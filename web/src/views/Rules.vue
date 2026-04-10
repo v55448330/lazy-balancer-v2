@@ -371,10 +371,6 @@
                 <el-input v-model="wizardForm.dns_server" placeholder="例如：8.8.8.8 或 223.5.5.5" style="width: 200px;" />
                 <span class="form-tip-inline">用于解析上游服务器域名的 DNS 服务器</span>
               </el-form-item>
-              <el-form-item label="缓存 TTL">
-                <el-input-number v-model="wizardForm.dns_ttl" :min="60" :max="3600" :step="60" controls-position="right" style="width: 120px;" />
-                <span class="form-tip-inline">秒，DNS 缓存时间</span>
-              </el-form-item>
               <el-form-item label="连接超时">
                 <el-input-number v-model="wizardForm.dns_timeout" :min="1" :max="30" controls-position="right" style="width: 120px;" />
                 <span class="form-tip-inline">秒</span>
@@ -441,13 +437,13 @@
             </el-descriptions-item>
             <el-descriptions-item label="DNS 服务器" v-if="wizardForm.protocol === 'http'">
               <template v-if="wizardForm.enable_dns_server">
-                {{ wizardForm.dns_server || '默认' }} (TTL: {{ wizardForm.dns_ttl }}s, 超时: {{ wizardForm.dns_timeout }}s)
+                {{ wizardForm.dns_server || '默认' }} (超时: {{ wizardForm.dns_timeout }}s)
               </template>
               <template v-else>禁用</template>
             </el-descriptions-item>
             <el-descriptions-item label="动态上游" v-if="wizardForm.protocol === 'http'">
               <template v-if="wizardForm.dynamic_dns">
-                启用 (刷新: {{ wizardForm.dns_ttl }}s, 协议栈: {{ (() => { const families = wizardForm.dns_family || []; if (families.length === 2) return 'IPv4/IPv6'; if (families.includes('ipv4')) return 'IPv4'; if (families.includes('ipv6')) return 'IPv6'; return 'None'; })() }})
+                启用 (协议栈: {{ (() => { const families = wizardForm.dns_family || []; if (families.length === 2) return 'IPv4/IPv6'; if (families.includes('ipv4')) return 'IPv4'; if (families.includes('ipv6')) return 'IPv6'; return 'None'; })() }})
               </template>
               <template v-else>禁用</template>
             </el-descriptions-item>
@@ -865,7 +861,6 @@ const wizardForm = reactive<Rule>({
 watch(() => wizardForm.enable_dns_server, (newVal) => {
   if (!newVal) {
     wizardForm.dns_server = ''
-    wizardForm.dns_ttl = 300
     wizardForm.dns_timeout = 5
   }
 })
