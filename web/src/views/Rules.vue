@@ -566,7 +566,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
 import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, Setting } from '@element-plus/icons-vue'
@@ -859,6 +859,15 @@ const wizardForm = reactive<Rule>({
   enable_compress: false,
   compress_types: 'gzip',
   enabled: true,
+})
+
+// Watch for enable_dns_server toggle to clear DNS fields when disabled
+watch(() => wizardForm.enable_dns_server, (newVal) => {
+  if (!newVal) {
+    wizardForm.dns_server = ''
+    wizardForm.dns_ttl = 300
+    wizardForm.dns_timeout = 5
+  }
 })
 
 const adminPorts = [8000, 2019]
