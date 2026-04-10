@@ -330,6 +330,11 @@
               <div class="form-tip">监控实际代理请求的失败情况，自动标记不健康的上游服务器</div>
             </el-form-item>
 
+            <el-form-item label="超时时间" v-if="wizardForm.protocol === 'http'">
+              <el-input-number v-model="wizardForm.health_check_timeout" :min="1" :max="30" controls-position="right" style="width: 120px;" />
+              <span class="form-tip-inline">秒，连接/健康检查超时</span>
+            </el-form-item>
+
             <el-form-item label="主动检查" v-if="wizardForm.protocol === 'http'">
               <div class="active-check-control">
                 <el-switch v-model="wizardForm.enable_active_health_check" />
@@ -344,10 +349,6 @@
               </el-form-item>
               <el-form-item label="检查间隔">
                 <el-input-number v-model="wizardForm.health_check_interval" :min="5" :max="300" controls-position="right" style="width: 120px;" />
-                <span class="form-tip-inline">秒</span>
-              </el-form-item>
-              <el-form-item label="超时时间">
-                <el-input-number v-model="wizardForm.health_check_timeout" :min="1" :max="30" controls-position="right" style="width: 120px;" />
                 <span class="form-tip-inline">秒</span>
               </el-form-item>
             </template>
