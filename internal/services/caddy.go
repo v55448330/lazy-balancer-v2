@@ -1403,8 +1403,6 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		DynamicDNS                    bool
 		EnableDnsServer               bool
 		DnsServer                     string
-		DnsTTL                        int
-		DnsTimeout                    int
 		DnsFamily                     string
 		HealthCheckPath               string
 		HealthCheckInterval           int
@@ -1442,7 +1440,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 
 	rows, err := db.DB.Query(`
 		SELECT COALESCE(caddy_id,''), name, protocol, COALESCE(domain,''), listen_port, strategy,
-		       IIF(dynamic_dns IN ('1',1),1,0), IIF(enable_dns_server IN ('1',1),1,0), COALESCE(dns_server,''), COALESCE(dns_ttl,300), COALESCE(dns_timeout,5), COALESCE(dns_family,'ipv4'),
+		       IIF(dynamic_dns IN ('1',1),1,0), IIF(enable_dns_server IN ('1',1),1,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval,
 		       COALESCE(health_check_timeout,5), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 		       IIF(enable_tls IN ('1',1),1,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
@@ -1466,7 +1464,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 	for rows.Next() {
 		var r lbRule
 		err := rows.Scan(&r.CaddyID, &r.Name, &r.Protocol, &r.Domain, &r.ListenPort, &r.Strategy,
-			&r.DynamicDNS, &r.EnableDnsServer, &r.DnsServer, &r.DnsTTL, &r.DnsTimeout, &r.DnsFamily, &r.HealthCheckPath, &r.HealthCheckInterval,
+			&r.DynamicDNS, &r.EnableDnsServer, &r.DnsServer, &r.DnsFamily, &r.HealthCheckPath, &r.HealthCheckInterval,
 			&r.HealthCheckTimeout, &r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
 			&r.EnableTLS, &r.TLSCert, &r.TLSKey, &r.TLSAutoCert, &r.TLSEmail,
 			&r.TLSHTTPRedirect, &r.TLSHSTS, &r.Enabled, &r.EnableCompress, &r.CompressTypes,
@@ -1560,8 +1558,6 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 				DynamicDNS:              r.DynamicDNS,
 				EnableDnsServer:         r.EnableDnsServer,
 				DnsServer:               r.DnsServer,
-				DnsTTL:                  r.DnsTTL,
-				DnsTimeout:              r.DnsTimeout,
 				DnsFamily:               r.DnsFamily,
 				HealthCheckPath:         r.HealthCheckPath,
 				HealthCheckInterval:     r.HealthCheckInterval,
@@ -1799,8 +1795,6 @@ type SingleRuleConfig struct {
 	DynamicDNS              bool
 	EnableDnsServer         bool
 	DnsServer               string
-	DnsTTL                  int
-	DnsTimeout              int
 	DnsFamily               string
 	HealthCheckPath         string
 	HealthCheckInterval     int
@@ -1823,7 +1817,6 @@ type UpstreamConfig struct {
 	Protocol  string
 	Enabled   bool
 	DnsServer string
-	DnsTTL    int
 }
 
 func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{} {

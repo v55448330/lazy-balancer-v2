@@ -398,10 +398,6 @@
             </el-form-item>
 
             <template v-if="wizardForm.protocol === 'http' && wizardForm.dynamic_dns">
-              <el-form-item label="刷新时间">
-                <el-input-number v-model="wizardForm.dns_ttl" :min="60" :max="3600" :step="60" controls-position="right" style="width: 120px;" />
-                <span class="form-tip-inline">秒，DNS 记录刷新间隔</span>
-              </el-form-item>
               <el-form-item label="协议栈">
                 <el-checkbox-group v-model="wizardForm.dns_family" style="width: 200px;">
                   <el-checkbox value="ipv4">IPv4</el-checkbox>
@@ -588,8 +584,6 @@ interface Rule {
   dynamic_dns: boolean
   enable_dns_server: boolean
   dns_server: string
-  dns_ttl: number
-  dns_timeout: number
   dns_family: string[]
   health_check_path: string
   health_check_interval: number
@@ -679,8 +673,6 @@ const ruleConfig = ref<{
   dynamic_dns: boolean
   enable_dns_server: boolean
   dns_server: string
-  dns_ttl: number
-  dns_timeout: number
   host_header: string
   enable_tls: boolean
   tls_http_redirect: boolean
@@ -830,8 +822,6 @@ const wizardForm = reactive<Rule>({
   dynamic_dns: false,
   enable_dns_server: false,
   dns_server: '',
-  dns_ttl: 300,
-  dns_timeout: 5,
   dns_family: ['ipv4'],
   health_check_path: '',
   health_check_interval: 10,
@@ -991,8 +981,6 @@ const openWizard = (rule?: Rule) => {
       dynamic_dns: rule.dynamic_dns || false,
       enable_dns_server: (rule as any).enable_dns_server || false,
       dns_server: (rule as any).dns_server || '',
-      dns_ttl: (rule as any).dns_ttl || 300,
-      dns_timeout: (rule as any).dns_timeout || 5,
       dns_family: (() => { const df = (rule as any).dns_family; if (Array.isArray(df)) return df; if (df === 'both') return ['ipv4', 'ipv6']; if (df === 'ipv4') return ['ipv4']; if (df === 'ipv6') return ['ipv6']; return ['ipv4']; })(),
       health_check_path: rule.health_check_path || '',
       health_check_interval: rule.health_check_interval || 10,
@@ -1035,7 +1023,6 @@ const openWizard = (rule?: Rule) => {
       enable_active_health_check: false,
       host_header: '',
       dns_server: '',
-      dns_ttl: 300,
   dns_family: ['ipv4'],
       upstreams: [defaultUpstream()],
       enable_tls: false,
@@ -1274,8 +1261,6 @@ const viewConfig = async (rule: Rule) => {
       dynamic_dns: rule.dynamic_dns || false,
       enable_dns_server: (rule as any).enable_dns_server || false,
       dns_server: (rule as any).dns_server || '',
-      dns_ttl: (rule as any).dns_ttl || 300,
-      dns_timeout: (rule as any).dns_timeout || 5,
       host_header: rule.host_header || '',
       enable_tls: rule.enable_tls || false,
       tls_http_redirect: rule.tls_http_redirect || false,
@@ -1302,8 +1287,6 @@ const viewConfig = async (rule: Rule) => {
       dynamic_dns: rule.dynamic_dns || false,
       enable_dns_server: (rule as any).enable_dns_server || false,
       dns_server: (rule as any).dns_server || '',
-      dns_ttl: (rule as any).dns_ttl || 300,
-      dns_timeout: (rule as any).dns_timeout || 5,
       host_header: rule.host_header || '',
       enable_tls: rule.enable_tls || false,
       tls_http_redirect: rule.tls_http_redirect || false,

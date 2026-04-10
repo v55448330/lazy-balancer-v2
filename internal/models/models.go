@@ -42,8 +42,6 @@ type LbRule struct {
 	DynamicDNS                    bool         `json:"dynamic_dns"`
 	EnableDnsServer               bool         `json:"enable_dns_server"`
 	DnsServer                     string       `json:"dns_server"`
-	DnsTTL                        int          `json:"dns_ttl"`
-	DnsTimeout                    int          `json:"dns_timeout"`
 	DnsFamily                     string       `json:"dns_family"`
 	HealthCheckPath               string       `json:"health_check_path"`
 	HealthCheckInterval           int          `json:"health_check_interval"`
@@ -97,7 +95,6 @@ type Upstream struct {
 	Enabled    bool   `json:"enabled"`
 	Protocol   string `json:"protocol"`
 	DnsServer  string `json:"dns_server"`
-	DnsTTL     int    `json:"dns_ttl"`
 }
 
 // TLSCertificate represents a TLS certificate
@@ -212,8 +209,6 @@ type CreateRuleRequest struct {
 	DynamicDNS                    bool       `json:"dynamic_dns"`
 	EnableDnsServer               bool       `json:"enable_dns_server"`
 	DnsServer                     string     `json:"dns_server"`
-	DnsTTL                        int        `json:"dns_ttl"`
-	DnsTimeout                    int        `json:"dns_timeout"`
 	DnsFamily                     string     `json:"dns_family"`
 	HealthCheckPath               string     `json:"health_check_path"`
 	HealthCheckInterval           int        `json:"health_check_interval"`
@@ -244,8 +239,6 @@ type UpdateRuleRequest struct {
 	DynamicDNS                    bool       `json:"dynamic_dns"`
 	EnableDnsServer               bool       `json:"enable_dns_server"`
 	DnsServer                     string     `json:"dns_server"`
-	DnsTTL                        int        `json:"dns_ttl"`
-	DnsTimeout                    int        `json:"dns_timeout"`
 	DnsFamily                     string     `json:"dns_family"`
 	HealthCheckPath               string     `json:"health_check_path"`
 	HealthCheckInterval           int        `json:"health_check_interval"`

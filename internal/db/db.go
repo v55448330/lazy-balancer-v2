@@ -95,8 +95,6 @@ func createTables() error {
 		dynamic_dns BOOLEAN DEFAULT FALSE,
 		enable_dns_server BOOLEAN DEFAULT FALSE,
 		dns_server VARCHAR(255) DEFAULT '',
-		dns_ttl INTEGER DEFAULT 300,
-		dns_timeout INTEGER DEFAULT 5,
 		dns_family VARCHAR(20) DEFAULT 'ipv4',
 		health_check_path VARCHAR(255),
 		health_check_interval INTEGER DEFAULT 10,
@@ -135,7 +133,6 @@ func createTables() error {
 		protocol VARCHAR(10) DEFAULT 'http',
 		host_header VARCHAR(255),
 		dns_server VARCHAR(255) DEFAULT '',
-		dns_ttl INTEGER DEFAULT 300,
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
 	);
 
@@ -331,11 +328,6 @@ func runMigrations() error {
 		DB.Exec("ALTER TABLE upstreams ADD COLUMN dns_server VARCHAR(255) DEFAULT ''")
 	}
 
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name='dns_ttl'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE upstreams ADD COLUMN dns_ttl INTEGER DEFAULT 300")
-	}
-
 	// Migrate existing data: set caddy_id for rows that don't have it
 	var count int
 	DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id IS NULL OR caddy_id = ''").Scan(&count)
@@ -402,8 +394,6 @@ func migrateLbRulesPrimaryKey() error {
 			dynamic_dns BOOLEAN DEFAULT FALSE,
 			enable_dns_server BOOLEAN DEFAULT FALSE,
 			dns_server VARCHAR(255) DEFAULT '',
-			dns_ttl INTEGER DEFAULT 300,
-			dns_timeout INTEGER DEFAULT 5,
 			dns_family VARCHAR(20) DEFAULT 'ipv4',
 			health_check_path VARCHAR(255),
 			health_check_interval INTEGER DEFAULT 10,
@@ -475,7 +465,6 @@ func migrateLbRulesPrimaryKey() error {
 			protocol VARCHAR(10) DEFAULT 'http',
 			host_header VARCHAR(255),
 			dns_server VARCHAR(255) DEFAULT '',
-			dns_ttl INTEGER DEFAULT 300,
 			FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
 		)
 	`)
@@ -487,9 +476,9 @@ func migrateLbRulesPrimaryKey() error {
 
 	// Copy data from old upstreams table to new (convert rule_id from int to string)
 	_, err = tx.Exec(`
-		INSERT INTO upstreams_new (id, rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, host_header, dns_server, dns_ttl)
+		INSERT INTO upstreams_new (id, rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, host_header, dns_server)
 		SELECT u.id, r.caddy_id, u.host, u.port, u.weight, u.domain, u.dynamic_dns, u.enabled, u.protocol, u.host_header, 
-		       COALESCE(u.dns_server, ''), COALESCE(u.dns_ttl, 300)
+		       COALESCE(u.dns_server, '')
 		FROM upstreams u
 		JOIN lb_rules r ON u.rule_id = r.id
 	`)
