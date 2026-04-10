@@ -323,11 +323,8 @@
             <el-divider content-position="left" class="compact-divider">健康检查</el-divider>
 
             <el-form-item label="失败阈值" v-if="wizardForm.protocol === 'http'">
-              <div class="health-check-info">
-                <el-input-number v-model="wizardForm.health_check_unhealthy_threshold" :min="1" :max="10" controls-position="right" style="width: 80px;" />
-                <span class="form-tip-inline">次失败后标记为不健康</span>
-              </div>
-              <div class="form-tip">监控实际代理请求的失败情况，自动标记不健康的上游服务器</div>
+              <el-input-number v-model="wizardForm.health_check_unhealthy_threshold" :min="1" :max="10" controls-position="right" style="width: 80px;" />
+              <span class="form-tip-inline">次失败后标记为不健康</span>
             </el-form-item>
 
             <el-form-item label="超时时间" v-if="wizardForm.protocol === 'http'">
