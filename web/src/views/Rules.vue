@@ -371,10 +371,6 @@
                 <el-input v-model="wizardForm.dns_server" placeholder="例如：8.8.8.8 或 223.5.5.5" style="width: 200px;" />
                 <span class="form-tip-inline">用于解析上游服务器域名的 DNS 服务器</span>
               </el-form-item>
-              <el-form-item label="连接超时">
-                <el-input-number v-model="wizardForm.dns_timeout" :min="1" :max="30" controls-position="right" style="width: 120px;" />
-                <span class="form-tip-inline">秒</span>
-              </el-form-item>
             </template>
 
             <el-divider content-position="left" class="compact-divider">压缩配置</el-divider>
@@ -437,7 +433,7 @@
             </el-descriptions-item>
             <el-descriptions-item label="DNS 服务器" v-if="wizardForm.protocol === 'http'">
               <template v-if="wizardForm.enable_dns_server">
-                {{ wizardForm.dns_server || '默认' }} (超时: {{ wizardForm.dns_timeout }}s)
+                {{ wizardForm.dns_server || '默认' }}
               </template>
               <template v-else>禁用</template>
             </el-descriptions-item>
@@ -861,7 +857,6 @@ const wizardForm = reactive<Rule>({
 watch(() => wizardForm.enable_dns_server, (newVal) => {
   if (!newVal) {
     wizardForm.dns_server = ''
-    wizardForm.dns_timeout = 5
   }
 })
 
@@ -1178,8 +1173,6 @@ const submitWizard = async () => {
       dynamic_dns: wizardForm.dynamic_dns,
       enable_dns_server: wizardForm.enable_dns_server,
       dns_server: wizardForm.dns_server,
-      dns_ttl: wizardForm.dns_ttl,
-      dns_timeout: wizardForm.dns_timeout,
       dns_family: (() => { const families = wizardForm.dns_family || []; if (families.length === 2) return 'both'; return families[0] || 'ipv4'; })(),
       health_check_path: wizardForm.enable_active_health_check ? (wizardForm.health_check_path || '/') : '',
       health_check_interval: wizardForm.health_check_interval,

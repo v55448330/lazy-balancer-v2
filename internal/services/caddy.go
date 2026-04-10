@@ -1954,8 +1954,8 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 				transportConfig["resolver"] = map[string]interface{}{
 					"addresses": []string{rule.DnsServer},
 				}
-				if rule.DnsTimeout > 0 {
-					transportConfig["dial_timeout"] = fmt.Sprintf("%ds", rule.DnsTimeout)
+				if rule.HealthCheckTimeout > 0 {
+					transportConfig["dial_timeout"] = fmt.Sprintf("%ds", rule.HealthCheckTimeout)
 				}
 			}
 			proxyConfig["transport"] = transportConfig
@@ -2200,8 +2200,8 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 				transportConfig["resolver"] = map[string]interface{}{
 					"addresses": []string{rule.DnsServer},
 				}
-				if rule.DnsTimeout > 0 {
-					transportConfig["dial_timeout"] = fmt.Sprintf("%ds", rule.DnsTimeout)
+				if rule.HealthCheckTimeout > 0 {
+					transportConfig["dial_timeout"] = fmt.Sprintf("%ds", rule.HealthCheckTimeout)
 				}
 			}
 			proxyConfig["transport"] = transportConfig
