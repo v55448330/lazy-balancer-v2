@@ -993,7 +993,7 @@ func (h *Handlers) DeleteAPIKey(c *gin.Context) {
 func (h *Handlers) ListRules(c *gin.Context) {
 	rows, err := db.DB.Query(`
 		SELECT COALESCE(caddy_id,'') AS caddy_id, name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port, strategy, 
-		       COALESCE(dynamic_dns,0), COALESCE(dns_server,''), COALESCE(dns_ttl,300),
+		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_ttl,300), COALESCE(dns_timeout,5), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval,
 		       COALESCE(enable_active_health_check,0), COALESCE(enable_tls,0), COALESCE(tls_auto_cert,0), COALESCE(tls_http_redirect,0),
 		       COALESCE(tls_hsts,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), enabled, created_by, created_at, updated_at, updated_by,
@@ -1009,15 +1009,16 @@ func (h *Handlers) ListRules(c *gin.Context) {
 	var rules []models.LbRule
 	for rows.Next() {
 		var r models.LbRule
-		var domain, strategy, description, compressTypes, hostHeader string
-		var dynamicDNS, enableActiveHealthCheck, enableTLS, tlsAutoCert, tlsHTTPRedirect, enableCompress bool
+		var domain, strategy, description, compressTypes, hostHeader, dnsFamily string
+		var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsAutoCert, tlsHTTPRedirect, enableCompress bool
 		var tlsHSTS int
 		var createdBy sql.NullInt64
 		var createdAt sql.NullTime
 		var updatedAt sql.NullTime
 		var updatedBy sql.NullInt64
 		err := rows.Scan(&r.CaddyID, &r.Name, &description, &r.Protocol, &domain, &r.ListenPort, &strategy,
-			&dynamicDNS, &r.DnsServer, &r.DnsTTL, &r.HealthCheckPath, &r.HealthCheckInterval,
+			&dynamicDNS, &enableDnsServer, &r.DnsServer, &r.DnsTTL, &r.DnsTimeout, &dnsFamily,
+			&r.HealthCheckPath, &r.HealthCheckInterval,
 			&enableActiveHealthCheck, &enableTLS, &tlsAutoCert, &tlsHTTPRedirect,
 			&tlsHSTS, &enableCompress, &compressTypes, &r.Enabled, &createdBy, &createdAt, &updatedAt, &updatedBy,
 			&hostHeader)
@@ -1043,6 +1044,8 @@ func (h *Handlers) ListRules(c *gin.Context) {
 			r.Strategy = "round_robin"
 		}
 		r.DynamicDNS = dynamicDNS
+		r.EnableDnsServer = enableDnsServer
+		r.DnsFamily = dnsFamily
 		r.EnableActiveHealthCheck = enableActiveHealthCheck
 		r.EnableTLS = enableTLS
 		r.TLSAutoCert = tlsAutoCert
@@ -1072,12 +1075,12 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 
 	var r models.LbRule
-	var domain, strategy, hostHeader string
-	var dynamicDNS, enableActiveHealthCheck, enableTLS, tlsAutoCert, tlsHTTPRedirect bool
+	var domain, strategy, hostHeader, dnsFamily string
+	var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsAutoCert, tlsHTTPRedirect bool
 	var tlsHSTS int
 	err := db.DB.QueryRow(`
 		SELECT name, protocol, COALESCE(domain,''), listen_port, strategy,
-		       COALESCE(dynamic_dns,0), COALESCE(dns_server,''), COALESCE(dns_ttl,300),
+		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_ttl,300), COALESCE(dns_timeout,5), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval,
 		       health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
 		       COALESCE(enable_active_health_check,0), COALESCE(enable_tls,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
@@ -1085,7 +1088,8 @@ func (h *Handlers) GetRule(c *gin.Context) {
 		       COALESCE(tls_hsts,0), enabled, created_at, updated_at, COALESCE(host_header,''), caddy_id
 		FROM lb_rules WHERE caddy_id = ?
 	`, caddyID).Scan(&r.Name, &r.Protocol, &domain, &r.ListenPort, &strategy,
-		&dynamicDNS, &r.DnsServer, &r.DnsTTL, &r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout,
+		&dynamicDNS, &enableDnsServer, &r.DnsServer, &r.DnsTTL, &r.DnsTimeout, &dnsFamily,
+		&r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout,
 		&r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
 		&enableActiveHealthCheck, &enableTLS, &r.TLSCert, &r.TLSKey, &tlsAutoCert, &r.TLSEmail, &tlsHTTPRedirect,
 		&tlsHSTS, &r.Enabled, &r.CreatedAt, &r.UpdatedAt, &hostHeader, &r.CaddyID)
@@ -1101,6 +1105,8 @@ func (h *Handlers) GetRule(c *gin.Context) {
 		r.Strategy = "round_robin"
 	}
 	r.DynamicDNS = dynamicDNS
+	r.EnableDnsServer = enableDnsServer
+	r.DnsFamily = dnsFamily
 	r.EnableActiveHealthCheck = enableActiveHealthCheck
 	r.EnableTLS = enableTLS
 	r.TLSAutoCert = tlsAutoCert
