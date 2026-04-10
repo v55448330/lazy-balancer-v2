@@ -1,0 +1,13 @@
+{
+    admin 0.0.0.0:2019 {
+        origins *
+    }
+    metrics {
+        per_host
+        observe_catchall_hosts
+    }
+}
+
+:80 {
+    respond "Lazy Balancer V2 is running!" 200
+}

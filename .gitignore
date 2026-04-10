@@ -1,0 +1,39 @@
+# Binaries
+bin/
+cmd/server/lazy-balancer
+
+# Data (runtime)
+data/
+test-data/
+
+# Test UI (staging)
+test-ui/
+
+# Pre-built UI (rebuilt during docker build)
+ui/
+
+# Node modules (installed during docker build)
+web/node_modules/
+
+# Editor and IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files with secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Sisyphus session files
+.sisyphus/
+
+# Logs
+*.log

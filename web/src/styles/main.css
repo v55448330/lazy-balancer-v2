@@ -1,0 +1,306 @@
+/* Global Styles - Refined Design System */
+
+:root {
+  /* Primary Colors - Clean Blue Theme */
+  --primary: #3b82f6;
+  --primary-hover: #2563eb;
+  --primary-light: #60a5fa;
+  --primary-bg: #eff6ff;
+  
+  /* Semantic Colors */
+  --success: #10b981;
+  --success-bg: #ecfdf5;
+  --warning: #f59e0b;
+  --warning-bg: #fffbeb;
+  --danger: #ef4444;
+  --danger-bg: #fef2f2;
+  --info: #6366f1;
+  --info-bg: #eef2ff;
+  
+  /* Text Colors */
+  --text-primary: #111827;
+  --text-regular: #374151;
+  --text-secondary: #6b7280;
+  --text-muted: #9ca3af;
+  
+  /* Border Colors */
+  --border: #e5e7eb;
+  --border-light: #d1d5db;
+  --border-lighter: #f3f4f6;
+  
+  /* Background Colors */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f9fafb;
+  --bg-tertiary: #f3f4f6;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04);
+  
+  /* Border Radius - Refined (less rounded) */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
+input, textarea, select, button {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--bg-secondary);
+  color: var(--text-regular);
+  line-height: 1.5;
+}
+
+/* Element Plus Overrides */
+:deep(.el-button) {
+  border-radius: var(--radius-md);
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+:deep(.el-button--primary) {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+:deep(.el-button--primary:hover) {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+:deep(.el-button--default) {
+  background: var(--bg-primary);
+  border-color: var(--border);
+  color: var(--text-regular);
+}
+
+:deep(.el-button--default:hover) {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-bg);
+}
+
+:deep(.el-card) {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  background: var(--bg-primary);
+}
+
+:deep(.el-card__header) {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+:deep(.el-card__body) {
+  padding: 16px;
+}
+
+:deep(.el-input__wrapper) {
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 1px var(--border) inset;
+}
+
+:deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px var(--primary) inset;
+}
+
+:deep(.el-table) {
+  font-size: 13px;
+  color: var(--text-regular);
+}
+
+:deep(.el-table th) {
+  background: var(--bg-secondary) !important;
+  font-weight: 600;
+  color: var(--text-regular);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+:deep(.el-table td) {
+  padding: 12px 0;
+  border-bottom-color: var(--border-lighter);
+}
+
+:deep(.el-table__body tr:hover > td.el-table__cell) {
+  background: var(--bg-secondary) !important;
+}
+
+:deep(.el-tag) {
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+  border: none;
+}
+
+:deep(.el-tag--success) {
+  background: var(--success-bg);
+  color: #047857;
+}
+
+:deep(.el-tag--warning) {
+  background: var(--warning-bg);
+  color: #b45309;
+}
+
+:deep(.el-tag--danger) {
+  background: var(--danger-bg);
+  color: #b91c1c;
+}
+
+:deep(.el-tag--info) {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+:deep(.el-tag--primary) {
+  background: var(--primary-bg);
+  color: var(--primary-hover);
+}
+
+:deep(.el-dialog) {
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+}
+
+:deep(.el-dialog__header) {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+:deep(.el-dialog__title) {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+:deep(.el-dialog__body) {
+  padding: 20px;
+}
+
+:deep(.el-dialog__footer) {
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+:deep(.el-progress-bar__outer) {
+  border-radius: var(--radius-sm);
+  background: var(--border-lighter);
+}
+
+:deep(.el-progress-bar__inner) {
+  border-radius: var(--radius-sm);
+}
+
+:deep(.el-form-item__label) {
+  font-size: 13px;
+  color: var(--text-regular);
+  font-weight: 500;
+}
+
+:deep(.el-descriptions__label) {
+  color: var(--text-secondary);
+  font-size: 13px;
+  background: var(--bg-secondary);
+}
+
+:deep(.el-descriptions__content) {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+:deep(.el-descriptions__cell) {
+  padding: 10px 12px;
+}
+
+:deep(.el-alert) {
+  border-radius: var(--radius-md);
+}
+
+:deep(.el-switch.is-checked .el-switch__core) {
+  background-color: var(--primary);
+  border-color: var(--primary);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-light);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Utility Classes */
+.mb-4 { margin-bottom: 16px; }
+.mb-5 { margin-bottom: 20px; }
+.mb-6 { margin-bottom: 24px; }
+.mt-4 { margin-top: 16px; }
+
+/* Common Page Styles - Extracted to avoid duplication */
+.page {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.header-left {
+  flex: 1;
+}
+
+.page-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.title-icon {
+  color: var(--primary);
+  font-size: 20px;
+}
+
+.page-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 4px 0 0 28px;
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+  font-size: 13px;
+}

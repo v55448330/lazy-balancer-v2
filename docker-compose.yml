@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  lazy-balancer:
+    build: .
+    container_name: lazy-balancer
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8000:8000"
+      - "2019:2019"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=admin123
+      - NODE_NAME=master
+      - NODE_MODE=master
+      # Uncomment for slave mode:
+      # - NODE_MODE=slave
+      # - MASTER_URL=http://10.0.0.1:8000
+      # DNSPod credentials (optional):
+      # - DNSPOD_ID=your_id
+      # - DNSPOD_TOKEN=your_token
+    restart: unless-stopped
