@@ -331,7 +331,7 @@
             </el-form-item>
 
             <el-form-item label="超时时间" v-if="wizardForm.protocol === 'http'">
-              <el-input-number v-model="wizardForm.health_check_timeout" :min="1" :max="30" controls-position="right" style="width: 120px;" />
+              <el-input-number v-model="wizardForm.health_check_timeout" :min="1" :max="30" controls-position="right" style="width: 80px;" />
               <span class="form-tip-inline">秒，连接/健康检查超时</span>
             </el-form-item>
 
@@ -426,7 +426,7 @@
               <template v-if="wizardForm.enable_active_health_check">
                 {{ wizardForm.health_check_path || '/' }} ({{ wizardForm.health_check_interval }}s/{{ wizardForm.health_check_timeout }}s)
               </template>
-              <template v-else>被动检查 (失败 {{ wizardForm.health_check_unhealthy_threshold }} 次视为不健康)</template>
+              <template v-else>被动检查 (失败 {{ wizardForm.health_check_unhealthy_threshold }} 次视为不健康, 超时 {{ wizardForm.health_check_timeout }}s)</template>
             </el-descriptions-item>
             <el-descriptions-item label="DNS 服务器" v-if="wizardForm.protocol === 'http'">
               <template v-if="wizardForm.enable_dns_server">
@@ -520,7 +520,7 @@
           </el-descriptions-item>
           <el-descriptions-item label="主动健康检查" v-if="ruleConfig.protocol === 'http' && !ruleConfig.health_check_path">未启用</el-descriptions-item>
           <el-descriptions-item label="被动健康检查" v-if="ruleConfig.protocol === 'http'">
-            失败 {{ ruleConfig.health_check_unhealthy_threshold || 3 }} 次视为不健康, 间隔 {{ ruleConfig.health_check_interval || 10 }}s
+            失败 {{ ruleConfig.health_check_unhealthy_threshold || 3 }} 次视为不健康, 间隔 {{ ruleConfig.health_check_interval || 10 }}s, 超时 {{ ruleConfig.health_check_timeout || 5 }}s
           </el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="ruleConfig.enabled ? 'success' : 'info'" size="small">{{ ruleConfig.enabled ? '启用' : '禁用' }}</el-tag>
@@ -848,6 +848,13 @@ const wizardForm = reactive<Rule>({
 watch(() => wizardForm.enable_dns_server, (newVal) => {
   if (!newVal) {
     wizardForm.dns_server = ''
+  }
+})
+
+// Watch for enable_active_health_check toggle to set default path
+watch(() => wizardForm.enable_active_health_check, (newVal) => {
+  if (newVal && !wizardForm.health_check_path) {
+    wizardForm.health_check_path = '/'
   }
 })
 
