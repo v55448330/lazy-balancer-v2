@@ -37,3 +37,13 @@ Thumbs.db
 
 # Logs
 *.log
+
+# OpenCode session files
+.opencode/
+
+# Openspec files (experimental workflow)
+openspec/
+
+# Build artifacts
+*.tgz
+dist/
