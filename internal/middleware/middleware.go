@@ -110,6 +110,8 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				api.POST("/certificate-configs", h.CreateCertificateConfig)
 				api.PUT("/certificate-configs/:id", h.UpdateCertificateConfig)
 				api.DELETE("/certificate-configs/:id", h.DeleteCertificateConfig)
+				api.GET("/dns-providers", h.ListDNSProviders)
+				api.POST("/certificate-configs/:id/test", h.TestCertificateConfig)
 
 				// Config (read only for non-admin)
 				api.GET("/config", h.GetConfig)
@@ -146,6 +148,9 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				api.GET("/certificates", h.ListCertificates)
 				api.POST("/certificates/issue", h.IssueCertificate)
 				api.POST("/certificates/parse", h.ParseCertificate)
+				api.GET("/certificates/jobs", h.ListCertJobs)
+				api.POST("/certificates/jobs/:id/retry", h.RetryCertJob)
+				api.DELETE("/certificates/jobs/:id", h.DeleteCertJob)
 			}
 		}
 	}

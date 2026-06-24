@@ -20,12 +20,13 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	var cfg models.GlobalConfig
 	err := db.DB.QueryRow(`
 		SELECT id, caddy_config, dns_provider, COALESCE(dns_credentials,'') as dns_credentials,
+		       COALESCE(acme_email,'') as acme_email, COALESCE(cert_expiry_days,30) as cert_expiry_days,
 		       COALESCE(letsencrypt_email,'') as letsencrypt_email, log_level, access_log_enabled,
 		       is_master, COALESCE(master_url, '') as master_url, sync_interval, 
 		       last_sync, updated_at
 		FROM global_config WHERE id = 1
 	`).Scan(&cfg.ID, &cfg.CaddyConfig, &cfg.DNSProvider, &cfg.DNSCredentials,
-		&cfg.LETSEncryptEmail, &cfg.LogLevel, &cfg.AccessLogEnabled, &cfg.IsMaster, &cfg.MasterURL,
+		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.LETSEncryptEmail, &cfg.LogLevel, &cfg.AccessLogEnabled, &cfg.IsMaster, &cfg.MasterURL,
 		&cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	if err != nil {
@@ -75,6 +76,8 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		UPDATE global_config SET
 			dns_provider = COALESCE(?, dns_provider),
 			dns_credentials = COALESCE(?, dns_credentials),
+			acme_email = COALESCE(?, acme_email),
+			cert_expiry_days = COALESCE(?, cert_expiry_days),
 			letsencrypt_email = COALESCE(?, letsencrypt_email),
 			log_level = COALESCE(?, log_level),
 			access_log_enabled = COALESCE(?, access_log_enabled),
@@ -83,7 +86,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			sync_interval = COALESCE(?, sync_interval),
 			updated_at = datetime('now')
 		WHERE id = 1
-	`, req.DNSProvider, req.DNSCredentials, req.LETSEncryptEmail, req.LogLevel, req.AccessLogEnabled,
+	`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.LETSEncryptEmail, req.LogLevel, req.AccessLogEnabled,
 		req.IsMaster, req.MasterURL, req.SyncInterval)
 
 	// Update node mode in memory
