@@ -152,14 +152,27 @@ func createTables() error {
 	CREATE TABLE IF NOT EXISTS certificate_configs (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name VARCHAR(100) NOT NULL,
-		acme_email VARCHAR(255),
 		dns_provider VARCHAR(50) DEFAULT 'dnspod',
-		dns_id VARCHAR(255),
-		dns_key TEXT,
+		dns_credentials TEXT,
 		enabled BOOLEAN DEFAULT TRUE,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME
 	);
+
+	-- Certificate Jobs table for ACME issuance tracking
+	CREATE TABLE IF NOT EXISTS cert_jobs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		rule_id VARCHAR(20) NOT NULL,
+		domain VARCHAR(255) NOT NULL,
+		status VARCHAR(20) DEFAULT 'pending',
+		message TEXT,
+		expires_at DATETIME,
+		cert_pem TEXT,
+		key_pem TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME
+	);
+	CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain);
 
 	-- Global Config table
 	CREATE TABLE IF NOT EXISTS global_config (
@@ -256,6 +269,8 @@ func runMigrations() error {
 		"tls_http_redirect":          "BOOLEAN DEFAULT 0",
 		"dynamic_dns":                "BOOLEAN DEFAULT 0",
 		"enable_active_health_check": "BOOLEAN DEFAULT 0",
+		"tls_source":                 "VARCHAR(20) DEFAULT 'manual'",
+		"acme_config_id":             "INTEGER DEFAULT 0",
 	}
 
 	for col, dtype := range newLbColumns {
@@ -295,6 +310,16 @@ func runMigrations() error {
 	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='letsencrypt_email'").Scan(&colCount)
 	if colCount == 0 {
 		DB.Exec("ALTER TABLE global_config ADD COLUMN letsencrypt_email VARCHAR(255)")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='acme_email'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE global_config ADD COLUMN acme_email VARCHAR(255)")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='cert_expiry_days'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE global_config ADD COLUMN cert_expiry_days INTEGER DEFAULT 30")
 	}
 
 	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='metrics_public'").Scan(&colCount)
@@ -406,8 +431,11 @@ func migrateLbRulesPrimaryKey() error {
 			tls_key TEXT,
 			tls_auto_cert BOOLEAN DEFAULT FALSE,
 			tls_email VARCHAR(255),
-		tls_http_redirect BOOLEAN DEFAULT FALSE,
-		enable_compress BOOLEAN DEFAULT TRUE,
+			tls_http_redirect BOOLEAN DEFAULT FALSE,
+			tls_source VARCHAR(20) DEFAULT 'manual',
+			acme_config_id INTEGER DEFAULT 0,
+			enable_compress BOOLEAN DEFAULT TRUE,
+
 			compress_types VARCHAR(100) DEFAULT 'gzip',
 			enabled BOOLEAN DEFAULT TRUE,
 			created_by INTEGER,
