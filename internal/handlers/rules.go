@@ -335,8 +335,8 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	if req.HealthCheckTimeout == 0 {
 		req.HealthCheckTimeout = 5
 	}
-	// Validate TLS certificate if provided
-	if req.EnableTLS && !req.TLSAutoCert {
+	// Validate TLS certificate if provided (manual source only)
+	if req.EnableTLS && req.TLSSource == "manual" {
 		if err := validateTLSCertificate(req.TLSCert, req.TLSKey); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "TLS certificate validation failed: " + err.Error()})
 			return
@@ -393,6 +393,8 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			HealthCheckInterval:     req.HealthCheckInterval,
 			HealthCheckTimeout:      req.HealthCheckTimeout,
 			EnableTLS:               req.EnableTLS,
+			TLSSource:               req.TLSSource,
+			ACMEConfigID:            req.ACMEConfigID,
 			TLSHTTPRedirect:         req.TLSHTTPRedirect,
 			EnableCompress:          req.EnableCompress,
 			CompressTypes:           req.CompressTypes,
@@ -445,13 +447,13 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
-			enable_active_health_check, host_header, enable_tls, tls_cert, tls_key, tls_auto_cert, tls_email, tls_http_redirect,
+			enable_active_health_check, host_header, enable_tls, tls_source, acme_config_id, tls_cert, tls_key, tls_auto_cert, tls_email, tls_http_redirect,
 			enable_compress, compress_types, enabled, created_by, updated_at, caddy_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
-		req.EnableActiveHealthCheck, req.HostHeader, req.EnableTLS, req.TLSCert, req.TLSKey, req.TLSAutoCert, req.TLSEmail,
+		req.EnableActiveHealthCheck, req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.TLSCert, req.TLSKey, req.TLSAutoCert, req.TLSEmail,
 		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, 1, userIDInt, time.Now().Format("2006-01-02 15:04:05"), caddyID)
 
 	if err != nil {
@@ -473,9 +475,12 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			caddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol)
 	}
 
-	// Reload full Caddy config to apply TLS certificates
-	if req.EnableTLS && !req.TLSAutoCert && req.TLSCert != "" && req.TLSKey != "" {
-		log.Printf("Reloading full Caddy config to apply TLS certificate for caddy_id=%s", caddyID)
+	// Reload full Caddy config to apply TLS certificates or ACME automation policies
+	if req.EnableTLS {
+		log.Printf("Reloading full Caddy config to apply TLS/ACME for caddy_id=%s", caddyID)
+		if req.TLSSource == "acme_dns" {
+			h.certificateService.CreateJobsForRule(caddyID, req.Domain)
+		}
 		fullConfig := services.GenerateCaddyConfig(h.cfg)
 		if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
 			log.Printf("Failed to reload Caddy config after rule creation: %v", err)
@@ -576,8 +581,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		req.Strategy = existingRule.Strategy
 	}
 
-	// Validate TLS certificate if provided
-	if req.EnableTLS || req.TLSCert != "" || req.TLSKey != "" {
+	// Validate TLS certificate if provided (manual source only)
+	if (req.EnableTLS || req.TLSCert != "" || req.TLSKey != "") && req.TLSSource == "manual" {
 		tlsCert := req.TLSCert
 		tlsKey := req.TLSKey
 		// If cert/key not provided in request, get from DB
@@ -680,6 +685,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	query += "enable_tls = ?, "
 	args = append(args, req.EnableTLS)
+	query += "tls_source = ?, "
+	args = append(args, req.TLSSource)
+	query += "acme_config_id = ?, "
+	args = append(args, req.ACMEConfigID)
 	if req.TLSCert != "" {
 		query += "tls_cert = ?, "
 		args = append(args, req.TLSCert)
@@ -767,6 +776,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			HealthCheckInterval:     req.HealthCheckInterval,
 			HealthCheckTimeout:      req.HealthCheckTimeout,
 			EnableTLS:               req.EnableTLS,
+			TLSSource:               req.TLSSource,
+			ACMEConfigID:            req.ACMEConfigID,
 			TLSHTTPRedirect:         req.TLSHTTPRedirect,
 			EnableCompress:          req.EnableCompress,
 			CompressTypes:           req.CompressTypes,
@@ -830,9 +841,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 	}
 
-	// Reload full Caddy config to apply TLS certificates if changed
-	if req.EnableTLS || req.TLSCert != "" || req.TLSKey != "" {
+	// Reload full Caddy config to apply TLS certificates or ACME automation policies
+	if req.EnableTLS || req.TLSCert != "" || req.TLSKey != "" || req.TLSSource == "acme_dns" {
 		log.Printf("Reloading full Caddy config after rule update for caddy_id=%s", caddyID)
+		if req.TLSSource == "acme_dns" && req.EnableTLS {
+			h.certificateService.CreateJobsForRule(caddyID, domain)
+		}
 		fullConfig := services.GenerateCaddyConfig(h.cfg)
 		if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
 			log.Printf("Failed to reload Caddy config after rule update: %v", err)

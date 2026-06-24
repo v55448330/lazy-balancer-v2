@@ -21,12 +21,13 @@ import (
 
 // MetricsService collects and stores metrics from Caddy
 type MetricsService struct {
-	metricsURL string
-	interval   int
-	client     *http.Client
-	stopCh     chan struct{}
-	overview   models.MetricsOverview
-	mu         sync.RWMutex
+	metricsURL         string
+	interval           int
+	client             *http.Client
+	stopCh             chan struct{}
+	overview           models.MetricsOverview
+	certificateService *CertificateService
+	mu                 sync.RWMutex
 }
 
 func NewMetricsService(metricsURL string, interval int) *MetricsService {
@@ -59,6 +60,10 @@ func (m *MetricsService) Stop() {
 	close(m.stopCh)
 }
 
+func (m *MetricsService) SetCertificateService(s *CertificateService) {
+	m.certificateService = s
+}
+
 func (m *MetricsService) collect() {
 	resp, err := m.client.Get(m.metricsURL)
 	if err != nil {
@@ -78,6 +83,14 @@ func (m *MetricsService) collect() {
 
 	// Check TLS certificate expiration
 	m.checkTLSCertificateExpiration()
+
+	// Check ACME certificate expiration
+	if m.certificateService != nil {
+		expired := m.certificateService.CheckExpiration()
+		for _, job := range expired {
+			log.Printf("Certificate %s expires at %v", job.Domain, job.ExpiresAt.Time)
+		}
+	}
 }
 
 type parsedMetrics struct {

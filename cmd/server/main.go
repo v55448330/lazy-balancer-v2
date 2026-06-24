@@ -41,12 +41,14 @@ func main() {
 
 	// Initialize services
 	caddyService := services.NewCaddyService(cfg.CaddyAdminURL)
+	certService := services.NewCertificateService(cfg.CaddyAdminURL)
 	metricsService := services.NewMetricsService(cfg.CaddyMetricsURL, cfg.MetricsInterval)
+	metricsService.SetCertificateService(certService)
 	nodeService := services.NewNodeService()
 	syncService := services.NewSyncService()
 
 	// Initialize handlers
-	h := handlers.NewHandlers(cfg, caddyService, metricsService, nodeService, syncService)
+	h := handlers.NewHandlers(cfg, caddyService, metricsService, nodeService, syncService, certService)
 
 	// Apply Caddy config from database on startup
 	if err := h.ApplyConfigOnStartup(); err != nil {
@@ -57,6 +59,7 @@ func main() {
 	router := middleware.SetupRouter(h, cfg)
 
 	// Start services
+	go certService.Start()
 	go metricsService.Start()
 	go nodeService.StartHeartbeat(cfg)
 	go syncService.Start()
@@ -68,6 +71,7 @@ func main() {
 	go func() {
 		<-quit
 		log.Println("Shutting down...")
+		certService.Stop()
 		metricsService.Stop()
 		nodeService.Stop()
 		syncService.Stop()

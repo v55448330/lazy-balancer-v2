@@ -17,20 +17,22 @@ import (
 )
 
 type Handlers struct {
-	cfg            *config.Config
-	caddyService   *services.CaddyService
-	metricsService *services.MetricsService
-	nodeService    *services.NodeService
-	syncService    *services.SyncService
+	cfg                *config.Config
+	caddyService       *services.CaddyService
+	metricsService     *services.MetricsService
+	nodeService        *services.NodeService
+	syncService        *services.SyncService
+	certificateService *services.CertificateService
 }
 
-func NewHandlers(cfg *config.Config, caddy *services.CaddyService, metrics *services.MetricsService, node *services.NodeService, sync *services.SyncService) *Handlers {
+func NewHandlers(cfg *config.Config, caddy *services.CaddyService, metrics *services.MetricsService, node *services.NodeService, sync *services.SyncService, cert *services.CertificateService) *Handlers {
 	h := &Handlers{
-		cfg:            cfg,
-		caddyService:   caddy,
-		metricsService: metrics,
-		nodeService:    node,
-		syncService:    sync,
+		cfg:                cfg,
+		caddyService:       caddy,
+		metricsService:     metrics,
+		nodeService:        node,
+		syncService:        sync,
+		certificateService: cert,
 	}
 
 	// Initialize default admin user
