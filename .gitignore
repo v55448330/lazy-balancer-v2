@@ -50,3 +50,4 @@ openspec/
 *.tgz
 dist/
 .superpowers/
+.worktrees/
