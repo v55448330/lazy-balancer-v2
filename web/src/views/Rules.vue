@@ -185,21 +185,18 @@
         <!-- Step 1: TLS 配置 (仅当启用 HTTPS 时显示) -->
         <div v-show="currentStep === 1" class="step-content">
           <el-form :model="wizardForm" label-width="100px" v-if="wizardForm.enable_tls && wizardForm.protocol === 'http'">
-            <el-form-item label="证书类型">
-              <el-radio-group v-model="wizardForm.tls_auto_cert">
-                <el-radio :value="true">Let's Encrypt (免费自动)</el-radio>
-                <el-radio :value="false">手动上传证书</el-radio>
+            <el-form-item label="证书来源">
+              <el-radio-group v-model="wizardForm.tls_source">
+                <el-radio value="manual">手动上传</el-radio>
+                <el-radio value="acme_dns">ACME + DNS 自动</el-radio>
               </el-radio-group>
             </el-form-item>
-            <template v-if="wizardForm.tls_auto_cert">
-              <el-form-item label="证书配置">
-                <el-select v-model="wizardForm.tls_email" placeholder="选择证书配置" style="width: 100%;" @change="handleCertConfigChange">
-                  <el-option v-for="config in certConfigs" :key="config.id" :label="config.name" :value="config.acme_email">
-                    <span>{{ config.name }}</span>
-                    <span style="float: right; color: #999; font-size: 12px;">{{ config.acme_email }}</span>
-                  </el-option>
+            <template v-if="wizardForm.tls_source === 'acme_dns'">
+              <el-form-item label="DNS 配置">
+                <el-select v-model="wizardForm.acme_config_id" placeholder="选择 DNS 提供商配置" style="width: 100%;">
+                  <el-option v-for="cfg in certConfigs" :key="cfg.id" :label="cfg.name" :value="cfg.id" />
                 </el-select>
-                <div class="form-tip">请先在设置页面添加证书配置</div>
+                <div class="form-tip">请先在「系统设置 / 免费证书」中添加 DNS 提供商配置</div>
               </el-form-item>
             </template>
             <template v-else>
@@ -649,6 +646,8 @@ interface Rule {
   host_header: string
   upstreams: Upstream[]
   enable_tls: boolean
+  tls_source?: string
+  acme_config_id?: number
   tls_cert: string
   tls_key: string
   tls_auto_cert: boolean
@@ -896,6 +895,8 @@ const wizardForm = reactive<Rule>({
   host_header: '',
   upstreams: [],
   enable_tls: false,
+  tls_source: 'manual',
+  acme_config_id: 0,
   tls_cert: '',
   tls_key: '',
   tls_auto_cert: true,
@@ -994,10 +995,6 @@ const fetchCertConfigs = async () => {
   } catch (e) {
     console.error('Failed to fetch cert configs:', e)
   }
-}
-
-const handleCertConfigChange = (email: string) => {
-  wizardForm.tls_email = email
 }
 
 const validateCertificate = async () => {
@@ -1129,6 +1126,8 @@ const openWizard = (rule?: Rule) => {
         protocol: u.protocol || 'http',
       })) || [],
       enable_tls: rule.enable_tls || false,
+      tls_source: rule.tls_source || (rule.tls_auto_cert ? 'acme_dns' : 'manual'),
+      acme_config_id: rule.acme_config_id || 0,
       tls_cert: rule.tls_cert || '',
       tls_key: rule.tls_key || '',
       tls_auto_cert: rule.tls_auto_cert || true,
@@ -1159,6 +1158,8 @@ const openWizard = (rule?: Rule) => {
   dns_family: ['ipv4'],
       upstreams: [defaultUpstream()],
       enable_tls: false,
+      tls_source: 'manual',
+      acme_config_id: 0,
       tls_cert: '',
       tls_key: '',
       tls_auto_cert: true,
@@ -1214,6 +1215,14 @@ const nextStep = () => {
   }
   if (currentStep.value === 1) {
     // TLS step - only for http with enable_tls
+    if (wizardForm.tls_source === 'acme_dns' && !wizardForm.acme_config_id) {
+      ElMessage.warning('请选择 DNS 提供商配置')
+      return
+    }
+    if (wizardForm.tls_source === 'manual' && (!wizardForm.tls_cert.trim() || !wizardForm.tls_key.trim())) {
+      ElMessage.warning('请上传证书和私钥')
+      return
+    }
     currentStep.value++
     return
   }
@@ -1311,9 +1320,11 @@ const submitWizard = async () => {
       host_header: wizardForm.host_header,
       upstreams: validUpstreams,
       enable_tls: wizardForm.enable_tls,
-      tls_cert: wizardForm.tls_cert,
-      tls_key: wizardForm.tls_key,
-      tls_auto_cert: wizardForm.tls_auto_cert,
+      tls_source: wizardForm.tls_source,
+      acme_config_id: wizardForm.acme_config_id,
+      tls_cert: wizardForm.tls_source === 'manual' ? wizardForm.tls_cert : '',
+      tls_key: wizardForm.tls_source === 'manual' ? wizardForm.tls_key : '',
+      tls_auto_cert: wizardForm.tls_source === 'acme_dns',
       tls_email: wizardForm.tls_email,
       tls_http_redirect: wizardForm.tls_http_redirect,
       enable_compress: wizardForm.enable_compress,
