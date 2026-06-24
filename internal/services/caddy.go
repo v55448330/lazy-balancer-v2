@@ -15,6 +15,7 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/services/dnsproviders"
 )
 
 // CaddyService handles Caddy configuration management
@@ -1480,6 +1481,9 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		HealthCheckUnhealthyThreshold int
 		HealthCheckHealthyThreshold   int
 		EnableTLS                     bool
+		TLSSource                     string
+		ACMEConfigID                  int
+		ACMEEmail                     string
 		TLSCert                       string
 		TLSKey                        string
 		TLSAutoCert                   bool
@@ -1512,7 +1516,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		       IIF(dynamic_dns IN ('1',1),1,0), IIF(enable_dns_server IN ('1',1),1,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval,
 		       COALESCE(health_check_timeout,5), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
-		       IIF(enable_tls IN ('1',1),1,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
+		       IIF(enable_tls IN ('1',1),1,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
 		       IIF(tls_auto_cert IN ('1',1),1,0), COALESCE(tls_email,''), IIF(tls_http_redirect IN ('1',1),1,0),
 		       IIF(enabled IN ('1',1),1,0), IIF(enable_compress IN ('1',1),1,0), COALESCE(compress_types,'gzip'),
 		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(host_header,'')
@@ -1524,9 +1528,9 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 	}
 	defer rows.Close()
 
-	var dnsProvider, letsencryptEmail string
+	var dnsProvider, letsencryptEmail, acmeEmail string
 	var isMaster bool
-	db.DB.QueryRow("SELECT COALESCE(dns_provider,''), COALESCE(letsencrypt_email,''), is_master FROM global_config WHERE id = 1").Scan(&dnsProvider, &letsencryptEmail, &isMaster)
+	db.DB.QueryRow("SELECT COALESCE(dns_provider,''), COALESCE(letsencrypt_email,''), COALESCE(acme_email,''), is_master FROM global_config WHERE id = 1").Scan(&dnsProvider, &letsencryptEmail, &acmeEmail, &isMaster)
 
 	var allRules []ruleWithUpstreams
 
@@ -1535,9 +1539,10 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		err := rows.Scan(&r.CaddyID, &r.Name, &r.Protocol, &r.Domain, &r.ListenPort, &r.Strategy,
 			&r.DynamicDNS, &r.EnableDnsServer, &r.DnsServer, &r.DnsFamily, &r.HealthCheckPath, &r.HealthCheckInterval,
 			&r.HealthCheckTimeout, &r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
-		&r.EnableTLS, &r.TLSCert, &r.TLSKey, &r.TLSAutoCert, &r.TLSEmail,
-		&r.TLSHTTPRedirect, &r.Enabled, &r.EnableCompress, &r.CompressTypes,
+			&r.EnableTLS, &r.TLSSource, &r.ACMEConfigID, &r.TLSCert, &r.TLSKey, &r.TLSAutoCert, &r.TLSEmail,
+			&r.TLSHTTPRedirect, &r.Enabled, &r.EnableCompress, &r.CompressTypes,
 			&r.EnableActiveHealthCheck, &r.HostHeader)
+
 		if err != nil {
 			log.Printf("Failed to scan rule: %v", err)
 			continue
@@ -1834,13 +1839,31 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		},
 	}
 
-	// Add TLS certificates configuration for manual certificates
-	if len(tlsCertificates) > 0 {
-		apps["tls"] = map[string]interface{}{
-			"certificates": map[string]interface{}{
+	// Add TLS automation policies for ACME DNS challenge
+	var automationRules []tlsAutomationRule
+	for _, rwu := range allRules {
+		automationRules = append(automationRules, tlsAutomationRule{
+			EnableTLS:    rwu.rule.EnableTLS,
+			TLSSource:    rwu.rule.TLSSource,
+			ACMEConfigID: rwu.rule.ACMEConfigID,
+			ACMEEmail:    rwu.rule.ACMEEmail,
+			Domain:       rwu.rule.Domain,
+		})
+	}
+	automationPolicies := buildTLSAutomationPolicies(automationRules, acmeEmail)
+	if len(automationPolicies) > 0 || len(tlsCertificates) > 0 {
+		tlsApp := map[string]interface{}{}
+		if len(tlsCertificates) > 0 {
+			tlsApp["certificates"] = map[string]interface{}{
 				"load_pem": tlsCertificates,
-			},
+			}
 		}
+		if len(automationPolicies) > 0 {
+			tlsApp["automation"] = map[string]interface{}{
+				"policies": automationPolicies,
+			}
+		}
+		apps["tls"] = tlsApp
 	}
 
 	conf := map[string]interface{}{
@@ -1902,6 +1925,84 @@ func splitAndTrim(s string) []string {
 	return result
 }
 
+func buildTLSAutomationPolicies(rules []tlsAutomationRule, acmeEmail string) []map[string]interface{} {
+	policies := []map[string]interface{}{}
+	for _, rule := range rules {
+		if !rule.EnableTLS || rule.TLSSource != "acme_dns" || rule.ACMEConfigID == 0 {
+			continue
+		}
+
+		var provider, credentials string
+		err := db.DB.QueryRow("SELECT dns_provider, dns_credentials FROM certificate_configs WHERE id=? AND enabled=1", rule.ACMEConfigID).Scan(&provider, &credentials)
+		if err != nil {
+			log.Printf("Failed to load certificate config %d: %v", rule.ACMEConfigID, err)
+			continue
+		}
+
+		p, ok := dnsproviders.Get(provider)
+		if !ok {
+			log.Printf("Unknown DNS provider %s for config %d", provider, rule.ACMEConfigID)
+			continue
+		}
+
+		var creds map[string]string
+		if err := json.Unmarshal([]byte(credentials), &creds); err != nil {
+			log.Printf("Failed to unmarshal DNS credentials for config %d: %v", rule.ACMEConfigID, err)
+			continue
+		}
+		providerJSON, err := p.BuildCredentialsJSON(creds)
+		if err != nil {
+			log.Printf("Failed to build DNS credentials JSON for config %d: %v", rule.ACMEConfigID, err)
+			continue
+		}
+
+		envVar := dnsproviders.EnvVarName(rule.ACMEConfigID, p)
+		email := rule.ACMEEmail
+		if email == "" {
+			email = acmeEmail
+		}
+
+		for _, domain := range strings.Split(rule.Domain, ",") {
+			domain = strings.TrimSpace(domain)
+			if domain == "" {
+				continue
+			}
+
+			providerCfg := map[string]interface{}{
+				"name": p.Code(),
+			}
+			for k := range providerJSON {
+				providerCfg[k] = "{" + envVar + "}"
+			}
+
+			policies = append(policies, map[string]interface{}{
+				"subjects": []string{domain},
+				"issuers": []map[string]interface{}{
+					{
+						"module": "acme",
+						"email":  email,
+						"challenges": map[string]interface{}{
+							"dns": map[string]interface{}{
+								"provider":  providerCfg,
+								"resolvers": []string{"119.29.29.29", "1.1.1.1"},
+							},
+						},
+					},
+				},
+			})
+		}
+	}
+	return policies
+}
+
+type tlsAutomationRule struct {
+	EnableTLS    bool
+	TLSSource    string
+	ACMEConfigID int
+	ACMEEmail    string
+	Domain       string
+}
+
 type SingleRuleConfig struct {
 	ID                      int
 	CaddyID                 string
@@ -1918,12 +2019,15 @@ type SingleRuleConfig struct {
 	HealthCheckInterval     int
 	HealthCheckTimeout      int
 	EnableTLS               bool
+	TLSSource               string
+	ACMEConfigID            int
+	ACMEEmail               string
 	TLSCert                 string
 	TLSKey                  string
 	TLSAutoCert             bool
 	TLSEmail                string
-		TLSHTTPRedirect         bool
-		EnableCompress          bool
+	TLSHTTPRedirect         bool
+	EnableCompress          bool
 	CompressTypes           string
 	EnableActiveHealthCheck bool
 	HostHeader              string
