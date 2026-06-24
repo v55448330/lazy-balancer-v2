@@ -1,7 +1,9 @@
 package services
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
@@ -73,6 +75,9 @@ func (m *MetricsService) collect() {
 	metrics := m.parsePrometheusMetrics(string(body))
 	m.storeMetrics(metrics)
 	m.updateOverview(metrics)
+
+	// Check TLS certificate expiration
+	m.checkTLSCertificateExpiration()
 }
 
 type parsedMetrics struct {
@@ -149,7 +154,7 @@ func (m *MetricsService) storeMetrics(metrics parsedMetrics) {
 		(rule_id, timestamp, requests_total, requests_2xx, requests_3xx, 
 		 requests_4xx, requests_5xx, bytes_in, bytes_out, 
 		 latency_p50, latency_p95, latency_p99)
-		VALUES (NULL, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (NULL, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, metrics.requestsTotal, metrics.requests2xx, metrics.requests3xx,
 		metrics.requests4xx, metrics.requests5xx, metrics.bytesIn, metrics.bytesOut,
 		metrics.latencyP50, metrics.latencyP95, metrics.latencyP99)
@@ -390,13 +395,13 @@ func (s *SyncService) applySyncData(data models.SyncData) error {
 					dynamic_dns, health_check_path, health_check_interval, health_check_timeout,
 					health_check_unhealthy_threshold, health_check_healthy_threshold,
 					enable_tls, tls_cert, tls_key, tls_auto_cert, tls_email, tls_http_redirect, 
-					tls_hsts, enabled)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, rule.ID, rule.Name, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
+					enabled)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, 			rule.ID, rule.Name, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 				rule.DynamicDNS, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 				rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
 				rule.EnableTLS, rule.TLSCert, rule.TLSKey, rule.TLSAutoCert, rule.TLSEmail,
-				rule.TLSHTTPRedirect, rule.TLSHSTS, rule.Enabled)
+				rule.TLSHTTPRedirect, rule.Enabled)
 
 			for _, u := range rule.Upstreams {
 				tx.Exec(`
@@ -428,4 +433,58 @@ func (s *SyncService) applySyncData(data models.SyncData) error {
 	}
 
 	return nil
+}
+
+// checkTLSCertificateExpiration checks all manual TLS certificates for expiration
+func (m *MetricsService) checkTLSCertificateExpiration() {
+	rows, err := db.DB.Query(`
+		SELECT caddy_id, name, domain, tls_cert 
+		FROM lb_rules 
+		WHERE enable_tls = 1 AND tls_auto_cert = 0 AND tls_cert != ''
+	`)
+	if err != nil {
+		log.Printf("Failed to query TLS certificates for expiration check: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	var expiredCount, expiringSoonCount int
+
+	for rows.Next() {
+		var caddyID, name, domain, certPEM string
+		if err := rows.Scan(&caddyID, &name, &domain, &certPEM); err != nil {
+			continue
+		}
+
+		// Parse certificate
+		block, _ := pem.Decode([]byte(certPEM))
+		if block == nil {
+			log.Printf("Warning: Invalid certificate PEM for rule %s (%s)", caddyID, name)
+			continue
+		}
+
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			log.Printf("Warning: Failed to parse certificate for rule %s (%s): %v", caddyID, name, err)
+			continue
+		}
+
+		// Check expiration
+		daysUntilExpiry := int(cert.NotAfter.Sub(now).Hours() / 24)
+
+		if now.After(cert.NotAfter) {
+			log.Printf("⚠️ CRITICAL: TLS certificate expired for rule '%s' (domain: %s, caddy_id: %s). Expired on %s", 
+				name, domain, caddyID, cert.NotAfter.Format("2006-01-02"))
+			expiredCount++
+		} else if daysUntilExpiry <= 30 {
+			log.Printf("⚠️ WARNING: TLS certificate expiring soon for rule '%s' (domain: %s, caddy_id: %s). Expires in %d days (%s)", 
+				name, domain, caddyID, daysUntilExpiry, cert.NotAfter.Format("2006-01-02"))
+			expiringSoonCount++
+		}
+	}
+
+	if expiredCount > 0 || expiringSoonCount > 0 {
+		log.Printf("TLS Certificate Check: %d expired, %d expiring within 30 days", expiredCount, expiringSoonCount)
+	}
 }

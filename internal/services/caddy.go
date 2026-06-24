@@ -862,6 +862,76 @@ func (s *CaddyService) CreateServerIfNotExists(serverName string, listenPort int
 	return nil
 }
 
+// ApplyTLSCertificate configures TLS certificate for a server and domain
+func (s *CaddyService) ApplyTLSCertificate(serverName string, caddyID string, domain string, certPEM string, keyPEM string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 1. Add TLS certificate to apps.tls.certificates.load_pem
+	certConfig := map[string]interface{}{
+		"cert_pem": certPEM,
+		"key_pem":  keyPEM,
+		"tags":     []string{caddyID},
+	}
+
+	certData, err := json.Marshal(certConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal cert config: %w", err)
+	}
+
+	// Try to append to existing load_pem array
+	req, err := http.NewRequest("POST", s.adminURL+"/config/apps/tls/certificates/load_pem", bytes.NewReader(certData))
+	if err != nil {
+		return fmt.Errorf("failed to create cert request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to apply TLS certificate: %w", err)
+	}
+	resp.Body.Close()
+
+	// 2. Add tls_connection_policies to the server
+	domainHosts := strings.Split(domain, ",")
+	for i, d := range domainHosts {
+		domainHosts[i] = strings.TrimSpace(d)
+	}
+
+	tlsPolicy := map[string]interface{}{
+		"match": map[string]interface{}{
+			"sni": domainHosts,
+		},
+		"certificate_selection": map[string]interface{}{
+			"any_tag": []string{caddyID},
+		},
+	}
+
+	policyData, err := json.Marshal(tlsPolicy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal TLS policy: %w", err)
+	}
+
+	req, err = http.NewRequest("POST", s.adminURL+fmt.Sprintf("/config/apps/http/servers/%s/tls_connection_policies", serverName), bytes.NewReader(policyData))
+	if err != nil {
+		return fmt.Errorf("failed to create policy request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to apply TLS policy: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("apply TLS policy failed: %s", string(body))
+	}
+
+	return nil
+}
+
 func getPortFromServerName(serverName string) string {
 	parts := strings.Split(serverName, "_")
 	if len(parts) >= 2 {
@@ -1415,7 +1485,6 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		TLSAutoCert                   bool
 		TLSEmail                      string
 		TLSHTTPRedirect               bool
-		TLSHSTS                       int
 		Enabled                       bool
 		EnableCompress                bool
 		CompressTypes                 string
@@ -1445,7 +1514,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		       COALESCE(health_check_timeout,5), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 		       IIF(enable_tls IN ('1',1),1,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
 		       IIF(tls_auto_cert IN ('1',1),1,0), COALESCE(tls_email,''), IIF(tls_http_redirect IN ('1',1),1,0),
-		       COALESCE(tls_hsts,0), IIF(enabled IN ('1',1),1,0), IIF(enable_compress IN ('1',1),1,0), COALESCE(compress_types,'gzip'),
+		       IIF(enabled IN ('1',1),1,0), IIF(enable_compress IN ('1',1),1,0), COALESCE(compress_types,'gzip'),
 		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(host_header,'')
 		FROM lb_rules WHERE enabled = 1
 	`)
@@ -1466,8 +1535,8 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		err := rows.Scan(&r.CaddyID, &r.Name, &r.Protocol, &r.Domain, &r.ListenPort, &r.Strategy,
 			&r.DynamicDNS, &r.EnableDnsServer, &r.DnsServer, &r.DnsFamily, &r.HealthCheckPath, &r.HealthCheckInterval,
 			&r.HealthCheckTimeout, &r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
-			&r.EnableTLS, &r.TLSCert, &r.TLSKey, &r.TLSAutoCert, &r.TLSEmail,
-			&r.TLSHTTPRedirect, &r.TLSHSTS, &r.Enabled, &r.EnableCompress, &r.CompressTypes,
+		&r.EnableTLS, &r.TLSCert, &r.TLSKey, &r.TLSAutoCert, &r.TLSEmail,
+		&r.TLSHTTPRedirect, &r.Enabled, &r.EnableCompress, &r.CompressTypes,
 			&r.EnableActiveHealthCheck, &r.HostHeader)
 		if err != nil {
 			log.Printf("Failed to scan rule: %v", err)
@@ -1531,7 +1600,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 			upstreamList[i] = map[string]interface{}{"dial": dial}
 		}
 
-		if r.Protocol == "http" || r.Protocol == "https" {
+		if r.Protocol == "http" {
 			httpServersByPort[r.ListenPort] = append(httpServersByPort[r.ListenPort], ru)
 		} else {
 			tcpServersByPort[r.ListenPort] = append(tcpServersByPort[r.ListenPort], ru)
@@ -1563,9 +1632,10 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 				HealthCheckInterval:     r.HealthCheckInterval,
 				HealthCheckTimeout:      r.HealthCheckTimeout,
 				EnableTLS:               r.EnableTLS,
-				TLSHTTPRedirect:         r.TLSHTTPRedirect,
-				TLSHSTS:                 r.TLSHSTS,
-				EnableCompress:          r.EnableCompress,
+				TLSCert:                 r.TLSCert,
+				TLSKey:                  r.TLSKey,
+			TLSHTTPRedirect:         r.TLSHTTPRedirect,
+			EnableCompress:          r.EnableCompress,
 				CompressTypes:           r.CompressTypes,
 				EnableActiveHealthCheck: r.EnableActiveHealthCheck,
 				HostHeader:              r.HostHeader,
@@ -1622,7 +1692,44 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		}
 
 		server["routes"] = routes
+
+		// Configure TLS for manual certificates
+		var tlsPolicies []interface{}
+		for _, ru := range rules {
+			r := ru.rule
+			if r.EnableTLS && !r.TLSAutoCert && r.TLSCert != "" && r.TLSKey != "" {
+				domainHosts := strings.Split(r.Domain, ",")
+				for i, d := range domainHosts {
+					domainHosts[i] = strings.TrimSpace(d)
+				}
+				tlsPolicies = append(tlsPolicies, map[string]interface{}{
+					"match": map[string]interface{}{
+						"sni": domainHosts,
+					},
+					"certificate_selection": map[string]interface{}{
+						"any_tag": []string{r.CaddyID},
+					},
+				})
+			}
+		}
+		if len(tlsPolicies) > 0 {
+			server["tls_connection_policies"] = tlsPolicies
+		}
+
 		servers[fmt.Sprintf("http_%d", port)] = server
+	}
+
+	// Collect manual TLS certificates for all rules
+	var tlsCertificates []map[string]interface{}
+	for _, ru := range allRules {
+		r := ru.rule
+		if r.EnableTLS && !r.TLSAutoCert && r.TLSCert != "" && r.TLSKey != "" {
+				tlsCertificates = append(tlsCertificates, map[string]interface{}{
+					"certificate": r.TLSCert,
+					"key":         r.TLSKey,
+					"tags":        []string{r.CaddyID},
+				})
+		}
 	}
 
 	for port, rules := range tcpServersByPort {
@@ -1717,19 +1824,30 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		servers["http_80"] = server
 	}
 
+	apps := map[string]interface{}{
+		"http": map[string]interface{}{
+			"metrics": map[string]interface{}{
+				"per_host":               true,
+				"observe_catchall_hosts": true,
+			},
+			"servers": servers,
+		},
+	}
+
+	// Add TLS certificates configuration for manual certificates
+	if len(tlsCertificates) > 0 {
+		apps["tls"] = map[string]interface{}{
+			"certificates": map[string]interface{}{
+				"load_pem": tlsCertificates,
+			},
+		}
+	}
+
 	conf := map[string]interface{}{
 		"admin": map[string]interface{}{
 			"listen": "0.0.0.0:2019",
 		},
-		"apps": map[string]interface{}{
-			"http": map[string]interface{}{
-				"metrics": map[string]interface{}{
-					"per_host":               true,
-					"observe_catchall_hosts": true,
-				},
-				"servers": servers,
-			},
-		},
+		"apps": apps,
 	}
 
 	conf["admin"] = map[string]interface{}{
@@ -1800,10 +1918,12 @@ type SingleRuleConfig struct {
 	HealthCheckInterval     int
 	HealthCheckTimeout      int
 	EnableTLS               bool
+	TLSCert                 string
+	TLSKey                  string
+	TLSAutoCert             bool
 	TLSEmail                string
-	TLSHTTPRedirect         bool
-	TLSHSTS                 int
-	EnableCompress          bool
+		TLSHTTPRedirect         bool
+		EnableCompress          bool
 	CompressTypes           string
 	EnableActiveHealthCheck bool
 	HostHeader              string
@@ -1844,7 +1964,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 	servers := make(map[string]interface{})
 
-	if rule.Protocol == "http" || rule.Protocol == "https" {
+	if rule.Protocol == "http" {
 		var upstreamList []interface{}
 		hasHTTPSUpstream := false
 
@@ -1913,7 +2033,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			}
 		}
 
-		if rule.Protocol == "http" {
+		if true { // HTTP protocol always supports health checks
 			healthChecks := map[string]interface{}{
 				"passive": map[string]interface{}{
 					"fail_duration": fmt.Sprintf("%ds", rule.HealthCheckInterval*3),
@@ -2002,13 +2122,27 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		}
 
 		serverName := fmt.Sprintf("http_%d", rule.ListenPort)
-		if rule.Protocol == "https" {
+		if rule.EnableTLS {
 			serverName = fmt.Sprintf("https_%d", rule.ListenPort)
 		}
 
 		server := map[string]interface{}{
 			"listen": []string{fmt.Sprintf(":%d", rule.ListenPort)},
 			"routes": routes,
+		}
+
+		// Add TLS configuration for manual certificates
+		if rule.EnableTLS && !rule.TLSAutoCert && rule.TLSCert != "" && rule.TLSKey != "" {
+			server["tls_connection_policies"] = []interface{}{
+				map[string]interface{}{
+					"match": map[string]interface{}{
+						"sni": domainHosts,
+					},
+					"certificate_selection": map[string]interface{}{
+						"any_tag": []string{rule.CaddyID},
+					},
+				},
+			}
 		}
 
 		servers[serverName] = server
@@ -2054,15 +2188,32 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		servers[fmt.Sprintf("tcp_%d", rule.ListenPort)] = server
 	}
 
+	apps := map[string]interface{}{
+		"http": map[string]interface{}{
+			"servers": servers,
+		},
+	}
+
+	// Add TLS certificates configuration for manual certificates
+	if rule.EnableTLS && !rule.TLSAutoCert && rule.TLSCert != "" && rule.TLSKey != "" {
+		apps["tls"] = map[string]interface{}{
+			"certificates": map[string]interface{}{
+				"load_pem": []map[string]interface{}{
+					{
+						"certificate": rule.TLSCert,
+						"key":         rule.TLSKey,
+						"tags":        []string{rule.CaddyID},
+					},
+				},
+			},
+		}
+	}
+
 	conf := map[string]interface{}{
 		"admin": map[string]interface{}{
 			"listen": "0.0.0.0:2019",
 		},
-		"apps": map[string]interface{}{
-			"http": map[string]interface{}{
-				"servers": servers,
-			},
-		},
+		"apps": apps,
 	}
 
 	return conf

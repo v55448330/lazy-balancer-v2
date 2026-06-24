@@ -145,6 +145,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				// Certificates
 				api.GET("/certificates", h.ListCertificates)
 				api.POST("/certificates/issue", h.IssueCertificate)
+				api.POST("/certificates/parse", h.ParseCertificate)
 			}
 		}
 	}

@@ -57,7 +57,6 @@ type LbRule struct {
 	TLSAutoCert                   bool         `json:"tls_auto_cert"`
 	TLSEmail                      string       `json:"tls_email"`
 	TLSHTTPRedirect               bool         `json:"tls_http_redirect"`
-	TLSHSTS                       int          `json:"tls_hsts"`
 	EnableCompress                bool         `json:"enable_compress"`
 	CompressTypes                 string       `json:"compress_types"`
 	Enabled                       bool         `json:"enabled"`
@@ -224,7 +223,6 @@ type CreateRuleRequest struct {
 	TLSAutoCert                   bool       `json:"tls_auto_cert"`
 	TLSEmail                      string     `json:"tls_email"`
 	TLSHTTPRedirect               bool       `json:"tls_http_redirect"`
-	TLSHSTS                       int        `json:"tls_hsts"`
 	EnableCompress                bool       `json:"enable_compress"`
 	CompressTypes                 string     `json:"compress_types"`
 }
@@ -254,7 +252,6 @@ type UpdateRuleRequest struct {
 	TLSAutoCert                   bool       `json:"tls_auto_cert"`
 	TLSEmail                      string     `json:"tls_email"`
 	TLSHTTPRedirect               bool       `json:"tls_http_redirect"`
-	TLSHSTS                       int        `json:"tls_hsts"`
 	EnableCompress                bool       `json:"enable_compress"`
 	CompressTypes                 string     `json:"compress_types"`
 	Enabled                       bool       `json:"enabled"`

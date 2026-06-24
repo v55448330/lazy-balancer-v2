@@ -13,7 +13,7 @@ services:
       - ./data:/app/data
     environment:
       - ADMIN_USER=admin
-      - ADMIN_PASSWORD=admin123
+      - ADMIN_PASSWORD=zdy123.org
       - NODE_NAME=master
       - NODE_MODE=master
       # Uncomment for slave mode:

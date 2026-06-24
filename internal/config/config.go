@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"strconv"
 	"time"
@@ -57,6 +58,32 @@ func Load(path string) *Config {
 		JWTExpire:            24 * time.Hour,
 		InitialAdminUser:     getEnv("ADMIN_USER", "admin"),
 		InitialAdminPassword: getEnv("ADMIN_PASSWORD", "admin123"),
+	}
+
+	// Load from config file if provided
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			// Try to parse as JSON (simple approach)
+			var fileCfg map[string]interface{}
+			if err := json.Unmarshal(data, &fileCfg); err == nil {
+				if v, ok := fileCfg["data_dir"].(string); ok && v != "" {
+					cfg.DataDir = v
+				}
+				if v, ok := fileCfg["static_dir"].(string); ok && v != "" {
+					cfg.StaticDir = v
+				}
+				if v, ok := fileCfg["port"].(float64); ok {
+					cfg.Port = int(v)
+				}
+				if v, ok := fileCfg["caddy_admin_url"].(string); ok && v != "" {
+					cfg.CaddyAdminURL = v
+				}
+				if v, ok := fileCfg["caddy_metrics_url"].(string); ok && v != "" {
+					cfg.CaddyMetricsURL = v
+				}
+			}
+		}
 	}
 
 	// Generate JWT secret if not set
