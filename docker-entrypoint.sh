@@ -25,6 +25,30 @@ if [ -n "$DNSPOD_TOKEN" ]; then
     export DNSPOD_TOKEN
 fi
 
+# Export ACME DNS provider credentials as environment variables for Caddy
+if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "${DATA_DIR:-/app/data}/lazy-balancer.db" "SELECT id, dns_provider, dns_credentials FROM certificate_configs WHERE enabled=1;" | while IFS='|' read -r id provider creds; do
+        if [ -n "$creds" ]; then
+            env_var_name=""
+            token=""
+            case "$provider" in
+                dnspod)
+                    token=$(echo "$creds" | jq -r '.auth_token // empty')
+                    env_var_name="DNSPOD_AUTH_TOKEN_${id}"
+                    ;;
+                cloudflare)
+                    token=$(echo "$creds" | jq -r '.api_token // empty')
+                    env_var_name="CF_API_TOKEN_${id}"
+                    ;;
+            esac
+            if [ -n "$env_var_name" ] && [ -n "$token" ]; then
+                export "$env_var_name=$token"
+                echo "Exported $env_var_name"
+            fi
+        fi
+    done
+fi
+
 # Start Caddy in background
 echo "Starting Caddy..."
 caddy run --config /app/config/Caddyfile --adapter caddyfile &

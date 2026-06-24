@@ -30,7 +30,7 @@ RUN npm run build
 
 # Final image
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates shadow
+RUN apk add --no-cache ca-certificates shadow jq sqlite
 WORKDIR /app
 
 COPY --from=xcaddy-builder /app/caddy /usr/local/bin/caddy
