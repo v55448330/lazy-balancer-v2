@@ -30,7 +30,6 @@
             size="large"
             :prefix-icon="Lock"
             show-password
-            @keyup.enter="handleLogin"
           />
         </el-form-item>
 

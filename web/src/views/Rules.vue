@@ -1266,16 +1266,25 @@ const submitWizard = async () => {
     return
   }
 
+  const enabledUpstreams = wizardForm.upstreams.filter(u => u.enabled)
+  if (enabledUpstreams.length === 0) {
+    ElMessage.warning('至少需要一个启用的上游服务器')
+    return
+  }
+
+  const action = editingRule.value ? '更新' : '创建'
+  try {
+    await ElMessageBox.confirm(
+      `确定要${action}规则 "${wizardForm.name}" 吗？`,
+      `${action}确认`,
+      { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' }
+    )
+  } catch (e) {
+    return
+  }
+
   saving.value = true
   try {
-    // Check if at least one upstream is enabled
-    const enabledUpstreams = wizardForm.upstreams.filter(u => u.enabled)
-    if (enabledUpstreams.length === 0) {
-      ElMessage.warning('至少需要一个启用的上游服务器')
-      saving.value = false
-      return
-    }
-
     const validUpstreams = wizardForm.upstreams.filter(u => u.host && u.port).map(u => ({
       ...u,
       weight: u.weight || 100,
