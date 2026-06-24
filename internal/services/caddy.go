@@ -2075,16 +2075,15 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		}
 
 		if rule.HostHeader != "" {
-			headersHandler := map[string]interface{}{
-				"handler": "headers",
+			proxyConfig["headers"] = map[string]interface{}{
 				"request": map[string]interface{}{
 					"set": map[string]interface{}{
 						"Host": []string{rule.HostHeader},
 					},
 				},
 			}
-			handleChain = append(handleChain, headersHandler)
 		}
+
 		handleChain = append(handleChain, proxyConfig)
 
 		var routes []interface{}
@@ -2352,15 +2351,13 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 		}
 
 		if rule.HostHeader != "" {
-			headersHandler := map[string]interface{}{
-				"handler": "headers",
+			proxyConfig["headers"] = map[string]interface{}{
 				"request": map[string]interface{}{
 					"set": map[string]interface{}{
 						"Host": []string{rule.HostHeader},
 					},
 				},
 			}
-			handleChain = append(handleChain, headersHandler)
 		}
 
 		handleChain = append(handleChain, proxyConfig)

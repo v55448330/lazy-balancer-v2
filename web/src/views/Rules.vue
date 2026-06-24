@@ -205,7 +205,14 @@
             <template v-else>
               <el-form-item label="证书 (PEM)">
                 <div class="cert-input-wrapper">
-                  <el-input v-model="wizardForm.tls_cert" type="textarea" :rows="8" placeholder="-----BEGIN CERTIFICATE-----..." class="cert-textarea" />
+                  <el-input 
+                    v-model="wizardForm.tls_cert" 
+                    type="textarea" 
+                    :rows="8" 
+                    placeholder="-----BEGIN CERTIFICATE-----..." 
+                    class="cert-textarea"
+                    @blur="validateCertificate"
+                  />
                   <el-button size="small" class="paste-btn" @click="pasteFromFile('cert')">
                     <el-icon><Document /></el-icon>从文件粘贴
                   </el-button>
@@ -213,20 +220,62 @@
               </el-form-item>
               <el-form-item label="私钥 (KEY)">
                 <div class="cert-input-wrapper">
-                  <el-input v-model="wizardForm.tls_key" type="textarea" :rows="8" placeholder="-----BEGIN PRIVATE KEY-----..." class="cert-textarea" />
+                  <el-input 
+                    v-model="wizardForm.tls_key" 
+                    type="textarea" 
+                    :rows="8" 
+                    placeholder="-----BEGIN PRIVATE KEY-----..." 
+                    class="cert-textarea"
+                    @blur="validateCertificate"
+                  />
                   <el-button size="small" class="paste-btn" @click="pasteFromFile('key')">
                     <el-icon><Document /></el-icon>从文件粘贴
                   </el-button>
                 </div>
               </el-form-item>
+              
+              <!-- Certificate Info Display -->
+              <div v-if="certInfo.valid || certInfo.warning || certInfo.error" class="cert-info-container">
+                <!-- Success or Warning with info -->
+                <el-alert
+                  v-if="certInfo.valid"
+                  :type="certInfo.warning ? 'warning' : 'success'"
+                  :closable="false"
+                  class="cert-info-alert"
+                >
+                  <template #title>
+                    <div class="cert-info-title">
+                      {{ certInfo.warning ? '证书验证通过（有警告）' : '证书验证通过' }}
+                    </div>
+                    <div class="cert-info-detail">
+                      域名: {{ certInfo.domain }} | 
+                      过期时间: {{ certInfo.expiryDate }} 
+                      <span v-if="certInfo.daysUntilExpiry <= 30" class="cert-expiry-warning">
+                        (剩余 {{ certInfo.daysUntilExpiry }} 天)
+                      </span>
+                      <span v-else class="cert-expiry-normal">
+                        (剩余 {{ certInfo.daysUntilExpiry }} 天)
+                      </span>
+                    </div>
+                    <div v-if="certInfo.warning" class="cert-warning-text">
+                      ⚠️ {{ certInfo.warning }}
+                    </div>
+                  </template>
+                </el-alert>
+                
+                <!-- Error only -->
+                <el-alert
+                  v-if="certInfo.error"
+                  :title="certInfo.error"
+                  type="error"
+                  :closable="false"
+                  class="cert-info-alert"
+                />
+              </div>
             </template>
             <el-form-item label="HTTP 重定向">
               <el-switch v-model="wizardForm.tls_http_redirect" />
               <div class="form-tip">将 HTTP 请求自动重定向到 HTTPS</div>
-            </el-form-item>
-            <el-form-item label="HSTS">
-              <el-switch v-model="wizardForm.tls_hsts" />
-              <div class="form-tip">启用 HSTS 强制使用 HTTPS</div>
             </el-form-item>
           </el-form>
           <el-alert v-if="wizardForm.protocol === 'http' && !wizardForm.enable_tls" type="info" :closable="false" title="请先在基本配置中启用 HTTPS" style="margin-top: 20px;" />
@@ -441,7 +490,15 @@
               {{ wizardForm.enable_compress ? (wizardForm.compress_types || 'gzip') : '禁用' }}
             </el-descriptions-item>
             <el-descriptions-item label="TLS 证书" v-if="wizardForm.enable_tls">
-              {{ wizardForm.tls_auto_cert ? certTypeLabels.auto : certTypeLabels.manual }}
+              <div v-if="wizardForm.tls_auto_cert">{{ certTypeLabels.auto }}</div>
+              <div v-else>
+                <div>{{ certTypeLabels.manual }}</div>
+                <div v-if="certInfo.valid" class="cert-preview-info">
+                  <el-tag size="small" :type="certInfo.warning ? 'warning' : 'success'">{{ certInfo.domain }}</el-tag>
+                  <span class="cert-expiry">过期: {{ certInfo.expiryDate }}</span>
+                  <span v-if="certInfo.daysUntilExpiry <= 30" class="cert-expiry-warning">({{ certInfo.daysUntilExpiry }} 天后)</span>
+                </div>
+              </div>
             </el-descriptions-item>
             <el-descriptions-item label="HTTP 重定向" v-if="wizardForm.enable_tls">
               {{ wizardForm.tls_http_redirect ? '启用' : '禁用' }}
@@ -597,7 +654,6 @@ interface Rule {
   tls_auto_cert: boolean
   tls_email: string
   tls_http_redirect: boolean
-  tls_hsts: number
   enable_compress: boolean
   compress_types: string
   enabled: boolean
@@ -809,6 +865,16 @@ const defaultUpstream = (): Upstream => ({
   protocol: 'http',
 })
 
+const certInfo = reactive({
+  valid: false,
+  domain: '',
+  issuer: '',
+  expiryDate: '',
+  daysUntilExpiry: 0,
+  warning: '',
+  error: ''
+})
+
 const wizardForm = reactive<Rule>({
   caddy_id: '',
   name: '',
@@ -835,7 +901,6 @@ const wizardForm = reactive<Rule>({
   tls_auto_cert: true,
   tls_email: '',
   tls_http_redirect: false,
-  tls_hsts: 0,
   enable_compress: false,
   compress_types: 'gzip',
   enabled: true,
@@ -935,6 +1000,70 @@ const handleCertConfigChange = (email: string) => {
   wizardForm.tls_email = email
 }
 
+const validateCertificate = async () => {
+  certInfo.valid = false
+  certInfo.warning = ''
+  certInfo.error = ''
+  certInfo.domain = ''
+  certInfo.expiryDate = ''
+  certInfo.daysUntilExpiry = 0
+
+  const certPEM = wizardForm.tls_cert?.trim() || ''
+  const keyPEM = wizardForm.tls_key?.trim() || ''
+
+  if (!certPEM && !keyPEM) return
+
+  if (!certPEM) {
+    certInfo.error = '请提供证书 (PEM)'
+    return
+  }
+
+  if (!keyPEM) {
+    certInfo.error = '请提供私钥 (KEY)'
+    return
+  }
+
+  // Validate certificate format
+  if (!certPEM.includes('-----BEGIN CERTIFICATE-----') || !certPEM.includes('-----END CERTIFICATE-----')) {
+    certInfo.error = '证书格式无效，必须以 -----BEGIN CERTIFICATE----- 开头'
+    return
+  }
+
+  // Validate private key format
+  const keyValid = 
+    (keyPEM.includes('-----BEGIN PRIVATE KEY-----') && keyPEM.includes('-----END PRIVATE KEY-----')) ||
+    (keyPEM.includes('-----BEGIN RSA PRIVATE KEY-----') && keyPEM.includes('-----END RSA PRIVATE KEY-----')) ||
+    (keyPEM.includes('-----BEGIN EC PRIVATE KEY-----') && keyPEM.includes('-----END EC PRIVATE KEY-----'))
+
+  if (!keyValid) {
+    certInfo.error = '私钥格式无效'
+    return
+  }
+
+  // Call backend API to parse certificate
+  try {
+    const res = await request.post('/certificates/parse', {
+      cert_pem: certPEM,
+      key_pem: keyPEM
+    })
+    
+    if (res.code === 0 && res.data) {
+      const data = res.data
+      certInfo.valid = data.valid
+      certInfo.domain = data.domain || '未知'
+      certInfo.issuer = data.issuer || ''
+      certInfo.expiryDate = data.not_after || ''
+      certInfo.daysUntilExpiry = data.days_until_expiry || 0
+      certInfo.warning = data.warning || ''
+      certInfo.error = ''
+    } else {
+      certInfo.error = res.message || '证书验证失败'
+    }
+  } catch (e: any) {
+    certInfo.error = e.message || '证书验证请求失败'
+  }
+}
+
 const pasteFromFile = async (type: 'cert' | 'key') => {
   try {
     // Create a file input element
@@ -1005,7 +1134,6 @@ const openWizard = (rule?: Rule) => {
       tls_auto_cert: rule.tls_auto_cert || true,
       tls_email: rule.tls_email || '',
       tls_http_redirect: rule.tls_http_redirect || false,
-      tls_hsts: rule.tls_hsts || 0,
       enable_compress: rule.enable_compress !== false,
       compress_types: compressType,
       enabled: rule.enabled,
@@ -1036,7 +1164,6 @@ const openWizard = (rule?: Rule) => {
       tls_auto_cert: true,
       tls_email: '',
       tls_http_redirect: false,
-      tls_hsts: 0,
       enable_compress: false,
       compress_types: 'gzip',
       enabled: true,
@@ -1180,7 +1307,6 @@ const submitWizard = async () => {
       tls_auto_cert: wizardForm.tls_auto_cert,
       tls_email: wizardForm.tls_email,
       tls_http_redirect: wizardForm.tls_http_redirect,
-      tls_hsts: wizardForm.tls_hsts,
       enable_compress: wizardForm.enable_compress,
       compress_types: wizardForm.compress_types || 'gzip',
       enabled: wizardForm.enabled,
@@ -1597,6 +1723,49 @@ onMounted(() => {
 }
 .paste-btn {
   align-self: flex-end;
+}
+
+.cert-info-container {
+  margin: 8px 20px;
+  max-width: calc(100% - 40px);
+}
+
+.cert-info-alert {
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+
+.cert-info-alert :deep(.el-alert__content) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cert-info-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.cert-info-detail {
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.4;
+}
+
+.cert-expiry-warning {
+  color: #e6a23c;
+  font-weight: 600;
+}
+
+.cert-expiry-normal {
+  color: #67c23a;
+}
+
+.cert-warning-text {
+  color: #e6a23c;
+  font-size: 13px;
+  margin-top: 4px;
+  font-weight: 500;
 }
 
 .wizard-steps { margin-bottom: 24px; }

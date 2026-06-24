@@ -161,4 +161,37 @@ onMounted(() => {
   color: #a78bfa !important;
   font-style: italic;
 }
+
+:deep(.vjs-tree-node:hover),
+:deep(.vjs-tree-node.is-highlight),
+:deep(.vjs-tree-node.dark:hover),
+:deep(.vjs-tree-node.dark.is-highlight),
+:deep(.vjs-tree-node .vjs-tree-node-actions) {
+  background-color: rgba(59, 130, 246, 0.22) !important;
+}
+
+:deep(.vjs-tree-node:hover .vjs-key),
+:deep(.vjs-tree-node:hover .vjs-value-string),
+:deep(.vjs-tree-node:hover .vjs-value-number),
+:deep(.vjs-tree-node:hover .vjs-value-boolean),
+:deep(.vjs-tree-node:hover .vjs-value-null),
+:deep(.vjs-tree-node:hover .vjs-value-undefined),
+:deep(.vjs-tree-node:hover .vjs-tree-brackets),
+:deep(.vjs-tree-node.is-highlight .vjs-key),
+:deep(.vjs-tree-node.is-highlight .vjs-value-string),
+:deep(.vjs-tree-node.is-highlight .vjs-value-number),
+:deep(.vjs-tree-node.is-highlight .vjs-value-boolean),
+:deep(.vjs-tree-node.is-highlight .vjs-value-null),
+:deep(.vjs-tree-node.is-highlight .vjs-value-undefined),
+:deep(.vjs-tree-node.is-highlight .vjs-tree-brackets) {
+  color: #ffffff !important;
+}
+
+:deep(.vjs-tree-node .vjs-tree-node-actions) {
+  background-color: rgba(59, 130, 246, 0.22) !important;
+}
+
+:deep(.vjs-tree-brackets:hover) {
+  color: #ffffff !important;
+}
 </style>
