@@ -49,3 +49,4 @@ openspec/
 # Build artifacts
 *.tgz
 dist/
+.superpowers/
