@@ -32,14 +32,6 @@
           <el-icon><List /></el-icon>
           <template #title>负载均衡</template>
         </el-menu-item>
-        <el-menu-item index="nodes" @click="goPage('nodes')">
-          <el-icon><Connection /></el-icon>
-          <template #title>节点管理</template>
-        </el-menu-item>
-        <el-menu-item index="settings" @click="goPage('settings')">
-          <el-icon><Setting /></el-icon>
-          <template #title>系统设置</template>
-        </el-menu-item>
         <el-menu-item index="caddy" @click="goPage('caddy')">
           <el-icon><Cpu /></el-icon>
           <template #title>全局配置</template>
@@ -48,9 +40,9 @@
           <el-icon><User /></el-icon>
           <template #title>用户管理</template>
         </el-menu-item>
-        <el-menu-item v-if="authStore.user?.role === 'admin'" index="keys" @click="goPage('keys')">
-          <el-icon><Key /></el-icon>
-          <template #title>API 密钥</template>
+        <el-menu-item index="settings" @click="goPage('settings')">
+          <el-icon><Setting /></el-icon>
+          <template #title>系统设置</template>
         </el-menu-item>
       </el-menu>
 
@@ -122,7 +114,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
-import { Monitor, DataAnalysis, List, Connection, Setting, Cpu, User, Key } from '@element-plus/icons-vue'
+import { Monitor, DataAnalysis, List, Setting, Cpu, User } from '@element-plus/icons-vue'
 
 const authStore = useAuthStore()
 const collapsed = ref(false)
@@ -134,11 +126,9 @@ const currentPage = computed(() => authStore.currentPage)
 const pageTitle: Record<string, string> = {
   dashboard: '仪表盘',
   rules: '负载均衡',
-  nodes: '节点管理',
-  settings: '系统设置',
   caddy: '全局配置',
   users: '用户管理',
-  keys: 'API 密钥',
+  settings: '系统设置',
 }
 
 const profileForm = ref({

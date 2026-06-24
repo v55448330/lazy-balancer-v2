@@ -10,11 +10,9 @@
   <AppLayout v-else>
     <Dashboard v-if="currentPage === 'dashboard'" />
     <Rules v-else-if="currentPage === 'rules'" />
-    <Nodes v-else-if="currentPage === 'nodes'" />
     <Settings v-else-if="currentPage === 'settings'" />
     <CaddyConfig v-else-if="currentPage === 'caddy'" />
     <Users v-else-if="currentPage === 'users'" />
-    <Keys v-else-if="currentPage === 'keys'" />
   </AppLayout>
 </template>
 
@@ -26,11 +24,9 @@ import Login from '@/views/Login.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Dashboard from '@/views/Dashboard.vue'
 import Rules from '@/views/Rules.vue'
-import Nodes from '@/views/Nodes.vue'
 import Settings from '@/views/Settings.vue'
 import CaddyConfig from '@/views/CaddyConfig.vue'
 import Users from '@/views/Users.vue'
-import Keys from '@/views/Keys.vue'
 
 const authStore = useAuthStore()
 const loading = ref(true)
