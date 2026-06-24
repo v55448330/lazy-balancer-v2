@@ -52,6 +52,8 @@ type LbRule struct {
 	Upstreams                     []Upstream   `json:"upstreams"`
 	HostHeader                    string       `json:"host_header"`
 	EnableTLS                     bool         `json:"enable_tls"`
+	TLSSource                     string       `json:"tls_source"`
+	ACMEConfigID                  int          `json:"acme_config_id"`
 	TLSCert                       string       `json:"tls_cert,omitempty"`
 	TLSKey                        string       `json:"tls_key,omitempty"`
 	TLSAutoCert                   bool         `json:"tls_auto_cert"`
@@ -72,6 +74,8 @@ type GlobalConfig struct {
 	CaddyConfig      string       `json:"caddy_config"`
 	DNSProvider      string       `json:"dns_provider"`
 	DNSCredentials   string       `json:"-"`
+	ACMEEmail        string       `json:"acme_email"`
+	CertExpiryDays   int          `json:"cert_expiry_days"`
 	LETSEncryptEmail string       `json:"letsencrypt_email"`
 	LogLevel         string       `json:"log_level"`
 	AccessLogEnabled bool         `json:"access_log_enabled"`
@@ -111,15 +115,25 @@ type TLSCertificate struct {
 
 // CertificateConfig represents free certificate configuration (ACME + DNS provider)
 type CertificateConfig struct {
-	ID          int          `json:"id"`
-	Name        string       `json:"name"`
-	ACMEEmail   string       `json:"acme_email"`
-	DNSProvider string       `json:"dns_provider"`
-	DNSID       string       `json:"dns_id"`
-	DNSKey      string       `json:"-"`
-	Enabled     bool         `json:"enabled"`
-	CreatedAt   time.Time    `json:"created_at"`
-	UpdatedAt   sql.NullTime `json:"updated_at"`
+	ID             int          `json:"id"`
+	Name           string       `json:"name"`
+	DNSProvider    string       `json:"dns_provider"`
+	DNSCredentials string       `json:"-"`
+	Enabled        bool         `json:"enabled"`
+	CreatedAt      time.Time    `json:"created_at"`
+	UpdatedAt      sql.NullTime `json:"updated_at"`
+}
+
+// CertJob represents an ACME certificate issuance job
+type CertJob struct {
+	ID        int          `json:"id"`
+	RuleID    string       `json:"rule_id"`
+	Domain    string       `json:"domain"`
+	Status    string       `json:"status"`
+	Message   string       `json:"message"`
+	ExpiresAt sql.NullTime `json:"expires_at"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt sql.NullTime `json:"updated_at"`
 }
 
 // Node represents a node in the cluster
@@ -218,6 +232,8 @@ type CreateRuleRequest struct {
 	HostHeader                    string     `json:"host_header"`
 	Upstreams                     []Upstream `json:"upstreams" binding:"required"`
 	EnableTLS                     bool       `json:"enable_tls"`
+	TLSSource                     string     `json:"tls_source"`
+	ACMEConfigID                  int        `json:"acme_config_id"`
 	TLSCert                       string     `json:"tls_cert"`
 	TLSKey                        string     `json:"tls_key"`
 	TLSAutoCert                   bool       `json:"tls_auto_cert"`
@@ -247,6 +263,8 @@ type UpdateRuleRequest struct {
 	HostHeader                    string     `json:"host_header"`
 	Upstreams                     []Upstream `json:"upstreams"`
 	EnableTLS                     bool       `json:"enable_tls"`
+	TLSSource                     string     `json:"tls_source"`
+	ACMEConfigID                  int        `json:"acme_config_id"`
 	TLSCert                       string     `json:"tls_cert"`
 	TLSKey                        string     `json:"tls_key"`
 	TLSAutoCert                   bool       `json:"tls_auto_cert"`
@@ -260,6 +278,8 @@ type UpdateRuleRequest struct {
 type UpdateConfigRequest struct {
 	DNSProvider      string `json:"dns_provider"`
 	DNSCredentials   string `json:"dns_credentials"`
+	ACMEEmail        string `json:"acme_email"`
+	CertExpiryDays   int    `json:"cert_expiry_days"`
 	LETSEncryptEmail string `json:"letsencrypt_email"`
 	LogLevel         string `json:"log_level"`
 	AccessLogEnabled *bool  `json:"access_log_enabled"`
@@ -282,21 +302,17 @@ type UpdateNodeRequest struct {
 }
 
 type CreateCertificateConfigRequest struct {
-	Name        string `json:"name" binding:"required"`
-	ACMEEmail   string `json:"acme_email" binding:"required"`
-	DNSProvider string `json:"dns_provider"`
-	DNSID       string `json:"dns_id"`
-	DNSKey      string `json:"dns_key"`
-	Enabled     bool   `json:"enabled"`
+	Name            string            `json:"name" binding:"required"`
+	DNSProvider     string            `json:"dns_provider" binding:"required"`
+	DNSCredentials  map[string]string `json:"dns_credentials"`
+	Enabled         bool              `json:"enabled"`
 }
 
 type UpdateCertificateConfigRequest struct {
-	Name        string `json:"name"`
-	ACMEEmail   string `json:"acme_email"`
-	DNSProvider string `json:"dns_provider"`
-	DNSID       string `json:"dns_id"`
-	DNSKey      string `json:"dns_key"`
-	Enabled     *bool  `json:"enabled"`
+	Name            string            `json:"name"`
+	DNSProvider     string            `json:"dns_provider"`
+	DNSCredentials  map[string]string `json:"dns_credentials"`
+	Enabled         *bool             `json:"enabled"`
 }
 
 type MetricsOverview struct {
