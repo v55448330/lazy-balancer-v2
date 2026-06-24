@@ -1,6 +1,8 @@
 # Binaries
 bin/
 cmd/server/lazy-balancer
+lazy-balancer
+server
 
 # Data (runtime)
 data/

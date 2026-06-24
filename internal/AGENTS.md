@@ -1,6 +1,6 @@
 # PROJECT KNOWLEDGE BASE: Lazy Balancer V2 (Internal)
 
-**Generated:** 2026-04-09
+**Generated:** 2026-04-24
 **Scope:** Backend Core Logic
 
 ## OVERVIEW
@@ -12,10 +12,10 @@ The `internal/` directory contains the private business logic for the load balan
 ├── caddy/       # Caddy-specific types and helpers
 ├── config/      # Application configuration logic
 ├── db/          # SQLite schema and persistence
-├── handlers/    # HTTP API request handlers
+├── handlers/    # HTTP API request handlers (see handlers/AGENTS.md)
 ├── middleware/  # Request interceptors (auth, logging)
 ├── models/      # Shared data structures
-└── services/    # Core business services (Caddy orchestration)
+└── services/    # Core business services (see services/AGENTS.md)
 ```
 
 ## WHERE TO LOOK
