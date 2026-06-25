@@ -58,7 +58,7 @@ export interface Rule {
   listen_port: number
   strategy: string
   enabled: boolean
-  upstreams: string
+  upstreams: any[]
   enable_tls: boolean
   tls_auto_https: boolean
 }

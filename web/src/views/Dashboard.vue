@@ -441,26 +441,78 @@ const fetchAllData = async () => {
 
     if (rulesRes?.data) {
       rules.value = rulesRes.data || []
+      // Load metrics immediately after rules are known
+      fetchRuleMetrics()
     }
   } catch (e) {
     console.error(e)
   }
 }
 
+const fetchRuleHealth = async () => {
+  if (rules.value.length === 0) return
+  try {
+    const res = await request.get('/config/health')
+    const healthData = res.data || {}
+    const newRuleMetrics: Record<string, RuleMetrics> = { ...ruleMetrics.value }
+    rules.value.forEach((rule: Rule) => {
+      const metrics = newRuleMetrics[rule.caddy_id] || {
+        requests_total: 0,
+        requests_in_flight: 0,
+        status_2xx: 0,
+        status_3xx: 0,
+        status_4xx: 0,
+        status_5xx: 0,
+        bytes_in: 0,
+        bytes_out: 0,
+      }
+      metrics.healthy = false
+      if (rule.enabled && rule.upstreams?.length) {
+        const allHealthy = rule.upstreams.every((u: any) => {
+          const key = `${u.host}:${u.port}`
+          for (const serverHealth of Object.values(healthData) as any[]) {
+            if (serverHealth?.[key]) {
+              return serverHealth[key].healthy === true
+            }
+          }
+          return false
+        })
+        metrics.healthy = allHealthy
+      }
+      newRuleMetrics[rule.caddy_id] = metrics
+    })
+    ruleMetrics.value = newRuleMetrics
+  } catch (e) {
+    console.error('Failed to fetch rule health:', e)
+  }
+}
+
 const fetchRuleMetrics = async () => {
   if (rules.value.length === 0) return
-  const headers = { Authorization: `Bearer ${authStore.token}` }
-  const metricsPromises = rules.value.map((rule: Rule) =>
-    request.get(`/metrics/rule/${rule.caddy_id}`, { headers })
-  )
-  const metricsResults = await Promise.allSettled(metricsPromises)
-  const newRuleMetrics: Record<string, RuleMetrics> = {}
-  metricsResults.forEach((result: any, index: number) => {
-    if (result.status === 'fulfilled' && result.value?.data) {
-      newRuleMetrics[rules.value[index].caddy_id] = result.value.data
-    }
-  })
-  ruleMetrics.value = newRuleMetrics
+  try {
+    const headers = { Authorization: `Bearer ${authStore.token}` }
+    const metricsPromises = rules.value.map((rule: Rule) =>
+      request.get(`/metrics/rule/${rule.caddy_id}`, { headers })
+    )
+    const metricsResults = await Promise.allSettled(metricsPromises)
+    const newRuleMetrics: Record<string, RuleMetrics> = {}
+    metricsResults.forEach((result: any, index: number) => {
+      if (result.status === 'fulfilled' && result.value?.data) {
+        newRuleMetrics[rules.value[index].caddy_id] = result.value.data
+      }
+    })
+    // Preserve existing health values until health endpoint updates them
+    Object.keys(ruleMetrics.value).forEach((caddyId: string) => {
+      const existing = (ruleMetrics.value as Record<string, RuleMetrics>)[caddyId]
+      const next = newRuleMetrics[caddyId]
+      if (next && existing && existing.healthy !== undefined) {
+        next.healthy = existing.healthy
+      }
+    })
+    ruleMetrics.value = newRuleMetrics
+  } catch (e) {
+    console.error('Failed to fetch rule metrics:', e)
+  }
 }
 
 const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
@@ -510,10 +562,9 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
 }
 
 onMounted(() => {
-  fetchAllData()
-  fetchRuleMetrics()
+  fetchAllData().then(() => fetchRuleHealth())
   timer = window.setInterval(() => {
-    fetchAllData()
+    fetchAllData().then(() => fetchRuleHealth())
     fetchRuleMetrics()
   }, 5000)
 })
