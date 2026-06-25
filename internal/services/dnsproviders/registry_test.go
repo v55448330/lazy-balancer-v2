@@ -27,20 +27,9 @@ func TestDNSPodCredentials(t *testing.T) {
 	}
 }
 
-func TestCloudflareCredentials(t *testing.T) {
-	p, ok := Get("cloudflare")
-	if !ok {
-		t.Fatal("cloudflare not registered")
-	}
-	_, err := p.BuildCredentialsJSON(map[string]string{})
-	if err == nil {
-		t.Fatal("expected error for empty token")
-	}
-}
-
 func TestListProviders(t *testing.T) {
 	list := List()
-	if len(list) != 2 {
-		t.Fatalf("expected 2 providers, got %d", len(list))
+	if len(list) != 1 {
+		t.Fatalf("expected 1 provider, got %d", len(list))
 	}
 }

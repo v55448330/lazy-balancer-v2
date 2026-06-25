@@ -8,8 +8,7 @@ WORKDIR /app
 
 ENV GOTOOLCHAIN=auto
 RUN xcaddy build v2.11.4 \
-  --with github.com/caddy-dns/dnspod@fb7cc31cc04c68a304b8d2672c3e5d9f2ad3d7ba \
-  --with github.com/caddy-dns/cloudflare
+  --with github.com/caddy-dns/dnspod@fb7cc31cc04c68a304b8d2672c3e5d9f2ad3d7ba
 
 # Build Go backend
 FROM golang:1.21-alpine AS backend

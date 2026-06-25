@@ -1,5 +1,5 @@
 <template>
-  <el-table :data="jobs" size="small" v-loading="loading" :empty-text="' '">
+  <el-table v-if="loading || jobs.length > 0" :data="jobs" size="small" v-loading="loading">
     <el-table-column prop="rule_id" label="规则 ID" width="120" show-overflow-tooltip />
     <el-table-column prop="domain" label="域名" min-width="180" show-overflow-tooltip />
     <el-table-column prop="status" label="状态" width="100" align="center">
