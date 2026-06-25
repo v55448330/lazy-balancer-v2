@@ -1,59 +1,22 @@
 <template>
-  <div class="page">
+  <div v-if="activeTab === 'apikeys' && isAdmin" class="page">
+    <APIKeys />
+  </div>
+
+  <div v-else class="page">
     <div class="page-header">
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Setting /></el-icon>
-          系统设置
+          {{ pageTitle }}
         </h2>
-        <p class="page-desc">配置系统参数、证书提供者和行为选项</p>
+        <p class="page-desc">{{ pageDesc }}</p>
       </div>
     </div>
 
-    <div class="settings-layout">
-      <div class="settings-sidebar">
-        <div
-          class="menu-item"
-          :class="{ active: activeTab === 'basic' }"
-          @click="activeTab = 'basic'"
-        >
-          <el-icon><Setting /></el-icon>
-          <span>基础设置</span>
-        </div>
-        <div
-          class="menu-item"
-          :class="{ active: activeTab === 'cluster' }"
-          @click="activeTab = 'cluster'"
-        >
-          <el-icon><Connection /></el-icon>
-          <span>集群管理</span>
-        </div>
-        <div
-          class="menu-item"
-          :class="{ active: activeTab === 'certificates' }"
-          @click="activeTab = 'certificates'"
-        >
-          <el-icon><Lock /></el-icon>
-          <span>免费证书</span>
-        </div>
-        <div
-          v-if="isAdmin"
-          class="menu-item"
-          :class="{ active: activeTab === 'apikeys' }"
-          @click="activeTab = 'apikeys'"
-        >
-          <el-icon><Key /></el-icon>
-          <span>API 密钥</span>
-        </div>
-      </div>
-
-      <div class="settings-content">
-        <BasicSettings v-if="activeTab === 'basic'" v-model:settings="settings" />
-        <ClusterSettings v-if="activeTab === 'cluster'" v-model:settings="settings" />
-        <FreeCertificates v-if="activeTab === 'certificates'" v-model:global="global" />
-        <APIKeys v-if="activeTab === 'apikeys' && isAdmin" />
-      </div>
-    </div>
+    <BasicSettings v-if="activeTab === 'basic'" v-model:settings="settings" />
+    <ClusterSettings v-else-if="activeTab === 'cluster'" v-model:settings="settings" />
+    <FreeCertificates v-else-if="activeTab === 'certificates'" v-model:global="global" />
 
     <div class="save-bar">
       <el-button type="primary" size="large" @click="handleSave" :loading="saving">
@@ -64,11 +27,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
-import { Setting, Connection, Lock, Key, Check } from '@element-plus/icons-vue'
+import { Setting, Check } from '@element-plus/icons-vue'
 import BasicSettings from './settings/BasicSettings.vue'
 import ClusterSettings from './settings/ClusterSettings.vue'
 import FreeCertificates from './settings/FreeCertificates.vue'
@@ -95,6 +58,23 @@ const global = ref<any>({
   acme_email: '',
   cert_expiry_days: 30,
 })
+
+const titles: Record<string, string> = {
+  basic: '基础设置',
+  cluster: '集群管理',
+  certificates: '免费证书',
+  apikeys: 'API 密钥',
+}
+
+const descs: Record<string, string> = {
+  basic: '配置系统日志、访问日志和基础行为',
+  cluster: '配置主从节点模式和同步策略',
+  certificates: '配置 ACME 邮箱、DNS 提供商和证书签发任务',
+  apikeys: '管理 API 访问密钥',
+}
+
+const pageTitle = computed(() => titles[activeTab.value] || '系统设置')
+const pageDesc = computed(() => descs[activeTab.value] || '')
 
 const fetchSettings = async () => {
   try {
@@ -136,13 +116,26 @@ const handleSave = async () => {
   }
 }
 
+const syncActiveTabFromPage = () => {
+  const map: Record<string, string> = {
+    'settings-basic': 'basic',
+    'settings-cluster': 'cluster',
+    'settings-certificates': 'certificates',
+    'settings-apikeys': 'apikeys',
+  }
+  activeTab.value = map[authStore.currentPage] || 'basic'
+}
+
+watch(() => authStore.currentPage, syncActiveTabFromPage)
+
 onMounted(() => {
+  syncActiveTabFromPage()
   fetchSettings()
 })
 </script>
 
 <style scoped>
-.page { max-width: 1200px; margin: 0 auto; }
+.page { max-width: 1500px; margin: 0 auto; }
 
 .page-header {
   display: flex;
@@ -169,48 +162,6 @@ onMounted(() => {
   font-size: 13px;
   color: #6b7280;
   margin: 4px 0 0 28px;
-}
-
-.settings-layout {
-  display: flex;
-  gap: 20px;
-}
-
-.settings-sidebar {
-  width: 200px;
-  flex-shrink: 0;
-  background: #ffffff;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
-  padding: 8px;
-}
-
-.menu-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
-  border-radius: 6px;
-  cursor: pointer;
-  color: #6b7280;
-  font-size: 14px;
-  transition: all 0.2s;
-}
-
-.menu-item:hover {
-  background: #f9fafb;
-  color: #111827;
-}
-
-.menu-item.active {
-  background: #eff6ff;
-  color: #3b82f6;
-  font-weight: 500;
-}
-
-.settings-content {
-  flex: 1;
-  min-width: 0;
 }
 
 .save-bar {

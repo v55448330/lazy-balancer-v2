@@ -1,6 +1,6 @@
 <template>
-  <div class="page">
-    <div class="page-header">
+  <div class="page" :class="{ 'hide-header': hideHeader }">
+    <div v-if="!hideHeader" class="page-header">
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Key /></el-icon>
@@ -8,6 +8,13 @@
         </h2>
         <p class="page-desc">管理 API 访问密钥，用于程序化访问</p>
       </div>
+      <el-button type="primary" @click="createKey">
+        <el-icon><Plus /></el-icon>
+        创建密钥
+      </el-button>
+    </div>
+
+    <div v-else class="toolbar">
       <el-button type="primary" @click="createKey">
         <el-icon><Plus /></el-icon>
         创建密钥
@@ -59,6 +66,14 @@ import { formatDateShort } from '@/utils/date'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { Key, Plus, View, Hide, Delete } from '@element-plus/icons-vue'
 
+defineProps<{
+  hideHeader?: boolean
+}>()
+
+defineExpose({
+  createKey,
+})
+
 const keys = ref<any[]>([])
 
 const fetchKeys = async () => {
@@ -66,13 +81,13 @@ const fetchKeys = async () => {
   keys.value = (res.data || []).map((k: any) => ({ ...k, showKey: false }))
 }
 
-const createKey = async () => {
+async function createKey() {
   const { value: name } = await ElMessageBox.prompt('请输入密钥名称', '创建 API 密钥', {
     confirmButtonText: '创建',
     cancelButtonText: '取消',
   })
   if (!name) return
-  
+
   const res = await request.post('/keys', { name })
   ElMessage.success('密钥创建成功')
   if (res.data?.key) {
@@ -94,7 +109,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page { max-width: 1400px; margin: 0 auto; }
+.page { max-width: 1500px; margin: 0 auto; }
 
 .page-header {
   display: flex;
@@ -102,6 +117,15 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 20px;
 }
+
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 20px;
+}
+
+.hide-header .page-header,
+.hide-header .toolbar { display: none; }
 
 .header-left { flex: 1; }
 

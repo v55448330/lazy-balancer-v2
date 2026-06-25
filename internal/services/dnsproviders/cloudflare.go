@@ -9,7 +9,6 @@ type Cloudflare struct{}
 func (c *Cloudflare) Code() string       { return "cloudflare" }
 func (c *Cloudflare) Name() string       { return "Cloudflare" }
 func (c *Cloudflare) ModuleName() string { return "dns.providers.cloudflare" }
-func (c *Cloudflare) EnvVarPrefix() string { return "CF_API_TOKEN" }
 
 func (c *Cloudflare) CredentialFields() []CredentialField {
 	return []CredentialField{

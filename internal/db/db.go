@@ -6,12 +6,17 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "github.com/glebarez/sqlite"
 )
 
-var DB *sql.DB
+var (
+	DB       *sql.DB
+	MetricsDB *sql.DB
+	BackgroundDBMu sync.Mutex
+)
 
 func Initialize(dataDir string) error {
 	// Create data directory
@@ -21,16 +26,25 @@ func Initialize(dataDir string) error {
 
 	dbPath := filepath.Join(dataDir, "lazy-balancer.db")
 
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=30000&_synchronous=NORMAL&_txlock=immediate")
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
+
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(0)
 
 	if err := db.Ping(); err != nil {
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
 	DB = db
+
+	// Initialize metrics database
+	if err := InitializeMetricsDB(dataDir); err != nil {
+		return fmt.Errorf("failed to initialize metrics database: %w", err)
+	}
 
 	// Create tables
 	if err := createTables(); err != nil {
@@ -208,24 +222,6 @@ func createTables() error {
 		FOREIGN KEY (master_id) REFERENCES nodes(id)
 	);
 
-	-- Metrics History table (rule_id now references caddy_id)
-	CREATE TABLE IF NOT EXISTS metrics_history (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		rule_id VARCHAR(20),
-		timestamp DATETIME NOT NULL,
-		requests_total INTEGER DEFAULT 0,
-		requests_2xx INTEGER DEFAULT 0,
-		requests_3xx INTEGER DEFAULT 0,
-		requests_4xx INTEGER DEFAULT 0,
-		requests_5xx INTEGER DEFAULT 0,
-		bytes_in BIGINT DEFAULT 0,
-		bytes_out BIGINT DEFAULT 0,
-		latency_p50 INTEGER DEFAULT 0,
-		latency_p95 INTEGER DEFAULT 0,
-		latency_p99 INTEGER DEFAULT 0,
-		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id)
-	);
-
 	-- Config versions table (for sync)
 	CREATE TABLE IF NOT EXISTS config_versions (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -236,8 +232,6 @@ func createTables() error {
 	);
 
 	-- Create indexes
-	CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics_history(timestamp);
-	CREATE INDEX IF NOT EXISTS idx_metrics_rule ON metrics_history(rule_id);
 	CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);
 	CREATE INDEX IF NOT EXISTS idx_nodes_master ON nodes(master_id);
 	`

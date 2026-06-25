@@ -70,7 +70,8 @@
                 <template v-if="row.dynamic_dns">
                   <div v-for="(status, address) in healthStatus[row.caddy_id]?.upstreams || {}" :key="address" class="upstream-item">
                     <span class="upstream-address">{{ address }}</span>
-                    <el-icon v-if="status.healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
+                    <el-icon v-if="status.unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
+                    <el-icon v-else-if="status.healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
                     <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
                   </div>
                 </template>
@@ -78,11 +79,12 @@
                   <div v-for="upstream in row.upstreams" :key="upstream.id" class="upstream-item">
                     <span class="upstream-address">{{ upstream.host }}:{{ upstream.port }}</span>
                     <span class="upstream-metrics">
-<el-icon v-if="getUpstreamHealthStatus(row.caddy_id, upstream)" class="upstream-healthy"><CircleCheckFilled /></el-icon>
-                    <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
-                    <span class="metric-num">{{ getUpstreamMetrics(row.caddy_id, upstream).num_requests }}</span>
-                    <span class="metric-sep">/</span>
-                    <span class="metric-fails">{{ getUpstreamMetrics(row.caddy_id, upstream).fails }}</span>
+                      <el-icon v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
+                      <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
+                      <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
+                      <span class="metric-num">{{ getUpstreamMetrics(row.caddy_id, upstream).num_requests }}</span>
+                      <span class="metric-sep">/</span>
+                      <span class="metric-fails">{{ getUpstreamMetrics(row.caddy_id, upstream).fails }}</span>
                     </span>
                   </div>
                 </template>
@@ -609,7 +611,7 @@
 import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
-import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, Setting } from '@element-plus/icons-vue'
+import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 
 interface Upstream {
@@ -710,7 +712,7 @@ const editingRule = ref<Rule | null>(null)
 const currentStep = ref(0)
 const upstreamTouched = ref<boolean[]>([])
 const certConfigs = ref<any[]>([])
-const healthStatus = ref<Record<string, { healthy: number; total: number; upstreams: Record<string, { healthy: boolean; num_requests?: number; fails?: number }> }>>({})
+const healthStatus = ref<Record<string, { healthy: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; num_requests?: number; fails?: number }> }>>({})
 
 // Config viewing
 const configDialogVisible = ref(false)
@@ -748,24 +750,26 @@ const upstreamHostWarning = computed(() => {
   return ''
 })
 
-const getHealthTagType = (status: { healthy: number; total: number }) => {
-  if (status.healthy === 0) return 'danger'
+const getHealthTagType = (status: { healthy: number; unknown: number; total: number }) => {
+  if (status.healthy === 0 && status.unknown === 0) return 'danger'
+  if (status.unknown > 0) return 'info'
   if (status.healthy < status.total) return 'warning'
   return 'success'
 }
 
-const getHealthLabel = (status: { healthy: number; total: number }) => {
-  if (status.healthy === 0) return '异常'
+const getHealthLabel = (status: { healthy: number; unknown: number; total: number }) => {
+  if (status.healthy === 0 && status.unknown === 0) return '异常'
+  if (status.unknown > 0) return '未知'
   if (status.healthy < status.total) return '异常'
   return '正常'
 }
 
 const getUpstreamHealthStatus = (ruleId: string, upstream: any) => {
   const status = healthStatus.value[ruleId]
-  if (!status || !status.upstreams) return false
+  if (!status || !status.upstreams) return { healthy: false, unknown: true }
   const upstreamKey = `${upstream.host}:${upstream.port}`
   const upstreamData = status.upstreams[upstreamKey]
-  return upstreamData ? upstreamData.healthy : false
+  return upstreamData ? { healthy: upstreamData.healthy, unknown: upstreamData.unknown } : { healthy: false, unknown: true }
 }
 
 const getUpstreamMetrics = (ruleId: string, upstream: any) => {
@@ -816,15 +820,17 @@ const fetchHealthStatus = async () => {
     const healthData = res.data || {}
     console.log('Health data received:', JSON.stringify(healthData))
     
-    const mapped: Record<string, { healthy: number; total: number; upstreams: Record<string, { healthy: boolean; num_requests?: number; fails?: number }> }> = {}
+    const mapped: Record<string, { healthy: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; num_requests?: number; fails?: number }> }> = {}
     for (const rule of rules.value) {
       if (rule.upstreams && rule.upstreams.length > 0) {
         let healthy = 0
-        const upstreamStatus: Record<string, { healthy: boolean; num_requests?: number; fails?: number }> = {}
+        let unknown = 0
+        const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; num_requests?: number; fails?: number }> = {}
         for (const upstream of rule.upstreams) {
           const upstreamKey = `${upstream.host}:${upstream.port}`
           
-          let isHealthy = true
+          let isHealthy = false
+          let isUnknown = true
           let numRequests = 0
           let fails = 0
           
@@ -832,7 +838,10 @@ const fetchHealthStatus = async () => {
             if (serverHealth && typeof serverHealth === 'object') {
               if (upstreamKey in serverHealth) {
                 const detail = serverHealth[upstreamKey]
-                isHealthy = detail.healthy !== false
+                isUnknown = detail.unknown === true
+                if (!isUnknown) {
+                  isHealthy = detail.healthy !== false
+                }
                 numRequests = detail.num_requests || 0
                 fails = detail.fails || 0
                 break
@@ -840,11 +849,12 @@ const fetchHealthStatus = async () => {
             }
           }
           
-          upstreamStatus[upstreamKey] = { healthy: isHealthy, num_requests: numRequests, fails }
-          if (isHealthy) healthy++
+          upstreamStatus[upstreamKey] = { healthy: isHealthy, unknown: isUnknown, num_requests: numRequests, fails }
+          if (isUnknown) unknown++
+          else if (isHealthy) healthy++
         }
         if (rule.caddy_id) {
-          mapped[rule.caddy_id] = { healthy, total: rule.upstreams.length, upstreams: upstreamStatus }
+          mapped[rule.caddy_id] = { healthy, unknown, total: rule.upstreams.length, upstreams: upstreamStatus }
         }
       }
     }
@@ -1602,6 +1612,11 @@ onMounted(() => {
   font-size: 12px;
 }
 
+.upstream-unknown {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
 .upstream-metrics {
   display: flex !important;
   align-items: center !important;
@@ -1672,6 +1687,11 @@ onMounted(() => {
 
 .upstream-unhealthy {
   color: #ef4444;
+  font-size: 14px;
+}
+
+.upstream-unknown {
+  color: #9ca3af;
   font-size: 14px;
 }
 

@@ -43,7 +43,6 @@ func main() {
 	caddyService := services.NewCaddyService(cfg.CaddyAdminURL)
 	certService := services.NewCertificateService(cfg.CaddyAdminURL)
 	metricsService := services.NewMetricsService(cfg.CaddyMetricsURL, cfg.MetricsInterval)
-	metricsService.SetCertificateService(certService)
 	nodeService := services.NewNodeService()
 	syncService := services.NewSyncService()
 

@@ -1,7 +1,5 @@
 package dnsproviders
 
-import "fmt"
-
 type CredentialField struct {
 	Name        string `json:"name"`
 	Label       string `json:"label"`
@@ -16,7 +14,6 @@ type Provider interface {
 	ModuleName() string
 	CredentialFields() []CredentialField
 	BuildCredentialsJSON(creds map[string]string) (map[string]interface{}, error)
-	EnvVarPrefix() string
 }
 
 var registry = map[string]Provider{}
@@ -36,8 +33,4 @@ func List() []Provider {
 		list = append(list, p)
 	}
 	return list
-}
-
-func EnvVarName(configID int, p Provider) string {
-	return fmt.Sprintf("%s_%d", p.EnvVarPrefix(), configID)
 }

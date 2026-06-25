@@ -1,7 +1,9 @@
 package services
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"log"
 	"net/http"
 	"strings"
@@ -34,6 +36,7 @@ func (s *CertificateService) Start() {
 		select {
 		case <-ticker.C:
 			s.poll()
+			s.checkManualCertExpiration()
 		case <-s.stopCh:
 			return
 		}
@@ -71,6 +74,19 @@ func (s *CertificateService) CreateJobsForRule(ruleID string, domains string) er
 }
 
 func (s *CertificateService) poll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Skip polling if there are no pending/issuing/failed cert jobs to avoid unnecessary DB/Caddy load
+	var pendingCount int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE status IN ('pending','issuing','failed')").Scan(&pendingCount); err != nil {
+		log.Printf("Failed to count pending cert jobs: %v", err)
+		return
+	}
+	if pendingCount == 0 {
+		return
+	}
+
 	resp, err := s.client.Get(s.adminURL + "/pki/ca/local")
 	if err != nil {
 		log.Printf("Failed to get Caddy certificates: %v", err)
@@ -94,24 +110,32 @@ func (s *CertificateService) poll() {
 		return
 	}
 
+	// Pre-read all jobs into memory, then close cursor before writing
 	rows, err := db.DB.Query("SELECT id, domain, status FROM cert_jobs WHERE status IN ('pending','issuing','failed')")
 	if err != nil {
 		log.Printf("Failed to query cert jobs: %v", err)
 		return
 	}
-	defer rows.Close()
-
+	type job struct {
+		id     int
+		domain string
+		status string
+	}
+	var jobs []job
 	for rows.Next() {
-		var id int
-		var domain, status string
-		if err := rows.Scan(&id, &domain, &status); err != nil {
+		var j job
+		if err := rows.Scan(&j.id, &j.domain, &j.status); err != nil {
 			continue
 		}
+		jobs = append(jobs, j)
+	}
+	rows.Close()
 
+	for _, j := range jobs {
 		found := false
 		var notAfter time.Time
 		for _, r := range data.Roots {
-			if strings.Contains(r.Subject, domain) {
+			if strings.Contains(r.Subject, j.domain) {
 				found = true
 				notAfter = r.NotAfter
 				break
@@ -119,15 +143,15 @@ func (s *CertificateService) poll() {
 		}
 
 		if found {
-			_, err := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='签发成功', expires_at=? WHERE id=?", notAfter, id)
+			_, err := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='签发成功', expires_at=? WHERE id=?", notAfter, j.id)
 			if err != nil {
 				log.Printf("Failed to update issued cert job: %v", err)
 			}
-		} else if status == "issuing" {
+		} else if j.status == "issuing" {
 			_, err := db.DB.Exec(`
 				UPDATE cert_jobs SET status='failed', message='签发超时，请检查 DNS 配置和域名解析'
 				WHERE id=? AND datetime(created_at, '+10 minutes') < datetime('now')
-			`, id)
+			`, j.id)
 			if err != nil {
 				log.Printf("Failed to update failed cert job: %v", err)
 			}
@@ -135,7 +159,74 @@ func (s *CertificateService) poll() {
 	}
 }
 
+func (s *CertificateService) checkManualCertExpiration() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Pre-read all manual certificates into memory, then close cursor before parsing
+	rows, err := db.DB.Query(`
+		SELECT caddy_id, name, domain, tls_cert 
+		FROM lb_rules 
+		WHERE enable_tls = 1 AND tls_auto_cert = 0 AND tls_cert != ''
+	`)
+	if err != nil {
+		log.Printf("Failed to query TLS certificates for expiration check: %v", err)
+		return
+	}
+	type certInfo struct {
+		caddyID string
+		name    string
+		domain  string
+		certPEM string
+	}
+	var certs []certInfo
+	for rows.Next() {
+		var c certInfo
+		if err := rows.Scan(&c.caddyID, &c.name, &c.domain, &c.certPEM); err != nil {
+			continue
+		}
+		certs = append(certs, c)
+	}
+	rows.Close()
+
+	now := time.Now()
+	var expiredCount, expiringSoonCount int
+
+	for _, c := range certs {
+		block, _ := pem.Decode([]byte(c.certPEM))
+		if block == nil {
+			log.Printf("Warning: Invalid certificate PEM for rule %s (%s)", c.caddyID, c.name)
+			continue
+		}
+
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			log.Printf("Warning: Failed to parse certificate for rule %s (%s): %v", c.caddyID, c.name, err)
+			continue
+		}
+
+		daysUntilExpiry := int(cert.NotAfter.Sub(now).Hours() / 24)
+
+		if now.After(cert.NotAfter) {
+			log.Printf("⚠️ CRITICAL: TLS certificate expired for rule '%s' (domain: %s, caddy_id: %s). Expired on %s",
+				c.name, c.domain, c.caddyID, cert.NotAfter.Format("2006-01-02"))
+			expiredCount++
+		} else if daysUntilExpiry <= 30 {
+			log.Printf("⚠️ WARNING: TLS certificate expiring soon for rule '%s' (domain: %s, caddy_id: %s). Expires in %d days (%s)",
+				c.name, c.domain, c.caddyID, daysUntilExpiry, cert.NotAfter.Format("2006-01-02"))
+			expiringSoonCount++
+		}
+	}
+
+	if expiredCount > 0 || expiringSoonCount > 0 {
+		log.Printf("TLS Certificate Check: %d expired, %d expiring within 30 days", expiredCount, expiringSoonCount)
+	}
+}
+
 func (s *CertificateService) CheckExpiration() []models.CertJob {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	var days int
 	err := db.DB.QueryRow("SELECT COALESCE(cert_expiry_days,30) FROM global_config WHERE id=1").Scan(&days)
 	if err != nil {

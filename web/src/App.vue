@@ -10,7 +10,7 @@
   <AppLayout v-else>
     <Dashboard v-if="currentPage === 'dashboard'" />
     <Rules v-else-if="currentPage === 'rules'" />
-    <Settings v-else-if="currentPage === 'settings'" />
+    <Settings v-else-if="currentPage === 'settings-basic' || currentPage === 'settings-cluster' || currentPage === 'settings-certificates' || currentPage === 'settings-apikeys'" />
     <CaddyConfig v-else-if="currentPage === 'caddy'" />
     <Users v-else-if="currentPage === 'users'" />
   </AppLayout>

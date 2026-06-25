@@ -1,9 +1,7 @@
 package services
 
 import (
-	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
@@ -21,13 +19,12 @@ import (
 
 // MetricsService collects and stores metrics from Caddy
 type MetricsService struct {
-	metricsURL         string
-	interval           int
-	client             *http.Client
-	stopCh             chan struct{}
-	overview           models.MetricsOverview
-	certificateService *CertificateService
-	mu                 sync.RWMutex
+	metricsURL string
+	interval   int
+	client     *http.Client
+	stopCh     chan struct{}
+	overview   models.MetricsOverview
+	mu         sync.RWMutex
 }
 
 func NewMetricsService(metricsURL string, interval int) *MetricsService {
@@ -60,10 +57,6 @@ func (m *MetricsService) Stop() {
 	close(m.stopCh)
 }
 
-func (m *MetricsService) SetCertificateService(s *CertificateService) {
-	m.certificateService = s
-}
-
 func (m *MetricsService) collect() {
 	resp, err := m.client.Get(m.metricsURL)
 	if err != nil {
@@ -80,17 +73,6 @@ func (m *MetricsService) collect() {
 	metrics := m.parsePrometheusMetrics(string(body))
 	m.storeMetrics(metrics)
 	m.updateOverview(metrics)
-
-	// Check TLS certificate expiration
-	m.checkTLSCertificateExpiration()
-
-	// Check ACME certificate expiration
-	if m.certificateService != nil {
-		expired := m.certificateService.CheckExpiration()
-		for _, job := range expired {
-			log.Printf("Certificate %s expires at %v", job.Domain, job.ExpiresAt.Time)
-		}
-	}
 }
 
 type parsedMetrics struct {
@@ -161,8 +143,8 @@ func (m *MetricsService) parsePrometheusMetrics(text string) parsedMetrics {
 }
 
 func (m *MetricsService) storeMetrics(metrics parsedMetrics) {
-	// Store global metrics
-	_, err := db.DB.Exec(`
+	// Store global metrics in independent metrics database
+	_, err := db.MetricsDB.Exec(`
 		INSERT INTO metrics_history 
 		(rule_id, timestamp, requests_total, requests_2xx, requests_3xx, 
 		 requests_4xx, requests_5xx, bytes_in, bytes_out, 
@@ -184,7 +166,7 @@ func (m *MetricsService) updateOverview(metrics parsedMetrics) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Get active rules count
+	// Get active rules count (fast read-only query)
 	var activeRules, totalRules int
 	db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE enabled = 1").Scan(&activeRules)
 	db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules").Scan(&totalRules)
@@ -215,6 +197,36 @@ func (m *MetricsService) GetOverview() models.MetricsOverview {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.overview
+}
+
+func (m *MetricsService) GetHistory(limit int) []models.MetricsHistory {
+	rows, err := db.MetricsDB.Query(`
+		SELECT id, rule_id, timestamp, requests_total, requests_2xx, requests_3xx,
+		       requests_4xx, requests_5xx, bytes_in, bytes_out,
+		       latency_p50, latency_p95, latency_p99
+		FROM metrics_history
+		ORDER BY timestamp DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		log.Printf("Failed to query metrics history: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var history []models.MetricsHistory
+	for rows.Next() {
+		var h models.MetricsHistory
+		if err := rows.Scan(&h.ID, &h.RuleID, &h.Timestamp,
+			&h.RequestsTotal, &h.Requests2xx, &h.Requests3xx,
+			&h.Requests4xx, &h.Requests5xx,
+			&h.BytesIn, &h.BytesOut,
+			&h.LatencyP50, &h.LatencyP95, &h.LatencyP99); err != nil {
+			continue
+		}
+		history = append(history, h)
+	}
+	return history
 }
 
 // NodeService manages node registration and heartbeat
@@ -448,56 +460,3 @@ func (s *SyncService) applySyncData(data models.SyncData) error {
 	return nil
 }
 
-// checkTLSCertificateExpiration checks all manual TLS certificates for expiration
-func (m *MetricsService) checkTLSCertificateExpiration() {
-	rows, err := db.DB.Query(`
-		SELECT caddy_id, name, domain, tls_cert 
-		FROM lb_rules 
-		WHERE enable_tls = 1 AND tls_auto_cert = 0 AND tls_cert != ''
-	`)
-	if err != nil {
-		log.Printf("Failed to query TLS certificates for expiration check: %v", err)
-		return
-	}
-	defer rows.Close()
-
-	now := time.Now()
-	var expiredCount, expiringSoonCount int
-
-	for rows.Next() {
-		var caddyID, name, domain, certPEM string
-		if err := rows.Scan(&caddyID, &name, &domain, &certPEM); err != nil {
-			continue
-		}
-
-		// Parse certificate
-		block, _ := pem.Decode([]byte(certPEM))
-		if block == nil {
-			log.Printf("Warning: Invalid certificate PEM for rule %s (%s)", caddyID, name)
-			continue
-		}
-
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			log.Printf("Warning: Failed to parse certificate for rule %s (%s): %v", caddyID, name, err)
-			continue
-		}
-
-		// Check expiration
-		daysUntilExpiry := int(cert.NotAfter.Sub(now).Hours() / 24)
-
-		if now.After(cert.NotAfter) {
-			log.Printf("⚠️ CRITICAL: TLS certificate expired for rule '%s' (domain: %s, caddy_id: %s). Expired on %s", 
-				name, domain, caddyID, cert.NotAfter.Format("2006-01-02"))
-			expiredCount++
-		} else if daysUntilExpiry <= 30 {
-			log.Printf("⚠️ WARNING: TLS certificate expiring soon for rule '%s' (domain: %s, caddy_id: %s). Expires in %d days (%s)", 
-				name, domain, caddyID, daysUntilExpiry, cert.NotAfter.Format("2006-01-02"))
-			expiringSoonCount++
-		}
-	}
-
-	if expiredCount > 0 || expiringSoonCount > 0 {
-		log.Printf("TLS Certificate Check: %d expired, %d expiring within 30 days", expiredCount, expiringSoonCount)
-	}
-}

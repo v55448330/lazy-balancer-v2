@@ -1237,6 +1237,7 @@ func (s *CaddyService) GetUpstreamHealth() (map[string]map[string]bool, error) {
 // UpstreamHealthDetail contains detailed health information for an upstream
 type UpstreamHealthDetail struct {
 	Healthy     bool `json:"healthy"`
+	Unknown     bool `json:"unknown"`
 	NumRequests int  `json:"num_requests"`
 	Fails       int  `json:"fails"`
 }
@@ -1317,17 +1318,37 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 							continue
 						}
 
-						detail := &UpstreamHealthDetail{
-							Healthy: true,
+						// Determine whether this rule uses active health checks.
+						usesActive := false
+						if hc, ok := handle["health_checks"].(map[string]interface{}); ok {
+							if active, ok := hc["active"].(map[string]interface{}); ok && active != nil {
+								usesActive = true
+							}
 						}
 
-						if len(upstreamHealth) > 0 {
-							detail.Healthy = upstreamHealth[dial]
-						}
+						detail := &UpstreamHealthDetail{}
 
 						if metrics, ok := upstreamMetrics[dial]; ok {
 							detail.NumRequests = metrics.NumRequests
 							detail.Fails = metrics.Fails
+						}
+
+						if observedHealthy, ok := upstreamHealth[dial]; ok {
+							if usesActive {
+								// Active health check: Caddy's observed result is authoritative.
+								detail.Healthy = observedHealthy
+							} else {
+								// Passive: if Caddy has not recorded any failures, treat as unknown
+								// until real traffic tests it.
+								if detail.Fails == 0 && detail.NumRequests == 0 {
+									detail.Unknown = true
+								} else {
+									detail.Healthy = observedHealthy
+								}
+							}
+						} else {
+							// No observation from Caddy at all.
+							detail.Unknown = true
 						}
 
 						healthStatus[serverName][dial] = detail
@@ -1340,17 +1361,32 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 					port, _ := dynamicUpstreams["port"].(string)
 					if name != "" {
 						dial := name + ":" + port
-						detail := &UpstreamHealthDetail{
-							Healthy: true,
+						usesActive := false
+						if hc, ok := handle["health_checks"].(map[string]interface{}); ok {
+							if active, ok := hc["active"].(map[string]interface{}); ok && active != nil {
+								usesActive = true
+							}
 						}
 
-						if len(upstreamHealth) > 0 {
-							detail.Healthy = upstreamHealth[dial]
-						}
+						detail := &UpstreamHealthDetail{}
 
 						if metrics, ok := upstreamMetrics[dial]; ok {
 							detail.NumRequests = metrics.NumRequests
 							detail.Fails = metrics.Fails
+						}
+
+						if observedHealthy, ok := upstreamHealth[dial]; ok {
+							if usesActive {
+								detail.Healthy = observedHealthy
+							} else {
+								if detail.Fails == 0 && detail.NumRequests == 0 {
+									detail.Unknown = true
+								} else {
+									detail.Healthy = observedHealthy
+								}
+							}
+						} else {
+							detail.Unknown = true
 						}
 
 						healthStatus[serverName][dial] = detail
@@ -1511,6 +1547,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		upstreams []upstream
 	}
 
+	// Load all enabled rules into memory first to avoid holding cursor while querying upstreams/global_config
 	rows, err := db.DB.Query(`
 		SELECT COALESCE(caddy_id,''), name, protocol, COALESCE(domain,''), listen_port, strategy,
 		       IIF(dynamic_dns IN ('1',1),1,0), IIF(enable_dns_server IN ('1',1),1,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
@@ -1526,14 +1563,8 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		log.Printf("Failed to get rules: %v", err)
 		return defaultCaddyConfig()
 	}
-	defer rows.Close()
-
-	var dnsProvider, letsencryptEmail, acmeEmail string
-	var isMaster bool
-	db.DB.QueryRow("SELECT COALESCE(dns_provider,''), COALESCE(letsencrypt_email,''), COALESCE(acme_email,''), is_master FROM global_config WHERE id = 1").Scan(&dnsProvider, &letsencryptEmail, &acmeEmail, &isMaster)
 
 	var allRules []ruleWithUpstreams
-
 	for rows.Next() {
 		var r lbRule
 		err := rows.Scan(&r.CaddyID, &r.Name, &r.Protocol, &r.Domain, &r.ListenPort, &r.Strategy,
@@ -1556,29 +1587,41 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 			continue
 		}
 
+		allRules = append(allRules, ruleWithUpstreams{rule: r})
+	}
+	rows.Close()
+
+	// Load upstreams for each rule after closing rules cursor
+	for i := range allRules {
+		r := &allRules[i]
 		upstreamRows, err := db.DB.Query(`
 			SELECT host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http')
 			FROM upstreams WHERE rule_id = ? AND enabled = 1
-		`, r.CaddyID)
+		`, r.rule.CaddyID)
 		if err != nil {
-			log.Printf("Failed to get upstreams for rule %s: %v", r.CaddyID, err)
+			log.Printf("Failed to get upstreams for rule %s: %v", r.rule.CaddyID, err)
 			continue
 		}
-
-		var ups []upstream
 		for upstreamRows.Next() {
 			var u upstream
 			upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol)
-			ups = append(ups, u)
+			r.upstreams = append(r.upstreams, u)
 		}
 		upstreamRows.Close()
-
-		if len(ups) == 0 {
-			continue
-		}
-
-		allRules = append(allRules, ruleWithUpstreams{rule: r, upstreams: ups})
 	}
+
+	// Filter out rules with no enabled upstreams
+	var filteredRules []ruleWithUpstreams
+	for _, ru := range allRules {
+		if len(ru.upstreams) > 0 {
+			filteredRules = append(filteredRules, ru)
+		}
+	}
+	allRules = filteredRules
+
+	var dnsProvider, letsencryptEmail, acmeEmail string
+	var isMaster bool
+	db.DB.QueryRow("SELECT COALESCE(dns_provider,''), COALESCE(letsencrypt_email,''), COALESCE(acme_email,''), is_master FROM global_config WHERE id = 1").Scan(&dnsProvider, &letsencryptEmail, &acmeEmail, &isMaster)
 
 	servers := make(map[string]interface{})
 
@@ -1956,12 +1999,6 @@ func buildTLSAutomationPolicies(rules []tlsAutomationRule, acmeEmail string) []m
 			continue
 		}
 
-		envVar := dnsproviders.EnvVarName(rule.ACMEConfigID, p)
-		email := rule.ACMEEmail
-		if email == "" {
-			email = acmeEmail
-		}
-
 		for _, domain := range strings.Split(rule.Domain, ",") {
 			domain = strings.TrimSpace(domain)
 			if domain == "" {
@@ -1971,8 +2008,13 @@ func buildTLSAutomationPolicies(rules []tlsAutomationRule, acmeEmail string) []m
 			providerCfg := map[string]interface{}{
 				"name": p.Code(),
 			}
-			for k := range providerJSON {
-				providerCfg[k] = "{" + envVar + "}"
+			for k, v := range providerJSON {
+				providerCfg[k] = v
+			}
+
+			email := rule.ACMEEmail
+			if email == "" {
+				email = acmeEmail
 			}
 
 			policies = append(policies, map[string]interface{}{

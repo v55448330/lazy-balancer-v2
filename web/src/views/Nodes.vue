@@ -71,7 +71,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page { max-width: 1400px; margin: 0 auto; }
+.page { max-width: 1500px; margin: 0 auto; }
 
 .page-header {
   display: flex;

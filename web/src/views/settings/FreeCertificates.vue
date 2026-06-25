@@ -21,7 +21,7 @@
           <el-button v-if="authStore.nodeMode === 'master'" type="primary" size="small" @click="openConfigDialog()">添加</el-button>
         </div>
       </template>
-      <el-table :data="configs" size="small">
+      <el-table :data="configs" size="small" :empty-text="' '">
         <el-table-column prop="name" label="名称" />
         <el-table-column prop="dns_provider" label="提供商" />
         <el-table-column prop="enabled" label="状态" width="80" align="center">

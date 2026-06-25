@@ -9,19 +9,27 @@ type DNSPod struct{}
 func (d *DNSPod) Code() string       { return "dnspod" }
 func (d *DNSPod) Name() string       { return "DNSPod (腾讯云)" }
 func (d *DNSPod) ModuleName() string { return "dns.providers.dnspod" }
-func (d *DNSPod) EnvVarPrefix() string { return "DNSPOD_AUTH_TOKEN" }
 
 func (d *DNSPod) CredentialFields() []CredentialField {
 	return []CredentialField{
-		{Name: "auth_token", Label: "Auth Token", Type: "password", Required: true, Placeholder: "APP_ID,APP_TOKEN"},
+		{Name: "app_id", Label: "App ID", Type: "text", Required: true, Placeholder: "12345"},
+		{Name: "app_token", Label: "App Token", Type: "password", Required: true, Placeholder: "Your DNSPod API token"},
 	}
 }
 
 func (d *DNSPod) BuildCredentialsJSON(creds map[string]string) (map[string]interface{}, error) {
-	if creds["auth_token"] == "" {
-		return nil, fmt.Errorf("auth_token is required")
+	appID := creds["app_id"]
+	appToken := creds["app_token"]
+	if appID != "" && appToken != "" {
+		return map[string]interface{}{
+			"api_token": appID + "," + appToken,
+		}, nil
 	}
-	return map[string]interface{}{
-		"auth_token": creds["auth_token"],
-	}, nil
+	// Backward compatibility with legacy auth_token field
+	if authToken := creds["auth_token"]; authToken != "" {
+		return map[string]interface{}{
+			"api_token": authToken,
+		}, nil
+	}
+	return nil, fmt.Errorf("app_id and app_token are required")
 }

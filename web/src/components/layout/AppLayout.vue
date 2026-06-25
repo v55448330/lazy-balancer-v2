@@ -40,7 +40,29 @@
           <el-icon><User /></el-icon>
           <template #title>用户管理</template>
         </el-menu-item>
-        <el-menu-item index="settings" @click="goPage('settings')">
+        <el-sub-menu index="settings" v-if="authStore.user?.role === 'admin'">
+          <template #title>
+            <el-icon><Setting /></el-icon>
+            <span>系统设置</span>
+          </template>
+          <el-menu-item index="settings-basic" @click="goPage('settings-basic')">
+            <el-icon><Setting /></el-icon>
+            <template #title>基础设置</template>
+          </el-menu-item>
+          <el-menu-item index="settings-cluster" @click="goPage('settings-cluster')">
+            <el-icon><Connection /></el-icon>
+            <template #title>集群管理</template>
+          </el-menu-item>
+          <el-menu-item index="settings-certificates" @click="goPage('settings-certificates')">
+            <el-icon><Lock /></el-icon>
+            <template #title>免费证书</template>
+          </el-menu-item>
+          <el-menu-item index="settings-apikeys" @click="goPage('settings-apikeys')">
+            <el-icon><Key /></el-icon>
+            <template #title>API 密钥</template>
+          </el-menu-item>
+        </el-sub-menu>
+        <el-menu-item v-else index="settings" @click="goPage('settings-basic')">
           <el-icon><Setting /></el-icon>
           <template #title>系统设置</template>
         </el-menu-item>
@@ -114,7 +136,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
-import { Monitor, DataAnalysis, List, Setting, Cpu, User } from '@element-plus/icons-vue'
+import { Monitor, DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key } from '@element-plus/icons-vue'
 
 const authStore = useAuthStore()
 const collapsed = ref(false)
@@ -128,7 +150,10 @@ const pageTitle: Record<string, string> = {
   rules: '负载均衡',
   caddy: '全局配置',
   users: '用户管理',
-  settings: '系统设置',
+  'settings-basic': '系统设置 / 基础设置',
+  'settings-cluster': '系统设置 / 集群管理',
+  'settings-certificates': '系统设置 / 免费证书',
+  'settings-apikeys': '系统设置 / API 密钥',
 }
 
 const profileForm = ref({
