@@ -2,7 +2,9 @@
   <div>
     <el-card class="settings-card">
       <template #header>
-        <span>ACME 全局设置</span>
+        <div class="card-header">
+          <span>ACME 全局设置</span>
+        </div>
       </template>
       <el-form :model="global" label-width="140px">
         <el-form-item label="ACME 邮箱">
@@ -11,6 +13,12 @@
         <el-form-item label="过期提醒天数">
           <el-input-number v-model="global.cert_expiry_days" :min="1" :max="90" />
         </el-form-item>
+          <el-form-item>
+            <el-button type="primary" :loading="saving" @click="handleSave">
+              <el-icon><Check /></el-icon>
+              <span class="btn-text">保存</span>
+            </el-button>
+          </el-form-item>
       </el-form>
     </el-card>
 
@@ -18,7 +26,10 @@
       <template #header>
         <div class="card-header">
           <span>DNS 提供商配置</span>
-          <el-button v-if="authStore.nodeMode === 'master'" type="primary" size="small" @click="openConfigDialog()">添加</el-button>
+          <el-button v-if="authStore.nodeMode === 'master'" type="primary" @click="openConfigDialog()">
+            <el-icon><Plus /></el-icon>
+            <span class="btn-text">添加</span>
+          </el-button>
         </div>
       </template>
       <el-table v-if="configs.length > 0" :data="configs" size="small">
@@ -84,6 +95,7 @@ import { ref, onMounted, computed } from 'vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Check } from '@element-plus/icons-vue'
 import CertJobs from './CertJobs.vue'
 
 interface CredentialField {
@@ -110,7 +122,11 @@ interface CertConfig {
 const authStore = useAuthStore()
 
 const global = defineModel<any>('global', { required: true })
+const emit = defineEmits<{
+  (e: 'save'): void
+}>()
 
+const saving = ref(false)
 const configs = ref<CertConfig[]>([])
 const providers = ref<DNSProvider[]>([])
 const dialogVisible = ref(false)
@@ -214,6 +230,22 @@ const testConfig = async (config: CertConfig) => {
   }
 }
 
+const handleSave = async () => {
+  saving.value = true
+  try {
+    await request.put('/config', {
+      acme_email: global.value.acme_email,
+      cert_expiry_days: global.value.cert_expiry_days,
+    })
+    ElMessage.success('保存成功')
+    emit('save')
+  } catch (error) {
+    console.error('Failed to save certificate settings:', error)
+  } finally {
+    saving.value = false
+  }
+}
+
 onMounted(() => {
   fetchConfigs()
   fetchProviders()
@@ -226,4 +258,5 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
 }
+.btn-text { margin-left: 4px; }
 </style>

@@ -77,15 +77,15 @@
                 </template>
                 <template v-else>
                   <div v-for="upstream in row.upstreams" :key="upstream.id" class="upstream-item">
-                    <span class="upstream-address">{{ upstream.host }}:{{ upstream.port }}</span>
-                    <span class="upstream-metrics">
-                      <el-icon v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
-                      <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
-                      <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
-                      <span class="metric-num">{{ getUpstreamMetrics(row.caddy_id, upstream).num_requests }}</span>
-                      <span class="metric-sep">/</span>
-                      <span class="metric-fails">{{ getUpstreamMetrics(row.caddy_id, upstream).fails }}</span>
-                    </span>
+                    <div class="upstream-item-row">
+                      <span class="upstream-address">{{ upstream.host }}:{{ upstream.port }}</span>
+                      <span class="upstream-status">
+                        <el-icon v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
+                        <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
+                        <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
+                        <span v-if="getUpstreamMetrics(row.caddy_id, upstream).fails > 0" class="upstream-fails">失败 {{ getUpstreamMetrics(row.caddy_id, upstream).fails }}</span>
+                      </span>
+                    </div>
                   </div>
                 </template>
               </div>
@@ -1666,18 +1666,28 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
 }
 
 .upstream-address {
   color: #4b5563;
   font-family: monospace;
   font-size: 12px;
+  line-height: 1;
 }
 
 .upstream-status {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.upstream-fails {
+  font-size: 11px;
+  color: #ef4444;
+  font-weight: 500;
+  line-height: 1;
 }
 
 .upstream-healthy {

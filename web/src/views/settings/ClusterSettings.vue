@@ -24,19 +24,49 @@
         <el-input-number v-model="settings.sync_interval" :min="10" :max="3600" />
         <div class="form-tip">从节点同步配置的间隔（秒）</div>
       </el-form-item>
+          <el-form-item>
+            <el-button type="primary" :loading="saving" @click="handleSave">
+              <el-icon><Check /></el-icon>
+              <span class="btn-text">保存</span>
+            </el-button>
+          </el-form-item>
     </el-form>
   </el-card>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { Connection } from '@element-plus/icons-vue'
+import { request } from '@/utils/api'
+import { ElMessage } from 'element-plus'
+import { Connection, Check } from '@element-plus/icons-vue'
 
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const settings = defineModel<any>('settings', { required: true })
+const emit = defineEmits<{
+  (e: 'save'): void
+}>()
+
+const saving = ref(false)
+
+const handleSave = async () => {
+  saving.value = true
+  try {
+    await request.put('/config', {
+      is_master: settings.value.is_master,
+      master_url: settings.value.master_url,
+      sync_interval: settings.value.sync_interval,
+    })
+    ElMessage.success('保存成功')
+    emit('save')
+  } catch (error) {
+    console.error('Failed to save cluster settings:', error)
+  } finally {
+    saving.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -55,4 +85,5 @@ const settings = defineModel<any>('settings', { required: true })
   color: #9ca3af;
   margin-top: 4px;
 }
+.btn-text { margin-left: 4px; }
 </style>

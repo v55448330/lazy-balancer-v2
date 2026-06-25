@@ -229,15 +229,43 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="请求数" width="100" align="right">
+            <el-table-column label="请求数" width="90" align="right">
               <template #default="{ row }">
-                <span class="text-primary">{{ (ruleMetrics[row.caddy_id]?.requests_total || 0).toLocaleString() }}</span>
+                <span class="text-primary">{{ (ruleMetrics[row.caddy_id]?.requests_total ?? 0).toLocaleString() }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态码" width="220" align="center">
+              <template #default="{ row }">
+                <div v-if="(ruleMetrics[row.caddy_id]?.requests_total ?? 0) > 0" class="status-codes">
+                  <span class="status-code status-2xx" title="成功">2xx {{ ruleMetrics[row.caddy_id]?.status_2xx ?? 0 }}</span>
+                  <span class="status-code status-3xx" title="重定向">3xx {{ ruleMetrics[row.caddy_id]?.status_3xx ?? 0 }}</span>
+                  <span class="status-code status-4xx" title="客户端错误">4xx {{ ruleMetrics[row.caddy_id]?.status_4xx ?? 0 }}</span>
+                  <span class="status-code status-5xx" title="服务器错误">5xx {{ ruleMetrics[row.caddy_id]?.status_5xx ?? 0 }}</span>
+                </div>
+                <span v-else class="text-secondary">-</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="入站流量" width="100" align="right">
+              <template #default="{ row }">
+                <span class="text-secondary">{{ formatBytes(ruleMetrics[row.caddy_id]?.bytes_in ?? 0) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="出站流量" width="100" align="right">
+              <template #default="{ row }">
+                <span class="text-secondary">{{ formatBytes(ruleMetrics[row.caddy_id]?.bytes_out ?? 0) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="处理中" width="70" align="center">
+              <template #default="{ row }">
+                <span class="text-secondary">{{ ruleMetrics[row.caddy_id]?.requests_in_flight ?? 0 }}</span>
               </template>
             </el-table-column>
             <el-table-column label="健康状态" width="80" align="center">
               <template #default="{ row }">
-<el-tag :type="ruleMetrics[row.caddy_id]?.healthy ? 'success' : 'danger'" size="small" effect="plain">
- {{ ruleMetrics[row.caddy_id]?.healthy ? '健康' : '异常' }}
+                <el-tag v-if="!row.enabled" type="info" size="small" effect="plain">-</el-tag>
+                <el-tag v-else-if="ruleMetrics[row.caddy_id]?.healthy === undefined" type="info" size="small" effect="plain">-</el-tag>
+                <el-tag v-else :type="ruleMetrics[row.caddy_id]?.healthy ? 'success' : 'danger'" size="small" effect="plain">
+                  {{ ruleMetrics[row.caddy_id]?.healthy ? '健康' : '异常' }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -422,13 +450,15 @@ const fetchAllData = async () => {
 const fetchRuleMetrics = async () => {
   if (rules.value.length === 0) return
   const headers = { Authorization: `Bearer ${authStore.token}` }
-  const metricsPromises = rules.value.map((rule: Rule) => 
-    request.get(`/metrics/rule/${rule.caddy_id}`, { headers }).then(r => r.ok ? r.json() : null).catch(() => null)
+  const metricsPromises = rules.value.map((rule: Rule) =>
+    request.get(`/metrics/rule/${rule.caddy_id}`, { headers })
   )
-  const metricsResults = await Promise.all(metricsPromises)
+  const metricsResults = await Promise.allSettled(metricsPromises)
   const newRuleMetrics: Record<string, RuleMetrics> = {}
   metricsResults.forEach((result: any, index: number) => {
-    if (result?.data) newRuleMetrics[rules.value[index].caddy_id] = result.data
+    if (result.status === 'fulfilled' && result.value?.data) {
+      newRuleMetrics[rules.value[index].caddy_id] = result.value.data
+    }
   })
   ruleMetrics.value = newRuleMetrics
 }
@@ -587,4 +617,21 @@ onUnmounted(() => {
 .text-primary { color: #111827; }
 .text-secondary { color: #6b7280; }
 .font-medium { font-weight: 500; }
+
+.status-codes {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+.status-code {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.status-2xx { background: #ecfdf5; color: #059669; }
+.status-3xx { background: #eff6ff; color: #2563eb; }
+.status-4xx { background: #fffbeb; color: #d97706; }
+.status-5xx { background: #fef2f2; color: #dc2626; }
 </style>

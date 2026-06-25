@@ -19,29 +19,31 @@ func (h *Handlers) GetMetricsOverview(c *gin.Context) {
 
 
 func (h *Handlers) GetRuleMetrics(c *gin.Context) {
-	caddyID := c.Param("caddy_id")
+	ruleID := c.Param("caddy_id")
 
-	var totalRequests, requests2xx, requests3xx, requests4xx, requests5xx int64
-	var bytesIn, bytesOut int64
+	var rule models.LbRule
+	err := db.DB.QueryRow(`SELECT domain, listen_port, protocol, enable_tls FROM lb_rules WHERE caddy_id = ?`, ruleID).Scan(
+		&rule.Domain, &rule.ListenPort, &rule.Protocol, &rule.EnableTLS)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Rule not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+		return
+	}
 
-	db.DB.QueryRow(`
-		SELECT COALESCE(SUM(requests_total), 0), COALESCE(SUM(requests_2xx), 0),
-		       COALESCE(SUM(requests_3xx), 0), COALESCE(SUM(requests_4xx), 0),
-		       COALESCE(SUM(requests_5xx), 0), COALESCE(SUM(bytes_in), 0),
-		       COALESCE(SUM(bytes_out), 0)
-		FROM metrics_history 
-		WHERE rule_id = ? AND timestamp > datetime('now', '-1 hour')
-	`, caddyID).Scan(&totalRequests, &requests2xx, &requests3xx, &requests4xx, &requests5xx, &bytesIn, &bytesOut)
+	resp, err := http.Get(h.cfg.CaddyAdminURL + "/metrics")
+	if err != nil {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: emptyRuleMetrics()})
+		return
+	}
+	defer resp.Body.Close()
 
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
-		"total_requests": totalRequests,
-		"status_2xx":     requests2xx,
-		"status_3xx":     requests3xx,
-		"status_4xx":     requests4xx,
-		"status_5xx":     requests5xx,
-		"bytes_in":       bytesIn,
-		"bytes_out":      bytesOut,
-	}})
+	body, _ := io.ReadAll(resp.Body)
+	metrics := parseRuleMetricsFromPrometheus(string(body), rule.Domain, rule.ListenPort, rule.Protocol, rule.EnableTLS)
+
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
 }
 
 

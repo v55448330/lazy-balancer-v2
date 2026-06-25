@@ -52,9 +52,7 @@
     </el-row>
 
     <el-card v-if="keys.length === 0" class="empty-card">
-      <el-empty description="暂无 API 密钥" :image-size="80">
-        <el-button type="primary" @click="createKey">创建第一个密钥</el-button>
-      </el-empty>
+      <el-empty description="暂无 API 密钥" :image-size="80" />
     </el-card>
   </div>
 </template>
@@ -184,4 +182,5 @@ onMounted(() => {
 .key-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .empty-card { padding: 20px; }
+.empty-card :deep(.el-empty__bottom) { margin-top: 16px; }
 </style>

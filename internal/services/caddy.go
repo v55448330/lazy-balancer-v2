@@ -1318,14 +1318,6 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 							continue
 						}
 
-						// Determine whether this rule uses active health checks.
-						usesActive := false
-						if hc, ok := handle["health_checks"].(map[string]interface{}); ok {
-							if active, ok := hc["active"].(map[string]interface{}); ok && active != nil {
-								usesActive = true
-							}
-						}
-
 						detail := &UpstreamHealthDetail{}
 
 						if metrics, ok := upstreamMetrics[dial]; ok {
@@ -1334,18 +1326,8 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 						}
 
 						if observedHealthy, ok := upstreamHealth[dial]; ok {
-							if usesActive {
-								// Active health check: Caddy's observed result is authoritative.
-								detail.Healthy = observedHealthy
-							} else {
-								// Passive: if Caddy has not recorded any failures, treat as unknown
-								// until real traffic tests it.
-								if detail.Fails == 0 && detail.NumRequests == 0 {
-									detail.Unknown = true
-								} else {
-									detail.Healthy = observedHealthy
-								}
-							}
+							// Caddy reports a definitive health status for this upstream.
+							detail.Healthy = observedHealthy
 						} else {
 							// No observation from Caddy at all.
 							detail.Unknown = true
@@ -1361,12 +1343,6 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 					port, _ := dynamicUpstreams["port"].(string)
 					if name != "" {
 						dial := name + ":" + port
-						usesActive := false
-						if hc, ok := handle["health_checks"].(map[string]interface{}); ok {
-							if active, ok := hc["active"].(map[string]interface{}); ok && active != nil {
-								usesActive = true
-							}
-						}
 
 						detail := &UpstreamHealthDetail{}
 
@@ -1376,15 +1352,7 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 						}
 
 						if observedHealthy, ok := upstreamHealth[dial]; ok {
-							if usesActive {
-								detail.Healthy = observedHealthy
-							} else {
-								if detail.Fails == 0 && detail.NumRequests == 0 {
-									detail.Unknown = true
-								} else {
-									detail.Healthy = observedHealthy
-								}
-							}
+							detail.Healthy = observedHealthy
 						} else {
 							detail.Unknown = true
 						}

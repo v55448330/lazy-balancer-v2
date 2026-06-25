@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -558,31 +560,33 @@ func parsePrometheusMetrics(body string) models.CaddyMetrics {
 		}
 		name := fields[0]
 		value, _ := strconv.ParseFloat(fields[1], 64)
-		switch name {
-		case "caddy_http_requests_total":
-			m.RequestsTotal = int64(value)
-		case "caddy_http_requests_in_flight":
-			m.RequestsInFlight = int64(value)
-		case "go_goroutines":
+		switch {
+		case strings.HasPrefix(name, "caddy_http_requests_total{"):
+			v := int64(value)
+			m.RequestsTotal += v
+		case strings.HasPrefix(name, "caddy_http_request_duration_seconds_count{"):
+			code := extractLabel(name, "code")
+			v := int64(value)
+			switch classifyStatusCode(code) {
+			case "status_2xx":
+				m.Status2xx += v
+			case "status_3xx":
+				m.Status3xx += v
+			case "status_4xx":
+				m.Status4xx += v
+			case "status_5xx":
+				m.Status5xx += v
+			}
+		case strings.HasPrefix(name, "caddy_http_requests_in_flight{"):
+			m.RequestsInFlight += int64(value)
+		case name == "go_goroutines":
 			m.Goroutines = int64(value)
 		}
-		if strings.Contains(name, "request_size_bytes") && !strings.Contains(name, "bucket") {
+		if strings.Contains(name, "caddy_http_request_size_bytes_sum") {
 			m.BytesIn += int64(value)
 		}
-		if strings.Contains(name, "response_size_bytes") && !strings.Contains(name, "bucket") {
+		if strings.Contains(name, "caddy_http_response_size_bytes_sum") {
 			m.BytesOut += int64(value)
-		}
-		if strings.HasSuffix(name, `{code="2xx"}`) {
-			m.Status2xx = int64(value)
-		}
-		if strings.HasSuffix(name, `{code="3xx"}`) {
-			m.Status3xx = int64(value)
-		}
-		if strings.HasSuffix(name, `{code="4xx"}`) {
-			m.Status4xx = int64(value)
-		}
-		if strings.HasSuffix(name, `{code="5xx"}`) {
-			m.Status5xx = int64(value)
 		}
 	}
 	return m
@@ -603,7 +607,7 @@ func parseHostMetrics(body string) []models.HostMetrics {
 		name := fields[0]
 		value, _ := strconv.ParseFloat(fields[1], 64)
 
-		host := extractLabel(name, "Host")
+		host := extractLabel(name, "host")
 		if host == "" {
 			continue
 		}
@@ -613,22 +617,28 @@ func parseHostMetrics(body string) []models.HostMetrics {
 		h := hostMap[host]
 
 		switch {
-		case strings.HasPrefix(name, "caddy_http_requests_total"):
-			h.RequestsTotal = int64(value)
-		case strings.HasPrefix(name, "caddy_http_requests_in_flight"):
-			h.RequestsInFlight = int64(value)
-		case strings.Contains(name, "request_size_bytes") && !strings.Contains(name, "bucket"):
+		case strings.HasPrefix(name, "caddy_http_requests_total{"):
+			v := int64(value)
+			h.RequestsTotal += v
+		case strings.HasPrefix(name, "caddy_http_request_duration_seconds_count{"):
+			code := extractLabel(name, "code")
+			v := int64(value)
+			switch classifyStatusCode(code) {
+			case "status_2xx":
+				h.Status2xx += v
+			case "status_3xx":
+				h.Status3xx += v
+			case "status_4xx":
+				h.Status4xx += v
+			case "status_5xx":
+				h.Status5xx += v
+			}
+		case strings.HasPrefix(name, "caddy_http_requests_in_flight{"):
+			h.RequestsInFlight += int64(value)
+		case strings.Contains(name, "caddy_http_request_size_bytes_sum"):
 			h.BytesIn += int64(value)
-		case strings.Contains(name, "response_size_bytes") && !strings.Contains(name, "bucket"):
+		case strings.Contains(name, "caddy_http_response_size_bytes_sum"):
 			h.BytesOut += int64(value)
-		case strings.HasSuffix(name, `{code="2xx",Host="`+host+`"}`) || strings.Contains(name, `code="2xx"`) && extractLabel(name, "Host") == host:
-			h.Status2xx = int64(value)
-		case strings.HasSuffix(name, `{code="3xx",Host="`+host+`"}`) || strings.Contains(name, `code="3xx"`) && extractLabel(name, "Host") == host:
-			h.Status3xx = int64(value)
-		case strings.HasSuffix(name, `{code="4xx",Host="`+host+`"}`) || strings.Contains(name, `code="4xx"`) && extractLabel(name, "Host") == host:
-			h.Status4xx = int64(value)
-		case strings.HasSuffix(name, `{code="5xx",Host="`+host+`"}`) || strings.Contains(name, `code="5xx"`) && extractLabel(name, "Host") == host:
-			h.Status5xx = int64(value)
 		}
 	}
 	result := make([]models.HostMetrics, 0, len(hostMap))
@@ -650,6 +660,104 @@ func extractLabel(metricName string, label string) string {
 		return ""
 	}
 	return metricName[start : start+end]
+}
+
+func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protocol string, enableTLS bool) gin.H {
+	result := emptyRuleMetrics()
+	if domain == "" {
+		return result
+	}
+
+	domains := strings.Split(domain, ",")
+	hostSet := make(map[string]struct{})
+	for _, d := range domains {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		hostSet[d] = struct{}{}
+		if !strings.Contains(d, ":") {
+			hostSet[d+":"+strconv.Itoa(listenPort)] = struct{}{}
+			if enableTLS {
+				hostSet[d+":443"] = struct{}{}
+			} else if listenPort == 80 || listenPort == 0 {
+				hostSet[d+":80"] = struct{}{}
+			}
+		}
+	}
+
+	lines := strings.Split(body, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		name := fields[0]
+		value, _ := strconv.ParseFloat(fields[1], 64)
+
+		host := extractLabel(name, "host")
+		if host == "" {
+			continue
+		}
+		if _, ok := hostSet[host]; !ok {
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(name, "caddy_http_requests_total{"):
+			v := int64(value)
+			result["requests_total"] = result["requests_total"].(int64) + v
+		case strings.HasPrefix(name, "caddy_http_request_duration_seconds_count{"):
+			code := extractLabel(name, "code")
+			v := int64(value)
+			bucket := classifyStatusCode(code)
+			result[bucket] = result[bucket].(int64) + v
+		case strings.HasPrefix(name, "caddy_http_requests_in_flight{"):
+			result["requests_in_flight"] = result["requests_in_flight"].(int64) + int64(value)
+		case strings.Contains(name, "caddy_http_request_size_bytes_sum"):
+			result["bytes_in"] = result["bytes_in"].(int64) + int64(value)
+		case strings.Contains(name, "caddy_http_response_size_bytes_sum"):
+			result["bytes_out"] = result["bytes_out"].(int64) + int64(value)
+		}
+	}
+
+	return result
+}
+
+func classifyStatusCode(code string) string {
+	if code == "" {
+		return "status_2xx"
+	}
+	prefix := code[:1]
+	switch prefix {
+	case "2":
+		return "status_2xx"
+	case "3":
+		return "status_3xx"
+	case "4":
+		return "status_4xx"
+	case "5":
+		return "status_5xx"
+	default:
+		return "status_2xx"
+	}
+}
+
+func emptyRuleMetrics() gin.H {
+	return gin.H{
+		"requests_total":     int64(0),
+		"requests_in_flight": int64(0),
+		"status_2xx":         int64(0),
+		"status_3xx":         int64(0),
+		"status_4xx":         int64(0),
+		"status_5xx":         int64(0),
+		"bytes_in":           int64(0),
+		"bytes_out":          int64(0),
+		"healthy":            false,
+	}
 }
 
 

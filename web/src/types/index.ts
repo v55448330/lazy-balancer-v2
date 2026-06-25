@@ -65,6 +65,7 @@ export interface Rule {
 
 export interface RuleMetrics {
   requests_total?: number
+  requests_in_flight?: number
   total_requests?: number
   healthy?: boolean
   status_2xx: number

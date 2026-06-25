@@ -1,9 +1,9 @@
 <template>
-  <div v-if="activeTab === 'apikeys' && isAdmin" class="page">
+  <div class="page" v-if="activeTab === 'apikeys' && isAdmin">
     <APIKeys />
   </div>
 
-  <div v-else class="page">
+  <div class="page" v-else>
     <div class="page-header">
       <div class="header-left">
         <h2 class="page-title">
@@ -14,15 +14,21 @@
       </div>
     </div>
 
-    <BasicSettings v-if="activeTab === 'basic'" v-model:settings="settings" />
-    <ClusterSettings v-else-if="activeTab === 'cluster'" v-model:settings="settings" />
-    <FreeCertificates v-else-if="activeTab === 'certificates'" v-model:global="global" />
-
-    <div class="save-bar">
-      <el-button type="primary" size="large" @click="handleSave" :loading="saving">
-        <el-icon><Check /></el-icon>保存设置
-      </el-button>
-    </div>
+    <BasicSettings
+      v-if="activeTab === 'basic'"
+      v-model:settings="settings"
+      @save="handleSaveBasic"
+    />
+    <ClusterSettings
+      v-else-if="activeTab === 'cluster'"
+      v-model:settings="settings"
+      @save="handleSaveCluster"
+    />
+    <FreeCertificates
+      v-else-if="activeTab === 'certificates'"
+      v-model:global="global"
+      @save="handleSaveCertificates"
+    />
   </div>
 </template>
 
@@ -31,7 +37,7 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
-import { Setting, Check } from '@element-plus/icons-vue'
+import { Setting } from '@element-plus/icons-vue'
 import BasicSettings from './settings/BasicSettings.vue'
 import ClusterSettings from './settings/ClusterSettings.vue'
 import FreeCertificates from './settings/FreeCertificates.vue'
@@ -41,12 +47,8 @@ const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const activeTab = ref('basic')
-const saving = ref(false)
 
 const settings = ref<any>({
-  dns_provider: 'dnspod',
-  dns_credentials: '',
-  letsencrypt_email: '',
   log_level: 'info',
   access_log_enabled: true,
   is_master: true,
@@ -81,9 +83,6 @@ const fetchSettings = async () => {
     const res = await request.get('/config')
     if (res.data) {
       settings.value = {
-        dns_provider: res.data.dns_provider || 'dnspod',
-        dns_credentials: res.data.dns_credentials || '',
-        letsencrypt_email: res.data.letsencrypt_email || '',
         log_level: res.data.log_level || 'info',
         access_log_enabled: res.data.access_log_enabled ?? true,
         is_master: res.data.is_master ?? true,
@@ -100,20 +99,35 @@ const fetchSettings = async () => {
   }
 }
 
-const handleSave = async () => {
-  saving.value = true
+const saveConfig = async (payload: any) => {
   try {
-    await request.put('/config', {
-      ...settings.value,
-      acme_email: global.value.acme_email,
-      cert_expiry_days: global.value.cert_expiry_days,
-    })
+    await request.put('/config', payload)
     ElMessage.success('保存成功')
   } catch (error) {
     console.error('Failed to save settings:', error)
-  } finally {
-    saving.value = false
   }
+}
+
+const handleSaveBasic = async () => {
+  await saveConfig({
+    log_level: settings.value.log_level,
+    access_log_enabled: settings.value.access_log_enabled,
+  })
+}
+
+const handleSaveCluster = async () => {
+  await saveConfig({
+    is_master: settings.value.is_master,
+    master_url: settings.value.master_url,
+    sync_interval: settings.value.sync_interval,
+  })
+}
+
+const handleSaveCertificates = async () => {
+  await saveConfig({
+    acme_email: global.value.acme_email,
+    cert_expiry_days: global.value.cert_expiry_days,
+  })
 }
 
 const syncActiveTabFromPage = () => {
@@ -162,13 +176,5 @@ onMounted(() => {
   font-size: 13px;
   color: #6b7280;
   margin: 4px 0 0 28px;
-}
-
-.save-bar {
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid #e5e7eb;
-  display: flex;
-  justify-content: flex-end;
 }
 </style>
