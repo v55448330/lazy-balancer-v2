@@ -920,6 +920,22 @@ const wizardForm = reactive<Rule>({
   enabled: true,
 })
 
+// Watch for enable_tls toggle to adjust default listen port
+watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
+  if (wizardForm.protocol !== 'http') return
+  if (newVal && !oldVal) {
+    // Enabling HTTPS: default to 443 if currently using the HTTP default 80
+    if (wizardForm.listen_port === 80) {
+      wizardForm.listen_port = 443
+    }
+  } else if (!newVal && oldVal) {
+    // Disabling HTTPS: revert to 80 if currently 443
+    if (wizardForm.listen_port === 443) {
+      wizardForm.listen_port = 80
+    }
+  }
+})
+
 // Watch for enable_dns_server toggle to clear DNS fields when disabled
 watch(() => wizardForm.enable_dns_server, (newVal) => {
   if (!newVal) {
@@ -961,7 +977,7 @@ const portWarning = computed(() => {
   const tcpPorts = existingRules.filter(r => r.protocol === 'tcp').map(r => r.listen_port)
   
   if (wizardForm.protocol === 'http') {
-    // HTTP 规则允许使用 80, 443
+    // HTTP rules cannot use admin ports and cannot share a port with any TCP rule.
     if (adminPorts.includes(wizardForm.listen_port)) {
       return `端口 ${wizardForm.listen_port} 为管理端口，不可使用`
     }
@@ -969,15 +985,15 @@ const portWarning = computed(() => {
       return `端口已被 TCP 规则占用`
     }
   } else if (wizardForm.protocol === 'tcp') {
-    // TCP 规则不允许使用 80, 443, 8000, 2019 和 HTTP 规则占用的端口
+    // TCP rules cannot use admin ports, 80/443, or share a port with any other rule.
     if (httpReservedPorts.includes(wizardForm.listen_port)) {
       return `端口 ${wizardForm.listen_port} 为 HTTP/Web 端口，TCP 规则不可使用`
     }
     if (adminPorts.includes(wizardForm.listen_port)) {
       return `端口 ${wizardForm.listen_port} 为管理端口，不可使用`
     }
-    if (httpPorts.includes(wizardForm.listen_port)) {
-      return `端口已被 HTTP 规则占用`
+    if (httpPorts.includes(wizardForm.listen_port) || tcpPorts.includes(wizardForm.listen_port)) {
+      return `端口已被其他规则占用`
     }
   }
   return ''

@@ -20,7 +20,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		SELECT COALESCE(caddy_id,'') AS caddy_id, name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port, strategy,
 		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval,
-		       COALESCE(enable_active_health_check,0), COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_auto_cert,0), COALESCE(tls_http_redirect,0),
+		       COALESCE(enable_active_health_check,0), COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_auto_cert,0), COALESCE(tls_http_redirect,0),
 		       COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), enabled, created_by, created_at, updated_at, updated_by,
 		       COALESCE(host_header,'')
 		FROM lb_rules ORDER BY id
@@ -35,6 +35,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 	for rows.Next() {
 		var r models.LbRule
 		var domain, strategy, description, compressTypes, hostHeader, dnsFamily, tlsSource string
+		var tlsCert, tlsKey string
 		var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsAutoCert, tlsHTTPRedirect, enableCompress bool
 		var acmeConfigID int
 		var createdBy sql.NullInt64
@@ -44,7 +45,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		err := rows.Scan(&r.CaddyID, &r.Name, &description, &r.Protocol, &domain, &r.ListenPort, &strategy,
 			&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
 			&r.HealthCheckPath, &r.HealthCheckInterval,
-			&enableActiveHealthCheck, &enableTLS, &tlsSource, &acmeConfigID, &tlsAutoCert, &tlsHTTPRedirect,
+			&enableActiveHealthCheck, &enableTLS, &tlsSource, &acmeConfigID, &tlsCert, &tlsKey, &tlsAutoCert, &tlsHTTPRedirect,
 			&enableCompress, &compressTypes, &r.Enabled, &createdBy, &createdAt, &updatedAt, &updatedBy,
 			&hostHeader)
 		if err != nil {
@@ -75,6 +76,8 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		r.EnableTLS = enableTLS
 		r.TLSSource = tlsSource
 		r.ACMEConfigID = acmeConfigID
+		r.TLSCert = tlsCert
+		r.TLSKey = tlsKey
 		r.TLSAutoCert = tlsAutoCert
 		r.TLSHTTPRedirect = tlsHTTPRedirect
 		r.EnableCompress = enableCompress

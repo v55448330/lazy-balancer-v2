@@ -1804,10 +1804,12 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 					map[string]interface{}{
 						"handler":   "reverse_proxy",
 						"upstreams": upstreamList,
-						"transport": proxyTransport,
 					},
 				},
 			},
+		}
+		if proxyTransport != nil {
+			server["routes"].([]interface{})[0].(map[string]interface{})["handle"].([]interface{})[0].(map[string]interface{})["transport"] = proxyTransport
 		}
 
 		servers[fmt.Sprintf("tcp_%d", port)] = server
@@ -2316,11 +2318,13 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 						map[string]interface{}{
 							"handler":   "reverse_proxy",
 							"upstreams": upstreamList,
-							"transport": proxyTransport,
 						},
 					},
 				},
 			},
+		}
+		if proxyTransport != nil {
+			server["routes"].([]interface{})[0].(map[string]interface{})["handle"].([]interface{})[0].(map[string]interface{})["transport"] = proxyTransport
 		}
 
 		servers[fmt.Sprintf("tcp_%d", rule.ListenPort)] = server
@@ -2525,11 +2529,14 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 			}
 		}
 
-		handleChain = append(handleChain, map[string]interface{}{
+		proxyConfig := map[string]interface{}{
 			"handler":   "reverse_proxy",
 			"upstreams": upstreamList,
-			"transport": proxyTransport,
-		})
+		}
+		if proxyTransport != nil {
+			proxyConfig["transport"] = proxyTransport
+		}
+		handleChain = append(handleChain, proxyConfig)
 	}
 
 	// Split domain by comma to support multiple domains
