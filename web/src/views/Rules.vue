@@ -489,7 +489,7 @@
               {{ wizardForm.enable_compress ? (wizardForm.compress_types || 'gzip') : '禁用' }}
             </el-descriptions-item>
             <el-descriptions-item label="TLS 证书" v-if="wizardForm.enable_tls">
-              <div v-if="wizardForm.tls_auto_cert">{{ certTypeLabels.auto }}</div>
+              <div v-if="wizardForm.tls_source === 'acme_dns'">{{ certTypeLabels.auto }}</div>
               <div v-else>
                 <div>{{ certTypeLabels.manual }}</div>
                 <div v-if="certInfo.valid" class="cert-preview-info">
@@ -563,6 +563,8 @@
           <el-descriptions-item label="后端域名" v-if="ruleConfig.protocol === 'http'">{{ ruleConfig.host_header || '-' }}</el-descriptions-item>
           <el-descriptions-item label="TLS" v-if="ruleConfig.enable_tls">
             {{ ruleConfig.tls_http_redirect ? '启用 (HTTP重定向)' : '启用' }}
+            <span v-if="ruleConfig.tls_source === 'manual'" class="tls-source-tag">(手动上传)</span>
+            <span v-else-if="ruleConfig.tls_source === 'acme_dns'" class="tls-source-tag">(ACME 自动)</span>
           </el-descriptions-item>
           <el-descriptions-item label="TLS" v-else>禁用</el-descriptions-item>
           <el-descriptions-item label="压缩" v-if="ruleConfig.protocol === 'http'">
@@ -730,6 +732,7 @@ const ruleConfig = ref<{
   dns_server: string
   host_header: string
   enable_tls: boolean
+  tls_source: string
   tls_http_redirect: boolean
   enable_compress: boolean
   compress_types: string
@@ -1424,6 +1427,7 @@ const viewConfig = async (rule: Rule) => {
       dns_server: (rule as any).dns_server || '',
       host_header: rule.host_header || '',
       enable_tls: rule.enable_tls || false,
+      tls_source: rule.tls_source || (rule.tls_auto_cert ? 'acme_dns' : 'manual'),
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
       compress_types: compressType,
@@ -1450,6 +1454,7 @@ const viewConfig = async (rule: Rule) => {
       dns_server: (rule as any).dns_server || '',
       host_header: rule.host_header || '',
       enable_tls: rule.enable_tls || false,
+      tls_source: rule.tls_source || (rule.tls_auto_cert ? 'acme_dns' : 'manual'),
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
       compress_types: 'gzip',
