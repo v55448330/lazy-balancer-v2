@@ -1648,10 +1648,15 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 				HealthCheckInterval:     r.HealthCheckInterval,
 				HealthCheckTimeout:      r.HealthCheckTimeout,
 				EnableTLS:               r.EnableTLS,
+				TLSSource:               r.TLSSource,
+				ACMEConfigID:            r.ACMEConfigID,
+				ACMEEmail:               r.ACMEEmail,
 				TLSCert:                 r.TLSCert,
 				TLSKey:                  r.TLSKey,
-			TLSHTTPRedirect:         r.TLSHTTPRedirect,
-			EnableCompress:          r.EnableCompress,
+				TLSAutoCert:             r.TLSAutoCert,
+				TLSEmail:                r.TLSEmail,
+				TLSHTTPRedirect:         r.TLSHTTPRedirect,
+				EnableCompress:          r.EnableCompress,
 				CompressTypes:           r.CompressTypes,
 				EnableActiveHealthCheck: r.EnableActiveHealthCheck,
 				HostHeader:              r.HostHeader,
@@ -1681,30 +1686,6 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 				continue
 			}
 			routes = append(routes, route)
-
-			if r.EnableTLS && r.TLSHTTPRedirect {
-				domainHosts := strings.Split(r.Domain, ",")
-				for i, d := range domainHosts {
-					domainHosts[i] = strings.TrimSpace(d)
-				}
-				redirectRoute := map[string]interface{}{
-					"match": []interface{}{
-						map[string]interface{}{
-							"host": domainHosts,
-						},
-					},
-					"handle": []interface{}{
-						map[string]interface{}{
-							"handler":     "static_response",
-							"status_code": 301,
-							"headers": map[string]interface{}{
-								"Location": []string{fmt.Sprintf("https://%s", r.Domain)},
-							},
-						},
-					},
-				}
-				routes = append(routes, redirectRoute)
-			}
 		}
 
 		server["routes"] = routes
@@ -1713,11 +1694,8 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		var tlsPolicies []interface{}
 		for _, ru := range rules {
 			r := ru.rule
-			if r.EnableTLS && !r.TLSAutoCert && r.TLSCert != "" && r.TLSKey != "" {
-				domainHosts := strings.Split(r.Domain, ",")
-				for i, d := range domainHosts {
-					domainHosts[i] = strings.TrimSpace(d)
-				}
+			if r.EnableTLS && r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
+				domainHosts := splitAndTrim(r.Domain)
 				tlsPolicies = append(tlsPolicies, map[string]interface{}{
 					"match": map[string]interface{}{
 						"sni": domainHosts,
@@ -1732,19 +1710,53 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 			server["tls_connection_policies"] = tlsPolicies
 		}
 
+		// Add HTTPS server automatic HTTPS disable marker when using non-standard ports to avoid Caddy auto redirect conflicts
+		if port != 443 && port != 80 {
+			server["automatic_https"] = map[string]interface{}{
+				"disable": true,
+			}
+		}
+
 		servers[fmt.Sprintf("http_%d", port)] = server
+	}
+
+	// Collect HTTP->HTTPS redirect routes from all TLS-enabled rules and place them on the HTTP (port 80) server.
+	var redirectRoutes []interface{}
+	for _, ru := range allRules {
+		r := ru.rule
+		if r.Protocol == "http" && r.EnableTLS && r.TLSHTTPRedirect {
+			domainHosts := splitAndTrim(r.Domain)
+			if len(domainHosts) > 0 {
+				redirectRoutes = append(redirectRoutes, map[string]interface{}{
+					"match": []interface{}{
+						map[string]interface{}{
+							"host": domainHosts,
+						},
+					},
+					"handle": []interface{}{
+						map[string]interface{}{
+							"handler":     "static_response",
+							"status_code": 301,
+							"headers": map[string]interface{}{
+								"Location": []string{fmt.Sprintf("https://%s", domainHosts[0])},
+							},
+						},
+					},
+				})
+			}
+		}
 	}
 
 	// Collect manual TLS certificates for all rules
 	var tlsCertificates []map[string]interface{}
 	for _, ru := range allRules {
 		r := ru.rule
-		if r.EnableTLS && !r.TLSAutoCert && r.TLSCert != "" && r.TLSKey != "" {
-				tlsCertificates = append(tlsCertificates, map[string]interface{}{
-					"certificate": r.TLSCert,
-					"key":         r.TLSKey,
-					"tags":        []string{r.CaddyID},
-				})
+		if r.EnableTLS && r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
+			tlsCertificates = append(tlsCertificates, map[string]interface{}{
+				"certificate": r.TLSCert,
+				"key":         r.TLSKey,
+				"tags":        []string{r.CaddyID},
+			})
 		}
 	}
 
@@ -1820,6 +1832,9 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 	}
 
 	if _, exists := servers["http_80"]; !exists {
+		if len(redirectRoutes) > 0 {
+			defaultSite["routes"] = append(redirectRoutes, defaultSite["routes"].([]interface{})...)
+		}
 		servers["http_80"] = defaultSite
 	} else {
 		server := servers["http_80"].(map[string]interface{})
@@ -1834,6 +1849,10 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 					"body":    "Lazy Balancer V2 is running!",
 				},
 			},
+		}
+		// Ensure redirect routes come before the default catch-all route.
+		if len(redirectRoutes) > 0 {
+			routes = append(redirectRoutes, routes...)
 		}
 		routes = append(routes, defaultRoute)
 		server["routes"] = routes
@@ -2226,7 +2245,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 						"handler":     "static_response",
 						"status_code": 301,
 						"headers": map[string]interface{}{
-							"Location": []string{fmt.Sprintf("https://%s", rule.Domain)},
+							"Location": []string{fmt.Sprintf("https://%s", domainHosts[0])},
 						},
 					},
 				},
@@ -2245,7 +2264,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		}
 
 		// Add TLS configuration for manual certificates
-		if rule.EnableTLS && !rule.TLSAutoCert && rule.TLSCert != "" && rule.TLSKey != "" {
+		if rule.EnableTLS && rule.TLSSource == "manual" && rule.TLSCert != "" && rule.TLSKey != "" {
 			server["tls_connection_policies"] = []interface{}{
 				map[string]interface{}{
 					"match": map[string]interface{}{
@@ -2255,6 +2274,12 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 						"any_tag": []string{rule.CaddyID},
 					},
 				},
+			}
+		}
+
+		if rule.ListenPort != 443 && rule.ListenPort != 80 {
+			server["automatic_https"] = map[string]interface{}{
+				"disable": true,
 			}
 		}
 
@@ -2308,7 +2333,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 	}
 
 	// Add TLS certificates configuration for manual certificates
-	if rule.EnableTLS && !rule.TLSAutoCert && rule.TLSCert != "" && rule.TLSKey != "" {
+	if rule.EnableTLS && rule.TLSSource == "manual" && rule.TLSCert != "" && rule.TLSKey != "" {
 		apps["tls"] = map[string]interface{}{
 			"certificates": map[string]interface{}{
 				"load_pem": []map[string]interface{}{

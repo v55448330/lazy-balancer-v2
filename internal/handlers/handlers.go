@@ -412,7 +412,6 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 
 func (h *Handlers) validatePort(protocol string, port int, excludeCaddyID string) error {
 	adminPorts := []int{8000, 2019}
-	httpReservedPorts := []int{80, 443}
 
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535")
@@ -424,20 +423,12 @@ func (h *Handlers) validatePort(protocol string, port int, excludeCaddyID string
 		}
 	}
 
-	if protocol == "tcp" {
-		for _, p := range httpReservedPorts {
-			if port == p {
-				return fmt.Errorf("port %d is reserved for HTTP", port)
-			}
-		}
-	}
-
 	return h.validatePortFromDB(protocol, port, excludeCaddyID)
 }
 
 
 func (h *Handlers) validatePortFromDB(protocol string, port int, excludeCaddyID string) error {
-	// Check conflict with existing rules
+	// Check conflict with existing rules. HTTP and TCP cannot share the same port.
 	var count int
 	if excludeCaddyID != "" {
 		db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE listen_port = ? AND caddy_id != ? AND protocol != ?", port, excludeCaddyID, protocol).Scan(&count)

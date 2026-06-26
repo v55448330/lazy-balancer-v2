@@ -282,6 +282,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		return
 	}
 
+	// Get the actual route object from Caddy via @id
 	caddyActualConfig, err := h.caddyService.GetConfigByID(r.CaddyID)
 	if err != nil {
 		log.Printf("GetRuleCaddyConfig: failed to get config from Caddy for caddy_id=%s: %v", r.CaddyID, err)
@@ -291,9 +292,121 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		return
 	}
 
-	responseData["config"] = caddyActualConfig
+	// Build the surrounding server/TLS context so the dialog shows certificates and policies
+	fullConfig := services.GenerateCaddyConfig(h.cfg)
+	ruleContext := buildRuleCaddyContext(fullConfig, r.CaddyID, r.ListenPort)
+
+	responseData["config"] = map[string]interface{}{
+		"route":               caddyActualConfig,
+		"server_context":      ruleContext["server"],
+		"tls_certificates":    ruleContext["tls_certificates"],
+		"tls_connection_policies": ruleContext["tls_connection_policies"],
+		"automation_policies": ruleContext["automation_policies"],
+	}
 	responseData["config_not_exists"] = false
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: responseData})
+}
+
+// buildRuleCaddyContext extracts the server and TLS context relevant to a rule from the full Caddy config.
+func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string, listenPort int) map[string]interface{} {
+	result := map[string]interface{}{
+		"server":                    nil,
+		"tls_certificates":          []interface{}{},
+		"tls_connection_policies":   []interface{}{},
+		"automation_policies":       []interface{}{},
+	}
+
+	apps, _ := fullConfig["apps"].(map[string]interface{})
+	if apps == nil {
+		return result
+	}
+
+	httpApp, _ := apps["http"].(map[string]interface{})
+	if httpApp == nil {
+		return result
+	}
+
+	servers, _ := httpApp["servers"].(map[string]interface{})
+	if servers == nil {
+		return result
+	}
+
+	// Find server containing this rule's route
+	for serverName, serverVal := range servers {
+		server, _ := serverVal.(map[string]interface{})
+		if server == nil {
+			continue
+		}
+		routes, _ := server["routes"].([]interface{})
+		for _, routeVal := range routes {
+			route, _ := routeVal.(map[string]interface{})
+			if route == nil {
+				continue
+			}
+			if route["@id"] == caddyID {
+				result["server"] = map[string]interface{}{
+					"server_name":             serverName,
+					"listen":                  server["listen"],
+					"tls_connection_policies": server["tls_connection_policies"],
+				}
+				if policies, ok := server["tls_connection_policies"].([]interface{}); ok {
+					result["tls_connection_policies"] = policies
+				}
+				break
+			}
+		}
+	}
+
+	tlsApp, _ := apps["tls"].(map[string]interface{})
+	if tlsApp == nil {
+		return result
+	}
+
+	if certs, ok := tlsApp["certificates"].(map[string]interface{}); ok {
+		var certList []interface{}
+		switch v := certs["load_pem"].(type) {
+		case []interface{}:
+			certList = v
+		case []map[string]interface{}:
+			for _, c := range v {
+				certList = append(certList, c)
+			}
+		}
+		for _, certVal := range certList {
+			cert, _ := certVal.(map[string]interface{})
+			if cert == nil {
+				continue
+			}
+			matched := false
+			switch tags := cert["tags"].(type) {
+			case []interface{}:
+				for _, tag := range tags {
+					if tag == caddyID {
+						matched = true
+						break
+					}
+				}
+			case []string:
+				for _, tag := range tags {
+					if tag == caddyID {
+						matched = true
+						break
+					}
+				}
+			}
+			if matched {
+				result["tls_certificates"] = append(result["tls_certificates"].([]interface{}), cert)
+			}
+		}
+	}
+
+	if automation, ok := tlsApp["automation"].(map[string]interface{}); ok {
+		if policies, ok := automation["policies"].([]interface{}); ok {
+			result["automation_policies"] = policies
+		}
+	}
+
+	return result
 }
 
 
@@ -322,10 +435,16 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Protocol is required"})
 		return
 	}
+	// When TLS is enabled for HTTP, default the listen port to 443 unless the user explicitly set another port.
+	if req.Protocol == "http" && req.EnableTLS && req.ListenPort == 0 {
+		req.ListenPort = 443
+	}
+
 	if req.ListenPort <= 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Listen port must be greater than 0"})
 		return
 	}
+
 	if len(req.Upstreams) == 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "At least one upstream required"})
 		return
@@ -552,10 +671,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request: " + err.Error()})
 		return
 	}
-	log.Printf("UpdateRule request for caddy_id=%s: enable_tls=%v, tls_auto_cert=%v, cert_len=%d, key_len=%d", 
+	log.Printf("UpdateRule request for caddy_id=%s: enable_tls=%v, tls_auto_cert=%v, cert_len=%d, key_len=%d",
 		caddyID, req.EnableTLS, req.TLSAutoCert, len(req.TLSCert), len(req.TLSKey))
 
-	// Prevent port change - get current rule's port
+	// When TLS is enabled on HTTP, default the port to 443 if the user didn't explicitly set one.
+	// For updates the port is fixed, so we only apply the default when an explicit port was not supplied.
+	if req.Protocol == "http" && req.EnableTLS && req.ListenPort == 0 {
+		req.ListenPort = 443
+	}
+
 	if req.ListenPort > 0 {
 		var currentPort int
 		err := db.DB.QueryRow("SELECT listen_port FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&currentPort)
@@ -597,7 +721,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		validationServerName = fmt.Sprintf("tcp_%d", validationPort)
 	}
 
-	// Fill in missing fields from database for validation
+	// Fill in missing fields from database so validation and the update use complete data.
 	var existingRule models.LbRule
 	err := db.DB.QueryRow(`
 		SELECT COALESCE(protocol,''), COALESCE(domain,''), listen_port, COALESCE(strategy,'round_robin'),
@@ -691,13 +815,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		tlsCert := req.TLSCert
 		tlsKey := req.TLSKey
 		// If cert/key not provided in request, get from DB
-		if tlsCert == "" || tlsKey == "" {
-			if tlsCert == "" {
-				tlsCert = existingRule.TLSCert
-			}
-			if tlsKey == "" {
-				tlsKey = existingRule.TLSKey
-			}
+		if tlsCert == "" {
+			tlsCert = existingRule.TLSCert
+		}
+		if tlsKey == "" {
+			tlsKey = existingRule.TLSKey
 		}
 		if tlsCert != "" && tlsKey != "" {
 			if err := validateTLSCertificate(tlsCert, tlsKey); err != nil {
@@ -1099,119 +1221,25 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 func (h *Handlers) EnableRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 
-	var protocol string
-	var listenPort int
-	err := db.DB.QueryRow("SELECT COALESCE(protocol,''), listen_port FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol, &listenPort)
+	var exists bool
+	err := db.DB.QueryRow("SELECT 1 FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&exists)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Rule not found"})
 		return
 	}
 
-	var serverName string
-	if protocol == "http" && listenPort == 80 {
-		serverName = "http_80"
-	} else if protocol == "https" && listenPort == 443 {
-		serverName = "https_443"
-	} else if protocol == "http" {
-		serverName = fmt.Sprintf("http_%d", listenPort)
-	} else if protocol == "https" {
-		serverName = fmt.Sprintf("https_%d", listenPort)
-	} else {
-		serverName = fmt.Sprintf("tcp_%d", listenPort)
-	}
-
-	if h.caddyService.RouteExistsInServer(serverName, caddyID) {
-		db.DB.Exec("UPDATE lb_rules SET enabled = 1, updated_at = datetime('now') WHERE caddy_id = ?", caddyID)
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule enabled"})
+	if _, err := db.DB.Exec("UPDATE lb_rules SET enabled = 1, updated_at = datetime('now') WHERE caddy_id = ?", caddyID); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to enable rule"})
 		return
 	}
 
-	var rule models.LbRule
-	err = db.DB.QueryRow(`
-		SELECT COALESCE(caddy_id,''), name, protocol, COALESCE(domain,''), listen_port, strategy,
-		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
-		       health_check_path, health_check_interval,
-		       COALESCE(health_check_timeout,5), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
-		       COALESCE(enable_tls,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
-		       COALESCE(tls_auto_cert,0), COALESCE(tls_email,''), COALESCE(tls_http_redirect,0),
-		       enabled, COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
-		       COALESCE(enable_active_health_check,0), COALESCE(host_header,'')
-		FROM lb_rules WHERE caddy_id = ?
-	`, caddyID).Scan(
-		&rule.CaddyID, &rule.Name, &rule.Protocol, &rule.Domain, &rule.ListenPort, &rule.Strategy,
-		&rule.DynamicDNS, &rule.EnableDnsServer, &rule.DnsServer, &rule.DnsFamily, &rule.HealthCheckPath, &rule.HealthCheckInterval,
-		&rule.HealthCheckTimeout, &rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
-		&rule.EnableTLS, &rule.TLSCert, &rule.TLSKey, &rule.TLSAutoCert, &rule.TLSEmail,
-		&rule.TLSHTTPRedirect, &rule.Enabled, &rule.EnableCompress, &rule.CompressTypes,
-		&rule.EnableActiveHealthCheck, &rule.HostHeader,
-	)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get rule"})
+	if err := h.applyCaddyConfigWithRollback(); err != nil {
+		// Revert DB state on Caddy failure
+		db.DB.Exec("UPDATE lb_rules SET enabled = 0, updated_at = datetime('now') WHERE caddy_id = ?", caddyID)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Failed to apply Caddy config: %v", err)})
 		return
 	}
 
-	upstreamRows, _ := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http') FROM upstreams WHERE rule_id = ?", caddyID)
-	if upstreamRows != nil {
-		for upstreamRows.Next() {
-			var u models.Upstream
-			upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol)
-			rule.Upstreams = append(rule.Upstreams, u)
-		}
-		upstreamRows.Close()
-	}
-
-	ruleConfig := services.SingleRuleConfig{
-		Protocol:                rule.Protocol,
-		Domain:                  rule.Domain,
-		ListenPort:              rule.ListenPort,
-		Strategy:                rule.Strategy,
-		DynamicDNS:              rule.DynamicDNS,
-		DnsServer:               rule.DnsServer,
-		DnsFamily:               rule.DnsFamily,
-		HealthCheckPath:         rule.HealthCheckPath,
-		HealthCheckInterval:     rule.HealthCheckInterval,
-		HealthCheckTimeout:      rule.HealthCheckTimeout,
-		EnableTLS:               rule.EnableTLS,
-		TLSHTTPRedirect:         rule.TLSHTTPRedirect,
-		EnableCompress:          rule.EnableCompress,
-		CompressTypes:           rule.CompressTypes,
-		EnableActiveHealthCheck: rule.EnableActiveHealthCheck,
-		HostHeader:              rule.HostHeader,
-		CaddyID:                 rule.CaddyID,
-	}
-	for _, u := range rule.Upstreams {
-		protocol := u.Protocol
-		if protocol == "" {
-			protocol = "http"
-		}
-		weight := u.Weight
-		if weight == 0 {
-			weight = 1
-		}
-		ruleConfig.Upstreams = append(ruleConfig.Upstreams, services.UpstreamConfig{
-			Host: u.Host, Port: u.Port, Weight: weight, Protocol: protocol, Enabled: u.Enabled,
-		})
-	}
-
-	h.caddyService.CreateServerIfNotExists(serverName, listenPort)
-
-	routeConfig, err := services.GenerateRouteObject(ruleConfig)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-		return
-	}
-
-	if err := h.caddyService.PrependRouteToServer(serverName, routeConfig); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Failed to add route to Caddy: %v", err)})
-		return
-	}
-
-	if err := h.caddyService.VerifyRouteExists(caddyID); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy write verification failed: %v", err)})
-		return
-	}
-
-	db.DB.Exec("UPDATE lb_rules SET enabled = 1, updated_at = datetime('now') WHERE caddy_id = ?", caddyID)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule enabled"})
 }
 
@@ -1219,31 +1247,23 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 func (h *Handlers) DisableRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 
-	var protocol string
-	var listenPort int
-	err := db.DB.QueryRow("SELECT COALESCE(protocol,''), listen_port FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol, &listenPort)
+	var exists bool
+	err := db.DB.QueryRow("SELECT 1 FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&exists)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Rule not found"})
 		return
 	}
 
-	var serverName string
-	if protocol == "http" && listenPort == 80 {
-		serverName = "http_80"
-	} else if protocol == "https" && listenPort == 443 {
-		serverName = "https_443"
-	} else if protocol == "http" {
-		serverName = fmt.Sprintf("http_%d", listenPort)
-	} else if protocol == "https" {
-		serverName = fmt.Sprintf("https_%d", listenPort)
-	} else {
-		serverName = fmt.Sprintf("tcp_%d", listenPort)
+	if _, err := db.DB.Exec("UPDATE lb_rules SET enabled = 0, updated_at = datetime('now') WHERE caddy_id = ?", caddyID); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to disable rule"})
+		return
 	}
 
-	db.DB.Exec("UPDATE lb_rules SET enabled = 0, updated_at = datetime('now') WHERE caddy_id = ?", caddyID)
-
-	if caddyID != "" {
-		h.caddyService.RemoveRouteFromServer(serverName, caddyID)
+	if err := h.applyCaddyConfigWithRollback(); err != nil {
+		// Revert DB state on Caddy failure
+		db.DB.Exec("UPDATE lb_rules SET enabled = 1, updated_at = datetime('now') WHERE caddy_id = ?", caddyID)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Failed to apply Caddy config: %v", err)})
+		return
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule disabled"})
