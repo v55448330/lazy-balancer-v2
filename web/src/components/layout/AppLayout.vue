@@ -261,11 +261,38 @@ onMounted(() => {
   flex: 1;
 }
 
-.layout-menu :deep(.el-menu-item) {
+.layout-menu :deep(.el-menu),
+.layout-menu :deep(.el-sub-menu) {
+  border: none !important;
+}
+
+.layout-menu :deep(.el-menu-item),
+.layout-menu :deep(.el-sub-menu__title) {
   height: 44px;
   line-height: 44px;
   margin: 4px 8px;
   border-radius: 6px;
+  padding-right: 16px !important;
+}
+
+.layout-menu :deep(.el-menu-item .el-icon),
+.layout-menu :deep(.el-sub-menu__title .el-icon) {
+  margin-right: 10px;
+  font-size: 18px;
+  width: 18px;
+  text-align: center;
+}
+
+.layout-menu :deep(.el-sub-menu__title) {
+  display: flex;
+  align-items: center;
+}
+
+.layout-menu :deep(.el-sub-menu__icon-arrow) {
+  position: static;
+  margin-left: auto;
+  margin-top: 0;
+  transform: none;
 }
 
 .layout-menu :deep(.el-menu-item.is-active) {
@@ -273,8 +300,60 @@ onMounted(() => {
   color: #3b82f6;
 }
 
-.layout-menu :deep(.el-menu-item:hover) {
+.layout-menu :deep(.el-menu-item:hover),
+.layout-menu :deep(.el-sub-menu__title:hover) {
   background: #f9fafb;
+}
+
+.layout-menu :deep(.el-sub-menu.is-active .el-sub-menu__title) {
+  color: #3b82f6;
+}
+
+.layout-menu :deep(.el-sub-menu .el-menu) {
+  background-color: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+}
+
+.layout-menu :deep(.el-sub-menu .el-menu-item) {
+  height: 40px;
+  line-height: 40px;
+  margin: 4px 8px;
+  border-radius: 6px;
+  min-width: 0;
+}
+
+.layout-menu :deep(.el-sub-menu .el-menu-item .el-icon) {
+  margin-right: 8px;
+  font-size: 17px;
+  width: 17px;
+}
+
+.layout-menu :deep(.el-sub-menu.is-opened) {
+  margin-bottom: 0 !important;
+}
+
+.layout-menu :deep(.el-sub-menu__title + .el-menu) {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+}
+
+.layout-menu :deep(.el-sub-menu) {
+  margin-top: 4px !important;
+  margin-bottom: 4px !important;
+}
+
+.layout-menu :deep(.el-sub-menu.is-opened) {
+  margin-bottom: 4px !important;
+}
+
+.layout-menu :deep(.el-sub-menu .el-menu-item) {
+  margin-top: 4px !important;
+}
+
+.layout-menu :deep(.el-sub-menu .el-menu-item:first-child) {
+  margin-top: 0 !important;
 }
 
 .aside-footer {

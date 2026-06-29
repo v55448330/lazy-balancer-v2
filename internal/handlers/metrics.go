@@ -33,6 +33,11 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 		return
 	}
 
+	if rule.Protocol == "tcp" {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: emptyRuleMetrics()})
+		return
+	}
+
 	resp, err := http.Get(h.cfg.CaddyAdminURL + "/metrics")
 	if err != nil {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: emptyRuleMetrics()})

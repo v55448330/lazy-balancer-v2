@@ -328,6 +328,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		HealthCheckPath:         data.HealthCheckPath,
 		HealthCheckInterval:     data.HealthCheckInterval,
 		HealthCheckTimeout:      data.HealthCheckTimeout,
+		HealthCheckUnhealthyThreshold: data.HealthCheckUnhealthyThreshold,
 		EnableTLS:               data.EnableTLS,
 		TLSCert:                 data.TLSCert,
 		TLSKey:                  data.TLSKey,
@@ -344,7 +345,11 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 	for _, u := range data.Upstreams {
 		protocol := u.Protocol
 		if protocol == "" {
-			protocol = "http"
+			if data.Protocol == "tcp" {
+				protocol = "tcp"
+			} else {
+				protocol = "http"
+			}
 		}
 		weight := u.Weight
 		if weight == 0 {
@@ -353,6 +358,10 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		ruleConfig.Upstreams = append(ruleConfig.Upstreams, services.UpstreamConfig{
 			Host: u.Host, Port: u.Port, Weight: weight, Protocol: protocol, Enabled: u.Enabled,
 		})
+	}
+
+	if data.Protocol == "tcp" {
+		return h.caddyService.ValidateConfig(services.GenerateSingleRuleCaddyConfig(ruleConfig), uniqueID+"_l4")
 	}
 
 	routeConfig, routeErr := services.GenerateRouteObject(ruleConfig)

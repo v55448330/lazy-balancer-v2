@@ -88,16 +88,18 @@ type GlobalConfig struct {
 
 // Upstream represents an upstream server
 type Upstream struct {
-	ID         int    `json:"id"`
-	RuleID     string `json:"rule_id"`
-	Host       string `json:"host"`
-	Port       int    `json:"port"`
-	Weight     int    `json:"weight"`
-	Domain     string `json:"domain"`
-	DynamicDNS bool   `json:"dynamic_dns"`
-	Enabled    bool   `json:"enabled"`
-	Protocol   string `json:"protocol"`
-	DnsServer  string `json:"dns_server"`
+	ID             int    `json:"id"`
+	RuleID         string `json:"rule_id"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	Weight         int    `json:"weight"`
+	Domain         string `json:"domain"`
+	DynamicDNS     bool   `json:"dynamic_dns"`
+	Enabled        bool   `json:"enabled"`
+	Protocol       string `json:"protocol"`
+	DnsServer      string `json:"dns_server"`
+	MaxConnections int    `json:"max_connections"`
+	ProxyProtocol  string `json:"proxy_protocol"`
 }
 
 // TLSCertificate represents a TLS certificate

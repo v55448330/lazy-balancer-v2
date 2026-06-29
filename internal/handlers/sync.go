@@ -68,11 +68,11 @@ func (h *Handlers) GetSyncConfig(c *gin.Context) {
 		r.TLSHTTPRedirect = tlsHTTPRedirect
 
 		// Get upstreams for this rule
-		upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http') FROM upstreams WHERE rule_id = ?`, r.CaddyID)
+		upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'') FROM upstreams WHERE rule_id = ?`, r.CaddyID)
 		if upstreamRows != nil {
 			for upstreamRows.Next() {
 				var u models.Upstream
-				upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol)
+				upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol)
 				r.Upstreams = append(r.Upstreams, u)
 			}
 			upstreamRows.Close()
