@@ -44,12 +44,9 @@ func (d *DNSPod) CredentialFieldOptions(field string) []string {
 func (d *DNSPod) BuildCredentialsJSON(creds map[string]string) (map[string]interface{}, error) {
 	mode := creds["auth_mode"]
 	if mode == "" {
-		// Auto-detect for backward compatibility
 		if creds["secret_id"] != "" && creds["secret_key"] != "" {
 			mode = "tencent_cloud"
 		} else if creds["app_id"] != "" && creds["app_token"] != "" {
-			mode = "dnspod"
-		} else if creds["auth_token"] != "" {
 			mode = "dnspod"
 		}
 	}
@@ -72,12 +69,6 @@ func (d *DNSPod) BuildCredentialsJSON(creds map[string]string) (map[string]inter
 				}, nil
 			}
 		}
-		// Backward compatibility with legacy auth_token field
-		if authToken := creds["auth_token"]; authToken != "" {
-			return map[string]interface{}{
-				"api_token": authToken,
-			}, nil
-		}
 		return nil, fmt.Errorf("DNSPod 认证方式需要提供 App ID 和 App Token")
 	}
 	return nil, fmt.Errorf("请选择认证方式")
@@ -89,8 +80,6 @@ func (d *DNSPod) Validate(creds map[string]string) error {
 		if creds["secret_id"] != "" && creds["secret_key"] != "" {
 			mode = "tencent_cloud"
 		} else if creds["app_id"] != "" && creds["app_token"] != "" {
-			mode = "dnspod"
-		} else if creds["auth_token"] != "" {
 			mode = "dnspod"
 		}
 	}

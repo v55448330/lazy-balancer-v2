@@ -18,12 +18,12 @@ func TestDNSPodCredentials(t *testing.T) {
 	if creds["api_token"] != "123,abc" {
 		t.Fatalf("expected api_token 123,abc, got %v", creds["api_token"])
 	}
-	legacy, err := p.BuildCredentialsJSON(map[string]string{"auth_token": "123,abc"})
+	tencent, err := p.BuildCredentialsJSON(map[string]string{"auth_mode": "tencent_cloud", "secret_id": "sid", "secret_key": "skey"})
 	if err != nil {
-		t.Fatalf("unexpected error for legacy token: %v", err)
+		t.Fatalf("unexpected error for tencent cloud: %v", err)
 	}
-	if legacy["api_token"] != "123,abc" {
-		t.Fatalf("expected legacy api_token 123,abc, got %v", legacy["api_token"])
+	if tencent["api_token"] != "sid,skey" {
+		t.Fatalf("expected tencent api_token sid,skey, got %v", tencent["api_token"])
 	}
 }
 
