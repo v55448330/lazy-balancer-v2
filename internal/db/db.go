@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -356,6 +357,27 @@ func runMigrations() error {
 	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name='proxy_protocol'").Scan(&colCount)
 	if colCount == 0 {
 		DB.Exec("ALTER TABLE upstreams ADD COLUMN proxy_protocol VARCHAR(10) DEFAULT ''")
+	}
+
+	// certificate_configs schema migration: move from legacy dns_id/dns_key to JSON dns_credentials
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('certificate_configs') WHERE name='dns_credentials'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE certificate_configs ADD COLUMN dns_credentials TEXT")
+	}
+
+	// Migrate legacy dns_id/dns_key into dns_credentials JSON
+	rows, err := DB.Query("SELECT id, dns_id, dns_key FROM certificate_configs WHERE dns_credentials IS NULL OR dns_credentials = ''")
+	if err == nil {
+		for rows.Next() {
+			var id int
+			var dnsID, dnsKey string
+			rows.Scan(&id, &dnsID, &dnsKey)
+			if dnsID != "" || dnsKey != "" {
+				creds, _ := json.Marshal(map[string]string{"app_id": dnsID, "app_token": dnsKey})
+				DB.Exec("UPDATE certificate_configs SET dns_credentials = ? WHERE id = ?", string(creds), id)
+			}
+		}
+		rows.Close()
 	}
 
 	// Migrate existing data: set caddy_id for rows that don't have it
