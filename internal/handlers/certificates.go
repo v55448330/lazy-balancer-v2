@@ -151,30 +151,55 @@ func (h *Handlers) ListDNSProviders(c *gin.Context) {
 	providers := dnsproviders.List()
 	var result []gin.H
 	for _, p := range providers {
+		fields := p.CredentialFields()
+		var fieldList []gin.H
+		for _, f := range fields {
+			fieldList = append(fieldList, gin.H{
+				"name":     f.Name,
+				"label":    f.Label,
+				"type":     f.Type,
+				"required": f.Required,
+				"placeholder": f.Placeholder,
+				"options":  p.CredentialFieldOptions(f.Name),
+			})
+		}
 		result = append(result, gin.H{
 			"code":              p.Code(),
 			"name":              p.Name(),
-			"credential_fields": p.CredentialFields(),
+			"credential_fields": fieldList,
 		})
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: result})
 }
 
 func (h *Handlers) TestCertificateConfig(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
-	var name, provider, credentials string
-	err := db.DB.QueryRow("SELECT name, dns_provider, dns_credentials FROM certificate_configs WHERE id=?", id).Scan(&name, &provider, &credentials)
-	if err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Config not found"})
-		return
+	var provider, credentials string
+	var creds map[string]string
+
+	id, idErr := strconv.Atoi(c.Param("id"))
+	if idErr == nil && id > 0 {
+		var name string
+		err := db.DB.QueryRow("SELECT name, dns_provider, dns_credentials FROM certificate_configs WHERE id=?", id).Scan(&name, &provider, &credentials)
+		if err != nil {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Config not found"})
+			return
+		}
+		json.Unmarshal([]byte(credentials), &creds)
+	} else {
+		var req models.CreateCertificateConfigRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+			return
+		}
+		provider = req.DNSProvider
+		creds = req.DNSCredentials
 	}
+
 	p, ok := dnsproviders.Get(provider)
 	if !ok {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Unknown provider"})
 		return
 	}
-	var creds map[string]string
-	json.Unmarshal([]byte(credentials), &creds)
 	if err := p.Validate(creds); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return

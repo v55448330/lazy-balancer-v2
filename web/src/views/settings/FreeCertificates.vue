@@ -69,14 +69,30 @@
           </el-select>
         </el-form-item>
         <template v-if="selectedProvider">
-          <el-form-item v-for="field in selectedProvider.credential_fields" :key="field.name" :label="field.label">
-            <el-input
-              v-model="form.dns_credentials[field.name]"
-              :type="field.type === 'password' ? 'password' : 'text'"
-              :placeholder="field.placeholder || ''"
-              show-password
-            />
-          </el-form-item>
+          <template v-for="field in selectedProvider.credential_fields" :key="field.name">
+            <el-form-item :label="field.label" v-if="shouldShowField(field)">
+              <el-select
+                v-if="field.type === 'select'"
+                v-model="form.dns_credentials[field.name]"
+                style="width: 100%"
+                @change="onAuthModeChange"
+              >
+                <el-option
+                  v-for="opt in field.options"
+                  :key="opt"
+                  :label="opt === 'dnspod' ? 'DNSPod API' : '腾讯云 API'"
+                  :value="opt"
+                />
+              </el-select>
+              <el-input
+                v-else
+                v-model="form.dns_credentials[field.name]"
+                :type="field.type === 'password' ? 'password' : 'text'"
+                :placeholder="field.placeholder || ''"
+                show-password
+              />
+            </el-form-item>
+          </template>
         </template>
         <el-form-item label="启用">
           <el-switch v-model="form.enabled" />
@@ -104,6 +120,7 @@ interface CredentialField {
   type: string
   required: boolean
   placeholder?: string
+  options?: string[]
 }
 
 interface DNSProvider {
@@ -116,6 +133,7 @@ interface CertConfig {
   id?: number
   name: string
   dns_provider: string
+  dns_credentials?: Record<string, string>
   enabled: boolean
 }
 
@@ -145,6 +163,24 @@ const form = ref<{
 })
 
 const selectedProvider = computed(() => providers.value.find(p => p.code === form.value.dns_provider))
+const authMode = computed(() => form.value.dns_credentials['auth_mode'] || 'dnspod')
+
+const shouldShowField = (field: CredentialField) => {
+  if (field.name === 'auth_mode') return true
+  if (authMode.value === 'tencent_cloud') {
+    return field.name === 'secret_id' || field.name === 'secret_key'
+  }
+  return field.name === 'app_id' || field.name === 'app_token'
+}
+
+const onProviderChange = () => {
+  form.value.dns_credentials = { auth_mode: 'dnspod' }
+}
+
+const onAuthModeChange = () => {
+  const mode = authMode.value
+  form.value.dns_credentials = { auth_mode: mode }
+}
 
 const fetchConfigs = async () => {
   try {
@@ -164,17 +200,13 @@ const fetchProviders = async () => {
   }
 }
 
-const onProviderChange = () => {
-  form.value.dns_credentials = {}
-}
-
 const openConfigDialog = (config?: CertConfig) => {
   if (config) {
     editingId.value = config.id || null
     form.value = {
       name: config.name,
       dns_provider: config.dns_provider,
-      dns_credentials: {},
+      dns_credentials: config.dns_credentials || { auth_mode: 'dnspod' },
       enabled: config.enabled,
     }
   } else {
@@ -182,7 +214,7 @@ const openConfigDialog = (config?: CertConfig) => {
     form.value = {
       name: '',
       dns_provider: providers.value[0]?.code || 'dnspod',
-      dns_credentials: {},
+      dns_credentials: { auth_mode: 'dnspod' },
       enabled: true,
     }
   }
@@ -194,6 +226,17 @@ const saveConfig = async () => {
     ElMessage.warning('请填写配置名称和 DNS 提供商')
     return
   }
+
+  saving.value = true
+  try {
+    await request.post('/certificate-configs/test', form.value)
+  } catch (error: any) {
+    const msg = error?.response?.data?.message || error?.message || '凭证验证失败'
+    ElMessage.error(msg)
+    saving.value = false
+    return
+  }
+
   try {
     if (editingId.value) {
       await request.put(`/certificate-configs/${editingId.value}`, form.value)
@@ -204,8 +247,11 @@ const saveConfig = async () => {
     }
     dialogVisible.value = false
     fetchConfigs()
-  } catch (error) {
-    console.error('Failed to save cert config:', error)
+  } catch (error: any) {
+    const msg = error?.response?.data?.message || error?.message || '保存失败'
+    ElMessage.error(msg)
+  } finally {
+    saving.value = false
   }
 }
 

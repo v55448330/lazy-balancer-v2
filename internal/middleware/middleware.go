@@ -113,6 +113,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				api.PUT("/certificate-configs/:id", h.UpdateCertificateConfig)
 				api.DELETE("/certificate-configs/:id", h.DeleteCertificateConfig)
 				api.GET("/dns-providers", h.ListDNSProviders)
+				api.POST("/certificate-configs/test", h.TestCertificateConfig)
 				api.POST("/certificate-configs/:id/test", h.TestCertificateConfig)
 
 				// Config (read only for non-admin)

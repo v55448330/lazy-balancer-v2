@@ -16,7 +16,9 @@ import (
 
 func init() { Register(&DNSPod{}) }
 
-type DNSPod struct{}
+type DNSPod struct {
+	BaseProvider
+}
 
 func (d *DNSPod) Code() string       { return "dnspod" }
 func (d *DNSPod) Name() string       { return "DNSPod (腾讯云)" }
@@ -24,6 +26,7 @@ func (d *DNSPod) ModuleName() string { return "dns.providers.dnspod" }
 
 func (d *DNSPod) CredentialFields() []CredentialField {
 	return []CredentialField{
+		{Name: "auth_mode", Label: "认证方式", Type: "select", Required: true, Placeholder: "dnspod"},
 		{Name: "app_id", Label: "App ID", Type: "text", Required: false, Placeholder: "DNSPod 账号的 App ID（旧版）"},
 		{Name: "app_token", Label: "App Token", Type: "password", Required: false, Placeholder: "DNSPod 账号的 API Token（旧版）"},
 		{Name: "secret_id", Label: "SecretId", Type: "text", Required: false, Placeholder: "腾讯云 API SecretId（新版）"},
@@ -31,44 +34,80 @@ func (d *DNSPod) CredentialFields() []CredentialField {
 	}
 }
 
+func (d *DNSPod) CredentialFieldOptions(field string) []string {
+	if field == "auth_mode" {
+		return []string{"dnspod", "tencent_cloud"}
+	}
+	return nil
+}
+
 func (d *DNSPod) BuildCredentialsJSON(creds map[string]string) (map[string]interface{}, error) {
-	if secretID := creds["secret_id"]; secretID != "" {
-		if secretKey := creds["secret_key"]; secretKey != "" {
-			return map[string]interface{}{
-				"api_token": secretID + "," + secretKey,
-			}, nil
+	mode := creds["auth_mode"]
+	if mode == "" {
+		// Auto-detect for backward compatibility
+		if creds["secret_id"] != "" && creds["secret_key"] != "" {
+			mode = "tencent_cloud"
+		} else if creds["app_id"] != "" && creds["app_token"] != "" {
+			mode = "dnspod"
+		} else if creds["auth_token"] != "" {
+			mode = "dnspod"
 		}
 	}
-	if appID := creds["app_id"]; appID != "" {
-		if appToken := creds["app_token"]; appToken != "" {
+
+	switch mode {
+	case "tencent_cloud":
+		if secretID := creds["secret_id"]; secretID != "" {
+			if secretKey := creds["secret_key"]; secretKey != "" {
+				return map[string]interface{}{
+					"api_token": secretID + "," + secretKey,
+				}, nil
+			}
+		}
+		return nil, fmt.Errorf("腾讯云认证方式需要提供 SecretId 和 SecretKey")
+	case "dnspod":
+		if appID := creds["app_id"]; appID != "" {
+			if appToken := creds["app_token"]; appToken != "" {
+				return map[string]interface{}{
+					"api_token": appID + "," + appToken,
+				}, nil
+			}
+		}
+		// Backward compatibility with legacy auth_token field
+		if authToken := creds["auth_token"]; authToken != "" {
 			return map[string]interface{}{
-				"api_token": appID + "," + appToken,
+				"api_token": authToken,
 			}, nil
 		}
+		return nil, fmt.Errorf("DNSPod 认证方式需要提供 App ID 和 App Token")
 	}
-	// Backward compatibility with legacy auth_token field
-	if authToken := creds["auth_token"]; authToken != "" {
-		return map[string]interface{}{
-			"api_token": authToken,
-		}, nil
-	}
-	return nil, fmt.Errorf("请提供 DNSPod App ID + App Token，或腾讯云 SecretId + SecretKey")
+	return nil, fmt.Errorf("请选择认证方式")
 }
 
 func (d *DNSPod) Validate(creds map[string]string) error {
-	if creds["secret_id"] != "" && creds["secret_key"] != "" {
-		return d.validateTencentCloud(creds["secret_id"], creds["secret_key"])
-	}
-	if creds["app_id"] != "" && creds["app_token"] != "" {
-		return d.validateDNSPod(creds["app_id"], creds["app_token"])
-	}
-	if authToken := creds["auth_token"]; authToken != "" {
-		parts := strings.SplitN(authToken, ",", 2)
-		if len(parts) == 2 {
-			return d.validateDNSPod(parts[0], parts[1])
+	mode := creds["auth_mode"]
+	if mode == "" {
+		if creds["secret_id"] != "" && creds["secret_key"] != "" {
+			mode = "tencent_cloud"
+		} else if creds["app_id"] != "" && creds["app_token"] != "" {
+			mode = "dnspod"
+		} else if creds["auth_token"] != "" {
+			mode = "dnspod"
 		}
 	}
-	return fmt.Errorf("请提供 DNSPod App ID + App Token，或腾讯云 SecretId + SecretKey")
+
+	switch mode {
+	case "tencent_cloud":
+		if creds["secret_id"] == "" || creds["secret_key"] == "" {
+			return fmt.Errorf("腾讯云认证方式需要提供 SecretId 和 SecretKey")
+		}
+		return d.validateTencentCloud(creds["secret_id"], creds["secret_key"])
+	case "dnspod":
+		if creds["app_id"] == "" || creds["app_token"] == "" {
+			return fmt.Errorf("DNSPod 认证方式需要提供 App ID 和 App Token")
+		}
+		return d.validateDNSPod(creds["app_id"], creds["app_token"])
+	}
+	return fmt.Errorf("请选择认证方式")
 }
 
 func (d *DNSPod) validateDNSPod(appID, appToken string) error {

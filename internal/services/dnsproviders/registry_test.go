@@ -11,7 +11,7 @@ func TestDNSPodCredentials(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty credentials")
 	}
-	creds, err := p.BuildCredentialsJSON(map[string]string{"app_id": "123", "app_token": "abc"})
+	creds, err := p.BuildCredentialsJSON(map[string]string{"auth_mode": "dnspod", "app_id": "123", "app_token": "abc"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
