@@ -40,7 +40,7 @@ COPY --from=backend /app/cmd/server/lazy-balancer /usr/local/bin/lazy-balancer
 COPY --from=frontend /app/dist /app/ui
 COPY third_party /app/third_party
 
-RUN mkdir -p /app/data /app/config
+RUN mkdir -p /app/data /app/config /app/logs
 RUN adduser -u 1000 -s /bin/sh -D -h /app caddy
 
 COPY --from=backend /app/config /app/config

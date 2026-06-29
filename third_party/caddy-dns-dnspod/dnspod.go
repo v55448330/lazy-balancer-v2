@@ -2,7 +2,10 @@ package dnspod
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -134,11 +137,13 @@ func (p *Provider) AppendRecords(ctx context.Context, zone string, records []lib
 
 		if old := findExisting(dnspodRecord.Name, dnspodRecord.Type); old != nil {
 			dnspodRecord.ID = old.ID
-			updated, _, err := client.Records.Update(domainID, old.ID, dnspodRecord)
+			dnspodRecord.Line = old.Line
+			dnspodRecord.LineID = old.LineID
+			updated, err := updateRecord(client, domainID, old.ID, dnspodRecord)
 			if err != nil {
 				return result, fmt.Errorf("update record %s %s: %w", dnspodRecord.Name, dnspodRecord.Type, err)
 			}
-			result = append(result, p.toLibdnsRecord(updated))
+			result = append(result, p.recordToResult(updated, libdnsRecord))
 			continue
 		}
 
@@ -146,7 +151,7 @@ func (p *Provider) AppendRecords(ctx context.Context, zone string, records []lib
 		if err != nil {
 			return result, fmt.Errorf("create record %s %s: %w", dnspodRecord.Name, dnspodRecord.Type, err)
 		}
-		result = append(result, p.toLibdnsRecord(created))
+		result = append(result, p.recordToResult(created, libdnsRecord))
 	}
 
 	return result, nil
@@ -180,7 +185,7 @@ func (p *Provider) SetRecords(ctx context.Context, zone string, records []libdns
 
 		// Set ID in the attributes for Update as DNSPod API often requires it in the body
 		dnspodRec.ID = id
-		updated, _, err := client.Records.Update(domainID, id, dnspodRec)
+		updated, err := updateRecord(client, domainID, id, dnspodRec)
 		if err != nil {
 			// Fallback: Delete and Re-create if Update fails (sometimes DNSPod API is picky about record IDs)
 			_, _ = client.Records.Delete(domainID, id)
@@ -188,10 +193,10 @@ func (p *Provider) SetRecords(ctx context.Context, zone string, records []libdns
 			if err != nil {
 				return setRecords, fmt.Errorf("update failed (%v) and fallback create also failed: %v", id, err)
 			}
-			setRecords = append(setRecords, p.toLibdnsRecord(created))
+			setRecords = append(setRecords, p.recordToResult(created, libdnsRecord))
 			continue
 		}
-		setRecords = append(setRecords, p.toLibdnsRecord(updated))
+		setRecords = append(setRecords, p.recordToResult(updated, libdnsRecord))
 	}
 
 	return setRecords, nil
@@ -223,6 +228,82 @@ func (p *Provider) DeleteRecords(ctx context.Context, zone string, records []lib
 	}
 
 	return deletedRecords, nil
+}
+
+// updateRecord updates a DNSPod record by sending the Record.Modify API call.
+// The dnspod-go v0.4.0 RecordsService.Update method omits the required
+// record_id form parameter, so we construct the request directly here.
+func updateRecord(client *dnspod.Client, domainID, recordID string, rec dnspod.Record) (dnspod.Record, error) {
+	payload := url.Values{}
+	if client.CommonParams.LoginToken != "" {
+		payload.Set("login_token", client.CommonParams.LoginToken)
+	}
+	if client.CommonParams.Format != "" {
+		payload.Set("format", client.CommonParams.Format)
+	} else {
+		payload.Set("format", "json")
+	}
+	if client.CommonParams.Lang != "" {
+		payload.Set("lang", client.CommonParams.Lang)
+	}
+	if client.CommonParams.ErrorOnEmpty != "" {
+		payload.Set("error_on_empty", client.CommonParams.ErrorOnEmpty)
+	}
+	if client.CommonParams.UserID != "" {
+		payload.Set("user_id", client.CommonParams.UserID)
+	}
+
+	payload.Set("domain_id", domainID)
+	payload.Set("record_id", recordID)
+
+	if rec.Name != "" {
+		payload.Set("sub_domain", rec.Name)
+	}
+	if rec.Type != "" {
+		payload.Set("record_type", rec.Type)
+	}
+	if rec.Line != "" {
+		payload.Set("record_line", rec.Line)
+	}
+	if rec.LineID != "" {
+		payload.Set("record_line_id", rec.LineID)
+	}
+	if rec.Value != "" {
+		payload.Set("value", rec.Value)
+	}
+	if rec.MX != "" {
+		payload.Set("mx", rec.MX)
+	}
+	if rec.TTL != "" {
+		payload.Set("ttl", rec.TTL)
+	}
+	if rec.Status != "" {
+		payload.Set("status", rec.Status)
+	}
+
+	var wrapper struct {
+		Status dnspod.Status `json:"status"`
+		Record struct {
+			ID     json.Number `json:"id"`
+			Name   string      `json:"name"`
+			Value  string      `json:"value"`
+			Status string      `json:"status"`
+			Weight *int        `json:"weight"`
+		} `json:"record"`
+	}
+	_, err := client.Do(http.MethodPost, "Record.Modify", payload, &wrapper)
+	if err != nil {
+		return dnspod.Record{}, err
+	}
+	if wrapper.Status.Code != "1" {
+		return dnspod.Record{}, fmt.Errorf("could not get domains: %s", wrapper.Status.Message)
+	}
+	return dnspod.Record{
+		ID:     wrapper.Record.ID.String(),
+		Name:   wrapper.Record.Name,
+		Value:  wrapper.Record.Value,
+		Status: wrapper.Record.Status,
+	}, nil
 }
 
 func (p *Provider) getClient() *dnspod.Client {
@@ -262,6 +343,32 @@ func (p *Provider) toLibdnsRecord(record dnspod.Record) libdns.Record {
 			Data: record.Value,
 			TTL:  time.Duration(ttl) * time.Second,
 		},
+	}
+}
+
+// recordToResult builds a libdns.Record from a DNSPod API response, filling
+// in any fields the API omits (Create/Modify often omit value, type, ttl,
+// etc.) from the original request so callers like CertMagic can identify and
+// clean up the record.
+func (p *Provider) recordToResult(apiRec dnspod.Record, input libdns.Record) libdns.Record {
+	rr := input.RR()
+	if apiRec.Type != "" {
+		rr.Type = apiRec.Type
+	}
+	if apiRec.Name != "" {
+		rr.Name = apiRec.Name
+	}
+	if apiRec.Value != "" {
+		rr.Data = apiRec.Value
+	}
+	if apiRec.TTL != "" {
+		if ttl, err := strconv.Atoi(apiRec.TTL); err == nil {
+			rr.TTL = time.Duration(ttl) * time.Second
+		}
+	}
+	return Record{
+		ID:   apiRec.ID,
+		base: rr,
 	}
 }
 

@@ -2,10 +2,11 @@ package services
 
 import (
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -87,29 +88,6 @@ func (s *CertificateService) poll() {
 		return
 	}
 
-	resp, err := s.client.Get(s.adminURL + "/pki/ca/local")
-	if err != nil {
-		log.Printf("Failed to get Caddy certificates: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Caddy certificates endpoint returned %d", resp.StatusCode)
-		return
-	}
-
-	var data struct {
-		Roots []struct {
-			Subject  string    `json:"subject"`
-			NotAfter time.Time `json:"not_after"`
-		} `json:"roots"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		log.Printf("Failed to decode Caddy certificates response: %v", err)
-		return
-	}
-
 	// Pre-read all jobs into memory, then close cursor before writing
 	rows, err := db.DB.Query("SELECT id, domain, status FROM cert_jobs WHERE status IN ('pending','issuing','failed')")
 	if err != nil {
@@ -131,21 +109,48 @@ func (s *CertificateService) poll() {
 	}
 	rows.Close()
 
+	// Read cert_pem from cert_jobs if available, otherwise fall back to the
+	// Caddy local CA endpoint (which only exposes the local CA root, not
+	// ACME-issued certificates).
 	for _, j := range jobs {
-		found := false
+		var certPEM string
+		err := db.DB.QueryRow("SELECT COALESCE(cert_pem, '') FROM cert_jobs WHERE id=?", j.id).Scan(&certPEM)
+		if err != nil {
+			log.Printf("Failed to read cert_pem for job %d: %v", j.id, err)
+			continue
+		}
+
 		var notAfter time.Time
-		for _, r := range data.Roots {
-			if strings.Contains(r.Subject, j.domain) {
-				found = true
-				notAfter = r.NotAfter
-				break
+		if certPEM != "" {
+			block, _ := pem.Decode([]byte(certPEM))
+			if block != nil {
+				if cert, err := x509.ParseCertificate(block.Bytes); err == nil {
+					notAfter = cert.NotAfter
+				}
 			}
 		}
 
-		if found {
+		// Fallback: try to locate the certificate in Caddy storage by scanning
+		// the certificates directory.
+		if notAfter.IsZero() {
+			notAfter = s.findCertExpiryInStorage(j.domain)
+		}
+
+		if !notAfter.IsZero() {
 			_, err := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='签发成功', expires_at=? WHERE id=?", notAfter, j.id)
 			if err != nil {
 				log.Printf("Failed to update issued cert job: %v", err)
+			}
+			continue
+		}
+
+		// Still not found: if the job is failed, reset it to issuing so a retry
+		// (e.g. from the UI) can be tracked. If it has been issuing for too long,
+		// mark it failed.
+		if j.status == "failed" {
+			_, err := db.DB.Exec("UPDATE cert_jobs SET status='issuing', message='重新签发' WHERE id=?", j.id)
+			if err != nil {
+				log.Printf("Failed to reset failed cert job to issuing: %v", err)
 			}
 		} else if j.status == "issuing" {
 			_, err := db.DB.Exec(`
@@ -157,6 +162,46 @@ func (s *CertificateService) poll() {
 			}
 		}
 	}
+}
+
+func (s *CertificateService) findCertExpiryInStorage(domain string) time.Time {
+	// Try the well-known Caddy storage layout for ACME certificates.
+	baseDir := "/root/.local/share/caddy/certificates"
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		return time.Time{}
+	}
+	for _, issuerDir := range entries {
+		if !issuerDir.IsDir() {
+			continue
+		}
+		certFile := filepath.Join(baseDir, issuerDir.Name(), domain, domain+".crt")
+		data, err := os.ReadFile(certFile)
+		if err != nil {
+			continue
+		}
+		block, _ := pem.Decode(data)
+		if block == nil {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			continue
+		}
+		if cert.Subject.CommonName == domain || containsDomain(cert.DNSNames, domain) {
+			return cert.NotAfter
+		}
+	}
+	return time.Time{}
+}
+
+func containsDomain(names []string, domain string) bool {
+	for _, n := range names {
+		if n == domain {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *CertificateService) checkManualCertExpiration() {

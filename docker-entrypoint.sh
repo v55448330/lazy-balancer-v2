@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+# Use /app/data as the single persistent data directory.
+export XDG_DATA_HOME=/app/data
+mkdir -p /app/data/caddy
+
 # Initialize database on first run
 if [ ! -f /app/data/lazy-balancer.db ]; then
     echo "Initializing database..."

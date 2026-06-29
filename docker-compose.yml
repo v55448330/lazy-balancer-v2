@@ -8,6 +8,7 @@ services:
     # Port mapping is not used with host network; Caddy binds directly to host ports.
     volumes:
       - ./data:/app/data
+      - ./logs:/app/logs
     environment:
       - ADMIN_USER=admin
       - ADMIN_PASSWORD=zdy123.org
