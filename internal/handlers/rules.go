@@ -732,7 +732,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Rule not found"})
 			return
 		}
-		if currentPort != req.ListenPort {
+		// Allow HTTP (80) -> HTTPS (443) upgrade when enabling TLS.
+		isHTTPUpgrade := currentPort == 80 && req.ListenPort == 443 && req.EnableTLS
+		if currentPort != req.ListenPort && !isHTTPUpgrade {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Port cannot be changed after rule creation"})
 			return
 		}
