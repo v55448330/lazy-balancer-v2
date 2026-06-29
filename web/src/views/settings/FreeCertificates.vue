@@ -84,7 +84,7 @@
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveConfig">保存</el-button>
+        <el-button type="primary" :loading="saving" @click="saveConfig">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -123,7 +123,7 @@ const authStore = useAuthStore()
 
 const global = defineModel<any>('global', { required: true })
 const emit = defineEmits<{
-  (e: 'save'): void
+  (e: 'save', payload?: any): void
 }>()
 
 const saving = ref(false)
@@ -233,14 +233,10 @@ const testConfig = async (config: CertConfig) => {
 const handleSave = async () => {
   saving.value = true
   try {
-    await request.put('/config', {
+    await emit('save', {
       acme_email: global.value.acme_email,
       cert_expiry_days: global.value.cert_expiry_days,
     })
-    ElMessage.success('保存成功')
-    emit('save')
-  } catch (error) {
-    console.error('Failed to save certificate settings:', error)
   } finally {
     saving.value = false
   }

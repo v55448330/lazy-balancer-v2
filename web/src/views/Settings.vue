@@ -123,11 +123,8 @@ const handleSaveCluster = async () => {
   })
 }
 
-const handleSaveCertificates = async () => {
-  await saveConfig({
-    acme_email: global.value.acme_email,
-    cert_expiry_days: global.value.cert_expiry_days,
-  })
+const handleSaveCertificates = async (payload: any) => {
+  await saveConfig(payload)
 }
 
 const syncActiveTabFromPage = () => {
