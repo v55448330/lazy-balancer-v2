@@ -897,7 +897,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	args = append(args, req.Domain)
 	query += "listen_port = ?, "
 	args = append(args, req.ListenPort)
-	if err := h.validatePortFromDB(req.Protocol, req.ListenPort, caddyID); err != nil {
+	if err := h.validatePort(req.Protocol, req.ListenPort, caddyID); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
