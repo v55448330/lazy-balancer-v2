@@ -146,6 +146,8 @@ func createTables() error {
 		protocol VARCHAR(10) DEFAULT 'http',
 		host_header VARCHAR(255),
 		dns_server VARCHAR(255) DEFAULT '',
+		max_connections INTEGER DEFAULT 0,
+		proxy_protocol VARCHAR(10) DEFAULT '',
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
 	);
 
@@ -346,6 +348,16 @@ func runMigrations() error {
 		DB.Exec("ALTER TABLE upstreams ADD COLUMN dns_server VARCHAR(255) DEFAULT ''")
 	}
 
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name='max_connections'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE upstreams ADD COLUMN max_connections INTEGER DEFAULT 0")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name='proxy_protocol'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE upstreams ADD COLUMN proxy_protocol VARCHAR(10) DEFAULT ''")
+	}
+
 	// Migrate existing data: set caddy_id for rows that don't have it
 	var count int
 	DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id IS NULL OR caddy_id = ''").Scan(&count)
@@ -485,6 +497,8 @@ func migrateLbRulesPrimaryKey() error {
 			protocol VARCHAR(10) DEFAULT 'http',
 			host_header VARCHAR(255),
 			dns_server VARCHAR(255) DEFAULT '',
+			max_connections INTEGER DEFAULT 0,
+			proxy_protocol VARCHAR(10) DEFAULT '',
 			FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
 		)
 	`)
@@ -496,9 +510,9 @@ func migrateLbRulesPrimaryKey() error {
 
 	// Copy data from old upstreams table to new (convert rule_id from int to string)
 	_, err = tx.Exec(`
-		INSERT INTO upstreams_new (id, rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, host_header, dns_server)
+		INSERT INTO upstreams_new (id, rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, host_header, dns_server, max_connections, proxy_protocol)
 		SELECT u.id, r.caddy_id, u.host, u.port, u.weight, u.domain, u.dynamic_dns, u.enabled, u.protocol, u.host_header, 
-		       COALESCE(u.dns_server, '')
+		       COALESCE(u.dns_server, ''), 0, ''
 		FROM upstreams u
 		JOIN lb_rules r ON u.rule_id = r.id
 	`)

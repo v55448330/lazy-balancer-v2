@@ -200,10 +200,10 @@
                 <el-icon class="title-icon rules-icon"><List /></el-icon>
                 <span>负载均衡规则</span>
               </div>
-              <el-badge :value="rules.length" type="primary" />
+              <el-badge :value="rules.filter(r => r.protocol !== 'tcp').length" type="primary" />
             </div>
           </template>
-          <el-table :data="rules" stripe :header-cell-style="{ background: '#f9fafb' }">
+          <el-table :data="rules.filter(r => r.protocol !== 'tcp')" stripe :header-cell-style="{ background: '#f9fafb' }">
             <el-table-column prop="name" label="规则名称" min-width="150">
               <template #default="{ row }">
                 <span class="text-primary font-medium">{{ row.name }}</span>
@@ -270,7 +270,7 @@
               </template>
             </el-table-column>
           </el-table>
-          <el-empty v-if="rules.length === 0" description="暂无负载均衡规则" :image-size="80" />
+          <el-empty v-if="rules.filter(r => r.protocol !== 'tcp').length === 0" description="暂无负载均衡规则" :image-size="80" />
         </el-card>
       </el-col>
     </el-row>

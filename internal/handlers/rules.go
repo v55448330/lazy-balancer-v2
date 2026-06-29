@@ -84,12 +84,12 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		r.CompressTypes = compressTypes
 		r.HostHeader = hostHeader
 
-		upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http') FROM upstreams WHERE rule_id = ?`, r.CaddyID)
+		upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'') FROM upstreams WHERE rule_id = ?`, r.CaddyID)
 		if upstreamRows != nil {
 			for upstreamRows.Next() {
 				var u models.Upstream
-				upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol)
-				r.Upstreams = append(r.Upstreams, u)
+		upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol)
+		r.Upstreams = append(r.Upstreams, u)
 			}
 			upstreamRows.Close()
 		}
@@ -150,11 +150,11 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	r.TLSHTTPRedirect = tlsHTTPRedirect
 	r.HostHeader = hostHeader
 
-	upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http') FROM upstreams WHERE rule_id = ?`, caddyID)
+	upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'') FROM upstreams WHERE rule_id = ?`, caddyID)
 	if upstreamRows != nil {
 		for upstreamRows.Next() {
 			var u models.Upstream
-			upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol)
+			upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol)
 			r.Upstreams = append(r.Upstreams, u)
 		}
 		upstreamRows.Close()
@@ -250,7 +250,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	r.HostHeader = hostHeader
 
 	upstreamRows, err := db.DB.Query(`
-		SELECT host, port, COALESCE(weight,1), COALESCE(protocol,'http'), enabled
+		SELECT host, port, COALESCE(weight,1), COALESCE(protocol,'http'), enabled, COALESCE(max_connections,0), COALESCE(proxy_protocol,'')
 		FROM upstreams WHERE rule_id = ? AND enabled = 1
 	`, caddyID)
 	if err != nil {
@@ -264,7 +264,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		var u services.UpstreamConfig
 		var protocol string
 		var enabled bool
-		upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &protocol, &enabled)
+		upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &protocol, &enabled, &u.MaxConnections, &u.ProxyProtocol)
 		u.Protocol = protocol
 		u.Enabled = enabled
 		ups = append(ups, u)
@@ -324,38 +324,60 @@ func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string, li
 		return result
 	}
 
-	httpApp, _ := apps["http"].(map[string]interface{})
-	if httpApp == nil {
-		return result
-	}
-
-	servers, _ := httpApp["servers"].(map[string]interface{})
-	if servers == nil {
-		return result
-	}
-
-	// Find server containing this rule's route
-	for serverName, serverVal := range servers {
-		server, _ := serverVal.(map[string]interface{})
-		if server == nil {
-			continue
-		}
-		routes, _ := server["routes"].([]interface{})
-		for _, routeVal := range routes {
-			route, _ := routeVal.(map[string]interface{})
-			if route == nil {
-				continue
+	// Search HTTP servers first
+	if httpApp, ok := apps["http"].(map[string]interface{}); ok {
+		if servers, ok := httpApp["servers"].(map[string]interface{}); ok {
+			for serverName, serverVal := range servers {
+				server, _ := serverVal.(map[string]interface{})
+				if server == nil {
+					continue
+				}
+				routes, _ := server["routes"].([]interface{})
+				for _, routeVal := range routes {
+					route, _ := routeVal.(map[string]interface{})
+					if route == nil {
+						continue
+					}
+					if route["@id"] == caddyID {
+						result["server"] = map[string]interface{}{
+							"server_name":             serverName,
+							"listen":                  server["listen"],
+							"tls_connection_policies": server["tls_connection_policies"],
+						}
+						if policies, ok := server["tls_connection_policies"].([]interface{}); ok {
+							result["tls_connection_policies"] = policies
+						}
+						break
+					}
+				}
 			}
-			if route["@id"] == caddyID {
-				result["server"] = map[string]interface{}{
-					"server_name":             serverName,
-					"listen":                  server["listen"],
-					"tls_connection_policies": server["tls_connection_policies"],
+		}
+	}
+
+	// If not found in HTTP app, search the layer4 app for TCP rules
+	if result["server"] == nil {
+		if layer4App, ok := apps["layer4"].(map[string]interface{}); ok {
+			if servers, ok := layer4App["servers"].(map[string]interface{}); ok {
+				for serverName, serverVal := range servers {
+					server, _ := serverVal.(map[string]interface{})
+					if server == nil {
+						continue
+					}
+					routes, _ := server["routes"].([]interface{})
+					for _, routeVal := range routes {
+						route, _ := routeVal.(map[string]interface{})
+						if route == nil {
+							continue
+						}
+						if route["@id"] == caddyID {
+							result["server"] = map[string]interface{}{
+								"server_name": serverName,
+								"listen":      server["listen"],
+							}
+							break
+						}
+					}
 				}
-				if policies, ok := server["tls_connection_policies"].([]interface{}); ok {
-					result["tls_connection_policies"] = policies
-				}
-				break
 			}
 		}
 	}
@@ -513,32 +535,37 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 
 	// Build route config for Caddy validation (using request data before DB write)
-		ruleConfig := services.SingleRuleConfig{
-			Protocol:                req.Protocol,
-			Domain:                  req.Domain,
-			ListenPort:              req.ListenPort,
-			Strategy:                req.Strategy,
-			DynamicDNS:              req.DynamicDNS,
-			EnableDnsServer:         req.EnableDnsServer,
-			DnsServer:               req.DnsServer,
-			DnsFamily:               req.DnsFamily,
-			HealthCheckPath:         req.HealthCheckPath,
-			HealthCheckInterval:     req.HealthCheckInterval,
-			HealthCheckTimeout:      req.HealthCheckTimeout,
-			EnableTLS:               req.EnableTLS,
-			TLSSource:               req.TLSSource,
-			ACMEConfigID:            req.ACMEConfigID,
-			TLSHTTPRedirect:         req.TLSHTTPRedirect,
-			EnableCompress:          req.EnableCompress,
-			CompressTypes:           req.CompressTypes,
-			EnableActiveHealthCheck: req.EnableActiveHealthCheck,
-			HostHeader:              req.HostHeader,
-			CaddyID:                 caddyID,
-		}
+	ruleConfig := services.SingleRuleConfig{
+		Protocol:                req.Protocol,
+		Domain:                  req.Domain,
+		ListenPort:              listenPort,
+		Strategy:                req.Strategy,
+		DynamicDNS:              req.DynamicDNS,
+		EnableDnsServer:         req.EnableDnsServer,
+		DnsServer:               req.DnsServer,
+		DnsFamily:               req.DnsFamily,
+		HealthCheckPath:         req.HealthCheckPath,
+		HealthCheckInterval:     req.HealthCheckInterval,
+		HealthCheckTimeout:      req.HealthCheckTimeout,
+		HealthCheckUnhealthyThreshold: req.HealthCheckUnhealthyThreshold,
+		EnableTLS:               req.EnableTLS,
+		TLSSource:               req.TLSSource,
+		ACMEConfigID:            req.ACMEConfigID,
+		TLSHTTPRedirect:         req.TLSHTTPRedirect,
+		EnableCompress:          req.EnableCompress,
+		CompressTypes:           req.CompressTypes,
+		EnableActiveHealthCheck: req.EnableActiveHealthCheck,
+		HostHeader:              req.HostHeader,
+		CaddyID:                 caddyID,
+	}
 	for _, u := range req.Upstreams {
 		protocol := u.Protocol
 		if protocol == "" {
-			protocol = "http"
+			if req.Protocol == "tcp" {
+				protocol = "tcp"
+			} else {
+				protocol = "http"
+			}
 		}
 		weight := u.Weight
 		if weight == 0 {
@@ -587,11 +614,15 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			u.Weight = 1
 		}
 		if u.Protocol == "" {
-			u.Protocol = "http"
+			if req.Protocol == "tcp" {
+				u.Protocol = "tcp"
+			} else {
+				u.Protocol = "http"
+			}
 		}
-		_, err = tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol) 
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			caddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol)
+		_, err = tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections, proxy_protocol) 
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			caddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections, u.ProxyProtocol)
 		if err != nil {
 			tx.Rollback()
 			log.Printf("CreateRule upstream insert error: %v", err)
@@ -607,53 +638,64 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 
 	// Apply Caddy config after DB commit; rollback DB on Caddy failure
-	routeConfig, err := services.GenerateRouteObject(ruleConfig)
-	if err != nil {
-		log.Printf("CreateRule failed to generate route config for caddy_id=%s: %v, rolling back database", caddyID, err)
-		db.DB.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID)
-		db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Failed to generate route config: " + err.Error()})
-		return
-	}
-
-	applyCaddy := func() error {
-		if err := h.caddyService.CreateServerIfNotExists(serverName, listenPort); err != nil {
-			return fmt.Errorf("failed to create server: %w", err)
-		}
-
-		if err := h.caddyService.PrependRouteToServer(serverName, routeConfig); err != nil {
-			return fmt.Errorf("failed to add route to Caddy: %w", err)
-		}
-
-		if err := h.caddyService.VerifyRouteExists(caddyID); err != nil {
-			return fmt.Errorf("Caddy write verification failed: %w", err)
-		}
-		return nil
-	}
-
-	if err := applyCaddy(); err != nil {
-		log.Printf("CreateRule Caddy apply failed for caddy_id=%s: %v, rolling back database", caddyID, err)
-		h.caddyService.RemoveRouteFromServer(serverName, caddyID)
-		db.DB.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID)
-		db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-		return
-	}
-
-	// Reload full Caddy config to apply TLS certificates or ACME automation policies
-	if req.EnableTLS {
-		log.Printf("Reloading full Caddy config to apply TLS/ACME for caddy_id=%s", caddyID)
-		if req.TLSSource == "acme_dns" {
-			h.certificateService.CreateJobsForRule(caddyID, req.Domain)
-		}
+	if req.Protocol == "tcp" {
 		fullConfig := services.GenerateCaddyConfig(h.cfg)
 		if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
-			log.Printf("Failed to reload Caddy config after rule creation: %v", err)
-			// Don't fail the request since the rule is already created and route applied
+			log.Printf("CreateRule Caddy apply failed for TCP rule caddy_id=%s: %v, rolling back database", caddyID, err)
+			db.DB.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID)
+			db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID)
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy apply failed: " + err.Error()})
+			return
+		}
+	} else {
+		routeConfig, err := services.GenerateRouteObject(ruleConfig)
+		if err != nil {
+			log.Printf("CreateRule failed to generate route config for caddy_id=%s: %v, rolling back database", caddyID, err)
+			db.DB.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID)
+			db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID)
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Failed to generate route config: " + err.Error()})
+			return
+		}
+
+		applyCaddy := func() error {
+			if err := h.caddyService.CreateServerIfNotExists(serverName, listenPort); err != nil {
+				return fmt.Errorf("failed to create server: %w", err)
+			}
+
+			if err := h.caddyService.PrependRouteToServer(serverName, routeConfig); err != nil {
+				return fmt.Errorf("failed to add route to Caddy: %w", err)
+			}
+
+			if err := h.caddyService.VerifyRouteExists(caddyID); err != nil {
+				return fmt.Errorf("Caddy write verification failed: %w", err)
+			}
+			return nil
+		}
+
+		if err := applyCaddy(); err != nil {
+			log.Printf("CreateRule Caddy apply failed for caddy_id=%s: %v, rolling back database", caddyID, err)
+			h.caddyService.RemoveRouteFromServer(serverName, caddyID)
+			db.DB.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID)
+			db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID)
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+
+		// Reload full Caddy config to apply TLS certificates or ACME automation policies
+		if req.EnableTLS {
+			log.Printf("Reloading full Caddy config to apply TLS/ACME for caddy_id=%s", caddyID)
+			if req.TLSSource == "acme_dns" {
+				h.certificateService.CreateJobsForRule(caddyID, req.Domain)
+			}
+			fullConfig := services.GenerateCaddyConfig(h.cfg)
+			if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
+				log.Printf("Failed to reload Caddy config after rule creation: %v", err)
+				// Don't fail the request since the rule is already created and route applied
+			}
 		}
 	}
 
-	log.Printf("Rule created with caddy_id=%s, applied via @id mechanism", caddyID)
+	log.Printf("Rule created with caddy_id=%s", caddyID)
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "Rule created", Data: gin.H{"caddy_id": caddyID}})
 }
 
@@ -751,11 +793,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	// Capture old upstreams for potential DB rollback
 	var oldUpstreams []models.Upstream
-	oldUpstreamRows, _ := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http') FROM upstreams WHERE rule_id = ?", caddyID)
+	oldUpstreamRows, _ := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'') FROM upstreams WHERE rule_id = ?", caddyID)
 	if oldUpstreamRows != nil {
 		for oldUpstreamRows.Next() {
 			var u models.Upstream
-			oldUpstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol)
+			oldUpstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol)
 			oldUpstreams = append(oldUpstreams, u)
 		}
 		oldUpstreamRows.Close()
@@ -928,6 +970,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		HealthCheckPath:         req.HealthCheckPath,
 		HealthCheckInterval:     req.HealthCheckInterval,
 		HealthCheckTimeout:      req.HealthCheckTimeout,
+		HealthCheckUnhealthyThreshold: req.HealthCheckUnhealthyThreshold,
 		EnableTLS:               req.EnableTLS,
 		TLSSource:               req.TLSSource,
 		ACMEConfigID:            req.ACMEConfigID,
@@ -941,7 +984,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	for _, u := range req.Upstreams {
 		protocol := u.Protocol
 		if protocol == "" {
-			protocol = "http"
+			if req.Protocol == "tcp" {
+				protocol = "tcp"
+			} else {
+				protocol = "http"
+			}
 		}
 		weight := u.Weight
 		if weight == 0 {
@@ -957,6 +1004,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Failed to generate route config: " + err.Error()})
 		return
 	}
+
+	// Backup current full Caddy config for rollback (used for TCP rules; HTTP rules use @id-based rollback)
+	oldFullConfig := services.GenerateCaddyConfig(h.cfg)
 
 	// Backup current Caddy route config for rollback
 	oldRouteConfig, _ := h.caddyService.GetConfigByID(caddyID)
@@ -994,11 +1044,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			u.Weight = 1
 		}
 		if u.Protocol == "" {
-			u.Protocol = "http"
+			if req.Protocol == "tcp" {
+				u.Protocol = "tcp"
+			} else {
+				u.Protocol = "http"
+			}
 		}
-		if _, err := tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol) 
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			caddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol); err != nil {
+		if _, err := tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections, proxy_protocol) 
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			caddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections, u.ProxyProtocol); err != nil {
 			tx.Rollback()
 			log.Printf("UpdateRule upstream insert error for caddy_id=%s: %v", caddyID, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update upstreams"})
@@ -1012,39 +1066,53 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 
-	// Apply Caddy changes after DB commit; restore previous Caddy route on failure
-	if err := h.caddyService.SetConfigByID(caddyID, routeConfig); err != nil {
-		if oldRouteConfig != nil {
-			h.caddyService.SetConfigByID(caddyID, oldRouteConfig)
+	// Apply Caddy changes after DB commit; restore previous Caddy config on failure
+	if req.Protocol == "tcp" {
+		newFullConfig := services.GenerateCaddyConfig(h.cfg)
+		if err := h.caddyService.ApplyConfig(newFullConfig); err != nil {
+			if oldFullConfig != nil {
+				if restoreErr := h.caddyService.ApplyConfig(oldFullConfig); restoreErr != nil {
+					log.Printf("UpdateRule failed to restore previous Caddy config for caddy_id=%s: %v", caddyID, restoreErr)
+				}
+			}
+			log.Printf("UpdateRule Caddy update failed for TCP rule caddy_id=%s: %v, restored previous config", caddyID, err)
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy update failed: " + err.Error()})
+			return
 		}
-		log.Printf("UpdateRule Caddy update failed for caddy_id=%s: %v, restored previous route", caddyID, err)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy update failed: " + err.Error()})
-		return
+	} else {
+		if err := h.caddyService.SetConfigByID(caddyID, routeConfig); err != nil {
+			if oldRouteConfig != nil {
+				h.caddyService.SetConfigByID(caddyID, oldRouteConfig)
+			}
+			log.Printf("UpdateRule Caddy update failed for caddy_id=%s: %v, restored previous route", caddyID, err)
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy update failed: " + err.Error()})
+			return
+		}
+
+		if err := h.caddyService.VerifyRouteExists(caddyID); err != nil {
+			if oldRouteConfig != nil {
+				h.caddyService.SetConfigByID(caddyID, oldRouteConfig)
+			}
+			log.Printf("UpdateRule Caddy verification failed for caddy_id=%s: %v, restored previous route", caddyID, err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy write verification failed: %v", err)})
+			return
+		}
+
+		// Reload full Caddy config to apply TLS certificates or ACME automation policies
+		if req.EnableTLS || req.TLSCert != "" || req.TLSKey != "" || req.TLSSource == "acme_dns" {
+			log.Printf("Reloading full Caddy config after rule update for caddy_id=%s", caddyID)
+			if req.TLSSource == "acme_dns" && req.EnableTLS {
+				h.certificateService.CreateJobsForRule(caddyID, domain)
+			}
+			fullConfig := services.GenerateCaddyConfig(h.cfg)
+			if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
+				log.Printf("Failed to reload Caddy config after rule update: %v", err)
+				// Don't fail the request since the rule is already updated
+			}
+		}
 	}
 
-	if err := h.caddyService.VerifyRouteExists(caddyID); err != nil {
-		if oldRouteConfig != nil {
-			h.caddyService.SetConfigByID(caddyID, oldRouteConfig)
-		}
-		log.Printf("UpdateRule Caddy verification failed for caddy_id=%s: %v, restored previous route", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy write verification failed: %v", err)})
-		return
-	}
-
-	// Reload full Caddy config to apply TLS certificates or ACME automation policies
-	if req.EnableTLS || req.TLSCert != "" || req.TLSKey != "" || req.TLSSource == "acme_dns" {
-		log.Printf("Reloading full Caddy config after rule update for caddy_id=%s", caddyID)
-		if req.TLSSource == "acme_dns" && req.EnableTLS {
-			h.certificateService.CreateJobsForRule(caddyID, domain)
-		}
-		fullConfig := services.GenerateCaddyConfig(h.cfg)
-		if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
-			log.Printf("Failed to reload Caddy config after rule update: %v", err)
-			// Don't fail the request since the rule is already updated
-		}
-	}
-
-	log.Printf("Rule %s updated, applied via @id mechanism", caddyID)
+	log.Printf("Rule %s updated", caddyID)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule updated"})
 }
 
@@ -1090,27 +1158,30 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		serverPort = listenPort
 	}
 
-	// Remove route from server
-	if caddyID != "" {
-		h.caddyService.RemoveRouteFromServer(serverName, caddyID)
-	}
-
-	// HTTP port 80 and HTTPS port 443 servers should never be deleted (default site)
-	keepServer := (protocol == "http" && listenPort == 80) || (protocol == "http" && enableTLS && listenPort == 443)
-
-	if !keepServer {
-		// Check if there are other enabled rules using this server
-		var otherEnabledCount int
-		db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id != ? AND listen_port = ? AND enabled = 1", caddyID, serverPort).Scan(&otherEnabledCount)
-
-		if otherEnabledCount == 0 {
-			h.caddyService.DeleteServer(serverName)
-			log.Printf("Rule %s deleted, server %s removed", caddyID, serverName)
-		} else {
-			log.Printf("Rule %s deleted, server %s kept (%d other enabled rules)", caddyID, serverName, otherEnabledCount)
+	// Remove route from HTTP server and clean up empty HTTP servers. TCP rules are managed
+	// by full config regeneration because they live in the layer4 app.
+	if protocol == "http" {
+		if caddyID != "" {
+			h.caddyService.RemoveRouteFromServer(serverName, caddyID)
 		}
-	} else {
-		log.Printf("Rule %s deleted, server %s kept (reserved port)", caddyID, serverName)
+
+		// HTTP port 80 and HTTPS port 443 servers should never be deleted (default site)
+		keepServer := (protocol == "http" && listenPort == 80) || (protocol == "http" && enableTLS && listenPort == 443)
+
+		if !keepServer {
+			// Check if there are other enabled rules using this server
+			var otherEnabledCount int
+			db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id != ? AND listen_port = ? AND enabled = 1", caddyID, serverPort).Scan(&otherEnabledCount)
+
+			if otherEnabledCount == 0 {
+				h.caddyService.DeleteServer(serverName)
+				log.Printf("Rule %s deleted, server %s removed", caddyID, serverName)
+			} else {
+				log.Printf("Rule %s deleted, server %s kept (%d other enabled rules)", caddyID, serverName, otherEnabledCount)
+			}
+		} else {
+			log.Printf("Rule %s deleted, server %s kept (reserved port)", caddyID, serverName)
+		}
 	}
 
 	// Delete upstreams first
@@ -1119,7 +1190,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	// Delete the rule
 	db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID)
 
-	// Reload full Caddy config to clean up TLS certificates
+	// Reload full Caddy config to clean up TLS certificates and layer4 servers
 	log.Printf("Reloading full Caddy config after rule deletion for caddy_id=%s", caddyID)
 	fullConfig := services.GenerateCaddyConfig(h.cfg)
 	if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
@@ -1194,25 +1265,27 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	db.DB.Exec("UPDATE lb_rules SET updated_by = ? WHERE caddy_id = ?", userID, newCaddyID)
 
 	upstreamRows, err := db.DB.Query(`
-		SELECT host, port, weight, domain, dynamic_dns, enabled, COALESCE(protocol,'http')
+		SELECT host, port, weight, domain, dynamic_dns, enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'')
 		FROM upstreams WHERE rule_id = ?
 	`, caddyID)
 	if err == nil {
 		for upstreamRows.Next() {
 			var u struct {
-				Host       string
-				Port       int
-				Weight     int
-				Domain     string
-				DynamicDNS bool
-				Enabled    bool
-				Protocol   string
+				Host           string
+				Port           int
+				Weight         int
+				Domain         string
+				DynamicDNS     bool
+				Enabled        bool
+				Protocol       string
+				MaxConnections int
+				ProxyProtocol  string
 			}
-			upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol)
+			upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol)
 			db.DB.Exec(`
-				INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			`, newCaddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol)
+				INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections, proxy_protocol)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, newCaddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections, u.ProxyProtocol)
 		}
 		upstreamRows.Close()
 	}

@@ -100,9 +100,9 @@
             <el-tag v-else type="info" size="small" effect="plain">禁用</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="健康" width="70" align="center">
+        <el-table-column label="健康" width="80" align="center">
           <template #default="{ row }">
-            <el-popover v-if="row.enabled && healthStatus[row.caddy_id]" placement="top" trigger="hover" :width="240">
+            <el-popover v-if="row.enabled && row.protocol !== 'tcp' && healthStatus[row.caddy_id]" placement="top" trigger="hover" :width="240">
               <template #reference>
                 <el-tag :type="getHealthTagType(healthStatus[row.caddy_id])" size="small" effect="plain" class="health-tag">
                   {{ getHealthLabel(healthStatus[row.caddy_id]) }}
@@ -133,6 +133,7 @@
                 </template>
               </div>
             </el-popover>
+            <el-tag v-else-if="row.protocol === 'tcp'" type="info" size="small" effect="plain" title="Caddy layer4 未提供 TCP 上游健康指标" class="tcp-health-tag">无数据</el-tag>
             <el-tag v-else-if="!row.enabled" type="info" size="small" effect="plain">-</el-tag>
             <span v-else class="text-secondary">-</span>
           </template>
@@ -354,14 +355,34 @@
               <el-table-column label="协议" width="100">
                 <template #default="{ row }">
                   <el-select v-model="row.protocol" size="small" placeholder="协议">
-                    <el-option value="http" label="HTTP" />
-                    <el-option value="https" label="HTTPS" />
+                    <template v-if="wizardForm.protocol === 'tcp'">
+                      <el-option value="tcp" label="TCP" />
+                      <el-option value="tls" label="TLS" />
+                    </template>
+                    <template v-else>
+                      <el-option value="http" label="HTTP" />
+                      <el-option value="https" label="HTTPS" />
+                    </template>
                   </el-select>
                 </template>
               </el-table-column>
               <el-table-column label="权重" width="100">
                 <template #default="{ row }">
                   <el-input-number v-model="row.weight" :min="1" :max="9999" size="small" controls-position="right" class="upstream-input-small" />
+                </template>
+              </el-table-column>
+              <el-table-column label="最大连接" width="120">
+                <template #default="{ row }">
+                  <el-input-number v-model="row.max_connections" :min="0" :max="100000" size="small" controls-position="right" class="upstream-input-small" />
+                </template>
+              </el-table-column>
+              <el-table-column label="PROXY" width="100">
+                <template #default="{ row }">
+                  <el-select v-model="row.proxy_protocol" size="small" placeholder="无">
+                    <el-option value="" label="无" />
+                    <el-option value="v1" label="v1" />
+                    <el-option value="v2" label="v2" />
+                  </el-select>
                 </template>
               </el-table-column>
               <el-table-column label="启用" width="60" align="center">
@@ -413,32 +434,35 @@
 
             <el-divider content-position="left" class="compact-divider">健康检查</el-divider>
 
-            <el-form-item label="失败阈值" v-if="wizardForm.protocol === 'http'">
+            <el-form-item label="失败阈值">
               <el-input-number v-model="wizardForm.health_check_unhealthy_threshold" :min="1" :max="10" controls-position="right" style="width: 80px;" />
               <span class="form-tip-inline">次失败后标记为不健康</span>
             </el-form-item>
 
-            <el-form-item label="超时时间" v-if="wizardForm.protocol === 'http'">
-              <el-input-number v-model="wizardForm.health_check_timeout" :min="1" :max="30" controls-position="right" style="width: 80px;" />
-              <span class="form-tip-inline">秒，连接/健康检查超时</span>
+            <el-form-item label="检查间隔">
+              <el-input-number v-model="wizardForm.health_check_interval" :min="5" :max="300" controls-position="right" style="width: 120px;" />
+              <span class="form-tip-inline">秒，健康检查/失败记忆窗口</span>
             </el-form-item>
 
-            <el-form-item label="主动检查" v-if="wizardForm.protocol === 'http'">
-              <div class="active-check-control">
-                <el-switch v-model="wizardForm.enable_active_health_check" />
-                <span class="active-check-desc">{{ wizardForm.enable_active_health_check ? '定期发送探测请求检查上游服务器状态' : '仅使用被动健康检查（推荐）' }}</span>
-              </div>
-            </el-form-item>
+            <template v-if="wizardForm.protocol === 'http'">
+              <el-form-item label="超时时间">
+                <el-input-number v-model="wizardForm.health_check_timeout" :min="1" :max="30" controls-position="right" style="width: 80px;" />
+                <span class="form-tip-inline">秒，连接/健康检查超时</span>
+              </el-form-item>
 
-            <template v-if="wizardForm.protocol === 'http' && wizardForm.enable_active_health_check">
-              <el-form-item label="检查路径">
-                <el-input v-model="wizardForm.health_check_path" placeholder="/health" style="width: 180px;" />
-                <span class="form-tip-inline">主动探测 URI 路径</span>
+              <el-form-item label="主动检查">
+                <div class="active-check-control">
+                  <el-switch v-model="wizardForm.enable_active_health_check" />
+                  <span class="active-check-desc">{{ wizardForm.enable_active_health_check ? '定期发送探测请求检查上游服务器状态' : '仅使用被动健康检查（推荐）' }}</span>
+                </div>
               </el-form-item>
-              <el-form-item label="检查间隔">
-                <el-input-number v-model="wizardForm.health_check_interval" :min="5" :max="300" controls-position="right" style="width: 120px;" />
-                <span class="form-tip-inline">秒</span>
-              </el-form-item>
+
+              <template v-if="wizardForm.enable_active_health_check">
+                <el-form-item label="检查路径">
+                  <el-input v-model="wizardForm.health_check_path" placeholder="/health" style="width: 180px;" />
+                  <span class="form-tip-inline">主动探测 URI 路径</span>
+                </el-form-item>
+              </template>
             </template>
           </el-form>
         </div>
@@ -446,52 +470,72 @@
         <!-- Step 3: 高级选项 -->
         <div v-show="currentStep === 3" class="step-content">
           <el-form :model="wizardForm" label-width="100px">
-            <el-divider content-position="left" class="compact-divider">DNS 服务器</el-divider>
+            <template v-if="wizardForm.protocol === 'http'">
+              <el-divider content-position="left" class="compact-divider">DNS 服务器</el-divider>
 
-            <el-form-item label="启用 DNS" v-if="wizardForm.protocol === 'http'">
-              <div class="dynamic-dns-content">
-                <el-switch v-model="wizardForm.enable_dns_server" />
-                <span class="dynamic-dns-desc">启用后，DNS 配置会在转发时生效</span>
-              </div>
-            </el-form-item>
-
-            <template v-if="wizardForm.protocol === 'http' && wizardForm.enable_dns_server">
-              <el-form-item label="DNS 服务器">
-                <el-input v-model="wizardForm.dns_server" placeholder="例如：8.8.8.8 或 223.5.5.5" style="width: 200px;" />
-                <span class="form-tip-inline">用于解析上游服务器域名的 DNS 服务器</span>
+              <el-form-item label="启用 DNS">
+                <div class="dynamic-dns-content">
+                  <el-switch v-model="wizardForm.enable_dns_server" />
+                  <span class="dynamic-dns-desc">启用后，DNS 配置会在转发时生效</span>
+                </div>
               </el-form-item>
+
+              <template v-if="wizardForm.enable_dns_server">
+                <el-form-item label="DNS 服务器">
+                  <el-input v-model="wizardForm.dns_server" placeholder="例如：8.8.8.8 或 223.5.5.5" style="width: 200px;" />
+                  <span class="form-tip-inline">用于解析上游服务器域名的 DNS 服务器</span>
+                </el-form-item>
+              </template>
+
+              <el-divider content-position="left" class="compact-divider">压缩配置</el-divider>
+
+              <el-form-item label="启用压缩">
+                <div class="dynamic-dns-content">
+                  <el-switch v-model="wizardForm.enable_compress" />
+                  <span class="dynamic-dns-desc">启用后，响应将被压缩传输以减少带宽</span>
+                </div>
+              </el-form-item>
+              <el-form-item label="压缩方式" v-if="wizardForm.enable_compress">
+                <el-select v-model="wizardForm.compress_types" placeholder="选择压缩方式" style="width: 200px;">
+                  <el-option value="gzip" label="gzip" />
+                  <el-option value="zstd" label="zstd" />
+                </el-select>
+              </el-form-item>
+
+              <el-divider content-position="left" class="compact-divider">动态上游</el-divider>
+
+              <el-form-item label="启用动态上游">
+                <div class="dynamic-dns-content">
+                  <el-switch v-model="wizardForm.dynamic_dns" />
+                  <span class="dynamic-dns-desc">启用后，通过 DNS A/AAAA 记录动态发现上游 IP 变化</span>
+                </div>
+              </el-form-item>
+
+              <template v-if="wizardForm.dynamic_dns">
+                <el-form-item label="协议栈">
+                  <el-checkbox-group v-model="wizardForm.dns_family" style="width: 200px;">
+                    <el-checkbox value="ipv4">IPv4</el-checkbox>
+                    <el-checkbox value="ipv6">IPv6</el-checkbox>
+                  </el-checkbox-group>
+                </el-form-item>
+              </template>
             </template>
 
-            <el-divider content-position="left" class="compact-divider">压缩配置</el-divider>
+            <template v-if="wizardForm.protocol === 'tcp'">
+              <el-divider content-position="left" class="compact-divider">连接选项</el-divider>
 
-            <el-form-item label="启用压缩" v-if="wizardForm.protocol === 'http'">
-              <div class="dynamic-dns-content">
-                <el-switch v-model="wizardForm.enable_compress" />
-                <span class="dynamic-dns-desc">启用后，响应将被压缩传输以减少带宽</span>
-              </div>
-            </el-form-item>
-            <el-form-item label="压缩方式" v-if="wizardForm.protocol === 'http' && wizardForm.enable_compress">
-              <el-select v-model="wizardForm.compress_types" placeholder="选择压缩方式" style="width: 200px;">
-                <el-option value="gzip" label="gzip" />
-                <el-option value="zstd" label="zstd" />
-              </el-select>
-            </el-form-item>
+              <el-form-item label="最大连接数">
+                <el-input-number v-model="wizardForm.max_connections" :min="0" :max="100000" controls-position="right" style="width: 120px;" />
+                <span class="form-tip-inline">单个上游最大并发连接，0 表示不限制</span>
+              </el-form-item>
 
-            <el-divider content-position="left" class="compact-divider">动态上游</el-divider>
-
-            <el-form-item label="启用动态上游" v-if="wizardForm.protocol === 'http'">
-              <div class="dynamic-dns-content">
-                <el-switch v-model="wizardForm.dynamic_dns" />
-                <span class="dynamic-dns-desc">启用后，通过 DNS A/AAAA 记录动态发现上游 IP 变化</span>
-              </div>
-            </el-form-item>
-
-            <template v-if="wizardForm.protocol === 'http' && wizardForm.dynamic_dns">
-              <el-form-item label="协议栈">
-                <el-checkbox-group v-model="wizardForm.dns_family" style="width: 200px;">
-                  <el-checkbox value="ipv4">IPv4</el-checkbox>
-                  <el-checkbox value="ipv6">IPv6</el-checkbox>
-                </el-checkbox-group>
+              <el-form-item label="PROXY 协议">
+                <el-select v-model="wizardForm.proxy_protocol" placeholder="不发送" style="width: 150px;">
+                  <el-option value="" label="不发送" />
+                  <el-option value="v1" label="v1" />
+                  <el-option value="v2" label="v2" />
+                </el-select>
+                <span class="form-tip-inline">向下游上游发送 HAProxy PROXY 协议头</span>
               </el-form-item>
             </template>
           </el-form>
@@ -669,6 +713,8 @@ interface Upstream {
   dynamic_dns: boolean
   enabled: boolean
   protocol?: string
+  max_connections?: number
+  proxy_protocol?: string
 }
 
 interface Rule {
@@ -702,6 +748,8 @@ interface Rule {
   tls_http_redirect: boolean
   enable_compress: boolean
   compress_types: string
+  max_connections?: number
+  proxy_protocol?: string
   enabled: boolean
   created_by?: number
   updated_by?: number
@@ -942,14 +990,16 @@ const fetchHealthStatus = async () => {
   }
 }
 
-const defaultUpstream = (): Upstream => ({
+const defaultUpstream = (protocol: string = 'http'): Upstream => ({
   host: '',
-  port: 80,
+  port: protocol === 'tcp' ? 8080 : 80,
   weight: 100,
   domain: '',
   dynamic_dns: false,
   enabled: true,
-  protocol: 'http',
+  protocol,
+  max_connections: 0,
+  proxy_protocol: '',
 })
 
 const certInfo = reactive({
@@ -992,6 +1042,8 @@ const wizardForm = reactive<Rule>({
   tls_http_redirect: false,
   enable_compress: false,
   compress_types: 'gzip',
+  max_connections: 0,
+  proxy_protocol: '',
   enabled: true,
 })
 
@@ -1008,6 +1060,31 @@ watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
     if (wizardForm.listen_port === 443) {
       wizardForm.listen_port = 80
     }
+  }
+})
+
+// Watch for protocol changes to adjust defaults for TCP rules
+watch(() => wizardForm.protocol, (newVal, oldVal) => {
+  if (newVal === 'tcp') {
+    // Switching to TCP: use a neutral high port and plain TCP upstreams
+    if (wizardForm.listen_port === 80 || wizardForm.listen_port === 443) {
+      wizardForm.listen_port = 8080
+    }
+    wizardForm.enable_tls = false
+    wizardForm.upstreams.forEach(u => {
+      if (!u.host && (u.protocol === 'http' || u.protocol === 'https')) {
+        u.protocol = 'tcp'
+      }
+    })
+  } else if (newVal === 'http' && oldVal === 'tcp') {
+    if (wizardForm.listen_port === 8080) {
+      wizardForm.listen_port = 80
+    }
+    wizardForm.upstreams.forEach(u => {
+      if (!u.host && (u.protocol === 'tcp' || u.protocol === 'tls')) {
+        u.protocol = 'http'
+      }
+    })
   }
 })
 
@@ -1224,10 +1301,12 @@ const openWizard = (rule?: Rule) => {
       health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
       enable_active_health_check: rule.enable_active_health_check === true,
       host_header: rule.host_header || '',
-      upstreams: rule.upstreams?.map(u => ({ 
-        ...u, 
+      upstreams: rule.upstreams?.map(u => ({
+        ...u,
         dynamic_dns: false,
         protocol: u.protocol || 'http',
+        max_connections: u.max_connections ?? 0,
+        proxy_protocol: u.proxy_protocol ?? '',
       })) || [],
       enable_tls: rule.enable_tls || false,
       tls_source: rule.tls_source || (rule.tls_auto_cert ? 'acme_dns' : 'manual'),
@@ -1239,6 +1318,8 @@ const openWizard = (rule?: Rule) => {
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
       compress_types: compressType,
+      max_connections: (rule as any).max_connections || 0,
+      proxy_protocol: (rule as any).proxy_protocol || '',
       enabled: rule.enabled,
     })
   } else {
@@ -1271,6 +1352,8 @@ const openWizard = (rule?: Rule) => {
       tls_http_redirect: false,
       enable_compress: false,
       compress_types: 'gzip',
+      max_connections: 0,
+      proxy_protocol: '',
       enabled: true,
     })
   }
@@ -1284,7 +1367,7 @@ const resetWizard = () => {
 }
 
 const addUpstream = () => {
-  wizardForm.upstreams.push(defaultUpstream())
+  wizardForm.upstreams.push(defaultUpstream(wizardForm.protocol === 'tcp' ? 'tcp' : 'http'))
 }
 
 const removeUpstream = (index: number) => {
@@ -1402,6 +1485,8 @@ const submitWizard = async () => {
       ...u,
       weight: u.weight || 100,
       dynamic_dns: wizardForm.dynamic_dns,
+      max_connections: u.max_connections ?? 0,
+      proxy_protocol: u.proxy_protocol ?? '',
     }))
 
     const data = {
@@ -1433,6 +1518,8 @@ const submitWizard = async () => {
       tls_http_redirect: wizardForm.tls_http_redirect,
       enable_compress: wizardForm.enable_compress,
       compress_types: wizardForm.compress_types || 'gzip',
+      max_connections: wizardForm.max_connections || 0,
+      proxy_protocol: wizardForm.proxy_protocol || '',
       enabled: wizardForm.enabled,
     }
 
@@ -1651,6 +1738,13 @@ onMounted(() => {
 /* Health tag */
 .health-tag {
   cursor: pointer;
+}
+
+.tcp-health-tag {
+  white-space: nowrap;
+  overflow: visible;
+  display: inline-flex;
+  max-width: none;
 }
 
 /* Health tooltip */
