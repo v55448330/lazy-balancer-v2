@@ -166,30 +166,33 @@ func (s *CertificateService) poll() {
 
 func (s *CertificateService) findCertExpiryInStorage(domain string) time.Time {
 	// Try the well-known Caddy storage layout for ACME certificates.
-	baseDir := "/root/.local/share/caddy/certificates"
-	entries, err := os.ReadDir(baseDir)
-	if err != nil {
-		return time.Time{}
-	}
-	for _, issuerDir := range entries {
-		if !issuerDir.IsDir() {
-			continue
-		}
-		certFile := filepath.Join(baseDir, issuerDir.Name(), domain, domain+".crt")
-		data, err := os.ReadFile(certFile)
+	// With XDG_DATA_HOME=/app/data, Caddy stores certificates under
+	// /app/data/caddy/certificates.
+	for _, baseDir := range []string{"/app/data/caddy/certificates", "/root/.local/share/caddy/certificates"} {
+		entries, err := os.ReadDir(baseDir)
 		if err != nil {
 			continue
 		}
-		block, _ := pem.Decode(data)
-		if block == nil {
-			continue
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			continue
-		}
-		if cert.Subject.CommonName == domain || containsDomain(cert.DNSNames, domain) {
-			return cert.NotAfter
+		for _, issuerDir := range entries {
+			if !issuerDir.IsDir() {
+				continue
+			}
+			certFile := filepath.Join(baseDir, issuerDir.Name(), domain, domain+".crt")
+			data, err := os.ReadFile(certFile)
+			if err != nil {
+				continue
+			}
+			block, _ := pem.Decode(data)
+			if block == nil {
+				continue
+			}
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				continue
+			}
+			if cert.Subject.CommonName == domain || containsDomain(cert.DNSNames, domain) {
+				return cert.NotAfter
+			}
 		}
 	}
 	return time.Time{}

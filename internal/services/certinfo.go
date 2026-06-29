@@ -5,6 +5,8 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -135,28 +137,73 @@ func GetRuleCertInfo(caddyID string) *models.RuleCertInfo {
 	}
 }
 
-// getACMECertInfo queries cert_jobs for the issued certificate of a rule.
+// getACMECertInfo returns parsed certificate info for an ACME-issued rule.
+// It first tries cert_jobs.cert_pem, then falls back to reading the certificate
+// from Caddy's on-disk storage (since Caddy does not expose ACME certificates
+// through its admin API).
 func getACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
 	var certPEM string
 	err := db.DB.QueryRow(`
 		SELECT COALESCE(cert_pem, '') FROM cert_jobs
 		WHERE rule_id = ? AND status = 'issued' AND cert_pem IS NOT NULL AND cert_pem != ''
 		ORDER BY updated_at DESC LIMIT 1`, caddyID).Scan(&certPEM)
-	if err != nil {
-		info := &models.RuleCertInfo{
-			CaddyID: caddyID,
-			Source:  "acme_dns",
-			Domains: ruleDomain,
-			Status:  "unknown",
-			Error:   "ACME 证书尚未签发或不存在",
-		}
+	if err == nil && certPEM != "" {
+		info := ParseCertInfo(certPEM, "acme_dns", ruleDomain)
+		info.CaddyID = caddyID
 		return info
 	}
 
-	info := ParseCertInfo(certPEM, "acme_dns", ruleDomain)
-	info.CaddyID = caddyID
+	// Fallback: read certificate from Caddy storage.
+	certPEM, err = findCertPEMInStorage(ruleDomain)
+	if err == nil && certPEM != "" {
+		info := ParseCertInfo(certPEM, "acme_dns", ruleDomain)
+		info.CaddyID = caddyID
+		return info
+	}
+
+	info := &models.RuleCertInfo{
+		CaddyID: caddyID,
+		Source:  "acme_dns",
+		Domains: ruleDomain,
+		Status:  "unknown",
+		Error:   "ACME 证书尚未签发或不存在",
+	}
 	return info
 }
+
+// findCertPEMInStorage scans Caddy certificate storage for a matching domain.
+func findCertPEMInStorage(domain string) (string, error) {
+	for _, baseDir := range []string{"/app/data/caddy/certificates", "/root/.local/share/caddy/certificates"} {
+		entries, err := os.ReadDir(baseDir)
+		if err != nil {
+			continue
+		}
+		for _, issuerDir := range entries {
+			if !issuerDir.IsDir() {
+				continue
+			}
+			certFile := filepath.Join(baseDir, issuerDir.Name(), domain, domain+".crt")
+			data, err := os.ReadFile(certFile)
+			if err != nil {
+				continue
+			}
+			block, _ := pem.Decode(data)
+			if block == nil {
+				continue
+			}
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				continue
+			}
+			if cert.Subject.CommonName == domain || containsDomain(cert.DNSNames, domain) {
+				return string(data), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("certificate not found in storage for %s", domain)
+}
+
+
 
 // GetRulesCertInfo returns parsed certificate info for multiple rules.
 func GetRulesCertInfo(caddyIDs []string) map[string]*models.RuleCertInfo {
