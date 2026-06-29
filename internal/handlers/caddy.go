@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,12 +23,16 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		SELECT id, caddy_config, dns_provider, COALESCE(dns_credentials,'') as dns_credentials,
 		       COALESCE(acme_email,'') as acme_email, COALESCE(cert_expiry_days,30) as cert_expiry_days,
 		       COALESCE(letsencrypt_email,'') as letsencrypt_email, log_level, access_log_enabled,
-		       is_master, COALESCE(master_url, '') as master_url, sync_interval, 
+		       COALESCE(caddy_log_path,'/app/logs/caddy.log') as caddy_log_path,
+		       COALESCE(caddy_log_level,'info') as caddy_log_level,
+		       COALESCE(caddy_log_size_mb,100) as caddy_log_size_mb,
+		       is_master, COALESCE(master_url, '') as master_url, sync_interval,
 		       last_sync, updated_at
 		FROM global_config WHERE id = 1
 	`).Scan(&cfg.ID, &cfg.CaddyConfig, &cfg.DNSProvider, &cfg.DNSCredentials,
-		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.LETSEncryptEmail, &cfg.LogLevel, &cfg.AccessLogEnabled, &cfg.IsMaster, &cfg.MasterURL,
-		&cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
+		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.LETSEncryptEmail, &cfg.LogLevel, &cfg.AccessLogEnabled,
+		&cfg.CaddyLogPath, &cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
+		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get config: " + err.Error()})
@@ -63,6 +68,31 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	if req.CaddyLogPath != "" {
+		if !filepath.IsAbs(req.CaddyLogPath) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy log path must be absolute"})
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(req.CaddyLogPath), 0755); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to create log directory: " + err.Error()})
+			return
+		}
+	}
+
+	if req.CaddyLogLevel != "" {
+		switch strings.ToLower(req.CaddyLogLevel) {
+		case "debug", "info", "warn", "error":
+		default:
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid Caddy log level"})
+			return
+		}
+	}
+
+	if req.CaddyLogSizeMB != nil && *req.CaddyLogSizeMB <= 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy log size must be greater than 0"})
+		return
+	}
+
 	// Update DNS credentials in environment if provided
 	if req.DNSCredentials != "" {
 		parts := strings.Split(req.DNSCredentials, ",")
@@ -81,12 +111,16 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			letsencrypt_email = COALESCE(?, letsencrypt_email),
 			log_level = COALESCE(?, log_level),
 			access_log_enabled = COALESCE(?, access_log_enabled),
+			caddy_log_path = COALESCE(?, caddy_log_path),
+			caddy_log_level = COALESCE(?, caddy_log_level),
+			caddy_log_size_mb = COALESCE(?, caddy_log_size_mb),
 			is_master = COALESCE(?, is_master),
 			master_url = COALESCE(?, master_url),
 			sync_interval = COALESCE(?, sync_interval),
 			updated_at = datetime('now')
 		WHERE id = 1
 	`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.LETSEncryptEmail, req.LogLevel, req.AccessLogEnabled,
+		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.IsMaster, req.MasterURL, req.SyncInterval)
 
 	// Update node mode in memory

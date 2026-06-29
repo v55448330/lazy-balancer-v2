@@ -18,11 +18,29 @@
               <el-option label="Warning" value="warn" />
               <el-option label="Error" value="error" />
             </el-select>
-            <div class="form-tip">控制日志详细程度</div>
+            <div class="form-tip">控制 Lazy Balancer 自身日志详细程度</div>
           </el-form-item>
           <el-form-item label="访问日志">
             <el-switch v-model="settings.access_log_enabled" />
             <div class="form-tip">记录所有 HTTP 请求到日志</div>
+          </el-form-item>
+          <el-divider />
+          <el-form-item label="Caddy 日志路径">
+            <el-input v-model="settings.caddy_log_path" placeholder="/app/logs/caddy.log" />
+            <div class="form-tip">Caddy 运行日志文件绝对路径</div>
+          </el-form-item>
+          <el-form-item label="Caddy 日志级别">
+            <el-select v-model="settings.caddy_log_level" style="width: 100%">
+              <el-option label="Debug" value="debug" />
+              <el-option label="Info" value="info" />
+              <el-option label="Warning" value="warn" />
+              <el-option label="Error" value="error" />
+            </el-select>
+            <div class="form-tip">控制 Caddy 运行日志详细程度</div>
+          </el-form-item>
+          <el-form-item label="日志滚动大小">
+            <el-input-number v-model="settings.caddy_log_size_mb" :min="1" :max="10240" style="width: 100%" />
+            <div class="form-tip">单个日志文件大小上限（MB），超过后自动滚动</div>
           </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="saving" @click="handleSave">
@@ -100,6 +118,9 @@ const handleSave = async () => {
     await request.put('/config', {
       log_level: settings.value.log_level,
       access_log_enabled: settings.value.access_log_enabled,
+      caddy_log_path: settings.value.caddy_log_path,
+      caddy_log_level: settings.value.caddy_log_level,
+      caddy_log_size_mb: settings.value.caddy_log_size_mb,
     })
     ElMessage.success('保存成功')
     emit('save')

@@ -203,6 +203,9 @@ func createTables() error {
 		is_master BOOLEAN DEFAULT TRUE,
 		master_url VARCHAR(255),
 		sync_interval INTEGER DEFAULT 60,
+		caddy_log_path VARCHAR(500) DEFAULT '/app/logs/caddy.log',
+		caddy_log_level VARCHAR(10) DEFAULT 'info',
+		caddy_log_size_mb INTEGER DEFAULT 100,
 		last_sync DATETIME,
 		updated_at DATETIME
 	);
@@ -327,6 +330,21 @@ func runMigrations() error {
 	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='metrics_origins'").Scan(&colCount)
 	if colCount == 0 {
 		DB.Exec("ALTER TABLE global_config ADD COLUMN metrics_origins VARCHAR(500)")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='caddy_log_path'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE global_config ADD COLUMN caddy_log_path VARCHAR(500) DEFAULT '/app/logs/caddy.log'")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='caddy_log_level'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE global_config ADD COLUMN caddy_log_level VARCHAR(10) DEFAULT 'info'")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='caddy_log_size_mb'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE global_config ADD COLUMN caddy_log_size_mb INTEGER DEFAULT 100")
 	}
 
 	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='caddy_id'").Scan(&colCount)

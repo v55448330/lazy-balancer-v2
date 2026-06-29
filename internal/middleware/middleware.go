@@ -152,6 +152,8 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				api.POST("/certificates/issue", h.IssueCertificate)
 				api.POST("/certificates/parse", h.ParseCertificate)
 				api.GET("/certificates/jobs", h.ListCertJobs)
+				api.GET("/certificates/jobs/:id", h.GetCertJob)
+				api.GET("/certificates/jobs/:id/logs", h.GetCertJobLogs)
 				api.POST("/certificates/jobs/:id/retry", h.RetryCertJob)
 				api.DELETE("/certificates/jobs/:id", h.DeleteCertJob)
 			}

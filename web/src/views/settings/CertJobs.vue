@@ -13,18 +13,37 @@
         {{ row.expires_at ? formatDate(row.expires_at) : '-' }}
       </template>
     </el-table-column>
-    <el-table-column label="操作" width="120" align="center">
+    <el-table-column label="操作" width="160" align="center">
       <template #default="{ row }">
+        <el-button link type="primary" size="small" @click="viewLogs(row)">查看日志</el-button>
         <el-button link type="primary" size="small" @click="retryJob(row)">重试</el-button>
         <el-button link type="danger" size="small" @click="deleteJob(row)">删除</el-button>
       </template>
     </el-table-column>
   </el-table>
   <el-empty v-if="!loading && jobs.length === 0" description="暂无签发任务" :image-size="60" />
+
+  <el-dialog
+    v-model="logDialogVisible"
+    :title="`证书日志 - ${currentJob?.domain || ''}`"
+    width="900px"
+    destroy-on-close
+    @opened="onLogDialogOpened"
+    @closed="onLogDialogClosed"
+  >
+    <div ref="logContainerRef" class="log-container">
+      <pre v-if="formattedLogs" class="log-content">{{ formattedLogs }}</pre>
+      <el-empty v-else description="暂无日志" :image-size="60" />
+    </div>
+    <template #footer>
+      <el-button @click="logDialogVisible = false">关闭</el-button>
+      <el-button type="primary" :loading="logLoading" @click="refreshLogs">刷新</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -45,6 +64,28 @@ const props = defineProps<{
 const jobs = ref<CertJob[]>([])
 const loading = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
+
+const logDialogVisible = ref(false)
+const logLoading = ref(false)
+const logLines = ref<string[]>([])
+const currentJob = ref<CertJob | null>(null)
+const logContainerRef = ref<HTMLDivElement | null>(null)
+let logPollTimer: ReturnType<typeof setInterval> | null = null
+
+const ansiRegex = /[\u001B\u009B][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d\/#&.:=?%@~_]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g
+
+const formattedLogs = computed(() => {
+  return logLines.value
+    .map(line => line.replace(ansiRegex, '').trimEnd())
+    .join('\n')
+})
+
+const scrollToBottom = async () => {
+  await nextTick()
+  if (logContainerRef.value) {
+    logContainerRef.value.scrollTop = logContainerRef.value.scrollHeight
+  }
+}
 
 const statusType = (status: string) => {
   switch (status) {
@@ -102,6 +143,49 @@ const deleteJob = async (row: CertJob) => {
   }
 }
 
+const viewLogs = async (row: CertJob) => {
+  currentJob.value = row
+  logDialogVisible.value = true
+}
+
+const onLogDialogOpened = async () => {
+  await refreshLogs()
+  startLogPolling()
+}
+
+const onLogDialogClosed = () => {
+  stopLogPolling()
+  currentJob.value = null
+  logLines.value = []
+}
+
+const startLogPolling = () => {
+  stopLogPolling()
+  logPollTimer = setInterval(refreshLogs, 3000)
+}
+
+const stopLogPolling = () => {
+  if (logPollTimer) {
+    clearInterval(logPollTimer)
+    logPollTimer = null
+  }
+}
+
+const refreshLogs = async () => {
+  if (!currentJob.value) return
+  logLoading.value = true
+  try {
+    const res = await request.get(`/certificates/jobs/${currentJob.value.id}/logs`, { params: { limit: 500 } })
+    logLines.value = res.data?.lines || []
+    await scrollToBottom()
+  } catch (error) {
+    console.error('Failed to fetch cert job logs:', error)
+    ElMessage.error('获取日志失败')
+  } finally {
+    logLoading.value = false
+  }
+}
+
 onMounted(() => {
   fetchJobs()
   pollTimer = setInterval(fetchJobs, 5000)
@@ -109,5 +193,26 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
+  stopLogPolling()
 })
 </script>
+
+<style scoped>
+.log-container {
+  max-height: 520px;
+  overflow: auto;
+  background: #0f172a;
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid #1e293b;
+}
+.log-content {
+  margin: 0;
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+</style>

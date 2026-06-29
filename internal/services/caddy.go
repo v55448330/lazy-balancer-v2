@@ -1633,7 +1633,13 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 
 	var dnsProvider, letsencryptEmail, acmeEmail string
 	var isMaster bool
-	db.DB.QueryRow("SELECT COALESCE(dns_provider,''), COALESCE(letsencrypt_email,''), COALESCE(acme_email,''), is_master FROM global_config WHERE id = 1").Scan(&dnsProvider, &letsencryptEmail, &acmeEmail, &isMaster)
+	var caddyLogPath, caddyLogLevel string
+	var caddyLogSizeMB int
+	db.DB.QueryRow(`
+		SELECT COALESCE(dns_provider,''), COALESCE(letsencrypt_email,''), COALESCE(acme_email,''), is_master,
+		       COALESCE(caddy_log_path,'/app/logs/caddy.log'), COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100)
+		FROM global_config WHERE id = 1
+	`).Scan(&dnsProvider, &letsencryptEmail, &acmeEmail, &isMaster, &caddyLogPath, &caddyLogLevel, &caddyLogSizeMB)
 
 	servers := make(map[string]interface{})
 
@@ -1987,7 +1993,8 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		"admin": map[string]interface{}{
 			"listen": "0.0.0.0:2019",
 		},
-		"apps": apps,
+		"apps":    apps,
+		"logging": buildCaddyLogging(caddyLogPath, caddyLogLevel, caddyLogSizeMB),
 	}
 
 	conf["admin"] = map[string]interface{}{
@@ -1995,6 +2002,35 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 	}
 
 	return conf
+}
+
+func buildCaddyLogging(path, level string, sizeMB int) map[string]interface{} {
+	if path == "" {
+		path = "/app/logs/caddy.log"
+	}
+	if level == "" {
+		level = "info"
+	}
+	level = strings.ToUpper(level)
+	if sizeMB <= 0 {
+		sizeMB = 100
+	}
+	return map[string]interface{}{
+		"logs": map[string]interface{}{
+			"default": map[string]interface{}{
+				"level": level,
+				"writer": map[string]interface{}{
+					"output":       "file",
+					"filename":     path,
+					"roll_size_mb": sizeMB,
+					"roll_keep":    5,
+				},
+				"encoder": map[string]interface{}{
+					"format": "console",
+				},
+			},
+		},
+	}
 }
 
 func defaultCaddyConfig() map[string]interface{} {
@@ -2025,6 +2061,7 @@ func defaultCaddyConfig() map[string]interface{} {
 				},
 			},
 		},
+		"logging": buildCaddyLogging("/app/logs/caddy.log", "info", 100),
 	}
 }
 
@@ -2100,6 +2137,7 @@ func buildTLSAutomationPolicies(rules []tlsAutomationRule, acmeEmail string) []m
 						"challenges": map[string]interface{}{
 							"dns": map[string]interface{}{
 								"provider":  providerCfg,
+								"ttl":       "600s",
 								"resolvers": []string{"119.29.29.29", "1.1.1.1"},
 							},
 						},

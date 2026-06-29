@@ -79,6 +79,9 @@ type GlobalConfig struct {
 	LETSEncryptEmail string       `json:"letsencrypt_email"`
 	LogLevel         string       `json:"log_level"`
 	AccessLogEnabled bool         `json:"access_log_enabled"`
+	CaddyLogPath     string       `json:"caddy_log_path"`
+	CaddyLogLevel    string       `json:"caddy_log_level"`
+	CaddyLogSizeMB   int          `json:"caddy_log_size_mb"`
 	IsMaster         bool         `json:"is_master"`
 	MasterURL        string       `json:"master_url"`
 	SyncInterval     int          `json:"sync_interval"`
@@ -303,6 +306,9 @@ type UpdateConfigRequest struct {
 	LETSEncryptEmail string `json:"letsencrypt_email"`
 	LogLevel         string `json:"log_level"`
 	AccessLogEnabled *bool  `json:"access_log_enabled"`
+	CaddyLogPath     string `json:"caddy_log_path"`
+	CaddyLogLevel    string `json:"caddy_log_level"`
+	CaddyLogSizeMB   *int   `json:"caddy_log_size_mb"`
 	IsMaster         *bool  `json:"is_master"`
 	MasterURL        string `json:"master_url"`
 	SyncInterval     *int   `json:"sync_interval"`

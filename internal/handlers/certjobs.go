@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"bufio"
 	"database/sql"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -80,4 +83,68 @@ func (h *Handlers) GetCertJob(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: j})
+}
+
+func (h *Handlers) GetCertJobLogs(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	var j models.CertJob
+	err := db.DB.QueryRow("SELECT id, rule_id, domain, status, message, expires_at, created_at, updated_at FROM cert_jobs WHERE id=?", id).
+		Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.Message, &j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get job"})
+		return
+	}
+
+	var logPath string
+	db.DB.QueryRow("SELECT COALESCE(caddy_log_path,'/app/logs/caddy.log') FROM global_config WHERE id=1").Scan(&logPath)
+
+	limit := 500
+	if l, _ := strconv.Atoi(c.Query("limit")); l > 0 {
+		if l > 5000 {
+			l = 5000
+		}
+		limit = l
+	}
+
+	lines := make([]string, 0, limit)
+	file, err := os.Open(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]interface{}{
+				"domain": j.Domain,
+				"path":   logPath,
+				"lines":  []string{},
+			}})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to open log file: " + err.Error()})
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if j.Domain != "" && !strings.Contains(line, j.Domain) {
+			continue
+		}
+		lines = append(lines, line)
+		if len(lines) > limit {
+			lines = lines[1:]
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read log file: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]interface{}{
+		"domain": j.Domain,
+		"path":   logPath,
+		"lines":  lines,
+	}})
 }

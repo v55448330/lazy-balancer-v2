@@ -51,6 +51,9 @@ const activeTab = ref('basic')
 const settings = ref<any>({
   log_level: 'info',
   access_log_enabled: true,
+  caddy_log_path: '/app/logs/caddy.log',
+  caddy_log_level: 'info',
+  caddy_log_size_mb: 100,
   is_master: true,
   master_url: '',
   sync_interval: 60,
@@ -85,6 +88,9 @@ const fetchSettings = async () => {
       settings.value = {
         log_level: res.data.log_level || 'info',
         access_log_enabled: res.data.access_log_enabled ?? true,
+        caddy_log_path: res.data.caddy_log_path || '/app/logs/caddy.log',
+        caddy_log_level: res.data.caddy_log_level || 'info',
+        caddy_log_size_mb: res.data.caddy_log_size_mb ?? 100,
         is_master: res.data.is_master ?? true,
         master_url: res.data.master_url || '',
         sync_interval: res.data.sync_interval || 60,
@@ -109,10 +115,7 @@ const saveConfig = async (payload: any) => {
 }
 
 const handleSaveBasic = async () => {
-  await saveConfig({
-    log_level: settings.value.log_level,
-    access_log_enabled: settings.value.access_log_enabled,
-  })
+  await fetchSettings()
 }
 
 const handleSaveCluster = async () => {
