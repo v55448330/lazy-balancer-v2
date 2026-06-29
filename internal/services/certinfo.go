@@ -27,10 +27,10 @@ func GetCertExpiryThreshold() int {
 }
 
 // ParseCertInfo parses a PEM certificate and returns structured display info.
-func ParseCertInfo(certPEM, source, domains string) *models.RuleCertInfo {
+func ParseCertInfo(certPEM, source, ruleDomains string) *models.RuleCertInfo {
 	info := &models.RuleCertInfo{
 		Source:  source,
-		Domains: domains,
+		Domains: ruleDomains,
 		Status:  "unknown",
 	}
 
@@ -52,10 +52,24 @@ func ParseCertInfo(certPEM, source, domains string) *models.RuleCertInfo {
 	}
 
 	// Domains: prefer certificate DNSNames, fallback to CommonName, fallback to rule domain
-	if len(cert.DNSNames) > 0 {
-		info.Domains = strings.Join(cert.DNSNames, ", ")
-	} else if cert.Subject.CommonName != "" {
-		info.Domains = cert.Subject.CommonName
+	domainSet := make(map[string]struct{})
+	var parsedDomains []string
+	for _, name := range cert.DNSNames {
+		if name != "" {
+			if _, exists := domainSet[name]; !exists {
+				domainSet[name] = struct{}{}
+				parsedDomains = append(parsedDomains, name)
+			}
+		}
+	}
+	if cert.Subject.CommonName != "" {
+		if _, exists := domainSet[cert.Subject.CommonName]; !exists {
+			domainSet[cert.Subject.CommonName] = struct{}{}
+			parsedDomains = append(parsedDomains, cert.Subject.CommonName)
+		}
+	}
+	if len(parsedDomains) > 0 {
+		info.Domains = strings.Join(parsedDomains, ", ")
 	}
 
 	// Issuer: prefer Organization, fallback to CommonName
