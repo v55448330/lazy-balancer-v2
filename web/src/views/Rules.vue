@@ -49,11 +49,54 @@
         </el-table-column>
         <el-table-column label="TLS" width="70" align="center">
           <template #default="{ row }">
-            <el-tooltip v-if="row.enable_tls" :content="row.tls_auto_cert ? certTypeLabels.auto : certTypeLabels.manual" placement="top">
-              <el-tag type="success" size="small" effect="plain">
-                {{ row.tls_auto_cert ? '自动' : '手动' }}
-              </el-tag>
-            </el-tooltip>
+            <el-popover
+              v-if="row.enable_tls"
+              placement="top"
+              trigger="hover"
+              :width="280"
+              :disabled="!certInfoMap[row.caddy_id]"
+            >
+              <template #reference>
+                <el-tag type="success" size="small" effect="plain">
+                  {{ row.tls_auto_cert ? '自动' : '手动' }}
+                </el-tag>
+              </template>
+              <div class="cert-tooltip" v-if="certInfoMap[row.caddy_id]">
+                <div class="tooltip-title">证书信息</div>
+                <div class="cert-row">
+                  <span class="cert-label">来源</span>
+                  <el-tag size="small" :type="certInfoMap[row.caddy_id]?.source === 'manual' ? 'primary' : 'success'">
+                    {{ certInfoMap[row.caddy_id]?.source === 'manual' ? '手动上传' : 'ACME 自动' }}
+                  </el-tag>
+                </div>
+                <div class="cert-row">
+                  <span class="cert-label">域名</span>
+                  <span class="cert-value" :title="certInfoMap[row.caddy_id]?.domains">{{ certInfoMap[row.caddy_id]?.domains || '-' }}</span>
+                </div>
+                <div class="cert-row">
+                  <span class="cert-label">颁发者</span>
+                  <span class="cert-value" :title="certInfoMap[row.caddy_id]?.issuer">{{ certInfoMap[row.caddy_id]?.issuer || '-' }}</span>
+                </div>
+                <div class="cert-row">
+                  <span class="cert-label">生效时间</span>
+                  <span class="cert-value">{{ certInfoMap[row.caddy_id]?.not_before || '-' }}</span>
+                </div>
+                <div class="cert-row">
+                  <span class="cert-label">过期时间</span>
+                  <span class="cert-value">{{ certInfoMap[row.caddy_id]?.not_after || '-' }}</span>
+                </div>
+                <div class="cert-row">
+                  <span class="cert-label">剩余天数</span>
+                  <span :class="['cert-days', certInfoMap[row.caddy_id]?.status]">
+                    {{ certInfoMap[row.caddy_id]?.days_remaining }} 天
+                  </span>
+                </div>
+                <div class="cert-row" v-if="certInfoMap[row.caddy_id]?.error">
+                  <span class="cert-label">错误</span>
+                  <span class="cert-error" :title="certInfoMap[row.caddy_id]?.error">{{ certInfoMap[row.caddy_id]?.error }}</span>
+                </div>
+              </div>
+            </el-popover>
             <el-tag v-else type="info" size="small" effect="plain">禁用</el-tag>
           </template>
         </el-table-column>
@@ -671,7 +714,19 @@ const authStore = useAuthStore()
 
 const certTypeLabels = {
   auto: "Let's Encrypt",
-  manual: "手动证书",
+  manual: '手动证书',
+}
+
+interface CertInfo {
+  caddy_id: string
+  source: string
+  domains: string
+  issuer: string
+  not_before: string
+  not_after: string
+  days_remaining: number
+  status: string
+  error?: string
 }
 
 const rules = ref<Rule[]>([])
@@ -702,8 +757,27 @@ const fetchRules = async () => {
     rules.value = res.data || []
     // Fetch health status after rules are loaded
     fetchHealthStatus()
+    // Fetch certificate info for TLS-enabled rules
+    fetchCertInfo()
   } finally {
     loading.value = false
+  }
+}
+
+const fetchCertInfo = async () => {
+  const tlsRules = rules.value.filter(r => r.enable_tls)
+  if (tlsRules.length === 0) {
+    certInfoMap.value = {}
+    return
+  }
+  try {
+    const res = await request.post('/rules/cert-info', {
+      caddy_ids: tlsRules.map(r => r.caddy_id)
+    })
+    certInfoMap.value = res.data || {}
+  } catch (e: any) {
+    // Non-critical: keep existing cert info map or clear it
+    certInfoMap.value = {}
   }
 }
 
@@ -715,6 +789,7 @@ const currentStep = ref(0)
 const upstreamTouched = ref<boolean[]>([])
 const certConfigs = ref<any[]>([])
 const healthStatus = ref<Record<string, { healthy: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; num_requests?: number; fails?: number }> }>>({})
+const certInfoMap = ref<Record<string, CertInfo | null>>({})
 
 // Config viewing
 const configDialogVisible = ref(false)
@@ -2074,5 +2149,68 @@ onMounted(() => {
 
 .config-empty {
   padding: 20px 0;
+}
+
+/* Certificate hover tooltip */
+.cert-tooltip .tooltip-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 6px;
+}
+
+.cert-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  gap: 8px;
+}
+
+.cert-label {
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.cert-value {
+  color: #1f2937;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 170px;
+}
+
+.cert-days {
+  font-weight: 500;
+}
+
+.cert-days.valid {
+  color: #10b981;
+}
+
+.cert-days.expiring {
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+.cert-days.expired {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.cert-days.unknown {
+  color: #9ca3af;
+}
+
+.cert-error {
+  color: #ef4444;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 170px;
 }
 </style>

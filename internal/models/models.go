@@ -124,6 +124,24 @@ type CertificateConfig struct {
 	UpdatedAt      sql.NullTime `json:"updated_at"`
 }
 
+// RuleCertInfo represents parsed TLS certificate information for display in the UI
+type RuleCertInfo struct {
+	CaddyID       string `json:"caddy_id"`
+	Source        string `json:"source"`         // "manual" | "acme_dns"
+	Domains       string `json:"domains"`        // rule domain or certificate DNS names
+	Issuer        string `json:"issuer"`         // issuer CN or Organization
+	NotBefore     string `json:"not_before"`     // formatted effective time
+	NotAfter      string `json:"not_after"`      // formatted expiration time
+	DaysRemaining int    `json:"days_remaining"` // days until expiration (negative if expired)
+	Status        string `json:"status"`         // "valid" | "expiring" | "expired" | "unknown"
+	Error         string `json:"error,omitempty"` // error message when parsing fails
+}
+
+// CertInfoBatchRequest represents a batch cert-info query request
+type CertInfoBatchRequest struct {
+	CaddyIDs []string `json:"caddy_ids" binding:"required"`
+}
+
 // CertJob represents an ACME certificate issuance job
 type CertJob struct {
 	ID        int          `json:"id"`
