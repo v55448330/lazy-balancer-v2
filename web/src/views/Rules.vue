@@ -740,7 +740,7 @@ interface Rule {
   upstreams: Upstream[]
   enable_tls: boolean
   tls_source?: string
-  acme_config_id?: number
+  acme_config_id?: number | undefined
   tls_cert: string
   tls_key: string
   tls_auto_cert: boolean
@@ -1310,7 +1310,7 @@ const openWizard = (rule?: Rule) => {
       })) || [],
       enable_tls: rule.enable_tls || false,
       tls_source: rule.tls_source || (rule.tls_auto_cert ? 'acme_dns' : 'manual'),
-      acme_config_id: rule.acme_config_id || 0,
+      acme_config_id: rule.acme_config_id || undefined,
       tls_cert: rule.tls_cert || '',
       tls_key: rule.tls_key || '',
       tls_auto_cert: rule.tls_auto_cert || true,
@@ -1344,7 +1344,7 @@ const openWizard = (rule?: Rule) => {
       upstreams: [defaultUpstream()],
       enable_tls: false,
       tls_source: 'manual',
-      acme_config_id: 0,
+      acme_config_id: undefined as number | undefined,
       tls_cert: '',
       tls_key: '',
       tls_auto_cert: true,
@@ -1510,7 +1510,7 @@ const submitWizard = async () => {
       upstreams: validUpstreams,
       enable_tls: wizardForm.enable_tls,
       tls_source: wizardForm.tls_source,
-      acme_config_id: wizardForm.acme_config_id,
+      acme_config_id: wizardForm.acme_config_id || 0,
       tls_cert: wizardForm.tls_source === 'manual' ? wizardForm.tls_cert : '',
       tls_key: wizardForm.tls_source === 'manual' ? wizardForm.tls_key : '',
       tls_auto_cert: wizardForm.tls_source === 'acme_dns',
