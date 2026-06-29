@@ -1217,10 +1217,11 @@ func (s *CaddyService) GetUpstreamHealth() (map[string]map[string]bool, error) {
 							if dial == "" {
 								continue
 							}
-							if len(upstreamHealth) > 0 {
-								isHealthy := upstreamHealth[dial]
-								healthStatus[serverName][dial] = isHealthy
+							if observedHealthy, ok := upstreamHealth[dial]; ok {
+								healthStatus[serverName][dial] = observedHealthy
 							} else {
+								// No metric observation yet; assume healthy so the UI does not
+								// show everything as unknown while Caddy is still collecting.
 								healthStatus[serverName][dial] = true
 							}
 						}
@@ -1318,27 +1319,38 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 									continue
 								}
 
-								dial, ok := up["dial"].(string)
-								if !ok {
-									continue
-								}
+							dial, ok := up["dial"].(string)
+							if !ok {
+								continue
+							}
 
-								detail := &UpstreamHealthDetail{}
+							detail := &UpstreamHealthDetail{}
 
-								if metrics, ok := upstreamMetrics[dial]; ok {
-									detail.NumRequests = metrics.NumRequests
-									detail.Fails = metrics.Fails
-								}
+							if metrics, ok := upstreamMetrics[dial]; ok {
+								detail.NumRequests = metrics.NumRequests
+								detail.Fails = metrics.Fails
+							}
 
-								if observedHealthy, ok := upstreamHealth[dial]; ok {
-									// Caddy reports a definitive health status for this upstream.
-									detail.Healthy = observedHealthy
-								} else {
-									// No observation from Caddy at all.
-									detail.Unknown = true
-								}
+							if observedHealthy, ok := upstreamHealth[dial]; ok {
+								// Caddy reports a definitive health status for this upstream.
+								detail.Healthy = observedHealthy
+							} else if detail.Fails > 0 {
+								// Passive health observed failures.
+								detail.Healthy = false
+							} else {
+								// No observation from Caddy at all.
+								detail.Unknown = true
+							}
 
-								healthStatus[serverName][dial] = detail
+							if detail.Unknown {
+								// Avoid showing "unknown" as the default for healthy-looking upstreams:
+								// if there are no failures and the upstream is configured, treat it as
+								// healthy until Caddy reports otherwise.
+								detail.Unknown = false
+								detail.Healthy = true
+							}
+
+							healthStatus[serverName][dial] = detail
 							}
 						}
 
@@ -1358,8 +1370,15 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 
 								if observedHealthy, ok := upstreamHealth[dial]; ok {
 									detail.Healthy = observedHealthy
+								} else if detail.Fails > 0 {
+									detail.Healthy = false
 								} else {
 									detail.Unknown = true
+								}
+
+								if detail.Unknown {
+									detail.Unknown = false
+									detail.Healthy = true
 								}
 
 								healthStatus[serverName][dial] = detail
@@ -1414,7 +1433,11 @@ func (s *CaddyService) getUpstreamMetrics() map[string]*upstreamMetric {
 	}
 
 	for _, up := range upstreams {
-		dial, ok := up["dial"].(string)
+		// Caddy uses "address" for the upstream key in this endpoint.
+		key, ok := up["address"].(string)
+		if !ok {
+			key, ok = up["dial"].(string)
+		}
 		if !ok {
 			continue
 		}
@@ -1429,7 +1452,7 @@ func (s *CaddyService) getUpstreamMetrics() map[string]*upstreamMetric {
 			metric.Fails = int(fails)
 		}
 
-		result[dial] = metric
+		result[key] = metric
 	}
 
 	return result
