@@ -175,12 +175,11 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 	}
 	var creds map[string]string
 	json.Unmarshal([]byte(credentials), &creds)
-	providerJSON, err := p.BuildCredentialsJSON(creds)
-	if err != nil {
+	if err := p.Validate(creds); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Credentials valid", Data: providerJSON})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "凭证有效"})
 }
 
 func (h *Handlers) ListCertificates(c *gin.Context) {

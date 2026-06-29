@@ -14,6 +14,7 @@ type Provider interface {
 	ModuleName() string
 	CredentialFields() []CredentialField
 	BuildCredentialsJSON(creds map[string]string) (map[string]interface{}, error)
+	Validate(creds map[string]string) error
 }
 
 var registry = map[string]Provider{}

@@ -42,7 +42,7 @@
         </el-table-column>
         <el-table-column v-if="authStore.nodeMode === 'master'" label="操作" width="180" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="testConfig(row)">测试</el-button>
+            <el-button link type="primary" size="small" :loading="testingId === row.id" @click="testConfig(row)">测试</el-button>
             <el-button link type="primary" size="small" @click="openConfigDialog(row)">编辑</el-button>
             <el-button link type="danger" size="small" @click="deleteConfig(row)">删除</el-button>
           </template>
@@ -131,6 +131,7 @@ const configs = ref<CertConfig[]>([])
 const providers = ref<DNSProvider[]>([])
 const dialogVisible = ref(false)
 const editingId = ref<number | null>(null)
+const testingId = ref<number | null>(null)
 const form = ref<{
   name: string
   dns_provider: string
@@ -222,11 +223,15 @@ const deleteConfig = async (config: CertConfig) => {
 }
 
 const testConfig = async (config: CertConfig) => {
+  testingId.value = config.id || null
   try {
     const res = await request.post(`/certificate-configs/${config.id}/test`)
     ElMessage.success(res.message || '凭证有效')
-  } catch (error) {
-    console.error('Failed to test cert config:', error)
+  } catch (error: any) {
+    const msg = error?.response?.data?.message || error?.message || '测试失败'
+    ElMessage.error(msg)
+  } finally {
+    testingId.value = null
   }
 }
 
