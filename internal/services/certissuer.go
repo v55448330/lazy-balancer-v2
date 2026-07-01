@@ -94,7 +94,7 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 		return fmt.Errorf("read global acme email: %w", err)
 	}
 
-	// Load DNS credentials from the rule's selected provider if enabled.
+	// Load DNS credentials from the rule's selected provider.
 	var dnsCredentialsJSON string
 	if acmeConfigID > 0 {
 		err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,'') FROM certificate_configs WHERE id=? AND enabled=1", acmeConfigID).Scan(&dnsCredentialsJSON)
@@ -104,16 +104,8 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 		}
 	}
 	if dnsCredentialsJSON == "" {
-		// Fallback to any enabled provider with credentials.
-		err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,'') FROM certificate_configs WHERE enabled=1 AND COALESCE(dns_credentials,'') != '' ORDER BY id LIMIT 1").Scan(&dnsCredentialsJSON)
-		if err != nil && err != sql.ErrNoRows {
-			s.failJob(jobID, "读取 DNS 凭证失败")
-			return fmt.Errorf("read fallback dns credentials: %w", err)
-		}
-	}
-	if dnsCredentialsJSON == "" {
-		s.failJob(jobID, "没有可用的 DNS 提供商，请先配置并启用 DNS 凭证")
-		return fmt.Errorf("no enabled DNS provider configured")
+		s.failJob(jobID, "未选择可用的 DNS 提供商，请先在规则中选择 DNS 凭证")
+		return fmt.Errorf("no enabled DNS provider selected for rule")
 	}
 
 	provider, err := dnsprovider.NewProviderFromCredentials(dnsCredentialsJSON)
