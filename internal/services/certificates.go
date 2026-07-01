@@ -2,7 +2,10 @@ package services
 
 import (
 	"crypto/x509"
+	"database/sql"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -51,32 +54,42 @@ func (s *CertificateService) Start() {
 
 func (s *CertificateService) Stop() { close(s.stopCh) }
 
-func (s *CertificateService) CreateJobsForRule(ruleID string, domains string) error {
+// CreateOrRequeueCertJob creates a queued cert job for the rule and enqueues it.
+func CreateOrRequeueCertJob(ruleID, domains string, caProviderID int, qm *CAQueueManager) error {
 	list := normalizeAndValidateDomains(domains)
 	if list == nil {
-		return nil
+		return fmt.Errorf("invalid ACME domains: %s", domains)
 	}
 	primary := list[0]
-	joinedDomains := strings.Join(list, ",")
+	joined := strings.Join(list, ",")
 
-	var existing int
-	err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE rule_id = ? AND domain = ?", ruleID, primary).Scan(&existing)
+	var jobID int
+	err := db.DB.QueryRow("SELECT id FROM cert_jobs WHERE rule_id=? AND domain=?", ruleID, primary).Scan(&jobID)
 	if err != nil {
-		log.Printf("Create cert job failed: %v", err)
-		return nil
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("lookup cert job: %w", err)
+		}
+		res, err := db.DB.Exec(
+			"INSERT INTO cert_jobs (rule_id, domain, status, message, ca_provider_id) VALUES (?, ?, 'queued', '等待排队签发', ?)",
+			ruleID, joined, caProviderID,
+		)
+		if err != nil {
+			return fmt.Errorf("create cert job: %w", err)
+		}
+		id64, err := res.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("get last insert id: %w", err)
+		}
+		jobID = int(id64)
+	} else {
+		if _, err := db.DB.Exec(
+			"UPDATE cert_jobs SET status='queued', message='重新排队签发', updated_at=datetime('now'), ca_provider_id=? WHERE id=?",
+			caProviderID, jobID,
+		); err != nil {
+			return fmt.Errorf("update cert job: %w", err)
+		}
 	}
-	if existing > 0 {
-		return nil
-	}
-
-	_, err = db.DB.Exec(`
-		INSERT INTO cert_jobs (rule_id, domain, status, message)
-		VALUES (?, ?, 'pending', '等待签发')
-	`, ruleID, joinedDomains)
-	if err != nil {
-		log.Printf("Create cert job failed: %v", err)
-	}
-	return nil
+	return qm.Enqueue(caProviderID, jobID, ruleID, joined)
 }
 
 func (s *CertificateService) renewExpiringCertificates() {

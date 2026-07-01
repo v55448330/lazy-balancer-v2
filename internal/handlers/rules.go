@@ -593,13 +593,13 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
-			enable_active_health_check, host_header, enable_tls, tls_source, acme_config_id, tls_cert, tls_key, tls_http_redirect,
+			enable_active_health_check, host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
 			enable_compress, compress_types, enabled, created_by, updated_at, caddy_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
-		req.EnableActiveHealthCheck, req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.TLSCert, req.TLSKey,
+		req.EnableActiveHealthCheck, req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.CAProviderID, req.TLSCert, req.TLSKey,
 		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, 1, userIDInt, time.Now().Format("2006-01-02 15:04:05"), caddyID)
 
 	if err != nil {
@@ -691,14 +691,12 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			// Trigger ACME issuance if needed
 			if req.TLSSource == "acme_dns" && req.Domain != "" {
 				go func() {
-					issuer := services.NewCertIssuer(func() error {
+					qm := services.GetCAQueueManager(func() error {
 						fullConfig := services.GenerateCaddyConfig(h.cfg)
 						return h.caddyService.ApplyConfig(fullConfig)
 					})
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-					defer cancel()
-					if err := issuer.IssueWithDefaultProvider_DEPRECATED(ctx, caddyID, req.Domain); err != nil {
-						log.Printf("Auto cert issuance failed for %s: %v", req.Domain, err)
+					if err := services.CreateOrRequeueCertJob(caddyID, req.Domain, req.CAProviderID, qm); err != nil {
+						log.Printf("Auto cert enqueue failed for %s: %v", req.Domain, err)
 					}
 				}()
 			}

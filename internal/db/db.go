@@ -199,6 +199,7 @@ func createTables() error {
 		expires_at DATETIME,
 		cert_pem TEXT,
 		key_pem TEXT,
+		ca_provider_id INTEGER DEFAULT 0,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME
 	);
@@ -425,9 +426,8 @@ func runMigrations() error {
 	}
 
 	// cert_jobs unique index migration
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_index_info('idx_cert_jobs_rule_domain_unique')").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)")
+	if _, err := DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)"); err != nil {
+		return fmt.Errorf("failed to create cert_jobs unique index: %w", err)
 	}
 
 	// cert_job_logs table migration
