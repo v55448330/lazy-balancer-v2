@@ -138,5 +138,9 @@ func (h *Handlers) GetCertJobLogs(c *gin.Context) {
 		logs[i], logs[j] = logs[j], logs[i]
 	}
 
+	if logs == nil {
+		logs = []models.CertJobLog{}
+	}
+
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: logs})
 }
