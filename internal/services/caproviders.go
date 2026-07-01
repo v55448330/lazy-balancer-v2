@@ -269,18 +269,14 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 	}
 
 	if req.Enabled != nil && !*req.Enabled && existing.Enabled {
-		res, err := tx.Exec(`
-			UPDATE ca_providers SET enabled=0, updated_at=datetime('now')
-			WHERE id=? AND (SELECT COUNT(*) FROM ca_providers WHERE id != ? AND enabled=1) > 0
-		`, id, id)
+		var enabledCount int
+		err := tx.QueryRow(`
+			SELECT COUNT(*) FROM ca_providers WHERE id != ? AND enabled=1
+		`, id).Scan(&enabledCount)
 		if err != nil {
 			return err
 		}
-		rows, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if rows == 0 {
+		if enabledCount == 0 {
 			return ErrCAProviderLastEnabled
 		}
 	}
