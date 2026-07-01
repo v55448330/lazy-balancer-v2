@@ -176,7 +176,7 @@ if (tlsRules.length > 0) {
 >
   <template #reference>
     <el-tag type="success" size="small" effect="plain">
-      {{ row.tls_auto_cert ? '自动' : '手动' }}
+      {{ row.tls_source === 'acme_dns' ? '自动' : '手动' }}
     </el-tag>
   </template>
   <div class="cert-tooltip">

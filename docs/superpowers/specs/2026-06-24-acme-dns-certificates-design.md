@@ -11,8 +11,8 @@
 ### 1.1 当前状态
 - Caddy 当前版本为 `v2.11.2`，项目需要升级到最新版 `v2.11.4`
 - 系统设置页面已有「免费证书配置」UI 和 `certificate_configs` 表，但尚未把配置注入 Caddy
-- 规则 TLS 目前只支持「手动上传证书」和「自动证书（tls_auto_cert）」，后者依赖 Caddy 内置 HTTP 挑战
-- 缺少 ACME + DNS 挑战的自动签发能力
+- 规则 TLS 目前支持「手动上传证书」和「ACME + DNS 自动签发（tls_source = 'acme_dns'）」
+- 自动签发由 `cert_jobs` 任务跟踪，并通过 `ca_providers` 选择具体 CA
 - 缺少签发进度追踪和证书过期时间展示
 
 ### 1.2 目标
@@ -85,14 +85,15 @@ RUN xcaddy build v2.11.4 \
 - Cloudflare: `{ "api_token": "xxx" }`
 
 ### 4.3 `lb_rules` 表扩展
-增加 TLS 来源字段，替代原有 `tls_auto_cert` 布尔值语义：
+增加 TLS 来源字段，替代已废弃的 `tls_auto_cert` 布尔值语义。当前规则通过 `tls_source` 选择证书来源，`ca_provider_id` 选择具体 CA Provider：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `tls_source` | TEXT | `manual` / `acme_dns` |
 | `acme_config_id` | INTEGER FK | 引用的 certificate_configs.id |
+| `ca_provider_id` | INTEGER FK | 引用的 ca_providers.id，`0` 表示使用系统默认 |
 
-保留 `tls_cert`, `tls_key` 用于手动模式。
+保留 `tls_cert`, `tls_key` 用于手动模式。历史字段 `tls_email`（规则级 ACME 邮箱）已废弃，ACME 邮箱现全局配置在 `global_config.acme_email`，CA Provider 在「系统设置 / 免费证书」的 CA Providers 卡片中管理。
 
 ### 4.4 `cert_jobs` 新建表
 用于追踪每个域名的签发状态：

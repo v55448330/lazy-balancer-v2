@@ -1,5 +1,7 @@
 # ACME DNS 自动证书签发实现计划
 
+> **⚠️ 已过时**：本计划已被 `2026-07-01-ca-provider-queue.md` 取代。后续实现使用 `ca_providers` 表与按 CA 排队的调度器，规则级字段 `tls_auto_cert` 已废弃，由 `tls_source` + `ca_provider_id` 替代，ACME 邮箱全局配置在 `global_config.acme_email`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 升级 Caddy 到 v2.11.4，新增 ACME + DNS 挑战免费证书自动签发能力，支持进度追踪和过期提醒，并重构系统设置页面导航。

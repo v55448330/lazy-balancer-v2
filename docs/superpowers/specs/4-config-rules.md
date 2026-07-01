@@ -101,8 +101,7 @@ TCP规则(port=8080) + TCP规则(port=8080) → 允许（同一端口可放多�
    ├── 验证 ListenPort（1-65535）
    ├── 验证 Strategy（round_robin/ip_hash/least_conn/random/first/least_time）
    ├── 验证 Domain（格式验证）
-   ├── 验证 Upstreams（至少一个、host格式、端口、去重、至少一个启用）
-   ├── 验证 TLSEmail（必须包含 @）
+   ├── 验证 Upstreams（至少一个、host格式、端口，去重、至少一个启用）
    ├── 验证 TLSHSTS（>= 0）
    ├── 验证 HealthCheckInterval/Timeout（>= 1）
    └── 调用 ValidateRouteMergedConfig 验证合并后的完整配置
@@ -435,9 +434,10 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 - Strategy: round_robin/ip_hash/least_conn/random/first/least_time
 - Domain: 格式验证（调用 isValidDomain）
 - Upstreams: 至少一个、host格式（IP或域名）、端口1-65535、去重、至少一个启用
-- TLSEmail: 必须包含 @
 - TLSHSTS: >= 0
 - HealthCheckInterval/Timeout: >= 1
+
+> **注意**：历史字段 `TLSEmail`（规则级 ACME 邮箱验证）已废弃。ACME 邮箱现全局配置在 `global_config.acme_email`，规则级 CA 选择通过 `ca_provider_id` 指定，CA Provider 在「系统设置 / 免费证书」的 CA Providers 卡片中管理。
 
 ### 7.2 ValidateRouteMergedConfig
 

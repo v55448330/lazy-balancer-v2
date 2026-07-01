@@ -178,10 +178,11 @@ type LbRule struct {
     Upstreams                     []Upstream    `json:"upstreams"`
     HostHeader                    string       `json:"host_header"`
     EnableTLS                     bool         `json:"enable_tls"`
+    TLSSource                     string       `json:"tls_source"`
+    ACMEConfigID                  int          `json:"acme_config_id"`
+    CAProviderID                  int          `json:"ca_provider_id"`
     TLSCert                       string       `json:"tls_cert,omitempty"`
     TLSKey                        string       `json:"tls_key,omitempty"`
-    TLSAutoCert                   bool         `json:"tls_auto_cert"`
-    TLSEmail                      string       `json:"tls_email"`
     TLSHTTPRedirect               bool         `json:"tls_http_redirect"`
     TLSHSTS                       int          `json:"tls_hsts"`
     EnableCompress                bool         `json:"enable_compress"`
@@ -193,6 +194,14 @@ type LbRule struct {
     UpdatedAt                     sql.NullTime `json:"updated_at"`
 }
 ```
+
+**TLS 字段说明（当前行为）**:
+- `enable_tls`: 是否启用 TLS。
+- `tls_source`: 证书来源，`manual`（手动上传）或 `acme_dns`（ACME + DNS 自动签发）。
+- `acme_config_id`: 引用的 DNS 提供商配置（`certificate_configs.id`）。
+- `ca_provider_id`: 选择的 CA Provider（`ca_providers.id`），`0` 表示使用系统默认。
+- `tls_cert` / `tls_key`: 手动模式下的证书与私钥。
+- 历史字段 `tls_auto_cert`（布尔值）与 `tls_email`（规则级邮箱）已废弃：ACME 邮箱现在全局配置在 `global_config.acme_email`，CA Provider 在「系统设置 / 免费证书」的 CA Providers 卡片中管理。
 
 ### 3.2 Upstream 结构体
 
@@ -554,7 +563,6 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
     // - Strategy: round_robin/ip_hash/least_conn/random/first/least_time
     // - Domain: 格式验证 (调用 isValidDomain)
     // - Upstreams: 至少一个、host 格式、端口 1-65535、去重、至少一个启用
-    // - TLSEmail: 必须包含 @
     // - TLSHSTS: >= 0
     // - HealthCheckInterval/Timeout: >= 1
 
