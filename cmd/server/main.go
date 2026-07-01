@@ -41,13 +41,19 @@ func main() {
 
 	// Initialize services
 	caddyService := services.NewCaddyService(cfg.CaddyAdminURL)
-	certService := services.NewCertificateService(cfg.CaddyAdminURL, func() error {
+	caddyReloader := func() error {
 		return caddyService.ApplyConfig(services.GenerateCaddyConfig(cfg))
-	})
+	}
+	certService := services.NewCertificateService(cfg.CaddyAdminURL, caddyReloader)
 	metricsService := services.NewMetricsService(cfg.CaddyMetricsURL, cfg.MetricsInterval)
 	nodeService := services.NewNodeService()
 	syncService := services.NewSyncService()
 	caProviderService := services.NewCAProviderService()
+
+	// Re-enqueue non-terminal certificate jobs before applying Caddy config so that
+	// pending/processing/queued jobs are scheduled without blocking startup.
+	qm := services.GetCAQueueManager(caddyReloader)
+	go services.RequeueNonTerminalJobs(qm)
 
 	// Initialize handlers
 	h := handlers.NewHandlers(cfg, caddyService, metricsService, nodeService, syncService, certService, caProviderService)
