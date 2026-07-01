@@ -15,7 +15,6 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
-	"lazy-balancer-v2/internal/services/dnsproviders"
 )
 
 // CaddyService handles Caddy configuration management
@@ -1741,11 +1740,24 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 
 		server["routes"] = routes
 
-		// Configure TLS for manual certificates
+		// Configure TLS for manual and ACME certificates
 		var tlsPolicies []interface{}
 		for _, ru := range rules {
 			r := ru.rule
-			if r.EnableTLS && r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
+			if !r.EnableTLS {
+				continue
+			}
+			if r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
+				domainHosts := splitAndTrim(r.Domain)
+				tlsPolicies = append(tlsPolicies, map[string]interface{}{
+					"match": map[string]interface{}{
+						"sni": domainHosts,
+					},
+					"certificate_selection": map[string]interface{}{
+						"any_tag": []string{r.CaddyID},
+					},
+				})
+			} else if r.TLSSource == "acme_dns" && isACMECertIssued(r.CaddyID, r.Domain) {
 				domainHosts := splitAndTrim(r.Domain)
 				tlsPolicies = append(tlsPolicies, map[string]interface{}{
 					"match": map[string]interface{}{
@@ -1776,6 +1788,10 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 	for _, ru := range allRules {
 		r := ru.rule
 		if r.Protocol == "http" && r.EnableTLS && r.TLSHTTPRedirect {
+			// Only redirect to HTTPS if the certificate is actually available.
+			if r.TLSSource == "acme_dns" && !isACMECertIssued(r.CaddyID, r.Domain) {
+				continue
+			}
 			domainHosts := splitAndTrim(r.Domain)
 			if len(domainHosts) > 0 {
 				redirectRoutes = append(redirectRoutes, map[string]interface{}{
@@ -1798,16 +1814,28 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		}
 	}
 
-	// Collect manual TLS certificates for all rules
+	// Collect TLS certificates for all rules (manual + ACME from cert_jobs)
 	var tlsCertificates []map[string]interface{}
 	for _, ru := range allRules {
 		r := ru.rule
-		if r.EnableTLS && r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
+		if !r.EnableTLS {
+			continue
+		}
+		if r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
 			tlsCertificates = append(tlsCertificates, map[string]interface{}{
 				"certificate": r.TLSCert,
 				"key":         r.TLSKey,
 				"tags":        []string{r.CaddyID},
 			})
+		} else if r.TLSSource == "acme_dns" {
+			certPEM, keyPEM, issued := loadACMECertificate(r.CaddyID, r.Domain)
+			if issued {
+				tlsCertificates = append(tlsCertificates, map[string]interface{}{
+					"certificate": certPEM,
+					"key":         keyPEM,
+					"tags":        []string{r.CaddyID},
+				})
+			}
 		}
 	}
 
@@ -1962,29 +1990,12 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		}
 	}
 
-	// Add TLS automation policies for ACME DNS challenge
-	var automationRules []tlsAutomationRule
-	for _, rwu := range allRules {
-		automationRules = append(automationRules, tlsAutomationRule{
-			EnableTLS:    rwu.rule.EnableTLS,
-			TLSSource:    rwu.rule.TLSSource,
-			ACMEConfigID: rwu.rule.ACMEConfigID,
-			ACMEEmail:    rwu.rule.ACMEEmail,
-			Domain:       rwu.rule.Domain,
-		})
-	}
-	automationPolicies := buildTLSAutomationPolicies(automationRules, acmeEmail)
-	if len(automationPolicies) > 0 || len(tlsCertificates) > 0 {
-		tlsApp := map[string]interface{}{}
-		if len(tlsCertificates) > 0 {
-			tlsApp["certificates"] = map[string]interface{}{
+	// TLS app: load certificates from database (manual + ACME), no Caddy ACME automation.
+	if len(tlsCertificates) > 0 {
+		tlsApp := map[string]interface{}{
+			"certificates": map[string]interface{}{
 				"load_pem": tlsCertificates,
-			}
-		}
-		if len(automationPolicies) > 0 {
-			tlsApp["automation"] = map[string]interface{}{
-				"policies": automationPolicies,
-			}
+			},
 		}
 		apps["tls"] = tlsApp
 	}
@@ -2065,6 +2076,43 @@ func defaultCaddyConfig() map[string]interface{} {
 	}
 }
 
+// loadACMECertificate reads the issued ACME certificate and key from cert_jobs
+// for the given rule and domain. Returns (certPEM, keyPEM, true) if issued.
+func loadACMECertificate(caddyID, domain string) (string, string, bool) {
+	parts := strings.Split(domain, ",")
+	domains := make([]string, 0, len(parts))
+	for _, d := range parts {
+		d = strings.TrimSpace(d)
+		if d != "" {
+			domains = append(domains, d)
+		}
+	}
+	for _, d := range domains {
+		var certPEM, keyPEM string
+		err := db.DB.QueryRow(`
+			SELECT cert_pem, key_pem
+			FROM cert_jobs
+			WHERE rule_id=? AND (domain=? OR domain=?)
+			  AND status='issued'
+			  AND cert_pem IS NOT NULL AND cert_pem != ''
+			  AND key_pem IS NOT NULL AND key_pem != ''
+			ORDER BY updated_at DESC LIMIT 1`,
+			caddyID, d, domains[0],
+		).Scan(&certPEM, &keyPEM)
+		if err == nil && certPEM != "" && keyPEM != "" {
+			return certPEM, keyPEM, true
+		}
+	}
+	return "", "", false
+}
+
+// isACMECertIssued returns true if cert_jobs has an issued certificate for the
+// given rule (by caddy_id) and domain.
+func isACMECertIssued(caddyID, domain string) bool {
+	_, _, issued := loadACMECertificate(caddyID, domain)
+	return issued
+}
+
 func splitAndTrim(s string) []string {
 	if s == "" {
 		return nil
@@ -2079,83 +2127,7 @@ func splitAndTrim(s string) []string {
 	return result
 }
 
-func buildTLSAutomationPolicies(rules []tlsAutomationRule, acmeEmail string) []map[string]interface{} {
-	policies := []map[string]interface{}{}
-	for _, rule := range rules {
-		if !rule.EnableTLS || rule.TLSSource != "acme_dns" || rule.ACMEConfigID == 0 {
-			continue
-		}
 
-		var provider, credentials string
-		err := db.DB.QueryRow("SELECT dns_provider, dns_credentials FROM certificate_configs WHERE id=? AND enabled=1", rule.ACMEConfigID).Scan(&provider, &credentials)
-		if err != nil {
-			log.Printf("Failed to load certificate config %d: %v", rule.ACMEConfigID, err)
-			continue
-		}
-
-		p, ok := dnsproviders.Get(provider)
-		if !ok {
-			log.Printf("Unknown DNS provider %s for config %d", provider, rule.ACMEConfigID)
-			continue
-		}
-
-		var creds map[string]string
-		if err := json.Unmarshal([]byte(credentials), &creds); err != nil {
-			log.Printf("Failed to unmarshal DNS credentials for config %d: %v", rule.ACMEConfigID, err)
-			continue
-		}
-		providerJSON, err := p.BuildCredentialsJSON(creds)
-		if err != nil {
-			log.Printf("Failed to build DNS credentials JSON for config %d: %v", rule.ACMEConfigID, err)
-			continue
-		}
-
-		for _, domain := range strings.Split(rule.Domain, ",") {
-			domain = strings.TrimSpace(domain)
-			if domain == "" {
-				continue
-			}
-
-			providerCfg := map[string]interface{}{
-				"name": p.Code(),
-			}
-			for k, v := range providerJSON {
-				providerCfg[k] = v
-			}
-
-			email := rule.ACMEEmail
-			if email == "" {
-				email = acmeEmail
-			}
-
-			policies = append(policies, map[string]interface{}{
-				"subjects": []string{domain},
-				"issuers": []map[string]interface{}{
-					{
-						"module": "acme",
-						"email":  email,
-						"challenges": map[string]interface{}{
-							"dns": map[string]interface{}{
-								"provider":  providerCfg,
-								"ttl":       "600s",
-								"resolvers": []string{"119.29.29.29", "1.1.1.1"},
-							},
-						},
-					},
-				},
-			})
-		}
-	}
-	return policies
-}
-
-type tlsAutomationRule struct {
-	EnableTLS    bool
-	TLSSource    string
-	ACMEConfigID int
-	ACMEEmail    string
-	Domain       string
-}
 
 type SingleRuleConfig struct {
 	ID                      int
