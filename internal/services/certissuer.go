@@ -87,15 +87,18 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 			return fmt.Errorf("read certificate config: %w", err)
 		}
 	}
+	if strings.TrimSpace(acmeEmail) == "" {
+		db.DB.QueryRow("SELECT COALESCE(acme_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail)
+	}
+	if strings.TrimSpace(acmeEmail) == "" {
+		db.DB.QueryRow("SELECT COALESCE(letsencrypt_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail)
+	}
 	if dnsCredentialsJSON == "" {
 		// Fallback to legacy global_config
 		err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,'') FROM global_config WHERE id=1").Scan(&dnsCredentialsJSON)
 		if err != nil {
 			s.failJob(jobID, "读取 DNS 凭证失败")
 			return fmt.Errorf("read global dns credentials: %w", err)
-		}
-		if acmeEmail == "" {
-			db.DB.QueryRow("SELECT COALESCE(letsencrypt_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail)
 		}
 	}
 	if dnsCredentialsJSON == "" {

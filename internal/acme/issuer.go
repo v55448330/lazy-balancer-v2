@@ -46,7 +46,7 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 	}
 	log("order_created", fmt.Sprintf("订单已创建，共 %d 个授权", len(order.AuthzURLs)))
 
-	// Step 3: Present DNS-01 challenges for all authorizations
+	// Step 3: Clean up any stale DNS-01 TXT records first, then present new challenges.
 	type challengeInfo struct {
 		domain    string
 		tokenFQDN string
@@ -78,8 +78,14 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 			return "", "", fmt.Errorf("dns01 record: %w", err)
 		}
 
+		zone := zoneFromDomain(domain)
+		log("cleanup_dns", fmt.Sprintf("清理可能残留的 TXT 记录 %s", tokenFQDN))
+		if err := i.Provider.CleanUp(ctx, zone, tokenFQDN); err != nil {
+			log("cleanup_warning", fmt.Sprintf("清理旧 TXT 记录失败 %s: %v", tokenFQDN, err))
+		}
+
 		log("presenting_dns", fmt.Sprintf("写入 TXT 记录 %s", tokenFQDN))
-		if err := i.Provider.Present(ctx, zoneFromDomain(domain), tokenFQDN, keyAuth, 600); err != nil {
+		if err := i.Provider.Present(ctx, zone, tokenFQDN, keyAuth, 600); err != nil {
 			return "", "", fmt.Errorf("present dns for %s: %w", domain, err)
 		}
 
