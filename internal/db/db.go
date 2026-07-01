@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,16 +53,16 @@ func Initialize(dataDir string) error {
 		return fmt.Errorf("failed to create tables: %w", err)
 	}
 
-	// Run migrations
-	if err := runMigrations(); err != nil {
-		return fmt.Errorf("failed to run migrations: %w", err)
-	}
-
 	// Ensure default config row exists
 	var configCount int
 	DB.QueryRow("SELECT COUNT(*) FROM global_config").Scan(&configCount)
 	if configCount == 0 {
 		DB.Exec("INSERT INTO global_config (id, caddy_config) VALUES (1, '{}')")
+	}
+
+	// Run migrations
+	if err := runMigrations(); err != nil {
+		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
 	log.Println("Database initialized successfully")
@@ -130,6 +131,20 @@ func createTables() error {
 		updated_at DATETIME,
 		updated_by INTEGER,
 		caddy_id VARCHAR(20) PRIMARY KEY
+	);
+
+	-- CA Providers table for ACME certificate issuance
+	CREATE TABLE IF NOT EXISTS ca_providers (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name VARCHAR(100) NOT NULL,
+		provider VARCHAR(50) NOT NULL,
+		directory_url VARCHAR(255) NOT NULL,
+		credentials TEXT,
+		max_concurrent INTEGER DEFAULT 1,
+		min_interval_ms INTEGER DEFAULT 2000,
+		enabled BOOLEAN DEFAULT 1,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
 	-- Upstreams table (rule_id now references caddy_id)
@@ -286,6 +301,28 @@ func runMigrations() error {
 		DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name=?", col).Scan(&colCount)
 		if colCount == 0 {
 			DB.Exec("ALTER TABLE lb_rules ADD COLUMN " + col + " " + dtype)
+		}
+	}
+
+	// ca_providers columns are created by createTables; here we only add columns to existing tables.
+	newColumns := map[string]string{
+		"lb_rules.ca_provider_id":              "INTEGER DEFAULT 0",
+		"cert_jobs.ca_provider_id":             "INTEGER DEFAULT 0",
+		"global_config.default_ca_provider_id": "INTEGER DEFAULT 0",
+	}
+	for col, dtype := range newColumns {
+		parts := strings.Split(col, ".")
+		if len(parts) != 2 {
+			continue
+		}
+		table, name := parts[0], parts[1]
+		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", table, name).Scan(&colCount); err != nil {
+			return fmt.Errorf("failed to check column %s.%s: %w", table, name, err)
+		}
+		if colCount == 0 {
+			if _, err := DB.Exec("ALTER TABLE " + table + " ADD COLUMN " + name + " " + dtype); err != nil {
+				return fmt.Errorf("failed to add column %s.%s: %w", table, name, err)
+			}
 		}
 	}
 
@@ -458,6 +495,36 @@ func runMigrations() error {
 		log.Printf("Warning: lb_rules primary key migration failed: %v", err)
 	}
 
+	// Seed default CA providers if table is empty.
+	var caCount int
+	DB.QueryRow("SELECT COUNT(*) FROM ca_providers").Scan(&caCount)
+	if caCount == 0 {
+		_, err := DB.Exec(`
+			INSERT INTO ca_providers (name, provider, directory_url, credentials, max_concurrent, min_interval_ms, enabled)
+			VALUES
+				('ZeroSSL', 'zerossl', 'https://acme.zerossl.com/v2/DV90', '{}', 1, 10000, 1),
+				('Let''s Encrypt', 'letsencrypt', 'https://acme-v02.api.letsencrypt.org/directory', '{}', 2, 5000, 1)
+		`)
+		if err != nil {
+			log.Printf("Warning: failed to seed CA providers: %v", err)
+		} else {
+			// LastInsertId returns the last row of the multi-row insert (Let's Encrypt),
+			// so look up ZeroSSL's actual ID directly.
+			var zid int64
+			if err := DB.QueryRow("SELECT id FROM ca_providers WHERE provider = 'zerossl' ORDER BY id LIMIT 1").Scan(&zid); err == nil {
+				res, err := DB.Exec("UPDATE global_config SET default_ca_provider_id = ? WHERE id = 1", zid)
+				if err != nil {
+					log.Printf("Warning: failed to set default CA provider: %v", err)
+				} else if rowsAffected, _ := res.RowsAffected(); rowsAffected == 0 {
+					log.Printf("Warning: default CA provider update affected 0 rows")
+				}
+			}
+		}
+	}
+
+	// Backfill any existing CA providers that were seeded before updated_at had a default.
+	_, _ = DB.Exec("UPDATE ca_providers SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL")
+
 	return nil
 }
 
@@ -515,6 +582,7 @@ func migrateLbRulesPrimaryKey() error {
 			tls_http_redirect BOOLEAN DEFAULT FALSE,
 			tls_source VARCHAR(20) DEFAULT 'manual',
 			acme_config_id INTEGER DEFAULT 0,
+			ca_provider_id INTEGER DEFAULT 0,
 			enable_compress BOOLEAN DEFAULT TRUE,
 
 			compress_types VARCHAR(100) DEFAULT 'gzip',
@@ -534,7 +602,26 @@ func migrateLbRulesPrimaryKey() error {
 
 	// Copy data from old table to new table
 	_, err = tx.Exec(`
-		INSERT INTO lb_rules_new SELECT * FROM lb_rules
+		INSERT INTO lb_rules_new (
+			id, name, description, protocol, domain, listen_port,
+			strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
+			health_check_path, health_check_interval, health_check_timeout,
+			health_check_unhealthy_threshold, health_check_healthy_threshold,
+			enable_active_health_check, host_header, enable_tls, tls_cert,
+			tls_key, tls_http_redirect, tls_source, acme_config_id,
+			ca_provider_id, enable_compress, compress_types, enabled,
+			created_by, created_at, updated_at, updated_by, caddy_id
+		)
+		SELECT
+			id, name, description, protocol, domain, listen_port,
+			strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
+			health_check_path, health_check_interval, health_check_timeout,
+			health_check_unhealthy_threshold, health_check_healthy_threshold,
+			enable_active_health_check, host_header, enable_tls, tls_cert,
+			tls_key, tls_http_redirect, tls_source, acme_config_id,
+			ca_provider_id, enable_compress, compress_types, enabled,
+			created_by, created_at, updated_at, updated_by, caddy_id
+		FROM lb_rules
 	`)
 	if err != nil {
 		tx.Rollback()
