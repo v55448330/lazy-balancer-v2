@@ -1,10 +1,8 @@
 package services
 
 import (
-	"context"
 	"crypto/x509"
 	"encoding/pem"
-	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -91,37 +89,19 @@ func (s *CertificateService) renewExpiringCertificates() {
 	}
 
 	for _, j := range jobs {
-		// Avoid concurrent renewals: skip if the job is already in a non-terminal state.
-		var currentStatus string
-		err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", j.ID).Scan(&currentStatus)
+		res, err := db.DB.Exec("UPDATE cert_jobs SET status='queued', message='等待排队续期', updated_at=datetime('now') WHERE id=? AND status IN ('issued','failed')", j.ID)
 		if err != nil {
-			log.Printf("Renewal: failed to read job %d status: %v", j.ID, err)
+			log.Printf("Renewal: failed to update job %d status: %v", j.ID, err)
 			continue
 		}
-		if isCertJobActive(currentStatus) {
-			continue
+		if rows, _ := res.RowsAffected(); rows == 0 {
+			continue // status changed concurrently or is active
 		}
-
-		log.Printf("Renewal: re-issuing certificate for rule %s domain %s (expires %s)", j.RuleID, j.Domain, j.ExpiresAt.Time.Format("2006-01-02"))
-		go func(job models.CertJob) {
-			issuer := NewCertIssuer(s.caddyReloader)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			defer cancel()
-			provider, err := loadCAProvider(job.CAProviderID)
-			if err != nil {
-				log.Printf("Renewal: failed to load CA provider for job %d: %v", job.ID, err)
-				failJob(job.ID, fmt.Sprintf("CA Provider 不可用: %v", err))
-				return
-			}
-			if err := issuer.Issue(ctx, job.ID, job.RuleID, job.Domain, provider); err != nil {
-				log.Printf("Renewal: failed to re-issue certificate for %s: %v", job.Domain, err)
-			}
-		}(j)
+		qm := GetCAQueueManager(s.caddyReloader)
+		if err := qm.Enqueue(j.CAProviderID, j.ID, j.RuleID, j.Domain); err != nil {
+			log.Printf("Renewal: failed to enqueue job %d: %v", j.ID, err)
+		}
 	}
-}
-
-func isCertJobActive(status string) bool {
-	return status != "issued" && status != "failed"
 }
 
 func (s *CertificateService) checkManualCertExpiration() {
