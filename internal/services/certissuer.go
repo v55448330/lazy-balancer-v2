@@ -56,14 +56,15 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 	}
 	primaryDomain := domainList[0]
 
-	// Create or reset the cert job (unique per rule_id+domain).
+	// Create or reset the cert job (unique per rule_id+primary_domain).
 	var jobID int
+	joinedDomains := strings.Join(domainList, ",")
 	err := db.DB.QueryRow("SELECT id FROM cert_jobs WHERE rule_id=? AND domain=?", ruleID, primaryDomain).Scan(&jobID)
 	if err != nil {
-		// Insert new job
+		// Insert new job with the full domain list.
 		res, err := db.DB.Exec(
 			"INSERT INTO cert_jobs (rule_id, domain, status, message) VALUES (?, ?, 'creating_account', '开始申请证书')",
-			ruleID, primaryDomain,
+			ruleID, joinedDomains,
 		)
 		if err != nil {
 			return fmt.Errorf("create cert job: %w", err)
@@ -71,7 +72,7 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 		id64, _ := res.LastInsertId()
 		jobID = int(id64)
 	} else {
-		// Reset existing job
+		// Reset existing job, keeping the domain list intact.
 		_, _ = db.DB.Exec(
 			"UPDATE cert_jobs SET status='creating_account', message='重新申请证书', updated_at=datetime('now') WHERE id=?",
 			jobID,

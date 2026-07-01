@@ -53,17 +53,12 @@ func (s *CertificateService) Start() {
 func (s *CertificateService) Stop() { close(s.stopCh) }
 
 func (s *CertificateService) CreateJobsForRule(ruleID string, domains string) error {
-	primary := ""
-	for _, d := range strings.Split(domains, ",") {
-		d = strings.TrimSpace(d)
-		if d != "" {
-			primary = d
-			break
-		}
-	}
-	if primary == "" {
+	list := normalizeAndValidateDomains(domains)
+	if list == nil {
 		return nil
 	}
+	primary := list[0]
+	joinedDomains := strings.Join(list, ",")
 
 	var existing int
 	err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE rule_id = ? AND domain = ?", ruleID, primary).Scan(&existing)
@@ -78,7 +73,7 @@ func (s *CertificateService) CreateJobsForRule(ruleID string, domains string) er
 	_, err = db.DB.Exec(`
 		INSERT INTO cert_jobs (rule_id, domain, status, message)
 		VALUES (?, ?, 'pending', '等待签发')
-	`, ruleID, primary)
+	`, ruleID, joinedDomains)
 	if err != nil {
 		log.Printf("Create cert job failed: %v", err)
 	}
