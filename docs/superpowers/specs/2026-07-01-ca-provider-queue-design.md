@@ -16,7 +16,7 @@ Lazy Balancer V2 的 ACME 证书签发目前仅支持 Let's Encrypt，且使用�
 
 包含：
 
-- 后端：数据模型、ACME client 工厂、CA Provider CRUD API、QueueManager 调度器、规则/重试/续期流程改造。
+- 后端：数据模型、ACME client 工厂、CA Provider 管理 API、QueueManager 调度器、规则/重试/续期流程改造。
 - 前端：「免费证书」页面增加 CA Provider 配置与默认选择、规则 wizard 增加 CA Provider 选择、签发任务列表显示 `queued` 状态。
 - 文档：清理历史遗留的 `tls_auto_cert` / `tls_email` 引用。
 - 验证：使用真实域名完成 Let's Encrypt / ZeroSSL 端到端签发验证（单域与根域+www）。
@@ -112,7 +112,7 @@ queued → creating_account → creating_order → order_created → presenting_
 
 - `queued`：已创建任务，等待 CA 调度器分配执行资源。
 - 只有 `issued` 和 `failed` 状态允许在 UI 点击「重签」。
-- 规则在存在非 `issued`/`failed`/`queued` 状态的任务时禁止编辑/删除；`queued` 状态允许取消排队（可选，首期不做取消功能，仅禁止编辑/删除）。
+- 规则在存在非 `issued`/`failed` 状态的任务时禁止编辑/删除。删除规则时级联删除关联的 `cert_jobs` 与 `cert_job_logs`。`queued` 状态的任务同样禁止编辑/删除规则，需等待其变为终态或删除规则。
 
 ## 调度器设计
 
@@ -248,14 +248,14 @@ account := &acme.Account{
 
 ## API 设计
 
-### CA Provider CRUD
+### CA Provider 管理
+
+CA Provider 仅内置两条记录（Let's Encrypt、ZeroSSL），不支持新增或删除，只允许修改配置与启用/禁用。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/ca-providers` | 列表 |
-| POST | `/api/ca-providers` | 创建 |
-| PUT | `/api/ca-providers/:id` | 更新 |
-| DELETE | `/api/ca-providers/:id` | 删除（若被规则引用则禁止） |
+| PUT | `/api/ca-providers/:id` | 更新配置 |
 | POST | `/api/ca-providers/:id/test` | 测试 EAB/Directory 是否可用 |
 
 请求体示例：
@@ -302,14 +302,13 @@ CAProviderID int `json:"ca_provider_id"`
 在现有「ACME 全局设置」与「DNS 提供商配置」之间新增「CA 提供商」卡片：
 
 - 表格列：名称、类型、并发、间隔、状态、操作。
-- 操作：编辑、删除、测试。
-- 顶部「添加」按钮。
+- 操作：编辑、测试（无新增/删除）。
 - ACME 全局设置表单底部增加「默认 CA 提供商」下拉框。
 
 弹窗表单字段：
 
 - 名称
-- 类型（Let's Encrypt / ZeroSSL）
+- 类型（只读，Let's Encrypt / ZeroSSL）
 - Directory URL（按类型默认填充，可手动修改）
 - 凭证字段（按类型动态显示）：
   - ZeroSSL：EAB KID、EAB HMAC Key
@@ -369,7 +368,7 @@ CAProviderID int `json:"ca_provider_id"`
 ## 风险与回退
 
 - **ZeroSSL EAB 凭证错误**：注册失败，任务标记 `failed`，日志明确提示。
-- **CA Provider 被删除/禁用**：已排队任务继续执行；新规则/重试若指向无效 CA，返回 400 或标记失败。
+- **CA Provider 被禁用**：已排队任务继续执行；新规则/重试若指向被禁用的 CA，解析时自动回退到系统默认的启用 CA，若系统默认也被禁用则标记失败。
 - **调度器重启**：进程重启后，`cert_jobs` 中处于 `queued`/`creating_*` 等非终态的任务需要重新入队。启动时扫描 `status NOT IN ('issued','failed')` 的任务并重新入队。
 - **并发调度器实现 bug**：保留现有全局 mutex 作为兜底方案的成本较高，新实现需仔细处理并发与 recover。
 
@@ -381,9 +380,10 @@ CAProviderID int `json:"ca_provider_id"`
 
 ## 待决策确认项
 
-1. 是否在首期支持「取消排队」功能？（建议不支持，仅显示状态；后续按需添加。）
-2. 是否允许删除被规则引用的 CA Provider？（建议禁止删除，仅允许禁用。）
-3. 任务执行超时是否可配置？（建议保持现有 10 分钟固定值。）
+1. 是否在首期支持「取消排队」功能？—— 不支持；删除规则时级联删除关联任务。
+2. 是否允许删除被规则引用的 CA Provider？—— CA Provider 不提供删除功能，仅支持编辑配置与启用/禁用。
+3. 任务执行超时是否可配置？—— 保持 10 分钟固定超时。
+4. CA Provider 数量是否受限？—— 仅内置 Let's Encrypt 与 ZeroSSL 两种，用户只能修改其配置，不能新增或删除。
 
 ## 附录：EAB 说明
 
