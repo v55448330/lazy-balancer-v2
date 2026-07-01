@@ -1630,15 +1630,15 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 	}
 	allRules = filteredRules
 
-	var dnsProvider, letsencryptEmail, acmeEmail string
+	var dnsProvider, acmeEmail string
 	var isMaster bool
 	var caddyLogPath, caddyLogLevel string
 	var caddyLogSizeMB int
 	db.DB.QueryRow(`
-		SELECT COALESCE(dns_provider,''), COALESCE(letsencrypt_email,''), COALESCE(acme_email,''), is_master,
+		SELECT COALESCE(dns_provider,''), COALESCE(acme_email,''), is_master,
 		       COALESCE(caddy_log_path,'/app/logs/caddy.log'), COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100)
 		FROM global_config WHERE id = 1
-	`).Scan(&dnsProvider, &letsencryptEmail, &acmeEmail, &isMaster, &caddyLogPath, &caddyLogLevel, &caddyLogSizeMB)
+	`).Scan(&dnsProvider, &acmeEmail, &isMaster, &caddyLogPath, &caddyLogLevel, &caddyLogSizeMB)
 
 	servers := make(map[string]interface{})
 

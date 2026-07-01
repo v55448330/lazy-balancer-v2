@@ -209,7 +209,7 @@ func createTables() error {
 		caddy_config TEXT DEFAULT '{}',
 		dns_provider VARCHAR(50) DEFAULT 'dnspod',
 		dns_credentials TEXT,
-		letsencrypt_email VARCHAR(255),
+		acme_email VARCHAR(255),
 		log_level VARCHAR(10) DEFAULT 'info',
 		access_log_enabled BOOLEAN DEFAULT TRUE,
 		is_master BOOLEAN DEFAULT TRUE,
@@ -218,6 +218,7 @@ func createTables() error {
 		caddy_log_path VARCHAR(500) DEFAULT '/app/logs/caddy.log',
 		caddy_log_level VARCHAR(10) DEFAULT 'info',
 		caddy_log_size_mb INTEGER DEFAULT 100,
+		cert_expiry_days INTEGER DEFAULT 30,
 		last_sync DATETIME,
 		updated_at DATETIME
 	);
@@ -319,11 +320,6 @@ func runMigrations() error {
 	`)
 
 	// global_config new columns
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='letsencrypt_email'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN letsencrypt_email VARCHAR(255)")
-	}
-
 	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='acme_email'").Scan(&colCount)
 	if colCount == 0 {
 		DB.Exec("ALTER TABLE global_config ADD COLUMN acme_email VARCHAR(255)")

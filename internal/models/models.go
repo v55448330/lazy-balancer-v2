@@ -76,7 +76,6 @@ type GlobalConfig struct {
 	DNSCredentials   string       `json:"-"`
 	ACMEEmail        string       `json:"acme_email"`
 	CertExpiryDays   int          `json:"cert_expiry_days"`
-	LETSEncryptEmail string       `json:"letsencrypt_email"`
 	LogLevel         string       `json:"log_level"`
 	AccessLogEnabled bool         `json:"access_log_enabled"`
 	CaddyLogPath     string       `json:"caddy_log_path"`
@@ -112,7 +111,6 @@ type TLSCertificate struct {
 	CertPEM   string       `json:"cert_pem"`
 	KeyPEM    string       `json:"key_pem"`
 	Issuer    string       `json:"issuer"`
-	ACMEEmail string       `json:"acme_email"`
 	ExpiresAt sql.NullTime `json:"expires_at"`
 	CreatedAt time.Time    `json:"created_at"`
 	UpdatedAt sql.NullTime `json:"updated_at"`
@@ -312,7 +310,6 @@ type UpdateConfigRequest struct {
 	DNSCredentials   string `json:"dns_credentials"`
 	ACMEEmail        string `json:"acme_email"`
 	CertExpiryDays   int    `json:"cert_expiry_days"`
-	LETSEncryptEmail string `json:"letsencrypt_email"`
 	LogLevel         string `json:"log_level"`
 	AccessLogEnabled *bool  `json:"access_log_enabled"`
 	CaddyLogPath     string `json:"caddy_log_path"`

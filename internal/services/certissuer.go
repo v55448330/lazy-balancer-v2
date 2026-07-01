@@ -81,7 +81,7 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 
 	var dnsCredentialsJSON string
 	if acmeConfigID > 0 {
-		err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,''), COALESCE(acme_email,'') FROM certificate_configs WHERE id=?", acmeConfigID).Scan(&dnsCredentialsJSON, &acmeEmail)
+		err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,'') FROM certificate_configs WHERE id=?", acmeConfigID).Scan(&dnsCredentialsJSON)
 		if err != nil {
 			s.failJob(jobID, "读取 DNS 凭证配置失败")
 			return fmt.Errorf("read certificate config: %w", err)
@@ -89,9 +89,6 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 	}
 	if strings.TrimSpace(acmeEmail) == "" {
 		db.DB.QueryRow("SELECT COALESCE(acme_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail)
-	}
-	if strings.TrimSpace(acmeEmail) == "" {
-		db.DB.QueryRow("SELECT COALESCE(letsencrypt_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail)
 	}
 	if dnsCredentialsJSON == "" {
 		// Fallback to legacy global_config

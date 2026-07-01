@@ -7,10 +7,28 @@
         <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
       </template>
     </el-table-column>
-    <el-table-column prop="message" label="消息" min-width="200" show-overflow-tooltip />
-    <el-table-column prop="expires_at" label="过期时间" width="160">
+    <el-table-column label="证书信息" min-width="260" show-overflow-tooltip>
       <template #default="{ row }">
-        {{ row.expires_at ? formatDate(row.expires_at) : '-' }}
+        <div v-if="row.status === 'issued' && certInfoMap[row.id]" class="cert-info-cell">
+          <div class="cert-info-line">
+            <span class="cert-info-label">颁发者</span>
+            <span class="cert-info-value" :title="certInfoMap[row.id].issuer">{{ certInfoMap[row.id].issuer || '-' }}</span>
+          </div>
+          <div class="cert-info-line">
+            <span class="cert-info-label">过期时间</span>
+            <span class="cert-info-value">{{ certInfoMap[row.id].not_after || '-' }}</span>
+          </div>
+          <div class="cert-info-line">
+            <span class="cert-info-label">更新时间</span>
+            <span class="cert-info-value">{{ formatDate(row.updated_at) }}</span>
+          </div>
+          <div class="cert-info-line">
+            <span class="cert-info-label">剩余天数</span>
+            <span :class="['cert-days', certInfoMap[row.id].status]">{{ certInfoMap[row.id].days_remaining }} 天</span>
+          </div>
+        </div>
+        <span v-else-if="row.status === 'failed'" class="cert-error">{{ row.message }}</span>
+        <span v-else class="text-secondary">{{ row.message || statusLabel(row.status) }}</span>
       </template>
     </el-table-column>
     <el-table-column label="操作" width="160" align="center">
@@ -47,6 +65,8 @@ import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import * as pkijs from 'pkijs'
+import * as asn1js from 'asn1js'
 
 interface CertJob {
   id: number
@@ -55,6 +75,15 @@ interface CertJob {
   status: string
   message: string
   expires_at?: string
+  updated_at?: string
+  cert_pem?: string
+}
+
+interface CertInfo {
+  issuer: string
+  not_after: string
+  days_remaining: number
+  status: string
 }
 
 interface CertJobLog {
@@ -71,6 +100,7 @@ const props = defineProps<{
 
 const jobs = ref<CertJob[]>([])
 const loading = ref(false)
+const certInfoMap = ref<Record<number, CertInfo>>({})
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const logDialogVisible = ref(false)
@@ -143,11 +173,58 @@ const fetchJobs = async () => {
     if (props.ruleId) params.rule_id = props.ruleId
     const res = await request.get('/certificates/jobs', { params })
     jobs.value = res.data || []
+    await fetchCertInfo()
   } catch (error) {
     console.error('Failed to fetch cert jobs:', error)
   } finally {
     loading.value = false
   }
+}
+
+const parseCertInfo = (certPEM: string): CertInfo | null => {
+  if (!certPEM) return null
+  try {
+    const match = certPEM.match(/-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/)
+    if (!match) return null
+    const base64 = match[1].replace(/\s/g, '')
+    const binary = atob(base64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i)
+    }
+    const asn1 = asn1js.fromBER(bytes.buffer)
+    const cert = new pkijs.Certificate({ schema: asn1.result })
+    const notAfterValue = cert.notAfter.value
+    const notAfter = notAfterValue.toLocaleString ? notAfterValue.toLocaleString() : notAfterValue
+    const now = new Date()
+    const expiry = new Date(notAfter)
+    const daysRemaining = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+    const issuerValues: string[] = []
+    for (const rdn of cert.issuer.typesAndValues) {
+      const value = rdn.value?.valueBlock?.value
+      if (value) issuerValues.push(String(value))
+    }
+    return {
+      issuer: issuerValues.join(', ') || '-',
+      not_after: formatDate(notAfter),
+      days_remaining: daysRemaining,
+      status: daysRemaining <= 0 ? 'expired' : (daysRemaining <= 30 ? 'expiring' : 'valid'),
+    }
+  } catch (e) {
+    return null
+  }
+}
+
+const fetchCertInfo = async () => {
+  const issuedJobs = jobs.value.filter(j => j.status === 'issued' && j.cert_pem)
+  const newMap: Record<number, CertInfo> = {}
+  for (const job of issuedJobs) {
+    const info = parseCertInfo(job.cert_pem || '')
+    if (info) {
+      newMap[job.id] = info
+    }
+  }
+  certInfoMap.value = newMap
 }
 
 const retryJob = async (row: CertJob) => {
