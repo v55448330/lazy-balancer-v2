@@ -146,6 +146,21 @@ func (s *CertIssuer) failJob(jobID int, message string) {
 	)
 }
 
+// IsACMECertIssued returns true if cert_jobs has an issued certificate for the
+// given rule (by caddy_id) and domain.
+func IsACMECertIssued(caddyID, domain string) bool {
+	return isACMECertIssued(caddyID, domain)
+}
+
+// ValidateACMEDomains returns an error if the domains string is not a valid
+// ACME certificate request (single domain or root+www).
+func ValidateACMEDomains(domains string) error {
+	if normalizeAndValidateDomains(domains) == nil {
+		return fmt.Errorf("ACME证书仅支持单域名或根域+www二级域名: %s", domains)
+	}
+	return nil
+}
+
 // normalizeAndValidateDomains returns a cleaned domain list if it is either
 // a single domain or a root domain plus its www subdomain. Otherwise nil.
 func normalizeAndValidateDomains(domains string) []string {

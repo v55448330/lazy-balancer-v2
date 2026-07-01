@@ -1,14 +1,11 @@
 package handlers
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -108,20 +105,6 @@ func (h *Handlers) GetCertJob(c *gin.Context) {
 
 func (h *Handlers) GetCertJobLogs(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
-	var j models.CertJob
-	err := db.DB.QueryRow("SELECT id, rule_id, domain, status, message, expires_at, created_at, updated_at FROM cert_jobs WHERE id=?", id).
-		Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.Message, &j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get job"})
-		return
-	}
-
-	var logPath string
-	db.DB.QueryRow("SELECT COALESCE(caddy_log_path,'/app/logs/caddy.log') FROM global_config WHERE id=1").Scan(&logPath)
 
 	limit := 500
 	if l, _ := strconv.Atoi(c.Query("limit")); l > 0 {
@@ -131,41 +114,29 @@ func (h *Handlers) GetCertJobLogs(c *gin.Context) {
 		limit = l
 	}
 
-	lines := make([]string, 0, limit)
-	file, err := os.Open(logPath)
+	rows, err := db.DB.Query(
+		"SELECT id, job_id, level, message, created_at FROM cert_job_logs WHERE job_id=? ORDER BY id DESC LIMIT ?",
+		id, limit,
+	)
 	if err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]interface{}{
-				"domain": j.Domain,
-				"path":   logPath,
-				"lines":  []string{},
-			}})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to open log file: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query logs: " + err.Error()})
 		return
 	}
-	defer file.Close()
+	defer rows.Close()
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if j.Domain != "" && !strings.Contains(line, j.Domain) {
+	var logs []models.CertJobLog
+	for rows.Next() {
+		var l models.CertJobLog
+		if err := rows.Scan(&l.ID, &l.JobID, &l.Level, &l.Message, &l.CreatedAt); err != nil {
 			continue
 		}
-		lines = append(lines, line)
-		if len(lines) > limit {
-			lines = lines[1:]
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read log file: " + err.Error()})
-		return
+		logs = append(logs, l)
 	}
 
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]interface{}{
-		"domain": j.Domain,
-		"path":   logPath,
-		"lines":  lines,
-	}})
+	// Reverse to chronological order for display
+	for i, j := 0, len(logs)-1; i < j; i, j = i+1, j-1 {
+		logs[i], logs[j] = logs[j], logs[i]
+	}
+
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: logs})
 }

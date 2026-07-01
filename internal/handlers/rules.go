@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"io"
@@ -475,6 +476,14 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return
 	}
 
+	// Validate ACME domain restrictions
+	if req.EnableTLS && req.TLSSource == "acme_dns" && req.Domain != "" {
+		if err := services.ValidateACMEDomains(req.Domain); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+	}
+
 	if err := h.validatePort(req.Protocol, req.ListenPort, ""); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -681,16 +690,26 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			return
 		}
 
-		// Reload full Caddy config to apply TLS certificates or ACME automation policies
+		// Reload full Caddy config to apply TLS certificates
 		if req.EnableTLS {
-			log.Printf("Reloading full Caddy config to apply TLS/ACME for caddy_id=%s", caddyID)
-			if req.TLSSource == "acme_dns" {
-				h.certificateService.CreateJobsForRule(caddyID, req.Domain)
-			}
+			log.Printf("Reloading full Caddy config to apply TLS for caddy_id=%s", caddyID)
 			fullConfig := services.GenerateCaddyConfig(h.cfg)
 			if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
 				log.Printf("Failed to reload Caddy config after rule creation: %v", err)
-				// Don't fail the request since the rule is already created and route applied
+			}
+			// Trigger ACME issuance if needed
+			if req.TLSSource == "acme_dns" && req.Domain != "" {
+				go func() {
+					issuer := services.NewCertIssuer(func() error {
+						fullConfig := services.GenerateCaddyConfig(h.cfg)
+						return h.caddyService.ApplyConfig(fullConfig)
+					})
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+					defer cancel()
+					if err := issuer.Issue(ctx, caddyID, req.Domain); err != nil {
+						log.Printf("Auto cert issuance failed for %s: %v", req.Domain, err)
+					}
+				}()
 			}
 		}
 	}
@@ -715,6 +734,25 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		log.Printf("UpdateRule bind error for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request: " + err.Error()})
 		return
+	}
+
+	// Lock rule if ACME certificate is being issued (non-terminal status)
+	var locked bool
+	_ = db.DB.QueryRow(`
+		SELECT 1 FROM cert_jobs
+		WHERE rule_id = ? AND status NOT IN ('issued','failed')
+	`, caddyID).Scan(&locked)
+	if locked {
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书申请中，请等待完成或失败后再修改规则"})
+		return
+	}
+
+	// Validate ACME domain restrictions
+	if req.EnableTLS && req.TLSSource == "acme_dns" && req.Domain != "" {
+		if err := services.ValidateACMEDomains(req.Domain); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
 	}
 	log.Printf("UpdateRule request for caddy_id=%s: enable_tls=%v, tls_auto_cert=%v, cert_len=%d, key_len=%d",
 		caddyID, req.EnableTLS, req.TLSAutoCert, len(req.TLSCert), len(req.TLSKey))
@@ -1100,17 +1138,29 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			return
 		}
 
-		// Reload full Caddy config to apply TLS certificates or ACME automation policies
+		// Reload full Caddy config to apply TLS certificates
 		if req.EnableTLS || req.TLSCert != "" || req.TLSKey != "" || req.TLSSource == "acme_dns" {
 			log.Printf("Reloading full Caddy config after rule update for caddy_id=%s", caddyID)
-			if req.TLSSource == "acme_dns" && req.EnableTLS {
-				h.certificateService.CreateJobsForRule(caddyID, domain)
-			}
 			fullConfig := services.GenerateCaddyConfig(h.cfg)
 			if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
 				log.Printf("Failed to reload Caddy config after rule update: %v", err)
-				// Don't fail the request since the rule is already updated
 			}
+			// Trigger ACME issuance if needed
+			if req.TLSSource == "acme_dns" && req.EnableTLS && domain != "" {
+				if !services.IsACMECertIssued(caddyID, domain) {
+					go func() {
+						issuer := services.NewCertIssuer(func() error {
+							fullConfig := services.GenerateCaddyConfig(h.cfg)
+							return h.caddyService.ApplyConfig(fullConfig)
+						})
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+						defer cancel()
+						if err := issuer.Issue(ctx, caddyID, domain); err != nil {
+							log.Printf("Auto cert issuance failed for %s: %v", domain, err)
+						}
+					}()
+				}
+}
 		}
 	}
 
