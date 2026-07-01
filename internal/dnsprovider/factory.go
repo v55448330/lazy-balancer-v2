@@ -24,6 +24,30 @@ func NewProviderFromCredentials(rawJSON string) (Provider, error) {
 		return nil, fmt.Errorf("invalid dns credentials: %w", err)
 	}
 
+	// Support credentials saved by the UI certificate-configs form, which use
+	// auth_mode, app_id, app_token (DNSPod) or auth_mode, secret_id, secret_key (Tencent).
+	if creds.Mode == "" {
+		var legacy struct {
+			AuthMode  string `json:"auth_mode"`
+			AppID     string `json:"app_id"`
+			AppToken  string `json:"app_token"`
+			SecretID  string `json:"secret_id"`
+			SecretKey string `json:"secret_key"`
+		}
+		if err := json.Unmarshal([]byte(rawJSON), &legacy); err == nil {
+			creds.Mode = legacy.AuthMode
+			if creds.APIToken == "" && legacy.AppID != "" && legacy.AppToken != "" {
+				creds.APIToken = legacy.AppID + "," + legacy.AppToken
+			}
+			if creds.SecretID == "" {
+				creds.SecretID = legacy.SecretID
+			}
+			if creds.SecretKey == "" {
+				creds.SecretKey = legacy.SecretKey
+			}
+		}
+	}
+
 	switch strings.ToLower(creds.Mode) {
 	case "dnspod":
 		if creds.APIToken == "" {

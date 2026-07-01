@@ -57,20 +57,9 @@
               :disabled="!certInfoMap[row.caddy_id]"
             >
               <template #reference>
-                <div class="tls-cell">
-                  <el-tag type="success" size="small" effect="plain">
-                    {{ row.tls_auto_cert ? '自动' : '手动' }}
-                  </el-tag>
-                  <el-tag
-                    v-if="row.tls_source === 'acme_dns' && certJobMap[row.caddy_id]"
-                    :type="certJobMap[row.caddy_id].status === 'issued' ? 'success' : (certJobMap[row.caddy_id].status === 'failed' ? 'danger' : 'warning')"
-                    size="small"
-                    effect="plain"
-                    class="cert-job-tag"
-                  >
-                    {{ certJobStatusLabel(certJobMap[row.caddy_id].status) }}
-                  </el-tag>
-                </div>
+                <el-tag :type="tlsTagType(row)" size="small" effect="plain" class="tls-tag">
+                  {{ tlsTagLabel(row) }}
+                </el-tag>
               </template>
               <div class="cert-tooltip" v-if="certInfoMap[row.caddy_id]">
                 <div class="tooltip-title">证书信息</div>
@@ -921,6 +910,25 @@ const canEditRule = (row: Rule) => {
     return false
   }
   return true
+}
+
+const tlsTagType = (row: Rule) => {
+  if (row.tls_source === 'acme_dns') {
+    const status = certJobMap.value[row.caddy_id]?.status
+    if (status === 'issued') return 'success'
+    if (status === 'failed') return 'danger'
+    return 'warning'
+  }
+  return 'primary'
+}
+
+const tlsTagLabel = (row: Rule) => {
+  if (row.tls_source === 'acme_dns') {
+    const status = certJobMap.value[row.caddy_id]?.status
+    const label = status ? certJobStatusLabel(status) : 'ACME'
+    return `ACME · ${label}`
+  }
+  return '手动'
 }
 
 const isCurrentRuleLocked = computed(() => {
@@ -1821,14 +1829,8 @@ onUnmounted(() => {
   color: #6b7280;
 }
 .port { font-family: monospace; color: #374151; }
-.tls-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-.cert-job-tag {
-  font-size: 10px;
+.tls-tag {
+  min-width: 72px;
 }
 .text-secondary { color: #6b7280; }
 .form-tip { font-size: 12px; color: #9ca3af; margin-top: 2px; }

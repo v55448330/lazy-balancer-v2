@@ -70,10 +70,35 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 		)
 	}
 
-	// Load DNS credentials from global_config
+	// Resolve ACME config for the rule.
+	var acmeConfigID int
+	var acmeEmail string
+	err = db.DB.QueryRow("SELECT COALESCE(acme_config_id,0) FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&acmeConfigID)
+	if err != nil {
+		s.failJob(jobID, "读取规则 ACME 配置失败")
+		return fmt.Errorf("read rule acme config: %w", err)
+	}
+
 	var dnsCredentialsJSON string
-	err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,'') FROM global_config WHERE id=1").Scan(&dnsCredentialsJSON)
-	if err != nil || dnsCredentialsJSON == "" {
+	if acmeConfigID > 0 {
+		err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,''), COALESCE(acme_email,'') FROM certificate_configs WHERE id=?", acmeConfigID).Scan(&dnsCredentialsJSON, &acmeEmail)
+		if err != nil {
+			s.failJob(jobID, "读取 DNS 凭证配置失败")
+			return fmt.Errorf("read certificate config: %w", err)
+		}
+	}
+	if dnsCredentialsJSON == "" {
+		// Fallback to legacy global_config
+		err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,'') FROM global_config WHERE id=1").Scan(&dnsCredentialsJSON)
+		if err != nil {
+			s.failJob(jobID, "读取 DNS 凭证失败")
+			return fmt.Errorf("read global dns credentials: %w", err)
+		}
+		if acmeEmail == "" {
+			db.DB.QueryRow("SELECT COALESCE(letsencrypt_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail)
+		}
+	}
+	if dnsCredentialsJSON == "" {
 		s.failJob(jobID, "ACME DNS 凭证未配置")
 		return fmt.Errorf("ACME DNS credentials not configured")
 	}
@@ -84,12 +109,11 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 		return err
 	}
 
-	// Load ACME email
-	var email string
-	db.DB.QueryRow("SELECT COALESCE(letsencrypt_email,'') FROM global_config WHERE id=1").Scan(&email)
-
 	// Create ACME client
-	client, err := acme.NewClient("https://acme-v02.api.letsencrypt.org/directory", email)
+	if acmeEmail == "" {
+		acmeEmail = "admin@" + primaryDomain
+	}
+	client, err := acme.NewClient("https://acme-v02.api.letsencrypt.org/directory", acmeEmail)
 	if err != nil {
 		s.failJob(jobID, err.Error())
 		return err

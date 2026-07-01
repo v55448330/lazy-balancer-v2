@@ -44,7 +44,7 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 	}
 
 	if len(records) > 0 {
-		return p.modifyRecord(ctx, domainID, records[0].ID, subDomain, value, ttl)
+		return p.modifyRecord(ctx, domainID, records[0].ID.String(), subDomain, value, ttl)
 	}
 	return p.createRecord(ctx, domainID, subDomain, value, ttl)
 }
@@ -67,7 +67,7 @@ func (p *Provider) CleanUp(ctx context.Context, zone, tokenFQDN string) error {
 
 	var lastErr error
 	for _, r := range records {
-		if err := p.deleteRecord(ctx, domainID, r.ID); err != nil {
+		if err := p.deleteRecord(ctx, domainID, r.ID.String()); err != nil {
 			lastErr = err
 		}
 	}
@@ -75,15 +75,15 @@ func (p *Provider) CleanUp(ctx context.Context, zone, tokenFQDN string) error {
 }
 
 type apiStatus struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    json.Number `json:"code"`
+	Message string      `json:"message"`
 }
 
 type record struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Value string `json:"value"`
+	ID    json.Number `json:"id"`
+	Name  string      `json:"name"`
+	Type  string      `json:"type"`
+	Value string      `json:"value"`
 }
 
 func (p *Provider) apiCall(ctx context.Context, method string, params url.Values, result interface{}) error {
@@ -120,19 +120,19 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 	var result struct {
 		Status  apiStatus `json:"status"`
 		Domains []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			ID   json.Number `json:"id"`
+			Name string      `json:"name"`
 		} `json:"domains"`
 	}
 	if err := p.apiCall(ctx, "Domain.List", params, &result); err != nil {
 		return "", err
 	}
-	if result.Status.Code != "1" {
+	if result.Status.Code.String() != "1" {
 		return "", fmt.Errorf("Domain.List failed: %s", result.Status.Message)
 	}
 	for _, d := range result.Domains {
 		if d.Name == zone {
-			return d.ID, nil
+			return d.ID.String(), nil
 		}
 	}
 	return "", fmt.Errorf("domain %s not found", zone)
@@ -151,8 +151,8 @@ func (p *Provider) listRecords(ctx context.Context, domainID, subDomain string) 
 	if err := p.apiCall(ctx, "Record.List", params, &result); err != nil {
 		return nil, err
 	}
-	if result.Status.Code != "1" {
-		if result.Status.Code == "10" {
+	if result.Status.Code.String() != "1" {
+		if result.Status.Code.String() == "10" {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("Record.List failed: %s", result.Status.Message)
@@ -181,7 +181,7 @@ func (p *Provider) createRecord(ctx context.Context, domainID, subDomain, value 
 	if err := p.apiCall(ctx, "Record.Create", params, &result); err != nil {
 		return err
 	}
-	if result.Status.Code != "1" {
+	if result.Status.Code.String() != "1" {
 		return fmt.Errorf("Record.Create failed: %s", result.Status.Message)
 	}
 	return nil
@@ -203,7 +203,7 @@ func (p *Provider) modifyRecord(ctx context.Context, domainID, recordID, subDoma
 	if err := p.apiCall(ctx, "Record.Modify", params, &result); err != nil {
 		return err
 	}
-	if result.Status.Code != "1" {
+	if result.Status.Code.String() != "1" {
 		return fmt.Errorf("Record.Modify failed: %s", result.Status.Message)
 	}
 	return nil
@@ -220,7 +220,7 @@ func (p *Provider) deleteRecord(ctx context.Context, domainID, recordID string) 
 	if err := p.apiCall(ctx, "Record.Remove", params, &result); err != nil {
 		return err
 	}
-	if result.Status.Code != "1" {
+	if result.Status.Code.String() != "1" {
 		return fmt.Errorf("Record.Remove failed: %s", result.Status.Message)
 	}
 	return nil
