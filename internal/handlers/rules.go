@@ -88,8 +88,8 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		if upstreamRows != nil {
 			for upstreamRows.Next() {
 				var u models.Upstream
-		upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol)
-			r.Upstreams = append(r.Upstreams, u)
+				upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol)
+				r.Upstreams = append(r.Upstreams, u)
 			}
 			upstreamRows.Close()
 		}
@@ -99,7 +99,6 @@ func (h *Handlers) ListRules(c *gin.Context) {
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: rules})
 }
-
 
 func (h *Handlers) GetRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
@@ -161,7 +160,6 @@ func (h *Handlers) GetRule(c *gin.Context) {
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: r})
 }
-
 
 func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
@@ -295,11 +293,11 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	ruleContext := buildRuleCaddyContext(fullConfig, r.CaddyID, r.ListenPort)
 
 	responseData["config"] = map[string]interface{}{
-		"route":               caddyActualConfig,
-		"server_context":      ruleContext["server"],
-		"tls_certificates":    ruleContext["tls_certificates"],
+		"route":                   caddyActualConfig,
+		"server_context":          ruleContext["server"],
+		"tls_certificates":        ruleContext["tls_certificates"],
 		"tls_connection_policies": ruleContext["tls_connection_policies"],
-		"automation_policies": ruleContext["automation_policies"],
+		"automation_policies":     ruleContext["automation_policies"],
 	}
 	responseData["config_not_exists"] = false
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: responseData})
@@ -308,10 +306,10 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 // buildRuleCaddyContext extracts the server and TLS context relevant to a rule from the full Caddy config.
 func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string, listenPort int) map[string]interface{} {
 	result := map[string]interface{}{
-		"server":                    nil,
-		"tls_certificates":          []interface{}{},
-		"tls_connection_policies":   []interface{}{},
-		"automation_policies":       []interface{}{},
+		"server":                  nil,
+		"tls_certificates":        []interface{}{},
+		"tls_connection_policies": []interface{}{},
+		"automation_policies":     []interface{}{},
 	}
 
 	apps, _ := fullConfig["apps"].(map[string]interface{})
@@ -429,7 +427,6 @@ func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string, li
 	return result
 }
 
-
 func (h *Handlers) CreateRule(c *gin.Context) {
 	// Check if slave mode
 	nodeMode, _ := c.Get("node_mode")
@@ -539,27 +536,27 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 
 	// Build route config for Caddy validation (using request data before DB write)
 	ruleConfig := services.SingleRuleConfig{
-		Protocol:                req.Protocol,
-		Domain:                  req.Domain,
-		ListenPort:              listenPort,
-		Strategy:                req.Strategy,
-		DynamicDNS:              req.DynamicDNS,
-		EnableDnsServer:         req.EnableDnsServer,
-		DnsServer:               req.DnsServer,
-		DnsFamily:               req.DnsFamily,
-		HealthCheckPath:         req.HealthCheckPath,
-		HealthCheckInterval:     req.HealthCheckInterval,
-		HealthCheckTimeout:      req.HealthCheckTimeout,
+		Protocol:                      req.Protocol,
+		Domain:                        req.Domain,
+		ListenPort:                    listenPort,
+		Strategy:                      req.Strategy,
+		DynamicDNS:                    req.DynamicDNS,
+		EnableDnsServer:               req.EnableDnsServer,
+		DnsServer:                     req.DnsServer,
+		DnsFamily:                     req.DnsFamily,
+		HealthCheckPath:               req.HealthCheckPath,
+		HealthCheckInterval:           req.HealthCheckInterval,
+		HealthCheckTimeout:            req.HealthCheckTimeout,
 		HealthCheckUnhealthyThreshold: req.HealthCheckUnhealthyThreshold,
-		EnableTLS:               req.EnableTLS,
-		TLSSource:               req.TLSSource,
-		ACMEConfigID:            req.ACMEConfigID,
-		TLSHTTPRedirect:         req.TLSHTTPRedirect,
-		EnableCompress:          req.EnableCompress,
-		CompressTypes:           req.CompressTypes,
-		EnableActiveHealthCheck: req.EnableActiveHealthCheck,
-		HostHeader:              req.HostHeader,
-		CaddyID:                 caddyID,
+		EnableTLS:                     req.EnableTLS,
+		TLSSource:                     req.TLSSource,
+		ACMEConfigID:                  req.ACMEConfigID,
+		TLSHTTPRedirect:               req.TLSHTTPRedirect,
+		EnableCompress:                req.EnableCompress,
+		CompressTypes:                 req.CompressTypes,
+		EnableActiveHealthCheck:       req.EnableActiveHealthCheck,
+		HostHeader:                    req.HostHeader,
+		CaddyID:                       caddyID,
 	}
 	for _, u := range req.Upstreams {
 		protocol := u.Protocol
@@ -700,7 +697,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 					})
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 					defer cancel()
-					if err := issuer.Issue(ctx, caddyID, req.Domain); err != nil {
+					if err := issuer.IssueWithDefaultProvider_DEPRECATED(ctx, caddyID, req.Domain); err != nil {
 						log.Printf("Auto cert issuance failed for %s: %v", req.Domain, err)
 					}
 				}()
@@ -711,7 +708,6 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	log.Printf("Rule created with caddy_id=%s", caddyID)
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "Rule created", Data: gin.H{"caddy_id": caddyID}})
 }
-
 
 func (h *Handlers) UpdateRule(c *gin.Context) {
 	// Check if slave mode
@@ -986,27 +982,27 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	ruleConfig := services.SingleRuleConfig{
-		Protocol:                req.Protocol,
-		Domain:                  domain,
-		ListenPort:              listenPort,
-		Strategy:                strategy,
-		DynamicDNS:              req.DynamicDNS,
-		EnableDnsServer:         req.EnableDnsServer,
-		DnsServer:               req.DnsServer,
-		DnsFamily:               req.DnsFamily,
-		HealthCheckPath:         req.HealthCheckPath,
-		HealthCheckInterval:     req.HealthCheckInterval,
-		HealthCheckTimeout:      req.HealthCheckTimeout,
+		Protocol:                      req.Protocol,
+		Domain:                        domain,
+		ListenPort:                    listenPort,
+		Strategy:                      strategy,
+		DynamicDNS:                    req.DynamicDNS,
+		EnableDnsServer:               req.EnableDnsServer,
+		DnsServer:                     req.DnsServer,
+		DnsFamily:                     req.DnsFamily,
+		HealthCheckPath:               req.HealthCheckPath,
+		HealthCheckInterval:           req.HealthCheckInterval,
+		HealthCheckTimeout:            req.HealthCheckTimeout,
 		HealthCheckUnhealthyThreshold: req.HealthCheckUnhealthyThreshold,
-		EnableTLS:               req.EnableTLS,
-		TLSSource:               req.TLSSource,
-		ACMEConfigID:            req.ACMEConfigID,
-		TLSHTTPRedirect:         req.TLSHTTPRedirect,
-		EnableCompress:          req.EnableCompress,
-		CompressTypes:           req.CompressTypes,
-		EnableActiveHealthCheck: req.EnableActiveHealthCheck,
-		HostHeader:              req.HostHeader,
-		CaddyID:                 caddyID,
+		EnableTLS:                     req.EnableTLS,
+		TLSSource:                     req.TLSSource,
+		ACMEConfigID:                  req.ACMEConfigID,
+		TLSHTTPRedirect:               req.TLSHTTPRedirect,
+		EnableCompress:                req.EnableCompress,
+		CompressTypes:                 req.CompressTypes,
+		EnableActiveHealthCheck:       req.EnableActiveHealthCheck,
+		HostHeader:                    req.HostHeader,
+		CaddyID:                       caddyID,
 	}
 	for _, u := range req.Upstreams {
 		protocol := u.Protocol
@@ -1142,19 +1138,18 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 						})
 						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 						defer cancel()
-						if err := issuer.Issue(ctx, caddyID, domain); err != nil {
+						if err := issuer.IssueWithDefaultProvider_DEPRECATED(ctx, caddyID, domain); err != nil {
 							log.Printf("Auto cert issuance failed for %s: %v", domain, err)
 						}
 					}()
 				}
-}
+			}
 		}
 	}
 
 	log.Printf("Rule %s updated", caddyID)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule updated"})
 }
-
 
 func (h *Handlers) DeleteRule(c *gin.Context) {
 	// Check if slave mode
@@ -1239,7 +1234,6 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule deleted"})
 }
-
 
 func (h *Handlers) DuplicateRule(c *gin.Context) {
 	nodeMode, _ := c.Get("node_mode")
@@ -1332,7 +1326,6 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "Rule duplicated", Data: gin.H{"caddy_id": newCaddyID}})
 }
 
-
 func (h *Handlers) EnableRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 
@@ -1358,7 +1351,6 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule enabled"})
 }
 
-
 func (h *Handlers) DisableRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 
@@ -1383,4 +1375,3 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule disabled"})
 }
-

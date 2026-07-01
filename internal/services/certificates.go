@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -106,7 +107,13 @@ func (s *CertificateService) renewExpiringCertificates() {
 			issuer := NewCertIssuer(s.caddyReloader)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
-			if err := issuer.Issue(ctx, job.RuleID, job.Domain); err != nil {
+			provider, err := loadCAProvider(job.CAProviderID)
+			if err != nil {
+				log.Printf("Renewal: failed to load CA provider for job %d: %v", job.ID, err)
+				failJob(job.ID, fmt.Sprintf("CA Provider 不可用: %v", err))
+				return
+			}
+			if err := issuer.Issue(ctx, job.ID, job.RuleID, job.Domain, provider); err != nil {
 				log.Printf("Renewal: failed to re-issue certificate for %s: %v", job.Domain, err)
 			}
 		}(j)
@@ -192,7 +199,7 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 	}
 
 	rows, err := db.DB.Query(`
-		SELECT id, rule_id, domain, status, expires_at
+		SELECT id, rule_id, domain, status, expires_at, ca_provider_id
 		FROM cert_jobs
 		WHERE status = 'issued'
 		  AND expires_at IS NOT NULL
@@ -208,7 +215,7 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 	var jobs []models.CertJob
 	for rows.Next() {
 		var j models.CertJob
-		if err := rows.Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.ExpiresAt); err != nil {
+		if err := rows.Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.ExpiresAt, &j.CAProviderID); err != nil {
 			continue
 		}
 		jobs = append(jobs, j)

@@ -5,15 +5,16 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/acme"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/dnsprovider"
+	"lazy-balancer-v2/internal/models"
 )
 
 // CertIssuer coordinates ACME certificate issuance: creates/updates cert_jobs,
@@ -21,9 +22,6 @@ import (
 type CertIssuer struct {
 	caddyReloader func() error
 }
-
-// issuingMu serializes ACME issuance to avoid rate limits and concurrent DNS conflicts.
-var issuingMu sync.Mutex
 
 // NewCertIssuer creates a new CertIssuer. The reloader is called after a
 // certificate is successfully issued so Caddy picks up the new cert.
@@ -43,50 +41,33 @@ func (l *jobLogger) Log(stage, message string) {
 		stage, message, l.jobID)
 }
 
-// failJob records a failure and marks the job as failed.
-func (s *CertIssuer) failJob(jobID int, message string) {
-	_, _ = db.DB.Exec(
-		"INSERT INTO cert_job_logs (job_id, level, message) VALUES (?, 'error', ?)",
-		jobID, message)
-	_, _ = db.DB.Exec(
-		"UPDATE cert_jobs SET status='failed', message=?, updated_at=datetime('now') WHERE id=?",
-		message, jobID)
-}
-
-// Issue obtains a certificate for the given rule and domains.
-// It validates domains, creates/updates a cert_jobs row, runs ACME, and
-// persists the cert+key on success.
-func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
-	issuingMu.Lock()
-	defer issuingMu.Unlock()
+// Issue obtains a certificate for the given rule and domains using the
+// provided CA provider. The caller (queue manager) must pass a valid jobID.
+func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains string, provider models.CAProvider) error {
+	if jobID <= 0 {
+		return fmt.Errorf("invalid job ID: %d", jobID)
+	}
 
 	domainList := normalizeAndValidateDomains(domains)
 	if domainList == nil {
 		return fmt.Errorf("ACME证书仅支持单域名或根域+www二级域名: %s", domains)
 	}
-	primaryDomain := domainList[0]
-	joinedDomains := strings.Join(domainList, ",")
 
-	// Create or reset the cert job (unique per rule_id+primary_domain).
-	var jobID int
-	err := db.DB.QueryRow("SELECT id FROM cert_jobs WHERE rule_id=? AND domain=?", ruleID, primaryDomain).Scan(&jobID)
+	// Reset the existing job row (queue manager already created/reused it).
+	res, err := db.DB.Exec(
+		"UPDATE cert_jobs SET status='creating_account', message='开始申请证书', updated_at=datetime('now') WHERE id=?",
+		jobID,
+	)
 	if err != nil {
-		// Insert new job with the full domain list.
-		res, err := db.DB.Exec(
-			"INSERT INTO cert_jobs (rule_id, domain, status, message) VALUES (?, ?, 'creating_account', '开始申请证书')",
-			ruleID, joinedDomains,
-		)
-		if err != nil {
-			return fmt.Errorf("create cert job: %w", err)
-		}
-		id64, _ := res.LastInsertId()
-		jobID = int(id64)
-	} else {
-		// Reset existing job, keeping the domain list intact.
-		_, _ = db.DB.Exec(
-			"UPDATE cert_jobs SET status='creating_account', message='重新申请证书', updated_at=datetime('now') WHERE id=?",
-			jobID,
-		)
+		return fmt.Errorf("update cert job status: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		failJob(jobID, "证书任务不存在")
+		return fmt.Errorf("cert job %d not found", jobID)
 	}
 
 	logger := &jobLogger{jobID: jobID}
@@ -95,14 +76,14 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 	var acmeConfigID int
 	err = db.DB.QueryRow("SELECT COALESCE(acme_config_id,0) FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&acmeConfigID)
 	if err != nil {
-		s.failJob(jobID, "读取规则 ACME 配置失败")
+		failJob(jobID, "读取规则 ACME 配置失败")
 		return fmt.Errorf("read rule acme config: %w", err)
 	}
 
 	// Load ACME email from global config (single source of truth).
 	var acmeEmail string
 	if err := db.DB.QueryRow("SELECT COALESCE(acme_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail); err != nil {
-		s.failJob(jobID, "读取 ACME 邮箱失败")
+		failJob(jobID, "读取 ACME 邮箱失败")
 		return fmt.Errorf("read global acme email: %w", err)
 	}
 
@@ -111,58 +92,59 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 	if acmeConfigID > 0 {
 		err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,'') FROM certificate_configs WHERE id=? AND enabled=1", acmeConfigID).Scan(&dnsCredentialsJSON)
 		if err != nil && err != sql.ErrNoRows {
-			s.failJob(jobID, "读取 DNS 凭证配置失败")
+			failJob(jobID, "读取 DNS 凭证配置失败")
 			return fmt.Errorf("read certificate config: %w", err)
 		}
 	}
 	if dnsCredentialsJSON == "" {
-		s.failJob(jobID, "未选择可用的 DNS 提供商，请先在规则中选择 DNS 凭证")
+		failJob(jobID, "未选择可用的 DNS 提供商，请先在规则中选择 DNS 凭证")
 		return fmt.Errorf("no enabled DNS provider selected for rule")
 	}
 
-	provider, err := dnsprovider.NewProviderFromCredentials(dnsCredentialsJSON)
+	dnsProvider, err := dnsprovider.NewProviderFromCredentials(dnsCredentialsJSON)
 	if err != nil {
-		s.failJob(jobID, err.Error())
+		failJob(jobID, err.Error())
 		return err
 	}
 
-	// Create ACME client
+	// Create ACME client for the selected provider
 	if strings.TrimSpace(acmeEmail) == "" {
-		s.failJob(jobID, "ACME 邮箱未配置，请在「系统设置 / 免费证书」中填写邮箱")
+		failJob(jobID, "ACME 邮箱未配置，请在「系统设置 / 免费证书」中填写邮箱")
 		return fmt.Errorf("ACME 邮箱未配置")
 	}
-	client, err := acme.NewClient("https://acme-v02.api.letsencrypt.org/directory", acmeEmail)
+	client, err := acme.NewClientForProvider(provider, acmeEmail)
 	if err != nil {
-		s.failJob(jobID, err.Error())
+		failJob(jobID, err.Error())
 		return err
 	}
 
 	issuer := &acme.Issuer{
 		Client:   client,
-		Provider: provider,
+		Provider: dnsProvider,
 		Logger:   logger,
 	}
 
 	// Run the ACME issuance flow
 	certPEM, keyPEM, err := issuer.Issue(ctx, domainList)
 	if err != nil {
-		s.failJob(jobID, err.Error())
+		failJob(jobID, err.Error())
 		return err
 	}
 
 	// Parse certificate expiry
 	notAfter, err := parseCertNotAfter(certPEM)
 	if err != nil {
-		s.failJob(jobID, err.Error())
+		failJob(jobID, err.Error())
 		return err
 	}
 
 	// Persist cert+key to database
 	_, err = db.DB.Exec(
-		"UPDATE cert_jobs SET status='issued', message='签发成功', cert_pem=?, key_pem=?, expires_at=?, updated_at=datetime('now') WHERE id=?",
-		certPEM, keyPEM, notAfter, jobID,
+		"UPDATE cert_jobs SET status='issued', message='签发成功', cert_pem=?, key_pem=?, expires_at=?, ca_provider_id=?, updated_at=datetime('now') WHERE id=?",
+		certPEM, keyPEM, notAfter, provider.ID, jobID,
 	)
 	if err != nil {
+		failJob(jobID, fmt.Sprintf("证书保存失败: %v", err))
 		return fmt.Errorf("update cert job: %w", err)
 	}
 
@@ -174,6 +156,52 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 	}
 
 	return nil
+}
+
+// IssueWithDefaultProvider_DEPRECATED is a temporary helper for callers that do
+// not yet supply an explicit jobID. It creates or reuses a cert_jobs row for the
+// rule and domain, loads the default CA provider, and then runs Issue.
+//
+// TODO(Task 6/7/8/9): remove this helper once callers enqueue via
+// CAQueueManager instead of issuing directly.
+func (s *CertIssuer) IssueWithDefaultProvider_DEPRECATED(ctx context.Context, ruleID, domains string) error {
+	list := normalizeAndValidateDomains(domains)
+	if list == nil {
+		return fmt.Errorf("ACME证书仅支持单域名或根域+www二级域名: %s", domains)
+	}
+	primaryDomain := list[0]
+	joinedDomains := strings.Join(list, ",")
+
+	var jobID int
+	err := db.DB.QueryRow("SELECT id FROM cert_jobs WHERE rule_id=? AND domain=?", ruleID, primaryDomain).Scan(&jobID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("lookup cert job: %w", err)
+		}
+		res, err := db.DB.Exec(
+			"INSERT INTO cert_jobs (rule_id, domain, ca_provider_id, status, message) VALUES (?, ?, 0, 'pending', '等待签发')",
+			ruleID, joinedDomains,
+		)
+		if err != nil {
+			return fmt.Errorf("create cert job: %w", err)
+		}
+		id64, _ := res.LastInsertId()
+		jobID = int(id64)
+	}
+
+	provider, err := loadCAProvider(0)
+	if err != nil {
+		failJob(jobID, err.Error())
+		return fmt.Errorf("load default CA provider: %w", err)
+	}
+
+	_, err = db.DB.Exec("UPDATE cert_jobs SET ca_provider_id=? WHERE id=?", provider.ID, jobID)
+	if err != nil {
+		failJob(jobID, err.Error())
+		return fmt.Errorf("update cert job ca_provider_id: %w", err)
+	}
+
+	return s.Issue(ctx, jobID, ruleID, domains, provider)
 }
 
 // IsACMECertIssued returns true if cert_jobs has an issued certificate for the

@@ -151,16 +151,11 @@ func (q *caQueue) execute(item queueItem) {
 		q.mu.Unlock()
 	}()
 
-	if _, err := db.DB.Exec("UPDATE cert_jobs SET status='creating_account', message='开始申请证书', updated_at=datetime('now') WHERE id=?", item.jobID); err != nil {
-		log.Printf("CA queue: failed to set job %d status to creating_account: %v", item.jobID, err)
-	}
-
 	issuer := NewCertIssuer(q.reloader)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	// TODO(Task 5): pass q.provider once CertIssuer.Issue accepts models.CAProvider.
-	if err := issuer.Issue(ctx, item.ruleID, item.domains); err != nil {
+	if err := issuer.Issue(ctx, item.jobID, item.ruleID, item.domains, q.provider); err != nil {
 		log.Printf("CA queue execution failed for job %d rule %s: %v", item.jobID, item.ruleID, err)
 		if !isTerminalJobStatus(item.jobID) {
 			failJob(item.jobID, fmt.Sprintf("CA 签发失败: %v", err))

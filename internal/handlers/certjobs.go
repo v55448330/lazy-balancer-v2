@@ -81,8 +81,9 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		})
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-		if err := issuer.Issue(ctx, ruleID, domain); err != nil {
-			log.Printf("Cert issuance failed for %s: %v", domain, err)
+		// TODO(Task 6/7/8/9): enqueue via CAQueueManager instead of direct issuance.
+		if err := issuer.IssueWithDefaultProvider_DEPRECATED(ctx, ruleID, domain); err != nil {
+			log.Printf("Retry cert job %d: failed to issue certificate: %v", id, err)
 		}
 	}()
 
