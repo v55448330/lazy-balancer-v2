@@ -60,11 +60,10 @@ func CreateOrRequeueCertJob(ruleID, domains string, caProviderID int, qm *CAQueu
 	if list == nil {
 		return fmt.Errorf("invalid ACME domains: %s", domains)
 	}
-	primary := list[0]
 	joined := strings.Join(list, ",")
 
 	var jobID int
-	err := db.DB.QueryRow("SELECT id FROM cert_jobs WHERE rule_id=? AND domain=?", ruleID, primary).Scan(&jobID)
+	err := db.DB.QueryRow("SELECT id FROM cert_jobs WHERE rule_id=? AND domain=?", ruleID, joined).Scan(&jobID)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("lookup cert job: %w", err)

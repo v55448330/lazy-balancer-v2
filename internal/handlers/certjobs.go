@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"database/sql"
 	"log"
 	"net/http"
@@ -52,10 +51,15 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		return
 	}
 
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
+		return
+	}
 	var ruleID, domain, status string
+	var caProviderID int
 	var updatedAt sql.NullTime
-	err := db.DB.QueryRow("SELECT rule_id, domain, status, updated_at FROM cert_jobs WHERE id=?", id).Scan(&ruleID, &domain, &status, &updatedAt)
+	err = db.DB.QueryRow("SELECT rule_id, domain, status, updated_at, ca_provider_id FROM cert_jobs WHERE id=?", id).Scan(&ruleID, &domain, &status, &updatedAt, &caProviderID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "任务不存在"})
 		return
@@ -75,15 +79,12 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 	}
 
 	go func() {
-		issuer := services.NewCertIssuer(func() error {
-			h.applyCaddyConfig()
-			return nil
+		qm := services.GetCAQueueManager(func() error {
+			fullConfig := services.GenerateCaddyConfig(h.cfg)
+			return h.caddyService.ApplyConfig(fullConfig)
 		})
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer cancel()
-		// TODO(Task 6/7/8/9): enqueue via CAQueueManager instead of direct issuance.
-		if err := issuer.IssueWithDefaultProvider_DEPRECATED(ctx, ruleID, domain); err != nil {
-			log.Printf("Retry cert job %d: failed to issue certificate: %v", id, err)
+		if err := services.CreateOrRequeueCertJob(ruleID, domain, caProviderID, qm); err != nil {
+			log.Printf("Manual retry enqueue failed for job %d: %v", id, err)
 		}
 	}()
 
@@ -97,15 +98,23 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		return
 	}
 
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
+		return
+	}
 	db.DB.Exec("DELETE FROM cert_jobs WHERE id = ?", id)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Job deleted"})
 }
 
 func (h *Handlers) GetCertJob(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
+		return
+	}
 	var j models.CertJob
-	err := db.DB.QueryRow("SELECT id, rule_id, domain, status, message, expires_at, created_at, updated_at FROM cert_jobs WHERE id=?", id).
+	err = db.DB.QueryRow("SELECT id, rule_id, domain, status, message, expires_at, created_at, updated_at FROM cert_jobs WHERE id=?", id).
 		Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.Message, &j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -119,7 +128,11 @@ func (h *Handlers) GetCertJob(c *gin.Context) {
 }
 
 func (h *Handlers) GetCertJobLogs(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
+		return
+	}
 
 	limit := 500
 	if l, _ := strconv.Atoi(c.Query("limit")); l > 0 {

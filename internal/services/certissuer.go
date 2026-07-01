@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -156,52 +155,6 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	}
 
 	return nil
-}
-
-// IssueWithDefaultProvider_DEPRECATED is a temporary helper for callers that do
-// not yet supply an explicit jobID. It creates or reuses a cert_jobs row for the
-// rule and domain, loads the default CA provider, and then runs Issue.
-//
-// TODO(Task 6/7/8/9): remove this helper once callers enqueue via
-// CAQueueManager instead of issuing directly.
-func (s *CertIssuer) IssueWithDefaultProvider_DEPRECATED(ctx context.Context, ruleID, domains string) error {
-	list := normalizeAndValidateDomains(domains)
-	if list == nil {
-		return fmt.Errorf("ACME证书仅支持单域名或根域+www二级域名: %s", domains)
-	}
-	primaryDomain := list[0]
-	joinedDomains := strings.Join(list, ",")
-
-	var jobID int
-	err := db.DB.QueryRow("SELECT id FROM cert_jobs WHERE rule_id=? AND domain=?", ruleID, primaryDomain).Scan(&jobID)
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("lookup cert job: %w", err)
-		}
-		res, err := db.DB.Exec(
-			"INSERT INTO cert_jobs (rule_id, domain, ca_provider_id, status, message) VALUES (?, ?, 0, 'pending', '等待签发')",
-			ruleID, joinedDomains,
-		)
-		if err != nil {
-			return fmt.Errorf("create cert job: %w", err)
-		}
-		id64, _ := res.LastInsertId()
-		jobID = int(id64)
-	}
-
-	provider, err := loadCAProvider(0)
-	if err != nil {
-		failJob(jobID, err.Error())
-		return fmt.Errorf("load default CA provider: %w", err)
-	}
-
-	_, err = db.DB.Exec("UPDATE cert_jobs SET ca_provider_id=? WHERE id=?", provider.ID, jobID)
-	if err != nil {
-		failJob(jobID, err.Error())
-		return fmt.Errorf("update cert job ca_provider_id: %w", err)
-	}
-
-	return s.Issue(ctx, jobID, ruleID, domains, provider)
 }
 
 // IsACMECertIssued returns true if cert_jobs has an issued certificate for the
