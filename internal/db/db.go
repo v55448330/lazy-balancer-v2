@@ -273,9 +273,9 @@ func runMigrations() error {
 	// lb_rules new columns
 	newLbColumns := map[string]string{
 		"domain":                     "VARCHAR(255)",
-	"tls_cert":                   "TEXT",
-	"tls_key":                    "TEXT",
-	"tls_http_redirect":          "BOOLEAN DEFAULT 0",
+		"tls_cert":                   "TEXT",
+		"tls_key":                    "TEXT",
+		"tls_http_redirect":          "BOOLEAN DEFAULT 0",
 		"dynamic_dns":                "BOOLEAN DEFAULT 0",
 		"enable_active_health_check": "BOOLEAN DEFAULT 0",
 		"tls_source":                 "VARCHAR(20) DEFAULT 'manual'",
@@ -420,6 +420,19 @@ func runMigrations() error {
 			}
 		}
 		rows.Close()
+	}
+
+	// Drop legacy columns from lb_rules if they still exist (no longer used).
+	legacyLbColumns := []string{"tls_auto_cert", "tls_email"}
+	for _, col := range legacyLbColumns {
+		DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name=?", col).Scan(&colCount)
+		if colCount > 0 {
+			if _, err := DB.Exec("ALTER TABLE lb_rules DROP COLUMN " + col); err != nil {
+				log.Printf("Warning: failed to drop legacy column %s from lb_rules: %v", col, err)
+			} else {
+				log.Printf("Dropped legacy column %s from lb_rules", col)
+			}
+		}
 	}
 
 	// Migrate existing data: set caddy_id for rows that don't have it
