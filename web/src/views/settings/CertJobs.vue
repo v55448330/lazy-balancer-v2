@@ -1,40 +1,46 @@
 <template>
-  <el-table v-if="loading || jobs.length > 0" :data="jobs" size="small" v-loading="loading">
-    <el-table-column prop="rule_id" label="规则 ID" width="120" show-overflow-tooltip />
+  <el-table
+    v-if="loading || jobs.length > 0"
+    :data="jobs"
+    size="small"
+    v-loading="loading"
+    class="cert-jobs-table"
+    :fit="true"
+  >
+    <el-table-column prop="rule_id" label="规则 ID" min-width="110" show-overflow-tooltip />
     <el-table-column prop="domain" label="域名" min-width="180" show-overflow-tooltip />
-    <el-table-column prop="status" label="状态" width="100" align="center">
+    <el-table-column prop="status" label="状态" width="90" align="center">
       <template #default="{ row }">
         <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
       </template>
     </el-table-column>
-    <el-table-column label="证书信息" min-width="260" show-overflow-tooltip>
+    <el-table-column label="颁发者" min-width="160" show-overflow-tooltip>
       <template #default="{ row }">
-        <div v-if="row.status === 'issued' && certInfoMap[row.id]" class="cert-info-cell">
-          <div class="cert-info-line">
-            <span class="cert-info-label">颁发者</span>
-            <span class="cert-info-value" :title="certInfoMap[row.id].issuer">{{ certInfoMap[row.id].issuer || '-' }}</span>
-          </div>
-          <div class="cert-info-line">
-            <span class="cert-info-label">过期时间</span>
-            <span class="cert-info-value">{{ certInfoMap[row.id].not_after || '-' }}</span>
-          </div>
-          <div class="cert-info-line">
-            <span class="cert-info-label">更新时间</span>
-            <span class="cert-info-value">{{ formatDate(row.updated_at) }}</span>
-          </div>
-          <div class="cert-info-line">
-            <span class="cert-info-label">剩余天数</span>
-            <span :class="['cert-days', certInfoMap[row.id].status]">{{ certInfoMap[row.id].days_remaining }} 天</span>
-          </div>
-        </div>
-        <span v-else-if="row.status === 'failed'" class="cert-error">{{ row.message }}</span>
-        <span v-else class="text-secondary">{{ row.message || statusLabel(row.status) }}</span>
+        <span v-if="row.status === 'issued' && certInfoMap[row.id]" class="cell-text">{{ certInfoMap[row.id].issuer || '-' }}</span>
+        <span v-else class="cell-empty">-</span>
       </template>
     </el-table-column>
-    <el-table-column label="操作" width="160" align="center">
+    <el-table-column label="过期时间" min-width="140" show-overflow-tooltip>
       <template #default="{ row }">
-        <el-button link type="primary" size="small" @click="viewLogs(row)">查看日志</el-button>
-        <el-button link type="primary" size="small" @click="retryJob(row)">重试</el-button>
+        <span v-if="row.status === 'issued' && certInfoMap[row.id]" class="cell-text">{{ certInfoMap[row.id].not_after || '-' }}</span>
+        <span v-else class="cell-empty">-</span>
+      </template>
+    </el-table-column>
+    <el-table-column label="更新时间" min-width="140" show-overflow-tooltip>
+      <template #default="{ row }">
+        <span class="cell-text">{{ formatDate(row.updated_at) || '-' }}</span>
+      </template>
+    </el-table-column>
+    <el-table-column label="剩余天数" width="90">
+      <template #default="{ row }">
+        <span v-if="row.status === 'issued' && certInfoMap[row.id]" :class="['cert-days', certInfoMap[row.id].status]">{{ certInfoMap[row.id].days_remaining }} 天</span>
+        <span v-else class="cell-empty">-</span>
+      </template>
+    </el-table-column>
+    <el-table-column label="操作" width="120" align="center">
+      <template #default="{ row }">
+        <el-button link type="primary" size="small" @click="viewLogs(row)">日志</el-button>
+        <el-button link type="primary" size="small" @click="retryJob(row)">重签</el-button>
         <el-button link type="danger" size="small" @click="deleteJob(row)">删除</el-button>
       </template>
     </el-table-column>
@@ -194,10 +200,10 @@ const parseCertInfo = (certPEM: string): CertInfo | null => {
     }
     const asn1 = asn1js.fromBER(bytes.buffer)
     const cert = new pkijs.Certificate({ schema: asn1.result })
-    const notAfterValue = cert.notAfter.value
-    const notAfter = notAfterValue.toLocaleString ? notAfterValue.toLocaleString() : notAfterValue
+    const notAfterValue = cert.notAfter.value as Date
+    const notAfter = notAfterValue.toISOString ? notAfterValue.toISOString() : String(notAfterValue)
     const now = new Date()
-    const expiry = new Date(notAfter)
+    const expiry = new Date(notAfterValue)
     const daysRemaining = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
     const issuerValues: string[] = []
     for (const rdn of cert.issuer.typesAndValues) {
@@ -230,7 +236,7 @@ const fetchCertInfo = async () => {
 const retryJob = async (row: CertJob) => {
   try {
     await request.post(`/certificates/jobs/${row.id}/retry`)
-    ElMessage.success('重试已触发')
+    ElMessage.success('重新签发已触发')
     fetchJobs()
   } catch (error) {
     console.error('Failed to retry cert job:', error)
@@ -322,5 +328,43 @@ onUnmounted(() => {
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-all;
+}
+.cell-text {
+  line-height: 1;
+}
+.cell-empty {
+  color: #9ca3af;
+  line-height: 1;
+}
+.cert-days {
+  line-height: 1;
+  font-weight: 500;
+}
+.cert-days.valid {
+  color: #10b981;
+}
+.cert-days.expiring {
+  color: #f59e0b;
+}
+.cert-days.expired {
+  color: #ef4444;
+}
+.cert-jobs-table {
+  width: 100%;
+}
+.cert-jobs-table :deep(.el-table__cell) {
+  vertical-align: middle;
+}
+.cert-jobs-table :deep(.el-table__cell .cell) {
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cert-jobs-table :deep(.el-table__cell.is-center .cell) {
+  text-align: center;
+}
+.cert-jobs-table :deep(.el-button + .el-button) {
+  margin-left: 6px;
 }
 </style>

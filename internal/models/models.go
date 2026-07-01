@@ -118,13 +118,13 @@ type TLSCertificate struct {
 
 // CertificateConfig represents free certificate configuration (ACME + DNS provider)
 type CertificateConfig struct {
-	ID             int          `json:"id"`
-	Name           string       `json:"name"`
-	DNSProvider    string       `json:"dns_provider"`
-	DNSCredentials string       `json:"-"`
-	Enabled        bool         `json:"enabled"`
-	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      sql.NullTime `json:"updated_at"`
+	ID             int            `json:"id"`
+	Name           string         `json:"name"`
+	DNSProvider    string         `json:"dns_provider"`
+	DNSCredentials string         `json:"dns_credentials"`
+	Enabled        bool           `json:"enabled"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      sql.NullTime   `json:"updated_at"`
 }
 
 // RuleCertInfo represents parsed TLS certificate information for display in the UI

@@ -59,7 +59,7 @@
       <CertJobs />
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑证书配置' : '添加证书配置'" width="520">
+    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑 DNS 提供商配置' : '添加 DNS 提供商配置'" width="520">
       <el-form :model="form" label-width="120px">
         <el-form-item label="配置名称" required>
           <el-input v-model="form.name" placeholder="例如：我的证书配置" />
@@ -134,7 +134,7 @@ interface CertConfig {
   id?: number
   name: string
   dns_provider: string
-  dns_credentials?: Record<string, string>
+  dns_credentials?: Record<string, string> | string
   enabled: boolean
 }
 
@@ -204,10 +204,28 @@ const fetchProviders = async () => {
 const openConfigDialog = (config?: CertConfig) => {
   if (config) {
     editingId.value = config.id || null
+    const rawCreds = config.dns_credentials || {}
+    let parsedCreds: Record<string, string> = {}
+    if (typeof rawCreds === 'string') {
+      try {
+        parsedCreds = JSON.parse(rawCreds) || {}
+      } catch {
+        parsedCreds = {}
+      }
+    } else {
+      parsedCreds = rawCreds
+    }
+    if (!parsedCreds.auth_mode) {
+      if (parsedCreds.secret_id && parsedCreds.secret_key) {
+        parsedCreds.auth_mode = 'tencent_cloud'
+      } else {
+        parsedCreds.auth_mode = 'dnspod'
+      }
+    }
     form.value = {
       name: config.name,
       dns_provider: config.dns_provider,
-      dns_credentials: config.dns_credentials || { auth_mode: 'dnspod' },
+      dns_credentials: parsedCreds,
       enabled: config.enabled,
     }
   } else {
@@ -228,9 +246,16 @@ const saveConfig = async () => {
     return
   }
 
+  const domain = await promptTestDomain()
+  if (!domain) return
+
   saving.value = true
   try {
-    await request.post('/certificate-configs/test', form.value)
+    const payload = { ...form.value, domain }
+    const url = editingId.value
+      ? `/certificate-configs/${editingId.value}/test`
+      : '/certificate-configs/test'
+    await request.post(url, payload)
   } catch (error: any) {
     const msg = error?.response?.data?.message || error?.message || '凭证验证失败'
     ElMessage.error(msg)
@@ -269,10 +294,34 @@ const deleteConfig = async (config: CertConfig) => {
   }
 }
 
+const promptTestDomain = async (): Promise<string | null> => {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '保存前需要验证 DNS 凭证。请输入一个该 DNS 账户下可管理的域名（例如 example.com），系统将临时写入并删除 _acme-challenge.lb-test 记录来验证权限',
+      '验证 DNS 凭证',
+      {
+        confirmButtonText: '验证并保存',
+        cancelButtonText: '取消',
+        inputPlaceholder: 'example.com',
+        inputValidator: (value) => {
+          if (!value) return '请输入域名'
+          if (!/^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$/.test(value.trim())) return '域名格式不正确'
+          return true
+        },
+      }
+    )
+    return value.trim()
+  } catch {
+    return null
+  }
+}
+
 const testConfig = async (config: CertConfig) => {
+  const domain = await promptTestDomain()
+  if (!domain) return
   testingId.value = config.id || null
   try {
-    const res = await request.post(`/certificate-configs/${config.id}/test`)
+    const res = await request.post(`/certificate-configs/${config.id}/test`, { domain })
     ElMessage.success(res.message || '凭证有效')
   } catch (error: any) {
     const msg = error?.response?.data?.message || error?.message || '测试失败'

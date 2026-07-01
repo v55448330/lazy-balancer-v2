@@ -13,7 +13,7 @@ import (
 )
 
 func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, name, dns_provider, enabled, created_at, updated_at FROM certificate_configs ORDER BY id")
+	rows, err := db.DB.Query("SELECT id, name, dns_provider, dns_credentials, enabled, created_at, updated_at FROM certificate_configs ORDER BY id")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query configs"})
 		return
@@ -23,7 +23,7 @@ func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 	var configs []models.CertificateConfig
 	for rows.Next() {
 		var cfg models.CertificateConfig
-		if err := rows.Scan(&cfg.ID, &cfg.Name, &cfg.DNSProvider, &cfg.Enabled, &cfg.CreatedAt, &cfg.UpdatedAt,
+		if err := rows.Scan(&cfg.ID, &cfg.Name, &cfg.DNSProvider, &cfg.DNSCredentials, &cfg.Enabled, &cfg.CreatedAt, &cfg.UpdatedAt,
 		); err != nil {
 			continue
 		}
@@ -176,6 +176,16 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 	var provider, credentials string
 	var creds map[string]string
 
+	var req struct {
+		Domain        string            `json:"domain"`
+		DNSProvider   string            `json:"dns_provider"`
+		DNSCredentials  map[string]string `json:"dns_credentials"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		return
+	}
+
 	id, idErr := strconv.Atoi(c.Param("id"))
 	if idErr == nil && id > 0 {
 		var name string
@@ -186,13 +196,13 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 		}
 		json.Unmarshal([]byte(credentials), &creds)
 	} else {
-		var req models.CreateCertificateConfigRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
-			return
-		}
 		provider = req.DNSProvider
 		creds = req.DNSCredentials
+	}
+
+	if req.Domain == "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请输入用于测试的域名"})
+		return
 	}
 
 	p, ok := dnsproviders.Get(provider)
@@ -200,7 +210,7 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Unknown provider"})
 		return
 	}
-	if err := p.Validate(creds); err != nil {
+	if err := p.Validate(creds, req.Domain); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}

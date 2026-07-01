@@ -1,6 +1,7 @@
 package dnsproviders
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"lazy-balancer-v2/internal/dnsprovider"
 )
 
 func init() { Register(&DNSPod{}) }
@@ -41,40 +44,7 @@ func (d *DNSPod) CredentialFieldOptions(field string) []string {
 	return nil
 }
 
-func (d *DNSPod) BuildCredentialsJSON(creds map[string]string) (map[string]interface{}, error) {
-	mode := creds["auth_mode"]
-	if mode == "" {
-		if creds["secret_id"] != "" && creds["secret_key"] != "" {
-			mode = "tencent_cloud"
-		} else if creds["app_id"] != "" && creds["app_token"] != "" {
-			mode = "dnspod"
-		}
-	}
-
-	switch mode {
-	case "tencent_cloud":
-		if secretID := creds["secret_id"]; secretID != "" {
-			if secretKey := creds["secret_key"]; secretKey != "" {
-				return map[string]interface{}{
-					"api_token": secretID + "," + secretKey,
-				}, nil
-			}
-		}
-		return nil, fmt.Errorf("腾讯云认证方式需要提供 SecretId 和 SecretKey")
-	case "dnspod":
-		if appID := creds["app_id"]; appID != "" {
-			if appToken := creds["app_token"]; appToken != "" {
-				return map[string]interface{}{
-					"api_token": appID + "," + appToken,
-				}, nil
-			}
-		}
-		return nil, fmt.Errorf("DNSPod 认证方式需要提供 App ID 和 App Token")
-	}
-	return nil, fmt.Errorf("请选择认证方式")
-}
-
-func (d *DNSPod) Validate(creds map[string]string) error {
+func (d *DNSPod) buildCredentialsJSON(creds map[string]string) (string, error) {
 	mode := creds["auth_mode"]
 	if mode == "" {
 		if creds["secret_id"] != "" && creds["secret_key"] != "" {
@@ -87,16 +57,64 @@ func (d *DNSPod) Validate(creds map[string]string) error {
 	switch mode {
 	case "tencent_cloud":
 		if creds["secret_id"] == "" || creds["secret_key"] == "" {
-			return fmt.Errorf("腾讯云认证方式需要提供 SecretId 和 SecretKey")
+			return "", fmt.Errorf("腾讯云认证方式需要提供 SecretId 和 SecretKey")
 		}
-		return d.validateTencentCloud(creds["secret_id"], creds["secret_key"])
+		data, _ := json.Marshal(map[string]string{
+			"mode":       "tencent",
+			"secret_id":  creds["secret_id"],
+			"secret_key": creds["secret_key"],
+		})
+		return string(data), nil
 	case "dnspod":
 		if creds["app_id"] == "" || creds["app_token"] == "" {
-			return fmt.Errorf("DNSPod 认证方式需要提供 App ID 和 App Token")
+			return "", fmt.Errorf("DNSPod 认证方式需要提供 App ID 和 App Token")
 		}
-		return d.validateDNSPod(creds["app_id"], creds["app_token"])
+		data, _ := json.Marshal(map[string]string{
+			"mode":      "dnspod",
+			"api_token": creds["app_id"] + "," + creds["app_token"],
+		})
+		return string(data), nil
 	}
-	return fmt.Errorf("请选择认证方式")
+	return "", fmt.Errorf("请选择认证方式")
+}
+
+func (d *DNSPod) BuildCredentialsJSON(creds map[string]string) (map[string]interface{}, error) {
+	raw, err := d.buildCredentialsJSON(creds)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (d *DNSPod) Validate(creds map[string]string, testDomain string) error {
+	rawJSON, err := d.buildCredentialsJSON(creds)
+	if err != nil {
+		return err
+	}
+	provider, err := dnsprovider.NewProviderFromCredentials(rawJSON)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if testDomain == "" {
+		return fmt.Errorf("测试域名不能为空")
+	}
+	domain := strings.TrimSpace(testDomain)
+	if !strings.HasSuffix(domain, ".") {
+		domain += "."
+	}
+	challengeName := "_acme-challenge.lb-test." + domain
+	if err := provider.Present(ctx, domain, challengeName, "lazy-balancer-test", 600); err != nil {
+		return fmt.Errorf("DNS 写入测试失败: %v", err)
+	}
+	_ = provider.CleanUp(ctx, domain, challengeName)
+	return nil
 }
 
 func (d *DNSPod) validateDNSPod(appID, appToken string) error {

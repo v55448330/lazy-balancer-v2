@@ -53,11 +53,25 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 	}
 
 	id, _ := strconv.Atoi(c.Param("id"))
-	var ruleID, domain string
-	err := db.DB.QueryRow("SELECT rule_id, domain FROM cert_jobs WHERE id=?", id).Scan(&ruleID, &domain)
+	var ruleID, domain, status string
+	var updatedAt sql.NullTime
+	err := db.DB.QueryRow("SELECT rule_id, domain, status, updated_at FROM cert_jobs WHERE id=?", id).Scan(&ruleID, &domain, &status, &updatedAt)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "任务不存在"})
 		return
+	}
+
+	if status != "issued" && status != "failed" {
+		if updatedAt.Valid && time.Since(updatedAt.Time) < 15*time.Minute {
+			c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "任务正在执行中，请稍后重试"})
+			return
+		}
+	}
+	if status == "failed" {
+		if updatedAt.Valid && time.Since(updatedAt.Time) < 5*time.Minute {
+			c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "失败后请等待 5 分钟再重试"})
+			return
+		}
 	}
 
 	go func() {

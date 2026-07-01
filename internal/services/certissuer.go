@@ -106,6 +106,13 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 		}
 	}
 	if dnsCredentialsJSON == "" {
+		// If still no credentials, ensure at least one enabled provider exists before proceeding.
+		var providerCount int
+		_ = db.DB.QueryRow("SELECT COUNT(*) FROM certificate_configs WHERE enabled=1 AND COALESCE(dns_credentials,'') != ''").Scan(&providerCount)
+		if providerCount == 0 {
+			s.failJob(jobID, "没有可用的 DNS 提供商，请先配置并启用 DNS 凭证")
+			return fmt.Errorf("no enabled DNS provider configured")
+		}
 		s.failJob(jobID, "ACME DNS 凭证未配置")
 		return fmt.Errorf("ACME DNS credentials not configured")
 	}

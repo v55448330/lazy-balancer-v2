@@ -15,12 +15,16 @@ type Provider interface {
 	CredentialFields() []CredentialField
 	CredentialFieldOptions(field string) []string
 	BuildCredentialsJSON(creds map[string]string) (map[string]interface{}, error)
-	Validate(creds map[string]string) error
+	Validate(creds map[string]string, testDomain string) error
 }
 
 type BaseProvider struct{}
 
 func (b *BaseProvider) CredentialFieldOptions(field string) []string { return nil }
+
+func (b *BaseProvider) Validate(creds map[string]string, testDomain string) error {
+	return nil
+}
 
 var registry = map[string]Provider{}
 
