@@ -10,6 +10,7 @@ import (
 
 	"github.com/miekg/dns"
 	"golang.org/x/crypto/acme"
+	"golang.org/x/net/publicsuffix"
 )
 
 // Issuer orchestrates the full ACME DNS-01 issuance flow.
@@ -172,22 +173,34 @@ type ChallengeInfo struct {
 	TokenFQDN string
 }
 
-// zoneFromDomain extracts the zone (root domain) from a domain name.
-// This is a simple heuristic; for production use a proper zone detector.
+// zoneFromDomain extracts the DNS zone (registered domain) from a domain name.
+// It uses the Public Suffix List so multi-level TLDs (e.g. co.uk, com.cn)
+// are handled correctly.
 func zoneFromDomain(domain string) string {
-	parts := strings.Split(strings.TrimSuffix(domain, "."), ".")
-	if len(parts) <= 2 {
-		return strings.Join(parts, ".")
+	domain = strings.TrimSuffix(domain, ".")
+	if domain == "" {
+		return domain
 	}
-	return strings.Join(parts[len(parts)-2:], ".")
+	zone, err := publicsuffix.EffectiveTLDPlusOne(domain)
+	if err != nil {
+		// Fallback to the last two labels.
+		parts := strings.Split(domain, ".")
+		if len(parts) <= 2 {
+			return domain
+		}
+		return strings.Join(parts[len(parts)-2:], ".")
+	}
+	return zone
 }
 
 // waitForDNS polls DNS resolvers until the expected TXT record appears.
 func waitForDNS(ctx context.Context, fqdn, expected string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
 	resolvers := []string{"8.8.8.8:53", "1.1.1.1:53"}
 
-	for time.Now().Before(deadline) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
 		for _, resolver := range resolvers {
 			m := new(dns.Msg)
 			m.SetQuestion(fqdn, dns.TypeTXT)
@@ -195,7 +208,10 @@ func waitForDNS(ctx context.Context, fqdn, expected string, timeout time.Duratio
 
 			c := new(dns.Client)
 			c.Net = "udp"
-			r, _, err := c.Exchange(m, resolver)
+			// Bound each exchange by the remaining context deadline or timeout.
+			exchangeCtx, cancel := context.WithTimeout(ctx, timeout)
+			r, _, err := c.ExchangeContext(exchangeCtx, m, resolver)
+			cancel()
 			if err != nil || r == nil {
 				continue
 			}
@@ -212,8 +228,7 @@ func waitForDNS(ctx context.Context, fqdn, expected string, timeout time.Duratio
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-ticker.C:
 		}
 	}
-	return fmt.Errorf("timed out waiting for DNS propagation of %s", fqdn)
 }

@@ -53,29 +53,34 @@ func (s *CertificateService) Start() {
 func (s *CertificateService) Stop() { close(s.stopCh) }
 
 func (s *CertificateService) CreateJobsForRule(ruleID string, domains string) error {
+	primary := ""
 	for _, d := range strings.Split(domains, ",") {
 		d = strings.TrimSpace(d)
-		if d == "" {
-			continue
+		if d != "" {
+			primary = d
+			break
 		}
+	}
+	if primary == "" {
+		return nil
+	}
 
-		var existing int
-		err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE rule_id = ? AND domain = ?", ruleID, d).Scan(&existing)
-		if err != nil {
-			log.Printf("Create cert job failed: %v", err)
-			continue
-		}
-		if existing > 0 {
-			continue
-		}
+	var existing int
+	err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE rule_id = ? AND domain = ?", ruleID, primary).Scan(&existing)
+	if err != nil {
+		log.Printf("Create cert job failed: %v", err)
+		return nil
+	}
+	if existing > 0 {
+		return nil
+	}
 
-		_, err = db.DB.Exec(`
-			INSERT INTO cert_jobs (rule_id, domain, status, message)
-			VALUES (?, ?, 'pending', '等待签发')
-		`, ruleID, d)
-		if err != nil {
-			log.Printf("Create cert job failed: %v", err)
-		}
+	_, err = db.DB.Exec(`
+		INSERT INTO cert_jobs (rule_id, domain, status, message)
+		VALUES (?, ?, 'pending', '等待签发')
+	`, ruleID, primary)
+	if err != nil {
+		log.Printf("Create cert job failed: %v", err)
 	}
 	return nil
 }

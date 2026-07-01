@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"crypto/x509"
+	"database/sql"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -79,42 +80,39 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 
 	// Resolve ACME config for the rule.
 	var acmeConfigID int
-	var acmeEmail string
 	err = db.DB.QueryRow("SELECT COALESCE(acme_config_id,0) FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&acmeConfigID)
 	if err != nil {
 		s.failJob(jobID, "读取规则 ACME 配置失败")
 		return fmt.Errorf("read rule acme config: %w", err)
 	}
 
+	// Load ACME email from global config (single source of truth).
+	var acmeEmail string
+	if err := db.DB.QueryRow("SELECT COALESCE(acme_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail); err != nil {
+		s.failJob(jobID, "读取 ACME 邮箱失败")
+		return fmt.Errorf("read global acme email: %w", err)
+	}
+
+	// Load DNS credentials from the rule's selected provider if enabled.
 	var dnsCredentialsJSON string
 	if acmeConfigID > 0 {
-		err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,'') FROM certificate_configs WHERE id=?", acmeConfigID).Scan(&dnsCredentialsJSON)
-		if err != nil {
+		err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,'') FROM certificate_configs WHERE id=? AND enabled=1", acmeConfigID).Scan(&dnsCredentialsJSON)
+		if err != nil && err != sql.ErrNoRows {
 			s.failJob(jobID, "读取 DNS 凭证配置失败")
 			return fmt.Errorf("read certificate config: %w", err)
 		}
 	}
-	if strings.TrimSpace(acmeEmail) == "" {
-		db.DB.QueryRow("SELECT COALESCE(acme_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail)
-	}
 	if dnsCredentialsJSON == "" {
-		// Fallback to legacy global_config
-		err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,'') FROM global_config WHERE id=1").Scan(&dnsCredentialsJSON)
-		if err != nil {
+		// Fallback to any enabled provider with credentials.
+		err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,'') FROM certificate_configs WHERE enabled=1 AND COALESCE(dns_credentials,'') != '' ORDER BY id LIMIT 1").Scan(&dnsCredentialsJSON)
+		if err != nil && err != sql.ErrNoRows {
 			s.failJob(jobID, "读取 DNS 凭证失败")
-			return fmt.Errorf("read global dns credentials: %w", err)
+			return fmt.Errorf("read fallback dns credentials: %w", err)
 		}
 	}
 	if dnsCredentialsJSON == "" {
-		// If still no credentials, ensure at least one enabled provider exists before proceeding.
-		var providerCount int
-		_ = db.DB.QueryRow("SELECT COUNT(*) FROM certificate_configs WHERE enabled=1 AND COALESCE(dns_credentials,'') != ''").Scan(&providerCount)
-		if providerCount == 0 {
-			s.failJob(jobID, "没有可用的 DNS 提供商，请先配置并启用 DNS 凭证")
-			return fmt.Errorf("no enabled DNS provider configured")
-		}
-		s.failJob(jobID, "ACME DNS 凭证未配置")
-		return fmt.Errorf("ACME DNS credentials not configured")
+		s.failJob(jobID, "没有可用的 DNS 提供商，请先配置并启用 DNS 凭证")
+		return fmt.Errorf("no enabled DNS provider configured")
 	}
 
 	provider, err := dnsprovider.NewProviderFromCredentials(dnsCredentialsJSON)
