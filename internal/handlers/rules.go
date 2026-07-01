@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"io"
@@ -799,6 +798,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	err := db.DB.QueryRow(`
 		SELECT COALESCE(protocol,''), COALESCE(domain,''), listen_port, COALESCE(strategy,'round_robin'),
 			COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0),
+			COALESCE(ca_provider_id,0),
 			COALESCE(enable_tls,0), COALESCE(tls_http_redirect,0),
 			COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 			COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,5),
@@ -808,6 +808,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(
 		&existingRule.Protocol, &existingRule.Domain, &existingRule.ListenPort, &existingRule.Strategy,
 		&existingRule.TLSCert, &existingRule.TLSKey, &existingRule.TLSSource, &existingRule.ACMEConfigID,
+		&existingRule.CAProviderID,
 		&existingRule.EnableTLS, &existingRule.TLSHTTPRedirect,
 		&existingRule.DynamicDNS, &existingRule.EnableDnsServer, &existingRule.DnsServer, &existingRule.DnsFamily,
 		&existingRule.HealthCheckPath, &existingRule.HealthCheckInterval, &existingRule.HealthCheckTimeout,
@@ -954,6 +955,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	args = append(args, req.TLSSource)
 	query += "acme_config_id = ?, "
 	args = append(args, req.ACMEConfigID)
+	if req.CAProviderID != nil {
+		query += "ca_provider_id = ?, "
+		args = append(args, *req.CAProviderID)
+	}
 	if req.TLSCert != "" {
 		query += "tls_cert = ?, "
 		args = append(args, req.TLSCert)
@@ -1130,14 +1135,16 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			if req.TLSSource == "acme_dns" && req.EnableTLS && domain != "" {
 				if !services.IsACMECertIssued(caddyID, domain) {
 					go func() {
-						issuer := services.NewCertIssuer(func() error {
+						qm := services.GetCAQueueManager(func() error {
 							fullConfig := services.GenerateCaddyConfig(h.cfg)
 							return h.caddyService.ApplyConfig(fullConfig)
 						})
-						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-						defer cancel()
-						if err := issuer.IssueWithDefaultProvider_DEPRECATED(ctx, caddyID, domain); err != nil {
-							log.Printf("Auto cert issuance failed for %s: %v", domain, err)
+						caProviderID := existingRule.CAProviderID
+						if req.CAProviderID != nil {
+							caProviderID = *req.CAProviderID
+						}
+						if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+							log.Printf("Auto cert enqueue failed for %s: %v", domain, err)
 						}
 					}()
 				}

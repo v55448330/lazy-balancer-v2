@@ -317,7 +317,7 @@ type UpdateRuleRequest struct {
 	EnableTLS                     bool       `json:"enable_tls"`
 	TLSSource                     string     `json:"tls_source"`
 	ACMEConfigID                  int        `json:"acme_config_id"`
-	CAProviderID                  int        `json:"ca_provider_id"`
+	CAProviderID                  *int       `json:"ca_provider_id"`
 	TLSCert                       string     `json:"tls_cert"`
 	TLSKey                        string     `json:"tls_key"`
 	TLSHTTPRedirect               bool       `json:"tls_http_redirect"`
