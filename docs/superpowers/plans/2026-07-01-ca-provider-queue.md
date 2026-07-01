@@ -1379,7 +1379,7 @@ git commit -m "feat(ui): allow selecting CA provider per rule"
 **Files:**
 - Modify: `web/src/views/settings/CertJobs.vue`
 
-- [ ] **Step 1: 在状态标签与重签禁用中处理 queued**
+- [x] **Step 1: 在状态标签与重签禁用中处理 queued**
 
 `statusLabel` 中增加：
 
@@ -1395,7 +1395,7 @@ git commit -m "feat(ui): allow selecting CA provider per rule"
 
 重签按钮保持仅 `issued`/`failed` 可点击。
 
-- [ ] **Step 2: 编译验证**
+- [x] **Step 2: 编译验证**
 
 ```bash
 cd web && npm run build
@@ -1403,7 +1403,7 @@ cd web && npm run build
 
 Expected: build succeeds.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add web/src/views/settings/CertJobs.vue

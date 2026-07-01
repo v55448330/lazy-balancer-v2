@@ -40,7 +40,11 @@
     <el-table-column label="操作" width="120" align="center">
       <template #default="{ row }">
         <el-button link type="primary" size="small" @click="viewLogs(row)">日志</el-button>
-        <el-button link type="primary" size="small" :disabled="!canRetry(row.status)" @click="retryJob(row)">重签</el-button>
+        <el-tooltip :disabled="!isQueued(row.status)" content="排队中的任务无法重签，请等待调度执行">
+          <span>
+            <el-button link type="primary" size="small" :disabled="!canRetry(row.status)" @click="retryJob(row)">重签</el-button>
+          </span>
+        </el-tooltip>
         <el-button link type="danger" size="small" @click="deleteJob(row)">删除</el-button>
       </template>
     </el-table-column>
@@ -74,11 +78,33 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import * as pkijs from 'pkijs'
 import * as asn1js from 'asn1js'
 
+type CertJobStatus =
+  | 'queued'
+  | 'pending'
+  | 'processing'
+  | 'creating_account'
+  | 'creating_order'
+  | 'order_created'
+  | 'cleanup_dns'
+  | 'cleanup_warning'
+  | 'presenting_dns'
+  | 'waiting_propagation'
+  | 'dns_propagated'
+  | 'accepting_challenge'
+  | 'validating'
+  | 'validated'
+  | 'finalizing'
+  | 'finalized'
+  | 'downloading'
+  | 'downloaded'
+  | 'issued'
+  | 'failed'
+
 interface CertJob {
   id: number
   rule_id: string
   domain: string
-  status: string
+  status: CertJobStatus
   message: string
   expires_at?: string
   updated_at?: string
@@ -137,44 +163,64 @@ const scrollToBottom = async () => {
   }
 }
 
-const statusType = (status: string) => {
+const statusType = (status: CertJobStatus) => {
   switch (status) {
     case 'issued': return 'success'
     case 'failed': return 'danger'
+    case 'queued': return 'info'
     case 'pending':
+    case 'processing':
     case 'creating_account':
     case 'creating_order':
     case 'order_created':
+    case 'cleanup_dns':
+    case 'cleanup_warning':
     case 'presenting_dns':
+    case 'waiting_propagation':
     case 'dns_propagated':
+    case 'accepting_challenge':
     case 'validating':
+    case 'validated':
     case 'finalizing':
+    case 'finalized':
     case 'downloading':
+    case 'downloaded':
       return 'warning'
     default: return 'info'
   }
 }
 
-const statusLabel = (status: string) => {
+const statusLabel = (status: CertJobStatus) => {
   switch (status) {
     case 'issued': return '已签发'
     case 'failed': return '失败'
+    case 'queued': return '排队中'
     case 'pending': return '待处理'
+    case 'processing': return '处理中'
     case 'creating_account': return '创建账户'
     case 'creating_order': return '创建订单'
     case 'order_created': return '订单已创建'
+    case 'cleanup_dns': return '清理 DNS'
+    case 'cleanup_warning': return '清理警告'
     case 'presenting_dns': return '设置 DNS'
+    case 'waiting_propagation': return '等待 DNS 传播'
     case 'dns_propagated': return 'DNS 已传播'
+    case 'accepting_challenge': return '提交验证'
     case 'validating': return '验证中'
+    case 'validated': return '验证通过'
     case 'finalizing': return '最终化'
+    case 'finalized': return '订单完成'
     case 'downloading': return '下载证书'
+    case 'downloaded': return '下载完成'
     default: return status
   }
 }
 
-const canRetry = (status: string) => {
+const canRetry = (status: CertJobStatus) => {
   return status === 'issued' || status === 'failed'
 }
+
+const isQueued = (status: CertJobStatus) => status === 'queued'
 
 const fetchJobs = async () => {
   loading.value = true
