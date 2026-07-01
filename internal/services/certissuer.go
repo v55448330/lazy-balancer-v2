@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/acme"
@@ -19,6 +20,9 @@ import (
 type CertIssuer struct {
 	caddyReloader func() error
 }
+
+// issuingMu serializes ACME issuance to avoid rate limits and concurrent DNS conflicts.
+var issuingMu sync.Mutex
 
 // NewCertIssuer creates a new CertIssuer. The reloader is called after a
 // certificate is successfully issued so Caddy picks up the new cert.
@@ -42,6 +46,9 @@ func (l *jobLogger) Log(stage, message string) {
 // It validates domains, creates/updates a cert_jobs row, runs ACME, and
 // persists the cert+key on success.
 func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
+	issuingMu.Lock()
+	defer issuingMu.Unlock()
+
 	domainList := normalizeAndValidateDomains(domains)
 	if domainList == nil {
 		return fmt.Errorf("ACME证书仅支持单域名或根域+www二级域名: %s", domains)

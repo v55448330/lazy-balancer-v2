@@ -152,6 +152,8 @@ type CertJob struct {
 	Domain    string       `json:"domain"`
 	Status    string       `json:"status"`
 	Message   string       `json:"message"`
+	CertPEM   string       `json:"cert_pem,omitempty"`
+	KeyPEM    string       `json:"key_pem,omitempty"`
 	ExpiresAt sql.NullTime `json:"expires_at"`
 	CreatedAt time.Time    `json:"created_at"`
 	UpdatedAt sql.NullTime `json:"updated_at"`
