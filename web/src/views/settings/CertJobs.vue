@@ -57,6 +57,14 @@ interface CertJob {
   expires_at?: string
 }
 
+interface CertJobLog {
+  id: number
+  job_id: number
+  level: string
+  message: string
+  created_at: string
+}
+
 const props = defineProps<{
   ruleId?: string
 }>()
@@ -67,15 +75,21 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const logDialogVisible = ref(false)
 const logLoading = ref(false)
-const logLines = ref<string[]>([])
+const logLines = ref<CertJobLog[]>([])
 const currentJob = ref<CertJob | null>(null)
 const logContainerRef = ref<HTMLDivElement | null>(null)
 let logPollTimer: ReturnType<typeof setInterval> | null = null
 
 const ansiRegex = /[\u001B\u009B][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d\/#&.:=?%@~_]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g
 
+const formatLogLine = (log: CertJobLog) => {
+  const ts = log.created_at ? formatDate(log.created_at) : '-'
+  return `[${ts}] [${log.level.toUpperCase()}] ${log.message}`
+}
+
 const formattedLogs = computed(() => {
   return logLines.value
+    .map(formatLogLine)
     .map(line => line.replace(ansiRegex, '').trimEnd())
     .join('\n')
 })
@@ -90,8 +104,17 @@ const scrollToBottom = async () => {
 const statusType = (status: string) => {
   switch (status) {
     case 'issued': return 'success'
-    case 'issuing': return 'warning'
     case 'failed': return 'danger'
+    case 'pending':
+    case 'creating_account':
+    case 'creating_order':
+    case 'order_created':
+    case 'presenting_dns':
+    case 'dns_propagated':
+    case 'validating':
+    case 'finalizing':
+    case 'downloading':
+      return 'warning'
     default: return 'info'
   }
 }
@@ -99,9 +122,16 @@ const statusType = (status: string) => {
 const statusLabel = (status: string) => {
   switch (status) {
     case 'issued': return '已签发'
-    case 'issuing': return '签发中'
     case 'failed': return '失败'
     case 'pending': return '待处理'
+    case 'creating_account': return '创建账户'
+    case 'creating_order': return '创建订单'
+    case 'order_created': return '订单已创建'
+    case 'presenting_dns': return '设置 DNS'
+    case 'dns_propagated': return 'DNS 已传播'
+    case 'validating': return '验证中'
+    case 'finalizing': return '最终化'
+    case 'downloading': return '下载证书'
     default: return status
   }
 }
@@ -176,7 +206,8 @@ const refreshLogs = async () => {
   logLoading.value = true
   try {
     const res = await request.get(`/certificates/jobs/${currentJob.value.id}/logs`, { params: { limit: 500 } })
-    logLines.value = res.data?.lines || []
+    const logs = Array.isArray(res.data) ? res.data : (res.data?.lines || [])
+    logLines.value = logs
     await scrollToBottom()
   } catch (error) {
     console.error('Failed to fetch cert job logs:', error)

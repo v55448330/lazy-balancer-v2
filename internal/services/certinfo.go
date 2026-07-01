@@ -203,7 +203,14 @@ func findCertPEMInStorage(domain string) (string, error) {
 	return "", fmt.Errorf("certificate not found in storage for %s", domain)
 }
 
-
+func containsDomain(names []string, domain string) bool {
+	for _, n := range names {
+		if n == domain {
+			return true
+		}
+	}
+	return false
+}
 
 // GetRulesCertInfo returns parsed certificate info for multiple rules.
 func GetRulesCertInfo(caddyIDs []string) map[string]*models.RuleCertInfo {

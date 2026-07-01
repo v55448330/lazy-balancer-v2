@@ -47,7 +47,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="TLS" width="70" align="center">
+        <el-table-column label="TLS" width="120" align="center">
           <template #default="{ row }">
             <el-popover
               v-if="row.enable_tls"
@@ -57,9 +57,20 @@
               :disabled="!certInfoMap[row.caddy_id]"
             >
               <template #reference>
-                <el-tag type="success" size="small" effect="plain">
-                  {{ row.tls_auto_cert ? '自动' : '手动' }}
-                </el-tag>
+                <div class="tls-cell">
+                  <el-tag type="success" size="small" effect="plain">
+                    {{ row.tls_auto_cert ? '自动' : '手动' }}
+                  </el-tag>
+                  <el-tag
+                    v-if="row.tls_source === 'acme_dns' && certJobMap[row.caddy_id]"
+                    :type="certJobMap[row.caddy_id].status === 'issued' ? 'success' : (certJobMap[row.caddy_id].status === 'failed' ? 'danger' : 'warning')"
+                    size="small"
+                    effect="plain"
+                    class="cert-job-tag"
+                  >
+                    {{ certJobStatusLabel(certJobMap[row.caddy_id].status) }}
+                  </el-tag>
+                </div>
               </template>
               <div class="cert-tooltip" v-if="certInfoMap[row.caddy_id]">
                 <div class="tooltip-title">证书信息</div>
@@ -153,18 +164,34 @@
             <el-switch v-model="row.enabled" :disabled="authStore.nodeMode === 'slave'" @change="toggleRule(row)" class="status-switch" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100" fixed="right" align="center">
+        <el-table-column label="操作" width="120" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
-              <el-button v-if="authStore.nodeMode === 'master'" type="primary" link size="small" @click="openWizard(row)">
-                编辑
-              </el-button>
+              <el-tooltip
+                v-if="authStore.nodeMode === 'master'"
+                :disabled="canEditRule(row)"
+                content="证书申请中，请等待完成或失败后再修改规则"
+              >
+                <div>
+                  <el-button type="primary" link size="small" @click="openWizard(row)" :disabled="!canEditRule(row)">
+                    编辑
+                  </el-button>
+                </div>
+              </el-tooltip>
               <el-button v-if="authStore.nodeMode === 'master'" type="success" link size="small" @click="duplicateRule(row)">
                 复制
               </el-button>
-              <el-button v-if="authStore.nodeMode === 'master'" type="danger" link size="small" @click="deleteRule(row)">
-                删除
-              </el-button>
+              <el-tooltip
+                v-if="authStore.nodeMode === 'master'"
+                :disabled="canEditRule(row)"
+                content="证书申请中，请等待完成或失败后再删除规则"
+              >
+                <div>
+                  <el-button type="danger" link size="small" @click="deleteRule(row)" :disabled="!canEditRule(row)">
+                    删除
+                  </el-button>
+                </div>
+              </el-tooltip>
             </div>
           </template>
         </el-table-column>
@@ -218,8 +245,11 @@
             </el-form-item>
 
             <el-form-item label="启用 HTTPS" v-if="wizardForm.protocol === 'http'">
-              <el-switch v-model="wizardForm.enable_tls" />
-              <span class="form-tip-inline">启用 TLS 加密传输</span>
+              <el-switch v-model="wizardForm.enable_tls" :disabled="isCurrentRuleLocked" />
+              <span class="form-tip-inline">
+                <span v-if="isCurrentRuleLocked" class="port-warning">证书申请中，暂不能修改 TLS 设置</span>
+                <span v-else>启用 TLS 加密传输</span>
+              </span>
             </el-form-item>
 
             <el-form-item label="描述">
@@ -232,10 +262,11 @@
         <div v-show="currentStep === 1" class="step-content">
           <el-form :model="wizardForm" label-width="100px" v-if="wizardForm.enable_tls && wizardForm.protocol === 'http'">
             <el-form-item label="证书来源">
-              <el-radio-group v-model="wizardForm.tls_source">
+              <el-radio-group v-model="wizardForm.tls_source" :disabled="isCurrentRuleLocked">
                 <el-radio value="manual">手动上传</el-radio>
                 <el-radio value="acme_dns">ACME + DNS 自动</el-radio>
               </el-radio-group>
+              <div v-if="isCurrentRuleLocked" class="form-tip-line port-warning">证书申请中，暂不能修改证书来源</div>
             </el-form-item>
             <template v-if="wizardForm.tls_source === 'acme_dns'">
               <el-form-item label="DNS 配置">
@@ -697,7 +728,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
 import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting } from '@element-plus/icons-vue'
@@ -777,8 +808,19 @@ interface CertInfo {
   error?: string
 }
 
+interface CertJob {
+  id: number
+  rule_id: string
+  domain: string
+  status: string
+  message: string
+  expires_at?: string
+}
+
 const rules = ref<Rule[]>([])
 const users = ref<any[]>([])
+const certInfoMap = ref<Record<string, CertInfo | null>>({})
+const certJobMap = ref<Record<string, CertJob>>({})
 
 const getUpdaterName = (userId?: number) => {
   if (!userId || userId === 0) return '-'
@@ -807,6 +849,8 @@ const fetchRules = async () => {
     fetchHealthStatus()
     // Fetch certificate info for TLS-enabled rules
     fetchCertInfo()
+    // Fetch cert job statuses for ACME rules
+    fetchCertJobs()
   } finally {
     loading.value = false
   }
@@ -829,6 +873,61 @@ const fetchCertInfo = async () => {
   }
 }
 
+const fetchCertJobs = async () => {
+  try {
+    const res = await request.get('/certificates/jobs')
+    const jobs: CertJob[] = res.data || []
+    const map: Record<string, CertJob> = {}
+    jobs.forEach(job => {
+      if (job.rule_id) {
+        // Keep the most recent non-terminal job if multiple exist
+        const existing = map[job.rule_id]
+        if (!existing || isCertJobActive(existing.status)) {
+          map[job.rule_id] = job
+        }
+      }
+    })
+    certJobMap.value = map
+  } catch (e: any) {
+    certJobMap.value = {}
+  }
+}
+
+const isCertJobActive = (status?: string) => {
+  if (!status) return false
+  return !['issued', 'failed'].includes(status)
+}
+
+const certJobStatusLabel = (status?: string) => {
+  switch (status) {
+    case 'issued': return '已签发'
+    case 'failed': return '签发失败'
+    case 'pending': return '待处理'
+    case 'creating_account': return '创建账户'
+    case 'creating_order': return '创建订单'
+    case 'order_created': return '订单已创建'
+    case 'presenting_dns': return '设置 DNS'
+    case 'dns_propagated': return 'DNS 已传播'
+    case 'validating': return '验证中'
+    case 'finalizing': return '最终化'
+    case 'downloading': return '下载证书'
+    default: return status || '未知'
+  }
+}
+
+const canEditRule = (row: Rule) => {
+  if (authStore.nodeMode === 'slave') return false
+  if (row.tls_source === 'acme_dns' && isCertJobActive(certJobMap.value[row.caddy_id]?.status)) {
+    return false
+  }
+  return true
+}
+
+const isCurrentRuleLocked = computed(() => {
+  if (!editingRule.value) return false
+  return editingRule.value.tls_source === 'acme_dns' && isCertJobActive(certJobMap.value[editingRule.value.caddy_id]?.status)
+})
+
 const loading = ref(false)
 const wizardVisible = ref(false)
 const saving = ref(false)
@@ -837,7 +936,7 @@ const currentStep = ref(0)
 const upstreamTouched = ref<boolean[]>([])
 const certConfigs = ref<any[]>([])
 const healthStatus = ref<Record<string, { healthy: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; num_requests?: number; fails?: number }> }>>({})
-const certInfoMap = ref<Record<string, CertInfo | null>>({})
+let certJobPollTimer: ReturnType<typeof setInterval> | null = null
 
 // Config viewing
 const configDialogVisible = ref(false)
@@ -1654,6 +1753,18 @@ onMounted(() => {
   fetchUsers()
   fetchCertConfigs()
   fetchHealthStatus()
+  certJobPollTimer = setInterval(() => {
+    if (rules.value.some(r => r.tls_source === 'acme_dns')) {
+      fetchCertJobs()
+    }
+  }, 5000)
+})
+
+onUnmounted(() => {
+  if (certJobPollTimer) {
+    clearInterval(certJobPollTimer)
+    certJobPollTimer = null
+  }
 })
 </script>
 
@@ -1710,6 +1821,15 @@ onMounted(() => {
   color: #6b7280;
 }
 .port { font-family: monospace; color: #374151; }
+.tls-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.cert-job-tag {
+  font-size: 10px;
+}
 .text-secondary { color: #6b7280; }
 .form-tip { font-size: 12px; color: #9ca3af; margin-top: 2px; }
 .form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; }

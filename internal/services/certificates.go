@@ -1,12 +1,11 @@
 package services
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -16,27 +15,34 @@ import (
 )
 
 type CertificateService struct {
-	adminURL string
-	client   *http.Client
-	mu       sync.Mutex
-	stopCh   chan struct{}
+	adminURL      string
+	client        *http.Client
+	mu            sync.Mutex
+	stopCh        chan struct{}
+	caddyReloader func() error
 }
 
-func NewCertificateService(adminURL string) *CertificateService {
+func NewCertificateService(adminURL string, reloader func() error) *CertificateService {
 	return &CertificateService{
-		adminURL: adminURL,
-		client:   &http.Client{Timeout: 10 * time.Second},
-		stopCh:   make(chan struct{}),
+		adminURL:      adminURL,
+		client:        &http.Client{Timeout: 10 * time.Second},
+		stopCh:        make(chan struct{}),
+		caddyReloader: reloader,
 	}
 }
 
 func (s *CertificateService) Start() {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
+	// Run renewal check shortly after startup, then every 6 hours.
+	time.AfterFunc(30*time.Second, s.renewExpiringCertificates)
+	renewalTicker := time.NewTicker(6 * time.Hour)
+	manualTicker := time.NewTicker(10 * time.Minute)
+	defer renewalTicker.Stop()
+	defer manualTicker.Stop()
 	for {
 		select {
-		case <-ticker.C:
-			s.poll()
+		case <-renewalTicker.C:
+			s.renewExpiringCertificates()
+		case <-manualTicker.C:
 			s.checkManualCertExpiration()
 		case <-s.stopCh:
 			return
@@ -65,7 +71,7 @@ func (s *CertificateService) CreateJobsForRule(ruleID string, domains string) er
 
 		_, err = db.DB.Exec(`
 			INSERT INTO cert_jobs (rule_id, domain, status, message)
-			VALUES (?, ?, 'issuing', '等待 Caddy 签发')
+			VALUES (?, ?, 'pending', '等待签发')
 		`, ruleID, d)
 		if err != nil {
 			log.Printf("Create cert job failed: %v", err)
@@ -74,137 +80,41 @@ func (s *CertificateService) CreateJobsForRule(ruleID string, domains string) er
 	return nil
 }
 
-func (s *CertificateService) poll() {
+func (s *CertificateService) renewExpiringCertificates() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Skip polling if there are no pending/issuing/failed cert jobs to avoid unnecessary DB/Caddy load
-	var pendingCount int
-	if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE status IN ('pending','issuing','failed')").Scan(&pendingCount); err != nil {
-		log.Printf("Failed to count pending cert jobs: %v", err)
-		return
-	}
-	if pendingCount == 0 {
+	jobs := s.CheckExpiration()
+	if len(jobs) == 0 {
 		return
 	}
 
-	// Pre-read all jobs into memory, then close cursor before writing
-	rows, err := db.DB.Query("SELECT id, domain, status FROM cert_jobs WHERE status IN ('pending','issuing','failed')")
-	if err != nil {
-		log.Printf("Failed to query cert jobs: %v", err)
-		return
-	}
-	type job struct {
-		id     int
-		domain string
-		status string
-	}
-	var jobs []job
-	for rows.Next() {
-		var j job
-		if err := rows.Scan(&j.id, &j.domain, &j.status); err != nil {
-			continue
-		}
-		jobs = append(jobs, j)
-	}
-	rows.Close()
-
-	// Read cert_pem from cert_jobs if available, otherwise fall back to the
-	// Caddy local CA endpoint (which only exposes the local CA root, not
-	// ACME-issued certificates).
 	for _, j := range jobs {
-		var certPEM string
-		err := db.DB.QueryRow("SELECT COALESCE(cert_pem, '') FROM cert_jobs WHERE id=?", j.id).Scan(&certPEM)
+		// Avoid concurrent renewals: skip if the job is already in a non-terminal state.
+		var currentStatus string
+		err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", j.ID).Scan(&currentStatus)
 		if err != nil {
-			log.Printf("Failed to read cert_pem for job %d: %v", j.id, err)
+			log.Printf("Renewal: failed to read job %d status: %v", j.ID, err)
+			continue
+		}
+		if isCertJobActive(currentStatus) {
 			continue
 		}
 
-		var notAfter time.Time
-		if certPEM != "" {
-			block, _ := pem.Decode([]byte(certPEM))
-			if block != nil {
-				if cert, err := x509.ParseCertificate(block.Bytes); err == nil {
-					notAfter = cert.NotAfter
-				}
+		log.Printf("Renewal: re-issuing certificate for rule %s domain %s (expires %s)", j.RuleID, j.Domain, j.ExpiresAt.Time.Format("2006-01-02"))
+		go func(job models.CertJob) {
+			issuer := NewCertIssuer(s.caddyReloader)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			if err := issuer.Issue(ctx, job.RuleID, job.Domain); err != nil {
+				log.Printf("Renewal: failed to re-issue certificate for %s: %v", job.Domain, err)
 			}
-		}
-
-		// Fallback: try to locate the certificate in Caddy storage by scanning
-		// the certificates directory.
-		if notAfter.IsZero() {
-			notAfter = s.findCertExpiryInStorage(j.domain)
-		}
-
-		if !notAfter.IsZero() {
-			_, err := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='签发成功', expires_at=? WHERE id=?", notAfter, j.id)
-			if err != nil {
-				log.Printf("Failed to update issued cert job: %v", err)
-			}
-			continue
-		}
-
-		// Still not found: if the job is failed, reset it to issuing so a retry
-		// (e.g. from the UI) can be tracked. If it has been issuing for too long,
-		// mark it failed.
-		if j.status == "failed" {
-			_, err := db.DB.Exec("UPDATE cert_jobs SET status='issuing', message='重新签发' WHERE id=?", j.id)
-			if err != nil {
-				log.Printf("Failed to reset failed cert job to issuing: %v", err)
-			}
-		} else if j.status == "issuing" {
-			_, err := db.DB.Exec(`
-				UPDATE cert_jobs SET status='failed', message='签发超时，请检查 DNS 配置和域名解析'
-				WHERE id=? AND datetime(created_at, '+10 minutes') < datetime('now')
-			`, j.id)
-			if err != nil {
-				log.Printf("Failed to update failed cert job: %v", err)
-			}
-		}
+		}(j)
 	}
 }
 
-func (s *CertificateService) findCertExpiryInStorage(domain string) time.Time {
-	// Try the well-known Caddy storage layout for ACME certificates.
-	// With XDG_DATA_HOME=/app/data, Caddy stores certificates under
-	// /app/data/caddy/certificates.
-	for _, baseDir := range []string{"/app/data/caddy/certificates", "/root/.local/share/caddy/certificates"} {
-		entries, err := os.ReadDir(baseDir)
-		if err != nil {
-			continue
-		}
-		for _, issuerDir := range entries {
-			if !issuerDir.IsDir() {
-				continue
-			}
-			certFile := filepath.Join(baseDir, issuerDir.Name(), domain, domain+".crt")
-			data, err := os.ReadFile(certFile)
-			if err != nil {
-				continue
-			}
-			block, _ := pem.Decode(data)
-			if block == nil {
-				continue
-			}
-			cert, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				continue
-			}
-			if cert.Subject.CommonName == domain || containsDomain(cert.DNSNames, domain) {
-				return cert.NotAfter
-			}
-		}
-	}
-	return time.Time{}
-}
-
-func containsDomain(names []string, domain string) bool {
-	for _, n := range names {
-		if n == domain {
-			return true
-		}
-	}
-	return false
+func isCertJobActive(status string) bool {
+	return status != "issued" && status != "failed"
 }
 
 func (s *CertificateService) checkManualCertExpiration() {

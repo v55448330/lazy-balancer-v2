@@ -41,7 +41,9 @@ func main() {
 
 	// Initialize services
 	caddyService := services.NewCaddyService(cfg.CaddyAdminURL)
-	certService := services.NewCertificateService(cfg.CaddyAdminURL)
+	certService := services.NewCertificateService(cfg.CaddyAdminURL, func() error {
+		return caddyService.ApplyConfig(services.GenerateCaddyConfig(cfg))
+	})
 	metricsService := services.NewMetricsService(cfg.CaddyMetricsURL, cfg.MetricsInterval)
 	nodeService := services.NewNodeService()
 	syncService := services.NewSyncService()
