@@ -7,8 +7,9 @@
         </div>
       </template>
       <el-form :model="global" label-width="140px">
-        <el-form-item label="ACME 邮箱">
+        <el-form-item label="ACME 邮箱" required>
           <el-input v-model="global.acme_email" placeholder="your@email.com" />
+          <div class="form-tip">用于 Let's Encrypt 账户注册，必须填写</div>
         </el-form-item>
         <el-form-item label="过期提醒天数">
           <el-input-number v-model="global.cert_expiry_days" :min="1" :max="90" />
@@ -282,6 +283,14 @@ const testConfig = async (config: CertConfig) => {
 }
 
 const handleSave = async () => {
+  if (!global.value.acme_email || !global.value.acme_email.trim()) {
+    ElMessage.warning('请填写 ACME 邮箱')
+    return
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(global.value.acme_email.trim())) {
+    ElMessage.warning('ACME 邮箱格式不正确')
+    return
+  }
   saving.value = true
   try {
     await emit('save', {
@@ -306,4 +315,5 @@ onMounted(() => {
   align-items: center;
 }
 .btn-text { margin-left: 4px; }
+.form-tip { font-size: 12px; color: #9ca3af; margin-top: 4px; }
 </style>

@@ -110,8 +110,9 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 	}
 
 	// Create ACME client
-	if acmeEmail == "" {
-		acmeEmail = "admin@" + primaryDomain
+	if strings.TrimSpace(acmeEmail) == "" {
+		s.failJob(jobID, "ACME 邮箱未配置，请在「系统设置 / 免费证书」中填写邮箱")
+		return fmt.Errorf("ACME 邮箱未配置")
 	}
 	client, err := acme.NewClient("https://acme-v02.api.letsencrypt.org/directory", acmeEmail)
 	if err != nil {
