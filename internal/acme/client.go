@@ -8,8 +8,13 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"strings"
+
+	"lazy-balancer-v2/internal/models"
 
 	"golang.org/x/crypto/acme"
 )
@@ -25,10 +30,46 @@ type Client struct {
 	Email        string
 	acme         *acme.Client
 	accountKey   crypto.Signer
+	eab          *acme.ExternalAccountBinding
 }
 
-// NewClient creates a new ACME client with a fresh ECDSA account key.
+// NewClient creates a Let's Encrypt compatible ACME client.
 func NewClient(directoryURL, email string) (*Client, error) {
+	return newClient(directoryURL, email, nil)
+}
+
+// NewClientForProvider creates an ACME client based on a CA provider configuration.
+func NewClientForProvider(provider models.CAProvider, email string) (*Client, error) {
+	var eab *acme.ExternalAccountBinding
+	if provider.Provider == "zerossl" {
+		var creds models.CAProviderCredentials
+		if provider.Credentials != "" {
+			if err := json.Unmarshal([]byte(provider.Credentials), &creds); err != nil {
+				return nil, fmt.Errorf("invalid ZeroSSL credentials JSON: %w", err)
+			}
+		}
+		if creds.EABKID == "" || creds.EABHMACKey == "" {
+			return nil, fmt.Errorf("ZeroSSL requires eab_kid and eab_hmac_key")
+		}
+		hmacKey, err := base64.RawURLEncoding.DecodeString(creds.EABHMACKey)
+		if err != nil {
+			hmacKey, err = base64.URLEncoding.DecodeString(creds.EABHMACKey)
+			if err != nil {
+				hmacKey, err = base64.StdEncoding.DecodeString(creds.EABHMACKey)
+				if err != nil {
+					return nil, fmt.Errorf("invalid ZeroSSL EAB HMAC key: %w", err)
+				}
+			}
+		}
+		eab = &acme.ExternalAccountBinding{
+			KID: creds.EABKID,
+			Key: hmacKey,
+		}
+	}
+	return newClient(provider.DirectoryURL, email, eab)
+}
+
+func newClient(directoryURL, email string, eab *acme.ExternalAccountBinding) (*Client, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
@@ -36,19 +77,24 @@ func NewClient(directoryURL, email string) (*Client, error) {
 	return &Client{
 		DirectoryURL: directoryURL,
 		Email:        email,
-		acme:         &acme.Client{
+		acme: &acme.Client{
 			Key:          key,
 			DirectoryURL: directoryURL,
 		},
 		accountKey: key,
+		eab:        eab,
 	}, nil
 }
 
 // RegisterAccount registers a new ACME account or returns nil if already registered.
 func (c *Client) RegisterAccount(ctx context.Context) error {
-	_, err := c.acme.Register(ctx, &acme.Account{
+	acct := &acme.Account{
 		Contact: []string{"mailto:" + c.Email},
-	}, acme.AcceptTOS)
+	}
+	if c.eab != nil {
+		acct.ExternalAccountBinding = c.eab
+	}
+	_, err := c.acme.Register(ctx, acct, acme.AcceptTOS)
 	if err != nil {
 		if strings.Contains(err.Error(), "Account already exists") || strings.Contains(err.Error(), "already registered") {
 			return nil
