@@ -264,6 +264,13 @@
                 </el-select>
                 <div class="form-tip">请先在「系统设置 / 免费证书」中添加 DNS 提供商配置</div>
               </el-form-item>
+              <el-form-item label="CA 提供商">
+                <el-select v-model="wizardForm.ca_provider_id" placeholder="系统默认" clearable style="width: 100%">
+                  <el-option label="系统默认" :value="0" />
+                  <el-option v-for="p in enabledCAProviders" :key="p.id" :label="p.name" :value="p.id" />
+                </el-select>
+                <div class="form-tip">选择自动签发证书使用的 CA 提供商，留空或「系统默认」将跟随全局默认设置</div>
+              </el-form-item>
             </template>
             <template v-else>
               <el-form-item label="证书 (PEM)">
@@ -761,6 +768,7 @@ interface Rule {
   enable_tls: boolean
   tls_source?: string
   acme_config_id?: number | undefined
+  ca_provider_id?: number | undefined
   tls_cert: string
   tls_key: string
   tls_http_redirect: boolean
@@ -941,6 +949,9 @@ const editingRule = ref<Rule | null>(null)
 const currentStep = ref(0)
 const upstreamTouched = ref<boolean[]>([])
 const certConfigs = ref<any[]>([])
+const caProviders = ref<Array<{ id: number; name: string; enabled: boolean }>>([])
+const enabledCAProviders = computed(() => caProviders.value.filter(p => p.enabled))
+const globalConfig = ref<{ default_ca_provider_id?: number }>({})
 const healthStatus = ref<Record<string, { healthy: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; num_requests?: number; fails?: number }> }>>({})
 let certJobPollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -1140,6 +1151,7 @@ const wizardForm = reactive<Rule>({
   enable_tls: false,
   tls_source: 'manual',
   acme_config_id: 0,
+  ca_provider_id: undefined as number | undefined,
   tls_cert: '',
   tls_key: '',
   tls_http_redirect: false,
@@ -1281,6 +1293,32 @@ const fetchCertConfigs = async () => {
   }
 }
 
+const fetchCAProviders = async () => {
+  try {
+    const res = await request.get('/ca-providers')
+    caProviders.value = res.data || []
+  } catch (e) {
+    console.error('Failed to load CA providers:', e)
+  }
+}
+
+const fetchGlobalConfig = async () => {
+  try {
+    const res = await request.get('/config')
+    globalConfig.value = res.data || {}
+  } catch (e) {
+    console.error('Failed to load global config:', e)
+  }
+}
+
+const getDefaultCAProviderId = (): number => {
+  const defaultId = globalConfig.value.default_ca_provider_id
+  if (defaultId && caProviders.value.some(p => p.id === defaultId)) {
+    return defaultId
+  }
+  return enabledCAProviders.value[0]?.id || 0
+}
+
 const validateCertificate = async () => {
   certInfo.valid = false
   certInfo.warning = ''
@@ -1414,6 +1452,7 @@ const openWizard = (rule?: Rule) => {
       enable_tls: rule.enable_tls || false,
       tls_source: rule.tls_source || 'manual',
       acme_config_id: rule.acme_config_id || undefined,
+      ca_provider_id: rule.ca_provider_id || getDefaultCAProviderId(),
       tls_cert: rule.tls_cert || '',
       tls_key: rule.tls_key || '',
       tls_http_redirect: rule.tls_http_redirect || false,
@@ -1446,6 +1485,7 @@ const openWizard = (rule?: Rule) => {
       enable_tls: false,
       tls_source: 'manual',
       acme_config_id: undefined as number | undefined,
+      ca_provider_id: getDefaultCAProviderId(),
       tls_cert: '',
       tls_key: '',
       tls_http_redirect: false,
@@ -1610,6 +1650,7 @@ const submitWizard = async () => {
       enable_tls: wizardForm.enable_tls,
       tls_source: wizardForm.tls_source,
       acme_config_id: wizardForm.acme_config_id || 0,
+      ca_provider_id: wizardForm.ca_provider_id || 0,
       tls_cert: wizardForm.tls_source === 'manual' ? wizardForm.tls_cert : '',
       tls_key: wizardForm.tls_source === 'manual' ? wizardForm.tls_key : '',
       tls_http_redirect: wizardForm.tls_http_redirect,
@@ -1750,6 +1791,8 @@ onMounted(() => {
   fetchRules()
   fetchUsers()
   fetchCertConfigs()
+  fetchCAProviders()
+  fetchGlobalConfig()
   fetchHealthStatus()
   certJobPollTimer = setInterval(() => {
     if (rules.value.some(r => r.tls_source === 'acme_dns')) {
