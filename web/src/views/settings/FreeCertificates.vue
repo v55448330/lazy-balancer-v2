@@ -246,7 +246,7 @@ const saveConfig = async () => {
     return
   }
 
-  const domain = await promptTestDomain()
+  const domain = await promptTestDomain(true)
   if (!domain) return
 
   saving.value = true
@@ -294,13 +294,15 @@ const deleteConfig = async (config: CertConfig) => {
   }
 }
 
-const promptTestDomain = async (): Promise<string | null> => {
+const promptTestDomain = async (isSave = false): Promise<string | null> => {
   try {
     const { value } = await ElMessageBox.prompt(
-      '保存前需要验证 DNS 凭证。请输入一个该 DNS 账户下可管理的域名（例如 example.com），系统将临时写入并删除 _acme-challenge.lb-test 记录来验证权限',
+      isSave
+        ? '保存前需要验证 DNS 凭证。请输入一个该 DNS 账户下可管理的域名（例如 example.com），系统将临时写入并删除 _acme-challenge.lb-test 记录来验证权限'
+        : '请输入一个该 DNS 账户下可管理的域名（例如 example.com），系统将临时写入并删除 _acme-challenge.lb-test 记录来验证权限',
       '验证 DNS 凭证',
       {
-        confirmButtonText: '验证并保存',
+        confirmButtonText: isSave ? '验证并保存' : '验证',
         cancelButtonText: '取消',
         inputPlaceholder: 'example.com',
         inputValidator: (value) => {
@@ -317,7 +319,7 @@ const promptTestDomain = async (): Promise<string | null> => {
 }
 
 const testConfig = async (config: CertConfig) => {
-  const domain = await promptTestDomain()
+  const domain = await promptTestDomain(false)
   if (!domain) return
   testingId.value = config.id || null
   try {

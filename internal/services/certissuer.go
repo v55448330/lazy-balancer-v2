@@ -43,6 +43,16 @@ func (l *jobLogger) Log(stage, message string) {
 		stage, message, l.jobID)
 }
 
+// failJob records a failure and marks the job as failed.
+func (s *CertIssuer) failJob(jobID int, message string) {
+	_, _ = db.DB.Exec(
+		"INSERT INTO cert_job_logs (job_id, level, message) VALUES (?, 'error', ?)",
+		jobID, message)
+	_, _ = db.DB.Exec(
+		"UPDATE cert_jobs SET status='failed', message=?, updated_at=datetime('now') WHERE id=?",
+		message, jobID)
+}
+
 // Issue obtains a certificate for the given rule and domains.
 // It validates domains, creates/updates a cert_jobs row, runs ACME, and
 // persists the cert+key on success.
@@ -55,10 +65,10 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 		return fmt.Errorf("ACME证书仅支持单域名或根域+www二级域名: %s", domains)
 	}
 	primaryDomain := domainList[0]
+	joinedDomains := strings.Join(domainList, ",")
 
 	// Create or reset the cert job (unique per rule_id+primary_domain).
 	var jobID int
-	joinedDomains := strings.Join(domainList, ",")
 	err := db.DB.QueryRow("SELECT id FROM cert_jobs WHERE rule_id=? AND domain=?", ruleID, primaryDomain).Scan(&jobID)
 	if err != nil {
 		// Insert new job with the full domain list.
@@ -78,6 +88,8 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 			jobID,
 		)
 	}
+
+	logger := &jobLogger{jobID: jobID}
 
 	// Resolve ACME config for the rule.
 	var acmeConfigID int
@@ -125,7 +137,6 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 		return err
 	}
 
-	logger := &jobLogger{jobID: jobID}
 	issuer := &acme.Issuer{
 		Client:   client,
 		Provider: provider,
@@ -163,17 +174,6 @@ func (s *CertIssuer) Issue(ctx context.Context, ruleID, domains string) error {
 	}
 
 	return nil
-}
-
-func (s *CertIssuer) failJob(jobID int, message string) {
-	_, _ = db.DB.Exec(
-		"UPDATE cert_jobs SET status='failed', message=?, updated_at=datetime('now') WHERE id=?",
-		message, jobID,
-	)
-	_, _ = db.DB.Exec(
-		"INSERT INTO cert_job_logs (job_id, level, message) VALUES (?, 'error', ?)",
-		jobID, message,
-	)
 }
 
 // IsACMECertIssued returns true if cert_jobs has an issued certificate for the

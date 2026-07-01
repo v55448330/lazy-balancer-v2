@@ -167,7 +167,7 @@
                   </el-button>
                 </div>
               </el-tooltip>
-              <el-button v-if="authStore.nodeMode === 'master'" type="success" link size="small" @click="duplicateRule(row)">
+              <el-button v-if="authStore.nodeMode === 'master'" type="primary" link size="small" @click="duplicateRule(row)">
                 复制
               </el-button>
               <el-tooltip

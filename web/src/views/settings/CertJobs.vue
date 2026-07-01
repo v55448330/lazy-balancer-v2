@@ -40,7 +40,7 @@
     <el-table-column label="操作" width="120" align="center">
       <template #default="{ row }">
         <el-button link type="primary" size="small" @click="viewLogs(row)">日志</el-button>
-        <el-button link type="primary" size="small" @click="retryJob(row)">重签</el-button>
+        <el-button link type="primary" size="small" :disabled="!canRetry(row.status)" @click="retryJob(row)">重签</el-button>
         <el-button link type="danger" size="small" @click="deleteJob(row)">删除</el-button>
       </template>
     </el-table-column>
@@ -170,6 +170,10 @@ const statusLabel = (status: string) => {
     case 'downloading': return '下载证书'
     default: return status
   }
+}
+
+const canRetry = (status: string) => {
+  return status === 'issued' || status === 'failed'
 }
 
 const fetchJobs = async () => {
