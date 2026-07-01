@@ -110,7 +110,7 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request: " + err.Error()})
 		return
 	}
-	if !isValidDomain(req.Domain) {
+	if !isValidACMEDomain(req.Domain) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "domain must be a valid domain name"})
 		return
 	}

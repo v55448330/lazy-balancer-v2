@@ -789,6 +789,29 @@ func isValidDomain(domain string) bool {
 	}
 
 	parts := strings.Split(domain, ".")
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		if len(part) > 63 {
+			return false
+		}
+		for _, c := range part {
+			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isValidACMEDomain(domain string) bool {
+	domain = strings.ToLower(domain)
+	if len(domain) > 253 {
+		return false
+	}
+
+	parts := strings.Split(domain, ".")
 	if len(parts) < 2 {
 		return false
 	}
