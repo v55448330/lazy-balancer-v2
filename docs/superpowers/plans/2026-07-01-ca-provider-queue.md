@@ -1025,7 +1025,7 @@ git commit -m "feat(api): add CA provider list/update/test endpoints"
 **Files:**
 - Modify: `internal/handlers/certificates.go`（全局设置保存）
 
-- [ ] **Step 1: 读取并保存 `default_ca_provider_id`**
+- [x] **Step 1: 读取并保存 `default_ca_provider_id`**
 
 在 `GetGlobalConfig`/`SaveGlobalConfig` 相关 handler 中，把 `default_ca_provider_id` 加入查询与更新。
 
@@ -1044,7 +1044,7 @@ git commit -m "feat(api): add CA provider list/update/test endpoints"
 
 并在读取时返回该字段。
 
-- [ ] **Step 2: 编译验证**
+- [x] **Step 2: 编译验证**
 
 ```bash
 go build ./...
@@ -1053,7 +1053,7 @@ go vet ./...
 
 Expected: no output.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add internal/handlers/certificates.go

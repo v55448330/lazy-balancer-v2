@@ -2,8 +2,6 @@ package services
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -83,6 +81,7 @@ type caQueue struct {
 	provider  models.CAProvider
 	pending   []queueItem
 	running   int
+	active    map[int]struct{} // jobIDs currently pending or running
 	lastOrder time.Time
 	reloader  func() error
 	mu        sync.Mutex
@@ -96,6 +95,7 @@ func newCAQueue(provider models.CAProvider, reloader func() error) *caQueue {
 	return &caQueue{
 		provider: provider,
 		reloader: reloader,
+		active:   make(map[int]struct{}),
 		stopCh:   make(chan struct{}),
 	}
 }
@@ -103,7 +103,11 @@ func newCAQueue(provider models.CAProvider, reloader func() error) *caQueue {
 func (q *caQueue) enqueue(item queueItem) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if _, ok := q.active[item.jobID]; ok {
+		return
+	}
 	q.pending = append(q.pending, item)
+	q.active[item.jobID] = struct{}{}
 }
 
 func (q *caQueue) loop() {
@@ -148,6 +152,7 @@ func (q *caQueue) execute(item queueItem) {
 		}
 		q.mu.Lock()
 		q.running--
+		delete(q.active, item.jobID)
 		q.mu.Unlock()
 	}()
 
@@ -188,25 +193,30 @@ func loadCAProvider(id int) (models.CAProvider, error) {
 	var p models.CAProvider
 	if id == 0 {
 		// Use system default.
-		var defaultID int
-		err := db.DB.QueryRow("SELECT COALESCE(default_ca_provider_id,0) FROM global_config WHERE id=1").Scan(&defaultID)
-		if err != nil || defaultID == 0 {
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				log.Printf("CA queue: failed to load default CA provider: %v", err)
-			}
-			// Fallback to first enabled provider.
-			err = db.DB.QueryRow("SELECT id FROM ca_providers WHERE enabled=1 ORDER BY id LIMIT 1").Scan(&defaultID)
-			if err != nil {
-				return p, fmt.Errorf("no enabled CA provider")
-			}
+		var err error
+		id, err = GetDefaultCAProvider()
+		if err != nil {
+			log.Printf("CA queue: failed to load default CA provider: %v", err)
 		}
-		id = defaultID
 	}
 
 	err := db.DB.QueryRow(`
 		SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled
 		FROM ca_providers WHERE id=? AND enabled=1
 	`, id).Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials, &p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled)
+	if err != nil {
+		// If the requested/default provider is disabled or missing, fall back to the first enabled provider.
+		if id != 0 {
+			var fallbackID int
+			if fallbackErr := db.DB.QueryRow("SELECT id FROM ca_providers WHERE enabled=1 ORDER BY id LIMIT 1").Scan(&fallbackID); fallbackErr == nil {
+				id = fallbackID
+				err = db.DB.QueryRow(`
+					SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled
+					FROM ca_providers WHERE id=? AND enabled=1
+				`, id).Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials, &p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled)
+			}
+		}
+	}
 	if err != nil {
 		return p, fmt.Errorf("load CA provider %d: %w", id, err)
 	}
@@ -224,5 +234,56 @@ func failJob(jobID int, message string) {
 	}
 	if _, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, updated_at=datetime('now') WHERE id=?", message, jobID); err != nil {
 		log.Printf("CA queue: failed to mark job %d as failed: %v", jobID, err)
+	}
+}
+
+// RequeueNonTerminalJobs scans cert_jobs and re-enqueues jobs that are not in a terminal state.
+// Jobs whose associated rule or CA provider no longer exists or is disabled are marked as failed.
+func RequeueNonTerminalJobs(qm *CAQueueManager) {
+	rows, err := db.DB.Query(`
+		SELECT id, rule_id, domain, ca_provider_id FROM cert_jobs
+		WHERE status IN ('pending','processing','queued')
+	`)
+	if err != nil {
+		log.Printf("Failed to requeue non-terminal jobs: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var jobID, caProviderID int
+		var ruleID, domain string
+		if err := rows.Scan(&jobID, &ruleID, &domain, &caProviderID); err != nil {
+			log.Printf("Failed to scan cert job for requeue: %v", err)
+			continue
+		}
+
+		// Verify the associated rule still exists and is enabled.
+		var ruleEnabled bool
+		err := db.DB.QueryRow("SELECT enabled FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&ruleEnabled)
+		if err != nil || !ruleEnabled {
+			failJob(jobID, "关联规则不存在或已禁用")
+			continue
+		}
+
+		// Verify the CA provider exists and is enabled (providerID 0 resolves to the default).
+		provider, err := loadCAProvider(caProviderID)
+		if err != nil {
+			failJob(jobID, fmt.Sprintf("CA Provider 不存在或已禁用: %v", err))
+			continue
+		}
+
+		// Mark queued and enqueue; deduplication inside CAQueueManager prevents duplicates.
+		if _, err := db.DB.Exec("UPDATE cert_jobs SET status='queued', message='等待排队签发', updated_at=datetime('now') WHERE id=?", jobID); err != nil {
+			log.Printf("Failed to update cert job %d status to queued: %v", jobID, err)
+			continue
+		}
+		if err := qm.Enqueue(provider.ID, jobID, ruleID, domain); err != nil {
+			log.Printf("Failed to requeue job %d: %v", jobID, err)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("Error iterating cert jobs for requeue: %v", err)
 	}
 }

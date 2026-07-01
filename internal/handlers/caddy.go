@@ -15,6 +15,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
 
 func (h *Handlers) GetConfig(c *gin.Context) {
@@ -22,6 +23,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	err := db.DB.QueryRow(`
 		SELECT id, caddy_config, dns_provider, COALESCE(dns_credentials,'') as dns_credentials,
 		       COALESCE(acme_email,'') as acme_email, COALESCE(cert_expiry_days,30) as cert_expiry_days,
+		       COALESCE(default_ca_provider_id,0) as default_ca_provider_id,
 		       log_level, access_log_enabled,
 		       COALESCE(caddy_log_path,'/app/logs/caddy.log') as caddy_log_path,
 		       COALESCE(caddy_log_level,'info') as caddy_log_level,
@@ -30,7 +32,8 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       last_sync, updated_at
 		FROM global_config WHERE id = 1
 	`).Scan(&cfg.ID, &cfg.CaddyConfig, &cfg.DNSProvider, &cfg.DNSCredentials,
-		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.LogLevel, &cfg.AccessLogEnabled,
+		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.DefaultCAProviderID,
+		&cfg.LogLevel, &cfg.AccessLogEnabled,
 		&cfg.CaddyLogPath, &cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
@@ -93,6 +96,13 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	if req.DefaultCAProviderID != nil {
+		if err := services.ValidateDefaultCAProvider(*req.DefaultCAProviderID); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+	}
+
 	// Update DNS credentials in environment if provided
 	if req.DNSCredentials != "" {
 		parts := strings.Split(req.DNSCredentials, ",")
@@ -108,6 +118,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			dns_credentials = COALESCE(?, dns_credentials),
 			acme_email = COALESCE(?, acme_email),
 			cert_expiry_days = COALESCE(?, cert_expiry_days),
+			default_ca_provider_id = COALESCE(?, default_ca_provider_id),
 			log_level = COALESCE(?, log_level),
 			access_log_enabled = COALESCE(?, access_log_enabled),
 			caddy_log_path = COALESCE(?, caddy_log_path),
@@ -118,7 +129,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			sync_interval = COALESCE(?, sync_interval),
 			updated_at = datetime('now')
 		WHERE id = 1
-	`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.LogLevel, req.AccessLogEnabled,
+	`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.DefaultCAProviderID, req.LogLevel, req.AccessLogEnabled,
 		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.IsMaster, req.MasterURL, req.SyncInterval)
 
