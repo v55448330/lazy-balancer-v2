@@ -159,6 +159,15 @@ type CertJob struct {
 	UpdatedAt sql.NullTime `json:"updated_at"`
 }
 
+// CertJobLog represents a single log line for a certificate issuance job
+type CertJobLog struct {
+	ID        int       `json:"id"`
+	JobID     int       `json:"job_id"`
+	Level     string    `json:"level"`
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // Node represents a node in the cluster
 type Node struct {
 	ID           int           `json:"id"`

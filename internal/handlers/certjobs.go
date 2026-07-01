@@ -2,16 +2,20 @@ package handlers
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
 
 func (h *Handlers) ListCertJobs(c *gin.Context) {
@@ -52,8 +56,25 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 	}
 
 	id, _ := strconv.Atoi(c.Param("id"))
-	db.DB.Exec("UPDATE cert_jobs SET status='issuing', message='重新签发', updated_at=datetime('now') WHERE id=?", id)
-	h.applyCaddyConfig()
+	var ruleID, domain string
+	err := db.DB.QueryRow("SELECT rule_id, domain FROM cert_jobs WHERE id=?", id).Scan(&ruleID, &domain)
+	if err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "任务不存在"})
+		return
+	}
+
+	go func() {
+		issuer := services.NewCertIssuer(func() error {
+			h.applyCaddyConfig()
+			return nil
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		if err := issuer.Issue(ctx, ruleID, domain); err != nil {
+			log.Printf("Cert issuance failed for %s: %v", domain, err)
+		}
+	}()
+
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Retry triggered"})
 }
 
