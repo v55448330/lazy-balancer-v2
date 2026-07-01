@@ -125,7 +125,7 @@ func (s *CertificateService) checkManualCertExpiration() {
 	rows, err := db.DB.Query(`
 		SELECT caddy_id, name, domain, tls_cert 
 		FROM lb_rules 
-		WHERE enable_tls = 1 AND tls_auto_cert = 0 AND tls_cert != ''
+		WHERE enable_tls = 1 AND COALESCE(tls_source,'manual') = 'manual' AND tls_cert != ''
 	`)
 	if err != nil {
 		log.Printf("Failed to query TLS certificates for expiration check: %v", err)

@@ -137,10 +137,10 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		HealthCheckUnhealthyThreshold int
 		HealthCheckHealthyThreshold   int
 		EnableTLS                     bool
+		TLSSource                     string
+		ACMEConfigID                  int
 		TLSCert                       string
 		TLSKey                        string
-		TLSAutoCert                   bool
-		TLSEmail                      string
 		TLSHTTPRedirect               bool
 		EnableCompress                bool
 		CompressTypes                 string
@@ -167,11 +167,11 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		data.HealthCheckUnhealthyThreshold = r.HealthCheckUnhealthyThreshold
 		data.HealthCheckHealthyThreshold = r.HealthCheckHealthyThreshold
 		data.EnableTLS = r.EnableTLS
+		data.TLSSource = r.TLSSource
+		data.ACMEConfigID = r.ACMEConfigID
 		data.TLSCert = r.TLSCert
 		data.TLSKey = r.TLSKey
-		data.TLSAutoCert = r.TLSAutoCert
 		data.TLSHTTPRedirect = r.TLSHTTPRedirect
-		data.TLSEmail = r.TLSEmail
 		data.EnableCompress = r.EnableCompress
 		data.CompressTypes = r.CompressTypes
 		data.EnableActiveHealthCheck = r.EnableActiveHealthCheck
@@ -197,11 +197,11 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		data.HealthCheckUnhealthyThreshold = r.HealthCheckUnhealthyThreshold
 		data.HealthCheckHealthyThreshold = r.HealthCheckHealthyThreshold
 		data.EnableTLS = r.EnableTLS
+		data.TLSSource = r.TLSSource
+		data.ACMEConfigID = r.ACMEConfigID
 		data.TLSCert = r.TLSCert
 		data.TLSKey = r.TLSKey
-		data.TLSAutoCert = r.TLSAutoCert
 		data.TLSHTTPRedirect = r.TLSHTTPRedirect
-		data.TLSEmail = r.TLSEmail
 		data.EnableCompress = r.EnableCompress
 		data.CompressTypes = r.CompressTypes
 		data.EnableActiveHealthCheck = r.EnableActiveHealthCheck
@@ -301,9 +301,9 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		return fmt.Errorf("at least one enabled upstream is required")
 	}
 
-	if data.EnableTLS && data.TLSEmail != "" {
-		if !strings.Contains(data.TLSEmail, "@") {
-			return fmt.Errorf("invalid TLS email format")
+	if data.EnableTLS && data.TLSSource == "acme_dns" {
+		if data.ACMEConfigID == 0 {
+			return fmt.Errorf("ACME DNS provider is required")
 		}
 	}
 
@@ -332,8 +332,6 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		EnableTLS:               data.EnableTLS,
 		TLSCert:                 data.TLSCert,
 		TLSKey:                  data.TLSKey,
-		TLSAutoCert:             data.TLSAutoCert,
-		TLSEmail:                data.TLSEmail,
 		TLSHTTPRedirect:         data.TLSHTTPRedirect,
 		EnableCompress:          data.EnableCompress,
 		CompressTypes:           data.CompressTypes,

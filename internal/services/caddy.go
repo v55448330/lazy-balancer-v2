@@ -1531,8 +1531,6 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		ACMEEmail                     string
 		TLSCert                       string
 		TLSKey                        string
-		TLSAutoCert                   bool
-		TLSEmail                      string
 		TLSHTTPRedirect               bool
 		Enabled                       bool
 		EnableCompress                bool
@@ -1565,7 +1563,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		       health_check_path, health_check_interval,
 		       COALESCE(health_check_timeout,5), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 		       IIF(enable_tls IN ('1',1),1,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
-		       IIF(tls_auto_cert IN ('1',1),1,0), COALESCE(tls_email,''), IIF(tls_http_redirect IN ('1',1),1,0),
+		       IIF(tls_http_redirect IN ('1',1),1,0),
 		       IIF(enabled IN ('1',1),1,0), IIF(enable_compress IN ('1',1),1,0), COALESCE(compress_types,'gzip'),
 		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(host_header,'')
 		FROM lb_rules WHERE enabled = 1
@@ -1581,7 +1579,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		err := rows.Scan(&r.CaddyID, &r.Name, &r.Protocol, &r.Domain, &r.ListenPort, &r.Strategy,
 			&r.DynamicDNS, &r.EnableDnsServer, &r.DnsServer, &r.DnsFamily, &r.HealthCheckPath, &r.HealthCheckInterval,
 			&r.HealthCheckTimeout, &r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
-			&r.EnableTLS, &r.TLSSource, &r.ACMEConfigID, &r.TLSCert, &r.TLSKey, &r.TLSAutoCert, &r.TLSEmail,
+			&r.EnableTLS, &r.TLSSource, &r.ACMEConfigID, &r.TLSCert, &r.TLSKey,
 			&r.TLSHTTPRedirect, &r.Enabled, &r.EnableCompress, &r.CompressTypes,
 			&r.EnableActiveHealthCheck, &r.HostHeader)
 
@@ -1703,8 +1701,6 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 				ACMEEmail:               r.ACMEEmail,
 				TLSCert:                 r.TLSCert,
 				TLSKey:                  r.TLSKey,
-				TLSAutoCert:             r.TLSAutoCert,
-				TLSEmail:                r.TLSEmail,
 				TLSHTTPRedirect:         r.TLSHTTPRedirect,
 				EnableCompress:          r.EnableCompress,
 				CompressTypes:           r.CompressTypes,
@@ -2151,8 +2147,6 @@ type SingleRuleConfig struct {
 	ACMEEmail               string
 	TLSCert                 string
 	TLSKey                  string
-	TLSAutoCert             bool
-	TLSEmail                string
 	TLSHTTPRedirect         bool
 	EnableCompress          bool
 	CompressTypes           string

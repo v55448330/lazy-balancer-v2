@@ -763,8 +763,6 @@ interface Rule {
   acme_config_id?: number | undefined
   tls_cert: string
   tls_key: string
-  tls_auto_cert: boolean
-  tls_email: string
   tls_http_redirect: boolean
   enable_compress: boolean
   compress_types: string
@@ -1144,8 +1142,6 @@ const wizardForm = reactive<Rule>({
   acme_config_id: 0,
   tls_cert: '',
   tls_key: '',
-  tls_auto_cert: true,
-  tls_email: '',
   tls_http_redirect: false,
   enable_compress: false,
   compress_types: 'gzip',
@@ -1416,12 +1412,10 @@ const openWizard = (rule?: Rule) => {
         proxy_protocol: u.proxy_protocol ?? '',
       })) || [],
       enable_tls: rule.enable_tls || false,
-      tls_source: rule.tls_source || (rule.tls_auto_cert ? 'acme_dns' : 'manual'),
+      tls_source: rule.tls_source || 'manual',
       acme_config_id: rule.acme_config_id || undefined,
       tls_cert: rule.tls_cert || '',
       tls_key: rule.tls_key || '',
-      tls_auto_cert: rule.tls_auto_cert || true,
-      tls_email: rule.tls_email || '',
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
       compress_types: compressType,
@@ -1454,8 +1448,6 @@ const openWizard = (rule?: Rule) => {
       acme_config_id: undefined as number | undefined,
       tls_cert: '',
       tls_key: '',
-      tls_auto_cert: true,
-      tls_email: '',
       tls_http_redirect: false,
       enable_compress: false,
       compress_types: 'gzip',
@@ -1620,8 +1612,6 @@ const submitWizard = async () => {
       acme_config_id: wizardForm.acme_config_id || 0,
       tls_cert: wizardForm.tls_source === 'manual' ? wizardForm.tls_cert : '',
       tls_key: wizardForm.tls_source === 'manual' ? wizardForm.tls_key : '',
-      tls_auto_cert: wizardForm.tls_source === 'acme_dns',
-      tls_email: wizardForm.tls_email,
       tls_http_redirect: wizardForm.tls_http_redirect,
       enable_compress: wizardForm.enable_compress,
       compress_types: wizardForm.compress_types || 'gzip',
@@ -1712,7 +1702,7 @@ const viewConfig = async (rule: Rule) => {
       dns_server: (rule as any).dns_server || '',
       host_header: rule.host_header || '',
       enable_tls: rule.enable_tls || false,
-      tls_source: rule.tls_source || (rule.tls_auto_cert ? 'acme_dns' : 'manual'),
+      tls_source: rule.tls_source || 'manual',
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
       compress_types: compressType,
@@ -1739,7 +1729,7 @@ const viewConfig = async (rule: Rule) => {
       dns_server: (rule as any).dns_server || '',
       host_header: rule.host_header || '',
       enable_tls: rule.enable_tls || false,
-      tls_source: rule.tls_source || (rule.tls_auto_cert ? 'acme_dns' : 'manual'),
+      tls_source: rule.tls_source || 'manual',
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
       compress_types: 'gzip',

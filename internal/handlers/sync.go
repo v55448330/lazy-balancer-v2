@@ -38,7 +38,7 @@ func (h *Handlers) GetSyncConfig(c *gin.Context) {
 		       COALESCE(dynamic_dns,0), COALESCE(dns_server,''),
 		       health_check_path, health_check_interval,
 		       health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
-		       COALESCE(enable_tls,0), COALESCE(tls_auto_cert,0), COALESCE(tls_http_redirect,0),
+		       COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_http_redirect,0),
 		       enabled, created_at, updated_at
 		FROM lb_rules
 	`)
@@ -47,12 +47,13 @@ func (h *Handlers) GetSyncConfig(c *gin.Context) {
 	var rules []models.LbRule
 	for rows.Next() {
 		var r models.LbRule
-		var domain, strategy string
-		var dynamicDNS, enableTLS, tlsAutoCert, tlsHTTPRedirect bool
+		var domain, strategy, tlsSource string
+		var dynamicDNS, enableTLS, tlsHTTPRedirect bool
+		var acmeConfigID int
 		err := rows.Scan(&r.ID, &r.CaddyID, &r.Name, &r.Protocol, &domain, &r.ListenPort, &strategy,
 			&dynamicDNS, &r.DnsServer, &r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout,
 			&r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
-			&enableTLS, &tlsAutoCert, &tlsHTTPRedirect,
+			&enableTLS, &tlsSource, &acmeConfigID, &tlsHTTPRedirect,
 			&r.Enabled, &r.CreatedAt, &r.UpdatedAt)
 		if err != nil {
 			continue
@@ -62,9 +63,10 @@ func (h *Handlers) GetSyncConfig(c *gin.Context) {
 		if r.Strategy == "" {
 			r.Strategy = "round_robin"
 		}
+		r.TLSSource = tlsSource
+		r.ACMEConfigID = acmeConfigID
 		r.DynamicDNS = dynamicDNS
 		r.EnableTLS = enableTLS
-		r.TLSAutoCert = tlsAutoCert
 		r.TLSHTTPRedirect = tlsHTTPRedirect
 
 		// Get upstreams for this rule

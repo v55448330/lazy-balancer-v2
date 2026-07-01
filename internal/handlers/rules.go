@@ -21,7 +21,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		SELECT COALESCE(caddy_id,'') AS caddy_id, name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port, strategy,
 		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval,
-		       COALESCE(enable_active_health_check,0), COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_auto_cert,0), COALESCE(tls_http_redirect,0),
+		       COALESCE(enable_active_health_check,0), COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_http_redirect,0),
 		       COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), enabled, created_by, created_at, updated_at, updated_by,
 		       COALESCE(host_header,'')
 		FROM lb_rules ORDER BY id
@@ -37,7 +37,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		var r models.LbRule
 		var domain, strategy, description, compressTypes, hostHeader, dnsFamily, tlsSource string
 		var tlsCert, tlsKey string
-		var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsAutoCert, tlsHTTPRedirect, enableCompress bool
+		var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect, enableCompress bool
 		var acmeConfigID int
 		var createdBy sql.NullInt64
 		var createdAt sql.NullTime
@@ -46,7 +46,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		err := rows.Scan(&r.CaddyID, &r.Name, &description, &r.Protocol, &domain, &r.ListenPort, &strategy,
 			&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
 			&r.HealthCheckPath, &r.HealthCheckInterval,
-			&enableActiveHealthCheck, &enableTLS, &tlsSource, &acmeConfigID, &tlsCert, &tlsKey, &tlsAutoCert, &tlsHTTPRedirect,
+			&enableActiveHealthCheck, &enableTLS, &tlsSource, &acmeConfigID, &tlsCert, &tlsKey, &tlsHTTPRedirect,
 			&enableCompress, &compressTypes, &r.Enabled, &createdBy, &createdAt, &updatedAt, &updatedBy,
 			&hostHeader)
 		if err != nil {
@@ -79,7 +79,6 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		r.ACMEConfigID = acmeConfigID
 		r.TLSCert = tlsCert
 		r.TLSKey = tlsKey
-		r.TLSAutoCert = tlsAutoCert
 		r.TLSHTTPRedirect = tlsHTTPRedirect
 		r.EnableCompress = enableCompress
 		r.CompressTypes = compressTypes
@@ -90,7 +89,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 			for upstreamRows.Next() {
 				var u models.Upstream
 		upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol)
-		r.Upstreams = append(r.Upstreams, u)
+			r.Upstreams = append(r.Upstreams, u)
 			}
 			upstreamRows.Close()
 		}
@@ -107,7 +106,7 @@ func (h *Handlers) GetRule(c *gin.Context) {
 
 	var r models.LbRule
 	var domain, strategy, hostHeader, dnsFamily, tlsSource string
-	var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsAutoCert, tlsHTTPRedirect bool
+	var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect bool
 	var acmeConfigID int
 	err := db.DB.QueryRow(`
 		SELECT name, protocol, COALESCE(domain,''), listen_port, strategy,
@@ -115,14 +114,14 @@ func (h *Handlers) GetRule(c *gin.Context) {
 		       health_check_path, health_check_interval,
 		       health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
 		       COALESCE(enable_active_health_check,0), COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
-		       COALESCE(tls_auto_cert,0), COALESCE(tls_email,''), COALESCE(tls_http_redirect,0),
+		       COALESCE(tls_http_redirect,0),
 		       enabled, created_at, updated_at, COALESCE(host_header,''), caddy_id
 		FROM lb_rules WHERE caddy_id = ?
 	`, caddyID).Scan(&r.Name, &r.Protocol, &domain, &r.ListenPort, &strategy,
 		&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
 		&r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout,
 		&r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
-		&enableActiveHealthCheck, &enableTLS, &tlsSource, &acmeConfigID, &r.TLSCert, &r.TLSKey, &tlsAutoCert, &r.TLSEmail, &tlsHTTPRedirect,
+		&enableActiveHealthCheck, &enableTLS, &tlsSource, &acmeConfigID, &r.TLSCert, &r.TLSKey, &tlsHTTPRedirect,
 		&r.Enabled, &r.CreatedAt, &r.UpdatedAt, &hostHeader, &r.CaddyID)
 
 	if err == sql.ErrNoRows {
@@ -147,7 +146,6 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	r.EnableTLS = enableTLS
 	r.TLSSource = tlsSource
 	r.ACMEConfigID = acmeConfigID
-	r.TLSAutoCert = tlsAutoCert
 	r.TLSHTTPRedirect = tlsHTTPRedirect
 	r.HostHeader = hostHeader
 
@@ -186,8 +184,6 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		EnableTLS                     bool
 		TLSCert                       string
 		TLSKey                        string
-		TLSAutoCert                   bool
-		TLSEmail                      string
 		TLSHTTPRedirect               bool
 		Enabled                       bool
 		EnableCompress                bool
@@ -197,8 +193,8 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		CaddyID                       string
 	}
 
-	var domain, strategy, hostHeader, compressTypes, tlsCert, tlsKey, tlsEmail string
-	var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsAutoCert, tlsHTTPRedirect, enableCompress bool
+	var domain, strategy, hostHeader, compressTypes, tlsCert, tlsKey string
+	var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect, enableCompress bool
 
 	log.Printf("GetRuleCaddyConfig: querying rule caddy_id=%s", caddyID)
 
@@ -208,14 +204,14 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		       COALESCE(dns_family,'ipv4'), health_check_path, health_check_interval,
 		       health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
 		       COALESCE(enable_tls,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
-		       COALESCE(tls_auto_cert,0), COALESCE(tls_email,''), COALESCE(tls_http_redirect,0),
+		       COALESCE(tls_http_redirect,0),
 		       enabled, COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
 		       COALESCE(enable_active_health_check,0), COALESCE(host_header,''), COALESCE(caddy_id,'')
 		FROM lb_rules WHERE caddy_id = ?
 	`, caddyID).Scan(&r.Name, &r.Protocol, &domain, &r.ListenPort, &strategy,
 		&dynamicDNS, &enableDnsServer, &r.DnsServer, &r.DnsFamily, &r.HealthCheckPath, &r.HealthCheckInterval,
 		&r.HealthCheckTimeout, &r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
-		&enableTLS, &tlsCert, &tlsKey, &tlsAutoCert, &tlsEmail, &tlsHTTPRedirect,
+		&enableTLS, &tlsCert, &tlsKey, &tlsHTTPRedirect,
 		&r.Enabled, &enableCompress, &compressTypes,
 		&enableActiveHealthCheck, &hostHeader, &r.CaddyID)
 
@@ -243,8 +239,6 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	r.EnableTLS = enableTLS
 	r.TLSCert = tlsCert
 	r.TLSKey = tlsKey
-	r.TLSAutoCert = tlsAutoCert
-	r.TLSEmail = tlsEmail
 	r.TLSHTTPRedirect = tlsHTTPRedirect
 	r.EnableCompress = enableCompress
 	r.CompressTypes = compressTypes
@@ -602,13 +596,13 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
-			enable_active_health_check, host_header, enable_tls, tls_source, acme_config_id, tls_cert, tls_key, tls_auto_cert, tls_email, tls_http_redirect,
+			enable_active_health_check, host_header, enable_tls, tls_source, acme_config_id, tls_cert, tls_key, tls_http_redirect,
 			enable_compress, compress_types, enabled, created_by, updated_at, caddy_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
-		req.EnableActiveHealthCheck, req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.TLSCert, req.TLSKey, req.TLSAutoCert, req.TLSEmail,
+		req.EnableActiveHealthCheck, req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.TLSCert, req.TLSKey,
 		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, 1, userIDInt, time.Now().Format("2006-01-02 15:04:05"), caddyID)
 
 	if err != nil {
@@ -754,8 +748,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			return
 		}
 	}
-	log.Printf("UpdateRule request for caddy_id=%s: enable_tls=%v, tls_auto_cert=%v, cert_len=%d, key_len=%d",
-		caddyID, req.EnableTLS, req.TLSAutoCert, len(req.TLSCert), len(req.TLSKey))
+	log.Printf("UpdateRule request for caddy_id=%s: enable_tls=%v, tls_source=%s, cert_len=%d, key_len=%d",
+		caddyID, req.EnableTLS, req.TLSSource, len(req.TLSCert), len(req.TLSKey))
 
 	// When TLS is enabled on HTTP, default the port to 443 if the user didn't explicitly set one.
 	// For updates the port is fixed, so we only apply the default when an explicit port was not supplied.
@@ -811,7 +805,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	err := db.DB.QueryRow(`
 		SELECT COALESCE(protocol,''), COALESCE(domain,''), listen_port, COALESCE(strategy,'round_robin'),
 			COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0),
-			COALESCE(enable_tls,0), COALESCE(tls_http_redirect,0), COALESCE(tls_auto_cert,0), COALESCE(tls_email,''),
+			COALESCE(enable_tls,0), COALESCE(tls_http_redirect,0),
 			COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 			COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,5),
 			COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
@@ -820,7 +814,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(
 		&existingRule.Protocol, &existingRule.Domain, &existingRule.ListenPort, &existingRule.Strategy,
 		&existingRule.TLSCert, &existingRule.TLSKey, &existingRule.TLSSource, &existingRule.ACMEConfigID,
-		&existingRule.EnableTLS, &existingRule.TLSHTTPRedirect, &existingRule.TLSAutoCert, &existingRule.TLSEmail,
+		&existingRule.EnableTLS, &existingRule.TLSHTTPRedirect,
 		&existingRule.DynamicDNS, &existingRule.EnableDnsServer, &existingRule.DnsServer, &existingRule.DnsFamily,
 		&existingRule.HealthCheckPath, &existingRule.HealthCheckInterval, &existingRule.HealthCheckTimeout,
 		&existingRule.HealthCheckUnhealthyThreshold, &existingRule.HealthCheckHealthyThreshold,
@@ -861,9 +855,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	if req.ACMEConfigID == 0 {
 		req.ACMEConfigID = existingRule.ACMEConfigID
-	}
-	if req.TLSEmail == "" {
-		req.TLSEmail = existingRule.TLSEmail
 	}
 	if req.HealthCheckPath == "" {
 		req.HealthCheckPath = existingRule.HealthCheckPath
@@ -977,10 +968,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		query += "tls_key = ?, "
 		args = append(args, req.TLSKey)
 	}
-	query += "tls_auto_cert = ?, "
-	args = append(args, req.TLSAutoCert)
-	query += "tls_email = ?, "
-	args = append(args, req.TLSEmail)
 	query += "tls_http_redirect = ?, "
 	args = append(args, req.TLSHTTPRedirect)
 	query += "enable_compress = ?, "
@@ -1268,7 +1255,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		SELECT caddy_id, name, protocol, domain, listen_port, strategy, dynamic_dns,
 		       health_check_path, health_check_interval, health_check_timeout,
 		       health_check_unhealthy_threshold, health_check_healthy_threshold,
-		       enable_tls, COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), tls_cert, tls_key, tls_auto_cert, tls_email,
+		       enable_tls, COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), tls_cert, tls_key,
 		       tls_http_redirect, COALESCE(enable_compress,1), COALESCE(compress_types,'gzip,zstd'), enabled, created_by,
 		       COALESCE(host_header,''), COALESCE(dns_server,'')
 		FROM lb_rules WHERE caddy_id = ?
@@ -1276,7 +1263,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		&rule.CaddyID, &rule.Name, &rule.Protocol, &rule.Domain, &rule.ListenPort, &rule.Strategy,
 		&rule.DynamicDNS, &rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout,
 		rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
-		&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.TLSCert, &rule.TLSKey, &rule.TLSAutoCert, &rule.TLSEmail,
+		&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.TLSCert, &rule.TLSKey,
 		&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.CreatedBy,
 		&rule.HostHeader, &rule.DnsServer,
 	)
@@ -1297,13 +1284,13 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		INSERT INTO lb_rules (name, protocol, domain, listen_port, strategy, dynamic_dns, dns_server,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
-			enable_tls, tls_source, acme_config_id, tls_cert, tls_key, tls_auto_cert, tls_email,
+			enable_tls, tls_source, acme_config_id, tls_cert, tls_key,
 			tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, caddy_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?)
 	`, rule.Name+" (Copy)", rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 		rule.DynamicDNS, rule.DnsServer, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 		rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
-		rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.TLSCert, rule.TLSKey, rule.TLSAutoCert, rule.TLSEmail,
+		rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.TLSCert, rule.TLSKey,
 		rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, 0, userID, userID,
 		rule.HostHeader, newCaddyID,
 	)

@@ -56,8 +56,6 @@ type LbRule struct {
 	ACMEConfigID                  int          `json:"acme_config_id"`
 	TLSCert                       string       `json:"tls_cert,omitempty"`
 	TLSKey                        string       `json:"tls_key,omitempty"`
-	TLSAutoCert                   bool         `json:"tls_auto_cert"`
-	TLSEmail                      string       `json:"tls_email"`
 	TLSHTTPRedirect               bool         `json:"tls_http_redirect"`
 	EnableCompress                bool         `json:"enable_compress"`
 	CompressTypes                 string       `json:"compress_types"`
@@ -264,12 +262,10 @@ type CreateRuleRequest struct {
 	HostHeader                    string     `json:"host_header"`
 	Upstreams                     []Upstream `json:"upstreams" binding:"required"`
 	EnableTLS                     bool       `json:"enable_tls"`
-	TLSSource                     string     `json:"tls_source"`
+	TLSSource                     string       `json:"tls_source"`
 	ACMEConfigID                  int        `json:"acme_config_id"`
-	TLSCert                       string     `json:"tls_cert"`
-	TLSKey                        string     `json:"tls_key"`
-	TLSAutoCert                   bool       `json:"tls_auto_cert"`
-	TLSEmail                      string     `json:"tls_email"`
+	TLSCert                       string       `json:"tls_cert"`
+	TLSKey                        string       `json:"tls_key"`
 	TLSHTTPRedirect               bool       `json:"tls_http_redirect"`
 	EnableCompress                bool       `json:"enable_compress"`
 	CompressTypes                 string     `json:"compress_types"`
@@ -299,8 +295,6 @@ type UpdateRuleRequest struct {
 	ACMEConfigID                  int        `json:"acme_config_id"`
 	TLSCert                       string     `json:"tls_cert"`
 	TLSKey                        string     `json:"tls_key"`
-	TLSAutoCert                   bool       `json:"tls_auto_cert"`
-	TLSEmail                      string     `json:"tls_email"`
 	TLSHTTPRedirect               bool       `json:"tls_http_redirect"`
 	EnableCompress                bool       `json:"enable_compress"`
 	CompressTypes                 string     `json:"compress_types"`

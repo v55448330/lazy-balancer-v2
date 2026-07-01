@@ -419,13 +419,12 @@ func (s *SyncService) applySyncData(data models.SyncData) error {
 				INSERT INTO lb_rules (id, name, protocol, domain, listen_port, strategy, 
 					dynamic_dns, health_check_path, health_check_interval, health_check_timeout,
 					health_check_unhealthy_threshold, health_check_healthy_threshold,
-					enable_tls, tls_cert, tls_key, tls_auto_cert, tls_email, tls_http_redirect, 
-					enabled)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, 			rule.ID, rule.Name, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
+					enable_tls, tls_cert, tls_key, tls_http_redirect, enabled)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, rule.ID, rule.Name, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 				rule.DynamicDNS, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 				rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
-				rule.EnableTLS, rule.TLSCert, rule.TLSKey, rule.TLSAutoCert, rule.TLSEmail,
+				rule.EnableTLS, rule.TLSCert, rule.TLSKey,
 				rule.TLSHTTPRedirect, rule.Enabled)
 
 			for _, u := range rule.Upstreams {
