@@ -1176,6 +1176,51 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		return
 	}
 
+	// Delete all related rows in a single transaction so that certificate jobs
+	// and their logs are never left as orphans.
+	tx, err := db.DB.Begin()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to start database transaction"})
+		return
+	}
+
+	if _, err := tx.Exec("DELETE FROM cert_job_logs WHERE job_id IN (SELECT id FROM cert_jobs WHERE rule_id = ?)", caddyID); err != nil {
+		tx.Rollback()
+		log.Printf("DeleteRule cert_job_logs delete error for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete certificate job logs"})
+		return
+	}
+	if _, err := tx.Exec("DELETE FROM cert_jobs WHERE rule_id = ?", caddyID); err != nil {
+		tx.Rollback()
+		log.Printf("DeleteRule cert_jobs delete error for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete certificate jobs"})
+		return
+	}
+	if _, err := tx.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID); err != nil {
+		tx.Rollback()
+		log.Printf("DeleteRule upstreams delete error for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete upstreams"})
+		return
+	}
+	if _, err := tx.Exec("DELETE FROM metrics_history WHERE rule_id = ?", caddyID); err != nil {
+		tx.Rollback()
+		log.Printf("DeleteRule metrics_history delete error for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete metrics history"})
+		return
+	}
+	if _, err := tx.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID); err != nil {
+		tx.Rollback()
+		log.Printf("DeleteRule lb_rules delete error for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete rule"})
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("DeleteRule transaction commit failed for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to commit rule deletion"})
+		return
+	}
+
 	var serverName string
 	var serverPort int
 	if protocol == "http" {
@@ -1222,12 +1267,6 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 			log.Printf("Rule %s deleted, server %s kept (reserved port)", caddyID, serverName)
 		}
 	}
-
-	// Delete upstreams first
-	db.DB.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID)
-	db.DB.Exec("DELETE FROM metrics_history WHERE rule_id = ?", caddyID)
-	// Delete the rule
-	db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID)
 
 	// Reload full Caddy config to clean up TLS certificates and layer4 servers
 	log.Printf("Reloading full Caddy config after rule deletion for caddy_id=%s", caddyID)

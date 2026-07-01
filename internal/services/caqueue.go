@@ -151,6 +151,12 @@ func (q *caQueue) execute(item queueItem) {
 		q.mu.Unlock()
 	}()
 
+	// If the rule/job was deleted while the item was queued, skip it silently.
+	if !jobExists(item.jobID) {
+		log.Printf("CA queue: job %d no longer exists, skipping", item.jobID)
+		return
+	}
+
 	issuer := NewCertIssuer(q.reloader)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -169,6 +175,13 @@ func isTerminalJobStatus(jobID int) bool {
 		return false
 	}
 	return status == "issued" || status == "failed"
+}
+
+// jobExists returns true if a cert_jobs row with the given id still exists.
+func jobExists(jobID int) bool {
+	var exists bool
+	err := db.DB.QueryRow("SELECT 1 FROM cert_jobs WHERE id=?", jobID).Scan(&exists)
+	return err == nil
 }
 
 func loadCAProvider(id int) (models.CAProvider, error) {
@@ -202,6 +215,10 @@ func loadCAProvider(id int) (models.CAProvider, error) {
 
 // failJob marks a job as failed and writes an error log.
 func failJob(jobID int, message string) {
+	if !jobExists(jobID) {
+		log.Printf("CA queue: cannot fail missing job %d: %s", jobID, message)
+		return
+	}
 	if _, err := db.DB.Exec("INSERT INTO cert_job_logs (job_id, level, message) VALUES (?, 'error', ?)", jobID, message); err != nil {
 		log.Printf("CA queue: failed to insert error log for job %d: %v", jobID, err)
 	}
