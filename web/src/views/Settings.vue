@@ -62,6 +62,7 @@ const settings = ref<any>({
 const global = ref<any>({
   acme_email: '',
   cert_expiry_days: 30,
+  default_ca_provider_id: 0,
 })
 
 const titles: Record<string, string> = {
@@ -98,6 +99,7 @@ const fetchSettings = async () => {
       global.value = {
         acme_email: res.data.acme_email || '',
         cert_expiry_days: res.data.cert_expiry_days ?? 30,
+        default_ca_provider_id: res.data.default_ca_provider_id ?? 0,
       }
     }
   } catch (error) {
@@ -107,7 +109,7 @@ const fetchSettings = async () => {
 
 const saveConfig = async (payload: any) => {
   try {
-    await request.put('/config', payload)
+    await request.put('/admin/config', payload)
     ElMessage.success('保存成功')
   } catch (error) {
     console.error('Failed to save settings:', error)

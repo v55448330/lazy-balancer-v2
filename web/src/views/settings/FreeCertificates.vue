@@ -14,6 +14,11 @@
         <el-form-item label="过期提醒天数">
           <el-input-number v-model="global.cert_expiry_days" :min="1" :max="90" />
         </el-form-item>
+        <el-form-item label="默认 CA 提供商">
+          <el-select v-model="global.default_ca_provider_id" style="width: 100%" clearable placeholder="系统默认">
+            <el-option v-for="p in enabledCAProviders" :key="p.id" :label="p.name" :value="p.id" />
+          </el-select>
+        </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="saving" @click="handleSave">
               <el-icon><Check /></el-icon>
@@ -21,6 +26,33 @@
             </el-button>
           </el-form-item>
       </el-form>
+    </el-card>
+
+    <el-card class="settings-card" style="margin-top: 20px">
+      <template #header>
+        <div class="card-header">
+          <span>CA 提供商</span>
+        </div>
+      </template>
+      <el-table v-if="caProviders.length > 0" :data="caProviders" size="small" v-loading="loadingCAProviders">
+        <el-table-column prop="name" label="名称" />
+        <el-table-column prop="provider" label="类型" />
+        <el-table-column prop="directory_url" label="Directory URL" show-overflow-tooltip />
+        <el-table-column prop="max_concurrent" label="最大并发" width="90" />
+        <el-table-column prop="min_interval_ms" label="最小间隔(ms)" width="120" />
+        <el-table-column prop="enabled" label="状态" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="authStore.nodeMode === 'master'" label="操作" width="140" align="center">
+          <template #default="{ row }">
+            <el-button link type="primary" size="small" :loading="testingCAId === row.id" @click="testCAProvider(row)">测试</el-button>
+            <el-button link type="primary" size="small" @click="openCAProviderDialog(row)">编辑</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else description="暂无 CA 提供商" :image-size="60" />
     </el-card>
 
     <el-card class="settings-card" style="margin-top: 20px">
@@ -104,11 +136,46 @@
         <el-button type="primary" :loading="saving" @click="saveConfig">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="caDialogVisible" title="编辑 CA 提供商" width="520">
+      <el-form :model="caForm" label-width="140px">
+        <el-form-item label="名称">
+          <el-input v-model="caForm.name" disabled />
+        </el-form-item>
+        <el-form-item label="类型">
+          <el-input v-model="caForm.provider" disabled />
+        </el-form-item>
+        <el-form-item label="Directory URL" required>
+          <el-input v-model="caForm.directory_url" placeholder="https://acme.example.com/directory" />
+        </el-form-item>
+        <el-form-item label="最大并发">
+          <el-input-number v-model="caForm.max_concurrent" :min="1" :max="100" />
+        </el-form-item>
+        <el-form-item label="最小间隔(ms)">
+          <el-input-number v-model="caForm.min_interval_ms" :min="1000" :max="60000" :step="1000" />
+        </el-form-item>
+        <template v-if="caForm.provider === 'zerossl'">
+          <el-form-item label="EAB KID" required>
+            <el-input v-model="caCreds.eab_kid" placeholder="ZeroSSL EAB KID" />
+          </el-form-item>
+          <el-form-item label="EAB HMAC Key" required>
+            <el-input v-model="caCreds.eab_hmac_key" type="password" placeholder="ZeroSSL EAB HMAC Key" show-password />
+          </el-form-item>
+        </template>
+        <el-form-item label="启用">
+          <el-switch v-model="caForm.enabled" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="caDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingCA" @click="saveCAProvider">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, reactive } from 'vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -138,6 +205,22 @@ interface CertConfig {
   enabled: boolean
 }
 
+interface CAProvider {
+  id: number
+  name: string
+  provider: string
+  directory_url: string
+  credentials: string
+  max_concurrent: number
+  min_interval_ms: number
+  enabled: boolean
+}
+
+interface CAProviderCredentials {
+  eab_kid: string
+  eab_hmac_key: string
+}
+
 const authStore = useAuthStore()
 
 const global = defineModel<any>('global', { required: true })
@@ -162,6 +245,29 @@ const form = ref<{
   dns_credentials: {},
   enabled: true,
 })
+
+const caProviders = ref<CAProvider[]>([])
+const loadingCAProviders = ref(false)
+const testingCAId = ref<number | null>(null)
+const caDialogVisible = ref(false)
+const savingCA = ref(false)
+const editingCAProvider = ref<CAProvider | null>(null)
+const caForm = reactive<CAProvider>({
+  id: 0,
+  name: '',
+  provider: 'zerossl',
+  directory_url: '',
+  credentials: '{}',
+  max_concurrent: 1,
+  min_interval_ms: 10000,
+  enabled: true,
+})
+const caCreds = reactive<CAProviderCredentials>({
+  eab_kid: '',
+  eab_hmac_key: '',
+})
+
+const enabledCAProviders = computed(() => caProviders.value.filter(p => p.enabled))
 
 const selectedProvider = computed(() => providers.value.find(p => p.code === form.value.dns_provider))
 const authMode = computed(() => form.value.dns_credentials['auth_mode'] || 'dnspod')
@@ -198,6 +304,133 @@ const fetchProviders = async () => {
     providers.value = res.data || []
   } catch (error) {
     console.error('Failed to fetch DNS providers:', error)
+  }
+}
+
+const parseCACredentials = (raw: string): CAProviderCredentials => {
+  if (!raw) return { eab_kid: '', eab_hmac_key: '' }
+  try {
+    const parsed = JSON.parse(raw)
+    return {
+      eab_kid: parsed.eab_kid || '',
+      eab_hmac_key: parsed.eab_hmac_key || '',
+    }
+  } catch {
+    return { eab_kid: '', eab_hmac_key: '' }
+  }
+}
+
+const stringifyCACredentials = (creds: CAProviderCredentials): string => {
+  return JSON.stringify({
+    eab_kid: creds.eab_kid,
+    eab_hmac_key: creds.eab_hmac_key,
+  })
+}
+
+const fetchCAProviders = async () => {
+  loadingCAProviders.value = true
+  try {
+    const res = await request.get('/ca-providers')
+    caProviders.value = res.data || []
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '获取 CA 提供商失败')
+  } finally {
+    loadingCAProviders.value = false
+  }
+}
+
+const openCAProviderDialog = (p: CAProvider) => {
+  editingCAProvider.value = p
+  Object.assign(caForm, {
+    ...p,
+    credentials: typeof p.credentials === 'string' ? p.credentials : JSON.stringify(p.credentials || {}),
+  })
+  const parsed = parseCACredentials(caForm.credentials)
+  caCreds.eab_kid = parsed.eab_kid
+  caCreds.eab_hmac_key = parsed.eab_hmac_key
+  caDialogVisible.value = true
+}
+
+const isValidHttpsUrl = (url: string): boolean => {
+  try {
+    const u = new URL(url.trim())
+    return u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+const saveCAProvider = async () => {
+  if (!caForm.directory_url || !isValidHttpsUrl(caForm.directory_url)) {
+    ElMessage.warning('Directory URL 必须是有效的 HTTPS 地址')
+    return
+  }
+
+  if (caForm.provider === 'zerossl') {
+    if (!caCreds.eab_kid.trim() || !caCreds.eab_hmac_key.trim()) {
+      ElMessage.warning('ZeroSSL 必须填写 EAB KID 和 EAB HMAC Key')
+      return
+    }
+  }
+
+  savingCA.value = true
+  try {
+    const payload: Partial<CAProvider> & { credentials: string } = {
+      name: caForm.name,
+      provider: caForm.provider,
+      directory_url: caForm.directory_url.trim(),
+      enabled: caForm.enabled,
+      max_concurrent: caForm.max_concurrent,
+      min_interval_ms: caForm.min_interval_ms,
+      credentials: caForm.provider === 'zerossl'
+        ? stringifyCACredentials(caCreds)
+        : '{}',
+    }
+    await request.put(`/admin/ca-providers/${editingCAProvider.value!.id}`, payload)
+    ElMessage.success('CA 提供商配置已更新')
+    caDialogVisible.value = false
+    fetchCAProviders()
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '保存失败')
+  } finally {
+    savingCA.value = false
+  }
+}
+
+const promptTestDomainForCA = async (): Promise<string | null> => {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '请输入一个该 CA 可签发证书的域名（例如 example.com），系统将尝试注册 ACME 账户来验证配置',
+      '验证 CA 配置',
+      {
+        confirmButtonText: '测试',
+        cancelButtonText: '取消',
+        inputPlaceholder: 'example.com',
+        inputValidator: (value) => {
+          if (!value) return '请输入域名'
+          if (!/^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$/.test(value.trim())) return '域名格式不正确'
+          return true
+        },
+      }
+    )
+    return value.trim()
+  } catch {
+    return null
+  }
+}
+
+const testCAProvider = async (p: CAProvider) => {
+  const domain = await promptTestDomainForCA()
+  if (!domain) return
+  testingCAId.value = p.id
+  try {
+    const res = await request.post(`/admin/ca-providers/${p.id}/test`, { domain })
+    ElMessage.success(res.message || 'CA 配置有效')
+  } catch (error: any) {
+    const msg = error?.response?.data?.message || error?.message || '测试失败'
+    ElMessage.error(msg)
+  } finally {
+    testingCAId.value = null
   }
 }
 
@@ -347,6 +580,7 @@ const handleSave = async () => {
     await emit('save', {
       acme_email: global.value.acme_email,
       cert_expiry_days: global.value.cert_expiry_days,
+      default_ca_provider_id: global.value.default_ca_provider_id ?? 0,
     })
   } finally {
     saving.value = false
@@ -356,6 +590,7 @@ const handleSave = async () => {
 onMounted(() => {
   fetchConfigs()
   fetchProviders()
+  fetchCAProviders()
 })
 </script>
 
