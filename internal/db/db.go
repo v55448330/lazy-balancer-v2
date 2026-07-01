@@ -190,6 +190,18 @@ func createTables() error {
 		updated_at DATETIME
 	);
 	CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain);
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain);
+
+	-- Certificate Job Logs table for detailed ACME issuance logs
+	CREATE TABLE IF NOT EXISTS cert_job_logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		job_id INTEGER NOT NULL,
+		level VARCHAR(10) DEFAULT 'info',
+		message TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (job_id) REFERENCES cert_jobs(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS idx_cert_job_logs_job ON cert_job_logs(job_id);
 
 	-- Global Config table
 	CREATE TABLE IF NOT EXISTS global_config (
@@ -381,6 +393,26 @@ func runMigrations() error {
 	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('certificate_configs') WHERE name='dns_credentials'").Scan(&colCount)
 	if colCount == 0 {
 		DB.Exec("ALTER TABLE certificate_configs ADD COLUMN dns_credentials TEXT")
+	}
+
+	// cert_jobs unique index migration
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_index_info('idx_cert_jobs_rule_domain_unique')").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)")
+	}
+
+	// cert_job_logs table migration
+	DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cert_job_logs'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec(`CREATE TABLE cert_job_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id INTEGER NOT NULL,
+			level VARCHAR(10) DEFAULT 'info',
+			message TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (job_id) REFERENCES cert_jobs(id) ON DELETE CASCADE
+		)`)
+		DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_job_logs_job ON cert_job_logs(job_id)")
 	}
 
 	// Migrate legacy dns_id/dns_key into dns_credentials JSON
