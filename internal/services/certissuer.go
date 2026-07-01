@@ -157,6 +157,11 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	return nil
 }
 
+// NewACMEClientForProvider exposes the ACME client factory for handlers.
+func NewACMEClientForProvider(provider models.CAProvider, email string) (*acme.Client, error) {
+	return acme.NewClientForProvider(provider, email)
+}
+
 // IsACMECertIssued returns true if cert_jobs has an issued certificate for the
 // given rule (by caddy_id) and domain.
 func IsACMECertIssued(caddyID, domain string) bool {

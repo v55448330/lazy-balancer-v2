@@ -1,0 +1,375 @@
+package services
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net/url"
+	"strings"
+	"time"
+
+	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/models"
+)
+
+const (
+	ProviderLetsEncrypt = "letsencrypt"
+	ProviderZeroSSL     = "zerossl"
+
+	// MaskedHMACKey is the sentinel value clients send for eab_hmac_key to
+	// indicate that the existing stored HMAC key should be preserved.
+	MaskedHMACKey = "__MASKED__"
+)
+
+// CAProviderListItem is a credential-safe view of a CA provider for list endpoints.
+type CAProviderListItem struct {
+	ID            int       `json:"id"`
+	Name          string    `json:"name"`
+	Provider      string    `json:"provider"`
+	DirectoryURL  string    `json:"directory_url"`
+	Credentials   string    `json:"credentials"`
+	MaxConcurrent int       `json:"max_concurrent"`
+	MinIntervalMS int       `json:"min_interval_ms"`
+	Enabled       bool      `json:"enabled"`
+	CreatedAt     time.Time `json:"created_at,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+}
+
+// CAProviderService manages CA provider business logic.
+type CAProviderService struct{}
+
+// NewCAProviderService creates a new CAProviderService.
+func NewCAProviderService() *CAProviderService {
+	return &CAProviderService{}
+}
+
+// maskCredentials masks the EAB HMAC key in a credentials JSON string.
+// If the credentials are not valid JSON, it returns an empty object "{}".
+func maskCredentials(credentials string) string {
+	if credentials == "" {
+		return ""
+	}
+	var credMap map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(credentials), &credMap); err != nil {
+		log.Printf("warning: CA provider credentials are not valid JSON, masking as empty: %v", err)
+		return "{}"
+	}
+	if _, ok := credMap["eab_hmac_key"]; ok {
+		credMap["eab_hmac_key"] = json.RawMessage(`"` + MaskedHMACKey + `"`)
+		masked, err := json.Marshal(credMap)
+		if err != nil {
+			log.Printf("warning: failed to marshal masked CA provider credentials, masking as empty: %v", err)
+			return "{}"
+		}
+		return string(masked)
+	}
+	return credentials
+}
+
+// ListCAProviders returns all CA providers with masked credentials.
+func (s *CAProviderService) ListCAProviders() ([]CAProviderListItem, error) {
+	rows, err := db.DB.Query(`
+		SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled, created_at, updated_at
+		FROM ca_providers ORDER BY id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	list := make([]CAProviderListItem, 0)
+	for rows.Next() {
+		var p CAProviderListItem
+		var createdAt, updatedAt sql.NullTime
+		if err := rows.Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials, &p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		if createdAt.Valid {
+			p.CreatedAt = createdAt.Time
+		}
+		if updatedAt.Valid {
+			p.UpdatedAt = updatedAt.Time
+		}
+		p.Credentials = maskCredentials(p.Credentials)
+		list = append(list, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// GetCAProvider returns a CA provider by ID, including credentials.
+// The EAB HMAC key in credentials is masked to limit credential exposure.
+func (s *CAProviderService) GetCAProvider(id int) (models.CAProvider, error) {
+	var p models.CAProvider
+	var createdAt, updatedAt sql.NullTime
+	err := db.DB.QueryRow(`
+		SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled, created_at, updated_at
+		FROM ca_providers WHERE id=?
+	`, id).Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials, &p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled, &createdAt, &updatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return p, ErrCAProviderNotFound
+		}
+		return p, err
+	}
+	if createdAt.Valid {
+		p.CreatedAt = createdAt.Time
+	}
+	if updatedAt.Valid {
+		p.UpdatedAt = updatedAt.Time
+	}
+	if p.Credentials != "" {
+		p.Credentials = maskCredentials(p.Credentials)
+	}
+	return p, nil
+}
+
+// ErrCAProviderNotFound is returned when a CA provider does not exist.
+var ErrCAProviderNotFound = errors.New("CA provider not found")
+
+// ErrCAProviderLastEnabled is returned when attempting to disable the only enabled CA provider.
+var ErrCAProviderLastEnabled = errors.New("cannot disable the last enabled CA provider")
+
+// ErrCAProviderInvalidProvider is returned when the provider type is unsupported.
+var ErrCAProviderInvalidProvider = errors.New("provider must be letsencrypt or zerossl")
+
+// ErrCAProviderInvalidName is returned when the provider name is empty.
+var ErrCAProviderInvalidName = errors.New("name is required")
+
+// ErrCAProviderNameTooLong is returned when the provider name exceeds 100 characters.
+var ErrCAProviderNameTooLong = errors.New("name must be <= 100 characters")
+
+// ErrCAProviderInvalidDirectoryURL is returned when the directory URL is not a valid HTTPS URL.
+var ErrCAProviderInvalidDirectoryURL = errors.New("directory_url must be a valid HTTPS URL")
+
+// ErrCAProviderDirectoryURLTooLong is returned when the directory URL exceeds 255 characters.
+var ErrCAProviderDirectoryURLTooLong = errors.New("directory_url must be <= 255 characters")
+
+// ErrCAProviderInvalidCredentials is returned when credentials are not valid JSON.
+var ErrCAProviderInvalidCredentials = errors.New("credentials must be valid JSON")
+
+// ErrCAProviderMissingZeroSSLCredentials is returned when ZeroSSL credentials are incomplete.
+var ErrCAProviderMissingZeroSSLCredentials = errors.New("zerossl credentials require eab_kid and eab_hmac_key")
+
+// ErrCAProviderLetsEncryptCredentialsNotEmpty is returned when letsencrypt credentials are provided.
+var ErrCAProviderLetsEncryptCredentialsNotEmpty = errors.New("letsencrypt credentials must be empty")
+
+// ErrCAProviderMaxConcurrentTooHigh is returned when max_concurrent exceeds the allowed upper bound.
+var ErrCAProviderMaxConcurrentTooHigh = errors.New("max_concurrent must be <= 100")
+
+// ErrCAProviderMinIntervalTooHigh is returned when min_interval_ms exceeds the allowed upper bound.
+var ErrCAProviderMinIntervalTooHigh = errors.New("min_interval_ms must be <= 60000")
+
+// ErrCAProviderMaskedHMACNotAvailable is returned when the existing HMAC key cannot be determined for a masked update.
+var ErrCAProviderMaskedHMACNotAvailable = errors.New("existing HMAC key is not available")
+
+// UpdateCAProvider updates a CA provider. Returns ErrCAProviderNotFound if no rows were affected.
+func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProviderRequest) error {
+	tx, err := db.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var existing models.CAProvider
+	var createdAt, updatedAt sql.NullTime
+	err = tx.QueryRow(`
+		SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled, created_at, updated_at
+		FROM ca_providers WHERE id=?
+	`, id).Scan(&existing.ID, &existing.Name, &existing.Provider, &existing.DirectoryURL, &existing.Credentials, &existing.MaxConcurrent, &existing.MinIntervalMS, &existing.Enabled, &createdAt, &updatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrCAProviderNotFound
+		}
+		return err
+	}
+	if createdAt.Valid {
+		existing.CreatedAt = createdAt.Time
+	}
+	if updatedAt.Valid {
+		existing.UpdatedAt = updatedAt.Time
+	}
+
+	if req.Name != nil {
+		existing.Name = *req.Name
+	}
+	if req.Provider != nil {
+		existing.Provider = *req.Provider
+	}
+	if req.DirectoryURL != nil {
+		existing.DirectoryURL = *req.DirectoryURL
+	}
+	originalCredentials := existing.Credentials
+	if req.Credentials != nil {
+		existing.Credentials = *req.Credentials
+	}
+	if req.MaxConcurrent != nil {
+		existing.MaxConcurrent = *req.MaxConcurrent
+	}
+	if req.MinIntervalMS != nil {
+		existing.MinIntervalMS = *req.MinIntervalMS
+	}
+	if req.Enabled != nil {
+		existing.Enabled = *req.Enabled
+	}
+
+	if existing.Provider != ProviderLetsEncrypt && existing.Provider != ProviderZeroSSL {
+		return ErrCAProviderInvalidProvider
+	}
+	if existing.Name == "" {
+		return ErrCAProviderInvalidName
+	}
+	if len(existing.Name) > 100 {
+		return ErrCAProviderNameTooLong
+	}
+	if existing.DirectoryURL == "" {
+		return ErrCAProviderInvalidDirectoryURL
+	}
+	if len(existing.DirectoryURL) > 255 {
+		return ErrCAProviderDirectoryURLTooLong
+	}
+	if u, err := url.Parse(existing.DirectoryURL); err != nil || u.Scheme != "https" || u.Host == "" {
+		return ErrCAProviderInvalidDirectoryURL
+	}
+
+	var creds models.CAProviderCredentials
+	if existing.Credentials != "" {
+		if err := json.Unmarshal([]byte(existing.Credentials), &creds); err != nil {
+			return ErrCAProviderInvalidCredentials
+		}
+	}
+	if existing.Provider == ProviderZeroSSL {
+		if creds.EABKID == "" || creds.EABHMACKey == "" {
+			return ErrCAProviderMissingZeroSSLCredentials
+		}
+	}
+	if existing.Provider == ProviderLetsEncrypt {
+		trimmed := strings.TrimSpace(existing.Credentials)
+		if trimmed != "" && trimmed != "{}" {
+			return ErrCAProviderLetsEncryptCredentialsNotEmpty
+		}
+	}
+
+	if existing.MaxConcurrent <= 0 {
+		existing.MaxConcurrent = 1
+	}
+	if existing.MaxConcurrent > 100 {
+		return ErrCAProviderMaxConcurrentTooHigh
+	}
+	if existing.MinIntervalMS <= 0 {
+		existing.MinIntervalMS = 1000
+	}
+	if existing.MinIntervalMS > 60000 {
+		return ErrCAProviderMinIntervalTooHigh
+	}
+
+	if req.Enabled != nil && !*req.Enabled && existing.Enabled {
+		res, err := tx.Exec(`
+			UPDATE ca_providers SET enabled=0, updated_at=datetime('now')
+			WHERE id=? AND (SELECT COUNT(*) FROM ca_providers WHERE id != ? AND enabled=1) > 0
+		`, id, id)
+		if err != nil {
+			return err
+		}
+		rows, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return ErrCAProviderLastEnabled
+		}
+	}
+
+	if req.Credentials != nil && creds.EABHMACKey == MaskedHMACKey {
+		if originalCredentials == "" {
+			return ErrCAProviderMaskedHMACNotAvailable
+		}
+		var existingCreds models.CAProviderCredentials
+		if err := json.Unmarshal([]byte(originalCredentials), &existingCreds); err != nil {
+			return fmt.Errorf("%w: %w", ErrCAProviderInvalidCredentials, err)
+		}
+		if existingCreds.EABHMACKey == "" || existingCreds.EABHMACKey == MaskedHMACKey {
+			return ErrCAProviderMaskedHMACNotAvailable
+		}
+		creds.EABHMACKey = existingCreds.EABHMACKey
+		updated, err := json.Marshal(creds)
+		if err != nil {
+			return err
+		}
+		existing.Credentials = string(updated)
+	}
+
+	res, err := tx.Exec(`
+		UPDATE ca_providers SET name=?, provider=?, directory_url=?, credentials=?, max_concurrent=?, min_interval_ms=?, enabled=?, updated_at=datetime('now')
+		WHERE id=?
+	`, existing.Name, existing.Provider, existing.DirectoryURL, existing.Credentials, existing.MaxConcurrent, existing.MinIntervalMS, existing.Enabled, id)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrCAProviderNotFound
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// CAProviderTestError records a failure during the ACME test phase.
+type CAProviderTestError struct {
+	Phase string
+	Err   error
+}
+
+func (e *CAProviderTestError) Error() string { return e.Err.Error() }
+func (e *CAProviderTestError) Unwrap() error { return e.Err }
+
+// TestCAProvider validates a CA provider by registering an ACME account.
+func (s *CAProviderService) TestCAProvider(id int, domain string) error {
+	log.Printf("Testing CA provider %d with domain %s", id, domain)
+
+	var p models.CAProvider
+	err := db.DB.QueryRow(`
+		SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled
+		FROM ca_providers WHERE id=? AND enabled=1
+	`, id).Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials, &p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrCAProviderNotFound
+		}
+		return err
+	}
+
+	var acmeEmail string
+	if err := db.DB.QueryRow("SELECT COALESCE(acme_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return &CAProviderTestError{Phase: "email", Err: errors.New("ACME email is not configured")}
+		}
+		return err
+	}
+	if acmeEmail == "" {
+		return &CAProviderTestError{Phase: "email", Err: errors.New("ACME email is not configured")}
+	}
+
+	client, err := NewACMEClientForProvider(p, acmeEmail)
+	if err != nil {
+		return &CAProviderTestError{Phase: "config", Err: err}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := client.RegisterAccount(ctx); err != nil {
+		return &CAProviderTestError{Phase: "register", Err: err}
+	}
+	return nil
+}

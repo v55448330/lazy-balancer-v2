@@ -87,6 +87,18 @@ type CAProviderCredentials struct {
 	EABHMACKey string `json:"eab_hmac_key,omitempty"`
 }
 
+// UpdateCAProviderRequest represents a partial update to a CA provider.
+// Pointer fields are only applied when non-nil.
+type UpdateCAProviderRequest struct {
+	Name          *string `json:"name"`
+	Provider      *string `json:"provider"`
+	DirectoryURL  *string `json:"directory_url"`
+	Credentials   *string `json:"credentials"`
+	MaxConcurrent *int    `json:"max_concurrent"`
+	MinIntervalMS *int    `json:"min_interval_ms"`
+	Enabled       *bool   `json:"enabled"`
+}
+
 // GlobalConfig represents global configuration
 type GlobalConfig struct {
 	ID                  int          `json:"id"`

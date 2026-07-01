@@ -70,6 +70,11 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/keys", h.CreateAPIKey)
 				admin.DELETE("/keys/:id", h.DeleteAPIKey)
 
+				// CA Providers (admin only for detail/update/test)
+				admin.GET("/ca-providers/:id", h.GetCAProvider)
+				admin.PUT("/ca-providers/:id", h.UpdateCAProvider)
+				admin.POST("/ca-providers/:id/test", h.TestCAProvider)
+
 				// Nodes
 				admin.GET("/nodes", h.ListNodes)
 				admin.GET("/nodes/pending", h.ListPendingNodes)
@@ -113,6 +118,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				api.PUT("/certificate-configs/:id", h.UpdateCertificateConfig)
 				api.DELETE("/certificate-configs/:id", h.DeleteCertificateConfig)
 				api.GET("/dns-providers", h.ListDNSProviders)
+				api.GET("/ca-providers", h.ListCAProviders)
 				api.POST("/certificate-configs/test", h.TestCertificateConfig)
 				api.POST("/certificate-configs/:id/test", h.TestCertificateConfig)
 

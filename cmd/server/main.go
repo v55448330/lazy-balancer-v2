@@ -47,9 +47,10 @@ func main() {
 	metricsService := services.NewMetricsService(cfg.CaddyMetricsURL, cfg.MetricsInterval)
 	nodeService := services.NewNodeService()
 	syncService := services.NewSyncService()
+	caProviderService := services.NewCAProviderService()
 
 	// Initialize handlers
-	h := handlers.NewHandlers(cfg, caddyService, metricsService, nodeService, syncService, certService)
+	h := handlers.NewHandlers(cfg, caddyService, metricsService, nodeService, syncService, certService, caProviderService)
 
 	// Apply Caddy config from database on startup
 	if err := h.ApplyConfigOnStartup(); err != nil {

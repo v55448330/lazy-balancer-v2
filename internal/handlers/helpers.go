@@ -34,7 +34,6 @@ func generateRandomString(n int) string {
 	return string(b)
 }
 
-
 type CertificateInfo struct {
 	Valid           bool   `json:"valid"`
 	Domain          string `json:"domain"`
@@ -160,7 +159,6 @@ func getOutboundIP() string {
 	return localAddr.IP.String()
 }
 
-
 func getHostname() string {
 	cmd := exec.Command("hostname")
 	output, err := cmd.Output()
@@ -169,7 +167,6 @@ func getHostname() string {
 	}
 	return strings.TrimSpace(string(output))
 }
-
 
 func getOSInfo() string {
 	data, err := os.ReadFile("/etc/os-release")
@@ -200,7 +197,6 @@ func getOSInfo() string {
 	return "Linux"
 }
 
-
 func getKernel() string {
 	cmd := exec.Command("uname", "-r")
 	output, err := cmd.Output()
@@ -210,7 +206,6 @@ func getKernel() string {
 	return strings.TrimSpace(string(output))
 }
 
-
 func getArchitecture() string {
 	cmd := exec.Command("arch")
 	output, err := cmd.Output()
@@ -219,7 +214,6 @@ func getArchitecture() string {
 	}
 	return strings.TrimSpace(string(output))
 }
-
 
 func getNetworkIPs() map[string]string {
 	ips := make(map[string]string)
@@ -251,7 +245,6 @@ func getNetworkIPs() map[string]string {
 	return ips
 }
 
-
 func getCaddyVersion() string {
 	cmd := exec.Command("caddy", "version")
 	output, err := cmd.Output()
@@ -265,11 +258,9 @@ func getCaddyVersion() string {
 	return strings.TrimSpace(string(output))
 }
 
-
 func getUptime() int64 {
 	return int64(time.Since(startTime).Seconds())
 }
-
 
 func getSystemMetrics() (models.SystemMetrics, error) {
 	var m runtime.MemStats
@@ -344,7 +335,6 @@ func getSystemMetrics() (models.SystemMetrics, error) {
 	}, nil
 }
 
-
 func getCPUPercent() float64 {
 	cmd := exec.Command("sh", "-c", "cat /proc/stat | head -1 | awk '{print ($2+$3+$4)/($2+$3+$4+$5)*100}'")
 	output, err := cmd.Output()
@@ -356,7 +346,6 @@ func getCPUPercent() float64 {
 	}
 	return 0
 }
-
 
 func getCPUFromProc() float64 {
 	readFile := func(path string) []byte {
@@ -397,7 +386,6 @@ func getCPUFromProc() float64 {
 	return float64(totalDelta-idleDelta) / float64(totalDelta) * 100
 }
 
-
 type cpuStats struct {
 	user, nice, system, idle, iowait, irq, softirq uint64
 }
@@ -426,7 +414,6 @@ func parseCPUStats(data string) *cpuStats {
 	}
 	return nil
 }
-
 
 var lastNetStats struct {
 	bytesIn  uint64
@@ -480,7 +467,6 @@ func getRealtimeTraffic() (models.RealtimeTraffic, error) {
 		BytesOut: rateOut,
 	}, nil
 }
-
 
 func getConnectionStats() (models.ConnectionStats, error) {
 	stats := models.ConnectionStats{}
@@ -546,7 +532,6 @@ func getConnectionStats() (models.ConnectionStats, error) {
 	return stats, nil
 }
 
-
 func parsePrometheusMetrics(body string) models.CaddyMetrics {
 	m := models.CaddyMetrics{}
 	lines := strings.Split(body, "\n")
@@ -591,7 +576,6 @@ func parsePrometheusMetrics(body string) models.CaddyMetrics {
 	}
 	return m
 }
-
 
 func parseHostMetrics(body string) []models.HostMetrics {
 	hostMap := make(map[string]*models.HostMetrics)
@@ -647,7 +631,6 @@ func parseHostMetrics(body string) []models.HostMetrics {
 	}
 	return result
 }
-
 
 func extractLabel(metricName string, label string) string {
 	idx := strings.Index(metricName, label+`="`)
@@ -760,7 +743,6 @@ func emptyRuleMetrics() gin.H {
 	}
 }
 
-
 func isValidHost(host string) bool {
 	// Check if it's a valid IP address
 	ip := net.ParseIP(host)
@@ -800,13 +782,16 @@ func isValidHost(host string) bool {
 	return valid
 }
 
-
 func isValidDomain(domain string) bool {
+	domain = strings.ToLower(domain)
 	if len(domain) > 253 {
 		return false
 	}
 
 	parts := strings.Split(domain, ".")
+	if len(parts) < 2 {
+		return false
+	}
 	for _, part := range parts {
 		if part == "" {
 			return false
@@ -815,11 +800,10 @@ func isValidDomain(domain string) bool {
 			return false
 		}
 		for _, c := range part {
-			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.') {
+			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.') {
 				return false
 			}
 		}
 	}
 	return true
 }
-

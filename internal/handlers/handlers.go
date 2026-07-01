@@ -23,9 +23,10 @@ type Handlers struct {
 	nodeService        *services.NodeService
 	syncService        *services.SyncService
 	certificateService *services.CertificateService
+	caProviderService  *services.CAProviderService
 }
 
-func NewHandlers(cfg *config.Config, caddy *services.CaddyService, metrics *services.MetricsService, node *services.NodeService, sync *services.SyncService, cert *services.CertificateService) *Handlers {
+func NewHandlers(cfg *config.Config, caddy *services.CaddyService, metrics *services.MetricsService, node *services.NodeService, sync *services.SyncService, cert *services.CertificateService, ca *services.CAProviderService) *Handlers {
 	h := &Handlers{
 		cfg:                cfg,
 		caddyService:       caddy,
@@ -33,6 +34,7 @@ func NewHandlers(cfg *config.Config, caddy *services.CaddyService, metrics *serv
 		nodeService:        node,
 		syncService:        sync,
 		certificateService: cert,
+		caProviderService:  ca,
 	}
 
 	// Initialize default admin user
