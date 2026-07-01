@@ -5,16 +5,13 @@ FROM golang:1.26.1-alpine AS xcaddy-builder
 RUN apk add --no-cache git
 RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.5
 WORKDIR /app
-COPY third_party ./third_party
 
 ENV GOTOOLCHAIN=auto
 RUN xcaddy build v2.11.4 \
-  --with github.com/caddy-dns/dnspod@fb7cc31cc04c68a304b8d2672c3e5d9f2ad3d7ba \
-  --replace github.com/caddy-dns/dnspod=/app/third_party/caddy-dns-dnspod \
   --with github.com/mholt/caddy-l4@v0.1.1
 
 # Build Go backend
-FROM golang:1.21-alpine AS backend
+FROM golang:1.26.1-alpine AS backend
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -38,7 +35,6 @@ WORKDIR /app
 COPY --from=xcaddy-builder /app/caddy /usr/local/bin/caddy
 COPY --from=backend /app/cmd/server/lazy-balancer /usr/local/bin/lazy-balancer
 COPY --from=frontend /app/dist /app/ui
-COPY third_party /app/third_party
 
 RUN mkdir -p /app/data /app/config /app/logs
 RUN adduser -u 1000 -s /bin/sh -D -h /app caddy
