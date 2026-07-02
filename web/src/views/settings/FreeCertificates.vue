@@ -18,10 +18,16 @@
           <el-input-number v-model="global.cert_renewal_days" :min="1" :max="90" />
           <div class="form-tip">证书到期前多少天自动尝试重签</div>
         </el-form-item>
-        <el-form-item label="默认 CA 提供商">
-          <el-select v-model="global.default_ca_provider_id" style="width: 100%" clearable placeholder="系统默认">
+        <el-form-item label="CA 提供商" required>
+          <el-select v-model="global.default_ca_provider_id" style="width: 100%" placeholder="请选择 CA 提供商">
             <el-option v-for="p in enabledCAProviders" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="DNS 提供商">
+          <el-select v-model="global.dns_provider" style="width: 100%" placeholder="请选择 DNS 提供商">
+            <el-option label="DNSPod" value="dnspod" />
+          </el-select>
+          <div class="form-tip">设置全局默认 DNS 提供商，后续创建规则时将默认使用</div>
         </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="saving" @click="handleSave">
@@ -162,6 +168,11 @@
         <template v-if="caForm.provider === 'zerossl'">
           <el-form-item label="EAB KID" required>
             <el-input v-model="caCreds.eab_kid" placeholder="ZeroSSL EAB KID" />
+            <div class="form-tip">
+              请前往
+              <a href="https://app.zerossl.com/developer" target="_blank" rel="noopener noreferrer" class="link">ZeroSSL Developer</a>
+              创建 EAB Credentials
+            </div>
           </el-form-item>
           <el-form-item label="EAB HMAC Key" required>
             <el-input v-model="caCreds.eab_hmac_key" type="password" placeholder="ZeroSSL EAB HMAC Key" show-password />
@@ -542,14 +553,19 @@ const handleSave = async () => {
     ElMessage.warning('ACME 邮箱格式不正确')
     return
   }
-  saving.value = true
-  try {
-  await emit('save', {
-    acme_email: global.value.acme_email,
-    cert_expiry_days: global.value.cert_expiry_days,
-    cert_renewal_days: global.value.cert_renewal_days,
-    default_ca_provider_id: global.value.default_ca_provider_id ?? 0,
-  })
+    if (!global.value.default_ca_provider_id) {
+      ElMessage.warning('请选择 CA 提供商')
+      return
+    }
+    saving.value = true
+    try {
+      await emit('save', {
+        acme_email: global.value.acme_email,
+        cert_expiry_days: global.value.cert_expiry_days,
+        cert_renewal_days: global.value.cert_renewal_days,
+        default_ca_provider_id: global.value.default_ca_provider_id,
+        dns_provider: global.value.dns_provider || 'dnspod',
+      })
   } finally {
     saving.value = false
   }
@@ -563,6 +579,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.form-tip a.link { color: #3b82f6; text-decoration: none; }
+.form-tip a.link:hover { text-decoration: underline; }
 .card-header {
   display: flex;
   justify-content: space-between;

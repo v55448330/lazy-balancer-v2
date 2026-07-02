@@ -95,6 +95,15 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	if req.DNSProvider != "" {
+		switch req.DNSProvider {
+		case "dnspod":
+		default:
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid DNS provider"})
+			return
+		}
+	}
+
 	if req.CertRenewalDays < 0 || req.CertRenewalDays > 90 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_renewal_days must be between 0 and 90"})
 		return
