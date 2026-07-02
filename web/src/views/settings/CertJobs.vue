@@ -57,7 +57,6 @@
             <el-button link type="primary" size="small" :disabled="!canRetry(row.status)" @click="retryJob(row)">重签</el-button>
           </span>
         </el-tooltip>
-        <el-button link type="danger" size="small" @click="deleteJob(row)">删除</el-button>
       </template>
     </el-table-column>
   </el-table>
@@ -86,7 +85,7 @@
 import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import * as pkijs from 'pkijs'
 import * as asn1js from 'asn1js'
 
@@ -318,19 +317,6 @@ const retryJob = async (row: CertJob) => {
     fetchJobs()
   } catch (error) {
     console.error('Failed to retry cert job:', error)
-  }
-}
-
-const deleteJob = async (row: CertJob) => {
-  try {
-    await ElMessageBox.confirm(`确定要删除任务 "${row.domain}" 吗？`, '删除确认', { type: 'warning' })
-    await request.delete(`/certificates/jobs/${row.id}`)
-    ElMessage.success('任务已删除')
-    fetchJobs()
-  } catch (error) {
-    if (error !== 'cancel') {
-      console.error('Failed to delete cert job:', error)
-    }
   }
 }
 
