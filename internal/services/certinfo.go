@@ -26,6 +26,20 @@ func GetCertExpiryThreshold() int {
 	return days
 }
 
+// GetCertRenewalAttempts returns the configured max renewal attempts.
+func GetCertRenewalAttempts() int {
+	var attempts int
+	err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_attempts, 5) FROM global_config WHERE id = 1").Scan(&attempts)
+	if err != nil {
+		log.Printf("GetCertRenewalAttempts: failed to read global_config, using default 5: %v", err)
+		return 5
+	}
+	if attempts <= 0 {
+		return 5
+	}
+	return attempts
+}
+
 // ParseCertInfo parses a PEM certificate and returns structured display info.
 func ParseCertInfo(certPEM, source, ruleDomains string) *models.RuleCertInfo {
 	info := &models.RuleCertInfo{
