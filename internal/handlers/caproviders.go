@@ -12,10 +12,6 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-type testCAProviderRequest struct {
-	Domain string `json:"domain"`
-}
-
 func (h *Handlers) ListCAProviders(c *gin.Context) {
 	list, err := h.caProviderService.ListCAProviders()
 	if err != nil {
@@ -105,17 +101,7 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 		return
 	}
 
-	var req testCAProviderRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request: " + err.Error()})
-		return
-	}
-	if !isValidACMEDomain(req.Domain) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "domain must be a valid domain name"})
-		return
-	}
-
-	if err := h.caProviderService.TestCAProvider(id, req.Domain); err != nil {
+	if err := h.caProviderService.TestCAProvider(id); err != nil {
 		if errors.Is(err, services.ErrCAProviderNotFound) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA provider not found or disabled"})
 			return

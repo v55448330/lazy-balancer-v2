@@ -145,8 +145,9 @@
         <el-form-item label="类型">
           <el-input v-model="caForm.provider" disabled />
         </el-form-item>
-        <el-form-item label="Directory URL" required>
-          <el-input v-model="caForm.directory_url" placeholder="https://acme.example.com/directory" />
+        <el-form-item label="Directory URL">
+          <el-input v-model="caForm.directory_url" disabled />
+          <div class="form-tip">Directory URL 为官方固定地址，不可修改</div>
         </el-form-item>
         <el-form-item label="最大并发">
           <el-input-number v-model="caForm.max_concurrent" :min="1" :max="100" />
@@ -351,21 +352,7 @@ const openCAProviderDialog = (p: CAProvider) => {
   caDialogVisible.value = true
 }
 
-const isValidHttpsUrl = (url: string): boolean => {
-  try {
-    const u = new URL(url.trim())
-    return u.protocol === 'https:'
-  } catch {
-    return false
-  }
-}
-
 const saveCAProvider = async () => {
-  if (!caForm.directory_url || !isValidHttpsUrl(caForm.directory_url)) {
-    ElMessage.warning('Directory URL 必须是有效的 HTTPS 地址')
-    return
-  }
-
   if (caForm.provider === 'zerossl') {
     if (!caCreds.eab_kid.trim() || !caCreds.eab_hmac_key.trim()) {
       ElMessage.warning('ZeroSSL 必须填写 EAB KID 和 EAB HMAC Key')
@@ -397,34 +384,10 @@ const saveCAProvider = async () => {
   }
 }
 
-const promptTestDomainForCA = async (): Promise<string | null> => {
-  try {
-    const { value } = await ElMessageBox.prompt(
-      '请输入一个该 CA 可签发证书的域名（例如 example.com），系统将尝试注册 ACME 账户来验证配置',
-      '验证 CA 配置',
-      {
-        confirmButtonText: '测试',
-        cancelButtonText: '取消',
-        inputPlaceholder: 'example.com',
-        inputValidator: (value) => {
-          if (!value) return '请输入域名'
-          if (!/^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$/.test(value.trim())) return '域名格式不正确'
-          return true
-        },
-      }
-    )
-    return value.trim()
-  } catch {
-    return null
-  }
-}
-
 const testCAProvider = async (p: CAProvider) => {
-  const domain = await promptTestDomainForCA()
-  if (!domain) return
   testingCAId.value = p.id
   try {
-    const res = await request.post(`/admin/ca-providers/${p.id}/test`, { domain })
+    const res: any = await request.post(`/admin/ca-providers/${p.id}/test`)
     ElMessage.success(res.message || 'CA 配置有效')
   } catch (error: any) {
     const msg = error?.response?.data?.message || error?.message || '测试失败'

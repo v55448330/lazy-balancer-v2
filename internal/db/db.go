@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	DB       *sql.DB
-	MetricsDB *sql.DB
+	DB             *sql.DB
+	MetricsDB      *sql.DB
 	BackgroundDBMu sync.Mutex
 )
 
@@ -509,14 +509,14 @@ func runMigrations() error {
 			log.Printf("Warning: failed to seed CA providers: %v", err)
 		} else {
 			// LastInsertId returns the last row of the multi-row insert (Let's Encrypt),
-			// so look up ZeroSSL's actual ID directly.
-			var zid int64
-			if err := DB.QueryRow("SELECT id FROM ca_providers WHERE provider = 'zerossl' ORDER BY id LIMIT 1").Scan(&zid); err == nil {
-				res, err := DB.Exec("UPDATE global_config SET default_ca_provider_id = ? WHERE id = 1", zid)
+			// so look up Let's Encrypt's actual ID directly and set it as the default.
+			var leid int64
+			if err := DB.QueryRow("SELECT id FROM ca_providers WHERE provider = 'letsencrypt' ORDER BY id LIMIT 1").Scan(&leid); err == nil {
+				res, err := DB.Exec("UPDATE global_config SET default_ca_provider_id = ? WHERE id = 1", leid)
 				if err != nil {
 					log.Printf("Warning: failed to set default CA provider: %v", err)
 				} else if rowsAffected, _ := res.RowsAffected(); rowsAffected == 0 {
-					log.Printf("Warning: default CA provider update affected 0 rows")
+					log.Printf("Warning: failed to set default CA provider to Let's Encrypt")
 				}
 			}
 		}

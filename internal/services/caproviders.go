@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/url"
 	"strings"
 	"time"
 
@@ -22,6 +21,10 @@ const (
 	// MaskedHMACKey is the sentinel value clients send for eab_hmac_key to
 	// indicate that the existing stored HMAC key should be preserved.
 	MaskedHMACKey = "__MASKED__"
+
+	// Official directory URLs. These are fixed and not user-editable.
+	LetsEncryptDirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"
+	ZeroSSLDirectoryURL     = "https://acme.zerossl.com/v2/DV90"
 )
 
 // CAProviderListItem is a credential-safe view of a CA provider for list endpoints.
@@ -221,20 +224,16 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 	if existing.Provider != ProviderLetsEncrypt && existing.Provider != ProviderZeroSSL {
 		return ErrCAProviderInvalidProvider
 	}
+	if existing.Provider == ProviderLetsEncrypt {
+		existing.DirectoryURL = LetsEncryptDirectoryURL
+	} else {
+		existing.DirectoryURL = ZeroSSLDirectoryURL
+	}
 	if existing.Name == "" {
 		return ErrCAProviderInvalidName
 	}
 	if len(existing.Name) > 100 {
 		return ErrCAProviderNameTooLong
-	}
-	if existing.DirectoryURL == "" {
-		return ErrCAProviderInvalidDirectoryURL
-	}
-	if len(existing.DirectoryURL) > 255 {
-		return ErrCAProviderDirectoryURLTooLong
-	}
-	if u, err := url.Parse(existing.DirectoryURL); err != nil || u.Scheme != "https" || u.Host == "" {
-		return ErrCAProviderInvalidDirectoryURL
 	}
 
 	var creds models.CAProviderCredentials
@@ -331,8 +330,10 @@ func (e *CAProviderTestError) Error() string { return e.Err.Error() }
 func (e *CAProviderTestError) Unwrap() error { return e.Err }
 
 // TestCAProvider validates a CA provider by registering an ACME account.
-func (s *CAProviderService) TestCAProvider(id int, domain string) error {
-	log.Printf("Testing CA provider %d with domain %s", id, domain)
+// It does not attempt to issue a certificate or validate domain ownership;
+// it only verifies that the CA is reachable and the credentials are accepted.
+func (s *CAProviderService) TestCAProvider(id int) error {
+	log.Printf("Testing CA provider %d", id)
 
 	var p models.CAProvider
 	err := db.DB.QueryRow(`
