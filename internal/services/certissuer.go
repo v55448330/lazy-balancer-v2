@@ -7,6 +7,8 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log"
+	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +22,61 @@ import (
 // runs the ACME flow, persists cert+key to DB, and triggers Caddy reload.
 type CertIssuer struct {
 	caddyReloader func() error
+}
+
+// CAProviderRateLimitError indicates the CA rejected the request with 429.
+type CAProviderRateLimitError struct {
+	RetryAfter time.Duration
+	Reason     string
+}
+
+func (e *CAProviderRateLimitError) Error() string {
+	return fmt.Sprintf("CA rate limited (429), retry after %v: %s", e.RetryAfter, e.Reason)
+}
+
+// parseRetryAfter parses an HTTP Retry-After header value into a duration.
+func parseRetryAfter(header string) time.Duration {
+	if header == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(header); err == nil {
+		return time.Duration(seconds) * time.Second
+	}
+	if t, err := http.ParseTime(header); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// defaultRetryAfter returns the default cooling duration when a CA does not provide Retry-After.
+func defaultRetryAfter(provider string) time.Duration {
+	switch provider {
+	case ProviderZeroSSL:
+		return 30 * time.Minute
+	case ProviderLetsEncrypt:
+		return time.Hour
+	default:
+		return time.Hour
+	}
+}
+
+// computeBackoff returns the cooling duration based on attempt count and CA Retry-After.
+func computeBackoff(attempts int, retryAfter time.Duration) time.Duration {
+	var base time.Duration
+	switch attempts {
+	case 1:
+		base = time.Hour
+	case 2:
+		base = 2 * time.Hour
+	default:
+		base = 3 * time.Hour
+	}
+	if retryAfter > base {
+		return retryAfter
+	}
+	return base
 }
 
 // NewCertIssuer creates a new CertIssuer. The reloader is called after a
@@ -126,6 +183,9 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// Run the ACME issuance flow
 	certPEM, keyPEM, err := issuer.Issue(ctx, domainList)
 	if err != nil {
+		if raErr := detectRateLimit(err, provider.Provider); raErr != nil {
+			return raErr
+		}
 		failJob(jobID, err.Error())
 		return err
 	}
@@ -137,9 +197,9 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		return err
 	}
 
-	// Persist cert+key to database and reset renewal failure counter on success.
+	// Persist cert+key to database and reset renewal failure counters on success.
 	_, err = db.DB.Exec(
-		"UPDATE cert_jobs SET status='issued', message='签发成功', cert_pem=?, key_pem=?, expires_at=?, ca_provider_id=?, renewal_attempts=0, updated_at=datetime('now') WHERE id=?",
+		"UPDATE cert_jobs SET status='issued', message='签发成功', cert_pem=?, key_pem=?, expires_at=?, ca_provider_id=?, renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?",
 		certPEM, keyPEM, notAfter, provider.ID, jobID,
 	)
 	if err != nil {
@@ -155,6 +215,18 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	}
 
 	return nil
+}
+
+func detectRateLimit(err error, providerType string) *CAProviderRateLimitError {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "429") && !strings.Contains(msg, "rate limit") && !strings.Contains(msg, "too many") {
+		return nil
+	}
+	retryAfter := defaultRetryAfter(providerType)
+	return &CAProviderRateLimitError{RetryAfter: retryAfter, Reason: err.Error()}
 }
 
 // NewACMEClientForProvider exposes the ACME client factory for handlers.

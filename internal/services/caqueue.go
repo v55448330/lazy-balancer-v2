@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -169,7 +170,12 @@ func (q *caQueue) execute(item queueItem) {
 	if err := issuer.Issue(ctx, item.jobID, item.ruleID, item.domains, q.provider); err != nil {
 		log.Printf("CA queue execution failed for job %d rule %s: %v", item.jobID, item.ruleID, err)
 		if !isTerminalJobStatus(item.jobID) {
-			failJob(item.jobID, fmt.Sprintf("CA 签发失败: %v", err))
+			var raErr *CAProviderRateLimitError
+			if errors.As(err, &raErr) {
+				markJobWaitingCA(item.jobID, raErr.RetryAfter)
+			} else {
+				failJob(item.jobID, fmt.Sprintf("CA 签发失败: %v", err))
+			}
 		}
 	}
 }
@@ -223,7 +229,21 @@ func loadCAProvider(id int) (models.CAProvider, error) {
 	return p, nil
 }
 
-// failJob marks a job as failed and writes an error log.
+func markJobWaitingCA(jobID int, retryAfter time.Duration) {
+	available := time.Now().Add(retryAfter).UTC()
+	if _, err := db.DB.Exec(
+		"INSERT INTO cert_job_logs (job_id, level, message) VALUES (?, 'warning', ?)",
+		jobID, fmt.Sprintf("CA 频率限制，将在 %s 后重试", available.Format(time.RFC3339)),
+	); err != nil {
+		log.Printf("CA queue: failed to insert waiting log for job %d: %v", jobID, err)
+	}
+	if _, err := db.DB.Exec(
+		"UPDATE cert_jobs SET status='waiting_ca', message='等待 CA 频率限制冷却', ca_available_after=?, last_error_code='429', renewal_attempts = COALESCE(renewal_attempts,0) + 1, updated_at=datetime('now') WHERE id=?",
+		available, jobID,
+	); err != nil {
+		log.Printf("CA queue: failed to mark job %d as waiting_ca: %v", jobID, err)
+	}
+}
 func failJob(jobID int, message string) {
 	if !jobExists(jobID) {
 		log.Printf("CA queue: cannot fail missing job %d: %s", jobID, message)
