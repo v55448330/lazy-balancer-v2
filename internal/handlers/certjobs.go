@@ -16,7 +16,7 @@ import (
 
 func (h *Handlers) ListCertJobs(c *gin.Context) {
 	ruleID := c.Query("rule_id")
-	query := "SELECT id, rule_id, domain, status, message, cert_pem, expires_at, created_at, updated_at FROM cert_jobs"
+	query := `SELECT id, rule_id, domain, status, message, cert_pem, expires_at, created_at, updated_at, COALESCE(renewal_attempts,0) as renewal_attempts FROM cert_jobs`
 	var args []interface{}
 	if ruleID != "" {
 		query += " WHERE rule_id = ?"
@@ -35,7 +35,7 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 	for rows.Next() {
 		var j models.CertJob
 		if err := rows.Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.Message, &j.CertPEM,
-			&j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt,
+			&j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt, &j.RenewalAttempts,
 		); err != nil {
 			continue
 		}

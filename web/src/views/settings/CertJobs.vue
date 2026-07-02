@@ -31,6 +31,18 @@
         <span class="cell-text">{{ formatDate(row.updated_at) || '-' }}</span>
       </template>
     </el-table-column>
+    <el-table-column label="自动重签时间" min-width="120" show-overflow-tooltip>
+      <template #default="{ row }">
+        <span v-if="row.status === 'issued' && certInfoMap[row.id]" class="cell-text">{{ renewalInfo(row).renewalDate || '-' }}</span>
+        <span v-else class="cell-empty">-</span>
+      </template>
+    </el-table-column>
+    <el-table-column label="重试次数" width="80" align="center">
+      <template #default="{ row }">
+        <span v-if="row.renewal_attempts && row.renewal_attempts > 0" class="cell-text">{{ row.renewal_attempts }}</span>
+        <span v-else class="cell-empty">-</span>
+      </template>
+    </el-table-column>
     <el-table-column label="剩余天数" width="90">
       <template #default="{ row }">
         <span v-if="row.status === 'issued' && certInfoMap[row.id]" :class="['cert-days', certInfoMap[row.id].status]">{{ certInfoMap[row.id].days_remaining }} 天</span>
@@ -109,6 +121,7 @@ interface CertJob {
   expires_at?: string
   updated_at?: string
   cert_pem?: string
+  renewal_attempts?: number
 }
 
 interface CertInfo {
@@ -133,6 +146,7 @@ const props = defineProps<{
 const jobs = ref<CertJob[]>([])
 const loading = ref(false)
 const certInfoMap = ref<Record<number, CertInfo>>({})
+const certRenewalDays = ref(30)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const logDialogVisible = ref(false)
@@ -222,13 +236,27 @@ const canRetry = (status: CertJobStatus) => {
 
 const isQueued = (status: CertJobStatus) => status === 'queued'
 
+const renewalInfo = (row: CertJob): { renewalDate?: string; willRenew: boolean } => {
+  const info = certInfoMap.value[row.id]
+  if (!info) return { willRenew: false }
+  const expiry = new Date(info.not_after)
+  if (isNaN(expiry.getTime())) return { willRenew: false }
+  const renewal = new Date(expiry.getTime() - certRenewalDays.value * 24 * 60 * 60 * 1000)
+  return {
+    renewalDate: formatDate(renewal.toISOString()),
+    willRenew: true,
+  }
+}
+
 const fetchJobs = async () => {
   loading.value = true
   try {
-    const params: any = {}
-    if (props.ruleId) params.rule_id = props.ruleId
-    const res = await request.get('/certificates/jobs', { params })
-    jobs.value = res.data || []
+    const [jobsRes, configRes] = await Promise.all([
+      request.get('/certificates/jobs', { params: props.ruleId ? { rule_id: props.ruleId } : {} }),
+      request.get('/config'),
+    ])
+    jobs.value = jobsRes.data || []
+    certRenewalDays.value = configRes.data?.cert_renewal_days ?? 30
     await fetchCertInfo()
   } catch (error) {
     console.error('Failed to fetch cert jobs:', error)
