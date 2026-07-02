@@ -14,6 +14,10 @@
         <el-form-item label="过期提醒天数">
           <el-input-number v-model="global.cert_expiry_days" :min="1" :max="90" />
         </el-form-item>
+        <el-form-item label="自动续签时间">
+          <el-input-number v-model="global.cert_renewal_days" :min="1" :max="90" />
+          <div class="form-tip">证书到期前多少天自动尝试重签</div>
+        </el-form-item>
         <el-form-item label="默认 CA 提供商">
           <el-select v-model="global.default_ca_provider_id" style="width: 100%" clearable placeholder="系统默认">
             <el-option v-for="p in enabledCAProviders" :key="p.id" :label="p.name" :value="p.id" />
@@ -540,11 +544,12 @@ const handleSave = async () => {
   }
   saving.value = true
   try {
-    await emit('save', {
-      acme_email: global.value.acme_email,
-      cert_expiry_days: global.value.cert_expiry_days,
-      default_ca_provider_id: global.value.default_ca_provider_id ?? 0,
-    })
+  await emit('save', {
+    acme_email: global.value.acme_email,
+    cert_expiry_days: global.value.cert_expiry_days,
+    cert_renewal_days: global.value.cert_renewal_days,
+    default_ca_provider_id: global.value.default_ca_provider_id ?? 0,
+  })
   } finally {
     saving.value = false
   }

@@ -79,11 +79,15 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 	}
 
 	go func() {
+		// Manual re-sign should use the current default CA provider selected by the user.
+		if _, err := db.DB.Exec("UPDATE cert_jobs SET renewal_attempts=0 WHERE id=?", id); err != nil {
+			log.Printf("Failed to reset renewal attempts for job %d: %v", id, err)
+		}
 		qm := services.GetCAQueueManager(func() error {
 			fullConfig := services.GenerateCaddyConfig(h.cfg)
 			return h.caddyService.ApplyConfig(fullConfig)
 		})
-		if err := services.CreateOrRequeueCertJob(ruleID, domain, caProviderID, qm); err != nil {
+		if err := services.CreateOrRequeueCertJob(ruleID, domain, 0, qm); err != nil {
 			log.Printf("Manual retry enqueue failed for job %d: %v", id, err)
 		}
 	}()

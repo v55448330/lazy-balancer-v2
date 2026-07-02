@@ -1311,14 +1311,6 @@ const fetchGlobalConfig = async () => {
   }
 }
 
-const getDefaultCAProviderId = (): number => {
-  const defaultId = globalConfig.value.default_ca_provider_id
-  if (defaultId && caProviders.value.some(p => p.id === defaultId)) {
-    return defaultId
-  }
-  return enabledCAProviders.value[0]?.id || 0
-}
-
 const validateCertificate = async () => {
   certInfo.valid = false
   certInfo.warning = ''
@@ -1452,7 +1444,7 @@ const openWizard = (rule?: Rule) => {
       enable_tls: rule.enable_tls || false,
       tls_source: rule.tls_source || 'manual',
       acme_config_id: rule.acme_config_id || undefined,
-      ca_provider_id: rule.ca_provider_id || getDefaultCAProviderId(),
+      ca_provider_id: rule.ca_provider_id ?? 0,
       tls_cert: rule.tls_cert || '',
       tls_key: rule.tls_key || '',
       tls_http_redirect: rule.tls_http_redirect || false,
@@ -1485,7 +1477,7 @@ const openWizard = (rule?: Rule) => {
       enable_tls: false,
       tls_source: 'manual',
       acme_config_id: undefined as number | undefined,
-      ca_provider_id: getDefaultCAProviderId(),
+      ca_provider_id: 0,
       tls_cert: '',
       tls_key: '',
       tls_http_redirect: false,

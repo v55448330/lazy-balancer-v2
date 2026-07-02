@@ -23,6 +23,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	err := db.DB.QueryRow(`
 		SELECT id, caddy_config, dns_provider, COALESCE(dns_credentials,'') as dns_credentials,
 		       COALESCE(acme_email,'') as acme_email, COALESCE(cert_expiry_days,30) as cert_expiry_days,
+		       COALESCE(cert_renewal_days,30) as cert_renewal_days,
 		       COALESCE(default_ca_provider_id,0) as default_ca_provider_id,
 		       log_level, access_log_enabled,
 		       COALESCE(caddy_log_path,'/app/logs/caddy.log') as caddy_log_path,
@@ -32,7 +33,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       last_sync, updated_at
 		FROM global_config WHERE id = 1
 	`).Scan(&cfg.ID, &cfg.CaddyConfig, &cfg.DNSProvider, &cfg.DNSCredentials,
-		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.DefaultCAProviderID,
+		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.CertRenewalDays, &cfg.DefaultCAProviderID,
 		&cfg.LogLevel, &cfg.AccessLogEnabled,
 		&cfg.CaddyLogPath, &cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
@@ -45,7 +46,6 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
 }
 
-
 func (h *Handlers) GetUpstreamHealth(c *gin.Context) {
 	healthStatus, err := h.caddyService.GetUpstreamHealthDetailed()
 	if err != nil {
@@ -55,7 +55,6 @@ func (h *Handlers) GetUpstreamHealth(c *gin.Context) {
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: healthStatus})
 }
-
 
 func (h *Handlers) UpdateConfig(c *gin.Context) {
 	// Check if slave mode
@@ -96,6 +95,11 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	if req.CertRenewalDays < 0 || req.CertRenewalDays > 90 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_renewal_days must be between 0 and 90"})
+		return
+	}
+
 	if req.DefaultCAProviderID != nil {
 		if err := services.ValidateDefaultCAProvider(*req.DefaultCAProviderID); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -118,6 +122,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			dns_credentials = COALESCE(?, dns_credentials),
 			acme_email = COALESCE(?, acme_email),
 			cert_expiry_days = COALESCE(?, cert_expiry_days),
+			cert_renewal_days = COALESCE(?, cert_renewal_days),
 			default_ca_provider_id = COALESCE(?, default_ca_provider_id),
 			log_level = COALESCE(?, log_level),
 			access_log_enabled = COALESCE(?, access_log_enabled),
@@ -129,7 +134,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			sync_interval = COALESCE(?, sync_interval),
 			updated_at = datetime('now')
 		WHERE id = 1
-	`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.DefaultCAProviderID, req.LogLevel, req.AccessLogEnabled,
+	`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.DefaultCAProviderID, req.LogLevel, req.AccessLogEnabled,
 		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.IsMaster, req.MasterURL, req.SyncInterval)
 
@@ -142,7 +147,6 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config updated"})
 }
-
 
 func (h *Handlers) ValidateConfig(c *gin.Context) {
 	var configData map[string]interface{}
@@ -165,12 +169,10 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config is valid"})
 }
 
-
 func (h *Handlers) ReloadCaddy(c *gin.Context) {
 	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy config reloaded"})
 }
-
 
 func (h *Handlers) GetCaddyStatus(c *gin.Context) {
 	client := &http.Client{Timeout: 2 * time.Second}
@@ -190,7 +192,6 @@ func (h *Handlers) GetCaddyStatus(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"status": "stopped"}})
 }
-
 
 func (h *Handlers) GetCaddyConfig(c *gin.Context) {
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -216,7 +217,6 @@ func (h *Handlers) GetCaddyConfig(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: configData})
 }
-
 
 func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	var req struct {
@@ -256,7 +256,6 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config saved"})
 }
 
-
 func (h *Handlers) StartCaddy(c *gin.Context) {
 	cmd := exec.Command("caddy", "run", "--config", "/app/config/Caddyfile", "--adapter", "caddyfile")
 	cmd.Stdout = os.Stdout
@@ -269,13 +268,11 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy started"})
 }
 
-
 func (h *Handlers) StopCaddy(c *gin.Context) {
 	exec.Command("sh", "-c", "kill -9 $(pgrep -x caddy) 2>/dev/null || killall -9 caddy 2>/dev/null || pkill -9 -x caddy 2>/dev/null || true").Run()
 	time.Sleep(1 * time.Second)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy stopped"})
 }
-
 
 func (h *Handlers) RestartCaddy(c *gin.Context) {
 	exec.Command("sh", "-c", "kill -9 $(pgrep -x caddy) 2>/dev/null || killall -9 caddy 2>/dev/null || pkill -9 -x caddy 2>/dev/null || true").Run()
@@ -290,4 +287,3 @@ func (h *Handlers) RestartCaddy(c *gin.Context) {
 	time.Sleep(2 * time.Second)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy restarted"})
 }
-

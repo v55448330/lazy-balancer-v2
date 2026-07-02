@@ -137,9 +137,9 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		return err
 	}
 
-	// Persist cert+key to database
+	// Persist cert+key to database and reset renewal failure counter on success.
 	_, err = db.DB.Exec(
-		"UPDATE cert_jobs SET status='issued', message='签发成功', cert_pem=?, key_pem=?, expires_at=?, ca_provider_id=?, updated_at=datetime('now') WHERE id=?",
+		"UPDATE cert_jobs SET status='issued', message='签发成功', cert_pem=?, key_pem=?, expires_at=?, ca_provider_id=?, renewal_attempts=0, updated_at=datetime('now') WHERE id=?",
 		certPEM, keyPEM, notAfter, provider.ID, jobID,
 	)
 	if err != nil {

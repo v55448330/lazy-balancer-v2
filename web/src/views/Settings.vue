@@ -62,6 +62,7 @@ const settings = ref<any>({
 const global = ref<any>({
   acme_email: '',
   cert_expiry_days: 30,
+  cert_renewal_days: 30,
   default_ca_provider_id: 0,
 })
 
@@ -99,6 +100,7 @@ const fetchSettings = async () => {
       global.value = {
         acme_email: res.data.acme_email || '',
         cert_expiry_days: res.data.cert_expiry_days ?? 30,
+        cert_renewal_days: res.data.cert_renewal_days ?? 30,
         default_ca_provider_id: res.data.default_ca_provider_id ?? 0,
       }
     }

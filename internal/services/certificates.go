@@ -91,6 +91,11 @@ func CreateOrRequeueCertJob(ruleID, domains string, caProviderID int, qm *CAQueu
 	return qm.Enqueue(caProviderID, jobID, ruleID, joined)
 }
 
+const (
+	maxRenewalAttempts    = 3
+	renewalFailureBackoff = 1 * time.Hour
+)
+
 func (s *CertificateService) renewExpiringCertificates() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -101,7 +106,10 @@ func (s *CertificateService) renewExpiringCertificates() {
 	}
 
 	for _, j := range jobs {
-		res, err := db.DB.Exec("UPDATE cert_jobs SET status='queued', message='等待排队续期', updated_at=datetime('now') WHERE id=? AND status IN ('issued','failed')", j.ID)
+		res, err := db.DB.Exec(
+			"UPDATE cert_jobs SET status='queued', message='等待排队续期', renewal_attempts = COALESCE(renewal_attempts,0) + 1, updated_at=datetime('now') WHERE id=? AND status IN ('issued','failed')",
+			j.ID,
+		)
 		if err != nil {
 			log.Printf("Renewal: failed to update job %d status: %v", j.ID, err)
 			continue
@@ -109,8 +117,9 @@ func (s *CertificateService) renewExpiringCertificates() {
 		if rows, _ := res.RowsAffected(); rows == 0 {
 			continue // status changed concurrently or is active
 		}
+		// Re-sign always uses the current default CA provider selected by the user.
 		qm := GetCAQueueManager(s.caddyReloader)
-		if err := qm.Enqueue(j.CAProviderID, j.ID, j.RuleID, j.Domain); err != nil {
+		if err := qm.Enqueue(0, j.ID, j.RuleID, j.Domain); err != nil {
 			log.Printf("Renewal: failed to enqueue job %d: %v", j.ID, err)
 		}
 	}
@@ -185,19 +194,29 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 	defer s.mu.Unlock()
 
 	var days int
-	err := db.DB.QueryRow("SELECT COALESCE(cert_expiry_days,30) FROM global_config WHERE id=1").Scan(&days)
+	err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&days)
 	if err != nil {
+		days = 30
+	}
+	if days <= 0 {
 		days = 30
 	}
 
 	rows, err := db.DB.Query(`
-		SELECT id, rule_id, domain, status, expires_at, ca_provider_id
+		SELECT id, rule_id, domain, status, expires_at, ca_provider_id, COALESCE(renewal_attempts,0) as renewal_attempts
 		FROM cert_jobs
-		WHERE status = 'issued'
-		  AND expires_at IS NOT NULL
+		WHERE expires_at IS NOT NULL
 		  AND expires_at <= datetime('now', '+' || ? || ' days')
+		  AND (
+			status = 'issued'
+			OR (
+				status = 'failed'
+				AND COALESCE(renewal_attempts,0) < ?
+				AND updated_at <= datetime('now', '-' || CAST(?/3600 AS INTEGER) || ' hours')
+			)
+		)
 		ORDER BY expires_at ASC
-	`, days)
+	`, days, maxRenewalAttempts, int(renewalFailureBackoff.Seconds()))
 	if err != nil {
 		log.Printf("Failed to query expiring certificates: %v", err)
 		return nil
@@ -207,7 +226,7 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 	var jobs []models.CertJob
 	for rows.Next() {
 		var j models.CertJob
-		if err := rows.Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.ExpiresAt, &j.CAProviderID); err != nil {
+		if err := rows.Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.ExpiresAt, &j.CAProviderID, &j.RenewalAttempts); err != nil {
 			continue
 		}
 		jobs = append(jobs, j)
