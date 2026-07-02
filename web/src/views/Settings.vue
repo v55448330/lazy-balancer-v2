@@ -63,6 +63,7 @@ const global = ref<any>({
   acme_email: '',
   cert_expiry_days: 30,
   cert_renewal_days: 30,
+  cert_renewal_attempts: 5,
   default_ca_provider_id: 0,
   dns_provider: 'dnspod',
 })
@@ -102,6 +103,7 @@ const fetchSettings = async () => {
         acme_email: res.data.acme_email || '',
         cert_expiry_days: res.data.cert_expiry_days ?? 30,
         cert_renewal_days: res.data.cert_renewal_days ?? 30,
+        cert_renewal_attempts: res.data.cert_renewal_attempts ?? 5,
         default_ca_provider_id: res.data.default_ca_provider_id ?? 0,
         dns_provider: res.data.dns_provider || 'dnspod',
       }
