@@ -2072,6 +2072,7 @@ onUnmounted(() => {
   margin: 0;
   padding: 2px 4px;
   min-width: auto;
+  line-height: 1;
 }
 
 /* Dynamic DNS alignment */
