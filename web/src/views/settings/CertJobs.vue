@@ -43,6 +43,12 @@
         <span v-else class="cell-empty">-</span>
       </template>
     </el-table-column>
+    <el-table-column label="冷却时间" min-width="140" show-overflow-tooltip>
+      <template #default="{ row }">
+        <span v-if="row.status === 'waiting_ca' && row.ca_available_after" class="cell-text">{{ formatCoolingTime(row.ca_available_after) }}</span>
+        <span v-else class="cell-empty">-</span>
+      </template>
+    </el-table-column>
     <el-table-column label="剩余天数" width="90">
       <template #default="{ row }">
         <span v-if="row.status === 'issued' && certInfoMap[row.id]" :class="['cert-days', certInfoMap[row.id].status]">{{ certInfoMap[row.id].days_remaining }} 天</span>
@@ -110,6 +116,7 @@ type CertJobStatus =
   | 'downloaded'
   | 'issued'
   | 'failed'
+  | 'waiting_ca'
 
 interface CertJob {
   id: number
@@ -121,6 +128,8 @@ interface CertJob {
   updated_at?: string
   cert_pem?: string
   renewal_attempts?: number
+  ca_available_after?: string
+  last_error_code?: string
 }
 
 interface CertInfo {
@@ -181,6 +190,7 @@ const statusType = (status: CertJobStatus) => {
     case 'issued': return 'success'
     case 'failed': return 'danger'
     case 'queued': return 'info'
+    case 'waiting_ca': return 'warning'
     case 'pending':
     case 'processing':
     case 'creating_account':
@@ -208,6 +218,7 @@ const statusLabel = (status: CertJobStatus) => {
     case 'issued': return '已签发'
     case 'failed': return '失败'
     case 'queued': return '排队中'
+    case 'waiting_ca': return '等待 CA 冷却'
     case 'pending': return '待处理'
     case 'processing': return '处理中'
     case 'creating_account': return '创建账户'
@@ -245,6 +256,16 @@ const renewalInfo = (row: CertJob): { renewalDate?: string; willRenew: boolean }
     renewalDate: formatDate(renewal.toISOString()),
     willRenew: true,
   }
+}
+
+const formatCoolingTime = (iso: string): string => {
+  const t = new Date(iso)
+  const now = new Date()
+  const diff = t.getTime() - now.getTime()
+  if (diff <= 0) return '可重试'
+  const hours = Math.floor(diff / (1000 * 60 * 60))
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+  return `${hours}小时${minutes}分钟后`
 }
 
 const fetchJobs = async () => {
