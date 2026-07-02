@@ -108,6 +108,7 @@ type GlobalConfig struct {
 	ACMEEmail           string       `json:"acme_email"`
 	CertExpiryDays      int          `json:"cert_expiry_days"`
 	CertRenewalDays     int          `json:"cert_renewal_days"`
+	CertRenewalAttempts int          `json:"cert_renewal_attempts"`
 	LogLevel            string       `json:"log_level"`
 	AccessLogEnabled    bool         `json:"access_log_enabled"`
 	CaddyLogPath        string       `json:"caddy_log_path"`
@@ -180,18 +181,20 @@ type CertInfoBatchRequest struct {
 
 // CertJob represents an ACME certificate issuance job
 type CertJob struct {
-	ID              int          `json:"id"`
-	RuleID          string       `json:"rule_id"`
-	Domain          string       `json:"domain"`
-	CAProviderID    int          `json:"ca_provider_id"`
-	Status          string       `json:"status"`
-	Message         string       `json:"message"`
-	CertPEM         string       `json:"cert_pem,omitempty"`
-	KeyPEM          string       `json:"key_pem,omitempty"`
-	RenewalAttempts int          `json:"renewal_attempts,omitempty"`
-	ExpiresAt       sql.NullTime `json:"expires_at"`
-	CreatedAt       time.Time    `json:"created_at"`
-	UpdatedAt       sql.NullTime `json:"updated_at"`
+	ID               int          `json:"id"`
+	RuleID           string       `json:"rule_id"`
+	Domain           string       `json:"domain"`
+	CAProviderID     int          `json:"ca_provider_id"`
+	Status           string       `json:"status"`
+	Message          string       `json:"message"`
+	CertPEM          string       `json:"cert_pem,omitempty"`
+	KeyPEM           string       `json:"key_pem,omitempty"`
+	RenewalAttempts  int          `json:"renewal_attempts,omitempty"`
+	CAAvailableAfter sql.NullTime `json:"ca_available_after,omitempty"`
+	LastErrorCode    string       `json:"last_error_code,omitempty"`
+	ExpiresAt        sql.NullTime `json:"expires_at"`
+	CreatedAt        time.Time    `json:"created_at"`
+	UpdatedAt        sql.NullTime `json:"updated_at"`
 }
 
 // CertJobLog represents a single log line for a certificate issuance job
@@ -346,6 +349,7 @@ type UpdateConfigRequest struct {
 	ACMEEmail           string `json:"acme_email"`
 	CertExpiryDays      int    `json:"cert_expiry_days"`
 	CertRenewalDays     int    `json:"cert_renewal_days"`
+	CertRenewalAttempts int    `json:"cert_renewal_attempts"`
 	LogLevel            string `json:"log_level"`
 	AccessLogEnabled    *bool  `json:"access_log_enabled"`
 	CaddyLogPath        string `json:"caddy_log_path"`

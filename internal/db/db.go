@@ -201,6 +201,8 @@ func createTables() error {
 		key_pem TEXT,
 		ca_provider_id INTEGER DEFAULT 0,
 		renewal_attempts INTEGER DEFAULT 0,
+		ca_available_after DATETIME,
+		last_error_code VARCHAR(20),
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME
 	);
@@ -312,8 +314,11 @@ func runMigrations() error {
 		"lb_rules.ca_provider_id":              "INTEGER DEFAULT 0",
 		"cert_jobs.ca_provider_id":             "INTEGER DEFAULT 0",
 		"cert_jobs.renewal_attempts":           "INTEGER DEFAULT 0",
+		"cert_jobs.ca_available_after":         "DATETIME",
+		"cert_jobs.last_error_code":            "VARCHAR(20)",
 		"global_config.default_ca_provider_id": "INTEGER DEFAULT 0",
 		"global_config.cert_renewal_days":      "INTEGER DEFAULT 30",
+		"global_config.cert_renewal_attempts":  "INTEGER DEFAULT 5",
 	}
 	for col, dtype := range newColumns {
 		parts := strings.Split(col, ".")
@@ -371,6 +376,11 @@ func runMigrations() error {
 	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='cert_renewal_days'").Scan(&colCount)
 	if colCount == 0 {
 		DB.Exec("ALTER TABLE global_config ADD COLUMN cert_renewal_days INTEGER DEFAULT 30")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='cert_renewal_attempts'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE global_config ADD COLUMN cert_renewal_attempts INTEGER DEFAULT 5")
 	}
 
 	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='metrics_public'").Scan(&colCount)
