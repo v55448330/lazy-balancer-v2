@@ -111,7 +111,7 @@ const fetchSettings = async () => {
 
 const saveConfig = async (payload: any) => {
   try {
-    await request.put('/admin/config', payload)
+    await request.put('/config', payload)
     ElMessage.success('保存成功')
   } catch (error) {
     console.error('Failed to save settings:', error)

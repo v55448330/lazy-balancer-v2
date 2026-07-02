@@ -377,7 +377,7 @@ const saveCAProvider = async () => {
         ? stringifyCACredentials(caCreds)
         : '{}',
     }
-    await request.put(`/admin/ca-providers/${editingCAProvider.value!.id}`, payload)
+    await request.put(`/ca-providers/${editingCAProvider.value!.id}`, payload)
     ElMessage.success('CA 提供商配置已更新')
     caDialogVisible.value = false
     fetchCAProviders()
@@ -391,7 +391,7 @@ const saveCAProvider = async () => {
 const testCAProvider = async (p: CAProvider) => {
   testingCAId.value = p.id
   try {
-    const res: any = await request.post(`/admin/ca-providers/${p.id}/test`)
+    const res: any = await request.post(`/ca-providers/${p.id}/test`)
     ElMessage.success(res.message || 'CA 配置有效')
   } catch (error: any) {
     const msg = error?.response?.data?.message || error?.message || '测试失败'
