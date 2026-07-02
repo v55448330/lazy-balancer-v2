@@ -24,27 +24,22 @@ var (
 	caQueueManagerOnce sync.Once
 )
 
-// GetCAQueueManager returns the singleton queue manager.
-func GetCAQueueManager(reloader func() error) *CAQueueManager {
+// InitCAQueueManager initializes the singleton queue manager with the given
+// Caddy reloader. It must be called once during application startup before
+// GetCAQueueManager is used.
+func InitCAQueueManager(reloader func() error) {
 	caQueueManagerOnce.Do(func() {
 		caQueueManager = &CAQueueManager{
 			queues:   make(map[int]*caQueue),
 			reloader: reloader,
 		}
 	})
-	return caQueueManager
 }
 
-// SetCAReloader updates the reloader used by existing and new issuers.
-func (m *CAQueueManager) SetCAReloader(reloader func() error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.reloader = reloader
-	for _, q := range m.queues {
-		q.mu.Lock()
-		q.reloader = reloader
-		q.mu.Unlock()
-	}
+// GetCAQueueManager returns the singleton queue manager. InitCAQueueManager
+// must have been called first.
+func GetCAQueueManager() *CAQueueManager {
+	return caQueueManager
 }
 
 // Enqueue adds or re-enqueues a cert job.
@@ -53,6 +48,14 @@ func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains stri
 	if err != nil {
 		failJob(jobID, fmt.Sprintf("CA Provider 不可用: %v", err))
 		return err
+	}
+
+	// Persist the resolved provider ID so renewals use the same provider unless
+	// the admin intentionally changes the default and triggers a new job.
+	if providerID != provider.ID {
+		if _, err := db.DB.Exec("UPDATE cert_jobs SET ca_provider_id=? WHERE id=?", provider.ID, jobID); err != nil {
+			log.Printf("CA queue: failed to update resolved provider for job %d: %v", jobID, err)
+		}
 	}
 
 	m.mu.Lock()
@@ -203,6 +206,7 @@ func loadCAProvider(id int) (models.CAProvider, error) {
 		id, err = GetDefaultCAProvider()
 		if err != nil {
 			log.Printf("CA queue: failed to load default CA provider: %v", err)
+			id = 0
 		}
 	}
 
@@ -212,15 +216,13 @@ func loadCAProvider(id int) (models.CAProvider, error) {
 	`, id).Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials, &p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled)
 	if err != nil {
 		// If the requested/default provider is disabled or missing, fall back to the first enabled provider.
-		if id != 0 {
-			var fallbackID int
-			if fallbackErr := db.DB.QueryRow("SELECT id FROM ca_providers WHERE enabled=1 ORDER BY id LIMIT 1").Scan(&fallbackID); fallbackErr == nil {
-				id = fallbackID
-				err = db.DB.QueryRow(`
-					SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled
-					FROM ca_providers WHERE id=? AND enabled=1
-				`, id).Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials, &p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled)
-			}
+		var fallbackID int
+		if fallbackErr := db.DB.QueryRow("SELECT id FROM ca_providers WHERE enabled=1 ORDER BY id LIMIT 1").Scan(&fallbackID); fallbackErr == nil {
+			id = fallbackID
+			err = db.DB.QueryRow(`
+				SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled
+				FROM ca_providers WHERE id=? AND enabled=1
+			`, id).Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials, &p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled)
 		}
 	}
 	if err != nil {
@@ -230,16 +232,31 @@ func loadCAProvider(id int) (models.CAProvider, error) {
 }
 
 func markJobWaitingCA(jobID int, retryAfter time.Duration) {
-	available := time.Now().Add(retryAfter).UTC()
+	maxAttempts := GetCertRenewalAttempts()
+
+	var attempts int
+	if err := db.DB.QueryRow("SELECT COALESCE(renewal_attempts,0) FROM cert_jobs WHERE id=?", jobID).Scan(&attempts); err != nil {
+		log.Printf("CA queue: failed to read attempts for job %d: %v", jobID, err)
+	}
+	attempts++
+
+	cooling := computeBackoff(attempts, retryAfter)
+	available := time.Now().Add(cooling).UTC()
+
+	if attempts >= maxAttempts {
+		failJob(jobID, fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts))
+		return
+	}
+
 	if _, err := db.DB.Exec(
 		"INSERT INTO cert_job_logs (job_id, level, message) VALUES (?, 'warning', ?)",
-		jobID, fmt.Sprintf("CA 频率限制，将在 %s 后重试", available.Format(time.RFC3339)),
+		jobID, fmt.Sprintf("CA 频率限制，第 %d 次，将在 %s 后重试", attempts, available.Format(time.RFC3339)),
 	); err != nil {
 		log.Printf("CA queue: failed to insert waiting log for job %d: %v", jobID, err)
 	}
 	if _, err := db.DB.Exec(
-		"UPDATE cert_jobs SET status='waiting_ca', message='等待 CA 频率限制冷却', ca_available_after=?, last_error_code='429', renewal_attempts = COALESCE(renewal_attempts,0) + 1, updated_at=datetime('now') WHERE id=?",
-		available, jobID,
+		"UPDATE cert_jobs SET status='waiting_ca', message='等待 CA 频率限制冷却', ca_available_after=?, last_error_code='429', renewal_attempts=?, updated_at=datetime('now') WHERE id=?",
+		available, attempts, jobID,
 	); err != nil {
 		log.Printf("CA queue: failed to mark job %d as waiting_ca: %v", jobID, err)
 	}
@@ -257,53 +274,4 @@ func failJob(jobID int, message string) {
 	}
 }
 
-// RequeueNonTerminalJobs scans cert_jobs and re-enqueues jobs that are not in a terminal state.
-// Jobs whose associated rule or CA provider no longer exists or is disabled are marked as failed.
-func RequeueNonTerminalJobs(qm *CAQueueManager) {
-	rows, err := db.DB.Query(`
-		SELECT id, rule_id, domain, ca_provider_id FROM cert_jobs
-		WHERE status IN ('pending','processing','queued')
-	`)
-	if err != nil {
-		log.Printf("Failed to requeue non-terminal jobs: %v", err)
-		return
-	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var jobID, caProviderID int
-		var ruleID, domain string
-		if err := rows.Scan(&jobID, &ruleID, &domain, &caProviderID); err != nil {
-			log.Printf("Failed to scan cert job for requeue: %v", err)
-			continue
-		}
-
-		// Verify the associated rule still exists and is enabled.
-		var ruleEnabled bool
-		err := db.DB.QueryRow("SELECT enabled FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&ruleEnabled)
-		if err != nil || !ruleEnabled {
-			failJob(jobID, "关联规则不存在或已禁用")
-			continue
-		}
-
-		// Verify the CA provider exists and is enabled (providerID 0 resolves to the default).
-		provider, err := loadCAProvider(caProviderID)
-		if err != nil {
-			failJob(jobID, fmt.Sprintf("CA Provider 不存在或已禁用: %v", err))
-			continue
-		}
-
-		// Mark queued and enqueue; deduplication inside CAQueueManager prevents duplicates.
-		if _, err := db.DB.Exec("UPDATE cert_jobs SET status='queued', message='等待排队签发', updated_at=datetime('now') WHERE id=?", jobID); err != nil {
-			log.Printf("Failed to update cert job %d status to queued: %v", jobID, err)
-			continue
-		}
-		if err := qm.Enqueue(provider.ID, jobID, ruleID, domain); err != nil {
-			log.Printf("Failed to requeue job %d: %v", jobID, err)
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		log.Printf("Error iterating cert jobs for requeue: %v", err)
-	}
-}

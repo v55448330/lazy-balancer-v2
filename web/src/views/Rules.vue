@@ -167,9 +167,11 @@
                   </el-button>
                 </div>
               </el-tooltip>
-              <el-button v-if="authStore.nodeMode === 'master'" type="primary" link size="small" @click="duplicateRule(row)">
-                复制
-              </el-button>
+              <div v-if="authStore.nodeMode === 'master'">
+                <el-button type="primary" link size="small" @click="duplicateRule(row)">
+                  复制
+                </el-button>
+              </div>
               <el-tooltip
                 v-if="authStore.nodeMode === 'master'"
                 :disabled="canEditRule(row)"
@@ -345,7 +347,7 @@
             </template>
             <el-form-item label="HTTP 重定向">
               <el-switch v-model="wizardForm.tls_http_redirect" />
-              <div class="form-tip">将 HTTP 请求自动重定向到 HTTPS</div>
+              <span class="form-tip-inline">将 HTTP 请求自动重定向到 HTTPS</span>
             </el-form-item>
           </el-form>
           <el-alert v-if="wizardForm.protocol === 'http' && !wizardForm.enable_tls" type="info" :closable="false" title="请先在基本配置中启用 HTTPS" style="margin-top: 20px;" />
@@ -425,7 +427,7 @@
                 </template>
               </el-table-column>
             </el-table>
-            <div class="form-tip" style="margin-top: 8px;">
+            <div class="form-tip">
               <span v-if="upstreamHostWarning" class="port-warning">{{ upstreamHostWarning }}</span>
               <span v-else>权重：数字越大，分配到的请求越多。至少需要添加一个上游服务器。</span>
             </div>
@@ -480,7 +482,7 @@
               <el-form-item label="主动检查">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.enable_active_health_check" />
-                  <span class="active-check-desc">{{ wizardForm.enable_active_health_check ? '定期发送探测请求检查上游服务器状态' : '仅使用被动健康检查（推荐）' }}</span>
+                  <span class="form-tip-inline">{{ wizardForm.enable_active_health_check ? '定期发送探测请求检查上游服务器状态' : '仅使用被动健康检查（推荐）' }}</span>
                 </div>
               </el-form-item>
 
@@ -503,7 +505,7 @@
               <el-form-item label="启用 DNS">
                 <div class="dynamic-dns-content">
                   <el-switch v-model="wizardForm.enable_dns_server" />
-                  <span class="dynamic-dns-desc">启用后，DNS 配置会在转发时生效</span>
+                  <span class="form-tip-inline">启用后，DNS 配置会在转发时生效</span>
                 </div>
               </el-form-item>
 
@@ -519,7 +521,7 @@
               <el-form-item label="启用压缩">
                 <div class="dynamic-dns-content">
                   <el-switch v-model="wizardForm.enable_compress" />
-                  <span class="dynamic-dns-desc">启用后，响应将被压缩传输以减少带宽</span>
+                  <span class="form-tip-inline">启用后，响应将被压缩传输以减少带宽</span>
                 </div>
               </el-form-item>
               <el-form-item label="压缩方式" v-if="wizardForm.enable_compress">
@@ -534,7 +536,7 @@
               <el-form-item label="启用动态上游">
                 <div class="dynamic-dns-content">
                   <el-switch v-model="wizardForm.dynamic_dns" />
-                  <span class="dynamic-dns-desc">启用后，通过 DNS A/AAAA 记录动态发现上游 IP 变化</span>
+                  <span class="form-tip-inline">启用后，通过 DNS A/AAAA 记录动态发现上游 IP 变化</span>
                 </div>
               </el-form-item>
 
@@ -1858,8 +1860,8 @@ onUnmounted(() => {
   min-width: 72px;
 }
 .text-secondary { color: #6b7280; }
-.form-tip { font-size: 12px; color: #9ca3af; margin-top: 2px; }
-.form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; }
+.form-tip { font-size: 12px; color: #9ca3af; margin-top: 8px; }
+.form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
 .form-tip-inline-tight { font-size: 12px; color: #9ca3af; margin-left: 6px; }
 .form-tip-line { font-size: 12px; color: #9ca3af; margin-top: 4px; }
 .form-tip-tight { font-size: 12px; color: #9ca3af; margin-top: 2px; }
@@ -2086,12 +2088,6 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
 }
-.dynamic-dns-desc {
-  font-size: 12px;
-  color: #9ca3af;
-  line-height: 1.4;
-}
-
 /* Description input */
 .description-input :deep(.el-textarea__inner) {
   min-height: 80px !important;
@@ -2319,11 +2315,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.active-check-desc {
-  font-size: 12px;
-  color: #9ca3af;
 }
 
 .health-summary {

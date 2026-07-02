@@ -307,6 +307,12 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		if data.ACMEConfigID == 0 {
 			return fmt.Errorf("ACME DNS provider is required")
 		}
+		if data.Domain == "" {
+			return fmt.Errorf("ACME DNS certificate requires a domain")
+		}
+		if err := services.ValidateACMEDomains(data.Domain); err != nil {
+			return err
+		}
 	}
 
 	if data.HealthCheckInterval < 1 {

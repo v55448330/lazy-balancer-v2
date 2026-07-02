@@ -16,7 +16,7 @@ import (
 
 func (h *Handlers) ListCertJobs(c *gin.Context) {
 	ruleID := c.Query("rule_id")
-	query := `SELECT id, rule_id, domain, status, message, cert_pem, expires_at, created_at, updated_at, COALESCE(renewal_attempts,0) as renewal_attempts, ca_available_after, last_error_code FROM cert_jobs`
+	query := `SELECT id, rule_id, domain, status, COALESCE(message,'') AS message, COALESCE(cert_pem,'') AS cert_pem, expires_at, created_at, updated_at, COALESCE(renewal_attempts,0) AS renewal_attempts, ca_available_after, COALESCE(last_error_code,'') AS last_error_code FROM cert_jobs`
 	var args []interface{}
 	if ruleID != "" {
 		query += " WHERE rule_id = ?"
@@ -37,6 +37,7 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 		if err := rows.Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.Message, &j.CertPEM,
 			&j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt, &j.RenewalAttempts, &j.CAAvailableAfter, &j.LastErrorCode,
 		); err != nil {
+			log.Printf("ListCertJobs scan error: %v", err)
 			continue
 		}
 		jobs = append(jobs, j)
@@ -83,10 +84,11 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		if _, err := db.DB.Exec("UPDATE cert_jobs SET renewal_attempts=0 WHERE id=?", id); err != nil {
 			log.Printf("Failed to reset renewal attempts for job %d: %v", id, err)
 		}
-		qm := services.GetCAQueueManager(func() error {
-			fullConfig := services.GenerateCaddyConfig(h.cfg)
-			return h.caddyService.ApplyConfig(fullConfig)
-		})
+		qm := services.GetCAQueueManager()
+		if qm == nil {
+			log.Printf("Manual retry enqueue failed for job %d: CA queue manager not initialized", id)
+			return
+		}
 		if err := services.CreateOrRequeueCertJob(ruleID, domain, 0, qm); err != nil {
 			log.Printf("Manual retry enqueue failed for job %d: %v", id, err)
 		}
@@ -118,7 +120,7 @@ func (h *Handlers) GetCertJob(c *gin.Context) {
 		return
 	}
 	var j models.CertJob
-	err = db.DB.QueryRow("SELECT id, rule_id, domain, status, message, expires_at, created_at, updated_at FROM cert_jobs WHERE id=?", id).
+	err = db.DB.QueryRow("SELECT id, rule_id, domain, status, COALESCE(message,'') AS message, expires_at, created_at, updated_at FROM cert_jobs WHERE id=?", id).
 		Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.Message, &j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {

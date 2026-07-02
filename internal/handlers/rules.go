@@ -683,21 +683,25 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		// Reload full Caddy config to apply TLS certificates
 		if req.EnableTLS {
 			log.Printf("Reloading full Caddy config to apply TLS for caddy_id=%s", caddyID)
-			fullConfig := services.GenerateCaddyConfig(h.cfg)
-			if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
-				log.Printf("Failed to reload Caddy config after rule creation: %v", err)
-			}
-			// Trigger ACME issuance if needed
+			go func() {
+				fullConfig := services.GenerateCaddyConfig(h.cfg)
+				if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
+					log.Printf("Failed to reload Caddy config after rule creation: %v", err)
+				}
+			}()
+			// Trigger ACME issuance synchronously so failures are surfaced
 			if req.TLSSource == "acme_dns" && req.Domain != "" {
-				go func() {
-					qm := services.GetCAQueueManager(func() error {
-						fullConfig := services.GenerateCaddyConfig(h.cfg)
-						return h.caddyService.ApplyConfig(fullConfig)
-					})
-					if err := services.CreateOrRequeueCertJob(caddyID, req.Domain, req.CAProviderID, qm); err != nil {
-						log.Printf("Auto cert enqueue failed for %s: %v", req.Domain, err)
-					}
-				}()
+				qm := services.GetCAQueueManager()
+				if qm == nil {
+					log.Printf("Auto cert enqueue failed for %s: CA queue manager not initialized", req.Domain)
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA queue manager not initialized"})
+					return
+				}
+				if err := services.CreateOrRequeueCertJob(caddyID, req.Domain, req.CAProviderID, qm); err != nil {
+					log.Printf("Auto cert enqueue failed for %s: %v", req.Domain, err)
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to enqueue certificate job: " + err.Error()})
+					return
+				}
 			}
 		}
 	}
@@ -720,17 +724,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Printf("UpdateRule bind error for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request: " + err.Error()})
-		return
-	}
-
-	// Lock rule if ACME certificate is being issued (non-terminal status)
-	var locked bool
-	_ = db.DB.QueryRow(`
-		SELECT 1 FROM cert_jobs
-		WHERE rule_id = ? AND status NOT IN ('issued','failed')
-	`, caddyID).Scan(&locked)
-	if locked {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书申请中，请等待完成或失败后再修改规则"})
 		return
 	}
 
@@ -1049,13 +1042,20 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if userID != nil {
 		userIDInt = int64(userID.(float64))
 	}
-	query += "updated_at = datetime('now'), updated_by = ? WHERE caddy_id = ?"
-	args = append(args, userIDInt, caddyID)
+	query += "updated_at = datetime('now'), updated_by = ? WHERE caddy_id = ? AND NOT EXISTS (SELECT 1 FROM cert_jobs WHERE rule_id = ? AND status NOT IN ('issued','failed'))"
+	args = append(args, userIDInt, caddyID, caddyID)
 
-	if _, err := tx.Exec(query, args...); err != nil {
+	res, err := tx.Exec(query, args...)
+	if err != nil {
 		tx.Rollback()
 		log.Printf("UpdateRule database error for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update rule"})
+		return
+	}
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		tx.Rollback()
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书申请中，请等待完成或失败后再修改规则"})
 		return
 	}
 
@@ -1135,10 +1135,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			if req.TLSSource == "acme_dns" && req.EnableTLS && domain != "" {
 				if !services.IsACMECertIssued(caddyID, domain) {
 					go func() {
-						qm := services.GetCAQueueManager(func() error {
-							fullConfig := services.GenerateCaddyConfig(h.cfg)
-							return h.caddyService.ApplyConfig(fullConfig)
-						})
+						qm := services.GetCAQueueManager()
+						if qm == nil {
+							log.Printf("Auto cert enqueue failed for %s: CA queue manager not initialized", domain)
+							return
+						}
 						caProviderID := existingRule.CAProviderID
 						if req.CAProviderID != nil {
 							caProviderID = *req.CAProviderID
@@ -1148,6 +1149,30 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 						}
 					}()
 				}
+			}
+		}
+
+	// Handle re-enabling an ACME rule or switching its TLS source to ACME DNS
+	// when no cert job row exists yet (any status). Existing rows are left
+	// alone since the ON CONFLICT and queue/renewal logic handle the rest.
+	wasReEnabled := !existingRule.Enabled && req.Enabled
+	tlsSourceChangedToACME := existingRule.TLSSource != "acme_dns" && req.TLSSource == "acme_dns"
+	if (wasReEnabled || tlsSourceChangedToACME) && req.EnableTLS && req.TLSSource == "acme_dns" && domain != "" {
+		if !services.HasCertJob(caddyID, domain) {
+				go func() {
+					qm := services.GetCAQueueManager()
+					if qm == nil {
+						log.Printf("Auto cert enqueue failed for %s: CA queue manager not initialized", domain)
+						return
+					}
+					caProviderID := existingRule.CAProviderID
+					if req.CAProviderID != nil {
+						caProviderID = *req.CAProviderID
+					}
+					if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+						log.Printf("Auto cert enqueue failed for %s: %v", domain, err)
+					}
+				}()
 			}
 		}
 	}
@@ -1390,6 +1415,33 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		db.DB.Exec("UPDATE lb_rules SET enabled = 0, updated_at = datetime('now') WHERE caddy_id = ?", caddyID)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Failed to apply Caddy config: %v", err)})
 		return
+	}
+
+	// Queue an ACME certificate job if the rule uses ACME DNS TLS and no
+	// cert job row exists yet for it (any status). Existing rows are left
+	// alone since the ON CONFLICT and queue/renewal logic handle the rest.
+	var domain, tlsSource string
+	var enableTLS bool
+	var caProviderID int
+	if err := db.DB.QueryRow(`
+		SELECT COALESCE(domain,''), COALESCE(tls_source,''), COALESCE(enable_tls,0), COALESCE(ca_provider_id,0)
+		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&domain, &tlsSource, &enableTLS, &caProviderID); err == nil {
+		log.Printf("EnableRule TLS state for caddy_id=%s: enableTLS=%v tlsSource=%s domain=%s caProviderID=%d", caddyID, enableTLS, tlsSource, domain, caProviderID)
+		hasCertJob := services.HasCertJob(caddyID, domain)
+		log.Printf("EnableRule HasCertJob for caddy_id=%s domain=%s: %v", caddyID, domain, hasCertJob)
+		if enableTLS && tlsSource == "acme_dns" && domain != "" && !hasCertJob {
+			qm := services.GetCAQueueManager()
+			log.Printf("EnableRule GetCAQueueManager for caddy_id=%s: nil=%v", caddyID, qm == nil)
+			if qm == nil {
+				log.Printf("Auto cert enqueue failed for %s after enable: CA queue manager not initialized", domain)
+			} else if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+				log.Printf("EnableRule CreateOrRequeueCertJob for caddy_id=%s domain=%s caProviderID=%d error: %v", caddyID, domain, caProviderID, err)
+			} else {
+				log.Printf("EnableRule CreateOrRequeueCertJob for caddy_id=%s domain=%s caProviderID=%d succeeded", caddyID, domain, caProviderID)
+			}
+		}
+	} else {
+		log.Printf("EnableRule failed to read rule TLS state for caddy_id=%s: %v", caddyID, err)
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule enabled"})

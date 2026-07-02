@@ -22,9 +22,9 @@ type Issuer struct {
 
 // Issue obtains a certificate for the given domains via DNS-01 challenge.
 // It logs each stage through the Logger and cleans up DNS records afterwards.
-func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM string, err error) {
+func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM string, challenges []ChallengeInfo, err error) {
 	if len(domains) == 0 {
-		return "", "", fmt.Errorf("no domains requested")
+		return "", "", nil, fmt.Errorf("no domains requested")
 	}
 
 	log := func(stage, msg string) {
@@ -36,14 +36,14 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 	// Step 1: Register account
 	log("creating_account", "注册 ACME 账户")
 	if err := i.Client.RegisterAccount(ctx); err != nil {
-		return "", "", fmt.Errorf("register account: %w", err)
+		return "", "", nil, fmt.Errorf("register account: %w", err)
 	}
 
 	// Step 2: Create order
 	log("creating_order", fmt.Sprintf("为域名 %v 创建订单", domains))
 	order, err := i.Client.AuthorizeOrder(ctx, domains)
 	if err != nil {
-		return "", "", fmt.Errorf("authorize order: %w", err)
+		return "", "", nil, fmt.Errorf("authorize order: %w", err)
 	}
 	log("order_created", fmt.Sprintf("订单已创建，共 %d 个授权", len(order.AuthzURLs)))
 
@@ -53,12 +53,12 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 		tokenFQDN string
 		chal      *acme.Challenge
 	}
-	var challenges []challengeInfo
+	var localChallenges []challengeInfo
 
 	for _, authURL := range order.AuthzURLs {
 		auth, err := i.Client.GetAuthorization(ctx, authURL)
 		if err != nil {
-			return "", "", fmt.Errorf("fetch authorization %s: %w", authURL, err)
+			return "", "", nil, fmt.Errorf("fetch authorization %s: %w", authURL, err)
 		}
 
 		var chal *acme.Challenge
@@ -69,14 +69,14 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 			}
 		}
 		if chal == nil {
-			return "", "", fmt.Errorf("no dns-01 challenge for %s", auth.Identifier.Value)
+			return "", "", nil, fmt.Errorf("no dns-01 challenge for %s", auth.Identifier.Value)
 		}
 
 		domain := auth.Identifier.Value
 		tokenFQDN := "_acme-challenge." + domain + "."
 		keyAuth, err := i.Client.DNS01ChallengeRecord(chal.Token)
 		if err != nil {
-			return "", "", fmt.Errorf("dns01 record: %w", err)
+			return "", "", nil, fmt.Errorf("dns01 record: %w", err)
 		}
 
 		zone := zoneFromDomain(domain)
@@ -87,31 +87,41 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 
 		log("presenting_dns", fmt.Sprintf("写入 TXT 记录 %s", tokenFQDN))
 		if err := i.Provider.Present(ctx, zone, tokenFQDN, keyAuth, 600); err != nil {
-			return "", "", fmt.Errorf("present dns for %s: %w", domain, err)
+			return "", "", nil, fmt.Errorf("present dns for %s: %w", domain, err)
 		}
 
-		challenges = append(challenges, challengeInfo{
+		localChallenges = append(localChallenges, challengeInfo{
 			domain:    domain,
 			tokenFQDN: tokenFQDN,
 			chal:      chal,
 		})
+		challenges = append(challenges, ChallengeInfo{
+			Domain:    domain,
+			TokenFQDN: tokenFQDN,
+		})
 	}
 
+	// Ensure DNS records are always cleaned up before returning.
+	defer func() {
+		log("cleanup_dns", "清理 ACME DNS TXT 记录")
+		i.Cleanup(ctx, challenges)
+	}()
+
 	// Step 4: Wait for DNS propagation and accept challenges
-	for _, ci := range challenges {
+	for _, ci := range localChallenges {
 		log("waiting_propagation", fmt.Sprintf("等待 DNS 传播 %s", ci.tokenFQDN))
 		keyAuth, err := i.Client.DNS01ChallengeRecord(ci.chal.Token)
 		if err != nil {
-			return "", "", err
+			return "", "", challenges, err
 		}
 		if err := waitForDNS(ctx, ci.tokenFQDN, keyAuth, 2*time.Minute); err != nil {
-			return "", "", fmt.Errorf("dns propagation %s: %w", ci.tokenFQDN, err)
+			return "", "", challenges, fmt.Errorf("dns propagation %s: %w", ci.tokenFQDN, err)
 		}
 		log("dns_propagated", fmt.Sprintf("DNS 已传播 %s", ci.tokenFQDN))
 
 		log("accepting_challenge", fmt.Sprintf("提交验证 %s", ci.domain))
 		if _, err := i.Client.AcceptChallenge(ctx, ci.chal); err != nil {
-			return "", "", fmt.Errorf("accept challenge %s: %w", ci.domain, err)
+			return "", "", challenges, fmt.Errorf("accept challenge %s: %w", ci.domain, err)
 		}
 	}
 
@@ -120,10 +130,10 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 		log("validating", fmt.Sprintf("等待 CA 验证 %s", authURL))
 		auth, err := i.Client.WaitAuthorization(ctx, authURL)
 		if err != nil {
-			return "", "", fmt.Errorf("wait authorization %s: %w", authURL, err)
+			return "", "", challenges, fmt.Errorf("wait authorization %s: %w", authURL, err)
 		}
 		if auth.Status != "valid" {
-			return "", "", fmt.Errorf("authorization %s status: %s", authURL, auth.Status)
+			return "", "", challenges, fmt.Errorf("authorization %s status: %s", authURL, auth.Status)
 		}
 	}
 	log("validated", "所有域名验证通过")
@@ -132,14 +142,14 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 	log("finalizing", "生成 CSR 并提交订单")
 	csrDER, key, err := CreateCSR(domains)
 	if err != nil {
-		return "", "", fmt.Errorf("create csr: %w", err)
+		return "", "", challenges, fmt.Errorf("create csr: %w", err)
 	}
- finalizedOrder, err := i.Client.CreateCertRequest(ctx, order.FinalizeURL, csrDER)
+	finalizedOrder, err := i.Client.CreateCertRequest(ctx, order.FinalizeURL, csrDER)
 	if err != nil {
-		return "", "", fmt.Errorf("finalize order: %w", err)
+		return "", "", challenges, fmt.Errorf("finalize order: %w", err)
 	}
 	if finalizedOrder.CertURL == "" {
-		return "", "", fmt.Errorf("finalize returned empty cert url")
+		return "", "", challenges, fmt.Errorf("finalize returned empty cert url")
 	}
 	log("finalized", fmt.Sprintf("订单已完成，证书 URL: %s", finalizedOrder.CertURL))
 
@@ -147,13 +157,13 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 	log("downloading", "下载证书")
 	certDER, err := i.Client.FetchCert(ctx, finalizedOrder.CertURL)
 	if err != nil {
-		return "", "", fmt.Errorf("fetch cert: %w", err)
+		return "", "", challenges, fmt.Errorf("fetch cert: %w", err)
 	}
 	log("downloaded", "证书下载完成")
 
 	certPEM = EncodeCertPEM(certDER)
 	keyPEM = EncodeKeyPEM(key)
-	return certPEM, keyPEM, nil
+	return certPEM, keyPEM, challenges, nil
 }
 
 // Cleanup removes DNS TXT records for all previously presented challenges.

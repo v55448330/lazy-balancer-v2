@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1753,16 +1754,6 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 						"any_tag": []string{r.CaddyID},
 					},
 				})
-			} else if r.TLSSource == "acme_dns" && isACMECertIssued(r.CaddyID, r.Domain) {
-				domainHosts := splitAndTrim(r.Domain)
-				tlsPolicies = append(tlsPolicies, map[string]interface{}{
-					"match": map[string]interface{}{
-						"sni": domainHosts,
-					},
-					"certificate_selection": map[string]interface{}{
-						"any_tag": []string{r.CaddyID},
-					},
-				})
 			}
 		}
 		if len(tlsPolicies) > 0 {
@@ -1785,7 +1776,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		r := ru.rule
 		if r.Protocol == "http" && r.EnableTLS && r.TLSHTTPRedirect {
 			// Only redirect to HTTPS if the certificate is actually available.
-			if r.TLSSource == "acme_dns" && !isACMECertIssued(r.CaddyID, r.Domain) {
+			if r.TLSSource == "acme_dns" && !IsACMECertIssued(r.CaddyID, r.Domain) {
 				continue
 			}
 			domainHosts := splitAndTrim(r.Domain)
@@ -2083,28 +2074,43 @@ func loadACMECertificate(caddyID, domain string) (string, string, bool) {
 			domains = append(domains, d)
 		}
 	}
+	if len(domains) == 0 {
+		return "", "", false
+	}
 	for _, d := range domains {
+		var id int
 		var certPEM, keyPEM string
 		err := db.DB.QueryRow(`
-			SELECT cert_pem, key_pem
+			SELECT id, cert_pem, key_pem
 			FROM cert_jobs
 			WHERE rule_id=? AND (domain=? OR domain=?)
 			  AND status='issued'
-			  AND cert_pem IS NOT NULL AND cert_pem != ''
-			  AND key_pem IS NOT NULL AND key_pem != ''
 			ORDER BY updated_at DESC LIMIT 1`,
 			caddyID, d, domains[0],
-		).Scan(&certPEM, &keyPEM)
-		if err == nil && certPEM != "" && keyPEM != "" {
-			return certPEM, keyPEM, true
+		).Scan(&id, &certPEM, &keyPEM)
+		if err != nil {
+			if err != sql.ErrNoRows {
+				log.Printf("loadACMECertificate: query failed for rule %s: %v", caddyID, err)
+			}
+			continue
 		}
+		if certPEM == "" || keyPEM == "" {
+			if _, updErr := db.DB.Exec(
+				"UPDATE cert_jobs SET status='failed', message='证书数据缺失', updated_at=datetime('now') WHERE id=?",
+				id,
+			); updErr != nil {
+				log.Printf("loadACMECertificate: failed to mark issued job %d as failed: %v", id, updErr)
+			}
+			continue
+		}
+		return certPEM, keyPEM, true
 	}
 	return "", "", false
 }
 
-// isACMECertIssued returns true if cert_jobs has an issued certificate for the
+// IsACMECertIssued returns true if cert_jobs has an issued certificate for the
 // given rule (by caddy_id) and domain.
-func isACMECertIssued(caddyID, domain string) bool {
+func IsACMECertIssued(caddyID, domain string) bool {
 	_, _, issued := loadACMECertificate(caddyID, domain)
 	return issued
 }

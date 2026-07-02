@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -64,19 +65,17 @@ func defaultRetryAfter(provider string) time.Duration {
 
 // computeBackoff returns the cooling duration based on attempt count and CA Retry-After.
 func computeBackoff(attempts int, retryAfter time.Duration) time.Duration {
-	var base time.Duration
-	switch attempts {
-	case 1:
-		base = time.Hour
-	case 2:
-		base = 2 * time.Hour
-	default:
-		base = 3 * time.Hour
-	}
-	if retryAfter > base {
+	if retryAfter > 0 {
 		return retryAfter
 	}
-	return base
+	switch attempts {
+	case 1:
+		return time.Hour
+	case 2:
+		return 2 * time.Hour
+	default:
+		return 3 * time.Hour
+	}
 }
 
 // NewCertIssuer creates a new CertIssuer. The reloader is called after a
@@ -91,10 +90,14 @@ type jobLogger struct {
 }
 
 func (l *jobLogger) Log(stage, message string) {
-	_, _ = db.DB.Exec("INSERT INTO cert_job_logs (job_id, level, message) VALUES (?, ?, ?)",
-		l.jobID, "info", fmt.Sprintf("[%s] %s", stage, message))
-	_, _ = db.DB.Exec("UPDATE cert_jobs SET status=?, message=?, updated_at=datetime('now') WHERE id=?",
-		stage, message, l.jobID)
+	if _, err := db.DB.Exec("INSERT INTO cert_job_logs (job_id, level, message) VALUES (?, ?, ?)",
+		l.jobID, "info", fmt.Sprintf("[%s] %s", stage, message)); err != nil {
+		log.Printf("cert job %d log insert failed: %v", l.jobID, err)
+	}
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET status=?, message=?, updated_at=datetime('now') WHERE id=?",
+		stage, message, l.jobID); err != nil {
+		log.Printf("cert job %d status update failed: %v", l.jobID, err)
+	}
 }
 
 // Issue obtains a certificate for the given rule and domains using the
@@ -181,7 +184,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	}
 
 	// Run the ACME issuance flow
-	certPEM, keyPEM, err := issuer.Issue(ctx, domainList)
+	certPEM, keyPEM, _, err := issuer.Issue(ctx, domainList)
 	if err != nil {
 		if raErr := detectRateLimit(err, provider.Provider); raErr != nil {
 			return raErr
@@ -225,19 +228,47 @@ func detectRateLimit(err error, providerType string) *CAProviderRateLimitError {
 	if !strings.Contains(msg, "429") && !strings.Contains(msg, "rate limit") && !strings.Contains(msg, "too many") {
 		return nil
 	}
-	retryAfter := defaultRetryAfter(providerType)
+
+	// Try to extract a Retry-After hint from the error text. The ACME library
+	// sometimes includes it as "retry after 2026-01-02 03:04:05 +0000 UTC" or
+	// "retry after 3600s".
+	retryAfter := time.Duration(0)
+	if d := extractRetryAfterFromError(err.Error()); d > 0 {
+		retryAfter = d
+	}
 	return &CAProviderRateLimitError{RetryAfter: retryAfter, Reason: err.Error()}
 }
 
-// NewACMEClientForProvider exposes the ACME client factory for handlers.
-func NewACMEClientForProvider(provider models.CAProvider, email string) (*acme.Client, error) {
-	return acme.NewClientForProvider(provider, email)
-}
-
-// IsACMECertIssued returns true if cert_jobs has an issued certificate for the
-// given rule (by caddy_id) and domain.
-func IsACMECertIssued(caddyID, domain string) bool {
-	return isACMECertIssued(caddyID, domain)
+// extractRetryAfterFromError attempts to pull a Retry-After duration out of a
+// CA error message. It is a best-effort fallback because golang.org/x/crypto/acme
+// does not expose the HTTP response directly.
+func extractRetryAfterFromError(errText string) time.Duration {
+	lower := strings.ToLower(errText)
+	if idx := strings.Index(lower, "retry after"); idx != -1 {
+		suffix := errText[idx+len("retry after"):]
+		suffix = strings.TrimSpace(suffix)
+		// Strip a trailing period or comma.
+		suffix = strings.TrimRight(suffix, ".")
+		// Try parsing as seconds if it looks like "3600s".
+		if strings.HasSuffix(suffix, "s") {
+			if sec, err := strconv.Atoi(strings.TrimSuffix(suffix, "s")); err == nil && sec > 0 {
+				return time.Duration(sec) * time.Second
+			}
+		}
+		// Try parsing as an RFC3339 timestamp.
+		if t, err := time.Parse(time.RFC3339, suffix); err == nil {
+			if d := time.Until(t); d > 0 {
+				return d
+			}
+		}
+		// Try parsing as HTTP date.
+		if t, err := time.Parse(http.TimeFormat, suffix); err == nil {
+			if d := time.Until(t); d > 0 {
+				return d
+			}
+		}
+	}
+	return 0
 }
 
 // ValidateACMEDomains returns an error if the domains string is not a valid
@@ -269,6 +300,11 @@ func normalizeAndValidateDomains(domains string) []string {
 	if len(list) == 0 || len(list) > 2 {
 		return nil
 	}
+	for _, d := range list {
+		if !isValidACMEIssuerDomain(d) {
+			return nil
+		}
+	}
 	if len(list) == 1 {
 		return list
 	}
@@ -278,6 +314,35 @@ func normalizeAndValidateDomains(domains string) []string {
 		return list
 	}
 	return nil
+}
+
+// isValidACMEIssuerDomain rejects wildcards, IP addresses, empty labels and
+// labels longer than 63 bytes.
+func isValidACMEIssuerDomain(d string) bool {
+	if d == "" {
+		return false
+	}
+	if strings.Contains(d, "*") {
+		return false
+	}
+	if net.ParseIP(d) != nil {
+		return false
+	}
+	if strings.HasPrefix(d, ".") || strings.HasSuffix(d, ".") || strings.Contains(d, "..") {
+		return false
+	}
+	if len(d) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(d, ".") {
+		if label == "" {
+			return false
+		}
+		if len(label) > 63 {
+			return false
+		}
+	}
+	return true
 }
 
 // parseCertNotAfter extracts the NotAfter time from a PEM certificate chain.

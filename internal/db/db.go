@@ -194,7 +194,7 @@ func createTables() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		rule_id VARCHAR(20) NOT NULL,
 		domain VARCHAR(255) NOT NULL,
-		status VARCHAR(20) DEFAULT 'pending',
+		status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','creating_account','issued','failed','waiting_ca')),
 		message TEXT,
 		expires_at DATETIME,
 		cert_pem TEXT,
@@ -447,6 +447,11 @@ func runMigrations() error {
 	// cert_jobs unique index migration
 	if _, err := DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)"); err != nil {
 		return fmt.Errorf("failed to create cert_jobs unique index: %w", err)
+	}
+
+	// Enforce cert_jobs status CHECK constraint and queued default on existing DBs.
+	if err := migrateCertJobsStatusConstraint(); err != nil {
+		return fmt.Errorf("failed to migrate cert_jobs status constraint: %w", err)
 	}
 
 	// cert_job_logs table migration
@@ -729,6 +734,148 @@ func migrateLbRulesPrimaryKey() error {
 	DB.Exec("PRAGMA foreign_keys = ON")
 
 	log.Println("Successfully migrated lb_rules to use caddy_id as primary key")
+	return nil
+}
+
+// migrateCertJobsStatusConstraint rebuilds cert_jobs (and cert_job_logs, which
+// references it) to enforce the allowed status CHECK constraint and the
+// 'queued' default value on existing databases.
+func migrateCertJobsStatusConstraint() error {
+	var tableSQL string
+	if err := DB.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='cert_jobs'").Scan(&tableSQL); err != nil {
+		return fmt.Errorf("failed to read cert_jobs schema: %w", err)
+	}
+	if strings.Contains(tableSQL, "CHECK") && strings.Contains(tableSQL, "DEFAULT 'queued'") {
+		return nil
+	}
+
+	log.Println("Migrating cert_jobs status constraint...")
+
+	DB.Exec("PRAGMA foreign_keys = OFF")
+	tx, err := DB.Begin()
+	if err != nil {
+		DB.Exec("PRAGMA foreign_keys = ON")
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	if _, err := tx.Exec("ALTER TABLE cert_jobs RENAME TO cert_jobs_old"); err != nil {
+		tx.Rollback()
+		DB.Exec("PRAGMA foreign_keys = ON")
+		return fmt.Errorf("failed to rename cert_jobs: %w", err)
+	}
+
+	var logsExist int
+	DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cert_job_logs'").Scan(&logsExist)
+	if logsExist > 0 {
+		if _, err := tx.Exec("ALTER TABLE cert_job_logs RENAME TO cert_job_logs_old"); err != nil {
+			tx.Rollback()
+			DB.Exec("PRAGMA foreign_keys = ON")
+			return fmt.Errorf("failed to rename cert_job_logs: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec(`
+		CREATE TABLE cert_jobs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			rule_id VARCHAR(20) NOT NULL,
+			domain VARCHAR(255) NOT NULL,
+			status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','creating_account','issued','failed','waiting_ca')),
+			message TEXT,
+			expires_at DATETIME,
+			cert_pem TEXT,
+			key_pem TEXT,
+			ca_provider_id INTEGER DEFAULT 0,
+			renewal_attempts INTEGER DEFAULT 0,
+			ca_available_after DATETIME,
+			last_error_code VARCHAR(20),
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME
+		)
+	`); err != nil {
+		tx.Rollback()
+		DB.Exec("PRAGMA foreign_keys = ON")
+		return fmt.Errorf("failed to create new cert_jobs table: %w", err)
+	}
+
+	if _, err := tx.Exec(`
+		INSERT INTO cert_jobs (
+			id, rule_id, domain, status, message, expires_at, cert_pem, key_pem,
+			ca_provider_id, renewal_attempts, ca_available_after, last_error_code,
+			created_at, updated_at
+		)
+		SELECT
+			id, rule_id, domain,
+			CASE WHEN status IN ('queued','creating_account','issued','failed','waiting_ca') THEN status ELSE 'queued' END,
+			message, expires_at, cert_pem, key_pem,
+			ca_provider_id, renewal_attempts, ca_available_after, last_error_code,
+			created_at, updated_at
+		FROM cert_jobs_old
+	`); err != nil {
+		tx.Rollback()
+		DB.Exec("PRAGMA foreign_keys = ON")
+		return fmt.Errorf("failed to copy cert_jobs data: %w", err)
+	}
+
+	if _, err := tx.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain)"); err != nil {
+		tx.Rollback()
+		DB.Exec("PRAGMA foreign_keys = ON")
+		return fmt.Errorf("failed to recreate cert_jobs index: %w", err)
+	}
+	if _, err := tx.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)"); err != nil {
+		tx.Rollback()
+		DB.Exec("PRAGMA foreign_keys = ON")
+		return fmt.Errorf("failed to recreate cert_jobs unique index: %w", err)
+	}
+
+	if logsExist > 0 {
+		if _, err := tx.Exec(`
+			CREATE TABLE cert_job_logs (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				job_id INTEGER NOT NULL,
+				level VARCHAR(10) DEFAULT 'info',
+				message TEXT NOT NULL,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				FOREIGN KEY (job_id) REFERENCES cert_jobs(id) ON DELETE CASCADE
+			)
+		`); err != nil {
+			tx.Rollback()
+			DB.Exec("PRAGMA foreign_keys = ON")
+			return fmt.Errorf("failed to create new cert_job_logs table: %w", err)
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO cert_job_logs (id, job_id, level, message, created_at)
+			SELECT id, job_id, level, message, created_at
+			FROM cert_job_logs_old
+		`); err != nil {
+			tx.Rollback()
+			DB.Exec("PRAGMA foreign_keys = ON")
+			return fmt.Errorf("failed to copy cert_job_logs data: %w", err)
+		}
+		if _, err := tx.Exec("CREATE INDEX IF NOT EXISTS idx_cert_job_logs_job ON cert_job_logs(job_id)"); err != nil {
+			tx.Rollback()
+			DB.Exec("PRAGMA foreign_keys = ON")
+			return fmt.Errorf("failed to recreate cert_job_logs index: %w", err)
+		}
+		if _, err := tx.Exec("DROP TABLE cert_job_logs_old"); err != nil {
+			tx.Rollback()
+			DB.Exec("PRAGMA foreign_keys = ON")
+			return fmt.Errorf("failed to drop old cert_job_logs table: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec("DROP TABLE cert_jobs_old"); err != nil {
+		tx.Rollback()
+		DB.Exec("PRAGMA foreign_keys = ON")
+		return fmt.Errorf("failed to drop old cert_jobs table: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		DB.Exec("PRAGMA foreign_keys = ON")
+		return fmt.Errorf("failed to commit cert_jobs migration: %w", err)
+	}
+	DB.Exec("PRAGMA foreign_keys = ON")
+
+	log.Println("cert_jobs status constraint migration completed")
 	return nil
 }
 

@@ -16,11 +16,11 @@
         </el-form-item>
         <el-form-item label="自动续签时间">
           <el-input-number v-model="global.cert_renewal_days" :min="1" :max="90" />
-          <div class="form-tip">证书到期前多少天自动尝试重签</div>
+          <span class="form-tip-inline">证书到期前多少天自动尝试重签</span>
         </el-form-item>
-        <el-form-item label="最大续签重试次数">
+        <el-form-item label="续签重试次数">
           <el-input-number v-model="global.cert_renewal_attempts" :min="1" :max="10" />
-          <div class="form-tip">证书续签失败（包括 CA 频率限制）后的最大自动重试次数</div>
+          <span class="form-tip-inline">证书续签失败（包括 CA 频率限制）后的最大自动重试次数</span>
         </el-form-item>
         <el-form-item label="CA 提供商" required>
           <el-select v-model="global.default_ca_provider_id" style="width: 100%" placeholder="请选择 CA 提供商">
@@ -592,5 +592,6 @@ onMounted(() => {
   align-items: center;
 }
 .btn-text { margin-left: 4px; }
-.form-tip { font-size: 12px; color: #9ca3af; margin-top: 4px; }
+.form-tip { font-size: 12px; color: #9ca3af; margin-top: 8px; }
+.form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
 </style>

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"lazy-balancer-v2/internal/acme"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
@@ -358,7 +359,7 @@ func (s *CAProviderService) TestCAProvider(id int) error {
 		return &CAProviderTestError{Phase: "email", Err: errors.New("ACME email is not configured")}
 	}
 
-	client, err := NewACMEClientForProvider(p, acmeEmail)
+	client, err := acme.NewClientForProvider(p, acmeEmail)
 	if err != nil {
 		return &CAProviderTestError{Phase: "config", Err: err}
 	}

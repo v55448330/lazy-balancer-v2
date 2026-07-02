@@ -2,9 +2,7 @@ package services
 
 import (
 	"crypto/x509"
-	"database/sql"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -34,6 +32,9 @@ func NewCertificateService(adminURL string, reloader func() error) *CertificateS
 }
 
 func (s *CertificateService) Start() {
+	// Recover any jobs left in non-terminal states from a previous run.
+	s.recoverCertJobs()
+
 	// Run renewal check shortly after startup, then every 6 hours.
 	time.AfterFunc(30*time.Second, s.renewExpiringCertificates)
 	renewalTicker := time.NewTicker(6 * time.Hour)
@@ -52,9 +53,65 @@ func (s *CertificateService) Start() {
 	}
 }
 
+// recoverCertJobs re-enqueues cert jobs that were not in a terminal state when
+// the process last exited. Jobs whose rule or CA provider no longer exist are
+// marked as failed.
+func (s *CertificateService) recoverCertJobs() {
+	rows, err := db.DB.Query(`
+		SELECT id, rule_id, domain, ca_provider_id FROM cert_jobs
+		WHERE status NOT IN ('issued','failed')
+	`)
+	if err != nil {
+		log.Printf("Failed to recover non-terminal cert jobs: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	qm := GetCAQueueManager()
+	if qm == nil {
+		log.Printf("Recovery: CA queue manager not initialized")
+		return
+	}
+
+	for rows.Next() {
+		var jobID, caProviderID int
+		var ruleID, domain string
+		if err := rows.Scan(&jobID, &ruleID, &domain, &caProviderID); err != nil {
+			log.Printf("Failed to scan cert job for recovery: %v", err)
+			continue
+		}
+
+		var ruleExists bool
+		if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1)", ruleID).Scan(&ruleExists); err != nil {
+			log.Printf("Failed to check rule existence for job %d: %v", jobID, err)
+			continue
+		}
+		if !ruleExists {
+			failJob(jobID, "关联规则不存在或已禁用")
+			continue
+		}
+
+		if _, err := db.DB.Exec(
+			"UPDATE cert_jobs SET status='queued', message='等待排队签发', updated_at=datetime('now') WHERE id=?",
+			jobID,
+		); err != nil {
+			log.Printf("Failed to update cert job %d status to queued: %v", jobID, err)
+			continue
+		}
+		if err := qm.Enqueue(caProviderID, jobID, ruleID, domain); err != nil {
+			log.Printf("Failed to enqueue recovered job %d: %v", jobID, err)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("Error iterating cert jobs for recovery: %v", err)
+	}
+}
+
 func (s *CertificateService) Stop() { close(s.stopCh) }
 
 // CreateOrRequeueCertJob creates a queued cert job for the rule and enqueues it.
+// Uses an atomic INSERT ... ON CONFLICT to avoid races between concurrent callers.
 func CreateOrRequeueCertJob(ruleID, domains string, caProviderID int, qm *CAQueueManager) error {
 	list := normalizeAndValidateDomains(domains)
 	if list == nil {
@@ -63,32 +120,52 @@ func CreateOrRequeueCertJob(ruleID, domains string, caProviderID int, qm *CAQueu
 	joined := strings.Join(list, ",")
 
 	var jobID int
-	err := db.DB.QueryRow("SELECT id FROM cert_jobs WHERE rule_id=? AND domain=?", ruleID, joined).Scan(&jobID)
+	err := db.DB.QueryRow(`
+		INSERT INTO cert_jobs (rule_id, domain, status, message, ca_provider_id)
+		VALUES (?, ?, 'queued', '等待排队签发', ?)
+		ON CONFLICT(rule_id, domain) DO UPDATE SET
+			status = CASE
+				WHEN cert_jobs.status = 'creating_account' THEN cert_jobs.status
+				ELSE 'queued'
+			END,
+			message = CASE
+				WHEN cert_jobs.status = 'creating_account' THEN cert_jobs.message
+				ELSE '重新排队签发'
+			END,
+			ca_provider_id = excluded.ca_provider_id,
+			updated_at = datetime('now')
+		RETURNING id
+	`, ruleID, joined, caProviderID).Scan(&jobID)
 	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("lookup cert job: %w", err)
-		}
-		res, err := db.DB.Exec(
-			"INSERT INTO cert_jobs (rule_id, domain, status, message, ca_provider_id) VALUES (?, ?, 'queued', '等待排队签发', ?)",
-			ruleID, joined, caProviderID,
-		)
-		if err != nil {
-			return fmt.Errorf("create cert job: %w", err)
-		}
-		id64, err := res.LastInsertId()
-		if err != nil {
-			return fmt.Errorf("get last insert id: %w", err)
-		}
-		jobID = int(id64)
-	} else {
-		if _, err := db.DB.Exec(
-			"UPDATE cert_jobs SET status='queued', message='重新排队签发', updated_at=datetime('now'), ca_provider_id=? WHERE id=?",
-			caProviderID, jobID,
-		); err != nil {
-			return fmt.Errorf("update cert job: %w", err)
-		}
+		return fmt.Errorf("upsert cert job: %w", err)
 	}
+
 	return qm.Enqueue(caProviderID, jobID, ruleID, joined)
+}
+
+// HasCertJob reports whether any certificate job row exists for the given
+// rule and domain, regardless of status. It is used to avoid re-creating
+// jobs when one already exists (in any state); the existing ON CONFLICT
+// and queue/renewal logic handle the rest.
+func HasCertJob(ruleID, domains string) bool {
+	list := normalizeAndValidateDomains(domains)
+	if list == nil {
+		return false
+	}
+	joined := strings.Join(list, ",")
+
+	var exists bool
+	err := db.DB.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM cert_jobs
+			WHERE rule_id = ? AND domain = ?
+		)
+	`, ruleID, joined).Scan(&exists)
+	if err != nil {
+		log.Printf("HasCertJob query failed for rule %s: %v", ruleID, err)
+		return false
+	}
+	return exists
 }
 
 func (s *CertificateService) renewExpiringCertificates() {
@@ -125,8 +202,12 @@ func (s *CertificateService) renewExpiringCertificates() {
 		if rows, _ := res.RowsAffected(); rows == 0 {
 			continue
 		}
-		qm := GetCAQueueManager(s.caddyReloader)
-		if err := qm.Enqueue(0, j.ID, j.RuleID, j.Domain); err != nil {
+		qm := GetCAQueueManager()
+		if qm == nil {
+			log.Printf("Renewal: CA queue manager not initialized")
+			continue
+		}
+		if err := qm.Enqueue(j.CAProviderID, j.ID, j.RuleID, j.Domain); err != nil {
 			log.Printf("Renewal: failed to enqueue job %d: %v", j.ID, err)
 		}
 	}
