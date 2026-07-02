@@ -150,7 +150,7 @@
         </el-table-column>
         <el-table-column label="状态" width="70" align="center">
           <template #default="{ row }">
-            <el-switch v-model="row.enabled" :disabled="authStore.nodeMode === 'slave'" @change="toggleRule(row)" class="status-switch" />
+            <el-switch v-model="row.enabled" :disabled="authStore.nodeMode === 'slave' || isCertJobActive(certJobMap[row.caddy_id]?.status)" @change="toggleRule(row)" class="status-switch" />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="120" fixed="right" align="center">
@@ -900,12 +900,14 @@ const certJobStatusLabel = (status?: string) => {
     case 'issued': return '已签发'
     case 'failed': return '签发失败'
     case 'pending': return '待处理'
-    case 'creating_account': return '创建账户'
+    case 'queued': return '签发中'
+    case 'creating_account': return '签发中'
     case 'creating_order': return '创建订单'
     case 'order_created': return '订单已创建'
     case 'presenting_dns': return '设置 DNS'
     case 'dns_propagated': return 'DNS 已传播'
     case 'validating': return '验证中'
+    case 'waiting_ca': return '签发中'
     case 'finalizing': return '最终化'
     case 'downloading': return '下载证书'
     default: return status || '未知'

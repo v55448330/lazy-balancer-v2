@@ -194,7 +194,7 @@ func createTables() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		rule_id VARCHAR(20) NOT NULL,
 		domain VARCHAR(255) NOT NULL,
-		status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','creating_account','issued','failed','waiting_ca')),
+		status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca')),
 		message TEXT,
 		expires_at DATETIME,
 		cert_pem TEXT,
@@ -745,7 +745,11 @@ func migrateCertJobsStatusConstraint() error {
 	if err := DB.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='cert_jobs'").Scan(&tableSQL); err != nil {
 		return fmt.Errorf("failed to read cert_jobs schema: %w", err)
 	}
-	if strings.Contains(tableSQL, "CHECK") && strings.Contains(tableSQL, "DEFAULT 'queued'") {
+	// Idempotency: the expanded constraint must allow all intermediate ACME
+	// stages logged by jobLogger.Log (e.g. 'presenting_dns', 'finalizing').
+	// If the table already contains one of the new stage values in its CHECK,
+	// the migration has already been applied.
+	if strings.Contains(tableSQL, "'presenting_dns'") {
 		return nil
 	}
 
@@ -779,7 +783,7 @@ func migrateCertJobsStatusConstraint() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			rule_id VARCHAR(20) NOT NULL,
 			domain VARCHAR(255) NOT NULL,
-			status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','creating_account','issued','failed','waiting_ca')),
+			status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca')),
 			message TEXT,
 			expires_at DATETIME,
 			cert_pem TEXT,
@@ -805,7 +809,7 @@ func migrateCertJobsStatusConstraint() error {
 		)
 		SELECT
 			id, rule_id, domain,
-			CASE WHEN status IN ('queued','creating_account','issued','failed','waiting_ca') THEN status ELSE 'queued' END,
+			CASE WHEN status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca') THEN status ELSE 'queued' END,
 			message, expires_at, cert_pem, key_pem,
 			ca_provider_id, renewal_attempts, ca_available_after, last_error_code,
 			created_at, updated_at

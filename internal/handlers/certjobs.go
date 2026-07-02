@@ -66,8 +66,15 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		return
 	}
 
-	if status != "issued" && status != "failed" {
-		if updatedAt.Valid && time.Since(updatedAt.Time) < 15*time.Minute {
+	if status != "issued" && status != "failed" && status != "waiting_ca" {
+		// creating_account may get stuck on account registration; allow retry
+		// after 2 minutes. Other in-progress states (queued, waiting_ca) keep
+		// the 15-minute guard.
+		guard := 15 * time.Minute
+		if status == "creating_account" {
+			guard = 2 * time.Minute
+		}
+		if updatedAt.Valid && time.Since(updatedAt.Time) < guard {
 			c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "任务正在执行中，请稍后重试"})
 			return
 		}
@@ -81,7 +88,7 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 
 	go func() {
 		// Manual re-sign should use the current default CA provider selected by the user.
-		if _, err := db.DB.Exec("UPDATE cert_jobs SET renewal_attempts=0 WHERE id=?", id); err != nil {
+		if _, err := db.DB.Exec("UPDATE cert_jobs SET renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL WHERE id=?", id); err != nil {
 			log.Printf("Failed to reset renewal attempts for job %d: %v", id, err)
 		}
 		qm := services.GetCAQueueManager()

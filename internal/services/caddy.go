@@ -2079,15 +2079,17 @@ func loadACMECertificate(caddyID, domain string) (string, string, bool) {
 	}
 	for _, d := range domains {
 		var id int
+		var status string
 		var certPEM, keyPEM string
 		err := db.DB.QueryRow(`
-			SELECT id, cert_pem, key_pem
+			SELECT id, status, cert_pem, key_pem
 			FROM cert_jobs
 			WHERE rule_id=? AND (domain=? OR domain=?)
-			  AND status='issued'
+			  AND cert_pem IS NOT NULL AND cert_pem <> ''
+			  AND key_pem IS NOT NULL AND key_pem <> ''
 			ORDER BY updated_at DESC LIMIT 1`,
 			caddyID, d, domains[0],
-		).Scan(&id, &certPEM, &keyPEM)
+		).Scan(&id, &status, &certPEM, &keyPEM)
 		if err != nil {
 			if err != sql.ErrNoRows {
 				log.Printf("loadACMECertificate: query failed for rule %s: %v", caddyID, err)
@@ -2095,11 +2097,15 @@ func loadACMECertificate(caddyID, domain string) (string, string, bool) {
 			continue
 		}
 		if certPEM == "" || keyPEM == "" {
-			if _, updErr := db.DB.Exec(
-				"UPDATE cert_jobs SET status='failed', message='证书数据缺失', updated_at=datetime('now') WHERE id=?",
-				id,
-			); updErr != nil {
-				log.Printf("loadACMECertificate: failed to mark issued job %d as failed: %v", id, updErr)
+			// Defensive: only mark as failed if the job was already issued.
+			// Don't disrupt in-progress jobs (creating_account, waiting_ca, etc.).
+			if status == "issued" {
+				if _, updErr := db.DB.Exec(
+					"UPDATE cert_jobs SET status='failed', message='证书数据缺失', updated_at=datetime('now') WHERE id=?",
+					id,
+				); updErr != nil {
+					log.Printf("loadACMECertificate: failed to mark issued job %d as failed: %v", id, updErr)
+				}
 			}
 			continue
 		}

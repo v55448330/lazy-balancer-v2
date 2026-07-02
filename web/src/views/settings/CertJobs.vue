@@ -91,7 +91,7 @@
 import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import * as pkijs from 'pkijs'
 import * as asn1js from 'asn1js'
 
@@ -218,7 +218,7 @@ const statusLabel = (status: CertJobStatus) => {
     case 'issued': return '已签发'
     case 'failed': return '失败'
     case 'queued': return '排队中'
-    case 'waiting_ca': return '等待 CA 冷却'
+    case 'waiting_ca': return '等待 CA'
     case 'pending': return '待处理'
     case 'processing': return '处理中'
     case 'creating_account': return '创建账户'
@@ -241,7 +241,7 @@ const statusLabel = (status: CertJobStatus) => {
 }
 
 const canRetry = (status: CertJobStatus) => {
-  return status === 'issued' || status === 'failed'
+  return status === 'issued' || status === 'failed' || status === 'waiting_ca'
 }
 
 const isQueued = (status: CertJobStatus) => status === 'queued'
@@ -332,6 +332,15 @@ const fetchCertInfo = async () => {
 }
 
 const retryJob = async (row: CertJob) => {
+  const isWaitingCA = row.status === 'waiting_ca'
+  const message = isWaitingCA
+    ? '任务当前处于"等待 CA"状态（可能仍在频率冷却中）。确定要立即重新签发吗？如果使用同一 CA 且冷却未到，可能再次被拒绝。'
+    : `确定要对域名 ${row.domain} 重新签发证书吗？`
+  try {
+    await ElMessageBox.confirm(message, '重签确认', { type: isWaitingCA ? 'warning' : 'info' })
+  } catch {
+    return
+  }
   try {
     await request.post(`/certificates/jobs/${row.id}/retry`)
     ElMessage.success('重新签发已触发')

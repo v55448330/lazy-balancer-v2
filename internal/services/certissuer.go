@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -17,6 +18,8 @@ import (
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/dnsprovider"
 	"lazy-balancer-v2/internal/models"
+
+	xacme "golang.org/x/crypto/acme"
 )
 
 // CertIssuer coordinates ACME certificate issuance: creates/updates cert_jobs,
@@ -224,6 +227,19 @@ func detectRateLimit(err error, providerType string) *CAProviderRateLimitError {
 	if err == nil {
 		return nil
 	}
+	// Check for structured ACME 429 error first. golang.org/x/crypto/acme
+	// returns *acme.Error with StatusCode and response headers for CA errors.
+	var acmeErr *xacme.Error
+	if errors.As(err, &acmeErr) && acmeErr.StatusCode == http.StatusTooManyRequests {
+		retryAfter := time.Duration(0)
+		if ra := acmeErr.Header.Get("Retry-After"); ra != "" {
+			retryAfter = parseRetryAfter(ra)
+		}
+		return &CAProviderRateLimitError{RetryAfter: retryAfter, Reason: err.Error()}
+	}
+
+	// Fallback: string matching for providers/wrappers that don't surface the
+	// structured *acme.Error.
 	msg := strings.ToLower(err.Error())
 	if !strings.Contains(msg, "429") && !strings.Contains(msg, "rate limit") && !strings.Contains(msg, "too many") {
 		return nil

@@ -155,7 +155,7 @@ func getACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
 	var certPEM string
 	err := db.DB.QueryRow(`
 		SELECT COALESCE(cert_pem, '') FROM cert_jobs
-		WHERE rule_id = ? AND status = 'issued' AND cert_pem IS NOT NULL AND cert_pem != ''
+		WHERE rule_id = ? AND cert_pem IS NOT NULL AND cert_pem != ''
 		ORDER BY updated_at DESC LIMIT 1`, caddyID).Scan(&certPEM)
 	if err == nil && certPEM != "" {
 		info := ParseCertInfo(certPEM, "acme_dns", ruleDomain)

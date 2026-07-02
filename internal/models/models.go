@@ -179,18 +179,32 @@ type CertInfoBatchRequest struct {
 	CaddyIDs []string `json:"caddy_ids" binding:"required"`
 }
 
+// JSONNullTime wraps sql.NullTime so that it serializes as a RFC3339 string
+// when valid and as null when invalid, instead of the default {"Time":...,"Valid":...}
+// object which cannot be parsed by JavaScript's new Date().
+type JSONNullTime struct {
+	sql.NullTime
+}
+
+func (n JSONNullTime) MarshalJSON() ([]byte, error) {
+	if !n.Valid {
+		return []byte("null"), nil
+	}
+	return n.Time.MarshalJSON()
+}
+
 // CertJob represents an ACME certificate issuance job
 type CertJob struct {
-	ID               int          `json:"id"`
-	RuleID           string       `json:"rule_id"`
-	Domain           string       `json:"domain"`
-	CAProviderID     int          `json:"ca_provider_id"`
-	Status           string       `json:"status"`
-	Message          string       `json:"message"`
-	CertPEM          string       `json:"cert_pem,omitempty"`
-	KeyPEM           string       `json:"key_pem,omitempty"`
-	RenewalAttempts  int          `json:"renewal_attempts,omitempty"`
-	CAAvailableAfter sql.NullTime `json:"ca_available_after,omitempty"`
+	ID               int           `json:"id"`
+	RuleID           string        `json:"rule_id"`
+	Domain           string        `json:"domain"`
+	CAProviderID     int           `json:"ca_provider_id"`
+	Status           string        `json:"status"`
+	Message          string        `json:"message"`
+	CertPEM          string        `json:"cert_pem,omitempty"`
+	KeyPEM           string        `json:"key_pem,omitempty"`
+	RenewalAttempts  int           `json:"renewal_attempts,omitempty"`
+	CAAvailableAfter JSONNullTime  `json:"ca_available_after,omitempty"`
 	LastErrorCode    string       `json:"last_error_code,omitempty"`
 	ExpiresAt        sql.NullTime `json:"expires_at"`
 	CreatedAt        time.Time    `json:"created_at"`

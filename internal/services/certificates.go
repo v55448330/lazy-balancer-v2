@@ -125,11 +125,11 @@ func CreateOrRequeueCertJob(ruleID, domains string, caProviderID int, qm *CAQueu
 		VALUES (?, ?, 'queued', '等待排队签发', ?)
 		ON CONFLICT(rule_id, domain) DO UPDATE SET
 			status = CASE
-				WHEN cert_jobs.status = 'creating_account' THEN cert_jobs.status
+				WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.status
 				ELSE 'queued'
 			END,
 			message = CASE
-				WHEN cert_jobs.status = 'creating_account' THEN cert_jobs.message
+				WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.message
 				ELSE '重新排队签发'
 			END,
 			ca_provider_id = excluded.ca_provider_id,

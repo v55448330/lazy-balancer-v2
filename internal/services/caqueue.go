@@ -242,6 +242,8 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 
 	cooling := computeBackoff(attempts, retryAfter)
 	available := time.Now().Add(cooling).UTC()
+	loc := time.FixedZone("CST", 8*3600)
+	display := available.In(loc)
 
 	if attempts >= maxAttempts {
 		failJob(jobID, fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts))
@@ -250,7 +252,7 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 
 	if _, err := db.DB.Exec(
 		"INSERT INTO cert_job_logs (job_id, level, message) VALUES (?, 'warning', ?)",
-		jobID, fmt.Sprintf("CA 频率限制，第 %d 次，将在 %s 后重试", attempts, available.Format(time.RFC3339)),
+		jobID, fmt.Sprintf("CA 频率限制，第 %d 次，将在 %s 后重试", attempts, display.Format("2006-01-02 15:04:05 -07:00")),
 	); err != nil {
 		log.Printf("CA queue: failed to insert waiting log for job %d: %v", jobID, err)
 	}
