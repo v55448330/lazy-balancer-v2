@@ -24,6 +24,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		SELECT id, caddy_config, dns_provider, COALESCE(dns_credentials,'') as dns_credentials,
 		       COALESCE(acme_email,'') as acme_email, COALESCE(cert_expiry_days,30) as cert_expiry_days,
 		       COALESCE(cert_renewal_days,30) as cert_renewal_days,
+		       COALESCE(cert_renewal_attempts,5) as cert_renewal_attempts,
 		       COALESCE(default_ca_provider_id,0) as default_ca_provider_id,
 		       log_level, access_log_enabled,
 		       COALESCE(caddy_log_path,'/app/logs/caddy.log') as caddy_log_path,
@@ -32,8 +33,9 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       is_master, COALESCE(master_url, '') as master_url, sync_interval,
 		       last_sync, updated_at
 		FROM global_config WHERE id = 1
-	`).Scan(&cfg.ID, &cfg.CaddyConfig, &cfg.DNSProvider, &cfg.DNSCredentials,
-		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.CertRenewalDays, &cfg.DefaultCAProviderID,
+	`).Scan(
+		&cfg.ID, &cfg.CaddyConfig, &cfg.DNSProvider, &cfg.DNSCredentials,
+		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.CertRenewalDays, &cfg.CertRenewalAttempts, &cfg.DefaultCAProviderID,
 		&cfg.LogLevel, &cfg.AccessLogEnabled,
 		&cfg.CaddyLogPath, &cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
@@ -109,6 +111,11 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	if req.CertRenewalAttempts < 1 || req.CertRenewalAttempts > 10 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_renewal_attempts must be between 1 and 10"})
+		return
+	}
+
 	if req.DefaultCAProviderID != nil {
 		if err := services.ValidateDefaultCAProvider(*req.DefaultCAProviderID); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -126,24 +133,25 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	}
 
 	db.DB.Exec(`
-		UPDATE global_config SET
-			dns_provider = COALESCE(?, dns_provider),
-			dns_credentials = COALESCE(?, dns_credentials),
-			acme_email = COALESCE(?, acme_email),
-			cert_expiry_days = COALESCE(?, cert_expiry_days),
-			cert_renewal_days = COALESCE(?, cert_renewal_days),
-			default_ca_provider_id = COALESCE(?, default_ca_provider_id),
-			log_level = COALESCE(?, log_level),
-			access_log_enabled = COALESCE(?, access_log_enabled),
-			caddy_log_path = COALESCE(?, caddy_log_path),
-			caddy_log_level = COALESCE(?, caddy_log_level),
-			caddy_log_size_mb = COALESCE(?, caddy_log_size_mb),
-			is_master = COALESCE(?, is_master),
-			master_url = COALESCE(?, master_url),
-			sync_interval = COALESCE(?, sync_interval),
-			updated_at = datetime('now')
-		WHERE id = 1
-	`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.DefaultCAProviderID, req.LogLevel, req.AccessLogEnabled,
+			UPDATE global_config SET
+				dns_provider = COALESCE(?, dns_provider),
+				dns_credentials = COALESCE(?, dns_credentials),
+				acme_email = COALESCE(?, acme_email),
+				cert_expiry_days = COALESCE(?, cert_expiry_days),
+				cert_renewal_days = COALESCE(?, cert_renewal_days),
+				cert_renewal_attempts = COALESCE(?, cert_renewal_attempts),
+				default_ca_provider_id = COALESCE(?, default_ca_provider_id),
+				log_level = COALESCE(?, log_level),
+				access_log_enabled = COALESCE(?, access_log_enabled),
+				caddy_log_path = COALESCE(?, caddy_log_path),
+				caddy_log_level = COALESCE(?, caddy_log_level),
+				caddy_log_size_mb = COALESCE(?, caddy_log_size_mb),
+				is_master = COALESCE(?, is_master),
+				master_url = COALESCE(?, master_url),
+				sync_interval = COALESCE(?, sync_interval),
+				updated_at = datetime('now')
+			WHERE id = 1
+		`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.LogLevel, req.AccessLogEnabled,
 		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.IsMaster, req.MasterURL, req.SyncInterval)
 
