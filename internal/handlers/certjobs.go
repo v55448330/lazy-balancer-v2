@@ -67,12 +67,11 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 	}
 
 	if status != "issued" && status != "failed" && status != "waiting_ca" {
-		// creating_account may get stuck on account registration; allow retry
-		// after 2 minutes. Other in-progress states (queued, waiting_ca) keep
-		// the 15-minute guard.
-		guard := 15 * time.Minute
-		if status == "creating_account" {
-			guard = 2 * time.Minute
+		// All ACME in-progress states get a short 2-minute guard so users can
+		// force-retry a stuck job quickly. Only 'queued' gets the long guard.
+		guard := 2 * time.Minute
+		if status == "queued" {
+			guard = 15 * time.Minute
 		}
 		if updatedAt.Valid && time.Since(updatedAt.Time) < guard {
 			c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "任务正在执行中，请稍后重试"})

@@ -479,6 +479,16 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return
 	}
 
+	// Domain uniqueness: HTTP/HTTPS rules cannot share the same domain.
+	if req.Protocol == "http" && req.Domain != "" {
+		var existing int
+		err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE protocol = 'http' AND domain = ?", req.Domain).Scan(&existing)
+		if err == nil && existing > 0 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名已被其他 HTTP/HTTPS 规则使用"})
+			return
+		}
+	}
+
 	// Set defaults before validation
 	if req.Strategy == "" {
 		req.Strategy = "round_robin"
@@ -506,11 +516,11 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	var listenPort int
 	if req.Protocol == "http" {
 		if req.EnableTLS && req.ListenPort == 443 {
-			serverName = "https_443"
+			serverName = "http_443"
 		} else if req.ListenPort == 80 {
 			serverName = "http_80"
 		} else if req.EnableTLS {
-			serverName = fmt.Sprintf("https_%d", req.ListenPort)
+			serverName = fmt.Sprintf("http_%d", req.ListenPort)
 		} else {
 			serverName = fmt.Sprintf("http_%d", req.ListenPort)
 		}
@@ -734,6 +744,17 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			return
 		}
 	}
+
+	// Domain uniqueness: HTTP/HTTPS rules cannot share the same domain (excluding current rule).
+	if req.Protocol == "http" && req.Domain != "" {
+		var existing int
+		err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE protocol = 'http' AND domain = ? AND caddy_id != ?", req.Domain, caddyID).Scan(&existing)
+		if err == nil && existing > 0 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名已被其他 HTTP/HTTPS 规则使用"})
+			return
+		}
+	}
+
 	log.Printf("UpdateRule request for caddy_id=%s: enable_tls=%v, tls_source=%s, cert_len=%d, key_len=%d",
 		caddyID, req.EnableTLS, req.TLSSource, len(req.TLSCert), len(req.TLSKey))
 
@@ -774,11 +795,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	if validationProtocol == "http" {
 		if validationEnableTLS && validationPort == 443 {
-			validationServerName = "https_443"
+			validationServerName = "http_443"
 		} else if validationPort == 80 {
 			validationServerName = "http_80"
 		} else if validationEnableTLS {
-			validationServerName = fmt.Sprintf("https_%d", validationPort)
+			validationServerName = fmt.Sprintf("http_%d", validationPort)
 		} else {
 			validationServerName = fmt.Sprintf("http_%d", validationPort)
 		}
@@ -1092,6 +1113,31 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 
+	// If the domain changed for an ACME rule, remove stale certificate jobs
+	// and enqueue a new issuance for the updated domain.
+	if req.EnableTLS && req.TLSSource == "acme_dns" && domain != "" && domain != existingRule.Domain {
+		if _, err := db.DB.Exec("DELETE FROM cert_job_logs WHERE job_id IN (SELECT id FROM cert_jobs WHERE rule_id = ?)", caddyID); err != nil {
+			log.Printf("UpdateRule failed to delete old cert job logs for %s: %v", caddyID, err)
+		}
+		if _, err := db.DB.Exec("DELETE FROM cert_jobs WHERE rule_id = ?", caddyID); err != nil {
+			log.Printf("UpdateRule failed to delete old cert jobs for %s: %v", caddyID, err)
+		}
+		go func() {
+			qm := services.GetCAQueueManager()
+			if qm == nil {
+				log.Printf("Auto cert enqueue failed for %s: CA queue manager not initialized", domain)
+				return
+			}
+			caProviderID := existingRule.CAProviderID
+			if req.CAProviderID != nil {
+				caProviderID = *req.CAProviderID
+			}
+			if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+				log.Printf("Auto cert enqueue failed for %s: %v", domain, err)
+			}
+		}()
+	}
+
 	// Apply Caddy changes after DB commit; restore previous Caddy config on failure
 	if req.Protocol == "tcp" {
 		newFullConfig := services.GenerateCaddyConfig(h.cfg)
@@ -1250,13 +1296,13 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	var serverPort int
 	if protocol == "http" {
 		if enableTLS && listenPort == 443 {
-			serverName = "https_443"
+			serverName = "http_443"
 			serverPort = 443
 		} else if listenPort == 80 {
 			serverName = "http_80"
 			serverPort = 80
 		} else if enableTLS {
-			serverName = fmt.Sprintf("https_%d", listenPort)
+			serverName = fmt.Sprintf("http_%d", listenPort)
 			serverPort = listenPort
 		} else {
 			serverName = fmt.Sprintf("http_%d", listenPort)
@@ -1325,7 +1371,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	`, caddyID).Scan(
 		&rule.CaddyID, &rule.Name, &rule.Protocol, &rule.Domain, &rule.ListenPort, &rule.Strategy,
 		&rule.DynamicDNS, &rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout,
-		rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
+		&rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
 		&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.TLSCert, &rule.TLSKey,
 		&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.CreatedBy,
 		&rule.HostHeader, &rule.DnsServer,
@@ -1343,22 +1389,24 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		return
 	}
 
+	now := time.Now()
 	result, err := db.DB.Exec(`
 		INSERT INTO lb_rules (name, protocol, domain, listen_port, strategy, dynamic_dns, dns_server,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_tls, tls_source, acme_config_id, tls_cert, tls_key,
 			tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, caddy_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, rule.Name+" (Copy)", rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 		rule.DynamicDNS, rule.DnsServer, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 		rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
 		rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.TLSCert, rule.TLSKey,
 		rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, 0, userID, userID,
-		rule.HostHeader, newCaddyID,
+		now, now, rule.HostHeader, newCaddyID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to duplicate rule"})
+		log.Printf("Failed to duplicate rule %s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to duplicate rule: " + err.Error()})
 		return
 	}
 

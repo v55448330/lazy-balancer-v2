@@ -87,7 +87,7 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 			log("cleanup_warning", fmt.Sprintf("清理旧 TXT 记录失败 %s: %v", tokenFQDN, err))
 		}
 
-		log("presenting_dns", fmt.Sprintf("写入 TXT 记录 %s", tokenFQDN))
+		log("presenting_dns", fmt.Sprintf("写入 TXT 记录 %s, 值: %s", tokenFQDN, keyAuth))
 		if err := i.Provider.Present(ctx, zone, tokenFQDN, keyAuth, 600); err != nil {
 			return "", "", nil, fmt.Errorf("present dns for %s: %w", domain, err)
 		}
@@ -105,18 +105,20 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 
 	// Ensure DNS records are always cleaned up before returning.
 	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cleanupCancel()
 		log("cleanup_dns", "清理 ACME DNS TXT 记录")
-		i.Cleanup(ctx, challenges)
+		i.Cleanup(cleanupCtx, challenges)
 	}()
 
 	// Step 4: Wait for DNS propagation and accept challenges
 	for _, ci := range localChallenges {
-		log("waiting_propagation", fmt.Sprintf("等待 DNS 传播 %s", ci.tokenFQDN))
 		keyAuth, err := i.Client.DNS01ChallengeRecord(ci.chal.Token)
 		if err != nil {
 			return "", "", challenges, err
 		}
-		if err := waitForDNS(ctx, ci.tokenFQDN, keyAuth, 2*time.Minute); err != nil {
+		log("waiting_propagation", fmt.Sprintf("等待 DNS 传播 %s, 期望值: %s", ci.tokenFQDN, keyAuth))
+		if err := i.waitForDNS(ctx, ci.tokenFQDN, keyAuth, 5*time.Minute); err != nil {
 			return "", "", challenges, fmt.Errorf("dns propagation %s: %w", ci.tokenFQDN, err)
 		}
 		log("dns_propagated", fmt.Sprintf("DNS 已传播 %s", ci.tokenFQDN))
@@ -130,7 +132,9 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 	// Step 5: Wait for all authorizations to be valid
 	for _, authURL := range order.AuthzURLs {
 		log("validating", fmt.Sprintf("等待 CA 验证 %s", authURL))
-		auth, err := i.Client.WaitAuthorization(ctx, authURL)
+		authCtx, authCancel := context.WithTimeout(ctx, 10*time.Minute)
+		auth, err := i.Client.WaitAuthorization(authCtx, authURL)
+		authCancel()
 		if err != nil {
 			return "", "", challenges, fmt.Errorf("wait authorization %s: %w", authURL, err)
 		}
@@ -206,40 +210,90 @@ func zoneFromDomain(domain string) string {
 }
 
 // waitForDNS polls DNS resolvers until the expected TXT record appears.
-func waitForDNS(ctx context.Context, fqdn, expected string, timeout time.Duration) error {
-	resolvers := []string{"8.8.8.8:53", "1.1.1.1:53"}
+//
+// It queries multiple resolvers (including ones reachable from mainland China
+// such as AliDNS and DNSPod, plus global resolvers Google and Cloudflare) over
+// both UDP and TCP. TCP is tried as a fallback because some networks block or
+// poison UDP traffic to public resolvers.
+//
+// All progress is reported through the Issuer's Logger so that stuck DNS
+// validation can be diagnosed: every miss logs the expected value and the
+// values actually returned by the resolver.
+func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout time.Duration) error {
+	// Order matters: China-friendly resolvers first, then global ones.
+	resolvers := []string{
+		"223.5.5.5:53",     // Alibaba AliDNS
+		"119.29.29.29:53",  // Tencent DNSPod
+		"8.8.8.8:53",       // Google Public DNS
+		"1.1.1.1:53",       // Cloudflare
+	}
 
-	ticker := time.NewTicker(2 * time.Second)
+	log := func(format string, args ...any) {
+		if i.Logger != nil {
+			i.Logger.Log("waiting_propagation", fmt.Sprintf(format, args...))
+		}
+	}
+
+	// Bound the whole propagation wait by timeout, independent of the parent
+	// context deadline.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
+
+	var lastFound []string
+	var lastResolver string
 
 	for {
 		for _, resolver := range resolvers {
-			m := new(dns.Msg)
-			m.SetQuestion(fqdn, dns.TypeTXT)
-			m.RecursionDesired = true
+			for _, net := range []string{"udp", "tcp"} {
+				m := new(dns.Msg)
+				m.SetQuestion(fqdn, dns.TypeTXT)
+				m.RecursionDesired = true
 
-			c := new(dns.Client)
-			c.Net = "udp"
-			// Bound each exchange by the remaining context deadline or timeout.
-			exchangeCtx, cancel := context.WithTimeout(ctx, timeout)
-			r, _, err := c.ExchangeContext(exchangeCtx, m, resolver)
-			cancel()
-			if err != nil || r == nil {
-				continue
-			}
-			for _, ans := range r.Answer {
-				if t, ok := ans.(*dns.TXT); ok {
-					got := strings.Join(t.Txt, "")
-					if got == expected {
-						return nil
+				c := new(dns.Client)
+				c.Net = net
+				// Short per-exchange timeout so a blocked resolver fails over
+				// quickly instead of consuming the whole propagation budget.
+				exchangeCtx, exCancel := context.WithTimeout(ctx, 8*time.Second)
+				r, _, err := c.ExchangeContext(exchangeCtx, m, resolver)
+				exCancel()
+				if err != nil || r == nil {
+					log("查询失败 %s @ %s/%s: %v", fqdn, resolver, net, err)
+					continue
+				}
+
+				var found []string
+				for _, ans := range r.Answer {
+					if t, ok := ans.(*dns.TXT); ok {
+						got := strings.TrimSpace(strings.Join(t.Txt, ""))
+						if got == "" {
+							continue
+						}
+						found = append(found, got)
+						if got == expected {
+							log("DNS 已命中 %s @ %s/%s, 值: %s", fqdn, resolver, net, got)
+							return nil
+						}
 					}
+				}
+				if len(found) > 0 {
+					lastFound = found
+					lastResolver = resolver + "/" + net
+					log("DNS 未命中 %s @ %s/%s, 期望: %s, 实际: %s", fqdn, resolver, net, expected, strings.Join(found, "; "))
 				}
 			}
 		}
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			if len(lastFound) > 0 {
+				return fmt.Errorf("dns propagation timeout for %s: expected %s, last found %s (via %s)",
+					fqdn, expected, strings.Join(lastFound, "; "), lastResolver)
+			}
+			return fmt.Errorf("dns propagation timeout for %s: expected %s, no TXT record found from any resolver",
+				fqdn, expected)
 		case <-ticker.C:
 		}
 	}

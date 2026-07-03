@@ -227,7 +227,7 @@ const statusLabel = (status: CertJobStatus) => {
     case 'cleanup_dns': return '清理 DNS'
     case 'cleanup_warning': return '清理警告'
     case 'presenting_dns': return '设置 DNS'
-    case 'waiting_propagation': return '等待 DNS 传播'
+    case 'waiting_propagation': return '等待 DNS'
     case 'dns_propagated': return 'DNS 已传播'
     case 'accepting_challenge': return '提交验证'
     case 'validating': return '验证中'
@@ -241,7 +241,7 @@ const statusLabel = (status: CertJobStatus) => {
 }
 
 const canRetry = (status: CertJobStatus) => {
-  return status === 'issued' || status === 'failed' || status === 'waiting_ca'
+  return status !== 'queued' && status !== 'pending'
 }
 
 const isQueued = (status: CertJobStatus) => status === 'queued'
@@ -345,7 +345,9 @@ const retryJob = async (row: CertJob) => {
     await request.post(`/certificates/jobs/${row.id}/retry`)
     ElMessage.success('重新签发已触发')
     fetchJobs()
-  } catch (error) {
+  } catch (error: any) {
+    const msg = error?.response?.data?.message || error?.message || '重签失败'
+    ElMessage.error(msg)
     console.error('Failed to retry cert job:', error)
   }
 }

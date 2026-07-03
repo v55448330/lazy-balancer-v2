@@ -192,7 +192,7 @@
       </el-table>
     </el-card>
 
-    <el-dialog v-model="wizardVisible" :title="editingRule ? '编辑规则' : '新建规则'" width="800" :close-on-click-modal="false" @close="resetWizard">
+    <el-dialog v-model="wizardVisible" :title="editingRule ? '编辑规则' : (isCopyMode ? '复制规则' : '新建规则')" width="800" :close-on-click-modal="false" @close="resetWizard">
       <el-steps :active="visualStepIndex" finish-status="success" align-center class="wizard-steps">
         <el-step title="基本配置" :icon="InfoFilled" />
         <el-step v-if="showTlsStep" title="TLS 配置" :icon="Lock" />
@@ -900,16 +900,24 @@ const certJobStatusLabel = (status?: string) => {
     case 'issued': return '已签发'
     case 'failed': return '签发失败'
     case 'pending': return '待处理'
-    case 'queued': return '签发中'
-    case 'creating_account': return '签发中'
-    case 'creating_order': return '创建订单'
-    case 'order_created': return '订单已创建'
-    case 'presenting_dns': return '设置 DNS'
-    case 'dns_propagated': return 'DNS 已传播'
-    case 'validating': return '验证中'
-    case 'waiting_ca': return '签发中'
-    case 'finalizing': return '最终化'
-    case 'downloading': return '下载证书'
+    case 'queued':
+    case 'creating_account':
+    case 'creating_order':
+    case 'order_created':
+    case 'presenting_dns':
+    case 'waiting_propagation':
+    case 'dns_propagated':
+    case 'accepting_challenge':
+    case 'validating':
+    case 'validated':
+    case 'finalizing':
+    case 'finalized':
+    case 'downloading':
+    case 'downloaded':
+    case 'cleanup_dns':
+    case 'cleanup_warning':
+      return '签发中'
+    case 'waiting_ca': return '等待 CA'
     default: return status || '未知'
   }
 }
@@ -950,6 +958,7 @@ const loading = ref(false)
 const wizardVisible = ref(false)
 const saving = ref(false)
 const editingRule = ref<Rule | null>(null)
+const isCopyMode = ref(false)
 const currentStep = ref(0)
 const upstreamTouched = ref<boolean[]>([])
 const certConfigs = ref<any[]>([])
@@ -1410,6 +1419,7 @@ const pasteFromFile = async (type: 'cert' | 'key') => {
 }
 
 const openWizard = (rule?: Rule) => {
+  isCopyMode.value = false
   if (rule) {
     editingRule.value = rule
     let compressType = 'gzip'
@@ -1498,6 +1508,7 @@ const openWizard = (rule?: Rule) => {
 
 const resetWizard = () => {
   editingRule.value = null
+  isCopyMode.value = false
   currentStep.value = 0
 }
 
@@ -1667,7 +1678,8 @@ const submitWizard = async () => {
     wizardVisible.value = false
     fetchRules()
   } catch (e: any) {
-    ElMessage.error(e.message || '操作失败')
+    // Error message is already shown by the global axios interceptor.
+    console.error('submit wizard failed', e)
   } finally {
     saving.value = false
   }
@@ -1701,10 +1713,63 @@ const deleteRule = async (rule: Rule) => {
 const duplicateRule = async (rule: Rule) => {
   try {
     await ElMessageBox.confirm(`确定要复制规则 "${rule.name}" 吗？`, '复制确认', { type: 'info' })
-    await request.post(`/rules/${rule.caddy_id}/duplicate`)
-    ElMessage.success('复制成功')
-    fetchRules()
+    openCopyWizard(rule)
   } catch (e) {}
+}
+
+const openCopyWizard = (rule: Rule) => {
+  editingRule.value = null
+  isCopyMode.value = true
+  let compressType = 'gzip'
+  if (rule.compress_types) {
+    if (Array.isArray(rule.compress_types) && rule.compress_types.length > 0) {
+      compressType = rule.compress_types[0] as string
+    } else if (typeof rule.compress_types === 'string') {
+      compressType = (rule.compress_types as string).split(',')[0].trim()
+    }
+  }
+  Object.assign(wizardForm, {
+    caddy_id: '',
+    id: undefined,
+    name: `${rule.name} (Copy)`,
+    description: rule.description || '',
+    protocol: rule.protocol,
+    domain: rule.domain || '',
+    listen_port: rule.listen_port,
+    strategy: rule.strategy || 'round_robin',
+    dynamic_dns: rule.dynamic_dns || false,
+    enable_dns_server: (rule as any).enable_dns_server || false,
+    dns_server: (rule as any).dns_server || '',
+    dns_family: (() => { const df = (rule as any).dns_family; if (Array.isArray(df)) return df; if (df === 'both') return ['ipv4', 'ipv6']; if (df === 'ipv4') return ['ipv4']; if (df === 'ipv6') return ['ipv6']; return ['ipv4']; })(),
+    health_check_path: rule.health_check_path || '',
+    health_check_interval: rule.health_check_interval || 10,
+    health_check_timeout: rule.health_check_timeout || 5,
+    health_check_healthy_threshold: rule.health_check_healthy_threshold || 2,
+    health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
+    enable_active_health_check: rule.enable_active_health_check === true,
+    host_header: rule.host_header || '',
+    upstreams: rule.upstreams?.map(u => ({
+      ...u,
+      dynamic_dns: false,
+      protocol: u.protocol || 'http',
+      max_connections: u.max_connections ?? 0,
+      proxy_protocol: u.proxy_protocol ?? '',
+    })) || [],
+    enable_tls: rule.enable_tls || false,
+    tls_source: rule.tls_source || 'manual',
+    acme_config_id: rule.acme_config_id || undefined,
+    ca_provider_id: rule.ca_provider_id ?? 0,
+    tls_cert: rule.tls_cert || '',
+    tls_key: rule.tls_key || '',
+    tls_http_redirect: rule.tls_http_redirect || false,
+    enable_compress: rule.enable_compress !== false,
+    compress_types: compressType,
+    max_connections: (rule as any).max_connections || 0,
+    proxy_protocol: (rule as any).proxy_protocol || '',
+    enabled: false,
+  })
+  currentStep.value = 0
+  wizardVisible.value = true
 }
 
 const viewConfig = async (rule: Rule) => {
@@ -1752,7 +1817,8 @@ const viewConfig = async (rule: Rule) => {
       config: res.data?.config || {}
     }
   } catch (e: any) {
-    ElMessage.error(e.message || '获取 Caddy 配置失败')
+    // Error message is already shown by the global axios interceptor.
+    console.error('view config failed', e)
     ruleConfig.value = {
       id: rule.id || 0,
       caddy_id: '',

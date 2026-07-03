@@ -108,6 +108,13 @@ func newClient(directoryURL, email string, eab *acme.ExternalAccountBinding) (*C
 		acme: &acme.Client{
 			Key:          key,
 			DirectoryURL: directoryURL,
+			HTTPClient:   &http.Client{Timeout: 30 * time.Second},
+			RetryBackoff: func(n int, r *http.Request, resp *http.Response) time.Duration {
+				if resp != nil && resp.StatusCode == http.StatusTooManyRequests {
+					return 0
+				}
+				return 2 * time.Second
+			},
 		},
 		accountKey: key,
 		eab:        eab,

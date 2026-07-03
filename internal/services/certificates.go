@@ -39,16 +39,68 @@ func (s *CertificateService) Start() {
 	time.AfterFunc(30*time.Second, s.renewExpiringCertificates)
 	renewalTicker := time.NewTicker(6 * time.Hour)
 	manualTicker := time.NewTicker(10 * time.Minute)
+	waitingCATicker := time.NewTicker(30 * time.Second)
 	defer renewalTicker.Stop()
 	defer manualTicker.Stop()
+	defer waitingCATicker.Stop()
 	for {
 		select {
 		case <-renewalTicker.C:
 			s.renewExpiringCertificates()
 		case <-manualTicker.C:
 			s.checkManualCertExpiration()
+		case <-waitingCATicker.C:
+			s.requeueWaitingCAJobs()
 		case <-s.stopCh:
 			return
+		}
+	}
+}
+
+// requeueWaitingCAJobs re-enqueues cert jobs parked in 'waiting_ca' once
+// their CA cooling period has elapsed. This covers first-time issuance jobs
+// (expires_at IS NULL) that renewExpiringCertificates cannot see.
+func (s *CertificateService) requeueWaitingCAJobs() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	qm := GetCAQueueManager()
+	if qm == nil {
+		return
+	}
+
+	rows, err := db.DB.Query(`
+		SELECT id, rule_id, domain, ca_provider_id
+		FROM cert_jobs
+		WHERE status = 'waiting_ca'
+		  AND ca_available_after IS NOT NULL
+		  AND datetime(ca_available_after) <= datetime('now')
+	`)
+	if err != nil {
+		log.Printf("waiting_ca scan: query failed: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var jobID, caProviderID int
+		var ruleID, domain string
+		if err := rows.Scan(&jobID, &ruleID, &domain, &caProviderID); err != nil {
+			continue
+		}
+		res, err := db.DB.Exec(
+			"UPDATE cert_jobs SET status='queued', message='冷却结束，重新排队签发', updated_at=datetime('now') WHERE id=? AND status='waiting_ca' AND (ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))",
+			jobID,
+		)
+		if err != nil {
+			log.Printf("waiting_ca scan: failed to requeue job %d: %v", jobID, err)
+			continue
+		}
+		if rows, _ := res.RowsAffected(); rows == 0 {
+			continue
+		}
+		if err := qm.Enqueue(caProviderID, jobID, ruleID, domain); err != nil {
+			log.Printf("waiting_ca scan: failed to enqueue job %d: %v", jobID, err)
 		}
 	}
 }
@@ -60,6 +112,7 @@ func (s *CertificateService) recoverCertJobs() {
 	rows, err := db.DB.Query(`
 		SELECT id, rule_id, domain, ca_provider_id FROM cert_jobs
 		WHERE status NOT IN ('issued','failed')
+		  AND (status != 'waiting_ca' OR ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))
 	`)
 	if err != nil {
 		log.Printf("Failed to recover non-terminal cert jobs: %v", err)
@@ -192,7 +245,7 @@ func (s *CertificateService) renewExpiringCertificates() {
 		}
 
 		res, err := db.DB.Exec(
-			"UPDATE cert_jobs SET status='queued', message='等待排队续期', updated_at=datetime('now') WHERE id=? AND status IN ('issued','failed','waiting_ca') AND (ca_available_after IS NULL OR ca_available_after <= datetime('now'))",
+			"UPDATE cert_jobs SET status='queued', message='等待排队续期', updated_at=datetime('now') WHERE id=? AND status IN ('issued','failed','waiting_ca') AND (ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))",
 			j.ID,
 		)
 		if err != nil {

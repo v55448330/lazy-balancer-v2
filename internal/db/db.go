@@ -454,6 +454,15 @@ func runMigrations() error {
 		return fmt.Errorf("failed to migrate cert_jobs status constraint: %w", err)
 	}
 
+	// Normalize ca_available_after to SQLite canonical UTC datetime format.
+	// Older rows may contain Go time.Time strings like
+	// "2026-07-02 11:56:03.432055881+00:00" which don't compare correctly
+	// against datetime('now'). datetime() of an already-canonical string
+	// returns the same value, so this is safe to run repeatedly.
+	if _, err := DB.Exec("UPDATE cert_jobs SET ca_available_after = datetime(ca_available_after) WHERE ca_available_after IS NOT NULL"); err != nil {
+		log.Printf("Warning: failed to normalize cert_jobs.ca_available_after: %v", err)
+	}
+
 	// cert_job_logs table migration
 	DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cert_job_logs'").Scan(&colCount)
 	if colCount == 0 {

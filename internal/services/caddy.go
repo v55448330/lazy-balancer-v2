@@ -2360,9 +2360,6 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		}
 
 		serverName := fmt.Sprintf("http_%d", rule.ListenPort)
-		if rule.EnableTLS {
-			serverName = fmt.Sprintf("https_%d", rule.ListenPort)
-		}
 
 		server := map[string]interface{}{
 			"listen": []string{fmt.Sprintf(":%d", rule.ListenPort)},

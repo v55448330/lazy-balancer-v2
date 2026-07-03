@@ -30,13 +30,14 @@ service.interceptors.response.use(
     return res
   },
   (error) => {
-    if (error.response?.status === 401) {
+    const status = error.response?.status
+    const backendMsg = error.response?.data?.message
+    const message = backendMsg || error.message || '网络错误'
+    if (status === 401) {
       const isLoginRequest = error.config?.url?.includes('/auth/login')
       if (isLoginRequest) {
-        // Login failed - show specific error message
         ElMessage.error('用户名或密码错误')
       } else {
-        // Session expired - show re-login prompt
         ElMessageBox.confirm('登录已过期，请重新登录', '会话失效', {
           confirmButtonText: '确定',
           cancelButtonText: '取消',
@@ -50,9 +51,9 @@ service.interceptors.response.use(
         })
       }
     } else {
-      ElMessage.error(error.message || '网络错误')
+      ElMessage.error(message)
     }
-    return Promise.reject(error)
+    return Promise.reject(new Error(message))
   }
 )
 
