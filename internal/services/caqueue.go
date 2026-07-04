@@ -49,6 +49,7 @@ func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains stri
 		failJob(jobID, fmt.Sprintf("CA Provider 不可用: %v", err))
 		return err
 	}
+	log.Printf("CA queue Enqueue job=%d providerID=%d resolved=%s (%s)", jobID, providerID, provider.Name, provider.Provider)
 
 	// Persist the resolved provider ID so renewals use the same provider unless
 	// the admin intentionally changes the default and triggers a new job.
@@ -167,7 +168,7 @@ func (q *caQueue) execute(item queueItem) {
 	}
 
 	issuer := NewCertIssuer(q.reloader)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
 	if err := issuer.Issue(ctx, item.jobID, item.ruleID, item.domains, q.provider); err != nil {

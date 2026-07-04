@@ -132,7 +132,8 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 	// Step 5: Wait for all authorizations to be valid
 	for _, authURL := range order.AuthzURLs {
 		log("validating", fmt.Sprintf("等待 CA 验证 %s", authURL))
-		authCtx, authCancel := context.WithTimeout(ctx, 10*time.Minute)
+		// Use a short timeout so a slow/unresponsive CA fails fast and can be retried.
+		authCtx, authCancel := context.WithTimeout(ctx, 5*time.Minute)
 		auth, err := i.Client.WaitAuthorization(authCtx, authURL)
 		authCancel()
 		if err != nil {
@@ -143,6 +144,23 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 		}
 	}
 	log("validated", "所有域名验证通过")
+
+	// Step 5.5: Wait for the order to become ready before finalizing.
+	log("waiting_order_ready", "等待订单就绪")
+	readyCtx, readyCancel := context.WithTimeout(ctx, 3*time.Minute)
+	readyOrder, err := i.Client.WaitOrder(readyCtx, order.URI)
+	readyCancel()
+	if err != nil {
+		return "", "", challenges, fmt.Errorf("wait order ready: %w", err)
+	}
+	if readyOrder.Status != "ready" && readyOrder.Status != "valid" {
+		errMsg := ""
+		if readyOrder.Error != nil {
+			errMsg = fmt.Sprintf(" (%d: %s)", readyOrder.Error.StatusCode, readyOrder.Error.Detail)
+		}
+		return "", "", challenges, fmt.Errorf("order status after ready wait: %s%s", readyOrder.Status, errMsg)
+	}
+	log("order_ready", fmt.Sprintf("订单已就绪，状态: %s", readyOrder.Status))
 
 	// Step 6: Finalize order with CSR
 	log("finalizing", "生成 CSR 并提交订单")
@@ -157,11 +175,31 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 	if finalizedOrder.CertURL == "" {
 		return "", "", challenges, fmt.Errorf("finalize returned empty cert url")
 	}
-	log("finalized", fmt.Sprintf("订单已完成，证书 URL: %s", finalizedOrder.CertURL))
+	log("finalized", fmt.Sprintf("订单已最终化，证书 URL: %s", finalizedOrder.CertURL))
+
+	// Step 6.5: Wait for the order to become valid after finalization.
+	log("waiting_order_valid", "等待订单最终完成")
+	validCtx, validCancel := context.WithTimeout(ctx, 5*time.Minute)
+	validOrder, err := i.Client.WaitOrder(validCtx, order.URI)
+	validCancel()
+	if err != nil {
+		return "", "", challenges, fmt.Errorf("wait order valid: %w", err)
+	}
+	if validOrder.Status != "valid" {
+		errMsg := ""
+		if validOrder.Error != nil {
+			errMsg = fmt.Sprintf(" (%d: %s)", validOrder.Error.StatusCode, validOrder.Error.Detail)
+		}
+		return "", "", challenges, fmt.Errorf("order status after finalize: %s%s", validOrder.Status, errMsg)
+	}
+	if validOrder.CertURL == "" {
+		validOrder.CertURL = finalizedOrder.CertURL
+	}
+	log("order_valid", "订单验证完成")
 
 	// Step 7: Download certificate
 	log("downloading", "下载证书")
-	certDER, err := i.Client.FetchCert(ctx, finalizedOrder.CertURL)
+	certDER, err := i.Client.FetchCert(ctx, validOrder.CertURL)
 	if err != nil {
 		return "", "", challenges, fmt.Errorf("fetch cert: %w", err)
 	}

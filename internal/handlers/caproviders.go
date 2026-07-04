@@ -97,34 +97,34 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 func (h *Handlers) TestCAProvider(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid id parameter"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的 ID 参数"})
 		return
 	}
 
 	if err := h.caProviderService.TestCAProvider(id); err != nil {
 		if errors.Is(err, services.ErrCAProviderNotFound) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA provider not found or disabled"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA 提供商不存在或已禁用"})
 			return
 		}
 		var terr *services.CAProviderTestError
 		if errors.As(err, &terr) {
 			switch terr.Phase {
 			case "email":
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ACME email is not configured"})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "未配置 ACME 邮箱，请在「系统设置 / 免费证书」中填写邮箱"})
 			case "config":
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid CA provider config: " + terr.Error()})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "CA 提供商配置无效: " + terr.Error()})
 			case "register":
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ACME registration failed: " + terr.Error()})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ACME 账户注册失败，请检查 CA 配置或网络: " + terr.Error()})
 			default:
 				log.Printf("CA provider test failed for provider %d: %v", id, err)
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA provider test failed"})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 提供商测试失败"})
 			}
 			return
 		}
 		log.Printf("CA provider test failed for provider %d: %v", id, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA provider test failed"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 提供商测试失败"})
 		return
 	}
 
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "CA provider configuration is valid"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "CA 提供商配置有效"})
 }

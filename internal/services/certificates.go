@@ -172,6 +172,16 @@ func CreateOrRequeueCertJob(ruleID, domains string, caProviderID int, qm *CAQueu
 	}
 	joined := strings.Join(list, ",")
 
+	// Defensive: if no explicit CA provider was supplied, use the rule's own
+	// setting rather than falling back to the global default.
+	if caProviderID == 0 {
+		var ruleCA int
+		if err := db.DB.QueryRow("SELECT COALESCE(ca_provider_id,0) FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&ruleCA); err == nil && ruleCA != 0 {
+			caProviderID = ruleCA
+		}
+	}
+	log.Printf("CreateOrRequeueCertJob rule=%s domain=%s ca_provider_id=%d", ruleID, joined, caProviderID)
+
 	var jobID int
 	err := db.DB.QueryRow(`
 		INSERT INTO cert_jobs (rule_id, domain, status, message, ca_provider_id)

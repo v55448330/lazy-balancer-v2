@@ -605,7 +605,7 @@
               {{ wizardForm.enable_compress ? (wizardForm.compress_types || 'gzip') : '禁用' }}
             </el-descriptions-item>
             <el-descriptions-item label="TLS 证书" v-if="wizardForm.enable_tls">
-              <div v-if="wizardForm.tls_source === 'acme_dns'">{{ certTypeLabels.auto }}</div>
+              <div v-if="wizardForm.tls_source === 'acme_dns'">{{ certTypeLabels.auto }} ({{ caProviderLabel }})</div>
               <div v-else>
                 <div>{{ certTypeLabels.manual }}</div>
                 <div v-if="certInfo.valid" class="cert-preview-info">
@@ -789,9 +789,15 @@ interface Rule {
 const authStore = useAuthStore()
 
 const certTypeLabels = {
-  auto: "Let's Encrypt",
+  auto: 'ACME 自动证书',
   manual: '手动证书',
 }
+
+const caProviderLabel = computed(() => {
+  const id = wizardForm.ca_provider_id
+  if (id === undefined || id === null || id === 0) return '系统默认'
+  return caProviders.value.find(p => p.id === id)?.name || '未知 CA'
+})
 
 interface CertInfo {
   caddy_id: string
@@ -1657,7 +1663,7 @@ const submitWizard = async () => {
       enable_tls: wizardForm.enable_tls,
       tls_source: wizardForm.tls_source,
       acme_config_id: wizardForm.acme_config_id || 0,
-      ca_provider_id: wizardForm.ca_provider_id || 0,
+      ca_provider_id: Number(wizardForm.ca_provider_id || 0),
       tls_cert: wizardForm.tls_source === 'manual' ? wizardForm.tls_cert : '',
       tls_key: wizardForm.tls_source === 'manual' ? wizardForm.tls_key : '',
       tls_http_redirect: wizardForm.tls_http_redirect,

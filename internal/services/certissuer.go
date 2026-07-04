@@ -115,6 +115,19 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		return fmt.Errorf("ACME证书仅支持单域名或根域+www二级域名: %s", domains)
 	}
 
+	logger := &jobLogger{jobID: jobID}
+
+	// Pre-flight check: verify the CA provider is reachable before starting the
+	// real issuance flow. If the CA is down (e.g. ZeroSSL 504), fail fast and
+	// let the retry scheduler handle the next attempt.
+	logger.Log("creating_account", fmt.Sprintf("测试 CA 提供商 %s (%s) 连通性", provider.Name, provider.Provider))
+	if err := NewCAProviderService().TestCAProvider(provider.ID); err != nil {
+		logger.Log("failed", fmt.Sprintf("CA 提供商测试失败: %v", err))
+		failJob(jobID, fmt.Sprintf("CA 提供商测试失败: %v", err))
+		return fmt.Errorf("CA provider test failed: %w", err)
+	}
+	logger.Log("creating_account", "CA 提供商测试通过")
+
 	// Reset the existing job row (queue manager already created/reused it).
 	res, err := db.DB.Exec(
 		"UPDATE cert_jobs SET status='creating_account', message='开始申请证书', updated_at=datetime('now') WHERE id=?",
@@ -131,8 +144,6 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		failJob(jobID, "证书任务不存在")
 		return fmt.Errorf("cert job %d not found", jobID)
 	}
-
-	logger := &jobLogger{jobID: jobID}
 
 	// Resolve ACME config for the rule.
 	var acmeConfigID int

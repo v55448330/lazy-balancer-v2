@@ -346,8 +346,7 @@ const retryJob = async (row: CertJob) => {
     ElMessage.success('重新签发已触发')
     fetchJobs()
   } catch (error: any) {
-    const msg = error?.response?.data?.message || error?.message || '重签失败'
-    ElMessage.error(msg)
+    // Error toast is already shown by the global axios interceptor.
     console.error('Failed to retry cert job:', error)
   }
 }

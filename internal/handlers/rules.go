@@ -20,7 +20,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		SELECT COALESCE(caddy_id,'') AS caddy_id, name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port, strategy,
 		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval,
-		       COALESCE(enable_active_health_check,0), COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_http_redirect,0),
+		       COALESCE(enable_active_health_check,0), COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_http_redirect,0),
 		       COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), enabled, created_by, created_at, updated_at, updated_by,
 		       COALESCE(host_header,'')
 		FROM lb_rules ORDER BY id
@@ -37,7 +37,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		var domain, strategy, description, compressTypes, hostHeader, dnsFamily, tlsSource string
 		var tlsCert, tlsKey string
 		var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect, enableCompress bool
-		var acmeConfigID int
+		var acmeConfigID, caProviderID int
 		var createdBy sql.NullInt64
 		var createdAt sql.NullTime
 		var updatedAt sql.NullTime
@@ -45,7 +45,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		err := rows.Scan(&r.CaddyID, &r.Name, &description, &r.Protocol, &domain, &r.ListenPort, &strategy,
 			&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
 			&r.HealthCheckPath, &r.HealthCheckInterval,
-			&enableActiveHealthCheck, &enableTLS, &tlsSource, &acmeConfigID, &tlsCert, &tlsKey, &tlsHTTPRedirect,
+			&enableActiveHealthCheck, &enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &tlsCert, &tlsKey, &tlsHTTPRedirect,
 			&enableCompress, &compressTypes, &r.Enabled, &createdBy, &createdAt, &updatedAt, &updatedBy,
 			&hostHeader)
 		if err != nil {
@@ -82,6 +82,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		r.EnableCompress = enableCompress
 		r.CompressTypes = compressTypes
 		r.HostHeader = hostHeader
+		r.CAProviderID = caProviderID
 
 		upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'') FROM upstreams WHERE rule_id = ?`, r.CaddyID)
 		if upstreamRows != nil {
@@ -707,6 +708,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA queue manager not initialized"})
 					return
 				}
+				log.Printf("CreateRule enqueueing cert job for caddy_id=%s domain=%s ca_provider_id=%d", caddyID, req.Domain, req.CAProviderID)
 				if err := services.CreateOrRequeueCertJob(caddyID, req.Domain, req.CAProviderID, qm); err != nil {
 					log.Printf("Auto cert enqueue failed for %s: %v", req.Domain, err)
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to enqueue certificate job: " + err.Error()})
@@ -755,8 +757,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 	}
 
-	log.Printf("UpdateRule request for caddy_id=%s: enable_tls=%v, tls_source=%s, cert_len=%d, key_len=%d",
-		caddyID, req.EnableTLS, req.TLSSource, len(req.TLSCert), len(req.TLSKey))
+	log.Printf("UpdateRule request for caddy_id=%s: enable_tls=%v, tls_source=%s, ca_provider_id=%v, cert_len=%d, key_len=%d",
+		caddyID, req.EnableTLS, req.TLSSource, func() interface{} {
+			if req.CAProviderID == nil {
+				return "<nil>"
+			}
+			return *req.CAProviderID
+		}(), len(req.TLSCert), len(req.TLSKey))
 
 	// When TLS is enabled on HTTP, default the port to 443 if the user didn't explicitly set one.
 	// For updates the port is fixed, so we only apply the default when an explicit port was not supplied.
@@ -1074,6 +1081,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 	rowsAffected, _ := res.RowsAffected()
+	log.Printf("UpdateRule executed for caddy_id=%s: rows_affected=%d ca_provider_id_included=%v", caddyID, rowsAffected, req.CAProviderID != nil)
 	if rowsAffected == 0 {
 		tx.Rollback()
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书申请中，请等待完成或失败后再修改规则"})
@@ -1113,27 +1121,26 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 
-	// If the domain changed for an ACME rule, remove stale certificate jobs
-	// and enqueue a new issuance for the updated domain.
-	if req.EnableTLS && req.TLSSource == "acme_dns" && domain != "" && domain != existingRule.Domain {
-		if _, err := db.DB.Exec("DELETE FROM cert_job_logs WHERE job_id IN (SELECT id FROM cert_jobs WHERE rule_id = ?)", caddyID); err != nil {
-			log.Printf("UpdateRule failed to delete old cert job logs for %s: %v", caddyID, err)
-		}
-		if _, err := db.DB.Exec("DELETE FROM cert_jobs WHERE rule_id = ?", caddyID); err != nil {
-			log.Printf("UpdateRule failed to delete old cert jobs for %s: %v", caddyID, err)
-		}
+	// If the domain or CA provider changed for an ACME rule, re-queue issuance.
+	// We do NOT delete the existing cert_job row: cert_pem/key_pem are kept so
+	// Caddy can continue serving the old certificate until the new one is issued.
+	caProviderID := existingRule.CAProviderID
+	if req.CAProviderID != nil {
+		caProviderID = *req.CAProviderID
+	}
+	domainChanged := req.EnableTLS && req.TLSSource == "acme_dns" && domain != "" && domain != existingRule.Domain
+	caProviderChanged := req.EnableTLS && req.TLSSource == "acme_dns" && domain != "" && caProviderID != existingRule.CAProviderID
+	if domainChanged || caProviderChanged {
+		log.Printf("UpdateRule ACME change for caddy_id=%s: domainChanged=%v caProviderChanged=%v oldCA=%d newCA=%d", caddyID, domainChanged, caProviderChanged, existingRule.CAProviderID, caProviderID)
 		go func() {
 			qm := services.GetCAQueueManager()
 			if qm == nil {
 				log.Printf("Auto cert enqueue failed for %s: CA queue manager not initialized", domain)
 				return
 			}
-			caProviderID := existingRule.CAProviderID
-			if req.CAProviderID != nil {
-				caProviderID = *req.CAProviderID
-			}
+			log.Printf("UpdateRule re-queueing cert job for caddy_id=%s domain=%s ca_provider_id=%d", caddyID, domain, caProviderID)
 			if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
-				log.Printf("Auto cert enqueue failed for %s: %v", domain, err)
+				log.Printf("Auto cert re-queue failed for %s: %v", domain, err)
 			}
 		}()
 	}

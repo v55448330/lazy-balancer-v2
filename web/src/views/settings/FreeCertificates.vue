@@ -407,10 +407,10 @@ const testCAProvider = async (p: CAProvider) => {
   testingCAId.value = p.id
   try {
     const res: any = await request.post(`/ca-providers/${p.id}/test`)
-    ElMessage.success(res.message || 'CA 配置有效')
+    ElMessage.success(res.message || 'CA 提供商测试通过')
   } catch (error: any) {
-    const msg = error?.response?.data?.message || error?.message || '测试失败'
-    ElMessage.error(msg)
+    // Error toast is already shown by the global axios interceptor.
+    console.error('Failed to test CA provider:', error)
   } finally {
     testingCAId.value = null
   }
