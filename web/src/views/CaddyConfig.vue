@@ -11,40 +11,115 @@
     </div>
 
     <el-row :gutter="20">
-      <el-col :span="24">
-        <el-card class="config-card">
+      <el-col :span="24" class="mb-5">
+        <el-card class="settings-card">
           <template #header>
             <div class="card-header">
               <div class="card-title">
-                <el-icon><Document /></el-icon>
-                <span>Caddy 配置预览 (JSON)</span>
-              </div>
-              <div class="card-actions">
-                <el-button size="small" @click="refreshConfig" :loading="loading">
-                  <el-icon><RefreshRight /></el-icon>刷新
-                </el-button>
+                <el-icon><Setting /></el-icon>
+                <span>Caddy 全局配置</span>
               </div>
             </div>
           </template>
-          <div v-loading="loading" class="config-preview">
-            <VueJsonPretty v-if="caddyConfigData" :data="caddyConfigData" :collapsed="false" show-length copyable :show-line="false" />
-            <pre v-else>{{ '正在加载...' }}</pre>
-          </div>
+          <el-row :gutter="24">
+            <el-col :span="18">
+              <el-form :model="caddySettings" label-width="160px">
+                <el-form-item label="日志路径">
+                  <el-input v-model="caddySettings.caddy_log_path" placeholder="/app/logs/caddy.log" />
+                </el-form-item>
+                <el-form-item label="日志级别">
+                  <el-select v-model="caddySettings.caddy_log_level" style="width: 100%">
+                    <el-option label="debug" value="debug" />
+                    <el-option label="info" value="info" />
+                    <el-option label="warn" value="warn" />
+                    <el-option label="error" value="error" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="日志大小 (MB)">
+                  <el-input-number v-model="caddySettings.caddy_log_size_mb" :min="0" controls-position="right" style="width: 100%" />
+                </el-form-item>
+                <el-form-item label="请求体最大大小 (MB)">
+                  <el-input-number v-model="caddySettings.request_body_max_size_mb" :min="0" controls-position="right" style="width: 100%" />
+                </el-form-item>
+                <el-form-item label="HTTP 读取超时 (秒)">
+                  <el-input-number v-model="caddySettings.http_read_timeout" :min="0" controls-position="right" style="width: 100%" />
+                </el-form-item>
+                <el-form-item label="HTTP 写入超时 (秒)">
+                  <el-input-number v-model="caddySettings.http_write_timeout" :min="0" controls-position="right" style="width: 100%" />
+                </el-form-item>
+                <el-form-item label="HTTP 空闲超时 (秒)">
+                  <el-input-number v-model="caddySettings.http_idle_timeout" :min="0" controls-position="right" style="width: 100%" />
+                </el-form-item>
+                <el-form-item label="上游 Keepalive 超时 (秒)">
+                  <el-input-number v-model="caddySettings.upstream_keepalive_timeout" :min="0" controls-position="right" style="width: 100%" />
+                </el-form-item>
+                <el-form-item label="隐藏 Server Tokens">
+                  <el-switch v-model="caddySettings.server_tokens_hidden" active-text="开启" inactive-text="关闭" />
+                </el-form-item>
+              </el-form>
+            </el-col>
+            <el-col :span="6" class="action-col">
+              <el-button type="primary" :loading="saving" style="width: 100%" @click="handleSave">保存</el-button>
+              <el-button type="warning" style="width: 100%" @click="handleReloadCaddy">重载 Caddy</el-button>
+            </el-col>
+          </el-row>
         </el-card>
+      </el-col>
+
+      <el-col :span="24">
+        <el-collapse v-model="activeCollapse" @change="onCollapseChange">
+          <el-collapse-item name="json-preview" title="Caddy 配置预览 (JSON)">
+            <el-card class="config-card">
+              <template #header>
+                <div class="card-header">
+                  <div class="card-title">
+                    <el-icon><Document /></el-icon>
+                    <span>Caddy 配置预览 (JSON)</span>
+                  </div>
+                  <div class="card-actions">
+                    <el-button size="small" :loading="loading" :disabled="!isJsonExpanded" @click="refreshConfig">
+                      <el-icon><RefreshRight /></el-icon>刷新
+                    </el-button>
+                  </div>
+                </div>
+              </template>
+              <div v-loading="loading" class="config-preview">
+                <VueJsonPretty v-if="caddyConfigData" :data="caddyConfigData" :collapsed="false" show-length copyable :show-line="false" />
+                <pre v-else>{{ '点击展开以加载配置' }}</pre>
+              </div>
+            </el-card>
+          </el-collapse-item>
+        </el-collapse>
       </el-col>
     </el-row>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { request } from '@/utils/api'
-import { Cpu, Document, RefreshRight } from '@element-plus/icons-vue'
+import { Cpu, Document, RefreshRight, Setting } from '@element-plus/icons-vue'
 import VueJsonPretty from 'vue-json-pretty'
 import 'vue-json-pretty/lib/styles.css'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const caddyConfigData = ref<any>(null)
 const loading = ref(false)
+
+const caddySettings = ref({
+  caddy_log_path: '/app/logs/caddy.log',
+  caddy_log_level: 'info',
+  caddy_log_size_mb: 100,
+  request_body_max_size_mb: 0,
+  http_read_timeout: 0,
+  http_write_timeout: 0,
+  http_idle_timeout: 0,
+  upstream_keepalive_timeout: 0,
+  server_tokens_hidden: false,
+})
+
+const saving = ref(false)
+const activeCollapse = ref<string[]>([])
 
 const fetchCaddyConfig = async () => {
   loading.value = true
@@ -60,12 +135,69 @@ const fetchCaddyConfig = async () => {
   }
 }
 
+const fetchGlobalConfig = async () => {
+  try {
+    const res = await request.get('/config')
+    if (res.data) {
+      caddySettings.value = {
+        caddy_log_path: res.data.caddy_log_path || '/app/logs/caddy.log',
+        caddy_log_level: res.data.caddy_log_level || 'info',
+        caddy_log_size_mb: res.data.caddy_log_size_mb ?? 100,
+        request_body_max_size_mb: res.data.request_body_max_size_mb ?? 0,
+        http_read_timeout: res.data.http_read_timeout ?? 0,
+        http_write_timeout: res.data.http_write_timeout ?? 0,
+        http_idle_timeout: res.data.http_idle_timeout ?? 0,
+        upstream_keepalive_timeout: res.data.upstream_keepalive_timeout ?? 0,
+        server_tokens_hidden: res.data.server_tokens_hidden ?? false,
+      }
+    }
+  } catch (e: any) {
+    console.error('Failed to fetch global config:', e)
+  }
+}
+
+const handleSave = async () => {
+  saving.value = true
+  try {
+    await request.put('/config', caddySettings.value)
+    ElMessage.success('保存成功')
+  } catch (e: any) {
+    ElMessage.error('保存失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+const handleReloadCaddy = async () => {
+  try {
+    await ElMessageBox.confirm('此操作将重新加载 Caddy 配置，是否继续？', '确认重载', {
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    await request.post('/config/reload')
+    ElMessage.success('Caddy 配置已重载')
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      console.error('Failed to reload Caddy:', error)
+    }
+  }
+}
+
+const isJsonExpanded = computed(() => activeCollapse.value.includes('json-preview'))
+
+const onCollapseChange = (val: string[]) => {
+  if (val.includes('json-preview') && !caddyConfigData.value) {
+    fetchCaddyConfig()
+  }
+}
+
 const refreshConfig = () => {
   fetchCaddyConfig()
 }
 
 onMounted(() => {
-  fetchCaddyConfig()
+  fetchGlobalConfig()
 })
 </script>
 
@@ -118,6 +250,15 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.action-col {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  border-left: 1px solid var(--border);
+  padding-left: 20px;
 }
 
 .config-preview {
@@ -193,5 +334,29 @@ onMounted(() => {
 
 :deep(.vjs-tree-brackets:hover) {
   color: #ffffff !important;
+}
+
+:deep(.el-collapse) {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+:deep(.el-collapse-item__header) {
+  padding: 14px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+}
+
+:deep(.el-collapse-item__content) {
+  padding: 0 16px 16px;
+  background: var(--bg-primary);
+}
+
+:deep(.el-collapse-item__wrap) {
+  background: var(--bg-primary);
 }
 </style>
