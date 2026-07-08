@@ -121,6 +121,9 @@ func createTables() error {
 		tcp_health_check_port INTEGER DEFAULT 0,
 		tcp_try_duration INTEGER DEFAULT 0,
 		tcp_try_interval INTEGER DEFAULT 250,
+		request_body_max_size_mb INTEGER DEFAULT 0,
+		upstream_keepalive_timeout INTEGER DEFAULT 0,
+		server_tokens_hidden INTEGER DEFAULT 0,
 		host_header VARCHAR(255),
 		enable_tls BOOLEAN DEFAULT FALSE,
 		tls_cert TEXT,
@@ -238,6 +241,12 @@ func createTables() error {
 		caddy_log_path VARCHAR(500) DEFAULT '/app/logs/caddy.log',
 		caddy_log_level VARCHAR(10) DEFAULT 'info',
 		caddy_log_size_mb INTEGER DEFAULT 100,
+		request_body_max_size_mb INTEGER DEFAULT 0,
+		http_read_timeout INTEGER DEFAULT 0,
+		http_write_timeout INTEGER DEFAULT 0,
+		http_idle_timeout INTEGER DEFAULT 0,
+		upstream_keepalive_timeout INTEGER DEFAULT 0,
+		server_tokens_hidden BOOLEAN DEFAULT FALSE,
 		cert_expiry_days INTEGER DEFAULT 30,
 		cert_renewal_days INTEGER DEFAULT 30,
 		last_sync DATETIME,
@@ -411,6 +420,36 @@ func runMigrations() error {
 		DB.Exec("ALTER TABLE global_config ADD COLUMN caddy_log_size_mb INTEGER DEFAULT 100")
 	}
 
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='request_body_max_size_mb'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE global_config ADD COLUMN request_body_max_size_mb INTEGER DEFAULT 0")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='http_read_timeout'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE global_config ADD COLUMN http_read_timeout INTEGER DEFAULT 0")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='http_write_timeout'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE global_config ADD COLUMN http_write_timeout INTEGER DEFAULT 0")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='http_idle_timeout'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE global_config ADD COLUMN http_idle_timeout INTEGER DEFAULT 0")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='upstream_keepalive_timeout'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE global_config ADD COLUMN upstream_keepalive_timeout INTEGER DEFAULT 0")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='server_tokens_hidden'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE global_config ADD COLUMN server_tokens_hidden BOOLEAN DEFAULT FALSE")
+	}
+
 	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='caddy_id'").Scan(&colCount)
 	if colCount == 0 {
 		DB.Exec("ALTER TABLE lb_rules ADD COLUMN caddy_id VARCHAR(20)")
@@ -454,6 +493,21 @@ func runMigrations() error {
 	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='tcp_try_interval'").Scan(&colCount)
 	if colCount == 0 {
 		DB.Exec("ALTER TABLE lb_rules ADD COLUMN tcp_try_interval INTEGER DEFAULT 250")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='request_body_max_size_mb'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE lb_rules ADD COLUMN request_body_max_size_mb INTEGER DEFAULT 0")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='upstream_keepalive_timeout'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE lb_rules ADD COLUMN upstream_keepalive_timeout INTEGER DEFAULT 0")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='server_tokens_hidden'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE lb_rules ADD COLUMN server_tokens_hidden INTEGER DEFAULT 0")
 	}
 
 	// certificate_configs schema migration: move from legacy dns_id/dns_key to JSON dns_credentials
@@ -629,6 +683,9 @@ func migrateLbRulesPrimaryKey() error {
 			tcp_health_check_port INTEGER DEFAULT 0,
 			tcp_try_duration INTEGER DEFAULT 0,
 			tcp_try_interval INTEGER DEFAULT 250,
+			request_body_max_size_mb INTEGER DEFAULT 0,
+			upstream_keepalive_timeout INTEGER DEFAULT 0,
+			server_tokens_hidden INTEGER DEFAULT 0,
 			host_header VARCHAR(255),
 			enable_tls BOOLEAN DEFAULT FALSE,
 			tls_cert TEXT,
@@ -662,6 +719,7 @@ func migrateLbRulesPrimaryKey() error {
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
+			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			host_header, enable_tls, tls_cert,
 			tls_key, tls_http_redirect, tls_source, acme_config_id,
 			ca_provider_id, enable_compress, compress_types, enabled,
@@ -673,6 +731,7 @@ func migrateLbRulesPrimaryKey() error {
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
+			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			host_header, enable_tls, tls_cert,
 			tls_key, tls_http_redirect, tls_source, acme_config_id,
 			ca_provider_id, enable_compress, compress_types, enabled,
