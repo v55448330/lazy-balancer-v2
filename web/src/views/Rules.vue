@@ -583,6 +583,26 @@
                 <span class="form-tip-inline">毫秒，每次重试间隔；0 表示使用 Caddy 默认间隔</span>
               </el-form-item>
             </template>
+
+            <el-divider content-position="left" class="compact-divider">Caddy 全局覆盖</el-divider>
+
+            <el-form-item label="请求体大小">
+              <el-input-number v-model="wizardForm.request_body_max_size_mb" :min="0" :max="10240" controls-position="right" style="width: 120px;" />
+              <span class="form-tip-inline">MB，0 表示使用全局默认值</span>
+            </el-form-item>
+
+            <el-form-item label="上游 keepalive">
+              <el-input-number v-model="wizardForm.upstream_keepalive_timeout" :min="0" :max="3600" controls-position="right" style="width: 120px;" />
+              <span class="form-tip-inline">秒，0 表示使用全局默认值</span>
+            </el-form-item>
+
+            <el-form-item label="Server 响应头">
+              <el-select v-model="wizardForm.server_tokens_hidden" style="width: 180px;">
+                <el-option :value="0" label="使用全局默认值" />
+                <el-option :value="1" label="隐藏" />
+                <el-option :value="2" label="显示" />
+              </el-select>
+            </el-form-item>
           </el-form>
         </div>
 
@@ -733,6 +753,9 @@
             </template>
             <template v-else>禁用</template>
           </el-descriptions-item>
+          <el-descriptions-item label="请求体大小">{{ (ruleConfig.request_body_max_size_mb || 0) > 0 ? ruleConfig.request_body_max_size_mb + 'MB' : '全局默认' }}</el-descriptions-item>
+          <el-descriptions-item label="上游 keepalive">{{ (ruleConfig.upstream_keepalive_timeout || 0) > 0 ? ruleConfig.upstream_keepalive_timeout + 's' : '全局默认' }}</el-descriptions-item>
+          <el-descriptions-item label="Server 头">{{ serverTokensLabel(ruleConfig.server_tokens_hidden) }}</el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="ruleConfig.enabled ? 'success' : 'info'" size="small">{{ ruleConfig.enabled ? '启用' : '禁用' }}</el-tag>
           </el-descriptions-item>
@@ -821,6 +844,9 @@ interface Rule {
   tls_http_redirect: boolean
   enable_compress: boolean
   compress_types: string
+  request_body_max_size_mb?: number
+  upstream_keepalive_timeout?: number
+  server_tokens_hidden?: number
   enabled: boolean
   created_by?: number
   updated_by?: number
@@ -1045,6 +1071,9 @@ const ruleConfig = ref<{
   tcp_health_check_port: number
   tcp_try_duration: number
   tcp_try_interval: number
+  request_body_max_size_mb: number
+  upstream_keepalive_timeout: number
+  server_tokens_hidden: number
   upstreams: any[]
   enabled: boolean
   config: any
@@ -1226,6 +1255,9 @@ const wizardForm = reactive<Rule>({
   tls_http_redirect: false,
   enable_compress: false,
   compress_types: 'gzip',
+  request_body_max_size_mb: 0,
+  upstream_keepalive_timeout: 0,
+  server_tokens_hidden: 0,
   enabled: true,
 })
 
@@ -1348,6 +1380,15 @@ const getStrategyLabel = (strategy: string) => {
     ip_hash: 'IP 哈希',
   }
   return labels[strategy] || strategy
+}
+
+const serverTokensLabel = (value: number | undefined) => {
+  const labels: Record<number, string> = {
+    0: '使用全局默认值',
+    1: '隐藏',
+    2: '显示',
+  }
+  return labels[value || 0] || '使用全局默认值'
 }
 
 const fetchUsers = async () => {
@@ -1529,6 +1570,9 @@ const openWizard = (rule?: Rule) => {
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
       compress_types: compressType,
+      request_body_max_size_mb: (rule as any).request_body_max_size_mb || 0,
+      upstream_keepalive_timeout: (rule as any).upstream_keepalive_timeout || 0,
+      server_tokens_hidden: (rule as any).server_tokens_hidden || 0,
       enabled: rule.enabled,
     })
   } else {
@@ -1563,6 +1607,9 @@ const openWizard = (rule?: Rule) => {
       tls_http_redirect: false,
       enable_compress: false,
       compress_types: 'gzip',
+      request_body_max_size_mb: 0,
+      upstream_keepalive_timeout: 0,
+      server_tokens_hidden: 0,
       enabled: true,
     })
   }
@@ -1734,6 +1781,9 @@ const submitWizard = async () => {
       tls_http_redirect: wizardForm.tls_http_redirect,
       enable_compress: wizardForm.enable_compress,
       compress_types: wizardForm.compress_types || 'gzip',
+      request_body_max_size_mb: wizardForm.request_body_max_size_mb || 0,
+      upstream_keepalive_timeout: wizardForm.upstream_keepalive_timeout || 0,
+      server_tokens_hidden: wizardForm.server_tokens_hidden || 0,
       enabled: wizardForm.enabled,
     }
 
@@ -1883,6 +1933,9 @@ const viewConfig = async (rule: Rule) => {
       tcp_health_check_port: (rule as any).tcp_health_check_port || 0,
       tcp_try_duration: (rule as any).tcp_try_duration || 0,
       tcp_try_interval: (rule as any).tcp_try_interval || 250,
+      request_body_max_size_mb: (rule as any).request_body_max_size_mb || 0,
+      upstream_keepalive_timeout: (rule as any).upstream_keepalive_timeout || 0,
+      server_tokens_hidden: (rule as any).server_tokens_hidden || 0,
       upstreams: rule.upstreams || [],
       enabled: rule.enabled !== false,
       config: res.data?.config || {}
@@ -1915,6 +1968,9 @@ const viewConfig = async (rule: Rule) => {
       tcp_health_check_port: (rule as any).tcp_health_check_port || 0,
       tcp_try_duration: (rule as any).tcp_try_duration || 0,
       tcp_try_interval: (rule as any).tcp_try_interval || 250,
+      request_body_max_size_mb: (rule as any).request_body_max_size_mb || 0,
+      upstream_keepalive_timeout: (rule as any).upstream_keepalive_timeout || 0,
+      server_tokens_hidden: (rule as any).server_tokens_hidden || 0,
       upstreams: rule.upstreams || [],
       enabled: rule.enabled !== false,
       config: { error: '获取配置失败', details: e.message }
