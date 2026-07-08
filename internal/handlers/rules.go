@@ -20,7 +20,8 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		SELECT COALESCE(caddy_id,'') AS caddy_id, name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port, strategy,
 		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval,
-		       COALESCE(enable_active_health_check,0), COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_http_redirect,0),
+		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
+		       COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_http_redirect,0),
 		       COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), enabled, created_by, created_at, updated_at, updated_by,
 		       COALESCE(host_header,'')
 		FROM lb_rules ORDER BY id
@@ -42,10 +43,12 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		var createdAt sql.NullTime
 		var updatedAt sql.NullTime
 		var updatedBy sql.NullInt64
+		var tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
 		err := rows.Scan(&r.CaddyID, &r.Name, &description, &r.Protocol, &domain, &r.ListenPort, &strategy,
 			&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
 			&r.HealthCheckPath, &r.HealthCheckInterval,
-			&enableActiveHealthCheck, &enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &tlsCert, &tlsKey, &tlsHTTPRedirect,
+			&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
+			&enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &tlsCert, &tlsKey, &tlsHTTPRedirect,
 			&enableCompress, &compressTypes, &r.Enabled, &createdBy, &createdAt, &updatedAt, &updatedBy,
 			&hostHeader)
 		if err != nil {
@@ -73,6 +76,9 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		r.EnableDnsServer = enableDnsServer
 		r.DnsFamily = dnsFamily
 		r.EnableActiveHealthCheck = enableActiveHealthCheck
+		r.TCPHealthCheckPort = tcpHealthCheckPort
+		r.TCPTryDuration = tcpTryDuration
+		r.TCPTryInterval = tcpTryInterval
 		r.EnableTLS = enableTLS
 		r.TLSSource = tlsSource
 		r.ACMEConfigID = acmeConfigID
@@ -107,12 +113,14 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	var domain, strategy, hostHeader, dnsFamily, tlsSource string
 	var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect bool
 	var acmeConfigID int
+	var tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
 	err := db.DB.QueryRow(`
 		SELECT name, protocol, COALESCE(domain,''), listen_port, strategy,
 		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval,
 		       health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
-		       COALESCE(enable_active_health_check,0), COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
+		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
+		       COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
 		       COALESCE(tls_http_redirect,0),
 		       enabled, created_at, updated_at, COALESCE(host_header,''), caddy_id
 		FROM lb_rules WHERE caddy_id = ?
@@ -120,7 +128,8 @@ func (h *Handlers) GetRule(c *gin.Context) {
 		&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
 		&r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout,
 		&r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
-		&enableActiveHealthCheck, &enableTLS, &tlsSource, &acmeConfigID, &r.TLSCert, &r.TLSKey, &tlsHTTPRedirect,
+		&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
+		&enableTLS, &tlsSource, &acmeConfigID, &r.TLSCert, &r.TLSKey, &tlsHTTPRedirect,
 		&r.Enabled, &r.CreatedAt, &r.UpdatedAt, &hostHeader, &r.CaddyID)
 
 	if err == sql.ErrNoRows {
@@ -142,6 +151,9 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	r.EnableDnsServer = enableDnsServer
 	r.DnsFamily = dnsFamily
 	r.EnableActiveHealthCheck = enableActiveHealthCheck
+	r.TCPHealthCheckPort = tcpHealthCheckPort
+	r.TCPTryDuration = tcpTryDuration
+	r.TCPTryInterval = tcpTryInterval
 	r.EnableTLS = enableTLS
 	r.TLSSource = tlsSource
 	r.ACMEConfigID = acmeConfigID
@@ -179,6 +191,10 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		HealthCheckTimeout            int
 		HealthCheckUnhealthyThreshold int
 		HealthCheckHealthyThreshold   int
+		EnableActiveHealthCheck       bool
+		TCPHealthCheckPort            int
+		TCPTryDuration                int
+		TCPTryInterval                int
 		EnableTLS                     bool
 		TLSCert                       string
 		TLSKey                        string
@@ -186,7 +202,6 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		Enabled                       bool
 		EnableCompress                bool
 		CompressTypes                 string
-		EnableActiveHealthCheck       bool
 		HostHeader                    string
 		CaddyID                       string
 	}
@@ -201,17 +216,19 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''),
 		       COALESCE(dns_family,'ipv4'), health_check_path, health_check_interval,
 		       health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
+		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		       COALESCE(enable_tls,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
 		       COALESCE(tls_http_redirect,0),
 		       enabled, COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
-		       COALESCE(enable_active_health_check,0), COALESCE(host_header,''), COALESCE(caddy_id,'')
+		       COALESCE(host_header,''), COALESCE(caddy_id,'')
 		FROM lb_rules WHERE caddy_id = ?
 	`, caddyID).Scan(&r.Name, &r.Protocol, &domain, &r.ListenPort, &strategy,
 		&dynamicDNS, &enableDnsServer, &r.DnsServer, &r.DnsFamily, &r.HealthCheckPath, &r.HealthCheckInterval,
 		&r.HealthCheckTimeout, &r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
+		&enableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPTryDuration, &r.TCPTryInterval,
 		&enableTLS, &tlsCert, &tlsKey, &tlsHTTPRedirect,
 		&r.Enabled, &enableCompress, &compressTypes,
-		&enableActiveHealthCheck, &hostHeader, &r.CaddyID)
+		&hostHeader, &r.CaddyID)
 
 	if err != nil {
 		log.Printf("GetRuleCaddyConfig: query/scan error for rule caddy_id=%s: %v", caddyID, err)
@@ -233,6 +250,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		r.Strategy = "round_robin"
 	}
 	r.DynamicDNS = dynamicDNS
+	r.EnableDnsServer = enableDnsServer
 	r.EnableActiveHealthCheck = enableActiveHealthCheck
 	r.EnableTLS = enableTLS
 	r.TLSCert = tlsCert
@@ -558,13 +576,16 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		HealthCheckInterval:           req.HealthCheckInterval,
 		HealthCheckTimeout:            req.HealthCheckTimeout,
 		HealthCheckUnhealthyThreshold: req.HealthCheckUnhealthyThreshold,
+		EnableActiveHealthCheck:       req.EnableActiveHealthCheck,
+		TCPHealthCheckPort:            req.TCPHealthCheckPort,
+		TCPTryDuration:                req.TCPTryDuration,
+		TCPTryInterval:                req.TCPTryInterval,
 		EnableTLS:                     req.EnableTLS,
 		TLSSource:                     req.TLSSource,
 		ACMEConfigID:                  req.ACMEConfigID,
 		TLSHTTPRedirect:               req.TLSHTTPRedirect,
 		EnableCompress:                req.EnableCompress,
 		CompressTypes:                 req.CompressTypes,
-		EnableActiveHealthCheck:       req.EnableActiveHealthCheck,
 		HostHeader:                    req.HostHeader,
 		CaddyID:                       caddyID,
 	}
@@ -583,6 +604,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		}
 		ruleConfig.Upstreams = append(ruleConfig.Upstreams, services.UpstreamConfig{
 			Host: u.Host, Port: u.Port, Weight: weight, Protocol: protocol, Enabled: u.Enabled,
+			MaxConnections: u.MaxConnections, ProxyProtocol: u.ProxyProtocol,
 		})
 	}
 
@@ -603,13 +625,15 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
-			enable_active_health_check, host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
+			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
+			host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
 			enable_compress, compress_types, enabled, created_by, updated_at, caddy_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
-		req.EnableActiveHealthCheck, req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.CAProviderID, req.TLSCert, req.TLSKey,
+		req.EnableActiveHealthCheck, req.TCPHealthCheckPort, req.TCPTryDuration, req.TCPTryInterval,
+		req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.CAProviderID, req.TLSCert, req.TLSKey,
 		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, 1, userIDInt, time.Now().Format("2006-01-02 15:04:05"), caddyID)
 
 	if err != nil {
@@ -824,7 +848,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 			COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,5),
 			COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
-			COALESCE(enable_active_health_check,0), COALESCE(host_header,''), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
+			COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
+			COALESCE(host_header,''), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
 			COALESCE(enabled,1), name, description
 		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(
 		&existingRule.Protocol, &existingRule.Domain, &existingRule.ListenPort, &existingRule.Strategy,
@@ -834,7 +859,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		&existingRule.DynamicDNS, &existingRule.EnableDnsServer, &existingRule.DnsServer, &existingRule.DnsFamily,
 		&existingRule.HealthCheckPath, &existingRule.HealthCheckInterval, &existingRule.HealthCheckTimeout,
 		&existingRule.HealthCheckUnhealthyThreshold, &existingRule.HealthCheckHealthyThreshold,
-		&existingRule.EnableActiveHealthCheck, &existingRule.HostHeader, &existingRule.EnableCompress, &existingRule.CompressTypes,
+		&existingRule.EnableActiveHealthCheck, &existingRule.TCPHealthCheckPort, &existingRule.TCPTryDuration, &existingRule.TCPTryInterval,
+		&existingRule.HostHeader, &existingRule.EnableCompress, &existingRule.CompressTypes,
 		&existingRule.Enabled, &existingRule.Name, &existingRule.Description)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Rule not found"})
@@ -886,6 +912,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	if req.HealthCheckHealthyThreshold == 0 {
 		req.HealthCheckHealthyThreshold = existingRule.HealthCheckHealthyThreshold
+	}
+	if req.TCPHealthCheckPort == 0 {
+		req.TCPHealthCheckPort = existingRule.TCPHealthCheckPort
+	}
+	if req.TCPTryDuration == 0 {
+		req.TCPTryDuration = existingRule.TCPTryDuration
+	}
+	if req.TCPTryInterval == 0 {
+		req.TCPTryInterval = existingRule.TCPTryInterval
 	}
 	if req.CompressTypes == "" {
 		req.CompressTypes = existingRule.CompressTypes
@@ -968,6 +1003,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	args = append(args, req.HealthCheckHealthyThreshold)
 	query += "enable_active_health_check = ?, "
 	args = append(args, req.EnableActiveHealthCheck)
+	query += "tcp_health_check_port = ?, "
+	args = append(args, req.TCPHealthCheckPort)
+	query += "tcp_try_duration = ?, "
+	args = append(args, req.TCPTryDuration)
+	query += "tcp_try_interval = ?, "
+	args = append(args, req.TCPTryInterval)
 	query += "host_header = ?, "
 	args = append(args, req.HostHeader)
 	query += "enable_tls = ?, "
@@ -1018,13 +1059,16 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		HealthCheckInterval:           req.HealthCheckInterval,
 		HealthCheckTimeout:            req.HealthCheckTimeout,
 		HealthCheckUnhealthyThreshold: req.HealthCheckUnhealthyThreshold,
+		EnableActiveHealthCheck:       req.EnableActiveHealthCheck,
+		TCPHealthCheckPort:            req.TCPHealthCheckPort,
+		TCPTryDuration:                req.TCPTryDuration,
+		TCPTryInterval:                req.TCPTryInterval,
 		EnableTLS:                     req.EnableTLS,
 		TLSSource:                     req.TLSSource,
 		ACMEConfigID:                  req.ACMEConfigID,
 		TLSHTTPRedirect:               req.TLSHTTPRedirect,
 		EnableCompress:                req.EnableCompress,
 		CompressTypes:                 req.CompressTypes,
-		EnableActiveHealthCheck:       req.EnableActiveHealthCheck,
 		HostHeader:                    req.HostHeader,
 		CaddyID:                       caddyID,
 	}
@@ -1043,6 +1087,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 		ruleConfig.Upstreams = append(ruleConfig.Upstreams, services.UpstreamConfig{
 			Host: u.Host, Port: u.Port, Weight: weight, Protocol: protocol, Enabled: u.Enabled,
+			MaxConnections: u.MaxConnections, ProxyProtocol: u.ProxyProtocol,
 		})
 	}
 
@@ -1205,13 +1250,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			}
 		}
 
-	// Handle re-enabling an ACME rule or switching its TLS source to ACME DNS
-	// when no cert job row exists yet (any status). Existing rows are left
-	// alone since the ON CONFLICT and queue/renewal logic handle the rest.
-	wasReEnabled := !existingRule.Enabled && req.Enabled
-	tlsSourceChangedToACME := existingRule.TLSSource != "acme_dns" && req.TLSSource == "acme_dns"
-	if (wasReEnabled || tlsSourceChangedToACME) && req.EnableTLS && req.TLSSource == "acme_dns" && domain != "" {
-		if !services.HasCertJob(caddyID, domain) {
+		// Handle re-enabling an ACME rule or switching its TLS source to ACME DNS
+		// when no cert job row exists yet (any status). Existing rows are left
+		// alone since the ON CONFLICT and queue/renewal logic handle the rest.
+		wasReEnabled := !existingRule.Enabled && req.Enabled
+		tlsSourceChangedToACME := existingRule.TLSSource != "acme_dns" && req.TLSSource == "acme_dns"
+		if (wasReEnabled || tlsSourceChangedToACME) && req.EnableTLS && req.TLSSource == "acme_dns" && domain != "" {
+			if !services.HasCertJob(caddyID, domain) {
 				go func() {
 					qm := services.GetCAQueueManager()
 					if qm == nil {
@@ -1367,10 +1412,13 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 
 	var rule models.LbRule
+	var enableActiveHealthCheck bool
+	var tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
 	err := db.DB.QueryRow(`
 		SELECT caddy_id, name, protocol, domain, listen_port, strategy, dynamic_dns,
 		       health_check_path, health_check_interval, health_check_timeout,
 		       health_check_unhealthy_threshold, health_check_healthy_threshold,
+		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		       enable_tls, COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), tls_cert, tls_key,
 		       tls_http_redirect, COALESCE(enable_compress,1), COALESCE(compress_types,'gzip,zstd'), enabled, created_by,
 		       COALESCE(host_header,''), COALESCE(dns_server,'')
@@ -1379,6 +1427,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		&rule.CaddyID, &rule.Name, &rule.Protocol, &rule.Domain, &rule.ListenPort, &rule.Strategy,
 		&rule.DynamicDNS, &rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout,
 		&rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
+		&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
 		&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.TLSCert, &rule.TLSKey,
 		&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.CreatedBy,
 		&rule.HostHeader, &rule.DnsServer,
@@ -1387,6 +1436,11 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Rule not found"})
 		return
 	}
+
+	rule.EnableActiveHealthCheck = enableActiveHealthCheck
+	rule.TCPHealthCheckPort = tcpHealthCheckPort
+	rule.TCPTryDuration = tcpTryDuration
+	rule.TCPTryInterval = tcpTryInterval
 
 	userID, _ := c.Get("user_id")
 
@@ -1401,12 +1455,14 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		INSERT INTO lb_rules (name, protocol, domain, listen_port, strategy, dynamic_dns, dns_server,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
+			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
 			enable_tls, tls_source, acme_config_id, tls_cert, tls_key,
 			tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, caddy_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, rule.Name+" (Copy)", rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 		rule.DynamicDNS, rule.DnsServer, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 		rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
+		rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPTryDuration, rule.TCPTryInterval,
 		rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.TLSCert, rule.TLSKey,
 		rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, 0, userID, userID,
 		now, now, rule.HostHeader, newCaddyID,

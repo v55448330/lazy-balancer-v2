@@ -416,22 +416,27 @@ func (s *SyncService) applySyncData(data models.SyncData) error {
 
 		for _, rule := range data.Rules {
 			tx.Exec(`
-				INSERT INTO lb_rules (id, name, protocol, domain, listen_port, strategy, 
-					dynamic_dns, health_check_path, health_check_interval, health_check_timeout,
+				INSERT INTO lb_rules (id, caddy_id, name, description, protocol, domain, listen_port, strategy, 
+					dynamic_dns, enable_dns_server, dns_server, dns_family,
+					health_check_path, health_check_interval, health_check_timeout,
 					health_check_unhealthy_threshold, health_check_healthy_threshold,
-					enable_tls, tls_cert, tls_key, tls_http_redirect, enabled)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, rule.ID, rule.Name, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
-				rule.DynamicDNS, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
+					enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval, host_header,
+					enable_tls, tls_source, tls_cert, tls_key, tls_http_redirect, 
+					enable_compress, compress_types, enabled, created_by, updated_by)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, rule.ID, rule.CaddyID, rule.Name, rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
+				rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily,
+				rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 				rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
-				rule.EnableTLS, rule.TLSCert, rule.TLSKey,
-				rule.TLSHTTPRedirect, rule.Enabled)
+				rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPTryDuration, rule.TCPTryInterval, rule.HostHeader,
+				rule.EnableTLS, rule.TLSSource, rule.TLSCert, rule.TLSKey, rule.TLSHTTPRedirect,
+				rule.EnableCompress, rule.CompressTypes, rule.Enabled, rule.CreatedBy, rule.UpdatedBy)
 
 			for _, u := range rule.Upstreams {
 				tx.Exec(`
-					INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled)
-					VALUES (?, ?, ?, ?, ?, ?, ?)
-				`, rule.ID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled)
+					INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, dns_server, max_connections, proxy_protocol)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				`, rule.CaddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.DnsServer, u.MaxConnections, u.ProxyProtocol)
 			}
 		}
 	}
@@ -458,4 +463,3 @@ func (s *SyncService) applySyncData(data models.SyncData) error {
 
 	return nil
 }
-

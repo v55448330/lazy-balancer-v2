@@ -26,7 +26,6 @@ func (h *Handlers) GetSyncStatus(c *gin.Context) {
 	}})
 }
 
-
 func (h *Handlers) GetSyncConfig(c *gin.Context) {
 	// Get current config version
 	var version int64
@@ -38,6 +37,7 @@ func (h *Handlers) GetSyncConfig(c *gin.Context) {
 		       COALESCE(dynamic_dns,0), COALESCE(dns_server,''),
 		       health_check_path, health_check_interval,
 		       health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
+		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		       COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_http_redirect,0),
 		       enabled, created_at, updated_at
 		FROM lb_rules
@@ -48,11 +48,12 @@ func (h *Handlers) GetSyncConfig(c *gin.Context) {
 	for rows.Next() {
 		var r models.LbRule
 		var domain, strategy, tlsSource string
-		var dynamicDNS, enableTLS, tlsHTTPRedirect bool
-		var acmeConfigID int
+		var dynamicDNS, enableTLS, tlsHTTPRedirect, enableActiveHealthCheck bool
+		var acmeConfigID, tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
 		err := rows.Scan(&r.ID, &r.CaddyID, &r.Name, &r.Protocol, &domain, &r.ListenPort, &strategy,
 			&dynamicDNS, &r.DnsServer, &r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout,
 			&r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
+			&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
 			&enableTLS, &tlsSource, &acmeConfigID, &tlsHTTPRedirect,
 			&r.Enabled, &r.CreatedAt, &r.UpdatedAt)
 		if err != nil {
@@ -68,6 +69,10 @@ func (h *Handlers) GetSyncConfig(c *gin.Context) {
 		r.DynamicDNS = dynamicDNS
 		r.EnableTLS = enableTLS
 		r.TLSHTTPRedirect = tlsHTTPRedirect
+		r.EnableActiveHealthCheck = enableActiveHealthCheck
+		r.TCPHealthCheckPort = tcpHealthCheckPort
+		r.TCPTryDuration = tcpTryDuration
+		r.TCPTryInterval = tcpTryInterval
 
 		// Get upstreams for this rule
 		upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'') FROM upstreams WHERE rule_id = ?`, r.CaddyID)
@@ -109,7 +114,6 @@ func (h *Handlers) GetSyncConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: syncData})
 }
 
-
 func (h *Handlers) ManualSync(c *gin.Context) {
 	if err := h.syncService.SyncFromMaster(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -117,4 +121,3 @@ func (h *Handlers) ManualSync(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Sync completed"})
 }
-
