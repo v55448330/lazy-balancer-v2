@@ -2349,6 +2349,27 @@ type UpstreamConfig struct {
 	ProxyProtocol  string
 }
 
+func resolveRuleOverrides(rule SingleRuleConfig) (requestBodyMaxSizeMB int, upstreamKeepalive int, hideServer bool) {
+	requestBodyMaxSizeMB = rule.RequestBodyMaxSizeMB
+	if requestBodyMaxSizeMB <= 0 {
+		requestBodyMaxSizeMB = rule.GlobalRequestBodyMaxSizeMB
+	}
+
+	upstreamKeepalive = rule.UpstreamKeepaliveTimeout
+	if upstreamKeepalive <= 0 {
+		upstreamKeepalive = rule.GlobalUpstreamKeepaliveTimeout
+	}
+
+	hideServer = rule.GlobalServerTokensHidden
+	if rule.ServerTokensHidden == 1 {
+		hideServer = true
+	} else if rule.ServerTokensHidden == 2 {
+		hideServer = false
+	}
+
+	return requestBodyMaxSizeMB, upstreamKeepalive, hideServer
+}
+
 func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{} {
 	if rule.Strategy == "" {
 		rule.Strategy = "round_robin"
@@ -2410,10 +2431,8 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 		var handleChain []interface{}
 
-		effectiveRequestBodyMaxSizeMB := rule.RequestBodyMaxSizeMB
-		if effectiveRequestBodyMaxSizeMB <= 0 {
-			effectiveRequestBodyMaxSizeMB = rule.GlobalRequestBodyMaxSizeMB
-		}
+		effectiveRequestBodyMaxSizeMB, effectiveUpstreamKeepaliveTimeout, effectiveServerTokensHidden := resolveRuleOverrides(rule)
+
 		if effectiveRequestBodyMaxSizeMB > 0 {
 			handleChain = append([]interface{}{
 				map[string]interface{}{
@@ -2421,18 +2440,6 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 					"max_size": effectiveRequestBodyMaxSizeMB * 1024 * 1024,
 				},
 			}, handleChain...)
-		}
-
-		effectiveUpstreamKeepaliveTimeout := rule.UpstreamKeepaliveTimeout
-		if effectiveUpstreamKeepaliveTimeout <= 0 {
-			effectiveUpstreamKeepaliveTimeout = rule.GlobalUpstreamKeepaliveTimeout
-		}
-
-		effectiveServerTokensHidden := rule.GlobalServerTokensHidden
-		if rule.ServerTokensHidden == 1 {
-			effectiveServerTokensHidden = true
-		} else if rule.ServerTokensHidden == 2 {
-			effectiveServerTokensHidden = false
 		}
 
 		if rule.EnableCompress && rule.CompressTypes != "" {
@@ -2522,8 +2529,6 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			}
 		}
 
-		handleChain = append(handleChain, proxyConfig)
-
 		if effectiveServerTokensHidden {
 			handleChain = append(handleChain, map[string]interface{}{
 				"handler": "headers",
@@ -2532,6 +2537,8 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 				},
 			})
 		}
+
+		handleChain = append(handleChain, proxyConfig)
 
 		var routes []interface{}
 		route := map[string]interface{}{
@@ -2765,10 +2772,8 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 		hasHTTPSUpstream := false
 		upstreamList := make([]interface{}, 0)
 
-		effectiveRequestBodyMaxSizeMB := rule.RequestBodyMaxSizeMB
-		if effectiveRequestBodyMaxSizeMB <= 0 {
-			effectiveRequestBodyMaxSizeMB = rule.GlobalRequestBodyMaxSizeMB
-		}
+		effectiveRequestBodyMaxSizeMB, effectiveUpstreamKeepaliveTimeout, effectiveServerTokensHidden := resolveRuleOverrides(rule)
+
 		if effectiveRequestBodyMaxSizeMB > 0 {
 			handleChain = append([]interface{}{
 				map[string]interface{}{
@@ -2776,18 +2781,6 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 					"max_size": effectiveRequestBodyMaxSizeMB * 1024 * 1024,
 				},
 			}, handleChain...)
-		}
-
-		effectiveUpstreamKeepaliveTimeout := rule.UpstreamKeepaliveTimeout
-		if effectiveUpstreamKeepaliveTimeout <= 0 {
-			effectiveUpstreamKeepaliveTimeout = rule.GlobalUpstreamKeepaliveTimeout
-		}
-
-		effectiveServerTokensHidden := rule.GlobalServerTokensHidden
-		if rule.ServerTokensHidden == 1 {
-			effectiveServerTokensHidden = true
-		} else if rule.ServerTokensHidden == 2 {
-			effectiveServerTokensHidden = false
 		}
 
 		for _, u := range enabledUpstreams {

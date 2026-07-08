@@ -338,10 +338,12 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		requestBodyMaxSizeMB, upstreamKeepaliveTimeout int
 		serverTokensHidden                             bool
 	}
-	db.DB.QueryRow(`
+	if err := db.DB.QueryRow(`
 		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE)
 		FROM global_config WHERE id = 1
-	`).Scan(&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout, &global.serverTokensHidden)
+	`).Scan(&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout, &global.serverTokensHidden); err != nil {
+		return fmt.Errorf("failed to load global config: %v", err)
+	}
 
 		ruleConfig := services.SingleRuleConfig{
 		Protocol:                       data.Protocol,

@@ -546,6 +546,19 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		req.CompressTypes = "gzip"
 	}
 
+	if req.RequestBodyMaxSizeMB < 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "request_body max size must be >= 0"})
+		return
+	}
+	if req.UpstreamKeepaliveTimeout < 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "upstream keepalive timeout must be >= 0"})
+		return
+	}
+	if req.ServerTokensHidden < 0 || req.ServerTokensHidden > 2 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden must be 0, 1, or 2"})
+		return
+	}
+
 	// Determine server name based on port, protocol and TLS status
 	var serverName string
 	var listenPort int
@@ -578,35 +591,51 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return
 	}
 
+	var global struct {
+		requestBodyMaxSizeMB, upstreamKeepaliveTimeout int
+		serverTokensHidden                             bool
+	}
+	if err := db.DB.QueryRow(`
+		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE)
+		FROM global_config WHERE id = 1
+	`).Scan(&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout, &global.serverTokensHidden); err != nil {
+		log.Printf("CreateRule failed to load global config: %v", err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to load global config"})
+		return
+	}
+
 	// Build route config for Caddy validation (using request data before DB write)
 	ruleConfig := services.SingleRuleConfig{
-		Protocol:                      req.Protocol,
-		Domain:                        req.Domain,
-		ListenPort:                    listenPort,
-		Strategy:                      req.Strategy,
-		DynamicDNS:                    req.DynamicDNS,
-		EnableDnsServer:               req.EnableDnsServer,
-		DnsServer:                     req.DnsServer,
-		DnsFamily:                     req.DnsFamily,
-		HealthCheckPath:               req.HealthCheckPath,
-		HealthCheckInterval:           req.HealthCheckInterval,
-		HealthCheckTimeout:            req.HealthCheckTimeout,
-		HealthCheckUnhealthyThreshold: req.HealthCheckUnhealthyThreshold,
-		EnableActiveHealthCheck:       req.EnableActiveHealthCheck,
-		TCPHealthCheckPort:            req.TCPHealthCheckPort,
-		TCPTryDuration:                req.TCPTryDuration,
-		TCPTryInterval:                req.TCPTryInterval,
-		RequestBodyMaxSizeMB:          req.RequestBodyMaxSizeMB,
-		UpstreamKeepaliveTimeout:      req.UpstreamKeepaliveTimeout,
-		ServerTokensHidden:            req.ServerTokensHidden,
-		EnableTLS:                     req.EnableTLS,
-		TLSSource:                     req.TLSSource,
-		ACMEConfigID:                  req.ACMEConfigID,
-		TLSHTTPRedirect:               req.TLSHTTPRedirect,
-		EnableCompress:                req.EnableCompress,
-		CompressTypes:                 req.CompressTypes,
-		HostHeader:                    req.HostHeader,
-		CaddyID:                       caddyID,
+		Protocol:                       req.Protocol,
+		Domain:                         req.Domain,
+		ListenPort:                     listenPort,
+		Strategy:                       req.Strategy,
+		DynamicDNS:                     req.DynamicDNS,
+		EnableDnsServer:                req.EnableDnsServer,
+		DnsServer:                      req.DnsServer,
+		DnsFamily:                      req.DnsFamily,
+		HealthCheckPath:                req.HealthCheckPath,
+		HealthCheckInterval:            req.HealthCheckInterval,
+		HealthCheckTimeout:             req.HealthCheckTimeout,
+		HealthCheckUnhealthyThreshold:  req.HealthCheckUnhealthyThreshold,
+		EnableActiveHealthCheck:        req.EnableActiveHealthCheck,
+		TCPHealthCheckPort:             req.TCPHealthCheckPort,
+		TCPTryDuration:                 req.TCPTryDuration,
+		TCPTryInterval:                 req.TCPTryInterval,
+		RequestBodyMaxSizeMB:           req.RequestBodyMaxSizeMB,
+		UpstreamKeepaliveTimeout:       req.UpstreamKeepaliveTimeout,
+		ServerTokensHidden:             req.ServerTokensHidden,
+		GlobalRequestBodyMaxSizeMB:     global.requestBodyMaxSizeMB,
+		GlobalUpstreamKeepaliveTimeout: global.upstreamKeepaliveTimeout,
+		GlobalServerTokensHidden:       global.serverTokensHidden,
+		EnableTLS:                      req.EnableTLS,
+		TLSSource:                      req.TLSSource,
+		ACMEConfigID:                   req.ACMEConfigID,
+		TLSHTTPRedirect:                req.TLSHTTPRedirect,
+		EnableCompress:                 req.EnableCompress,
+		CompressTypes:                  req.CompressTypes,
+		HostHeader:                     req.HostHeader,
+		CaddyID:                        caddyID,
 	}
 	for _, u := range req.Upstreams {
 		protocol := u.Protocol
@@ -969,6 +998,19 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		req.Upstreams = oldUpstreams
 	}
 
+	if req.RequestBodyMaxSizeMB < 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "request_body max size must be >= 0"})
+		return
+	}
+	if req.UpstreamKeepaliveTimeout < 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "upstream keepalive timeout must be >= 0"})
+		return
+	}
+	if req.ServerTokensHidden < 0 || req.ServerTokensHidden > 2 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden must be 0, 1, or 2"})
+		return
+	}
+
 	// Validate TLS certificate if provided (manual source only)
 	if (req.EnableTLS || req.TLSCert != "" || req.TLSKey != "") && req.TLSSource == "manual" {
 		tlsCert := req.TLSCert
@@ -1084,6 +1126,20 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		strategy = "round_robin"
 	}
 
+	var global struct {
+		requestBodyMaxSizeMB, upstreamKeepaliveTimeout int
+		serverTokensHidden                             bool
+	}
+	if err := db.DB.QueryRow(`
+		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE)
+		FROM global_config WHERE id = 1
+	`).Scan(
+		&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout, &global.serverTokensHidden); err != nil {
+		log.Printf("UpdateRule failed to load global config for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to load global config"})
+		return
+	}
+
 	ruleConfig := services.SingleRuleConfig{
 		Protocol:                      req.Protocol,
 		Domain:                        domain,
@@ -1101,17 +1157,20 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		TCPHealthCheckPort:            req.TCPHealthCheckPort,
 		TCPTryDuration:                req.TCPTryDuration,
 		TCPTryInterval:                req.TCPTryInterval,
-		RequestBodyMaxSizeMB:          req.RequestBodyMaxSizeMB,
-		UpstreamKeepaliveTimeout:      req.UpstreamKeepaliveTimeout,
-		ServerTokensHidden:            req.ServerTokensHidden,
-		EnableTLS:                     req.EnableTLS,
-		TLSSource:                     req.TLSSource,
-		ACMEConfigID:                  req.ACMEConfigID,
-		TLSHTTPRedirect:               req.TLSHTTPRedirect,
-		EnableCompress:                req.EnableCompress,
-		CompressTypes:                 req.CompressTypes,
-		HostHeader:                    req.HostHeader,
-		CaddyID:                       caddyID,
+		RequestBodyMaxSizeMB:           req.RequestBodyMaxSizeMB,
+		UpstreamKeepaliveTimeout:       req.UpstreamKeepaliveTimeout,
+		ServerTokensHidden:             req.ServerTokensHidden,
+		GlobalRequestBodyMaxSizeMB:     global.requestBodyMaxSizeMB,
+		GlobalUpstreamKeepaliveTimeout: global.upstreamKeepaliveTimeout,
+		GlobalServerTokensHidden:       global.serverTokensHidden,
+		EnableTLS:                      req.EnableTLS,
+		TLSSource:                      req.TLSSource,
+		ACMEConfigID:                   req.ACMEConfigID,
+		TLSHTTPRedirect:                req.TLSHTTPRedirect,
+		EnableCompress:                 req.EnableCompress,
+		CompressTypes:                  req.CompressTypes,
+		HostHeader:                     req.HostHeader,
+		CaddyID:                        caddyID,
 	}
 	for _, u := range req.Upstreams {
 		protocol := u.Protocol
