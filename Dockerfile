@@ -8,7 +8,7 @@ WORKDIR /app
 
 ENV GOTOOLCHAIN=auto
 RUN xcaddy build v2.11.4 \
-  --with github.com/mholt/caddy-l4@v0.1.1
+  --with github.com/mholt/caddy-l4@v0.1.2-0.20260707094320-bd96009ea737
 
 # Build Go backend
 FROM golang:1.26.1-alpine AS backend

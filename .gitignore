@@ -40,8 +40,9 @@ Thumbs.db
 # Logs
 *.log
 
-# OpenCode session files
+# OpenCode session and workflow files
 .opencode/
+.omo/
 
 # Openspec files (experimental workflow)
 openspec/
