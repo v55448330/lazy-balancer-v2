@@ -1745,7 +1745,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		requestBodyMaxSizeMB, httpReadTimeout, httpWriteTimeout, httpIdleTimeout, upstreamKeepaliveTimeout int
 		serverTokensHidden                                                                                 bool
 	}
-	db.DB.QueryRow(`
+	if err := db.DB.QueryRow(`
 		SELECT COALESCE(dns_provider,''), COALESCE(acme_email,''), is_master,
 		       COALESCE(caddy_log_path,'/app/logs/caddy.log'), COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
 		       COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,0), COALESCE(http_write_timeout,0),
@@ -1753,7 +1753,9 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		FROM global_config WHERE id = 1
 	`).Scan(&dnsProvider, &acmeEmail, &isMaster, &caddyLogPath, &caddyLogLevel, &caddyLogSizeMB,
 		&global.requestBodyMaxSizeMB, &global.httpReadTimeout, &global.httpWriteTimeout, &global.httpIdleTimeout,
-		&global.upstreamKeepaliveTimeout, &global.serverTokensHidden)
+		&global.upstreamKeepaliveTimeout, &global.serverTokensHidden); err != nil {
+		log.Printf("Failed to load global config, using zero defaults: %v", err)
+	}
 
 	applyTimeouts := func(server map[string]interface{}) {
 		if global.httpReadTimeout > 0 {
@@ -2900,8 +2902,6 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 			}
 		}
 
-		handleChain = append(handleChain, proxyConfig)
-
 		if effectiveServerTokensHidden {
 			handleChain = append(handleChain, map[string]interface{}{
 				"handler": "headers",
@@ -2910,6 +2910,8 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 				},
 			})
 		}
+
+		handleChain = append(handleChain, proxyConfig)
 	} else {
 		// TCP protocol
 		upstreamList := make([]interface{}, 0)
