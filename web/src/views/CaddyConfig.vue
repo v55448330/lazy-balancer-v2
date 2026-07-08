@@ -326,6 +326,7 @@ onMounted(() => {
 .caddy-form {
   width: 100%;
   padding-left: 24px;
+  padding-right: 24px;
 }
 
 .caddy-form .caddy-input {

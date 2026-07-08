@@ -35,6 +35,11 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="负载策略" width="120" align="center">
+          <template #default="{ row }">
+            <span>{{ getStrategyLabel(row.strategy) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="listen_port" label="端口" width="70" align="center">
           <template #default="{ row }">
             <span class="port">{{ row.listen_port }}</span>
@@ -1378,6 +1383,10 @@ const getStrategyLabel = (strategy: string) => {
     round_robin: '轮询',
     least_conn: '最少连接',
     ip_hash: 'IP 哈希',
+    first: '首个可用',
+    random: '随机',
+    header: 'Header',
+    cookie: 'Cookie',
   }
   return labels[strategy] || strategy
 }
