@@ -30,6 +30,12 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       COALESCE(caddy_log_path,'/app/logs/caddy.log') as caddy_log_path,
 		       COALESCE(caddy_log_level,'info') as caddy_log_level,
 		       COALESCE(caddy_log_size_mb,100) as caddy_log_size_mb,
+		       COALESCE(request_body_max_size_mb,0) as request_body_max_size_mb,
+		       COALESCE(http_read_timeout,0) as http_read_timeout,
+		       COALESCE(http_write_timeout,0) as http_write_timeout,
+		       COALESCE(http_idle_timeout,0) as http_idle_timeout,
+		       COALESCE(upstream_keepalive_timeout,0) as upstream_keepalive_timeout,
+		       COALESCE(server_tokens_hidden,FALSE) as server_tokens_hidden,
 		       is_master, COALESCE(master_url, '') as master_url, sync_interval,
 		       last_sync, updated_at
 		FROM global_config WHERE id = 1
@@ -38,6 +44,8 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.CertRenewalDays, &cfg.CertRenewalAttempts, &cfg.DefaultCAProviderID,
 		&cfg.LogLevel, &cfg.AccessLogEnabled,
 		&cfg.CaddyLogPath, &cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
+		&cfg.RequestBodyMaxSizeMB, &cfg.HTTPReadTimeout, &cfg.HTTPWriteTimeout, &cfg.HTTPIdleTimeout,
+		&cfg.UpstreamKeepaliveTimeout, &cfg.ServerTokensHidden,
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	if err != nil {
@@ -123,6 +131,15 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 
+	if req.RequestBodyMaxSizeMB < 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "request_body_max_size_mb must be >= 0"})
+		return
+	}
+	if req.HTTPReadTimeout < 0 || req.HTTPWriteTimeout < 0 || req.HTTPIdleTimeout < 0 || req.UpstreamKeepaliveTimeout < 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "timeouts must be >= 0"})
+		return
+	}
+
 	// Update DNS credentials in environment if provided
 	if req.DNSCredentials != "" {
 		parts := strings.Split(req.DNSCredentials, ",")
@@ -146,6 +163,12 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				caddy_log_path = COALESCE(?, caddy_log_path),
 				caddy_log_level = COALESCE(?, caddy_log_level),
 				caddy_log_size_mb = COALESCE(?, caddy_log_size_mb),
+				request_body_max_size_mb = COALESCE(?, request_body_max_size_mb),
+				http_read_timeout = COALESCE(?, http_read_timeout),
+				http_write_timeout = COALESCE(?, http_write_timeout),
+				http_idle_timeout = COALESCE(?, http_idle_timeout),
+				upstream_keepalive_timeout = COALESCE(?, upstream_keepalive_timeout),
+				server_tokens_hidden = COALESCE(?, server_tokens_hidden),
 				is_master = COALESCE(?, is_master),
 				master_url = COALESCE(?, master_url),
 				sync_interval = COALESCE(?, sync_interval),
@@ -153,6 +176,8 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			WHERE id = 1
 		`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.LogLevel, req.AccessLogEnabled,
 		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
+		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
+		req.UpstreamKeepaliveTimeout, req.ServerTokensHidden,
 		req.IsMaster, req.MasterURL, req.SyncInterval)
 
 	// Update node mode in memory
