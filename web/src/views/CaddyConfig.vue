@@ -327,6 +327,7 @@ onMounted(() => {
   width: 100%;
   padding-left: 24px;
   padding-right: 24px;
+  box-sizing: border-box;
 }
 
 .caddy-form .caddy-input {
@@ -338,6 +339,10 @@ onMounted(() => {
   gap: 12px;
   align-items: center;
   width: 100%;
+}
+
+.log-path-row .el-input {
+  flex: 1;
 }
 
 .log-toolbar {

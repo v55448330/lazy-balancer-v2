@@ -460,8 +460,8 @@
                 :class="{ active: wizardForm.strategy === 'ip_hash' }"
                 @click="wizardForm.strategy = 'ip_hash'"
               >
-                <div class="strategy-card-title">IP 哈希</div>
-                <div class="strategy-card-desc">根据客户端 IP 分配到固定服务器</div>
+              <div class="strategy-card-title">IP 哈希（粘滞）</div>
+                <div class="strategy-card-desc">按客户端 IP 固定分配，实现简单会话粘滞</div>
               </div>
             </div>
 
@@ -591,14 +591,14 @@
 
             <el-divider content-position="left" class="compact-divider">Caddy 全局覆盖</el-divider>
 
-            <el-form-item label="请求体大小">
+            <el-form-item label="请求体最大大小">
               <el-input-number v-model="wizardForm.request_body_max_size_mb" :min="0" :max="10240" controls-position="right" style="width: 120px;" />
               <span class="form-tip-inline">MB，0 表示使用全局默认值</span>
             </el-form-item>
 
-            <el-form-item label="上游 keepalive">
+            <el-form-item label="上游 Keepalive 超时">
               <el-input-number v-model="wizardForm.upstream_keepalive_timeout" :min="0" :max="3600" controls-position="right" style="width: 120px;" />
-              <span class="form-tip-inline">秒，0 表示使用全局默认值</span>
+              <span class="form-tip-inline">秒，与上游长连接的空闲超时，0 使用全局默认值</span>
             </el-form-item>
 
             <el-form-item label="Server 响应头">
@@ -607,6 +607,7 @@
                 <el-option :value="1" label="隐藏" />
                 <el-option :value="2" label="显示" />
               </el-select>
+              <span class="form-tip-inline">是否隐藏 HTTP 响应头中的 Server 字段</span>
             </el-form-item>
           </el-form>
         </div>
