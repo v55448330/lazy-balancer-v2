@@ -188,67 +188,17 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 
 	var r struct {
-		Name                          string
-		Protocol                      string
-		Domain                        string
-		ListenPort                    int
-		Strategy                      string
-		DynamicDNS                    bool
-		EnableDnsServer               bool
-		DnsServer                     string
-		DnsFamily                     string
-		HealthCheckPath               string
-		HealthCheckInterval           int
-		HealthCheckTimeout            int
-		HealthCheckUnhealthyThreshold int
-		HealthCheckHealthyThreshold   int
-		EnableActiveHealthCheck       bool
-		TCPHealthCheckPort            int
-		TCPTryDuration                int
-		TCPTryInterval                int
-		RequestBodyMaxSizeMB          int
-		UpstreamKeepaliveTimeout      int
-		ServerTokensHidden            int
-		EnableTLS                     bool
-		TLSCert                       string
-		TLSKey                        string
-		TLSHTTPRedirect               bool
-		Enabled                       bool
-		EnableCompress                bool
-		CompressTypes                 string
-		HostHeader                    string
-		CaddyID                       string
+		CaddyID    string
+		ListenPort int
+		Enabled    bool
 	}
-
-	var domain, strategy, hostHeader, compressTypes, tlsCert, tlsKey string
-	var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect, enableCompress bool
 
 	log.Printf("GetRuleCaddyConfig: querying rule caddy_id=%s", caddyID)
 
 	err := db.DB.QueryRow(`
-		SELECT name, protocol, COALESCE(domain,''), listen_port, strategy,
-		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''),
-		       COALESCE(dns_family,'ipv4'), health_check_path, health_check_interval,
-		       health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
-		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
-		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
-		       COALESCE(enable_tls,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
-		       COALESCE(tls_http_redirect,0),
-		       enabled, COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
-		       COALESCE(host_header,''), COALESCE(caddy_id,'')
+		SELECT COALESCE(caddy_id,''), listen_port, COALESCE(enabled,0)
 		FROM lb_rules WHERE caddy_id = ?
-	`, caddyID).Scan(&r.Name, &r.Protocol, &domain, &r.ListenPort, &strategy,
-		&dynamicDNS, &enableDnsServer, &r.DnsServer, &r.DnsFamily, &r.HealthCheckPath, &r.HealthCheckInterval,
-		&r.HealthCheckTimeout, &r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
-		&enableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPTryDuration, &r.TCPTryInterval,
-		&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden,
-		&enableTLS, &tlsCert, &tlsKey, &tlsHTTPRedirect,
-		&r.Enabled, &enableCompress, &compressTypes,
-		&hostHeader, &r.CaddyID)
-
-	if err != nil {
-		log.Printf("GetRuleCaddyConfig: query/scan error for rule caddy_id=%s: %v", caddyID, err)
-	}
+	`, caddyID).Scan(&r.CaddyID, &r.ListenPort, &r.Enabled)
 
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Rule not found"})
@@ -256,25 +206,10 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	}
 
 	if err != nil {
+		log.Printf("GetRuleCaddyConfig: query/scan error for rule caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get rule: " + err.Error()})
 		return
 	}
-
-	r.Domain = domain
-	r.Strategy = strategy
-	if r.Strategy == "" {
-		r.Strategy = "round_robin"
-	}
-	r.DynamicDNS = dynamicDNS
-	r.EnableDnsServer = enableDnsServer
-	r.EnableActiveHealthCheck = enableActiveHealthCheck
-	r.EnableTLS = enableTLS
-	r.TLSCert = tlsCert
-	r.TLSKey = tlsKey
-	r.TLSHTTPRedirect = tlsHTTPRedirect
-	r.EnableCompress = enableCompress
-	r.CompressTypes = compressTypes
-	r.HostHeader = hostHeader
 
 	upstreamRows, err := db.DB.Query(`
 		SELECT host, port, COALESCE(weight,1), COALESCE(protocol,'http'), enabled, COALESCE(max_connections,0), COALESCE(proxy_protocol,'')
@@ -297,8 +232,8 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		ups = append(ups, u)
 	}
 
-	log.Printf("GetRuleCaddyConfig: caddyID=%s, protocol=%s, domain=%s, port=%d, upstreams=%d, enabled=%v",
-		r.CaddyID, r.Protocol, r.Domain, r.ListenPort, len(ups), r.Enabled)
+	log.Printf("GetRuleCaddyConfig: caddyID=%s, port=%d, upstreams=%d, enabled=%v",
+		r.CaddyID, r.ListenPort, len(ups), r.Enabled)
 
 	responseData := map[string]interface{}{
 		"caddy_id": r.CaddyID,
@@ -974,14 +909,14 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.TCPTryInterval == 0 {
 		req.TCPTryInterval = existingRule.TCPTryInterval
 	}
-	if req.RequestBodyMaxSizeMB == 0 {
-		req.RequestBodyMaxSizeMB = existingRule.RequestBodyMaxSizeMB
+	if req.RequestBodyMaxSizeMB == nil {
+		req.RequestBodyMaxSizeMB = &existingRule.RequestBodyMaxSizeMB
 	}
-	if req.UpstreamKeepaliveTimeout == 0 {
-		req.UpstreamKeepaliveTimeout = existingRule.UpstreamKeepaliveTimeout
+	if req.UpstreamKeepaliveTimeout == nil {
+		req.UpstreamKeepaliveTimeout = &existingRule.UpstreamKeepaliveTimeout
 	}
-	if req.ServerTokensHidden == 0 {
-		req.ServerTokensHidden = existingRule.ServerTokensHidden
+	if req.ServerTokensHidden == nil {
+		req.ServerTokensHidden = &existingRule.ServerTokensHidden
 	}
 	if req.CompressTypes == "" {
 		req.CompressTypes = existingRule.CompressTypes
@@ -998,15 +933,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		req.Upstreams = oldUpstreams
 	}
 
-	if req.RequestBodyMaxSizeMB < 0 {
+	if req.RequestBodyMaxSizeMB != nil && *req.RequestBodyMaxSizeMB < 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "request_body max size must be >= 0"})
 		return
 	}
-	if req.UpstreamKeepaliveTimeout < 0 {
+	if req.UpstreamKeepaliveTimeout != nil && *req.UpstreamKeepaliveTimeout < 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "upstream keepalive timeout must be >= 0"})
 		return
 	}
-	if req.ServerTokensHidden < 0 || req.ServerTokensHidden > 2 {
+	if req.ServerTokensHidden != nil && (*req.ServerTokensHidden < 0 || *req.ServerTokensHidden > 2) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden must be 0, 1, or 2"})
 		return
 	}
@@ -1084,11 +1019,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	query += "tcp_try_interval = ?, "
 	args = append(args, req.TCPTryInterval)
 	query += "request_body_max_size_mb = ?, "
-	args = append(args, req.RequestBodyMaxSizeMB)
+	args = append(args, *req.RequestBodyMaxSizeMB)
 	query += "upstream_keepalive_timeout = ?, "
-	args = append(args, req.UpstreamKeepaliveTimeout)
+	args = append(args, *req.UpstreamKeepaliveTimeout)
 	query += "server_tokens_hidden = ?, "
-	args = append(args, req.ServerTokensHidden)
+	args = append(args, *req.ServerTokensHidden)
 	query += "host_header = ?, "
 	args = append(args, req.HostHeader)
 	query += "enable_tls = ?, "
@@ -1140,38 +1075,39 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 
-	ruleConfig := services.SingleRuleConfig{
-		Protocol:                      req.Protocol,
-		Domain:                        domain,
-		ListenPort:                    listenPort,
-		Strategy:                      strategy,
-		DynamicDNS:                    req.DynamicDNS,
-		EnableDnsServer:               req.EnableDnsServer,
-		DnsServer:                     req.DnsServer,
-		DnsFamily:                     req.DnsFamily,
-		HealthCheckPath:               req.HealthCheckPath,
-		HealthCheckInterval:           req.HealthCheckInterval,
-		HealthCheckTimeout:            req.HealthCheckTimeout,
-		HealthCheckUnhealthyThreshold: req.HealthCheckUnhealthyThreshold,
-		EnableActiveHealthCheck:       req.EnableActiveHealthCheck,
-		TCPHealthCheckPort:            req.TCPHealthCheckPort,
-		TCPTryDuration:                req.TCPTryDuration,
-		TCPTryInterval:                req.TCPTryInterval,
-		RequestBodyMaxSizeMB:           req.RequestBodyMaxSizeMB,
-		UpstreamKeepaliveTimeout:       req.UpstreamKeepaliveTimeout,
-		ServerTokensHidden:             req.ServerTokensHidden,
-		GlobalRequestBodyMaxSizeMB:     global.requestBodyMaxSizeMB,
-		GlobalUpstreamKeepaliveTimeout: global.upstreamKeepaliveTimeout,
-		GlobalServerTokensHidden:       global.serverTokensHidden,
-		EnableTLS:                      req.EnableTLS,
-		TLSSource:                      req.TLSSource,
-		ACMEConfigID:                   req.ACMEConfigID,
-		TLSHTTPRedirect:                req.TLSHTTPRedirect,
-		EnableCompress:                 req.EnableCompress,
-		CompressTypes:                  req.CompressTypes,
-		HostHeader:                     req.HostHeader,
-		CaddyID:                        caddyID,
-	}
+		ruleConfig := services.SingleRuleConfig{
+			Protocol:                       req.Protocol,
+			Domain:                         domain,
+			ListenPort:                     listenPort,
+			Strategy:                       strategy,
+			DynamicDNS:                     req.DynamicDNS,
+			EnableDnsServer:                req.EnableDnsServer,
+			DnsServer:                      req.DnsServer,
+			DnsFamily:                      req.DnsFamily,
+			HealthCheckPath:                req.HealthCheckPath,
+			HealthCheckInterval:            req.HealthCheckInterval,
+			HealthCheckTimeout:             req.HealthCheckTimeout,
+			HealthCheckUnhealthyThreshold:  req.HealthCheckUnhealthyThreshold,
+			EnableActiveHealthCheck:        req.EnableActiveHealthCheck,
+			TCPHealthCheckPort:             req.TCPHealthCheckPort,
+			TCPTryDuration:                 req.TCPTryDuration,
+			TCPTryInterval:                 req.TCPTryInterval,
+			RequestBodyMaxSizeMB:           *req.RequestBodyMaxSizeMB,
+			UpstreamKeepaliveTimeout:       *req.UpstreamKeepaliveTimeout,
+			ServerTokensHidden:             *req.ServerTokensHidden,
+			GlobalRequestBodyMaxSizeMB:     global.requestBodyMaxSizeMB,
+			GlobalUpstreamKeepaliveTimeout: global.upstreamKeepaliveTimeout,
+			GlobalServerTokensHidden:       global.serverTokensHidden,
+			EnableTLS:                      req.EnableTLS,
+			TLSSource:                      req.TLSSource,
+			ACMEConfigID:                   req.ACMEConfigID,
+			TLSHTTPRedirect:                req.TLSHTTPRedirect,
+			EnableCompress:                 req.EnableCompress,
+			CompressTypes:                  req.CompressTypes,
+			HostHeader:                     req.HostHeader,
+			CaddyID:                        caddyID,
+		}
+
 	for _, u := range req.Upstreams {
 		protocol := u.Protocol
 		if protocol == "" {

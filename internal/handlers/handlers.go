@@ -214,9 +214,15 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		data.CompressTypes = r.CompressTypes
 		data.EnableActiveHealthCheck = r.EnableActiveHealthCheck
 		data.HostHeader = r.HostHeader
-		data.RequestBodyMaxSizeMB = r.RequestBodyMaxSizeMB
-		data.UpstreamKeepaliveTimeout = r.UpstreamKeepaliveTimeout
-		data.ServerTokensHidden = r.ServerTokensHidden
+		if r.RequestBodyMaxSizeMB != nil {
+			data.RequestBodyMaxSizeMB = *r.RequestBodyMaxSizeMB
+		}
+		if r.UpstreamKeepaliveTimeout != nil {
+			data.UpstreamKeepaliveTimeout = *r.UpstreamKeepaliveTimeout
+		}
+		if r.ServerTokensHidden != nil {
+			data.ServerTokensHidden = *r.ServerTokensHidden
+		}
 		for _, u := range r.Upstreams {
 			upstreams = append(upstreams, requestUpstream{
 				Host: u.Host, Port: u.Port, Weight: u.Weight, Domain: u.Domain,

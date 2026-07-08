@@ -80,19 +80,19 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	if req.CaddyLogPath != "" {
-		if !filepath.IsAbs(req.CaddyLogPath) {
+	if req.CaddyLogPath != nil {
+		if !filepath.IsAbs(*req.CaddyLogPath) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy log path must be absolute"})
 			return
 		}
-		if err := os.MkdirAll(filepath.Dir(req.CaddyLogPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(*req.CaddyLogPath), 0755); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to create log directory: " + err.Error()})
 			return
 		}
 	}
 
-	if req.CaddyLogLevel != "" {
-		switch strings.ToLower(req.CaddyLogLevel) {
+	if req.CaddyLogLevel != nil {
+		switch strings.ToLower(*req.CaddyLogLevel) {
 		case "debug", "info", "warn", "error":
 		default:
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid Caddy log level"})
@@ -105,8 +105,8 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	if req.DNSProvider != "" {
-		switch req.DNSProvider {
+	if req.DNSProvider != nil {
+		switch *req.DNSProvider {
 		case "dnspod":
 		default:
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid DNS provider"})
@@ -114,12 +114,12 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 
-	if req.CertRenewalDays < 0 || req.CertRenewalDays > 90 {
+	if req.CertRenewalDays != nil && (*req.CertRenewalDays < 0 || *req.CertRenewalDays > 90) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_renewal_days must be between 0 and 90"})
 		return
 	}
 
-	if req.CertRenewalAttempts < 1 || req.CertRenewalAttempts > 10 {
+	if req.CertRenewalAttempts != nil && (*req.CertRenewalAttempts < 1 || *req.CertRenewalAttempts > 10) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_renewal_attempts must be between 1 and 10"})
 		return
 	}
@@ -131,18 +131,18 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 
-	if req.RequestBodyMaxSizeMB < 0 {
+	if req.RequestBodyMaxSizeMB != nil && *req.RequestBodyMaxSizeMB < 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "request_body_max_size_mb must be >= 0"})
 		return
 	}
-	if req.HTTPReadTimeout < 0 || req.HTTPWriteTimeout < 0 || req.HTTPIdleTimeout < 0 || req.UpstreamKeepaliveTimeout < 0 {
+	if (req.HTTPReadTimeout != nil && *req.HTTPReadTimeout < 0) || (req.HTTPWriteTimeout != nil && *req.HTTPWriteTimeout < 0) || (req.HTTPIdleTimeout != nil && *req.HTTPIdleTimeout < 0) || (req.UpstreamKeepaliveTimeout != nil && *req.UpstreamKeepaliveTimeout < 0) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "timeouts must be >= 0"})
 		return
 	}
 
 	// Update DNS credentials in environment if provided
-	if req.DNSCredentials != "" {
-		parts := strings.Split(req.DNSCredentials, ",")
+	if req.DNSCredentials != nil {
+		parts := strings.Split(*req.DNSCredentials, ",")
 		if len(parts) >= 2 {
 			os.Setenv("DNSPOD_ID", parts[0])
 			os.Setenv("DNSPOD_TOKEN", parts[1])

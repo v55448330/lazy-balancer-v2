@@ -364,9 +364,9 @@ type UpdateRuleRequest struct {
 	TCPHealthCheckPort            int        `json:"tcp_health_check_port"`
 	TCPTryDuration                int        `json:"tcp_try_duration"`
 	TCPTryInterval                int        `json:"tcp_try_interval"`
-	RequestBodyMaxSizeMB          int        `json:"request_body_max_size_mb"`
-	UpstreamKeepaliveTimeout      int        `json:"upstream_keepalive_timeout"`
-	ServerTokensHidden            int        `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
+	RequestBodyMaxSizeMB          *int       `json:"request_body_max_size_mb"`
+	UpstreamKeepaliveTimeout      *int       `json:"upstream_keepalive_timeout"`
+	ServerTokensHidden            *int       `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
 	HostHeader                    string     `json:"host_header"`
 	Upstreams                     []Upstream `json:"upstreams"`
 	EnableTLS                     bool       `json:"enable_tls"`
@@ -382,27 +382,27 @@ type UpdateRuleRequest struct {
 }
 
 type UpdateConfigRequest struct {
-	DNSProvider              string `json:"dns_provider"`
-	DNSCredentials           string `json:"dns_credentials"`
-	ACMEEmail                string `json:"acme_email"`
-	CertExpiryDays           int    `json:"cert_expiry_days"`
-	CertRenewalDays          int    `json:"cert_renewal_days"`
-	CertRenewalAttempts      int    `json:"cert_renewal_attempts"`
-	LogLevel                 string `json:"log_level"`
-	AccessLogEnabled         *bool  `json:"access_log_enabled"`
-	CaddyLogPath             string `json:"caddy_log_path"`
-	CaddyLogLevel            string `json:"caddy_log_level"`
-	CaddyLogSizeMB           *int   `json:"caddy_log_size_mb"`
-	RequestBodyMaxSizeMB     int    `json:"request_body_max_size_mb"`
-	HTTPReadTimeout          int    `json:"http_read_timeout"`
-	HTTPWriteTimeout         int    `json:"http_write_timeout"`
-	HTTPIdleTimeout          int    `json:"http_idle_timeout"`
-	UpstreamKeepaliveTimeout int    `json:"upstream_keepalive_timeout"`
-	ServerTokensHidden       bool   `json:"server_tokens_hidden"`
-	IsMaster                 *bool  `json:"is_master"`
-	MasterURL                string `json:"master_url"`
-	SyncInterval             *int   `json:"sync_interval"`
-	DefaultCAProviderID      *int   `json:"default_ca_provider_id"`
+	DNSProvider              *string `json:"dns_provider"`
+	DNSCredentials           *string `json:"dns_credentials"`
+	ACMEEmail                *string `json:"acme_email"`
+	CertExpiryDays           *int    `json:"cert_expiry_days"`
+	CertRenewalDays          *int    `json:"cert_renewal_days"`
+	CertRenewalAttempts      *int    `json:"cert_renewal_attempts"`
+	LogLevel                 *string `json:"log_level"`
+	AccessLogEnabled         *bool   `json:"access_log_enabled"`
+	CaddyLogPath             *string `json:"caddy_log_path"`
+	CaddyLogLevel            *string `json:"caddy_log_level"`
+	CaddyLogSizeMB           *int    `json:"caddy_log_size_mb"`
+	RequestBodyMaxSizeMB     *int    `json:"request_body_max_size_mb"`
+	HTTPReadTimeout          *int    `json:"http_read_timeout"`
+	HTTPWriteTimeout         *int    `json:"http_write_timeout"`
+	HTTPIdleTimeout          *int    `json:"http_idle_timeout"`
+	UpstreamKeepaliveTimeout *int    `json:"upstream_keepalive_timeout"`
+	ServerTokensHidden       *bool   `json:"server_tokens_hidden"`
+	IsMaster                 *bool   `json:"is_master"`
+	MasterURL                *string `json:"master_url"`
+	SyncInterval             *int    `json:"sync_interval"`
+	DefaultCAProviderID      *int    `json:"default_ca_provider_id"`
 }
 
 type RegisterNodeRequest struct {

@@ -2439,7 +2439,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			handleChain = append([]interface{}{
 				map[string]interface{}{
 					"handler":  "request_body",
-					"max_size": effectiveRequestBodyMaxSizeMB * 1024 * 1024,
+					"max_size": int64(effectiveRequestBodyMaxSizeMB) * 1024 * 1024,
 				},
 			}, handleChain...)
 		}
@@ -2780,7 +2780,7 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 			handleChain = append([]interface{}{
 				map[string]interface{}{
 					"handler":  "request_body",
-					"max_size": effectiveRequestBodyMaxSizeMB * 1024 * 1024,
+					"max_size": int64(effectiveRequestBodyMaxSizeMB) * 1024 * 1024,
 				},
 			}, handleChain...)
 		}
