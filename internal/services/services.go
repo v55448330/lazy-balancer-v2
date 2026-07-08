@@ -420,15 +420,17 @@ func (s *SyncService) applySyncData(data models.SyncData) error {
 					dynamic_dns, enable_dns_server, dns_server, dns_family,
 					health_check_path, health_check_interval, health_check_timeout,
 					health_check_unhealthy_threshold, health_check_healthy_threshold,
-					enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval, host_header,
+					enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval, 
+					request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden, host_header,
 					enable_tls, tls_source, tls_cert, tls_key, tls_http_redirect, 
 					enable_compress, compress_types, enabled, created_by, updated_by)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`, rule.ID, rule.CaddyID, rule.Name, rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 				rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily,
 				rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 				rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
-				rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPTryDuration, rule.TCPTryInterval, rule.HostHeader,
+				rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPTryDuration, rule.TCPTryInterval, 
+				rule.RequestBodyMaxSizeMB, rule.UpstreamKeepaliveTimeout, rule.ServerTokensHidden, rule.HostHeader,
 				rule.EnableTLS, rule.TLSSource, rule.TLSCert, rule.TLSKey, rule.TLSHTTPRedirect,
 				rule.EnableCompress, rule.CompressTypes, rule.Enabled, rule.CreatedBy, rule.UpdatedBy)
 

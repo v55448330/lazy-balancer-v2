@@ -38,6 +38,7 @@ func (h *Handlers) GetSyncConfig(c *gin.Context) {
 		       health_check_path, health_check_interval,
 		       health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
 		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
+		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
 		       COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_http_redirect,0),
 		       enabled, created_at, updated_at
 		FROM lb_rules
@@ -50,10 +51,12 @@ func (h *Handlers) GetSyncConfig(c *gin.Context) {
 		var domain, strategy, tlsSource string
 		var dynamicDNS, enableTLS, tlsHTTPRedirect, enableActiveHealthCheck bool
 		var acmeConfigID, tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
+		var requestBodyMaxSizeMB, upstreamKeepaliveTimeout, serverTokensHidden int
 		err := rows.Scan(&r.ID, &r.CaddyID, &r.Name, &r.Protocol, &domain, &r.ListenPort, &strategy,
 			&dynamicDNS, &r.DnsServer, &r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout,
 			&r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
 			&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
+			&requestBodyMaxSizeMB, &upstreamKeepaliveTimeout, &serverTokensHidden,
 			&enableTLS, &tlsSource, &acmeConfigID, &tlsHTTPRedirect,
 			&r.Enabled, &r.CreatedAt, &r.UpdatedAt)
 		if err != nil {
@@ -73,6 +76,9 @@ func (h *Handlers) GetSyncConfig(c *gin.Context) {
 		r.TCPHealthCheckPort = tcpHealthCheckPort
 		r.TCPTryDuration = tcpTryDuration
 		r.TCPTryInterval = tcpTryInterval
+		r.RequestBodyMaxSizeMB = requestBodyMaxSizeMB
+		r.UpstreamKeepaliveTimeout = upstreamKeepaliveTimeout
+		r.ServerTokensHidden = serverTokensHidden
 
 		// Get upstreams for this rule
 		upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'') FROM upstreams WHERE rule_id = ?`, r.CaddyID)
