@@ -80,6 +80,9 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	// Log path is managed by the system and cannot be changed through the UI/API.
+	req.CaddyLogPath = nil
+
 	if req.CaddyLogPath != nil {
 		if !filepath.IsAbs(*req.CaddyLogPath) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy log path must be absolute"})
