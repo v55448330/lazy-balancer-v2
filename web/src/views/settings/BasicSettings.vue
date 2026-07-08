@@ -24,24 +24,6 @@
             <el-switch v-model="settings.access_log_enabled" />
             <div class="form-tip">记录所有 HTTP 请求到日志</div>
           </el-form-item>
-          <el-divider />
-          <el-form-item label="Caddy 日志路径">
-            <el-input v-model="settings.caddy_log_path" placeholder="/app/logs/caddy.log" />
-            <div class="form-tip">Caddy 运行日志文件绝对路径</div>
-          </el-form-item>
-          <el-form-item label="Caddy 日志级别">
-            <el-select v-model="settings.caddy_log_level" style="width: 100%">
-              <el-option label="Debug" value="debug" />
-              <el-option label="Info" value="info" />
-              <el-option label="Warning" value="warn" />
-              <el-option label="Error" value="error" />
-            </el-select>
-            <div class="form-tip">控制 Caddy 运行日志详细程度</div>
-          </el-form-item>
-          <el-form-item label="日志滚动大小">
-            <el-input-number v-model="settings.caddy_log_size_mb" :min="1" :max="10240" style="width: 100%" />
-            <div class="form-tip">单个日志文件大小上限（MB），超过后自动滚动</div>
-          </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="saving" @click="handleSave">
               <el-icon><Check /></el-icon>
@@ -76,22 +58,6 @@
         </div>
       </el-card>
 
-      <el-card class="action-card" style="margin-top: 20px;">
-        <template #header>
-          <div class="card-header">
-            <div class="card-title danger">
-              <el-icon><WarningFilled /></el-icon>
-              <span>危险操作</span>
-            </div>
-          </div>
-        </template>
-        <div class="danger-actions">
-          <el-button type="warning" @click="handleReloadCaddy">
-            <el-icon><RefreshRight /></el-icon>
-            <span class="btn-text">重载 Caddy</span>
-          </el-button>
-        </div>
-      </el-card>
     </el-col>
   </el-row>
 </template>
@@ -99,9 +65,9 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { request } from '@/utils/api'
-import { Setting, InfoFilled, WarningFilled, RefreshRight, Check } from '@element-plus/icons-vue'
+import { Setting, InfoFilled, Check } from '@element-plus/icons-vue'
 
 const authStore = useAuthStore()
 
@@ -118,9 +84,6 @@ const handleSave = async () => {
     await request.put('/config', {
       log_level: settings.value.log_level,
       access_log_enabled: settings.value.access_log_enabled,
-      caddy_log_path: settings.value.caddy_log_path,
-      caddy_log_level: settings.value.caddy_log_level,
-      caddy_log_size_mb: settings.value.caddy_log_size_mb,
     })
     ElMessage.success('保存成功')
     emit('save')
@@ -128,26 +91,6 @@ const handleSave = async () => {
     console.error('Failed to save basic settings:', error)
   } finally {
     saving.value = false
-  }
-}
-
-const handleReloadCaddy = async () => {
-  try {
-    await ElMessageBox.confirm(
-      '此操作将重新加载 Caddy 配置，是否继续？',
-      '确认重载',
-      {
-        confirmButtonText: '确认',
-        cancelButtonText: '取消',
-        type: 'warning',
-      }
-    )
-    await request.post('/config/reload')
-    ElMessage.success('Caddy 配置已重载')
-  } catch (error) {
-    if (error !== 'cancel') {
-      console.error('Failed to reload Caddy:', error)
-    }
   }
 }
 </script>
@@ -162,7 +105,6 @@ const handleReloadCaddy = async () => {
   font-weight: 600;
   color: #111827;
 }
-.card-title.danger { color: #dc2626; }
 .settings-form { padding: 4px 0; }
 .form-tip {
   font-size: 12px;
@@ -179,6 +121,5 @@ const handleReloadCaddy = async () => {
 }
 .info-item:last-child { border-bottom: none; }
 .info-label { color: #6b7280; font-size: 13px; }
-.danger-actions { display: flex; gap: 12px; }
 .btn-text { margin-left: 4px; }
 </style>
