@@ -63,6 +63,7 @@ func (d *DNSPod) buildCredentialsJSON(creds map[string]string) (string, error) {
 			"mode":       "tencent",
 			"secret_id":  creds["secret_id"],
 			"secret_key": creds["secret_key"],
+			"api_token":  creds["secret_id"] + "," + creds["secret_key"],
 		})
 		return string(data), nil
 	case "dnspod":
