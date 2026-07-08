@@ -17,7 +17,6 @@ func (h *Handlers) GetMetricsOverview(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: overview})
 }
 
-
 func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	ruleID := c.Param("caddy_id")
 
@@ -33,11 +32,6 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 		return
 	}
 
-	if rule.Protocol == "tcp" {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: emptyRuleMetrics()})
-		return
-	}
-
 	resp, err := http.Get(h.cfg.CaddyAdminURL + "/metrics")
 	if err != nil {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: emptyRuleMetrics()})
@@ -46,11 +40,21 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	metrics := parseRuleMetricsFromPrometheus(string(body), rule.Domain, rule.ListenPort, rule.Protocol, rule.EnableTLS)
+
+	var metrics gin.H
+	if rule.Protocol == "tcp" {
+		upstreams, err := loadRuleUpstreams(ruleID)
+		if err != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: emptyRuleMetrics()})
+			return
+		}
+		metrics = parseTCPRuleMetricsFromPrometheus(string(body), upstreams)
+	} else {
+		metrics = parseRuleMetricsFromPrometheus(string(body), rule.Domain, rule.ListenPort, rule.Protocol, rule.EnableTLS)
+	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
 }
-
 
 func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 	ruleID := c.Query("rule_id")
@@ -106,7 +110,6 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
 }
 
-
 func (h *Handlers) GetCaddyMetrics(c *gin.Context) {
 	resp, err := http.Get(h.cfg.CaddyAdminURL + "/metrics")
 	if err != nil {
@@ -120,7 +123,6 @@ func (h *Handlers) GetCaddyMetrics(c *gin.Context) {
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
 }
-
 
 func (h *Handlers) GetHostMetrics(c *gin.Context) {
 	resp, err := http.Get(h.cfg.CaddyAdminURL + "/metrics")
@@ -136,3 +138,23 @@ func (h *Handlers) GetHostMetrics(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
 }
 
+func loadRuleUpstreams(ruleID string) ([]models.Upstream, error) {
+	rows, err := db.DB.Query(`
+		SELECT id, rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, dns_server, max_connections, proxy_protocol
+		FROM upstreams WHERE rule_id = ? AND enabled = 1
+	`, ruleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var upstreams []models.Upstream
+	for rows.Next() {
+		var u models.Upstream
+		if err := rows.Scan(&u.ID, &u.RuleID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.DnsServer, &u.MaxConnections, &u.ProxyProtocol); err != nil {
+			continue
+		}
+		upstreams = append(upstreams, u)
+	}
+	return upstreams, nil
+}

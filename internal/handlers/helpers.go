@@ -645,6 +645,56 @@ func extractLabel(metricName string, label string) string {
 	return metricName[start : start+end]
 }
 
+func parseTCPRuleMetricsFromPrometheus(body string, upstreams []models.Upstream) gin.H {
+	result := emptyRuleMetrics()
+
+	upstreamSet := make(map[string]struct{})
+	for _, u := range upstreams {
+		if u.Enabled {
+			upstreamSet[fmt.Sprintf("%s:%d", u.Host, u.Port)] = struct{}{}
+		}
+	}
+	if len(upstreamSet) == 0 {
+		return result
+	}
+
+	var connectionsTotal, activeConnections int64
+
+	lines := strings.Split(body, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		name := fields[0]
+		value, _ := strconv.ParseFloat(fields[1], 64)
+
+		upstream := extractLabel(name, "upstream")
+		if upstream == "" {
+			continue
+		}
+		if _, ok := upstreamSet[upstream]; !ok {
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(name, "caddy_layer4_proxy_connections_total{"),
+			strings.HasPrefix(name, "caddy_layer4_proxy_connections_total "):
+			connectionsTotal += int64(value)
+		case strings.HasPrefix(name, "caddy_layer4_proxy_active_connections{"),
+			strings.HasPrefix(name, "caddy_layer4_proxy_active_connections "):
+			activeConnections += int64(value)
+		}
+	}
+
+	result["requests_total"] = connectionsTotal
+	result["requests_in_flight"] = activeConnections
+	return result
+}
+
 func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protocol string, enableTLS bool) gin.H {
 	result := emptyRuleMetrics()
 	if domain == "" {
