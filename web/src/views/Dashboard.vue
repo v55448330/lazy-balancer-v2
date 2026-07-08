@@ -272,8 +272,10 @@
                 </el-tag>
               </template>
             </el-table-column>
+            <template #empty>
+              <el-empty description="暂无负载均衡规则" :image-size="80" />
+            </template>
           </el-table>
-          <el-empty v-if="rules.length === 0" description="暂无负载均衡规则" :image-size="80" />
         </el-card>
       </el-col>
     </el-row>

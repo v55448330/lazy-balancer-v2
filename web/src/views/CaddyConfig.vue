@@ -25,7 +25,7 @@
             <el-col :span="18">
               <el-form :model="caddySettings" label-width="160px">
                 <el-form-item label="日志路径">
-                  <el-input v-model="caddySettings.caddy_log_path" placeholder="/app/logs/caddy.log" />
+                  <el-input v-model="caddySettings.caddy_log_path" style="width: 100%" placeholder="/app/logs/caddy.log" />
                 </el-form-item>
                 <el-form-item label="日志级别">
                   <el-select v-model="caddySettings.caddy_log_level" style="width: 100%">
@@ -59,8 +59,8 @@
               </el-form>
             </el-col>
             <el-col :span="6" class="action-col">
-              <el-button type="primary" :loading="saving" style="width: 100%" @click="handleSave">保存</el-button>
-              <el-button type="warning" style="width: 100%" @click="handleReloadCaddy">重载 Caddy</el-button>
+              <el-button type="primary" class="action-btn" :loading="saving" style="width: 100%" @click="handleSave">保存</el-button>
+              <el-button type="warning" class="action-btn" style="width: 100%" @click="handleReloadCaddy">重载 Caddy</el-button>
             </el-col>
           </el-row>
         </el-card>
@@ -69,25 +69,15 @@
       <el-col :span="24">
         <el-collapse v-model="activeCollapse" @change="onCollapseChange">
           <el-collapse-item name="json-preview" title="Caddy 配置预览 (JSON)">
-            <el-card class="config-card">
-              <template #header>
-                <div class="card-header">
-                  <div class="card-title">
-                    <el-icon><Document /></el-icon>
-                    <span>Caddy 配置预览 (JSON)</span>
-                  </div>
-                  <div class="card-actions">
-                    <el-button size="small" :loading="loading" :disabled="!isJsonExpanded" @click="refreshConfig">
-                      <el-icon><RefreshRight /></el-icon>刷新
-                    </el-button>
-                  </div>
-                </div>
-              </template>
-              <div v-loading="loading" class="config-preview">
-                <VueJsonPretty v-if="caddyConfigData" :data="caddyConfigData" :collapsed="false" show-length copyable :show-line="false" />
-                <pre v-else>{{ '点击展开以加载配置' }}</pre>
-              </div>
-            </el-card>
+            <div class="config-toolbar">
+              <el-button size="small" :loading="loading" :disabled="!isJsonExpanded" @click="refreshConfig">
+                <el-icon><RefreshRight /></el-icon>刷新
+              </el-button>
+            </div>
+            <div v-loading="loading" class="config-preview">
+              <VueJsonPretty v-if="caddyConfigData" :data="caddyConfigData" :collapsed="false" show-length copyable :show-line="false" />
+              <pre v-else>{{ '点击展开以加载配置' }}</pre>
+            </div>
           </el-collapse-item>
         </el-collapse>
       </el-col>
@@ -98,7 +88,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { request } from '@/utils/api'
-import { Cpu, Document, RefreshRight, Setting } from '@element-plus/icons-vue'
+import { Cpu, RefreshRight, Setting } from '@element-plus/icons-vue'
 import VueJsonPretty from 'vue-json-pretty'
 import 'vue-json-pretty/lib/styles.css'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -246,20 +236,22 @@ onMounted(() => {
   color: #111827;
 }
 
-.card-actions {
+.config-toolbar {
   display: flex;
-  gap: 8px;
-  align-items: center;
+  justify-content: flex-end;
+  margin-bottom: 12px;
 }
 
 .action-col {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 12px;
   border-left: 1px solid var(--border);
   padding-left: 20px;
 }
+
+.action-btn { margin: 0; }
 
 .config-preview {
   background: #1e293b;
