@@ -21,48 +21,44 @@
               </div>
             </div>
           </template>
-          <el-row :gutter="24">
-            <el-col :span="18">
-              <el-form :model="caddySettings" label-width="160px">
-                <el-form-item label="日志路径">
-                  <el-input v-model="caddySettings.caddy_log_path" style="width: 100%" placeholder="/app/logs/caddy.log" />
-                </el-form-item>
-                <el-form-item label="日志级别">
-                  <el-select v-model="caddySettings.caddy_log_level" style="width: 100%">
-                    <el-option label="debug" value="debug" />
-                    <el-option label="info" value="info" />
-                    <el-option label="warn" value="warn" />
-                    <el-option label="error" value="error" />
-                  </el-select>
-                </el-form-item>
-                <el-form-item label="日志大小 (MB)">
-                  <el-input-number v-model="caddySettings.caddy_log_size_mb" :min="0" controls-position="right" style="width: 100%" />
-                </el-form-item>
-                <el-form-item label="请求体最大大小 (MB)">
-                  <el-input-number v-model="caddySettings.request_body_max_size_mb" :min="0" controls-position="right" style="width: 100%" />
-                </el-form-item>
-                <el-form-item label="HTTP 读取超时 (秒)">
-                  <el-input-number v-model="caddySettings.http_read_timeout" :min="0" controls-position="right" style="width: 100%" />
-                </el-form-item>
-                <el-form-item label="HTTP 写入超时 (秒)">
-                  <el-input-number v-model="caddySettings.http_write_timeout" :min="0" controls-position="right" style="width: 100%" />
-                </el-form-item>
-                <el-form-item label="HTTP 空闲超时 (秒)">
-                  <el-input-number v-model="caddySettings.http_idle_timeout" :min="0" controls-position="right" style="width: 100%" />
-                </el-form-item>
-                <el-form-item label="上游 Keepalive 超时 (秒)">
-                  <el-input-number v-model="caddySettings.upstream_keepalive_timeout" :min="0" controls-position="right" style="width: 100%" />
-                </el-form-item>
-                <el-form-item label="隐藏 Server Tokens">
-                  <el-switch v-model="caddySettings.server_tokens_hidden" active-text="开启" inactive-text="关闭" />
-                </el-form-item>
-              </el-form>
-            </el-col>
-            <el-col :span="6" class="action-col">
-              <el-button type="primary" class="action-btn" :loading="saving" style="width: 100%" @click="handleSave">保存</el-button>
-              <el-button type="warning" class="action-btn" style="width: 100%" @click="handleReloadCaddy">重载 Caddy</el-button>
-            </el-col>
-          </el-row>
+          <el-form :model="caddySettings" label-width="200px" class="caddy-form">
+            <el-form-item label="日志路径">
+              <el-input v-model="caddySettings.caddy_log_path" class="caddy-input" placeholder="/app/logs/caddy.log" />
+            </el-form-item>
+            <el-form-item label="日志级别">
+              <el-select v-model="caddySettings.caddy_log_level" class="caddy-input">
+                <el-option label="debug" value="debug" />
+                <el-option label="info" value="info" />
+                <el-option label="warn" value="warn" />
+                <el-option label="error" value="error" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="日志大小 (MB)">
+              <el-input-number v-model="caddySettings.caddy_log_size_mb" :min="0" controls-position="right" class="caddy-input" />
+            </el-form-item>
+            <el-form-item label="请求体最大大小 (MB)">
+              <el-input-number v-model="caddySettings.request_body_max_size_mb" :min="0" controls-position="right" class="caddy-input" />
+            </el-form-item>
+            <el-form-item label="HTTP 读取超时 (秒)">
+              <el-input-number v-model="caddySettings.http_read_timeout" :min="0" controls-position="right" class="caddy-input" />
+            </el-form-item>
+            <el-form-item label="HTTP 写入超时 (秒)">
+              <el-input-number v-model="caddySettings.http_write_timeout" :min="0" controls-position="right" class="caddy-input" />
+            </el-form-item>
+            <el-form-item label="HTTP 空闲超时 (秒)">
+              <el-input-number v-model="caddySettings.http_idle_timeout" :min="0" controls-position="right" class="caddy-input" />
+            </el-form-item>
+            <el-form-item label="上游 Keepalive 超时 (秒)">
+              <el-input-number v-model="caddySettings.upstream_keepalive_timeout" :min="0" controls-position="right" class="caddy-input" />
+            </el-form-item>
+            <el-form-item label="隐藏 Server Tokens">
+              <el-switch v-model="caddySettings.server_tokens_hidden" active-text="开启" inactive-text="关闭" />
+            </el-form-item>
+            <div class="form-actions">
+              <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
+              <el-button type="warning" @click="handleReloadCaddy">重载 Caddy</el-button>
+            </div>
+          </el-form>
         </el-card>
       </el-col>
 
@@ -242,16 +238,23 @@ onMounted(() => {
   margin-bottom: 12px;
 }
 
-.action-col {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  gap: 12px;
-  border-left: 1px solid var(--border);
-  padding-left: 20px;
+.caddy-form {
+  width: 100%;
 }
 
-.action-btn { margin: 0; }
+.caddy-form .caddy-input {
+  max-width: 320px;
+  width: 100%;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
 
 .config-preview {
   background: #1e293b;
