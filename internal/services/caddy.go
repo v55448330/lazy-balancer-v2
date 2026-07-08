@@ -1234,11 +1234,57 @@ func (s *CaddyService) GetUpstreamHealth() (map[string]map[string]bool, error) {
 	if layer4App, ok := apps["layer4"].(map[string]interface{}); ok {
 		if servers, ok := layer4App["servers"].(map[string]interface{}); ok {
 			for serverName, serverVal := range servers {
-				_ = serverName
-				_ = serverVal
-				// caddy-l4 does not expose upstream health metrics or admin API for TCP upstreams.
-				// Do not include TCP upstreams in this HTTP-oriented health response to avoid
-				// misleading unknown/healthy defaults on the dashboard.
+				server, ok := serverVal.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				routes, ok := server["routes"].([]interface{})
+				if !ok {
+					continue
+				}
+				for _, route := range routes {
+					routeMap, ok := route.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					handleGroups, ok := routeMap["handle"].([]interface{})
+					if !ok {
+						continue
+					}
+					for _, handleGroup := range handleGroups {
+						handle, ok := handleGroup.(map[string]interface{})
+						if !ok || handle["handler"] != "proxy" {
+							continue
+						}
+						upstreams, ok := handle["upstreams"].([]interface{})
+						if !ok {
+							continue
+						}
+						if _, exists := healthStatus[serverName]; !exists {
+							healthStatus[serverName] = make(map[string]bool)
+						}
+						for _, upstream := range upstreams {
+							up, ok := upstream.(map[string]interface{})
+							if !ok {
+								continue
+							}
+							dialList, ok := up["dial"].([]interface{})
+							if !ok || len(dialList) == 0 {
+								continue
+							}
+							dial, _ := dialList[0].(string)
+							if dial == "" {
+								continue
+							}
+							if observedHealthy, ok := upstreamHealth[dial]; ok {
+								healthStatus[serverName][dial] = observedHealthy
+							} else {
+								// No metric observation yet; assume healthy.
+								healthStatus[serverName][dial] = true
+							}
+						}
+					}
+				}
 			}
 		}
 	}
@@ -1319,38 +1365,38 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 									continue
 								}
 
-							dial, ok := up["dial"].(string)
-							if !ok {
-								continue
-							}
+								dial, ok := up["dial"].(string)
+								if !ok {
+									continue
+								}
 
-							detail := &UpstreamHealthDetail{}
+								detail := &UpstreamHealthDetail{}
 
-							if metrics, ok := upstreamMetrics[dial]; ok {
-								detail.NumRequests = metrics.NumRequests
-								detail.Fails = metrics.Fails
-							}
+								if metrics, ok := upstreamMetrics[dial]; ok {
+									detail.NumRequests = metrics.NumRequests
+									detail.Fails = metrics.Fails
+								}
 
-							if observedHealthy, ok := upstreamHealth[dial]; ok {
-								// Caddy reports a definitive health status for this upstream.
-								detail.Healthy = observedHealthy
-							} else if detail.Fails > 0 {
-								// Passive health observed failures.
-								detail.Healthy = false
-							} else {
-								// No observation from Caddy at all.
-								detail.Unknown = true
-							}
+								if observedHealthy, ok := upstreamHealth[dial]; ok {
+									// Caddy reports a definitive health status for this upstream.
+									detail.Healthy = observedHealthy
+								} else if detail.Fails > 0 {
+									// Passive health observed failures.
+									detail.Healthy = false
+								} else {
+									// No observation from Caddy at all.
+									detail.Unknown = true
+								}
 
-							if detail.Unknown {
-								// Avoid showing "unknown" as the default for healthy-looking upstreams:
-								// if there are no failures and the upstream is configured, treat it as
-								// healthy until Caddy reports otherwise.
-								detail.Unknown = false
-								detail.Healthy = true
-							}
+								if detail.Unknown {
+									// Avoid showing "unknown" as the default for healthy-looking upstreams:
+									// if there are no failures and the upstream is configured, treat it as
+									// healthy until Caddy reports otherwise.
+									detail.Unknown = false
+									detail.Healthy = true
+								}
 
-							healthStatus[serverName][dial] = detail
+								healthStatus[serverName][dial] = detail
 							}
 						}
 
@@ -1393,10 +1439,64 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 	if layer4App, ok := apps["layer4"].(map[string]interface{}); ok {
 		if servers, ok := layer4App["servers"].(map[string]interface{}); ok {
 			for serverName, serverVal := range servers {
-				_ = serverName
-				_ = serverVal
-				// caddy-l4 does not expose upstream health metrics or admin API for TCP upstreams.
-				// Do not include TCP upstreams in this HTTP-oriented health response.
+				server, ok := serverVal.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				routes, ok := server["routes"].([]interface{})
+				if !ok {
+					continue
+				}
+				for _, route := range routes {
+					routeMap, ok := route.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					handleGroups, ok := routeMap["handle"].([]interface{})
+					if !ok {
+						continue
+					}
+					for _, handleGroup := range handleGroups {
+						handle, ok := handleGroup.(map[string]interface{})
+						if !ok || handle["handler"] != "proxy" {
+							continue
+						}
+						upstreams, ok := handle["upstreams"].([]interface{})
+						if !ok {
+							continue
+						}
+						if _, exists := healthStatus[serverName]; !exists {
+							healthStatus[serverName] = make(map[string]*UpstreamHealthDetail)
+						}
+						for _, upstream := range upstreams {
+							up, ok := upstream.(map[string]interface{})
+							if !ok {
+								continue
+							}
+							dialList, ok := up["dial"].([]interface{})
+							if !ok || len(dialList) == 0 {
+								continue
+							}
+							dial, _ := dialList[0].(string)
+							if dial == "" {
+								continue
+							}
+							detail := &UpstreamHealthDetail{}
+							if metrics, ok := upstreamMetrics[dial]; ok {
+								detail.NumRequests = metrics.NumRequests
+								detail.Fails = metrics.Fails
+							}
+							if observedHealthy, ok := upstreamHealth[dial]; ok {
+								detail.Healthy = observedHealthy
+							} else if detail.Fails > 0 {
+								detail.Healthy = false
+							} else {
+								detail.Unknown = true
+							}
+							healthStatus[serverName][dial] = detail
+						}
+					}
+				}
 			}
 		}
 	}
@@ -1478,7 +1578,7 @@ func (s *CaddyService) getUpstreamHealthFromMetrics() map[string]bool {
 
 	lines := strings.Split(string(body), "\n")
 	for _, line := range lines {
-		if strings.HasPrefix(line, "caddy_reverse_proxy_upstreams_healthy{") || strings.HasPrefix(line, "caddy_layer4_proxy_upstreams_healthy{") {
+		if strings.HasPrefix(line, "caddy_reverse_proxy_upstreams_healthy{") || strings.HasPrefix(line, "caddy_layer4_proxy_upstream_healthy{") {
 			upstream := extractMetricLabel(line, "upstream")
 			spaceIdx := strings.LastIndex(line, " ")
 			var isHealthy float64
@@ -1537,6 +1637,9 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		EnableCompress                bool
 		CompressTypes                 string
 		EnableActiveHealthCheck       bool
+		TCPHealthCheckPort            int
+		TCPTryDuration                int
+		TCPTryInterval                int
 		HostHeader                    string
 	}
 
@@ -1566,7 +1669,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		       IIF(enable_tls IN ('1',1),1,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
 		       IIF(tls_http_redirect IN ('1',1),1,0),
 		       IIF(enabled IN ('1',1),1,0), IIF(enable_compress IN ('1',1),1,0), COALESCE(compress_types,'gzip'),
-		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(host_header,'')
+		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250), COALESCE(host_header,'')
 		FROM lb_rules WHERE enabled = 1
 	`)
 	if err != nil {
@@ -1582,7 +1685,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 			&r.HealthCheckTimeout, &r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
 			&r.EnableTLS, &r.TLSSource, &r.ACMEConfigID, &r.TLSCert, &r.TLSKey,
 			&r.TLSHTTPRedirect, &r.Enabled, &r.EnableCompress, &r.CompressTypes,
-			&r.EnableActiveHealthCheck, &r.HostHeader)
+			&r.EnableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPTryDuration, &r.TCPTryInterval, &r.HostHeader)
 
 		if err != nil {
 			log.Printf("Failed to scan rule: %v", err)
@@ -1683,30 +1786,30 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 			ups := ru.upstreams
 
 			ruleConfig := SingleRuleConfig{
-				CaddyID:                 r.CaddyID,
-				Protocol:                r.Protocol,
-				Domain:                  r.Domain,
-				ListenPort:              r.ListenPort,
-				Strategy:                r.Strategy,
-				DynamicDNS:              r.DynamicDNS,
-				EnableDnsServer:         r.EnableDnsServer,
-				DnsServer:               r.DnsServer,
-				DnsFamily:               r.DnsFamily,
-				HealthCheckPath:         r.HealthCheckPath,
-				HealthCheckInterval:     r.HealthCheckInterval,
-				HealthCheckTimeout:      r.HealthCheckTimeout,
+				CaddyID:                       r.CaddyID,
+				Protocol:                      r.Protocol,
+				Domain:                        r.Domain,
+				ListenPort:                    r.ListenPort,
+				Strategy:                      r.Strategy,
+				DynamicDNS:                    r.DynamicDNS,
+				EnableDnsServer:               r.EnableDnsServer,
+				DnsServer:                     r.DnsServer,
+				DnsFamily:                     r.DnsFamily,
+				HealthCheckPath:               r.HealthCheckPath,
+				HealthCheckInterval:           r.HealthCheckInterval,
+				HealthCheckTimeout:            r.HealthCheckTimeout,
 				HealthCheckUnhealthyThreshold: r.HealthCheckUnhealthyThreshold,
-				EnableTLS:               r.EnableTLS,
-				TLSSource:               r.TLSSource,
-				ACMEConfigID:            r.ACMEConfigID,
-				ACMEEmail:               r.ACMEEmail,
-				TLSCert:                 r.TLSCert,
-				TLSKey:                  r.TLSKey,
-				TLSHTTPRedirect:         r.TLSHTTPRedirect,
-				EnableCompress:          r.EnableCompress,
-				CompressTypes:           r.CompressTypes,
-				EnableActiveHealthCheck: r.EnableActiveHealthCheck,
-				HostHeader:              r.HostHeader,
+				EnableTLS:                     r.EnableTLS,
+				TLSSource:                     r.TLSSource,
+				ACMEConfigID:                  r.ACMEConfigID,
+				ACMEEmail:                     r.ACMEEmail,
+				TLSCert:                       r.TLSCert,
+				TLSKey:                        r.TLSKey,
+				TLSHTTPRedirect:               r.TLSHTTPRedirect,
+				EnableCompress:                r.EnableCompress,
+				CompressTypes:                 r.CompressTypes,
+				EnableActiveHealthCheck:       r.EnableActiveHealthCheck,
+				HostHeader:                    r.HostHeader,
 			}
 			for _, u := range ups {
 				if u.Enabled {
@@ -1830,12 +1933,14 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 
 	for port, rules := range tcpServersByPort {
 		var upstreamList []interface{}
+		var enabledUpstreams []upstream
 		var proxyProtocol string
 		for _, ru := range rules {
 			for _, u := range ru.upstreams {
 				if !u.Enabled {
 					continue
 				}
+				enabledUpstreams = append(enabledUpstreams, u)
 				dial := fmt.Sprintf("%s:%d", u.Host, u.Port)
 				upstreamEntry := map[string]interface{}{
 					"dial": []string{dial},
@@ -1877,12 +1982,19 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 			proxyHandler["proxy_protocol"] = proxyProtocol
 		}
 
-		if len(upstreamList) > 1 && strategy != "" {
-			proxyHandler["load_balancing"] = map[string]interface{}{
-				"selection": map[string]interface{}{
-					"policy": strategy,
-				},
-			}
+		loadBalancing := map[string]interface{}{
+			"selection": map[string]interface{}{
+				"policy": strategy,
+			},
+		}
+		if r.TCPTryDuration > 0 {
+			loadBalancing["try_duration"] = fmt.Sprintf("%dms", r.TCPTryDuration)
+		}
+		if r.TCPTryInterval > 0 {
+			loadBalancing["try_interval"] = fmt.Sprintf("%dms", r.TCPTryInterval)
+		}
+		if len(upstreamList) > 1 || r.TCPTryDuration > 0 || r.TCPTryInterval > 0 {
+			proxyHandler["load_balancing"] = loadBalancing
 		}
 
 		healthCheckInterval := r.HealthCheckInterval
@@ -1893,15 +2005,33 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		if unhealthyThreshold <= 0 {
 			unhealthyThreshold = 3
 		}
-		proxyHandler["health_checks"] = map[string]interface{}{
+		healthChecks := map[string]interface{}{
 			"passive": map[string]interface{}{
 				"fail_duration": fmt.Sprintf("%ds", healthCheckInterval*3),
 				"max_fails":     unhealthyThreshold,
 			},
 		}
+		if r.EnableActiveHealthCheck {
+			activePort := r.TCPHealthCheckPort
+			if activePort <= 0 && len(enabledUpstreams) > 0 {
+				activePort = enabledUpstreams[0].Port
+			}
+			healthCheckTimeout := r.HealthCheckTimeout
+			if healthCheckTimeout <= 0 {
+				healthCheckTimeout = 5
+			}
+			healthChecks["active"] = map[string]interface{}{
+				"interval": fmt.Sprintf("%ds", healthCheckInterval),
+				"port":     activePort,
+				"timeout":  fmt.Sprintf("%ds", healthCheckTimeout),
+			}
+		}
+		proxyHandler["health_checks"] = healthChecks
 
 		route := map[string]interface{}{
-			"handle": []interface{}{proxyHandler},
+			"handle": []interface{}{
+				proxyHandler,
+			},
 		}
 		if r.CaddyID != "" {
 			route["@id"] = r.CaddyID
@@ -2135,36 +2265,37 @@ func splitAndTrim(s string) []string {
 	return result
 }
 
-
-
 type SingleRuleConfig struct {
-	ID                      int
-	CaddyID                 string
-	Name                    string
-	Protocol                string
-	Domain                  string
-	ListenPort              int
-	Strategy                string
-	DynamicDNS              bool
-	EnableDnsServer         bool
-	DnsServer               string
-	DnsFamily               string
-	HealthCheckPath         string
-	HealthCheckInterval     int
-	HealthCheckTimeout      int
+	ID                            int
+	CaddyID                       string
+	Name                          string
+	Protocol                      string
+	Domain                        string
+	ListenPort                    int
+	Strategy                      string
+	DynamicDNS                    bool
+	EnableDnsServer               bool
+	DnsServer                     string
+	DnsFamily                     string
+	HealthCheckPath               string
+	HealthCheckInterval           int
+	HealthCheckTimeout            int
 	HealthCheckUnhealthyThreshold int
-	EnableTLS               bool
-	TLSSource               string
-	ACMEConfigID            int
-	ACMEEmail               string
-	TLSCert                 string
-	TLSKey                  string
-	TLSHTTPRedirect         bool
-	EnableCompress          bool
-	CompressTypes           string
-	EnableActiveHealthCheck bool
-	HostHeader              string
-	Upstreams               []UpstreamConfig
+	EnableTLS                     bool
+	TLSSource                     string
+	ACMEConfigID                  int
+	ACMEEmail                     string
+	TLSCert                       string
+	TLSKey                        string
+	TLSHTTPRedirect               bool
+	EnableCompress                bool
+	CompressTypes                 string
+	EnableActiveHealthCheck       bool
+	TCPHealthCheckPort            int
+	TCPTryDuration                int
+	TCPTryInterval                int
+	HostHeader                    string
+	Upstreams                     []UpstreamConfig
 }
 
 type UpstreamConfig struct {
@@ -2421,12 +2552,20 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		if proxyProtocol != "" {
 			proxyHandler["proxy_protocol"] = proxyProtocol
 		}
-		if len(upstreamList) > 1 {
-			proxyHandler["load_balancing"] = map[string]interface{}{
-				"selection": map[string]interface{}{
-					"policy": strategy,
-				},
-			}
+
+		loadBalancing := map[string]interface{}{
+			"selection": map[string]interface{}{
+				"policy": strategy,
+			},
+		}
+		if rule.TCPTryDuration > 0 {
+			loadBalancing["try_duration"] = fmt.Sprintf("%dms", rule.TCPTryDuration)
+		}
+		if rule.TCPTryInterval > 0 {
+			loadBalancing["try_interval"] = fmt.Sprintf("%dms", rule.TCPTryInterval)
+		}
+		if len(upstreamList) > 1 || rule.TCPTryDuration > 0 || rule.TCPTryInterval > 0 {
+			proxyHandler["load_balancing"] = loadBalancing
 		}
 
 		healthCheckInterval := rule.HealthCheckInterval
@@ -2437,12 +2576,28 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		if unhealthyThreshold <= 0 {
 			unhealthyThreshold = 3
 		}
-		proxyHandler["health_checks"] = map[string]interface{}{
+		healthChecks := map[string]interface{}{
 			"passive": map[string]interface{}{
 				"fail_duration": fmt.Sprintf("%ds", healthCheckInterval*3),
 				"max_fails":     unhealthyThreshold,
 			},
 		}
+		if rule.EnableActiveHealthCheck {
+			activePort := rule.TCPHealthCheckPort
+			if activePort <= 0 && len(enabledUpstreams) > 0 {
+				activePort = enabledUpstreams[0].Port
+			}
+			healthCheckTimeout := rule.HealthCheckTimeout
+			if healthCheckTimeout <= 0 {
+				healthCheckTimeout = 5
+			}
+			healthChecks["active"] = map[string]interface{}{
+				"interval": fmt.Sprintf("%ds", healthCheckInterval),
+				"port":     activePort,
+				"timeout":  fmt.Sprintf("%ds", healthCheckTimeout),
+			}
+		}
+		proxyHandler["health_checks"] = healthChecks
 
 		route := map[string]interface{}{
 			"handle": []interface{}{proxyHandler},
