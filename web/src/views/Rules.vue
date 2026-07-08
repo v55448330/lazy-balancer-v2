@@ -470,7 +470,7 @@
                 @click="wizardForm.strategy = 'cookie'"
               >
                 <div class="strategy-card-title">Cookie 粘滞</div>
-                <div class="strategy-card-desc">Cookie 名 lb_sticky，精确会话粘滞</div>
+                <div class="strategy-card-desc">通过 Cookie 实现精确会话粘滞</div>
               </div>
             </div>
 
@@ -603,11 +603,13 @@
             <el-form-item label="请求体大小">
               <el-input-number v-model="wizardForm.request_body_max_size_mb" :min="0" :max="10240" controls-position="right" style="width: 120px;" />
               <span class="form-tip-inline">MB，0=默认</span>
+              <div class="form-tip-line">限制单个请求体的最大大小；0 表示使用全局配置中的默认值。</div>
             </el-form-item>
 
             <el-form-item label="上游超时">
               <el-input-number v-model="wizardForm.upstream_keepalive_timeout" :min="0" :max="3600" controls-position="right" style="width: 120px;" />
               <span class="form-tip-inline">秒，0=默认</span>
+              <div class="form-tip-line">与上游服务器建立的长连接在空闲多久后关闭；0 表示使用全局配置中的默认值。</div>
             </el-form-item>
           </el-form>
         </div>

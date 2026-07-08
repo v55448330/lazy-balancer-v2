@@ -270,12 +270,19 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get log path: " + err.Error()})
 		return
 	}
+	if logPath == "" {
+		logPath = "/app/logs/caddy.log"
+	}
 
 	const maxBytes = 128 * 1024
 	const maxLines = 500
 
 	info, err := os.Stat(logPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": ""}})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Log file not accessible: " + err.Error()})
 		return
 	}

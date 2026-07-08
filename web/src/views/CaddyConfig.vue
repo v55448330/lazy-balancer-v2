@@ -21,7 +21,7 @@
               </div>
             </div>
           </template>
-          <el-form :model="caddySettings" label-width="240px" class="caddy-form">
+          <el-form :model="caddySettings" label-width="180px" class="caddy-form">
             <el-form-item label="日志路径">
               <div class="log-path-row">
                 <el-input v-model="caddySettings.caddy_log_path" readonly placeholder="/app/logs/caddy.log" />
@@ -29,33 +29,41 @@
               </div>
             </el-form-item>
             <el-form-item label="日志级别">
-              <el-select v-model="caddySettings.caddy_log_level" class="caddy-input">
+              <el-select v-model="caddySettings.caddy_log_level" style="width: 120px;">
                 <el-option label="debug" value="debug" />
                 <el-option label="info" value="info" />
                 <el-option label="warn" value="warn" />
                 <el-option label="error" value="error" />
               </el-select>
+              <span class="caddy-form-tip">Caddy 日志输出级别</span>
             </el-form-item>
-            <el-form-item label="日志大小 (MB)">
-              <el-input-number v-model="caddySettings.caddy_log_size_mb" :min="0" controls-position="right" class="caddy-input" />
+            <el-form-item label="日志大小">
+              <el-input-number v-model="caddySettings.caddy_log_size_mb" :min="0" controls-position="right" style="width: 120px;" />
+              <span class="caddy-form-tip">MB，单个日志文件达到该大小后滚动</span>
             </el-form-item>
-            <el-form-item label="请求体最大大小 (MB)">
-              <el-input-number v-model="caddySettings.request_body_max_size_mb" :min="0" controls-position="right" class="caddy-input" />
+            <el-form-item label="请求体大小">
+              <el-input-number v-model="caddySettings.request_body_max_size_mb" :min="0" controls-position="right" style="width: 120px;" />
+              <span class="caddy-form-tip">MB，限制单个请求体的最大大小</span>
             </el-form-item>
-            <el-form-item label="HTTP 读取超时 (秒)">
-              <el-input-number v-model="caddySettings.http_read_timeout" :min="0" controls-position="right" class="caddy-input" />
+            <el-form-item label="读取超时">
+              <el-input-number v-model="caddySettings.http_read_timeout" :min="0" controls-position="right" style="width: 120px;" />
+              <span class="caddy-form-tip">秒，读取请求体的超时时间</span>
             </el-form-item>
-            <el-form-item label="HTTP 写入超时 (秒)">
-              <el-input-number v-model="caddySettings.http_write_timeout" :min="0" controls-position="right" class="caddy-input" />
+            <el-form-item label="写入超时">
+              <el-input-number v-model="caddySettings.http_write_timeout" :min="0" controls-position="right" style="width: 120px;" />
+              <span class="caddy-form-tip">秒，写入响应的超时时间</span>
             </el-form-item>
-            <el-form-item label="HTTP 空闲超时 (秒)">
-              <el-input-number v-model="caddySettings.http_idle_timeout" :min="0" controls-position="right" class="caddy-input" />
+            <el-form-item label="空闲超时">
+              <el-input-number v-model="caddySettings.http_idle_timeout" :min="0" controls-position="right" style="width: 120px;" />
+              <span class="caddy-form-tip">秒，连接保持空闲的最大时间</span>
             </el-form-item>
-            <el-form-item label="上游 Keepalive 超时 (秒)">
-              <el-input-number v-model="caddySettings.upstream_keepalive_timeout" :min="0" controls-position="right" class="caddy-input" />
+            <el-form-item label="上游 Keepalive">
+              <el-input-number v-model="caddySettings.upstream_keepalive_timeout" :min="0" controls-position="right" style="width: 120px;" />
+              <span class="caddy-form-tip">秒，与上游长连接的空闲超时</span>
             </el-form-item>
-            <el-form-item label="隐藏 Server Tokens">
+            <el-form-item label="Server Tokens">
               <el-switch v-model="caddySettings.server_tokens_hidden" active-text="开启" inactive-text="关闭" />
+              <span class="caddy-form-tip">是否在响应头中隐藏 Server 字段</span>
             </el-form-item>
             <div class="form-actions">
               <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
@@ -329,10 +337,6 @@ onMounted(() => {
   box-sizing: border-box;
 }
 
-.caddy-form .caddy-input {
-  width: 100%;
-}
-
 .caddy-form .el-input-number :deep(.el-input__inner) {
   text-align: left;
 }
@@ -343,6 +347,13 @@ onMounted(() => {
 
 .caddy-form .el-select :deep(.el-input__inner) {
   text-align: left;
+}
+
+.caddy-form-tip {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #6b7280;
+  vertical-align: middle;
 }
 
 .log-path-row {
