@@ -2294,6 +2294,9 @@ type SingleRuleConfig struct {
 	TCPHealthCheckPort            int
 	TCPTryDuration                int
 	TCPTryInterval                int
+	RequestBodyMaxSizeMB          int
+	UpstreamKeepaliveTimeout      int
+	ServerTokensHidden            int
 	HostHeader                    string
 	Upstreams                     []UpstreamConfig
 }
