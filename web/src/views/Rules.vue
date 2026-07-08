@@ -470,7 +470,7 @@
                 @click="wizardForm.strategy = 'cookie'"
               >
                 <div class="strategy-card-title">Cookie 粘滞</div>
-                <div class="strategy-card-desc">通过 Cookie 实现精确会话粘滞</div>
+                <div class="strategy-card-desc">Cookie 名 lb_sticky，精确会话粘滞</div>
               </div>
             </div>
 
@@ -608,15 +608,6 @@
             <el-form-item label="上游超时">
               <el-input-number v-model="wizardForm.upstream_keepalive_timeout" :min="0" :max="3600" controls-position="right" style="width: 120px;" />
               <span class="form-tip-inline">秒，0=默认</span>
-            </el-form-item>
-
-            <el-form-item label="Server 响应头">
-              <el-select v-model="wizardForm.server_tokens_hidden" style="width: 180px;">
-                <el-option :value="0" label="使用全局默认值" />
-                <el-option :value="1" label="隐藏" />
-                <el-option :value="2" label="显示" />
-              </el-select>
-              <span class="form-tip-inline">0=默认</span>
             </el-form-item>
           </el-form>
         </div>
@@ -770,7 +761,6 @@
           </el-descriptions-item>
           <el-descriptions-item label="请求体大小">{{ (ruleConfig.request_body_max_size_mb || 0) > 0 ? ruleConfig.request_body_max_size_mb + 'MB' : '全局默认' }}</el-descriptions-item>
           <el-descriptions-item label="上游 keepalive">{{ (ruleConfig.upstream_keepalive_timeout || 0) > 0 ? ruleConfig.upstream_keepalive_timeout + 's' : '全局默认' }}</el-descriptions-item>
-          <el-descriptions-item label="Server 头">{{ serverTokensLabel(ruleConfig.server_tokens_hidden) }}</el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="ruleConfig.enabled ? 'success' : 'info'" size="small">{{ ruleConfig.enabled ? '启用' : '禁用' }}</el-tag>
           </el-descriptions-item>
@@ -1399,15 +1389,6 @@ const getStrategyLabel = (strategy: string) => {
     header: 'Header',
   }
   return labels[strategy] || strategy
-}
-
-const serverTokensLabel = (value: number | undefined) => {
-  const labels: Record<number, string> = {
-    0: '使用全局默认值',
-    1: '隐藏',
-    2: '显示',
-  }
-  return labels[value || 0] || '使用全局默认值'
 }
 
 const fetchUsers = async () => {
@@ -2407,12 +2388,13 @@ onUnmounted(() => {
   display: flex;
   gap: 8px;
   width: 100%;
-  justify-content: center;
   padding: 0 20px;
+  box-sizing: border-box;
 }
 
 .strategy-card {
-  width: 190px;
+  flex: 1;
+  min-width: 0;
   padding: 8px 10px;
   border: 1px solid #e5e7eb;
   border-radius: 4px;
@@ -2422,7 +2404,7 @@ onUnmounted(() => {
   flex-direction: column;
   justify-content: center;
   min-height: 44px;
-  box-sizing: content-box;
+  box-sizing: border-box;
 }
 
 .compact-divider {
@@ -2453,19 +2435,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.strategy-card {
-  width: 190px;
-  padding: 8px 10px;
-  border: 1px solid #e5e7eb;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-height: 44px;
 }
 
 .compact-divider {

@@ -325,12 +325,24 @@ onMounted(() => {
 
 .caddy-form {
   width: 100%;
-  padding: 0 48px;
+  padding: 0 64px;
   box-sizing: border-box;
 }
 
 .caddy-form .caddy-input {
   width: 100%;
+}
+
+.caddy-form .el-input-number :deep(.el-input__inner) {
+  text-align: left;
+}
+
+.caddy-form .el-input :deep(.el-input__inner) {
+  text-align: left;
+}
+
+.caddy-form .el-select :deep(.el-input__inner) {
+  text-align: left;
 }
 
 .log-path-row {
