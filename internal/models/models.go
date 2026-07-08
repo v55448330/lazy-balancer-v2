@@ -49,6 +49,9 @@ type LbRule struct {
 	HealthCheckUnhealthyThreshold int          `json:"health_check_unhealthy_threshold"`
 	HealthCheckHealthyThreshold   int          `json:"health_check_healthy_threshold"`
 	EnableActiveHealthCheck       bool         `json:"enable_active_health_check"`
+	TCPHealthCheckPort            int          `json:"tcp_health_check_port"`
+	TCPTryDuration                int          `json:"tcp_try_duration"`
+	TCPTryInterval                int          `json:"tcp_try_interval"`
 	Upstreams                     []Upstream   `json:"upstreams"`
 	HostHeader                    string       `json:"host_header"`
 	EnableTLS                     bool         `json:"enable_tls"`
@@ -195,16 +198,16 @@ func (n JSONNullTime) MarshalJSON() ([]byte, error) {
 
 // CertJob represents an ACME certificate issuance job
 type CertJob struct {
-	ID               int           `json:"id"`
-	RuleID           string        `json:"rule_id"`
-	Domain           string        `json:"domain"`
-	CAProviderID     int           `json:"ca_provider_id"`
-	Status           string        `json:"status"`
-	Message          string        `json:"message"`
-	CertPEM          string        `json:"cert_pem,omitempty"`
-	KeyPEM           string        `json:"key_pem,omitempty"`
-	RenewalAttempts  int           `json:"renewal_attempts,omitempty"`
-	CAAvailableAfter JSONNullTime  `json:"ca_available_after,omitempty"`
+	ID               int          `json:"id"`
+	RuleID           string       `json:"rule_id"`
+	Domain           string       `json:"domain"`
+	CAProviderID     int          `json:"ca_provider_id"`
+	Status           string       `json:"status"`
+	Message          string       `json:"message"`
+	CertPEM          string       `json:"cert_pem,omitempty"`
+	KeyPEM           string       `json:"key_pem,omitempty"`
+	RenewalAttempts  int          `json:"renewal_attempts,omitempty"`
+	CAAvailableAfter JSONNullTime `json:"ca_available_after,omitempty"`
 	LastErrorCode    string       `json:"last_error_code,omitempty"`
 	ExpiresAt        sql.NullTime `json:"expires_at"`
 	CreatedAt        time.Time    `json:"created_at"`
@@ -313,6 +316,9 @@ type CreateRuleRequest struct {
 	HealthCheckUnhealthyThreshold int        `json:"health_check_unhealthy_threshold"`
 	HealthCheckHealthyThreshold   int        `json:"health_check_healthy_threshold"`
 	EnableActiveHealthCheck       bool       `json:"enable_active_health_check"`
+	TCPHealthCheckPort            int        `json:"tcp_health_check_port"`
+	TCPTryDuration                int        `json:"tcp_try_duration"`
+	TCPTryInterval                int        `json:"tcp_try_interval"`
 	HostHeader                    string     `json:"host_header"`
 	Upstreams                     []Upstream `json:"upstreams" binding:"required"`
 	EnableTLS                     bool       `json:"enable_tls"`
@@ -343,6 +349,9 @@ type UpdateRuleRequest struct {
 	HealthCheckUnhealthyThreshold int        `json:"health_check_unhealthy_threshold"`
 	HealthCheckHealthyThreshold   int        `json:"health_check_healthy_threshold"`
 	EnableActiveHealthCheck       bool       `json:"enable_active_health_check"`
+	TCPHealthCheckPort            int        `json:"tcp_health_check_port"`
+	TCPTryDuration                int        `json:"tcp_try_duration"`
+	TCPTryInterval                int        `json:"tcp_try_interval"`
 	HostHeader                    string     `json:"host_header"`
 	Upstreams                     []Upstream `json:"upstreams"`
 	EnableTLS                     bool       `json:"enable_tls"`

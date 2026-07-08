@@ -118,6 +118,9 @@ func createTables() error {
 		health_check_unhealthy_threshold INTEGER DEFAULT 3,
 		health_check_healthy_threshold INTEGER DEFAULT 2,
 		enable_active_health_check BOOLEAN DEFAULT FALSE,
+		tcp_health_check_port INTEGER DEFAULT 0,
+		tcp_try_duration INTEGER DEFAULT 0,
+		tcp_try_interval INTEGER DEFAULT 250,
 		host_header VARCHAR(255),
 		enable_tls BOOLEAN DEFAULT FALSE,
 		tls_cert TEXT,
@@ -438,6 +441,21 @@ func runMigrations() error {
 		DB.Exec("ALTER TABLE upstreams ADD COLUMN proxy_protocol VARCHAR(10) DEFAULT ''")
 	}
 
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='tcp_health_check_port'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE lb_rules ADD COLUMN tcp_health_check_port INTEGER DEFAULT 0")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='tcp_try_duration'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE lb_rules ADD COLUMN tcp_try_duration INTEGER DEFAULT 0")
+	}
+
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='tcp_try_interval'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE lb_rules ADD COLUMN tcp_try_interval INTEGER DEFAULT 250")
+	}
+
 	// certificate_configs schema migration: move from legacy dns_id/dns_key to JSON dns_credentials
 	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('certificate_configs') WHERE name='dns_credentials'").Scan(&colCount)
 	if colCount == 0 {
@@ -608,6 +626,9 @@ func migrateLbRulesPrimaryKey() error {
 			health_check_unhealthy_threshold INTEGER DEFAULT 3,
 			health_check_healthy_threshold INTEGER DEFAULT 2,
 			enable_active_health_check BOOLEAN DEFAULT FALSE,
+			tcp_health_check_port INTEGER DEFAULT 0,
+			tcp_try_duration INTEGER DEFAULT 0,
+			tcp_try_interval INTEGER DEFAULT 250,
 			host_header VARCHAR(255),
 			enable_tls BOOLEAN DEFAULT FALSE,
 			tls_cert TEXT,
@@ -640,7 +661,8 @@ func migrateLbRulesPrimaryKey() error {
 			strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
-			enable_active_health_check, host_header, enable_tls, tls_cert,
+			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
+			host_header, enable_tls, tls_cert,
 			tls_key, tls_http_redirect, tls_source, acme_config_id,
 			ca_provider_id, enable_compress, compress_types, enabled,
 			created_by, created_at, updated_at, updated_by, caddy_id
@@ -650,7 +672,8 @@ func migrateLbRulesPrimaryKey() error {
 			strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
-			enable_active_health_check, host_header, enable_tls, tls_cert,
+			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
+			host_header, enable_tls, tls_cert,
 			tls_key, tls_http_redirect, tls_source, acme_config_id,
 			ca_provider_id, enable_compress, compress_types, enabled,
 			created_by, created_at, updated_at, updated_by, caddy_id
