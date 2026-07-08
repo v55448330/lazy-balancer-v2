@@ -260,6 +260,62 @@ func (h *Handlers) GetCaddyConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: configData})
 }
 
+func (h *Handlers) GetCaddyLogs(c *gin.Context) {
+	var logPath string
+	err := db.DB.QueryRow("SELECT COALESCE(caddy_log_path,'/app/logs/caddy.log') FROM global_config WHERE id = 1").Scan(&logPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get log path: " + err.Error()})
+		return
+	}
+
+	const maxBytes = 128 * 1024
+	const maxLines = 500
+
+	info, err := os.Stat(logPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Log file not accessible: " + err.Error()})
+		return
+	}
+
+	startOffset := int64(0)
+	if info.Size() > maxBytes {
+		startOffset = info.Size() - maxBytes
+	}
+
+	f, err := os.Open(logPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to open log file: " + err.Error()})
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read log file: " + err.Error()})
+		return
+	}
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read log file: " + err.Error()})
+		return
+	}
+
+	// If we started mid-file, skip the first partial line so the result starts on a line boundary.
+	if startOffset > 0 {
+		if idx := bytes.Index(data, []byte("\n")); idx != -1 {
+			data = data[idx+1:]
+		}
+	}
+
+	lines := strings.Split(string(data), "\n")
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	content := strings.Join(lines, "\n")
+
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": content}})
+}
+
 func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	var req struct {
 		Content string `json:"content"`

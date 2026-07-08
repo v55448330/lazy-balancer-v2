@@ -136,10 +136,11 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				api.GET("/system/info", h.GetSystemInfo)
 				api.GET("/system/metrics", h.GetSystemMetrics)
 
-				// Caddy
-				api.GET("/caddy/status", h.GetCaddyStatus)
-				api.GET("/caddy/config", h.GetCaddyConfig)
-				api.PUT("/caddy/config", h.PutCaddyConfig)
+			// Caddy
+			api.GET("/caddy/status", h.GetCaddyStatus)
+			api.GET("/caddy/config", h.GetCaddyConfig)
+			api.GET("/caddy/logs", h.GetCaddyLogs)
+			api.PUT("/caddy/config", h.PutCaddyConfig)
 				api.GET("/caddy/host-metrics", h.GetHostMetrics)
 				api.POST("/caddy/start", h.StartCaddy)
 				api.POST("/caddy/stop", h.StopCaddy)

@@ -21,9 +21,12 @@
               </div>
             </div>
           </template>
-          <el-form :model="caddySettings" label-width="200px" class="caddy-form">
+          <el-form :model="caddySettings" label-width="240px" class="caddy-form">
             <el-form-item label="日志路径">
-              <el-input v-model="caddySettings.caddy_log_path" class="caddy-input" placeholder="/app/logs/caddy.log" />
+              <div class="log-path-row">
+                <el-input v-model="caddySettings.caddy_log_path" readonly placeholder="/app/logs/caddy.log" />
+                <el-button type="primary" :icon="View" @click="openLogDialog">查看</el-button>
+              </div>
             </el-form-item>
             <el-form-item label="日志级别">
               <el-select v-model="caddySettings.caddy_log_level" class="caddy-input">
@@ -77,14 +80,41 @@
           </el-collapse-item>
         </el-collapse>
       </el-col>
-    </el-row>
-  </div>
+  </el-row>
+
+  <el-dialog
+    v-model="logDialogVisible"
+    title="Caddy 运行日志"
+    width="900px"
+    destroy-on-close
+    @opened="onLogDialogOpened"
+    @closed="onLogDialogClosed"
+  >
+    <div class="log-toolbar">
+      <el-switch v-model="autoRefresh" active-text="自动刷新" />
+      <el-button type="primary" :loading="logLoading" size="small" @click="refreshLogs">
+        <el-icon><RefreshRight /></el-icon>刷新
+      </el-button>
+    </div>
+    <el-input
+      v-model="logContent"
+      type="textarea"
+      :readonly="true"
+      :rows="20"
+      class="log-textarea"
+      placeholder="暂无日志"
+    />
+    <template #footer>
+      <el-button @click="logDialogVisible = false">关闭</el-button>
+    </template>
+  </el-dialog>
+</div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { request } from '@/utils/api'
-import { Cpu, RefreshRight, Setting } from '@element-plus/icons-vue'
+import { Cpu, RefreshRight, Setting, View } from '@element-plus/icons-vue'
 import VueJsonPretty from 'vue-json-pretty'
 import 'vue-json-pretty/lib/styles.css'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -106,6 +136,12 @@ const caddySettings = ref({
 
 const saving = ref(false)
 const activeCollapse = ref<string[]>([])
+
+const logDialogVisible = ref(false)
+const logContent = ref('')
+const logLoading = ref(false)
+const autoRefresh = ref(true)
+let logPollTimer: ReturnType<typeof setInterval> | null = null
 
 const fetchCaddyConfig = async () => {
   loading.value = true
@@ -182,6 +218,55 @@ const refreshConfig = () => {
   fetchCaddyConfig()
 }
 
+const openLogDialog = () => {
+  logDialogVisible.value = true
+}
+
+const onLogDialogOpened = () => {
+  refreshLogs()
+  startLogPolling()
+}
+
+const onLogDialogClosed = () => {
+  stopLogPolling()
+  logContent.value = ''
+}
+
+const startLogPolling = () => {
+  stopLogPolling()
+  if (autoRefresh.value) {
+    logPollTimer = setInterval(refreshLogs, 2000)
+  }
+}
+
+const stopLogPolling = () => {
+  if (logPollTimer) {
+    clearInterval(logPollTimer)
+    logPollTimer = null
+  }
+}
+
+const refreshLogs = async () => {
+  logLoading.value = true
+  try {
+    const res: any = await request.get('/caddy/logs')
+    logContent.value = res.data?.content || ''
+  } catch (e: any) {
+    console.error('Failed to fetch caddy logs:', e)
+  } finally {
+    logLoading.value = false
+  }
+}
+
+watch(autoRefresh, (val) => {
+  if (!logDialogVisible.value) return
+  if (val) {
+    startLogPolling()
+  } else {
+    stopLogPolling()
+  }
+})
+
 onMounted(() => {
   fetchGlobalConfig()
 })
@@ -240,11 +325,35 @@ onMounted(() => {
 
 .caddy-form {
   width: 100%;
+  padding-left: 24px;
 }
 
 .caddy-form .caddy-input {
-  max-width: 320px;
   width: 100%;
+}
+
+.log-path-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+}
+
+.log-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.log-textarea :deep(.el-textarea__inner) {
+  height: 500px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #1e293b;
 }
 
 .form-actions {
