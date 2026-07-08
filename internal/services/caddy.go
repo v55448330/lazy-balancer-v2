@@ -2006,6 +2006,9 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		if strategy == "" {
 			strategy = "round_robin"
 		}
+		if strategy == "cookie" {
+			strategy = "round_robin" // cookie sticky is only supported for HTTP
+		}
 
 		proxyHandler := map[string]interface{}{
 			"handler":   "proxy",
@@ -2470,10 +2473,12 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		}
 
 		if rule.Strategy != "" {
+			selectionPolicy := map[string]interface{}{"policy": rule.Strategy}
+			if rule.Strategy == "cookie" {
+				selectionPolicy["name"] = "lb_sticky"
+			}
 			proxyConfig["load_balancing"] = map[string]interface{}{
-				"selection_policy": map[string]interface{}{
-					"policy": rule.Strategy,
-				},
+				"selection_policy": selectionPolicy,
 			}
 		}
 
@@ -2841,10 +2846,12 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 		}
 
 		if rule.Strategy != "" {
+			selectionPolicy := map[string]interface{}{"policy": rule.Strategy}
+			if rule.Strategy == "cookie" {
+				selectionPolicy["name"] = "lb_sticky"
+			}
 			proxyConfig["load_balancing"] = map[string]interface{}{
-				"selection_policy": map[string]interface{}{
-					"policy": rule.Strategy,
-				},
+				"selection_policy": selectionPolicy,
 			}
 		}
 

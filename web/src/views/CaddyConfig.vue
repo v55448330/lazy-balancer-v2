@@ -325,8 +325,7 @@ onMounted(() => {
 
 .caddy-form {
   width: 100%;
-  padding-left: 24px;
-  padding-right: 24px;
+  padding: 0 48px;
   box-sizing: border-box;
 }
 
