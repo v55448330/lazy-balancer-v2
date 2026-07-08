@@ -1611,36 +1611,39 @@ func extractMetricLabel(metricName string, label string) string {
 // GenerateCaddyConfig generates Caddy configuration from database
 func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 	type lbRule struct {
-		CaddyID                       string
-		Name                          string
-		Protocol                      string
-		Domain                        string
-		ListenPort                    int
-		Strategy                      string
-		DynamicDNS                    bool
-		EnableDnsServer               bool
-		DnsServer                     string
-		DnsFamily                     string
-		HealthCheckPath               string
-		HealthCheckInterval           int
-		HealthCheckTimeout            int
-		HealthCheckUnhealthyThreshold int
-		HealthCheckHealthyThreshold   int
-		EnableTLS                     bool
-		TLSSource                     string
-		ACMEConfigID                  int
-		ACMEEmail                     string
-		TLSCert                       string
-		TLSKey                        string
-		TLSHTTPRedirect               bool
-		Enabled                       bool
-		EnableCompress                bool
-		CompressTypes                 string
-		EnableActiveHealthCheck       bool
-		TCPHealthCheckPort            int
-		TCPTryDuration                int
-		TCPTryInterval                int
-		HostHeader                    string
+		CaddyID                        string
+		Name                           string
+		Protocol                       string
+		Domain                         string
+		ListenPort                     int
+		Strategy                       string
+		DynamicDNS                     bool
+		EnableDnsServer                bool
+		DnsServer                      string
+		DnsFamily                      string
+		HealthCheckPath                string
+		HealthCheckInterval            int
+		HealthCheckTimeout             int
+		HealthCheckUnhealthyThreshold  int
+		HealthCheckHealthyThreshold    int
+		EnableTLS                      bool
+		TLSSource                      string
+		ACMEConfigID                   int
+		ACMEEmail                      string
+		TLSCert                        string
+		TLSKey                         string
+		TLSHTTPRedirect                bool
+		Enabled                        bool
+		EnableCompress                 bool
+		CompressTypes                  string
+		EnableActiveHealthCheck        bool
+		TCPHealthCheckPort             int
+		TCPTryDuration                 int
+		TCPTryInterval                 int
+		RequestBodyMaxSizeMB           int
+		UpstreamKeepaliveTimeout       int
+		ServerTokensHidden             int
+		HostHeader                     string
 	}
 
 	type upstream struct {
@@ -1669,7 +1672,8 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		       IIF(enable_tls IN ('1',1),1,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
 		       IIF(tls_http_redirect IN ('1',1),1,0),
 		       IIF(enabled IN ('1',1),1,0), IIF(enable_compress IN ('1',1),1,0), COALESCE(compress_types,'gzip'),
-		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250), COALESCE(host_header,'')
+		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
+		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(host_header,'')
 		FROM lb_rules WHERE enabled = 1
 	`)
 	if err != nil {
@@ -1685,7 +1689,8 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 			&r.HealthCheckTimeout, &r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
 			&r.EnableTLS, &r.TLSSource, &r.ACMEConfigID, &r.TLSCert, &r.TLSKey,
 			&r.TLSHTTPRedirect, &r.Enabled, &r.EnableCompress, &r.CompressTypes,
-			&r.EnableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPTryDuration, &r.TCPTryInterval, &r.HostHeader)
+			&r.EnableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPTryDuration, &r.TCPTryInterval,
+			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.HostHeader)
 
 		if err != nil {
 			log.Printf("Failed to scan rule: %v", err)
@@ -1807,30 +1812,36 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 			ups := ru.upstreams
 
 			ruleConfig := SingleRuleConfig{
-				CaddyID:                       r.CaddyID,
-				Protocol:                      r.Protocol,
-				Domain:                        r.Domain,
-				ListenPort:                    r.ListenPort,
-				Strategy:                      r.Strategy,
-				DynamicDNS:                    r.DynamicDNS,
-				EnableDnsServer:               r.EnableDnsServer,
-				DnsServer:                     r.DnsServer,
-				DnsFamily:                     r.DnsFamily,
-				HealthCheckPath:               r.HealthCheckPath,
-				HealthCheckInterval:           r.HealthCheckInterval,
-				HealthCheckTimeout:            r.HealthCheckTimeout,
-				HealthCheckUnhealthyThreshold: r.HealthCheckUnhealthyThreshold,
-				EnableTLS:                     r.EnableTLS,
-				TLSSource:                     r.TLSSource,
-				ACMEConfigID:                  r.ACMEConfigID,
-				ACMEEmail:                     r.ACMEEmail,
-				TLSCert:                       r.TLSCert,
-				TLSKey:                        r.TLSKey,
-				TLSHTTPRedirect:               r.TLSHTTPRedirect,
-				EnableCompress:                r.EnableCompress,
-				CompressTypes:                 r.CompressTypes,
-				EnableActiveHealthCheck:       r.EnableActiveHealthCheck,
-				HostHeader:                    r.HostHeader,
+				CaddyID:                        r.CaddyID,
+				Protocol:                       r.Protocol,
+				Domain:                         r.Domain,
+				ListenPort:                     r.ListenPort,
+				Strategy:                       r.Strategy,
+				DynamicDNS:                     r.DynamicDNS,
+				EnableDnsServer:                r.EnableDnsServer,
+				DnsServer:                      r.DnsServer,
+				DnsFamily:                      r.DnsFamily,
+				HealthCheckPath:                r.HealthCheckPath,
+				HealthCheckInterval:            r.HealthCheckInterval,
+				HealthCheckTimeout:             r.HealthCheckTimeout,
+				HealthCheckUnhealthyThreshold:  r.HealthCheckUnhealthyThreshold,
+				EnableTLS:                      r.EnableTLS,
+				TLSSource:                      r.TLSSource,
+				ACMEConfigID:                   r.ACMEConfigID,
+				ACMEEmail:                      r.ACMEEmail,
+				TLSCert:                        r.TLSCert,
+				TLSKey:                         r.TLSKey,
+				TLSHTTPRedirect:                r.TLSHTTPRedirect,
+				EnableCompress:                 r.EnableCompress,
+				CompressTypes:                  r.CompressTypes,
+				EnableActiveHealthCheck:        r.EnableActiveHealthCheck,
+				HostHeader:                     r.HostHeader,
+				RequestBodyMaxSizeMB:           r.RequestBodyMaxSizeMB,
+				UpstreamKeepaliveTimeout:       r.UpstreamKeepaliveTimeout,
+				ServerTokensHidden:             r.ServerTokensHidden,
+				GlobalRequestBodyMaxSizeMB:     global.requestBodyMaxSizeMB,
+				GlobalUpstreamKeepaliveTimeout: global.upstreamKeepaliveTimeout,
+				GlobalServerTokensHidden:       global.serverTokensHidden,
 			}
 			for _, u := range ups {
 				if u.Enabled {
@@ -2289,39 +2300,42 @@ func splitAndTrim(s string) []string {
 }
 
 type SingleRuleConfig struct {
-	ID                            int
-	CaddyID                       string
-	Name                          string
-	Protocol                      string
-	Domain                        string
-	ListenPort                    int
-	Strategy                      string
-	DynamicDNS                    bool
-	EnableDnsServer               bool
-	DnsServer                     string
-	DnsFamily                     string
-	HealthCheckPath               string
-	HealthCheckInterval           int
-	HealthCheckTimeout            int
-	HealthCheckUnhealthyThreshold int
-	EnableTLS                     bool
-	TLSSource                     string
-	ACMEConfigID                  int
-	ACMEEmail                     string
-	TLSCert                       string
-	TLSKey                        string
-	TLSHTTPRedirect               bool
-	EnableCompress                bool
-	CompressTypes                 string
-	EnableActiveHealthCheck       bool
-	TCPHealthCheckPort            int
-	TCPTryDuration                int
-	TCPTryInterval                int
-	RequestBodyMaxSizeMB          int
-	UpstreamKeepaliveTimeout      int
-	ServerTokensHidden            int
-	HostHeader                    string
-	Upstreams                     []UpstreamConfig
+	ID                             int
+	CaddyID                        string
+	Name                           string
+	Protocol                       string
+	Domain                         string
+	ListenPort                     int
+	Strategy                       string
+	DynamicDNS                     bool
+	EnableDnsServer                bool
+	DnsServer                      string
+	DnsFamily                      string
+	HealthCheckPath                string
+	HealthCheckInterval            int
+	HealthCheckTimeout             int
+	HealthCheckUnhealthyThreshold  int
+	EnableTLS                      bool
+	TLSSource                      string
+	ACMEConfigID                   int
+	ACMEEmail                      string
+	TLSCert                        string
+	TLSKey                         string
+	TLSHTTPRedirect                bool
+	EnableCompress                 bool
+	CompressTypes                  string
+	EnableActiveHealthCheck        bool
+	TCPHealthCheckPort             int
+	TCPTryDuration                 int
+	TCPTryInterval                 int
+	RequestBodyMaxSizeMB           int
+	UpstreamKeepaliveTimeout       int
+	ServerTokensHidden             int
+	GlobalRequestBodyMaxSizeMB     int
+	GlobalUpstreamKeepaliveTimeout int
+	GlobalServerTokensHidden       bool
+	HostHeader                     string
+	Upstreams                      []UpstreamConfig
 }
 
 type UpstreamConfig struct {
@@ -2396,6 +2410,31 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 		var handleChain []interface{}
 
+		effectiveRequestBodyMaxSizeMB := rule.RequestBodyMaxSizeMB
+		if effectiveRequestBodyMaxSizeMB <= 0 {
+			effectiveRequestBodyMaxSizeMB = rule.GlobalRequestBodyMaxSizeMB
+		}
+		if effectiveRequestBodyMaxSizeMB > 0 {
+			handleChain = append([]interface{}{
+				map[string]interface{}{
+					"handler":  "request_body",
+					"max_size": effectiveRequestBodyMaxSizeMB * 1024 * 1024,
+				},
+			}, handleChain...)
+		}
+
+		effectiveUpstreamKeepaliveTimeout := rule.UpstreamKeepaliveTimeout
+		if effectiveUpstreamKeepaliveTimeout <= 0 {
+			effectiveUpstreamKeepaliveTimeout = rule.GlobalUpstreamKeepaliveTimeout
+		}
+
+		effectiveServerTokensHidden := rule.GlobalServerTokensHidden
+		if rule.ServerTokensHidden == 1 {
+			effectiveServerTokensHidden = true
+		} else if rule.ServerTokensHidden == 2 {
+			effectiveServerTokensHidden = false
+		}
+
 		if rule.EnableCompress && rule.CompressTypes != "" {
 			encodings := make(map[string]interface{})
 			for _, ct := range splitAndTrim(rule.CompressTypes) {
@@ -2448,7 +2487,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			proxyConfig["health_checks"] = healthChecks
 		}
 
-		needsTransport := hasHTTPSUpstream || rule.EnableDnsServer
+		needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0
 		if needsTransport {
 			transportConfig := map[string]interface{}{
 				"protocol": "http",
@@ -2467,6 +2506,9 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 					transportConfig["dial_timeout"] = fmt.Sprintf("%ds", rule.HealthCheckTimeout)
 				}
 			}
+			if effectiveUpstreamKeepaliveTimeout > 0 {
+				transportConfig["keepalive"] = fmt.Sprintf("%ds", effectiveUpstreamKeepaliveTimeout)
+			}
 			proxyConfig["transport"] = transportConfig
 		}
 
@@ -2481,6 +2523,15 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		}
 
 		handleChain = append(handleChain, proxyConfig)
+
+		if effectiveServerTokensHidden {
+			handleChain = append(handleChain, map[string]interface{}{
+				"handler": "headers",
+				"response": map[string]interface{}{
+					"delete": []string{"Server"},
+				},
+			})
+		}
 
 		var routes []interface{}
 		route := map[string]interface{}{
@@ -2714,6 +2765,31 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 		hasHTTPSUpstream := false
 		upstreamList := make([]interface{}, 0)
 
+		effectiveRequestBodyMaxSizeMB := rule.RequestBodyMaxSizeMB
+		if effectiveRequestBodyMaxSizeMB <= 0 {
+			effectiveRequestBodyMaxSizeMB = rule.GlobalRequestBodyMaxSizeMB
+		}
+		if effectiveRequestBodyMaxSizeMB > 0 {
+			handleChain = append([]interface{}{
+				map[string]interface{}{
+					"handler":  "request_body",
+					"max_size": effectiveRequestBodyMaxSizeMB * 1024 * 1024,
+				},
+			}, handleChain...)
+		}
+
+		effectiveUpstreamKeepaliveTimeout := rule.UpstreamKeepaliveTimeout
+		if effectiveUpstreamKeepaliveTimeout <= 0 {
+			effectiveUpstreamKeepaliveTimeout = rule.GlobalUpstreamKeepaliveTimeout
+		}
+
+		effectiveServerTokensHidden := rule.GlobalServerTokensHidden
+		if rule.ServerTokensHidden == 1 {
+			effectiveServerTokensHidden = true
+		} else if rule.ServerTokensHidden == 2 {
+			effectiveServerTokensHidden = false
+		}
+
 		for _, u := range enabledUpstreams {
 			if rule.DynamicDNS {
 				versions := map[string]bool{"ipv4": false, "ipv6": false}
@@ -2796,7 +2872,7 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 			proxyConfig["health_checks"] = healthChecks
 		}
 
-		needsTransport := hasHTTPSUpstream || rule.EnableDnsServer
+		needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0
 		if needsTransport {
 			transportConfig := map[string]interface{}{
 				"protocol": "http",
@@ -2815,6 +2891,9 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 					transportConfig["dial_timeout"] = fmt.Sprintf("%ds", rule.HealthCheckTimeout)
 				}
 			}
+			if effectiveUpstreamKeepaliveTimeout > 0 {
+				transportConfig["keepalive"] = fmt.Sprintf("%ds", effectiveUpstreamKeepaliveTimeout)
+			}
 			proxyConfig["transport"] = transportConfig
 		}
 
@@ -2829,6 +2908,15 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 		}
 
 		handleChain = append(handleChain, proxyConfig)
+
+		if effectiveServerTokensHidden {
+			handleChain = append(handleChain, map[string]interface{}{
+				"handler": "headers",
+				"response": map[string]interface{}{
+					"delete": []string{"Server"},
+				},
+			})
+		}
 	} else {
 		// TCP protocol
 		upstreamList := make([]interface{}, 0)

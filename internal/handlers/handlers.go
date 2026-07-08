@@ -126,29 +126,32 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 	}
 
 	type requestData struct {
-		Protocol                      string
-		Domain                        string
-		ListenPort                    int
-		Strategy                      string
-		DynamicDNS                    bool
-		DnsServer                     string
-		DnsFamily                     string
-		HealthCheckPath               string
-		HealthCheckInterval           int
-		HealthCheckTimeout            int
-		HealthCheckUnhealthyThreshold int
-		HealthCheckHealthyThreshold   int
-		EnableTLS                     bool
-		TLSSource                     string
-		ACMEConfigID                  int
-		TLSCert                       string
-		TLSKey                        string
-		TLSHTTPRedirect               bool
-		EnableCompress                bool
-		CompressTypes                 string
-		EnableActiveHealthCheck       bool
-		HostHeader                    string
-		Upstreams                     []requestUpstream
+		Protocol                       string
+		Domain                         string
+		ListenPort                     int
+		Strategy                       string
+		DynamicDNS                     bool
+		DnsServer                      string
+		DnsFamily                      string
+		HealthCheckPath                string
+		HealthCheckInterval            int
+		HealthCheckTimeout             int
+		HealthCheckUnhealthyThreshold  int
+		HealthCheckHealthyThreshold    int
+		EnableTLS                      bool
+		TLSSource                      string
+		ACMEConfigID                   int
+		TLSCert                        string
+		TLSKey                         string
+		TLSHTTPRedirect                bool
+		EnableCompress                 bool
+		CompressTypes                  string
+		EnableActiveHealthCheck        bool
+		HostHeader                     string
+		RequestBodyMaxSizeMB           int
+		UpstreamKeepaliveTimeout       int
+		ServerTokensHidden             int
+		Upstreams                      []requestUpstream
 	}
 
 	var data requestData
@@ -178,6 +181,9 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		data.CompressTypes = r.CompressTypes
 		data.EnableActiveHealthCheck = r.EnableActiveHealthCheck
 		data.HostHeader = r.HostHeader
+		data.RequestBodyMaxSizeMB = r.RequestBodyMaxSizeMB
+		data.UpstreamKeepaliveTimeout = r.UpstreamKeepaliveTimeout
+		data.ServerTokensHidden = r.ServerTokensHidden
 		for _, u := range r.Upstreams {
 			upstreams = append(upstreams, requestUpstream{
 				Host: u.Host, Port: u.Port, Weight: u.Weight, Domain: u.Domain,
@@ -208,6 +214,9 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		data.CompressTypes = r.CompressTypes
 		data.EnableActiveHealthCheck = r.EnableActiveHealthCheck
 		data.HostHeader = r.HostHeader
+		data.RequestBodyMaxSizeMB = r.RequestBodyMaxSizeMB
+		data.UpstreamKeepaliveTimeout = r.UpstreamKeepaliveTimeout
+		data.ServerTokensHidden = r.ServerTokensHidden
 		for _, u := range r.Upstreams {
 			upstreams = append(upstreams, requestUpstream{
 				Host: u.Host, Port: u.Port, Weight: u.Weight, Domain: u.Domain,
@@ -325,27 +334,42 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 
 	tempCaddyID := "validate_" + uniqueID
 
+	var global struct {
+		requestBodyMaxSizeMB, upstreamKeepaliveTimeout int
+		serverTokensHidden                             bool
+	}
+	db.DB.QueryRow(`
+		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE)
+		FROM global_config WHERE id = 1
+	`).Scan(&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout, &global.serverTokensHidden)
+
 		ruleConfig := services.SingleRuleConfig{
-		Protocol:                data.Protocol,
-		Domain:                  data.Domain,
-		ListenPort:              data.ListenPort,
-		Strategy:                data.Strategy,
-		DynamicDNS:              data.DynamicDNS,
-		DnsServer:               data.DnsServer,
-		DnsFamily:               data.DnsFamily,
-		HealthCheckPath:         data.HealthCheckPath,
-		HealthCheckInterval:     data.HealthCheckInterval,
-		HealthCheckTimeout:      data.HealthCheckTimeout,
-		HealthCheckUnhealthyThreshold: data.HealthCheckUnhealthyThreshold,
-		EnableTLS:               data.EnableTLS,
-		TLSCert:                 data.TLSCert,
-		TLSKey:                  data.TLSKey,
-		TLSHTTPRedirect:         data.TLSHTTPRedirect,
-		EnableCompress:          data.EnableCompress,
-		CompressTypes:           data.CompressTypes,
-		EnableActiveHealthCheck: data.EnableActiveHealthCheck,
-		HostHeader:              data.HostHeader,
-		CaddyID:                 tempCaddyID,
+		Protocol:                       data.Protocol,
+		Domain:                         data.Domain,
+		ListenPort:                     data.ListenPort,
+		Strategy:                       data.Strategy,
+		DynamicDNS:                     data.DynamicDNS,
+		DnsServer:                      data.DnsServer,
+		DnsFamily:                      data.DnsFamily,
+		HealthCheckPath:                data.HealthCheckPath,
+		HealthCheckInterval:            data.HealthCheckInterval,
+		HealthCheckTimeout:             data.HealthCheckTimeout,
+		HealthCheckUnhealthyThreshold:  data.HealthCheckUnhealthyThreshold,
+		EnableTLS:                      data.EnableTLS,
+		TLSCert:                        data.TLSCert,
+		TLSKey:                         data.TLSKey,
+		TLSHTTPRedirect:                data.TLSHTTPRedirect,
+		EnableCompress:                 data.EnableCompress,
+		CompressTypes:                  data.CompressTypes,
+		EnableActiveHealthCheck:        data.EnableActiveHealthCheck,
+		HostHeader:                     data.HostHeader,
+		RequestBodyMaxSizeMB:           data.RequestBodyMaxSizeMB,
+		UpstreamKeepaliveTimeout:       data.UpstreamKeepaliveTimeout,
+		ServerTokensHidden:             data.ServerTokensHidden,
+		GlobalRequestBodyMaxSizeMB:     global.requestBodyMaxSizeMB,
+		GlobalUpstreamKeepaliveTimeout: global.upstreamKeepaliveTimeout,
+		GlobalServerTokensHidden:       global.serverTokensHidden,
+		CaddyID:                        tempCaddyID,
 	}
 
 	for _, u := range data.Upstreams {
