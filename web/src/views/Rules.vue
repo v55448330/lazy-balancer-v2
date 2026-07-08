@@ -102,7 +102,7 @@
         </el-table-column>
         <el-table-column label="健康" width="80" align="center">
           <template #default="{ row }">
-            <el-popover v-if="row.enabled && row.protocol !== 'tcp' && healthStatus[row.caddy_id]" placement="top" trigger="hover" :width="240">
+            <el-popover v-if="row.enabled && healthStatus[row.caddy_id]" placement="top" trigger="hover" :width="240">
               <template #reference>
                 <el-tag :type="getHealthTagType(healthStatus[row.caddy_id])" size="small" effect="plain" class="health-tag">
                   {{ getHealthLabel(healthStatus[row.caddy_id]) }}
@@ -133,7 +133,6 @@
                 </template>
               </div>
             </el-popover>
-            <el-tag v-else-if="row.protocol === 'tcp'" type="info" size="small" effect="plain" title="Caddy layer4 未提供 TCP 上游健康指标" class="tcp-health-tag">无数据</el-tag>
             <el-tag v-else-if="!row.enabled" type="info" size="small" effect="plain">-</el-tag>
             <span v-else class="text-secondary">-</span>
           </template>
@@ -493,6 +492,27 @@
                 </el-form-item>
               </template>
             </template>
+
+            <template v-if="wizardForm.protocol === 'tcp'">
+              <el-form-item label="超时时间">
+                <el-input-number v-model="wizardForm.health_check_timeout" :min="1" :max="30" controls-position="right" style="width: 80px;" />
+                <span class="form-tip-inline">秒，TCP 连接/健康检查超时</span>
+              </el-form-item>
+
+              <el-form-item label="主动检查">
+                <div class="active-check-control">
+                  <el-switch v-model="wizardForm.enable_active_health_check" />
+                  <span class="form-tip-inline">{{ wizardForm.enable_active_health_check ? '定期 TCP 探测检查上游端口' : '仅使用被动健康检查（推荐）' }}</span>
+                </div>
+              </el-form-item>
+
+              <template v-if="wizardForm.enable_active_health_check">
+                <el-form-item label="检查端口">
+                  <el-input-number v-model="wizardForm.tcp_health_check_port" :min="1" :max="65535" controls-position="right" style="width: 120px;" />
+                  <span class="form-tip-inline">0 表示使用第一个上游端口</span>
+                </el-form-item>
+              </template>
+            </template>
           </el-form>
         </div>
 
@@ -551,20 +571,16 @@
             </template>
 
             <template v-if="wizardForm.protocol === 'tcp'">
-              <el-divider content-position="left" class="compact-divider">连接选项</el-divider>
+              <el-divider content-position="left" class="compact-divider">连接重试</el-divider>
 
-              <el-form-item label="最大连接数">
-                <el-input-number v-model="wizardForm.max_connections" :min="0" :max="100000" controls-position="right" style="width: 120px;" />
-                <span class="form-tip-inline">单个上游最大并发连接，0 表示不限制</span>
+              <el-form-item label="重试窗口">
+                <el-input-number v-model="wizardForm.tcp_try_duration" :min="0" :max="60000" controls-position="right" style="width: 120px;" />
+                <span class="form-tip-inline">毫秒，0 表示不重试；连接失败后在窗口期内尝试其他上游</span>
               </el-form-item>
 
-              <el-form-item label="PROXY 协议">
-                <el-select v-model="wizardForm.proxy_protocol" placeholder="不发送" style="width: 150px;">
-                  <el-option value="" label="不发送" />
-                  <el-option value="v1" label="v1" />
-                  <el-option value="v2" label="v2" />
-                </el-select>
-                <span class="form-tip-inline">向下游上游发送 HAProxy PROXY 协议头</span>
+              <el-form-item label="重试间隔">
+                <el-input-number v-model="wizardForm.tcp_try_interval" :min="0" :max="10000" controls-position="right" style="width: 120px;" />
+                <span class="form-tip-inline">毫秒，每次重试间隔；0 表示使用 Caddy 默认间隔</span>
               </el-form-item>
             </template>
           </el-form>
@@ -588,6 +604,18 @@
                 {{ wizardForm.health_check_path || '/' }} ({{ wizardForm.health_check_interval }}s/{{ wizardForm.health_check_timeout }}s)
               </template>
               <template v-else>被动检查 (失败 {{ wizardForm.health_check_unhealthy_threshold }} 次视为不健康, 超时 {{ wizardForm.health_check_timeout }}s)</template>
+            </el-descriptions-item>
+            <el-descriptions-item label="健康检查" v-if="wizardForm.protocol === 'tcp'">
+              <template v-if="wizardForm.enable_active_health_check">
+                TCP 主动探测端口 {{ wizardForm.tcp_health_check_port || '默认' }} ({{ wizardForm.health_check_interval }}s/{{ wizardForm.health_check_timeout }}s)
+              </template>
+              <template v-else>被动检查 (失败 {{ wizardForm.health_check_unhealthy_threshold }} 次视为不健康, 超时 {{ wizardForm.health_check_timeout }}s)</template>
+            </el-descriptions-item>
+            <el-descriptions-item label="连接重试" v-if="wizardForm.protocol === 'tcp'">
+              <template v-if="(wizardForm.tcp_try_duration || 0) > 0">
+                窗口 {{ wizardForm.tcp_try_duration || 0 }}ms / 间隔 {{ wizardForm.tcp_try_interval || 0 }}ms
+              </template>
+              <template v-else>禁用</template>
             </el-descriptions-item>
             <el-descriptions-item label="DNS 服务器" v-if="wizardForm.protocol === 'http'">
               <template v-if="wizardForm.enable_dns_server">
@@ -631,6 +659,8 @@
                   </template>
                 </el-table-column>
                 <el-table-column prop="weight" label="权重" width="70" />
+                <el-table-column prop="max_connections" label="最大连接" width="90" />
+                <el-table-column prop="proxy_protocol" label="PROXY" width="80" />
                 <el-table-column prop="enabled" label="状态" width="70">
                   <template #default="{ row }">
                     {{ row.enabled ? '启用' : '禁用' }}
@@ -690,8 +720,18 @@
             {{ ruleConfig.health_check_path }} ({{ ruleConfig.health_check_interval }}s/{{ ruleConfig.health_check_timeout }}s)
           </el-descriptions-item>
           <el-descriptions-item label="主动健康检查" v-if="ruleConfig.protocol === 'http' && !ruleConfig.health_check_path">未启用</el-descriptions-item>
-          <el-descriptions-item label="被动健康检查" v-if="ruleConfig.protocol === 'http'">
+          <el-descriptions-item label="主动健康检查" v-if="ruleConfig.protocol === 'tcp' && ruleConfig.enable_active_health_check">
+            TCP 探测端口 {{ ruleConfig.tcp_health_check_port || '默认' }} ({{ ruleConfig.health_check_interval }}s/{{ ruleConfig.health_check_timeout }}s)
+          </el-descriptions-item>
+          <el-descriptions-item label="主动健康检查" v-if="ruleConfig.protocol === 'tcp' && !ruleConfig.enable_active_health_check">未启用</el-descriptions-item>
+          <el-descriptions-item label="被动健康检查" v-if="ruleConfig.protocol === 'http' || ruleConfig.protocol === 'tcp'">
             失败 {{ ruleConfig.health_check_unhealthy_threshold || 3 }} 次视为不健康, 间隔 {{ ruleConfig.health_check_interval || 10 }}s, 超时 {{ ruleConfig.health_check_timeout || 5 }}s
+          </el-descriptions-item>
+          <el-descriptions-item label="连接重试" v-if="ruleConfig.protocol === 'tcp'">
+            <template v-if="ruleConfig.tcp_try_duration > 0">
+              窗口 {{ ruleConfig.tcp_try_duration }}ms / 间隔 {{ ruleConfig.tcp_try_interval }}ms
+            </template>
+            <template v-else>禁用</template>
           </el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="ruleConfig.enabled ? 'success' : 'info'" size="small">{{ ruleConfig.enabled ? '启用' : '禁用' }}</el-tag>
@@ -708,6 +748,8 @@
             </template>
           </el-table-column>
           <el-table-column prop="weight" label="权重" align="center" />
+          <el-table-column prop="max_connections" label="最大连接" align="center" />
+          <el-table-column prop="proxy_protocol" label="PROXY" align="center" />
           <el-table-column prop="enabled" label="状态" align="center">
             <template #default="{ row }">
               <el-tag size="small" :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
@@ -765,6 +807,9 @@ interface Rule {
   health_check_healthy_threshold: number
   health_check_unhealthy_threshold: number
   enable_active_health_check: boolean
+  tcp_health_check_port?: number
+  tcp_try_duration?: number
+  tcp_try_interval?: number
   host_header: string
   upstreams: Upstream[]
   enable_tls: boolean
@@ -776,8 +821,6 @@ interface Rule {
   tls_http_redirect: boolean
   enable_compress: boolean
   compress_types: string
-  max_connections?: number
-  proxy_protocol?: string
   enabled: boolean
   created_by?: number
   updated_by?: number
@@ -998,6 +1041,10 @@ const ruleConfig = ref<{
   health_check_interval: number
   health_check_timeout: number
   health_check_unhealthy_threshold: number
+  enable_active_health_check: boolean
+  tcp_health_check_port: number
+  tcp_try_duration: number
+  tcp_try_interval: number
   upstreams: any[]
   enabled: boolean
   config: any
@@ -1165,6 +1212,9 @@ const wizardForm = reactive<Rule>({
   health_check_healthy_threshold: 2,
   health_check_unhealthy_threshold: 3,
   enable_active_health_check: false,
+  tcp_health_check_port: 0,
+  tcp_try_duration: 0,
+  tcp_try_interval: 250,
   host_header: '',
   upstreams: [],
   enable_tls: false,
@@ -1176,8 +1226,6 @@ const wizardForm = reactive<Rule>({
   tls_http_redirect: false,
   enable_compress: false,
   compress_types: 'gzip',
-  max_connections: 0,
-  proxy_protocol: '',
   enabled: true,
 })
 
@@ -1229,10 +1277,18 @@ watch(() => wizardForm.enable_dns_server, (newVal) => {
   }
 })
 
-// Watch for enable_active_health_check toggle to set default path
+// Watch for enable_active_health_check toggle to set default path / TCP port
 watch(() => wizardForm.enable_active_health_check, (newVal) => {
-  if (newVal && !wizardForm.health_check_path) {
+  if (!newVal) return
+  if (!wizardForm.health_check_path) {
     wizardForm.health_check_path = '/'
+  }
+  // For TCP rules, default the active health check port to the first upstream port
+  if (wizardForm.protocol === 'tcp' && wizardForm.tcp_health_check_port === 0) {
+    const firstUpstream = wizardForm.upstreams.find(u => u.port && u.port > 0)
+    if (firstUpstream) {
+      wizardForm.tcp_health_check_port = firstUpstream.port
+    }
   }
 })
 
@@ -1453,6 +1509,9 @@ const openWizard = (rule?: Rule) => {
       health_check_healthy_threshold: rule.health_check_healthy_threshold || 2,
       health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
       enable_active_health_check: rule.enable_active_health_check === true,
+      tcp_health_check_port: (rule as any).tcp_health_check_port || 0,
+      tcp_try_duration: (rule as any).tcp_try_duration || 0,
+      tcp_try_interval: (rule as any).tcp_try_interval || 250,
       host_header: rule.host_header || '',
       upstreams: rule.upstreams?.map(u => ({
         ...u,
@@ -1470,8 +1529,6 @@ const openWizard = (rule?: Rule) => {
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
       compress_types: compressType,
-      max_connections: (rule as any).max_connections || 0,
-      proxy_protocol: (rule as any).proxy_protocol || '',
       enabled: rule.enabled,
     })
   } else {
@@ -1490,6 +1547,9 @@ const openWizard = (rule?: Rule) => {
       health_check_healthy_threshold: 2,
       health_check_unhealthy_threshold: 3,
       enable_active_health_check: false,
+      tcp_health_check_port: 0,
+      tcp_try_duration: 0,
+      tcp_try_interval: 250,
       host_header: '',
       dns_server: '',
   dns_family: ['ipv4'],
@@ -1503,8 +1563,6 @@ const openWizard = (rule?: Rule) => {
       tls_http_redirect: false,
       enable_compress: false,
       compress_types: 'gzip',
-      max_connections: 0,
-      proxy_protocol: '',
       enabled: true,
     })
   }
@@ -1553,7 +1611,11 @@ const nextStep = () => {
     return
   }
   if (currentStep.value === 1) {
-    // TLS step - only for http with enable_tls
+    // TLS step - only applicable when the TLS step is visible
+    if (!showTlsStep.value) {
+      currentStep.value++
+      return
+    }
     if (wizardForm.tls_source === 'acme_dns' && !wizardForm.acme_config_id) {
       ElMessage.warning('请选择 DNS 提供商配置')
       return
@@ -1593,10 +1655,10 @@ const nextStep = () => {
 
 const prevStep = () => {
   if (currentStep.value > 0) {
-    // Skip TLS step if HTTPS is not enabled
-    if (currentStep.value === 2 && wizardForm.protocol === 'http' && !wizardForm.enable_tls) {
+    // Skip TLS step when it is hidden (TCP rules or HTTP without TLS)
+    if (currentStep.value === 2 && !showTlsStep.value) {
       currentStep.value -= 2
-    } else if (currentStep.value === 2 && wizardForm.protocol === 'http' && wizardForm.enable_tls) {
+    } else if (currentStep.value === 2 && showTlsStep.value) {
       currentStep.value--
     } else {
       currentStep.value--
@@ -1658,6 +1720,9 @@ const submitWizard = async () => {
       health_check_healthy_threshold: wizardForm.health_check_healthy_threshold,
       health_check_unhealthy_threshold: wizardForm.health_check_unhealthy_threshold,
       enable_active_health_check: wizardForm.enable_active_health_check,
+      tcp_health_check_port: wizardForm.tcp_health_check_port || 0,
+      tcp_try_duration: wizardForm.tcp_try_duration || 0,
+      tcp_try_interval: wizardForm.tcp_try_interval || 250,
       host_header: wizardForm.host_header,
       upstreams: validUpstreams,
       enable_tls: wizardForm.enable_tls,
@@ -1669,8 +1734,6 @@ const submitWizard = async () => {
       tls_http_redirect: wizardForm.tls_http_redirect,
       enable_compress: wizardForm.enable_compress,
       compress_types: wizardForm.compress_types || 'gzip',
-      max_connections: wizardForm.max_connections || 0,
-      proxy_protocol: wizardForm.proxy_protocol || '',
       enabled: wizardForm.enabled,
     }
 
@@ -1766,14 +1829,12 @@ const openCopyWizard = (rule: Rule) => {
     acme_config_id: rule.acme_config_id || undefined,
     ca_provider_id: rule.ca_provider_id ?? 0,
     tls_cert: rule.tls_cert || '',
-    tls_key: rule.tls_key || '',
-    tls_http_redirect: rule.tls_http_redirect || false,
-    enable_compress: rule.enable_compress !== false,
-    compress_types: compressType,
-    max_connections: (rule as any).max_connections || 0,
-    proxy_protocol: (rule as any).proxy_protocol || '',
-    enabled: false,
-  })
+      tls_key: rule.tls_key || '',
+      tls_http_redirect: rule.tls_http_redirect || false,
+      enable_compress: rule.enable_compress !== false,
+      compress_types: compressType,
+      enabled: false,
+    })
   currentStep.value = 0
   wizardVisible.value = true
 }
@@ -1818,6 +1879,10 @@ const viewConfig = async (rule: Rule) => {
       health_check_interval: rule.health_check_interval || 10,
       health_check_timeout: rule.health_check_timeout || 5,
       health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
+      enable_active_health_check: rule.enable_active_health_check === true,
+      tcp_health_check_port: (rule as any).tcp_health_check_port || 0,
+      tcp_try_duration: (rule as any).tcp_try_duration || 0,
+      tcp_try_interval: (rule as any).tcp_try_interval || 250,
       upstreams: rule.upstreams || [],
       enabled: rule.enabled !== false,
       config: res.data?.config || {}
@@ -1846,6 +1911,10 @@ const viewConfig = async (rule: Rule) => {
       health_check_interval: rule.health_check_interval || 10,
       health_check_timeout: rule.health_check_timeout || 5,
       health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
+      enable_active_health_check: rule.enable_active_health_check === true,
+      tcp_health_check_port: (rule as any).tcp_health_check_port || 0,
+      tcp_try_duration: (rule as any).tcp_try_duration || 0,
+      tcp_try_interval: (rule as any).tcp_try_interval || 250,
       upstreams: rule.upstreams || [],
       enabled: rule.enabled !== false,
       config: { error: '获取配置失败', details: e.message }

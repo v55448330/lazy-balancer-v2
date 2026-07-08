@@ -200,10 +200,10 @@
                 <el-icon class="title-icon rules-icon"><List /></el-icon>
                 <span>负载均衡规则</span>
               </div>
-              <el-badge :value="rules.filter(r => r.protocol !== 'tcp').length" type="primary" />
+              <el-badge :value="rules.length" type="primary" />
             </div>
           </template>
-          <el-table :data="rules.filter(r => r.protocol !== 'tcp')" stripe :header-cell-style="{ background: '#f9fafb' }">
+          <el-table :data="rules" stripe :header-cell-style="{ background: '#f9fafb' }">
             <el-table-column prop="name" label="规则名称" min-width="150">
               <template #default="{ row }">
                 <span class="text-primary font-medium">{{ row.name }}</span>
@@ -236,7 +236,8 @@
             </el-table-column>
             <el-table-column label="状态码" width="220" align="center">
               <template #default="{ row }">
-                <div v-if="(ruleMetrics[row.caddy_id]?.requests_total ?? 0) > 0" class="status-codes">
+                <div v-if="row.protocol === 'tcp'" class="text-secondary">-</div>
+                <div v-else-if="(ruleMetrics[row.caddy_id]?.requests_total ?? 0) > 0" class="status-codes">
                   <span class="status-code status-2xx" title="成功">2xx {{ ruleMetrics[row.caddy_id]?.status_2xx ?? 0 }}</span>
                   <span class="status-code status-3xx" title="重定向">3xx {{ ruleMetrics[row.caddy_id]?.status_3xx ?? 0 }}</span>
                   <span class="status-code status-4xx" title="客户端错误">4xx {{ ruleMetrics[row.caddy_id]?.status_4xx ?? 0 }}</span>
@@ -247,12 +248,14 @@
             </el-table-column>
             <el-table-column label="入站流量" width="100" align="right">
               <template #default="{ row }">
-                <span class="text-secondary">{{ formatBytes(ruleMetrics[row.caddy_id]?.bytes_in ?? 0) }}</span>
+                <span v-if="row.protocol === 'tcp'" class="text-secondary">-</span>
+                <span v-else class="text-secondary">{{ formatBytes(ruleMetrics[row.caddy_id]?.bytes_in ?? 0) }}</span>
               </template>
             </el-table-column>
             <el-table-column label="出站流量" width="100" align="right">
               <template #default="{ row }">
-                <span class="text-secondary">{{ formatBytes(ruleMetrics[row.caddy_id]?.bytes_out ?? 0) }}</span>
+                <span v-if="row.protocol === 'tcp'" class="text-secondary">-</span>
+                <span v-else class="text-secondary">{{ formatBytes(ruleMetrics[row.caddy_id]?.bytes_out ?? 0) }}</span>
               </template>
             </el-table-column>
             <el-table-column label="处理中" width="70" align="center">
@@ -270,7 +273,7 @@
               </template>
             </el-table-column>
           </el-table>
-          <el-empty v-if="rules.filter(r => r.protocol !== 'tcp').length === 0" description="暂无负载均衡规则" :image-size="80" />
+          <el-empty v-if="rules.length === 0" description="暂无负载均衡规则" :image-size="80" />
         </el-card>
       </el-col>
     </el-row>
@@ -468,16 +471,33 @@ const fetchRuleHealth = async () => {
       }
       metrics.healthy = false
       if (rule.enabled && rule.upstreams?.length) {
-        const allHealthy = rule.upstreams.every((u: any) => {
+        let allFound = true
+        let allHealthy = true
+        let hasUnknown = false
+
+        rule.upstreams.forEach((u: any) => {
           const key = `${u.host}:${u.port}`
+          let found = false
           for (const serverHealth of Object.values(healthData) as any[]) {
-            if (serverHealth?.[key]) {
-              return serverHealth[key].healthy === true
+            const upHealth = serverHealth?.[key]
+            if (upHealth) {
+              found = true
+              if (upHealth.unknown) {
+                hasUnknown = true
+              } else if (!upHealth.healthy) {
+                allHealthy = false
+              }
+              break
             }
           }
-          return false
+          if (!found) allFound = false
         })
-        metrics.healthy = allHealthy
+
+        if (!allFound || hasUnknown) {
+          metrics.healthy = undefined
+        } else {
+          metrics.healthy = allHealthy
+        }
       }
       newRuleMetrics[rule.caddy_id] = metrics
     })
