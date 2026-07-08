@@ -1736,11 +1736,31 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 	var isMaster bool
 	var caddyLogPath, caddyLogLevel string
 	var caddyLogSizeMB int
+	var global struct {
+		requestBodyMaxSizeMB, httpReadTimeout, httpWriteTimeout, httpIdleTimeout, upstreamKeepaliveTimeout int
+		serverTokensHidden                                                                                 bool
+	}
 	db.DB.QueryRow(`
 		SELECT COALESCE(dns_provider,''), COALESCE(acme_email,''), is_master,
-		       COALESCE(caddy_log_path,'/app/logs/caddy.log'), COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100)
+		       COALESCE(caddy_log_path,'/app/logs/caddy.log'), COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
+		       COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,0), COALESCE(http_write_timeout,0),
+		       COALESCE(http_idle_timeout,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE)
 		FROM global_config WHERE id = 1
-	`).Scan(&dnsProvider, &acmeEmail, &isMaster, &caddyLogPath, &caddyLogLevel, &caddyLogSizeMB)
+	`).Scan(&dnsProvider, &acmeEmail, &isMaster, &caddyLogPath, &caddyLogLevel, &caddyLogSizeMB,
+		&global.requestBodyMaxSizeMB, &global.httpReadTimeout, &global.httpWriteTimeout, &global.httpIdleTimeout,
+		&global.upstreamKeepaliveTimeout, &global.serverTokensHidden)
+
+	applyTimeouts := func(server map[string]interface{}) {
+		if global.httpReadTimeout > 0 {
+			server["read_timeout"] = fmt.Sprintf("%ds", global.httpReadTimeout)
+		}
+		if global.httpWriteTimeout > 0 {
+			server["write_timeout"] = fmt.Sprintf("%ds", global.httpWriteTimeout)
+		}
+		if global.httpIdleTimeout > 0 {
+			server["idle_timeout"] = fmt.Sprintf("%ds", global.httpIdleTimeout)
+		}
+	}
 
 	servers := make(map[string]interface{})
 
@@ -1778,6 +1798,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		server := map[string]interface{}{
 			"listen": []string{fmt.Sprintf(":%d", port)},
 		}
+		applyTimeouts(server)
 
 		var routes []interface{}
 
@@ -2062,6 +2083,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 			},
 		},
 	}
+	applyTimeouts(defaultSite)
 
 	if _, exists := servers["http_80"]; !exists {
 		if len(redirectRoutes) > 0 {
@@ -2070,6 +2092,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		servers["http_80"] = defaultSite
 	} else {
 		server := servers["http_80"].(map[string]interface{})
+		applyTimeouts(server)
 		routes, ok := server["routes"].([]interface{})
 		if !ok {
 			routes = []interface{}{}
