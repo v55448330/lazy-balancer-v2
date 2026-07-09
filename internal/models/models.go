@@ -126,6 +126,7 @@ type GlobalConfig struct {
 	HTTPIdleTimeout          int          `json:"http_idle_timeout"`
 	UpstreamKeepaliveTimeout int          `json:"upstream_keepalive_timeout"`
 	ServerTokensHidden       bool         `json:"server_tokens_hidden"`
+	CertJobLogSizeMB         int          `json:"cert_job_log_size_mb"`
 	IsMaster                 bool         `json:"is_master"`
 	MasterURL                string       `json:"master_url"`
 	SyncInterval             int          `json:"sync_interval"`
@@ -399,6 +400,7 @@ type UpdateConfigRequest struct {
 	HTTPIdleTimeout          *int    `json:"http_idle_timeout"`
 	UpstreamKeepaliveTimeout *int    `json:"upstream_keepalive_timeout"`
 	ServerTokensHidden       *bool   `json:"server_tokens_hidden"`
+	CertJobLogSizeMB         *int    `json:"cert_job_log_size_mb"`
 	IsMaster                 *bool   `json:"is_master"`
 	MasterURL                *string `json:"master_url"`
 	SyncInterval             *int    `json:"sync_interval"`

@@ -87,16 +87,15 @@ func NewCertIssuer(reloader func() error) *CertIssuer {
 	return &CertIssuer{caddyReloader: reloader}
 }
 
-// jobLogger writes issuance progress to cert_job_logs and updates cert_jobs.status.
+// jobLogger writes issuance progress to cert job log files and updates cert_jobs.status.
 type jobLogger struct {
-	jobID int
+	jobID  int
+	ruleID string
+	file   *CertJobFileLogger
 }
 
 func (l *jobLogger) Log(stage, message string) {
-	if _, err := db.DB.Exec("INSERT INTO cert_job_logs (job_id, level, message) VALUES (?, ?, ?)",
-		l.jobID, "info", fmt.Sprintf("[%s] %s", stage, message)); err != nil {
-		log.Printf("cert job %d log insert failed: %v", l.jobID, err)
-	}
+	l.file.Log(stage, message)
 	if _, err := db.DB.Exec("UPDATE cert_jobs SET status=?, message=?, updated_at=datetime('now') WHERE id=?",
 		stage, message, l.jobID); err != nil {
 		log.Printf("cert job %d status update failed: %v", l.jobID, err)
@@ -115,7 +114,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		return fmt.Errorf("ACME证书仅支持单域名或根域+www二级域名: %s", domains)
 	}
 
-	logger := &jobLogger{jobID: jobID}
+	logger := &jobLogger{jobID: jobID, ruleID: ruleID, file: NewCertJobFileLogger(ruleID)}
 
 	// Pre-flight check: verify the CA provider is reachable before starting the
 	// real issuance flow. If the CA is down (e.g. ZeroSSL 504), fail fast and
@@ -222,6 +221,10 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	if err != nil {
 		failJob(jobID, fmt.Sprintf("证书保存失败: %v", err))
 		return fmt.Errorf("update cert job: %w", err)
+	}
+
+	if err := WriteCertFiles(ruleID, certPEM, keyPEM); err != nil {
+		log.Printf("Cert issued for rule %s but file write failed: %v", ruleID, err)
 	}
 
 	// Reload Caddy to pick up the new certificate

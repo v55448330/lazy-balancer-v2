@@ -1938,25 +1938,28 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		}
 	}
 
-	// Collect TLS certificates for all rules (manual + ACME from cert_jobs)
-	var tlsCertificates []map[string]interface{}
+	// Collect TLS certificate file paths for all rules (manual + ACME from cert_jobs)
+	var tlsCertFiles []map[string]interface{}
 	for _, ru := range allRules {
 		r := ru.rule
 		if !r.EnableTLS {
 			continue
 		}
+		certPath, keyPath := CertFilePaths(r.CaddyID)
 		if r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
-			tlsCertificates = append(tlsCertificates, map[string]interface{}{
-				"certificate": r.TLSCert,
-				"key":         r.TLSKey,
+			WriteCertFiles(r.CaddyID, r.TLSCert, r.TLSKey)
+			tlsCertFiles = append(tlsCertFiles, map[string]interface{}{
+				"certificate": certPath,
+				"key":         keyPath,
 				"tags":        []string{r.CaddyID},
 			})
 		} else if r.TLSSource == "acme_dns" {
 			certPEM, keyPEM, issued := loadACMECertificate(r.CaddyID, r.Domain)
 			if issued {
-				tlsCertificates = append(tlsCertificates, map[string]interface{}{
-					"certificate": certPEM,
-					"key":         keyPEM,
+				WriteCertFiles(r.CaddyID, certPEM, keyPEM)
+				tlsCertFiles = append(tlsCertFiles, map[string]interface{}{
+					"certificate": certPath,
+					"key":         keyPath,
 					"tags":        []string{r.CaddyID},
 				})
 			}
@@ -2147,10 +2150,10 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 	}
 
 	// TLS app: load certificates from database (manual + ACME), no Caddy ACME automation.
-	if len(tlsCertificates) > 0 {
+	if len(tlsCertFiles) > 0 {
 		tlsApp := map[string]interface{}{
 			"certificates": map[string]interface{}{
-				"load_pem": tlsCertificates,
+				"load_files": tlsCertFiles,
 			},
 		}
 		apps["tls"] = tlsApp

@@ -36,6 +36,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       COALESCE(http_idle_timeout,0) as http_idle_timeout,
 		       COALESCE(upstream_keepalive_timeout,0) as upstream_keepalive_timeout,
 		       COALESCE(server_tokens_hidden,FALSE) as server_tokens_hidden,
+		       COALESCE(cert_job_log_size_mb,10) as cert_job_log_size_mb,
 		       is_master, COALESCE(master_url, '') as master_url, sync_interval,
 		       last_sync, updated_at
 		FROM global_config WHERE id = 1
@@ -44,9 +45,9 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.CertRenewalDays, &cfg.CertRenewalAttempts, &cfg.DefaultCAProviderID,
 		&cfg.LogLevel, &cfg.AccessLogEnabled,
 		&cfg.CaddyLogPath, &cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
-		&cfg.RequestBodyMaxSizeMB, &cfg.HTTPReadTimeout, &cfg.HTTPWriteTimeout, &cfg.HTTPIdleTimeout,
-		&cfg.UpstreamKeepaliveTimeout, &cfg.ServerTokensHidden,
-		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
+	&cfg.RequestBodyMaxSizeMB, &cfg.HTTPReadTimeout, &cfg.HTTPWriteTimeout, &cfg.HTTPIdleTimeout,
+	&cfg.UpstreamKeepaliveTimeout, &cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB,
+	&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get config: " + err.Error()})
@@ -143,6 +144,11 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	if req.CertJobLogSizeMB != nil && *req.CertJobLogSizeMB <= 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_job_log_size_mb must be greater than 0"})
+		return
+	}
+
 	// Update DNS credentials in environment if provided
 	if req.DNSCredentials != nil {
 		parts := strings.Split(*req.DNSCredentials, ",")
@@ -170,9 +176,10 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				http_read_timeout = COALESCE(?, http_read_timeout),
 				http_write_timeout = COALESCE(?, http_write_timeout),
 				http_idle_timeout = COALESCE(?, http_idle_timeout),
-				upstream_keepalive_timeout = COALESCE(?, upstream_keepalive_timeout),
-				server_tokens_hidden = COALESCE(?, server_tokens_hidden),
-				is_master = COALESCE(?, is_master),
+			upstream_keepalive_timeout = COALESCE(?, upstream_keepalive_timeout),
+			server_tokens_hidden = COALESCE(?, server_tokens_hidden),
+			cert_job_log_size_mb = COALESCE(?, cert_job_log_size_mb),
+			is_master = COALESCE(?, is_master),
 				master_url = COALESCE(?, master_url),
 				sync_interval = COALESCE(?, sync_interval),
 				updated_at = datetime('now')
@@ -180,7 +187,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.LogLevel, req.AccessLogEnabled,
 		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
-		req.UpstreamKeepaliveTimeout, req.ServerTokensHidden,
+		req.UpstreamKeepaliveTimeout, req.ServerTokensHidden, req.CertJobLogSizeMB,
 		req.IsMaster, req.MasterURL, req.SyncInterval)
 
 	// Update node mode in memory

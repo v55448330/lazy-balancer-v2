@@ -247,21 +247,14 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 	display := available.In(loc)
 
 	if attempts >= maxAttempts {
-		if _, err := db.DB.Exec("INSERT INTO cert_job_logs (job_id, level, message) VALUES (?, 'error', ?)", jobID, fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts)); err != nil {
-			log.Printf("CA queue: failed to insert max-attempts log for job %d: %v", jobID, err)
-		}
+		WriteCertJobLog(jobID, "ERROR", "failed", fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts))
 		if _, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=?, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?", fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts), attempts, jobID); err != nil {
 			log.Printf("CA queue: failed to mark job %d as failed at max attempts: %v", jobID, err)
 		}
 		return
 	}
 
-	if _, err := db.DB.Exec(
-		"INSERT INTO cert_job_logs (job_id, level, message) VALUES (?, 'warning', ?)",
-		jobID, fmt.Sprintf("CA 频率限制，第 %d 次，将在 %s 后重试", attempts, display.Format("2006-01-02 15:04:05 -07:00")),
-	); err != nil {
-		log.Printf("CA queue: failed to insert waiting log for job %d: %v", jobID, err)
-	}
+	WriteCertJobLog(jobID, "WARN", "waiting_ca", fmt.Sprintf("CA 频率限制，第 %d 次，将在 %s 后重试", attempts, display.Format("2006-01-02 15:04:05 -07:00")))
 	if _, err := db.DB.Exec(
 		"UPDATE cert_jobs SET status='waiting_ca', message='等待 CA 频率限制冷却', ca_available_after=?, last_error_code='429', renewal_attempts=?, updated_at=datetime('now') WHERE id=?",
 		available.UTC().Format("2006-01-02 15:04:05"), attempts, jobID,
@@ -274,9 +267,7 @@ func failJob(jobID int, message string) {
 		log.Printf("CA queue: cannot fail missing job %d: %s", jobID, message)
 		return
 	}
-	if _, err := db.DB.Exec("INSERT INTO cert_job_logs (job_id, level, message) VALUES (?, 'error', ?)", jobID, message); err != nil {
-		log.Printf("CA queue: failed to insert error log for job %d: %v", jobID, err)
-	}
+	WriteCertJobLog(jobID, "ERROR", "failed", message)
 	if _, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=COALESCE(renewal_attempts,0)+1, updated_at=datetime('now') WHERE id=?", message, jobID); err != nil {
 		log.Printf("CA queue: failed to mark job %d as failed: %v", jobID, err)
 	}

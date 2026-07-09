@@ -35,35 +35,35 @@
                 <el-option label="warn" value="warn" />
                 <el-option label="error" value="error" />
               </el-select>
-              <span class="caddy-form-tip">Caddy 日志输出级别</span>
+              <span class="caddy-form-tip">生产环境建议 info；debug 会产生大量日志</span>
             </el-form-item>
             <el-form-item label="日志大小">
               <el-input-number v-model="caddySettings.caddy_log_size_mb" :min="0" controls-position="right" style="width: 120px;" />
-              <span class="caddy-form-tip">MB，单个日志文件达到该大小后滚动</span>
+              <span class="caddy-form-tip">MB，单个文件达到此大小后自动滚动归档，保留 5 个历史文件；建议 100</span>
             </el-form-item>
             <el-form-item label="请求体大小">
               <el-input-number v-model="caddySettings.request_body_max_size_mb" :min="0" controls-position="right" style="width: 120px;" />
-              <span class="caddy-form-tip">MB，限制单个请求体的最大大小</span>
+              <span class="caddy-form-tip">MB，限制单个请求体最大体积；0 = 不限制。常规建议 0，需防护大文件上传可设为 100</span>
             </el-form-item>
             <el-form-item label="读取超时">
               <el-input-number v-model="caddySettings.http_read_timeout" :min="0" controls-position="right" style="width: 120px;" />
-              <span class="caddy-form-tip">秒，读取请求体的超时时间</span>
+              <span class="caddy-form-tip">秒，等待客户端发送请求体的最长时间；0 = Caddy 默认（无超时）。常规建议 60</span>
             </el-form-item>
             <el-form-item label="写入超时">
               <el-input-number v-model="caddySettings.http_write_timeout" :min="0" controls-position="right" style="width: 120px;" />
-              <span class="caddy-form-tip">秒，写入响应的超时时间</span>
+              <span class="caddy-form-tip">秒，向客户端写入响应的最长时间；0 = Caddy 默认（无超时）。常规建议 60</span>
             </el-form-item>
             <el-form-item label="空闲超时">
               <el-input-number v-model="caddySettings.http_idle_timeout" :min="0" controls-position="right" style="width: 120px;" />
-              <span class="caddy-form-tip">秒，连接保持空闲的最大时间</span>
+              <span class="caddy-form-tip">秒，客户端到 Caddy 的 Keep-Alive 连接空闲多久后关闭；0 = Caddy 默认。常规建议 120</span>
             </el-form-item>
             <el-form-item label="上游 Keepalive">
               <el-input-number v-model="caddySettings.upstream_keepalive_timeout" :min="0" controls-position="right" style="width: 120px;" />
-              <span class="caddy-form-tip">秒，与上游长连接的空闲超时</span>
+              <span class="caddy-form-tip">秒，Caddy 到后端服务器的长连接空闲多久后关闭；0 = Caddy 默认。常规建议 60</span>
             </el-form-item>
             <el-form-item label="Server Tokens">
               <el-switch v-model="caddySettings.server_tokens_hidden" active-text="开启" inactive-text="关闭" />
-              <span class="caddy-form-tip">是否在响应头中隐藏 Server 字段</span>
+              <span class="caddy-form-tip">开启后在响应头中隐藏 Server 字段，减少服务器指纹暴露</span>
             </el-form-item>
             <div class="form-actions">
               <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
@@ -93,7 +93,9 @@
   <el-dialog
     v-model="logDialogVisible"
     title="Caddy 运行日志"
-    width="900px"
+    width="70%"
+    :style="{ maxWidth: '70vw' }"
+    class="log-dialog"
     destroy-on-close
     @opened="onLogDialogOpened"
     @closed="onLogDialogClosed"
@@ -104,13 +106,10 @@
         <el-icon><RefreshRight /></el-icon>刷新
       </el-button>
     </div>
-    <el-input
-      v-model="logContent"
-      type="textarea"
-      :readonly="true"
-      :rows="20"
-      class="log-textarea"
-      placeholder="暂无日志"
+    <div
+      ref="logContainerRef"
+      class="log-viewer"
+      v-html="logHtml"
     />
     <template #footer>
       <el-button @click="logDialogVisible = false">关闭</el-button>
@@ -120,12 +119,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { request } from '@/utils/api'
 import { Cpu, RefreshRight, Setting, View } from '@element-plus/icons-vue'
 import VueJsonPretty from 'vue-json-pretty'
 import 'vue-json-pretty/lib/styles.css'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ansiToHtml } from '@/utils/ansi'
 
 const caddyConfigData = ref<any>(null)
 const loading = ref(false)
@@ -147,8 +147,10 @@ const activeCollapse = ref<string[]>([])
 
 const logDialogVisible = ref(false)
 const logContent = ref('')
+const logHtml = computed(() => ansiToHtml(logContent.value))
 const logLoading = ref(false)
 const autoRefresh = ref(true)
+const logContainerRef = ref<HTMLElement | null>(null)
 let logPollTimer: ReturnType<typeof setInterval> | null = null
 
 const fetchCaddyConfig = async () => {
@@ -259,10 +261,18 @@ const refreshLogs = async () => {
   try {
     const res: any = await request.get('/caddy/logs')
     logContent.value = res.data?.content || ''
+    nextTick(scrollToBottom)
   } catch (e: any) {
     console.error('Failed to fetch caddy logs:', e)
   } finally {
     logLoading.value = false
+  }
+}
+
+const scrollToBottom = () => {
+  const el = logContainerRef.value
+  if (el) {
+    el.scrollTop = el.scrollHeight
   }
 }
 
@@ -374,14 +384,20 @@ onMounted(() => {
   margin-bottom: 12px;
 }
 
-.log-textarea :deep(.el-textarea__inner) {
-  height: 500px;
+.log-viewer {
+  height: 65vh;
+  min-height: 400px;
+  max-height: 800px;
+  overflow: auto;
+  padding: 12px 16px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 13px;
   line-height: 1.7;
   background: #0f172a;
   color: #e2e8f0;
   border: 1px solid #1e293b;
+  border-radius: 4px;
+  white-space: pre-wrap;
 }
 
 .form-actions {

@@ -7,6 +7,8 @@ server
 # Data (runtime)
 data/
 test-data/
+certs/
+logs/
 
 # Test UI (staging)
 test-ui/

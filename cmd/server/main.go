@@ -54,7 +54,8 @@ func main() {
 	// Initialize handlers
 	h := handlers.NewHandlers(cfg, caddyService, metricsService, nodeService, syncService, certService, caProviderService)
 
-	// Apply Caddy config from database on startup
+	// Materialize cert files from DB, then apply Caddy config on startup
+	services.MaterializeAllCertsFromDB()
 	if err := h.ApplyConfigOnStartup(); err != nil {
 		log.Printf("Warning: Failed to apply Caddy config on startup: %v", err)
 	}

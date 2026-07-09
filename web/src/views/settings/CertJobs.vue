@@ -71,13 +71,15 @@
   <el-dialog
     v-model="logDialogVisible"
     :title="`证书日志 - ${currentJob?.domain || ''}`"
-    width="900px"
+    width="70%"
+    :style="{ maxWidth: '70vw' }"
+    class="cert-log-dialog"
     destroy-on-close
     @opened="onLogDialogOpened"
     @closed="onLogDialogClosed"
   >
     <div ref="logContainerRef" class="log-container">
-      <pre v-if="formattedLogs" class="log-content">{{ formattedLogs }}</pre>
+      <pre v-if="logHtml" class="log-content" v-html="logHtml" />
       <el-empty v-else description="暂无日志" :image-size="60" />
     </div>
     <template #footer>
@@ -91,6 +93,7 @@
 import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
+import { escapeHtml } from '@/utils/ansi'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as pkijs from 'pkijs'
 import * as asn1js from 'asn1js'
@@ -139,14 +142,6 @@ interface CertInfo {
   status: string
 }
 
-interface CertJobLog {
-  id: number
-  job_id: number
-  level: string
-  message: string
-  created_at: string
-}
-
 const props = defineProps<{
   ruleId?: string
 }>()
@@ -159,23 +154,18 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const logDialogVisible = ref(false)
 const logLoading = ref(false)
-const logLines = ref<CertJobLog[]>([])
+const logContent = ref('')
 const currentJob = ref<CertJob | null>(null)
 const logContainerRef = ref<HTMLDivElement | null>(null)
 let logPollTimer: ReturnType<typeof setInterval> | null = null
 
-const ansiRegex = /[\u001B\u009B][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d\/#&.:=?%@~_]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g
-
-const formatLogLine = (log: CertJobLog) => {
-  const ts = log.created_at ? formatDate(log.created_at) : '-'
-  return `[${ts}] [${log.level.toUpperCase()}] ${log.message}`
-}
-
-const formattedLogs = computed(() => {
-  return logLines.value
-    .map(formatLogLine)
-    .map(line => line.replace(ansiRegex, '').trimEnd())
-    .join('\n')
+const logHtml = computed(() => {
+  if (!logContent.value) return ''
+  return escapeHtml(logContent.value)
+    .replace(/\[INFO\]/g, '<span style="color:#3b82f6">$&</span>')
+    .replace(/\[WARN\]/g, '<span style="color:#eab308">$&</span>')
+    .replace(/\[ERROR\]/g, '<span style="color:#ef4444">$&</span>')
+    .replace(/\[DEBUG\]/g, '<span style="color:#a855f7">$&</span>')
 })
 
 const scrollToBottom = async () => {
@@ -364,7 +354,7 @@ const onLogDialogOpened = async () => {
 const onLogDialogClosed = () => {
   stopLogPolling()
   currentJob.value = null
-  logLines.value = []
+  logContent.value = ''
 }
 
 const startLogPolling = () => {
@@ -383,9 +373,8 @@ const refreshLogs = async () => {
   if (!currentJob.value) return
   logLoading.value = true
   try {
-    const res = await request.get(`/certificates/jobs/${currentJob.value.id}/logs`, { params: { limit: 500 } })
-    const logs = Array.isArray(res.data) ? res.data : (res.data?.lines || [])
-    logLines.value = logs
+    const res: any = await request.get(`/certificates/jobs/${currentJob.value.id}/logs`)
+    logContent.value = res.data?.content || ''
     await scrollToBottom()
   } catch (error) {
     console.error('Failed to fetch cert job logs:', error)
@@ -422,8 +411,8 @@ onUnmounted(() => {
   font-size: 12px;
   line-height: 1.7;
   white-space: pre-wrap;
-  word-break: break-all;
 }
+
 .cell-text {
   line-height: 1;
 }

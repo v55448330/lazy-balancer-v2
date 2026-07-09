@@ -1,10 +1,14 @@
 package handlers
 
 import (
+	"bytes"
 	"database/sql"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -146,41 +150,60 @@ func (h *Handlers) GetCertJobLogs(c *gin.Context) {
 		return
 	}
 
-	limit := 500
-	if l, _ := strconv.Atoi(c.Query("limit")); l > 0 {
-		if l > 5000 {
-			l = 5000
-		}
-		limit = l
-	}
-
-	rows, err := db.DB.Query(
-		"SELECT id, job_id, level, message, created_at FROM cert_job_logs WHERE job_id=? ORDER BY id DESC LIMIT ?",
-		id, limit,
-	)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query logs: " + err.Error()})
+	var ruleID string
+	if err := db.DB.QueryRow("SELECT rule_id FROM cert_jobs WHERE id=?", id).Scan(&ruleID); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Cert job not found"})
 		return
 	}
-	defer rows.Close()
 
-	var logs []models.CertJobLog
-	for rows.Next() {
-		var l models.CertJobLog
-		if err := rows.Scan(&l.ID, &l.JobID, &l.Level, &l.Message, &l.CreatedAt); err != nil {
-			continue
+	logPath := services.CertJobLogPath(ruleID)
+	logPathBackup := logPath + ".1"
+
+	content := readCertJobLogFile(logPath)
+	if oldData := readCertJobLogFile(logPathBackup); oldData != "" {
+		content = oldData + content
+	}
+
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": content}})
+}
+
+func readCertJobLogFile(path string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+
+	const maxBytes = 128 * 1024
+	startOffset := int64(0)
+	if info.Size() > maxBytes {
+		startOffset = info.Size() - maxBytes
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
+		return ""
+	}
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return ""
+	}
+
+	if startOffset > 0 {
+		if idx := bytes.IndexByte(data, '\n'); idx != -1 {
+			data = data[idx+1:]
 		}
-		logs = append(logs, l)
 	}
 
-	// Reverse to chronological order for display
-	for i, j := 0, len(logs)-1; i < j; i, j = i+1, j-1 {
-		logs[i], logs[j] = logs[j], logs[i]
+	const maxLines = 500
+	lines := strings.Split(string(data), "\n")
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
 	}
-
-	if logs == nil {
-		logs = []models.CertJobLog{}
-	}
-
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: logs})
+	return strings.Join(lines, "\n")
 }

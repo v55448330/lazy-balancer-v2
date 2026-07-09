@@ -215,17 +215,6 @@ func createTables() error {
 	CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain);
 	CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain);
 
-	-- Certificate Job Logs table for detailed ACME issuance logs
-	CREATE TABLE IF NOT EXISTS cert_job_logs (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		job_id INTEGER NOT NULL,
-		level VARCHAR(10) DEFAULT 'info',
-		message TEXT NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (job_id) REFERENCES cert_jobs(id) ON DELETE CASCADE
-	);
-	CREATE INDEX IF NOT EXISTS idx_cert_job_logs_job ON cert_job_logs(job_id);
-
 	-- Global Config table
 	CREATE TABLE IF NOT EXISTS global_config (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -249,6 +238,7 @@ func createTables() error {
 		server_tokens_hidden BOOLEAN DEFAULT FALSE,
 		cert_expiry_days INTEGER DEFAULT 30,
 		cert_renewal_days INTEGER DEFAULT 30,
+		cert_job_log_size_mb INTEGER DEFAULT 10,
 		last_sync DATETIME,
 		updated_at DATETIME
 	);
@@ -331,6 +321,7 @@ func runMigrations() error {
 		"global_config.default_ca_provider_id": "INTEGER DEFAULT 0",
 		"global_config.cert_renewal_days":      "INTEGER DEFAULT 30",
 		"global_config.cert_renewal_attempts":  "INTEGER DEFAULT 5",
+		"global_config.cert_job_log_size_mb":   "INTEGER DEFAULT 10",
 	}
 	for col, dtype := range newColumns {
 		parts := strings.Split(col, ".")
@@ -347,6 +338,9 @@ func runMigrations() error {
 			}
 		}
 	}
+
+	// Drop legacy cert_job_logs table — logs now stored in files under /app/logs/
+	DB.Exec("DROP TABLE IF EXISTS cert_job_logs")
 
 	// Create upstreams table if not exists
 	DB.Exec(`CREATE TABLE IF NOT EXISTS upstreams (
@@ -533,20 +527,6 @@ func runMigrations() error {
 	// returns the same value, so this is safe to run repeatedly.
 	if _, err := DB.Exec("UPDATE cert_jobs SET ca_available_after = datetime(ca_available_after) WHERE ca_available_after IS NOT NULL"); err != nil {
 		log.Printf("Warning: failed to normalize cert_jobs.ca_available_after: %v", err)
-	}
-
-	// cert_job_logs table migration
-	DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cert_job_logs'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec(`CREATE TABLE cert_job_logs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			job_id INTEGER NOT NULL,
-			level VARCHAR(10) DEFAULT 'info',
-			message TEXT NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (job_id) REFERENCES cert_jobs(id) ON DELETE CASCADE
-		)`)
-		DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_job_logs_job ON cert_job_logs(job_id)")
 	}
 
 	// Migrate legacy dns_id/dns_key into dns_credentials JSON

@@ -24,6 +24,10 @@
             <el-switch v-model="settings.access_log_enabled" />
             <div class="form-tip">记录所有 HTTP 请求到日志</div>
           </el-form-item>
+          <el-form-item label="证书日志大小">
+            <el-input-number v-model="settings.cert_job_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
+            <span class="form-tip-inline">MB，单个证书签发日志文件达到该大小后滚动</span>
+          </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="saving" @click="handleSave">
               <el-icon><Check /></el-icon>
@@ -84,6 +88,7 @@ const handleSave = async () => {
     await request.put('/config', {
       log_level: settings.value.log_level,
       access_log_enabled: settings.value.access_log_enabled,
+      cert_job_log_size_mb: settings.value.cert_job_log_size_mb,
     })
     ElMessage.success('保存成功')
     emit('save')
@@ -110,6 +115,11 @@ const handleSave = async () => {
   font-size: 12px;
   color: #9ca3af;
   margin-top: 4px;
+}
+.form-tip-inline {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-left: 8px;
 }
 .info-list { padding: 4px 0; }
 .info-item {

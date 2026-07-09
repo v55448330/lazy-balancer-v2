@@ -532,7 +532,7 @@
 
         <!-- Step 3: 高级选项 -->
         <div v-show="currentStep === 3" class="step-content">
-          <el-form :model="wizardForm" label-width="100px">
+          <el-form :model="wizardForm" label-width="130px">
             <template v-if="wizardForm.protocol === 'http'">
               <el-divider content-position="left" class="compact-divider">DNS 服务器</el-divider>
 
@@ -602,14 +602,12 @@
 
             <el-form-item label="请求体大小">
               <el-input-number v-model="wizardForm.request_body_max_size_mb" :min="0" :max="10240" controls-position="right" style="width: 120px;" />
-              <span class="form-tip-inline">MB，0=默认</span>
-              <div class="form-tip-line">限制单个请求体的最大大小；0 表示使用全局配置中的默认值。</div>
+              <span class="form-tip-inline">MB，0 = 全局默认；限制单个请求体的最大大小</span>
             </el-form-item>
 
-            <el-form-item label="上游超时">
+            <el-form-item label="Keepalive 超时">
               <el-input-number v-model="wizardForm.upstream_keepalive_timeout" :min="0" :max="3600" controls-position="right" style="width: 120px;" />
-              <span class="form-tip-inline">秒，0=默认</span>
-              <div class="form-tip-line">与上游服务器建立的长连接在空闲多久后关闭；0 表示使用全局配置中的默认值。</div>
+              <span class="form-tip-inline">秒，0 = 全局默认；与上游服务器长连接的空闲超时</span>
             </el-form-item>
           </el-form>
         </div>
@@ -762,7 +760,7 @@
             <template v-else>禁用</template>
           </el-descriptions-item>
           <el-descriptions-item label="请求体大小">{{ (ruleConfig.request_body_max_size_mb || 0) > 0 ? ruleConfig.request_body_max_size_mb + 'MB' : '全局默认' }}</el-descriptions-item>
-          <el-descriptions-item label="上游 keepalive">{{ (ruleConfig.upstream_keepalive_timeout || 0) > 0 ? ruleConfig.upstream_keepalive_timeout + 's' : '全局默认' }}</el-descriptions-item>
+            <el-descriptions-item label="Keepalive 超时">{{ (ruleConfig.upstream_keepalive_timeout || 0) > 0 ? ruleConfig.upstream_keepalive_timeout + 's' : '全局默认' }}</el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="ruleConfig.enabled ? 'success' : 'info'" size="small">{{ ruleConfig.enabled ? '启用' : '禁用' }}</el-tag>
           </el-descriptions-item>

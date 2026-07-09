@@ -352,12 +352,22 @@ func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string, li
 
 	if certs, ok := tlsApp["certificates"].(map[string]interface{}); ok {
 		var certList []interface{}
-		switch v := certs["load_pem"].(type) {
+		switch v := certs["load_files"].(type) {
 		case []interface{}:
 			certList = v
 		case []map[string]interface{}:
 			for _, c := range v {
 				certList = append(certList, c)
+			}
+		}
+		if certList == nil {
+			switch v := certs["load_pem"].(type) {
+			case []interface{}:
+				certList = v
+			case []map[string]interface{}:
+				for _, c := range v {
+					certList = append(certList, c)
+				}
 			}
 		}
 		for _, certVal := range certList {
@@ -1344,12 +1354,6 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		return
 	}
 
-	if _, err := tx.Exec("DELETE FROM cert_job_logs WHERE job_id IN (SELECT id FROM cert_jobs WHERE rule_id = ?)", caddyID); err != nil {
-		tx.Rollback()
-		log.Printf("DeleteRule cert_job_logs delete error for caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete certificate job logs"})
-		return
-	}
 	if _, err := tx.Exec("DELETE FROM cert_jobs WHERE rule_id = ?", caddyID); err != nil {
 		tx.Rollback()
 		log.Printf("DeleteRule cert_jobs delete error for caddy_id=%s: %v", caddyID, err)
@@ -1380,6 +1384,8 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to commit rule deletion"})
 		return
 	}
+
+	services.RemoveCertFiles(caddyID)
 
 	var serverName string
 	var serverPort int
