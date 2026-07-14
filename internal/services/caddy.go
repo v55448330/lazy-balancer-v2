@@ -10,12 +10,14 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/models"
 )
 
 // CaddyService handles Caddy configuration management
@@ -1609,7 +1611,7 @@ func extractMetricLabel(metricName string, label string) string {
 }
 
 // GenerateCaddyConfig generates Caddy configuration from database
-func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
+func GenerateCaddyConfig(cfg *config.Config, overrides ...*models.UpdateConfigRequest) map[string]interface{} {
 	type lbRule struct {
 		CaddyID                        string
 		Name                           string
@@ -1644,6 +1646,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		UpstreamKeepaliveTimeout       int
 		ServerTokensHidden             int
 		HostHeader                     string
+		LogEnabled                     bool
 	}
 
 	type upstream struct {
@@ -1673,7 +1676,8 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		       IIF(tls_http_redirect IN ('1',1),1,0),
 		       IIF(enabled IN ('1',1),1,0), IIF(enable_compress IN ('1',1),1,0), COALESCE(compress_types,'gzip'),
 		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
-		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(host_header,'')
+		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(host_header,''),
+		       IIF(log_enabled IN ('1',1),1,0)
 		FROM lb_rules WHERE enabled = 1
 	`)
 	if err != nil {
@@ -1690,7 +1694,7 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 			&r.EnableTLS, &r.TLSSource, &r.ACMEConfigID, &r.TLSCert, &r.TLSKey,
 			&r.TLSHTTPRedirect, &r.Enabled, &r.EnableCompress, &r.CompressTypes,
 			&r.EnableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPTryDuration, &r.TCPTryInterval,
-			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.HostHeader)
+			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.HostHeader, &r.LogEnabled)
 
 		if err != nil {
 			log.Printf("Failed to scan rule: %v", err)
@@ -1741,6 +1745,8 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 	var isMaster bool
 	var caddyLogPath, caddyLogLevel string
 	var caddyLogSizeMB int
+	var accessLogJSON bool
+	var accessLogFormat string
 	var global struct {
 		requestBodyMaxSizeMB, httpReadTimeout, httpWriteTimeout, httpIdleTimeout, upstreamKeepaliveTimeout int
 		serverTokensHidden                                                                                 bool
@@ -1749,12 +1755,30 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		SELECT COALESCE(dns_provider,''), COALESCE(acme_email,''), is_master,
 		       COALESCE(caddy_log_path,'/app/logs/caddy.log'), COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
 		       COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,0), COALESCE(http_write_timeout,0),
-		       COALESCE(http_idle_timeout,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE)
+		       COALESCE(http_idle_timeout,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE),
+		       COALESCE(access_log_json,TRUE), COALESCE(access_log_format,'')
 		FROM global_config WHERE id = 1
 	`).Scan(&dnsProvider, &acmeEmail, &isMaster, &caddyLogPath, &caddyLogLevel, &caddyLogSizeMB,
 		&global.requestBodyMaxSizeMB, &global.httpReadTimeout, &global.httpWriteTimeout, &global.httpIdleTimeout,
-		&global.upstreamKeepaliveTimeout, &global.serverTokensHidden); err != nil {
+		&global.upstreamKeepaliveTimeout, &global.serverTokensHidden, &accessLogJSON, &accessLogFormat); err != nil {
 		log.Printf("Failed to load global config, using zero defaults: %v", err)
+	}
+
+	if len(overrides) > 0 && overrides[0] != nil {
+		o := overrides[0]
+		if o.CaddyLogPath != nil { caddyLogPath = *o.CaddyLogPath }
+		if o.CaddyLogLevel != nil { caddyLogLevel = *o.CaddyLogLevel }
+		if o.CaddyLogSizeMB != nil { caddyLogSizeMB = *o.CaddyLogSizeMB }
+		if o.RequestBodyMaxSizeMB != nil { global.requestBodyMaxSizeMB = *o.RequestBodyMaxSizeMB }
+		if o.HTTPReadTimeout != nil { global.httpReadTimeout = *o.HTTPReadTimeout }
+		if o.HTTPWriteTimeout != nil { global.httpWriteTimeout = *o.HTTPWriteTimeout }
+		if o.HTTPIdleTimeout != nil { global.httpIdleTimeout = *o.HTTPIdleTimeout }
+		if o.UpstreamKeepaliveTimeout != nil { global.upstreamKeepaliveTimeout = *o.UpstreamKeepaliveTimeout }
+		if o.ServerTokensHidden != nil { global.serverTokensHidden = *o.ServerTokensHidden }
+		if o.AccessLogJSON != nil { accessLogJSON = *o.AccessLogJSON }
+		if o.AccessLogFormat != nil { accessLogFormat = *o.AccessLogFormat }
+		if o.DNSProvider != nil { dnsProvider = *o.DNSProvider }
+		if o.ACMEEmail != nil { acmeEmail = *o.ACMEEmail }
 	}
 
 	applyTimeouts := func(server map[string]interface{}) {
@@ -2133,6 +2157,29 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		servers["http_80"] = server
 	}
 
+	loggerNames := map[string]interface{}{}
+	for _, ru := range allRules {
+		r := ru.rule
+		if !r.LogEnabled || r.Protocol != "http" || r.Domain == "" {
+			continue
+		}
+		for _, d := range strings.Split(r.Domain, ",") {
+			d = strings.TrimSpace(d)
+			if d != "" {
+				loggerNames[d] = "rule_" + r.CaddyID
+			}
+		}
+	}
+	if len(loggerNames) > 0 {
+		for _, serverVal := range servers {
+			srv, _ := serverVal.(map[string]interface{})
+			if srv == nil {
+				continue
+			}
+			srv["logs"] = map[string]interface{}{"logger_names": loggerNames}
+		}
+	}
+
 	apps := map[string]interface{}{
 		"http": map[string]interface{}{
 			"metrics": map[string]interface{}{
@@ -2159,25 +2206,76 @@ func GenerateCaddyConfig(cfg *config.Config) map[string]interface{} {
 		apps["tls"] = tlsApp
 	}
 
+	logging := buildCaddyLogging(caddyLogLevel, caddyLogSizeMB)
+
+	if logsMap, ok := logging["logs"].(map[string]interface{}); ok {
+		var encoder map[string]interface{}
+		if accessLogJSON {
+			filterFields := parseAccessLogFormat(accessLogFormat)
+			encoder = map[string]interface{}{
+				"format": "filter",
+				"wrap":   map[string]interface{}{"format": "json"},
+				"fields": filterFields,
+			}
+		} else {
+			encoder = map[string]interface{}{"format": "json"}
+		}
+		for _, ru := range allRules {
+			r := ru.rule
+			if !r.LogEnabled || r.Protocol != "http" {
+				continue
+			}
+			os.MkdirAll(ruleLogDir, 0755)
+			logsMap["rule_"+r.CaddyID] = map[string]interface{}{
+				"writer": map[string]interface{}{
+					"output":       "file",
+					"filename":     RuleLogPath(r.CaddyID),
+					"roll_size_mb": caddyLogSizeMB,
+					"roll_keep":    5,
+				},
+				"encoder": encoder,
+				"include": []string{"http.log.access.rule_" + r.CaddyID},
+			}
+		}
+	}
+
 	conf := map[string]interface{}{
 		"admin": map[string]interface{}{
 			"listen": "0.0.0.0:2019",
 		},
 		"apps":    apps,
-		"logging": buildCaddyLogging(caddyLogPath, caddyLogLevel, caddyLogSizeMB),
-	}
-
-	conf["admin"] = map[string]interface{}{
-		"listen": "0.0.0.0:2019",
+		"logging": logging,
 	}
 
 	return conf
 }
 
-func buildCaddyLogging(path, level string, sizeMB int) map[string]interface{} {
-	if path == "" {
-		path = "/app/logs/caddy.log"
+func parseAccessLogFormat(format string) map[string]interface{} {
+	fields := map[string]interface{}{}
+	for _, line := range strings.Split(format, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "->", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		path := strings.TrimSpace(parts[0])
+		action := strings.TrimSpace(parts[1])
+		if path == "" {
+			continue
+		}
+		if action == "delete" {
+			fields[path] = map[string]interface{}{"filter": "delete"}
+		} else if action != "" {
+			fields[path] = map[string]interface{}{"filter": "rename", "name": action}
+		}
 	}
+	return fields
+}
+
+func buildCaddyLogging(level string, sizeMB int) map[string]interface{} {
 	if level == "" {
 		level = "info"
 	}
@@ -2185,19 +2283,40 @@ func buildCaddyLogging(path, level string, sizeMB int) map[string]interface{} {
 	if sizeMB <= 0 {
 		sizeMB = 100
 	}
+	consoleEncoder := map[string]interface{}{"format": "console"}
+	fileWriter := func(filename string) map[string]interface{} {
+		return map[string]interface{}{
+			"output":       "file",
+			"filename":     filename,
+			"roll_size_mb": sizeMB,
+			"roll_keep":    5,
+		}
+	}
 	return map[string]interface{}{
 		"logs": map[string]interface{}{
 			"default": map[string]interface{}{
-				"level": level,
-				"writer": map[string]interface{}{
-					"output":       "file",
-					"filename":     path,
-					"roll_size_mb": sizeMB,
-					"roll_keep":    5,
-				},
-				"encoder": map[string]interface{}{
-					"format": "console",
-				},
+				"level":    level,
+				"writer":   fileWriter("/app/logs/caddy.log"),
+				"encoder":  consoleEncoder,
+				"exclude":  []string{"http", "tls", "http.log.access"},
+			},
+			"caddy_tls": map[string]interface{}{
+				"level":   level,
+				"writer":  fileWriter("/app/logs/caddy-tls.log"),
+				"encoder": consoleEncoder,
+				"include": []string{"tls"},
+			},
+			"caddy_server": map[string]interface{}{
+				"level":   level,
+				"writer":  fileWriter("/app/logs/caddy-server.log"),
+				"encoder": consoleEncoder,
+				"exclude": []string{"admin", "tls", "events", "http.log.access", "http.handlers.reverse_proxy"},
+			},
+			"caddy_proxy": map[string]interface{}{
+				"level":   level,
+				"writer":  fileWriter("/app/logs/caddy-proxy.log"),
+				"encoder": consoleEncoder,
+				"include": []string{"http.handlers.reverse_proxy"},
 			},
 		},
 	}
@@ -2231,7 +2350,7 @@ func defaultCaddyConfig() map[string]interface{} {
 				},
 			},
 		},
-		"logging": buildCaddyLogging("/app/logs/caddy.log", "info", 100),
+		"logging": buildCaddyLogging("info", 100),
 	}
 }
 
@@ -2485,11 +2604,15 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			}
 		}
 
-		if true { // HTTP protocol always supports health checks
+		{
+			hcInterval := rule.HealthCheckInterval
+			if hcInterval <= 0 { hcInterval = 10 }
+			hcThreshold := rule.HealthCheckUnhealthyThreshold
+			if hcThreshold <= 0 { hcThreshold = 3 }
 			healthChecks := map[string]interface{}{
 				"passive": map[string]interface{}{
-					"fail_duration": fmt.Sprintf("%ds", rule.HealthCheckInterval*3),
-					"max_fails":     3,
+					"fail_duration": fmt.Sprintf("%ds", hcInterval*3),
+					"max_fails":     hcThreshold,
 				},
 			}
 
@@ -2524,7 +2647,9 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 				}
 			}
 			if effectiveUpstreamKeepaliveTimeout > 0 {
-				transportConfig["keepalive"] = fmt.Sprintf("%ds", effectiveUpstreamKeepaliveTimeout)
+				transportConfig["keep_alive"] = map[string]interface{}{
+					"idle_timeout": fmt.Sprintf("%ds", effectiveUpstreamKeepaliveTimeout),
+				}
 			}
 			proxyConfig["transport"] = transportConfig
 		}
@@ -2705,9 +2830,9 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 				"listen": []string{fmt.Sprintf(":%d", rule.ListenPort)},
 				"routes": []interface{}{route},
 			},
-		}
+	}
 
-		apps := map[string]interface{}{
+	apps := map[string]interface{}{
 			"layer4": map[string]interface{}{
 				"servers": layer4Servers,
 			},
@@ -2859,10 +2984,14 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 		}
 
 		if rule.Protocol == "http" {
+			hcInterval := rule.HealthCheckInterval
+			if hcInterval <= 0 { hcInterval = 10 }
+			hcThreshold := rule.HealthCheckUnhealthyThreshold
+			if hcThreshold <= 0 { hcThreshold = 3 }
 			healthChecks := map[string]interface{}{
 				"passive": map[string]interface{}{
-					"fail_duration": fmt.Sprintf("%ds", rule.HealthCheckInterval*3),
-					"max_fails":     3,
+					"fail_duration": fmt.Sprintf("%ds", hcInterval*3),
+					"max_fails":     hcThreshold,
 				},
 			}
 
@@ -2897,7 +3026,9 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 				}
 			}
 			if effectiveUpstreamKeepaliveTimeout > 0 {
-				transportConfig["keepalive"] = fmt.Sprintf("%ds", effectiveUpstreamKeepaliveTimeout)
+				transportConfig["keep_alive"] = map[string]interface{}{
+					"idle_timeout": fmt.Sprintf("%ds", effectiveUpstreamKeepaliveTimeout),
+				}
 			}
 			proxyConfig["transport"] = transportConfig
 		}

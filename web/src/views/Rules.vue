@@ -157,7 +157,7 @@
             <el-switch v-model="row.enabled" :disabled="authStore.nodeMode === 'slave' || isCertJobActive(certJobMap[row.caddy_id]?.status)" @change="toggleRule(row)" class="status-switch" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right" align="center">
+        <el-table-column label="操作" width="160" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
               <el-tooltip
@@ -174,6 +174,11 @@
               <div v-if="authStore.nodeMode === 'master'">
                 <el-button type="primary" link size="small" @click="duplicateRule(row)">
                   复制
+                </el-button>
+              </div>
+              <div>
+                <el-button type="primary" link size="small" :disabled="!row.log_enabled" @click="openRuleLogDialog(row)">
+                  日志
                 </el-button>
               </div>
               <el-tooltip
@@ -249,6 +254,11 @@
 
             <el-form-item label="描述">
               <el-input v-model="wizardForm.description" type="textarea" :rows="3" placeholder="可选填写，便于理解规则用途" maxlength="300" show-word-limit class="description-input" />
+            </el-form-item>
+
+            <el-form-item label="访问日志" v-if="wizardForm.protocol === 'http'">
+              <el-switch v-model="wizardForm.log_enabled" />
+              <span class="form-tip-inline">开启后记录该规则的访问日志到 /app/logs/rules/ 目录</span>
             </el-form-item>
           </el-form>
         </div>
@@ -792,15 +802,37 @@
         <el-empty description="未找到该规则的配置信息" :image-size="60" />
       </div>
     </el-dialog>
+
+    <el-dialog
+      v-model="ruleLogDialogVisible"
+      :title="`访问日志 - ${ruleLogRuleName}`"
+      width="70%"
+      :style="{ maxWidth: '70vw' }"
+      destroy-on-close
+      @opened="onRuleLogDialogOpened"
+      @closed="onRuleLogDialogClosed"
+    >
+      <div class="log-toolbar">
+        <el-switch v-model="ruleLogAutoRefresh" active-text="自动刷新" />
+        <el-button type="primary" :loading="ruleLogLoading" size="small" @click="refreshRuleLogs">
+          <el-icon><RefreshRight /></el-icon>刷新
+        </el-button>
+      </div>
+      <div ref="ruleLogContainerRef" class="rule-log-viewer" v-html="ruleLogHtml" />
+      <template #footer>
+        <el-button @click="ruleLogDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
-import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting } from '@element-plus/icons-vue'
+import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
+import { ansiToHtml } from '@/utils/ansi'
 
 interface Upstream {
   id?: number
@@ -853,6 +885,7 @@ interface Rule {
   upstream_keepalive_timeout?: number
   server_tokens_hidden?: number
   enabled: boolean
+  log_enabled?: boolean
   created_by?: number
   updated_by?: number
   creator_name?: string
@@ -1051,6 +1084,17 @@ let certJobPollTimer: ReturnType<typeof setInterval> | null = null
 // Config viewing
 const configDialogVisible = ref(false)
 const configLoading = ref(false)
+
+const ruleLogDialogVisible = ref(false)
+const ruleLogRuleName = ref('')
+const ruleLogCaddyId = ref('')
+const ruleLogContent = ref('')
+const ruleLogLoading = ref(false)
+const ruleLogAutoRefresh = ref(true)
+const ruleLogContainerRef = ref<HTMLElement | null>(null)
+let ruleLogPollTimer: ReturnType<typeof setInterval> | null = null
+
+const ruleLogHtml = computed(() => ansiToHtml(ruleLogContent.value || '暂无日志'))
 const ruleConfig = ref<{
   id: number
   caddy_id: string
@@ -1264,6 +1308,7 @@ const wizardForm = reactive<Rule>({
   upstream_keepalive_timeout: 0,
   server_tokens_hidden: 0,
   enabled: true,
+  log_enabled: false,
 })
 
 // Watch for enable_tls toggle to adjust default listen port
@@ -1574,6 +1619,7 @@ const openWizard = (rule?: Rule) => {
       upstream_keepalive_timeout: (rule as any).upstream_keepalive_timeout || 0,
       server_tokens_hidden: (rule as any).server_tokens_hidden || 0,
       enabled: rule.enabled,
+      log_enabled: (rule as any).log_enabled || false,
     })
   } else {
     editingRule.value = null
@@ -1785,6 +1831,7 @@ const submitWizard = async () => {
       upstream_keepalive_timeout: wizardForm.upstream_keepalive_timeout || 0,
       server_tokens_hidden: wizardForm.server_tokens_hidden || 0,
       enabled: wizardForm.enabled,
+      log_enabled: wizardForm.log_enabled || false,
     }
 
     if (editingRule.value) {
@@ -1979,6 +2026,60 @@ const viewConfig = async (rule: Rule) => {
     configLoading.value = false
   }
 }
+
+const openRuleLogDialog = (rule: Rule) => {
+  ruleLogRuleName.value = rule.name || rule.caddy_id
+  ruleLogCaddyId.value = rule.caddy_id
+  ruleLogDialogVisible.value = true
+}
+
+const onRuleLogDialogOpened = () => {
+  refreshRuleLogs()
+  startRuleLogPolling()
+}
+
+const onRuleLogDialogClosed = () => {
+  stopRuleLogPolling()
+  ruleLogContent.value = ''
+  ruleLogCaddyId.value = ''
+}
+
+const startRuleLogPolling = () => {
+  stopRuleLogPolling()
+  if (ruleLogAutoRefresh.value) {
+    ruleLogPollTimer = setInterval(refreshRuleLogs, 20000)
+  }
+}
+
+const stopRuleLogPolling = () => {
+  if (ruleLogPollTimer) {
+    clearInterval(ruleLogPollTimer)
+    ruleLogPollTimer = null
+  }
+}
+
+const refreshRuleLogs = async () => {
+  if (!ruleLogCaddyId.value) return
+  ruleLogLoading.value = true
+  try {
+    const res: any = await request.get(`/rules/${ruleLogCaddyId.value}/logs`)
+    ruleLogContent.value = res.data?.content || ''
+    nextTick(() => {
+      const el = ruleLogContainerRef.value
+      if (el) el.scrollTop = el.scrollHeight
+    })
+  } catch (e: any) {
+    console.error('Failed to fetch rule logs:', e)
+  } finally {
+    ruleLogLoading.value = false
+  }
+}
+
+watch(ruleLogAutoRefresh, (val) => {
+  if (!ruleLogDialogVisible.value) return
+  if (val) startRuleLogPolling()
+  else stopRuleLogPolling()
+})
 
 onMounted(() => {
   fetchRules()
@@ -2565,6 +2666,29 @@ onUnmounted(() => {
   max-height: 400px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.rule-log-viewer {
+  height: 60vh;
+  min-height: 300px;
+  max-height: 700px;
+  overflow: auto;
+  padding: 12px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #1e293b;
+  border-radius: 4px;
+  white-space: pre-wrap;
+}
+
+.log-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
 }
 
 .config-empty {

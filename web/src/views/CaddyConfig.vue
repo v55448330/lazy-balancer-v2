@@ -22,12 +22,7 @@
             </div>
           </template>
           <el-form :model="caddySettings" label-width="180px" class="caddy-form">
-            <el-form-item label="日志路径">
-              <div class="log-path-row">
-                <el-input v-model="caddySettings.caddy_log_path" readonly placeholder="/app/logs/caddy.log" />
-                <el-button type="primary" :icon="View" @click="openLogDialog">查看</el-button>
-              </div>
-            </el-form-item>
+            <el-divider content-position="left">运行日志</el-divider>
             <el-form-item label="日志级别">
               <el-select v-model="caddySettings.caddy_log_level" style="width: 120px;">
                 <el-option label="debug" value="debug" />
@@ -36,11 +31,14 @@
                 <el-option label="error" value="error" />
               </el-select>
               <span class="caddy-form-tip">生产环境建议 info；debug 会产生大量日志</span>
+              <el-button type="primary" :icon="View" @click="openLogDialog" style="margin-left: auto;">查看日志</el-button>
             </el-form-item>
             <el-form-item label="日志大小">
               <el-input-number v-model="caddySettings.caddy_log_size_mb" :min="0" controls-position="right" style="width: 120px;" />
               <span class="caddy-form-tip">MB，单个文件达到此大小后自动滚动归档，保留 5 个历史文件；建议 100</span>
             </el-form-item>
+
+            <el-divider content-position="left">请求与超时</el-divider>
             <el-form-item label="请求体大小">
               <el-input-number v-model="caddySettings.request_body_max_size_mb" :min="0" controls-position="right" style="width: 120px;" />
               <span class="caddy-form-tip">MB，限制单个请求体最大体积；0 = 不限制。常规建议 0，需防护大文件上传可设为 100</span>
@@ -61,9 +59,34 @@
               <el-input-number v-model="caddySettings.upstream_keepalive_timeout" :min="0" controls-position="right" style="width: 120px;" />
               <span class="caddy-form-tip">秒，Caddy 到后端服务器的长连接空闲多久后关闭；0 = Caddy 默认。常规建议 60</span>
             </el-form-item>
+
+            <el-divider content-position="left">响应头</el-divider>
             <el-form-item label="Server Tokens">
               <el-switch v-model="caddySettings.server_tokens_hidden" active-text="开启" inactive-text="关闭" />
               <span class="caddy-form-tip">开启后在响应头中隐藏 Server 字段，减少服务器指纹暴露</span>
+            </el-form-item>
+
+            <el-divider content-position="left">访问日志</el-divider>
+            <el-form-item label="自定义格式">
+              <el-switch v-model="caddySettings.access_log_json" active-text="自定义 JSON" inactive-text="Caddy JSON" />
+              <span class="caddy-form-tip">开启后使用 filter 编码器按自定义格式输出；关闭时输出 Caddy 原生完整 JSON</span>
+            </el-form-item>
+            <el-form-item label="日志格式" v-if="caddySettings.access_log_json">
+              <el-input
+                v-model="caddySettings.access_log_format"
+                type="textarea"
+                :rows="8"
+                style="width: 100%"
+                placeholder='每行一个字段映射，格式: caddy字段路径 -> 自定义名称，或 caddy字段路径 -> delete'
+              />
+              <div>
+                <el-button text type="primary" size="small" @click="caddySettings.access_log_format = defaultLogFormat">还原默认格式</el-button>
+              </div>
+              <div class="caddy-form-tip">
+                每行一条规则：字段重命名 <code>request>remote_ip -&gt; src</code> 或删除字段 <code>request>headers -&gt; delete</code>。
+                可用字段：<code>request>remote_ip</code> <code>request>client_ip</code> <code>request>method</code> <code>request>host</code> <code>request>uri</code> <code>request>proto</code> <code>request>headers>User-Agent</code> <code>status</code> <code>size</code> <code>duration</code> <code>bytes_read</code> <code>user_id</code> <code>ts</code> <code>resp_headers</code> <code>request>tls</code>。
+                Caddy 日志文档：<a href="https://caddyserver.com/docs/json/apps/http/servers/logs/" target="_blank">官方字段说明</a>
+              </div>
             </el-form-item>
             <div class="form-actions">
               <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
@@ -92,7 +115,7 @@
 
   <el-dialog
     v-model="logDialogVisible"
-    title="Caddy 运行日志"
+    title="Caddy 日志"
     width="70%"
     :style="{ maxWidth: '70vw' }"
     class="log-dialog"
@@ -100,6 +123,12 @@
     @opened="onLogDialogOpened"
     @closed="onLogDialogClosed"
   >
+    <el-tabs v-model="activeLogTab" @tab-change="onLogTabChange">
+      <el-tab-pane label="运行时" name="runtime" />
+      <el-tab-pane label="TLS" name="tls" />
+      <el-tab-pane label="HTTP 服务器" name="server" />
+      <el-tab-pane label="反向代理" name="proxy" />
+    </el-tabs>
     <div class="log-toolbar">
       <el-switch v-model="autoRefresh" active-text="自动刷新" />
       <el-button type="primary" :loading="logLoading" size="small" @click="refreshLogs">
@@ -130,16 +159,20 @@ import { ansiToHtml } from '@/utils/ansi'
 const caddyConfigData = ref<any>(null)
 const loading = ref(false)
 
+const defaultLogFormat = 'request>headers -> delete\nresp_headers -> delete\nrequest>tls -> delete\nrequest>remote_port -> delete\nlevel -> delete\nlogger -> delete\nmsg -> delete\nrequest>remote_ip -> src\nrequest>client_ip -> src_ip\nrequest>method -> http_method\nrequest>host -> server\nrequest>uri -> uri_path\nrequest>proto -> protocol\nuser_id -> user\nts -> time_local\nsize -> bytes_out\nbytes_read -> bytes_in\nduration -> request_time'
+
 const caddySettings = ref({
   caddy_log_path: '/app/logs/caddy.log',
   caddy_log_level: 'info',
   caddy_log_size_mb: 100,
   request_body_max_size_mb: 0,
-  http_read_timeout: 0,
-  http_write_timeout: 0,
-  http_idle_timeout: 0,
-  upstream_keepalive_timeout: 0,
+  http_read_timeout: 60,
+  http_write_timeout: 60,
+  http_idle_timeout: 120,
+  upstream_keepalive_timeout: 60,
   server_tokens_hidden: false,
+  access_log_json: true,
+  access_log_format: defaultLogFormat,
 })
 
 const saving = ref(false)
@@ -147,6 +180,7 @@ const activeCollapse = ref<string[]>([])
 
 const logDialogVisible = ref(false)
 const logContent = ref('')
+const activeLogTab = ref('runtime')
 const logHtml = computed(() => ansiToHtml(logContent.value))
 const logLoading = ref(false)
 const autoRefresh = ref(true)
@@ -176,11 +210,13 @@ const fetchGlobalConfig = async () => {
         caddy_log_level: res.data.caddy_log_level || 'info',
         caddy_log_size_mb: res.data.caddy_log_size_mb ?? 100,
         request_body_max_size_mb: res.data.request_body_max_size_mb ?? 0,
-        http_read_timeout: res.data.http_read_timeout ?? 0,
-        http_write_timeout: res.data.http_write_timeout ?? 0,
-        http_idle_timeout: res.data.http_idle_timeout ?? 0,
-        upstream_keepalive_timeout: res.data.upstream_keepalive_timeout ?? 0,
+        http_read_timeout: res.data.http_read_timeout ?? 60,
+        http_write_timeout: res.data.http_write_timeout ?? 60,
+        http_idle_timeout: res.data.http_idle_timeout ?? 120,
+        upstream_keepalive_timeout: res.data.upstream_keepalive_timeout ?? 60,
         server_tokens_hidden: res.data.server_tokens_hidden ?? false,
+        access_log_json: res.data.access_log_json ?? true,
+        access_log_format: res.data.access_log_format || defaultLogFormat,
       }
     }
   } catch (e: any) {
@@ -189,12 +225,21 @@ const fetchGlobalConfig = async () => {
 }
 
 const handleSave = async () => {
+  try {
+    await ElMessageBox.confirm('确认保存并重载 Caddy 配置？', '确认保存', {
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
   saving.value = true
   try {
     await request.put('/config', caddySettings.value)
     ElMessage.success('保存成功')
   } catch (e: any) {
-    ElMessage.error('保存失败')
+    ElMessage.error('保存失败：' + (e?.response?.data?.message || e?.message || '配置验证未通过'))
   } finally {
     saving.value = false
   }
@@ -259,7 +304,7 @@ const stopLogPolling = () => {
 const refreshLogs = async () => {
   logLoading.value = true
   try {
-    const res: any = await request.get('/caddy/logs')
+    const res: any = await request.get('/caddy/logs', { params: { type: activeLogTab.value } })
     logContent.value = res.data?.content || ''
     nextTick(scrollToBottom)
   } catch (e: any) {
@@ -267,6 +312,11 @@ const refreshLogs = async () => {
   } finally {
     logLoading.value = false
   }
+}
+
+const onLogTabChange = () => {
+  logContent.value = ''
+  refreshLogs()
 }
 
 const scrollToBottom = () => {

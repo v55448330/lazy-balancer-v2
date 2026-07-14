@@ -67,6 +67,7 @@ type LbRule struct {
 	EnableCompress                bool         `json:"enable_compress"`
 	CompressTypes                 string       `json:"compress_types"`
 	Enabled                       bool         `json:"enabled"`
+	LogEnabled                    bool         `json:"log_enabled"`
 	CreatedBy                     int          `json:"created_by"`
 	UpdatedBy                     int          `json:"updated_by"`
 	CreatedAt                     time.Time    `json:"created_at"`
@@ -127,6 +128,9 @@ type GlobalConfig struct {
 	UpstreamKeepaliveTimeout int          `json:"upstream_keepalive_timeout"`
 	ServerTokensHidden       bool         `json:"server_tokens_hidden"`
 	CertJobLogSizeMB         int          `json:"cert_job_log_size_mb"`
+	AccessLogJSON            bool         `json:"access_log_json"`
+	AccessLogFormat          string       `json:"access_log_format"`
+	Timezone                 string       `json:"timezone"`
 	IsMaster                 bool         `json:"is_master"`
 	MasterURL                string       `json:"master_url"`
 	SyncInterval             int          `json:"sync_interval"`
@@ -343,6 +347,7 @@ type CreateRuleRequest struct {
 	TLSHTTPRedirect               bool       `json:"tls_http_redirect"`
 	EnableCompress                bool       `json:"enable_compress"`
 	CompressTypes                 string     `json:"compress_types"`
+	LogEnabled                    bool       `json:"log_enabled"`
 }
 
 type UpdateRuleRequest struct {
@@ -380,6 +385,7 @@ type UpdateRuleRequest struct {
 	EnableCompress                bool       `json:"enable_compress"`
 	CompressTypes                 string     `json:"compress_types"`
 	Enabled                       bool       `json:"enabled"`
+	LogEnabled                    bool       `json:"log_enabled"`
 }
 
 type UpdateConfigRequest struct {
@@ -401,6 +407,9 @@ type UpdateConfigRequest struct {
 	UpstreamKeepaliveTimeout *int    `json:"upstream_keepalive_timeout"`
 	ServerTokensHidden       *bool   `json:"server_tokens_hidden"`
 	CertJobLogSizeMB         *int    `json:"cert_job_log_size_mb"`
+	AccessLogJSON            *bool   `json:"access_log_json"`
+	AccessLogFormat          *string `json:"access_log_format"`
+	Timezone                 *string `json:"timezone"`
 	IsMaster                 *bool   `json:"is_master"`
 	MasterURL                *string `json:"master_url"`
 	SyncInterval             *int    `json:"sync_interval"`

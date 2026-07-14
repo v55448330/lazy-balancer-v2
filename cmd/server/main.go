@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
@@ -37,6 +38,13 @@ func main() {
 	if *initDB {
 		log.Println("Database initialized successfully")
 		os.Exit(0)
+	}
+
+	var tz string
+	if err := db.DB.QueryRow("SELECT COALESCE(timezone,'Asia/Shanghai') FROM global_config WHERE id=1").Scan(&tz); err == nil && tz != "" {
+		os.Setenv("TZ", tz)
+		time.LoadLocation(tz)
+		log.Printf("Timezone set to %s", tz)
 	}
 
 	// Initialize services

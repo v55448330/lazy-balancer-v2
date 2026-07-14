@@ -28,6 +28,30 @@
             <el-input-number v-model="settings.cert_job_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
             <span class="form-tip-inline">MB，单个证书签发日志文件达到该大小后滚动</span>
           </el-form-item>
+          <el-form-item label="时区">
+            <el-select v-model="settings.timezone" filterable style="width: 100%">
+              <el-option label="Asia/Shanghai (UTC+8)" value="Asia/Shanghai" />
+              <el-option label="Asia/Hong_Kong (UTC+8)" value="Asia/Hong_Kong" />
+              <el-option label="Asia/Tokyo (UTC+9)" value="Asia/Tokyo" />
+              <el-option label="Asia/Singapore (UTC+8)" value="Asia/Singapore" />
+              <el-option label="Asia/Seoul (UTC+9)" value="Asia/Seoul" />
+              <el-option label="Asia/Bangkok (UTC+7)" value="Asia/Bangkok" />
+              <el-option label="Asia/Kolkata (UTC+5:30)" value="Asia/Kolkata" />
+              <el-option label="Asia/Dubai (UTC+4)" value="Asia/Dubai" />
+              <el-option label="Europe/London (UTC+0)" value="Europe/London" />
+              <el-option label="Europe/Paris (UTC+1)" value="Europe/Paris" />
+              <el-option label="Europe/Berlin (UTC+1)" value="Europe/Berlin" />
+              <el-option label="Europe/Moscow (UTC+3)" value="Europe/Moscow" />
+              <el-option label="America/New_York (UTC-5)" value="America/New_York" />
+              <el-option label="America/Chicago (UTC-6)" value="America/Chicago" />
+              <el-option label="America/Denver (UTC-7)" value="America/Denver" />
+              <el-option label="America/Los_Angeles (UTC-8)" value="America/Los_Angeles" />
+              <el-option label="America/Sao_Paulo (UTC-3)" value="America/Sao_Paulo" />
+              <el-option label="Australia/Sydney (UTC+10)" value="Australia/Sydney" />
+              <el-option label="UTC" value="UTC" />
+            </el-select>
+            <div class="form-tip">影响所有日志时间戳和证书时间；修改后需重启容器生效</div>
+          </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="saving" @click="handleSave">
               <el-icon><Check /></el-icon>
@@ -89,6 +113,7 @@ const handleSave = async () => {
       log_level: settings.value.log_level,
       access_log_enabled: settings.value.access_log_enabled,
       cert_job_log_size_mb: settings.value.cert_job_log_size_mb,
+      timezone: settings.value.timezone,
     })
     ElMessage.success('保存成功')
     emit('save')

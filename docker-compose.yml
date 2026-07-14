@@ -9,6 +9,7 @@ services:
       - ./logs:/app/logs
       - ./certs:/app/certs
     environment:
+      - TZ=Asia/Shanghai
       - ADMIN_USER=admin
       - ADMIN_PASSWORD=zdy123.org
       - NODE_NAME=master

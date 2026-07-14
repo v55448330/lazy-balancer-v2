@@ -132,6 +132,7 @@ func createTables() error {
 		enable_compress BOOLEAN DEFAULT TRUE,
 		compress_types VARCHAR(100) DEFAULT 'gzip',
 		enabled BOOLEAN DEFAULT TRUE,
+		log_enabled BOOLEAN DEFAULT 0,
 		created_by INTEGER,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME,
@@ -231,14 +232,17 @@ func createTables() error {
 		caddy_log_level VARCHAR(10) DEFAULT 'info',
 		caddy_log_size_mb INTEGER DEFAULT 100,
 		request_body_max_size_mb INTEGER DEFAULT 0,
-		http_read_timeout INTEGER DEFAULT 0,
-		http_write_timeout INTEGER DEFAULT 0,
-		http_idle_timeout INTEGER DEFAULT 0,
-		upstream_keepalive_timeout INTEGER DEFAULT 0,
+		http_read_timeout INTEGER DEFAULT 60,
+		http_write_timeout INTEGER DEFAULT 60,
+		http_idle_timeout INTEGER DEFAULT 120,
+		upstream_keepalive_timeout INTEGER DEFAULT 60,
 		server_tokens_hidden BOOLEAN DEFAULT FALSE,
 		cert_expiry_days INTEGER DEFAULT 30,
 		cert_renewal_days INTEGER DEFAULT 30,
 		cert_job_log_size_mb INTEGER DEFAULT 10,
+		access_log_json BOOLEAN DEFAULT TRUE,
+		access_log_format TEXT DEFAULT '',
+		timezone VARCHAR(50) DEFAULT 'Asia/Shanghai',
 		last_sync DATETIME,
 		updated_at DATETIME
 	);
@@ -322,6 +326,10 @@ func runMigrations() error {
 		"global_config.cert_renewal_days":      "INTEGER DEFAULT 30",
 		"global_config.cert_renewal_attempts":  "INTEGER DEFAULT 5",
 		"global_config.cert_job_log_size_mb":   "INTEGER DEFAULT 10",
+		"global_config.access_log_json":        "BOOLEAN DEFAULT TRUE",
+		"global_config.access_log_format":       "TEXT DEFAULT ''",
+		"global_config.timezone":               "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
+		"lb_rules.log_enabled":                 "BOOLEAN DEFAULT 0",
 	}
 	for col, dtype := range newColumns {
 		parts := strings.Split(col, ".")
@@ -341,6 +349,13 @@ func runMigrations() error {
 
 	// Drop legacy cert_job_logs table — logs now stored in files under /app/logs/
 	DB.Exec("DROP TABLE IF EXISTS cert_job_logs")
+
+	// Set recommended defaults for timeout fields that are still 0
+	DB.Exec("UPDATE global_config SET http_read_timeout=60 WHERE http_read_timeout=0")
+	DB.Exec("UPDATE global_config SET http_write_timeout=60 WHERE http_write_timeout=0")
+	DB.Exec("UPDATE global_config SET http_idle_timeout=120 WHERE http_idle_timeout=0")
+	DB.Exec("UPDATE global_config SET upstream_keepalive_timeout=60 WHERE upstream_keepalive_timeout=0")
+	DB.Exec("UPDATE global_config SET access_log_format='' WHERE access_log_format LIKE '{%'")
 
 	// Create upstreams table if not exists
 	DB.Exec(`CREATE TABLE IF NOT EXISTS upstreams (

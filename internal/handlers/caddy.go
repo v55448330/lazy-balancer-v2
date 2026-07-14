@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -37,6 +37,9 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       COALESCE(upstream_keepalive_timeout,0) as upstream_keepalive_timeout,
 		       COALESCE(server_tokens_hidden,FALSE) as server_tokens_hidden,
 		       COALESCE(cert_job_log_size_mb,10) as cert_job_log_size_mb,
+		       COALESCE(access_log_json,TRUE) as access_log_json,
+		       COALESCE(access_log_format,'') as access_log_format,
+		       COALESCE(timezone,'Asia/Shanghai') as timezone,
 		       is_master, COALESCE(master_url, '') as master_url, sync_interval,
 		       last_sync, updated_at
 		FROM global_config WHERE id = 1
@@ -46,7 +49,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.LogLevel, &cfg.AccessLogEnabled,
 		&cfg.CaddyLogPath, &cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
 	&cfg.RequestBodyMaxSizeMB, &cfg.HTTPReadTimeout, &cfg.HTTPWriteTimeout, &cfg.HTTPIdleTimeout,
-	&cfg.UpstreamKeepaliveTimeout, &cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB,
+	&cfg.UpstreamKeepaliveTimeout, &cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.Timezone,
 	&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	if err != nil {
@@ -83,17 +86,6 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 
 	// Log path is managed by the system and cannot be changed through the UI/API.
 	req.CaddyLogPath = nil
-
-	if req.CaddyLogPath != nil {
-		if !filepath.IsAbs(*req.CaddyLogPath) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy log path must be absolute"})
-			return
-		}
-		if err := os.MkdirAll(filepath.Dir(*req.CaddyLogPath), 0755); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to create log directory: " + err.Error()})
-			return
-		}
-	}
 
 	if req.CaddyLogLevel != nil {
 		switch strings.ToLower(*req.CaddyLogLevel) {
@@ -149,15 +141,14 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	// Update DNS credentials in environment if provided
-	if req.DNSCredentials != nil {
-		parts := strings.Split(*req.DNSCredentials, ",")
-		if len(parts) >= 2 {
-			os.Setenv("DNSPOD_ID", parts[0])
-			os.Setenv("DNSPOD_TOKEN", parts[1])
-		}
+	// Generate config with requested overrides — DB is NOT touched yet
+	testConfig := services.GenerateCaddyConfig(h.cfg, &req)
+	if err := h.caddyService.ValidateConfig(testConfig, "global_config_validation"); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "配置验证失败: " + err.Error()})
+		return
 	}
 
+	// Validation passed — now safe to write to DB
 	db.DB.Exec(`
 			UPDATE global_config SET
 				dns_provider = COALESCE(?, dns_provider),
@@ -176,10 +167,13 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				http_read_timeout = COALESCE(?, http_read_timeout),
 				http_write_timeout = COALESCE(?, http_write_timeout),
 				http_idle_timeout = COALESCE(?, http_idle_timeout),
-			upstream_keepalive_timeout = COALESCE(?, upstream_keepalive_timeout),
-			server_tokens_hidden = COALESCE(?, server_tokens_hidden),
-			cert_job_log_size_mb = COALESCE(?, cert_job_log_size_mb),
-			is_master = COALESCE(?, is_master),
+				upstream_keepalive_timeout = COALESCE(?, upstream_keepalive_timeout),
+				server_tokens_hidden = COALESCE(?, server_tokens_hidden),
+				cert_job_log_size_mb = COALESCE(?, cert_job_log_size_mb),
+				access_log_json = COALESCE(?, access_log_json),
+				access_log_format = COALESCE(?, access_log_format),
+				timezone = COALESCE(?, timezone),
+				is_master = COALESCE(?, is_master),
 				master_url = COALESCE(?, master_url),
 				sync_interval = COALESCE(?, sync_interval),
 				updated_at = datetime('now')
@@ -187,17 +181,31 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.LogLevel, req.AccessLogEnabled,
 		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
-		req.UpstreamKeepaliveTimeout, req.ServerTokensHidden, req.CertJobLogSizeMB,
+		req.UpstreamKeepaliveTimeout, req.ServerTokensHidden, req.CertJobLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.Timezone,
 		req.IsMaster, req.MasterURL, req.SyncInterval)
 
-	// Update node mode in memory
+	// Update DNS credentials in environment if provided
+	if req.DNSCredentials != nil {
+		parts := strings.Split(*req.DNSCredentials, ",")
+		if len(parts) >= 2 {
+			os.Setenv("DNSPOD_ID", parts[0])
+			os.Setenv("DNSPOD_TOKEN", parts[1])
+		}
+	}
+
+	// Apply config from DB (now has validated values)
+	if err := h.applyCaddyConfigWithRollback(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置已保存但重载失败: " + err.Error()})
+		return
+	}
+
 	if req.IsMaster != nil && *req.IsMaster {
 		h.nodeService.SetMode("master")
 	} else if req.IsMaster != nil && !*req.IsMaster {
 		h.nodeService.SetMode("slave")
 	}
 
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config updated"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config updated and applied"})
 }
 
 func (h *Handlers) ValidateConfig(c *gin.Context) {
@@ -271,14 +279,16 @@ func (h *Handlers) GetCaddyConfig(c *gin.Context) {
 }
 
 func (h *Handlers) GetCaddyLogs(c *gin.Context) {
-	var logPath string
-	err := db.DB.QueryRow("SELECT COALESCE(caddy_log_path,'/app/logs/caddy.log') FROM global_config WHERE id = 1").Scan(&logPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get log path: " + err.Error()})
-		return
+	logType := c.DefaultQuery("type", "runtime")
+	pathMap := map[string]string{
+		"runtime": "/app/logs/caddy.log",
+		"tls":     "/app/logs/caddy-tls.log",
+		"server":  "/app/logs/caddy-server.log",
+		"proxy":   "/app/logs/caddy-proxy.log",
 	}
-	if logPath == "" {
-		logPath = "/app/logs/caddy.log"
+	logPath, ok := pathMap[logType]
+	if !ok {
+		logPath = pathMap["runtime"]
 	}
 
 	const maxBytes = 128 * 1024
@@ -317,7 +327,6 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 		return
 	}
 
-	// If we started mid-file, skip the first partial line so the result starts on a line boundary.
 	if startOffset > 0 {
 		if idx := bytes.Index(data, []byte("\n")); idx != -1 {
 			data = data[idx+1:]
@@ -328,9 +337,35 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
-	content := strings.Join(lines, "\n")
+	content := convertLogTimezone(strings.Join(lines, "\n"))
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": content}})
+}
+
+var logTimeRe = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d+)`)
+
+func convertLogTimezone(content string) string {
+	var tzStr string
+	if err := db.DB.QueryRow("SELECT COALESCE(timezone,'Asia/Shanghai') FROM global_config WHERE id=1").Scan(&tzStr); err != nil {
+		return content
+	}
+	loc, err := time.LoadLocation(tzStr)
+	if err != nil || loc.String() == "UTC" {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		m := logTimeRe.FindString(line)
+		if m == "" {
+			continue
+		}
+		t, err := time.ParseInLocation("2006/01/02 15:04:05.000", m, time.UTC)
+		if err != nil {
+			continue
+		}
+		lines[i] = t.In(loc).Format("2006/01/02 15:04:05.000") + line[len(m):]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (h *Handlers) PutCaddyConfig(c *gin.Context) {

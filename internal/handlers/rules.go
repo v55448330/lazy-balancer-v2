@@ -1,11 +1,14 @@
 package handlers
 
 import (
+	"bytes"
 	"database/sql"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,7 +27,8 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
 		       COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_http_redirect,0),
 		       COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), enabled, created_by, created_at, updated_at, updated_by,
-		       COALESCE(host_header,'')
+		       COALESCE(host_header,''),
+		       COALESCE(log_enabled,0)
 		FROM lb_rules ORDER BY id
 	`)
 	if err != nil {
@@ -53,7 +57,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 			&requestBodyMaxSizeMB, &upstreamKeepaliveTimeout, &serverTokensHidden,
 			&enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &tlsCert, &tlsKey, &tlsHTTPRedirect,
 			&enableCompress, &compressTypes, &r.Enabled, &createdBy, &createdAt, &updatedAt, &updatedBy,
-			&hostHeader)
+			&hostHeader, &r.LogEnabled)
 		if err != nil {
 			continue
 		}
@@ -622,15 +626,15 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
-			enable_compress, compress_types, enabled, created_by, updated_at, caddy_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			enable_compress, compress_types, enabled, created_by, updated_at, caddy_id, log_enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
 		req.EnableActiveHealthCheck, req.TCPHealthCheckPort, req.TCPTryDuration, req.TCPTryInterval,
 		req.RequestBodyMaxSizeMB, req.UpstreamKeepaliveTimeout, req.ServerTokensHidden,
 		req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.CAProviderID, req.TLSCert, req.TLSKey,
-		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, 1, userIDInt, time.Now().Format("2006-01-02 15:04:05"), caddyID)
+		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, 1, userIDInt, time.Now().Format("2006-01-02 15:04:05"), caddyID, req.LogEnabled)
 
 	if err != nil {
 		tx.Rollback()
@@ -1063,6 +1067,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	args = append(args, req.CompressTypes)
 	query += "enabled = ?, "
 	args = append(args, req.Enabled)
+	query += "log_enabled = ?, "
+	args = append(args, req.LogEnabled)
 
 	// Build full rule config for route generation
 	domain := req.Domain
@@ -1386,6 +1392,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	}
 
 	services.RemoveCertFiles(caddyID)
+	services.RemoveRuleLogFiles(caddyID)
 
 	var serverName string
 	var serverPort int
@@ -1628,4 +1635,52 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule disabled"})
+}
+
+func (h *Handlers) GetRuleLogs(c *gin.Context) {
+	caddyID := c.Param("caddy_id")
+	logPath := services.RuleLogPath(caddyID)
+
+	info, err := os.Stat(logPath)
+	if err != nil {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": ""}})
+		return
+	}
+
+	const maxBytes = 64 * 1024
+	startOffset := int64(0)
+	if info.Size() > maxBytes {
+		startOffset = info.Size() - maxBytes
+	}
+
+	f, err := os.Open(logPath)
+	if err != nil {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": ""}})
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": ""}})
+		return
+	}
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": ""}})
+		return
+	}
+
+	if startOffset > 0 {
+		if idx := bytes.IndexByte(data, '\n'); idx != -1 {
+			data = data[idx+1:]
+		}
+	}
+
+	lines := strings.Split(string(data), "\n")
+	if len(lines) > 100 {
+		lines = lines[len(lines)-100:]
+	}
+
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": strings.Join(lines, "\n")}})
 }
