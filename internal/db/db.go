@@ -17,6 +17,7 @@ import (
 var (
 	DB             *sql.DB
 	MetricsDB      *sql.DB
+	AuditDB        *sql.DB
 	BackgroundDBMu sync.Mutex
 )
 
@@ -65,6 +66,10 @@ func Initialize(dataDir string) error {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
+	if err := InitializeAuditDB(dataDir); err != nil {
+		return fmt.Errorf("failed to initialize audit database: %w", err)
+	}
+
 	log.Println("Database initialized successfully")
 	return nil
 }
@@ -95,6 +100,7 @@ func createTables() error {
 		created_by INTEGER NOT NULL,
 		last_used DATETIME,
 		expires_at DATETIME,
+		is_enabled BOOLEAN DEFAULT TRUE,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (created_by) REFERENCES users(id)
 	);
@@ -201,7 +207,7 @@ func createTables() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		rule_id VARCHAR(20) NOT NULL,
 		domain VARCHAR(255) NOT NULL,
-		status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca')),
+		status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled')),
 		message TEXT,
 		expires_at DATETIME,
 		cert_pem TEXT,
@@ -242,6 +248,8 @@ func createTables() error {
 		cert_job_log_size_mb INTEGER DEFAULT 10,
 		access_log_json BOOLEAN DEFAULT TRUE,
 		access_log_format TEXT DEFAULT '',
+		audit_retention_months INTEGER DEFAULT 3,
+		jwt_expire_minutes INTEGER DEFAULT 20,
 		timezone VARCHAR(50) DEFAULT 'Asia/Shanghai',
 		last_sync DATETIME,
 		updated_at DATETIME
@@ -295,6 +303,10 @@ func runMigrations() error {
 	if colCount == 0 {
 		DB.Exec("ALTER TABLE users ADD COLUMN is_enabled BOOLEAN DEFAULT 1")
 	}
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('api_keys') WHERE name='is_enabled'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE api_keys ADD COLUMN is_enabled BOOLEAN DEFAULT 1")
+	}
 
 	// lb_rules new columns
 	newLbColumns := map[string]string{
@@ -327,7 +339,9 @@ func runMigrations() error {
 		"global_config.cert_renewal_attempts":  "INTEGER DEFAULT 5",
 		"global_config.cert_job_log_size_mb":   "INTEGER DEFAULT 10",
 		"global_config.access_log_json":        "BOOLEAN DEFAULT TRUE",
-		"global_config.access_log_format":       "TEXT DEFAULT ''",
+		"global_config.access_log_format":      "TEXT DEFAULT ''",
+		"global_config.audit_retention_months": "INTEGER DEFAULT 3",
+		"global_config.jwt_expire_minutes":     "INTEGER DEFAULT 20",
 		"global_config.timezone":               "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
 		"lb_rules.log_enabled":                 "BOOLEAN DEFAULT 0",
 	}
@@ -869,7 +883,7 @@ func migrateCertJobsStatusConstraint() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			rule_id VARCHAR(20) NOT NULL,
 			domain VARCHAR(255) NOT NULL,
-			status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca')),
+			status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled')),
 			message TEXT,
 			expires_at DATETIME,
 			cert_pem TEXT,
@@ -970,10 +984,21 @@ func migrateCertJobsStatusConstraint() error {
 }
 
 func Close() error {
-	if DB != nil {
-		return DB.Close()
+	var err error
+	if AuditDB != nil {
+		err = AuditDB.Close()
 	}
-	return nil
+	if MetricsDB != nil {
+		if closeErr := MetricsDB.Close(); err == nil {
+			err = closeErr
+		}
+	}
+	if DB != nil {
+		if closeErr := DB.Close(); err == nil {
+			err = closeErr
+		}
+	}
+	return err
 }
 
 // generateCaddyIDForMigration generates a unique caddy_id for migration

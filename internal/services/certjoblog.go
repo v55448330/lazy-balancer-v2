@@ -104,3 +104,10 @@ func WriteCertJobLog(jobID int, level, stage, message string) {
 	}
 	NewCertJobFileLogger(ruleID).write(level, stage, message)
 }
+
+func WriteCertJobLogByRule(ruleID, level, stage, message string) {
+	if ruleID == "" {
+		return
+	}
+	NewCertJobFileLogger(ruleID).write(level, stage, message)
+}

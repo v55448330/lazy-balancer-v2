@@ -429,7 +429,7 @@ func (s *SyncService) applySyncData(data models.SyncData) error {
 				rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily,
 				rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 				rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
-				rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPTryDuration, rule.TCPTryInterval, 
+				rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPTryDuration, rule.TCPTryInterval,
 				rule.RequestBodyMaxSizeMB, rule.UpstreamKeepaliveTimeout, rule.ServerTokensHidden, rule.HostHeader,
 				rule.EnableTLS, rule.TLSSource, rule.TLSCert, rule.TLSKey, rule.TLSHTTPRedirect,
 				rule.EnableCompress, rule.CompressTypes, rule.Enabled, rule.CreatedBy, rule.UpdatedBy)

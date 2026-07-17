@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -39,6 +40,8 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       COALESCE(cert_job_log_size_mb,10) as cert_job_log_size_mb,
 		       COALESCE(access_log_json,TRUE) as access_log_json,
 		       COALESCE(access_log_format,'') as access_log_format,
+		       COALESCE(audit_retention_months,3) as audit_retention_months,
+		       COALESCE(jwt_expire_minutes,20) as jwt_expire_minutes,
 		       COALESCE(timezone,'Asia/Shanghai') as timezone,
 		       is_master, COALESCE(master_url, '') as master_url, sync_interval,
 		       last_sync, updated_at
@@ -48,9 +51,9 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.CertRenewalDays, &cfg.CertRenewalAttempts, &cfg.DefaultCAProviderID,
 		&cfg.LogLevel, &cfg.AccessLogEnabled,
 		&cfg.CaddyLogPath, &cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
-	&cfg.RequestBodyMaxSizeMB, &cfg.HTTPReadTimeout, &cfg.HTTPWriteTimeout, &cfg.HTTPIdleTimeout,
-	&cfg.UpstreamKeepaliveTimeout, &cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.Timezone,
-	&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
+		&cfg.RequestBodyMaxSizeMB, &cfg.HTTPReadTimeout, &cfg.HTTPWriteTimeout, &cfg.HTTPIdleTimeout,
+		&cfg.UpstreamKeepaliveTimeout, &cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.JWTExpireMinutes, &cfg.Timezone,
+		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get config: " + err.Error()})
@@ -68,6 +71,23 @@ func (h *Handlers) GetUpstreamHealth(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: healthStatus})
+}
+
+func (h *Handlers) PreviewConfigUpdate(c *gin.Context) {
+	var req models.UpdateConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		return
+	}
+	req.CaddyLogPath = nil
+
+	old, err := loadConfigSnapshot()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read current config"})
+		return
+	}
+	plan := planConfigChanges(req, old)
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: plan})
 }
 
 func (h *Handlers) UpdateConfig(c *gin.Context) {
@@ -141,6 +161,18 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	old, err := loadConfigSnapshot()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read current config"})
+		return
+	}
+	plan := planConfigChanges(req, old)
+	if !plan.Changed {
+		recordAudit(c, "更新", plan.Section, "无修改")
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config unchanged", Data: plan})
+		return
+	}
+
 	// Generate config with requested overrides — DB is NOT touched yet
 	testConfig := services.GenerateCaddyConfig(h.cfg, &req)
 	if err := h.caddyService.ValidateConfig(testConfig, "global_config_validation"); err != nil {
@@ -149,7 +181,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	}
 
 	// Validation passed — now safe to write to DB
-	db.DB.Exec(`
+	res, err := db.DB.Exec(`
 			UPDATE global_config SET
 				dns_provider = COALESCE(?, dns_provider),
 				dns_credentials = COALESCE(?, dns_credentials),
@@ -172,6 +204,8 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				cert_job_log_size_mb = COALESCE(?, cert_job_log_size_mb),
 				access_log_json = COALESCE(?, access_log_json),
 				access_log_format = COALESCE(?, access_log_format),
+				audit_retention_months = COALESCE(?, audit_retention_months),
+				jwt_expire_minutes = COALESCE(?, jwt_expire_minutes),
 				timezone = COALESCE(?, timezone),
 				is_master = COALESCE(?, is_master),
 				master_url = COALESCE(?, master_url),
@@ -181,8 +215,16 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.LogLevel, req.AccessLogEnabled,
 		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
-		req.UpstreamKeepaliveTimeout, req.ServerTokensHidden, req.CertJobLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.Timezone,
+		req.UpstreamKeepaliveTimeout, req.ServerTokensHidden, req.CertJobLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone,
 		req.IsMaster, req.MasterURL, req.SyncInterval)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败: " + err.Error()})
+		return
+	}
+	if rows, err := res.RowsAffected(); err == nil && rows == 0 {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败: 未找到配置记录"})
+		return
+	}
 
 	// Update DNS credentials in environment if provided
 	if req.DNSCredentials != nil {
@@ -199,13 +241,21 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	if len(plan.SectionChanges) > 0 {
+		for section, fields := range plan.SectionChanges {
+			recordAudit(c, "更新", section, fmt.Sprintf("修改了: %s", strings.Join(fields, ", ")))
+		}
+	}
+
+	recordAudit(c, "重载", "Caddy配置", "保存配置后自动重载")
+
 	if req.IsMaster != nil && *req.IsMaster {
 		h.nodeService.SetMode("master")
 	} else if req.IsMaster != nil && !*req.IsMaster {
 		h.nodeService.SetMode("slave")
 	}
 
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config updated and applied"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config updated and applied", Data: plan})
 }
 
 func (h *Handlers) ValidateConfig(c *gin.Context) {

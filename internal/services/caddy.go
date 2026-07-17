@@ -1613,40 +1613,40 @@ func extractMetricLabel(metricName string, label string) string {
 // GenerateCaddyConfig generates Caddy configuration from database
 func GenerateCaddyConfig(cfg *config.Config, overrides ...*models.UpdateConfigRequest) map[string]interface{} {
 	type lbRule struct {
-		CaddyID                        string
-		Name                           string
-		Protocol                       string
-		Domain                         string
-		ListenPort                     int
-		Strategy                       string
-		DynamicDNS                     bool
-		EnableDnsServer                bool
-		DnsServer                      string
-		DnsFamily                      string
-		HealthCheckPath                string
-		HealthCheckInterval            int
-		HealthCheckTimeout             int
-		HealthCheckUnhealthyThreshold  int
-		HealthCheckHealthyThreshold    int
-		EnableTLS                      bool
-		TLSSource                      string
-		ACMEConfigID                   int
-		ACMEEmail                      string
-		TLSCert                        string
-		TLSKey                         string
-		TLSHTTPRedirect                bool
-		Enabled                        bool
-		EnableCompress                 bool
-		CompressTypes                  string
-		EnableActiveHealthCheck        bool
-		TCPHealthCheckPort             int
-		TCPTryDuration                 int
-		TCPTryInterval                 int
-		RequestBodyMaxSizeMB           int
-		UpstreamKeepaliveTimeout       int
-		ServerTokensHidden             int
-		HostHeader                     string
-		LogEnabled                     bool
+		CaddyID                       string
+		Name                          string
+		Protocol                      string
+		Domain                        string
+		ListenPort                    int
+		Strategy                      string
+		DynamicDNS                    bool
+		EnableDnsServer               bool
+		DnsServer                     string
+		DnsFamily                     string
+		HealthCheckPath               string
+		HealthCheckInterval           int
+		HealthCheckTimeout            int
+		HealthCheckUnhealthyThreshold int
+		HealthCheckHealthyThreshold   int
+		EnableTLS                     bool
+		TLSSource                     string
+		ACMEConfigID                  int
+		ACMEEmail                     string
+		TLSCert                       string
+		TLSKey                        string
+		TLSHTTPRedirect               bool
+		Enabled                       bool
+		EnableCompress                bool
+		CompressTypes                 string
+		EnableActiveHealthCheck       bool
+		TCPHealthCheckPort            int
+		TCPTryDuration                int
+		TCPTryInterval                int
+		RequestBodyMaxSizeMB          int
+		UpstreamKeepaliveTimeout      int
+		ServerTokensHidden            int
+		HostHeader                    string
+		LogEnabled                    bool
 	}
 
 	type upstream struct {
@@ -1766,19 +1766,45 @@ func GenerateCaddyConfig(cfg *config.Config, overrides ...*models.UpdateConfigRe
 
 	if len(overrides) > 0 && overrides[0] != nil {
 		o := overrides[0]
-		if o.CaddyLogPath != nil { caddyLogPath = *o.CaddyLogPath }
-		if o.CaddyLogLevel != nil { caddyLogLevel = *o.CaddyLogLevel }
-		if o.CaddyLogSizeMB != nil { caddyLogSizeMB = *o.CaddyLogSizeMB }
-		if o.RequestBodyMaxSizeMB != nil { global.requestBodyMaxSizeMB = *o.RequestBodyMaxSizeMB }
-		if o.HTTPReadTimeout != nil { global.httpReadTimeout = *o.HTTPReadTimeout }
-		if o.HTTPWriteTimeout != nil { global.httpWriteTimeout = *o.HTTPWriteTimeout }
-		if o.HTTPIdleTimeout != nil { global.httpIdleTimeout = *o.HTTPIdleTimeout }
-		if o.UpstreamKeepaliveTimeout != nil { global.upstreamKeepaliveTimeout = *o.UpstreamKeepaliveTimeout }
-		if o.ServerTokensHidden != nil { global.serverTokensHidden = *o.ServerTokensHidden }
-		if o.AccessLogJSON != nil { accessLogJSON = *o.AccessLogJSON }
-		if o.AccessLogFormat != nil { accessLogFormat = *o.AccessLogFormat }
-		if o.DNSProvider != nil { dnsProvider = *o.DNSProvider }
-		if o.ACMEEmail != nil { acmeEmail = *o.ACMEEmail }
+		if o.CaddyLogPath != nil {
+			caddyLogPath = *o.CaddyLogPath
+		}
+		if o.CaddyLogLevel != nil {
+			caddyLogLevel = *o.CaddyLogLevel
+		}
+		if o.CaddyLogSizeMB != nil {
+			caddyLogSizeMB = *o.CaddyLogSizeMB
+		}
+		if o.RequestBodyMaxSizeMB != nil {
+			global.requestBodyMaxSizeMB = *o.RequestBodyMaxSizeMB
+		}
+		if o.HTTPReadTimeout != nil {
+			global.httpReadTimeout = *o.HTTPReadTimeout
+		}
+		if o.HTTPWriteTimeout != nil {
+			global.httpWriteTimeout = *o.HTTPWriteTimeout
+		}
+		if o.HTTPIdleTimeout != nil {
+			global.httpIdleTimeout = *o.HTTPIdleTimeout
+		}
+		if o.UpstreamKeepaliveTimeout != nil {
+			global.upstreamKeepaliveTimeout = *o.UpstreamKeepaliveTimeout
+		}
+		if o.ServerTokensHidden != nil {
+			global.serverTokensHidden = *o.ServerTokensHidden
+		}
+		if o.AccessLogJSON != nil {
+			accessLogJSON = *o.AccessLogJSON
+		}
+		if o.AccessLogFormat != nil {
+			accessLogFormat = *o.AccessLogFormat
+		}
+		if o.DNSProvider != nil {
+			dnsProvider = *o.DNSProvider
+		}
+		if o.ACMEEmail != nil {
+			acmeEmail = *o.ACMEEmail
+		}
 	}
 
 	applyTimeouts := func(server map[string]interface{}) {
@@ -2295,10 +2321,10 @@ func buildCaddyLogging(level string, sizeMB int) map[string]interface{} {
 	return map[string]interface{}{
 		"logs": map[string]interface{}{
 			"default": map[string]interface{}{
-				"level":    level,
-				"writer":   fileWriter("/app/logs/caddy.log"),
-				"encoder":  consoleEncoder,
-				"exclude":  []string{"http", "tls", "http.log.access"},
+				"level":   level,
+				"writer":  fileWriter("/app/logs/caddy.log"),
+				"encoder": consoleEncoder,
+				"exclude": []string{"http", "tls", "http.log.access"},
 			},
 			"caddy_tls": map[string]interface{}{
 				"level":   level,
@@ -2396,6 +2422,8 @@ func loadACMECertificate(caddyID, domain string) (string, string, bool) {
 					id,
 				); updErr != nil {
 					log.Printf("loadACMECertificate: failed to mark issued job %d as failed: %v", id, updErr)
+				} else {
+					RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(id), AuditRulePart(caddyID), AuditResultPart("missing_material")), "")
 				}
 			}
 			continue
@@ -2606,9 +2634,13 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 		{
 			hcInterval := rule.HealthCheckInterval
-			if hcInterval <= 0 { hcInterval = 10 }
+			if hcInterval <= 0 {
+				hcInterval = 10
+			}
 			hcThreshold := rule.HealthCheckUnhealthyThreshold
-			if hcThreshold <= 0 { hcThreshold = 3 }
+			if hcThreshold <= 0 {
+				hcThreshold = 3
+			}
 			healthChecks := map[string]interface{}{
 				"passive": map[string]interface{}{
 					"fail_duration": fmt.Sprintf("%ds", hcInterval*3),
@@ -2830,9 +2862,9 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 				"listen": []string{fmt.Sprintf(":%d", rule.ListenPort)},
 				"routes": []interface{}{route},
 			},
-	}
+		}
 
-	apps := map[string]interface{}{
+		apps := map[string]interface{}{
 			"layer4": map[string]interface{}{
 				"servers": layer4Servers,
 			},
@@ -2985,9 +3017,13 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 
 		if rule.Protocol == "http" {
 			hcInterval := rule.HealthCheckInterval
-			if hcInterval <= 0 { hcInterval = 10 }
+			if hcInterval <= 0 {
+				hcInterval = 10
+			}
 			hcThreshold := rule.HealthCheckUnhealthyThreshold
-			if hcThreshold <= 0 { hcThreshold = 3 }
+			if hcThreshold <= 0 {
+				hcThreshold = 3
+			}
 			healthChecks := map[string]interface{}{
 				"passive": map[string]interface{}{
 					"fail_duration": fmt.Sprintf("%ds", hcInterval*3),

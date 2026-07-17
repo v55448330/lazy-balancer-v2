@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -11,31 +13,42 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
 
 func (h *Handlers) Login(c *gin.Context) {
 	var req models.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		services.RecordAuditLog("", "登录失败", "用户认证", services.AuditResultPart("invalid_request"), c.ClientIP())
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
 	}
 
 	var user models.User
 	var passwordHash string
-	err := db.DB.QueryRow("SELECT id, username, password_hash, role, display_name, last_login FROM users WHERE username = ?",
-		req.Username).Scan(&user.ID, &user.Username, &passwordHash, &user.Role, &user.DisplayName, &user.LastLogin)
+	err := db.DB.QueryRow("SELECT id, username, password_hash, role, display_name, is_enabled, last_login FROM users WHERE username = ?",
+		req.Username).Scan(&user.ID, &user.Username, &passwordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.LastLogin)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "Invalid credentials"})
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("invalid_credentials"), c.ClientIP())
+		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "用户名或密码错误"})
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "Invalid credentials"})
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("invalid_credentials"), c.ClientIP())
+		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "用户名或密码错误"})
+		return
+	}
+
+	if !user.IsEnabled {
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %d", user.ID), "账号已禁用"), c.ClientIP())
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "账号已禁用，请联系管理员"})
 		return
 	}
 
@@ -48,16 +61,23 @@ func (h *Handlers) Login(c *gin.Context) {
 		nodeMode = "master"
 	}
 
+	expireMinutes := 20
+	if err := db.DB.QueryRow("SELECT COALESCE(jwt_expire_minutes,20) FROM global_config WHERE id=1").Scan(&expireMinutes); err != nil || expireMinutes <= 0 {
+		expireMinutes = 20
+	}
+	expireDuration := time.Duration(expireMinutes) * time.Minute
+
 	// Generate JWT token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id":   user.ID,
 		"username":  user.Username,
 		"role":      user.Role,
 		"node_mode": nodeMode,
-		"exp":       time.Now().Add(h.cfg.JWTExpire).Unix(),
+		"exp":       time.Now().Add(expireDuration).Unix(),
 	})
 
 	tokenString, _ := token.SignedString([]byte(h.cfg.JWTSecret))
+	services.RecordAuditLog(user.Username, "登录成功", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %d", user.ID), services.AuditResultPart("success")), c.ClientIP())
 
 	c.JSON(http.StatusOK, models.LoginResponse{
 		Token:    tokenString,
@@ -66,16 +86,17 @@ func (h *Handlers) Login(c *gin.Context) {
 	})
 }
 
-
 func (h *Handlers) Logout(c *gin.Context) {
+	username, _ := c.Get("username")
+	usernameStr, _ := username.(string)
+	services.RecordAuditLog(usernameStr, "登出", "用户认证", services.AuditResultPart("success"), c.ClientIP())
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Logged out"})
 }
-
 
 func (h *Handlers) GetCurrentUser(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	if userID == nil {
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "Not authenticated"})
+		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "未登录或登录已过期"})
 		return
 	}
 
@@ -91,28 +112,27 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 
 	var user models.User
 	err := db.DB.QueryRow(`
-		SELECT id, username, role, display_name, created_at, last_login 
+		SELECT id, username, role, display_name, is_enabled, created_at, last_login 
 		FROM users WHERE id = ?
-	`, userIDInt).Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.CreatedAt, &user.LastLogin)
+	`, userIDInt).Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "User not found"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "用户不存在或已被删除"})
 		return
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: user})
 }
 
-
 type UpdateCurrentUserRequest struct {
-	DisplayName string `json:"display_name"`
-	Password    string `json:"password"`
+	DisplayName *string `json:"display_name"`
+	Password    string  `json:"password"`
 }
 
 func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	if userID == nil {
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "Not authenticated"})
+		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "未登录或登录已过期"})
 		return
 	}
 
@@ -128,37 +148,56 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 
 	var req UpdateCurrentUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
+		return
+	}
+
+	var oldDisplayName string
+	if err := db.DB.QueryRow("SELECT COALESCE(display_name,'') FROM users WHERE id = ?", userIDInt).Scan(&oldDisplayName); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
 		return
 	}
 
 	// Update display name
-	if req.DisplayName != "" {
-		db.DB.Exec("UPDATE users SET display_name = ? WHERE id = ?", req.DisplayName, userIDInt)
+	changed := []string{}
+	if req.DisplayName != nil && *req.DisplayName != oldDisplayName {
+		if _, err := db.DB.Exec("UPDATE users SET display_name = ? WHERE id = ?", *req.DisplayName, userIDInt); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新显示名失败"})
+			return
+		}
+		changed = append(changed, "昵称")
 	}
 
 	// Update password if provided
 	if req.Password != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to hash password"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "密码加密失败"})
 			return
 		}
-		db.DB.Exec("UPDATE users SET password_hash = ? WHERE id = ?", string(hash), userIDInt)
+		if _, err := db.DB.Exec("UPDATE users SET password_hash = ? WHERE id = ?", string(hash), userIDInt); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新密码失败"})
+			return
+		}
+		changed = append(changed, "密码")
 	}
 
 	// Return updated user
 	var user models.User
 	err := db.DB.QueryRow(`
-		SELECT id, username, role, display_name, created_at, last_login 
+		SELECT id, username, role, display_name, is_enabled, created_at, last_login 
 		FROM users WHERE id = ?
-	`, userIDInt).Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.CreatedAt, &user.LastLogin)
+	`, userIDInt).Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get user"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
 		return
 	}
 
+	if len(changed) == 0 {
+		recordAudit(c, "更新资料", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", userIDInt), "无修改"))
+	} else {
+		recordAudit(c, "更新资料", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", userIDInt), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: user})
 }
-

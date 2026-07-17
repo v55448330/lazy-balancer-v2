@@ -10,6 +10,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
 
 func (h *Handlers) GetSyncStatus(c *gin.Context) {
@@ -122,8 +123,10 @@ func (h *Handlers) GetSyncConfig(c *gin.Context) {
 
 func (h *Handlers) ManualSync(c *gin.Context) {
 	if err := h.syncService.SyncFromMaster(); err != nil {
+		recordAudit(c, "同步失败", "配置同步", services.FormatAuditDetail(services.AuditSourcePart("manual"), services.AuditResultPart("sync_failed")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
+	recordAudit(c, "同步", "配置同步", services.FormatAuditDetail(services.AuditSourcePart("manual"), services.AuditResultPart("applied_or_no_change")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Sync completed"})
 }

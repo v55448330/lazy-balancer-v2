@@ -36,19 +36,43 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
-import { ElMessage } from 'element-plus'
 import { Setting } from '@element-plus/icons-vue'
 import BasicSettings from './settings/BasicSettings.vue'
 import ClusterSettings from './settings/ClusterSettings.vue'
 import FreeCertificates from './settings/FreeCertificates.vue'
-import APIKeys from './settings/APIKeys.vue'
+import APIKeys from '@/views/Keys.vue'
 
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const activeTab = ref('basic')
 
-const settings = ref<any>({
+interface SettingsConfig {
+  log_level: string
+  access_log_enabled: boolean
+  caddy_log_path: string
+  caddy_log_level: string
+  caddy_log_size_mb: number
+  cert_job_log_size_mb: number
+  access_log_json: boolean
+  audit_retention_months: number
+  jwt_expire_minutes: number
+  timezone: string
+  is_master: boolean
+  master_url: string
+  sync_interval: number
+}
+
+interface CertificateConfig {
+  acme_email: string
+  cert_expiry_days: number
+  cert_renewal_days: number
+  cert_renewal_attempts: number
+  default_ca_provider_id: number
+  dns_provider: string
+}
+
+const settings = ref<SettingsConfig>({
   log_level: 'info',
   access_log_enabled: true,
   caddy_log_path: '/app/logs/caddy.log',
@@ -56,13 +80,15 @@ const settings = ref<any>({
   caddy_log_size_mb: 100,
   cert_job_log_size_mb: 10,
   access_log_json: true,
+  audit_retention_months: 3,
+  jwt_expire_minutes: 20,
   timezone: 'Asia/Shanghai',
   is_master: true,
   master_url: '',
   sync_interval: 60,
 })
 
-const global = ref<any>({
+const global = ref<CertificateConfig>({
   acme_email: '',
   cert_expiry_days: 30,
   cert_renewal_days: 30,
@@ -100,6 +126,8 @@ const fetchSettings = async () => {
         caddy_log_size_mb: res.data.caddy_log_size_mb ?? 100,
         cert_job_log_size_mb: res.data.cert_job_log_size_mb ?? 10,
         access_log_json: res.data.access_log_json ?? true,
+        audit_retention_months: res.data.audit_retention_months ?? 3,
+        jwt_expire_minutes: res.data.jwt_expire_minutes ?? 20,
         timezone: res.data.timezone || 'Asia/Shanghai',
         is_master: res.data.is_master ?? true,
         master_url: res.data.master_url || '',
@@ -119,29 +147,16 @@ const fetchSettings = async () => {
   }
 }
 
-const saveConfig = async (payload: any) => {
-  try {
-    await request.put('/config', payload)
-    ElMessage.success('保存成功')
-  } catch (error) {
-    console.error('Failed to save settings:', error)
-  }
-}
-
 const handleSaveBasic = async () => {
   await fetchSettings()
 }
 
 const handleSaveCluster = async () => {
-  await saveConfig({
-    is_master: settings.value.is_master,
-    master_url: settings.value.master_url,
-    sync_interval: settings.value.sync_interval,
-  })
+  await fetchSettings()
 }
 
-const handleSaveCertificates = async (payload: any) => {
-  await saveConfig(payload)
+const handleSaveCertificates = async () => {
+  await fetchSettings()
 }
 
 const syncActiveTabFromPage = () => {

@@ -46,7 +46,6 @@ func NewHandlers(cfg *config.Config, caddy *services.CaddyService, metrics *serv
 	return h
 }
 
-
 func (h *Handlers) initDefaultAdmin() {
 	var count int
 	db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", h.cfg.InitialAdminUser).Scan(&count)
@@ -59,7 +58,6 @@ func (h *Handlers) initDefaultAdmin() {
 	}
 }
 
-
 func (h *Handlers) initDefaultConfig() {
 	var count int
 	db.DB.QueryRow("SELECT COUNT(*) FROM global_config WHERE id = 1").Scan(&count)
@@ -71,6 +69,50 @@ func (h *Handlers) initDefaultConfig() {
 	}
 }
 
+type EnableCertJobAction int
+
+const (
+	EnableCertJobCreate EnableCertJobAction = iota
+	EnableCertJobKeep
+	EnableCertJobResume
+	EnableCertJobRetry
+	EnableCertJobRenew
+	EnableCertJobInProgress
+)
+
+func ShouldRenewIssuedCert(now, expiresAt time.Time, renewalDays int) bool {
+	renewalTime := expiresAt.AddDate(0, 0, -renewalDays)
+	return !now.Before(renewalTime)
+}
+
+func ResolveEnableCertJobAction(hasJob bool, status string, expiresAt *time.Time, now time.Time, renewalDays int) EnableCertJobAction {
+	if !hasJob {
+		return EnableCertJobCreate
+	}
+	if (status == "issued" || status == "disabled" || status == "failed") && expiresAt != nil {
+		if !ShouldRenewIssuedCert(now, *expiresAt, renewalDays) {
+			if status == "issued" {
+				return EnableCertJobKeep
+			}
+			return EnableCertJobResume
+		}
+		if status == "issued" {
+			return EnableCertJobRenew
+		}
+		return EnableCertJobRetry
+	}
+	if status == "failed" || status == "disabled" {
+		return EnableCertJobRetry
+	}
+	return EnableCertJobInProgress
+}
+
+func boolText(value bool) string {
+	if value {
+		return "启用"
+	}
+	return "禁用"
+}
 
 func (h *Handlers) applyCaddyConfig() {
 	// Generate Caddy config from DB
@@ -81,7 +123,6 @@ func (h *Handlers) applyCaddyConfig() {
 		log.Printf("Failed to apply Caddy config: %v", err)
 	}
 }
-
 
 func (h *Handlers) applyCaddyConfigWithRollback() error {
 	// Backup current Caddy config before applying
@@ -113,7 +154,6 @@ func (h *Handlers) applyCaddyConfigWithRollback() error {
 	return nil
 }
 
-
 func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID string, serverName string) error {
 	type requestUpstream struct {
 		Host       string
@@ -126,32 +166,32 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 	}
 
 	type requestData struct {
-		Protocol                       string
-		Domain                         string
-		ListenPort                     int
-		Strategy                       string
-		DynamicDNS                     bool
-		DnsServer                      string
-		DnsFamily                      string
-		HealthCheckPath                string
-		HealthCheckInterval            int
-		HealthCheckTimeout             int
-		HealthCheckUnhealthyThreshold  int
-		HealthCheckHealthyThreshold    int
-		EnableTLS                      bool
-		TLSSource                      string
-		ACMEConfigID                   int
-		TLSCert                        string
-		TLSKey                         string
-		TLSHTTPRedirect                bool
-		EnableCompress                 bool
-		CompressTypes                  string
-		EnableActiveHealthCheck        bool
-		HostHeader                     string
-		RequestBodyMaxSizeMB           int
-		UpstreamKeepaliveTimeout       int
-		ServerTokensHidden             int
-		Upstreams                      []requestUpstream
+		Protocol                      string
+		Domain                        string
+		ListenPort                    int
+		Strategy                      string
+		DynamicDNS                    bool
+		DnsServer                     string
+		DnsFamily                     string
+		HealthCheckPath               string
+		HealthCheckInterval           int
+		HealthCheckTimeout            int
+		HealthCheckUnhealthyThreshold int
+		HealthCheckHealthyThreshold   int
+		EnableTLS                     bool
+		TLSSource                     string
+		ACMEConfigID                  int
+		TLSCert                       string
+		TLSKey                        string
+		TLSHTTPRedirect               bool
+		EnableCompress                bool
+		CompressTypes                 string
+		EnableActiveHealthCheck       bool
+		HostHeader                    string
+		RequestBodyMaxSizeMB          int
+		UpstreamKeepaliveTimeout      int
+		ServerTokensHidden            int
+		Upstreams                     []requestUpstream
 	}
 
 	var data requestData
@@ -351,7 +391,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		return fmt.Errorf("failed to load global config: %v", err)
 	}
 
-		ruleConfig := services.SingleRuleConfig{
+	ruleConfig := services.SingleRuleConfig{
 		Protocol:                       data.Protocol,
 		Domain:                         data.Domain,
 		ListenPort:                     data.ListenPort,
@@ -417,7 +457,6 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 	return nil
 }
 
-
 func (h *Handlers) ApplyConfigOnStartup() error {
 	// Wait for Caddy to be ready (up to 10 seconds)
 	maxRetries := 20
@@ -452,10 +491,10 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 
 	log.Printf("Applying Caddy config on startup (enabled rules: %d)", count)
 	h.applyCaddyConfig()
+	services.RecordAuditLog("system", "载入", "系统配置", fmt.Sprintf("启动时从数据库载入配置并应用 Caddy；启用规则 %d 条", count), "")
 
 	return nil
 }
-
 
 func (h *Handlers) validatePort(protocol string, port int, excludeCaddyID string) error {
 	adminPorts := []int{8000, 2019}
@@ -481,7 +520,6 @@ func (h *Handlers) validatePort(protocol string, port int, excludeCaddyID string
 
 	return h.validatePortFromDB(protocol, port, excludeCaddyID)
 }
-
 
 func (h *Handlers) validatePortFromDB(protocol string, port int, excludeCaddyID string) error {
 	// Check conflict with existing rules:
@@ -513,7 +551,6 @@ func (h *Handlers) validatePortFromDB(protocol string, port int, excludeCaddyID 
 	return nil
 }
 
-
 func (h *Handlers) validateUpstreams(upstreams []models.Upstream) error {
 	if len(upstreams) == 0 {
 		return fmt.Errorf("at least one upstream is required")
@@ -543,4 +580,3 @@ func (h *Handlers) validateUpstreams(upstreams []models.Upstream) error {
 
 	return nil
 }
-

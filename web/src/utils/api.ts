@@ -3,7 +3,7 @@ import type { AxiosInstance, AxiosRequestConfig } from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const service: AxiosInstance = axios.create({
-  baseURL: '/api',
+  baseURL: '/api/v1',
   timeout: 30000,
 })
 
@@ -33,12 +33,10 @@ service.interceptors.response.use(
     const status = error.response?.status
     const backendMsg = error.response?.data?.message
     const message = backendMsg || error.message || '网络错误'
-    if (status === 401) {
-      const isLoginRequest = error.config?.url?.includes('/auth/login')
-      if (isLoginRequest) {
-        ElMessage.error('用户名或密码错误')
-      } else {
-        ElMessageBox.confirm('登录已过期，请重新登录', '会话失效', {
+      if (status === 401) {
+        const isLoginRequest = error.config?.url?.includes('/auth/login')
+        if (!isLoginRequest) {
+          ElMessageBox.confirm('登录已过期，请重新登录', '会话失效', {
           confirmButtonText: '确定',
           cancelButtonText: '取消',
           type: 'warning',
@@ -50,9 +48,9 @@ service.interceptors.response.use(
           window.location.reload()
         })
       }
-    } else {
-      ElMessage.error(message)
-    }
+      } else if (!error.config?.url?.includes('/auth/login')) {
+        ElMessage.error(message)
+      }
     return Promise.reject(new Error(message))
   }
 )

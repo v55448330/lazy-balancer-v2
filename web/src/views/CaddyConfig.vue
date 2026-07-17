@@ -161,7 +161,29 @@ const loading = ref(false)
 
 const defaultLogFormat = 'request>headers -> delete\nresp_headers -> delete\nrequest>tls -> delete\nrequest>remote_port -> delete\nlevel -> delete\nlogger -> delete\nmsg -> delete\nrequest>remote_ip -> src\nrequest>client_ip -> src_ip\nrequest>method -> http_method\nrequest>host -> server\nrequest>uri -> uri_path\nrequest>proto -> protocol\nuser_id -> user\nts -> time_local\nsize -> bytes_out\nbytes_read -> bytes_in\nduration -> request_time'
 
-const caddySettings = ref({
+interface CaddySettingsConfig {
+  caddy_log_path: string
+  caddy_log_level: string
+  caddy_log_size_mb: number
+  request_body_max_size_mb: number
+  http_read_timeout: number
+  http_write_timeout: number
+  http_idle_timeout: number
+  upstream_keepalive_timeout: number
+  server_tokens_hidden: boolean
+  access_log_json: boolean
+  access_log_format: string
+}
+
+interface ConfigPreviewResponse {
+  data?: {
+    changed: boolean
+    section: string
+    changes: string[]
+  }
+}
+
+const caddySettings = ref<CaddySettingsConfig>({
   caddy_log_path: '/app/logs/caddy.log',
   caddy_log_level: 'info',
   caddy_log_size_mb: 100,
@@ -225,21 +247,25 @@ const fetchGlobalConfig = async () => {
 }
 
 const handleSave = async () => {
-  try {
-    await ElMessageBox.confirm('确认保存并重载 Caddy 配置？', '确认保存', {
-      confirmButtonText: '确认',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
-  } catch {
-    return
-  }
+  if (saving.value) return
   saving.value = true
   try {
-    await request.put('/config', caddySettings.value)
+    const payload = { ...caddySettings.value, source: 'caddy' }
+    const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
+    if (preview.data?.changed) {
+      const changes = preview.data.changes.length > 0 ? preview.data.changes.join('；') : '检测到配置变更'
+      await ElMessageBox.confirm(changes, `确认保存${preview.data.section || 'Caddy 配置'}？`, {
+        confirmButtonText: '确认',
+        cancelButtonText: '取消',
+        type: 'warning',
+      })
+    }
+    await request.put('/config', payload)
     ElMessage.success('保存成功')
   } catch (e: any) {
-    ElMessage.error('保存失败：' + (e?.response?.data?.message || e?.message || '配置验证未通过'))
+    if (e !== 'cancel' && e !== 'close') {
+      ElMessage.error('保存失败：' + (e?.response?.data?.message || e?.message || '配置验证未通过'))
+    }
   } finally {
     saving.value = false
   }

@@ -13,6 +13,7 @@
     <Settings v-else-if="currentPage === 'settings-basic' || currentPage === 'settings-cluster' || currentPage === 'settings-certificates' || currentPage === 'settings-apikeys'" />
     <CaddyConfig v-else-if="currentPage === 'caddy'" />
     <Users v-else-if="currentPage === 'users'" />
+    <AuditLog v-else-if="currentPage === 'audit-log'" />
   </AppLayout>
 </template>
 
@@ -27,6 +28,7 @@ import Rules from '@/views/Rules.vue'
 import Settings from '@/views/Settings.vue'
 import CaddyConfig from '@/views/CaddyConfig.vue'
 import Users from '@/views/Users.vue'
+import AuditLog from '@/views/AuditLog.vue'
 
 const authStore = useAuthStore()
 const loading = ref(true)

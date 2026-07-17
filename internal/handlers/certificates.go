@@ -2,13 +2,16 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 	"lazy-balancer-v2/internal/services/dnsproviders"
 )
 
@@ -23,8 +26,7 @@ func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 	var configs []models.CertificateConfig
 	for rows.Next() {
 		var cfg models.CertificateConfig
-		if err := rows.Scan(&cfg.ID, &cfg.Name, &cfg.DNSProvider, &cfg.DNSCredentials, &cfg.Enabled, &cfg.CreatedAt, &cfg.UpdatedAt,
-		); err != nil {
+		if err := rows.Scan(&cfg.ID, &cfg.Name, &cfg.DNSProvider, &cfg.DNSCredentials, &cfg.Enabled, &cfg.CreatedAt, &cfg.UpdatedAt); err != nil {
 			continue
 		}
 		configs = append(configs, cfg)
@@ -72,6 +74,7 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 	}
 
 	id, _ := result.LastInsertId()
+	recordAudit(c, "创建", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), req.Name, req.DNSProvider, fmt.Sprintf("启用：%t", req.Enabled)))
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "Config created", Data: gin.H{"id": id}})
 }
 
@@ -104,25 +107,45 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 		}
 	}
 
+	var oldName, oldProvider, oldCredentials string
+	var oldEnabled bool
+	if err := db.DB.QueryRow("SELECT name, dns_provider, COALESCE(dns_credentials,''), COALESCE(enabled,1) FROM certificate_configs WHERE id=?", id).Scan(&oldName, &oldProvider, &oldCredentials, &oldEnabled); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Config not found"})
+		return
+	}
+
+	changed := []string{}
 	query := "UPDATE certificate_configs SET "
 	var args []interface{}
 
-	if req.Name != "" {
+	if req.Name != "" && req.Name != oldName {
 		query += "name = ?, "
 		args = append(args, req.Name)
+		changed = append(changed, "名称")
 	}
-	if req.DNSProvider != "" {
+	if req.DNSProvider != "" && req.DNSProvider != oldProvider {
 		query += "dns_provider = ?, "
 		args = append(args, req.DNSProvider)
+		changed = append(changed, "DNS提供商")
 	}
 	if req.DNSCredentials != nil {
 		credsJSON, _ := json.Marshal(req.DNSCredentials)
-		query += "dns_credentials = ?, "
-		args = append(args, string(credsJSON))
+		if string(credsJSON) != oldCredentials {
+			query += "dns_credentials = ?, "
+			args = append(args, string(credsJSON))
+			changed = append(changed, "凭证")
+		}
 	}
-	if req.Enabled != nil {
+	if req.Enabled != nil && *req.Enabled != oldEnabled {
 		query += "enabled = ?, "
 		args = append(args, *req.Enabled)
+		changed = append(changed, "启用状态")
+	}
+
+	if len(changed) == 0 {
+		recordAudit(c, "更新", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), "无修改"))
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config unchanged"})
+		return
 	}
 
 	query += "updated_at = datetime('now') WHERE id = ?"
@@ -132,6 +155,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update config"})
 		return
 	}
+	recordAudit(c, "更新", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config updated"})
 }
 
@@ -143,7 +167,16 @@ func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 	}
 
 	id, _ := strconv.Atoi(c.Param("id"))
-	db.DB.Exec("DELETE FROM certificate_configs WHERE id = ?", id)
+	var name, provider string
+	if err := db.DB.QueryRow("SELECT name, dns_provider FROM certificate_configs WHERE id = ?", id).Scan(&name, &provider); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Config not found"})
+		return
+	}
+	if _, err := db.DB.Exec("DELETE FROM certificate_configs WHERE id = ?", id); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete config"})
+		return
+	}
+	recordAudit(c, "删除", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), name, provider))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config deleted"})
 }
 
@@ -155,12 +188,12 @@ func (h *Handlers) ListDNSProviders(c *gin.Context) {
 		var fieldList []gin.H
 		for _, f := range fields {
 			fieldList = append(fieldList, gin.H{
-				"name":     f.Name,
-				"label":    f.Label,
-				"type":     f.Type,
-				"required": f.Required,
+				"name":        f.Name,
+				"label":       f.Label,
+				"type":        f.Type,
+				"required":    f.Required,
 				"placeholder": f.Placeholder,
-				"options":  p.CredentialFieldOptions(f.Name),
+				"options":     p.CredentialFieldOptions(f.Name),
 			})
 		}
 		result = append(result, gin.H{
@@ -177,9 +210,9 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 	var creds map[string]string
 
 	var req struct {
-		Domain        string            `json:"domain"`
-		DNSProvider   string            `json:"dns_provider"`
-		DNSCredentials  map[string]string `json:"dns_credentials"`
+		Domain         string            `json:"domain"`
+		DNSProvider    string            `json:"dns_provider"`
+		DNSCredentials map[string]string `json:"dns_credentials"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
@@ -187,10 +220,11 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 	}
 
 	id, idErr := strconv.Atoi(c.Param("id"))
+	var configName string
 	if idErr == nil && id > 0 {
-		var name string
-		err := db.DB.QueryRow("SELECT name, dns_provider, dns_credentials FROM certificate_configs WHERE id=?", id).Scan(&name, &provider, &credentials)
+		err := db.DB.QueryRow("SELECT name, dns_provider, dns_credentials FROM certificate_configs WHERE id=?", id).Scan(&configName, &provider, &credentials)
 		if err != nil {
+			recordAudit(c, "测试失败", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), services.AuditResultPart("not_found")))
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Config not found"})
 			return
 		}
@@ -201,19 +235,23 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 	}
 
 	if req.Domain == "" {
+		recordAudit(c, "测试失败", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, services.AuditResultPart("missing_domain")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请输入用于测试的域名"})
 		return
 	}
 
 	p, ok := dnsproviders.Get(provider)
 	if !ok {
+		recordAudit(c, "测试失败", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, services.AuditResultPart("unknown_provider")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Unknown provider"})
 		return
 	}
 	if err := p.Validate(creds, req.Domain); err != nil {
+		recordAudit(c, "测试失败", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, req.Domain, services.AuditResultPart("credentials_invalid")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	recordAudit(c, "测试成功", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, req.Domain, services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "凭证有效"})
 }
 
@@ -232,6 +270,7 @@ func (h *Handlers) ListCertificates(c *gin.Context) {
 }
 
 func (h *Handlers) IssueCertificate(c *gin.Context) {
+	recordAudit(c, "触发签发", "证书", services.FormatAuditDetail("范围：所有已启用的 ACME 规则", services.AuditResultPart("requested")))
 	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Certificate issuance triggered"})
 }

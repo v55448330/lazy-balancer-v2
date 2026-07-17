@@ -13,12 +13,15 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isLoggedIn = computed(() => !!token.value && !isTokenExpired(token.value))
 
+  const normalizeDisplayName = (value: User['display_name'], username?: string) => {
+    if (typeof value === 'string') return value || username || ''
+    if (value && typeof value === 'object' && 'String' in value) return value.String || username || ''
+    return username || ''
+  }
+
   const displayName = computed(() => {
     if (!user.value) return ''
-    const name = user.value.display_name as any
-    if (typeof name === 'string') return name || user.value.username || ''
-    if (name && typeof name === 'object' && 'String' in name) return name.String || user.value.username || ''
-    return user.value.username || ''
+    return normalizeDisplayName(user.value.display_name, user.value.username)
   })
 
   const userRole = computed(() => {
@@ -35,7 +38,7 @@ export const useAuthStore = defineStore('auth', () => {
           id: res.data.id,
           username: res.data.username,
           role: res.data.role,
-          display_name: res.data.display_name?.String || res.data.display_name,
+          display_name: normalizeDisplayName(res.data.display_name, res.data.username),
         }
       }
     } catch (e) {
@@ -67,7 +70,7 @@ export const useAuthStore = defineStore('auth', () => {
           id: res.user.id,
           username: res.user.username,
           role: res.user.role,
-          display_name: res.user.display_name?.String || res.user.display_name,
+          display_name: normalizeDisplayName(res.user.display_name, res.user.username),
         }
       }
       await fetchConfig()
@@ -124,6 +127,7 @@ export const useAuthStore = defineStore('auth', () => {
     loading,
     currentPage,
     isLoggedIn,
+    normalizeDisplayName,
     displayName,
     userRole,
     login,

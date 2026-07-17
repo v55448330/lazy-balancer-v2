@@ -24,7 +24,6 @@ func (h *Handlers) GetSystemInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: info})
 }
 
-
 func (h *Handlers) GetSystemMetrics(c *gin.Context) {
 	metrics, err := getSystemMetrics()
 	if err != nil {
@@ -33,7 +32,6 @@ func (h *Handlers) GetSystemMetrics(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
 }
-
 
 func (h *Handlers) GetRealtimeTraffic(c *gin.Context) {
 	traffic, err := getRealtimeTraffic()
@@ -44,7 +42,6 @@ func (h *Handlers) GetRealtimeTraffic(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: traffic})
 }
 
-
 func (h *Handlers) GetConnectionStats(c *gin.Context) {
 	stats, err := getConnectionStats()
 	if err != nil {
@@ -53,4 +50,3 @@ func (h *Handlers) GetConnectionStats(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: stats})
 }
-

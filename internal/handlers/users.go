@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
 
 func (h *Handlers) ListUsers(c *gin.Context) {
@@ -29,7 +31,6 @@ func (h *Handlers) ListUsers(c *gin.Context) {
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: users})
 }
-
 
 func (h *Handlers) CreateUser(c *gin.Context) {
 	var req models.CreateUserRequest
@@ -61,9 +62,9 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 	}
 
 	id, _ := result.LastInsertId()
+	recordAudit(c, "创建", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), req.Username, fmt.Sprintf("角色：%s", req.Role)))
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "User created", Data: gin.H{"id": id}})
 }
-
 
 func (h *Handlers) UpdateUser(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
@@ -81,25 +82,53 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	if req.Username != "" {
-		db.DB.Exec("UPDATE users SET username = ? WHERE id = ?", req.Username, id)
+	var oldUsername, oldRole, oldDisplayName string
+	if err := db.DB.QueryRow("SELECT username, role, COALESCE(display_name,'') FROM users WHERE id = ?", id).Scan(&oldUsername, &oldRole, &oldDisplayName); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+		return
 	}
 
-	if req.Role != "" {
-		db.DB.Exec("UPDATE users SET role = ? WHERE id = ?", req.Role, id)
+	changed := []string{}
+	if req.Username != "" && req.Username != oldUsername {
+		if _, err := db.DB.Exec("UPDATE users SET username = ? WHERE id = ?", req.Username, id); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update username"})
+			return
+		}
+		changed = append(changed, "用户名")
 	}
 
-	// DisplayName can be updated even if empty (to clear it)
-	db.DB.Exec("UPDATE users SET display_name = ? WHERE id = ?", req.DisplayName, id)
+	if req.Role != "" && req.Role != oldRole {
+		if _, err := db.DB.Exec("UPDATE users SET role = ? WHERE id = ?", req.Role, id); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update role"})
+			return
+		}
+		changed = append(changed, "角色")
+	}
+
+	if req.DisplayName != oldDisplayName {
+		if _, err := db.DB.Exec("UPDATE users SET display_name = ? WHERE id = ?", req.DisplayName, id); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update display name"})
+			return
+		}
+		changed = append(changed, "昵称")
+	}
 
 	if req.Password != "" {
 		hash, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-		db.DB.Exec("UPDATE users SET password_hash = ? WHERE id = ?", string(hash), id)
+		if _, err := db.DB.Exec("UPDATE users SET password_hash = ? WHERE id = ?", string(hash), id); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update password"})
+			return
+		}
+		changed = append(changed, "密码")
 	}
 
+	if len(changed) == 0 {
+		recordAudit(c, "更新", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), "无修改"))
+	} else {
+		recordAudit(c, "更新", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "User updated"})
 }
-
 
 func (h *Handlers) DeleteUser(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
@@ -120,6 +149,11 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 		return
 	}
 
+	var targetUsername string
+	if err := db.DB.QueryRow("SELECT username FROM users WHERE id = ?", id).Scan(&targetUsername); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+		return
+	}
 	result, err := db.DB.Exec("DELETE FROM users WHERE id = ?", id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete user"})
@@ -132,9 +166,9 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 		return
 	}
 
+	recordAudit(c, "删除", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), targetUsername))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "User deleted"})
 }
-
 
 func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
@@ -153,9 +187,13 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		return
 	}
 
+	status := "disabled"
+	if req.IsEnabled {
+		status = "enabled"
+	}
+	recordAudit(c, "修改状态", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), services.AuditResultPart(status)))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "User status updated"})
 }
-
 
 func (h *Handlers) ResetUserPassword(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
@@ -180,6 +218,6 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 		return
 	}
 
+	recordAudit(c, "重置密码", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Password reset successfully"})
 }
-

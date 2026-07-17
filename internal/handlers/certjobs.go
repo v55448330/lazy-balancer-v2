@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"database/sql"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -20,13 +21,13 @@ import (
 
 func (h *Handlers) ListCertJobs(c *gin.Context) {
 	ruleID := c.Query("rule_id")
-	query := `SELECT id, rule_id, domain, status, COALESCE(message,'') AS message, COALESCE(cert_pem,'') AS cert_pem, expires_at, created_at, updated_at, COALESCE(renewal_attempts,0) AS renewal_attempts, ca_available_after, COALESCE(last_error_code,'') AS last_error_code FROM cert_jobs`
+	query := `SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.message,'') AS message, COALESCE(j.cert_pem,'') AS cert_pem, j.expires_at, j.created_at, j.updated_at, COALESCE(j.renewal_attempts,0) AS renewal_attempts, j.ca_available_after, COALESCE(j.last_error_code,'') AS last_error_code, COALESCE(j.ca_provider_id,0) AS ca_provider_id, COALESCE(p.name,'') AS ca_provider_name FROM cert_jobs j LEFT JOIN ca_providers p ON p.id = j.ca_provider_id`
 	var args []interface{}
 	if ruleID != "" {
-		query += " WHERE rule_id = ?"
+		query += " WHERE j.rule_id = ?"
 		args = append(args, ruleID)
 	}
-	query += " ORDER BY created_at DESC"
+	query += " ORDER BY j.created_at DESC"
 
 	rows, err := db.DB.Query(query, args...)
 	if err != nil {
@@ -39,7 +40,7 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 	for rows.Next() {
 		var j models.CertJob
 		if err := rows.Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.Message, &j.CertPEM,
-			&j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt, &j.RenewalAttempts, &j.CAAvailableAfter, &j.LastErrorCode,
+			&j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt, &j.RenewalAttempts, &j.CAAvailableAfter, &j.LastErrorCode, &j.CAProviderID, &j.CAProviderName,
 		); err != nil {
 			log.Printf("ListCertJobs scan error: %v", err)
 			continue
@@ -89,20 +90,23 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		}
 	}
 
-	go func() {
-		// Manual re-sign should use the current default CA provider selected by the user.
-		if _, err := db.DB.Exec("UPDATE cert_jobs SET renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL WHERE id=?", id); err != nil {
-			log.Printf("Failed to reset renewal attempts for job %d: %v", id, err)
-		}
-		qm := services.GetCAQueueManager()
-		if qm == nil {
-			log.Printf("Manual retry enqueue failed for job %d: CA queue manager not initialized", id)
-			return
-		}
-		if err := services.CreateOrRequeueCertJob(ruleID, domain, 0, qm); err != nil {
-			log.Printf("Manual retry enqueue failed for job %d: %v", id, err)
-		}
-	}()
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL WHERE id=?", id); err != nil {
+		log.Printf("Failed to reset renewal attempts for job %d: %v", id, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to reset retry state"})
+		return
+	}
+	qm := services.GetCAQueueManager()
+	if qm == nil {
+		log.Printf("Manual retry enqueue failed for job %d: CA queue manager not initialized", id)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA queue manager not initialized"})
+		return
+	}
+	if err := services.CreateOrRequeueCertJob(ruleID, domain, 0, qm); err != nil {
+		log.Printf("Manual retry enqueue failed for job %d: %v", id, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to enqueue retry"})
+		return
+	}
+	recordAudit(c, "重试", "证书签发任务", services.FormatAuditDetail(services.AuditJobPart(id), services.AuditRulePart(ruleID), domain, fmt.Sprintf("原状态：%s", status), services.AuditResultPart("queued")))
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Retry triggered"})
 }
@@ -119,7 +123,16 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
 		return
 	}
-	db.DB.Exec("DELETE FROM cert_jobs WHERE id = ?", id)
+	var ruleID, domain, status string
+	if err := db.DB.QueryRow("SELECT rule_id, domain, status FROM cert_jobs WHERE id = ?", id).Scan(&ruleID, &domain, &status); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
+		return
+	}
+	if _, err := db.DB.Exec("DELETE FROM cert_jobs WHERE id = ?", id); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete job"})
+		return
+	}
+	recordAudit(c, "删除", "证书签发任务", services.FormatAuditDetail(services.AuditJobPart(id), services.AuditRulePart(ruleID), domain, fmt.Sprintf("原状态：%s", status)))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Job deleted"})
 }
 

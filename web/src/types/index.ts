@@ -1,8 +1,13 @@
+export interface NullableString {
+  String: string
+  Valid: boolean
+}
+
 export interface User {
   id: number
   username: string
   role: string
-  display_name?: string
+  display_name?: string | NullableString | null
   created_at?: string | null
   last_login?: string | null
 }

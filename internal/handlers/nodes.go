@@ -1,13 +1,16 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
 
 func (h *Handlers) RegisterNode(c *gin.Context) {
@@ -38,7 +41,11 @@ func (h *Handlers) RegisterNode(c *gin.Context) {
 
 	if err == nil {
 		// Already registered, just update status
-		db.DB.Exec("UPDATE nodes SET status = 'pending', name = ? WHERE id = ?", req.Name, existingID)
+		if _, err := db.DB.Exec("UPDATE nodes SET status = 'pending', name = ? WHERE id = ?", req.Name, existingID); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to re-register node"})
+			return
+		}
+		services.RecordAuditLog("system", "重新注册", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", existingID), req.Name, services.AuditResultPart("reregistered")), c.ClientIP())
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Node re-registered", Data: gin.H{"id": existingID}})
 		return
 	}
@@ -55,9 +62,9 @@ func (h *Handlers) RegisterNode(c *gin.Context) {
 	}
 
 	id, _ := result.LastInsertId()
+	services.RecordAuditLog("system", "注册", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", id), req.Name, services.AuditResultPart("created")), c.ClientIP())
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "Node registered, waiting for approval", Data: gin.H{"id": id}})
 }
-
 
 func (h *Handlers) ListNodes(c *gin.Context) {
 	rows, err := db.DB.Query(`
@@ -83,7 +90,6 @@ func (h *Handlers) ListNodes(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: nodes})
 }
 
-
 func (h *Handlers) ListPendingNodes(c *gin.Context) {
 	rows, err := db.DB.Query(`
 		SELECT id, name, mode, ip_address, port, status, created_at
@@ -105,27 +111,50 @@ func (h *Handlers) ListPendingNodes(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: nodes})
 }
 
-
 func (h *Handlers) ApproveNode(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
-	db.DB.Exec("UPDATE nodes SET is_approved = 1, status = 'online' WHERE id = ?", id)
+	var name string
+	if err := db.DB.QueryRow("SELECT name FROM nodes WHERE id = ?", id).Scan(&name); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Node not found"})
+		return
+	}
+	if _, err := db.DB.Exec("UPDATE nodes SET is_approved = 1, status = 'online' WHERE id = ?", id); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to approve node"})
+		return
+	}
+	recordAudit(c, "审批", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", id), name, services.AuditResultPart("approved")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Node approved"})
 }
 
-
 func (h *Handlers) RejectNode(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
-	db.DB.Exec("DELETE FROM nodes WHERE id = ?", id)
+	var name string
+	if err := db.DB.QueryRow("SELECT name FROM nodes WHERE id = ?", id).Scan(&name); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Node not found"})
+		return
+	}
+	if _, err := db.DB.Exec("DELETE FROM nodes WHERE id = ?", id); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to reject node"})
+		return
+	}
+	recordAudit(c, "拒绝", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", id), name, services.AuditResultPart("rejected")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Node rejected"})
 }
 
-
 func (h *Handlers) DeleteNode(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
-	db.DB.Exec("DELETE FROM nodes WHERE id = ?", id)
+	var name string
+	if err := db.DB.QueryRow("SELECT name FROM nodes WHERE id = ?", id).Scan(&name); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Node not found"})
+		return
+	}
+	if _, err := db.DB.Exec("DELETE FROM nodes WHERE id = ?", id); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete node"})
+		return
+	}
+	recordAudit(c, "删除", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", id), name))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Node deleted"})
 }
-
 
 func (h *Handlers) UpdateNode(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
@@ -133,26 +162,48 @@ func (h *Handlers) UpdateNode(c *gin.Context) {
 	var req models.UpdateNodeRequest
 	c.ShouldBindJSON(&req)
 
+	var name string
+	if err := db.DB.QueryRow("SELECT name FROM nodes WHERE id = ?", id).Scan(&name); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Node not found"})
+		return
+	}
+	changed := []string{}
 	if req.Name != "" {
-		db.DB.Exec("UPDATE nodes SET name = ? WHERE id = ?", req.Name, id)
+		if _, err := db.DB.Exec("UPDATE nodes SET name = ? WHERE id = ?", req.Name, id); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update node name"})
+			return
+		}
+		changed = append(changed, "name")
+		name = req.Name
 	}
 	if req.SyncEnabled != nil {
-		db.DB.Exec("UPDATE nodes SET sync_enabled = ? WHERE id = ?", *req.SyncEnabled, id)
+		if _, err := db.DB.Exec("UPDATE nodes SET sync_enabled = ? WHERE id = ?", *req.SyncEnabled, id); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update sync setting"})
+			return
+		}
+		changed = append(changed, "sync_enabled")
 	}
 	if req.SyncInterval != nil {
-		db.DB.Exec("UPDATE nodes SET sync_interval = ? WHERE id = ?", *req.SyncInterval, id)
+		if _, err := db.DB.Exec("UPDATE nodes SET sync_interval = ? WHERE id = ?", *req.SyncInterval, id); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update sync interval"})
+			return
+		}
+		changed = append(changed, "sync_interval")
 	}
 	if req.SyncScope != "" {
-		db.DB.Exec("UPDATE nodes SET sync_scope = ? WHERE id = ?", req.SyncScope, id)
+		if _, err := db.DB.Exec("UPDATE nodes SET sync_scope = ? WHERE id = ?", req.SyncScope, id); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update sync scope"})
+			return
+		}
+		changed = append(changed, "sync_scope")
 	}
 
+	recordAudit(c, "更新", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", id), name, fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Node updated"})
 }
-
 
 func (h *Handlers) NodeHeartbeat(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	db.DB.Exec("UPDATE nodes SET status = 'online', last_seen = datetime('now') WHERE id = ?", id)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Heartbeat received"})
 }
-

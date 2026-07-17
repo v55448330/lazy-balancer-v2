@@ -38,13 +38,27 @@
 import { ref, computed } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Connection, Check } from '@element-plus/icons-vue'
 
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
-const settings = defineModel<any>('settings', { required: true })
+interface ClusterSettingsConfig {
+  is_master: boolean
+  master_url: string
+  sync_interval: number
+}
+
+interface ConfigPreviewResponse {
+  data?: {
+    changed: boolean
+    section: string
+    changes: string[]
+  }
+}
+
+const settings = defineModel<ClusterSettingsConfig>('settings', { required: true })
 const emit = defineEmits<{
   (e: 'save'): void
 }>()
@@ -52,13 +66,25 @@ const emit = defineEmits<{
 const saving = ref(false)
 
 const handleSave = async () => {
+  if (saving.value) return
   saving.value = true
   try {
-    await request.put('/config', {
+    const payload = {
       is_master: settings.value.is_master,
       master_url: settings.value.master_url,
       sync_interval: settings.value.sync_interval,
-    })
+      source: 'cluster',
+    }
+    const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
+    if (preview.data?.changed) {
+      const changes = preview.data.changes.length > 0 ? preview.data.changes.join('；') : '检测到配置变更'
+      await ElMessageBox.confirm(changes, `确认保存${preview.data.section || '集群设置'}？`, {
+        confirmButtonText: '确认',
+        cancelButtonText: '取消',
+        type: 'warning',
+      })
+    }
+    await request.put('/config', payload)
     ElMessage.success('保存成功')
     emit('save')
   } catch (error) {

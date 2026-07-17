@@ -102,7 +102,7 @@
                 </div>
               </div>
             </el-popover>
-            <el-tag v-else type="info" size="small" effect="plain">禁用</el-tag>
+            <span v-else class="text-secondary">-</span>
           </template>
         </el-table-column>
         <el-table-column label="健康" width="80" align="center">
@@ -154,7 +154,13 @@
         </el-table-column>
         <el-table-column label="状态" width="70" align="center">
           <template #default="{ row }">
-            <el-switch v-model="row.enabled" :disabled="authStore.nodeMode === 'slave' || isCertJobActive(certJobMap[row.caddy_id]?.status)" @change="toggleRule(row)" class="status-switch" />
+            <el-switch
+              v-model="row.enabled"
+              :loading="ruleTogglePending[row.caddy_id]"
+              :disabled="authStore.nodeMode === 'slave' || isCertJobActive(certJobMap[row.caddy_id]?.status) || ruleTogglePending[row.caddy_id]"
+              @change="toggleRule(row)"
+              class="status-switch"
+            />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="160" fixed="right" align="center">
@@ -931,6 +937,7 @@ const rules = ref<Rule[]>([])
 const users = ref<any[]>([])
 const certInfoMap = ref<Record<string, CertInfo | null>>({})
 const certJobMap = ref<Record<string, CertJob>>({})
+const ruleTogglePending = ref<Record<string, boolean>>({})
 
 const getUpdaterName = (userId?: number) => {
   if (!userId || userId === 0) return '-'
@@ -1005,13 +1012,14 @@ const fetchCertJobs = async () => {
 
 const isCertJobActive = (status?: string) => {
   if (!status) return false
-  return !['issued', 'failed'].includes(status)
+  return !['issued', 'failed', 'disabled'].includes(status)
 }
 
 const certJobStatusLabel = (status?: string) => {
   switch (status) {
     case 'issued': return '已签发'
     case 'failed': return '签发失败'
+    case 'disabled': return '已禁用'
     case 'pending': return '待处理'
     case 'queued':
     case 'creating_account':
@@ -1852,7 +1860,10 @@ const submitWizard = async () => {
 }
 
 const toggleRule = async (rule: Rule) => {
+  if (ruleTogglePending.value[rule.caddy_id]) return
+  const nextEnabled = rule.enabled
   const action = rule.enabled ? '启用' : '禁用'
+  ruleTogglePending.value[rule.caddy_id] = true
   try {
     await ElMessageBox.confirm(`确定要${action}规则 "${rule.name}" 吗？`, `${action}确认`, { type: 'warning' })
     if (rule.enabled) {
@@ -1861,9 +1872,11 @@ const toggleRule = async (rule: Rule) => {
       await request.put(`/rules/${rule.caddy_id}/disable`)
     }
     ElMessage.success(`${action}成功`)
-    fetchRules()
+    await fetchRules()
   } catch (e) {
-    rule.enabled = !rule.enabled
+    rule.enabled = !nextEnabled
+  } finally {
+    ruleTogglePending.value[rule.caddy_id] = false
   }
 }
 
@@ -2157,7 +2170,7 @@ onUnmounted(() => {
 }
 .port { font-family: monospace; color: #374151; }
 .tls-tag {
-  min-width: 72px;
+  min-width: 44px;
 }
 .text-secondary { color: #6b7280; }
 .form-tip { font-size: 12px; color: #9ca3af; margin-top: 8px; }

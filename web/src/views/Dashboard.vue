@@ -394,73 +394,69 @@ const connChartOption = computed(() => ({
 }))
 
 let timer: number | null = null
+let fetchAllDataPromise: Promise<void> | null = null
+let isFetchingRuleHealth = false
+let isFetchingRuleMetrics = false
 
-const fetchAllData = async () => {
-  try {
-    const headers = { Authorization: `Bearer ${authStore.token}` }
-    const results = await Promise.allSettled([
-      request.get('/system/info', { headers }),
-      request.get('/system/metrics', { headers }),
-      request.get('/metrics/realtime', { headers }),
-      request.get('/caddy/metrics', { headers }),
-      request.get('/caddy/host-metrics', { headers }),
-      request.get('/rules', { headers }),
-      request.get('/metrics/connections', { headers }),
-      request.get('/caddy/status', { headers }),
-    ])
+const fetchAllData = (): Promise<void> => {
+  if (fetchAllDataPromise) return fetchAllDataPromise
 
-    const getData = (index: number) => results[index].status === 'fulfilled' ? results[index].value : null
-
-    const sysInfoRes = getData(0)
-    const sysMetricsRes = getData(1)
-    const trafficRes = getData(2)
-    const caddyMetricsRes = getData(3)
-    const hostMetricsRes = getData(4)
-    const rulesRes = getData(5)
-    const connStatsRes = getData(6)
-    const caddyStatusRes = getData(7)
-
-    if (sysInfoRes?.data) systemInfo.value = sysInfoRes.data
-    if (sysMetricsRes?.data) systemMetrics.value = sysMetricsRes.data
-    if (caddyMetricsRes?.data) caddyMetrics.value = caddyMetricsRes.data
-    if (hostMetricsRes?.data) hostMetrics.value = hostMetricsRes.data || []
-    if (caddyStatusRes?.data) caddyStatus.value = caddyStatusRes.data?.status || 'unknown'
-
-    if (trafficRes?.data) {
-      const data = trafficRes.data
+  const headers = { Authorization: `Bearer ${authStore.token}` }
+  fetchAllDataPromise = Promise.allSettled([
+    request.get('/system/info', { headers }).then((res) => {
+      if (res.data) systemInfo.value = res.data
+    }),
+    request.get('/system/metrics', { headers }).then((res) => {
+      if (res.data) systemMetrics.value = res.data
+    }),
+    request.get('/metrics/realtime', { headers }).then((res) => {
+      if (!res.data) return
+      const data = res.data
       realtimeTraffic.value = data
       const now = Date.now()
       trafficInHistory.value = [...trafficInHistory.value, data?.bytes_in || 0].slice(-60)
       trafficOutHistory.value = [...trafficOutHistory.value, data?.bytes_out || 0].slice(-60)
       trafficTimestamps.value = [...trafficTimestamps.value, now].slice(-60)
-    }
-
-    if (connStatsRes?.data) {
-      const connData = connStatsRes.data
+    }),
+    request.get('/caddy/metrics', { headers }).then((res) => {
+      if (res.data) caddyMetrics.value = res.data
+    }),
+    request.get('/caddy/host-metrics', { headers }).then((res) => {
+      if (res.data) hostMetrics.value = res.data || []
+    }),
+    request.get('/rules', { headers }).then((res) => {
+      if (!res.data) return
+      rules.value = res.data || []
+      void Promise.allSettled([fetchRuleMetrics(), fetchRuleHealth()])
+    }),
+    request.get('/metrics/connections', { headers }).then((res) => {
+      if (!res.data) return
+      const connData = res.data
       connectionStats.value = connData
       const now = Date.now()
       connEstablishedHistory.value = [...connEstablishedHistory.value, connData?.established || 0].slice(-60)
       connTimeWaitHistory.value = [...connTimeWaitHistory.value, connData?.time_wait || 0].slice(-60)
       connTimestamps.value = [...connTimestamps.value, now].slice(-60)
-    }
+    }),
+    request.get('/caddy/status', { headers }).then((res) => {
+      if (res.data) caddyStatus.value = res.data.status || 'unknown'
+    }),
+  ]).then(() => undefined).finally(() => {
+    fetchAllDataPromise = null
+  })
 
-    if (rulesRes?.data) {
-      rules.value = rulesRes.data || []
-      // Load metrics immediately after rules are known
-      fetchRuleMetrics()
-    }
-  } catch (e) {
-    console.error(e)
-  }
+  return fetchAllDataPromise
 }
 
 const fetchRuleHealth = async () => {
-  if (rules.value.length === 0) return
+  if (rules.value.length === 0 || isFetchingRuleHealth) return
+  isFetchingRuleHealth = true
+  const currentRules = rules.value
   try {
     const res = await request.get('/config/health')
     const healthData = res.data || {}
     const newRuleMetrics: Record<string, RuleMetrics> = { ...ruleMetrics.value }
-    rules.value.forEach((rule: Rule) => {
+    currentRules.forEach((rule: Rule) => {
       const metrics = newRuleMetrics[rule.caddy_id] || {
         requests_total: 0,
         requests_in_flight: 0,
@@ -506,21 +502,25 @@ const fetchRuleHealth = async () => {
     ruleMetrics.value = newRuleMetrics
   } catch (e) {
     console.error('Failed to fetch rule health:', e)
+  } finally {
+    isFetchingRuleHealth = false
   }
 }
 
 const fetchRuleMetrics = async () => {
-  if (rules.value.length === 0) return
+  if (rules.value.length === 0 || isFetchingRuleMetrics) return
+  isFetchingRuleMetrics = true
+  const currentRules = rules.value
   try {
     const headers = { Authorization: `Bearer ${authStore.token}` }
-    const metricsPromises = rules.value.map((rule: Rule) =>
+    const metricsPromises = currentRules.map((rule: Rule) =>
       request.get(`/metrics/rule/${rule.caddy_id}`, { headers })
     )
     const metricsResults = await Promise.allSettled(metricsPromises)
     const newRuleMetrics: Record<string, RuleMetrics> = {}
     metricsResults.forEach((result: any, index: number) => {
       if (result.status === 'fulfilled' && result.value?.data) {
-        newRuleMetrics[rules.value[index].caddy_id] = result.value.data
+        newRuleMetrics[currentRules[index].caddy_id] = result.value.data
       }
     })
     // Preserve existing health values until health endpoint updates them
@@ -534,6 +534,8 @@ const fetchRuleMetrics = async () => {
     ruleMetrics.value = newRuleMetrics
   } catch (e) {
     console.error('Failed to fetch rule metrics:', e)
+  } finally {
+    isFetchingRuleMetrics = false
   }
 }
 
@@ -584,10 +586,9 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
 }
 
 onMounted(() => {
-  fetchAllData().then(() => fetchRuleHealth())
+  fetchAllData()
   timer = window.setInterval(() => {
-    fetchAllData().then(() => fetchRuleHealth())
-    fetchRuleMetrics()
+    fetchAllData()
   }, 5000)
 })
 

@@ -26,6 +26,7 @@ type APIKey struct {
 	CreatedBy int          `json:"created_by"`
 	LastUsed  sql.NullTime `json:"last_used"`
 	ExpiresAt sql.NullTime `json:"expires_at"`
+	IsEnabled bool         `json:"is_enabled"`
 	CreatedAt time.Time    `json:"created_at"`
 }
 
@@ -130,6 +131,8 @@ type GlobalConfig struct {
 	CertJobLogSizeMB         int          `json:"cert_job_log_size_mb"`
 	AccessLogJSON            bool         `json:"access_log_json"`
 	AccessLogFormat          string       `json:"access_log_format"`
+	AuditRetentionMonths     int          `json:"audit_retention_months"`
+	JWTExpireMinutes         int          `json:"jwt_expire_minutes"`
 	Timezone                 string       `json:"timezone"`
 	IsMaster                 bool         `json:"is_master"`
 	MasterURL                string       `json:"master_url"`
@@ -216,6 +219,7 @@ type CertJob struct {
 	RuleID           string       `json:"rule_id"`
 	Domain           string       `json:"domain"`
 	CAProviderID     int          `json:"ca_provider_id"`
+	CAProviderName   string       `json:"ca_provider_name,omitempty"`
 	Status           string       `json:"status"`
 	Message          string       `json:"message"`
 	CertPEM          string       `json:"cert_pem,omitempty"`
@@ -389,6 +393,7 @@ type UpdateRuleRequest struct {
 }
 
 type UpdateConfigRequest struct {
+	Source                   string  `json:"source"`
 	DNSProvider              *string `json:"dns_provider"`
 	DNSCredentials           *string `json:"dns_credentials"`
 	ACMEEmail                *string `json:"acme_email"`
@@ -409,6 +414,8 @@ type UpdateConfigRequest struct {
 	CertJobLogSizeMB         *int    `json:"cert_job_log_size_mb"`
 	AccessLogJSON            *bool   `json:"access_log_json"`
 	AccessLogFormat          *string `json:"access_log_format"`
+	AuditRetentionMonths     *int    `json:"audit_retention_months"`
+	JWTExpireMinutes         *int    `json:"jwt_expire_minutes"`
 	Timezone                 *string `json:"timezone"`
 	IsMaster                 *bool   `json:"is_master"`
 	MasterURL                *string `json:"master_url"`

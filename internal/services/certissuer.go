@@ -223,14 +223,22 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		return fmt.Errorf("update cert job: %w", err)
 	}
 
+	RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书签发成功，过期时间 %s", ruleID, notAfter.Format("2006-01-02")), "")
+
 	if err := WriteCertFiles(ruleID, certPEM, keyPEM); err != nil {
 		log.Printf("Cert issued for rule %s but file write failed: %v", ruleID, err)
+		RecordAuditLog("system", "写入失败", "证书文件", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(ruleID), AuditResultPart("io_error")), "")
+	} else {
+		RecordAuditLog("system", "写入", "证书文件", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(ruleID), AuditResultPart("success")), "")
 	}
 
 	// Reload Caddy to pick up the new certificate
 	if s.caddyReloader != nil {
 		if err := s.caddyReloader(); err != nil {
 			log.Printf("Cert issued but Caddy reload failed: %v", err)
+			RecordAuditLog("system", "重载失败", "Caddy配置", FormatAuditDetail(AuditSourcePart("certificate_issued"), AuditJobPart(jobID), AuditRulePart(ruleID)), "")
+		} else {
+			RecordAuditLog("system", "重载", "Caddy配置", FormatAuditDetail(AuditSourcePart("certificate_issued"), AuditJobPart(jobID), AuditRulePart(ruleID), AuditResultPart("success")), "")
 		}
 	}
 

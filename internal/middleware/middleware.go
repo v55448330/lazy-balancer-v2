@@ -1,16 +1,18 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strings"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/handlers"
+	"lazy-balancer-v2/internal/services"
 
 	"github.com/gin-gonic/gin"
 	jwt "github.com/golang-jwt/jwt/v5"
-	"golang.org/x/crypto/bcrypt"
 )
 
 func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
@@ -24,6 +26,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 	// CORS
 	r.Use(corsMiddleware())
+	r.Use(auditMiddleware())
 
 	// Serve static files
 	r.Static("/assets", cfg.StaticDir+"/assets")
@@ -38,24 +41,20 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	})
 
 	// API routes
-	api := r.Group("/api")
+	v1 := r.Group("/api/v1")
 	{
-		// Auth (public)
-		api.POST("/auth/login", h.Login)
+		v1.GET("/openapi.yaml", h.GetOpenAPIYAML)
+		v1.GET("/docs", h.GetAPIDocs)
+		v1.POST("/auth/login", h.Login)
 
-		// API Key auth (public)
-		api.Use(apiKeyAuth(cfg))
+		v1.Use(apiKeyAuth(cfg))
+		v1.GET("/caddy/metrics", h.GetCaddyMetrics)
+
+		v1.Use(jwtAuth(cfg))
 		{
-			api.POST("/auth/logout", h.Logout)
-		}
-
-		api.GET("/caddy/metrics", h.GetCaddyMetrics)
-
-		// Protected routes
-		api.Use(jwtAuth(cfg))
-		{
+			v1.POST("/auth/logout", h.Logout)
 			// User management (admin only)
-			admin := api.Group("")
+			admin := v1.Group("")
 			admin.Use(adminOnly())
 			{
 				admin.GET("/users", h.ListUsers)
@@ -66,9 +65,10 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.DELETE("/users/:id", h.DeleteUser)
 
 				// API Keys
-				admin.GET("/keys", h.ListAPIKeys)
-				admin.POST("/keys", h.CreateAPIKey)
-				admin.DELETE("/keys/:id", h.DeleteAPIKey)
+				admin.GET("/api-keys", h.ListAPIKeys)
+				admin.POST("/api-keys", h.CreateAPIKey)
+				admin.PATCH("/api-keys/:id/status", h.UpdateAPIKeyStatus)
+				admin.DELETE("/api-keys/:id", h.DeleteAPIKey)
 
 				// CA Providers (admin only for update/test)
 				admin.PUT("/ca-providers/:id", h.UpdateCAProvider)
@@ -82,6 +82,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.DELETE("/nodes/:id", h.DeleteNode)
 
 				// Config
+				admin.POST("/config/preview", h.PreviewConfigUpdate)
 				admin.PUT("/config", h.UpdateConfig)
 				admin.POST("/config/reload", h.ReloadCaddy)
 				admin.POST("/config/validate", h.ValidateConfig)
@@ -95,80 +96,120 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			// User + Admin
 			{
 				// Current user (self)
-				api.GET("/users/me", h.GetCurrentUser)
-				api.PUT("/users/me", h.UpdateCurrentUser)
+				v1.GET("/users/me", h.GetCurrentUser)
+				v1.PATCH("/users/me", h.UpdateCurrentUser)
+				v1.GET("/users/me/api-keys", h.ListCurrentUserAPIKeys)
+				v1.POST("/users/me/api-keys", h.CreateCurrentUserAPIKey)
+				v1.PATCH("/users/me/api-keys/:id", h.UpdateCurrentUserAPIKeyStatus)
+				v1.DELETE("/users/me/api-keys/:id", h.DeleteCurrentUserAPIKey)
 
 				// Rules
-				api.GET("/rules", h.ListRules)
-				api.GET("/rules/:caddy_id", h.GetRule)
-				api.GET("/rules/:caddy_id/caddy-config", h.GetRuleCaddyConfig)
-	api.GET("/rules/:caddy_id/logs", h.GetRuleLogs)
-				api.GET("/rules/:caddy_id/cert-info", h.GetRuleCertInfo)
-				api.POST("/rules/cert-info", h.GetRulesCertInfo)
-				api.POST("/rules", h.CreateRule)
-				api.PUT("/rules/:caddy_id", h.UpdateRule)
-				api.DELETE("/rules/:caddy_id", h.DeleteRule)
-				api.POST("/rules/:caddy_id/enable", h.EnableRule)
-				api.PUT("/rules/:caddy_id/disable", h.DisableRule)
-				api.POST("/rules/:caddy_id/duplicate", h.DuplicateRule)
+				v1.GET("/rules", h.ListRules)
+				v1.GET("/rules/:caddy_id", h.GetRule)
+				v1.GET("/rules/:caddy_id/caddy-config", h.GetRuleCaddyConfig)
+				v1.GET("/rules/:caddy_id/logs", h.GetRuleLogs)
+				v1.GET("/rules/:caddy_id/cert-info", h.GetRuleCertInfo)
+				v1.POST("/rules/cert-info", h.GetRulesCertInfo)
+				v1.POST("/rules", h.CreateRule)
+				v1.PUT("/rules/:caddy_id", h.UpdateRule)
+				v1.DELETE("/rules/:caddy_id", h.DeleteRule)
+				v1.POST("/rules/:caddy_id/enable", h.EnableRule)
+				v1.PUT("/rules/:caddy_id/disable", h.DisableRule)
+				v1.POST("/rules/:caddy_id/duplicate", h.DuplicateRule)
 
 				// Certificate Configs
-				api.GET("/certificate-configs", h.ListCertificateConfigs)
-				api.POST("/certificate-configs", h.CreateCertificateConfig)
-				api.PUT("/certificate-configs/:id", h.UpdateCertificateConfig)
-				api.DELETE("/certificate-configs/:id", h.DeleteCertificateConfig)
-				api.GET("/dns-providers", h.ListDNSProviders)
-				api.GET("/ca-providers", h.ListCAProviders)
-				api.GET("/ca-providers/:id", h.GetCAProvider)
-				api.POST("/certificate-configs/test", h.TestCertificateConfig)
-				api.POST("/certificate-configs/:id/test", h.TestCertificateConfig)
+				v1.GET("/certificate-configs", h.ListCertificateConfigs)
+				v1.POST("/certificate-configs", h.CreateCertificateConfig)
+				v1.PUT("/certificate-configs/:id", h.UpdateCertificateConfig)
+				v1.DELETE("/certificate-configs/:id", h.DeleteCertificateConfig)
+				v1.GET("/dns-providers", h.ListDNSProviders)
+				v1.GET("/ca-providers", h.ListCAProviders)
+				v1.GET("/ca-providers/:id", h.GetCAProvider)
+				v1.POST("/certificate-configs/test", h.TestCertificateConfig)
+				v1.POST("/certificate-configs/:id/test", h.TestCertificateConfig)
 
 				// Config (read only for non-admin)
-				api.GET("/config", h.GetConfig)
+				v1.GET("/config", h.GetConfig)
 
 				// Metrics
-				api.GET("/metrics/overview", h.GetMetricsOverview)
-				api.GET("/metrics/rule/:caddy_id", h.GetRuleMetrics)
-				api.GET("/metrics/history", h.GetMetricsHistory)
-				api.GET("/metrics/realtime", h.GetRealtimeTraffic)
-				api.GET("/metrics/connections", h.GetConnectionStats)
+				v1.GET("/metrics/overview", h.GetMetricsOverview)
+				v1.GET("/metrics/rule/:caddy_id", h.GetRuleMetrics)
+				v1.GET("/metrics/history", h.GetMetricsHistory)
+				v1.GET("/metrics/realtime", h.GetRealtimeTraffic)
+				v1.GET("/metrics/connections", h.GetConnectionStats)
 
 				// System
-				api.GET("/system/info", h.GetSystemInfo)
-				api.GET("/system/metrics", h.GetSystemMetrics)
+				v1.GET("/system/info", h.GetSystemInfo)
+				v1.GET("/system/metrics", h.GetSystemMetrics)
 
-			// Caddy
-			api.GET("/caddy/status", h.GetCaddyStatus)
-			api.GET("/caddy/config", h.GetCaddyConfig)
-			api.GET("/caddy/logs", h.GetCaddyLogs)
-			api.PUT("/caddy/config", h.PutCaddyConfig)
-				api.GET("/caddy/host-metrics", h.GetHostMetrics)
-				api.POST("/caddy/start", h.StartCaddy)
-				api.POST("/caddy/stop", h.StopCaddy)
-				api.POST("/caddy/restart", h.RestartCaddy)
+				// Caddy
+				v1.GET("/caddy/status", h.GetCaddyStatus)
+				v1.GET("/caddy/config", h.GetCaddyConfig)
+				v1.GET("/caddy/logs", h.GetCaddyLogs)
+				v1.PUT("/caddy/config", h.PutCaddyConfig)
+				v1.GET("/caddy/host-metrics", h.GetHostMetrics)
+				v1.POST("/caddy/start", h.StartCaddy)
+				v1.POST("/caddy/stop", h.StopCaddy)
+				v1.POST("/caddy/restart", h.RestartCaddy)
 
 				// Sync
-				api.GET("/sync/status", h.GetSyncStatus)
+				v1.GET("/sync/status", h.GetSyncStatus)
 
 				// Nodes
-				api.POST("/nodes/register", h.RegisterNode)
-				api.POST("/nodes/:id/heartbeat", h.NodeHeartbeat)
-				api.PUT("/nodes/:id", h.UpdateNode)
+				v1.POST("/nodes/register", h.RegisterNode)
+				v1.POST("/nodes/:id/heartbeat", h.NodeHeartbeat)
+				v1.PUT("/nodes/:id", h.UpdateNode)
 
 				// Certificates
-				api.GET("/certificates", h.ListCertificates)
-				api.POST("/certificates/issue", h.IssueCertificate)
-				api.POST("/certificates/parse", h.ParseCertificate)
-				api.GET("/certificates/jobs", h.ListCertJobs)
-				api.GET("/certificates/jobs/:id", h.GetCertJob)
-				api.GET("/certificates/jobs/:id/logs", h.GetCertJobLogs)
-				api.POST("/certificates/jobs/:id/retry", h.RetryCertJob)
-				api.DELETE("/certificates/jobs/:id", h.DeleteCertJob)
+				v1.GET("/certificates", h.ListCertificates)
+				v1.POST("/certificates/issue", h.IssueCertificate)
+				v1.POST("/certificates/parse", h.ParseCertificate)
+				v1.GET("/certificates/jobs", h.ListCertJobs)
+				v1.GET("/certificates/jobs/:id", h.GetCertJob)
+				v1.GET("/certificates/jobs/:id/logs", h.GetCertJobLogs)
+				v1.POST("/certificates/jobs/:id/retry", h.RetryCertJob)
+				v1.DELETE("/certificates/jobs/:id", h.DeleteCertJob)
+
+				v1.GET("/audit-logs", h.GetAuditLogs)
 			}
 		}
 	}
 
+	services.StartAuditCleanup()
+
 	return r
+}
+
+func auditMiddleware() gin.HandlerFunc {
+	writeMethods := map[string]bool{"POST": true, "PUT": true, "DELETE": true}
+	return func(c *gin.Context) {
+		c.Next()
+
+		if !writeMethods[c.Request.Method] {
+			return
+		}
+		path := c.FullPath()
+		policy := services.ClassifyAuditRoute(c.Request.Method, path)
+		if policy == services.AuditPolicySkip || services.HasExplicitAuditEvent(c.Request.Method, path) {
+			return
+		}
+		if c.Writer.Status() >= 400 {
+			return
+		}
+
+		action, resource, detail := services.FormatAuditAction(c.Request.Method, path)
+		if action == "" {
+			return
+		}
+
+		username, _ := c.Get("username")
+		usernameStr, _ := username.(string)
+		if c.GetString("auth_type") == "api_key" {
+			detail = services.AppendAPIKeyAuditDetail(detail, c.GetInt("api_key_id"), c.GetString("api_key_name"))
+		}
+
+		services.RecordAuditLog(usernameStr, action, resource, detail, c.ClientIP())
+	}
 }
 
 func corsMiddleware() gin.HandlerFunc {
@@ -188,6 +229,10 @@ func corsMiddleware() gin.HandlerFunc {
 
 func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if c.GetString("auth_type") == "api_key" {
+			c.Next()
+			return
+		}
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Missing authorization header"})
@@ -237,34 +282,48 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 
 		apiKey := c.GetHeader("X-API-Key")
 		if apiKey == "" {
+			authHeader := c.GetHeader("Authorization")
+			if strings.HasPrefix(authHeader, "Bearer lb_sk_") {
+				apiKey = strings.TrimPrefix(authHeader, "Bearer ")
+			}
+		}
+		if apiKey == "" {
 			c.Next()
 			return
 		}
+		if len(apiKey) < 13 {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid API key"})
+			c.Abort()
+			return
+		}
+		prefix := apiKey[:12]
+		hash := sha256.Sum256([]byte(apiKey))
+		keyHash := hex.EncodeToString(hash[:])
 
-		// Validate API key
-		var keyHash string
-		err := db.DB.QueryRow("SELECT key_hash FROM api_keys WHERE key_prefix = ?",
-			apiKey[:12]).Scan(&keyHash)
-
+		var keyID, userID int
+		var keyName, username, role string
+		err := db.DB.QueryRow(`
+			SELECT k.id, k.name, u.id, u.username, u.role
+			FROM api_keys k
+			JOIN users u ON u.id = k.created_by
+			WHERE k.key_prefix = ? AND k.key_hash = ?
+			  AND k.is_enabled = 1
+			  AND u.is_enabled = 1
+			  AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))
+		`, prefix, keyHash).Scan(&keyID, &keyName, &userID, &username, &role)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid API key"})
 			c.Abort()
 			return
 		}
 
-		// Verify key
-		if err := bcrypt.CompareHashAndPassword([]byte(keyHash), []byte(apiKey)); err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid API key"})
-			c.Abort()
-			return
-		}
-
-		// Update last used
-		db.DB.Exec("UPDATE api_keys SET last_used = datetime('now') WHERE key_prefix = ?", apiKey[:12])
-
-		// Set admin role for API key
-		c.Set("user_id", 0)
-		c.Set("role", "admin")
+		db.DB.Exec("UPDATE api_keys SET last_used = datetime('now') WHERE id = ?", keyID)
+		c.Set("user_id", userID)
+		c.Set("username", username)
+		c.Set("role", role)
+		c.Set("auth_type", "api_key")
+		c.Set("api_key_id", keyID)
+		c.Set("api_key_name", keyName)
 
 		c.Next()
 	}

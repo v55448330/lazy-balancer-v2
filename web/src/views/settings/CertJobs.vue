@@ -14,24 +14,23 @@
         <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
       </template>
     </el-table-column>
-    <el-table-column label="颁发者" min-width="160" show-overflow-tooltip>
+    <el-table-column label="颁发者" width="110" show-overflow-tooltip>
       <template #default="{ row }">
-        <span v-if="row.status === 'issued' && certInfoMap[row.id]" class="cell-text">{{ certInfoMap[row.id].issuer || '-' }}</span>
-        <span v-else class="cell-empty">-</span>
+        <span :class="row.ca_provider_name ? 'cell-text' : 'cell-empty'">{{ row.ca_provider_name || '-' }}</span>
       </template>
     </el-table-column>
-    <el-table-column label="过期时间" min-width="140" show-overflow-tooltip>
+    <el-table-column label="过期时间" width="180">
       <template #default="{ row }">
         <span v-if="row.status === 'issued' && certInfoMap[row.id]" class="cell-text">{{ certInfoMap[row.id].not_after || '-' }}</span>
         <span v-else class="cell-empty">-</span>
       </template>
     </el-table-column>
-    <el-table-column label="更新时间" min-width="140" show-overflow-tooltip>
+    <el-table-column label="更新时间" width="180">
       <template #default="{ row }">
         <span class="cell-text">{{ formatDate(row.updated_at) || '-' }}</span>
       </template>
     </el-table-column>
-    <el-table-column label="自动重签时间" min-width="120" show-overflow-tooltip>
+    <el-table-column label="自动重签时间" width="180">
       <template #default="{ row }">
         <span v-if="row.status === 'issued' && certInfoMap[row.id]" class="cell-text">{{ renewalInfo(row).renewalDate || '-' }}</span>
         <span v-else class="cell-empty">-</span>
@@ -120,6 +119,7 @@ type CertJobStatus =
   | 'issued'
   | 'failed'
   | 'waiting_ca'
+  | 'disabled'
 
 interface CertJob {
   id: number
@@ -130,6 +130,7 @@ interface CertJob {
   expires_at?: string
   updated_at?: string
   cert_pem?: string
+  ca_provider_name?: string
   renewal_attempts?: number
   ca_available_after?: string
   last_error_code?: string
@@ -179,6 +180,7 @@ const statusType = (status: CertJobStatus) => {
   switch (status) {
     case 'issued': return 'success'
     case 'failed': return 'danger'
+    case 'disabled': return 'info'
     case 'queued': return 'info'
     case 'waiting_ca': return 'warning'
     case 'pending':
@@ -207,6 +209,7 @@ const statusLabel = (status: CertJobStatus) => {
   switch (status) {
     case 'issued': return '已签发'
     case 'failed': return '失败'
+    case 'disabled': return '已禁用'
     case 'queued': return '排队中'
     case 'waiting_ca': return '等待 CA'
     case 'pending': return '待处理'
@@ -231,7 +234,7 @@ const statusLabel = (status: CertJobStatus) => {
 }
 
 const canRetry = (status: CertJobStatus) => {
-  return status !== 'queued' && status !== 'pending'
+  return status !== 'queued' && status !== 'pending' && status !== 'disabled'
 }
 
 const isQueued = (status: CertJobStatus) => status === 'queued'

@@ -93,7 +93,7 @@ const handleLogin = async () => {
     try {
       await authStore.login(form.username, form.password)
     } catch (e: any) {
-      error.value = e.message || '登录失败，请检查用户名和密码'
+      error.value = (e as any)?.response?.data?.message || (e as any)?.message || '登录失败，请稍后重试'
     } finally {
       loading.value = false
     }

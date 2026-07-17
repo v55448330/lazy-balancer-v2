@@ -250,6 +250,8 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 		WriteCertJobLog(jobID, "ERROR", "failed", fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts))
 		if _, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=?, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?", fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts), attempts, jobID); err != nil {
 			log.Printf("CA queue: failed to mark job %d as failed at max attempts: %v", jobID, err)
+		} else {
+			RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("max_attempts")), "")
 		}
 		return
 	}
@@ -260,6 +262,8 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 		available.UTC().Format("2006-01-02 15:04:05"), attempts, jobID,
 	); err != nil {
 		log.Printf("CA queue: failed to mark job %d as waiting_ca: %v", jobID, err)
+	} else {
+		RecordAuditLog("system", "CA限流", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), fmt.Sprintf("第 %d 次限流", attempts), fmt.Sprintf("恢复时间：%s", display.Format("2006-01-02 15:04:05"))), "")
 	}
 }
 func failJob(jobID int, message string) {
@@ -270,7 +274,7 @@ func failJob(jobID int, message string) {
 	WriteCertJobLog(jobID, "ERROR", "failed", message)
 	if _, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=COALESCE(renewal_attempts,0)+1, updated_at=datetime('now') WHERE id=?", message, jobID); err != nil {
 		log.Printf("CA queue: failed to mark job %d as failed: %v", jobID, err)
+	} else {
+		RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("failed")), "")
 	}
 }
-
-

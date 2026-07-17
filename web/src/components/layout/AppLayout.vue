@@ -36,10 +36,6 @@
           <el-icon><Cpu /></el-icon>
           <template #title>全局配置</template>
         </el-menu-item>
-        <el-menu-item v-if="authStore.user?.role === 'admin'" index="users" @click="goPage('users')">
-          <el-icon><User /></el-icon>
-          <template #title>用户管理</template>
-        </el-menu-item>
         <el-sub-menu index="settings" v-if="authStore.user?.role === 'admin'">
           <template #title>
             <el-icon><Setting /></el-icon>
@@ -61,10 +57,18 @@
             <el-icon><Key /></el-icon>
             <template #title>API 密钥</template>
           </el-menu-item>
+          <el-menu-item index="users" @click="goPage('users')">
+            <el-icon><User /></el-icon>
+            <template #title>用户管理</template>
+          </el-menu-item>
         </el-sub-menu>
         <el-menu-item v-else index="settings" @click="goPage('settings-basic')">
           <el-icon><Setting /></el-icon>
           <template #title>系统设置</template>
+        </el-menu-item>
+        <el-menu-item v-if="authStore.user?.role === 'admin'" index="audit-log" @click="goPage('audit-log')">
+          <el-icon><Document /></el-icon>
+          <template #title>操作日志</template>
         </el-menu-item>
       </el-menu>
 
@@ -77,7 +81,7 @@
             <transition name="fade">
               <div v-if="!collapsed" class="user-detail">
                 <div class="user-name">{{ authStore.displayName || '用户' }}</div>
-                <div class="user-role">{{ authStore.userRole }}</div>
+                <div v-if="hasCustomDisplayName" class="user-role">{{ authStore.user?.username || '-' }}</div>
               </div>
             </transition>
           </div>
@@ -110,6 +114,9 @@
       <el-main class="layout-main">
         <slot />
       </el-main>
+      <el-footer class="layout-footer">
+        <span>Copyright © 2026 XiaoBao. All rights reserved.</span>
+      </el-footer>
     </el-container>
 
     <el-dialog v-model="showProfile" title="个人资料" width="480px" :close-on-click-modal="false">
@@ -135,8 +142,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { request } from '@/utils/api'
-import { Monitor, DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key } from '@element-plus/icons-vue'
+import api from '@/utils/api'
+import { Monitor, DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document } from '@element-plus/icons-vue'
 
 const authStore = useAuthStore()
 const collapsed = ref(false)
@@ -144,12 +151,17 @@ const showProfile = ref(false)
 const saving = ref(false)
 
 const currentPage = computed(() => authStore.currentPage)
+const hasCustomDisplayName = computed(() => {
+  const displayName = authStore.normalizeDisplayName(authStore.user?.display_name, '')
+  return displayName !== '' && displayName !== authStore.user?.username
+})
 
 const pageTitle: Record<string, string> = {
   dashboard: '仪表盘',
   rules: '负载均衡',
   caddy: '全局配置',
-  users: '用户管理',
+  users: '系统设置 / 用户管理',
+  'audit-log': '操作日志',
   'settings-basic': '系统设置 / 基础设置',
   'settings-cluster': '系统设置 / 集群管理',
   'settings-certificates': '系统设置 / 免费证书',
@@ -162,12 +174,21 @@ const profileForm = ref({
   password: '',
 })
 
+const syncProfileForm = () => {
+  profileForm.value = {
+    username: authStore.user?.username || '',
+    display_name: authStore.normalizeDisplayName(authStore.user?.display_name, ''),
+    password: '',
+  }
+}
+
 const goPage = (page: string) => {
   authStore.setCurrentPage(page)
 }
 
 const handleCommand = (command: string) => {
   if (command === 'profile') {
+    syncProfileForm()
     showProfile.value = true
   } else if (command === 'logout') {
     authStore.logout()
@@ -177,7 +198,7 @@ const handleCommand = (command: string) => {
 const saveProfile = async () => {
   saving.value = true
   try {
-    await request.put('/users/me', {
+    await api.patch('/users/me', {
       display_name: profileForm.value.display_name,
       ...(profileForm.value.password && { password: profileForm.value.password }),
     })
@@ -190,11 +211,7 @@ const saveProfile = async () => {
 }
 
 onMounted(() => {
-  profileForm.value = {
-    username: authStore.user?.username || '',
-    display_name: authStore.user?.display_name || '',
-    password: '',
-  }
+  syncProfileForm()
 })
 </script>
 
@@ -357,17 +374,31 @@ onMounted(() => {
 }
 
 .aside-footer {
-  padding: 12px;
+  padding: 0;
   border-top: 1px solid #f3f4f6;
+}
+
+.aside-footer :deep(.el-dropdown) {
+  display: block;
+  width: 100%;
+}
+
+.aside-footer :deep(.el-dropdown .el-dropdown__caret-button),
+.aside-footer :deep(.el-dropdown > span),
+.aside-footer :deep(.el-dropdown > div) {
+  width: 100%;
 }
 
 .user-info {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px;
-  border-radius: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 16px;
+  border-radius: 0;
   cursor: pointer;
+  transition: background-color 0.2s;
 }
 
 .user-info:hover {
@@ -380,7 +411,7 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
-.user-detail { flex: 1; min-width: 0; }
+.user-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 
 .user-name {
   font-size: 14px;
@@ -389,14 +420,14 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  line-height: 1.5;
+  line-height: 1.3;
 }
 
 .user-role {
   font-size: 12px;
   color: #9ca3af;
-  line-height: 1.5;
-  margin-top: 6px;
+  line-height: 1.3;
+  margin-top: 0;
 }
 
 .main-container { background: #f3f4f6; }
@@ -445,6 +476,17 @@ onMounted(() => {
 .layout-main {
   padding: 20px;
   overflow-y: auto;
+}
+
+.layout-footer {
+  height: 40px;
+  line-height: 40px;
+  text-align: center;
+  font-size: 12px;
+  color: #909399;
+  flex-shrink: 0;
+  background-color: #ffffff;
+  border-top: 1px solid var(--el-border-color-lighter);
 }
 
 .fade-enter-active,

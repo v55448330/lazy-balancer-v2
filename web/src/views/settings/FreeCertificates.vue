@@ -8,8 +8,8 @@
       </template>
       <el-form :model="global" label-width="140px">
         <el-form-item label="ACME 邮箱" required>
-          <el-input v-model="global.acme_email" placeholder="your@email.com" />
-          <div class="form-tip">用于 Let's Encrypt 账户注册，必须填写</div>
+          <el-input v-model="global.acme_email" placeholder="your@email.com" style="width: 240px;" />
+          <span class="form-tip-inline">用于 CA 账户注册，使用 ACME 签发时必须填写</span>
         </el-form-item>
         <el-form-item label="过期提醒天数">
           <el-input-number v-model="global.cert_expiry_days" :min="1" :max="90" />
@@ -23,15 +23,16 @@
           <span class="form-tip-inline">证书续签失败（包括 CA 频率限制）后的最大自动重试次数</span>
         </el-form-item>
         <el-form-item label="CA 提供商" required>
-          <el-select v-model="global.default_ca_provider_id" style="width: 100%" placeholder="请选择 CA 提供商">
+          <el-select v-model="global.default_ca_provider_id" style="width: 240px;" placeholder="请选择 CA 提供商">
             <el-option v-for="p in enabledCAProviders" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
+          <span class="form-tip-inline">系统默认使用的证书签发机构</span>
         </el-form-item>
         <el-form-item label="DNS 提供商">
-          <el-select v-model="global.dns_provider" style="width: 100%" placeholder="请选择 DNS 提供商">
+          <el-select v-model="global.dns_provider" style="width: 240px;" placeholder="请选择 DNS 提供商">
             <el-option label="DNSPod" value="dnspod" />
           </el-select>
-          <div class="form-tip">设置全局默认 DNS 提供商，后续创建规则时将默认使用</div>
+          <span class="form-tip-inline">全局默认 DNS 提供商，创建规则时默认使用</span>
         </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="saving" @click="handleSave">
@@ -241,11 +242,28 @@ interface CAProviderCredentials {
   eab_hmac_key: string
 }
 
+interface GlobalCertificateConfig {
+  acme_email: string
+  cert_expiry_days: number
+  cert_renewal_days: number
+  cert_renewal_attempts: number
+  default_ca_provider_id: number
+  dns_provider: string
+}
+
+interface ConfigPreviewResponse {
+  data?: {
+    changed: boolean
+    section: string
+    changes: string[]
+  }
+}
+
 const authStore = useAuthStore()
 
-const global = defineModel<any>('global', { required: true })
+const global = defineModel<GlobalCertificateConfig>('global', { required: true })
 const emit = defineEmits<{
-  (e: 'save', payload?: any): void
+  (e: 'save'): void
 }>()
 
 const saving = ref(false)
@@ -549,6 +567,7 @@ const testConfig = async (config: CertConfig) => {
 }
 
 const handleSave = async () => {
+  if (saving.value) return
   if (!global.value.acme_email || !global.value.acme_email.trim()) {
     ElMessage.warning('请填写 ACME 邮箱')
     return
@@ -557,20 +576,37 @@ const handleSave = async () => {
     ElMessage.warning('ACME 邮箱格式不正确')
     return
   }
-    if (!global.value.default_ca_provider_id) {
-      ElMessage.warning('请选择 CA 提供商')
-      return
+  if (!global.value.default_ca_provider_id) {
+    ElMessage.warning('请选择 CA 提供商')
+    return
+  }
+  saving.value = true
+  try {
+    const payload = {
+      acme_email: global.value.acme_email,
+      cert_expiry_days: global.value.cert_expiry_days,
+      cert_renewal_days: global.value.cert_renewal_days,
+      cert_renewal_attempts: global.value.cert_renewal_attempts,
+      default_ca_provider_id: global.value.default_ca_provider_id,
+      dns_provider: global.value.dns_provider || 'dnspod',
+      source: 'acme',
     }
-    saving.value = true
-    try {
-  await emit('save', {
-    acme_email: global.value.acme_email,
-    cert_expiry_days: global.value.cert_expiry_days,
-    cert_renewal_days: global.value.cert_renewal_days,
-    cert_renewal_attempts: global.value.cert_renewal_attempts,
-    default_ca_provider_id: global.value.default_ca_provider_id,
-    dns_provider: global.value.dns_provider || 'dnspod',
-  })
+    const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
+    if (preview.data?.changed) {
+      const changes = preview.data.changes.length > 0 ? preview.data.changes.join('；') : '检测到配置变更'
+      await ElMessageBox.confirm(changes, `确认保存${preview.data.section || 'ACME 设置'}？`, {
+        confirmButtonText: '确认',
+        cancelButtonText: '取消',
+        type: 'warning',
+      })
+    }
+    await request.put('/config', payload)
+    ElMessage.success('保存成功')
+    emit('save')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      console.error('Failed to save certificate settings:', error)
+    }
   } finally {
     saving.value = false
   }

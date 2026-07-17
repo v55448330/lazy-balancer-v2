@@ -99,6 +99,7 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 		if rows, _ := res.RowsAffected(); rows == 0 {
 			continue
 		}
+		RecordAuditLog("system", "重新排队", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(ruleID), AuditSourcePart("ca_cooldown")), "")
 		if err := qm.Enqueue(caProviderID, jobID, ruleID, domain); err != nil {
 			log.Printf("waiting_ca scan: failed to enqueue job %d: %v", jobID, err)
 		}
@@ -151,6 +152,7 @@ func (s *CertificateService) recoverCertJobs() {
 			log.Printf("Failed to update cert job %d status to queued: %v", jobID, err)
 			continue
 		}
+		RecordAuditLog("system", "恢复排队", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(ruleID), AuditSourcePart("startup_recovery")), "")
 		if err := qm.Enqueue(caProviderID, jobID, ruleID, domain); err != nil {
 			log.Printf("Failed to enqueue recovered job %d: %v", jobID, err)
 		}
@@ -249,6 +251,8 @@ func (s *CertificateService) renewExpiringCertificates() {
 					j.ID,
 				); err != nil {
 					log.Printf("Renewal: failed to convert waiting_ca job %d to failed: %v", j.ID, err)
+				} else {
+					RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditResultPart("max_attempts")), "")
 				}
 			}
 			continue
@@ -265,6 +269,7 @@ func (s *CertificateService) renewExpiringCertificates() {
 		if rows, _ := res.RowsAffected(); rows == 0 {
 			continue
 		}
+		RecordAuditLog("system", "续签排队", "证书签发任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditSourcePart("renewal")), "")
 		qm := GetCAQueueManager()
 		if qm == nil {
 			log.Printf("Renewal: CA queue manager not initialized")

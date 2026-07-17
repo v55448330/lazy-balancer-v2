@@ -28,6 +28,14 @@
             <el-input-number v-model="settings.cert_job_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
             <span class="form-tip-inline">MB，单个证书签发日志文件达到该大小后滚动</span>
           </el-form-item>
+          <el-form-item label="日志保留">
+            <el-input-number v-model="settings.audit_retention_months" :min="1" :max="12" controls-position="right" style="width: 120px;" />
+            <span class="form-tip-inline">个月，操作日志保留时间，超期自动清理（最短 1 个月）</span>
+          </el-form-item>
+          <el-form-item label="登录过期">
+            <el-input-number v-model="settings.jwt_expire_minutes" :min="5" :max="1440" controls-position="right" style="width: 120px;" />
+            <span class="form-tip-inline">分钟，登录令牌有效期，默认 20 分钟</span>
+          </el-form-item>
           <el-form-item label="时区">
             <el-select v-model="settings.timezone" filterable style="width: 100%">
               <el-option label="Asia/Shanghai (UTC+8)" value="Asia/Shanghai" />
@@ -93,13 +101,30 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
 import { Setting, InfoFilled, Check } from '@element-plus/icons-vue'
 
 const authStore = useAuthStore()
 
-const settings = defineModel<any>('settings', { required: true })
+interface BasicSettingsConfig {
+  log_level: string
+  access_log_enabled: boolean
+  cert_job_log_size_mb: number
+  audit_retention_months: number
+  jwt_expire_minutes: number
+  timezone: string
+}
+
+interface ConfigPreviewResponse {
+  data?: {
+    changed: boolean
+    section: string
+    changes: string[]
+  }
+}
+
+const settings = defineModel<BasicSettingsConfig>('settings', { required: true })
 const emit = defineEmits<{
   (e: 'save'): void
 }>()
@@ -107,14 +132,28 @@ const emit = defineEmits<{
 const saving = ref(false)
 
 const handleSave = async () => {
+  if (saving.value) return
   saving.value = true
   try {
-    await request.put('/config', {
+    const payload = {
       log_level: settings.value.log_level,
       access_log_enabled: settings.value.access_log_enabled,
       cert_job_log_size_mb: settings.value.cert_job_log_size_mb,
+      audit_retention_months: settings.value.audit_retention_months,
+      jwt_expire_minutes: settings.value.jwt_expire_minutes,
       timezone: settings.value.timezone,
-    })
+      source: 'basic',
+    }
+    const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
+    if (preview.data?.changed) {
+      const changes = preview.data.changes.length > 0 ? preview.data.changes.join('；') : '检测到配置变更'
+      await ElMessageBox.confirm(changes, `确认保存${preview.data.section || '基础设置'}？`, {
+        confirmButtonText: '确认',
+        cancelButtonText: '取消',
+        type: 'warning',
+      })
+    }
+    await request.put('/config', payload)
     ElMessage.success('保存成功')
     emit('save')
   } catch (error) {
