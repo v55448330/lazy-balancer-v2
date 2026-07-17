@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -14,78 +15,119 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
 
-func (h *Handlers) ListAPIKeys(c *gin.Context) {
+func (h *Handlers) ListCurrentUserAPIKeys(c *gin.Context) {
+	userID := currentUserID(c)
 	rows, err := db.DB.Query(`
-		SELECT k.id, k.name, k.key_prefix, k.created_by, k.last_used, k.expires_at, k.created_at, u.username 
-		FROM api_keys k 
-		JOIN users u ON k.created_by = u.id 
+		SELECT k.id, k.name, k.key_prefix, k.created_by, k.last_used, k.expires_at, k.is_enabled, k.created_at, u.username
+		FROM api_keys k
+		JOIN users u ON k.created_by = u.id
+		WHERE k.created_by = ?
 		ORDER BY k.id
-	`)
+	`, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
 		return
 	}
 	defer rows.Close()
-
-	type APIKeyWithUser struct {
-		ID        int          `json:"id"`
-		Name      string       `json:"name"`
-		KeyPrefix string       `json:"key_prefix"`
-		CreatedBy int          `json:"created_by"`
-		Username  string       `json:"username"`
-		LastUsed  sql.NullTime `json:"last_used"`
-		ExpiresAt sql.NullTime `json:"expires_at"`
-		CreatedAt time.Time    `json:"created_at"`
-	}
-
-	var keys []APIKeyWithUser
-	for rows.Next() {
-		var k APIKeyWithUser
-		rows.Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.CreatedBy, &k.LastUsed, &k.ExpiresAt, &k.CreatedAt, &k.Username)
-		keys = append(keys, k)
-	}
-
+	keys := scanAPIKeys(rows)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: keys})
 }
 
+func (h *Handlers) CreateCurrentUserAPIKey(c *gin.Context) {
+	createAPIKeyForUser(c, currentUserID(c))
+}
 
-func (h *Handlers) CreateAPIKey(c *gin.Context) {
+func (h *Handlers) DeleteCurrentUserAPIKey(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	userID := currentUserID(c)
+	var name string
+	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ? AND created_by = ?", id, userID).Scan(&name); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
+		return
+	}
+	if _, err := db.DB.Exec("DELETE FROM api_keys WHERE id = ? AND created_by = ?", id, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete API key"})
+		return
+	}
+	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API key deleted"})
+}
+
+func currentUserID(c *gin.Context) int {
+	userID, _ := c.Get("user_id")
+	switch v := userID.(type) {
+	case int:
+		return v
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
+type apiKeyWithUser struct {
+	ID        int          `json:"id"`
+	Name      string       `json:"name"`
+	KeyPrefix string       `json:"key_prefix"`
+	CreatedBy int          `json:"created_by"`
+	Username  string       `json:"username"`
+	LastUsed  sql.NullTime `json:"last_used"`
+	ExpiresAt sql.NullTime `json:"expires_at"`
+	IsEnabled bool         `json:"is_enabled"`
+	CreatedAt time.Time    `json:"created_at"`
+}
+
+func scanAPIKeys(rows *sql.Rows) []apiKeyWithUser {
+	var keys []apiKeyWithUser
+	for rows.Next() {
+		var k apiKeyWithUser
+		rows.Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.CreatedBy, &k.LastUsed, &k.ExpiresAt, &k.IsEnabled, &k.CreatedAt, &k.Username)
+		keys = append(keys, k)
+	}
+	if keys == nil {
+		keys = []apiKeyWithUser{}
+	}
+	return keys
+}
+
+func createAPIKeyForUser(c *gin.Context, userID int) {
 	var req models.CreateAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
 		return
 	}
 
-	// Generate API key
 	keyBytes := make([]byte, 32)
-	rand.Read(keyBytes)
+	if _, err := rand.Read(keyBytes); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成 API 密钥失败"})
+		return
+	}
 	apiKey := "lb_sk_" + base64.URLEncoding.EncodeToString(keyBytes)[:32]
-
-	// Hash the key for storage
 	hash := sha256.Sum256([]byte(apiKey))
 	keyHash := hex.EncodeToString(hash[:])
 	keyPrefix := apiKey[:12]
-
-	userID, _ := c.Get("user_id")
 
 	var expiresAt *time.Time
 	if req.ExpiresAt != nil {
 		expiresAt = req.ExpiresAt
 	}
-
 	result, err := db.DB.Exec(`
-		INSERT INTO api_keys (name, key_hash, key_prefix, created_by, expires_at) 
+		INSERT INTO api_keys (name, key_hash, key_prefix, created_by, expires_at)
 		VALUES (?, ?, ?, ?, ?)
 	`, req.Name, keyHash, keyPrefix, userID, expiresAt)
-
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to create API key"})
 		return
 	}
-
 	id, _ := result.LastInsertId()
+	expiry := "永不过期"
+	if expiresAt != nil {
+		expiry = expiresAt.Format("2006-01-02")
+	}
+	recordAudit(c, "创建", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), req.Name, fmt.Sprintf("过期：%s", expiry)))
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Data: gin.H{
 		"id":      id,
 		"key":     apiKey,
@@ -93,10 +135,88 @@ func (h *Handlers) CreateAPIKey(c *gin.Context) {
 	}})
 }
 
+func (h *Handlers) ListAPIKeys(c *gin.Context) {
+	rows, err := db.DB.Query(`
+		SELECT k.id, k.name, k.key_prefix, k.created_by, k.last_used, k.expires_at, k.is_enabled, k.created_at, u.username
+		FROM api_keys k
+		JOIN users u ON k.created_by = u.id
+		ORDER BY k.id
+	`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+		return
+	}
+	defer rows.Close()
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: scanAPIKeys(rows)})
+}
+
+func (h *Handlers) CreateAPIKey(c *gin.Context) {
+	createAPIKeyForUser(c, currentUserID(c))
+}
+
+func (h *Handlers) UpdateCurrentUserAPIKeyStatus(c *gin.Context) {
+	updateAPIKeyStatus(c, true)
+}
+
+func (h *Handlers) UpdateAPIKeyStatus(c *gin.Context) {
+	updateAPIKeyStatus(c, false)
+}
+
+func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	userID := currentUserID(c)
+	var req struct {
+		IsEnabled bool `json:"is_enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		return
+	}
+	query := "SELECT name FROM api_keys WHERE id = ?"
+	args := []interface{}{id}
+	if currentUserOnly {
+		query += " AND created_by = ?"
+		args = append(args, userID)
+	}
+	var name string
+	if err := db.DB.QueryRow(query, args...).Scan(&name); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
+		return
+	}
+	update := "UPDATE api_keys SET is_enabled = ? WHERE id = ?"
+	updateArgs := []interface{}{req.IsEnabled, id}
+	if currentUserOnly {
+		update += " AND created_by = ?"
+		updateArgs = append(updateArgs, userID)
+	}
+	if _, err := db.DB.Exec(update, updateArgs...); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update API key status"})
+		return
+	}
+	status := "disabled"
+	if req.IsEnabled {
+		status = "enabled"
+	}
+	recordAudit(c, "修改状态", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name, services.AuditResultPart(status)))
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API key status updated"})
+}
 
 func (h *Handlers) DeleteAPIKey(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
-	db.DB.Exec("DELETE FROM api_keys WHERE id = ?", id)
+	var name string
+	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ?", id).Scan(&name); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
+		return
+	}
+	result, err := db.DB.Exec("DELETE FROM api_keys WHERE id = ?", id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete API key"})
+		return
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
+		return
+	}
+	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API key deleted"})
 }
-
