@@ -8,13 +8,13 @@
         </h2>
         <p class="page-desc">管理流量分发策略和上游服务器配置</p>
       </div>
-      <el-button v-if="authStore.nodeMode === 'master'" type="primary" @click="openWizard()">
+      <el-button type="primary" :disabled="isReadOnly" @click="openWizard()">
         <el-icon><Plus /></el-icon>
         新建规则
       </el-button>
     </div>
 
-    <el-alert v-if="authStore.nodeMode === 'slave'" title="从节点模式下无法修改规则，所有配置从主节点同步" type="info" :closable="false" class="mb-5" />
+    <el-alert v-if="isReadOnly" :title="authStore.readOnlyMessage" :description="readOnlyDescription" type="info" :closable="false" show-icon class="mb-5" />
 
     <el-card>
       <el-table :data="rules" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
@@ -157,7 +157,7 @@
             <el-switch
               v-model="row.enabled"
               :loading="ruleTogglePending[row.caddy_id]"
-              :disabled="authStore.nodeMode === 'slave' || isCertJobActive(certJobMap[row.caddy_id]?.status) || ruleTogglePending[row.caddy_id]"
+              :disabled="isReadOnly || isCertJobActive(certJobMap[row.caddy_id]?.status) || ruleTogglePending[row.caddy_id]"
               @change="toggleRule(row)"
               class="status-switch"
             />
@@ -167,18 +167,17 @@
           <template #default="{ row }">
             <div class="operation-buttons">
               <el-tooltip
-                v-if="authStore.nodeMode === 'master'"
-                :disabled="canEditRule(row)"
-                content="证书申请中，请等待完成或失败后再修改规则"
+              :disabled="!isReadOnly && canEditRule(row)"
+              :content="isReadOnly ? authStore.readOnlyMessage : '证书申请中，请等待完成或失败后再修改规则'"
               >
                 <div>
-                  <el-button type="primary" link size="small" @click="openWizard(row)" :disabled="!canEditRule(row)">
+                <el-button type="primary" link size="small" @click="openWizard(row)" :disabled="isReadOnly || !canEditRule(row)">
                     编辑
                   </el-button>
                 </div>
               </el-tooltip>
-              <div v-if="authStore.nodeMode === 'master'">
-                <el-button type="primary" link size="small" @click="duplicateRule(row)">
+              <div>
+              <el-button type="primary" link size="small" :disabled="isReadOnly" @click="duplicateRule(row)">
                   复制
                 </el-button>
               </div>
@@ -188,12 +187,11 @@
                 </el-button>
               </div>
               <el-tooltip
-                v-if="authStore.nodeMode === 'master'"
-                :disabled="canEditRule(row)"
-                content="证书申请中，请等待完成或失败后再删除规则"
+              :disabled="!isReadOnly && canEditRule(row)"
+              :content="isReadOnly ? authStore.readOnlyMessage : '证书申请中，请等待完成或失败后再删除规则'"
               >
                 <div>
-                  <el-button type="danger" link size="small" @click="deleteRule(row)" :disabled="!canEditRule(row)">
+                <el-button type="danger" link size="small" @click="deleteRule(row)" :disabled="isReadOnly || !canEditRule(row)">
                     删除
                   </el-button>
                 </div>
@@ -900,6 +898,10 @@ interface Rule {
 }
 
 const authStore = useAuthStore()
+const isReadOnly = computed(() => authStore.readOnlyReason !== null)
+const readOnlyDescription = computed(() => authStore.readOnlyReason === 'slave'
+  ? '负载均衡规则由主节点统一管理并同步到当前节点。'
+  : '当前账号可以查看负载均衡规则，但不能修改。')
 
 const certTypeLabels = {
   auto: 'ACME 自动证书',
@@ -1044,7 +1046,7 @@ const certJobStatusLabel = (status?: string) => {
 }
 
 const canEditRule = (row: Rule) => {
-  if (authStore.nodeMode === 'slave') return false
+  if (isReadOnly.value) return false
   if (row.tls_source === 'acme_dns' && isCertJobActive(certJobMap.value[row.caddy_id]?.status)) {
     return false
   }
@@ -1575,6 +1577,7 @@ const pasteFromFile = async (type: 'cert' | 'key') => {
 }
 
 const openWizard = (rule?: Rule) => {
+  if (isReadOnly.value) return
   isCopyMode.value = false
   if (rule) {
     editingRule.value = rule
@@ -1768,6 +1771,7 @@ const prevStep = () => {
 }
 
 const submitWizard = async () => {
+  if (isReadOnly.value) return
   if (!wizardForm.name) {
     ElMessage.warning('请输入规则名称')
     return
@@ -1860,6 +1864,7 @@ const submitWizard = async () => {
 }
 
 const toggleRule = async (rule: Rule) => {
+  if (isReadOnly.value) return
   if (ruleTogglePending.value[rule.caddy_id]) return
   const nextEnabled = rule.enabled
   const action = rule.enabled ? '启用' : '禁用'
@@ -1881,6 +1886,7 @@ const toggleRule = async (rule: Rule) => {
 }
 
 const deleteRule = async (rule: Rule) => {
+  if (isReadOnly.value) return
   try {
     await ElMessageBox.confirm(`确定要删除规则 "${rule.name}" 吗？`, '删除确认', { type: 'warning' })
     await request.delete(`/rules/${rule.caddy_id}`)
@@ -1890,6 +1896,7 @@ const deleteRule = async (rule: Rule) => {
 }
 
 const duplicateRule = async (rule: Rule) => {
+  if (isReadOnly.value) return
   try {
     await ElMessageBox.confirm(`确定要复制规则 "${rule.name}" 吗？`, '复制确认', { type: 'info' })
     openCopyWizard(rule)

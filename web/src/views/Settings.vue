@@ -21,8 +21,6 @@
     />
     <ClusterSettings
       v-else-if="activeTab === 'cluster'"
-      v-model:settings="settings"
-      @save="handleSaveCluster"
     />
     <FreeCertificates
       v-else-if="activeTab === 'certificates'"
@@ -58,9 +56,6 @@ interface SettingsConfig {
   audit_retention_months: number
   jwt_expire_minutes: number
   timezone: string
-  is_master: boolean
-  master_url: string
-  sync_interval: number
 }
 
 interface CertificateConfig {
@@ -83,9 +78,6 @@ const settings = ref<SettingsConfig>({
   audit_retention_months: 3,
   jwt_expire_minutes: 20,
   timezone: 'Asia/Shanghai',
-  is_master: true,
-  master_url: '',
-  sync_interval: 60,
 })
 
 const global = ref<CertificateConfig>({
@@ -129,9 +121,6 @@ const fetchSettings = async () => {
         audit_retention_months: res.data.audit_retention_months ?? 3,
         jwt_expire_minutes: res.data.jwt_expire_minutes ?? 20,
         timezone: res.data.timezone || 'Asia/Shanghai',
-        is_master: res.data.is_master ?? true,
-        master_url: res.data.master_url || '',
-        sync_interval: res.data.sync_interval || 60,
       }
       global.value = {
         acme_email: res.data.acme_email || '',
@@ -148,10 +137,6 @@ const fetchSettings = async () => {
 }
 
 const handleSaveBasic = async () => {
-  await fetchSettings()
-}
-
-const handleSaveCluster = async () => {
   await fetchSettings()
 }
 

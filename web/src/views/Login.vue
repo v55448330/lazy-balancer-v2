@@ -11,42 +11,66 @@
         <p class="login-subtitle">Caddy 负载均衡管理平台</p>
       </div>
 
-      <el-form ref="formRef" :model="form" :rules="rules" @submit.prevent="handleLogin" class="login-form">
-        <el-form-item prop="username">
-          <el-input 
-            v-model="form.username" 
-            placeholder="请输入用户名"
-            size="large"
-            :prefix-icon="User"
-            clearable
-          />
-        </el-form-item>
-        
-        <el-form-item prop="password">
-          <el-input 
-            v-model="form.password" 
-            type="password"
-            placeholder="请输入密码"
-            size="large"
-            :prefix-icon="Lock"
-            show-password
-          />
-        </el-form-item>
+      <template v-if="!checkingSetup">
+        <el-form v-if="setupMode" ref="setupFormRef" :model="setupForm" :rules="setupRules" @submit.prevent="handleSetup" class="login-form">
+          <el-alert title="首次启动，请创建管理员账号" type="info" show-icon :closable="false" class="login-error" />
+          <el-form-item prop="username">
+            <el-input v-model="setupForm.username" placeholder="管理员用户名" size="large" :prefix-icon="User" clearable />
+          </el-form-item>
+          <el-form-item prop="display_name">
+            <el-input v-model="setupForm.display_name" placeholder="显示名（选填）" size="large" :prefix-icon="Postcard" clearable />
+          </el-form-item>
+          <el-form-item prop="password">
+            <el-input v-model="setupForm.password" type="password" placeholder="密码（至少 6 位）" size="large" :prefix-icon="Lock" show-password />
+          </el-form-item>
+          <el-form-item prop="confirm">
+            <el-input v-model="setupForm.confirm" type="password" placeholder="确认密码" size="large" :prefix-icon="Lock" show-password />
+          </el-form-item>
+          <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="login-error" />
+          <el-form-item>
+            <el-button type="primary" native-type="submit" :loading="loading" size="large" class="login-btn">
+              {{ loading ? '创建中...' : '创建管理员并登录' }}
+            </el-button>
+          </el-form-item>
+        </el-form>
 
-        <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="login-error" />
+        <el-form v-else ref="formRef" :model="form" :rules="rules" @submit.prevent="handleLogin" class="login-form">
+          <el-form-item prop="username">
+            <el-input
+              v-model="form.username"
+              placeholder="请输入用户名"
+              size="large"
+              :prefix-icon="User"
+              clearable
+            />
+          </el-form-item>
 
-        <el-form-item>
-          <el-button 
-            type="primary" 
-            native-type="submit"
-            :loading="loading"
-            size="large"
-            class="login-btn"
-          >
-            {{ loading ? '登录中...' : '登 录' }}
-          </el-button>
-        </el-form-item>
-      </el-form>
+          <el-form-item prop="password">
+            <el-input
+              v-model="form.password"
+              type="password"
+              placeholder="请输入密码"
+              size="large"
+              :prefix-icon="Lock"
+              show-password
+            />
+          </el-form-item>
+
+          <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="login-error" />
+
+          <el-form-item>
+            <el-button
+              type="primary"
+              native-type="submit"
+              :loading="loading"
+              size="large"
+              class="login-btn"
+            >
+              {{ loading ? '登录中...' : '登 录' }}
+            </el-button>
+          </el-form-item>
+        </el-form>
+      </template>
 
       <div class="login-footer">
         <span class="version">版本 2.0.0</span>
@@ -56,17 +80,34 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { User, Lock, Monitor } from '@element-plus/icons-vue'
+import { request } from '@/utils/api'
+import { User, Lock, Monitor, Postcard } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
+
+interface SetupStatusResponse {
+  code: number
+  data: { needs_setup: boolean }
+}
 
 const authStore = useAuthStore()
 const formRef = ref<FormInstance>()
+const setupFormRef = ref<FormInstance>()
+
+const setupMode = ref(false)
+const checkingSetup = ref(true)
 
 const form = reactive({
   username: '',
   password: '',
+})
+
+const setupForm = reactive({
+  username: '',
+  display_name: '',
+  password: '',
+  confirm: '',
 })
 
 const rules: FormRules = {
@@ -79,15 +120,39 @@ const rules: FormRules = {
   ],
 }
 
+const setupRules: FormRules = {
+  username: [
+    { required: true, message: '请输入管理员用户名', trigger: 'blur' },
+    { min: 3, message: '用户名至少3位', trigger: 'blur' },
+  ],
+  password: [
+    { required: true, message: '请输入密码', trigger: 'blur' },
+    { min: 6, message: '密码至少6位', trigger: 'blur' },
+  ],
+  confirm: [
+    { required: true, message: '请再次输入密码', trigger: 'blur' },
+    {
+      validator: (_rule: unknown, value: string, callback: (error?: Error) => void) => {
+        if (value !== setupForm.password) {
+          callback(new Error('两次输入的密码不一致'))
+          return
+        }
+        callback()
+      },
+      trigger: 'blur',
+    },
+  ],
+}
+
 const error = ref('')
 const loading = ref(false)
 
 const handleLogin = async () => {
   if (!formRef.value) return
-  
+
   await formRef.value.validate(async (valid) => {
     if (!valid) return
-    
+
     error.value = ''
     loading.value = true
     try {
@@ -99,6 +164,40 @@ const handleLogin = async () => {
     }
   })
 }
+
+const handleSetup = async () => {
+  if (!setupFormRef.value) return
+
+  await setupFormRef.value.validate(async (valid) => {
+    if (!valid) return
+
+    error.value = ''
+    loading.value = true
+    try {
+      await request.post('/auth/setup', {
+        username: setupForm.username,
+        password: setupForm.password,
+        display_name: setupForm.display_name,
+      })
+      await authStore.login(setupForm.username, setupForm.password)
+    } catch (e: any) {
+      error.value = (e as any)?.response?.data?.message || (e as any)?.message || '创建管理员失败，请稍后重试'
+    } finally {
+      loading.value = false
+    }
+  })
+}
+
+onMounted(async () => {
+  try {
+    const res = await request.get<SetupStatusResponse>('/auth/setup')
+    setupMode.value = res.data.needs_setup
+  } catch {
+    setupMode.value = false
+  } finally {
+    checkingSetup.value = false
+  }
+})
 </script>
 
 <style scoped>

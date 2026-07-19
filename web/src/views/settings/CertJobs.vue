@@ -57,9 +57,9 @@
     <el-table-column label="操作" width="120" align="center">
       <template #default="{ row }">
         <el-button link type="primary" size="small" @click="viewLogs(row)">日志</el-button>
-        <el-tooltip :disabled="!isQueued(row.status)" content="排队中的任务无法重签，请等待调度执行">
+        <el-tooltip :disabled="!isReadOnly && !isQueued(row.status)" :content="isReadOnly ? authStore.readOnlyMessage : '排队中的任务无法重签，请等待调度执行'">
           <span>
-            <el-button link type="primary" size="small" :disabled="!canRetry(row.status)" @click="retryJob(row)">重签</el-button>
+            <el-button link type="primary" size="small" :disabled="isReadOnly || !canRetry(row.status)" @click="retryJob(row)">重签</el-button>
           </span>
         </el-tooltip>
       </template>
@@ -94,6 +94,7 @@ import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { escapeHtml } from '@/utils/ansi'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
 import * as pkijs from 'pkijs'
 import * as asn1js from 'asn1js'
 
@@ -146,6 +147,9 @@ interface CertInfo {
 const props = defineProps<{
   ruleId?: string
 }>()
+
+const authStore = useAuthStore()
+const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 
 const jobs = ref<CertJob[]>([])
 const loading = ref(false)
@@ -325,6 +329,7 @@ const fetchCertInfo = async () => {
 }
 
 const retryJob = async (row: CertJob) => {
+  if (isReadOnly.value) return
   const isWaitingCA = row.status === 'waiting_ca'
   const message = isWaitingCA
     ? '任务当前处于"等待 CA"状态（可能仍在频率冷却中）。确定要立即重新签发吗？如果使用同一 CA 且冷却未到，可能再次被拒绝。'

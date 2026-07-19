@@ -1,115 +1,299 @@
 <template>
-  <el-card class="settings-card">
-    <template #header>
-      <div class="card-header">
-        <div class="card-title">
-          <el-icon><Connection /></el-icon>
-          <span>集群管理</span>
-        </div>
+  <div class="cluster-settings">
+    <el-alert v-if="isNonAdminReadOnly" :title="authStore.readOnlyMessage" type="info" :closable="false" show-icon />
+    <ClusterStatusCard :status="status" :loading="initialLoading" />
+    <ClusterModeCard
+      :status="status"
+      :loading="modeLoading"
+      :registration-request="registrationRequest"
+      :read-only="isNonAdminReadOnly"
+      :interval-saving="intervalSaving"
+      @register="registerAsSlave"
+      @promote="promoteToMaster"
+      @update-interval="updateSyncInterval"
+    />
+
+    <ClusterMasterPanel
+      v-if="status?.node_mode === 'master'"
+      :status="status"
+      :nodes="nodes"
+      :loading="nodesLoading"
+      :token-loading="tokenLoading"
+      :settings-loading="settingsLoading"
+      :pending-node-id="pendingNodeId"
+      :read-only="isNonAdminReadOnly"
+      @generate-token="generateRegisterToken"
+      @update-sync="updateSyncSetting"
+      @approve="approveNode"
+      @reject="rejectNode"
+      @remove="removeNode"
+    />
+
+    <ClusterSlavePanel
+      v-else-if="status"
+      :status="status"
+      :syncing="syncing"
+      :promoting="promoting"
+      :read-only="isNonAdminReadOnly"
+      @sync="syncNow"
+      @promote="promoteToMaster"
+      @reregister="requestRegistration"
+    />
+
+    <el-dialog v-model="tokenDialogVisible" title="一次性注册令牌" width="560px" :close-on-click-modal="false">
+      <el-alert title="仅展示一次，请立即复制并妥善保存" type="warning" :closable="false" show-icon />
+      <div class="token-box">
+        <code>{{ registerToken?.token }}</code>
+        <el-button type="primary" @click="copyRegisterToken">
+          <el-icon><CopyDocument /></el-icon>复制令牌
+        </el-button>
       </div>
-    </template>
-    <el-form :model="settings" label-width="120px" class="settings-form">
-      <el-form-item label="节点模式">
-        <el-radio-group v-model="settings.is_master" :disabled="!isAdmin">
-          <el-radio :true-value="true" :false-value="false">主节点</el-radio>
-          <el-radio :true-value="false" :false-value="true">从节点</el-radio>
-        </el-radio-group>
-        <div class="form-tip">主节点管理负载均衡规则，从节点同步配置</div>
-      </el-form-item>
-      <el-form-item label="主节点地址" v-if="!settings.is_master">
-        <el-input v-model="settings.master_url" placeholder="http://192.168.1.1:8000" />
-        <div class="form-tip">从节点需要连接到主节点</div>
-      </el-form-item>
-      <el-form-item label="同步间隔">
-        <el-input-number v-model="settings.sync_interval" :min="10" :max="3600" />
-        <div class="form-tip">从节点同步配置的间隔（秒）</div>
-      </el-form-item>
-          <el-form-item>
-            <el-button type="primary" :loading="saving" @click="handleSave">
-              <el-icon><Check /></el-icon>
-              <span class="btn-text">保存</span>
-            </el-button>
-          </el-form-item>
-    </el-form>
-  </el-card>
+      <div class="form-tip">有效期至：{{ formatTime(registerToken?.expires_at ?? '') }}</div>
+      <template #footer><el-button type="primary" @click="tokenDialogVisible = false">我已保存</el-button></template>
+    </el-dialog>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { CopyDocument } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Connection, Check } from '@element-plus/icons-vue'
+import type {
+  ApiResponse,
+  ClusterModeResult,
+  ClusterNode,
+  ClusterRegisterToken,
+  ClusterRegistrationInput,
+  ClusterStatus,
+  ClusterSyncResult,
+} from '@/types'
+import ClusterMasterPanel from './cluster/ClusterMasterPanel.vue'
+import ClusterModeCard from './cluster/ClusterModeCard.vue'
+import ClusterSlavePanel from './cluster/ClusterSlavePanel.vue'
+import ClusterStatusCard from './cluster/ClusterStatusCard.vue'
+
+interface ActionResponse {
+  readonly code: number
+  readonly message: string
+}
 
 const authStore = useAuthStore()
-const isAdmin = computed(() => authStore.user?.role === 'admin')
+const status = ref<ClusterStatus | null>(null)
+const nodes = ref<readonly ClusterNode[]>([])
+const initialLoading = ref(true)
+const nodesLoading = ref(false)
+const modeLoading = ref(false)
+const tokenLoading = ref(false)
+const settingsLoading = ref(false)
+const syncing = ref(false)
+const promoting = ref(false)
+const intervalSaving = ref(false)
+const pendingNodeId = ref<number | null>(null)
+const registrationRequest = ref(0)
+const tokenDialogVisible = ref(false)
+const registerToken = ref<ClusterRegisterToken | null>(null)
+const isNonAdminReadOnly = computed(() => authStore.readOnlyReason === 'non-admin')
+let refreshTimer: ReturnType<typeof setInterval> | null = null
 
-interface ClusterSettingsConfig {
-  is_master: boolean
-  master_url: string
-  sync_interval: number
+const fetchStatus = async (): Promise<ClusterStatus> => {
+  const response = await request.get<ApiResponse<ClusterStatus>>('/cluster/status')
+  status.value = response.data
+  authStore.setNodeMode(response.data.node_mode)
+  return response.data
 }
 
-interface ConfigPreviewResponse {
-  data?: {
-    changed: boolean
-    section: string
-    changes: string[]
-  }
-}
-
-const settings = defineModel<ClusterSettingsConfig>('settings', { required: true })
-const emit = defineEmits<{
-  (e: 'save'): void
-}>()
-
-const saving = ref(false)
-
-const handleSave = async () => {
-  if (saving.value) return
-  saving.value = true
+const fetchNodes = async (): Promise<void> => {
+  nodesLoading.value = true
   try {
-    const payload = {
-      is_master: settings.value.is_master,
-      master_url: settings.value.master_url,
-      sync_interval: settings.value.sync_interval,
-      source: 'cluster',
-    }
-    const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
-    if (preview.data?.changed) {
-      const changes = preview.data.changes.length > 0 ? preview.data.changes.join('；') : '检测到配置变更'
-      await ElMessageBox.confirm(changes, `确认保存${preview.data.section || '集群设置'}？`, {
-        confirmButtonText: '确认',
-        cancelButtonText: '取消',
-        type: 'warning',
-      })
-    }
-    await request.put('/config', payload)
-    ElMessage.success('保存成功')
-    emit('save')
-  } catch (error) {
-    console.error('Failed to save cluster settings:', error)
+    const response = await request.get<ApiResponse<readonly ClusterNode[]>>('/cluster/nodes')
+    nodes.value = response.data
   } finally {
-    saving.value = false
+    nodesLoading.value = false
   }
 }
+
+const refreshCluster = async (): Promise<void> => {
+  const currentStatus = await fetchStatus()
+  if (currentStatus.node_mode === 'master') {
+    await fetchNodes()
+  } else {
+    nodes.value = []
+  }
+}
+
+const confirmAction = async (message: string, title: string): Promise<boolean> => {
+  try {
+    await ElMessageBox.confirm(message, title, {
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    return true
+  } catch (error: unknown) {
+    if (error === 'cancel' || error === 'close') return false
+    throw error
+  }
+}
+
+const registerAsSlave = async (input: ClusterRegistrationInput): Promise<void> => {
+  if (isNonAdminReadOnly.value) return
+  const confirmed = await confirmAction('切换后本地数据将被主节点全覆盖，是否继续？', '确认切换为从节点')
+  if (!confirmed) return
+  modeLoading.value = true
+  try {
+    await request.post<ApiResponse<ClusterModeResult>>('/cluster/mode', { mode: 'slave', ...input })
+    ElMessage.success('注册请求已提交，等待主节点审批')
+    await refreshCluster()
+  } finally {
+    modeLoading.value = false
+  }
+}
+
+const promoteToMaster = async (): Promise<void> => {
+  if (isNonAdminReadOnly.value) return
+  const confirmed = await confirmAction('将脱离集群，当前数据成为权威数据', '确认提升为主节点')
+  if (!confirmed) return
+  promoting.value = true
+  try {
+    await request.post<ActionResponse>('/cluster/promote')
+    ElMessage.success('已提升为主节点')
+    await refreshCluster()
+  } finally {
+    promoting.value = false
+  }
+}
+
+const syncNow = async (): Promise<void> => {
+  if (isNonAdminReadOnly.value) return
+  syncing.value = true
+  try {
+    const response = await request.post<ApiResponse<ClusterSyncResult>>('/cluster/sync/pull')
+    ElMessage.success(response.data.changed ? `同步完成，已应用版本 ${response.data.applied_version}` : '当前已是最新配置')
+    await fetchStatus()
+  } finally {
+    syncing.value = false
+  }
+}
+
+const generateRegisterToken = async (): Promise<void> => {
+  if (isNonAdminReadOnly.value) return
+  tokenLoading.value = true
+  try {
+    const response = await request.post<ApiResponse<ClusterRegisterToken>>('/cluster/register-tokens')
+    registerToken.value = response.data
+    tokenDialogVisible.value = true
+  } finally {
+    tokenLoading.value = false
+  }
+}
+
+const copyRegisterToken = async (): Promise<void> => {
+  const token = registerToken.value?.token
+  if (!token) return
+  try {
+    await navigator.clipboard.writeText(token)
+    ElMessage.success('注册令牌已复制')
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      ElMessage.error('复制失败，请手动复制注册令牌')
+      return
+    }
+    throw error
+  }
+}
+
+const updateSyncSetting = async (value: boolean): Promise<void> => {
+  if (isNonAdminReadOnly.value) return
+  settingsLoading.value = true
+  try {
+    await request.put<ActionResponse>('/cluster/settings', { sync_caddy_config: value })
+    ElMessage.success('同步设置已更新')
+    await fetchStatus()
+  } finally {
+    settingsLoading.value = false
+  }
+}
+
+const updateSyncInterval = async (value: number): Promise<void> => {
+  if (isNonAdminReadOnly.value) return
+  intervalSaving.value = true
+  try {
+    await request.put<ActionResponse>('/cluster/settings', { sync_interval: value })
+    ElMessage.success('同步间隔已更新')
+    await fetchStatus()
+  } finally {
+    intervalSaving.value = false
+  }
+}
+
+const runNodeAction = async (node: ClusterNode, action: 'approve' | 'reject' | 'remove'): Promise<void> => {
+  if (isNonAdminReadOnly.value) return
+  pendingNodeId.value = node.id
+  try {
+    if (action === 'approve') {
+      await request.post<ActionResponse>(`/cluster/nodes/${node.id}/approve`)
+      ElMessage.success('节点已确认')
+    } else if (action === 'reject') {
+      await request.post<ActionResponse>(`/cluster/nodes/${node.id}/reject`)
+      ElMessage.success('节点已拒绝')
+    } else {
+      await request.delete<ActionResponse>(`/cluster/nodes/${node.id}`)
+      ElMessage.success('节点已删除')
+    }
+    await refreshCluster()
+  } finally {
+    pendingNodeId.value = null
+  }
+}
+
+const approveNode = (node: ClusterNode): Promise<void> => runNodeAction(node, 'approve')
+
+const requestRegistration = (): void => {
+  if (isNonAdminReadOnly.value) return
+  registrationRequest.value += 1
+}
+
+const rejectNode = async (node: ClusterNode): Promise<void> => {
+  const confirmed = await confirmAction(`确定拒绝节点“${node.name}”吗？`, '拒绝确认')
+  if (confirmed) await runNodeAction(node, 'reject')
+}
+
+const removeNode = async (node: ClusterNode): Promise<void> => {
+  const confirmed = await confirmAction(`确定删除节点“${node.name}”吗？删除后该节点将无法继续同步。`, '删除确认')
+  if (confirmed) await runNodeAction(node, 'remove')
+}
+
+const formatTime = (value: string): string => {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN')
+}
+
+onMounted(async () => {
+  try {
+    await refreshCluster()
+  } finally {
+    initialLoading.value = false
+  }
+  refreshTimer = setInterval(() => {
+    void refreshCluster()
+  }, 15000)
+})
+
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
+})
 </script>
 
 <style scoped>
-.card-header { display: flex; align-items: center; }
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #111827;
+.cluster-settings { display: flex; flex-direction: column; gap: 20px; }
+.token-box { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding: 12px; border-radius: var(--radius-md); background: var(--bg-secondary); }
+.token-box code { flex: 1; min-width: 0; color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; word-break: break-all; }
+.form-tip { margin-top: 12px; color: var(--text-muted); font-size: 12px; }
+
+@media (max-width: 768px) {
+  .token-box { align-items: stretch; flex-direction: column; }
 }
-.settings-form { padding: 4px 0; }
-.form-tip {
-  font-size: 12px;
-  color: #9ca3af;
-  margin-top: 4px;
-}
-.btn-text { margin-left: 4px; }
 </style>

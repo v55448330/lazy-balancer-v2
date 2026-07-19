@@ -1,17 +1,27 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { User } from '@/types'
+import type { ApiResponse, ClusterNodeMode, User } from '@/types'
 import { isTokenExpired, request } from '@/utils/api'
 import { ElMessageBox, ElMessage } from 'element-plus'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
   const token = ref<string | null>(localStorage.getItem('token'))
-  const nodeMode = ref<string>('master')
+  const nodeMode = ref<ClusterNodeMode>('master')
   const loading = ref(false)
   const currentPage = ref<string>(localStorage.getItem('currentPage') || 'dashboard')
 
   const isLoggedIn = computed(() => !!token.value && !isTokenExpired(token.value))
+  const readOnlyReason = computed<'slave' | 'non-admin' | null>(() => {
+    if (nodeMode.value === 'slave') return 'slave'
+    if (user.value && user.value.role !== 'admin') return 'non-admin'
+    return null
+  })
+  const readOnlyMessage = computed(() => {
+    if (readOnlyReason.value === 'slave') return '从节点只读，请在主节点操作'
+    if (readOnlyReason.value === 'non-admin') return '非管理员用户只读'
+    return ''
+  })
 
   const normalizeDisplayName = (value: User['display_name'], username?: string) => {
     if (typeof value === 'string') return value || username || ''
@@ -32,7 +42,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchUser() {
     if (!token.value) return
     try {
-      const res = await request.get<any>('/users/me')
+      const res = await request.get<ApiResponse<User>>('/users/me')
       if (res.data) {
         user.value = {
           id: res.data.id,
@@ -49,7 +59,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchConfig() {
     if (!token.value) return
     try {
-      const res = await request.get<any>('/config')
+      const res = await request.get<ApiResponse<{ readonly is_master: boolean }>>('/config')
       if (res.data) {
         nodeMode.value = res.data.is_master ? 'master' : 'slave'
       }
@@ -61,7 +71,11 @@ export const useAuthStore = defineStore('auth', () => {
   async function login(username: string, password: string) {
     loading.value = true
     try {
-      const res = await request.post<any>('/auth/login', { username, password })
+      const res = await request.post<{
+        readonly token: string
+        readonly node_mode: ClusterNodeMode
+        readonly user?: User
+      }>('/auth/login', { username, password })
       token.value = res.token
       nodeMode.value = res.node_mode
       localStorage.setItem('token', res.token)
@@ -99,6 +113,10 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem('currentPage', page)
   }
 
+  function setNodeMode(mode: ClusterNodeMode) {
+    nodeMode.value = mode
+  }
+
   function showConfirm(title: string, message: string, onConfirm: () => void) {
     ElMessageBox.confirm(message, title, {
       confirmButtonText: '确定',
@@ -127,6 +145,8 @@ export const useAuthStore = defineStore('auth', () => {
     loading,
     currentPage,
     isLoggedIn,
+    readOnlyReason,
+    readOnlyMessage,
     normalizeDisplayName,
     displayName,
     userRole,
@@ -134,6 +154,7 @@ export const useAuthStore = defineStore('auth', () => {
     logout,
     fetchUser,
     fetchConfig,
+    setNodeMode,
     init,
     setCurrentPage,
     showToast,

@@ -55,7 +55,7 @@
                 >
                   {{ caddyStatus === 'running' ? '运行中' : caddyStatus === 'stopped' ? '已停止' : '未知' }}
                 </el-tag>
-                <div v-if="!isSlave" class="caddy-actions">
+                <div v-if="authStore.readOnlyReason === null" class="caddy-actions">
                   <el-button v-if="caddyStatus === 'running'" type="warning" size="small" @click="controlCaddy('restart')" :loading="caddyLoading">
                     重启
                   </el-button>
@@ -540,7 +540,7 @@ const fetchRuleMetrics = async () => {
 }
 
 const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
-  if (isSlave.value) return
+  if (authStore.readOnlyReason !== null) return
   
   const actionText = { start: '启动', stop: '停止', restart: '重启' }[action]
   const actionDesc = {

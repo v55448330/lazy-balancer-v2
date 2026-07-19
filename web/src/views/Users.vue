@@ -1,5 +1,6 @@
 <template>
   <div class="page">
+    <el-alert v-if="isReadOnly" :title="authStore.readOnlyMessage" type="info" :closable="false" show-icon class="readonly-alert" />
     <div class="page-header">
       <div class="header-left">
         <h2 class="page-title">
@@ -8,7 +9,7 @@
         </h2>
         <p class="page-desc">管理系统用户和权限</p>
       </div>
-      <el-button type="primary" @click="showForm = true">
+      <el-button type="primary" :disabled="isReadOnly" @click="showForm = true">
         <el-icon><Plus /></el-icon>
         新建用户
       </el-button>
@@ -23,7 +24,7 @@
           </div>
         </div>
       </template>
-      <el-form :model="form" label-width="90px">
+      <el-form :model="form" label-width="90px" :disabled="isReadOnly">
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="用户名">
@@ -89,7 +90,7 @@
             <el-switch
               v-model="row.is_enabled"
               :loading="switchingId === row.id"
-              :disabled="row.id === authStore.user?.id"
+               :disabled="isReadOnly || row.id === authStore.user?.id"
               @change="(val: boolean) => handleToggleStatus(row.id, val)"
             />
           </template>
@@ -106,13 +107,13 @@
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button v-if="row.id !== authStore.user?.id" type="primary" link size="small" @click="editUser(row)">
+            <el-button v-if="row.id !== authStore.user?.id" type="primary" link size="small" :disabled="isReadOnly" @click="editUser(row)">
               编辑
             </el-button>
-            <el-button v-if="row.id !== authStore.user?.id" type="warning" link size="small" @click="resetPassword(row.id)">
+            <el-button v-if="row.id !== authStore.user?.id" type="warning" link size="small" :disabled="isReadOnly" @click="resetPassword(row.id)">
               重置密码
             </el-button>
-            <el-button v-if="row.id !== authStore.user?.id" type="danger" link size="small" @click="deleteUser(row.id)">
+            <el-button v-if="row.id !== authStore.user?.id" type="danger" link size="small" :disabled="isReadOnly" @click="deleteUser(row.id)">
               删除
             </el-button>
           </template>
@@ -123,7 +124,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
@@ -131,6 +132,7 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 import { UserFilled, User, Plus } from '@element-plus/icons-vue'
 
 const authStore = useAuthStore()
+const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 const users = ref<any[]>([])
 const showForm = ref(false)
 const editingUser = ref<any>(null)
@@ -155,6 +157,7 @@ const fetchUsers = async () => {
 }
 
 const handleSubmit = async () => {
+  if (isReadOnly.value) return
   if (editingUser.value) {
     await request.put(`/users/${editingUser.value.id}`, {
       username: form.value.username,
@@ -173,6 +176,7 @@ const handleSubmit = async () => {
 }
 
 const editUser = (user: any) => {
+  if (isReadOnly.value) return
   editingUser.value = user
   form.value = {
     username: user.username,
@@ -190,6 +194,7 @@ const closeForm = () => {
 }
 
 const deleteUser = async (id: number) => {
+  if (isReadOnly.value) return
   try {
     await ElMessageBox.confirm('确定要删除这个用户吗？', '警告', { type: 'warning' })
     await request.delete(`/users/${id}`)
@@ -201,6 +206,7 @@ const deleteUser = async (id: number) => {
 }
 
 const handleToggleStatus = async (id: number, isEnabled: boolean) => {
+  if (isReadOnly.value) return
   switchingId.value = id
   try {
     await request.put(`/users/${id}/status`, { is_enabled: isEnabled })
@@ -214,6 +220,7 @@ const handleToggleStatus = async (id: number, isEnabled: boolean) => {
 }
 
 const resetPassword = async (id: number) => {
+  if (isReadOnly.value) return
   try {
     const { value } = await ElMessageBox.prompt('请输入新密码', '重置密码', {
       confirmButtonText: '确定',
@@ -305,4 +312,5 @@ onMounted(() => {
 .user-display { font-size: 12px; color: #9ca3af; }
 
 .text-secondary { color: #6b7280; font-size: 13px; }
+.readonly-alert { margin-bottom: 20px; }
 </style>

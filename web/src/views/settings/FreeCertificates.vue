@@ -1,12 +1,13 @@
 <template>
   <div>
+    <el-alert v-if="isReadOnly" :title="authStore.readOnlyMessage" type="info" :closable="false" show-icon class="readonly-alert" />
     <el-card class="settings-card">
       <template #header>
         <div class="card-header">
           <span>ACME 全局设置</span>
         </div>
       </template>
-      <el-form :model="global" label-width="140px">
+      <el-form :model="global" label-width="140px" :disabled="isReadOnly">
         <el-form-item label="ACME 邮箱" required>
           <el-input v-model="global.acme_email" placeholder="your@email.com" style="width: 240px;" />
           <span class="form-tip-inline">用于 CA 账户注册，使用 ACME 签发时必须填写</span>
@@ -35,7 +36,7 @@
           <span class="form-tip-inline">全局默认 DNS 提供商，创建规则时默认使用</span>
         </el-form-item>
           <el-form-item>
-            <el-button type="primary" :loading="saving" @click="handleSave">
+            <el-button type="primary" :loading="saving" :disabled="isReadOnly" @click="handleSave">
               <el-icon><Check /></el-icon>
               <span class="btn-text">保存</span>
             </el-button>
@@ -60,10 +61,10 @@
             <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="authStore.nodeMode === 'master'" label="操作" width="140" align="center">
+        <el-table-column label="操作" width="140" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" :loading="testingCAId === row.id" @click="testCAProvider(row)">测试</el-button>
-            <el-button link type="primary" size="small" @click="openCAProviderDialog(row)">编辑</el-button>
+            <el-button link type="primary" size="small" :loading="testingCAId === row.id" :disabled="isReadOnly" @click="testCAProvider(row)">测试</el-button>
+            <el-button link type="primary" size="small" :disabled="isReadOnly" @click="openCAProviderDialog(row)">编辑</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -74,7 +75,7 @@
       <template #header>
         <div class="card-header">
           <span>DNS 提供商配置</span>
-          <el-button v-if="authStore.nodeMode === 'master'" type="primary" @click="openConfigDialog()">
+          <el-button type="primary" :disabled="isReadOnly" @click="openConfigDialog()">
             <el-icon><Plus /></el-icon>
             <span class="btn-text">添加</span>
           </el-button>
@@ -88,11 +89,11 @@
             <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="authStore.nodeMode === 'master'" label="操作" width="180" align="center">
+        <el-table-column label="操作" width="180" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" :loading="testingId === row.id" @click="testConfig(row)">测试</el-button>
-            <el-button link type="primary" size="small" @click="openConfigDialog(row)">编辑</el-button>
-            <el-button link type="danger" size="small" @click="deleteConfig(row)">删除</el-button>
+            <el-button link type="primary" size="small" :loading="testingId === row.id" :disabled="isReadOnly" @click="testConfig(row)">测试</el-button>
+            <el-button link type="primary" size="small" :disabled="isReadOnly" @click="openConfigDialog(row)">编辑</el-button>
+            <el-button link type="danger" size="small" :disabled="isReadOnly" @click="deleteConfig(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -260,6 +261,7 @@ interface ConfigPreviewResponse {
 }
 
 const authStore = useAuthStore()
+const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 
 const global = defineModel<GlobalCertificateConfig>('global', { required: true })
 const emit = defineEmits<{
@@ -567,6 +569,7 @@ const testConfig = async (config: CertConfig) => {
 }
 
 const handleSave = async () => {
+  if (isReadOnly.value) return
   if (saving.value) return
   if (!global.value.acme_email || !global.value.acme_email.trim()) {
     ElMessage.warning('请填写 ACME 邮箱')
@@ -630,4 +633,5 @@ onMounted(() => {
 .btn-text { margin-left: 4px; }
 .form-tip { font-size: 12px; color: #9ca3af; margin-top: 8px; }
 .form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
+.readonly-alert { margin-bottom: 20px; }
 </style>

@@ -1,0 +1,143 @@
+<template>
+  <el-card class="settings-card controls-card">
+    <template #header>
+      <div class="card-header">
+        <div class="card-title">
+          <el-icon><Setting /></el-icon>
+          <span>主节点同步设置</span>
+        </div>
+        <el-button type="primary" :loading="tokenLoading" :disabled="readOnly" @click="$emit('generate-token')">生成注册令牌</el-button>
+      </div>
+    </template>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">同步 Caddy 全局配置</div>
+        <div class="form-tip">开启后，从节点同步主节点的 Caddy 全局配置</div>
+      </div>
+      <el-switch :model-value="status.sync_caddy_config" :loading="settingsLoading" :disabled="readOnly" @change="handleSyncChange" />
+    </div>
+  </el-card>
+
+  <el-card class="settings-card">
+    <template #header>
+      <div class="card-header">
+        <div class="card-title">
+          <el-icon><List /></el-icon>
+          <span>节点列表</span>
+        </div>
+        <span class="form-tip">每 15 秒自动刷新</span>
+      </div>
+    </template>
+
+    <el-table :data="nodes" v-loading="loading" stripe :header-cell-style="{ background: 'var(--bg-secondary)' }" empty-text="">
+      <el-table-column prop="name" label="名称" min-width="130" />
+      <el-table-column label="地址" min-width="150">
+        <template #default="{ row }"><span class="mono-value">{{ row.ip_address }}:{{ row.port }}</span></template>
+      </el-table-column>
+      <el-table-column label="状态" width="90" align="center">
+        <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag></template>
+      </el-table-column>
+      <el-table-column label="配置版本" min-width="170">
+        <template #default="{ row }">
+          <div class="version-cell">
+            <span>已应用 {{ row.reported_version }} / 当前 {{ row.current_version }}</span>
+            <el-tag v-if="row.reported_version < row.current_version" type="warning" size="small">待同步</el-tag>
+          </div>
+        </template>
+      </el-table-column>
+      <el-table-column label="健康" min-width="210">
+        <template #default="{ row }">
+          <div v-if="row.health" class="health-cell">
+            <span :class="row.health.caddy_ok ? 'health-ok' : 'health-error'">
+              <el-icon><CircleCheckFilled v-if="row.health.caddy_ok" /><CircleCloseFilled v-else /></el-icon>
+              Caddy {{ row.health.caddy_ok ? '正常' : '异常' }}
+            </span>
+            <span>规则 {{ row.health.rules_count }}</span>
+            <span>30 天内到期 {{ row.health.certs_expiring_30d }}</span>
+            <span v-if="row.health.last_sync_error" class="health-error" :title="row.health.last_sync_error">{{ row.health.last_sync_error }}</span>
+          </div>
+          <span v-else class="form-tip">暂无健康信息</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="最后上报时间" min-width="170">
+        <template #default="{ row }">{{ formatTime(row.last_seen) }}</template>
+      </el-table-column>
+      <el-table-column label="操作" width="150" fixed="right" align="center">
+        <template #default="{ row }">
+          <template v-if="row.status === 'pending' || !row.is_approved">
+            <el-button link type="primary" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly" @click="$emit('approve', row)">确认</el-button>
+            <el-button link type="danger" size="small" :disabled="readOnly || pendingNodeId === row.id" @click="$emit('reject', row)">拒绝</el-button>
+          </template>
+          <el-button v-else link type="danger" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly" @click="$emit('remove', row)">删除</el-button>
+        </template>
+      </el-table-column>
+      <template #empty><el-empty description="暂无集群节点" :image-size="60" /></template>
+    </el-table>
+  </el-card>
+</template>
+
+<script setup lang="ts">
+import { CircleCheckFilled, CircleCloseFilled, List, Setting } from '@element-plus/icons-vue'
+import type { ClusterNode, ClusterNodeStatus, ClusterStatus } from '@/types'
+
+const props = defineProps<{
+  readonly status: ClusterStatus
+  readonly nodes: readonly ClusterNode[]
+  readonly loading: boolean
+  readonly tokenLoading: boolean
+  readonly settingsLoading: boolean
+  readonly pendingNodeId: number | null
+  readonly readOnly: boolean
+}>()
+
+const emit = defineEmits<{
+  (event: 'generate-token'): void
+  (event: 'update-sync', value: boolean): void
+  (event: 'approve', node: ClusterNode): void
+  (event: 'reject', node: ClusterNode): void
+  (event: 'remove', node: ClusterNode): void
+}>()
+
+const handleSyncChange = (value: string | number | boolean): void => {
+  if (props.readOnly) return
+  if (typeof value === 'boolean') emit('update-sync', value)
+}
+
+const statusType = (status: ClusterNodeStatus): 'success' | 'info' | 'warning' => {
+  if (status === 'online') return 'success'
+  if (status === 'pending') return 'warning'
+  return 'info'
+}
+
+const statusLabel = (status: ClusterNodeStatus): string => {
+  if (status === 'online') return '在线'
+  if (status === 'pending') return '待确认'
+  return '离线'
+}
+
+const formatTime = (value: string): string => {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN')
+}
+</script>
+
+<style scoped>
+.card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.setting-label { color: var(--text-primary); font-size: 13px; font-weight: 500; }
+.form-tip { color: var(--text-muted); font-size: 12px; }
+.setting-row .form-tip { margin-top: 4px; }
+.mono-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.version-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.health-cell { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.health-cell > span { display: inline-flex; align-items: center; gap: 4px; }
+.health-ok { color: var(--success); }
+.health-error { color: var(--danger); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 768px) {
+  .card-header { align-items: flex-start; flex-direction: column; }
+  .setting-row { align-items: flex-start; }
+}
+</style>

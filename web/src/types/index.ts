@@ -102,3 +102,64 @@ export interface ChartDataPoint {
   time: number
   [key: string]: number
 }
+
+export type ClusterNodeMode = 'master' | 'slave'
+
+export type ClusterNodeStatus = 'pending' | 'online' | 'offline'
+
+export interface ClusterHealth {
+  readonly caddy_ok: boolean
+  readonly rules_count: number
+  readonly certs_expiring_30d: number
+  readonly last_sync_at: string
+  readonly last_sync_error: string
+  readonly uptime_sec: number
+}
+
+export interface ClusterNode {
+  readonly id: number
+  readonly name: string
+  readonly ip_address: string
+  readonly port: number
+  readonly status: ClusterNodeStatus
+  readonly is_approved: boolean
+  readonly reported_version: number
+  readonly current_version: number
+  readonly health: ClusterHealth | null
+  readonly last_seen: string
+  readonly created_at: string
+}
+
+export interface ClusterStatus {
+  readonly node_mode: ClusterNodeMode
+  readonly cluster_version: number
+  readonly master_url: string
+  readonly sync_interval: number
+  readonly sync_caddy_config: boolean
+  readonly cluster_active: boolean
+  readonly applied_version: number
+  readonly last_sync_at: string
+  readonly last_sync_error: string
+  readonly pending_count: number
+  readonly approved_count: number
+}
+
+export interface ClusterRegistrationInput {
+  readonly master_url: string
+  readonly register_token: string
+  readonly node_name?: string
+}
+
+export interface ClusterRegisterToken {
+  readonly token: string
+  readonly expires_at: string
+}
+
+export interface ClusterModeResult {
+  readonly status: string
+}
+
+export interface ClusterSyncResult {
+  readonly applied_version: number
+  readonly changed: boolean
+}

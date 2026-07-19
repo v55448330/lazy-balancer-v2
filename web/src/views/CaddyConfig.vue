@@ -1,5 +1,6 @@
 <template>
   <div class="page">
+    <el-alert v-if="isReadOnly" :title="authStore.readOnlyMessage" type="info" :closable="false" show-icon class="readonly-alert" />
     <div class="page-header">
       <div class="header-left">
         <h2 class="page-title">
@@ -24,7 +25,7 @@
           <el-form :model="caddySettings" label-width="180px" class="caddy-form">
             <el-divider content-position="left">运行日志</el-divider>
             <el-form-item label="日志级别">
-              <el-select v-model="caddySettings.caddy_log_level" style="width: 120px;">
+              <el-select v-model="caddySettings.caddy_log_level" :disabled="isReadOnly" style="width: 120px;">
                 <el-option label="debug" value="debug" />
                 <el-option label="info" value="info" />
                 <el-option label="warn" value="warn" />
@@ -34,41 +35,41 @@
               <el-button type="primary" :icon="View" @click="openLogDialog" style="margin-left: auto;">查看日志</el-button>
             </el-form-item>
             <el-form-item label="日志大小">
-              <el-input-number v-model="caddySettings.caddy_log_size_mb" :min="0" controls-position="right" style="width: 120px;" />
+              <el-input-number v-model="caddySettings.caddy_log_size_mb" :disabled="isReadOnly" :min="0" controls-position="right" style="width: 120px;" />
               <span class="caddy-form-tip">MB，单个文件达到此大小后自动滚动归档，保留 5 个历史文件；建议 100</span>
             </el-form-item>
 
             <el-divider content-position="left">请求与超时</el-divider>
             <el-form-item label="请求体大小">
-              <el-input-number v-model="caddySettings.request_body_max_size_mb" :min="0" controls-position="right" style="width: 120px;" />
+              <el-input-number v-model="caddySettings.request_body_max_size_mb" :disabled="isReadOnly" :min="0" controls-position="right" style="width: 120px;" />
               <span class="caddy-form-tip">MB，限制单个请求体最大体积；0 = 不限制。常规建议 0，需防护大文件上传可设为 100</span>
             </el-form-item>
             <el-form-item label="读取超时">
-              <el-input-number v-model="caddySettings.http_read_timeout" :min="0" controls-position="right" style="width: 120px;" />
+              <el-input-number v-model="caddySettings.http_read_timeout" :disabled="isReadOnly" :min="0" controls-position="right" style="width: 120px;" />
               <span class="caddy-form-tip">秒，等待客户端发送请求体的最长时间；0 = Caddy 默认（无超时）。常规建议 60</span>
             </el-form-item>
             <el-form-item label="写入超时">
-              <el-input-number v-model="caddySettings.http_write_timeout" :min="0" controls-position="right" style="width: 120px;" />
+              <el-input-number v-model="caddySettings.http_write_timeout" :disabled="isReadOnly" :min="0" controls-position="right" style="width: 120px;" />
               <span class="caddy-form-tip">秒，向客户端写入响应的最长时间；0 = Caddy 默认（无超时）。常规建议 60</span>
             </el-form-item>
             <el-form-item label="空闲超时">
-              <el-input-number v-model="caddySettings.http_idle_timeout" :min="0" controls-position="right" style="width: 120px;" />
+              <el-input-number v-model="caddySettings.http_idle_timeout" :disabled="isReadOnly" :min="0" controls-position="right" style="width: 120px;" />
               <span class="caddy-form-tip">秒，客户端到 Caddy 的 Keep-Alive 连接空闲多久后关闭；0 = Caddy 默认。常规建议 120</span>
             </el-form-item>
             <el-form-item label="上游 Keepalive">
-              <el-input-number v-model="caddySettings.upstream_keepalive_timeout" :min="0" controls-position="right" style="width: 120px;" />
+              <el-input-number v-model="caddySettings.upstream_keepalive_timeout" :disabled="isReadOnly" :min="0" controls-position="right" style="width: 120px;" />
               <span class="caddy-form-tip">秒，Caddy 到后端服务器的长连接空闲多久后关闭；0 = Caddy 默认。常规建议 60</span>
             </el-form-item>
 
             <el-divider content-position="left">响应头</el-divider>
             <el-form-item label="Server Tokens">
-              <el-switch v-model="caddySettings.server_tokens_hidden" active-text="开启" inactive-text="关闭" />
+              <el-switch v-model="caddySettings.server_tokens_hidden" :disabled="isReadOnly" active-text="开启" inactive-text="关闭" />
               <span class="caddy-form-tip">开启后在响应头中隐藏 Server 字段，减少服务器指纹暴露</span>
             </el-form-item>
 
             <el-divider content-position="left">访问日志</el-divider>
             <el-form-item label="自定义格式">
-              <el-switch v-model="caddySettings.access_log_json" active-text="自定义 JSON" inactive-text="Caddy JSON" />
+              <el-switch v-model="caddySettings.access_log_json" :disabled="isReadOnly" active-text="自定义 JSON" inactive-text="Caddy JSON" />
               <span class="caddy-form-tip">开启后使用 filter 编码器按自定义格式输出；关闭时输出 Caddy 原生完整 JSON</span>
             </el-form-item>
             <el-form-item label="日志格式" v-if="caddySettings.access_log_json">
@@ -76,11 +77,12 @@
                 v-model="caddySettings.access_log_format"
                 type="textarea"
                 :rows="8"
+                :disabled="isReadOnly"
                 style="width: 100%"
                 placeholder='每行一个字段映射，格式: caddy字段路径 -> 自定义名称，或 caddy字段路径 -> delete'
               />
               <div>
-                <el-button text type="primary" size="small" @click="caddySettings.access_log_format = defaultLogFormat">还原默认格式</el-button>
+                <el-button text type="primary" size="small" :disabled="isReadOnly" @click="caddySettings.access_log_format = defaultLogFormat">还原默认格式</el-button>
               </div>
               <div class="caddy-form-tip">
                 每行一条规则：字段重命名 <code>request>remote_ip -&gt; src</code> 或删除字段 <code>request>headers -&gt; delete</code>。
@@ -89,8 +91,8 @@
               </div>
             </el-form-item>
             <div class="form-actions">
-              <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
-              <el-button type="warning" @click="handleReloadCaddy">重载 Caddy</el-button>
+              <el-button type="primary" :loading="saving" :disabled="isReadOnly" @click="handleSave">保存</el-button>
+              <el-button type="warning" :disabled="isReadOnly" @click="handleReloadCaddy">重载 Caddy</el-button>
             </div>
           </el-form>
         </el-card>
@@ -155,8 +157,11 @@ import VueJsonPretty from 'vue-json-pretty'
 import 'vue-json-pretty/lib/styles.css'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ansiToHtml } from '@/utils/ansi'
+import { useAuthStore } from '@/stores/auth'
 
 const caddyConfigData = ref<any>(null)
+const authStore = useAuthStore()
+const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 const loading = ref(false)
 
 const defaultLogFormat = 'request>headers -> delete\nresp_headers -> delete\nrequest>tls -> delete\nrequest>remote_port -> delete\nlevel -> delete\nlogger -> delete\nmsg -> delete\nrequest>remote_ip -> src\nrequest>client_ip -> src_ip\nrequest>method -> http_method\nrequest>host -> server\nrequest>uri -> uri_path\nrequest>proto -> protocol\nuser_id -> user\nts -> time_local\nsize -> bytes_out\nbytes_read -> bytes_in\nduration -> request_time'
@@ -247,6 +252,7 @@ const fetchGlobalConfig = async () => {
 }
 
 const handleSave = async () => {
+  if (isReadOnly.value) return
   if (saving.value) return
   saving.value = true
   try {
@@ -272,6 +278,7 @@ const handleSave = async () => {
 }
 
 const handleReloadCaddy = async () => {
+  if (isReadOnly.value) return
   try {
     await ElMessageBox.confirm('此操作将重新加载 Caddy 配置，是否继续？', '确认重载', {
       confirmButtonText: '确认',
@@ -583,4 +590,5 @@ onMounted(() => {
 :deep(.el-collapse-item__wrap) {
   background: var(--bg-primary);
 }
+.readonly-alert { margin-bottom: 20px; }
 </style>

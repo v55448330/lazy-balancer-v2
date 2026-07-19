@@ -1,4 +1,6 @@
 <template>
+  <div>
+    <el-alert v-if="isReadOnly" :title="authStore.readOnlyMessage" type="info" :closable="false" show-icon class="readonly-alert" />
   <el-row :gutter="20">
     <el-col :span="12">
       <el-card class="settings-card">
@@ -10,7 +12,7 @@
             </div>
           </div>
         </template>
-        <el-form :model="settings" label-width="120px" class="settings-form">
+        <el-form :model="settings" label-width="120px" class="settings-form" :disabled="isReadOnly">
           <el-form-item label="日志级别">
             <el-select v-model="settings.log_level" style="width: 100%">
               <el-option label="Debug" value="debug" />
@@ -61,7 +63,7 @@
             <div class="form-tip">影响所有日志时间戳和证书时间；修改后需重启容器生效</div>
           </el-form-item>
           <el-form-item>
-            <el-button type="primary" :loading="saving" @click="handleSave">
+            <el-button type="primary" :loading="saving" :disabled="isReadOnly" @click="handleSave">
               <el-icon><Check /></el-icon>
               <span class="btn-text">保存</span>
             </el-button>
@@ -96,16 +98,18 @@
 
     </el-col>
   </el-row>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
 import { Setting, InfoFilled, Check } from '@element-plus/icons-vue'
 
 const authStore = useAuthStore()
+const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 
 interface BasicSettingsConfig {
   log_level: string
@@ -132,6 +136,7 @@ const emit = defineEmits<{
 const saving = ref(false)
 
 const handleSave = async () => {
+  if (isReadOnly.value) return
   if (saving.value) return
   saving.value = true
   try {
@@ -196,4 +201,5 @@ const handleSave = async () => {
 .info-item:last-child { border-bottom: none; }
 .info-label { color: #6b7280; font-size: 13px; }
 .btn-text { margin-left: 4px; }
+.readonly-alert { margin-bottom: 20px; }
 </style>

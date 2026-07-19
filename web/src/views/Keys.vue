@@ -1,5 +1,6 @@
 <template>
   <div class="page" :class="{ 'hide-header': hideHeader }">
+    <el-alert v-if="isSlave" title="从节点只读，请在主节点操作" type="info" :closable="false" show-icon class="readonly-alert" />
     <div v-if="!hideHeader" class="page-header">
       <div class="header-left">
         <h2 class="page-title">
@@ -13,7 +14,7 @@
           <el-icon><Document /></el-icon>
           接口文档
         </el-button>
-        <el-button type="primary" @click="createKey">
+        <el-button type="primary" :disabled="isSlave" @click="createKey">
           <el-icon><Plus /></el-icon>
           创建密钥
         </el-button>
@@ -21,7 +22,7 @@
     </div>
 
     <div v-else class="toolbar">
-      <el-button type="primary" @click="createKey">
+      <el-button type="primary" :disabled="isSlave" @click="createKey">
         <el-icon><Plus /></el-icon>
         创建密钥
       </el-button>
@@ -57,12 +58,13 @@
               size="small"
               :type="key.is_enabled ? 'warning' : 'success'"
               :loading="togglePendingId === key.id"
+              :disabled="isSlave"
               @click="toggleKey(key)"
             >
               <el-icon><SwitchButton v-if="key.is_enabled" /><VideoPlay v-else /></el-icon>
               {{ key.is_enabled ? '禁用' : '启用' }}
             </el-button>
-            <el-button size="small" type="danger" @click="deleteKey(key.id)">
+            <el-button size="small" type="danger" :disabled="isSlave" @click="deleteKey(key.id)">
               <el-icon><Delete /></el-icon>
               删除
             </el-button>
@@ -103,8 +105,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import api, { request } from '@/utils/api'
+import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateShort } from '@/utils/date'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { CopyDocument, Delete, Document, Key, Plus, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
@@ -142,9 +145,8 @@ defineProps<{
   hideHeader?: boolean
 }>()
 
-defineExpose({
-  createKey,
-})
+const authStore = useAuthStore()
+const isSlave = computed(() => authStore.nodeMode === 'slave')
 
 const keys = ref<readonly APIKey[]>([])
 const loading = ref(false)
@@ -163,6 +165,7 @@ const fetchKeys = async () => {
 }
 
 async function createKey() {
+  if (isSlave.value) return
   let result
   try {
     result = await ElMessageBox.prompt('请输入密钥名称', '创建 API 密钥', {
@@ -188,6 +191,7 @@ async function createKey() {
 }
 
 const deleteKey = async (id: number) => {
+  if (isSlave.value) return
   try {
     await ElMessageBox.confirm('确定要删除这个 API 密钥吗？删除后无法恢复。', '警告', { type: 'warning' })
   } catch (error: unknown) {
@@ -201,6 +205,7 @@ const deleteKey = async (id: number) => {
 }
 
 const toggleKey = async (key: APIKey) => {
+  if (isSlave.value) return
   const isEnabled = !key.is_enabled
 
   if (!isEnabled) {
@@ -279,4 +284,5 @@ onMounted(() => {
 
 .empty-card { padding: 20px; }
 .empty-card :deep(.el-empty__bottom) { margin-top: 16px; }
+.readonly-alert { margin-bottom: 20px; }
 </style>

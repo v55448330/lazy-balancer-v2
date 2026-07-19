@@ -1,13 +1,13 @@
 <template>
   <el-container class="layout-container">
-    <el-aside :width="collapsed ? '64px' : '220px'" class="layout-aside">
+    <el-aside :width="effectiveCollapsed ? '64px' : '220px'" class="layout-aside">
       <div class="aside-header">
         <div class="logo-area" @click="collapsed = !collapsed">
           <div class="logo-icon">
             <el-icon :size="24"><Monitor /></el-icon>
           </div>
           <transition name="fade">
-            <span v-if="!collapsed" class="logo-text">
+            <span v-if="!effectiveCollapsed" class="logo-text">
               Lazy Balancer <span class="v2-badge">V2</span>
             </span>
           </transition>
@@ -17,7 +17,7 @@
       <el-menu
         :default-active="currentPage"
         class="layout-menu"
-        :collapse="collapsed"
+        :collapse="effectiveCollapsed"
         :collapse-transition="false"
         background-color="#ffffff"
         text-color="#6b7280"
@@ -79,7 +79,7 @@
               <el-icon><User /></el-icon>
             </el-avatar>
             <transition name="fade">
-              <div v-if="!collapsed" class="user-detail">
+              <div v-if="!effectiveCollapsed" class="user-detail">
                 <div class="user-name">{{ authStore.displayName || '用户' }}</div>
                 <div v-if="hasCustomDisplayName" class="user-role">{{ authStore.user?.username || '-' }}</div>
               </div>
@@ -120,20 +120,21 @@
     </el-container>
 
     <el-dialog v-model="showProfile" title="个人资料" width="480px" :close-on-click-modal="false">
+      <el-alert v-if="isSlave" title="从节点只读，请在主节点操作" type="info" :closable="false" show-icon class="profile-readonly-alert" />
       <el-form :model="profileForm" label-width="80px" class="profile-form">
         <el-form-item label="用户名">
           <el-input v-model="profileForm.username" disabled />
         </el-form-item>
         <el-form-item label="显示名">
-          <el-input v-model="profileForm.display_name" placeholder="选填" />
+          <el-input v-model="profileForm.display_name" :disabled="isSlave" placeholder="选填" />
         </el-form-item>
         <el-form-item label="新密码">
-          <el-input v-model="profileForm.password" type="password" placeholder="如不修改请留空" show-password />
+          <el-input v-model="profileForm.password" :disabled="isSlave" type="password" placeholder="如不修改请留空" show-password />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showProfile = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveProfile">保存</el-button>
+        <el-button type="primary" :loading="saving" :disabled="isSlave" @click="saveProfile">保存</el-button>
       </template>
     </el-dialog>
   </el-container>
@@ -141,16 +142,20 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { useAuthStore } from '@/stores/auth'
 import api from '@/utils/api'
 import { Monitor, DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document } from '@element-plus/icons-vue'
 
 const authStore = useAuthStore()
 const collapsed = ref(false)
+const isNarrowViewport = useMediaQuery('(max-width: 768px)')
+const effectiveCollapsed = computed(() => collapsed.value || isNarrowViewport.value)
 const showProfile = ref(false)
 const saving = ref(false)
 
 const currentPage = computed(() => authStore.currentPage)
+const isSlave = computed(() => authStore.nodeMode === 'slave')
 const hasCustomDisplayName = computed(() => {
   const displayName = authStore.normalizeDisplayName(authStore.user?.display_name, '')
   return displayName !== '' && displayName !== authStore.user?.username
@@ -196,6 +201,7 @@ const handleCommand = (command: string) => {
 }
 
 const saveProfile = async () => {
+  if (isSlave.value) return
   saving.value = true
   try {
     await api.patch('/users/me', {
@@ -500,4 +506,5 @@ onMounted(() => {
 }
 
 .profile-form { padding: 0 20px; }
+.profile-readonly-alert { margin-bottom: 20px; }
 </style>
