@@ -118,7 +118,6 @@ type GlobalConfig struct {
 	CertRenewalDays          int          `json:"cert_renewal_days"`
 	CertRenewalAttempts      int          `json:"cert_renewal_attempts"`
 	LogLevel                 string       `json:"log_level"`
-	AccessLogEnabled         bool         `json:"access_log_enabled"`
 	CaddyLogPath             string       `json:"caddy_log_path"`
 	CaddyLogLevel            string       `json:"caddy_log_level"`
 	CaddyLogSizeMB           int          `json:"caddy_log_size_mb"`
@@ -396,7 +395,6 @@ type UpdateConfigRequest struct {
 	CertRenewalDays          *int    `json:"cert_renewal_days"`
 	CertRenewalAttempts      *int    `json:"cert_renewal_attempts"`
 	LogLevel                 *string `json:"log_level"`
-	AccessLogEnabled         *bool   `json:"access_log_enabled"`
 	CaddyLogPath             *string `json:"caddy_log_path"`
 	CaddyLogLevel            *string `json:"caddy_log_level"`
 	CaddyLogSizeMB           *int    `json:"caddy_log_size_mb"`
@@ -458,6 +456,7 @@ type SystemInfo struct {
 	RunningStatus string            `json:"running_status"`
 	Uptime        int64             `json:"uptime"`
 	NodeMode      string            `json:"node_mode"`
+	Version       string            `json:"version"`
 }
 
 // SystemMetrics contains system resource usage

@@ -124,8 +124,8 @@ func insertSnapshotRules(ctx context.Context, tx *sql.Tx, rules []models.LbRule)
 
 func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
 	settings := snapshot.BasicSettings
-	query := `UPDATE global_config SET log_level=?,access_log_enabled=?,access_log_json=?,access_log_format=?,cert_job_log_size_mb=?,audit_retention_months=?,jwt_expire_minutes=?,timezone=?,acme_email=?,cert_expiry_days=?,cert_renewal_days=?,cert_renewal_attempts=?,default_ca_provider_id=?,dns_provider=?,dns_credentials=?,sync_interval=?`
-	args := []any{settings.LogLevel, settings.AccessLogEnabled, settings.AccessLogJSON, settings.AccessLogFormat, settings.CertJobLogSizeMB, settings.AuditRetentionMonths, settings.JWTExpireMinutes, settings.Timezone, settings.ACMEEmail, settings.CertExpiryDays, settings.CertRenewalDays, settings.CertRenewalAttempts, settings.DefaultCAProviderID, settings.DNSProvider, settings.DNSCredentials, settings.SyncInterval}
+	query := `UPDATE global_config SET log_level=?,access_log_json=?,access_log_format=?,cert_job_log_size_mb=?,audit_retention_months=?,jwt_expire_minutes=?,timezone=?,acme_email=?,cert_expiry_days=?,cert_renewal_days=?,cert_renewal_attempts=?,default_ca_provider_id=?,dns_provider=?,dns_credentials=?,sync_interval=?`
+	args := []any{settings.LogLevel, settings.AccessLogJSON, settings.AccessLogFormat, settings.CertJobLogSizeMB, settings.AuditRetentionMonths, settings.JWTExpireMinutes, settings.Timezone, settings.ACMEEmail, settings.CertExpiryDays, settings.CertRenewalDays, settings.CertRenewalAttempts, settings.DefaultCAProviderID, settings.DNSProvider, settings.DNSCredentials, settings.SyncInterval}
 	if snapshot.CaddyConfig != nil {
 		query += ",caddy_config=?"
 		args = append(args, *snapshot.CaddyConfig)

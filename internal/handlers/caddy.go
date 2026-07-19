@@ -27,7 +27,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       COALESCE(cert_renewal_days,30) as cert_renewal_days,
 		       COALESCE(cert_renewal_attempts,5) as cert_renewal_attempts,
 		       COALESCE(default_ca_provider_id,0) as default_ca_provider_id,
-		       log_level, access_log_enabled,
+		       log_level,
 		       COALESCE(caddy_log_path,'/app/logs/caddy.log') as caddy_log_path,
 		       COALESCE(caddy_log_level,'info') as caddy_log_level,
 		       COALESCE(caddy_log_size_mb,100) as caddy_log_size_mb,
@@ -49,7 +49,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	`).Scan(
 		&cfg.ID, &cfg.CaddyConfig, &cfg.DNSProvider, &cfg.DNSCredentials,
 		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.CertRenewalDays, &cfg.CertRenewalAttempts, &cfg.DefaultCAProviderID,
-		&cfg.LogLevel, &cfg.AccessLogEnabled,
+		&cfg.LogLevel,
 		&cfg.CaddyLogPath, &cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
 		&cfg.RequestBodyMaxSizeMB, &cfg.HTTPReadTimeout, &cfg.HTTPWriteTimeout, &cfg.HTTPIdleTimeout,
 		&cfg.UpstreamKeepaliveTimeout, &cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.JWTExpireMinutes, &cfg.Timezone,
@@ -191,8 +191,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				cert_renewal_attempts = COALESCE(?, cert_renewal_attempts),
 				default_ca_provider_id = COALESCE(?, default_ca_provider_id),
 				log_level = COALESCE(?, log_level),
-				access_log_enabled = COALESCE(?, access_log_enabled),
-				caddy_log_path = COALESCE(?, caddy_log_path),
+								caddy_log_path = COALESCE(?, caddy_log_path),
 				caddy_log_level = COALESCE(?, caddy_log_level),
 				caddy_log_size_mb = COALESCE(?, caddy_log_size_mb),
 				request_body_max_size_mb = COALESCE(?, request_body_max_size_mb),
@@ -209,7 +208,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				timezone = COALESCE(?, timezone),
 				updated_at = datetime('now')
 			WHERE id = 1
-		`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.LogLevel, req.AccessLogEnabled,
+		`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.LogLevel,
 		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
 		req.UpstreamKeepaliveTimeout, req.ServerTokensHidden, req.CertJobLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone)

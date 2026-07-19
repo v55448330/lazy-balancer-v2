@@ -48,7 +48,6 @@ type ClusterReport struct {
 
 type ClusterBasicSettings struct {
 	LogLevel             string `json:"log_level"`
-	AccessLogEnabled     bool   `json:"access_log_enabled"`
 	AccessLogJSON        bool   `json:"access_log_json"`
 	AccessLogFormat      string `json:"access_log_format"`
 	CertJobLogSizeMB     int    `json:"cert_job_log_size_mb"`

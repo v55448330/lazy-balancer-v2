@@ -1,6 +1,9 @@
 services:
   lazy-balancer:
-    build: .
+    build:
+      context: .
+      args:
+        VERSION: 2.1.0
     container_name: lazy-balancer
     network_mode: host
     # Port mapping is not used with host network; Caddy binds directly to host ports.
@@ -14,6 +17,7 @@ services:
       - ADMIN_PASSWORD=zdy123.org
       - NODE_NAME=master
       - NODE_MODE=master
+      - LOG_FILE=/app/logs/lazy-balancer.log
       # Uncomment for slave mode:
       # - NODE_MODE=slave
       # - MASTER_URL=http://10.0.0.1:8000
@@ -25,7 +29,10 @@ services:
   # 从节点测试实例：bridge 网络，仅将容器 8000 映射到宿主机 8001，避免与主节点(host 网络)端口冲突
   # 主节点地址注册时填写: http://host.docker.internal:8000
   lazy-balancer-slave:
-    build: .
+    build:
+      context: .
+      args:
+        VERSION: 2.1.0
     container_name: lazy-balancer-slave
     ports:
       - "8001:8000"
@@ -38,4 +45,5 @@ services:
       - ADMIN_USER=admin
       - ADMIN_PASSWORD=zdy123.org
       - NODE_NAME=slave-test
+      - LOG_FILE=/app/logs/lazy-balancer.log
     restart: unless-stopped

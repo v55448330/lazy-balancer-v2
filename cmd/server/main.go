@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -29,6 +30,13 @@ func main() {
 
 	// Load configuration
 	cfg := config.Load(*configPath)
+
+	if logFile := os.Getenv("LOG_FILE"); logFile != "" {
+		if file, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+			log.SetOutput(io.MultiWriter(os.Stdout, file))
+			defer file.Close()
+		}
+	}
 
 	// Initialize database
 	if err := db.Initialize(cfg.DataDir); err != nil {

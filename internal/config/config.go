@@ -12,6 +12,7 @@ type Config struct {
 	Port      int    `json:"port"`
 	DataDir   string `json:"data_dir"`
 	StaticDir string `json:"static_dir"`
+	Version   string `json:"version"`
 
 	// Caddy
 	CaddyAdminURL   string `json:"caddy_admin_url"`
@@ -55,6 +56,7 @@ func Load(path string) *Config {
 		SyncInterval:         getEnvInt("SYNC_INTERVAL", 60),
 		LogLevel:             getEnv("LOG_LEVEL", "info"),
 		JWTSecret:            getEnv("JWT_SECRET", ""),
+		Version:              getEnv("APP_VERSION", "2.1.0"),
 		JWTExpire:            24 * time.Hour,
 		InitialAdminUser:     getEnv("ADMIN_USER", "admin"),
 		InitialAdminPassword: getEnv("ADMIN_PASSWORD", "admin123"),

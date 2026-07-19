@@ -234,7 +234,7 @@ func TestReplaceSnapshotDB_replaces_resources_without_overwriting_role(t *testin
 		}},
 		Users:         []models.ClusterUser{{ID: 20, Username: "admin-master", PasswordHash: "hash", Role: "admin", IsEnabled: true}},
 		APIKeys:       []models.ClusterAPIKey{{ID: 30, Name: "ci", KeyHash: "key-hash", KeyPrefix: "lb_sk_master", CreatedBy: 20, IsEnabled: true}},
-		BasicSettings: models.ClusterBasicSettings{LogLevel: "debug", AccessLogEnabled: true, AccessLogJSON: true, Timezone: "Asia/Shanghai", SyncInterval: 120},
+		BasicSettings: models.ClusterBasicSettings{LogLevel: "debug", AccessLogJSON: true, Timezone: "Asia/Shanghai", SyncInterval: 120},
 	}
 
 	// When
@@ -281,7 +281,7 @@ func TestSyncService_applySnapshot_rolls_back_when_caddy_rejects_config(t *testi
 	snapshot := models.ClusterSnapshot{
 		Version:       2,
 		Users:         []models.ClusterUser{{ID: 99, Username: "incoming", PasswordHash: "hash", Role: "admin", IsEnabled: true}},
-		BasicSettings: models.ClusterBasicSettings{LogLevel: "info", AccessLogEnabled: true, AccessLogJSON: true, Timezone: "Asia/Shanghai"},
+		BasicSettings: models.ClusterBasicSettings{LogLevel: "info", AccessLogJSON: true, Timezone: "Asia/Shanghai"},
 	}
 	var oldUsername string
 	if err := database.QueryRow("SELECT username FROM users ORDER BY id LIMIT 1").Scan(&oldUsername); err != nil {

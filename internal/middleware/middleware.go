@@ -50,6 +50,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.POST("/auth/login", h.Login)
 		v1.GET("/auth/setup", h.GetSetupStatus)
 		v1.POST("/auth/setup", h.SetupAdmin)
+		v1.GET("/branding", h.GetBranding)
 		v1.POST("/cluster/register", h.RegisterClusterNode)
 		v1.GET("/cluster/register/:id/status", registrationAuth(db.DB), h.GetClusterRegistrationStatus)
 		v1.GET("/cluster/sync/snapshot", clusterTokenAuth(db.DB), h.GetClusterSnapshot)
@@ -92,12 +93,14 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/cluster/sync/pull", jwtOnly(), h.PullClusterSnapshot)
 				admin.PUT("/cluster/settings", jwtOnly(), h.UpdateClusterSettings)
 
-				// Config
-				admin.POST("/config/preview", h.PreviewConfigUpdate)
-				admin.PUT("/config", h.UpdateConfig)
-				admin.POST("/config/reload", h.ReloadCaddy)
-				admin.POST("/config/validate", h.ValidateConfig)
-				admin.GET("/config/health", h.GetUpstreamHealth)
+			// Config
+			admin.POST("/config/preview", h.PreviewConfigUpdate)
+			admin.PUT("/config", h.UpdateConfig)
+			admin.POST("/config/reload", h.ReloadCaddy)
+			admin.POST("/config/validate", h.ValidateConfig)
+			admin.GET("/config/health", h.GetUpstreamHealth)
+			admin.GET("/config/export", h.ExportConfigBackup)
+			admin.POST("/config/import", h.ImportConfigBackup)
 
 			}
 
@@ -152,6 +155,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				// System
 				business.GET("/system/info", h.GetSystemInfo)
 				business.GET("/system/metrics", h.GetSystemMetrics)
+				business.GET("/system/logs", h.GetAppLogs)
 
 				// Caddy
 				business.GET("/caddy/status", h.GetCaddyStatus)

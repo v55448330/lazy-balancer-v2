@@ -40,6 +40,8 @@ func newReadOnlyGuardTestRouter(t *testing.T, isMaster bool, role string) *gin.E
 	router.POST("/api/v1/users/me/api-keys", noContent)
 	router.POST("/api/v1/cluster/nodes/report", noContent)
 	router.POST("/api/v1/auth/login", noContent)
+	router.POST("/api/v1/rules/cert-info", noContent)
+	router.POST("/api/v1/config/preview", noContent)
 	return router
 }
 
@@ -184,5 +186,21 @@ func TestReadOnlyGuard_allows_unauthenticated_machine_and_login_routes(t *testin
 	// Then
 	if machine.Code != http.StatusNoContent || login.Code != http.StatusNoContent {
 		t.Fatalf("machine status = %d, login status = %d, want both 204", machine.Code, login.Code)
+	}
+}
+
+func TestReadOnlyGuard_allows_slave_readonly_post_routes(t *testing.T) {
+	// Given
+	router := newReadOnlyGuardTestRouter(t, false, "admin")
+
+	// When
+	certInfo := httptest.NewRecorder()
+	router.ServeHTTP(certInfo, httptest.NewRequest(http.MethodPost, "/api/v1/rules/cert-info", nil))
+	preview := httptest.NewRecorder()
+	router.ServeHTTP(preview, httptest.NewRequest(http.MethodPost, "/api/v1/config/preview", nil))
+
+	// Then
+	if certInfo.Code != http.StatusNoContent || preview.Code != http.StatusNoContent {
+		t.Fatalf("cert-info status = %d, preview status = %d, want both 204", certInfo.Code, preview.Code)
 	}
 }

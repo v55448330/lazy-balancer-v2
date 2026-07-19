@@ -15,7 +15,6 @@ type configSnapshot struct {
 	CertRenewalAttempts      int
 	DefaultCAProviderID      int
 	LogLevel                 string
-	AccessLogEnabled         bool
 	Timezone                 string
 	CaddyLogLevel            string
 	CaddyLogSizeMB           int
@@ -43,7 +42,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 	var old configSnapshot
 	err := db.DB.QueryRow(`SELECT COALESCE(acme_email,''), COALESCE(dns_provider,'dnspod'), COALESCE(dns_credentials,''),
 		COALESCE(cert_expiry_days,30), COALESCE(cert_renewal_days,30), COALESCE(cert_renewal_attempts,5),
-		COALESCE(default_ca_provider_id,0), COALESCE(log_level,'info'), COALESCE(access_log_enabled,TRUE),
+		COALESCE(default_ca_provider_id,0), COALESCE(log_level,'info'),
 		COALESCE(timezone,'Asia/Shanghai'),
 		COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100), COALESCE(request_body_max_size_mb,0),
 		COALESCE(http_read_timeout,60), COALESCE(http_write_timeout,60), COALESCE(http_idle_timeout,120),
@@ -53,7 +52,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		FROM global_config WHERE id=1`).Scan(
 		&old.ACMEEmail, &old.DNSProvider, &old.DNSCredentials,
 		&old.CertExpiryDays, &old.CertRenewalDays, &old.CertRenewalAttempts,
-		&old.DefaultCAProviderID, &old.LogLevel, &old.AccessLogEnabled,
+		&old.DefaultCAProviderID, &old.LogLevel,
 		&old.Timezone,
 		&old.CaddyLogLevel, &old.CaddyLogSizeMB, &old.RequestBodyMaxSizeMB,
 		&old.HTTPReadTimeout, &old.HTTPWriteTimeout, &old.HTTPIdleTimeout,
@@ -87,7 +86,6 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 	add("cert_renewal_days", "续签天数", req.CertRenewalDays != nil && *req.CertRenewalDays != old.CertRenewalDays)
 	add("cert_renewal_attempts", "重试次数", req.CertRenewalAttempts != nil && *req.CertRenewalAttempts != old.CertRenewalAttempts)
 	add("log_level", "系统日志级别", req.LogLevel != nil && *req.LogLevel != old.LogLevel)
-	add("access_log_enabled", "访问日志开关", req.AccessLogEnabled != nil && *req.AccessLogEnabled != old.AccessLogEnabled)
 	add("timezone", "时区", req.Timezone != nil && *req.Timezone != old.Timezone)
 	add("audit_retention_months", "日志保留", req.AuditRetentionMonths != nil && *req.AuditRetentionMonths != old.AuditRetentionMonths)
 	add("jwt_expire_minutes", "登录过期时间", req.JWTExpireMinutes != nil && *req.JWTExpireMinutes != old.JWTExpireMinutes)
