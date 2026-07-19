@@ -464,6 +464,14 @@
             <div class="strategy-cards">
               <div 
                 class="strategy-card" 
+                :class="{ active: wizardForm.strategy === 'weighted_round_robin' }"
+                @click="wizardForm.strategy = 'weighted_round_robin'"
+              >
+                <div class="strategy-card-title">轮询</div>
+                <div class="strategy-card-desc">按上游权重比例分配，权重相同即为普通轮询</div>
+              </div>
+              <div 
+                class="strategy-card" 
                 :class="{ active: wizardForm.strategy === 'least_conn' }"
                 @click="wizardForm.strategy = 'least_conn'"
               >
@@ -477,14 +485,6 @@
               >
                 <div class="strategy-card-title">IP 哈希</div>
                 <div class="strategy-card-desc">按客户端 IP 固定分配</div>
-              </div>
-              <div 
-                class="strategy-card" 
-                :class="{ active: wizardForm.strategy === 'weighted_round_robin' }"
-                @click="wizardForm.strategy = 'weighted_round_robin'"
-              >
-                <div class="strategy-card-title">轮询</div>
-                <div class="strategy-card-desc">按上游权重比例分配，权重相同即为普通轮询</div>
               </div>
               <div 
                 v-if="wizardForm.protocol === 'http'"

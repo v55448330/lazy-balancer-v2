@@ -8,6 +8,7 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
   const token = ref<string | null>(localStorage.getItem('token'))
   const nodeMode = ref<ClusterNodeMode>('master')
+  const timezone = ref<string>('Asia/Shanghai')
   const loading = ref(false)
   const currentPage = ref<string>(localStorage.getItem('currentPage') || 'dashboard')
 
@@ -59,9 +60,10 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchConfig() {
     if (!token.value) return
     try {
-      const res = await request.get<ApiResponse<{ readonly is_master: boolean }>>('/config')
+      const res = await request.get<ApiResponse<{ readonly is_master: boolean; readonly timezone?: string }>>('/config')
       if (res.data) {
         nodeMode.value = res.data.is_master ? 'master' : 'slave'
+        if (res.data.timezone) timezone.value = res.data.timezone
       }
     } catch (e) {
       console.error(e)
@@ -142,6 +144,7 @@ export const useAuthStore = defineStore('auth', () => {
     user,
     token,
     nodeMode,
+    timezone,
     loading,
     currentPage,
     isLoggedIn,
