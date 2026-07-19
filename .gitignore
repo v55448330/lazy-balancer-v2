@@ -6,9 +6,12 @@ server
 
 # Data (runtime)
 data/
+data-slave/
 test-data/
 certs/
+certs-slave/
 logs/
+logs-slave/
 
 # Test UI (staging)
 test-ui/
