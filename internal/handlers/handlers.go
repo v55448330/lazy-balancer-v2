@@ -265,7 +265,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 	}
 
 	if data.Strategy == "" {
-		data.Strategy = "round_robin"
+		data.Strategy = "weighted_round_robin"
 	}
 	if data.HealthCheckInterval == 0 {
 		data.HealthCheckInterval = 10
@@ -292,11 +292,11 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 	}
 
 	validStrategies := map[string]bool{
-		"round_robin": true, "ip_hash": true, "least_conn": true,
-		"random": true, "first": true, "least_time": true,
+		"ip_hash": true, "least_conn": true,
+		"random": true, "first": true, "least_time": true, "weighted_round_robin": true,
 	}
 	if !validStrategies[data.Strategy] {
-		return fmt.Errorf("invalid strategy: must be round_robin, ip_hash, least_conn, random, first, or least_time")
+		return fmt.Errorf("invalid strategy: must be weighted_round_robin, ip_hash, least_conn, random, first, or least_time")
 	}
 
 	if data.Domain != "" && (data.Protocol == "http" || data.Protocol == "https") {

@@ -113,7 +113,7 @@ func createTables() error {
 		protocol VARCHAR(10) NOT NULL,
 		domain VARCHAR(255),
 		listen_port INTEGER NOT NULL,
-		strategy VARCHAR(20) DEFAULT 'round_robin',
+		strategy VARCHAR(20) DEFAULT 'weighted_round_robin',
 		dynamic_dns BOOLEAN DEFAULT FALSE,
 		enable_dns_server BOOLEAN DEFAULT FALSE,
 		dns_server VARCHAR(255) DEFAULT '',
@@ -351,6 +351,8 @@ func runMigrations() error {
 			DB.Exec("ALTER TABLE lb_rules ADD COLUMN " + col + " " + dtype)
 		}
 	}
+
+	DB.Exec("UPDATE lb_rules SET strategy='weighted_round_robin' WHERE strategy='round_robin'")
 
 	// ca_providers columns are created by createTables; here we only add columns to existing tables.
 	newColumns := map[string]string{
@@ -731,7 +733,7 @@ func migrateLbRulesPrimaryKey() error {
 			protocol VARCHAR(10) NOT NULL,
 			domain VARCHAR(255),
 			listen_port INTEGER NOT NULL,
-			strategy VARCHAR(20) DEFAULT 'round_robin',
+			strategy VARCHAR(20) DEFAULT 'weighted_round_robin',
 			dynamic_dns BOOLEAN DEFAULT FALSE,
 			enable_dns_server BOOLEAN DEFAULT FALSE,
 			dns_server VARCHAR(255) DEFAULT '',

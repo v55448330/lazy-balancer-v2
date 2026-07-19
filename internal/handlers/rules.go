@@ -77,7 +77,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		r.Domain = domain
 		r.Strategy = strategy
 		if r.Strategy == "" {
-			r.Strategy = "round_robin"
+			r.Strategy = "weighted_round_robin"
 		}
 		r.DynamicDNS = dynamicDNS
 		r.EnableDnsServer = enableDnsServer
@@ -158,7 +158,7 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	r.Domain = domain
 	r.Strategy = strategy
 	if r.Strategy == "" {
-		r.Strategy = "round_robin"
+		r.Strategy = "weighted_round_robin"
 	}
 	r.DynamicDNS = dynamicDNS
 	r.EnableDnsServer = enableDnsServer
@@ -476,7 +476,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 
 	// Set defaults before validation
 	if req.Strategy == "" {
-		req.Strategy = "round_robin"
+		req.Strategy = "weighted_round_robin"
 	}
 	if req.HealthCheckInterval == 0 {
 		req.HealthCheckInterval = 10
@@ -627,7 +627,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
 			enable_compress, compress_types, enabled, created_by, updated_at, caddy_id, log_enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
@@ -843,7 +843,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// Fill in missing fields from database so validation and the update use complete data.
 	var existingRule models.LbRule
 	err := db.DB.QueryRow(`
-		SELECT COALESCE(protocol,''), COALESCE(domain,''), listen_port, COALESCE(strategy,'round_robin'),
+		SELECT COALESCE(protocol,''), COALESCE(domain,''), listen_port, COALESCE(strategy,'weighted_round_robin'),
 			COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0),
 			COALESCE(ca_provider_id,0),
 			COALESCE(enable_tls,0), COALESCE(tls_http_redirect,0),
@@ -1077,7 +1077,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	listenPort := req.ListenPort
 	strategy := req.Strategy
 	if strategy == "" {
-		strategy = "round_robin"
+		strategy = "weighted_round_robin"
 	}
 
 	var global struct {

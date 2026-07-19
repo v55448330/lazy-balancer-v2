@@ -1712,7 +1712,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 		}
 
 		if r.Strategy == "" {
-			r.Strategy = "round_robin"
+			r.Strategy = "weighted_round_robin"
 		}
 
 		if !r.Enabled {
@@ -1887,6 +1887,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 				HealthCheckInterval:            r.HealthCheckInterval,
 				HealthCheckTimeout:             r.HealthCheckTimeout,
 				HealthCheckUnhealthyThreshold:  r.HealthCheckUnhealthyThreshold,
+				HealthCheckHealthyThreshold:    r.HealthCheckHealthyThreshold,
 				EnableTLS:                      r.EnableTLS,
 				TLSSource:                      r.TLSSource,
 				ACMEConfigID:                   r.ACMEConfigID,
@@ -2042,6 +2043,9 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 				upstreamEntry := map[string]interface{}{
 					"dial": []string{dial},
 				}
+				if u.Weight > 1 {
+					upstreamEntry["weight"] = u.Weight
+				}
 				// For TCP rules, "https" is treated as TLS-wrapped TCP; "tls" is explicit TLS upstream.
 				if u.Protocol == "https" || u.Protocol == "tls" {
 					upstreamEntry["tls"] = map[string]interface{}{
@@ -2067,10 +2071,10 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 		r := rules[0].rule
 		strategy := r.Strategy
 		if strategy == "" {
-			strategy = "round_robin"
+			strategy = "weighted_round_robin"
 		}
 		if strategy == "cookie" {
-			strategy = "round_robin" // cookie sticky is only supported for HTTP
+			strategy = "weighted_round_robin" // cookie sticky is only supported for HTTP
 		}
 
 		proxyHandler := map[string]interface{}{
@@ -2120,10 +2124,16 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 			if healthCheckTimeout <= 0 {
 				healthCheckTimeout = 5
 			}
+			healthyThreshold := r.HealthCheckHealthyThreshold
+			if healthyThreshold <= 0 {
+				healthyThreshold = 2
+			}
 			healthChecks["active"] = map[string]interface{}{
 				"interval": fmt.Sprintf("%ds", healthCheckInterval),
 				"port":     activePort,
 				"timeout":  fmt.Sprintf("%ds", healthCheckTimeout),
+				"rise":     healthyThreshold,
+				"fall":     unhealthyThreshold,
 			}
 		}
 		proxyHandler["health_checks"] = healthChecks
@@ -2488,6 +2498,7 @@ type SingleRuleConfig struct {
 	HealthCheckInterval            int
 	HealthCheckTimeout             int
 	HealthCheckUnhealthyThreshold  int
+	HealthCheckHealthyThreshold    int
 	EnableTLS                      bool
 	TLSSource                      string
 	ACMEConfigID                   int
@@ -2545,7 +2556,7 @@ func resolveRuleOverrides(rule SingleRuleConfig) (requestBodyMaxSizeMB int, upst
 
 func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{} {
 	if rule.Strategy == "" {
-		rule.Strategy = "round_robin"
+		rule.Strategy = "weighted_round_robin"
 	}
 
 	domainHosts := strings.Split(rule.Domain, ",")
@@ -2570,9 +2581,15 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 	if rule.Protocol == "http" {
 		var upstreamList []interface{}
+		var upstreamWeights []int
 		hasHTTPSUpstream := false
 
 		for _, u := range enabledUpstreams {
+			weight := u.Weight
+			if weight <= 0 {
+				weight = 1
+			}
+			upstreamWeights = append(upstreamWeights, weight)
 			if rule.DynamicDNS {
 				versions := map[string]bool{"ipv4": false, "ipv6": false}
 				switch rule.DnsFamily {
@@ -2644,6 +2661,9 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			selectionPolicy := map[string]interface{}{"policy": rule.Strategy}
 			if rule.Strategy == "cookie" {
 				selectionPolicy["name"] = "lb_sticky"
+			}
+			if rule.Strategy == "weighted_round_robin" && len(upstreamWeights) > 0 {
+				selectionPolicy["weights"] = upstreamWeights
 			}
 			proxyConfig["load_balancing"] = map[string]interface{}{
 				"selection_policy": selectionPolicy,
@@ -2795,6 +2815,9 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			upstreamEntry := map[string]interface{}{
 				"dial": []string{dial},
 			}
+			if u.Weight > 1 {
+				upstreamEntry["weight"] = u.Weight
+			}
 			if u.Protocol == "https" || u.Protocol == "tls" {
 				upstreamEntry["tls"] = map[string]interface{}{
 					"insecure_skip_verify": true,
@@ -2811,7 +2834,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 		strategy := rule.Strategy
 		if strategy == "" {
-			strategy = "round_robin"
+			strategy = "weighted_round_robin"
 		}
 
 		proxyHandler := map[string]interface{}{
@@ -2860,10 +2883,16 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			if healthCheckTimeout <= 0 {
 				healthCheckTimeout = 5
 			}
+			healthyThreshold := rule.HealthCheckHealthyThreshold
+			if healthyThreshold <= 0 {
+				healthyThreshold = 2
+			}
 			healthChecks["active"] = map[string]interface{}{
 				"interval": fmt.Sprintf("%ds", healthCheckInterval),
 				"port":     activePort,
 				"timeout":  fmt.Sprintf("%ds", healthCheckTimeout),
+				"rise":     healthyThreshold,
+				"fall":     unhealthyThreshold,
 			}
 		}
 		proxyHandler["health_checks"] = healthChecks
@@ -2933,7 +2962,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 // This is used for @id-based incremental updates via SetConfigByID/PatchConfigByID
 func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) {
 	if rule.Strategy == "" {
-		rule.Strategy = "round_robin"
+		rule.Strategy = "weighted_round_robin"
 	}
 
 	enabledUpstreams := make([]UpstreamConfig, 0)
@@ -2956,6 +2985,7 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 	if rule.Protocol == "http" || rule.Protocol == "https" {
 		hasHTTPSUpstream := false
 		upstreamList := make([]interface{}, 0)
+		upstreamWeights := make([]int, 0)
 
 		effectiveRequestBodyMaxSizeMB, effectiveUpstreamKeepaliveTimeout, effectiveServerTokensHidden := resolveRuleOverrides(rule)
 
@@ -2969,6 +2999,11 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 		}
 
 		for _, u := range enabledUpstreams {
+			weight := u.Weight
+			if weight <= 0 {
+				weight = 1
+			}
+			upstreamWeights = append(upstreamWeights, weight)
 			if rule.DynamicDNS {
 				versions := map[string]bool{"ipv4": false, "ipv6": false}
 				switch rule.DnsFamily {
@@ -3027,6 +3062,9 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 			selectionPolicy := map[string]interface{}{"policy": rule.Strategy}
 			if rule.Strategy == "cookie" {
 				selectionPolicy["name"] = "lb_sticky"
+			}
+			if rule.Strategy == "weighted_round_robin" && len(upstreamWeights) > 0 {
+				selectionPolicy["weights"] = upstreamWeights
 			}
 			proxyConfig["load_balancing"] = map[string]interface{}{
 				"selection_policy": selectionPolicy,
