@@ -15,7 +15,10 @@
     </div>
 
     <el-card>
-      <el-table :data="rules" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+      <div class="table-toolbar">
+        <el-input v-model="searchQuery" placeholder="搜索规则名 / 域名 / 端口" clearable :prefix-icon="Search" class="search-input" />
+      </div>
+      <el-table :data="pagedRules" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <el-table-column prop="name" label="规则名称" min-width="140">
           <template #default="{ row }">
             <a class="rule-name-link" @click.prevent="viewConfig(row)">{{ row.name }}</a>
@@ -201,6 +204,14 @@
           <el-empty description="暂无负载均衡规则" :image-size="80" />
         </template>
       </el-table>
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :total="filteredRules.length"
+        :page-sizes="[10, 20, 30, 50]"
+        layout="total, sizes, prev, pager, next"
+        class="rules-pagination"
+      />
     </el-card>
 
     <el-dialog v-model="wizardVisible" :title="editingRule ? '编辑规则' : (isCopyMode ? '复制规则' : '新建规则')" width="800" :close-on-click-modal="false" @close="resetWizard">
@@ -445,20 +456,12 @@
             </el-table>
             <div class="form-tip">
               <span v-if="upstreamHostWarning" class="port-warning">{{ upstreamHostWarning }}</span>
-              <span v-else>权重：数字越大，分配到的请求越多。至少需要添加一个上游服务器。</span>
+              <span v-else>权重：数字越大，分配到的请求越多；权重相同时即为普通轮询。至少需要添加一个上游服务器。</span>
             </div>
 
             <el-divider content-position="left" class="compact-divider">负载策略</el-divider>
 
             <div class="strategy-cards">
-              <div 
-                class="strategy-card" 
-                :class="{ active: wizardForm.strategy === 'round_robin' }"
-                @click="wizardForm.strategy = 'round_robin'"
-              >
-                <div class="strategy-card-title">轮询</div>
-                <div class="strategy-card-desc">按顺序依次分配请求</div>
-              </div>
               <div 
                 class="strategy-card" 
                 :class="{ active: wizardForm.strategy === 'least_conn' }"
@@ -474,6 +477,14 @@
               >
                 <div class="strategy-card-title">IP 哈希</div>
                 <div class="strategy-card-desc">按客户端 IP 固定分配</div>
+              </div>
+              <div 
+                class="strategy-card" 
+                :class="{ active: wizardForm.strategy === 'weighted_round_robin' }"
+                @click="wizardForm.strategy = 'weighted_round_robin'"
+              >
+                <div class="strategy-card-title">轮询</div>
+                <div class="strategy-card-desc">按上游权重比例分配，权重相同即为普通轮询</div>
               </div>
               <div 
                 v-if="wizardForm.protocol === 'http'"
@@ -832,7 +843,7 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
-import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight } from '@element-plus/icons-vue'
+import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight, Search } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { ansiToHtml } from '@/utils/ansi'
 
@@ -931,6 +942,29 @@ interface CertJob {
 }
 
 const rules = ref<Rule[]>([])
+const searchQuery = ref('')
+const currentPage = ref(1)
+const pageSize = ref(10)
+
+const filteredRules = computed(() => {
+  const query = searchQuery.value.trim().toLowerCase()
+  if (!query) return rules.value
+  return rules.value.filter((rule) => {
+    const name = (rule.name || '').toLowerCase()
+    const domain = (rule.domain || '').toLowerCase()
+    const port = String(rule.listen_port || '')
+    return name.includes(query) || domain.includes(query) || port.includes(query)
+  })
+})
+
+const pagedRules = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredRules.value.slice(start, start + pageSize.value)
+})
+
+watch(searchQuery, () => {
+  currentPage.value = 1
+})
 const users = ref<any[]>([])
 const certInfoMap = ref<Record<string, CertInfo | null>>({})
 const certJobMap = ref<Record<string, CertJob>>({})
@@ -1284,7 +1318,7 @@ const wizardForm = reactive<Rule>({
   protocol: 'http',
   domain: '',
   listen_port: 80,
-  strategy: 'round_robin',
+  strategy: 'weighted_round_robin',
   dynamic_dns: false,
   enable_dns_server: false,
   dns_server: '',
@@ -1430,7 +1464,7 @@ const portWarning = computed(() => {
 
 const getStrategyLabel = (strategy: string) => {
   const labels: Record<string, string> = {
-    round_robin: '轮询',
+    weighted_round_robin: '轮询',
     least_conn: '最少连接',
     ip_hash: 'IP 哈希',
     cookie: 'Cookie 粘滞',
@@ -1590,7 +1624,7 @@ const openWizard = (rule?: Rule) => {
       protocol: rule.protocol,
       domain: rule.domain || '',
       listen_port: rule.listen_port,
-      strategy: rule.strategy || 'round_robin',
+      strategy: rule.strategy || 'weighted_round_robin',
       dynamic_dns: rule.dynamic_dns || false,
       enable_dns_server: (rule as any).enable_dns_server || false,
       dns_server: (rule as any).dns_server || '',
@@ -1635,7 +1669,7 @@ const openWizard = (rule?: Rule) => {
       protocol: 'http',
       domain: '',
       listen_port: 80,
-      strategy: 'round_robin',
+      strategy: 'weighted_round_robin',
       dynamic_dns: false,
       health_check_path: '',
       health_check_interval: 10,
@@ -1917,7 +1951,7 @@ const openCopyWizard = (rule: Rule) => {
     protocol: rule.protocol,
     domain: rule.domain || '',
     listen_port: rule.listen_port,
-    strategy: rule.strategy || 'round_robin',
+    strategy: rule.strategy || 'weighted_round_robin',
     dynamic_dns: rule.dynamic_dns || false,
     enable_dns_server: (rule as any).enable_dns_server || false,
     dns_server: (rule as any).dns_server || '',
@@ -1977,7 +2011,7 @@ const viewConfig = async (rule: Rule) => {
       domain: rule.domain || '',
       listen_port: rule.listen_port || 0,
       protocol: rule.protocol || 'http',
-      strategy: rule.strategy || 'round_robin',
+      strategy: rule.strategy || 'weighted_round_robin',
       dynamic_dns: rule.dynamic_dns || false,
       enable_dns_server: (rule as any).enable_dns_server || false,
       dns_server: (rule as any).dns_server || '',
@@ -2012,7 +2046,7 @@ const viewConfig = async (rule: Rule) => {
       domain: rule.domain || '',
       listen_port: rule.listen_port || 0,
       protocol: rule.protocol || 'http',
-      strategy: rule.strategy || 'round_robin',
+      strategy: rule.strategy || 'weighted_round_robin',
       dynamic_dns: rule.dynamic_dns || false,
       enable_dns_server: (rule as any).enable_dns_server || false,
       dns_server: (rule as any).dns_server || '',
@@ -2119,6 +2153,9 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
+.search-input { width: 280px; }
+.rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 .page-header {
   display: flex;
   justify-content: space-between;
