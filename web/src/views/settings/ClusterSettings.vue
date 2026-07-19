@@ -1,6 +1,5 @@
 <template>
   <div class="cluster-settings">
-    <el-alert v-if="isNonAdminReadOnly" :title="authStore.readOnlyMessage" type="info" :closable="false" show-icon />
     <ClusterStatusCard :status="status" :loading="initialLoading" />
     <ClusterModeCard
       :status="status"

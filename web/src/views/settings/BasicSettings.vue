@@ -1,45 +1,38 @@
 <template>
-  <div>
-    <el-alert v-if="isReadOnly" :title="authStore.readOnlyMessage" type="info" :closable="false" show-icon class="readonly-alert" />
-  <el-row :gutter="20">
-    <el-col :span="12">
-      <el-card class="settings-card">
-        <template #header>
-          <div class="card-header">
-            <div class="card-title">
-              <el-icon><Setting /></el-icon>
-              <span>基础设置</span>
-            </div>
+  <div class="basic-stack">
+    <el-card class="settings-card">
+      <template #header>
+        <div class="card-header">
+          <div class="card-title">
+            <el-icon><Setting /></el-icon>
+            <span>基础设置</span>
           </div>
-        </template>
+        </div>
+      </template>
         <el-form :model="settings" label-width="120px" class="settings-form" :disabled="isReadOnly">
           <el-form-item label="日志级别">
-            <el-select v-model="settings.log_level" style="width: 100%">
+            <el-select v-model="settings.log_level" class="compact-select">
               <el-option label="Debug" value="debug" />
               <el-option label="Info" value="info" />
               <el-option label="Warning" value="warn" />
               <el-option label="Error" value="error" />
             </el-select>
-            <div class="form-tip">控制 Lazy Balancer 自身日志详细程度</div>
-          </el-form-item>
-          <el-form-item label="访问日志">
-            <el-switch v-model="settings.access_log_enabled" />
-            <div class="form-tip">记录所有 HTTP 请求到日志</div>
+            <el-text type="info" size="small" class="tip-inline">控制 Lazy Balancer 自身日志详细程度</el-text>
           </el-form-item>
           <el-form-item label="证书日志大小">
             <el-input-number v-model="settings.cert_job_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
-            <span class="form-tip-inline">MB，单个证书签发日志文件达到该大小后滚动</span>
+            <el-text type="info" size="small" class="tip-inline">MB，单个证书签发日志文件达到该大小后滚动</el-text>
           </el-form-item>
           <el-form-item label="日志保留">
             <el-input-number v-model="settings.audit_retention_months" :min="1" :max="12" controls-position="right" style="width: 120px;" />
-            <span class="form-tip-inline">个月，操作日志保留时间，超期自动清理（最短 1 个月）</span>
+            <el-text type="info" size="small" class="tip-inline">个月，操作日志保留时间，超期自动清理（最短 1 个月）</el-text>
           </el-form-item>
           <el-form-item label="登录过期">
             <el-input-number v-model="settings.jwt_expire_minutes" :min="5" :max="1440" controls-position="right" style="width: 120px;" />
-            <span class="form-tip-inline">分钟，登录令牌有效期，默认 20 分钟</span>
+            <el-text type="info" size="small" class="tip-inline">分钟，登录令牌有效期，默认 20 分钟</el-text>
           </el-form-item>
           <el-form-item label="时区">
-            <el-select v-model="settings.timezone" filterable style="width: 100%">
+            <el-select v-model="settings.timezone" filterable class="compact-select">
               <el-option label="Asia/Shanghai (UTC+8)" value="Asia/Shanghai" />
               <el-option label="Asia/Hong_Kong (UTC+8)" value="Asia/Hong_Kong" />
               <el-option label="Asia/Tokyo (UTC+9)" value="Asia/Tokyo" />
@@ -60,7 +53,11 @@
               <el-option label="Australia/Sydney (UTC+10)" value="Australia/Sydney" />
               <el-option label="UTC" value="UTC" />
             </el-select>
-            <div class="form-tip">影响所有日志时间戳和证书时间；修改后需重启容器生效</div>
+            <el-text type="info" size="small" class="tip-inline">影响所有日志时间戳和证书时间；修改后需重启容器生效</el-text>
+          </el-form-item>
+          <el-form-item label="运行日志">
+            <el-button size="small" :icon="View" @click="openAppLogDialog">查看日志</el-button>
+            <el-text type="info" size="small" class="tip-inline">查看 Lazy Balancer 自身运行日志</el-text>
           </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="saving" :disabled="isReadOnly" @click="handleSave">
@@ -69,51 +66,180 @@
             </el-button>
           </el-form-item>
         </el-form>
-      </el-card>
-    </el-col>
+    </el-card>
 
-    <el-col :span="12">
-      <el-card class="info-card">
-        <template #header>
-          <div class="card-header">
-            <div class="card-title">
-              <el-icon><InfoFilled /></el-icon>
-              <span>系统信息</span>
-            </div>
-          </div>
-        </template>
-        <div class="info-list">
-          <div class="info-item">
-            <span class="info-label">版本</span>
-            <el-tag type="info" size="small">2.0.0</el-tag>
-          </div>
-          <div class="info-item">
-            <span class="info-label">运行模式</span>
-            <el-tag :type="authStore.nodeMode === 'master' ? 'success' : 'warning'" size="small">
-              {{ authStore.nodeMode === 'master' ? '主节点' : '从节点' }}
-            </el-tag>
+    <el-card class="info-card">
+      <template #header>
+        <div class="card-header">
+          <div class="card-title">
+            <el-icon><InfoFilled /></el-icon>
+            <span>系统信息</span>
           </div>
         </div>
-      </el-card>
+      </template>
+      <div class="info-list">
+        <div class="info-item">
+          <span class="info-label">版本</span>
+          <el-tag type="info" size="small">{{ appVersion }}</el-tag>
+        </div>
+        <div class="info-item">
+          <span class="info-label">运行模式</span>
+          <el-tag :type="authStore.nodeMode === 'master' ? 'success' : 'warning'" size="small">
+            {{ authStore.nodeMode === 'master' ? '主节点' : '从节点' }}
+          </el-tag>
+        </div>
+        <div class="info-item">
+          <span class="info-label">配置备份</span>
+          <div class="backup-actions">
+            <el-button size="small" :disabled="backupDisabled" :loading="exporting" @click="exportBackup">导出</el-button>
+            <el-button size="small" type="warning" plain :disabled="backupDisabled" :loading="importing" @click="triggerImport">导入</el-button>
+            <input ref="importInput" type="file" accept="application/json" class="import-input" @change="handleImportFile" />
+          </div>
+        </div>
+        <el-text type="info" size="small" class="backup-tip">备份包含全部配置、规则、用户、密钥与证书任务；导入将覆盖当前配置，仅主节点可用</el-text>
+      </div>
+    </el-card>
 
-    </el-col>
-  </el-row>
+    <el-dialog v-model="appLogVisible" title="Lazy Balancer 运行日志" width="70%" destroy-on-close @opened="onAppLogOpened" @closed="onAppLogClosed">
+      <div class="log-toolbar">
+        <el-switch v-model="appLogAutoRefresh" active-text="自动刷新" />
+        <el-button size="small" :loading="appLogLoading" @click="fetchAppLogs">刷新</el-button>
+      </div>
+      <div ref="appLogContainer" class="log-viewer"><pre>{{ appLogContent || '暂无日志' }}</pre></div>
+      <template #footer><el-button @click="appLogVisible = false">关闭</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
-import { Setting, InfoFilled, Check } from '@element-plus/icons-vue'
+import { Setting, InfoFilled, Check, View } from '@element-plus/icons-vue'
+import type { SystemInfo } from '@/types'
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
+const backupDisabled = computed(() => isReadOnly.value || authStore.nodeMode !== 'master')
+const exporting = ref(false)
+const importing = ref(false)
+const importInput = ref<HTMLInputElement | null>(null)
+const appVersion = ref('-')
+
+onMounted(async () => {
+  try {
+    const res = await request.get<{ data: SystemInfo }>('/system/info')
+    appVersion.value = res.data.version || '-'
+  } catch {
+    appVersion.value = '-'
+  }
+})
+
+const appLogVisible = ref(false)
+const appLogContent = ref('')
+const appLogLoading = ref(false)
+const appLogAutoRefresh = ref(true)
+const appLogContainer = ref<HTMLElement | null>(null)
+let appLogTimer: ReturnType<typeof setInterval> | null = null
+
+const fetchAppLogs = async (): Promise<void> => {
+  appLogLoading.value = true
+  try {
+    const res = await request.get<{ data?: { content?: string } }>('/system/logs')
+    appLogContent.value = res.data?.content || ''
+    await nextTick()
+    if (appLogContainer.value) appLogContainer.value.scrollTop = appLogContainer.value.scrollHeight
+  } finally {
+    appLogLoading.value = false
+  }
+}
+
+const stopAppLogTimer = (): void => {
+  if (appLogTimer) {
+    clearInterval(appLogTimer)
+    appLogTimer = null
+  }
+}
+
+const openAppLogDialog = (): void => {
+  appLogVisible.value = true
+}
+
+const onAppLogOpened = (): void => {
+  void fetchAppLogs()
+  stopAppLogTimer()
+  if (appLogAutoRefresh.value) appLogTimer = setInterval(() => void fetchAppLogs(), 3000)
+}
+
+const onAppLogClosed = (): void => {
+  stopAppLogTimer()
+  appLogContent.value = ''
+}
+
+watch(appLogAutoRefresh, (enabled) => {
+  if (!appLogVisible.value) return
+  stopAppLogTimer()
+  if (enabled) appLogTimer = setInterval(() => void fetchAppLogs(), 3000)
+})
+
+onUnmounted(stopAppLogTimer)
+
+const exportBackup = async (): Promise<void> => {
+  if (backupDisabled.value || exporting.value) return
+  exporting.value = true
+  try {
+    const blob = await request.get<Blob>('/config/export', { responseType: 'blob' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `lazy-balancer-backup-${new Date().toISOString().slice(0, 10)}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('配置备份已导出')
+  } finally {
+    exporting.value = false
+  }
+}
+
+const triggerImport = (): void => {
+  if (backupDisabled.value) return
+  importInput.value?.click()
+}
+
+const handleImportFile = async (event: Event): Promise<void> => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file || importing.value) return
+  let payload: unknown
+  try {
+    payload = JSON.parse(await file.text())
+  } catch {
+    ElMessage.error('备份文件不是有效的 JSON')
+    return
+  }
+  try {
+    await ElMessageBox.confirm('导入将覆盖当前全部配置（规则、用户、密钥、证书任务），是否继续？', '确认导入', {
+      confirmButtonText: '确认导入',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  importing.value = true
+  try {
+    await request.post('/config/import', payload)
+    ElMessage.success('配置导入成功')
+    window.location.reload()
+  } finally {
+    importing.value = false
+  }
+}
 
 interface BasicSettingsConfig {
   log_level: string
-  access_log_enabled: boolean
   cert_job_log_size_mb: number
   audit_retention_months: number
   jwt_expire_minutes: number
@@ -142,7 +268,6 @@ const handleSave = async () => {
   try {
     const payload = {
       log_level: settings.value.log_level,
-      access_log_enabled: settings.value.access_log_enabled,
       cert_job_log_size_mb: settings.value.cert_job_log_size_mb,
       audit_retention_months: settings.value.audit_retention_months,
       jwt_expire_minutes: settings.value.jwt_expire_minutes,
@@ -170,6 +295,7 @@ const handleSave = async () => {
 </script>
 
 <style scoped>
+.basic-stack { display: flex; flex-direction: column; gap: 20px; }
 .card-header { display: flex; align-items: center; }
 .card-title {
   display: flex;
@@ -180,26 +306,23 @@ const handleSave = async () => {
   color: #111827;
 }
 .settings-form { padding: 4px 0; }
-.form-tip {
-  font-size: 12px;
-  color: #9ca3af;
-  margin-top: 4px;
-}
-.form-tip-inline {
-  font-size: 12px;
-  color: #9ca3af;
-  margin-left: 8px;
-}
+.compact-select { width: 240px; max-width: 100%; }
+.tip-inline { margin-left: 8px; line-height: 1.5; }
 .info-list { padding: 4px 0; }
 .info-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 12px 0;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid var(--border-lighter);
 }
 .info-item:last-child { border-bottom: none; }
-.info-label { color: #6b7280; font-size: 13px; }
+.info-label { color: var(--text-secondary); font-size: 13px; }
 .btn-text { margin-left: 4px; }
-.readonly-alert { margin-bottom: 20px; }
+.backup-actions { display: flex; align-items: center; gap: 8px; }
+.import-input { display: none; }
+.backup-tip { display: block; margin-top: 8px; line-height: 1.5; }
+.log-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.log-viewer { height: 60vh; min-height: 320px; overflow: auto; padding: 12px 16px; background: #0f172a; border-radius: var(--radius-sm, 6px); }
+.log-viewer pre { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.7; color: #e2e8f0; white-space: pre-wrap; word-break: break-all; }
 </style>

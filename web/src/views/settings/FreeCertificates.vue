@@ -1,39 +1,41 @@
 <template>
   <div>
-    <el-alert v-if="isReadOnly" :title="authStore.readOnlyMessage" type="info" :closable="false" show-icon class="readonly-alert" />
     <el-card class="settings-card">
       <template #header>
         <div class="card-header">
-          <span>ACME 全局设置</span>
+          <div class="card-title">
+            <el-icon><Setting /></el-icon>
+            <span>ACME 全局设置</span>
+          </div>
         </div>
       </template>
       <el-form :model="global" label-width="140px" :disabled="isReadOnly">
         <el-form-item label="ACME 邮箱" required>
           <el-input v-model="global.acme_email" placeholder="your@email.com" style="width: 240px;" />
-          <span class="form-tip-inline">用于 CA 账户注册，使用 ACME 签发时必须填写</span>
+          <el-text type="info" size="small" class="tip-inline">用于 CA 账户注册，使用 ACME 签发时必须填写</el-text>
         </el-form-item>
         <el-form-item label="过期提醒天数">
           <el-input-number v-model="global.cert_expiry_days" :min="1" :max="90" />
         </el-form-item>
         <el-form-item label="自动续签时间">
           <el-input-number v-model="global.cert_renewal_days" :min="1" :max="90" />
-          <span class="form-tip-inline">证书到期前多少天自动尝试重签</span>
+          <el-text type="info" size="small" class="tip-inline">证书到期前多少天自动尝试重签</el-text>
         </el-form-item>
         <el-form-item label="续签重试次数">
           <el-input-number v-model="global.cert_renewal_attempts" :min="1" :max="10" />
-          <span class="form-tip-inline">证书续签失败（包括 CA 频率限制）后的最大自动重试次数</span>
+          <el-text type="info" size="small" class="tip-inline">证书续签失败（包括 CA 频率限制）后的最大自动重试次数</el-text>
         </el-form-item>
         <el-form-item label="CA 提供商" required>
           <el-select v-model="global.default_ca_provider_id" style="width: 240px;" placeholder="请选择 CA 提供商">
             <el-option v-for="p in enabledCAProviders" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
-          <span class="form-tip-inline">系统默认使用的证书签发机构</span>
+          <el-text type="info" size="small" class="tip-inline">系统默认使用的证书签发机构</el-text>
         </el-form-item>
         <el-form-item label="DNS 提供商">
           <el-select v-model="global.dns_provider" style="width: 240px;" placeholder="请选择 DNS 提供商">
             <el-option label="DNSPod" value="dnspod" />
           </el-select>
-          <span class="form-tip-inline">全局默认 DNS 提供商，创建规则时默认使用</span>
+          <el-text type="info" size="small" class="tip-inline">全局默认 DNS 提供商，创建规则时默认使用</el-text>
         </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="saving" :disabled="isReadOnly" @click="handleSave">
@@ -47,7 +49,10 @@
     <el-card class="settings-card" style="margin-top: 20px">
       <template #header>
         <div class="card-header">
-          <span>CA 提供商</span>
+          <div class="card-title">
+            <el-icon><OfficeBuilding /></el-icon>
+            <span>CA 提供商</span>
+          </div>
         </div>
       </template>
       <el-table v-if="caProviders.length > 0" :data="caProviders" size="small" v-loading="loadingCAProviders">
@@ -74,7 +79,10 @@
     <el-card class="settings-card" style="margin-top: 20px">
       <template #header>
         <div class="card-header">
-          <span>DNS 提供商配置</span>
+          <div class="card-title">
+            <el-icon><Connection /></el-icon>
+            <span>DNS 提供商配置</span>
+          </div>
           <el-button type="primary" :disabled="isReadOnly" @click="openConfigDialog()">
             <el-icon><Plus /></el-icon>
             <span class="btn-text">添加</span>
@@ -102,7 +110,12 @@
 
     <el-card class="settings-card" style="margin-top: 20px">
       <template #header>
-        <span>签发任务</span>
+        <div class="card-header">
+          <div class="card-title">
+            <el-icon><Document /></el-icon>
+            <span>签发任务</span>
+          </div>
+        </div>
       </template>
       <CertJobs />
     </el-card>
@@ -163,7 +176,7 @@
         </el-form-item>
         <el-form-item label="Directory URL">
           <el-input v-model="caForm.directory_url" disabled />
-          <div class="form-tip">Directory URL 为官方固定地址，不可修改</div>
+          <el-text type="info" size="small" class="tip-block">Directory URL 为官方固定地址，不可修改</el-text>
         </el-form-item>
         <el-form-item label="最大并发">
           <el-input-number v-model="caForm.max_concurrent" :min="1" :max="100" />
@@ -174,11 +187,11 @@
         <template v-if="caForm.provider === 'zerossl'">
           <el-form-item label="EAB KID" required>
             <el-input v-model="caCreds.eab_kid" placeholder="ZeroSSL EAB KID" />
-            <div class="form-tip">
+            <el-text type="info" size="small" class="tip-block">
               请前往
               <a href="https://app.zerossl.com/developer" target="_blank" rel="noopener noreferrer" class="link">ZeroSSL Developer</a>
               创建 EAB Credentials
-            </div>
+            </el-text>
           </el-form-item>
           <el-form-item label="EAB HMAC Key" required>
             <el-input v-model="caCreds.eab_hmac_key" type="password" placeholder="ZeroSSL EAB HMAC Key" show-password />
@@ -623,15 +636,22 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.form-tip a.link { color: #3b82f6; text-decoration: none; }
-.form-tip a.link:hover { text-decoration: underline; }
+.tip-block a.link { color: #3b82f6; text-decoration: none; }
+.tip-block a.link:hover { text-decoration: underline; }
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
 .btn-text { margin-left: 4px; }
-.form-tip { font-size: 12px; color: #9ca3af; margin-top: 8px; }
-.form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
-.readonly-alert { margin-bottom: 20px; }
+.tip-inline { margin-left: 8px; line-height: 1.5; }
+.tip-block { display: block; margin-top: 4px; line-height: 1.5; }
 </style>

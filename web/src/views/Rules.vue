@@ -14,8 +14,6 @@
       </el-button>
     </div>
 
-    <el-alert v-if="isReadOnly" :title="authStore.readOnlyMessage" :description="readOnlyDescription" type="info" :closable="false" show-icon class="mb-5" />
-
     <el-card>
       <el-table :data="rules" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <el-table-column prop="name" label="规则名称" min-width="140">
@@ -899,9 +897,6 @@ interface Rule {
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
-const readOnlyDescription = computed(() => authStore.readOnlyReason === 'slave'
-  ? '负载均衡规则由主节点统一管理并同步到当前节点。'
-  : '当前账号可以查看负载均衡规则，但不能修改。')
 
 const certTypeLabels = {
   auto: 'ACME 自动证书',
@@ -2124,8 +2119,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.page { max-width: 1500px; margin: 0 auto; }
-
 .page-header {
   display: flex;
   justify-content: space-between;

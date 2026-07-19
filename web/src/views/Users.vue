@@ -1,6 +1,5 @@
 <template>
   <div class="page">
-    <el-alert v-if="isReadOnly" :title="authStore.readOnlyMessage" type="info" :closable="false" show-icon class="readonly-alert" />
     <div class="page-header">
       <div class="header-left">
         <h2 class="page-title">
@@ -312,5 +311,4 @@ onMounted(() => {
 .user-display { font-size: 12px; color: #9ca3af; }
 
 .text-secondary { color: #6b7280; font-size: 13px; }
-.readonly-alert { margin-bottom: 20px; }
 </style>

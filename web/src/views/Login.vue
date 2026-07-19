@@ -3,10 +3,10 @@
     <el-card class="login-card">
       <div class="login-header">
         <div class="logo-wrapper">
-          <el-icon :size="32" class="logo-icon"><Monitor /></el-icon>
+          <AppLogo :size="64" />
         </div>
         <h1 class="login-title">
-          Lazy Balancer <span class="v2-badge">V2</span>
+          {{ appName }} <span class="v2-badge">V2</span>
         </h1>
         <p class="login-subtitle">Caddy 负载均衡管理平台</p>
       </div>
@@ -73,7 +73,7 @@
       </template>
 
       <div class="login-footer">
-        <span class="version">版本 2.0.0</span>
+        <span class="version">版本 {{ appVersion }}</span>
       </div>
     </el-card>
   </div>
@@ -83,7 +83,9 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
-import { User, Lock, Monitor, Postcard } from '@element-plus/icons-vue'
+import { User, Lock, Postcard } from '@element-plus/icons-vue'
+import AppLogo from '@/components/AppLogo.vue'
+import { appName, appVersion } from '@/utils/branding'
 import type { FormInstance, FormRules } from 'element-plus'
 
 interface SetupStatusResponse {
@@ -226,15 +228,9 @@ onMounted(async () => {
   width: 64px;
   height: 64px;
   margin: 0 auto 16px;
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
   border-radius: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.logo-icon {
-  color: white;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
 }
 
 .login-title {

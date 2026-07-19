@@ -27,6 +27,7 @@ export interface SystemInfo {
   caddy_version: string
   network_ips: Record<string, string>
   ip_addresses?: string
+  version?: string
 }
 
 export interface SystemMetrics {

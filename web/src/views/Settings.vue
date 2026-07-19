@@ -14,11 +14,16 @@
       </div>
     </div>
 
-    <BasicSettings
-      v-if="activeTab === 'basic'"
-      v-model:settings="settings"
-      @save="handleSaveBasic"
-    />
+    <div v-if="activeTab === 'basic'" class="basic-settings-grid">
+      <BasicSettings
+        v-model:settings="settings"
+        @save="handleSaveBasic"
+      />
+      <CaddyGlobalSettings
+        v-model:settings="settings"
+        @save="handleSaveBasic"
+      />
+    </div>
     <ClusterSettings
       v-else-if="activeTab === 'cluster'"
     />
@@ -36,6 +41,7 @@ import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { Setting } from '@element-plus/icons-vue'
 import BasicSettings from './settings/BasicSettings.vue'
+import CaddyGlobalSettings from './settings/CaddyGlobalSettings.vue'
 import ClusterSettings from './settings/ClusterSettings.vue'
 import FreeCertificates from './settings/FreeCertificates.vue'
 import APIKeys from '@/views/Keys.vue'
@@ -47,12 +53,18 @@ const activeTab = ref('basic')
 
 interface SettingsConfig {
   log_level: string
-  access_log_enabled: boolean
   caddy_log_path: string
   caddy_log_level: string
   caddy_log_size_mb: number
+  request_body_max_size_mb: number
+  http_read_timeout: number
+  http_write_timeout: number
+  http_idle_timeout: number
+  upstream_keepalive_timeout: number
+  server_tokens_hidden: boolean
   cert_job_log_size_mb: number
   access_log_json: boolean
+  access_log_format: string
   audit_retention_months: number
   jwt_expire_minutes: number
   timezone: string
@@ -69,12 +81,18 @@ interface CertificateConfig {
 
 const settings = ref<SettingsConfig>({
   log_level: 'info',
-  access_log_enabled: true,
   caddy_log_path: '/app/logs/caddy.log',
   caddy_log_level: 'info',
   caddy_log_size_mb: 100,
+  request_body_max_size_mb: 0,
+  http_read_timeout: 60,
+  http_write_timeout: 60,
+  http_idle_timeout: 120,
+  upstream_keepalive_timeout: 60,
+  server_tokens_hidden: false,
   cert_job_log_size_mb: 10,
   access_log_json: true,
+  access_log_format: 'request>headers -> delete\nresp_headers -> delete\nrequest>tls -> delete\nrequest>remote_port -> delete\nlevel -> delete\nlogger -> delete\nmsg -> delete\nrequest>remote_ip -> src\nrequest>client_ip -> src_ip\nrequest>method -> http_method\nrequest>host -> server\nrequest>uri -> uri_path\nrequest>proto -> protocol\nuser_id -> user\nts -> time_local\nsize -> bytes_out\nbytes_read -> bytes_in\nduration -> request_time',
   audit_retention_months: 3,
   jwt_expire_minutes: 20,
   timezone: 'Asia/Shanghai',
@@ -112,12 +130,18 @@ const fetchSettings = async () => {
     if (res.data) {
       settings.value = {
         log_level: res.data.log_level || 'info',
-        access_log_enabled: res.data.access_log_enabled ?? true,
         caddy_log_path: res.data.caddy_log_path || '/app/logs/caddy.log',
         caddy_log_level: res.data.caddy_log_level || 'info',
         caddy_log_size_mb: res.data.caddy_log_size_mb ?? 100,
+        request_body_max_size_mb: res.data.request_body_max_size_mb ?? 0,
+        http_read_timeout: res.data.http_read_timeout ?? 60,
+        http_write_timeout: res.data.http_write_timeout ?? 60,
+        http_idle_timeout: res.data.http_idle_timeout ?? 120,
+        upstream_keepalive_timeout: res.data.upstream_keepalive_timeout ?? 60,
+        server_tokens_hidden: res.data.server_tokens_hidden ?? false,
         cert_job_log_size_mb: res.data.cert_job_log_size_mb ?? 10,
         access_log_json: res.data.access_log_json ?? true,
+        access_log_format: res.data.access_log_format || settings.value.access_log_format,
         audit_retention_months: res.data.audit_retention_months ?? 3,
         jwt_expire_minutes: res.data.jwt_expire_minutes ?? 20,
         timezone: res.data.timezone || 'Asia/Shanghai',
@@ -163,7 +187,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page { max-width: 1500px; margin: 0 auto; }
+.basic-settings-grid { display: grid; grid-template-columns: 5fr 7fr; gap: 20px; align-items: start; }
+@media (max-width: 1100px) { .basic-settings-grid { grid-template-columns: 1fr; } }
 
 .page-header {
   display: flex;

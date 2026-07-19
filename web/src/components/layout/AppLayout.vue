@@ -3,12 +3,10 @@
     <el-aside :width="effectiveCollapsed ? '64px' : '220px'" class="layout-aside">
       <div class="aside-header">
         <div class="logo-area" @click="collapsed = !collapsed">
-          <div class="logo-icon">
-            <el-icon :size="24"><Monitor /></el-icon>
-          </div>
+          <AppLogo :size="28" />
           <transition name="fade">
             <span v-if="!effectiveCollapsed" class="logo-text">
-              Lazy Balancer <span class="v2-badge">V2</span>
+              {{ appName }} <span class="v2-badge">V2</span>
             </span>
           </transition>
         </div>
@@ -34,7 +32,7 @@
         </el-menu-item>
         <el-menu-item index="caddy" @click="goPage('caddy')">
           <el-icon><Cpu /></el-icon>
-          <template #title>全局配置</template>
+          <template #title>配置预览</template>
         </el-menu-item>
         <el-sub-menu index="settings" v-if="authStore.user?.role === 'admin'">
           <template #title>
@@ -99,11 +97,14 @@
       <el-header class="layout-header">
         <div class="header-left">
           <el-breadcrumb separator="/">
-            <el-breadcrumb-item>Lazy Balancer</el-breadcrumb-item>
+            <el-breadcrumb-item>{{ appName }}</el-breadcrumb-item>
             <el-breadcrumb-item>{{ pageTitle[currentPage] || '仪表盘' }}</el-breadcrumb-item>
           </el-breadcrumb>
         </div>
         <div class="header-right">
+          <el-tooltip v-if="authStore.readOnlyReason" :content="authStore.readOnlyMessage" placement="bottom">
+            <el-tag type="warning" size="small" effect="plain" class="readonly-tag">只读</el-tag>
+          </el-tooltip>
           <div class="node-tag" :class="authStore.nodeMode">
             <el-icon><Connection /></el-icon>
             <span>{{ authStore.nodeMode === 'master' ? '主节点' : '从节点' }}</span>
@@ -115,7 +116,7 @@
         <slot />
       </el-main>
       <el-footer class="layout-footer">
-        <span>Copyright © 2026 XiaoBao. All rights reserved.</span>
+        <span>{{ footerText }}</span>
       </el-footer>
     </el-container>
 
@@ -145,7 +146,9 @@ import { ref, computed, onMounted } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useAuthStore } from '@/stores/auth'
 import api from '@/utils/api'
-import { Monitor, DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document } from '@element-plus/icons-vue'
+import { DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document } from '@element-plus/icons-vue'
+import AppLogo from '@/components/AppLogo.vue'
+import { appName, footerText } from '@/utils/branding'
 
 const authStore = useAuthStore()
 const collapsed = ref(false)
@@ -164,7 +167,7 @@ const hasCustomDisplayName = computed(() => {
 const pageTitle: Record<string, string> = {
   dashboard: '仪表盘',
   rules: '负载均衡',
-  caddy: '全局配置',
+  caddy: '配置预览',
   users: '系统设置 / 用户管理',
   'audit-log': '操作日志',
   'settings-basic': '系统设置 / 基础设置',
@@ -242,18 +245,6 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   cursor: pointer;
-}
-
-.logo-icon {
-  width: 36px;
-  height: 36px;
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  flex-shrink: 0;
 }
 
 .logo-text {
@@ -450,6 +441,7 @@ onMounted(() => {
 .header-left { flex: 1; }
 
 .header-right { display: flex; align-items: center; gap: 12px; }
+.readonly-tag { cursor: default; }
 
 .node-tag {
   display: inline-flex;
@@ -485,11 +477,13 @@ onMounted(() => {
 }
 
 .layout-footer {
-  height: 40px;
-  line-height: 40px;
+  height: 44px;
+  line-height: 44px;
   text-align: center;
-  font-size: 12px;
-  color: #909399;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--el-text-color-regular);
+  letter-spacing: 0.2px;
   flex-shrink: 0;
   background-color: #ffffff;
   border-top: 1px solid var(--el-border-color-lighter);
