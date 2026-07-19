@@ -34,7 +34,7 @@
           <el-icon><Cpu /></el-icon>
           <template #title>配置预览</template>
         </el-menu-item>
-        <el-sub-menu index="settings" v-if="authStore.user?.role === 'admin'">
+        <el-sub-menu index="settings">
           <template #title>
             <el-icon><Setting /></el-icon>
             <span>系统设置</span>
@@ -60,11 +60,7 @@
             <template #title>用户管理</template>
           </el-menu-item>
         </el-sub-menu>
-        <el-menu-item v-else index="settings" @click="goPage('settings-basic')">
-          <el-icon><Setting /></el-icon>
-          <template #title>系统设置</template>
-        </el-menu-item>
-        <el-menu-item v-if="authStore.user?.role === 'admin'" index="audit-log" @click="goPage('audit-log')">
+        <el-menu-item index="audit-log" @click="goPage('audit-log')">
           <el-icon><Document /></el-icon>
           <template #title>操作日志</template>
         </el-menu-item>

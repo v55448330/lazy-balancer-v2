@@ -1,5 +1,5 @@
 <template>
-  <div class="page" v-if="activeTab === 'apikeys' && isAdmin">
+  <div class="page" v-if="activeTab === 'apikeys'">
     <APIKeys />
   </div>
 
@@ -47,7 +47,6 @@ import FreeCertificates from './settings/FreeCertificates.vue'
 import APIKeys from '@/views/Keys.vue'
 
 const authStore = useAuthStore()
-const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const activeTab = ref('basic')
 

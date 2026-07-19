@@ -66,7 +66,6 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			admin := v1.Group("")
 			admin.Use(adminOnly(), readOnlyGuard(db.DB))
 			{
-				admin.GET("/users", h.ListUsers)
 				admin.POST("/users", h.CreateUser)
 				admin.PUT("/users/:id", h.UpdateUser)
 				admin.PUT("/users/:id/status", h.ToggleUserStatus)
@@ -74,7 +73,6 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.DELETE("/users/:id", h.DeleteUser)
 
 				// API Keys
-				admin.GET("/api-keys", h.ListAPIKeys)
 				admin.POST("/api-keys", h.CreateAPIKey)
 				admin.PATCH("/api-keys/:id/status", h.UpdateAPIKeyStatus)
 				admin.DELETE("/api-keys/:id", h.DeleteAPIKey)
@@ -83,7 +81,6 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.PUT("/ca-providers/:id", h.UpdateCAProvider)
 				admin.POST("/ca-providers/:id/test", h.TestCAProvider)
 
-				admin.GET("/cluster/nodes", jwtOnly(), h.ListClusterNodes)
 				admin.POST("/cluster/register-tokens", jwtOnly(), h.GenerateClusterRegisterToken)
 				admin.POST("/cluster/nodes/:id/approve", jwtOnly(), h.ApproveClusterNode)
 				admin.POST("/cluster/nodes/:id/reject", jwtOnly(), h.RejectClusterNode)
@@ -98,7 +95,6 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			admin.PUT("/config", h.UpdateConfig)
 			admin.POST("/config/reload", h.ReloadCaddy)
 			admin.POST("/config/validate", h.ValidateConfig)
-			admin.GET("/config/health", h.GetUpstreamHealth)
 			admin.GET("/config/export", h.ExportConfigBackup)
 			admin.POST("/config/import", h.ImportConfigBackup)
 
@@ -115,6 +111,12 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.POST("/users/me/api-keys", h.CreateCurrentUserAPIKey)
 				business.PATCH("/users/me/api-keys/:id", h.UpdateCurrentUserAPIKeyStatus)
 				business.DELETE("/users/me/api-keys/:id", h.DeleteCurrentUserAPIKey)
+
+				// Read-only lists (all authenticated users)
+				business.GET("/users", h.ListUsers)
+				business.GET("/api-keys", h.ListAPIKeys)
+				business.GET("/cluster/nodes", jwtOnly(), h.ListClusterNodes)
+				business.GET("/config/health", h.GetUpstreamHealth)
 
 				// Rules
 				business.GET("/rules", h.ListRules)
