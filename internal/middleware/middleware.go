@@ -3,6 +3,7 @@ package middleware
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -23,7 +24,12 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
+		return fmt.Sprintf("[%s] %s | %3d | %13v | %15s | %-7s %#v\n",
+			param.TimeStamp.In(services.CurrentLocation()).Format("2006/01/02 15:04:05"),
+			param.Method, param.StatusCode, param.Latency, param.ClientIP, param.Method, param.Path)
+	}), gin.Recovery())
 
 	// CORS
 	r.Use(corsMiddleware())

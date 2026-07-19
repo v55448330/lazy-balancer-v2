@@ -31,12 +31,15 @@ func main() {
 	// Load configuration
 	cfg := config.Load(*configPath)
 
+	log.SetFlags(0)
+	var logWriter io.Writer = os.Stdout
 	if logFile := os.Getenv("LOG_FILE"); logFile != "" {
 		if file, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
-			log.SetOutput(io.MultiWriter(os.Stdout, file))
+			logWriter = io.MultiWriter(os.Stdout, file)
 			defer file.Close()
 		}
 	}
+	log.SetOutput(&tzLogWriter{w: logWriter})
 
 	// Initialize database
 	if err := db.Initialize(cfg.DataDir); err != nil {
@@ -115,4 +118,13 @@ func main() {
 	if err := router.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
+}
+
+type tzLogWriter struct {
+	w io.Writer
+}
+
+func (t *tzLogWriter) Write(p []byte) (int, error) {
+	prefix := time.Now().In(services.CurrentLocation()).Format("2006/01/02 15:04:05 ")
+	return t.w.Write(append([]byte(prefix), p...))
 }

@@ -66,12 +66,9 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	usernames := map[string]struct{}{}
 	for rows.Next() {
 		var e AuditLogEntry
-		var rawTime string
-		rows.Scan(&e.ID, &e.Username, &e.Action, &e.Resource, &e.Detail, &e.IPAddress, &rawTime)
-		if t, err := time.ParseInLocation("2006-01-02 15:04:05", rawTime, time.UTC); err == nil {
-			e.CreatedAt = t.In(loc).Format("2006-01-02 15:04:05")
-		} else {
-			e.CreatedAt = rawTime
+		var createdAt time.Time
+		if err := rows.Scan(&e.ID, &e.Username, &e.Action, &e.Resource, &e.Detail, &e.IPAddress, &createdAt); err == nil {
+			e.CreatedAt = createdAt.In(loc).Format("2006-01-02 15:04:05")
 		}
 		if e.Username != "" {
 			usernames[e.Username] = struct{}{}

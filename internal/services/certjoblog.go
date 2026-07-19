@@ -74,7 +74,7 @@ func (l *CertJobFileLogger) write(level, stage, message string) {
 	}
 	defer f.Close()
 
-	timestamp := time.Now().Format("2006/01/02 15:04:05")
+	timestamp := time.Now().In(CurrentLocation()).Format("2006/01/02 15:04:05")
 	fmt.Fprintf(f, "%s [%s] %s - %s\n", timestamp, level, stage, message)
 }
 
