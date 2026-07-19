@@ -207,16 +207,12 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				audit_retention_months = COALESCE(?, audit_retention_months),
 				jwt_expire_minutes = COALESCE(?, jwt_expire_minutes),
 				timezone = COALESCE(?, timezone),
-				is_master = COALESCE(?, is_master),
-				master_url = COALESCE(?, master_url),
-				sync_interval = COALESCE(?, sync_interval),
 				updated_at = datetime('now')
 			WHERE id = 1
 		`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.LogLevel, req.AccessLogEnabled,
 		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
-		req.UpstreamKeepaliveTimeout, req.ServerTokensHidden, req.CertJobLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone,
-		req.IsMaster, req.MasterURL, req.SyncInterval)
+		req.UpstreamKeepaliveTimeout, req.ServerTokensHidden, req.CertJobLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败: " + err.Error()})
 		return
@@ -248,12 +244,6 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	}
 
 	recordAudit(c, "重载", "Caddy配置", "保存配置后自动重载")
-
-	if req.IsMaster != nil && *req.IsMaster {
-		h.nodeService.SetMode("master")
-	} else if req.IsMaster != nil && !*req.IsMaster {
-		h.nodeService.SetMode("slave")
-	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config updated and applied", Data: plan})
 }
@@ -452,7 +442,13 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy rejected config: " + string(respBody)})
 		return
 	}
+	if _, err := db.DB.ExecContext(c.Request.Context(), "UPDATE global_config SET caddy_config=?, updated_at=datetime('now') WHERE id=1", req.Content); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 Caddy 配置失败"})
+		return
+	}
 
+	recordAudit(c, "更新", "Caddy配置", "保存 Caddy 全局配置")
+	recordAudit(c, "重载", "Caddy配置", "保存配置后自动重载")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config saved"})
 }
 

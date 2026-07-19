@@ -24,8 +24,7 @@ internal/handlers/
 | Metrics | GetMetricsOverview, GetRuleMetrics, GetMetricsHistory | 2484-2571 |
 | System | GetSystemInfo, GetSystemMetrics, GetRealtimeTraffic, GetConnectionStats | 2840-2883 |
 | Caddy | GetCaddyStatus, GetCaddyConfig, PutCaddyConfig, StartCaddy, StopCaddy, RestartCaddy | 3016-3130 |
-| Nodes | RegisterNode, ListNodes, ListPendingNodes, ApproveNode, RejectNode, DeleteNode, UpdateNode, NodeHeartbeat | 2571-2712 |
-| Sync | GetSyncStatus, GetSyncConfig, ManualSync | 2712-2818 |
+| Cluster | Registration, approval, status, mode, snapshot, report, and manual pull | `cluster_*.go` |
 
 ## CONVENTIONS
 - Handlers delegate to services (internal/services). NOT to db directly.
@@ -37,6 +36,6 @@ internal/handlers/
 - **NEVER delete ports 80/443**: Line 1775: `// HTTP port 80 and HTTPS port 443 servers should never be deleted (default site)`
 
 ## NOTES
-- Constructor: `NewHandlers(cfg, caddy, metrics, node, sync)` - deps injected
+- Constructor: `NewHandlers(Dependencies)` - cluster, sync, Caddy, metrics, and CA dependencies injected
 - Validation: `validatePort`, `validatePortFromDB`, `validateUpstreams`, `validateCaddyConfigBeforeSave`
 - Caddy config: `applyCaddyConfig`, `applyCaddyConfigWithRollback` for atomic updates

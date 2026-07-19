@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
-
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -17,45 +15,37 @@ import (
 )
 
 type Handlers struct {
-	cfg                *config.Config
-	caddyService       *services.CaddyService
-	metricsService     *services.MetricsService
-	nodeService        *services.NodeService
-	syncService        *services.SyncService
-	certificateService *services.CertificateService
-	caProviderService  *services.CAProviderService
+	cfg               *config.Config
+	caddyService      *services.CaddyService
+	metricsService    *services.MetricsService
+	syncService       *services.SyncService
+	clusterService    *services.ClusterService
+	caProviderService *services.CAProviderService
 }
 
-func NewHandlers(cfg *config.Config, caddy *services.CaddyService, metrics *services.MetricsService, node *services.NodeService, sync *services.SyncService, cert *services.CertificateService, ca *services.CAProviderService) *Handlers {
-	h := &Handlers{
-		cfg:                cfg,
-		caddyService:       caddy,
-		metricsService:     metrics,
-		nodeService:        node,
-		syncService:        sync,
-		certificateService: cert,
-		caProviderService:  ca,
-	}
+type Dependencies struct {
+	Config            *config.Config
+	CaddyService      *services.CaddyService
+	MetricsService    *services.MetricsService
+	SyncService       *services.SyncService
+	ClusterService    *services.ClusterService
+	CAProviderService *services.CAProviderService
+}
 
-	// Initialize default admin user
-	h.initDefaultAdmin()
+func NewHandlers(deps Dependencies) *Handlers {
+	h := &Handlers{
+		cfg:               deps.Config,
+		caddyService:      deps.CaddyService,
+		metricsService:    deps.MetricsService,
+		syncService:       deps.SyncService,
+		clusterService:    deps.ClusterService,
+		caProviderService: deps.CAProviderService,
+	}
 
 	// Initialize default config
 	h.initDefaultConfig()
 
 	return h
-}
-
-func (h *Handlers) initDefaultAdmin() {
-	var count int
-	db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", h.cfg.InitialAdminUser).Scan(&count)
-
-	if count == 0 {
-		hash, _ := bcrypt.GenerateFromPassword([]byte(h.cfg.InitialAdminPassword), bcrypt.DefaultCost)
-		db.DB.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')",
-			h.cfg.InitialAdminUser, string(hash))
-		log.Printf("Created default admin user: %s", h.cfg.InitialAdminUser)
-	}
 }
 
 func (h *Handlers) initDefaultConfig() {

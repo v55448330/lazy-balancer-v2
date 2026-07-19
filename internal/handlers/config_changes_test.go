@@ -22,15 +22,11 @@ func TestPlanConfigChangesUnchanged(t *testing.T) {
 
 func TestPlanConfigChangesGroupsChangedFields(t *testing.T) {
 	logLevel := "debug"
-	masterURL := "http://master.example:8000"
-	syncInterval := 45
 	req := models.UpdateConfigRequest{
-		LogLevel:     &logLevel,
-		MasterURL:    &masterURL,
-		SyncInterval: &syncInterval,
-		Source:       "cluster",
+		LogLevel: &logLevel,
+		Source:   "basic",
 	}
-	old := configSnapshot{LogLevel: "info", MasterURL: "", SyncInterval: 30}
+	old := configSnapshot{LogLevel: "info"}
 
 	plan := planConfigChanges(req, old)
 	if !plan.Changed {
@@ -38,9 +34,6 @@ func TestPlanConfigChangesGroupsChangedFields(t *testing.T) {
 	}
 	if got := len(plan.SectionChanges["基础设置"]); got != 1 {
 		t.Fatalf("basic changes = %d, want 1", got)
-	}
-	if got := len(plan.SectionChanges["集群管理"]); got != 2 {
-		t.Fatalf("cluster changes = %d, want 2", got)
 	}
 }
 

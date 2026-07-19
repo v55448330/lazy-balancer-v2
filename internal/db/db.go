@@ -252,6 +252,14 @@ func createTables() error {
 		jwt_expire_minutes INTEGER DEFAULT 20,
 		timezone VARCHAR(50) DEFAULT 'Asia/Shanghai',
 		last_sync DATETIME,
+		last_sync_error TEXT DEFAULT '',
+		applied_version INTEGER DEFAULT 0,
+		cluster_version INTEGER DEFAULT 0,
+		sync_caddy_config BOOLEAN DEFAULT FALSE,
+		cluster_token TEXT DEFAULT '',
+		registration_id INTEGER DEFAULT 0,
+		registration_secret TEXT DEFAULT '',
+		sync_fingerprint TEXT DEFAULT '',
 		updated_at DATETIME
 	);
 
@@ -268,6 +276,13 @@ func createTables() error {
 		sync_interval INTEGER DEFAULT 60,
 		sync_scope VARCHAR(50) DEFAULT 'all',
 		status VARCHAR(20) DEFAULT 'offline',
+		cluster_token_hash VARCHAR(64),
+		registration_secret VARCHAR(64),
+		cluster_token_delivered BOOLEAN DEFAULT FALSE,
+		reported_version INTEGER DEFAULT 0,
+		health_json TEXT,
+		last_sync_at DATETIME,
+		last_sync_error TEXT,
 		last_seen DATETIME,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (master_id) REFERENCES nodes(id)
@@ -285,6 +300,16 @@ func createTables() error {
 	-- Create indexes
 	CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);
 	CREATE INDEX IF NOT EXISTS idx_nodes_master ON nodes(master_id);
+
+	CREATE TABLE IF NOT EXISTS cluster_register_tokens (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		token_hash VARCHAR(64) UNIQUE NOT NULL,
+		expires_at DATETIME NOT NULL,
+		used_at DATETIME,
+		created_by INTEGER,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_cluster_register_tokens_hash ON cluster_register_tokens(token_hash);
 	`
 
 	_, err := DB.Exec(schema)
@@ -344,6 +369,21 @@ func runMigrations() error {
 		"global_config.jwt_expire_minutes":     "INTEGER DEFAULT 20",
 		"global_config.timezone":               "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
 		"lb_rules.log_enabled":                 "BOOLEAN DEFAULT 0",
+		"global_config.cluster_version":        "INTEGER DEFAULT 0",
+		"global_config.sync_caddy_config":      "BOOLEAN DEFAULT 0",
+		"global_config.cluster_token":          "TEXT DEFAULT ''",
+		"global_config.registration_id":        "INTEGER DEFAULT 0",
+		"global_config.registration_secret":    "TEXT DEFAULT ''",
+		"global_config.applied_version":        "INTEGER DEFAULT 0",
+		"global_config.last_sync_error":        "TEXT DEFAULT ''",
+		"global_config.sync_fingerprint":       "TEXT DEFAULT ''",
+		"nodes.cluster_token_hash":             "VARCHAR(64)",
+		"nodes.registration_secret":            "VARCHAR(64)",
+		"nodes.cluster_token_delivered":        "BOOLEAN DEFAULT 0",
+		"nodes.reported_version":               "INTEGER DEFAULT 0",
+		"nodes.health_json":                    "TEXT",
+		"nodes.last_sync_at":                   "DATETIME",
+		"nodes.last_sync_error":                "TEXT",
 	}
 	for col, dtype := range newColumns {
 		parts := strings.Split(col, ".")
@@ -359,6 +399,19 @@ func runMigrations() error {
 				return fmt.Errorf("failed to add column %s.%s: %w", table, name, err)
 			}
 		}
+	}
+	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS cluster_register_tokens (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		token_hash VARCHAR(64) UNIQUE NOT NULL,
+		expires_at DATETIME NOT NULL,
+		used_at DATETIME,
+		created_by INTEGER,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		return fmt.Errorf("failed to create cluster_register_tokens: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cluster_register_tokens_hash ON cluster_register_tokens(token_hash)"); err != nil {
+		return fmt.Errorf("failed to index cluster_register_tokens: %w", err)
 	}
 
 	// Drop legacy cert_job_logs table — logs now stored in files under /app/logs/

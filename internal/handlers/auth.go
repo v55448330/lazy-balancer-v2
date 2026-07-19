@@ -55,10 +55,10 @@ func (h *Handlers) Login(c *gin.Context) {
 	// Update last login
 	db.DB.Exec("UPDATE users SET last_login = datetime('now') WHERE id = ?", user.ID)
 
-	// Get node mode
-	nodeMode := h.cfg.NodeMode
-	if nodeMode == "" {
-		nodeMode = "master"
+	nodeMode := "master"
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err == nil && !isMaster {
+		nodeMode = "slave"
 	}
 
 	expireMinutes := 20
@@ -200,4 +200,48 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		recordAudit(c, "更新资料", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", userIDInt), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: user})
+}
+
+func (h *Handlers) GetSetupStatus(c *gin.Context) {
+	var count int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查初始化状态失败"})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"needs_setup": count == 0}})
+}
+
+func (h *Handlers) SetupAdmin(c *gin.Context) {
+	var count int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查初始化状态失败"})
+		return
+	}
+	if count > 0 {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "系统已完成初始化，请直接登录"})
+		return
+	}
+	var req struct {
+		Username    string `json:"username" binding:"required,min=3,max=50"`
+		Password    string `json:"password" binding:"required,min=6"`
+		DisplayName string `json:"display_name" binding:"max=50"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "用户名至少 3 位，密码至少 6 位"})
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "密码加密失败"})
+		return
+	}
+	result, err := db.DB.Exec("INSERT INTO users (username, password_hash, role, display_name, is_enabled) VALUES (?, ?, 'admin', ?, 1)",
+		req.Username, string(hash), req.DisplayName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建管理员失败"})
+		return
+	}
+	id, _ := result.LastInsertId()
+	services.RecordAuditLog(req.Username, "创建", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), req.Username, "首个管理员，系统初始化"), c.ClientIP())
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "管理员账号创建成功，请登录"})
 }

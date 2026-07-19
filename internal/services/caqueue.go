@@ -17,6 +17,7 @@ type CAQueueManager struct {
 	mu       sync.Mutex
 	queues   map[int]*caQueue
 	reloader func() error
+	active   bool
 }
 
 var (
@@ -32,6 +33,7 @@ func InitCAQueueManager(reloader func() error) {
 		caQueueManager = &CAQueueManager{
 			queues:   make(map[int]*caQueue),
 			reloader: reloader,
+			active:   true,
 		}
 	})
 }
@@ -44,6 +46,12 @@ func GetCAQueueManager() *CAQueueManager {
 
 // Enqueue adds or re-enqueues a cert job.
 func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains string) error {
+	m.mu.Lock()
+	active := m.active
+	m.mu.Unlock()
+	if !active {
+		return errors.New("从节点不运行证书签发队列")
+	}
 	provider, err := loadCAProvider(providerID)
 	if err != nil {
 		failJob(jobID, fmt.Sprintf("CA Provider 不可用: %v", err))
@@ -76,6 +84,26 @@ func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains stri
 	return nil
 }
 
+func (m *CAQueueManager) Start() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.active = true
+}
+
+func (m *CAQueueManager) Stop() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.active {
+		return
+	}
+	m.active = false
+	for _, queue := range m.queues {
+		queue.cancel()
+		close(queue.stopCh)
+	}
+	m.queues = make(map[int]*caQueue)
+}
+
 type queueItem struct {
 	jobID   int
 	ruleID  string
@@ -91,17 +119,22 @@ type caQueue struct {
 	reloader  func() error
 	mu        sync.Mutex
 	stopCh    chan struct{}
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 func newCAQueue(provider models.CAProvider, reloader func() error) *caQueue {
 	if provider.MaxConcurrent <= 0 {
 		provider.MaxConcurrent = 1
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &caQueue{
 		provider: provider,
 		reloader: reloader,
 		active:   make(map[int]struct{}),
 		stopCh:   make(chan struct{}),
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 }
 
@@ -168,7 +201,7 @@ func (q *caQueue) execute(item queueItem) {
 	}
 
 	issuer := NewCertIssuer(q.reloader)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(q.ctx, 15*time.Minute)
 	defer cancel()
 
 	if err := issuer.Issue(ctx, item.jobID, item.ruleID, item.domains, q.provider); err != nil {

@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,8 @@ type apiDocRoute struct {
 
 var apiDocRoutes = []apiDocRoute{
 	{"POST", "/auth/login", "认证", "用户登录", `{"username":"admin","password":"..."}`, `{"token":"jwt","user":{},"node_mode":"master"}`, []string{"400 invalid_request", "401 invalid_credentials"}, "密码仅用于验证，不返回。"},
+	{"GET", "/auth/setup", "认证", "检查是否需要初始化", "", `{"needs_setup":true}`, []string{}, "用户表为空时返回 needs_setup=true，前端应引导创建首个管理员。"},
+	{"POST", "/auth/setup", "认证", "创建首个管理员", `{"username":"admin","password":"...","display_name":""}`, `{"message":"管理员账号创建成功，请登录"}`, []string{"400 invalid_request", "403 already_initialized"}, "仅当用户表为空时可用。"},
 	{"POST", "/auth/logout", "认证", "用户登出", "", `{"code":0,"message":"Logged out"}`, nil, ""},
 	{"GET", "/users/me", "用户", "当前用户信息", "", `{"id":1,"username":"admin","role":"admin","display_name":null}`, []string{"401 unauthenticated"}, ""},
 	{"PATCH", "/users/me", "用户", "更新当前用户", `{"display_name":"昵称","password":"新密码(可选)"}`, `{"id":1,"username":"admin","display_name":"昵称"}`, []string{"400 invalid_request", "401 unauthenticated"}, "密码只接受新值，不返回。"},
@@ -59,15 +62,20 @@ var apiDocRoutes = []apiDocRoute{
 	{"DELETE", "/certificates/jobs/:id", "证书", "删除证书签发任务", "", `{"code":0,"message":"Job deleted"}`, []string{"404 not_found"}, ""},
 	{"POST", "/certificates/issue", "证书", "触发 ACME 签发流程", "", `{"code":0,"message":"Certificate issuance triggered"}`, []string{"401 unauthenticated"}, "该接口仅触发流程，不表示签发完成。"},
 	{"POST", "/certificates/parse", "证书", "解析证书", `{"cert_pem":"...","key_pem":"..."}`, `{"domain":"example.com","valid":true}`, []string{"400 invalid_certificate"}, "证书材料不写入审计。"},
-	{"GET", "/nodes", "集群", "节点列表", "", `[{"id":1,"name":"node-1","status":"online"}]`, []string{"403 admin_required"}, ""},
-	{"POST", "/nodes/register", "集群", "节点注册", `{"name":"node-1","ip_address":"10.0.0.2","port":8000}`, `{"id":2}`, []string{"400 no_master"}, ""},
-	{"PUT", "/nodes/:id", "集群", "更新节点", `{"name":"node-1","sync_enabled":true}`, `{"code":0,"message":"Node updated"}`, []string{"404 not_found"}, ""},
-	{"PUT", "/nodes/:id/approve", "集群", "审批节点", "", `{"code":0,"message":"Node approved"}`, []string{"404 not_found"}, ""},
-	{"PUT", "/nodes/:id/reject", "集群", "拒绝节点", "", `{"code":0,"message":"Node rejected"}`, []string{"404 not_found"}, ""},
-	{"DELETE", "/nodes/:id", "集群", "删除节点", "", `{"code":0,"message":"Node deleted"}`, []string{"404 not_found"}, ""},
-	{"POST", "/nodes/:id/heartbeat", "集群", "节点心跳", "", `{"code":0,"message":"Heartbeat received"}`, nil, "不记录操作日志。"},
-	{"GET", "/sync/status", "同步", "同步状态", "", `{"last_sync":null,"pending_nodes":0,"node_mode":"master"}`, []string{"401 unauthenticated"}, ""},
-	{"POST", "/sync/pull", "同步", "手动同步", "", `{"code":0,"message":"Sync completed"}`, []string{"500 sync_failed"}, ""},
+	{"GET", "/cluster/status", "集群", "当前节点集群状态", "", `{"code":0,"message":"查询成功","data":{"node_mode":"master","cluster_version":3,"master_url":"","sync_interval":60,"sync_caddy_config":false,"cluster_active":true,"applied_version":0,"last_sync_at":"","last_sync_error":"","pending_count":1,"approved_count":2}}`, []string{"401 未登录"}, "JWT。主节点返回待审批和已批准节点计数。"},
+	{"GET", "/cluster/nodes", "集群", "主节点查看从节点", "", `{"code":0,"data":[{"id":2,"name":"slave-a","ip_address":"10.0.0.2","port":8000,"status":"online","is_approved":true,"reported_version":3,"current_version":3,"health":{"caddy_ok":true,"rules_count":5,"certs_expiring_30d":0,"last_sync_at":"2026-07-18T12:00:00Z","last_sync_error":"","uptime_sec":3600},"last_seen":"2026-07-18T12:00:00Z","created_at":"2026-07-18T11:00:00Z"}]}`, []string{"403 仅主节点管理员"}, "admin JWT；离线状态按 last_seen 超过 3×sync_interval 在读取时计算。"},
+	{"POST", "/cluster/register-tokens", "集群", "生成一次性注册令牌", "", `{"code":0,"message":"注册令牌已生成，仅显示一次","data":{"token":"...","expires_at":"2026-07-18T12:30:00Z"}}`, []string{"403 仅主节点管理员"}, "admin JWT；明文仅返回一次，服务端仅保存 SHA-256 哈希，30 分钟过期。"},
+	{"POST", "/cluster/register", "集群机器接口", "从节点注册", `{"token":"...","name":"slave-a","ip_address":"10.0.0.2","port":8000}`, `{"code":0,"message":"注册成功，等待主节点审批","data":{"registration_id":2,"registration_secret":"..."}}`, []string{"401 注册令牌无效或已过期"}, "不使用 JWT；注册令牌一次性。相同 IP+端口待审批注册幂等更新。"},
+	{"GET", "/cluster/register/:id/status", "集群机器接口", "轮询注册审批状态", "", `{"code":0,"data":{"status":"approved","cluster_token":"lb_cluster_..."}}`, []string{"401 注册凭证无效"}, "X-Registration-Secret 或 Bearer registration_secret；cluster_token 仅在首次 approved 响应返回。"},
+	{"POST", "/cluster/nodes/:id/approve", "集群", "批准待审批节点", "", `{"code":0,"message":"审批节点成功"}`, []string{"403 仅主节点管理员", "404 节点不存在"}, "admin JWT；签发节点专属长期集群令牌，仅保存 SHA-256 哈希。"},
+	{"POST", "/cluster/nodes/:id/reject", "集群", "拒绝待审批节点", "", `{"code":0,"message":"拒绝节点成功"}`, []string{"403 仅主节点管理员", "404 节点不存在"}, "admin JWT；删除节点记录。"},
+	{"DELETE", "/cluster/nodes/:id", "集群", "移除集群节点", "", `{"code":0,"message":"删除节点成功"}`, []string{"403 仅主节点管理员", "404 节点不存在"}, "admin JWT；删除节点及其长期令牌哈希。"},
+	{"POST", "/cluster/mode", "集群", "主节点注册并切换为从节点", `{"mode":"slave","master_url":"https://master:8000","register_token":"...","node_name":"slave-a"}`, `{"code":0,"message":"已切换为从节点，等待主节点审批"}`, []string{"400 参数无效", "502 向目标主节点注册失败"}, "admin JWT；仅在目标主节点注册成功后持久化 slave。http:// 地址成功但 message 包含明文传输警告。"},
+	{"POST", "/cluster/promote", "集群", "从节点提升为主节点", "", `{"code":0,"message":"已提升为主节点"}`, []string{"500 提升失败"}, "admin JWT；清空主节点地址和集群令牌、停止同步、启动 ACME 并递增版本。"},
+	{"PUT", "/cluster/settings", "集群", "更新集群设置", `{"sync_interval":60,"sync_caddy_config":true}`, `{"code":0,"message":"集群设置已更新"}`, []string{"400 参数无效", "403 从节点不能修改 Caddy 同步开关"}, "admin JWT；从节点可修改 sync_interval，sync_caddy_config 仅主节点可改。"},
+	{"GET", "/cluster/sync/snapshot", "集群机器接口", "拉取全量集群快照", "", `{"code":0,"data":{"version":3,"fingerprint":"sha256","rules":[],"users":[],"api_keys":[],"basic_settings":{},"certs":[]}}`, []string{"304 版本和指纹均未变化", "401 集群凭证无效"}, "X-Cluster-Token 或 Bearer cluster token；query: since_version,fingerprint。用户密码哈希、API key 哈希和证书私钥只通过此机器接口传输。"},
+	{"POST", "/cluster/sync/pull", "集群", "从节点立即同步", "", `{"code":0,"message":"手动同步完成","data":{"applied_version":3,"changed":true}}`, []string{"500 同步失败"}, "admin JWT；304 无变更不写同步审计。"},
+	{"POST", "/cluster/nodes/report", "集群机器接口", "从节点上报健康状态", `{"applied_version":3,"service_status":"ok","health":{"caddy_ok":true,"rules_count":5,"certs_expiring_30d":0,"last_sync_at":"2026-07-18T12:00:00Z","last_sync_error":"","uptime_sec":3600},"last_sync_at":"2026-07-18T12:00:00Z","last_sync_error":""}`, `{"code":0,"message":"节点状态已更新"}`, []string{"401 集群凭证无效"}, "X-Cluster-Token 或 Bearer cluster token。"},
 	{"GET", "/caddy/status", "Caddy", "Caddy 状态", "", `{"status":"running"}`, []string{"500 caddy_unavailable"}, ""},
 	{"GET", "/caddy/config", "Caddy", "当前 Caddy 配置", "", `{...}`, []string{"500 caddy_unavailable"}, ""},
 	{"PUT", "/caddy/config", "Caddy", "直接更新 Caddy 配置", `{...}`, `{"code":0,"message":"Config saved"}`, []string{"400 config_invalid"}, ""},
@@ -87,27 +95,49 @@ var apiDocRoutes = []apiDocRoute{
 func buildOpenAPIYAML() string {
 	var b strings.Builder
 	b.WriteString("openapi: 3.1.0\ninfo:\n  title: Lazy Balancer API\n  version: 1.0.0\n")
-	b.WriteString("  description: |\n    Lazy Balancer v1 REST API。认证使用 Authorization: Bearer <JWT 或 lb_sk_ API Key>。\n    响应统一为 {code,message,data?}；敏感字段（密码、密钥、凭证、私钥）不会返回。\nservers:\n  - url: /api/v1\npaths:\n")
+	b.WriteString("  description: |\n    Lazy Balancer v1 REST API。管理接口使用 Authorization: Bearer <JWT 或 lb_sk_ API Key>。\n    集群机器接口使用 X-Cluster-Token 或 X-Registration-Secret；响应统一为 {code,message,data?}。\n    管理接口不返回密码、密钥或私钥；集群快照按设计包含哈希及证书私钥，部署时建议使用 HTTPS。\nservers:\n  - url: /api/v1\npaths:\n")
+	pathOrder := make([]string, 0)
+	routesByPath := make(map[string][]apiDocRoute)
 	for _, r := range apiDocRoutes {
-		fmt.Fprintf(&b, "  %s:\n    %s:\n      tags: [%s]\n      summary: %s\n", r.Path, strings.ToLower(r.Method), r.Tag, r.Summary)
-		if r.Description != "" {
-			fmt.Fprintf(&b, "      description: %s\n", r.Description)
+		if _, exists := routesByPath[r.Path]; !exists {
+			pathOrder = append(pathOrder, r.Path)
 		}
-		if r.Request != "" {
-			fmt.Fprintf(&b, "      requestBody:\n        required: true\n        content:\n          application/json:\n            example: %s\n", r.Request)
-		}
-		fmt.Fprintf(&b, "      responses:\n        '200':\n          description: 成功\n          content:\n            application/json:\n              example: %s\n", r.Response)
-		for _, e := range r.Errors {
-			parts := strings.SplitN(e, " ", 2)
-			desc := "错误"
-			if len(parts) == 2 {
-				desc = parts[1]
-			}
-			fmt.Fprintf(&b, "        '%s':\n          description: %s\n          content:\n            application/json:\n              example: {\"code\":%s,\"message\":\"%s\"}\n", parts[0], desc, parts[0], desc)
+		routesByPath[r.Path] = append(routesByPath[r.Path], r)
+	}
+	for _, path := range pathOrder {
+		fmt.Fprintf(&b, "  %s:\n", path)
+		for _, route := range routesByPath[path] {
+			writeOpenAPIOperation(&b, route)
 		}
 	}
-	b.WriteString("components:\n  securitySchemes:\n    bearerAuth:\n      type: http\n      scheme: bearer\n      description: JWT 或 lb_sk_ API Key\nsecurity:\n  - bearerAuth: []\n")
+	b.WriteString("components:\n  securitySchemes:\n    bearerAuth:\n      type: http\n      scheme: bearer\n      description: JWT 或 lb_sk_ API Key\n    clusterToken:\n      type: apiKey\n      in: header\n      name: X-Cluster-Token\n    registrationSecret:\n      type: apiKey\n      in: header\n      name: X-Registration-Secret\nsecurity:\n  - bearerAuth: []\n")
 	return b.String()
+}
+
+func writeOpenAPIOperation(b *strings.Builder, route apiDocRoute) {
+	fmt.Fprintf(b, "    %s:\n      tags: [%s]\n      summary: %s\n", strings.ToLower(route.Method), route.Tag, route.Summary)
+	if route.Path == "/cluster/register" {
+		b.WriteString("      security: []\n")
+	} else if route.Path == "/cluster/register/:id/status" {
+		b.WriteString("      security:\n        - registrationSecret: []\n")
+	} else if route.Tag == "集群机器接口" {
+		b.WriteString("      security:\n        - clusterToken: []\n")
+	}
+	if route.Description != "" {
+		fmt.Fprintf(b, "      description: %s\n", strconv.Quote(route.Description))
+	}
+	if route.Request != "" {
+		fmt.Fprintf(b, "      requestBody:\n        required: true\n        content:\n          application/json:\n            example: %s\n", route.Request)
+	}
+	fmt.Fprintf(b, "      responses:\n        '200':\n          description: 成功\n          content:\n            application/json:\n              example: %s\n", route.Response)
+	for _, routeError := range route.Errors {
+		parts := strings.SplitN(routeError, " ", 2)
+		description := "错误"
+		if len(parts) == 2 {
+			description = parts[1]
+		}
+		fmt.Fprintf(b, "        '%s':\n          description: %s\n          content:\n            application/json:\n              example: {\"code\":%s,\"message\":\"%s\"}\n", parts[0], description, parts[0], description)
+	}
 }
 
 func (h *Handlers) GetOpenAPIYAML(c *gin.Context) {

@@ -1611,7 +1611,17 @@ func extractMetricLabel(metricName string, label string) string {
 }
 
 // GenerateCaddyConfig generates Caddy configuration from database
+type caddyConfigStore interface {
+	Query(string, ...any) (*sql.Rows, error)
+	QueryRow(string, ...any) *sql.Row
+	Exec(string, ...any) (sql.Result, error)
+}
+
 func GenerateCaddyConfig(cfg *config.Config, overrides ...*models.UpdateConfigRequest) map[string]interface{} {
+	return generateCaddyConfigFromStore(cfg, db.DB, overrides...)
+}
+
+func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, overrides ...*models.UpdateConfigRequest) map[string]interface{} {
 	type lbRule struct {
 		CaddyID                       string
 		Name                          string
@@ -1667,7 +1677,7 @@ func GenerateCaddyConfig(cfg *config.Config, overrides ...*models.UpdateConfigRe
 	}
 
 	// Load all enabled rules into memory first to avoid holding cursor while querying upstreams/global_config
-	rows, err := db.DB.Query(`
+	rows, err := store.Query(`
 		SELECT COALESCE(caddy_id,''), name, protocol, COALESCE(domain,''), listen_port, strategy,
 		       IIF(dynamic_dns IN ('1',1),1,0), IIF(enable_dns_server IN ('1',1),1,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval,
@@ -1716,7 +1726,7 @@ func GenerateCaddyConfig(cfg *config.Config, overrides ...*models.UpdateConfigRe
 	// Load upstreams for each rule after closing rules cursor
 	for i := range allRules {
 		r := &allRules[i]
-		upstreamRows, err := db.DB.Query(`
+		upstreamRows, err := store.Query(`
 			SELECT host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'')
 			FROM upstreams WHERE rule_id = ? AND enabled = 1
 		`, r.rule.CaddyID)
@@ -1751,7 +1761,7 @@ func GenerateCaddyConfig(cfg *config.Config, overrides ...*models.UpdateConfigRe
 		requestBodyMaxSizeMB, httpReadTimeout, httpWriteTimeout, httpIdleTimeout, upstreamKeepaliveTimeout int
 		serverTokensHidden                                                                                 bool
 	}
-	if err := db.DB.QueryRow(`
+	if err := store.QueryRow(`
 		SELECT COALESCE(dns_provider,''), COALESCE(acme_email,''), is_master,
 		       COALESCE(caddy_log_path,'/app/logs/caddy.log'), COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
 		       COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,0), COALESCE(http_write_timeout,0),
@@ -1963,7 +1973,7 @@ func GenerateCaddyConfig(cfg *config.Config, overrides ...*models.UpdateConfigRe
 		r := ru.rule
 		if r.Protocol == "http" && r.EnableTLS && r.TLSHTTPRedirect {
 			// Only redirect to HTTPS if the certificate is actually available.
-			if r.TLSSource == "acme_dns" && !IsACMECertIssued(r.CaddyID, r.Domain) {
+			if r.TLSSource == "acme_dns" && !isACMECertIssuedFromStore(store, r.CaddyID, r.Domain) {
 				continue
 			}
 			domainHosts := splitAndTrim(r.Domain)
@@ -2004,7 +2014,7 @@ func GenerateCaddyConfig(cfg *config.Config, overrides ...*models.UpdateConfigRe
 				"tags":        []string{r.CaddyID},
 			})
 		} else if r.TLSSource == "acme_dns" {
-			certPEM, keyPEM, issued := loadACMECertificate(r.CaddyID, r.Domain)
+			certPEM, keyPEM, issued := loadACMECertificateFromStore(store, r.CaddyID, r.Domain)
 			if issued {
 				WriteCertFiles(r.CaddyID, certPEM, keyPEM)
 				tlsCertFiles = append(tlsCertFiles, map[string]interface{}{
@@ -2383,6 +2393,10 @@ func defaultCaddyConfig() map[string]interface{} {
 // loadACMECertificate reads the issued ACME certificate and key from cert_jobs
 // for the given rule and domain. Returns (certPEM, keyPEM, true) if issued.
 func loadACMECertificate(caddyID, domain string) (string, string, bool) {
+	return loadACMECertificateFromStore(db.DB, caddyID, domain)
+}
+
+func loadACMECertificateFromStore(store caddyConfigStore, caddyID, domain string) (string, string, bool) {
 	parts := strings.Split(domain, ",")
 	domains := make([]string, 0, len(parts))
 	for _, d := range parts {
@@ -2398,7 +2412,7 @@ func loadACMECertificate(caddyID, domain string) (string, string, bool) {
 		var id int
 		var status string
 		var certPEM, keyPEM string
-		err := db.DB.QueryRow(`
+		err := store.QueryRow(`
 			SELECT id, status, cert_pem, key_pem
 			FROM cert_jobs
 			WHERE rule_id=? AND (domain=? OR domain=?)
@@ -2417,7 +2431,7 @@ func loadACMECertificate(caddyID, domain string) (string, string, bool) {
 			// Defensive: only mark as failed if the job was already issued.
 			// Don't disrupt in-progress jobs (creating_account, waiting_ca, etc.).
 			if status == "issued" {
-				if _, updErr := db.DB.Exec(
+				if _, updErr := store.Exec(
 					"UPDATE cert_jobs SET status='failed', message='证书数据缺失', updated_at=datetime('now') WHERE id=?",
 					id,
 				); updErr != nil {
@@ -2436,7 +2450,11 @@ func loadACMECertificate(caddyID, domain string) (string, string, bool) {
 // IsACMECertIssued returns true if cert_jobs has an issued certificate for the
 // given rule (by caddy_id) and domain.
 func IsACMECertIssued(caddyID, domain string) bool {
-	_, _, issued := loadACMECertificate(caddyID, domain)
+	return isACMECertIssuedFromStore(db.DB, caddyID, domain)
+}
+
+func isACMECertIssuedFromStore(store caddyConfigStore, caddyID, domain string) bool {
+	_, _, issued := loadACMECertificateFromStore(store, caddyID, domain)
 	return issued
 }
 

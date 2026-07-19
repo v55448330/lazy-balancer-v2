@@ -35,10 +35,6 @@ var configFieldSections = map[string]string{
 	"audit_retention_months": "基础设置",
 	"jwt_expire_minutes":     "基础设置",
 	"timezone":               "基础设置",
-
-	"is_master":     "集群管理",
-	"master_url":    "集群管理",
-	"sync_interval": "集群管理",
 }
 
 func GetConfigSection(field string) string {

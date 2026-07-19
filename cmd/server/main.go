@@ -53,14 +53,18 @@ func main() {
 		return caddyService.ApplyConfig(services.GenerateCaddyConfig(cfg))
 	}
 	services.InitCAQueueManager(caddyReloader)
-	certService := services.NewCertificateService(cfg.CaddyAdminURL, caddyReloader)
 	metricsService := services.NewMetricsService(cfg.CaddyMetricsURL, cfg.MetricsInterval)
-	nodeService := services.NewNodeService()
-	syncService := services.NewSyncService()
+	syncService := services.NewSyncService(db.DB, cfg, caddyService)
+	lifecycle := services.NewRuntimeLifecycle(syncService, func() *services.CertificateService {
+		return services.NewCertificateService(cfg.CaddyAdminURL, caddyReloader)
+	})
+	clusterService := services.NewClusterService(db.DB, lifecycle)
 	caProviderService := services.NewCAProviderService()
 
-	// Initialize handlers
-	h := handlers.NewHandlers(cfg, caddyService, metricsService, nodeService, syncService, certService, caProviderService)
+	h := handlers.NewHandlers(handlers.Dependencies{
+		Config: cfg, CaddyService: caddyService, MetricsService: metricsService,
+		SyncService: syncService, ClusterService: clusterService, CAProviderService: caProviderService,
+	})
 
 	// Materialize cert files from DB, then apply Caddy config on startup
 	services.MaterializeAllCertsFromDB()
@@ -72,10 +76,18 @@ func main() {
 	router := middleware.SetupRouter(h, cfg)
 
 	// Start services
-	go certService.Start()
 	go metricsService.Start()
-	go nodeService.StartHeartbeat(cfg)
-	go syncService.Start()
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
+		log.Printf("Warning: failed to read cluster role: %v", err)
+		isMaster = true
+	}
+	if isMaster {
+		lifecycle.StartACME()
+	} else {
+		lifecycle.StopACME()
+		lifecycle.StartSync()
+	}
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
@@ -84,10 +96,8 @@ func main() {
 	go func() {
 		<-quit
 		log.Println("Shutting down...")
-		certService.Stop()
 		metricsService.Stop()
-		nodeService.Stop()
-		syncService.Stop()
+		lifecycle.Shutdown()
 		os.Exit(0)
 	}()
 

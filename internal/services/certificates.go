@@ -234,6 +234,10 @@ func HasCertJob(ruleID, domains string) bool {
 }
 
 func (s *CertificateService) renewExpiringCertificates() {
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

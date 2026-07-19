@@ -212,15 +212,33 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		failJob(jobID, err.Error())
 		return err
 	}
+	var isMaster bool
+	if err := db.DB.QueryRowContext(ctx, "SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		return fmt.Errorf("节点已切换为从节点，停止保存签发结果")
+	}
 
 	// Persist cert+key to database and reset renewal failure counters on success.
-	_, err = db.DB.Exec(
+	tx, err := db.DB.BeginTx(ctx, nil)
+	if err != nil {
+		failJob(jobID, fmt.Sprintf("证书保存失败: %v", err))
+		return fmt.Errorf("begin certificate transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx,
 		"UPDATE cert_jobs SET status='issued', message='签发成功', cert_pem=?, key_pem=?, expires_at=?, ca_provider_id=?, renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?",
 		certPEM, keyPEM, notAfter, provider.ID, jobID,
 	)
 	if err != nil {
 		failJob(jobID, fmt.Sprintf("证书保存失败: %v", err))
 		return fmt.Errorf("update cert job: %w", err)
+	}
+	if err := BumpClusterVersion(ctx, tx); err != nil {
+		failJob(jobID, fmt.Sprintf("集群版本更新失败: %v", err))
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		failJob(jobID, fmt.Sprintf("证书保存失败: %v", err))
+		return fmt.Errorf("commit certificate transaction: %w", err)
 	}
 
 	RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书签发成功，过期时间 %s", ruleID, notAfter.Format("2006-01-02")), "")

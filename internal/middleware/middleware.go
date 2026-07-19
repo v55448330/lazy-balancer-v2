@@ -9,6 +9,7 @@ import (
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/handlers"
+	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 
 	"github.com/gin-gonic/gin"
@@ -27,6 +28,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	// CORS
 	r.Use(corsMiddleware())
 	r.Use(auditMiddleware())
+	r.Use(clusterVersionMiddleware(db.DB))
 
 	// Serve static files
 	r.Static("/assets", cfg.StaticDir+"/assets")
@@ -46,6 +48,12 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.GET("/openapi.yaml", h.GetOpenAPIYAML)
 		v1.GET("/docs", h.GetAPIDocs)
 		v1.POST("/auth/login", h.Login)
+		v1.GET("/auth/setup", h.GetSetupStatus)
+		v1.POST("/auth/setup", h.SetupAdmin)
+		v1.POST("/cluster/register", h.RegisterClusterNode)
+		v1.GET("/cluster/register/:id/status", registrationAuth(db.DB), h.GetClusterRegistrationStatus)
+		v1.GET("/cluster/sync/snapshot", clusterTokenAuth(db.DB), h.GetClusterSnapshot)
+		v1.POST("/cluster/nodes/report", clusterTokenAuth(db.DB), h.ReportClusterNode)
 
 		v1.Use(apiKeyAuth(cfg))
 		v1.GET("/caddy/metrics", h.GetCaddyMetrics)
@@ -55,7 +63,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			v1.POST("/auth/logout", h.Logout)
 			// User management (admin only)
 			admin := v1.Group("")
-			admin.Use(adminOnly())
+			admin.Use(adminOnly(), readOnlyGuard(db.DB))
 			{
 				admin.GET("/users", h.ListUsers)
 				admin.POST("/users", h.CreateUser)
@@ -74,12 +82,15 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.PUT("/ca-providers/:id", h.UpdateCAProvider)
 				admin.POST("/ca-providers/:id/test", h.TestCAProvider)
 
-				// Nodes
-				admin.GET("/nodes", h.ListNodes)
-				admin.GET("/nodes/pending", h.ListPendingNodes)
-				admin.PUT("/nodes/:id/approve", h.ApproveNode)
-				admin.PUT("/nodes/:id/reject", h.RejectNode)
-				admin.DELETE("/nodes/:id", h.DeleteNode)
+				admin.GET("/cluster/nodes", jwtOnly(), h.ListClusterNodes)
+				admin.POST("/cluster/register-tokens", jwtOnly(), h.GenerateClusterRegisterToken)
+				admin.POST("/cluster/nodes/:id/approve", jwtOnly(), h.ApproveClusterNode)
+				admin.POST("/cluster/nodes/:id/reject", jwtOnly(), h.RejectClusterNode)
+				admin.DELETE("/cluster/nodes/:id", jwtOnly(), h.DeleteClusterNode)
+				admin.POST("/cluster/mode", jwtOnly(), h.SetClusterMode)
+				admin.POST("/cluster/promote", jwtOnly(), h.PromoteClusterNode)
+				admin.POST("/cluster/sync/pull", jwtOnly(), h.PullClusterSnapshot)
+				admin.PUT("/cluster/settings", jwtOnly(), h.UpdateClusterSettings)
 
 				// Config
 				admin.POST("/config/preview", h.PreviewConfigUpdate)
@@ -88,89 +99,81 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/config/validate", h.ValidateConfig)
 				admin.GET("/config/health", h.GetUpstreamHealth)
 
-				// Sync
-				admin.GET("/sync/config", h.GetSyncConfig)
-				admin.POST("/sync/pull", h.ManualSync)
 			}
 
 			// User + Admin
+			business := v1.Group("")
+			business.Use(readOnlyGuard(db.DB))
 			{
 				// Current user (self)
-				v1.GET("/users/me", h.GetCurrentUser)
-				v1.PATCH("/users/me", h.UpdateCurrentUser)
-				v1.GET("/users/me/api-keys", h.ListCurrentUserAPIKeys)
-				v1.POST("/users/me/api-keys", h.CreateCurrentUserAPIKey)
-				v1.PATCH("/users/me/api-keys/:id", h.UpdateCurrentUserAPIKeyStatus)
-				v1.DELETE("/users/me/api-keys/:id", h.DeleteCurrentUserAPIKey)
+				business.GET("/users/me", h.GetCurrentUser)
+				business.PATCH("/users/me", h.UpdateCurrentUser)
+				business.GET("/users/me/api-keys", h.ListCurrentUserAPIKeys)
+				business.POST("/users/me/api-keys", h.CreateCurrentUserAPIKey)
+				business.PATCH("/users/me/api-keys/:id", h.UpdateCurrentUserAPIKeyStatus)
+				business.DELETE("/users/me/api-keys/:id", h.DeleteCurrentUserAPIKey)
 
 				// Rules
-				v1.GET("/rules", h.ListRules)
-				v1.GET("/rules/:caddy_id", h.GetRule)
-				v1.GET("/rules/:caddy_id/caddy-config", h.GetRuleCaddyConfig)
-				v1.GET("/rules/:caddy_id/logs", h.GetRuleLogs)
-				v1.GET("/rules/:caddy_id/cert-info", h.GetRuleCertInfo)
-				v1.POST("/rules/cert-info", h.GetRulesCertInfo)
-				v1.POST("/rules", h.CreateRule)
-				v1.PUT("/rules/:caddy_id", h.UpdateRule)
-				v1.DELETE("/rules/:caddy_id", h.DeleteRule)
-				v1.POST("/rules/:caddy_id/enable", h.EnableRule)
-				v1.PUT("/rules/:caddy_id/disable", h.DisableRule)
-				v1.POST("/rules/:caddy_id/duplicate", h.DuplicateRule)
+				business.GET("/rules", h.ListRules)
+				business.GET("/rules/:caddy_id", h.GetRule)
+				business.GET("/rules/:caddy_id/caddy-config", h.GetRuleCaddyConfig)
+				business.GET("/rules/:caddy_id/logs", h.GetRuleLogs)
+				business.GET("/rules/:caddy_id/cert-info", h.GetRuleCertInfo)
+				business.POST("/rules/cert-info", h.GetRulesCertInfo)
+				business.POST("/rules", h.CreateRule)
+				business.PUT("/rules/:caddy_id", h.UpdateRule)
+				business.DELETE("/rules/:caddy_id", h.DeleteRule)
+				business.POST("/rules/:caddy_id/enable", h.EnableRule)
+				business.PUT("/rules/:caddy_id/disable", h.DisableRule)
+				business.POST("/rules/:caddy_id/duplicate", h.DuplicateRule)
 
 				// Certificate Configs
-				v1.GET("/certificate-configs", h.ListCertificateConfigs)
-				v1.POST("/certificate-configs", h.CreateCertificateConfig)
-				v1.PUT("/certificate-configs/:id", h.UpdateCertificateConfig)
-				v1.DELETE("/certificate-configs/:id", h.DeleteCertificateConfig)
-				v1.GET("/dns-providers", h.ListDNSProviders)
-				v1.GET("/ca-providers", h.ListCAProviders)
-				v1.GET("/ca-providers/:id", h.GetCAProvider)
-				v1.POST("/certificate-configs/test", h.TestCertificateConfig)
-				v1.POST("/certificate-configs/:id/test", h.TestCertificateConfig)
+				business.GET("/certificate-configs", h.ListCertificateConfigs)
+				business.POST("/certificate-configs", h.CreateCertificateConfig)
+				business.PUT("/certificate-configs/:id", h.UpdateCertificateConfig)
+				business.DELETE("/certificate-configs/:id", h.DeleteCertificateConfig)
+				business.GET("/dns-providers", h.ListDNSProviders)
+				business.GET("/ca-providers", h.ListCAProviders)
+				business.GET("/ca-providers/:id", h.GetCAProvider)
+				business.POST("/certificate-configs/test", h.TestCertificateConfig)
+				business.POST("/certificate-configs/:id/test", h.TestCertificateConfig)
 
 				// Config (read only for non-admin)
-				v1.GET("/config", h.GetConfig)
+				business.GET("/config", h.GetConfig)
+				business.GET("/cluster/status", jwtOnly(), h.GetClusterStatus)
 
 				// Metrics
-				v1.GET("/metrics/overview", h.GetMetricsOverview)
-				v1.GET("/metrics/rule/:caddy_id", h.GetRuleMetrics)
-				v1.GET("/metrics/history", h.GetMetricsHistory)
-				v1.GET("/metrics/realtime", h.GetRealtimeTraffic)
-				v1.GET("/metrics/connections", h.GetConnectionStats)
+				business.GET("/metrics/overview", h.GetMetricsOverview)
+				business.GET("/metrics/rule/:caddy_id", h.GetRuleMetrics)
+				business.GET("/metrics/history", h.GetMetricsHistory)
+				business.GET("/metrics/realtime", h.GetRealtimeTraffic)
+				business.GET("/metrics/connections", h.GetConnectionStats)
 
 				// System
-				v1.GET("/system/info", h.GetSystemInfo)
-				v1.GET("/system/metrics", h.GetSystemMetrics)
+				business.GET("/system/info", h.GetSystemInfo)
+				business.GET("/system/metrics", h.GetSystemMetrics)
 
 				// Caddy
-				v1.GET("/caddy/status", h.GetCaddyStatus)
-				v1.GET("/caddy/config", h.GetCaddyConfig)
-				v1.GET("/caddy/logs", h.GetCaddyLogs)
-				v1.PUT("/caddy/config", h.PutCaddyConfig)
-				v1.GET("/caddy/host-metrics", h.GetHostMetrics)
-				v1.POST("/caddy/start", h.StartCaddy)
-				v1.POST("/caddy/stop", h.StopCaddy)
-				v1.POST("/caddy/restart", h.RestartCaddy)
-
-				// Sync
-				v1.GET("/sync/status", h.GetSyncStatus)
-
-				// Nodes
-				v1.POST("/nodes/register", h.RegisterNode)
-				v1.POST("/nodes/:id/heartbeat", h.NodeHeartbeat)
-				v1.PUT("/nodes/:id", h.UpdateNode)
+				business.GET("/caddy/status", h.GetCaddyStatus)
+				business.GET("/caddy/config", h.GetCaddyConfig)
+				business.GET("/caddy/logs", h.GetCaddyLogs)
+				business.PUT("/caddy/config", h.PutCaddyConfig)
+				business.GET("/caddy/host-metrics", h.GetHostMetrics)
+				business.POST("/caddy/start", h.StartCaddy)
+				business.POST("/caddy/stop", h.StopCaddy)
+				business.POST("/caddy/restart", h.RestartCaddy)
 
 				// Certificates
-				v1.GET("/certificates", h.ListCertificates)
-				v1.POST("/certificates/issue", h.IssueCertificate)
-				v1.POST("/certificates/parse", h.ParseCertificate)
-				v1.GET("/certificates/jobs", h.ListCertJobs)
-				v1.GET("/certificates/jobs/:id", h.GetCertJob)
-				v1.GET("/certificates/jobs/:id/logs", h.GetCertJobLogs)
-				v1.POST("/certificates/jobs/:id/retry", h.RetryCertJob)
-				v1.DELETE("/certificates/jobs/:id", h.DeleteCertJob)
+				business.GET("/certificates", h.ListCertificates)
+				business.POST("/certificates/issue", h.IssueCertificate)
+				business.POST("/certificates/parse", h.ParseCertificate)
+				business.GET("/certificates/jobs", h.ListCertJobs)
+				business.GET("/certificates/jobs/:id", h.GetCertJob)
+				business.GET("/certificates/jobs/:id/logs", h.GetCertJobLogs)
+				business.POST("/certificates/jobs/:id/retry", h.RetryCertJob)
+				business.DELETE("/certificates/jobs/:id", h.DeleteCertJob)
 
-				v1.GET("/audit-logs", h.GetAuditLogs)
+				business.GET("/audit-logs", h.GetAuditLogs)
 			}
 		}
 	}
@@ -181,7 +184,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 }
 
 func auditMiddleware() gin.HandlerFunc {
-	writeMethods := map[string]bool{"POST": true, "PUT": true, "DELETE": true}
+	writeMethods := map[string]bool{"POST": true, "PUT": true, "PATCH": true, "DELETE": true}
 	return func(c *gin.Context) {
 		c.Next()
 
@@ -215,8 +218,8 @@ func auditMiddleware() gin.HandlerFunc {
 func corsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, X-Cluster-Token, X-Registration-Secret")
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusNoContent)
@@ -335,6 +338,16 @@ func adminOnly() gin.HandlerFunc {
 		if !exists || role != "admin" {
 			c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "Admin access required"})
 			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+func jwtOnly() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.GetString("auth_type") == "api_key" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "集群管理接口仅接受管理员 JWT"})
 			return
 		}
 		c.Next()

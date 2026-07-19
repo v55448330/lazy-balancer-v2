@@ -8,7 +8,7 @@ main.go (83 lines)
 
 ## WHERE TO LOOK
 - Startup: lines 23-40 (flag parse, config load, DB init)
-- Service init: lines 42-49 (Caddy, Metrics, Node, Sync)
+- Service init: Caddy, metrics, cluster sync, and role lifecycle
 - Graceful shutdown: lines 64-75 (signal handling, service stop)
 - HTTP server: lines 77-81
 
@@ -23,7 +23,7 @@ main.go (83 lines)
 Main process. Background services started as goroutines:
 - CaddyService: Caddy orchestration
 - MetricsService: Periodic metrics collection
-- NodeService: Health checking via heartbeat
-- SyncService: Caddy config sync
+- RuntimeLifecycle: starts ACME only for masters and SyncService only for slaves
+- SyncService: registration polling, snapshot pull, and status reporting
 
 Starts on port from config. Applies saved Caddy config on startup if available.

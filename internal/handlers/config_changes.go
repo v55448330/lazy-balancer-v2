@@ -16,9 +16,6 @@ type configSnapshot struct {
 	DefaultCAProviderID      int
 	LogLevel                 string
 	AccessLogEnabled         bool
-	IsMaster                 bool
-	MasterURL                string
-	SyncInterval             int
 	Timezone                 string
 	CaddyLogLevel            string
 	CaddyLogSizeMB           int
@@ -47,7 +44,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 	err := db.DB.QueryRow(`SELECT COALESCE(acme_email,''), COALESCE(dns_provider,'dnspod'), COALESCE(dns_credentials,''),
 		COALESCE(cert_expiry_days,30), COALESCE(cert_renewal_days,30), COALESCE(cert_renewal_attempts,5),
 		COALESCE(default_ca_provider_id,0), COALESCE(log_level,'info'), COALESCE(access_log_enabled,TRUE),
-		is_master, COALESCE(master_url,''), COALESCE(sync_interval,30), COALESCE(timezone,'Asia/Shanghai'),
+		COALESCE(timezone,'Asia/Shanghai'),
 		COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100), COALESCE(request_body_max_size_mb,0),
 		COALESCE(http_read_timeout,60), COALESCE(http_write_timeout,60), COALESCE(http_idle_timeout,120),
 		COALESCE(upstream_keepalive_timeout,60), COALESCE(server_tokens_hidden,FALSE),
@@ -57,7 +54,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		&old.ACMEEmail, &old.DNSProvider, &old.DNSCredentials,
 		&old.CertExpiryDays, &old.CertRenewalDays, &old.CertRenewalAttempts,
 		&old.DefaultCAProviderID, &old.LogLevel, &old.AccessLogEnabled,
-		&old.IsMaster, &old.MasterURL, &old.SyncInterval, &old.Timezone,
+		&old.Timezone,
 		&old.CaddyLogLevel, &old.CaddyLogSizeMB, &old.RequestBodyMaxSizeMB,
 		&old.HTTPReadTimeout, &old.HTTPWriteTimeout, &old.HTTPIdleTimeout,
 		&old.UpstreamKeepaliveTimeout, &old.ServerTokensHidden,
@@ -95,9 +92,6 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 	add("audit_retention_months", "日志保留", req.AuditRetentionMonths != nil && *req.AuditRetentionMonths != old.AuditRetentionMonths)
 	add("jwt_expire_minutes", "登录过期时间", req.JWTExpireMinutes != nil && *req.JWTExpireMinutes != old.JWTExpireMinutes)
 	add("cert_job_log_size_mb", "证书日志大小", req.CertJobLogSizeMB != nil && *req.CertJobLogSizeMB != old.CertJobLogSizeMB)
-	add("is_master", "节点模式", req.IsMaster != nil && *req.IsMaster != old.IsMaster)
-	add("master_url", "主节点地址", req.MasterURL != nil && *req.MasterURL != old.MasterURL)
-	add("sync_interval", "同步间隔", req.SyncInterval != nil && *req.SyncInterval != old.SyncInterval)
 	add("caddy_log_level", "Caddy日志级别", req.CaddyLogLevel != nil && *req.CaddyLogLevel != old.CaddyLogLevel)
 	add("caddy_log_size_mb", "日志大小", req.CaddyLogSizeMB != nil && *req.CaddyLogSizeMB != old.CaddyLogSizeMB)
 	add("request_body_max_size_mb", "请求体大小", req.RequestBodyMaxSizeMB != nil && *req.RequestBodyMaxSizeMB != old.RequestBodyMaxSizeMB)

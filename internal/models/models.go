@@ -138,6 +138,13 @@ type GlobalConfig struct {
 	MasterURL                string       `json:"master_url"`
 	SyncInterval             int          `json:"sync_interval"`
 	DefaultCAProviderID      int          `json:"default_ca_provider_id"`
+	ClusterVersion           int          `json:"cluster_version"`
+	SyncCaddyConfig          bool         `json:"sync_caddy_config"`
+	ClusterToken             string       `json:"-"`
+	RegistrationID           int          `json:"-"`
+	RegistrationSecret       string       `json:"-"`
+	AppliedVersion           int          `json:"applied_version"`
+	LastSyncError            string       `json:"last_sync_error"`
 	LastSync                 sql.NullTime `json:"last_sync"`
 	UpdatedAt                sql.NullTime `json:"updated_at"`
 }
@@ -243,19 +250,25 @@ type CertJobLog struct {
 
 // Node represents a node in the cluster
 type Node struct {
-	ID           int           `json:"id"`
-	Name         string        `json:"name"`
-	Mode         string        `json:"mode"`
-	IPAddress    string        `json:"ip_address"`
-	Port         int           `json:"port"`
-	MasterID     sql.NullInt64 `json:"master_id"`
-	IsApproved   bool          `json:"is_approved"`
-	SyncEnabled  bool          `json:"sync_enabled"`
-	SyncInterval int           `json:"sync_interval"`
-	SyncScope    string        `json:"sync_scope"`
-	Status       string        `json:"status"`
-	LastSeen     sql.NullTime  `json:"last_seen"`
-	CreatedAt    time.Time     `json:"created_at"`
+	ID                 int           `json:"id"`
+	Name               string        `json:"name"`
+	Mode               string        `json:"mode"`
+	IPAddress          string        `json:"ip_address"`
+	Port               int           `json:"port"`
+	MasterID           sql.NullInt64 `json:"master_id"`
+	IsApproved         bool          `json:"is_approved"`
+	SyncEnabled        bool          `json:"sync_enabled"`
+	SyncInterval       int           `json:"sync_interval"`
+	SyncScope          string        `json:"sync_scope"`
+	Status             string        `json:"status"`
+	ClusterTokenHash   string        `json:"-"`
+	RegistrationSecret string        `json:"-"`
+	ReportedVersion    int           `json:"reported_version"`
+	HealthJSON         string        `json:"-"`
+	LastSyncAt         sql.NullTime  `json:"last_sync_at"`
+	LastSyncError      string        `json:"last_sync_error"`
+	LastSeen           sql.NullTime  `json:"last_seen"`
+	CreatedAt          time.Time     `json:"created_at"`
 }
 
 // MetricsHistory represents historical metrics data
@@ -273,24 +286,6 @@ type MetricsHistory struct {
 	LatencyP50    int       `json:"latency_p50"`
 	LatencyP95    int       `json:"latency_p95"`
 	LatencyP99    int       `json:"latency_p99"`
-}
-
-// ConfigVersion represents a configuration version for sync
-type ConfigVersion struct {
-	ID          int       `json:"id"`
-	Version     int64     `json:"version"`
-	Timestamp   time.Time `json:"timestamp"`
-	ChangeType  string    `json:"change_type"`
-	Description string    `json:"description"`
-}
-
-// SyncData represents the data to be synced between nodes
-type SyncData struct {
-	Version   int64        `json:"version"`
-	Timestamp time.Time    `json:"timestamp"`
-	Rules     []LbRule     `json:"rules"`
-	Config    GlobalConfig `json:"config"`
-	Users     []User       `json:"users,omitempty"`
 }
 
 // Request/Response types
@@ -417,23 +412,7 @@ type UpdateConfigRequest struct {
 	AuditRetentionMonths     *int    `json:"audit_retention_months"`
 	JWTExpireMinutes         *int    `json:"jwt_expire_minutes"`
 	Timezone                 *string `json:"timezone"`
-	IsMaster                 *bool   `json:"is_master"`
-	MasterURL                *string `json:"master_url"`
-	SyncInterval             *int    `json:"sync_interval"`
 	DefaultCAProviderID      *int    `json:"default_ca_provider_id"`
-}
-
-type RegisterNodeRequest struct {
-	Name      string `json:"name" binding:"required"`
-	IPAddress string `json:"ip_address" binding:"required"`
-	Port      int    `json:"port"`
-}
-
-type UpdateNodeRequest struct {
-	Name         string `json:"name"`
-	SyncEnabled  *bool  `json:"sync_enabled"`
-	SyncInterval *int   `json:"sync_interval"`
-	SyncScope    string `json:"sync_scope"`
 }
 
 type CreateCertificateConfigRequest struct {
