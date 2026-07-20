@@ -59,6 +59,7 @@ import { CopyDocument } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
+import { formatDate } from '@/utils/date'
 import type {
   ApiResponse,
   ClusterModeResult,
@@ -264,11 +265,7 @@ const removeNode = async (node: ClusterNode): Promise<void> => {
   if (confirmed) await runNodeAction(node, 'remove')
 }
 
-const formatTime = (value: string): string => {
-  if (!value) return '-'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN')
-}
+const formatTime = (value: string): string => formatDate(value) || '-'
 
 onMounted(async () => {
   try {

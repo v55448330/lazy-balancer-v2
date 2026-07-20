@@ -91,12 +91,6 @@ func (h *Handlers) PreviewConfigUpdate(c *gin.Context) {
 }
 
 func (h *Handlers) UpdateConfig(c *gin.Context) {
-	// Check if slave mode
-	nodeMode, _ := c.Get("node_mode")
-	if nodeMode != nil && nodeMode.(string) == "slave" {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "Cannot update config on slave node"})
-		return
-	}
 
 	var req models.UpdateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

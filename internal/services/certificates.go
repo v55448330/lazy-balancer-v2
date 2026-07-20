@@ -135,13 +135,12 @@ func (s *CertificateService) recoverCertJobs() {
 			continue
 		}
 
-		var ruleExists bool
-		if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1)", ruleID).Scan(&ruleExists); err != nil {
-			log.Printf("Failed to check rule existence for job %d: %v", jobID, err)
+		var ruleEnabled int
+		if err := db.DB.QueryRow("SELECT COALESCE(enabled, -1) FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&ruleEnabled); err != nil {
+			failJob(jobID, "关联规则不存在")
 			continue
 		}
-		if !ruleExists {
-			failJob(jobID, "关联规则不存在或已禁用")
+		if ruleEnabled != 1 {
 			continue
 		}
 
@@ -318,6 +317,8 @@ func (s *CertificateService) checkManualCertExpiration() {
 	now := time.Now()
 	var expiredCount, expiringSoonCount int
 
+	warnDays := 30
+	_ = db.DB.QueryRow("SELECT COALESCE(cert_expiry_days,30) FROM global_config WHERE id=1").Scan(&warnDays)
 	for _, c := range certs {
 		block, _ := pem.Decode([]byte(c.certPEM))
 		if block == nil {
@@ -337,7 +338,7 @@ func (s *CertificateService) checkManualCertExpiration() {
 			log.Printf("⚠️ CRITICAL: TLS certificate expired for rule '%s' (domain: %s, caddy_id: %s). Expired on %s",
 				c.name, c.domain, c.caddyID, cert.NotAfter.Format("2006-01-02"))
 			expiredCount++
-		} else if daysUntilExpiry <= 30 {
+		} else if daysUntilExpiry <= warnDays {
 			log.Printf("⚠️ WARNING: TLS certificate expiring soon for rule '%s' (domain: %s, caddy_id: %s). Expires in %d days (%s)",
 				c.name, c.domain, c.caddyID, daysUntilExpiry, cert.NotAfter.Format("2006-01-02"))
 			expiringSoonCount++
@@ -345,7 +346,7 @@ func (s *CertificateService) checkManualCertExpiration() {
 	}
 
 	if expiredCount > 0 || expiringSoonCount > 0 {
-		log.Printf("TLS Certificate Check: %d expired, %d expiring within 30 days", expiredCount, expiringSoonCount)
+		log.Printf("TLS Certificate Check: %d expired, %d expiring within %d days", expiredCount, expiringSoonCount, warnDays)
 	}
 }
 

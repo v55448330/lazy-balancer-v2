@@ -296,7 +296,16 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理旧规则失败，已回滚: " + err.Error()})
 		return
 	}
-	userID := c.GetInt("user_id")
+	if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id NOT IN (SELECT caddy_id FROM lb_rules)"); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理孤儿证书任务失败，已回滚: " + err.Error()})
+		return
+	}
+	userID := 0
+	if uid, exists := c.Get("user_id"); exists {
+		if f, ok := uid.(float64); ok {
+			userID = int(f)
+		}
+	}
 	imported := 0
 	tlsCount := 0
 	upstreamCount := 0
@@ -312,12 +321,12 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
-			enable_compress, compress_types, enabled, created_by, updated_at, caddy_id, log_enabled)
-		VALUES (?, ?, ?, ?, ?, ?, 0, 0, '', '', ?, 5, ?, 2, ?, 0, 0, 250, 0, 0, 0, ?, ?, ?, 0, 0, ?, ?, ?, ?, 'gzip', ?, ?, datetime('now'), ?, 0)`,
+			enable_compress, compress_types, enabled, created_by, updated_by, updated_at, caddy_id, log_enabled)
+		VALUES (?, ?, ?, ?, ?, ?, 0, 0, '', '', ?, 5, ?, 2, ?, 0, 0, 250, 0, 0, 0, ?, ?, ?, 0, 0, ?, ?, ?, ?, 'gzip', ?, ?, ?, datetime('now'), ?, 0)`,
 			r.Name, r.Description, r.Protocol, r.Domain, r.ListenPort, "weighted_round_robin",
 			r.HealthInt, r.HealthFails, r.ActiveHC,
 			r.HostHeader, r.EnableTLS, tlsSource(r), r.TLSCert, r.TLSKey, r.Redirect,
-			r.Compress, r.Enabled, userID, caddyID)
+			r.Compress, r.Enabled, userID, userID, caddyID)
 		if err != nil {
 			recordAudit(c, "导入失败", "配置备份", fmt.Sprintf("规则 %s: %v", r.Name, err))
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入规则失败，已回滚: " + err.Error()})

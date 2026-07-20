@@ -51,11 +51,6 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 }
 
 func (h *Handlers) RetryCertJob(c *gin.Context) {
-	nodeMode, _ := c.Get("node_mode")
-	if nodeMode != nil && nodeMode.(string) == "slave" {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "Cannot retry jobs on slave node"})
-		return
-	}
 
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -90,11 +85,6 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		}
 	}
 
-	if _, err := db.DB.Exec("UPDATE cert_jobs SET renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL WHERE id=?", id); err != nil {
-		log.Printf("Failed to reset renewal attempts for job %d: %v", id, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to reset retry state"})
-		return
-	}
 	qm := services.GetCAQueueManager()
 	if qm == nil {
 		log.Printf("Manual retry enqueue failed for job %d: CA queue manager not initialized", id)
@@ -106,17 +96,15 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to enqueue retry"})
 		return
 	}
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL WHERE id=?", id); err != nil {
+		log.Printf("Failed to reset renewal attempts for job %d: %v", id, err)
+	}
 	recordAudit(c, "重试", "证书签发任务", services.FormatAuditDetail(services.AuditJobPart(id), services.AuditRulePart(ruleID), domain, fmt.Sprintf("原状态：%s", status), services.AuditResultPart("queued")))
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Retry triggered"})
 }
 
 func (h *Handlers) DeleteCertJob(c *gin.Context) {
-	nodeMode, _ := c.Get("node_mode")
-	if nodeMode != nil && nodeMode.(string) == "slave" {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "Cannot delete jobs on slave node"})
-		return
-	}
 
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {

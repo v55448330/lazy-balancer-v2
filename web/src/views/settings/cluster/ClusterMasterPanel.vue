@@ -77,6 +77,7 @@
 </template>
 
 <script setup lang="ts">
+import { formatDate } from '@/utils/date'
 import { CircleCheckFilled, CircleCloseFilled, List, Setting } from '@element-plus/icons-vue'
 import type { ClusterNode, ClusterNodeStatus, ClusterStatus } from '@/types'
 
@@ -115,11 +116,7 @@ const statusLabel = (status: ClusterNodeStatus): string => {
   return '离线'
 }
 
-const formatTime = (value: string): string => {
-  if (!value) return '-'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN')
-}
+const formatTime = (value: string): string => formatDate(value) || '-'
 </script>
 
 <style scoped>

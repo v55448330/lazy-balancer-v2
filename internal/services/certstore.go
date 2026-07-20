@@ -16,12 +16,28 @@ func CertFilePaths(ruleID string) (certPath, keyPath string) {
 }
 
 func WriteCertFiles(ruleID, certPEM, keyPEM string) error {
-	os.MkdirAll(certDir, 0755)
-	certPath, keyPath := CertFilePaths(ruleID)
-	if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
-		return err
+	if err := os.MkdirAll(certDir, 0755); err != nil {
+		return fmt.Errorf("创建证书目录: %w", err)
 	}
-	return os.WriteFile(keyPath, []byte(keyPEM), 0600)
+	certPath, keyPath := CertFilePaths(ruleID)
+	certTmp, keyTmp := certPath+".tmp", keyPath+".tmp"
+	if err := os.WriteFile(certTmp, []byte(certPEM), 0644); err != nil {
+		return fmt.Errorf("写入证书: %w", err)
+	}
+	if err := os.WriteFile(keyTmp, []byte(keyPEM), 0600); err != nil {
+		_ = os.Remove(certTmp)
+		return fmt.Errorf("写入私钥: %w", err)
+	}
+	if err := os.Rename(certTmp, certPath); err != nil {
+		_ = os.Remove(certTmp)
+		_ = os.Remove(keyTmp)
+		return fmt.Errorf("部署证书: %w", err)
+	}
+	if err := os.Rename(keyTmp, keyPath); err != nil {
+		_ = os.Remove(keyTmp)
+		return fmt.Errorf("部署私钥: %w", err)
+	}
+	return nil
 }
 
 func RemoveCertFiles(ruleID string) {

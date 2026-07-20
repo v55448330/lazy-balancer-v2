@@ -207,7 +207,7 @@ func createTables() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		rule_id VARCHAR(20) NOT NULL,
 		domain VARCHAR(255) NOT NULL,
-		status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled')),
+		status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid')),
 		message TEXT,
 		expires_at DATETIME,
 		cert_pem TEXT,
@@ -230,7 +230,6 @@ func createTables() error {
 		dns_credentials TEXT,
 		acme_email VARCHAR(255),
 		log_level VARCHAR(10) DEFAULT 'info',
-		access_log_enabled BOOLEAN DEFAULT TRUE,
 		is_master BOOLEAN DEFAULT TRUE,
 		master_url VARCHAR(255),
 		sync_interval INTEGER DEFAULT 60,
@@ -286,15 +285,6 @@ func createTables() error {
 		last_seen DATETIME,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (master_id) REFERENCES nodes(id)
-	);
-
-	-- Config versions table (for sync)
-	CREATE TABLE IF NOT EXISTS config_versions (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		version INTEGER NOT NULL,
-		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-		change_type VARCHAR(20) NOT NULL,
-		description TEXT
 	);
 
 	-- Create indexes
@@ -353,6 +343,12 @@ func runMigrations() error {
 	}
 
 	DB.Exec("UPDATE lb_rules SET strategy='weighted_round_robin' WHERE strategy='round_robin'")
+
+	DB.Exec("DROP TABLE IF EXISTS config_versions")
+	var accessLogCol int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='access_log_enabled'").Scan(&accessLogCol); err == nil && accessLogCol > 0 {
+		DB.Exec("ALTER TABLE global_config DROP COLUMN access_log_enabled")
+	}
 
 	// ca_providers columns are created by createTables; here we only add columns to existing tables.
 	newColumns := map[string]string{
@@ -938,7 +934,7 @@ func migrateCertJobsStatusConstraint() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			rule_id VARCHAR(20) NOT NULL,
 			domain VARCHAR(255) NOT NULL,
-			status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled')),
+			status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid')),
 			message TEXT,
 			expires_at DATETIME,
 			cert_pem TEXT,

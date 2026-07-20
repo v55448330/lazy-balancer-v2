@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        VERSION: 2.1.0
+        VERSION: 2.0.0
     container_name: lazy-balancer
     network_mode: host
     # Port mapping is not used with host network; Caddy binds directly to host ports.
@@ -13,14 +13,8 @@ services:
       - ./certs:/app/certs
     environment:
       - TZ=Asia/Shanghai
-      - ADMIN_USER=admin
-      - ADMIN_PASSWORD=zdy123.org
       - NODE_NAME=master
-      - NODE_MODE=master
       - LOG_FILE=/app/logs/lazy-balancer.log
-      # Uncomment for slave mode:
-      # - NODE_MODE=slave
-      # - MASTER_URL=http://10.0.0.1:8000
       # DNSPod credentials (optional):
       # - DNSPOD_ID=your_id
       # - DNSPOD_TOKEN=your_token
@@ -32,7 +26,7 @@ services:
     build:
       context: .
       args:
-        VERSION: 2.1.0
+        VERSION: 2.0.0
     container_name: lazy-balancer-slave
     ports:
       - "8001:8000"
@@ -42,8 +36,6 @@ services:
       - ./certs-slave:/app/certs
     environment:
       - TZ=Asia/Shanghai
-      - ADMIN_USER=admin
-      - ADMIN_PASSWORD=zdy123.org
       - NODE_NAME=slave-test
       - LOG_FILE=/app/logs/lazy-balancer.log
     restart: unless-stopped

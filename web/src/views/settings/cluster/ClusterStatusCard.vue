@@ -45,6 +45,7 @@
 </template>
 
 <script setup lang="ts">
+import { formatDate } from '@/utils/date'
 import { Monitor } from '@element-plus/icons-vue'
 import type { ClusterStatus } from '@/types'
 
@@ -53,11 +54,7 @@ defineProps<{
   readonly loading: boolean
 }>()
 
-const formatTime = (value: string): string => {
-  if (!value) return '-'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN')
-}
+const formatTime = (value: string): string => formatDate(value) || '-'
 </script>
 
 <style scoped>

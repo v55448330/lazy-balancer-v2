@@ -500,7 +500,7 @@
             <el-divider content-position="left" class="compact-divider">健康检查</el-divider>
 
             <el-form-item label="失败阈值">
-              <el-input-number v-model="wizardForm.health_check_unhealthy_threshold" :min="1" :max="10" controls-position="right" style="width: 80px;" />
+              <el-input-number v-model="wizardForm.health_check_unhealthy_threshold" :min="1" :max="10" controls-position="right" style="width: 120px;" />
               <span class="form-tip-inline">次失败后标记为不健康</span>
             </el-form-item>
 
@@ -511,7 +511,7 @@
 
             <template v-if="wizardForm.protocol === 'http'">
               <el-form-item label="超时时间">
-                <el-input-number v-model="wizardForm.health_check_timeout" :min="1" :max="30" controls-position="right" style="width: 80px;" />
+                <el-input-number v-model="wizardForm.health_check_timeout" :min="1" :max="30" controls-position="right" style="width: 120px;" />
                 <span class="form-tip-inline">秒，连接/健康检查超时</span>
               </el-form-item>
 
@@ -532,7 +532,7 @@
 
             <template v-if="wizardForm.protocol === 'tcp'">
               <el-form-item label="超时时间">
-                <el-input-number v-model="wizardForm.health_check_timeout" :min="1" :max="30" controls-position="right" style="width: 80px;" />
+                <el-input-number v-model="wizardForm.health_check_timeout" :min="1" :max="30" controls-position="right" style="width: 120px;" />
                 <span class="form-tip-inline">秒，TCP 连接/健康检查超时</span>
               </el-form-item>
 
@@ -846,6 +846,7 @@ import { request } from '@/utils/api'
 import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight, Search } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { ansiToHtml } from '@/utils/ansi'
+import { formatDate } from '@/utils/date'
 
 interface Upstream {
   id?: number
@@ -948,14 +949,23 @@ const pageSize = ref(10)
 
 const filteredRules = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
-  if (!query) return rules.value
-  return rules.value.filter((rule) => {
-    const name = (rule.name || '').toLowerCase()
-    const domain = (rule.domain || '').toLowerCase()
-    const port = String(rule.listen_port || '')
-    return name.includes(query) || domain.includes(query) || port.includes(query)
-  })
+  const base = query
+    ? rules.value.filter((rule) => {
+        const name = (rule.name || '').toLowerCase()
+        const domain = (rule.domain || '').toLowerCase()
+        const port = String(rule.listen_port || '')
+        return name.includes(query) || domain.includes(query) || port.includes(query)
+      })
+    : rules.value
+  return [...base].sort((a, b) => ruleUpdatedAtMs(b) - ruleUpdatedAtMs(a))
 })
+
+const ruleUpdatedAtMs = (rule: Rule): number => {
+  const value: any = rule.updated_at
+  const raw = typeof value === 'object' && value !== null && 'Time' in value ? value.Time : value
+  const t = raw ? new Date(raw).getTime() : 0
+  return Number.isNaN(t) ? 0 : t
+}
 
 const pagedRules = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
@@ -1083,6 +1093,9 @@ const canEditRule = (row: Rule) => {
 }
 
 const tlsTagType = (row: Rule) => {
+  const cert = certInfoMap.value[row.caddy_id]
+  if (cert?.status === 'expired') return 'danger'
+  if (cert?.status === 'expiring') return 'warning'
   if (row.tls_source === 'acme_dns') {
     const status = certJobMap.value[row.caddy_id]?.status
     if (status === 'issued') return 'success'
@@ -1093,6 +1106,9 @@ const tlsTagType = (row: Rule) => {
 }
 
 const tlsTagLabel = (row: Rule) => {
+  const cert = certInfoMap.value[row.caddy_id]
+  if (cert?.status === 'expired') return '已过期'
+  if (cert?.status === 'expiring') return `临期 ${cert.days_remaining} 天`
   if (row.tls_source === 'acme_dns') {
     const status = certJobMap.value[row.caddy_id]?.status
     const label = status ? certJobStatusLabel(status) : 'ACME'
@@ -1208,35 +1224,9 @@ const getUpstreamMetrics = (ruleId: string, upstream: any) => {
   }
 }
 
-const formatUpdatedTime = (updatedAt: any) => {
+const formatUpdatedTime = (updatedAt: any): string => {
   if (!updatedAt) return '-'
-  
-  let timeValue: Date | null = null
-  
-  if (updatedAt.Valid !== undefined) {
-    if (updatedAt.Valid && updatedAt.Time) {
-      timeValue = new Date(updatedAt.Time)
-    }
-  } else if (typeof updatedAt === 'string') {
-    timeValue = new Date(updatedAt)
-  } else if (updatedAt instanceof Date) {
-    timeValue = updatedAt
-  }
-  
-  if (!timeValue || isNaN(timeValue.getTime())) return '-'
-  
-  try {
-    return timeValue.toLocaleString('zh-CN', { 
-      year: 'numeric', 
-      month: '2-digit', 
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    })
-  } catch {
-    return '-'
-  }
+  return formatDate(updatedAt) || '-'
 }
 
 const fetchHealthStatus = async () => {

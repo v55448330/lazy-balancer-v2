@@ -35,11 +35,6 @@ func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 }
 
 func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
-	nodeMode, _ := c.Get("node_mode")
-	if nodeMode != nil && nodeMode.(string) == "slave" {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "Cannot create configs on slave node"})
-		return
-	}
 
 	var req models.CreateCertificateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -79,11 +74,6 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 }
 
 func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
-	nodeMode, _ := c.Get("node_mode")
-	if nodeMode != nil && nodeMode.(string) == "slave" {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "Cannot update configs on slave node"})
-		return
-	}
 
 	id, _ := strconv.Atoi(c.Param("id"))
 
@@ -160,11 +150,6 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 }
 
 func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
-	nodeMode, _ := c.Get("node_mode")
-	if nodeMode != nil && nodeMode.(string) == "slave" {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "Cannot delete configs on slave node"})
-		return
-	}
 
 	id, _ := strconv.Atoi(c.Param("id"))
 	var name, provider string
@@ -270,9 +255,42 @@ func (h *Handlers) ListCertificates(c *gin.Context) {
 }
 
 func (h *Handlers) IssueCertificate(c *gin.Context) {
-	recordAudit(c, "触发签发", "证书", services.FormatAuditDetail("范围：所有已启用的 ACME 规则", services.AuditResultPart("requested")))
+	var req struct {
+		CaddyID string `json:"caddy_id"`
+		Domain  string `json:"domain"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	qm := services.GetCAQueueManager()
+	if qm == nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化"})
+		return
+	}
+	queued := 0
+	if req.CaddyID != "" && req.Domain != "" {
+		if err := services.CreateOrRequeueCertJob(req.CaddyID, req.Domain, 0, qm); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建签发任务失败: " + err.Error()})
+			return
+		}
+		queued++
+	} else {
+		rows, err := db.DB.Query("SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND protocol='http' AND COALESCE(domain,'') != ''")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询 ACME 规则失败"})
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ruleID, domain string
+			if err := rows.Scan(&ruleID, &domain); err == nil {
+				if err := services.CreateOrRequeueCertJob(ruleID, domain, 0, qm); err == nil {
+					queued++
+				}
+			}
+		}
+	}
+	recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(fmt.Sprintf("规则：%s", req.CaddyID), fmt.Sprintf("入队 %d 个任务", queued), services.AuditResultPart("requested")))
 	h.applyCaddyConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Certificate issuance triggered"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已创建 %d 个签发任务", queued), Data: gin.H{"queued": queued}})
 }
 
 func (h *Handlers) ParseCertificate(c *gin.Context) {

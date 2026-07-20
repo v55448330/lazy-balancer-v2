@@ -12,11 +12,6 @@ export interface User {
   last_login?: string | null
 }
 
-export interface AuthState {
-  user: User | null
-  token: string | null
-  nodeMode: string
-}
 
 export interface SystemInfo {
   hostname: string

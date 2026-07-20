@@ -320,8 +320,9 @@ const confirmImport = async (): Promise<void> => {
     const res = await request.post<{ message?: string }>(endpoint, importFileContent.value, {
       headers: { 'Content-Type': 'application/json' },
     })
-    ElMessage.success({ message: res.message || '配置导入成功', duration: 1500 })
-    setTimeout(() => window.location.reload(), 1600)
+    importDialogVisible.value = false
+    ElMessage.success({ message: `${res.message || '配置导入成功'}，正在刷新…`, duration: 800 })
+    setTimeout(() => window.location.reload(), 800)
   } finally {
     importing.value = false
   }

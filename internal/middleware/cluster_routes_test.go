@@ -22,7 +22,7 @@ func TestSetupRouter_registers_cluster_contract_and_removes_legacy_routes(t *tes
 	cfg := &config.Config{
 		Port: 8000, StaticDir: t.TempDir(), CaddyAdminURL: "http://127.0.0.1:1",
 		CaddyMetricsURL: "http://127.0.0.1:1/metrics", MetricsInterval: 60,
-		NodeName: "node-test", JWTSecret: "test-secret", InitialAdminUser: "admin", InitialAdminPassword: "password",
+		NodeName: "node-test", JWTSecret: "test-secret",
 	}
 	caddy := services.NewCaddyService(cfg.CaddyAdminURL)
 	syncService := services.NewSyncService(db.DB, cfg, caddy)

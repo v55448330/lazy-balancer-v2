@@ -96,15 +96,15 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/cluster/sync/pull", jwtOnly(), h.PullClusterSnapshot)
 				admin.PUT("/cluster/settings", jwtOnly(), h.UpdateClusterSettings)
 
-			// Config
-			admin.POST("/config/preview", h.PreviewConfigUpdate)
-			admin.PUT("/config", h.UpdateConfig)
-			admin.POST("/config/reload", h.ReloadCaddy)
-			admin.POST("/config/validate", h.ValidateConfig)
-			admin.GET("/config/export", h.ExportConfigBackup)
-			admin.POST("/config/import", h.ImportConfigBackup)
-			admin.POST("/config/import/validate", h.ValidateConfigImport)
-			admin.POST("/config/import/v1", h.ImportV1Config)
+				// Config
+				admin.POST("/config/preview", h.PreviewConfigUpdate)
+				admin.PUT("/config", h.UpdateConfig)
+				admin.POST("/config/reload", h.ReloadCaddy)
+				admin.POST("/config/validate", h.ValidateConfig)
+				admin.GET("/config/export", h.ExportConfigBackup)
+				admin.POST("/config/import", h.ImportConfigBackup)
+				admin.POST("/config/import/validate", h.ValidateConfigImport)
+				admin.POST("/config/import/v1", h.ImportV1Config)
 
 			}
 
@@ -366,31 +366,4 @@ func jwtOnly() gin.HandlerFunc {
 		}
 		c.Next()
 	}
-}
-
-// GetNodeMode returns the current node mode
-func GetNodeMode(c *gin.Context) string {
-	mode, _ := c.Get("node_mode")
-	if mode == nil {
-		return "master"
-	}
-	return mode.(string)
-}
-
-// GetUserRole returns the current user role
-func GetUserRole(c *gin.Context) string {
-	role, _ := c.Get("role")
-	if role == nil {
-		return ""
-	}
-	return role.(string)
-}
-
-// IsReadOnly returns true if the current node is a slave
-func IsReadOnly(c *gin.Context) bool {
-	mode, _ := c.Get("node_mode")
-	if mode == nil {
-		return false
-	}
-	return mode.(string) == "slave"
 }

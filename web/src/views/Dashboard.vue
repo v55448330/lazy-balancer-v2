@@ -203,7 +203,7 @@
               <el-badge :value="rules.length" type="primary" />
             </div>
           </template>
-          <el-table :data="rules" stripe :header-cell-style="{ background: '#f9fafb' }">
+          <el-table :data="sortedRules" stripe :header-cell-style="{ background: '#f9fafb' }">
             <el-table-column prop="name" label="规则名称" min-width="150">
               <template #default="{ row }">
                 <span class="text-primary font-medium">{{ row.name }}</span>
@@ -307,7 +307,7 @@ const connectionStats = ref<ConnectionStats | null>(null)
 const caddyStatus = ref('unknown')
 const caddyLoading = ref(false)
 const rules = ref<Rule[]>([])
-const ruleMetrics = ref<Record<number, RuleMetrics>>({})
+const ruleMetrics = ref<Record<string, RuleMetrics>>({})
 const hostMetrics = ref<HostMetrics[]>([])
 
 const trafficInHistory = ref<number[]>([])
@@ -318,6 +318,12 @@ const connTimeWaitHistory = ref<number[]>([])
 const connTimestamps = ref<number[]>([])
 
 const isSlave = computed(() => authStore.nodeMode === 'slave')
+
+const sortedRules = computed(() =>
+  [...rules.value].sort(
+    (a, b) => (ruleMetrics.value[b.caddy_id]?.requests_total ?? 0) - (ruleMetrics.value[a.caddy_id]?.requests_total ?? 0),
+  ),
+)
 
 const ipList = computed(() => {
   if (!systemInfo.value?.ip_addresses) return []

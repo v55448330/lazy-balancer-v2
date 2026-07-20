@@ -412,12 +412,6 @@ func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string, li
 }
 
 func (h *Handlers) CreateRule(c *gin.Context) {
-	// Check if slave mode
-	nodeMode, _ := c.Get("node_mode")
-	if nodeMode != nil && nodeMode.(string) == "slave" {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "从节点模式不能执行此操作"})
-		return
-	}
 
 	var req models.CreateRuleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -634,7 +628,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		req.EnableActiveHealthCheck, req.TCPHealthCheckPort, req.TCPTryDuration, req.TCPTryInterval,
 		req.RequestBodyMaxSizeMB, req.UpstreamKeepaliveTimeout, req.ServerTokensHidden,
 		req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.CAProviderID, req.TLSCert, req.TLSKey,
-		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, 1, userIDInt, time.Now().Format("2006-01-02 15:04:05"), caddyID, req.LogEnabled)
+		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, 1, userIDInt, time.Now().UTC().Format("2006-01-02 15:04:05"), caddyID, req.LogEnabled)
 
 	if err != nil {
 		tx.Rollback()
@@ -725,7 +719,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 				}
 			}()
 			// Trigger ACME issuance synchronously so failures are surfaced
-			if req.TLSSource == "acme_dns" && req.Domain != "" {
+			if req.TLSSource == "acme_dns" && req.Protocol == "http" && req.Domain != "" {
 				qm := services.GetCAQueueManager()
 				if qm == nil {
 					log.Printf("Auto cert enqueue failed for %s: CA queue manager not initialized", req.Domain)
@@ -749,12 +743,6 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 }
 
 func (h *Handlers) UpdateRule(c *gin.Context) {
-	// Check if slave mode
-	nodeMode, _ := c.Get("node_mode")
-	if nodeMode != nil && nodeMode.(string) == "slave" {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "从节点模式不能执行此操作"})
-		return
-	}
 
 	caddyID := c.Param("caddy_id")
 
@@ -1285,7 +1273,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				log.Printf("Failed to reload Caddy config after rule update: %v", err)
 			}
 			// Trigger ACME issuance if needed
-			if req.TLSSource == "acme_dns" && req.EnableTLS && domain != "" {
+			if req.TLSSource == "acme_dns" && req.Protocol == "http" && req.EnableTLS && domain != "" {
 				if !services.IsACMECertIssued(caddyID, domain) {
 					go func() {
 						qm := services.GetCAQueueManager()
@@ -1337,12 +1325,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 }
 
 func (h *Handlers) DeleteRule(c *gin.Context) {
-	// Check if slave mode
-	nodeMode, _ := c.Get("node_mode")
-	if nodeMode != nil && nodeMode.(string) == "slave" {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "从节点模式不能执行此操作"})
-		return
-	}
 
 	caddyID := c.Param("caddy_id")
 
@@ -1459,11 +1441,6 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 }
 
 func (h *Handlers) DuplicateRule(c *gin.Context) {
-	nodeMode, _ := c.Get("node_mode")
-	if nodeMode != nil && nodeMode.(string) == "slave" {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "从节点模式不能执行此操作"})
-		return
-	}
 
 	caddyID := c.Param("caddy_id")
 
@@ -1508,7 +1485,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		return
 	}
 
-	now := time.Now()
+	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	result, err := db.DB.Exec(`
 		INSERT INTO lb_rules (name, protocol, domain, listen_port, strategy, dynamic_dns, dns_server,
 			health_check_path, health_check_interval, health_check_timeout,
@@ -1623,10 +1600,15 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 
 			switch action {
 			case EnableCertJobCreate:
-				if qm != nil {
-					services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm)
-					recordAudit(c, "创建", "证书签发任务", fmt.Sprintf("启用规则 %s，创建证书签发任务 (%s)", caddyID, domain))
+				if qm == nil {
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化，无法创建证书签发任务"})
+					return
 				}
+				if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书签发任务失败: " + err.Error()})
+					return
+				}
+				recordAudit(c, "创建", "证书签发任务", fmt.Sprintf("启用规则 %s，创建证书签发任务 (%s)", caddyID, domain))
 			case EnableCertJobKeep:
 				recordAudit(c, "启用", "证书签发任务", fmt.Sprintf("启用规则 %s，证书有效（过期前%d天续签），保持现有证书", caddyID, renewalDays))
 			case EnableCertJobResume:
@@ -1636,13 +1618,23 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 					recordAudit(c, "启用", "证书签发任务", fmt.Sprintf("启用规则 %s，证书仍有效，恢复使用现有证书", caddyID))
 				}
 			case EnableCertJobRenew:
-				if qm != nil {
-					services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm)
+				if qm == nil {
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化，无法续签证书"})
+					return
+				}
+				if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "续签排队失败: " + err.Error()})
+					return
 				}
 				recordAudit(c, "续签", "证书签发任务", fmt.Sprintf("启用规则 %s，证书即将过期，重新排队续签", caddyID))
 			case EnableCertJobRetry:
-				if qm != nil {
-					services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm)
+				if qm == nil {
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化，无法重试证书任务"})
+					return
+				}
+				if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重试排队失败: " + err.Error()})
+					return
 				}
 				recordAudit(c, "重试", "证书签发任务", fmt.Sprintf("启用规则 %s，任务之前已暂停/失败，重新排队", caddyID))
 			default:

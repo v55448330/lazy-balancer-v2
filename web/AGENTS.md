@@ -11,7 +11,7 @@ The frontend is a single-page application (SPA) that provides a management inter
 ├── components/    # Shared UI components (Layout, custom widgets)
 ├── stores/        # Pinia state management (auth, session)
 ├── utils/         # API clients, date helpers, validation logic
-├── views/         # Page-level components (Dashboard, Nodes, Rules, etc.)
+├── views/         # Page-level components (Dashboard, Rules, AuditLog, Keys, Login, etc.)
 ├── types/         # TypeScript interfaces and type definitions
 └── styles/        # Global CSS and Tailwind configurations
 ```

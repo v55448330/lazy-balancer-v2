@@ -22,11 +22,7 @@ type Config struct {
 	MetricsInterval int `json:"metrics_interval"` // seconds
 
 	// Node
-	NodeName     string `json:"node_name"`
-	NodeMode     string `json:"node_mode"` // master | slave
-	MasterURL    string `json:"master_url"`
-	SyncEnabled  bool   `json:"sync_enabled"`
-	SyncInterval int    `json:"sync_interval"` // seconds
+	NodeName string `json:"node_name"`
 
 	// Log
 	LogLevel string `json:"log_level"`
@@ -36,30 +32,22 @@ type Config struct {
 	JWTExpire time.Duration `json:"jwt_expire"`
 
 	// Admin
-	InitialAdminUser     string `json:"initial_admin_user"`
-	InitialAdminPassword string `json:"initial_admin_password"`
 }
 
 func Load(path string) *Config {
 	// Default values
 	cfg := &Config{
-		Port:                 8000,
-		DataDir:              "/app/data",
-		StaticDir:            "/app/ui",
-		CaddyAdminURL:        "http://localhost:2019",
-		CaddyMetricsURL:      "http://localhost:2019/metrics",
-		MetricsInterval:      30,
-		NodeName:             getEnv("NODE_NAME", "node-1"),
-		NodeMode:             getEnv("NODE_MODE", "master"),
-		MasterURL:            getEnv("MASTER_URL", ""),
-		SyncEnabled:          getEnvBool("SYNC_ENABLED", false),
-		SyncInterval:         getEnvInt("SYNC_INTERVAL", 60),
-		LogLevel:             getEnv("LOG_LEVEL", "info"),
-		JWTSecret:            getEnv("JWT_SECRET", ""),
-		Version:              getEnv("APP_VERSION", "2.1.0"),
-		JWTExpire:            24 * time.Hour,
-		InitialAdminUser:     getEnv("ADMIN_USER", "admin"),
-		InitialAdminPassword: getEnv("ADMIN_PASSWORD", "admin123"),
+		Port:            8000,
+		DataDir:         "/app/data",
+		StaticDir:       "/app/ui",
+		CaddyAdminURL:   "http://localhost:2019",
+		CaddyMetricsURL: "http://localhost:2019/metrics",
+		MetricsInterval: 30,
+		NodeName:        getEnv("NODE_NAME", "node-1"),
+		LogLevel:        getEnv("LOG_LEVEL", "info"),
+		JWTSecret:       getEnv("JWT_SECRET", ""),
+		Version:         getEnv("APP_VERSION", "2.0.0"),
+		JWTExpire:       24 * time.Hour,
 	}
 
 	// Load from config file if provided

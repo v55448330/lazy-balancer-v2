@@ -298,58 +298,6 @@ func (s *CaddyService) ValidateRouteConfig(serverName string, routeConfig map[st
 	return nil
 }
 
-func (s *CaddyService) PatchConfigByID(id string, patch map[string]interface{}) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	data, err := json.Marshal(patch)
-	if err != nil {
-		return fmt.Errorf("failed to marshal patch: %w", err)
-	}
-
-	req, err := http.NewRequest("PATCH", s.adminURL+"/id/"+id, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to patch config: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("patch failed: %s", string(body))
-	}
-
-	return nil
-}
-
-func (s *CaddyService) DeleteConfigByID(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	req, err := http.NewRequest("DELETE", s.adminURL+"/id/"+id, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to delete config: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("delete failed: %s", string(body))
-	}
-
-	return nil
-}
-
 func (s *CaddyService) DeleteServer(serverName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -500,148 +448,6 @@ func (s *CaddyService) GetConfigByID(id string) (map[string]interface{}, error) 
 	}
 
 	return result, nil
-}
-
-func (s *CaddyService) GetServerRoutes(serverName string) ([]interface{}, error) {
-	config, err := s.GetConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	apps, ok := config["apps"].(map[string]interface{})
-	if !ok {
-		return nil, nil
-	}
-
-	httpApp, ok := apps["http"].(map[string]interface{})
-	if !ok {
-		return nil, nil
-	}
-
-	servers, ok := httpApp["servers"].(map[string]interface{})
-	if !ok {
-		return nil, nil
-	}
-
-	server, ok := servers[serverName].(map[string]interface{})
-	if !ok {
-		return nil, nil
-	}
-
-	routes, ok := server["routes"].([]interface{})
-	if !ok {
-		return nil, nil
-	}
-
-	return routes, nil
-}
-
-func (s *CaddyService) RouteExistsInServer(serverName string, routeID string) bool {
-	routes, err := s.GetServerRoutes(serverName)
-	if err != nil || routes == nil {
-		return false
-	}
-
-	for _, r := range routes {
-		if routeMap, ok := r.(map[string]interface{}); ok {
-			if id, ok := routeMap["@id"].(string); ok && id == routeID {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (s *CaddyService) AddRouteToServer(serverName string, routeID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	config, err := s.GetConfig()
-	if err != nil {
-		return fmt.Errorf("failed to get config: %w", err)
-	}
-
-	apps, ok := config["apps"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("apps not found in config")
-	}
-
-	httpApp, ok := apps["http"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("http app not found")
-	}
-
-	servers, ok := httpApp["servers"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("servers not found")
-	}
-
-	server, ok := servers[serverName].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("server %s not found", serverName)
-	}
-
-	routes, ok := server["routes"].([]interface{})
-	if !ok {
-		routes = []interface{}{}
-	}
-
-	for _, r := range routes {
-		if routeMap, ok := r.(map[string]interface{}); ok {
-			if existingID, ok := routeMap["@id"].(string); ok && existingID == routeID {
-				return nil
-			}
-		}
-	}
-
-	routes = append(routes, map[string]interface{}{
-		"@id": routeID,
-	})
-
-	server["routes"] = routes
-	servers[serverName] = server
-	httpApp["servers"] = servers
-	apps["http"] = httpApp
-	config["apps"] = apps
-
-	return s.applyConfigRaw(config)
-}
-
-func (s *CaddyService) AddRouteToServerWithRoute(serverName string, routeConfig map[string]interface{}) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	port := getPortFromServerName(serverName)
-
-	newServer := map[string]interface{}{
-		"listen": []string{port},
-		"routes": []interface{}{routeConfig},
-	}
-
-	data, err := json.Marshal(newServer)
-	if err != nil {
-		return fmt.Errorf("failed to marshal server config: %w", err)
-	}
-
-	path := fmt.Sprintf("/config/apps/http/servers/%s", serverName)
-	req, err := http.NewRequest("POST", s.adminURL+path, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to add route to server: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("add route failed: %s", string(body))
-	}
-
-	return nil
 }
 
 func (s *CaddyService) AppendRouteToServer(serverName string, routeConfig map[string]interface{}) error {
@@ -863,84 +669,6 @@ func (s *CaddyService) CreateServerIfNotExists(serverName string, listenPort int
 	}
 
 	return nil
-}
-
-// ApplyTLSCertificate configures TLS certificate for a server and domain
-func (s *CaddyService) ApplyTLSCertificate(serverName string, caddyID string, domain string, certPEM string, keyPEM string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// 1. Add TLS certificate to apps.tls.certificates.load_pem
-	certConfig := map[string]interface{}{
-		"cert_pem": certPEM,
-		"key_pem":  keyPEM,
-		"tags":     []string{caddyID},
-	}
-
-	certData, err := json.Marshal(certConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal cert config: %w", err)
-	}
-
-	// Try to append to existing load_pem array
-	req, err := http.NewRequest("POST", s.adminURL+"/config/apps/tls/certificates/load_pem", bytes.NewReader(certData))
-	if err != nil {
-		return fmt.Errorf("failed to create cert request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to apply TLS certificate: %w", err)
-	}
-	resp.Body.Close()
-
-	// 2. Add tls_connection_policies to the server
-	domainHosts := strings.Split(domain, ",")
-	for i, d := range domainHosts {
-		domainHosts[i] = strings.TrimSpace(d)
-	}
-
-	tlsPolicy := map[string]interface{}{
-		"match": map[string]interface{}{
-			"sni": domainHosts,
-		},
-		"certificate_selection": map[string]interface{}{
-			"any_tag": []string{caddyID},
-		},
-	}
-
-	policyData, err := json.Marshal(tlsPolicy)
-	if err != nil {
-		return fmt.Errorf("failed to marshal TLS policy: %w", err)
-	}
-
-	req, err = http.NewRequest("POST", s.adminURL+fmt.Sprintf("/config/apps/http/servers/%s/tls_connection_policies", serverName), bytes.NewReader(policyData))
-	if err != nil {
-		return fmt.Errorf("failed to create policy request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err = s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to apply TLS policy: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("apply TLS policy failed: %s", string(body))
-	}
-
-	return nil
-}
-
-func getPortFromServerName(serverName string) string {
-	parts := strings.Split(serverName, "_")
-	if len(parts) >= 2 {
-		return parts[1]
-	}
-	return "80"
 }
 
 func (s *CaddyService) RemoveRouteFromServer(serverName string, routeID string) error {
@@ -1942,7 +1670,14 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 			if !r.EnableTLS {
 				continue
 			}
+			hasCert := false
 			if r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
+				hasCert = true
+			} else if r.TLSSource == "acme_dns" {
+				_, _, issued := loadACMECertificateFromStore(store, r.CaddyID, r.Domain)
+				hasCert = issued
+			}
+			if hasCert {
 				domainHosts := splitAndTrim(r.Domain)
 				tlsPolicies = append(tlsPolicies, map[string]interface{}{
 					"match": map[string]interface{}{
@@ -2030,129 +1765,41 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 	layer4Servers := make(map[string]interface{})
 
 	for port, rules := range tcpServersByPort {
-		var upstreamList []interface{}
-		var enabledUpstreams []upstream
-		var proxyProtocol string
+		r := rules[0].rule
+		ruleConfig := SingleRuleConfig{
+			CaddyID:                       r.CaddyID,
+			Protocol:                      "tcp",
+			ListenPort:                    r.ListenPort,
+			Strategy:                      r.Strategy,
+			HealthCheckInterval:           r.HealthCheckInterval,
+			HealthCheckTimeout:            r.HealthCheckTimeout,
+			HealthCheckUnhealthyThreshold: r.HealthCheckUnhealthyThreshold,
+			HealthCheckHealthyThreshold:   r.HealthCheckHealthyThreshold,
+			EnableActiveHealthCheck:       r.EnableActiveHealthCheck,
+			TCPHealthCheckPort:            r.TCPHealthCheckPort,
+			TCPTryDuration:                r.TCPTryDuration,
+			TCPTryInterval:                r.TCPTryInterval,
+		}
 		for _, ru := range rules {
 			for _, u := range ru.upstreams {
 				if !u.Enabled {
 					continue
 				}
-				enabledUpstreams = append(enabledUpstreams, u)
-				dial := fmt.Sprintf("%s:%d", u.Host, u.Port)
-				upstreamEntry := map[string]interface{}{
-					"dial": []string{dial},
+				weight := u.Weight
+				if weight <= 0 {
+					weight = 1
 				}
-				if u.Weight > 1 {
-					upstreamEntry["weight"] = u.Weight
-				}
-				// For TCP rules, "https" is treated as TLS-wrapped TCP; "tls" is explicit TLS upstream.
-				if u.Protocol == "https" || u.Protocol == "tls" {
-					upstreamEntry["tls"] = map[string]interface{}{
-						"insecure_skip_verify": true,
-					}
-				}
-				if u.MaxConnections > 0 {
-					upstreamEntry["max_connections"] = u.MaxConnections
-				}
-				if u.ProxyProtocol == "v1" || u.ProxyProtocol == "v2" {
-					proxyProtocol = u.ProxyProtocol
-				}
-				upstreamList = append(upstreamList, upstreamEntry)
+				ruleConfig.Upstreams = append(ruleConfig.Upstreams, UpstreamConfig{
+					Host: u.Host, Port: u.Port, Weight: weight, Protocol: u.Protocol, Enabled: u.Enabled,
+					MaxConnections: u.MaxConnections, ProxyProtocol: u.ProxyProtocol,
+				})
 			}
 		}
-
-		if len(upstreamList) == 0 {
+		if len(ruleConfig.Upstreams) == 0 {
 			continue
 		}
 
-		// Use the first rule's settings for strategy and health checks. TCP rules cannot share a port,
-		// so there will be at most one rule per port.
-		r := rules[0].rule
-		strategy := r.Strategy
-		if strategy == "" {
-			strategy = "weighted_round_robin"
-		}
-		if strategy == "cookie" {
-			strategy = "weighted_round_robin" // cookie sticky is only supported for HTTP
-		}
-
-		proxyHandler := map[string]interface{}{
-			"handler":   "proxy",
-			"upstreams": upstreamList,
-		}
-
-		if proxyProtocol != "" {
-			proxyHandler["proxy_protocol"] = proxyProtocol
-		}
-
-		loadBalancing := map[string]interface{}{
-			"selection": map[string]interface{}{
-				"policy": strategy,
-			},
-		}
-		if r.TCPTryDuration > 0 {
-			loadBalancing["try_duration"] = fmt.Sprintf("%dms", r.TCPTryDuration)
-		}
-		if r.TCPTryInterval > 0 {
-			loadBalancing["try_interval"] = fmt.Sprintf("%dms", r.TCPTryInterval)
-		}
-		if len(upstreamList) > 1 || r.TCPTryDuration > 0 || r.TCPTryInterval > 0 {
-			proxyHandler["load_balancing"] = loadBalancing
-		}
-
-		healthCheckInterval := r.HealthCheckInterval
-		if healthCheckInterval <= 0 {
-			healthCheckInterval = 10
-		}
-		unhealthyThreshold := r.HealthCheckUnhealthyThreshold
-		if unhealthyThreshold <= 0 {
-			unhealthyThreshold = 3
-		}
-		healthChecks := map[string]interface{}{
-			"passive": map[string]interface{}{
-				"fail_duration": fmt.Sprintf("%ds", healthCheckInterval*3),
-				"max_fails":     unhealthyThreshold,
-			},
-		}
-		if r.EnableActiveHealthCheck {
-			activePort := r.TCPHealthCheckPort
-			if activePort <= 0 && len(enabledUpstreams) > 0 {
-				activePort = enabledUpstreams[0].Port
-			}
-			healthCheckTimeout := r.HealthCheckTimeout
-			if healthCheckTimeout <= 0 {
-				healthCheckTimeout = 5
-			}
-			healthyThreshold := r.HealthCheckHealthyThreshold
-			if healthyThreshold <= 0 {
-				healthyThreshold = 2
-			}
-			healthChecks["active"] = map[string]interface{}{
-				"interval": fmt.Sprintf("%ds", healthCheckInterval),
-				"port":     activePort,
-				"timeout":  fmt.Sprintf("%ds", healthCheckTimeout),
-				"rise":     healthyThreshold,
-				"fall":     unhealthyThreshold,
-			}
-		}
-		proxyHandler["health_checks"] = healthChecks
-
-		route := map[string]interface{}{
-			"handle": []interface{}{
-				proxyHandler,
-			},
-		}
-		if r.CaddyID != "" {
-			route["@id"] = r.CaddyID
-		}
-
-		server := map[string]interface{}{
-			"listen": []string{fmt.Sprintf(":%d", port)},
-			"routes": []interface{}{route},
-		}
-
-		layer4Servers[fmt.Sprintf("tcp_%d", port)] = server
+		layer4Servers[fmt.Sprintf("tcp_%d", port)] = buildTCPServer(ruleConfig)
 	}
 
 	if len(servers) == 0 {
@@ -2808,112 +2455,11 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 		servers[serverName] = server
 	} else {
-		var upstreamList []interface{}
-		var proxyProtocol string
-		for _, u := range enabledUpstreams {
-			dial := fmt.Sprintf("%s:%d", u.Host, u.Port)
-			upstreamEntry := map[string]interface{}{
-				"dial": []string{dial},
-			}
-			if u.Weight > 1 {
-				upstreamEntry["weight"] = u.Weight
-			}
-			if u.Protocol == "https" || u.Protocol == "tls" {
-				upstreamEntry["tls"] = map[string]interface{}{
-					"insecure_skip_verify": true,
-				}
-			}
-			if u.MaxConnections > 0 {
-				upstreamEntry["max_connections"] = u.MaxConnections
-			}
-			if u.ProxyProtocol == "v1" || u.ProxyProtocol == "v2" {
-				proxyProtocol = u.ProxyProtocol
-			}
-			upstreamList = append(upstreamList, upstreamEntry)
-		}
-
-		strategy := rule.Strategy
-		if strategy == "" {
-			strategy = "weighted_round_robin"
-		}
-
-		proxyHandler := map[string]interface{}{
-			"handler":   "proxy",
-			"upstreams": upstreamList,
-		}
-		if proxyProtocol != "" {
-			proxyHandler["proxy_protocol"] = proxyProtocol
-		}
-
-		loadBalancing := map[string]interface{}{
-			"selection": map[string]interface{}{
-				"policy": strategy,
-			},
-		}
-		if rule.TCPTryDuration > 0 {
-			loadBalancing["try_duration"] = fmt.Sprintf("%dms", rule.TCPTryDuration)
-		}
-		if rule.TCPTryInterval > 0 {
-			loadBalancing["try_interval"] = fmt.Sprintf("%dms", rule.TCPTryInterval)
-		}
-		if len(upstreamList) > 1 || rule.TCPTryDuration > 0 || rule.TCPTryInterval > 0 {
-			proxyHandler["load_balancing"] = loadBalancing
-		}
-
-		healthCheckInterval := rule.HealthCheckInterval
-		if healthCheckInterval <= 0 {
-			healthCheckInterval = 10
-		}
-		unhealthyThreshold := rule.HealthCheckUnhealthyThreshold
-		if unhealthyThreshold <= 0 {
-			unhealthyThreshold = 3
-		}
-		healthChecks := map[string]interface{}{
-			"passive": map[string]interface{}{
-				"fail_duration": fmt.Sprintf("%ds", healthCheckInterval*3),
-				"max_fails":     unhealthyThreshold,
-			},
-		}
-		if rule.EnableActiveHealthCheck {
-			activePort := rule.TCPHealthCheckPort
-			if activePort <= 0 && len(enabledUpstreams) > 0 {
-				activePort = enabledUpstreams[0].Port
-			}
-			healthCheckTimeout := rule.HealthCheckTimeout
-			if healthCheckTimeout <= 0 {
-				healthCheckTimeout = 5
-			}
-			healthyThreshold := rule.HealthCheckHealthyThreshold
-			if healthyThreshold <= 0 {
-				healthyThreshold = 2
-			}
-			healthChecks["active"] = map[string]interface{}{
-				"interval": fmt.Sprintf("%ds", healthCheckInterval),
-				"port":     activePort,
-				"timeout":  fmt.Sprintf("%ds", healthCheckTimeout),
-				"rise":     healthyThreshold,
-				"fall":     unhealthyThreshold,
-			}
-		}
-		proxyHandler["health_checks"] = healthChecks
-
-		route := map[string]interface{}{
-			"handle": []interface{}{proxyHandler},
-		}
-		if rule.CaddyID != "" {
-			route["@id"] = rule.CaddyID
-		}
-
-		layer4Servers := map[string]interface{}{
-			fmt.Sprintf("tcp_%d", rule.ListenPort): map[string]interface{}{
-				"listen": []string{fmt.Sprintf(":%d", rule.ListenPort)},
-				"routes": []interface{}{route},
-			},
-		}
-
 		apps := map[string]interface{}{
 			"layer4": map[string]interface{}{
-				"servers": layer4Servers,
+				"servers": map[string]interface{}{
+					fmt.Sprintf("tcp_%d", rule.ListenPort): buildTCPServer(rule),
+				},
 			},
 		}
 
@@ -2963,6 +2509,9 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) {
 	if rule.Strategy == "" {
 		rule.Strategy = "weighted_round_robin"
+	}
+	if rule.Protocol == "tcp" {
+		return buildTCPProxyRoute(rule), nil
 	}
 
 	enabledUpstreams := make([]UpstreamConfig, 0)
@@ -3145,39 +2694,6 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 		}
 
 		handleChain = append(handleChain, proxyConfig)
-	} else {
-		// TCP protocol
-		upstreamList := make([]interface{}, 0)
-		hasHTTPSUpstream := false
-
-		for _, u := range enabledUpstreams {
-			dial := fmt.Sprintf("%s:%d", u.Host, u.Port)
-			dialWithScheme := dial
-			if u.Protocol == "https" {
-				dialWithScheme = "https://" + dial
-				hasHTTPSUpstream = true
-			}
-			upstreamList = append(upstreamList, map[string]interface{}{"dial": dialWithScheme})
-		}
-
-		var proxyTransport map[string]interface{}
-		if hasHTTPSUpstream {
-			proxyTransport = map[string]interface{}{
-				"protocol": "http",
-				"tls": map[string]interface{}{
-					"insecure_skip_verify": true,
-				},
-			}
-		}
-
-		proxyConfig := map[string]interface{}{
-			"handler":   "reverse_proxy",
-			"upstreams": upstreamList,
-		}
-		if proxyTransport != nil {
-			proxyConfig["transport"] = proxyTransport
-		}
-		handleChain = append(handleChain, proxyConfig)
 	}
 
 	// Split domain by comma to support multiple domains
@@ -3207,4 +2723,121 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 // and applies it, keeping the database unchanged when Caddy rejects the config.
 func (s *CaddyService) ApplyConfigFromTx(cfg *config.Config, tx *sql.Tx) error {
 	return s.ApplyConfig(generateCaddyConfigFromStore(cfg, tx))
+}
+
+// buildTCPProxyRoute generates the layer4 proxy handler and route for a TCP rule.
+func buildTCPProxyRoute(rule SingleRuleConfig) map[string]interface{} {
+	upstreamList := make([]interface{}, 0)
+	enabledPorts := make([]int, 0)
+	proxyProtocol := ""
+	for _, u := range rule.Upstreams {
+		if !u.Enabled {
+			continue
+		}
+		enabledPorts = append(enabledPorts, u.Port)
+		dial := fmt.Sprintf("%s:%d", u.Host, u.Port)
+		upstreamEntry := map[string]interface{}{
+			"dial": []string{dial},
+		}
+		weight := u.Weight
+		if weight > 1 {
+			upstreamEntry["weight"] = weight
+		}
+		if u.Protocol == "https" || u.Protocol == "tls" {
+			upstreamEntry["tls"] = map[string]interface{}{
+				"insecure_skip_verify": true,
+			}
+		}
+		if u.MaxConnections > 0 {
+			upstreamEntry["max_connections"] = u.MaxConnections
+		}
+		if u.ProxyProtocol == "v1" || u.ProxyProtocol == "v2" {
+			proxyProtocol = u.ProxyProtocol
+		}
+		upstreamList = append(upstreamList, upstreamEntry)
+	}
+
+	strategy := rule.Strategy
+	if strategy == "" {
+		strategy = "weighted_round_robin"
+	}
+	if strategy == "cookie" {
+		strategy = "weighted_round_robin"
+	}
+
+	proxyHandler := map[string]interface{}{
+		"handler":   "proxy",
+		"upstreams": upstreamList,
+	}
+	if proxyProtocol != "" {
+		proxyHandler["proxy_protocol"] = proxyProtocol
+	}
+
+	loadBalancing := map[string]interface{}{
+		"selection": map[string]interface{}{
+			"policy": strategy,
+		},
+	}
+	if rule.TCPTryDuration > 0 {
+		loadBalancing["try_duration"] = fmt.Sprintf("%dms", rule.TCPTryDuration)
+	}
+	if rule.TCPTryInterval > 0 {
+		loadBalancing["try_interval"] = fmt.Sprintf("%dms", rule.TCPTryInterval)
+	}
+	if len(upstreamList) > 1 || rule.TCPTryDuration > 0 || rule.TCPTryInterval > 0 {
+		proxyHandler["load_balancing"] = loadBalancing
+	}
+
+	healthCheckInterval := rule.HealthCheckInterval
+	if healthCheckInterval <= 0 {
+		healthCheckInterval = 10
+	}
+	unhealthyThreshold := rule.HealthCheckUnhealthyThreshold
+	if unhealthyThreshold <= 0 {
+		unhealthyThreshold = 3
+	}
+	healthChecks := map[string]interface{}{
+		"passive": map[string]interface{}{
+			"fail_duration": fmt.Sprintf("%ds", healthCheckInterval*3),
+			"max_fails":     unhealthyThreshold,
+		},
+	}
+	if rule.EnableActiveHealthCheck {
+		activePort := rule.TCPHealthCheckPort
+		if activePort <= 0 && len(enabledPorts) > 0 {
+			activePort = enabledPorts[0]
+		}
+		healthCheckTimeout := rule.HealthCheckTimeout
+		if healthCheckTimeout <= 0 {
+			healthCheckTimeout = 5
+		}
+		healthyThreshold := rule.HealthCheckHealthyThreshold
+		if healthyThreshold <= 0 {
+			healthyThreshold = 2
+		}
+		healthChecks["active"] = map[string]interface{}{
+			"interval": fmt.Sprintf("%ds", healthCheckInterval),
+			"port":     activePort,
+			"timeout":  fmt.Sprintf("%ds", healthCheckTimeout),
+			"rise":     healthyThreshold,
+			"fall":     unhealthyThreshold,
+		}
+	}
+	proxyHandler["health_checks"] = healthChecks
+
+	route := map[string]interface{}{
+		"handle": []interface{}{proxyHandler},
+	}
+	if rule.CaddyID != "" {
+		route["@id"] = rule.CaddyID
+	}
+	return route
+}
+
+// buildTCPServer generates a layer4 server entry (listen + routes) for a TCP rule.
+func buildTCPServer(rule SingleRuleConfig) map[string]interface{} {
+	return map[string]interface{}{
+		"listen": []string{fmt.Sprintf(":%d", rule.ListenPort)},
+		"routes": []interface{}{buildTCPProxyRoute(rule)},
+	}
 }

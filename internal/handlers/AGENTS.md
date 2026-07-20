@@ -1,15 +1,21 @@
 # Handlers Knowledge Base
 
 **Generated:** 2026-04-24
-**File:** `internal/handlers/handlers.go` (3260 lines)
-
 ## OVERVIEW
-All HTTP API handlers in one file (~3260 lines). Single-file anti-pattern.
+HTTP API handlers, split by domain across multiple files.
 
 ## STRUCTURE
 ```
 internal/handlers/
-└── handlers.go    # ALL handlers + helpers (68 methods, single file)
+├── handlers.go            # Handlers struct, shared deps, helpers
+├── auth.go / users.go     # auth, user management, first-run setup
+├── rules.go               # LB rule CRUD + enable/disable + ACME lifecycle
+├── caddy.go               # global config, Caddy control, config preview
+├── certificates.go / certjobs.go / caproviders.go
+├── cluster_*.go           # cluster registration, mode, sync, status, backup import
+├── config_backup.go / config_import_v1.go
+├── metrics.go / system.go / branding.go / apidocs.go
+└── audit.go / auditlog.go # audit helpers and audit log query
 ```
 
 ## WHERE TO LOOK
@@ -32,7 +38,6 @@ internal/handlers/
 - Helper functions: getOutboundIP, getHostname, getOSInfo, getKernel, getCaddyVersion, getUptime
 
 ## ANTI-PATTERNS
-- **SINGLE FILE**: All 68 handler methods in one file (~3260 lines). Should be split by domain: `auth.go`, `users.go`, `rules.go`, `certs.go`, `nodes.go`, `sync.go`, `metrics.go`, `system.go`.
 - **NEVER delete ports 80/443**: Line 1775: `// HTTP port 80 and HTTPS port 443 servers should never be deleted (default site)`
 
 ## NOTES

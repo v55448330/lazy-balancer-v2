@@ -207,6 +207,18 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			return
 		}
 	}
+	importUserID := 0
+	if uid, exists := c.Get("user_id"); exists {
+		if f, ok := uid.(float64); ok {
+			importUserID = int(f)
+		}
+	}
+	_, _ = tx.ExecContext(ctx, "UPDATE lb_rules SET updated_by=? WHERE id IN (SELECT id FROM lb_rules)", importUserID)
+	if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id NOT IN (SELECT caddy_id FROM lb_rules)"); err != nil {
+		recordAudit(c, "导入失败", "配置备份", "清理孤儿证书任务失败: "+err.Error())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理孤儿证书任务失败，已回滚: " + err.Error()})
+		return
+	}
 	if backup.Config != nil {
 		valid, err := tableColumns(ctx, db.DB, "global_config")
 		if err != nil {

@@ -8,11 +8,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
 
 func (h *Handlers) GetSystemInfo(c *gin.Context) {
 	info := models.SystemInfo{
+		NodeMode:      "master",
 		IPAddress:     getOutboundIP(),
 		Hostname:      getHostname(),
 		OSInfo:        getOSInfo(),
@@ -22,8 +24,11 @@ func (h *Handlers) GetSystemInfo(c *gin.Context) {
 		CaddyVersion:  getCaddyVersion(),
 		RunningStatus: "running",
 		Uptime:        getUptime(),
-		NodeMode:      h.cfg.NodeMode,
 		Version:       h.cfg.Version,
+	}
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err == nil && !isMaster {
+		info.NodeMode = "slave"
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: info})
 }

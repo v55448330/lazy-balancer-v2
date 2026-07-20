@@ -27,7 +27,7 @@ Lazy Balancer V2 is a full-stack load balancer management system that orchestrat
 | Core Logic | `internal/` | DB schema, API handlers, Caddy orchestration |
 | Frontend Source | `web/src/` | Vue components and state management |
 | Database Schema | `internal/db/db.go` | SQLite table definitions & migrations |
-| Caddy Logic | `internal/services/caddy.go` | Configuration generation and API calls |
+| Caddy Logic | `internal/services/caddy.go` | Config generation, L4 builder (`buildTCPProxyRoute`/`buildTCPServer`) |
 
 ## CONVENTIONS
 - **Backend**: Standard Go project layout. Private logic resides in `internal/`.
@@ -50,7 +50,7 @@ docker compose down -v # Reset DB and containers
 ```
 
 ## NOTES
-- **Testing**: ⚠️ NO tests are currently implemented for either the backend or frontend.
+- **Testing**: Go unit tests exist under `internal/` (run `go test ./...`). No frontend tests.
 - **UI Staging**: `/ui` directory is used for staging built assets; `/web` is the source of truth.
 - **Build**: No Makefile - use `docker compose build` or compile Go directly with `go build -o bin/lazy-balancer ./cmd/server`
 ```
