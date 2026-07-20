@@ -229,6 +229,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置已保存但重载失败: " + err.Error()})
 		return
 	}
+	services.ApplyLogLevel()
 
 	if len(plan.SectionChanges) > 0 {
 		for section, fields := range plan.SectionChanges {

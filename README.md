@@ -55,7 +55,7 @@ docker run -d \
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `LOG_LEVEL` | `info` | 应用日志级别（debug/info/warn/error） |
+| （页面设置） | `info` | 应用日志级别在"基础设置 → 日志级别"配置，即时生效 |
 | `JWT_SECRET` | 自动生成 | JWT 签名密钥，生产建议显式设置以跨重启保持会话 |
 | `LOG_FILE` | （空） | 设置后将应用日志同时写入该文件（如 `/app/logs/lazy-balancer.log`），可在页面"基础设置 → 运行日志"查看 |
 | `NODE_NAME` | `node-1` | 集群注册时的默认节点名 |

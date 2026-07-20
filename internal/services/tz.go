@@ -4,6 +4,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"lazy-balancer-v2/internal/db"
 )
 
@@ -37,4 +39,16 @@ func CurrentLocation() *time.Location {
 		return loc
 	}
 	return time.UTC
+}
+
+func ApplyLogLevel() {
+	level := "info"
+	if db.DB != nil {
+		_ = db.DB.QueryRow("SELECT COALESCE(log_level,'info') FROM global_config WHERE id=1").Scan(&level)
+	}
+	if level == "debug" {
+		gin.SetMode(gin.DebugMode)
+	} else {
+		gin.SetMode(gin.ReleaseMode)
+	}
 }

@@ -25,7 +25,6 @@ type Config struct {
 	NodeName string `json:"node_name"`
 
 	// Log
-	LogLevel string `json:"log_level"`
 
 	// JWT
 	JWTSecret string        `json:"jwt_secret"`
@@ -44,7 +43,6 @@ func Load(path string) *Config {
 		CaddyMetricsURL: "http://localhost:2019/metrics",
 		MetricsInterval: 30,
 		NodeName:        getEnv("NODE_NAME", "node-1"),
-		LogLevel:        getEnv("LOG_LEVEL", "info"),
 		JWTSecret:       getEnv("JWT_SECRET", ""),
 		Version:         getEnv("APP_VERSION", "2.0.0"),
 		JWTExpire:       24 * time.Hour,

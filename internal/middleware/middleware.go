@@ -18,11 +18,7 @@ import (
 )
 
 func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
-	if cfg.LogLevel == "debug" {
-		gin.SetMode(gin.DebugMode)
-	} else {
-		gin.SetMode(gin.ReleaseMode)
-	}
+	services.ApplyLogLevel()
 
 	r := gin.New()
 	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
@@ -367,3 +363,4 @@ func jwtOnly() gin.HandlerFunc {
 		c.Next()
 	}
 }
+
