@@ -3202,3 +3202,9 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 
 	return route, nil
 }
+
+// ApplyConfigFromTx renders the Caddy config from an uncommitted transaction
+// and applies it, keeping the database unchanged when Caddy rejects the config.
+func (s *CaddyService) ApplyConfigFromTx(cfg *config.Config, tx *sql.Tx) error {
+	return s.ApplyConfig(generateCaddyConfigFromStore(cfg, tx))
+}

@@ -153,7 +153,7 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		}
 		backup.Tables[table] = rows
 	}
-	recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(fmt.Sprintf("规则 %d 条", len(backup.Tables["lb_rules"])), fmt.Sprintf("用户 %d 个", len(backup.Tables["users"])), fmt.Sprintf("任务 %d 个", len(backup.Tables["cert_jobs"]))))
+	recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(importCountsDetail(backup.Tables), services.AuditResultPart("success")))
 	c.Header("Content-Disposition", "attachment; filename=lazy-balancer-backup-"+time.Now().Format("20060102-150405")+".json")
 	c.JSON(http.StatusOK, backup)
 }
@@ -230,6 +230,24 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			}
 		}
 	}
+	for _, row := range backup.Tables["lb_rules"] {
+		caddyID, _ := row["caddy_id"].(string)
+		certPEM, _ := row["tls_cert"].(string)
+		keyPEM, _ := row["tls_key"].(string)
+		if caddyID != "" && certPEM != "" && keyPEM != "" {
+			if err := services.WriteCertFiles(caddyID, certPEM, keyPEM); err != nil {
+				recordAudit(c, "导入失败", "配置备份", "写入证书文件失败: "+err.Error())
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入证书文件失败，已回滚: " + err.Error()})
+				return
+			}
+		}
+	}
+	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
+		services.MaterializeAllCertsFromDB()
+		recordAudit(c, "导入失败", "配置备份", "Caddy 配置验证未通过，数据库未变更: "+err.Error())
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份生成的配置未通过 Caddy 验证，未执行导入: " + err.Error()})
+		return
+	}
 	if err := services.BumpClusterVersion(ctx, tx); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新配置版本失败"})
 		return
@@ -239,12 +257,30 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		return
 	}
 	committed = true
-	if err := h.applyCaddyConfigWithRollback(); err != nil {
-		recordAudit(c, "导入失败", "配置备份", "重载 Caddy 失败: "+err.Error())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置已导入但重载 Caddy 失败: " + err.Error()})
-		return
-	}
-	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(fmt.Sprintf("规则 %d 条", len(backup.Tables["lb_rules"])), fmt.Sprintf("用户 %d 个", len(backup.Tables["users"])), services.AuditResultPart("success")))
+	counts := importCountsDetail(backup.Tables)
+	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail("来源：v2 备份（覆盖导入）", counts, services.AuditResultPart("success")))
 	recordAudit(c, "重载", "Caddy配置", "导入配置后自动重载")
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置导入成功"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置导入成功", Data: gin.H{"summary": counts}})
+}
+
+func importCountsDetail(tables map[string][]map[string]any) string {
+	parts := []string{}
+	labels := []struct {
+		table string
+		label string
+	}{
+		{"lb_rules", "规则 %d 条"},
+		{"upstreams", "上游 %d 个"},
+		{"users", "用户 %d 个"},
+		{"api_keys", "密钥 %d 个"},
+		{"ca_providers", "CA %d 个"},
+		{"certificate_configs", "DNS %d 个"},
+		{"cert_jobs", "任务 %d 个"},
+	}
+	for _, item := range labels {
+		if rows, ok := tables[item.table]; ok {
+			parts = append(parts, fmt.Sprintf(item.label, len(rows)))
+		}
+	}
+	return joinStrings(parts, "；")
 }

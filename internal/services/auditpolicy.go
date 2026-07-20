@@ -54,6 +54,7 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/certificate-configs/:id/test": AuditPolicyExplicit,
 	"PUT /api/v1/caddy/config":                  AuditPolicyExplicit,
 	"POST /api/v1/config/import":                AuditPolicyExplicit,
+	"POST /api/v1/config/import/v1":             AuditPolicyExplicit,
 	"POST /api/v1/caddy/start":                  AuditPolicyGeneric,
 	"POST /api/v1/caddy/stop":                   AuditPolicyGeneric,
 	"POST /api/v1/caddy/restart":                AuditPolicyGeneric,
@@ -119,6 +120,7 @@ func HasExplicitAuditEvent(method, path string) bool {
 		"DELETE /api/v1/certificates/jobs/:id",
 		"PUT /api/v1/caddy/config",
 		"POST /api/v1/config/import",
+		"POST /api/v1/config/import/v1",
 		"PUT /api/v1/config":
 		return true
 	default:

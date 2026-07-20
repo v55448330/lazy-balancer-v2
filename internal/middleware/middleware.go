@@ -103,6 +103,8 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			admin.POST("/config/validate", h.ValidateConfig)
 			admin.GET("/config/export", h.ExportConfigBackup)
 			admin.POST("/config/import", h.ImportConfigBackup)
+			admin.POST("/config/import/validate", h.ValidateConfigImport)
+			admin.POST("/config/import/v1", h.ImportV1Config)
 
 			}
 
