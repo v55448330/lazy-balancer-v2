@@ -3,6 +3,7 @@ package acme
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -277,6 +278,14 @@ func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// The CA validates against authoritative name servers, so probe them
+	// directly: it is the strongest signal and usually much faster than
+	// waiting for recursive resolvers' caches to expire.
+	authServers := resolveAuthoritativeNS(ctx, fqdn, resolvers[0])
+	if len(authServers) > 0 {
+		log("权威 DNS 服务器: %s", strings.Join(authServers, ", "))
+	}
+
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
@@ -284,43 +293,53 @@ func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout 
 	var lastResolver string
 
 	for {
-		for _, resolver := range resolvers {
-			for _, net := range []string{"udp", "tcp"} {
-				m := new(dns.Msg)
-				m.SetQuestion(fqdn, dns.TypeTXT)
-				m.RecursionDesired = true
-
-				c := new(dns.Client)
-				c.Net = net
-				// Short per-exchange timeout so a blocked resolver fails over
-				// quickly instead of consuming the whole propagation budget.
-				exchangeCtx, exCancel := context.WithTimeout(ctx, 8*time.Second)
-				r, _, err := c.ExchangeContext(exchangeCtx, m, resolver)
-				exCancel()
-				if err != nil || r == nil {
-					log("查询失败 %s @ %s/%s: %v", fqdn, resolver, net, err)
-					continue
-				}
-
-				var found []string
-				for _, ans := range r.Answer {
-					if t, ok := ans.(*dns.TXT); ok {
-						got := strings.TrimSpace(strings.Join(t.Txt, ""))
-						if got == "" {
-							continue
-						}
-						found = append(found, got)
-						if got == expected {
-							log("DNS 已命中 %s @ %s/%s, 值: %s", fqdn, resolver, net, got)
-							return nil
-						}
-					}
-				}
+		// Authoritative name servers first: every reachable server must have
+		// the record before we let the CA validate. Servers that fail to
+		// respond are dropped from the list so a network-blocked server does
+		// not consume the propagation budget on every tick.
+		authReady := len(authServers) > 0
+		var alive []string
+		for _, server := range authServers {
+			hit, found, err := probeTXT(ctx, server, fqdn, expected, false)
+			switch {
+			case err != nil:
+				authReady = false
+				log("权威 DNS 查询失败 %s @ %s: %v", fqdn, server, err)
+			case hit:
+				alive = append(alive, server)
+				log("权威 DNS 已命中 %s @ %s, 值: %s", fqdn, server, expected)
+			default:
+				authReady = false
+				alive = append(alive, server)
 				if len(found) > 0 {
 					lastFound = found
-					lastResolver = resolver + "/" + net
-					log("DNS 未命中 %s @ %s/%s, 期望: %s, 实际: %s", fqdn, resolver, net, expected, strings.Join(found, "; "))
+					lastResolver = server + " (auth)"
+					log("权威 DNS 未命中 %s @ %s, 期望: %s, 实际: %s", fqdn, server, expected, strings.Join(found, "; "))
+				} else {
+					log("权威 DNS 无 TXT 记录 %s @ %s", fqdn, server)
 				}
+			}
+		}
+		authServers = alive
+		if authReady {
+			return nil
+		}
+
+		// Fallback: public recursive resolvers (slower due to caching).
+		for _, resolver := range resolvers {
+			hit, found, err := probeTXT(ctx, resolver, fqdn, expected, true)
+			if err != nil {
+				log("查询失败 %s @ %s: %v", fqdn, resolver, err)
+				continue
+			}
+			if hit {
+				log("DNS 已命中 %s @ %s, 值: %s", fqdn, resolver, expected)
+				return nil
+			}
+			if len(found) > 0 {
+				lastFound = found
+				lastResolver = resolver
+				log("DNS 未命中 %s @ %s, 期望: %s, 实际: %s", fqdn, resolver, expected, strings.Join(found, "; "))
 			}
 		}
 
@@ -335,4 +354,117 @@ func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout 
 		case <-ticker.C:
 		}
 	}
+}
+
+// probeTXT queries a single DNS server for the TXT records of fqdn over UDP,
+// falling back to TCP. It reports whether the expected value is present along
+// with all values found.
+func probeTXT(ctx context.Context, server, fqdn, expected string, recursion bool) (hit bool, found []string, err error) {
+	var lastErr error
+	for _, network := range []string{"udp", "tcp"} {
+		m := new(dns.Msg)
+		m.SetQuestion(fqdn, dns.TypeTXT)
+		m.RecursionDesired = recursion
+
+		c := &dns.Client{Net: network}
+		// Short per-exchange timeout so a blocked server fails over quickly
+		// instead of consuming the whole propagation budget.
+		exchangeCtx, exCancel := context.WithTimeout(ctx, 8*time.Second)
+		r, _, err := c.ExchangeContext(exchangeCtx, m, server)
+		exCancel()
+		if err != nil || r == nil {
+			lastErr = err
+			continue
+		}
+
+		for _, ans := range r.Answer {
+			if t, ok := ans.(*dns.TXT); ok {
+				got := strings.TrimSpace(strings.Join(t.Txt, ""))
+				if got == "" {
+					continue
+				}
+				found = append(found, got)
+				if got == expected {
+					return true, found, nil
+				}
+			}
+		}
+		return false, found, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no response")
+	}
+	return false, nil, lastErr
+}
+
+// resolveAuthoritativeNS finds the authoritative name servers of fqdn's zone
+// by walking up the domain labels and querying NS records through a public
+// recursive resolver, then resolves the servers' addresses. Best-effort:
+// returns nil when the zone cannot be determined.
+func resolveAuthoritativeNS(ctx context.Context, fqdn, bootstrap string) []string {
+	query := func(name string, qtype uint16) *dns.Msg {
+		m := new(dns.Msg)
+		m.SetQuestion(name, qtype)
+		m.RecursionDesired = true
+		c := &dns.Client{Net: "udp", Timeout: 5 * time.Second}
+		r, _, err := c.ExchangeContext(ctx, m, bootstrap)
+		if err != nil {
+			return nil
+		}
+		return r
+	}
+
+	// Walk up the labels until NS records are found, so delegated subdomains
+	// resolve to their own zone's servers.
+	name := fqdn
+	var nsNames []string
+	for {
+		labels := strings.Split(strings.TrimSuffix(name, "."), ".")
+		if len(labels) <= 1 {
+			return nil
+		}
+		name = strings.Join(labels[1:], ".") + "."
+		r := query(name, dns.TypeNS)
+		if r == nil {
+			return nil
+		}
+		for _, ans := range r.Answer {
+			if ns, ok := ans.(*dns.NS); ok {
+				nsNames = append(nsNames, ns.Ns)
+			}
+		}
+		if len(nsNames) > 0 {
+			break
+		}
+	}
+
+	// Resolve addresses of each name server.
+	seen := make(map[string]bool)
+	var servers []string
+	for _, ns := range nsNames {
+		for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
+			r := query(ns, qtype)
+			if r == nil {
+				continue
+			}
+			for _, ans := range r.Answer {
+				var ip string
+				switch rr := ans.(type) {
+				case *dns.A:
+					ip = rr.A.String()
+				case *dns.AAAA:
+					ip = rr.AAAA.String()
+				}
+				if ip == "" {
+					continue
+				}
+				server := net.JoinHostPort(ip, "53")
+				if !seen[server] {
+					seen[server] = true
+					servers = append(servers, server)
+				}
+			}
+		}
+	}
+	return servers
 }
