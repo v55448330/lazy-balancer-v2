@@ -92,8 +92,7 @@
           <span class="info-label">配置备份</span>
           <div class="backup-actions">
             <el-button size="small" :disabled="backupDisabled" :loading="exporting" @click="exportBackup">导出</el-button>
-            <el-button size="small" type="warning" plain :disabled="backupDisabled" :loading="importing" @click="triggerImport">导入</el-button>
-            <input ref="importInput" type="file" accept="application/json" class="import-input" @change="handleImportFile" />
+            <el-button size="small" type="warning" plain :disabled="backupDisabled" @click="triggerImport">导入</el-button>
           </div>
         </div>
         <el-text type="info" size="small" class="backup-tip">备份包含全部配置、规则、用户、密钥与证书任务；导入将覆盖当前配置，仅主节点可用</el-text>
@@ -108,6 +107,57 @@
       <div ref="appLogContainer" class="log-viewer"><pre>{{ appLogContent || '暂无日志' }}</pre></div>
       <template #footer><el-button @click="appLogVisible = false">关闭</el-button></template>
     </el-dialog>
+
+    <el-dialog v-model="importDialogVisible" title="导入配置备份" width="560px" :close-on-click-modal="false">
+      <div class="import-picker">
+        <el-button :icon="Upload" @click="chooseImportFile">选择备份文件</el-button>
+        <span v-if="importFileName" class="import-filename">{{ importFileName }}</span>
+        <span v-else class="import-hint">支持 V2 完整备份与 V1（nginx 版）备份</span>
+      </div>
+      <input ref="importInput" type="file" accept="application/json,.json,.bak" class="import-input" @change="handleImportFile" />
+
+      <div v-if="importValidating" v-loading="true" class="import-validating">正在校验备份文件...</div>
+
+      <template v-if="importValidation && !importValidating">
+        <el-alert v-if="!importValidation.valid" :title="importValidation.error || '备份文件校验失败'" type="error" :closable="false" show-icon class="import-alert" />
+        <template v-else>
+          <div class="import-result">
+            <el-tag :type="importValidation.type === 'v1' ? 'warning' : 'success'" size="small">
+              {{ importValidation.type === 'v1' ? 'V1 兼容导入' : 'V2 完整备份' }}
+            </el-tag>
+            <div class="import-summary">
+              <span v-for="(count, key) in importValidation.summary" :key="key" class="import-summary-item">
+                {{ summaryLabels[key] || key }} {{ count }}
+              </span>
+            </div>
+            <ul v-if="importValidation.warnings?.length" class="import-warnings">
+              <li v-for="(warning, index) in importValidation.warnings" :key="index">{{ warning }}</li>
+            </ul>
+            <el-alert
+              v-if="importValidation.type !== 'v1'"
+              title="导入将覆盖当前全部配置（规则、用户、密钥、证书任务）"
+              type="warning"
+              :closable="false"
+              show-icon
+              class="import-alert"
+            />
+            <el-alert
+              v-else
+              title="仅导入负载均衡规则，其他数据不受影响"
+              type="info"
+              :closable="false"
+              show-icon
+              class="import-alert"
+            />
+          </div>
+        </template>
+      </template>
+
+      <template #footer>
+        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!importValidation?.valid" :loading="importing" @click="confirmImport">确认导入</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -116,7 +166,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
-import { Setting, InfoFilled, Check, View } from '@element-plus/icons-vue'
+import { Setting, InfoFilled, Check, View, Upload } from '@element-plus/icons-vue'
 import type { SystemInfo } from '@/types'
 
 const authStore = useAuthStore()
@@ -124,7 +174,6 @@ const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 const backupDisabled = computed(() => isReadOnly.value || authStore.nodeMode !== 'master')
 const exporting = ref(false)
 const importing = ref(false)
-const importInput = ref<HTMLInputElement | null>(null)
 const appVersion = ref('-')
 
 onMounted(async () => {
@@ -202,8 +251,42 @@ const exportBackup = async (): Promise<void> => {
   }
 }
 
+interface ImportValidation {
+  valid: boolean
+  type?: string
+  error?: string
+  summary?: Record<string, number>
+  warnings?: string[]
+}
+
+const importDialogVisible = ref(false)
+const importFileName = ref('')
+const importFileContent = ref('')
+const importValidation = ref<ImportValidation | null>(null)
+const importValidating = ref(false)
+const importInput = ref<HTMLInputElement | null>(null)
+
+const summaryLabels: Record<string, string> = {
+  lb_rules: '规则',
+  upstreams: '上游',
+  users: '用户',
+  api_keys: 'API 密钥',
+  ca_providers: 'CA 提供商',
+  certificate_configs: 'DNS 提供商',
+  cert_jobs: '证书任务',
+  rules: '规则',
+  tls_rules: '其中 TLS 规则',
+}
+
 const triggerImport = (): void => {
   if (backupDisabled.value) return
+  importFileName.value = ''
+  importFileContent.value = ''
+  importValidation.value = null
+  importDialogVisible.value = true
+}
+
+const chooseImportFile = (): void => {
   importInput.value?.click()
 }
 
@@ -211,28 +294,34 @@ const handleImportFile = async (event: Event): Promise<void> => {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
-  if (!file || importing.value) return
-  let payload: unknown
+  if (!file) return
+  importFileName.value = file.name
+  importValidation.value = null
+  importValidating.value = true
   try {
-    payload = JSON.parse(await file.text())
-  } catch {
-    ElMessage.error('备份文件不是有效的 JSON')
-    return
-  }
-  try {
-    await ElMessageBox.confirm('导入将覆盖当前全部配置（规则、用户、密钥、证书任务），是否继续？', '确认导入', {
-      confirmButtonText: '确认导入',
-      cancelButtonText: '取消',
-      type: 'warning',
+    importFileContent.value = await file.text()
+    const res = await request.post<{ data: ImportValidation }>('/config/import/validate', importFileContent.value, {
+      headers: { 'Content-Type': 'application/json' },
     })
+    importValidation.value = res.data
   } catch {
-    return
+    importValidation.value = { valid: false, error: '校验请求失败，请重试' }
+  } finally {
+    importValidating.value = false
   }
+}
+
+const confirmImport = async (): Promise<void> => {
+  const validation = importValidation.value
+  if (!validation?.valid || importing.value) return
   importing.value = true
   try {
-    await request.post('/config/import', payload)
-    ElMessage.success('配置导入成功')
-    window.location.reload()
+    const endpoint = validation.type === 'v1' ? '/config/import/v1' : '/config/import'
+    const res = await request.post<{ message?: string }>(endpoint, importFileContent.value, {
+      headers: { 'Content-Type': 'application/json' },
+    })
+    ElMessage.success({ message: res.message || '配置导入成功', duration: 1500 })
+    setTimeout(() => window.location.reload(), 1600)
   } finally {
     importing.value = false
   }
@@ -325,4 +414,12 @@ const handleSave = async () => {
 .log-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .log-viewer { height: 60vh; min-height: 320px; overflow: auto; padding: 12px 16px; background: #0f172a; border-radius: var(--radius-sm, 6px); }
 .log-viewer pre { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.7; color: #e2e8f0; white-space: pre-wrap; word-break: break-all; }
+.import-picker { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.import-filename { font-size: 13px; color: var(--el-text-color-primary); }
+.import-hint { font-size: 12px; color: var(--el-text-color-secondary); }
+.import-validating { padding: 24px 0; text-align: center; color: var(--el-text-color-secondary); font-size: 13px; }
+.import-result { display: flex; flex-direction: column; gap: 12px; }
+.import-summary { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; color: var(--el-text-color-primary); }
+.import-warnings { margin: 0; padding-left: 18px; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.8; }
+.import-alert { margin-top: 4px; }
 </style>

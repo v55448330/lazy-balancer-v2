@@ -331,8 +331,10 @@ const ipList = computed(() => {
 const getStrategyLabel = (strategy: string) => {
   const labels: Record<string, string> = {
     round_robin: '轮询',
+    weighted_round_robin: '轮询',
     least_conn: '最少连接',
     ip_hash: 'IP 哈希',
+    cookie: 'Cookie 粘滞',
   }
   return labels[strategy] || strategy
 }
