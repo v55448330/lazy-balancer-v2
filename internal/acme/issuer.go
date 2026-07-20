@@ -54,6 +54,7 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 	type challengeInfo struct {
 		domain    string
 		tokenFQDN string
+		authURL   string
 		chal      *acme.Challenge
 	}
 	var localChallenges []challengeInfo
@@ -96,6 +97,7 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 		localChallenges = append(localChallenges, challengeInfo{
 			domain:    domain,
 			tokenFQDN: tokenFQDN,
+			authURL:   authURL,
 			chal:      chal,
 		})
 		challenges = append(challenges, ChallengeInfo{
@@ -131,17 +133,10 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 	}
 
 	// Step 5: Wait for all authorizations to be valid
-	for _, authURL := range order.AuthzURLs {
-		log("validating", fmt.Sprintf("等待 CA 验证 %s", authURL))
-		// Use a short timeout so a slow/unresponsive CA fails fast and can be retried.
-		authCtx, authCancel := context.WithTimeout(ctx, 5*time.Minute)
-		auth, err := i.Client.WaitAuthorization(authCtx, authURL)
-		authCancel()
-		if err != nil {
-			return "", "", challenges, fmt.Errorf("wait authorization %s: %w", authURL, err)
-		}
-		if auth.Status != "valid" {
-			return "", "", challenges, fmt.Errorf("authorization %s status: %s", authURL, auth.Status)
+	for _, ci := range localChallenges {
+		log("validating", fmt.Sprintf("等待 CA 验证 %s", ci.domain))
+		if err := i.waitForValidation(ctx, ci.authURL, ci.chal.URI); err != nil {
+			return "", "", challenges, fmt.Errorf("wait authorization %s: %w", ci.authURL, err)
 		}
 	}
 	log("validated", "所有域名验证通过")
@@ -246,6 +241,66 @@ func zoneFromDomain(domain string) string {
 		return strings.Join(parts[len(parts)-2:], ".")
 	}
 	return zone
+}
+
+// waitForValidation polls both the challenge URL and the authorization URL
+// until the authorization reaches a final state. Polling the challenge as
+// well is required for ZeroSSL compatibility: its authorization status can
+// lag far behind the challenge status, and x/crypto's WaitAuthorization only
+// watches the authorization, which then appears to hang forever. Every status
+// transition is logged so a stuck CA is diagnosable from the job log.
+func (i *Issuer) waitForValidation(ctx context.Context, authURL, chalURL string) error {
+	log := func(msg string) {
+		if i.Logger != nil {
+			i.Logger.Log("validating", msg)
+		}
+	}
+
+	// ZeroSSL validation can legitimately take several minutes, so allow a
+	// generous budget instead of failing fast into an order-recreating retry.
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	var lastChalStatus, lastAuthStatus string
+	var lastChal *acme.Challenge
+	for {
+		if chal, err := i.Client.GetChallenge(ctx, chalURL); err != nil {
+			log(fmt.Sprintf("查询 challenge 状态失败: %v", err))
+		} else {
+			lastChal = chal
+			if chal.Status != lastChalStatus {
+				log(fmt.Sprintf("challenge 状态: %s", chal.Status))
+				lastChalStatus = chal.Status
+			}
+		}
+
+		if auth, err := i.Client.GetAuthorization(ctx, authURL); err != nil {
+			log(fmt.Sprintf("查询授权状态失败: %v", err))
+		} else {
+			if auth.Status != lastAuthStatus {
+				log(fmt.Sprintf("授权状态: %s", auth.Status))
+				lastAuthStatus = auth.Status
+			}
+			switch auth.Status {
+			case "valid":
+				return nil
+			case "invalid", "deactivated", "expired", "revoked":
+				if lastChal != nil && lastChal.Error != nil {
+					return fmt.Errorf("授权状态 %s: %v", auth.Status, lastChal.Error)
+				}
+				return fmt.Errorf("授权状态: %s", auth.Status)
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("等待 CA 验证超时 (challenge: %s, 授权: %s)", lastChalStatus, lastAuthStatus)
+		case <-ticker.C:
+		}
+	}
 }
 
 // waitForDNS polls DNS resolvers until the expected TXT record appears.

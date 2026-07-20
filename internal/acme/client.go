@@ -158,6 +158,11 @@ func (c *Client) WaitAuthorization(ctx context.Context, url string) (*acme.Autho
 	return c.acme.WaitAuthorization(ctx, url)
 }
 
+// GetChallenge fetches the current status of a challenge by URL.
+func (c *Client) GetChallenge(ctx context.Context, url string) (*acme.Challenge, error) {
+	return c.acme.GetChallenge(ctx, url)
+}
+
 // WaitOrder polls the order until it is ready or valid.
 func (c *Client) WaitOrder(ctx context.Context, url string) (*acme.Order, error) {
 	return c.acme.WaitOrder(ctx, url)

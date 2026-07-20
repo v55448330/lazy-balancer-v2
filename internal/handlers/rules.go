@@ -1358,12 +1358,6 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除上游服务器失败"})
 		return
 	}
-	if _, err := tx.Exec("DELETE FROM metrics_history WHERE rule_id = ?", caddyID); err != nil {
-		tx.Rollback()
-		log.Printf("DeleteRule metrics_history delete error for caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除指标历史失败"})
-		return
-	}
 	if _, err := tx.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID); err != nil {
 		tx.Rollback()
 		log.Printf("DeleteRule lb_rules delete error for caddy_id=%s: %v", caddyID, err)
@@ -1375,6 +1369,14 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		log.Printf("DeleteRule transaction commit failed for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交规则删除失败"})
 		return
+	}
+
+	// metrics_history lives in the separate metrics database, so it cannot
+	// join the business transaction; delete best-effort after commit.
+	if db.MetricsDB != nil {
+		if _, err := db.MetricsDB.Exec("DELETE FROM metrics_history WHERE rule_id = ?", caddyID); err != nil {
+			log.Printf("DeleteRule metrics_history delete error for caddy_id=%s: %v", caddyID, err)
+		}
 	}
 
 	services.RemoveCertFiles(caddyID)
