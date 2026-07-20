@@ -112,3 +112,9 @@ Go 1.26 · Gin · SQLite · Caddy v2.11.4 + caddy-l4 v0.1.2 · Vue 3 · Element 
 ```
 v55448330/lazy-balancer-v2:v2.0.0
 ```
+
+## License
+
+本项目采用 [Apache License 2.0](LICENSE) 授权。
+
+第三方组件致谢：Caddy（Apache 2.0）、caddy-l4（Apache 2.0）、Gin（MIT）、Vue 3（MIT）、Element Plus（MIT）、glebarez/sqlite（MIT）、golang-jwt（MIT）、x/crypto（BSD-3）。
