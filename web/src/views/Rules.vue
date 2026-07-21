@@ -520,14 +520,14 @@
               <el-form-item label="主动检查">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.enable_active_health_check" />
-                  <span class="form-tip-inline">{{ wizardForm.enable_active_health_check ? '周期探测，按失败/恢复阈值摘除与加回（多上游推荐）' : '被动按真实流量统计，失败自动重试转移' }}</span>
+                  <span class="form-tip-inline">{{ wizardForm.enable_active_health_check ? '周期探测，异常节点持续摘除直至恢复（推荐）' : '仅被动熔断，异常节点会周期恢复并重新接收流量' }}</span>
                 </div>
               </el-form-item>
 
               <template v-if="wizardForm.enable_active_health_check">
                 <el-form-item label="检查路径">
                   <el-input v-model="wizardForm.health_check_path" placeholder="默认 /" style="width: 180px;" />
-                  <span class="form-tip-inline">留空探测根路径 /；请求携带后端域名作为 Host 头</span>
+                  <span class="form-tip-inline">留空探测 /，需返回 2xx 否则判为异常；携带后端域名作为 Host 头</span>
                 </el-form-item>
                 <el-form-item label="恢复阈值">
                   <el-input-number v-model="wizardForm.health_check_healthy_threshold" :min="1" :max="10" controls-position="right" style="width: 120px;" />
@@ -545,7 +545,7 @@
               <el-form-item label="主动检查">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.enable_active_health_check" />
-                  <span class="form-tip-inline">{{ wizardForm.enable_active_health_check ? '周期探测上游端口，按失败/恢复阈值摘除与加回（多上游推荐）' : '被动按真实流量统计，失败自动重试转移' }}</span>
+                  <span class="form-tip-inline">{{ wizardForm.enable_active_health_check ? '周期探测上游端口，异常节点持续摘除直至恢复（推荐）' : '仅被动熔断，异常节点会周期恢复并重新接收流量' }}</span>
                 </div>
               </el-form-item>
 
@@ -1328,7 +1328,7 @@ const wizardForm = reactive<Rule>({
   health_check_timeout: 5,
   health_check_healthy_threshold: 2,
   health_check_unhealthy_threshold: 3,
-  enable_active_health_check: false,
+  enable_active_health_check: true,
   tcp_health_check_port: 0,
   tcp_try_duration: 0,
   tcp_try_interval: 250,
@@ -1676,7 +1676,7 @@ const openWizard = (rule?: Rule) => {
       health_check_timeout: 5,
       health_check_healthy_threshold: 2,
       health_check_unhealthy_threshold: 3,
-      enable_active_health_check: false,
+      enable_active_health_check: true,
       tcp_health_check_port: 0,
       tcp_try_duration: 0,
       tcp_try_interval: 250,
