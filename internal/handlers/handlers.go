@@ -294,9 +294,13 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 	validStrategies := map[string]bool{
 		"ip_hash": true, "least_conn": true,
 		"random": true, "first": true, "least_time": true, "weighted_round_robin": true,
+		"cookie": true,
 	}
 	if !validStrategies[data.Strategy] {
-		return fmt.Errorf("invalid strategy: must be weighted_round_robin, ip_hash, least_conn, random, first, or least_time")
+		return fmt.Errorf("invalid strategy: must be weighted_round_robin, ip_hash, least_conn, random, first, least_time, or cookie")
+	}
+	if data.Strategy == "cookie" && data.Protocol != "http" {
+		return fmt.Errorf("cookie strategy is only supported for http rules")
 	}
 
 	if data.Domain != "" && (data.Protocol == "http" || data.Protocol == "https") {
