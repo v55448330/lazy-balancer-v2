@@ -2327,7 +2327,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 				selectionPolicy["name"] = "lb_sticky"
 			}
 			if rule.Strategy == "weighted_round_robin" && len(upstreamWeights) > 0 {
-				selectionPolicy["weights"] = upstreamWeights
+				selectionPolicy["weights"] = normalizeWeights(upstreamWeights)
 			}
 			proxyConfig["load_balancing"] = map[string]interface{}{
 				"selection_policy": selectionPolicy,
@@ -2659,7 +2659,7 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 				selectionPolicy["name"] = "lb_sticky"
 			}
 			if rule.Strategy == "weighted_round_robin" && len(upstreamWeights) > 0 {
-				selectionPolicy["weights"] = upstreamWeights
+				selectionPolicy["weights"] = normalizeWeights(upstreamWeights)
 			}
 			proxyConfig["load_balancing"] = map[string]interface{}{
 				"selection_policy": selectionPolicy,
@@ -2791,6 +2791,33 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 // and applies it, keeping the database unchanged when Caddy rejects the config.
 func (s *CaddyService) ApplyConfigFromTx(cfg *config.Config, tx *sql.Tx) error {
 	return s.ApplyConfig(generateCaddyConfigFromStore(cfg, tx))
+}
+
+
+func normalizeWeights(weights []int) []int {
+	g := 0
+	for _, w := range weights {
+		if w <= 0 {
+			continue
+		}
+		if g == 0 {
+			g = w
+		} else {
+			for w > 0 {
+				g, w = w, g%w
+			}
+		}
+	}
+	if g <= 1 {
+		return weights
+	}
+	out := make([]int, len(weights))
+	for i, w := range weights {
+		if w > 0 {
+			out[i] = w / g
+		}
+	}
+	return out
 }
 
 // buildTCPProxyRoute generates the layer4 proxy handler and route for a TCP rule.

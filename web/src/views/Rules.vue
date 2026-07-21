@@ -1296,7 +1296,7 @@ const fetchHealthStatus = async () => {
 const defaultUpstream = (protocol: string = 'http'): Upstream => ({
   host: '',
   port: protocol === 'tcp' ? 8080 : 80,
-  weight: 100,
+  weight: 1,
   domain: '',
   dynamic_dns: false,
   enabled: true,
