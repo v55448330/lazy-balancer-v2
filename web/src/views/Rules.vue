@@ -120,6 +120,7 @@
                   <div v-for="(status, address) in healthStatus[row.caddy_id]?.upstreams || {}" :key="address" class="upstream-item">
                     <span class="upstream-address">{{ address }}</span>
                     <el-icon v-if="status.unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
+                    <el-icon v-else-if="status.degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                     <el-icon v-else-if="status.healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
                     <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
                   </div>
@@ -130,6 +131,7 @@
                       <span class="upstream-address">{{ upstream.host }}:{{ upstream.port }}</span>
                       <span class="upstream-status">
                         <el-icon v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown" class="upstream-unknown"><QuestionFilled /></el-icon>
+                        <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
                         <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
                         <span v-if="getUpstreamMetrics(row.caddy_id, upstream).fails > 0" class="upstream-fails">失败 {{ getUpstreamMetrics(row.caddy_id, upstream).fails }}</span>
@@ -853,7 +855,7 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
-import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight, Search } from '@element-plus/icons-vue'
+import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight, Search, WarningFilled} from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { ansiToHtml } from '@/utils/ansi'
 import { formatDate } from '@/utils/date'
@@ -1143,7 +1145,7 @@ const certConfigs = ref<any[]>([])
 const caProviders = ref<Array<{ id: number; name: string; enabled: boolean }>>([])
 const enabledCAProviders = computed(() => caProviders.value.filter(p => p.enabled))
 const globalConfig = ref<{ default_ca_provider_id?: number }>({})
-const healthStatus = ref<Record<string, { healthy: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; num_requests?: number; fails?: number }> }>>({})
+const healthStatus = ref<Record<string, { healthy: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }>>({})
 let certJobPollTimer: ReturnType<typeof setInterval> | null = null
 
 // Config viewing
@@ -1220,7 +1222,7 @@ const getUpstreamHealthStatus = (ruleId: string, upstream: any) => {
   if (!status || !status.upstreams) return { healthy: false, unknown: true }
   const upstreamKey = `${upstream.host}:${upstream.port}`
   const upstreamData = status.upstreams[upstreamKey]
-  return upstreamData ? { healthy: upstreamData.healthy, unknown: upstreamData.unknown } : { healthy: false, unknown: true }
+  return upstreamData ? { healthy: upstreamData.healthy, unknown: upstreamData.unknown, degraded: upstreamData.degraded } : { healthy: false, unknown: true, degraded: false }
 }
 
 const getUpstreamMetrics = (ruleId: string, upstream: any) => {
@@ -1245,17 +1247,18 @@ const fetchHealthStatus = async () => {
     const healthData = res.data || {}
     console.log('Health data received:', JSON.stringify(healthData))
     
-    const mapped: Record<string, { healthy: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; num_requests?: number; fails?: number }> }> = {}
+    const mapped: Record<string, { healthy: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
     for (const rule of rules.value) {
       if (rule.upstreams && rule.upstreams.length > 0) {
         let healthy = 0
         let unknown = 0
-        const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; num_requests?: number; fails?: number }> = {}
+        const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> = {}
         for (const upstream of rule.upstreams) {
           const upstreamKey = `${upstream.host}:${upstream.port}`
           
           let isHealthy = false
           let isUnknown = true
+          let isDegraded = false
           let numRequests = 0
           let fails = 0
           
@@ -1266,6 +1269,7 @@ const fetchHealthStatus = async () => {
                 isUnknown = detail.unknown === true
                 if (!isUnknown) {
                   isHealthy = detail.healthy !== false
+                  isDegraded = detail.degraded === true
                 }
                 numRequests = detail.num_requests || 0
                 fails = detail.fails || 0
@@ -1274,9 +1278,9 @@ const fetchHealthStatus = async () => {
             }
           }
           
-          upstreamStatus[upstreamKey] = { healthy: isHealthy, unknown: isUnknown, num_requests: numRequests, fails }
+          upstreamStatus[upstreamKey] = { healthy: isHealthy, unknown: isUnknown, degraded: isDegraded, num_requests: numRequests, fails }
           if (isUnknown) unknown++
-          else if (isHealthy) healthy++
+          else if (isHealthy && !isDegraded) healthy++
         }
         if (rule.caddy_id) {
           mapped[rule.caddy_id] = { healthy, unknown, total: rule.upstreams.length, upstreams: upstreamStatus }
@@ -2301,6 +2305,9 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
+.upstream-degraded {
+  color: var(--el-color-warning);
+}
 .upstream-unknown {
   color: #9ca3af;
   font-size: 12px;

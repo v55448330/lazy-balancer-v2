@@ -1026,6 +1026,7 @@ func (s *CaddyService) GetUpstreamHealth() (map[string]map[string]bool, error) {
 type UpstreamHealthDetail struct {
 	Healthy     bool `json:"healthy"`
 	Unknown     bool `json:"unknown"`
+	Degraded    bool `json:"degraded"`
 	NumRequests int  `json:"num_requests"`
 	Fails       int  `json:"fails"`
 }
@@ -1107,13 +1108,19 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 									detail.Fails = metrics.Fails
 								}
 
-								if observedHealthy, ok := upstreamHealth[dial]; ok {
-									// Caddy reports a definitive health status for this upstream.
-									detail.Healthy = observedHealthy
-								} else if detail.Fails > 0 {
-									// Passive health observed failures.
-									detail.Healthy = false
-								} else {
+							if observedHealthy, ok := upstreamHealth[dial]; ok {
+								// Caddy reports a definitive health status for this upstream.
+								detail.Healthy = observedHealthy
+								// Passive circuit breakers forget failures after the fail
+								// window, so the gauge flaps back to healthy while the
+								// upstream is still erroring; surface that as degraded.
+								if observedHealthy && detail.Fails > 0 {
+									detail.Degraded = true
+								}
+							} else if detail.Fails > 0 {
+								// Passive health observed failures.
+								detail.Healthy = false
+							} else {
 									// No observation from Caddy at all.
 									detail.Unknown = true
 								}
@@ -1218,6 +1225,9 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 							}
 							if observedHealthy, ok := upstreamHealth[dial]; ok {
 								detail.Healthy = observedHealthy
+								if observedHealthy && detail.Fails > 0 {
+									detail.Degraded = true
+								}
 							} else if detail.Fails > 0 {
 								detail.Healthy = false
 							} else {
