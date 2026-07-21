@@ -15,7 +15,7 @@
         <template #empty>
           <el-empty description="暂无操作日志" :image-size="60" />
         </template>
-        <el-table-column prop="created_at" label="时间" width="160" />
+        <el-table-column prop="created_at" label="时间" width="190" />
         <el-table-column label="操作人" width="150">
           <template #default="{ row }">
             <span v-if="row.display_name && row.display_name !== row.username">{{ row.display_name }}（{{ row.username }}）</span>

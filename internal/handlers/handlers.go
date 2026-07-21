@@ -133,10 +133,10 @@ func (h *Handlers) applyCaddyConfigWithRollback() error {
 		// Attempt rollback
 		if rollbackErr := h.caddyService.Rollback(); rollbackErr != nil {
 			log.Printf("CRITICAL: Failed to rollback Caddy config: %v", rollbackErr)
-			return fmt.Errorf("config apply failed and rollback also failed: %v (rollback error: %v)", err, rollbackErr)
+			return fmt.Errorf("配置应用失败且回滚也失败: %v（回滚错误: %v）", err, rollbackErr)
 		}
 
-		return fmt.Errorf("config apply failed, rolled back to previous config: %v", err)
+		return fmt.Errorf("配置应用失败，已回滚到之前的配置: %v", err)
 	}
 
 	// Clear backup after successful apply
@@ -288,11 +288,11 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 	}
 
 	if data.Protocol != "http" && data.Protocol != "tcp" {
-		return fmt.Errorf("invalid protocol: must be http or tcp")
+		return fmt.Errorf("无效的协议：仅支持 http 或 tcp")
 	}
 
 	if data.ListenPort < 1 || data.ListenPort > 65535 {
-		return fmt.Errorf("invalid listen port: must be between 1 and 65535")
+		return fmt.Errorf("无效的监听端口：必须在 1-65535 之间")
 	}
 
 	validStrategies := map[string]bool{
@@ -301,10 +301,10 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		"cookie": true,
 	}
 	if !validStrategies[data.Strategy] {
-		return fmt.Errorf("invalid strategy: must be weighted_round_robin, ip_hash, least_conn, random, first, least_time, or cookie")
+		return fmt.Errorf("无效的负载策略：仅支持 weighted_round_robin / ip_hash / least_conn / random / first / least_time / cookie")
 	}
 	if data.Strategy == "cookie" && data.Protocol != "http" {
-		return fmt.Errorf("cookie strategy is only supported for http rules")
+		return fmt.Errorf("Cookie 粘滞策略仅支持 HTTP 规则")
 	}
 
 	if data.Domain != "" && (data.Protocol == "http" || data.Protocol == "https") {
@@ -315,51 +315,51 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 				continue
 			}
 			if !isValidDomain(d) {
-				return fmt.Errorf("invalid domain format: '%s'", d)
+				return fmt.Errorf("无效的域名格式：'%s'", d)
 			}
 		}
 	}
 
 	if len(data.Upstreams) == 0 {
-		return fmt.Errorf("at least one upstream is required")
+		return fmt.Errorf("至少需要一个上游服务器")
 	}
 
 	enabledUpstreamCount := 0
 	hostPortSeen := make(map[string]bool)
 	for i, u := range data.Upstreams {
 		if u.Host == "" {
-			return fmt.Errorf("upstream #%d: host is required", i+1)
+			return fmt.Errorf("上游 #%d：主机地址不能为空", i+1)
 		}
 		if u.Port < 1 || u.Port > 65535 {
-			return fmt.Errorf("upstream #%d: invalid port %d (must be 1-65535)", i+1, u.Port)
+			return fmt.Errorf("上游 #%d：端口 %d 无效（必须在 1-65535 之间）", i+1, u.Port)
 		}
 		if u.Weight < 0 {
-			return fmt.Errorf("upstream #%d: weight cannot be negative", i+1)
+			return fmt.Errorf("上游 #%d：权重不能为负数", i+1)
 		}
 		if data.Protocol == "http" {
 			if u.Protocol != "" && u.Protocol != "http" && u.Protocol != "https" {
-				return fmt.Errorf("upstream #%d: invalid protocol '%s' (must be http or https)", i+1, u.Protocol)
+				return fmt.Errorf("上游 #%d：协议 '%s' 无效（HTTP 规则仅支持 http/https）", i+1, u.Protocol)
 			}
 		} else {
 			if u.Protocol != "" && u.Protocol != "tcp" && u.Protocol != "tls" {
-				return fmt.Errorf("upstream #%d: invalid protocol '%s' (must be tcp or tls)", i+1, u.Protocol)
+				return fmt.Errorf("上游 #%d：协议 '%s' 无效（TCP 规则仅支持 tcp/tls）", i+1, u.Protocol)
 			}
 		}
 		if u.ProxyProtocol != "" && u.ProxyProtocol != "v1" && u.ProxyProtocol != "v2" {
-			return fmt.Errorf("upstream #%d: invalid proxy protocol '%s' (must be v1 or v2)", i+1, u.ProxyProtocol)
+			return fmt.Errorf("上游 #%d：PROXY 协议 '%s' 无效（仅支持 v1 或 v2）", i+1, u.ProxyProtocol)
 		}
 		if u.MaxConnections < 0 {
-			return fmt.Errorf("upstream #%d: max connections cannot be negative", i+1)
+			return fmt.Errorf("上游 #%d：最大连接数不能为负数", i+1)
 		}
 
 		key := fmt.Sprintf("%s:%d", u.Host, u.Port)
 		if hostPortSeen[key] {
-			return fmt.Errorf("upstream %s:%d is duplicated", u.Host, u.Port)
+			return fmt.Errorf("上游 %s:%d 重复", u.Host, u.Port)
 		}
 		hostPortSeen[key] = true
 
 		if !isValidHost(u.Host) {
-			return fmt.Errorf("upstream #%d: invalid host '%s'", i+1, u.Host)
+			return fmt.Errorf("上游 #%d：主机 '%s' 无效", i+1, u.Host)
 		}
 
 		if u.Enabled {
@@ -368,26 +368,26 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 	}
 
 	if enabledUpstreamCount == 0 {
-		return fmt.Errorf("at least one enabled upstream is required")
+		return fmt.Errorf("至少需要一个启用的上游服务器")
 	}
 
 	if data.DynamicDNS && enabledUpstreamCount > 1 {
-		return fmt.Errorf("dynamic DNS mode supports only one enabled upstream (DNS resolves multiple IPs)")
+		return fmt.Errorf("动态 DNS 模式仅支持一个启用的上游（DNS 会解析出多个 IP）")
 	}
 	if data.DynamicDNS && data.DnsFamily != "ipv4" && data.DnsFamily != "ipv6" && data.DnsFamily != "both" {
-		return fmt.Errorf("invalid dns family '%s' (must be ipv4, ipv6, or both)", data.DnsFamily)
+		return fmt.Errorf("无效的 DNS 协议栈 '%s'（仅支持 ipv4、ipv6 或 both）", data.DnsFamily)
 	}
 
 	if data.HealthCheckPath != "" && !strings.HasPrefix(data.HealthCheckPath, "/") {
-		return fmt.Errorf("health check path must start with /")
+		return fmt.Errorf("健康检查路径必须以 / 开头")
 	}
 
 	if data.EnableTLS && data.TLSSource == "acme_dns" {
 		if data.ACMEConfigID == 0 {
-			return fmt.Errorf("ACME DNS provider is required")
+			return fmt.Errorf("使用 ACME 签发时必须选择 DNS 提供商配置")
 		}
 		if data.Domain == "" {
-			return fmt.Errorf("ACME DNS certificate requires a domain")
+			return fmt.Errorf("ACME DNS 证书需要填写域名")
 		}
 		if err := services.ValidateACMEDomains(data.Domain); err != nil {
 			return err
@@ -395,11 +395,11 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 	}
 
 	if data.HealthCheckInterval < 1 {
-		return fmt.Errorf("health check interval must be >= 1 second")
+		return fmt.Errorf("健康检查间隔必须 ≥ 1 秒")
 	}
 
 	if data.HealthCheckTimeout < 1 {
-		return fmt.Errorf("health check timeout must be >= 1 second")
+		return fmt.Errorf("健康检查超时必须 ≥ 1 秒")
 	}
 
 	tempCaddyID := "validate_" + uniqueID
@@ -412,7 +412,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE)
 		FROM global_config WHERE id = 1
 	`).Scan(&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout, &global.serverTokensHidden); err != nil {
-		return fmt.Errorf("failed to load global config: %v", err)
+		return fmt.Errorf("加载全局配置失败: %v", err)
 	}
 
 	ruleConfig := services.SingleRuleConfig{
@@ -468,10 +468,10 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 
 	routeConfig, routeErr := services.GenerateRouteObject(ruleConfig)
 	if routeErr != nil {
-		return fmt.Errorf("route config generation failed: %v", routeErr)
+		return fmt.Errorf("路由配置生成失败: %v", routeErr)
 	}
 	if mergeErr := h.caddyService.ValidateRouteMergedConfig(serverName, routeConfig, uniqueID+"_merge"); mergeErr != nil {
-		return fmt.Errorf("Caddy configuration validation failed: %v", mergeErr)
+		return fmt.Errorf("Caddy 配置验证失败: %v", mergeErr)
 	}
 
 	if delErr := h.caddyService.DeleteRouteByID(serverName, tempCaddyID); delErr != nil {
@@ -525,19 +525,19 @@ func (h *Handlers) validatePort(protocol string, port int, excludeCaddyID string
 	httpReservedPorts := []int{80, 443}
 
 	if port < 1 || port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535")
+		return fmt.Errorf("端口必须在 1-65535 之间")
 	}
 
 	for _, p := range adminPorts {
 		if port == p {
-			return fmt.Errorf("port %d is reserved for admin", port)
+			return fmt.Errorf("端口 %d 为管理端口，不可使用", port)
 		}
 	}
 
 	if protocol == "tcp" {
 		for _, p := range httpReservedPorts {
 			if port == p {
-				return fmt.Errorf("port %d is reserved for HTTP/HTTPS", p)
+				return fmt.Errorf("端口 %d 为 HTTP/HTTPS 保留端口", p)
 			}
 		}
 	}
@@ -565,11 +565,11 @@ func (h *Handlers) validatePortFromDB(protocol string, port int, excludeCaddyID 
 		}
 	}
 	if err != nil {
-		return fmt.Errorf("database error while validating port: %v", err)
+		return fmt.Errorf("验证端口时数据库错误: %v", err)
 	}
 
 	if count > 0 {
-		return fmt.Errorf("port %d is already in use by another rule", port)
+		return fmt.Errorf("端口 %d 已被其他规则占用", port)
 	}
 
 	return nil
@@ -577,28 +577,28 @@ func (h *Handlers) validatePortFromDB(protocol string, port int, excludeCaddyID 
 
 func (h *Handlers) validateUpstreams(upstreams []models.Upstream) error {
 	if len(upstreams) == 0 {
-		return fmt.Errorf("at least one upstream is required")
+		return fmt.Errorf("至少需要一个上游服务器")
 	}
 
 	hostPortSeen := make(map[string]bool)
 	for i, u := range upstreams {
 		if u.Host == "" {
-			return fmt.Errorf("upstream #%d: host is required", i+1)
+			return fmt.Errorf("上游 #%d：主机地址不能为空", i+1)
 		}
 		if u.Port < 1 || u.Port > 65535 {
-			return fmt.Errorf("upstream %s:%d: invalid port", u.Host, u.Port)
+			return fmt.Errorf("上游 %s:%d：端口无效", u.Host, u.Port)
 		}
 
 		// Check for duplicate host:port
 		key := fmt.Sprintf("%s:%d", u.Host, u.Port)
 		if hostPortSeen[key] {
-			return fmt.Errorf("upstream %s:%d is duplicated", u.Host, u.Port)
+			return fmt.Errorf("上游 %s:%d 重复", u.Host, u.Port)
 		}
 		hostPortSeen[key] = true
 
 		// Validate host format - must be valid IP or domain
 		if !isValidHost(u.Host) {
-			return fmt.Errorf("upstream %s:%d: invalid host format '%s' (must be IP address or domain name)", u.Host, u.Port, u.Host)
+			return fmt.Errorf("上游 %s:%d：主机 '%s' 格式无效（仅支持 IP 地址或域名）", u.Host, u.Port, u.Host)
 		}
 	}
 

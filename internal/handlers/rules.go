@@ -151,7 +151,7 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	}
 	if err != nil {
 		log.Printf("GetRule scan error for caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read rule"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
 		return
 	}
 
@@ -212,7 +212,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 
 	if err != nil {
 		log.Printf("GetRuleCaddyConfig: query/scan error for rule caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get rule: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取规则失败: " + err.Error()})
 		return
 	}
 
@@ -221,7 +221,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		FROM upstreams WHERE rule_id = ? AND enabled = 1
 	`, caddyID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get upstreams"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取上游服务器失败"})
 		return
 	}
 	defer upstreamRows.Close()
@@ -436,7 +436,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 
 	if req.ListenPort <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Listen port must be greater than 0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "监听端口必须大于 0"})
 		return
 	}
 
@@ -481,7 +481,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	// Validate TLS certificate if provided (manual source only)
 	if req.EnableTLS && req.TLSSource == "manual" {
 		if err := validateTLSCertificate(req.TLSCert, req.TLSKey); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "TLS certificate validation failed: " + err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "TLS 证书校验失败: " + err.Error()})
 			return
 		}
 	}
@@ -491,15 +491,15 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 
 	if req.RequestBodyMaxSizeMB < 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "request_body max size must be >= 0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求体大小限制不能为负数"})
 		return
 	}
 	if req.UpstreamKeepaliveTimeout < 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "upstream keepalive timeout must be >= 0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "上游 keepalive 超时不能为负数"})
 		return
 	}
 	if req.ServerTokensHidden < 0 || req.ServerTokensHidden > 2 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden must be 0, 1, or 2"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden 必须为 0、1 或 2"})
 		return
 	}
 
@@ -672,7 +672,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			log.Printf("CreateRule Caddy apply failed for TCP rule caddy_id=%s: %v, rolling back database", caddyID, err)
 			db.DB.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID)
 			db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID)
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy apply failed: " + err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置应用失败: " + err.Error()})
 			return
 		}
 	} else {
@@ -681,7 +681,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			log.Printf("CreateRule failed to generate route config for caddy_id=%s: %v, rolling back database", caddyID, err)
 			db.DB.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID)
 			db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID)
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Failed to generate route config: " + err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "路由配置生成失败: " + err.Error()})
 			return
 		}
 
@@ -729,7 +729,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 				log.Printf("CreateRule enqueueing cert job for caddy_id=%s domain=%s ca_provider_id=%d", caddyID, req.Domain, req.CAProviderID)
 				if err := services.CreateOrRequeueCertJob(caddyID, req.Domain, req.CAProviderID, qm); err != nil {
 					log.Printf("Auto cert enqueue failed for %s: %v", req.Domain, err)
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to enqueue certificate job: " + err.Error()})
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书签发任务失败: " + err.Error()})
 					return
 				}
 			}
@@ -739,7 +739,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	log.Printf("Rule created with caddy_id=%s", caddyID)
 	recordAudit(c, "创建", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), fmt.Sprintf("端口：%d", req.ListenPort), req.Domain))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_create"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
-	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "Rule created", Data: gin.H{"caddy_id": caddyID}})
+	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "规则已创建", Data: gin.H{"caddy_id": caddyID}})
 }
 
 func (h *Handlers) UpdateRule(c *gin.Context) {
@@ -749,7 +749,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	var req models.UpdateRuleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Printf("UpdateRule bind error for caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request: " + err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的请求: " + err.Error()})
 		return
 	}
 
@@ -939,15 +939,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	if req.RequestBodyMaxSizeMB != nil && *req.RequestBodyMaxSizeMB < 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "request_body max size must be >= 0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求体大小限制不能为负数"})
 		return
 	}
 	if req.UpstreamKeepaliveTimeout != nil && *req.UpstreamKeepaliveTimeout < 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "upstream keepalive timeout must be >= 0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "上游 keepalive 超时不能为负数"})
 		return
 	}
 	if req.ServerTokensHidden != nil && (*req.ServerTokensHidden < 0 || *req.ServerTokensHidden > 2) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden must be 0, 1, or 2"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden 必须为 0、1 或 2"})
 		return
 	}
 
@@ -964,7 +964,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 		if tlsCert != "" && tlsKey != "" {
 			if err := validateTLSCertificate(tlsCert, tlsKey); err != nil {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "TLS certificate validation failed: " + err.Error()})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "TLS 证书校验失败: " + err.Error()})
 				return
 			}
 		}
@@ -1136,7 +1136,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	routeConfig, err := services.GenerateRouteObject(ruleConfig)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Failed to generate route config: " + err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "路由配置生成失败: " + err.Error()})
 		return
 	}
 
@@ -1243,7 +1243,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				}
 			}
 			log.Printf("UpdateRule Caddy update failed for TCP rule caddy_id=%s: %v, restored previous config", caddyID, err)
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy update failed: " + err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置更新失败: " + err.Error()})
 			return
 		}
 	} else {
@@ -1252,7 +1252,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				h.caddyService.SetConfigByID(caddyID, oldRouteConfig)
 			}
 			log.Printf("UpdateRule Caddy update failed for caddy_id=%s: %v, restored previous route", caddyID, err)
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy update failed: " + err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置更新失败: " + err.Error()})
 			return
 		}
 
@@ -1321,7 +1321,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	log.Printf("Rule %s updated", caddyID)
 	recordAudit(c, "更新", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), domain, fmt.Sprintf("TLS：%s", boolText(req.EnableTLS))))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_update"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule updated"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新"})
 }
 
 func (h *Handlers) DeleteRule(c *gin.Context) {
@@ -1439,7 +1439,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 
 	recordAudit(c, "删除", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("协议：%s", protocol), fmt.Sprintf("端口：%d", listenPort), domain))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_delete"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule deleted"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已删除"})
 }
 
 func (h *Handlers) DuplicateRule(c *gin.Context) {
@@ -1450,24 +1450,25 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	var enableActiveHealthCheck bool
 	var tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
 	err := db.DB.QueryRow(`
-		SELECT caddy_id, name, protocol, domain, listen_port, strategy, dynamic_dns,
+		SELECT caddy_id, name, COALESCE(description,''), protocol, domain, listen_port, strategy, dynamic_dns,
+		       COALESCE(enable_dns_server,0), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval, health_check_timeout,
 		       health_check_unhealthy_threshold, health_check_healthy_threshold,
 		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
-		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
-		       enable_tls, COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), tls_cert, tls_key,
+		       request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
+		       enable_tls, COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), tls_cert, tls_key,
 		       tls_http_redirect, COALESCE(enable_compress,1), COALESCE(compress_types,'gzip,zstd'), enabled, created_by,
-		       COALESCE(host_header,''), COALESCE(dns_server,'')
+		       COALESCE(host_header,''), COALESCE(dns_server,''), COALESCE(log_enabled,0)
 		FROM lb_rules WHERE caddy_id = ?
 	`, caddyID).Scan(
-		&rule.CaddyID, &rule.Name, &rule.Protocol, &rule.Domain, &rule.ListenPort, &rule.Strategy,
-		&rule.DynamicDNS, &rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout,
+		&rule.CaddyID, &rule.Name, &rule.Description, &rule.Protocol, &rule.Domain, &rule.ListenPort, &rule.Strategy,
+		&rule.DynamicDNS, &rule.EnableDnsServer, &rule.DnsFamily, &rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout,
 		&rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
 		&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
 		&rule.RequestBodyMaxSizeMB, &rule.UpstreamKeepaliveTimeout, &rule.ServerTokensHidden,
-		&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.TLSCert, &rule.TLSKey,
+		&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.CAProviderID, &rule.TLSCert, &rule.TLSKey,
 		&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.CreatedBy,
-		&rule.HostHeader, &rule.DnsServer,
+		&rule.HostHeader, &rule.DnsServer, &rule.LogEnabled,
 	)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
@@ -1480,6 +1481,10 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	rule.TCPTryInterval = tcpTryInterval
 
 	userID, _ := c.Get("user_id")
+	var userIDInt int64
+	if userID != nil {
+		userIDInt = int64(userID.(float64))
+	}
 
 	newCaddyID, err := services.GenerateCaddyID()
 	if err != nil {
@@ -1489,32 +1494,32 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	result, err := db.DB.Exec(`
-		INSERT INTO lb_rules (name, protocol, domain, listen_port, strategy, dynamic_dns, dns_server,
+		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
-			enable_tls, tls_source, acme_config_id, tls_cert, tls_key,
-			tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, caddy_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, rule.Name+" (Copy)", rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
-		rule.DynamicDNS, rule.DnsServer, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
+			enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key,
+			tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, log_enabled, caddy_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, rule.Name+" (Copy)", rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
+		rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 		rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
 		rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPTryDuration, rule.TCPTryInterval,
 		rule.RequestBodyMaxSizeMB, rule.UpstreamKeepaliveTimeout, rule.ServerTokensHidden,
-		rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.TLSCert, rule.TLSKey,
-		rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, 0, userID, userID,
-		now, now, rule.HostHeader, newCaddyID,
+		rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.CAProviderID, rule.TLSCert, &rule.TLSKey,
+		rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, 0, userIDInt, userIDInt,
+		now, now, rule.HostHeader, rule.LogEnabled, newCaddyID,
 	)
 	if err != nil {
 		log.Printf("Failed to duplicate rule %s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to duplicate rule: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "复制规则失败: " + err.Error()})
 		return
 	}
 
 	_ = result
 
-	db.DB.Exec("UPDATE lb_rules SET updated_by = ? WHERE caddy_id = ?", userID, newCaddyID)
+	db.DB.Exec("UPDATE lb_rules SET updated_by = ? WHERE caddy_id = ?", userIDInt, newCaddyID)
 
 	upstreamRows, err := db.DB.Query(`
 		SELECT host, port, weight, domain, dynamic_dns, enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'')
@@ -1543,7 +1548,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	}
 
 	recordAudit(c, "复制", "负载均衡规则", services.FormatAuditDetail(fmt.Sprintf("源规则：%s", caddyID), fmt.Sprintf("新规则：%s", newCaddyID), rule.Name))
-	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "Rule duplicated", Data: gin.H{"caddy_id": newCaddyID}})
+	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "规则已复制", Data: gin.H{"caddy_id": newCaddyID}})
 }
 
 func (h *Handlers) EnableRule(c *gin.Context) {
@@ -1649,7 +1654,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 
 	recordAudit(c, "启用", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已启用"))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_enable"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule enabled"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已启用"})
 }
 
 func (h *Handlers) DisableRule(c *gin.Context) {
@@ -1689,7 +1694,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 
 	recordAudit(c, "禁用", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已禁用"))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_disable"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Rule disabled"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已禁用"})
 }
 
 func (h *Handlers) GetRuleLogs(c *gin.Context) {
