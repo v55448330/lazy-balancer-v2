@@ -720,7 +720,7 @@
                   </template>
                 </el-table-column>
                 <el-table-column label="权重" width="70">
-                  <template #default="{ row }">{{ weightPercent(ruleConfig?.upstreams, row) }}%</template>
+                  <template #default="{ row }">{{ weightPercent(wizardForm.upstreams, row) }}%</template>
                 </el-table-column>
                 <el-table-column prop="max_connections" label="最大连接" width="90" />
                 <el-table-column prop="proxy_protocol" label="PROXY" width="80" />
@@ -1150,6 +1150,7 @@ const caProviders = ref<Array<{ id: number; name: string; enabled: boolean }>>([
 const enabledCAProviders = computed(() => caProviders.value.filter(p => p.enabled))
 const globalConfig = ref<{ default_ca_provider_id?: number }>({})
 const healthStatus = ref<Record<string, { healthy: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }>>({})
+let healthPollTimer: ReturnType<typeof setInterval> | null = null
 let certJobPollTimer: ReturnType<typeof setInterval> | null = null
 
 // Config viewing
@@ -2224,6 +2225,7 @@ onMounted(() => {
   fetchCAProviders()
   fetchGlobalConfig()
   fetchHealthStatus()
+  healthPollTimer = setInterval(fetchHealthStatus, 15000)
   certJobPollTimer = setInterval(() => {
     if (rules.value.some(r => r.tls_source === 'acme_dns')) {
       fetchCertJobs()
@@ -2232,6 +2234,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (healthPollTimer) {
+    clearInterval(healthPollTimer)
+    healthPollTimer = null
+  }
   if (certJobPollTimer) {
     clearInterval(certJobPollTimer)
     certJobPollTimer = null
