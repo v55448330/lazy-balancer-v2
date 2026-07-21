@@ -31,6 +31,7 @@ var configFieldSections = map[string]string{
 
 	"log_level":              "基础设置",
 	"cert_job_log_size_mb":   "基础设置",
+	"runtime_log_size_mb":    "基础设置",
 	"audit_retention_months": "基础设置",
 	"jwt_expire_minutes":     "基础设置",
 	"timezone":               "基础设置",

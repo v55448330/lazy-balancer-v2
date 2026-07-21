@@ -128,6 +128,7 @@ type GlobalConfig struct {
 	UpstreamKeepaliveTimeout int          `json:"upstream_keepalive_timeout"`
 	ServerTokensHidden       bool         `json:"server_tokens_hidden"`
 	CertJobLogSizeMB         int          `json:"cert_job_log_size_mb"`
+	RuntimeLogSizeMB         int          `json:"runtime_log_size_mb"`
 	AccessLogJSON            bool         `json:"access_log_json"`
 	AccessLogFormat          string       `json:"access_log_format"`
 	AuditRetentionMonths     int          `json:"audit_retention_months"`
@@ -405,6 +406,7 @@ type UpdateConfigRequest struct {
 	UpstreamKeepaliveTimeout *int    `json:"upstream_keepalive_timeout"`
 	ServerTokensHidden       *bool   `json:"server_tokens_hidden"`
 	CertJobLogSizeMB         *int    `json:"cert_job_log_size_mb"`
+	RuntimeLogSizeMB         *int    `json:"runtime_log_size_mb"`
 	AccessLogJSON            *bool   `json:"access_log_json"`
 	AccessLogFormat          *string `json:"access_log_format"`
 	AuditRetentionMonths     *int    `json:"audit_retention_months"`

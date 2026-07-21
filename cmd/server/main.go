@@ -35,7 +35,7 @@ func main() {
 	var logWriter io.Writer = os.Stdout
 	var runtimeLogFile string
 	if logFile := os.Getenv("LOG_FILE"); logFile != "" {
-		if w, err := services.NewRotatingFileWriter(logFile, 100); err == nil {
+		if w, err := services.NewRotatingFileWriter(logFile); err == nil {
 			logWriter = io.MultiWriter(os.Stdout, w)
 			defer w.Close()
 			runtimeLogFile = logFile

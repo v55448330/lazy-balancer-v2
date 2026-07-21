@@ -7,24 +7,45 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
 )
 
+var runtimeLogSizeMB atomic.Int64
+
+func init() {
+	runtimeLogSizeMB.Store(100)
+	go func() {
+		refresh := func() {
+			if db.DB == nil {
+				return
+			}
+			var mb int
+			if err := db.DB.QueryRow("SELECT COALESCE(runtime_log_size_mb,100) FROM global_config WHERE id=1").Scan(&mb); err == nil && mb > 0 {
+				runtimeLogSizeMB.Store(int64(mb))
+			}
+		}
+		refresh()
+		for range time.Tick(30 * time.Second) {
+			refresh()
+		}
+	}()
+}
+
 // RotatingFileWriter writes to a log file and rotates it once it exceeds the
 // size limit. Rotated files are suffixed with a timestamp and are subject to
 // retention cleanup (see StartRuntimeLogCleanup).
 type RotatingFileWriter struct {
-	path    string
-	maxSize int64
-	mu      sync.Mutex
-	file    *os.File
-	size    int64
+	path string
+	mu   sync.Mutex
+	file *os.File
+	size int64
 }
 
-func NewRotatingFileWriter(path string, maxSizeMB int64) (*RotatingFileWriter, error) {
-	w := &RotatingFileWriter{path: path, maxSize: maxSizeMB * 1024 * 1024}
+func NewRotatingFileWriter(path string) (*RotatingFileWriter, error) {
+	w := &RotatingFileWriter{path: path}
 	if err := w.open(); err != nil {
 		return nil, err
 	}
@@ -48,7 +69,7 @@ func (w *RotatingFileWriter) open() error {
 func (w *RotatingFileWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.size+int64(len(p)) > w.maxSize {
+	if w.size+int64(len(p)) > runtimeLogSizeMB.Load()*1024*1024 {
 		if err := w.rotateLocked(); err != nil {
 			log.Printf("日志轮转失败: %v", err)
 		}

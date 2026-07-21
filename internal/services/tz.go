@@ -31,6 +31,10 @@ func refreshLocation() {
 	}
 	if loc, err := time.LoadLocation(tz); err == nil {
 		currentLocation.Store(loc)
+		// Keep the process-local timezone in sync so time.Now() users (e.g.
+		// runtime log rotation filenames) follow the configured timezone
+		// without a restart.
+		time.Local = loc
 	}
 }
 

@@ -38,6 +38,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       COALESCE(upstream_keepalive_timeout,0) as upstream_keepalive_timeout,
 		       COALESCE(server_tokens_hidden,FALSE) as server_tokens_hidden,
 		       COALESCE(cert_job_log_size_mb,10) as cert_job_log_size_mb,
+		       COALESCE(runtime_log_size_mb,100) as runtime_log_size_mb,
 		       COALESCE(access_log_json,TRUE) as access_log_json,
 		       COALESCE(access_log_format,'') as access_log_format,
 		       COALESCE(audit_retention_months,3) as audit_retention_months,
@@ -52,7 +53,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.LogLevel,
 		&cfg.CaddyLogPath, &cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
 		&cfg.RequestBodyMaxSizeMB, &cfg.HTTPReadTimeout, &cfg.HTTPWriteTimeout, &cfg.HTTPIdleTimeout,
-		&cfg.UpstreamKeepaliveTimeout, &cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.JWTExpireMinutes, &cfg.Timezone,
+		&cfg.UpstreamKeepaliveTimeout, &cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.RuntimeLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.JWTExpireMinutes, &cfg.Timezone,
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	if err != nil {
@@ -151,7 +152,11 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	}
 
 	if req.CertJobLogSizeMB != nil && *req.CertJobLogSizeMB <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_job_log_size_mb must be greater than 0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书日志大小必须大于 0"})
+		return
+	}
+	if req.RuntimeLogSizeMB != nil && *req.RuntimeLogSizeMB <= 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "运行日志大小必须大于 0"})
 		return
 	}
 
@@ -195,6 +200,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				upstream_keepalive_timeout = COALESCE(?, upstream_keepalive_timeout),
 				server_tokens_hidden = COALESCE(?, server_tokens_hidden),
 				cert_job_log_size_mb = COALESCE(?, cert_job_log_size_mb),
+				runtime_log_size_mb = COALESCE(?, runtime_log_size_mb),
 				access_log_json = COALESCE(?, access_log_json),
 				access_log_format = COALESCE(?, access_log_format),
 				audit_retention_months = COALESCE(?, audit_retention_months),
@@ -205,7 +211,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.LogLevel,
 		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
-		req.UpstreamKeepaliveTimeout, req.ServerTokensHidden, req.CertJobLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone)
+		req.UpstreamKeepaliveTimeout, req.ServerTokensHidden, req.CertJobLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败: " + err.Error()})
 		return

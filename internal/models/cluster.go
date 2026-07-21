@@ -51,6 +51,7 @@ type ClusterBasicSettings struct {
 	AccessLogJSON            bool   `json:"access_log_json"`
 	AccessLogFormat          string `json:"access_log_format"`
 	CertJobLogSizeMB         int    `json:"cert_job_log_size_mb"`
+	RuntimeLogSizeMB         int    `json:"runtime_log_size_mb"`
 	AuditRetentionMonths     int    `json:"audit_retention_months"`
 	JWTExpireMinutes         int    `json:"jwt_expire_minutes"`
 	Timezone                 string `json:"timezone"`

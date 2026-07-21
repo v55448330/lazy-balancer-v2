@@ -27,6 +27,7 @@ type configSnapshot struct {
 	AccessLogJSON            bool
 	AccessLogFormat          string
 	CertJobLogSizeMB         int
+	RuntimeLogSizeMB         int
 	AuditRetentionMonths     int
 	JWTExpireMinutes         int
 }
@@ -48,7 +49,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		COALESCE(http_read_timeout,60), COALESCE(http_write_timeout,60), COALESCE(http_idle_timeout,120),
 		COALESCE(upstream_keepalive_timeout,60), COALESCE(server_tokens_hidden,FALSE),
 		COALESCE(access_log_json,TRUE), COALESCE(access_log_format,''),
-		COALESCE(cert_job_log_size_mb,10), COALESCE(audit_retention_months,3), COALESCE(jwt_expire_minutes,20)
+		COALESCE(cert_job_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3), COALESCE(jwt_expire_minutes,20)
 		FROM global_config WHERE id=1`).Scan(
 		&old.ACMEEmail, &old.DNSProvider, &old.DNSCredentials,
 		&old.CertExpiryDays, &old.CertRenewalDays, &old.CertRenewalAttempts,
@@ -58,7 +59,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		&old.HTTPReadTimeout, &old.HTTPWriteTimeout, &old.HTTPIdleTimeout,
 		&old.UpstreamKeepaliveTimeout, &old.ServerTokensHidden,
 		&old.AccessLogJSON, &old.AccessLogFormat,
-		&old.CertJobLogSizeMB, &old.AuditRetentionMonths, &old.JWTExpireMinutes)
+		&old.CertJobLogSizeMB, &old.RuntimeLogSizeMB, &old.AuditRetentionMonths, &old.JWTExpireMinutes)
 	return old, err
 }
 
@@ -90,6 +91,7 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 	add("audit_retention_months", "日志保留", req.AuditRetentionMonths != nil && *req.AuditRetentionMonths != old.AuditRetentionMonths)
 	add("jwt_expire_minutes", "登录过期时间", req.JWTExpireMinutes != nil && *req.JWTExpireMinutes != old.JWTExpireMinutes)
 	add("cert_job_log_size_mb", "证书日志大小", req.CertJobLogSizeMB != nil && *req.CertJobLogSizeMB != old.CertJobLogSizeMB)
+	add("runtime_log_size_mb", "运行日志大小", req.RuntimeLogSizeMB != nil && *req.RuntimeLogSizeMB != old.RuntimeLogSizeMB)
 	add("caddy_log_level", "Caddy日志级别", req.CaddyLogLevel != nil && *req.CaddyLogLevel != old.CaddyLogLevel)
 	add("caddy_log_size_mb", "日志大小", req.CaddyLogSizeMB != nil && *req.CaddyLogSizeMB != old.CaddyLogSizeMB)
 	add("request_body_max_size_mb", "请求体大小", req.RequestBodyMaxSizeMB != nil && *req.RequestBodyMaxSizeMB != old.RequestBodyMaxSizeMB)

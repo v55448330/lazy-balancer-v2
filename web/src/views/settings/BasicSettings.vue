@@ -21,11 +21,15 @@
           </el-form-item>
           <el-form-item label="证书日志大小">
             <el-input-number v-model="settings.cert_job_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
-            <el-text type="info" size="small" class="tip-inline">MB，单个证书签发日志文件达到该大小后滚动</el-text>
+            <el-text type="info" size="small" class="tip-inline">MB，单个证书签发日志达到该大小后滚动，保留 5 份（建议 10-50）</el-text>
+          </el-form-item>
+          <el-form-item label="运行日志大小">
+            <el-input-number v-model="settings.runtime_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
+            <el-text type="info" size="small" class="tip-inline">MB，运行日志达到该大小后轮转（建议 50-200）</el-text>
           </el-form-item>
           <el-form-item label="日志保留">
             <el-input-number v-model="settings.audit_retention_months" :min="1" :max="12" controls-position="right" style="width: 120px;" />
-            <el-text type="info" size="small" class="tip-inline">个月，操作日志保留时间，超期自动清理（最短 1 个月）</el-text>
+            <el-text type="info" size="small" class="tip-inline">个月，操作日志与运行日志保留时长，超期自动清理（建议 3-6）</el-text>
           </el-form-item>
           <el-form-item label="登录过期">
             <el-input-number v-model="settings.jwt_expire_minutes" :min="5" :max="1440" controls-position="right" style="width: 120px;" />
@@ -53,7 +57,7 @@
               <el-option label="Australia/Sydney (UTC+10)" value="Australia/Sydney" />
               <el-option label="UTC" value="UTC" />
             </el-select>
-            <el-text type="info" size="small" class="tip-inline">影响所有日志时间戳和证书时间；修改后需重启容器生效</el-text>
+            <el-text type="info" size="small" class="tip-inline">影响所有日志时间戳和证书时间，修改即时生效；仅 Caddy 日志时间戳需在系统信息中重启服务</el-text>
           </el-form-item>
           <el-form-item label="运行日志">
             <el-button size="small" :icon="View" @click="openAppLogDialog">查看日志</el-button>
@@ -94,6 +98,10 @@
             <el-button size="small" :disabled="backupDisabled" :loading="exporting" @click="exportBackup">导出</el-button>
             <el-button size="small" type="warning" plain :disabled="backupDisabled" @click="triggerImport">导入</el-button>
           </div>
+        </div>
+        <div class="info-item">
+          <span class="info-label">重启服务</span>
+          <el-button size="small" type="danger" plain :disabled="isReadOnly" :loading="restarting" @click="handleRestart">重启</el-button>
         </div>
         <el-text type="info" size="small" class="backup-tip">备份包含全部配置、规则、用户、密钥与证书任务；导入将覆盖当前配置，仅主节点可用</el-text>
       </div>
@@ -331,6 +339,7 @@ const confirmImport = async (): Promise<void> => {
 interface BasicSettingsConfig {
   log_level: string
   cert_job_log_size_mb: number
+  runtime_log_size_mb: number
   audit_retention_months: number
   jwt_expire_minutes: number
   timezone: string
@@ -350,6 +359,24 @@ const emit = defineEmits<{
 }>()
 
 const saving = ref(false)
+const restarting = ref(false)
+
+const handleRestart = async () => {
+  if (isReadOnly.value || restarting.value) return
+  await ElMessageBox.confirm('重启期间服务短暂不可用（约 10 秒），容器将自动拉起。确认重启？', '重启服务', {
+    confirmButtonText: '重启',
+    cancelButtonText: '取消',
+    type: 'warning',
+  })
+  restarting.value = true
+  try {
+    await request.post('/system/restart')
+    ElMessage.success('服务正在重启，稍后自动刷新页面')
+    setTimeout(() => window.location.reload(), 10000)
+  } finally {
+    restarting.value = false
+  }
+}
 
 const handleSave = async () => {
   if (isReadOnly.value) return
@@ -359,6 +386,7 @@ const handleSave = async () => {
     const payload = {
       log_level: settings.value.log_level,
       cert_job_log_size_mb: settings.value.cert_job_log_size_mb,
+      runtime_log_size_mb: settings.value.runtime_log_size_mb,
       audit_retention_months: settings.value.audit_retention_months,
       jwt_expire_minutes: settings.value.jwt_expire_minutes,
       timezone: settings.value.timezone,

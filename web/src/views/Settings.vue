@@ -62,6 +62,7 @@ interface SettingsConfig {
   upstream_keepalive_timeout: number
   server_tokens_hidden: boolean
   cert_job_log_size_mb: number
+  runtime_log_size_mb: number
   access_log_json: boolean
   access_log_format: string
   audit_retention_months: number
@@ -90,6 +91,7 @@ const settings = ref<SettingsConfig>({
   upstream_keepalive_timeout: 60,
   server_tokens_hidden: false,
   cert_job_log_size_mb: 10,
+  runtime_log_size_mb: 100,
   access_log_json: true,
   access_log_format: 'request>headers -> delete\nresp_headers -> delete\nrequest>tls -> delete\nrequest>remote_port -> delete\nlevel -> delete\nlogger -> delete\nmsg -> delete\nrequest>remote_ip -> src\nrequest>client_ip -> src_ip\nrequest>method -> http_method\nrequest>host -> server\nrequest>uri -> uri_path\nrequest>proto -> protocol\nuser_id -> user\nts -> time_local\nsize -> bytes_out\nbytes_read -> bytes_in\nduration -> request_time',
   audit_retention_months: 3,
@@ -139,6 +141,7 @@ const fetchSettings = async () => {
         upstream_keepalive_timeout: res.data.upstream_keepalive_timeout ?? 60,
         server_tokens_hidden: res.data.server_tokens_hidden ?? false,
         cert_job_log_size_mb: res.data.cert_job_log_size_mb ?? 10,
+        runtime_log_size_mb: res.data.runtime_log_size_mb ?? 100,
         access_log_json: res.data.access_log_json ?? true,
         access_log_format: res.data.access_log_format || settings.value.access_log_format,
         audit_retention_months: res.data.audit_retention_months ?? 3,

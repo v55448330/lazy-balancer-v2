@@ -5,12 +5,25 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
+
+// RestartService exits the process after responding; the container's
+// restart policy brings the service back up (used to apply process-level
+// settings such as the Caddy log timezone).
+func (h *Handlers) RestartService(c *gin.Context) {
+	recordAudit(c, "重启", "系统", "用户触发服务重启")
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "服务正在重启"})
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
+}
 
 func (h *Handlers) GetSystemInfo(c *gin.Context) {
 	info := models.SystemInfo{
