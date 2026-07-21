@@ -83,7 +83,7 @@
             <el-icon><Connection /></el-icon>
             <span>DNS 提供商配置</span>
           </div>
-          <el-button type="primary" :disabled="isReadOnly" @click="openConfigDialog()">
+          <el-button type="primary" size="small" :disabled="isReadOnly" @click="openConfigDialog()">
             <el-icon><Plus /></el-icon>
             <span class="btn-text">添加</span>
           </el-button>
