@@ -425,9 +425,9 @@
                   </el-select>
                 </template>
               </el-table-column>
-              <el-table-column label="权重" width="100">
-                <template #default="{ row }">
-                  <el-input-number v-model="row.weight" :min="1" :max="9999" size="small" controls-position="right" class="upstream-input-small" />
+              <el-table-column label="权重 %" width="110">
+                <template #default="{ row, $index }">
+                  <el-input-number v-model="row.weight" :min="0" :max="100" size="small" controls-position="right" class="upstream-input-small" :disabled="!row.enabled" @change="onWeightChange($index)" />
                 </template>
               </el-table-column>
               <el-table-column label="最大连接" width="120">
@@ -445,8 +445,8 @@
                 </template>
               </el-table-column>
               <el-table-column label="启用" width="60" align="center">
-                <template #default="{ row }">
-                  <el-switch v-model="row.enabled" size="small" />
+                <template #default="{ row, $index }">
+                  <el-switch v-model="row.enabled" size="small" @change="onWeightChange($index)" />
                 </template>
               </el-table-column>
               <el-table-column width="50" align="center">
@@ -719,7 +719,9 @@
                     {{ row.protocol || 'http' }}
                   </template>
                 </el-table-column>
-                <el-table-column prop="weight" label="权重" width="70" />
+                <el-table-column label="权重" width="70">
+                  <template #default="{ row }">{{ weightPercent(ruleConfig?.upstreams, row) }}%</template>
+                </el-table-column>
                 <el-table-column prop="max_connections" label="最大连接" width="90" />
                 <el-table-column prop="proxy_protocol" label="PROXY" width="80" />
                 <el-table-column prop="enabled" label="状态" width="70">
@@ -810,7 +812,9 @@
               <el-tag size="small" :type="row.protocol === 'https' ? 'warning' : 'primary'">{{ row.protocol || 'http' }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="weight" label="权重" align="center" />
+          <el-table-column label="权重" align="center">
+            <template #default="{ row }">{{ weightPercent(ruleConfig?.upstreams, row) }}%</template>
+          </el-table-column>
           <el-table-column prop="max_connections" label="最大连接" align="center" />
           <el-table-column prop="proxy_protocol" label="PROXY" align="center" />
           <el-table-column prop="enabled" label="状态" align="center">
@@ -1665,6 +1669,7 @@ const openWizard = (rule?: Rule) => {
       enabled: rule.enabled,
       log_enabled: (rule as any).log_enabled || false,
     })
+    weightsToPercent(wizardForm.upstreams)
   } else {
     editingRule.value = null
     Object.assign(wizardForm, {
@@ -1713,12 +1718,90 @@ const resetWizard = () => {
   currentStep.value = 0
 }
 
+// Weights are shown and edited as percentages of enabled upstreams; the
+// interlock keeps the enabled total at 100 so values stay meaningful.
+const onWeightChange = (changedIdx: number) => {
+  const rows = wizardForm.upstreams
+  if (!rows.length) return
+  const enabled = rows.map((r, i) => ({ r, i })).filter(({ r }) => r.enabled)
+  if (enabled.length === 0) return
+  const changed = rows[changedIdx]
+  if (changed && !changed.enabled) {
+    // Disabled a row: redistribute its share across the remaining enabled rows.
+    changed.weight = 0
+  }
+  const anchor = enabled.find(({ i }) => i === changedIdx)
+  const others = enabled.filter(({ i }) => i !== changedIdx)
+  if (others.length === 0) {
+    if (anchor) anchor.r.weight = 100
+    return
+  }
+  const anchorVal = anchor ? Math.min(100, Math.max(0, anchor.r.weight || 0)) : 0
+  if (anchor) anchor.r.weight = anchorVal
+  const remaining = 100 - anchorVal
+  const othersSum = others.reduce((sum, { r }) => sum + (r.weight || 0), 0)
+  if (othersSum === 0) {
+    const base = Math.floor(remaining / others.length)
+    others.forEach(({ r }, k) => {
+      r.weight = k === 0 ? remaining - base * (others.length - 1) : base
+    })
+  } else {
+    let acc = 0
+    others.forEach(({ r }, k) => {
+      if (k === others.length - 1) {
+        r.weight = remaining - acc
+      } else {
+        const v = Math.round(((r.weight || 0) / othersSum) * remaining)
+        r.weight = v
+        acc += v
+      }
+    })
+  }
+}
+
+const weightsToPercent = (upstreams: any[]) => {
+  const enabled = upstreams.filter(u => u.enabled)
+  const sum = enabled.reduce((s, u) => s + (u.weight || 0), 0)
+  if (enabled.length === 0) return
+  if (sum === 0) {
+    const base = Math.floor(100 / enabled.length)
+    enabled.forEach((u, k) => { u.weight = k === 0 ? 100 - base * (enabled.length - 1) : base })
+    return
+  }
+  let acc = 0
+  enabled.forEach((u, k) => {
+    if (k === enabled.length - 1) {
+      u.weight = 100 - acc
+    } else {
+      const v = Math.round(((u.weight || 0) / sum) * 100)
+      u.weight = v
+      acc += v
+    }
+  })
+}
+
+const weightPercent = (upstreams: any[] | undefined, row: any): number => {
+  if (!upstreams?.length) return 0
+  const sum = upstreams.reduce((s, u) => s + (u.weight || 0), 0)
+  if (sum <= 0) return 0
+  return Math.round(((row.weight || 0) / sum) * 100)
+}
+
 const addUpstream = () => {
-  wizardForm.upstreams.push(defaultUpstream(wizardForm.protocol === 'tcp' ? 'tcp' : 'http'))
+  const upstream = defaultUpstream(wizardForm.protocol === 'tcp' ? 'tcp' : 'http')
+  upstream.weight = 0
+  wizardForm.upstreams.push(upstream)
+  if (wizardForm.upstreams.length === 1) {
+    upstream.weight = 100
+  }
 }
 
 const removeUpstream = (index: number) => {
   wizardForm.upstreams.splice(index, 1)
+  const lastEnabled = wizardForm.upstreams.findIndex(u => u.enabled)
+  if (lastEnabled >= 0) {
+    onWeightChange(lastEnabled)
+  }
 }
 
 const nextStep = () => {
