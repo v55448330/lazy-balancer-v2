@@ -1925,7 +1925,7 @@ const submitWizard = async () => {
   try {
     const validUpstreams = wizardForm.upstreams.filter(u => u.host && u.port).map(u => ({
       ...u,
-      weight: u.weight || 100,
+      weight: u.weight ?? 100,
       dynamic_dns: wizardForm.dynamic_dns,
       max_connections: u.max_connections ?? 0,
       proxy_protocol: u.proxy_protocol ?? '',

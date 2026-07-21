@@ -347,74 +347,6 @@ func getCPUPercent() float64 {
 	return 0
 }
 
-func getCPUFromProc() float64 {
-	readFile := func(path string) []byte {
-		data, _ := os.ReadFile(path)
-		return data
-	}
-
-	prevStats := parseCPUStats(string(readFile("/proc/stat")))
-	if prevStats == nil {
-		cmd := exec.Command("sh", "-c", "cat /proc/stat | head -1")
-		output, _ := cmd.Output()
-		prevStats = parseCPUStats(string(output))
-		if prevStats == nil {
-			return 0
-		}
-	}
-	time.Sleep(500 * time.Millisecond)
-	currStats := parseCPUStats(string(readFile("/proc/stat")))
-	if currStats == nil {
-		return 0
-	}
-
-	prevTotal := prevStats.total()
-	currTotal := currStats.total()
-	if currTotal <= prevTotal {
-		return 0
-	}
-
-	prevIdle := prevStats.idle + prevStats.iowait
-	currIdle := currStats.idle + currStats.iowait
-	idleDelta := currIdle - prevIdle
-	totalDelta := currTotal - prevTotal
-
-	if totalDelta == 0 {
-		return 0
-	}
-
-	return float64(totalDelta-idleDelta) / float64(totalDelta) * 100
-}
-
-type cpuStats struct {
-	user, nice, system, idle, iowait, irq, softirq uint64
-}
-
-func (c *cpuStats) total() uint64 {
-	return c.user + c.nice + c.system + c.idle + c.iowait + c.irq + c.softirq
-}
-
-func parseCPUStats(data string) *cpuStats {
-	lines := strings.Split(data, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "cpu ") {
-			fields := strings.Fields(line)
-			if len(fields) < 8 {
-				return nil
-			}
-			user, _ := strconv.ParseUint(fields[1], 10, 64)
-			nice, _ := strconv.ParseUint(fields[2], 10, 64)
-			system, _ := strconv.ParseUint(fields[3], 10, 64)
-			idle, _ := strconv.ParseUint(fields[4], 10, 64)
-			iowait, _ := strconv.ParseUint(fields[5], 10, 64)
-			irq, _ := strconv.ParseUint(fields[6], 10, 64)
-			softirq, _ := strconv.ParseUint(fields[7], 10, 64)
-			return &cpuStats{user, nice, system, idle, iowait, irq, softirq}
-		}
-	}
-	return nil
-}
-
 var lastNetStats struct {
 	bytesIn  uint64
 	bytesOut uint64
@@ -839,32 +771,6 @@ func isValidDomain(domain string) bool {
 	}
 
 	parts := strings.Split(domain, ".")
-	for _, part := range parts {
-		if part == "" {
-			return false
-		}
-		if len(part) > 63 {
-			return false
-		}
-		for _, c := range part {
-			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.') {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func isValidACMEDomain(domain string) bool {
-	domain = strings.ToLower(domain)
-	if len(domain) > 253 {
-		return false
-	}
-
-	parts := strings.Split(domain, ".")
-	if len(parts) < 2 {
-		return false
-	}
 	for _, part := range parts {
 		if part == "" {
 			return false

@@ -364,4 +364,3 @@ func jwtOnly() gin.HandlerFunc {
 		c.Next()
 	}
 }
-

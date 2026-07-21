@@ -47,7 +47,5 @@ func isReadOnlyGuardWhitelisted(path string) bool {
 	return path == "/api/v1/auth/login" ||
 		path == "/api/v1/auth/logout" ||
 		path == "/api/v1/cluster" ||
-		strings.HasPrefix(path, "/api/v1/cluster/") ||
-		path == "/api/v1/users/me" ||
-		strings.HasPrefix(path, "/api/v1/users/me/")
+		strings.HasPrefix(path, "/api/v1/cluster/")
 }

@@ -114,7 +114,7 @@ func TestReadOnlyGuard_does_not_whitelist_admin_users_route(t *testing.T) {
 	}
 }
 
-func TestReadOnlyGuard_allows_non_admin_profile_update(t *testing.T) {
+func TestReadOnlyGuard_blocks_slave_profile_update(t *testing.T) {
 	// Given
 	router := newReadOnlyGuardTestRouter(t, true, "user")
 
@@ -123,12 +123,12 @@ func TestReadOnlyGuard_allows_non_admin_profile_update(t *testing.T) {
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodPatch, "/api/v1/users/me", nil))
 
 	// Then
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204", response.Code)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", response.Code)
 	}
 }
 
-func TestReadOnlyGuard_allows_non_admin_api_key_creation(t *testing.T) {
+func TestReadOnlyGuard_blocks_slave_api_key_creation(t *testing.T) {
 	// Given
 	router := newReadOnlyGuardTestRouter(t, true, "user")
 
@@ -137,8 +137,8 @@ func TestReadOnlyGuard_allows_non_admin_api_key_creation(t *testing.T) {
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/users/me/api-keys", nil))
 
 	// Then
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204", response.Code)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", response.Code)
 	}
 }
 

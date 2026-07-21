@@ -13,7 +13,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -30,21 +29,6 @@ type RateLimitError struct {
 
 func (e *RateLimitError) Error() string {
 	return fmt.Sprintf("CA rate limited (429), retry after %v: %s", e.RetryAfter, e.Reason)
-}
-
-func parseRetryAfter(header string) time.Duration {
-	if header == "" {
-		return 0
-	}
-	if seconds, err := strconv.Atoi(header); err == nil {
-		return time.Duration(seconds) * time.Second
-	}
-	if t, err := http.ParseTime(header); err == nil {
-		if d := time.Until(t); d > 0 {
-			return d
-		}
-	}
-	return 0
 }
 
 // Logger receives progress updates during issuance.

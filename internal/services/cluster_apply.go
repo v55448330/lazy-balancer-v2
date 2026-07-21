@@ -44,7 +44,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if snapshot.CaddyConfig != nil {
 		caddySync = "已同步"
 	}
-	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs)), "基本设置：已同步", fmt.Sprintf("Caddy 全局配置：%s", caddySync)), "")
+	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs)), fmt.Sprintf("CA 提供商 %d 个", len(snapshot.CAProviders)), "基本设置：已同步", fmt.Sprintf("Caddy 全局配置：%s", caddySync)), "")
 	RecordAuditLog("system", "重载", "Caddy配置", "同步应用后自动重载", "")
 	return nil
 }
@@ -82,7 +82,7 @@ func replaceSnapshotDB(ctx context.Context, database *sql.DB, snapshot models.Cl
 }
 
 func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
-	for _, statement := range []string{"DELETE FROM upstreams", "DELETE FROM cert_jobs", "DELETE FROM lb_rules", "DELETE FROM api_keys", "DELETE FROM users"} {
+	for _, statement := range []string{"DELETE FROM upstreams", "DELETE FROM cert_jobs", "DELETE FROM lb_rules", "DELETE FROM api_keys", "DELETE FROM users", "DELETE FROM ca_providers"} {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("清理快照数据: %w", err)
 		}
@@ -98,6 +98,11 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 	for _, key := range snapshot.APIKeys {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,expires_at,is_enabled) VALUES (?,?,?,?,?,?,?)`, key.ID, key.Name, key.KeyHash, key.KeyPrefix, key.CreatedBy, nullableString(key.ExpiresAt), key.IsEnabled); err != nil {
 			return fmt.Errorf("写入快照密钥 %d: %w", key.ID, err)
+		}
+	}
+	for _, p := range snapshot.CAProviders {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO ca_providers (id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled) VALUES (?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.Provider, p.DirectoryURL, p.Credentials, p.MaxConcurrent, p.MinIntervalMS, p.Enabled); err != nil {
+			return fmt.Errorf("写入快照 CA 提供商 %d: %w", p.ID, err)
 		}
 	}
 	for _, cert := range snapshot.Certs {

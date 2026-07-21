@@ -89,22 +89,6 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-func getEnvInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intVal, err := strconv.Atoi(value); err == nil {
-			return intVal
-		}
-	}
-	return defaultValue
-}
-
-func getEnvBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		return value == "true" || value == "1"
-	}
-	return defaultValue
-}
-
 func generateSecret() string {
 	// Simple secret generation - in production use crypto/rand
 	return "lb_secret_" + strconv.FormatInt(time.Now().Unix(), 10)

@@ -71,7 +71,30 @@ func (s *ClusterService) buildSnapshot(ctx context.Context) (models.ClusterSnaps
 	if snapshot.Certs, err = s.snapshotCertificates(ctx); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
+	if snapshot.CAProviders, err = s.snapshotCAProviders(ctx); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
 	return snapshot, nil
+}
+
+func (s *ClusterService) snapshotCAProviders(ctx context.Context) ([]models.CAProvider, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, provider, directory_url, COALESCE(credentials,''),
+		COALESCE(max_concurrent,1), COALESCE(min_interval_ms,2000), COALESCE(enabled,1)
+		FROM ca_providers ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("读取快照 CA 提供商: %w", err)
+	}
+	defer rows.Close()
+	providers := make([]models.CAProvider, 0)
+	for rows.Next() {
+		var p models.CAProvider
+		if err := rows.Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials,
+			&p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled); err != nil {
+			return nil, fmt.Errorf("扫描快照 CA 提供商: %w", err)
+		}
+		providers = append(providers, p)
+	}
+	return providers, rows.Err()
 }
 
 func (s *ClusterService) snapshotRules(ctx context.Context) ([]models.LbRule, error) {

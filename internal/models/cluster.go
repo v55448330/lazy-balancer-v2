@@ -109,6 +109,7 @@ type ClusterSnapshot struct {
 	BasicSettings ClusterBasicSettings `json:"basic_settings"`
 	CaddyConfig   *string              `json:"caddy_config,omitempty"`
 	Certs         []ClusterCertificate `json:"certs"`
+	CAProviders   []CAProvider         `json:"ca_providers"`
 }
 
 type ClusterNodeView struct {

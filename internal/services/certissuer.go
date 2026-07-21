@@ -55,17 +55,6 @@ func parseRetryAfter(header string) time.Duration {
 }
 
 // defaultRetryAfter returns the default cooling duration when a CA does not provide Retry-After.
-func defaultRetryAfter(provider string) time.Duration {
-	switch provider {
-	case ProviderZeroSSL:
-		return 30 * time.Minute
-	case ProviderLetsEncrypt:
-		return time.Hour
-	default:
-		return time.Hour
-	}
-}
-
 // computeBackoff returns the cooling duration based on attempt count and CA Retry-After.
 func computeBackoff(attempts int, retryAfter time.Duration) time.Duration {
 	if retryAfter > 0 {
@@ -115,6 +104,24 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	}
 
 	logger := &jobLogger{jobID: jobID, ruleID: ruleID, file: NewCertJobFileLogger(ruleID)}
+
+	// Fast path: a previous attempt completed ACME issuance and persisted a
+	// valid certificate, but file deployment failed. Redeploy instead of
+	// re-issuing through the CA.
+	var existingCert, existingKey string
+	if err := db.DB.QueryRow("SELECT COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&existingCert, &existingKey); err == nil && existingCert != "" && existingKey != "" {
+		if notAfter, perr := parseCertNotAfter(existingCert); perr == nil && time.Until(notAfter) > 7*24*time.Hour {
+			logger.Log("deploying", "检测到已签发的有效证书，直接重新部署文件")
+			werr := WriteCertFiles(ruleID, existingCert, existingKey)
+			if werr == nil {
+				if _, uerr := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书文件重新部署成功', updated_at=datetime('now') WHERE id=?", jobID); uerr == nil {
+					RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书重新部署成功", ruleID), "")
+					return nil
+				}
+			}
+			logger.Log("deploy_failed", fmt.Sprintf("已有证书重新部署失败: %v，转为重新签发", werr))
+		}
+	}
 
 	// Pre-flight check: verify the CA provider is reachable before starting the
 	// real issuance flow. If the CA is down (e.g. ZeroSSL 504), fail fast and

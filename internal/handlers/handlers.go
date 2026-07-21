@@ -574,33 +574,3 @@ func (h *Handlers) validatePortFromDB(protocol string, port int, excludeCaddyID 
 
 	return nil
 }
-
-func (h *Handlers) validateUpstreams(upstreams []models.Upstream) error {
-	if len(upstreams) == 0 {
-		return fmt.Errorf("至少需要一个上游服务器")
-	}
-
-	hostPortSeen := make(map[string]bool)
-	for i, u := range upstreams {
-		if u.Host == "" {
-			return fmt.Errorf("上游 #%d：主机地址不能为空", i+1)
-		}
-		if u.Port < 1 || u.Port > 65535 {
-			return fmt.Errorf("上游 %s:%d：端口无效", u.Host, u.Port)
-		}
-
-		// Check for duplicate host:port
-		key := fmt.Sprintf("%s:%d", u.Host, u.Port)
-		if hostPortSeen[key] {
-			return fmt.Errorf("上游 %s:%d 重复", u.Host, u.Port)
-		}
-		hostPortSeen[key] = true
-
-		// Validate host format - must be valid IP or domain
-		if !isValidHost(u.Host) {
-			return fmt.Errorf("上游 %s:%d：主机 '%s' 格式无效（仅支持 IP 地址或域名）", u.Host, u.Port, u.Host)
-		}
-	}
-
-	return nil
-}

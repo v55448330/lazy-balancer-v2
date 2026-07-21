@@ -2060,10 +2060,6 @@ func defaultCaddyConfig() map[string]interface{} {
 
 // loadACMECertificate reads the issued ACME certificate and key from cert_jobs
 // for the given rule and domain. Returns (certPEM, keyPEM, true) if issued.
-func loadACMECertificate(caddyID, domain string) (string, string, bool) {
-	return loadACMECertificateFromStore(db.DB, caddyID, domain)
-}
-
 func loadACMECertificateFromStore(store caddyConfigStore, caddyID, domain string) (string, string, bool) {
 	parts := strings.Split(domain, ",")
 	domains := make([]string, 0, len(parts))

@@ -3,7 +3,6 @@ package tencent
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
@@ -122,9 +121,4 @@ func (p *Provider) modifyRecord(ctx context.Context, zone string, recordID uint6
 		return fmt.Errorf("ModifyRecord failed: %w", err)
 	}
 	return nil
-}
-
-func parseRecordID(s string) uint64 {
-	v, _ := strconv.ParseUint(s, 10, 64)
-	return v
 }

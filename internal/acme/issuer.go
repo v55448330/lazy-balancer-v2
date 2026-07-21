@@ -316,10 +316,10 @@ func (i *Issuer) waitForValidation(ctx context.Context, authURL, chalURL string)
 func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout time.Duration) error {
 	// Order matters: China-friendly resolvers first, then global ones.
 	resolvers := []string{
-		"223.5.5.5:53",     // Alibaba AliDNS
-		"119.29.29.29:53",  // Tencent DNSPod
-		"8.8.8.8:53",       // Google Public DNS
-		"1.1.1.1:53",       // Cloudflare
+		"223.5.5.5:53",    // Alibaba AliDNS
+		"119.29.29.29:53", // Tencent DNSPod
+		"8.8.8.8:53",      // Google Public DNS
+		"1.1.1.1:53",      // Cloudflare
 	}
 
 	log := func(format string, args ...any) {

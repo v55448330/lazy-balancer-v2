@@ -18,8 +18,7 @@ import (
 )
 
 var (
-	version   = "dev"
-	buildTime = "unknown"
+	version = "dev"
 )
 
 func main() {
