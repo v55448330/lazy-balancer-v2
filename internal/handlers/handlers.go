@@ -146,13 +146,15 @@ func (h *Handlers) applyCaddyConfigWithRollback() error {
 
 func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID string, serverName string) error {
 	type requestUpstream struct {
-		Host       string
-		Port       int
-		Weight     int
-		Domain     string
-		DynamicDNS bool
-		Enabled    bool
-		Protocol   string
+		Host           string
+		Port           int
+		Weight         int
+		Domain         string
+		DynamicDNS     bool
+		Enabled        bool
+		Protocol       string
+		ProxyProtocol  string
+		MaxConnections int
 	}
 
 	type requestData struct {
@@ -218,6 +220,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 			upstreams = append(upstreams, requestUpstream{
 				Host: u.Host, Port: u.Port, Weight: u.Weight, Domain: u.Domain,
 				DynamicDNS: u.DynamicDNS, Enabled: u.Enabled, Protocol: u.Protocol,
+				ProxyProtocol: u.ProxyProtocol, MaxConnections: u.MaxConnections,
 			})
 		}
 		data.Upstreams = upstreams
@@ -257,6 +260,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 			upstreams = append(upstreams, requestUpstream{
 				Host: u.Host, Port: u.Port, Weight: u.Weight, Domain: u.Domain,
 				DynamicDNS: u.DynamicDNS, Enabled: u.Enabled, Protocol: u.Protocol,
+				ProxyProtocol: u.ProxyProtocol, MaxConnections: u.MaxConnections,
 			})
 		}
 		data.Upstreams = upstreams
@@ -332,6 +336,21 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 		if u.Weight < 0 {
 			return fmt.Errorf("upstream #%d: weight cannot be negative", i+1)
 		}
+		if data.Protocol == "http" {
+			if u.Protocol != "" && u.Protocol != "http" && u.Protocol != "https" {
+				return fmt.Errorf("upstream #%d: invalid protocol '%s' (must be http or https)", i+1, u.Protocol)
+			}
+		} else {
+			if u.Protocol != "" && u.Protocol != "tcp" && u.Protocol != "tls" {
+				return fmt.Errorf("upstream #%d: invalid protocol '%s' (must be tcp or tls)", i+1, u.Protocol)
+			}
+		}
+		if u.ProxyProtocol != "" && u.ProxyProtocol != "v1" && u.ProxyProtocol != "v2" {
+			return fmt.Errorf("upstream #%d: invalid proxy protocol '%s' (must be v1 or v2)", i+1, u.ProxyProtocol)
+		}
+		if u.MaxConnections < 0 {
+			return fmt.Errorf("upstream #%d: max connections cannot be negative", i+1)
+		}
 
 		key := fmt.Sprintf("%s:%d", u.Host, u.Port)
 		if hostPortSeen[key] {
@@ -350,6 +369,17 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 
 	if enabledUpstreamCount == 0 {
 		return fmt.Errorf("at least one enabled upstream is required")
+	}
+
+	if data.DynamicDNS && enabledUpstreamCount > 1 {
+		return fmt.Errorf("dynamic DNS mode supports only one enabled upstream (DNS resolves multiple IPs)")
+	}
+	if data.DynamicDNS && data.DnsFamily != "ipv4" && data.DnsFamily != "ipv6" && data.DnsFamily != "both" {
+		return fmt.Errorf("invalid dns family '%s' (must be ipv4, ipv6, or both)", data.DnsFamily)
+	}
+
+	if data.HealthCheckPath != "" && !strings.HasPrefix(data.HealthCheckPath, "/") {
+		return fmt.Errorf("health check path must start with /")
 	}
 
 	if data.EnableTLS && data.TLSSource == "acme_dns" {

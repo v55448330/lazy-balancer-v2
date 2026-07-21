@@ -385,10 +385,11 @@
           <el-form :model="wizardForm" label-width="100px">
             <div class="upstream-header">
               <span class="section-title">上游服务器列表</span>
-              <el-button size="small" type="primary" @click="addUpstream">
+              <el-button size="small" type="primary" @click="addUpstream" :disabled="wizardForm.dynamic_dns && wizardForm.upstreams.length >= 1">
                 <el-icon><Plus /></el-icon>添加上游
               </el-button>
             </div>
+            <el-alert v-if="wizardForm.dynamic_dns" type="info" :closable="false" title="动态上游模式下仅需一个上游条目，DNS 将动态解析出多个 IP" style="margin-bottom: 12px;" />
 
             <el-table :data="wizardForm.upstreams" border class="upstream-table" :fit="true">
               <el-table-column label="主机地址 *" min-width="180">
@@ -504,9 +505,14 @@
               <span class="form-tip-inline">次失败后标记为不健康</span>
             </el-form-item>
 
+            <el-form-item label="恢复阈值">
+              <el-input-number v-model="wizardForm.health_check_healthy_threshold" :min="1" :max="10" controls-position="right" style="width: 120px;" />
+              <span class="form-tip-inline">次探测成功后恢复为健康</span>
+            </el-form-item>
+
             <el-form-item label="检查间隔">
               <el-input-number v-model="wizardForm.health_check_interval" :min="5" :max="300" controls-position="right" style="width: 120px;" />
-              <span class="form-tip-inline">秒，健康检查/失败记忆窗口</span>
+              <span class="form-tip-inline">秒，主动探测间隔；被动失败记忆窗口为其 3 倍</span>
             </el-form-item>
 
             <template v-if="wizardForm.protocol === 'http'">
@@ -518,7 +524,7 @@
               <el-form-item label="主动检查">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.enable_active_health_check" />
-                  <span class="form-tip-inline">{{ wizardForm.enable_active_health_check ? '定期发送探测请求检查上游服务器状态' : '仅使用被动健康检查（推荐）' }}</span>
+                  <span class="form-tip-inline">{{ wizardForm.enable_active_health_check ? '周期探测，按失败/恢复阈值摘除与加回（多上游推荐）' : '被动按真实流量统计，失败自动重试转移' }}</span>
                 </div>
               </el-form-item>
 
@@ -539,7 +545,7 @@
               <el-form-item label="主动检查">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.enable_active_health_check" />
-                  <span class="form-tip-inline">{{ wizardForm.enable_active_health_check ? '定期 TCP 探测检查上游端口' : '仅使用被动健康检查（推荐）' }}</span>
+                  <span class="form-tip-inline">{{ wizardForm.enable_active_health_check ? '周期探测上游端口，按失败/恢复阈值摘除与加回（多上游推荐）' : '被动按真实流量统计，失败自动重试转移' }}</span>
                 </div>
               </el-form-item>
 
@@ -593,7 +599,7 @@
               <el-form-item label="启用动态上游">
                 <div class="dynamic-dns-content">
                   <el-switch v-model="wizardForm.dynamic_dns" />
-                  <span class="form-tip-inline">启用后，通过 DNS A/AAAA 记录动态发现上游 IP 变化</span>
+                  <span class="form-tip-inline">启用后，通过 DNS A/AAAA 记录动态发现上游 IP 变化（仅使用第一个上游条目）</span>
                 </div>
               </el-form-item>
 

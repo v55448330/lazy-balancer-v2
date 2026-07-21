@@ -2230,6 +2230,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		var upstreamList []interface{}
 		var upstreamWeights []int
 		hasHTTPSUpstream := false
+		var upstreamProxyProtocol string
 
 		for _, u := range enabledUpstreams {
 			weight := u.Weight
@@ -2258,11 +2259,17 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			} else {
 				dial := fmt.Sprintf("%s:%d", u.Host, u.Port)
 				upstreamEntry := map[string]interface{}{"dial": dial}
+				if u.MaxConnections > 0 {
+					upstreamEntry["max_requests"] = u.MaxConnections
+				}
 				upstreamList = append(upstreamList, upstreamEntry)
 			}
 
 			if u.Protocol == "https" {
 				hasHTTPSUpstream = true
+			}
+			if u.ProxyProtocol != "" && upstreamProxyProtocol == "" {
+				upstreamProxyProtocol = u.ProxyProtocol
 			}
 		}
 
@@ -2314,6 +2321,8 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			}
 			proxyConfig["load_balancing"] = map[string]interface{}{
 				"selection_policy": selectionPolicy,
+				"try_duration":     "5s",
+				"try_interval":     "250ms",
 			}
 		}
 
@@ -2328,23 +2337,34 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			}
 			healthChecks := map[string]interface{}{
 				"passive": map[string]interface{}{
-					"fail_duration": fmt.Sprintf("%ds", hcInterval*3),
-					"max_fails":     hcThreshold,
+					"fail_duration":    fmt.Sprintf("%ds", hcInterval*3),
+					"max_fails":        hcThreshold,
+					"unhealthy_status": []int{5},
 				},
 			}
 
-			if rule.EnableActiveHealthCheck && rule.HealthCheckPath != "" {
+			if rule.EnableActiveHealthCheck {
+				hcPath := rule.HealthCheckPath
+				if hcPath == "" {
+					hcPath = "/"
+				}
+				hcPasses := rule.HealthCheckHealthyThreshold
+				if hcPasses <= 0 {
+					hcPasses = 2
+				}
 				healthChecks["active"] = map[string]interface{}{
-					"uri":      rule.HealthCheckPath,
+					"uri":      hcPath,
 					"timeout":  fmt.Sprintf("%ds", rule.HealthCheckTimeout),
 					"interval": fmt.Sprintf("%ds", rule.HealthCheckInterval),
+					"passes":   hcPasses,
+					"fails":    hcThreshold,
 				}
 			}
 
 			proxyConfig["health_checks"] = healthChecks
 		}
 
-		needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0
+		needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0 || rule.HealthCheckTimeout > 0 || upstreamProxyProtocol != ""
 		if needsTransport {
 			transportConfig := map[string]interface{}{
 				"protocol": "http",
@@ -2359,9 +2379,12 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 				transportConfig["resolver"] = map[string]interface{}{
 					"addresses": []string{rule.DnsServer},
 				}
-				if rule.HealthCheckTimeout > 0 {
-					transportConfig["dial_timeout"] = fmt.Sprintf("%ds", rule.HealthCheckTimeout)
-				}
+			}
+			if rule.HealthCheckTimeout > 0 {
+				transportConfig["dial_timeout"] = fmt.Sprintf("%ds", rule.HealthCheckTimeout)
+			}
+			if upstreamProxyProtocol != "" {
+				transportConfig["proxy_protocol"] = upstreamProxyProtocol
 			}
 			if effectiveUpstreamKeepaliveTimeout > 0 {
 				transportConfig["keep_alive"] = map[string]interface{}{
@@ -2533,6 +2556,7 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 
 	if rule.Protocol == "http" || rule.Protocol == "https" {
 		hasHTTPSUpstream := false
+		var upstreamProxyProtocol string
 		upstreamList := make([]interface{}, 0)
 		upstreamWeights := make([]int, 0)
 
@@ -2574,11 +2598,17 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 			} else {
 				dial := fmt.Sprintf("%s:%d", u.Host, u.Port)
 				upstreamEntry := map[string]interface{}{"dial": dial}
+				if u.MaxConnections > 0 {
+					upstreamEntry["max_requests"] = u.MaxConnections
+				}
 				upstreamList = append(upstreamList, upstreamEntry)
 			}
 
 			if u.Protocol == "https" {
 				hasHTTPSUpstream = true
+			}
+			if u.ProxyProtocol != "" && upstreamProxyProtocol == "" {
+				upstreamProxyProtocol = u.ProxyProtocol
 			}
 		}
 
@@ -2617,6 +2647,8 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 			}
 			proxyConfig["load_balancing"] = map[string]interface{}{
 				"selection_policy": selectionPolicy,
+				"try_duration":     "5s",
+				"try_interval":     "250ms",
 			}
 		}
 
@@ -2631,23 +2663,34 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 			}
 			healthChecks := map[string]interface{}{
 				"passive": map[string]interface{}{
-					"fail_duration": fmt.Sprintf("%ds", hcInterval*3),
-					"max_fails":     hcThreshold,
+					"fail_duration":    fmt.Sprintf("%ds", hcInterval*3),
+					"max_fails":        hcThreshold,
+					"unhealthy_status": []int{5},
 				},
 			}
 
-			if rule.EnableActiveHealthCheck && rule.HealthCheckPath != "" {
+			if rule.EnableActiveHealthCheck {
+				hcPath := rule.HealthCheckPath
+				if hcPath == "" {
+					hcPath = "/"
+				}
+				hcPasses := rule.HealthCheckHealthyThreshold
+				if hcPasses <= 0 {
+					hcPasses = 2
+				}
 				healthChecks["active"] = map[string]interface{}{
-					"uri":      rule.HealthCheckPath,
+					"uri":      hcPath,
 					"timeout":  fmt.Sprintf("%ds", rule.HealthCheckTimeout),
 					"interval": fmt.Sprintf("%ds", rule.HealthCheckInterval),
+					"passes":   hcPasses,
+					"fails":    hcThreshold,
 				}
 			}
 
 			proxyConfig["health_checks"] = healthChecks
 		}
 
-		needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0
+		needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0 || rule.HealthCheckTimeout > 0 || upstreamProxyProtocol != ""
 		if needsTransport {
 			transportConfig := map[string]interface{}{
 				"protocol": "http",
@@ -2662,9 +2705,12 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 				transportConfig["resolver"] = map[string]interface{}{
 					"addresses": []string{rule.DnsServer},
 				}
-				if rule.HealthCheckTimeout > 0 {
-					transportConfig["dial_timeout"] = fmt.Sprintf("%ds", rule.HealthCheckTimeout)
-				}
+			}
+			if rule.HealthCheckTimeout > 0 {
+				transportConfig["dial_timeout"] = fmt.Sprintf("%ds", rule.HealthCheckTimeout)
+			}
+			if upstreamProxyProtocol != "" {
+				transportConfig["proxy_protocol"] = upstreamProxyProtocol
 			}
 			if effectiveUpstreamKeepaliveTimeout > 0 {
 				transportConfig["keep_alive"] = map[string]interface{}{
@@ -2778,12 +2824,19 @@ func buildTCPProxyRoute(rule SingleRuleConfig) map[string]interface{} {
 			"policy": strategy,
 		},
 	}
-	if rule.TCPTryDuration > 0 {
-		loadBalancing["try_duration"] = fmt.Sprintf("%dms", rule.TCPTryDuration)
+	// Default to retrying on other upstreams so a connection routed to a
+	// dead upstream fails over transparently instead of erroring to the
+	// client; rule-level values override when set.
+	tryDuration := rule.TCPTryDuration
+	if tryDuration <= 0 {
+		tryDuration = 5000
 	}
-	if rule.TCPTryInterval > 0 {
-		loadBalancing["try_interval"] = fmt.Sprintf("%dms", rule.TCPTryInterval)
+	tryInterval := rule.TCPTryInterval
+	if tryInterval <= 0 {
+		tryInterval = 250
 	}
+	loadBalancing["try_duration"] = fmt.Sprintf("%dms", tryDuration)
+	loadBalancing["try_interval"] = fmt.Sprintf("%dms", tryInterval)
 	if len(upstreamList) > 1 || rule.TCPTryDuration > 0 || rule.TCPTryInterval > 0 {
 		proxyHandler["load_balancing"] = loadBalancing
 	}
