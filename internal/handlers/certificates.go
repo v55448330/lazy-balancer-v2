@@ -27,9 +27,14 @@ func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 	for rows.Next() {
 		var cfg models.CertificateConfig
 		if err := rows.Scan(&cfg.ID, &cfg.Name, &cfg.DNSProvider, &cfg.DNSCredentials, &cfg.Enabled, &cfg.CreatedAt, &cfg.UpdatedAt); err != nil {
-			continue
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书配置失败: " + err.Error()})
+			return
 		}
 		configs = append(configs, cfg)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书配置失败: " + err.Error()})
+		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: configs})
 }

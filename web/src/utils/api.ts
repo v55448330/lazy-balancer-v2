@@ -2,6 +2,8 @@ import axios from 'axios'
 import type { AxiosInstance, AxiosRequestConfig } from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
+let sessionExpiredDialogOpen = false
+
 const service: AxiosInstance = axios.create({
   baseURL: '/api/v1',
   timeout: 30000,
@@ -36,17 +38,20 @@ service.interceptors.response.use(
       if (status === 401) {
         const isLoginRequest = error.config?.url?.includes('/auth/login')
         if (!isLoginRequest) {
-          ElMessageBox.confirm('登录已过期，请重新登录', '会话失效', {
-          confirmButtonText: '确定',
-          cancelButtonText: '取消',
-          type: 'warning',
-        }).then(() => {
-          localStorage.removeItem('token')
-          window.location.reload()
-        }).catch(() => {
-          localStorage.removeItem('token')
-          window.location.reload()
-        })
+          if (!sessionExpiredDialogOpen) {
+            sessionExpiredDialogOpen = true
+            ElMessageBox.confirm('登录已过期，请重新登录', '会话失效', {
+              confirmButtonText: '确定',
+              cancelButtonText: '取消',
+              type: 'warning',
+            }).then(() => {
+              localStorage.removeItem('token')
+              window.location.reload()
+            }).catch(() => {
+              localStorage.removeItem('token')
+              window.location.reload()
+            })
+          }
       }
       } else if (!error.config?.url?.includes('/auth/login')) {
         ElMessage.error(message)

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"sync"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -31,6 +32,7 @@ type ClusterLifecycle interface {
 type ClusterService struct {
 	db        *sql.DB
 	lifecycle ClusterLifecycle
+	roleMu    sync.Mutex
 }
 
 func NewClusterService(database *sql.DB, lifecycle ClusterLifecycle) *ClusterService {
@@ -190,6 +192,8 @@ func BumpClusterVersion(ctx context.Context, executor clusterVersionExecutor) er
 }
 
 func (s *ClusterService) Promote(ctx context.Context) error {
+	s.roleMu.Lock()
+	defer s.roleMu.Unlock()
 	isMaster, err := s.IsMaster(ctx)
 	if err != nil {
 		return err

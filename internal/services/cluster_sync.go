@@ -147,6 +147,19 @@ func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
 	return SyncResult{AppliedVersion: envelope.Data.Version, Changed: true}, nil
 }
 
+// recordSyncError surfaces pull/report failures in last_sync_error so the
+// node page shows the real problem instead of a silently stuck state;
+// a fully successful cycle clears it.
+func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr error) {
+	msg := ""
+	if pullErr != nil {
+		msg = "同步拉取失败: " + pullErr.Error()
+	} else if reportErr != nil {
+		msg = "状态上报失败: " + reportErr.Error()
+	}
+	_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", msg)
+}
+
 func (s *SyncService) run(ctx context.Context) {
 	for {
 		var isMaster bool
@@ -158,8 +171,9 @@ func (s *SyncService) run(ctx context.Context) {
 		if token == "" {
 			s.pollRegistration(ctx)
 		} else {
-			_, _ = s.Pull(ctx)
-			_ = s.Report(ctx)
+			_, pullErr := s.Pull(ctx)
+			reportErr := s.Report(ctx)
+			s.recordSyncError(ctx, pullErr, reportErr)
 		}
 		delay := time.Duration(interval) * time.Second
 		if token == "" {

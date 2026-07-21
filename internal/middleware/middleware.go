@@ -207,13 +207,16 @@ func auditMiddleware() gin.HandlerFunc {
 		if policy == services.AuditPolicySkip || services.HasExplicitAuditEvent(c.Request.Method, path) {
 			return
 		}
-		if c.Writer.Status() >= 400 {
+		if c.Writer.Status() >= 400 && c.Writer.Status() < 500 {
 			return
 		}
 
 		action, resource, detail := services.FormatAuditAction(c.Request.Method, path)
 		if action == "" {
 			return
+		}
+		if c.Writer.Status() >= 500 {
+			detail = detail + "；结果：失败"
 		}
 
 		username, _ := c.Get("username")

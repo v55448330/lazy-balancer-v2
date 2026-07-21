@@ -42,10 +42,14 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 		if err := rows.Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.Message, &j.CertPEM,
 			&j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt, &j.RenewalAttempts, &j.CAAvailableAfter, &j.LastErrorCode, &j.CAProviderID, &j.CAProviderName,
 		); err != nil {
-			log.Printf("ListCertJobs scan error: %v", err)
-			continue
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败: " + err.Error()})
+			return
 		}
 		jobs = append(jobs, j)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败: " + err.Error()})
+		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: jobs})
 }

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"context"
 	"database/sql"
 	"fmt"
@@ -172,6 +173,16 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "不是有效的 Lazy Balancer 备份文件"})
 		return
 	}
+	if backup.Meta.Version != 1 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("不支持的备份版本: %d", backup.Meta.Version)})
+		return
+	}
+	for _, required := range []string{"lb_rules", "users"} {
+		if _, exists := backup.Tables[required]; !exists {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份缺少必需的数据表: " + required})
+			return
+		}
+	}
 	ctx := c.Request.Context()
 	tx, err := db.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -242,18 +253,6 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			}
 		}
 	}
-	for _, row := range backup.Tables["lb_rules"] {
-		caddyID, _ := row["caddy_id"].(string)
-		certPEM, _ := row["tls_cert"].(string)
-		keyPEM, _ := row["tls_key"].(string)
-		if caddyID != "" && certPEM != "" && keyPEM != "" {
-			if err := services.WriteCertFiles(caddyID, certPEM, keyPEM); err != nil {
-				recordAudit(c, "导入失败", "配置备份", "写入证书文件失败: "+err.Error())
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入证书文件失败，已回滚: " + err.Error()})
-				return
-			}
-		}
-	}
 	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
 		services.MaterializeAllCertsFromDB()
 		recordAudit(c, "导入失败", "配置备份", "Caddy 配置验证未通过，数据库未变更: "+err.Error())
@@ -269,6 +268,18 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		return
 	}
 	committed = true
+	// Cert files are materialized only after a successful commit, so a failed
+	// import can never leave orphaned files behind.
+	for _, row := range backup.Tables["lb_rules"] {
+		caddyID, _ := row["caddy_id"].(string)
+		certPEM, _ := row["tls_cert"].(string)
+		keyPEM, _ := row["tls_key"].(string)
+		if caddyID != "" && certPEM != "" && keyPEM != "" {
+			if err := services.WriteCertFiles(caddyID, certPEM, keyPEM); err != nil {
+				log.Printf("导入后写入证书文件失败 %s: %v", caddyID, err)
+			}
+		}
+	}
 	counts := importCountsDetail(backup.Tables)
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail("来源：v2 备份（覆盖导入）", counts, services.AuditResultPart("success")))
 	recordAudit(c, "重载", "Caddy配置", "导入配置后自动重载")

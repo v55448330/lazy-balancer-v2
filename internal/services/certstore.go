@@ -53,7 +53,10 @@ func CertFileExists(ruleID string) bool {
 }
 
 func MaterializeAllCertsFromDB() {
-	os.MkdirAll(certDir, 0755)
+	if err := os.MkdirAll(certDir, 0755); err != nil {
+		log.Printf("certstore: create cert dir failed: %v", err)
+		return
+	}
 	manualRecovered := 0
 	acmeRecovered := 0
 
@@ -64,14 +67,19 @@ func MaterializeAllCertsFromDB() {
 	} else {
 		for rows.Next() {
 			var ruleID, certPEM, keyPEM string
-			if rows.Scan(&ruleID, &certPEM, &keyPEM) == nil {
-				if err := WriteCertFiles(ruleID, certPEM, keyPEM); err != nil {
-					log.Printf("certstore: write manual cert %s failed: %v", ruleID, err)
-					RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditRulePart(ruleID), "类型：手动证书", AuditResultPart("io_error")), "")
-				} else {
-					manualRecovered++
-				}
+			if err := rows.Scan(&ruleID, &certPEM, &keyPEM); err != nil {
+				log.Printf("certstore: scan manual cert failed: %v", err)
+				continue
 			}
+			if err := WriteCertFiles(ruleID, certPEM, keyPEM); err != nil {
+				log.Printf("certstore: write manual cert %s failed: %v", ruleID, err)
+				RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditRulePart(ruleID), "类型：手动证书", AuditResultPart("io_error")), "")
+			} else {
+				manualRecovered++
+			}
+		}
+		if err := rows.Err(); err != nil {
+			log.Printf("certstore: iterate manual certs failed: %v", err)
 		}
 		rows.Close()
 	}
@@ -83,14 +91,19 @@ func MaterializeAllCertsFromDB() {
 	} else {
 		for rows2.Next() {
 			var ruleID, certPEM, keyPEM string
-			if rows2.Scan(&ruleID, &certPEM, &keyPEM) == nil {
-				if err := WriteCertFiles(ruleID, certPEM, keyPEM); err != nil {
-					log.Printf("certstore: write ACME cert %s failed: %v", ruleID, err)
-					RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditRulePart(ruleID), "类型：ACME证书", AuditResultPart("io_error")), "")
-				} else {
-					acmeRecovered++
-				}
+			if err := rows2.Scan(&ruleID, &certPEM, &keyPEM); err != nil {
+				log.Printf("certstore: scan ACME cert failed: %v", err)
+				continue
 			}
+			if err := WriteCertFiles(ruleID, certPEM, keyPEM); err != nil {
+				log.Printf("certstore: write ACME cert %s failed: %v", ruleID, err)
+				RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditRulePart(ruleID), "类型：ACME证书", AuditResultPart("io_error")), "")
+			} else {
+				acmeRecovered++
+			}
+		}
+		if err := rows2.Err(); err != nil {
+			log.Printf("certstore: iterate ACME certs failed: %v", err)
 		}
 		rows2.Close()
 	}

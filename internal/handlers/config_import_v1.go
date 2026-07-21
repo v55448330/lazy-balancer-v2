@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -109,6 +110,9 @@ func (b *v1Backup) parse() ([]v1Proxy, map[int]v1Upstream, error) {
 	}
 	byPK := make(map[int]v1Upstream, len(upstreams))
 	for _, u := range upstreams {
+		if _, dup := byPK[u.PK]; dup {
+			return nil, nil, fmt.Errorf("upstream_config 中存在重复的主键: %d", u.PK)
+		}
 		byPK[u.PK] = u
 	}
 	return proxies, byPK, nil
@@ -309,6 +313,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	imported := 0
 	tlsCount := 0
 	upstreamCount := 0
+	var pendingCerts []struct{ id, cert, key string }
 	for _, r := range rules {
 		caddyID, err := services.GenerateCaddyID()
 		if err != nil {
@@ -342,11 +347,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			upstreamCount++
 		}
 		if r.EnableTLS && r.TLSCert != "" && r.TLSKey != "" {
-			if err := services.WriteCertFiles(caddyID, r.TLSCert, r.TLSKey); err != nil {
-				recordAudit(c, "导入失败", "配置备份", fmt.Sprintf("规则 %s 证书写入: %v", r.Name, err))
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入证书文件失败，已回滚: " + err.Error()})
-				return
-			}
+			pendingCerts = append(pendingCerts, struct{ id, cert, key string }{caddyID, r.TLSCert, r.TLSKey})
 		}
 		if r.EnableTLS {
 			tlsCount++
@@ -368,6 +369,11 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		return
 	}
 	committed = true
+	for _, pc := range pendingCerts {
+		if err := services.WriteCertFiles(pc.id, pc.cert, pc.key); err != nil {
+			log.Printf("导入后写入证书文件失败 %s: %v", pc.id, err)
+		}
+	}
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail("来源：v1 备份（覆盖导入规则）", fmt.Sprintf("规则 %d 条", imported), fmt.Sprintf("TLS 规则 %d 条", tlsCount), fmt.Sprintf("上游 %d 个", upstreamCount), services.AuditResultPart("success")))
 	recordAudit(c, "重载", "Caddy配置", "导入配置后自动重载")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已导入 %d 条规则", imported), Data: gin.H{"imported": imported}})
