@@ -21,19 +21,19 @@
           </el-form-item>
           <el-form-item label="证书日志大小">
             <el-input-number v-model="settings.cert_job_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
-            <el-text type="info" size="small" class="tip-inline">MB，单个证书签发日志达到该大小后滚动，保留 5 份（建议 10-50）</el-text>
+            <el-text type="info" size="small" class="tip-inline">MB，滚动阈值，保留 5 份（建议 10-50）</el-text>
           </el-form-item>
           <el-form-item label="运行日志大小">
             <el-input-number v-model="settings.runtime_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
-            <el-text type="info" size="small" class="tip-inline">MB，运行日志达到该大小后轮转（建议 50-200）</el-text>
+            <el-text type="info" size="small" class="tip-inline">MB，轮转阈值（建议 50-200）</el-text>
           </el-form-item>
           <el-form-item label="日志保留">
             <el-input-number v-model="settings.audit_retention_months" :min="1" :max="12" controls-position="right" style="width: 120px;" />
-            <el-text type="info" size="small" class="tip-inline">个月，操作日志与运行日志保留时长，超期自动清理（建议 3-6）</el-text>
+            <el-text type="info" size="small" class="tip-inline">个月，操作与运行日志超期清理（建议 3-6）</el-text>
           </el-form-item>
           <el-form-item label="登录过期">
             <el-input-number v-model="settings.jwt_expire_minutes" :min="5" :max="1440" controls-position="right" style="width: 120px;" />
-            <el-text type="info" size="small" class="tip-inline">分钟，登录令牌有效期，默认 20 分钟</el-text>
+            <el-text type="info" size="small" class="tip-inline">分钟，登录令牌有效期（默认 20）</el-text>
           </el-form-item>
           <el-form-item label="时区">
             <el-select v-model="settings.timezone" filterable class="compact-select">
@@ -57,7 +57,7 @@
               <el-option label="Australia/Sydney (UTC+10)" value="Australia/Sydney" />
               <el-option label="UTC" value="UTC" />
             </el-select>
-            <el-text type="info" size="small" class="tip-inline">影响所有日志时间戳和证书时间，修改即时生效；仅 Caddy 日志时间戳需在系统信息中重启服务</el-text>
+            <el-text type="info" size="small" class="tip-inline">影响日志时间戳与证书时间；仅 Caddy 日志需重启服务生效</el-text>
           </el-form-item>
           <el-form-item label="运行日志">
             <el-button size="small" :icon="View" @click="openAppLogDialog">查看日志</el-button>

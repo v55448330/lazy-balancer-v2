@@ -20,6 +20,7 @@ export interface SystemInfo {
   architecture: string
   node_mode: string
   caddy_version: string
+  uptime?: number
   network_ips: Record<string, string>
   ip_addresses?: string
   version?: string

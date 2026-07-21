@@ -530,8 +530,8 @@
 
               <template v-if="wizardForm.enable_active_health_check">
                 <el-form-item label="检查路径">
-                  <el-input v-model="wizardForm.health_check_path" placeholder="/health" style="width: 180px;" />
-                  <span class="form-tip-inline">主动探测 URI 路径</span>
+                  <el-input v-model="wizardForm.health_check_path" placeholder="默认 /" style="width: 180px;" />
+                  <span class="form-tip-inline">留空探测根路径 /；请求携带后端域名作为 Host 头</span>
                 </el-form-item>
               </template>
             </template>

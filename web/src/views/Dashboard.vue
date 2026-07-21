@@ -24,6 +24,7 @@
             <el-descriptions-item label="Caddy版本">
               <el-tag type="info" size="small">{{ systemInfo?.caddy_version || '-' }}</el-tag>
             </el-descriptions-item>
+            <el-descriptions-item label="运行时间">{{ formatUptime(systemInfo?.uptime) }}</el-descriptions-item>
           </el-descriptions>
           <div v-if="ipList.length > 0" class="network-section">
             <div class="section-label">网络接口</div>
@@ -298,6 +299,17 @@ import type { SystemInfo, SystemMetrics, CaddyMetrics, RealtimeTraffic, Connecti
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent])
 
 const authStore = useAuthStore()
+
+const formatUptime = (seconds?: number): string => {
+  if (!seconds || seconds < 0) return '-'
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor((seconds % 86400) / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  if (d > 0) return `${d} 天 ${h} 小时`
+  if (h > 0) return `${h} 小时 ${m} 分`
+  if (m > 0) return `${m} 分 ${Math.floor(seconds % 60)} 秒`
+  return `${Math.floor(seconds)} 秒`
+}
 
 const systemInfo = ref<SystemInfo | null>(null)
 const systemMetrics = ref<SystemMetrics | null>(null)

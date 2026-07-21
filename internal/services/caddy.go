@@ -2352,13 +2352,19 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 				if hcPasses <= 0 {
 					hcPasses = 2
 				}
-				healthChecks["active"] = map[string]interface{}{
+				active := map[string]interface{}{
 					"uri":      hcPath,
 					"timeout":  fmt.Sprintf("%ds", rule.HealthCheckTimeout),
 					"interval": fmt.Sprintf("%ds", rule.HealthCheckInterval),
 					"passes":   hcPasses,
 					"fails":    hcThreshold,
 				}
+				if rule.HostHeader != "" {
+					active["headers"] = map[string]interface{}{
+						"Host": []string{rule.HostHeader},
+					}
+				}
+				healthChecks["active"] = active
 			}
 
 			proxyConfig["health_checks"] = healthChecks
@@ -2678,13 +2684,19 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 				if hcPasses <= 0 {
 					hcPasses = 2
 				}
-				healthChecks["active"] = map[string]interface{}{
+				active := map[string]interface{}{
 					"uri":      hcPath,
 					"timeout":  fmt.Sprintf("%ds", rule.HealthCheckTimeout),
 					"interval": fmt.Sprintf("%ds", rule.HealthCheckInterval),
 					"passes":   hcPasses,
 					"fails":    hcThreshold,
 				}
+				if rule.HostHeader != "" {
+					active["headers"] = map[string]interface{}{
+						"Host": []string{rule.HostHeader},
+					}
+				}
+				healthChecks["active"] = active
 			}
 
 			proxyConfig["health_checks"] = healthChecks
