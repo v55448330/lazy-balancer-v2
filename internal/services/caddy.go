@@ -13,7 +13,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"lazy-balancer-v2/internal/config"
@@ -27,58 +26,6 @@ type CaddyService struct {
 	client       *http.Client
 	mu           sync.Mutex
 	backupConfig map[string]interface{}
-
-	upstreamTraffic  sync.Map
-	upstreamFailTime sync.Map
-	samplerLastKick  atomic.Int64
-	samplerRunning   atomic.Bool
-}
-
-// KickTrafficSampler starts a short burst of in-flight sampling (250ms for
-// 30s) whenever the health endpoint is queried. Caddy exposes no per-upstream
-// success counter, so catching requests in flight is the only positive
-// traffic evidence for passive-only rules; bursting on demand keeps it
-// reliable while the UI is actively used and free when idle.
-func (s *CaddyService) KickTrafficSampler() {
-	s.samplerLastKick.Store(time.Now().UnixNano())
-	if s.samplerRunning.CompareAndSwap(false, true) {
-		go s.runTrafficSampler()
-	}
-}
-
-func (s *CaddyService) runTrafficSampler() {
-	defer s.samplerRunning.Store(false)
-	for {
-		s.sampleUpstreamTraffic()
-		if time.Since(time.Unix(0, s.samplerLastKick.Load())) > 30*time.Second {
-			return
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-}
-
-func (s *CaddyService) sampleUpstreamTraffic() {
-	resp, err := s.client.Get(s.adminURL + "/reverse_proxy/upstreams")
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-	var upstreams []map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&upstreams); err != nil {
-		return
-	}
-	for _, up := range upstreams {
-		key, ok := up["address"].(string)
-		if !ok {
-			key, ok = up["dial"].(string)
-		}
-		if !ok {
-			continue
-		}
-		if numReq, ok := up["num_requests"].(float64); ok && numReq > 0 {
-			s.upstreamTraffic.Store(key, true)
-		}
-	}
 }
 
 func NewCaddyService(adminURL string) *CaddyService {
@@ -88,23 +35,6 @@ func NewCaddyService(adminURL string) *CaddyService {
 			Timeout: 30 * time.Second,
 		},
 	}
-}
-
-// UpstreamHasTraffic reports whether the upstream has been observed serving
-// traffic since process start.
-func (s *CaddyService) UpstreamHasTraffic(dial string) bool {
-	_, ok := s.upstreamTraffic.Load(dial)
-	return ok
-}
-
-// recentlyFailed reports whether the upstream had failures within the memory
-// window; Caddy forgets passive failures after fail_duration, so without this
-// a dead upstream flips back to healthy-looking between failure windows.
-func (s *CaddyService) recentlyFailed(dial string) bool {
-	if t, ok := s.upstreamFailTime.Load(dial); ok {
-		return time.Since(t.(time.Time)) < 5*time.Minute
-	}
-	return false
 }
 
 func GenerateCaddyID() (string, error) {
@@ -1103,7 +1033,6 @@ type UpstreamHealthDetail struct {
 
 // GetUpstreamHealthDetailed returns detailed health status of all upstreams from Caddy
 func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*UpstreamHealthDetail, error) {
-	s.KickTrafficSampler()
 	healthStatus := make(map[string]map[string]*UpstreamHealthDetail)
 
 	upstreamHealth := s.getUpstreamHealthFromMetrics()
@@ -1154,11 +1083,6 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 						if !ok || handle["handler"] != "reverse_proxy" {
 							continue
 						}
-						hasActiveHC := false
-						if hc, ok := handle["health_checks"].(map[string]interface{}); ok {
-							_, hasActiveHC = hc["active"]
-						}
-
 						if _, exists := healthStatus[serverName]; !exists {
 							healthStatus[serverName] = make(map[string]*UpstreamHealthDetail)
 						}
@@ -1191,12 +1115,6 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 									// upstream is still erroring; surface that as degraded.
 									if observedHealthy && detail.Fails > 0 {
 										detail.Degraded = true
-									} else if observedHealthy && s.recentlyFailed(dial) {
-										detail.Degraded = true
-									} else if observedHealthy && !hasActiveHC && !s.UpstreamHasTraffic(dial) {
-										// Passive-only: without any traffic observation there
-										// is no evidence of health, so report unknown.
-										detail.Unknown = true
 									}
 								} else if detail.Fails > 0 {
 									// Passive health observed failures.
@@ -1204,6 +1122,13 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 								} else {
 									// No observation from Caddy at all.
 									detail.Unknown = true
+								}
+
+								if detail.Unknown {
+									// No failure evidence either way; assume healthy
+									// until Caddy reports otherwise.
+									detail.Unknown = false
+									detail.Healthy = true
 								}
 
 								healthStatus[serverName][dial] = detail
@@ -1228,15 +1153,16 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 									detail.Healthy = observedHealthy
 									if observedHealthy && detail.Fails > 0 {
 										detail.Degraded = true
-									} else if observedHealthy && s.recentlyFailed(dial) {
-										detail.Degraded = true
-									} else if observedHealthy && !hasActiveHC && !s.UpstreamHasTraffic(dial) {
-										detail.Unknown = true
 									}
 								} else if detail.Fails > 0 {
 									detail.Healthy = false
 								} else {
 									detail.Unknown = true
+								}
+
+								if detail.Unknown {
+									detail.Unknown = false
+									detail.Healthy = true
 								}
 
 								healthStatus[serverName][dial] = detail
@@ -1361,16 +1287,10 @@ func (s *CaddyService) getUpstreamMetrics() map[string]*upstreamMetric {
 
 		if numReq, ok := up["num_requests"].(float64); ok {
 			metric.NumRequests = int(numReq)
-			if metric.NumRequests > 0 {
-				s.upstreamTraffic.Store(key, true)
-			}
 		}
 
 		if fails, ok := up["fails"].(float64); ok {
 			metric.Fails = int(fails)
-			if metric.Fails > 0 {
-				s.upstreamFailTime.Store(key, time.Now())
-			}
 		}
 
 		result[key] = metric
