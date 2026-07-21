@@ -1149,7 +1149,7 @@ const certConfigs = ref<any[]>([])
 const caProviders = ref<Array<{ id: number; name: string; enabled: boolean }>>([])
 const enabledCAProviders = computed(() => caProviders.value.filter(p => p.enabled))
 const globalConfig = ref<{ default_ca_provider_id?: number }>({})
-const healthStatus = ref<Record<string, { healthy: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }>>({})
+const healthStatus = ref<Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }>>({})
 let healthPollTimer: ReturnType<typeof setInterval> | null = null
 let certJobPollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -1208,17 +1208,19 @@ const upstreamHostWarning = computed(() => {
   return ''
 })
 
-const getHealthTagType = (status: { healthy: number; unknown: number; total: number }) => {
-  if (status.healthy === 0 && status.unknown === 0) return 'danger'
-  if (status.unknown > 0) return 'info'
-  if (status.healthy < status.total) return 'warning'
+interface HealthSummary { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number }
+
+const getHealthTagType = (status: HealthSummary) => {
+  if (status.unhealthy + status.degraded === status.total) return 'danger'
+  if (status.unhealthy + status.degraded > 0) return 'warning'
+  if (status.unknown === status.total) return 'info'
   return 'success'
 }
 
-const getHealthLabel = (status: { healthy: number; unknown: number; total: number }) => {
-  if (status.healthy === 0 && status.unknown === 0) return '异常'
-  if (status.unknown > 0) return '未知'
-  if (status.healthy < status.total) return '异常'
+const getHealthLabel = (status: HealthSummary) => {
+  if (status.unhealthy + status.degraded === status.total) return '异常'
+  if (status.unhealthy + status.degraded > 0) return '异常'
+  if (status.unknown === status.total) return '未知'
   return '正常'
 }
 
@@ -1252,10 +1254,12 @@ const fetchHealthStatus = async () => {
     const healthData = res.data || {}
     console.log('Health data received:', JSON.stringify(healthData))
     
-    const mapped: Record<string, { healthy: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
+    const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
     for (const rule of rules.value) {
       if (rule.upstreams && rule.upstreams.length > 0) {
         let healthy = 0
+        let unhealthy = 0
+        let degraded = 0
         let unknown = 0
         const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> = {}
         for (const upstream of rule.upstreams) {
@@ -1285,10 +1289,12 @@ const fetchHealthStatus = async () => {
           
           upstreamStatus[upstreamKey] = { healthy: isHealthy, unknown: isUnknown, degraded: isDegraded, num_requests: numRequests, fails }
           if (isUnknown) unknown++
-          else if (isHealthy && !isDegraded) healthy++
+          else if (!isHealthy) unhealthy++
+          else if (isDegraded) degraded++
+          else healthy++
         }
         if (rule.caddy_id) {
-          mapped[rule.caddy_id] = { healthy, unknown, total: rule.upstreams.length, upstreams: upstreamStatus }
+          mapped[rule.caddy_id] = { healthy, unhealthy, degraded, unknown, total: rule.upstreams.length, upstreams: upstreamStatus }
         }
       }
     }

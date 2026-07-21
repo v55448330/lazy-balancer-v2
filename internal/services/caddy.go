@@ -1083,10 +1083,6 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 						if !ok || handle["handler"] != "reverse_proxy" {
 							continue
 						}
-						hasActiveHC := false
-						if hc, ok := handle["health_checks"].(map[string]interface{}); ok {
-							_, hasActiveHC = hc["active"]
-						}
 
 						if _, exists := healthStatus[serverName]; !exists {
 							healthStatus[serverName] = make(map[string]*UpstreamHealthDetail)
@@ -1120,10 +1116,6 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 									// upstream is still erroring; surface that as degraded.
 									if observedHealthy && detail.Fails > 0 {
 										detail.Degraded = true
-									} else if observedHealthy && !hasActiveHC && detail.Fails == 0 {
-										// Passive-only mode: a healthy gauge merely means no
-										// failures were observed, which is not evidence of health.
-										detail.Unknown = true
 									}
 								} else if detail.Fails > 0 {
 									// Passive health observed failures.
@@ -1155,8 +1147,6 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 									detail.Healthy = observedHealthy
 									if observedHealthy && detail.Fails > 0 {
 										detail.Degraded = true
-									} else if observedHealthy && !hasActiveHC && detail.Fails == 0 {
-										detail.Unknown = true
 									}
 								} else if detail.Fails > 0 {
 									detail.Healthy = false
@@ -1198,10 +1188,6 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 						if !ok || handle["handler"] != "proxy" {
 							continue
 						}
-						hasActiveHC := false
-						if hc, ok := handle["health_checks"].(map[string]interface{}); ok {
-							_, hasActiveHC = hc["active"]
-						}
 						upstreams, ok := handle["upstreams"].([]interface{})
 						if !ok {
 							continue
@@ -1231,8 +1217,6 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 								detail.Healthy = observedHealthy
 								if observedHealthy && detail.Fails > 0 {
 									detail.Degraded = true
-								} else if observedHealthy && !hasActiveHC && detail.Fails == 0 {
-									detail.Unknown = true
 								}
 							} else if detail.Fails > 0 {
 								detail.Healthy = false
