@@ -502,13 +502,9 @@
 
             <el-form-item label="失败阈值">
               <el-input-number v-model="wizardForm.health_check_unhealthy_threshold" :min="1" :max="10" controls-position="right" style="width: 120px;" />
-              <span class="form-tip-inline">次失败后标记为不健康</span>
+              <span class="form-tip-inline">次失败后标记为不健康（被动计数与主动探测共用）</span>
             </el-form-item>
 
-            <el-form-item label="恢复阈值">
-              <el-input-number v-model="wizardForm.health_check_healthy_threshold" :min="1" :max="10" controls-position="right" style="width: 120px;" />
-              <span class="form-tip-inline">次探测成功后恢复为健康</span>
-            </el-form-item>
 
             <el-form-item label="检查间隔">
               <el-input-number v-model="wizardForm.health_check_interval" :min="5" :max="300" controls-position="right" style="width: 120px;" />
@@ -533,6 +529,10 @@
                   <el-input v-model="wizardForm.health_check_path" placeholder="默认 /" style="width: 180px;" />
                   <span class="form-tip-inline">留空探测根路径 /；请求携带后端域名作为 Host 头</span>
                 </el-form-item>
+                <el-form-item label="恢复阈值">
+                  <el-input-number v-model="wizardForm.health_check_healthy_threshold" :min="1" :max="10" controls-position="right" style="width: 120px;" />
+                  <span class="form-tip-inline">次连续探测成功后恢复为健康</span>
+                </el-form-item>
               </template>
             </template>
 
@@ -553,6 +553,10 @@
                 <el-form-item label="检查端口">
                   <el-input-number v-model="wizardForm.tcp_health_check_port" :min="1" :max="65535" controls-position="right" style="width: 120px;" />
                   <span class="form-tip-inline">0 表示使用第一个上游端口</span>
+                </el-form-item>
+                <el-form-item label="恢复阈值">
+                  <el-input-number v-model="wizardForm.health_check_healthy_threshold" :min="1" :max="10" controls-position="right" style="width: 120px;" />
+                  <span class="form-tip-inline">次连续探测成功后恢复为健康</span>
                 </el-form-item>
               </template>
             </template>

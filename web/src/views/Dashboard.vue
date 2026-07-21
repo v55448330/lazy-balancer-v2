@@ -14,7 +14,7 @@
               </el-tag>
             </div>
           </template>
-          <el-descriptions :column="5" border>
+          <el-descriptions :column="6" border>
             <el-descriptions-item label="主机名">
               <span class="text-primary">{{ systemInfo?.hostname || '-' }}</span>
             </el-descriptions-item>
