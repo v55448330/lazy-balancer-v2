@@ -59,10 +59,10 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.POST("/cluster/nodes/report", clusterTokenAuth(db.DB), h.ReportClusterNode)
 
 		v1.Use(apiKeyAuth(cfg))
-		v1.GET("/caddy/metrics", h.GetCaddyMetrics)
 
 		v1.Use(jwtAuth(cfg))
 		{
+			v1.GET("/caddy/metrics", h.GetCaddyMetrics)
 			v1.POST("/auth/logout", h.Logout)
 			// User management (admin only)
 			admin := v1.Group("")
@@ -278,9 +278,25 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
+		// Resolve the current role and enabled state from the database so that
+		// demotion or disabling takes effect immediately, not at token expiry.
+		userIDFloat, ok := claims["user_id"].(float64)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid token subject"})
+			c.Abort()
+			return
+		}
+		var dbRole string
+		var dbEnabled bool
+		if err := db.DB.QueryRow("SELECT role, COALESCE(is_enabled,1) FROM users WHERE id = ?", int64(userIDFloat)).Scan(&dbRole, &dbEnabled); err != nil || !dbEnabled {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在或已禁用"})
+			c.Abort()
+			return
+		}
+
 		c.Set("user_id", claims["user_id"])
 		c.Set("username", claims["username"])
-		c.Set("role", claims["role"])
+		c.Set("role", dbRole)
 
 		c.Next()
 	}

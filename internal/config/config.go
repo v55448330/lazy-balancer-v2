@@ -1,9 +1,12 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"log"
 	"os"
-	"strconv"
+	"path/filepath"
 	"time"
 )
 
@@ -74,9 +77,10 @@ func Load(path string) *Config {
 		}
 	}
 
-	// Generate JWT secret if not set
+	// JWT secret: env wins; otherwise persist a random one so tokens survive
+	// restarts and the secret is never predictable.
 	if cfg.JWTSecret == "" {
-		cfg.JWTSecret = generateSecret()
+		cfg.JWTSecret = loadOrCreateJWTSecret(cfg.DataDir)
 	}
 
 	return cfg
@@ -89,7 +93,20 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-func generateSecret() string {
-	// Simple secret generation - in production use crypto/rand
-	return "lb_secret_" + strconv.FormatInt(time.Now().Unix(), 10)
+func loadOrCreateJWTSecret(dataDir string) string {
+	secretPath := filepath.Join(dataDir, "jwt_secret")
+	if data, err := os.ReadFile(secretPath); err == nil && len(data) >= 32 {
+		return string(data)
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		log.Fatalf("生成 JWT 密钥失败: %v", err)
+	}
+	secret := hex.EncodeToString(buf)
+	if err := os.MkdirAll(dataDir, 0755); err == nil {
+		if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
+			log.Printf("JWT 密钥写入 %s 失败（重启后令牌将失效）: %v", secretPath, err)
+		}
+	}
+	return secret
 }

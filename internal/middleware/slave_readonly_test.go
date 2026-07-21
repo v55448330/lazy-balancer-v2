@@ -12,6 +12,7 @@ import (
 	jwt "github.com/golang-jwt/jwt/v5"
 
 	"lazy-balancer-v2/internal/config"
+	"lazy-balancer-v2/internal/db"
 )
 
 func newReadOnlyGuardTestRouter(t *testing.T, isMaster bool, role string) *gin.Engine {
@@ -77,6 +78,14 @@ func TestReadOnlyGuard_blocks_non_admin_jwt_after_authentication(t *testing.T) {
 		t.Fatalf("seed database: %v", err)
 	}
 	cfg := &config.Config{JWTSecret: "test-secret"}
+	oldDB := db.DB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("init database: %v", err)
+	}
+	t.Cleanup(func() { db.DB = oldDB })
+	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, is_enabled) VALUES (7, 'viewer', 'x', 'user', 1)"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id": 7, "username": "viewer", "role": "user", "exp": time.Now().Add(time.Hour).Unix(),
 	})

@@ -28,7 +28,7 @@ func readOnlyGuard(database *sql.DB) gin.HandlerFunc {
 		}
 		var isMaster bool
 		if err := database.QueryRowContext(c.Request.Context(), "SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
-			c.Next()
+			c.AbortWithStatusJSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "节点角色查询失败"})
 			return
 		}
 		if !isMaster {
