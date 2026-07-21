@@ -28,9 +28,10 @@ type CaddyService struct {
 	mu           sync.Mutex
 	backupConfig map[string]interface{}
 
-	upstreamTraffic sync.Map
-	samplerLastKick atomic.Int64
-	samplerRunning  atomic.Bool
+	upstreamTraffic  sync.Map
+	upstreamFailTime sync.Map
+	samplerLastKick  atomic.Int64
+	samplerRunning   atomic.Bool
 }
 
 // KickTrafficSampler starts a short burst of in-flight sampling (250ms for
@@ -94,6 +95,16 @@ func NewCaddyService(adminURL string) *CaddyService {
 func (s *CaddyService) UpstreamHasTraffic(dial string) bool {
 	_, ok := s.upstreamTraffic.Load(dial)
 	return ok
+}
+
+// recentlyFailed reports whether the upstream had failures within the memory
+// window; Caddy forgets passive failures after fail_duration, so without this
+// a dead upstream flips back to healthy-looking between failure windows.
+func (s *CaddyService) recentlyFailed(dial string) bool {
+	if t, ok := s.upstreamFailTime.Load(dial); ok {
+		return time.Since(t.(time.Time)) < 5*time.Minute
+	}
+	return false
 }
 
 func GenerateCaddyID() (string, error) {
@@ -1180,6 +1191,8 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 									// upstream is still erroring; surface that as degraded.
 									if observedHealthy && detail.Fails > 0 {
 										detail.Degraded = true
+									} else if observedHealthy && s.recentlyFailed(dial) {
+										detail.Degraded = true
 									} else if observedHealthy && !hasActiveHC && !s.UpstreamHasTraffic(dial) {
 										// Passive-only: without any traffic observation there
 										// is no evidence of health, so report unknown.
@@ -1214,6 +1227,8 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 								if observedHealthy, ok := upstreamHealth[dial]; ok {
 									detail.Healthy = observedHealthy
 									if observedHealthy && detail.Fails > 0 {
+										detail.Degraded = true
+									} else if observedHealthy && s.recentlyFailed(dial) {
 										detail.Degraded = true
 									} else if observedHealthy && !hasActiveHC && !s.UpstreamHasTraffic(dial) {
 										detail.Unknown = true
@@ -1353,6 +1368,9 @@ func (s *CaddyService) getUpstreamMetrics() map[string]*upstreamMetric {
 
 		if fails, ok := up["fails"].(float64); ok {
 			metric.Fails = int(fails)
+			if metric.Fails > 0 {
+				s.upstreamFailTime.Store(key, time.Now())
+			}
 		}
 
 		result[key] = metric
