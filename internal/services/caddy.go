@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"lazy-balancer-v2/internal/config"
@@ -28,6 +29,55 @@ type CaddyService struct {
 	backupConfig map[string]interface{}
 
 	upstreamTraffic sync.Map
+	samplerLastKick atomic.Int64
+	samplerRunning  atomic.Bool
+}
+
+// KickTrafficSampler starts a short burst of in-flight sampling (250ms for
+// 30s) whenever the health endpoint is queried. Caddy exposes no per-upstream
+// success counter, so catching requests in flight is the only positive
+// traffic evidence for passive-only rules; bursting on demand keeps it
+// reliable while the UI is actively used and free when idle.
+func (s *CaddyService) KickTrafficSampler() {
+	s.samplerLastKick.Store(time.Now().UnixNano())
+	if s.samplerRunning.CompareAndSwap(false, true) {
+		go s.runTrafficSampler()
+	}
+}
+
+func (s *CaddyService) runTrafficSampler() {
+	defer s.samplerRunning.Store(false)
+	for {
+		s.sampleUpstreamTraffic()
+		if time.Since(time.Unix(0, s.samplerLastKick.Load())) > 30*time.Second {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func (s *CaddyService) sampleUpstreamTraffic() {
+	resp, err := s.client.Get(s.adminURL + "/reverse_proxy/upstreams")
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	var upstreams []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&upstreams); err != nil {
+		return
+	}
+	for _, up := range upstreams {
+		key, ok := up["address"].(string)
+		if !ok {
+			key, ok = up["dial"].(string)
+		}
+		if !ok {
+			continue
+		}
+		if numReq, ok := up["num_requests"].(float64); ok && numReq > 0 {
+			s.upstreamTraffic.Store(key, true)
+		}
+	}
 }
 
 func NewCaddyService(adminURL string) *CaddyService {
@@ -1042,6 +1092,7 @@ type UpstreamHealthDetail struct {
 
 // GetUpstreamHealthDetailed returns detailed health status of all upstreams from Caddy
 func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*UpstreamHealthDetail, error) {
+	s.KickTrafficSampler()
 	healthStatus := make(map[string]map[string]*UpstreamHealthDetail)
 
 	upstreamHealth := s.getUpstreamHealthFromMetrics()
