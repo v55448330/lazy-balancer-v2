@@ -116,6 +116,9 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
 		return
 	}
+	if qm := services.GetCAQueueManager(); qm != nil {
+		qm.CancelJob(id)
+	}
 	if _, err := db.DB.Exec("DELETE FROM cert_jobs WHERE id = ?", id); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete job"})
 		return

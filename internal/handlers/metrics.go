@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"strings"
+	"strconv"
 	"database/sql"
 	"io"
 	"net/http"
@@ -56,15 +58,41 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
 }
 
+
+// metricsIntervalModifier converts shorthand intervals (1h/6h/24h/7d/30d or
+// "<n>h"/"<n>d") into a SQLite datetime modifier; unknown values fall back to
+// one hour. SQLite has no "1h" syntax and arithmetic concatenation yields NULL.
+func metricsIntervalModifier(interval string) string {
+	interval = strings.TrimSpace(strings.ToLower(interval))
+	if interval == "" {
+		return "-1 hours"
+	}
+	unit := interval[len(interval)-1:]
+	n := strings.TrimSuffix(interval, unit)
+	if _, err := strconv.Atoi(n); err != nil {
+		return "-1 hours"
+	}
+	switch unit {
+	case "h":
+		return "-" + n + " hours"
+	case "d":
+		return "-" + n + " days"
+	case "m":
+		return "-" + n + " months"
+	default:
+		return "-1 hours"
+	}
+}
+
 func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 	ruleID := c.Query("rule_id")
-	interval := c.DefaultQuery("interval", "1h")
+	interval := metricsIntervalModifier(c.DefaultQuery("interval", "1h"))
 
 	var rows *sql.Rows
 	var err error
 
 	if ruleID != "" {
-		rows, err = db.DB.Query(`
+		rows, err = db.MetricsDB.Query(`
 			SELECT timestamp, requests_total, requests_2xx, requests_3xx, 
 			       requests_4xx, requests_5xx, bytes_in, bytes_out
 			FROM metrics_history 
@@ -72,7 +100,7 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 			ORDER BY timestamp
 		`, ruleID, interval)
 	} else {
-		rows, err = db.DB.Query(`
+		rows, err = db.MetricsDB.Query(`
 			SELECT timestamp, SUM(requests_total), SUM(requests_2xx), SUM(requests_3xx), 
 			       SUM(requests_4xx), SUM(requests_5xx), SUM(bytes_in), SUM(bytes_out)
 			FROM metrics_history 

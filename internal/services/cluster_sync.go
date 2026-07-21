@@ -50,7 +50,14 @@ func (s *SyncService) Start() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
-	go s.run(ctx)
+	go func() {
+		s.run(ctx)
+		// Clear cancel on exit (transient error, demotion, or role loss) so a
+		// later Start() can revive the loop instead of no-opping forever.
+		s.mu.Lock()
+		s.cancel = nil
+		s.mu.Unlock()
+	}()
 }
 
 func (s *SyncService) Stop() {

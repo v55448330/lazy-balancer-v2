@@ -338,12 +338,9 @@ const sortedRules = computed(() =>
 )
 
 const ipList = computed(() => {
-  if (!systemInfo.value?.ip_addresses) return []
-  try {
-    return JSON.parse(systemInfo.value.ip_addresses)
-  } catch {
-    return []
-  }
+  const ips = systemInfo.value?.network_ips
+  if (!ips || typeof ips !== 'object') return []
+  return Object.entries(ips).map(([iface, ip]) => ({ iface, ip }))
 })
 
 const getStrategyLabel = (strategy: string) => {

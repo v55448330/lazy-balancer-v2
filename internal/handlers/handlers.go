@@ -114,6 +114,11 @@ func (h *Handlers) applyCaddyConfig() {
 	}
 }
 
+func (h *Handlers) applyCaddyConfigE() error {
+	config := services.GenerateCaddyConfig(h.cfg)
+	return h.caddyService.ApplyConfig(config)
+}
+
 func (h *Handlers) applyCaddyConfigWithRollback() error {
 	// Backup current Caddy config before applying
 	if err := h.caddyService.BackupConfig(); err != nil {

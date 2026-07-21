@@ -270,8 +270,12 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 }
 
 func (h *Handlers) ReloadCaddy(c *gin.Context) {
-	h.applyCaddyConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy config reloaded"})
+	if err := h.applyCaddyConfigE(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置重载失败: " + err.Error()})
+		return
+	}
+	recordAudit(c, "重载", "Caddy配置", "手动重载 Caddy 配置")
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy 配置已重载"})
 }
 
 func (h *Handlers) GetCaddyStatus(c *gin.Context) {

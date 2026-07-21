@@ -44,6 +44,26 @@ func GetCAQueueManager() *CAQueueManager {
 	return caQueueManager
 }
 
+// CancelJob aborts an in-flight issuance for the given job across all
+// provider queues; deletion handlers call this before removing the row so a
+// worker cannot keep issuing and deploying after the job is gone.
+func (m *CAQueueManager) CancelJob(jobID int) {
+	m.mu.Lock()
+	queues := make([]*caQueue, 0, len(m.queues))
+	for _, q := range m.queues {
+		queues = append(queues, q)
+	}
+	m.mu.Unlock()
+	for _, q := range queues {
+		q.mu.Lock()
+		cancel, ok := q.cancels[jobID]
+		q.mu.Unlock()
+		if ok {
+			cancel()
+		}
+	}
+}
+
 // Enqueue adds or re-enqueues a cert job.
 func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains string) error {
 	m.mu.Lock()
@@ -115,6 +135,7 @@ type caQueue struct {
 	pending   []queueItem
 	running   int
 	active    map[int]struct{} // jobIDs currently pending or running
+	cancels   map[int]context.CancelFunc
 	lastOrder time.Time
 	reloader  func() error
 	mu        sync.Mutex
@@ -132,6 +153,7 @@ func newCAQueue(provider models.CAProvider, reloader func() error) *caQueue {
 		provider: provider,
 		reloader: reloader,
 		active:   make(map[int]struct{}),
+		cancels:  make(map[int]context.CancelFunc),
 		stopCh:   make(chan struct{}),
 		ctx:      ctx,
 		cancel:   cancel,
@@ -191,6 +213,7 @@ func (q *caQueue) execute(item queueItem) {
 		q.mu.Lock()
 		q.running--
 		delete(q.active, item.jobID)
+		delete(q.cancels, item.jobID)
 		q.mu.Unlock()
 	}()
 
@@ -203,6 +226,9 @@ func (q *caQueue) execute(item queueItem) {
 	issuer := NewCertIssuer(q.reloader)
 	ctx, cancel := context.WithTimeout(q.ctx, 15*time.Minute)
 	defer cancel()
+	q.mu.Lock()
+	q.cancels[item.jobID] = cancel
+	q.mu.Unlock()
 
 	if err := issuer.Issue(ctx, item.jobID, item.ruleID, item.domains, q.provider); err != nil {
 		log.Printf("CA queue execution failed for job %d rule %s: %v", item.jobID, item.ruleID, err)

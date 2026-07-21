@@ -1,6 +1,7 @@
 package services
 
 import (
+	"sort"
 	"io"
 	"log"
 	"net/http"
@@ -15,12 +16,15 @@ import (
 
 // MetricsService collects and stores metrics from Caddy
 type MetricsService struct {
-	metricsURL string
-	interval   int
-	client     *http.Client
-	stopCh     chan struct{}
-	overview   models.MetricsOverview
-	mu         sync.RWMutex
+	metricsURL    string
+	interval      int
+	client        *http.Client
+	stopCh        chan struct{}
+	overview      models.MetricsOverview
+	mu            sync.RWMutex
+	lastTotal     int64
+	lastSampleAt  time.Time
+	hasLastSample bool
 }
 
 func NewMetricsService(metricsURL string, interval int) *MetricsService {
@@ -60,6 +64,10 @@ func (m *MetricsService) collect() {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Metrics endpoint returned status %d, skipping sample", resp.StatusCode)
+		return
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -129,13 +137,53 @@ func (m *MetricsService) parsePrometheusMetrics(text string) parsedMetrics {
 		}
 	}
 
-	// Parse latency buckets (simplified - use last bucket as rough estimate)
-	// This is a simplified version
-	metrics.latencyP50 = 10 // Default ms
-	metrics.latencyP95 = 50
-	metrics.latencyP99 = 100
+	metrics.latencyP50, metrics.latencyP95, metrics.latencyP99 = estimateLatencyPercentiles(text)
 
 	return metrics
+}
+
+// estimateLatencyPercentiles computes p50/p95/p99 in milliseconds from the
+// cumulative caddy_http_request_duration_seconds_bucket histogram.
+func estimateLatencyPercentiles(text string) (int, int, int) {
+	re := regexp.MustCompile(`caddy_http_request_duration_seconds_bucket\{[^}]*le="([^"]+)"[^}]*\} (\d+)`)
+	matches := re.FindAllStringSubmatch(text, -1)
+	type bucket struct {
+		le    float64
+		count int64
+	}
+	byLE := map[float64]int64{}
+	for _, m := range matches {
+		le, err := strconv.ParseFloat(m[1], 64)
+		if err != nil {
+			continue
+		}
+		count, _ := strconv.ParseInt(m[2], 10, 64)
+		if count > byLE[le] {
+			byLE[le] = count
+		}
+	}
+	if len(byLE) == 0 {
+		return 0, 0, 0
+	}
+	buckets := make([]bucket, 0, len(byLE))
+	var total int64
+	for le, count := range byLE {
+		buckets = append(buckets, bucket{le, count})
+		if count > total {
+			total = count
+		}
+	}
+	sort.Slice(buckets, func(i, j int) bool { return buckets[i].le < buckets[j].le })
+	percentile := func(q float64) int {
+		target := int64(float64(total) * q)
+		for _, b := range buckets {
+			if b.count >= target {
+				return int(b.le * 1000)
+			}
+		}
+		return 0
+	}
+	return percentile(0.5), percentile(0.95), percentile(0.99)
 }
 
 func (m *MetricsService) storeMetrics(metrics parsedMetrics) {
@@ -171,9 +219,20 @@ func (m *MetricsService) updateOverview(metrics parsedMetrics) {
 	var onlineNodes int
 	db.DB.QueryRow("SELECT COUNT(*) FROM nodes WHERE status = 'online'").Scan(&onlineNodes)
 
+	var rps float64
+	now := time.Now()
+	if m.hasLastSample && metrics.requestsTotal >= m.lastTotal {
+		if elapsed := now.Sub(m.lastSampleAt).Seconds(); elapsed > 0 {
+			rps = float64(metrics.requestsTotal-m.lastTotal) / elapsed
+		}
+	}
+	m.lastTotal = metrics.requestsTotal
+	m.lastSampleAt = now
+	m.hasLastSample = true
+
 	m.overview = models.MetricsOverview{
 		TotalRequests:  metrics.requestsTotal,
-		RequestsPerSec: float64(metrics.requestsTotal) / 3600, // Approximate
+		RequestsPerSec: rps,
 		BytesIn:        metrics.bytesIn,
 		BytesOut:       metrics.bytesOut,
 		Status2xx:      metrics.requests2xx,

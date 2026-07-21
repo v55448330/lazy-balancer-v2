@@ -267,6 +267,29 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	}
 	queued := 0
 	if req.CaddyID != "" && req.Domain != "" {
+		var enabled, enableTLS bool
+		var protocol, tlsSource, ruleDomain string
+		err := db.DB.QueryRow(`SELECT COALESCE(enabled,0), COALESCE(enable_tls,0), COALESCE(protocol,''), COALESCE(tls_source,''), COALESCE(domain,'') FROM lb_rules WHERE caddy_id = ?`, req.CaddyID).
+			Scan(&enabled, &enableTLS, &protocol, &tlsSource, &ruleDomain)
+		if err != nil {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+			return
+		}
+		if !enabled || protocol != "http" || !enableTLS || tlsSource != "acme_dns" {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则不是启用状态的 ACME HTTPS 规则"})
+			return
+		}
+		domainOK := false
+		for _, d := range strings.Split(ruleDomain, ",") {
+			if strings.TrimSpace(d) == req.Domain {
+				domainOK = true
+				break
+			}
+		}
+		if !domainOK {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名不属于该规则"})
+			return
+		}
 		if err := services.CreateOrRequeueCertJob(req.CaddyID, req.Domain, 0, qm); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建签发任务失败: " + err.Error()})
 			return
