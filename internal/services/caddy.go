@@ -26,6 +26,8 @@ type CaddyService struct {
 	client       *http.Client
 	mu           sync.Mutex
 	backupConfig map[string]interface{}
+
+	upstreamTraffic sync.Map
 }
 
 func NewCaddyService(adminURL string) *CaddyService {
@@ -35,6 +37,13 @@ func NewCaddyService(adminURL string) *CaddyService {
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+// UpstreamHasTraffic reports whether the upstream has been observed serving
+// traffic since process start.
+func (s *CaddyService) UpstreamHasTraffic(dial string) bool {
+	_, ok := s.upstreamTraffic.Load(dial)
+	return ok
 }
 
 func GenerateCaddyID() (string, error) {
@@ -1083,6 +1092,10 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 						if !ok || handle["handler"] != "reverse_proxy" {
 							continue
 						}
+						hasActiveHC := false
+						if hc, ok := handle["health_checks"].(map[string]interface{}); ok {
+							_, hasActiveHC = hc["active"]
+						}
 
 						if _, exists := healthStatus[serverName]; !exists {
 							healthStatus[serverName] = make(map[string]*UpstreamHealthDetail)
@@ -1116,6 +1129,10 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 									// upstream is still erroring; surface that as degraded.
 									if observedHealthy && detail.Fails > 0 {
 										detail.Degraded = true
+									} else if observedHealthy && !hasActiveHC && !s.UpstreamHasTraffic(dial) {
+										// Passive-only: without any traffic observation there
+										// is no evidence of health, so report unknown.
+										detail.Unknown = true
 									}
 								} else if detail.Fails > 0 {
 									// Passive health observed failures.
@@ -1147,6 +1164,8 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 									detail.Healthy = observedHealthy
 									if observedHealthy && detail.Fails > 0 {
 										detail.Degraded = true
+									} else if observedHealthy && !hasActiveHC && !s.UpstreamHasTraffic(dial) {
+										detail.Unknown = true
 									}
 								} else if detail.Fails > 0 {
 									detail.Healthy = false
@@ -1276,6 +1295,9 @@ func (s *CaddyService) getUpstreamMetrics() map[string]*upstreamMetric {
 
 		if numReq, ok := up["num_requests"].(float64); ok {
 			metric.NumRequests = int(numReq)
+			if metric.NumRequests > 0 {
+				s.upstreamTraffic.Store(key, true)
+			}
 		}
 
 		if fails, ok := up["fails"].(float64); ok {
