@@ -24,7 +24,7 @@
             <a class="rule-name-link" @click.prevent="viewConfig(row)">{{ row.name }}</a>
           </template>
         </el-table-column>
-        <el-table-column prop="domain" label="域名" min-width="140">
+        <el-table-column prop="domain" label="域名" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="domain">{{ row.domain || '-' }}</span>
           </template>
@@ -36,12 +36,12 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="负载策略" width="120" align="center">
+        <el-table-column label="负载策略" width="100" align="center">
           <template #default="{ row }">
             <span>{{ getStrategyLabel(row.strategy) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="listen_port" label="端口" width="70" align="center">
+        <el-table-column prop="listen_port" label="端口" width="60" align="center">
           <template #default="{ row }">
             <span class="port">{{ row.listen_port }}</span>
           </template>
@@ -53,7 +53,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="TLS" width="120" align="center">
+        <el-table-column label="TLS" width="110" align="center">
           <template #default="{ row }">
             <el-popover
               v-if="row.enable_tls"
@@ -148,7 +148,7 @@
             <span class="updater-name">{{ getUpdaterName(row.updated_by || row.created_by) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="更新时间" width="170" align="center">
+        <el-table-column label="更新时间" width="160" align="center">
           <template #default="{ row }">
             <span class="updated-time">{{ formatUpdatedTime(row.updated_at) }}</span>
           </template>

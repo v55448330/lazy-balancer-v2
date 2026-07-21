@@ -15,8 +15,8 @@
         <template #empty>
           <el-empty description="暂无操作日志" :image-size="60" />
         </template>
-        <el-table-column prop="created_at" label="时间" width="190" />
-        <el-table-column label="操作人" width="170">
+        <el-table-column prop="created_at" label="时间" width="160" />
+        <el-table-column label="操作人" width="150">
           <template #default="{ row }">
             <span v-if="row.display_name && row.display_name !== row.username">{{ row.display_name }}（{{ row.username }}）</span>
             <span v-else>{{ row.username || '-' }}</span>
@@ -29,7 +29,7 @@
         </el-table-column>
         <el-table-column prop="resource" label="对象" width="160" />
         <el-table-column prop="detail" label="详情" show-overflow-tooltip />
-        <el-table-column prop="ip_address" label="IP" width="120" />
+        <el-table-column prop="ip_address" label="IP" width="160" show-overflow-tooltip />
       </el-table>
 
       <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
