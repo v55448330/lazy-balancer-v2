@@ -47,21 +47,30 @@ type ClusterReport struct {
 }
 
 type ClusterBasicSettings struct {
-	LogLevel             string `json:"log_level"`
-	AccessLogJSON        bool   `json:"access_log_json"`
-	AccessLogFormat      string `json:"access_log_format"`
-	CertJobLogSizeMB     int    `json:"cert_job_log_size_mb"`
-	AuditRetentionMonths int    `json:"audit_retention_months"`
-	JWTExpireMinutes     int    `json:"jwt_expire_minutes"`
-	Timezone             string `json:"timezone"`
-	ACMEEmail            string `json:"acme_email"`
-	CertExpiryDays       int    `json:"cert_expiry_days"`
-	CertRenewalDays      int    `json:"cert_renewal_days"`
-	CertRenewalAttempts  int    `json:"cert_renewal_attempts"`
-	DefaultCAProviderID  int    `json:"default_ca_provider_id"`
-	DNSProvider          string `json:"dns_provider"`
-	DNSCredentials       string `json:"dns_credentials"`
-	SyncInterval         int    `json:"sync_interval"`
+	LogLevel                 string `json:"log_level"`
+	AccessLogJSON            bool   `json:"access_log_json"`
+	AccessLogFormat          string `json:"access_log_format"`
+	CertJobLogSizeMB         int    `json:"cert_job_log_size_mb"`
+	AuditRetentionMonths     int    `json:"audit_retention_months"`
+	JWTExpireMinutes         int    `json:"jwt_expire_minutes"`
+	Timezone                 string `json:"timezone"`
+	ACMEEmail                string `json:"acme_email"`
+	CertExpiryDays           int    `json:"cert_expiry_days"`
+	CertRenewalDays          int    `json:"cert_renewal_days"`
+	CertRenewalAttempts      int    `json:"cert_renewal_attempts"`
+	DefaultCAProviderID      int    `json:"default_ca_provider_id"`
+	DNSProvider              string `json:"dns_provider"`
+	DNSCredentials           string `json:"dns_credentials"`
+	SyncInterval             int    `json:"sync_interval"`
+	CaddyLogPath             string `json:"caddy_log_path,omitempty"`
+	CaddyLogLevel            string `json:"caddy_log_level,omitempty"`
+	CaddyLogSizeMB           int    `json:"caddy_log_size_mb,omitempty"`
+	RequestBodyMaxSizeMB     int    `json:"request_body_max_size_mb,omitempty"`
+	HTTPReadTimeout          int    `json:"http_read_timeout,omitempty"`
+	HTTPWriteTimeout         int    `json:"http_write_timeout,omitempty"`
+	HTTPIdleTimeout          int    `json:"http_idle_timeout,omitempty"`
+	UpstreamKeepaliveTimeout int    `json:"upstream_keepalive_timeout,omitempty"`
+	ServerTokensHidden       bool   `json:"server_tokens_hidden,omitempty"`
 }
 
 type ClusterUser struct {

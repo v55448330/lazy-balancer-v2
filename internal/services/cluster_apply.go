@@ -40,7 +40,11 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		_ = s.caddy.ApplyConfig(GenerateCaddyConfig(s.cfg))
 		return fmt.Errorf("提交快照事务: %w", err)
 	}
-	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs))), "")
+	caddySync := "未开启"
+	if snapshot.CaddyConfig != nil {
+		caddySync = "已同步"
+	}
+	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs)), "基本设置：已同步", fmt.Sprintf("Caddy 全局配置：%s", caddySync)), "")
 	RecordAuditLog("system", "重载", "Caddy配置", "同步应用后自动重载", "")
 	return nil
 }
@@ -127,8 +131,10 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 	query := `UPDATE global_config SET log_level=?,access_log_json=?,access_log_format=?,cert_job_log_size_mb=?,audit_retention_months=?,jwt_expire_minutes=?,timezone=?,acme_email=?,cert_expiry_days=?,cert_renewal_days=?,cert_renewal_attempts=?,default_ca_provider_id=?,dns_provider=?,dns_credentials=?,sync_interval=?`
 	args := []any{settings.LogLevel, settings.AccessLogJSON, settings.AccessLogFormat, settings.CertJobLogSizeMB, settings.AuditRetentionMonths, settings.JWTExpireMinutes, settings.Timezone, settings.ACMEEmail, settings.CertExpiryDays, settings.CertRenewalDays, settings.CertRenewalAttempts, settings.DefaultCAProviderID, settings.DNSProvider, settings.DNSCredentials, settings.SyncInterval}
 	if snapshot.CaddyConfig != nil {
-		query += ",caddy_config=?"
-		args = append(args, *snapshot.CaddyConfig)
+		query += ",caddy_config=?,caddy_log_path=?,caddy_log_level=?,caddy_log_size_mb=?,request_body_max_size_mb=?,http_read_timeout=?,http_write_timeout=?,http_idle_timeout=?,upstream_keepalive_timeout=?,server_tokens_hidden=?"
+		args = append(args, *snapshot.CaddyConfig, settings.CaddyLogPath, settings.CaddyLogLevel, settings.CaddyLogSizeMB,
+			settings.RequestBodyMaxSizeMB, settings.HTTPReadTimeout, settings.HTTPWriteTimeout, settings.HTTPIdleTimeout,
+			settings.UpstreamKeepaliveTimeout, settings.ServerTokensHidden)
 	}
 	query += " WHERE id=1"
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {

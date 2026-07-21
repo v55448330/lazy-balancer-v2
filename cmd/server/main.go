@@ -33,10 +33,12 @@ func main() {
 
 	log.SetFlags(0)
 	var logWriter io.Writer = os.Stdout
+	var runtimeLogFile string
 	if logFile := os.Getenv("LOG_FILE"); logFile != "" {
-		if file, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
-			logWriter = io.MultiWriter(os.Stdout, file)
-			defer file.Close()
+		if w, err := services.NewRotatingFileWriter(logFile, 100); err == nil {
+			logWriter = io.MultiWriter(os.Stdout, w)
+			defer w.Close()
+			runtimeLogFile = logFile
 		}
 	}
 	log.SetOutput(&tzLogWriter{w: logWriter})
@@ -44,6 +46,9 @@ func main() {
 	// Initialize database
 	if err := db.Initialize(cfg.DataDir); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	if runtimeLogFile != "" {
+		services.StartRuntimeLogCleanup(runtimeLogFile)
 	}
 
 	if *initDB {

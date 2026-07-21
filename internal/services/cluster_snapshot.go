@@ -49,6 +49,15 @@ func (s *ClusterService) buildSnapshot(ctx context.Context) (models.ClusterSnaps
 	}
 	if syncCaddy {
 		snapshot.CaddyConfig = &caddyConfig
+		if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(caddy_log_path,'/app/logs/caddy.log'), COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
+			COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,0), COALESCE(http_write_timeout,0), COALESCE(http_idle_timeout,0),
+			COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0)
+			FROM global_config WHERE id=1`).Scan(
+			&snapshot.BasicSettings.CaddyLogPath, &snapshot.BasicSettings.CaddyLogLevel, &snapshot.BasicSettings.CaddyLogSizeMB,
+			&snapshot.BasicSettings.RequestBodyMaxSizeMB, &snapshot.BasicSettings.HTTPReadTimeout, &snapshot.BasicSettings.HTTPWriteTimeout, &snapshot.BasicSettings.HTTPIdleTimeout,
+			&snapshot.BasicSettings.UpstreamKeepaliveTimeout, &snapshot.BasicSettings.ServerTokensHidden); err != nil {
+			return models.ClusterSnapshot{}, fmt.Errorf("读取 Caddy 全局设置: %w", err)
+		}
 	}
 	if snapshot.Rules, err = s.snapshotRules(ctx); err != nil {
 		return models.ClusterSnapshot{}, err
