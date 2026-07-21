@@ -59,6 +59,11 @@
             </el-select>
             <el-text type="info" size="small" class="tip-inline">影响日志时间戳与证书时间；仅 Caddy 日志需重启服务生效</el-text>
           </el-form-item>
+          <el-form-item label="强制 HTTPS">
+            <el-switch v-model="adminTls.enabled" @change="onAdminTlsToggle" />
+            <el-button v-if="adminTls.enabled" size="small" style="margin-left: 8px;" @click="adminTlsDialogVisible = true">配置证书</el-button>
+            <el-text type="info" size="small" class="tip-inline">启用后管理面板仅经 HTTPS 访问，需重启服务生效</el-text>
+          </el-form-item>
           <el-form-item label="运行日志">
             <el-button size="small" :icon="View" @click="openAppLogDialog">查看日志</el-button>
             <el-text type="info" size="small" class="tip-inline">查看 Lazy Balancer 自身运行日志</el-text>
@@ -106,6 +111,41 @@
         <el-text type="info" size="small" class="backup-tip">备份包含全部配置、规则、用户、密钥与证书任务；导入将覆盖当前配置，仅主节点可用</el-text>
       </div>
     </el-card>
+
+    <el-dialog v-model="adminTlsDialogVisible" title="HTTPS 证书配置" width="520">
+      <el-form label-width="110px">
+        <el-form-item label="证书来源">
+          <el-radio-group v-model="adminTlsForm.mode">
+            <el-radio value="selfsigned">本地自签名证书</el-radio>
+            <el-radio value="upload">上传证书</el-radio>
+            <el-radio value="acme">ACME 证书</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="HTTPS 端口">
+          <el-input-number v-model="adminTlsForm.port" :min="1" :max="65535" controls-position="right" style="width: 140px;" />
+        </el-form-item>
+        <template v-if="adminTlsForm.mode === 'upload'">
+          <el-form-item label="证书 (PEM)">
+            <el-input v-model="adminTlsForm.cert" type="textarea" :rows="5" placeholder="-----BEGIN CERTIFICATE-----" />
+          </el-form-item>
+          <el-form-item label="私钥 (PEM)">
+            <el-input v-model="adminTlsForm.key" type="textarea" :rows="5" placeholder="-----BEGIN PRIVATE KEY-----" />
+          </el-form-item>
+        </template>
+        <el-form-item v-if="adminTlsForm.mode === 'acme'" label="ACME 规则">
+          <el-select v-model="adminTlsForm.acme_rule_id" filterable placeholder="选择已有签发证书的规则" style="width: 260px;">
+            <el-option v-for="r in acmeRules" :key="r.caddy_id" :label="r.domain" :value="r.caddy_id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="adminTlsForm.mode === 'selfsigned'" label="说明">
+          <el-text type="info" size="small">自动生成自签名证书，浏览器会提示不受信任；集群同步会自动跳过自签验证</el-text>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="adminTlsDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="adminTlsSaving" @click="saveAdminTls">保存</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="appLogVisible" title="Lazy Balancer 运行日志" width="70%" destroy-on-close @opened="onAppLogOpened" @closed="onAppLogClosed">
       <div class="log-toolbar">
@@ -359,6 +399,69 @@ const emit = defineEmits<{
 }>()
 
 const saving = ref(false)
+
+const adminTls = ref({ enabled: false, mode: 'selfsigned', port: 8443, acme_rule_id: '' })
+const adminTlsForm = ref({ mode: 'selfsigned', port: 8443, cert: '', key: '', acme_rule_id: '' })
+const adminTlsDialogVisible = ref(false)
+const adminTlsSaving = ref(false)
+const acmeRules = ref<any[]>([])
+
+const loadAdminTls = async () => {
+  try {
+    const res = await request.get('/admin-tls')
+    if (res.data) {
+      adminTls.value = { enabled: res.data.enabled, mode: res.data.mode || 'selfsigned', port: res.data.port || 8443, acme_rule_id: res.data.acme_rule_id || '' }
+      adminTlsForm.value = { mode: res.data.mode || 'selfsigned', port: res.data.port || 8443, cert: '', key: '', acme_rule_id: res.data.acme_rule_id || '' }
+    }
+  } catch { /* ignore */ }
+}
+
+const loadAcmeRules = async () => {
+  try {
+    const res = await request.get('/rules')
+    acmeRules.value = (res.data || []).filter((r: any) => r.tls_source === 'acme_dns')
+  } catch { /* ignore */ }
+}
+
+const onAdminTlsToggle = async (val: string | number | boolean) => {
+  if (!val) {
+    await request.put('/admin-tls', { enabled: false })
+    ElMessage.success('已禁用 HTTPS 访问，重启服务后生效')
+    return
+  }
+  adminTlsForm.value = { ...adminTlsForm.value, mode: adminTls.value.mode, port: adminTls.value.port, acme_rule_id: adminTls.value.acme_rule_id }
+  adminTlsDialogVisible.value = true
+}
+
+const saveAdminTls = async () => {
+  if (adminTlsForm.value.mode === 'upload' && (!adminTlsForm.value.cert.trim() || !adminTlsForm.value.key.trim())) {
+    ElMessage.warning('请粘贴证书和私钥')
+    return
+  }
+  if (adminTlsForm.value.mode === 'acme' && !adminTlsForm.value.acme_rule_id) {
+    ElMessage.warning('请选择 ACME 规则')
+    return
+  }
+  adminTlsSaving.value = true
+  try {
+    await request.put('/admin-tls', {
+      enabled: true,
+      mode: adminTlsForm.value.mode,
+      cert: adminTlsForm.value.cert,
+      key: adminTlsForm.value.key,
+      acme_rule_id: adminTlsForm.value.acme_rule_id,
+      port: adminTlsForm.value.port,
+    })
+    ElMessage.success('已保存，请在系统信息中重启服务生效')
+    adminTlsDialogVisible.value = false
+    loadAdminTls()
+  } finally {
+    adminTlsSaving.value = false
+  }
+}
+
+loadAdminTls()
+loadAcmeRules()
 const restarting = ref(false)
 
 const handleRestart = async () => {

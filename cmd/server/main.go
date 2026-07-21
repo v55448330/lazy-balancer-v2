@@ -1,6 +1,10 @@
 package main
 
 import (
+	"crypto/tls"
+	"net"
+	"net/http"
+	"strconv"
 	"flag"
 	"fmt"
 	"io"
@@ -14,6 +18,8 @@ import (
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/handlers"
 	"lazy-balancer-v2/internal/middleware"
+
+	"github.com/gin-gonic/gin"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -119,7 +125,42 @@ func main() {
 	// Start server
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Starting lazy-balancer-v2 %s on %s", version, addr)
-	if err := router.Run(addr); err != nil {
+
+	tlsCfg := services.LoadAdminTLSConfig()
+	if tlsCfg.Enabled {
+		cert, err := tlsCfg.ResolveCertificate(cfg.DataDir)
+		if err != nil {
+			log.Fatalf("管理面板 HTTPS 启用失败: %v", err)
+		}
+		tlsAddr := fmt.Sprintf(":%d", tlsCfg.Port)
+		go func() {
+			tlsServer := &http.Server{
+				Addr:    tlsAddr,
+				Handler: router,
+				TLSConfig: &tls.Config{
+					Certificates: []tls.Certificate{cert},
+					MinVersion:   tls.VersionTLS12,
+				},
+			}
+			log.Printf("管理面板 HTTPS 监听 %s（证书来源：%s）", tlsAddr, tlsCfg.Mode)
+			if err := tlsServer.ListenAndServeTLS("", ""); err != nil {
+				log.Fatalf("HTTPS 服务启动失败: %v", err)
+			}
+		}()
+		redirectRouter := gin.New()
+		redirectRouter.Use(gin.Recovery())
+		redirectRouter.NoRoute(func(c *gin.Context) {
+			target := "https://" + c.Request.Host
+			if host, _, splitErr := net.SplitHostPort(c.Request.Host); splitErr == nil {
+				target = "https://" + net.JoinHostPort(host, strconv.Itoa(tlsCfg.Port))
+			}
+			c.Redirect(http.StatusMovedPermanently, target+c.Request.URL.RequestURI())
+		})
+		log.Printf("HTTP %s 重定向至 HTTPS :%d", addr, tlsCfg.Port)
+		if err := redirectRouter.Run(addr); err != nil {
+			log.Fatalf("Failed to start redirect server: %v", err)
+		}
+	} else if err := router.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }

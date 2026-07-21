@@ -160,6 +160,8 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 				// System
 				business.GET("/system/info", h.GetSystemInfo)
+				business.GET("/admin-tls", h.GetAdminTLS)
+				business.PUT("/admin-tls", h.UpdateAdminTLS)
 				business.GET("/system/metrics", h.GetSystemMetrics)
 				business.GET("/system/logs", h.GetAppLogs)
 				business.POST("/system/restart", h.RestartService)

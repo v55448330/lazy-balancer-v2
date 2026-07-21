@@ -1,6 +1,7 @@
 package services
 
 import (
+	"crypto/tls"
 	"bytes"
 	"context"
 	"database/sql"
@@ -38,7 +39,10 @@ func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *
 	return &SyncService{
 		db: database, cfg: cfg, caddy: caddy,
 		cluster: NewClusterService(database, nil),
-		client:  &http.Client{Timeout: 30 * time.Second},
+		// Self-signed admin certificates on the master must not break sync.
+		client: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}},
 	}
 }
 
