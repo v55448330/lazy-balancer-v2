@@ -1,6 +1,5 @@
 <template>
   <div class="page" :class="{ 'hide-header': hideHeader }">
-    <el-alert v-if="isSlave" title="从节点只读，请在主节点操作" type="info" :closable="false" show-icon class="readonly-alert" />
     <div v-if="!hideHeader" class="page-header">
       <div class="header-left">
         <h2 class="page-title">
@@ -284,5 +283,4 @@ onMounted(() => {
 
 .empty-card { padding: 20px; }
 .empty-card :deep(.el-empty__bottom) { margin-top: 16px; }
-.readonly-alert { margin-bottom: 20px; }
 </style>

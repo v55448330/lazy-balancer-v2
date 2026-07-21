@@ -110,7 +110,12 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// re-issuing through the CA.
 	var existingCert, existingKey string
 	if err := db.DB.QueryRow("SELECT COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&existingCert, &existingKey); err == nil && existingCert != "" && existingKey != "" {
-		if notAfter, perr := parseCertNotAfter(existingCert); perr == nil && time.Until(notAfter) > 7*24*time.Hour {
+		renewalDays := 30
+		_ = db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays)
+		if renewalDays <= 0 {
+			renewalDays = 30
+		}
+		if notAfter, perr := parseCertNotAfter(existingCert); perr == nil && time.Until(notAfter) > time.Duration(renewalDays)*24*time.Hour {
 			logger.Log("deploying", "检测到已签发的有效证书，直接重新部署文件")
 			werr := WriteCertFiles(ruleID, existingCert, existingKey)
 			if werr == nil {
