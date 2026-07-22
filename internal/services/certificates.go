@@ -237,9 +237,9 @@ func (s *CertificateService) renewExpiringCertificates() {
 	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
+	// CheckExpiration locks s.mu internally; the loop below only touches the
+	// DB and the queue, so holding s.mu here would deadlock the renewal.
 	maxAttempts := GetCertRenewalAttempts()
 	jobs := s.CheckExpiration()
 	if len(jobs) == 0 {

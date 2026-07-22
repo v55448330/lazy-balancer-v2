@@ -120,6 +120,11 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 			werr := WriteCertFiles(ruleID, existingCert, existingKey)
 			if werr == nil {
 				if _, uerr := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书文件重新部署成功', updated_at=datetime('now') WHERE id=?", jobID); uerr == nil {
+					if s.caddyReloader != nil {
+						if rerr := s.caddyReloader(); rerr != nil {
+							log.Printf("重新部署后重载 Caddy 失败: %v", rerr)
+						}
+					}
 					RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书重新部署成功", ruleID), "")
 					return nil
 				}

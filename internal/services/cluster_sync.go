@@ -241,6 +241,17 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 // the master does and checks referential consistency, so a corrupted or
 // truncated payload is rejected before anything is applied.
 func verifySnapshotIntegrity(snapshot models.ClusterSnapshot) error {
+	// Masters older than the fingerprint feature send an empty value; skip the
+	// check for them instead of breaking sync across a rolling upgrade.
+	if snapshot.Fingerprint != "" {
+		if err := verifySnapshotFingerprint(snapshot); err != nil {
+			return err
+		}
+	}
+	return verifySnapshotConsistency(snapshot)
+}
+
+func verifySnapshotFingerprint(snapshot models.ClusterSnapshot) error {
 	canonical := snapshot
 	canonical.Fingerprint = ""
 	canonical.Version = 0
@@ -252,7 +263,10 @@ func verifySnapshotIntegrity(snapshot models.ClusterSnapshot) error {
 	if hex.EncodeToString(hash[:]) != snapshot.Fingerprint {
 		return fmt.Errorf("快照指纹校验失败：数据可能被截断或篡改")
 	}
+	return nil
+}
 
+func verifySnapshotConsistency(snapshot models.ClusterSnapshot) error {
 	caIDs := make(map[int]bool, len(snapshot.CAProviders))
 	for _, p := range snapshot.CAProviders {
 		caIDs[p.ID] = true

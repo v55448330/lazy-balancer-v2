@@ -96,7 +96,7 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 			SELECT timestamp, requests_total, requests_2xx, requests_3xx, 
 			       requests_4xx, requests_5xx, bytes_in, bytes_out
 			FROM metrics_history 
-			WHERE rule_id = ? AND timestamp > datetime('now', '-'+?)
+			WHERE rule_id = ? AND timestamp > datetime('now', ?)
 			ORDER BY timestamp
 		`, ruleID, interval)
 	} else {
@@ -104,7 +104,7 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 			SELECT timestamp, SUM(requests_total), SUM(requests_2xx), SUM(requests_3xx), 
 			       SUM(requests_4xx), SUM(requests_5xx), SUM(bytes_in), SUM(bytes_out)
 			FROM metrics_history 
-			WHERE timestamp > datetime('now', '-'+?)
+			WHERE timestamp > datetime('now', ?)
 			GROUP BY timestamp
 			ORDER BY timestamp
 		`, interval)
@@ -130,9 +130,16 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 	var metrics []MetricRow
 	for rows.Next() {
 		var m MetricRow
-		rows.Scan(&m.Timestamp, &m.RequestsTotal, &m.Status2xx, &m.Status3xx,
-			&m.Status4xx, &m.Status5xx, &m.BytesIn, &m.BytesOut)
+		if err := rows.Scan(&m.Timestamp, &m.RequestsTotal, &m.Status2xx, &m.Status3xx,
+			&m.Status4xx, &m.Status5xx, &m.BytesIn, &m.BytesOut); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取指标历史失败: " + err.Error()})
+			return
+		}
 		metrics = append(metrics, m)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取指标历史失败: " + err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})

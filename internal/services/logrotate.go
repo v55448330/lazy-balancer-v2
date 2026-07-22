@@ -84,6 +84,9 @@ func (w *RotatingFileWriter) rotateLocked() error {
 		return err
 	}
 	rotated := fmt.Sprintf("%s.%s", w.path, time.Now().Format("20060102-150405"))
+	if _, err := os.Stat(rotated); err == nil {
+		rotated = fmt.Sprintf("%s.%d", rotated, time.Now().UnixNano()%1000)
+	}
 	if err := os.Rename(w.path, rotated); err != nil {
 		// Rename failed (e.g. cross-device); keep appending to the old file.
 		return w.open()

@@ -93,7 +93,7 @@ func replaceSnapshotDB(ctx context.Context, database *sql.DB, snapshot models.Cl
 }
 
 func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
-	for _, statement := range []string{"DELETE FROM upstreams", "DELETE FROM cert_jobs", "DELETE FROM lb_rules", "DELETE FROM api_keys", "DELETE FROM users", "DELETE FROM ca_providers", "DELETE FROM certificate_configs"} {
+	for _, statement := range []string{"DELETE FROM upstreams", "DELETE FROM cert_jobs", "DELETE FROM lb_rules", "DELETE FROM api_keys", "DELETE FROM users"} {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("清理快照数据: %w", err)
 		}
@@ -111,14 +111,27 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 			return fmt.Errorf("写入快照密钥 %d: %w", key.ID, err)
 		}
 	}
-	for _, p := range snapshot.CAProviders {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO ca_providers (id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled) VALUES (?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.Provider, p.DirectoryURL, p.Credentials, p.MaxConcurrent, p.MinIntervalMS, p.Enabled); err != nil {
-			return fmt.Errorf("写入快照 CA 提供商 %d: %w", p.ID, err)
+	// Sections added after the initial sync feature arrive as nil on older
+	// masters; nil means "not provided", so keep the slave's existing rows
+	// instead of wiping them.
+	if snapshot.CAProviders != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM ca_providers"); err != nil {
+			return fmt.Errorf("清理 CA 提供商: %w", err)
+		}
+		for _, p := range snapshot.CAProviders {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO ca_providers (id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled) VALUES (?,?,?,?,?,?,?,?)`, p.ID, p.Name, p.Provider, p.DirectoryURL, p.Credentials, p.MaxConcurrent, p.MinIntervalMS, p.Enabled); err != nil {
+				return fmt.Errorf("写入快照 CA 提供商 %d: %w", p.ID, err)
+			}
 		}
 	}
-	for _, cfg := range snapshot.CertConfigs {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO certificate_configs (id,name,dns_provider,dns_credentials,enabled) VALUES (?,?,?,?,?)`, cfg.ID, cfg.Name, cfg.DNSProvider, cfg.DNSCredentials, cfg.Enabled); err != nil {
-			return fmt.Errorf("写入快照 DNS 提供商配置 %d: %w", cfg.ID, err)
+	if snapshot.CertConfigs != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM certificate_configs"); err != nil {
+			return fmt.Errorf("清理 DNS 提供商配置: %w", err)
+		}
+		for _, cfg := range snapshot.CertConfigs {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO certificate_configs (id,name,dns_provider,dns_credentials,enabled) VALUES (?,?,?,?,?)`, cfg.ID, cfg.Name, cfg.DNSProvider, cfg.DNSCredentials, cfg.Enabled); err != nil {
+				return fmt.Errorf("写入快照 DNS 提供商配置 %d: %w", cfg.ID, err)
+			}
 		}
 	}
 	for _, cert := range snapshot.Certs {

@@ -38,6 +38,8 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"PUT /api/v1/cluster/settings":              AuditPolicyExplicit,
 	"POST /api/v1/config/preview":               AuditPolicySkip,
 	"PUT /api/v1/config":                        AuditPolicyExplicit,
+	"PUT /api/v1/admin-tls":                   AuditPolicyExplicit,
+	"POST /api/v1/system/restart":             AuditPolicyGeneric,
 	"POST /api/v1/config/reload":                AuditPolicyGeneric,
 	"POST /api/v1/config/validate":              AuditPolicySkip,
 	"POST /api/v1/rules/cert-info":              AuditPolicySkip,

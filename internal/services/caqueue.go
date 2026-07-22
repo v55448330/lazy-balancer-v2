@@ -66,12 +66,6 @@ func (m *CAQueueManager) CancelJob(jobID int) {
 
 // Enqueue adds or re-enqueues a cert job.
 func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains string) error {
-	m.mu.Lock()
-	active := m.active
-	m.mu.Unlock()
-	if !active {
-		return errors.New("从节点不运行证书签发队列")
-	}
 	provider, err := loadCAProvider(providerID)
 	if err != nil {
 		failJob(jobID, fmt.Sprintf("CA Provider 不可用: %v", err))
@@ -87,7 +81,13 @@ func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains stri
 		}
 	}
 
+	// The active check and queue get/create must share one lock: a concurrent
+	// Stop would otherwise leave a fresh live queue running on a demoted node.
 	m.mu.Lock()
+	if !m.active {
+		m.mu.Unlock()
+		return errors.New("从节点不运行证书签发队列")
+	}
 	q, ok := m.queues[provider.ID]
 	if !ok {
 		q = newCAQueue(provider, m.reloader)

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"math"
 	"sort"
 	"io"
 	"log"
@@ -158,9 +159,7 @@ func estimateLatencyPercentiles(text string) (int, int, int) {
 			continue
 		}
 		count, _ := strconv.ParseInt(m[2], 10, 64)
-		if count > byLE[le] {
-			byLE[le] = count
-		}
+		byLE[le] += count
 	}
 	if len(byLE) == 0 {
 		return 0, 0, 0
@@ -175,7 +174,10 @@ func estimateLatencyPercentiles(text string) (int, int, int) {
 	}
 	sort.Slice(buckets, func(i, j int) bool { return buckets[i].le < buckets[j].le })
 	percentile := func(q float64) int {
-		target := int64(float64(total) * q)
+		target := int64(math.Ceil(float64(total) * q))
+		if target < 1 {
+			target = 1
+		}
 		for _, b := range buckets {
 			if b.count >= target {
 				return int(b.le * 1000)
