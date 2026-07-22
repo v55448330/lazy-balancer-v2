@@ -50,7 +50,7 @@ func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *
 // admin TLS, which otherwise breaks sync with a 400 "HTTP request to HTTPS
 // server" response. The response body is consumed and closed before retry.
 func (s *SyncService) do(req *http.Request) (*http.Response, error) {
-	resp, err := s.do(req)
+	resp, err := s.client.Do(req)
 	if err != nil || req.URL.Scheme != "http" || resp.StatusCode != http.StatusBadRequest {
 		return resp, err
 	}
