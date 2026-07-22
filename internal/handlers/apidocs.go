@@ -87,7 +87,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"POST", "/caddy/restart", "Caddy", "重启 Caddy", "", `{"code":0,"message":"Caddy restarted"}`, []string{"500 restart_failed"}, ""},
 	{"GET", "/admin-tls", "系统", "管理面板 HTTPS 配置", "", `{"enabled":true,"mode":"selfsigned","restart_hint":true}`, []string{"401 unauthenticated"}, "不返回证书内容。"},
 	{"PUT", "/admin-tls", "系统", "启用/禁用管理面板 HTTPS", `{"enabled":true,"mode":"selfsigned"}`, `{"code":0,"message":"已保存，服务正在重启以应用 HTTPS 配置"}`, []string{"400 invalid_request", "403 admin_required"}, "multipart 表单；mode=selfsigned 或 upload（upload 需 cert_file/key_file 文件字段）。保存后服务自动重启，从节点同步后亦自动重启。"},
-	{"POST", "/admin-tls/inspect", "系统", "解析上传证书信息（不保存）", "multipart: cert_file, key_file", `{"domain":"example.com","issuer":"Let's Encrypt","not_after":"2027-01-01 00:00:00","days_left":365}`, []string{"400 invalid_certificate"}, "仅解析并返回证书信息，供保存前展示。"},
+	{"POST", "/admin-tls/inspect", "系统", "解析上传证书信息（不保存）", `"multipart form: cert_file, key_file"`, `{"domain":"example.com","issuer":"Let's Encrypt","not_after":"2027-01-01 00:00:00","days_left":365}`, []string{"400 invalid_certificate"}, "仅解析并返回证书信息，供保存前展示。"},
 	{"POST", "/system/restart", "系统", "重启服务", "", `{"code":0,"message":"服务正在重启"}`, []string{"403 admin_required"}, "进程退出后由容器重启策略拉起，用于应用进程级配置（如 Caddy 日志时区）。"},
 	{"GET", "/system/logs", "系统", "读取应用运行日志", "", `{"content":"..."}`, []string{"401 unauthenticated"}, "需配置 LOG_FILE 环境变量。"},
 	{"GET", "/rules/:caddy_id/logs", "规则", "规则访问日志", "", `{"content":"..."}`, []string{"404 not_found"}, "需规则开启访问日志。"},
