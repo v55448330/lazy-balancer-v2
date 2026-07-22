@@ -152,20 +152,20 @@ func TestClusterService_Snapshot_uses_version_and_fingerprint(t *testing.T) {
 	if _, err := database.Exec("UPDATE global_config SET cluster_version=7 WHERE id=1"); err != nil {
 		t.Fatalf("set version: %v", err)
 	}
-	initial, changed, err := service.Snapshot(context.Background(), 0, "")
+	initial, changed, err := service.Snapshot(context.Background(), 0, "", "")
 	if err != nil || !changed {
 		t.Fatalf("initial snapshot changed=%v err=%v", changed, err)
 	}
 
 	// When
-	_, unchanged, err := service.Snapshot(context.Background(), 7, initial.Fingerprint)
+	_, unchanged, err := service.Snapshot(context.Background(), 7, initial.Fingerprint, "")
 	if err != nil {
 		t.Fatalf("unchanged snapshot: %v", err)
 	}
 	if _, err := database.Exec("UPDATE global_config SET log_level='debug' WHERE id=1"); err != nil {
 		t.Fatalf("change content without version bump: %v", err)
 	}
-	fallback, fallbackChanged, err := service.Snapshot(context.Background(), 7, initial.Fingerprint)
+	fallback, fallbackChanged, err := service.Snapshot(context.Background(), 7, initial.Fingerprint, "")
 
 	// Then
 	if unchanged {

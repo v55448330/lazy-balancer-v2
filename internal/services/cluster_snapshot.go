@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,7 +11,10 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
-func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientFingerprint string) (models.ClusterSnapshot, bool, error) {
+// Snapshot builds the full cluster snapshot. tokenKey signs the payload with
+// the requesting node's cluster token (HMAC-SHA256) so slaves can verify
+// authenticity, not just integrity; leave empty to skip signing (legacy path).
+func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientFingerprint string, tokenKey string) (models.ClusterSnapshot, bool, error) {
 	snapshot, err := s.buildSnapshot(ctx)
 	if err != nil {
 		return models.ClusterSnapshot{}, false, err
@@ -24,6 +28,11 @@ func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientF
 	}
 	hash := sha256.Sum256(content)
 	snapshot.Fingerprint = hex.EncodeToString(hash[:])
+	if tokenKey != "" {
+		mac := hmac.New(sha256.New, []byte(tokenKey))
+		mac.Write(content)
+		snapshot.Signature = hex.EncodeToString(mac.Sum(nil))
+	}
 	if sinceVersion >= snapshot.Version && clientFingerprint != "" && clientFingerprint == snapshot.Fingerprint {
 		return snapshot, false, nil
 	}
@@ -73,50 +82,7 @@ func (s *ClusterService) buildSnapshot(ctx context.Context) (models.ClusterSnaps
 	if snapshot.Certs, err = s.snapshotCertificates(ctx); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
-	if snapshot.CAProviders, err = s.snapshotCAProviders(ctx); err != nil {
-		return models.ClusterSnapshot{}, err
-	}
-	if snapshot.CertConfigs, err = s.snapshotCertConfigs(ctx); err != nil {
-		return models.ClusterSnapshot{}, err
-	}
 	return snapshot, nil
-}
-
-func (s *ClusterService) snapshotCertConfigs(ctx context.Context) ([]models.CertificateConfig, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, COALESCE(dns_provider,'dnspod'), COALESCE(dns_credentials,''), COALESCE(enabled,1) FROM certificate_configs ORDER BY id`)
-	if err != nil {
-		return nil, fmt.Errorf("读取快照 DNS 提供商配置: %w", err)
-	}
-	defer rows.Close()
-	configs := make([]models.CertificateConfig, 0)
-	for rows.Next() {
-		var cfg models.CertificateConfig
-		if err := rows.Scan(&cfg.ID, &cfg.Name, &cfg.DNSProvider, &cfg.DNSCredentials, &cfg.Enabled); err != nil {
-			return nil, fmt.Errorf("扫描快照 DNS 提供商配置: %w", err)
-		}
-		configs = append(configs, cfg)
-	}
-	return configs, rows.Err()
-}
-
-func (s *ClusterService) snapshotCAProviders(ctx context.Context) ([]models.CAProvider, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, provider, directory_url, COALESCE(credentials,''),
-		COALESCE(max_concurrent,1), COALESCE(min_interval_ms,2000), COALESCE(enabled,1)
-		FROM ca_providers ORDER BY id`)
-	if err != nil {
-		return nil, fmt.Errorf("读取快照 CA 提供商: %w", err)
-	}
-	defer rows.Close()
-	providers := make([]models.CAProvider, 0)
-	for rows.Next() {
-		var p models.CAProvider
-		if err := rows.Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials,
-			&p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled); err != nil {
-			return nil, fmt.Errorf("扫描快照 CA 提供商: %w", err)
-		}
-		providers = append(providers, p)
-	}
-	return providers, rows.Err()
 }
 
 func (s *ClusterService) snapshotRules(ctx context.Context) ([]models.LbRule, error) {

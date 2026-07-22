@@ -17,7 +17,7 @@ func (h *Handlers) GetClusterSnapshot(c *gin.Context) {
 		return
 	}
 	sinceVersion, _ := strconv.Atoi(c.Query("since_version"))
-	snapshot, changed, err := h.clusterService.Snapshot(c.Request.Context(), sinceVersion, c.Query("fingerprint"))
+	snapshot, changed, err := h.clusterService.Snapshot(c.Request.Context(), sinceVersion, c.Query("fingerprint"), c.GetHeader("X-Cluster-Token"))
 	if err != nil {
 		clusterError(c, http.StatusInternalServerError, "生成集群快照失败", err)
 		return

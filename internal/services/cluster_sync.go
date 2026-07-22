@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
@@ -211,7 +212,7 @@ func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return SyncResult{}, fmt.Errorf("解析集群快照: %w", err)
 	}
-	if err := verifySnapshotIntegrity(envelope.Data); err != nil {
+	if err := verifySnapshotIntegrity(envelope.Data, token); err != nil {
 		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", err.Error())
 		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
 		return SyncResult{}, err
@@ -240,11 +241,19 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 // verifySnapshotIntegrity re-computes the snapshot fingerprint the same way
 // the master does and checks referential consistency, so a corrupted or
 // truncated payload is rejected before anything is applied.
-func verifySnapshotIntegrity(snapshot models.ClusterSnapshot) error {
+func verifySnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken string) error {
 	// Masters older than the fingerprint feature send an empty value; skip the
 	// check for them instead of breaking sync across a rolling upgrade.
 	if snapshot.Fingerprint != "" {
 		if err := verifySnapshotFingerprint(snapshot); err != nil {
+			return err
+		}
+	}
+	// Newer masters sign snapshots with the node's cluster token; an on-path
+	// attacker cannot forge that without knowing it. Older masters omit the
+	// signature and stay accepted until they upgrade.
+	if snapshot.Signature != "" {
+		if err := verifySnapshotSignature(snapshot, clusterToken); err != nil {
 			return err
 		}
 	}
@@ -266,27 +275,33 @@ func verifySnapshotFingerprint(snapshot models.ClusterSnapshot) error {
 	return nil
 }
 
+// verifySnapshotSignature recomputes the master's HMAC-SHA256 over the
+// canonical snapshot using this node's cluster token as the key.
+func verifySnapshotSignature(snapshot models.ClusterSnapshot, clusterToken string) error {
+	if clusterToken == "" {
+		return fmt.Errorf("快照签名校验失败：本节点缺少集群令牌")
+	}
+	canonical := snapshot
+	canonical.Fingerprint = ""
+	canonical.Signature = ""
+	canonical.Version = 0
+	content, err := json.Marshal(canonical)
+	if err != nil {
+		return fmt.Errorf("快照序列化失败: %w", err)
+	}
+	mac := hmac.New(sha256.New, []byte(clusterToken))
+	mac.Write(content)
+	expected := hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(expected), []byte(snapshot.Signature)) {
+		return fmt.Errorf("快照签名校验失败：来源无法验证，可能存在中间人攻击")
+	}
+	return nil
+}
+
 func verifySnapshotConsistency(snapshot models.ClusterSnapshot) error {
-	caIDs := make(map[int]bool, len(snapshot.CAProviders))
-	for _, p := range snapshot.CAProviders {
-		caIDs[p.ID] = true
-	}
-	cfgIDs := make(map[int]bool, len(snapshot.CertConfigs))
-	for _, cfg := range snapshot.CertConfigs {
-		cfgIDs[cfg.ID] = true
-	}
-	if d := snapshot.BasicSettings.DefaultCAProviderID; d > 0 && !caIDs[d] {
-		return fmt.Errorf("快照一致性校验失败：默认 CA 提供商 %d 不存在", d)
-	}
 	for _, rule := range snapshot.Rules {
 		if rule.Enabled && len(rule.Upstreams) == 0 {
 			return fmt.Errorf("快照一致性校验失败：规则 %s 没有上游", rule.CaddyID)
-		}
-		if rule.CAProviderID > 0 && !caIDs[rule.CAProviderID] {
-			return fmt.Errorf("快照一致性校验失败：规则 %s 引用的 CA 提供商 %d 不存在", rule.CaddyID, rule.CAProviderID)
-		}
-		if rule.ACMEConfigID > 0 && !cfgIDs[rule.ACMEConfigID] {
-			return fmt.Errorf("快照一致性校验失败：规则 %s 引用的 DNS 配置 %d 不存在", rule.CaddyID, rule.ACMEConfigID)
 		}
 	}
 	return nil

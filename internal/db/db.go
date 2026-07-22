@@ -375,6 +375,7 @@ func runMigrations() error {
 		"global_config.jwt_expire_minutes":     "INTEGER DEFAULT 20",
 		"global_config.timezone":               "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
 		"lb_rules.log_enabled":                 "BOOLEAN DEFAULT 0",
+		"users.password_changed_at":             "DATETIME",
 		"global_config.cluster_version":        "INTEGER DEFAULT 0",
 		"global_config.sync_caddy_config":      "BOOLEAN DEFAULT 0",
 		"global_config.cluster_token":          "TEXT DEFAULT ''",

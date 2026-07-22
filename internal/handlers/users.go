@@ -115,7 +115,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 
 	if req.Password != "" {
 		hash, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-		if _, err := db.DB.Exec("UPDATE users SET password_hash = ? WHERE id = ?", string(hash), id); err != nil {
+		if _, err := db.DB.Exec("UPDATE users SET password_hash = ?, password_changed_at = datetime('now') WHERE id = ?", string(hash), id); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update password"})
 			return
 		}
@@ -212,7 +212,7 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 		return
 	}
 
-	_, err = db.DB.Exec("UPDATE users SET password_hash = ? WHERE id = ?", string(hash), id)
+	_, err = db.DB.Exec("UPDATE users SET password_hash = ?, password_changed_at = datetime('now') WHERE id = ?", string(hash), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to reset password"})
 		return

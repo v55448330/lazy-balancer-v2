@@ -107,14 +107,13 @@ type ClusterCertificate struct {
 type ClusterSnapshot struct {
 	Version       int                  `json:"version"`
 	Fingerprint   string               `json:"fingerprint"`
+	Signature     string               `json:"signature,omitempty"`
 	Rules         []LbRule             `json:"rules"`
 	Users         []ClusterUser        `json:"users"`
 	APIKeys       []ClusterAPIKey      `json:"api_keys"`
 	BasicSettings ClusterBasicSettings `json:"basic_settings"`
 	CaddyConfig   *string              `json:"caddy_config,omitempty"`
 	Certs         []ClusterCertificate `json:"certs"`
-	CAProviders   []CAProvider         `json:"ca_providers"`
-	CertConfigs   []CertificateConfig  `json:"cert_configs"`
 }
 
 type ClusterNodeView struct {

@@ -73,6 +73,7 @@ func (h *Handlers) Login(c *gin.Context) {
 		"username":  user.Username,
 		"role":      user.Role,
 		"node_mode": nodeMode,
+		"iat":       time.Now().Unix(),
 		"exp":       time.Now().Add(expireDuration).Unix(),
 	})
 
@@ -175,7 +176,7 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "密码加密失败"})
 			return
 		}
-		if _, err := db.DB.Exec("UPDATE users SET password_hash = ? WHERE id = ?", string(hash), userIDInt); err != nil {
+		if _, err := db.DB.Exec("UPDATE users SET password_hash = ?, password_changed_at = datetime('now') WHERE id = ?", string(hash), userIDInt); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新密码失败"})
 			return
 		}

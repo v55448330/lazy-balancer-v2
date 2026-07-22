@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"database/sql"
+	"time"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -294,10 +296,25 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		}
 		var dbRole string
 		var dbEnabled bool
-		if err := db.DB.QueryRow("SELECT role, COALESCE(is_enabled,1) FROM users WHERE id = ?", int64(userIDFloat)).Scan(&dbRole, &dbEnabled); err != nil || !dbEnabled {
+		var pwdChangedAt sql.NullTime
+		if err := db.DB.QueryRow("SELECT role, COALESCE(is_enabled,1), password_changed_at FROM users WHERE id = ?", int64(userIDFloat)).Scan(&dbRole, &dbEnabled, &pwdChangedAt); err != nil || !dbEnabled {
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在或已禁用"})
 			c.Abort()
 			return
+		}
+		// Tokens issued before the last password change are revoked.
+		if pwdChangedAt.Valid {
+			if iatFloat, ok := claims["iat"].(float64); ok {
+				if time.Unix(int64(iatFloat), 0).Before(pwdChangedAt.Time) {
+					c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "密码已修改，请重新登录"})
+					c.Abort()
+					return
+				}
+			} else {
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "凭证已过期，请重新登录"})
+				c.Abort()
+				return
+			}
 		}
 
 		c.Set("user_id", claims["user_id"])
