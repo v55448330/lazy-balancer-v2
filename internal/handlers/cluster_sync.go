@@ -45,6 +45,8 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 	}
 	if result.Changed {
 		recordAudit(c, "手动同步", "集群同步", services.FormatAuditDetail("应用版本："+strconv.Itoa(result.AppliedVersion), services.AuditResultPart("success")))
+	} else {
+		recordAudit(c, "手动同步", "集群同步", services.FormatAuditDetail("配置无变化", services.AuditResultPart("success")))
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "手动同步完成", Data: result})
 }

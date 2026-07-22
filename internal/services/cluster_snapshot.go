@@ -29,8 +29,17 @@ func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientF
 	hash := sha256.Sum256(content)
 	snapshot.Fingerprint = hex.EncodeToString(hash[:])
 	if tokenKey != "" {
+		// The signature additionally binds the version, so a captured older
+		// snapshot cannot be replayed even though its content hash is valid.
+		signed := snapshot
+		signed.Fingerprint = ""
+		signed.Signature = ""
+		signedContent, err := json.Marshal(signed)
+		if err != nil {
+			return models.ClusterSnapshot{}, false, fmt.Errorf("序列化快照签名内容: %w", err)
+		}
 		mac := hmac.New(sha256.New, []byte(tokenKey))
-		mac.Write(content)
+		mac.Write(signedContent)
 		snapshot.Signature = hex.EncodeToString(mac.Sum(nil))
 	}
 	if sinceVersion >= snapshot.Version && clientFingerprint != "" && clientFingerprint == snapshot.Fingerprint {

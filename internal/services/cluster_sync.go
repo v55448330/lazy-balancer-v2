@@ -70,13 +70,9 @@ func (s *SyncService) do(req *http.Request) (*http.Response, error) {
 		}
 		return resp, err
 	}
-	if err != nil && req.URL.Scheme == "https" && strings.Contains(err.Error(), "server gave HTTP response to HTTPS client") {
-		resp, err = s.client.Do(s.cloneRequest(req, "http"))
-		if err == nil {
-			s.migrateMasterURLScheme("http")
-		}
-		return resp, err
-	}
+	// Never downgrade to plain HTTP automatically: an on-path attacker could
+	// force it and then read the cluster token in cleartext. HTTPS failures
+	// surface as errors instead.
 	return resp, err
 }
 
@@ -212,7 +208,7 @@ func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return SyncResult{}, fmt.Errorf("解析集群快照: %w", err)
 	}
-	if err := verifySnapshotIntegrity(envelope.Data, token); err != nil {
+	if err := verifySnapshotIntegrity(envelope.Data, token, appliedVersion); err != nil {
 		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", err.Error())
 		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
 		return SyncResult{}, err
@@ -241,19 +237,23 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 // verifySnapshotIntegrity re-computes the snapshot fingerprint the same way
 // the master does and checks referential consistency, so a corrupted or
 // truncated payload is rejected before anything is applied.
-func verifySnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken string) error {
-	// Masters older than the fingerprint feature send an empty value; skip the
-	// check for them instead of breaking sync across a rolling upgrade.
+func verifySnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken string, appliedVersion int) error {
+	// The signature is mandatory: it is the only authenticity proof over the
+	// (verification-skipped) transport, and an unsigned payload could be forged
+	// by any on-path actor. Masters that predate signing must be upgraded.
+	if snapshot.Signature == "" {
+		return fmt.Errorf("快照缺少签名：主节点版本过旧，请先升级主节点")
+	}
+	if err := verifySnapshotSignature(snapshot, clusterToken); err != nil {
+		return err
+	}
+	// Signed snapshots must also move forward; replaying a captured older one
+	// must not resurrect deleted credentials or roll back configuration.
+	if snapshot.Version < appliedVersion {
+		return fmt.Errorf("快照版本回退：收到 %d，已应用 %d，疑似重放攻击", snapshot.Version, appliedVersion)
+	}
 	if snapshot.Fingerprint != "" {
 		if err := verifySnapshotFingerprint(snapshot); err != nil {
-			return err
-		}
-	}
-	// Newer masters sign snapshots with the node's cluster token; an on-path
-	// attacker cannot forge that without knowing it. Older masters omit the
-	// signature and stay accepted until they upgrade.
-	if snapshot.Signature != "" {
-		if err := verifySnapshotSignature(snapshot, clusterToken); err != nil {
 			return err
 		}
 	}
@@ -285,7 +285,6 @@ func verifySnapshotSignature(snapshot models.ClusterSnapshot, clusterToken strin
 	canonical := snapshot
 	canonical.Fingerprint = ""
 	canonical.Signature = ""
-	canonical.Version = 0
 	content, err := json.Marshal(canonical)
 	if err != nil {
 		return fmt.Errorf("快照序列化失败: %w", err)
