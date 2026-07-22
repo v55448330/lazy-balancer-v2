@@ -40,7 +40,7 @@ service.interceptors.response.use(
         if (!isLoginRequest) {
           if (!sessionExpiredDialogOpen) {
             sessionExpiredDialogOpen = true
-            ElMessageBox.confirm('登录已过期，请重新登录', '会话失效', {
+            ElMessageBox.confirm(backendMsg || '登录已过期，请重新登录', '会话失效', {
               confirmButtonText: '确定',
               cancelButtonText: '取消',
               type: 'warning',

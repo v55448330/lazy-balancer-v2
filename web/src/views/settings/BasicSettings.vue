@@ -445,6 +445,8 @@ const formDataOf = (fields: Record<string, string>): FormData => {
   return fd
 }
 
+let tlsInspectSeq = 0
+
 const onTlsFile = async (e: Event, kind: 'cert' | 'key') => {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
@@ -453,17 +455,24 @@ const onTlsFile = async (e: Event, kind: 'cert' | 'key') => {
   else adminTlsForm.value.keyFile = file
   adminTlsForm.value.certInfo = null
   if (adminTlsForm.value.certFile && adminTlsForm.value.keyFile) {
+    const seq = ++tlsInspectSeq
     adminTlsForm.value.inspecting = true
     try {
       const fd = new FormData()
       fd.append('cert_file', adminTlsForm.value.certFile)
       fd.append('key_file', adminTlsForm.value.keyFile)
       const res = await request.post('/admin-tls/inspect', fd)
-      adminTlsForm.value.certInfo = res.data
+      if (seq === tlsInspectSeq) {
+        adminTlsForm.value.certInfo = res.data
+      }
     } catch {
-      adminTlsForm.value.certInfo = null
+      if (seq === tlsInspectSeq) {
+        adminTlsForm.value.certInfo = null
+      }
     } finally {
-      adminTlsForm.value.inspecting = false
+      if (seq === tlsInspectSeq) {
+        adminTlsForm.value.inspecting = false
+      }
     }
   }
 }

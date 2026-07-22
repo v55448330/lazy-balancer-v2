@@ -180,6 +180,14 @@ func estimateLatencyPercentiles(text string) (int, int, int) {
 		}
 		for _, b := range buckets {
 			if b.count >= target {
+				if math.IsInf(b.le, 1) {
+					// The +Inf bucket only tells us the tail exists; fall back
+					// to the largest finite bucket instead of a bogus value.
+					if len(buckets) > 1 {
+						return int(buckets[len(buckets)-2].le * 1000)
+					}
+					return 0
+				}
 				return int(b.le * 1000)
 			}
 		}

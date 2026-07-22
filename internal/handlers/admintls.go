@@ -1,12 +1,12 @@
 package handlers
 
 import (
-	"os"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -61,6 +61,7 @@ func (e *adminTLSError) Error() string { return e.msg }
 // InspectAdminTLSCert parses uploaded cert/key files without saving, so the
 // UI can show what will be installed before the user confirms.
 func (h *Handlers) InspectAdminTLSCert(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
 	certPEM, keyPEM, err := readAdminTLSFiles(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -118,7 +119,11 @@ func (h *Handlers) GetAdminTLS(c *gin.Context) {
 }
 
 func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
-	c.Request.ParseMultipartForm(2 << 20)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
+	if err := c.Request.ParseMultipartForm(2 << 20); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "表单解析失败: " + err.Error()})
+		return
+	}
 	form := c.Request.Form
 
 	current := services.LoadAdminTLSConfig()
@@ -142,8 +147,8 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	}
 
 	if enabled {
-		if mode != "selfsigned" && mode != "upload" && mode != "acme" {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的证书来源"})
+		if mode != "selfsigned" && mode != "upload" {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的证书来源：当前仅支持自签名或上传证书"})
 			return
 		}
 		probe := services.AdminTLSConfig{Enabled: true, Mode: mode, Cert: cert, Key: key, Port: port}

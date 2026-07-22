@@ -305,7 +305,7 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		// Tokens issued before the last password change are revoked.
 		if pwdChangedAt.Valid {
 			if iatFloat, ok := claims["iat"].(float64); ok {
-				if time.Unix(int64(iatFloat), 0).Before(pwdChangedAt.Time) {
+				if !time.Unix(int64(iatFloat), 0).After(pwdChangedAt.Time) {
 					c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "密码已修改，请重新登录"})
 					c.Abort()
 					return
@@ -370,7 +370,7 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		db.DB.Exec("UPDATE api_keys SET last_used = datetime('now') WHERE id = ?", keyID)
+		db.DB.Exec("UPDATE api_keys SET last_used = datetime('now') WHERE id = ? AND (last_used IS NULL OR datetime(last_used) < datetime('now', '-60 seconds'))", keyID)
 		c.Set("user_id", userID)
 		c.Set("username", username)
 		c.Set("role", role)

@@ -107,29 +107,40 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 
 	// Fast path: a previous attempt completed ACME issuance and persisted a
 	// valid certificate, but file deployment failed. Redeploy instead of
-	// re-issuing through the CA.
-	var existingCert, existingKey string
-	if err := db.DB.QueryRow("SELECT COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&existingCert, &existingKey); err == nil && existingCert != "" && existingKey != "" {
-		renewalDays := 30
-		_ = db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays)
-		if renewalDays <= 0 {
-			renewalDays = 30
-		}
-		if notAfter, perr := parseCertNotAfter(existingCert); perr == nil && time.Until(notAfter) > time.Duration(renewalDays)*24*time.Hour {
-			logger.Log("deploying", "检测到已签发的有效证书，直接重新部署文件")
-			werr := WriteCertFiles(ruleID, existingCert, existingKey)
-			if werr == nil {
-				if _, uerr := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书文件重新部署成功', updated_at=datetime('now') WHERE id=?", jobID); uerr == nil {
-					if s.caddyReloader != nil {
-						if rerr := s.caddyReloader(); rerr != nil {
-							log.Printf("重新部署后重载 Caddy 失败: %v", rerr)
-						}
-					}
-					RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书重新部署成功", ruleID), "")
-					return nil
-				}
+	// re-issuing through the CA. Skipped when the job is disabled, the rule is
+	// disabled, or the rule's CA provider changed since issuance (then the old
+	// certificate is from the wrong CA and a fresh issuance is required).
+	var jobStatus string
+	var jobProviderID int
+	var ruleEnabled bool
+	var ruleProviderID int
+	if err := db.DB.QueryRow(`SELECT j.status, COALESCE(j.ca_provider_id,0), COALESCE(r.enabled,0), COALESCE(r.ca_provider_id,0)
+		FROM cert_jobs j LEFT JOIN lb_rules r ON r.caddy_id = j.rule_id WHERE j.id = ?`, jobID).
+		Scan(&jobStatus, &jobProviderID, &ruleEnabled, &ruleProviderID); err == nil &&
+		jobStatus != "disabled" && ruleEnabled && ruleProviderID == jobProviderID {
+		var existingCert, existingKey string
+		if err := db.DB.QueryRow("SELECT COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&existingCert, &existingKey); err == nil && existingCert != "" && existingKey != "" {
+			renewalDays := 30
+			_ = db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays)
+			if renewalDays <= 0 {
+				renewalDays = 30
 			}
-			logger.Log("deploy_failed", fmt.Sprintf("已有证书重新部署失败: %v，转为重新签发", werr))
+			if notAfter, perr := parseCertNotAfter(existingCert); perr == nil && time.Until(notAfter) > time.Duration(renewalDays)*24*time.Hour {
+				logger.Log("deploying", "检测到已签发的有效证书，直接重新部署文件")
+				werr := WriteCertFiles(ruleID, existingCert, existingKey)
+				if werr == nil {
+					if _, uerr := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书文件重新部署成功', updated_at=datetime('now') WHERE id=?", jobID); uerr == nil {
+						if s.caddyReloader != nil {
+							if rerr := s.caddyReloader(); rerr != nil {
+								log.Printf("重新部署后重载 Caddy 失败: %v", rerr)
+							}
+						}
+						RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书重新部署成功", ruleID), "")
+						return nil
+					}
+				}
+				logger.Log("deploy_failed", fmt.Sprintf("已有证书重新部署失败: %v，转为重新签发", werr))
+			}
 		}
 	}
 

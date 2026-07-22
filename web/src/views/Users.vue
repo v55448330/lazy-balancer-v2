@@ -8,7 +8,7 @@
         </h2>
         <p class="page-desc">管理系统用户和权限</p>
       </div>
-      <el-button type="primary" :disabled="isReadOnly" @click="showForm = true">
+      <el-button type="primary" :disabled="isReadOnly" @click="openCreateForm">
         <el-icon><Plus /></el-icon>
         新建用户
       </el-button>
@@ -134,6 +134,12 @@ const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 const users = ref<any[]>([])
 const showForm = ref(false)
+
+const openCreateForm = () => {
+  editingUser.value = null
+  form.value = { username: '', password: '', display_name: '', role: 'user' }
+  showForm.value = true
+}
 const editingUser = ref<any>(null)
 const switchingId = ref<number | null>(null)
 const form = ref({

@@ -1,11 +1,11 @@
 package handlers
 
 import (
-	"strings"
-	"strconv"
 	"database/sql"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -58,7 +58,6 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
 }
 
-
 // metricsIntervalModifier converts shorthand intervals (1h/6h/24h/7d/30d or
 // "<n>h"/"<n>d") into a SQLite datetime modifier; unknown values fall back to
 // one hour. SQLite has no "1h" syntax and arithmetic concatenation yields NULL.
@@ -104,7 +103,7 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 			SELECT timestamp, SUM(requests_total), SUM(requests_2xx), SUM(requests_3xx), 
 			       SUM(requests_4xx), SUM(requests_5xx), SUM(bytes_in), SUM(bytes_out)
 			FROM metrics_history 
-			WHERE timestamp > datetime('now', ?)
+			WHERE rule_id IS NULL AND timestamp > datetime('now', ?)
 			GROUP BY timestamp
 			ORDER BY timestamp
 		`, interval)
