@@ -448,6 +448,7 @@ func runMigrations() error {
 	DB.Exec("UPDATE global_config SET http_idle_timeout=120 WHERE http_idle_timeout=0")
 	DB.Exec("UPDATE global_config SET upstream_keepalive_timeout=60 WHERE upstream_keepalive_timeout=0")
 	DB.Exec("UPDATE global_config SET access_log_format='' WHERE access_log_format LIKE '{%'")
+	DB.Exec("UPDATE global_config SET access_log_format = access_log_format || char(10) || 'request>headers>User-Agent -> user_agent' WHERE access_log_format != '' AND access_log_format NOT LIKE '%user_agent%'")
 
 	// Create upstreams table if not exists
 	DB.Exec(`CREATE TABLE IF NOT EXISTS upstreams (

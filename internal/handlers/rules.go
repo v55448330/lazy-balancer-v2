@@ -1697,6 +1697,12 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已禁用"})
 }
 
+func (h *Handlers) GetRuleLogStats(c *gin.Context) {
+	caddyID := c.Param("caddy_id")
+	reset := c.Query("reset") == "1"
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: services.GetRuleLogStats(caddyID, reset)})
+}
+
 func (h *Handlers) GetRuleLogs(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 	logPath := services.RuleLogPath(caddyID)

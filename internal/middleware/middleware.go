@@ -128,6 +128,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/rules", h.ListRules)
 				business.GET("/rules/:caddy_id", h.GetRule)
 				business.GET("/rules/:caddy_id/caddy-config", h.GetRuleCaddyConfig)
+				business.GET("/rules/:caddy_id/log-stats", h.GetRuleLogStats)
 				business.GET("/rules/:caddy_id/logs", h.GetRuleLogs)
 				business.GET("/rules/:caddy_id/cert-info", h.GetRuleCertInfo)
 				business.POST("/rules/cert-info", h.GetRulesCertInfo)

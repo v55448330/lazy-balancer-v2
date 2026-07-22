@@ -841,13 +841,48 @@
       @opened="onRuleLogDialogOpened"
       @closed="onRuleLogDialogClosed"
     >
-      <div class="log-toolbar">
-        <el-switch v-model="ruleLogAutoRefresh" active-text="自动刷新" />
-        <el-button type="primary" :loading="ruleLogLoading" size="small" @click="refreshRuleLogs">
-          <el-icon><RefreshRight /></el-icon>刷新
-        </el-button>
-      </div>
-      <div ref="ruleLogContainerRef" class="rule-log-viewer" v-html="ruleLogHtml" />
+      <el-tabs v-model="ruleLogTab" @tab-change="onRuleLogTabChange">
+        <el-tab-pane label="日志" name="log">
+          <div class="log-toolbar">
+            <el-switch v-model="ruleLogAutoRefresh" active-text="自动刷新" />
+            <el-button type="primary" :loading="ruleLogLoading" size="small" @click="refreshRuleLogs">
+              <el-icon><RefreshRight /></el-icon>刷新
+            </el-button>
+          </div>
+          <div ref="ruleLogContainerRef" class="rule-log-viewer" v-html="ruleLogHtml" />
+        </el-tab-pane>
+        <el-tab-pane label="统计" name="stats">
+          <div class="stats-summary" v-if="ruleLogStats">
+            <el-text type="info" size="small">自 {{ ruleLogStats.started_at }} 起共 {{ ruleLogStats.total }} 次请求，每 5 秒实时统计</el-text>
+          </div>
+          <div class="stats-grid" v-if="ruleLogStats">
+            <div class="stats-col">
+              <div class="stats-title">IP TOP</div>
+              <div v-for="item in ruleLogStats.top_ips" :key="item.value" class="stats-row">
+                <span class="stats-value" :title="item.value">{{ item.value }}</span>
+                <span class="stats-count">{{ item.count }}</span>
+              </div>
+              <el-empty v-if="!ruleLogStats.top_ips?.length" description="暂无数据" :image-size="40" />
+            </div>
+            <div class="stats-col">
+              <div class="stats-title">浏览器 UA TOP</div>
+              <div v-for="item in ruleLogStats.top_uas" :key="item.value" class="stats-row">
+                <span class="stats-value stats-ua" :title="item.value">{{ item.value }}</span>
+                <span class="stats-count">{{ item.count }}</span>
+              </div>
+              <el-empty v-if="!ruleLogStats.top_uas?.length" description="暂无数据" :image-size="40" />
+            </div>
+            <div class="stats-col">
+              <div class="stats-title">URI TOP</div>
+              <div v-for="item in ruleLogStats.top_uris" :key="item.value" class="stats-row">
+                <span class="stats-value" :title="item.value">{{ item.value }}</span>
+                <span class="stats-count">{{ item.count }}</span>
+              </div>
+              <el-empty v-if="!ruleLogStats.top_uris?.length" description="暂无数据" :image-size="40" />
+            </div>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
       <template #footer>
         <el-button @click="ruleLogDialogVisible = false">关闭</el-button>
       </template>
@@ -2195,7 +2230,31 @@ const openRuleLogDialog = (rule: Rule) => {
   ruleLogDialogVisible.value = true
 }
 
+const ruleLogTab = ref('log')
+const ruleLogStats = ref<any>(null)
+const ruleLogStatsInFlight = ref(false)
+
+const fetchRuleLogStats = async (reset = false) => {
+  if (!ruleLogCaddyId.value || ruleLogStatsInFlight.value) return
+  ruleLogStatsInFlight.value = true
+  try {
+    const res: any = await request.get(`/rules/${ruleLogCaddyId.value}/log-stats`, { params: reset ? { reset: 1 } : {} })
+    ruleLogStats.value = res.data
+  } catch (e: any) {
+    console.error('Failed to fetch rule log stats:', e)
+  } finally {
+    ruleLogStatsInFlight.value = false
+  }
+}
+
+const onRuleLogTabChange = (tab: string) => {
+  if (tab === 'stats') {
+    fetchRuleLogStats(true)
+  }
+}
+
 const onRuleLogDialogOpened = () => {
+  ruleLogTab.value = 'log'
   refreshRuleLogs()
   startRuleLogPolling()
 }
@@ -2209,7 +2268,7 @@ const onRuleLogDialogClosed = () => {
 const startRuleLogPolling = () => {
   stopRuleLogPolling()
   if (ruleLogAutoRefresh.value) {
-    ruleLogPollTimer = setInterval(refreshRuleLogs, 20000)
+    ruleLogPollTimer = setInterval(refreshRuleLogs, 5000)
   }
 }
 
@@ -2221,6 +2280,10 @@ const stopRuleLogPolling = () => {
 }
 
 const refreshRuleLogs = async () => {
+  if (ruleLogTab.value === 'stats') {
+    fetchRuleLogStats()
+    return
+  }
   if (!ruleLogCaddyId.value || ruleLogLoading.value) return
   ruleLogLoading.value = true
   try {
@@ -2840,6 +2903,14 @@ onUnmounted(() => {
   word-break: break-all;
 }
 
+.stats-summary { margin-bottom: 12px; }
+.stats-grid { display: grid; grid-template-columns: 1fr 1.6fr 1.6fr; gap: 16px; }
+.stats-col { min-width: 0; }
+.stats-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px; }
+.stats-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--border-lighter); font-size: 12px; }
+.stats-value { color: #111827; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 8px; }
+.stats-ua { max-width: 85%; }
+.stats-count { color: var(--el-color-primary); font-weight: 600; flex-shrink: 0; }
 .rule-log-viewer {
   height: 60vh;
   min-height: 300px;
