@@ -340,7 +340,7 @@ import { useAuthStore } from '@/stores/auth'
 import { request, formatBytes } from '@/utils/api'
 import { ElMessageBox } from 'element-plus'
 import { Monitor, Cpu, Document, Loading, CircleCheck, Odometer, TrendCharts, DataLine, List } from '@element-plus/icons-vue'
-import type { SystemInfo, SystemMetrics, CaddyMetrics, RealtimeTraffic, ConnectionStats, Rule, RuleMetrics, HostMetrics, MetricsOverview } from '@/types'
+import type { SystemInfo, SystemMetrics, CaddyMetrics, Rule, RuleMetrics, HostMetrics, MetricsOverview } from '@/types'
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent])
 
@@ -360,8 +360,6 @@ const formatUptime = (seconds?: number): string => {
 const systemInfo = ref<SystemInfo | null>(null)
 const systemMetrics = ref<SystemMetrics | null>(null)
 const caddyMetrics = ref<CaddyMetrics | null>(null)
-const realtimeTraffic = ref<RealtimeTraffic | null>(null)
-const connectionStats = ref<ConnectionStats | null>(null)
 const caddyStatus = ref('unknown')
 const caddyLoading = ref(false)
 const rules = ref<Rule[]>([])
@@ -476,7 +474,6 @@ const fetchAllData = (): Promise<void> => {
     request.get('/metrics/realtime', { headers }).then((res) => {
       if (!res.data) return
       const data = res.data
-      realtimeTraffic.value = data
       const now = Date.now()
       trafficInHistory.value = [...trafficInHistory.value, data?.bytes_in || 0].slice(-60)
       trafficOutHistory.value = [...trafficOutHistory.value, data?.bytes_out || 0].slice(-60)
@@ -499,7 +496,6 @@ const fetchAllData = (): Promise<void> => {
     request.get('/metrics/connections', { headers }).then((res) => {
       if (!res.data) return
       const connData = res.data
-      connectionStats.value = connData
       const now = Date.now()
       connEstablishedHistory.value = [...connEstablishedHistory.value, connData?.established || 0].slice(-60)
       connTimeWaitHistory.value = [...connTimeWaitHistory.value, connData?.time_wait || 0].slice(-60)

@@ -1652,7 +1652,7 @@ const openWizard = (rule?: Rule) => {
       enable_active_health_check: rule.enable_active_health_check === true,
       tcp_health_check_port: (rule as any).tcp_health_check_port || 0,
       tcp_try_duration: (rule as any).tcp_try_duration || 0,
-      tcp_try_interval: (rule as any).tcp_try_interval || 250,
+      tcp_try_interval: (rule as any).tcp_try_interval ?? 250,
       host_header: rule.host_header || '',
       upstreams: rule.upstreams?.map(u => ({
         ...u,
@@ -1712,6 +1712,8 @@ const openWizard = (rule?: Rule) => {
       request_body_max_size_mb: 0,
       upstream_keepalive_timeout: 0,
       server_tokens_hidden: 0,
+      enable_dns_server: false,
+      log_enabled: false,
       enabled: true,
     })
   }
@@ -1950,7 +1952,7 @@ const submitWizard = async () => {
       enable_active_health_check: wizardForm.enable_active_health_check,
       tcp_health_check_port: wizardForm.tcp_health_check_port || 0,
       tcp_try_duration: wizardForm.tcp_try_duration || 0,
-      tcp_try_interval: wizardForm.tcp_try_interval || 250,
+      tcp_try_interval: wizardForm.tcp_try_interval ?? 250,
       host_header: wizardForm.host_header,
       upstreams: validUpstreams,
       enable_tls: wizardForm.enable_tls,
@@ -2056,6 +2058,9 @@ const openCopyWizard = (rule: Rule) => {
     health_check_healthy_threshold: rule.health_check_healthy_threshold || 2,
     health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
     enable_active_health_check: rule.enable_active_health_check === true,
+    tcp_health_check_port: (rule as any).tcp_health_check_port || 0,
+    tcp_try_duration: (rule as any).tcp_try_duration || 0,
+    tcp_try_interval: (rule as any).tcp_try_interval ?? 250,
     host_header: rule.host_header || '',
     upstreams: rule.upstreams?.map(u => ({
       ...u,
@@ -2069,6 +2074,10 @@ const openCopyWizard = (rule: Rule) => {
     acme_config_id: rule.acme_config_id || undefined,
     ca_provider_id: rule.ca_provider_id ?? 0,
     tls_cert: rule.tls_cert || '',
+    request_body_max_size_mb: (rule as any).request_body_max_size_mb || 0,
+    upstream_keepalive_timeout: (rule as any).upstream_keepalive_timeout || 0,
+    server_tokens_hidden: (rule as any).server_tokens_hidden || 0,
+    log_enabled: (rule as any).log_enabled || false,
       tls_key: rule.tls_key || '',
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
@@ -2122,7 +2131,7 @@ const viewConfig = async (rule: Rule) => {
       enable_active_health_check: rule.enable_active_health_check === true,
       tcp_health_check_port: (rule as any).tcp_health_check_port || 0,
       tcp_try_duration: (rule as any).tcp_try_duration || 0,
-      tcp_try_interval: (rule as any).tcp_try_interval || 250,
+      tcp_try_interval: (rule as any).tcp_try_interval ?? 250,
       request_body_max_size_mb: (rule as any).request_body_max_size_mb || 0,
       upstream_keepalive_timeout: (rule as any).upstream_keepalive_timeout || 0,
       server_tokens_hidden: (rule as any).server_tokens_hidden || 0,
@@ -2157,7 +2166,7 @@ const viewConfig = async (rule: Rule) => {
       enable_active_health_check: rule.enable_active_health_check === true,
       tcp_health_check_port: (rule as any).tcp_health_check_port || 0,
       tcp_try_duration: (rule as any).tcp_try_duration || 0,
-      tcp_try_interval: (rule as any).tcp_try_interval || 250,
+      tcp_try_interval: (rule as any).tcp_try_interval ?? 250,
       request_body_max_size_mb: (rule as any).request_body_max_size_mb || 0,
       upstream_keepalive_timeout: (rule as any).upstream_keepalive_timeout || 0,
       server_tokens_hidden: (rule as any).server_tokens_hidden || 0,
@@ -2240,6 +2249,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  stopRuleLogPolling()
   if (healthPollTimer) {
     clearInterval(healthPollTimer)
     healthPollTimer = null

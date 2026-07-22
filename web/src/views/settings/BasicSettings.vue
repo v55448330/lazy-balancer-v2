@@ -112,7 +112,7 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="adminTlsDialogVisible" title="HTTPS 证书配置" width="520">
+    <el-dialog v-model="adminTlsDialogVisible" title="HTTPS 证书配置" width="520" destroy-on-close @closed="onAdminTlsDialogClose">
       <el-form label-width="110px">
         <el-form-item label="证书来源">
           <el-radio-group v-model="adminTlsForm.mode">
@@ -403,7 +403,7 @@ const emit = defineEmits<{
 
 const saving = ref(false)
 
-const adminTls = ref({ enabled: false, mode: 'selfsigned', acme_rule_id: '' })
+const adminTls = ref({ enabled: false, mode: 'selfsigned' })
 const adminTlsForm = ref<any>({ mode: 'selfsigned', certFile: null as File | null, keyFile: null as File | null, certInfo: null as any, inspecting: false })
 const adminTlsDialogVisible = ref(false)
 const adminTlsSaving = ref(false)
@@ -412,7 +412,7 @@ const loadAdminTls = async () => {
   try {
     const res = await request.get('/admin-tls')
     if (res.data) {
-      adminTls.value = { enabled: res.data.enabled, mode: res.data.mode || 'selfsigned', acme_rule_id: res.data.acme_rule_id || '' }
+      adminTls.value = { enabled: res.data.enabled, mode: res.data.mode || 'selfsigned' }
     }
   } catch { /* ignore */ }
 }
@@ -422,10 +422,18 @@ const openAdminTlsDialog = () => {
   adminTlsDialogVisible.value = true
 }
 
+const onAdminTlsDialogClose = () => {
+  loadAdminTls()
+}
+
 const onAdminTlsToggle = async (val: string | number | boolean) => {
   if (!val) {
-    await request.put('/admin-tls', formDataOf({ enabled: 'false' }))
-    notifyTlsRestarting()
+    try {
+      await request.put('/admin-tls', formDataOf({ enabled: 'false' }))
+      notifyTlsRestarting()
+    } catch {
+      adminTls.value.enabled = true
+    }
     return
   }
   openAdminTlsDialog()
