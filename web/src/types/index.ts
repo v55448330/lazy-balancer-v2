@@ -26,6 +26,23 @@ export interface SystemInfo {
   version?: string
 }
 
+export interface MetricsOverview {
+  total_requests: number
+  requests_per_sec: number
+  bytes_in: number
+  bytes_out: number
+  status_2xx: number
+  status_3xx: number
+  status_4xx: number
+  status_5xx: number
+  latency_p50: number
+  latency_p95: number
+  latency_p99: number
+  active_rules: number
+  total_rules: number
+  online_nodes: number
+}
+
 export interface SystemMetrics {
   cpu_percent: number
   memory_used: number

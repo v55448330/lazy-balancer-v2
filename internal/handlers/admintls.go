@@ -103,14 +103,17 @@ func readAdminTLSFiles(c *gin.Context) (string, string, error) {
 
 func (h *Handlers) GetAdminTLS(c *gin.Context) {
 	cfg := services.LoadAdminTLSConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
+	resp := gin.H{
 		"enabled":      cfg.Enabled,
 		"mode":         cfg.Mode,
-		"port":         cfg.Port,
-		"acme_rule_id": cfg.ACMERuleID,
-		"has_uploaded": cfg.Cert != "" && cfg.Key != "",
 		"restart_hint": true,
-	}})
+	}
+	if cfg.Cert != "" {
+		if info, err := parseAdminTLSCertInfo(cfg.Cert); err == nil {
+			resp["cert_info"] = info
+		}
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: resp})
 }
 
 func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
@@ -126,7 +129,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	if v := form.Get("mode"); v != "" {
 		mode = v
 	}
-	cert, key, ruleID := current.Cert, current.Key, current.ACMERuleID
+	cert, key := current.Cert, current.Key
 	port := h.cfg.Port
 	if mode == "upload" {
 		certPEM, keyPEM, err := readAdminTLSFiles(c)
@@ -142,7 +145,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的证书来源"})
 			return
 		}
-		probe := services.AdminTLSConfig{Enabled: true, Mode: mode, Cert: cert, Key: key, ACMERuleID: ruleID, Port: port}
+		probe := services.AdminTLSConfig{Enabled: true, Mode: mode, Cert: cert, Key: key, Port: port}
 		if _, err := probe.ResolveCertificate(h.cfg.DataDir); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书不可用: " + err.Error()})
 			return
@@ -150,7 +153,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	}
 
 	if _, err := db.DB.Exec(`UPDATE global_config SET admin_tls_enabled=?, admin_tls_mode=?, admin_tls_cert=?, admin_tls_key=?, admin_tls_acme_rule_id=?, admin_tls_port=?, updated_at=datetime('now') WHERE id=1`,
-		enabled, mode, cert, key, ruleID, port); err != nil {
+		enabled, mode, cert, key, "", port); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 HTTPS 配置失败: " + err.Error()})
 		return
 	}

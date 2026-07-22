@@ -62,13 +62,6 @@ func (c AdminTLSConfig) ResolveCertificate(dataDir string) (tls.Certificate, err
 			return tls.Certificate{}, fmt.Errorf("上传证书模式但未提供证书内容")
 		}
 		return tls.X509KeyPair([]byte(c.Cert), []byte(c.Key))
-	case "acme":
-		var certPEM, keyPEM string
-		err := db.DB.QueryRow(`SELECT COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE rule_id=? AND status='issued' ORDER BY id DESC LIMIT 1`, c.ACMERuleID).Scan(&certPEM, &keyPEM)
-		if err != nil || certPEM == "" {
-			return tls.Certificate{}, fmt.Errorf("所选规则暂无已签发的 ACME 证书")
-		}
-		return tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
 	default:
 		return selfSignedCert(dataDir)
 	}
@@ -92,9 +85,9 @@ func selfSignedCert(dataDir string) (tls.Certificate, error) {
 	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	tmpl := x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "Lazy Balancer Admin"},
+		Subject:               pkix.Name{CommonName: "Lazy Balancer V2", Organization: []string{"XiaoBao"}},
 		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().AddDate(10, 0, 0),
+		NotAfter:              time.Now().AddDate(50, 0, 0),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,

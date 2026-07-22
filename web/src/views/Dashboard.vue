@@ -105,6 +105,52 @@
               </div>
             </el-col>
           </el-row>
+          <el-row :gutter="16" style="margin-top: 16px;">
+            <el-col :span="6">
+              <div class="stat-item">
+                <div class="stat-icon stat-blue">
+                  <el-icon><TrendCharts /></el-icon>
+                </div>
+                <div class="stat-content">
+                  <div class="stat-value">{{ (overview?.requests_per_sec || 0).toFixed(2) }}</div>
+                  <div class="stat-label">请求速率 /s</div>
+                </div>
+              </div>
+            </el-col>
+            <el-col :span="6">
+              <div class="stat-item">
+                <div class="stat-icon stat-purple">
+                  <el-icon><Odometer /></el-icon>
+                </div>
+                <div class="stat-content">
+                  <div class="stat-value">{{ overview?.latency_p50 || 0 }}ms</div>
+                  <div class="stat-label">延迟 P50</div>
+                </div>
+              </div>
+            </el-col>
+            <el-col :span="6">
+              <div class="stat-item">
+                <div class="stat-icon stat-purple">
+                  <el-icon><Odometer /></el-icon>
+                </div>
+                <div class="stat-content">
+                  <div class="stat-value">{{ overview?.latency_p95 || 0 }}ms</div>
+                  <div class="stat-label">延迟 P95</div>
+                </div>
+              </div>
+            </el-col>
+            <el-col :span="6">
+              <div class="stat-item">
+                <div class="stat-icon stat-purple">
+                  <el-icon><Odometer /></el-icon>
+                </div>
+                <div class="stat-content">
+                  <div class="stat-value">{{ overview?.latency_p99 || 0 }}ms</div>
+                  <div class="stat-label">延迟 P99</div>
+                </div>
+              </div>
+            </el-col>
+          </el-row>
         </el-card>
       </el-col>
     </el-row>
@@ -294,7 +340,7 @@ import { useAuthStore } from '@/stores/auth'
 import { request, formatBytes } from '@/utils/api'
 import { ElMessageBox } from 'element-plus'
 import { Monitor, Cpu, Document, Loading, CircleCheck, Odometer, TrendCharts, DataLine, List } from '@element-plus/icons-vue'
-import type { SystemInfo, SystemMetrics, CaddyMetrics, RealtimeTraffic, ConnectionStats, Rule, RuleMetrics, HostMetrics } from '@/types'
+import type { SystemInfo, SystemMetrics, CaddyMetrics, RealtimeTraffic, ConnectionStats, Rule, RuleMetrics, HostMetrics, MetricsOverview } from '@/types'
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent])
 
@@ -321,6 +367,7 @@ const caddyLoading = ref(false)
 const rules = ref<Rule[]>([])
 const ruleMetrics = ref<Record<string, RuleMetrics>>({})
 const hostMetrics = ref<HostMetrics[]>([])
+const overview = ref<MetricsOverview | null>(null)
 
 const trafficInHistory = ref<number[]>([])
 const trafficOutHistory = ref<number[]>([])
@@ -445,6 +492,9 @@ const fetchAllData = (): Promise<void> => {
       if (!res.data) return
       rules.value = res.data || []
       void Promise.allSettled([fetchRuleMetrics(), fetchRuleHealth()])
+    }),
+    request.get('/metrics/overview', { headers }).then((res) => {
+      if (res.data) overview.value = res.data
     }),
     request.get('/metrics/connections', { headers }).then((res) => {
       if (!res.data) return
