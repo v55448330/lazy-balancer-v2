@@ -370,7 +370,7 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		db.DB.Exec("UPDATE api_keys SET last_used = datetime('now') WHERE id = ? AND (last_used IS NULL OR datetime(last_used) < datetime('now', '-60 seconds'))", keyID)
+		db.DB.Exec("UPDATE api_keys SET last_used = datetime('now') WHERE id = ?", keyID)
 		c.Set("user_id", userID)
 		c.Set("username", username)
 		c.Set("role", role)
