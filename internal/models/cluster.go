@@ -72,6 +72,10 @@ type ClusterBasicSettings struct {
 	HTTPIdleTimeout          int    `json:"http_idle_timeout,omitempty"`
 	UpstreamKeepaliveTimeout int    `json:"upstream_keepalive_timeout,omitempty"`
 	ServerTokensHidden       bool   `json:"server_tokens_hidden,omitempty"`
+	AdminTLSEnabled          bool   `json:"admin_tls_enabled,omitempty"`
+	AdminTLSMode             string `json:"admin_tls_mode,omitempty"`
+	AdminTLSCert             string `json:"admin_tls_cert,omitempty"`
+	AdminTLSKey              string `json:"admin_tls_key,omitempty"`
 }
 
 type ClusterUser struct {

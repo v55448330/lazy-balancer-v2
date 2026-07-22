@@ -175,7 +175,10 @@ func (s *SyncService) run(ctx context.Context) {
 		if token == "" {
 			s.pollRegistration(ctx)
 		} else {
-			_, pullErr := s.Pull(ctx)
+			result, pullErr := s.Pull(ctx)
+			if pullErr == nil && !result.Changed {
+				RecordAuditLog("system", "同步", "集群同步", "配置无变化", "")
+			}
 			reportErr := s.Report(ctx)
 			s.recordSyncError(ctx, pullErr, reportErr)
 		}
