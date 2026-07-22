@@ -263,6 +263,7 @@ func verifySnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken strin
 func verifySnapshotFingerprint(snapshot models.ClusterSnapshot) error {
 	canonical := snapshot
 	canonical.Fingerprint = ""
+	canonical.Signature = ""
 	canonical.Version = 0
 	content, err := json.Marshal(canonical)
 	if err != nil {
