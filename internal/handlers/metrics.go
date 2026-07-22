@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"lazy-balancer-v2/internal/services"
 	"database/sql"
 	"io"
 	"net/http"
@@ -81,6 +82,57 @@ func metricsIntervalModifier(interval string) string {
 	default:
 		return "-1 hours"
 	}
+}
+
+// GetRuleMetricsHistory returns cumulative history rows for one HTTP rule
+// within the requested range (1h/6h/24h/7d). TCP rules have no per-rule
+// traffic counters from caddy-l4 and return an empty list with a note.
+func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
+	caddyID := c.Param("caddy_id")
+	var protocol string
+	if err := db.DB.QueryRow("SELECT COALESCE(protocol,'') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+		return
+	}
+	if protocol != "http" {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"protocol": protocol, "supported": false, "rows": []any{}}})
+		return
+	}
+	modifier := metricsIntervalModifier(c.DefaultQuery("range", "24h"))
+	rows, err := db.MetricsDB.Query(`
+		SELECT timestamp, requests_total, requests_2xx, requests_3xx,
+		       requests_4xx, requests_5xx, bytes_in, bytes_out
+		FROM metrics_history
+		WHERE rule_id = ? AND timestamp > datetime('now', ?)
+		ORDER BY timestamp
+	`, caddyID, modifier)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取历史指标失败: " + err.Error()})
+		return
+	}
+	defer rows.Close()
+	type row struct {
+		Timestamp string `json:"timestamp"`
+		Requests  int64  `json:"requests_total"`
+		Status2xx int64  `json:"requests_2xx"`
+		Status3xx int64  `json:"requests_3xx"`
+		Status4xx int64  `json:"requests_4xx"`
+		Status5xx int64  `json:"requests_5xx"`
+		BytesIn   int64  `json:"bytes_in"`
+		BytesOut  int64  `json:"bytes_out"`
+	}
+	result := []row{}
+	for rows.Next() {
+		var r row
+		var ts time.Time
+		if err := rows.Scan(&ts, &r.Requests, &r.Status2xx, &r.Status3xx, &r.Status4xx, &r.Status5xx, &r.BytesIn, &r.BytesOut); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取历史指标失败: " + err.Error()})
+			return
+		}
+		r.Timestamp = ts.In(services.CurrentLocation()).Format("2006-01-02 15:04:05")
+		result = append(result, r)
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"protocol": protocol, "supported": true, "rows": result}})
 }
 
 func (h *Handlers) GetMetricsHistory(c *gin.Context) {

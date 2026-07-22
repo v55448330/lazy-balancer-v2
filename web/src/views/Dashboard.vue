@@ -253,7 +253,7 @@
           <el-table :data="sortedRules" stripe :header-cell-style="{ background: '#f9fafb' }">
             <el-table-column prop="name" label="规则名称" min-width="150">
               <template #default="{ row }">
-                <span class="text-primary font-medium">{{ row.name }}</span>
+                <a class="rule-name-link" @click.prevent="openRuleHistory(row)">{{ row.name }}</a>
               </template>
             </el-table-column>
             <el-table-column label="协议" width="90">
@@ -326,6 +326,27 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <el-dialog v-model="ruleHistoryVisible" :title="`历史统计 - ${ruleHistoryRule?.name || ''}`" width="76%" destroy-on-close>
+      <div class="history-toolbar">
+        <el-radio-group v-model="ruleHistoryRange" size="small" @change="fetchRuleHistory">
+          <el-radio-button value="1h">近 1 小时</el-radio-button>
+          <el-radio-button value="6h">近 6 小时</el-radio-button>
+          <el-radio-button value="24h">近 24 小时</el-radio-button>
+          <el-radio-button value="7d">近 7 天</el-radio-button>
+        </el-radio-group>
+      </div>
+      <el-empty v-if="ruleHistoryUnsupported" description="TCP 规则暂无历史流量统计（四层代理无流量计数指标）" :image-size="60" />
+      <template v-else>
+        <el-empty v-if="!ruleHistoryLoading && ruleHistoryRows.length === 0" description="该时间范围内暂无数据" :image-size="60" />
+        <div v-else v-loading="ruleHistoryLoading">
+          <div class="history-chart-title">请求数与状态码</div>
+          <v-chart :option="ruleRequestsChartOption" autoresize style="height: 240px;" />
+          <div class="history-chart-title">流量（入站 / 出站）</div>
+          <v-chart :option="ruleBytesChartOption" autoresize style="height: 240px;" />
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -375,6 +396,92 @@ const connTimeWaitHistory = ref<number[]>([])
 const connTimestamps = ref<number[]>([])
 
 const isSlave = computed(() => authStore.nodeMode === 'slave')
+
+const ruleHistoryVisible = ref(false)
+const ruleHistoryRule = ref<Rule | null>(null)
+const ruleHistoryRange = ref('24h')
+const ruleHistoryRows = ref<any[]>([])
+const ruleHistoryLoading = ref(false)
+const ruleHistoryUnsupported = ref(false)
+
+const openRuleHistory = (rule: Rule) => {
+  ruleHistoryRule.value = rule
+  ruleHistoryVisible.value = true
+  ruleHistoryRange.value = '24h'
+  fetchRuleHistory()
+}
+
+const fetchRuleHistory = async () => {
+  if (!ruleHistoryRule.value) return
+  ruleHistoryLoading.value = true
+  ruleHistoryUnsupported.value = false
+  try {
+    const res: any = await request.get(`/rules/${ruleHistoryRule.value.caddy_id}/metrics-history`, { params: { range: ruleHistoryRange.value } })
+    if (res.data?.supported === false) {
+      ruleHistoryUnsupported.value = true
+      ruleHistoryRows.value = []
+    } else {
+      ruleHistoryRows.value = res.data?.rows || []
+    }
+  } catch (e: any) {
+    console.error('Failed to fetch rule history:', e)
+    ruleHistoryRows.value = []
+  } finally {
+    ruleHistoryLoading.value = false
+  }
+}
+
+// rows store cumulative counters; charts show per-interval deltas
+const ruleHistoryDeltas = computed(() => {
+  const rows = ruleHistoryRows.value
+  const labels: string[] = []
+  const deltas: any[] = []
+  for (let i = 1; i < rows.length; i++) {
+    const prev = rows[i - 1]
+    const curr = rows[i]
+    const diff = (a: number, b: number) => Math.max(0, b - a)
+    labels.push(curr.timestamp?.slice(5, 16) || '')
+    deltas.push({
+      requests: diff(prev.requests_total, curr.requests_total),
+      s2xx: diff(prev.requests_2xx, curr.requests_2xx),
+      s3xx: diff(prev.requests_3xx, curr.requests_3xx),
+      s4xx: diff(prev.requests_4xx, curr.requests_4xx),
+      s5xx: diff(prev.requests_5xx, curr.requests_5xx),
+      bin: diff(prev.bytes_in, curr.bytes_in),
+      bout: diff(prev.bytes_out, curr.bytes_out),
+    })
+  }
+  return { labels, deltas }
+})
+
+const historyChartBase = (legend: string[], series: any[]) => ({
+  tooltip: { trigger: 'axis', backgroundColor: 'rgba(255,255,255,0.95)', borderColor: '#e5e7eb', textStyle: { color: '#374151', fontSize: 12 } },
+  legend: { data: legend, bottom: 0, textStyle: { fontSize: 11, color: '#6b7280' } },
+  grid: { left: 55, right: 15, top: 15, bottom: 40 },
+  xAxis: { type: 'category', data: ruleHistoryDeltas.value.labels, axisLine: { lineStyle: { color: '#e5e7eb' } }, axisLabel: { fontSize: 10, color: '#9ca3af' } },
+  yAxis: { type: 'value', axisLine: { show: false }, axisLabel: { fontSize: 10, color: '#9ca3af' }, splitLine: { lineStyle: { color: '#f3f4f6' } } },
+  series,
+})
+
+const ruleRequestsChartOption = computed(() => {
+  const d = ruleHistoryDeltas.value.deltas
+  const mk = (name: string, key: string, color: string) => ({ name, type: 'line', data: d.map((x: any) => x[key]), smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: color + '1a' } })
+  return historyChartBase(['总请求', '2xx', '3xx', '4xx', '5xx'], [
+    mk('总请求', 'requests', '#3b82f6'),
+    mk('2xx', 's2xx', '#10b981'),
+    mk('3xx', 's3xx', '#f59e0b'),
+    mk('4xx', 's4xx', '#f97316'),
+    mk('5xx', 's5xx', '#ef4444'),
+  ])
+})
+
+const ruleBytesChartOption = computed(() => {
+  const d = ruleHistoryDeltas.value.deltas
+  const mk = (name: string, key: string, color: string) => ({ name, type: 'line', data: d.map((x: any) => x[key]), smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: color + '1a' } })
+  const opt = historyChartBase(['入站', '出站'], [mk('入站', 'bin', '#3b82f6'), mk('出站', 'bout', '#10b981')])
+  ;(opt.yAxis as any).axisLabel.formatter = (v: number) => formatBytes(v)
+  return opt
+})
 
 const sortedRules = computed(() =>
   [...rules.value].sort(
@@ -772,3 +879,8 @@ onUnmounted(() => {
 .status-4xx { background: #fffbeb; color: #d97706; }
 .status-5xx { background: #fef2f2; color: #dc2626; }
 </style>
+
+.rule-name-link { color: var(--el-color-primary); cursor: pointer; text-decoration: none; font-weight: 500; }
+.rule-name-link:hover { text-decoration: underline; }
+.history-toolbar { margin-bottom: 12px; display: flex; justify-content: flex-end; }
+.history-chart-title { font-size: 13px; font-weight: 600; color: #374151; margin: 12px 0 6px; }

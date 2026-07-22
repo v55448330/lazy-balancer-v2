@@ -1,6 +1,7 @@
 package services
 
 import (
+	"strings"
 	"math"
 	"sort"
 	"io"
@@ -77,6 +78,7 @@ func (m *MetricsService) collect() {
 
 	metrics := m.parsePrometheusMetrics(string(body))
 	m.storeMetrics(metrics)
+	m.storePerHostMetrics(string(body))
 	m.updateOverview(metrics)
 }
 
@@ -194,6 +196,94 @@ func estimateLatencyPercentiles(text string) (int, int, int) {
 		return 0
 	}
 	return percentile(0.5), percentile(0.95), percentile(0.99)
+}
+
+type perHostMetrics struct {
+	requests int64
+	codes    map[int]int64
+	bytesIn  int64
+	bytesOut int64
+}
+
+// parsePerHostMetrics extracts cumulative request/byte counters grouped by
+// host label so per-rule history rows can be stored alongside the global row.
+func parsePerHostMetrics(text string) map[string]*perHostMetrics {
+	hosts := map[string]*perHostMetrics{}
+	get := func(host string) *perHostMetrics {
+		h, ok := hosts[host]
+		if !ok {
+			h = &perHostMetrics{codes: map[int]int64{}}
+			hosts[host] = h
+		}
+		return h
+	}
+	reCount := regexp.MustCompile(`caddy_http_request_duration_seconds_count\{[^}]*code="(\d+)"[^}]*host="([^"]+)"[^}]*\} (\d+)`)
+	for _, m := range reCount.FindAllStringSubmatch(text, -1) {
+		if len(m) < 4 {
+			continue
+		}
+		code, _ := strconv.Atoi(m[1])
+		v, _ := strconv.ParseInt(m[3], 10, 64)
+		h := get(m[2])
+		h.requests += v
+		h.codes[code] += v
+	}
+	reRespSize := regexp.MustCompile(`caddy_http_response_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\} (\d+)`)
+	for _, m := range reRespSize.FindAllStringSubmatch(text, -1) {
+		v, _ := strconv.ParseInt(m[2], 10, 64)
+		get(m[1]).bytesOut += v
+	}
+	reReqSize := regexp.MustCompile(`caddy_http_request_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\} (\d+)`)
+	for _, m := range reReqSize.FindAllStringSubmatch(text, -1) {
+		v, _ := strconv.ParseInt(m[2], 10, 64)
+		get(m[1]).bytesIn += v
+	}
+	return hosts
+}
+
+// storePerHostMetrics maps host labels to HTTP rules by domain and writes a
+// cumulative history row per rule; TCP rules produce no rows because caddy-l4
+// exports no per-rule traffic counters.
+func (m *MetricsService) storePerHostMetrics(text string) {
+	hosts := parsePerHostMetrics(text)
+	if len(hosts) == 0 {
+		return
+	}
+	rows, err := db.DB.Query(`SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND enabled=1`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	domainToRule := map[string]string{}
+	for rows.Next() {
+		var id, domains string
+		if rows.Scan(&id, &domains) == nil {
+			for _, d := range strings.Split(domains, ",") {
+				if d = strings.TrimSpace(d); d != "" {
+					domainToRule[d] = id
+				}
+			}
+		}
+	}
+	for host, h := range hosts {
+		ruleID, ok := domainToRule[host]
+		if !ok {
+			continue
+		}
+		c2xx := h.codes[200] + h.codes[201] + h.codes[204] + h.codes[206]
+		c3xx := h.codes[301] + h.codes[302] + h.codes[304]
+		c4xx := h.codes[400] + h.codes[401] + h.codes[403] + h.codes[404] + h.codes[429]
+		c5xx := h.codes[500] + h.codes[502] + h.codes[503] + h.codes[504]
+		if _, err := db.MetricsDB.Exec(`
+			INSERT INTO metrics_history
+			(rule_id, timestamp, requests_total, requests_2xx, requests_3xx,
+			 requests_4xx, requests_5xx, bytes_in, bytes_out,
+			 latency_p50, latency_p95, latency_p99)
+			VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
+		`, ruleID, h.requests, c2xx, c3xx, c4xx, c5xx, h.bytesIn, h.bytesOut); err != nil {
+			log.Printf("Failed to store per-rule metrics for %s: %v", ruleID, err)
+		}
+	}
 }
 
 func (m *MetricsService) storeMetrics(metrics parsedMetrics) {

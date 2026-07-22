@@ -128,6 +128,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/rules", h.ListRules)
 				business.GET("/rules/:caddy_id", h.GetRule)
 				business.GET("/rules/:caddy_id/caddy-config", h.GetRuleCaddyConfig)
+				business.GET("/rules/:caddy_id/metrics-history", h.GetRuleMetricsHistory)
 				business.GET("/rules/:caddy_id/log-stats", h.GetRuleLogStats)
 				business.GET("/rules/:caddy_id/logs", h.GetRuleLogs)
 				business.GET("/rules/:caddy_id/cert-info", h.GetRuleCertInfo)
@@ -258,14 +259,14 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		}
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Missing authorization header"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "缺少认证信息"})
 			c.Abort()
 			return
 		}
 
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 		if tokenString == authHeader {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid authorization format"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "认证格式无效"})
 			c.Abort()
 			return
 		}
@@ -275,14 +276,14 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		})
 
 		if err != nil || !token.Valid {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid token"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录状态已过期，请重新登录"})
 			c.Abort()
 			return
 		}
 
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid token claims"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录凭证无效"})
 			c.Abort()
 			return
 		}
@@ -291,7 +292,7 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		// demotion or disabling takes effect immediately, not at token expiry.
 		userIDFloat, ok := claims["user_id"].(float64)
 		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid token subject"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录凭证无效"})
 			c.Abort()
 			return
 		}
