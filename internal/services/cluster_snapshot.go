@@ -76,7 +76,27 @@ func (s *ClusterService) buildSnapshot(ctx context.Context) (models.ClusterSnaps
 	if snapshot.CAProviders, err = s.snapshotCAProviders(ctx); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
+	if snapshot.CertConfigs, err = s.snapshotCertConfigs(ctx); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
 	return snapshot, nil
+}
+
+func (s *ClusterService) snapshotCertConfigs(ctx context.Context) ([]models.CertificateConfig, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, COALESCE(dns_provider,'dnspod'), COALESCE(dns_credentials,''), COALESCE(enabled,1) FROM certificate_configs ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("读取快照 DNS 提供商配置: %w", err)
+	}
+	defer rows.Close()
+	configs := make([]models.CertificateConfig, 0)
+	for rows.Next() {
+		var cfg models.CertificateConfig
+		if err := rows.Scan(&cfg.ID, &cfg.Name, &cfg.DNSProvider, &cfg.DNSCredentials, &cfg.Enabled); err != nil {
+			return nil, fmt.Errorf("扫描快照 DNS 提供商配置: %w", err)
+		}
+		configs = append(configs, cfg)
+	}
+	return configs, rows.Err()
 }
 
 func (s *ClusterService) snapshotCAProviders(ctx context.Context) ([]models.CAProvider, error) {

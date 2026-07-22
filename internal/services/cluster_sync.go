@@ -1,7 +1,9 @@
 package services
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"bytes"
 	"context"
 	"database/sql"
@@ -161,6 +163,11 @@ func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return SyncResult{}, fmt.Errorf("解析集群快照: %w", err)
 	}
+	if err := verifySnapshotIntegrity(envelope.Data); err != nil {
+		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", err.Error())
+		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
+		return SyncResult{}, err
+	}
 	if err := s.applySnapshot(ctx, envelope.Data); err != nil {
 		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", err.Error())
 		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
@@ -180,6 +187,47 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 		msg = "状态上报失败: " + reportErr.Error()
 	}
 	_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", msg)
+}
+
+// verifySnapshotIntegrity re-computes the snapshot fingerprint the same way
+// the master does and checks referential consistency, so a corrupted or
+// truncated payload is rejected before anything is applied.
+func verifySnapshotIntegrity(snapshot models.ClusterSnapshot) error {
+	canonical := snapshot
+	canonical.Fingerprint = ""
+	canonical.Version = 0
+	content, err := json.Marshal(canonical)
+	if err != nil {
+		return fmt.Errorf("快照序列化失败: %w", err)
+	}
+	hash := sha256.Sum256(content)
+	if hex.EncodeToString(hash[:]) != snapshot.Fingerprint {
+		return fmt.Errorf("快照指纹校验失败：数据可能被截断或篡改")
+	}
+
+	caIDs := make(map[int]bool, len(snapshot.CAProviders))
+	for _, p := range snapshot.CAProviders {
+		caIDs[p.ID] = true
+	}
+	cfgIDs := make(map[int]bool, len(snapshot.CertConfigs))
+	for _, cfg := range snapshot.CertConfigs {
+		cfgIDs[cfg.ID] = true
+	}
+	if d := snapshot.BasicSettings.DefaultCAProviderID; d > 0 && !caIDs[d] {
+		return fmt.Errorf("快照一致性校验失败：默认 CA 提供商 %d 不存在", d)
+	}
+	for _, rule := range snapshot.Rules {
+		if rule.Enabled && len(rule.Upstreams) == 0 {
+			return fmt.Errorf("快照一致性校验失败：规则 %s 没有上游", rule.CaddyID)
+		}
+		if rule.CAProviderID > 0 && !caIDs[rule.CAProviderID] {
+			return fmt.Errorf("快照一致性校验失败：规则 %s 引用的 CA 提供商 %d 不存在", rule.CaddyID, rule.CAProviderID)
+		}
+		if rule.ACMEConfigID > 0 && !cfgIDs[rule.ACMEConfigID] {
+			return fmt.Errorf("快照一致性校验失败：规则 %s 引用的 DNS 配置 %d 不存在", rule.CaddyID, rule.ACMEConfigID)
+		}
+	}
+	return nil
 }
 
 func (s *SyncService) run(ctx context.Context) {

@@ -64,8 +64,8 @@ func RecordAuditLog(username, action, resource, detail, ipAddress string) {
 		log.Printf("audit log write skipped: audit database is not initialized")
 		return
 	}
-	if _, err := db.AuditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-		username, action, resource, detail, ipAddress, time.Now().In(CurrentLocation()).Format("2006-01-02 15:04:05")); err != nil {
+	if _, err := db.AuditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address) VALUES (?, ?, ?, ?, ?)",
+		username, action, resource, detail, ipAddress); err != nil {
 		log.Printf("audit log write failed: %v", err)
 	}
 }
@@ -86,7 +86,7 @@ func CleanupAuditLogs() {
 	if retentionMonths < 1 {
 		retentionMonths = 1
 	}
-	cutoff := time.Now().In(CurrentLocation()).AddDate(0, -retentionMonths, 0).Format("2006-01-02 15:04:05")
+	cutoff := time.Now().UTC().AddDate(0, -retentionMonths, 0).Format("2006-01-02 15:04:05")
 	if db.AuditDB == nil {
 		log.Printf("audit log cleanup skipped: audit database is not initialized")
 		return
