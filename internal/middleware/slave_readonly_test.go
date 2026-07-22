@@ -82,7 +82,8 @@ func TestReadOnlyGuard_blocks_non_admin_jwt_after_authentication(t *testing.T) {
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("init database: %v", err)
 	}
-	t.Cleanup(func() { db.DB = oldDB })
+	t.Cleanup(func() { db.DB = oldDB
+	db.SetDB(oldDB) })
 	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, is_enabled) VALUES (7, 'viewer', 'x', 'user', 1)"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}

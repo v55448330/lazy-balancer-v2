@@ -19,11 +19,12 @@ func init() {
 	runtimeLogSizeMB.Store(100)
 	go func() {
 		refresh := func() {
-			if db.DB == nil {
+			database := db.GetDB()
+			if database == nil {
 				return
 			}
 			var mb int
-			if err := db.DB.QueryRow("SELECT COALESCE(runtime_log_size_mb,100) FROM global_config WHERE id=1").Scan(&mb); err == nil && mb > 0 {
+			if err := database.QueryRow("SELECT COALESCE(runtime_log_size_mb,100) FROM global_config WHERE id=1").Scan(&mb); err == nil && mb > 0 {
 				runtimeLogSizeMB.Store(int64(mb))
 			}
 		}
@@ -106,7 +107,11 @@ func (w *RotatingFileWriter) Close() error {
 func StartRuntimeLogCleanup(logFile string) {
 	cleanup := func() {
 		months := 3
-		if err := db.DB.QueryRow("SELECT COALESCE(audit_retention_months,3) FROM global_config WHERE id=1").Scan(&months); err != nil || months < 1 {
+		database := db.GetDB()
+		if database == nil {
+			return
+		}
+		if err := database.QueryRow("SELECT COALESCE(audit_retention_months,3) FROM global_config WHERE id=1").Scan(&months); err != nil || months < 1 {
 			months = 3
 		}
 		cutoff := time.Now().AddDate(0, -months, 0)

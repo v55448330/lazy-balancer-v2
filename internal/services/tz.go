@@ -22,11 +22,12 @@ func init() {
 }
 
 func refreshLocation() {
-	if db.DB == nil {
+	database := db.GetDB()
+	if database == nil {
 		return
 	}
 	var tz string
-	if err := db.DB.QueryRow("SELECT COALESCE(timezone,'Asia/Shanghai') FROM global_config WHERE id=1").Scan(&tz); err != nil {
+	if err := database.QueryRow("SELECT COALESCE(timezone,'Asia/Shanghai') FROM global_config WHERE id=1").Scan(&tz); err != nil {
 		return
 	}
 	if loc, err := time.LoadLocation(tz); err == nil {

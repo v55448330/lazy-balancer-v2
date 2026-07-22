@@ -22,8 +22,10 @@ func setupAuthTestDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	db.DB = database
+	db.SetDB(database)
 	t.Cleanup(func() {
 		db.DB = oldDB
+	db.SetDB(oldDB)
 		database.Close()
 	})
 	_, err = database.Exec(`CREATE TABLE users (

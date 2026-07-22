@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/glebarez/sqlite"
@@ -16,10 +17,26 @@ import (
 
 var (
 	DB             *sql.DB
+	currentDB      atomic.Value
 	MetricsDB      *sql.DB
 	AuditDB        *sql.DB
 	BackgroundDBMu sync.Mutex
 )
+
+// SetDB registers the handle background goroutines should use; tests that
+// swap DB directly should call this too so refresh loops follow.
+func SetDB(d *sql.DB) {
+	currentDB.Store(d)
+}
+
+// GetDB returns the handle registered via Initialize/SetDB, safe for
+// concurrent background readers.
+func GetDB() *sql.DB {
+	if v, ok := currentDB.Load().(*sql.DB); ok {
+		return v
+	}
+	return nil
+}
 
 func Initialize(dataDir string) error {
 	// Create data directory
@@ -43,6 +60,7 @@ func Initialize(dataDir string) error {
 	}
 
 	DB = db
+	currentDB.Store(db)
 
 	// Initialize metrics database
 	if err := InitializeMetricsDB(dataDir); err != nil {
@@ -363,19 +381,19 @@ func runMigrations() error {
 		"global_config.cert_renewal_attempts":  "INTEGER DEFAULT 5",
 		"global_config.cert_job_log_size_mb":   "INTEGER DEFAULT 10",
 		"global_config.runtime_log_size_mb":    "INTEGER DEFAULT 100",
-	"global_config.admin_tls_enabled":     "BOOLEAN DEFAULT 0",
-	"global_config.admin_tls_mode":        "VARCHAR(20) DEFAULT 'selfsigned'",
-	"global_config.admin_tls_cert":        "TEXT DEFAULT ''",
-	"global_config.admin_tls_key":         "TEXT DEFAULT ''",
-	"global_config.admin_tls_acme_rule_id": "VARCHAR(50) DEFAULT ''",
-	"global_config.admin_tls_port":        "INTEGER DEFAULT 8443",
+		"global_config.admin_tls_enabled":      "BOOLEAN DEFAULT 0",
+		"global_config.admin_tls_mode":         "VARCHAR(20) DEFAULT 'selfsigned'",
+		"global_config.admin_tls_cert":         "TEXT DEFAULT ''",
+		"global_config.admin_tls_key":          "TEXT DEFAULT ''",
+		"global_config.admin_tls_acme_rule_id": "VARCHAR(50) DEFAULT ''",
+		"global_config.admin_tls_port":         "INTEGER DEFAULT 8443",
 		"global_config.access_log_json":        "BOOLEAN DEFAULT TRUE",
 		"global_config.access_log_format":      "TEXT DEFAULT ''",
 		"global_config.audit_retention_months": "INTEGER DEFAULT 3",
 		"global_config.jwt_expire_minutes":     "INTEGER DEFAULT 20",
 		"global_config.timezone":               "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
 		"lb_rules.log_enabled":                 "BOOLEAN DEFAULT 0",
-		"users.password_changed_at":             "DATETIME",
+		"users.password_changed_at":            "DATETIME",
 		"global_config.cluster_version":        "INTEGER DEFAULT 0",
 		"global_config.sync_caddy_config":      "BOOLEAN DEFAULT 0",
 		"global_config.cluster_token":          "TEXT DEFAULT ''",

@@ -22,8 +22,10 @@ func TestAPIKeyAuthBindsOwningUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.DB = database
+	db.SetDB(database)
 	t.Cleanup(func() {
 		db.DB = oldDB
+	db.SetDB(oldDB)
 		database.Close()
 	})
 	_, err = database.Exec(`CREATE TABLE users (
@@ -80,7 +82,9 @@ func TestAPIKeyAuthRejectsDisabledKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.DB = database
-	t.Cleanup(func() { db.DB = oldDB; database.Close() })
+	db.SetDB(database)
+	t.Cleanup(func() { db.DB = oldDB
+	db.SetDB(oldDB); database.Close() })
 	_, err = database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username VARCHAR(50), role VARCHAR(20), is_enabled BOOLEAN DEFAULT TRUE);
 	CREATE TABLE api_keys (id INTEGER PRIMARY KEY, name VARCHAR(100), key_hash VARCHAR(255), key_prefix VARCHAR(20), created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN DEFAULT TRUE, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
 	INSERT INTO users VALUES (7, 'alice', 'user', 1);`)
