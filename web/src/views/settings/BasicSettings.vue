@@ -425,7 +425,10 @@ const openAdminTlsDialog = () => {
 const onAdminTlsToggle = async (val: string | number | boolean) => {
   if (!val) {
     await request.put('/admin-tls', formDataOf({ enabled: 'false' }))
-    ElMessage.success('已禁用 HTTPS 访问，重启服务后生效')
+    ElMessageBox.alert('已禁用 HTTPS。主节点与所有从节点都需要重启服务后才能生效，请尽快在"系统信息"中重启。', '需要重启', {
+      confirmButtonText: '知道了',
+      type: 'warning',
+    })
     return
   }
   openAdminTlsDialog()
@@ -469,9 +472,12 @@ const saveAdminTls = async () => {
       fd.append('key_file', adminTlsForm.value.keyFile)
     }
     await request.put('/admin-tls', fd)
-    ElMessage.success('已保存，请在系统信息中重启服务生效')
     adminTlsDialogVisible.value = false
     loadAdminTls()
+    ElMessageBox.alert('已保存。主节点与所有从节点都需要重启服务后 HTTPS 才能生效（从节点会同步该配置，同样需要重启），请尽快在"系统信息"中重启。', '需要重启', {
+      confirmButtonText: '知道了',
+      type: 'warning',
+    })
   } finally {
     adminTlsSaving.value = false
   }
