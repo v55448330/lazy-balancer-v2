@@ -124,6 +124,7 @@ func main() {
 	log.Printf("Starting lazy-balancer-v2 %s on %s", version, addr)
 
 	tlsCfg := services.LoadAdminTLSConfig()
+	services.RecordRuntimeAdminTLS(tlsCfg)
 	if tlsCfg.Enabled {
 		cert, err := tlsCfg.ResolveCertificate(cfg.DataDir)
 		if err != nil {

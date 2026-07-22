@@ -1,6 +1,9 @@
 package services
 
 import (
+	"log"
+	"os"
+	"time"
 	"context"
 	"database/sql"
 	"fmt"
@@ -43,6 +46,14 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	caddySync := "未开启"
 	if snapshot.CaddyConfig != nil {
 		caddySync = "已同步"
+	}
+	if RuntimeAdminTLSChanged(LoadAdminTLSConfig()) {
+		RecordAuditLog("system", "重启", "系统", "同步到新的 HTTPS 访问配置，自动重启生效", "")
+		log.Printf("Admin TLS config changed via sync, restarting to apply")
+		go func() {
+			time.Sleep(time.Second)
+			os.Exit(0)
+		}()
 	}
 	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs)), fmt.Sprintf("CA 提供商 %d 个", len(snapshot.CAProviders)), fmt.Sprintf("DNS 配置 %d 个", len(snapshot.CertConfigs)), "基本设置：已同步", fmt.Sprintf("Caddy 全局配置：%s", caddySync)), "")
 	RecordAuditLog("system", "重载", "Caddy配置", "同步应用后自动重载", "")

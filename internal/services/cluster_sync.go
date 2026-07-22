@@ -1,16 +1,17 @@
 package services
 
 import (
-	"crypto/sha256"
-	"crypto/tls"
-	"encoding/hex"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -48,22 +49,69 @@ func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *
 	}
 }
 
-// do upgrades plain-HTTP requests to HTTPS when the master has enforced
-// admin TLS, which otherwise breaks sync with a 400 "HTTP request to HTTPS
-// server" response. The response body is consumed and closed before retry.
+// do transparently migrates the scheme when the master toggles enforced
+// admin TLS: plain HTTP hitting an HTTPS server (400) upgrades to HTTPS, and
+// HTTPS hitting a plain HTTP server (client error) downgrades to HTTP. A
+// successful migration is persisted to master_url so later cycles skip the
+// probe entirely.
 func (s *SyncService) do(req *http.Request) (*http.Response, error) {
 	resp, err := s.client.Do(req)
-	if err != nil || req.URL.Scheme != "http" || resp.StatusCode != http.StatusBadRequest {
+	if err == nil && req.URL.Scheme == "http" && resp.StatusCode == http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if !strings.Contains(string(body), "HTTP request to an HTTPS server") {
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			return resp, nil
+		}
+		resp, err = s.client.Do(s.cloneRequest(req, "https"))
+		if err == nil {
+			s.migrateMasterURLScheme("https")
+		}
 		return resp, err
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if !strings.Contains(string(body), "HTTP request to an HTTPS server") {
-		resp.Body = io.NopCloser(bytes.NewReader(body))
-		return resp, nil
+	if err != nil && req.URL.Scheme == "https" && strings.Contains(err.Error(), "server gave HTTP response to HTTPS client") {
+		resp, err = s.client.Do(s.cloneRequest(req, "http"))
+		if err == nil {
+			s.migrateMasterURLScheme("http")
+		}
+		return resp, err
 	}
-	req.URL.Scheme = "https"
-	return s.client.Do(req)
+	return resp, err
+}
+
+// cloneRequest rebuilds a request with a different scheme, replaying the body
+// via GetBody so POST retries (registration) keep their payload.
+func (s *SyncService) cloneRequest(req *http.Request, scheme string) *http.Request {
+	u := *req.URL
+	u.Scheme = scheme
+	clone, err := http.NewRequestWithContext(req.Context(), req.Method, u.String(), nil)
+	if err != nil {
+		return req
+	}
+	clone.Header = req.Header.Clone()
+	if req.GetBody != nil {
+		clone.Body, _ = req.GetBody()
+	}
+	clone.ContentLength = req.ContentLength
+	return clone
+}
+
+// migrateMasterURLScheme persists the scheme that just worked so subsequent
+// sync cycles use it directly.
+func (s *SyncService) migrateMasterURLScheme(scheme string) {
+	var masterURL string
+	if err := s.db.QueryRow("SELECT COALESCE(master_url,'') FROM global_config WHERE id=1").Scan(&masterURL); err != nil || masterURL == "" {
+		return
+	}
+	u, err := url.Parse(masterURL)
+	if err != nil || u.Scheme == scheme {
+		return
+	}
+	u.Scheme = scheme
+	if _, err := s.db.Exec("UPDATE global_config SET master_url=? WHERE id=1", u.String()); err == nil {
+		log.Printf("集群主节点地址协议已自动切换为 %s", scheme)
+		RecordAuditLog("system", "更新", "集群同步", fmt.Sprintf("主节点地址协议自动切换为 %s", scheme), "")
+	}
 }
 
 func (s *SyncService) Start() {

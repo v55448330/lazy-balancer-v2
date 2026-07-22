@@ -226,7 +226,7 @@ func ComputeNodeStatus(approved bool, lastSeen time.Time, syncInterval int, now 
 	if !approved {
 		return "pending"
 	}
-	if lastSeen.IsZero() || now.Sub(lastSeen) > 3*time.Duration(syncInterval)*time.Second {
+	if lastSeen.IsZero() || now.Sub(lastSeen) > 2*time.Duration(syncInterval)*time.Second {
 		return "offline"
 	}
 	return "online"

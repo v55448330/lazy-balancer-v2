@@ -1,6 +1,7 @@
 package services
 
 import (
+	"sync/atomic"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -26,6 +27,24 @@ type AdminTLSConfig struct {
 	Key        string
 	ACMERuleID string
 	Port       int
+}
+
+var runtimeAdminTLS atomic.Value
+
+// RecordRuntimeAdminTLS captures the state the process actually started with;
+// the sync applier compares later states against it.
+func RecordRuntimeAdminTLS(cfg AdminTLSConfig) {
+	runtimeAdminTLS.Store([2]interface{}{cfg.Enabled, cfg.Mode})
+}
+
+// RuntimeAdminTLSChanged reports whether the given config differs from the
+// state the process started with, meaning a restart is required to apply it.
+func RuntimeAdminTLSChanged(cfg AdminTLSConfig) bool {
+	v, ok := runtimeAdminTLS.Load().([2]interface{})
+	if !ok {
+		return false
+	}
+	return v[0] != cfg.Enabled || v[1] != cfg.Mode
 }
 
 func LoadAdminTLSConfig() AdminTLSConfig {

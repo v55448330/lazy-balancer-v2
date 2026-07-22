@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"os"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -163,5 +164,9 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		"证书来源："+mode,
 		services.AuditResultPart("success"),
 	))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已保存，请在系统信息中重启服务生效"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已保存，服务正在重启以应用 HTTPS 配置"})
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
 }

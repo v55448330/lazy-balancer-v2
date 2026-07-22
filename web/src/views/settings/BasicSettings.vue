@@ -425,10 +425,7 @@ const openAdminTlsDialog = () => {
 const onAdminTlsToggle = async (val: string | number | boolean) => {
   if (!val) {
     await request.put('/admin-tls', formDataOf({ enabled: 'false' }))
-    ElMessageBox.alert('已禁用 HTTPS。主节点与所有从节点都需要重启服务后才能生效，请尽快在"系统信息"中重启。', '需要重启', {
-      confirmButtonText: '知道了',
-      type: 'warning',
-    })
+    notifyTlsRestarting()
     return
   }
   openAdminTlsDialog()
@@ -463,6 +460,17 @@ const onTlsFile = async (e: Event, kind: 'cert' | 'key') => {
   }
 }
 
+const notifyTlsRestarting = () => {
+  ElMessageBox.alert('已保存，服务正在自动重启以应用 HTTPS 配置（从节点同步后将自动重启生效），页面稍后自动刷新。', '正在重启', {
+    confirmButtonText: '知道了',
+    type: 'success',
+    showClose: false,
+    closeOnClickModal: false,
+    closeOnPressEscape: false,
+  }).catch(() => {})
+  setTimeout(() => window.location.reload(), 12000)
+}
+
 const saveAdminTls = async () => {
   adminTlsSaving.value = true
   try {
@@ -473,11 +481,7 @@ const saveAdminTls = async () => {
     }
     await request.put('/admin-tls', fd)
     adminTlsDialogVisible.value = false
-    loadAdminTls()
-    ElMessageBox.alert('已保存。主节点与所有从节点都需要重启服务后 HTTPS 才能生效（从节点会同步该配置，同样需要重启），请尽快在"系统信息"中重启。', '需要重启', {
-      confirmButtonText: '知道了',
-      type: 'warning',
-    })
+    notifyTlsRestarting()
   } finally {
     adminTlsSaving.value = false
   }
