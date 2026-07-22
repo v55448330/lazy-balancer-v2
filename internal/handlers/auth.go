@@ -235,10 +235,15 @@ func (h *Handlers) SetupAdmin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "密码加密失败"})
 		return
 	}
-	result, err := db.DB.Exec("INSERT INTO users (username, password_hash, role, display_name, is_enabled) VALUES (?, ?, 'admin', ?, 1)",
+	result, err := db.DB.Exec("INSERT INTO users (username, password_hash, role, display_name, is_enabled) SELECT ?, ?, 'admin', ?, 1 WHERE NOT EXISTS (SELECT 1 FROM users)",
 		req.Username, string(hash), req.DisplayName)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建管理员失败"})
+		return
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "系统已完成初始化，请直接登录"})
 		return
 	}
 	id, _ := result.LastInsertId()

@@ -132,8 +132,12 @@ func main() {
 		}
 		log.Printf("管理面板 HTTPS 监听 %s（证书来源：%s）", addr, tlsCfg.Mode)
 		tlsServer := &http.Server{
-			Addr:    addr,
-			Handler: router,
+			Addr:              addr,
+			Handler:           router,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      60 * time.Second,
+			IdleTimeout:       120 * time.Second,
 			TLSConfig: &tls.Config{
 				Certificates: []tls.Certificate{cert},
 				MinVersion:   tls.VersionTLS12,

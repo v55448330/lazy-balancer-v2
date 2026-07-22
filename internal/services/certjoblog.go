@@ -30,7 +30,17 @@ func NewCertJobFileLogger(ruleID string) *CertJobFileLogger {
 
 // CertJobLogPath returns the log file path for the given rule ID.
 func CertJobLogPath(ruleID string) string {
-	return filepath.Join(certJobLogDir, fmt.Sprintf("certjob-%s.log", ruleID))
+	return filepath.Join(certJobLogDir, fmt.Sprintf("certjob-%s.log", sanitizePathComponent(ruleID)))
+}
+
+func sanitizePathComponent(value string) string {
+	out := make([]rune, 0, len(value))
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			out = append(out, r)
+		}
+	}
+	return string(out)
 }
 
 // getCertJobLogSizeBytes reads the configured max size (MB) from global_config.

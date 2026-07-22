@@ -11,7 +11,24 @@ import (
 
 const certDir = "/app/certs"
 
+// safeRuleID rejects anything outside the generated caddy_id alphabet so a
+// malicious or corrupted rule ID can never escape the cert directory.
+func safeRuleID(ruleID string) bool {
+	if ruleID == "" || len(ruleID) > 64 {
+		return false
+	}
+	for _, r := range ruleID {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
 func CertFilePaths(ruleID string) (certPath, keyPath string) {
+	if !safeRuleID(ruleID) {
+		return "", ""
+	}
 	return filepath.Join(certDir, ruleID+".crt"), filepath.Join(certDir, ruleID+".key")
 }
 
@@ -20,6 +37,9 @@ func WriteCertFiles(ruleID, certPEM, keyPEM string) error {
 		return fmt.Errorf("创建证书目录: %w", err)
 	}
 	certPath, keyPath := CertFilePaths(ruleID)
+	if certPath == "" {
+		return fmt.Errorf("非法的规则编号: %q", ruleID)
+	}
 	certTmp, keyTmp := certPath+".tmp", keyPath+".tmp"
 	if err := os.WriteFile(certTmp, []byte(certPEM), 0644); err != nil {
 		return fmt.Errorf("写入证书: %w", err)
@@ -42,6 +62,9 @@ func WriteCertFiles(ruleID, certPEM, keyPEM string) error {
 
 func RemoveCertFiles(ruleID string) {
 	certPath, keyPath := CertFilePaths(ruleID)
+	if certPath == "" {
+		return
+	}
 	os.Remove(certPath)
 	os.Remove(keyPath)
 }
