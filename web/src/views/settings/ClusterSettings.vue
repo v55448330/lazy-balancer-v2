@@ -114,12 +114,19 @@ const fetchNodes = async (): Promise<void> => {
   }
 }
 
+let refreshInFlight = false
 const refreshCluster = async (): Promise<void> => {
-  const currentStatus = await fetchStatus()
+  if (refreshInFlight) return
+  refreshInFlight = true
+  try {
+    const currentStatus = await fetchStatus()
   if (currentStatus.node_mode === 'master') {
     await fetchNodes()
   } else {
-    nodes.value = []
+      nodes.value = []
+    }
+  } finally {
+    refreshInFlight = false
   }
 }
 

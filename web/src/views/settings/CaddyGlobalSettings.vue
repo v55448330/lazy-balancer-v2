@@ -235,7 +235,7 @@ const refreshLogs = async (): Promise<void> => {
 
 const startLogPolling = (): void => {
   stopLogPolling()
-  if (autoRefresh.value) logPollTimer = setInterval(() => void refreshLogs(), 2000)
+  if (autoRefresh.value) logPollTimer = setInterval(() => { if (!logLoading.value) void refreshLogs() }, 2000)
 }
 
 const openLogDialog = (): void => { logDialogVisible.value = true }

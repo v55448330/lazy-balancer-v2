@@ -244,6 +244,7 @@ const appLogContainer = ref<HTMLElement | null>(null)
 let appLogTimer: ReturnType<typeof setInterval> | null = null
 
 const fetchAppLogs = async (): Promise<void> => {
+  if (appLogLoading.value) return
   appLogLoading.value = true
   try {
     const res = await request.get<{ data?: { content?: string } }>('/system/logs')

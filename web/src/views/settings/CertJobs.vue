@@ -266,6 +266,7 @@ const formatCoolingTime = (iso: string): string => {
 }
 
 const fetchJobs = async () => {
+  if (loading.value) return
   loading.value = true
   try {
     const [jobsRes, configRes] = await Promise.all([
@@ -378,7 +379,7 @@ const stopLogPolling = () => {
 }
 
 const refreshLogs = async () => {
-  if (!currentJob.value) return
+  if (!currentJob.value || logLoading.value) return
   logLoading.value = true
   try {
     const res: any = await request.get(`/certificates/jobs/${currentJob.value.id}/logs`)

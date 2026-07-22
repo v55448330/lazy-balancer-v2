@@ -1047,7 +1047,10 @@ const fetchCertInfo = async () => {
   }
 }
 
+let certJobsInFlight = false
 const fetchCertJobs = async () => {
+  if (certJobsInFlight) return
+  certJobsInFlight = true
   try {
     const res = await request.get('/certificates/jobs')
     const jobs: CertJob[] = res.data || []
@@ -1064,6 +1067,8 @@ const fetchCertJobs = async () => {
     certJobMap.value = map
   } catch (e: any) {
     certJobMap.value = {}
+  } finally {
+    certJobsInFlight = false
   }
 }
 
@@ -1248,7 +1253,10 @@ const formatUpdatedTime = (updatedAt: any): string => {
   return formatDate(updatedAt) || '-'
 }
 
+let healthInFlight = false
 const fetchHealthStatus = async () => {
+  if (healthInFlight) return
+  healthInFlight = true
   try {
     const res = await request.get('/config/health')
     const healthData = res.data || {}
@@ -1301,6 +1309,8 @@ const fetchHealthStatus = async () => {
     healthStatus.value = mapped
   } catch (e) {
     console.error('Failed to fetch health status:', e)
+  } finally {
+    healthInFlight = false
   }
 }
 
@@ -2211,7 +2221,7 @@ const stopRuleLogPolling = () => {
 }
 
 const refreshRuleLogs = async () => {
-  if (!ruleLogCaddyId.value) return
+  if (!ruleLogCaddyId.value || ruleLogLoading.value) return
   ruleLogLoading.value = true
   try {
     const res: any = await request.get(`/rules/${ruleLogCaddyId.value}/logs`)
