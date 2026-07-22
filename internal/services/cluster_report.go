@@ -60,7 +60,7 @@ func (s *SyncService) Report(ctx context.Context) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Cluster-Token", token)
-	resp, err := s.client.Do(req)
+	resp, err := s.do(req)
 	if err != nil {
 		RecordAuditLog("system", "上报失败", "集群节点", err.Error(), "")
 		return fmt.Errorf("上报主节点失败: %w", err)

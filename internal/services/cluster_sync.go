@@ -46,6 +46,24 @@ func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *
 	}
 }
 
+// do upgrades plain-HTTP requests to HTTPS when the master has enforced
+// admin TLS, which otherwise breaks sync with a 400 "HTTP request to HTTPS
+// server" response. The response body is consumed and closed before retry.
+func (s *SyncService) do(req *http.Request) (*http.Response, error) {
+	resp, err := s.do(req)
+	if err != nil || req.URL.Scheme != "http" || resp.StatusCode != http.StatusBadRequest {
+		return resp, err
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), "HTTP request to an HTTPS server") {
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		return resp, nil
+	}
+	req.URL.Scheme = "https"
+	return s.client.Do(req)
+}
+
 func (s *SyncService) Start() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -85,7 +103,7 @@ func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, 
 		return models.ClusterRegistration{}, fmt.Errorf("创建注册请求: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := s.client.Do(httpReq)
+	resp, err := s.do(httpReq)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return models.ClusterRegistration{}, errors.New("连接主节点超时，请检查主节点地址与网络")
@@ -125,7 +143,7 @@ func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
 		return SyncResult{}, fmt.Errorf("创建快照请求: %w", err)
 	}
 	req.Header.Set("X-Cluster-Token", token)
-	resp, err := s.client.Do(req)
+	resp, err := s.do(req)
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("拉取主节点快照: %w", err)
 	}
@@ -207,7 +225,7 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 		return
 	}
 	req.Header.Set("X-Registration-Secret", secret)
-	resp, err := s.client.Do(req)
+	resp, err := s.do(req)
 	if err != nil {
 		return
 	}
