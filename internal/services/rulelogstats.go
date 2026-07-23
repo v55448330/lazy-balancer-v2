@@ -1,12 +1,12 @@
 package services
 
 import (
-	"strings"
 	"bufio"
 	"encoding/json"
 	"io"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,8 +17,8 @@ type RuleLogStatItem struct {
 }
 
 type RuleLogStats struct {
-	Total     int64            `json:"total"`
-	StartedAt string           `json:"started_at"`
+	Total     int64             `json:"total"`
+	StartedAt string            `json:"started_at"`
 	TopIPs    []RuleLogStatItem `json:"top_ips"`
 	TopUAs    []RuleLogStatItem `json:"top_uas"`
 	TopURIs   []RuleLogStatItem `json:"top_uris"`
@@ -77,7 +77,7 @@ func GetRuleLogStats(ruleID string, reset bool) RuleLogStats {
 	return agg.snapshot()
 }
 
-const ruleLogInitialReadLimit = 16 << 20
+const ruleLogInitialLines = 1000
 
 func (a *ruleLogAggregator) consume(ruleID string) {
 	path := RuleLogPath(ruleID)
@@ -95,8 +95,10 @@ func (a *ruleLogAggregator) consume(ruleID string) {
 		a.offset = 0
 	}
 	start := a.offset
-	if start == 0 && info.Size() > ruleLogInitialReadLimit {
-		start = info.Size() - ruleLogInitialReadLimit
+	if start == 0 {
+		if _, tailOffset := ReadRuleLogTail(ruleID, ruleLogInitialLines); tailOffset > 0 {
+			start = tailOffset
+		}
 	}
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
 		return

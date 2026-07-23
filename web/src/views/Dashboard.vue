@@ -331,10 +331,8 @@
       <template #header>
         <div class="dialog-title">
           <el-icon class="dialog-title-icon"><TrendCharts /></el-icon>
-          <div>
-            <div class="dialog-title-main">历史统计</div>
-            <div class="dialog-title-sub">{{ ruleHistoryRule?.name }} · {{ ruleHistoryRule?.protocol?.toUpperCase() }} · :{{ ruleHistoryRule?.listen_port }}</div>
-          </div>
+          <span class="dialog-title-main">历史统计</span>
+          <el-text type="info" size="small" class="dialog-title-sub">{{ ruleHistoryRule?.name }} · {{ ruleHistoryRule?.protocol?.toUpperCase() }} · :{{ ruleHistoryRule?.listen_port }}</el-text>
         </div>
       </template>
       <div class="history-toolbar">
@@ -905,13 +903,13 @@ onUnmounted(() => {
 
 .rule-name-link { color: var(--el-color-primary); cursor: pointer; text-decoration: none; font-weight: 500; }
 .rule-name-link:hover { text-decoration: underline; }
-.dialog-title { display: flex; align-items: center; gap: 10px; }
-.dialog-title-icon { font-size: 20px; color: var(--el-color-primary); }
+.dialog-title { display: flex; align-items: center; gap: 10px; white-space: nowrap; overflow: hidden; }
+.dialog-title-icon { font-size: 20px; color: var(--el-color-primary); flex-shrink: 0; }
 .dialog-title-main { font-size: 16px; font-weight: 600; color: #111827; }
-.dialog-title-sub { font-size: 12px; color: #6b7280; margin-top: 2px; }
-.history-toolbar { margin-bottom: 16px; display: flex; justify-content: flex-end; }
-.history-card { margin-bottom: 16px; border: 1px solid var(--border-lighter); border-radius: 8px; }
+.dialog-title-sub { overflow: hidden; text-overflow: ellipsis; }
+.history-toolbar { display: flex; justify-content: flex-end; padding: 12px 0 16px; border-bottom: 1px solid var(--border-lighter); margin-bottom: 20px; }
+.history-card { margin-bottom: 20px; border: 1px solid var(--border-lighter); border-radius: 8px; }
 .history-card:last-child { margin-bottom: 0; }
-.history-card-header { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; color: #374151; }
-.history-card-header .el-icon { color: var(--el-color-primary); }
+.history-card-header { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #374151; }
+.history-card-header .el-icon { color: var(--el-color-primary); font-size: 16px; }
 .history-chart-title { font-size: 13px; font-weight: 600; color: #374151; margin: 12px 0 6px; }

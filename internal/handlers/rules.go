@@ -1,14 +1,11 @@
 package handlers
 
 import (
-	"bytes"
 	"database/sql"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -1705,48 +1702,6 @@ func (h *Handlers) GetRuleLogStats(c *gin.Context) {
 
 func (h *Handlers) GetRuleLogs(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
-	logPath := services.RuleLogPath(caddyID)
-
-	info, err := os.Stat(logPath)
-	if err != nil {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": ""}})
-		return
-	}
-
-	const maxBytes = 64 * 1024
-	startOffset := int64(0)
-	if info.Size() > maxBytes {
-		startOffset = info.Size() - maxBytes
-	}
-
-	f, err := os.Open(logPath)
-	if err != nil {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": ""}})
-		return
-	}
-	defer f.Close()
-
-	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": ""}})
-		return
-	}
-
-	data, err := io.ReadAll(f)
-	if err != nil {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": ""}})
-		return
-	}
-
-	if startOffset > 0 {
-		if idx := bytes.IndexByte(data, '\n'); idx != -1 {
-			data = data[idx+1:]
-		}
-	}
-
-	lines := strings.Split(string(data), "\n")
-	if len(lines) > 100 {
-		lines = lines[len(lines)-100:]
-	}
-
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": strings.Join(lines, "\n")}})
+	content, _ := services.ReadRuleLogTail(caddyID, 1000)
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": content}})
 }
