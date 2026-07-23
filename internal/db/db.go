@@ -450,28 +450,17 @@ func runMigrations() error {
 	DB.Exec("UPDATE global_config SET access_log_format='' WHERE access_log_format LIKE '{%'")
 	DB.Exec("UPDATE global_config SET access_log_format = access_log_format || char(10) || 'request>headers>User-Agent -> user_agent' WHERE access_log_format != '' AND access_log_format NOT LIKE '%user_agent%'")
 
-	// The User-Agent rename must precede the headers delete, otherwise the
-	// delete wipes the value before it can be renamed.
-	var logFormat string
-	if err := DB.QueryRow("SELECT COALESCE(access_log_format,'') FROM global_config WHERE id=1").Scan(&logFormat); err == nil && logFormat != "" {
-		uaLine := "request>headers>User-Agent -> user_agent"
-		lines := []string{}
-		for _, l := range strings.Split(logFormat, "\n") {
-			if strings.TrimSpace(l) != uaLine {
-				lines = append(lines, l)
-			}
-		}
+	// Headers are kept in access logs so User-Agent stats work; the filter
+	// encoder cannot rename a field under a deleted parent.
+	var lf string
+	if err := DB.QueryRow("SELECT COALESCE(access_log_format,'') FROM global_config WHERE id=1").Scan(&lf); err == nil && lf != "" {
 		out := []string{}
-		inserted := false
-		for _, l := range lines {
-			if !inserted && strings.Contains(l, "headers") && strings.Contains(l, "delete") {
-				out = append(out, uaLine)
-				inserted = true
+		for _, l := range strings.Split(lf, "\n") {
+			t := strings.TrimSpace(l)
+			if t == "request>headers -> delete" || t == "request>headers>User-Agent -> user_agent" {
+				continue
 			}
 			out = append(out, l)
-		}
-		if !inserted {
-			out = append(out, uaLine)
 		}
 		DB.Exec("UPDATE global_config SET access_log_format=? WHERE id=1", strings.Join(out, "\n"))
 	}
