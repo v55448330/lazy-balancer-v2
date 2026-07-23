@@ -172,6 +172,13 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	if req.AccessLogFormat != nil {
+		if err := validateAccessLogFormat(*req.AccessLogFormat); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+	}
+
 	// Generate config with requested overrides — DB is NOT touched yet
 	testConfig := services.GenerateCaddyConfig(h.cfg, &req)
 	if err := h.caddyService.ValidateConfig(testConfig, "global_config_validation"); err != nil {
@@ -486,4 +493,42 @@ func (h *Handlers) RestartCaddy(c *gin.Context) {
 	}
 	time.Sleep(2 * time.Second)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy restarted"})
+}
+
+// validateAccessLogFormat enforces the fields the log stats feature relies
+// on: a client IP and a request URI must survive the format (present natively
+// or renamed, never deleted).
+func validateAccessLogFormat(format string) error {
+	if strings.TrimSpace(format) == "" {
+		return nil
+	}
+	type rule struct {
+		path   string
+		action string
+	}
+	var rules []rule
+	for _, line := range strings.Split(format, "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "->", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		rules = append(rules, rule{strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])})
+	}
+	fieldKept := func(paths ...string) bool {
+		for _, p := range paths {
+			for _, r := range rules {
+				if r.path == p && r.action == "delete" {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	if !fieldKept("request>remote_ip", "request>client_ip") {
+		return fmt.Errorf("日志格式不能删除客户端 IP 字段（request>remote_ip / request>client_ip），日志统计依赖该字段")
+	}
+	if !fieldKept("request>uri") {
+		return fmt.Errorf("日志格式不能删除 URI 字段（request>uri），日志统计依赖该字段")
+	}
+	return nil
 }

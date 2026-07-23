@@ -1,6 +1,8 @@
 package services
 
 import (
+	"strings"
+	"io"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,6 +24,42 @@ func sanitizeRuleLogName(value string) string {
 		}
 	}
 	return string(out)
+}
+
+// ReadRuleLogFrom reads the access log from offset to EOF and returns the new
+// lines plus the end offset, so callers can incrementally consume without any
+// server-side state. If the file rotated (size < offset), it restarts at 0.
+func ReadRuleLogFrom(ruleID string, offset int64) (lines []string, next int64) {
+	path := RuleLogPath(ruleID)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, offset
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, offset
+	}
+	if info.Size() < offset {
+		offset = 0
+	}
+	if offset > info.Size() {
+		offset = info.Size()
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return nil, offset
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, offset
+	}
+	next = offset + int64(len(data))
+	text := string(data)
+	parts := strings.Split(text, "\n")
+	if parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	return parts, next
 }
 
 // ReadRuleLogTail returns the last maxLines lines of the rule's access log

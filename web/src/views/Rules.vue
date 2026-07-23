@@ -2247,24 +2247,117 @@ const openRuleLogDialog = (rule: Rule) => {
 
 const ruleLogTab = ref('log')
 const ruleLogStats = ref<any>(null)
-const ruleLogStatsInFlight = ref(false)
+const logStatsOffset = ref(0)
+const logStatsMaps = ref<{ ip: Record<string, number>; ua: Record<string, number>; uri: Record<string, number>; total: number; startedAt: string } | null>(null)
+const logStatsInFlight = ref(false)
 
-const fetchRuleLogStats = async (reset = false) => {
-  if (!ruleLogCaddyId.value || ruleLogStatsInFlight.value) return
-  ruleLogStatsInFlight.value = true
+const generalizeUA = (ua: string): string => {
+  if (!ua) return '未知'
+  let client = '其他'
+  let version = ''
+  const pick = (marker: string) => {
+    const i = ua.indexOf(marker)
+    if (i < 0) return ''
+    const rest = ua.slice(i + marker.length)
+    const m = rest.match(/^[\d.]+/)
+    return m ? m[0].split('.')[0] : ''
+  }
+  if (ua.includes('Edg/')) { client = 'Edge'; version = pick('Edg/') }
+  else if (ua.includes('Chrome/')) { client = 'Chrome'; version = pick('Chrome/') }
+  else if (ua.includes('Firefox/')) { client = 'Firefox'; version = pick('Firefox/') }
+  else if (ua.includes('Version/') && ua.includes('Safari/')) { client = 'Safari'; version = pick('Version/') }
+  else if (ua.includes('curl/')) { client = 'curl'; version = pick('curl/') }
+  else if (ua.includes('PostmanRuntime')) client = 'Postman'
+  else if (ua.includes('python-requests')) client = 'Python Requests'
+  else if (ua.includes('Go-http-client')) client = 'Go Client'
+  let osName = '其他系统'
+  if (ua.includes('Windows NT')) osName = 'Windows'
+  else if (ua.includes('Mac OS X')) osName = 'macOS'
+  else if (ua.includes('iPhone') || ua.includes('iPad')) osName = 'iOS'
+  else if (ua.includes('Android')) osName = 'Android'
+  else if (ua.includes('Linux')) osName = 'Linux'
+  return version ? `${client} ${version} / ${osName}` : `${client} / ${osName}`
+}
+
+const consumeLogLine = (maps: { ip: Record<string, number>; ua: Record<string, number>; uri: Record<string, number>; total: number }, line: string) => {
+  let entry: any
   try {
-    const res: any = await request.get(`/rules/${ruleLogCaddyId.value}/log-stats`, { params: reset ? { reset: 1 } : {} })
-    ruleLogStats.value = res.data
+    entry = JSON.parse(line)
+  } catch {
+    return
+  }
+  const req = entry?.request
+  if (!req) return
+  maps.total++
+  const ip = req.client_ip || req.src_ip || req.src || req.remote_ip || '-'
+  maps.ip[ip] = (maps.ip[ip] || 0) + 1
+  let uri = req.uri || req.uri_path || '-'
+  const qi = uri.indexOf('?')
+  if (qi >= 0) uri = uri.slice(0, qi)
+  maps.uri[uri] = (maps.uri[uri] || 0) + 1
+  let ua = req.user_agent || ''
+  if (!ua && req.headers) {
+    const list = req.headers['User-Agent']
+    if (Array.isArray(list) && list.length) ua = list[0]
+  }
+  const g = generalizeUA(ua)
+  maps.ua[g] = (maps.ua[g] || 0) + 1
+}
+
+const topN = (m: Record<string, number>, n: number) =>
+  Object.entries(m).map(([value, count]) => ({ value, count }))
+    .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
+    .slice(0, n)
+
+const rebuildStatsView = () => {
+  if (!logStatsMaps.value) return
+  const m = logStatsMaps.value
+  ruleLogStats.value = {
+    total: m.total,
+    started_at: m.startedAt,
+    top_ips: topN(m.ip, 10),
+    top_uas: topN(m.ua, 10),
+    top_uris: topN(m.uri, 10),
+  }
+}
+
+const fetchLogStream = async () => {
+  if (!ruleLogCaddyId.value || logStatsInFlight.value) return
+  logStatsInFlight.value = true
+  try {
+    const res: any = await request.get(`/rules/${ruleLogCaddyId.value}/log-stream`, { params: { offset: logStatsOffset.value } })
+    const lines: string[] = res.data?.lines || []
+    if (logStatsMaps.value && lines.length) {
+      for (const line of lines) consumeLogLine(logStatsMaps.value, line)
+      rebuildStatsView()
+    }
+    logStatsOffset.value = res.data?.offset ?? logStatsOffset.value
   } catch (e: any) {
-    console.error('Failed to fetch rule log stats:', e)
+    console.error('Failed to fetch log stream:', e)
   } finally {
-    ruleLogStatsInFlight.value = false
+    logStatsInFlight.value = false
+  }
+}
+
+const startLogStats = async () => {
+  logStatsMaps.value = { ip: {}, ua: {}, uri: {}, total: 0, startedAt: new Date().toLocaleString() }
+  logStatsOffset.value = 0
+  try {
+    const res: any = await request.get(`/rules/${ruleLogCaddyId.value}/logs`)
+    const content: string = res.data?.content || ''
+    for (const line of content.split('\n')) {
+      if (line.trim()) consumeLogLine(logStatsMaps.value, line)
+    }
+    rebuildStatsView()
+    logStatsOffset.value = res.data?.offset ?? 0
+  } catch (e: any) {
+    console.error('Failed to init log stats:', e)
   }
 }
 
 const onRuleLogTabChange = (tab: string) => {
   if (tab === 'stats') {
-    fetchRuleLogStats(true)
+    startLogStats()
   }
 }
 
@@ -2278,6 +2371,9 @@ const onRuleLogDialogClosed = () => {
   stopRuleLogPolling()
   ruleLogContent.value = ''
   ruleLogCaddyId.value = ''
+  logStatsMaps.value = null
+  ruleLogStats.value = null
+  logStatsOffset.value = 0
 }
 
 const startRuleLogPolling = () => {
@@ -2296,7 +2392,7 @@ const stopRuleLogPolling = () => {
 
 const refreshRuleLogs = async () => {
   if (ruleLogTab.value === 'stats') {
-    fetchRuleLogStats()
+    fetchLogStream()
     return
   }
   if (!ruleLogCaddyId.value || ruleLogLoading.value) return
