@@ -253,7 +253,7 @@
           <el-table :data="sortedRules" stripe :header-cell-style="{ background: '#f9fafb' }">
             <el-table-column prop="name" label="规则名称" min-width="150">
               <template #default="{ row }">
-                <a class="rule-name-link" @click.prevent="openRuleHistory(row)">{{ row.name }}</a>
+                <el-link type="primary" :underline="false" @click.prevent="openRuleHistory(row)">{{ row.name }}</el-link>
               </template>
             </el-table-column>
             <el-table-column label="协议" width="90">
@@ -327,7 +327,16 @@
       </el-col>
     </el-row>
 
-    <el-dialog v-model="ruleHistoryVisible" :title="`历史统计 - ${ruleHistoryRule?.name || ''}`" width="76%" destroy-on-close>
+    <el-dialog v-model="ruleHistoryVisible" width="78%" destroy-on-close class="history-dialog">
+      <template #header>
+        <div class="dialog-title">
+          <el-icon class="dialog-title-icon"><TrendCharts /></el-icon>
+          <div>
+            <div class="dialog-title-main">历史统计</div>
+            <div class="dialog-title-sub">{{ ruleHistoryRule?.name }} · {{ ruleHistoryRule?.protocol?.toUpperCase() }} · :{{ ruleHistoryRule?.listen_port }}</div>
+          </div>
+        </div>
+      </template>
       <div class="history-toolbar">
         <el-radio-group v-model="ruleHistoryRange" size="small" @change="fetchRuleHistory">
           <el-radio-button value="1h">近 1 小时</el-radio-button>
@@ -340,10 +349,24 @@
       <template v-else>
         <el-empty v-if="!ruleHistoryLoading && ruleHistoryRows.length === 0" description="该时间范围内暂无数据" :image-size="60" />
         <div v-else v-loading="ruleHistoryLoading">
-          <div class="history-chart-title">请求数与状态码</div>
-          <v-chart :option="ruleRequestsChartOption" autoresize style="height: 240px;" />
-          <div class="history-chart-title">流量（入站 / 出站）</div>
-          <v-chart :option="ruleBytesChartOption" autoresize style="height: 240px;" />
+          <el-card shadow="never" class="history-card">
+            <template #header>
+              <div class="history-card-header">
+                <el-icon><Odometer /></el-icon>
+                <span>请求数与状态码</span>
+              </div>
+            </template>
+            <v-chart :option="ruleRequestsChartOption" autoresize style="height: 260px;" />
+          </el-card>
+          <el-card shadow="never" class="history-card">
+            <template #header>
+              <div class="history-card-header">
+                <el-icon><DataLine /></el-icon>
+                <span>流量（入站 / 出站）</span>
+              </div>
+            </template>
+            <v-chart :option="ruleBytesChartOption" autoresize style="height: 260px;" />
+          </el-card>
         </div>
       </template>
     </el-dialog>
@@ -882,5 +905,13 @@ onUnmounted(() => {
 
 .rule-name-link { color: var(--el-color-primary); cursor: pointer; text-decoration: none; font-weight: 500; }
 .rule-name-link:hover { text-decoration: underline; }
-.history-toolbar { margin-bottom: 12px; display: flex; justify-content: flex-end; }
+.dialog-title { display: flex; align-items: center; gap: 10px; }
+.dialog-title-icon { font-size: 20px; color: var(--el-color-primary); }
+.dialog-title-main { font-size: 16px; font-weight: 600; color: #111827; }
+.dialog-title-sub { font-size: 12px; color: #6b7280; margin-top: 2px; }
+.history-toolbar { margin-bottom: 16px; display: flex; justify-content: flex-end; }
+.history-card { margin-bottom: 16px; border: 1px solid var(--border-lighter); border-radius: 8px; }
+.history-card:last-child { margin-bottom: 0; }
+.history-card-header { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; color: #374151; }
+.history-card-header .el-icon { color: var(--el-color-primary); }
 .history-chart-title { font-size: 13px; font-weight: 600; color: #374151; margin: 12px 0 6px; }

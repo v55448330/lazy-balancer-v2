@@ -852,35 +852,50 @@
           <div ref="ruleLogContainerRef" class="rule-log-viewer" v-html="ruleLogHtml" />
         </el-tab-pane>
         <el-tab-pane label="统计" name="stats">
-          <div class="stats-summary" v-if="ruleLogStats">
-            <el-text type="info" size="small">自 {{ ruleLogStats.started_at }} 起共 {{ ruleLogStats.total }} 次请求，每 5 秒实时统计</el-text>
-          </div>
-          <div class="stats-grid" v-if="ruleLogStats">
-            <div class="stats-col">
-              <div class="stats-title">IP TOP</div>
-              <div v-for="item in ruleLogStats.top_ips" :key="item.value" class="stats-row">
-                <span class="stats-value" :title="item.value">{{ item.value }}</span>
-                <span class="stats-count">{{ item.count }}</span>
-              </div>
-              <el-empty v-if="!ruleLogStats.top_ips?.length" description="暂无数据" :image-size="40" />
+          <template v-if="ruleLogStats">
+            <div class="stats-summary">
+              <el-tag size="small" type="info" effect="plain">共 {{ ruleLogStats.total }} 次请求</el-tag>
+              <el-text type="info" size="small" style="margin-left: 8px;">自 {{ ruleLogStats.started_at }} 起，每 5 秒实时统计</el-text>
             </div>
-            <div class="stats-col">
-              <div class="stats-title">浏览器 UA TOP</div>
-              <div v-for="item in ruleLogStats.top_uas" :key="item.value" class="stats-row">
-                <span class="stats-value stats-ua" :title="item.value">{{ item.value }}</span>
-                <span class="stats-count">{{ item.count }}</span>
-              </div>
-              <el-empty v-if="!ruleLogStats.top_uas?.length" description="暂无数据" :image-size="40" />
+            <div class="stats-grid">
+              <el-card shadow="never" class="stats-card">
+                <template #header>
+                  <div class="stats-card-header"><el-icon><Location /></el-icon><span>IP TOP</span></div>
+                </template>
+                <el-table :data="ruleLogStats.top_ips" size="small" :show-header="false">
+                  <el-table-column prop="value" show-overflow-tooltip />
+                  <el-table-column prop="count" width="70" align="right">
+                    <template #default="{ row }"><span class="stats-count">{{ row.count }}</span></template>
+                  </el-table-column>
+                  <template #empty><el-empty description="暂无数据" :image-size="40" /></template>
+                </el-table>
+              </el-card>
+              <el-card shadow="never" class="stats-card">
+                <template #header>
+                  <div class="stats-card-header"><el-icon><Monitor /></el-icon><span>客户端 TOP</span></div>
+                </template>
+                <el-table :data="ruleLogStats.top_uas" size="small" :show-header="false">
+                  <el-table-column prop="value" show-overflow-tooltip />
+                  <el-table-column prop="count" width="70" align="right">
+                    <template #default="{ row }"><span class="stats-count">{{ row.count }}</span></template>
+                  </el-table-column>
+                  <template #empty><el-empty description="暂无数据" :image-size="40" /></template>
+                </el-table>
+              </el-card>
+              <el-card shadow="never" class="stats-card">
+                <template #header>
+                  <div class="stats-card-header"><el-icon><Link /></el-icon><span>URI TOP</span></div>
+                </template>
+                <el-table :data="ruleLogStats.top_uris" size="small" :show-header="false">
+                  <el-table-column prop="value" show-overflow-tooltip />
+                  <el-table-column prop="count" width="70" align="right">
+                    <template #default="{ row }"><span class="stats-count">{{ row.count }}</span></template>
+                  </el-table-column>
+                  <template #empty><el-empty description="暂无数据" :image-size="40" /></template>
+                </el-table>
+              </el-card>
             </div>
-            <div class="stats-col">
-              <div class="stats-title">URI TOP</div>
-              <div v-for="item in ruleLogStats.top_uris" :key="item.value" class="stats-row">
-                <span class="stats-value" :title="item.value">{{ item.value }}</span>
-                <span class="stats-count">{{ item.count }}</span>
-              </div>
-              <el-empty v-if="!ruleLogStats.top_uris?.length" description="暂无数据" :image-size="40" />
-            </div>
-          </div>
+          </template>
         </el-tab-pane>
       </el-tabs>
       <template #footer>
@@ -894,7 +909,7 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
-import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight, Search, WarningFilled} from '@element-plus/icons-vue'
+import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight, Search, WarningFilled, Location, Monitor, Link} from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { ansiToHtml } from '@/utils/ansi'
 import { formatDate } from '@/utils/date'
@@ -2903,14 +2918,14 @@ onUnmounted(() => {
   word-break: break-all;
 }
 
-.stats-summary { margin-bottom: 12px; }
-.stats-grid { display: grid; grid-template-columns: 1fr 1.6fr 1.6fr; gap: 16px; }
-.stats-col { min-width: 0; }
-.stats-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px; }
-.stats-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--border-lighter); font-size: 12px; }
-.stats-value { color: #111827; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 8px; }
-.stats-ua { max-width: 85%; }
-.stats-count { color: var(--el-color-primary); font-weight: 600; flex-shrink: 0; }
+.stats-summary { margin-bottom: 14px; display: flex; align-items: center; }
+.stats-grid { display: grid; grid-template-columns: 1fr 1.5fr 1.5fr; gap: 14px; }
+.stats-card { border: 1px solid var(--border-lighter); border-radius: 8px; }
+.stats-card :deep(.el-card__header) { padding: 8px 12px; background: #f9fafb; }
+.stats-card :deep(.el-card__body) { padding: 4px 8px; }
+.stats-card-header { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: #374151; }
+.stats-card-header .el-icon { color: var(--el-color-primary); }
+.stats-count { color: var(--el-color-primary); font-weight: 600; }
 .rule-log-viewer {
   height: 60vh;
   min-height: 300px;
