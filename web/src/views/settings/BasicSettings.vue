@@ -479,14 +479,17 @@ const onTlsFile = async (e: Event, kind: 'cert' | 'key') => {
 }
 
 const notifyTlsRestarting = () => {
-  ElMessageBox.alert('已保存，服务正在自动重启以应用 HTTPS 配置（从节点同步后将自动重启生效），页面稍后自动刷新。', '正在重启', {
+  const toHttps = location.protocol !== 'https:'
+  ElMessageBox.alert(`已保存，服务正在自动重启，即将跳转到 ${toHttps ? 'HTTPS' : 'HTTP'} 地址（从节点同步后将自动重启生效）。`, '正在重启', {
     confirmButtonText: '知道了',
     type: 'success',
     showClose: false,
     closeOnClickModal: false,
     closeOnPressEscape: false,
   }).catch(() => {})
-  setTimeout(() => window.location.reload(), 12000)
+  setTimeout(() => {
+    window.location.href = `${toHttps ? 'https' : 'http'}://${location.host}/`
+  }, 2500)
 }
 
 const saveAdminTls = async () => {
