@@ -899,8 +899,6 @@ onUnmounted(() => {
 .status-3xx { background: #eff6ff; color: #2563eb; }
 .status-4xx { background: #fffbeb; color: #d97706; }
 .status-5xx { background: #fef2f2; color: #dc2626; }
-</style>
-
 .rule-name-link { color: var(--el-color-primary); cursor: pointer; text-decoration: none; font-weight: 500; }
 .rule-name-link:hover { text-decoration: underline; }
 .dialog-title { display: inline-flex; align-items: center; white-space: nowrap; overflow: hidden; }
@@ -916,3 +914,5 @@ onUnmounted(() => {
 .history-card-header { display: flex; align-items: center; font-size: 14px; font-weight: 600; color: #374151; line-height: 1; }
 .history-card-header .el-icon { color: var(--el-color-primary); font-size: 16px; margin-right: 8px; }
 .history-chart-title { font-size: 13px; font-weight: 600; color: #374151; margin: 12px 0 6px; }
+
+</style>
