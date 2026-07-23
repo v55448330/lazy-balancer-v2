@@ -2252,8 +2252,8 @@ const logStatsMaps = ref<{ ip: Record<string, number>; ua: Record<string, number
 const logStatsInFlight = ref(false)
 
 const generalizeUA = (ua: string): string => {
-  if (!ua) return '未知'
-  let client = '其他'
+  if (!ua) return '-'
+  let client = ''
   let version = ''
   const pick = (marker: string) => {
     const i = ua.indexOf(marker)
@@ -2270,13 +2270,15 @@ const generalizeUA = (ua: string): string => {
   else if (ua.includes('PostmanRuntime')) client = 'Postman'
   else if (ua.includes('python-requests')) client = 'Python Requests'
   else if (ua.includes('Go-http-client')) client = 'Go Client'
-  let osName = '其他系统'
+  if (!client) return ua
+  let osName = ''
   if (ua.includes('Windows NT')) osName = 'Windows'
   else if (ua.includes('Mac OS X')) osName = 'macOS'
   else if (ua.includes('iPhone') || ua.includes('iPad')) osName = 'iOS'
   else if (ua.includes('Android')) osName = 'Android'
   else if (ua.includes('Linux')) osName = 'Linux'
-  return version ? `${client} ${version} / ${osName}` : `${client} / ${osName}`
+  const ver = version ? ` ${version}` : ''
+  return osName ? `${client}${ver} / ${osName}` : `${client}${ver}`
 }
 
 const consumeLogLine = (maps: { ip: Record<string, number>; ua: Record<string, number>; uri: Record<string, number>; total: number }, line: string) => {
@@ -2315,9 +2317,9 @@ const rebuildStatsView = () => {
   ruleLogStats.value = {
     total: m.total,
     started_at: m.startedAt,
-    top_ips: topN(m.ip, 10),
-    top_uas: topN(m.ua, 10),
-    top_uris: topN(m.uri, 10),
+    top_ips: topN(m.ip, 20),
+    top_uas: topN(m.ua, 20),
+    top_uris: topN(m.uri, 20),
   }
 }
 

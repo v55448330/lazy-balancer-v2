@@ -465,6 +465,13 @@ func runMigrations() error {
 		DB.Exec("UPDATE global_config SET access_log_format=? WHERE id=1", strings.Join(out, "\n"))
 	}
 
+	// Sensitive credential headers are dropped from access logs (Cookie and
+	// Authorization are redacted by Caddy itself; API keys are not).
+	var lf2 string
+	if err := DB.QueryRow("SELECT COALESCE(access_log_format,'') FROM global_config WHERE id=1").Scan(&lf2); err == nil && lf2 != "" && !strings.Contains(lf2, "X-API-Key") {
+		DB.Exec("UPDATE global_config SET access_log_format = ? WHERE id=1", lf2+"\nrequest>headers>X-API-Key -> delete")
+	}
+
 	// Create upstreams table if not exists
 	DB.Exec(`CREATE TABLE IF NOT EXISTS upstreams (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -51,7 +51,8 @@ func ReadRuleLogFrom(ruleID string, offset int64) (lines []string, next int64) {
 	}
 	// Cap each poll so a huge or maliciously reset offset cannot force a
 	// full-log allocation; the caller continues from the returned offset.
-	const maxRead = 2 << 20
+	// 8MB covers ~1.6-4K header-rich lines per 5s poll.
+	const maxRead = 8 << 20
 	data, err := io.ReadAll(io.LimitReader(f, maxRead+1))
 	if err != nil {
 		return nil, offset
