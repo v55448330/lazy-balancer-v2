@@ -1705,5 +1705,7 @@ func (h *Handlers) GetRuleLogStream(c *gin.Context) {
 func (h *Handlers) GetRuleLogs(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 	content, offset := services.ReadRuleLogTail(caddyID, 1000)
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"content": content, "offset": offset}})
+	// offset must point just past the returned tail so a following stream
+	// request continues without re-reading the same lines.
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"content": content, "offset": offset + int64(len(content))}})
 }
