@@ -111,8 +111,8 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 
-	if req.CaddyLogSizeMB != nil && *req.CaddyLogSizeMB <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy log size must be greater than 0"})
+	if req.CaddyLogSizeMB != nil && *req.CaddyLogSizeMB < 100 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 日志大小不能小于 100MB"})
 		return
 	}
 

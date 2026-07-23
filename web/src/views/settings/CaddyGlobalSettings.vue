@@ -21,7 +21,7 @@
         <el-text type="info" size="small" class="tip-inline">生产环境建议 info；debug 会产生大量日志</el-text>
       </el-form-item>
       <el-form-item label="日志大小">
-        <el-input-number v-model="settings.caddy_log_size_mb" :disabled="isReadOnly" :min="0" controls-position="right" class="number-input" />
+        <el-input-number v-model="settings.caddy_log_size_mb" :disabled="isReadOnly" :min="100" :max="10240" controls-position="right" class="number-input" />
         <el-text type="info" size="small" class="tip-inline">MB，单个文件达到此大小后自动滚动归档，保留 5 个历史文件；建议 100</el-text>
       </el-form-item>
       <el-form-item label="运行日志">

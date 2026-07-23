@@ -53,7 +53,6 @@ func ReadRuleLogTail(ruleID string, maxLines int) (content string, offset int64)
 			break
 		}
 		buf = append(chunk, buf...)
-		newlines = 0
 		for _, b := range chunk {
 			if b == '\n' {
 				newlines++
@@ -61,9 +60,10 @@ func ReadRuleLogTail(ruleID string, maxLines int) (content string, offset int64)
 		}
 		end = start
 	}
-	// keep only the last maxLines lines
+	// keep only the last maxLines lines; when the log holds fewer lines than
+	// maxLines, cut stays 0 and everything is returned.
 	lines := 0
-	cut := len(buf)
+	cut := 0
 	for i := len(buf) - 1; i >= 0; i-- {
 		if buf[i] == '\n' {
 			lines++
