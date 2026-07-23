@@ -903,14 +903,16 @@ onUnmounted(() => {
 
 .rule-name-link { color: var(--el-color-primary); cursor: pointer; text-decoration: none; font-weight: 500; }
 .rule-name-link:hover { text-decoration: underline; }
-.dialog-title { display: flex; align-items: center; white-space: nowrap; overflow: hidden; }
+.dialog-title { display: inline-flex; align-items: center; white-space: nowrap; overflow: hidden; }
 .dialog-title > * { line-height: 1; }
-.dialog-title-icon { font-size: 20px; color: var(--el-color-primary); flex-shrink: 0; margin-right: 10px; }
-.dialog-title-main { font-size: 16px; font-weight: 600; color: #111827; margin-right: 14px; }
+.dialog-title-icon { font-size: 20px; color: var(--el-color-primary); flex-shrink: 0; margin-right: 12px; }
+.dialog-title-main { font-size: 16px; font-weight: 600; color: #111827; margin-right: 16px; }
 .dialog-title-sub { overflow: hidden; text-overflow: ellipsis; line-height: 1; padding-top: 3px; }
-.history-toolbar { display: flex; justify-content: flex-end; margin-top: 4px; padding-bottom: 14px; border-bottom: 1px solid var(--border-lighter); margin-bottom: 20px; }
+.history-toolbar { display: flex; justify-content: flex-end; margin-top: 8px; padding-bottom: 16px; border-bottom: 1px solid var(--border-lighter); margin-bottom: 20px; }
 .history-card { margin-bottom: 24px; border: 1px solid var(--border-lighter); border-radius: 8px; }
 .history-card:last-child { margin-bottom: 0; }
+.history-card :deep(.el-card__header) { padding: 8px 14px; background: #f9fafb; }
+.history-card :deep(.el-card__body) { padding: 10px 14px; }
 .history-card-header { display: flex; align-items: center; font-size: 14px; font-weight: 600; color: #374151; line-height: 1; }
 .history-card-header .el-icon { color: var(--el-color-primary); font-size: 16px; margin-right: 8px; }
 .history-chart-title { font-size: 13px; font-weight: 600; color: #374151; margin: 12px 0 6px; }
