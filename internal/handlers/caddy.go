@@ -530,5 +530,33 @@ func validateAccessLogFormat(format string) error {
 	if !fieldKept("request>uri") {
 		return fmt.Errorf("日志格式不能删除 URI 字段（request>uri），日志统计依赖该字段")
 	}
+	if !fieldKept("request>headers") {
+		return fmt.Errorf("日志格式不能删除请求头（request>headers），UA 统计依赖该字段")
+	}
+	renameAlias := func(paths []string, allowed []string) error {
+		for _, p := range paths {
+			for _, r := range rules {
+				if r.path == p && r.action != "delete" && r.action != "" {
+					ok := false
+					for _, a := range allowed {
+						if r.action == a {
+							ok = true
+							break
+						}
+					}
+					if !ok {
+						return fmt.Errorf("字段 %s 重命名为 %s 后统计将无法识别，仅支持：%s", p, r.action, strings.Join(allowed, " / "))
+					}
+				}
+			}
+		}
+		return nil
+	}
+	if err := renameAlias([]string{"request>remote_ip", "request>client_ip"}, []string{"src", "src_ip"}); err != nil {
+		return err
+	}
+	if err := renameAlias([]string{"request>uri"}, []string{"uri_path"}); err != nil {
+		return err
+	}
 	return nil
 }

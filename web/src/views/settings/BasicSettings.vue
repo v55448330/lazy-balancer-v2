@@ -431,7 +431,7 @@ const onAdminTlsToggle = async (val: string | number | boolean) => {
   if (!val) {
     try {
       await request.put('/admin-tls', formDataOf({ enabled: 'false' }))
-      notifyTlsRestarting()
+      notifyTlsRestarting(false)
     } catch {
       adminTls.value.enabled = true
     }
@@ -478,8 +478,7 @@ const onTlsFile = async (e: Event, kind: 'cert' | 'key') => {
   }
 }
 
-const notifyTlsRestarting = () => {
-  const toHttps = location.protocol !== 'https:'
+const notifyTlsRestarting = (toHttps: boolean) => {
   ElMessageBox.alert(`已保存，服务正在自动重启，即将跳转到 ${toHttps ? 'HTTPS' : 'HTTP'} 地址（从节点同步后将自动重启生效）。`, '正在重启', {
     confirmButtonText: '知道了',
     type: 'success',
@@ -487,9 +486,20 @@ const notifyTlsRestarting = () => {
     closeOnClickModal: false,
     closeOnPressEscape: false,
   }).catch(() => {})
-  setTimeout(() => {
-    window.location.href = `${toHttps ? 'https' : 'http'}://${location.host}/`
-  }, 2500)
+  const target = `${toHttps ? 'https' : 'http'}://${location.host}/`
+  const started = Date.now()
+  const timer = setInterval(async () => {
+    if (Date.now() - started > 15000) {
+      clearInterval(timer)
+      window.location.href = target
+      return
+    }
+    try {
+      await fetch(`/api/v1/branding?ts=${Date.now()}`, { cache: 'no-store', redirect: 'manual' })
+      clearInterval(timer)
+      window.location.href = target
+    } catch { /* not up yet */ }
+  }, 600)
 }
 
 const saveAdminTls = async () => {
@@ -502,7 +512,7 @@ const saveAdminTls = async () => {
     }
     await request.put('/admin-tls', fd)
     adminTlsDialogVisible.value = false
-    notifyTlsRestarting()
+    notifyTlsRestarting(true)
   } finally {
     adminTlsSaving.value = false
   }

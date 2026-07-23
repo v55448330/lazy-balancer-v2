@@ -150,7 +150,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("HTTPS 监听失败: %v", err)
 		}
-		if err := tlsServer.ServeTLS(newHTTPRedirectMux(ln, tlsCfg.Port), "", ""); err != nil {
+		if err := tlsServer.ServeTLS(newHTTPRedirectMux(ln), "", ""); err != nil {
 			log.Fatalf("HTTPS 服务启动失败: %v", err)
 		}
 	} else if err := router.Run(addr); err != nil {
@@ -181,11 +181,10 @@ func (c *prefixConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 // are redirected instead of producing TLS handshake errors.
 type httpRedirectMux struct {
 	net.Listener
-	port int
 }
 
-func newHTTPRedirectMux(ln net.Listener, port int) *httpRedirectMux {
-	return &httpRedirectMux{Listener: ln, port: port}
+func newHTTPRedirectMux(ln net.Listener) *httpRedirectMux {
+	return &httpRedirectMux{Listener: ln}
 }
 
 func (m *httpRedirectMux) Accept() (net.Conn, error) {
@@ -194,20 +193,24 @@ func (m *httpRedirectMux) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The sniff must be time-bounded: a silent client that never sends a
+		// byte would otherwise stall the entire accept loop.
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 		br := bufio.NewReader(c)
 		b, err := br.Peek(1)
 		if err != nil {
 			c.Close()
 			continue
 		}
+		_ = c.SetReadDeadline(time.Time{})
 		if b[0] == 0x16 {
 			return &prefixConn{Conn: c, r: br}, nil
 		}
-		redirectHTTP(br, c, m.port)
+		redirectHTTP(br, c)
 	}
 }
 
-func redirectHTTP(br *bufio.Reader, c net.Conn, port int) {
+func redirectHTTP(br *bufio.Reader, c net.Conn) {
 	defer c.Close()
 	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
 	head, _ := br.ReadString('\n')

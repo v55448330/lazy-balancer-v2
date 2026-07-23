@@ -432,12 +432,16 @@ const openRuleHistory = (rule: Rule) => {
   fetchRuleHistory()
 }
 
+let ruleHistorySeq = 0
+
 const fetchRuleHistory = async () => {
   if (!ruleHistoryRule.value) return
+  const seq = ++ruleHistorySeq
   ruleHistoryLoading.value = true
   ruleHistoryUnsupported.value = false
   try {
     const res: any = await request.get(`/rules/${ruleHistoryRule.value.caddy_id}/metrics-history`, { params: { range: ruleHistoryRange.value } })
+    if (seq !== ruleHistorySeq) return
     if (res.data?.supported === false) {
       ruleHistoryUnsupported.value = true
       ruleHistoryRows.value = []
@@ -445,10 +449,14 @@ const fetchRuleHistory = async () => {
       ruleHistoryRows.value = res.data?.rows || []
     }
   } catch (e: any) {
-    console.error('Failed to fetch rule history:', e)
-    ruleHistoryRows.value = []
+    if (seq === ruleHistorySeq) {
+      console.error('Failed to fetch rule history:', e)
+      ruleHistoryRows.value = []
+    }
   } finally {
-    ruleHistoryLoading.value = false
+    if (seq === ruleHistorySeq) {
+      ruleHistoryLoading.value = false
+    }
   }
 }
 
@@ -460,7 +468,9 @@ const ruleHistoryDeltas = computed(() => {
   for (let i = 1; i < rows.length; i++) {
     const prev = rows[i - 1]
     const curr = rows[i]
-    const diff = (a: number, b: number) => Math.max(0, b - a)
+    // Caddy reload resets counters; when current < previous, the current
+    // value itself is the interval's traffic.
+    const diff = (a: number, b: number) => (b >= a ? b - a : b)
     labels.push(curr.timestamp?.slice(5, 16) || '')
     deltas.push({
       requests: diff(prev.requests_total, curr.requests_total),

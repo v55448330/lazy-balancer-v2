@@ -1,11 +1,11 @@
 package services
 
 import (
-	"strings"
-	"io"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const ruleLogDir = "/app/logs/rules"
@@ -43,21 +43,39 @@ func ReadRuleLogFrom(ruleID string, offset int64) (lines []string, next int64) {
 	if info.Size() < offset {
 		offset = 0
 	}
-	if offset > info.Size() {
-		offset = info.Size()
+	if offset < 0 {
+		offset = 0
 	}
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return nil, offset
 	}
-	data, err := io.ReadAll(f)
+	// Cap each poll so a huge or maliciously reset offset cannot force a
+	// full-log allocation; the caller continues from the returned offset.
+	const maxRead = 2 << 20
+	data, err := io.ReadAll(io.LimitReader(f, maxRead+1))
 	if err != nil {
 		return nil, offset
 	}
+	if len(data) > maxRead {
+		data = data[:maxRead]
+	}
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		// Hold back the unterminated trailing record so it is delivered
+		// complete on the next poll instead of being skipped forever.
+		if i := strings.LastIndex(string(data), "\n"); i >= 0 {
+			data = data[:i+1]
+		} else {
+			data = nil
+		}
+	}
 	next = offset + int64(len(data))
 	text := string(data)
-	parts := strings.Split(text, "\n")
-	if parts[len(parts)-1] == "" {
-		parts = parts[:len(parts)-1]
+	var parts []string
+	if text != "" {
+		parts = strings.Split(text, "\n")
+		if parts[len(parts)-1] == "" {
+			parts = parts[:len(parts)-1]
+		}
 	}
 	return parts, next
 }
@@ -99,9 +117,13 @@ func ReadRuleLogTail(ruleID string, maxLines int) (content string, offset int64)
 		end = start
 	}
 	// keep only the last maxLines lines; when the log holds fewer lines than
-	// maxLines, cut stays 0 and everything is returned.
+	// maxLines, cut stays 0 and everything is returned. An unterminated
+	// trailing record still counts as a line.
 	lines := 0
 	cut := 0
+	if len(buf) > 0 && buf[len(buf)-1] != '\n' {
+		lines = 1
+	}
 	for i := len(buf) - 1; i >= 0; i-- {
 		if buf[i] == '\n' {
 			lines++
