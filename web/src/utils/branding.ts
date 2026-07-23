@@ -11,7 +11,7 @@ interface BrandingResponse {
 
 export const appName = ref('Lazy Balancer')
 export const footerText = ref('Copyright © 2026 XiaoBao. All rights reserved.')
-export const appVersion = ref('2.0.3')
+export const appVersion = ref('2.0.4')
 
 export async function loadBranding(): Promise<void> {
   try {
