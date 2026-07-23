@@ -150,7 +150,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("HTTPS 监听失败: %v", err)
 		}
-		if err := tlsServer.Serve(newHTTPRedirectMux(ln, tlsCfg.Port)); err != nil {
+		if err := tlsServer.ServeTLS(newHTTPRedirectMux(ln, tlsCfg.Port), "", ""); err != nil {
 			log.Fatalf("HTTPS 服务启动失败: %v", err)
 		}
 	} else if err := router.Run(addr); err != nil {
