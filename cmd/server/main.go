@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -130,7 +133,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("管理面板 HTTPS 启用失败: %v", err)
 		}
-		log.Printf("管理面板 HTTPS 监听 %s（证书来源：%s）", addr, tlsCfg.Mode)
+		log.Printf("管理面板 HTTPS 监听 %s（证书来源：%s，HTTP 明文请求 301 跳转）", addr, tlsCfg.Mode)
 		tlsServer := &http.Server{
 			Addr:              addr,
 			Handler:           router,
@@ -143,7 +146,11 @@ func main() {
 				MinVersion:   tls.VersionTLS12,
 			},
 		}
-		if err := tlsServer.ListenAndServeTLS("", ""); err != nil {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			log.Fatalf("HTTPS 监听失败: %v", err)
+		}
+		if err := tlsServer.Serve(newHTTPRedirectMux(ln, tlsCfg.Port)); err != nil {
 			log.Fatalf("HTTPS 服务启动失败: %v", err)
 		}
 	} else if err := router.Run(addr); err != nil {
@@ -158,4 +165,70 @@ type tzLogWriter struct {
 func (t *tzLogWriter) Write(p []byte) (int, error) {
 	prefix := time.Now().In(services.CurrentLocation()).Format("2006/01/02 15:04:05 ")
 	return t.w.Write(append([]byte(prefix), p...))
+}
+
+// prefixConn replays the bytes Peek consumed so the TLS handshake is intact.
+type prefixConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *prefixConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// httpRedirectMux sniffs the first byte of each connection: TLS handshakes
+// (0x16) go to the HTTPS server, plain HTTP gets a 301 to the HTTPS URL. It
+// only activates when admin TLS is enabled, so misdirected plain-HTTP clients
+// are redirected instead of producing TLS handshake errors.
+type httpRedirectMux struct {
+	net.Listener
+	port int
+}
+
+func newHTTPRedirectMux(ln net.Listener, port int) *httpRedirectMux {
+	return &httpRedirectMux{Listener: ln, port: port}
+}
+
+func (m *httpRedirectMux) Accept() (net.Conn, error) {
+	for {
+		c, err := m.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		br := bufio.NewReader(c)
+		b, err := br.Peek(1)
+		if err != nil {
+			c.Close()
+			continue
+		}
+		if b[0] == 0x16 {
+			return &prefixConn{Conn: c, r: br}, nil
+		}
+		redirectHTTP(br, c, m.port)
+	}
+}
+
+func redirectHTTP(br *bufio.Reader, c net.Conn, port int) {
+	defer c.Close()
+	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	head, _ := br.ReadString('\n')
+	host := ""
+	var location string
+	parts := strings.Fields(head)
+	if len(parts) >= 2 {
+		location = parts[1]
+	}
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil || line == "\r\n" || line == "\n" {
+			break
+		}
+		if strings.HasPrefix(strings.ToLower(line), "host:") {
+			host = strings.TrimSpace(line[len("host:"):])
+		}
+	}
+	if host == "" {
+		host = c.LocalAddr().String()
+	}
+	resp := fmt.Sprintf("HTTP/1.1 301 Moved Permanently\r\nContent-Length: 0\r\nConnection: close\r\nLocation: https://%s%s\r\n\r\n", host, location)
+	_, _ = c.Write([]byte(resp))
 }
