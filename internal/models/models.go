@@ -56,6 +56,15 @@ type LbRule struct {
 	RequestBodyMaxSizeMB          int          `json:"request_body_max_size_mb"`
 	UpstreamKeepaliveTimeout      int          `json:"upstream_keepalive_timeout"`
 	ServerTokensHidden            int          `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
+	IPACLMode                     string       `json:"ip_acl_mode"`
+	IPACLList                     []string     `json:"ip_acl_list"`
+	CustomRoutesEnabled           bool         `json:"custom_routes_enabled"`
+	ProxyDialTimeout              int          `json:"proxy_dial_timeout"`
+	ProxyResponseHeaderTimeout    int          `json:"proxy_response_header_timeout"`
+	ProxyReadTimeout              int          `json:"proxy_read_timeout"`
+	ProxyWriteTimeout             int          `json:"proxy_write_timeout"`
+	ProxyStreamTimeout            int          `json:"proxy_stream_timeout"`
+	PathRules                     []PathRule   `json:"path_rules"`
 	Upstreams                     []Upstream   `json:"upstreams"`
 	HostHeader                    string       `json:"host_header"`
 	EnableTLS                     bool         `json:"enable_tls"`
@@ -109,44 +118,49 @@ type UpdateCAProviderRequest struct {
 
 // GlobalConfig represents global configuration
 type GlobalConfig struct {
-	ID                       int          `json:"id"`
-	CaddyConfig              string       `json:"caddy_config"`
-	DNSProvider              string       `json:"dns_provider"`
-	DNSCredentials           string       `json:"-"`
-	ACMEEmail                string       `json:"acme_email"`
-	CertExpiryDays           int          `json:"cert_expiry_days"`
-	CertRenewalDays          int          `json:"cert_renewal_days"`
-	CertRenewalAttempts      int          `json:"cert_renewal_attempts"`
-	LogLevel                 string       `json:"log_level"`
-	CaddyLogPath             string       `json:"caddy_log_path"`
-	CaddyLogLevel            string       `json:"caddy_log_level"`
-	CaddyLogSizeMB           int          `json:"caddy_log_size_mb"`
-	RequestBodyMaxSizeMB     int          `json:"request_body_max_size_mb"`
-	HTTPReadTimeout          int          `json:"http_read_timeout"`
-	HTTPWriteTimeout         int          `json:"http_write_timeout"`
-	HTTPIdleTimeout          int          `json:"http_idle_timeout"`
-	UpstreamKeepaliveTimeout int          `json:"upstream_keepalive_timeout"`
-	ServerTokensHidden       bool         `json:"server_tokens_hidden"`
-	CertJobLogSizeMB         int          `json:"cert_job_log_size_mb"`
-	RuntimeLogSizeMB         int          `json:"runtime_log_size_mb"`
-	AccessLogJSON            bool         `json:"access_log_json"`
-	AccessLogFormat          string       `json:"access_log_format"`
-	AuditRetentionMonths     int          `json:"audit_retention_months"`
-	JWTExpireMinutes         int          `json:"jwt_expire_minutes"`
-	Timezone                 string       `json:"timezone"`
-	IsMaster                 bool         `json:"is_master"`
-	MasterURL                string       `json:"master_url"`
-	SyncInterval             int          `json:"sync_interval"`
-	DefaultCAProviderID      int          `json:"default_ca_provider_id"`
-	ClusterVersion           int          `json:"cluster_version"`
-	SyncCaddyConfig          bool         `json:"sync_caddy_config"`
-	ClusterToken             string       `json:"-"`
-	RegistrationID           int          `json:"-"`
-	RegistrationSecret       string       `json:"-"`
-	AppliedVersion           int          `json:"applied_version"`
-	LastSyncError            string       `json:"last_sync_error"`
-	LastSync                 sql.NullTime `json:"last_sync"`
-	UpdatedAt                sql.NullTime `json:"updated_at"`
+	ID                         int          `json:"id"`
+	CaddyConfig                string       `json:"caddy_config"`
+	DNSProvider                string       `json:"dns_provider"`
+	DNSCredentials             string       `json:"-"`
+	ACMEEmail                  string       `json:"acme_email"`
+	CertExpiryDays             int          `json:"cert_expiry_days"`
+	CertRenewalDays            int          `json:"cert_renewal_days"`
+	CertRenewalAttempts        int          `json:"cert_renewal_attempts"`
+	LogLevel                   string       `json:"log_level"`
+	CaddyLogPath               string       `json:"caddy_log_path"`
+	CaddyLogLevel              string       `json:"caddy_log_level"`
+	CaddyLogSizeMB             int          `json:"caddy_log_size_mb"`
+	RequestBodyMaxSizeMB       int          `json:"request_body_max_size_mb"`
+	HTTPReadTimeout            int          `json:"http_read_timeout"`
+	HTTPWriteTimeout           int          `json:"http_write_timeout"`
+	HTTPIdleTimeout            int          `json:"http_idle_timeout"`
+	UpstreamKeepaliveTimeout   int          `json:"upstream_keepalive_timeout"`
+	ProxyDialTimeout           int          `json:"proxy_dial_timeout"`
+	ProxyResponseHeaderTimeout int          `json:"proxy_response_header_timeout"`
+	ProxyReadTimeout           int          `json:"proxy_read_timeout"`
+	ProxyWriteTimeout          int          `json:"proxy_write_timeout"`
+	ProxyStreamTimeout         int          `json:"proxy_stream_timeout"`
+	ServerTokensHidden         bool         `json:"server_tokens_hidden"`
+	CertJobLogSizeMB           int          `json:"cert_job_log_size_mb"`
+	RuntimeLogSizeMB           int          `json:"runtime_log_size_mb"`
+	AccessLogJSON              bool         `json:"access_log_json"`
+	AccessLogFormat            string       `json:"access_log_format"`
+	AuditRetentionMonths       int          `json:"audit_retention_months"`
+	JWTExpireMinutes           int          `json:"jwt_expire_minutes"`
+	Timezone                   string       `json:"timezone"`
+	IsMaster                   bool         `json:"is_master"`
+	MasterURL                  string       `json:"master_url"`
+	SyncInterval               int          `json:"sync_interval"`
+	DefaultCAProviderID        int          `json:"default_ca_provider_id"`
+	ClusterVersion             int          `json:"cluster_version"`
+	SyncCaddyConfig            bool         `json:"sync_caddy_config"`
+	ClusterToken               string       `json:"-"`
+	RegistrationID             int          `json:"-"`
+	RegistrationSecret         string       `json:"-"`
+	AppliedVersion             int          `json:"applied_version"`
+	LastSyncError              string       `json:"last_sync_error"`
+	LastSync                   sql.NullTime `json:"last_sync"`
+	UpdatedAt                  sql.NullTime `json:"updated_at"`
 }
 
 // Upstream represents an upstream server
@@ -163,6 +177,23 @@ type Upstream struct {
 	DnsServer      string `json:"dns_server"`
 	MaxConnections int    `json:"max_connections"`
 	ProxyProtocol  string `json:"proxy_protocol"`
+}
+
+type PathRuleUpstream struct {
+	Address string `json:"address"`
+	Port    int    `json:"port"`
+	Weight  int    `json:"weight"`
+}
+
+type PathRule struct {
+	ID        int                `json:"id"`
+	RuleID    string             `json:"-"`
+	SortOrder int                `json:"sort_order"`
+	MatchType string             `json:"match_type"`
+	Path      string             `json:"path"`
+	Upstreams []PathRuleUpstream `json:"upstreams"`
+	CreatedAt time.Time          `json:"-"`
+	UpdatedAt sql.NullTime       `json:"-"`
 }
 
 // TLSCertificate represents a TLS certificate
@@ -335,6 +366,15 @@ type CreateRuleRequest struct {
 	RequestBodyMaxSizeMB          int        `json:"request_body_max_size_mb"`
 	UpstreamKeepaliveTimeout      int        `json:"upstream_keepalive_timeout"`
 	ServerTokensHidden            int        `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
+	IPACLMode                     string     `json:"ip_acl_mode"`
+	IPACLList                     []string   `json:"ip_acl_list"`
+	CustomRoutesEnabled           bool       `json:"custom_routes_enabled"`
+	ProxyDialTimeout              int        `json:"proxy_dial_timeout"`
+	ProxyResponseHeaderTimeout    int        `json:"proxy_response_header_timeout"`
+	ProxyReadTimeout              int        `json:"proxy_read_timeout"`
+	ProxyWriteTimeout             int        `json:"proxy_write_timeout"`
+	ProxyStreamTimeout            int        `json:"proxy_stream_timeout"`
+	PathRules                     []PathRule `json:"path_rules"`
 	HostHeader                    string     `json:"host_header"`
 	Upstreams                     []Upstream `json:"upstreams" binding:"required"`
 	EnableTLS                     bool       `json:"enable_tls"`
@@ -350,69 +390,83 @@ type CreateRuleRequest struct {
 }
 
 type UpdateRuleRequest struct {
-	Name                          string     `json:"name"`
-	Description                   string     `json:"description"`
-	Protocol                      string     `json:"protocol"`
-	Domain                        string     `json:"domain"`
-	ListenPort                    int        `json:"listen_port"`
-	Strategy                      string     `json:"strategy"`
-	DynamicDNS                    bool       `json:"dynamic_dns"`
-	EnableDnsServer               bool       `json:"enable_dns_server"`
-	DnsServer                     string     `json:"dns_server"`
-	DnsFamily                     string     `json:"dns_family"`
-	HealthCheckPath               string     `json:"health_check_path"`
-	HealthCheckInterval           int        `json:"health_check_interval"`
-	HealthCheckTimeout            int        `json:"health_check_timeout"`
-	HealthCheckUnhealthyThreshold int        `json:"health_check_unhealthy_threshold"`
-	HealthCheckHealthyThreshold   int        `json:"health_check_healthy_threshold"`
-	EnableActiveHealthCheck       bool       `json:"enable_active_health_check"`
-	TCPHealthCheckPort            int        `json:"tcp_health_check_port"`
-	TCPTryDuration                int        `json:"tcp_try_duration"`
-	TCPTryInterval                int        `json:"tcp_try_interval"`
-	RequestBodyMaxSizeMB          *int       `json:"request_body_max_size_mb"`
-	UpstreamKeepaliveTimeout      *int       `json:"upstream_keepalive_timeout"`
-	ServerTokensHidden            *int       `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
-	HostHeader                    string     `json:"host_header"`
-	Upstreams                     []Upstream `json:"upstreams"`
-	EnableTLS                     bool       `json:"enable_tls"`
-	TLSSource                     string     `json:"tls_source"`
-	ACMEConfigID                  int        `json:"acme_config_id"`
-	CAProviderID                  *int       `json:"ca_provider_id"`
-	TLSCert                       string     `json:"tls_cert"`
-	TLSKey                        string     `json:"tls_key"`
-	TLSHTTPRedirect               bool       `json:"tls_http_redirect"`
-	EnableCompress                bool       `json:"enable_compress"`
-	CompressTypes                 string     `json:"compress_types"`
-	Enabled                       bool       `json:"enabled"`
-	LogEnabled                    bool       `json:"log_enabled"`
+	Name                          string      `json:"name"`
+	Description                   string      `json:"description"`
+	Protocol                      string      `json:"protocol"`
+	Domain                        string      `json:"domain"`
+	ListenPort                    int         `json:"listen_port"`
+	Strategy                      string      `json:"strategy"`
+	DynamicDNS                    bool        `json:"dynamic_dns"`
+	EnableDnsServer               bool        `json:"enable_dns_server"`
+	DnsServer                     string      `json:"dns_server"`
+	DnsFamily                     string      `json:"dns_family"`
+	HealthCheckPath               string      `json:"health_check_path"`
+	HealthCheckInterval           int         `json:"health_check_interval"`
+	HealthCheckTimeout            int         `json:"health_check_timeout"`
+	HealthCheckUnhealthyThreshold int         `json:"health_check_unhealthy_threshold"`
+	HealthCheckHealthyThreshold   int         `json:"health_check_healthy_threshold"`
+	EnableActiveHealthCheck       bool        `json:"enable_active_health_check"`
+	TCPHealthCheckPort            int         `json:"tcp_health_check_port"`
+	TCPTryDuration                int         `json:"tcp_try_duration"`
+	TCPTryInterval                int         `json:"tcp_try_interval"`
+	RequestBodyMaxSizeMB          *int        `json:"request_body_max_size_mb"`
+	UpstreamKeepaliveTimeout      *int        `json:"upstream_keepalive_timeout"`
+	ServerTokensHidden            *int        `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
+	IPACLMode                     *string     `json:"ip_acl_mode"`
+	IPACLList                     *[]string   `json:"ip_acl_list"`
+	CustomRoutesEnabled           *bool       `json:"custom_routes_enabled"`
+	ProxyDialTimeout              *int        `json:"proxy_dial_timeout"`
+	ProxyResponseHeaderTimeout    *int        `json:"proxy_response_header_timeout"`
+	ProxyReadTimeout              *int        `json:"proxy_read_timeout"`
+	ProxyWriteTimeout             *int        `json:"proxy_write_timeout"`
+	ProxyStreamTimeout            *int        `json:"proxy_stream_timeout"`
+	PathRules                     *[]PathRule `json:"path_rules"`
+	HostHeader                    string      `json:"host_header"`
+	Upstreams                     []Upstream  `json:"upstreams"`
+	EnableTLS                     bool        `json:"enable_tls"`
+	TLSSource                     string      `json:"tls_source"`
+	ACMEConfigID                  int         `json:"acme_config_id"`
+	CAProviderID                  *int        `json:"ca_provider_id"`
+	TLSCert                       string      `json:"tls_cert"`
+	TLSKey                        string      `json:"tls_key"`
+	TLSHTTPRedirect               bool        `json:"tls_http_redirect"`
+	EnableCompress                bool        `json:"enable_compress"`
+	CompressTypes                 string      `json:"compress_types"`
+	Enabled                       bool        `json:"enabled"`
+	LogEnabled                    bool        `json:"log_enabled"`
 }
 
 type UpdateConfigRequest struct {
-	Source                   string  `json:"source"`
-	DNSProvider              *string `json:"dns_provider"`
-	DNSCredentials           *string `json:"dns_credentials"`
-	ACMEEmail                *string `json:"acme_email"`
-	CertExpiryDays           *int    `json:"cert_expiry_days"`
-	CertRenewalDays          *int    `json:"cert_renewal_days"`
-	CertRenewalAttempts      *int    `json:"cert_renewal_attempts"`
-	LogLevel                 *string `json:"log_level"`
-	CaddyLogPath             *string `json:"caddy_log_path"`
-	CaddyLogLevel            *string `json:"caddy_log_level"`
-	CaddyLogSizeMB           *int    `json:"caddy_log_size_mb"`
-	RequestBodyMaxSizeMB     *int    `json:"request_body_max_size_mb"`
-	HTTPReadTimeout          *int    `json:"http_read_timeout"`
-	HTTPWriteTimeout         *int    `json:"http_write_timeout"`
-	HTTPIdleTimeout          *int    `json:"http_idle_timeout"`
-	UpstreamKeepaliveTimeout *int    `json:"upstream_keepalive_timeout"`
-	ServerTokensHidden       *bool   `json:"server_tokens_hidden"`
-	CertJobLogSizeMB         *int    `json:"cert_job_log_size_mb"`
-	RuntimeLogSizeMB         *int    `json:"runtime_log_size_mb"`
-	AccessLogJSON            *bool   `json:"access_log_json"`
-	AccessLogFormat          *string `json:"access_log_format"`
-	AuditRetentionMonths     *int    `json:"audit_retention_months"`
-	JWTExpireMinutes         *int    `json:"jwt_expire_minutes"`
-	Timezone                 *string `json:"timezone"`
-	DefaultCAProviderID      *int    `json:"default_ca_provider_id"`
+	Source                     string  `json:"source"`
+	DNSProvider                *string `json:"dns_provider"`
+	DNSCredentials             *string `json:"dns_credentials"`
+	ACMEEmail                  *string `json:"acme_email"`
+	CertExpiryDays             *int    `json:"cert_expiry_days"`
+	CertRenewalDays            *int    `json:"cert_renewal_days"`
+	CertRenewalAttempts        *int    `json:"cert_renewal_attempts"`
+	LogLevel                   *string `json:"log_level"`
+	CaddyLogPath               *string `json:"caddy_log_path"`
+	CaddyLogLevel              *string `json:"caddy_log_level"`
+	CaddyLogSizeMB             *int    `json:"caddy_log_size_mb"`
+	RequestBodyMaxSizeMB       *int    `json:"request_body_max_size_mb"`
+	HTTPReadTimeout            *int    `json:"http_read_timeout"`
+	HTTPWriteTimeout           *int    `json:"http_write_timeout"`
+	HTTPIdleTimeout            *int    `json:"http_idle_timeout"`
+	UpstreamKeepaliveTimeout   *int    `json:"upstream_keepalive_timeout"`
+	ProxyDialTimeout           *int    `json:"proxy_dial_timeout"`
+	ProxyResponseHeaderTimeout *int    `json:"proxy_response_header_timeout"`
+	ProxyReadTimeout           *int    `json:"proxy_read_timeout"`
+	ProxyWriteTimeout          *int    `json:"proxy_write_timeout"`
+	ProxyStreamTimeout         *int    `json:"proxy_stream_timeout"`
+	ServerTokensHidden         *bool   `json:"server_tokens_hidden"`
+	CertJobLogSizeMB           *int    `json:"cert_job_log_size_mb"`
+	RuntimeLogSizeMB           *int    `json:"runtime_log_size_mb"`
+	AccessLogJSON              *bool   `json:"access_log_json"`
+	AccessLogFormat            *string `json:"access_log_format"`
+	AuditRetentionMonths       *int    `json:"audit_retention_months"`
+	JWTExpireMinutes           *int    `json:"jwt_expire_minutes"`
+	Timezone                   *string `json:"timezone"`
+	DefaultCAProviderID        *int    `json:"default_ca_provider_id"`
 }
 
 type CreateCertificateConfigRequest struct {

@@ -1,12 +1,12 @@
 package handlers
 
 import (
-	"strconv"
 	"database/sql"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -23,6 +23,8 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		       health_check_path, health_check_interval,
 		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
+		       COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
+		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
 		       COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_http_redirect,0),
 		       COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), enabled, created_by, created_at, updated_at, updated_by,
 		       COALESCE(host_header,''),
@@ -38,7 +40,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 	var rules []models.LbRule
 	for rows.Next() {
 		var r models.LbRule
-		var domain, strategy, description, compressTypes, hostHeader, dnsFamily, tlsSource string
+		var domain, strategy, description, compressTypes, hostHeader, dnsFamily, tlsSource, ipACLListJSON string
 		var tlsCert, tlsKey string
 		var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect, enableCompress bool
 		var acmeConfigID, caProviderID int
@@ -53,6 +55,8 @@ func (h *Handlers) ListRules(c *gin.Context) {
 			&r.HealthCheckPath, &r.HealthCheckInterval,
 			&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
 			&requestBodyMaxSizeMB, &upstreamKeepaliveTimeout, &serverTokensHidden,
+			&r.IPACLMode, &ipACLListJSON, &r.CustomRoutesEnabled,
+			&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout,
 			&enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &tlsCert, &tlsKey, &tlsHTTPRedirect,
 			&enableCompress, &compressTypes, &r.Enabled, &createdBy, &createdAt, &updatedAt, &updatedBy,
 			&hostHeader, &r.LogEnabled)
@@ -87,6 +91,13 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		r.RequestBodyMaxSizeMB = requestBodyMaxSizeMB
 		r.UpstreamKeepaliveTimeout = upstreamKeepaliveTimeout
 		r.ServerTokensHidden = serverTokensHidden
+		ipACLList, err := decodeIPACLList(ipACLListJSON)
+		if err != nil {
+			log.Printf("ListRules invalid ip_acl_list for caddy_id=%s: %v", r.CaddyID, err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 IP 访问控制列表失败"})
+			return
+		}
+		r.IPACLList = ipACLList
 		r.EnableTLS = enableTLS
 		r.TLSSource = tlsSource
 		r.ACMEConfigID = acmeConfigID
@@ -107,6 +118,13 @@ func (h *Handlers) ListRules(c *gin.Context) {
 			}
 			upstreamRows.Close()
 		}
+		pathRules, err := loadPathRules(c.Request.Context(), db.DB, r.CaddyID)
+		if err != nil {
+			log.Printf("ListRules failed to load path_rules for caddy_id=%s: %v", r.CaddyID, err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取自定义路径规则失败"})
+			return
+		}
+		r.PathRules = pathRules
 
 		rules = append(rules, r)
 	}
@@ -118,9 +136,9 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 
 	var r models.LbRule
-	var domain, strategy, hostHeader, dnsFamily, tlsSource string
+	var domain, strategy, hostHeader, dnsFamily, tlsSource, ipACLListJSON string
 	var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect bool
-	var acmeConfigID int
+	var acmeConfigID, caProviderID int
 	var tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
 	var requestBodyMaxSizeMB, upstreamKeepaliveTimeout, serverTokensHidden int
 	err := db.DB.QueryRow(`
@@ -130,18 +148,22 @@ func (h *Handlers) GetRule(c *gin.Context) {
 		       health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
 		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
-		       COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
-		       COALESCE(tls_http_redirect,0),
-		       enabled, created_at, updated_at, COALESCE(host_header,''), caddy_id
-		FROM lb_rules WHERE caddy_id = ?
-	`, caddyID).Scan(&r.Name, &r.Protocol, &domain, &r.ListenPort, &strategy,
-		&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
-		&r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout,
-		&r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
-		&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
-		&requestBodyMaxSizeMB, &upstreamKeepaliveTimeout, &serverTokensHidden,
-		&enableTLS, &tlsSource, &acmeConfigID, &r.TLSCert, &r.TLSKey, &tlsHTTPRedirect,
-		&r.Enabled, &r.CreatedAt, &r.UpdatedAt, &hostHeader, &r.CaddyID)
+		       COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
+		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
+	       COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
+	       COALESCE(tls_http_redirect,0),
+	       enabled, created_at, updated_at, COALESCE(host_header,''), caddy_id
+	FROM lb_rules WHERE caddy_id = ?
+`, caddyID).Scan(&r.Name, &r.Protocol, &domain, &r.ListenPort, &strategy,
+	&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
+	&r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout,
+	&r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
+	&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
+	&requestBodyMaxSizeMB, &upstreamKeepaliveTimeout, &serverTokensHidden,
+	&r.IPACLMode, &ipACLListJSON, &r.CustomRoutesEnabled,
+	&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout,
+	&enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &r.TLSCert, &r.TLSKey, &tlsHTTPRedirect,
+	&r.Enabled, &r.CreatedAt, &r.UpdatedAt, &hostHeader, &r.CaddyID)
 
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
@@ -168,9 +190,17 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	r.RequestBodyMaxSizeMB = requestBodyMaxSizeMB
 	r.UpstreamKeepaliveTimeout = upstreamKeepaliveTimeout
 	r.ServerTokensHidden = serverTokensHidden
+	ipACLList, err := decodeIPACLList(ipACLListJSON)
+	if err != nil {
+		log.Printf("GetRule invalid ip_acl_list for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 IP 访问控制列表失败"})
+		return
+	}
+	r.IPACLList = ipACLList
 	r.EnableTLS = enableTLS
 	r.TLSSource = tlsSource
 	r.ACMEConfigID = acmeConfigID
+	r.CAProviderID = caProviderID
 	r.TLSHTTPRedirect = tlsHTTPRedirect
 	r.HostHeader = hostHeader
 
@@ -183,6 +213,13 @@ func (h *Handlers) GetRule(c *gin.Context) {
 		}
 		upstreamRows.Close()
 	}
+	pathRules, err := loadPathRules(c.Request.Context(), db.DB, caddyID)
+	if err != nil {
+		log.Printf("GetRule failed to load path_rules for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取自定义路径规则失败"})
+		return
+	}
+	r.PathRules = pathRules
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: r})
 }
@@ -500,6 +537,16 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden 必须为 0、1 或 2"})
 		return
 	}
+	features := createRuleFeatures(req)
+	if err := validateRuleFeatures(features); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	ipACLListJSON, err := encodeIPACLList(features.IPACLList)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
 
 	// Determine server name based on port, protocol and TLS status
 	var serverName string
@@ -534,13 +581,18 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 
 	var global struct {
-		requestBodyMaxSizeMB, upstreamKeepaliveTimeout int
-		serverTokensHidden                             bool
+		requestBodyMaxSizeMB, upstreamKeepaliveTimeout                                                        int
+		proxyDialTimeout, proxyResponseHeaderTimeout, proxyReadTimeout, proxyWriteTimeout, proxyStreamTimeout int
+		serverTokensHidden                                                                                    bool
 	}
 	if err := db.DB.QueryRow(`
-		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE)
+		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0),
+			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
+			COALESCE(server_tokens_hidden,FALSE)
 		FROM global_config WHERE id = 1
-	`).Scan(&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout, &global.serverTokensHidden); err != nil {
+	`).Scan(&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout,
+		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout, &global.proxyStreamTimeout,
+		&global.serverTokensHidden); err != nil {
 		log.Printf("CreateRule failed to load global config: %v", err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取全局配置失败"})
 		return
@@ -548,36 +600,50 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 
 	// Build route config for Caddy validation (using request data before DB write)
 	ruleConfig := services.SingleRuleConfig{
-		Protocol:                       req.Protocol,
-		Domain:                         req.Domain,
-		ListenPort:                     listenPort,
-		Strategy:                       req.Strategy,
-		DynamicDNS:                     req.DynamicDNS,
-		EnableDnsServer:                req.EnableDnsServer,
-		DnsServer:                      req.DnsServer,
-		DnsFamily:                      req.DnsFamily,
-		HealthCheckPath:                req.HealthCheckPath,
-		HealthCheckInterval:            req.HealthCheckInterval,
-		HealthCheckTimeout:             req.HealthCheckTimeout,
-		HealthCheckUnhealthyThreshold:  req.HealthCheckUnhealthyThreshold,
-		EnableActiveHealthCheck:        req.EnableActiveHealthCheck,
-		TCPHealthCheckPort:             req.TCPHealthCheckPort,
-		TCPTryDuration:                 req.TCPTryDuration,
-		TCPTryInterval:                 req.TCPTryInterval,
-		RequestBodyMaxSizeMB:           req.RequestBodyMaxSizeMB,
-		UpstreamKeepaliveTimeout:       req.UpstreamKeepaliveTimeout,
-		ServerTokensHidden:             req.ServerTokensHidden,
-		GlobalRequestBodyMaxSizeMB:     global.requestBodyMaxSizeMB,
-		GlobalUpstreamKeepaliveTimeout: global.upstreamKeepaliveTimeout,
-		GlobalServerTokensHidden:       global.serverTokensHidden,
-		EnableTLS:                      req.EnableTLS,
-		TLSSource:                      req.TLSSource,
-		ACMEConfigID:                   req.ACMEConfigID,
-		TLSHTTPRedirect:                req.TLSHTTPRedirect,
-		EnableCompress:                 req.EnableCompress,
-		CompressTypes:                  req.CompressTypes,
-		HostHeader:                     req.HostHeader,
-		CaddyID:                        caddyID,
+		Protocol:                         req.Protocol,
+		Domain:                           req.Domain,
+		ListenPort:                       listenPort,
+		Strategy:                         req.Strategy,
+		DynamicDNS:                       req.DynamicDNS,
+		EnableDnsServer:                  req.EnableDnsServer,
+		DnsServer:                        req.DnsServer,
+		DnsFamily:                        req.DnsFamily,
+		HealthCheckPath:                  req.HealthCheckPath,
+		HealthCheckInterval:              req.HealthCheckInterval,
+		HealthCheckTimeout:               req.HealthCheckTimeout,
+		HealthCheckUnhealthyThreshold:    req.HealthCheckUnhealthyThreshold,
+		EnableActiveHealthCheck:          req.EnableActiveHealthCheck,
+		TCPHealthCheckPort:               req.TCPHealthCheckPort,
+		TCPTryDuration:                   req.TCPTryDuration,
+		TCPTryInterval:                   req.TCPTryInterval,
+		RequestBodyMaxSizeMB:             req.RequestBodyMaxSizeMB,
+		UpstreamKeepaliveTimeout:         req.UpstreamKeepaliveTimeout,
+		ServerTokensHidden:               req.ServerTokensHidden,
+		GlobalRequestBodyMaxSizeMB:       global.requestBodyMaxSizeMB,
+		GlobalUpstreamKeepaliveTimeout:   global.upstreamKeepaliveTimeout,
+		GlobalServerTokensHidden:         global.serverTokensHidden,
+		IPACLMode:                        features.IPACLMode,
+		IPACLList:                        features.IPACLList,
+		CustomRoutesEnabled:              features.CustomRoutesEnabled,
+		PathRules:                        toPathRuleConfigs(features.PathRules),
+		ProxyDialTimeout:                 features.ProxyDialTimeout,
+		ProxyResponseHeaderTimeout:       features.ProxyResponseHeaderTimeout,
+		ProxyReadTimeout:                 features.ProxyReadTimeout,
+		ProxyWriteTimeout:                features.ProxyWriteTimeout,
+		ProxyStreamTimeout:               features.ProxyStreamTimeout,
+		GlobalProxyDialTimeout:           global.proxyDialTimeout,
+		GlobalProxyResponseHeaderTimeout: global.proxyResponseHeaderTimeout,
+		GlobalProxyReadTimeout:           global.proxyReadTimeout,
+		GlobalProxyWriteTimeout:          global.proxyWriteTimeout,
+		GlobalProxyStreamTimeout:         global.proxyStreamTimeout,
+		EnableTLS:                        req.EnableTLS,
+		TLSSource:                        req.TLSSource,
+		ACMEConfigID:                     req.ACMEConfigID,
+		TLSHTTPRedirect:                  req.TLSHTTPRedirect,
+		EnableCompress:                   req.EnableCompress,
+		CompressTypes:                    req.CompressTypes,
+		HostHeader:                       req.HostHeader,
+		CaddyID:                          caddyID,
 	}
 	for _, u := range req.Upstreams {
 		protocol := u.Protocol
@@ -599,7 +665,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 
 	// Validate Caddy config BEFORE writing to database
-	if err := h.validateCaddyConfigBeforeSave(req, "new_"+generateRandomString(8), serverName); err != nil {
+	if err := h.validateCaddyConfigBeforeSave(req, features, "new_"+generateRandomString(8), serverName); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -617,14 +683,18 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
+			ip_acl_mode, ip_acl_list, custom_routes_enabled,
+			proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout,
 			host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
 			enable_compress, compress_types, enabled, created_by, updated_at, caddy_id, log_enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
 		req.EnableActiveHealthCheck, req.TCPHealthCheckPort, req.TCPTryDuration, req.TCPTryInterval,
 		req.RequestBodyMaxSizeMB, req.UpstreamKeepaliveTimeout, req.ServerTokensHidden,
+		features.IPACLMode, ipACLListJSON, features.CustomRoutesEnabled,
+		features.ProxyDialTimeout, features.ProxyResponseHeaderTimeout, features.ProxyReadTimeout, features.ProxyWriteTimeout, features.ProxyStreamTimeout,
 		req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.CAProviderID, req.TLSCert, req.TLSKey,
 		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, 1, userIDInt, time.Now().UTC().Format("2006-01-02 15:04:05"), caddyID, req.LogEnabled)
 
@@ -655,6 +725,12 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建上游服务器失败"})
 			return
 		}
+	}
+	if err := replacePathRulesTx(c.Request.Context(), tx, caddyID, features.PathRules); err != nil {
+		tx.Rollback()
+		log.Printf("CreateRule path_rules replace error: %v", err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建自定义路径规则失败"})
+		return
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -828,6 +904,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	// Fill in missing fields from database so validation and the update use complete data.
 	var existingRule models.LbRule
+	var existingIPACLListJSON string
 	err := db.DB.QueryRow(`
 		SELECT COALESCE(protocol,''), COALESCE(domain,''), listen_port, COALESCE(strategy,'weighted_round_robin'),
 			COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0),
@@ -838,6 +915,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 			COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 			COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
+			COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
+			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
 			COALESCE(host_header,''), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
 			COALESCE(enabled,1), name, description
 		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(
@@ -850,10 +929,24 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		&existingRule.HealthCheckUnhealthyThreshold, &existingRule.HealthCheckHealthyThreshold,
 		&existingRule.EnableActiveHealthCheck, &existingRule.TCPHealthCheckPort, &existingRule.TCPTryDuration, &existingRule.TCPTryInterval,
 		&existingRule.RequestBodyMaxSizeMB, &existingRule.UpstreamKeepaliveTimeout, &existingRule.ServerTokensHidden,
+		&existingRule.IPACLMode, &existingIPACLListJSON, &existingRule.CustomRoutesEnabled,
+		&existingRule.ProxyDialTimeout, &existingRule.ProxyResponseHeaderTimeout, &existingRule.ProxyReadTimeout, &existingRule.ProxyWriteTimeout, &existingRule.ProxyStreamTimeout,
 		&existingRule.HostHeader, &existingRule.EnableCompress, &existingRule.CompressTypes,
 		&existingRule.Enabled, &existingRule.Name, &existingRule.Description)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+		return
+	}
+	existingRule.IPACLList, err = decodeIPACLList(existingIPACLListJSON)
+	if err != nil {
+		log.Printf("UpdateRule invalid ip_acl_list for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 IP 访问控制列表失败"})
+		return
+	}
+	existingRule.PathRules, err = loadPathRules(c.Request.Context(), db.DB, caddyID)
+	if err != nil {
+		log.Printf("UpdateRule failed to load path_rules for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取自定义路径规则失败"})
 		return
 	}
 
@@ -948,6 +1041,16 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden 必须为 0、1 或 2"})
 		return
 	}
+	features := updateRuleFeatures(req, existingRule)
+	if err := validateRuleFeatures(features); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	ipACLListJSON, err := encodeIPACLList(features.IPACLList)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
 
 	// Validate TLS certificate if provided (manual source only)
 	if (req.EnableTLS || req.TLSCert != "" || req.TLSKey != "") && req.TLSSource == "manual" {
@@ -969,7 +1072,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	// Validate Caddy config BEFORE writing to database
-	if err := h.validateCaddyConfigBeforeSave(req, fmt.Sprintf("update_%s_%s", caddyID, generateRandomString(8)), validationServerName); err != nil {
+	if err := h.validateCaddyConfigBeforeSave(req, features, fmt.Sprintf("update_%s_%s", caddyID, generateRandomString(8)), validationServerName); err != nil {
 		log.Printf("UpdateRule validation failed for caddy_id=%s, server_name=%s: %v", caddyID, validationServerName, err)
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -1027,6 +1130,22 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	args = append(args, *req.UpstreamKeepaliveTimeout)
 	query += "server_tokens_hidden = ?, "
 	args = append(args, *req.ServerTokensHidden)
+	query += "ip_acl_mode = ?, "
+	args = append(args, features.IPACLMode)
+	query += "ip_acl_list = ?, "
+	args = append(args, ipACLListJSON)
+	query += "custom_routes_enabled = ?, "
+	args = append(args, features.CustomRoutesEnabled)
+	query += "proxy_dial_timeout = ?, "
+	args = append(args, features.ProxyDialTimeout)
+	query += "proxy_response_header_timeout = ?, "
+	args = append(args, features.ProxyResponseHeaderTimeout)
+	query += "proxy_read_timeout = ?, "
+	args = append(args, features.ProxyReadTimeout)
+	query += "proxy_write_timeout = ?, "
+	args = append(args, features.ProxyWriteTimeout)
+	query += "proxy_stream_timeout = ?, "
+	args = append(args, features.ProxyStreamTimeout)
 	query += "host_header = ?, "
 	args = append(args, req.HostHeader)
 	query += "enable_tls = ?, "
@@ -1067,50 +1186,69 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	var global struct {
-		requestBodyMaxSizeMB, upstreamKeepaliveTimeout int
-		serverTokensHidden                             bool
+		requestBodyMaxSizeMB, upstreamKeepaliveTimeout                                                        int
+		proxyDialTimeout, proxyResponseHeaderTimeout, proxyReadTimeout, proxyWriteTimeout, proxyStreamTimeout int
+		serverTokensHidden                                                                                    bool
 	}
 	if err := db.DB.QueryRow(`
-		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE)
+		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0),
+			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
+			COALESCE(server_tokens_hidden,FALSE)
 		FROM global_config WHERE id = 1
 	`).Scan(
-		&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout, &global.serverTokensHidden); err != nil {
+		&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout,
+		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout, &global.proxyStreamTimeout,
+		&global.serverTokensHidden); err != nil {
 		log.Printf("UpdateRule failed to load global config for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取全局配置失败"})
 		return
 	}
 
 	ruleConfig := services.SingleRuleConfig{
-		Protocol:                       req.Protocol,
-		Domain:                         domain,
-		ListenPort:                     listenPort,
-		Strategy:                       strategy,
-		DynamicDNS:                     req.DynamicDNS,
-		EnableDnsServer:                req.EnableDnsServer,
-		DnsServer:                      req.DnsServer,
-		DnsFamily:                      req.DnsFamily,
-		HealthCheckPath:                req.HealthCheckPath,
-		HealthCheckInterval:            req.HealthCheckInterval,
-		HealthCheckTimeout:             req.HealthCheckTimeout,
-		HealthCheckUnhealthyThreshold:  req.HealthCheckUnhealthyThreshold,
-		EnableActiveHealthCheck:        req.EnableActiveHealthCheck,
-		TCPHealthCheckPort:             req.TCPHealthCheckPort,
-		TCPTryDuration:                 req.TCPTryDuration,
-		TCPTryInterval:                 req.TCPTryInterval,
-		RequestBodyMaxSizeMB:           *req.RequestBodyMaxSizeMB,
-		UpstreamKeepaliveTimeout:       *req.UpstreamKeepaliveTimeout,
-		ServerTokensHidden:             *req.ServerTokensHidden,
-		GlobalRequestBodyMaxSizeMB:     global.requestBodyMaxSizeMB,
-		GlobalUpstreamKeepaliveTimeout: global.upstreamKeepaliveTimeout,
-		GlobalServerTokensHidden:       global.serverTokensHidden,
-		EnableTLS:                      req.EnableTLS,
-		TLSSource:                      req.TLSSource,
-		ACMEConfigID:                   req.ACMEConfigID,
-		TLSHTTPRedirect:                req.TLSHTTPRedirect,
-		EnableCompress:                 req.EnableCompress,
-		CompressTypes:                  req.CompressTypes,
-		HostHeader:                     req.HostHeader,
-		CaddyID:                        caddyID,
+		Protocol:                         req.Protocol,
+		Domain:                           domain,
+		ListenPort:                       listenPort,
+		Strategy:                         strategy,
+		DynamicDNS:                       req.DynamicDNS,
+		EnableDnsServer:                  req.EnableDnsServer,
+		DnsServer:                        req.DnsServer,
+		DnsFamily:                        req.DnsFamily,
+		HealthCheckPath:                  req.HealthCheckPath,
+		HealthCheckInterval:              req.HealthCheckInterval,
+		HealthCheckTimeout:               req.HealthCheckTimeout,
+		HealthCheckUnhealthyThreshold:    req.HealthCheckUnhealthyThreshold,
+		EnableActiveHealthCheck:          req.EnableActiveHealthCheck,
+		TCPHealthCheckPort:               req.TCPHealthCheckPort,
+		TCPTryDuration:                   req.TCPTryDuration,
+		TCPTryInterval:                   req.TCPTryInterval,
+		RequestBodyMaxSizeMB:             *req.RequestBodyMaxSizeMB,
+		UpstreamKeepaliveTimeout:         *req.UpstreamKeepaliveTimeout,
+		ServerTokensHidden:               *req.ServerTokensHidden,
+		GlobalRequestBodyMaxSizeMB:       global.requestBodyMaxSizeMB,
+		GlobalUpstreamKeepaliveTimeout:   global.upstreamKeepaliveTimeout,
+		GlobalServerTokensHidden:         global.serverTokensHidden,
+		IPACLMode:                        features.IPACLMode,
+		IPACLList:                        features.IPACLList,
+		CustomRoutesEnabled:              features.CustomRoutesEnabled,
+		PathRules:                        toPathRuleConfigs(features.PathRules),
+		ProxyDialTimeout:                 features.ProxyDialTimeout,
+		ProxyResponseHeaderTimeout:       features.ProxyResponseHeaderTimeout,
+		ProxyReadTimeout:                 features.ProxyReadTimeout,
+		ProxyWriteTimeout:                features.ProxyWriteTimeout,
+		ProxyStreamTimeout:               features.ProxyStreamTimeout,
+		GlobalProxyDialTimeout:           global.proxyDialTimeout,
+		GlobalProxyResponseHeaderTimeout: global.proxyResponseHeaderTimeout,
+		GlobalProxyReadTimeout:           global.proxyReadTimeout,
+		GlobalProxyWriteTimeout:          global.proxyWriteTimeout,
+		GlobalProxyStreamTimeout:         global.proxyStreamTimeout,
+		EnableTLS:                        req.EnableTLS,
+		TLSSource:                        req.TLSSource,
+		ACMEConfigID:                     req.ACMEConfigID,
+		TLSHTTPRedirect:                  req.TLSHTTPRedirect,
+		EnableCompress:                   req.EnableCompress,
+		CompressTypes:                    req.CompressTypes,
+		HostHeader:                       req.HostHeader,
+		CaddyID:                          caddyID,
 	}
 
 	for _, u := range req.Upstreams {
@@ -1199,6 +1337,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新上游服务器失败"})
 			return
 		}
+	}
+	if err := replacePathRulesTx(c.Request.Context(), tx, caddyID, features.PathRules); err != nil {
+		tx.Rollback()
+		log.Printf("UpdateRule path_rules replace error for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新自定义路径规则失败"})
+		return
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1446,6 +1590,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 
 	var rule models.LbRule
 	var enableActiveHealthCheck bool
+	var ipACLListJSON string
 	var tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
 	err := db.DB.QueryRow(`
 		SELECT caddy_id, name, COALESCE(description,''), protocol, domain, listen_port, strategy, dynamic_dns,
@@ -1455,18 +1600,22 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		       request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 		       enable_tls, COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), tls_cert, tls_key,
-		       tls_http_redirect, COALESCE(enable_compress,1), COALESCE(compress_types,'gzip,zstd'), enabled, created_by,
-		       COALESCE(host_header,''), COALESCE(dns_server,''), COALESCE(log_enabled,0)
-		FROM lb_rules WHERE caddy_id = ?
-	`, caddyID).Scan(
-		&rule.CaddyID, &rule.Name, &rule.Description, &rule.Protocol, &rule.Domain, &rule.ListenPort, &rule.Strategy,
-		&rule.DynamicDNS, &rule.EnableDnsServer, &rule.DnsFamily, &rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout,
-		&rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
-		&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
-		&rule.RequestBodyMaxSizeMB, &rule.UpstreamKeepaliveTimeout, &rule.ServerTokensHidden,
-		&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.CAProviderID, &rule.TLSCert, &rule.TLSKey,
-		&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.CreatedBy,
+	       tls_http_redirect, COALESCE(enable_compress,1), COALESCE(compress_types,'gzip,zstd'), enabled, created_by,
+	       COALESCE(host_header,''), COALESCE(dns_server,''), COALESCE(log_enabled,0),
+	       COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
+	       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0)
+	FROM lb_rules WHERE caddy_id = ?
+`, caddyID).Scan(
+	&rule.CaddyID, &rule.Name, &rule.Description, &rule.Protocol, &rule.Domain, &rule.ListenPort, &rule.Strategy,
+	&rule.DynamicDNS, &rule.EnableDnsServer, &rule.DnsFamily, &rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout,
+	&rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
+	&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
+	&rule.RequestBodyMaxSizeMB, &rule.UpstreamKeepaliveTimeout, &rule.ServerTokensHidden,
+	&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.CAProviderID, &rule.TLSCert, &rule.TLSKey,
+	&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.CreatedBy,
 		&rule.HostHeader, &rule.DnsServer, &rule.LogEnabled,
+		&rule.IPACLMode, &ipACLListJSON, &rule.CustomRoutesEnabled,
+		&rule.ProxyDialTimeout, &rule.ProxyResponseHeaderTimeout, &rule.ProxyReadTimeout, &rule.ProxyWriteTimeout, &rule.ProxyStreamTimeout,
 	)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
@@ -1498,8 +1647,10 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key,
-			tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, log_enabled, caddy_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, log_enabled, caddy_id,
+		ip_acl_mode, ip_acl_list, custom_routes_enabled,
+		proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, rule.Name+" (Copy)", rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 		rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 		rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
@@ -1508,6 +1659,8 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.CAProviderID, rule.TLSCert, &rule.TLSKey,
 		rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, 0, userIDInt, userIDInt,
 		now, now, rule.HostHeader, rule.LogEnabled, newCaddyID,
+		rule.IPACLMode, ipACLListJSON, rule.CustomRoutesEnabled,
+		rule.ProxyDialTimeout, rule.ProxyResponseHeaderTimeout, rule.ProxyReadTimeout, rule.ProxyWriteTimeout, rule.ProxyStreamTimeout,
 	)
 	if err != nil {
 		log.Printf("Failed to duplicate rule %s: %v", caddyID, err)
@@ -1543,6 +1696,15 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			`, newCaddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections, u.ProxyProtocol)
 		}
 		upstreamRows.Close()
+	}
+
+	if rule.CustomRoutesEnabled {
+		if _, err := db.DB.Exec(`
+			INSERT INTO path_rules (rule_id, sort_order, match_type, path, upstreams_json, created_at, updated_at)
+			SELECT ?, sort_order, match_type, path, upstreams_json, datetime('now'), datetime('now') FROM path_rules WHERE rule_id = ?
+		`, newCaddyID, caddyID); err != nil {
+			log.Printf("Failed to copy path_rules for %s: %v", newCaddyID, err)
+		}
 	}
 
 	recordAudit(c, "复制", "负载均衡规则", services.FormatAuditDetail(fmt.Sprintf("源规则：%s", caddyID), fmt.Sprintf("新规则：%s", newCaddyID), rule.Name))

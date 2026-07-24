@@ -60,6 +60,11 @@ interface SettingsConfig {
   http_write_timeout: number
   http_idle_timeout: number
   upstream_keepalive_timeout: number
+  proxy_dial_timeout: number
+  proxy_response_header_timeout: number
+  proxy_read_timeout: number
+  proxy_write_timeout: number
+  proxy_stream_timeout: number
   server_tokens_hidden: boolean
   cert_job_log_size_mb: number
   runtime_log_size_mb: number
@@ -89,6 +94,11 @@ const settings = ref<SettingsConfig>({
   http_write_timeout: 60,
   http_idle_timeout: 120,
   upstream_keepalive_timeout: 60,
+  proxy_dial_timeout: 0,
+  proxy_response_header_timeout: 0,
+  proxy_read_timeout: 0,
+  proxy_write_timeout: 0,
+  proxy_stream_timeout: 0,
   server_tokens_hidden: false,
   cert_job_log_size_mb: 10,
   runtime_log_size_mb: 100,
@@ -139,6 +149,11 @@ const fetchSettings = async () => {
         http_write_timeout: res.data.http_write_timeout ?? 60,
         http_idle_timeout: res.data.http_idle_timeout ?? 120,
         upstream_keepalive_timeout: res.data.upstream_keepalive_timeout ?? 60,
+        proxy_dial_timeout: res.data.proxy_dial_timeout ?? 0,
+        proxy_response_header_timeout: res.data.proxy_response_header_timeout ?? 0,
+        proxy_read_timeout: res.data.proxy_read_timeout ?? 0,
+        proxy_write_timeout: res.data.proxy_write_timeout ?? 0,
+        proxy_stream_timeout: res.data.proxy_stream_timeout ?? 0,
         server_tokens_hidden: res.data.server_tokens_hidden ?? false,
         cert_job_log_size_mb: res.data.cert_job_log_size_mb ?? 10,
         runtime_log_size_mb: res.data.runtime_log_size_mb ?? 100,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -71,11 +72,15 @@ func (s *ClusterService) buildSnapshot(ctx context.Context) (models.ClusterSnaps
 		snapshot.CaddyConfig = &caddyConfig
 		if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(caddy_log_path,'/app/logs/caddy.log'), COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
 			COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,0), COALESCE(http_write_timeout,0), COALESCE(http_idle_timeout,0),
-			COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0)
+			COALESCE(upstream_keepalive_timeout,0),
+			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
+			COALESCE(server_tokens_hidden,0)
 			FROM global_config WHERE id=1`).Scan(
 			&snapshot.BasicSettings.CaddyLogPath, &snapshot.BasicSettings.CaddyLogLevel, &snapshot.BasicSettings.CaddyLogSizeMB,
 			&snapshot.BasicSettings.RequestBodyMaxSizeMB, &snapshot.BasicSettings.HTTPReadTimeout, &snapshot.BasicSettings.HTTPWriteTimeout, &snapshot.BasicSettings.HTTPIdleTimeout,
-			&snapshot.BasicSettings.UpstreamKeepaliveTimeout, &snapshot.BasicSettings.ServerTokensHidden); err != nil {
+			&snapshot.BasicSettings.UpstreamKeepaliveTimeout,
+			&snapshot.BasicSettings.ProxyDialTimeout, &snapshot.BasicSettings.ProxyResponseHeaderTimeout, &snapshot.BasicSettings.ProxyReadTimeout, &snapshot.BasicSettings.ProxyWriteTimeout, &snapshot.BasicSettings.ProxyStreamTimeout,
+			&snapshot.BasicSettings.ServerTokensHidden); err != nil {
 			return models.ClusterSnapshot{}, fmt.Errorf("读取 Caddy 全局设置: %w", err)
 		}
 	}
@@ -100,6 +105,8 @@ func (s *ClusterService) snapshotRules(ctx context.Context) ([]models.LbRule, er
 		COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,5), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 		COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(host_header,''),
+		COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
+		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
 		COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
 		COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), COALESCE(enabled,1), COALESCE(log_enabled,0), COALESCE(created_by,0), COALESCE(updated_by,0)
 		FROM lb_rules ORDER BY caddy_id`)
@@ -110,26 +117,63 @@ func (s *ClusterService) snapshotRules(ctx context.Context) ([]models.LbRule, er
 	rules := make([]models.LbRule, 0)
 	for rows.Next() {
 		var rule models.LbRule
+		var ipACLListJSON string
 		if err := rows.Scan(&rule.CaddyID, &rule.Name, &rule.Description, &rule.Protocol, &rule.Domain, &rule.ListenPort,
 			&rule.Strategy, &rule.DynamicDNS, &rule.EnableDnsServer, &rule.DnsServer, &rule.DnsFamily,
 			&rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout, &rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
 			&rule.EnableActiveHealthCheck, &rule.TCPHealthCheckPort, &rule.TCPTryDuration, &rule.TCPTryInterval,
 			&rule.RequestBodyMaxSizeMB, &rule.UpstreamKeepaliveTimeout, &rule.ServerTokensHidden, &rule.HostHeader,
+			&rule.IPACLMode, &ipACLListJSON, &rule.CustomRoutesEnabled,
+			&rule.ProxyDialTimeout, &rule.ProxyResponseHeaderTimeout, &rule.ProxyReadTimeout, &rule.ProxyWriteTimeout, &rule.ProxyStreamTimeout,
 			&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.CAProviderID, &rule.TLSCert, &rule.TLSKey,
 			&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.LogEnabled, &rule.CreatedBy, &rule.UpdatedBy); err != nil {
 			return nil, fmt.Errorf("扫描快照规则: %w", err)
+		}
+		if err := json.Unmarshal([]byte(ipACLListJSON), &rule.IPACLList); err != nil {
+			return nil, fmt.Errorf("解析快照规则 %s 的 IP 访问控制列表: %w", rule.CaddyID, err)
 		}
 		upstreams, upstreamErr := s.snapshotUpstreams(ctx, rule.CaddyID)
 		if upstreamErr != nil {
 			return nil, upstreamErr
 		}
 		rule.Upstreams = upstreams
+		pathRules, pathRulesErr := s.snapshotPathRules(ctx, rule.CaddyID)
+		if pathRulesErr != nil {
+			return nil, pathRulesErr
+		}
+		rule.PathRules = pathRules
 		rules = append(rules, rule)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("遍历快照规则: %w", err)
 	}
 	return rules, nil
+}
+
+func (s *ClusterService) snapshotPathRules(ctx context.Context, ruleID string) ([]models.PathRule, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,rule_id,sort_order,match_type,path,upstreams_json FROM path_rules WHERE rule_id=? ORDER BY sort_order,id`, ruleID)
+	if err != nil {
+		return nil, fmt.Errorf("读取规则路径 %s: %w", ruleID, err)
+	}
+	defer rows.Close()
+	pathRules := make([]models.PathRule, 0)
+	for rows.Next() {
+		var pathRule models.PathRule
+		var upstreamsJSON sql.NullString
+		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &upstreamsJSON); err != nil {
+			return nil, fmt.Errorf("扫描规则路径 %s: %w", ruleID, err)
+		}
+		if upstreamsJSON.Valid {
+			if err := json.Unmarshal([]byte(upstreamsJSON.String), &pathRule.Upstreams); err != nil {
+				return nil, fmt.Errorf("解析规则路径 %d 的上游: %w", pathRule.ID, err)
+			}
+		}
+		pathRules = append(pathRules, pathRule)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历规则路径 %s: %w", ruleID, err)
+	}
+	return pathRules, nil
 }
 
 func (s *ClusterService) snapshotUpstreams(ctx context.Context, ruleID string) ([]models.Upstream, error) {

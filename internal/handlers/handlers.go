@@ -149,7 +149,7 @@ func (h *Handlers) applyCaddyConfigWithRollback() error {
 	return nil
 }
 
-func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID string, serverName string) error {
+func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleFeatureInput, uniqueID string, serverName string) error {
 	type requestUpstream struct {
 		Host           string
 		Port           int
@@ -410,43 +410,62 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, uniqueID strin
 	tempCaddyID := "validate_" + uniqueID
 
 	var global struct {
-		requestBodyMaxSizeMB, upstreamKeepaliveTimeout int
-		serverTokensHidden                             bool
+		requestBodyMaxSizeMB, upstreamKeepaliveTimeout                                                        int
+		proxyDialTimeout, proxyResponseHeaderTimeout, proxyReadTimeout, proxyWriteTimeout, proxyStreamTimeout int
+		serverTokensHidden                                                                                    bool
 	}
 	if err := db.DB.QueryRow(`
-		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE)
+		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0),
+			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
+			COALESCE(server_tokens_hidden,FALSE)
 		FROM global_config WHERE id = 1
-	`).Scan(&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout, &global.serverTokensHidden); err != nil {
+	`).Scan(&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout,
+		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout, &global.proxyStreamTimeout,
+		&global.serverTokensHidden); err != nil {
 		return fmt.Errorf("加载全局配置失败: %v", err)
 	}
 
 	ruleConfig := services.SingleRuleConfig{
-		Protocol:                       data.Protocol,
-		Domain:                         data.Domain,
-		ListenPort:                     data.ListenPort,
-		Strategy:                       data.Strategy,
-		DynamicDNS:                     data.DynamicDNS,
-		DnsServer:                      data.DnsServer,
-		DnsFamily:                      data.DnsFamily,
-		HealthCheckPath:                data.HealthCheckPath,
-		HealthCheckInterval:            data.HealthCheckInterval,
-		HealthCheckTimeout:             data.HealthCheckTimeout,
-		HealthCheckUnhealthyThreshold:  data.HealthCheckUnhealthyThreshold,
-		EnableTLS:                      data.EnableTLS,
-		TLSCert:                        data.TLSCert,
-		TLSKey:                         data.TLSKey,
-		TLSHTTPRedirect:                data.TLSHTTPRedirect,
-		EnableCompress:                 data.EnableCompress,
-		CompressTypes:                  data.CompressTypes,
-		EnableActiveHealthCheck:        data.EnableActiveHealthCheck,
-		HostHeader:                     data.HostHeader,
-		RequestBodyMaxSizeMB:           data.RequestBodyMaxSizeMB,
-		UpstreamKeepaliveTimeout:       data.UpstreamKeepaliveTimeout,
-		ServerTokensHidden:             data.ServerTokensHidden,
-		GlobalRequestBodyMaxSizeMB:     global.requestBodyMaxSizeMB,
-		GlobalUpstreamKeepaliveTimeout: global.upstreamKeepaliveTimeout,
-		GlobalServerTokensHidden:       global.serverTokensHidden,
-		CaddyID:                        tempCaddyID,
+		Protocol:                         data.Protocol,
+		Domain:                           data.Domain,
+		ListenPort:                       data.ListenPort,
+		Strategy:                         data.Strategy,
+		DynamicDNS:                       data.DynamicDNS,
+		DnsServer:                        data.DnsServer,
+		DnsFamily:                        data.DnsFamily,
+		HealthCheckPath:                  data.HealthCheckPath,
+		HealthCheckInterval:              data.HealthCheckInterval,
+		HealthCheckTimeout:               data.HealthCheckTimeout,
+		HealthCheckUnhealthyThreshold:    data.HealthCheckUnhealthyThreshold,
+		EnableTLS:                        data.EnableTLS,
+		TLSCert:                          data.TLSCert,
+		TLSKey:                           data.TLSKey,
+		TLSHTTPRedirect:                  data.TLSHTTPRedirect,
+		EnableCompress:                   data.EnableCompress,
+		CompressTypes:                    data.CompressTypes,
+		EnableActiveHealthCheck:          data.EnableActiveHealthCheck,
+		HostHeader:                       data.HostHeader,
+		RequestBodyMaxSizeMB:             data.RequestBodyMaxSizeMB,
+		UpstreamKeepaliveTimeout:         data.UpstreamKeepaliveTimeout,
+		ServerTokensHidden:               data.ServerTokensHidden,
+		GlobalRequestBodyMaxSizeMB:       global.requestBodyMaxSizeMB,
+		GlobalUpstreamKeepaliveTimeout:   global.upstreamKeepaliveTimeout,
+		GlobalServerTokensHidden:         global.serverTokensHidden,
+		IPACLMode:                        features.IPACLMode,
+		IPACLList:                        features.IPACLList,
+		CustomRoutesEnabled:              features.CustomRoutesEnabled,
+		PathRules:                        toPathRuleConfigs(features.PathRules),
+		ProxyDialTimeout:                 features.ProxyDialTimeout,
+		ProxyResponseHeaderTimeout:       features.ProxyResponseHeaderTimeout,
+		ProxyReadTimeout:                 features.ProxyReadTimeout,
+		ProxyWriteTimeout:                features.ProxyWriteTimeout,
+		ProxyStreamTimeout:               features.ProxyStreamTimeout,
+		GlobalProxyDialTimeout:           global.proxyDialTimeout,
+		GlobalProxyResponseHeaderTimeout: global.proxyResponseHeaderTimeout,
+		GlobalProxyReadTimeout:           global.proxyReadTimeout,
+		GlobalProxyWriteTimeout:          global.proxyWriteTimeout,
+		GlobalProxyStreamTimeout:         global.proxyStreamTimeout,
+		CaddyID:                          tempCaddyID,
 	}
 
 	for _, u := range data.Upstreams {

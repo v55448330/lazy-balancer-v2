@@ -28,4 +28,20 @@ func TestBuildOpenAPIYAML_contains_cluster_contract_and_valid_yaml(t *testing.T)
 			t.Errorf("OpenAPI missing security scheme %s", scheme)
 		}
 	}
+	for _, field := range []string{
+		"ip_acl_mode",
+		"ip_acl_list",
+		"custom_routes_enabled",
+		"path_rules",
+		"proxy_dial_timeout",
+		"proxy_response_header_timeout",
+		"proxy_read_timeout",
+		"proxy_write_timeout",
+		"proxy_stream_timeout",
+		`"upstreams":null`,
+	} {
+		if !strings.Contains(openAPI, field) {
+			t.Errorf("OpenAPI missing rule routing field %s", field)
+		}
+	}
 }

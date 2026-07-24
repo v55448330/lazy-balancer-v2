@@ -21,7 +21,11 @@
       <el-table :data="pagedRules" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <el-table-column prop="name" label="规则名称" min-width="140">
           <template #default="{ row }">
-            <a class="rule-name-link" @click.prevent="viewConfig(row)">{{ row.name }}</a>
+            <div class="rule-name-cell">
+              <a class="rule-name-link" @click.prevent="viewConfig(row)">{{ row.name }}</a>
+              <el-tag v-if="row.ip_acl_mode === 'allow'" type="success" size="small" effect="plain">白名单 {{ row.ip_acl_list?.length || 0 }}</el-tag>
+              <el-tag v-else-if="row.ip_acl_mode === 'deny'" type="danger" size="small" effect="plain">黑名单 {{ row.ip_acl_list?.length || 0 }}</el-tag>
+            </div>
           </template>
         </el-table-column>
         <el-table-column prop="domain" label="域名" min-width="200" show-overflow-tooltip>
@@ -166,7 +170,7 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right" align="center">
+        <el-table-column label="操作" width="225" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
               <el-tooltip
@@ -187,6 +191,11 @@
               <div>
                 <el-button type="primary" link size="small" :disabled="!row.log_enabled" @click="openRuleLogDialog(row)">
                   日志
+                </el-button>
+              </div>
+              <div>
+                <el-button type="primary" link size="small" :disabled="isReadOnly" @click="openAclDialog(row)">
+                  访问控制
                 </el-button>
               </div>
               <el-tooltip
@@ -216,18 +225,29 @@
       />
     </el-card>
 
-    <el-dialog v-model="wizardVisible" :title="editingRule ? '编辑规则' : (isCopyMode ? '复制规则' : '新建规则')" width="800" :close-on-click-modal="false" @close="resetWizard">
+    <RuleAclDialog
+      :visible="aclDialogVisible"
+      :rule-name="aclTarget?.name || ''"
+      :initial-mode="aclTarget?.ip_acl_mode || ''"
+      :initial-cidrs="aclTarget?.ip_acl_list || []"
+      :saving="aclSaving"
+      @update:visible="aclDialogVisible = $event"
+      @save="saveAcl"
+    />
+
+    <el-dialog v-model="wizardVisible" :title="editingRule ? '编辑规则' : (isCopyMode ? '复制规则' : '新建规则')" width="min(800px, 94vw)" top="5vh" :close-on-click-modal="false" @close="resetWizard">
       <el-steps :active="visualStepIndex" finish-status="success" align-center class="wizard-steps">
         <el-step title="基本配置" :icon="InfoFilled" />
         <el-step v-if="showTlsStep" title="TLS 配置" :icon="Lock" />
         <el-step title="上游服务器" :icon="Connection" />
+        <el-step v-if="showCustomRoutesStep" title="自定义路由" :icon="Guide" />
         <el-step title="高级选项" :icon="Setting" />
         <el-step title="预览保存" :icon="Check" />
       </el-steps>
 
       <div class="wizard-content">
         <!-- Step 0: 基本配置 -->
-        <div v-show="currentStep === 0" class="step-content">
+        <div v-show="currentStep === WIZARD_STEP.BASIC" class="step-content">
           <el-form :model="wizardForm" label-width="100px">
             <el-form-item label="规则名称" required>
               <el-input v-model="wizardForm.name" placeholder="例如：我的网站负载均衡" />
@@ -279,7 +299,7 @@
         </div>
 
         <!-- Step 1: TLS 配置 (仅当启用 HTTPS 时显示) -->
-        <div v-show="currentStep === 1" class="step-content">
+        <div v-show="currentStep === WIZARD_STEP.TLS" class="step-content">
           <el-form :model="wizardForm" label-width="100px" v-if="wizardForm.enable_tls && wizardForm.protocol === 'http'">
             <el-form-item label="证书来源">
               <el-radio-group v-model="wizardForm.tls_source" :disabled="isCurrentRuleLocked">
@@ -383,7 +403,7 @@
         </div>
 
         <!-- Step 2: 上游服务器 -->
-        <div v-show="currentStep === 2" class="step-content">
+        <div v-show="currentStep === WIZARD_STEP.UPSTREAMS" class="step-content">
           <el-form :model="wizardForm" label-width="100px">
             <div class="upstream-header">
               <span class="section-title">上游服务器列表</span>
@@ -461,6 +481,14 @@
               <span v-if="upstreamHostWarning" class="port-warning">{{ upstreamHostWarning }}</span>
               <span v-else>权重：数字越大，分配到的请求越多；权重相同时即为普通轮询。至少需要添加一个上游服务器。</span>
             </div>
+
+            <template v-if="wizardForm.protocol === 'http'">
+              <el-divider content-position="left" class="compact-divider">自定义路由</el-divider>
+              <el-form-item label="自定义路由">
+                <el-switch v-model="wizardForm.custom_routes_enabled" @change="onCustomRoutesToggle" />
+                <span class="form-tip-inline">开启后在下一步配置按路径转发规则</span>
+              </el-form-item>
+            </template>
 
             <el-divider content-position="left" class="compact-divider">负载策略</el-divider>
 
@@ -565,8 +593,13 @@
           </el-form>
         </div>
 
-        <!-- Step 3: 高级选项 -->
-        <div v-show="currentStep === 3" class="step-content">
+        <!-- Step 3: 自定义路由（仅 HTTP 且启用时显示） -->
+        <div v-show="currentStep === WIZARD_STEP.CUSTOM_ROUTES" class="step-content">
+          <PathRulesEditor v-if="showCustomRoutesStep" v-model="wizardForm.path_rules" />
+        </div>
+
+        <!-- Step 4: 高级选项 -->
+        <div v-show="currentStep === WIZARD_STEP.ADVANCED" class="step-content">
           <el-form :model="wizardForm" label-width="130px">
             <template v-if="wizardForm.protocol === 'http'">
               <el-divider content-position="left" class="compact-divider">DNS 服务器</el-divider>
@@ -617,6 +650,9 @@
                   </el-checkbox-group>
                 </el-form-item>
               </template>
+
+              <el-divider content-position="left" class="compact-divider">代理超时</el-divider>
+              <ProxyTimeoutFields :value="wizardForm" inherit-label="全局" @update="updateRuleProxyTimeout" />
             </template>
 
             <template v-if="wizardForm.protocol === 'tcp'">
@@ -647,8 +683,8 @@
           </el-form>
         </div>
 
-        <!-- Step 4: 预览保存 -->
-        <div v-show="currentStep === 4" class="step-content">
+        <!-- Step 5: 预览保存 -->
+        <div v-show="currentStep === WIZARD_STEP.PREVIEW" class="step-content">
           <el-descriptions title="配置预览" :column="1" border>
             <el-descriptions-item label="规则名称">{{ wizardForm.name }}</el-descriptions-item>
             <el-descriptions-item label="协议">
@@ -737,13 +773,13 @@
 
       <template #footer>
         <div class="wizard-footer">
-          <el-button v-if="currentStep > 0" @click="prevStep">
+          <el-button v-if="hasPreviousStep" @click="prevStep">
             <el-icon><ArrowLeft /></el-icon>上一步
           </el-button>
-          <el-button v-if="currentStep < 4" type="primary" @click="nextStep">
+          <el-button v-if="hasNextStep" type="primary" @click="nextStep">
             下一步<el-icon><ArrowRight /></el-icon>
           </el-button>
-          <el-button v-if="currentStep === 4" type="primary" :loading="saving" @click="submitWizard">
+          <el-button v-if="currentStep === WIZARD_STEP.PREVIEW" type="primary" :loading="saving" @click="submitWizard">
             <span>保存规则</span><el-icon style="margin-left: 6px;"><Check /></el-icon>
           </el-button>
         </div>
@@ -909,10 +945,15 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
-import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight, Search, WarningFilled, Location, Monitor, Link} from '@element-plus/icons-vue'
+import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight, Search, WarningFilled, Location, Monitor, Link} from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { ansiToHtml } from '@/utils/ansi'
 import { formatDate } from '@/utils/date'
+import type { IpAclMode, PathRule, ProxyTimeoutConfig } from '@/types'
+import RuleAclDialog from '@/components/rules/RuleAclDialog.vue'
+import PathRulesEditor from '@/components/rules/PathRulesEditor.vue'
+import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
+import { validatePathRules } from '@/utils/ruleValidation'
 
 interface Upstream {
   id?: number
@@ -928,7 +969,7 @@ interface Upstream {
   proxy_protocol?: string
 }
 
-interface Rule {
+interface Rule extends ProxyTimeoutConfig {
   id?: number
   caddy_id: string
   name: string
@@ -966,6 +1007,10 @@ interface Rule {
   server_tokens_hidden?: number
   enabled: boolean
   log_enabled?: boolean
+  ip_acl_mode: IpAclMode
+  ip_acl_list: string[]
+  custom_routes_enabled: boolean
+  path_rules: PathRule[]
   created_by?: number
   updated_by?: number
   creator_name?: string
@@ -1198,7 +1243,16 @@ const wizardVisible = ref(false)
 const saving = ref(false)
 const editingRule = ref<Rule | null>(null)
 const isCopyMode = ref(false)
-const currentStep = ref(0)
+const WIZARD_STEP = {
+  BASIC: 0,
+  TLS: 1,
+  UPSTREAMS: 2,
+  CUSTOM_ROUTES: 3,
+  ADVANCED: 4,
+  PREVIEW: 5,
+} as const
+type WizardStep = (typeof WIZARD_STEP)[keyof typeof WIZARD_STEP]
+const currentStep = ref<WizardStep>(WIZARD_STEP.BASIC)
 const upstreamTouched = ref<boolean[]>([])
 const certConfigs = ref<any[]>([])
 const caProviders = ref<Array<{ id: number; name: string; enabled: boolean }>>([])
@@ -1211,6 +1265,35 @@ let certJobPollTimer: ReturnType<typeof setInterval> | null = null
 // Config viewing
 const configDialogVisible = ref(false)
 const configLoading = ref(false)
+
+const aclDialogVisible = ref(false)
+const aclSaving = ref(false)
+const aclTarget = ref<Rule | null>(null)
+
+const openAclDialog = (rule: Rule): void => {
+  if (isReadOnly.value) return
+  aclTarget.value = rule
+  aclDialogVisible.value = true
+}
+
+const saveAcl = async (value: { readonly mode: IpAclMode; readonly cidrs: readonly string[] }): Promise<void> => {
+  const target = aclTarget.value
+  if (!target || isReadOnly.value || aclSaving.value) return
+  aclSaving.value = true
+  try {
+    const response = await request.get<{ readonly data: Rule }>(`/rules/${target.caddy_id}`)
+    await request.put(`/rules/${target.caddy_id}`, {
+      ...response.data,
+      ip_acl_mode: value.mode,
+      ip_acl_list: [...value.cidrs],
+    })
+    ElMessage.success('访问控制已保存')
+    aclDialogVisible.value = false
+    await fetchRules()
+  } finally {
+    aclSaving.value = false
+  }
+}
 
 const ruleLogDialogVisible = ref(false)
 const ruleLogRuleName = ref('')
@@ -1423,6 +1506,15 @@ const wizardForm = reactive<Rule>({
   server_tokens_hidden: 0,
   enabled: true,
   log_enabled: false,
+  ip_acl_mode: '',
+  ip_acl_list: [],
+  custom_routes_enabled: false,
+  path_rules: [],
+  proxy_dial_timeout: 0,
+  proxy_response_header_timeout: 0,
+  proxy_read_timeout: 0,
+  proxy_write_timeout: 0,
+  proxy_stream_timeout: 0,
 })
 
 // Watch for enable_tls toggle to adjust default listen port
@@ -1449,6 +1541,8 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
       wizardForm.listen_port = 8080
     }
     wizardForm.enable_tls = false
+    wizardForm.custom_routes_enabled = false
+    wizardForm.path_rules = []
     wizardForm.upstreams.forEach(u => {
       if (!u.host && (u.protocol === 'http' || u.protocol === 'https')) {
         u.protocol = 'tcp'
@@ -1491,20 +1585,25 @@ watch(() => wizardForm.enable_active_health_check, (newVal) => {
 const adminPorts = [8000, 2019]
 const httpReservedPorts = [80, 443]
 
-// Compute visual step index for el-steps (accounts for hidden TLS step)
 const showTlsStep = computed(() => wizardForm.protocol === 'http' && wizardForm.enable_tls)
+const showCustomRoutesStep = computed(() => wizardForm.protocol === 'http' && wizardForm.custom_routes_enabled)
+
+const visibleWizardSteps = computed<readonly WizardStep[]>(() => [
+  WIZARD_STEP.BASIC,
+  ...(showTlsStep.value ? [WIZARD_STEP.TLS] : []),
+  WIZARD_STEP.UPSTREAMS,
+  ...(showCustomRoutesStep.value ? [WIZARD_STEP.CUSTOM_ROUTES] : []),
+  WIZARD_STEP.ADVANCED,
+  WIZARD_STEP.PREVIEW,
+])
 
 const visualStepIndex = computed(() => {
-  const step = currentStep.value
-  if (!showTlsStep.value) {
-    // TLS step hidden: map internal step to visual index
-    // Internal: 0  1(TLS)  2     3       4
-    // Visual:   0  -       1     2       3
-    if (step <= 1) return step
-    return step - 1
-  }
-  return step
+  const index = visibleWizardSteps.value.indexOf(currentStep.value)
+  return index >= 0 ? index : 0
 })
+
+const hasPreviousStep = computed(() => visualStepIndex.value > 0)
+const hasNextStep = computed(() => visualStepIndex.value < visibleWizardSteps.value.length - 1)
 
 const portWarning = computed(() => {
   // Get existing ports (excluding current editing rule)
@@ -1735,6 +1834,20 @@ const openWizard = (rule?: Rule) => {
       server_tokens_hidden: (rule as any).server_tokens_hidden || 0,
       enabled: rule.enabled,
       log_enabled: (rule as any).log_enabled || false,
+      ip_acl_mode: rule.ip_acl_mode || '',
+      ip_acl_list: [...(rule.ip_acl_list || [])],
+      custom_routes_enabled: rule.custom_routes_enabled === true,
+      path_rules: [...(rule.path_rules || [])]
+        .sort((left, right) => left.sort_order - right.sort_order)
+        .map((pathRule) => ({
+          ...pathRule,
+          upstreams: pathRule.upstreams?.map((upstream) => ({ ...upstream })) || null,
+        })),
+      proxy_dial_timeout: rule.proxy_dial_timeout || 0,
+      proxy_response_header_timeout: rule.proxy_response_header_timeout || 0,
+      proxy_read_timeout: rule.proxy_read_timeout || 0,
+      proxy_write_timeout: rule.proxy_write_timeout || 0,
+      proxy_stream_timeout: rule.proxy_stream_timeout || 0,
     })
     weightsToPercent(wizardForm.upstreams)
   } else {
@@ -1775,16 +1888,25 @@ const openWizard = (rule?: Rule) => {
       enable_dns_server: false,
       log_enabled: false,
       enabled: true,
+      ip_acl_mode: '',
+      ip_acl_list: [],
+      custom_routes_enabled: false,
+      path_rules: [],
+      proxy_dial_timeout: 0,
+      proxy_response_header_timeout: 0,
+      proxy_read_timeout: 0,
+      proxy_write_timeout: 0,
+      proxy_stream_timeout: 0,
     })
   }
-  currentStep.value = 0
+  currentStep.value = WIZARD_STEP.BASIC
   wizardVisible.value = true
 }
 
 const resetWizard = () => {
   editingRule.value = null
   isCopyMode.value = false
-  currentStep.value = 0
+  currentStep.value = WIZARD_STEP.BASIC
 }
 
 // Weights are shown and edited as percentages of enabled upstreams; the
@@ -1873,8 +1995,25 @@ const removeUpstream = (index: number) => {
   }
 }
 
-const nextStep = () => {
-  if (currentStep.value === 0) {
+const onCustomRoutesToggle = (enabled: string | number | boolean): void => {
+  if (Boolean(enabled) && wizardForm.path_rules.length === 0) {
+    wizardForm.path_rules.push({ match_type: 'prefix', path: '/', sort_order: 0, upstreams: null })
+  }
+  if (!enabled) wizardForm.path_rules = []
+}
+
+const updateRuleProxyTimeout = (field: keyof ProxyTimeoutConfig, value: number): void => {
+  wizardForm[field] = value
+}
+
+const moveToAdjacentWizardStep = (direction: -1 | 1): void => {
+  const currentIndex = visibleWizardSteps.value.indexOf(currentStep.value)
+  const targetStep = visibleWizardSteps.value[currentIndex + direction]
+  if (targetStep !== undefined) currentStep.value = targetStep
+}
+
+const nextStep = (): void => {
+  if (currentStep.value === WIZARD_STEP.BASIC) {
     if (!wizardForm.name) {
       ElMessage.warning('请输入规则名称')
       return
@@ -1891,20 +2030,10 @@ const nextStep = () => {
       ElMessage.warning(portWarning.value)
       return
     }
-    // Skip TLS step if HTTPS is not enabled
-    if (wizardForm.protocol === 'http' && wizardForm.enable_tls) {
-      currentStep.value++
-    } else {
-      currentStep.value += 2
-    }
+    moveToAdjacentWizardStep(1)
     return
   }
-  if (currentStep.value === 1) {
-    // TLS step - only applicable when the TLS step is visible
-    if (!showTlsStep.value) {
-      currentStep.value++
-      return
-    }
+  if (currentStep.value === WIZARD_STEP.TLS) {
     if (wizardForm.tls_source === 'acme_dns' && !wizardForm.acme_config_id) {
       ElMessage.warning('请选择 DNS 提供商配置')
       return
@@ -1913,10 +2042,10 @@ const nextStep = () => {
       ElMessage.warning('请上传证书和私钥')
       return
     }
-    currentStep.value++
+    moveToAdjacentWizardStep(1)
     return
   }
-  if (currentStep.value === 2) {
+  if (currentStep.value === WIZARD_STEP.UPSTREAMS) {
     upstreamTouched.value = wizardForm.upstreams.map(() => true)
     const hasEmptyHost = wizardForm.upstreams.some(u => !u.host)
     if (hasEmptyHost) {
@@ -1934,25 +2063,25 @@ const nextStep = () => {
       ElMessage.warning('至少需要一个启用的上游服务器')
       return
     }
-    currentStep.value++
+    moveToAdjacentWizardStep(1)
     return
   }
-  if (currentStep.value < 4) {
-    currentStep.value++
-  }
-}
-
-const prevStep = () => {
-  if (currentStep.value > 0) {
-    // Skip TLS step when it is hidden (TCP rules or HTTP without TLS)
-    if (currentStep.value === 2 && !showTlsStep.value) {
-      currentStep.value -= 2
-    } else if (currentStep.value === 2 && showTlsStep.value) {
-      currentStep.value--
-    } else {
-      currentStep.value--
+  if (currentStep.value === WIZARD_STEP.CUSTOM_ROUTES) {
+    if (wizardForm.path_rules.length === 0) {
+      ElMessage.warning('请至少添加一条路径规则')
+      return
+    }
+    const pathRuleError = validatePathRules(wizardForm.path_rules)
+    if (pathRuleError) {
+      ElMessage.warning(pathRuleError)
+      return
     }
   }
+  moveToAdjacentWizardStep(1)
+}
+
+const prevStep = (): void => {
+  moveToAdjacentWizardStep(-1)
 }
 
 const submitWizard = async () => {
@@ -1964,6 +2093,13 @@ const submitWizard = async () => {
   if (wizardForm.upstreams.length === 0) {
     ElMessage.warning('请至少添加一个上游服务器')
     return
+  }
+  if (wizardForm.protocol === 'http' && wizardForm.custom_routes_enabled) {
+    const pathRuleError = validatePathRules(wizardForm.path_rules)
+    if (pathRuleError) {
+      ElMessage.warning(pathRuleError)
+      return
+    }
   }
 
   const enabledUpstreams = wizardForm.upstreams.filter(u => u.enabled)
@@ -2029,6 +2165,21 @@ const submitWizard = async () => {
       server_tokens_hidden: wizardForm.server_tokens_hidden || 0,
       enabled: wizardForm.enabled,
       log_enabled: wizardForm.log_enabled || false,
+      ip_acl_mode: wizardForm.ip_acl_mode,
+      ip_acl_list: [...wizardForm.ip_acl_list],
+      custom_routes_enabled: wizardForm.protocol === 'http' && wizardForm.custom_routes_enabled,
+      path_rules: wizardForm.protocol === 'http' && wizardForm.custom_routes_enabled
+        ? wizardForm.path_rules.map((pathRule, index) => ({
+            ...pathRule,
+            sort_order: index,
+            upstreams: pathRule.upstreams?.map((upstream) => ({ ...upstream })) || null,
+          }))
+        : [],
+      proxy_dial_timeout: wizardForm.protocol === 'http' ? wizardForm.proxy_dial_timeout : 0,
+      proxy_response_header_timeout: wizardForm.protocol === 'http' ? wizardForm.proxy_response_header_timeout : 0,
+      proxy_read_timeout: wizardForm.protocol === 'http' ? wizardForm.proxy_read_timeout : 0,
+      proxy_write_timeout: wizardForm.protocol === 'http' ? wizardForm.proxy_write_timeout : 0,
+      proxy_stream_timeout: wizardForm.protocol === 'http' ? wizardForm.proxy_stream_timeout : 0,
     }
 
     if (editingRule.value) {
@@ -2138,13 +2289,27 @@ const openCopyWizard = (rule: Rule) => {
     upstream_keepalive_timeout: (rule as any).upstream_keepalive_timeout || 0,
     server_tokens_hidden: (rule as any).server_tokens_hidden || 0,
     log_enabled: (rule as any).log_enabled || false,
+    ip_acl_mode: rule.ip_acl_mode || '',
+    ip_acl_list: [...(rule.ip_acl_list || [])],
+    custom_routes_enabled: rule.custom_routes_enabled === true,
+    path_rules: [...(rule.path_rules || [])]
+      .sort((left, right) => left.sort_order - right.sort_order)
+      .map((pathRule) => ({
+        ...pathRule,
+        upstreams: pathRule.upstreams?.map((upstream) => ({ ...upstream })) || null,
+      })),
+    proxy_dial_timeout: rule.proxy_dial_timeout || 0,
+    proxy_response_header_timeout: rule.proxy_response_header_timeout || 0,
+    proxy_read_timeout: rule.proxy_read_timeout || 0,
+    proxy_write_timeout: rule.proxy_write_timeout || 0,
+    proxy_stream_timeout: rule.proxy_stream_timeout || 0,
       tls_key: rule.tls_key || '',
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
       compress_types: compressType,
       enabled: false,
     })
-  currentStep.value = 0
+  currentStep.value = WIZARD_STEP.BASIC
   wizardVisible.value = true
 }
 
@@ -2481,6 +2646,7 @@ onUnmounted(() => {
 .mb-5 { margin-bottom: 20px; }
 
 .rule-name { font-weight: 500; color: #111827; }
+.rule-name-cell { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .rule-name-link { 
   font-weight: 500; 
   color: #111827; 
@@ -2802,7 +2968,7 @@ onUnmounted(() => {
 
 .wizard-steps { margin-bottom: 24px; }
 
-.wizard-content { min-height: 350px; }
+.wizard-content { min-height: min(350px, 55dvh); max-height: 55dvh; overflow-y: auto; padding-right: 8px; }
 
 .step-content { padding: 8px 0; }
 

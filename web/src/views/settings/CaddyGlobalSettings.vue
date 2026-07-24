@@ -51,6 +51,9 @@
         <el-text type="info" size="small" class="tip-inline">秒，Caddy 到后端服务器的长连接空闲多久后关闭；0 = Caddy 默认。常规建议 60</el-text>
       </el-form-item>
 
+      <el-divider content-position="left">代理超时</el-divider>
+      <ProxyTimeoutFields :value="settings" inherit-label="Caddy 默认" :disabled="isReadOnly" @update="updateProxyTimeout" />
+
       <el-divider content-position="left">响应头</el-divider>
       <el-form-item label="Server Tokens">
         <el-switch v-model="settings.server_tokens_hidden" :disabled="isReadOnly" active-text="开启" inactive-text="关闭" />
@@ -120,8 +123,10 @@ import { RefreshRight, Setting, View } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { ansiToHtml } from '@/utils/ansi'
 import { request } from '@/utils/api'
+import type { ProxyTimeoutConfig } from '@/types'
+import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
 
-type CaddySettingsConfig = {
+type CaddySettingsConfig = ProxyTimeoutConfig & {
   caddy_log_path: string
   caddy_log_level: string
   caddy_log_size_mb: number
@@ -162,6 +167,10 @@ const logLoading = ref(false)
 const autoRefresh = ref(true)
 const logContainerRef = ref<HTMLElement | null>(null)
 let logPollTimer: ReturnType<typeof setInterval> | null = null
+
+const updateProxyTimeout = (field: keyof ProxyTimeoutConfig, value: number): void => {
+  settings.value[field] = value
+}
 
 const handleSave = async (): Promise<void> => {
   if (isReadOnly.value || saving.value) return

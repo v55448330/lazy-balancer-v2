@@ -152,6 +152,12 @@ func TestClusterService_Snapshot_uses_version_and_fingerprint(t *testing.T) {
 	if _, err := database.Exec("UPDATE global_config SET cluster_version=7 WHERE id=1"); err != nil {
 		t.Fatalf("set version: %v", err)
 	}
+	if _, err := database.Exec("INSERT INTO lb_rules (caddy_id,name,protocol,listen_port) VALUES ('lb_fingerprint','fingerprint','http',8080)"); err != nil {
+		t.Fatalf("seed fingerprint rule: %v", err)
+	}
+	if _, err := database.Exec("INSERT INTO path_rules (rule_id,sort_order,match_type,path) VALUES ('lb_fingerprint',0,'prefix','/before/')"); err != nil {
+		t.Fatalf("seed fingerprint path rule: %v", err)
+	}
 	initial, changed, err := service.Snapshot(context.Background(), 0, "", "")
 	if err != nil || !changed {
 		t.Fatalf("initial snapshot changed=%v err=%v", changed, err)
@@ -162,7 +168,7 @@ func TestClusterService_Snapshot_uses_version_and_fingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unchanged snapshot: %v", err)
 	}
-	if _, err := database.Exec("UPDATE global_config SET log_level='debug' WHERE id=1"); err != nil {
+	if _, err := database.Exec("UPDATE path_rules SET path='/after/' WHERE rule_id='lb_fingerprint'"); err != nil {
 		t.Fatalf("change content without version bump: %v", err)
 	}
 	fallback, fallbackChanged, err := service.Snapshot(context.Background(), 7, initial.Fingerprint, "")
@@ -225,16 +231,20 @@ func TestReplaceSnapshotDB_replaces_resources_without_overwriting_role(t *testin
 	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url='https://master', sync_interval=45 WHERE id=1"); err != nil {
 		t.Fatalf("seed role fields: %v", err)
 	}
+	caddyConfig := "{}"
 	snapshot := models.ClusterSnapshot{
 		Version: 9,
 		Rules: []models.LbRule{{
 			CaddyID: "lb_snapshot1", Name: "snapshot", Protocol: "http", ListenPort: 8080,
-			Strategy: "round_robin", Enabled: true,
+			Strategy: "round_robin", Enabled: true, IPACLMode: "allow", IPACLList: []string{"192.0.2.0/24"}, CustomRoutesEnabled: true,
+			ProxyDialTimeout: 3, ProxyResponseHeaderTimeout: 4, ProxyReadTimeout: 5, ProxyWriteTimeout: 6, ProxyStreamTimeout: 7,
 			Upstreams: []models.Upstream{{ID: 11, Host: "127.0.0.1", Port: 9000, Weight: 1, Enabled: true, Protocol: "http"}},
+			PathRules: []models.PathRule{{ID: 21, SortOrder: 2, MatchType: "prefix", Path: "/metrics/", Upstreams: nil}},
 		}},
 		Users:         []models.ClusterUser{{ID: 20, Username: "admin-master", PasswordHash: "hash", Role: "admin", IsEnabled: true}},
 		APIKeys:       []models.ClusterAPIKey{{ID: 30, Name: "ci", KeyHash: "key-hash", KeyPrefix: "lb_sk_master", CreatedBy: 20, IsEnabled: true}},
-		BasicSettings: models.ClusterBasicSettings{LogLevel: "debug", AccessLogJSON: true, Timezone: "Asia/Shanghai", SyncInterval: 120},
+		BasicSettings: models.ClusterBasicSettings{LogLevel: "debug", AccessLogJSON: true, Timezone: "Asia/Shanghai", SyncInterval: 120, ProxyDialTimeout: 8, ProxyResponseHeaderTimeout: 9, ProxyReadTimeout: 10, ProxyWriteTimeout: 11, ProxyStreamTimeout: 12},
+		CaddyConfig:   &caddyConfig,
 	}
 
 	// When
@@ -244,12 +254,12 @@ func TestReplaceSnapshotDB_replaces_resources_without_overwriting_role(t *testin
 	if err != nil {
 		t.Fatalf("replace snapshot: %v", err)
 	}
-	var rules, upstreams, users, keys int
-	if err := database.QueryRow(`SELECT (SELECT COUNT(*) FROM lb_rules), (SELECT COUNT(*) FROM upstreams), (SELECT COUNT(*) FROM users), (SELECT COUNT(*) FROM api_keys)`).Scan(&rules, &upstreams, &users, &keys); err != nil {
+	var rules, upstreams, paths, users, keys int
+	if err := database.QueryRow(`SELECT (SELECT COUNT(*) FROM lb_rules), (SELECT COUNT(*) FROM upstreams), (SELECT COUNT(*) FROM path_rules), (SELECT COUNT(*) FROM users), (SELECT COUNT(*) FROM api_keys)`).Scan(&rules, &upstreams, &paths, &users, &keys); err != nil {
 		t.Fatalf("count replaced resources: %v", err)
 	}
-	if rules != 1 || upstreams != 1 || users != 1 || keys != 1 {
-		t.Fatalf("resource counts rules=%d upstreams=%d users=%d keys=%d", rules, upstreams, users, keys)
+	if rules != 1 || upstreams != 1 || paths != 1 || users != 1 || keys != 1 {
+		t.Fatalf("resource counts rules=%d upstreams=%d paths=%d users=%d keys=%d", rules, upstreams, paths, users, keys)
 	}
 	var isMaster bool
 	var masterURL string
@@ -259,6 +269,14 @@ func TestReplaceSnapshotDB_replaces_resources_without_overwriting_role(t *testin
 	}
 	if isMaster || masterURL != "https://master" || syncInterval != 120 {
 		t.Fatalf("role overwritten master=%v url=%q interval=%d", isMaster, masterURL, syncInterval)
+	}
+	var ipACLMode, ipACLList, path string
+	var ruleDialTimeout, globalDialTimeout int
+	if err := database.QueryRow(`SELECT r.ip_acl_mode,r.ip_acl_list,r.proxy_dial_timeout,p.path,g.proxy_dial_timeout FROM lb_rules r JOIN path_rules p ON p.rule_id=r.caddy_id JOIN global_config g ON g.id=1 WHERE r.caddy_id='lb_snapshot1'`).Scan(&ipACLMode, &ipACLList, &ruleDialTimeout, &path, &globalDialTimeout); err != nil {
+		t.Fatalf("read new snapshot fields: %v", err)
+	}
+	if ipACLMode != "allow" || ipACLList != `["192.0.2.0/24"]` || ruleDialTimeout != 3 || path != "/metrics/" || globalDialTimeout != 8 {
+		t.Fatalf("new snapshot fields mode=%q list=%q rule_dial=%d path=%q global_dial=%d", ipACLMode, ipACLList, ruleDialTimeout, path, globalDialTimeout)
 	}
 }
 

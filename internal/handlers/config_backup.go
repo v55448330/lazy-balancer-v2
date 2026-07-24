@@ -15,7 +15,7 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-var configBackupTables = []string{"lb_rules", "upstreams", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs"}
+var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs"}
 
 var configBackupProtectedConfigKeys = map[string]bool{
 	"id": true, "is_master": true, "master_url": true, "cluster_token": true,
@@ -195,7 +195,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			_ = tx.Rollback()
 		}
 	}()
-	deleteOrder := []string{"api_keys", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs"}
+	deleteOrder := []string{"api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs"}
 	for _, table := range deleteOrder {
 		if _, exists := backup.Tables[table]; !exists {
 			continue
@@ -206,7 +206,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			return
 		}
 	}
-	insertOrder := []string{"users", "lb_rules", "ca_providers", "certificate_configs", "api_keys", "upstreams", "cert_jobs"}
+	insertOrder := []string{"users", "lb_rules", "ca_providers", "certificate_configs", "api_keys", "upstreams", "path_rules", "cert_jobs"}
 	for _, table := range insertOrder {
 		rows, exists := backup.Tables[table]
 		if !exists {

@@ -148,6 +148,14 @@ func createTables() error {
 		request_body_max_size_mb INTEGER DEFAULT 0,
 		upstream_keepalive_timeout INTEGER DEFAULT 0,
 		server_tokens_hidden INTEGER DEFAULT 0,
+		ip_acl_mode TEXT NOT NULL DEFAULT '',
+		ip_acl_list TEXT NOT NULL DEFAULT '[]',
+		custom_routes_enabled BOOLEAN NOT NULL DEFAULT 0,
+		proxy_dial_timeout INTEGER NOT NULL DEFAULT 0,
+		proxy_response_header_timeout INTEGER NOT NULL DEFAULT 0,
+		proxy_read_timeout INTEGER NOT NULL DEFAULT 0,
+		proxy_write_timeout INTEGER NOT NULL DEFAULT 0,
+		proxy_stream_timeout INTEGER NOT NULL DEFAULT 0,
 		host_header VARCHAR(255),
 		enable_tls BOOLEAN DEFAULT FALSE,
 		tls_cert TEXT,
@@ -195,6 +203,19 @@ func createTables() error {
 		proxy_protocol VARCHAR(10) DEFAULT '',
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
 	);
+
+	CREATE TABLE IF NOT EXISTS path_rules (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		rule_id VARCHAR(20) NOT NULL,
+		sort_order INTEGER NOT NULL DEFAULT 0,
+		match_type TEXT NOT NULL DEFAULT 'prefix',
+		path TEXT NOT NULL,
+		upstreams_json TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME,
+		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS idx_path_rules_rule_order ON path_rules(rule_id, sort_order, id);
 
 	-- TLS Certificates table for Let's Encrypt
 	CREATE TABLE IF NOT EXISTS tls_certificates (
@@ -259,6 +280,11 @@ func createTables() error {
 		http_write_timeout INTEGER DEFAULT 60,
 		http_idle_timeout INTEGER DEFAULT 120,
 		upstream_keepalive_timeout INTEGER DEFAULT 60,
+		proxy_dial_timeout INTEGER DEFAULT 0,
+		proxy_response_header_timeout INTEGER DEFAULT 0,
+		proxy_read_timeout INTEGER DEFAULT 0,
+		proxy_write_timeout INTEGER DEFAULT 0,
+		proxy_stream_timeout INTEGER DEFAULT 0,
 		server_tokens_hidden BOOLEAN DEFAULT FALSE,
 		cert_expiry_days INTEGER DEFAULT 30,
 		cert_renewal_days INTEGER DEFAULT 30,
@@ -371,44 +397,57 @@ func runMigrations() error {
 
 	// ca_providers columns are created by createTables; here we only add columns to existing tables.
 	newColumns := map[string]string{
-		"lb_rules.ca_provider_id":              "INTEGER DEFAULT 0",
-		"cert_jobs.ca_provider_id":             "INTEGER DEFAULT 0",
-		"cert_jobs.renewal_attempts":           "INTEGER DEFAULT 0",
-		"cert_jobs.ca_available_after":         "DATETIME",
-		"cert_jobs.last_error_code":            "VARCHAR(20)",
-		"global_config.default_ca_provider_id": "INTEGER DEFAULT 0",
-		"global_config.cert_renewal_days":      "INTEGER DEFAULT 30",
-		"global_config.cert_renewal_attempts":  "INTEGER DEFAULT 5",
-		"global_config.cert_job_log_size_mb":   "INTEGER DEFAULT 10",
-		"global_config.runtime_log_size_mb":    "INTEGER DEFAULT 100",
-		"global_config.admin_tls_enabled":      "BOOLEAN DEFAULT 0",
-		"global_config.admin_tls_mode":         "VARCHAR(20) DEFAULT 'selfsigned'",
-		"global_config.admin_tls_cert":         "TEXT DEFAULT ''",
-		"global_config.admin_tls_key":          "TEXT DEFAULT ''",
-		"global_config.admin_tls_acme_rule_id": "VARCHAR(50) DEFAULT ''",
-		"global_config.admin_tls_port":         "INTEGER DEFAULT 8443",
-		"global_config.access_log_json":        "BOOLEAN DEFAULT TRUE",
-		"global_config.access_log_format":      "TEXT DEFAULT ''",
-		"global_config.audit_retention_months": "INTEGER DEFAULT 3",
-		"global_config.jwt_expire_minutes":     "INTEGER DEFAULT 20",
-		"global_config.timezone":               "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
-		"lb_rules.log_enabled":                 "BOOLEAN DEFAULT 0",
-		"users.password_changed_at":            "DATETIME",
-		"global_config.cluster_version":        "INTEGER DEFAULT 0",
-		"global_config.sync_caddy_config":      "BOOLEAN DEFAULT 0",
-		"global_config.cluster_token":          "TEXT DEFAULT ''",
-		"global_config.registration_id":        "INTEGER DEFAULT 0",
-		"global_config.registration_secret":    "TEXT DEFAULT ''",
-		"global_config.applied_version":        "INTEGER DEFAULT 0",
-		"global_config.last_sync_error":        "TEXT DEFAULT ''",
-		"global_config.sync_fingerprint":       "TEXT DEFAULT ''",
-		"nodes.cluster_token_hash":             "VARCHAR(64)",
-		"nodes.registration_secret":            "VARCHAR(64)",
-		"nodes.cluster_token_delivered":        "BOOLEAN DEFAULT 0",
-		"nodes.reported_version":               "INTEGER DEFAULT 0",
-		"nodes.health_json":                    "TEXT",
-		"nodes.last_sync_at":                   "DATETIME",
-		"nodes.last_sync_error":                "TEXT",
+		"lb_rules.ca_provider_id":                     "INTEGER DEFAULT 0",
+		"cert_jobs.ca_provider_id":                    "INTEGER DEFAULT 0",
+		"cert_jobs.renewal_attempts":                  "INTEGER DEFAULT 0",
+		"cert_jobs.ca_available_after":                "DATETIME",
+		"cert_jobs.last_error_code":                   "VARCHAR(20)",
+		"global_config.default_ca_provider_id":        "INTEGER DEFAULT 0",
+		"global_config.cert_renewal_days":             "INTEGER DEFAULT 30",
+		"global_config.cert_renewal_attempts":         "INTEGER DEFAULT 5",
+		"global_config.cert_job_log_size_mb":          "INTEGER DEFAULT 10",
+		"global_config.runtime_log_size_mb":           "INTEGER DEFAULT 100",
+		"global_config.admin_tls_enabled":             "BOOLEAN DEFAULT 0",
+		"global_config.admin_tls_mode":                "VARCHAR(20) DEFAULT 'selfsigned'",
+		"global_config.admin_tls_cert":                "TEXT DEFAULT ''",
+		"global_config.admin_tls_key":                 "TEXT DEFAULT ''",
+		"global_config.admin_tls_acme_rule_id":        "VARCHAR(50) DEFAULT ''",
+		"global_config.admin_tls_port":                "INTEGER DEFAULT 8443",
+		"global_config.access_log_json":               "BOOLEAN DEFAULT TRUE",
+		"global_config.access_log_format":             "TEXT DEFAULT ''",
+		"global_config.audit_retention_months":        "INTEGER DEFAULT 3",
+		"global_config.jwt_expire_minutes":            "INTEGER DEFAULT 20",
+		"global_config.timezone":                      "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
+		"lb_rules.log_enabled":                        "BOOLEAN DEFAULT 0",
+		"lb_rules.ip_acl_mode":                        "TEXT NOT NULL DEFAULT ''",
+		"lb_rules.ip_acl_list":                        "TEXT NOT NULL DEFAULT '[]'",
+		"lb_rules.custom_routes_enabled":              "BOOLEAN NOT NULL DEFAULT 0",
+		"lb_rules.proxy_dial_timeout":                 "INTEGER NOT NULL DEFAULT 0",
+		"lb_rules.proxy_response_header_timeout":      "INTEGER NOT NULL DEFAULT 0",
+		"lb_rules.proxy_read_timeout":                 "INTEGER NOT NULL DEFAULT 0",
+		"lb_rules.proxy_write_timeout":                "INTEGER NOT NULL DEFAULT 0",
+		"lb_rules.proxy_stream_timeout":               "INTEGER NOT NULL DEFAULT 0",
+		"global_config.proxy_dial_timeout":            "INTEGER DEFAULT 0",
+		"global_config.proxy_response_header_timeout": "INTEGER DEFAULT 0",
+		"global_config.proxy_read_timeout":            "INTEGER DEFAULT 0",
+		"global_config.proxy_write_timeout":           "INTEGER DEFAULT 0",
+		"global_config.proxy_stream_timeout":          "INTEGER DEFAULT 0",
+		"users.password_changed_at":                   "DATETIME",
+		"global_config.cluster_version":               "INTEGER DEFAULT 0",
+		"global_config.sync_caddy_config":             "BOOLEAN DEFAULT 0",
+		"global_config.cluster_token":                 "TEXT DEFAULT ''",
+		"global_config.registration_id":               "INTEGER DEFAULT 0",
+		"global_config.registration_secret":           "TEXT DEFAULT ''",
+		"global_config.applied_version":               "INTEGER DEFAULT 0",
+		"global_config.last_sync_error":               "TEXT DEFAULT ''",
+		"global_config.sync_fingerprint":              "TEXT DEFAULT ''",
+		"nodes.cluster_token_hash":                    "VARCHAR(64)",
+		"nodes.registration_secret":                   "VARCHAR(64)",
+		"nodes.cluster_token_delivered":               "BOOLEAN DEFAULT 0",
+		"nodes.reported_version":                      "INTEGER DEFAULT 0",
+		"nodes.health_json":                           "TEXT",
+		"nodes.last_sync_at":                          "DATETIME",
+		"nodes.last_sync_error":                       "TEXT",
 	}
 	for col, dtype := range newColumns {
 		parts := strings.Split(col, ".")
@@ -437,6 +476,22 @@ func runMigrations() error {
 	}
 	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cluster_register_tokens_hash ON cluster_register_tokens(token_hash)"); err != nil {
 		return fmt.Errorf("failed to index cluster_register_tokens: %w", err)
+	}
+	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS path_rules (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		rule_id VARCHAR(20) NOT NULL,
+		sort_order INTEGER NOT NULL DEFAULT 0,
+		match_type TEXT NOT NULL DEFAULT 'prefix',
+		path TEXT NOT NULL,
+		upstreams_json TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME,
+		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
+	)`); err != nil {
+		return fmt.Errorf("failed to create path_rules: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_path_rules_rule_order ON path_rules(rule_id, sort_order, id)"); err != nil {
+		return fmt.Errorf("failed to index path_rules: %w", err)
 	}
 
 	// Drop legacy cert_job_logs table — logs now stored in files under /app/logs/
@@ -796,6 +851,14 @@ func migrateLbRulesPrimaryKey() error {
 			request_body_max_size_mb INTEGER DEFAULT 0,
 			upstream_keepalive_timeout INTEGER DEFAULT 0,
 			server_tokens_hidden INTEGER DEFAULT 0,
+			ip_acl_mode TEXT NOT NULL DEFAULT '',
+			ip_acl_list TEXT NOT NULL DEFAULT '[]',
+			custom_routes_enabled BOOLEAN NOT NULL DEFAULT 0,
+			proxy_dial_timeout INTEGER NOT NULL DEFAULT 0,
+			proxy_response_header_timeout INTEGER NOT NULL DEFAULT 0,
+			proxy_read_timeout INTEGER NOT NULL DEFAULT 0,
+			proxy_write_timeout INTEGER NOT NULL DEFAULT 0,
+			proxy_stream_timeout INTEGER NOT NULL DEFAULT 0,
 			host_header VARCHAR(255),
 			enable_tls BOOLEAN DEFAULT FALSE,
 			tls_cert TEXT,
@@ -805,9 +868,9 @@ func migrateLbRulesPrimaryKey() error {
 			acme_config_id INTEGER DEFAULT 0,
 			ca_provider_id INTEGER DEFAULT 0,
 			enable_compress BOOLEAN DEFAULT TRUE,
-
 			compress_types VARCHAR(100) DEFAULT 'gzip',
 			enabled BOOLEAN DEFAULT TRUE,
+			log_enabled BOOLEAN DEFAULT 0,
 			created_by INTEGER,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME,
@@ -830,9 +893,11 @@ func migrateLbRulesPrimaryKey() error {
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
+			ip_acl_mode, ip_acl_list, custom_routes_enabled,
+			proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout,
 			host_header, enable_tls, tls_cert,
 			tls_key, tls_http_redirect, tls_source, acme_config_id,
-			ca_provider_id, enable_compress, compress_types, enabled,
+			ca_provider_id, enable_compress, compress_types, enabled, log_enabled,
 			created_by, created_at, updated_at, updated_by, caddy_id
 		)
 		SELECT
@@ -842,9 +907,11 @@ func migrateLbRulesPrimaryKey() error {
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
+			COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
+			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
 			host_header, enable_tls, tls_cert,
 			tls_key, tls_http_redirect, tls_source, acme_config_id,
-			ca_provider_id, enable_compress, compress_types, enabled,
+			ca_provider_id, enable_compress, compress_types, enabled, COALESCE(log_enabled,0),
 			created_by, created_at, updated_at, updated_by, caddy_id
 		FROM lb_rules
 	`)
