@@ -49,9 +49,16 @@ export const isValidCidr = (rawValue: string): boolean => {
 }
 
 export const validatePathRules = (rules: readonly PathRuleInput[]): string | null => {
+  const seen = new Map<string, number>()
   for (const [index, rule] of rules.entries()) {
     const rowNumber = index + 1
-    if (!rule.path.trim().startsWith('/')) return `第 ${rowNumber} 条路径必须以 / 开头`
+    const path = rule.path.trim()
+    if (!path.startsWith('/')) return `第 ${rowNumber} 条路径必须以 / 开头`
+    if (/[*?{}]/.test(path)) return `第 ${rowNumber} 条路径不能包含 * ? { } 通配字符`
+    const duplicateKey = `${rule.match_type}:${path}`
+    const seenAt = seen.get(duplicateKey)
+    if (seenAt !== undefined) return `第 ${rowNumber} 条路径与第 ${seenAt} 条重复（${path}）`
+    seen.set(duplicateKey, rowNumber)
     if (rule.upstreams === null) continue
     if (rule.upstreams.length === 0) return `第 ${rowNumber} 条路径至少需要一个自定义上游`
 

@@ -1,7 +1,6 @@
 package services
 
 import (
-	"sync"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -10,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/models"

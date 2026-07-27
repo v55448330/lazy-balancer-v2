@@ -247,6 +247,9 @@ func verifySnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken strin
 	if err := verifySnapshotSignature(snapshot, clusterToken); err != nil {
 		return err
 	}
+	if snapshot.MinReaderVersion > CurrentSnapshotSchema {
+		return fmt.Errorf("快照需要更新的读取端（要求 schema v%d，当前支持 v%d），请先升级本节点", snapshot.MinReaderVersion, CurrentSnapshotSchema)
+	}
 	// Signed snapshots must also move forward; replaying a captured older one
 	// must not resurrect deleted credentials or roll back configuration.
 	if snapshot.Version < appliedVersion {

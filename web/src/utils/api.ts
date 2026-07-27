@@ -1,6 +1,66 @@
 import axios from 'axios'
 import type { AxiosInstance, AxiosRequestConfig } from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import type {
+  ApiResponse,
+  CaddyMetrics,
+  ConnectionStats,
+  HostMetrics,
+  MetricsOverview,
+  RealtimeTraffic,
+  Rule,
+  SystemInfo,
+  SystemMetrics,
+} from '@/types'
+
+interface GlobalConfigData {
+  log_level: string
+  caddy_log_path: string
+  caddy_log_level: string
+  caddy_log_size_mb: number
+  request_body_max_size_mb: number
+  http_read_timeout: number
+  http_write_timeout: number
+  http_idle_timeout: number
+  upstream_keepalive_timeout: number
+  proxy_dial_timeout: number
+  proxy_response_header_timeout: number
+  proxy_read_timeout: number
+  proxy_write_timeout: number
+  proxy_stream_timeout: number
+  server_tokens_hidden: boolean
+  cert_job_log_size_mb: number
+  runtime_log_size_mb: number
+  access_log_json: boolean
+  access_log_format: string
+  audit_retention_months: number
+  jwt_expire_minutes: number
+  timezone: string
+  acme_email: string
+  cert_expiry_days: number
+  cert_renewal_days: number
+  cert_renewal_attempts: number
+  default_ca_provider_id: number
+  dns_provider: string
+}
+
+interface RequestClient {
+  get(url: '/system/info', config?: AxiosRequestConfig): Promise<ApiResponse<SystemInfo>>
+  get(url: '/system/metrics', config?: AxiosRequestConfig): Promise<ApiResponse<SystemMetrics>>
+  get(url: '/metrics/realtime', config?: AxiosRequestConfig): Promise<ApiResponse<RealtimeTraffic>>
+  get(url: '/caddy/metrics', config?: AxiosRequestConfig): Promise<ApiResponse<CaddyMetrics>>
+  get(url: '/caddy/host-metrics', config?: AxiosRequestConfig): Promise<ApiResponse<HostMetrics[]>>
+  get(url: '/rules', config?: AxiosRequestConfig): Promise<ApiResponse<Rule[]>>
+  get(url: '/metrics/overview', config?: AxiosRequestConfig): Promise<ApiResponse<MetricsOverview>>
+  get(url: '/metrics/connections', config?: AxiosRequestConfig): Promise<ApiResponse<ConnectionStats>>
+  get(url: '/caddy/status', config?: AxiosRequestConfig): Promise<ApiResponse<{ status: string }>>
+  get(url: '/config', config?: AxiosRequestConfig): Promise<ApiResponse<GlobalConfigData>>
+  get(url: '/admin-tls', config?: AxiosRequestConfig): Promise<ApiResponse<{ enabled: boolean; mode: string }>>
+  get<T = ApiResponse>(url: string, config?: AxiosRequestConfig): Promise<T>
+  post<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  put<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  delete<T = ApiResponse>(url: string, config?: AxiosRequestConfig): Promise<T>
+}
 
 let sessionExpiredDialogOpen = false
 
@@ -60,17 +120,17 @@ service.interceptors.response.use(
   }
 )
 
-export const request = {
-  get<T = any>(url: string, config?: AxiosRequestConfig): Promise<T> {
+export const request: RequestClient = {
+  get<T = ApiResponse>(url: string, config?: AxiosRequestConfig): Promise<T> {
     return service.get(url, config)
   },
-  post<T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
+  post<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
     return service.post(url, data, config)
   },
-  put<T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
+  put<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
     return service.put(url, data, config)
   },
-  delete<T = any>(url: string, config?: AxiosRequestConfig): Promise<T> {
+  delete<T = ApiResponse>(url: string, config?: AxiosRequestConfig): Promise<T> {
     return service.delete(url, config)
   },
 }

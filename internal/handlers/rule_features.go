@@ -6,10 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
+
+	"github.com/gin-gonic/gin"
 )
 
 type ruleFeatureInput struct {
@@ -165,10 +169,19 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 	if !input.CustomRoutesEnabled && len(input.PathRules) > 0 {
 		return fmt.Errorf("自定义路径规则未启用，不能提交路径规则")
 	}
+	seenPaths := make(map[string]int, len(input.PathRules))
 	for index, pathRule := range input.PathRules {
 		if !strings.HasPrefix(pathRule.Path, "/") {
 			return fmt.Errorf("第 %d 条路径规则的路径必须以 / 开头", index+1)
 		}
+		if strings.ContainsAny(pathRule.Path, "*?{}") {
+			return fmt.Errorf("第 %d 条路径规则的路径不能包含 * ? { } 通配字符", index+1)
+		}
+		duplicateKey := pathRule.MatchType + ":" + strings.TrimSpace(pathRule.Path)
+		if seenAt, exists := seenPaths[duplicateKey]; exists {
+			return fmt.Errorf("第 %d 条路径规则与第 %d 条重复（%s）", index+1, seenAt, pathRule.Path)
+		}
+		seenPaths[duplicateKey] = index + 1
 		switch pathRule.MatchType {
 		case "prefix", "exact":
 		default:
@@ -237,4 +250,140 @@ func loadPathRules(ctx context.Context, queryer pathRuleQueryer, ruleID string) 
 		return nil, fmt.Errorf("遍历规则 %s 的路径规则: %w", ruleID, err)
 	}
 	return pathRules, nil
+}
+
+func dumpRowsByKey(ctx context.Context, table, keyColumn string, keyValue any) ([]map[string]any, error) {
+	rows, err := db.DB.QueryContext(ctx, fmt.Sprintf("SELECT * FROM %s WHERE %s = ?", table, keyColumn), keyValue)
+	if err != nil {
+		return nil, fmt.Errorf("读取 %s 快照: %w", table, err)
+	}
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]map[string]any, 0)
+	for rows.Next() {
+		values := make([]any, len(columns))
+		targets := make([]any, len(columns))
+		for i := range values {
+			targets[i] = &values[i]
+		}
+		if err := rows.Scan(targets...); err != nil {
+			return nil, fmt.Errorf("扫描 %s 快照: %w", table, err)
+		}
+		row := map[string]any{}
+		for i, column := range columns {
+			if bytes, ok := values[i].([]byte); ok {
+				row[column] = string(bytes)
+			} else {
+				row[column] = values[i]
+			}
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func dumpRowByKey(ctx context.Context, table, keyColumn string, keyValue any) (map[string]any, error) {
+	rows, err := dumpRowsByKey(ctx, table, keyColumn, keyValue)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("%s 中不存在 %s=%v", table, keyColumn, keyValue)
+	}
+	return rows[0], nil
+}
+
+func insertRowFromMapTx(ctx context.Context, tx *sql.Tx, table string, row map[string]any) error {
+	columns := make([]string, 0, len(row))
+	placeholders := make([]string, 0, len(row))
+	args := make([]any, 0, len(row))
+	for column, value := range row {
+		columns = append(columns, column)
+		placeholders = append(placeholders, "?")
+		args = append(args, value)
+	}
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", table, strings.Join(columns, ","), strings.Join(placeholders, ","))
+	_, err := tx.ExecContext(ctx, query, args...)
+	return err
+}
+
+func (h *Handlers) UpdateRuleACL(c *gin.Context) {
+	caddyID := c.Param("caddy_id")
+
+	var req struct {
+		IPACLMode string   `json:"ip_acl_mode"`
+		IPACLList []string `json:"ip_acl_list"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误: " + err.Error()})
+		return
+	}
+
+	var protocol, oldMode, oldListJSON string
+	if err := db.DB.QueryRow("SELECT protocol, COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol, &oldMode, &oldListJSON); err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+		return
+	}
+	input := ruleFeatureInput{Protocol: protocol, IPACLMode: req.IPACLMode, IPACLList: req.IPACLList}
+	if err := validateRuleFeatures(input); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	newListJSON, err := encodeIPACLList(input.IPACLList)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+
+	if _, err := db.DB.Exec("UPDATE lb_rules SET ip_acl_mode = ?, ip_acl_list = ?, updated_at = datetime('now') WHERE caddy_id = ?", input.IPACLMode, newListJSON, caddyID); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新访问控制失败"})
+		return
+	}
+
+	if err := h.applyCaddyConfigWithRollback(); err != nil {
+		db.DB.Exec("UPDATE lb_rules SET ip_acl_mode = ?, ip_acl_list = ?, updated_at = datetime('now') WHERE caddy_id = ?", oldMode, oldListJSON, caddyID)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用失败，已回滚: %v", err)})
+		return
+	}
+
+	recordAudit(c, "更新", "访问控制", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("模式：%s", boolText(input.IPACLMode != "")), fmt.Sprintf("CIDR 数：%d", len(input.IPACLList))))
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "访问控制已保存"})
+}
+
+func restoreRuleSnapshot(ctx context.Context, caddyID string, ruleRow map[string]any, upstreamRows []map[string]any, pathRules []models.PathRule) error {
+	tx, err := db.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM lb_rules WHERE caddy_id = ?", caddyID); err != nil {
+		return fmt.Errorf("恢复规则快照: %w", err)
+	}
+	if err := insertRowFromMapTx(ctx, tx, "lb_rules", ruleRow); err != nil {
+		return fmt.Errorf("恢复规则快照: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM upstreams WHERE rule_id = ?", caddyID); err != nil {
+		return fmt.Errorf("恢复上游快照: %w", err)
+	}
+	for _, upstreamRow := range upstreamRows {
+		if err := insertRowFromMapTx(ctx, tx, "upstreams", upstreamRow); err != nil {
+			return fmt.Errorf("恢复上游快照: %w", err)
+		}
+	}
+	if err := replacePathRulesTx(ctx, tx, caddyID, pathRules); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }

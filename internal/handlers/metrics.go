@@ -1,9 +1,9 @@
 package handlers
 
 import (
-	"lazy-balancer-v2/internal/services"
 	"database/sql"
 	"io"
+	"lazy-balancer-v2/internal/services"
 	"net/http"
 	"strconv"
 	"strings"

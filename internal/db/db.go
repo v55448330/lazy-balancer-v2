@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -815,13 +816,24 @@ func migrateLbRulesPrimaryKey() error {
 
 	log.Println("Migrating lb_rules to use caddy_id as primary key...")
 
-	// Disable foreign keys temporarily
-	DB.Exec("PRAGMA foreign_keys = OFF")
-
-	// Start transaction
-	tx, err := DB.Begin()
+	// PRAGMA 是会话级设置，必须与后续事务使用同一连接
+	conn, err := DB.Conn(context.Background())
 	if err != nil {
-		DB.Exec("PRAGMA foreign_keys = ON")
+		return fmt.Errorf("failed to acquire connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys = OFF"); err != nil {
+		return fmt.Errorf("failed to disable foreign keys: %w", err)
+	}
+	fkRestored := false
+	defer func() {
+		if !fkRestored {
+			_, _ = conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON")
+		}
+	}()
+
+	tx, err := conn.BeginTx(context.Background(), nil)
+	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
@@ -880,7 +892,6 @@ func migrateLbRulesPrimaryKey() error {
 	`)
 	if err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to create lb_rules_new: %w", err)
 	}
 
@@ -917,7 +928,6 @@ func migrateLbRulesPrimaryKey() error {
 	`)
 	if err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to copy lb_rules data: %w", err)
 	}
 
@@ -925,7 +935,6 @@ func migrateLbRulesPrimaryKey() error {
 	_, err = tx.Exec("DROP TABLE lb_rules")
 	if err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to drop old lb_rules: %w", err)
 	}
 
@@ -933,7 +942,6 @@ func migrateLbRulesPrimaryKey() error {
 	_, err = tx.Exec("ALTER TABLE lb_rules_new RENAME TO lb_rules")
 	if err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to rename lb_rules_new: %w", err)
 	}
 
@@ -958,7 +966,6 @@ func migrateLbRulesPrimaryKey() error {
 	`)
 	if err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to create upstreams_new: %w", err)
 	}
 
@@ -972,7 +979,6 @@ func migrateLbRulesPrimaryKey() error {
 	`)
 	if err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to copy upstreams data: %w", err)
 	}
 
@@ -980,7 +986,6 @@ func migrateLbRulesPrimaryKey() error {
 	_, err = tx.Exec("DROP TABLE upstreams")
 	if err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to drop old upstreams: %w", err)
 	}
 
@@ -988,18 +993,17 @@ func migrateLbRulesPrimaryKey() error {
 	_, err = tx.Exec("ALTER TABLE upstreams_new RENAME TO upstreams")
 	if err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to rename upstreams_new: %w", err)
 	}
 
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
-
-	// Re-enable foreign keys
-	DB.Exec("PRAGMA foreign_keys = ON")
+	if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON"); err != nil {
+		return fmt.Errorf("failed to re-enable foreign keys: %w", err)
+	}
+	fkRestored = true
 
 	log.Println("Successfully migrated lb_rules to use caddy_id as primary key")
 	return nil
@@ -1023,16 +1027,28 @@ func migrateCertJobsStatusConstraint() error {
 
 	log.Println("Migrating cert_jobs status constraint...")
 
-	DB.Exec("PRAGMA foreign_keys = OFF")
-	tx, err := DB.Begin()
+	conn, err := DB.Conn(context.Background())
 	if err != nil {
-		DB.Exec("PRAGMA foreign_keys = ON")
+		return fmt.Errorf("failed to acquire connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys = OFF"); err != nil {
+		return fmt.Errorf("failed to disable foreign keys: %w", err)
+	}
+	fkRestored := false
+	defer func() {
+		if !fkRestored {
+			_, _ = conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON")
+		}
+	}()
+
+	tx, err := conn.BeginTx(context.Background(), nil)
+	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
 	if _, err := tx.Exec("ALTER TABLE cert_jobs RENAME TO cert_jobs_old"); err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to rename cert_jobs: %w", err)
 	}
 
@@ -1041,7 +1057,6 @@ func migrateCertJobsStatusConstraint() error {
 	if logsExist > 0 {
 		if _, err := tx.Exec("ALTER TABLE cert_job_logs RENAME TO cert_job_logs_old"); err != nil {
 			tx.Rollback()
-			DB.Exec("PRAGMA foreign_keys = ON")
 			return fmt.Errorf("failed to rename cert_job_logs: %w", err)
 		}
 	}
@@ -1065,7 +1080,6 @@ func migrateCertJobsStatusConstraint() error {
 		)
 	`); err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to create new cert_jobs table: %w", err)
 	}
 
@@ -1084,18 +1098,15 @@ func migrateCertJobsStatusConstraint() error {
 		FROM cert_jobs_old
 	`); err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to copy cert_jobs data: %w", err)
 	}
 
 	if _, err := tx.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain)"); err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to recreate cert_jobs index: %w", err)
 	}
 	if _, err := tx.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)"); err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to recreate cert_jobs unique index: %w", err)
 	}
 
@@ -1111,7 +1122,6 @@ func migrateCertJobsStatusConstraint() error {
 			)
 		`); err != nil {
 			tx.Rollback()
-			DB.Exec("PRAGMA foreign_keys = ON")
 			return fmt.Errorf("failed to create new cert_job_logs table: %w", err)
 		}
 		if _, err := tx.Exec(`
@@ -1120,32 +1130,30 @@ func migrateCertJobsStatusConstraint() error {
 			FROM cert_job_logs_old
 		`); err != nil {
 			tx.Rollback()
-			DB.Exec("PRAGMA foreign_keys = ON")
 			return fmt.Errorf("failed to copy cert_job_logs data: %w", err)
 		}
 		if _, err := tx.Exec("CREATE INDEX IF NOT EXISTS idx_cert_job_logs_job ON cert_job_logs(job_id)"); err != nil {
 			tx.Rollback()
-			DB.Exec("PRAGMA foreign_keys = ON")
 			return fmt.Errorf("failed to recreate cert_job_logs index: %w", err)
 		}
 		if _, err := tx.Exec("DROP TABLE cert_job_logs_old"); err != nil {
 			tx.Rollback()
-			DB.Exec("PRAGMA foreign_keys = ON")
 			return fmt.Errorf("failed to drop old cert_job_logs table: %w", err)
 		}
 	}
 
 	if _, err := tx.Exec("DROP TABLE cert_jobs_old"); err != nil {
 		tx.Rollback()
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to drop old cert_jobs table: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		DB.Exec("PRAGMA foreign_keys = ON")
 		return fmt.Errorf("failed to commit cert_jobs migration: %w", err)
 	}
-	DB.Exec("PRAGMA foreign_keys = ON")
+	if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON"); err != nil {
+		return fmt.Errorf("failed to re-enable foreign keys: %w", err)
+	}
+	fkRestored = true
 
 	log.Println("cert_jobs status constraint migration completed")
 	return nil

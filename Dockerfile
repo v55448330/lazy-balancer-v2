@@ -48,6 +48,6 @@ COPY --from=backend /app/config /app/config
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-EXPOSE 80 443 8000 2019
+EXPOSE 80 443 8000
 
 ENTRYPOINT ["docker-entrypoint.sh"]

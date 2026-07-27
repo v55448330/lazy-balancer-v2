@@ -269,36 +269,6 @@ func (s *CaddyService) validateConfigInternal(config map[string]interface{}, uni
 	return nil
 }
 
-func (s *CaddyService) ValidateRouteConfig(serverName string, routeConfig map[string]interface{}) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	data, err := json.Marshal(routeConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal route: %w", err)
-	}
-
-	path := fmt.Sprintf("/config/apps/http/servers/%s/routes", serverName)
-	req, err := http.NewRequest("POST", s.adminURL+path, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("validation request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("route validation failed: %s", string(body))
-	}
-
-	return nil
-}
-
 func (s *CaddyService) DeleteServer(serverName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -449,36 +419,6 @@ func (s *CaddyService) GetConfigByID(id string) (map[string]interface{}, error) 
 	}
 
 	return result, nil
-}
-
-func (s *CaddyService) AppendRouteToServer(serverName string, routeConfig map[string]interface{}) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	data, err := json.Marshal(routeConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal route config: %w", err)
-	}
-
-	path := fmt.Sprintf("/config/apps/http/servers/%s/routes", serverName)
-	req, err := http.NewRequest("POST", s.adminURL+path, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to append route: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("append route failed: %s", string(body))
-	}
-
-	return nil
 }
 
 func (s *CaddyService) PrependRouteToServer(serverName string, routeConfig map[string]interface{}) error {
@@ -793,47 +733,6 @@ func (s *CaddyService) DeleteRouteByID(serverName string, caddyID string) error 
 	}
 
 	server["routes"] = filteredRoutes
-	servers[serverName] = server
-	httpApp["servers"] = servers
-	apps["http"] = httpApp
-	config["apps"] = apps
-
-	return s.applyConfigRaw(config)
-}
-
-func (s *CaddyService) CreateServerForRoute(serverName string, listenPort int, routeID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	config, err := s.GetConfig()
-	if err != nil {
-		return fmt.Errorf("failed to get config: %w", err)
-	}
-
-	apps, ok := config["apps"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("apps not found in config")
-	}
-
-	httpApp, ok := apps["http"].(map[string]interface{})
-	if !ok {
-		httpApp = make(map[string]interface{})
-	}
-
-	servers, ok := httpApp["servers"].(map[string]interface{})
-	if !ok {
-		servers = make(map[string]interface{})
-	}
-
-	server := map[string]interface{}{
-		"listen": []string{fmt.Sprintf(":%d", listenPort)},
-		"routes": []interface{}{
-			map[string]interface{}{
-				"@id": routeID,
-			},
-		},
-	}
-
 	servers[serverName] = server
 	httpApp["servers"] = servers
 	apps["http"] = httpApp
@@ -1702,7 +1601,6 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 				EnableTLS:                        r.EnableTLS,
 				TLSSource:                        r.TLSSource,
 				ACMEConfigID:                     r.ACMEConfigID,
-				ACMEEmail:                        r.ACMEEmail,
 				TLSCert:                          r.TLSCert,
 				TLSKey:                           r.TLSKey,
 				TLSHTTPRedirect:                  r.TLSHTTPRedirect,
@@ -2036,7 +1934,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 
 	conf := map[string]interface{}{
 		"admin": map[string]interface{}{
-			"listen": "0.0.0.0:2019",
+			"listen": "127.0.0.1:2019",
 		},
 		"apps":    apps,
 		"logging": logging,
@@ -2120,7 +2018,7 @@ func buildCaddyLogging(level string, sizeMB int) map[string]interface{} {
 func defaultCaddyConfig() map[string]interface{} {
 	return map[string]interface{}{
 		"admin": map[string]interface{}{
-			"listen": "0.0.0.0:2019",
+			"listen": "127.0.0.1:2019",
 		},
 		"apps": map[string]interface{}{
 			"http": map[string]interface{}{
@@ -2228,9 +2126,7 @@ func splitAndTrim(s string) []string {
 }
 
 type SingleRuleConfig struct {
-	ID                               int
 	CaddyID                          string
-	Name                             string
 	Protocol                         string
 	Domain                           string
 	ListenPort                       int
@@ -2247,7 +2143,6 @@ type SingleRuleConfig struct {
 	EnableTLS                        bool
 	TLSSource                        string
 	ACMEConfigID                     int
-	ACMEEmail                        string
 	TLSCert                          string
 	TLSKey                           string
 	TLSHTTPRedirect                  bool
@@ -2302,7 +2197,6 @@ type UpstreamConfig struct {
 	Weight         int
 	Protocol       string
 	Enabled        bool
-	DnsServer      string
 	MaxConnections int
 	ProxyProtocol  string
 }
@@ -2582,6 +2476,25 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		handleChain = append(handleChain, proxyConfig)
 
 		var routes []interface{}
+		if rule.EnableTLS && rule.TLSHTTPRedirect {
+			redirectRoute := map[string]interface{}{
+				"match": []interface{}{
+					map[string]interface{}{
+						"host": domainHosts,
+					},
+				},
+				"handle": []interface{}{
+					map[string]interface{}{
+						"handler":     "static_response",
+						"status_code": 301,
+						"headers": map[string]interface{}{
+							"Location": []string{fmt.Sprintf("https://%s", domainHosts[0])},
+						},
+					},
+				},
+			}
+			routes = append(routes, redirectRoute)
+		}
 		if rule.IPACLMode == "deny" {
 			routes = append(routes, forbiddenHTTPRoute(domainHosts, rule.IPACLList, true))
 		}
@@ -2632,26 +2545,6 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			routes = append(routes, forbiddenHTTPRoute(domainHosts, nil, false))
 		}
 
-		if rule.EnableTLS && rule.TLSHTTPRedirect {
-			redirectRoute := map[string]interface{}{
-				"match": []interface{}{
-					map[string]interface{}{
-						"host": domainHosts,
-					},
-				},
-				"handle": []interface{}{
-					map[string]interface{}{
-						"handler":     "static_response",
-						"status_code": 301,
-						"headers": map[string]interface{}{
-							"Location": []string{fmt.Sprintf("https://%s", domainHosts[0])},
-						},
-					},
-				},
-			}
-			routes = append(routes, redirectRoute)
-		}
-
 		serverName := fmt.Sprintf("http_%d", rule.ListenPort)
 
 		server := map[string]interface{}{
@@ -2691,7 +2584,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 		conf := map[string]interface{}{
 			"admin": map[string]interface{}{
-				"listen": "0.0.0.0:2019",
+				"listen": "127.0.0.1:2019",
 			},
 			"apps": apps,
 		}
@@ -2722,7 +2615,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 	conf := map[string]interface{}{
 		"admin": map[string]interface{}{
-			"listen": "0.0.0.0:2019",
+			"listen": "127.0.0.1:2019",
 		},
 		"apps": apps,
 	}

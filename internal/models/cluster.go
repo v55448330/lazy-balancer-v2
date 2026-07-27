@@ -110,15 +110,17 @@ type ClusterCertificate struct {
 }
 
 type ClusterSnapshot struct {
-	Version       int                  `json:"version"`
-	Fingerprint   string               `json:"fingerprint"`
-	Signature     string               `json:"signature,omitempty"`
-	Rules         []LbRule             `json:"rules"`
-	Users         []ClusterUser        `json:"users"`
-	APIKeys       []ClusterAPIKey      `json:"api_keys"`
-	BasicSettings ClusterBasicSettings `json:"basic_settings"`
-	CaddyConfig   *string              `json:"caddy_config,omitempty"`
-	Certs         []ClusterCertificate `json:"certs"`
+	Version          int                  `json:"version"`
+	SchemaVersion    int                  `json:"schema_version,omitempty"`
+	MinReaderVersion int                  `json:"min_reader_version,omitempty"`
+	Fingerprint      string               `json:"fingerprint"`
+	Signature        string               `json:"signature,omitempty"`
+	Rules            []LbRule             `json:"rules"`
+	Users            []ClusterUser        `json:"users"`
+	APIKeys          []ClusterAPIKey      `json:"api_keys"`
+	BasicSettings    ClusterBasicSettings `json:"basic_settings"`
+	CaddyConfig      *string              `json:"caddy_config,omitempty"`
+	Certs            []ClusterCertificate `json:"certs"`
 }
 
 type ClusterNodeView struct {

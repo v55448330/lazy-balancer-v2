@@ -1,13 +1,13 @@
 package middleware
 
 import (
-	"database/sql"
-	"time"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
@@ -135,6 +135,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.POST("/rules/cert-info", h.GetRulesCertInfo)
 				business.POST("/rules", h.CreateRule)
 				business.PUT("/rules/:caddy_id", h.UpdateRule)
+				business.POST("/rules/:caddy_id/acl", h.UpdateRuleACL)
 				business.DELETE("/rules/:caddy_id", h.DeleteRule)
 				business.POST("/rules/:caddy_id/enable", h.EnableRule)
 				business.PUT("/rules/:caddy_id/disable", h.DisableRule)

@@ -722,7 +722,7 @@
             </el-descriptions-item>
             <el-descriptions-item label="动态上游" v-if="wizardForm.protocol === 'http'">
               <template v-if="wizardForm.dynamic_dns">
-                启用 (协议栈: {{ (() => { const families = wizardForm.dns_family || []; if (families.length === 2) return 'IPv4/IPv6'; if (families.includes('ipv4')) return 'IPv4'; if (families.includes('ipv6')) return 'IPv6'; return 'None'; })() }})
+                启用 (协议栈: {{ (() => { const families = wizardForm.dns_family || []; if (families.length === 2) return 'IPv4/IPv6'; if (families.includes('ipv4')) return 'IPv4'; if (families.includes('ipv6')) return 'IPv6'; return '无'; })() }})
               </template>
               <template v-else>禁用</template>
             </el-descriptions-item>
@@ -949,73 +949,157 @@ import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, Ar
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { ansiToHtml } from '@/utils/ansi'
 import { formatDate } from '@/utils/date'
-import type { IpAclMode, PathRule, ProxyTimeoutConfig } from '@/types'
+import type {
+  APIResponse,
+  CreateRuleRequest,
+  IpAclMode,
+  ProxyTimeoutConfig,
+  Rule,
+  RuleAclRequest,
+  UpdateRuleRequest,
+  Upstream,
+  UpstreamInput,
+  User,
+} from '@/types'
 import RuleAclDialog from '@/components/rules/RuleAclDialog.vue'
 import PathRulesEditor from '@/components/rules/PathRulesEditor.vue'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
 import { validatePathRules } from '@/utils/ruleValidation'
 
-interface Upstream {
-  id?: number
-  rule_id?: number
-  host: string
-  port: number
-  weight: number
-  domain: string
-  dynamic_dns: boolean
-  enabled: boolean
-  protocol?: string
-  max_connections?: number
-  proxy_protocol?: string
-}
-
-interface Rule extends ProxyTimeoutConfig {
+interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id'> {
   id?: number
   caddy_id: string
+  dns_family: string[]
+  upstreams: UpstreamInput[]
+  acme_config_id?: number
+  ca_provider_id?: number
+  enabled: boolean
+}
+
+interface CertificateConfig {
+  id: number
   name: string
-  description?: string
-  protocol: string
+  dns_provider: string
+  dns_credentials: string
+  enabled: boolean
+  created_at: string
+  updated_at: Rule['updated_at']
+}
+
+interface CAProvider {
+  id: number
+  name: string
+  provider: string
+  directory_url: string
+  credentials?: string
+  max_concurrent: number
+  min_interval_ms: number
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+interface GlobalConfigSummary {
+  default_ca_provider_id?: number
+}
+
+interface UpstreamHealthDetail {
+  healthy: boolean
+  unknown: boolean
+  degraded: boolean
+  num_requests: number
+  fails: number
+}
+
+type UpstreamHealthResponse = Record<string, Record<string, UpstreamHealthDetail>>
+
+interface CertificateParseResult {
+  valid: boolean
+  domain: string
+  issuer: string
+  not_before: string
+  not_after: string
+  days_until_expiry: number
+  warning?: string
+  error?: string
+}
+
+interface RuleCaddyConfigResponse {
+  caddy_id: string
+  enabled: boolean
+  config?: object | null
+  config_not_exists?: boolean
+}
+
+interface RuleConfigView {
+  id: number
+  caddy_id: string
+  name: string
   domain: string
   listen_port: number
+  protocol: string
   strategy: string
   dynamic_dns: boolean
   enable_dns_server: boolean
   dns_server: string
-  dns_family: string[]
-  health_check_path: string
-  health_check_interval: number
-  health_check_timeout: number
-  health_check_healthy_threshold: number
-  health_check_unhealthy_threshold: number
-  enable_active_health_check: boolean
-  tcp_health_check_port?: number
-  tcp_try_duration?: number
-  tcp_try_interval?: number
   host_header: string
-  upstreams: Upstream[]
   enable_tls: boolean
-  tls_source?: string
-  acme_config_id?: number | undefined
-  ca_provider_id?: number | undefined
-  tls_cert: string
-  tls_key: string
+  tls_source: string
   tls_http_redirect: boolean
   enable_compress: boolean
   compress_types: string
-  request_body_max_size_mb?: number
-  upstream_keepalive_timeout?: number
-  server_tokens_hidden?: number
+  health_check_path: string
+  health_check_interval: number
+  health_check_timeout: number
+  health_check_unhealthy_threshold: number
+  enable_active_health_check: boolean
+  tcp_health_check_port: number
+  tcp_try_duration: number
+  tcp_try_interval: number
+  request_body_max_size_mb: number
+  upstream_keepalive_timeout: number
+  server_tokens_hidden: number
+  upstreams: Upstream[]
   enabled: boolean
-  log_enabled?: boolean
-  ip_acl_mode: IpAclMode
-  ip_acl_list: string[]
-  custom_routes_enabled: boolean
-  path_rules: PathRule[]
-  created_by?: number
-  updated_by?: number
-  creator_name?: string
-  created_at?: string
-  updated_at?: any
+  config: object | null
+}
+
+interface RuleLogData {
+  content: string
+  offset: number
+}
+
+interface RuleLogStreamData {
+  offset: number
+  lines: string[]
+}
+
+interface CaddyLogRequest {
+  client_ip?: string
+  src_ip?: string
+  src?: string
+  remote_ip?: string
+  uri?: string
+  uri_path?: string
+  user_agent?: string
+  headers?: Record<string, string[] | undefined>
+}
+
+interface CaddyLogEntry {
+  request?: CaddyLogRequest
+}
+
+interface LogStatItem {
+  value: string
+  count: number
+}
+
+interface RuleLogStats {
+  total: number
+  started_at: string
+  top_ips: LogStatItem[]
+  top_uas: LogStatItem[]
+  top_uris: LogStatItem[]
 }
 
 const authStore = useAuthStore()
@@ -1072,8 +1156,8 @@ const filteredRules = computed(() => {
 })
 
 const ruleUpdatedAtMs = (rule: Rule): number => {
-  const value: any = rule.updated_at
-  const raw = typeof value === 'object' && value !== null && 'Time' in value ? value.Time : value
+  const value = rule.updated_at
+  const raw = typeof value === 'object' && value !== null ? value.Time : value
   const t = raw ? new Date(raw).getTime() : 0
   return Number.isNaN(t) ? 0 : t
 }
@@ -1086,7 +1170,7 @@ const pagedRules = computed(() => {
 watch(searchQuery, () => {
   currentPage.value = 1
 })
-const users = ref<any[]>([])
+const users = ref<User[]>([])
 const certInfoMap = ref<Record<string, CertInfo | null>>({})
 const certJobMap = ref<Record<string, CertJob>>({})
 const ruleTogglePending = ref<Record<string, boolean>>({})
@@ -1112,7 +1196,7 @@ const getUpdaterName = (userId?: number) => {
 const fetchRules = async () => {
   loading.value = true
   try {
-    const res = await request.get('/rules')
+    const res = await request.get<APIResponse<Rule[]>>('/rules')
     rules.value = res.data || []
     // Fetch health status after rules are loaded
     fetchHealthStatus()
@@ -1132,11 +1216,11 @@ const fetchCertInfo = async () => {
     return
   }
   try {
-    const res = await request.post('/rules/cert-info', {
+    const res = await request.post<APIResponse<Record<string, CertInfo | null>>>('/rules/cert-info', {
       caddy_ids: tlsRules.map(r => r.caddy_id)
     })
     certInfoMap.value = res.data || {}
-  } catch (e: any) {
+  } catch {
     // Non-critical: keep existing cert info map or clear it
     certInfoMap.value = {}
   }
@@ -1147,7 +1231,7 @@ const fetchCertJobs = async () => {
   if (certJobsInFlight) return
   certJobsInFlight = true
   try {
-    const res = await request.get('/certificates/jobs')
+    const res = await request.get<APIResponse<CertJob[]>>('/certificates/jobs')
     const jobs: CertJob[] = res.data || []
     const map: Record<string, CertJob> = {}
     jobs.forEach(job => {
@@ -1160,7 +1244,7 @@ const fetchCertJobs = async () => {
       }
     })
     certJobMap.value = map
-  } catch (e: any) {
+  } catch {
     certJobMap.value = {}
   } finally {
     certJobsInFlight = false
@@ -1254,10 +1338,10 @@ const WIZARD_STEP = {
 type WizardStep = (typeof WIZARD_STEP)[keyof typeof WIZARD_STEP]
 const currentStep = ref<WizardStep>(WIZARD_STEP.BASIC)
 const upstreamTouched = ref<boolean[]>([])
-const certConfigs = ref<any[]>([])
-const caProviders = ref<Array<{ id: number; name: string; enabled: boolean }>>([])
+const certConfigs = ref<CertificateConfig[]>([])
+const caProviders = ref<CAProvider[]>([])
 const enabledCAProviders = computed(() => caProviders.value.filter(p => p.enabled))
-const globalConfig = ref<{ default_ca_provider_id?: number }>({})
+const globalConfig = ref<GlobalConfigSummary>({})
 const healthStatus = ref<Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }>>({})
 let healthPollTimer: ReturnType<typeof setInterval> | null = null
 let certJobPollTimer: ReturnType<typeof setInterval> | null = null
@@ -1281,14 +1365,15 @@ const saveAcl = async (value: { readonly mode: IpAclMode; readonly cidrs: readon
   if (!target || isReadOnly.value || aclSaving.value) return
   aclSaving.value = true
   try {
-    const response = await request.get<{ readonly data: Rule }>(`/rules/${target.caddy_id}`)
-    await request.put(`/rules/${target.caddy_id}`, {
-      ...response.data,
+    const payload: RuleAclRequest = {
       ip_acl_mode: value.mode,
       ip_acl_list: [...value.cidrs],
-    })
+    }
+    await request.post<APIResponse>(`/rules/${target.caddy_id}/acl`, payload)
     ElMessage.success('访问控制已保存')
-    aclDialogVisible.value = false
+    if (aclTarget.value?.caddy_id === target.caddy_id) {
+      aclDialogVisible.value = false
+    }
     await fetchRules()
   } finally {
     aclSaving.value = false
@@ -1305,38 +1390,7 @@ const ruleLogContainerRef = ref<HTMLElement | null>(null)
 let ruleLogPollTimer: ReturnType<typeof setInterval> | null = null
 
 const ruleLogHtml = computed(() => ansiToHtml(ruleLogContent.value || '暂无日志'))
-const ruleConfig = ref<{
-  id: number
-  caddy_id: string
-  name: string
-  domain: string
-  listen_port: number
-  protocol: string
-  strategy: string
-  dynamic_dns: boolean
-  enable_dns_server: boolean
-  dns_server: string
-  host_header: string
-  enable_tls: boolean
-  tls_source: string
-  tls_http_redirect: boolean
-  enable_compress: boolean
-  compress_types: string
-  health_check_path: string
-  health_check_interval: number
-  health_check_timeout: number
-  health_check_unhealthy_threshold: number
-  enable_active_health_check: boolean
-  tcp_health_check_port: number
-  tcp_try_duration: number
-  tcp_try_interval: number
-  request_body_max_size_mb: number
-  upstream_keepalive_timeout: number
-  server_tokens_hidden: number
-  upstreams: any[]
-  enabled: boolean
-  config: any
-} | null>(null)
+const ruleConfig = ref<RuleConfigView | null>(null)
 
 const upstreamHostWarning = computed(() => {
   const hasEmptyHost = wizardForm.upstreams.some((u, i) => !u.host && upstreamTouched.value[i])
@@ -1362,7 +1416,7 @@ const getHealthLabel = (status: HealthSummary) => {
   return '正常'
 }
 
-const getUpstreamHealthStatus = (ruleId: string, upstream: any) => {
+const getUpstreamHealthStatus = (ruleId: string, upstream: Upstream | UpstreamInput) => {
   const status = healthStatus.value[ruleId]
   if (!status || !status.upstreams) return { healthy: false, unknown: true }
   const upstreamKey = `${upstream.host}:${upstream.port}`
@@ -1370,7 +1424,7 @@ const getUpstreamHealthStatus = (ruleId: string, upstream: any) => {
   return upstreamData ? { healthy: upstreamData.healthy, unknown: upstreamData.unknown, degraded: upstreamData.degraded } : { healthy: false, unknown: true, degraded: false }
 }
 
-const getUpstreamMetrics = (ruleId: string, upstream: any) => {
+const getUpstreamMetrics = (ruleId: string, upstream: Upstream | UpstreamInput) => {
   const status = healthStatus.value[ruleId]
   if (!status || !status.upstreams) return { num_requests: 0, fails: 0 }
   const upstreamKey = `${upstream.host}:${upstream.port}`
@@ -1381,7 +1435,7 @@ const getUpstreamMetrics = (ruleId: string, upstream: any) => {
   }
 }
 
-const formatUpdatedTime = (updatedAt: any): string => {
+const formatUpdatedTime = (updatedAt: Rule['updated_at']): string => {
   if (!updatedAt) return '-'
   return formatDate(updatedAt) || '-'
 }
@@ -1391,7 +1445,7 @@ const fetchHealthStatus = async () => {
   if (healthInFlight) return
   healthInFlight = true
   try {
-    const res = await request.get('/config/health')
+    const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health')
     const healthData = res.data || {}
     console.log('Health data received:', JSON.stringify(healthData))
     
@@ -1412,7 +1466,7 @@ const fetchHealthStatus = async () => {
           let numRequests = 0
           let fails = 0
           
-          for (const serverHealth of Object.values(healthData) as any[]) {
+          for (const serverHealth of Object.values(healthData)) {
             if (serverHealth && typeof serverHealth === 'object') {
               if (upstreamKey in serverHealth) {
                 const detail = serverHealth[upstreamKey]
@@ -1447,7 +1501,7 @@ const fetchHealthStatus = async () => {
   }
 }
 
-const defaultUpstream = (protocol: string = 'http'): Upstream => ({
+const defaultUpstream = (protocol: string = 'http'): UpstreamInput => ({
   host: '',
   port: protocol === 'tcp' ? 8080 : 80,
   weight: 1,
@@ -1469,7 +1523,7 @@ const certInfo = reactive({
   error: ''
 })
 
-const wizardForm = reactive<Rule>({
+const wizardForm = reactive<RuleForm>({
   caddy_id: '',
   name: '',
   description: '',
@@ -1651,7 +1705,7 @@ const getStrategyLabel = (strategy: string) => {
 
 const fetchUsers = async () => {
   try {
-    const res = await request.get('/users')
+    const res = await request.get<APIResponse<User[]>>('/users')
     users.value = res.data || []
   } catch (e) {
     console.error('Failed to fetch users:', e)
@@ -1660,7 +1714,7 @@ const fetchUsers = async () => {
 
 const fetchCertConfigs = async () => {
   try {
-    const res = await request.get('/certificate-configs')
+    const res = await request.get<APIResponse<CertificateConfig[]>>('/certificate-configs')
     certConfigs.value = res.data || []
   } catch (e) {
     console.error('Failed to fetch cert configs:', e)
@@ -1669,7 +1723,7 @@ const fetchCertConfigs = async () => {
 
 const fetchCAProviders = async () => {
   try {
-    const res = await request.get('/ca-providers')
+    const res = await request.get<APIResponse<CAProvider[]>>('/ca-providers')
     caProviders.value = res.data || []
   } catch (e) {
     console.error('Failed to load CA providers:', e)
@@ -1678,7 +1732,7 @@ const fetchCAProviders = async () => {
 
 const fetchGlobalConfig = async () => {
   try {
-    const res = await request.get('/config')
+    const res = await request.get<APIResponse<GlobalConfigSummary>>('/config')
     globalConfig.value = res.data || {}
   } catch (e) {
     console.error('Failed to load global config:', e)
@@ -1727,7 +1781,7 @@ const validateCertificate = async () => {
 
   // Call backend API to parse certificate
   try {
-    const res = await request.post('/certificates/parse', {
+    const res = await request.post<APIResponse<CertificateParseResult>>('/certificates/parse', {
       cert_pem: certPEM,
       key_pem: keyPEM
     })
@@ -1744,9 +1798,23 @@ const validateCertificate = async () => {
     } else {
       certInfo.error = res.message || '证书验证失败'
     }
-  } catch (e: any) {
-    certInfo.error = e.message || '证书验证请求失败'
+  } catch (error: unknown) {
+    certInfo.error = error instanceof Error ? error.message : '证书验证请求失败'
   }
+}
+
+const selectedCompressType = (value: string | string[]): string => {
+  if (Array.isArray(value) && value.length > 0) return value[0]
+  if (typeof value === 'string') return value.split(',')[0].trim()
+  return 'gzip'
+}
+
+const selectedDnsFamilies = (value: string | string[]): string[] => {
+  if (Array.isArray(value)) return value
+  if (value === 'both') return ['ipv4', 'ipv6']
+  if (value === 'ipv4') return ['ipv4']
+  if (value === 'ipv6') return ['ipv6']
+  return ['ipv4']
 }
 
 const pasteFromFile = async (type: 'cert' | 'key') => {
@@ -1784,14 +1852,7 @@ const openWizard = (rule?: Rule) => {
   isCopyMode.value = false
   if (rule) {
     editingRule.value = rule
-    let compressType = 'gzip'
-    if (rule.compress_types) {
-      if (Array.isArray(rule.compress_types) && rule.compress_types.length > 0) {
-        compressType = rule.compress_types[0] as string
-      } else if (typeof rule.compress_types === 'string') {
-        compressType = (rule.compress_types as string).split(',')[0].trim()
-      }
-    }
+    const compressType = rule.compress_types ? selectedCompressType(rule.compress_types) : 'gzip'
     Object.assign(wizardForm, {
       name: rule.name,
       description: rule.description || '',
@@ -1800,18 +1861,18 @@ const openWizard = (rule?: Rule) => {
       listen_port: rule.listen_port,
       strategy: rule.strategy || 'weighted_round_robin',
       dynamic_dns: rule.dynamic_dns || false,
-      enable_dns_server: (rule as any).enable_dns_server || false,
-      dns_server: (rule as any).dns_server || '',
-      dns_family: (() => { const df = (rule as any).dns_family; if (Array.isArray(df)) return df; if (df === 'both') return ['ipv4', 'ipv6']; if (df === 'ipv4') return ['ipv4']; if (df === 'ipv6') return ['ipv6']; return ['ipv4']; })(),
+      enable_dns_server: rule.enable_dns_server || false,
+      dns_server: rule.dns_server || '',
+      dns_family: selectedDnsFamilies(rule.dns_family),
       health_check_path: rule.health_check_path || '',
       health_check_interval: rule.health_check_interval || 10,
       health_check_timeout: rule.health_check_timeout || 5,
       health_check_healthy_threshold: rule.health_check_healthy_threshold || 2,
       health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
       enable_active_health_check: rule.enable_active_health_check === true,
-      tcp_health_check_port: (rule as any).tcp_health_check_port || 0,
-      tcp_try_duration: (rule as any).tcp_try_duration || 0,
-      tcp_try_interval: (rule as any).tcp_try_interval ?? 250,
+      tcp_health_check_port: rule.tcp_health_check_port || 0,
+      tcp_try_duration: rule.tcp_try_duration || 0,
+      tcp_try_interval: rule.tcp_try_interval ?? 250,
       host_header: rule.host_header || '',
       upstreams: rule.upstreams?.map(u => ({
         ...u,
@@ -1829,11 +1890,11 @@ const openWizard = (rule?: Rule) => {
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
       compress_types: compressType,
-      request_body_max_size_mb: (rule as any).request_body_max_size_mb || 0,
-      upstream_keepalive_timeout: (rule as any).upstream_keepalive_timeout || 0,
-      server_tokens_hidden: (rule as any).server_tokens_hidden || 0,
+      request_body_max_size_mb: rule.request_body_max_size_mb || 0,
+      upstream_keepalive_timeout: rule.upstream_keepalive_timeout || 0,
+      server_tokens_hidden: rule.server_tokens_hidden || 0,
       enabled: rule.enabled,
-      log_enabled: (rule as any).log_enabled || false,
+      log_enabled: rule.log_enabled || false,
       ip_acl_mode: rule.ip_acl_mode || '',
       ip_acl_list: [...(rule.ip_acl_list || [])],
       custom_routes_enabled: rule.custom_routes_enabled === true,
@@ -1950,7 +2011,7 @@ const onWeightChange = (changedIdx: number) => {
   }
 }
 
-const weightsToPercent = (upstreams: any[]) => {
+const weightsToPercent = (upstreams: UpstreamInput[]) => {
   const enabled = upstreams.filter(u => u.enabled)
   const sum = enabled.reduce((s, u) => s + (u.weight || 0), 0)
   if (enabled.length === 0) return
@@ -1971,7 +2032,7 @@ const weightsToPercent = (upstreams: any[]) => {
   })
 }
 
-const weightPercent = (upstreams: any[] | undefined, row: any): number => {
+const weightPercent = (upstreams: readonly (Upstream | UpstreamInput)[] | undefined, row: Upstream | UpstreamInput): number => {
   if (!upstreams?.length) return 0
   const sum = upstreams.reduce((s, u) => s + (u.weight || 0), 0)
   if (sum <= 0) return 0
@@ -2129,7 +2190,7 @@ const submitWizard = async () => {
       proxy_protocol: u.proxy_protocol ?? '',
     }))
 
-    const data = {
+    const data: UpdateRuleRequest = {
       name: wizardForm.name,
       description: wizardForm.description,
       protocol: wizardForm.protocol,
@@ -2183,17 +2244,17 @@ const submitWizard = async () => {
     }
 
     if (editingRule.value) {
-      await request.put(`/rules/${editingRule.value.caddy_id}`, data)
+      await request.put<APIResponse>(`/rules/${editingRule.value.caddy_id}`, data)
     } else {
-      await request.post('/rules', data)
+      await request.post<APIResponse>('/rules', data)
     }
 
     ElMessage.success(editingRule.value ? '更新成功' : '创建成功')
     wizardVisible.value = false
     fetchRules()
-  } catch (e: any) {
+  } catch (error: unknown) {
     // Error message is already shown by the global axios interceptor.
-    console.error('submit wizard failed', e)
+    console.error('submit wizard failed', error)
   } finally {
     saving.value = false
   }
@@ -2208,9 +2269,9 @@ const toggleRule = async (rule: Rule) => {
   try {
     await ElMessageBox.confirm(`确定要${action}规则 "${rule.name}" 吗？`, `${action}确认`, { type: 'warning' })
     if (rule.enabled) {
-      await request.post(`/rules/${rule.caddy_id}/enable`)
+      await request.post<APIResponse>(`/rules/${rule.caddy_id}/enable`)
     } else {
-      await request.put(`/rules/${rule.caddy_id}/disable`)
+      await request.put<APIResponse>(`/rules/${rule.caddy_id}/disable`)
     }
     ElMessage.success(`${action}成功`)
     await fetchRules()
@@ -2225,7 +2286,7 @@ const deleteRule = async (rule: Rule) => {
   if (isReadOnly.value) return
   try {
     await ElMessageBox.confirm(`确定要删除规则 "${rule.name}" 吗？`, '删除确认', { type: 'warning' })
-    await request.delete(`/rules/${rule.caddy_id}`)
+    await request.delete<APIResponse>(`/rules/${rule.caddy_id}`)
     ElMessage.success('删除成功')
     fetchRules()
   } catch (e) {}
@@ -2242,14 +2303,7 @@ const duplicateRule = async (rule: Rule) => {
 const openCopyWizard = (rule: Rule) => {
   editingRule.value = null
   isCopyMode.value = true
-  let compressType = 'gzip'
-  if (rule.compress_types) {
-    if (Array.isArray(rule.compress_types) && rule.compress_types.length > 0) {
-      compressType = rule.compress_types[0] as string
-    } else if (typeof rule.compress_types === 'string') {
-      compressType = (rule.compress_types as string).split(',')[0].trim()
-    }
-  }
+  const compressType = rule.compress_types ? selectedCompressType(rule.compress_types) : 'gzip'
   Object.assign(wizardForm, {
     caddy_id: '',
     id: undefined,
@@ -2260,18 +2314,18 @@ const openCopyWizard = (rule: Rule) => {
     listen_port: rule.listen_port,
     strategy: rule.strategy || 'weighted_round_robin',
     dynamic_dns: rule.dynamic_dns || false,
-    enable_dns_server: (rule as any).enable_dns_server || false,
-    dns_server: (rule as any).dns_server || '',
-    dns_family: (() => { const df = (rule as any).dns_family; if (Array.isArray(df)) return df; if (df === 'both') return ['ipv4', 'ipv6']; if (df === 'ipv4') return ['ipv4']; if (df === 'ipv6') return ['ipv6']; return ['ipv4']; })(),
+    enable_dns_server: rule.enable_dns_server || false,
+    dns_server: rule.dns_server || '',
+    dns_family: selectedDnsFamilies(rule.dns_family),
     health_check_path: rule.health_check_path || '',
     health_check_interval: rule.health_check_interval || 10,
     health_check_timeout: rule.health_check_timeout || 5,
     health_check_healthy_threshold: rule.health_check_healthy_threshold || 2,
     health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
     enable_active_health_check: rule.enable_active_health_check === true,
-    tcp_health_check_port: (rule as any).tcp_health_check_port || 0,
-    tcp_try_duration: (rule as any).tcp_try_duration || 0,
-    tcp_try_interval: (rule as any).tcp_try_interval ?? 250,
+    tcp_health_check_port: rule.tcp_health_check_port || 0,
+    tcp_try_duration: rule.tcp_try_duration || 0,
+    tcp_try_interval: rule.tcp_try_interval ?? 250,
     host_header: rule.host_header || '',
     upstreams: rule.upstreams?.map(u => ({
       ...u,
@@ -2285,10 +2339,10 @@ const openCopyWizard = (rule: Rule) => {
     acme_config_id: rule.acme_config_id || undefined,
     ca_provider_id: rule.ca_provider_id ?? 0,
     tls_cert: rule.tls_cert || '',
-    request_body_max_size_mb: (rule as any).request_body_max_size_mb || 0,
-    upstream_keepalive_timeout: (rule as any).upstream_keepalive_timeout || 0,
-    server_tokens_hidden: (rule as any).server_tokens_hidden || 0,
-    log_enabled: (rule as any).log_enabled || false,
+    request_body_max_size_mb: rule.request_body_max_size_mb || 0,
+    upstream_keepalive_timeout: rule.upstream_keepalive_timeout || 0,
+    server_tokens_hidden: rule.server_tokens_hidden || 0,
+    log_enabled: rule.log_enabled || false,
     ip_acl_mode: rule.ip_acl_mode || '',
     ip_acl_list: [...(rule.ip_acl_list || [])],
     custom_routes_enabled: rule.custom_routes_enabled === true,
@@ -2320,17 +2374,10 @@ const viewConfig = async (rule: Rule) => {
   
   try {
     // Get rule-specific Caddy config from API
-    const res = await request.get(`/rules/${rule.caddy_id}/caddy-config`)
+    const res = await request.get<APIResponse<RuleCaddyConfigResponse>>(`/rules/${rule.caddy_id}/caddy-config`)
      
     // Build the display config
-    let compressType = 'gzip'
-    if (rule.compress_types) {
-      if (Array.isArray(rule.compress_types) && rule.compress_types.length > 0) {
-        compressType = rule.compress_types[0] as string
-      } else if (typeof rule.compress_types === 'string') {
-        compressType = (rule.compress_types as string).split(',')[0].trim()
-      }
-    }
+    const compressType = rule.compress_types ? selectedCompressType(rule.compress_types) : 'gzip'
     
     ruleConfig.value = {
       id: rule.id || 0,
@@ -2341,8 +2388,8 @@ const viewConfig = async (rule: Rule) => {
       protocol: rule.protocol || 'http',
       strategy: rule.strategy || 'weighted_round_robin',
       dynamic_dns: rule.dynamic_dns || false,
-      enable_dns_server: (rule as any).enable_dns_server || false,
-      dns_server: (rule as any).dns_server || '',
+      enable_dns_server: rule.enable_dns_server || false,
+      dns_server: rule.dns_server || '',
       host_header: rule.host_header || '',
       enable_tls: rule.enable_tls || false,
       tls_source: rule.tls_source || 'manual',
@@ -2354,19 +2401,19 @@ const viewConfig = async (rule: Rule) => {
       health_check_timeout: rule.health_check_timeout || 5,
       health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
       enable_active_health_check: rule.enable_active_health_check === true,
-      tcp_health_check_port: (rule as any).tcp_health_check_port || 0,
-      tcp_try_duration: (rule as any).tcp_try_duration || 0,
-      tcp_try_interval: (rule as any).tcp_try_interval ?? 250,
-      request_body_max_size_mb: (rule as any).request_body_max_size_mb || 0,
-      upstream_keepalive_timeout: (rule as any).upstream_keepalive_timeout || 0,
-      server_tokens_hidden: (rule as any).server_tokens_hidden || 0,
+      tcp_health_check_port: rule.tcp_health_check_port || 0,
+      tcp_try_duration: rule.tcp_try_duration || 0,
+      tcp_try_interval: rule.tcp_try_interval ?? 250,
+      request_body_max_size_mb: rule.request_body_max_size_mb || 0,
+      upstream_keepalive_timeout: rule.upstream_keepalive_timeout || 0,
+      server_tokens_hidden: rule.server_tokens_hidden || 0,
       upstreams: rule.upstreams || [],
       enabled: rule.enabled !== false,
       config: res.data?.config || {}
     }
-  } catch (e: any) {
+  } catch (error: unknown) {
     // Error message is already shown by the global axios interceptor.
-    console.error('view config failed', e)
+    console.error('view config failed', error)
     ruleConfig.value = {
       id: rule.id || 0,
       caddy_id: '',
@@ -2376,8 +2423,8 @@ const viewConfig = async (rule: Rule) => {
       protocol: rule.protocol || 'http',
       strategy: rule.strategy || 'weighted_round_robin',
       dynamic_dns: rule.dynamic_dns || false,
-      enable_dns_server: (rule as any).enable_dns_server || false,
-      dns_server: (rule as any).dns_server || '',
+      enable_dns_server: rule.enable_dns_server || false,
+      dns_server: rule.dns_server || '',
       host_header: rule.host_header || '',
       enable_tls: rule.enable_tls || false,
       tls_source: rule.tls_source || 'manual',
@@ -2389,15 +2436,15 @@ const viewConfig = async (rule: Rule) => {
       health_check_timeout: rule.health_check_timeout || 5,
       health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
       enable_active_health_check: rule.enable_active_health_check === true,
-      tcp_health_check_port: (rule as any).tcp_health_check_port || 0,
-      tcp_try_duration: (rule as any).tcp_try_duration || 0,
-      tcp_try_interval: (rule as any).tcp_try_interval ?? 250,
-      request_body_max_size_mb: (rule as any).request_body_max_size_mb || 0,
-      upstream_keepalive_timeout: (rule as any).upstream_keepalive_timeout || 0,
-      server_tokens_hidden: (rule as any).server_tokens_hidden || 0,
+      tcp_health_check_port: rule.tcp_health_check_port || 0,
+      tcp_try_duration: rule.tcp_try_duration || 0,
+      tcp_try_interval: rule.tcp_try_interval ?? 250,
+      request_body_max_size_mb: rule.request_body_max_size_mb || 0,
+      upstream_keepalive_timeout: rule.upstream_keepalive_timeout || 0,
+      server_tokens_hidden: rule.server_tokens_hidden || 0,
       upstreams: rule.upstreams || [],
       enabled: rule.enabled !== false,
-      config: { error: '获取配置失败', details: e.message }
+      config: { error: '获取配置失败', details: error instanceof Error ? error.message : undefined }
     }
   } finally {
     configLoading.value = false
@@ -2411,7 +2458,7 @@ const openRuleLogDialog = (rule: Rule) => {
 }
 
 const ruleLogTab = ref('log')
-const ruleLogStats = ref<any>(null)
+const ruleLogStats = ref<RuleLogStats | null>(null)
 const logStatsOffset = ref(0)
 const logStatsMaps = ref<{ ip: Record<string, number>; ua: Record<string, number>; uri: Record<string, number>; total: number; startedAt: string } | null>(null)
 const logStatsInFlight = ref(false)
@@ -2447,7 +2494,7 @@ const generalizeUA = (ua: string): string => {
 }
 
 const consumeLogLine = (maps: { ip: Record<string, number>; ua: Record<string, number>; uri: Record<string, number>; total: number }, line: string) => {
-  let entry: any
+  let entry: CaddyLogEntry
   try {
     entry = JSON.parse(line)
   } catch {
@@ -2492,15 +2539,15 @@ const fetchLogStream = async () => {
   if (!ruleLogCaddyId.value || logStatsInFlight.value) return
   logStatsInFlight.value = true
   try {
-    const res: any = await request.get(`/rules/${ruleLogCaddyId.value}/log-stream`, { params: { offset: logStatsOffset.value } })
+    const res = await request.get<APIResponse<RuleLogStreamData>>(`/rules/${ruleLogCaddyId.value}/log-stream`, { params: { offset: logStatsOffset.value } })
     const lines: string[] = res.data?.lines || []
     if (logStatsMaps.value && lines.length) {
       for (const line of lines) consumeLogLine(logStatsMaps.value, line)
       rebuildStatsView()
     }
     logStatsOffset.value = res.data?.offset ?? logStatsOffset.value
-  } catch (e: any) {
-    console.error('Failed to fetch log stream:', e)
+  } catch (error: unknown) {
+    console.error('Failed to fetch log stream:', error)
   } finally {
     logStatsInFlight.value = false
   }
@@ -2510,15 +2557,15 @@ const startLogStats = async () => {
   logStatsMaps.value = { ip: {}, ua: {}, uri: {}, total: 0, startedAt: new Date().toLocaleString() }
   logStatsOffset.value = 0
   try {
-    const res: any = await request.get(`/rules/${ruleLogCaddyId.value}/logs`)
+    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${ruleLogCaddyId.value}/logs`)
     const content: string = res.data?.content || ''
     for (const line of content.split('\n')) {
       if (line.trim()) consumeLogLine(logStatsMaps.value, line)
     }
     rebuildStatsView()
     logStatsOffset.value = res.data?.offset ?? 0
-  } catch (e: any) {
-    console.error('Failed to init log stats:', e)
+  } catch (error: unknown) {
+    console.error('Failed to init log stats:', error)
   }
 }
 
@@ -2565,14 +2612,14 @@ const refreshRuleLogs = async () => {
   if (!ruleLogCaddyId.value || ruleLogLoading.value) return
   ruleLogLoading.value = true
   try {
-    const res: any = await request.get(`/rules/${ruleLogCaddyId.value}/logs`)
+    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${ruleLogCaddyId.value}/logs`)
     ruleLogContent.value = res.data?.content || ''
     nextTick(() => {
       const el = ruleLogContainerRef.value
       if (el) el.scrollTop = el.scrollHeight
     })
-  } catch (e: any) {
-    console.error('Failed to fetch rule logs:', e)
+  } catch (error: unknown) {
+    console.error('Failed to fetch rule logs:', error)
   } finally {
     ruleLogLoading.value = false
   }

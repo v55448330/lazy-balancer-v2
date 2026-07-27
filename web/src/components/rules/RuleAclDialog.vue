@@ -4,7 +4,7 @@
     :title="`访问控制 — ${ruleName}`"
     width="min(620px, 92vw)"
     :close-on-click-modal="false"
-    @update:model-value="emit('update:visible', $event)"
+    @update:model-value="!saving && emit('update:visible', $event)"
   >
     <el-form label-width="100px">
       <el-form-item label="访问模式">
@@ -30,7 +30,7 @@
     </el-form>
 
     <template #footer>
-      <el-button @click="emit('update:visible', false)">取消</el-button>
+      <el-button :disabled="saving" @click="emit('update:visible', false)">取消</el-button>
       <el-button type="primary" :loading="saving" @click="submit">保存</el-button>
     </template>
   </el-dialog>
@@ -82,8 +82,14 @@ const removeCidr = (index: number): void => {
   validationError.value = ''
 }
 
+const normalizeCidr = (rawValue: string): string => {
+  const value = rawValue.trim()
+  if (!value || value.includes('/')) return value
+  return value.includes(':') ? `${value}/128` : `${value}/32`
+}
+
 const submit = (): void => {
-  const normalizedCidrs = cidrs.value.map((cidr) => cidr.trim())
+  const normalizedCidrs = cidrs.value.map(normalizeCidr).filter((cidr) => cidr !== '')
   if (mode.value && normalizedCidrs.length === 0) {
     validationError.value = '请至少添加一个 CIDR'
     return

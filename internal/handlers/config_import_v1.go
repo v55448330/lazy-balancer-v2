@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"log"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -50,7 +50,6 @@ type v1Proxy struct {
 		SSLRedirectHTTPS    bool   `json:"ssl_redirect_https"`
 		SSLCert             string `json:"ssl_cert"`
 		SSLKey              string `json:"ssl_key"`
-		CustomConfig        string `json:"custom_config"`
 		BackendProtocol     string `json:"backend_protocol"`
 		BackendDomainToggle bool   `json:"backend_domain_toggle"`
 		BackendDomain       string `json:"backend_domain"`
@@ -354,12 +353,15 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		}
 		imported++
 	}
+	h.caddyOpMu.Lock()
 	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
+		h.caddyOpMu.Unlock()
 		services.MaterializeAllCertsFromDB()
 		recordAudit(c, "导入失败", "配置备份", "Caddy 配置验证未通过，数据库未变更: "+err.Error())
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份生成的配置未通过 Caddy 验证，未执行导入: " + err.Error()})
 		return
 	}
+	h.caddyOpMu.Unlock()
 	if err := services.BumpClusterVersion(ctx, tx); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新配置版本失败"})
 		return

@@ -12,6 +12,11 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
+// CurrentSnapshotSchema 是本方能够读取的快照结构版本。仅做增量字段时不递增
+// （旧读取端会忽略未知字段）；发生破坏性结构变更时递增，并在构建快照时同步
+// 抬高 MinReaderVersion，让过旧的读取端明确拒绝而不是静默降级。
+const CurrentSnapshotSchema = 1
+
 // Snapshot builds the full cluster snapshot. tokenKey signs the payload with
 // the requesting node's cluster token (HMAC-SHA256) so slaves can verify
 // authenticity, not just integrity; leave empty to skip signing (legacy path).
@@ -20,6 +25,8 @@ func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientF
 	if err != nil {
 		return models.ClusterSnapshot{}, false, err
 	}
+	snapshot.SchemaVersion = CurrentSnapshotSchema
+	snapshot.MinReaderVersion = 1
 	canonical := snapshot
 	canonical.Fingerprint = ""
 	canonical.Version = 0

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/config"
@@ -21,6 +22,7 @@ type Handlers struct {
 	syncService       *services.SyncService
 	clusterService    *services.ClusterService
 	caProviderService *services.CAProviderService
+	caddyOpMu         sync.Mutex
 }
 
 type Dependencies struct {
@@ -115,11 +117,15 @@ func (h *Handlers) applyCaddyConfig() {
 }
 
 func (h *Handlers) applyCaddyConfigE() error {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
 	config := services.GenerateCaddyConfig(h.cfg)
 	return h.caddyService.ApplyConfig(config)
 }
 
 func (h *Handlers) applyCaddyConfigWithRollback() error {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
 	// Backup current Caddy config before applying
 	if err := h.caddyService.BackupConfig(); err != nil {
 		log.Printf("Warning: Failed to backup Caddy config: %v", err)

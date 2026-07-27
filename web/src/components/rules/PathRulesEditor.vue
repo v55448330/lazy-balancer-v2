@@ -28,7 +28,13 @@
 
           <label class="rule-field path-field">
             <span class="rule-field-label">路径</span>
-            <el-input v-model="rule.path" :aria-label="`路径规则 ${index + 1} 的路径`" placeholder="例如：/api" />
+            <el-input
+              v-model="rule.path"
+              :aria-label="`路径规则 ${index + 1} 的路径`"
+              placeholder="例如：/api"
+              :class="{ 'is-error-input': rowError(index) }"
+            />
+            <span v-if="rowError(index)" class="path-field-error">{{ rowError(index) }}</span>
           </label>
 
           <div class="path-rule-actions">
@@ -88,6 +94,20 @@ import { ArrowDown, ArrowUp, Delete, Plus } from '@element-plus/icons-vue'
 import type { PathRule, PathRuleUpstream } from '@/types'
 
 const pathRules = defineModel<PathRule[]>({ required: true })
+
+const rowError = (index: number): string => {
+  const rule = pathRules.value[index]
+  if (!rule) return ''
+  const path = rule.path.trim()
+  if (path !== '' && !path.startsWith('/')) return '必须以 / 开头'
+  if (/[*?{}]/.test(path)) return '不能包含 * ? { } 通配字符'
+  if (path !== '') {
+    const dupIndex = pathRules.value.findIndex((other, otherIndex) =>
+      otherIndex !== index && other.match_type === rule.match_type && other.path.trim() === path)
+    if (dupIndex >= 0) return `与规则 ${dupIndex + 1} 重复`
+  }
+  return ''
+}
 
 const normalizeOrder = (): void => {
   pathRules.value.forEach((rule, index) => { rule.sort_order = index })
@@ -166,5 +186,14 @@ const removeUpstream = (rule: PathRule, index: number): void => {
   .upstream-address-field { grid-column: 1 / -1; }
   .mobile-field-label { display: inline; }
   .upstream-row > .el-button { justify-self: end; }
+}
+.path-field-error {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-color-danger);
+}
+.is-error-input :deep(.el-input__wrapper) {
+  box-shadow: 0 0 0 1px var(--el-color-danger) inset;
 }
 </style>

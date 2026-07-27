@@ -155,15 +155,15 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	       enabled, created_at, updated_at, COALESCE(host_header,''), caddy_id
 	FROM lb_rules WHERE caddy_id = ?
 `, caddyID).Scan(&r.Name, &r.Protocol, &domain, &r.ListenPort, &strategy,
-	&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
-	&r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout,
-	&r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
-	&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
-	&requestBodyMaxSizeMB, &upstreamKeepaliveTimeout, &serverTokensHidden,
-	&r.IPACLMode, &ipACLListJSON, &r.CustomRoutesEnabled,
-	&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout,
-	&enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &r.TLSCert, &r.TLSKey, &tlsHTTPRedirect,
-	&r.Enabled, &r.CreatedAt, &r.UpdatedAt, &hostHeader, &r.CaddyID)
+		&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
+		&r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout,
+		&r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
+		&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
+		&requestBodyMaxSizeMB, &upstreamKeepaliveTimeout, &serverTokensHidden,
+		&r.IPACLMode, &ipACLListJSON, &r.CustomRoutesEnabled,
+		&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout,
+		&enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &r.TLSCert, &r.TLSKey, &tlsHTTPRedirect,
+		&r.Enabled, &r.CreatedAt, &r.UpdatedAt, &hostHeader, &r.CaddyID)
 
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
@@ -740,6 +740,8 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 
 	// Apply Caddy config after DB commit; rollback DB on Caddy failure
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
 	if req.Protocol == "tcp" {
 		fullConfig := services.GenerateCaddyConfig(h.cfg)
 		if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
@@ -1282,6 +1284,25 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// Backup current Caddy route config for rollback
 	oldRouteConfig, _ := h.caddyService.GetConfigByID(caddyID)
 
+	// Caddy 应用失败时需要用这些快照把已提交的 DB 更新恢复回去
+	oldRuleRow, oldRuleRowErr := dumpRowByKey(c.Request.Context(), "lb_rules", "caddy_id", caddyID)
+	if oldRuleRowErr != nil {
+		log.Printf("UpdateRule failed to snapshot lb_rules row for caddy_id=%s: %v", caddyID, oldRuleRowErr)
+	}
+	oldUpstreamRowsMap, oldUpstreamRowsErr := dumpRowsByKey(c.Request.Context(), "upstreams", "rule_id", caddyID)
+	if oldUpstreamRowsErr != nil {
+		log.Printf("UpdateRule failed to snapshot upstreams for caddy_id=%s: %v", caddyID, oldUpstreamRowsErr)
+	}
+	restoreRuleDBSnapshot := func() {
+		if oldRuleRowErr != nil || oldUpstreamRowsErr != nil {
+			log.Printf("UpdateRule skip DB restore for caddy_id=%s: snapshot unavailable", caddyID)
+			return
+		}
+		if err := restoreRuleSnapshot(c.Request.Context(), caddyID, oldRuleRow, oldUpstreamRowsMap, existingRule.PathRules); err != nil {
+			log.Printf("CRITICAL: UpdateRule DB restore failed for caddy_id=%s: %v", caddyID, err)
+		}
+	}
+
 	// Start DB transaction: write validated config and commit first
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -1376,6 +1397,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	// Apply Caddy changes after DB commit; restore previous Caddy config on failure
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
 	if req.Protocol == "tcp" {
 		newFullConfig := services.GenerateCaddyConfig(h.cfg)
 		if err := h.caddyService.ApplyConfig(newFullConfig); err != nil {
@@ -1385,6 +1408,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				}
 			}
 			log.Printf("UpdateRule Caddy update failed for TCP rule caddy_id=%s: %v, restored previous config", caddyID, err)
+			restoreRuleDBSnapshot()
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置更新失败: " + err.Error()})
 			return
 		}
@@ -1394,6 +1418,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				h.caddyService.SetConfigByID(caddyID, oldRouteConfig)
 			}
 			log.Printf("UpdateRule Caddy update failed for caddy_id=%s: %v, restored previous route", caddyID, err)
+			restoreRuleDBSnapshot()
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置更新失败: " + err.Error()})
 			return
 		}
@@ -1403,6 +1428,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				h.caddyService.SetConfigByID(caddyID, oldRouteConfig)
 			}
 			log.Printf("UpdateRule Caddy verification failed for caddy_id=%s: %v, restored previous route", caddyID, err)
+			restoreRuleDBSnapshot()
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy write verification failed: %v", err)})
 			return
 		}
@@ -1606,13 +1632,13 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0)
 	FROM lb_rules WHERE caddy_id = ?
 `, caddyID).Scan(
-	&rule.CaddyID, &rule.Name, &rule.Description, &rule.Protocol, &rule.Domain, &rule.ListenPort, &rule.Strategy,
-	&rule.DynamicDNS, &rule.EnableDnsServer, &rule.DnsFamily, &rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout,
-	&rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
-	&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
-	&rule.RequestBodyMaxSizeMB, &rule.UpstreamKeepaliveTimeout, &rule.ServerTokensHidden,
-	&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.CAProviderID, &rule.TLSCert, &rule.TLSKey,
-	&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.CreatedBy,
+		&rule.CaddyID, &rule.Name, &rule.Description, &rule.Protocol, &rule.Domain, &rule.ListenPort, &rule.Strategy,
+		&rule.DynamicDNS, &rule.EnableDnsServer, &rule.DnsFamily, &rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout,
+		&rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
+		&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
+		&rule.RequestBodyMaxSizeMB, &rule.UpstreamKeepaliveTimeout, &rule.ServerTokensHidden,
+		&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.CAProviderID, &rule.TLSCert, &rule.TLSKey,
+		&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.CreatedBy,
 		&rule.HostHeader, &rule.DnsServer, &rule.LogEnabled,
 		&rule.IPACLMode, &ipACLListJSON, &rule.CustomRoutesEnabled,
 		&rule.ProxyDialTimeout, &rule.ProxyResponseHeaderTimeout, &rule.ProxyReadTimeout, &rule.ProxyWriteTimeout, &rule.ProxyStreamTimeout,
@@ -1640,7 +1666,19 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	}
 
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
-	result, err := db.DB.Exec(`
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启复制事务失败"})
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err := tx.Exec(`
 		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
@@ -1651,7 +1689,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		ip_acl_mode, ip_acl_list, custom_routes_enabled,
 		proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, rule.Name+" (Copy)", rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
+	`, rule.Name+"（副本）", rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 		rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 		rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
 		rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPTryDuration, rule.TCPTryInterval,
@@ -1661,51 +1699,63 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		now, now, rule.HostHeader, rule.LogEnabled, newCaddyID,
 		rule.IPACLMode, ipACLListJSON, rule.CustomRoutesEnabled,
 		rule.ProxyDialTimeout, rule.ProxyResponseHeaderTimeout, rule.ProxyReadTimeout, rule.ProxyWriteTimeout, rule.ProxyStreamTimeout,
-	)
-	if err != nil {
+	); err != nil {
 		log.Printf("Failed to duplicate rule %s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "复制规则失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "复制规则失败，已回滚: " + err.Error()})
 		return
 	}
 
-	_ = result
-
-	db.DB.Exec("UPDATE lb_rules SET updated_by = ? WHERE caddy_id = ?", userIDInt, newCaddyID)
-
-	upstreamRows, err := db.DB.Query(`
+	upstreamRows, err := tx.Query(`
 		SELECT host, port, weight, domain, dynamic_dns, enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'')
 		FROM upstreams WHERE rule_id = ?
 	`, caddyID)
-	if err == nil {
-		for upstreamRows.Next() {
-			var u struct {
-				Host           string
-				Port           int
-				Weight         int
-				Domain         string
-				DynamicDNS     bool
-				Enabled        bool
-				Protocol       string
-				MaxConnections int
-				ProxyProtocol  string
-			}
-			upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol)
-			db.DB.Exec(`
-				INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections, proxy_protocol)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, newCaddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections, u.ProxyProtocol)
-		}
-		upstreamRows.Close()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取上游失败，已回滚: " + err.Error()})
+		return
 	}
+	for upstreamRows.Next() {
+		var u struct {
+			Host           string
+			Port           int
+			Weight         int
+			Domain         string
+			DynamicDNS     bool
+			Enabled        bool
+			Protocol       string
+			MaxConnections int
+			ProxyProtocol  string
+		}
+		if err := upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol); err != nil {
+			upstreamRows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "扫描上游失败，已回滚: " + err.Error()})
+			return
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections, proxy_protocol)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, newCaddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections, u.ProxyProtocol); err != nil {
+			upstreamRows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "复制上游失败，已回滚: " + err.Error()})
+			return
+		}
+	}
+	upstreamRows.Close()
 
 	if rule.CustomRoutesEnabled {
-		if _, err := db.DB.Exec(`
+		if _, err := tx.Exec(`
 			INSERT INTO path_rules (rule_id, sort_order, match_type, path, upstreams_json, created_at, updated_at)
 			SELECT ?, sort_order, match_type, path, upstreams_json, datetime('now'), datetime('now') FROM path_rules WHERE rule_id = ?
 		`, newCaddyID, caddyID); err != nil {
-			log.Printf("Failed to copy path_rules for %s: %v", newCaddyID, err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "复制路径规则失败，已回滚: " + err.Error()})
+			return
 		}
 	}
+
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交复制事务失败: " + err.Error()})
+		return
+	}
+	committed = true
 
 	recordAudit(c, "复制", "负载均衡规则", services.FormatAuditDetail(fmt.Sprintf("源规则：%s", caddyID), fmt.Sprintf("新规则：%s", newCaddyID), rule.Name))
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "规则已复制", Data: gin.H{"caddy_id": newCaddyID}})
@@ -1719,6 +1769,24 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return
+	}
+
+	var ruleProtocol, ruleDomain string
+	var rulePort int
+	if err := db.DB.QueryRow("SELECT protocol, COALESCE(domain,''), listen_port FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&ruleProtocol, &ruleDomain, &rulePort); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
+		return
+	}
+	if err := h.validatePort(ruleProtocol, rulePort, caddyID); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "端口冲突，无法启用: " + err.Error()})
+		return
+	}
+	if ruleProtocol == "http" && ruleDomain != "" {
+		var dupCount int
+		if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE protocol = 'http' AND domain = ? AND caddy_id != ? AND enabled = 1", ruleDomain, caddyID).Scan(&dupCount); err == nil && dupCount > 0 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已被其他启用中的规则使用，无法启用", ruleDomain)})
+			return
+		}
 	}
 
 	if _, err := db.DB.Exec("UPDATE lb_rules SET enabled = 1, updated_at = datetime('now') WHERE caddy_id = ?", caddyID); err != nil {

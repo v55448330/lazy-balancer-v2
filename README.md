@@ -93,7 +93,7 @@ docker run -d \
 |---|---|
 | `8000` | 管理界面与 REST API（`/api/v1`，文档 `/api/v1/docs`） |
 | `80 / 443` | HTTP/HTTPS 代理流量 |
-| `2019` | Caddy Admin API（容器内部使用，无需暴露） |
+| `2019` | Caddy Admin API（仅监听 loopback，不对外暴露） |
 | 自定义 | TCP 规则监听端口（host 网络下直接绑定） |
 
 ## 主从集群快速部署

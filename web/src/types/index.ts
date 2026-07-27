@@ -69,51 +69,7 @@ export interface ConnectionStats {
   total: number
 }
 
-export type IpAclMode = '' | 'allow' | 'deny'
-
-export interface PathRuleUpstream {
-  address: string
-  port: number
-  weight: number
-}
-
-export interface PathRule {
-  id?: number
-  match_type: 'prefix' | 'exact'
-  path: string
-  sort_order: number
-  upstreams: PathRuleUpstream[] | null
-}
-
-export interface ProxyTimeoutConfig {
-  proxy_dial_timeout: number
-  proxy_response_header_timeout: number
-  proxy_read_timeout: number
-  proxy_write_timeout: number
-  proxy_stream_timeout: number
-}
-
-export interface Rule {
-  id?: number
-  caddy_id: string
-  name: string
-  protocol: string
-  listen_port: number
-  strategy: string
-  enabled: boolean
-  upstreams: any[]
-  enable_tls: boolean
-  tls_auto_https: boolean
-  ip_acl_mode: IpAclMode
-  ip_acl_list: string[]
-  custom_routes_enabled: boolean
-  path_rules: PathRule[]
-  proxy_dial_timeout: number
-  proxy_response_header_timeout: number
-  proxy_read_timeout: number
-  proxy_write_timeout: number
-  proxy_stream_timeout: number
-}
+export * from './rules'
 
 export interface RuleMetrics {
   requests_total?: number
@@ -139,9 +95,13 @@ export interface HostMetrics {
   bytes_out: number
 }
 
-export interface ApiResponse<T = any> {
+export interface APIResponse<T = never> {
   code: number
-  message: string
+  message?: string
+  data?: T
+}
+
+export interface ApiResponse<T = never> extends Omit<APIResponse<T>, 'data'> {
   data: T
 }
 

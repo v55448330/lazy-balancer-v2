@@ -31,23 +31,23 @@
 
       <el-divider content-position="left">请求与超时</el-divider>
       <el-form-item label="请求体大小">
-        <el-input-number v-model="settings.request_body_max_size_mb" :disabled="isReadOnly" :min="0" controls-position="right" class="number-input" />
+        <el-input-number v-model="settings.request_body_max_size_mb" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
         <el-text type="info" size="small" class="tip-inline">MB，限制单个请求体最大体积；0 = 不限制。常规建议 0，需防护大文件上传可设为 100</el-text>
       </el-form-item>
       <el-form-item label="读取超时">
-        <el-input-number v-model="settings.http_read_timeout" :disabled="isReadOnly" :min="0" controls-position="right" class="number-input" />
+        <el-input-number v-model="settings.http_read_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
         <el-text type="info" size="small" class="tip-inline">秒，等待客户端发送请求体的最长时间；0 = Caddy 默认（无超时）。常规建议 60</el-text>
       </el-form-item>
       <el-form-item label="写入超时">
-        <el-input-number v-model="settings.http_write_timeout" :disabled="isReadOnly" :min="0" controls-position="right" class="number-input" />
+        <el-input-number v-model="settings.http_write_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
         <el-text type="info" size="small" class="tip-inline">秒，向客户端写入响应的最长时间；0 = Caddy 默认（无超时）。常规建议 60</el-text>
       </el-form-item>
       <el-form-item label="空闲超时">
-        <el-input-number v-model="settings.http_idle_timeout" :disabled="isReadOnly" :min="0" controls-position="right" class="number-input" />
+        <el-input-number v-model="settings.http_idle_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
         <el-text type="info" size="small" class="tip-inline">秒，客户端到 Caddy 的 Keep-Alive 连接空闲多久后关闭；0 = Caddy 默认。常规建议 120</el-text>
       </el-form-item>
       <el-form-item label="上游 Keepalive">
-        <el-input-number v-model="settings.upstream_keepalive_timeout" :disabled="isReadOnly" :min="0" controls-position="right" class="number-input" />
+        <el-input-number v-model="settings.upstream_keepalive_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
         <el-text type="info" size="small" class="tip-inline">秒，Caddy 到后端服务器的长连接空闲多久后关闭；0 = Caddy 默认。常规建议 60</el-text>
       </el-form-item>
 

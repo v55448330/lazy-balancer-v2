@@ -29,7 +29,7 @@ func setupAPIKeyTestDB(t *testing.T) *sql.DB {
 	db.AuditDB = auditDB
 	t.Cleanup(func() {
 		db.DB = oldDB
-	db.SetDB(oldDB)
+		db.SetDB(oldDB)
 		db.AuditDB = oldAuditDB
 		database.Close()
 		auditDB.Close()

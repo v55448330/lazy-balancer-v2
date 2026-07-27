@@ -5,11 +5,15 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"lazy-balancer-v2/internal/db"
 )
 
 const certDir = "/app/certs"
+
+// 序列化证书对写盘：避免并发写同一规则产生撕裂的 cert/key 组合
+var certWriteMu sync.Mutex
 
 // safeRuleID rejects anything outside the generated caddy_id alphabet so a
 // malicious or corrupted rule ID can never escape the cert directory.
@@ -33,6 +37,8 @@ func CertFilePaths(ruleID string) (certPath, keyPath string) {
 }
 
 func WriteCertFiles(ruleID, certPEM, keyPEM string) error {
+	certWriteMu.Lock()
+	defer certWriteMu.Unlock()
 	if err := os.MkdirAll(certDir, 0755); err != nil {
 		return fmt.Errorf("创建证书目录: %w", err)
 	}
@@ -67,12 +73,6 @@ func RemoveCertFiles(ruleID string) {
 	}
 	os.Remove(certPath)
 	os.Remove(keyPath)
-}
-
-func CertFileExists(ruleID string) bool {
-	certPath, _ := CertFilePaths(ruleID)
-	_, err := os.Stat(certPath)
-	return err == nil
 }
 
 func MaterializeAllCertsFromDB() {

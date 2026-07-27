@@ -62,7 +62,7 @@ func FormatAuditDetail(parts ...string) string {
 			filtered = append(filtered, part)
 		}
 	}
-	return fmt.Sprintf("%s", joinChineseParts(filtered))
+	return joinChineseParts(filtered)
 }
 
 func joinChineseParts(parts []string) string {

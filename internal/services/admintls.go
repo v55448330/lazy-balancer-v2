@@ -1,7 +1,6 @@
 package services
 
 import (
-	"sync/atomic"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -14,6 +13,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
