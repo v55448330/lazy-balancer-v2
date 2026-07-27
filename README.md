@@ -51,7 +51,7 @@ docker run -d \
 
 | 容器路径 | 内容 | 是否必须 |
 |---|---|---|
-| `/app/data` | 业务库（lazy-balancer.db）、审计库、指标库、`branding.json` | **必须**（持久化核心数据） |
+| `/app/data` | 业务库（lazy-balancer.db）、审计库、指标库、`branding.json`、ACME 账户密钥（`acme_accounts/`，按 CA+邮箱 复用） | **必须**（持久化核心数据） |
 | `/app/certs` | 证书与私钥文件（手动上传与 ACME 签发） | **必须**（重启后证书不丢） |
 | `/app/logs` | 应用日志、Caddy 四类日志、规则级访问日志 | 建议 |
 | `/app/config` | Caddyfile（仅高级自定义场景） | 可选 |

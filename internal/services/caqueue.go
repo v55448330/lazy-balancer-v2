@@ -93,6 +93,11 @@ func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains stri
 		q = newCAQueue(provider, m.reloader)
 		m.queues[provider.ID] = q
 		go q.loop()
+	} else {
+		// 队列缓存的 provider 快照可能早于用户修改的凭证/配置，每次入队刷新
+		q.mu.Lock()
+		q.provider = provider
+		q.mu.Unlock()
 	}
 	m.mu.Unlock()
 
@@ -228,9 +233,10 @@ func (q *caQueue) execute(item queueItem) {
 	defer cancel()
 	q.mu.Lock()
 	q.cancels[item.jobID] = cancel
+	provider := q.provider
 	q.mu.Unlock()
 
-	if err := issuer.Issue(ctx, item.jobID, item.ruleID, item.domains, q.provider); err != nil {
+	if err := issuer.Issue(ctx, item.jobID, item.ruleID, item.domains, provider); err != nil {
 		log.Printf("CA queue execution failed for job %d rule %s: %v", item.jobID, item.ruleID, err)
 		if !isTerminalJobStatus(item.jobID) {
 			var raErr *CAProviderRateLimitError

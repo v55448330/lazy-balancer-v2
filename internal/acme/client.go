@@ -7,13 +7,19 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/models"
@@ -82,7 +88,7 @@ func NewClientForProvider(provider models.CAProvider, email string) (*Client, er
 }
 
 func newClient(directoryURL, email string, eab *acme.ExternalAccountBinding) (*Client, error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := loadOrCreateAccountKey(directoryURL, email)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +109,52 @@ func newClient(directoryURL, email string, eab *acme.ExternalAccountBinding) (*C
 		accountKey: key,
 		eab:        eab,
 	}, nil
+}
+
+// 账户密钥按 CA+邮箱 维度持久化复用：同一 CA 同一邮箱重复签发共享一个 ACME 账户，
+// 避免每次签发注册新账户触发 CA 的新账户限流；更换邮箱或 CA 时自动生成新密钥。
+const acmeAccountDir = "/app/data/acme_accounts"
+
+var acmeAccountKeyMu sync.Mutex
+
+func acmeAccountKeyPath(directoryURL, email string) string {
+	sum := sha256.Sum256([]byte(directoryURL + "|" + email))
+	return filepath.Join(acmeAccountDir, hex.EncodeToString(sum[:8]) + ".key")
+}
+
+func loadOrCreateAccountKey(directoryURL, email string) (*ecdsa.PrivateKey, error) {
+	acmeAccountKeyMu.Lock()
+	defer acmeAccountKeyMu.Unlock()
+	keyPath := acmeAccountKeyPath(directoryURL, email)
+	if data, err := os.ReadFile(keyPath); err == nil {
+		block, _ := pem.Decode(data)
+		if block != nil {
+			if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
+				return key, nil
+			}
+		}
+		log.Printf("ACME 账户密钥 %s 无法解析，将重新生成", keyPath)
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(acmeAccountDir, 0755); err != nil {
+		return nil, fmt.Errorf("创建 ACME 账户目录: %w", err)
+	}
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	tmp := keyPath + ".tmp"
+	if err := os.WriteFile(tmp, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), 0600); err != nil {
+		return nil, fmt.Errorf("写入 ACME 账户密钥: %w", err)
+	}
+	if err := os.Rename(tmp, keyPath); err != nil {
+		_ = os.Remove(tmp)
+		return nil, fmt.Errorf("部署 ACME 账户密钥: %w", err)
+	}
+	return key, nil
 }
 
 // RegisterAccount registers a new ACME account or returns nil if already registered.
