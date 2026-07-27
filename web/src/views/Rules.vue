@@ -1258,7 +1258,7 @@ const isCertJobActive = (status?: string) => {
 const certJobStatusLabel = (status?: string) => {
   switch (status) {
     case 'issued': return '已签发'
-    case 'failed': return '签发失败'
+    case 'failed': return '失败'
     case 'disabled': return '已禁用'
     case 'pending': return '待处理'
     case 'queued':
@@ -1279,7 +1279,7 @@ const certJobStatusLabel = (status?: string) => {
     case 'cleanup_warning':
       return '签发中'
     case 'waiting_ca': return '等待 CA'
-    default: return status || '未知'
+    default: return ''
   }
 }
 
@@ -1310,8 +1310,8 @@ const tlsTagLabel = (row: Rule) => {
   if (cert?.status === 'expiring') return `临期 ${cert.days_remaining} 天`
   if (row.tls_source === 'acme_dns') {
     const status = certJobMap.value[row.caddy_id]?.status
-    const label = status ? certJobStatusLabel(status) : 'ACME'
-    return `ACME ${label}`
+    const label = status ? certJobStatusLabel(status) : ''
+    return label ? `ACME ${label}` : 'ACME'
   }
   return '手动'
 }
