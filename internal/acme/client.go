@@ -167,7 +167,8 @@ func (c *Client) RegisterAccount(ctx context.Context) error {
 	}
 	_, err := c.acme.Register(ctx, acct, acme.AcceptTOS)
 	if err != nil {
-		if strings.Contains(err.Error(), "Account already exists") || strings.Contains(err.Error(), "already registered") {
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "account already exists") || strings.Contains(lower, "already registered") {
 			return nil
 		}
 	}
