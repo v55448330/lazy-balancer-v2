@@ -1,4 +1,5 @@
 type PathUpstreamInput = {
+  readonly protocol: 'http' | 'https'
   readonly address: string
   readonly port: number
   readonly weight: number

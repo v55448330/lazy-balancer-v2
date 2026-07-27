@@ -665,6 +665,11 @@ func runMigrations() error {
 		DB.Exec("ALTER TABLE lb_rules ADD COLUMN tcp_health_check_port INTEGER DEFAULT 0")
 	}
 
+	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='tcp_proxy_protocol'").Scan(&colCount)
+	if colCount == 0 {
+		DB.Exec("ALTER TABLE lb_rules ADD COLUMN tcp_proxy_protocol BOOLEAN DEFAULT 0")
+	}
+
 	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='tcp_try_duration'").Scan(&colCount)
 	if colCount == 0 {
 		DB.Exec("ALTER TABLE lb_rules ADD COLUMN tcp_try_duration INTEGER DEFAULT 0")
@@ -858,6 +863,7 @@ func migrateLbRulesPrimaryKey() error {
 			health_check_healthy_threshold INTEGER DEFAULT 2,
 			enable_active_health_check BOOLEAN DEFAULT FALSE,
 			tcp_health_check_port INTEGER DEFAULT 0,
+			tcp_proxy_protocol BOOLEAN DEFAULT 0,
 			tcp_try_duration INTEGER DEFAULT 0,
 			tcp_try_interval INTEGER DEFAULT 250,
 			request_body_max_size_mb INTEGER DEFAULT 0,
@@ -902,7 +908,7 @@ func migrateLbRulesPrimaryKey() error {
 			strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
-			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
+			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			ip_acl_mode, ip_acl_list, custom_routes_enabled,
 			proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout,
@@ -916,7 +922,7 @@ func migrateLbRulesPrimaryKey() error {
 			strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
-			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
+			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
 			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),

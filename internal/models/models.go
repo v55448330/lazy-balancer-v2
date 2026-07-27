@@ -51,6 +51,7 @@ type LbRule struct {
 	HealthCheckHealthyThreshold   int          `json:"health_check_healthy_threshold"`
 	EnableActiveHealthCheck       bool         `json:"enable_active_health_check"`
 	TCPHealthCheckPort            int          `json:"tcp_health_check_port"`
+	TCPProxyProtocol              bool         `json:"tcp_proxy_protocol"`
 	TCPTryDuration                int          `json:"tcp_try_duration"`
 	TCPTryInterval                int          `json:"tcp_try_interval"`
 	RequestBodyMaxSizeMB          int          `json:"request_body_max_size_mb"`
@@ -176,13 +177,13 @@ type Upstream struct {
 	Protocol       string `json:"protocol"`
 	DnsServer      string `json:"dns_server"`
 	MaxConnections int    `json:"max_connections"`
-	ProxyProtocol  string `json:"proxy_protocol"`
 }
 
 type PathRuleUpstream struct {
-	Address string `json:"address"`
-	Port    int    `json:"port"`
-	Weight  int    `json:"weight"`
+	Address  string `json:"address"`
+	Port     int    `json:"port"`
+	Weight   int    `json:"weight"`
+	Protocol string `json:"protocol"`
 }
 
 type PathRule struct {
@@ -361,6 +362,7 @@ type CreateRuleRequest struct {
 	HealthCheckHealthyThreshold   int        `json:"health_check_healthy_threshold"`
 	EnableActiveHealthCheck       bool       `json:"enable_active_health_check"`
 	TCPHealthCheckPort            int        `json:"tcp_health_check_port"`
+	TCPProxyProtocol              bool         `json:"tcp_proxy_protocol"`
 	TCPTryDuration                int        `json:"tcp_try_duration"`
 	TCPTryInterval                int        `json:"tcp_try_interval"`
 	RequestBodyMaxSizeMB          int        `json:"request_body_max_size_mb"`
@@ -407,6 +409,7 @@ type UpdateRuleRequest struct {
 	HealthCheckHealthyThreshold   int         `json:"health_check_healthy_threshold"`
 	EnableActiveHealthCheck       bool        `json:"enable_active_health_check"`
 	TCPHealthCheckPort            int         `json:"tcp_health_check_port"`
+	TCPProxyProtocol              bool         `json:"tcp_proxy_protocol"`
 	TCPTryDuration                int         `json:"tcp_try_duration"`
 	TCPTryInterval                int         `json:"tcp_try_interval"`
 	RequestBodyMaxSizeMB          *int        `json:"request_body_max_size_mb"`

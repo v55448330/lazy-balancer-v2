@@ -17,7 +17,6 @@ export interface Upstream {
   protocol: string
   dns_server: string
   max_connections: number
-  proxy_protocol: string
 }
 
 export type UpstreamInput = Omit<Upstream, 'id' | 'rule_id' | 'dns_server'> & {
@@ -27,6 +26,7 @@ export type UpstreamInput = Omit<Upstream, 'id' | 'rule_id' | 'dns_server'> & {
 }
 
 export interface PathRuleUpstream {
+  protocol: 'http' | 'https'
   address: string
   port: number
   weight: number
@@ -68,6 +68,7 @@ export interface Rule extends ProxyTimeoutConfig {
   health_check_healthy_threshold: number
   enable_active_health_check: boolean
   tcp_health_check_port: number
+  tcp_proxy_protocol: boolean
   tcp_try_duration: number
   tcp_try_interval: number
   request_body_max_size_mb: number
@@ -114,6 +115,7 @@ export interface CreateRuleRequest extends ProxyTimeoutConfig {
   health_check_healthy_threshold: number
   enable_active_health_check: boolean
   tcp_health_check_port: number
+  tcp_proxy_protocol: boolean
   tcp_try_duration: number
   tcp_try_interval: number
   request_body_max_size_mb: number
@@ -144,6 +146,7 @@ export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
   | 'ip_acl_mode'
   | 'ip_acl_list'
   | 'custom_routes_enabled'
+  | 'tcp_proxy_protocol'
   | keyof ProxyTimeoutConfig
   | 'path_rules'
   | 'ca_provider_id'> {
@@ -153,6 +156,7 @@ export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
   ip_acl_mode?: IpAclMode
   ip_acl_list?: string[]
   custom_routes_enabled?: boolean
+  tcp_proxy_protocol: boolean
   proxy_dial_timeout?: number
   proxy_response_header_timeout?: number
   proxy_read_timeout?: number

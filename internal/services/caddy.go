@@ -1289,6 +1289,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 		CompressTypes                 string
 		EnableActiveHealthCheck       bool
 		TCPHealthCheckPort            int
+		TCPProxyProtocol              bool
 		TCPTryDuration                int
 		TCPTryInterval                int
 		RequestBodyMaxSizeMB          int
@@ -1317,7 +1318,6 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 		Enabled        bool
 		Protocol       string
 		MaxConnections int
-		ProxyProtocol  string
 	}
 
 	type ruleWithUpstreams struct {
@@ -1334,7 +1334,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 		       IIF(enable_tls IN ('1',1),1,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
 		       IIF(tls_http_redirect IN ('1',1),1,0),
 		       IIF(enabled IN ('1',1),1,0), IIF(enable_compress IN ('1',1),1,0), COALESCE(compress_types,'gzip'),
-		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
+		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(host_header,''),
 		       IIF(log_enabled IN ('1',1),1,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), IIF(custom_routes_enabled IN ('1',1),1,0),
 		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0)
@@ -1353,7 +1353,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 			&r.HealthCheckTimeout, &r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
 			&r.EnableTLS, &r.TLSSource, &r.ACMEConfigID, &r.TLSCert, &r.TLSKey,
 			&r.TLSHTTPRedirect, &r.Enabled, &r.EnableCompress, &r.CompressTypes,
-			&r.EnableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPTryDuration, &r.TCPTryInterval,
+			&r.EnableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPProxyProtocol, &r.TCPTryDuration, &r.TCPTryInterval,
 			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.HostHeader, &r.LogEnabled,
 			&r.IPACLMode, &r.IPACLListJSON, &r.CustomRoutesEnabled, &r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout,
 			&r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout)
@@ -1382,7 +1382,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 	for i := range allRules {
 		r := &allRules[i]
 		upstreamRows, err := store.Query(`
-			SELECT host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'')
+			SELECT host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0)
 			FROM upstreams WHERE rule_id = ? AND enabled = 1
 		`, r.rule.CaddyID)
 		if err != nil {
@@ -1391,7 +1391,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 		}
 		for upstreamRows.Next() {
 			var u upstream
-			upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol)
+			upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections)
 			r.upstreams = append(r.upstreams, u)
 		}
 		upstreamRows.Close()
@@ -1641,7 +1641,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 					}
 					ruleConfig.Upstreams = append(ruleConfig.Upstreams, UpstreamConfig{
 						Host: u.Host, Port: u.Port, Weight: weight, Protocol: protocol, Enabled: u.Enabled,
-						MaxConnections: u.MaxConnections, ProxyProtocol: u.ProxyProtocol,
+						MaxConnections: u.MaxConnections,
 					})
 				}
 			}
@@ -1775,6 +1775,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 			HealthCheckHealthyThreshold:   r.HealthCheckHealthyThreshold,
 			EnableActiveHealthCheck:       r.EnableActiveHealthCheck,
 			TCPHealthCheckPort:            r.TCPHealthCheckPort,
+			TCPProxyProtocol:              r.TCPProxyProtocol,
 			TCPTryDuration:                r.TCPTryDuration,
 			TCPTryInterval:                r.TCPTryInterval,
 			IPACLMode:                     r.IPACLMode,
@@ -1791,7 +1792,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 				}
 				ruleConfig.Upstreams = append(ruleConfig.Upstreams, UpstreamConfig{
 					Host: u.Host, Port: u.Port, Weight: weight, Protocol: u.Protocol, Enabled: u.Enabled,
-					MaxConnections: u.MaxConnections, ProxyProtocol: u.ProxyProtocol,
+					MaxConnections: u.MaxConnections,
 				})
 			}
 		}
@@ -2150,6 +2151,7 @@ type SingleRuleConfig struct {
 	CompressTypes                    string
 	EnableActiveHealthCheck          bool
 	TCPHealthCheckPort               int
+	TCPProxyProtocol                 bool
 	TCPTryDuration                   int
 	TCPTryInterval                   int
 	RequestBodyMaxSizeMB             int
@@ -2198,7 +2200,6 @@ type UpstreamConfig struct {
 	Protocol       string
 	Enabled        bool
 	MaxConnections int
-	ProxyProtocol  string
 }
 
 func resolveRuleOverrides(rule SingleRuleConfig) (requestBodyMaxSizeMB int, upstreamKeepalive int, hideServer bool) {
@@ -2271,8 +2272,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		var upstreamList []interface{}
 		var upstreamWeights []int
 		hasHTTPSUpstream := false
-		var upstreamProxyProtocol string
-
+	
 		for _, u := range enabledUpstreams {
 			weight := u.Weight
 			if weight <= 0 {
@@ -2308,9 +2308,6 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 			if u.Protocol == "https" {
 				hasHTTPSUpstream = true
-			}
-			if u.ProxyProtocol != "" && upstreamProxyProtocol == "" {
-				upstreamProxyProtocol = u.ProxyProtocol
 			}
 		}
 
@@ -2415,7 +2412,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			proxyConfig["stream_timeout"] = fmt.Sprintf("%ds", effectiveProxyTimeouts.stream)
 		}
 
-		needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0 || upstreamProxyProtocol != "" || effectiveProxyTimeouts.dial > 0 || effectiveProxyTimeouts.responseHeader > 0 || effectiveProxyTimeouts.read > 0 || effectiveProxyTimeouts.write > 0
+		needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0 || effectiveProxyTimeouts.dial > 0 || effectiveProxyTimeouts.responseHeader > 0 || effectiveProxyTimeouts.read > 0 || effectiveProxyTimeouts.write > 0
 		if needsTransport {
 			transportConfig := map[string]interface{}{
 				"protocol": "http",
@@ -2442,9 +2439,6 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			}
 			if effectiveProxyTimeouts.write > 0 {
 				transportConfig["write_timeout"] = fmt.Sprintf("%ds", effectiveProxyTimeouts.write)
-			}
-			if upstreamProxyProtocol != "" {
-				transportConfig["proxy_protocol"] = upstreamProxyProtocol
 			}
 			if effectiveUpstreamKeepaliveTimeout > 0 {
 				transportConfig["keep_alive"] = map[string]interface{}{
@@ -2771,7 +2765,6 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 	upstreamList := make([]interface{}, 0, len(enabledUpstreams))
 	upstreamWeights := make([]int, 0, len(enabledUpstreams))
 	hasHTTPSUpstream := false
-	upstreamProxyProtocol := ""
 	for _, upstream := range enabledUpstreams {
 		weight := upstream.Weight
 		if weight <= 0 {
@@ -2804,9 +2797,6 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 		}
 		if upstream.Protocol == "https" {
 			hasHTTPSUpstream = true
-		}
-		if upstream.ProxyProtocol != "" && upstreamProxyProtocol == "" {
-			upstreamProxyProtocol = upstream.ProxyProtocol
 		}
 	}
 
@@ -2891,7 +2881,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 	if timeouts.stream > 0 {
 		proxyConfig["stream_timeout"] = fmt.Sprintf("%ds", timeouts.stream)
 	}
-	needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0 || upstreamProxyProtocol != "" || timeouts.dial > 0 || timeouts.responseHeader > 0 || timeouts.read > 0 || timeouts.write > 0
+	needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0 || timeouts.dial > 0 || timeouts.responseHeader > 0 || timeouts.read > 0 || timeouts.write > 0
 	if needsTransport {
 		transportConfig := map[string]interface{}{"protocol": "http"}
 		if hasHTTPSUpstream {
@@ -2914,9 +2904,6 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 		}
 		if timeouts.write > 0 {
 			transportConfig["write_timeout"] = fmt.Sprintf("%ds", timeouts.write)
-		}
-		if upstreamProxyProtocol != "" {
-			transportConfig["proxy_protocol"] = upstreamProxyProtocol
 		}
 		if effectiveUpstreamKeepaliveTimeout > 0 {
 			transportConfig["keep_alive"] = map[string]interface{}{
@@ -2978,7 +2965,6 @@ func normalizeWeights(weights []int) []int {
 func buildTCPProxyRoute(rule SingleRuleConfig) map[string]interface{} {
 	upstreamList := make([]interface{}, 0)
 	enabledPorts := make([]int, 0)
-	proxyProtocol := ""
 	for _, u := range rule.Upstreams {
 		if !u.Enabled {
 			continue
@@ -3000,9 +2986,6 @@ func buildTCPProxyRoute(rule SingleRuleConfig) map[string]interface{} {
 		if u.MaxConnections > 0 {
 			upstreamEntry["max_connections"] = u.MaxConnections
 		}
-		if u.ProxyProtocol == "v1" || u.ProxyProtocol == "v2" {
-			proxyProtocol = u.ProxyProtocol
-		}
 		upstreamList = append(upstreamList, upstreamEntry)
 	}
 
@@ -3018,8 +3001,8 @@ func buildTCPProxyRoute(rule SingleRuleConfig) map[string]interface{} {
 		"handler":   "proxy",
 		"upstreams": upstreamList,
 	}
-	if proxyProtocol != "" {
-		proxyHandler["proxy_protocol"] = proxyProtocol
+	if rule.TCPProxyProtocol {
+		proxyHandler["proxy_protocol"] = "v2"
 	}
 
 	loadBalancing := map[string]interface{}{

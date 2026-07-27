@@ -455,15 +455,6 @@
                   <el-input-number v-model="row.max_connections" :min="0" :max="100000" size="small" controls-position="right" class="upstream-input-small" />
                 </template>
               </el-table-column>
-              <el-table-column label="PROXY" width="100">
-                <template #default="{ row }">
-                  <el-select v-model="row.proxy_protocol" size="small" placeholder="无">
-                    <el-option value="" label="无" />
-                    <el-option value="v1" label="v1" />
-                    <el-option value="v2" label="v2" />
-                  </el-select>
-                </template>
-              </el-table-column>
               <el-table-column label="启用" width="60" align="center">
                 <template #default="{ row, $index }">
                   <el-switch v-model="row.enabled" size="small" @change="onWeightChange($index)" />
@@ -667,6 +658,11 @@
                 <el-input-number v-model="wizardForm.tcp_try_interval" :min="0" :max="10000" controls-position="right" style="width: 120px;" />
                 <span class="form-tip-inline">毫秒，每次重试间隔；0 表示使用 Caddy 默认间隔</span>
               </el-form-item>
+
+              <el-form-item label="PROXY V2">
+                <el-switch v-model="wizardForm.tcp_proxy_protocol" />
+                <span class="form-tip-inline">开启后向上游发送 PROXY v2 协议头传递真实客户端 IP，需后端支持</span>
+              </el-form-item>
             </template>
 
             <el-divider content-position="left" class="compact-divider">Caddy 全局覆盖</el-divider>
@@ -714,6 +710,9 @@
               </template>
               <template v-else>禁用</template>
             </el-descriptions-item>
+            <el-descriptions-item label="PROXY 协议 v2" v-if="wizardForm.protocol === 'tcp'">
+              {{ wizardForm.tcp_proxy_protocol ? '启用' : '禁用' }}
+            </el-descriptions-item>
             <el-descriptions-item label="DNS 服务器" v-if="wizardForm.protocol === 'http'">
               <template v-if="wizardForm.enable_dns_server">
                 {{ wizardForm.dns_server || '默认' }}
@@ -759,7 +758,6 @@
                   <template #default="{ row }">{{ weightPercent(wizardForm.upstreams, row) }}%</template>
                 </el-table-column>
                 <el-table-column prop="max_connections" label="最大连接" width="90" />
-                <el-table-column prop="proxy_protocol" label="PROXY" width="80" />
                 <el-table-column prop="enabled" label="状态" width="70">
                   <template #default="{ row }">
                     {{ row.enabled ? '启用' : '禁用' }}
@@ -852,7 +850,6 @@
             <template #default="{ row }">{{ weightPercent(ruleConfig?.upstreams, row) }}%</template>
           </el-table-column>
           <el-table-column prop="max_connections" label="最大连接" align="center" />
-          <el-table-column prop="proxy_protocol" label="PROXY" align="center" />
           <el-table-column prop="enabled" label="状态" align="center">
             <template #default="{ row }">
               <el-tag size="small" :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
@@ -954,6 +951,7 @@ import type {
   CreateRuleRequest,
   IpAclMode,
   ProxyTimeoutConfig,
+  PathRuleUpstream,
   Rule,
   RuleAclRequest,
   UpdateRuleRequest,
@@ -965,6 +963,7 @@ import RuleAclDialog from '@/components/rules/RuleAclDialog.vue'
 import PathRulesEditor from '@/components/rules/PathRulesEditor.vue'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
 import { validatePathRules } from '@/utils/ruleValidation'
+import { normalizeWeights } from '@/utils/upstreamWeights'
 
 interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id'> {
   id?: number
@@ -1510,8 +1509,17 @@ const defaultUpstream = (protocol: string = 'http'): UpstreamInput => ({
   enabled: true,
   protocol,
   max_connections: 0,
-  proxy_protocol: '',
 })
+
+const pathRuleUpstreamsToPercent = (upstreams: readonly PathRuleUpstream[] | null | undefined): PathRuleUpstream[] | null => {
+  if (!upstreams) return null
+  const normalized = upstreams.map((upstream) => ({
+    ...upstream,
+    protocol: upstream.protocol || 'http',
+  }))
+  normalizeWeights(normalized)
+  return normalized
+}
 
 const certInfo = reactive({
   valid: false,
@@ -1542,6 +1550,7 @@ const wizardForm = reactive<RuleForm>({
   health_check_unhealthy_threshold: 3,
   enable_active_health_check: true,
   tcp_health_check_port: 0,
+  tcp_proxy_protocol: false,
   tcp_try_duration: 0,
   tcp_try_interval: 250,
   host_header: '',
@@ -1871,6 +1880,7 @@ const openWizard = (rule?: Rule) => {
       health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
       enable_active_health_check: rule.enable_active_health_check === true,
       tcp_health_check_port: rule.tcp_health_check_port || 0,
+      tcp_proxy_protocol: rule.tcp_proxy_protocol === true,
       tcp_try_duration: rule.tcp_try_duration || 0,
       tcp_try_interval: rule.tcp_try_interval ?? 250,
       host_header: rule.host_header || '',
@@ -1879,7 +1889,6 @@ const openWizard = (rule?: Rule) => {
         dynamic_dns: false,
         protocol: u.protocol || 'http',
         max_connections: u.max_connections ?? 0,
-        proxy_protocol: u.proxy_protocol ?? '',
       })) || [],
       enable_tls: rule.enable_tls || false,
       tls_source: rule.tls_source || 'manual',
@@ -1902,7 +1911,7 @@ const openWizard = (rule?: Rule) => {
         .sort((left, right) => left.sort_order - right.sort_order)
         .map((pathRule) => ({
           ...pathRule,
-          upstreams: pathRule.upstreams?.map((upstream) => ({ ...upstream })) || null,
+          upstreams: pathRuleUpstreamsToPercent(pathRule.upstreams),
         })),
       proxy_dial_timeout: rule.proxy_dial_timeout || 0,
       proxy_response_header_timeout: rule.proxy_response_header_timeout || 0,
@@ -1928,6 +1937,7 @@ const openWizard = (rule?: Rule) => {
       health_check_unhealthy_threshold: 3,
       enable_active_health_check: true,
       tcp_health_check_port: 0,
+      tcp_proxy_protocol: false,
       tcp_try_duration: 0,
       tcp_try_interval: 250,
       host_header: '',
@@ -2187,7 +2197,6 @@ const submitWizard = async () => {
       weight: u.weight ?? 100,
       dynamic_dns: wizardForm.dynamic_dns,
       max_connections: u.max_connections ?? 0,
-      proxy_protocol: u.proxy_protocol ?? '',
     }))
 
     const data: UpdateRuleRequest = {
@@ -2208,6 +2217,7 @@ const submitWizard = async () => {
       health_check_unhealthy_threshold: wizardForm.health_check_unhealthy_threshold,
       enable_active_health_check: wizardForm.enable_active_health_check,
       tcp_health_check_port: wizardForm.tcp_health_check_port || 0,
+      tcp_proxy_protocol: wizardForm.protocol === 'tcp' && wizardForm.tcp_proxy_protocol,
       tcp_try_duration: wizardForm.tcp_try_duration || 0,
       tcp_try_interval: wizardForm.tcp_try_interval ?? 250,
       host_header: wizardForm.host_header,
@@ -2324,6 +2334,7 @@ const openCopyWizard = (rule: Rule) => {
     health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
     enable_active_health_check: rule.enable_active_health_check === true,
     tcp_health_check_port: rule.tcp_health_check_port || 0,
+    tcp_proxy_protocol: rule.tcp_proxy_protocol === true,
     tcp_try_duration: rule.tcp_try_duration || 0,
     tcp_try_interval: rule.tcp_try_interval ?? 250,
     host_header: rule.host_header || '',
@@ -2332,7 +2343,6 @@ const openCopyWizard = (rule: Rule) => {
       dynamic_dns: false,
       protocol: u.protocol || 'http',
       max_connections: u.max_connections ?? 0,
-      proxy_protocol: u.proxy_protocol ?? '',
     })) || [],
     enable_tls: rule.enable_tls || false,
     tls_source: rule.tls_source || 'manual',
@@ -2350,7 +2360,7 @@ const openCopyWizard = (rule: Rule) => {
       .sort((left, right) => left.sort_order - right.sort_order)
       .map((pathRule) => ({
         ...pathRule,
-        upstreams: pathRule.upstreams?.map((upstream) => ({ ...upstream })) || null,
+        upstreams: pathRuleUpstreamsToPercent(pathRule.upstreams),
       })),
     proxy_dial_timeout: rule.proxy_dial_timeout || 0,
     proxy_response_header_timeout: rule.proxy_response_header_timeout || 0,

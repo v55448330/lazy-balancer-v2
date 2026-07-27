@@ -21,7 +21,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		SELECT COALESCE(caddy_id,'') AS caddy_id, name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port, strategy,
 		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval,
-		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
+		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
 		       COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
 		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
@@ -49,11 +49,12 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		var updatedAt sql.NullTime
 		var updatedBy sql.NullInt64
 		var tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
+	var tcpProxyProtocol bool
 		var requestBodyMaxSizeMB, upstreamKeepaliveTimeout, serverTokensHidden int
 		err := rows.Scan(&r.CaddyID, &r.Name, &description, &r.Protocol, &domain, &r.ListenPort, &strategy,
 			&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
 			&r.HealthCheckPath, &r.HealthCheckInterval,
-			&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
+			&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpProxyProtocol, &tcpTryDuration, &tcpTryInterval,
 			&requestBodyMaxSizeMB, &upstreamKeepaliveTimeout, &serverTokensHidden,
 			&r.IPACLMode, &ipACLListJSON, &r.CustomRoutesEnabled,
 			&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout,
@@ -86,6 +87,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		r.DnsFamily = dnsFamily
 		r.EnableActiveHealthCheck = enableActiveHealthCheck
 		r.TCPHealthCheckPort = tcpHealthCheckPort
+	r.TCPProxyProtocol = tcpProxyProtocol
 		r.TCPTryDuration = tcpTryDuration
 		r.TCPTryInterval = tcpTryInterval
 		r.RequestBodyMaxSizeMB = requestBodyMaxSizeMB
@@ -109,11 +111,11 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		r.HostHeader = hostHeader
 		r.CAProviderID = caProviderID
 
-		upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'') FROM upstreams WHERE rule_id = ?`, r.CaddyID)
+		upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id = ?`, r.CaddyID)
 		if upstreamRows != nil {
 			for upstreamRows.Next() {
 				var u models.Upstream
-				upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol)
+				upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections)
 				r.Upstreams = append(r.Upstreams, u)
 			}
 			upstreamRows.Close()
@@ -140,13 +142,14 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect bool
 	var acmeConfigID, caProviderID int
 	var tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
+	var tcpProxyProtocol bool
 	var requestBodyMaxSizeMB, upstreamKeepaliveTimeout, serverTokensHidden int
 	err := db.DB.QueryRow(`
 		SELECT name, protocol, COALESCE(domain,''), listen_port, strategy,
 		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval,
 		       health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
-		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
+		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
 		       COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
 		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
@@ -158,7 +161,7 @@ func (h *Handlers) GetRule(c *gin.Context) {
 		&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
 		&r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout,
 		&r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
-		&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
+		&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpProxyProtocol, &tcpTryDuration, &tcpTryInterval,
 		&requestBodyMaxSizeMB, &upstreamKeepaliveTimeout, &serverTokensHidden,
 		&r.IPACLMode, &ipACLListJSON, &r.CustomRoutesEnabled,
 		&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout,
@@ -185,6 +188,7 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	r.DnsFamily = dnsFamily
 	r.EnableActiveHealthCheck = enableActiveHealthCheck
 	r.TCPHealthCheckPort = tcpHealthCheckPort
+	r.TCPProxyProtocol = tcpProxyProtocol
 	r.TCPTryDuration = tcpTryDuration
 	r.TCPTryInterval = tcpTryInterval
 	r.RequestBodyMaxSizeMB = requestBodyMaxSizeMB
@@ -204,11 +208,11 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	r.TLSHTTPRedirect = tlsHTTPRedirect
 	r.HostHeader = hostHeader
 
-	upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'') FROM upstreams WHERE rule_id = ?`, caddyID)
+	upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id = ?`, caddyID)
 	if upstreamRows != nil {
 		for upstreamRows.Next() {
 			var u models.Upstream
-			upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol)
+			upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections)
 			r.Upstreams = append(r.Upstreams, u)
 		}
 		upstreamRows.Close()
@@ -252,7 +256,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	}
 
 	upstreamRows, err := db.DB.Query(`
-		SELECT host, port, COALESCE(weight,1), COALESCE(protocol,'http'), enabled, COALESCE(max_connections,0), COALESCE(proxy_protocol,'')
+		SELECT host, port, COALESCE(weight,1), COALESCE(protocol,'http'), enabled, COALESCE(max_connections,0)
 		FROM upstreams WHERE rule_id = ? AND enabled = 1
 	`, caddyID)
 	if err != nil {
@@ -266,7 +270,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		var u services.UpstreamConfig
 		var protocol string
 		var enabled bool
-		upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &protocol, &enabled, &u.MaxConnections, &u.ProxyProtocol)
+		upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &protocol, &enabled, &u.MaxConnections)
 		u.Protocol = protocol
 		u.Enabled = enabled
 		ups = append(ups, u)
@@ -614,6 +618,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		HealthCheckUnhealthyThreshold:    req.HealthCheckUnhealthyThreshold,
 		EnableActiveHealthCheck:          req.EnableActiveHealthCheck,
 		TCPHealthCheckPort:               req.TCPHealthCheckPort,
+		TCPProxyProtocol:                 req.TCPProxyProtocol,
 		TCPTryDuration:                   req.TCPTryDuration,
 		TCPTryInterval:                   req.TCPTryInterval,
 		RequestBodyMaxSizeMB:             req.RequestBodyMaxSizeMB,
@@ -660,7 +665,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		}
 		ruleConfig.Upstreams = append(ruleConfig.Upstreams, services.UpstreamConfig{
 			Host: u.Host, Port: u.Port, Weight: weight, Protocol: protocol, Enabled: u.Enabled,
-			MaxConnections: u.MaxConnections, ProxyProtocol: u.ProxyProtocol,
+			MaxConnections: u.MaxConnections,
 		})
 	}
 
@@ -681,7 +686,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
-			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
+			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			ip_acl_mode, ip_acl_list, custom_routes_enabled,
 			proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout,
@@ -691,7 +696,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
-		req.EnableActiveHealthCheck, req.TCPHealthCheckPort, req.TCPTryDuration, req.TCPTryInterval,
+		req.EnableActiveHealthCheck, req.TCPHealthCheckPort, req.TCPProxyProtocol, req.TCPTryDuration, req.TCPTryInterval,
 		req.RequestBodyMaxSizeMB, req.UpstreamKeepaliveTimeout, req.ServerTokensHidden,
 		features.IPACLMode, ipACLListJSON, features.CustomRoutesEnabled,
 		features.ProxyDialTimeout, features.ProxyResponseHeaderTimeout, features.ProxyReadTimeout, features.ProxyWriteTimeout, features.ProxyStreamTimeout,
@@ -716,9 +721,9 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 				u.Protocol = "http"
 			}
 		}
-		_, err = tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections, proxy_protocol) 
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			caddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections, u.ProxyProtocol)
+		_, err = tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections) 
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			caddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections)
 		if err != nil {
 			tx.Rollback()
 			log.Printf("CreateRule upstream insert error: %v", err)
@@ -915,7 +920,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 			COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,5),
 			COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
-			COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
+			COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 			COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
 			COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
 			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
@@ -929,7 +934,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		&existingRule.DynamicDNS, &existingRule.EnableDnsServer, &existingRule.DnsServer, &existingRule.DnsFamily,
 		&existingRule.HealthCheckPath, &existingRule.HealthCheckInterval, &existingRule.HealthCheckTimeout,
 		&existingRule.HealthCheckUnhealthyThreshold, &existingRule.HealthCheckHealthyThreshold,
-		&existingRule.EnableActiveHealthCheck, &existingRule.TCPHealthCheckPort, &existingRule.TCPTryDuration, &existingRule.TCPTryInterval,
+		&existingRule.EnableActiveHealthCheck, &existingRule.TCPHealthCheckPort, &existingRule.TCPProxyProtocol, &existingRule.TCPTryDuration, &existingRule.TCPTryInterval,
 		&existingRule.RequestBodyMaxSizeMB, &existingRule.UpstreamKeepaliveTimeout, &existingRule.ServerTokensHidden,
 		&existingRule.IPACLMode, &existingIPACLListJSON, &existingRule.CustomRoutesEnabled,
 		&existingRule.ProxyDialTimeout, &existingRule.ProxyResponseHeaderTimeout, &existingRule.ProxyReadTimeout, &existingRule.ProxyWriteTimeout, &existingRule.ProxyStreamTimeout,
@@ -954,11 +959,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	// Capture old upstreams for potential DB rollback
 	var oldUpstreams []models.Upstream
-	oldUpstreamRows, _ := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'') FROM upstreams WHERE rule_id = ?", caddyID)
+	oldUpstreamRows, _ := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id = ?", caddyID)
 	if oldUpstreamRows != nil {
 		for oldUpstreamRows.Next() {
 			var u models.Upstream
-			oldUpstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol)
+			oldUpstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections)
 			oldUpstreams = append(oldUpstreams, u)
 		}
 		oldUpstreamRows.Close()
@@ -1122,6 +1127,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	args = append(args, req.EnableActiveHealthCheck)
 	query += "tcp_health_check_port = ?, "
 	args = append(args, req.TCPHealthCheckPort)
+	query += "tcp_proxy_protocol = ?, "
+	args = append(args, req.TCPProxyProtocol)
 	query += "tcp_try_duration = ?, "
 	args = append(args, req.TCPTryDuration)
 	query += "tcp_try_interval = ?, "
@@ -1221,6 +1228,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		HealthCheckUnhealthyThreshold:    req.HealthCheckUnhealthyThreshold,
 		EnableActiveHealthCheck:          req.EnableActiveHealthCheck,
 		TCPHealthCheckPort:               req.TCPHealthCheckPort,
+		TCPProxyProtocol:                 req.TCPProxyProtocol,
 		TCPTryDuration:                   req.TCPTryDuration,
 		TCPTryInterval:                   req.TCPTryInterval,
 		RequestBodyMaxSizeMB:             *req.RequestBodyMaxSizeMB,
@@ -1268,7 +1276,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 		ruleConfig.Upstreams = append(ruleConfig.Upstreams, services.UpstreamConfig{
 			Host: u.Host, Port: u.Port, Weight: weight, Protocol: protocol, Enabled: u.Enabled,
-			MaxConnections: u.MaxConnections, ProxyProtocol: u.ProxyProtocol,
+			MaxConnections: u.MaxConnections,
 		})
 	}
 
@@ -1350,9 +1358,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				u.Protocol = "http"
 			}
 		}
-		if _, err := tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections, proxy_protocol) 
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			caddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections, u.ProxyProtocol); err != nil {
+		if _, err := tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections) 
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			caddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections); err != nil {
 			tx.Rollback()
 			log.Printf("UpdateRule upstream insert error for caddy_id=%s: %v", caddyID, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新上游服务器失败"})
@@ -1618,12 +1626,13 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	var enableActiveHealthCheck bool
 	var ipACLListJSON string
 	var tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
+	var tcpProxyProtocol bool
 	err := db.DB.QueryRow(`
 		SELECT caddy_id, name, COALESCE(description,''), protocol, domain, listen_port, strategy, dynamic_dns,
 		       COALESCE(enable_dns_server,0), COALESCE(dns_family,'ipv4'),
 		       health_check_path, health_check_interval, health_check_timeout,
 		       health_check_unhealthy_threshold, health_check_healthy_threshold,
-		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
+		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		       request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 		       enable_tls, COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), tls_cert, tls_key,
 	       tls_http_redirect, COALESCE(enable_compress,1), COALESCE(compress_types,'gzip,zstd'), enabled, created_by,
@@ -1635,7 +1644,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		&rule.CaddyID, &rule.Name, &rule.Description, &rule.Protocol, &rule.Domain, &rule.ListenPort, &rule.Strategy,
 		&rule.DynamicDNS, &rule.EnableDnsServer, &rule.DnsFamily, &rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout,
 		&rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
-		&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpTryDuration, &tcpTryInterval,
+		&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpProxyProtocol, &tcpTryDuration, &tcpTryInterval,
 		&rule.RequestBodyMaxSizeMB, &rule.UpstreamKeepaliveTimeout, &rule.ServerTokensHidden,
 		&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.CAProviderID, &rule.TLSCert, &rule.TLSKey,
 		&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.CreatedBy,
@@ -1650,6 +1659,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 
 	rule.EnableActiveHealthCheck = enableActiveHealthCheck
 	rule.TCPHealthCheckPort = tcpHealthCheckPort
+	rule.TCPProxyProtocol = tcpProxyProtocol
 	rule.TCPTryDuration = tcpTryDuration
 	rule.TCPTryInterval = tcpTryInterval
 
@@ -1682,7 +1692,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
-			enable_active_health_check, tcp_health_check_port, tcp_try_duration, tcp_try_interval,
+			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key,
 		tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, log_enabled, caddy_id,
@@ -1692,7 +1702,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	`, rule.Name+"（副本）", rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 		rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 		rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
-		rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPTryDuration, rule.TCPTryInterval,
+		rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPProxyProtocol, rule.TCPTryDuration, rule.TCPTryInterval,
 		rule.RequestBodyMaxSizeMB, rule.UpstreamKeepaliveTimeout, rule.ServerTokensHidden,
 		rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.CAProviderID, rule.TLSCert, &rule.TLSKey,
 		rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, 0, userIDInt, userIDInt,
@@ -1706,7 +1716,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	}
 
 	upstreamRows, err := tx.Query(`
-		SELECT host, port, weight, domain, dynamic_dns, enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0), COALESCE(proxy_protocol,'')
+		SELECT host, port, weight, domain, dynamic_dns, enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0)
 		FROM upstreams WHERE rule_id = ?
 	`, caddyID)
 	if err != nil {
@@ -1723,17 +1733,16 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			Enabled        bool
 			Protocol       string
 			MaxConnections int
-			ProxyProtocol  string
 		}
-		if err := upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections, &u.ProxyProtocol); err != nil {
+		if err := upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
 			upstreamRows.Close()
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "扫描上游失败，已回滚: " + err.Error()})
 			return
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections, proxy_protocol)
+			INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, newCaddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections, u.ProxyProtocol); err != nil {
+		`, newCaddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections); err != nil {
 			upstreamRows.Close()
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "复制上游失败，已回滚: " + err.Error()})
 			return

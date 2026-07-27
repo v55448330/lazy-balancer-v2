@@ -164,7 +164,6 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		DynamicDNS     bool
 		Enabled        bool
 		Protocol       string
-		ProxyProtocol  string
 		MaxConnections int
 	}
 
@@ -231,7 +230,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 			upstreams = append(upstreams, requestUpstream{
 				Host: u.Host, Port: u.Port, Weight: u.Weight, Domain: u.Domain,
 				DynamicDNS: u.DynamicDNS, Enabled: u.Enabled, Protocol: u.Protocol,
-				ProxyProtocol: u.ProxyProtocol, MaxConnections: u.MaxConnections,
+				MaxConnections: u.MaxConnections,
 			})
 		}
 		data.Upstreams = upstreams
@@ -271,7 +270,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 			upstreams = append(upstreams, requestUpstream{
 				Host: u.Host, Port: u.Port, Weight: u.Weight, Domain: u.Domain,
 				DynamicDNS: u.DynamicDNS, Enabled: u.Enabled, Protocol: u.Protocol,
-				ProxyProtocol: u.ProxyProtocol, MaxConnections: u.MaxConnections,
+				MaxConnections: u.MaxConnections,
 			})
 		}
 		data.Upstreams = upstreams
@@ -355,9 +354,6 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 			if u.Protocol != "" && u.Protocol != "tcp" && u.Protocol != "tls" {
 				return fmt.Errorf("上游 #%d：协议 '%s' 无效（TCP 规则仅支持 tcp/tls）", i+1, u.Protocol)
 			}
-		}
-		if u.ProxyProtocol != "" && u.ProxyProtocol != "v1" && u.ProxyProtocol != "v2" {
-			return fmt.Errorf("上游 #%d：PROXY 协议 '%s' 无效（仅支持 v1 或 v2）", i+1, u.ProxyProtocol)
 		}
 		if u.MaxConnections < 0 {
 			return fmt.Errorf("上游 #%d：最大连接数不能为负数", i+1)

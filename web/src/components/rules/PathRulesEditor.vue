@@ -61,12 +61,20 @@
 
           <div v-if="rule.upstreams !== null" class="custom-upstream-editor">
             <div class="upstream-grid upstream-grid-header" aria-hidden="true">
+              <span>协议</span>
               <span>地址</span>
               <span>端口</span>
-              <span>权重</span>
+              <span>权重 %</span>
               <span>操作</span>
             </div>
             <div v-for="(upstream, upstreamIndex) in rule.upstreams" :key="upstreamIndex" class="upstream-grid upstream-row">
+              <label class="upstream-field">
+                <span class="mobile-field-label">协议</span>
+                <el-select v-model="upstream.protocol" aria-label="协议">
+                  <el-option value="http" label="HTTP" />
+                  <el-option value="https" label="HTTPS" />
+                </el-select>
+              </label>
               <label class="upstream-field upstream-address-field">
                 <span class="mobile-field-label">地址</span>
                 <el-input v-model="upstream.address" :aria-label="`路径规则 ${index + 1} 自定义上游 ${upstreamIndex + 1} 地址`" placeholder="IP 或域名" />
@@ -77,7 +85,9 @@
               </label>
               <label class="upstream-field">
                 <span class="mobile-field-label">权重</span>
-                <el-input-number v-model="upstream.weight" :min="1" :max="100" aria-label="权重" controls-position="right" />
+                <el-input v-model.number="upstream.weight" type="number" :min="1" :max="100" aria-label="权重百分比" @change="onWeightChange(rule, upstreamIndex)">
+                  <template #suffix>%</template>
+                </el-input>
               </label>
               <el-button :icon="Delete" type="danger" link aria-label="删除自定义上游" @click="removeUpstream(rule, upstreamIndex)" />
             </div>
@@ -92,6 +102,7 @@
 <script setup lang="ts">
 import { ArrowDown, ArrowUp, Delete, Plus } from '@element-plus/icons-vue'
 import type { PathRule, PathRuleUpstream } from '@/types'
+import { normalizeWeights, redistributeWeight } from '@/utils/upstreamWeights'
 
 const pathRules = defineModel<PathRule[]>({ required: true })
 
@@ -133,18 +144,30 @@ const moveRule = (index: number, direction: -1 | 1): void => {
   normalizeOrder()
 }
 
-const defaultUpstream = (): PathRuleUpstream => ({ address: '', port: 80, weight: 100 })
+const defaultUpstream = (): PathRuleUpstream => ({ protocol: 'http', address: '', port: 80, weight: 100 })
 
 const toggleCustomUpstreams = (rule: PathRule, enabled: string | number | boolean): void => {
   rule.upstreams = Boolean(enabled) ? [defaultUpstream()] : null
 }
 
 const addUpstream = (rule: PathRule): void => {
-  rule.upstreams?.push(defaultUpstream())
+  const upstreams = rule.upstreams
+  if (!upstreams) return
+  const upstream = defaultUpstream()
+  upstream.weight = 1
+  upstreams.push(upstream)
+  redistributeWeight(upstreams, upstreams.length - 1)
 }
 
 const removeUpstream = (rule: PathRule, index: number): void => {
-  rule.upstreams?.splice(index, 1)
+  const upstreams = rule.upstreams
+  if (!upstreams) return
+  upstreams.splice(index, 1)
+  normalizeWeights(upstreams)
+}
+
+const onWeightChange = (rule: PathRule, index: number): void => {
+  if (rule.upstreams) redistributeWeight(rule.upstreams, index)
 }
 </script>
 
@@ -167,7 +190,7 @@ const removeUpstream = (rule: PathRule, index: number): void => {
 .custom-upstream-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .custom-upstream-title { color: var(--text-regular); font-size: 13px; font-weight: 500; }
 .custom-upstream-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-secondary); }
-.upstream-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.4fr) minmax(0, 0.4fr) auto; align-items: center; gap: 8px; }
+.upstream-grid { display: grid; grid-template-columns: minmax(0, 0.45fr) minmax(0, 1fr) minmax(0, 0.4fr) minmax(0, 0.4fr) auto; align-items: center; gap: 8px; }
 .upstream-grid-header { color: var(--text-secondary); font-size: 12px; font-weight: 500; }
 .upstream-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .upstream-field :deep(.el-input-number) { width: 100%; }
@@ -181,9 +204,8 @@ const removeUpstream = (rule: PathRule, index: number): void => {
   .path-rule-order { justify-self: start; }
   .path-rule-actions { justify-content: flex-end; }
   .upstream-grid-header { display: none; }
-  .upstream-row { grid-template-columns: 1fr 1fr; align-items: end; padding-top: 8px; border-top: 1px solid var(--border); }
+  .upstream-row { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); align-items: end; padding-top: 8px; border-top: 1px solid var(--border); }
   .upstream-row:first-of-type { padding-top: 0; border-top: 0; }
-  .upstream-address-field { grid-column: 1 / -1; }
   .mobile-field-label { display: inline; }
   .upstream-row > .el-button { justify-self: end; }
 }

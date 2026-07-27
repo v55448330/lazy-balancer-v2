@@ -115,8 +115,12 @@ func toPathRuleConfigs(pathRules []models.PathRule) []services.PathRuleConfig {
 		if pathRule.Upstreams != nil {
 			config.Upstreams = make([]services.UpstreamConfig, 0, len(pathRule.Upstreams))
 			for _, upstream := range pathRule.Upstreams {
+				protocol := upstream.Protocol
+				if protocol == "" {
+					protocol = "http"
+				}
 				config.Upstreams = append(config.Upstreams, services.UpstreamConfig{
-					Host: upstream.Address, Port: upstream.Port, Weight: upstream.Weight, Protocol: "http", Enabled: true,
+					Host: upstream.Address, Port: upstream.Port, Weight: upstream.Weight, Protocol: protocol, Enabled: true,
 				})
 			}
 		}
@@ -196,6 +200,9 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 			}
 			if upstream.Weight < 0 {
 				return fmt.Errorf("第 %d 条路径规则的第 %d 个上游权重不能为负数", index+1, upstreamIndex+1)
+			}
+			if upstream.Protocol != "" && upstream.Protocol != "http" && upstream.Protocol != "https" {
+				return fmt.Errorf("第 %d 条路径规则的第 %d 个上游协议只能是 http 或 https", index+1, upstreamIndex+1)
 			}
 		}
 	}

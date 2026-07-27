@@ -226,7 +226,7 @@ func (h *Handlers) GetHostMetrics(c *gin.Context) {
 
 func loadRuleUpstreams(ruleID string) ([]models.Upstream, error) {
 	rows, err := db.DB.Query(`
-		SELECT id, rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, dns_server, max_connections, proxy_protocol
+		SELECT id, rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, dns_server, max_connections
 		FROM upstreams WHERE rule_id = ? AND enabled = 1
 	`, ruleID)
 	if err != nil {
@@ -237,7 +237,7 @@ func loadRuleUpstreams(ruleID string) ([]models.Upstream, error) {
 	var upstreams []models.Upstream
 	for rows.Next() {
 		var u models.Upstream
-		if err := rows.Scan(&u.ID, &u.RuleID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.DnsServer, &u.MaxConnections, &u.ProxyProtocol); err != nil {
+		if err := rows.Scan(&u.ID, &u.RuleID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.DnsServer, &u.MaxConnections); err != nil {
 			continue
 		}
 		upstreams = append(upstreams, u)

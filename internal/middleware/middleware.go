@@ -15,6 +15,7 @@ import (
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 
+	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	jwt "github.com/golang-jwt/jwt/v5"
 )
@@ -31,12 +32,21 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 	// CORS
 	r.Use(corsMiddleware())
+	r.Use(gzip.Gzip(gzip.DefaultCompression))
 	r.Use(auditMiddleware())
 	r.Use(clusterVersionMiddleware(db.DB))
 
 	// Serve static files
+	r.Use(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/assets/") {
+			// Vite 产物文件名带内容哈希，可长期缓存
+			c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		}
+		c.Next()
+	})
 	r.Static("/assets", cfg.StaticDir+"/assets")
 	r.GET("/", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-cache")
 		c.File(cfg.StaticDir + "/index.html")
 	})
 	r.Static("/ui", cfg.StaticDir)

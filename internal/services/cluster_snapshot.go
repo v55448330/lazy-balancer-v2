@@ -110,7 +110,7 @@ func (s *ClusterService) snapshotRules(ctx context.Context) ([]models.LbRule, er
 	rows, err := s.db.QueryContext(ctx, `SELECT COALESCE(caddy_id,''), name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port,
 		COALESCE(strategy,'weighted_round_robin'), COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 		COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,5), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
-		COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
+		COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(host_header,''),
 		COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
 		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
@@ -128,7 +128,7 @@ func (s *ClusterService) snapshotRules(ctx context.Context) ([]models.LbRule, er
 		if err := rows.Scan(&rule.CaddyID, &rule.Name, &rule.Description, &rule.Protocol, &rule.Domain, &rule.ListenPort,
 			&rule.Strategy, &rule.DynamicDNS, &rule.EnableDnsServer, &rule.DnsServer, &rule.DnsFamily,
 			&rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout, &rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
-			&rule.EnableActiveHealthCheck, &rule.TCPHealthCheckPort, &rule.TCPTryDuration, &rule.TCPTryInterval,
+			&rule.EnableActiveHealthCheck, &rule.TCPHealthCheckPort, &rule.TCPProxyProtocol, &rule.TCPTryDuration, &rule.TCPTryInterval,
 			&rule.RequestBodyMaxSizeMB, &rule.UpstreamKeepaliveTimeout, &rule.ServerTokensHidden, &rule.HostHeader,
 			&rule.IPACLMode, &ipACLListJSON, &rule.CustomRoutesEnabled,
 			&rule.ProxyDialTimeout, &rule.ProxyResponseHeaderTimeout, &rule.ProxyReadTimeout, &rule.ProxyWriteTimeout, &rule.ProxyStreamTimeout,
@@ -184,7 +184,7 @@ func (s *ClusterService) snapshotPathRules(ctx context.Context, ruleID string) (
 }
 
 func (s *ClusterService) snapshotUpstreams(ctx context.Context, ruleID string) ([]models.Upstream, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), COALESCE(enabled,1), COALESCE(protocol,'http'), COALESCE(dns_server,''), COALESCE(max_connections,0), COALESCE(proxy_protocol,'') FROM upstreams WHERE rule_id=? ORDER BY id`, ruleID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), COALESCE(enabled,1), COALESCE(protocol,'http'), COALESCE(dns_server,''), COALESCE(max_connections,0) FROM upstreams WHERE rule_id=? ORDER BY id`, ruleID)
 	if err != nil {
 		return nil, fmt.Errorf("读取规则上游 %s: %w", ruleID, err)
 	}
@@ -192,7 +192,7 @@ func (s *ClusterService) snapshotUpstreams(ctx context.Context, ruleID string) (
 	upstreams := make([]models.Upstream, 0)
 	for rows.Next() {
 		var upstream models.Upstream
-		if err := rows.Scan(&upstream.ID, &upstream.RuleID, &upstream.Host, &upstream.Port, &upstream.Weight, &upstream.Domain, &upstream.DynamicDNS, &upstream.Enabled, &upstream.Protocol, &upstream.DnsServer, &upstream.MaxConnections, &upstream.ProxyProtocol); err != nil {
+		if err := rows.Scan(&upstream.ID, &upstream.RuleID, &upstream.Host, &upstream.Port, &upstream.Weight, &upstream.Domain, &upstream.DynamicDNS, &upstream.Enabled, &upstream.Protocol, &upstream.DnsServer, &upstream.MaxConnections); err != nil {
 			return nil, fmt.Errorf("扫描规则上游 %s: %w", ruleID, err)
 		}
 		upstreams = append(upstreams, upstream)
