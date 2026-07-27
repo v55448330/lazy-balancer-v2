@@ -35,7 +35,7 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 	}
 
 	// Step 1: Register account
-	log("creating_account", "注册 ACME 账户")
+	log("creating_account", "确认 ACME 账户（新账户注册，已注册则复用）")
 	regCtx, regCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer regCancel()
 	if err := i.Client.RegisterAccount(regCtx); err != nil {
