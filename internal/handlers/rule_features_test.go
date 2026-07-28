@@ -197,6 +197,92 @@ func newRuleFeatureTestHandlersWithCapture(t *testing.T) (*Handlers, *string) {
 	}, &postedConfig
 }
 
+func TestCreateRule_succeeds_with_all_feature_columns(t *testing.T) {
+	// Given：全列 INSERT（曾出现 44/45 占位符不匹配，防回归）
+	handler, _ := newRuleFeatureTestHandlersWithCapture(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/rules", func(c *gin.Context) {
+		c.Set("user_id", float64(1))
+		handler.CreateRule(c)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{
+		"name":"全字段 TCP 规则","protocol":"tcp","listen_port":13000,
+		"tcp_health_check_port":9000,"tcp_proxy_protocol":true,"tcp_try_duration":5,"tcp_try_interval":250,
+		"ip_acl_mode":"deny","ip_acl_list":["203.0.113.0/24"],
+		"upstreams":[{"host":"127.0.0.1","port":9000,"weight":1,"enabled":true}]
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var name string
+	var proxyProtocol bool
+	if err := db.DB.QueryRow(`SELECT name, COALESCE(tcp_proxy_protocol,0) FROM lb_rules WHERE listen_port=13000`).Scan(&name, &proxyProtocol); err != nil {
+		t.Fatalf("read created rule: %v", err)
+	}
+	if !proxyProtocol {
+		t.Fatalf("tcp_proxy_protocol not persisted")
+	}
+}
+
+func TestDuplicateRule_copies_rule_upstreams_and_path_rules(t *testing.T) {
+	// Given：复制规则全链路（曾出现 48/46 与 9/10 占位符不匹配，防回归）
+	handler, _ := newRuleFeatureTestHandlersWithCapture(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,dynamic_dns,enable_dns_server,dns_server,dns_family,
+		health_check_path,health_check_interval,health_check_timeout,health_check_unhealthy_threshold,health_check_healthy_threshold,
+		enable_active_health_check,tcp_health_check_port,tcp_proxy_protocol,tcp_try_duration,tcp_try_interval,
+		request_body_max_size_mb,upstream_keepalive_timeout,server_tokens_hidden,
+		enable_tls,tls_source,acme_config_id,ca_provider_id,tls_cert,tls_key,tls_http_redirect,
+		enable_compress,compress_types,enabled,created_by,updated_by,host_header,log_enabled,
+		ip_acl_mode,ip_acl_list,custom_routes_enabled,
+		proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,proxy_stream_timeout)
+		VALUES ('lb_dupsrc','源规则','','http','dup.example.test',8080,'weighted_round_robin',0,0,'','ipv4',
+		'',10,5,3,2,0,0,0,5,250,0,0,0,1,'manual',0,0,'','',0,1,'gzip',1,1,1,'',1,
+		'allow','["192.0.2.0/24"]',1,5,15,30,30,0)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_dupsrc','127.0.0.1',9000,1,1,'http')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO path_rules (rule_id,sort_order,match_type,path) VALUES ('lb_dupsrc',0,'prefix','/metrics/')`); err != nil {
+		t.Fatalf("seed path rule: %v", err)
+	}
+	router := gin.New()
+	router.POST("/rules/:caddy_id/duplicate", func(c *gin.Context) {
+		c.Set("user_id", float64(1))
+		handler.DuplicateRule(c)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/rules/lb_dupsrc/duplicate", nil)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
+		t.Fatalf("duplicate status=%d body=%s", response.Code, response.Body.String())
+	}
+	var newID, aclMode string
+	var upstreamCount, pathCount, customRoutes int
+	if err := db.DB.QueryRow(`SELECT caddy_id, ip_acl_mode, custom_routes_enabled,
+		(SELECT COUNT(*) FROM upstreams WHERE rule_id=lb_rules.caddy_id),
+		(SELECT COUNT(*) FROM path_rules WHERE rule_id=lb_rules.caddy_id)
+		FROM lb_rules WHERE caddy_id != 'lb_dupsrc'`).Scan(&newID, &aclMode, &customRoutes, &upstreamCount, &pathCount); err != nil {
+		t.Fatalf("read duplicated rule: %v", err)
+	}
+	if newID == "" || aclMode != "allow" || customRoutes != 1 || upstreamCount != 1 || pathCount != 1 {
+		t.Fatalf("duplicated rule incomplete: id=%q acl=%q custom=%d ups=%d paths=%d", newID, aclMode, customRoutes, upstreamCount, pathCount)
+	}
+}
+
 func TestReplacePathRulesTx_replaces_all_rows_and_preserves_nullable_upstreams(t *testing.T) {
 	// Given
 	database := initializeRuleFeatureTestDB(t)
