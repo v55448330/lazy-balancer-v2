@@ -134,6 +134,12 @@ type importRuntimeSnapshot struct {
 	certFiles   services.CertFilesSnapshot
 }
 
+type importCertificate struct {
+	ruleID  string
+	certPEM string
+	keyPEM  string
+}
+
 func currentRuleIDs(ctx context.Context) ([]string, error) {
 	rows, err := db.DB.QueryContext(ctx, "SELECT caddy_id FROM lb_rules")
 	if err != nil {
@@ -164,9 +170,36 @@ func (h *Handlers) snapshotImportRuntime(ruleIDs []string) (importRuntimeSnapsho
 }
 
 func (h *Handlers) restoreImportRuntime(snapshot importRuntimeSnapshot) error {
-	caddyErr := h.caddyService.ApplyConfig(snapshot.caddyConfig)
 	certErr := services.RestoreCertFiles(snapshot.certFiles)
+	caddyErr := h.caddyService.ApplyConfig(snapshot.caddyConfig)
 	return errors.Join(caddyErr, certErr)
+}
+
+func materializeImportCertificates(certificates []importCertificate) error {
+	for _, certificate := range certificates {
+		if err := validateTLSCertificate(certificate.certPEM, certificate.keyPEM); err != nil {
+			return fmt.Errorf("验证规则 %s 的证书: %w", certificate.ruleID, err)
+		}
+		if err := services.WriteCertFiles(certificate.ruleID, certificate.certPEM, certificate.keyPEM); err != nil {
+			return fmt.Errorf("写入规则 %s 的证书文件: %w", certificate.ruleID, err)
+		}
+	}
+	return nil
+}
+
+func validateV2Backup(backup configBackup) error {
+	if backup.Meta.App != "lazy-balancer-v2" || backup.Tables == nil {
+		return errors.New("不是有效的 Lazy Balancer 备份文件")
+	}
+	if backup.Meta.Version != 1 {
+		return fmt.Errorf("不支持的备份版本: %d", backup.Meta.Version)
+	}
+	for _, required := range []string{"lb_rules", "users"} {
+		if _, exists := backup.Tables[required]; !exists {
+			return errors.New("备份缺少必需的数据表: " + required)
+		}
+	}
+	return nil
 }
 
 func (h *Handlers) ExportConfigBackup(c *gin.Context) {
@@ -210,19 +243,9 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份文件格式不正确"})
 		return
 	}
-	if backup.Meta.App != "lazy-balancer-v2" || backup.Tables == nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "不是有效的 Lazy Balancer 备份文件"})
+	if err := validateV2Backup(backup); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
-	}
-	if backup.Meta.Version != 1 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("不支持的备份版本: %d", backup.Meta.Version)})
-		return
-	}
-	for _, required := range []string{"lb_rules", "users"} {
-		if _, exists := backup.Tables[required]; !exists {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份缺少必需的数据表: " + required})
-			return
-		}
 	}
 	ctx := c.Request.Context()
 	existingRuleIDs, err := currentRuleIDs(ctx)
@@ -270,7 +293,11 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			importUserID = int(f)
 		}
 	}
-	_, _ = tx.ExecContext(ctx, "UPDATE lb_rules SET updated_by=? WHERE id IN (SELECT id FROM lb_rules)", importUserID)
+	if _, err := tx.ExecContext(ctx, "UPDATE lb_rules SET updated_by=? WHERE id IN (SELECT id FROM lb_rules)", importUserID); err != nil {
+		recordAudit(c, "导入失败", "配置备份", "更新规则操作者失败: "+err.Error())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新规则操作者失败，已回滚: " + err.Error()})
+		return
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id NOT IN (SELECT caddy_id FROM lb_rules)"); err != nil {
 		recordAudit(c, "导入失败", "配置备份", "清理孤儿证书任务失败: "+err.Error())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理孤儿证书任务失败，已回滚: " + err.Error()})
@@ -300,9 +327,15 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		}
 	}
 	affectedRuleIDs := append([]string(nil), existingRuleIDs...)
+	pendingCertificates := make([]importCertificate, 0)
 	for _, row := range backup.Tables["lb_rules"] {
 		if caddyID, ok := row["caddy_id"].(string); ok && caddyID != "" {
 			affectedRuleIDs = append(affectedRuleIDs, caddyID)
+			certPEM, _ := row["tls_cert"].(string)
+			keyPEM, _ := row["tls_key"].(string)
+			if certPEM != "" && keyPEM != "" {
+				pendingCertificates = append(pendingCertificates, importCertificate{ruleID: caddyID, certPEM: certPEM, keyPEM: keyPEM})
+			}
 		}
 	}
 	h.caddyOpMu.Lock()
@@ -316,6 +349,13 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		if restoreErr := h.restoreImportRuntime(runtimeSnapshot); restoreErr != nil {
 			log.Printf("导入失败后恢复运行配置失败: %v", restoreErr)
 		}
+	}
+	if err := materializeImportCertificates(pendingCertificates); err != nil {
+		restoreRuntime()
+		h.caddyOpMu.Unlock()
+		recordAudit(c, "导入失败", "配置备份", err.Error())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "准备证书文件失败，已回滚: " + err.Error()})
+		return
 	}
 	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
 		restoreRuntime()
@@ -338,18 +378,6 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	}
 	committed = true
 	h.caddyOpMu.Unlock()
-	// Cert files are materialized only after a successful commit, so a failed
-	// import can never leave orphaned files behind.
-	for _, row := range backup.Tables["lb_rules"] {
-		caddyID, _ := row["caddy_id"].(string)
-		certPEM, _ := row["tls_cert"].(string)
-		keyPEM, _ := row["tls_key"].(string)
-		if caddyID != "" && certPEM != "" && keyPEM != "" {
-			if err := services.WriteCertFiles(caddyID, certPEM, keyPEM); err != nil {
-				log.Printf("导入后写入证书文件失败 %s: %v", caddyID, err)
-			}
-		}
-	}
 	counts := importCountsDetail(backup.Tables)
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail("来源：v2 备份（覆盖导入）", counts, services.AuditResultPart("success")))
 	recordAudit(c, "重载", "Caddy配置", "导入配置后自动重载")

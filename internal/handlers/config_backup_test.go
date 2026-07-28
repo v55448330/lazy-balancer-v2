@@ -139,3 +139,85 @@ func TestConfigBackup_import_rejects_invalid_file(t *testing.T) {
 	var body map[string]json.RawMessage
 	_ = json.Unmarshal(response.Body.Bytes(), &body)
 }
+
+func TestValidateConfigImport_rejects_v2_backup_missing_required_contract(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/config/validate", h.ValidateConfigImport)
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "unsupported version", body: `{"meta":{"app":"lazy-balancer-v2","version":2},"tables":{"lb_rules":[],"users":[]}}`},
+		{name: "missing tables", body: `{"meta":{"app":"lazy-balancer-v2","version":1}}`},
+		{name: "missing users", body: `{"meta":{"app":"lazy-balancer-v2","version":1},"tables":{"lb_rules":[]}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// When
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(tt.body))
+			request.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(response, request)
+
+			// Then
+			var envelope struct {
+				Data importValidateResponse `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("decode validation response: %v", err)
+			}
+			if envelope.Data.Valid {
+				t.Fatalf("validation accepted invalid v2 backup: %s", response.Body.String())
+			}
+			if envelope.Data.Type != "v2" {
+				t.Fatalf("validation type=%q, want v2", envelope.Data.Type)
+			}
+		})
+	}
+}
+
+func TestImportConfigBackup_rolls_back_when_certificate_materialization_fails(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec("INSERT INTO users (username, password_hash, role) VALUES ('old-user', 'hash', 'admin')"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT INTO lb_rules (caddy_id, name, protocol, listen_port, enabled) VALUES ('lb_old', 'old-rule', 'http', 8080, 1)"); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	backup := `{
+		"meta":{"app":"lazy-balancer-v2","version":1},
+		"tables":{
+			"users":[{"id":2,"username":"new-user","password_hash":"hash","role":"admin"}],
+			"lb_rules":[{"caddy_id":"lb_badcert","name":"new-rule","protocol":"http","listen_port":8443,"enabled":1,"enable_tls":1,"tls_source":"manual","tls_cert":"invalid-cert","tls_key":"invalid-key"}]
+		}
+	}`
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+
+	// When
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code == http.StatusOK {
+		t.Fatalf("import status=%d body=%s", response.Code, response.Body.String())
+	}
+	var oldRules, newRules int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_old'").Scan(&oldRules); err != nil {
+		t.Fatalf("count old rules: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_badcert'").Scan(&newRules); err != nil {
+		t.Fatalf("count new rules: %v", err)
+	}
+	if oldRules != 1 || newRules != 0 {
+		t.Fatalf("rules after failed import: old=%d new=%d", oldRules, newRules)
+	}
+}

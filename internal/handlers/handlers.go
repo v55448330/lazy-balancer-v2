@@ -35,29 +35,13 @@ type Dependencies struct {
 }
 
 func NewHandlers(deps Dependencies) *Handlers {
-	h := &Handlers{
+	return &Handlers{
 		cfg:               deps.Config,
 		caddyService:      deps.CaddyService,
 		metricsService:    deps.MetricsService,
 		syncService:       deps.SyncService,
 		clusterService:    deps.ClusterService,
 		caProviderService: deps.CAProviderService,
-	}
-
-	// Initialize default config
-	h.initDefaultConfig()
-
-	return h
-}
-
-func (h *Handlers) initDefaultConfig() {
-	var count int
-	db.DB.QueryRow("SELECT COUNT(*) FROM global_config WHERE id = 1").Scan(&count)
-
-	if count == 0 {
-		defaultConfig, _ := json.Marshal(map[string]interface{}{})
-		db.DB.Exec("INSERT INTO global_config (id, caddy_config, dns_provider, is_master) VALUES (1, ?, 'dnspod', 1)",
-			string(defaultConfig))
 	}
 }
 

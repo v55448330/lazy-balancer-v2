@@ -28,6 +28,14 @@ type CertIssuer struct {
 	caddyReloader func() error
 }
 
+type issuedCertificate struct {
+	ruleID     string
+	certPEM    string
+	keyPEM     string
+	notAfter   time.Time
+	providerID int
+}
+
 // CAProviderRateLimitError indicates the CA rejected the request with 429.
 type CAProviderRateLimitError struct {
 	RetryAfter time.Duration
@@ -85,7 +93,7 @@ type jobLogger struct {
 
 func (l *jobLogger) Log(stage, message string) {
 	l.file.Log(stage, message)
-	if _, err := db.DB.Exec("UPDATE cert_jobs SET status=?, message=?, updated_at=datetime('now') WHERE id=?",
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET status=?, message=?, updated_at=datetime('now') WHERE id=? AND status!='disabled'",
 		stage, message, l.jobID); err != nil {
 		log.Printf("cert job %d status update failed: %v", l.jobID, err)
 	}
@@ -126,20 +134,37 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 				renewalDays = 30
 			}
 			if notAfter, perr := parseCertNotAfter(existingCert); perr == nil && time.Until(notAfter) > time.Duration(renewalDays)*24*time.Hour {
-				logger.Log("deploying", "检测到已签发的有效证书，直接重新部署文件")
-				werr := WriteCertFiles(ruleID, existingCert, existingKey)
-				if werr == nil {
-					if _, uerr := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书文件重新部署成功', updated_at=datetime('now') WHERE id=?", jobID); uerr == nil {
-						if s.caddyReloader != nil {
-							if rerr := s.caddyReloader(); rerr != nil {
-								log.Printf("重新部署后重载 Caddy 失败: %v", rerr)
-							}
-						}
-						RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书重新部署成功", ruleID), "")
-						return nil
+				logger.Log("downloaded", "检测到已签发的有效证书，直接重新部署文件")
+				snapshot, snapshotErr := SnapshotCertFiles([]string{ruleID})
+				if snapshotErr != nil {
+					failJob(jobID, "读取现有证书文件失败: "+snapshotErr.Error())
+					return fmt.Errorf("snapshot existing certificate files: %w", snapshotErr)
+				}
+				if err := WriteCertFiles(ruleID, existingCert, existingKey); err != nil {
+					failJob(jobID, "已有证书重新部署失败: "+err.Error())
+					return fmt.Errorf("redeploy existing certificate: %w", err)
+				}
+				if s.caddyReloader != nil {
+					if err := s.caddyReloader(); err != nil {
+						failJob(jobID, "重新部署后重载 Caddy 失败: "+err.Error())
+						return fmt.Errorf("reload Caddy after certificate redeploy: %w", err)
 					}
 				}
-				logger.Log("deploy_failed", fmt.Sprintf("已有证书重新部署失败: %v，转为重新签发", werr))
+				result, err := db.DB.Exec(`UPDATE cert_jobs SET status='issued', message='证书文件重新部署成功', updated_at=datetime('now')
+					WHERE id=? AND status='downloaded' AND EXISTS (SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1)
+					AND EXISTS (SELECT 1 FROM global_config WHERE id=1 AND is_master=1)`, jobID, ruleID)
+				if err == nil {
+					var updated int64
+					updated, err = result.RowsAffected()
+					if err == nil && updated != 1 {
+						err = fmt.Errorf("certificate job is no longer deployable")
+					}
+				}
+				if err != nil {
+					return errors.Join(fmt.Errorf("finalize certificate redeploy: %w", err), restoreCertificateDeployment(snapshot, s.caddyReloader))
+				}
+				RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书重新部署成功", ruleID), "")
+				return nil
 			}
 		}
 	}
@@ -157,7 +182,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 
 	// Reset the existing job row (queue manager already created/reused it).
 	res, err := db.DB.Exec(
-		"UPDATE cert_jobs SET status='creating_account', message='开始申请证书', updated_at=datetime('now') WHERE id=?",
+		"UPDATE cert_jobs SET status='creating_account', message='开始申请证书', updated_at=datetime('now') WHERE id=? AND status!='disabled'",
 		jobID,
 	)
 	if err != nil {
@@ -233,6 +258,9 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		failJob(jobID, err.Error())
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("certificate issuance cancelled: %w", err)
+	}
 
 	// Parse certificate expiry
 	notAfter, err := parseCertNotAfter(certPEM)
@@ -245,49 +273,92 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		return fmt.Errorf("节点已切换为从节点，停止保存签发结果")
 	}
 
-	// Persist cert+key to database and reset renewal failure counters on success.
-	tx, err := db.DB.BeginTx(ctx, nil)
-	if err != nil {
-		failJob(jobID, fmt.Sprintf("证书保存失败: %v", err))
-		return fmt.Errorf("begin certificate transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	_, err = tx.ExecContext(ctx,
-		"UPDATE cert_jobs SET status='issued', message='签发成功', cert_pem=?, key_pem=?, expires_at=?, ca_provider_id=?, renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?",
-		certPEM, keyPEM, notAfter, provider.ID, jobID,
-	)
-	if err != nil {
-		failJob(jobID, fmt.Sprintf("证书保存失败: %v", err))
-		return fmt.Errorf("update cert job: %w", err)
-	}
-	if err := BumpClusterVersion(ctx, tx); err != nil {
-		failJob(jobID, fmt.Sprintf("集群版本更新失败: %v", err))
+	if err := s.deployIssuedCertificate(ctx, jobID, issuedCertificate{
+		ruleID: ruleID, certPEM: certPEM, keyPEM: keyPEM,
+		notAfter: notAfter, providerID: provider.ID,
+	}); err != nil {
 		return err
-	}
-	if err := tx.Commit(); err != nil {
-		failJob(jobID, fmt.Sprintf("证书保存失败: %v", err))
-		return fmt.Errorf("commit certificate transaction: %w", err)
-	}
-
-	// Write certificate files before declaring the job complete; failures retry.
-	if err := WriteCertFiles(ruleID, certPEM, keyPEM); err != nil {
-		RecordAuditLog("system", "写入失败", "证书文件", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(ruleID), AuditResultPart("io_error")), "")
-		failJob(jobID, "证书文件写入失败: "+err.Error())
-		return err
-	}
-	RecordAuditLog("system", "写入", "证书文件", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(ruleID), AuditResultPart("success")), "")
-
-	// Reload Caddy to pick up the new certificate; failure reverts job for retry.
-	if s.caddyReloader != nil {
-		if err := s.caddyReloader(); err != nil {
-			RecordAuditLog("system", "重载失败", "Caddy配置", FormatAuditDetail(AuditSourcePart("certificate_issued"), AuditJobPart(jobID), AuditRulePart(ruleID)), "")
-			failJob(jobID, "Caddy 重载失败: "+err.Error())
-			return err
-		}
-		RecordAuditLog("system", "重载", "Caddy配置", FormatAuditDetail(AuditSourcePart("certificate_issued"), AuditJobPart(jobID), AuditRulePart(ruleID), AuditResultPart("success")), "")
 	}
 
 	RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书签发成功，过期时间 %s", ruleID, notAfter.Format("2006-01-02")), "")
+	return nil
+}
+
+func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, material issuedCertificate) error {
+	result, err := db.DB.ExecContext(ctx, `UPDATE cert_jobs SET cert_pem=?, key_pem=?, expires_at=?, ca_provider_id=?, updated_at=datetime('now')
+		WHERE id=? AND status IN ('downloaded','cleanup_dns','cleanup_warning') AND EXISTS (SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1)
+		AND EXISTS (SELECT 1 FROM global_config WHERE id=1 AND is_master=1)`,
+		material.certPEM, material.keyPEM, material.notAfter, material.providerID, jobID, material.ruleID)
+	if err != nil {
+		return fmt.Errorf("persist downloaded certificate: %w", err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read downloaded certificate update result: %w", err)
+	}
+	if updated != 1 {
+		return fmt.Errorf("certificate job %d is no longer deployable", jobID)
+	}
+
+	snapshot, err := SnapshotCertFiles([]string{material.ruleID})
+	if err != nil {
+		failJob(jobID, "读取现有证书文件失败: "+err.Error())
+		return fmt.Errorf("snapshot existing certificate files: %w", err)
+	}
+	if err := WriteCertFiles(material.ruleID, material.certPEM, material.keyPEM); err != nil {
+		RecordAuditLog("system", "写入失败", "证书文件", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(material.ruleID), AuditResultPart("io_error")), "")
+		failJob(jobID, "证书文件写入失败: "+err.Error())
+		return fmt.Errorf("write certificate files: %w", err)
+	}
+	RecordAuditLog("system", "写入", "证书文件", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(material.ruleID), AuditResultPart("success")), "")
+
+	if s.caddyReloader != nil {
+		if err := s.caddyReloader(); err != nil {
+			RecordAuditLog("system", "重载失败", "Caddy配置", FormatAuditDetail(AuditSourcePart("certificate_issued"), AuditJobPart(jobID), AuditRulePart(material.ruleID)), "")
+			failJob(jobID, "Caddy 重载失败: "+err.Error())
+			return fmt.Errorf("reload Caddy after certificate issuance: %w", err)
+		}
+		RecordAuditLog("system", "重载", "Caddy配置", FormatAuditDetail(AuditSourcePart("certificate_issued"), AuditJobPart(jobID), AuditRulePart(material.ruleID), AuditResultPart("success")), "")
+	}
+
+	tx, err := db.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.Join(fmt.Errorf("begin certificate transaction: %w", err), restoreCertificateDeployment(snapshot, s.caddyReloader))
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err = tx.ExecContext(ctx, `UPDATE cert_jobs SET status='issued', message='签发成功', renewal_attempts=0,
+		ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now')
+		WHERE id=? AND status IN ('downloaded','cleanup_dns','cleanup_warning') AND EXISTS (SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1)
+		AND EXISTS (SELECT 1 FROM global_config WHERE id=1 AND is_master=1)`, jobID, material.ruleID)
+	if err == nil {
+		updated, err = result.RowsAffected()
+		if err == nil && updated != 1 {
+			err = fmt.Errorf("certificate job is no longer deployable")
+		}
+	}
+	if err == nil {
+		err = BumpClusterVersion(ctx, tx)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		cleanupErr := restoreCertificateDeployment(snapshot, s.caddyReloader)
+		failJob(jobID, "证书部署确认失败: "+err.Error())
+		return errors.Join(fmt.Errorf("finalize issued certificate: %w", err), cleanupErr)
+	}
+	return nil
+}
+
+func restoreCertificateDeployment(snapshot CertFilesSnapshot, reloader func() error) error {
+	if err := RestoreCertFiles(snapshot); err != nil {
+		return fmt.Errorf("restore previous certificate files: %w", err)
+	}
+	if reloader != nil {
+		if err := reloader(); err != nil {
+			return fmt.Errorf("reload Caddy after certificate rollback: %w", err)
+		}
+	}
 	return nil
 }
 

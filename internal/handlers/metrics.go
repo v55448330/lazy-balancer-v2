@@ -1,9 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"io"
-	"lazy-balancer-v2/internal/services"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,7 +13,23 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
+
+var caddyMetricsHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+func fetchCaddyMetrics(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := caddyMetricsHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
 
 func (h *Handlers) GetMetricsOverview(c *gin.Context) {
 	overview := h.metricsService.GetOverview()
@@ -35,14 +51,11 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 		return
 	}
 
-	resp, err := http.Get(h.cfg.CaddyAdminURL + "/metrics")
+	body, err := fetchCaddyMetrics(c.Request.Context(), h.cfg.CaddyAdminURL+"/metrics")
 	if err != nil {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: emptyRuleMetrics()})
 		return
 	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
 
 	var metrics gin.H
 	if rule.Protocol == "tcp" {
@@ -132,6 +145,10 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 		r.Timestamp = ts.In(services.CurrentLocation()).Format("2006-01-02 15:04:05")
 		result = append(result, r)
 	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取历史指标失败: " + err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"protocol": protocol, "supported": true, "rows": result}})
 }
 
@@ -197,28 +214,22 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 }
 
 func (h *Handlers) GetCaddyMetrics(c *gin.Context) {
-	resp, err := http.Get(h.cfg.CaddyAdminURL + "/metrics")
+	body, err := fetchCaddyMetrics(c.Request.Context(), h.cfg.CaddyAdminURL+"/metrics")
 	if err != nil {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: models.CaddyMetrics{}})
 		return
 	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
 	metrics := parsePrometheusMetrics(string(body))
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
 }
 
 func (h *Handlers) GetHostMetrics(c *gin.Context) {
-	resp, err := http.Get(h.cfg.CaddyAdminURL + "/metrics")
+	body, err := fetchCaddyMetrics(c.Request.Context(), h.cfg.CaddyAdminURL+"/metrics")
 	if err != nil {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: []models.HostMetrics{}})
 		return
 	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
 	metrics := parseHostMetrics(string(body))
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
@@ -226,7 +237,9 @@ func (h *Handlers) GetHostMetrics(c *gin.Context) {
 
 func loadRuleUpstreams(ruleID string) ([]models.Upstream, error) {
 	rows, err := db.DB.Query(`
-		SELECT id, rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, dns_server, max_connections
+		SELECT COALESCE(id,0), COALESCE(rule_id,''), COALESCE(host,''), COALESCE(port,0), COALESCE(weight,0),
+		       COALESCE(domain,''), COALESCE(dynamic_dns,0), COALESCE(enabled,0), COALESCE(protocol,''),
+		       COALESCE(dns_server,''), COALESCE(max_connections,0)
 		FROM upstreams WHERE rule_id = ? AND enabled = 1
 	`, ruleID)
 	if err != nil {
@@ -238,9 +251,9 @@ func loadRuleUpstreams(ruleID string) ([]models.Upstream, error) {
 	for rows.Next() {
 		var u models.Upstream
 		if err := rows.Scan(&u.ID, &u.RuleID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.DnsServer, &u.MaxConnections); err != nil {
-			continue
+			return nil, err
 		}
 		upstreams = append(upstreams, u)
 	}
-	return upstreams, nil
+	return upstreams, rows.Err()
 }

@@ -211,6 +211,10 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: "备份文件格式不正确: " + err.Error()}})
 			return
 		}
+		if err := validateV2Backup(backup); err != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
+			return
+		}
 		summary := map[string]int{}
 		for table, rows := range backup.Tables {
 			summary[table] = len(rows)
@@ -318,7 +322,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	tlsCount := 0
 	upstreamCount := 0
 	affectedRuleIDs := append([]string(nil), existingRuleIDs...)
-	var pendingCerts []struct{ id, cert, key string }
+	var pendingCerts []importCertificate
 	for _, r := range rules {
 		caddyID, err := services.GenerateCaddyID()
 		if err != nil {
@@ -353,7 +357,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			upstreamCount++
 		}
 		if r.EnableTLS && r.TLSCert != "" && r.TLSKey != "" {
-			pendingCerts = append(pendingCerts, struct{ id, cert, key string }{caddyID, r.TLSCert, r.TLSKey})
+			pendingCerts = append(pendingCerts, importCertificate{ruleID: caddyID, certPEM: r.TLSCert, keyPEM: r.TLSKey})
 		}
 		if r.EnableTLS {
 			tlsCount++
@@ -371,6 +375,13 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		if restoreErr := h.restoreImportRuntime(runtimeSnapshot); restoreErr != nil {
 			log.Printf("v1 导入失败后恢复运行配置失败: %v", restoreErr)
 		}
+	}
+	if err := materializeImportCertificates(pendingCerts); err != nil {
+		restoreRuntime()
+		h.caddyOpMu.Unlock()
+		recordAudit(c, "导入失败", "配置备份", err.Error())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "准备证书文件失败，已回滚: " + err.Error()})
+		return
 	}
 	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
 		restoreRuntime()
@@ -393,11 +404,6 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	}
 	committed = true
 	h.caddyOpMu.Unlock()
-	for _, pc := range pendingCerts {
-		if err := services.WriteCertFiles(pc.id, pc.cert, pc.key); err != nil {
-			log.Printf("导入后写入证书文件失败 %s: %v", pc.id, err)
-		}
-	}
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail("来源：v1 备份（覆盖导入规则）", fmt.Sprintf("规则 %d 条", imported), fmt.Sprintf("TLS 规则 %d 条", tlsCount), fmt.Sprintf("上游 %d 个", upstreamCount), services.AuditResultPart("success")))
 	recordAudit(c, "重载", "Caddy配置", "导入配置后自动重载")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已导入 %d 条规则", imported), Data: gin.H{"imported": imported}})

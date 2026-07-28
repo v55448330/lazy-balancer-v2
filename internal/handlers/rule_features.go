@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -156,6 +157,9 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 	}
 	if input.IPACLMode != "" && len(input.IPACLList) == 0 {
 		return fmt.Errorf("白名单/黑名单模式需要至少一条 CIDR")
+	}
+	if input.IPACLMode == "" && len(input.IPACLList) > 0 {
+		return fmt.Errorf("IP 访问控制模式为空时列表必须为空")
 	}
 	for _, cidr := range input.IPACLList {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
@@ -351,7 +355,11 @@ func (h *Handlers) UpdateRuleACL(c *gin.Context) {
 	}
 
 	if err := h.applyCaddyConfigWithRollback(); err != nil {
-		db.DB.Exec("UPDATE lb_rules SET ip_acl_mode = ?, ip_acl_list = ?, updated_at = datetime('now') WHERE caddy_id = ?", oldMode, oldListJSON, caddyID)
+		if _, restoreErr := db.DB.Exec("UPDATE lb_rules SET ip_acl_mode = ?, ip_acl_list = ?, updated_at = datetime('now') WHERE caddy_id = ?", oldMode, oldListJSON, caddyID); restoreErr != nil {
+			log.Printf("CRITICAL: UpdateRuleACL Caddy apply and DB restore failed for caddy_id=%s: caddy=%v db=%v", caddyID, err, restoreErr)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 与 DB 恢复均失败: Caddy: %v; DB: %v", err, restoreErr)})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用失败，已回滚: %v", err)})
 		return
 	}
@@ -397,13 +405,13 @@ func restoreRuleSnapshot(ctx context.Context, caddyID string, ruleRow map[string
 
 const lbRuleColumns = `COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port, COALESCE(strategy,''),
 	COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
-	health_check_path, health_check_interval, health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
+	COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,5), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 	COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 	COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
 	COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
 	COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
 	COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
-	COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), enabled, COALESCE(log_enabled,0),
+	COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), COALESCE(enabled,1), COALESCE(log_enabled,0),
 	created_by, created_at, updated_at, updated_by, COALESCE(host_header,'')`
 
 // 规范化规则行扫描：ListRules/GetRule/DuplicateRule 共用，避免列清单多处漂移

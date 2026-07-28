@@ -27,6 +27,11 @@ type clusterSnapshotCache struct {
 
 var clusterSnapshotCaches sync.Map
 
+type snapshotStore interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 // Snapshot builds the full cluster snapshot. tokenKey signs the payload with
 // the requesting node's cluster token (HMAC-SHA256) so slaves can verify
 // authenticity, not just integrity; leave empty to skip signing (legacy path).
@@ -72,16 +77,25 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return models.ClusterSnapshot{}, fmt.Errorf("开启集群快照事务: %w", err)
+	}
+	defer tx.Rollback()
+
 	var version int
-	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(cluster_version,0) FROM global_config WHERE id=1").Scan(&version); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(cluster_version,0) FROM global_config WHERE id=1").Scan(&version); err != nil {
 		return models.ClusterSnapshot{}, fmt.Errorf("读取集群版本: %w", err)
 	}
 	if cache.initialized && cache.version == version {
 		return cache.snapshot, nil
 	}
-	snapshot, err := s.buildSnapshot(ctx)
+	snapshot, err := s.buildSnapshot(ctx, tx)
 	if err != nil {
 		return models.ClusterSnapshot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return models.ClusterSnapshot{}, fmt.Errorf("提交集群快照事务: %w", err)
 	}
 	cache.initialized = true
 	cache.version = snapshot.Version
@@ -89,11 +103,11 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	return snapshot, nil
 }
 
-func (s *ClusterService) buildSnapshot(ctx context.Context) (models.ClusterSnapshot, error) {
+func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore) (models.ClusterSnapshot, error) {
 	var snapshot models.ClusterSnapshot
 	var syncCaddy bool
 	var caddyConfig string
-	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(cluster_version,0), COALESCE(sync_caddy_config,0), COALESCE(caddy_config,'{}'),
+	err := store.QueryRowContext(ctx, `SELECT COALESCE(cluster_version,0), COALESCE(sync_caddy_config,0), COALESCE(caddy_config,'{}'),
 		COALESCE(log_level,'info'), COALESCE(access_log_json,1), COALESCE(access_log_format,''),
 		COALESCE(cert_job_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3), COALESCE(jwt_expire_minutes,20), COALESCE(timezone,'Asia/Shanghai'),
 		COALESCE(acme_email,''), COALESCE(cert_expiry_days,30), COALESCE(cert_renewal_days,30), COALESCE(cert_renewal_attempts,5),
@@ -110,7 +124,7 @@ func (s *ClusterService) buildSnapshot(ctx context.Context) (models.ClusterSnaps
 	}
 	if syncCaddy {
 		snapshot.CaddyConfig = &caddyConfig
-		if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(caddy_log_path,'/app/logs/caddy.log'), COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
+		if err := store.QueryRowContext(ctx, `SELECT COALESCE(caddy_log_path,'/app/logs/caddy.log'), COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
 			COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,0), COALESCE(http_write_timeout,0), COALESCE(http_idle_timeout,0),
 			COALESCE(upstream_keepalive_timeout,0),
 			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
@@ -124,23 +138,23 @@ func (s *ClusterService) buildSnapshot(ctx context.Context) (models.ClusterSnaps
 			return models.ClusterSnapshot{}, fmt.Errorf("读取 Caddy 全局设置: %w", err)
 		}
 	}
-	if snapshot.Rules, err = s.snapshotRules(ctx); err != nil {
+	if snapshot.Rules, err = s.snapshotRules(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
-	if snapshot.Users, err = s.snapshotUsers(ctx); err != nil {
+	if snapshot.Users, err = s.snapshotUsers(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
-	if snapshot.APIKeys, err = s.snapshotAPIKeys(ctx); err != nil {
+	if snapshot.APIKeys, err = s.snapshotAPIKeys(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
-	if snapshot.Certs, err = s.snapshotCertificates(ctx); err != nil {
+	if snapshot.Certs, err = s.snapshotCertificates(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
 	return snapshot, nil
 }
 
-func (s *ClusterService) snapshotRules(ctx context.Context) ([]models.LbRule, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT COALESCE(caddy_id,''), name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port,
+func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore) ([]models.LbRule, error) {
+	rows, err := store.QueryContext(ctx, `SELECT COALESCE(caddy_id,''), name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port,
 		COALESCE(strategy,'weighted_round_robin'), COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 		COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,5), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 		COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
@@ -172,12 +186,12 @@ func (s *ClusterService) snapshotRules(ctx context.Context) ([]models.LbRule, er
 		if err := json.Unmarshal([]byte(ipACLListJSON), &rule.IPACLList); err != nil {
 			return nil, fmt.Errorf("解析快照规则 %s 的 IP 访问控制列表: %w", rule.CaddyID, err)
 		}
-		upstreams, upstreamErr := s.snapshotUpstreams(ctx, rule.CaddyID)
+		upstreams, upstreamErr := s.snapshotUpstreams(ctx, store, rule.CaddyID)
 		if upstreamErr != nil {
 			return nil, upstreamErr
 		}
 		rule.Upstreams = upstreams
-		pathRules, pathRulesErr := s.snapshotPathRules(ctx, rule.CaddyID)
+		pathRules, pathRulesErr := s.snapshotPathRules(ctx, store, rule.CaddyID)
 		if pathRulesErr != nil {
 			return nil, pathRulesErr
 		}
@@ -190,8 +204,8 @@ func (s *ClusterService) snapshotRules(ctx context.Context) ([]models.LbRule, er
 	return rules, nil
 }
 
-func (s *ClusterService) snapshotPathRules(ctx context.Context, ruleID string) ([]models.PathRule, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,rule_id,sort_order,match_type,path,upstreams_json FROM path_rules WHERE rule_id=? ORDER BY sort_order,id`, ruleID)
+func (s *ClusterService) snapshotPathRules(ctx context.Context, store snapshotStore, ruleID string) ([]models.PathRule, error) {
+	rows, err := store.QueryContext(ctx, `SELECT id,rule_id,sort_order,match_type,path,upstreams_json FROM path_rules WHERE rule_id=? ORDER BY sort_order,id`, ruleID)
 	if err != nil {
 		return nil, fmt.Errorf("读取规则路径 %s: %w", ruleID, err)
 	}
@@ -216,8 +230,8 @@ func (s *ClusterService) snapshotPathRules(ctx context.Context, ruleID string) (
 	return pathRules, nil
 }
 
-func (s *ClusterService) snapshotUpstreams(ctx context.Context, ruleID string) ([]models.Upstream, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), COALESCE(enabled,1), COALESCE(protocol,'http'), COALESCE(dns_server,''), COALESCE(max_connections,0) FROM upstreams WHERE rule_id=? ORDER BY id`, ruleID)
+func (s *ClusterService) snapshotUpstreams(ctx context.Context, store snapshotStore, ruleID string) ([]models.Upstream, error) {
+	rows, err := store.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), COALESCE(enabled,1), COALESCE(protocol,'http'), COALESCE(dns_server,''), COALESCE(max_connections,0) FROM upstreams WHERE rule_id=? ORDER BY id`, ruleID)
 	if err != nil {
 		return nil, fmt.Errorf("读取规则上游 %s: %w", ruleID, err)
 	}
@@ -233,8 +247,8 @@ func (s *ClusterService) snapshotUpstreams(ctx context.Context, ruleID string) (
 	return upstreams, rows.Err()
 }
 
-func (s *ClusterService) snapshotUsers(ctx context.Context) ([]models.ClusterUser, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, username, password_hash, role, COALESCE(display_name,''), COALESCE(is_enabled,1) FROM users ORDER BY username`)
+func (s *ClusterService) snapshotUsers(ctx context.Context, store snapshotStore) ([]models.ClusterUser, error) {
+	rows, err := store.QueryContext(ctx, `SELECT id, username, password_hash, role, COALESCE(display_name,''), COALESCE(is_enabled,1) FROM users ORDER BY username`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照用户: %w", err)
 	}
@@ -250,8 +264,8 @@ func (s *ClusterService) snapshotUsers(ctx context.Context) ([]models.ClusterUse
 	return users, rows.Err()
 }
 
-func (s *ClusterService) snapshotAPIKeys(ctx context.Context) ([]models.ClusterAPIKey, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, key_hash, key_prefix, created_by, COALESCE(expires_at,''), COALESCE(is_enabled,1) FROM api_keys ORDER BY id`)
+func (s *ClusterService) snapshotAPIKeys(ctx context.Context, store snapshotStore) ([]models.ClusterAPIKey, error) {
+	rows, err := store.QueryContext(ctx, `SELECT id, name, key_hash, key_prefix, created_by, COALESCE(expires_at,''), COALESCE(is_enabled,1) FROM api_keys ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照密钥: %w", err)
 	}
@@ -267,8 +281,8 @@ func (s *ClusterService) snapshotAPIKeys(ctx context.Context) ([]models.ClusterA
 	return keys, rows.Err()
 }
 
-func (s *ClusterService) snapshotCertificates(ctx context.Context) ([]models.ClusterCertificate, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT caddy_id, tls_cert, tls_key, '' FROM lb_rules WHERE enable_tls=1 AND tls_source='manual' AND COALESCE(tls_cert,'')<>'' AND COALESCE(tls_key,'')<>''
+func (s *ClusterService) snapshotCertificates(ctx context.Context, store snapshotStore) ([]models.ClusterCertificate, error) {
+	rows, err := store.QueryContext(ctx, `SELECT caddy_id, tls_cert, tls_key, '' FROM lb_rules WHERE enable_tls=1 AND tls_source='manual' AND COALESCE(tls_cert,'')<>'' AND COALESCE(tls_key,'')<>''
 		UNION ALL SELECT rule_id, cert_pem, key_pem, COALESCE(expires_at,'') FROM cert_jobs WHERE status='issued' AND COALESCE(cert_pem,'')<>'' AND COALESCE(key_pem,'')<>'' ORDER BY 1`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照证书: %w", err)

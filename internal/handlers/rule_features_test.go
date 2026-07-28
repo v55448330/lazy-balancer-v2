@@ -34,6 +34,11 @@ func TestRuleFeatures_rejects_invalid_ACL_and_path_rule_inputs(t *testing.T) {
 			wantError: "CIDR",
 		},
 		{
+			name:      "ACL list without mode",
+			input:     ruleFeatureInput{IPACLList: []string{"192.0.2.0/24"}},
+			wantError: "模式为空",
+		},
+		{
 			name: "path rules while disabled",
 			input: ruleFeatureInput{PathRules: []models.PathRule{{
 				MatchType: "prefix",

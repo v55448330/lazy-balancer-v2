@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"runtime"
 	"strings"
 	"testing"
@@ -8,6 +9,67 @@ import (
 
 	"lazy-balancer-v2/internal/models"
 )
+
+func TestCAQueueManager_CancelJob_removes_pending_job(t *testing.T) {
+	// Given
+	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
+	queue.enqueue(queueItem{jobID: 42, ruleID: "lb_cancel", domains: "example.com"})
+	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
+
+	// When
+	manager.CancelJob(42)
+
+	// Then
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if len(queue.pending) != 0 {
+		t.Fatalf("pending jobs=%d, want 0", len(queue.pending))
+	}
+	if _, active := queue.active[42]; active {
+		t.Fatal("cancelled pending job remains active")
+	}
+}
+
+func TestCAQueue_prepareExecution_registers_cancel_atomically(t *testing.T) {
+	// Given
+	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
+	queue.enqueue(queueItem{jobID: 42, ruleID: "lb_dispatch", domains: "example.com"})
+
+	// When
+	queue.mu.Lock()
+	execution, ok := queue.prepareExecutionLocked(context.Background())
+	queue.mu.Unlock()
+
+	// Then
+	if !ok {
+		t.Fatal("pending job was not prepared")
+	}
+	defer execution.cancel()
+	queue.mu.Lock()
+	registered := queue.cancels[42] != nil
+	queue.mu.Unlock()
+	if !registered {
+		t.Fatal("cancel function was not registered during dequeue")
+	}
+}
+
+func TestIsTerminalJobStatus_returns_true_for_disabled_job(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	result, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status) VALUES ('lb_disabled', 'example.com', 'disabled')`)
+	if err != nil {
+		t.Fatalf("seed disabled job: %v", err)
+	}
+	jobID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read job ID: %v", err)
+	}
+
+	// When / Then
+	if !isTerminalJobStatus(int(jobID)) {
+		t.Fatal("disabled job is not terminal")
+	}
+}
 
 func TestCAQueue_tick_fails_pending_job_when_provider_disabled(t *testing.T) {
 	// Given

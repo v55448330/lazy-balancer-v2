@@ -56,6 +56,15 @@ func (m *CAQueueManager) CancelJob(jobID int) {
 	m.mu.Unlock()
 	for _, q := range queues {
 		q.mu.Lock()
+		pending := q.pending[:0]
+		for _, item := range q.pending {
+			if item.jobID == jobID {
+				delete(q.active, jobID)
+				continue
+			}
+			pending = append(pending, item)
+		}
+		q.pending = pending
 		cancel, ok := q.cancels[jobID]
 		q.mu.Unlock()
 		if ok {
@@ -149,6 +158,13 @@ type caQueue struct {
 	cancel    context.CancelFunc
 }
 
+type queueExecution struct {
+	item     queueItem
+	provider models.CAProvider
+	ctx      context.Context
+	cancel   context.CancelFunc
+}
+
 func newCAQueue(provider models.CAProvider, reloader func() error) *caQueue {
 	if provider.MaxConcurrent <= 0 {
 		provider.MaxConcurrent = 1
@@ -224,16 +240,32 @@ func (q *caQueue) tick() {
 		return
 	}
 
-	item := q.pending[0]
-	q.pending = q.pending[1:]
-	q.running++
+	execution, ok := q.prepareExecutionLocked(q.ctx)
+	if !ok {
+		q.mu.Unlock()
+		return
+	}
 	q.lastOrder = time.Now()
 	q.mu.Unlock()
 
-	go q.execute(item)
+	go q.execute(execution)
 }
 
-func (q *caQueue) execute(item queueItem) {
+func (q *caQueue) prepareExecutionLocked(parent context.Context) (queueExecution, bool) {
+	if len(q.pending) == 0 {
+		return queueExecution{}, false
+	}
+	item := q.pending[0]
+	q.pending = q.pending[1:]
+	q.running++
+	ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
+	q.cancels[item.jobID] = cancel
+	return queueExecution{item: item, provider: q.provider, ctx: ctx, cancel: cancel}, true
+}
+
+func (q *caQueue) execute(execution queueExecution) {
+	item := execution.item
+	defer execution.cancel()
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("CA queue panic for job %d: %v", item.jobID, r)
@@ -246,6 +278,10 @@ func (q *caQueue) execute(item queueItem) {
 		q.mu.Unlock()
 	}()
 
+	if err := execution.ctx.Err(); err != nil {
+		return
+	}
+
 	// If the rule/job was deleted while the item was queued, skip it silently.
 	if !jobExists(item.jobID) {
 		log.Printf("CA queue: job %d no longer exists, skipping", item.jobID)
@@ -253,14 +289,7 @@ func (q *caQueue) execute(item queueItem) {
 	}
 
 	issuer := NewCertIssuer(q.reloader)
-	ctx, cancel := context.WithTimeout(q.ctx, 15*time.Minute)
-	defer cancel()
-	q.mu.Lock()
-	q.cancels[item.jobID] = cancel
-	provider := q.provider
-	q.mu.Unlock()
-
-	if err := issuer.Issue(ctx, item.jobID, item.ruleID, item.domains, provider); err != nil {
+	if err := issuer.Issue(execution.ctx, item.jobID, item.ruleID, item.domains, execution.provider); err != nil {
 		log.Printf("CA queue execution failed for job %d rule %s: %v", item.jobID, item.ruleID, err)
 		if !isTerminalJobStatus(item.jobID) {
 			var raErr *CAProviderRateLimitError
@@ -278,7 +307,7 @@ func isTerminalJobStatus(jobID int) bool {
 	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
 		return false
 	}
-	return status == "issued" || status == "failed"
+	return status == "issued" || status == "failed" || status == "disabled"
 }
 
 // jobExists returns true if a cert_jobs row with the given id still exists.
@@ -361,9 +390,17 @@ func failJob(jobID int, message string) {
 		return
 	}
 	WriteCertJobLog(jobID, "ERROR", "failed", message)
-	if _, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=COALESCE(renewal_attempts,0)+1, updated_at=datetime('now') WHERE id=?", message, jobID); err != nil {
+	result, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=COALESCE(renewal_attempts,0)+1, updated_at=datetime('now') WHERE id=? AND status!='disabled'", message, jobID)
+	if err != nil {
 		log.Printf("CA queue: failed to mark job %d as failed: %v", jobID, err)
-	} else {
+		return
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		log.Printf("CA queue: failed to read fail result for job %d: %v", jobID, err)
+		return
+	}
+	if updated == 1 {
 		RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("failed")), "")
 	}
 }

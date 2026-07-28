@@ -22,9 +22,13 @@
         <el-table-column prop="name" label="规则名称" min-width="140">
           <template #default="{ row }">
             <div class="rule-name-cell">
+              <el-tooltip
+                v-if="row.ip_acl_mode === 'allow' || row.ip_acl_mode === 'deny'"
+                :content="row.ip_acl_mode === 'allow' ? `IP 白名单 · ${row.ip_acl_list?.length || 0} 条` : `IP 黑名单 · ${row.ip_acl_list?.length || 0} 条`"
+              >
+                <el-icon :size="14" class="acl-lock-icon" :class="`is-${row.ip_acl_mode}`"><Lock /></el-icon>
+              </el-tooltip>
               <a class="rule-name-link" @click.prevent="viewConfig(row)">{{ row.name }}</a>
-              <el-tag v-if="row.ip_acl_mode === 'allow'" type="success" size="small" effect="plain">白名单 {{ row.ip_acl_list?.length || 0 }}</el-tag>
-              <el-tag v-else-if="row.ip_acl_mode === 'deny'" type="danger" size="small" effect="plain">黑名单 {{ row.ip_acl_list?.length || 0 }}</el-tag>
             </div>
           </template>
         </el-table-column>
@@ -407,7 +411,7 @@
           <el-form :model="wizardForm" label-width="100px">
             <div class="upstream-header">
               <span class="section-title">上游服务器列表</span>
-              <el-button size="small" type="primary" @click="addUpstream" :disabled="wizardForm.dynamic_dns && wizardForm.upstreams.length >= 1">
+              <el-button size="small" type="primary" @click="addUpstream" :disabled="wizardForm.upstreams.length >= MAX_UPSTREAM_ROWS || (wizardForm.dynamic_dns && wizardForm.upstreams.length >= 1)">
                 <el-icon><Plus /></el-icon>添加上游
               </el-button>
             </div>
@@ -969,7 +973,7 @@ import RuleAclDialog from '@/components/rules/RuleAclDialog.vue'
 import PathRulesEditor from '@/components/rules/PathRulesEditor.vue'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
 import { validatePathRules } from '@/utils/ruleValidation'
-import { normalizeWeights, redistributeWeight } from '@/utils/upstreamWeights'
+import { MAX_UPSTREAM_ROWS, normalizeWeights, redistributeWeight } from '@/utils/upstreamWeights'
 
 interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id'> {
   id?: number
@@ -1179,6 +1183,7 @@ const users = ref<User[]>([])
 const certInfoMap = ref<Record<string, CertInfo | null>>({})
 const certJobMap = ref<Record<string, CertJob>>({})
 const ruleTogglePending = ref<Record<string, boolean>>({})
+let certInfoRequestSeq = 0
 
 const getUpdaterName = (userId?: number) => {
   if (!userId || userId === 0) return '-'
@@ -1215,6 +1220,7 @@ const fetchRules = async () => {
 }
 
 const fetchCertInfo = async (caddyIds?: readonly string[]) => {
+  const requestSeq = ++certInfoRequestSeq
   const requestedIds = caddyIds ? new Set(caddyIds) : null
   const tlsRules = rules.value.filter(r => r.enable_tls && (!requestedIds || requestedIds.has(r.caddy_id)))
   if (tlsRules.length === 0) {
@@ -1226,9 +1232,11 @@ const fetchCertInfo = async (caddyIds?: readonly string[]) => {
       caddy_ids: tlsRules.map(r => r.caddy_id)
     })
     const certInfo = res.data || {}
-    certInfoMap.value = requestedIds ? { ...certInfoMap.value, ...certInfo } : certInfo
+    if (requestSeq === certInfoRequestSeq) {
+      certInfoMap.value = requestedIds ? { ...certInfoMap.value, ...certInfo } : certInfo
+    }
   } catch {
-    if (!requestedIds) certInfoMap.value = {}
+    return
   }
 }
 
@@ -1242,9 +1250,8 @@ const fetchCertJobs = async () => {
     const map: Record<string, CertJob> = {}
     jobs.forEach(job => {
       if (job.rule_id) {
-        // Keep the most recent non-terminal job if multiple exist
         const existing = map[job.rule_id]
-        if (!existing || isCertJobActive(existing.status)) {
+        if (!existing || certJobPriority(job.status) > certJobPriority(existing.status)) {
           map[job.rule_id] = job
         }
       }
@@ -1267,6 +1274,13 @@ const fetchCertJobs = async () => {
 const isCertJobActive = (status?: string) => {
   if (!status) return false
   return !['issued', 'failed', 'disabled'].includes(status)
+}
+
+const certJobPriority = (status: string): number => {
+  if (status === 'waiting_ca' || status === 'failed') return 2
+  if (isCertJobActive(status)) return 3
+  if (status === 'issued') return 1
+  return 0
 }
 
 const certJobStatusLabel = (status?: string) => {
@@ -1544,6 +1558,20 @@ const certInfo = reactive({
   warning: '',
   error: ''
 })
+let certValidationSeq = 0
+let certValidationSessionSeq = 0
+
+const resetCertInfo = (): void => {
+  Object.assign(certInfo, {
+    valid: false,
+    domain: '',
+    issuer: '',
+    expiryDate: '',
+    daysUntilExpiry: 0,
+    warning: '',
+    error: '',
+  })
+}
 
 const wizardForm = reactive<RuleForm>({
   caddy_id: '',
@@ -1764,12 +1792,9 @@ const fetchGlobalConfig = async () => {
 }
 
 const validateCertificate = async () => {
-  certInfo.valid = false
-  certInfo.warning = ''
-  certInfo.error = ''
-  certInfo.domain = ''
-  certInfo.expiryDate = ''
-  certInfo.daysUntilExpiry = 0
+  const validationSeq = ++certValidationSeq
+  const sessionSeq = certValidationSessionSeq
+  resetCertInfo()
 
   const certPEM = wizardForm.tls_cert?.trim() || ''
   const keyPEM = wizardForm.tls_key?.trim() || ''
@@ -1809,6 +1834,7 @@ const validateCertificate = async () => {
       cert_pem: certPEM,
       key_pem: keyPEM
     })
+    if (validationSeq !== certValidationSeq || sessionSeq !== certValidationSessionSeq) return
     
     if (res.code === 0 && res.data) {
       const data = res.data
@@ -1823,6 +1849,7 @@ const validateCertificate = async () => {
       certInfo.error = res.message || '证书验证失败'
     }
   } catch (error: unknown) {
+    if (validationSeq !== certValidationSeq || sessionSeq !== certValidationSessionSeq) return
     certInfo.error = error instanceof Error ? error.message : '证书验证请求失败'
   }
 }
@@ -1873,6 +1900,10 @@ const pasteFromFile = async (type: 'cert' | 'key') => {
 
 const openWizard = (rule?: Rule) => {
   if (isReadOnly.value) return
+  certValidationSessionSeq++
+  certValidationSeq++
+  resetCertInfo()
+  upstreamTouched.value = []
   isCopyMode.value = false
   if (rule) {
     editingRule.value = rule
@@ -1990,6 +2021,10 @@ const openWizard = (rule?: Rule) => {
 }
 
 const resetWizard = () => {
+  certValidationSessionSeq++
+  certValidationSeq++
+  resetCertInfo()
+  upstreamTouched.value = []
   editingRule.value = null
   isCopyMode.value = false
   currentStep.value = WIZARD_STEP.BASIC
@@ -2010,6 +2045,7 @@ const weightPercent = (upstreams: readonly (Upstream | UpstreamInput)[] | undefi
 }
 
 const addUpstream = () => {
+  if (wizardForm.upstreams.length >= MAX_UPSTREAM_ROWS) return
   const upstream = defaultUpstream(wizardForm.protocol === 'tcp' ? 'tcp' : 'http')
   upstream.weight = 0
   wizardForm.upstreams.push(upstream)
@@ -2128,19 +2164,28 @@ const prevStep = (): void => {
 }
 
 const submitWizard = async () => {
-  if (isReadOnly.value) return
+  if (isReadOnly.value || saving.value) return
+  saving.value = true
   if (!wizardForm.name) {
     ElMessage.warning('请输入规则名称')
+    saving.value = false
     return
   }
   if (wizardForm.upstreams.length === 0) {
     ElMessage.warning('请至少添加一个上游服务器')
+    saving.value = false
+    return
+  }
+  if (wizardForm.upstreams.length > MAX_UPSTREAM_ROWS) {
+    ElMessage.warning(`上游服务器最多允许 ${MAX_UPSTREAM_ROWS} 条`)
+    saving.value = false
     return
   }
   if (wizardForm.protocol === 'http' && wizardForm.custom_routes_enabled) {
     const pathRuleError = validatePathRules(wizardForm.path_rules)
     if (pathRuleError) {
       ElMessage.warning(pathRuleError)
+      saving.value = false
       return
     }
   }
@@ -2148,6 +2193,7 @@ const submitWizard = async () => {
   const enabledUpstreams = wizardForm.upstreams.filter(u => u.enabled)
   if (enabledUpstreams.length === 0) {
     ElMessage.warning('至少需要一个启用的上游服务器')
+    saving.value = false
     return
   }
 
@@ -2159,10 +2205,10 @@ const submitWizard = async () => {
       { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' }
     )
   } catch (e) {
+    saving.value = false
     return
   }
 
-  saving.value = true
   try {
     const validUpstreams = wizardForm.upstreams.filter(u => u.host && u.port).map(u => ({
       ...u,
@@ -2283,6 +2329,10 @@ const duplicateRule = async (rule: Rule) => {
 }
 
 const openCopyWizard = (rule: Rule) => {
+  certValidationSessionSeq++
+  certValidationSeq++
+  resetCertInfo()
+  upstreamTouched.value = []
   editingRule.value = null
   isCopyMode.value = true
   const compressType = rule.compress_types ? selectedCompressType(rule.compress_types) : 'gzip'
@@ -2689,7 +2739,10 @@ onUnmounted(() => {
 .mb-5 { margin-bottom: 20px; }
 
 .rule-name { font-weight: 500; color: #111827; }
-.rule-name-cell { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.rule-name-cell { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; white-space: nowrap; }
+.acl-lock-icon { flex: 0 0 auto; cursor: pointer; }
+.acl-lock-icon.is-allow { color: var(--el-color-success); }
+.acl-lock-icon.is-deny { color: var(--el-color-danger); }
 .rule-name-link { 
   font-weight: 500; 
   color: #111827; 

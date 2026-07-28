@@ -7,7 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"lazy-balancer-v2/internal/config"
 )
 
 func TestGenerateSingleRuleCaddyConfig_HTTPAllowACL_appendsForbiddenFallback(t *testing.T) {
@@ -238,6 +241,128 @@ func TestSetConfigByID_replacesOwnedRouteSet_andPreservesSiblingRoutes(t *testin
 	}
 	routes := httpRoutesFromConfig(t, applied)
 	assertRouteIDs(t, routes, []string{"rule-sibling_path_0", "rule-target", "", ""})
+}
+
+func TestSetConfigByID_preservesTLSRedirectOnHTTPServer(t *testing.T) {
+	// Given
+	current := map[string]interface{}{
+		"apps": map[string]interface{}{
+			"http": map[string]interface{}{
+				"servers": map[string]interface{}{
+					"http_80": map[string]interface{}{"routes": []interface{}{
+						map[string]interface{}{"@id": "rule-target_redirect"},
+						runningDefaultRoute(),
+					}},
+					"http_443": map[string]interface{}{"routes": []interface{}{
+						map[string]interface{}{"@id": "rule-target"},
+						map[string]interface{}{"@id": "rule-sibling"},
+					}},
+				},
+			},
+		},
+	}
+	replacement := map[string]interface{}{"@id": "rule-target", "handle": []interface{}{map[string]interface{}{"handler": "subroute"}}}
+	var applied map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			if err := json.NewEncoder(writer).Encode(current); err != nil {
+				t.Errorf("encode current config: %v", err)
+			}
+			return
+		}
+		if err := json.NewDecoder(request.Body).Decode(&applied); err != nil {
+			t.Errorf("decode applied config: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	// When
+	err := NewCaddyService(server.URL).SetConfigByID("rule-target", replacement)
+
+	// Then
+	if err != nil {
+		t.Fatalf("replace TLS route: %v", err)
+	}
+	assertRouteIDs(t, httpRoutesFromServer(t, applied, "http_80"), []string{"rule-target_redirect", ""})
+	assertRouteIDs(t, httpRoutesFromServer(t, applied, "http_443"), []string{"rule-target", "rule-sibling"})
+}
+
+func TestGenerateCaddyConfig_propagatesCertificateMaterializationFailure(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,health_check_path,enable_tls,tls_source,tls_cert,tls_key) VALUES ('../invalid','invalid cert','http','example.com',443,'weighted_round_robin','',1,'manual','new-cert','new-key')`); err != nil {
+		t.Fatalf("seed invalid certificate rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('../invalid','127.0.0.1',8080,1,1,'http')`); err != nil {
+		t.Fatalf("seed invalid certificate upstream: %v", err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests++
+	}))
+	defer server.Close()
+
+	// When
+	err := NewCaddyService(server.URL).ApplyConfig(GenerateCaddyConfig(&config.Config{}))
+
+	// Then
+	if err == nil || !strings.Contains(err.Error(), "invalid") {
+		t.Fatalf("expected materialization error for invalid rule ID, got %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("Caddy received %d requests after certificate materialization failed", requests)
+	}
+}
+
+func TestGenerateCaddyConfig_restoresCertificateSnapshotWhenMaterializationFails(t *testing.T) {
+	// Given
+	oldCertDir := certDir
+	certDir = t.TempDir()
+	t.Cleanup(func() { certDir = oldCertDir })
+	_, database := newClusterTestService(t)
+	for _, ruleID := range []string{"a-valid", "z-fail"} {
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,health_check_path,enable_tls,tls_source,tls_cert,tls_key) VALUES (?,?, 'http','example.com',443,'weighted_round_robin','',1,'manual','new-cert','new-key')`, ruleID, ruleID); err != nil {
+			t.Fatalf("seed certificate rule %s: %v", ruleID, err)
+		}
+		if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES (?,'127.0.0.1',8080,1,1,'http')`, ruleID); err != nil {
+			t.Fatalf("seed certificate upstream %s: %v", ruleID, err)
+		}
+	}
+	validCertPath, validKeyPath := CertFilePaths("a-valid")
+	if err := os.WriteFile(validCertPath, []byte("old-cert"), 0644); err != nil {
+		t.Fatalf("seed old certificate: %v", err)
+	}
+	if err := os.WriteFile(validKeyPath, []byte("old-key"), 0600); err != nil {
+		t.Fatalf("seed old key: %v", err)
+	}
+	_, failingKeyPath := CertFilePaths("z-fail")
+	if err := os.Mkdir(failingKeyPath+".tmp", 0700); err != nil {
+		t.Fatalf("block failing key temporary path: %v", err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer server.Close()
+
+	// When
+	err := NewCaddyService(server.URL).ApplyConfig(GenerateCaddyConfig(&config.Config{}))
+
+	// Then
+	if err == nil {
+		t.Fatal("expected certificate materialization failure")
+	}
+	cert, readErr := os.ReadFile(validCertPath)
+	if readErr != nil {
+		t.Fatalf("read restored certificate: %v", readErr)
+	}
+	key, readErr := os.ReadFile(validKeyPath)
+	if readErr != nil {
+		t.Fatalf("read restored key: %v", readErr)
+	}
+	assertEqual(t, string(cert), "old-cert")
+	assertEqual(t, string(key), "old-key")
+	if requests != 0 {
+		t.Fatalf("Caddy received %d requests after certificate rollback", requests)
+	}
 }
 
 func TestDeleteRouteByID_removesOnlyOwnedRouteSet(t *testing.T) {
@@ -582,10 +707,15 @@ func testHTTPConfig(routes []interface{}) map[string]interface{} {
 
 func httpRoutesFromConfig(t *testing.T, config map[string]interface{}) []interface{} {
 	t.Helper()
+	return httpRoutesFromServer(t, config, "http_80")
+}
+
+func httpRoutesFromServer(t *testing.T, config map[string]interface{}, serverName string) []interface{} {
+	t.Helper()
 	apps := mustMap(t, config["apps"], "apps")
 	httpApp := mustMap(t, apps["http"], "http app")
 	servers := mustMap(t, httpApp["servers"], "servers")
-	server := mustMap(t, servers["http_80"], "http_80")
+	server := mustMap(t, servers[serverName], serverName)
 	routes, ok := server["routes"].([]interface{})
 	if !ok {
 		t.Fatalf("routes has type %T", server["routes"])

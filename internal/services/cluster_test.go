@@ -214,6 +214,43 @@ func TestClusterService_Snapshot_signatures_verify_for_each_requesting_token(t *
 	}
 }
 
+func TestClusterService_buildSnapshot_readsOnlyFromProvidedTransaction(t *testing.T) {
+	// Given
+	service, database := newClusterTestService(t)
+	tx, err := database.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatalf("begin snapshot transaction: %v", err)
+	}
+	defer tx.Rollback()
+	if err := database.Close(); err != nil {
+		t.Fatalf("close database pool: %v", err)
+	}
+
+	// When
+	snapshot, err := service.buildSnapshot(context.Background(), tx)
+
+	// Then
+	if err != nil {
+		t.Fatalf("build snapshot from active transaction after pool close: %v", err)
+	}
+	if snapshot.Version != 0 {
+		t.Fatalf("snapshot version=%d, want 0", snapshot.Version)
+	}
+}
+
+func TestSyncService_finishRun_doesNotClearNewerRun(t *testing.T) {
+	// Given
+	service := &SyncService{generation: 2, cancel: func() {}}
+
+	// When
+	service.finishRun(1)
+
+	// Then
+	if service.cancel == nil {
+		t.Fatal("stale run cleared the newer run cancellation handle")
+	}
+}
+
 func TestComputeNodeStatus_marks_stale_approved_node_offline(t *testing.T) {
 	// Given
 	now := time.Date(2026, 7, 18, 12, 10, 0, 0, time.UTC)

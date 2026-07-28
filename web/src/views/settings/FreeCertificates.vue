@@ -494,15 +494,20 @@ const openConfigDialog = (config?: CertConfig) => {
 }
 
 const saveConfig = async () => {
+  if (saving.value) return
+  saving.value = true
   if (!form.value.name || !form.value.dns_provider) {
     ElMessage.warning('请填写配置名称和 DNS 提供商')
+    saving.value = false
     return
   }
 
   const domain = await promptTestDomain(true)
-  if (!domain) return
+  if (!domain) {
+    saving.value = false
+    return
+  }
 
-  saving.value = true
   try {
     const payload = { ...form.value, domain }
     const url = editingId.value

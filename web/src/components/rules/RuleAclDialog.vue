@@ -89,14 +89,17 @@ const normalizeCidr = (rawValue: string): string => {
 }
 
 const submit = (): void => {
-  const normalizedCidrs = cidrs.value.map(normalizeCidr).filter((cidr) => cidr !== '')
+  const normalizedRows = cidrs.value
+    .map((cidr, originalIndex) => ({ cidr: normalizeCidr(cidr), originalIndex }))
+    .filter((row) => row.cidr !== '')
+  const normalizedCidrs = normalizedRows.map((row) => row.cidr)
   if (mode.value && normalizedCidrs.length === 0) {
     validationError.value = '请至少添加一个 CIDR'
     return
   }
-  const invalidIndex = normalizedCidrs.findIndex((cidr) => !isValidCidr(cidr))
-  if (mode.value && invalidIndex >= 0) {
-    validationError.value = `第 ${invalidIndex + 1} 行 CIDR 格式不正确`
+  const invalidRow = normalizedRows.find((row) => !isValidCidr(row.cidr))
+  if (mode.value && invalidRow) {
+    validationError.value = `第 ${invalidRow.originalIndex + 1} 行 CIDR 格式不正确`
     return
   }
   validationError.value = ''

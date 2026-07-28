@@ -11,9 +11,9 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-const certDir = "/app/certs"
+var certDir = "/app/certs"
 
-// 序列化证书对写盘：避免并发写同一规则产生撕裂的 cert/key 组合
+// 序列化证书对文件操作，避免并发写入、恢复或删除产生撕裂的 cert/key 组合。
 var certWriteMu sync.Mutex
 
 type CertFileSnapshot struct {
@@ -110,13 +110,22 @@ func removeTemporaryCertFile(path string) error {
 	return nil
 }
 
-func RemoveCertFiles(ruleID string) {
+func RemoveCertFiles(ruleID string) error {
+	certWriteMu.Lock()
+	defer certWriteMu.Unlock()
+
 	certPath, keyPath := CertFilePaths(ruleID)
 	if certPath == "" {
-		return
+		return fmt.Errorf("非法的规则编号: %q", ruleID)
 	}
-	os.Remove(certPath)
-	os.Remove(keyPath)
+	var certErr, keyErr error
+	if err := os.Remove(certPath); err != nil && !os.IsNotExist(err) {
+		certErr = fmt.Errorf("删除证书: %w", err)
+	}
+	if err := os.Remove(keyPath); err != nil && !os.IsNotExist(err) {
+		keyErr = fmt.Errorf("删除私钥: %w", err)
+	}
+	return errors.Join(certErr, keyErr)
 }
 
 func SnapshotCertFiles(ruleIDs []string) (CertFilesSnapshot, error) {
@@ -156,11 +165,31 @@ func RestoreCertFiles(snapshot CertFilesSnapshot) error {
 			restoreErrors = append(restoreErrors, fmt.Errorf("非法的规则编号: %q", ruleID))
 			continue
 		}
-		if err := restoreCertFile(certPath, pair.Cert); err != nil {
-			restoreErrors = append(restoreErrors, fmt.Errorf("恢复证书 %s: %w", ruleID, err))
+		currentCert, err := snapshotCertFile(certPath)
+		if err != nil {
+			restoreErrors = append(restoreErrors, fmt.Errorf("快照当前证书 %s: %w", ruleID, err))
+			continue
 		}
-		if err := restoreCertFile(keyPath, pair.Key); err != nil {
-			restoreErrors = append(restoreErrors, fmt.Errorf("恢复私钥 %s: %w", ruleID, err))
+		currentKey, err := snapshotCertFile(keyPath)
+		if err != nil {
+			restoreErrors = append(restoreErrors, fmt.Errorf("快照当前私钥 %s: %w", ruleID, err))
+			continue
+		}
+		certErr := restoreCertFile(certPath, pair.Cert)
+		var keyErr error
+		if certErr == nil {
+			keyErr = restoreCertFile(keyPath, pair.Key)
+		}
+		if certErr != nil || keyErr != nil {
+			rollbackErr := errors.Join(
+				restoreCertFile(certPath, currentCert),
+				restoreCertFile(keyPath, currentKey),
+			)
+			restoreErr := fmt.Errorf("恢复证书对 %s: %w", ruleID, errors.Join(certErr, keyErr))
+			if rollbackErr != nil {
+				restoreErr = errors.Join(restoreErr, fmt.Errorf("回滚证书对 %s: %w", ruleID, rollbackErr))
+			}
+			restoreErrors = append(restoreErrors, restoreErr)
 		}
 	}
 	return errors.Join(restoreErrors...)

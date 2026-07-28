@@ -75,9 +75,13 @@ func Initialize(dataDir string) error {
 
 	// Ensure default config row exists
 	var configCount int
-	DB.QueryRow("SELECT COUNT(*) FROM global_config").Scan(&configCount)
+	if err := DB.QueryRow("SELECT COUNT(*) FROM global_config").Scan(&configCount); err != nil {
+		return fmt.Errorf("failed to count global config rows: %w", err)
+	}
 	if configCount == 0 {
-		DB.Exec("INSERT INTO global_config (id, caddy_config) VALUES (1, '{}')")
+		if _, err := DB.Exec("INSERT INTO global_config (id, caddy_config) VALUES (1, '{}')"); err != nil {
+			return fmt.Errorf("failed to insert global config singleton: %w", err)
+		}
 	}
 
 	// Run migrations
@@ -358,18 +362,30 @@ func createTables() error {
 func runMigrations() error {
 	var colCount int
 
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='display_name'").Scan(&colCount)
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='display_name'").Scan(&colCount); err != nil {
+		return fmt.Errorf("failed to check users.display_name: %w", err)
+	}
 	if colCount == 0 {
-		DB.Exec("ALTER TABLE users ADD COLUMN display_name VARCHAR(100)")
+		if _, err := DB.Exec("ALTER TABLE users ADD COLUMN display_name VARCHAR(100)"); err != nil {
+			return fmt.Errorf("failed to add users.display_name: %w", err)
+		}
 	}
 
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='is_enabled'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE users ADD COLUMN is_enabled BOOLEAN DEFAULT 1")
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='is_enabled'").Scan(&colCount); err != nil {
+		return fmt.Errorf("failed to check users.is_enabled: %w", err)
 	}
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('api_keys') WHERE name='is_enabled'").Scan(&colCount)
 	if colCount == 0 {
-		DB.Exec("ALTER TABLE api_keys ADD COLUMN is_enabled BOOLEAN DEFAULT 1")
+		if _, err := DB.Exec("ALTER TABLE users ADD COLUMN is_enabled BOOLEAN DEFAULT 1"); err != nil {
+			return fmt.Errorf("failed to add users.is_enabled: %w", err)
+		}
+	}
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('api_keys') WHERE name='is_enabled'").Scan(&colCount); err != nil {
+		return fmt.Errorf("failed to check api_keys.is_enabled: %w", err)
+	}
+	if colCount == 0 {
+		if _, err := DB.Exec("ALTER TABLE api_keys ADD COLUMN is_enabled BOOLEAN DEFAULT 1"); err != nil {
+			return fmt.Errorf("failed to add api_keys.is_enabled: %w", err)
+		}
 	}
 
 	// lb_rules new columns
@@ -385,23 +401,50 @@ func runMigrations() error {
 	}
 
 	for col, dtype := range newLbColumns {
-		DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name=?", col).Scan(&colCount)
+		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name=?", col).Scan(&colCount); err != nil {
+			return fmt.Errorf("failed to check lb_rules.%s: %w", col, err)
+		}
 		if colCount == 0 {
-			DB.Exec("ALTER TABLE lb_rules ADD COLUMN " + col + " " + dtype)
+			if _, err := DB.Exec("ALTER TABLE lb_rules ADD COLUMN " + col + " " + dtype); err != nil {
+				return fmt.Errorf("failed to add lb_rules.%s: %w", col, err)
+			}
 		}
 	}
 
-	DB.Exec("UPDATE lb_rules SET strategy='weighted_round_robin' WHERE strategy='round_robin'")
+	if _, err := DB.Exec("UPDATE lb_rules SET strategy='weighted_round_robin' WHERE strategy='round_robin'"); err != nil {
+		return fmt.Errorf("failed to normalize lb_rules strategy: %w", err)
+	}
 
-	DB.Exec("DROP TABLE IF EXISTS config_versions")
+	if _, err := DB.Exec("DROP TABLE IF EXISTS config_versions"); err != nil {
+		return fmt.Errorf("failed to drop config_versions: %w", err)
+	}
 	var accessLogCol int
-	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='access_log_enabled'").Scan(&accessLogCol); err == nil && accessLogCol > 0 {
-		DB.Exec("ALTER TABLE global_config DROP COLUMN access_log_enabled")
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='access_log_enabled'").Scan(&accessLogCol); err != nil {
+		return fmt.Errorf("failed to check global_config.access_log_enabled: %w", err)
+	}
+	if accessLogCol > 0 {
+		if _, err := DB.Exec("ALTER TABLE global_config DROP COLUMN access_log_enabled"); err != nil {
+			return fmt.Errorf("failed to drop global_config.access_log_enabled: %w", err)
+		}
 	}
 
 	// ca_providers columns are created by createTables; here we only add columns to existing tables.
 	newColumns := map[string]string{
 		"lb_rules.ca_provider_id":                     "INTEGER DEFAULT 0",
+		"lb_rules.caddy_id":                           "VARCHAR(20)",
+		"lb_rules.dns_family":                         "VARCHAR(20) DEFAULT 'ipv4'",
+		"lb_rules.updated_by":                         "INTEGER",
+		"lb_rules.tcp_health_check_port":              "INTEGER DEFAULT 0",
+		"lb_rules.tcp_proxy_protocol":                 "BOOLEAN DEFAULT 0",
+		"lb_rules.tcp_try_duration":                   "INTEGER DEFAULT 0",
+		"lb_rules.tcp_try_interval":                   "INTEGER DEFAULT 250",
+		"lb_rules.request_body_max_size_mb":           "INTEGER DEFAULT 0",
+		"lb_rules.upstream_keepalive_timeout":         "INTEGER DEFAULT 0",
+		"lb_rules.server_tokens_hidden":               "INTEGER DEFAULT 0",
+		"upstreams.dns_server":                        "VARCHAR(255) DEFAULT ''",
+		"upstreams.max_connections":                   "INTEGER DEFAULT 0",
+		"upstreams.proxy_protocol":                    "VARCHAR(10) DEFAULT ''",
+		"certificate_configs.dns_credentials":         "TEXT",
 		"cert_jobs.ca_provider_id":                    "INTEGER DEFAULT 0",
 		"cert_jobs.renewal_attempts":                  "INTEGER DEFAULT 0",
 		"cert_jobs.ca_available_after":                "DATETIME",
@@ -411,6 +454,19 @@ func runMigrations() error {
 		"global_config.cert_renewal_attempts":         "INTEGER DEFAULT 5",
 		"global_config.cert_job_log_size_mb":          "INTEGER DEFAULT 10",
 		"global_config.runtime_log_size_mb":           "INTEGER DEFAULT 100",
+		"global_config.acme_email":                    "VARCHAR(255)",
+		"global_config.cert_expiry_days":              "INTEGER DEFAULT 30",
+		"global_config.metrics_public":                "BOOLEAN DEFAULT 0",
+		"global_config.metrics_origins":               "VARCHAR(500)",
+		"global_config.caddy_log_path":                "VARCHAR(500) DEFAULT '/app/logs/caddy.log'",
+		"global_config.caddy_log_level":               "VARCHAR(10) DEFAULT 'info'",
+		"global_config.caddy_log_size_mb":             "INTEGER DEFAULT 100",
+		"global_config.request_body_max_size_mb":      "INTEGER DEFAULT 0",
+		"global_config.http_read_timeout":             "INTEGER DEFAULT 0",
+		"global_config.http_write_timeout":            "INTEGER DEFAULT 0",
+		"global_config.http_idle_timeout":             "INTEGER DEFAULT 0",
+		"global_config.upstream_keepalive_timeout":    "INTEGER DEFAULT 0",
+		"global_config.server_tokens_hidden":          "BOOLEAN DEFAULT FALSE",
 		"global_config.admin_tls_enabled":             "BOOLEAN DEFAULT 0",
 		"global_config.admin_tls_mode":                "VARCHAR(20) DEFAULT 'selfsigned'",
 		"global_config.admin_tls_cert":                "TEXT DEFAULT ''",
@@ -500,20 +556,32 @@ func runMigrations() error {
 	}
 
 	// Drop legacy cert_job_logs table — logs now stored in files under /app/logs/
-	DB.Exec("DROP TABLE IF EXISTS cert_job_logs")
+	if _, err := DB.Exec("DROP TABLE IF EXISTS cert_job_logs"); err != nil {
+		return fmt.Errorf("failed to drop cert_job_logs: %w", err)
+	}
 
 	// Set recommended defaults for timeout fields that are still 0
-	DB.Exec("UPDATE global_config SET http_read_timeout=60 WHERE http_read_timeout=0")
-	DB.Exec("UPDATE global_config SET http_write_timeout=60 WHERE http_write_timeout=0")
-	DB.Exec("UPDATE global_config SET http_idle_timeout=120 WHERE http_idle_timeout=0")
-	DB.Exec("UPDATE global_config SET upstream_keepalive_timeout=60 WHERE upstream_keepalive_timeout=0")
-	DB.Exec("UPDATE global_config SET access_log_format='' WHERE access_log_format LIKE '{%'")
-	DB.Exec("UPDATE global_config SET access_log_format = access_log_format || char(10) || 'request>headers>User-Agent -> user_agent' WHERE access_log_format != '' AND access_log_format NOT LIKE '%user_agent%'")
+	defaultUpdates := []string{
+		"UPDATE global_config SET http_read_timeout=60 WHERE http_read_timeout=0",
+		"UPDATE global_config SET http_write_timeout=60 WHERE http_write_timeout=0",
+		"UPDATE global_config SET http_idle_timeout=120 WHERE http_idle_timeout=0",
+		"UPDATE global_config SET upstream_keepalive_timeout=60 WHERE upstream_keepalive_timeout=0",
+		"UPDATE global_config SET access_log_format='' WHERE access_log_format LIKE '{%'",
+		"UPDATE global_config SET access_log_format = access_log_format || char(10) || 'request>headers>User-Agent -> user_agent' WHERE access_log_format != '' AND access_log_format NOT LIKE '%user_agent%'",
+	}
+	for _, statement := range defaultUpdates {
+		if _, err := DB.Exec(statement); err != nil {
+			return fmt.Errorf("failed to update global config defaults: %w", err)
+		}
+	}
 
 	// Headers are kept in access logs so User-Agent stats work; the filter
 	// encoder cannot rename a field under a deleted parent.
 	var lf string
-	if err := DB.QueryRow("SELECT COALESCE(access_log_format,'') FROM global_config WHERE id=1").Scan(&lf); err == nil && lf != "" {
+	if err := DB.QueryRow("SELECT COALESCE(access_log_format,'') FROM global_config WHERE id=1").Scan(&lf); err != nil {
+		return fmt.Errorf("failed to read global config access log format: %w", err)
+	}
+	if lf != "" {
 		out := []string{}
 		for _, l := range strings.Split(lf, "\n") {
 			t := strings.TrimSpace(l)
@@ -522,18 +590,25 @@ func runMigrations() error {
 			}
 			out = append(out, l)
 		}
-		DB.Exec("UPDATE global_config SET access_log_format=? WHERE id=1", strings.Join(out, "\n"))
+		if _, err := DB.Exec("UPDATE global_config SET access_log_format=? WHERE id=1", strings.Join(out, "\n")); err != nil {
+			return fmt.Errorf("failed to clean global config access log format: %w", err)
+		}
 	}
 
 	// Sensitive credential headers are dropped from access logs (Cookie and
 	// Authorization are redacted by Caddy itself; API keys are not).
 	var lf2 string
-	if err := DB.QueryRow("SELECT COALESCE(access_log_format,'') FROM global_config WHERE id=1").Scan(&lf2); err == nil && lf2 != "" && !strings.Contains(lf2, "X-API-Key") {
-		DB.Exec("UPDATE global_config SET access_log_format = ? WHERE id=1", lf2+"\nrequest>headers>X-API-Key -> delete")
+	if err := DB.QueryRow("SELECT COALESCE(access_log_format,'') FROM global_config WHERE id=1").Scan(&lf2); err != nil {
+		return fmt.Errorf("failed to reread global config access log format: %w", err)
+	}
+	if lf2 != "" && !strings.Contains(lf2, "X-API-Key") {
+		if _, err := DB.Exec("UPDATE global_config SET access_log_format = ? WHERE id=1", lf2+"\nrequest>headers>X-API-Key -> delete"); err != nil {
+			return fmt.Errorf("failed to redact API key access log header: %w", err)
+		}
 	}
 
 	// Create upstreams table if not exists
-	DB.Exec(`CREATE TABLE IF NOT EXISTS upstreams (
+	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS upstreams (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		rule_id VARCHAR(20) NOT NULL,
 		host VARCHAR(255) NOT NULL,
@@ -543,10 +618,12 @@ func runMigrations() error {
 		dynamic_dns BOOLEAN DEFAULT 0,
 		enabled BOOLEAN DEFAULT 1,
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
-	`)
+	)`); err != nil {
+		return fmt.Errorf("failed to create upstreams: %w", err)
+	}
 
 	// Create tls_certificates table if not exists
-	DB.Exec(`CREATE TABLE IF NOT EXISTS tls_certificates (
+	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS tls_certificates (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		domain VARCHAR(255) UNIQUE NOT NULL,
 		cert_pem TEXT NOT NULL,
@@ -556,153 +633,8 @@ func runMigrations() error {
 		expires_at DATETIME,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME
-	`)
-
-	// global_config new columns
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='acme_email'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN acme_email VARCHAR(255)")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='cert_expiry_days'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN cert_expiry_days INTEGER DEFAULT 30")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='cert_renewal_days'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN cert_renewal_days INTEGER DEFAULT 30")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='cert_renewal_attempts'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN cert_renewal_attempts INTEGER DEFAULT 5")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='metrics_public'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN metrics_public BOOLEAN DEFAULT 0")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='metrics_origins'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN metrics_origins VARCHAR(500)")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='caddy_log_path'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN caddy_log_path VARCHAR(500) DEFAULT '/app/logs/caddy.log'")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='caddy_log_level'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN caddy_log_level VARCHAR(10) DEFAULT 'info'")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='caddy_log_size_mb'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN caddy_log_size_mb INTEGER DEFAULT 100")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='request_body_max_size_mb'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN request_body_max_size_mb INTEGER DEFAULT 0")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='http_read_timeout'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN http_read_timeout INTEGER DEFAULT 0")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='http_write_timeout'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN http_write_timeout INTEGER DEFAULT 0")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='http_idle_timeout'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN http_idle_timeout INTEGER DEFAULT 0")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='upstream_keepalive_timeout'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN upstream_keepalive_timeout INTEGER DEFAULT 0")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='server_tokens_hidden'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE global_config ADD COLUMN server_tokens_hidden BOOLEAN DEFAULT FALSE")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='caddy_id'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE lb_rules ADD COLUMN caddy_id VARCHAR(20)")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='dns_family'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE lb_rules ADD COLUMN dns_family VARCHAR(20) DEFAULT 'ipv4'")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='updated_by'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE lb_rules ADD COLUMN updated_by INTEGER")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name='dns_server'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE upstreams ADD COLUMN dns_server VARCHAR(255) DEFAULT ''")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name='max_connections'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE upstreams ADD COLUMN max_connections INTEGER DEFAULT 0")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name='proxy_protocol'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE upstreams ADD COLUMN proxy_protocol VARCHAR(10) DEFAULT ''")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='tcp_health_check_port'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE lb_rules ADD COLUMN tcp_health_check_port INTEGER DEFAULT 0")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='tcp_proxy_protocol'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE lb_rules ADD COLUMN tcp_proxy_protocol BOOLEAN DEFAULT 0")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='tcp_try_duration'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE lb_rules ADD COLUMN tcp_try_duration INTEGER DEFAULT 0")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='tcp_try_interval'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE lb_rules ADD COLUMN tcp_try_interval INTEGER DEFAULT 250")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='request_body_max_size_mb'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE lb_rules ADD COLUMN request_body_max_size_mb INTEGER DEFAULT 0")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='upstream_keepalive_timeout'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE lb_rules ADD COLUMN upstream_keepalive_timeout INTEGER DEFAULT 0")
-	}
-
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name='server_tokens_hidden'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE lb_rules ADD COLUMN server_tokens_hidden INTEGER DEFAULT 0")
-	}
-
-	// certificate_configs schema migration: move from legacy dns_id/dns_key to JSON dns_credentials
-	DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('certificate_configs') WHERE name='dns_credentials'").Scan(&colCount)
-	if colCount == 0 {
-		DB.Exec("ALTER TABLE certificate_configs ADD COLUMN dns_credentials TEXT")
+	)`); err != nil {
+		return fmt.Errorf("failed to create tls_certificates: %w", err)
 	}
 
 	// cert_jobs unique index migration
@@ -727,89 +659,136 @@ func runMigrations() error {
 	// against datetime('now'). datetime() of an already-canonical string
 	// returns the same value, so this is safe to run repeatedly.
 	if _, err := DB.Exec("UPDATE cert_jobs SET ca_available_after = datetime(ca_available_after) WHERE ca_available_after IS NOT NULL"); err != nil {
-		log.Printf("Warning: failed to normalize cert_jobs.ca_available_after: %v", err)
+		return fmt.Errorf("failed to normalize cert_jobs.ca_available_after: %w", err)
 	}
 
 	// Migrate legacy dns_id/dns_key into dns_credentials JSON
-	rows, err := DB.Query("SELECT id, dns_id, dns_key FROM certificate_configs WHERE dns_credentials IS NULL OR dns_credentials = ''")
-	if err == nil {
+	var legacyCredentialColumns int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('certificate_configs') WHERE name IN ('dns_id','dns_key')").Scan(&legacyCredentialColumns); err != nil {
+		return fmt.Errorf("failed to check legacy certificate credential columns: %w", err)
+	}
+	if legacyCredentialColumns == 2 {
+		rows, err := DB.Query("SELECT id, dns_id, dns_key FROM certificate_configs WHERE dns_credentials IS NULL OR dns_credentials = ''")
+		if err != nil {
+			return fmt.Errorf("failed to query legacy certificate credentials: %w", err)
+		}
 		for rows.Next() {
 			var id int
 			var dnsID, dnsKey string
-			rows.Scan(&id, &dnsID, &dnsKey)
+			if err := rows.Scan(&id, &dnsID, &dnsKey); err != nil {
+				rows.Close()
+				return fmt.Errorf("failed to scan legacy certificate credentials: %w", err)
+			}
 			if dnsID != "" || dnsKey != "" {
-				creds, _ := json.Marshal(map[string]string{"app_id": dnsID, "app_token": dnsKey})
-				DB.Exec("UPDATE certificate_configs SET dns_credentials = ? WHERE id = ?", string(creds), id)
+				creds, err := json.Marshal(map[string]string{"app_id": dnsID, "app_token": dnsKey})
+				if err != nil {
+					rows.Close()
+					return fmt.Errorf("failed to encode legacy certificate credentials: %w", err)
+				}
+				if _, err := DB.Exec("UPDATE certificate_configs SET dns_credentials = ? WHERE id = ?", string(creds), id); err != nil {
+					rows.Close()
+					return fmt.Errorf("failed to migrate certificate credentials for config %d: %w", id, err)
+				}
 			}
 		}
-		rows.Close()
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to iterate legacy certificate credentials: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("failed to close legacy certificate credential rows: %w", err)
+		}
 	}
 
 	// Drop legacy columns from lb_rules if they still exist (no longer used).
 	legacyLbColumns := []string{"tls_auto_cert", "tls_email"}
 	for _, col := range legacyLbColumns {
-		DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name=?", col).Scan(&colCount)
+		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name=?", col).Scan(&colCount); err != nil {
+			return fmt.Errorf("failed to check legacy lb_rules.%s: %w", col, err)
+		}
 		if colCount > 0 {
 			if _, err := DB.Exec("ALTER TABLE lb_rules DROP COLUMN " + col); err != nil {
-				log.Printf("Warning: failed to drop legacy column %s from lb_rules: %v", col, err)
-			} else {
-				log.Printf("Dropped legacy column %s from lb_rules", col)
+				return fmt.Errorf("failed to drop legacy lb_rules.%s: %w", col, err)
 			}
+			log.Printf("Dropped legacy column %s from lb_rules", col)
 		}
 	}
 
 	// Migrate existing data: set caddy_id for rows that don't have it
 	var count int
-	DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id IS NULL OR caddy_id = ''").Scan(&count)
+	if err := DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id IS NULL OR caddy_id = ''").Scan(&count); err != nil {
+		return fmt.Errorf("failed to count lb_rules without caddy_id: %w", err)
+	}
 	if count > 0 {
 		// Generate caddy_id for existing rules
 		rows, err := DB.Query("SELECT id FROM lb_rules WHERE caddy_id IS NULL OR caddy_id = ''")
-		if err == nil {
-			for rows.Next() {
-				var ruleID int
-				rows.Scan(&ruleID)
-				caddyID := generateCaddyIDForMigration()
-				DB.Exec("UPDATE lb_rules SET caddy_id = ? WHERE id = ?", caddyID, ruleID)
+		if err != nil {
+			return fmt.Errorf("failed to query lb_rules without caddy_id: %w", err)
+		}
+		for rows.Next() {
+			var ruleID int
+			if err := rows.Scan(&ruleID); err != nil {
+				rows.Close()
+				return fmt.Errorf("failed to scan lb_rule without caddy_id: %w", err)
 			}
+			caddyID := generateCaddyIDForMigration()
+			if _, err := DB.Exec("UPDATE lb_rules SET caddy_id = ? WHERE id = ?", caddyID, ruleID); err != nil {
+				rows.Close()
+				return fmt.Errorf("failed to set caddy_id for lb_rule %d: %w", ruleID, err)
+			}
+		}
+		if err := rows.Err(); err != nil {
 			rows.Close()
+			return fmt.Errorf("failed to iterate lb_rules without caddy_id: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("failed to close lb_rules migration rows: %w", err)
 		}
 	}
 
 	// Migration: Check if we need to rebuild lb_rules with caddy_id as primary key
 	// SQLite doesn't support changing primary key directly, so we need to rebuild the table
 	if err := migrateLbRulesPrimaryKey(); err != nil {
-		log.Printf("Warning: lb_rules primary key migration failed: %v", err)
+		return fmt.Errorf("failed to migrate lb_rules primary key: %w", err)
 	}
 
 	// Seed default CA providers if table is empty.
 	var caCount int
-	DB.QueryRow("SELECT COUNT(*) FROM ca_providers").Scan(&caCount)
+	if err := DB.QueryRow("SELECT COUNT(*) FROM ca_providers").Scan(&caCount); err != nil {
+		return fmt.Errorf("failed to count CA providers: %w", err)
+	}
 	if caCount == 0 {
-		_, err := DB.Exec(`
+		if _, err := DB.Exec(`
 			INSERT INTO ca_providers (name, provider, directory_url, credentials, max_concurrent, min_interval_ms, enabled)
 			VALUES
 				('ZeroSSL', 'zerossl', 'https://acme.zerossl.com/v2/DV90', '{}', 1, 10000, 1),
 				('Let''s Encrypt', 'letsencrypt', 'https://acme-v02.api.letsencrypt.org/directory', '{}', 2, 5000, 1)
-		`)
+		`); err != nil {
+			return fmt.Errorf("failed to seed CA providers: %w", err)
+		}
+		// LastInsertId returns the last row of the multi-row insert (Let's Encrypt),
+		// so look up Let's Encrypt's actual ID directly and set it as the default.
+		var leid int64
+		if err := DB.QueryRow("SELECT id FROM ca_providers WHERE provider = 'letsencrypt' ORDER BY id LIMIT 1").Scan(&leid); err != nil {
+			return fmt.Errorf("failed to find seeded Let's Encrypt provider: %w", err)
+		}
+		res, err := DB.Exec("UPDATE global_config SET default_ca_provider_id = ? WHERE id = 1", leid)
 		if err != nil {
-			log.Printf("Warning: failed to seed CA providers: %v", err)
-		} else {
-			// LastInsertId returns the last row of the multi-row insert (Let's Encrypt),
-			// so look up Let's Encrypt's actual ID directly and set it as the default.
-			var leid int64
-			if err := DB.QueryRow("SELECT id FROM ca_providers WHERE provider = 'letsencrypt' ORDER BY id LIMIT 1").Scan(&leid); err == nil {
-				res, err := DB.Exec("UPDATE global_config SET default_ca_provider_id = ? WHERE id = 1", leid)
-				if err != nil {
-					log.Printf("Warning: failed to set default CA provider: %v", err)
-				} else if rowsAffected, _ := res.RowsAffected(); rowsAffected == 0 {
-					log.Printf("Warning: failed to set default CA provider to Let's Encrypt")
-				}
-			}
+			return fmt.Errorf("failed to set default CA provider: %w", err)
+		}
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("failed to read default CA provider update result: %w", err)
+		}
+		if rowsAffected == 0 {
+			return fmt.Errorf("failed to set default CA provider: global config singleton not found")
 		}
 	}
 
 	// Backfill any existing CA providers that were seeded before updated_at had a default.
-	_, _ = DB.Exec("UPDATE ca_providers SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL")
+	if _, err := DB.Exec("UPDATE ca_providers SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"); err != nil {
+		return fmt.Errorf("failed to backfill CA provider timestamps: %w", err)
+	}
 
 	return nil
 }
@@ -989,7 +968,7 @@ func migrateLbRulesPrimaryKey() error {
 	_, err = tx.Exec(`
 		INSERT INTO upstreams_new (id, rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, host_header, dns_server, max_connections, proxy_protocol)
 		SELECT u.id, r.caddy_id, u.host, u.port, u.weight, u.domain, u.dynamic_dns, u.enabled, u.protocol, u.host_header, 
-		       COALESCE(u.dns_server, ''), 0, ''
+		       COALESCE(u.dns_server, ''), COALESCE(u.max_connections, 0), COALESCE(u.proxy_protocol, '')
 		FROM upstreams u
 		JOIN lb_rules r ON u.rule_id = r.id
 	`)
@@ -1033,11 +1012,21 @@ func migrateCertJobsStatusConstraint() error {
 	if err := DB.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='cert_jobs'").Scan(&tableSQL); err != nil {
 		return fmt.Errorf("failed to read cert_jobs schema: %w", err)
 	}
-	// Idempotency: the expanded constraint must allow all intermediate ACME
-	// stages logged by jobLogger.Log (e.g. 'presenting_dns', 'finalizing').
-	// If the table already contains one of the new stage values in its CHECK,
-	// the migration has already been applied.
-	if strings.Contains(tableSQL, "'presenting_dns'") {
+	requiredStatuses := []string{
+		"queued", "pending", "processing", "creating_account", "creating_order", "order_created",
+		"cleanup_dns", "cleanup_warning", "presenting_dns", "waiting_propagation", "dns_propagated",
+		"accepting_challenge", "validating", "validated", "finalizing", "finalized", "downloading",
+		"downloaded", "issued", "failed", "waiting_ca", "disabled", "waiting_order_ready", "order_ready",
+		"waiting_order_valid", "order_valid",
+	}
+	constraintComplete := true
+	for _, status := range requiredStatuses {
+		if !strings.Contains(tableSQL, "'"+status+"'") {
+			constraintComplete = false
+			break
+		}
+	}
+	if constraintComplete {
 		return nil
 	}
 
@@ -1069,7 +1058,10 @@ func migrateCertJobsStatusConstraint() error {
 	}
 
 	var logsExist int
-	DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cert_job_logs'").Scan(&logsExist)
+	if err := tx.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cert_job_logs'").Scan(&logsExist); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to check cert_job_logs table: %w", err)
+	}
 	if logsExist > 0 {
 		if _, err := tx.Exec("ALTER TABLE cert_job_logs RENAME TO cert_job_logs_old"); err != nil {
 			tx.Rollback()
@@ -1107,7 +1099,7 @@ func migrateCertJobsStatusConstraint() error {
 		)
 		SELECT
 			id, rule_id, domain,
-			CASE WHEN status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca') THEN status ELSE 'queued' END,
+			CASE WHEN status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid') THEN status ELSE 'queued' END,
 			message, expires_at, cert_pem, key_pem,
 			ca_provider_id, renewal_attempts, ca_available_after, last_error_code,
 			created_at, updated_at

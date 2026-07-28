@@ -162,6 +162,7 @@ const logDialogVisible = ref(false)
 const logLoading = ref(false)
 const logContent = ref('')
 const currentJob = ref<CertJob | null>(null)
+let logRequestSeq = 0
 const logContainerRef = ref<HTMLDivElement | null>(null)
 let logPollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -352,6 +353,8 @@ const retryJob = async (row: CertJob) => {
 }
 
 const viewLogs = async (row: CertJob) => {
+  logRequestSeq++
+  logLoading.value = false
   currentJob.value = row
   logDialogVisible.value = true
 }
@@ -362,6 +365,7 @@ const onLogDialogOpened = async () => {
 }
 
 const onLogDialogClosed = () => {
+  logRequestSeq++
   stopLogPolling()
   currentJob.value = null
   logContent.value = ''
@@ -381,16 +385,21 @@ const stopLogPolling = () => {
 
 const refreshLogs = async () => {
   if (!currentJob.value || logLoading.value) return
+  const jobId = currentJob.value.id
+  const requestSeq = ++logRequestSeq
   logLoading.value = true
   try {
-    const res = await request.get<APIResponse<{ content: string }>>(`/certificates/jobs/${currentJob.value.id}/logs`)
+    const res = await request.get<APIResponse<{ content: string }>>(`/certificates/jobs/${jobId}/logs`)
+    if (!logDialogVisible.value || currentJob.value?.id !== jobId || requestSeq !== logRequestSeq) return
     logContent.value = res.data?.content || ''
     await scrollToBottom()
   } catch (error) {
-    console.error('Failed to fetch cert job logs:', error)
-    ElMessage.error('获取日志失败')
+    if (logDialogVisible.value && currentJob.value?.id === jobId && requestSeq === logRequestSeq) {
+      console.error('Failed to fetch cert job logs:', error)
+      ElMessage.error('获取日志失败')
+    }
   } finally {
-    logLoading.value = false
+    if (requestSeq === logRequestSeq) logLoading.value = false
   }
 }
 

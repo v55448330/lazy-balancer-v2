@@ -58,6 +58,10 @@ export const redistributeWeight = <Item extends WeightedItem>(items: Item[], cha
     distributeWeight(participating, 100)
     return
   }
+  if (participating.length === 1) {
+    changed.weight = 100
+    return
+  }
   const otherItems = participating.filter((item) => item !== changed)
   const otherMinimum = otherItems.reduce((sum, item) => sum + minimumWeight(item), 0)
   changed.weight = Math.min(100 - otherMinimum, normalizedWeight(changed))

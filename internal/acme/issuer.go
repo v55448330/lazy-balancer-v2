@@ -58,6 +58,13 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 		chal      *acme.Challenge
 	}
 	var localChallenges []challengeInfo
+	var presentedChallenges []ChallengeInfo
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cleanupCancel()
+		log("cleanup_dns", "清理 ACME DNS TXT 记录")
+		i.Cleanup(cleanupCtx, presentedChallenges)
+	}()
 
 	for _, authURL := range order.AuthzURLs {
 		auth, err := i.Client.GetAuthorization(ctx, authURL)
@@ -100,19 +107,13 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 			authURL:   authURL,
 			chal:      chal,
 		})
-		challenges = append(challenges, ChallengeInfo{
+		challenge := ChallengeInfo{
 			Domain:    domain,
 			TokenFQDN: tokenFQDN,
-		})
+		}
+		challenges = append(challenges, challenge)
+		presentedChallenges = append(presentedChallenges, challenge)
 	}
-
-	// Ensure DNS records are always cleaned up before returning.
-	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cleanupCancel()
-		log("cleanup_dns", "清理 ACME DNS TXT 记录")
-		i.Cleanup(cleanupCtx, challenges)
-	}()
 
 	// Step 4: Wait for DNS propagation and accept challenges
 	for _, ci := range localChallenges {

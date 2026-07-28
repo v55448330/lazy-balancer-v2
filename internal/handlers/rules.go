@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -337,7 +338,12 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	if req.Protocol == "http" && req.Domain != "" {
 		var existing int
 		err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE protocol = 'http' AND domain = ?", req.Domain).Scan(&existing)
-		if err == nil && existing > 0 {
+		if err != nil && err != sql.ErrNoRows {
+			log.Printf("CreateRule domain conflict query failed for domain=%s: %v", req.Domain, err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
+			return
+		}
+		if existing > 0 {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名已被其他 HTTP/HTTPS 规则使用"})
 			return
 		}
@@ -580,15 +586,57 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return
 	}
 
-	// Apply Caddy config after DB commit; rollback DB on Caddy failure
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
+	oldRuntimeConfig, err := h.caddyService.GetConfig()
+	removeCreatedRule := func() error {
+		cleanupTx, beginErr := db.DB.BeginTx(c.Request.Context(), nil)
+		if beginErr != nil {
+			return fmt.Errorf("开启创建补偿事务: %w", beginErr)
+		}
+		cleanupCommitted := false
+		defer func() {
+			if !cleanupCommitted {
+				if rollbackErr := cleanupTx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+					log.Printf("CreateRule compensation rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
+				}
+			}
+		}()
+		for _, statement := range []string{
+			"DELETE FROM cert_jobs WHERE rule_id = ?",
+			"DELETE FROM upstreams WHERE rule_id = ?",
+			"DELETE FROM lb_rules WHERE caddy_id = ?",
+		} {
+			if _, cleanupErr := cleanupTx.ExecContext(c.Request.Context(), statement, caddyID); cleanupErr != nil {
+				return fmt.Errorf("补偿删除已创建规则: %w", cleanupErr)
+			}
+		}
+		if commitErr := cleanupTx.Commit(); commitErr != nil {
+			return fmt.Errorf("提交创建补偿事务: %w", commitErr)
+		}
+		cleanupCommitted = true
+		services.RemoveCertFiles(caddyID)
+		return nil
+	}
+	if err != nil {
+		cleanupErr := removeCreatedRule()
+		log.Printf("CreateRule failed to snapshot Caddy runtime for caddy_id=%s: %v", caddyID, err)
+		if cleanupErr != nil {
+			log.Printf("CRITICAL: CreateRule runtime snapshot and DB compensation failed for caddy_id=%s: snapshot=%v compensation=%v", caddyID, err, cleanupErr)
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前 Caddy 配置失败"})
+		return
+	}
+	restoreCreatedRule := func() error {
+		return errors.Join(h.caddyService.ApplyConfig(oldRuntimeConfig), removeCreatedRule())
+	}
 	if req.Protocol == "tcp" {
 		fullConfig := services.GenerateCaddyConfig(h.cfg)
 		if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
 			log.Printf("CreateRule Caddy apply failed for TCP rule caddy_id=%s: %v, rolling back database", caddyID, err)
-			db.DB.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID)
-			db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID)
+			if restoreErr := restoreCreatedRule(); restoreErr != nil {
+				log.Printf("CRITICAL: CreateRule compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
+			}
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置应用失败: " + err.Error()})
 			return
 		}
@@ -596,8 +644,9 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		routeConfig, err := services.GenerateRouteObject(ruleConfig)
 		if err != nil {
 			log.Printf("CreateRule failed to generate route config for caddy_id=%s: %v, rolling back database", caddyID, err)
-			db.DB.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID)
-			db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID)
+			if cleanupErr := removeCreatedRule(); cleanupErr != nil {
+				log.Printf("CRITICAL: CreateRule DB compensation failed for caddy_id=%s: %v", caddyID, cleanupErr)
+			}
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "路由配置生成失败: " + err.Error()})
 			return
 		}
@@ -619,33 +668,39 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 
 		if err := applyCaddy(); err != nil {
 			log.Printf("CreateRule Caddy apply failed for caddy_id=%s: %v, rolling back database", caddyID, err)
-			h.caddyService.RemoveRouteFromServer(serverName, caddyID)
-			db.DB.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID)
-			db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID)
+			if restoreErr := restoreCreatedRule(); restoreErr != nil {
+				log.Printf("CRITICAL: CreateRule compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
+			}
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
 
-		// Reload full Caddy config to apply TLS certificates
 		if req.EnableTLS {
 			log.Printf("Reloading full Caddy config to apply TLS for caddy_id=%s", caddyID)
-			go func() {
-				fullConfig := services.GenerateCaddyConfig(h.cfg)
-				if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
-					log.Printf("Failed to reload Caddy config after rule creation: %v", err)
+			fullConfig := services.GenerateCaddyConfig(h.cfg)
+			if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
+				if restoreErr := restoreCreatedRule(); restoreErr != nil {
+					log.Printf("CRITICAL: CreateRule TLS apply compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
 				}
-			}()
-			// Trigger ACME issuance synchronously so failures are surfaced
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy TLS 配置应用失败: " + err.Error()})
+				return
+			}
 			if req.TLSSource == "acme_dns" && req.Protocol == "http" && req.Domain != "" {
 				qm := services.GetCAQueueManager()
 				if qm == nil {
 					log.Printf("Auto cert enqueue failed for %s: CA queue manager not initialized", req.Domain)
+					if restoreErr := restoreCreatedRule(); restoreErr != nil {
+						log.Printf("CRITICAL: CreateRule ACME compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
+					}
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化"})
 					return
 				}
 				log.Printf("CreateRule enqueueing cert job for caddy_id=%s domain=%s ca_provider_id=%d", caddyID, req.Domain, req.CAProviderID)
 				if err := services.CreateOrRequeueCertJob(caddyID, req.Domain, req.CAProviderID, qm); err != nil {
 					log.Printf("Auto cert enqueue failed for %s: %v", req.Domain, err)
+					if restoreErr := restoreCreatedRule(); restoreErr != nil {
+						log.Printf("CRITICAL: CreateRule ACME compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
+					}
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书签发任务失败: " + err.Error()})
 					return
 				}
@@ -674,16 +729,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.EnableTLS && req.TLSSource == "acme_dns" && req.Domain != "" {
 		if err := services.ValidateACMEDomains(req.Domain); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-			return
-		}
-	}
-
-	// Domain uniqueness: HTTP/HTTPS rules cannot share the same domain (excluding current rule).
-	if req.Protocol == "http" && req.Domain != "" {
-		var existing int
-		err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE protocol = 'http' AND domain = ? AND caddy_id != ?", req.Domain, caddyID).Scan(&existing)
-		if err == nil && existing > 0 {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名已被其他 HTTP/HTTPS 规则使用"})
 			return
 		}
 	}
@@ -795,14 +840,36 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	// Capture old upstreams for potential DB rollback
 	var oldUpstreams []models.Upstream
-	oldUpstreamRows, _ := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id = ?", caddyID)
-	if oldUpstreamRows != nil {
-		for oldUpstreamRows.Next() {
-			var u models.Upstream
-			oldUpstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections)
-			oldUpstreams = append(oldUpstreams, u)
+	oldUpstreamRows, err := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id = ?", caddyID)
+	if err != nil {
+		log.Printf("UpdateRule failed to read existing upstreams for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
+		return
+	}
+	for oldUpstreamRows.Next() {
+		var u models.Upstream
+		if err := oldUpstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
+			if closeErr := oldUpstreamRows.Close(); closeErr != nil {
+				log.Printf("UpdateRule failed to close existing upstream cursor for caddy_id=%s: %v", caddyID, closeErr)
+			}
+			log.Printf("UpdateRule failed to scan existing upstream for caddy_id=%s: %v", caddyID, err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
+			return
 		}
-		oldUpstreamRows.Close()
+		oldUpstreams = append(oldUpstreams, u)
+	}
+	if err := oldUpstreamRows.Err(); err != nil {
+		if closeErr := oldUpstreamRows.Close(); closeErr != nil {
+			log.Printf("UpdateRule failed to close existing upstream cursor for caddy_id=%s: %v", caddyID, closeErr)
+		}
+		log.Printf("UpdateRule existing upstream cursor failed for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
+		return
+	}
+	if err := oldUpstreamRows.Close(); err != nil {
+		log.Printf("UpdateRule failed to close existing upstream cursor for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
+		return
 	}
 
 	// Use existing values for fields not provided in request
@@ -865,6 +932,20 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	if req.Description == "" {
 		req.Description = existingRule.Description
+	}
+
+	if req.Protocol == "http" && req.Domain != "" {
+		var existing int
+		err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE protocol = 'http' AND domain = ? AND caddy_id != ?", req.Domain, caddyID).Scan(&existing)
+		if err != nil && err != sql.ErrNoRows {
+			log.Printf("UpdateRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
+			return
+		}
+		if existing > 0 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名已被其他 HTTP/HTTPS 规则使用"})
+			return
+		}
 	}
 
 	// Load existing upstreams if not provided in request
@@ -1132,16 +1213,16 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	oldRuleRow, oldRuleRowErr := dumpRowByKey(c.Request.Context(), "lb_rules", "caddy_id", caddyID)
 	if oldRuleRowErr != nil {
 		log.Printf("UpdateRule failed to snapshot lb_rules row for caddy_id=%s: %v", caddyID, oldRuleRowErr)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份规则数据失败"})
+		return
 	}
 	oldUpstreamRowsMap, oldUpstreamRowsErr := dumpRowsByKey(c.Request.Context(), "upstreams", "rule_id", caddyID)
 	if oldUpstreamRowsErr != nil {
 		log.Printf("UpdateRule failed to snapshot upstreams for caddy_id=%s: %v", caddyID, oldUpstreamRowsErr)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份上游数据失败"})
+		return
 	}
 	restoreRuleDBSnapshot := func() {
-		if oldRuleRowErr != nil || oldUpstreamRowsErr != nil {
-			log.Printf("UpdateRule skip DB restore for caddy_id=%s: snapshot unavailable", caddyID)
-			return
-		}
 		if err := restoreRuleSnapshot(c.Request.Context(), caddyID, oldRuleRow, oldUpstreamRowsMap, existingRule.PathRules); err != nil {
 			log.Printf("CRITICAL: UpdateRule DB restore failed for caddy_id=%s: %v", caddyID, err)
 		}
@@ -1343,48 +1424,74 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	var protocol string
 	var listenPort int
 	var domain string
-	var enableTLS bool
-	err := db.DB.QueryRow("SELECT COALESCE(caddy_id,''), COALESCE(protocol,''), listen_port, COALESCE(domain,''), COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&caddyID, &protocol, &listenPort, &domain, &enableTLS)
+	err := db.DB.QueryRow("SELECT COALESCE(caddy_id,''), COALESCE(protocol,''), listen_port, COALESCE(domain,'') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&caddyID, &protocol, &listenPort, &domain)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return
 	}
 
-	// Delete all related rows in a single transaction so that certificate jobs
-	// and their logs are never left as orphans.
-	tx, err := db.DB.Begin()
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+				log.Printf("DeleteRule transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
+			}
+		}
+	}()
 
 	if _, err := tx.Exec("DELETE FROM cert_jobs WHERE rule_id = ?", caddyID); err != nil {
-		tx.Rollback()
 		log.Printf("DeleteRule cert_jobs delete error for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除证书任务失败"})
 		return
 	}
 	if _, err := tx.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID); err != nil {
-		tx.Rollback()
 		log.Printf("DeleteRule upstreams delete error for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除上游服务器失败"})
 		return
 	}
 	if _, err := tx.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID); err != nil {
-		tx.Rollback()
 		log.Printf("DeleteRule lb_rules delete error for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除规则失败"})
 		return
 	}
 
+	h.caddyOpMu.Lock()
+	runtimeSnapshot, err := h.snapshotImportRuntime([]string{caddyID})
+	if err != nil {
+		h.caddyOpMu.Unlock()
+		log.Printf("DeleteRule runtime snapshot failed for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
+		return
+	}
+	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
+		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
+		h.caddyOpMu.Unlock()
+		if restoreErr != nil {
+			log.Printf("CRITICAL: DeleteRule Caddy apply and runtime restore failed for caddy_id=%s: apply=%v restore=%v", caddyID, err, restoreErr)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与恢复均失败: %v; %v", err, restoreErr)})
+			return
+		}
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置应用失败，规则未删除: " + err.Error()})
+		return
+	}
 	if err := tx.Commit(); err != nil {
+		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
+		h.caddyOpMu.Unlock()
 		log.Printf("DeleteRule transaction commit failed for caddy_id=%s: %v", caddyID, err)
+		if restoreErr != nil {
+			log.Printf("CRITICAL: DeleteRule commit and runtime restore failed for caddy_id=%s: commit=%v restore=%v", caddyID, err, restoreErr)
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交规则删除失败"})
 		return
 	}
+	committed = true
+	h.caddyOpMu.Unlock()
 
-	// metrics_history lives in the separate metrics database, so it cannot
-	// join the business transaction; delete best-effort after commit.
 	if db.MetricsDB != nil {
 		if _, err := db.MetricsDB.Exec("DELETE FROM metrics_history WHERE rule_id = ?", caddyID); err != nil {
 			log.Printf("DeleteRule metrics_history delete error for caddy_id=%s: %v", caddyID, err)
@@ -1393,61 +1500,6 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 
 	services.RemoveCertFiles(caddyID)
 	services.RemoveRuleLogFiles(caddyID)
-
-	var serverName string
-	var serverPort int
-	if protocol == "http" {
-		if enableTLS && listenPort == 443 {
-			serverName = "http_443"
-			serverPort = 443
-		} else if listenPort == 80 {
-			serverName = "http_80"
-			serverPort = 80
-		} else if enableTLS {
-			serverName = fmt.Sprintf("http_%d", listenPort)
-			serverPort = listenPort
-		} else {
-			serverName = fmt.Sprintf("http_%d", listenPort)
-			serverPort = listenPort
-		}
-	} else {
-		serverName = fmt.Sprintf("tcp_%d", listenPort)
-		serverPort = listenPort
-	}
-
-	// Remove route from HTTP server and clean up empty HTTP servers. TCP rules are managed
-	// by full config regeneration because they live in the layer4 app.
-	if protocol == "http" {
-		if caddyID != "" {
-			h.caddyService.RemoveRouteFromServer(serverName, caddyID)
-		}
-
-		// HTTP port 80 and HTTPS port 443 servers should never be deleted (default site)
-		keepServer := (protocol == "http" && listenPort == 80) || (protocol == "http" && enableTLS && listenPort == 443)
-
-		if !keepServer {
-			// Check if there are other enabled rules using this server
-			var otherEnabledCount int
-			db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id != ? AND listen_port = ? AND enabled = 1", caddyID, serverPort).Scan(&otherEnabledCount)
-
-			if otherEnabledCount == 0 {
-				h.caddyService.DeleteServer(serverName)
-				log.Printf("Rule %s deleted, server %s removed", caddyID, serverName)
-			} else {
-				log.Printf("Rule %s deleted, server %s kept (%d other enabled rules)", caddyID, serverName, otherEnabledCount)
-			}
-		} else {
-			log.Printf("Rule %s deleted, server %s kept (reserved port)", caddyID, serverName)
-		}
-	}
-
-	// Reload full Caddy config to clean up TLS certificates and layer4 servers
-	log.Printf("Reloading full Caddy config after rule deletion for caddy_id=%s", caddyID)
-	fullConfig := services.GenerateCaddyConfig(h.cfg)
-	if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
-		log.Printf("Failed to reload Caddy config after rule deletion: %v", err)
-		// Don't fail the request since the rule is already deleted
-	}
 
 	recordAudit(c, "删除", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("协议：%s", protocol), fmt.Sprintf("端口：%d", listenPort), domain))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_delete"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
@@ -1570,7 +1622,17 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			return
 		}
 	}
-	upstreamRows.Close()
+	if err := upstreamRows.Err(); err != nil {
+		if closeErr := upstreamRows.Close(); closeErr != nil {
+			log.Printf("DuplicateRule failed to close upstream cursor for caddy_id=%s: %v", caddyID, closeErr)
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "遍历上游失败，已回滚: " + err.Error()})
+		return
+	}
+	if err := upstreamRows.Close(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "关闭上游游标失败，已回滚: " + err.Error()})
+		return
+	}
 
 	if rule.CustomRoutesEnabled {
 		if _, err := tx.Exec(`
@@ -1595,17 +1657,22 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 func (h *Handlers) EnableRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 
-	var exists bool
-	err := db.DB.QueryRow("SELECT 1 FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&exists)
-	if err != nil {
+	var originalEnabled, enableTLS bool
+	var ruleProtocol, ruleDomain, tlsSource string
+	var rulePort, caProviderID int
+	err := db.DB.QueryRow(`SELECT COALESCE(enabled,1), COALESCE(protocol,''), COALESCE(domain,''), listen_port,
+		COALESCE(tls_source,''), COALESCE(enable_tls,0), COALESCE(ca_provider_id,0)
+		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&originalEnabled, &ruleProtocol, &ruleDomain, &rulePort, &tlsSource, &enableTLS, &caProviderID)
+	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return
 	}
-
-	var ruleProtocol, ruleDomain string
-	var rulePort int
-	if err := db.DB.QueryRow("SELECT protocol, COALESCE(domain,''), listen_port FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&ruleProtocol, &ruleDomain, &rulePort); err != nil {
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
+		return
+	}
+	if originalEnabled {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已启用"})
 		return
 	}
 	if err := h.validatePort(ruleProtocol, rulePort, caddyID); err != nil {
@@ -1614,7 +1681,13 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	}
 	if ruleProtocol == "http" && ruleDomain != "" {
 		var dupCount int
-		if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE protocol = 'http' AND domain = ? AND caddy_id != ? AND enabled = 1", ruleDomain, caddyID).Scan(&dupCount); err == nil && dupCount > 0 {
+		err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE protocol = 'http' AND domain = ? AND caddy_id != ? AND enabled = 1", ruleDomain, caddyID).Scan(&dupCount)
+		if err != nil && err != sql.ErrNoRows {
+			log.Printf("EnableRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, ruleDomain, err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
+			return
+		}
+		if dupCount > 0 {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已被其他启用中的规则使用，无法启用", ruleDomain)})
 			return
 		}
@@ -1626,89 +1699,103 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	}
 
 	if err := h.applyCaddyConfigWithRollback(); err != nil {
-		// Revert DB state on Caddy failure
-		db.DB.Exec("UPDATE lb_rules SET enabled = 0, updated_at = datetime('now') WHERE caddy_id = ?", caddyID)
+		if _, restoreErr := db.DB.Exec("UPDATE lb_rules SET enabled = ?, updated_at = datetime('now') WHERE caddy_id = ?", originalEnabled, caddyID); restoreErr != nil {
+			log.Printf("CRITICAL: EnableRule Caddy apply and DB restore failed for caddy_id=%s: caddy=%v db=%v", caddyID, err, restoreErr)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与 DB 恢复均失败: %v; %v", err, restoreErr)})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Failed to apply Caddy config: %v", err)})
 		return
 	}
-
-	// Queue an ACME certificate job if the rule uses ACME DNS TLS and no
-	// cert job row exists yet for it (any status). Existing rows are left
-	// alone since the ON CONFLICT and queue/renewal logic handle the rest.
-	var domain, tlsSource string
-	var enableTLS bool
-	var caProviderID int
-	if err := db.DB.QueryRow(`
-		SELECT COALESCE(domain,''), COALESCE(tls_source,''), COALESCE(enable_tls,0), COALESCE(ca_provider_id,0)
-		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&domain, &tlsSource, &enableTLS, &caProviderID); err == nil {
-		log.Printf("EnableRule TLS state for caddy_id=%s: enableTLS=%v tlsSource=%s domain=%s caProviderID=%d", caddyID, enableTLS, tlsSource, domain, caProviderID)
-		hasCertJob := services.HasCertJob(caddyID, domain)
-		log.Printf("EnableRule HasCertJob for caddy_id=%s domain=%s: %v", caddyID, domain, hasCertJob)
-		if enableTLS && tlsSource == "acme_dns" && domain != "" {
-			qm := services.GetCAQueueManager()
-
-			var jobStatus, jobMsg string
-			var jobExpiresAt sql.NullTime
-			var jobID int
-			hasJob := false
-			err := db.DB.QueryRow("SELECT id, status, COALESCE(message,''), expires_at FROM cert_jobs WHERE rule_id=? ORDER BY id DESC LIMIT 1", caddyID).Scan(&jobID, &jobStatus, &jobMsg, &jobExpiresAt)
-			if err == nil {
-				hasJob = true
-			}
-			var renewalDays int
-			db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays)
-			var expiryPtr *time.Time
-			if jobExpiresAt.Valid {
-				expiry := jobExpiresAt.Time
-				expiryPtr = &expiry
-			}
-			action := ResolveEnableCertJobAction(hasJob, jobStatus, expiryPtr, time.Now(), renewalDays)
-
-			switch action {
-			case EnableCertJobCreate:
-				if qm == nil {
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化，无法创建证书签发任务"})
-					return
-				}
-				if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书签发任务失败: " + err.Error()})
-					return
-				}
-				recordAudit(c, "创建", "证书签发任务", fmt.Sprintf("启用规则 %s，创建证书签发任务 (%s)", caddyID, domain))
-			case EnableCertJobKeep:
-				recordAudit(c, "启用", "证书签发任务", fmt.Sprintf("启用规则 %s，证书有效（过期前%d天续签），保持现有证书", caddyID, renewalDays))
-			case EnableCertJobResume:
-				if _, err := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书有效，已恢复使用', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?", jobID); err != nil {
-					log.Printf("EnableRule failed to resume cert job %d: %v", jobID, err)
-				} else {
-					recordAudit(c, "启用", "证书签发任务", fmt.Sprintf("启用规则 %s，证书仍有效，恢复使用现有证书", caddyID))
-				}
-			case EnableCertJobRenew:
-				if qm == nil {
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化，无法续签证书"})
-					return
-				}
-				if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "续签排队失败: " + err.Error()})
-					return
-				}
-				recordAudit(c, "续签", "证书签发任务", fmt.Sprintf("启用规则 %s，证书即将过期，重新排队续签", caddyID))
-			case EnableCertJobRetry:
-				if qm == nil {
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化，无法重试证书任务"})
-					return
-				}
-				if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重试排队失败: " + err.Error()})
-					return
-				}
-				recordAudit(c, "重试", "证书签发任务", fmt.Sprintf("启用规则 %s，任务之前已暂停/失败，重新排队", caddyID))
-			default:
-				recordAudit(c, "启用", "证书签发任务", fmt.Sprintf("启用规则 %s，签发任务已在进行中 (状态: %s)", caddyID, jobStatus))
-			}
+	restoreEnabledState := func() error {
+		_, dbErr := db.DB.Exec("UPDATE lb_rules SET enabled = ?, updated_at = datetime('now') WHERE caddy_id = ?", originalEnabled, caddyID)
+		if dbErr != nil {
+			return fmt.Errorf("恢复规则启用状态: %w", dbErr)
 		}
-	} else {
-		log.Printf("EnableRule failed to read rule TLS state for caddy_id=%s: %v", caddyID, err)
+		if caddyErr := h.applyCaddyConfigWithRollback(); caddyErr != nil {
+			return fmt.Errorf("恢复 Caddy 配置: %w", caddyErr)
+		}
+		return nil
+	}
+	failEnable := func(message string) {
+		if restoreErr := restoreEnabledState(); restoreErr != nil {
+			log.Printf("CRITICAL: EnableRule compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: message + "；规则与 Caddy 恢复失败: " + restoreErr.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: message})
+	}
+
+	domain := ruleDomain
+	log.Printf("EnableRule TLS state for caddy_id=%s: enableTLS=%v tlsSource=%s domain=%s caProviderID=%d", caddyID, enableTLS, tlsSource, domain, caProviderID)
+	if enableTLS && tlsSource == "acme_dns" && domain != "" {
+		qm := services.GetCAQueueManager()
+
+		var jobStatus, jobMsg string
+		var jobExpiresAt sql.NullTime
+		var jobID int
+		hasJob := false
+		err := db.DB.QueryRow("SELECT id, status, COALESCE(message,''), expires_at FROM cert_jobs WHERE rule_id=? ORDER BY id DESC LIMIT 1", caddyID).Scan(&jobID, &jobStatus, &jobMsg, &jobExpiresAt)
+		if err == nil {
+			hasJob = true
+		} else if err != sql.ErrNoRows {
+			failEnable("读取证书签发任务失败")
+			return
+		}
+		var renewalDays int
+		if err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays); err != nil {
+			failEnable("读取证书续签配置失败")
+			return
+		}
+		var expiryPtr *time.Time
+		if jobExpiresAt.Valid {
+			expiry := jobExpiresAt.Time
+			expiryPtr = &expiry
+		}
+		action := ResolveEnableCertJobAction(hasJob, jobStatus, expiryPtr, time.Now(), renewalDays)
+
+		switch action {
+		case EnableCertJobCreate:
+			if qm == nil {
+				failEnable("CA 队列未初始化，无法创建证书签发任务")
+				return
+			}
+			if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+				failEnable("创建证书签发任务失败: " + err.Error())
+				return
+			}
+			recordAudit(c, "创建", "证书签发任务", fmt.Sprintf("启用规则 %s，创建证书签发任务 (%s)", caddyID, domain))
+		case EnableCertJobKeep:
+			recordAudit(c, "启用", "证书签发任务", fmt.Sprintf("启用规则 %s，证书有效（过期前%d天续签），保持现有证书", caddyID, renewalDays))
+		case EnableCertJobResume:
+			if _, err := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书有效，已恢复使用', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?", jobID); err != nil {
+				failEnable("恢复证书签发任务失败: " + err.Error())
+				return
+			}
+			recordAudit(c, "启用", "证书签发任务", fmt.Sprintf("启用规则 %s，证书仍有效，恢复使用现有证书", caddyID))
+		case EnableCertJobRenew:
+			if qm == nil {
+				failEnable("CA 队列未初始化，无法续签证书")
+				return
+			}
+			if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+				failEnable("续签排队失败: " + err.Error())
+				return
+			}
+			recordAudit(c, "续签", "证书签发任务", fmt.Sprintf("启用规则 %s，证书即将过期，重新排队续签", caddyID))
+		case EnableCertJobRetry:
+			if qm == nil {
+				failEnable("CA 队列未初始化，无法重试证书任务")
+				return
+			}
+			if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+				failEnable("重试排队失败: " + err.Error())
+				return
+			}
+			recordAudit(c, "重试", "证书签发任务", fmt.Sprintf("启用规则 %s，任务之前已暂停/失败，重新排队", caddyID))
+		default:
+			recordAudit(c, "启用", "证书签发任务", fmt.Sprintf("启用规则 %s，签发任务已在进行中 (状态: %s)", caddyID, jobStatus))
+		}
 	}
 
 	recordAudit(c, "启用", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已启用"))
@@ -1719,10 +1806,19 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 func (h *Handlers) DisableRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 
-	var exists bool
-	err := db.DB.QueryRow("SELECT 1 FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&exists)
-	if err != nil {
+	var originalEnabled, enableTLS bool
+	var domain, tlsSource string
+	err := db.DB.QueryRow("SELECT COALESCE(enabled,1), COALESCE(domain,''), COALESCE(tls_source,''), COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&originalEnabled, &domain, &tlsSource, &enableTLS)
+	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
+		return
+	}
+	if !originalEnabled {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已禁用"})
 		return
 	}
 
@@ -1732,22 +1828,29 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	}
 
 	if err := h.applyCaddyConfigWithRollback(); err != nil {
-		// Revert DB state on Caddy failure
-		db.DB.Exec("UPDATE lb_rules SET enabled = 1, updated_at = datetime('now') WHERE caddy_id = ?", caddyID)
+		if _, restoreErr := db.DB.Exec("UPDATE lb_rules SET enabled = ?, updated_at = datetime('now') WHERE caddy_id = ?", originalEnabled, caddyID); restoreErr != nil {
+			log.Printf("CRITICAL: DisableRule Caddy apply and DB restore failed for caddy_id=%s: caddy=%v db=%v", caddyID, err, restoreErr)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与 DB 恢复均失败: %v; %v", err, restoreErr)})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Failed to apply Caddy config: %v", err)})
 		return
 	}
 
-	var domain, tlsSource string
-	var enableTLS bool
-	if err := db.DB.QueryRow("SELECT COALESCE(domain,''), COALESCE(tls_source,''), COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&domain, &tlsSource, &enableTLS); err == nil {
-		if enableTLS && tlsSource == "acme_dns" && domain != "" {
-			result, _ := db.DB.Exec("UPDATE cert_jobs SET status='disabled', message='规则已禁用，任务已暂停', updated_at=datetime('now') WHERE rule_id=? AND status NOT IN ('failed','disabled')", caddyID)
-			rows, _ := result.RowsAffected()
-			if rows > 0 {
-				services.WriteCertJobLogByRule(caddyID, "WARN", "cancelled", "规则已禁用，证书签发任务已暂停")
-				recordAudit(c, "禁用", "证书签发任务", fmt.Sprintf("规则 %s 已禁用，%d 个证书任务状态设为已禁用", caddyID, rows))
-			}
+	if enableTLS && tlsSource == "acme_dns" && domain != "" {
+		result, err := db.DB.Exec("UPDATE cert_jobs SET status='disabled', message='规则已禁用，任务已暂停', updated_at=datetime('now') WHERE rule_id=? AND status NOT IN ('failed','disabled')", caddyID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新证书任务状态失败: " + err.Error()})
+			return
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务更新结果失败: " + err.Error()})
+			return
+		}
+		if rows > 0 {
+			services.WriteCertJobLogByRule(caddyID, "WARN", "cancelled", "规则已禁用，证书签发任务已暂停")
+			recordAudit(c, "禁用", "证书签发任务", fmt.Sprintf("规则 %s 已禁用，%d 个证书任务状态设为已禁用", caddyID, rows))
 		}
 	}
 

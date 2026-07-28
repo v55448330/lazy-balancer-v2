@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,6 +21,8 @@ import (
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
+
+const caddyConfigGenerationErrorKey = "__lazy_balancer_generation_error"
 
 // CaddyService handles Caddy configuration management
 type CaddyService struct {
@@ -129,6 +132,9 @@ func (s *CaddyService) ClearBackup() {
 func (s *CaddyService) ApplyConfig(config map[string]interface{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {
+		return errors.New(message)
+	}
 
 	data, err := json.Marshal(config)
 	if err != nil {
@@ -152,6 +158,9 @@ func (s *CaddyService) ApplyConfig(config map[string]interface{}) error {
 
 // ValidateConfig validates Caddy configuration using the /load API with validate=true
 func (s *CaddyService) ValidateConfig(config map[string]interface{}, uniqueID string) error {
+	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {
+		return errors.New(message)
+	}
 	data, err := json.Marshal(config)
 	if err != nil {
 		return err
@@ -322,6 +331,17 @@ func (s *CaddyService) SetConfigByID(id string, config map[string]interface{}) e
 		}
 		routes, ok := server["routes"].([]interface{})
 		if !ok {
+			continue
+		}
+		hasMainRoute := false
+		for _, route := range routes {
+			routeMap, routeOK := route.(map[string]interface{})
+			if routeOK && routeMap["@id"] == id {
+				hasMainRoute = true
+				break
+			}
+		}
+		if !hasMainRoute {
 			continue
 		}
 
@@ -1410,6 +1430,45 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 	}
 	allRules = filteredRules
 
+	type certificateMaterial struct {
+		ruleID  string
+		certPEM string
+		keyPEM  string
+	}
+	materials := make([]certificateMaterial, 0)
+	for _, ru := range allRules {
+		r := ru.rule
+		if !r.EnableTLS {
+			continue
+		}
+		if r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
+			materials = append(materials, certificateMaterial{ruleID: r.CaddyID, certPEM: r.TLSCert, keyPEM: r.TLSKey})
+			continue
+		}
+		if r.TLSSource == "acme_dns" {
+			certPEM, keyPEM, issued := loadACMECertificateFromStore(store, r.CaddyID, r.Domain)
+			if issued {
+				materials = append(materials, certificateMaterial{ruleID: r.CaddyID, certPEM: certPEM, keyPEM: keyPEM})
+			}
+		}
+	}
+	if len(materials) > 0 {
+		ruleIDs := make([]string, len(materials))
+		for i, material := range materials {
+			ruleIDs[i] = material.ruleID
+		}
+		filesSnapshot, err := SnapshotCertFiles(ruleIDs)
+		if err != nil {
+			return map[string]interface{}{caddyConfigGenerationErrorKey: fmt.Sprintf("snapshot certificate files: %v", err)}
+		}
+		for _, material := range materials {
+			if err := WriteCertFiles(material.ruleID, material.certPEM, material.keyPEM); err != nil {
+				restoreErr := RestoreCertFiles(filesSnapshot)
+				return map[string]interface{}{caddyConfigGenerationErrorKey: errors.Join(fmt.Errorf("materialize certificate %s: %w", material.ruleID, err), restoreErr).Error()}
+			}
+		}
+	}
+
 	var dnsProvider, acmeEmail string
 	var isMaster bool
 	var caddyLogPath, caddyLogLevel string
@@ -1710,16 +1769,14 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 		}
 		certPath, keyPath := CertFilePaths(r.CaddyID)
 		if r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
-			WriteCertFiles(r.CaddyID, r.TLSCert, r.TLSKey)
 			tlsCertFiles = append(tlsCertFiles, map[string]interface{}{
 				"certificate": certPath,
 				"key":         keyPath,
 				"tags":        []string{r.CaddyID},
 			})
 		} else if r.TLSSource == "acme_dns" {
-			certPEM, keyPEM, issued := loadACMECertificateFromStore(store, r.CaddyID, r.Domain)
+			_, _, issued := loadACMECertificateFromStore(store, r.CaddyID, r.Domain)
 			if issued {
-				WriteCertFiles(r.CaddyID, certPEM, keyPEM)
 				tlsCertFiles = append(tlsCertFiles, map[string]interface{}{
 					"certificate": certPath,
 					"key":         keyPath,

@@ -317,6 +317,7 @@ const importFileContent = ref('')
 const importValidation = ref<ImportValidation | null>(null)
 const importValidating = ref(false)
 const importInput = ref<HTMLInputElement | null>(null)
+let importValidationSeq = 0
 
 const summaryLabels: Record<string, string> = {
   lb_rules: '规则',
@@ -332,6 +333,7 @@ const summaryLabels: Record<string, string> = {
 
 const triggerImport = (): void => {
   if (backupDisabled.value) return
+  importValidationSeq++
   importFileName.value = ''
   importFileContent.value = ''
   importValidation.value = null
@@ -347,19 +349,26 @@ const handleImportFile = async (event: Event): Promise<void> => {
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
+  const validationSeq = ++importValidationSeq
   importFileName.value = file.name
   importValidation.value = null
   importValidating.value = true
   try {
-    importFileContent.value = await file.text()
-    const res = await request.post<{ data: ImportValidation }>('/config/import/validate', importFileContent.value, {
+    const fileContent = await file.text()
+    const res = await request.post<{ data: ImportValidation }>('/config/import/validate', fileContent, {
       headers: { 'Content-Type': 'application/json' },
     })
+    if (validationSeq !== importValidationSeq) return
+    importFileContent.value = fileContent
     importValidation.value = res.data
   } catch {
-    importValidation.value = { valid: false, error: '校验请求失败，请重试' }
+    if (validationSeq === importValidationSeq) {
+      importValidation.value = { valid: false, error: '校验请求失败，请重试' }
+    }
   } finally {
-    importValidating.value = false
+    if (validationSeq === importValidationSeq) {
+      importValidating.value = false
+    }
   }
 }
 
@@ -439,6 +448,8 @@ const openAdminTlsDialog = () => {
 }
 
 const onAdminTlsDialogClose = () => {
+  tlsInspectSeq++
+  adminTlsForm.value = { mode: 'selfsigned', certFile: null, keyFile: null, certInfo: null, inspecting: false }
   loadAdminTls()
 }
 

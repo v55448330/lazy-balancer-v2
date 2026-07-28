@@ -30,13 +30,14 @@ type SyncResult struct {
 }
 
 type SyncService struct {
-	db      *sql.DB
-	cfg     *config.Config
-	caddy   *CaddyService
-	cluster *ClusterService
-	client  *http.Client
-	mu      sync.Mutex
-	cancel  context.CancelFunc
+	db         *sql.DB
+	cfg        *config.Config
+	caddy      *CaddyService
+	cluster    *ClusterService
+	client     *http.Client
+	mu         sync.Mutex
+	cancel     context.CancelFunc
+	generation uint64
 }
 
 func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *SyncService {
@@ -118,15 +119,21 @@ func (s *SyncService) Start() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	s.generation++
+	generation := s.generation
 	s.cancel = cancel
 	go func() {
 		s.run(ctx)
-		// Clear cancel on exit (transient error, demotion, or role loss) so a
-		// later Start() can revive the loop instead of no-opping forever.
-		s.mu.Lock()
-		s.cancel = nil
-		s.mu.Unlock()
+		s.finishRun(generation)
 	}()
+}
+
+func (s *SyncService) finishRun(generation uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.generation == generation {
+		s.cancel = nil
+	}
 }
 
 func (s *SyncService) Stop() {
