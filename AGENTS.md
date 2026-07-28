@@ -18,6 +18,7 @@ Lazy Balancer V2 is a full-stack load balancer management system that orchestrat
 ├── bin/          # Compiled binary (⚠️ NOT committed to git - see ANTI-PATTERNS)
 ├── docs/         # Project documentation
 └── Dockerfile    # Multi-stage build (xcaddy-builder, Go backend, Node frontend)
+    Dockerfile.prebuilt  # Release build: skips frontend stage, COPY web/dist (run `npm run build` first)
 ```
 
 ## WHERE TO LOOK
