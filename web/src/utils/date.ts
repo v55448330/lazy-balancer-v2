@@ -24,30 +24,32 @@ const formatInConfigTz = (d: Date, withTime: boolean): string => {
   return `${date} ${get('hour')}:${get('minute')}:${get('second')}`
 }
 
-const parseDateValue = (date: any): Date | null => {
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
+
+const parseDateValue = (date: unknown): Date | null => {
   if (!date) return null
-  if (typeof date === 'object' && 'Valid' in date && date.Valid === false) return null
+  if (isRecord(date) && date.Valid === false) return null
   let raw: unknown = date
-  if (typeof date === 'object' && 'String' in date && date.String) raw = date.String
-  if (typeof date === 'object' && 'Time' in date && date.Time) raw = date.Time
+  if (isRecord(date) && typeof date.String === 'string' && date.String) raw = date.String
+  if (isRecord(date) && typeof date.Time === 'string' && date.Time) raw = date.Time
   if (typeof raw === 'string' && !isIsoLike(raw)) return null
   if (typeof raw !== 'string') return null
   const d = new Date(raw)
   return isNaN(d.getTime()) ? null : d
 }
 
-export const formatDate = (date: any): string => {
+export const formatDate = (date: unknown): string => {
   const d = parseDateValue(date)
   if (d) return formatInConfigTz(d, true)
   if (typeof date === 'string' && date) return date
-  if (typeof date === 'object' && 'String' in date && date.String) return date.String
+  if (isRecord(date) && typeof date.String === 'string' && date.String) return date.String
   return ''
 }
 
-export const formatDateShort = (date: any): string => {
+export const formatDateShort = (date: unknown): string => {
   const d = parseDateValue(date)
   if (d) return formatInConfigTz(d, false)
   if (typeof date === 'string' && date) return date
-  if (typeof date === 'object' && 'String' in date && date.String) return date.String
+  if (isRecord(date) && typeof date.String === 'string' && date.String) return date.String
   return ''
 }

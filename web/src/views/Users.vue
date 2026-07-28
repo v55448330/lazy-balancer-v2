@@ -129,10 +129,11 @@ import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { UserFilled, User, Plus } from '@element-plus/icons-vue'
+import type { ApiResponse, User as UserDto } from '@/types'
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
-const users = ref<any[]>([])
+const users = ref<UserDto[]>([])
 const showForm = ref(false)
 
 const openCreateForm = () => {
@@ -140,7 +141,7 @@ const openCreateForm = () => {
   form.value = { username: '', password: '', display_name: '', role: 'user' }
   showForm.value = true
 }
-const editingUser = ref<any>(null)
+const editingUser = ref<UserDto | null>(null)
 const switchingId = ref<number | null>(null)
 const form = ref({
   username: '',
@@ -149,7 +150,7 @@ const form = ref({
   role: 'user',
 })
 
-const getDisplayName = (row: any) => {
+const getDisplayName = (row: UserDto): string => {
   const name = row.display_name
   if (typeof name === 'string') return name
   if (name && typeof name === 'object' && 'String' in name) return name.String
@@ -157,7 +158,7 @@ const getDisplayName = (row: any) => {
 }
 
 const fetchUsers = async () => {
-  const res = await request.get('/users')
+  const res = await request.get<ApiResponse<UserDto[]>>('/users')
   users.value = res.data || []
 }
 
@@ -180,7 +181,7 @@ const handleSubmit = async () => {
   form.value = { username: '', password: '', display_name: '', role: 'user' }
 }
 
-const editUser = (user: any) => {
+const editUser = (user: UserDto) => {
   if (isReadOnly.value) return
   editingUser.value = user
   form.value = {

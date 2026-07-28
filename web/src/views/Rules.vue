@@ -728,6 +728,12 @@
             <el-descriptions-item label="压缩" v-if="wizardForm.protocol === 'http'">
               {{ wizardForm.enable_compress ? (wizardForm.compress_types || 'gzip') : '禁用' }}
             </el-descriptions-item>
+            <el-descriptions-item label="访问控制">
+              {{ aclPreview() }}
+            </el-descriptions-item>
+            <el-descriptions-item label="自定义路由" v-if="wizardForm.protocol === 'http'">
+              {{ customRoutesPreview() }}
+            </el-descriptions-item>
             <el-descriptions-item label="TLS 证书" v-if="wizardForm.enable_tls">
               <div v-if="wizardForm.tls_source === 'acme_dns'">{{ certTypeLabels.auto }} ({{ caProviderLabel }})</div>
               <div v-else>
@@ -755,7 +761,7 @@
                   </template>
                 </el-table-column>
                 <el-table-column label="权重" width="70">
-                  <template #default="{ row }">{{ weightPercent(wizardForm.upstreams, row) }}%</template>
+                  <template #default="{ row }">{{ row.enabled ? `${weightPercent(wizardForm.upstreams, row)}%` : '禁用' }}</template>
                 </el-table-column>
                 <el-table-column prop="max_connections" label="最大连接" width="90" />
                 <el-table-column prop="enabled" label="状态" width="70">
@@ -963,7 +969,7 @@ import RuleAclDialog from '@/components/rules/RuleAclDialog.vue'
 import PathRulesEditor from '@/components/rules/PathRulesEditor.vue'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
 import { validatePathRules } from '@/utils/ruleValidation'
-import { normalizeWeights } from '@/utils/upstreamWeights'
+import { normalizeWeights, redistributeWeight } from '@/utils/upstreamWeights'
 
 interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id'> {
   id?: number
@@ -1208,20 +1214,21 @@ const fetchRules = async () => {
   }
 }
 
-const fetchCertInfo = async () => {
-  const tlsRules = rules.value.filter(r => r.enable_tls)
+const fetchCertInfo = async (caddyIds?: readonly string[]) => {
+  const requestedIds = caddyIds ? new Set(caddyIds) : null
+  const tlsRules = rules.value.filter(r => r.enable_tls && (!requestedIds || requestedIds.has(r.caddy_id)))
   if (tlsRules.length === 0) {
-    certInfoMap.value = {}
+    if (!requestedIds) certInfoMap.value = {}
     return
   }
   try {
     const res = await request.post<APIResponse<Record<string, CertInfo | null>>>('/rules/cert-info', {
       caddy_ids: tlsRules.map(r => r.caddy_id)
     })
-    certInfoMap.value = res.data || {}
+    const certInfo = res.data || {}
+    certInfoMap.value = requestedIds ? { ...certInfoMap.value, ...certInfo } : certInfo
   } catch {
-    // Non-critical: keep existing cert info map or clear it
-    certInfoMap.value = {}
+    if (!requestedIds) certInfoMap.value = {}
   }
 }
 
@@ -1242,7 +1249,14 @@ const fetchCertJobs = async () => {
         }
       }
     })
+    const newlyIssuedRuleIds = Object.entries(map)
+      .filter(([ruleId, job]) => {
+        const previousStatus = certJobMap.value[ruleId]?.status
+        return previousStatus !== undefined && previousStatus !== 'issued' && job.status === 'issued'
+      })
+      .map(([ruleId]) => ruleId)
     certJobMap.value = map
+    if (newlyIssuedRuleIds.length > 0) await fetchCertInfo(newlyIssuedRuleIds)
   } catch {
     certJobMap.value = {}
   } finally {
@@ -1598,6 +1612,7 @@ watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
 
 // Watch for protocol changes to adjust defaults for TCP rules
 watch(() => wizardForm.protocol, (newVal, oldVal) => {
+  if (newVal !== 'tcp') wizardForm.tcp_proxy_protocol = false
   if (newVal === 'tcp') {
     // Switching to TCP: use a neutral high port and plain TCP upstreams
     if (wizardForm.listen_port === 80 || wizardForm.listen_port === 443) {
@@ -1982,69 +1997,14 @@ const resetWizard = () => {
 
 // Weights are shown and edited as percentages of enabled upstreams; the
 // interlock keeps the enabled total at 100 so values stay meaningful.
-const onWeightChange = (changedIdx: number) => {
-  const rows = wizardForm.upstreams
-  if (!rows.length) return
-  const enabled = rows.map((r, i) => ({ r, i })).filter(({ r }) => r.enabled)
-  if (enabled.length === 0) return
-  const changed = rows[changedIdx]
-  if (changed && !changed.enabled) {
-    // Disabled a row: redistribute its share across the remaining enabled rows.
-    changed.weight = 0
-  }
-  const anchor = enabled.find(({ i }) => i === changedIdx)
-  const others = enabled.filter(({ i }) => i !== changedIdx)
-  if (others.length === 0) {
-    if (anchor) anchor.r.weight = 100
-    return
-  }
-  const anchorVal = anchor ? Math.min(100, Math.max(0, anchor.r.weight || 0)) : 0
-  if (anchor) anchor.r.weight = anchorVal
-  const remaining = 100 - anchorVal
-  const othersSum = others.reduce((sum, { r }) => sum + (r.weight || 0), 0)
-  if (othersSum === 0) {
-    const base = Math.floor(remaining / others.length)
-    others.forEach(({ r }, k) => {
-      r.weight = k === 0 ? remaining - base * (others.length - 1) : base
-    })
-  } else {
-    let acc = 0
-    others.forEach(({ r }, k) => {
-      if (k === others.length - 1) {
-        r.weight = remaining - acc
-      } else {
-        const v = Math.round(((r.weight || 0) / othersSum) * remaining)
-        r.weight = v
-        acc += v
-      }
-    })
-  }
-}
+const onWeightChange = (changedIdx: number): void => redistributeWeight(wizardForm.upstreams, changedIdx)
 
-const weightsToPercent = (upstreams: UpstreamInput[]) => {
-  const enabled = upstreams.filter(u => u.enabled)
-  const sum = enabled.reduce((s, u) => s + (u.weight || 0), 0)
-  if (enabled.length === 0) return
-  if (sum === 0) {
-    const base = Math.floor(100 / enabled.length)
-    enabled.forEach((u, k) => { u.weight = k === 0 ? 100 - base * (enabled.length - 1) : base })
-    return
-  }
-  let acc = 0
-  enabled.forEach((u, k) => {
-    if (k === enabled.length - 1) {
-      u.weight = 100 - acc
-    } else {
-      const v = Math.round(((u.weight || 0) / sum) * 100)
-      u.weight = v
-      acc += v
-    }
-  })
-}
+const weightsToPercent = (upstreams: UpstreamInput[]): void => normalizeWeights(upstreams)
 
 const weightPercent = (upstreams: readonly (Upstream | UpstreamInput)[] | undefined, row: Upstream | UpstreamInput): number => {
   if (!upstreams?.length) return 0
-  const sum = upstreams.reduce((s, u) => s + (u.weight || 0), 0)
+  if (row.enabled === false) return 0
+  const sum = upstreams.filter((upstream) => upstream.enabled !== false).reduce((s, u) => s + (u.weight || 0), 0)
   if (sum <= 0) return 0
   return Math.round(((row.weight || 0) / sum) * 100)
 }
@@ -2056,6 +2016,18 @@ const addUpstream = () => {
   if (wizardForm.upstreams.length === 1) {
     upstream.weight = 100
   }
+}
+
+const aclPreview = (): string => {
+  const labels: Record<IpAclMode, string> = { '': '全部允许', allow: '白名单', deny: '黑名单' }
+  return `${labels[wizardForm.ip_acl_mode]} · ${wizardForm.ip_acl_list.length} 个 CIDR`
+}
+
+const customRoutesPreview = (): string => {
+  if (!wizardForm.custom_routes_enabled || wizardForm.path_rules.length === 0) return '禁用'
+  const paths = wizardForm.path_rules.slice(0, 3).map((rule) => rule.path || '/').join('、')
+  const suffix = wizardForm.path_rules.length > 3 ? ' 等' : ''
+  return `${wizardForm.path_rules.length} 条 · ${paths}${suffix}`
 }
 
 const removeUpstream = (index: number) => {
@@ -2317,7 +2289,7 @@ const openCopyWizard = (rule: Rule) => {
   Object.assign(wizardForm, {
     caddy_id: '',
     id: undefined,
-    name: `${rule.name} (Copy)`,
+    name: `${rule.name}（副本）`,
     description: rule.description || '',
     protocol: rule.protocol,
     domain: rule.domain || '',
@@ -2472,6 +2444,8 @@ const ruleLogStats = ref<RuleLogStats | null>(null)
 const logStatsOffset = ref(0)
 const logStatsMaps = ref<{ ip: Record<string, number>; ua: Record<string, number>; uri: Record<string, number>; total: number; startedAt: string } | null>(null)
 const logStatsInFlight = ref(false)
+const MAX_LOG_STAT_KEYS = 500
+const OTHER_LOG_STAT_KEY = '其他'
 
 const generalizeUA = (ua: string): string => {
   if (!ua) return '-'
@@ -2514,18 +2488,30 @@ const consumeLogLine = (maps: { ip: Record<string, number>; ua: Record<string, n
   if (!req) return
   maps.total++
   const ip = req.client_ip || req.src_ip || req.src || req.remote_ip || '-'
-  maps.ip[ip] = (maps.ip[ip] || 0) + 1
+  incrementCappedStat(maps.ip, ip)
   let uri = req.uri || req.uri_path || '-'
   const qi = uri.indexOf('?')
   if (qi >= 0) uri = uri.slice(0, qi)
-  maps.uri[uri] = (maps.uri[uri] || 0) + 1
+  incrementCappedStat(maps.uri, uri)
   let ua = req.user_agent || ''
   if (!ua && req.headers) {
     const list = req.headers['User-Agent']
     if (Array.isArray(list) && list.length) ua = list[0]
   }
   const g = generalizeUA(ua)
-  maps.ua[g] = (maps.ua[g] || 0) + 1
+  incrementCappedStat(maps.ua, g)
+}
+
+const incrementCappedStat = (map: Record<string, number>, key: string): void => {
+  if (Object.prototype.hasOwnProperty.call(map, key)) {
+    map[key] += 1
+    return
+  }
+  if (Object.keys(map).length < MAX_LOG_STAT_KEYS - 1) {
+    map[key] = 1
+    return
+  }
+  map[OTHER_LOG_STAT_KEY] = (map[OTHER_LOG_STAT_KEY] || 0) + 1
 }
 
 const topN = (m: Record<string, number>, n: number) =>
@@ -2730,7 +2716,6 @@ onUnmounted(() => {
 .text-secondary { color: #6b7280; }
 .form-tip { font-size: 12px; color: #9ca3af; margin-top: 8px; }
 .form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
-.form-tip-inline-tight { font-size: 12px; color: #9ca3af; margin-left: 6px; }
 .form-tip-line { font-size: 12px; color: #9ca3af; margin-top: 4px; }
 .form-tip-tight { font-size: 12px; color: #9ca3af; margin-top: 2px; }
 .form-tip-below { font-size: 12px; color: #9ca3af; margin-top: 8px; display: block; }
@@ -2755,13 +2740,6 @@ onUnmounted(() => {
 /* Health tag */
 .health-tag {
   cursor: pointer;
-}
-
-.tcp-health-tag {
-  white-space: nowrap;
-  overflow: visible;
-  display: inline-flex;
-  max-width: none;
 }
 
 /* Health tooltip */
@@ -3093,10 +3071,6 @@ onUnmounted(() => {
   width: calc(50% - 30px);
 }
 
-.health-check-wrapper {
-  padding: 0 80px;
-}
-
 .health-check-info {
   display: flex;
   align-items: center;
@@ -3120,10 +3094,6 @@ onUnmounted(() => {
 
 .section-wrapper {
   padding: 0;
-}
-
-.health-form {
-  padding: 0 20px;
 }
 
 .strategy-card:hover {
@@ -3166,24 +3136,10 @@ onUnmounted(() => {
   gap: 8px;
 }
 
-.health-check-section {
-  padding: 0 80px;
-}
-
 .active-check-control {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.health-summary {
-  margin-top: 8px;
-}
-
-.health-summary-text {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .summary-desc {

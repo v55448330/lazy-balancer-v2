@@ -149,6 +149,8 @@ const setupRules: FormRules = {
 const error = ref('')
 const loading = ref(false)
 
+const errorMessage = (caught: unknown, fallback: string): string => caught instanceof Error ? caught.message : fallback
+
 const handleLogin = async () => {
   if (!formRef.value) return
 
@@ -159,8 +161,8 @@ const handleLogin = async () => {
     loading.value = true
     try {
       await authStore.login(form.username, form.password)
-    } catch (e: any) {
-      error.value = (e as any)?.response?.data?.message || (e as any)?.message || '登录失败，请稍后重试'
+    } catch (caught: unknown) {
+      error.value = errorMessage(caught, '登录失败，请稍后重试')
     } finally {
       loading.value = false
     }
@@ -182,8 +184,8 @@ const handleSetup = async () => {
         display_name: setupForm.display_name,
       })
       await authStore.login(setupForm.username, setupForm.password)
-    } catch (e: any) {
-      error.value = (e as any)?.response?.data?.message || (e as any)?.message || '创建管理员失败，请稍后重试'
+    } catch (caught: unknown) {
+      error.value = errorMessage(caught, '创建管理员失败，请稍后重试')
     } finally {
       loading.value = false
     }

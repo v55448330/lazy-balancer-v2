@@ -394,3 +394,158 @@ func restoreRuleSnapshot(ctx context.Context, caddyID string, ruleRow map[string
 	committed = true
 	return nil
 }
+
+const lbRuleColumns = `COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port, COALESCE(strategy,''),
+	COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
+	health_check_path, health_check_interval, health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
+	COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
+	COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
+	COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
+	COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
+	COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
+	COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), enabled, COALESCE(log_enabled,0),
+	created_by, created_at, updated_at, updated_by, COALESCE(host_header,'')`
+
+// 规范化规则行扫描：ListRules/GetRule/DuplicateRule 共用，避免列清单多处漂移
+func scanLbRules(rows *sql.Rows) ([]models.LbRule, error) {
+	rules := make([]models.LbRule, 0)
+	for rows.Next() {
+		var r models.LbRule
+		var description, domain, strategy, dnsFamily, ipACLListJSON, tlsSource, tlsCert, tlsKey, compressTypes, hostHeader string
+		var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect, enableCompress bool
+		var acmeConfigID, caProviderID int
+		var createdBy, updatedBy sql.NullInt64
+		var createdAt, updatedAt sql.NullTime
+		if err := rows.Scan(&r.ID, &r.CaddyID, &r.Name, &description, &r.Protocol, &domain, &r.ListenPort, &strategy,
+			&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
+			&r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout, &r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
+			&enableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPProxyProtocol, &r.TCPTryDuration, &r.TCPTryInterval,
+			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden,
+			&r.IPACLMode, &ipACLListJSON, &r.CustomRoutesEnabled,
+			&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout,
+			&enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &tlsCert, &tlsKey, &tlsHTTPRedirect,
+			&enableCompress, &compressTypes, &r.Enabled, &r.LogEnabled,
+			&createdBy, &createdAt, &updatedAt, &updatedBy, &hostHeader); err != nil {
+			return nil, err
+		}
+		r.Description = description
+		r.Domain = domain
+		r.Strategy = strategy
+		if r.Strategy == "" {
+			r.Strategy = "weighted_round_robin"
+		}
+		r.DynamicDNS = dynamicDNS
+		r.EnableDnsServer = enableDnsServer
+		r.DnsFamily = dnsFamily
+		r.EnableActiveHealthCheck = enableActiveHealthCheck
+		ipACLList, err := decodeIPACLList(ipACLListJSON)
+		if err != nil {
+			return nil, fmt.Errorf("规则 %s 的 IP 访问控制列表: %w", r.CaddyID, err)
+		}
+		r.IPACLList = ipACLList
+		r.EnableTLS = enableTLS
+		r.TLSSource = tlsSource
+		r.ACMEConfigID = acmeConfigID
+		r.CAProviderID = caProviderID
+		r.TLSCert = tlsCert
+		r.TLSKey = tlsKey
+		r.TLSHTTPRedirect = tlsHTTPRedirect
+		r.EnableCompress = enableCompress
+		r.CompressTypes = compressTypes
+		r.HostHeader = hostHeader
+		if createdBy.Valid {
+			r.CreatedBy = int(createdBy.Int64)
+		}
+		if createdAt.Valid {
+			r.CreatedAt = createdAt.Time
+		}
+		if updatedAt.Valid {
+			r.UpdatedAt = updatedAt
+		}
+		if updatedBy.Valid {
+			r.UpdatedBy = int(updatedBy.Int64)
+		}
+		rules = append(rules, r)
+	}
+	return rules, rows.Err()
+}
+
+func loadUpstreamsBatch(ctx context.Context, ruleIDs []string) (map[string][]models.Upstream, error) {
+	result := make(map[string][]models.Upstream, len(ruleIDs))
+	if len(ruleIDs) == 0 {
+		return result, nil
+	}
+	placeholders := make([]string, len(ruleIDs))
+	args := make([]any, len(ruleIDs))
+	for i, id := range ruleIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := db.DB.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0)
+		FROM upstreams WHERE rule_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("批量读取上游: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var u models.Upstream
+		if err := rows.Scan(&u.ID, &u.RuleID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
+			return nil, err
+		}
+		result[u.RuleID] = append(result[u.RuleID], u)
+	}
+	return result, rows.Err()
+}
+
+func loadPathRulesBatch(ctx context.Context, ruleIDs []string) (map[string][]models.PathRule, error) {
+	result := make(map[string][]models.PathRule, len(ruleIDs))
+	if len(ruleIDs) == 0 {
+		return result, nil
+	}
+	placeholders := make([]string, len(ruleIDs))
+	args := make([]any, len(ruleIDs))
+	for i, id := range ruleIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := db.DB.QueryContext(ctx, `SELECT id,rule_id,sort_order,match_type,path,upstreams_json
+		FROM path_rules WHERE rule_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY rule_id, sort_order, id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("批量读取路径规则: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pathRule models.PathRule
+		var upstreamsJSON sql.NullString
+		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &upstreamsJSON); err != nil {
+			return nil, err
+		}
+		if upstreamsJSON.Valid {
+			if err := json.Unmarshal([]byte(upstreamsJSON.String), &pathRule.Upstreams); err != nil {
+				return nil, fmt.Errorf("解析路径规则 %d 的上游: %w", pathRule.ID, err)
+			}
+		}
+		result[pathRule.RuleID] = append(result[pathRule.RuleID], pathRule)
+	}
+	return result, rows.Err()
+}
+
+func hydrateRuleRelations(ctx context.Context, rules []models.LbRule) error {
+	ruleIDs := make([]string, len(rules))
+	for i, r := range rules {
+		ruleIDs[i] = r.CaddyID
+	}
+	upstreamsMap, err := loadUpstreamsBatch(ctx, ruleIDs)
+	if err != nil {
+		return err
+	}
+	pathRulesMap, err := loadPathRulesBatch(ctx, ruleIDs)
+	if err != nil {
+		return err
+	}
+	for i := range rules {
+		rules[i].Upstreams = upstreamsMap[rules[i].CaddyID]
+		rules[i].PathRules = pathRulesMap[rules[i].CaddyID]
+	}
+	return nil
+}

@@ -261,6 +261,8 @@ func createTables() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain);
 	CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain);
+	CREATE INDEX IF NOT EXISTS idx_cert_jobs_status_ca_available ON cert_jobs(status, ca_available_after);
+	CREATE INDEX IF NOT EXISTS idx_cert_jobs_status_expires ON cert_jobs(status, expires_at);
 
 	-- Global Config table
 	CREATE TABLE IF NOT EXISTS global_config (
@@ -294,6 +296,7 @@ func createTables() error {
 		access_log_json BOOLEAN DEFAULT TRUE,
 		access_log_format TEXT DEFAULT '',
 		audit_retention_months INTEGER DEFAULT 3,
+		metrics_retention_days INTEGER DEFAULT 7,
 		jwt_expire_minutes INTEGER DEFAULT 20,
 		timezone VARCHAR(50) DEFAULT 'Asia/Shanghai',
 		last_sync DATETIME,
@@ -417,6 +420,7 @@ func runMigrations() error {
 		"global_config.access_log_json":               "BOOLEAN DEFAULT TRUE",
 		"global_config.access_log_format":             "TEXT DEFAULT ''",
 		"global_config.audit_retention_months":        "INTEGER DEFAULT 3",
+		"global_config.metrics_retention_days":        "INTEGER DEFAULT 7",
 		"global_config.jwt_expire_minutes":            "INTEGER DEFAULT 20",
 		"global_config.timezone":                      "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
 		"lb_rules.log_enabled":                        "BOOLEAN DEFAULT 0",
@@ -709,6 +713,12 @@ func runMigrations() error {
 	// Enforce cert_jobs status CHECK constraint and queued default on existing DBs.
 	if err := migrateCertJobsStatusConstraint(); err != nil {
 		return fmt.Errorf("failed to migrate cert_jobs status constraint: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_status_ca_available ON cert_jobs(status, ca_available_after)"); err != nil {
+		return fmt.Errorf("failed to index cert_jobs CA availability: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_status_expires ON cert_jobs(status, expires_at)"); err != nil {
+		return fmt.Errorf("failed to index cert_jobs expiration: %w", err)
 	}
 
 	// Normalize ca_available_after to SQLite canonical UTC datetime format.

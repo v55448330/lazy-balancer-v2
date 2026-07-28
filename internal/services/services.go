@@ -43,12 +43,17 @@ func NewMetricsService(metricsURL string, interval int) *MetricsService {
 
 func (m *MetricsService) Start() {
 	ticker := time.NewTicker(time.Duration(m.interval) * time.Second)
+	cleanupTicker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
+	defer cleanupTicker.Stop()
+	m.cleanupHistory()
 
 	for {
 		select {
 		case <-ticker.C:
 			m.collect()
+		case <-cleanupTicker.C:
+			m.cleanupHistory()
 		case <-m.stopCh:
 			return
 		}
@@ -95,8 +100,36 @@ type parsedMetrics struct {
 	latencyP99    int
 }
 
+type statusClassCounts struct {
+	status2xx int64
+	status3xx int64
+	status4xx int64
+	status5xx int64
+	other     int64
+}
+
+func classifyStatusCodes(codes map[int]int64) statusClassCounts {
+	var counts statusClassCounts
+	for code, value := range codes {
+		switch {
+		case code >= 200 && code < 300:
+			counts.status2xx += value
+		case code >= 300 && code < 400:
+			counts.status3xx += value
+		case code >= 400 && code < 500:
+			counts.status4xx += value
+		case code >= 500 && code < 600:
+			counts.status5xx += value
+		default:
+			counts.other += value
+		}
+	}
+	return counts
+}
+
 func (m *MetricsService) parsePrometheusMetrics(text string) parsedMetrics {
 	metrics := parsedMetrics{}
+	codes := make(map[int]int64)
 
 	// Parse request counters
 	// caddy_http_requests_total{code="200",...}
@@ -107,17 +140,14 @@ func (m *MetricsService) parsePrometheusMetrics(text string) parsedMetrics {
 			code, _ := strconv.ParseInt(match[1], 10, 64)
 			value, _ := strconv.ParseInt(match[2], 10, 64)
 			metrics.requestsTotal += value
-			if code >= 200 && code < 300 {
-				metrics.requests2xx += value
-			} else if code >= 300 && code < 400 {
-				metrics.requests3xx += value
-			} else if code >= 400 && code < 500 {
-				metrics.requests4xx += value
-			} else if code >= 500 {
-				metrics.requests5xx += value
-			}
+			codes[int(code)] += value
 		}
 	}
+	classified := classifyStatusCodes(codes)
+	metrics.requests2xx = classified.status2xx
+	metrics.requests3xx = classified.status3xx
+	metrics.requests4xx = classified.status4xx
+	metrics.requests5xx = classified.status5xx
 
 	// Parse response size
 	// caddy_http_response_size_bytes_sum{...}
@@ -270,19 +300,29 @@ func (m *MetricsService) storePerHostMetrics(text string) {
 		if !ok {
 			continue
 		}
-		c2xx := h.codes[200] + h.codes[201] + h.codes[204] + h.codes[206]
-		c3xx := h.codes[301] + h.codes[302] + h.codes[304]
-		c4xx := h.codes[400] + h.codes[401] + h.codes[403] + h.codes[404] + h.codes[429]
-		c5xx := h.codes[500] + h.codes[502] + h.codes[503] + h.codes[504]
+		classified := classifyStatusCodes(h.codes)
 		if _, err := db.MetricsDB.Exec(`
 			INSERT INTO metrics_history
 			(rule_id, timestamp, requests_total, requests_2xx, requests_3xx,
 			 requests_4xx, requests_5xx, bytes_in, bytes_out,
 			 latency_p50, latency_p95, latency_p99)
 			VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
-		`, ruleID, h.requests, c2xx, c3xx, c4xx, c5xx, h.bytesIn, h.bytesOut); err != nil {
+		`, ruleID, h.requests, classified.status2xx, classified.status3xx, classified.status4xx, classified.status5xx, h.bytesIn, h.bytesOut); err != nil {
 			log.Printf("Failed to store per-rule metrics for %s: %v", ruleID, err)
 		}
+	}
+}
+
+func (m *MetricsService) cleanupHistory() {
+	retentionDays := 7
+	if err := db.DB.QueryRow("SELECT COALESCE(metrics_retention_days,7) FROM global_config WHERE id=1").Scan(&retentionDays); err != nil {
+		return
+	}
+	if retentionDays < 1 {
+		retentionDays = 7
+	}
+	if err := db.CleanupMetricsHistory(retentionDays); err != nil {
+		log.Printf("Failed to clean up metrics history: %v", err)
 	}
 }
 

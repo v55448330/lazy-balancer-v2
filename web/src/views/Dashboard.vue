@@ -377,12 +377,13 @@ import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import type { EChartsOption, LineSeriesOption, TooltipComponentFormatterCallbackParams } from 'echarts'
 import VChart from 'vue-echarts'
 import { useAuthStore } from '@/stores/auth'
 import { request, formatBytes } from '@/utils/api'
 import { ElMessageBox } from 'element-plus'
 import { Monitor, Cpu, Document, Loading, CircleCheck, Odometer, TrendCharts, DataLine, List } from '@element-plus/icons-vue'
-import type { SystemInfo, SystemMetrics, CaddyMetrics, Rule, RuleMetrics, HostMetrics, MetricsOverview } from '@/types'
+import type { APIResponse, SystemInfo, SystemMetrics, CaddyMetrics, Rule, RuleMetrics, HostMetrics, MetricsOverview } from '@/types'
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent])
 
@@ -418,10 +419,43 @@ const connTimestamps = ref<number[]>([])
 
 const isSlave = computed(() => authStore.nodeMode === 'slave')
 
+interface RuleHistoryRow {
+  timestamp: string
+  requests_total: number
+  requests_2xx: number
+  requests_3xx: number
+  requests_4xx: number
+  requests_5xx: number
+  bytes_in: number
+  bytes_out: number
+}
+
+interface RuleHistoryDelta {
+  requests: number
+  s2xx: number
+  s3xx: number
+  s4xx: number
+  s5xx: number
+  bin: number
+  bout: number
+}
+
+interface RuleHistoryResponse {
+  supported?: boolean
+  rows?: RuleHistoryRow[]
+}
+
+interface UpstreamHealth {
+  healthy?: boolean
+  unknown?: boolean
+}
+
+type HealthResponse = Record<string, Record<string, UpstreamHealth>>
+
 const ruleHistoryVisible = ref(false)
 const ruleHistoryRule = ref<Rule | null>(null)
 const ruleHistoryRange = ref('24h')
-const ruleHistoryRows = ref<any[]>([])
+const ruleHistoryRows = ref<RuleHistoryRow[]>([])
 const ruleHistoryLoading = ref(false)
 const ruleHistoryUnsupported = ref(false)
 
@@ -440,7 +474,7 @@ const fetchRuleHistory = async () => {
   ruleHistoryLoading.value = true
   ruleHistoryUnsupported.value = false
   try {
-    const res: any = await request.get(`/rules/${ruleHistoryRule.value.caddy_id}/metrics-history`, { params: { range: ruleHistoryRange.value } })
+    const res = await request.get<APIResponse<RuleHistoryResponse>>(`/rules/${ruleHistoryRule.value.caddy_id}/metrics-history`, { params: { range: ruleHistoryRange.value } })
     if (seq !== ruleHistorySeq) return
     if (res.data?.supported === false) {
       ruleHistoryUnsupported.value = true
@@ -448,9 +482,9 @@ const fetchRuleHistory = async () => {
     } else {
       ruleHistoryRows.value = res.data?.rows || []
     }
-  } catch (e: any) {
+  } catch (error: unknown) {
     if (seq === ruleHistorySeq) {
-      console.error('Failed to fetch rule history:', e)
+      console.error('Failed to fetch rule history:', error)
       ruleHistoryRows.value = []
     }
   } finally {
@@ -464,7 +498,7 @@ const fetchRuleHistory = async () => {
 const ruleHistoryDeltas = computed(() => {
   const rows = ruleHistoryRows.value
   const labels: string[] = []
-  const deltas: any[] = []
+  const deltas: RuleHistoryDelta[] = []
   for (let i = 1; i < rows.length; i++) {
     const prev = rows[i - 1]
     const curr = rows[i]
@@ -485,18 +519,18 @@ const ruleHistoryDeltas = computed(() => {
   return { labels, deltas }
 })
 
-const historyChartBase = (legend: string[], series: any[]) => ({
+const historyChartBase = (legend: string[], series: LineSeriesOption[], valueFormatter?: (value: number) => string): EChartsOption => ({
   tooltip: { trigger: 'axis', backgroundColor: 'rgba(255,255,255,0.95)', borderColor: '#e5e7eb', textStyle: { color: '#374151', fontSize: 12 } },
   legend: { data: legend, bottom: 0, textStyle: { fontSize: 11, color: '#6b7280' } },
   grid: { left: 55, right: 15, top: 15, bottom: 40 },
   xAxis: { type: 'category', data: ruleHistoryDeltas.value.labels, axisLine: { lineStyle: { color: '#e5e7eb' } }, axisLabel: { fontSize: 10, color: '#9ca3af' } },
-  yAxis: { type: 'value', axisLine: { show: false }, axisLabel: { fontSize: 10, color: '#9ca3af' }, splitLine: { lineStyle: { color: '#f3f4f6' } } },
+  yAxis: { type: 'value', axisLine: { show: false }, axisLabel: { fontSize: 10, color: '#9ca3af', ...(valueFormatter ? { formatter: valueFormatter } : {}) }, splitLine: { lineStyle: { color: '#f3f4f6' } } },
   series,
 })
 
-const ruleRequestsChartOption = computed(() => {
+const ruleRequestsChartOption = computed<EChartsOption>(() => {
   const d = ruleHistoryDeltas.value.deltas
-  const mk = (name: string, key: string, color: string) => ({ name, type: 'line', data: d.map((x: any) => x[key]), smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: color + '1a' } })
+  const mk = (name: string, key: keyof RuleHistoryDelta, color: string): LineSeriesOption => ({ name, type: 'line', data: d.map((row) => row[key]), smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
   return historyChartBase(['总请求', '2xx', '3xx', '4xx', '5xx'], [
     mk('总请求', 'requests', '#3b82f6'),
     mk('2xx', 's2xx', '#10b981'),
@@ -506,12 +540,10 @@ const ruleRequestsChartOption = computed(() => {
   ])
 })
 
-const ruleBytesChartOption = computed(() => {
+const ruleBytesChartOption = computed<EChartsOption>(() => {
   const d = ruleHistoryDeltas.value.deltas
-  const mk = (name: string, key: string, color: string) => ({ name, type: 'line', data: d.map((x: any) => x[key]), smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: color + '1a' } })
-  const opt = historyChartBase(['入站', '出站'], [mk('入站', 'bin', '#3b82f6'), mk('出站', 'bout', '#10b981')])
-  ;(opt.yAxis as any).axisLabel.formatter = (v: number) => formatBytes(v)
-  return opt
+  const mk = (name: string, key: keyof RuleHistoryDelta, color: string): LineSeriesOption => ({ name, type: 'line', data: d.map((row) => row[key]), smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
+  return historyChartBase(['入站', '出站'], [mk('入站', 'bin', '#3b82f6'), mk('出站', 'bout', '#10b981')], formatBytes)
 })
 
 const sortedRules = computed(() =>
@@ -537,16 +569,18 @@ const getStrategyLabel = (strategy: string) => {
   return labels[strategy] || strategy
 }
 
-const trafficChartOption = computed(() => ({
+const trafficChartOption = computed<EChartsOption>(() => ({
   tooltip: { 
     trigger: 'axis', 
     backgroundColor: 'rgba(255,255,255,0.95)', 
     borderColor: '#e5e7eb', 
     textStyle: { color: '#374151', fontSize: 12 },
-    formatter: (params: any) => {
-      let result = params[0].name + '<br/>'
-      params.forEach((item: any) => {
-        result += `${item.marker} ${item.seriesName}: ${formatBytes(item.value)}<br/>`
+    formatter: (params: TooltipComponentFormatterCallbackParams) => {
+      const items = Array.isArray(params) ? params : [params]
+      let result = `${items[0]?.name ?? ''}<br/>`
+      items.forEach((item) => {
+        const value = typeof item.value === 'number' ? item.value : Number(item.value ?? 0)
+        result += `${item.marker} ${item.seriesName}: ${formatBytes(value)}<br/>`
       })
       return result
     }
@@ -571,7 +605,7 @@ const trafficChartOption = computed(() => ({
   ],
 }))
 
-const connChartOption = computed(() => ({
+const connChartOption = computed<EChartsOption>(() => ({
   tooltip: { trigger: 'axis', backgroundColor: 'rgba(255,255,255,0.95)', borderColor: '#e5e7eb', textStyle: { color: '#374151', fontSize: 12 } },
   legend: { data: ['已建立', '等待释放'], bottom: 0, textStyle: { fontSize: 11, color: '#6b7280' } },
   grid: { left: 45, right: 15, top: 15, bottom: 40 },
@@ -654,7 +688,7 @@ const fetchRuleHealth = async () => {
   isFetchingRuleHealth = true
   const currentRules = rules.value
   try {
-    const res = await request.get('/config/health')
+    const res = await request.get<APIResponse<HealthResponse>>('/config/health')
     const healthData = res.data || {}
     const newRuleMetrics: Record<string, RuleMetrics> = { ...ruleMetrics.value }
     currentRules.forEach((rule: Rule) => {
@@ -674,10 +708,10 @@ const fetchRuleHealth = async () => {
         let allHealthy = true
         let hasUnknown = false
 
-        rule.upstreams.forEach((u: any) => {
+        rule.upstreams.forEach((u) => {
           const key = `${u.host}:${u.port}`
           let found = false
-          for (const serverHealth of Object.values(healthData) as any[]) {
+          for (const serverHealth of Object.values(healthData)) {
             const upHealth = serverHealth?.[key]
             if (upHealth) {
               found = true
@@ -715,13 +749,15 @@ const fetchRuleMetrics = async () => {
   try {
     const headers = { Authorization: `Bearer ${authStore.token}` }
     const metricsPromises = currentRules.map((rule: Rule) =>
-      request.get(`/metrics/rule/${rule.caddy_id}`, { headers })
+      request.get<APIResponse<RuleMetrics>>(`/metrics/rule/${rule.caddy_id}`, { headers })
     )
     const metricsResults = await Promise.allSettled(metricsPromises)
     const newRuleMetrics: Record<string, RuleMetrics> = {}
-    metricsResults.forEach((result: any, index: number) => {
+    metricsResults.forEach((result, index) => {
+      const rule = currentRules[index]
+      if (!rule) return
       if (result.status === 'fulfilled' && result.value?.data) {
-        newRuleMetrics[currentRules[index].caddy_id] = result.value.data
+        newRuleMetrics[rule.caddy_id] = result.value.data
       }
     })
     // Preserve existing health values until health endpoint updates them
@@ -777,9 +813,9 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
     // Also fetch actual status to confirm
     setTimeout(fetchAllData, 1000)
     setTimeout(fetchAllData, 2500)
-  } catch (e: any) {
-    if (e === 'cancel') return
-    const msg = e?.response?.data?.message || e?.message || '操作失败'
+  } catch (error: unknown) {
+    if (error === 'cancel') return
+    const msg = error instanceof Error ? error.message : '操作失败'
     authStore.showToast('error', msg)
   } finally {
     caddyLoading.value = false

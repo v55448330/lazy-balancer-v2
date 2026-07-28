@@ -305,16 +305,20 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		return fmt.Errorf("无效的监听端口：必须在 1-65535 之间")
 	}
 
-	validStrategies := map[string]bool{
+	httpStrategies := map[string]bool{
 		"ip_hash": true, "least_conn": true,
-		"random": true, "first": true, "least_time": true, "weighted_round_robin": true,
+		"random": true, "first": true, "weighted_round_robin": true,
 		"cookie": true,
 	}
-	if !validStrategies[data.Strategy] {
-		return fmt.Errorf("无效的负载策略：仅支持 weighted_round_robin / ip_hash / least_conn / random / first / least_time / cookie")
+	tcpStrategies := map[string]bool{
+		"ip_hash": true, "least_conn": true,
+		"random": true, "first": true, "weighted_round_robin": true,
 	}
-	if data.Strategy == "cookie" && data.Protocol != "http" {
-		return fmt.Errorf("Cookie 粘滞策略仅支持 HTTP 规则")
+	if data.Protocol == "http" && !httpStrategies[data.Strategy] {
+		return fmt.Errorf("无效的负载策略：HTTP 规则仅支持 weighted_round_robin / ip_hash / least_conn / random / first / cookie")
+	}
+	if data.Protocol == "tcp" && !tcpStrategies[data.Strategy] {
+		return fmt.Errorf("无效的负载策略：TCP 规则仅支持 weighted_round_robin / ip_hash / least_conn / random / first")
 	}
 
 	if data.Domain != "" && (data.Protocol == "http" || data.Protocol == "https") {

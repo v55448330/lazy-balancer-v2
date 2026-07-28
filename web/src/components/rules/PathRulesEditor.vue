@@ -91,7 +91,10 @@
               </label>
               <el-button :icon="Delete" type="danger" link aria-label="删除自定义上游" @click="removeUpstream(rule, upstreamIndex)" />
             </div>
-            <el-button class="add-upstream-button" size="small" plain :icon="Plus" @click="addUpstream(rule)">添加上游</el-button>
+            <div class="add-upstream-actions">
+              <el-button class="add-upstream-button" size="small" plain :icon="Plus" :disabled="rule.upstreams.length >= MAX_UPSTREAM_ROWS" @click="addUpstream(rule)">添加上游</el-button>
+              <el-text v-if="rule.upstreams.length >= MAX_UPSTREAM_ROWS" type="info" size="small">最多添加 {{ MAX_UPSTREAM_ROWS }} 个上游</el-text>
+            </div>
           </div>
         </div>
       </el-card>
@@ -102,7 +105,7 @@
 <script setup lang="ts">
 import { ArrowDown, ArrowUp, Delete, Plus } from '@element-plus/icons-vue'
 import type { PathRule, PathRuleUpstream } from '@/types'
-import { normalizeWeights, redistributeWeight } from '@/utils/upstreamWeights'
+import { MAX_UPSTREAM_ROWS, normalizeWeights, redistributeWeight } from '@/utils/upstreamWeights'
 
 const pathRules = defineModel<PathRule[]>({ required: true })
 
@@ -152,7 +155,7 @@ const toggleCustomUpstreams = (rule: PathRule, enabled: string | number | boolea
 
 const addUpstream = (rule: PathRule): void => {
   const upstreams = rule.upstreams
-  if (!upstreams) return
+  if (!upstreams || upstreams.length >= MAX_UPSTREAM_ROWS) return
   const upstream = defaultUpstream()
   upstream.weight = 1
   upstreams.push(upstream)
@@ -196,6 +199,7 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 .upstream-field :deep(.el-input-number) { width: 100%; }
 .mobile-field-label { display: none; }
 .add-upstream-button { align-self: flex-start; }
+.add-upstream-actions { display: flex; align-items: center; gap: 8px; }
 
 @media (max-width: 767px) {
   .path-rules-editor { padding: 0; }

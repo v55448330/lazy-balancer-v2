@@ -190,11 +190,35 @@ func (q *caQueue) loop() {
 
 func (q *caQueue) tick() {
 	q.mu.Lock()
-	if q.running >= q.provider.MaxConcurrent || len(q.pending) == 0 {
+	if len(q.pending) == 0 {
 		q.mu.Unlock()
 		return
 	}
-	interval := time.Duration(q.provider.MinIntervalMS) * time.Millisecond
+
+	providerID := q.provider.ID
+	provider, err := loadCAProvider(providerID)
+	if err != nil || provider.ID != providerID {
+		pending := q.pending
+		q.pending = nil
+		for _, item := range pending {
+			delete(q.active, item.jobID)
+		}
+		q.mu.Unlock()
+		message := fmt.Sprintf("CA Provider 不可用：配置已禁用或删除（ID %d）", providerID)
+		for _, item := range pending {
+			failJob(item.jobID, message)
+		}
+		return
+	}
+	if provider.MaxConcurrent <= 0 {
+		provider.MaxConcurrent = 1
+	}
+	q.provider = provider
+	if q.running >= provider.MaxConcurrent {
+		q.mu.Unlock()
+		return
+	}
+	interval := time.Duration(provider.MinIntervalMS) * time.Millisecond
 	if time.Since(q.lastOrder) < interval {
 		q.mu.Unlock()
 		return

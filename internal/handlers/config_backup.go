@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -128,6 +129,46 @@ func joinStrings(parts []string, sep string) string {
 	return out
 }
 
+type importRuntimeSnapshot struct {
+	caddyConfig map[string]interface{}
+	certFiles   services.CertFilesSnapshot
+}
+
+func currentRuleIDs(ctx context.Context) ([]string, error) {
+	rows, err := db.DB.QueryContext(ctx, "SELECT caddy_id FROM lb_rules")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ruleIDs := make([]string, 0)
+	for rows.Next() {
+		var ruleID string
+		if err := rows.Scan(&ruleID); err != nil {
+			return nil, err
+		}
+		ruleIDs = append(ruleIDs, ruleID)
+	}
+	return ruleIDs, rows.Err()
+}
+
+func (h *Handlers) snapshotImportRuntime(ruleIDs []string) (importRuntimeSnapshot, error) {
+	caddyConfig, err := h.caddyService.GetConfig()
+	if err != nil {
+		return importRuntimeSnapshot{}, fmt.Errorf("读取当前 Caddy 配置: %w", err)
+	}
+	certFiles, err := services.SnapshotCertFiles(ruleIDs)
+	if err != nil {
+		return importRuntimeSnapshot{}, err
+	}
+	return importRuntimeSnapshot{caddyConfig: caddyConfig, certFiles: certFiles}, nil
+}
+
+func (h *Handlers) restoreImportRuntime(snapshot importRuntimeSnapshot) error {
+	caddyErr := h.caddyService.ApplyConfig(snapshot.caddyConfig)
+	certErr := services.RestoreCertFiles(snapshot.certFiles)
+	return errors.Join(caddyErr, certErr)
+}
+
 func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 	if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err != nil || !isMaster {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导出配置"})
@@ -184,6 +225,11 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		}
 	}
 	ctx := c.Request.Context()
+	existingRuleIDs, err := currentRuleIDs(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有规则失败"})
+		return
+	}
 	tx, err := db.DB.BeginTx(ctx, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开始导入事务失败"})
@@ -253,24 +299,45 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			}
 		}
 	}
+	affectedRuleIDs := append([]string(nil), existingRuleIDs...)
+	for _, row := range backup.Tables["lb_rules"] {
+		if caddyID, ok := row["caddy_id"].(string); ok && caddyID != "" {
+			affectedRuleIDs = append(affectedRuleIDs, caddyID)
+		}
+	}
 	h.caddyOpMu.Lock()
-	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
+	runtimeSnapshot, err := h.snapshotImportRuntime(affectedRuleIDs)
+	if err != nil {
 		h.caddyOpMu.Unlock()
-		services.MaterializeAllCertsFromDB()
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败: " + err.Error()})
+		return
+	}
+	restoreRuntime := func() {
+		if restoreErr := h.restoreImportRuntime(runtimeSnapshot); restoreErr != nil {
+			log.Printf("导入失败后恢复运行配置失败: %v", restoreErr)
+		}
+	}
+	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
+		restoreRuntime()
+		h.caddyOpMu.Unlock()
 		recordAudit(c, "导入失败", "配置备份", "Caddy 配置验证未通过，数据库未变更: "+err.Error())
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份生成的配置未通过 Caddy 验证，未执行导入: " + err.Error()})
 		return
 	}
-	h.caddyOpMu.Unlock()
 	if err := services.BumpClusterVersion(ctx, tx); err != nil {
+		restoreRuntime()
+		h.caddyOpMu.Unlock()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新配置版本失败"})
 		return
 	}
 	if err := tx.Commit(); err != nil {
+		restoreRuntime()
+		h.caddyOpMu.Unlock()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交导入失败"})
 		return
 	}
 	committed = true
+	h.caddyOpMu.Unlock()
 	// Cert files are materialized only after a successful commit, so a failed
 	// import can never leave orphaned files behind.
 	for _, row := range backup.Tables["lb_rules"] {

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -17,215 +18,50 @@ import (
 )
 
 func (h *Handlers) ListRules(c *gin.Context) {
-	rows, err := db.DB.Query(`
-		SELECT COALESCE(caddy_id,'') AS caddy_id, name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port, strategy,
-		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
-		       health_check_path, health_check_interval,
-		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
-		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
-		       COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
-		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
-		       COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_http_redirect,0),
-		       COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), enabled, created_by, created_at, updated_at, updated_by,
-		       COALESCE(host_header,''),
-		       COALESCE(log_enabled,0)
-		FROM lb_rules ORDER BY id
-	`)
+	rows, err := db.DB.Query(`SELECT ` + lbRuleColumns + ` FROM lb_rules ORDER BY id`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return
 	}
-	defer rows.Close()
-
-	var rules []models.LbRule
-	for rows.Next() {
-		var r models.LbRule
-		var domain, strategy, description, compressTypes, hostHeader, dnsFamily, tlsSource, ipACLListJSON string
-		var tlsCert, tlsKey string
-		var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect, enableCompress bool
-		var acmeConfigID, caProviderID int
-		var createdBy sql.NullInt64
-		var createdAt sql.NullTime
-		var updatedAt sql.NullTime
-		var updatedBy sql.NullInt64
-		var tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
-	var tcpProxyProtocol bool
-		var requestBodyMaxSizeMB, upstreamKeepaliveTimeout, serverTokensHidden int
-		err := rows.Scan(&r.CaddyID, &r.Name, &description, &r.Protocol, &domain, &r.ListenPort, &strategy,
-			&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
-			&r.HealthCheckPath, &r.HealthCheckInterval,
-			&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpProxyProtocol, &tcpTryDuration, &tcpTryInterval,
-			&requestBodyMaxSizeMB, &upstreamKeepaliveTimeout, &serverTokensHidden,
-			&r.IPACLMode, &ipACLListJSON, &r.CustomRoutesEnabled,
-			&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout,
-			&enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &tlsCert, &tlsKey, &tlsHTTPRedirect,
-			&enableCompress, &compressTypes, &r.Enabled, &createdBy, &createdAt, &updatedAt, &updatedBy,
-			&hostHeader, &r.LogEnabled)
-		if err != nil {
-			continue
-		}
-		if createdBy.Valid {
-			r.CreatedBy = int(createdBy.Int64)
-		}
-		if createdAt.Valid {
-			r.CreatedAt = createdAt.Time
-		}
-		if updatedAt.Valid {
-			r.UpdatedAt = updatedAt
-		}
-		if updatedBy.Valid {
-			r.UpdatedBy = int(updatedBy.Int64)
-		}
-		r.Description = description
-		r.Domain = domain
-		r.Strategy = strategy
-		if r.Strategy == "" {
-			r.Strategy = "weighted_round_robin"
-		}
-		r.DynamicDNS = dynamicDNS
-		r.EnableDnsServer = enableDnsServer
-		r.DnsFamily = dnsFamily
-		r.EnableActiveHealthCheck = enableActiveHealthCheck
-		r.TCPHealthCheckPort = tcpHealthCheckPort
-	r.TCPProxyProtocol = tcpProxyProtocol
-		r.TCPTryDuration = tcpTryDuration
-		r.TCPTryInterval = tcpTryInterval
-		r.RequestBodyMaxSizeMB = requestBodyMaxSizeMB
-		r.UpstreamKeepaliveTimeout = upstreamKeepaliveTimeout
-		r.ServerTokensHidden = serverTokensHidden
-		ipACLList, err := decodeIPACLList(ipACLListJSON)
-		if err != nil {
-			log.Printf("ListRules invalid ip_acl_list for caddy_id=%s: %v", r.CaddyID, err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 IP 访问控制列表失败"})
-			return
-		}
-		r.IPACLList = ipACLList
-		r.EnableTLS = enableTLS
-		r.TLSSource = tlsSource
-		r.ACMEConfigID = acmeConfigID
-		r.TLSCert = tlsCert
-		r.TLSKey = tlsKey
-		r.TLSHTTPRedirect = tlsHTTPRedirect
-		r.EnableCompress = enableCompress
-		r.CompressTypes = compressTypes
-		r.HostHeader = hostHeader
-		r.CAProviderID = caProviderID
-
-		upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id = ?`, r.CaddyID)
-		if upstreamRows != nil {
-			for upstreamRows.Next() {
-				var u models.Upstream
-				upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections)
-				r.Upstreams = append(r.Upstreams, u)
-			}
-			upstreamRows.Close()
-		}
-		pathRules, err := loadPathRules(c.Request.Context(), db.DB, r.CaddyID)
-		if err != nil {
-			log.Printf("ListRules failed to load path_rules for caddy_id=%s: %v", r.CaddyID, err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取自定义路径规则失败"})
-			return
-		}
-		r.PathRules = pathRules
-
-		rules = append(rules, r)
+	rules, err := scanLbRules(rows)
+	rows.Close()
+	if err != nil {
+		log.Printf("ListRules scan error: %v", err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
+		return
 	}
-
+	if err := hydrateRuleRelations(c.Request.Context(), rules); err != nil {
+		log.Printf("ListRules relations error: %v", err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则关联数据失败"})
+		return
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: rules})
 }
 
 func (h *Handlers) GetRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
-
-	var r models.LbRule
-	var domain, strategy, hostHeader, dnsFamily, tlsSource, ipACLListJSON string
-	var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect bool
-	var acmeConfigID, caProviderID int
-	var tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
-	var tcpProxyProtocol bool
-	var requestBodyMaxSizeMB, upstreamKeepaliveTimeout, serverTokensHidden int
-	err := db.DB.QueryRow(`
-		SELECT name, protocol, COALESCE(domain,''), listen_port, strategy,
-		       COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
-		       health_check_path, health_check_interval,
-		       health_check_timeout, health_check_unhealthy_threshold, health_check_healthy_threshold,
-		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
-		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
-		       COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
-		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
-	       COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
-	       COALESCE(tls_http_redirect,0),
-	       enabled, created_at, updated_at, COALESCE(host_header,''), caddy_id
-	FROM lb_rules WHERE caddy_id = ?
-`, caddyID).Scan(&r.Name, &r.Protocol, &domain, &r.ListenPort, &strategy,
-		&dynamicDNS, &enableDnsServer, &r.DnsServer, &dnsFamily,
-		&r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout,
-		&r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
-		&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpProxyProtocol, &tcpTryDuration, &tcpTryInterval,
-		&requestBodyMaxSizeMB, &upstreamKeepaliveTimeout, &serverTokensHidden,
-		&r.IPACLMode, &ipACLListJSON, &r.CustomRoutesEnabled,
-		&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout,
-		&enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &r.TLSCert, &r.TLSKey, &tlsHTTPRedirect,
-		&r.Enabled, &r.CreatedAt, &r.UpdatedAt, &hostHeader, &r.CaddyID)
-
-	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+	rows, err := db.DB.Query(`SELECT `+lbRuleColumns+` FROM lb_rules WHERE caddy_id = ?`, caddyID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
 		return
 	}
+	rules, err := scanLbRules(rows)
+	rows.Close()
 	if err != nil {
 		log.Printf("GetRule scan error for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
 		return
 	}
-
-	r.Domain = domain
-	r.Strategy = strategy
-	if r.Strategy == "" {
-		r.Strategy = "weighted_round_robin"
-	}
-	r.DynamicDNS = dynamicDNS
-	r.EnableDnsServer = enableDnsServer
-	r.DnsFamily = dnsFamily
-	r.EnableActiveHealthCheck = enableActiveHealthCheck
-	r.TCPHealthCheckPort = tcpHealthCheckPort
-	r.TCPProxyProtocol = tcpProxyProtocol
-	r.TCPTryDuration = tcpTryDuration
-	r.TCPTryInterval = tcpTryInterval
-	r.RequestBodyMaxSizeMB = requestBodyMaxSizeMB
-	r.UpstreamKeepaliveTimeout = upstreamKeepaliveTimeout
-	r.ServerTokensHidden = serverTokensHidden
-	ipACLList, err := decodeIPACLList(ipACLListJSON)
-	if err != nil {
-		log.Printf("GetRule invalid ip_acl_list for caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 IP 访问控制列表失败"})
+	if len(rules) == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return
 	}
-	r.IPACLList = ipACLList
-	r.EnableTLS = enableTLS
-	r.TLSSource = tlsSource
-	r.ACMEConfigID = acmeConfigID
-	r.CAProviderID = caProviderID
-	r.TLSHTTPRedirect = tlsHTTPRedirect
-	r.HostHeader = hostHeader
-
-	upstreamRows, _ := db.DB.Query(`SELECT id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id = ?`, caddyID)
-	if upstreamRows != nil {
-		for upstreamRows.Next() {
-			var u models.Upstream
-			upstreamRows.Scan(&u.ID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections)
-			r.Upstreams = append(r.Upstreams, u)
-		}
-		upstreamRows.Close()
-	}
-	pathRules, err := loadPathRules(c.Request.Context(), db.DB, caddyID)
-	if err != nil {
-		log.Printf("GetRule failed to load path_rules for caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取自定义路径规则失败"})
+	if err := hydrateRuleRelations(c.Request.Context(), rules); err != nil {
+		log.Printf("GetRule relations error for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则关联数据失败"})
 		return
 	}
-	r.PathRules = pathRules
-
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: r})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: rules[0]})
 }
 
 func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
@@ -1622,46 +1458,32 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 
 	caddyID := c.Param("caddy_id")
 
-	var rule models.LbRule
-	var enableActiveHealthCheck bool
-	var ipACLListJSON string
-	var tcpHealthCheckPort, tcpTryDuration, tcpTryInterval int
-	var tcpProxyProtocol bool
-	err := db.DB.QueryRow(`
-		SELECT caddy_id, name, COALESCE(description,''), protocol, domain, listen_port, strategy, dynamic_dns,
-		       COALESCE(enable_dns_server,0), COALESCE(dns_family,'ipv4'),
-		       health_check_path, health_check_interval, health_check_timeout,
-		       health_check_unhealthy_threshold, health_check_healthy_threshold,
-		       COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
-		       request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
-		       enable_tls, COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), tls_cert, tls_key,
-	       tls_http_redirect, COALESCE(enable_compress,1), COALESCE(compress_types,'gzip,zstd'), enabled, created_by,
-	       COALESCE(host_header,''), COALESCE(dns_server,''), COALESCE(log_enabled,0),
-	       COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
-	       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0)
-	FROM lb_rules WHERE caddy_id = ?
-`, caddyID).Scan(
-		&rule.CaddyID, &rule.Name, &rule.Description, &rule.Protocol, &rule.Domain, &rule.ListenPort, &rule.Strategy,
-		&rule.DynamicDNS, &rule.EnableDnsServer, &rule.DnsFamily, &rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout,
-		&rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
-		&enableActiveHealthCheck, &tcpHealthCheckPort, &tcpProxyProtocol, &tcpTryDuration, &tcpTryInterval,
-		&rule.RequestBodyMaxSizeMB, &rule.UpstreamKeepaliveTimeout, &rule.ServerTokensHidden,
-		&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.CAProviderID, &rule.TLSCert, &rule.TLSKey,
-		&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.CreatedBy,
-		&rule.HostHeader, &rule.DnsServer, &rule.LogEnabled,
-		&rule.IPACLMode, &ipACLListJSON, &rule.CustomRoutesEnabled,
-		&rule.ProxyDialTimeout, &rule.ProxyResponseHeaderTimeout, &rule.ProxyReadTimeout, &rule.ProxyWriteTimeout, &rule.ProxyStreamTimeout,
-	)
+	rows, err := db.DB.Query(`SELECT `+lbRuleColumns+` FROM lb_rules WHERE caddy_id = ?`, caddyID)
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
+		return
+	}
+	rules, err := scanLbRules(rows)
+	rows.Close()
+	if err != nil {
+		log.Printf("DuplicateRule scan error for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
+		return
+	}
+	if len(rules) == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return
 	}
-
-	rule.EnableActiveHealthCheck = enableActiveHealthCheck
-	rule.TCPHealthCheckPort = tcpHealthCheckPort
-	rule.TCPProxyProtocol = tcpProxyProtocol
-	rule.TCPTryDuration = tcpTryDuration
-	rule.TCPTryInterval = tcpTryInterval
+	rule := rules[0]
+	ipACLListBytes, err := json.Marshal(rule.IPACLList)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "序列化 IP 访问控制列表失败"})
+		return
+	}
+	ipACLListJSON := string(ipACLListBytes)
+	if ipACLListJSON == "null" {
+		ipACLListJSON = "[]"
+	}
 
 	userID, _ := c.Get("user_id")
 	var userIDInt int64

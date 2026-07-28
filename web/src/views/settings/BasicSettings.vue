@@ -397,6 +397,21 @@ interface ConfigPreviewResponse {
   }
 }
 
+interface AdminTlsCertInfo {
+  domain: string
+  issuer: string
+  not_after: string
+  days_left: number
+}
+
+interface AdminTlsForm {
+  mode: string
+  certFile: File | null
+  keyFile: File | null
+  certInfo: AdminTlsCertInfo | null
+  inspecting: boolean
+}
+
 const settings = defineModel<BasicSettingsConfig>('settings', { required: true })
 const emit = defineEmits<{
   (e: 'save'): void
@@ -405,7 +420,7 @@ const emit = defineEmits<{
 const saving = ref(false)
 
 const adminTls = ref({ enabled: false, mode: 'selfsigned' })
-const adminTlsForm = ref<any>({ mode: 'selfsigned', certFile: null as File | null, keyFile: null as File | null, certInfo: null as any, inspecting: false })
+const adminTlsForm = ref<AdminTlsForm>({ mode: 'selfsigned', certFile: null, keyFile: null, certInfo: null, inspecting: false })
 const adminTlsDialogVisible = ref(false)
 const adminTlsSaving = ref(false)
 
@@ -462,9 +477,9 @@ const onTlsFile = async (e: Event, kind: 'cert' | 'key') => {
       const fd = new FormData()
       fd.append('cert_file', adminTlsForm.value.certFile)
       fd.append('key_file', adminTlsForm.value.keyFile)
-      const res = await request.post('/admin-tls/inspect', fd)
+      const res = await request.post<{ data?: AdminTlsCertInfo }>('/admin-tls/inspect', fd)
       if (seq === tlsInspectSeq) {
-        adminTlsForm.value.certInfo = res.data
+        adminTlsForm.value.certInfo = res.data ?? null
       }
     } catch {
       if (seq === tlsInspectSeq) {
@@ -507,8 +522,10 @@ const saveAdminTls = async () => {
   try {
     const fd = formDataOf({ enabled: 'true', mode: adminTlsForm.value.mode })
     if (adminTlsForm.value.mode === 'upload') {
-      fd.append('cert_file', adminTlsForm.value.certFile)
-      fd.append('key_file', adminTlsForm.value.keyFile)
+      const { certFile, keyFile } = adminTlsForm.value
+      if (!certFile || !keyFile) return
+      fd.append('cert_file', certFile)
+      fd.append('key_file', keyFile)
     }
     await request.put('/admin-tls', fd)
     adminTlsDialogVisible.value = false

@@ -216,6 +216,7 @@ import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Check } from '@element-plus/icons-vue'
 import CertJobs from './CertJobs.vue'
+import type { APIResponse } from '@/types'
 
 interface CredentialField {
   name: string
@@ -272,6 +273,8 @@ interface ConfigPreviewResponse {
     changes: string[]
   }
 }
+
+const requestErrorMessage = (caught: unknown, fallback: string): string => caught instanceof Error ? caught.message : fallback
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
@@ -383,10 +386,10 @@ const stringifyCACredentials = (creds: CAProviderCredentials): string => {
 const fetchCAProviders = async () => {
   loadingCAProviders.value = true
   try {
-    const res = await request.get('/ca-providers')
+    const res = await request.get<APIResponse<CAProvider[]>>('/ca-providers')
     caProviders.value = res.data || []
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || '获取 CA 提供商失败')
+  } catch (caught: unknown) {
+    ElMessage.error(requestErrorMessage(caught, '获取 CA 提供商失败'))
   } finally {
     loadingCAProviders.value = false
   }
@@ -425,12 +428,14 @@ const saveCAProvider = async () => {
         ? stringifyCACredentials(caCreds)
         : '{}',
     }
-    await request.put(`/ca-providers/${editingCAProvider.value!.id}`, payload)
+    const provider = editingCAProvider.value
+    if (!provider) return
+    await request.put(`/ca-providers/${provider.id}`, payload)
     ElMessage.success('CA 提供商配置已更新')
     caDialogVisible.value = false
     fetchCAProviders()
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || '保存失败')
+  } catch (caught: unknown) {
+    ElMessage.error(requestErrorMessage(caught, '保存失败'))
   } finally {
     savingCA.value = false
   }
@@ -439,9 +444,9 @@ const saveCAProvider = async () => {
 const testCAProvider = async (p: CAProvider) => {
   testingCAId.value = p.id
   try {
-    const res: any = await request.post(`/ca-providers/${p.id}/test`)
+    const res = await request.post<APIResponse>(`/ca-providers/${p.id}/test`)
     ElMessage.success(res.message || 'CA 提供商测试通过')
-  } catch (error: any) {
+  } catch (error: unknown) {
     // Error toast is already shown by the global axios interceptor.
     console.error('Failed to test CA provider:', error)
   } finally {
@@ -504,9 +509,8 @@ const saveConfig = async () => {
       ? `/certificate-configs/${editingId.value}/test`
       : '/certificate-configs/test'
     await request.post(url, payload)
-  } catch (error: any) {
-    const msg = error?.response?.data?.message || error?.message || '凭证验证失败'
-    ElMessage.error(msg)
+  } catch (caught: unknown) {
+    ElMessage.error(requestErrorMessage(caught, '凭证验证失败'))
     saving.value = false
     return
   }
@@ -521,9 +525,8 @@ const saveConfig = async () => {
     }
     dialogVisible.value = false
     fetchConfigs()
-  } catch (error: any) {
-    const msg = error?.response?.data?.message || error?.message || '保存失败'
-    ElMessage.error(msg)
+  } catch (caught: unknown) {
+    ElMessage.error(requestErrorMessage(caught, '保存失败'))
   } finally {
     saving.value = false
   }
@@ -573,9 +576,8 @@ const testConfig = async (config: CertConfig) => {
   try {
     const res = await request.post(`/certificate-configs/${config.id}/test`, { domain })
     ElMessage.success(res.message || '凭证有效')
-  } catch (error: any) {
-    const msg = error?.response?.data?.message || error?.message || '测试失败'
-    ElMessage.error(msg)
+  } catch (caught: unknown) {
+    ElMessage.error(requestErrorMessage(caught, '测试失败'))
   } finally {
     testingId.value = null
   }

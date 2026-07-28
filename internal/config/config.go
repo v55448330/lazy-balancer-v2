@@ -73,6 +73,9 @@ func Load(path string) *Config {
 				if v, ok := fileCfg["caddy_metrics_url"].(string); ok && v != "" {
 					cfg.CaddyMetricsURL = v
 				}
+				if v, ok := fileCfg["metrics_interval"].(float64); ok && v > 0 {
+					cfg.MetricsInterval = max(5, int(v))
+				}
 			}
 		}
 	}

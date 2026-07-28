@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"time"
 )
 
 func InitializeMetricsDB(dataDir string) error {
@@ -43,8 +44,17 @@ func InitializeMetricsDB(dataDir string) error {
 
 	CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics_history(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_metrics_rule ON metrics_history(rule_id);
+	CREATE INDEX IF NOT EXISTS idx_metrics_rule_timestamp ON metrics_history(rule_id, timestamp);
 	`
 
 	_, err = MetricsDB.Exec(schema)
 	return err
+}
+
+func CleanupMetricsHistory(retentionDays int) error {
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format("2006-01-02 15:04:05")
+	if _, err := MetricsDB.Exec("DELETE FROM metrics_history WHERE timestamp < ?", cutoff); err != nil {
+		return fmt.Errorf("delete expired metrics history: %w", err)
+	}
+	return nil
 }

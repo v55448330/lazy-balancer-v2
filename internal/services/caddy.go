@@ -213,18 +213,11 @@ func (s *CaddyService) ValidateRouteMergedConfig(serverName string, routeConfig 
 	var defaultRoute interface{}
 	newRoutes := make([]interface{}, 0, len(routes)+1)
 
-	for i, r := range routes {
+	for _, r := range routes {
 		if routeMap, ok := r.(map[string]interface{}); ok {
-			handle, ok := routeMap["handle"].([]interface{})
-			if ok && len(handle) > 0 {
-				if h, ok := handle[0].(map[string]interface{}); ok {
-					if h["handler"] == "static_response" && h["body"] == "Lazy Balancer V2 is running!" {
-						if i == 0 {
-							defaultRoute = r
-							continue
-						}
-					}
-				}
+			if isRunningDefaultRoute(routeMap) {
+				defaultRoute = r
+				continue
 			}
 		}
 		newRoutes = append(newRoutes, r)
@@ -333,38 +326,30 @@ func (s *CaddyService) SetConfigByID(id string, config map[string]interface{}) e
 		}
 
 		newRoutes := make([]interface{}, 0, len(routes))
+		serverChanged := false
+		inserted := false
 
 		for _, r := range routes {
 			routeMap, ok := r.(map[string]interface{})
 			if !ok {
-				continue
-			}
-
-			existingID, hasID := routeMap["@id"].(string)
-
-			if hasID && existingID == id {
-				newRoutes = append(newRoutes, config)
-				replaced = true
-				continue
-			}
-
-			if hasID {
 				newRoutes = append(newRoutes, r)
 				continue
 			}
 
-			handle, ok := routeMap["handle"].([]interface{})
-			if ok && len(handle) > 0 {
-				if h, ok := handle[0].(map[string]interface{}); ok {
-					if h["handler"] == "static_response" && h["body"] == "Lazy Balancer V2 is running!" {
-						newRoutes = append(newRoutes, r)
-						continue
-					}
+			existingID, hasID := routeMap["@id"].(string)
+			if hasID && routeIDBelongsToRule(existingID, id) {
+				if existingID == id && !inserted {
+					newRoutes = append(newRoutes, config)
+					inserted = true
 				}
+				serverChanged = true
+				replaced = true
+				continue
 			}
+			newRoutes = append(newRoutes, r)
 		}
 
-		if replaced {
+		if serverChanged {
 			server["routes"] = newRoutes
 			servers[serverName] = server
 		}
@@ -456,18 +441,11 @@ func (s *CaddyService) PrependRouteToServer(serverName string, routeConfig map[s
 	var defaultRoute interface{}
 	newRoutes := make([]interface{}, 0, len(routes)+1)
 
-	for i, r := range routes {
+	for _, r := range routes {
 		if routeMap, ok := r.(map[string]interface{}); ok {
-			handle, ok := routeMap["handle"].([]interface{})
-			if ok && len(handle) > 0 {
-				if h, ok := handle[0].(map[string]interface{}); ok {
-					if h["handler"] == "static_response" && h["body"] == "Lazy Balancer V2 is running!" {
-						if i == 0 {
-							defaultRoute = r
-							continue
-						}
-					}
-				}
+			if isRunningDefaultRoute(routeMap) {
+				defaultRoute = r
+				continue
 			}
 		}
 		newRoutes = append(newRoutes, r)
@@ -654,23 +632,9 @@ func (s *CaddyService) RemoveRouteFromServer(serverName string, routeID string) 
 		}
 
 		existingID, hasID := routeMap["@id"].(string)
-		if hasID && existingID == routeID {
+		if hasID && routeIDBelongsToRule(existingID, routeID) {
 			continue
 		}
-
-		if !hasID {
-			handle, ok := routeMap["handle"].([]interface{})
-			if ok && len(handle) > 0 {
-				if h, ok := handle[0].(map[string]interface{}); ok {
-					if h["handler"] == "static_response" && h["body"] == "Lazy Balancer V2 is running!" {
-						filteredRoutes = append(filteredRoutes, r)
-						continue
-					}
-				}
-			}
-			continue
-		}
-
 		filteredRoutes = append(filteredRoutes, r)
 	}
 
@@ -725,7 +689,7 @@ func (s *CaddyService) DeleteRouteByID(serverName string, caddyID string) error 
 			continue
 		}
 
-		if existingID, hasID := routeMap["@id"].(string); hasID && existingID == caddyID {
+		if existingID, hasID := routeMap["@id"].(string); hasID && routeIDBelongsToRule(existingID, caddyID) {
 			continue
 		}
 
@@ -739,6 +703,19 @@ func (s *CaddyService) DeleteRouteByID(serverName string, caddyID string) error 
 	config["apps"] = apps
 
 	return s.applyConfigRaw(config)
+}
+
+func isRunningDefaultRoute(route map[string]interface{}) bool {
+	handlers, ok := route["handle"].([]interface{})
+	if !ok || len(handlers) == 0 {
+		return false
+	}
+	handler, ok := handlers[0].(map[string]interface{})
+	return ok && handler["handler"] == "static_response" && handler["body"] == "Lazy Balancer V2 is running!"
+}
+
+func routeIDBelongsToRule(routeID, ruleID string) bool {
+	return ruleID != "" && (routeID == ruleID || strings.HasPrefix(routeID, ruleID+"_"))
 }
 
 func (s *CaddyService) applyConfigRaw(config map[string]interface{}) error {
@@ -1412,20 +1389,11 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 					continue
 				}
 				if upstreamsJSON.Valid {
-					var pathUpstreams []struct {
-						Address string `json:"address"`
-						Port    int    `json:"port"`
-						Weight  int    `json:"weight"`
-					}
-					if unmarshalErr := json.Unmarshal([]byte(upstreamsJSON.String), &pathUpstreams); unmarshalErr != nil {
+					pathUpstreams, unmarshalErr := decodePathUpstreams(upstreamsJSON.String)
+					if unmarshalErr != nil {
 						continue
 					}
-					pathRule.Upstreams = make([]UpstreamConfig, 0, len(pathUpstreams))
-					for _, pathUpstream := range pathUpstreams {
-						pathRule.Upstreams = append(pathRule.Upstreams, UpstreamConfig{
-							Host: pathUpstream.Address, Port: pathUpstream.Port, Weight: pathUpstream.Weight, Protocol: "http", Enabled: true,
-						})
-					}
+					pathRule.Upstreams = pathUpstreams
 				}
 				r.rule.PathRules = append(r.rule.PathRules, pathRule)
 			}
@@ -1713,6 +1681,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 			domainHosts := splitAndTrim(r.Domain)
 			if len(domainHosts) > 0 {
 				redirectRoutes = append(redirectRoutes, map[string]interface{}{
+					"@id": r.CaddyID + "_redirect",
 					"match": []interface{}{
 						map[string]interface{}{
 							"host": domainHosts,
@@ -2272,7 +2241,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		var upstreamList []interface{}
 		var upstreamWeights []int
 		hasHTTPSUpstream := false
-	
+
 		for _, u := range enabledUpstreams {
 			weight := u.Weight
 			if weight <= 0 {
@@ -2487,17 +2456,20 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 					},
 				},
 			}
+			tagRuleRoute(redirectRoute, rule.CaddyID, "redirect")
 			routes = append(routes, redirectRoute)
 		}
 		if rule.IPACLMode == "deny" {
-			routes = append(routes, forbiddenHTTPRoute(domainHosts, rule.IPACLList, true))
+			denyRoute := forbiddenHTTPRoute(domainHosts, rule.IPACLList, true)
+			tagRuleRoute(denyRoute, rule.CaddyID, "acl_deny")
+			routes = append(routes, denyRoute)
 		}
 		if rule.CustomRoutesEnabled {
 			pathRules := append([]PathRuleConfig(nil), rule.PathRules...)
 			sort.SliceStable(pathRules, func(i, j int) bool {
 				return pathRules[i].SortOrder < pathRules[j].SortOrder
 			})
-			for _, pathRule := range pathRules {
+			for pathIndex, pathRule := range pathRules {
 				pathUpstreams := pathRule.Upstreams
 				if pathUpstreams == nil {
 					pathUpstreams = rule.Upstreams
@@ -2517,10 +2489,12 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 				if rule.IPACLMode == "allow" {
 					pathMatcher["client_ip"] = map[string]interface{}{"ranges": rule.IPACLList}
 				}
-				routes = append(routes, map[string]interface{}{
+				pathRoute := map[string]interface{}{
 					"match":  []interface{}{pathMatcher},
 					"handle": pathHandle,
-				})
+				}
+				tagRuleRoute(pathRoute, rule.CaddyID, fmt.Sprintf("path_%d", pathIndex))
+				routes = append(routes, pathRoute)
 			}
 		}
 		mainMatcher := map[string]interface{}{"host": domainHosts}
@@ -2536,7 +2510,9 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		}
 		routes = append(routes, route)
 		if rule.IPACLMode == "allow" {
-			routes = append(routes, forbiddenHTTPRoute(domainHosts, nil, false))
+			allowRoute := forbiddenHTTPRoute(domainHosts, nil, false)
+			tagRuleRoute(allowRoute, rule.CaddyID, "acl_allow")
+			routes = append(routes, allowRoute)
 		}
 
 		serverName := fmt.Sprintf("http_%d", rule.ListenPort)
@@ -2685,14 +2661,16 @@ func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, 
 
 	routes := make([]map[string]interface{}, 0, len(rule.PathRules)+2)
 	if rule.IPACLMode == "deny" {
-		routes = append(routes, forbiddenHTTPRoute(domainHosts, rule.IPACLList, true))
+		denyRoute := forbiddenHTTPRoute(domainHosts, rule.IPACLList, true)
+		tagRuleRoute(denyRoute, rule.CaddyID, "acl_deny")
+		routes = append(routes, denyRoute)
 	}
 	if rule.CustomRoutesEnabled {
 		pathRules := append([]PathRuleConfig(nil), rule.PathRules...)
 		sort.SliceStable(pathRules, func(i, j int) bool {
 			return pathRules[i].SortOrder < pathRules[j].SortOrder
 		})
-		for _, pathRule := range pathRules {
+		for pathIndex, pathRule := range pathRules {
 			upstreams := pathRule.Upstreams
 			if upstreams == nil {
 				upstreams = rule.Upstreams
@@ -2712,15 +2690,19 @@ func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, 
 			if rule.IPACLMode == "allow" {
 				matcher["client_ip"] = map[string]interface{}{"ranges": rule.IPACLList}
 			}
-			routes = append(routes, map[string]interface{}{
+			pathRoute := map[string]interface{}{
 				"match":  []interface{}{matcher},
 				"handle": handle,
-			})
+			}
+			tagRuleRoute(pathRoute, rule.CaddyID, fmt.Sprintf("path_%d", pathIndex))
+			routes = append(routes, pathRoute)
 		}
 	}
 	routes = append(routes, mainRoute)
 	if rule.IPACLMode == "allow" {
-		routes = append(routes, forbiddenHTTPRoute(domainHosts, nil, false))
+		allowRoute := forbiddenHTTPRoute(domainHosts, nil, false)
+		tagRuleRoute(allowRoute, rule.CaddyID, "acl_allow")
+		routes = append(routes, allowRoute)
 	}
 	return routes, mainRoute, nil
 }
@@ -2740,6 +2722,35 @@ func forbiddenHTTPRoute(domainHosts, ranges []string, matchClientIP bool) map[st
 			},
 		},
 	}
+}
+
+func tagRuleRoute(route map[string]interface{}, ruleID, suffix string) {
+	if ruleID != "" {
+		route["@id"] = ruleID + "_" + suffix
+	}
+}
+
+func decodePathUpstreams(raw string) ([]UpstreamConfig, error) {
+	var stored []struct {
+		Address  string `json:"address"`
+		Port     int    `json:"port"`
+		Weight   int    `json:"weight"`
+		Protocol string `json:"protocol"`
+	}
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		return nil, err
+	}
+	upstreams := make([]UpstreamConfig, 0, len(stored))
+	for _, item := range stored {
+		protocol := item.Protocol
+		if protocol == "" {
+			protocol = "http"
+		}
+		upstreams = append(upstreams, UpstreamConfig{
+			Host: item.Address, Port: item.Port, Weight: item.Weight, Protocol: protocol, Enabled: true,
+		})
+	}
+	return upstreams, nil
 }
 
 func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]interface{}, error) {
@@ -2964,12 +2975,10 @@ func normalizeWeights(weights []int) []int {
 // buildTCPProxyRoute generates the layer4 proxy handler and route for a TCP rule.
 func buildTCPProxyRoute(rule SingleRuleConfig) map[string]interface{} {
 	upstreamList := make([]interface{}, 0)
-	enabledPorts := make([]int, 0)
 	for _, u := range rule.Upstreams {
 		if !u.Enabled {
 			continue
 		}
-		enabledPorts = append(enabledPorts, u.Port)
 		dial := fmt.Sprintf("%s:%d", u.Host, u.Port)
 		upstreamEntry := map[string]interface{}{
 			"dial": []string{dial},
@@ -3042,10 +3051,6 @@ func buildTCPProxyRoute(rule SingleRuleConfig) map[string]interface{} {
 		},
 	}
 	if rule.EnableActiveHealthCheck {
-		activePort := rule.TCPHealthCheckPort
-		if activePort <= 0 && len(enabledPorts) > 0 {
-			activePort = enabledPorts[0]
-		}
 		healthCheckTimeout := rule.HealthCheckTimeout
 		if healthCheckTimeout <= 0 {
 			healthCheckTimeout = 5
@@ -3054,13 +3059,16 @@ func buildTCPProxyRoute(rule SingleRuleConfig) map[string]interface{} {
 		if healthyThreshold <= 0 {
 			healthyThreshold = 2
 		}
-		healthChecks["active"] = map[string]interface{}{
+		active := map[string]interface{}{
 			"interval": fmt.Sprintf("%ds", healthCheckInterval),
-			"port":     activePort,
 			"timeout":  fmt.Sprintf("%ds", healthCheckTimeout),
 			"rise":     healthyThreshold,
 			"fall":     unhealthyThreshold,
 		}
+		if rule.TCPHealthCheckPort > 0 {
+			active["port"] = rule.TCPHealthCheckPort
+		}
+		healthChecks["active"] = active
 	}
 	proxyHandler["health_checks"] = healthChecks
 

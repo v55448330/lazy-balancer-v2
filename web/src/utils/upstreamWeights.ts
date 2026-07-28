@@ -1,55 +1,65 @@
 type WeightedItem = {
   weight: number
+  enabled?: boolean
 }
 
-const normalizedWeight = (weight: number): number => Math.max(1, Math.round(weight || 0))
+export const MAX_UPSTREAM_ROWS = 100
 
-export const normalizeWeights = <Item extends WeightedItem>(items: Item[]): void => {
+const minimumWeight = (item: WeightedItem): number => item.enabled === undefined ? 1 : 0
+const normalizedWeight = (item: WeightedItem): number => Math.max(minimumWeight(item), Math.round(item.weight || 0))
+
+const participatingItems = <Item extends WeightedItem>(items: Item[]): Item[] => {
+  const withinLimit = items.slice(0, MAX_UPSTREAM_ROWS)
+  items.slice(MAX_UPSTREAM_ROWS).forEach((item) => { item.weight = 0 })
+  items.forEach((item) => {
+    if (item.enabled === false) item.weight = 0
+  })
+  return withinLimit.filter((item) => item.enabled !== false)
+}
+
+const distributeWeight = <Item extends WeightedItem>(items: Item[], totalWeight: number): void => {
   if (items.length === 0) return
-  if (items.length === 1) {
-    items[0].weight = 100
+  const minimums = items.map(minimumWeight)
+  const minimumTotal = minimums.reduce((sum, weight) => sum + weight, 0)
+  const availableTotal = Math.max(minimumTotal, totalWeight)
+  const sourceTotal = items.reduce((sum, item) => sum + normalizedWeight(item), 0)
+  if (sourceTotal === 0) {
+    const baseWeight = Math.floor(availableTotal / items.length)
+    items.forEach((item, index) => {
+      item.weight = index === 0 ? availableTotal - baseWeight * (items.length - 1) : baseWeight
+    })
     return
   }
-
-  const total = items.reduce((sum, item) => sum + normalizedWeight(item.weight), 0)
   let allocated = 0
+
   items.forEach((item, index) => {
     if (index === items.length - 1) {
-      item.weight = 100 - allocated
+      item.weight = availableTotal - allocated
       return
     }
-
-    const rowsAfter = items.length - index - 1
-    const available = 100 - allocated - rowsAfter
-    item.weight = Math.min(available, Math.max(1, Math.round((normalizedWeight(item.weight) / total) * 100)))
+    const remainingMinimum = minimums.slice(index + 1).reduce((sum, weight) => sum + weight, 0)
+    const proportional = Math.round((normalizedWeight(item) / sourceTotal) * availableTotal)
+    item.weight = Math.min(availableTotal - allocated - remainingMinimum, Math.max(minimums[index], proportional))
     allocated += item.weight
   })
+}
+
+export const normalizeWeights = <Item extends WeightedItem>(items: Item[]): void => {
+  distributeWeight(participatingItems(items), 100)
 }
 
 export const redistributeWeight = <Item extends WeightedItem>(items: Item[], changedIndex: number): void => {
-  if (items.length === 0) return
-  if (items.length === 1) {
-    items[0].weight = 100
-    return
-  }
-
+  const participating = participatingItems(items)
+  if (participating.length === 0) return
   const changed = items[changedIndex]
   if (!changed) return
-  const otherItems = items.filter((_, index) => index !== changedIndex)
-  changed.weight = Math.min(100 - otherItems.length, normalizedWeight(changed.weight))
-
-  const remaining = 100 - changed.weight
-  const otherTotal = otherItems.reduce((sum, item) => sum + normalizedWeight(item.weight), 0)
-  let allocated = 0
-  otherItems.forEach((item, index) => {
-    if (index === otherItems.length - 1) {
-      item.weight = remaining - allocated
-      return
-    }
-
-    const rowsAfter = otherItems.length - index - 1
-    const available = remaining - allocated - rowsAfter
-    item.weight = Math.min(available, Math.max(1, Math.round((normalizedWeight(item.weight) / otherTotal) * remaining)))
-    allocated += item.weight
-  })
+  if (changed.enabled === false || !participating.includes(changed)) {
+    changed.weight = 0
+    distributeWeight(participating, 100)
+    return
+  }
+  const otherItems = participating.filter((item) => item !== changed)
+  const otherMinimum = otherItems.reduce((sum, item) => sum + minimumWeight(item), 0)
+  changed.weight = Math.min(100 - otherMinimum, normalizedWeight(changed))
+  distributeWeight(otherItems, 100 - changed.weight)
 }

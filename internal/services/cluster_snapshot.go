@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"lazy-balancer-v2/internal/models"
 )
@@ -17,11 +18,20 @@ import (
 // 抬高 MinReaderVersion，让过旧的读取端明确拒绝而不是静默降级。
 const CurrentSnapshotSchema = 1
 
+type clusterSnapshotCache struct {
+	mu          sync.Mutex
+	initialized bool
+	version     int
+	snapshot    models.ClusterSnapshot
+}
+
+var clusterSnapshotCaches sync.Map
+
 // Snapshot builds the full cluster snapshot. tokenKey signs the payload with
 // the requesting node's cluster token (HMAC-SHA256) so slaves can verify
 // authenticity, not just integrity; leave empty to skip signing (legacy path).
 func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientFingerprint string, tokenKey string) (models.ClusterSnapshot, bool, error) {
-	snapshot, err := s.buildSnapshot(ctx)
+	snapshot, err := s.cachedSnapshot(ctx)
 	if err != nil {
 		return models.ClusterSnapshot{}, false, err
 	}
@@ -54,6 +64,29 @@ func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientF
 		return snapshot, false, nil
 	}
 	return snapshot, true, nil
+}
+
+func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnapshot, error) {
+	value, _ := clusterSnapshotCaches.LoadOrStore(s.db, &clusterSnapshotCache{})
+	cache := value.(*clusterSnapshotCache)
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	var version int
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(cluster_version,0) FROM global_config WHERE id=1").Scan(&version); err != nil {
+		return models.ClusterSnapshot{}, fmt.Errorf("读取集群版本: %w", err)
+	}
+	if cache.initialized && cache.version == version {
+		return cache.snapshot, nil
+	}
+	snapshot, err := s.buildSnapshot(ctx)
+	if err != nil {
+		return models.ClusterSnapshot{}, err
+	}
+	cache.initialized = true
+	cache.version = snapshot.Version
+	cache.snapshot = snapshot
+	return snapshot, nil
 }
 
 func (s *ClusterService) buildSnapshot(ctx context.Context) (models.ClusterSnapshot, error) {

@@ -280,6 +280,11 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	existingRuleIDs, err := currentRuleIDs(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有规则失败"})
+		return
+	}
 	tx, err := db.DB.BeginTx(ctx, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开始导入事务失败"})
@@ -312,6 +317,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	imported := 0
 	tlsCount := 0
 	upstreamCount := 0
+	affectedRuleIDs := append([]string(nil), existingRuleIDs...)
 	var pendingCerts []struct{ id, cert, key string }
 	for _, r := range rules {
 		caddyID, err := services.GenerateCaddyID()
@@ -319,6 +325,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成规则编号失败"})
 			return
 		}
+		affectedRuleIDs = append(affectedRuleIDs, caddyID)
 		_, err = tx.ExecContext(ctx, `INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
@@ -354,23 +361,38 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		imported++
 	}
 	h.caddyOpMu.Lock()
-	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
+	runtimeSnapshot, err := h.snapshotImportRuntime(affectedRuleIDs)
+	if err != nil {
 		h.caddyOpMu.Unlock()
-		services.MaterializeAllCertsFromDB()
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败: " + err.Error()})
+		return
+	}
+	restoreRuntime := func() {
+		if restoreErr := h.restoreImportRuntime(runtimeSnapshot); restoreErr != nil {
+			log.Printf("v1 导入失败后恢复运行配置失败: %v", restoreErr)
+		}
+	}
+	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
+		restoreRuntime()
+		h.caddyOpMu.Unlock()
 		recordAudit(c, "导入失败", "配置备份", "Caddy 配置验证未通过，数据库未变更: "+err.Error())
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份生成的配置未通过 Caddy 验证，未执行导入: " + err.Error()})
 		return
 	}
-	h.caddyOpMu.Unlock()
 	if err := services.BumpClusterVersion(ctx, tx); err != nil {
+		restoreRuntime()
+		h.caddyOpMu.Unlock()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新配置版本失败"})
 		return
 	}
 	if err := tx.Commit(); err != nil {
+		restoreRuntime()
+		h.caddyOpMu.Unlock()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交导入失败"})
 		return
 	}
 	committed = true
+	h.caddyOpMu.Unlock()
 	for _, pc := range pendingCerts {
 		if err := services.WriteCertFiles(pc.id, pc.cert, pc.key); err != nil {
 			log.Printf("导入后写入证书文件失败 %s: %v", pc.id, err)

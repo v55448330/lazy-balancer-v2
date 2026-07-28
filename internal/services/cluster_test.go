@@ -164,21 +164,53 @@ func TestClusterService_Snapshot_uses_version_and_fingerprint(t *testing.T) {
 	}
 
 	// When
-	_, unchanged, err := service.Snapshot(context.Background(), 7, initial.Fingerprint, "")
-	if err != nil {
-		t.Fatalf("unchanged snapshot: %v", err)
-	}
 	if _, err := database.Exec("UPDATE path_rules SET path='/after/' WHERE rule_id='lb_fingerprint'"); err != nil {
 		t.Fatalf("change content without version bump: %v", err)
 	}
-	fallback, fallbackChanged, err := service.Snapshot(context.Background(), 7, initial.Fingerprint, "")
+	cached, cachedChanged, err := service.Snapshot(context.Background(), 7, initial.Fingerprint, "")
+	if err != nil {
+		t.Fatalf("cached snapshot: %v", err)
+	}
+	if err := BumpClusterVersion(context.Background(), database); err != nil {
+		t.Fatalf("bump cluster version: %v", err)
+	}
+	invalidated, invalidatedChanged, err := service.Snapshot(context.Background(), 7, initial.Fingerprint, "")
 
 	// Then
-	if unchanged {
-		t.Fatal("matching version and fingerprint should be unchanged")
+	if cachedChanged || cached.Fingerprint != initial.Fingerprint {
+		t.Fatalf("unbumped content rebuilt snapshot changed=%v fingerprint=%q", cachedChanged, cached.Fingerprint)
 	}
-	if err != nil || !fallbackChanged || fallback.Fingerprint == initial.Fingerprint {
-		t.Fatalf("fingerprint fallback snapshot=%#v changed=%v err=%v", fallback, fallbackChanged, err)
+	if err != nil || !invalidatedChanged || invalidated.Fingerprint == initial.Fingerprint || invalidated.Version != 8 {
+		t.Fatalf("invalidated snapshot=%#v changed=%v err=%v", invalidated, invalidatedChanged, err)
+	}
+}
+
+func TestClusterService_Snapshot_signatures_verify_for_each_requesting_token(t *testing.T) {
+	// Given
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec("UPDATE global_config SET cluster_version=3 WHERE id=1"); err != nil {
+		t.Fatalf("set version: %v", err)
+	}
+
+	// When
+	first, _, err := service.Snapshot(context.Background(), 0, "", "token-a")
+	if err != nil {
+		t.Fatalf("first snapshot: %v", err)
+	}
+	second, _, err := service.Snapshot(context.Background(), 0, "", "token-b")
+	if err != nil {
+		t.Fatalf("second snapshot: %v", err)
+	}
+
+	// Then
+	if first.Fingerprint != second.Fingerprint || first.Signature == second.Signature {
+		t.Fatalf("fingerprints/signatures first=%q/%q second=%q/%q", first.Fingerprint, first.Signature, second.Fingerprint, second.Signature)
+	}
+	if err := verifySnapshotIntegrity(first, "token-a", 0); err != nil {
+		t.Fatalf("verify first snapshot: %v", err)
+	}
+	if err := verifySnapshotIntegrity(second, "token-b", 0); err != nil {
+		t.Fatalf("verify second snapshot: %v", err)
 	}
 }
 

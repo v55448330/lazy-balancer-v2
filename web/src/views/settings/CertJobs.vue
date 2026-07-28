@@ -97,6 +97,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import * as pkijs from 'pkijs'
 import * as asn1js from 'asn1js'
+import type { APIResponse } from '@/types'
 
 type CertJobStatus =
   | 'queued'
@@ -344,7 +345,7 @@ const retryJob = async (row: CertJob) => {
     await request.post(`/certificates/jobs/${row.id}/retry`)
     ElMessage.success('重新签发已触发')
     fetchJobs()
-  } catch (error: any) {
+  } catch (error: unknown) {
     // Error toast is already shown by the global axios interceptor.
     console.error('Failed to retry cert job:', error)
   }
@@ -382,7 +383,7 @@ const refreshLogs = async () => {
   if (!currentJob.value || logLoading.value) return
   logLoading.value = true
   try {
-    const res: any = await request.get(`/certificates/jobs/${currentJob.value.id}/logs`)
+    const res = await request.get<APIResponse<{ content: string }>>(`/certificates/jobs/${currentJob.value.id}/logs`)
     logContent.value = res.data?.content || ''
     await scrollToBottom()
   } catch (error) {

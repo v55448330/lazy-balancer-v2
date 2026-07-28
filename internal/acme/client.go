@@ -88,7 +88,11 @@ func NewClientForProvider(provider models.CAProvider, email string) (*Client, er
 }
 
 func newClient(directoryURL, email string, eab *acme.ExternalAccountBinding) (*Client, error) {
-	key, err := loadOrCreateAccountKey(directoryURL, email)
+	eabKID := ""
+	if eab != nil {
+		eabKID = eab.KID
+	}
+	key, err := loadOrCreateAccountKey(directoryURL, email, eabKID)
 	if err != nil {
 		return nil, err
 	}
@@ -111,21 +115,20 @@ func newClient(directoryURL, email string, eab *acme.ExternalAccountBinding) (*C
 	}, nil
 }
 
-// 账户密钥按 CA+邮箱 维度持久化复用：同一 CA 同一邮箱重复签发共享一个 ACME 账户，
-// 避免每次签发注册新账户触发 CA 的新账户限流；更换邮箱或 CA 时自动生成新密钥。
+// 账户密钥按 CA+邮箱+EAB KID 维度持久化复用；EAB 密钥本身不参与文件名计算。
 const acmeAccountDir = "/app/data/acme_accounts"
 
 var acmeAccountKeyMu sync.Mutex
 
-func acmeAccountKeyPath(directoryURL, email string) string {
-	sum := sha256.Sum256([]byte(directoryURL + "|" + email))
-	return filepath.Join(acmeAccountDir, hex.EncodeToString(sum[:8]) + ".key")
+func acmeAccountKeyPath(directoryURL, email, eabKID string) string {
+	sum := sha256.Sum256([]byte(directoryURL + "|" + email + "|" + eabKID))
+	return filepath.Join(acmeAccountDir, hex.EncodeToString(sum[:])+".key")
 }
 
-func loadOrCreateAccountKey(directoryURL, email string) (*ecdsa.PrivateKey, error) {
+func loadOrCreateAccountKey(directoryURL, email, eabKID string) (*ecdsa.PrivateKey, error) {
 	acmeAccountKeyMu.Lock()
 	defer acmeAccountKeyMu.Unlock()
-	keyPath := acmeAccountKeyPath(directoryURL, email)
+	keyPath := acmeAccountKeyPath(directoryURL, email, eabKID)
 	if data, err := os.ReadFile(keyPath); err == nil {
 		block, _ := pem.Decode(data)
 		if block != nil {

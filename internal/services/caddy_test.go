@@ -1,6 +1,11 @@
 package services
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -195,6 +200,265 @@ func TestGenerateRouteObject_HealthCheckTimeout_doesNotSetTransportDialTimeout(t
 	}
 }
 
+func TestSetConfigByID_replacesOwnedRouteSet_andPreservesSiblingRoutes(t *testing.T) {
+	// Given
+	defaultRoute := runningDefaultRoute()
+	current := testHTTPConfig([]interface{}{
+		map[string]interface{}{"@id": "rule-target_acl_deny"},
+		map[string]interface{}{"@id": "rule-sibling_path_0"},
+		map[string]interface{}{"@id": "rule-target"},
+		map[string]interface{}{"@id": "rule-target_acl_allow"},
+		map[string]interface{}{"handle": []interface{}{map[string]interface{}{"handler": "headers"}}},
+		defaultRoute,
+	})
+	replacement := map[string]interface{}{"@id": "rule-target", "handle": []interface{}{map[string]interface{}{"handler": "subroute"}}}
+	var applied map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/config/":
+			if err := json.NewEncoder(writer).Encode(current); err != nil {
+				t.Errorf("encode current config: %v", err)
+			}
+		case request.Method == http.MethodPost && request.URL.Path == "/config/":
+			if err := json.NewDecoder(request.Body).Decode(&applied); err != nil {
+				t.Errorf("decode applied config: %v", err)
+			}
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	// When
+	err := NewCaddyService(server.URL).SetConfigByID("rule-target", replacement)
+
+	// Then
+	if err != nil {
+		t.Fatalf("replace route set: %v", err)
+	}
+	routes := httpRoutesFromConfig(t, applied)
+	assertRouteIDs(t, routes, []string{"rule-sibling_path_0", "rule-target", "", ""})
+}
+
+func TestDeleteRouteByID_removesOnlyOwnedRouteSet(t *testing.T) {
+	// Given
+	current := testHTTPConfig([]interface{}{
+		map[string]interface{}{"@id": "rule-target_acl_deny"},
+		map[string]interface{}{"@id": "rule-target_path_0"},
+		map[string]interface{}{"@id": "rule-target"},
+		map[string]interface{}{"@id": "rule-sibling"},
+		runningDefaultRoute(),
+	})
+	var applied map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			if err := json.NewEncoder(writer).Encode(current); err != nil {
+				t.Errorf("encode current config: %v", err)
+			}
+			return
+		}
+		if err := json.NewDecoder(request.Body).Decode(&applied); err != nil {
+			t.Errorf("decode applied config: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	// When
+	err := NewCaddyService(server.URL).DeleteRouteByID("http_80", "rule-target")
+
+	// Then
+	if err != nil {
+		t.Fatalf("delete route set: %v", err)
+	}
+	assertRouteIDs(t, httpRoutesFromConfig(t, applied), []string{"rule-sibling", ""})
+}
+
+func TestPrependRouteToServer_insertsBeforeCatchAll_regardlessOfCatchAllIndex(t *testing.T) {
+	// Given
+	existing := map[string]interface{}{"@id": "rule-existing"}
+	catchAll := runningDefaultRoute()
+	current := testHTTPConfig([]interface{}{existing, catchAll})
+	var applied map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			if err := json.NewEncoder(writer).Encode(current); err != nil {
+				t.Errorf("encode current config: %v", err)
+			}
+			return
+		}
+		if err := json.NewDecoder(request.Body).Decode(&applied); err != nil {
+			t.Errorf("decode applied config: %v", err)
+		}
+	}))
+	defer server.Close()
+	newRoute := map[string]interface{}{"@id": "rule-new"}
+
+	// When
+	err := NewCaddyService(server.URL).PrependRouteToServer("http_80", newRoute)
+
+	// Then
+	if err != nil {
+		t.Fatalf("prepend route: %v", err)
+	}
+	assertRouteIDs(t, httpRoutesFromConfig(t, applied), []string{"rule-existing", "rule-new", ""})
+}
+
+func TestValidateRouteMergedConfig_insertsBeforeCatchAll_regardlessOfCatchAllIndex(t *testing.T) {
+	// Given
+	current := testHTTPConfig([]interface{}{map[string]interface{}{"@id": "rule-existing"}, runningDefaultRoute()})
+	var validated map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			if err := json.NewEncoder(writer).Encode(current); err != nil {
+				t.Errorf("encode current config: %v", err)
+			}
+			return
+		}
+		if err := json.NewDecoder(request.Body).Decode(&validated); err != nil {
+			t.Errorf("decode validation config: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	// When
+	err := NewCaddyService(server.URL).ValidateRouteMergedConfig("http_80", map[string]interface{}{"@id": "rule-new"}, "validation-id")
+
+	// Then
+	if err != nil {
+		t.Fatalf("validate merged route: %v", err)
+	}
+	assertRouteIDs(t, httpRoutesFromConfig(t, validated), []string{"rule-existing", "rule-new", ""})
+}
+
+func TestGenerateSingleRuleCaddyConfig_tagsEveryOwnedAuxiliaryRoute(t *testing.T) {
+	// Given
+	rule := baseHTTPRule()
+	rule.EnableTLS = true
+	rule.TLSHTTPRedirect = true
+	rule.IPACLMode = "deny"
+	rule.IPACLList = []string{"192.0.2.0/24"}
+	rule.CustomRoutesEnabled = true
+	rule.PathRules = []PathRuleConfig{{SortOrder: 10, MatchType: "prefix", Path: "/api/"}}
+
+	// When
+	routes := renderedHTTPRoutes(t, GenerateSingleRuleCaddyConfig(rule))
+
+	// Then
+	assertRouteIDs(t, routes, []string{"rule-http_redirect", "rule-http_acl_deny", "rule-http_path_0", "rule-http"})
+}
+
+func TestGenerateHTTPRouteObjects_tagsEveryOwnedAuxiliaryRoute(t *testing.T) {
+	// Given
+	rule := baseHTTPRule()
+	rule.IPACLMode = "allow"
+	rule.IPACLList = []string{"192.0.2.0/24"}
+	rule.CustomRoutesEnabled = true
+	rule.PathRules = []PathRuleConfig{{SortOrder: 10, MatchType: "prefix", Path: "/api/"}}
+
+	// When
+	routes, _, err := generateHTTPRouteObjects(rule)
+
+	// Then
+	if err != nil {
+		t.Fatalf("generate HTTP route objects: %v", err)
+	}
+	routeValues := make([]interface{}, len(routes))
+	for index, route := range routes {
+		routeValues[index] = route
+	}
+	assertRouteIDs(t, routeValues, []string{"rule-http_path_0", "rule-http", "rule-http_acl_allow"})
+}
+
+func TestDecodePathUpstreams_preservesHTTPSProtocol_andDefaultsEmptyProtocol(t *testing.T) {
+	// Given
+	raw := `[{"address":"secure.internal","port":443,"weight":2,"protocol":"https"},{"address":"plain.internal","port":8080,"weight":1}]`
+
+	// When
+	upstreams, err := decodePathUpstreams(raw)
+
+	// Then
+	if err != nil {
+		t.Fatalf("decode path upstreams: %v", err)
+	}
+	assertEqual(t, upstreams, []UpstreamConfig{
+		{Host: "secure.internal", Port: 443, Weight: 2, Protocol: "https", Enabled: true},
+		{Host: "plain.internal", Port: 8080, Weight: 1, Protocol: "http", Enabled: true},
+	})
+}
+
+func TestBuildTCPProxyRoute_omitsActivePort_withoutExplicitOverride(t *testing.T) {
+	// Given
+	rule := SingleRuleConfig{
+		CaddyID: "rule-tcp", Protocol: "tcp", EnableActiveHealthCheck: true,
+		Upstreams: []UpstreamConfig{
+			{Host: "10.0.0.10", Port: 3306, Enabled: true},
+			{Host: "10.0.0.11", Port: 3307, Enabled: true},
+		},
+	}
+
+	// When
+	route := buildTCPProxyRoute(rule)
+
+	// Then
+	proxy := firstHandler(t, route)
+	healthChecks := mustMap(t, proxy["health_checks"], "health checks")
+	active := mustMap(t, healthChecks["active"], "active health check")
+	if _, exists := active["port"]; exists {
+		t.Fatalf("implicit active health port should be omitted, got %#v", active["port"])
+	}
+
+	rule.TCPHealthCheckPort = 13306
+	active = mustMap(t, mustMap(t, firstHandler(t, buildTCPProxyRoute(rule))["health_checks"], "health checks")["active"], "active health check")
+	assertEqual(t, active["port"], 13306)
+}
+
+func TestWriteCertPair_restoresPreviousCertificate_whenKeyDeployFails(t *testing.T) {
+	// Given
+	directory := t.TempDir()
+	certPath := filepath.Join(directory, "rule.crt")
+	keyPath := filepath.Join(directory, "rule.key")
+	if err := os.WriteFile(certPath, []byte("old-cert"), 0644); err != nil {
+		t.Fatalf("write old cert: %v", err)
+	}
+	if err := os.Mkdir(keyPath, 0700); err != nil {
+		t.Fatalf("create blocking key directory: %v", err)
+	}
+
+	// When
+	err := writeCertPair(certPath, keyPath, "new-cert", "new-key")
+
+	// Then
+	if err == nil {
+		t.Fatal("expected key deployment to fail")
+	}
+	cert, readErr := os.ReadFile(certPath)
+	if readErr != nil {
+		t.Fatalf("read restored cert: %v", readErr)
+	}
+	assertEqual(t, string(cert), "old-cert")
+}
+
+func TestWriteCertPair_removesNewCertificate_whenKeyDeployFailsWithoutPreviousCertificate(t *testing.T) {
+	// Given
+	directory := t.TempDir()
+	certPath := filepath.Join(directory, "rule.crt")
+	keyPath := filepath.Join(directory, "rule.key")
+	if err := os.Mkdir(keyPath, 0700); err != nil {
+		t.Fatalf("create blocking key directory: %v", err)
+	}
+
+	// When
+	err := writeCertPair(certPath, keyPath, "new-cert", "new-key")
+
+	// Then
+	if err == nil {
+		t.Fatal("expected key deployment to fail")
+	}
+	if _, statErr := os.Stat(certPath); !os.IsNotExist(statErr) {
+		t.Fatalf("new certificate remained after rollback: %v", statErr)
+	}
+}
+
 func baseHTTPRule() SingleRuleConfig {
 	return SingleRuleConfig{
 		CaddyID:    "rule-http",
@@ -293,4 +557,49 @@ func assertEqual(t *testing.T, got, want interface{}) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("want %#v, got %#v", want, got)
 	}
+}
+
+func runningDefaultRoute() map[string]interface{} {
+	return map[string]interface{}{
+		"handle": []interface{}{map[string]interface{}{
+			"handler": "static_response",
+			"body":    "Lazy Balancer V2 is running!",
+		}},
+	}
+}
+
+func testHTTPConfig(routes []interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		"apps": map[string]interface{}{
+			"http": map[string]interface{}{
+				"servers": map[string]interface{}{
+					"http_80": map[string]interface{}{"routes": routes},
+				},
+			},
+		},
+	}
+}
+
+func httpRoutesFromConfig(t *testing.T, config map[string]interface{}) []interface{} {
+	t.Helper()
+	apps := mustMap(t, config["apps"], "apps")
+	httpApp := mustMap(t, apps["http"], "http app")
+	servers := mustMap(t, httpApp["servers"], "servers")
+	server := mustMap(t, servers["http_80"], "http_80")
+	routes, ok := server["routes"].([]interface{})
+	if !ok {
+		t.Fatalf("routes has type %T", server["routes"])
+	}
+	return routes
+}
+
+func assertRouteIDs(t *testing.T, routes []interface{}, want []string) {
+	t.Helper()
+	got := make([]string, 0, len(routes))
+	for _, routeValue := range routes {
+		route := mustMap(t, routeValue, "route")
+		id, _ := route["@id"].(string)
+		got = append(got, id)
+	}
+	assertEqual(t, got, want)
 }
