@@ -83,7 +83,7 @@ func parseTLSCertificate(certPEM, keyPEM string) (*CertificateInfo, error) {
 
 	// Extract issuer
 	issuer := x509Cert.Issuer.CommonName
-	if issuer == "" {
+	if issuer == "" && len(x509Cert.Issuer.Organization) > 0 {
 		issuer = x509Cert.Issuer.Organization[0]
 	}
 

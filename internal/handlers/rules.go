@@ -398,11 +398,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		listenPort = req.ListenPort
 	}
 
-	userID, _ := c.Get("user_id")
-	var userIDInt int64
-	if userID != nil {
-		userIDInt = int64(userID.(float64))
-	}
+	userIDInt := contextUserID(c)
 
 	// Generate caddy_id for @id-based management
 	caddyID, err := services.GenerateCaddyID()
@@ -509,8 +505,13 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return
 	}
 
+	dnsFamily := req.DnsFamily
+	if dnsFamily == "" {
+		dnsFamily = "ipv4"
+	}
+
 	_, err = tx.Exec(`
-		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server,
+		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
@@ -519,8 +520,8 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout,
 			host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
 			enable_compress, compress_types, enabled, created_by, updated_at, caddy_id, log_enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer, dnsFamily,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
 		req.EnableActiveHealthCheck, req.TCPHealthCheckPort, req.TCPProxyProtocol, req.TCPTryDuration, req.TCPTryInterval,
@@ -709,6 +710,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的请求: " + err.Error()})
 		return
 	}
+
+	// caddyOpMu 必须覆盖 读取→合并→验证→快照→提交→应用→恢复 全程：锁外读取合并时，
+	// 并发的成功请求会用旧快照合并值覆盖彼此已提交的字段（丢失更新）。
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
 
 	// Validate ACME domain restrictions
 	if req.EnableTLS != nil && *req.EnableTLS && req.TLSSource == "acme_dns" && req.Domain != "" {
@@ -1227,16 +1233,16 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 
-	// caddyOpMu 必须覆盖 快照→提交→应用→恢复 全程：并发更新若先各自提交再串行应用，
-	// 较早请求失败时会用自己的旧快照覆盖较晚请求已提交的成功更新。
-	h.caddyOpMu.Lock()
-	defer h.caddyOpMu.Unlock()
-
-	runtimeSnapshot, snapErr := h.snapshotImportRuntime([]string{caddyID})
-	if snapErr != nil {
-		log.Printf("UpdateRule runtime snapshot failed for caddy_id=%s: %v", caddyID, snapErr)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
-		return
+	// TCP 分支的失败恢复只用 oldFullConfig，不需要运行时快照（避免白拿一次全量配置+证书文件锁）
+	var runtimeSnapshot importRuntimeSnapshot
+	if req.Protocol != "tcp" {
+		var snapErr error
+		runtimeSnapshot, snapErr = h.snapshotImportRuntime([]string{caddyID})
+		if snapErr != nil {
+			log.Printf("UpdateRule runtime snapshot failed for caddy_id=%s: %v", caddyID, snapErr)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
+			return
+		}
 	}
 
 	// Backup current full Caddy config for rollback (used for TCP rules; HTTP rules use @id-based rollback)
@@ -1258,10 +1264,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份上游数据失败"})
 		return
 	}
-	restoreRuleDBSnapshot := func() {
+	restoreRuleDBSnapshot := func() error {
 		if err := restoreRuleSnapshot(c.Request.Context(), caddyID, oldRuleRow, oldUpstreamRowsMap, existingRule.PathRules); err != nil {
 			log.Printf("CRITICAL: UpdateRule DB restore failed for caddy_id=%s: %v", caddyID, err)
+			return err
 		}
+		return nil
 	}
 
 	// Start DB transaction: write validated config and commit first
@@ -1271,11 +1279,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 
-	userID, _ := c.Get("user_id")
-	var userIDInt int64
-	if userID != nil {
-		userIDInt = int64(userID.(float64))
-	}
+	userIDInt := contextUserID(c)
 	query += "updated_at = datetime('now'), updated_by = ? WHERE caddy_id = ? AND NOT EXISTS (SELECT 1 FROM cert_jobs WHERE rule_id = ? AND status NOT IN ('issued','failed'))"
 	args = append(args, userIDInt, caddyID, caddyID)
 
@@ -1372,10 +1376,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			log.Printf("Reloading full Caddy config after rule update for caddy_id=%s", caddyID)
 			fullConfig := services.GenerateCaddyConfig(h.cfg)
 			if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
-				restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-				restoreRuleDBSnapshot()
+				restoreErr := errors.Join(h.restoreImportRuntime(runtimeSnapshot), restoreRuleDBSnapshot())
 				if restoreErr != nil {
-					log.Printf("CRITICAL: UpdateRule Caddy apply and runtime restore failed for caddy_id=%s: apply=%v restore=%v", caddyID, err, restoreErr)
+					log.Printf("CRITICAL: UpdateRule Caddy apply and restore failed for caddy_id=%s: apply=%v restore=%v", caddyID, err, restoreErr)
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与恢复均失败: %v; %v", err, restoreErr)})
 					return
 				}
@@ -1401,20 +1404,22 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			if needJob {
 				qm := services.GetCAQueueManager()
 				if qm == nil {
-					restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-					restoreRuleDBSnapshot()
+					restoreErr := errors.Join(h.restoreImportRuntime(runtimeSnapshot), restoreRuleDBSnapshot())
 					if restoreErr != nil {
-						log.Printf("CRITICAL: UpdateRule ACME enqueue failed and runtime restore failed for caddy_id=%s: restore=%v", caddyID, restoreErr)
+						log.Printf("CRITICAL: UpdateRule ACME enqueue failed and restore failed for caddy_id=%s: restore=%v", caddyID, restoreErr)
+						c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("CA 队列未初始化且恢复失败: %v", restoreErr)})
+						return
 					}
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化"})
 					return
 				}
 				log.Printf("UpdateRule enqueueing cert job for caddy_id=%s domain=%s ca_provider_id=%d", caddyID, domain, caProviderID)
 				if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
-					restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-					restoreRuleDBSnapshot()
+					restoreErr := errors.Join(h.restoreImportRuntime(runtimeSnapshot), restoreRuleDBSnapshot())
 					if restoreErr != nil {
-						log.Printf("CRITICAL: UpdateRule ACME enqueue failed and runtime restore failed for caddy_id=%s: enqueue=%v restore=%v", caddyID, err, restoreErr)
+						log.Printf("CRITICAL: UpdateRule ACME enqueue failed and restore failed for caddy_id=%s: enqueue=%v restore=%v", caddyID, err, restoreErr)
+						c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("创建证书签发任务失败且恢复失败: %v; %v", err, restoreErr)})
+						return
 					}
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书签发任务失败: " + err.Error()})
 					return
@@ -1554,11 +1559,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		ipACLListJSON = "[]"
 	}
 
-	userID, _ := c.Get("user_id")
-	var userIDInt int64
-	if userID != nil {
-		userIDInt = int64(userID.(float64))
-	}
+	userIDInt := contextUserID(c)
 
 	newCaddyID, err := services.GenerateCaddyID()
 	if err != nil {

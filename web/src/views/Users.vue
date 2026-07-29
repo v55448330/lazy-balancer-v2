@@ -8,7 +8,7 @@
         </h2>
         <p class="page-desc">管理系统用户和权限</p>
       </div>
-      <el-button type="primary" :disabled="isReadOnly" @click="openCreateForm">
+      <el-button type="primary" :disabled="isReadOnly || submitting" @click="openCreateForm">
         <el-icon><Plus /></el-icon>
         新建用户
       </el-button>
@@ -23,7 +23,7 @@
           </div>
         </div>
       </template>
-      <el-form :model="form" label-width="90px" :disabled="isReadOnly">
+      <el-form :model="form" label-width="90px" :disabled="isReadOnly || submitting">
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="用户名">
@@ -57,7 +57,7 @@
         </el-row>
         <el-form-item>
           <el-button type="primary" :loading="submitting" :disabled="submitting" @click="handleSubmit">保存</el-button>
-          <el-button @click="closeForm">取消</el-button>
+          <el-button :disabled="submitting" @click="closeForm">取消</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -88,8 +88,8 @@
           <template #default="{ row }">
             <el-switch
               v-model="row.is_enabled"
-              :loading="switchingId === row.id"
-               :disabled="isReadOnly || row.id === authStore.user?.id"
+              :loading="switchingIds.has(row.id)"
+              :disabled="isReadOnly || switchingIds.has(row.id) || row.id === authStore.user?.id"
               @change="(val: boolean) => handleToggleStatus(row.id, val)"
             />
           </template>
@@ -106,7 +106,7 @@
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button v-if="row.id !== authStore.user?.id" type="primary" link size="small" :disabled="isReadOnly" @click="editUser(row)">
+            <el-button v-if="row.id !== authStore.user?.id" type="primary" link size="small" :disabled="isReadOnly || submitting" @click="editUser(row)">
               编辑
             </el-button>
             <el-button v-if="row.id !== authStore.user?.id" type="warning" link size="small" :disabled="isReadOnly" @click="resetPassword(row.id)">
@@ -138,12 +138,14 @@ const showForm = ref(false)
 const submitting = ref(false)
 
 const openCreateForm = () => {
+  if (submitting.value) return
   editingUser.value = null
   form.value = { username: '', password: '', display_name: '', role: 'user' }
   showForm.value = true
 }
 const editingUser = ref<UserDto | null>(null)
-const switchingId = ref<number | null>(null)
+const switchingIds = ref(new Set<number>())
+let usersRequestSeq = 0
 const form = ref({
   username: '',
   password: '',
@@ -159,8 +161,9 @@ const getDisplayName = (row: UserDto): string => {
 }
 
 const fetchUsers = async () => {
+  const requestSeq = ++usersRequestSeq
   const res = await request.get<ApiResponse<UserDto[]>>('/users')
-  users.value = res.data || []
+  if (requestSeq === usersRequestSeq) users.value = res.data || []
 }
 
 const handleSubmit = async () => {
@@ -179,16 +182,15 @@ const handleSubmit = async () => {
       await request.post('/users', form.value)
       ElMessage.success('创建成功')
     }
-    closeForm()
-    fetchUsers()
-    form.value = { username: '', password: '', display_name: '', role: 'user' }
   } finally {
     submitting.value = false
   }
+  closeForm()
+  fetchUsers()
 }
 
 const editUser = (user: UserDto) => {
-  if (isReadOnly.value) return
+  if (isReadOnly.value || submitting.value) return
   editingUser.value = user
   form.value = {
     username: user.username,
@@ -200,6 +202,7 @@ const editUser = (user: UserDto) => {
 }
 
 const closeForm = () => {
+  if (submitting.value) return
   showForm.value = false
   editingUser.value = null
   form.value = { username: '', password: '', display_name: '', role: 'user' }
@@ -218,8 +221,8 @@ const deleteUser = async (id: number) => {
 }
 
 const handleToggleStatus = async (id: number, isEnabled: boolean) => {
-  if (isReadOnly.value) return
-  switchingId.value = id
+  if (isReadOnly.value || switchingIds.value.has(id)) return
+  switchingIds.value.add(id)
   try {
     await request.put(`/users/${id}/status`, { is_enabled: isEnabled })
     ElMessage.success(isEnabled ? '已启用用户' : '已禁用用户')
@@ -227,7 +230,7 @@ const handleToggleStatus = async (id: number, isEnabled: boolean) => {
   } catch (e) {
     fetchUsers() // revert on failure
   } finally {
-    switchingId.value = null
+    switchingIds.value.delete(id)
   }
 }
 

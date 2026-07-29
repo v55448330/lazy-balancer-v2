@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
@@ -36,7 +35,11 @@ type configBackupMeta struct {
 	ExportedAt string `json:"exported_at"`
 }
 
-func dumpTable(ctx context.Context, database *sql.DB, table string) ([]map[string]any, error) {
+type tableQuerier interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func dumpTable(ctx context.Context, database tableQuerier, table string) ([]map[string]any, error) {
 	rows, err := database.QueryContext(ctx, "SELECT * FROM "+table)
 	if err != nil {
 		return nil, fmt.Errorf("读取表 %s: %w", table, err)
@@ -212,8 +215,14 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 1, ExportedAt: time.Now().UTC().Format(time.RFC3339)},
 		Tables: map[string][]map[string]any{},
 	}
-	configRows, err := dumpTable(ctx, db.DB, "global_config")
+	tx, err := db.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
+		return
+	}
+	configRows, err := dumpTable(ctx, tx, "global_config")
+	if err != nil {
+		err = errors.Join(err, tx.Rollback())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
 		return
 	}
@@ -221,12 +230,17 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		backup.Config = configRows[0]
 	}
 	for _, table := range configBackupTables {
-		rows, err := dumpTable(ctx, db.DB, table)
+		rows, err := dumpTable(ctx, tx, table)
 		if err != nil {
+			err = errors.Join(err, tx.Rollback())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
 			return
 		}
 		backup.Tables[table] = rows
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
+		return
 	}
 	recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(importCountsDetail(backup.Tables), services.AuditResultPart("success")))
 	c.Header("Content-Disposition", "attachment; filename=lazy-balancer-backup-"+time.Now().Format("20060102-150405")+".json")
@@ -345,35 +359,36 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败: " + err.Error()})
 		return
 	}
-	restoreRuntime := func() {
+	restoreRuntime := func(importErr error) error {
 		if restoreErr := h.restoreImportRuntime(runtimeSnapshot); restoreErr != nil {
-			log.Printf("导入失败后恢复运行配置失败: %v", restoreErr)
+			return errors.Join(importErr, fmt.Errorf("恢复运行配置失败: %w", restoreErr))
 		}
+		return importErr
 	}
 	if err := materializeImportCertificates(pendingCertificates); err != nil {
-		restoreRuntime()
+		err = restoreRuntime(err)
 		h.caddyOpMu.Unlock()
 		recordAudit(c, "导入失败", "配置备份", err.Error())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "准备证书文件失败，已回滚: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "准备证书文件失败: " + err.Error()})
 		return
 	}
 	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
-		restoreRuntime()
+		err = restoreRuntime(err)
 		h.caddyOpMu.Unlock()
 		recordAudit(c, "导入失败", "配置备份", "Caddy 配置验证未通过，数据库未变更: "+err.Error())
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份生成的配置未通过 Caddy 验证，未执行导入: " + err.Error()})
 		return
 	}
 	if err := services.BumpClusterVersion(ctx, tx); err != nil {
-		restoreRuntime()
+		err = restoreRuntime(err)
 		h.caddyOpMu.Unlock()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新配置版本失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新配置版本失败: " + err.Error()})
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		restoreRuntime()
+		err = restoreRuntime(err)
 		h.caddyOpMu.Unlock()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交导入失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交导入失败: " + err.Error()})
 		return
 	}
 	committed = true

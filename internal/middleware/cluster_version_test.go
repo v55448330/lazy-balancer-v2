@@ -33,7 +33,7 @@ func TestIsSynchronizedWrite_classifies_only_snapshot_content_mutations(t *testi
 	}
 }
 
-func TestClusterVersionMiddleware_bumps_after_request_context_is_canceled(t *testing.T) {
+func TestClusterVersionMiddleware_bumps_in_business_write_transaction(t *testing.T) {
 	// Given
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	if err := db.Initialize(t.TempDir()); err != nil {
@@ -52,6 +52,10 @@ func TestClusterVersionMiddleware_bumps_after_request_context_is_canceled(t *tes
 	router := gin.New()
 	router.Use(clusterVersionMiddleware(database))
 	router.POST("/api/v1/rules", func(c *gin.Context) {
+		if _, err := database.ExecContext(c.Request.Context(), `INSERT INTO lb_rules (caddy_id,name,protocol,listen_port) VALUES ('lb_version', 'version', 'http', 8080)`); err != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
 		cancel()
 		c.Status(http.StatusNoContent)
 	})
@@ -71,7 +75,7 @@ func TestClusterVersionMiddleware_bumps_after_request_context_is_canceled(t *tes
 	}
 }
 
-func TestClusterVersionMiddleware_returns_error_when_version_bump_fails(t *testing.T) {
+func TestClusterVersionMiddleware_rolls_back_business_write_when_version_bump_fails(t *testing.T) {
 	// Given
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	if err := db.Initialize(t.TempDir()); err != nil {
@@ -85,8 +89,15 @@ func TestClusterVersionMiddleware_returns_error_when_version_bump_fails(t *testi
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(clusterVersionMiddleware(database))
+	if _, err := database.Exec(`CREATE TRIGGER reject_cluster_version BEFORE UPDATE OF cluster_version ON global_config
+		BEGIN SELECT RAISE(ABORT, 'cluster version unavailable'); END`); err != nil {
+		t.Fatalf("install failing bump trigger: %v", err)
+	}
 	router.POST("/api/v1/rules", func(c *gin.Context) {
-		_ = database.Close()
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port) VALUES ('lb_rollback', 'rollback', 'http', 8080)`); err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "save failed"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"saved": true})
 	})
 	recorder := httptest.NewRecorder()
@@ -98,7 +109,14 @@ func TestClusterVersionMiddleware_returns_error_when_version_bump_fails(t *testi
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("response status=%d body=%q, want 500", recorder.Code, recorder.Body.String())
 	}
-	if recorder.Body.String() != `{"error":"cluster version update failed"}` {
-		t.Fatalf("response body=%q", recorder.Body.String())
+	var count, version int
+	if err := database.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_rollback'").Scan(&count); err != nil {
+		t.Fatalf("count rolled back rules: %v", err)
+	}
+	if err := database.QueryRow("SELECT cluster_version FROM global_config WHERE id=1").Scan(&version); err != nil {
+		t.Fatalf("read cluster version: %v", err)
+	}
+	if count != 0 || version != 0 {
+		t.Fatalf("rule count=%d version=%d, want both unchanged", count, version)
 	}
 }

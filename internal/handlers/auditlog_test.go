@@ -70,3 +70,52 @@ func TestGetAuditLogs_converts_utc_to_configured_timezone(t *testing.T) {
 		t.Fatalf("created_at = %q, want %q (UTC converted to Asia/Shanghai)", body.Data.List[0].CreatedAt, want)
 	}
 }
+
+func TestGetAuditLogs_falls_back_to_username_when_user_lookup_fails(t *testing.T) {
+	// Given
+	oldDB, oldAuditDB := db.DB, db.AuditDB
+	mainDB, err := sql.Open("sqlite", t.TempDir()+"/main.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditDB, err := sql.Open("sqlite", t.TempDir()+"/audit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.DB, db.AuditDB = mainDB, auditDB
+	t.Cleanup(func() {
+		db.DB, db.AuditDB = oldDB, oldAuditDB
+		_ = mainDB.Close()
+		_ = auditDB.Close()
+	})
+	if _, err := mainDB.Exec("CREATE TABLE global_config (id INTEGER PRIMARY KEY, timezone VARCHAR(50)); INSERT INTO global_config VALUES (1, 'UTC')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auditDB.Exec("CREATE TABLE audit_log (id INTEGER PRIMARY KEY, username TEXT, action TEXT, resource TEXT, detail TEXT, ip_address TEXT, created_at DATETIME); INSERT INTO audit_log VALUES (1, 'deleted-user', '更新', '配置', '', '', '2026-07-19 12:00:00')"); err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.GET("/audit-logs", (&Handlers{}).GetAuditLogs)
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/audit-logs", nil))
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data struct {
+			List []struct {
+				DisplayName string `json:"display_name"`
+			} `json:"list"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Data.List) != 1 || body.Data.List[0].DisplayName != "deleted-user" {
+		t.Fatalf("logs=%+v, want username fallback", body.Data.List)
+	}
+}

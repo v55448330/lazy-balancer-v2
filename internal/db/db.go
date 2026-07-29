@@ -1026,7 +1026,31 @@ func migrateCertJobsStatusConstraint() error {
 			break
 		}
 	}
-	if constraintComplete {
+	defaultQueued := false
+	rows, err := DB.Query("PRAGMA table_info(cert_jobs)")
+	if err != nil {
+		return fmt.Errorf("failed to read cert_jobs columns: %w", err)
+	}
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan cert_jobs columns: %w", err)
+		}
+		if name == "status" {
+			defaultQueued = defaultValue.Valid && strings.Trim(defaultValue.String, "'\"") == "queued"
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("failed to iterate cert_jobs columns: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("failed to close cert_jobs columns: %w", err)
+	}
+	if constraintComplete && defaultQueued {
 		return nil
 	}
 

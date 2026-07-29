@@ -98,10 +98,10 @@ func (d *DNSPod) Validate(creds map[string]string, testDomain string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if testDomain == "" {
+	domain := strings.TrimSpace(testDomain)
+	if domain == "" {
 		return fmt.Errorf("测试域名不能为空")
 	}
-	domain := strings.TrimSpace(testDomain)
 	if !strings.HasSuffix(domain, ".") {
 		domain += "."
 	}

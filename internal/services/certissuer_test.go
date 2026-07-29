@@ -61,7 +61,7 @@ func TestCertIssuer_deployIssuedCertificate_keeps_nonterminal_state_when_reload_
 	useTemporaryCertDir(t)
 	issuer := NewCertIssuer(func() error { return errors.New("reload failed") })
 	retries := 0
-	issuer.deploymentRetry = func(gotJobID int, got issuedCertificate) {
+	issuer.deploymentRetry = func(gotJobID int, got issuedCertificate, _ time.Duration) {
 		if gotJobID != jobID || got.ruleID != ruleID {
 			t.Fatalf("retry job=(%d,%q), want (%d,%q)", gotJobID, got.ruleID, jobID, ruleID)
 		}
@@ -189,7 +189,7 @@ func TestCertIssuer_Issue_fast_path_returns_reload_error_and_keeps_downloaded(t 
 	}
 	issuer := NewCertIssuer(func() error { return errors.New("reload failed") })
 	retries := 0
-	issuer.deploymentRetry = func(int, issuedCertificate) { retries++ }
+	issuer.deploymentRetry = func(int, issuedCertificate, time.Duration) { retries++ }
 
 	// When
 	err := issuer.Issue(context.Background(), jobID, ruleID, "example.com", models.CAProvider{ID: 1})
@@ -204,5 +204,56 @@ func TestCertIssuer_Issue_fast_path_returns_reload_error_and_keeps_downloaded(t 
 	}
 	if status != "downloaded" || retries != 1 {
 		t.Fatalf("fast-path job status=%q retries=%d, want downloaded and one retry", status, retries)
+	}
+}
+
+func TestCertIssuer_deploymentFailed_backs_off_and_stops_after_max_attempts(t *testing.T) {
+	// Given
+	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	issuer := NewCertIssuer(nil)
+	var delays []time.Duration
+	var retryMaterial issuedCertificate
+	issuer.deploymentRetry = func(_ int, material issuedCertificate, delay time.Duration) {
+		delays = append(delays, delay)
+		retryMaterial = material
+	}
+	material := issuedCertificate{ruleID: ruleID, providerID: 1}
+
+	// When
+	for attempt := range maxCertificateDeploymentAttempts {
+		_ = issuer.deploymentFailed(jobID, material, "reload failed", errors.New("reload failed"))
+		if attempt+1 < maxCertificateDeploymentAttempts {
+			if _, err := db.DB.Exec("UPDATE cert_jobs SET message='检测到已签发的有效证书，直接重新部署文件' WHERE id=?", jobID); err != nil {
+				t.Fatalf("overwrite deployment progress: %v", err)
+			}
+			material = retryMaterial
+		}
+	}
+
+	// Then
+	wantDelays := []time.Duration{
+		time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second,
+		32 * time.Second, 64 * time.Second, 128 * time.Second, 256 * time.Second,
+	}
+	if len(delays) != len(wantDelays) {
+		t.Fatalf("scheduled retries=%d, want %d", len(delays), len(wantDelays))
+	}
+	for i := range wantDelays {
+		if delays[i] != wantDelays[i] {
+			t.Fatalf("retry %d delay=%v, want %v", i+1, delays[i], wantDelays[i])
+		}
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+		t.Fatalf("read deployment retry status: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("deployment retry status=%q, want failed", status)
+	}
+}
+
+func TestCertificateDeploymentBackoff_caps_at_five_minutes(t *testing.T) {
+	if got := certificateDeploymentBackoff(20); got != 5*time.Minute {
+		t.Fatalf("deployment backoff=%v, want 5m", got)
 	}
 }

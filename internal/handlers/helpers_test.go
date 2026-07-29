@@ -278,6 +278,40 @@ func TestParseTLSCertificate_DaysUntilExpiry(t *testing.T) {
 	}
 }
 
+func TestParseTLSCertificate_keeps_empty_issuer_when_CN_and_organization_are_empty(t *testing.T) {
+	// Given
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	now := time.Now()
+	template := x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}))
+	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+
+	// When
+	info, err := parseTLSCertificate(certPEM, keyPEM)
+
+	// Then
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	if info.Issuer != "" {
+		t.Fatalf("issuer=%q, want empty", info.Issuer)
+	}
+}
+
 func TestValidateTLSCertificate(t *testing.T) {
 	now := time.Now()
 

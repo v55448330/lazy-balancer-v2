@@ -2,7 +2,7 @@
 bin/
 cmd/server/lazy-balancer
 lazy-balancer
-server
+/server
 
 # Data (runtime)
 data/

@@ -144,16 +144,18 @@ export function formatBytes(bytes: number): string {
 }
 
 export function isTokenExpired(token: string): boolean {
-  if (!token || token === 'null' || token === 'undefined') return false
+  if (!token || token === 'null' || token === 'undefined') return true
   try {
     const parts = token.split('.')
-    if (parts.length !== 3) return false
-    const payload = JSON.parse(atob(parts[1]))
-    if (!payload.exp) return false
+    if (parts.length !== 3) return true
+    const encodedPayload = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const paddedPayload = encodedPayload.padEnd(encodedPayload.length + (4 - encodedPayload.length % 4) % 4, '=')
+    const payload: unknown = JSON.parse(atob(paddedPayload))
+    if (!payload || typeof payload !== 'object' || !('exp' in payload) || typeof payload.exp !== 'number') return true
     const exp = payload.exp * 1000
     return Date.now() >= exp
   } catch {
-    return false
+    return true
   }
 }
 

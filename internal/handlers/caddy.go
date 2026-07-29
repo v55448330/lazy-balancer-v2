@@ -277,19 +277,12 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 
 func (h *Handlers) ValidateConfig(c *gin.Context) {
 	var configData map[string]interface{}
-	c.ShouldBindJSON(&configData)
-
-	// Call Caddy validate endpoint
-	resp, err := http.Post(h.cfg.CaddyAdminURL+"/adapt", "application/json", nil)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to validate config"})
+	if err := c.ShouldBindJSON(&configData); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid config JSON"})
 		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Config validation failed", Data: string(body)})
+	if err := h.caddyService.ValidateConfig(configData, ""); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Config validation failed", Data: err.Error()})
 		return
 	}
 

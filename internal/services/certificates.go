@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -14,35 +15,45 @@ import (
 )
 
 type CertificateService struct {
-	mu     sync.Mutex
-	stopCh chan struct{}
+	mu          sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelFunc
+	done        chan struct{}
+	recoverJobs func(context.Context)
 }
 
 func NewCertificateService() *CertificateService {
-	return &CertificateService{stopCh: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	service := &CertificateService{ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	service.recoverJobs = service.recoverCertJobs
+	return service
 }
 
 func (s *CertificateService) Start() {
+	defer close(s.done)
 	// Recover any jobs left in non-terminal states from a previous run.
-	s.recoverCertJobs()
+	s.recoverJobs(s.ctx)
 
 	// Run renewal check shortly after startup, then every 6 hours.
-	time.AfterFunc(30*time.Second, s.renewExpiringCertificates)
+	initialRenewal := time.NewTimer(30 * time.Second)
 	renewalTicker := time.NewTicker(6 * time.Hour)
 	manualTicker := time.NewTicker(10 * time.Minute)
 	waitingCATicker := time.NewTicker(30 * time.Second)
+	defer initialRenewal.Stop()
 	defer renewalTicker.Stop()
 	defer manualTicker.Stop()
 	defer waitingCATicker.Stop()
 	for {
 		select {
+		case <-initialRenewal.C:
+			s.renewExpiringCertificates()
 		case <-renewalTicker.C:
 			s.renewExpiringCertificates()
 		case <-manualTicker.C:
 			s.checkManualCertExpiration()
 		case <-waitingCATicker.C:
 			s.requeueWaitingCAJobs()
-		case <-s.stopCh:
+		case <-s.ctx.Done():
 			return
 		}
 	}
@@ -100,8 +111,8 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 // recoverCertJobs re-enqueues cert jobs that were not in a terminal state when
 // the process last exited. Jobs whose rule or CA provider no longer exist are
 // marked as failed.
-func (s *CertificateService) recoverCertJobs() {
-	rows, err := db.DB.Query(`
+func (s *CertificateService) recoverCertJobs(ctx context.Context) {
+	rows, err := db.DB.QueryContext(ctx, `
 		SELECT id, rule_id, domain, ca_provider_id FROM cert_jobs
 		WHERE status NOT IN ('issued','failed')
 		  AND (status != 'waiting_ca' OR ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))
@@ -119,6 +130,9 @@ func (s *CertificateService) recoverCertJobs() {
 	}
 
 	for rows.Next() {
+		if ctx.Err() != nil {
+			return
+		}
 		var jobID, caProviderID int
 		var ruleID, domain string
 		if err := rows.Scan(&jobID, &ruleID, &domain, &caProviderID); err != nil {
@@ -135,7 +149,7 @@ func (s *CertificateService) recoverCertJobs() {
 			continue
 		}
 
-		if _, err := db.DB.Exec(
+		if _, err := db.DB.ExecContext(ctx,
 			"UPDATE cert_jobs SET status='queued', message='等待排队签发', updated_at=datetime('now') WHERE id=?",
 			jobID,
 		); err != nil {
@@ -153,7 +167,10 @@ func (s *CertificateService) recoverCertJobs() {
 	}
 }
 
-func (s *CertificateService) Stop() { close(s.stopCh) }
+func (s *CertificateService) Stop() {
+	s.cancel()
+	<-s.done
+}
 
 // CreateOrRequeueCertJob creates a queued cert job for the rule and enqueues it.
 // Uses an atomic INSERT ... ON CONFLICT to avoid races between concurrent callers.

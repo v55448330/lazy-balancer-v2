@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -202,13 +203,13 @@ func newRuleFeatureTestHandlersWithCapture(t *testing.T) (*Handlers, *string) {
 	}, &postedConfig
 }
 
-func TestCreateRule_succeeds_with_all_feature_columns(t *testing.T) {
+func TestCreateRule_accepts_API_key_user_ID_and_succeeds_with_all_feature_columns(t *testing.T) {
 	// Given：全列 INSERT（曾出现 44/45 占位符不匹配，防回归）
 	handler, _ := newRuleFeatureTestHandlersWithCapture(t)
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/rules", func(c *gin.Context) {
-		c.Set("user_id", float64(1))
+		c.Set("user_id", 1)
 		handler.CreateRule(c)
 	})
 	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{
@@ -229,15 +230,16 @@ func TestCreateRule_succeeds_with_all_feature_columns(t *testing.T) {
 	}
 	var name string
 	var proxyProtocol bool
-	if err := db.DB.QueryRow(`SELECT name, COALESCE(tcp_proxy_protocol,0) FROM lb_rules WHERE listen_port=13000`).Scan(&name, &proxyProtocol); err != nil {
+	var createdBy int64
+	if err := db.DB.QueryRow(`SELECT name, COALESCE(tcp_proxy_protocol,0), created_by FROM lb_rules WHERE listen_port=13000`).Scan(&name, &proxyProtocol, &createdBy); err != nil {
 		t.Fatalf("read created rule: %v", err)
 	}
-	if !proxyProtocol {
-		t.Fatalf("tcp_proxy_protocol not persisted")
+	if !proxyProtocol || createdBy != 1 {
+		t.Fatalf("created rule proxy_protocol=%v created_by=%d", proxyProtocol, createdBy)
 	}
 }
 
-func TestDuplicateRule_copies_rule_upstreams_and_path_rules(t *testing.T) {
+func TestDuplicateRule_accepts_API_key_user_ID_and_copies_rule_upstreams_and_path_rules(t *testing.T) {
 	// Given：复制规则全链路（曾出现 48/46 与 9/10 占位符不匹配，防回归）
 	handler, _ := newRuleFeatureTestHandlersWithCapture(t)
 	gin.SetMode(gin.TestMode)
@@ -262,7 +264,7 @@ func TestDuplicateRule_copies_rule_upstreams_and_path_rules(t *testing.T) {
 	}
 	router := gin.New()
 	router.POST("/rules/:caddy_id/duplicate", func(c *gin.Context) {
-		c.Set("user_id", float64(1))
+		c.Set("user_id", 1)
 		handler.DuplicateRule(c)
 	})
 	request := httptest.NewRequest(http.MethodPost, "/rules/lb_dupsrc/duplicate", nil)
@@ -277,14 +279,52 @@ func TestDuplicateRule_copies_rule_upstreams_and_path_rules(t *testing.T) {
 	}
 	var newID, aclMode string
 	var upstreamCount, pathCount, customRoutes int
-	if err := db.DB.QueryRow(`SELECT caddy_id, ip_acl_mode, custom_routes_enabled,
+	var createdBy, updatedBy int64
+	if err := db.DB.QueryRow(`SELECT caddy_id, ip_acl_mode, custom_routes_enabled, created_by, updated_by,
 		(SELECT COUNT(*) FROM upstreams WHERE rule_id=lb_rules.caddy_id),
 		(SELECT COUNT(*) FROM path_rules WHERE rule_id=lb_rules.caddy_id)
-		FROM lb_rules WHERE caddy_id != 'lb_dupsrc'`).Scan(&newID, &aclMode, &customRoutes, &upstreamCount, &pathCount); err != nil {
+		FROM lb_rules WHERE caddy_id != 'lb_dupsrc'`).Scan(&newID, &aclMode, &customRoutes, &createdBy, &updatedBy, &upstreamCount, &pathCount); err != nil {
 		t.Fatalf("read duplicated rule: %v", err)
 	}
-	if newID == "" || aclMode != "allow" || customRoutes != 1 || upstreamCount != 1 || pathCount != 1 {
-		t.Fatalf("duplicated rule incomplete: id=%q acl=%q custom=%d ups=%d paths=%d", newID, aclMode, customRoutes, upstreamCount, pathCount)
+	if newID == "" || aclMode != "allow" || customRoutes != 1 || createdBy != 1 || updatedBy != 1 || upstreamCount != 1 || pathCount != 1 {
+		t.Fatalf("duplicated rule incomplete: id=%q acl=%q custom=%d created_by=%d updated_by=%d ups=%d paths=%d", newID, aclMode, customRoutes, createdBy, updatedBy, upstreamCount, pathCount)
+	}
+}
+
+func TestCreateRule_persists_requested_DNS_family(t *testing.T) {
+	tests := []struct {
+		family string
+		port   int
+	}{
+		{family: "ipv6", port: 13001},
+		{family: "both", port: 13002},
+	}
+	for _, test := range tests {
+		t.Run(test.family, func(t *testing.T) {
+			// Given
+			handler, _ := newRuleFeatureTestHandlersWithCapture(t)
+			router := gin.New()
+			router.POST("/rules", handler.CreateRule)
+			body := strings.NewReader(fmt.Sprintf(`{"name":"dns-%s","protocol":"tcp","listen_port":%d,"dynamic_dns":true,"dns_family":"%s","upstreams":[{"host":"example.test","port":9000,"enabled":true}]}`, test.family, test.port, test.family))
+			request := httptest.NewRequest(http.MethodPost, "/rules", body)
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// When
+			router.ServeHTTP(response, request)
+
+			// Then
+			if response.Code != http.StatusCreated {
+				t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+			}
+			var family string
+			if err := db.DB.QueryRow("SELECT dns_family FROM lb_rules WHERE listen_port = ?", test.port).Scan(&family); err != nil {
+				t.Fatalf("read dns_family: %v", err)
+			}
+			if family != test.family {
+				t.Fatalf("dns_family=%q, want %q", family, test.family)
+			}
+		})
 	}
 }
 

@@ -29,12 +29,12 @@ func (l *RuntimeLifecycle) StartACME() {
 func (l *RuntimeLifecycle) StopACME() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if queue := GetCAQueueManager(); queue != nil {
-		queue.Stop()
-	}
 	if l.certService != nil {
 		l.certService.Stop()
 		l.certService = nil
+	}
+	if queue := GetCAQueueManager(); queue != nil {
+		queue.Stop()
 	}
 }
 

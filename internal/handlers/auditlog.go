@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -57,10 +58,13 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	}
 
 	var logs []AuditLogEntry
-	var tzStr string
-	db.DB.QueryRow("SELECT COALESCE(timezone,'Asia/Shanghai') FROM global_config WHERE id=1").Scan(&tzStr)
-	loc, _ := time.LoadLocation(tzStr)
-	if loc == nil {
+	tzStr := "UTC"
+	if err := db.DB.QueryRow("SELECT COALESCE(timezone,'Asia/Shanghai') FROM global_config WHERE id=1").Scan(&tzStr); err != nil {
+		log.Printf("GetAuditLogs: failed to read configured timezone, using UTC: %v", err)
+	}
+	loc, err := time.LoadLocation(tzStr)
+	if err != nil {
+		log.Printf("GetAuditLogs: failed to load timezone %q, using UTC: %v", tzStr, err)
 		loc = time.UTC
 	}
 	usernames := map[string]struct{}{}
@@ -72,6 +76,7 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 			return
 		}
 		e.CreatedAt = createdAt.In(loc).Format("2006-01-02 15:04:05")
+		e.DisplayName = e.Username
 		if e.Username != "" {
 			usernames[e.Username] = struct{}{}
 		}
@@ -92,20 +97,27 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 			args = append(args, name)
 		}
 		userRows, err := db.DB.Query("SELECT username, COALESCE(NULLIF(TRIM(display_name), ''), username) FROM users WHERE username IN ("+strings.Join(placeholders, ",")+")", args...)
-		if err == nil {
+		if err != nil {
+			log.Printf("GetAuditLogs: failed to enrich usernames, using usernames: %v", err)
+		} else {
 			displayNames := map[string]string{}
 			for userRows.Next() {
 				var username, displayName string
-				if err := userRows.Scan(&username, &displayName); err == nil {
-					displayNames[username] = displayName
+				if err := userRows.Scan(&username, &displayName); err != nil {
+					log.Printf("GetAuditLogs: failed to scan username enrichment, using usernames: %v", err)
+					break
 				}
+				displayNames[username] = displayName
 			}
-			userRows.Close()
+			if err := userRows.Err(); err != nil {
+				log.Printf("GetAuditLogs: failed to iterate username enrichment, using available names: %v", err)
+			}
+			if err := userRows.Close(); err != nil {
+				log.Printf("GetAuditLogs: failed to close username enrichment rows: %v", err)
+			}
 			for i := range logs {
 				if displayName, ok := displayNames[logs[i].Username]; ok {
 					logs[i].DisplayName = displayName
-				} else {
-					logs[i].DisplayName = logs[i].Username
 				}
 			}
 		}

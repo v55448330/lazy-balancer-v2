@@ -177,3 +177,47 @@ func TestCAQueue_tick_fails_pending_job_when_provider_disabled(t *testing.T) {
 		t.Fatalf("job status=%q message=%q, want provider-unavailable failure", status, message)
 	}
 }
+
+func TestCAQueueManager_Stop_waits_for_in_progress_enqueue(t *testing.T) {
+	// Given
+	_, _ = newClusterTestService(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	manager := &CAQueueManager{
+		queues: make(map[int]*caQueue),
+		active: true,
+		beforeEnqueue: func() {
+			close(entered)
+			<-release
+		},
+	}
+	enqueueDone := make(chan error, 1)
+	go func() {
+		enqueueDone <- manager.Enqueue(1, 42, "lb_enqueue_stop", "example.com")
+	}()
+	<-entered
+	stopDone := make(chan struct{})
+	go func() {
+		manager.Stop()
+		close(stopDone)
+	}()
+
+	// When
+	select {
+	case <-stopDone:
+		t.Fatal("Stop completed while Enqueue was inside its manager critical section")
+	default:
+	}
+	close(release)
+
+	// Then
+	if err := <-enqueueDone; err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	<-stopDone
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.active || len(manager.queues) != 0 {
+		t.Fatalf("manager active=%v queues=%d, want stopped with no dead queues", manager.active, len(manager.queues))
+	}
+}

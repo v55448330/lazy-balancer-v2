@@ -27,6 +27,7 @@ type importRollbackHarness struct {
 	certDir       string
 	currentConfig func() string
 	loadCalls     func() int
+	failRestore   func()
 }
 
 func newImportRollbackHarness(t *testing.T) importRollbackHarness {
@@ -46,6 +47,7 @@ func newImportRollbackHarness(t *testing.T) importRollbackHarness {
 	var stateMu sync.Mutex
 	currentConfig := `{"marker":"before-import"}`
 	loads := 0
+	rejectLoads := false
 	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
 		switch {
@@ -62,6 +64,12 @@ func newImportRollbackHarness(t *testing.T) importRollbackHarness {
 			}
 			stateMu.Lock()
 			loads++
+			if rejectLoads {
+				stateMu.Unlock()
+				response.WriteHeader(http.StatusInternalServerError)
+				_, _ = response.Write([]byte("restore rejected"))
+				return
+			}
 			currentConfig = string(body)
 			stateMu.Unlock()
 			response.WriteHeader(http.StatusOK)
@@ -88,6 +96,11 @@ func newImportRollbackHarness(t *testing.T) importRollbackHarness {
 			stateMu.Lock()
 			defer stateMu.Unlock()
 			return loads
+		},
+		failRestore: func() {
+			stateMu.Lock()
+			rejectLoads = true
+			stateMu.Unlock()
 		},
 	}
 }
@@ -178,6 +191,52 @@ func TestImportV1Config_restores_partial_certificate_materialization(t *testing.
 	}
 	if harness.loadCalls() != 1 || harness.currentConfig() != `{"marker":"before-import"}` {
 		t.Fatalf("Caddy loads=%d config=%s, want one restore to pre-import config", harness.loadCalls(), harness.currentConfig())
+	}
+}
+
+func TestImportV1Config_reports_import_and_runtime_restore_failures(t *testing.T) {
+	// Given
+	harness := newImportRollbackHarness(t)
+	harness.failRestore()
+	backup := `{
+		"proxy_config":{"config":[{"pk":1,"fields":{"proxy_name":"bad-cert","protocol":true,"listen":8443,"server_name":"bad.example","ssl":true,"ssl_cert":"invalid-cert","ssl_key":"invalid-key","status":true,"upstream_list":[1]}}]},
+		"upstream_config":{"config":[{"pk":1,"fields":{"status":true,"address":"127.0.0.1","port":9000,"weight":100}}]}
+	}`
+	router := gin.New()
+	router.POST("/config/import/v1", harness.handler.ImportV1Config)
+
+	// When
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/config/import/v1", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+
+	// Then
+	body := response.Body.String()
+	if response.Code != http.StatusInternalServerError || !strings.Contains(body, "invalid certificate") || !strings.Contains(body, "restore rejected") {
+		t.Fatalf("status=%d body=%s, want joined import and restore errors", response.Code, body)
+	}
+	if strings.Contains(body, "已回滚") {
+		t.Fatalf("response falsely claims rollback success: %s", body)
+	}
+}
+
+func TestRestoreImportRuntime_reports_certificate_restore_failure(t *testing.T) {
+	// Given
+	harness := newImportRollbackHarness(t)
+	snapshot := importRuntimeSnapshot{
+		caddyConfig: map[string]interface{}{"marker": "before-import"},
+		certFiles: services.CertFilesSnapshot{
+			"../invalid": {},
+		},
+	}
+
+	// When
+	err := harness.handler.restoreImportRuntime(snapshot)
+
+	// Then
+	if err == nil || !strings.Contains(err.Error(), "非法的规则编号") {
+		t.Fatalf("restore error=%v, want certificate restore failure", err)
 	}
 }
 

@@ -8,6 +8,8 @@ func AuditResultText(result string) string {
 		return "成功"
 	case "failed":
 		return "失败"
+	case "partial":
+		return "部分成功"
 	case "max_attempts":
 		return "达到最大重试次数"
 	case "missing_material":

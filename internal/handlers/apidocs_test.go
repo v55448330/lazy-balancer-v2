@@ -45,3 +45,18 @@ func TestBuildOpenAPIYAML_contains_cluster_contract_and_valid_yaml(t *testing.T)
 		}
 	}
 }
+
+func TestBuildOpenAPIYAML_contains_active_configuration_and_certificate_paths(t *testing.T) {
+	openAPI := buildOpenAPIYAML()
+	var document struct {
+		Paths map[string]any `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal([]byte(openAPI), &document); err != nil {
+		t.Fatalf("parse generated OpenAPI YAML: %v", err)
+	}
+	for _, path := range []string{"/config/import/validate", "/certificate-configs", "/certificates", "/rules/:caddy_id/cert-info"} {
+		if _, exists := document.Paths[path]; !exists {
+			t.Errorf("OpenAPI missing active path %s", path)
+		}
+	}
+}

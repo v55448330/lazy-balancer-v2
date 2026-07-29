@@ -29,6 +29,7 @@ func TestExplicitAuditRoutesAreHandledByHandlers(t *testing.T) {
 		{"POST", "/api/v1/cluster/promote"},
 		{"POST", "/api/v1/rules"},
 		{"PUT", "/api/v1/rules/:caddy_id"},
+		{"POST", "/api/v1/rules/:caddy_id/acl"},
 		{"DELETE", "/api/v1/rules/:caddy_id"},
 		{"POST", "/api/v1/rules/:caddy_id/enable"},
 		{"PUT", "/api/v1/rules/:caddy_id/disable"},
@@ -67,6 +68,8 @@ func TestClassifyAuditRouteMatrix(t *testing.T) {
 		{"PUT", "/api/v1/config", AuditPolicyExplicit},
 		{"POST", "/api/v1/config/reload", AuditPolicyGeneric},
 		{"POST", "/api/v1/config/validate", AuditPolicySkip},
+		{"POST", "/api/v1/config/import/validate", AuditPolicySkip},
+		{"POST", "/api/v1/admin-tls/inspect", AuditPolicySkip},
 		{"POST", "/api/v1/cluster/sync/pull", AuditPolicyExplicit},
 		{"PATCH", "/api/v1/users/me", AuditPolicyExplicit},
 		{"POST", "/api/v1/rules/cert-info", AuditPolicySkip},
@@ -100,5 +103,17 @@ func TestClassifyAuditRouteMatrix(t *testing.T) {
 		if got := ClassifyAuditRoute(tt.method, tt.path); got != tt.policy {
 			t.Fatalf("ClassifyAuditRoute(%s) = %v, want %v", key, got, tt.policy)
 		}
+	}
+}
+
+func TestAuditResultText_translates_partial_result(t *testing.T) {
+	if got := AuditResultText("partial"); got != "部分成功" {
+		t.Fatalf("AuditResultText(partial)=%q, want 部分成功", got)
+	}
+}
+
+func TestHasExplicitAuditEvent_suppresses_generic_ACL_audit(t *testing.T) {
+	if !HasExplicitAuditEvent("POST", "/api/v1/rules/:caddy_id/acl") {
+		t.Fatal("ACL update would receive a second generic audit event")
 	}
 }

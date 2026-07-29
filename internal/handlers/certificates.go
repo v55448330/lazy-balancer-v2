@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -278,9 +280,24 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		CaddyID string `json:"caddy_id"`
 		Domain  string `json:"domain"`
 	}
-	_ = c.ShouldBindJSON(&req)
+	bindErr := c.ShouldBindJSON(&req)
+	scope := "范围：全部 ACME 规则"
+	if req.CaddyID != "" {
+		scope = fmt.Sprintf("规则：%s", req.CaddyID)
+	}
+	auditFailure := func(result string, detail ...string) {
+		parts := append([]string{scope}, detail...)
+		parts = append(parts, services.AuditResultPart(result))
+		recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(parts...))
+	}
+	if bindErr != nil && !(errors.Is(bindErr, io.EOF) && c.Request.ContentLength == 0) {
+		auditFailure("invalid_request")
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
+		return
+	}
 	qm := services.GetCAQueueManager()
 	if qm == nil {
+		auditFailure("failed", "CA 队列未初始化")
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化"})
 		return
 	}
@@ -291,10 +308,12 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		err := db.DB.QueryRow(`SELECT COALESCE(enabled,0), COALESCE(enable_tls,0), COALESCE(protocol,''), COALESCE(tls_source,''), COALESCE(domain,'') FROM lb_rules WHERE caddy_id = ?`, req.CaddyID).
 			Scan(&enabled, &enableTLS, &protocol, &tlsSource, &ruleDomain)
 		if err != nil {
+			auditFailure("failed", "规则不存在")
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 			return
 		}
 		if !enabled || protocol != "http" || !enableTLS || tlsSource != "acme_dns" {
+			auditFailure("failed", "规则状态不支持 ACME 签发")
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则不是启用状态的 ACME HTTPS 规则"})
 			return
 		}
@@ -306,10 +325,12 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			}
 		}
 		if !domainOK {
+			auditFailure("failed", "域名不属于该规则")
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名不属于该规则"})
 			return
 		}
 		if err := services.CreateOrRequeueCertJob(req.CaddyID, req.Domain, 0, qm); err != nil {
+			auditFailure("failed", "创建签发任务失败: "+err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建签发任务失败: " + err.Error()})
 			return
 		}
@@ -317,6 +338,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	} else {
 		rows, err := db.DB.Query("SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND protocol='http' AND COALESCE(domain,'') != ''")
 		if err != nil {
+			auditFailure("failed", "查询 ACME 规则失败: "+err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询 ACME 规则失败"})
 			return
 		}
@@ -324,7 +346,8 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		for rows.Next() {
 			var ruleID, domain string
 			if err := rows.Scan(&ruleID, &domain); err != nil {
-				rows.Close()
+				err = errors.Join(err, rows.Close())
+				auditFailure("failed", "读取 ACME 规则失败: "+err.Error())
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 ACME 规则失败: " + err.Error()})
 				return
 			}
@@ -335,23 +358,28 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			queued++
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			err = errors.Join(err, rows.Close())
+			auditFailure("failed", "遍历 ACME 规则失败: "+err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "遍历 ACME 规则失败: " + err.Error()})
 			return
 		}
-		rows.Close()
+		if err := rows.Close(); err != nil {
+			auditFailure("failed", "关闭 ACME 规则结果失败: "+err.Error())
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "关闭 ACME 规则结果失败: " + err.Error()})
+			return
+		}
 		if queued == 0 && len(failed) > 0 {
-			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(fmt.Sprintf("规则：%s", req.CaddyID), services.AuditResultPart("failed")))
+			auditFailure("failed")
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "全部签发任务创建失败: " + strings.Join(failed, "; ")})
 			return
 		}
 		if len(failed) > 0 {
-			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(fmt.Sprintf("规则：%s", req.CaddyID), fmt.Sprintf("入队 %d 个任务，失败 %d 个", queued, len(failed)), services.AuditResultPart("partial")))
+			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, fmt.Sprintf("入队 %d 个任务，失败 %d 个", queued, len(failed)), services.AuditResultPart("partial")))
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已创建 %d 个签发任务，%d 个失败: %s", queued, len(failed), strings.Join(failed, "; ")), Data: gin.H{"queued": queued, "failed": len(failed)}})
 			return
 		}
 	}
-	recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(fmt.Sprintf("规则：%s", req.CaddyID), fmt.Sprintf("入队 %d 个任务", queued), services.AuditResultPart("requested")))
+	recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, fmt.Sprintf("入队 %d 个任务", queued), services.AuditResultPart("requested")))
 	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已创建 %d 个签发任务", queued), Data: gin.H{"queued": queued}})
 }

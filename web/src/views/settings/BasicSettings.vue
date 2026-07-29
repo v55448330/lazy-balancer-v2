@@ -242,17 +242,20 @@ const appLogLoading = ref(false)
 const appLogAutoRefresh = ref(true)
 const appLogContainer = ref<HTMLElement | null>(null)
 let appLogTimer: ReturnType<typeof setInterval> | null = null
+let appLogRequestSeq = 0
 
 const fetchAppLogs = async (): Promise<void> => {
   if (appLogLoading.value) return
+  const requestSeq = ++appLogRequestSeq
   appLogLoading.value = true
   try {
     const res = await request.get<{ data?: { content?: string } }>('/system/logs')
+    if (requestSeq !== appLogRequestSeq || !appLogVisible.value) return
     appLogContent.value = res.data?.content || ''
     await nextTick()
     if (appLogContainer.value) appLogContainer.value.scrollTop = appLogContainer.value.scrollHeight
   } finally {
-    appLogLoading.value = false
+    if (requestSeq === appLogRequestSeq) appLogLoading.value = false
   }
 }
 
@@ -275,6 +278,8 @@ const onAppLogOpened = (): void => {
 
 const onAppLogClosed = (): void => {
   stopAppLogTimer()
+  appLogRequestSeq++
+  appLogLoading.value = false
   appLogContent.value = ''
 }
 

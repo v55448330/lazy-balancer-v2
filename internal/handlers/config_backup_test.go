@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -236,6 +238,39 @@ func TestConfigBackup_slave_mode_forbidden(t *testing.T) {
 	}
 }
 
+func TestDumpTable_uses_one_transaction_snapshot_across_tables(t *testing.T) {
+	// Given
+	_ = newBackupTestHandlers(t)
+	if _, err := db.DB.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		t.Fatalf("enable WAL: %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT INTO lb_rules (caddy_id, name, protocol, listen_port) VALUES ('lb_snapshot', 'before', 'http', 8080); INSERT INTO upstreams (rule_id, host, port) VALUES ('lb_snapshot', 'old-host', 9000)"); err != nil {
+		t.Fatalf("seed snapshot data: %v", err)
+	}
+	tx, err := db.DB.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatalf("begin read transaction: %v", err)
+	}
+	defer tx.Rollback()
+	if _, err := dumpTable(context.Background(), tx, "lb_rules"); err != nil {
+		t.Fatalf("read first table: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE upstreams SET host='new-host' WHERE rule_id='lb_snapshot'"); err != nil {
+		t.Fatalf("concurrent update: %v", err)
+	}
+
+	// When
+	upstreams, err := dumpTable(context.Background(), tx, "upstreams")
+
+	// Then
+	if err != nil {
+		t.Fatalf("read second table: %v", err)
+	}
+	if len(upstreams) != 1 || upstreams[0]["host"] != "old-host" {
+		t.Fatalf("upstream snapshot=%v, want old-host", upstreams)
+	}
+}
+
 func TestConfigBackup_import_rejects_invalid_file(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
@@ -409,5 +444,35 @@ func TestImportConfigBackup_restores_partial_certificate_materialization(t *test
 	}
 	if harness.loadCalls() != 1 || harness.currentConfig() != `{"marker":"before-import"}` {
 		t.Fatalf("Caddy loads=%d config=%s, want one restore to pre-import config", harness.loadCalls(), harness.currentConfig())
+	}
+}
+
+func TestImportConfigBackup_reports_import_and_runtime_restore_failures(t *testing.T) {
+	// Given
+	harness := newImportRollbackHarness(t)
+	harness.failRestore()
+	backup := `{
+		"meta":{"app":"lazy-balancer-v2","version":1},
+		"tables":{
+			"users":[],
+			"lb_rules":[{"caddy_id":"lb_bad_restore","name":"bad-cert","protocol":"http","listen_port":8443,"enable_tls":1,"tls_source":"manual","tls_cert":"invalid-cert","tls_key":"invalid-key"}]
+		}
+	}`
+	router := gin.New()
+	router.POST("/config/import", harness.handler.ImportConfigBackup)
+
+	// When
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+
+	// Then
+	body := response.Body.String()
+	if response.Code != http.StatusInternalServerError || !strings.Contains(body, "invalid certificate") || !strings.Contains(body, "restore rejected") {
+		t.Fatalf("status=%d body=%s, want joined import and restore errors", response.Code, body)
+	}
+	if strings.Contains(body, "已回滚") {
+		t.Fatalf("response falsely claims rollback success: %s", body)
 	}
 }

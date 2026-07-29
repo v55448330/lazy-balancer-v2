@@ -34,6 +34,8 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 					log.Printf("GetBranding: failed to write default branding file %s: %v", path, werr)
 				}
 			}
+		} else {
+			log.Printf("GetBranding: failed to read branding file %s, using defaults: %v", path, err)
 		}
 		cfg.Version = h.cfg.Version
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})

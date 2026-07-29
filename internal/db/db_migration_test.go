@@ -58,7 +58,7 @@ func TestMigrateLbRulesPrimaryKey_preserves_upstream_connection_settings(t *test
 func TestMigrateCertJobsStatusConstraint_rebuilds_incomplete_expanded_constraint(t *testing.T) {
 	// Given
 	database := openMigrationTestDB(t)
-	createLegacyCertJobs(t, database, "'queued','presenting_dns','disabled','waiting_order_ready'")
+	createLegacyCertJobs(t, database, "'queued'", "'queued','presenting_dns','disabled','waiting_order_ready'")
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status) VALUES
 		('lb_1', 'disabled.example', 'disabled'),
 		('lb_2', 'ready.example', 'waiting_order_ready')`); err != nil {
@@ -79,7 +79,7 @@ func TestMigrateCertJobsStatusConstraint_rebuilds_incomplete_expanded_constraint
 func TestMigrateCertJobsStatusConstraint_preserves_paused_and_acme_stage_statuses(t *testing.T) {
 	// Given
 	database := openMigrationTestDB(t)
-	createLegacyCertJobs(t, database, "'queued','disabled','waiting_order_ready'")
+	createLegacyCertJobs(t, database, "'queued'", "'queued','disabled','waiting_order_ready'")
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status) VALUES
 		('lb_1', 'disabled.example', 'disabled'),
 		('lb_2', 'ready.example', 'waiting_order_ready')`); err != nil {
@@ -114,6 +114,30 @@ func TestMigrateCertJobsStatusConstraint_preserves_paused_and_acme_stage_statuse
 	}
 	if got != len(want) {
 		t.Fatalf("migrated rows=%d, want %d (migration must not drop rows)", got, len(want))
+	}
+}
+
+func TestMigrateCertJobsStatusConstraint_repairs_incorrect_status_default(t *testing.T) {
+	// Given
+	database := openMigrationTestDB(t)
+	allStatuses := "'queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid'"
+	createLegacyCertJobs(t, database, "'pending'", allStatuses)
+
+	// When
+	if err := migrateCertJobsStatusConstraint(); err != nil {
+		t.Fatalf("migrate certificate job constraint: %v", err)
+	}
+	if _, err := database.Exec("INSERT INTO cert_jobs (rule_id, domain) VALUES ('lb_default', 'default.example')"); err != nil {
+		t.Fatalf("insert certificate job using default: %v", err)
+	}
+
+	// Then
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_default'").Scan(&status); err != nil {
+		t.Fatalf("read default status: %v", err)
+	}
+	if status != "queued" {
+		t.Fatalf("default status=%q, want queued", status)
 	}
 }
 
@@ -163,13 +187,13 @@ func openMigrationTestDB(t *testing.T) *sql.DB {
 	return database
 }
 
-func createLegacyCertJobs(t *testing.T, database *sql.DB, allowedStatuses string) {
+func createLegacyCertJobs(t *testing.T, database *sql.DB, defaultStatus, allowedStatuses string) {
 	t.Helper()
 	schema := fmt.Sprintf(`CREATE TABLE cert_jobs (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		rule_id TEXT NOT NULL,
 		domain TEXT NOT NULL,
-		status TEXT DEFAULT 'queued' CHECK (status IN (%s)),
+		status TEXT DEFAULT %s CHECK (status IN (%s)),
 		message TEXT,
 		expires_at DATETIME,
 		cert_pem TEXT,
@@ -180,7 +204,7 @@ func createLegacyCertJobs(t *testing.T, database *sql.DB, allowedStatuses string
 		last_error_code TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME
-	)`, allowedStatuses)
+	)`, defaultStatus, allowedStatuses)
 	if _, err := database.Exec(schema); err != nil {
 		t.Fatalf("create legacy certificate jobs table: %v", err)
 	}

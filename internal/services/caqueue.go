@@ -14,10 +14,11 @@ import (
 
 // CAQueueManager schedules ACME issuance jobs per CA provider.
 type CAQueueManager struct {
-	mu       sync.Mutex
-	queues   map[int]*caQueue
-	reloader func() error
-	active   bool
+	mu            sync.Mutex
+	queues        map[int]*caQueue
+	reloader      func() error
+	active        bool
+	beforeEnqueue func()
 }
 
 var (
@@ -42,6 +43,15 @@ func InitCAQueueManager(reloader func() error) {
 // must have been called first.
 func GetCAQueueManager() *CAQueueManager {
 	return caQueueManager
+}
+
+// ResetCAQueueManagerForTest 停止并清空单例，仅供测试隔离使用
+func ResetCAQueueManagerForTest() {
+	if caQueueManager != nil {
+		caQueueManager.Stop()
+	}
+	caQueueManager = nil
+	caQueueManagerOnce = sync.Once{}
 }
 
 // CancelJob aborts an in-flight issuance for the given job across all
@@ -142,13 +152,15 @@ func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains stri
 		q.provider = provider
 		q.mu.Unlock()
 	}
-	m.mu.Unlock()
-
+	if m.beforeEnqueue != nil {
+		m.beforeEnqueue()
+	}
 	q.enqueue(queueItem{
 		jobID:   jobID,
 		ruleID:  ruleID,
 		domains: domains,
 	})
+	m.mu.Unlock()
 	return nil
 }
 

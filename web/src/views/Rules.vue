@@ -1192,6 +1192,7 @@ const certInfoMap = ref<Record<string, CertInfo | null>>({})
 const certJobMap = ref<Record<string, CertJob>>({})
 const ruleTogglePending = ref<Record<string, boolean>>({})
 let certInfoRequestSeq = 0
+let rulesRequestSeq = 0
 
 const getUpdaterName = (userId?: number) => {
   if (!userId || userId === 0) return '-'
@@ -1212,9 +1213,11 @@ const getUpdaterName = (userId?: number) => {
 }
 
 const fetchRules = async () => {
+  const requestSeq = ++rulesRequestSeq
   loading.value = true
   try {
     const res = await request.get<APIResponse<Rule[]>>('/rules')
+    if (requestSeq !== rulesRequestSeq) return
     rules.value = res.data || []
     // Fetch health status after rules are loaded
     fetchHealthStatus()
@@ -1223,7 +1226,7 @@ const fetchRules = async () => {
     // Fetch cert job statuses for ACME rules
     fetchCertJobs()
   } finally {
-    loading.value = false
+    if (requestSeq === rulesRequestSeq) loading.value = false
   }
 }
 
@@ -1603,9 +1606,11 @@ const wizardForm = reactive<RuleForm>({
   proxy_write_timeout: 0,
   proxy_stream_timeout: 0,
 })
+let hydratingWizard = false
 
 // Watch for enable_tls toggle to adjust default listen port
 watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
+  if (hydratingWizard) return
   if (wizardForm.protocol !== 'http') return
   if (newVal && !oldVal) {
     // Enabling HTTPS: default to 443 if currently using the HTTP default 80
@@ -1618,10 +1623,11 @@ watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
       wizardForm.listen_port = 80
     }
   }
-})
+}, { flush: 'sync' })
 
 // Watch for protocol changes to adjust defaults for TCP rules
 watch(() => wizardForm.protocol, (newVal, oldVal) => {
+  if (hydratingWizard) return
   if (newVal !== 'tcp') wizardForm.tcp_proxy_protocol = false
   if (newVal === 'tcp') {
     // Switching to TCP: use a neutral high port and plain TCP upstreams
@@ -1646,7 +1652,7 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
       }
     })
   }
-})
+}, { flush: 'sync' })
 
 // Watch for enable_dns_server toggle to clear DNS fields when disabled
 watch(() => wizardForm.enable_dns_server, (newVal) => {
@@ -1882,6 +1888,7 @@ const pasteFromFile = async (type: 'cert' | 'key') => {
 
 const openWizard = (rule?: Rule) => {
   if (isReadOnly.value || saving.value) return
+  hydratingWizard = true
   certValidationSessionSeq++
   certValidationSeq++
   resetCertInfo()
@@ -1998,6 +2005,7 @@ const openWizard = (rule?: Rule) => {
       proxy_stream_timeout: 0,
     })
   }
+  hydratingWizard = false
   currentStep.value = WIZARD_STEP.BASIC
   wizardVisible.value = true
 }
@@ -2316,6 +2324,7 @@ const duplicateRule = async (rule: Rule) => {
 
 const openCopyWizard = (rule: Rule) => {
   if (saving.value) return
+  hydratingWizard = true
   certValidationSessionSeq++
   certValidationSeq++
   resetCertInfo()
@@ -2382,6 +2391,7 @@ const openCopyWizard = (rule: Rule) => {
       compress_types: compressType,
       enabled: false,
     })
+  hydratingWizard = false
   currentStep.value = WIZARD_STEP.BASIC
   wizardVisible.value = true
 }

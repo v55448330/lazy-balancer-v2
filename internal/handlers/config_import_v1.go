@@ -3,8 +3,8 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -371,35 +371,36 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败: " + err.Error()})
 		return
 	}
-	restoreRuntime := func() {
+	restoreRuntime := func(importErr error) error {
 		if restoreErr := h.restoreImportRuntime(runtimeSnapshot); restoreErr != nil {
-			log.Printf("v1 导入失败后恢复运行配置失败: %v", restoreErr)
+			return errors.Join(importErr, fmt.Errorf("恢复运行配置失败: %w", restoreErr))
 		}
+		return importErr
 	}
 	if err := materializeImportCertificates(pendingCerts); err != nil {
-		restoreRuntime()
+		err = restoreRuntime(err)
 		h.caddyOpMu.Unlock()
 		recordAudit(c, "导入失败", "配置备份", err.Error())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "准备证书文件失败，已回滚: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "准备证书文件失败: " + err.Error()})
 		return
 	}
 	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
-		restoreRuntime()
+		err = restoreRuntime(err)
 		h.caddyOpMu.Unlock()
 		recordAudit(c, "导入失败", "配置备份", "Caddy 配置验证未通过，数据库未变更: "+err.Error())
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份生成的配置未通过 Caddy 验证，未执行导入: " + err.Error()})
 		return
 	}
 	if err := services.BumpClusterVersion(ctx, tx); err != nil {
-		restoreRuntime()
+		err = restoreRuntime(err)
 		h.caddyOpMu.Unlock()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新配置版本失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新配置版本失败: " + err.Error()})
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		restoreRuntime()
+		err = restoreRuntime(err)
 		h.caddyOpMu.Unlock()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交导入失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交导入失败: " + err.Error()})
 		return
 	}
 	committed = true

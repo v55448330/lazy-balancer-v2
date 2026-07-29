@@ -64,6 +64,7 @@ export const useAuthStore = defineStore('auth', () => {
           id: res.data.id,
           username: res.data.username,
           role: res.data.role,
+          is_enabled: res.data.is_enabled,
           display_name: normalizeDisplayName(res.data.display_name, res.data.username),
         }
       }

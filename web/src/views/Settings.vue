@@ -134,11 +134,13 @@ const descs: Record<string, string> = {
 
 const pageTitle = computed(() => titles[activeTab.value] || '系统设置')
 const pageDesc = computed(() => descs[activeTab.value] || '')
+let settingsRequestSeq = 0
 
 const fetchSettings = async () => {
+  const requestSeq = ++settingsRequestSeq
   try {
     const res = await request.get('/config')
-    if (res.data) {
+    if (requestSeq === settingsRequestSeq && res.data) {
       settings.value = {
         log_level: res.data.log_level || 'info',
         caddy_log_path: res.data.caddy_log_path || '/app/logs/caddy.log',

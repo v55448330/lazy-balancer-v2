@@ -6,7 +6,8 @@ export interface NullableString {
 export interface User {
   id: number
   username: string
-  role: string
+  role: 'admin' | 'user'
+  is_enabled?: boolean
   display_name?: string | NullableString | null
   created_at?: string | null
   last_login?: string | null

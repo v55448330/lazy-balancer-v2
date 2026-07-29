@@ -1,8 +1,10 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -13,18 +15,59 @@ import (
 
 var currentLocation atomic.Value
 
+var timezoneRefresh struct {
+	sync.Mutex
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
 func init() {
 	currentLocation.Store(time.FixedZone("CST", 8*3600))
+	StartTimezoneRefresh(context.Background())
+}
+
+func StartTimezoneRefresh(ctx context.Context) <-chan struct{} {
+	timezoneRefresh.Lock()
+	defer timezoneRefresh.Unlock()
+	if timezoneRefresh.cancel != nil {
+		timezoneRefresh.cancel()
+		<-timezoneRefresh.done
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	timezoneRefresh.cancel = cancel
+	timezoneRefresh.done = done
 	go func() {
+		defer close(done)
 		if err := refreshLocation(); err != nil {
 			log.Printf("refresh timezone: %v", err)
 		}
-		for range time.Tick(30 * time.Second) {
-			if err := refreshLocation(); err != nil {
-				log.Printf("refresh timezone: %v", err)
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := refreshLocation(); err != nil {
+					log.Printf("refresh timezone: %v", err)
+				}
+			case <-workerCtx.Done():
+				return
 			}
 		}
 	}()
+	return done
+}
+
+func StopTimezoneRefresh() {
+	timezoneRefresh.Lock()
+	defer timezoneRefresh.Unlock()
+	if timezoneRefresh.cancel == nil {
+		return
+	}
+	timezoneRefresh.cancel()
+	<-timezoneRefresh.done
+	timezoneRefresh.cancel = nil
+	timezoneRefresh.done = nil
 }
 
 func refreshLocation() error {

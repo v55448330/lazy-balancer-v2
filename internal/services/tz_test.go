@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -35,4 +36,23 @@ func TestRefreshLocation_updates_current_location_without_mutating_timeLocal(t *
 	if CurrentLocation() != time.UTC {
 		t.Fatalf("current location=%v, want UTC", CurrentLocation())
 	}
+}
+
+func TestTimezoneRefresh_stops_and_waits_when_context_is_canceled(t *testing.T) {
+	// Given
+	StopTimezoneRefresh()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := StartTimezoneRefresh(ctx)
+
+	// When
+	cancel()
+	<-done
+
+	// Then
+	select {
+	case <-done:
+	default:
+		t.Fatal("timezone refresh did not stop")
+	}
+	t.Cleanup(func() { StartTimezoneRefresh(context.Background()) })
 }
