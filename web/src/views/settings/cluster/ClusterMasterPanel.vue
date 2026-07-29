@@ -60,7 +60,7 @@
         </template>
       </el-table-column>
       <el-table-column label="最后上报时间" min-width="170">
-        <template #default="{ row }">{{ formatTime(row.last_seen) }}</template>
+        <template #default="{ row }">{{ formatDate(row.last_seen) || '-' }}</template>
       </el-table-column>
       <el-table-column label="操作" width="150" fixed="right" align="center">
         <template #default="{ row }">
@@ -116,7 +116,6 @@ const statusLabel = (status: ClusterNodeStatus): string => {
   return '离线'
 }
 
-const formatTime = (value: string): string => formatDate(value) || '-'
 </script>
 
 <style scoped>

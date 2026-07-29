@@ -11,7 +11,7 @@
     <el-table-column prop="domain" label="域名" min-width="180" show-overflow-tooltip />
     <el-table-column prop="status" label="状态" width="90" align="center">
       <template #default="{ row }">
-        <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+        <el-tag :type="statusType(row.status)" size="small">{{ certJobStatusLabel(row.status) }}</el-tag>
       </template>
     </el-table-column>
     <el-table-column label="颁发者" width="110" show-overflow-tooltip>
@@ -98,30 +98,8 @@ import { useAuthStore } from '@/stores/auth'
 import * as pkijs from 'pkijs'
 import * as asn1js from 'asn1js'
 import type { APIResponse } from '@/types'
-
-type CertJobStatus =
-  | 'queued'
-  | 'pending'
-  | 'processing'
-  | 'creating_account'
-  | 'creating_order'
-  | 'order_created'
-  | 'cleanup_dns'
-  | 'cleanup_warning'
-  | 'presenting_dns'
-  | 'waiting_propagation'
-  | 'dns_propagated'
-  | 'accepting_challenge'
-  | 'validating'
-  | 'validated'
-  | 'finalizing'
-  | 'finalized'
-  | 'downloading'
-  | 'downloaded'
-  | 'issued'
-  | 'failed'
-  | 'waiting_ca'
-  | 'disabled'
+import { certJobStatusLabel } from '@/utils/certJobStatus'
+import type { CertJobStatus } from '@/utils/certJobStatus'
 
 interface CertJob {
   id: number
@@ -194,12 +172,16 @@ const statusType = (status: CertJobStatus) => {
     case 'creating_account':
     case 'creating_order':
     case 'order_created':
+    case 'waiting_order_ready':
+    case 'order_ready':
     case 'cleanup_dns':
     case 'cleanup_warning':
     case 'presenting_dns':
     case 'waiting_propagation':
     case 'dns_propagated':
     case 'accepting_challenge':
+    case 'waiting_order_valid':
+    case 'order_valid':
     case 'validating':
     case 'validated':
     case 'finalizing':
@@ -211,50 +193,19 @@ const statusType = (status: CertJobStatus) => {
   }
 }
 
-const statusLabel = (status: CertJobStatus) => {
-  switch (status) {
-    case 'issued': return '已签发'
-    case 'failed': return '失败'
-    case 'disabled': return '已禁用'
-    case 'queued': return '排队中'
-    case 'waiting_ca': return '等待 CA'
-    case 'pending': return '待处理'
-    case 'processing': return '处理中'
-    case 'creating_account': return '创建账户'
-    case 'creating_order': return '创建订单'
-    case 'order_created': return '订单已创建'
-    case 'cleanup_dns': return '清理 DNS'
-    case 'cleanup_warning': return '清理警告'
-    case 'presenting_dns': return '设置 DNS'
-    case 'waiting_propagation': return '等待 DNS'
-    case 'dns_propagated': return 'DNS 已传播'
-    case 'accepting_challenge': return '提交验证'
-    case 'validating': return '验证中'
-    case 'validated': return '验证通过'
-    case 'finalizing': return '最终化'
-    case 'finalized': return '订单完成'
-    case 'downloading': return '下载证书'
-    case 'downloaded': return '下载完成'
-    default: return status
-  }
-}
-
 const canRetry = (status: CertJobStatus) => {
   return status !== 'queued' && status !== 'pending' && status !== 'disabled'
 }
 
 const isQueued = (status: CertJobStatus) => status === 'queued'
 
-const renewalInfo = (row: CertJob): { renewalDate?: string; willRenew: boolean } => {
+const renewalInfo = (row: CertJob): { renewalDate?: string } => {
   const info = certInfoMap.value[row.id]
-  if (!info) return { willRenew: false }
+  if (!info) return {}
   const expiry = new Date(info.not_after)
-  if (isNaN(expiry.getTime())) return { willRenew: false }
+  if (isNaN(expiry.getTime())) return {}
   const renewal = new Date(expiry.getTime() - certRenewalDays.value * 24 * 60 * 60 * 1000)
-  return {
-    renewalDate: formatDate(renewal.toISOString()),
-    willRenew: true,
-  }
+  return { renewalDate: formatDate(renewal.toISOString()) }
 }
 
 const formatCoolingTime = (iso: string): string => {

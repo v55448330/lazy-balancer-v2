@@ -63,9 +63,14 @@ func main() {
 
 	var tz string
 	if err := db.DB.QueryRow("SELECT COALESCE(timezone,'Asia/Shanghai') FROM global_config WHERE id=1").Scan(&tz); err == nil && tz != "" {
-		os.Setenv("TZ", tz)
-		time.LoadLocation(tz)
-		log.Printf("Timezone set to %s", tz)
+		if err := os.Setenv("TZ", tz); err != nil {
+			log.Printf("Failed to set TZ environment: %v", err)
+		} else if loc, err := services.ConfigureLocation(tz); err != nil {
+			log.Printf("Failed to load timezone %s: %v", tz, err)
+		} else {
+			time.Local = loc
+			log.Printf("Timezone set to %s", tz)
+		}
 	}
 
 	// Initialize services
@@ -77,7 +82,7 @@ func main() {
 	metricsService := services.NewMetricsService(cfg.CaddyMetricsURL, cfg.MetricsInterval)
 	syncService := services.NewSyncService(db.DB, cfg, caddyService)
 	lifecycle := services.NewRuntimeLifecycle(syncService, func() *services.CertificateService {
-		return services.NewCertificateService(cfg.CaddyAdminURL, caddyReloader)
+		return services.NewCertificateService()
 	})
 	clusterService := services.NewClusterService(db.DB, lifecycle)
 	caProviderService := services.NewCAProviderService()
@@ -118,6 +123,7 @@ func main() {
 		<-quit
 		log.Println("Shutting down...")
 		metricsService.Stop()
+		services.StopAuditCleanup()
 		lifecycle.Shutdown()
 		os.Exit(0)
 	}()

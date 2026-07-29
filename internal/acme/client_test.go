@@ -1,6 +1,9 @@
 package acme
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,5 +29,27 @@ func TestACMEAccountKeyPath_includes_EAB_KID_and_full_hash(t *testing.T) {
 	base := strings.TrimSuffix(filepath.Base(first), ".key")
 	if len(base) != 64 {
 		t.Fatalf("account hash length=%d, want 64", len(base))
+	}
+}
+
+func TestClient_FetchCert_uses_certificate_downloaded_during_finalize(t *testing.T) {
+	// Given
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests++
+	}))
+	defer server.Close()
+	want := [][]byte{{1, 2, 3}, {4, 5, 6}}
+	client := &Client{finalizedCerts: map[string][][]byte{server.URL + "/cert": want}}
+
+	// When
+	got, err := client.FetchCert(context.Background(), server.URL+"/cert")
+
+	// Then
+	if err != nil {
+		t.Fatalf("fetch finalized certificate: %v", err)
+	}
+	if requests != 0 || len(got) != 2 || string(got[0]) != string(want[0]) || string(got[1]) != string(want[1]) {
+		t.Fatalf("requests=%d certificate=%v, want cached %v", requests, got, want)
 	}
 }

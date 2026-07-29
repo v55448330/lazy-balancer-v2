@@ -1,10 +1,12 @@
 package middleware
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
-	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -13,18 +15,92 @@ import (
 
 func clusterVersionMiddleware(database *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !isSynchronizedWrite(c.Request.Method, c.FullPath()) {
+			c.Next()
+			return
+		}
+		originalWriter := c.Writer
+		bufferedWriter := &clusterVersionResponseWriter{ResponseWriter: originalWriter}
+		c.Writer = bufferedWriter
 		c.Next()
-		if c.Writer.Status() >= http.StatusBadRequest || !isSynchronizedWrite(c.Request.Method, c.FullPath()) {
+		if bufferedWriter.Status() >= http.StatusBadRequest {
+			bufferedWriter.flush(c, originalWriter)
 			return
 		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
+		defer cancel()
 		var isMaster bool
-		if err := database.QueryRowContext(c.Request.Context(), "SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		if err := database.QueryRowContext(ctx, "SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
+			writeClusterVersionError(c, originalWriter, err)
 			return
 		}
-		if err := services.BumpClusterVersion(c.Request.Context(), database); err != nil {
-			log.Printf("cluster version bump failed for %s %s: %v", c.Request.Method, c.FullPath(), err)
+		if !isMaster {
+			bufferedWriter.flush(c, originalWriter)
+			return
 		}
+		if err := services.BumpClusterVersion(ctx, database); err != nil {
+			writeClusterVersionError(c, originalWriter, err)
+			return
+		}
+		bufferedWriter.flush(c, originalWriter)
 	}
+}
+
+type clusterVersionResponseWriter struct {
+	gin.ResponseWriter
+	body   bytes.Buffer
+	status int
+}
+
+func (w *clusterVersionResponseWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+}
+
+func (w *clusterVersionResponseWriter) WriteHeaderNow() {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+}
+
+func (w *clusterVersionResponseWriter) Write(data []byte) (int, error) {
+	w.WriteHeaderNow()
+	return w.body.Write(data)
+}
+
+func (w *clusterVersionResponseWriter) WriteString(data string) (int, error) {
+	w.WriteHeaderNow()
+	return w.body.WriteString(data)
+}
+
+func (w *clusterVersionResponseWriter) Status() int {
+	if w.status == 0 {
+		return http.StatusOK
+	}
+	return w.status
+}
+
+func (w *clusterVersionResponseWriter) Size() int     { return w.body.Len() }
+func (w *clusterVersionResponseWriter) Written() bool { return w.status != 0 }
+func (w *clusterVersionResponseWriter) Flush()        { w.WriteHeaderNow() }
+
+func (w *clusterVersionResponseWriter) flush(c *gin.Context, original gin.ResponseWriter) {
+	c.Writer = original
+	original.WriteHeader(w.Status())
+	if w.body.Len() == 0 {
+		return
+	}
+	if _, err := original.Write(w.body.Bytes()); err != nil {
+		_ = c.Error(err)
+	}
+}
+
+func writeClusterVersionError(c *gin.Context, original gin.ResponseWriter, err error) {
+	c.Writer = original
+	original.Header().Del("Content-Length")
+	c.Error(err)
+	c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "cluster version update failed"})
 }
 
 func isSynchronizedWrite(method, path string) bool {

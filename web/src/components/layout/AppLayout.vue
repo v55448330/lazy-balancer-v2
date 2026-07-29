@@ -2,7 +2,7 @@
   <el-container class="layout-container">
     <el-aside :width="effectiveCollapsed ? '64px' : '220px'" class="layout-aside">
       <div class="aside-header">
-        <div class="logo-area" @click="collapsed = !collapsed">
+        <div class="logo-area" role="button" tabindex="0" aria-label="切换侧边栏" @click="collapsed = !collapsed" @keydown.enter.prevent="collapsed = !collapsed" @keydown.space.prevent="collapsed = !collapsed">
           <AppLogo :size="28" />
           <transition name="fade">
             <span v-if="!effectiveCollapsed" class="logo-text">

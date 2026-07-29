@@ -68,6 +68,7 @@ const loading = ref(false)
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
+let requestSeq = 0
 
 const actionTagType = (action: string) => {
   if (action === '创建' || action === '启用' || action === '审批' || action === '签发成功' || action === '测试成功' || action === '登录成功' || action === '恢复') return 'success'
@@ -77,15 +78,19 @@ const actionTagType = (action: string) => {
 }
 
 const fetchLogs = async () => {
+  const targetPage = page.value
+  const targetPageSize = pageSize.value
+  const currentRequestSeq = ++requestSeq
   loading.value = true
   try {
-    const res = await request.get<{ data?: { list?: AuditLogEntry[]; total?: number } }>('/audit-logs', { params: { page: page.value, page_size: pageSize.value } })
+    const res = await request.get<{ data?: { list?: AuditLogEntry[]; total?: number } }>('/audit-logs', { params: { page: targetPage, page_size: targetPageSize } })
+    if (currentRequestSeq !== requestSeq || page.value !== targetPage || pageSize.value !== targetPageSize) return
     logs.value = res.data?.list || []
     total.value = res.data?.total || 0
   } catch (e) {
     console.error('Failed to fetch audit logs:', e)
   } finally {
-    loading.value = false
+    if (currentRequestSeq === requestSeq) loading.value = false
   }
 }
 

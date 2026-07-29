@@ -1,6 +1,13 @@
 package dnsproviders
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"lazy-balancer-v2/internal/dnsprovider"
+)
 
 func TestDNSPodCredentials(t *testing.T) {
 	p, ok := Get("dnspod")
@@ -24,6 +31,31 @@ func TestDNSPodCredentials(t *testing.T) {
 	}
 	if tencent["api_token"] != "sid,skey" {
 		t.Fatalf("expected tencent api_token sid,skey, got %v", tencent["api_token"])
+	}
+}
+
+type cleanupFailingProvider struct{}
+
+func (cleanupFailingProvider) Present(context.Context, string, string, string, int) error { return nil }
+func (cleanupFailingProvider) CleanUp(context.Context, string, string) error {
+	return errors.New("cleanup failed")
+}
+
+func TestDNSPod_Validate_returns_cleanup_error(t *testing.T) {
+	// Given
+	originalFactory := newDNSProviderFromCredentials
+	newDNSProviderFromCredentials = func(string) (dnsprovider.Provider, error) {
+		return cleanupFailingProvider{}, nil
+	}
+	t.Cleanup(func() { newDNSProviderFromCredentials = originalFactory })
+	provider := &DNSPod{}
+
+	// When
+	err := provider.Validate(map[string]string{"auth_mode": "dnspod", "app_id": "123", "app_token": "abc"}, "example.com")
+
+	// Then
+	if err == nil || !strings.Contains(err.Error(), "cleanup failed") {
+		t.Fatalf("cleanup error=%v, want cleanup failure", err)
 	}
 }
 

@@ -403,6 +403,10 @@ func restoreRuleSnapshot(ctx context.Context, caddyID string, ruleRow map[string
 	return nil
 }
 
+func derefBool(p *bool) bool {
+	return p != nil && *p
+}
+
 const lbRuleColumns = `COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port, COALESCE(strategy,''),
 	COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
 	COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,5), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
@@ -489,7 +493,7 @@ func loadUpstreamsBatch(ctx context.Context, ruleIDs []string) (map[string][]mod
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	rows, err := db.DB.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0)
+	rows, err := db.DB.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), COALESCE(enabled,1), COALESCE(protocol,'http'), COALESCE(max_connections,0)
 		FROM upstreams WHERE rule_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("批量读取上游: %w", err)

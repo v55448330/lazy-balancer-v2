@@ -253,7 +253,7 @@
           <el-table :data="sortedRules" stripe :header-cell-style="{ background: '#f9fafb' }">
             <el-table-column prop="name" label="规则名称" min-width="150">
               <template #default="{ row }">
-                <el-link type="primary" :underline="false" @click.prevent="openRuleHistory(row)">{{ row.name }}</el-link>
+                <el-link type="primary" :underline="false" role="button" tabindex="0" @click.prevent="openRuleHistory(row)" @keydown.enter.prevent="openRuleHistory(row)" @keydown.space.prevent="openRuleHistory(row)">{{ row.name }}</el-link>
               </template>
             </el-table-column>
             <el-table-column label="协议" width="90">
@@ -628,6 +628,8 @@ const connChartOption = computed<EChartsOption>(() => ({
 }))
 
 let timer: number | null = null
+let statusRefreshTimer: number | null = null
+let statusConfirmTimer: number | null = null
 let fetchAllDataPromise: Promise<void> | null = null
 let isFetchingRuleHealth = false
 let isFetchingRuleMetrics = false
@@ -811,8 +813,10 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
     authStore.showToast('success', `Caddy ${actionText}成功`)
     
     // Also fetch actual status to confirm
-    setTimeout(fetchAllData, 1000)
-    setTimeout(fetchAllData, 2500)
+    if (statusRefreshTimer) clearTimeout(statusRefreshTimer)
+    if (statusConfirmTimer) clearTimeout(statusConfirmTimer)
+    statusRefreshTimer = window.setTimeout(fetchAllData, 1000)
+    statusConfirmTimer = window.setTimeout(fetchAllData, 2500)
   } catch (error: unknown) {
     if (error === 'cancel') return
     const msg = error instanceof Error ? error.message : '操作失败'
@@ -831,6 +835,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (timer) clearInterval(timer)
+  if (statusRefreshTimer) clearTimeout(statusRefreshTimer)
+  if (statusConfirmTimer) clearTimeout(statusConfirmTimer)
 })
 </script>
 

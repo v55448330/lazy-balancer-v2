@@ -10,6 +10,8 @@ import (
 	"lazy-balancer-v2/internal/dnsprovider"
 )
 
+var newDNSProviderFromCredentials = dnsprovider.NewProviderFromCredentials
+
 func init() { Register(&DNSPod{}) }
 
 type DNSPod struct {
@@ -89,7 +91,7 @@ func (d *DNSPod) Validate(creds map[string]string, testDomain string) error {
 	if err != nil {
 		return err
 	}
-	provider, err := dnsprovider.NewProviderFromCredentials(rawJSON)
+	provider, err := newDNSProviderFromCredentials(rawJSON)
 	if err != nil {
 		return err
 	}
@@ -105,8 +107,10 @@ func (d *DNSPod) Validate(creds map[string]string, testDomain string) error {
 	}
 	challengeName := "_acme-challenge.lb-test." + domain
 	if err := provider.Present(ctx, domain, challengeName, "lazy-balancer-test", 600); err != nil {
-		return fmt.Errorf("DNS 写入测试失败: %v", err)
+		return fmt.Errorf("DNS 写入测试失败: %w", err)
 	}
-	_ = provider.CleanUp(ctx, domain, challengeName)
+	if err := provider.CleanUp(ctx, domain, challengeName); err != nil {
+		return fmt.Errorf("DNS 清理测试失败: %w", err)
+	}
 	return nil
 }

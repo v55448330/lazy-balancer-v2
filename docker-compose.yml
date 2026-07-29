@@ -15,9 +15,6 @@ services:
       - TZ=Asia/Shanghai
       - NODE_NAME=master
       - LOG_FILE=/app/logs/lazy-balancer.log
-      # DNSPod credentials (optional):
-      # - DNSPOD_ID=your_id
-      # - DNSPOD_TOKEN=your_token
     restart: unless-stopped
 
   # 从节点测试实例：bridge 网络，仅将容器 8000 映射到宿主机 8001，避免与主节点(host 网络)端口冲突

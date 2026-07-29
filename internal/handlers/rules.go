@@ -92,29 +92,14 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		return
 	}
 
-	upstreamRows, err := db.DB.Query(`
-		SELECT host, port, COALESCE(weight,1), COALESCE(protocol,'http'), enabled, COALESCE(max_connections,0)
-		FROM upstreams WHERE rule_id = ? AND enabled = 1
-	`, caddyID)
-	if err != nil {
+	var upstreamCount int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM upstreams WHERE rule_id = ? AND enabled = 1`, caddyID).Scan(&upstreamCount); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取上游服务器失败"})
 		return
 	}
-	defer upstreamRows.Close()
-
-	var ups []services.UpstreamConfig
-	for upstreamRows.Next() {
-		var u services.UpstreamConfig
-		var protocol string
-		var enabled bool
-		upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &protocol, &enabled, &u.MaxConnections)
-		u.Protocol = protocol
-		u.Enabled = enabled
-		ups = append(ups, u)
-	}
 
 	log.Printf("GetRuleCaddyConfig: caddyID=%s, port=%d, upstreams=%d, enabled=%v",
-		r.CaddyID, r.ListenPort, len(ups), r.Enabled)
+		r.CaddyID, r.ListenPort, upstreamCount, r.Enabled)
 
 	responseData := map[string]interface{}{
 		"caddy_id": r.CaddyID,
@@ -726,7 +711,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	// Validate ACME domain restrictions
-	if req.EnableTLS && req.TLSSource == "acme_dns" && req.Domain != "" {
+	if req.EnableTLS != nil && *req.EnableTLS && req.TLSSource == "acme_dns" && req.Domain != "" {
 		if err := services.ValidateACMEDomains(req.Domain); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
@@ -734,7 +719,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	log.Printf("UpdateRule request for caddy_id=%s: enable_tls=%v, tls_source=%s, ca_provider_id=%v, cert_len=%d, key_len=%d",
-		caddyID, req.EnableTLS, req.TLSSource, func() interface{} {
+		caddyID, derefBool(req.EnableTLS), req.TLSSource, func() interface{} {
 			if req.CAProviderID == nil {
 				return "<nil>"
 			}
@@ -743,7 +728,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	// When TLS is enabled on HTTP, default the port to 443 if the user didn't explicitly set one.
 	// For updates the port is fixed, so we only apply the default when an explicit port was not supplied.
-	if req.Protocol == "http" && req.EnableTLS && req.ListenPort == 0 {
+	if req.Protocol == "http" && req.EnableTLS != nil && *req.EnableTLS && req.ListenPort == 0 {
 		req.ListenPort = 443
 	}
 
@@ -755,7 +740,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			return
 		}
 		// Allow HTTP (80) -> HTTPS (443) upgrade when enabling TLS.
-		isHTTPUpgrade := currentPort == 80 && req.ListenPort == 443 && req.EnableTLS
+		isHTTPUpgrade := currentPort == 80 && req.ListenPort == 443 && req.EnableTLS != nil && *req.EnableTLS
 		if currentPort != req.ListenPort && !isHTTPUpgrade {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "端口创建后不能修改"})
 			return
@@ -769,7 +754,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		db.DB.QueryRow("SELECT listen_port FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&validationPort)
 	}
 	validationProtocol := req.Protocol
-	validationEnableTLS := req.EnableTLS
+	validationEnableTLS := false
+	if req.EnableTLS != nil {
+		validationEnableTLS = *req.EnableTLS
+	}
 	if validationProtocol == "" {
 		db.DB.QueryRow("SELECT COALESCE(protocol,'') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&validationProtocol)
 	}
@@ -805,22 +793,22 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
 			COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
 			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
-			COALESCE(host_header,''), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
-			COALESCE(enabled,1), name, description
-		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(
-		&existingRule.Protocol, &existingRule.Domain, &existingRule.ListenPort, &existingRule.Strategy,
-		&existingRule.TLSCert, &existingRule.TLSKey, &existingRule.TLSSource, &existingRule.ACMEConfigID,
-		&existingRule.CAProviderID,
-		&existingRule.EnableTLS, &existingRule.TLSHTTPRedirect,
-		&existingRule.DynamicDNS, &existingRule.EnableDnsServer, &existingRule.DnsServer, &existingRule.DnsFamily,
-		&existingRule.HealthCheckPath, &existingRule.HealthCheckInterval, &existingRule.HealthCheckTimeout,
-		&existingRule.HealthCheckUnhealthyThreshold, &existingRule.HealthCheckHealthyThreshold,
-		&existingRule.EnableActiveHealthCheck, &existingRule.TCPHealthCheckPort, &existingRule.TCPProxyProtocol, &existingRule.TCPTryDuration, &existingRule.TCPTryInterval,
-		&existingRule.RequestBodyMaxSizeMB, &existingRule.UpstreamKeepaliveTimeout, &existingRule.ServerTokensHidden,
-		&existingRule.IPACLMode, &existingIPACLListJSON, &existingRule.CustomRoutesEnabled,
-		&existingRule.ProxyDialTimeout, &existingRule.ProxyResponseHeaderTimeout, &existingRule.ProxyReadTimeout, &existingRule.ProxyWriteTimeout, &existingRule.ProxyStreamTimeout,
-		&existingRule.HostHeader, &existingRule.EnableCompress, &existingRule.CompressTypes,
-		&existingRule.Enabled, &existingRule.Name, &existingRule.Description)
+		COALESCE(host_header,''), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
+		COALESCE(enabled,1), COALESCE(log_enabled,0), name, description
+	FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(
+	&existingRule.Protocol, &existingRule.Domain, &existingRule.ListenPort, &existingRule.Strategy,
+	&existingRule.TLSCert, &existingRule.TLSKey, &existingRule.TLSSource, &existingRule.ACMEConfigID,
+	&existingRule.CAProviderID,
+	&existingRule.EnableTLS, &existingRule.TLSHTTPRedirect,
+	&existingRule.DynamicDNS, &existingRule.EnableDnsServer, &existingRule.DnsServer, &existingRule.DnsFamily,
+	&existingRule.HealthCheckPath, &existingRule.HealthCheckInterval, &existingRule.HealthCheckTimeout,
+	&existingRule.HealthCheckUnhealthyThreshold, &existingRule.HealthCheckHealthyThreshold,
+	&existingRule.EnableActiveHealthCheck, &existingRule.TCPHealthCheckPort, &existingRule.TCPProxyProtocol, &existingRule.TCPTryDuration, &existingRule.TCPTryInterval,
+	&existingRule.RequestBodyMaxSizeMB, &existingRule.UpstreamKeepaliveTimeout, &existingRule.ServerTokensHidden,
+	&existingRule.IPACLMode, &existingIPACLListJSON, &existingRule.CustomRoutesEnabled,
+	&existingRule.ProxyDialTimeout, &existingRule.ProxyResponseHeaderTimeout, &existingRule.ProxyReadTimeout, &existingRule.ProxyWriteTimeout, &existingRule.ProxyStreamTimeout,
+	&existingRule.HostHeader, &existingRule.EnableCompress, &existingRule.CompressTypes,
+	&existingRule.Enabled, &existingRule.LogEnabled, &existingRule.Name, &existingRule.Description)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return
@@ -924,8 +912,44 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.ServerTokensHidden == nil {
 		req.ServerTokensHidden = &existingRule.ServerTokensHidden
 	}
+	if req.DynamicDNS == nil {
+		req.DynamicDNS = &existingRule.DynamicDNS
+	}
+	if req.EnableDnsServer == nil {
+		req.EnableDnsServer = &existingRule.EnableDnsServer
+	}
+	if req.EnableActiveHealthCheck == nil {
+		req.EnableActiveHealthCheck = &existingRule.EnableActiveHealthCheck
+	}
+	if req.TCPProxyProtocol == nil {
+		req.TCPProxyProtocol = &existingRule.TCPProxyProtocol
+	}
+	if req.EnableTLS == nil {
+		req.EnableTLS = &existingRule.EnableTLS
+	}
+	if req.TLSHTTPRedirect == nil {
+		req.TLSHTTPRedirect = &existingRule.TLSHTTPRedirect
+	}
+	if req.EnableCompress == nil {
+		req.EnableCompress = &existingRule.EnableCompress
+	}
+	if req.Enabled == nil {
+		req.Enabled = &existingRule.Enabled
+	}
+	if req.LogEnabled == nil {
+		req.LogEnabled = &existingRule.LogEnabled
+	}
 	if req.CompressTypes == "" {
 		req.CompressTypes = existingRule.CompressTypes
+	}
+	if req.DnsServer == "" {
+		req.DnsServer = existingRule.DnsServer
+	}
+	if req.DnsFamily == "" {
+		req.DnsFamily = existingRule.DnsFamily
+	}
+	if req.HostHeader == "" {
+		req.HostHeader = existingRule.HostHeader
 	}
 	if req.Name == "" {
 		req.Name = existingRule.Name
@@ -977,7 +1001,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	// Validate TLS certificate if provided (manual source only)
-	if (req.EnableTLS || req.TLSCert != "" || req.TLSKey != "") && req.TLSSource == "manual" {
+	if (*req.EnableTLS || req.TLSCert != "" || req.TLSKey != "") && req.TLSSource == "manual" {
 		tlsCert := req.TLSCert
 		tlsKey := req.TLSKey
 		// If cert/key not provided in request, get from DB
@@ -1023,9 +1047,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	query += "strategy = ?, "
 	args = append(args, req.Strategy)
 	query += "dynamic_dns = ?, "
-	args = append(args, req.DynamicDNS)
+	args = append(args, *req.DynamicDNS)
 	query += "enable_dns_server = ?, "
-	args = append(args, req.EnableDnsServer)
+	args = append(args, *req.EnableDnsServer)
 	query += "dns_server = ?, "
 	args = append(args, req.DnsServer)
 	query += "dns_family = ?, "
@@ -1041,11 +1065,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	query += "health_check_healthy_threshold = ?, "
 	args = append(args, req.HealthCheckHealthyThreshold)
 	query += "enable_active_health_check = ?, "
-	args = append(args, req.EnableActiveHealthCheck)
+	args = append(args, *req.EnableActiveHealthCheck)
 	query += "tcp_health_check_port = ?, "
 	args = append(args, req.TCPHealthCheckPort)
 	query += "tcp_proxy_protocol = ?, "
-	args = append(args, req.TCPProxyProtocol)
+	args = append(args, *req.TCPProxyProtocol)
 	query += "tcp_try_duration = ?, "
 	args = append(args, req.TCPTryDuration)
 	query += "tcp_try_interval = ?, "
@@ -1075,7 +1099,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	query += "host_header = ?, "
 	args = append(args, req.HostHeader)
 	query += "enable_tls = ?, "
-	args = append(args, req.EnableTLS)
+	args = append(args, *req.EnableTLS)
 	query += "tls_source = ?, "
 	args = append(args, req.TLSSource)
 	query += "acme_config_id = ?, "
@@ -1093,15 +1117,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		args = append(args, req.TLSKey)
 	}
 	query += "tls_http_redirect = ?, "
-	args = append(args, req.TLSHTTPRedirect)
+	args = append(args, *req.TLSHTTPRedirect)
 	query += "enable_compress = ?, "
-	args = append(args, req.EnableCompress)
+	args = append(args, *req.EnableCompress)
 	query += "compress_types = ?, "
 	args = append(args, req.CompressTypes)
 	query += "enabled = ?, "
-	args = append(args, req.Enabled)
+	args = append(args, *req.Enabled)
 	query += "log_enabled = ?, "
-	args = append(args, req.LogEnabled)
+	args = append(args, *req.LogEnabled)
 
 	// Build full rule config for route generation
 	domain := req.Domain
@@ -1135,17 +1159,17 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		Domain:                           domain,
 		ListenPort:                       listenPort,
 		Strategy:                         strategy,
-		DynamicDNS:                       req.DynamicDNS,
-		EnableDnsServer:                  req.EnableDnsServer,
+		DynamicDNS:                       *req.DynamicDNS,
+		EnableDnsServer:                  *req.EnableDnsServer,
 		DnsServer:                        req.DnsServer,
 		DnsFamily:                        req.DnsFamily,
 		HealthCheckPath:                  req.HealthCheckPath,
 		HealthCheckInterval:              req.HealthCheckInterval,
 		HealthCheckTimeout:               req.HealthCheckTimeout,
 		HealthCheckUnhealthyThreshold:    req.HealthCheckUnhealthyThreshold,
-		EnableActiveHealthCheck:          req.EnableActiveHealthCheck,
+		EnableActiveHealthCheck:          *req.EnableActiveHealthCheck,
 		TCPHealthCheckPort:               req.TCPHealthCheckPort,
-		TCPProxyProtocol:                 req.TCPProxyProtocol,
+		TCPProxyProtocol:                 *req.TCPProxyProtocol,
 		TCPTryDuration:                   req.TCPTryDuration,
 		TCPTryInterval:                   req.TCPTryInterval,
 		RequestBodyMaxSizeMB:             *req.RequestBodyMaxSizeMB,
@@ -1168,11 +1192,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		GlobalProxyReadTimeout:           global.proxyReadTimeout,
 		GlobalProxyWriteTimeout:          global.proxyWriteTimeout,
 		GlobalProxyStreamTimeout:         global.proxyStreamTimeout,
-		EnableTLS:                        req.EnableTLS,
+		EnableTLS:                        *req.EnableTLS,
 		TLSSource:                        req.TLSSource,
 		ACMEConfigID:                     req.ACMEConfigID,
-		TLSHTTPRedirect:                  req.TLSHTTPRedirect,
-		EnableCompress:                   req.EnableCompress,
+		TLSHTTPRedirect:                  *req.TLSHTTPRedirect,
+		EnableCompress:                   *req.EnableCompress,
 		CompressTypes:                    req.CompressTypes,
 		HostHeader:                       req.HostHeader,
 		CaddyID:                          caddyID,
@@ -1200,6 +1224,18 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	routeConfig, err := services.GenerateRouteObject(ruleConfig)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "路由配置生成失败: " + err.Error()})
+		return
+	}
+
+	// caddyOpMu 必须覆盖 快照→提交→应用→恢复 全程：并发更新若先各自提交再串行应用，
+	// 较早请求失败时会用自己的旧快照覆盖较晚请求已提交的成功更新。
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
+	runtimeSnapshot, snapErr := h.snapshotImportRuntime([]string{caddyID})
+	if snapErr != nil {
+		log.Printf("UpdateRule runtime snapshot failed for caddy_id=%s: %v", caddyID, snapErr)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
 		return
 	}
 
@@ -1297,33 +1333,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 
-	// If the domain or CA provider changed for an ACME rule, re-queue issuance.
-	// We do NOT delete the existing cert_job row: cert_pem/key_pem are kept so
-	// Caddy can continue serving the old certificate until the new one is issued.
-	caProviderID := existingRule.CAProviderID
-	if req.CAProviderID != nil {
-		caProviderID = *req.CAProviderID
-	}
-	domainChanged := req.EnableTLS && req.TLSSource == "acme_dns" && domain != "" && domain != existingRule.Domain
-	caProviderChanged := req.EnableTLS && req.TLSSource == "acme_dns" && domain != "" && caProviderID != existingRule.CAProviderID
-	if domainChanged || caProviderChanged {
-		log.Printf("UpdateRule ACME change for caddy_id=%s: domainChanged=%v caProviderChanged=%v oldCA=%d newCA=%d", caddyID, domainChanged, caProviderChanged, existingRule.CAProviderID, caProviderID)
-		go func() {
-			qm := services.GetCAQueueManager()
-			if qm == nil {
-				log.Printf("Auto cert enqueue failed for %s: CA queue manager not initialized", domain)
-				return
-			}
-			log.Printf("UpdateRule re-queueing cert job for caddy_id=%s domain=%s ca_provider_id=%d", caddyID, domain, caProviderID)
-			if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
-				log.Printf("Auto cert re-queue failed for %s: %v", domain, err)
-			}
-		}()
-	}
-
-	// Apply Caddy changes after DB commit; restore previous Caddy config on failure
-	h.caddyOpMu.Lock()
-	defer h.caddyOpMu.Unlock()
 	if req.Protocol == "tcp" {
 		newFullConfig := services.GenerateCaddyConfig(h.cfg)
 		if err := h.caddyService.ApplyConfig(newFullConfig); err != nil {
@@ -1359,60 +1368,63 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 
 		// Reload full Caddy config to apply TLS certificates
-		if req.EnableTLS || req.TLSCert != "" || req.TLSKey != "" || req.TLSSource == "acme_dns" {
+		if *req.EnableTLS || req.TLSCert != "" || req.TLSKey != "" || req.TLSSource == "acme_dns" {
 			log.Printf("Reloading full Caddy config after rule update for caddy_id=%s", caddyID)
 			fullConfig := services.GenerateCaddyConfig(h.cfg)
 			if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
-				log.Printf("Failed to reload Caddy config after rule update: %v", err)
-			}
-			// Trigger ACME issuance if needed
-			if req.TLSSource == "acme_dns" && req.Protocol == "http" && req.EnableTLS && domain != "" {
-				if !services.IsACMECertIssued(caddyID, domain) {
-					go func() {
-						qm := services.GetCAQueueManager()
-						if qm == nil {
-							log.Printf("Auto cert enqueue failed for %s: CA queue manager not initialized", domain)
-							return
-						}
-						caProviderID := existingRule.CAProviderID
-						if req.CAProviderID != nil {
-							caProviderID = *req.CAProviderID
-						}
-						if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
-							log.Printf("Auto cert enqueue failed for %s: %v", domain, err)
-						}
-					}()
+				restoreErr := h.restoreImportRuntime(runtimeSnapshot)
+				restoreRuleDBSnapshot()
+				if restoreErr != nil {
+					log.Printf("CRITICAL: UpdateRule Caddy apply and runtime restore failed for caddy_id=%s: apply=%v restore=%v", caddyID, err, restoreErr)
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与恢复均失败: %v; %v", err, restoreErr)})
+					return
 				}
+				log.Printf("UpdateRule full Caddy reload failed for caddy_id=%s: %v, restored previous config", caddyID, err)
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 全量配置应用失败: " + err.Error()})
+				return
 			}
 		}
 
-		// Handle re-enabling an ACME rule or switching its TLS source to ACME DNS
-		// when no cert job row exists yet (any status). Existing rows are left
-		// alone since the ON CONFLICT and queue/renewal logic handle the rest.
-		wasReEnabled := !existingRule.Enabled && req.Enabled
-		tlsSourceChangedToACME := existingRule.TLSSource != "acme_dns" && req.TLSSource == "acme_dns"
-		if (wasReEnabled || tlsSourceChangedToACME) && req.EnableTLS && req.TLSSource == "acme_dns" && domain != "" {
-			if !services.HasCertJob(caddyID, domain) {
-				go func() {
-					qm := services.GetCAQueueManager()
-					if qm == nil {
-						log.Printf("Auto cert enqueue failed for %s: CA queue manager not initialized", domain)
-						return
+		// 证书任务必须在 Caddy 全部应用成功后同步入队：之前的失败回滚不触碰 cert_jobs，
+		// 若先入队再失败，已回滚的域名/CA 变更仍会后台签发并覆盖证书文件。
+		if *req.EnableTLS && req.TLSSource == "acme_dns" && req.Protocol == "http" && domain != "" {
+			caProviderID := existingRule.CAProviderID
+			if req.CAProviderID != nil {
+				caProviderID = *req.CAProviderID
+			}
+			domainChanged := domain != existingRule.Domain
+			caProviderChanged := caProviderID != existingRule.CAProviderID
+			wasReEnabled := !existingRule.Enabled && *req.Enabled
+			tlsSourceChangedToACME := existingRule.TLSSource != "acme_dns"
+			needJob := domainChanged || caProviderChanged || !services.IsACMECertIssued(caddyID, domain) ||
+				((wasReEnabled || tlsSourceChangedToACME) && !services.HasCertJob(caddyID, domain))
+			if needJob {
+				qm := services.GetCAQueueManager()
+				if qm == nil {
+					restoreErr := h.restoreImportRuntime(runtimeSnapshot)
+					restoreRuleDBSnapshot()
+					if restoreErr != nil {
+						log.Printf("CRITICAL: UpdateRule ACME enqueue failed and runtime restore failed for caddy_id=%s: restore=%v", caddyID, restoreErr)
 					}
-					caProviderID := existingRule.CAProviderID
-					if req.CAProviderID != nil {
-						caProviderID = *req.CAProviderID
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化"})
+					return
+				}
+				log.Printf("UpdateRule enqueueing cert job for caddy_id=%s domain=%s ca_provider_id=%d", caddyID, domain, caProviderID)
+				if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+					restoreErr := h.restoreImportRuntime(runtimeSnapshot)
+					restoreRuleDBSnapshot()
+					if restoreErr != nil {
+						log.Printf("CRITICAL: UpdateRule ACME enqueue failed and runtime restore failed for caddy_id=%s: enqueue=%v restore=%v", caddyID, err, restoreErr)
 					}
-					if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
-						log.Printf("Auto cert enqueue failed for %s: %v", domain, err)
-					}
-				}()
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书签发任务失败: " + err.Error()})
+					return
+				}
 			}
 		}
 	}
 
 	log.Printf("Rule %s updated", caddyID)
-	recordAudit(c, "更新", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), domain, fmt.Sprintf("TLS：%s", boolText(req.EnableTLS))))
+	recordAudit(c, "更新", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), domain, fmt.Sprintf("TLS：%s", boolText(*req.EnableTLS))))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_update"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新"})
 }
@@ -1491,6 +1503,11 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	}
 	committed = true
 	h.caddyOpMu.Unlock()
+
+	// 取消仍在排队或执行中的签发协程，避免已删规则继续占用 CA 配额
+	if qm := services.GetCAQueueManager(); qm != nil {
+		qm.CancelJobsForRule(caddyID)
+	}
 
 	if db.MetricsDB != nil {
 		if _, err := db.MetricsDB.Exec("DELETE FROM metrics_history WHERE rule_id = ?", caddyID); err != nil {
@@ -1838,20 +1855,38 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	}
 
 	if enableTLS && tlsSource == "acme_dns" && domain != "" {
+		restoreRuleEnabled := func(stageErr error) {
+			if _, restoreErr := db.DB.Exec("UPDATE lb_rules SET enabled = ?, updated_at = datetime('now') WHERE caddy_id = ?", originalEnabled, caddyID); restoreErr != nil {
+				log.Printf("CRITICAL: DisableRule cert job update failed and rule restore failed for caddy_id=%s: stage=%v restore=%v", caddyID, stageErr, restoreErr)
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("证书任务状态更新失败且规则恢复失败: %v; %v", stageErr, restoreErr)})
+				return
+			}
+			if applyErr := h.applyCaddyConfigWithRollback(); applyErr != nil {
+				log.Printf("CRITICAL: DisableRule cert job update failed and Caddy re-apply failed for caddy_id=%s: stage=%v apply=%v", caddyID, stageErr, applyErr)
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("证书任务状态更新失败且 Caddy 恢复失败: %v; %v", stageErr, applyErr)})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新证书任务状态失败，已恢复规则状态: " + stageErr.Error()})
+		}
 		result, err := db.DB.Exec("UPDATE cert_jobs SET status='disabled', message='规则已禁用，任务已暂停', updated_at=datetime('now') WHERE rule_id=? AND status NOT IN ('failed','disabled')", caddyID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新证书任务状态失败: " + err.Error()})
+			restoreRuleEnabled(err)
 			return
 		}
 		rows, err := result.RowsAffected()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务更新结果失败: " + err.Error()})
+			restoreRuleEnabled(err)
 			return
 		}
 		if rows > 0 {
 			services.WriteCertJobLogByRule(caddyID, "WARN", "cancelled", "规则已禁用，证书签发任务已暂停")
 			recordAudit(c, "禁用", "证书签发任务", fmt.Sprintf("规则 %s 已禁用，%d 个证书任务状态设为已禁用", caddyID, rows))
 		}
+	}
+
+	// 取消仍在排队或执行中的签发协程，避免已禁用规则继续占用 CA 配额
+	if qm := services.GetCAQueueManager(); qm != nil {
+		qm.CancelJobsForRule(caddyID)
 	}
 
 	recordAudit(c, "禁用", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已禁用"))

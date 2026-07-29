@@ -44,11 +44,13 @@ type Logger interface {
 
 // Client wraps golang.org/x/crypto/acme.Client with convenience methods.
 type Client struct {
-	DirectoryURL string
-	Email        string
-	acme         *acme.Client
-	accountKey   crypto.Signer
-	eab          *acme.ExternalAccountBinding
+	DirectoryURL   string
+	Email          string
+	acme           *acme.Client
+	accountKey     crypto.Signer
+	eab            *acme.ExternalAccountBinding
+	finalizedMu    sync.Mutex
+	finalizedCerts map[string][][]byte
 }
 
 // NewClient creates a Let's Encrypt compatible ACME client.
@@ -110,8 +112,9 @@ func newClient(directoryURL, email string, eab *acme.ExternalAccountBinding) (*C
 				return 2 * time.Second
 			},
 		},
-		accountKey: key,
-		eab:        eab,
+		accountKey:     key,
+		eab:            eab,
+		finalizedCerts: make(map[string][][]byte),
 	}, nil
 }
 
@@ -193,11 +196,6 @@ func (c *Client) AcceptChallenge(ctx context.Context, chal *acme.Challenge) (*ac
 	return c.acme.Accept(ctx, chal)
 }
 
-// WaitAuthorization polls the authorization until it is in a final state.
-func (c *Client) WaitAuthorization(ctx context.Context, url string) (*acme.Authorization, error) {
-	return c.acme.WaitAuthorization(ctx, url)
-}
-
 // GetChallenge fetches the current status of a challenge by URL.
 func (c *Client) GetChallenge(ctx context.Context, url string) (*acme.Challenge, error) {
 	return c.acme.GetChallenge(ctx, url)
@@ -215,15 +213,30 @@ func (c *Client) DNS01ChallengeRecord(token string) (string, error) {
 
 // CreateCertRequest finalizes an order with a CSR and returns the order with CertURL.
 func (c *Client) CreateCertRequest(ctx context.Context, finalizeURL string, csr []byte) (*acme.Order, error) {
-	_, certURL, err := c.acme.CreateOrderCert(ctx, finalizeURL, csr, true)
+	certDER, certURL, err := c.acme.CreateOrderCert(ctx, finalizeURL, csr, true)
 	if err != nil {
 		return nil, err
 	}
+	c.finalizedMu.Lock()
+	if c.finalizedCerts == nil {
+		c.finalizedCerts = make(map[string][][]byte)
+	}
+	c.finalizedCerts[certURL] = certDER
+	c.finalizedMu.Unlock()
 	return &acme.Order{CertURL: certURL}, nil
 }
 
 // FetchCert downloads the certificate chain from the given URL.
 func (c *Client) FetchCert(ctx context.Context, url string) ([][]byte, error) {
+	c.finalizedMu.Lock()
+	certDER, ok := c.finalizedCerts[url]
+	if ok {
+		delete(c.finalizedCerts, url)
+	}
+	c.finalizedMu.Unlock()
+	if ok {
+		return certDER, nil
+	}
 	return c.acme.FetchCert(ctx, url, true)
 }
 

@@ -60,6 +60,13 @@ func TestCertIssuer_deployIssuedCertificate_keeps_nonterminal_state_when_reload_
 	jobID, ruleID := seedCertificateJob(t, "downloaded")
 	useTemporaryCertDir(t)
 	issuer := NewCertIssuer(func() error { return errors.New("reload failed") })
+	retries := 0
+	issuer.deploymentRetry = func(gotJobID int, got issuedCertificate) {
+		if gotJobID != jobID || got.ruleID != ruleID {
+			t.Fatalf("retry job=(%d,%q), want (%d,%q)", gotJobID, got.ruleID, jobID, ruleID)
+		}
+		retries++
+	}
 	material := issuedCertificate{
 		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
@@ -80,8 +87,8 @@ func TestCertIssuer_deployIssuedCertificate_keeps_nonterminal_state_when_reload_
 	if err := db.DB.QueryRow("SELECT cluster_version FROM global_config WHERE id=1").Scan(&version); err != nil {
 		t.Fatalf("read cluster version: %v", err)
 	}
-	if status == "issued" || certPEM != "new-cert" || keyPEM != "new-key" || version != 0 {
-		t.Fatalf("job=(%q,%q,%q) version=%d, want non-issued persisted material without version bump", status, certPEM, keyPEM, version)
+	if status != "downloaded" || certPEM != "new-cert" || keyPEM != "new-key" || version != 0 || retries != 1 {
+		t.Fatalf("job=(%q,%q,%q) version=%d retries=%d, want downloaded persisted material, no version bump, one retry", status, certPEM, keyPEM, version, retries)
 	}
 }
 
@@ -169,7 +176,7 @@ func TestCertIssuer_deployIssuedCertificate_restores_files_when_job_disabled_bef
 	}
 }
 
-func TestCertIssuer_Issue_fast_path_returns_reload_error_and_marks_job_failed(t *testing.T) {
+func TestCertIssuer_Issue_fast_path_returns_reload_error_and_keeps_downloaded(t *testing.T) {
 	// Given
 	jobID, ruleID := seedCertificateJob(t, "issued")
 	useTemporaryCertDir(t)
@@ -181,6 +188,8 @@ func TestCertIssuer_Issue_fast_path_returns_reload_error_and_marks_job_failed(t 
 		t.Fatalf("seed rule CA provider: %v", err)
 	}
 	issuer := NewCertIssuer(func() error { return errors.New("reload failed") })
+	retries := 0
+	issuer.deploymentRetry = func(int, issuedCertificate) { retries++ }
 
 	// When
 	err := issuer.Issue(context.Background(), jobID, ruleID, "example.com", models.CAProvider{ID: 1})
@@ -193,7 +202,7 @@ func TestCertIssuer_Issue_fast_path_returns_reload_error_and_marks_job_failed(t 
 	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
 		t.Fatalf("read fast-path job: %v", err)
 	}
-	if status != "failed" {
-		t.Fatalf("fast-path job status=%q, want failed", status)
+	if status != "downloaded" || retries != 1 {
+		t.Fatalf("fast-path job status=%q retries=%d, want downloaded and one retry", status, retries)
 	}
 }

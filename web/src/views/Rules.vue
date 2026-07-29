@@ -8,7 +8,7 @@
         </h2>
         <p class="page-desc">管理流量分发策略和上游服务器配置</p>
       </div>
-      <el-button type="primary" :disabled="isReadOnly" @click="openWizard()">
+      <el-button type="primary" :disabled="isReadOnly || saving" @click="openWizard()">
         <el-icon><Plus /></el-icon>
         新建规则
       </el-button>
@@ -26,9 +26,15 @@
                 v-if="row.ip_acl_mode === 'allow' || row.ip_acl_mode === 'deny'"
                 :content="row.ip_acl_mode === 'allow' ? `IP 白名单 · ${row.ip_acl_list?.length || 0} 条` : `IP 黑名单 · ${row.ip_acl_list?.length || 0} 条`"
               >
-                <el-icon :size="14" class="acl-lock-icon" :class="`is-${row.ip_acl_mode}`"><Lock /></el-icon>
+                <el-icon
+                  :size="14"
+                  class="acl-lock-icon"
+                  :class="`is-${row.ip_acl_mode}`"
+                  :aria-label="row.ip_acl_mode === 'allow' ? `IP 白名单，${row.ip_acl_list?.length || 0} 条` : `IP 黑名单，${row.ip_acl_list?.length || 0} 条`"
+                  tabindex="0"
+                ><Lock /></el-icon>
               </el-tooltip>
-              <a class="rule-name-link" @click.prevent="viewConfig(row)">{{ row.name }}</a>
+              <a class="rule-name-link" role="button" tabindex="0" @click.prevent="viewConfig(row)" @keydown.enter.prevent="viewConfig(row)" @keydown.space.prevent="viewConfig(row)">{{ row.name }}</a>
             </div>
           </template>
         </el-table-column>
@@ -182,13 +188,13 @@
               :content="isReadOnly ? authStore.readOnlyMessage : '证书申请中，请等待完成或失败后再修改规则'"
               >
                 <div>
-                <el-button type="primary" link size="small" @click="openWizard(row)" :disabled="isReadOnly || !canEditRule(row)">
+                <el-button type="primary" link size="small" @click="openWizard(row)" :disabled="isReadOnly || saving || !canEditRule(row)">
                     编辑
                   </el-button>
                 </div>
               </el-tooltip>
               <div>
-              <el-button type="primary" link size="small" :disabled="isReadOnly" @click="duplicateRule(row)">
+              <el-button type="primary" link size="small" :disabled="isReadOnly || saving" @click="duplicateRule(row)">
                   复制
                 </el-button>
               </div>
@@ -239,7 +245,7 @@
       @save="saveAcl"
     />
 
-    <el-dialog v-model="wizardVisible" :title="editingRule ? '编辑规则' : (isCopyMode ? '复制规则' : '新建规则')" width="min(800px, 94vw)" top="5vh" :close-on-click-modal="false" @close="resetWizard">
+    <el-dialog v-model="wizardVisible" :title="editingRule ? '编辑规则' : (isCopyMode ? '复制规则' : '新建规则')" width="min(800px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
       <el-steps :active="visualStepIndex" finish-status="success" align-center class="wizard-steps">
         <el-step title="基本配置" :icon="InfoFilled" />
         <el-step v-if="showTlsStep" title="TLS 配置" :icon="Lock" />
@@ -795,7 +801,7 @@
     </el-dialog>
 
     <!-- View Config Dialog -->
-    <el-dialog v-model="configDialogVisible" title="Caddy 配置" width="900" :close-on-click-modal="true">
+    <el-dialog v-model="configDialogVisible" title="Caddy 配置" width="900" :close-on-click-modal="true" @close="onConfigDialogClosed">
       <div v-if="configLoading" v-loading="configLoading" style="min-height: 200px;"></div>
       <div v-else-if="ruleConfig" class="config-view">
         <el-descriptions :column="2" border size="small" class="config-info">
@@ -882,7 +888,7 @@
       :style="{ maxWidth: '70vw' }"
       destroy-on-close
       @opened="onRuleLogDialogOpened"
-      @closed="onRuleLogDialogClosed"
+      @close="onRuleLogDialogClosed"
     >
       <el-tabs v-model="ruleLogTab" @tab-change="onRuleLogTabChange">
         <el-tab-pane label="日志" name="log">
@@ -974,6 +980,8 @@ import PathRulesEditor from '@/components/rules/PathRulesEditor.vue'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
 import { validatePathRules } from '@/utils/ruleValidation'
 import { MAX_UPSTREAM_ROWS, normalizeWeights, redistributeWeight } from '@/utils/upstreamWeights'
+import { certJobStatusLabel } from '@/utils/certJobStatus'
+import type { CertJobStatus } from '@/utils/certJobStatus'
 
 interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id'> {
   id?: number
@@ -1141,7 +1149,7 @@ interface CertJob {
   id: number
   rule_id: string
   domain: string
-  status: string
+  status: CertJobStatus
   message: string
   expires_at?: string
 }
@@ -1265,50 +1273,22 @@ const fetchCertJobs = async () => {
     certJobMap.value = map
     if (newlyIssuedRuleIds.length > 0) await fetchCertInfo(newlyIssuedRuleIds)
   } catch {
-    certJobMap.value = {}
+    return
   } finally {
     certJobsInFlight = false
   }
 }
 
-const isCertJobActive = (status?: string) => {
+const isCertJobActive = (status?: CertJobStatus) => {
   if (!status) return false
   return !['issued', 'failed', 'disabled'].includes(status)
 }
 
-const certJobPriority = (status: string): number => {
+const certJobPriority = (status: CertJobStatus): number => {
   if (status === 'waiting_ca' || status === 'failed') return 2
   if (isCertJobActive(status)) return 3
   if (status === 'issued') return 1
   return 0
-}
-
-const certJobStatusLabel = (status?: string) => {
-  switch (status) {
-    case 'issued': return '已签发'
-    case 'failed': return '失败'
-    case 'disabled': return '已禁用'
-    case 'pending': return '待处理'
-    case 'queued':
-    case 'creating_account':
-    case 'creating_order':
-    case 'order_created':
-    case 'presenting_dns':
-    case 'waiting_propagation':
-    case 'dns_propagated':
-    case 'accepting_challenge':
-    case 'validating':
-    case 'validated':
-    case 'finalizing':
-    case 'finalized':
-    case 'downloading':
-    case 'downloaded':
-    case 'cleanup_dns':
-    case 'cleanup_warning':
-      return '签发中'
-    case 'waiting_ca': return '等待 CA'
-    default: return ''
-  }
 }
 
 const canEditRule = (row: Rule) => {
@@ -1376,6 +1356,7 @@ let certJobPollTimer: ReturnType<typeof setInterval> | null = null
 // Config viewing
 const configDialogVisible = ref(false)
 const configLoading = ref(false)
+let configRequestSeq = 0
 
 const aclDialogVisible = ref(false)
 const aclSaving = ref(false)
@@ -1415,6 +1396,7 @@ const ruleLogLoading = ref(false)
 const ruleLogAutoRefresh = ref(true)
 const ruleLogContainerRef = ref<HTMLElement | null>(null)
 let ruleLogPollTimer: ReturnType<typeof setInterval> | null = null
+let ruleLogRequestSeq = 0
 
 const ruleLogHtml = computed(() => ansiToHtml(ruleLogContent.value || '暂无日志'))
 const ruleConfig = ref<RuleConfigView | null>(null)
@@ -1899,7 +1881,7 @@ const pasteFromFile = async (type: 'cert' | 'key') => {
 }
 
 const openWizard = (rule?: Rule) => {
-  if (isReadOnly.value) return
+  if (isReadOnly.value || saving.value) return
   certValidationSessionSeq++
   certValidationSeq++
   resetCertInfo()
@@ -2028,6 +2010,10 @@ const resetWizard = () => {
   editingRule.value = null
   isCopyMode.value = false
   currentStep.value = WIZARD_STEP.BASIC
+}
+
+const beforeWizardClose = (done: () => void): void => {
+  if (!saving.value) done()
 }
 
 // Weights are shown and edited as percentages of enabled upstreams; the
@@ -2329,6 +2315,7 @@ const duplicateRule = async (rule: Rule) => {
 }
 
 const openCopyWizard = (rule: Rule) => {
+  if (saving.value) return
   certValidationSessionSeq++
   certValidationSeq++
   resetCertInfo()
@@ -2400,13 +2387,16 @@ const openCopyWizard = (rule: Rule) => {
 }
 
 const viewConfig = async (rule: Rule) => {
+  const targetId = rule.caddy_id
+  const requestSeq = ++configRequestSeq
   configDialogVisible.value = true
   configLoading.value = true
   ruleConfig.value = null
   
   try {
     // Get rule-specific Caddy config from API
-    const res = await request.get<APIResponse<RuleCaddyConfigResponse>>(`/rules/${rule.caddy_id}/caddy-config`)
+    const res = await request.get<APIResponse<RuleCaddyConfigResponse>>(`/rules/${targetId}/caddy-config`)
+    if (requestSeq !== configRequestSeq || !configDialogVisible.value) return
      
     // Build the display config
     const compressType = rule.compress_types ? selectedCompressType(rule.compress_types) : 'gzip'
@@ -2444,6 +2434,7 @@ const viewConfig = async (rule: Rule) => {
       config: res.data?.config || {}
     }
   } catch (error: unknown) {
+    if (requestSeq !== configRequestSeq || !configDialogVisible.value) return
     // Error message is already shown by the global axios interceptor.
     console.error('view config failed', error)
     ruleConfig.value = {
@@ -2479,11 +2470,17 @@ const viewConfig = async (rule: Rule) => {
       config: { error: '获取配置失败', details: error instanceof Error ? error.message : undefined }
     }
   } finally {
-    configLoading.value = false
+    if (requestSeq === configRequestSeq) configLoading.value = false
   }
 }
 
+const onConfigDialogClosed = (): void => {
+  configRequestSeq++
+  configLoading.value = false
+}
+
 const openRuleLogDialog = (rule: Rule) => {
+  ruleLogRequestSeq++
   ruleLogRuleName.value = rule.name || rule.caddy_id
   ruleLogCaddyId.value = rule.caddy_id
   ruleLogDialogVisible.value = true
@@ -2583,30 +2580,42 @@ const rebuildStatsView = () => {
 
 const fetchLogStream = async () => {
   if (!ruleLogCaddyId.value || logStatsInFlight.value) return
+  const targetId = ruleLogCaddyId.value
+  const targetMaps = logStatsMaps.value
+  const targetOffset = logStatsOffset.value
+  const requestSeq = ++ruleLogRequestSeq
+  if (!targetMaps) return
   logStatsInFlight.value = true
   try {
-    const res = await request.get<APIResponse<RuleLogStreamData>>(`/rules/${ruleLogCaddyId.value}/log-stream`, { params: { offset: logStatsOffset.value } })
+    const res = await request.get<APIResponse<RuleLogStreamData>>(`/rules/${targetId}/log-stream`, { params: { offset: targetOffset } })
+    if (requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== targetMaps) return
     const lines: string[] = res.data?.lines || []
-    if (logStatsMaps.value && lines.length) {
-      for (const line of lines) consumeLogLine(logStatsMaps.value, line)
+    if (lines.length) {
+      for (const line of lines) consumeLogLine(targetMaps, line)
       rebuildStatsView()
     }
-    logStatsOffset.value = res.data?.offset ?? logStatsOffset.value
+    logStatsOffset.value = res.data?.offset ?? targetOffset
   } catch (error: unknown) {
     console.error('Failed to fetch log stream:', error)
   } finally {
-    logStatsInFlight.value = false
+    if (requestSeq === ruleLogRequestSeq) logStatsInFlight.value = false
   }
 }
 
 const startLogStats = async () => {
-  logStatsMaps.value = { ip: {}, ua: {}, uri: {}, total: 0, startedAt: new Date().toLocaleString() }
+  const targetId = ruleLogCaddyId.value
+  if (!targetId) return
+  const requestSeq = ++ruleLogRequestSeq
+  const maps = { ip: {}, ua: {}, uri: {}, total: 0, startedAt: new Date().toLocaleString() }
+  logStatsMaps.value = maps
+  ruleLogStats.value = null
   logStatsOffset.value = 0
   try {
-    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${ruleLogCaddyId.value}/logs`)
+    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`)
+    if (requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== maps) return
     const content: string = res.data?.content || ''
     for (const line of content.split('\n')) {
-      if (line.trim()) consumeLogLine(logStatsMaps.value, line)
+      if (line.trim()) consumeLogLine(maps, line)
     }
     rebuildStatsView()
     logStatsOffset.value = res.data?.offset ?? 0
@@ -2616,24 +2625,34 @@ const startLogStats = async () => {
 }
 
 const onRuleLogTabChange = (tab: string) => {
+  ruleLogRequestSeq++
+  ruleLogLoading.value = false
+  logStatsInFlight.value = false
   if (tab === 'stats') {
     startLogStats()
+  } else {
+    ruleLogContent.value = ''
+    refreshRuleLogs()
   }
 }
 
 const onRuleLogDialogOpened = () => {
+  ruleLogRequestSeq++
   ruleLogTab.value = 'log'
   refreshRuleLogs()
   startRuleLogPolling()
 }
 
 const onRuleLogDialogClosed = () => {
+  ruleLogRequestSeq++
   stopRuleLogPolling()
   ruleLogContent.value = ''
   ruleLogCaddyId.value = ''
   logStatsMaps.value = null
   ruleLogStats.value = null
   logStatsOffset.value = 0
+  ruleLogLoading.value = false
+  logStatsInFlight.value = false
 }
 
 const startRuleLogPolling = () => {
@@ -2656,9 +2675,12 @@ const refreshRuleLogs = async () => {
     return
   }
   if (!ruleLogCaddyId.value || ruleLogLoading.value) return
+  const targetId = ruleLogCaddyId.value
+  const requestSeq = ++ruleLogRequestSeq
   ruleLogLoading.value = true
   try {
-    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${ruleLogCaddyId.value}/logs`)
+    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`)
+    if (requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'log' || ruleLogCaddyId.value !== targetId) return
     ruleLogContent.value = res.data?.content || ''
     nextTick(() => {
       const el = ruleLogContainerRef.value
@@ -2667,7 +2689,7 @@ const refreshRuleLogs = async () => {
   } catch (error: unknown) {
     console.error('Failed to fetch rule logs:', error)
   } finally {
-    ruleLogLoading.value = false
+    if (requestSeq === ruleLogRequestSeq) ruleLogLoading.value = false
   }
 }
 
@@ -2738,7 +2760,6 @@ onUnmounted(() => {
 
 .mb-5 { margin-bottom: 20px; }
 
-.rule-name { font-weight: 500; color: #111827; }
 .rule-name-cell { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; white-space: nowrap; }
 .acl-lock-icon { flex: 0 0 auto; cursor: pointer; }
 .acl-lock-icon.is-allow { color: var(--el-color-success); }

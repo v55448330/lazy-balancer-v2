@@ -47,7 +47,7 @@
           <el-icon><CopyDocument /></el-icon>复制令牌
         </el-button>
       </div>
-      <div class="form-tip">有效期至：{{ formatTime(registerToken?.expires_at ?? '') }}</div>
+      <div class="form-tip">有效期至：{{ formatDate(registerToken?.expires_at ?? '') || '-' }}</div>
       <template #footer><el-button type="primary" @click="tokenDialogVisible = false">我已保存</el-button></template>
     </el-dialog>
   </div>
@@ -271,8 +271,6 @@ const removeNode = async (node: ClusterNode): Promise<void> => {
   const confirmed = await confirmAction(`确定删除节点“${node.name}”吗？删除后该节点将无法继续同步。`, '删除确认')
   if (confirmed) await runNodeAction(node, 'remove')
 }
-
-const formatTime = (value: string): string => formatDate(value) || '-'
 
 onMounted(async () => {
   try {

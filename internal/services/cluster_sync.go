@@ -30,14 +30,17 @@ type SyncResult struct {
 }
 
 type SyncService struct {
-	db         *sql.DB
-	cfg        *config.Config
-	caddy      *CaddyService
-	cluster    *ClusterService
-	client     *http.Client
-	mu         sync.Mutex
-	cancel     context.CancelFunc
-	generation uint64
+	db          *sql.DB
+	cfg         *config.Config
+	caddy       *CaddyService
+	cluster     *ClusterService
+	client      *http.Client
+	lifecycleMu sync.Mutex
+	mu          sync.Mutex
+	cancel      context.CancelFunc
+	done        chan struct{}
+	generation  uint64
+	runFn       func(context.Context)
 }
 
 func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *SyncService {
@@ -113,6 +116,8 @@ func (s *SyncService) migrateMasterURLScheme(scheme string) {
 }
 
 func (s *SyncService) Start() {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cancel != nil {
@@ -122,9 +127,16 @@ func (s *SyncService) Start() {
 	s.generation++
 	generation := s.generation
 	s.cancel = cancel
+	done := make(chan struct{})
+	s.done = done
 	go func() {
-		s.run(ctx)
+		if s.runFn != nil {
+			s.runFn(ctx)
+		} else {
+			s.run(ctx)
+		}
 		s.finishRun(generation)
+		close(done)
 	}()
 }
 
@@ -133,15 +145,22 @@ func (s *SyncService) finishRun(generation uint64) {
 	defer s.mu.Unlock()
 	if s.generation == generation {
 		s.cancel = nil
+		s.done = nil
 	}
 }
 
 func (s *SyncService) Stop() {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
+	cancel := s.cancel
+	done := s.done
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
 	}
 }
 

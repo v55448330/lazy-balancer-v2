@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,14 +30,19 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			if defaults, merr := json.MarshalIndent(cfg, "", "  "); merr == nil {
-				_ = os.WriteFile(path, defaults, 0644)
+				if werr := os.WriteFile(path, defaults, 0644); werr != nil {
+					log.Printf("GetBranding: failed to write default branding file %s: %v", path, werr)
+				}
 			}
 		}
 		cfg.Version = h.cfg.Version
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
 		return
 	}
-	_ = json.Unmarshal(data, &cfg)
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		log.Printf("GetBranding: invalid branding file %s, using defaults: %v", path, err)
+		cfg = defaultBranding
+	}
 	cfg.Version = h.cfg.Version
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
 }

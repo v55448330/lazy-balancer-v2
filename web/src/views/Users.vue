@@ -56,7 +56,7 @@
           </el-col>
         </el-row>
         <el-form-item>
-          <el-button type="primary" @click="handleSubmit">保存</el-button>
+          <el-button type="primary" :loading="submitting" :disabled="submitting" @click="handleSubmit">保存</el-button>
           <el-button @click="closeForm">取消</el-button>
         </el-form-item>
       </el-form>
@@ -135,6 +135,7 @@ const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 const users = ref<UserDto[]>([])
 const showForm = ref(false)
+const submitting = ref(false)
 
 const openCreateForm = () => {
   editingUser.value = null
@@ -163,22 +164,27 @@ const fetchUsers = async () => {
 }
 
 const handleSubmit = async () => {
-  if (isReadOnly.value) return
-  if (editingUser.value) {
-    await request.put(`/users/${editingUser.value.id}`, {
-      username: form.value.username,
-      role: form.value.role,
-      display_name: form.value.display_name,
-      password: form.value.password || undefined,
-    })
-    ElMessage.success('更新成功')
-  } else {
-    await request.post('/users', form.value)
-    ElMessage.success('创建成功')
+  if (isReadOnly.value || submitting.value) return
+  submitting.value = true
+  try {
+    if (editingUser.value) {
+      await request.put(`/users/${editingUser.value.id}`, {
+        username: form.value.username,
+        role: form.value.role,
+        display_name: form.value.display_name,
+        password: form.value.password || undefined,
+      })
+      ElMessage.success('更新成功')
+    } else {
+      await request.post('/users', form.value)
+      ElMessage.success('创建成功')
+    }
+    closeForm()
+    fetchUsers()
+    form.value = { username: '', password: '', display_name: '', role: 'user' }
+  } finally {
+    submitting.value = false
   }
-  closeForm()
-  fetchUsers()
-  form.value = { username: '', password: '', display_name: '', role: 'user' }
 }
 
 const editUser = (user: UserDto) => {

@@ -398,8 +398,8 @@ type UpdateRuleRequest struct {
 	Domain                        string      `json:"domain"`
 	ListenPort                    int         `json:"listen_port"`
 	Strategy                      string      `json:"strategy"`
-	DynamicDNS                    bool        `json:"dynamic_dns"`
-	EnableDnsServer               bool        `json:"enable_dns_server"`
+	DynamicDNS                    *bool       `json:"dynamic_dns"`
+	EnableDnsServer               *bool       `json:"enable_dns_server"`
 	DnsServer                     string      `json:"dns_server"`
 	DnsFamily                     string      `json:"dns_family"`
 	HealthCheckPath               string      `json:"health_check_path"`
@@ -407,9 +407,9 @@ type UpdateRuleRequest struct {
 	HealthCheckTimeout            int         `json:"health_check_timeout"`
 	HealthCheckUnhealthyThreshold int         `json:"health_check_unhealthy_threshold"`
 	HealthCheckHealthyThreshold   int         `json:"health_check_healthy_threshold"`
-	EnableActiveHealthCheck       bool        `json:"enable_active_health_check"`
+	EnableActiveHealthCheck       *bool       `json:"enable_active_health_check"`
 	TCPHealthCheckPort            int         `json:"tcp_health_check_port"`
-	TCPProxyProtocol              bool         `json:"tcp_proxy_protocol"`
+	TCPProxyProtocol              *bool       `json:"tcp_proxy_protocol"`
 	TCPTryDuration                int         `json:"tcp_try_duration"`
 	TCPTryInterval                int         `json:"tcp_try_interval"`
 	RequestBodyMaxSizeMB          *int        `json:"request_body_max_size_mb"`
@@ -426,17 +426,17 @@ type UpdateRuleRequest struct {
 	PathRules                     *[]PathRule `json:"path_rules"`
 	HostHeader                    string      `json:"host_header"`
 	Upstreams                     []Upstream  `json:"upstreams"`
-	EnableTLS                     bool        `json:"enable_tls"`
+	EnableTLS                     *bool       `json:"enable_tls"`
 	TLSSource                     string      `json:"tls_source"`
 	ACMEConfigID                  int         `json:"acme_config_id"`
 	CAProviderID                  *int        `json:"ca_provider_id"`
 	TLSCert                       string      `json:"tls_cert"`
 	TLSKey                        string      `json:"tls_key"`
-	TLSHTTPRedirect               bool        `json:"tls_http_redirect"`
-	EnableCompress                bool        `json:"enable_compress"`
+	TLSHTTPRedirect               *bool       `json:"tls_http_redirect"`
+	EnableCompress                *bool       `json:"enable_compress"`
 	CompressTypes                 string      `json:"compress_types"`
-	Enabled                       bool        `json:"enabled"`
-	LogEnabled                    bool        `json:"log_enabled"`
+	Enabled                       *bool       `json:"enabled"`
+	LogEnabled                    *bool       `json:"log_enabled"`
 }
 
 type UpdateConfigRequest struct {

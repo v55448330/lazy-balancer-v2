@@ -97,7 +97,7 @@
     class="log-dialog"
     destroy-on-close
     @opened="onLogDialogOpened"
-    @closed="onLogDialogClosed"
+    @close="onLogDialogClosed"
   >
     <el-tabs v-model="activeLogTab" @tab-change="onLogTabChange">
       <el-tab-pane label="运行时" name="runtime" />
@@ -167,6 +167,7 @@ const logLoading = ref(false)
 const autoRefresh = ref(true)
 const logContainerRef = ref<HTMLElement | null>(null)
 let logPollTimer: ReturnType<typeof setInterval> | null = null
+let logRequestSeq = 0
 
 const updateProxyTimeout = (field: keyof ProxyTimeoutConfig, value: number): void => {
   settings.value[field] = value
@@ -224,9 +225,12 @@ const stopLogPolling = (): void => {
 }
 
 const refreshLogs = async (): Promise<void> => {
+  const targetTab = activeLogTab.value
+  const requestSeq = ++logRequestSeq
   logLoading.value = true
   try {
-    const response = await request.get<CaddyLogsResponse>('/caddy/logs', { params: { type: activeLogTab.value } })
+    const response = await request.get<CaddyLogsResponse>('/caddy/logs', { params: { type: targetTab } })
+    if (requestSeq !== logRequestSeq || !logDialogVisible.value || activeLogTab.value !== targetTab) return
     logContent.value = response.data?.content || ''
     await nextTick()
     const container = logContainerRef.value
@@ -238,7 +242,7 @@ const refreshLogs = async (): Promise<void> => {
     }
     throw error
   } finally {
-    logLoading.value = false
+    if (requestSeq === logRequestSeq) logLoading.value = false
   }
 }
 
@@ -248,9 +252,9 @@ const startLogPolling = (): void => {
 }
 
 const openLogDialog = (): void => { logDialogVisible.value = true }
-const onLogDialogOpened = (): void => { void refreshLogs(); startLogPolling() }
-const onLogDialogClosed = (): void => { stopLogPolling(); logContent.value = '' }
-const onLogTabChange = (): void => { logContent.value = ''; void refreshLogs() }
+const onLogDialogOpened = (): void => { logRequestSeq++; void refreshLogs(); startLogPolling() }
+const onLogDialogClosed = (): void => { logRequestSeq++; logLoading.value = false; stopLogPolling(); logContent.value = '' }
+const onLogTabChange = (): void => { logRequestSeq++; logLoading.value = false; logContent.value = ''; void refreshLogs() }
 
 watch(autoRefresh, (enabled) => {
   if (!logDialogVisible.value) return

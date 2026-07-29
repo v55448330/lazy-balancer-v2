@@ -26,7 +26,26 @@ const (
 	// Official directory URLs. These are fixed and not user-editable.
 	LetsEncryptDirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"
 	ZeroSSLDirectoryURL     = "https://acme.zerossl.com/v2/DV90"
+	caProviderColumns       = "id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled, created_at, updated_at"
 )
+
+type caProviderScanner interface {
+	Scan(...any) error
+}
+
+func scanCAProvider(scanner caProviderScanner, provider *models.CAProvider) error {
+	var createdAt, updatedAt sql.NullTime
+	if err := scanner.Scan(&provider.ID, &provider.Name, &provider.Provider, &provider.DirectoryURL, &provider.Credentials, &provider.MaxConcurrent, &provider.MinIntervalMS, &provider.Enabled, &createdAt, &updatedAt); err != nil {
+		return err
+	}
+	if createdAt.Valid {
+		provider.CreatedAt = createdAt.Time
+	}
+	if updatedAt.Valid {
+		provider.UpdatedAt = updatedAt.Time
+	}
+	return nil
+}
 
 // CAProviderListItem is a credential-safe view of a CA provider for list endpoints.
 type CAProviderListItem struct {
@@ -75,10 +94,7 @@ func maskCredentials(credentials string) string {
 
 // ListCAProviders returns all CA providers with masked credentials.
 func (s *CAProviderService) ListCAProviders() ([]CAProviderListItem, error) {
-	rows, err := db.DB.Query(`
-		SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled, created_at, updated_at
-		FROM ca_providers ORDER BY id
-	`)
+	rows, err := db.DB.Query("SELECT " + caProviderColumns + " FROM ca_providers ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -86,18 +102,16 @@ func (s *CAProviderService) ListCAProviders() ([]CAProviderListItem, error) {
 
 	list := make([]CAProviderListItem, 0)
 	for rows.Next() {
-		var p CAProviderListItem
-		var createdAt, updatedAt sql.NullTime
-		if err := rows.Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials, &p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled, &createdAt, &updatedAt); err != nil {
+		var provider models.CAProvider
+		if err := scanCAProvider(rows, &provider); err != nil {
 			return nil, err
 		}
-		if createdAt.Valid {
-			p.CreatedAt = createdAt.Time
+		p := CAProviderListItem{
+			ID: provider.ID, Name: provider.Name, Provider: provider.Provider,
+			DirectoryURL: provider.DirectoryURL, Credentials: maskCredentials(provider.Credentials),
+			MaxConcurrent: provider.MaxConcurrent, MinIntervalMS: provider.MinIntervalMS,
+			Enabled: provider.Enabled, CreatedAt: provider.CreatedAt, UpdatedAt: provider.UpdatedAt,
 		}
-		if updatedAt.Valid {
-			p.UpdatedAt = updatedAt.Time
-		}
-		p.Credentials = maskCredentials(p.Credentials)
 		list = append(list, p)
 	}
 	if err := rows.Err(); err != nil {
@@ -110,22 +124,12 @@ func (s *CAProviderService) ListCAProviders() ([]CAProviderListItem, error) {
 // The EAB HMAC key in credentials is masked to limit credential exposure.
 func (s *CAProviderService) GetCAProvider(id int) (models.CAProvider, error) {
 	var p models.CAProvider
-	var createdAt, updatedAt sql.NullTime
-	err := db.DB.QueryRow(`
-		SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled, created_at, updated_at
-		FROM ca_providers WHERE id=?
-	`, id).Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials, &p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled, &createdAt, &updatedAt)
+	err := scanCAProvider(db.DB.QueryRow("SELECT "+caProviderColumns+" FROM ca_providers WHERE id=?", id), &p)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return p, ErrCAProviderNotFound
 		}
 		return p, err
-	}
-	if createdAt.Valid {
-		p.CreatedAt = createdAt.Time
-	}
-	if updatedAt.Valid {
-		p.UpdatedAt = updatedAt.Time
 	}
 	if p.Credentials != "" {
 		p.Credentials = maskCredentials(p.Credentials)
@@ -181,24 +185,13 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 	defer tx.Rollback()
 
 	var existing models.CAProvider
-	var createdAt, updatedAt sql.NullTime
-	err = tx.QueryRow(`
-		SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled, created_at, updated_at
-		FROM ca_providers WHERE id=?
-	`, id).Scan(&existing.ID, &existing.Name, &existing.Provider, &existing.DirectoryURL, &existing.Credentials, &existing.MaxConcurrent, &existing.MinIntervalMS, &existing.Enabled, &createdAt, &updatedAt)
+	err = scanCAProvider(tx.QueryRow("SELECT "+caProviderColumns+" FROM ca_providers WHERE id=?", id), &existing)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrCAProviderNotFound
 		}
 		return err
 	}
-	if createdAt.Valid {
-		existing.CreatedAt = createdAt.Time
-	}
-	if updatedAt.Valid {
-		existing.UpdatedAt = updatedAt.Time
-	}
-
 	if req.Name != nil {
 		existing.Name = *req.Name
 	}
@@ -337,10 +330,7 @@ func (s *CAProviderService) TestCAProvider(id int) error {
 	log.Printf("Testing CA provider %d", id)
 
 	var p models.CAProvider
-	err := db.DB.QueryRow(`
-		SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled
-		FROM ca_providers WHERE id=? AND enabled=1
-	`, id).Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials, &p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled)
+	err := scanCAProvider(db.DB.QueryRow("SELECT "+caProviderColumns+" FROM ca_providers WHERE id=? AND enabled=1", id), &p)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrCAProviderNotFound

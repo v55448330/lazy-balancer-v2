@@ -83,7 +83,7 @@
             <el-icon><Connection /></el-icon>
             <span>DNS 提供商配置</span>
           </div>
-          <el-button type="primary" size="small" :disabled="isReadOnly" @click="openConfigDialog()">
+          <el-button type="primary" size="small" :disabled="isReadOnly || saving" @click="openConfigDialog()">
             <el-icon><Plus /></el-icon>
             <span class="btn-text">添加</span>
           </el-button>
@@ -100,7 +100,7 @@
         <el-table-column label="操作" width="180" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" :loading="testingId === row.id" :disabled="isReadOnly" @click="testConfig(row)">测试</el-button>
-            <el-button link type="primary" size="small" :disabled="isReadOnly" @click="openConfigDialog(row)">编辑</el-button>
+            <el-button link type="primary" size="small" :disabled="isReadOnly || saving" @click="openConfigDialog(row)">编辑</el-button>
             <el-button link type="danger" size="small" :disabled="isReadOnly" @click="deleteConfig(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -120,7 +120,13 @@
       <CertJobs />
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑 DNS 提供商配置' : '添加 DNS 提供商配置'" width="520">
+    <el-dialog
+      v-model="dialogVisible"
+      :title="editingId ? '编辑 DNS 提供商配置' : '添加 DNS 提供商配置'"
+      width="520"
+      :close-on-click-modal="false"
+      :before-close="beforeConfigDialogClose"
+    >
       <el-form :model="form" label-width="120px">
         <el-form-item label="配置名称" required>
           <el-input v-model="form.name" placeholder="例如：我的证书配置" />
@@ -161,8 +167,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveConfig">保存</el-button>
+        <el-button :disabled="saving" @click="closeConfigDialog">取消</el-button>
+        <el-button type="primary" :loading="saving" :disabled="saving" @click="saveConfig">保存</el-button>
       </template>
     </el-dialog>
 
@@ -455,6 +461,7 @@ const testCAProvider = async (p: CAProvider) => {
 }
 
 const openConfigDialog = (config?: CertConfig) => {
+  if (saving.value) return
   if (config) {
     editingId.value = config.id || null
     const rawCreds = config.dns_credentials || {}
@@ -493,14 +500,28 @@ const openConfigDialog = (config?: CertConfig) => {
   dialogVisible.value = true
 }
 
+const beforeConfigDialogClose = (done: () => void): void => {
+  if (!saving.value) done()
+}
+
+const closeConfigDialog = (): void => {
+  if (!saving.value) dialogVisible.value = false
+}
+
 const saveConfig = async () => {
   if (saving.value) return
-  saving.value = true
-  if (!form.value.name || !form.value.dns_provider) {
+  const targetId = editingId.value
+  const payload = {
+    name: form.value.name,
+    dns_provider: form.value.dns_provider,
+    dns_credentials: { ...form.value.dns_credentials },
+    enabled: form.value.enabled,
+  }
+  if (!payload.name || !payload.dns_provider) {
     ElMessage.warning('请填写配置名称和 DNS 提供商')
-    saving.value = false
     return
   }
+  saving.value = true
 
   const domain = await promptTestDomain(true)
   if (!domain) {
@@ -509,11 +530,10 @@ const saveConfig = async () => {
   }
 
   try {
-    const payload = { ...form.value, domain }
-    const url = editingId.value
-      ? `/certificate-configs/${editingId.value}/test`
+    const url = targetId
+      ? `/certificate-configs/${targetId}/test`
       : '/certificate-configs/test'
-    await request.post(url, payload)
+    await request.post(url, { ...payload, domain })
   } catch (caught: unknown) {
     ElMessage.error(requestErrorMessage(caught, '凭证验证失败'))
     saving.value = false
@@ -521,11 +541,11 @@ const saveConfig = async () => {
   }
 
   try {
-    if (editingId.value) {
-      await request.put(`/certificate-configs/${editingId.value}`, form.value)
+    if (targetId) {
+      await request.put(`/certificate-configs/${targetId}`, payload)
       ElMessage.success('配置已更新')
     } else {
-      await request.post('/certificate-configs', form.value)
+      await request.post('/certificate-configs', payload)
       ElMessage.success('配置已创建')
     }
     dialogVisible.value = false

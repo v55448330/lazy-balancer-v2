@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"lazy-balancer-v2/internal/db"
@@ -28,6 +29,12 @@ type CertPairSnapshot struct {
 }
 
 type CertFilesSnapshot map[string]CertPairSnapshot
+
+type CertMaterial struct {
+	RuleID  string
+	CertPEM string
+	KeyPEM  string
+}
 
 // safeRuleID rejects anything outside the generated caddy_id alphabet so a
 // malicious or corrupted rule ID can never escape the cert directory.
@@ -131,7 +138,10 @@ func RemoveCertFiles(ruleID string) error {
 func SnapshotCertFiles(ruleIDs []string) (CertFilesSnapshot, error) {
 	certWriteMu.Lock()
 	defer certWriteMu.Unlock()
+	return snapshotCertFilesLocked(ruleIDs)
+}
 
+func snapshotCertFilesLocked(ruleIDs []string) (CertFilesSnapshot, error) {
 	snapshot := make(CertFilesSnapshot, len(ruleIDs))
 	for _, ruleID := range ruleIDs {
 		if _, exists := snapshot[ruleID]; exists {
@@ -157,42 +167,77 @@ func SnapshotCertFiles(ruleIDs []string) (CertFilesSnapshot, error) {
 func RestoreCertFiles(snapshot CertFilesSnapshot) error {
 	certWriteMu.Lock()
 	defer certWriteMu.Unlock()
+	return restoreCertFilesLocked(snapshot)
+}
 
-	var restoreErrors []error
-	for ruleID, pair := range snapshot {
+func restoreCertFilesLocked(snapshot CertFilesSnapshot) error {
+	ruleIDs := make([]string, 0, len(snapshot))
+	for ruleID := range snapshot {
+		ruleIDs = append(ruleIDs, ruleID)
+	}
+	sort.Strings(ruleIDs)
+	current, err := snapshotCertFilesLocked(ruleIDs)
+	if err != nil {
+		return fmt.Errorf("快照恢复前证书文件: %w", err)
+	}
+
+	for _, ruleID := range ruleIDs {
+		pair := snapshot[ruleID]
 		certPath, keyPath := CertFilePaths(ruleID)
-		if certPath == "" {
-			restoreErrors = append(restoreErrors, fmt.Errorf("非法的规则编号: %q", ruleID))
-			continue
-		}
-		currentCert, err := snapshotCertFile(certPath)
-		if err != nil {
-			restoreErrors = append(restoreErrors, fmt.Errorf("快照当前证书 %s: %w", ruleID, err))
-			continue
-		}
-		currentKey, err := snapshotCertFile(keyPath)
-		if err != nil {
-			restoreErrors = append(restoreErrors, fmt.Errorf("快照当前私钥 %s: %w", ruleID, err))
-			continue
-		}
 		certErr := restoreCertFile(certPath, pair.Cert)
 		var keyErr error
 		if certErr == nil {
 			keyErr = restoreCertFile(keyPath, pair.Key)
 		}
 		if certErr != nil || keyErr != nil {
-			rollbackErr := errors.Join(
-				restoreCertFile(certPath, currentCert),
-				restoreCertFile(keyPath, currentKey),
-			)
+			rollbackErr := restoreCertFilesBestEffortLocked(current)
 			restoreErr := fmt.Errorf("恢复证书对 %s: %w", ruleID, errors.Join(certErr, keyErr))
 			if rollbackErr != nil {
-				restoreErr = errors.Join(restoreErr, fmt.Errorf("回滚证书对 %s: %w", ruleID, rollbackErr))
+				restoreErr = errors.Join(restoreErr, fmt.Errorf("回滚全部证书文件: %w", rollbackErr))
 			}
-			restoreErrors = append(restoreErrors, restoreErr)
+			return restoreErr
 		}
 	}
+	return nil
+}
+
+func restoreCertFilesBestEffortLocked(snapshot CertFilesSnapshot) error {
+	var restoreErrors []error
+	for ruleID, pair := range snapshot {
+		certPath, keyPath := CertFilePaths(ruleID)
+		restoreErrors = append(restoreErrors,
+			restoreCertFile(certPath, pair.Cert),
+			restoreCertFile(keyPath, pair.Key),
+		)
+	}
 	return errors.Join(restoreErrors...)
+}
+
+func MaterializeCertPairs(materials []CertMaterial) (CertFilesSnapshot, error) {
+	certWriteMu.Lock()
+	defer certWriteMu.Unlock()
+
+	ruleIDs := make([]string, len(materials))
+	for i, material := range materials {
+		ruleIDs[i] = material.RuleID
+	}
+	snapshot, err := snapshotCertFilesLocked(ruleIDs)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(certDir, 0755); err != nil {
+		return nil, fmt.Errorf("创建证书目录: %w", err)
+	}
+	for _, material := range materials {
+		certPath, keyPath := CertFilePaths(material.RuleID)
+		if certPath == "" {
+			return nil, errors.Join(fmt.Errorf("非法的规则编号: %q", material.RuleID), restoreCertFilesLocked(snapshot))
+		}
+		if err := writeCertPair(certPath, keyPath, material.CertPEM, material.KeyPEM); err != nil {
+			return nil, errors.Join(fmt.Errorf("物化证书 %s: %w", material.RuleID, err), restoreCertFilesLocked(snapshot))
+		}
+	}
+	return snapshot, nil
 }
 
 func snapshotCertFile(path string) (CertFileSnapshot, error) {

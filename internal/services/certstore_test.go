@@ -75,24 +75,30 @@ func TestRemoveCertFiles_returns_both_delete_errors(t *testing.T) {
 	}
 }
 
-func TestRestoreCertFiles_rolls_back_pair_when_key_restore_fails(t *testing.T) {
+func TestRestoreCertFiles_rolls_back_all_rules_when_later_restore_fails(t *testing.T) {
 	// Given
-	dir := useTemporaryCertDir(t)
-	certPath := filepath.Join(dir, "lb_restore.crt")
-	keyPath := filepath.Join(dir, "lb_restore.key")
-	if err := os.WriteFile(certPath, []byte("current-cert"), 0644); err != nil {
-		t.Fatalf("write current cert: %v", err)
+	useTemporaryCertDir(t)
+	for _, ruleID := range []string{"a-restored", "z-fails"} {
+		certPath, keyPath := CertFilePaths(ruleID)
+		if err := os.WriteFile(certPath, []byte(ruleID+"-current-cert"), 0644); err != nil {
+			t.Fatalf("write current cert for %s: %v", ruleID, err)
+		}
+		if err := os.WriteFile(keyPath, []byte(ruleID+"-current-key"), 0600); err != nil {
+			t.Fatalf("write current key for %s: %v", ruleID, err)
+		}
 	}
-	if err := os.WriteFile(keyPath, []byte("current-key"), 0600); err != nil {
-		t.Fatalf("write current key: %v", err)
-	}
-	if err := os.Mkdir(keyPath+".restore", 0700); err != nil {
+	_, failingKeyPath := CertFilePaths("z-fails")
+	if err := os.Mkdir(failingKeyPath+".restore", 0700); err != nil {
 		t.Fatalf("block key restore temporary path: %v", err)
 	}
 	snapshot := CertFilesSnapshot{
-		"lb_restore": {
-			Cert: CertFileSnapshot{Data: []byte("snapshot-cert"), Mode: 0644, Exists: true},
-			Key:  CertFileSnapshot{Data: []byte("snapshot-key"), Mode: 0600, Exists: true},
+		"a-restored": {
+			Cert: CertFileSnapshot{Data: []byte("a-snapshot-cert"), Mode: 0644, Exists: true},
+			Key:  CertFileSnapshot{Data: []byte("a-snapshot-key"), Mode: 0600, Exists: true},
+		},
+		"z-fails": {
+			Cert: CertFileSnapshot{Data: []byte("z-snapshot-cert"), Mode: 0644, Exists: true},
+			Key:  CertFileSnapshot{Data: []byte("z-snapshot-key"), Mode: 0600, Exists: true},
 		},
 	}
 
@@ -103,15 +109,18 @@ func TestRestoreCertFiles_rolls_back_pair_when_key_restore_fails(t *testing.T) {
 	if err == nil {
 		t.Fatal("restore succeeded despite blocked key restore")
 	}
-	cert, readErr := os.ReadFile(certPath)
-	if readErr != nil {
-		t.Fatalf("read rolled back cert: %v", readErr)
-	}
-	key, readErr := os.ReadFile(keyPath)
-	if readErr != nil {
-		t.Fatalf("read rolled back key: %v", readErr)
-	}
-	if string(cert) != "current-cert" || string(key) != "current-key" {
-		t.Fatalf("certificate pair after rollback=(%q,%q), want current pair", cert, key)
+	for _, ruleID := range []string{"a-restored", "z-fails"} {
+		certPath, keyPath := CertFilePaths(ruleID)
+		cert, readErr := os.ReadFile(certPath)
+		if readErr != nil {
+			t.Fatalf("read rolled back cert for %s: %v", ruleID, readErr)
+		}
+		key, readErr := os.ReadFile(keyPath)
+		if readErr != nil {
+			t.Fatalf("read rolled back key for %s: %v", ruleID, readErr)
+		}
+		if string(cert) != ruleID+"-current-cert" || string(key) != ruleID+"-current-key" {
+			t.Fatalf("%s pair after rollback=(%q,%q), want current pair", ruleID, cert, key)
+		}
 	}
 }

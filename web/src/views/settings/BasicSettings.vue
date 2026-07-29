@@ -159,7 +159,7 @@
       <template #footer><el-button @click="appLogVisible = false">关闭</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="importDialogVisible" title="导入配置备份" width="560px" :close-on-click-modal="false">
+    <el-dialog v-model="importDialogVisible" title="导入配置备份" width="560px" :close-on-click-modal="false" @close="onImportDialogClosed">
       <div class="import-picker">
         <el-button :icon="Upload" @click="chooseImportFile">选择备份文件</el-button>
         <span v-if="importFileName" class="import-filename">{{ importFileName }}</span>
@@ -334,10 +334,16 @@ const summaryLabels: Record<string, string> = {
 const triggerImport = (): void => {
   if (backupDisabled.value) return
   importValidationSeq++
+  importValidating.value = false
   importFileName.value = ''
   importFileContent.value = ''
   importValidation.value = null
   importDialogVisible.value = true
+}
+
+const onImportDialogClosed = (): void => {
+  importValidationSeq++
+  importValidating.value = false
 }
 
 const chooseImportFile = (): void => {

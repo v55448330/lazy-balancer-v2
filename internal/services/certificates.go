@@ -5,7 +5,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -15,20 +14,12 @@ import (
 )
 
 type CertificateService struct {
-	adminURL      string
-	client        *http.Client
-	mu            sync.Mutex
-	stopCh        chan struct{}
-	caddyReloader func() error
+	mu     sync.Mutex
+	stopCh chan struct{}
 }
 
-func NewCertificateService(adminURL string, reloader func() error) *CertificateService {
-	return &CertificateService{
-		adminURL:      adminURL,
-		client:        &http.Client{Timeout: 10 * time.Second},
-		stopCh:        make(chan struct{}),
-		caddyReloader: reloader,
-	}
+func NewCertificateService() *CertificateService {
+	return &CertificateService{stopCh: make(chan struct{})}
 }
 
 func (s *CertificateService) Start() {

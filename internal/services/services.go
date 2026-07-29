@@ -1,6 +1,7 @@
 package services
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"math"
@@ -81,7 +82,11 @@ func (m *MetricsService) collect() {
 		return
 	}
 
-	metrics := m.parsePrometheusMetrics(string(body))
+	metrics, err := m.parsePrometheusMetrics(string(body))
+	if err != nil {
+		log.Printf("Failed to parse metrics: %v", err)
+		return
+	}
 	m.storeMetrics(metrics)
 	m.storePerHostMetrics(string(body))
 	m.updateOverview(metrics)
@@ -127,18 +132,24 @@ func classifyStatusCodes(codes map[int]int64) statusClassCounts {
 	return counts
 }
 
-func (m *MetricsService) parsePrometheusMetrics(text string) parsedMetrics {
+func (m *MetricsService) parsePrometheusMetrics(text string) (parsedMetrics, error) {
 	metrics := parsedMetrics{}
 	codes := make(map[int]int64)
 
 	// Parse request counters
 	// caddy_http_requests_total{code="200",...}
-	re := regexp.MustCompile(`caddy_http_requests_total\{[^}]*code="(\d+)".*?\} (\d+)`)
+	re := regexp.MustCompile(`caddy_http_requests_total\{[^}]*code="(\d+)".*?\}\s+(\S+)`)
 	matches := re.FindAllStringSubmatch(text, -1)
 	for _, match := range matches {
 		if len(match) >= 3 {
-			code, _ := strconv.ParseInt(match[1], 10, 64)
-			value, _ := strconv.ParseInt(match[2], 10, 64)
+			code, err := strconv.ParseInt(match[1], 10, 64)
+			if err != nil {
+				return parsedMetrics{}, fmt.Errorf("parse HTTP status code %q: %w", match[1], err)
+			}
+			value, err := parsePrometheusInteger(match[2])
+			if err != nil {
+				return parsedMetrics{}, fmt.Errorf("parse request count %q: %w", match[2], err)
+			}
 			metrics.requestsTotal += value
 			codes[int(code)] += value
 		}
@@ -151,28 +162,45 @@ func (m *MetricsService) parsePrometheusMetrics(text string) parsedMetrics {
 
 	// Parse response size
 	// caddy_http_response_size_bytes_sum{...}
-	reSize := regexp.MustCompile(`caddy_http_response_size_bytes_sum.*?\} (\d+\.?\d*)`)
+	reSize := regexp.MustCompile(`caddy_http_response_size_bytes_sum.*?\}\s+(\S+)`)
 	matches = reSize.FindAllStringSubmatch(text, -1)
 	for _, match := range matches {
 		if len(match) >= 2 {
-			value, _ := strconv.ParseInt(match[1], 10, 64)
+			value, err := parsePrometheusInteger(match[1])
+			if err != nil {
+				return parsedMetrics{}, fmt.Errorf("parse response size %q: %w", match[1], err)
+			}
 			metrics.bytesOut += value
 		}
 	}
 
 	// Parse request size
-	reReqSize := regexp.MustCompile(`caddy_http_request_size_bytes_sum.*?\} (\d+\.?\d*)`)
+	reReqSize := regexp.MustCompile(`caddy_http_request_size_bytes_sum.*?\}\s+(\S+)`)
 	matches = reReqSize.FindAllStringSubmatch(text, -1)
 	for _, match := range matches {
 		if len(match) >= 2 {
-			value, _ := strconv.ParseInt(match[1], 10, 64)
+			value, err := parsePrometheusInteger(match[1])
+			if err != nil {
+				return parsedMetrics{}, fmt.Errorf("parse request size %q: %w", match[1], err)
+			}
 			metrics.bytesIn += value
 		}
 	}
 
 	metrics.latencyP50, metrics.latencyP95, metrics.latencyP99 = estimateLatencyPercentiles(text)
 
-	return metrics
+	return metrics, nil
+}
+
+func parsePrometheusInteger(raw string) (int64, error) {
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, err
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) || value > math.MaxInt64 || value < math.MinInt64 {
+		return 0, fmt.Errorf("value is not a finite int64")
+	}
+	return int64(value), nil
 }
 
 // estimateLatencyPercentiles computes p50/p95/p99 in milliseconds from the

@@ -1,6 +1,8 @@
 package services
 
 import (
+	"fmt"
+	"log"
 	"sync/atomic"
 	"time"
 
@@ -14,29 +16,39 @@ var currentLocation atomic.Value
 func init() {
 	currentLocation.Store(time.FixedZone("CST", 8*3600))
 	go func() {
-		refreshLocation()
+		if err := refreshLocation(); err != nil {
+			log.Printf("refresh timezone: %v", err)
+		}
 		for range time.Tick(30 * time.Second) {
-			refreshLocation()
+			if err := refreshLocation(); err != nil {
+				log.Printf("refresh timezone: %v", err)
+			}
 		}
 	}()
 }
 
-func refreshLocation() {
+func refreshLocation() error {
 	database := db.GetDB()
 	if database == nil {
-		return
+		return nil
 	}
 	var tz string
 	if err := database.QueryRow("SELECT COALESCE(timezone,'Asia/Shanghai') FROM global_config WHERE id=1").Scan(&tz); err != nil {
-		return
+		return fmt.Errorf("read configured timezone: %w", err)
 	}
-	if loc, err := time.LoadLocation(tz); err == nil {
-		currentLocation.Store(loc)
-		// Keep the process-local timezone in sync so time.Now() users (e.g.
-		// runtime log rotation filenames) follow the configured timezone
-		// without a restart.
-		time.Local = loc
+	if _, err := ConfigureLocation(tz); err != nil {
+		return fmt.Errorf("load configured timezone %q: %w", tz, err)
 	}
+	return nil
+}
+
+func ConfigureLocation(name string) (*time.Location, error) {
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, err
+	}
+	currentLocation.Store(loc)
+	return loc, nil
 }
 
 func CurrentLocation() *time.Location {

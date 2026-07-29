@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -25,24 +26,28 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if err := replaceSnapshotTx(ctx, tx, snapshot); err != nil {
 		return err
 	}
-	removeMissingSnapshotCerts(previous.Certs, snapshot.Certs)
+	if err := removeMissingSnapshotCerts(previous.Certs, snapshot.Certs); err != nil {
+		return errors.Join(fmt.Errorf("删除本地旧证书: %w", err), restoreSnapshotCerts(previous.Certs, snapshot.Certs))
+	}
 	if err := materializeSnapshotCerts(snapshot.Certs); err != nil {
-		restoreSnapshotCerts(previous.Certs, snapshot.Certs)
-		return fmt.Errorf("写入同步证书: %w", err)
+		return errors.Join(fmt.Errorf("写入同步证书: %w", err), restoreSnapshotCerts(previous.Certs, snapshot.Certs))
 	}
 	if err := s.caddy.ApplyConfig(generateCaddyConfigFromStore(s.cfg, tx)); err != nil {
-		restoreSnapshotCerts(previous.Certs, snapshot.Certs)
-		return fmt.Errorf("重载 Caddy 失败，数据库已回滚: %w", err)
+		return errors.Join(fmt.Errorf("重载 Caddy 失败，数据库已回滚: %w", err), restoreSnapshotCerts(previous.Certs, snapshot.Certs))
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE global_config SET applied_version=?, sync_fingerprint=?, last_sync=datetime('now'), last_sync_error='' WHERE id=1`, snapshot.Version, snapshot.Fingerprint); err != nil {
-		restoreSnapshotCerts(previous.Certs, snapshot.Certs)
-		_ = s.caddy.ApplyConfig(GenerateCaddyConfig(s.cfg))
-		return fmt.Errorf("记录同步状态: %w", err)
+		return errors.Join(
+			fmt.Errorf("记录同步状态: %w", err),
+			restoreSnapshotCerts(previous.Certs, snapshot.Certs),
+			wrapSnapshotRestoreError(s.caddy.ApplyConfig(GenerateCaddyConfig(s.cfg))),
+		)
 	}
 	if err := tx.Commit(); err != nil {
-		restoreSnapshotCerts(previous.Certs, snapshot.Certs)
-		_ = s.caddy.ApplyConfig(GenerateCaddyConfig(s.cfg))
-		return fmt.Errorf("提交快照事务: %w", err)
+		return errors.Join(
+			fmt.Errorf("提交快照事务: %w", err),
+			restoreSnapshotCerts(previous.Certs, snapshot.Certs),
+			wrapSnapshotRestoreError(s.caddy.ApplyConfig(GenerateCaddyConfig(s.cfg))),
+		)
 	}
 	caddySync := "未开启"
 	if snapshot.CaddyConfig != nil {
@@ -61,21 +66,31 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	return nil
 }
 
-func restoreSnapshotCerts(previous, current []models.ClusterCertificate) {
-	removeMissingSnapshotCerts(current, previous)
-	_ = materializeSnapshotCerts(previous)
+func restoreSnapshotCerts(previous, current []models.ClusterCertificate) error {
+	return errors.Join(removeMissingSnapshotCerts(current, previous), materializeSnapshotCerts(previous))
 }
 
-func removeMissingSnapshotCerts(previous, current []models.ClusterCertificate) {
+func removeMissingSnapshotCerts(previous, current []models.ClusterCertificate) error {
 	currentIDs := make(map[string]bool, len(current))
 	for _, cert := range current {
 		currentIDs[cert.RuleID] = true
 	}
+	var errs []error
 	for _, cert := range previous {
 		if !currentIDs[cert.RuleID] {
-			RemoveCertFiles(cert.RuleID)
+			if err := RemoveCertFiles(cert.RuleID); err != nil {
+				errs = append(errs, fmt.Errorf("删除证书 %s: %w", cert.RuleID, err))
+			}
 		}
 	}
+	return errors.Join(errs...)
+}
+
+func wrapSnapshotRestoreError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("恢复旧 Caddy 配置: %w", err)
 }
 
 func replaceSnapshotDB(ctx context.Context, database *sql.DB, snapshot models.ClusterSnapshot) error {

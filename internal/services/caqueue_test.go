@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
@@ -27,6 +28,38 @@ func TestCAQueueManager_CancelJob_removes_pending_job(t *testing.T) {
 	}
 	if _, active := queue.active[42]; active {
 		t.Fatal("cancelled pending job remains active")
+	}
+}
+
+func TestCAQueueManager_CancelJobsForRule_removes_pending_and_cancels_running(t *testing.T) {
+	// Given
+	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
+	queue.enqueue(queueItem{jobID: 41, ruleID: "lb-target", domains: "one.example.com"})
+	queue.enqueue(queueItem{jobID: 42, ruleID: "lb-other", domains: "two.example.com"})
+	runningCtx, cancel := context.WithCancel(context.Background())
+	queue.mu.Lock()
+	queue.active[43] = struct{}{}
+	queue.cancels[43] = cancel
+	queue.runningRules[43] = "lb-target"
+	queue.mu.Unlock()
+	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
+
+	// When
+	manager.CancelJobsForRule("lb-target")
+
+	// Then
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if len(queue.pending) != 1 || queue.pending[0].jobID != 42 {
+		t.Fatalf("pending jobs=%v, want only job 42", queue.pending)
+	}
+	if _, active := queue.active[41]; active {
+		t.Fatal("cancelled pending rule job remains active")
+	}
+	select {
+	case <-runningCtx.Done():
+	default:
+		t.Fatal("running rule job was not cancelled")
 	}
 }
 
@@ -68,6 +101,31 @@ func TestIsTerminalJobStatus_returns_true_for_disabled_job(t *testing.T) {
 	// When / Then
 	if !isTerminalJobStatus(int(jobID)) {
 		t.Fatal("disabled job is not terminal")
+	}
+}
+
+func TestHandleQueueExecutionError_preserves_downloaded_deployment_failure(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	result, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status) VALUES ('lb_retry', 'example.com', 'downloaded')`)
+	if err != nil {
+		t.Fatalf("seed downloaded job: %v", err)
+	}
+	jobID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read job ID: %v", err)
+	}
+
+	// When
+	handleQueueExecutionError(int(jobID), &certificateDeploymentError{err: errors.New("reload failed")})
+
+	// Then
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+		t.Fatalf("read deployment job: %v", err)
+	}
+	if status != "downloaded" {
+		t.Fatalf("deployment job status=%q, want downloaded", status)
 	}
 }
 

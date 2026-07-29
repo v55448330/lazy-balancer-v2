@@ -22,7 +22,10 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
-const caddyConfigGenerationErrorKey = "__lazy_balancer_generation_error"
+const (
+	caddyConfigGenerationErrorKey = "__lazy_balancer_generation_error"
+	caddyCertFilesSnapshotKey     = "__lazy_balancer_cert_files_snapshot"
+)
 
 // CaddyService handles Caddy configuration management
 type CaddyService struct {
@@ -129,14 +132,22 @@ func (s *CaddyService) ClearBackup() {
 }
 
 // ApplyConfig pushes configuration to Caddy
-func (s *CaddyService) ApplyConfig(config map[string]interface{}) error {
+func (s *CaddyService) ApplyConfig(config map[string]interface{}) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {
 		return errors.New(message)
 	}
+	snapshot, hasSnapshot := config[caddyCertFilesSnapshotKey].(CertFilesSnapshot)
+	if hasSnapshot {
+		defer func() {
+			if err != nil {
+				err = errors.Join(err, RestoreCertFiles(snapshot))
+			}
+		}()
+	}
 
-	data, err := json.Marshal(config)
+	data, err := json.Marshal(caddyPayload(config))
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
@@ -157,11 +168,17 @@ func (s *CaddyService) ApplyConfig(config map[string]interface{}) error {
 }
 
 // ValidateConfig validates Caddy configuration using the /load API with validate=true
-func (s *CaddyService) ValidateConfig(config map[string]interface{}, uniqueID string) error {
+func (s *CaddyService) ValidateConfig(config map[string]interface{}, uniqueID string) (err error) {
 	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {
 		return errors.New(message)
 	}
-	data, err := json.Marshal(config)
+	snapshot, hasSnapshot := config[caddyCertFilesSnapshotKey].(CertFilesSnapshot)
+	if hasSnapshot {
+		defer func() {
+			err = errors.Join(err, RestoreCertFiles(snapshot))
+		}()
+	}
+	data, err := json.Marshal(caddyPayload(config))
 	if err != nil {
 		return err
 	}
@@ -179,6 +196,16 @@ func (s *CaddyService) ValidateConfig(config map[string]interface{}, uniqueID st
 	}
 
 	return nil
+}
+
+func caddyPayload(config map[string]interface{}) map[string]interface{} {
+	payload := make(map[string]interface{}, len(config))
+	for key, value := range config {
+		if key != caddyCertFilesSnapshotKey {
+			payload[key] = value
+		}
+	}
+	return payload
 }
 
 // ValidateRouteMergedConfig simulates PrependRouteToServer and validates the merged full config
@@ -1430,42 +1457,28 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 	}
 	allRules = filteredRules
 
-	type certificateMaterial struct {
-		ruleID  string
-		certPEM string
-		keyPEM  string
-	}
-	materials := make([]certificateMaterial, 0)
+	materials := make([]CertMaterial, 0)
 	for _, ru := range allRules {
 		r := ru.rule
 		if !r.EnableTLS {
 			continue
 		}
 		if r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
-			materials = append(materials, certificateMaterial{ruleID: r.CaddyID, certPEM: r.TLSCert, keyPEM: r.TLSKey})
+			materials = append(materials, CertMaterial{RuleID: r.CaddyID, CertPEM: r.TLSCert, KeyPEM: r.TLSKey})
 			continue
 		}
 		if r.TLSSource == "acme_dns" {
 			certPEM, keyPEM, issued := loadACMECertificateFromStore(store, r.CaddyID, r.Domain)
 			if issued {
-				materials = append(materials, certificateMaterial{ruleID: r.CaddyID, certPEM: certPEM, keyPEM: keyPEM})
+				materials = append(materials, CertMaterial{RuleID: r.CaddyID, CertPEM: certPEM, KeyPEM: keyPEM})
 			}
 		}
 	}
+	var filesSnapshot CertFilesSnapshot
 	if len(materials) > 0 {
-		ruleIDs := make([]string, len(materials))
-		for i, material := range materials {
-			ruleIDs[i] = material.ruleID
-		}
-		filesSnapshot, err := SnapshotCertFiles(ruleIDs)
+		filesSnapshot, err = MaterializeCertPairs(materials)
 		if err != nil {
-			return map[string]interface{}{caddyConfigGenerationErrorKey: fmt.Sprintf("snapshot certificate files: %v", err)}
-		}
-		for _, material := range materials {
-			if err := WriteCertFiles(material.ruleID, material.certPEM, material.keyPEM); err != nil {
-				restoreErr := RestoreCertFiles(filesSnapshot)
-				return map[string]interface{}{caddyConfigGenerationErrorKey: errors.Join(fmt.Errorf("materialize certificate %s: %w", material.ruleID, err), restoreErr).Error()}
-			}
+			return map[string]interface{}{caddyConfigGenerationErrorKey: fmt.Sprintf("materialize certificate files: %v", err)}
 		}
 	}
 
@@ -1965,6 +1978,9 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 		},
 		"apps":    apps,
 		"logging": logging,
+	}
+	if filesSnapshot != nil {
+		conf[caddyCertFilesSnapshotKey] = filesSnapshot
 	}
 
 	return conf

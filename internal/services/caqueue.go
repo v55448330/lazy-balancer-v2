@@ -73,6 +73,40 @@ func (m *CAQueueManager) CancelJob(jobID int) {
 	}
 }
 
+func (m *CAQueueManager) CancelJobsForRule(ruleID string) {
+	m.mu.Lock()
+	queues := make([]*caQueue, 0, len(m.queues))
+	for _, q := range m.queues {
+		queues = append(queues, q)
+	}
+	m.mu.Unlock()
+
+	for _, q := range queues {
+		q.mu.Lock()
+		pending := q.pending[:0]
+		for _, item := range q.pending {
+			if item.ruleID == ruleID {
+				delete(q.active, item.jobID)
+				continue
+			}
+			pending = append(pending, item)
+		}
+		q.pending = pending
+		cancels := make([]context.CancelFunc, 0)
+		for jobID, runningRuleID := range q.runningRules {
+			if runningRuleID == ruleID {
+				if cancel := q.cancels[jobID]; cancel != nil {
+					cancels = append(cancels, cancel)
+				}
+			}
+		}
+		q.mu.Unlock()
+		for _, cancel := range cancels {
+			cancel()
+		}
+	}
+}
+
 // Enqueue adds or re-enqueues a cert job.
 func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains string) error {
 	provider, err := loadCAProvider(providerID)
@@ -145,17 +179,18 @@ type queueItem struct {
 }
 
 type caQueue struct {
-	provider  models.CAProvider
-	pending   []queueItem
-	running   int
-	active    map[int]struct{} // jobIDs currently pending or running
-	cancels   map[int]context.CancelFunc
-	lastOrder time.Time
-	reloader  func() error
-	mu        sync.Mutex
-	stopCh    chan struct{}
-	ctx       context.Context
-	cancel    context.CancelFunc
+	provider     models.CAProvider
+	pending      []queueItem
+	running      int
+	active       map[int]struct{} // jobIDs currently pending or running
+	cancels      map[int]context.CancelFunc
+	runningRules map[int]string
+	lastOrder    time.Time
+	reloader     func() error
+	mu           sync.Mutex
+	stopCh       chan struct{}
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
 type queueExecution struct {
@@ -171,13 +206,14 @@ func newCAQueue(provider models.CAProvider, reloader func() error) *caQueue {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &caQueue{
-		provider: provider,
-		reloader: reloader,
-		active:   make(map[int]struct{}),
-		cancels:  make(map[int]context.CancelFunc),
-		stopCh:   make(chan struct{}),
-		ctx:      ctx,
-		cancel:   cancel,
+		provider:     provider,
+		reloader:     reloader,
+		active:       make(map[int]struct{}),
+		cancels:      make(map[int]context.CancelFunc),
+		runningRules: make(map[int]string),
+		stopCh:       make(chan struct{}),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 }
 
@@ -260,6 +296,7 @@ func (q *caQueue) prepareExecutionLocked(parent context.Context) (queueExecution
 	q.running++
 	ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
 	q.cancels[item.jobID] = cancel
+	q.runningRules[item.jobID] = item.ruleID
 	return queueExecution{item: item, provider: q.provider, ctx: ctx, cancel: cancel}, true
 }
 
@@ -275,6 +312,7 @@ func (q *caQueue) execute(execution queueExecution) {
 		q.running--
 		delete(q.active, item.jobID)
 		delete(q.cancels, item.jobID)
+		delete(q.runningRules, item.jobID)
 		q.mu.Unlock()
 	}()
 
@@ -291,15 +329,21 @@ func (q *caQueue) execute(execution queueExecution) {
 	issuer := NewCertIssuer(q.reloader)
 	if err := issuer.Issue(execution.ctx, item.jobID, item.ruleID, item.domains, execution.provider); err != nil {
 		log.Printf("CA queue execution failed for job %d rule %s: %v", item.jobID, item.ruleID, err)
-		if !isTerminalJobStatus(item.jobID) {
-			var raErr *CAProviderRateLimitError
-			if errors.As(err, &raErr) {
-				markJobWaitingCA(item.jobID, raErr.RetryAfter)
-			} else {
-				failJob(item.jobID, fmt.Sprintf("CA 签发失败: %v", err))
-			}
-		}
+		handleQueueExecutionError(item.jobID, err)
 	}
+}
+
+func handleQueueExecutionError(jobID int, err error) {
+	var deploymentErr *certificateDeploymentError
+	if errors.As(err, &deploymentErr) || isTerminalJobStatus(jobID) {
+		return
+	}
+	var rateLimitErr *CAProviderRateLimitError
+	if errors.As(err, &rateLimitErr) {
+		markJobWaitingCA(jobID, rateLimitErr.RetryAfter)
+		return
+	}
+	failJob(jobID, fmt.Sprintf("CA 签发失败: %v", err))
 }
 
 func isTerminalJobStatus(jobID int) bool {
@@ -329,19 +373,13 @@ func loadCAProvider(id int) (models.CAProvider, error) {
 		}
 	}
 
-	err := db.DB.QueryRow(`
-		SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled
-		FROM ca_providers WHERE id=? AND enabled=1
-	`, id).Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials, &p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled)
+	err := scanCAProvider(db.DB.QueryRow("SELECT "+caProviderColumns+" FROM ca_providers WHERE id=? AND enabled=1", id), &p)
 	if err != nil {
 		// If the requested/default provider is disabled or missing, fall back to the first enabled provider.
 		var fallbackID int
 		if fallbackErr := db.DB.QueryRow("SELECT id FROM ca_providers WHERE enabled=1 ORDER BY id LIMIT 1").Scan(&fallbackID); fallbackErr == nil {
 			id = fallbackID
-			err = db.DB.QueryRow(`
-				SELECT id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled
-				FROM ca_providers WHERE id=? AND enabled=1
-			`, id).Scan(&p.ID, &p.Name, &p.Provider, &p.DirectoryURL, &p.Credentials, &p.MaxConcurrent, &p.MinIntervalMS, &p.Enabled)
+			err = scanCAProvider(db.DB.QueryRow("SELECT "+caProviderColumns+" FROM ca_providers WHERE id=? AND enabled=1", id), &p)
 		}
 	}
 	if err != nil {

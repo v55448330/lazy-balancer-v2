@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -13,6 +15,121 @@ import (
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
+
+func TestUpdateUser_rejects_invalid_id_and_body(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "invalid id", path: "/users/not-a-number", body: `{}`},
+		{name: "invalid body", path: "/users/1", body: `{"role":`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Given
+			h := newBackupTestHandlers(t)
+			if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name')"); err != nil {
+				t.Fatalf("seed user: %v", err)
+			}
+			router := gin.New()
+			router.PUT("/users/:id", h.UpdateUser)
+			request := httptest.NewRequest(http.MethodPut, tt.path, strings.NewReader(tt.body))
+			request.Header.Set("Content-Type", "application/json")
+
+			// When
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+
+			// Then
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+			}
+			assertUserState(t, "original", "admin", "Original Name", "original-hash")
+		})
+	}
+}
+
+func TestUpdateUser_preserves_omitted_display_name(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name')"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	router := gin.New()
+	router.PUT("/users/:id", h.UpdateUser)
+	request := httptest.NewRequest(http.MethodPut, "/users/1", strings.NewReader(`{"role":"user"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	assertUserState(t, "original", "user", "Original Name", "original-hash")
+}
+
+func TestUpdateUser_preserves_all_fields_when_password_hashing_fails(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name')"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	router := gin.New()
+	router.PUT("/users/:id", h.UpdateUser)
+	body := `{"username":"changed","role":"user","display_name":"Changed Name","password":"` + strings.Repeat("p", 73) + `"}`
+	request := httptest.NewRequest(http.MethodPut, "/users/1", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	}
+	assertUserState(t, "original", "admin", "Original Name", "original-hash")
+}
+
+func TestUpdateUser_preserves_all_fields_when_update_fails(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name')"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.DB.Exec("CREATE TRIGGER fail_user_role_update BEFORE UPDATE ON users WHEN NEW.role='user' BEGIN SELECT RAISE(ABORT,'role update failed'); END"); err != nil {
+		t.Fatalf("create update failure trigger: %v", err)
+	}
+	router := gin.New()
+	router.PUT("/users/:id", h.UpdateUser)
+	request := httptest.NewRequest(http.MethodPut, "/users/1", strings.NewReader(`{"username":"changed","role":"user","display_name":"Changed Name"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	}
+	assertUserState(t, "original", "admin", "Original Name", "original-hash")
+}
+
+func assertUserState(t *testing.T, username, role, displayName, passwordHash string) {
+	t.Helper()
+	var gotUsername, gotRole, gotDisplayName, gotPasswordHash string
+	if err := db.DB.QueryRow("SELECT username, role, COALESCE(display_name,''), password_hash FROM users WHERE id=1").Scan(&gotUsername, &gotRole, &gotDisplayName, &gotPasswordHash); err != nil {
+		t.Fatalf("query user state: %v", err)
+	}
+	if gotUsername != username || gotRole != role || gotDisplayName != displayName || gotPasswordHash != passwordHash {
+		t.Fatalf("user state=(%q,%q,%q,%q), want (%q,%q,%q,%q)", gotUsername, gotRole, gotDisplayName, gotPasswordHash, username, role, displayName, passwordHash)
+	}
+}
 
 func newBackupTestHandlers(t *testing.T) *Handlers {
 	t.Helper()
@@ -219,5 +336,78 @@ func TestImportConfigBackup_rolls_back_when_certificate_materialization_fails(t 
 	}
 	if oldRules != 1 || newRules != 0 {
 		t.Fatalf("rules after failed import: old=%d new=%d", oldRules, newRules)
+	}
+}
+
+func TestImportConfigBackup_restores_partial_certificate_materialization(t *testing.T) {
+	// Given
+	harness := newImportRollbackHarness(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec("INSERT INTO users (username, password_hash, role) VALUES ('old-user', 'hash', 'admin')"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT INTO lb_rules (caddy_id, name, protocol, listen_port, enabled) VALUES ('lb_old_partial', 'old-rule', 'http', 8080, 1)"); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	const firstRuleID = "lb_partial_valid"
+	const oldCert = "certificate-before-import"
+	const oldKey = "key-before-import"
+	if err := services.WriteCertFiles(firstRuleID, oldCert, oldKey); err != nil {
+		t.Fatalf("seed certificate files: %v", err)
+	}
+	validCert, validKey, err := generateTestCert("partial.example.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("generate valid certificate: %v", err)
+	}
+	backup, err := json.Marshal(configBackup{
+		Meta: configBackupMeta{App: "lazy-balancer-v2", Version: 1},
+		Tables: map[string][]map[string]any{
+			"users": {{"id": 2, "username": "new-user", "password_hash": "hash", "role": "admin"}},
+			"lb_rules": {
+				{"caddy_id": firstRuleID, "name": "first-rule", "protocol": "http", "domain": "partial.example.test", "listen_port": 8443, "enabled": 1, "enable_tls": 1, "tls_source": "manual", "tls_cert": validCert, "tls_key": validKey},
+				{"caddy_id": "lb_partial_invalid", "name": "second-rule", "protocol": "http", "domain": "invalid.example.test", "listen_port": 9443, "enabled": 1, "enable_tls": 1, "tls_source": "manual", "tls_cert": "invalid-cert", "tls_key": "invalid-key"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal backup: %v", err)
+	}
+	router := gin.New()
+	router.POST("/config/import", harness.handler.ImportConfigBackup)
+
+	// When
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(string(backup)))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code == http.StatusOK {
+		t.Fatalf("import status=%d body=%s", response.Code, response.Body.String())
+	}
+	var oldRules, importedRules int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_old_partial'").Scan(&oldRules); err != nil {
+		t.Fatalf("count old rules: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id IN ('lb_partial_valid','lb_partial_invalid')").Scan(&importedRules); err != nil {
+		t.Fatalf("count imported rules: %v", err)
+	}
+	if oldRules != 1 || importedRules != 0 {
+		t.Fatalf("rules after failed import: old=%d imported=%d", oldRules, importedRules)
+	}
+	certPath, keyPath := services.CertFilePaths(firstRuleID)
+	cert, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatalf("read restored certificate: %v", err)
+	}
+	key, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read restored key: %v", err)
+	}
+	if string(cert) != oldCert || string(key) != oldKey {
+		t.Fatalf("restored certificate pair=(%q,%q), want (%q,%q)", cert, key, oldCert, oldKey)
+	}
+	if harness.loadCalls() != 1 || harness.currentConfig() != `{"marker":"before-import"}` {
+		t.Fatalf("Caddy loads=%d config=%s, want one restore to pre-import config", harness.loadCalls(), harness.currentConfig())
 	}
 }

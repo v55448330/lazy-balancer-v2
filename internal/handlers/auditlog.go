@@ -67,13 +67,19 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	for rows.Next() {
 		var e AuditLogEntry
 		var createdAt time.Time
-		if err := rows.Scan(&e.ID, &e.Username, &e.Action, &e.Resource, &e.Detail, &e.IPAddress, &createdAt); err == nil {
-			e.CreatedAt = createdAt.In(loc).Format("2006-01-02 15:04:05")
+		if err := rows.Scan(&e.ID, &e.Username, &e.Action, &e.Resource, &e.Detail, &e.IPAddress, &createdAt); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取操作日志失败: " + err.Error()})
+			return
 		}
+		e.CreatedAt = createdAt.In(loc).Format("2006-01-02 15:04:05")
 		if e.Username != "" {
 			usernames[e.Username] = struct{}{}
 		}
 		logs = append(logs, e)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "遍历操作日志失败: " + err.Error()})
+		return
 	}
 	if logs == nil {
 		logs = []AuditLogEntry{}

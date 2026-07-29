@@ -34,7 +34,7 @@
         <el-descriptions-item label="主节点地址" :span="2">
           <span class="mono-value">{{ status.master_url || '-' }}</span>
         </el-descriptions-item>
-        <el-descriptions-item label="最近同步">{{ formatTime(status.last_sync_at) }}</el-descriptions-item>
+        <el-descriptions-item label="最近同步">{{ formatDate(status.last_sync_at) || '-' }}</el-descriptions-item>
         <el-descriptions-item v-if="status.last_sync_error" label="同步错误" :span="3">
           <span class="error-text">{{ status.last_sync_error }}</span>
         </el-descriptions-item>
@@ -54,7 +54,6 @@ defineProps<{
   readonly loading: boolean
 }>()
 
-const formatTime = (value: string): string => formatDate(value) || '-'
 </script>
 
 <style scoped>

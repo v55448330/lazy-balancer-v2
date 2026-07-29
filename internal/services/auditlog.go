@@ -1,12 +1,21 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+)
+
+var (
+	auditCleanupOnce   sync.Once
+	auditCleanupMu     sync.Mutex
+	auditCleanupCancel context.CancelFunc
+	auditCleanupDone   chan struct{}
 )
 
 var configFieldSections = map[string]string{
@@ -102,14 +111,41 @@ func CleanupAuditLogs() {
 }
 
 func StartAuditCleanup() {
-	go func() {
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
-		for range ticker.C {
-			CleanupAuditLogs()
-		}
-	}()
-	CleanupAuditLogs()
+	auditCleanupOnce.Do(func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		auditCleanupMu.Lock()
+		auditCleanupCancel = cancel
+		auditCleanupDone = done
+		auditCleanupMu.Unlock()
+		go func() {
+			defer close(done)
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					CleanupAuditLogs()
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+		CleanupAuditLogs()
+	})
+}
+
+func StopAuditCleanup() {
+	auditCleanupMu.Lock()
+	cancel := auditCleanupCancel
+	done := auditCleanupDone
+	auditCleanupMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
 }
 
 func FormatAuditAction(method, path string) (action, resource, detail string) {

@@ -223,7 +223,9 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		data.Domain = r.Domain
 		data.ListenPort = r.ListenPort
 		data.Strategy = r.Strategy
-		data.DynamicDNS = r.DynamicDNS
+		if r.DynamicDNS != nil {
+			data.DynamicDNS = *r.DynamicDNS
+		}
 		data.DnsServer = r.DnsServer
 		data.DnsFamily = r.DnsFamily
 		data.HealthCheckPath = r.HealthCheckPath
@@ -231,15 +233,23 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		data.HealthCheckTimeout = r.HealthCheckTimeout
 		data.HealthCheckUnhealthyThreshold = r.HealthCheckUnhealthyThreshold
 		data.HealthCheckHealthyThreshold = r.HealthCheckHealthyThreshold
-		data.EnableTLS = r.EnableTLS
+		if r.EnableTLS != nil {
+			data.EnableTLS = *r.EnableTLS
+		}
 		data.TLSSource = r.TLSSource
 		data.ACMEConfigID = r.ACMEConfigID
 		data.TLSCert = r.TLSCert
 		data.TLSKey = r.TLSKey
-		data.TLSHTTPRedirect = r.TLSHTTPRedirect
-		data.EnableCompress = r.EnableCompress
+		if r.TLSHTTPRedirect != nil {
+			data.TLSHTTPRedirect = *r.TLSHTTPRedirect
+		}
+		if r.EnableCompress != nil {
+			data.EnableCompress = *r.EnableCompress
+		}
 		data.CompressTypes = r.CompressTypes
-		data.EnableActiveHealthCheck = r.EnableActiveHealthCheck
+		if r.EnableActiveHealthCheck != nil {
+			data.EnableActiveHealthCheck = *r.EnableActiveHealthCheck
+		}
 		data.HostHeader = r.HostHeader
 		if r.RequestBodyMaxSizeMB != nil {
 			data.RequestBodyMaxSizeMB = *r.RequestBodyMaxSizeMB

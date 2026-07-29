@@ -333,6 +333,28 @@ func TestReplacePathRulesTx_replaces_all_rows_and_preserves_nullable_upstreams(t
 	}
 }
 
+func TestLoadUpstreamsBatch_defaults_NULL_enabled_to_true(t *testing.T) {
+	// Given
+	database := initializeRuleFeatureTestDB(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port) VALUES ('lb_null_upstream','nullable upstream','http',8080)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,enabled) VALUES ('lb_null_upstream','127.0.0.1',9000,NULL)`); err != nil {
+		t.Fatalf("seed nullable upstream: %v", err)
+	}
+
+	// When
+	upstreams, err := loadUpstreamsBatch(context.Background(), []string{"lb_null_upstream"})
+
+	// Then
+	if err != nil {
+		t.Fatalf("load upstreams: %v", err)
+	}
+	if len(upstreams["lb_null_upstream"]) != 1 || !upstreams["lb_null_upstream"][0].Enabled {
+		t.Fatalf("loaded upstreams = %#v, want one enabled upstream", upstreams["lb_null_upstream"])
+	}
+}
+
 func initializeRuleFeatureTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB

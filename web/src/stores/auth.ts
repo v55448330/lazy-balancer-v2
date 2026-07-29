@@ -2,7 +2,22 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { ApiResponse, ClusterNodeMode, User } from '@/types'
 import { isTokenExpired, request } from '@/utils/api'
-import { ElMessageBox, ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus'
+
+const validPages = new Set([
+  'dashboard',
+  'rules',
+  'caddy',
+  'users',
+  'audit-log',
+  'settings-basic',
+  'settings-cluster',
+  'settings-certificates',
+  'settings-apikeys',
+])
+const storedCurrentPage = localStorage.getItem('currentPage')
+const initialCurrentPage = storedCurrentPage && validPages.has(storedCurrentPage) ? storedCurrentPage : 'dashboard'
+if (storedCurrentPage !== initialCurrentPage) localStorage.setItem('currentPage', initialCurrentPage)
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
@@ -10,7 +25,7 @@ export const useAuthStore = defineStore('auth', () => {
   const nodeMode = ref<ClusterNodeMode>('master')
   const timezone = ref<string>('Asia/Shanghai')
   const loading = ref(false)
-  const currentPage = ref<string>(localStorage.getItem('currentPage') || 'dashboard')
+  const currentPage = ref<string>(initialCurrentPage)
 
   const isLoggedIn = computed(() => !!token.value && !isTokenExpired(token.value))
   const readOnlyReason = computed<'slave' | 'non-admin' | null>(() => {
@@ -119,18 +134,6 @@ export const useAuthStore = defineStore('auth', () => {
     nodeMode.value = mode
   }
 
-  function showConfirm(title: string, message: string, onConfirm: () => void) {
-    ElMessageBox.confirm(message, title, {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
-      .then(() => {
-        onConfirm()
-      })
-      .catch(() => {})
-  }
-
   async function init() {
     if (!token.value || isTokenExpired(token.value)) {
       logout()
@@ -161,6 +164,5 @@ export const useAuthStore = defineStore('auth', () => {
     init,
     setCurrentPage,
     showToast,
-    showConfirm,
   }
 })

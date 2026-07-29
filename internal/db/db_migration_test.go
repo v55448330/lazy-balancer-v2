@@ -98,7 +98,9 @@ func TestMigrateCertJobsStatusConstraint_preserves_paused_and_acme_stage_statuse
 	}
 	defer rows.Close()
 	want := []string{"disabled", "waiting_order_ready"}
+	got := 0
 	for index := 0; rows.Next(); index++ {
+		got++
 		var status string
 		if err := rows.Scan(&status); err != nil {
 			t.Fatalf("scan migrated status: %v", err)
@@ -109,6 +111,9 @@ func TestMigrateCertJobsStatusConstraint_preserves_paused_and_acme_stage_statuse
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate migrated statuses: %v", err)
+	}
+	if got != len(want) {
+		t.Fatalf("migrated rows=%d, want %d (migration must not drop rows)", got, len(want))
 	}
 }
 

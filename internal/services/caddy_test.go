@@ -365,6 +365,47 @@ func TestGenerateCaddyConfig_restoresCertificateSnapshotWhenMaterializationFails
 	}
 }
 
+func TestApplyConfig_restoresCertificateSnapshotWhenLoadRejects(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,health_check_path,enable_tls,tls_source,tls_cert,tls_key) VALUES ('lb-rejected','rejected cert','http','example.com',443,'weighted_round_robin','',1,'manual','new-cert','new-key')`); err != nil {
+		t.Fatalf("seed certificate rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb-rejected','127.0.0.1',8080,1,1,'http')`); err != nil {
+		t.Fatalf("seed certificate upstream: %v", err)
+	}
+	certPath, keyPath := CertFilePaths("lb-rejected")
+	if err := os.WriteFile(certPath, []byte("old-cert"), 0644); err != nil {
+		t.Fatalf("seed old certificate: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("old-key"), 0600); err != nil {
+		t.Fatalf("seed old key: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		http.Error(writer, "load rejected", http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	// When
+	err := NewCaddyService(server.URL).ApplyConfig(GenerateCaddyConfig(&config.Config{}))
+
+	// Then
+	if err == nil {
+		t.Fatal("Caddy load rejection reported success")
+	}
+	cert, certErr := os.ReadFile(certPath)
+	if certErr != nil {
+		t.Fatalf("read restored certificate: %v", certErr)
+	}
+	key, keyErr := os.ReadFile(keyPath)
+	if keyErr != nil {
+		t.Fatalf("read restored key: %v", keyErr)
+	}
+	assertEqual(t, string(cert), "old-cert")
+	assertEqual(t, string(key), "old-key")
+}
+
 func TestDeleteRouteByID_removesOnlyOwnedRouteSet(t *testing.T) {
 	// Given
 	current := testHTTPConfig([]interface{}{

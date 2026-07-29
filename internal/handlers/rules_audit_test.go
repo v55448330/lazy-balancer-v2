@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -22,6 +23,9 @@ func TestListRules_uses_schema_defaults_when_nullable_columns_are_NULL(t *testin
 		VALUES ('lb_nulls','nullable','http',8080,NULL,NULL,NULL,NULL,NULL,NULL)`); err != nil {
 		t.Fatalf("seed nullable rule: %v", err)
 	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_nulls','127.0.0.1',9000,1,NULL,'http')`); err != nil {
+		t.Fatalf("seed nullable upstream: %v", err)
+	}
 	router := gin.New()
 	router.GET("/rules", handler.ListRules)
 	response := httptest.NewRecorder()
@@ -33,7 +37,7 @@ func TestListRules_uses_schema_defaults_when_nullable_columns_are_NULL(t *testin
 	if response.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
 	}
-	for _, expected := range []string{`"health_check_path":""`, `"health_check_interval":10`, `"health_check_timeout":5`, `"health_check_unhealthy_threshold":3`, `"health_check_healthy_threshold":2`, `"enabled":true`} {
+	for _, expected := range []string{`"health_check_path":""`, `"health_check_interval":10`, `"health_check_timeout":5`, `"health_check_unhealthy_threshold":3`, `"health_check_healthy_threshold":2`, `"enabled":true`, `"host":"127.0.0.1"`} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("list body missing %s: %s", expected, response.Body.String())
 		}
@@ -263,6 +267,197 @@ func TestDisableRule_returns_error_instead_of_panicking_when_cert_job_update_fai
 	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "证书任务") {
 		t.Fatalf("disable status=%d body=%s", response.Code, response.Body.String())
 	}
+	var enabled bool
+	var jobStatus string
+	if err := db.DB.QueryRow(`SELECT r.enabled,j.status FROM lb_rules r JOIN cert_jobs j ON j.rule_id=r.caddy_id WHERE r.caddy_id='lb_disable_cert'`).Scan(&enabled, &jobStatus); err != nil {
+		t.Fatalf("read compensated rule and cert job: %v", err)
+	}
+	if !enabled || jobStatus != "queued" {
+		t.Fatalf("enabled=%v job status=%q, want original enabled/queued state", enabled, jobStatus)
+	}
+}
+
+func TestUpdateRule_preserves_omitted_boolean_fields(t *testing.T) {
+	// Given
+	harness := newUpdateAuditRuleHandlers(t, "lb_bool_keep", 0, false)
+	handler, currentConfig := harness.handler, harness.currentConfig
+	seedAuditRule(t, "lb_bool_keep", "before", "bool-keep.example.test", 8080, true, "manual", true)
+	if _, err := db.DB.Exec(`UPDATE lb_rules SET dynamic_dns=1,enable_dns_server=1,enable_active_health_check=1,tcp_proxy_protocol=1,tls_http_redirect=1,enable_compress=1,log_enabled=1 WHERE caddy_id='lb_bool_keep'`); err != nil {
+		t.Fatalf("seed boolean fields: %v", err)
+	}
+	seedAuditUpstream(t, "lb_bool_keep")
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_bool_keep", strings.NewReader(`{"name":"after"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", response.Code, response.Body.String())
+	}
+	var dynamicDNS, dnsServer, activeHealth, proxyProtocol, enableTLS, redirect, compress, enabled, logEnabled bool
+	if err := db.DB.QueryRow(`SELECT dynamic_dns,enable_dns_server,enable_active_health_check,tcp_proxy_protocol,enable_tls,tls_http_redirect,enable_compress,enabled,log_enabled FROM lb_rules WHERE caddy_id='lb_bool_keep'`).Scan(
+		&dynamicDNS, &dnsServer, &activeHealth, &proxyProtocol, &enableTLS, &redirect, &compress, &enabled, &logEnabled); err != nil {
+		t.Fatalf("read booleans: %v", err)
+	}
+	if !dynamicDNS || !dnsServer || !activeHealth || !proxyProtocol || !enableTLS || !redirect || !compress || !enabled || !logEnabled {
+		t.Fatalf("omitted booleans changed: dynamic_dns=%v dns_server=%v active=%v proxy=%v tls=%v redirect=%v compress=%v enabled=%v log=%v", dynamicDNS, dnsServer, activeHealth, proxyProtocol, enableTLS, redirect, compress, enabled, logEnabled)
+	}
+	if !strings.Contains(currentConfig(), `"lb_bool_keep"`) {
+		t.Fatalf("Caddy config lost updated route: %s", currentConfig())
+	}
+}
+
+func TestUpdateRule_applies_explicit_false_boolean_fields(t *testing.T) {
+	// Given
+	harness := newUpdateAuditRuleHandlers(t, "lb_bool_false", 0, false)
+	handler, currentConfig := harness.handler, harness.currentConfig
+	seedAuditRule(t, "lb_bool_false", "before", "bool-false.example.test", 8080, true, "manual", true)
+	if _, err := db.DB.Exec(`UPDATE lb_rules SET dynamic_dns=1,enable_dns_server=1,enable_active_health_check=1,tcp_proxy_protocol=1,tls_http_redirect=1,enable_compress=1,log_enabled=1 WHERE caddy_id='lb_bool_false'`); err != nil {
+		t.Fatalf("seed boolean fields: %v", err)
+	}
+	seedAuditUpstream(t, "lb_bool_false")
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_bool_false", strings.NewReader(`{"dynamic_dns":false,"enable_dns_server":false,"enable_active_health_check":false,"tcp_proxy_protocol":false,"enable_tls":false,"tls_http_redirect":false,"enable_compress":false,"enabled":false,"log_enabled":false}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", response.Code, response.Body.String())
+	}
+	var enabledCount int
+	if err := db.DB.QueryRow(`SELECT dynamic_dns+enable_dns_server+enable_active_health_check+tcp_proxy_protocol+enable_tls+tls_http_redirect+enable_compress+enabled+log_enabled FROM lb_rules WHERE caddy_id='lb_bool_false'`).Scan(&enabledCount); err != nil {
+		t.Fatalf("read booleans: %v", err)
+	}
+	if enabledCount != 0 {
+		t.Fatalf("explicit false fields left %d enabled values", enabledCount)
+	}
+	if !strings.Contains(currentConfig(), `"lb_bool_false"`) {
+		t.Fatalf("Caddy config lost updated route: %s", currentConfig())
+	}
+}
+
+func TestUpdateRule_restores_database_and_Caddy_when_TLS_reload_fails(t *testing.T) {
+	// Given
+	harness := newUpdateAuditRuleHandlers(t, "lb_tls_rollback", 1, false)
+	handler, loadCalls, currentConfig := harness.handler, harness.loadCalls, harness.currentConfig
+	seedAuditRule(t, "lb_tls_rollback", "before", "tls-old.example.test", 8080, true, "manual", false)
+	seedAuditUpstream(t, "lb_tls_rollback")
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_tls_rollback", strings.NewReader(`{"name":"after","enable_tls":true,"tls_source":"acme_dns","acme_config_id":1,"domain":"tls-new.example.test"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code == http.StatusOK {
+		t.Fatalf("update unexpectedly succeeded: %s", response.Body.String())
+	}
+	var name, domain string
+	var enableTLS bool
+	if err := db.DB.QueryRow(`SELECT name,domain,enable_tls FROM lb_rules WHERE caddy_id='lb_tls_rollback'`).Scan(&name, &domain, &enableTLS); err != nil {
+		t.Fatalf("read restored rule: %v", err)
+	}
+	if name != "before" || domain != "tls-old.example.test" || enableTLS {
+		t.Fatalf("restored rule name=%q domain=%q tls=%v", name, domain, enableTLS)
+	}
+	if loadCalls.Load() != 2 || !strings.Contains(currentConfig(), `"old":true`) {
+		t.Fatalf("Caddy loads=%d config=%s, want failed TLS load plus old full-config restore", loadCalls.Load(), currentConfig())
+	}
+}
+
+func TestUpdateRule_restores_database_and_Caddy_when_ACME_enqueue_fails(t *testing.T) {
+	// Given
+	harness := newUpdateAuditRuleHandlers(t, "lb_acme_rollback", 0, false)
+	handler, loadCalls, currentConfig := harness.handler, harness.loadCalls, harness.currentConfig
+	seedAuditRule(t, "lb_acme_rollback", "before", "acme-old.example.test", 8080, true, "acme_dns", true)
+	if _, err := db.DB.Exec(`UPDATE lb_rules SET acme_config_id=1,ca_provider_id=1 WHERE caddy_id='lb_acme_rollback'`); err != nil {
+		t.Fatalf("seed ACME config: %v", err)
+	}
+	seedAuditUpstream(t, "lb_acme_rollback")
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_acme_rollback", strings.NewReader(`{"domain":"acme-new.example.test"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("update status=%d body=%s", response.Code, response.Body.String())
+	}
+	var domain string
+	if err := db.DB.QueryRow(`SELECT domain FROM lb_rules WHERE caddy_id='lb_acme_rollback'`).Scan(&domain); err != nil {
+		t.Fatalf("read restored domain: %v", err)
+	}
+	var jobs int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_acme_rollback'`).Scan(&jobs); err != nil {
+		t.Fatalf("read cert jobs: %v", err)
+	}
+	if domain != "acme-old.example.test" || jobs != 0 || loadCalls.Load() < 2 || !strings.Contains(currentConfig(), `"old":true`) {
+		t.Fatalf("domain=%q jobs=%d loads=%d config=%s, want full compensation", domain, jobs, loadCalls.Load(), currentConfig())
+	}
+}
+
+func TestUpdateRule_serializes_snapshot_commit_apply_and_restore(t *testing.T) {
+	// Given
+	harness := newUpdateAuditRuleHandlers(t, "lb_concurrent", 0, true)
+	handler := harness.handler
+	seedAuditRule(t, "lb_concurrent", "original", "concurrent.example.test", 8080, true, "manual", false)
+	seedAuditUpstream(t, "lb_concurrent")
+	firstRouteEntered := harness.firstRouteEntered
+	releaseFirstRoute := harness.releaseFirstRoute
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	firstResponse := httptest.NewRecorder()
+	secondResponse := httptest.NewRecorder()
+	firstDone := make(chan struct{})
+	secondDone := make(chan struct{})
+	go func() {
+		request := httptest.NewRequest(http.MethodPut, "/rules/lb_concurrent", strings.NewReader(`{"name":"first"}`))
+		request.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(firstResponse, request)
+		close(firstDone)
+	}()
+	<-firstRouteEntered
+	go func() {
+		request := httptest.NewRequest(http.MethodPut, "/rules/lb_concurrent", strings.NewReader(`{"name":"second"}`))
+		request.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(secondResponse, request)
+		close(secondDone)
+	}()
+	<-harness.secondValidation
+
+	// When
+	close(releaseFirstRoute)
+	<-firstDone
+	<-secondDone
+
+	// Then
+	if firstResponse.Code == http.StatusOK || secondResponse.Code != http.StatusOK {
+		t.Fatalf("first status=%d body=%s; second status=%d body=%s", firstResponse.Code, firstResponse.Body.String(), secondResponse.Code, secondResponse.Body.String())
+	}
+	var name string
+	if err := db.DB.QueryRow(`SELECT name FROM lb_rules WHERE caddy_id='lb_concurrent'`).Scan(&name); err != nil {
+		t.Fatalf("read final rule: %v", err)
+	}
+	if name != "second" {
+		t.Fatalf("final rule name=%q, want later successful update", name)
+	}
 }
 
 func TestUpdateRuleACL_reports_database_restore_failure_separately(t *testing.T) {
@@ -295,6 +490,110 @@ func seedAuditRule(t *testing.T, id, name, domain string, port int, enabled bool
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,health_check_path,enabled,enable_compress,tls_source,enable_tls)
 		VALUES (?,?,?,?,?,?,'weighted_round_robin','',?,1,?,?)`, id, name, "", "http", domain, port, enabled, tlsSource, enableTLS); err != nil {
 		t.Fatalf("seed rule %s: %v", id, err)
+	}
+}
+
+func seedAuditUpstream(t *testing.T, ruleID string) {
+	t.Helper()
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES (?, '127.0.0.1', 9000, 1, 1, 'http')`, ruleID); err != nil {
+		t.Fatalf("seed upstream for %s: %v", ruleID, err)
+	}
+}
+
+type updateAuditHarness struct {
+	handler           *Handlers
+	loadCalls         *atomic.Int32
+	currentConfig     func() string
+	firstRouteEntered chan struct{}
+	releaseFirstRoute chan struct{}
+	secondValidation  chan struct{}
+}
+
+func newUpdateAuditRuleHandlers(t *testing.T, caddyID string, failedLoads int32, failFirstRoute bool) *updateAuditHarness {
+	t.Helper()
+	initializeRuleFeatureTestDB(t)
+	var stateMu sync.Mutex
+	currentConfig := `{"old":true,"apps":{"http":{"servers":{"http_8080":{"listen":[":8080"],"routes":[{"@id":"` + caddyID + `","handle":[]}]}}}}}`
+	var loadCalls atomic.Int32
+	var routePosts atomic.Int32
+	var validations atomic.Int32
+	firstRouteEntered := make(chan struct{})
+	releaseFirstRoute := make(chan struct{})
+	secondValidation := make(chan struct{})
+	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/config/":
+			stateMu.Lock()
+			body := currentConfig
+			stateMu.Unlock()
+			_, _ = response.Write([]byte(body))
+			return
+		case request.Method == http.MethodGet && request.URL.Path == "/id/"+caddyID:
+			_, _ = response.Write([]byte(`{"@id":"` + caddyID + `","handle":[]}`))
+			return
+		case request.Method == http.MethodPost && request.URL.Path == "/load" && request.URL.Query().Get("validate") == "true":
+			if validations.Add(1) == 2 {
+				close(secondValidation)
+			}
+			response.WriteHeader(http.StatusOK)
+			return
+		case request.Method == http.MethodPost && request.URL.Path == "/config/":
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				response.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			if routePosts.Add(1) == 2 && failFirstRoute {
+				close(firstRouteEntered)
+				<-releaseFirstRoute
+				response.WriteHeader(http.StatusBadRequest)
+				_, _ = response.Write([]byte("route rejected"))
+				return
+			}
+			stateMu.Lock()
+			currentConfig = string(body)
+			stateMu.Unlock()
+			response.WriteHeader(http.StatusOK)
+			return
+		case request.Method == http.MethodPost && request.URL.Path == "/load":
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				response.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			if loadCalls.Add(1) <= failedLoads {
+				response.WriteHeader(http.StatusBadRequest)
+				_, _ = response.Write([]byte("load rejected"))
+				return
+			}
+			stateMu.Lock()
+			currentConfig = string(body)
+			stateMu.Unlock()
+			response.WriteHeader(http.StatusOK)
+			return
+		default:
+			response.WriteHeader(http.StatusOK)
+			_, _ = response.Write([]byte(`{}`))
+		}
+	}))
+	t.Cleanup(fakeCaddy.Close)
+	cfg := &config.Config{CaddyAdminURL: fakeCaddy.URL}
+	return &updateAuditHarness{
+		handler: &Handlers{
+			cfg:            cfg,
+			caddyService:   services.NewCaddyService(fakeCaddy.URL),
+			clusterService: services.NewClusterService(db.DB, nil),
+		},
+		loadCalls: &loadCalls,
+		currentConfig: func() string {
+			stateMu.Lock()
+			defer stateMu.Unlock()
+			return currentConfig
+		},
+		firstRouteEntered: firstRouteEntered,
+		releaseFirstRoute: releaseFirstRoute,
+		secondValidation:  secondValidation,
 	}
 }
 

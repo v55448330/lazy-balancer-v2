@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -248,6 +249,86 @@ func TestSyncService_finishRun_doesNotClearNewerRun(t *testing.T) {
 	// Then
 	if service.cancel == nil {
 		t.Fatal("stale run cleared the newer run cancellation handle")
+	}
+}
+
+func TestSyncService_Stop_waits_for_run_before_Start_creates_next_generation(t *testing.T) {
+	// Given
+	firstStarted := make(chan struct{})
+	firstCanceled := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+	active := 0
+	maxActive := 0
+	var activeMu sync.Mutex
+	runs := 0
+	service := &SyncService{runFn: func(ctx context.Context) {
+		activeMu.Lock()
+		runs++
+		run := runs
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		activeMu.Unlock()
+		if run == 1 {
+			close(firstStarted)
+			<-ctx.Done()
+			close(firstCanceled)
+			<-releaseFirst
+		} else {
+			close(secondStarted)
+		}
+		activeMu.Lock()
+		active--
+		activeMu.Unlock()
+	}}
+	service.Start()
+	<-firstStarted
+	stopReturned := make(chan struct{})
+	go func() {
+		service.Stop()
+		close(stopReturned)
+	}()
+	<-firstCanceled
+	startReturned := make(chan struct{})
+	go func() {
+		service.Start()
+		close(startReturned)
+	}()
+
+	// When
+	close(releaseFirst)
+	<-stopReturned
+	<-startReturned
+	<-secondStarted
+	service.Stop()
+
+	// Then
+	activeMu.Lock()
+	defer activeMu.Unlock()
+	if maxActive != 1 || active != 0 {
+		t.Fatalf("run concurrency max=%d active=%d, want max=1 active=0", maxActive, active)
+	}
+}
+
+func TestRestoreSnapshotCerts_returns_delete_and_materialize_errors(t *testing.T) {
+	// Given
+	originalCertDir := certDir
+	certDir = t.TempDir()
+	t.Cleanup(func() { certDir = originalCertDir })
+	previous := []models.ClusterCertificate{{RuleID: "invalid/rule", CertPEM: "cert", KeyPEM: "key"}}
+	current := []models.ClusterCertificate{{RuleID: "other/invalid", CertPEM: "cert", KeyPEM: "key"}}
+
+	// When
+	err := restoreSnapshotCerts(previous, current)
+
+	// Then
+	if err == nil {
+		t.Fatal("certificate restoration errors were discarded")
+	}
+	if !strings.Contains(err.Error(), "invalid/rule") || !strings.Contains(err.Error(), "other/invalid") {
+		t.Fatalf("restore error=%q, want both delete and materialize failures", err)
 	}
 }
 

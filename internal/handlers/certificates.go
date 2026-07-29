@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -246,15 +247,28 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 }
 
 func (h *Handlers) ListCertificates(c *gin.Context) {
-	resp, err := http.Get(h.cfg.CaddyAdminURL + "/pki/ca/local")
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, h.cfg.CaddyAdminURL+"/pki/ca/local", nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get certificates"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "构造证书请求失败"})
+		return
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取证书列表失败: " + err.Error()})
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 返回异常状态: %d", resp.StatusCode)})
+		return
+	}
 
 	var data map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&data)
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析证书列表失败: " + err.Error()})
+		return
+	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: data})
 }
@@ -306,14 +320,35 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询 ACME 规则失败"})
 			return
 		}
-		defer rows.Close()
+		var failed []string
 		for rows.Next() {
 			var ruleID, domain string
-			if err := rows.Scan(&ruleID, &domain); err == nil {
-				if err := services.CreateOrRequeueCertJob(ruleID, domain, 0, qm); err == nil {
-					queued++
-				}
+			if err := rows.Scan(&ruleID, &domain); err != nil {
+				rows.Close()
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 ACME 规则失败: " + err.Error()})
+				return
 			}
+			if err := services.CreateOrRequeueCertJob(ruleID, domain, 0, qm); err != nil {
+				failed = append(failed, fmt.Sprintf("%s(%v)", domain, err))
+				continue
+			}
+			queued++
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "遍历 ACME 规则失败: " + err.Error()})
+			return
+		}
+		rows.Close()
+		if queued == 0 && len(failed) > 0 {
+			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(fmt.Sprintf("规则：%s", req.CaddyID), services.AuditResultPart("failed")))
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "全部签发任务创建失败: " + strings.Join(failed, "; ")})
+			return
+		}
+		if len(failed) > 0 {
+			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(fmt.Sprintf("规则：%s", req.CaddyID), fmt.Sprintf("入队 %d 个任务，失败 %d 个", queued, len(failed)), services.AuditResultPart("partial")))
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已创建 %d 个签发任务，%d 个失败: %s", queued, len(failed), strings.Join(failed, "; ")), Data: gin.H{"queued": queued, "failed": len(failed)}})
+			return
 		}
 	}
 	recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(fmt.Sprintf("规则：%s", req.CaddyID), fmt.Sprintf("入队 %d 个任务", queued), services.AuditResultPart("requested")))

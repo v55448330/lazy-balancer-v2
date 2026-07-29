@@ -105,11 +105,6 @@ export interface ApiResponse<T = never> extends Omit<APIResponse<T>, 'data'> {
   data: T
 }
 
-export interface ChartDataPoint {
-  time: number
-  [key: string]: number
-}
-
 export type ClusterNodeMode = 'master' | 'slave'
 
 export type ClusterNodeStatus = 'pending' | 'online' | 'offline'

@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,8 +28,15 @@ func (h *Handlers) ListUsers(c *gin.Context) {
 	var users []models.User
 	for rows.Next() {
 		var u models.User
-		rows.Scan(&u.ID, &u.Username, &u.Role, &u.DisplayName, &u.IsEnabled, &u.CreatedAt, &u.LastLogin)
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.DisplayName, &u.IsEnabled, &u.CreatedAt, &u.LastLogin); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+			return
+		}
 		users = append(users, u)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+		return
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: users})
@@ -67,60 +77,96 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 }
 
 func (h *Handlers) UpdateUser(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
-
-	var req struct {
-		Username    string `json:"username"`
-		Password    string `json:"password"`
-		Role        string `json:"role"`
-		DisplayName string `json:"display_name"`
-	}
-	c.ShouldBindJSON(&req)
-
-	if req.Role != "" && req.Role != "admin" && req.Role != "user" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid role"})
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid user ID"})
 		return
 	}
 
+	var req struct {
+		Username    *string `json:"username"`
+		Password    *string `json:"password"`
+		Role        *string `json:"role"`
+		DisplayName *string `json:"display_name"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		return
+	}
+
+	if req.Role != nil && *req.Role != "" && *req.Role != "admin" && *req.Role != "user" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid role"})
+		return
+	}
+	var passwordHash string
+	if req.Password != nil && *req.Password != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(*req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to hash password"})
+			return
+		}
+		passwordHash = string(hash)
+	}
+
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user"})
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				log.Printf("UpdateUser rollback failed for id=%d: %v", id, rollbackErr)
+			}
+		}
+	}()
+
 	var oldUsername, oldRole, oldDisplayName string
-	if err := db.DB.QueryRow("SELECT username, role, COALESCE(display_name,'') FROM users WHERE id = ?", id).Scan(&oldUsername, &oldRole, &oldDisplayName); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, role, COALESCE(display_name,'') FROM users WHERE id = ?", id).Scan(&oldUsername, &oldRole, &oldDisplayName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query user"})
+		}
 		return
 	}
 
 	changed := []string{}
-	if req.Username != "" && req.Username != oldUsername {
-		if _, err := db.DB.Exec("UPDATE users SET username = ? WHERE id = ?", req.Username, id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update username"})
-			return
-		}
+	sets := make([]string, 0, 5)
+	args := make([]any, 0, 5)
+	if req.Username != nil && *req.Username != "" && *req.Username != oldUsername {
+		sets = append(sets, "username = ?")
+		args = append(args, *req.Username)
 		changed = append(changed, "用户名")
 	}
-
-	if req.Role != "" && req.Role != oldRole {
-		if _, err := db.DB.Exec("UPDATE users SET role = ? WHERE id = ?", req.Role, id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update role"})
-			return
-		}
+	if req.Role != nil && *req.Role != "" && *req.Role != oldRole {
+		sets = append(sets, "role = ?")
+		args = append(args, *req.Role)
 		changed = append(changed, "角色")
 	}
-
-	if req.DisplayName != oldDisplayName {
-		if _, err := db.DB.Exec("UPDATE users SET display_name = ? WHERE id = ?", req.DisplayName, id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update display name"})
-			return
-		}
+	if req.DisplayName != nil && *req.DisplayName != oldDisplayName {
+		sets = append(sets, "display_name = ?")
+		args = append(args, *req.DisplayName)
 		changed = append(changed, "昵称")
 	}
-
-	if req.Password != "" {
-		hash, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-		if _, err := db.DB.Exec("UPDATE users SET password_hash = ?, password_changed_at = datetime('now') WHERE id = ?", string(hash), id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update password"})
-			return
-		}
+	if passwordHash != "" {
+		sets = append(sets, "password_hash = ?", "password_changed_at = datetime('now')")
+		args = append(args, passwordHash)
 		changed = append(changed, "密码")
 	}
+	if len(sets) > 0 {
+		args = append(args, id)
+		if _, err := tx.ExecContext(c.Request.Context(), "UPDATE users SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user"})
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user"})
+		return
+	}
+	committed = true
 
 	if len(changed) == 0 {
 		recordAudit(c, "更新", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), "无修改"))
