@@ -333,6 +333,10 @@ func (h *Handlers) UpdateRuleACL(c *gin.Context) {
 		return
 	}
 
+	// 与 UpdateRule 同一锁序：读旧值→写入→应用全程持锁，避免被全量更新覆盖丢失
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	var protocol, oldMode, oldListJSON string
 	if err := db.DB.QueryRow("SELECT protocol, COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol, &oldMode, &oldListJSON); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
@@ -354,7 +358,7 @@ func (h *Handlers) UpdateRuleACL(c *gin.Context) {
 		return
 	}
 
-	if err := h.applyCaddyConfigWithRollback(); err != nil {
+	if err := h.applyCaddyConfigWithRollbackLocked(); err != nil {
 		if _, restoreErr := db.DB.Exec("UPDATE lb_rules SET ip_acl_mode = ?, ip_acl_list = ?, updated_at = datetime('now') WHERE caddy_id = ?", oldMode, oldListJSON, caddyID); restoreErr != nil {
 			log.Printf("CRITICAL: UpdateRuleACL Caddy apply and DB restore failed for caddy_id=%s: caddy=%v db=%v", caddyID, err, restoreErr)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 与 DB 恢复均失败: Caddy: %v; DB: %v", err, restoreErr)})

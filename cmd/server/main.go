@@ -28,6 +28,13 @@ var (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Printf("HTTP server stopped unexpectedly: %v", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	// Parse flags
 	configPath := flag.String("config", "", "Config file path")
 	initDB := flag.Bool("init", false, "Initialize database")
@@ -50,7 +57,7 @@ func main() {
 
 	// Initialize database
 	if err := db.Initialize(cfg.DataDir); err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		return fmt.Errorf("initialize database: %w", err)
 	}
 	if runtimeLogFile != "" {
 		services.StartRuntimeLogCleanup(runtimeLogFile)
@@ -58,7 +65,7 @@ func main() {
 
 	if *initDB {
 		log.Println("Database initialized successfully")
-		return
+		return nil
 	}
 
 	var tz string
@@ -118,6 +125,15 @@ func main() {
 		lifecycle.StopACME()
 		lifecycle.StartSync()
 	}
+	defer func() {
+		metricsService.Stop()
+		<-metricsDone
+		services.StopAuditCleanup()
+		services.StopTimezoneRefresh()
+		services.StopLogRotate()
+		services.StopRuntimeLogCleanup()
+		lifecycle.Shutdown()
+	}()
 
 	// Start server
 	addr := fmt.Sprintf(":%d", cfg.Port)
@@ -136,7 +152,7 @@ func main() {
 	if tlsCfg.Enabled {
 		cert, err := tlsCfg.ResolveCertificate(cfg.DataDir)
 		if err != nil {
-			log.Fatalf("管理面板 HTTPS 启用失败: %v", err)
+			return fmt.Errorf("管理面板 HTTPS 启用失败: %w", err)
 		}
 		log.Printf("管理面板 HTTPS 监听 %s（证书来源：%s，HTTP 明文请求 301 跳转）", addr, tlsCfg.Mode)
 		server.TLSConfig = &tls.Config{
@@ -149,13 +165,14 @@ func main() {
 		server.IdleTimeout = 120 * time.Second
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
-			log.Fatalf("HTTPS 监听失败: %v", err)
+			return fmt.Errorf("HTTPS 监听失败: %w", err)
 		}
 		go func() { serverErrors <- server.ServeTLS(newHTTPRedirectMux(ln), "", "") }()
 	} else {
 		go func() { serverErrors <- server.ListenAndServe() }()
 	}
 
+	var serverErr error
 	select {
 	case <-quit:
 		log.Println("Shutting down...")
@@ -167,15 +184,12 @@ func main() {
 			}
 		}
 		cancel()
-	case err := <-serverErrors:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("HTTP server stopped unexpectedly: %v", err)
-		}
+	case serverErr = <-serverErrors:
 	}
-	metricsService.Stop()
-	<-metricsDone
-	services.StopAuditCleanup()
-	lifecycle.Shutdown()
+	if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
+		return fmt.Errorf("serve HTTP: %w", serverErr)
+	}
+	return nil
 }
 
 type tzLogWriter struct {

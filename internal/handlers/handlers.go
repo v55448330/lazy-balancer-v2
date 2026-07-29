@@ -110,9 +110,15 @@ func (h *Handlers) applyCaddyConfigE() error {
 func (h *Handlers) applyCaddyConfigWithRollback() error {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
-	// Backup current Caddy config before applying
+	return h.applyCaddyConfigWithRollbackLocked()
+}
+
+// applyCaddyConfigWithRollbackLocked 供已持有 caddyOpMu 的调用方使用，避免重入死锁
+func (h *Handlers) applyCaddyConfigWithRollbackLocked() error {
+	// Backup current Caddy config before applying; without a restore point
+	// the rollback contract cannot be honored, so abort instead of applying.
 	if err := h.caddyService.BackupConfig(); err != nil {
-		log.Printf("Warning: Failed to backup Caddy config: %v", err)
+		return fmt.Errorf("备份 Caddy 配置失败: %w", err)
 	}
 
 	// Generate Caddy config from DB

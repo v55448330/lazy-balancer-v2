@@ -48,9 +48,50 @@ func TestIssueCertificate_records_queue_unavailable_failure(t *testing.T) {
 	assertLatestCertificateAudit(t, "范围：全部 ACME 规则", "失败")
 }
 
+func TestIssueCertificate_rejects_partial_rule_selector_without_creating_jobs(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	router := gin.New()
+	router.POST("/certificates/issue", h.IssueCertificate)
+	tests := []struct {
+		name      string
+		body      string
+		wantScope string
+	}{
+		{name: "only caddy ID", body: `{"caddy_id":"lb_partial"}`, wantScope: "规则：lb_partial"},
+		{name: "only domain", body: `{"domain":"partial.example"}`, wantScope: "范围：全部 ACME 规则"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// When
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/certificates/issue", strings.NewReader(tt.body))
+			request.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(response, request)
+
+			// Then
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+			}
+			var jobs int
+			if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs").Scan(&jobs); err != nil {
+				t.Fatalf("count certificate jobs: %v", err)
+			}
+			if jobs != 0 {
+				t.Fatalf("certificate jobs=%d, want 0", jobs)
+			}
+			assertLatestCertificateAudit(t, tt.wantScope, "请求格式错误")
+		})
+	}
+}
+
 func TestIssueCertificate_records_each_rule_and_batch_failure(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil })
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	services.GetCAQueueManager().Start()

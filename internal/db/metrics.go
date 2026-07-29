@@ -2,18 +2,24 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
 )
 
-func InitializeMetricsDB(dataDir string) error {
+func InitializeMetricsDB(dataDir string) (err error) {
 	dbPath := filepath.Join(dataDir, "lazy-balancer-metrics.db")
 
 	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=30000&_synchronous=NORMAL")
 	if err != nil {
 		return fmt.Errorf("failed to open metrics database: %w", err)
 	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, db.Close())
+		}
+	}()
 
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(2)
@@ -22,8 +28,6 @@ func InitializeMetricsDB(dataDir string) error {
 	if err := db.Ping(); err != nil {
 		return fmt.Errorf("failed to ping metrics database: %w", err)
 	}
-
-	MetricsDB = db
 
 	schema := `
 	CREATE TABLE IF NOT EXISTS metrics_history (
@@ -47,8 +51,12 @@ func InitializeMetricsDB(dataDir string) error {
 	CREATE INDEX IF NOT EXISTS idx_metrics_rule_timestamp ON metrics_history(rule_id, timestamp);
 	`
 
-	_, err = MetricsDB.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return fmt.Errorf("failed to initialize metrics database schema: %w", err)
+	}
+
+	MetricsDB = db
+	return nil
 }
 
 func CleanupMetricsHistory(retentionDays int) error {

@@ -40,7 +40,7 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	ruleID := c.Param("caddy_id")
 
 	var rule models.LbRule
-	err := db.DB.QueryRow(`SELECT domain, listen_port, protocol, enable_tls FROM lb_rules WHERE caddy_id = ?`, ruleID).Scan(
+	err := db.DB.QueryRow(`SELECT COALESCE(domain,''), listen_port, COALESCE(protocol,''), COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?`, ruleID).Scan(
 		&rule.Domain, &rule.ListenPort, &rule.Protocol, &rule.EnableTLS)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Rule not found"})

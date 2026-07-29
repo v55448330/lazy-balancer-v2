@@ -39,6 +39,4 @@ onMounted(async () => {
   await authStore.init()
   loading.value = false
 })
-
-defineExpose({ currentPage })
 </script>

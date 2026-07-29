@@ -26,21 +26,43 @@ func clusterVersionMiddleware(database *sql.DB) gin.HandlerFunc {
 }
 
 func installClusterVersionTriggers(database *sql.DB) error {
-	for _, table := range []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "cert_jobs"} {
+	tables := []struct {
+		name            string
+		snapshotColumns string
+	}{
+		{name: "lb_rules", snapshotColumns: "caddy_id,name,description,protocol,domain,listen_port,strategy,dynamic_dns,enable_dns_server,dns_server,dns_family,health_check_path,health_check_interval,health_check_timeout,health_check_unhealthy_threshold,health_check_healthy_threshold,enable_active_health_check,tcp_health_check_port,tcp_proxy_protocol,tcp_try_duration,tcp_try_interval,request_body_max_size_mb,upstream_keepalive_timeout,server_tokens_hidden,host_header,ip_acl_mode,ip_acl_list,custom_routes_enabled,proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,proxy_stream_timeout,enable_tls,tls_source,acme_config_id,ca_provider_id,tls_cert,tls_key,tls_http_redirect,enable_compress,compress_types,enabled,log_enabled,created_by,updated_by"},
+		{name: "upstreams", snapshotColumns: "id,rule_id,host,port,weight,domain,dynamic_dns,enabled,protocol,dns_server,max_connections"},
+		{name: "path_rules", snapshotColumns: "id,rule_id,sort_order,match_type,path,upstreams_json"},
+		{name: "users", snapshotColumns: "id,username,password_hash,role,display_name,is_enabled"},
+		{name: "api_keys", snapshotColumns: "id,name,key_hash,key_prefix,created_by,expires_at,is_enabled"},
+		{name: "cert_jobs", snapshotColumns: "rule_id,cert_pem,key_pem,expires_at"},
+	}
+	for _, table := range tables {
 		for _, operation := range []string{"INSERT", "UPDATE", "DELETE"} {
+			triggerName := fmt.Sprintf("cluster_version_%s_%s", table.name, strings.ToLower(operation))
+			operationClause := operation
+			if operation == "UPDATE" {
+				if _, err := database.Exec("DROP TRIGGER IF EXISTS " + triggerName); err != nil {
+					return fmt.Errorf("replace cluster version trigger for %s %s: %w", operation, table.name, err)
+				}
+				operationClause += " OF " + table.snapshotColumns
+			}
 			statement := fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS cluster_version_%s_%s
 				AFTER %s ON %s
 				WHEN (SELECT COALESCE(is_master,0) FROM global_config WHERE id=1)=1
 				BEGIN
 					UPDATE global_config SET cluster_version=COALESCE(cluster_version,0)+1 WHERE id=1;
-				END`, table, strings.ToLower(operation), operation, table)
+				END`, table.name, strings.ToLower(operation), operationClause, table.name)
 			if _, err := database.Exec(statement); err != nil {
-				return fmt.Errorf("install cluster version trigger for %s %s: %w", operation, table, err)
+				return fmt.Errorf("install cluster version trigger for %s %s: %w", operation, table.name, err)
 			}
 		}
 	}
-	if _, err := database.Exec(`CREATE TRIGGER IF NOT EXISTS cluster_version_global_config_update
-		AFTER UPDATE ON global_config
+	if _, err := database.Exec("DROP TRIGGER IF EXISTS cluster_version_global_config_update"); err != nil {
+		return fmt.Errorf("replace cluster version trigger for global_config UPDATE: %w", err)
+	}
+	if _, err := database.Exec(`CREATE TRIGGER cluster_version_global_config_update
+		AFTER UPDATE OF sync_caddy_config,caddy_config,log_level,access_log_json,access_log_format,cert_job_log_size_mb,runtime_log_size_mb,audit_retention_months,jwt_expire_minutes,timezone,acme_email,cert_expiry_days,cert_renewal_days,cert_renewal_attempts,default_ca_provider_id,dns_provider,dns_credentials,sync_interval,admin_tls_enabled,admin_tls_mode,admin_tls_cert,admin_tls_key,caddy_log_path,caddy_log_level,caddy_log_size_mb,request_body_max_size_mb,http_read_timeout,http_write_timeout,http_idle_timeout,upstream_keepalive_timeout,proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,proxy_stream_timeout,server_tokens_hidden ON global_config
 		WHEN OLD.cluster_version IS NEW.cluster_version AND COALESCE(NEW.is_master,0)=1
 		BEGIN
 			UPDATE global_config SET cluster_version=COALESCE(cluster_version,0)+1 WHERE id=1;

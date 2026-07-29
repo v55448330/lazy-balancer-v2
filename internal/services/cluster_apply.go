@@ -8,10 +8,42 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/models"
 )
+
+var restartRequiredHandler = struct {
+	sync.RWMutex
+	fn func()
+}{fn: defaultRestartRequiredHandler}
+
+func defaultRestartRequiredHandler() {
+	go func() {
+		time.Sleep(time.Second)
+		os.Exit(0)
+	}()
+}
+
+// SetRestartRequiredHandler installs the graceful restart signal used by the
+// process lifecycle. Passing nil restores the standalone fallback behavior.
+func SetRestartRequiredHandler(handler func()) {
+	restartRequiredHandler.Lock()
+	defer restartRequiredHandler.Unlock()
+	if handler == nil {
+		restartRequiredHandler.fn = defaultRestartRequiredHandler
+		return
+	}
+	restartRequiredHandler.fn = handler
+}
+
+func requestRestart() {
+	restartRequiredHandler.RLock()
+	handler := restartRequiredHandler.fn
+	restartRequiredHandler.RUnlock()
+	handler()
+}
 
 func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.ClusterSnapshot) error {
 	previous, _, err := s.cluster.Snapshot(ctx, 0, "", "")
@@ -56,10 +88,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if RuntimeAdminTLSChanged(LoadAdminTLSConfig()) {
 		RecordAuditLog("system", "重启", "系统", "同步到新的 HTTPS 访问配置，自动重启生效", "")
 		log.Printf("Admin TLS config changed via sync, restarting to apply")
-		go func() {
-			time.Sleep(time.Second)
-			os.Exit(0)
-		}()
+		requestRestart()
 	}
 	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs)), "基本设置：已同步", fmt.Sprintf("Caddy 全局配置：%s", caddySync)), "")
 	RecordAuditLog("system", "重载", "Caddy配置", "同步应用后自动重载", "")

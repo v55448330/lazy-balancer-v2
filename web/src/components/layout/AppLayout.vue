@@ -116,9 +116,9 @@
       </el-footer>
     </el-container>
 
-    <el-dialog v-model="showProfile" title="个人资料" width="480px" :close-on-click-modal="false">
+    <el-dialog v-model="showProfile" title="个人资料" width="480px" :close-on-click-modal="false" :before-close="beforeProfileClose">
       <el-alert v-if="isSlave" title="从节点只读，请在主节点操作" type="info" :closable="false" show-icon class="profile-readonly-alert" />
-      <el-form :model="profileForm" label-width="80px" class="profile-form">
+      <el-form :model="profileForm" label-width="80px" class="profile-form" :disabled="saving">
         <el-form-item label="用户名">
           <el-input v-model="profileForm.username" disabled />
         </el-form-item>
@@ -130,8 +130,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="showProfile = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="isSlave" @click="saveProfile">保存</el-button>
+        <el-button :disabled="saving" @click="closeProfile">取消</el-button>
+        <el-button type="primary" :loading="saving" :disabled="isSlave || saving" @click="saveProfile">保存</el-button>
       </template>
     </el-dialog>
   </el-container>
@@ -192,6 +192,7 @@ const goPage = (page: string) => {
 
 const handleCommand = (command: string) => {
   if (command === 'profile') {
+    if (saving.value) return
     syncProfileForm()
     showProfile.value = true
   } else if (command === 'logout') {
@@ -199,8 +200,16 @@ const handleCommand = (command: string) => {
   }
 }
 
+const beforeProfileClose = (done: () => void): void => {
+  if (!saving.value) done()
+}
+
+const closeProfile = (): void => {
+  if (!saving.value) showProfile.value = false
+}
+
 const saveProfile = async () => {
-  if (isSlave.value) return
+  if (isSlave.value || saving.value) return
   saving.value = true
   try {
     await api.patch('/users/me', {

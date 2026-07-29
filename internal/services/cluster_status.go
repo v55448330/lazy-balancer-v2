@@ -58,9 +58,6 @@ func (s *ClusterService) UpdateSettings(ctx context.Context, req models.ClusterS
 			return fmt.Errorf("更新 Caddy 同步开关: %w", err)
 		}
 	}
-	if err := BumpClusterVersion(ctx, tx); err != nil {
-		return err
-	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("提交集群设置: %w", err)
 	}

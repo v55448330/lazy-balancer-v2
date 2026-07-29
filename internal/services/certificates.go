@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"crypto/x509"
+	"database/sql"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -15,16 +16,17 @@ import (
 )
 
 type CertificateService struct {
-	mu          sync.Mutex
-	ctx         context.Context
-	cancel      context.CancelFunc
-	done        chan struct{}
-	recoverJobs func(context.Context)
+	mu              sync.Mutex
+	ctx             context.Context
+	cancel          context.CancelFunc
+	done            chan struct{}
+	recoverJobs     func(context.Context)
+	deploymentRetry func(int, issuedCertificate, time.Duration)
 }
 
 func NewCertificateService() *CertificateService {
 	ctx, cancel := context.WithCancel(context.Background())
-	service := &CertificateService{ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	service := &CertificateService{ctx: ctx, cancel: cancel, done: make(chan struct{}), deploymentRetry: scheduleCertificateDeploymentRetry}
 	service.recoverJobs = service.recoverCertJobs
 	return service
 }
@@ -113,7 +115,7 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 // marked as failed.
 func (s *CertificateService) recoverCertJobs(ctx context.Context) {
 	rows, err := db.DB.QueryContext(ctx, `
-		SELECT id, rule_id, domain, ca_provider_id FROM cert_jobs
+		SELECT id, rule_id, domain, status, ca_provider_id, COALESCE(deployment_attempts,0), deployment_available_after FROM cert_jobs
 		WHERE status NOT IN ('issued','failed')
 		  AND (status != 'waiting_ca' OR ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))
 	`)
@@ -123,19 +125,14 @@ func (s *CertificateService) recoverCertJobs(ctx context.Context) {
 	}
 	defer rows.Close()
 
-	qm := GetCAQueueManager()
-	if qm == nil {
-		log.Printf("Recovery: CA queue manager not initialized")
-		return
-	}
-
 	for rows.Next() {
 		if ctx.Err() != nil {
 			return
 		}
-		var jobID, caProviderID int
-		var ruleID, domain string
-		if err := rows.Scan(&jobID, &ruleID, &domain, &caProviderID); err != nil {
+		var jobID, caProviderID, deploymentAttempts int
+		var ruleID, domain, status string
+		var deploymentAvailableAfter sql.NullTime
+		if err := rows.Scan(&jobID, &ruleID, &domain, &status, &caProviderID, &deploymentAttempts, &deploymentAvailableAfter); err != nil {
 			log.Printf("Failed to scan cert job for recovery: %v", err)
 			continue
 		}
@@ -148,6 +145,17 @@ func (s *CertificateService) recoverCertJobs(ctx context.Context) {
 		if ruleEnabled != 1 {
 			continue
 		}
+		if status == "downloaded" {
+			delay := time.Duration(0)
+			if deploymentAvailableAfter.Valid {
+				delay = time.Until(deploymentAvailableAfter.Time)
+				if delay < 0 {
+					delay = 0
+				}
+			}
+			s.deploymentRetry(jobID, issuedCertificate{ruleID: ruleID, providerID: caProviderID, deploymentAttempt: deploymentAttempts}, delay)
+			continue
+		}
 
 		if _, err := db.DB.ExecContext(ctx,
 			"UPDATE cert_jobs SET status='queued', message='等待排队签发', updated_at=datetime('now') WHERE id=?",
@@ -157,6 +165,11 @@ func (s *CertificateService) recoverCertJobs(ctx context.Context) {
 			continue
 		}
 		RecordAuditLog("system", "恢复排队", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(ruleID), AuditSourcePart("startup_recovery")), "")
+		qm := GetCAQueueManager()
+		if qm == nil {
+			log.Printf("Recovery: CA queue manager not initialized")
+			continue
+		}
 		if err := qm.Enqueue(caProviderID, jobID, ruleID, domain); err != nil {
 			log.Printf("Failed to enqueue recovered job %d: %v", jobID, err)
 		}

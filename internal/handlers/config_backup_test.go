@@ -15,6 +15,7 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -288,8 +289,13 @@ func TestConfigBackup_import_rejects_invalid_file(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid backup status = %d, want 400", response.Code)
 	}
-	var body map[string]json.RawMessage
-	_ = json.Unmarshal(response.Body.Bytes(), &body)
+	var body models.APIResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("parse error response: %v", err)
+	}
+	if body.Message == "" || !strings.Contains(body.Message, "Lazy Balancer") {
+		t.Fatalf("error message = %q, want explicit v2 backup identity rejection", body.Message)
+	}
 }
 
 func TestValidateConfigImport_rejects_v2_backup_missing_required_contract(t *testing.T) {

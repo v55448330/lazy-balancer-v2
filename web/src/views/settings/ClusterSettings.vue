@@ -114,19 +114,36 @@ const fetchNodes = async (): Promise<void> => {
   }
 }
 
-let refreshInFlight = false
+let refreshInFlight: Promise<void> | null = null
+let refreshPending = false
 const refreshCluster = async (): Promise<void> => {
-  if (refreshInFlight) return
-  refreshInFlight = true
+  if (refreshInFlight) {
+    refreshPending = true
+    await refreshInFlight
+    return
+  }
+  refreshInFlight = (async () => {
+    let refreshError: unknown = null
+    do {
+      refreshPending = false
+      try {
+        const currentStatus = await fetchStatus()
+        if (currentStatus.node_mode === 'master') {
+          await fetchNodes()
+        } else {
+          nodes.value = []
+        }
+        refreshError = null
+      } catch (error: unknown) {
+        refreshError = error
+      }
+    } while (refreshPending)
+    if (refreshError) throw refreshError
+  })()
   try {
-    const currentStatus = await fetchStatus()
-  if (currentStatus.node_mode === 'master') {
-    await fetchNodes()
-  } else {
-      nodes.value = []
-    }
+    await refreshInFlight
   } finally {
-    refreshInFlight = false
+    refreshInFlight = null
   }
 }
 

@@ -79,16 +79,17 @@ func TestCertIssuer_deployIssuedCertificate_keeps_nonterminal_state_when_reload_
 	if err == nil {
 		t.Fatal("deployment succeeded despite reload failure")
 	}
-	var status, certPEM, keyPEM string
+	var status, certPEM, keyPEM, deploymentAvailableAfter string
+	var deploymentAttempts int
 	var version int
-	if err := db.DB.QueryRow("SELECT status, COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&status, &certPEM, &keyPEM); err != nil {
+	if err := db.DB.QueryRow("SELECT status, COALESCE(cert_pem,''), COALESCE(key_pem,''), deployment_attempts, COALESCE(deployment_available_after,'') FROM cert_jobs WHERE id=?", jobID).Scan(&status, &certPEM, &keyPEM, &deploymentAttempts, &deploymentAvailableAfter); err != nil {
 		t.Fatalf("read failed job: %v", err)
 	}
 	if err := db.DB.QueryRow("SELECT cluster_version FROM global_config WHERE id=1").Scan(&version); err != nil {
 		t.Fatalf("read cluster version: %v", err)
 	}
-	if status != "downloaded" || certPEM != "new-cert" || keyPEM != "new-key" || version != 0 || retries != 1 {
-		t.Fatalf("job=(%q,%q,%q) version=%d retries=%d, want downloaded persisted material, no version bump, one retry", status, certPEM, keyPEM, version, retries)
+	if status != "downloaded" || certPEM != "new-cert" || keyPEM != "new-key" || deploymentAttempts != 1 || deploymentAvailableAfter == "" || version != 0 || retries != 1 {
+		t.Fatalf("job=(%q,%q,%q) deployment_attempts=%d available_after=%q version=%d retries=%d", status, certPEM, keyPEM, deploymentAttempts, deploymentAvailableAfter, version, retries)
 	}
 }
 
@@ -105,6 +106,7 @@ func TestCertIssuer_deployIssuedCertificate_finalizes_post_cleanup_state(t *test
 		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
 		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
 	}
+	installCertJobVersionTrigger(t)
 
 	// When
 	err := issuer.deployIssuedCertificate(context.Background(), jobID, material)
@@ -223,9 +225,6 @@ func TestCertIssuer_deploymentFailed_backs_off_and_stops_after_max_attempts(t *t
 	for attempt := range maxCertificateDeploymentAttempts {
 		_ = issuer.deploymentFailed(jobID, material, "reload failed", errors.New("reload failed"))
 		if attempt+1 < maxCertificateDeploymentAttempts {
-			if _, err := db.DB.Exec("UPDATE cert_jobs SET message='检测到已签发的有效证书，直接重新部署文件' WHERE id=?", jobID); err != nil {
-				t.Fatalf("overwrite deployment progress: %v", err)
-			}
 			material = retryMaterial
 		}
 	}
@@ -244,11 +243,54 @@ func TestCertIssuer_deploymentFailed_backs_off_and_stops_after_max_attempts(t *t
 		}
 	}
 	var status string
-	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+	var attempts int
+	if err := db.DB.QueryRow("SELECT status, deployment_attempts FROM cert_jobs WHERE id=?", jobID).Scan(&status, &attempts); err != nil {
 		t.Fatalf("read deployment retry status: %v", err)
 	}
-	if status != "failed" {
-		t.Fatalf("deployment retry status=%q, want failed", status)
+	if status != "failed" || attempts != maxCertificateDeploymentAttempts {
+		t.Fatalf("deployment retry status=%q attempts=%d, want failed and %d", status, attempts, maxCertificateDeploymentAttempts)
+	}
+}
+
+func TestCertificateService_recoverCertJobs_preserves_deployment_retry_state(t *testing.T) {
+	// Given
+	jobID, _ := seedCertificateJob(t, "downloaded")
+	available := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET deployment_attempts=4, deployment_available_after=? WHERE id=?", available.Format("2006-01-02 15:04:05"), jobID); err != nil {
+		t.Fatalf("seed deployment retry state: %v", err)
+	}
+	service := NewCertificateService()
+	var gotAttempt int
+	var gotDelay time.Duration
+	service.deploymentRetry = func(_ int, material issuedCertificate, delay time.Duration) {
+		gotAttempt = material.deploymentAttempt
+		gotDelay = delay
+	}
+
+	// When
+	service.recoverCertJobs(context.Background())
+
+	// Then
+	var status string
+	var attempts int
+	if err := db.DB.QueryRow("SELECT status, deployment_attempts FROM cert_jobs WHERE id=?", jobID).Scan(&status, &attempts); err != nil {
+		t.Fatalf("read recovered deployment job: %v", err)
+	}
+	if status != "downloaded" || attempts != 4 || gotAttempt != 4 {
+		t.Fatalf("recovered job status=%q attempts=%d scheduled_attempt=%d", status, attempts, gotAttempt)
+	}
+	if gotDelay < 59*time.Minute || gotDelay > time.Hour {
+		t.Fatalf("recovered deployment delay=%v, want persisted delay near one hour", gotDelay)
+	}
+}
+
+func installCertJobVersionTrigger(t *testing.T) {
+	t.Helper()
+	if _, err := db.DB.Exec(`CREATE TRIGGER test_cluster_version_cert_jobs_update
+		AFTER UPDATE OF rule_id, cert_pem, key_pem, expires_at ON cert_jobs
+		WHEN (SELECT is_master FROM global_config WHERE id=1)=1
+		BEGIN UPDATE global_config SET cluster_version=cluster_version+1 WHERE id=1; END`); err != nil {
+		t.Fatalf("install certificate job version trigger: %v", err)
 	}
 }
 

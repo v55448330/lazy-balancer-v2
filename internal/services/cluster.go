@@ -209,9 +209,6 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE global_config SET is_master=1, master_url='', cluster_token='', registration_id=0, registration_secret='' WHERE id=1`); err != nil {
 		return fmt.Errorf("重置主节点状态: %w", err)
 	}
-	if err := BumpClusterVersion(ctx, tx); err != nil {
-		return err
-	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("提交提升事务: %w", err)
 	}

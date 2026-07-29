@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"path/filepath"
 	"testing"
 )
 
@@ -77,5 +78,45 @@ func TestInitialize_adds_metrics_retention_and_composite_indexes(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("index %s count=%d, want 1", index.name, count)
 		}
+	}
+}
+
+func TestInitializeMetricsDB_preserves_global_when_schema_creation_fails(t *testing.T) {
+	// Given
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "lazy-balancer-metrics.db")
+	conflictingDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open conflicting metrics database: %v", err)
+	}
+	if _, err := conflictingDB.Exec("CREATE VIEW metrics_history AS SELECT 1 AS id"); err != nil {
+		closeErr := conflictingDB.Close()
+		t.Fatalf("create conflicting metrics schema: %v; close database: %v", err, closeErr)
+	}
+	if err := conflictingDB.Close(); err != nil {
+		t.Fatalf("close conflicting metrics database: %v", err)
+	}
+	oldMetricsDB := MetricsDB
+	sentinelDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sentinel metrics database: %v", err)
+	}
+	MetricsDB = sentinelDB
+	t.Cleanup(func() {
+		if err := sentinelDB.Close(); err != nil {
+			t.Errorf("close sentinel metrics database: %v", err)
+		}
+		MetricsDB = oldMetricsDB
+	})
+
+	// When
+	err = InitializeMetricsDB(dataDir)
+
+	// Then
+	if err == nil {
+		t.Fatal("initialize metrics database succeeded, want schema error")
+	}
+	if MetricsDB != sentinelDB {
+		t.Fatal("failed initialization replaced global metrics database")
 	}
 }

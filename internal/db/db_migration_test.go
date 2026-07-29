@@ -172,6 +172,30 @@ func TestInitialize_returns_error_when_global_config_singleton_insert_fails(t *t
 	}
 }
 
+func TestInitialize_adds_certificate_deployment_retry_columns(t *testing.T) {
+	// Given
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+
+	// When
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+
+	// Then
+	var count int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('cert_jobs') WHERE name IN ('deployment_attempts','deployment_available_after')`).Scan(&count); err != nil {
+		t.Fatalf("read certificate job columns: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("deployment retry columns=%d, want 2", count)
+	}
+}
+
 func openMigrationTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migration.db")+"?_foreign_keys=on")
@@ -202,6 +226,8 @@ func createLegacyCertJobs(t *testing.T, database *sql.DB, defaultStatus, allowed
 		renewal_attempts INTEGER DEFAULT 0,
 		ca_available_after DATETIME,
 		last_error_code TEXT,
+		deployment_attempts INTEGER DEFAULT 0,
+		deployment_available_after DATETIME,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME
 	)`, defaultStatus, allowedStatuses)

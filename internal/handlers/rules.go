@@ -281,6 +281,10 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("Invalid request: %v", err)})
 		return
 	}
+
+	// 与 UpdateRule/DeleteRule 同一锁序：先 caddyOpMu 后 DB，冲突检查与写入串行化
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
 	log.Printf("CreateRule bind success: name=%s, protocol=%s, port=%d, upstreams=%d", req.Name, req.Protocol, req.ListenPort, len(req.Upstreams))
 
 	if req.Name == "" {
@@ -312,6 +316,10 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
+	}
+
+	if req.DnsFamily == "" {
+		req.DnsFamily = "ipv4"
 	}
 
 	if err := h.validatePort(req.Protocol, req.ListenPort, ""); err != nil {
@@ -505,11 +513,6 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return
 	}
 
-	dnsFamily := req.DnsFamily
-	if dnsFamily == "" {
-		dnsFamily = "ipv4"
-	}
-
 	_, err = tx.Exec(`
 		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
 			health_check_path, health_check_interval, health_check_timeout,
@@ -521,7 +524,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
 			enable_compress, compress_types, enabled, created_by, updated_at, caddy_id, log_enabled)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer, dnsFamily,
+	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer, req.DnsFamily,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
 		req.EnableActiveHealthCheck, req.TCPHealthCheckPort, req.TCPProxyProtocol, req.TCPTryDuration, req.TCPTryInterval,
@@ -572,8 +575,6 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return
 	}
 
-	h.caddyOpMu.Lock()
-	defer h.caddyOpMu.Unlock()
 	oldRuntimeConfig, err := h.caddyService.GetConfig()
 	removeCreatedRule := func() error {
 		cleanupTx, beginErr := db.DB.BeginTx(c.Request.Context(), nil)
@@ -1340,33 +1341,49 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.Protocol == "tcp" {
 		newFullConfig := services.GenerateCaddyConfig(h.cfg)
 		if err := h.caddyService.ApplyConfig(newFullConfig); err != nil {
+			var caddyRestoreErr error
 			if oldFullConfig != nil {
-				if restoreErr := h.caddyService.ApplyConfig(oldFullConfig); restoreErr != nil {
-					log.Printf("UpdateRule failed to restore previous Caddy config for caddy_id=%s: %v", caddyID, restoreErr)
-				}
+				caddyRestoreErr = h.caddyService.ApplyConfig(oldFullConfig)
+			}
+			restoreErr := errors.Join(caddyRestoreErr, restoreRuleDBSnapshot())
+			if restoreErr != nil {
+				log.Printf("CRITICAL: UpdateRule Caddy apply and restore failed for caddy_id=%s: apply=%v restore=%v", caddyID, err, restoreErr)
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与恢复均失败: %v; %v", err, restoreErr)})
+				return
 			}
 			log.Printf("UpdateRule Caddy update failed for TCP rule caddy_id=%s: %v, restored previous config", caddyID, err)
-			restoreRuleDBSnapshot()
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置更新失败: " + err.Error()})
 			return
 		}
 	} else {
 		if err := h.caddyService.SetConfigByID(caddyID, routeConfig); err != nil {
+			var caddyRestoreErr error
 			if oldRouteConfig != nil {
-				h.caddyService.SetConfigByID(caddyID, oldRouteConfig)
+				caddyRestoreErr = h.caddyService.SetConfigByID(caddyID, oldRouteConfig)
+			}
+			restoreErr := errors.Join(caddyRestoreErr, restoreRuleDBSnapshot())
+			if restoreErr != nil {
+				log.Printf("CRITICAL: UpdateRule Caddy apply and restore failed for caddy_id=%s: apply=%v restore=%v", caddyID, err, restoreErr)
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与恢复均失败: %v; %v", err, restoreErr)})
+				return
 			}
 			log.Printf("UpdateRule Caddy update failed for caddy_id=%s: %v, restored previous route", caddyID, err)
-			restoreRuleDBSnapshot()
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置更新失败: " + err.Error()})
 			return
 		}
 
 		if err := h.caddyService.VerifyRouteExists(caddyID); err != nil {
+			var caddyRestoreErr error
 			if oldRouteConfig != nil {
-				h.caddyService.SetConfigByID(caddyID, oldRouteConfig)
+				caddyRestoreErr = h.caddyService.SetConfigByID(caddyID, oldRouteConfig)
+			}
+			restoreErr := errors.Join(caddyRestoreErr, restoreRuleDBSnapshot())
+			if restoreErr != nil {
+				log.Printf("CRITICAL: UpdateRule Caddy verify and restore failed for caddy_id=%s: verify=%v restore=%v", caddyID, err, restoreErr)
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 验证与恢复均失败: %v; %v", err, restoreErr)})
+				return
 			}
 			log.Printf("UpdateRule Caddy verification failed for caddy_id=%s: %v, restored previous route", caddyID, err)
-			restoreRuleDBSnapshot()
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy write verification failed: %v", err)})
 			return
 		}
@@ -1438,6 +1455,10 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 
 	caddyID := c.Param("caddy_id")
 
+	// 与 UpdateRule 同一锁序：先 caddyOpMu 后 DB 事务，避免 AB-BA 循环等待
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	var protocol string
 	var listenPort int
 	var domain string
@@ -1477,17 +1498,14 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		return
 	}
 
-	h.caddyOpMu.Lock()
 	runtimeSnapshot, err := h.snapshotImportRuntime([]string{caddyID})
 	if err != nil {
-		h.caddyOpMu.Unlock()
 		log.Printf("DeleteRule runtime snapshot failed for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
 		return
 	}
 	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		h.caddyOpMu.Unlock()
 		if restoreErr != nil {
 			log.Printf("CRITICAL: DeleteRule Caddy apply and runtime restore failed for caddy_id=%s: apply=%v restore=%v", caddyID, err, restoreErr)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与恢复均失败: %v; %v", err, restoreErr)})
@@ -1498,7 +1516,6 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	}
 	if err := tx.Commit(); err != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		h.caddyOpMu.Unlock()
 		log.Printf("DeleteRule transaction commit failed for caddy_id=%s: %v", caddyID, err)
 		if restoreErr != nil {
 			log.Printf("CRITICAL: DeleteRule commit and runtime restore failed for caddy_id=%s: commit=%v restore=%v", caddyID, err, restoreErr)
@@ -1507,7 +1524,6 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		return
 	}
 	committed = true
-	h.caddyOpMu.Unlock()
 
 	// 取消仍在排队或执行中的签发协程，避免已删规则继续占用 CA 配额
 	if qm := services.GetCAQueueManager(); qm != nil {
@@ -1675,6 +1691,9 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 func (h *Handlers) EnableRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	var originalEnabled, enableTLS bool
 	var ruleProtocol, ruleDomain, tlsSource string
 	var rulePort, caProviderID int
@@ -1716,7 +1735,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		return
 	}
 
-	if err := h.applyCaddyConfigWithRollback(); err != nil {
+	if err := h.applyCaddyConfigWithRollbackLocked(); err != nil {
 		if _, restoreErr := db.DB.Exec("UPDATE lb_rules SET enabled = ?, updated_at = datetime('now') WHERE caddy_id = ?", originalEnabled, caddyID); restoreErr != nil {
 			log.Printf("CRITICAL: EnableRule Caddy apply and DB restore failed for caddy_id=%s: caddy=%v db=%v", caddyID, err, restoreErr)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与 DB 恢复均失败: %v; %v", err, restoreErr)})
@@ -1730,7 +1749,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		if dbErr != nil {
 			return fmt.Errorf("恢复规则启用状态: %w", dbErr)
 		}
-		if caddyErr := h.applyCaddyConfigWithRollback(); caddyErr != nil {
+		if caddyErr := h.applyCaddyConfigWithRollbackLocked(); caddyErr != nil {
 			return fmt.Errorf("恢复 Caddy 配置: %w", caddyErr)
 		}
 		return nil
@@ -1824,6 +1843,9 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 func (h *Handlers) DisableRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	var originalEnabled, enableTLS bool
 	var domain, tlsSource string
 	err := db.DB.QueryRow("SELECT COALESCE(enabled,1), COALESCE(domain,''), COALESCE(tls_source,''), COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&originalEnabled, &domain, &tlsSource, &enableTLS)
@@ -1845,7 +1867,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 		return
 	}
 
-	if err := h.applyCaddyConfigWithRollback(); err != nil {
+	if err := h.applyCaddyConfigWithRollbackLocked(); err != nil {
 		if _, restoreErr := db.DB.Exec("UPDATE lb_rules SET enabled = ?, updated_at = datetime('now') WHERE caddy_id = ?", originalEnabled, caddyID); restoreErr != nil {
 			log.Printf("CRITICAL: DisableRule Caddy apply and DB restore failed for caddy_id=%s: caddy=%v db=%v", caddyID, err, restoreErr)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与 DB 恢复均失败: %v; %v", err, restoreErr)})
@@ -1862,7 +1884,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("证书任务状态更新失败且规则恢复失败: %v; %v", stageErr, restoreErr)})
 				return
 			}
-			if applyErr := h.applyCaddyConfigWithRollback(); applyErr != nil {
+			if applyErr := h.applyCaddyConfigWithRollbackLocked(); applyErr != nil {
 				log.Printf("CRITICAL: DisableRule cert job update failed and Caddy re-apply failed for caddy_id=%s: stage=%v apply=%v", caddyID, stageErr, applyErr)
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("证书任务状态更新失败且 Caddy 恢复失败: %v; %v", stageErr, applyErr)})
 				return

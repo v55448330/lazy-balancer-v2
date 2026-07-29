@@ -295,6 +295,11 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
 	}
+	if (req.CaddyID == "") != (req.Domain == "") {
+		auditFailure("invalid_request")
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
+		return
+	}
 	qm := services.GetCAQueueManager()
 	if qm == nil {
 		auditFailure("failed", "CA 队列未初始化")

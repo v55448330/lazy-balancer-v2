@@ -105,6 +105,10 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	// 与规则写路径同一锁序：先 caddyOpMu，DB 写入与 Caddy 应用全程持锁
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	// Log path is managed by the system and cannot be changed through the UI/API.
 	req.CaddyLogPath = nil
 
@@ -200,8 +204,21 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	// Validation passed — now safe to write to DB
-	res, err := db.DB.Exec(`
+	// Validation passed — write in a transaction; Caddy applies the uncommitted
+	// state and the transaction only commits after a successful apply, so a
+	// failed apply leaves DB and env unchanged.
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启配置事务失败"})
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	res, err := tx.Exec(`
 			UPDATE global_config SET
 				dns_provider = COALESCE(?, dns_provider),
 				dns_credentials = COALESCE(?, dns_credentials),
@@ -249,19 +266,38 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	}
 
 	// Update DNS credentials in environment if provided
+	oldDNSPodID, hadDNSPodID := os.LookupEnv("DNSPOD_ID")
+	oldDNSPodToken, hadDNSPodToken := os.LookupEnv("DNSPOD_TOKEN")
+	envChanged := false
 	if req.DNSCredentials != nil {
 		parts := strings.Split(*req.DNSCredentials, ",")
 		if len(parts) >= 2 {
 			os.Setenv("DNSPOD_ID", parts[0])
 			os.Setenv("DNSPOD_TOKEN", parts[1])
+			envChanged = true
 		}
 	}
 
-	// Apply config from DB (now has validated values)
-	if err := h.applyCaddyConfigWithRollback(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置已保存但重载失败: " + err.Error()})
+	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
+		if envChanged {
+			restoreEnv := func(key, value string, existed bool) {
+				if existed {
+					os.Setenv(key, value)
+				} else {
+					os.Unsetenv(key)
+				}
+			}
+			restoreEnv("DNSPOD_ID", oldDNSPodID, hadDNSPodID)
+			restoreEnv("DNSPOD_TOKEN", oldDNSPodToken, hadDNSPodToken)
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，配置未保存: " + err.Error()})
 		return
 	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交配置失败: " + err.Error()})
+		return
+	}
+	committed = true
 	services.ApplyLogLevel()
 
 	if len(plan.SectionChanges) > 0 {

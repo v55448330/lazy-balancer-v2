@@ -116,11 +116,10 @@ func scheduleCertificateDeploymentRetry(jobID int, material issuedCertificate, d
 }
 
 func (s *CertIssuer) deploymentFailed(jobID int, material issuedCertificate, message string, err error) error {
-	var currentMessage string
-	if queryErr := db.DB.QueryRow("SELECT COALESCE(message,'') FROM cert_jobs WHERE id=? AND status!='disabled'", jobID).Scan(&currentMessage); queryErr != nil {
+	var previousAttempt int
+	if queryErr := db.DB.QueryRow("SELECT COALESCE(deployment_attempts,0) FROM cert_jobs WHERE id=? AND status!='disabled'", jobID).Scan(&previousAttempt); queryErr != nil {
 		return &certificateDeploymentError{err: errors.Join(err, queryErr)}
 	}
-	previousAttempt := certificateDeploymentAttempt(currentMessage)
 	if material.deploymentAttempt > previousAttempt {
 		previousAttempt = material.deploymentAttempt
 	}
@@ -130,7 +129,12 @@ func (s *CertIssuer) deploymentFailed(jobID int, material issuedCertificate, mes
 		status = "failed"
 	}
 	storedMessage := fmt.Sprintf("部署失败 [attempt=%d/%d]: %s", attempt, maxCertificateDeploymentAttempts, message)
-	result, updateErr := db.DB.Exec("UPDATE cert_jobs SET status=?, message=?, updated_at=datetime('now') WHERE id=? AND status!='disabled'", status, storedMessage, jobID)
+	delay := certificateDeploymentBackoff(attempt)
+	var availableAfter any
+	if status == "downloaded" {
+		availableAfter = time.Now().UTC().Add(delay).Format("2006-01-02 15:04:05")
+	}
+	result, updateErr := db.DB.Exec("UPDATE cert_jobs SET status=?, message=?, deployment_attempts=?, deployment_available_after=?, updated_at=datetime('now') WHERE id=? AND status!='disabled'", status, storedMessage, attempt, availableAfter, jobID)
 	if updateErr == nil {
 		var updated int64
 		updated, updateErr = result.RowsAffected()
@@ -140,28 +144,12 @@ func (s *CertIssuer) deploymentFailed(jobID int, material issuedCertificate, mes
 	}
 	if updateErr == nil && status == "downloaded" && s.deploymentRetry != nil {
 		material.deploymentAttempt = attempt
-		s.deploymentRetry(jobID, material, certificateDeploymentBackoff(attempt))
+		s.deploymentRetry(jobID, material, delay)
 	}
 	if updateErr == nil && status == "failed" {
 		RecordAuditLog("system", "部署失败", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("max_attempts")), "")
 	}
 	return &certificateDeploymentError{err: errors.Join(err, updateErr)}
-}
-
-func certificateDeploymentAttempt(message string) int {
-	const prefix = "部署失败 [attempt="
-	if !strings.HasPrefix(message, prefix) {
-		return 0
-	}
-	end := strings.IndexByte(message[len(prefix):], '/')
-	if end < 0 {
-		return 0
-	}
-	attempt, parseErr := strconv.Atoi(message[len(prefix) : len(prefix)+end])
-	if parseErr != nil || attempt < 0 {
-		return 0
-	}
-	return attempt
 }
 
 func certificateDeploymentBackoff(attempt int) time.Duration {
@@ -210,13 +198,13 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// disabled, or the rule's CA provider changed since issuance (then the old
 	// certificate is from the wrong CA and a fresh issuance is required).
 	var jobStatus string
-	var jobMessage string
 	var jobProviderID int
+	var deploymentAttempt int
 	var ruleEnabled bool
 	var ruleProviderID int
-	if err := db.DB.QueryRow(`SELECT j.status, COALESCE(j.message,''), COALESCE(j.ca_provider_id,0), COALESCE(r.enabled,0), COALESCE(r.ca_provider_id,0)
+	if err := db.DB.QueryRow(`SELECT j.status, COALESCE(j.ca_provider_id,0), COALESCE(j.deployment_attempts,0), COALESCE(r.enabled,0), COALESCE(r.ca_provider_id,0)
 		FROM cert_jobs j LEFT JOIN lb_rules r ON r.caddy_id = j.rule_id WHERE j.id = ?`, jobID).
-		Scan(&jobStatus, &jobMessage, &jobProviderID, &ruleEnabled, &ruleProviderID); err == nil &&
+		Scan(&jobStatus, &jobProviderID, &deploymentAttempt, &ruleEnabled, &ruleProviderID); err == nil &&
 		jobStatus != "disabled" && ruleEnabled && ruleProviderID == jobProviderID {
 		var existingCert, existingKey string
 		if err := db.DB.QueryRow("SELECT COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&existingCert, &existingKey); err == nil && existingCert != "" && existingKey != "" {
@@ -226,7 +214,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 				renewalDays = 30
 			}
 			if notAfter, perr := parseCertNotAfter(existingCert); perr == nil && time.Until(notAfter) > time.Duration(renewalDays)*24*time.Hour {
-				material := issuedCertificate{ruleID: ruleID, certPEM: existingCert, keyPEM: existingKey, notAfter: notAfter, providerID: jobProviderID, deploymentAttempt: certificateDeploymentAttempt(jobMessage)}
+				material := issuedCertificate{ruleID: ruleID, certPEM: existingCert, keyPEM: existingKey, notAfter: notAfter, providerID: jobProviderID, deploymentAttempt: deploymentAttempt}
 				logger.Log("downloaded", "检测到已签发的有效证书，直接重新部署文件")
 				snapshot, snapshotErr := SnapshotCertFiles([]string{ruleID})
 				if snapshotErr != nil {
@@ -240,7 +228,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 						return s.deploymentFailed(jobID, material, "重新部署后重载 Caddy 失败: "+err.Error(), fmt.Errorf("reload Caddy after certificate redeploy: %w", err))
 					}
 				}
-				result, err := db.DB.Exec(`UPDATE cert_jobs SET status='issued', message='证书文件重新部署成功', updated_at=datetime('now')
+				result, err := db.DB.Exec(`UPDATE cert_jobs SET status='issued', message='证书文件重新部署成功', deployment_attempts=0, deployment_available_after=NULL, updated_at=datetime('now')
 					WHERE id=? AND status='downloaded' AND EXISTS (SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1)
 					AND EXISTS (SELECT 1 FROM global_config WHERE id=1 AND is_master=1)`, jobID, ruleID)
 				if err == nil {
@@ -342,6 +330,9 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// Run the ACME issuance flow
 	certPEM, keyPEM, _, err := issuer.Issue(ctx, domainList)
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("certificate issuance canceled: %w", ctx.Err())
+		}
 		if raErr := detectRateLimit(err, provider.Provider); raErr != nil {
 			return raErr
 		}
@@ -375,7 +366,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 }
 
 func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, material issuedCertificate) error {
-	result, err := db.DB.ExecContext(ctx, `UPDATE cert_jobs SET status='downloaded', cert_pem=?, key_pem=?, expires_at=?, ca_provider_id=?, updated_at=datetime('now')
+	result, err := db.DB.ExecContext(ctx, `UPDATE cert_jobs SET status='downloaded', cert_pem=?, key_pem=?, expires_at=?, ca_provider_id=?, deployment_attempts=0, deployment_available_after=NULL, updated_at=datetime('now')
 		WHERE id=? AND status IN ('downloaded','cleanup_dns','cleanup_warning') AND EXISTS (SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1)
 		AND EXISTS (SELECT 1 FROM global_config WHERE id=1 AND is_master=1)`,
 		material.certPEM, material.keyPEM, material.notAfter, material.providerID, jobID, material.ruleID)
@@ -414,7 +405,7 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 	}
 	defer func() { _ = tx.Rollback() }()
 	result, err = tx.ExecContext(ctx, `UPDATE cert_jobs SET status='issued', message='签发成功', renewal_attempts=0,
-		ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now')
+		ca_available_after=NULL, last_error_code=NULL, deployment_attempts=0, deployment_available_after=NULL, updated_at=datetime('now')
 		WHERE id=? AND status IN ('downloaded','cleanup_dns','cleanup_warning') AND EXISTS (SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1)
 		AND EXISTS (SELECT 1 FROM global_config WHERE id=1 AND is_master=1)`, jobID, material.ruleID)
 	if err == nil {
@@ -424,15 +415,13 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 		}
 	}
 	if err == nil {
-		err = BumpClusterVersion(ctx, tx)
-	}
-	if err == nil {
 		err = tx.Commit()
 	}
 	if err != nil {
+		rollbackErr := tx.Rollback()
 		cleanupErr := restoreCertificateDeployment(snapshot, s.caddyReloader)
 		failJob(jobID, "证书部署确认失败: "+err.Error())
-		return errors.Join(fmt.Errorf("finalize issued certificate: %w", err), cleanupErr)
+		return errors.Join(fmt.Errorf("finalize issued certificate: %w", err), rollbackErr, cleanupErr)
 	}
 	return nil
 }

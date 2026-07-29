@@ -267,6 +267,10 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有规则失败"})
 		return
 	}
+	// 与 UpdateRule 同一锁序：先 caddyOpMu 后 DB 事务，避免与规则写路径循环等待
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	tx, err := db.DB.BeginTx(ctx, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开始导入事务失败"})
@@ -301,12 +305,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			return
 		}
 	}
-	importUserID := 0
-	if uid, exists := c.Get("user_id"); exists {
-		if f, ok := uid.(float64); ok {
-			importUserID = int(f)
-		}
-	}
+	importUserID := int(contextUserID(c))
 	if _, err := tx.ExecContext(ctx, "UPDATE lb_rules SET updated_by=? WHERE id IN (SELECT id FROM lb_rules)", importUserID); err != nil {
 		recordAudit(c, "导入失败", "配置备份", "更新规则操作者失败: "+err.Error())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新规则操作者失败，已回滚: " + err.Error()})
@@ -352,10 +351,8 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			}
 		}
 	}
-	h.caddyOpMu.Lock()
 	runtimeSnapshot, err := h.snapshotImportRuntime(affectedRuleIDs)
 	if err != nil {
-		h.caddyOpMu.Unlock()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败: " + err.Error()})
 		return
 	}
@@ -367,32 +364,27 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	}
 	if err := materializeImportCertificates(pendingCertificates); err != nil {
 		err = restoreRuntime(err)
-		h.caddyOpMu.Unlock()
 		recordAudit(c, "导入失败", "配置备份", err.Error())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "准备证书文件失败: " + err.Error()})
 		return
 	}
 	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
 		err = restoreRuntime(err)
-		h.caddyOpMu.Unlock()
 		recordAudit(c, "导入失败", "配置备份", "Caddy 配置验证未通过，数据库未变更: "+err.Error())
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份生成的配置未通过 Caddy 验证，未执行导入: " + err.Error()})
 		return
 	}
 	if err := services.BumpClusterVersion(ctx, tx); err != nil {
 		err = restoreRuntime(err)
-		h.caddyOpMu.Unlock()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新配置版本失败: " + err.Error()})
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		err = restoreRuntime(err)
-		h.caddyOpMu.Unlock()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交导入失败: " + err.Error()})
 		return
 	}
 	committed = true
-	h.caddyOpMu.Unlock()
 	counts := importCountsDetail(backup.Tables)
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail("来源：v2 备份（覆盖导入）", counts, services.AuditResultPart("success")))
 	recordAudit(c, "重载", "Caddy配置", "导入配置后自动重载")

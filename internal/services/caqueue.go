@@ -172,16 +172,21 @@ func (m *CAQueueManager) Start() {
 
 func (m *CAQueueManager) Stop() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if !m.active {
+		m.mu.Unlock()
 		return
 	}
 	m.active = false
+	queues := make([]*caQueue, 0, len(m.queues))
 	for _, queue := range m.queues {
-		queue.cancel()
-		close(queue.stopCh)
+		queues = append(queues, queue)
+		queue.stop()
 	}
 	m.queues = make(map[int]*caQueue)
+	m.mu.Unlock()
+	for _, queue := range queues {
+		queue.wait()
+	}
 }
 
 type queueItem struct {
@@ -203,6 +208,10 @@ type caQueue struct {
 	stopCh       chan struct{}
 	ctx          context.Context
 	cancel       context.CancelFunc
+	loopDone     chan struct{}
+	executions   sync.WaitGroup
+	stopping     bool
+	executeFn    func(context.Context, queueItem, models.CAProvider) error
 }
 
 type queueExecution struct {
@@ -217,16 +226,21 @@ func newCAQueue(provider models.CAProvider, reloader func() error) *caQueue {
 		provider.MaxConcurrent = 1
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &caQueue{
+	q := &caQueue{
 		provider:     provider,
 		reloader:     reloader,
 		active:       make(map[int]struct{}),
 		cancels:      make(map[int]context.CancelFunc),
 		runningRules: make(map[int]string),
 		stopCh:       make(chan struct{}),
+		loopDone:     make(chan struct{}),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
+	q.executeFn = func(ctx context.Context, item queueItem, provider models.CAProvider) error {
+		return NewCertIssuer(q.reloader).Issue(ctx, item.jobID, item.ruleID, item.domains, provider)
+	}
+	return q
 }
 
 func (q *caQueue) enqueue(item queueItem) {
@@ -240,6 +254,7 @@ func (q *caQueue) enqueue(item queueItem) {
 }
 
 func (q *caQueue) loop() {
+	defer close(q.loopDone)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -254,6 +269,10 @@ func (q *caQueue) loop() {
 
 func (q *caQueue) tick() {
 	q.mu.Lock()
+	if q.stopping {
+		q.mu.Unlock()
+		return
+	}
 	if len(q.pending) == 0 {
 		q.mu.Unlock()
 		return
@@ -306,6 +325,7 @@ func (q *caQueue) prepareExecutionLocked(parent context.Context) (queueExecution
 	item := q.pending[0]
 	q.pending = q.pending[1:]
 	q.running++
+	q.executions.Add(1)
 	ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
 	q.cancels[item.jobID] = cancel
 	q.runningRules[item.jobID] = item.ruleID
@@ -314,6 +334,7 @@ func (q *caQueue) prepareExecutionLocked(parent context.Context) (queueExecution
 
 func (q *caQueue) execute(execution queueExecution) {
 	item := execution.item
+	defer q.executions.Done()
 	defer execution.cancel()
 	defer func() {
 		if r := recover(); r != nil {
@@ -338,10 +359,35 @@ func (q *caQueue) execute(execution queueExecution) {
 		return
 	}
 
-	issuer := NewCertIssuer(q.reloader)
-	if err := issuer.Issue(execution.ctx, item.jobID, item.ruleID, item.domains, execution.provider); err != nil {
+	if err := q.executeFn(execution.ctx, item, execution.provider); err != nil {
 		log.Printf("CA queue execution failed for job %d rule %s: %v", item.jobID, item.ruleID, err)
+		if execution.ctx.Err() != nil {
+			requeueCanceledJob(item.jobID)
+			return
+		}
 		handleQueueExecutionError(item.jobID, err)
+	}
+}
+
+func (q *caQueue) stop() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.stopping {
+		return
+	}
+	q.stopping = true
+	q.cancel()
+	close(q.stopCh)
+}
+
+func (q *caQueue) wait() {
+	<-q.loopDone
+	q.executions.Wait()
+}
+
+func requeueCanceledJob(jobID int) {
+	if _, err := db.DB.Exec(`UPDATE cert_jobs SET status='queued', message='节点生命周期切换，等待恢复签发', updated_at=datetime('now') WHERE id=? AND status!='disabled'`, jobID); err != nil {
+		log.Printf("CA queue: failed to requeue canceled job %d: %v", jobID, err)
 	}
 }
 

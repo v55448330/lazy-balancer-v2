@@ -60,12 +60,26 @@ func (m *httpRedirectMux) Close() error {
 }
 
 func (m *httpRedirectMux) dispatch() {
+	var retryDelay time.Duration
 	for {
 		connection, err := m.Listener.Accept()
 		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Temporary() {
+				if retryDelay == 0 {
+					retryDelay = 5 * time.Millisecond
+				} else {
+					retryDelay *= 2
+				}
+				if maximum := time.Second; retryDelay > maximum {
+					retryDelay = maximum
+				}
+				time.Sleep(retryDelay)
+				continue
+			}
 			m.finish(err)
 			return
 		}
+		retryDelay = 0
 		select {
 		case m.slots <- struct{}{}:
 			go m.sniff(connection)

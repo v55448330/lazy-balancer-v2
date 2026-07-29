@@ -89,7 +89,7 @@
             <el-switch
               v-model="row.is_enabled"
               :loading="switchingIds.has(row.id)"
-              :disabled="isReadOnly || switchingIds.has(row.id) || row.id === authStore.user?.id"
+              :disabled="isReadOnly || switchingIds.has(row.id) || submittingUserId === row.id || row.id === authStore.user?.id"
               @change="(val: boolean) => handleToggleStatus(row.id, val)"
             />
           </template>
@@ -109,10 +109,10 @@
             <el-button v-if="row.id !== authStore.user?.id" type="primary" link size="small" :disabled="isReadOnly || submitting" @click="editUser(row)">
               编辑
             </el-button>
-            <el-button v-if="row.id !== authStore.user?.id" type="warning" link size="small" :disabled="isReadOnly" @click="resetPassword(row.id)">
+            <el-button v-if="row.id !== authStore.user?.id" type="warning" link size="small" :disabled="isReadOnly || submittingUserId === row.id" @click="resetPassword(row.id)">
               重置密码
             </el-button>
-            <el-button v-if="row.id !== authStore.user?.id" type="danger" link size="small" :disabled="isReadOnly" @click="deleteUser(row.id)">
+            <el-button v-if="row.id !== authStore.user?.id" type="danger" link size="small" :disabled="isReadOnly || submittingUserId === row.id" @click="deleteUser(row.id)">
               删除
             </el-button>
           </template>
@@ -129,13 +129,14 @@ import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { UserFilled, User, Plus } from '@element-plus/icons-vue'
-import type { ApiResponse, User as UserDto } from '@/types'
+import type { ApiResponse, UserListItem } from '@/types'
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
-const users = ref<UserDto[]>([])
+const users = ref<UserListItem[]>([])
 const showForm = ref(false)
 const submitting = ref(false)
+const submittingUserId = ref<number | null>(null)
 
 const openCreateForm = () => {
   if (submitting.value) return
@@ -143,7 +144,7 @@ const openCreateForm = () => {
   form.value = { username: '', password: '', display_name: '', role: 'user' }
   showForm.value = true
 }
-const editingUser = ref<UserDto | null>(null)
+const editingUser = ref<UserListItem | null>(null)
 const switchingIds = ref(new Set<number>())
 let usersRequestSeq = 0
 const form = ref({
@@ -153,7 +154,7 @@ const form = ref({
   role: 'user',
 })
 
-const getDisplayName = (row: UserDto): string => {
+const getDisplayName = (row: UserListItem): string => {
   const name = row.display_name
   if (typeof name === 'string') return name
   if (name && typeof name === 'object' && 'String' in name) return name.String
@@ -162,12 +163,13 @@ const getDisplayName = (row: UserDto): string => {
 
 const fetchUsers = async () => {
   const requestSeq = ++usersRequestSeq
-  const res = await request.get<ApiResponse<UserDto[]>>('/users')
+  const res = await request.get<ApiResponse<UserListItem[]>>('/users')
   if (requestSeq === usersRequestSeq) users.value = res.data || []
 }
 
 const handleSubmit = async () => {
   if (isReadOnly.value || submitting.value) return
+  submittingUserId.value = editingUser.value?.id ?? null
   submitting.value = true
   try {
     if (editingUser.value) {
@@ -184,12 +186,13 @@ const handleSubmit = async () => {
     }
   } finally {
     submitting.value = false
+    submittingUserId.value = null
   }
   closeForm()
   fetchUsers()
 }
 
-const editUser = (user: UserDto) => {
+const editUser = (user: UserListItem) => {
   if (isReadOnly.value || submitting.value) return
   editingUser.value = user
   form.value = {
@@ -209,7 +212,7 @@ const closeForm = () => {
 }
 
 const deleteUser = async (id: number) => {
-  if (isReadOnly.value) return
+  if (isReadOnly.value || submittingUserId.value === id) return
   try {
     await ElMessageBox.confirm('确定要删除这个用户吗？', '警告', { type: 'warning' })
     await request.delete(`/users/${id}`)
@@ -221,7 +224,7 @@ const deleteUser = async (id: number) => {
 }
 
 const handleToggleStatus = async (id: number, isEnabled: boolean) => {
-  if (isReadOnly.value || switchingIds.value.has(id)) return
+  if (isReadOnly.value || switchingIds.value.has(id) || submittingUserId.value === id) return
   switchingIds.value.add(id)
   try {
     await request.put(`/users/${id}/status`, { is_enabled: isEnabled })
@@ -235,7 +238,7 @@ const handleToggleStatus = async (id: number, isEnabled: boolean) => {
 }
 
 const resetPassword = async (id: number) => {
-  if (isReadOnly.value) return
+  if (isReadOnly.value || submittingUserId.value === id) return
   try {
     const { value } = await ElMessageBox.prompt('请输入新密码', '重置密码', {
       confirmButtonText: '确定',

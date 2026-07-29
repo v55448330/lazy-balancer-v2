@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { ApiResponse, ClusterNodeMode, User } from '@/types'
+import type { ApiResponse, ClusterNodeMode, CurrentUser } from '@/types'
 import { isTokenExpired, request } from '@/utils/api'
 import { ElMessage } from 'element-plus'
 
@@ -20,7 +20,7 @@ const initialCurrentPage = storedCurrentPage && validPages.has(storedCurrentPage
 if (storedCurrentPage !== initialCurrentPage) localStorage.setItem('currentPage', initialCurrentPage)
 
 export const useAuthStore = defineStore('auth', () => {
-  const user = ref<User | null>(null)
+  const user = ref<CurrentUser | null>(null)
   const token = ref<string | null>(localStorage.getItem('token'))
   const nodeMode = ref<ClusterNodeMode>('master')
   const timezone = ref<string>('Asia/Shanghai')
@@ -39,7 +39,7 @@ export const useAuthStore = defineStore('auth', () => {
     return ''
   })
 
-  const normalizeDisplayName = (value: User['display_name'], username?: string) => {
+  const normalizeDisplayName = (value: CurrentUser['display_name'], username?: string) => {
     if (typeof value === 'string') return value || username || ''
     if (value && typeof value === 'object' && 'String' in value) return value.String || username || ''
     return username || ''
@@ -50,15 +50,10 @@ export const useAuthStore = defineStore('auth', () => {
     return normalizeDisplayName(user.value.display_name, user.value.username)
   })
 
-  const userRole = computed(() => {
-    if (!user.value) return '用户'
-    return user.value.role === 'admin' ? '管理员' : '用户'
-  })
-
   async function fetchUser() {
     if (!token.value) return
     try {
-      const res = await request.get<ApiResponse<User>>('/users/me')
+      const res = await request.get<ApiResponse<CurrentUser>>('/users/me')
       if (res.data) {
         user.value = {
           id: res.data.id,
@@ -92,7 +87,7 @@ export const useAuthStore = defineStore('auth', () => {
       const res = await request.post<{
         readonly token: string
         readonly node_mode: ClusterNodeMode
-        readonly user?: User
+        readonly user?: CurrentUser
       }>('/auth/login', { username, password })
       token.value = res.token
       nodeMode.value = res.node_mode
@@ -156,7 +151,6 @@ export const useAuthStore = defineStore('auth', () => {
     readOnlyMessage,
     normalizeDisplayName,
     displayName,
-    userRole,
     login,
     logout,
     fetchUser,

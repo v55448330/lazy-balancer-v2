@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -650,4 +651,61 @@ func newAuditRuleHandlers(t *testing.T, failedLoads int32) (*Handlers, *atomic.I
 		caddyService:   services.NewCaddyService(fakeCaddy.URL),
 		clusterService: services.NewClusterService(db.DB, nil),
 	}, &loadCalls, &lastLoad
+}
+
+func TestRuleWriteEndpoints_share_one_lock_order_under_concurrency(t *testing.T) {
+	// Given：同一条规则上并发执行 Update/Delete/ACL/Create，旧锁序（DB 事务→caddyOpMu
+	// 与 caddyOpMu→DB 并存）会 AB-BA 循环等待；统一锁序后全部请求必须在超时内完成。
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_lockorder", "lock", "lock.example.test", 8080, true, "manual", false)
+	seedAuditUpstream(t, "lb_lockorder")
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	router.DELETE("/rules/:caddy_id", handler.DeleteRule)
+	router.POST("/rules/:caddy_id/acl", handler.UpdateRuleACL)
+	router.POST("/rules", handler.CreateRule)
+
+	done := make(chan struct{})
+	go func() {
+		var wg sync.WaitGroup
+		for i := 0; i < 4; i++ {
+			wg.Add(1)
+			go func(n int) {
+				defer wg.Done()
+				switch n % 4 {
+				case 0:
+					body := strings.NewReader(`{"description":"u"}`)
+					recorder := httptest.NewRecorder()
+					router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/rules/lb_lockorder", body))
+				case 1:
+					body := strings.NewReader(`{"ip_acl_mode":"allow","ip_acl_list":["192.0.2.0/24"]}`)
+					recorder := httptest.NewRecorder()
+					router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/rules/lb_lockorder/acl", body))
+				case 2:
+					recorder := httptest.NewRecorder()
+					router.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/rules/lb_lockorder", nil))
+				case 3:
+					body := strings.NewReader(`{"name":"newbie","protocol":"tcp","listen_port":19000,"upstreams":[{"host":"127.0.0.1","port":9001}]}`)
+					recorder := httptest.NewRecorder()
+					router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/rules", body))
+				}
+			}(i)
+		}
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("concurrent rule write endpoints deadlocked (lock order inversion)")
+	}
+
+	var remaining int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM lb_rules WHERE caddy_id IN ('lb_lockorder','lb_newbie') OR name='newbie'`).Scan(&remaining); err != nil {
+		t.Fatalf("read final rules: %v", err)
+	}
+	if remaining > 2 {
+		t.Fatalf("unexpected rule count %d after concurrent writes", remaining)
+	}
 }

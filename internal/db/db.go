@@ -260,6 +260,8 @@ func createTables() error {
 		renewal_attempts INTEGER DEFAULT 0,
 		ca_available_after DATETIME,
 		last_error_code VARCHAR(20),
+		deployment_attempts INTEGER DEFAULT 0,
+		deployment_available_after DATETIME,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME
 	);
@@ -449,6 +451,8 @@ func runMigrations() error {
 		"cert_jobs.renewal_attempts":                  "INTEGER DEFAULT 0",
 		"cert_jobs.ca_available_after":                "DATETIME",
 		"cert_jobs.last_error_code":                   "VARCHAR(20)",
+		"cert_jobs.deployment_attempts":               "INTEGER DEFAULT 0",
+		"cert_jobs.deployment_available_after":        "DATETIME",
 		"global_config.default_ca_provider_id":        "INTEGER DEFAULT 0",
 		"global_config.cert_renewal_days":             "INTEGER DEFAULT 30",
 		"global_config.cert_renewal_attempts":         "INTEGER DEFAULT 5",
@@ -1107,6 +1111,8 @@ func migrateCertJobsStatusConstraint() error {
 			renewal_attempts INTEGER DEFAULT 0,
 			ca_available_after DATETIME,
 			last_error_code VARCHAR(20),
+			deployment_attempts INTEGER DEFAULT 0,
+			deployment_available_after DATETIME,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME
 		)
@@ -1118,14 +1124,14 @@ func migrateCertJobsStatusConstraint() error {
 	if _, err := tx.Exec(`
 		INSERT INTO cert_jobs (
 			id, rule_id, domain, status, message, expires_at, cert_pem, key_pem,
-			ca_provider_id, renewal_attempts, ca_available_after, last_error_code,
+			ca_provider_id, renewal_attempts, ca_available_after, last_error_code, deployment_attempts, deployment_available_after,
 			created_at, updated_at
 		)
 		SELECT
 			id, rule_id, domain,
 			CASE WHEN status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid') THEN status ELSE 'queued' END,
 			message, expires_at, cert_pem, key_pem,
-			ca_provider_id, renewal_attempts, ca_available_after, last_error_code,
+			ca_provider_id, renewal_attempts, ca_available_after, last_error_code, deployment_attempts, deployment_available_after,
 			created_at, updated_at
 		FROM cert_jobs_old
 	`); err != nil {

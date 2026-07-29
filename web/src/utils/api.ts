@@ -151,8 +151,9 @@ export function isTokenExpired(token: string): boolean {
     const encodedPayload = parts[1].replace(/-/g, '+').replace(/_/g, '/')
     const paddedPayload = encodedPayload.padEnd(encodedPayload.length + (4 - encodedPayload.length % 4) % 4, '=')
     const payload: unknown = JSON.parse(atob(paddedPayload))
-    if (!payload || typeof payload !== 'object' || !('exp' in payload) || typeof payload.exp !== 'number') return true
+    if (!payload || typeof payload !== 'object' || !('exp' in payload) || typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) return true
     const exp = payload.exp * 1000
+    if (!Number.isFinite(exp)) return true
     return Date.now() >= exp
   } catch {
     return true

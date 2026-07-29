@@ -221,3 +221,90 @@ func TestCAQueueManager_Stop_waits_for_in_progress_enqueue(t *testing.T) {
 		t.Fatalf("manager active=%v queues=%d, want stopped with no dead queues", manager.active, len(manager.queues))
 	}
 }
+
+func TestCAQueueManager_Stop_waits_for_running_execution(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO cert_jobs (id, rule_id, domain, status) VALUES (42, 'lb_stop', 'example.com', 'creating_order')`); err != nil {
+		t.Fatalf("seed certificate job: %v", err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
+	go queue.loop()
+	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error {
+		close(started)
+		<-release
+		return nil
+	}
+	queue.enqueue(queueItem{jobID: 42, ruleID: "lb_stop", domains: "example.com"})
+	queue.mu.Lock()
+	execution, ok := queue.prepareExecutionLocked(queue.ctx)
+	queue.mu.Unlock()
+	if !ok {
+		t.Fatal("pending execution was not prepared")
+	}
+	go queue.execute(execution)
+	<-started
+	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
+	stopDone := make(chan struct{})
+	go func() {
+		manager.Stop()
+		close(stopDone)
+	}()
+
+	// When
+	select {
+	case <-stopDone:
+		t.Fatal("Stop returned before the running execution completed")
+	default:
+	}
+	close(release)
+
+	// Then
+	<-stopDone
+}
+
+func TestCAQueue_execute_requeues_job_when_lifecycle_is_canceled(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	result, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, renewal_attempts) VALUES ('lb_cancelled', 'example.com', 'creating_order', 2)`)
+	if err != nil {
+		t.Fatalf("seed certificate job: %v", err)
+	}
+	jobID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read certificate job ID: %v", err)
+	}
+	started := make(chan struct{})
+	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
+	go queue.loop()
+	queue.executeFn = func(ctx context.Context, _ queueItem, _ models.CAProvider) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	queue.enqueue(queueItem{jobID: int(jobID), ruleID: "lb_cancelled", domains: "example.com"})
+	queue.mu.Lock()
+	execution, ok := queue.prepareExecutionLocked(queue.ctx)
+	queue.mu.Unlock()
+	if !ok {
+		t.Fatal("pending execution was not prepared")
+	}
+	go queue.execute(execution)
+	<-started
+	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
+
+	// When
+	manager.Stop()
+
+	// Then
+	var status string
+	var attempts int
+	if err := database.QueryRow("SELECT status, renewal_attempts FROM cert_jobs WHERE id=?", jobID).Scan(&status, &attempts); err != nil {
+		t.Fatalf("read canceled certificate job: %v", err)
+	}
+	if status != "queued" || attempts != 2 {
+		t.Fatalf("canceled job status=%q attempts=%d, want queued and 2", status, attempts)
+	}
+}

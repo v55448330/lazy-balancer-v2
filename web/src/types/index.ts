@@ -3,12 +3,16 @@ export interface NullableString {
   Valid: boolean
 }
 
-export interface User {
+export interface CurrentUser {
   id: number
   username: string
   role: 'admin' | 'user'
   is_enabled?: boolean
   display_name?: string | NullableString | null
+}
+
+export interface UserListItem extends Omit<CurrentUser, 'is_enabled'> {
+  is_enabled: boolean
   created_at?: string | null
   last_login?: string | null
 }

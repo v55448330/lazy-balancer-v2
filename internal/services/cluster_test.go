@@ -354,6 +354,7 @@ func TestClusterService_Promote_resets_slave_state(t *testing.T) {
 	if _, err := database.Exec(`UPDATE global_config SET is_master=0, master_url='https://master', cluster_token='secret', cluster_version=4 WHERE id=1`); err != nil {
 		t.Fatalf("seed slave state: %v", err)
 	}
+	installGlobalConfigVersionTrigger(t, database)
 
 	// When
 	if err := service.Promote(context.Background()); err != nil {
@@ -472,6 +473,38 @@ func TestSyncService_applySnapshot_rolls_back_when_caddy_rejects_config(t *testi
 	}
 }
 
+func TestSyncService_restart_callback_runs_when_synced_admin_TLS_changes(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, admin_tls_enabled=0 WHERE id=1"); err != nil {
+		t.Fatalf("seed slave mode: %v", err)
+	}
+	RecordRuntimeAdminTLS(AdminTLSConfig{Enabled: false, Mode: "selfsigned"})
+	restarted := make(chan struct{}, 1)
+	SetRestartRequiredHandler(func() { restarted <- struct{}{} })
+	t.Cleanup(func() { SetRestartRequiredHandler(nil) })
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+	snapshot := models.ClusterSnapshot{Version: 2, BasicSettings: models.ClusterBasicSettings{
+		LogLevel: "info", AccessLogJSON: true, Timezone: "Asia/Shanghai", AdminTLSEnabled: true, AdminTLSMode: "selfsigned",
+	}}
+
+	// When
+	if err := syncService.applySnapshot(context.Background(), snapshot); err != nil {
+		t.Fatalf("apply snapshot: %v", err)
+	}
+
+	// Then
+	select {
+	case <-restarted:
+	default:
+		t.Fatal("restart callback was not invoked")
+	}
+}
+
 func TestSyncService_pollRegistration_clears_temporary_secret_after_approval(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
@@ -556,6 +589,10 @@ func TestClusterService_UpdateSettings_sync_interval_master_only(t *testing.T) {
 	if _, err := database.Exec("UPDATE global_config SET is_master=1 WHERE id=1"); err != nil {
 		t.Fatalf("restore master mode: %v", err)
 	}
+	if _, err := database.Exec("UPDATE global_config SET cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatalf("reset cluster version: %v", err)
+	}
+	installGlobalConfigVersionTrigger(t, database)
 
 	// When
 	masterErr := service.UpdateSettings(context.Background(), models.ClusterSettingsRequest{SyncInterval: &interval})
@@ -568,7 +605,17 @@ func TestClusterService_UpdateSettings_sync_interval_master_only(t *testing.T) {
 	if err := database.QueryRow("SELECT sync_interval, cluster_version FROM global_config WHERE id=1").Scan(&gotInterval, &gotVersion); err != nil {
 		t.Fatalf("read settings: %v", err)
 	}
-	if gotInterval != 45 || gotVersion == 0 {
+	if gotInterval != 45 || gotVersion != 1 {
 		t.Fatalf("interval=%d version=%d", gotInterval, gotVersion)
+	}
+}
+
+func installGlobalConfigVersionTrigger(t *testing.T, database *sql.DB) {
+	t.Helper()
+	if _, err := database.Exec(`CREATE TRIGGER test_cluster_version_global_config_update
+		AFTER UPDATE ON global_config
+		WHEN OLD.cluster_version IS NEW.cluster_version AND NEW.is_master=1
+		BEGIN UPDATE global_config SET cluster_version=cluster_version+1 WHERE id=1; END`); err != nil {
+		t.Fatalf("install global config version trigger: %v", err)
 	}
 }

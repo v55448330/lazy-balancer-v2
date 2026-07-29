@@ -69,7 +69,7 @@
         <el-table-column label="操作" width="140" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" :loading="testingCAId === row.id" :disabled="isReadOnly" @click="testCAProvider(row)">测试</el-button>
-            <el-button link type="primary" size="small" :disabled="isReadOnly" @click="openCAProviderDialog(row)">编辑</el-button>
+            <el-button link type="primary" size="small" :disabled="isReadOnly || savingCA" @click="openCAProviderDialog(row)">编辑</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -172,8 +172,8 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="caDialogVisible" title="编辑 CA 提供商" width="520">
-      <el-form :model="caForm" label-width="140px">
+    <el-dialog v-model="caDialogVisible" title="编辑 CA 提供商" width="520" :before-close="beforeCADialogClose">
+      <el-form :model="caForm" label-width="140px" :disabled="savingCA">
         <el-form-item label="名称">
           <el-input v-model="caForm.name" disabled />
         </el-form-item>
@@ -208,8 +208,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="caDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="savingCA" @click="saveCAProvider">保存</el-button>
+        <el-button :disabled="savingCA" @click="closeCADialog">取消</el-button>
+        <el-button type="primary" :loading="savingCA" :disabled="savingCA" @click="saveCAProvider">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -402,6 +402,7 @@ const fetchCAProviders = async () => {
 }
 
 const openCAProviderDialog = (p: CAProvider) => {
+  if (savingCA.value) return
   editingCAProvider.value = p
   Object.assign(caForm, {
     ...p,
@@ -413,7 +414,16 @@ const openCAProviderDialog = (p: CAProvider) => {
   caDialogVisible.value = true
 }
 
+const beforeCADialogClose = (done: () => void): void => {
+  if (!savingCA.value) done()
+}
+
+const closeCADialog = (): void => {
+  if (!savingCA.value) caDialogVisible.value = false
+}
+
 const saveCAProvider = async () => {
+  if (savingCA.value) return
   if (caForm.provider === 'zerossl') {
     if (!caCreds.eab_kid.trim() || !caCreds.eab_hmac_key.trim()) {
       ElMessage.warning('ZeroSSL 必须填写 EAB KID 和 EAB HMAC Key')

@@ -120,9 +120,14 @@ func (w *RotatingFileWriter) open() error {
 func (w *RotatingFileWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.file == nil {
+		if err := w.open(); err != nil {
+			return 0, fmt.Errorf("reopen log file: %w", err)
+		}
+	}
 	if w.size+int64(len(p)) > runtimeLogSizeMB.Load()*1024*1024 {
 		if err := w.rotateLocked(); err != nil {
-			log.Printf("日志轮转失败: %v", err)
+			return 0, fmt.Errorf("rotate log file: %w", err)
 		}
 	}
 	n, err := w.file.Write(p)
@@ -134,6 +139,7 @@ func (w *RotatingFileWriter) rotateLocked() error {
 	if err := w.file.Close(); err != nil {
 		return err
 	}
+	w.file = nil
 	rotated := fmt.Sprintf("%s.%s", w.path, time.Now().Format("20060102-150405"))
 	if _, err := os.Stat(rotated); err == nil {
 		rotated = fmt.Sprintf("%s.%d", rotated, time.Now().UnixNano()%1000)
@@ -148,6 +154,9 @@ func (w *RotatingFileWriter) rotateLocked() error {
 func (w *RotatingFileWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.file == nil {
+		return nil
+	}
 	return w.file.Close()
 }
 
