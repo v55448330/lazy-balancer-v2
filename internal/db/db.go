@@ -285,10 +285,6 @@ func createTables() error {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME
 	);
-	CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain);
-	CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain);
-	CREATE INDEX IF NOT EXISTS idx_cert_jobs_status_ca_available ON cert_jobs(status, ca_available_after);
-	CREATE INDEX IF NOT EXISTS idx_cert_jobs_status_expires ON cert_jobs(status, expires_at);
 
 	-- Global Config table
 	CREATE TABLE IF NOT EXISTS global_config (
@@ -352,6 +348,7 @@ func createTables() error {
 		status VARCHAR(20) DEFAULT 'offline',
 		cluster_token_hash VARCHAR(64),
 		registration_secret VARCHAR(64),
+		registration_secret_expires_at DATETIME,
 		cluster_token_delivered BOOLEAN DEFAULT FALSE,
 		reported_version INTEGER DEFAULT 0,
 		health_json TEXT,
@@ -518,6 +515,7 @@ func runMigrations() error {
 		"global_config.proxy_write_timeout":           "INTEGER DEFAULT 0",
 		"global_config.proxy_stream_timeout":          "INTEGER DEFAULT 0",
 		"users.password_changed_at":                   "DATETIME",
+		"users.password_version":                      "INTEGER NOT NULL DEFAULT 0",
 		"global_config.cluster_version":               "INTEGER DEFAULT 0",
 		"global_config.sync_caddy_config":             "BOOLEAN DEFAULT 0",
 		"global_config.cluster_token":                 "TEXT DEFAULT ''",
@@ -528,6 +526,7 @@ func runMigrations() error {
 		"global_config.sync_fingerprint":              "TEXT DEFAULT ''",
 		"nodes.cluster_token_hash":                    "VARCHAR(64)",
 		"nodes.registration_secret":                   "VARCHAR(64)",
+		"nodes.registration_secret_expires_at":        "DATETIME",
 		"nodes.cluster_token_delivered":               "BOOLEAN DEFAULT 0",
 		"nodes.reported_version":                      "INTEGER DEFAULT 0",
 		"nodes.health_json":                           "TEXT",
@@ -661,16 +660,21 @@ func runMigrations() error {
 		return fmt.Errorf("failed to create tls_certificates: %w", err)
 	}
 
-	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain)"); err != nil {
-		return fmt.Errorf("failed to create cert_jobs rule-domain index: %w", err)
-	}
-	if _, err := DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)"); err != nil {
-		return fmt.Errorf("failed to create cert_jobs unique index: %w", err)
+	if _, err := DB.Exec(`DELETE FROM cert_jobs WHERE id NOT IN (
+		SELECT MAX(id) FROM cert_jobs GROUP BY rule_id, domain
+	)`); err != nil {
+		return fmt.Errorf("failed to deduplicate cert_jobs: %w", err)
 	}
 
 	// Enforce cert_jobs status CHECK constraint and queued default on existing DBs.
 	if err := migrateCertJobsStatusConstraint(); err != nil {
 		return fmt.Errorf("failed to migrate cert_jobs status constraint: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain)"); err != nil {
+		return fmt.Errorf("failed to create cert_jobs rule-domain index: %w", err)
+	}
+	if _, err := DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)"); err != nil {
+		return fmt.Errorf("failed to create cert_jobs unique index: %w", err)
 	}
 	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_status_ca_available ON cert_jobs(status, ca_available_after)"); err != nil {
 		return fmt.Errorf("failed to index cert_jobs CA availability: %w", err)
@@ -1223,15 +1227,6 @@ func migrateCertJobsStatusConstraint() error {
 		tx.Rollback()
 		return fmt.Errorf("failed to drop old cert_jobs table: %w", err)
 	}
-	if _, err := tx.Exec("CREATE INDEX idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain)"); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to recreate cert_jobs index: %w", err)
-	}
-	if _, err := tx.Exec("CREATE UNIQUE INDEX idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)"); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to recreate cert_jobs unique index: %w", err)
-	}
-
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit cert_jobs migration: %w", err)
 	}

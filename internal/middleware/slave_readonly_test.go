@@ -13,29 +13,61 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/handlers"
 )
 
-func TestJWTAuth_password_version_allows_same_second_login_and_rejects_old_token(t *testing.T) {
+func TestJWTAuth_rejects_first_token_after_two_same_second_password_changes(t *testing.T) {
 	cfg := &config.Config{JWTSecret: "password-version-secret"}
 	oldDB := db.DB
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("init database: %v", err)
 	}
+	ensurePasswordVersionColumn(t)
 	t.Cleanup(func() {
 		_ = db.Close()
 		db.DB = oldDB
 		db.SetDB(oldDB)
 	})
-	changedAt := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
-	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled,password_changed_at) VALUES (7,'admin','hash','admin',1,?)", changedAt); err != nil {
+	if _, err := db.DB.Exec(`
+		INSERT INTO users (id,username,password_hash,role,is_enabled,password_version) VALUES (7,'admin','hash','admin',1,0);
+		CREATE TRIGGER fixed_password_change_time AFTER UPDATE OF password_hash ON users
+		BEGIN UPDATE users SET password_changed_at='2026-07-30 12:00:00' WHERE id=NEW.id; END;
+	`); err != nil {
 		t.Fatalf("seed user: %v", err)
+	}
+	h := handlers.NewHandlers(handlers.Dependencies{})
+	update := func(password string) int64 {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPatch, "/users/me", strings.NewReader(`{"password":"`+password+`"}`))
+		request.Header.Set("Content-Type", "application/json")
+		context, _ := gin.CreateTestContext(response)
+		context.Request = request
+		context.Set("user_id", 7)
+		h.UpdateCurrentUser(context)
+		if response.Code != http.StatusOK {
+			t.Fatalf("password update status=%d body=%q", response.Code, response.Body.String())
+		}
+		var version int64
+		var changedAt string
+		if err := db.DB.QueryRow("SELECT password_version,password_changed_at FROM users WHERE id=7").Scan(&version, &changedAt); err != nil {
+			t.Fatalf("read password state: %v", err)
+		}
+		if changedAt != "2026-07-30T12:00:00Z" && changedAt != "2026-07-30 12:00:00" {
+			t.Fatalf("password_changed_at=%q, want fixed same-second value", changedAt)
+		}
+		return version
+	}
+	firstVersion := update("first-password")
+	secondVersion := update("second-password")
+	if firstVersion != 1 || secondVersion != 2 {
+		t.Fatalf("password versions=(%d,%d), want (1,2)", firstVersion, secondVersion)
 	}
 	router := gin.New()
 	router.Use(jwtAuth(cfg))
 	router.GET("/protected", noContent)
 	sign := func(passwordVersion int64) string {
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"user_id": 7, "username": "admin", "iat": changedAt.Unix(), "exp": time.Now().Add(time.Hour).Unix(), "pwd_ver": passwordVersion,
+			"user_id": 7, "username": "admin", "iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(), "pwd_ver": passwordVersion,
 		})
 		signed, err := token.SignedString([]byte(cfg.JWTSecret))
 		if err != nil {
@@ -51,11 +83,106 @@ func TestJWTAuth_password_version_allows_same_second_login_and_rejects_old_token
 		return response
 	}
 
-	if response := request(sign(changedAt.Unix())); response.Code != http.StatusNoContent {
-		t.Fatalf("same-second fresh token status=%d body=%q", response.Code, response.Body.String())
+	if response := request(sign(firstVersion)); response.Code != http.StatusUnauthorized {
+		t.Fatalf("first token status=%d, want 401", response.Code)
 	}
-	if response := request(sign(0)); response.Code != http.StatusUnauthorized {
-		t.Fatalf("old token status=%d, want 401", response.Code)
+	if response := request(sign(secondVersion)); response.Code != http.StatusNoContent {
+		t.Fatalf("second token status=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
+func TestResetUserPassword_revokes_target_users_existing_token(t *testing.T) {
+	cfg := &config.Config{JWTSecret: "reset-secret"}
+	oldDB := db.DB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("init database: %v", err)
+	}
+	ensurePasswordVersionColumn(t)
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB = oldDB
+		db.SetDB(oldDB)
+	})
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled,password_version) VALUES (9,'target','hash','user',1,0)"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	sign := func() string {
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+			"user_id": 9, "username": "target", "exp": time.Now().Add(time.Hour).Unix(), "pwd_ver": 0,
+		})
+		signed, err := token.SignedString([]byte(cfg.JWTSecret))
+		if err != nil {
+			t.Fatalf("sign token: %v", err)
+		}
+		return signed
+	}
+	oldToken := sign()
+	h := handlers.NewHandlers(handlers.Dependencies{})
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/users/9/reset-password", strings.NewReader(`{"new_password":"reset-password"}`))
+	request.Header.Set("Content-Type", "application/json")
+	context, _ := gin.CreateTestContext(response)
+	context.Request = request
+	context.Params = gin.Params{{Key: "id", Value: "9"}}
+	h.ResetUserPassword(context)
+	if response.Code != http.StatusOK {
+		t.Fatalf("reset status=%d body=%q", response.Code, response.Body.String())
+	}
+
+	router := gin.New()
+	router.Use(jwtAuth(cfg))
+	router.GET("/protected", noContent)
+	authRequest := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	authRequest.Header.Set("Authorization", "Bearer "+oldToken)
+	authResponse := httptest.NewRecorder()
+	router.ServeHTTP(authResponse, authRequest)
+	if authResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("old target token status=%d, want 401", authResponse.Code)
+	}
+}
+
+func TestJWTAuth_allows_legacy_token_only_for_password_version_zero(t *testing.T) {
+	cfg := &config.Config{JWTSecret: "legacy-secret"}
+	oldDB := db.DB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("init database: %v", err)
+	}
+	ensurePasswordVersionColumn(t)
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB = oldDB
+		db.SetDB(oldDB)
+	})
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled,password_version) VALUES (8,'legacy','hash','user',1,0)"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id": 8, "username": "legacy", "iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+	})
+	signed, err := token.SignedString([]byte(cfg.JWTSecret))
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+	router := gin.New()
+	router.Use(jwtAuth(cfg))
+	router.GET("/protected", noContent)
+	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	request.Header.Set("Authorization", "Bearer "+signed)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("legacy token status=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
+func ensurePasswordVersionColumn(t *testing.T) {
+	t.Helper()
+	var version int
+	if err := db.DB.QueryRow("SELECT password_version FROM users LIMIT 1").Scan(&version); err == nil || err == sql.ErrNoRows {
+		return
+	}
+	if _, err := db.DB.Exec("ALTER TABLE users ADD COLUMN password_version INTEGER NOT NULL DEFAULT 0"); err != nil {
+		t.Fatalf("add password_version column: %v", err)
 	}
 }
 
@@ -126,6 +253,7 @@ func TestReadOnlyGuard_blocks_non_admin_jwt_after_authentication(t *testing.T) {
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("init database: %v", err)
 	}
+	ensurePasswordVersionColumn(t)
 	t.Cleanup(func() {
 		db.DB = oldDB
 		db.SetDB(oldDB)

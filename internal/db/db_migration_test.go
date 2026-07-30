@@ -141,7 +141,7 @@ func TestMigrateCertJobsStatusConstraint_repairs_incorrect_status_default(t *tes
 	}
 }
 
-func TestMigrateCertJobsStatusConstraint_recreates_indexes_after_startup_index_creation(t *testing.T) {
+func TestMigrateCertJobsStatusConstraint_rebuilds_after_startup_index_creation(t *testing.T) {
 	database := openMigrationTestDB(t)
 	createLegacyCertJobs(t, database, "'queued'", "'queued','disabled'")
 	if _, err := database.Exec(`
@@ -156,17 +156,70 @@ func TestMigrateCertJobsStatusConstraint_recreates_indexes_after_startup_index_c
 		t.Fatalf("migrate certificate jobs after startup index creation: %v", err)
 	}
 
-	var indexCount int
-	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN
-		('idx_cert_jobs_rule_domain','idx_cert_jobs_rule_domain_unique') AND tbl_name='cert_jobs'`).Scan(&indexCount); err != nil {
-		t.Fatalf("count migrated indexes: %v", err)
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_index'").Scan(&status); err != nil {
+		t.Fatalf("read certificate job after rebuild: %v", err)
 	}
-	if indexCount != 2 {
-		t.Fatalf("certificate job indexes=%d, want 2", indexCount)
+	if status != "queued" {
+		t.Fatalf("certificate job status=%q, want queued", status)
 	}
-	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_index','index.example','failed')
-		ON CONFLICT(rule_id,domain) DO UPDATE SET status=excluded.status`); err != nil {
-		t.Fatalf("upsert through recreated unique index: %v", err)
+}
+
+func TestInitialize_upgrades_legacy_cert_jobs_before_creating_indexes(t *testing.T) {
+	dir := t.TempDir()
+	legacy, err := sql.Open("sqlite", filepath.Join(dir, "lazy-balancer.db"))
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	if _, err := legacy.Exec(`CREATE TABLE cert_jobs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id TEXT NOT NULL, domain TEXT NOT NULL,
+		status TEXT DEFAULT 'pending' CHECK (status IN ('pending','issued','failed')),
+		message TEXT, expires_at DATETIME, cert_pem TEXT, key_pem TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME
+	);
+	INSERT INTO cert_jobs (rule_id,domain,status,message) VALUES
+		('lb_duplicate','duplicate.example','failed','old'),
+		('lb_duplicate','duplicate.example','issued','new');`); err != nil {
+		t.Fatalf("seed legacy certificate jobs: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := Initialize(dir); err != nil {
+			t.Fatalf("initialize legacy database attempt %d: %v", attempt, err)
+		}
+		if attempt == 1 {
+			if err := Close(); err != nil {
+				t.Fatalf("close upgraded database: %v", err)
+			}
+		}
+	}
+
+	var count, keptID int
+	var message string
+	if err := DB.QueryRow("SELECT COUNT(*), MAX(id), MAX(message) FROM cert_jobs WHERE rule_id='lb_duplicate' AND domain='duplicate.example'").Scan(&count, &keptID, &message); err != nil {
+		t.Fatalf("read deduplicated certificate job: %v", err)
+	}
+	if count != 1 || keptID != 2 || message != "new" {
+		t.Fatalf("deduplicated job count=%d id=%d message=%q, want newest id=2", count, keptID, message)
+	}
+	var columns, indexes int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('cert_jobs') WHERE name='ca_available_after'").Scan(&columns); err != nil {
+		t.Fatalf("read migrated certificate columns: %v", err)
+	}
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN
+		('idx_cert_jobs_rule_domain_unique','idx_cert_jobs_status_ca_available','idx_cert_jobs_status_expires')`).Scan(&indexes); err != nil {
+		t.Fatalf("read certificate indexes: %v", err)
+	}
+	if columns != 1 || indexes != 3 {
+		t.Fatalf("migrated columns=%d indexes=%d, want 1 and 3", columns, indexes)
 	}
 }
 

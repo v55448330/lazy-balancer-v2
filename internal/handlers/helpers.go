@@ -461,10 +461,10 @@ func parseDFOutput(output string) (uint64, uint64, bool) {
 func getConnectionStats() (models.ConnectionStats, error) {
 	stats := models.ConnectionStats{}
 
-	cmd := exec.Command("netstat", "-tan")
+	cmd := netstatCommand()
 	output, err := cmd.Output()
 	if err != nil {
-		return stats, nil
+		return stats, fmt.Errorf("execute netstat -tan: %w", err)
 	}
 
 	lines := strings.Split(string(output), "\n")
@@ -520,6 +520,10 @@ func getConnectionStats() (models.ConnectionStats, error) {
 		stats.FinWait2 + stats.CloseWait + stats.Closing + stats.LastAck + stats.TimeWait
 
 	return stats, nil
+}
+
+var netstatCommand = func() *exec.Cmd {
+	return exec.Command("netstat", "-tan")
 }
 
 func parsePrometheusMetrics(body string) models.CaddyMetrics {

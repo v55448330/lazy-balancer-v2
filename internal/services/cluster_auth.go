@@ -26,7 +26,7 @@ func AuthenticateRegistrationSecret(ctx context.Context, database *sql.DB, nodeI
 		return ErrInvalidClusterAuth
 	}
 	var count int
-	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM nodes WHERE id=? AND registration_secret=?", nodeID, tokenHash(secret)).Scan(&count); err != nil {
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM nodes WHERE id=? AND registration_secret=? AND (registration_secret_expires_at IS NULL OR registration_secret_expires_at='' OR datetime(registration_secret_expires_at) > datetime('now'))", nodeID, tokenHash(secret)).Scan(&count); err != nil {
 		return fmt.Errorf("校验注册凭证: %w", err)
 	}
 	if count != 1 {

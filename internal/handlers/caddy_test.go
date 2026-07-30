@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -12,6 +13,34 @@ import (
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/services"
 )
+
+func TestStartCaddy_returns_500_when_process_exits_before_ready(t *testing.T) {
+	original := caddyRunCommand
+	caddyRunCommand = func() *exec.Cmd { return exec.Command("sh", "-c", "exit 7") }
+	t.Cleanup(func() { caddyRunCommand = original })
+	h := &Handlers{cfg: &config.Config{CaddyAdminURL: "http://127.0.0.1:1"}}
+	router := gin.New()
+	router.POST("/start", h.StartCaddy)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/start", nil))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	}
+}
+
+func TestStopCaddy_returns_500_when_stop_command_fails(t *testing.T) {
+	original := caddyStopCommand
+	caddyStopCommand = func(string) *exec.Cmd { return exec.Command("sh", "-c", "exit 8") }
+	t.Cleanup(func() { caddyStopCommand = original })
+	h := &Handlers{cfg: &config.Config{CaddyAdminURL: "http://127.0.0.1:1"}}
+	router := gin.New()
+	router.POST("/stop", h.StopCaddy)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/stop", nil))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	}
+}
 
 func TestValidateConfig_validates_submitted_config(t *testing.T) {
 	// Given

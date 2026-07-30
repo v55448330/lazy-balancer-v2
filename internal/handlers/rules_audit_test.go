@@ -215,6 +215,52 @@ func TestEnableRule_restores_cert_job_fields_when_requeue_fails(t *testing.T) {
 	}
 }
 
+func TestUpdateRule_allows_edit_with_disabled_ACME_job(t *testing.T) {
+	harness := newUpdateAuditRuleHandlers(t, "lb_edit_disabled", 0, false)
+	seedAuditRule(t, "lb_edit_disabled", "before", "edit.example.test", 8080, false, "acme_dns", true)
+	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=1,ca_provider_id=1 WHERE caddy_id='lb_edit_disabled'"); err != nil {
+		t.Fatalf("seed ACME config: %v", err)
+	}
+	seedAuditUpstream(t, "lb_edit_disabled")
+	if _, err := db.DB.Exec("INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_edit_disabled','edit.example.test','disabled')"); err != nil {
+		t.Fatalf("seed disabled job: %v", err)
+	}
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", harness.handler.UpdateRule)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_edit_disabled", strings.NewReader(`{"name":"after"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+}
+
+func TestEnableRule_uses_latest_job_for_current_domain(t *testing.T) {
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_domain_job", "domain job", "current.example.test", 8080, false, "acme_dns", true)
+	seedAuditUpstream(t, "lb_domain_job")
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at) VALUES
+		('lb_domain_job','current.example.test','disabled',datetime('now','+90 days')),
+		('lb_domain_job','old.example.test','queued',NULL)`); err != nil {
+		t.Fatalf("seed domain jobs: %v", err)
+	}
+	router := gin.New()
+	router.POST("/rules/:caddy_id/enable", handler.EnableRule)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/lb_domain_job/enable", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_domain_job' AND domain='current.example.test'").Scan(&status); err != nil {
+		t.Fatalf("read current-domain job: %v", err)
+	}
+	if status != "issued" {
+		t.Fatalf("current-domain status=%q, want issued", status)
+	}
+}
+
 func TestRuleToggle_is_idempotent_when_rule_already_has_target_state(t *testing.T) {
 	tests := []struct {
 		name    string

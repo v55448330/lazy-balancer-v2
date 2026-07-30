@@ -1298,7 +1298,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	userIDInt := contextUserID(c)
-	query += "updated_at = datetime('now'), updated_by = ? WHERE caddy_id = ? AND NOT EXISTS (SELECT 1 FROM cert_jobs WHERE rule_id = ? AND status NOT IN ('issued','failed'))"
+	query += "updated_at = datetime('now'), updated_by = ? WHERE caddy_id = ? AND NOT EXISTS (SELECT 1 FROM cert_jobs WHERE rule_id = ? AND status NOT IN ('issued','failed','disabled'))"
 	args = append(args, userIDInt, caddyID, caddyID)
 
 	res, err := tx.Exec(query, args...)
@@ -1424,7 +1424,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 
 		// 证书任务必须在 Caddy 全部应用成功后同步入队：之前的失败回滚不触碰 cert_jobs，
 		// 若先入队再失败，已回滚的域名/CA 变更仍会后台签发并覆盖证书文件。
-		if *req.EnableTLS && req.TLSSource == "acme_dns" && req.Protocol == "http" && domain != "" {
+		if *req.Enabled && *req.EnableTLS && req.TLSSource == "acme_dns" && req.Protocol == "http" && domain != "" {
 			caProviderID := existingRule.CAProviderID
 			if req.CAProviderID != nil {
 				caProviderID = *req.CAProviderID
@@ -1883,7 +1883,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		var jobExpiresAt sql.NullTime
 		var jobID int
 		hasJob := false
-		err := db.DB.QueryRow("SELECT id, status, COALESCE(message,''), expires_at FROM cert_jobs WHERE rule_id=? ORDER BY id DESC LIMIT 1", caddyID).Scan(&jobID, &jobStatus, &jobMsg, &jobExpiresAt)
+		err := db.DB.QueryRow("SELECT id, status, COALESCE(message,''), expires_at FROM cert_jobs WHERE rule_id=? AND domain=? ORDER BY id DESC LIMIT 1", caddyID, domain).Scan(&jobID, &jobStatus, &jobMsg, &jobExpiresAt)
 		if err == nil {
 			hasJob = true
 		} else if err != sql.ErrNoRows {

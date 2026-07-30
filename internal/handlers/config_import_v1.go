@@ -316,14 +316,14 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	// 与 UpdateRule 同一锁序：先 caddyOpMu 后 DB 事务，避免与规则写路径循环等待
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
 	existingRuleIDs, err := currentRuleIDs(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有规则失败"})
 		return
 	}
-	// 与 UpdateRule 同一锁序：先 caddyOpMu 后 DB 事务，避免与规则写路径循环等待
-	h.caddyOpMu.Lock()
-	defer h.caddyOpMu.Unlock()
 	recovery := importQueueRecovery{manager: services.GetCAQueueManager()}
 	if recovery.manager != nil {
 		recovery.manager.PauseAndDrain()

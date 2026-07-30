@@ -112,6 +112,9 @@ func TestUserMutationEndpoints_validate_ID_and_return_not_found(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			// Given
 			h := newBackupTestHandlers(t)
+			if _, err := db.DB.Exec("ALTER TABLE users ADD COLUMN password_version INTEGER NOT NULL DEFAULT 0"); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+				t.Fatalf("ensure password_version column: %v", err)
+			}
 			router := gin.New()
 			test.mount(router, h)
 			request := httptest.NewRequest(http.MethodPut, test.path, strings.NewReader(test.body))

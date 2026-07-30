@@ -92,8 +92,7 @@
   <el-dialog
     v-model="logDialogVisible"
     title="Caddy 日志"
-    width="70%"
-    :style="{ maxWidth: '70vw' }"
+    width="min(1100px, 94vw)"
     class="log-dialog"
     destroy-on-close
     @opened="onLogDialogOpened"

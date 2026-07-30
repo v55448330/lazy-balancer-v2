@@ -2,12 +2,10 @@ package middleware
 
 import (
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
@@ -309,36 +307,23 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		}
 		var dbRole string
 		var dbEnabled bool
-		var pwdChangedAt sql.NullTime
-		if err := db.DB.QueryRow("SELECT role, COALESCE(is_enabled,1), password_changed_at FROM users WHERE id = ?", int64(userIDFloat)).Scan(&dbRole, &dbEnabled, &pwdChangedAt); err != nil || !dbEnabled {
+		var passwordVersion int64
+		if err := db.DB.QueryRow("SELECT role, COALESCE(is_enabled,1), password_version FROM users WHERE id = ?", int64(userIDFloat)).Scan(&dbRole, &dbEnabled, &passwordVersion); err != nil || !dbEnabled {
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在或已禁用"})
 			c.Abort()
 			return
 		}
-		// Tokens issued before the last password change are revoked.
-		passwordVersion := int64(0)
-		if pwdChangedAt.Valid {
-			passwordVersion = pwdChangedAt.Time.Unix()
-		}
 		if claim, exists := claims["pwd_ver"]; exists {
 			claimVersion, valid := claim.(float64)
-			if !valid || int64(claimVersion) != passwordVersion {
+			if !valid || claimVersion != float64(passwordVersion) {
 				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "密码已修改，请重新登录"})
 				c.Abort()
 				return
 			}
-		} else if pwdChangedAt.Valid {
-			if iatFloat, ok := claims["iat"].(float64); ok {
-				if !time.Unix(int64(iatFloat), 0).After(pwdChangedAt.Time) {
-					c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "密码已修改，请重新登录"})
-					c.Abort()
-					return
-				}
-			} else {
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "凭证已过期，请重新登录"})
-				c.Abort()
-				return
-			}
+		} else if passwordVersion != 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "密码已修改，请重新登录"})
+			c.Abort()
+			return
 		}
 
 		c.Set("user_id", claims["user_id"])

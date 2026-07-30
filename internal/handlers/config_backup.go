@@ -17,6 +17,7 @@ import (
 )
 
 var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs"}
+var configBackupV1Tables = []string{"lb_rules", "upstreams", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs"}
 
 var configBackupProtectedConfigKeys = map[string]bool{
 	"id": true, "is_master": true, "master_url": true, "cluster_token": true,
@@ -220,15 +221,24 @@ func validateV2Backup(backup configBackup) error {
 	if backup.Meta.App != "lazy-balancer-v2" || backup.Tables == nil {
 		return errors.New("不是有效的 Lazy Balancer 备份文件")
 	}
-	if backup.Meta.Version != 1 {
+	if backup.Meta.Version != 1 && backup.Meta.Version != 2 {
 		return fmt.Errorf("不支持的备份版本: %d", backup.Meta.Version)
 	}
 	if backup.Config == nil {
 		return errors.New("备份缺少全局配置")
 	}
-	for _, required := range configBackupTables {
+	requiredTables := configBackupTables
+	if backup.Meta.Version == 1 {
+		requiredTables = configBackupV1Tables
+	}
+	for _, required := range requiredTables {
 		if _, exists := backup.Tables[required]; !exists {
 			return errors.New("备份缺少必需的数据表: " + required)
+		}
+	}
+	for _, table := range configBackupTables {
+		if _, exists := backup.Tables[table]; !exists {
+			backup.Tables[table] = []map[string]any{}
 		}
 	}
 	return nil
@@ -241,7 +251,7 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 	backup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 1, ExportedAt: time.Now().UTC().Format(time.RFC3339)},
+		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: time.Now().UTC().Format(time.RFC3339)},
 		Tables: map[string][]map[string]any{},
 	}
 	tx, err := db.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -298,14 +308,14 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	// 与 UpdateRule 同一锁序：先 caddyOpMu 后 DB 事务，避免与规则写路径循环等待
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
 	existingRuleIDs, err := currentRuleIDs(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有规则失败"})
 		return
 	}
-	// 与 UpdateRule 同一锁序：先 caddyOpMu 后 DB 事务，避免与规则写路径循环等待
-	h.caddyOpMu.Lock()
-	defer h.caddyOpMu.Unlock()
 	recovery := importQueueRecovery{manager: services.GetCAQueueManager()}
 	if recovery.manager != nil {
 		recovery.manager.PauseAndDrain()

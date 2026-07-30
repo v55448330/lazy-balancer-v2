@@ -1290,6 +1290,16 @@ func GenerateCaddyConfig(cfg *config.Config, overrides ...*models.UpdateConfigRe
 }
 
 func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, overrides ...*models.UpdateConfigRequest) map[string]interface{} {
+	var filesSnapshot CertFilesSnapshot
+	generationFailure := func(format string, args ...any) map[string]interface{} {
+		err := fmt.Errorf(format, args...)
+		if filesSnapshot != nil {
+			err = errors.Join(err, RestoreCertFiles(filesSnapshot))
+			filesSnapshot = nil
+		}
+		return map[string]interface{}{caddyConfigGenerationErrorKey: err.Error()}
+	}
+
 	type lbRule struct {
 		CaddyID                       string
 		Name                          string
@@ -1358,7 +1368,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 	rows, err := store.Query(`
 		SELECT COALESCE(caddy_id,''), name, protocol, COALESCE(domain,''), listen_port, strategy,
 		       IIF(dynamic_dns IN ('1',1),1,0), IIF(enable_dns_server IN ('1',1),1,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
-		       health_check_path, health_check_interval,
+		       COALESCE(health_check_path,''), COALESCE(health_check_interval,10),
 		       COALESCE(health_check_timeout,5), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 		       IIF(enable_tls IN ('1',1),1,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
 		       IIF(tls_http_redirect IN ('1',1),1,0),
@@ -1370,8 +1380,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 		FROM lb_rules WHERE enabled = 1
 	`)
 	if err != nil {
-		log.Printf("Failed to get rules: %v", err)
-		return defaultCaddyConfig()
+		return generationFailure("query enabled rules: %v", err)
 	}
 
 	var allRules []ruleWithUpstreams
@@ -1388,8 +1397,8 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 			&r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout)
 
 		if err != nil {
-			log.Printf("Failed to scan rule: %v", err)
-			continue
+			closeErr := rows.Close()
+			return generationFailure("scan enabled rule: %v", errors.Join(err, closeErr))
 		}
 
 		if r.Strategy == "" {
@@ -1400,12 +1409,19 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 			continue
 		}
 		if unmarshalErr := json.Unmarshal([]byte(r.IPACLListJSON), &r.IPACLList); unmarshalErr != nil {
-			r.IPACLList = nil
+			closeErr := rows.Close()
+			return generationFailure("decode ACL for rule %s: %v", r.CaddyID, errors.Join(unmarshalErr, closeErr))
 		}
 
 		allRules = append(allRules, ruleWithUpstreams{rule: r})
 	}
-	rows.Close()
+	if err := rows.Err(); err != nil {
+		closeErr := rows.Close()
+		return generationFailure("iterate enabled rules: %v", errors.Join(err, closeErr))
+	}
+	if err := rows.Close(); err != nil {
+		return generationFailure("close enabled rules: %v", err)
+	}
 
 	// Load upstreams for each rule after closing rules cursor
 	for i := range allRules {
@@ -1415,49 +1431,55 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 			FROM upstreams WHERE rule_id = ? AND enabled = 1
 		`, r.rule.CaddyID)
 		if err != nil {
-			return map[string]interface{}{caddyConfigGenerationErrorKey: fmt.Sprintf("query upstreams for rule %s: %v", r.rule.CaddyID, err)}
+			return generationFailure("query upstreams for rule %s: %v", r.rule.CaddyID, err)
 		}
 		for upstreamRows.Next() {
 			var u upstream
 			if err := upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
-				_ = upstreamRows.Close()
-				return map[string]interface{}{caddyConfigGenerationErrorKey: fmt.Sprintf("scan upstream for rule %s: %v", r.rule.CaddyID, err)}
+				closeErr := upstreamRows.Close()
+				return generationFailure("scan upstream for rule %s: %v", r.rule.CaddyID, errors.Join(err, closeErr))
 			}
 			r.upstreams = append(r.upstreams, u)
 		}
 		if err := upstreamRows.Err(); err != nil {
-			_ = upstreamRows.Close()
-			return map[string]interface{}{caddyConfigGenerationErrorKey: fmt.Sprintf("iterate upstreams for rule %s: %v", r.rule.CaddyID, err)}
+			closeErr := upstreamRows.Close()
+			return generationFailure("iterate upstreams for rule %s: %v", r.rule.CaddyID, errors.Join(err, closeErr))
 		}
 		if err := upstreamRows.Close(); err != nil {
-			return map[string]interface{}{caddyConfigGenerationErrorKey: fmt.Sprintf("close upstreams for rule %s: %v", r.rule.CaddyID, err)}
+			return generationFailure("close upstreams for rule %s: %v", r.rule.CaddyID, err)
 		}
-
 		if r.rule.CustomRoutesEnabled {
 			pathRows, pathErr := store.Query(`
 				SELECT sort_order, match_type, path, upstreams_json
 				FROM path_rules WHERE rule_id = ? ORDER BY sort_order, id
 			`, r.rule.CaddyID)
 			if pathErr != nil {
-				log.Printf("Failed to get path rules for rule %s: %v", r.rule.CaddyID, pathErr)
-				continue
+				return generationFailure("query path rules for rule %s: %v", r.rule.CaddyID, pathErr)
 			}
 			for pathRows.Next() {
 				var pathRule PathRuleConfig
 				var upstreamsJSON sql.NullString
 				if scanErr := pathRows.Scan(&pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &upstreamsJSON); scanErr != nil {
-					continue
+					closeErr := pathRows.Close()
+					return generationFailure("scan path rule for rule %s: %v", r.rule.CaddyID, errors.Join(scanErr, closeErr))
 				}
 				if upstreamsJSON.Valid {
 					pathUpstreams, unmarshalErr := decodePathUpstreams(upstreamsJSON.String)
 					if unmarshalErr != nil {
-						continue
+						closeErr := pathRows.Close()
+						return generationFailure("decode path upstreams for rule %s: %v", r.rule.CaddyID, errors.Join(unmarshalErr, closeErr))
 					}
 					pathRule.Upstreams = pathUpstreams
 				}
 				r.rule.PathRules = append(r.rule.PathRules, pathRule)
 			}
-			pathRows.Close()
+			if err := pathRows.Err(); err != nil {
+				closeErr := pathRows.Close()
+				return generationFailure("iterate path rules for rule %s: %v", r.rule.CaddyID, errors.Join(err, closeErr))
+			}
+			if err := pathRows.Close(); err != nil {
+				return generationFailure("close path rules for rule %s: %v", r.rule.CaddyID, err)
+			}
 		}
 	}
 
@@ -1487,11 +1509,10 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 			}
 		}
 	}
-	var filesSnapshot CertFilesSnapshot
 	if len(materials) > 0 {
 		filesSnapshot, err = MaterializeCertPairs(materials)
 		if err != nil {
-			return map[string]interface{}{caddyConfigGenerationErrorKey: fmt.Sprintf("materialize certificate files: %v", err)}
+			return generationFailure("materialize certificate files: %v", err)
 		}
 	}
 
@@ -1519,7 +1540,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 		&global.upstreamKeepaliveTimeout, &global.serverTokensHidden, &accessLogJSON, &accessLogFormat,
 		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout,
 		&global.proxyStreamTimeout); err != nil {
-		log.Printf("Failed to load global config, using zero defaults: %v", err)
+		return generationFailure("load global config: %v", err)
 	}
 
 	if len(overrides) > 0 && overrides[0] != nil {
@@ -1705,7 +1726,7 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 
 			ruleRoutes, _, err := generateHTTPRouteObjects(ruleConfig)
 			if err != nil {
-				continue
+				return generationFailure("generate HTTP routes for rule %s: %v", r.CaddyID, err)
 			}
 			for _, route := range ruleRoutes {
 				routes = append(routes, route)

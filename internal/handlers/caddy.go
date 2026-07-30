@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -21,6 +22,82 @@ import (
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
+
+var caddyRunCommand = func() *exec.Cmd {
+	return exec.Command("caddy", "run", "--config", "/app/config/Caddyfile", "--adapter", "caddyfile")
+}
+
+var caddyStopCommand = func(adminURL string) *exec.Cmd {
+	address := adminURL
+	if parsed, err := url.Parse(adminURL); err == nil && parsed.Host != "" {
+		address = parsed.Host
+	}
+	return exec.Command("caddy", "stop", "--address", address)
+}
+
+var caddyProcessCommand = func() *exec.Cmd { return exec.Command("pgrep", "-x", "caddy") }
+
+func caddyProcessRunning() bool {
+	return caddyProcessCommand().Run() == nil
+}
+
+func caddyAdminReady(adminURL string) bool {
+	client := &http.Client{Timeout: 250 * time.Millisecond}
+	response, err := client.Get(strings.TrimRight(adminURL, "/") + "/config/")
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	return response.StatusCode < http.StatusInternalServerError
+}
+
+func startCaddy(adminURL string) error {
+	cmd := caddyRunCommand()
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-exited:
+			if err == nil {
+				err = errors.New("Caddy exited before Admin API became ready")
+			}
+			return err
+		case <-ticker.C:
+			if caddyAdminReady(adminURL) {
+				return nil
+			}
+		case <-deadline.C:
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+				<-exited
+			}
+			return errors.New("Caddy Admin API did not become ready")
+		}
+	}
+}
+
+func stopCaddy(adminURL string) error {
+	if err := caddyStopCommand(adminURL).Run(); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !caddyAdminReady(adminURL) && !caddyProcessRunning() {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return errors.New("Caddy Admin API is still reachable after stop")
+}
 
 func (h *Handlers) GetConfig(c *gin.Context) {
 	var cfg models.GlobalConfig
@@ -578,34 +655,30 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 }
 
 func (h *Handlers) StartCaddy(c *gin.Context) {
-	cmd := exec.Command("caddy", "run", "--config", "/app/config/Caddyfile", "--adapter", "caddyfile")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
+	if err := startCaddy(h.cfg.CaddyAdminURL); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	time.Sleep(2 * time.Second)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy started"})
 }
 
 func (h *Handlers) StopCaddy(c *gin.Context) {
-	exec.Command("sh", "-c", "kill -9 $(pgrep -x caddy) 2>/dev/null || killall -9 caddy 2>/dev/null || pkill -9 -x caddy 2>/dev/null || true").Run()
-	time.Sleep(1 * time.Second)
+	if err := stopCaddy(h.cfg.CaddyAdminURL); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy stopped"})
 }
 
 func (h *Handlers) RestartCaddy(c *gin.Context) {
-	exec.Command("sh", "-c", "kill -9 $(pgrep -x caddy) 2>/dev/null || killall -9 caddy 2>/dev/null || pkill -9 -x caddy 2>/dev/null || true").Run()
-	time.Sleep(1 * time.Second)
-	cmd := exec.Command("caddy", "run", "--config", "/app/config/Caddyfile", "--adapter", "caddyfile")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
+	if err := stopCaddy(h.cfg.CaddyAdminURL); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	time.Sleep(2 * time.Second)
+	if err := startCaddy(h.cfg.CaddyAdminURL); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy restarted"})
 }
 

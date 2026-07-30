@@ -327,7 +327,7 @@
       </el-col>
     </el-row>
 
-    <el-dialog v-model="ruleHistoryVisible" width="78%" destroy-on-close class="history-dialog">
+    <el-dialog v-model="ruleHistoryVisible" width="min(900px, 92vw)" destroy-on-close class="history-dialog">
       <template #header>
         <div class="dialog-title">
           <el-icon class="dialog-title-icon"><TrendCharts /></el-icon>
@@ -712,6 +712,7 @@ const fetchRuleHealth = async () => {
     const healthData = res.data || {}
     const newRuleMetrics: Record<string, RuleMetrics> = { ...ruleMetrics.value }
     currentRules.forEach((rule: Rule) => {
+      const enabledUpstreams = rule.upstreams?.filter((upstream) => upstream.enabled !== false) || []
       const metrics = newRuleMetrics[rule.caddy_id] || {
         requests_total: 0,
         requests_in_flight: 0,
@@ -723,12 +724,12 @@ const fetchRuleHealth = async () => {
         bytes_out: 0,
       }
       metrics.healthy = false
-      if (rule.enabled && rule.upstreams?.length) {
+      if (rule.enabled && enabledUpstreams.length) {
         let allFound = true
         let allHealthy = true
         let hasUnknown = false
 
-        rule.upstreams.forEach((u) => {
+        enabledUpstreams.forEach((u) => {
           const key = `${u.host}:${u.port}`
           let found = false
           for (const serverHealth of Object.values(healthData)) {

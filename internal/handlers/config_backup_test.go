@@ -168,7 +168,7 @@ func completeBackupJSON(t *testing.T, tables map[string][]map[string]any) string
 		completeTables[table] = rows
 	}
 	data, err := json.Marshal(configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 1},
+		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2},
 		Config: map[string]any{},
 		Tables: completeTables,
 	})
@@ -237,6 +237,30 @@ func TestConfigBackup_export_import_roundtrip(t *testing.T) {
 	}
 	if clusterVersion == 99 {
 		t.Fatal("cluster_version was overwritten by import")
+	}
+}
+
+func TestImportConfigBackup_accepts_historical_v1_core_tables(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	body, err := json.Marshal(configBackup{
+		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 1},
+		Config: map[string]any{},
+		Tables: map[string][]map[string]any{
+			"lb_rules": {}, "upstreams": {}, "users": {}, "api_keys": {},
+			"ca_providers": {}, "certificate_configs": {}, "cert_jobs": {},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(string(body)))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want historical v1 import success", response.Code, response.Body.String())
 	}
 }
 
@@ -421,11 +445,11 @@ func TestValidateConfigImport_rejects_v2_backup_missing_required_contract(t *tes
 		name string
 		body string
 	}{
-		{name: "unsupported version", body: `{"meta":{"app":"lazy-balancer-v2","version":2},"tables":{"lb_rules":[],"users":[]}}`},
-		{name: "missing tables", body: `{"meta":{"app":"lazy-balancer-v2","version":1}}`},
-		{name: "missing users", body: `{"meta":{"app":"lazy-balancer-v2","version":1},"tables":{"lb_rules":[]}}`},
-		{name: "missing global config", body: `{"meta":{"app":"lazy-balancer-v2","version":1},"tables":{"lb_rules":[],"upstreams":[],"path_rules":[],"users":[],"api_keys":[],"ca_providers":[],"certificate_configs":[],"cert_jobs":[]}}`},
-		{name: "missing exported table", body: `{"meta":{"app":"lazy-balancer-v2","version":1},"config":{},"tables":{"lb_rules":[],"upstreams":[],"path_rules":[],"users":[],"api_keys":[],"ca_providers":[],"certificate_configs":[]}}`},
+		{name: "unsupported version", body: `{"meta":{"app":"lazy-balancer-v2","version":3},"tables":{"lb_rules":[],"users":[]}}`},
+		{name: "missing tables", body: `{"meta":{"app":"lazy-balancer-v2","version":2}}`},
+		{name: "missing users", body: `{"meta":{"app":"lazy-balancer-v2","version":2},"tables":{"lb_rules":[]}}`},
+		{name: "missing global config", body: `{"meta":{"app":"lazy-balancer-v2","version":2},"tables":{"lb_rules":[],"upstreams":[],"path_rules":[],"users":[],"api_keys":[],"ca_providers":[],"certificate_configs":[],"cert_jobs":[]}}`},
+		{name: "missing exported table", body: `{"meta":{"app":"lazy-balancer-v2","version":2},"config":{},"tables":{"lb_rules":[],"upstreams":[],"path_rules":[],"users":[],"api_keys":[],"ca_providers":[],"certificate_configs":[]}}`},
 	}
 
 	for _, tt := range tests {

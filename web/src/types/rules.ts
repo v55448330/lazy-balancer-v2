@@ -1,4 +1,6 @@
 export type IpAclMode = '' | 'allow' | 'deny'
+export type RuleProtocol = 'http' | 'tcp'
+export type UpstreamProtocol = 'http' | 'https' | 'tcp' | 'tls'
 
 export interface Upstream {
   id: number
@@ -9,7 +11,7 @@ export interface Upstream {
   domain: string
   dynamic_dns: boolean
   enabled: boolean
-  protocol: string
+  protocol: UpstreamProtocol
   dns_server: string
   max_connections: number
 }
@@ -48,7 +50,7 @@ export interface Rule extends ProxyTimeoutConfig {
   caddy_id: string
   name: string
   description: string
-  protocol: string
+  protocol: RuleProtocol
   domain: string
   listen_port: number
   strategy: string
@@ -95,7 +97,7 @@ export interface Rule extends ProxyTimeoutConfig {
 export interface CreateRuleRequest extends ProxyTimeoutConfig {
   name: string
   description: string
-  protocol: string
+  protocol: RuleProtocol
   domain: string
   listen_port: number
   strategy: string

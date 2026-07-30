@@ -154,6 +154,33 @@ func TestClusterService_ApproveNode_redelivers_cluster_token_until_authenticated
 	}
 }
 
+func TestClusterService_RegistrationStatus_rejects_expired_secret(t *testing.T) {
+	service, database := newClusterTestService(t)
+	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	registerToken, _, err := service.GenerateRegisterToken(context.Background(), 1, now)
+	if err != nil {
+		t.Fatalf("generate token: %v", err)
+	}
+	registration, err := service.RegisterNode(context.Background(), models.ClusterRegisterRequest{
+		Token: registerToken, Name: "slave-expired", IPAddress: "10.0.0.3", Port: 8000,
+	}, now)
+	if err != nil {
+		t.Fatalf("register node: %v", err)
+	}
+	if err := service.ApproveNode(context.Background(), registration.RegistrationID); err != nil {
+		t.Fatalf("approve node: %v", err)
+	}
+	if _, err := database.Exec("UPDATE nodes SET registration_secret_expires_at=datetime('now','-1 second') WHERE id=?", registration.RegistrationID); err != nil {
+		t.Fatalf("expire registration secret: %v", err)
+	}
+
+	_, err = service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret)
+
+	if !errors.Is(err, ErrInvalidClusterAuth) {
+		t.Fatalf("expired registration status error=%v, want invalid auth", err)
+	}
+}
+
 func TestClusterService_Snapshot_uses_version_and_fingerprint(t *testing.T) {
 	// Given
 	service, database := newClusterTestService(t)
@@ -470,6 +497,61 @@ func TestReplaceSnapshotDB_replaces_resources_without_overwriting_role(t *testin
 	}
 	if ipACLMode != "allow" || ipACLList != `["192.0.2.0/24"]` || ruleDialTimeout != 3 || path != "/metrics/" || globalDialTimeout != 8 {
 		t.Fatalf("new snapshot fields mode=%q list=%q rule_dial=%d path=%q global_dial=%d", ipACLMode, ipACLList, ruleDialTimeout, path, globalDialTimeout)
+	}
+}
+
+func TestClusterSnapshot_syncs_password_changed_at(t *testing.T) {
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,password_changed_at)
+		VALUES (20,'admin-master','hash','admin',1,'2026-07-31 01:02:03')`); err != nil {
+		t.Fatalf("seed user password timestamp: %v", err)
+	}
+
+	snapshot, _, err := service.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatalf("build snapshot: %v", err)
+	}
+	if len(snapshot.Users) != 1 || snapshot.Users[0].PasswordChangedAt == nil || *snapshot.Users[0].PasswordChangedAt != "2026-07-31T01:02:03.000Z" {
+		t.Fatalf("snapshot password_changed_at=%#v", snapshot.Users)
+	}
+	if _, err := database.Exec("DELETE FROM users"); err != nil {
+		t.Fatalf("clear users: %v", err)
+	}
+	if err := replaceSnapshotDB(context.Background(), database, snapshot); err != nil {
+		t.Fatalf("apply snapshot: %v", err)
+	}
+	var restored string
+	if err := database.QueryRow("SELECT strftime('%Y-%m-%dT%H:%M:%fZ',password_changed_at) FROM users WHERE id=20").Scan(&restored); err != nil {
+		t.Fatalf("read restored password timestamp: %v", err)
+	}
+	if restored != "2026-07-31T01:02:03.000Z" {
+		t.Fatalf("restored password_changed_at=%q", restored)
+	}
+}
+
+func TestSyncService_applySnapshot_inherits_version_for_promotion(t *testing.T) {
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
+		t.Fatalf("set slave mode: %v", err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+	if err := syncService.applySnapshot(context.Background(), models.ClusterSnapshot{Version: 100}); err != nil {
+		t.Fatalf("apply version 100: %v", err)
+	}
+
+	if err := service.Promote(context.Background()); err != nil {
+		t.Fatalf("promote slave: %v", err)
+	}
+	published, _, err := service.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatalf("publish promoted snapshot: %v", err)
+	}
+	if published.Version < 100 {
+		t.Fatalf("promoted snapshot version=%d, want >=100", published.Version)
 	}
 }
 

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -56,6 +57,97 @@ func TestGenerateCaddyConfig_upstream_scan_error_returns_generation_failure(t *t
 	message, ok := generated[caddyConfigGenerationErrorKey].(string)
 	if !ok || !strings.Contains(message, "scan upstream") {
 		t.Fatalf("generation result=%#v, want upstream scan error", generated)
+	}
+}
+
+func TestGenerateCaddyConfig_fail_closed_errors_do_not_call_load(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, *sql.DB)
+		want  string
+	}{
+		{name: "rule query", setup: func(t *testing.T, database *sql.DB) {
+			if _, err := database.Exec("DROP TABLE lb_rules"); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "query enabled rules"},
+		{name: "rule scan", setup: func(t *testing.T, database *sql.DB) {
+			seedGenerationRule(t, database, "lb_rule_scan", false)
+			if _, err := database.Exec("UPDATE lb_rules SET health_check_interval='bad' WHERE caddy_id='lb_rule_scan'"); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "scan enabled rule"},
+		{name: "ACL JSON", setup: func(t *testing.T, database *sql.DB) {
+			seedGenerationRule(t, database, "lb_acl_json", false)
+			if _, err := database.Exec("UPDATE lb_rules SET ip_acl_list='{' WHERE caddy_id='lb_acl_json'"); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "decode ACL"},
+		{name: "path query", setup: func(t *testing.T, database *sql.DB) {
+			seedGenerationRule(t, database, "lb_path_query", true)
+			if _, err := database.Exec("DROP TABLE path_rules"); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "query path rules"},
+		{name: "path scan", setup: func(t *testing.T, database *sql.DB) {
+			seedGenerationRule(t, database, "lb_path_scan", true)
+			if _, err := database.Exec("INSERT INTO path_rules (rule_id,sort_order,match_type,path) VALUES ('lb_path_scan','bad','prefix','/api')"); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "scan path rule"},
+		{name: "path JSON", setup: func(t *testing.T, database *sql.DB) {
+			seedGenerationRule(t, database, "lb_path_json", true)
+			if _, err := database.Exec("INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstreams_json) VALUES ('lb_path_json',1,'prefix','/api','{')"); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "decode path upstreams"},
+		{name: "HTTP route", setup: func(t *testing.T, database *sql.DB) {
+			seedGenerationRule(t, database, "lb_route", true)
+			if _, err := database.Exec("INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstreams_json) VALUES ('lb_route',1,'prefix','/api','[]')"); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "generate HTTP routes"},
+		{name: "global config", setup: func(t *testing.T, database *sql.DB) {
+			if _, err := database.Exec("DELETE FROM global_config"); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "load global config"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, database := newClusterTestService(t)
+			test.setup(t, database)
+			var loads int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/load" {
+					loads++
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+			generated := generateCaddyConfigFromStore(&config.Config{}, database)
+			message, ok := generated[caddyConfigGenerationErrorKey].(string)
+			if !ok || !strings.Contains(message, test.want) {
+				t.Fatalf("generation result=%#v, want %q failure", generated, test.want)
+			}
+			if err := NewCaddyService(server.URL).ApplyConfig(generated); err == nil {
+				t.Fatal("generation failure was applied")
+			}
+			if loads != 0 {
+				t.Fatalf("Caddy /load calls=%d, want 0", loads)
+			}
+		})
+	}
+}
+
+func seedGenerationRule(t *testing.T, database *sql.DB, ruleID string, customRoutes bool) {
+	t.Helper()
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,health_check_path,health_check_interval,enabled,custom_routes_enabled)
+		VALUES (?,?,'http','example.test',8080,'weighted_round_robin','',10,1,?)`, ruleID, ruleID, customRoutes); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := database.Exec("INSERT INTO upstreams (rule_id,host,port,enabled,protocol) VALUES (?,'127.0.0.1',9000,1,'http')", ruleID); err != nil {
+		t.Fatalf("seed upstream: %v", err)
 	}
 }
 

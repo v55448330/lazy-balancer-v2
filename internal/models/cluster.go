@@ -84,12 +84,13 @@ type ClusterBasicSettings struct {
 }
 
 type ClusterUser struct {
-	ID           int    `json:"id"`
-	Username     string `json:"username"`
-	PasswordHash string `json:"password_hash"`
-	Role         string `json:"role"`
-	DisplayName  string `json:"display_name"`
-	IsEnabled    bool   `json:"is_enabled"`
+	ID                int     `json:"id"`
+	Username          string  `json:"username"`
+	PasswordHash      string  `json:"password_hash"`
+	Role              string  `json:"role"`
+	DisplayName       string  `json:"display_name"`
+	IsEnabled         bool    `json:"is_enabled"`
+	PasswordChangedAt *string `json:"password_changed_at"`
 }
 
 type ClusterAPIKey struct {

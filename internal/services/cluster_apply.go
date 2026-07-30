@@ -67,7 +67,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if err := s.caddy.ApplyConfig(generateCaddyConfigFromStore(s.cfg, tx)); err != nil {
 		return errors.Join(fmt.Errorf("重载 Caddy 失败，数据库已回滚: %w", err), restoreSnapshotCerts(previous.Certs, snapshot.Certs))
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE global_config SET applied_version=?, sync_fingerprint=?, last_sync=datetime('now'), last_sync_error='' WHERE id=1`, snapshot.Version, snapshot.Fingerprint); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE global_config SET applied_version=?, cluster_version=?, sync_fingerprint=?, last_sync=datetime('now'), last_sync_error='' WHERE id=1`, snapshot.Version, snapshot.Version, snapshot.Fingerprint); err != nil {
 		return errors.Join(
 			fmt.Errorf("记录同步状态: %w", err),
 			restoreSnapshotCerts(previous.Certs, snapshot.Certs),
@@ -148,7 +148,7 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 		return err
 	}
 	for _, user := range snapshot.Users {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id,username,password_hash,role,display_name,is_enabled) VALUES (?,?,?,?,?,?)`, user.ID, user.Username, user.PasswordHash, user.Role, user.DisplayName, user.IsEnabled); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,password_changed_at) VALUES (?,?,?,?,?,?,?)`, user.ID, user.Username, user.PasswordHash, user.Role, user.DisplayName, user.IsEnabled, user.PasswordChangedAt); err != nil {
 			return fmt.Errorf("写入快照用户 %s: %w", user.Username, err)
 		}
 	}

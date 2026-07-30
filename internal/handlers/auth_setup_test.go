@@ -40,7 +40,8 @@ func setupAuthTestDB(t *testing.T) *sql.DB {
 		is_enabled BOOLEAN DEFAULT TRUE,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		last_login DATETIME,
-		password_changed_at DATETIME
+		password_changed_at DATETIME,
+		password_version INTEGER NOT NULL DEFAULT 0
 	)`)
 	if err != nil {
 		t.Fatal(err)
@@ -101,8 +102,7 @@ func TestLogin_signs_password_version_claim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash password: %v", err)
 	}
-	passwordChangedAt := time.Date(2026, time.July, 30, 5, 6, 7, 0, time.UTC)
-	if _, err := database.Exec(`INSERT INTO users (username,password_hash,role,is_enabled,password_changed_at) VALUES ('root',?,'admin',1,?)`, string(hash), passwordChangedAt); err != nil {
+	if _, err := database.Exec(`INSERT INTO users (username,password_hash,role,is_enabled,password_changed_at,password_version) VALUES ('root',?,'admin',1,datetime('now'),7)`, string(hash)); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	h := &Handlers{cfg: &config.Config{JWTSecret: "test-secret"}}
@@ -128,8 +128,8 @@ func TestLogin_signs_password_version_claim(t *testing.T) {
 		t.Fatalf("parse login token: %v", err)
 	}
 	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok || claims["pwd_ver"] != float64(passwordChangedAt.Unix()) {
-		t.Fatalf("pwd_ver=%v, want %d", claims["pwd_ver"], passwordChangedAt.Unix())
+	if !ok || claims["pwd_ver"] != float64(7) {
+		t.Fatalf("pwd_ver=%v, want 7", claims["pwd_ver"])
 	}
 }
 

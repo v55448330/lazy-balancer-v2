@@ -28,9 +28,9 @@ func (h *Handlers) Login(c *gin.Context) {
 
 	var user models.User
 	var passwordHash string
-	var passwordChangedAt sql.NullTime
-	err := db.DB.QueryRow("SELECT id, username, password_hash, role, display_name, is_enabled, created_at, last_login, password_changed_at FROM users WHERE username = ?",
-		req.Username).Scan(&user.ID, &user.Username, &passwordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &passwordChangedAt)
+	var passwordVersion int64
+	err := db.DB.QueryRow("SELECT id, username, password_hash, role, display_name, is_enabled, created_at, last_login, password_version FROM users WHERE username = ?",
+		req.Username).Scan(&user.ID, &user.Username, &passwordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &passwordVersion)
 
 	if err == sql.ErrNoRows {
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("invalid_credentials"), c.ClientIP())
@@ -74,18 +74,13 @@ func (h *Handlers) Login(c *gin.Context) {
 		expireMinutes = 20
 	}
 	expireDuration := time.Duration(expireMinutes) * time.Minute
-	pwdVer := int64(0)
-	if passwordChangedAt.Valid {
-		pwdVer = passwordChangedAt.Time.Unix()
-	}
-
 	// Generate JWT token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id":   user.ID,
 		"username":  user.Username,
 		"role":      user.Role,
 		"node_mode": nodeMode,
-		"pwd_ver":   pwdVer,
+		"pwd_ver":   passwordVersion,
 		"iat":       time.Now().Unix(),
 		"exp":       time.Now().Add(expireDuration).Unix(),
 	})
@@ -214,7 +209,7 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		changed = append(changed, "昵称")
 	}
 	if passwordHash != "" {
-		sets = append(sets, "password_hash = ?", "password_changed_at = datetime('now')")
+		sets = append(sets, "password_hash = ?", "password_changed_at = datetime('now')", "password_version = password_version + 1")
 		args = append(args, passwordHash)
 		changed = append(changed, "密码")
 	}

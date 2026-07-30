@@ -159,7 +159,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		changed = append(changed, "昵称")
 	}
 	if passwordHash != "" {
-		sets = append(sets, "password_hash = ?", "password_changed_at = datetime('now')")
+		sets = append(sets, "password_hash = ?", "password_changed_at = datetime('now')", "password_version = password_version + 1")
 		args = append(args, passwordHash)
 		changed = append(changed, "密码")
 	}
@@ -293,7 +293,7 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 		return
 	}
 
-	result, err := db.DB.Exec("UPDATE users SET password_hash = ?, password_changed_at = datetime('now') WHERE id = ?", string(hash), id)
+	result, err := db.DB.Exec("UPDATE users SET password_hash = ?, password_changed_at = datetime('now'), password_version = password_version + 1 WHERE id = ?", string(hash), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to reset password"})
 		return

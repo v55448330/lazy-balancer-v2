@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +19,12 @@ import (
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
+
+var certJobOperationLocks [64]sync.Mutex
+
+func certJobOperationLock(id int) *sync.Mutex {
+	return &certJobOperationLocks[id%len(certJobOperationLocks)]
+}
 
 func (h *Handlers) ListCertJobs(c *gin.Context) {
 	ruleID := c.Query("rule_id")
@@ -57,10 +64,13 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 func (h *Handlers) RetryCertJob(c *gin.Context) {
 
 	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
+	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
 		return
 	}
+	operationLock := certJobOperationLock(id)
+	operationLock.Lock()
+	defer operationLock.Unlock()
 	var ruleID, domain, status string
 	var caProviderID int
 	var updatedAt sql.NullTime
@@ -81,9 +91,26 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA queue manager not initialized"})
 		return
 	}
-	if _, err := services.CreateOrRequeueCertJob(ruleID, domain, 0, qm); err != nil {
+	changed, err := qm.EnqueueIfActive(caProviderID, id, ruleID, domain, func() (bool, error) {
+		result, err := db.DB.Exec(`UPDATE cert_jobs
+			SET status='queued', message='重新排队签发', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now')
+			WHERE id=? AND status=? AND EXISTS (
+				SELECT 1 FROM lb_rules
+				WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND domain=?
+			)`, id, status, ruleID, domain)
+		if err != nil {
+			return false, err
+		}
+		rowsAffected, err := result.RowsAffected()
+		return rowsAffected != 0, err
+	})
+	if err != nil {
 		log.Printf("Manual retry enqueue failed for job %d: %v", id, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to enqueue retry"})
+		return
+	}
+	if !changed {
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务关联规则已禁用、证书配置已变更或队列已暂停"})
 		return
 	}
 	recordAudit(c, "重试", "证书签发任务", services.FormatAuditDetail(services.AuditJobPart(id), services.AuditRulePart(ruleID), domain, fmt.Sprintf("原状态：%s", status), services.AuditResultPart("queued")))
@@ -92,13 +119,16 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 }
 
 func certJobRetryBlocked(status string, updatedAt sql.NullTime, now time.Time) (bool, string) {
+	if status == "disabled" {
+		return true, "已退役的证书任务不能重试"
+	}
 	if !updatedAt.Valid {
 		return false, ""
 	}
 	if status == "failed" && now.Sub(updatedAt.Time) < 5*time.Minute {
 		return true, "失败后请等待 5 分钟再重试"
 	}
-	if status == "issued" || status == "failed" || status == "waiting_ca" || status == "disabled" {
+	if status == "issued" || status == "failed" || status == "waiting_ca" {
 		return false, ""
 	}
 	guard := 2 * time.Minute
@@ -115,17 +145,30 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
 		return
 	}
+	operationLock := certJobOperationLock(id)
+	operationLock.Lock()
+	defer operationLock.Unlock()
 	var ruleID, domain, status string
 	if err := db.DB.QueryRow("SELECT rule_id, domain, status FROM cert_jobs WHERE id = ?", id).Scan(&ruleID, &domain, &status); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
 		return
 	}
-	if qm := services.GetCAQueueManager(); qm != nil {
-		qm.CancelJob(id)
-	}
-	if _, err := db.DB.Exec("DELETE FROM cert_jobs WHERE id = ?", id); err != nil {
+	result, err := db.DB.Exec("DELETE FROM cert_jobs WHERE id = ?", id)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete job"})
 		return
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to verify deleted job"})
+		return
+	}
+	if rowsAffected == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
+		return
+	}
+	if qm := services.GetCAQueueManager(); qm != nil {
+		qm.CancelJob(id)
 	}
 	recordAudit(c, "删除", "证书签发任务", services.FormatAuditDetail(services.AuditJobPart(id), services.AuditRulePart(ruleID), domain, fmt.Sprintf("原状态：%s", status)))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Job deleted"})

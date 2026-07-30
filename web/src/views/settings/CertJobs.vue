@@ -70,8 +70,7 @@
   <el-dialog
     v-model="logDialogVisible"
     :title="`证书日志 - ${currentJob?.domain || ''}`"
-    width="70%"
-    :style="{ maxWidth: '70vw' }"
+    width="min(1100px, 94vw)"
     class="cert-log-dialog"
     destroy-on-close
     @opened="onLogDialogOpened"
@@ -107,12 +106,12 @@ interface CertJob {
   domain: string
   status: CertJobStatus
   message: string
-  expires_at?: string
+  expires_at?: string | null
   updated_at?: string | null
   cert_pem?: string
   ca_provider_name?: string
   renewal_attempts?: number
-  ca_available_after?: string
+  ca_available_after?: string | null
   last_error_code?: string
 }
 

@@ -9,10 +9,21 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestGetConnectionStats_returns_netstat_error(t *testing.T) {
+	original := netstatCommand
+	netstatCommand = func() *exec.Cmd { return exec.Command("sh", "-c", "exit 17") }
+	t.Cleanup(func() { netstatCommand = original })
+	_, err := getConnectionStats()
+	if err == nil || !strings.Contains(err.Error(), "netstat -tan") {
+		t.Fatalf("error=%v, want contextual netstat error", err)
+	}
+}
 
 // generateTestCert creates a test certificate and key pair
 func generateTestCert(domain string, notBefore, notAfter time.Time) (certPEM, keyPEM string, err error) {

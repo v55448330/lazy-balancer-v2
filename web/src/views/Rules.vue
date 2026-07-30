@@ -884,8 +884,7 @@
     <el-dialog
       v-model="ruleLogDialogVisible"
       :title="`访问日志 - ${ruleLogRuleName}`"
-      width="70%"
-      :style="{ maxWidth: '70vw' }"
+      width="min(1100px, 94vw)"
       destroy-on-close
       @opened="onRuleLogDialogOpened"
       @close="onRuleLogDialogClosed"
@@ -969,10 +968,12 @@ import type {
   ProxyTimeoutConfig,
   PathRuleUpstream,
   Rule,
+  RuleProtocol,
   RuleAclRequest,
   UpdateRuleRequest,
   Upstream,
   UpstreamInput,
+  UpstreamProtocol,
   UserListItem,
 } from '@/types'
 import RuleAclDialog from '@/components/rules/RuleAclDialog.vue'
@@ -1054,7 +1055,7 @@ interface RuleConfigView {
   name: string
   domain: string
   listen_port: number
-  protocol: string
+  protocol: RuleProtocol
   strategy: string
   dynamic_dns: boolean
   enable_dns_server: boolean
@@ -1151,7 +1152,8 @@ interface CertJob {
   domain: string
   status: CertJobStatus
   message: string
-  expires_at?: string
+  expires_at?: string | null
+  ca_available_after?: string | null
 }
 
 const rules = ref<Rule[]>([])
@@ -1474,13 +1476,14 @@ const fetchHealthStatus = async () => {
     const healthData = res.data || {}
     const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
     for (const rule of rules.value) {
-      if (rule.upstreams && rule.upstreams.length > 0) {
+      const enabledUpstreams = rule.upstreams?.filter((upstream) => upstream.enabled !== false) || []
+      if (enabledUpstreams.length > 0) {
         let healthy = 0
         let unhealthy = 0
         let degraded = 0
         let unknown = 0
         const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> = {}
-        for (const upstream of rule.upstreams) {
+        for (const upstream of enabledUpstreams) {
           const upstreamKey = `${upstream.host}:${upstream.port}`
           let isHealthy = false
           let isUnknown = true
@@ -1509,7 +1512,7 @@ const fetchHealthStatus = async () => {
           else healthy++
         }
         if (rule.caddy_id) {
-          mapped[rule.caddy_id] = { healthy, unhealthy, degraded, unknown, total: rule.upstreams.length, upstreams: upstreamStatus }
+          mapped[rule.caddy_id] = { healthy, unhealthy, degraded, unknown, total: enabledUpstreams.length, upstreams: upstreamStatus }
         }
       }
     }
@@ -1528,7 +1531,7 @@ const fetchHealthStatus = async () => {
   }
 }
 
-const defaultUpstream = (protocol: string = 'http'): UpstreamInput => ({
+const defaultUpstream = (protocol: UpstreamProtocol = 'http'): UpstreamInput => ({
   host: '',
   port: protocol === 'tcp' ? 8080 : 80,
   weight: 1,
@@ -2202,7 +2205,7 @@ const submitWizard = async () => {
     saving.value = false
     return
   }
-  const allowedProtocols = wizardForm.protocol === 'tcp' ? ['tcp', 'tls'] : ['http', 'https']
+  const allowedProtocols: readonly UpstreamProtocol[] = wizardForm.protocol === 'tcp' ? ['tcp', 'tls'] : ['http', 'https']
   if (wizardForm.upstreams.some(u => !allowedProtocols.includes(u.protocol))) {
     ElMessage.warning(`${wizardForm.protocol.toUpperCase()} 规则包含协议族不匹配的上游服务器`)
     saving.value = false
@@ -3279,6 +3282,9 @@ onUnmounted(() => {
 
 .stats-summary { margin-bottom: 14px; display: flex; align-items: center; }
 .stats-grid { display: grid; grid-template-columns: 1fr 1.5fr 1.5fr; gap: 14px; }
+@media (max-width: 767px) {
+  .stats-grid { grid-template-columns: 1fr; }
+}
 .stats-card { border: 1px solid var(--border-lighter); border-radius: 8px; }
 .stats-card :deep(.el-card__header) { padding: 8px 12px; background: #f9fafb; }
 .stats-card :deep(.el-card__body) { padding: 4px 8px; }

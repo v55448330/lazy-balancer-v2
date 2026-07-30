@@ -98,7 +98,7 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 	err = tx.QueryRowContext(ctx, "SELECT id FROM nodes WHERE ip_address=? AND port=?", req.IPAddress, req.Port).Scan(&nodeID)
 	switch {
 	case err == nil:
-		_, err = tx.ExecContext(ctx, `UPDATE nodes SET name=?, status='pending', is_approved=0, registration_secret=?, cluster_token_hash=NULL, cluster_token_delivered=0, reported_version=0, health_json=NULL, last_seen=NULL WHERE id=?`, req.Name, tokenHash(secret), nodeID)
+		_, err = tx.ExecContext(ctx, `UPDATE nodes SET name=?, status='pending', is_approved=0, registration_secret=?, registration_secret_expires_at=NULL, cluster_token_hash=NULL, cluster_token_delivered=0, reported_version=0, health_json=NULL, last_seen=NULL WHERE id=?`, req.Name, tokenHash(secret), nodeID)
 	case errors.Is(err, sql.ErrNoRows):
 		insert, insertErr := tx.ExecContext(ctx, `INSERT INTO nodes (name, mode, ip_address, port, status, is_approved, registration_secret) VALUES (?, 'slave', ?, ?, 'pending', 0, ?)`, req.Name, req.IPAddress, req.Port, tokenHash(secret))
 		if insertErr != nil {
@@ -123,7 +123,7 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 }
 
 func (s *ClusterService) ApproveNode(ctx context.Context, nodeID int) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE nodes SET is_approved=1, status='online', cluster_token_hash=NULL, cluster_token_delivered=0 WHERE id=? AND status='pending' AND COALESCE(registration_secret,'')<>''`, nodeID)
+	result, err := s.db.ExecContext(ctx, `UPDATE nodes SET is_approved=1, status='online', registration_secret_expires_at=datetime('now','+24 hours'), cluster_token_hash=NULL, cluster_token_delivered=0 WHERE id=? AND status='pending' AND COALESCE(registration_secret,'')<>''`, nodeID)
 	if err != nil {
 		return fmt.Errorf("批准节点: %w", err)
 	}
@@ -145,13 +145,14 @@ func (s *ClusterService) RegistrationStatus(ctx context.Context, nodeID int, sec
 	defer func() { _ = tx.Rollback() }()
 	var status, storedSecretHash string
 	var approved bool
-	if err := tx.QueryRowContext(ctx, `SELECT status, is_approved, COALESCE(registration_secret,'') FROM nodes WHERE id=?`, nodeID).Scan(&status, &approved, &storedSecretHash); err != nil {
+	var secretExpiresAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT status, is_approved, COALESCE(registration_secret,''), registration_secret_expires_at FROM nodes WHERE id=?`, nodeID).Scan(&status, &approved, &storedSecretHash, &secretExpiresAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.ClusterRegistrationStatus{Status: "rejected"}, nil
 		}
 		return models.ClusterRegistrationStatus{}, fmt.Errorf("读取注册状态: %w", err)
 	}
-	if storedSecretHash == "" || storedSecretHash != tokenHash(secret) {
+	if storedSecretHash == "" || storedSecretHash != tokenHash(secret) || (secretExpiresAt.Valid && !secretExpiresAt.Time.After(time.Now().UTC())) {
 		return models.ClusterRegistrationStatus{}, ErrInvalidClusterAuth
 	}
 	response := models.ClusterRegistrationStatus{Status: "pending"}

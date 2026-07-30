@@ -36,6 +36,7 @@ type SyncService struct {
 	cluster      *ClusterService
 	client       *http.Client
 	lifecycleMu  sync.Mutex
+	pullMu       sync.Mutex
 	mu           sync.Mutex
 	cancel       context.CancelFunc
 	done         chan struct{}
@@ -200,6 +201,9 @@ func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, 
 }
 
 func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
+	s.pullMu.Lock()
+	defer s.pullMu.Unlock()
+
 	var masterURL, token, fingerprint string
 	var isMaster bool
 	var appliedVersion int
@@ -235,6 +239,9 @@ func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return SyncResult{}, fmt.Errorf("解析集群快照: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(applied_version,0) FROM global_config WHERE id=1").Scan(&appliedVersion); err != nil {
+		return SyncResult{}, fmt.Errorf("重读已应用版本: %w", err)
 	}
 	if err := verifySnapshotIntegrity(envelope.Data, token, appliedVersion); err != nil {
 		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", err.Error())

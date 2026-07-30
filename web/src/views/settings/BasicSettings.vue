@@ -150,7 +150,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="appLogVisible" title="Lazy Balancer 运行日志" width="70%" destroy-on-close @opened="onAppLogOpened" @closed="onAppLogClosed">
+    <el-dialog v-model="appLogVisible" title="Lazy Balancer 运行日志" width="min(1100px, 94vw)" destroy-on-close @opened="onAppLogOpened" @closed="onAppLogClosed">
       <div class="log-toolbar">
         <el-switch v-model="appLogAutoRefresh" active-text="自动刷新" />
         <el-button size="small" :loading="appLogLoading" @click="fetchAppLogs">刷新</el-button>
