@@ -421,33 +421,3 @@ func (m *MetricsService) GetOverview() models.MetricsOverview {
 	defer m.mu.RUnlock()
 	return m.overview
 }
-
-func (m *MetricsService) GetHistory(limit int) []models.MetricsHistory {
-	rows, err := db.MetricsDB.Query(`
-		SELECT id, rule_id, timestamp, requests_total, requests_2xx, requests_3xx,
-		       requests_4xx, requests_5xx, bytes_in, bytes_out,
-		       latency_p50, latency_p95, latency_p99
-		FROM metrics_history
-		ORDER BY timestamp DESC
-		LIMIT ?
-	`, limit)
-	if err != nil {
-		log.Printf("Failed to query metrics history: %v", err)
-		return nil
-	}
-	defer rows.Close()
-
-	var history []models.MetricsHistory
-	for rows.Next() {
-		var h models.MetricsHistory
-		if err := rows.Scan(&h.ID, &h.RuleID, &h.Timestamp,
-			&h.RequestsTotal, &h.Requests2xx, &h.Requests3xx,
-			&h.Requests4xx, &h.Requests5xx,
-			&h.BytesIn, &h.BytesOut,
-			&h.LatencyP50, &h.LatencyP95, &h.LatencyP99); err != nil {
-			continue
-		}
-		history = append(history, h)
-	}
-	return history
-}

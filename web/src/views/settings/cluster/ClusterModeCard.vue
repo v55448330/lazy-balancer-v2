@@ -150,7 +150,7 @@ watch(
 )
 
 const handleModeChange = (value: string | number | boolean): void => {
-  if (props.readOnly) return
+  if (props.readOnly || props.loading) return
   if (value === 'slave') {
     registrationOpen.value = true
     return

@@ -29,11 +29,11 @@
     />
 
     <div class="actions">
-      <el-button type="primary" :loading="syncing" :disabled="readOnly || !status.cluster_active" @click="$emit('sync')">
+      <el-button type="primary" :loading="syncing" :disabled="readOnly || !status.cluster_active || promoting" @click="$emit('sync')">
         <el-icon><Refresh /></el-icon>立即同步
       </el-button>
       <el-button :disabled="readOnly || syncing || promoting" @click="$emit('reregister')">重新注册</el-button>
-      <el-button type="danger" plain :loading="promoting" :disabled="readOnly" @click="$emit('promote')">提升为主节点</el-button>
+      <el-button type="danger" plain :loading="promoting" :disabled="readOnly || syncing" @click="$emit('promote')">提升为主节点</el-button>
     </div>
     <div class="form-tip">提升后将脱离当前集群，本地数据将成为权威数据。</div>
   </el-card>

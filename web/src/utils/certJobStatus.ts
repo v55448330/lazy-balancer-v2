@@ -26,6 +26,10 @@ export type CertJobStatus =
   | 'waiting_ca'
   | 'disabled'
 
+export const assertNever = (status: never): never => {
+  throw new Error(`Unexpected certificate job status: ${status}`)
+}
+
 export const certJobStatusLabel = (status: CertJobStatus): string => {
   switch (status) {
     case 'issued': return '已签发'
@@ -54,5 +58,6 @@ export const certJobStatusLabel = (status: CertJobStatus): string => {
     case 'finalized': return '订单完成'
     case 'downloading': return '下载证书'
     case 'downloaded': return '下载完成'
+    default: return assertNever(status)
   }
 }

@@ -27,16 +27,6 @@ import (
 	"golang.org/x/crypto/acme"
 )
 
-// RateLimitError wraps a CA 429 response and exposes the Retry-After value.
-type RateLimitError struct {
-	RetryAfter time.Duration
-	Reason     string
-}
-
-func (e *RateLimitError) Error() string {
-	return fmt.Sprintf("CA rate limited (429), retry after %v: %s", e.RetryAfter, e.Reason)
-}
-
 // Logger receives progress updates during issuance.
 type Logger interface {
 	Log(stage, message string)

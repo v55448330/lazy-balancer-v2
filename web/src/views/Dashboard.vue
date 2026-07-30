@@ -630,6 +630,7 @@ const connChartOption = computed<EChartsOption>(() => ({
 let timer: number | null = null
 let statusRefreshTimer: number | null = null
 let statusConfirmTimer: number | null = null
+let disposed = false
 let fetchAllDataPromise: Promise<void> | null = null
 let isFetchingRuleHealth = false
 let isFetchingRuleMetrics = false
@@ -817,6 +818,7 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
     if (statusConfirmTimer) clearTimeout(statusConfirmTimer)
     statusRefreshTimer = window.setTimeout(() => {
       void fetchAllData().then(() => {
+        if (disposed) return
         statusConfirmTimer = window.setTimeout(fetchAllData, 1500)
       })
     }, 1000)
@@ -837,6 +839,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  disposed = true
   if (timer) clearInterval(timer)
   if (statusRefreshTimer) clearTimeout(statusRefreshTimer)
   if (statusConfirmTimer) clearTimeout(statusConfirmTimer)

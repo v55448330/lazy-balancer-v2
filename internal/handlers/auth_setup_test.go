@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
@@ -42,6 +44,76 @@ func setupAuthTestDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	return database
+}
+
+func TestLogin_returns_created_at_and_new_last_login_as_nullable_values(t *testing.T) {
+	// Given
+	database := setupAuthTestDB(t)
+	if _, err := database.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY, is_master BOOLEAN, jwt_expire_minutes INTEGER); INSERT INTO global_config VALUES (1,1,20)`); err != nil {
+		t.Fatalf("create global config: %v", err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	createdAt := "2026-07-29 01:02:03"
+	if _, err := database.Exec(`INSERT INTO users (username,password_hash,role,display_name,is_enabled,created_at) VALUES ('root',?,'admin',NULL,1,?)`, string(hash), createdAt); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	h := &Handlers{cfg: &config.Config{JWTSecret: "test-secret"}}
+	router := gin.New()
+	router.POST("/auth/login", h.Login)
+	request := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"root","password":"secret123"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	before := time.Now().Add(-time.Second)
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		User struct {
+			DisplayName *string    `json:"display_name"`
+			CreatedAt   time.Time  `json:"created_at"`
+			LastLogin   *time.Time `json:"last_login"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	if body.User.DisplayName != nil || body.User.CreatedAt.IsZero() || body.User.LastLogin == nil || body.User.LastLogin.Before(before) {
+		t.Fatalf("login user=%+v, want null display name and current timestamps", body.User)
+	}
+}
+
+func TestLogin_returns_error_when_last_login_update_fails(t *testing.T) {
+	// Given
+	database := setupAuthTestDB(t)
+	hash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO users (username,password_hash,role,is_enabled) VALUES ('root',?,'admin',1); CREATE TRIGGER fail_last_login BEFORE UPDATE OF last_login ON users BEGIN SELECT RAISE(ABORT,'last login failed'); END`, string(hash)); err != nil {
+		t.Fatalf("seed user and trigger: %v", err)
+	}
+	h := &Handlers{cfg: &config.Config{JWTSecret: "test-secret"}}
+	router := gin.New()
+	router.POST("/auth/login", h.Login)
+	request := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"root","password":"secret123"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("login status=%d body=%s, want 500", response.Code, response.Body.String())
+	}
 }
 
 func TestSetupAdmin_first_run_flow(t *testing.T) {

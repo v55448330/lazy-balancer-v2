@@ -1187,6 +1187,11 @@ const pagedRules = computed(() => {
 watch(searchQuery, () => {
   currentPage.value = 1
 })
+
+watch([() => filteredRules.value.length, pageSize], ([ruleCount, size]) => {
+  const maxPage = Math.max(1, Math.ceil(ruleCount / size))
+  currentPage.value = Math.min(Math.max(currentPage.value, 1), maxPage)
+})
 const users = ref<UserListItem[]>([])
 const certInfoMap = ref<Record<string, CertInfo | null>>({})
 const certJobMap = ref<Record<string, CertJob>>({})
@@ -1260,29 +1265,36 @@ const fetchCertJobs = async () => {
   }
   certJobsInFlight = true
   try {
+    let fetchError: unknown = null
     for (let attempt = 0; attempt < 2; attempt++) {
       certJobsPending = false
-      const res = await request.get<APIResponse<CertJob[]>>('/certificates/jobs')
-      const jobs: CertJob[] = res.data || []
-      const map: Record<string, CertJob> = {}
-      jobs.forEach(job => {
-        if (job.rule_id) {
-          const existing = map[job.rule_id]
-          if (!existing || certJobPriority(job.status) > certJobPriority(existing.status)) {
-            map[job.rule_id] = job
+      try {
+        const res = await request.get<APIResponse<CertJob[]>>('/certificates/jobs')
+        const jobs: CertJob[] = res.data || []
+        const map: Record<string, CertJob> = {}
+        jobs.forEach(job => {
+          if (job.rule_id) {
+            const existing = map[job.rule_id]
+            if (!existing || certJobPriority(job.status) > certJobPriority(existing.status)) {
+              map[job.rule_id] = job
+            }
           }
-        }
-      })
-      const newlyIssuedRuleIds = Object.entries(map)
-        .filter(([ruleId, job]) => {
-          const previousStatus = certJobMap.value[ruleId]?.status
-          return previousStatus !== undefined && previousStatus !== 'issued' && job.status === 'issued'
         })
-        .map(([ruleId]) => ruleId)
-      certJobMap.value = map
-      if (newlyIssuedRuleIds.length > 0) await fetchCertInfo(newlyIssuedRuleIds)
+        const newlyIssuedRuleIds = Object.entries(map)
+          .filter(([ruleId, job]) => {
+            const previousStatus = certJobMap.value[ruleId]?.status
+            return previousStatus !== undefined && previousStatus !== 'issued' && job.status === 'issued'
+          })
+          .map(([ruleId]) => ruleId)
+        certJobMap.value = map
+        if (newlyIssuedRuleIds.length > 0) await fetchCertInfo(newlyIssuedRuleIds)
+        fetchError = null
+      } catch (error: unknown) {
+        fetchError = error
+      }
       if (!certJobsPending) break
     }
+    if (fetchError) throw fetchError
   } catch {
     return
   } finally {
@@ -1470,56 +1482,61 @@ const fetchHealthStatus = async () => {
   }
   healthInFlight = true
   try {
+    let fetchError: unknown = null
     for (let attempt = 0; attempt < 2; attempt++) {
       healthPending = false
-      const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health')
-      const healthData = res.data || {}
-      const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
-      for (const rule of rules.value) {
-        if (rule.upstreams && rule.upstreams.length > 0) {
-          let healthy = 0
-          let unhealthy = 0
-          let degraded = 0
-          let unknown = 0
-          const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> = {}
-          for (const upstream of rule.upstreams) {
-            const upstreamKey = `${upstream.host}:${upstream.port}`
-            let isHealthy = false
-            let isUnknown = true
-            let isDegraded = false
-            let numRequests = 0
-            let fails = 0
-            for (const serverHealth of Object.values(healthData)) {
-              if (serverHealth && typeof serverHealth === 'object') {
-                if (upstreamKey in serverHealth) {
-                  const detail = serverHealth[upstreamKey]
-                  isUnknown = detail.unknown === true
-                  if (!isUnknown) {
-                    isHealthy = detail.healthy !== false
-                    isDegraded = detail.degraded === true
+      try {
+        const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health')
+        const healthData = res.data || {}
+        const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
+        for (const rule of rules.value) {
+          if (rule.upstreams && rule.upstreams.length > 0) {
+            let healthy = 0
+            let unhealthy = 0
+            let degraded = 0
+            let unknown = 0
+            const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> = {}
+            for (const upstream of rule.upstreams) {
+              const upstreamKey = `${upstream.host}:${upstream.port}`
+              let isHealthy = false
+              let isUnknown = true
+              let isDegraded = false
+              let numRequests = 0
+              let fails = 0
+              for (const serverHealth of Object.values(healthData)) {
+                if (serverHealth && typeof serverHealth === 'object') {
+                  if (upstreamKey in serverHealth) {
+                    const detail = serverHealth[upstreamKey]
+                    isUnknown = detail.unknown === true
+                    if (!isUnknown) {
+                      isHealthy = detail.healthy !== false
+                      isDegraded = detail.degraded === true
+                    }
+                    numRequests = detail.num_requests || 0
+                    fails = detail.fails || 0
+                    break
                   }
-                  numRequests = detail.num_requests || 0
-                  fails = detail.fails || 0
-                  break
                 }
               }
+              upstreamStatus[upstreamKey] = { healthy: isHealthy, unknown: isUnknown, degraded: isDegraded, num_requests: numRequests, fails }
+              if (isUnknown) unknown++
+              else if (!isHealthy) unhealthy++
+              else if (isDegraded) degraded++
+              else healthy++
             }
-            upstreamStatus[upstreamKey] = { healthy: isHealthy, unknown: isUnknown, degraded: isDegraded, num_requests: numRequests, fails }
-            if (isUnknown) unknown++
-            else if (!isHealthy) unhealthy++
-            else if (isDegraded) degraded++
-            else healthy++
-          }
-          if (rule.caddy_id) {
-            mapped[rule.caddy_id] = { healthy, unhealthy, degraded, unknown, total: rule.upstreams.length, upstreams: upstreamStatus }
+            if (rule.caddy_id) {
+              mapped[rule.caddy_id] = { healthy, unhealthy, degraded, unknown, total: rule.upstreams.length, upstreams: upstreamStatus }
+            }
           }
         }
+        healthStatus.value = mapped
+        fetchError = null
+      } catch (error: unknown) {
+        fetchError = error
       }
-      healthStatus.value = mapped
       if (!healthPending) break
     }
-  } catch (e) {
-    console.error('Failed to fetch health status:', e)
+    if (fetchError) console.error('Failed to fetch health status:', fetchError)
   } finally {
     healthPending = false
     healthInFlight = false
@@ -2868,6 +2885,7 @@ onUnmounted(() => {
   margin: 0 !important;
   gap: 4px !important;
   box-sizing: border-box !important;
+  border-bottom: 1px solid #f3f4f6;
 }
 
 .upstream-item > * {
@@ -2877,7 +2895,8 @@ onUnmounted(() => {
 .upstream-address {
   color: #4b5563;
   font-family: monospace;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1;
   flex: 1 !important;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2935,14 +2954,6 @@ onUnmounted(() => {
   padding-bottom: 6px;
 }
 
-.upstream-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 0;
-  border-bottom: 1px solid #f3f4f6;
-}
-
 .upstream-item:last-child {
   border-bottom: none;
 }
@@ -2952,13 +2963,6 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-
-.upstream-address {
-  color: #4b5563;
-  font-family: monospace;
-  font-size: 12px;
-  line-height: 1;
 }
 
 .upstream-status {
@@ -3155,7 +3159,7 @@ onUnmounted(() => {
 }
 
 .compact-divider {
-  margin: 20px 0 20px 0;
+  margin: 16px 0 12px 0;
 }
 
 .compact-divider :deep(.el-divider__text) {
@@ -3180,15 +3184,6 @@ onUnmounted(() => {
   gap: 12px;
 }
 
-.compact-divider {
-  margin: 16px 0 12px 0;
-}
-
-.compact-divider :deep(.el-divider__text) {
-  font-size: 14px;
-  font-weight: 500;
-}
-
 .section-wrapper {
   padding: 0;
 }
@@ -3211,7 +3206,7 @@ onUnmounted(() => {
 }
 
 .strategy-card-desc {
-  font-size: 12px;
+  font-size: 11px;
   color: #64748b;
   line-height: 1.3;
   margin-top: 2px;
@@ -3219,18 +3214,6 @@ onUnmounted(() => {
 
 .strategy-item {
   margin-bottom: 12px;
-}
-
-.strategy-card-desc {
-  font-size: 11px;
-  color: #64748b;
-  line-height: 1.3;
-}
-
-.health-check-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .active-check-control {

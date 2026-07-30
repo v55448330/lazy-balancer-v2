@@ -28,8 +28,8 @@ func (h *Handlers) Login(c *gin.Context) {
 
 	var user models.User
 	var passwordHash string
-	err := db.DB.QueryRow("SELECT id, username, password_hash, role, display_name, is_enabled, last_login FROM users WHERE username = ?",
-		req.Username).Scan(&user.ID, &user.Username, &passwordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.LastLogin)
+	err := db.DB.QueryRow("SELECT id, username, password_hash, role, display_name, is_enabled, created_at, last_login FROM users WHERE username = ?",
+		req.Username).Scan(&user.ID, &user.Username, &passwordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin)
 
 	if err == sql.ErrNoRows {
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("invalid_credentials"), c.ClientIP())
@@ -54,8 +54,13 @@ func (h *Handlers) Login(c *gin.Context) {
 		return
 	}
 
-	// Update last login
-	db.DB.Exec("UPDATE users SET last_login = datetime('now') WHERE id = ?", user.ID)
+	lastLogin := time.Now().UTC()
+	if _, err := db.DB.Exec("UPDATE users SET last_login = ? WHERE id = ?", lastLogin, user.ID); err != nil {
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新登录时间失败"})
+		return
+	}
+	user.LastLogin = sql.NullTime{Time: lastLogin, Valid: true}
 
 	nodeMode := "master"
 	var isMaster bool
@@ -84,7 +89,7 @@ func (h *Handlers) Login(c *gin.Context) {
 
 	c.JSON(http.StatusOK, models.LoginResponse{
 		Token:    tokenString,
-		User:     user,
+		User:     models.NewUserResponse(user),
 		NodeMode: nodeMode,
 	})
 }
@@ -124,7 +129,7 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: user})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: models.NewUserResponse(user)})
 }
 
 type UpdateCurrentUserRequest struct {
@@ -231,7 +236,7 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	} else {
 		recordAudit(c, "更新资料", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", userIDInt), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: user})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: models.NewUserResponse(user)})
 }
 
 func (h *Handlers) GetSetupStatus(c *gin.Context) {

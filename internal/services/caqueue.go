@@ -58,6 +58,7 @@ func ResetCAQueueManagerForTest() {
 // provider queues; deletion handlers call this before removing the row so a
 // worker cannot keep issuing and deploying after the job is gone.
 func (m *CAQueueManager) CancelJob(jobID int) {
+	cancelCertificateDeploymentRetry(jobID)
 	m.mu.Lock()
 	queues := make([]*caQueue, 0, len(m.queues))
 	for _, q := range m.queues {
@@ -121,6 +122,29 @@ func (m *CAQueueManager) CancelJobsForRule(ruleID string) {
 // manager active for future jobs.
 func (m *CAQueueManager) CancelAllJobs() {
 	m.mu.Lock()
+	queues := m.stopQueuesLocked()
+	m.mu.Unlock()
+
+	for _, q := range queues {
+		q.wait()
+	}
+}
+
+// PauseAndDrain prevents new work, cancels every queue, and waits for all
+// workers to exit before returning.
+func (m *CAQueueManager) PauseAndDrain() {
+	m.mu.Lock()
+	m.active = false
+	queues := m.stopQueuesLocked()
+	m.mu.Unlock()
+	pauseCertificateDeploymentRetries()
+
+	for _, q := range queues {
+		q.wait()
+	}
+}
+
+func (m *CAQueueManager) stopQueuesLocked() []*caQueue {
 	queues := make([]*caQueue, 0, len(m.queues))
 	for _, q := range m.queues {
 		q.mu.Lock()
@@ -133,11 +157,14 @@ func (m *CAQueueManager) CancelAllJobs() {
 		queues = append(queues, q)
 	}
 	m.queues = make(map[int]*caQueue)
-	m.mu.Unlock()
+	return queues
+}
 
-	for _, q := range queues {
-		q.wait()
-	}
+func (m *CAQueueManager) Resume() {
+	m.mu.Lock()
+	m.active = true
+	m.mu.Unlock()
+	resumeCertificateDeploymentRetries()
 }
 
 // Enqueue adds or re-enqueues a cert job.
@@ -188,28 +215,11 @@ func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains stri
 }
 
 func (m *CAQueueManager) Start() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.active = true
+	m.Resume()
 }
 
 func (m *CAQueueManager) Stop() {
-	m.mu.Lock()
-	if !m.active {
-		m.mu.Unlock()
-		return
-	}
-	m.active = false
-	queues := make([]*caQueue, 0, len(m.queues))
-	for _, queue := range m.queues {
-		queues = append(queues, queue)
-		queue.stop()
-	}
-	m.queues = make(map[int]*caQueue)
-	m.mu.Unlock()
-	for _, queue := range queues {
-		queue.wait()
-	}
+	m.PauseAndDrain()
 }
 
 type queueItem struct {

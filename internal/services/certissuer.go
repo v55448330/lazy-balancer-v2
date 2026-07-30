@@ -96,19 +96,41 @@ func NewCertIssuer(reloader func() error) *CertIssuer {
 }
 
 func scheduleCertificateDeploymentRetry(jobID int, _ issuedCertificate, delay time.Duration) {
-	time.AfterFunc(delay, func() {
-		manager := GetCAQueueManager()
-		if manager == nil {
-			log.Printf("certificate deployment retry skipped for job %d: Caddy reloader is not initialized", jobID)
-			return
-		}
-		manager.mu.Lock()
-		reloader := manager.reloader
-		manager.mu.Unlock()
-		if err := retryCertificateDeployment(jobID, reloader); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			log.Printf("certificate deployment retry failed for job %d: %v", jobID, err)
-		}
-	})
+	certificateServiceMu.Lock()
+	service := certificateService
+	certificateServiceMu.Unlock()
+	if service == nil {
+		log.Printf("certificate deployment retry skipped for job %d: certificate service is not initialized", jobID)
+		return
+	}
+	service.scheduleDeploymentRetry(jobID, delay)
+}
+
+func cancelCertificateDeploymentRetry(jobID int) {
+	certificateServiceMu.Lock()
+	service := certificateService
+	certificateServiceMu.Unlock()
+	if service != nil {
+		service.cancelDeploymentRetry(jobID)
+	}
+}
+
+func pauseCertificateDeploymentRetries() {
+	certificateServiceMu.Lock()
+	service := certificateService
+	certificateServiceMu.Unlock()
+	if service != nil {
+		service.pauseDeploymentRetries()
+	}
+}
+
+func resumeCertificateDeploymentRetries() {
+	certificateServiceMu.Lock()
+	service := certificateService
+	certificateServiceMu.Unlock()
+	if service != nil {
+		service.resumeDeploymentRetries()
+	}
 }
 
 func retryCertificateDeployment(jobID int, reloader func() error) error {
@@ -224,6 +246,11 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 			}
 			if notAfter, perr := parseCertNotAfter(existingCert); perr == nil && time.Until(notAfter) > time.Duration(renewalDays)*24*time.Hour {
 				material := issuedCertificate{ruleID: ruleID, certPEM: existingCert, keyPEM: existingKey, notAfter: notAfter, providerID: jobProviderID, deploymentAttempt: deploymentAttempt}
+				unlock := DeployLock(ruleID)
+				defer unlock()
+				if err := confirmCertificateDeployment(context.Background(), jobID, material, true); err != nil {
+					return err
+				}
 				logger.Log("downloaded", "检测到已签发的有效证书，直接重新部署文件")
 				snapshot, snapshotErr := SnapshotCertFiles([]string{ruleID})
 				if snapshotErr != nil {
@@ -375,6 +402,12 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 }
 
 func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, material issuedCertificate) error {
+	unlock := DeployLock(material.ruleID)
+	defer unlock()
+	if err := confirmCertificateDeployment(ctx, jobID, material, false); err != nil {
+		return err
+	}
+
 	result, err := db.DB.ExecContext(ctx, `UPDATE cert_jobs SET status='downloaded', cert_pem=?, key_pem=?, expires_at=?, ca_provider_id=?, deployment_attempts=0, deployment_available_after=NULL, updated_at=datetime('now')
 		WHERE id=? AND status IN ('downloaded','cleanup_dns','cleanup_warning') AND EXISTS (SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1)
 		AND EXISTS (SELECT 1 FROM global_config WHERE id=1 AND is_master=1)`,
@@ -431,6 +464,27 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 		cleanupErr := restoreCertificateDeployment(snapshot, s.caddyReloader)
 		failJob(jobID, "证书部署确认失败: "+err.Error())
 		return errors.Join(fmt.Errorf("finalize issued certificate: %w", err), rollbackErr, cleanupErr)
+	}
+	return nil
+}
+
+func confirmCertificateDeployment(ctx context.Context, jobID int, material issuedCertificate, allowIssued bool) error {
+	var status string
+	err := db.DB.QueryRowContext(ctx, `SELECT j.status FROM cert_jobs j
+		JOIN lb_rules r ON r.caddy_id=j.rule_id
+		JOIN global_config g ON g.id=1
+		WHERE j.id=? AND j.rule_id=?
+		  AND r.enabled=1 AND r.domain=j.domain AND g.is_master=1
+	`, jobID, material.ruleID).Scan(&status)
+	if err != nil {
+		return fmt.Errorf("confirm certificate deployment: %w", err)
+	}
+	deployable := status == "downloaded" || status == "cleanup_dns" || status == "cleanup_warning"
+	if allowIssued {
+		deployable = status == "issued" || status == "downloaded"
+	}
+	if !deployable {
+		return fmt.Errorf("certificate job %d is no longer deployable", jobID)
 	}
 	return nil
 }

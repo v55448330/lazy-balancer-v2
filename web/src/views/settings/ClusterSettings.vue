@@ -3,7 +3,7 @@
     <ClusterStatusCard :status="status" :loading="initialLoading" />
     <ClusterModeCard
       :status="status"
-      :loading="modeLoading"
+      :loading="clusterModeChanging"
       :registration-request="registrationRequest"
       :read-only="isNonAdminReadOnly"
       :interval-saving="intervalSaving"
@@ -95,6 +95,7 @@ const registrationRequest = ref(0)
 const tokenDialogVisible = ref(false)
 const registerToken = ref<ClusterRegisterToken | null>(null)
 const isNonAdminReadOnly = computed(() => authStore.readOnlyReason === 'non-admin')
+const clusterModeChanging = computed(() => syncing.value || promoting.value || modeLoading.value)
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 const fetchStatus = async (): Promise<ClusterStatus> => {
@@ -164,11 +165,11 @@ const confirmAction = async (message: string, title: string): Promise<boolean> =
 }
 
 const registerAsSlave = async (input: ClusterRegistrationInput): Promise<void> => {
-  if (isNonAdminReadOnly.value) return
-  const confirmed = await confirmAction('切换后本地数据将被主节点全覆盖，是否继续？', '确认切换为从节点')
-  if (!confirmed) return
+  if (isNonAdminReadOnly.value || clusterModeChanging.value) return
   modeLoading.value = true
   try {
+    const confirmed = await confirmAction('切换后本地数据将被主节点全覆盖，是否继续？', '确认切换为从节点')
+    if (!confirmed) return
     await request.post<ApiResponse<ClusterModeResult>>('/cluster/mode', { mode: 'slave', ...input })
     ElMessage.success('注册请求已提交，等待主节点审批')
     await refreshCluster()
@@ -178,11 +179,11 @@ const registerAsSlave = async (input: ClusterRegistrationInput): Promise<void> =
 }
 
 const promoteToMaster = async (): Promise<void> => {
-  if (isNonAdminReadOnly.value) return
-  const confirmed = await confirmAction('将脱离集群，当前数据成为权威数据', '确认提升为主节点')
-  if (!confirmed) return
+  if (isNonAdminReadOnly.value || clusterModeChanging.value) return
   promoting.value = true
   try {
+    const confirmed = await confirmAction('将脱离集群，当前数据成为权威数据', '确认提升为主节点')
+    if (!confirmed) return
     await request.post<ActionResponse>('/cluster/promote')
     ElMessage.success('已提升为主节点')
     await refreshCluster()
@@ -192,7 +193,7 @@ const promoteToMaster = async (): Promise<void> => {
 }
 
 const syncNow = async (): Promise<void> => {
-  if (isNonAdminReadOnly.value) return
+  if (isNonAdminReadOnly.value || clusterModeChanging.value) return
   syncing.value = true
   try {
     const response = await request.post<ApiResponse<ClusterSyncResult>>('/cluster/sync/pull')
@@ -255,7 +256,7 @@ const updateSyncInterval = async (value: number): Promise<void> => {
 }
 
 const runNodeAction = async (node: ClusterNode, action: 'approve' | 'reject' | 'remove'): Promise<void> => {
-  if (isNonAdminReadOnly.value) return
+  if (isNonAdminReadOnly.value || pendingNodeId.value !== null) return
   pendingNodeId.value = node.id
   try {
     if (action === 'approve') {

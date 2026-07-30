@@ -141,7 +141,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useAuthStore } from '@/stores/auth'
-import api from '@/utils/api'
+import { request } from '@/utils/api'
 import { DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document } from '@element-plus/icons-vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, footerText } from '@/utils/branding'
@@ -216,7 +216,7 @@ const saveProfile = async () => {
   }
   saving.value = true
   try {
-    await api.patch('/users/me', {
+    await request.patch('/users/me', {
       display_name: profileForm.value.display_name,
       ...(profileForm.value.password && { password: profileForm.value.password }),
     })

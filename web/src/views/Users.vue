@@ -109,10 +109,10 @@
             <el-button v-if="row.id !== authStore.user?.id" type="primary" link size="small" :disabled="isReadOnly || submitting" @click="editUser(row)">
               编辑
             </el-button>
-            <el-button v-if="row.id !== authStore.user?.id" type="warning" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id)" @click="resetPassword(row.id)">
+            <el-button v-if="row.id !== authStore.user?.id" type="warning" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row.id)">
               重置密码
             </el-button>
-            <el-button v-if="row.id !== authStore.user?.id" type="danger" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id)" @click="deleteUser(row.id)">
+            <el-button v-if="row.id !== authStore.user?.id" type="danger" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="deleteUser(row.id)">
               删除
             </el-button>
           </template>
@@ -217,7 +217,7 @@ const closeForm = () => {
 }
 
 const deleteUser = async (id: number) => {
-  if (isReadOnly.value || submittingUserId.value === id || operatingUserIds.value.has(id)) return
+  if (isReadOnly.value || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
   operatingUserIds.value.add(id)
   try {
     await ElMessageBox.confirm('确定要删除这个用户吗？', '警告', { type: 'warning' })
@@ -246,7 +246,7 @@ const handleToggleStatus = async (id: number, isEnabled: boolean) => {
 }
 
 const resetPassword = async (id: number) => {
-  if (isReadOnly.value || submittingUserId.value === id || operatingUserIds.value.has(id)) return
+  if (isReadOnly.value || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
   operatingUserIds.value.add(id)
   try {
     const { value } = await ElMessageBox.prompt('请输入新密码', '重置密码', {

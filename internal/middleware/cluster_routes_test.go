@@ -3,19 +3,22 @@ package middleware
 import (
 	"testing"
 
+	"github.com/gin-gonic/gin"
+
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/handlers"
 	"lazy-balancer-v2/internal/services"
 )
 
-func TestSetupRouter_registers_cluster_contract_and_removes_legacy_routes(t *testing.T) {
-	// Given
+func newMiddlewareTestRouter(t *testing.T) *gin.Engine {
+	t.Helper()
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
 	t.Cleanup(func() {
+		services.StopAuditCleanup()
 		_ = db.Close()
 		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
 	})
@@ -25,15 +28,19 @@ func TestSetupRouter_registers_cluster_contract_and_removes_legacy_routes(t *tes
 		NodeName: "node-test", JWTSecret: "test-secret",
 	}
 	caddy := services.NewCaddyService(cfg.CaddyAdminURL)
-	syncService := services.NewSyncService(db.DB, cfg, caddy)
-	clusterService := services.NewClusterService(db.DB, nil)
 	handler := handlers.NewHandlers(handlers.Dependencies{
 		Config: cfg, CaddyService: caddy, MetricsService: services.NewMetricsService(cfg.CaddyMetricsURL, 60),
-		SyncService: syncService, ClusterService: clusterService, CAProviderService: services.NewCAProviderService(),
+		SyncService: services.NewSyncService(db.DB, cfg, caddy), ClusterService: services.NewClusterService(db.DB, nil),
+		CAProviderService: services.NewCAProviderService(),
 	})
+	return SetupRouter(handler, cfg)
+}
+
+func TestSetupRouter_registers_cluster_contract_and_removes_legacy_routes(t *testing.T) {
+	// Given
+	router := newMiddlewareTestRouter(t)
 
 	// When
-	router := SetupRouter(handler, cfg)
 	routes := make(map[string]bool)
 	for _, route := range router.Routes() {
 		routes[route.Method+" "+route.Path] = true

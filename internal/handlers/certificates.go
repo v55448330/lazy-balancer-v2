@@ -334,7 +334,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名不属于该规则"})
 			return
 		}
-		if err := services.CreateOrRequeueCertJob(req.CaddyID, req.Domain, 0, qm); err != nil {
+		if _, err := services.CreateOrRequeueCertJob(req.CaddyID, req.Domain, 0, qm); err != nil {
 			auditFailure("failed", "创建签发任务失败: "+err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建签发任务失败: " + err.Error()})
 			return
@@ -356,7 +356,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 ACME 规则失败: " + err.Error()})
 				return
 			}
-			if err := services.CreateOrRequeueCertJob(ruleID, domain, 0, qm); err != nil {
+			if _, err := services.CreateOrRequeueCertJob(ruleID, domain, 0, qm); err != nil {
 				failed = append(failed, fmt.Sprintf("%s(%v)", domain, err))
 				continue
 			}

@@ -65,10 +65,10 @@
       <el-table-column label="操作" width="150" fixed="right" align="center">
         <template #default="{ row }">
           <template v-if="row.status === 'pending' || !row.is_approved">
-            <el-button link type="primary" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly" @click="$emit('approve', row)">确认</el-button>
-            <el-button link type="danger" size="small" :disabled="readOnly || pendingNodeId === row.id" @click="$emit('reject', row)">拒绝</el-button>
+            <el-button link type="primary" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('approve', row)">确认</el-button>
+            <el-button link type="danger" size="small" :disabled="readOnly || pendingNodeId !== null" @click="$emit('reject', row)">拒绝</el-button>
           </template>
-          <el-button v-else link type="danger" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly" @click="$emit('remove', row)">删除</el-button>
+          <el-button v-else link type="danger" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('remove', row)">删除</el-button>
         </template>
       </el-table-column>
       <template #empty><el-empty description="暂无集群节点" :image-size="60" /></template>

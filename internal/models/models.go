@@ -17,6 +17,33 @@ type User struct {
 	LastLogin    sql.NullTime   `json:"last_login"`
 }
 
+type UserResponse struct {
+	ID          int        `json:"id"`
+	Username    string     `json:"username"`
+	Role        string     `json:"role"`
+	DisplayName *string    `json:"display_name"`
+	IsEnabled   bool       `json:"is_enabled"`
+	CreatedAt   time.Time  `json:"created_at"`
+	LastLogin   *time.Time `json:"last_login"`
+}
+
+func NewUserResponse(user User) UserResponse {
+	response := UserResponse{
+		ID:        user.ID,
+		Username:  user.Username,
+		Role:      user.Role,
+		IsEnabled: user.IsEnabled,
+		CreatedAt: user.CreatedAt,
+	}
+	if user.DisplayName.Valid {
+		response.DisplayName = &user.DisplayName.String
+	}
+	if user.LastLogin.Valid {
+		response.LastLogin = &user.LastLogin.Time
+	}
+	return response
+}
+
 // APIKey represents an API key
 type APIKey struct {
 	ID        int          `json:"id"`
@@ -28,6 +55,35 @@ type APIKey struct {
 	ExpiresAt sql.NullTime `json:"expires_at"`
 	IsEnabled bool         `json:"is_enabled"`
 	CreatedAt time.Time    `json:"created_at"`
+}
+
+type APIKeyResponse struct {
+	ID        int        `json:"id"`
+	Name      string     `json:"name"`
+	KeyPrefix string     `json:"key_prefix"`
+	CreatedBy int        `json:"created_by"`
+	LastUsed  *time.Time `json:"last_used"`
+	ExpiresAt *time.Time `json:"expires_at"`
+	IsEnabled bool       `json:"is_enabled"`
+	CreatedAt time.Time  `json:"created_at"`
+}
+
+func NewAPIKeyResponse(key APIKey) APIKeyResponse {
+	response := APIKeyResponse{
+		ID:        key.ID,
+		Name:      key.Name,
+		KeyPrefix: key.KeyPrefix,
+		CreatedBy: key.CreatedBy,
+		IsEnabled: key.IsEnabled,
+		CreatedAt: key.CreatedAt,
+	}
+	if key.LastUsed.Valid {
+		response.LastUsed = &key.LastUsed.Time
+	}
+	if key.ExpiresAt.Valid {
+		response.ExpiresAt = &key.ExpiresAt.Time
+	}
+	return response
 }
 
 // LbRule represents a load balancing rule
@@ -327,9 +383,9 @@ type LoginRequest struct {
 }
 
 type LoginResponse struct {
-	Token    string `json:"token"`
-	User     User   `json:"user"`
-	NodeMode string `json:"node_mode"`
+	Token    string       `json:"token"`
+	User     UserResponse `json:"user"`
+	NodeMode string       `json:"node_mode"`
 }
 
 type CreateUserRequest struct {

@@ -13,7 +13,7 @@
           <el-icon><Document /></el-icon>
           接口文档
         </el-button>
-        <el-button type="primary" :disabled="isSlave" @click="createKey">
+        <el-button type="primary" :loading="creating" :disabled="isSlave || creating" @click="createKey">
           <el-icon><Plus /></el-icon>
           创建密钥
         </el-button>
@@ -21,7 +21,7 @@
     </div>
 
     <div v-else class="toolbar">
-      <el-button type="primary" :disabled="isSlave" @click="createKey">
+      <el-button type="primary" :loading="creating" :disabled="isSlave || creating" @click="createKey">
         <el-icon><Plus /></el-icon>
         创建密钥
       </el-button>
@@ -57,13 +57,13 @@
               size="small"
               :type="key.is_enabled ? 'warning' : 'success'"
               :loading="togglePendingId === key.id"
-              :disabled="isSlave"
+              :disabled="isSlave || deletingIds.has(key.id)"
               @click="toggleKey(key)"
             >
               <el-icon><SwitchButton v-if="key.is_enabled" /><VideoPlay v-else /></el-icon>
               {{ key.is_enabled ? '禁用' : '启用' }}
             </el-button>
-            <el-button size="small" type="danger" :disabled="isSlave" @click="deleteKey(key.id)">
+            <el-button size="small" type="danger" :loading="deletingIds.has(key.id)" :disabled="isSlave || togglePendingId === key.id || deletingIds.has(key.id)" @click="deleteKey(key.id)">
               <el-icon><Delete /></el-icon>
               删除
             </el-button>
@@ -105,16 +105,12 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
-import api, { request } from '@/utils/api'
+import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateShort } from '@/utils/date'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { CopyDocument, Delete, Document, Key, Plus, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
-
-interface NullableTime {
-  readonly Time: string
-  readonly Valid: boolean
-}
+import type { NullableTime } from '@/types'
 
 interface APIKey {
   readonly id: number
@@ -149,7 +145,9 @@ const isSlave = computed(() => authStore.nodeMode === 'slave')
 
 const keys = ref<readonly APIKey[]>([])
 const loading = ref(false)
+const creating = ref(false)
 const togglePendingId = ref<number | null>(null)
+const deletingIds = ref(new Set<number>())
 const createdKey = ref('')
 const createdKeyVisible = ref(false)
 
@@ -164,47 +162,50 @@ const fetchKeys = async () => {
 }
 
 async function createKey() {
-  if (isSlave.value) return
-  let result
+  if (isSlave.value || creating.value) return
+  creating.value = true
   try {
-    result = await ElMessageBox.prompt('请输入密钥名称', '创建 API 密钥', {
+    const result = await ElMessageBox.prompt('请输入密钥名称', '创建 API 密钥', {
       confirmButtonText: '创建',
       cancelButtonText: '取消',
       inputValidator: (value) => value.trim().length > 0 || '请输入密钥名称',
     })
+    const name = result.value.trim()
+    if (!name) return
+
+    const res = await request.post<CreateAPIKeyResponse>('/users/me/api-keys', { name })
+    ElMessage.success('密钥创建成功')
+    if (res.data?.key) {
+      createdKey.value = res.data.key
+      createdKeyVisible.value = true
+    }
+    await fetchKeys()
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
     throw error
+  } finally {
+    creating.value = false
   }
-
-  const name = result.value.trim()
-  if (!name) return
-
-  const res = await request.post<CreateAPIKeyResponse>('/users/me/api-keys', { name })
-  ElMessage.success('密钥创建成功')
-  if (res.data?.key) {
-    createdKey.value = res.data.key
-    createdKeyVisible.value = true
-  }
-  await fetchKeys()
 }
 
 const deleteKey = async (id: number) => {
-  if (isSlave.value) return
+  if (isSlave.value || togglePendingId.value === id || deletingIds.value.has(id)) return
+  deletingIds.value.add(id)
   try {
     await ElMessageBox.confirm('确定要删除这个 API 密钥吗？删除后无法恢复。', '警告', { type: 'warning' })
+    await request.delete(`/users/me/api-keys/${id}`)
+    ElMessage.success('删除成功')
+    await fetchKeys()
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
     throw error
+  } finally {
+    deletingIds.value.delete(id)
   }
-
-  await request.delete(`/users/me/api-keys/${id}`)
-  ElMessage.success('删除成功')
-  await fetchKeys()
 }
 
 const toggleKey = async (key: APIKey) => {
-  if (isSlave.value) return
+  if (isSlave.value || togglePendingId.value !== null || deletingIds.value.has(key.id)) return
   const isEnabled = !key.is_enabled
 
   if (!isEnabled) {
@@ -222,7 +223,7 @@ const toggleKey = async (key: APIKey) => {
 
   togglePendingId.value = key.id
   try {
-    await api.patch(`/users/me/api-keys/${key.id}`, { is_enabled: isEnabled })
+    await request.patch(`/users/me/api-keys/${key.id}`, { is_enabled: isEnabled })
     ElMessage.success(isEnabled ? '密钥已启用' : '密钥已禁用')
     await fetchKeys()
   } finally {

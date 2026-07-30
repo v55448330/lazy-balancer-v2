@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -16,13 +17,30 @@ import (
 )
 
 type CertificateService struct {
-	mu              sync.Mutex
-	ctx             context.Context
-	cancel          context.CancelFunc
-	done            chan struct{}
-	recoverJobs     func(context.Context)
-	deploymentRetry func(int, issuedCertificate, time.Duration)
+	mu                  sync.Mutex
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	done                chan struct{}
+	recoverJobs         func(context.Context)
+	deploymentRetry     func(int, issuedCertificate, time.Duration)
+	timerMu             sync.Mutex
+	deploymentTimers    map[int]*deploymentTimer
+	deploymentCallbacks map[int]map[*deploymentTimer]struct{}
+	timersPaused        bool
+	stopping            bool
+	retryDeployment     func(int) error
 }
+
+type deploymentTimer struct {
+	timer    *time.Timer
+	done     chan struct{}
+	canceled bool
+}
+
+var (
+	certificateServiceMu sync.Mutex
+	certificateService   *CertificateService
+)
 
 type certJobSnapshot struct {
 	id                       int
@@ -59,7 +77,7 @@ func DisableCertJobsExceptDomain(ruleID, keepDomain string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	rows, err := tx.Query(`SELECT id FROM cert_jobs WHERE rule_id=? AND domain<>? AND status NOT IN ('issued','failed','disabled')`, ruleID, keepDomain)
+	rows, err := tx.Query(`SELECT id FROM cert_jobs WHERE rule_id=? AND domain<>? AND status<>'disabled'`, ruleID, keepDomain)
 	if err != nil {
 		return fmt.Errorf("query retired certificate jobs: %w", err)
 	}
@@ -81,7 +99,7 @@ func DisableCertJobsExceptDomain(ruleID, keepDomain string) error {
 	}
 
 	result, err := tx.Exec(`UPDATE cert_jobs SET status='disabled', message='规则域名已变更，任务已退役', updated_at=datetime('now')
-		WHERE rule_id=? AND domain<>? AND status NOT IN ('issued','failed','disabled')`, ruleID, keepDomain)
+		WHERE rule_id=? AND domain<>? AND status<>'disabled'`, ruleID, keepDomain)
 	if err != nil {
 		return fmt.Errorf("disable retired certificate jobs: %w", err)
 	}
@@ -96,6 +114,10 @@ func DisableCertJobsExceptDomain(ruleID, keepDomain string) error {
 	if manager := GetCAQueueManager(); manager != nil {
 		for _, jobID := range jobIDs {
 			manager.CancelJob(jobID)
+		}
+	} else {
+		for _, jobID := range jobIDs {
+			cancelCertificateDeploymentRetry(jobID)
 		}
 	}
 	if updated > 0 {
@@ -159,9 +181,142 @@ func RestoreCertJobsForRule(snapshot CertJobsSnapshot) error {
 
 func NewCertificateService() *CertificateService {
 	ctx, cancel := context.WithCancel(context.Background())
-	service := &CertificateService{ctx: ctx, cancel: cancel, done: make(chan struct{}), deploymentRetry: scheduleCertificateDeploymentRetry}
+	service := &CertificateService{
+		ctx: ctx, cancel: cancel, done: make(chan struct{}),
+		deploymentRetry:     scheduleCertificateDeploymentRetry,
+		deploymentTimers:    make(map[int]*deploymentTimer),
+		deploymentCallbacks: make(map[int]map[*deploymentTimer]struct{}),
+	}
+	service.retryDeployment = func(jobID int) error {
+		manager := GetCAQueueManager()
+		if manager == nil {
+			return fmt.Errorf("Caddy reloader is not initialized")
+		}
+		manager.mu.Lock()
+		reloader := manager.reloader
+		manager.mu.Unlock()
+		return retryCertificateDeployment(jobID, reloader)
+	}
 	service.recoverJobs = service.recoverCertJobs
+	certificateServiceMu.Lock()
+	certificateService = service
+	certificateServiceMu.Unlock()
 	return service
+}
+
+func (s *CertificateService) scheduleDeploymentRetry(jobID int, delay time.Duration) {
+	for {
+		s.timerMu.Lock()
+		if s.stopping || s.timersPaused {
+			s.timerMu.Unlock()
+			return
+		}
+		if previous := s.deploymentTimers[jobID]; previous != nil {
+			previous.canceled = true
+			stopped := previous.timer.Stop()
+			delete(s.deploymentTimers, jobID)
+			s.timerMu.Unlock()
+			if stopped {
+				close(previous.done)
+			} else {
+				<-previous.done
+			}
+			continue
+		}
+		entry := &deploymentTimer{done: make(chan struct{})}
+		entry.timer = time.AfterFunc(delay, func() {
+			s.timerMu.Lock()
+			if s.deploymentTimers[jobID] == entry {
+				delete(s.deploymentTimers, jobID)
+			}
+			callbacks := s.deploymentCallbacks[jobID]
+			if callbacks == nil {
+				callbacks = make(map[*deploymentTimer]struct{})
+				s.deploymentCallbacks[jobID] = callbacks
+			}
+			callbacks[entry] = struct{}{}
+			stopping := entry.canceled || s.stopping || s.timersPaused
+			s.timerMu.Unlock()
+			defer func() {
+				s.timerMu.Lock()
+				delete(s.deploymentCallbacks[jobID], entry)
+				if len(s.deploymentCallbacks[jobID]) == 0 {
+					delete(s.deploymentCallbacks, jobID)
+				}
+				s.timerMu.Unlock()
+				close(entry.done)
+			}()
+			if stopping {
+				return
+			}
+			if err := s.retryDeployment(jobID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				log.Printf("certificate deployment retry failed for job %d: %v", jobID, err)
+			}
+		})
+		s.deploymentTimers[jobID] = entry
+		s.timerMu.Unlock()
+		return
+	}
+}
+
+func (s *CertificateService) cancelDeploymentRetry(jobID int) {
+	s.timerMu.Lock()
+	entry := s.deploymentTimers[jobID]
+	var pendingDone <-chan struct{}
+	if entry != nil {
+		entry.canceled = true
+		if entry.timer.Stop() {
+			delete(s.deploymentTimers, jobID)
+			close(entry.done)
+		} else {
+			pendingDone = entry.done
+		}
+	}
+	runningDone := make([]<-chan struct{}, 0, len(s.deploymentCallbacks[jobID]))
+	for callback := range s.deploymentCallbacks[jobID] {
+		callback.canceled = true
+		runningDone = append(runningDone, callback.done)
+	}
+	s.timerMu.Unlock()
+	if pendingDone != nil {
+		<-pendingDone
+	}
+	for _, done := range runningDone {
+		<-done
+	}
+}
+
+func (s *CertificateService) pauseDeploymentRetries() {
+	s.timerMu.Lock()
+	s.timersPaused = true
+	var waitFor []<-chan struct{}
+	for jobID, entry := range s.deploymentTimers {
+		entry.canceled = true
+		if entry.timer.Stop() {
+			close(entry.done)
+		} else {
+			waitFor = append(waitFor, entry.done)
+		}
+		delete(s.deploymentTimers, jobID)
+	}
+	for _, callbacks := range s.deploymentCallbacks {
+		for callback := range callbacks {
+			callback.canceled = true
+			waitFor = append(waitFor, callback.done)
+		}
+	}
+	s.timerMu.Unlock()
+	for _, done := range waitFor {
+		<-done
+	}
+}
+
+func (s *CertificateService) resumeDeploymentRetries() {
+	s.timerMu.Lock()
+	if !s.stopping {
+		s.timersPaused = false
+	}
+	s.timerMu.Unlock()
 }
 
 func (s *CertificateService) Start() {
@@ -247,83 +402,103 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 // the process last exited. Jobs whose rule or CA provider no longer exist are
 // marked as failed.
 func (s *CertificateService) recoverCertJobs(ctx context.Context) {
+	if err := requeueNonTerminalCertJobs(ctx, s.deploymentRetry); err != nil {
+		log.Printf("Failed to recover non-terminal cert jobs: %v", err)
+	}
+}
+
+func RequeueNonTerminalCertJobs() error {
+	return requeueNonTerminalCertJobs(context.Background(), scheduleCertificateDeploymentRetry)
+}
+
+func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, issuedCertificate, time.Duration)) error {
 	rows, err := db.DB.QueryContext(ctx, `
 		SELECT id, rule_id, domain, status, ca_provider_id, COALESCE(deployment_attempts,0), deployment_available_after FROM cert_jobs
-		WHERE status NOT IN ('issued','failed')
+		WHERE status NOT IN ('issued','failed','disabled')
 		  AND (status != 'waiting_ca' OR ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))
 	`)
 	if err != nil {
-		log.Printf("Failed to recover non-terminal cert jobs: %v", err)
-		return
+		return fmt.Errorf("query non-terminal certificate jobs: %w", err)
 	}
-	defer rows.Close()
-
+	type recoveryJob struct {
+		id, providerID, deploymentAttempts int
+		ruleID, domain, status             string
+		deploymentAvailableAfter           sql.NullTime
+	}
+	var jobs []recoveryJob
 	for rows.Next() {
-		if ctx.Err() != nil {
-			return
+		var job recoveryJob
+		if err := rows.Scan(&job.id, &job.ruleID, &job.domain, &job.status, &job.providerID, &job.deploymentAttempts, &job.deploymentAvailableAfter); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan non-terminal certificate job: %w", err)
 		}
-		var jobID, caProviderID, deploymentAttempts int
-		var ruleID, domain, status string
-		var deploymentAvailableAfter sql.NullTime
-		if err := rows.Scan(&jobID, &ruleID, &domain, &status, &caProviderID, &deploymentAttempts, &deploymentAvailableAfter); err != nil {
-			log.Printf("Failed to scan cert job for recovery: %v", err)
-			continue
-		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate non-terminal certificate jobs: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close non-terminal certificate jobs: %w", err)
+	}
 
+	for _, job := range jobs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		var ruleEnabled int
-		if err := db.DB.QueryRow("SELECT COALESCE(enabled, -1) FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&ruleEnabled); err != nil {
-			failJob(jobID, "关联规则不存在")
+		if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(enabled, -1) FROM lb_rules WHERE caddy_id=?", job.ruleID).Scan(&ruleEnabled); err != nil {
+			failJob(job.id, "关联规则不存在")
 			continue
 		}
 		if ruleEnabled != 1 {
 			continue
 		}
-		if status == "downloaded" {
+		if job.status == "downloaded" {
 			delay := time.Duration(0)
-			if deploymentAvailableAfter.Valid {
-				delay = time.Until(deploymentAvailableAfter.Time)
+			if job.deploymentAvailableAfter.Valid {
+				delay = time.Until(job.deploymentAvailableAfter.Time)
 				if delay < 0 {
 					delay = 0
 				}
 			}
-			s.deploymentRetry(jobID, issuedCertificate{ruleID: ruleID, providerID: caProviderID, deploymentAttempt: deploymentAttempts}, delay)
+			deploymentRetry(job.id, issuedCertificate{ruleID: job.ruleID, providerID: job.providerID, deploymentAttempt: job.deploymentAttempts}, delay)
 			continue
 		}
 
 		if _, err := db.DB.ExecContext(ctx,
 			"UPDATE cert_jobs SET status='queued', message='等待排队签发', updated_at=datetime('now') WHERE id=?",
-			jobID,
+			job.id,
 		); err != nil {
-			log.Printf("Failed to update cert job %d status to queued: %v", jobID, err)
-			continue
+			return fmt.Errorf("queue recovered certificate job %d: %w", job.id, err)
 		}
-		RecordAuditLog("system", "恢复排队", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(ruleID), AuditSourcePart("startup_recovery")), "")
+		RecordAuditLog("system", "恢复排队", "证书签发任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("startup_recovery")), "")
 		qm := GetCAQueueManager()
 		if qm == nil {
-			log.Printf("Recovery: CA queue manager not initialized")
-			continue
+			return fmt.Errorf("CA queue manager not initialized")
 		}
-		if err := qm.Enqueue(caProviderID, jobID, ruleID, domain); err != nil {
-			log.Printf("Failed to enqueue recovered job %d: %v", jobID, err)
+		if err := qm.Enqueue(job.providerID, job.id, job.ruleID, job.domain); err != nil {
+			return fmt.Errorf("enqueue recovered certificate job %d: %w", job.id, err)
 		}
 	}
-
-	if err := rows.Err(); err != nil {
-		log.Printf("Error iterating cert jobs for recovery: %v", err)
-	}
+	return nil
 }
 
 func (s *CertificateService) Stop() {
+	s.timerMu.Lock()
+	s.stopping = true
+	s.timerMu.Unlock()
+	s.pauseDeploymentRetries()
 	s.cancel()
 	<-s.done
 }
 
 // CreateOrRequeueCertJob creates a queued cert job for the rule and enqueues it.
 // Uses an atomic INSERT ... ON CONFLICT to avoid races between concurrent callers.
-func CreateOrRequeueCertJob(ruleID, domains string, caProviderID int, qm *CAQueueManager) error {
+func CreateOrRequeueCertJob(ruleID, domains string, caProviderID int, qm *CAQueueManager) (int, error) {
 	list := normalizeAndValidateDomains(domains)
 	if list == nil {
-		return fmt.Errorf("invalid ACME domains: %s", domains)
+		return 0, fmt.Errorf("invalid ACME domains: %s", domains)
 	}
 	joined := strings.Join(list, ",")
 
@@ -355,10 +530,10 @@ func CreateOrRequeueCertJob(ruleID, domains string, caProviderID int, qm *CAQueu
 		RETURNING id
 	`, ruleID, joined, caProviderID).Scan(&jobID)
 	if err != nil {
-		return fmt.Errorf("upsert cert job: %w", err)
+		return 0, fmt.Errorf("upsert cert job: %w", err)
 	}
 
-	return qm.Enqueue(caProviderID, jobID, ruleID, joined)
+	return jobID, qm.Enqueue(caProviderID, jobID, ruleID, joined)
 }
 
 // HasCertJob reports whether any certificate job row exists for the given
@@ -518,12 +693,14 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 	}
 
 	rows, err := db.DB.Query(`
-		SELECT id, rule_id, domain, status, expires_at, ca_provider_id, COALESCE(renewal_attempts,0) as renewal_attempts, ca_available_after, last_error_code
-		FROM cert_jobs
-		WHERE expires_at IS NOT NULL
-		  AND expires_at <= datetime('now', '+' || ? || ' days')
-		  AND status IN ('issued', 'failed', 'waiting_ca')
-		ORDER BY expires_at ASC
+		SELECT j.id, j.rule_id, j.domain, j.status, j.expires_at, j.ca_provider_id, COALESCE(j.renewal_attempts,0), j.ca_available_after, COALESCE(j.last_error_code,'')
+		FROM cert_jobs j
+		JOIN lb_rules r ON r.caddy_id=j.rule_id
+		WHERE j.expires_at IS NOT NULL
+		  AND j.expires_at <= datetime('now', '+' || ? || ' days')
+		  AND j.status IN ('issued', 'failed', 'waiting_ca')
+		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' AND r.domain=j.domain
+		ORDER BY j.expires_at ASC
 	`, days)
 	if err != nil {
 		log.Printf("Failed to query expiring certificates: %v", err)

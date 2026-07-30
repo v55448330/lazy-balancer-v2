@@ -6,13 +6,44 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"lazy-balancer-v2/internal/services"
 )
+
+func TestRestartRequiredHandler_shutsDownHTTPServer(t *testing.T) {
+	// Given
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	server := &http.Server{Handler: http.NewServeMux()}
+	serverErrors := make(chan error, 1)
+	go func() { serverErrors <- server.Serve(listener) }()
+	quit := make(chan os.Signal, 1)
+	restart, requestRestart := newRestartSignal()
+	services.SetRestartRequiredHandler(requestRestart)
+	t.Cleanup(func() { services.SetRestartRequiredHandler(nil) })
+
+	// When
+	requestRestart()
+	requestRestart()
+	serverErr := waitForServerStop(server, serverStopSignals{quit: quit, restart: restart, serverErrors: serverErrors})
+
+	// Then
+	if serverErr != nil {
+		t.Fatalf("wait for server stop: %v", serverErr)
+	}
+	if err := <-serverErrors; !errors.Is(err, http.ErrServerClosed) {
+		t.Fatalf("serve error=%v, want http.ErrServerClosed", err)
+	}
+}
 
 func TestMain_exitsNonZero_whenHTTPListenFails(t *testing.T) {
 	// Given

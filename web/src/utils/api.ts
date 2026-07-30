@@ -59,6 +59,7 @@ interface RequestClient {
   get<T = ApiResponse>(url: string, config?: AxiosRequestConfig): Promise<T>
   post<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
   put<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  patch<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
   delete<T = ApiResponse>(url: string, config?: AxiosRequestConfig): Promise<T>
 }
 
@@ -129,6 +130,9 @@ export const request: RequestClient = {
   },
   put<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
     return service.put(url, data, config)
+  },
+  patch<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
+    return service.patch(url, data, config)
   },
   delete<T = ApiResponse>(url: string, config?: AxiosRequestConfig): Promise<T> {
     return service.delete(url, config)

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -278,7 +279,13 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 	if queueManager := services.GetCAQueueManager(); queueManager != nil {
-		queueManager.CancelAllJobs()
+		queueManager.PauseAndDrain()
+		defer func() {
+			queueManager.Resume()
+			if err := services.RequeueNonTerminalCertJobs(); err != nil {
+				log.Printf("ImportConfigBackup certificate job recovery failed: %v", err)
+			}
+		}()
 	}
 
 	tx, err := db.DB.BeginTx(ctx, nil)

@@ -685,7 +685,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 					return
 				}
 				log.Printf("CreateRule enqueueing cert job for caddy_id=%s domain=%s ca_provider_id=%d", caddyID, req.Domain, req.CAProviderID)
-				if err := services.CreateOrRequeueCertJob(caddyID, req.Domain, req.CAProviderID, qm); err != nil {
+				if _, err := services.CreateOrRequeueCertJob(caddyID, req.Domain, req.CAProviderID, qm); err != nil {
 					log.Printf("Auto cert enqueue failed for %s: %v", req.Domain, err)
 					if restoreErr := restoreCreatedRule(); restoreErr != nil {
 						log.Printf("CRITICAL: CreateRule ACME compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
@@ -1437,7 +1437,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份证书任务失败: " + errors.Join(err, restoreErr).Error()})
 				return
 			}
+			var enqueuedJobID int
+			var queueManager *services.CAQueueManager
 			restoreACMEState := func() error {
+				if enqueuedJobID > 0 && queueManager != nil {
+					queueManager.CancelJob(enqueuedJobID)
+				}
 				return errors.Join(h.restoreImportRuntime(runtimeSnapshot), restoreRuleDBSnapshot(), services.RestoreCertJobsForRule(certJobsSnapshot))
 			}
 			resumedValidJob := false
@@ -1477,8 +1482,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				((wasReEnabled || tlsSourceChangedToACME) && !services.HasCertJob(caddyID, domain))
 			needJob = needJob && !resumedValidJob
 			if needJob {
-				qm := services.GetCAQueueManager()
-				if qm == nil {
+				queueManager = services.GetCAQueueManager()
+				if queueManager == nil {
 					restoreErr := restoreACMEState()
 					if restoreErr != nil {
 						log.Printf("CRITICAL: UpdateRule ACME enqueue failed and restore failed for caddy_id=%s: restore=%v", caddyID, restoreErr)
@@ -1489,7 +1494,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 					return
 				}
 				log.Printf("UpdateRule enqueueing cert job for caddy_id=%s domain=%s ca_provider_id=%d", caddyID, domain, caProviderID)
-				if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+				jobID, err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, queueManager)
+				if err != nil {
 					restoreErr := restoreACMEState()
 					if restoreErr != nil {
 						log.Printf("CRITICAL: UpdateRule ACME enqueue failed and restore failed for caddy_id=%s: enqueue=%v restore=%v", caddyID, err, restoreErr)
@@ -1499,6 +1505,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书签发任务失败: " + err.Error()})
 					return
 				}
+				enqueuedJobID = jobID
 				if domainChanged {
 					if err := services.DisableCertJobsExceptDomain(caddyID, domain); err != nil {
 						restoreErr := restoreACMEState()
@@ -1862,7 +1869,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 				failEnable("CA 队列未初始化，无法创建证书签发任务")
 				return
 			}
-			if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+			if _, err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
 				failEnable("创建证书签发任务失败: " + err.Error())
 				return
 			}
@@ -1880,7 +1887,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 				failEnable("CA 队列未初始化，无法续签证书")
 				return
 			}
-			if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+			if _, err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
 				failEnable("续签排队失败: " + err.Error())
 				return
 			}
@@ -1890,7 +1897,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 				failEnable("CA 队列未初始化，无法重试证书任务")
 				return
 			}
-			if err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+			if _, err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
 				failEnable("重试排队失败: " + err.Error())
 				return
 			}

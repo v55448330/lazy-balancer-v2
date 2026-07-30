@@ -219,6 +219,44 @@ func TestConfigBackup_export_import_roundtrip(t *testing.T) {
 	}
 }
 
+func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_requeue_v2','requeue','http',8080,1);
+		INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES ('lb_requeue_v2','requeue.example.test','creating_order',999999)`); err != nil {
+		t.Fatalf("seed non-terminal job: %v", err)
+	}
+	router := gin.New()
+	router.GET("/config/export", h.ExportConfigBackup)
+	router.POST("/config/import", h.ImportConfigBackup)
+	exportResponse := httptest.NewRecorder()
+	router.ServeHTTP(exportResponse, httptest.NewRequest(http.MethodGet, "/config/export", nil))
+	if exportResponse.Code != http.StatusOK {
+		t.Fatalf("export status=%d body=%s", exportResponse.Code, exportResponse.Body.String())
+	}
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(exportResponse.Body.String()))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s", response.Code, response.Body.String())
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_requeue_v2'").Scan(&status); err != nil {
+		t.Fatalf("read recovered certificate job: %v", err)
+	}
+	if status != "queued" {
+		t.Fatalf("recovered certificate job status=%q, want queued", status)
+	}
+}
+
 func TestConfigBackup_slave_mode_forbidden(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)

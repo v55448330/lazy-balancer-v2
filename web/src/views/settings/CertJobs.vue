@@ -57,9 +57,9 @@
     <el-table-column label="操作" width="120" align="center">
       <template #default="{ row }">
         <el-button link type="primary" size="small" @click="viewLogs(row)">日志</el-button>
-        <el-tooltip :disabled="!isReadOnly && !isQueued(row.status)" :content="isReadOnly ? authStore.readOnlyMessage : '排队中的任务无法重签，请等待调度执行'">
+        <el-tooltip :disabled="!retryDisabledReason(row)" :content="retryDisabledReason(row)">
           <span>
-            <el-button link type="primary" size="small" :disabled="isReadOnly || !canRetry(row.status)" @click="retryJob(row)">重签</el-button>
+            <el-button link type="primary" size="small" :disabled="isReadOnly || !canRetry(row)" @click="retryJob(row)">重签</el-button>
           </span>
         </el-tooltip>
       </template>
@@ -98,7 +98,7 @@ import { useAuthStore } from '@/stores/auth'
 import * as pkijs from 'pkijs'
 import * as asn1js from 'asn1js'
 import type { APIResponse } from '@/types'
-import { certJobStatusLabel } from '@/utils/certJobStatus'
+import { assertNever, certJobStatusLabel } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
 
 interface CertJob {
@@ -189,15 +189,28 @@ const statusType = (status: CertJobStatus) => {
     case 'downloading':
     case 'downloaded':
       return 'warning'
-    default: return 'info'
+    default: return assertNever(status)
   }
 }
 
-const canRetry = (status: CertJobStatus) => {
-  return status !== 'queued' && status !== 'pending' && status !== 'disabled'
+const canRetry = (row: CertJob): boolean => {
+  if (row.status === 'disabled') return false
+  if (row.status === 'issued' || row.status === 'failed' || row.status === 'waiting_ca') return true
+  if (!row.updated_at) return true
+  const updatedAt = new Date(row.updated_at).getTime()
+  if (Number.isNaN(updatedAt)) return true
+  const cooldown = row.status === 'queued' || row.status === 'pending' ? 15 * 60 * 1000 : 2 * 60 * 1000
+  return Date.now() - updatedAt >= cooldown
 }
 
-const isQueued = (status: CertJobStatus) => status === 'queued'
+const retryDisabledReason = (row: CertJob): string => {
+  if (isReadOnly.value) return authStore.readOnlyMessage
+  if (row.status === 'disabled') return '已禁用的任务无法重签'
+  if (canRetry(row)) return ''
+  return row.status === 'queued' || row.status === 'pending'
+    ? '排队或待处理任务需等待 15 分钟后重签'
+    : '执行中的任务需等待 2 分钟后重签'
+}
 
 const renewalInfo = (row: CertJob): { renewalDate?: string } => {
   const info = certInfoMap.value[row.id]
@@ -283,7 +296,7 @@ const fetchCertInfo = async () => {
 }
 
 const retryJob = async (row: CertJob) => {
-  if (isReadOnly.value) return
+  if (isReadOnly.value || !canRetry(row)) return
   const isWaitingCA = row.status === 'waiting_ca'
   const message = isWaitingCA
     ? '任务当前处于"等待 CA"状态（可能仍在频率冷却中）。确定要立即重新签发吗？如果使用同一 CA 且冷却未到，可能再次被拒绝。'

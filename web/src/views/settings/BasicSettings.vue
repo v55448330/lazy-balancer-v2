@@ -289,7 +289,12 @@ watch(appLogAutoRefresh, (enabled) => {
   if (enabled) appLogTimer = setInterval(() => void fetchAppLogs(), 3000)
 })
 
-onUnmounted(stopAppLogTimer)
+onUnmounted(() => {
+  disposed = true
+  stopAppLogTimer()
+  if (tlsProtocolPollTimer) clearInterval(tlsProtocolPollTimer)
+  tlsProtocolPollTimer = null
+})
 
 const exportBackup = async (): Promise<void> => {
   if (backupDisabled.value || exporting.value) return
@@ -484,6 +489,8 @@ const formDataOf = (fields: Record<string, string>): FormData => {
 }
 
 let tlsInspectSeq = 0
+let tlsProtocolPollTimer: ReturnType<typeof setInterval> | null = null
+let disposed = false
 
 const onTlsFile = async (e: Event, kind: 'cert' | 'key') => {
   const input = e.target as HTMLInputElement
@@ -525,15 +532,20 @@ const notifyTlsRestarting = (toHttps: boolean) => {
   }).catch(() => {})
   const target = `${toHttps ? 'https' : 'http'}://${location.host}/`
   const started = Date.now()
-  const timer = setInterval(async () => {
+  if (tlsProtocolPollTimer) clearInterval(tlsProtocolPollTimer)
+  tlsProtocolPollTimer = setInterval(async () => {
+    if (disposed) return
     if (Date.now() - started > 15000) {
-      clearInterval(timer)
+      if (tlsProtocolPollTimer) clearInterval(tlsProtocolPollTimer)
+      tlsProtocolPollTimer = null
       window.location.href = target
       return
     }
     try {
       await fetch(`/api/v1/branding?ts=${Date.now()}`, { cache: 'no-store', redirect: 'manual' })
-      clearInterval(timer)
+      if (disposed) return
+      if (tlsProtocolPollTimer) clearInterval(tlsProtocolPollTimer)
+      tlsProtocolPollTimer = null
       window.location.href = target
     } catch { /* not up yet */ }
   }, 600)

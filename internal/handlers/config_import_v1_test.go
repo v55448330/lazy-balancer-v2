@@ -138,6 +138,42 @@ func TestImportV1Config_rolls_back_when_certificate_materialization_fails(t *tes
 	}
 }
 
+func TestImportV1Config_requeues_original_non_terminal_jobs_after_rollback(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_requeue_v1','old-rule','http',8080,1);
+		INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES ('lb_requeue_v1','old.example.test','creating_order',999999)`); err != nil {
+		t.Fatalf("seed original non-terminal job: %v", err)
+	}
+	backup := `{
+		"proxy_config":{"config":[{"pk":1,"fields":{"proxy_name":"new-rule","protocol":true,"listen":8443,"server_name":"example.test","ssl":true,"ssl_cert":"invalid-cert","ssl_key":"invalid-key","status":true,"upstream_list":[1]}}]},
+		"upstream_config":{"config":[{"pk":1,"fields":{"status":true,"address":"127.0.0.1","port":9000,"weight":100}}]}
+	}`
+	router := gin.New()
+	router.POST("/config/import/v1", h.ImportV1Config)
+	request := httptest.NewRequest(http.MethodPost, "/config/import/v1", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code == http.StatusOK {
+		t.Fatalf("import unexpectedly succeeded: %s", response.Body.String())
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_requeue_v1'").Scan(&status); err != nil {
+		t.Fatalf("read recovered original job: %v", err)
+	}
+	if status != "queued" {
+		t.Fatalf("recovered original job status=%q, want queued", status)
+	}
+}
+
 func TestImportV1Config_restores_partial_certificate_materialization(t *testing.T) {
 	// Given
 	harness := newImportRollbackHarness(t)

@@ -414,6 +414,72 @@ func TestUpdateRule_restores_database_and_Caddy_when_ACME_enqueue_fails(t *testi
 	}
 }
 
+func TestUpdateRule_cancels_requeued_job_before_restoring_when_retirement_fails(t *testing.T) {
+	// Given
+	harness := newUpdateAuditRuleHandlers(t, "lb_acme_retire", 0, false)
+	seedAuditRule(t, "lb_acme_retire", "before", "old.example.test", 8080, true, "acme_dns", true)
+	seedAuditUpstream(t, "lb_acme_retire")
+	var providerID int
+	if err := db.DB.QueryRow("SELECT id FROM ca_providers WHERE enabled=1 ORDER BY id LIMIT 1").Scan(&providerID); err != nil {
+		t.Fatalf("read CA provider: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=1,ca_provider_id=? WHERE caddy_id='lb_acme_retire'", providerID); err != nil {
+		t.Fatalf("set rule CA provider: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES
+		('lb_acme_retire','old.example.test','issued',?),
+		('lb_acme_retire','new.example.test','failed',?)`, providerID, providerID); err != nil {
+		t.Fatalf("seed certificate jobs: %v", err)
+	}
+	if _, err := db.DB.Exec(`CREATE TRIGGER fail_retired_cert_job BEFORE UPDATE OF status ON cert_jobs
+		WHEN OLD.rule_id='lb_acme_retire' AND OLD.domain='old.example.test' AND NEW.status='disabled'
+		BEGIN SELECT RAISE(ABORT,'retirement failed'); END`); err != nil {
+		t.Fatalf("create retirement failure trigger: %v", err)
+	}
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", harness.handler.UpdateRule)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_acme_retire", strings.NewReader(`{"domain":"new.example.test"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "退役旧域名证书任务失败") {
+		t.Fatalf("update status=%d body=%s", response.Code, response.Body.String())
+	}
+	var domain string
+	if err := db.DB.QueryRow("SELECT domain FROM lb_rules WHERE caddy_id='lb_acme_retire'").Scan(&domain); err != nil {
+		t.Fatalf("read restored rule: %v", err)
+	}
+	rows, err := db.DB.Query("SELECT domain,status FROM cert_jobs WHERE rule_id='lb_acme_retire' ORDER BY domain")
+	if err != nil {
+		t.Fatalf("read restored certificate jobs: %v", err)
+	}
+	defer rows.Close()
+	statuses := map[string]string{}
+	for rows.Next() {
+		var jobDomain, status string
+		if err := rows.Scan(&jobDomain, &status); err != nil {
+			t.Fatalf("scan restored certificate job: %v", err)
+		}
+		statuses[jobDomain] = status
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate restored certificate jobs: %v", err)
+	}
+	if domain != "old.example.test" || statuses["new.example.test"] != "failed" || statuses["old.example.test"] != "issued" {
+		t.Fatalf("domain=%q statuses=%v, want original DB snapshot", domain, statuses)
+	}
+	if harness.loadCalls.Load() < 2 || !strings.Contains(harness.currentConfig(), `"old":true`) {
+		t.Fatalf("Caddy loads=%d config=%s, want runtime restoration", harness.loadCalls.Load(), harness.currentConfig())
+	}
+}
+
 func TestUpdateRule_serializes_snapshot_commit_apply_and_restore(t *testing.T) {
 	// Given
 	harness := newUpdateAuditRuleHandlers(t, "lb_concurrent", 0, true)

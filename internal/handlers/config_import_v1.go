@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -323,7 +324,13 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 	if queueManager := services.GetCAQueueManager(); queueManager != nil {
-		queueManager.CancelAllJobs()
+		queueManager.PauseAndDrain()
+		defer func() {
+			queueManager.Resume()
+			if err := services.RequeueNonTerminalCertJobs(); err != nil {
+				log.Printf("ImportV1Config certificate job recovery failed: %v", err)
+			}
+		}()
 	}
 
 	tx, err := db.DB.BeginTx(ctx, nil)

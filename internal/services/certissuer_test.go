@@ -41,7 +41,7 @@ func seedCertificateJob(t *testing.T, status string) (int, string) {
 	t.Helper()
 	_, database := newClusterTestService(t)
 	ruleID := "lb_issue_test"
-	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES (?, 'issue test', 'http', 8080, 1)`, ruleID); err != nil {
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled) VALUES (?, 'issue test', 'example.com', 'http', 8080, 1)`, ruleID); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
 	result, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES (?, 'example.com', ?, 1)`, ruleID, status)
@@ -330,5 +330,86 @@ func installCertJobVersionTrigger(t *testing.T) {
 func TestCertificateDeploymentBackoff_caps_at_five_minutes(t *testing.T) {
 	if got := certificateDeploymentBackoff(20); got != 5*time.Minute {
 		t.Fatalf("deployment backoff=%v, want 5m", got)
+	}
+}
+
+func TestCertIssuer_deployIssuedCertificate_serializes_rollback_by_rule(t *testing.T) {
+	// Given
+	oldJobID, ruleID := seedCertificateJob(t, "downloaded")
+	useTemporaryCertDir(t)
+	if err := WriteCertFiles(ruleID, "base-cert", "base-key"); err != nil {
+		t.Fatalf("write base certificate: %v", err)
+	}
+	oldReloadEntered := make(chan struct{})
+	releaseOldReload := make(chan struct{})
+	oldIssuer := NewCertIssuer(func() error {
+		close(oldReloadEntered)
+		<-releaseOldReload
+		return errors.New("old reload failed")
+	})
+	newReloadEntered := make(chan struct{})
+	newIssuer := NewCertIssuer(func() error {
+		close(newReloadEntered)
+		return nil
+	})
+	oldDone := make(chan error, 1)
+	newDone := make(chan error, 1)
+	go func() {
+		oldDone <- oldIssuer.deployIssuedCertificate(context.Background(), oldJobID, issuedCertificate{ruleID: ruleID, certPEM: "old-cert", keyPEM: "old-key", notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1})
+	}()
+	<-oldReloadEntered
+	if _, err := db.DB.Exec("UPDATE lb_rules SET domain='www.example.com' WHERE caddy_id=?", ruleID); err != nil {
+		t.Fatalf("advance rule domain: %v", err)
+	}
+	result, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES (?, 'www.example.com', 'downloaded', 1)`, ruleID)
+	if err != nil {
+		t.Fatalf("seed newer job: %v", err)
+	}
+	newJobID64, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read newer job ID: %v", err)
+	}
+	newJobID := int(newJobID64)
+	go func() {
+		newDone <- newIssuer.deployIssuedCertificate(context.Background(), newJobID, issuedCertificate{ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key", notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1})
+	}()
+
+	// When
+	timer := time.NewTimer(100 * time.Millisecond)
+	newEnteredBeforeRollback := false
+	select {
+	case <-newReloadEntered:
+		newEnteredBeforeRollback = true
+	case <-timer.C:
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	close(releaseOldReload)
+
+	// Then
+	if err := <-oldDone; err == nil {
+		t.Fatal("old deployment unexpectedly succeeded")
+	}
+	if err := <-newDone; err != nil {
+		t.Fatalf("new deployment failed: %v", err)
+	}
+	if newEnteredBeforeRollback {
+		t.Fatal("new deployment reached reload before the old deployment rolled back")
+	}
+	certPath, keyPath := CertFilePaths(ruleID)
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatalf("read final cert: %v", err)
+	}
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read final key: %v", err)
+	}
+	if string(certPEM) != "new-cert" || string(keyPEM) != "new-key" {
+		t.Fatalf("final certificate=(%q,%q), want newer pair", certPEM, keyPEM)
 	}
 }

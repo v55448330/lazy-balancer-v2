@@ -95,7 +95,7 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA queue manager not initialized"})
 		return
 	}
-	if err := services.CreateOrRequeueCertJob(ruleID, domain, 0, qm); err != nil {
+	if _, err := services.CreateOrRequeueCertJob(ruleID, domain, 0, qm); err != nil {
 		log.Printf("Manual retry enqueue failed for job %d: %v", id, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to enqueue retry"})
 		return

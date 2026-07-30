@@ -17,6 +17,17 @@ var certDir = "/app/certs"
 // 序列化证书对文件操作，避免并发写入、恢复或删除产生撕裂的 cert/key 组合。
 var certWriteMu sync.Mutex
 
+var certificateDeployLocks sync.Map
+
+// DeployLock serializes the complete deployment and rollback transaction for
+// one rule while allowing unrelated rules to deploy concurrently.
+func DeployLock(ruleID string) func() {
+	lock, _ := certificateDeployLocks.LoadOrStore(ruleID, &sync.Mutex{})
+	mu := lock.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 type CertFileSnapshot struct {
 	Data   []byte
 	Mode   os.FileMode

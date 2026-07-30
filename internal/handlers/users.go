@@ -25,14 +25,14 @@ func (h *Handlers) ListUsers(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var users []models.User
+	var users []models.UserResponse
 	for rows.Next() {
 		var u models.User
 		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.DisplayName, &u.IsEnabled, &u.CreatedAt, &u.LastLogin); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
 			return
 		}
-		users = append(users, u)
+		users = append(users, models.NewUserResponse(u))
 	}
 	if err := rows.Err(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
@@ -170,6 +170,12 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 			return
 		}
 	}
+	var user models.User
+	if err := tx.QueryRowContext(c.Request.Context(), `SELECT id,username,role,display_name,is_enabled,created_at,last_login FROM users WHERE id=?`, id).
+		Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query user"})
+		return
+	}
 	if err := tx.Commit(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user"})
 		return
@@ -181,7 +187,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	} else {
 		recordAudit(c, "更新", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "User updated"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "User updated", Data: models.NewUserResponse(user)})
 }
 
 func (h *Handlers) DeleteUser(c *gin.Context) {
@@ -214,7 +220,11 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 		return
 	}
 
-	rowsAffected, _ := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete user"})
+		return
+	}
 	if rowsAffected == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
 		return

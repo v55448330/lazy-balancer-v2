@@ -107,6 +107,9 @@ func run() error {
 
 	// Setup router
 	router := middleware.SetupRouter(h, cfg)
+	restart, requestRestart := newRestartSignal()
+	services.SetRestartRequiredHandler(requestRestart)
+	defer services.SetRestartRequiredHandler(nil)
 
 	// Start services
 	metricsDone := make(chan struct{})
@@ -172,22 +175,45 @@ func run() error {
 		go func() { serverErrors <- server.ListenAndServe() }()
 	}
 
-	var serverErr error
-	select {
-	case <-quit:
-		log.Println("Shutting down...")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("HTTP server shutdown failed: %v", err)
-			if closeErr := server.Close(); closeErr != nil {
-				log.Printf("HTTP server forced close failed: %v", closeErr)
-			}
-		}
-		cancel()
-	case serverErr = <-serverErrors:
-	}
+	serverErr := waitForServerStop(server, serverStopSignals{quit: quit, restart: restart, serverErrors: serverErrors})
 	if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
 		return fmt.Errorf("serve HTTP: %w", serverErr)
+	}
+	return nil
+}
+
+func newRestartSignal() (<-chan struct{}, func()) {
+	restart := make(chan struct{}, 1)
+	return restart, func() {
+		select {
+		case restart <- struct{}{}:
+		default:
+		}
+	}
+}
+
+type serverStopSignals struct {
+	quit         <-chan os.Signal
+	restart      <-chan struct{}
+	serverErrors <-chan error
+}
+
+func waitForServerStop(server *http.Server, signals serverStopSignals) error {
+	select {
+	case <-signals.quit:
+	case <-signals.restart:
+	case err := <-signals.serverErrors:
+		return err
+	}
+
+	log.Println("Shutting down...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server shutdown failed: %v", err)
+		if closeErr := server.Close(); closeErr != nil {
+			log.Printf("HTTP server forced close failed: %v", closeErr)
+		}
 	}
 	return nil
 }

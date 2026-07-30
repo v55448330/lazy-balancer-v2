@@ -75,7 +75,7 @@ func installClusterVersionTriggers(database *sql.DB) error {
 	if _, err := database.Exec(`CREATE TRIGGER cluster_version_cert_jobs_status_update
 		AFTER UPDATE OF status ON cert_jobs
 		WHEN (SELECT COALESCE(is_master,0) FROM global_config WHERE id=1)=1
-			AND (OLD.status='issued')<>(NEW.status='issued')
+			AND COALESCE(OLD.status='issued',0)<>COALESCE(NEW.status='issued',0)
 		BEGIN
 			UPDATE global_config SET cluster_version=COALESCE(cluster_version,0)+1 WHERE id=1;
 		END`); err != nil {
