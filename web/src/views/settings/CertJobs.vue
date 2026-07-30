@@ -97,7 +97,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import * as pkijs from 'pkijs'
 import * as asn1js from 'asn1js'
-import type { APIResponse } from '@/types'
+import type { APIResponse, NullableTime } from '@/types'
 import { assertNever, certJobStatusLabel } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
 
@@ -108,7 +108,7 @@ interface CertJob {
   status: CertJobStatus
   message: string
   expires_at?: string
-  updated_at?: string
+  updated_at?: string | NullableTime | null
   cert_pem?: string
   ca_provider_name?: string
   renewal_attempts?: number
@@ -193,23 +193,61 @@ const statusType = (status: CertJobStatus) => {
   }
 }
 
+const retryCooldownMinutes = (status: CertJobStatus): number | null => {
+  switch (status) {
+    case 'disabled': return null
+    case 'issued':
+    case 'waiting_ca':
+      return 0
+    case 'queued': return 15
+    case 'failed': return 5
+    case 'pending':
+    case 'processing':
+    case 'creating_account':
+    case 'creating_order':
+    case 'order_created':
+    case 'waiting_order_ready':
+    case 'order_ready':
+    case 'cleanup_dns':
+    case 'cleanup_warning':
+    case 'presenting_dns':
+    case 'waiting_propagation':
+    case 'dns_propagated':
+    case 'accepting_challenge':
+    case 'waiting_order_valid':
+    case 'order_valid':
+    case 'validating':
+    case 'validated':
+    case 'finalizing':
+    case 'finalized':
+    case 'downloading':
+    case 'downloaded':
+      return 2
+    default: return assertNever(status)
+  }
+}
+
 const canRetry = (row: CertJob): boolean => {
-  if (row.status === 'disabled') return false
-  if (row.status === 'issued' || row.status === 'failed' || row.status === 'waiting_ca') return true
-  if (!row.updated_at) return true
-  const updatedAt = new Date(row.updated_at).getTime()
+  const cooldownMinutes = retryCooldownMinutes(row.status)
+  if (cooldownMinutes === null) return false
+  if (cooldownMinutes === 0) return true
+  const updatedAtValue = typeof row.updated_at === 'string'
+    ? row.updated_at
+    : row.updated_at?.Valid
+      ? row.updated_at.Time
+      : null
+  if (!updatedAtValue) return true
+  const updatedAt = new Date(updatedAtValue).getTime()
   if (Number.isNaN(updatedAt)) return true
-  const cooldown = row.status === 'queued' || row.status === 'pending' ? 15 * 60 * 1000 : 2 * 60 * 1000
-  return Date.now() - updatedAt >= cooldown
+  return Date.now() - updatedAt >= cooldownMinutes * 60 * 1000
 }
 
 const retryDisabledReason = (row: CertJob): string => {
   if (isReadOnly.value) return authStore.readOnlyMessage
   if (row.status === 'disabled') return '已禁用的任务无法重签'
   if (canRetry(row)) return ''
-  return row.status === 'queued' || row.status === 'pending'
-    ? '排队或待处理任务需等待 15 分钟后重签'
-    : '执行中的任务需等待 2 分钟后重签'
+  const cooldownMinutes = retryCooldownMinutes(row.status)
+  return `当前状态需等待 ${cooldownMinutes ?? 0} 分钟后重签`
 }
 
 const renewalInfo = (row: CertJob): { renewalDate?: string } => {

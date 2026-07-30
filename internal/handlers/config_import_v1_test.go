@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -144,7 +145,7 @@ func TestImportV1Config_requeues_original_non_terminal_jobs_after_rollback(t *te
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil })
 	t.Cleanup(services.ResetCAQueueManagerForTest)
-	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_requeue_v1','old-rule','http',8080,1);
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_requeue_v1','old-rule','http','old.example.test',8080,1,1,'acme_dns');
 		INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES ('lb_requeue_v1','old.example.test','creating_order',999999)`); err != nil {
 		t.Fatalf("seed original non-terminal job: %v", err)
 	}
@@ -171,6 +172,56 @@ func TestImportV1Config_requeues_original_non_terminal_jobs_after_rollback(t *te
 	}
 	if status != "queued" {
 		t.Fatalf("recovered original job status=%q, want queued", status)
+	}
+}
+
+func TestImportV1Config_reports_partial_failure_when_certificate_job_recovery_fails(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	oldRequeue := requeueNonTerminalCertJobs
+	requeueNonTerminalCertJobs = func() error { return errors.New("requeue failed") }
+	t.Cleanup(func() { requeueNonTerminalCertJobs = oldRequeue })
+	backup := `{"proxy_config":{"config":[{"pk":1,"fields":{"proxy_name":"new-rule","protocol":true,"listen":8443,"server_name":"example.test","status":true,"upstream_list":[1]}}]},"upstream_config":{"config":[{"pk":1,"fields":{"status":true,"address":"127.0.0.1","port":9000,"weight":100}}]}}`
+	router := gin.New()
+	router.POST("/config/import/v1", h.ImportV1Config)
+	request := httptest.NewRequest(http.MethodPost, "/config/import/v1", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "配置已导入但证书任务恢复失败") || !strings.Contains(response.Body.String(), "requeue failed") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestImportV1Config_joins_import_and_certificate_job_recovery_failures(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	oldRequeue := requeueNonTerminalCertJobs
+	requeueNonTerminalCertJobs = func() error { return errors.New("requeue failed") }
+	t.Cleanup(func() { requeueNonTerminalCertJobs = oldRequeue })
+	backup := `{"proxy_config":{"config":[{"pk":1,"fields":{"proxy_name":"bad","protocol":true,"listen":8443,"server_name":"bad.example","ssl":true,"ssl_cert":"invalid-cert","ssl_key":"invalid-key","status":true,"upstream_list":[1]}}]},"upstream_config":{"config":[{"pk":1,"fields":{"status":true,"address":"127.0.0.1","port":9000,"weight":100}}]}}`
+	router := gin.New()
+	router.POST("/config/import/v1", h.ImportV1Config)
+	request := httptest.NewRequest(http.MethodPost, "/config/import/v1", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "invalid certificate") || !strings.Contains(response.Body.String(), "requeue failed") {
+		t.Fatalf("status=%d body=%s, want joined failures", response.Code, response.Body.String())
 	}
 }
 

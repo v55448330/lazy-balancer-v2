@@ -28,12 +28,15 @@ type CertificateService struct {
 	deploymentCallbacks map[int]map[*deploymentTimer]struct{}
 	timersPaused        bool
 	stopping            bool
-	retryDeployment     func(int) error
+	retryDeployment     func(context.Context, int) error
 }
 
 type deploymentTimer struct {
 	timer    *time.Timer
 	done     chan struct{}
+	ctx      context.Context
+	cancel   context.CancelFunc
+	ruleID   string
 	canceled bool
 }
 
@@ -187,7 +190,7 @@ func NewCertificateService() *CertificateService {
 		deploymentTimers:    make(map[int]*deploymentTimer),
 		deploymentCallbacks: make(map[int]map[*deploymentTimer]struct{}),
 	}
-	service.retryDeployment = func(jobID int) error {
+	service.retryDeployment = func(ctx context.Context, jobID int) error {
 		manager := GetCAQueueManager()
 		if manager == nil {
 			return fmt.Errorf("Caddy reloader is not initialized")
@@ -195,7 +198,7 @@ func NewCertificateService() *CertificateService {
 		manager.mu.Lock()
 		reloader := manager.reloader
 		manager.mu.Unlock()
-		return retryCertificateDeployment(jobID, reloader)
+		return retryCertificateDeployment(ctx, jobID, reloader)
 	}
 	service.recoverJobs = service.recoverCertJobs
 	certificateServiceMu.Lock()
@@ -204,7 +207,7 @@ func NewCertificateService() *CertificateService {
 	return service
 }
 
-func (s *CertificateService) scheduleDeploymentRetry(jobID int, delay time.Duration) {
+func (s *CertificateService) scheduleDeploymentRetry(jobID int, ruleID string, delay time.Duration) {
 	for {
 		s.timerMu.Lock()
 		if s.stopping || s.timersPaused {
@@ -213,6 +216,7 @@ func (s *CertificateService) scheduleDeploymentRetry(jobID int, delay time.Durat
 		}
 		if previous := s.deploymentTimers[jobID]; previous != nil {
 			previous.canceled = true
+			previous.cancel()
 			stopped := previous.timer.Stop()
 			delete(s.deploymentTimers, jobID)
 			s.timerMu.Unlock()
@@ -223,7 +227,8 @@ func (s *CertificateService) scheduleDeploymentRetry(jobID int, delay time.Durat
 			}
 			continue
 		}
-		entry := &deploymentTimer{done: make(chan struct{})}
+		entry := &deploymentTimer{done: make(chan struct{}), ruleID: ruleID}
+		entry.ctx, entry.cancel = context.WithCancel(s.ctx)
 		entry.timer = time.AfterFunc(delay, func() {
 			s.timerMu.Lock()
 			if s.deploymentTimers[jobID] == entry {
@@ -249,7 +254,7 @@ func (s *CertificateService) scheduleDeploymentRetry(jobID int, delay time.Durat
 			if stopping {
 				return
 			}
-			if err := s.retryDeployment(jobID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			if err := s.retryDeployment(entry.ctx, jobID); err != nil && !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, context.Canceled) {
 				log.Printf("certificate deployment retry failed for job %d: %v", jobID, err)
 			}
 		})
@@ -265,6 +270,7 @@ func (s *CertificateService) cancelDeploymentRetry(jobID int) {
 	var pendingDone <-chan struct{}
 	if entry != nil {
 		entry.canceled = true
+		entry.cancel()
 		if entry.timer.Stop() {
 			delete(s.deploymentTimers, jobID)
 			close(entry.done)
@@ -275,6 +281,7 @@ func (s *CertificateService) cancelDeploymentRetry(jobID int) {
 	runningDone := make([]<-chan struct{}, 0, len(s.deploymentCallbacks[jobID]))
 	for callback := range s.deploymentCallbacks[jobID] {
 		callback.canceled = true
+		callback.cancel()
 		runningDone = append(runningDone, callback.done)
 	}
 	s.timerMu.Unlock()
@@ -286,12 +293,44 @@ func (s *CertificateService) cancelDeploymentRetry(jobID int) {
 	}
 }
 
+func (s *CertificateService) cancelDeploymentRetriesForRule(ruleID string) {
+	s.timerMu.Lock()
+	waitFor := make(map[*deploymentTimer]struct{})
+	for jobID, entry := range s.deploymentTimers {
+		if entry.ruleID != ruleID {
+			continue
+		}
+		entry.canceled = true
+		entry.cancel()
+		if entry.timer.Stop() {
+			delete(s.deploymentTimers, jobID)
+			close(entry.done)
+		} else {
+			waitFor[entry] = struct{}{}
+		}
+	}
+	for _, callbacks := range s.deploymentCallbacks {
+		for callback := range callbacks {
+			if callback.ruleID == ruleID {
+				callback.canceled = true
+				callback.cancel()
+				waitFor[callback] = struct{}{}
+			}
+		}
+	}
+	s.timerMu.Unlock()
+	for entry := range waitFor {
+		<-entry.done
+	}
+}
+
 func (s *CertificateService) pauseDeploymentRetries() {
 	s.timerMu.Lock()
 	s.timersPaused = true
 	var waitFor []<-chan struct{}
 	for jobID, entry := range s.deploymentTimers {
 		entry.canceled = true
+		entry.cancel()
 		if entry.timer.Stop() {
 			close(entry.done)
 		} else {
@@ -302,6 +341,7 @@ func (s *CertificateService) pauseDeploymentRetries() {
 	for _, callbacks := range s.deploymentCallbacks {
 		for callback := range callbacks {
 			callback.canceled = true
+			callback.cancel()
 			waitFor = append(waitFor, callback.done)
 		}
 	}
@@ -353,13 +393,13 @@ func (s *CertificateService) Start() {
 // their CA cooling period has elapsed. This covers first-time issuance jobs
 // (expires_at IS NULL) that renewExpiringCertificates cannot see.
 func (s *CertificateService) requeueWaitingCAJobs() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	qm := GetCAQueueManager()
-	if qm == nil {
+	if qm == nil || qm.IsPaused() {
 		return
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	rows, err := db.DB.Query(`
 		SELECT id, rule_id, domain, ca_provider_id
@@ -413,9 +453,12 @@ func RequeueNonTerminalCertJobs() error {
 
 func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, issuedCertificate, time.Duration)) error {
 	rows, err := db.DB.QueryContext(ctx, `
-		SELECT id, rule_id, domain, status, ca_provider_id, COALESCE(deployment_attempts,0), deployment_available_after FROM cert_jobs
-		WHERE status NOT IN ('issued','failed','disabled')
-		  AND (status != 'waiting_ca' OR ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))
+		SELECT j.id, j.rule_id, j.domain, j.status, j.ca_provider_id, COALESCE(j.deployment_attempts,0), j.deployment_available_after,
+		       CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' AND r.domain=j.domain THEN 1 ELSE 0 END
+		FROM cert_jobs j
+		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
+		WHERE j.status NOT IN ('issued','failed','disabled')
+		  AND (j.status != 'waiting_ca' OR j.ca_available_after IS NULL OR datetime(j.ca_available_after) <= datetime('now'))
 	`)
 	if err != nil {
 		return fmt.Errorf("query non-terminal certificate jobs: %w", err)
@@ -424,11 +467,12 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 		id, providerID, deploymentAttempts int
 		ruleID, domain, status             string
 		deploymentAvailableAfter           sql.NullTime
+		applicable                         bool
 	}
 	var jobs []recoveryJob
 	for rows.Next() {
 		var job recoveryJob
-		if err := rows.Scan(&job.id, &job.ruleID, &job.domain, &job.status, &job.providerID, &job.deploymentAttempts, &job.deploymentAvailableAfter); err != nil {
+		if err := rows.Scan(&job.id, &job.ruleID, &job.domain, &job.status, &job.providerID, &job.deploymentAttempts, &job.deploymentAvailableAfter, &job.applicable); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan non-terminal certificate job: %w", err)
 		}
@@ -446,12 +490,10 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		var ruleEnabled int
-		if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(enabled, -1) FROM lb_rules WHERE caddy_id=?", job.ruleID).Scan(&ruleEnabled); err != nil {
-			failJob(job.id, "关联规则不存在")
-			continue
-		}
-		if ruleEnabled != 1 {
+		if !job.applicable {
+			if _, err := db.DB.ExecContext(ctx, "UPDATE cert_jobs SET status='disabled', message='关联规则已不再使用当前 ACME 证书任务', updated_at=datetime('now') WHERE id=? AND status NOT IN ('issued','failed','disabled')", job.id); err != nil {
+				return fmt.Errorf("disable ineligible recovered certificate job %d: %w", job.id, err)
+			}
 			continue
 		}
 		if job.status == "downloaded" {
@@ -562,6 +604,11 @@ func HasCertJob(ruleID, domains string) bool {
 }
 
 func (s *CertificateService) renewExpiringCertificates() {
+	qm := GetCAQueueManager()
+	if qm != nil && qm.IsPaused() {
+		return
+	}
+
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
 		return

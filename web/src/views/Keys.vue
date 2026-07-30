@@ -119,6 +119,7 @@ interface APIKey {
   readonly created_by: number
   readonly username: string
   readonly is_enabled: boolean
+  // Keep sql.NullTime compatibility until the API key endpoint switches DTOs.
   readonly last_used?: string | NullableTime | null
   readonly expires_at?: string | NullableTime | null
   readonly created_at: string

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -323,36 +324,37 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	// 与 UpdateRule 同一锁序：先 caddyOpMu 后 DB 事务，避免与规则写路径循环等待
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
-	if queueManager := services.GetCAQueueManager(); queueManager != nil {
-		queueManager.PauseAndDrain()
-		defer func() {
-			queueManager.Resume()
-			if err := services.RequeueNonTerminalCertJobs(); err != nil {
-				log.Printf("ImportV1Config certificate job recovery failed: %v", err)
-			}
-		}()
+	recovery := importQueueRecovery{manager: services.GetCAQueueManager()}
+	if recovery.manager != nil {
+		recovery.manager.PauseAndDrain()
 	}
 
 	tx, err := db.DB.BeginTx(ctx, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开始导入事务失败"})
+		err = finishImportFailure(nil, &recovery, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开始导入事务失败: " + err.Error()})
 		return
 	}
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback()
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				log.Printf("ImportV1Config transaction rollback failed: %v", rollbackErr)
+			}
 		}
 	}()
 	if _, err := tx.ExecContext(ctx, "DELETE FROM upstreams"); err != nil {
+		err = finishImportFailure(tx, &recovery, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理旧上游失败，已回滚: " + err.Error()})
 		return
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM lb_rules"); err != nil {
+		err = finishImportFailure(tx, &recovery, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理旧规则失败，已回滚: " + err.Error()})
 		return
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id NOT IN (SELECT caddy_id FROM lb_rules)"); err != nil {
+		err = finishImportFailure(tx, &recovery, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理孤儿证书任务失败，已回滚: " + err.Error()})
 		return
 	}
@@ -365,7 +367,8 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	for _, r := range rules {
 		caddyID, err := services.GenerateCaddyID()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成规则编号失败"})
+			err = finishImportFailure(tx, &recovery, err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成规则编号失败: " + err.Error()})
 			return
 		}
 		affectedRuleIDs = append(affectedRuleIDs, caddyID)
@@ -382,6 +385,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			r.HostHeader, r.EnableTLS, tlsSource(r), r.TLSCert, r.TLSKey, r.Redirect,
 			r.Compress, r.Enabled, userID, userID, caddyID)
 		if err != nil {
+			err = finishImportFailure(tx, &recovery, err)
 			recordAudit(c, "导入失败", "配置备份", fmt.Sprintf("规则 %s: %v", r.Name, err))
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入规则失败，已回滚: " + err.Error()})
 			return
@@ -389,6 +393,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		for _, u := range r.Upstreams {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, host_header, dns_server, max_connections)
 				VALUES (?, ?, ?, ?, '', 0, ?, ?, '', '', 0)`, caddyID, u.Host, u.Port, u.Weight, u.Enabled, u.Protocol); err != nil {
+				err = finishImportFailure(tx, &recovery, err)
 				recordAudit(c, "导入失败", "配置备份", fmt.Sprintf("规则 %s 上游: %v", r.Name, err))
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入上游失败，已回滚: " + err.Error()})
 				return
@@ -405,6 +410,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	}
 	runtimeSnapshot, err := h.snapshotImportRuntime(affectedRuleIDs)
 	if err != nil {
+		err = finishImportFailure(tx, &recovery, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败: " + err.Error()})
 		return
 	}
@@ -416,27 +422,36 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	}
 	if err := materializeImportCertificates(pendingCerts); err != nil {
 		err = restoreRuntime(err)
+		err = finishImportFailure(tx, &recovery, err)
 		recordAudit(c, "导入失败", "配置备份", err.Error())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "准备证书文件失败: " + err.Error()})
 		return
 	}
 	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
 		err = restoreRuntime(err)
+		err = finishImportFailure(tx, &recovery, err)
 		recordAudit(c, "导入失败", "配置备份", "Caddy 配置验证未通过，数据库未变更: "+err.Error())
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份生成的配置未通过 Caddy 验证，未执行导入: " + err.Error()})
 		return
 	}
 	if err := services.BumpClusterVersion(ctx, tx); err != nil {
 		err = restoreRuntime(err)
+		err = finishImportFailure(tx, &recovery, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新配置版本失败: " + err.Error()})
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		err = restoreRuntime(err)
+		err = finishImportFailure(tx, &recovery, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交导入失败: " + err.Error()})
 		return
 	}
 	committed = true
+	if err := recovery.finish(); err != nil {
+		recordAudit(c, "导入部分失败", "配置备份", err.Error())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置已导入但证书任务恢复失败: " + err.Error(), Data: gin.H{"imported": imported}})
+		return
+	}
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail("来源：v1 备份（覆盖导入规则）", fmt.Sprintf("规则 %d 条", imported), fmt.Sprintf("TLS 规则 %d 条", tlsCount), fmt.Sprintf("上游 %d 个", upstreamCount), services.AuditResultPart("success")))
 	recordAudit(c, "重载", "Caddy配置", "导入配置后自动重载")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已导入 %d 条规则", imported), Data: gin.H{"imported": imported}})

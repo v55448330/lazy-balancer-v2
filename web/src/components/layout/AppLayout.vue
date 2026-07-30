@@ -156,7 +156,7 @@ const saving = ref(false)
 const currentPage = computed(() => authStore.currentPage)
 const isSlave = computed(() => authStore.nodeMode === 'slave')
 const hasCustomDisplayName = computed(() => {
-  const displayName = authStore.normalizeDisplayName(authStore.user?.display_name, '')
+  const displayName = authStore.normalizeDisplayName(authStore.user?.display_name ?? null, '')
   return displayName !== '' && displayName !== authStore.user?.username
 })
 
@@ -181,7 +181,7 @@ const profileForm = ref({
 const syncProfileForm = () => {
   profileForm.value = {
     username: authStore.user?.username || '',
-    display_name: authStore.normalizeDisplayName(authStore.user?.display_name, ''),
+    display_name: authStore.normalizeDisplayName(authStore.user?.display_name ?? null, ''),
     password: '',
   }
 }

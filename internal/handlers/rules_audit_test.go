@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -411,6 +412,55 @@ func TestUpdateRule_restores_database_and_Caddy_when_ACME_enqueue_fails(t *testi
 	}
 	if domain != "acme-old.example.test" || jobs != 0 || loadCalls.Load() < 2 || !strings.Contains(currentConfig(), `"old":true`) {
 		t.Fatalf("domain=%q jobs=%d loads=%d config=%s, want full compensation", domain, jobs, loadCalls.Load(), currentConfig())
+	}
+}
+
+func TestUpdateRule_cancels_job_before_restore_when_create_returns_jobID_and_error(t *testing.T) {
+	// Given
+	harness := newUpdateAuditRuleHandlers(t, "lb_acme_cancel", 0, false)
+	seedAuditRule(t, "lb_acme_cancel", "before", "cancel-old.example.test", 8080, true, "acme_dns", true)
+	seedAuditUpstream(t, "lb_acme_cancel")
+	var providerID int
+	if err := db.DB.QueryRow("SELECT id FROM ca_providers WHERE enabled=1 ORDER BY id LIMIT 1").Scan(&providerID); err != nil {
+		t.Fatalf("read CA provider: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=1,ca_provider_id=? WHERE caddy_id='lb_acme_cancel'", providerID); err != nil {
+		t.Fatalf("set rule CA provider: %v", err)
+	}
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	oldCreate := createOrRequeueCertJob
+	oldCancel := cancelCertJob
+	createOrRequeueCertJob = func(string, string, int, *services.CAQueueManager) (int, error) {
+		return 77, errors.New("enqueue failed")
+	}
+	cancelled := make(chan int, 1)
+	cancelCertJob = func(_ *services.CAQueueManager, jobID int) { cancelled <- jobID }
+	t.Cleanup(func() {
+		createOrRequeueCertJob = oldCreate
+		cancelCertJob = oldCancel
+	})
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", harness.handler.UpdateRule)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_acme_cancel", strings.NewReader(`{"domain":"cancel-new.example.test"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	select {
+	case jobID := <-cancelled:
+		if jobID != 77 {
+			t.Fatalf("cancelled job=%d, want 77", jobID)
+		}
+	default:
+		t.Fatal("job was not cancelled before restore returned")
 	}
 }
 

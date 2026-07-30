@@ -95,7 +95,7 @@ func NewCertIssuer(reloader func() error) *CertIssuer {
 	return &CertIssuer{caddyReloader: reloader, deploymentRetry: scheduleCertificateDeploymentRetry}
 }
 
-func scheduleCertificateDeploymentRetry(jobID int, _ issuedCertificate, delay time.Duration) {
+func scheduleCertificateDeploymentRetry(jobID int, material issuedCertificate, delay time.Duration) {
 	certificateServiceMu.Lock()
 	service := certificateService
 	certificateServiceMu.Unlock()
@@ -103,7 +103,16 @@ func scheduleCertificateDeploymentRetry(jobID int, _ issuedCertificate, delay ti
 		log.Printf("certificate deployment retry skipped for job %d: certificate service is not initialized", jobID)
 		return
 	}
-	service.scheduleDeploymentRetry(jobID, delay)
+	service.scheduleDeploymentRetry(jobID, material.ruleID, delay)
+}
+
+func cancelCertificateDeploymentRetriesForRule(ruleID string) {
+	certificateServiceMu.Lock()
+	service := certificateService
+	certificateServiceMu.Unlock()
+	if service != nil {
+		service.cancelDeploymentRetriesForRule(ruleID)
+	}
 }
 
 func cancelCertificateDeploymentRetry(jobID int) {
@@ -133,9 +142,9 @@ func resumeCertificateDeploymentRetries() {
 	}
 }
 
-func retryCertificateDeployment(jobID int, reloader func() error) error {
+func retryCertificateDeployment(ctx context.Context, jobID int, reloader func() error) error {
 	var material issuedCertificate
-	if err := db.DB.QueryRow(`SELECT rule_id, COALESCE(cert_pem,''), COALESCE(key_pem,''), expires_at,
+	if err := db.DB.QueryRowContext(ctx, `SELECT rule_id, COALESCE(cert_pem,''), COALESCE(key_pem,''), expires_at,
 		COALESCE(ca_provider_id,0), COALESCE(deployment_attempts,0)
 		FROM cert_jobs WHERE id=? AND status='downloaded'`, jobID).Scan(
 		&material.ruleID, &material.certPEM, &material.keyPEM, &material.notAfter,
@@ -143,7 +152,7 @@ func retryCertificateDeployment(jobID int, reloader func() error) error {
 	); err != nil {
 		return fmt.Errorf("load downloaded certificate for deployment: %w", err)
 	}
-	return NewCertIssuer(reloader).deployIssuedCertificate(context.Background(), jobID, material)
+	return NewCertIssuer(reloader).deployIssuedCertificate(ctx, jobID, material)
 }
 
 func (s *CertIssuer) deploymentFailed(jobID int, material issuedCertificate, message string, err error) error {
@@ -422,16 +431,25 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 	if updated != 1 {
 		return fmt.Errorf("certificate job %d is no longer deployable", jobID)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	snapshot, err := SnapshotCertFiles([]string{material.ruleID})
 	if err != nil {
 		return s.deploymentFailed(jobID, material, "读取现有证书文件失败: "+err.Error(), fmt.Errorf("snapshot existing certificate files: %w", err))
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := WriteCertFiles(material.ruleID, material.certPEM, material.keyPEM); err != nil {
 		RecordAuditLog("system", "写入失败", "证书文件", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(material.ruleID), AuditResultPart("io_error")), "")
 		return s.deploymentFailed(jobID, material, "证书文件写入失败: "+err.Error(), fmt.Errorf("write certificate files: %w", err))
 	}
 	RecordAuditLog("system", "写入", "证书文件", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(material.ruleID), AuditResultPart("success")), "")
+	if err := ctx.Err(); err != nil {
+		return errors.Join(err, restoreCertificateDeployment(snapshot, s.caddyReloader))
+	}
 
 	if s.caddyReloader != nil {
 		if err := s.caddyReloader(); err != nil {

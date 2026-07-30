@@ -40,9 +40,7 @@ export const useAuthStore = defineStore('auth', () => {
   })
 
   const normalizeDisplayName = (value: CurrentUser['display_name'], username?: string) => {
-    if (typeof value === 'string') return value || username || ''
-    if (value && typeof value === 'object' && 'String' in value) return value.String || username || ''
-    return username || ''
+    return value || username || ''
   }
 
   const displayName = computed(() => {

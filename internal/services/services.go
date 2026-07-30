@@ -88,7 +88,9 @@ func (m *MetricsService) collect() {
 		return
 	}
 	m.storeMetrics(metrics)
-	m.storePerHostMetrics(string(body))
+	if err := m.storePerHostMetrics(string(body)); err != nil {
+		log.Printf("Failed to store per-host metrics: %v", err)
+	}
 	m.updateOverview(metrics)
 }
 
@@ -302,26 +304,30 @@ func parsePerHostMetrics(text string) map[string]*perHostMetrics {
 // storePerHostMetrics maps host labels to HTTP rules by domain and writes a
 // cumulative history row per rule; TCP rules produce no rows because caddy-l4
 // exports no per-rule traffic counters.
-func (m *MetricsService) storePerHostMetrics(text string) {
+func (m *MetricsService) storePerHostMetrics(text string) error {
 	hosts := parsePerHostMetrics(text)
 	if len(hosts) == 0 {
-		return
+		return nil
 	}
 	rows, err := db.DB.Query(`SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND enabled=1`)
 	if err != nil {
-		return
+		return fmt.Errorf("query enabled HTTP rules for per-host metrics: %w", err)
 	}
 	defer rows.Close()
 	domainToRule := map[string]string{}
 	for rows.Next() {
 		var id, domains string
-		if rows.Scan(&id, &domains) == nil {
-			for _, d := range strings.Split(domains, ",") {
-				if d = strings.TrimSpace(d); d != "" {
-					domainToRule[d] = id
-				}
+		if err := rows.Scan(&id, &domains); err != nil {
+			return fmt.Errorf("scan enabled HTTP rule for per-host metrics: %w", err)
+		}
+		for _, d := range strings.Split(domains, ",") {
+			if d = strings.TrimSpace(d); d != "" {
+				domainToRule[d] = id
 			}
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate enabled HTTP rules for per-host metrics: %w", err)
 	}
 	for host, h := range hosts {
 		ruleID, ok := domainToRule[host]
@@ -336,9 +342,10 @@ func (m *MetricsService) storePerHostMetrics(text string) {
 			 latency_p50, latency_p95, latency_p99)
 			VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
 		`, ruleID, h.requests, classified.status2xx, classified.status3xx, classified.status4xx, classified.status5xx, h.bytesIn, h.bytesOut); err != nil {
-			log.Printf("Failed to store per-rule metrics for %s: %v", ruleID, err)
+			return fmt.Errorf("store per-rule metrics for %s: %w", ruleID, err)
 		}
 	}
+	return nil
 }
 
 func (m *MetricsService) cleanupHistory() {

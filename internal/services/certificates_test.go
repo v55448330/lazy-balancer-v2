@@ -84,7 +84,7 @@ func TestRequeueNonTerminalCertJobs_schedules_downloaded_deployment(t *testing.T
 	jobID, _ := seedCertificateJob(t, "downloaded")
 	service := NewCertificateService()
 	retried := make(chan int, 1)
-	service.retryDeployment = func(gotJobID int) error {
+	service.retryDeployment = func(_ context.Context, gotJobID int) error {
 		retried <- gotJobID
 		return nil
 	}
@@ -106,14 +106,14 @@ func TestCertificateService_deployment_retry_deduplicates_job_id(t *testing.T) {
 	// Given
 	service := NewCertificateService()
 	calls := make(chan int, 2)
-	service.retryDeployment = func(jobID int) error {
+	service.retryDeployment = func(_ context.Context, jobID int) error {
 		calls <- jobID
 		return nil
 	}
-	service.scheduleDeploymentRetry(42, time.Hour)
+	service.scheduleDeploymentRetry(42, "lb_retry", time.Hour)
 
 	// When
-	service.scheduleDeploymentRetry(42, 0)
+	service.scheduleDeploymentRetry(42, "lb_retry", 0)
 
 	// Then
 	if jobID := <-calls; jobID != 42 {
@@ -132,12 +132,12 @@ func TestCertificateService_cancelDeploymentRetry_waits_for_running_callback(t *
 	service := NewCertificateService()
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	service.retryDeployment = func(int) error {
+	service.retryDeployment = func(_ context.Context, _ int) error {
 		close(entered)
 		<-release
 		return errors.New("ignored test failure")
 	}
-	service.scheduleDeploymentRetry(42, 0)
+	service.scheduleDeploymentRetry(42, "lb_retry", 0)
 	<-entered
 	cancelStarted := make(chan struct{})
 	cancelDone := make(chan struct{})
@@ -166,31 +166,116 @@ func TestCertificateService_Stop_waits_for_deployment_retry_callback(t *testing.
 	service := NewCertificateService()
 	service.recoverJobs = func(context.Context) {}
 	callbackEntered := make(chan struct{})
+	cancellationObserved := make(chan struct{})
 	releaseCallback := make(chan struct{})
-	service.retryDeployment = func(int) error {
+	service.retryDeployment = func(ctx context.Context, _ int) error {
 		close(callbackEntered)
+		<-ctx.Done()
+		close(cancellationObserved)
 		<-releaseCallback
-		return nil
+		return ctx.Err()
 	}
 	go service.Start()
-	service.scheduleDeploymentRetry(42, 0)
+	service.scheduleDeploymentRetry(42, "lb_stop", 0)
 	<-callbackEntered
 	stopDone := make(chan struct{})
 	go func() {
 		service.Stop()
 		close(stopDone)
 	}()
+	<-cancellationObserved
 
 	// When
 	select {
 	case <-stopDone:
 		t.Fatal("stop returned while deployment retry callback was running")
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 	close(releaseCallback)
 
 	// Then
 	<-stopDone
+}
+
+func TestCertificateService_periodic_scans_do_not_mutate_jobs_while_queue_paused(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	ResetCAQueueManagerForTest()
+	InitCAQueueManager(func() error { return nil })
+	manager := GetCAQueueManager()
+	manager.PauseAndDrain()
+	t.Cleanup(ResetCAQueueManagerForTest)
+	for _, ruleID := range []string{"lb_paused_renewal", "lb_paused_waiting"} {
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?,?,?, 'http',8080,1,1,'acme_dns')`, ruleID, ruleID, ruleID+".example.com"); err != nil {
+			t.Fatalf("seed paused rule %s: %v", ruleID, err)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,ca_provider_id) VALUES ('lb_paused_renewal','lb_paused_renewal.example.com','issued',datetime('now','+1 day'),1)`); err != nil {
+		t.Fatalf("seed paused renewal job: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id) VALUES ('lb_paused_waiting','lb_paused_waiting.example.com','waiting_ca',datetime('now','-1 minute'),1)`); err != nil {
+		t.Fatalf("seed paused waiting job: %v", err)
+	}
+	service := NewCertificateService()
+
+	// When
+	service.renewExpiringCertificates()
+	service.requeueWaitingCAJobs()
+
+	// Then
+	for ruleID, wantStatus := range map[string]string{"lb_paused_renewal": "issued", "lb_paused_waiting": "waiting_ca"} {
+		var status string
+		if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id=?", ruleID).Scan(&status); err != nil {
+			t.Fatalf("read paused job %s: %v", ruleID, err)
+		}
+		if status != wantStatus {
+			t.Fatalf("paused job %s status=%q, want %q", ruleID, status, wantStatus)
+		}
+	}
+}
+
+func TestRequeueNonTerminalCertJobs_disables_jobs_outside_acme_rule_gate(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	for _, rule := range []struct {
+		id, domain, source string
+		enabled, tls       int
+	}{
+		{id: "lb_recover_disabled", domain: "disabled.example.com", source: "acme_dns", enabled: 0, tls: 1},
+		{id: "lb_recover_no_tls", domain: "plain.example.com", source: "acme_dns", enabled: 1, tls: 0},
+		{id: "lb_recover_manual", domain: "manual.example.com", source: "manual", enabled: 1, tls: 1},
+		{id: "lb_recover_changed", domain: "new.example.com", source: "acme_dns", enabled: 1, tls: 1},
+	} {
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?,?,?,?,8080,?,?,?)`, rule.id, rule.id, rule.domain, "http", rule.enabled, rule.tls, rule.source); err != nil {
+			t.Fatalf("seed recovery rule %s: %v", rule.id, err)
+		}
+	}
+	for _, job := range []struct{ ruleID, domain string }{
+		{ruleID: "lb_recover_disabled", domain: "disabled.example.com"},
+		{ruleID: "lb_recover_no_tls", domain: "plain.example.com"},
+		{ruleID: "lb_recover_manual", domain: "manual.example.com"},
+		{ruleID: "lb_recover_changed", domain: "old.example.com"},
+		{ruleID: "lb_recover_missing", domain: "missing.example.com"},
+	} {
+		if _, err := database.Exec("INSERT INTO cert_jobs (rule_id,domain,status) VALUES (?,?,'queued')", job.ruleID, job.domain); err != nil {
+			t.Fatalf("seed recovery job %s: %v", job.ruleID, err)
+		}
+	}
+
+	// When
+	err := requeueNonTerminalCertJobs(context.Background(), func(int, issuedCertificate, time.Duration) {})
+
+	// Then
+	if err != nil {
+		t.Fatalf("recover non-terminal jobs: %v", err)
+	}
+	var remaining int
+	if err := database.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE status!='disabled'").Scan(&remaining); err != nil {
+		t.Fatalf("count non-disabled recovery jobs: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("non-disabled ineligible recovery jobs=%d, want 0", remaining)
+	}
 }
 
 func TestCertificateService_CheckExpiration_returns_only_current_enabled_acme_domain(t *testing.T) {

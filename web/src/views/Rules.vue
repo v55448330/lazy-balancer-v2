@@ -1203,15 +1203,7 @@ const getUpdaterName = (userId?: number) => {
   if (!userId || userId === 0) return '-'
   const user = users.value.find(u => u.id === userId)
   if (user) {
-    // Handle display_name which can be { String: "", Valid: false } or direct string
-    let displayName = ''
-    if (user.display_name) {
-      if (typeof user.display_name === 'string') {
-        displayName = user.display_name
-      } else if (user.display_name.String) {
-        displayName = user.display_name.String
-      }
-    }
+    const displayName = user.display_name || ''
     return displayName || user.username || '-'
   }
   return '-'
@@ -1264,42 +1256,38 @@ const fetchCertJobs = async () => {
     return
   }
   certJobsInFlight = true
+  certJobsPending = false
   try {
-    let fetchError: unknown = null
-    for (let attempt = 0; attempt < 2; attempt++) {
-      certJobsPending = false
-      try {
-        const res = await request.get<APIResponse<CertJob[]>>('/certificates/jobs')
-        const jobs: CertJob[] = res.data || []
-        const map: Record<string, CertJob> = {}
-        jobs.forEach(job => {
-          if (job.rule_id) {
-            const existing = map[job.rule_id]
-            if (!existing || certJobPriority(job.status) > certJobPriority(existing.status)) {
-              map[job.rule_id] = job
-            }
-          }
-        })
-        const newlyIssuedRuleIds = Object.entries(map)
-          .filter(([ruleId, job]) => {
-            const previousStatus = certJobMap.value[ruleId]?.status
-            return previousStatus !== undefined && previousStatus !== 'issued' && job.status === 'issued'
-          })
-          .map(([ruleId]) => ruleId)
-        certJobMap.value = map
-        if (newlyIssuedRuleIds.length > 0) await fetchCertInfo(newlyIssuedRuleIds)
-        fetchError = null
-      } catch (error: unknown) {
-        fetchError = error
+    const res = await request.get<APIResponse<CertJob[]>>('/certificates/jobs')
+    const jobs: CertJob[] = res.data || []
+    const map: Record<string, CertJob> = {}
+    jobs.forEach(job => {
+      if (job.rule_id) {
+        const existing = map[job.rule_id]
+        if (!existing || certJobPriority(job.status) > certJobPriority(existing.status)) {
+          map[job.rule_id] = job
+        }
       }
-      if (!certJobsPending) break
-    }
-    if (fetchError) throw fetchError
+    })
+    const newlyIssuedRuleIds = Object.entries(map)
+      .filter(([ruleId, job]) => {
+        const previousStatus = certJobMap.value[ruleId]?.status
+        return previousStatus !== undefined && previousStatus !== 'issued' && job.status === 'issued'
+      })
+      .map(([ruleId]) => ruleId)
+    certJobMap.value = map
+    if (newlyIssuedRuleIds.length > 0) await fetchCertInfo(newlyIssuedRuleIds)
   } catch {
     return
   } finally {
+    const shouldDrain = certJobsPending
     certJobsPending = false
     certJobsInFlight = false
+    if (shouldDrain) {
+      queueMicrotask(() => {
+        void fetchCertJobs()
+      })
+    }
   }
 }
 
@@ -1481,65 +1469,63 @@ const fetchHealthStatus = async () => {
     return
   }
   healthInFlight = true
+  healthPending = false
   try {
-    let fetchError: unknown = null
-    for (let attempt = 0; attempt < 2; attempt++) {
-      healthPending = false
-      try {
-        const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health')
-        const healthData = res.data || {}
-        const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
-        for (const rule of rules.value) {
-          if (rule.upstreams && rule.upstreams.length > 0) {
-            let healthy = 0
-            let unhealthy = 0
-            let degraded = 0
-            let unknown = 0
-            const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> = {}
-            for (const upstream of rule.upstreams) {
-              const upstreamKey = `${upstream.host}:${upstream.port}`
-              let isHealthy = false
-              let isUnknown = true
-              let isDegraded = false
-              let numRequests = 0
-              let fails = 0
-              for (const serverHealth of Object.values(healthData)) {
-                if (serverHealth && typeof serverHealth === 'object') {
-                  if (upstreamKey in serverHealth) {
-                    const detail = serverHealth[upstreamKey]
-                    isUnknown = detail.unknown === true
-                    if (!isUnknown) {
-                      isHealthy = detail.healthy !== false
-                      isDegraded = detail.degraded === true
-                    }
-                    numRequests = detail.num_requests || 0
-                    fails = detail.fails || 0
-                    break
-                  }
+    const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health')
+    const healthData = res.data || {}
+    const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
+    for (const rule of rules.value) {
+      if (rule.upstreams && rule.upstreams.length > 0) {
+        let healthy = 0
+        let unhealthy = 0
+        let degraded = 0
+        let unknown = 0
+        const upstreamStatus: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> = {}
+        for (const upstream of rule.upstreams) {
+          const upstreamKey = `${upstream.host}:${upstream.port}`
+          let isHealthy = false
+          let isUnknown = true
+          let isDegraded = false
+          let numRequests = 0
+          let fails = 0
+          for (const serverHealth of Object.values(healthData)) {
+            if (serverHealth && typeof serverHealth === 'object') {
+              if (upstreamKey in serverHealth) {
+                const detail = serverHealth[upstreamKey]
+                isUnknown = detail.unknown === true
+                if (!isUnknown) {
+                  isHealthy = detail.healthy !== false
+                  isDegraded = detail.degraded === true
                 }
+                numRequests = detail.num_requests || 0
+                fails = detail.fails || 0
+                break
               }
-              upstreamStatus[upstreamKey] = { healthy: isHealthy, unknown: isUnknown, degraded: isDegraded, num_requests: numRequests, fails }
-              if (isUnknown) unknown++
-              else if (!isHealthy) unhealthy++
-              else if (isDegraded) degraded++
-              else healthy++
-            }
-            if (rule.caddy_id) {
-              mapped[rule.caddy_id] = { healthy, unhealthy, degraded, unknown, total: rule.upstreams.length, upstreams: upstreamStatus }
             }
           }
+          upstreamStatus[upstreamKey] = { healthy: isHealthy, unknown: isUnknown, degraded: isDegraded, num_requests: numRequests, fails }
+          if (isUnknown) unknown++
+          else if (!isHealthy) unhealthy++
+          else if (isDegraded) degraded++
+          else healthy++
         }
-        healthStatus.value = mapped
-        fetchError = null
-      } catch (error: unknown) {
-        fetchError = error
+        if (rule.caddy_id) {
+          mapped[rule.caddy_id] = { healthy, unhealthy, degraded, unknown, total: rule.upstreams.length, upstreams: upstreamStatus }
+        }
       }
-      if (!healthPending) break
     }
-    if (fetchError) console.error('Failed to fetch health status:', fetchError)
+    healthStatus.value = mapped
+  } catch (error: unknown) {
+    console.error('Failed to fetch health status:', error)
   } finally {
+    const shouldDrain = healthPending
     healthPending = false
     healthInFlight = false
+    if (shouldDrain) {
+      queueMicrotask(() => {
+        void fetchHealthStatus()
+      })
+    }
   }
 }
 
@@ -1731,8 +1717,9 @@ const hasNextStep = computed(() => visualStepIndex.value < visibleWizardSteps.va
 
 const portWarning = computed(() => {
   // Get existing ports (excluding current editing rule)
-  const existingRules = editingRule.value 
-    ? rules.value.filter(r => r.caddy_id !== editingRule.value!.caddy_id)
+  const currentRule = editingRule.value
+  const existingRules = currentRule
+    ? rules.value.filter(r => r.caddy_id !== currentRule.caddy_id)
     : rules.value
   const httpPorts = existingRules.filter(r => r.protocol === 'http').map(r => r.listen_port)
   const tcpPorts = existingRules.filter(r => r.protocol === 'tcp').map(r => r.listen_port)
@@ -2341,7 +2328,14 @@ const deleteRule = async (rule: Rule) => {
     await request.delete<APIResponse>(`/rules/${rule.caddy_id}`)
     ElMessage.success('删除成功')
     fetchRules()
-  } catch (e) {}
+  } catch (error: unknown) {
+    if (error === 'cancel' || error === 'close') return
+    if (error instanceof Error) {
+      console.error('delete rule failed', error)
+      return
+    }
+    throw error
+  }
 }
 
 const duplicateRule = async (rule: Rule) => {
@@ -2349,7 +2343,14 @@ const duplicateRule = async (rule: Rule) => {
   try {
     await ElMessageBox.confirm(`确定要复制规则 "${rule.name}" 吗？`, '复制确认', { type: 'info' })
     openCopyWizard(rule)
-  } catch (e) {}
+  } catch (error: unknown) {
+    if (error === 'cancel' || error === 'close') return
+    if (error instanceof Error) {
+      console.error('duplicate rule failed', error)
+      return
+    }
+    throw error
+  }
 }
 
 const openCopyWizard = (rule: Rule) => {

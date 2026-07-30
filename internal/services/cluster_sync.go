@@ -30,17 +30,19 @@ type SyncResult struct {
 }
 
 type SyncService struct {
-	db          *sql.DB
-	cfg         *config.Config
-	caddy       *CaddyService
-	cluster     *ClusterService
-	client      *http.Client
-	lifecycleMu sync.Mutex
-	mu          sync.Mutex
-	cancel      context.CancelFunc
-	done        chan struct{}
-	generation  uint64
-	runFn       func(context.Context)
+	db           *sql.DB
+	cfg          *config.Config
+	caddy        *CaddyService
+	cluster      *ClusterService
+	client       *http.Client
+	lifecycleMu  sync.Mutex
+	mu           sync.Mutex
+	cancel       context.CancelFunc
+	done         chan struct{}
+	generation   uint64
+	runFn        func(context.Context)
+	loadRunState func(context.Context) (bool, string, int, error)
+	waitRunDelay func(context.Context, time.Duration) bool
 }
 
 func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *SyncService {
@@ -337,13 +339,56 @@ func verifySnapshotConsistency(snapshot models.ClusterSnapshot) error {
 }
 
 func (s *SyncService) run(ctx context.Context) {
+	loadState := s.loadRunState
+	if loadState == nil {
+		loadState = func(ctx context.Context) (bool, string, int, error) {
+			var isMaster bool
+			var token string
+			var interval int
+			err := s.db.QueryRowContext(ctx, "SELECT is_master, COALESCE(cluster_token,''), COALESCE(sync_interval,60) FROM global_config WHERE id=1").Scan(&isMaster, &token, &interval)
+			return isMaster, token, interval, err
+		}
+	}
+	waitDelay := s.waitRunDelay
+	if waitDelay == nil {
+		waitDelay = func(ctx context.Context, delay time.Duration) bool {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return false
+			case <-timer.C:
+				return true
+			}
+		}
+	}
+	retryDelay := time.Second
 	for {
-		var isMaster bool
-		var token string
-		var interval int
-		if err := s.db.QueryRowContext(ctx, "SELECT is_master, COALESCE(cluster_token,''), COALESCE(sync_interval,60) FROM global_config WHERE id=1").Scan(&isMaster, &token, &interval); err != nil || isMaster {
+		isMaster, token, interval, err := loadState(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			message := "读取同步状态失败: " + err.Error()
+			log.Printf("cluster sync state read failed; retrying: %v", err)
+			if _, updateErr := s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", message); updateErr != nil {
+				log.Printf("cluster sync state error persistence failed: %v", updateErr)
+			}
+			if !waitDelay(ctx, retryDelay) {
+				return
+			}
+			if retryDelay < 30*time.Second {
+				retryDelay *= 2
+				if retryDelay > 30*time.Second {
+					retryDelay = 30 * time.Second
+				}
+			}
+			continue
+		}
+		if isMaster {
 			return
 		}
+		retryDelay = time.Second
 		if token == "" {
 			s.pollRegistration(ctx)
 		} else {
@@ -358,12 +403,8 @@ func (s *SyncService) run(ctx context.Context) {
 		if token == "" {
 			delay = 10 * time.Second
 		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !waitDelay(ctx, delay) {
 			return
-		case <-timer.C:
 		}
 	}
 }

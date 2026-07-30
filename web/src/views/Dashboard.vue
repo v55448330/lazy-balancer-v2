@@ -388,6 +388,7 @@ import type { APIResponse, SystemInfo, SystemMetrics, CaddyMetrics, Rule, RuleMe
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent])
 
 const authStore = useAuthStore()
+const abortController = new AbortController()
 
 const formatUptime = (seconds?: number): string => {
   if (!seconds || seconds < 0) return '-'
@@ -469,13 +470,16 @@ const openRuleHistory = (rule: Rule) => {
 let ruleHistorySeq = 0
 
 const fetchRuleHistory = async () => {
-  if (!ruleHistoryRule.value) return
+  if (disposed || !ruleHistoryRule.value) return
   const seq = ++ruleHistorySeq
   ruleHistoryLoading.value = true
   ruleHistoryUnsupported.value = false
   try {
-    const res = await request.get<APIResponse<RuleHistoryResponse>>(`/rules/${ruleHistoryRule.value.caddy_id}/metrics-history`, { params: { range: ruleHistoryRange.value } })
-    if (seq !== ruleHistorySeq) return
+    const res = await request.get<APIResponse<RuleHistoryResponse>>(`/rules/${ruleHistoryRule.value.caddy_id}/metrics-history`, {
+      params: { range: ruleHistoryRange.value },
+      signal: abortController.signal,
+    })
+    if (disposed || seq !== ruleHistorySeq) return
     if (res.data?.supported === false) {
       ruleHistoryUnsupported.value = true
       ruleHistoryRows.value = []
@@ -483,12 +487,12 @@ const fetchRuleHistory = async () => {
       ruleHistoryRows.value = res.data?.rows || []
     }
   } catch (error: unknown) {
-    if (seq === ruleHistorySeq) {
+    if (!disposed && seq === ruleHistorySeq) {
       console.error('Failed to fetch rule history:', error)
       ruleHistoryRows.value = []
     }
   } finally {
-    if (seq === ruleHistorySeq) {
+    if (!disposed && seq === ruleHistorySeq) {
       ruleHistoryLoading.value = false
     }
   }
@@ -636,17 +640,22 @@ let isFetchingRuleHealth = false
 let isFetchingRuleMetrics = false
 
 const fetchAllData = (): Promise<void> => {
+  if (disposed) return Promise.resolve()
   if (fetchAllDataPromise) return fetchAllDataPromise
 
   const headers = { Authorization: `Bearer ${authStore.token}` }
+  const config = { headers, signal: abortController.signal }
   fetchAllDataPromise = Promise.allSettled([
-    request.get('/system/info', { headers }).then((res) => {
+    request.get('/system/info', config).then((res) => {
+      if (disposed) return
       if (res.data) systemInfo.value = res.data
     }),
-    request.get('/system/metrics', { headers }).then((res) => {
+    request.get('/system/metrics', config).then((res) => {
+      if (disposed) return
       if (res.data) systemMetrics.value = res.data
     }),
-    request.get('/metrics/realtime', { headers }).then((res) => {
+    request.get('/metrics/realtime', config).then((res) => {
+      if (disposed) return
       if (!res.data) return
       const data = res.data
       const now = Date.now()
@@ -654,21 +663,27 @@ const fetchAllData = (): Promise<void> => {
       trafficOutHistory.value = [...trafficOutHistory.value, data?.bytes_out || 0].slice(-60)
       trafficTimestamps.value = [...trafficTimestamps.value, now].slice(-60)
     }),
-    request.get('/caddy/metrics', { headers }).then((res) => {
+    request.get('/caddy/metrics', config).then((res) => {
+      if (disposed) return
       if (res.data) caddyMetrics.value = res.data
     }),
-    request.get('/caddy/host-metrics', { headers }).then((res) => {
+    request.get('/caddy/host-metrics', config).then((res) => {
+      if (disposed) return
       if (res.data) hostMetrics.value = res.data || []
     }),
-    request.get('/rules', { headers }).then((res) => {
+    request.get('/rules', config).then((res) => {
+      if (disposed) return
       if (!res.data) return
       rules.value = res.data || []
+      if (disposed) return
       void Promise.allSettled([fetchRuleMetrics(), fetchRuleHealth()])
     }),
-    request.get('/metrics/overview', { headers }).then((res) => {
+    request.get('/metrics/overview', config).then((res) => {
+      if (disposed) return
       if (res.data) overview.value = res.data
     }),
-    request.get('/metrics/connections', { headers }).then((res) => {
+    request.get('/metrics/connections', config).then((res) => {
+      if (disposed) return
       if (!res.data) return
       const connData = res.data
       const now = Date.now()
@@ -676,7 +691,8 @@ const fetchAllData = (): Promise<void> => {
       connTimeWaitHistory.value = [...connTimeWaitHistory.value, connData?.time_wait || 0].slice(-60)
       connTimestamps.value = [...connTimestamps.value, now].slice(-60)
     }),
-    request.get('/caddy/status', { headers }).then((res) => {
+    request.get('/caddy/status', config).then((res) => {
+      if (disposed) return
       if (res.data) caddyStatus.value = res.data.status || 'unknown'
     }),
   ]).then(() => undefined).finally(() => {
@@ -687,11 +703,12 @@ const fetchAllData = (): Promise<void> => {
 }
 
 const fetchRuleHealth = async () => {
-  if (rules.value.length === 0 || isFetchingRuleHealth) return
+  if (disposed || rules.value.length === 0 || isFetchingRuleHealth) return
   isFetchingRuleHealth = true
   const currentRules = rules.value
   try {
-    const res = await request.get<APIResponse<HealthResponse>>('/config/health')
+    const res = await request.get<APIResponse<HealthResponse>>('/config/health', { signal: abortController.signal })
+    if (disposed) return
     const healthData = res.data || {}
     const newRuleMetrics: Record<string, RuleMetrics> = { ...ruleMetrics.value }
     currentRules.forEach((rule: Rule) => {
@@ -737,24 +754,25 @@ const fetchRuleHealth = async () => {
       }
       newRuleMetrics[rule.caddy_id] = metrics
     })
-    ruleMetrics.value = newRuleMetrics
+    if (!disposed) ruleMetrics.value = newRuleMetrics
   } catch (e) {
-    console.error('Failed to fetch rule health:', e)
+    if (!disposed) console.error('Failed to fetch rule health:', e)
   } finally {
     isFetchingRuleHealth = false
   }
 }
 
 const fetchRuleMetrics = async () => {
-  if (rules.value.length === 0 || isFetchingRuleMetrics) return
+  if (disposed || rules.value.length === 0 || isFetchingRuleMetrics) return
   isFetchingRuleMetrics = true
   const currentRules = rules.value
   try {
     const headers = { Authorization: `Bearer ${authStore.token}` }
     const metricsPromises = currentRules.map((rule: Rule) =>
-      request.get<APIResponse<RuleMetrics>>(`/metrics/rule/${rule.caddy_id}`, { headers })
+      request.get<APIResponse<RuleMetrics>>(`/metrics/rule/${rule.caddy_id}`, { headers, signal: abortController.signal })
     )
     const metricsResults = await Promise.allSettled(metricsPromises)
+    if (disposed) return
     const newRuleMetrics: Record<string, RuleMetrics> = {}
     metricsResults.forEach((result, index) => {
       const rule = currentRules[index]
@@ -771,9 +789,9 @@ const fetchRuleMetrics = async () => {
         next.healthy = existing.healthy
       }
     })
-    ruleMetrics.value = newRuleMetrics
+    if (!disposed) ruleMetrics.value = newRuleMetrics
   } catch (e) {
-    console.error('Failed to fetch rule metrics:', e)
+    if (!disposed) console.error('Failed to fetch rule metrics:', e)
   } finally {
     isFetchingRuleMetrics = false
   }
@@ -795,13 +813,16 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
       cancelButtonText: '取消',
       type: 'warning',
     })
+    if (disposed) return
     
     caddyLoading.value = true
-    await request.post(`/caddy/${action}`)
+    await request.post(`/caddy/${action}`, undefined, { signal: abortController.signal })
+    if (disposed) return
     
     // After start or restart, reload config from database
     if (action === 'start' || action === 'restart') {
-      await request.post('/config/reload')
+      await request.post('/config/reload', undefined, { signal: abortController.signal })
+      if (disposed) return
     }
     
     // Optimistic update - show the expected status immediately
@@ -823,11 +844,12 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
       })
     }, 1000)
   } catch (error: unknown) {
+    if (disposed) return
     if (error === 'cancel') return
     const msg = error instanceof Error ? error.message : '操作失败'
     authStore.showToast('error', msg)
   } finally {
-    caddyLoading.value = false
+    if (!disposed) caddyLoading.value = false
   }
 }
 
@@ -840,6 +862,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   disposed = true
+  abortController.abort()
   if (timer) clearInterval(timer)
   if (statusRefreshTimer) clearTimeout(statusRefreshTimer)
   if (statusConfirmTimer) clearTimeout(statusConfirmTimer)

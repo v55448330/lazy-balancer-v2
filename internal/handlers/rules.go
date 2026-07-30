@@ -18,6 +18,11 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
+var (
+	createOrRequeueCertJob = services.CreateOrRequeueCertJob
+	cancelCertJob          = func(manager *services.CAQueueManager, jobID int) { manager.CancelJob(jobID) }
+)
+
 func (h *Handlers) ListRules(c *gin.Context) {
 	rows, err := db.DB.Query(`SELECT ` + lbRuleColumns + ` FROM lb_rules ORDER BY id`)
 	if err != nil {
@@ -1441,7 +1446,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			var queueManager *services.CAQueueManager
 			restoreACMEState := func() error {
 				if enqueuedJobID > 0 && queueManager != nil {
-					queueManager.CancelJob(enqueuedJobID)
+					cancelCertJob(queueManager, enqueuedJobID)
 				}
 				return errors.Join(h.restoreImportRuntime(runtimeSnapshot), restoreRuleDBSnapshot(), services.RestoreCertJobsForRule(certJobsSnapshot))
 			}
@@ -1494,7 +1499,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 					return
 				}
 				log.Printf("UpdateRule enqueueing cert job for caddy_id=%s domain=%s ca_provider_id=%d", caddyID, domain, caProviderID)
-				jobID, err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, queueManager)
+				jobID, err := createOrRequeueCertJob(caddyID, domain, caProviderID, queueManager)
+				enqueuedJobID = jobID
 				if err != nil {
 					restoreErr := restoreACMEState()
 					if restoreErr != nil {
@@ -1505,7 +1511,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书签发任务失败: " + err.Error()})
 					return
 				}
-				enqueuedJobID = jobID
 				if domainChanged {
 					if err := services.DisableCertJobsExceptDomain(caddyID, domain); err != nil {
 						restoreErr := restoreACMEState()

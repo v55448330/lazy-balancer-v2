@@ -93,6 +93,7 @@ service.interceptors.response.use(
     return res
   },
   (error) => {
+    if (axios.isCancel(error)) return Promise.reject(error)
     const status = error.response?.status
     const backendMsg = error.response?.data?.message
     const message = backendMsg || error.message || '网络错误'

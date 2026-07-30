@@ -123,30 +123,26 @@ const refreshCluster = async (): Promise<void> => {
     await refreshInFlight
     return
   }
+  refreshPending = false
   refreshInFlight = (async () => {
-    let refreshError: unknown = null
-    for (let attempt = 0; attempt < 2; attempt++) {
-      refreshPending = false
-      try {
-        const currentStatus = await fetchStatus()
-        if (currentStatus.node_mode === 'master') {
-          await fetchNodes()
-        } else {
-          nodes.value = []
-        }
-        refreshError = null
-      } catch (error: unknown) {
-        refreshError = error
-      }
-      if (!refreshPending) break
+    const currentStatus = await fetchStatus()
+    if (currentStatus.node_mode === 'master') {
+      await fetchNodes()
+    } else {
+      nodes.value = []
     }
-    if (refreshError) throw refreshError
   })()
   try {
     await refreshInFlight
   } finally {
+    const shouldDrain = refreshPending
     refreshPending = false
     refreshInFlight = null
+    if (shouldDrain) {
+      queueMicrotask(() => {
+        void refreshCluster().catch(() => undefined)
+      })
+    }
   }
 }
 

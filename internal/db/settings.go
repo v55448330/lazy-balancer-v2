@@ -31,7 +31,11 @@ func SetDefaultCAProvider(id int) error {
 	if err != nil {
 		return fmt.Errorf("set default CA provider: %w", err)
 	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check default CA provider update: %w", err)
+	}
+	if rows == 0 {
 		return fmt.Errorf("global_config row not found")
 	}
 	return nil

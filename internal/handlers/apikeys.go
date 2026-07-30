@@ -52,8 +52,18 @@ func (h *Handlers) DeleteCurrentUserAPIKey(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
 		return
 	}
-	if _, err := db.DB.Exec("DELETE FROM api_keys WHERE id = ? AND created_by = ?", id, userID); err != nil {
+	result, err := db.DB.Exec("DELETE FROM api_keys WHERE id = ? AND created_by = ?", id, userID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete API key"})
+		return
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to verify API key deletion"})
+		return
+	}
+	if rows == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
 		return
 	}
 	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
@@ -72,32 +82,21 @@ func currentUserID(c *gin.Context) int {
 	}
 }
 
-type apiKeyWithUser struct {
-	ID        int          `json:"id"`
-	Name      string       `json:"name"`
-	KeyPrefix string       `json:"key_prefix"`
-	CreatedBy int          `json:"created_by"`
-	Username  string       `json:"username"`
-	LastUsed  sql.NullTime `json:"last_used"`
-	ExpiresAt sql.NullTime `json:"expires_at"`
-	IsEnabled bool         `json:"is_enabled"`
-	CreatedAt time.Time    `json:"created_at"`
-}
-
-func scanAPIKeys(rows *sql.Rows) ([]apiKeyWithUser, error) {
-	var keys []apiKeyWithUser
+func scanAPIKeys(rows *sql.Rows) ([]models.APIKeyWithUserResponse, error) {
+	var keys []models.APIKeyWithUserResponse
 	for rows.Next() {
-		var k apiKeyWithUser
-		if err := rows.Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.CreatedBy, &k.LastUsed, &k.ExpiresAt, &k.IsEnabled, &k.CreatedAt, &k.Username); err != nil {
+		var key models.APIKey
+		var username string
+		if err := rows.Scan(&key.ID, &key.Name, &key.KeyPrefix, &key.CreatedBy, &key.LastUsed, &key.ExpiresAt, &key.IsEnabled, &key.CreatedAt, &username); err != nil {
 			return nil, fmt.Errorf("scan API key: %w", err)
 		}
-		keys = append(keys, k)
+		keys = append(keys, models.NewAPIKeyWithUserResponse(key, username))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate API keys: %w", err)
 	}
 	if keys == nil {
-		keys = []apiKeyWithUser{}
+		keys = []models.APIKeyWithUserResponse{}
 	}
 	return keys, nil
 }
@@ -203,8 +202,18 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		update += " AND created_by = ?"
 		updateArgs = append(updateArgs, userID)
 	}
-	if _, err := db.DB.Exec(update, updateArgs...); err != nil {
+	result, err := db.DB.Exec(update, updateArgs...)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update API key status"})
+		return
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to verify API key status update"})
+		return
+	}
+	if rows == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
 		return
 	}
 	status := "disabled"
@@ -227,7 +236,12 @@ func (h *Handlers) DeleteAPIKey(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete API key"})
 		return
 	}
-	if rows, _ := result.RowsAffected(); rows == 0 {
+	rows, err := result.RowsAffected()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to verify API key deletion"})
+		return
+	}
+	if rows == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
 		return
 	}

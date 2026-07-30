@@ -62,3 +62,21 @@ func TestMetricsService_parsePrometheusMetrics_rejects_invalid_sample(t *testing
 		t.Fatal("invalid Prometheus sample was silently accepted")
 	}
 }
+
+func TestMetricsService_storePerHostMetrics_returns_rule_query_error(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	if err := database.Close(); err != nil {
+		t.Fatalf("close rule database: %v", err)
+	}
+	service := &MetricsService{}
+	text := `caddy_http_request_duration_seconds_count{code="200",host="example.com"} 1`
+
+	// When
+	err := service.storePerHostMetrics(text)
+
+	// Then
+	if err == nil {
+		t.Fatal("closed rule database query error was swallowed")
+	}
+}

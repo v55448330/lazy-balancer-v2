@@ -41,7 +41,7 @@ func seedCertificateJob(t *testing.T, status string) (int, string) {
 	t.Helper()
 	_, database := newClusterTestService(t)
 	ruleID := "lb_issue_test"
-	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled) VALUES (?, 'issue test', 'example.com', 'http', 8080, 1)`, ruleID); err != nil {
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?, 'issue test', 'example.com', 'http', 8080, 1, 1, 'acme_dns')`, ruleID); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
 	result, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES (?, 'example.com', ?, 1)`, ruleID, status)
@@ -298,7 +298,7 @@ func TestCertificateDeploymentRetry_succeeds_when_provider_deleted(t *testing.T)
 	reloads := 0
 
 	// When
-	err := retryCertificateDeployment(jobID, func() error {
+	err := retryCertificateDeployment(context.Background(), jobID, func() error {
 		reloads++
 		return nil
 	})

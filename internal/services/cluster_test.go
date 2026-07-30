@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -249,6 +250,41 @@ func TestSyncService_finishRun_doesNotClearNewerRun(t *testing.T) {
 	// Then
 	if service.cancel == nil {
 		t.Fatal("stale run cleared the newer run cancellation handle")
+	}
+}
+
+func TestSyncService_run_retries_transient_state_read_failure(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	attempts := 0
+	retryReached := make(chan struct{})
+	service := &SyncService{db: database}
+	service.loadRunState = func(context.Context) (bool, string, int, error) {
+		attempts++
+		if attempts == 1 {
+			return false, "", 0, errors.New("temporary database failure")
+		}
+		return true, "", 60, nil
+	}
+	service.waitRunDelay = func(context.Context, time.Duration) bool {
+		close(retryReached)
+		return true
+	}
+
+	// When
+	service.run(context.Background())
+
+	// Then
+	<-retryReached
+	if attempts != 2 {
+		t.Fatalf("sync state reads=%d, want retry then master exit", attempts)
+	}
+	var lastError string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastError); err != nil {
+		t.Fatalf("read last sync error: %v", err)
+	}
+	if !strings.Contains(lastError, "temporary database failure") {
+		t.Fatalf("last_sync_error=%q, want transient database failure", lastError)
 	}
 }
 

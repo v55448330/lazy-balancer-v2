@@ -352,22 +352,99 @@ func TestCAQueueManager_PauseAndDrain_rejects_until_resume(t *testing.T) {
 	manager.Stop()
 }
 
+func TestCAQueueManager_Enqueue_has_no_database_side_effects_when_paused(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	result, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, ca_provider_id, renewal_attempts) VALUES ('lb_paused_enqueue', 'example.com', 'queued', 999, 2)`)
+	if err != nil {
+		t.Fatalf("seed paused certificate job: %v", err)
+	}
+	jobID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read paused certificate job ID: %v", err)
+	}
+	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: false}
+
+	// When
+	err = manager.Enqueue(999, int(jobID), "lb_paused_enqueue", "example.com")
+
+	// Then
+	if err == nil {
+		t.Fatal("enqueue succeeded while manager was paused")
+	}
+	var status string
+	var providerID, attempts int
+	if err := database.QueryRow("SELECT status, ca_provider_id, renewal_attempts FROM cert_jobs WHERE id=?", jobID).Scan(&status, &providerID, &attempts); err != nil {
+		t.Fatalf("read paused certificate job: %v", err)
+	}
+	if status != "queued" || providerID != 999 || attempts != 2 {
+		t.Fatalf("paused job status=%q provider=%d attempts=%d, want unchanged", status, providerID, attempts)
+	}
+}
+
+func TestCAQueueManager_CancelJobsForRule_cancels_and_waits_for_deployment_callback(t *testing.T) {
+	// Given
+	service := NewCertificateService()
+	callbackEntered := make(chan struct{})
+	cancellationObserved := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	wroteFiles := make(chan struct{}, 1)
+	service.retryDeployment = func(ctx context.Context, _ int) error {
+		close(callbackEntered)
+		<-ctx.Done()
+		close(cancellationObserved)
+		<-releaseCallback
+		if ctx.Err() == nil {
+			wroteFiles <- struct{}{}
+		}
+		return ctx.Err()
+	}
+	service.scheduleDeploymentRetry(42, "lb_deleted", 0)
+	<-callbackEntered
+	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: true}
+	cancelDone := make(chan struct{})
+	go func() {
+		manager.CancelJobsForRule("lb_deleted")
+		close(cancelDone)
+	}()
+	<-cancellationObserved
+
+	// When
+	select {
+	case <-cancelDone:
+		t.Fatal("rule cancellation returned while deployment callback was running")
+	default:
+	}
+	close(releaseCallback)
+
+	// Then
+	<-cancelDone
+	select {
+	case <-wroteFiles:
+		t.Fatal("deployment callback wrote files after rule cancellation")
+	default:
+	}
+}
+
 func TestCAQueueManager_PauseAndDrain_waits_for_deployment_retry_callback(t *testing.T) {
 	// Given
 	service := NewCertificateService()
 	callbackEntered := make(chan struct{})
+	cancellationObserved := make(chan struct{})
 	releaseCallback := make(chan struct{})
 	resumedRetry := make(chan struct{}, 1)
-	service.retryDeployment = func(jobID int) error {
+	service.retryDeployment = func(ctx context.Context, jobID int) error {
 		if jobID == 42 {
 			close(callbackEntered)
+			<-ctx.Done()
+			close(cancellationObserved)
 			<-releaseCallback
-			return nil
+			return ctx.Err()
 		}
 		resumedRetry <- struct{}{}
 		return nil
 	}
-	service.scheduleDeploymentRetry(42, 0)
+	service.scheduleDeploymentRetry(42, "lb_pause", 0)
 	<-callbackEntered
 	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: true}
 	pauseDone := make(chan struct{})
@@ -375,19 +452,20 @@ func TestCAQueueManager_PauseAndDrain_waits_for_deployment_retry_callback(t *tes
 		manager.PauseAndDrain()
 		close(pauseDone)
 	}()
+	<-cancellationObserved
 
 	// When
 	select {
 	case <-pauseDone:
 		t.Fatal("pause returned while deployment retry callback was running")
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 	close(releaseCallback)
 
 	// Then
 	<-pauseDone
 	manager.Resume()
-	service.scheduleDeploymentRetry(43, 0)
+	service.scheduleDeploymentRetry(43, "lb_resumed", 0)
 	<-resumedRetry
 	manager.Stop()
 }

@@ -156,10 +156,7 @@ const form = ref({
 })
 
 const getDisplayName = (row: UserListItem): string => {
-  const name = row.display_name
-  if (typeof name === 'string') return name
-  if (name && typeof name === 'object' && 'String' in name) return name.String
-  return ''
+  return row.display_name || ''
 }
 
 const fetchUsers = async () => {

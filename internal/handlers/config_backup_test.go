@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -225,7 +226,7 @@ func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *t
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil })
 	t.Cleanup(services.ResetCAQueueManagerForTest)
-	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_requeue_v2','requeue','http',8080,1);
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_requeue_v2','requeue','http','requeue.example.test',8080,1,1,'acme_dns');
 		INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES ('lb_requeue_v2','requeue.example.test','creating_order',999999)`); err != nil {
 		t.Fatalf("seed non-terminal job: %v", err)
 	}
@@ -254,6 +255,58 @@ func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *t
 	}
 	if status != "queued" {
 		t.Fatalf("recovered certificate job status=%q, want queued", status)
+	}
+}
+
+func TestImportConfigBackup_reports_partial_failure_when_certificate_job_recovery_fails(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	oldRequeue := requeueNonTerminalCertJobs
+	requeueNonTerminalCertJobs = func() error { return errors.New("requeue failed") }
+	t.Cleanup(func() { requeueNonTerminalCertJobs = oldRequeue })
+	router := gin.New()
+	router.GET("/config/export", h.ExportConfigBackup)
+	router.POST("/config/import", h.ImportConfigBackup)
+	exportResponse := httptest.NewRecorder()
+	router.ServeHTTP(exportResponse, httptest.NewRequest(http.MethodGet, "/config/export", nil))
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(exportResponse.Body.String()))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "配置已导入但证书任务恢复失败") || !strings.Contains(response.Body.String(), "requeue failed") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestImportConfigBackup_joins_import_and_certificate_job_recovery_failures(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	oldRequeue := requeueNonTerminalCertJobs
+	requeueNonTerminalCertJobs = func() error { return errors.New("requeue failed") }
+	t.Cleanup(func() { requeueNonTerminalCertJobs = oldRequeue })
+	backup := `{"meta":{"app":"lazy-balancer-v2","version":1},"tables":{"users":[],"lb_rules":[{"caddy_id":"lb_bad_recovery","name":"bad","protocol":"http","listen_port":8443,"enable_tls":1,"tls_source":"manual","tls_cert":"invalid-cert","tls_key":"invalid-key"}]}}`
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "invalid certificate") || !strings.Contains(response.Body.String(), "requeue failed") {
+		t.Fatalf("status=%d body=%s, want joined failures", response.Code, response.Body.String())
 	}
 }
 

@@ -18,14 +18,32 @@ var certDir = "/app/certs"
 var certWriteMu sync.Mutex
 
 var certificateDeployLocks sync.Map
+var certificateDeployLocksMu sync.Mutex
+
+type certificateDeployLock struct {
+	mu   sync.Mutex
+	refs int
+}
 
 // DeployLock serializes the complete deployment and rollback transaction for
 // one rule while allowing unrelated rules to deploy concurrently.
 func DeployLock(ruleID string) func() {
-	lock, _ := certificateDeployLocks.LoadOrStore(ruleID, &sync.Mutex{})
-	mu := lock.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+	certificateDeployLocksMu.Lock()
+	value, _ := certificateDeployLocks.LoadOrStore(ruleID, &certificateDeployLock{})
+	lock := value.(*certificateDeployLock)
+	lock.refs++
+	certificateDeployLocksMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		certificateDeployLocksMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			certificateDeployLocks.Delete(ruleID)
+		}
+		certificateDeployLocksMu.Unlock()
+	}
 }
 
 type CertFileSnapshot struct {

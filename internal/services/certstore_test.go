@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -72,6 +73,20 @@ func TestRemoveCertFiles_returns_both_delete_errors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "删除证书") || !strings.Contains(err.Error(), "删除私钥") {
 		t.Fatalf("remove error did not preserve both failures: %v", err)
+	}
+}
+
+func TestDeployLock_removes_entry_after_last_release(t *testing.T) {
+	// Given
+	certificateDeployLocks = sync.Map{}
+
+	// When
+	unlock := DeployLock("lb_refcount")
+	unlock()
+
+	// Then
+	if _, exists := certificateDeployLocks.Load("lb_refcount"); exists {
+		t.Fatal("deployment lock entry remained after its last holder released it")
 	}
 }
 

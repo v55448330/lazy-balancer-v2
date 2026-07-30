@@ -68,6 +68,11 @@ type APIKeyResponse struct {
 	CreatedAt time.Time  `json:"created_at"`
 }
 
+type APIKeyWithUserResponse struct {
+	APIKeyResponse
+	Username string `json:"username"`
+}
+
 func NewAPIKeyResponse(key APIKey) APIKeyResponse {
 	response := APIKeyResponse{
 		ID:        key.ID,
@@ -84,6 +89,10 @@ func NewAPIKeyResponse(key APIKey) APIKeyResponse {
 		response.ExpiresAt = &key.ExpiresAt.Time
 	}
 	return response
+}
+
+func NewAPIKeyWithUserResponse(key APIKey, username string) APIKeyWithUserResponse {
+	return APIKeyWithUserResponse{APIKeyResponse: NewAPIKeyResponse(key), Username: username}
 }
 
 // LbRule represents a load balancing rule
