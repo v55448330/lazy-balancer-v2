@@ -265,7 +265,7 @@ func TestCAQueueManager_Stop_waits_for_running_execution(t *testing.T) {
 	<-stopDone
 }
 
-func TestCAQueueManager_CancelAllJobs_cancels_pending_and_waits_for_running(t *testing.T) {
+func TestCAQueueManager_PauseAndDrain_cancels_pending_and_waits_for_running(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
 	if _, err := database.Exec(`INSERT INTO cert_jobs (id, rule_id, domain, status) VALUES (42, 'lb_all', 'example.com', 'creating_order')`); err != nil {
@@ -294,7 +294,7 @@ func TestCAQueueManager_CancelAllJobs_cancels_pending_and_waits_for_running(t *t
 	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
 
 	// When
-	manager.CancelAllJobs()
+	manager.PauseAndDrain()
 
 	// Then
 	<-finished
@@ -305,8 +305,8 @@ func TestCAQueueManager_CancelAllJobs_cancels_pending_and_waits_for_running(t *t
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if !manager.active || len(manager.queues) != 0 {
-		t.Fatalf("manager active=%v queues=%d, want active empty manager", manager.active, len(manager.queues))
+	if manager.active || len(manager.queues) != 0 {
+		t.Fatalf("manager active=%v queues=%d, want paused empty manager", manager.active, len(manager.queues))
 	}
 }
 

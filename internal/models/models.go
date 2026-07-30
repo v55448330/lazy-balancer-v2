@@ -262,18 +262,6 @@ type PathRule struct {
 	UpdatedAt sql.NullTime       `json:"-"`
 }
 
-// TLSCertificate represents a TLS certificate
-type TLSCertificate struct {
-	ID        int          `json:"id"`
-	Domain    string       `json:"domain"`
-	CertPEM   string       `json:"cert_pem"`
-	KeyPEM    string       `json:"key_pem"`
-	Issuer    string       `json:"issuer"`
-	ExpiresAt sql.NullTime `json:"expires_at"`
-	CreatedAt time.Time    `json:"created_at"`
-	UpdatedAt sql.NullTime `json:"updated_at"`
-}
-
 // CertificateConfig represents free certificate configuration (ACME + DNS provider)
 type CertificateConfig struct {
 	ID             int          `json:"id"`
@@ -331,58 +319,9 @@ type CertJob struct {
 	RenewalAttempts  int          `json:"renewal_attempts,omitempty"`
 	CAAvailableAfter JSONNullTime `json:"ca_available_after,omitempty"`
 	LastErrorCode    string       `json:"last_error_code,omitempty"`
-	ExpiresAt        sql.NullTime `json:"expires_at"`
+	ExpiresAt        JSONNullTime `json:"expires_at"`
 	CreatedAt        time.Time    `json:"created_at"`
-	UpdatedAt        sql.NullTime `json:"updated_at"`
-}
-
-// CertJobLog represents a single log line for a certificate issuance job
-type CertJobLog struct {
-	ID        int       `json:"id"`
-	JobID     int       `json:"job_id"`
-	Level     string    `json:"level"`
-	Message   string    `json:"message"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-// Node represents a node in the cluster
-type Node struct {
-	ID                 int           `json:"id"`
-	Name               string        `json:"name"`
-	Mode               string        `json:"mode"`
-	IPAddress          string        `json:"ip_address"`
-	Port               int           `json:"port"`
-	MasterID           sql.NullInt64 `json:"master_id"`
-	IsApproved         bool          `json:"is_approved"`
-	SyncEnabled        bool          `json:"sync_enabled"`
-	SyncInterval       int           `json:"sync_interval"`
-	SyncScope          string        `json:"sync_scope"`
-	Status             string        `json:"status"`
-	ClusterTokenHash   string        `json:"-"`
-	RegistrationSecret string        `json:"-"`
-	ReportedVersion    int           `json:"reported_version"`
-	HealthJSON         string        `json:"-"`
-	LastSyncAt         sql.NullTime  `json:"last_sync_at"`
-	LastSyncError      string        `json:"last_sync_error"`
-	LastSeen           sql.NullTime  `json:"last_seen"`
-	CreatedAt          time.Time     `json:"created_at"`
-}
-
-// MetricsHistory represents historical metrics data
-type MetricsHistory struct {
-	ID            int       `json:"id"`
-	RuleID        int       `json:"rule_id"`
-	Timestamp     time.Time `json:"timestamp"`
-	RequestsTotal int       `json:"requests_total"`
-	Requests2xx   int       `json:"requests_2xx"`
-	Requests3xx   int       `json:"requests_3xx"`
-	Requests4xx   int       `json:"requests_4xx"`
-	Requests5xx   int       `json:"requests_5xx"`
-	BytesIn       int64     `json:"bytes_in"`
-	BytesOut      int64     `json:"bytes_out"`
-	LatencyP50    int       `json:"latency_p50"`
-	LatencyP95    int       `json:"latency_p95"`
-	LatencyP99    int       `json:"latency_p99"`
+	UpdatedAt        JSONNullTime `json:"updated_at"`
 }
 
 // Request/Response types

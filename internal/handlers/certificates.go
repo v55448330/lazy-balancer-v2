@@ -19,7 +19,7 @@ import (
 )
 
 func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, name, dns_provider, dns_credentials, enabled, created_at, updated_at FROM certificate_configs ORDER BY id")
+	rows, err := db.DB.Query("SELECT id, name, dns_provider, COALESCE(dns_credentials,''), enabled, created_at, updated_at FROM certificate_configs ORDER BY id")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query configs"})
 		return
@@ -215,7 +215,7 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 	id, idErr := strconv.Atoi(c.Param("id"))
 	var configName string
 	if idErr == nil && id > 0 {
-		err := db.DB.QueryRow("SELECT name, dns_provider, dns_credentials FROM certificate_configs WHERE id=?", id).Scan(&configName, &provider, &credentials)
+		err := db.DB.QueryRow("SELECT name, dns_provider, COALESCE(dns_credentials,'') FROM certificate_configs WHERE id=?", id).Scan(&configName, &provider, &credentials)
 		if err != nil {
 			recordAudit(c, "测试失败", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), services.AuditResultPart("not_found")))
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Config not found"})

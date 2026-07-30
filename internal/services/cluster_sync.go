@@ -171,7 +171,7 @@ func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, 
 	if err != nil {
 		return models.ClusterRegistration{}, fmt.Errorf("编码注册请求: %w", err)
 	}
-	callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(callCtx, http.MethodPost, strings.TrimRight(masterURL, "/")+"/api/v1/cluster/register", bytes.NewReader(payload))
 	if err != nil {

@@ -234,6 +234,45 @@ func TestCertificateService_periodic_scans_do_not_mutate_jobs_while_queue_paused
 	}
 }
 
+func TestCertificateService_requeueWaitingCAJobs_pause_after_scan_start_leaves_job_waiting(t *testing.T) {
+	_, database := newClusterTestService(t)
+	ResetCAQueueManagerForTest()
+	InitCAQueueManager(func() error { return nil })
+	manager := GetCAQueueManager()
+	t.Cleanup(ResetCAQueueManagerForTest)
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id) VALUES ('lb_pause_scan','example.com','waiting_ca',datetime('now','-1 minute'),1)`); err != nil {
+		t.Fatalf("seed waiting job: %v", err)
+	}
+	scanReady := make(chan struct{})
+	resumeScan := make(chan struct{})
+	manager.beforeActiveEnqueue = func() {
+		close(scanReady)
+		<-resumeScan
+	}
+	scanDone := make(chan struct{})
+	go func() {
+		NewCertificateService().requeueWaitingCAJobs()
+		close(scanDone)
+	}()
+	<-scanReady
+	pauseDone := make(chan struct{})
+	go func() {
+		manager.PauseAndDrain()
+		close(pauseDone)
+	}()
+	<-pauseDone
+	close(resumeScan)
+	<-scanDone
+
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_pause_scan'").Scan(&status); err != nil {
+		t.Fatalf("read waiting job: %v", err)
+	}
+	if status != "waiting_ca" {
+		t.Fatalf("job status=%q, want waiting_ca", status)
+	}
+}
+
 func TestRequeueNonTerminalCertJobs_disables_jobs_outside_acme_rule_gate(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)

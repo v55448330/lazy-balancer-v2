@@ -10,6 +10,7 @@ import (
 	"errors"
 	"math/big"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -206,6 +207,71 @@ func TestCertIssuer_Issue_fast_path_returns_reload_error_and_keeps_downloaded(t 
 	}
 	if status != "downloaded" || retries != 1 {
 		t.Fatalf("fast-path job status=%q retries=%d, want downloaded and one retry", status, retries)
+	}
+}
+
+func TestCAQueueManager_CancelJobsForRule_waits_for_fast_path_rollback(t *testing.T) {
+	jobID, ruleID := seedCertificateJob(t, "issued")
+	useTemporaryCertDir(t)
+	if err := WriteCertFiles(ruleID, "old-cert", "old-key"); err != nil {
+		t.Fatalf("write old certificate: %v", err)
+	}
+	certPEM := testCertificatePEM(t, time.Now().Add(90*24*time.Hour))
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET cert_pem=?, key_pem='new-key', ca_provider_id=1 WHERE id=?", certPEM, jobID); err != nil {
+		t.Fatalf("seed issued material: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE lb_rules SET ca_provider_id=1 WHERE caddy_id=?", ruleID); err != nil {
+		t.Fatalf("seed rule provider: %v", err)
+	}
+	reloadEntered := make(chan struct{})
+	releaseReload := make(chan struct{})
+	var reloadOnce sync.Once
+	issuer := NewCertIssuer(func() error {
+		reloadOnce.Do(func() {
+			close(reloadEntered)
+			<-releaseReload
+		})
+		return nil
+	})
+	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
+	queue.executeFn = func(ctx context.Context, item queueItem, provider models.CAProvider) error {
+		return issuer.Issue(ctx, item.jobID, item.ruleID, item.domains, provider)
+	}
+	queue.enqueue(queueItem{jobID: jobID, ruleID: ruleID, domains: "example.com"})
+	queue.mu.Lock()
+	execution, ok := queue.prepareExecutionLocked(queue.ctx)
+	queue.mu.Unlock()
+	if !ok {
+		t.Fatal("fast-path execution was not prepared")
+	}
+	go queue.execute(execution)
+	<-reloadEntered
+	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
+	cancelDone := make(chan struct{})
+	go func() {
+		manager.CancelJobsForRule(ruleID)
+		close(cancelDone)
+	}()
+	<-execution.ctx.Done()
+	select {
+	case <-cancelDone:
+		t.Fatal("rule cancellation returned before fast-path deployment exited")
+	default:
+	}
+	close(releaseReload)
+	<-cancelDone
+	if _, err := db.DB.Exec("DELETE FROM cert_jobs WHERE id=?", jobID); err != nil {
+		t.Fatalf("delete certificate job: %v", err)
+	}
+
+	certPath, keyPath := CertFilePaths(ruleID)
+	gotCert, certErr := os.ReadFile(certPath)
+	gotKey, keyErr := os.ReadFile(keyPath)
+	if certErr != nil || keyErr != nil {
+		t.Fatalf("read rolled-back files: cert=%v key=%v", certErr, keyErr)
+	}
+	if string(gotCert) != "old-cert" || string(gotKey) != "old-key" {
+		t.Fatalf("files after cancellation=(%q,%q), want old pair", gotCert, gotKey)
 	}
 }
 

@@ -3,6 +3,7 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -87,6 +88,54 @@ func TestDeployLock_removes_entry_after_last_release(t *testing.T) {
 	// Then
 	if _, exists := certificateDeployLocks.Load("lb_refcount"); exists {
 		t.Fatal("deployment lock entry remained after its last holder released it")
+	}
+}
+
+func TestDeployLock_serializes_waiters_and_keeps_entry_until_final_release(t *testing.T) {
+	certificateDeployLocks = sync.Map{}
+	acquired := make(chan int)
+	release := make(chan struct{})
+	done := make(chan int)
+	for id := 1; id <= 3; id++ {
+		go func() {
+			unlock := DeployLock("lb_serial")
+			acquired <- id
+			<-release
+			unlock()
+			done <- id
+		}()
+	}
+	first := <-acquired
+	for {
+		certificateDeployLocksMu.Lock()
+		value, exists := certificateDeployLocks.Load("lb_serial")
+		registered := exists && value.(*certificateDeployLock).refs == 3
+		certificateDeployLocksMu.Unlock()
+		if registered {
+			break
+		}
+		runtime.Gosched()
+	}
+	release <- struct{}{}
+	if released := <-done; released != first {
+		t.Fatalf("released worker=%d, want first holder %d", released, first)
+	}
+	second := <-acquired
+	if _, exists := certificateDeployLocks.Load("lb_serial"); !exists {
+		t.Fatal("deployment lock entry was deleted while a waiter held it")
+	}
+	release <- struct{}{}
+	if released := <-done; released != second {
+		t.Fatalf("released worker=%d, want second holder %d", released, second)
+	}
+	<-acquired
+	if _, exists := certificateDeployLocks.Load("lb_serial"); !exists {
+		t.Fatal("deployment lock entry was deleted before the final release")
+	}
+	release <- struct{}{}
+	<-done
+	if _, exists := certificateDeployLocks.Load("lb_serial"); exists {
+		t.Fatal("deployment lock entry remained after final release")
 	}
 }
 

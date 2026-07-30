@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -80,15 +81,158 @@ func TestListCurrentUserAPIKeysOnlyOwn(t *testing.T) {
 	}
 	var body struct {
 		Data []struct {
-			ID   int    `json:"id"`
-			Name string `json:"name"`
+			ID       int    `json:"id"`
+			Name     string `json:"name"`
+			Username string `json:"username"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Data) != 1 || body.Data[0].ID != 10 {
+	if len(body.Data) != 1 || body.Data[0].ID != 10 || body.Data[0].Username != "alice" {
 		t.Fatalf("unexpected keys: %#v", body.Data)
+	}
+}
+
+func TestListAPIKeysIncludesUsernameOwnership(t *testing.T) {
+	setupAPIKeyTestDB(t)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/api-keys", nil)
+
+	(&Handlers{}).ListAPIKeys(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Data []struct {
+			ID       int    `json:"id"`
+			Username string `json:"username"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data) != 2 || body.Data[0].ID != 10 || body.Data[0].Username != "alice" || body.Data[1].ID != 20 || body.Data[1].Username != "bob" {
+		t.Fatalf("unexpected key ownership: %#v", body.Data)
+	}
+}
+
+func TestCertJobEndpointsSerializeNullableTimes(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	validTime := time.Date(2026, time.July, 30, 12, 34, 56, 0, time.UTC)
+	result, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, expires_at, created_at, updated_at)
+		VALUES ('lb_valid', 'valid.example', 'issued', ?, ?, ?),
+		       ('lb_null', 'null.example', 'queued', NULL, ?, NULL)`, validTime, validTime, validTime, validTime)
+	if err != nil {
+		t.Fatalf("seed certificate jobs: %v", err)
+	}
+	nullID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read certificate job ID: %v", err)
+	}
+	validID := nullID - 1
+
+	t.Run("list", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/cert-jobs", nil)
+		h.ListCertJobs(ctx)
+
+		body := recorder.Body.String()
+		if recorder.Code != http.StatusOK || !strings.Contains(body, `"expires_at":"2026-07-30T12:34:56Z"`) || !strings.Contains(body, `"updated_at":"2026-07-30T12:34:56Z"`) || !strings.Contains(body, `"expires_at":null`) || !strings.Contains(body, `"updated_at":null`) {
+			t.Fatalf("status=%d body=%s", recorder.Code, body)
+		}
+		if strings.Contains(body, `"Time"`) || strings.Contains(body, `"Valid"`) {
+			t.Fatalf("response leaked sql.NullTime representation: %s", body)
+		}
+	})
+
+	for _, tt := range []struct {
+		name string
+		id   int64
+		want string
+	}{
+		{name: "valid", id: validID, want: `"expires_at":"2026-07-30T12:34:56Z"`},
+		{name: "null", id: nullID, want: `"expires_at":null`},
+	} {
+		t.Run("detail "+tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodGet, "/cert-jobs/"+strconv.FormatInt(tt.id, 10), nil)
+			ctx.Params = gin.Params{{Key: "id", Value: strconv.FormatInt(tt.id, 10)}}
+			h.GetCertJob(ctx)
+
+			body := recorder.Body.String()
+			if recorder.Code != http.StatusOK || !strings.Contains(body, tt.want) {
+				t.Fatalf("status=%d body=%s, want %s", recorder.Code, body, tt.want)
+			}
+			if strings.Contains(body, `"Time"`) || strings.Contains(body, `"Valid"`) {
+				t.Fatalf("response leaked sql.NullTime representation: %s", body)
+			}
+		})
+	}
+}
+
+func TestCertificateConfigEndpointsHandleNullDNSCredentials(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	result, err := db.DB.Exec("INSERT INTO certificate_configs (name, dns_provider, dns_credentials, enabled) VALUES ('legacy', 'dnspod', NULL, 1)")
+	if err != nil {
+		t.Fatalf("seed certificate config: %v", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read certificate config ID: %v", err)
+	}
+
+	t.Run("list", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/certificate-configs", nil)
+		h.ListCertificateConfigs(ctx)
+
+		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"dns_credentials":""`) {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("test", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/certificate-configs/"+strconv.FormatInt(id, 10)+"/test", strings.NewReader(`{"domain":"example.com"}`))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+		ctx.Params = gin.Params{{Key: "id", Value: strconv.FormatInt(id, 10)}}
+		h.TestCertificateConfig(ctx)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d body=%s, want credential validation error instead of 404", recorder.Code, recorder.Body.String())
+		}
+	})
+}
+
+func TestRegisterClusterNodeRejectsInvalidAddressAndPort(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "invalid IP", body: `{"token":"token","name":"node","ip_address":"not-an-ip","port":8000}`},
+		{name: "negative port", body: `{"token":"token","name":"node","ip_address":"127.0.0.1","port":-1}`},
+		{name: "port too large", body: `{"token":"token","name":"node","ip_address":"127.0.0.1","port":65536}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/cluster/register", strings.NewReader(tt.body))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			h.RegisterClusterNode(ctx)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+			}
+		})
 	}
 }
 

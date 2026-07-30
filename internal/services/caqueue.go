@@ -14,11 +14,12 @@ import (
 
 // CAQueueManager schedules ACME issuance jobs per CA provider.
 type CAQueueManager struct {
-	mu            sync.Mutex
-	queues        map[int]*caQueue
-	reloader      func() error
-	active        bool
-	beforeEnqueue func()
+	mu                  sync.Mutex
+	queues              map[int]*caQueue
+	reloader            func() error
+	active              bool
+	beforeEnqueue       func()
+	beforeActiveEnqueue func()
 }
 
 var (
@@ -65,6 +66,7 @@ func (m *CAQueueManager) CancelJob(jobID int) {
 		queues = append(queues, q)
 	}
 	m.mu.Unlock()
+	var done []<-chan struct{}
 	for _, q := range queues {
 		q.mu.Lock()
 		pending := q.pending[:0]
@@ -77,10 +79,16 @@ func (m *CAQueueManager) CancelJob(jobID int) {
 		}
 		q.pending = pending
 		cancel, ok := q.cancels[jobID]
+		if executionDone := q.executionDone[jobID]; executionDone != nil {
+			done = append(done, executionDone)
+		}
 		q.mu.Unlock()
 		if ok {
 			cancel()
 		}
+	}
+	for _, executionDone := range done {
+		<-executionDone
 	}
 }
 
@@ -93,6 +101,7 @@ func (m *CAQueueManager) CancelJobsForRule(ruleID string) {
 	}
 	m.mu.Unlock()
 
+	var done []<-chan struct{}
 	for _, q := range queues {
 		q.mu.Lock()
 		pending := q.pending[:0]
@@ -110,6 +119,9 @@ func (m *CAQueueManager) CancelJobsForRule(ruleID string) {
 				if cancel := q.cancels[jobID]; cancel != nil {
 					cancels = append(cancels, cancel)
 				}
+				if executionDone := q.executionDone[jobID]; executionDone != nil {
+					done = append(done, executionDone)
+				}
 			}
 		}
 		q.mu.Unlock()
@@ -117,17 +129,8 @@ func (m *CAQueueManager) CancelJobsForRule(ruleID string) {
 			cancel()
 		}
 	}
-}
-
-// CancelAllJobs cancels every pending and running issuance while keeping the
-// manager active for future jobs.
-func (m *CAQueueManager) CancelAllJobs() {
-	m.mu.Lock()
-	queues := m.stopQueuesLocked()
-	m.mu.Unlock()
-
-	for _, q := range queues {
-		q.wait()
+	for _, executionDone := range done {
+		<-executionDone
 	}
 }
 
@@ -181,7 +184,26 @@ func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains stri
 	if !m.active {
 		return errors.New("从节点不运行证书签发队列")
 	}
+	return m.enqueueLocked(providerID, jobID, ruleID, domains)
+}
 
+func (m *CAQueueManager) EnqueueIfActive(providerID int, jobID int, ruleID, domains string, transition func() (bool, error)) (bool, error) {
+	if m.beforeActiveEnqueue != nil {
+		m.beforeActiveEnqueue()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.active {
+		return false, nil
+	}
+	changed, err := transition()
+	if err != nil || !changed {
+		return changed, err
+	}
+	return true, m.enqueueLocked(providerID, jobID, ruleID, domains)
+}
+
+func (m *CAQueueManager) enqueueLocked(providerID int, jobID int, ruleID, domains string) error {
 	provider, err := loadCAProvider(providerID)
 	if err != nil {
 		failJob(jobID, fmt.Sprintf("CA Provider 不可用: %v", err))
@@ -234,22 +256,23 @@ type queueItem struct {
 }
 
 type caQueue struct {
-	provider     models.CAProvider
-	pending      []queueItem
-	running      int
-	active       map[int]struct{} // jobIDs currently pending or running
-	cancels      map[int]context.CancelFunc
-	runningRules map[int]string
-	lastOrder    time.Time
-	reloader     func() error
-	mu           sync.Mutex
-	stopCh       chan struct{}
-	ctx          context.Context
-	cancel       context.CancelFunc
-	loopDone     chan struct{}
-	executions   sync.WaitGroup
-	stopping     bool
-	executeFn    func(context.Context, queueItem, models.CAProvider) error
+	provider      models.CAProvider
+	pending       []queueItem
+	running       int
+	active        map[int]struct{} // jobIDs currently pending or running
+	cancels       map[int]context.CancelFunc
+	executionDone map[int]chan struct{}
+	runningRules  map[int]string
+	lastOrder     time.Time
+	reloader      func() error
+	mu            sync.Mutex
+	stopCh        chan struct{}
+	ctx           context.Context
+	cancel        context.CancelFunc
+	loopDone      chan struct{}
+	executions    sync.WaitGroup
+	stopping      bool
+	executeFn     func(context.Context, queueItem, models.CAProvider) error
 }
 
 type queueExecution struct {
@@ -265,15 +288,16 @@ func newCAQueue(provider models.CAProvider, reloader func() error) *caQueue {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	q := &caQueue{
-		provider:     provider,
-		reloader:     reloader,
-		active:       make(map[int]struct{}),
-		cancels:      make(map[int]context.CancelFunc),
-		runningRules: make(map[int]string),
-		stopCh:       make(chan struct{}),
-		loopDone:     make(chan struct{}),
-		ctx:          ctx,
-		cancel:       cancel,
+		provider:      provider,
+		reloader:      reloader,
+		active:        make(map[int]struct{}),
+		cancels:       make(map[int]context.CancelFunc),
+		executionDone: make(map[int]chan struct{}),
+		runningRules:  make(map[int]string),
+		stopCh:        make(chan struct{}),
+		loopDone:      make(chan struct{}),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 	q.executeFn = func(ctx context.Context, item queueItem, provider models.CAProvider) error {
 		return NewCertIssuer(q.reloader).Issue(ctx, item.jobID, item.ruleID, item.domains, provider)
@@ -366,6 +390,8 @@ func (q *caQueue) prepareExecutionLocked(parent context.Context) (queueExecution
 	q.executions.Add(1)
 	ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
 	q.cancels[item.jobID] = cancel
+	done := make(chan struct{})
+	q.executionDone[item.jobID] = done
 	q.runningRules[item.jobID] = item.ruleID
 	return queueExecution{item: item, provider: q.provider, ctx: ctx, cancel: cancel}, true
 }
@@ -383,6 +409,8 @@ func (q *caQueue) execute(execution queueExecution) {
 		q.running--
 		delete(q.active, item.jobID)
 		delete(q.cancels, item.jobID)
+		close(q.executionDone[item.jobID])
+		delete(q.executionDone, item.jobID)
 		delete(q.runningRules, item.jobID)
 		q.mu.Unlock()
 	}()

@@ -257,7 +257,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 				material := issuedCertificate{ruleID: ruleID, certPEM: existingCert, keyPEM: existingKey, notAfter: notAfter, providerID: jobProviderID, deploymentAttempt: deploymentAttempt}
 				unlock := DeployLock(ruleID)
 				defer unlock()
-				if err := confirmCertificateDeployment(context.Background(), jobID, material, true); err != nil {
+				if err := confirmCertificateDeployment(ctx, jobID, material, true); err != nil {
 					return err
 				}
 				logger.Log("downloaded", "检测到已签发的有效证书，直接重新部署文件")
@@ -265,15 +265,24 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 				if snapshotErr != nil {
 					return s.deploymentFailed(jobID, material, "读取现有证书文件失败: "+snapshotErr.Error(), fmt.Errorf("snapshot existing certificate files: %w", snapshotErr))
 				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				if err := WriteCertFiles(ruleID, existingCert, existingKey); err != nil {
 					return s.deploymentFailed(jobID, material, "已有证书重新部署失败: "+err.Error(), fmt.Errorf("redeploy existing certificate: %w", err))
+				}
+				if err := ctx.Err(); err != nil {
+					return errors.Join(err, restoreCertificateDeployment(snapshot, s.caddyReloader))
 				}
 				if s.caddyReloader != nil {
 					if err := s.caddyReloader(); err != nil {
 						return s.deploymentFailed(jobID, material, "重新部署后重载 Caddy 失败: "+err.Error(), fmt.Errorf("reload Caddy after certificate redeploy: %w", err))
 					}
 				}
-				result, err := db.DB.Exec(`UPDATE cert_jobs SET status='issued', message='证书文件重新部署成功', deployment_attempts=0, deployment_available_after=NULL, updated_at=datetime('now')
+				if err := ctx.Err(); err != nil {
+					return errors.Join(err, restoreCertificateDeployment(snapshot, s.caddyReloader))
+				}
+				result, err := db.DB.ExecContext(ctx, `UPDATE cert_jobs SET status='issued', message='证书文件重新部署成功', deployment_attempts=0, deployment_available_after=NULL, updated_at=datetime('now')
 					WHERE id=? AND status='downloaded' AND EXISTS (SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1)
 					AND EXISTS (SELECT 1 FROM global_config WHERE id=1 AND is_master=1)`, jobID, ruleID)
 				if err == nil {

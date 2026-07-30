@@ -3,8 +3,8 @@ package models
 type ClusterRegisterRequest struct {
 	Token     string `json:"token" binding:"required"`
 	Name      string `json:"name" binding:"required"`
-	IPAddress string `json:"ip_address" binding:"required"`
-	Port      int    `json:"port"`
+	IPAddress string `json:"ip_address" binding:"required,ip"`
+	Port      int    `json:"port" binding:"omitempty,min=1,max=65535"`
 }
 
 type ClusterModeRequest struct {

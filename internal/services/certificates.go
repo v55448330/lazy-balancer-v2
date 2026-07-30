@@ -394,7 +394,7 @@ func (s *CertificateService) Start() {
 // (expires_at IS NULL) that renewExpiringCertificates cannot see.
 func (s *CertificateService) requeueWaitingCAJobs() {
 	qm := GetCAQueueManager()
-	if qm == nil || qm.IsPaused() {
+	if qm == nil {
 		return
 	}
 
@@ -420,21 +420,25 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 		if err := rows.Scan(&jobID, &ruleID, &domain, &caProviderID); err != nil {
 			continue
 		}
-		res, err := db.DB.Exec(
-			"UPDATE cert_jobs SET status='queued', message='冷却结束，重新排队签发', updated_at=datetime('now') WHERE id=? AND status='waiting_ca' AND (ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))",
-			jobID,
-		)
+		changed, err := qm.EnqueueIfActive(caProviderID, jobID, ruleID, domain, func() (bool, error) {
+			res, err := db.DB.Exec(
+				"UPDATE cert_jobs SET status='queued', message='冷却结束，重新排队签发', updated_at=datetime('now') WHERE id=? AND status='waiting_ca' AND (ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))",
+				jobID,
+			)
+			if err != nil {
+				return false, err
+			}
+			rows, err := res.RowsAffected()
+			return rows != 0, err
+		})
 		if err != nil {
 			log.Printf("waiting_ca scan: failed to requeue job %d: %v", jobID, err)
 			continue
 		}
-		if rows, _ := res.RowsAffected(); rows == 0 {
+		if !changed {
 			continue
 		}
 		RecordAuditLog("system", "重新排队", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(ruleID), AuditSourcePart("ca_cooldown")), "")
-		if err := qm.Enqueue(caProviderID, jobID, ruleID, domain); err != nil {
-			log.Printf("waiting_ca scan: failed to enqueue job %d: %v", jobID, err)
-		}
 	}
 }
 
@@ -605,9 +609,6 @@ func HasCertJob(ruleID, domains string) bool {
 
 func (s *CertificateService) renewExpiringCertificates() {
 	qm := GetCAQueueManager()
-	if qm != nil && qm.IsPaused() {
-		return
-	}
 
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
@@ -637,26 +638,29 @@ func (s *CertificateService) renewExpiringCertificates() {
 			continue
 		}
 
-		res, err := db.DB.Exec(
-			"UPDATE cert_jobs SET status='queued', message='等待排队续期', updated_at=datetime('now') WHERE id=? AND status IN ('issued','failed','waiting_ca') AND (ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))",
-			j.ID,
-		)
+		if qm == nil {
+			log.Printf("Renewal: CA queue manager not initialized")
+			return
+		}
+		changed, err := qm.EnqueueIfActive(j.CAProviderID, j.ID, j.RuleID, j.Domain, func() (bool, error) {
+			res, err := db.DB.Exec(
+				"UPDATE cert_jobs SET status='queued', message='等待排队续期', updated_at=datetime('now') WHERE id=? AND status IN ('issued','failed','waiting_ca') AND (ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))",
+				j.ID,
+			)
+			if err != nil {
+				return false, err
+			}
+			rows, err := res.RowsAffected()
+			return rows != 0, err
+		})
 		if err != nil {
 			log.Printf("Renewal: failed to update job %d status: %v", j.ID, err)
 			continue
 		}
-		if rows, _ := res.RowsAffected(); rows == 0 {
+		if !changed {
 			continue
 		}
 		RecordAuditLog("system", "续签排队", "证书签发任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditSourcePart("renewal")), "")
-		qm := GetCAQueueManager()
-		if qm == nil {
-			log.Printf("Renewal: CA queue manager not initialized")
-			continue
-		}
-		if err := qm.Enqueue(j.CAProviderID, j.ID, j.RuleID, j.Domain); err != nil {
-			log.Printf("Renewal: failed to enqueue job %d: %v", j.ID, err)
-		}
 	}
 }
 
