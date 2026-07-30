@@ -61,13 +61,9 @@ func ResetCAQueueManagerForTest() {
 func (m *CAQueueManager) CancelJob(jobID int) {
 	cancelCertificateDeploymentRetry(jobID)
 	m.mu.Lock()
-	queues := make([]*caQueue, 0, len(m.queues))
-	for _, q := range m.queues {
-		queues = append(queues, q)
-	}
-	m.mu.Unlock()
 	var done []<-chan struct{}
-	for _, q := range queues {
+	var cancels []context.CancelFunc
+	for _, q := range m.queues {
 		q.mu.Lock()
 		pending := q.pending[:0]
 		for _, item := range q.pending {
@@ -79,13 +75,17 @@ func (m *CAQueueManager) CancelJob(jobID int) {
 		}
 		q.pending = pending
 		cancel, ok := q.cancels[jobID]
+		if ok {
+			cancels = append(cancels, cancel)
+		}
 		if executionDone := q.executionDone[jobID]; executionDone != nil {
 			done = append(done, executionDone)
 		}
 		q.mu.Unlock()
-		if ok {
-			cancel()
-		}
+	}
+	m.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
 	}
 	for _, executionDone := range done {
 		<-executionDone
@@ -95,14 +95,9 @@ func (m *CAQueueManager) CancelJob(jobID int) {
 func (m *CAQueueManager) CancelJobsForRule(ruleID string) {
 	cancelCertificateDeploymentRetriesForRule(ruleID)
 	m.mu.Lock()
-	queues := make([]*caQueue, 0, len(m.queues))
-	for _, q := range m.queues {
-		queues = append(queues, q)
-	}
-	m.mu.Unlock()
-
 	var done []<-chan struct{}
-	for _, q := range queues {
+	var cancels []context.CancelFunc
+	for _, q := range m.queues {
 		q.mu.Lock()
 		pending := q.pending[:0]
 		for _, item := range q.pending {
@@ -113,7 +108,6 @@ func (m *CAQueueManager) CancelJobsForRule(ruleID string) {
 			pending = append(pending, item)
 		}
 		q.pending = pending
-		cancels := make([]context.CancelFunc, 0)
 		for jobID, runningRuleID := range q.runningRules {
 			if runningRuleID == ruleID {
 				if cancel := q.cancels[jobID]; cancel != nil {
@@ -125,9 +119,10 @@ func (m *CAQueueManager) CancelJobsForRule(ruleID string) {
 			}
 		}
 		q.mu.Unlock()
-		for _, cancel := range cancels {
-			cancel()
-		}
+	}
+	m.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
 	}
 	for _, executionDone := range done {
 		<-executionDone

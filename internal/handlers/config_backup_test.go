@@ -158,6 +158,26 @@ func newBackupTestHandlers(t *testing.T) *Handlers {
 	}
 }
 
+func completeBackupJSON(t *testing.T, tables map[string][]map[string]any) string {
+	t.Helper()
+	completeTables := make(map[string][]map[string]any, len(configBackupTables))
+	for _, table := range configBackupTables {
+		completeTables[table] = []map[string]any{}
+	}
+	for table, rows := range tables {
+		completeTables[table] = rows
+	}
+	data, err := json.Marshal(configBackup{
+		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 1},
+		Config: map[string]any{},
+		Tables: completeTables,
+	})
+	if err != nil {
+		t.Fatalf("marshal complete backup: %v", err)
+	}
+	return string(data)
+}
+
 func TestConfigBackup_export_import_roundtrip(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
@@ -294,7 +314,9 @@ func TestImportConfigBackup_joins_import_and_certificate_job_recovery_failures(t
 	oldRequeue := requeueNonTerminalCertJobs
 	requeueNonTerminalCertJobs = func() error { return errors.New("requeue failed") }
 	t.Cleanup(func() { requeueNonTerminalCertJobs = oldRequeue })
-	backup := `{"meta":{"app":"lazy-balancer-v2","version":1},"tables":{"users":[],"lb_rules":[{"caddy_id":"lb_bad_recovery","name":"bad","protocol":"http","listen_port":8443,"enable_tls":1,"tls_source":"manual","tls_cert":"invalid-cert","tls_key":"invalid-key"}]}}`
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"lb_rules": {{"caddy_id": "lb_bad_recovery", "name": "bad", "protocol": "http", "listen_port": 8443, "enable_tls": 1, "tls_source": "manual", "tls_cert": "invalid-cert", "tls_key": "invalid-key"}},
+	})
 	router := gin.New()
 	router.POST("/config/import", h.ImportConfigBackup)
 	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
@@ -402,6 +424,8 @@ func TestValidateConfigImport_rejects_v2_backup_missing_required_contract(t *tes
 		{name: "unsupported version", body: `{"meta":{"app":"lazy-balancer-v2","version":2},"tables":{"lb_rules":[],"users":[]}}`},
 		{name: "missing tables", body: `{"meta":{"app":"lazy-balancer-v2","version":1}}`},
 		{name: "missing users", body: `{"meta":{"app":"lazy-balancer-v2","version":1},"tables":{"lb_rules":[]}}`},
+		{name: "missing global config", body: `{"meta":{"app":"lazy-balancer-v2","version":1},"tables":{"lb_rules":[],"upstreams":[],"path_rules":[],"users":[],"api_keys":[],"ca_providers":[],"certificate_configs":[],"cert_jobs":[]}}`},
+		{name: "missing exported table", body: `{"meta":{"app":"lazy-balancer-v2","version":1},"config":{},"tables":{"lb_rules":[],"upstreams":[],"path_rules":[],"users":[],"api_keys":[],"ca_providers":[],"certificate_configs":[]}}`},
 	}
 
 	for _, tt := range tests {
@@ -439,13 +463,10 @@ func TestImportConfigBackup_rolls_back_when_certificate_materialization_fails(t 
 	if _, err := db.DB.Exec("INSERT INTO lb_rules (caddy_id, name, protocol, listen_port, enabled) VALUES ('lb_old', 'old-rule', 'http', 8080, 1)"); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
-	backup := `{
-		"meta":{"app":"lazy-balancer-v2","version":1},
-		"tables":{
-			"users":[{"id":2,"username":"new-user","password_hash":"hash","role":"admin"}],
-			"lb_rules":[{"caddy_id":"lb_badcert","name":"new-rule","protocol":"http","listen_port":8443,"enabled":1,"enable_tls":1,"tls_source":"manual","tls_cert":"invalid-cert","tls_key":"invalid-key"}]
-		}
-	}`
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"users":    {{"id": 2, "username": "new-user", "password_hash": "hash", "role": "admin"}},
+		"lb_rules": {{"caddy_id": "lb_badcert", "name": "new-rule", "protocol": "http", "listen_port": 8443, "enabled": 1, "enable_tls": 1, "tls_source": "manual", "tls_cert": "invalid-cert", "tls_key": "invalid-key"}},
+	})
 	router := gin.New()
 	router.POST("/config/import", h.ImportConfigBackup)
 
@@ -492,8 +513,10 @@ func TestImportConfigBackup_restores_partial_certificate_materialization(t *test
 		t.Fatalf("generate valid certificate: %v", err)
 	}
 	backup, err := json.Marshal(configBackup{
-		Meta: configBackupMeta{App: "lazy-balancer-v2", Version: 1},
+		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 1},
+		Config: map[string]any{},
 		Tables: map[string][]map[string]any{
+			"upstreams": {}, "path_rules": {}, "api_keys": {}, "ca_providers": {}, "certificate_configs": {}, "cert_jobs": {},
 			"users": {{"id": 2, "username": "new-user", "password_hash": "hash", "role": "admin"}},
 			"lb_rules": {
 				{"caddy_id": firstRuleID, "name": "first-rule", "protocol": "http", "domain": "partial.example.test", "listen_port": 8443, "enabled": 1, "enable_tls": 1, "tls_source": "manual", "tls_cert": validCert, "tls_key": validKey},
@@ -548,13 +571,9 @@ func TestImportConfigBackup_reports_import_and_runtime_restore_failures(t *testi
 	// Given
 	harness := newImportRollbackHarness(t)
 	harness.failRestore()
-	backup := `{
-		"meta":{"app":"lazy-balancer-v2","version":1},
-		"tables":{
-			"users":[],
-			"lb_rules":[{"caddy_id":"lb_bad_restore","name":"bad-cert","protocol":"http","listen_port":8443,"enable_tls":1,"tls_source":"manual","tls_cert":"invalid-cert","tls_key":"invalid-key"}]
-		}
-	}`
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"lb_rules": {{"caddy_id": "lb_bad_restore", "name": "bad-cert", "protocol": "http", "listen_port": 8443, "enable_tls": 1, "tls_source": "manual", "tls_cert": "invalid-cert", "tls_key": "invalid-key"}},
+	})
 	router := gin.New()
 	router.POST("/config/import", harness.handler.ImportConfigBackup)
 

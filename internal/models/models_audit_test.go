@@ -74,3 +74,20 @@ func TestAPIKeyResponse_serializes_nullable_times_as_values_or_null(t *testing.T
 		t.Fatalf("APIKeyResponse leaked sql nullable representation: %s", jsonBody)
 	}
 }
+
+func TestPublicModelsSerializeNullableTimesAsStringsOrNull(t *testing.T) {
+	value := JSONNullTime{NullTime: sql.NullTime{Time: time.Date(2026, time.July, 30, 1, 2, 3, 0, time.UTC), Valid: true}}
+	data, err := json.Marshal([]any{
+		LbRule{UpdatedAt: value.NullTime}, GlobalConfig{LastSync: value}, GlobalConfig{}, CertificateConfig{UpdatedAt: value}, CertificateConfig{},
+	})
+	if err != nil {
+		t.Fatalf("marshal public models: %v", err)
+	}
+	body := string(data)
+	if strings.Count(body, `"2026-07-30T01:02:03Z"`) != 3 || !strings.Contains(body, `"updated_at":null`) || !strings.Contains(body, `"last_sync":null`) {
+		t.Fatalf("unexpected nullable time JSON: %s", body)
+	}
+	if strings.Contains(body, `"Time"`) || strings.Contains(body, `"Valid"`) {
+		t.Fatalf("public model leaked sql.NullTime representation: %s", body)
+	}
+}

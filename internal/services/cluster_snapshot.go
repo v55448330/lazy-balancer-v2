@@ -36,6 +36,11 @@ type snapshotStore interface {
 // the requesting node's cluster token (HMAC-SHA256) so slaves can verify
 // authenticity, not just integrity; leave empty to skip signing (legacy path).
 func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientFingerprint string, tokenKey string) (models.ClusterSnapshot, bool, error) {
+	if tokenKey != "" {
+		if _, err := s.db.ExecContext(ctx, "UPDATE nodes SET registration_secret=NULL WHERE cluster_token_hash=?", tokenHash(tokenKey)); err != nil {
+			return models.ClusterSnapshot{}, false, fmt.Errorf("确认集群令牌交付: %w", err)
+		}
+	}
 	snapshot, err := s.cachedSnapshot(ctx)
 	if err != nil {
 		return models.ClusterSnapshot{}, false, err

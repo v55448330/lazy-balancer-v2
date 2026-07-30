@@ -1,6 +1,8 @@
 package services
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -41,5 +43,14 @@ func TestCAProviderQueries_mask_list_but_not_business_load(t *testing.T) {
 	}
 	if loaded.Credentials != credentials {
 		t.Fatalf("business credentials=%q, want unmasked credentials", loaded.Credentials)
+	}
+}
+
+func TestCAProviderService_TestCAProviderWithContext_honors_parent_cancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := NewCAProviderService().TestCAProviderWithContext(ctx, 1)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("test provider error=%v, want context canceled", err)
 	}
 }

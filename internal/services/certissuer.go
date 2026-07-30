@@ -305,7 +305,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// real issuance flow. If the CA is down (e.g. ZeroSSL 504), fail fast and
 	// let the retry scheduler handle the next attempt.
 	logger.Log("creating_account", fmt.Sprintf("测试 CA 提供商 %s (%s) 连通性", provider.Name, provider.Provider))
-	if err := NewCAProviderService().TestCAProvider(provider.ID); err != nil {
+	if err := NewCAProviderService().TestCAProviderWithContext(ctx, provider.ID); err != nil {
 		logger.Log("failed", fmt.Sprintf("CA 提供商测试失败: %v", err))
 		failJob(jobID, fmt.Sprintf("CA 提供商测试失败: %v", err))
 		return fmt.Errorf("CA provider test failed: %w", err)

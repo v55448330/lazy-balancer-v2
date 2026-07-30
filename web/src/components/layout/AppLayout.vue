@@ -116,7 +116,7 @@
       </el-footer>
     </el-container>
 
-    <el-dialog v-model="showProfile" title="个人资料" width="480px" :close-on-click-modal="false" :before-close="beforeProfileClose">
+    <el-dialog v-model="showProfile" title="个人资料" width="min(480px, 92vw)" :close-on-click-modal="false" :before-close="beforeProfileClose">
       <el-alert v-if="isSlave" title="从节点只读，请在主节点操作" type="info" :closable="false" show-icon class="profile-readonly-alert" />
       <el-form :model="profileForm" label-width="80px" class="profile-form" :disabled="saving">
         <el-form-item label="用户名">

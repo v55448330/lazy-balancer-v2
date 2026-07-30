@@ -123,7 +123,7 @@
     <el-dialog
       v-model="dialogVisible"
       :title="editingId ? '编辑 DNS 提供商配置' : '添加 DNS 提供商配置'"
-      width="520"
+      width="min(520px, 92vw)"
       :close-on-click-modal="false"
       :before-close="beforeConfigDialogClose"
     >
@@ -172,7 +172,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="caDialogVisible" title="编辑 CA 提供商" width="520" :before-close="beforeCADialogClose">
+    <el-dialog v-model="caDialogVisible" title="编辑 CA 提供商" width="min(520px, 92vw)" :before-close="beforeCADialogClose">
       <el-form :model="caForm" label-width="140px" :disabled="savingCA">
         <el-form-item label="名称">
           <el-input v-model="caForm.name" disabled />

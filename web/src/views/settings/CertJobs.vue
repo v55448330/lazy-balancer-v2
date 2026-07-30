@@ -97,7 +97,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import * as pkijs from 'pkijs'
 import * as asn1js from 'asn1js'
-import type { APIResponse, NullableTime } from '@/types'
+import type { APIResponse } from '@/types'
 import { assertNever, certJobStatusLabel } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
 
@@ -108,7 +108,7 @@ interface CertJob {
   status: CertJobStatus
   message: string
   expires_at?: string
-  updated_at?: string | NullableTime | null
+  updated_at?: string | null
   cert_pem?: string
   ca_provider_name?: string
   renewal_attempts?: number
@@ -117,7 +117,6 @@ interface CertJob {
 }
 
 interface CertInfo {
-  issuer: string
   not_after: string
   days_remaining: number
   status: string
@@ -231,11 +230,7 @@ const canRetry = (row: CertJob): boolean => {
   const cooldownMinutes = retryCooldownMinutes(row.status)
   if (cooldownMinutes === null) return false
   if (cooldownMinutes === 0) return true
-  const updatedAtValue = typeof row.updated_at === 'string'
-    ? row.updated_at
-    : row.updated_at?.Valid
-      ? row.updated_at.Time
-      : null
+  const updatedAtValue = row.updated_at
   if (!updatedAtValue) return true
   const updatedAt = new Date(updatedAtValue).getTime()
   if (Number.isNaN(updatedAt)) return true
@@ -305,13 +300,7 @@ const parseCertInfo = (certPEM: string): CertInfo | null => {
     const now = new Date()
     const expiry = new Date(notAfterValue)
     const daysRemaining = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-    const issuerValues: string[] = []
-    for (const rdn of cert.issuer.typesAndValues) {
-      const value = rdn.value?.valueBlock?.value
-      if (value) issuerValues.push(String(value))
-    }
     return {
-      issuer: issuerValues.join(', ') || '-',
       not_after: formatDate(notAfter),
       days_remaining: daysRemaining,
       status: daysRemaining <= 0 ? 'expired' : (daysRemaining <= 30 ? 'expiring' : 'valid'),

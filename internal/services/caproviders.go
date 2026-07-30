@@ -327,7 +327,14 @@ func (e *CAProviderTestError) Unwrap() error { return e.Err }
 // It does not attempt to issue a certificate or validate domain ownership;
 // it only verifies that the CA is reachable and the credentials are accepted.
 func (s *CAProviderService) TestCAProvider(id int) error {
+	return s.TestCAProviderWithContext(context.Background(), id)
+}
+
+func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id int) error {
 	log.Printf("Testing CA provider %d", id)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	var p models.CAProvider
 	err := scanCAProvider(db.DB.QueryRow("SELECT "+caProviderColumns+" FROM ca_providers WHERE id=? AND enabled=1", id), &p)
@@ -354,7 +361,7 @@ func (s *CAProviderService) TestCAProvider(id int) error {
 		return &CAProviderTestError{Phase: "config", Err: err}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := client.RegisterAccount(ctx); err != nil {
 		return &CAProviderTestError{Phase: "register", Err: err}

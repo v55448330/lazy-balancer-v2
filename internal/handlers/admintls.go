@@ -58,6 +58,8 @@ type adminTLSError struct{ msg string }
 
 func (e *adminTLSError) Error() string { return e.msg }
 
+var exitProcess = os.Exit
+
 // InspectAdminTLSCert parses uploaded cert/key files without saving, so the
 // UI can show what will be installed before the user confirms.
 func (h *Handlers) InspectAdminTLSCert(c *gin.Context) {
@@ -138,12 +140,16 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	cert, key := current.Cert, current.Key
 	port := h.cfg.Port
 	if mode == "upload" {
-		certPEM, keyPEM, err := readAdminTLSFiles(c)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-			return
+		certFiles := c.Request.MultipartForm.File["cert_file"]
+		keyFiles := c.Request.MultipartForm.File["key_file"]
+		if len(certFiles) > 0 || len(keyFiles) > 0 {
+			certPEM, keyPEM, err := readAdminTLSFiles(c)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+				return
+			}
+			cert, key = certPEM, keyPEM
 		}
-		cert, key = certPEM, keyPEM
 	}
 
 	if enabled {
@@ -172,6 +178,6 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已保存，服务正在重启以应用 HTTPS 配置"})
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		os.Exit(0)
+		exitProcess(0)
 	}()
 }

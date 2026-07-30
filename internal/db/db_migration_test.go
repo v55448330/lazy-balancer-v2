@@ -141,6 +141,35 @@ func TestMigrateCertJobsStatusConstraint_repairs_incorrect_status_default(t *tes
 	}
 }
 
+func TestMigrateCertJobsStatusConstraint_recreates_indexes_after_startup_index_creation(t *testing.T) {
+	database := openMigrationTestDB(t)
+	createLegacyCertJobs(t, database, "'queued'", "'queued','disabled'")
+	if _, err := database.Exec(`
+		CREATE INDEX idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain);
+		CREATE UNIQUE INDEX idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain);
+		INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_index','index.example','queued');
+	`); err != nil {
+		t.Fatalf("seed startup index state: %v", err)
+	}
+
+	if err := migrateCertJobsStatusConstraint(); err != nil {
+		t.Fatalf("migrate certificate jobs after startup index creation: %v", err)
+	}
+
+	var indexCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN
+		('idx_cert_jobs_rule_domain','idx_cert_jobs_rule_domain_unique') AND tbl_name='cert_jobs'`).Scan(&indexCount); err != nil {
+		t.Fatalf("count migrated indexes: %v", err)
+	}
+	if indexCount != 2 {
+		t.Fatalf("certificate job indexes=%d, want 2", indexCount)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_index','index.example','failed')
+		ON CONFLICT(rule_id,domain) DO UPDATE SET status=excluded.status`); err != nil {
+		t.Fatalf("upsert through recreated unique index: %v", err)
+	}
+}
+
 func TestInitialize_returns_error_when_global_config_singleton_insert_fails(t *testing.T) {
 	// Given
 	dir := t.TempDir()
@@ -258,6 +287,31 @@ func TestInitialize_adds_certificate_deployment_retry_columns(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("deployment retry columns=%d, want 2", count)
+	}
+}
+
+func TestMigrateLegacyDNSCredentials_rollsBackAllRowsOnFailure(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if _, err := database.Exec(`CREATE TABLE certificate_configs (
+		id INTEGER PRIMARY KEY, dns_id TEXT, dns_key TEXT, dns_credentials TEXT
+	);
+	INSERT INTO certificate_configs VALUES (1, 'id-1', 'key-1', NULL), (2, 'id-2', 'key-2', NULL);
+	CREATE TRIGGER fail_second_credential BEFORE UPDATE ON certificate_configs WHEN NEW.id = 2
+	BEGIN SELECT RAISE(ABORT, 'injected migration failure'); END;`); err != nil {
+		t.Fatalf("seed legacy certificate configs: %v", err)
+	}
+
+	err := migrateLegacyDNSCredentials()
+
+	if err == nil || !strings.Contains(err.Error(), "injected migration failure") {
+		t.Fatalf("migration error=%v, want injected failure", err)
+	}
+	var migrated int
+	if err := database.QueryRow("SELECT COUNT(*) FROM certificate_configs WHERE dns_credentials IS NOT NULL").Scan(&migrated); err != nil {
+		t.Fatalf("count migrated credentials: %v", err)
+	}
+	if migrated != 0 {
+		t.Fatalf("migrated rows=%d, want transaction rollback", migrated)
 	}
 }
 

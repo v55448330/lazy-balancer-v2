@@ -2,6 +2,7 @@ package acme
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -289,10 +290,15 @@ func (i *Issuer) waitForValidation(ctx context.Context, authURL, chalURL string)
 			case "valid":
 				return nil
 			case "invalid", "deactivated", "expired", "revoked":
-				if lastChal != nil && lastChal.Error != nil {
-					return fmt.Errorf("授权状态 %s: %v", auth.Status, lastChal.Error)
+				var authErr error
+				if auth.Status == "invalid" {
+					_, waitErr := i.Client.WaitAuthorization(ctx, authURL)
+					var authorizationErr *acme.AuthorizationError
+					if errors.As(waitErr, &authorizationErr) {
+						authErr = authorizationErr
+					}
 				}
-				return fmt.Errorf("授权状态: %s", auth.Status)
+				return terminalAuthorizationError(auth.Status, authErr, lastChal)
 			}
 		}
 
@@ -302,6 +308,16 @@ func (i *Issuer) waitForValidation(ctx context.Context, authURL, chalURL string)
 		case <-ticker.C:
 		}
 	}
+}
+
+func terminalAuthorizationError(status string, authorizationErr error, challenge *acme.Challenge) error {
+	if authorizationErr != nil {
+		return fmt.Errorf("授权状态 %s: %v", status, authorizationErr)
+	}
+	if challenge != nil && challenge.Error != nil {
+		return fmt.Errorf("授权状态 %s: %v", status, challenge.Error)
+	}
+	return fmt.Errorf("授权状态: %s", status)
 }
 
 // waitForDNS polls DNS resolvers until the expected TXT record appears.

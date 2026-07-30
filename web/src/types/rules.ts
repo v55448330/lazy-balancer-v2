@@ -1,5 +1,3 @@
-import type { NullableTime } from './index'
-
 export type IpAclMode = '' | 'allow' | 'deny'
 
 export interface Upstream {
@@ -91,7 +89,7 @@ export interface Rule extends ProxyTimeoutConfig {
   created_by: number
   updated_by: number
   created_at: string
-  updated_at: string | NullableTime | null
+  updated_at: string | null
 }
 
 export interface CreateRuleRequest extends ProxyTimeoutConfig {

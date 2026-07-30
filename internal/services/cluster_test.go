@@ -90,7 +90,7 @@ func TestClusterService_RegisterToken_rejects_expired_token(t *testing.T) {
 	}
 }
 
-func TestClusterService_ApproveNode_returns_cluster_token_once(t *testing.T) {
+func TestClusterService_ApproveNode_redelivers_cluster_token_until_authenticated(t *testing.T) {
 	// Given
 	service, database := newClusterTestService(t)
 	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
@@ -132,8 +132,8 @@ func TestClusterService_ApproveNode_returns_cluster_token_once(t *testing.T) {
 	if first.Status != "approved" || first.ClusterToken == "" {
 		t.Fatalf("first status = %#v, want approved with token", first)
 	}
-	if second.ClusterToken != "" {
-		t.Fatal("cluster token was disclosed more than once")
+	if second.ClusterToken != first.ClusterToken {
+		t.Fatalf("redelivered token=%q, want %q", second.ClusterToken, first.ClusterToken)
 	}
 	nodeID, err := AuthenticateClusterToken(context.Background(), database, first.ClusterToken)
 	if err != nil || nodeID != registration.RegistrationID {
@@ -145,6 +145,12 @@ func TestClusterService_ApproveNode_returns_cluster_token_once(t *testing.T) {
 	}
 	if plaintextCount != 0 {
 		t.Fatal("cluster token was stored in plaintext")
+	}
+	if _, _, err := service.Snapshot(context.Background(), 0, "", first.ClusterToken); err != nil {
+		t.Fatalf("authenticate snapshot: %v", err)
+	}
+	if _, err := service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret); !errors.Is(err, ErrInvalidClusterAuth) {
+		t.Fatalf("registration secret remained valid after token authentication: %v", err)
 	}
 }
 
@@ -506,6 +512,50 @@ func TestSyncService_applySnapshot_rolls_back_when_caddy_rejects_config(t *testi
 	}
 	if oldCount != 1 || incomingCount != 0 {
 		t.Fatalf("rollback users old=%d incoming=%d", oldCount, incomingCount)
+	}
+}
+
+func TestSyncService_applySnapshot_invalidates_cache_only_after_commit(t *testing.T) {
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
+		t.Fatalf("set slave mode: %v", err)
+	}
+	reject := false
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		if reject {
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+	snapshotA := models.ClusterSnapshot{Version: 1, Users: []models.ClusterUser{{ID: 1, Username: "user-a", PasswordHash: "hash", Role: "admin", IsEnabled: true}}, BasicSettings: models.ClusterBasicSettings{LogLevel: "info", Timezone: "Asia/Shanghai"}}
+	if err := syncService.applySnapshot(context.Background(), snapshotA); err != nil {
+		t.Fatalf("apply snapshot A: %v", err)
+	}
+	cachedA, _, err := service.Snapshot(context.Background(), 0, "", "")
+	if err != nil || len(cachedA.Users) != 1 || cachedA.Users[0].Username != "user-a" {
+		t.Fatalf("cache snapshot A=%#v err=%v", cachedA.Users, err)
+	}
+
+	snapshotB := models.ClusterSnapshot{Version: 2, Users: []models.ClusterUser{{ID: 2, Username: "user-b", PasswordHash: "hash", Role: "admin", IsEnabled: true}}, BasicSettings: snapshotA.BasicSettings}
+	if err := syncService.applySnapshot(context.Background(), snapshotB); err != nil {
+		t.Fatalf("apply snapshot B: %v", err)
+	}
+	cachedB, _, err := service.Snapshot(context.Background(), 0, "", "")
+	if err != nil || len(cachedB.Users) != 1 || cachedB.Users[0].Username != "user-b" {
+		t.Fatalf("cache snapshot B=%#v err=%v", cachedB.Users, err)
+	}
+
+	reject = true
+	snapshotC := models.ClusterSnapshot{Version: 3, Users: []models.ClusterUser{{ID: 3, Username: "user-c", PasswordHash: "hash", Role: "admin", IsEnabled: true}}, BasicSettings: snapshotA.BasicSettings}
+	if err := syncService.applySnapshot(context.Background(), snapshotC); err == nil {
+		t.Fatal("snapshot C unexpectedly committed")
+	}
+	afterFailure, _, err := service.Snapshot(context.Background(), 0, "", "")
+	if err != nil || len(afterFailure.Users) != 1 || afterFailure.Users[0].Username != "user-b" {
+		t.Fatalf("cache after failed C=%#v err=%v", afterFailure.Users, err)
 	}
 }
 

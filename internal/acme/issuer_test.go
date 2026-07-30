@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -101,5 +102,18 @@ func TestIssuer_Issue_cleans_presented_records_when_later_present_fails(t *testi
 	}
 	if len(provider.cleaned) != 3 || firstRecordCleanups != 2 {
 		t.Fatalf("cleaned records=%v, want stale cleanup for both records and deferred cleanup for the first", provider.cleaned)
+	}
+}
+
+func TestTerminalAuthorizationError_prefers_authorization_error(t *testing.T) {
+	authError := &acme.Error{ProblemType: "urn:auth", Detail: "authorization detail"}
+	challengeError := &acme.Error{ProblemType: "urn:challenge", Detail: "challenge detail"}
+	err := terminalAuthorizationError(
+		"invalid",
+		&acme.AuthorizationError{Errors: []error{authError}},
+		&acme.Challenge{Error: challengeError},
+	)
+	if !strings.Contains(err.Error(), "authorization detail") || strings.Contains(err.Error(), "challenge detail") {
+		t.Fatalf("terminal error=%q, want authorization detail only", err)
 	}
 }

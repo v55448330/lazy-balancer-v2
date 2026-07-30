@@ -31,6 +31,52 @@ func TestCAQueueManager_CancelJob_removes_pending_job(t *testing.T) {
 	}
 }
 
+func TestCAQueueManager_CancelJob_cancels_enqueue_admitted_during_cancel(t *testing.T) {
+	_, _ = newClusterTestService(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	manager := &CAQueueManager{
+		queues: make(map[int]*caQueue),
+		active: true,
+		beforeEnqueue: func() {
+			close(entered)
+			<-release
+		},
+	}
+	enqueueDone := make(chan error, 1)
+	go func() {
+		enqueueDone <- manager.Enqueue(1, 42, "lb_cancel_race", "example.com")
+	}()
+	<-entered
+	cancelDone := make(chan struct{})
+	go func() {
+		manager.CancelJob(42)
+		close(cancelDone)
+	}()
+	select {
+	case <-cancelDone:
+		t.Fatal("cancel passed an enqueue inside the admission critical section")
+	default:
+	}
+	close(release)
+	if err := <-enqueueDone; err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	<-cancelDone
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	for _, queue := range manager.queues {
+		queue.mu.Lock()
+		_, active := queue.active[42]
+		pending := len(queue.pending)
+		queue.mu.Unlock()
+		if active || pending != 0 {
+			t.Fatalf("cancelled concurrent enqueue active=%v pending=%d", active, pending)
+		}
+	}
+}
+
 func TestCAQueueManager_CancelJobsForRule_removes_pending_and_cancels_running(t *testing.T) {
 	// Given
 	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)

@@ -122,9 +122,9 @@ func TestListAPIKeysIncludesUsernameOwnership(t *testing.T) {
 func TestCertJobEndpointsSerializeNullableTimes(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	validTime := time.Date(2026, time.July, 30, 12, 34, 56, 0, time.UTC)
-	result, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, expires_at, created_at, updated_at)
-		VALUES ('lb_valid', 'valid.example', 'issued', ?, ?, ?),
-		       ('lb_null', 'null.example', 'queued', NULL, ?, NULL)`, validTime, validTime, validTime, validTime)
+	result, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, expires_at, created_at, updated_at, ca_available_after)
+		VALUES ('lb_valid', 'valid.example', 'issued', ?, ?, ?, ?),
+		       ('lb_null', 'null.example', 'queued', NULL, ?, NULL, NULL)`, validTime, validTime, validTime, validTime, validTime)
 	if err != nil {
 		t.Fatalf("seed certificate jobs: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestCertJobEndpointsSerializeNullableTimes(t *testing.T) {
 		h.ListCertJobs(ctx)
 
 		body := recorder.Body.String()
-		if recorder.Code != http.StatusOK || !strings.Contains(body, `"expires_at":"2026-07-30T12:34:56Z"`) || !strings.Contains(body, `"updated_at":"2026-07-30T12:34:56Z"`) || !strings.Contains(body, `"expires_at":null`) || !strings.Contains(body, `"updated_at":null`) {
+		if recorder.Code != http.StatusOK || !strings.Contains(body, `"expires_at":"2026-07-30T12:34:56Z"`) || !strings.Contains(body, `"updated_at":"2026-07-30T12:34:56Z"`) || !strings.Contains(body, `"ca_available_after":"2026-07-30T12:34:56Z"`) || !strings.Contains(body, `"expires_at":null`) || !strings.Contains(body, `"updated_at":null`) || !strings.Contains(body, `"ca_available_after":null`) {
 			t.Fatalf("status=%d body=%s", recorder.Code, body)
 		}
 		if strings.Contains(body, `"Time"`) || strings.Contains(body, `"Valid"`) {
@@ -152,10 +152,10 @@ func TestCertJobEndpointsSerializeNullableTimes(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		id   int64
-		want string
+		want []string
 	}{
-		{name: "valid", id: validID, want: `"expires_at":"2026-07-30T12:34:56Z"`},
-		{name: "null", id: nullID, want: `"expires_at":null`},
+		{name: "valid", id: validID, want: []string{`"expires_at":"2026-07-30T12:34:56Z"`, `"ca_available_after":"2026-07-30T12:34:56Z"`}},
+		{name: "null", id: nullID, want: []string{`"expires_at":null`, `"ca_available_after":null`}},
 	} {
 		t.Run("detail "+tt.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -165,8 +165,13 @@ func TestCertJobEndpointsSerializeNullableTimes(t *testing.T) {
 			h.GetCertJob(ctx)
 
 			body := recorder.Body.String()
-			if recorder.Code != http.StatusOK || !strings.Contains(body, tt.want) {
-				t.Fatalf("status=%d body=%s, want %s", recorder.Code, body, tt.want)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, body)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(body, want) {
+					t.Fatalf("body=%s, want %s", body, want)
+				}
 			}
 			if strings.Contains(body, `"Time"`) || strings.Contains(body, `"Valid"`) {
 				t.Fatalf("response leaked sql.NullTime representation: %s", body)

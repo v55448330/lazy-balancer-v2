@@ -39,7 +39,7 @@
       @reregister="requestRegistration"
     />
 
-    <el-dialog v-model="tokenDialogVisible" title="一次性注册令牌" width="560px" :close-on-click-modal="false">
+    <el-dialog v-model="tokenDialogVisible" title="一次性注册令牌" width="min(560px, 92vw)" :close-on-click-modal="false">
       <el-alert title="仅展示一次，请立即复制并妥善保存" type="warning" :closable="false" show-icon />
       <div class="token-box">
         <code>{{ registerToken?.token }}</code>

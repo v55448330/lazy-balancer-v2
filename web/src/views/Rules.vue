@@ -801,7 +801,7 @@
     </el-dialog>
 
     <!-- View Config Dialog -->
-    <el-dialog v-model="configDialogVisible" title="Caddy 配置" width="900" :close-on-click-modal="true" @close="onConfigDialogClosed">
+    <el-dialog v-model="configDialogVisible" title="Caddy 配置" width="min(900px, 94vw)" :close-on-click-modal="true" @close="onConfigDialogClosed">
       <div v-if="configLoading" v-loading="configLoading" style="min-height: 200px;"></div>
       <div v-else-if="ruleConfig" class="config-view">
         <el-descriptions :column="2" border size="small" class="config-info">
@@ -1174,8 +1174,7 @@ const filteredRules = computed(() => {
 
 const ruleUpdatedAtMs = (rule: Rule): number => {
   const value = rule.updated_at
-  const raw = typeof value === 'object' && value !== null ? value.Time : value
-  const t = raw ? new Date(raw).getTime() : 0
+  const t = value ? new Date(value).getTime() : 0
   return Number.isNaN(t) ? 0 : t
 }
 
@@ -1654,18 +1653,16 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
     wizardForm.custom_routes_enabled = false
     wizardForm.path_rules = []
     wizardForm.upstreams.forEach(u => {
-      if (!u.host && (u.protocol === 'http' || u.protocol === 'https')) {
-        u.protocol = 'tcp'
-      }
+      if (u.protocol === 'http') u.protocol = 'tcp'
+      if (u.protocol === 'https') u.protocol = 'tls'
     })
   } else if (newVal === 'http' && oldVal === 'tcp') {
     if (wizardForm.listen_port === 8080) {
       wizardForm.listen_port = 80
     }
     wizardForm.upstreams.forEach(u => {
-      if (!u.host && (u.protocol === 'tcp' || u.protocol === 'tls')) {
-        u.protocol = 'http'
-      }
+      if (u.protocol === 'tcp') u.protocol = 'http'
+      if (u.protocol === 'tls') u.protocol = 'https'
     })
   }
 }, { flush: 'sync' })
@@ -2060,9 +2057,7 @@ const addUpstream = () => {
   const upstream = defaultUpstream(wizardForm.protocol === 'tcp' ? 'tcp' : 'http')
   upstream.weight = 0
   wizardForm.upstreams.push(upstream)
-  if (wizardForm.upstreams.length === 1) {
-    upstream.weight = 100
-  }
+  redistributeWeight(wizardForm.upstreams, wizardForm.upstreams.length - 1)
 }
 
 const aclPreview = (): string => {
@@ -2204,6 +2199,12 @@ const submitWizard = async () => {
   const enabledUpstreams = wizardForm.upstreams.filter(u => u.enabled)
   if (enabledUpstreams.length === 0) {
     ElMessage.warning('至少需要一个启用的上游服务器')
+    saving.value = false
+    return
+  }
+  const allowedProtocols = wizardForm.protocol === 'tcp' ? ['tcp', 'tls'] : ['http', 'https']
+  if (wizardForm.upstreams.some(u => !allowedProtocols.includes(u.protocol))) {
+    ElMessage.warning(`${wizardForm.protocol.toUpperCase()} 规则包含协议族不匹配的上游服务器`)
     saving.value = false
     return
   }

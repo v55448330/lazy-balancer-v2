@@ -79,7 +79,7 @@
     <el-dialog
       v-model="createdKeyVisible"
       title="API 密钥已创建"
-      width="560px"
+      width="min(560px, 92vw)"
       :close-on-click-modal="false"
       @closed="createdKey = ''"
     >
@@ -110,7 +110,6 @@ import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateShort } from '@/utils/date'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { CopyDocument, Delete, Document, Key, Plus, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
-import type { NullableTime } from '@/types'
 
 interface APIKey {
   readonly id: number
@@ -119,9 +118,8 @@ interface APIKey {
   readonly created_by: number
   readonly username: string
   readonly is_enabled: boolean
-  // Keep sql.NullTime compatibility until the API key endpoint switches DTOs.
-  readonly last_used?: string | NullableTime | null
-  readonly expires_at?: string | NullableTime | null
+  readonly last_used?: string | null
+  readonly expires_at?: string | null
   readonly created_at: string
 }
 
@@ -151,14 +149,16 @@ const togglePendingId = ref<number | null>(null)
 const deletingIds = ref(new Set<number>())
 const createdKey = ref('')
 const createdKeyVisible = ref(false)
+let keysRequestSeq = 0
 
 const fetchKeys = async () => {
+  const requestSeq = ++keysRequestSeq
   loading.value = true
   try {
     const res = await request.get<APIKeyListResponse>('/users/me/api-keys')
-    keys.value = res.data || []
+    if (requestSeq === keysRequestSeq) keys.value = res.data || []
   } finally {
-    loading.value = false
+    if (requestSeq === keysRequestSeq) loading.value = false
   }
 }
 

@@ -43,11 +43,6 @@ type Client struct {
 	finalizedCerts map[string][][]byte
 }
 
-// NewClient creates a Let's Encrypt compatible ACME client.
-func NewClient(directoryURL, email string) (*Client, error) {
-	return newClient(directoryURL, email, nil)
-}
-
 // NewClientForProvider creates an ACME client based on a CA provider configuration.
 func NewClientForProvider(provider models.CAProvider, email string) (*Client, error) {
 	var eab *acme.ExternalAccountBinding
@@ -179,6 +174,10 @@ func (c *Client) AuthorizeOrder(ctx context.Context, domains []string) (*acme.Or
 // GetAuthorization fetches an authorization by URL.
 func (c *Client) GetAuthorization(ctx context.Context, url string) (*acme.Authorization, error) {
 	return c.acme.GetAuthorization(ctx, url)
+}
+
+func (c *Client) WaitAuthorization(ctx context.Context, url string) (*acme.Authorization, error) {
+	return c.acme.WaitAuthorization(ctx, url)
 }
 
 // AcceptChallenge accepts a DNS-01 challenge.

@@ -181,6 +181,40 @@ func TestEnableRule_restores_disabled_state_when_ACME_queue_is_unavailable(t *te
 	}
 }
 
+func TestEnableRule_restores_cert_job_fields_when_requeue_fails(t *testing.T) {
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_enable_restore", "enable", "restore.example.test", 8080, false, "acme_dns", true)
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs
+		(rule_id,domain,status,message,renewal_attempts,ca_available_after,last_error_code)
+		VALUES ('lb_enable_restore','restore.example.test','disabled','paused message',7,datetime('now','-1 hour'),'paused_code')`); err != nil {
+		t.Fatalf("seed disabled certificate job: %v", err)
+	}
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	services.GetCAQueueManager().Stop()
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	router := gin.New()
+	router.POST("/rules/:caddy_id/enable", handler.EnableRule)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/lb_enable_restore/enable", nil))
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("enable status=%d body=%s, want 500", response.Code, response.Body.String())
+	}
+	var enabled bool
+	var status, message, errorCode string
+	var attempts int
+	if err := db.DB.QueryRow(`SELECT r.enabled,j.status,j.message,j.renewal_attempts,j.last_error_code
+		FROM lb_rules r JOIN cert_jobs j ON j.rule_id=r.caddy_id WHERE r.caddy_id='lb_enable_restore'`).
+		Scan(&enabled, &status, &message, &attempts, &errorCode); err != nil {
+		t.Fatalf("read compensated state: %v", err)
+	}
+	if enabled || status != "disabled" || message != "paused message" || attempts != 7 || errorCode != "paused_code" {
+		t.Fatalf("compensated state=(%v,%q,%q,%d,%q), want original", enabled, status, message, attempts, errorCode)
+	}
+}
+
 func TestRuleToggle_is_idempotent_when_rule_already_has_target_state(t *testing.T) {
 	tests := []struct {
 		name    string

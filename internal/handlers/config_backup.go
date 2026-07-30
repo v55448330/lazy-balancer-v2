@@ -223,7 +223,10 @@ func validateV2Backup(backup configBackup) error {
 	if backup.Meta.Version != 1 {
 		return fmt.Errorf("不支持的备份版本: %d", backup.Meta.Version)
 	}
-	for _, required := range []string{"lb_rules", "users"} {
+	if backup.Config == nil {
+		return errors.New("备份缺少全局配置")
+	}
+	for _, required := range configBackupTables {
 		if _, exists := backup.Tables[required]; !exists {
 			return errors.New("备份缺少必需的数据表: " + required)
 		}

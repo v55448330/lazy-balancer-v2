@@ -112,7 +112,7 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="adminTlsDialogVisible" title="HTTPS 证书配置" width="520" destroy-on-close @closed="onAdminTlsDialogClose">
+    <el-dialog v-model="adminTlsDialogVisible" title="HTTPS 证书配置" width="min(520px, 92vw)" destroy-on-close @closed="onAdminTlsDialogClose">
       <el-form label-width="110px">
         <el-form-item label="证书来源">
           <el-radio-group v-model="adminTlsForm.mode">
@@ -159,7 +159,7 @@
       <template #footer><el-button @click="appLogVisible = false">关闭</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="importDialogVisible" title="导入配置备份" width="560px" :close-on-click-modal="false" @close="onImportDialogClosed">
+    <el-dialog v-model="importDialogVisible" title="导入配置备份" width="min(560px, 92vw)" :close-on-click-modal="false" @close="onImportDialogClosed">
       <div class="import-picker">
         <el-button :icon="Upload" @click="chooseImportFile">选择备份文件</el-button>
         <span v-if="importFileName" class="import-filename">{{ importFileName }}</span>

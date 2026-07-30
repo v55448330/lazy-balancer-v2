@@ -316,7 +316,18 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 		// Tokens issued before the last password change are revoked.
+		passwordVersion := int64(0)
 		if pwdChangedAt.Valid {
+			passwordVersion = pwdChangedAt.Time.Unix()
+		}
+		if claim, exists := claims["pwd_ver"]; exists {
+			claimVersion, valid := claim.(float64)
+			if !valid || int64(claimVersion) != passwordVersion {
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "密码已修改，请重新登录"})
+				c.Abort()
+				return
+			}
+		} else if pwdChangedAt.Valid {
 			if iatFloat, ok := claims["iat"].(float64); ok {
 				if !time.Unix(int64(iatFloat), 0).After(pwdChangedAt.Time) {
 					c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "密码已修改，请重新登录"})

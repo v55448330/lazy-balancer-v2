@@ -28,8 +28,9 @@ func (h *Handlers) Login(c *gin.Context) {
 
 	var user models.User
 	var passwordHash string
-	err := db.DB.QueryRow("SELECT id, username, password_hash, role, display_name, is_enabled, created_at, last_login FROM users WHERE username = ?",
-		req.Username).Scan(&user.ID, &user.Username, &passwordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin)
+	var passwordChangedAt sql.NullTime
+	err := db.DB.QueryRow("SELECT id, username, password_hash, role, display_name, is_enabled, created_at, last_login, password_changed_at FROM users WHERE username = ?",
+		req.Username).Scan(&user.ID, &user.Username, &passwordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &passwordChangedAt)
 
 	if err == sql.ErrNoRows {
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("invalid_credentials"), c.ClientIP())
@@ -73,6 +74,10 @@ func (h *Handlers) Login(c *gin.Context) {
 		expireMinutes = 20
 	}
 	expireDuration := time.Duration(expireMinutes) * time.Minute
+	pwdVer := int64(0)
+	if passwordChangedAt.Valid {
+		pwdVer = passwordChangedAt.Time.Unix()
+	}
 
 	// Generate JWT token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -80,11 +85,17 @@ func (h *Handlers) Login(c *gin.Context) {
 		"username":  user.Username,
 		"role":      user.Role,
 		"node_mode": nodeMode,
+		"pwd_ver":   pwdVer,
 		"iat":       time.Now().Unix(),
 		"exp":       time.Now().Add(expireDuration).Unix(),
 	})
 
-	tokenString, _ := token.SignedString([]byte(h.cfg.JWTSecret))
+	tokenString, err := token.SignedString([]byte(h.cfg.JWTSecret))
+	if err != nil {
+		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "签发登录令牌失败"})
+		return
+	}
 	services.RecordAuditLog(user.Username, "登录成功", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %d", user.ID), services.AuditResultPart("success")), c.ClientIP())
 
 	c.JSON(http.StatusOK, models.LoginResponse{

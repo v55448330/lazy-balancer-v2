@@ -43,6 +43,22 @@ func TestCaddyService_BackupConfig_failure_prevents_apply(t *testing.T) {
 	}
 }
 
+func TestGenerateCaddyConfig_upstream_scan_error_returns_generation_failure(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,strategy,health_check_path,enabled) VALUES ('lb_bad_upstream','bad upstream','http',8080,'weighted_round_robin','',1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,enabled) VALUES ('lb_bad_upstream','127.0.0.1','not-a-port',1)`); err != nil {
+		t.Fatalf("seed invalid upstream: %v", err)
+	}
+
+	generated := generateCaddyConfigFromStore(&config.Config{}, database)
+	message, ok := generated[caddyConfigGenerationErrorKey].(string)
+	if !ok || !strings.Contains(message, "scan upstream") {
+		t.Fatalf("generation result=%#v, want upstream scan error", generated)
+	}
+}
+
 func TestGenerateSingleRuleCaddyConfig_HTTPAllowACL_appendsForbiddenFallback(t *testing.T) {
 	// Given
 	rule := baseHTTPRule()

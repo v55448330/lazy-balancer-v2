@@ -1,8 +1,3 @@
-export interface NullableTime {
-  Time: string
-  Valid: boolean
-}
-
 export interface CurrentUser {
   id: number
   username: string
@@ -14,7 +9,7 @@ export interface CurrentUser {
 export interface UserListItem extends Omit<CurrentUser, 'is_enabled'> {
   is_enabled: boolean
   created_at?: string | null
-  last_login?: string | NullableTime | null
+  last_login?: string | null
 }
 
 

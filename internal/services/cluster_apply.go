@@ -81,6 +81,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			wrapSnapshotRestoreError(s.caddy.ApplyConfig(GenerateCaddyConfig(s.cfg))),
 		)
 	}
+	clusterSnapshotCaches.Delete(s.db)
 	caddySync := "未开启"
 	if snapshot.CaddyConfig != nil {
 		caddySync = "已同步"

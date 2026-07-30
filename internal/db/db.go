@@ -661,7 +661,9 @@ func runMigrations() error {
 		return fmt.Errorf("failed to create tls_certificates: %w", err)
 	}
 
-	// cert_jobs unique index migration
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain)"); err != nil {
+		return fmt.Errorf("failed to create cert_jobs rule-domain index: %w", err)
+	}
 	if _, err := DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)"); err != nil {
 		return fmt.Errorf("failed to create cert_jobs unique index: %w", err)
 	}
@@ -686,42 +688,8 @@ func runMigrations() error {
 		return fmt.Errorf("failed to normalize cert_jobs.ca_available_after: %w", err)
 	}
 
-	// Migrate legacy dns_id/dns_key into dns_credentials JSON
-	var legacyCredentialColumns int
-	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('certificate_configs') WHERE name IN ('dns_id','dns_key')").Scan(&legacyCredentialColumns); err != nil {
-		return fmt.Errorf("failed to check legacy certificate credential columns: %w", err)
-	}
-	if legacyCredentialColumns == 2 {
-		rows, err := DB.Query("SELECT id, dns_id, dns_key FROM certificate_configs WHERE dns_credentials IS NULL OR dns_credentials = ''")
-		if err != nil {
-			return fmt.Errorf("failed to query legacy certificate credentials: %w", err)
-		}
-		for rows.Next() {
-			var id int
-			var dnsID, dnsKey string
-			if err := rows.Scan(&id, &dnsID, &dnsKey); err != nil {
-				rows.Close()
-				return fmt.Errorf("failed to scan legacy certificate credentials: %w", err)
-			}
-			if dnsID != "" || dnsKey != "" {
-				creds, err := json.Marshal(map[string]string{"app_id": dnsID, "app_token": dnsKey})
-				if err != nil {
-					rows.Close()
-					return fmt.Errorf("failed to encode legacy certificate credentials: %w", err)
-				}
-				if _, err := DB.Exec("UPDATE certificate_configs SET dns_credentials = ? WHERE id = ?", string(creds), id); err != nil {
-					rows.Close()
-					return fmt.Errorf("failed to migrate certificate credentials for config %d: %w", id, err)
-				}
-			}
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return fmt.Errorf("failed to iterate legacy certificate credentials: %w", err)
-		}
-		if err := rows.Close(); err != nil {
-			return fmt.Errorf("failed to close legacy certificate credential rows: %w", err)
-		}
+	if err := migrateLegacyDNSCredentials(); err != nil {
+		return err
 	}
 
 	// Drop legacy columns from lb_rules if they still exist (no longer used).
@@ -814,6 +782,66 @@ func runMigrations() error {
 		return fmt.Errorf("failed to backfill CA provider timestamps: %w", err)
 	}
 
+	return nil
+}
+
+func migrateLegacyDNSCredentials() error {
+	tx, err := DB.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin legacy certificate credential migration: %w", err)
+	}
+	rollback := func(migrationErr error) error {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			return errors.Join(migrationErr, rollbackErr)
+		}
+		return migrationErr
+	}
+
+	var columnCount int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM pragma_table_info('certificate_configs') WHERE name IN ('dns_id','dns_key')").Scan(&columnCount); err != nil {
+		return rollback(fmt.Errorf("failed to check legacy certificate credential columns: %w", err))
+	}
+	if columnCount == 2 {
+		rows, err := tx.Query("SELECT id, dns_id, dns_key FROM certificate_configs WHERE dns_credentials IS NULL OR dns_credentials = ''")
+		if err != nil {
+			return rollback(fmt.Errorf("failed to query legacy certificate credentials: %w", err))
+		}
+		type legacyCredential struct {
+			id            int
+			dnsID, dnsKey string
+		}
+		var credentials []legacyCredential
+		for rows.Next() {
+			var credential legacyCredential
+			if err := rows.Scan(&credential.id, &credential.dnsID, &credential.dnsKey); err != nil {
+				closeErr := rows.Close()
+				return rollback(errors.Join(fmt.Errorf("failed to scan legacy certificate credentials: %w", err), closeErr))
+			}
+			credentials = append(credentials, credential)
+		}
+		if err := rows.Err(); err != nil {
+			closeErr := rows.Close()
+			return rollback(errors.Join(fmt.Errorf("failed to iterate legacy certificate credentials: %w", err), closeErr))
+		}
+		if err := rows.Close(); err != nil {
+			return rollback(fmt.Errorf("failed to close legacy certificate credential rows: %w", err))
+		}
+		for _, credential := range credentials {
+			if credential.dnsID == "" && credential.dnsKey == "" {
+				continue
+			}
+			encoded, err := json.Marshal(map[string]string{"app_id": credential.dnsID, "app_token": credential.dnsKey})
+			if err != nil {
+				return rollback(fmt.Errorf("failed to encode legacy certificate credentials: %w", err))
+			}
+			if _, err := tx.Exec("UPDATE certificate_configs SET dns_credentials = ? WHERE id = ?", string(encoded), credential.id); err != nil {
+				return rollback(fmt.Errorf("failed to migrate certificate credentials for config %d: %w", credential.id, err))
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit legacy certificate credential migration: %w", err)
+	}
 	return nil
 }
 
@@ -1159,15 +1187,6 @@ func migrateCertJobsStatusConstraint() error {
 		return fmt.Errorf("failed to copy cert_jobs data: %w", err)
 	}
 
-	if _, err := tx.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain)"); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to recreate cert_jobs index: %w", err)
-	}
-	if _, err := tx.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)"); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to recreate cert_jobs unique index: %w", err)
-	}
-
 	if logsExist > 0 {
 		if _, err := tx.Exec(`
 			CREATE TABLE cert_job_logs (
@@ -1203,6 +1222,14 @@ func migrateCertJobsStatusConstraint() error {
 	if _, err := tx.Exec("DROP TABLE cert_jobs_old"); err != nil {
 		tx.Rollback()
 		return fmt.Errorf("failed to drop old cert_jobs table: %w", err)
+	}
+	if _, err := tx.Exec("CREATE INDEX idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain)"); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to recreate cert_jobs index: %w", err)
+	}
+	if _, err := tx.Exec("CREATE UNIQUE INDEX idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)"); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to recreate cert_jobs unique index: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

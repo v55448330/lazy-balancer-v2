@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -303,13 +304,8 @@ func getSystemMetrics() (models.SystemMetrics, error) {
 	dfCmd := exec.Command("df", "-B1", "/")
 	dfOutput, err := dfCmd.Output()
 	if err == nil {
-		lines := strings.Split(string(dfOutput), "\n")
-		if len(lines) >= 2 {
-			fields := strings.Fields(lines[1])
-			if len(fields) >= 4 {
-				diskUsed, _ = strconv.ParseUint(fields[2], 10, 64)
-				diskTotal, _ = strconv.ParseUint(fields[3], 10, 64)
-			}
+		if total, used, ok := parseDFOutput(string(dfOutput)); ok {
+			diskTotal, diskUsed = total, used
 		}
 	}
 
@@ -336,18 +332,31 @@ func getSystemMetrics() (models.SystemMetrics, error) {
 }
 
 func getCPUPercent() float64 {
-	cmd := exec.Command("sh", "-c", "cat /proc/stat | head -1 | awk '{print ($2+$3+$4)/($2+$3+$4+$5)*100}'")
-	output, err := cmd.Output()
-	if err == nil {
-		line := strings.TrimSpace(string(output))
-		if val, err := strconv.ParseFloat(line, 64); err == nil {
-			return val
-		}
+	stat, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0
 	}
-	return 0
+	current, ok := parseCPUSnapshot(string(stat))
+	if !ok {
+		return 0
+	}
+	lastCPUStats.mu.Lock()
+	defer lastCPUStats.mu.Unlock()
+	previous := lastCPUStats.snapshot
+	lastCPUStats.snapshot = current
+	if previous.total == 0 || current.total <= previous.total || current.idle < previous.idle {
+		return 0
+	}
+	totalDelta := current.total - previous.total
+	idleDelta := current.idle - previous.idle
+	if idleDelta > totalDelta {
+		return 0
+	}
+	return float64(totalDelta-idleDelta) / float64(totalDelta) * 100
 }
 
 var lastNetStats struct {
+	mu       sync.Mutex
 	bytesIn  uint64
 	bytesOut uint64
 	time     time.Time
@@ -375,6 +384,8 @@ func getRealtimeTraffic() (models.RealtimeTraffic, error) {
 
 	now := time.Now()
 	var rateIn, rateOut int64
+	lastNetStats.mu.Lock()
+	defer lastNetStats.mu.Unlock()
 
 	if !lastNetStats.time.IsZero() {
 		elapsed := now.Sub(lastNetStats.time).Seconds()
@@ -398,6 +409,53 @@ func getRealtimeTraffic() (models.RealtimeTraffic, error) {
 		BytesIn:  rateIn,
 		BytesOut: rateOut,
 	}, nil
+}
+
+type cpuSnapshot struct {
+	total uint64
+	idle  uint64
+}
+
+var lastCPUStats struct {
+	mu       sync.Mutex
+	snapshot cpuSnapshot
+}
+
+func parseCPUSnapshot(stat string) (cpuSnapshot, bool) {
+	line, _, _ := strings.Cut(stat, "\n")
+	fields := strings.Fields(line)
+	if len(fields) < 5 || fields[0] != "cpu" {
+		return cpuSnapshot{}, false
+	}
+	var snapshot cpuSnapshot
+	for index, field := range fields[1:] {
+		value, err := strconv.ParseUint(field, 10, 64)
+		if err != nil {
+			return cpuSnapshot{}, false
+		}
+		snapshot.total += value
+		if index == 3 || index == 4 {
+			snapshot.idle += value
+		}
+	}
+	return snapshot, snapshot.total > 0
+}
+
+func parseDFOutput(output string) (uint64, uint64, bool) {
+	lines := strings.Split(output, "\n")
+	if len(lines) < 2 {
+		return 0, 0, false
+	}
+	fields := strings.Fields(lines[1])
+	if len(fields) < 4 {
+		return 0, 0, false
+	}
+	total, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	used, err := strconv.ParseUint(fields[2], 10, 64)
+	return total, used, err == nil
 }
 
 func getConnectionStats() (models.ConnectionStats, error) {

@@ -343,3 +343,18 @@ func TestValidateTLSCertificate(t *testing.T) {
 		}
 	})
 }
+
+func TestParseDFOutput_uses_total_and_used_columns(t *testing.T) {
+	output := "Filesystem 1B-blocks Used Available Use% Mounted on\n/dev/root 1000 750 250 75% /\n"
+	total, used, ok := parseDFOutput(output)
+	if !ok || total != 1000 || used != 750 {
+		t.Fatalf("parseDFOutput()=(%d,%d,%v), want (1000,750,true)", total, used, ok)
+	}
+}
+
+func TestParseCPUSnapshot_includes_idle_and_iowait(t *testing.T) {
+	snapshot, ok := parseCPUSnapshot("cpu  10 20 30 40 5 6 7 8 0 0\ncpu0 1 2 3 4")
+	if !ok || snapshot.total != 126 || snapshot.idle != 45 {
+		t.Fatalf("parseCPUSnapshot()=%+v,%v, want total=126 idle=45", snapshot, ok)
+	}
+}

@@ -1415,15 +1415,23 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 			FROM upstreams WHERE rule_id = ? AND enabled = 1
 		`, r.rule.CaddyID)
 		if err != nil {
-			log.Printf("Failed to get upstreams for rule %s: %v", r.rule.CaddyID, err)
-			continue
+			return map[string]interface{}{caddyConfigGenerationErrorKey: fmt.Sprintf("query upstreams for rule %s: %v", r.rule.CaddyID, err)}
 		}
 		for upstreamRows.Next() {
 			var u upstream
-			upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections)
+			if err := upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
+				_ = upstreamRows.Close()
+				return map[string]interface{}{caddyConfigGenerationErrorKey: fmt.Sprintf("scan upstream for rule %s: %v", r.rule.CaddyID, err)}
+			}
 			r.upstreams = append(r.upstreams, u)
 		}
-		upstreamRows.Close()
+		if err := upstreamRows.Err(); err != nil {
+			_ = upstreamRows.Close()
+			return map[string]interface{}{caddyConfigGenerationErrorKey: fmt.Sprintf("iterate upstreams for rule %s: %v", r.rule.CaddyID, err)}
+		}
+		if err := upstreamRows.Close(); err != nil {
+			return map[string]interface{}{caddyConfigGenerationErrorKey: fmt.Sprintf("close upstreams for rule %s: %v", r.rule.CaddyID, err)}
+		}
 
 		if r.rule.CustomRoutesEnabled {
 			pathRows, pathErr := store.Query(`

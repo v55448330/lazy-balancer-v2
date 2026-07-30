@@ -144,8 +144,8 @@ func (s *ClusterService) RegistrationStatus(ctx context.Context, nodeID int, sec
 	}
 	defer func() { _ = tx.Rollback() }()
 	var status, storedSecretHash string
-	var approved, delivered bool
-	if err := tx.QueryRowContext(ctx, `SELECT status, is_approved, COALESCE(registration_secret,''), COALESCE(cluster_token_delivered,0) FROM nodes WHERE id=?`, nodeID).Scan(&status, &approved, &storedSecretHash, &delivered); err != nil {
+	var approved bool
+	if err := tx.QueryRowContext(ctx, `SELECT status, is_approved, COALESCE(registration_secret,'') FROM nodes WHERE id=?`, nodeID).Scan(&status, &approved, &storedSecretHash); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.ClusterRegistrationStatus{Status: "rejected"}, nil
 		}
@@ -157,20 +157,11 @@ func (s *ClusterService) RegistrationStatus(ctx context.Context, nodeID int, sec
 	response := models.ClusterRegistrationStatus{Status: "pending"}
 	if approved {
 		response.Status = "approved"
-		if !delivered {
-			clusterToken := permanentClusterToken(secret)
-			result, err := tx.ExecContext(ctx, "UPDATE nodes SET cluster_token_hash=?, cluster_token_delivered=1 WHERE id=? AND cluster_token_delivered=0", tokenHash(clusterToken), nodeID)
-			if err != nil {
-				return models.ClusterRegistrationStatus{}, fmt.Errorf("标记集群令牌已领取: %w", err)
-			}
-			updated, err := result.RowsAffected()
-			if err != nil {
-				return models.ClusterRegistrationStatus{}, fmt.Errorf("读取集群令牌领取结果: %w", err)
-			}
-			if updated == 1 {
-				response.ClusterToken = clusterToken
-			}
+		clusterToken := permanentClusterToken(secret)
+		if _, err := tx.ExecContext(ctx, "UPDATE nodes SET cluster_token_hash=?, cluster_token_delivered=1 WHERE id=?", tokenHash(clusterToken), nodeID); err != nil {
+			return models.ClusterRegistrationStatus{}, fmt.Errorf("保存集群令牌: %w", err)
 		}
+		response.ClusterToken = clusterToken
 	} else if status != "pending" {
 		response.Status = "rejected"
 	}

@@ -79,6 +79,30 @@ func TestCreateOrRequeueCertJob_returns_job_id_when_enqueue_fails(t *testing.T) 
 	}
 }
 
+func TestCreateOrRequeueCertJob_resets_retry_fields_before_enqueue(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO cert_jobs
+		(rule_id,domain,status,renewal_attempts,ca_available_after,last_error_code)
+		VALUES ('lb_retry_reset','retry.example','failed',4,datetime('now','-1 hour'),'rate_limited')`); err != nil {
+		t.Fatalf("seed retry job: %v", err)
+	}
+	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: false}
+
+	if _, err := CreateOrRequeueCertJob("lb_retry_reset", "retry.example", 1, manager); err == nil {
+		t.Fatal("enqueue error=nil, want inactive queue error")
+	}
+
+	var attempts int
+	var availableAfter, errorCode *string
+	if err := database.QueryRow(`SELECT renewal_attempts,ca_available_after,last_error_code FROM cert_jobs
+		WHERE rule_id='lb_retry_reset'`).Scan(&attempts, &availableAfter, &errorCode); err != nil {
+		t.Fatalf("read reset retry job: %v", err)
+	}
+	if attempts != 0 || availableAfter != nil || errorCode != nil {
+		t.Fatalf("retry fields=(%d,%v,%v), want zero and NULLs", attempts, availableAfter, errorCode)
+	}
+}
+
 func TestRequeueNonTerminalCertJobs_schedules_downloaded_deployment(t *testing.T) {
 	// Given
 	jobID, _ := seedCertificateJob(t, "downloaded")

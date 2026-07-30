@@ -70,23 +70,9 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		return
 	}
 
-	if status != "issued" && status != "failed" && status != "waiting_ca" {
-		// All ACME in-progress states get a short 2-minute guard so users can
-		// force-retry a stuck job quickly. Only 'queued' gets the long guard.
-		guard := 2 * time.Minute
-		if status == "queued" {
-			guard = 15 * time.Minute
-		}
-		if updatedAt.Valid && time.Since(updatedAt.Time) < guard {
-			c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "任务正在执行中，请稍后重试"})
-			return
-		}
-	}
-	if status == "failed" {
-		if updatedAt.Valid && time.Since(updatedAt.Time) < 5*time.Minute {
-			c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "失败后请等待 5 分钟再重试"})
-			return
-		}
+	if blocked, message := certJobRetryBlocked(status, updatedAt, time.Now()); blocked {
+		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: message})
+		return
 	}
 
 	qm := services.GetCAQueueManager()
@@ -100,12 +86,26 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to enqueue retry"})
 		return
 	}
-	if _, err := db.DB.Exec("UPDATE cert_jobs SET renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL WHERE id=?", id); err != nil {
-		log.Printf("Failed to reset renewal attempts for job %d: %v", id, err)
-	}
 	recordAudit(c, "重试", "证书签发任务", services.FormatAuditDetail(services.AuditJobPart(id), services.AuditRulePart(ruleID), domain, fmt.Sprintf("原状态：%s", status), services.AuditResultPart("queued")))
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Retry triggered"})
+}
+
+func certJobRetryBlocked(status string, updatedAt sql.NullTime, now time.Time) (bool, string) {
+	if !updatedAt.Valid {
+		return false, ""
+	}
+	if status == "failed" && now.Sub(updatedAt.Time) < 5*time.Minute {
+		return true, "失败后请等待 5 分钟再重试"
+	}
+	if status == "issued" || status == "failed" || status == "waiting_ca" || status == "disabled" {
+		return false, ""
+	}
+	guard := 2 * time.Minute
+	if status == "queued" {
+		guard = 15 * time.Minute
+	}
+	return now.Sub(updatedAt.Time) < guard, "任务正在执行中，请稍后重试"
 }
 
 func (h *Handlers) DeleteCertJob(c *gin.Context) {
@@ -138,8 +138,8 @@ func (h *Handlers) GetCertJob(c *gin.Context) {
 		return
 	}
 	var j models.CertJob
-	err = db.DB.QueryRow("SELECT id, rule_id, domain, status, COALESCE(message,'') AS message, expires_at, created_at, updated_at FROM cert_jobs WHERE id=?", id).
-		Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.Message, &j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt)
+	err = db.DB.QueryRow("SELECT id, rule_id, domain, status, COALESCE(message,'') AS message, expires_at, created_at, updated_at, ca_available_after FROM cert_jobs WHERE id=?", id).
+		Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.Message, &j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt, &j.CAAvailableAfter)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})

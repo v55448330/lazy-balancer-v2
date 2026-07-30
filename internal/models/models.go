@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
@@ -150,6 +151,14 @@ type LbRule struct {
 	UpdatedAt                     sql.NullTime `json:"updated_at"`
 }
 
+func (r LbRule) MarshalJSON() ([]byte, error) {
+	type alias LbRule
+	return json.Marshal(struct {
+		alias
+		UpdatedAt JSONNullTime `json:"updated_at"`
+	}{alias: alias(r), UpdatedAt: JSONNullTime{NullTime: r.UpdatedAt}})
+}
+
 // CAProvider represents an ACME certificate authority configuration.
 type CAProvider struct {
 	ID            int       `json:"id"`
@@ -225,8 +234,8 @@ type GlobalConfig struct {
 	RegistrationSecret         string       `json:"-"`
 	AppliedVersion             int          `json:"applied_version"`
 	LastSyncError              string       `json:"last_sync_error"`
-	LastSync                   sql.NullTime `json:"last_sync"`
-	UpdatedAt                  sql.NullTime `json:"updated_at"`
+	LastSync                   JSONNullTime `json:"last_sync"`
+	UpdatedAt                  JSONNullTime `json:"updated_at"`
 }
 
 // Upstream represents an upstream server
@@ -270,7 +279,7 @@ type CertificateConfig struct {
 	DNSCredentials string       `json:"dns_credentials"`
 	Enabled        bool         `json:"enabled"`
 	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      sql.NullTime `json:"updated_at"`
+	UpdatedAt      JSONNullTime `json:"updated_at"`
 }
 
 // RuleCertInfo represents parsed TLS certificate information for display in the UI

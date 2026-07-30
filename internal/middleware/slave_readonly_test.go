@@ -15,6 +15,50 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
+func TestJWTAuth_password_version_allows_same_second_login_and_rejects_old_token(t *testing.T) {
+	cfg := &config.Config{JWTSecret: "password-version-secret"}
+	oldDB := db.DB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("init database: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB = oldDB
+		db.SetDB(oldDB)
+	})
+	changedAt := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled,password_changed_at) VALUES (7,'admin','hash','admin',1,?)", changedAt); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	router := gin.New()
+	router.Use(jwtAuth(cfg))
+	router.GET("/protected", noContent)
+	sign := func(passwordVersion int64) string {
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+			"user_id": 7, "username": "admin", "iat": changedAt.Unix(), "exp": time.Now().Add(time.Hour).Unix(), "pwd_ver": passwordVersion,
+		})
+		signed, err := token.SignedString([]byte(cfg.JWTSecret))
+		if err != nil {
+			t.Fatalf("sign token: %v", err)
+		}
+		return signed
+	}
+	request := func(token string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		router.ServeHTTP(response, req)
+		return response
+	}
+
+	if response := request(sign(changedAt.Unix())); response.Code != http.StatusNoContent {
+		t.Fatalf("same-second fresh token status=%d body=%q", response.Code, response.Body.String())
+	}
+	if response := request(sign(0)); response.Code != http.StatusUnauthorized {
+		t.Fatalf("old token status=%d, want 401", response.Code)
+	}
+}
+
 func newReadOnlyGuardTestRouter(t *testing.T, isMaster bool, role string) *gin.Engine {
 	t.Helper()
 	database, err := sql.Open("sqlite", t.TempDir()+"/readonly.db")

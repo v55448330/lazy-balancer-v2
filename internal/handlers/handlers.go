@@ -551,13 +551,18 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 	for rows.Next() {
 		var caddyID string
 		if err := rows.Scan(&caddyID); err != nil {
-			continue
+			return err
 		}
 		count++
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
 
 	log.Printf("Applying Caddy config on startup (enabled rules: %d)", count)
-	h.applyCaddyConfig()
+	if err := h.applyCaddyConfigE(); err != nil {
+		return fmt.Errorf("apply Caddy config on startup: %w", err)
+	}
 	services.RecordAuditLog("system", "载入", "系统配置", fmt.Sprintf("启动时从数据库载入配置并应用 Caddy；启用规则 %d 条", count), "")
 
 	return nil

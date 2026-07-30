@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,24 +92,31 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 		return
 	}
 
-	if req.DNSProvider != "" {
-		provider, ok := dnsproviders.Get(req.DNSProvider)
-		if !ok {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Unknown DNS provider"})
-			return
-		}
-		if req.DNSCredentials != nil {
-			if _, err := provider.BuildCredentialsJSON(req.DNSCredentials); err != nil {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-				return
-			}
-		}
-	}
-
 	var oldName, oldProvider, oldCredentials string
 	var oldEnabled bool
 	if err := db.DB.QueryRow("SELECT name, dns_provider, COALESCE(dns_credentials,''), COALESCE(enabled,1) FROM certificate_configs WHERE id=?", id).Scan(&oldName, &oldProvider, &oldCredentials, &oldEnabled); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Config not found"})
+		return
+	}
+	effectiveProvider := oldProvider
+	if req.DNSProvider != "" {
+		effectiveProvider = req.DNSProvider
+	}
+	effectiveCredentials := req.DNSCredentials
+	if effectiveCredentials == nil {
+		effectiveCredentials = map[string]string{}
+		if err := json.Unmarshal([]byte(oldCredentials), &effectiveCredentials); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid stored DNS credentials"})
+			return
+		}
+	}
+	provider, ok := dnsproviders.Get(effectiveProvider)
+	if !ok {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Unknown DNS provider"})
+		return
+	}
+	if _, err := provider.BuildCredentialsJSON(effectiveCredentials); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
 
@@ -332,6 +340,20 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		if !domainOK {
 			auditFailure("failed", "域名不属于该规则")
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名不属于该规则"})
+			return
+		}
+		var jobStatus string
+		var jobUpdatedAt sql.NullTime
+		err = db.DB.QueryRow("SELECT status, updated_at FROM cert_jobs WHERE rule_id=? AND domain=?", req.CaddyID, req.Domain).Scan(&jobStatus, &jobUpdatedAt)
+		if err == nil {
+			if blocked, message := certJobRetryBlocked(jobStatus, jobUpdatedAt, time.Now()); blocked {
+				auditFailure("blocked", "证书任务正在执行")
+				c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: message})
+				return
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			auditFailure("failed", "读取证书任务失败: "+err.Error())
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败"})
 			return
 		}
 		if _, err := services.CreateOrRequeueCertJob(req.CaddyID, req.Domain, 0, qm); err != nil {

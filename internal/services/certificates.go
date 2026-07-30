@@ -571,6 +571,18 @@ func CreateOrRequeueCertJob(ruleID, domains string, caProviderID int, qm *CAQueu
 				WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.message
 				ELSE '重新排队签发'
 			END,
+			renewal_attempts = CASE
+				WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.renewal_attempts
+				ELSE 0
+			END,
+			ca_available_after = CASE
+				WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.ca_available_after
+				ELSE NULL
+			END,
+			last_error_code = CASE
+				WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.last_error_code
+				ELSE NULL
+			END,
 			ca_provider_id = excluded.ca_provider_id,
 			updated_at = datetime('now')
 		RETURNING id

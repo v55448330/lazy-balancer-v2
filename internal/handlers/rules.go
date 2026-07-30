@@ -1622,8 +1622,9 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 }
 
 func (h *Handlers) DuplicateRule(c *gin.Context) {
-
 	caddyID := c.Param("caddy_id")
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
 
 	rows, err := db.DB.Query(`SELECT `+lbRuleColumns+` FROM lb_rules WHERE caddy_id = ?`, caddyID)
 	if err != nil {
@@ -1806,13 +1807,56 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			return
 		}
 	}
+	isACME := enableTLS && tlsSource == "acme_dns" && ruleDomain != ""
+	var certJobsSnapshot services.CertJobsSnapshot
+	var oldRuntimeConfig map[string]interface{}
+	if isACME {
+		certJobsSnapshot, err = services.SnapshotCertJobsForRule(caddyID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份证书任务失败: " + err.Error()})
+			return
+		}
+		oldRuntimeConfig, err = h.caddyService.GetConfig()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前 Caddy 配置失败: " + err.Error()})
+			return
+		}
+	}
 
 	if _, err := db.DB.Exec("UPDATE lb_rules SET enabled = 1, updated_at = datetime('now') WHERE caddy_id = ?", caddyID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "启用规则失败"})
 		return
 	}
 
+	var enqueuedJobID int
+	var queueManager *services.CAQueueManager
+	restoreEnabledState := func() error {
+		if enqueuedJobID > 0 && queueManager != nil {
+			cancelCertJob(queueManager, enqueuedJobID)
+		}
+		var caddyErr, dbErr, jobsErr error
+		if isACME {
+			caddyErr = h.caddyService.ApplyConfig(oldRuntimeConfig)
+		}
+		if _, dbErr = db.DB.Exec("UPDATE lb_rules SET enabled = ?, updated_at = datetime('now') WHERE caddy_id = ?", originalEnabled, caddyID); dbErr != nil {
+			dbErr = fmt.Errorf("恢复规则启用状态: %w", dbErr)
+		}
+		if isACME {
+			jobsErr = services.RestoreCertJobsForRule(certJobsSnapshot)
+		}
+		return errors.Join(caddyErr, dbErr, jobsErr)
+	}
 	if err := h.applyCaddyConfigWithRollbackLocked(); err != nil {
+		if isACME {
+			restoreErr := restoreEnabledState()
+			if restoreErr != nil {
+				log.Printf("CRITICAL: EnableRule Caddy apply and compensation failed for caddy_id=%s: apply=%v restore=%v", caddyID, err, restoreErr)
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与恢复均失败: %v; %v", err, restoreErr)})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Failed to apply Caddy config: %v", err)})
+			return
+		}
 		if _, restoreErr := db.DB.Exec("UPDATE lb_rules SET enabled = ?, updated_at = datetime('now') WHERE caddy_id = ?", originalEnabled, caddyID); restoreErr != nil {
 			log.Printf("CRITICAL: EnableRule Caddy apply and DB restore failed for caddy_id=%s: caddy=%v db=%v", caddyID, err, restoreErr)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与 DB 恢复均失败: %v; %v", err, restoreErr)})
@@ -1820,16 +1864,6 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Failed to apply Caddy config: %v", err)})
 		return
-	}
-	restoreEnabledState := func() error {
-		_, dbErr := db.DB.Exec("UPDATE lb_rules SET enabled = ?, updated_at = datetime('now') WHERE caddy_id = ?", originalEnabled, caddyID)
-		if dbErr != nil {
-			return fmt.Errorf("恢复规则启用状态: %w", dbErr)
-		}
-		if caddyErr := h.applyCaddyConfigWithRollbackLocked(); caddyErr != nil {
-			return fmt.Errorf("恢复 Caddy 配置: %w", caddyErr)
-		}
-		return nil
 	}
 	failEnable := func(message string) {
 		if restoreErr := restoreEnabledState(); restoreErr != nil {
@@ -1842,8 +1876,8 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 
 	domain := ruleDomain
 	log.Printf("EnableRule TLS state for caddy_id=%s: enableTLS=%v tlsSource=%s domain=%s caProviderID=%d", caddyID, enableTLS, tlsSource, domain, caProviderID)
-	if enableTLS && tlsSource == "acme_dns" && domain != "" {
-		qm := services.GetCAQueueManager()
+	if isACME {
+		queueManager = services.GetCAQueueManager()
 
 		var jobStatus, jobMsg string
 		var jobExpiresAt sql.NullTime
@@ -1870,11 +1904,12 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 
 		switch action {
 		case EnableCertJobCreate:
-			if qm == nil {
+			if queueManager == nil {
 				failEnable("CA 队列未初始化，无法创建证书签发任务")
 				return
 			}
-			if _, err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+			enqueuedJobID, err = services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, queueManager)
+			if err != nil {
 				failEnable("创建证书签发任务失败: " + err.Error())
 				return
 			}
@@ -1888,21 +1923,23 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			}
 			recordAudit(c, "启用", "证书签发任务", fmt.Sprintf("启用规则 %s，证书仍有效，恢复使用现有证书", caddyID))
 		case EnableCertJobRenew:
-			if qm == nil {
+			if queueManager == nil {
 				failEnable("CA 队列未初始化，无法续签证书")
 				return
 			}
-			if _, err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+			enqueuedJobID, err = services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, queueManager)
+			if err != nil {
 				failEnable("续签排队失败: " + err.Error())
 				return
 			}
 			recordAudit(c, "续签", "证书签发任务", fmt.Sprintf("启用规则 %s，证书即将过期，重新排队续签", caddyID))
 		case EnableCertJobRetry:
-			if qm == nil {
+			if queueManager == nil {
 				failEnable("CA 队列未初始化，无法重试证书任务")
 				return
 			}
-			if _, err := services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, qm); err != nil {
+			enqueuedJobID, err = services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, queueManager)
+			if err != nil {
 				failEnable("重试排队失败: " + err.Error())
 				return
 			}
