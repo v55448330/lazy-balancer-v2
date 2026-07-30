@@ -117,6 +117,29 @@ func (m *CAQueueManager) CancelJobsForRule(ruleID string) {
 	}
 }
 
+// CancelAllJobs cancels every pending and running issuance while keeping the
+// manager active for future jobs.
+func (m *CAQueueManager) CancelAllJobs() {
+	m.mu.Lock()
+	queues := make([]*caQueue, 0, len(m.queues))
+	for _, q := range m.queues {
+		q.mu.Lock()
+		for _, item := range q.pending {
+			delete(q.active, item.jobID)
+		}
+		q.pending = nil
+		q.mu.Unlock()
+		q.stop()
+		queues = append(queues, q)
+	}
+	m.queues = make(map[int]*caQueue)
+	m.mu.Unlock()
+
+	for _, q := range queues {
+		q.wait()
+	}
+}
+
 // Enqueue adds or re-enqueues a cert job.
 func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains string) error {
 	provider, err := loadCAProvider(providerID)

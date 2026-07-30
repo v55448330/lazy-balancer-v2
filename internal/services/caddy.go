@@ -67,23 +67,28 @@ func (s *CaddyService) BackupConfig() error {
 
 	config, err := s.GetConfig()
 	if err != nil {
-		log.Printf("Failed to backup Caddy config: %v", err)
 		s.backupConfig = nil
-		return nil
+		return fmt.Errorf("get Caddy config for backup: %w", err)
+	}
+	if len(config) == 0 {
+		s.backupConfig = nil
+		return errors.New("Caddy config backup is empty")
 	}
 
 	configBytes, err := json.Marshal(config)
 	if err != nil {
-		log.Printf("Failed to marshal backup config: %v", err)
 		s.backupConfig = nil
-		return nil
+		return fmt.Errorf("marshal Caddy config backup: %w", err)
 	}
 
 	var backupConfig map[string]interface{}
 	if err := json.Unmarshal(configBytes, &backupConfig); err != nil {
-		log.Printf("Failed to unmarshal backup config: %v", err)
 		s.backupConfig = nil
-		return nil
+		return fmt.Errorf("unmarshal Caddy config backup: %w", err)
+	}
+	if len(backupConfig) == 0 {
+		s.backupConfig = nil
+		return errors.New("Caddy config backup is empty")
 	}
 
 	s.backupConfig = backupConfig

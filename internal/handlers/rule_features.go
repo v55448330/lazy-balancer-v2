@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -380,7 +381,9 @@ func restoreRuleSnapshot(ctx context.Context, caddyID string, ruleRow map[string
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback()
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				log.Printf("restoreRuleSnapshot rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
+			}
 		}
 	}()
 	if _, err := tx.ExecContext(ctx, "DELETE FROM lb_rules WHERE caddy_id = ?", caddyID); err != nil {

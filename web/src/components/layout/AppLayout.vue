@@ -126,7 +126,7 @@
           <el-input v-model="profileForm.display_name" :disabled="isSlave" placeholder="选填" />
         </el-form-item>
         <el-form-item label="新密码">
-          <el-input v-model="profileForm.password" :disabled="isSlave" type="password" placeholder="如不修改请留空" show-password />
+          <el-input v-model="profileForm.password" :disabled="isSlave" type="password" minlength="6" placeholder="如不修改请留空（至少6位）" show-password />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -210,6 +210,10 @@ const closeProfile = (): void => {
 
 const saveProfile = async () => {
   if (isSlave.value || saving.value) return
+  if (profileForm.value.password && profileForm.value.password.length < 6) {
+    authStore.showToast('warning', '密码长度至少6位')
+    return
+  }
   saving.value = true
   try {
     await api.patch('/users/me', {

@@ -95,24 +95,33 @@ func NewCertIssuer(reloader func() error) *CertIssuer {
 	return &CertIssuer{caddyReloader: reloader, deploymentRetry: scheduleCertificateDeploymentRetry}
 }
 
-func scheduleCertificateDeploymentRetry(jobID int, material issuedCertificate, delay time.Duration) {
+func scheduleCertificateDeploymentRetry(jobID int, _ issuedCertificate, delay time.Duration) {
 	time.AfterFunc(delay, func() {
-		var domains string
-		if err := db.DB.QueryRow("SELECT domain FROM cert_jobs WHERE id=? AND status='downloaded'", jobID).Scan(&domains); err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				log.Printf("certificate deployment retry lookup failed for job %d: %v", jobID, err)
-			}
-			return
-		}
 		manager := GetCAQueueManager()
 		if manager == nil {
-			log.Printf("certificate deployment retry skipped for job %d: CA queue is not initialized", jobID)
+			log.Printf("certificate deployment retry skipped for job %d: Caddy reloader is not initialized", jobID)
 			return
 		}
-		if err := manager.Enqueue(material.providerID, jobID, material.ruleID, domains); err != nil {
-			log.Printf("certificate deployment retry enqueue failed for job %d: %v", jobID, err)
+		manager.mu.Lock()
+		reloader := manager.reloader
+		manager.mu.Unlock()
+		if err := retryCertificateDeployment(jobID, reloader); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("certificate deployment retry failed for job %d: %v", jobID, err)
 		}
 	})
+}
+
+func retryCertificateDeployment(jobID int, reloader func() error) error {
+	var material issuedCertificate
+	if err := db.DB.QueryRow(`SELECT rule_id, COALESCE(cert_pem,''), COALESCE(key_pem,''), expires_at,
+		COALESCE(ca_provider_id,0), COALESCE(deployment_attempts,0)
+		FROM cert_jobs WHERE id=? AND status='downloaded'`, jobID).Scan(
+		&material.ruleID, &material.certPEM, &material.keyPEM, &material.notAfter,
+		&material.providerID, &material.deploymentAttempt,
+	); err != nil {
+		return fmt.Errorf("load downloaded certificate for deployment: %w", err)
+	}
+	return NewCertIssuer(reloader).deployIssuedCertificate(context.Background(), jobID, material)
 }
 
 func (s *CertIssuer) deploymentFailed(jobID int, material issuedCertificate, message string, err error) error {

@@ -24,6 +24,139 @@ type CertificateService struct {
 	deploymentRetry func(int, issuedCertificate, time.Duration)
 }
 
+type certJobSnapshot struct {
+	id                       int
+	ruleID                   string
+	domain                   string
+	status                   string
+	message                  sql.NullString
+	expiresAt                sql.NullTime
+	certPEM                  sql.NullString
+	keyPEM                   sql.NullString
+	caProviderID             int
+	renewalAttempts          int
+	caAvailableAfter         sql.NullTime
+	lastErrorCode            sql.NullString
+	deploymentAttempts       int
+	deploymentAvailableAfter sql.NullTime
+	createdAt                sql.NullTime
+	updatedAt                sql.NullTime
+}
+
+// CertJobsSnapshot is an opaque cert_jobs restore point used to compensate a
+// failed UpdateRule ACME enqueue after an UPSERT may have replaced old state.
+type CertJobsSnapshot struct {
+	ruleID string
+	jobs   []certJobSnapshot
+}
+
+// DisableCertJobsExceptDomain retires non-terminal jobs that no longer match
+// the rule's current ACME domain.
+func DisableCertJobsExceptDomain(ruleID, keepDomain string) error {
+	tx, err := db.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin certificate job retirement: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.Query(`SELECT id FROM cert_jobs WHERE rule_id=? AND domain<>? AND status NOT IN ('issued','failed','disabled')`, ruleID, keepDomain)
+	if err != nil {
+		return fmt.Errorf("query retired certificate jobs: %w", err)
+	}
+	var jobIDs []int
+	for rows.Next() {
+		var jobID int
+		if err := rows.Scan(&jobID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan retired certificate job: %w", err)
+		}
+		jobIDs = append(jobIDs, jobID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate retired certificate jobs: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close retired certificate jobs: %w", err)
+	}
+
+	result, err := tx.Exec(`UPDATE cert_jobs SET status='disabled', message='规则域名已变更，任务已退役', updated_at=datetime('now')
+		WHERE rule_id=? AND domain<>? AND status NOT IN ('issued','failed','disabled')`, ruleID, keepDomain)
+	if err != nil {
+		return fmt.Errorf("disable retired certificate jobs: %w", err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read retired certificate job count: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit certificate job retirement: %w", err)
+	}
+
+	if manager := GetCAQueueManager(); manager != nil {
+		for _, jobID := range jobIDs {
+			manager.CancelJob(jobID)
+		}
+	}
+	if updated > 0 {
+		WriteCertJobLogByRule(ruleID, "WARN", "cancelled", "规则域名已变更，旧证书签发任务已退役")
+		RecordAuditLog("system", "禁用", "证书签发任务", FormatAuditDetail(AuditRulePart(ruleID), fmt.Sprintf("退役任务：%d 个", updated)), "")
+	}
+	return nil
+}
+
+// SnapshotCertJobsForRule captures all cert_jobs rows for UpdateRule ACME
+// enqueue compensation.
+func SnapshotCertJobsForRule(ruleID string) (CertJobsSnapshot, error) {
+	snapshot := CertJobsSnapshot{ruleID: ruleID}
+	rows, err := db.DB.Query(`SELECT id,rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,
+		renewal_attempts,ca_available_after,last_error_code,deployment_attempts,deployment_available_after,created_at,updated_at
+		FROM cert_jobs WHERE rule_id=? ORDER BY id`, ruleID)
+	if err != nil {
+		return CertJobsSnapshot{}, fmt.Errorf("query certificate job snapshot: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var job certJobSnapshot
+		if err := rows.Scan(&job.id, &job.ruleID, &job.domain, &job.status, &job.message, &job.expiresAt,
+			&job.certPEM, &job.keyPEM, &job.caProviderID, &job.renewalAttempts, &job.caAvailableAfter,
+			&job.lastErrorCode, &job.deploymentAttempts, &job.deploymentAvailableAfter, &job.createdAt, &job.updatedAt); err != nil {
+			return CertJobsSnapshot{}, fmt.Errorf("scan certificate job snapshot: %w", err)
+		}
+		snapshot.jobs = append(snapshot.jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return CertJobsSnapshot{}, fmt.Errorf("iterate certificate job snapshot: %w", err)
+	}
+	return snapshot, nil
+}
+
+// RestoreCertJobsForRule restores UPSERT-overwritten rows and removes jobs
+// created after SnapshotCertJobsForRule captured the rule state.
+func RestoreCertJobsForRule(snapshot CertJobsSnapshot) error {
+	tx, err := db.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin certificate job restore: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec("DELETE FROM cert_jobs WHERE rule_id=?", snapshot.ruleID); err != nil {
+		return fmt.Errorf("clear certificate jobs for restore: %w", err)
+	}
+	for _, job := range snapshot.jobs {
+		if _, err := tx.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,
+			renewal_attempts,ca_available_after,last_error_code,deployment_attempts,deployment_available_after,created_at,updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, job.id, job.ruleID, job.domain, job.status, job.message,
+			job.expiresAt, job.certPEM, job.keyPEM, job.caProviderID, job.renewalAttempts, job.caAvailableAfter,
+			job.lastErrorCode, job.deploymentAttempts, job.deploymentAvailableAfter, job.createdAt, job.updatedAt); err != nil {
+			return fmt.Errorf("restore certificate job %d: %w", job.id, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit certificate job restore: %w", err)
+	}
+	return nil
+}
+
 func NewCertificateService() *CertificateService {
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &CertificateService{ctx: ctx, cancel: cancel, done: make(chan struct{}), deploymentRetry: scheduleCertificateDeploymentRetry}

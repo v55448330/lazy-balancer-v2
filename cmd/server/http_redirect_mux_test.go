@@ -112,11 +112,11 @@ func TestHTTPRedirectMux_TLSHandshakeCompletes_whenSilentConnectionsAreOpen(t *t
 	}
 }
 
-func TestHTTPRedirectMux_Accept_retriesTemporaryListenerError(t *testing.T) {
+func TestHTTPRedirectMux_Accept_backsOffTemporaryErrorsAndResetsAfterSuccess(t *testing.T) {
 	// Given
 	listener := &fakeListener{
-		results:  make(chan acceptResult, 2),
-		accepted: make(chan struct{}, 2),
+		results:  make(chan acceptResult, 12),
+		accepted: make(chan struct{}, 12),
 		closed:   make(chan struct{}),
 	}
 	serverConnection, clientConnection := net.Pipe()
@@ -124,40 +124,37 @@ func TestHTTPRedirectMux_Accept_retriesTemporaryListenerError(t *testing.T) {
 		_ = clientConnection.Close()
 		_ = listener.Close()
 	})
-	listener.results <- acceptResult{err: temporaryAcceptError{}}
+	for range 9 {
+		listener.results <- acceptResult{err: temporaryAcceptError{}}
+	}
 	listener.results <- acceptResult{connection: serverConnection}
-	mux := newHTTPRedirectMux(listener)
-
-	writeDone := make(chan error, 1)
-	go func() {
-		_, err := clientConnection.Write([]byte{0x16})
-		writeDone <- err
-	}()
-	acceptDone := make(chan acceptResult, 1)
-	go func() {
-		connection, err := mux.Accept()
-		acceptDone <- acceptResult{connection: connection, err: err}
-	}()
+	listener.results <- acceptResult{err: temporaryAcceptError{}}
+	listener.results <- acceptResult{err: errors.New("permanent accept error")}
+	var delays []time.Duration
+	mux := newHTTPRedirectMuxWithSleeper(listener, func(delay time.Duration) {
+		delays = append(delays, delay)
+	})
 
 	// When
-	var result acceptResult
 	select {
-	case result = <-acceptDone:
+	case <-mux.done:
 	case <-time.After(time.Second):
-		t.Fatal("mux did not retry the temporary listener error")
+		t.Fatal("mux did not finish scripted accepts")
 	}
 
 	// Then
-	if result.err != nil {
-		t.Fatalf("accept after temporary listener error: %v", result.err)
+	want := []time.Duration{
+		5 * time.Millisecond, 10 * time.Millisecond, 20 * time.Millisecond,
+		40 * time.Millisecond, 80 * time.Millisecond, 160 * time.Millisecond,
+		320 * time.Millisecond, 640 * time.Millisecond, time.Second,
+		5 * time.Millisecond,
 	}
-	if result.connection == nil {
-		t.Fatal("accept returned a nil connection")
+	if len(delays) != len(want) {
+		t.Fatalf("backoff delays=%v, want %v", delays, want)
 	}
-	if err := result.connection.Close(); err != nil {
-		t.Fatalf("close accepted connection: %v", err)
-	}
-	if err := <-writeDone; err != nil && !errors.Is(err, net.ErrClosed) {
-		t.Fatalf("write TLS prefix: %v", err)
+	for i := range want {
+		if delays[i] != want[i] {
+			t.Fatalf("backoff delays=%v, want %v", delays, want)
+		}
 	}
 }

@@ -26,17 +26,23 @@ type httpRedirectMux struct {
 	tlsConnections chan net.Conn
 	slots          chan struct{}
 	done           chan struct{}
+	sleep          func(time.Duration)
 	closeOnce      sync.Once
 	errMu          sync.Mutex
 	acceptErr      error
 }
 
 func newHTTPRedirectMux(listener net.Listener) *httpRedirectMux {
+	return newHTTPRedirectMuxWithSleeper(listener, time.Sleep)
+}
+
+func newHTTPRedirectMuxWithSleeper(listener net.Listener, sleep func(time.Duration)) *httpRedirectMux {
 	mux := &httpRedirectMux{
 		Listener:       listener,
 		tlsConnections: make(chan net.Conn),
 		slots:          make(chan struct{}, maxProtocolSniffers),
 		done:           make(chan struct{}),
+		sleep:          sleep,
 	}
 	go mux.dispatch()
 	return mux
@@ -73,7 +79,7 @@ func (m *httpRedirectMux) dispatch() {
 				if maximum := time.Second; retryDelay > maximum {
 					retryDelay = maximum
 				}
-				time.Sleep(retryDelay)
+				m.sleep(retryDelay)
 				continue
 			}
 			m.finish(err)

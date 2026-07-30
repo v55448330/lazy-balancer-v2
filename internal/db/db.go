@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -22,6 +23,7 @@ var (
 	MetricsDB      *sql.DB
 	AuditDB        *sql.DB
 	BackgroundDBMu sync.Mutex
+	openDatabase   = sql.Open
 )
 
 // SetDB registers the handle background goroutines should use; tests that
@@ -39,7 +41,7 @@ func GetDB() *sql.DB {
 	return nil
 }
 
-func Initialize(dataDir string) error {
+func Initialize(dataDir string) (err error) {
 	// Create data directory
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
@@ -47,26 +49,41 @@ func Initialize(dataDir string) error {
 
 	dbPath := filepath.Join(dataDir, "lazy-balancer.db")
 
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=30000&_synchronous=NORMAL&_txlock=immediate")
+	database, err := openDatabase("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=30000&_synchronous=NORMAL&_txlock=immediate")
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	var metricsDB, auditDB *sql.DB
+	defer func() {
+		if err == nil {
+			return
+		}
+		if auditDB != nil && auditDB != oldAuditDB {
+			err = errors.Join(err, auditDB.Close())
+		}
+		if metricsDB != nil && metricsDB != oldMetricsDB {
+			err = errors.Join(err, metricsDB.Close())
+		}
+		err = errors.Join(err, database.Close())
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	}()
 
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(0)
+	database.SetMaxOpenConns(10)
+	database.SetMaxIdleConns(5)
+	database.SetConnMaxLifetime(0)
 
-	if err := db.Ping(); err != nil {
+	if err := database.Ping(); err != nil {
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	DB = db
-	currentDB.Store(db)
+	DB = database
 
 	// Initialize metrics database
 	if err := InitializeMetricsDB(dataDir); err != nil {
 		return fmt.Errorf("failed to initialize metrics database: %w", err)
 	}
+	metricsDB = MetricsDB
 
 	// Create tables
 	if err := createTables(); err != nil {
@@ -89,9 +106,12 @@ func Initialize(dataDir string) error {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
-	if err := InitializeAuditDB(dataDir); err != nil {
-		return fmt.Errorf("failed to initialize audit database: %w", err)
+	if initErr := InitializeAuditDB(dataDir); initErr != nil {
+		auditDB = AuditDB
+		return fmt.Errorf("failed to initialize audit database: %w", initErr)
 	}
+	auditDB = AuditDB
+	currentDB.Store(database)
 
 	log.Println("Database initialized successfully")
 	return nil

@@ -172,6 +172,71 @@ func TestInitialize_returns_error_when_global_config_singleton_insert_fails(t *t
 	}
 }
 
+func TestInitialize_closesNewHandlesAndPreservesGlobalsWhenInitializationFails(t *testing.T) {
+	// Given
+	dir := t.TempDir()
+	legacy, err := sql.Open("sqlite", filepath.Join(dir, "lazy-balancer.db"))
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	if _, err := legacy.Exec("CREATE TABLE global_config (id INTEGER PRIMARY KEY CHECK (id = 2), caddy_config TEXT)"); err != nil {
+		t.Fatalf("create conflicting global config table: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	mainSentinel, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open main sentinel: %v", err)
+	}
+	metricsSentinel, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open metrics sentinel: %v", err)
+	}
+	auditSentinel, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open audit sentinel: %v", err)
+	}
+	DB, MetricsDB, AuditDB = mainSentinel, metricsSentinel, auditSentinel
+	oldOpenDatabase := openDatabase
+	var openedMain *sql.DB
+	openDatabase = func(driverName, dataSourceName string) (*sql.DB, error) {
+		openedMain, err = sql.Open(driverName, dataSourceName)
+		return openedMain, err
+	}
+	t.Cleanup(func() {
+		openDatabase = oldOpenDatabase
+		if DB != mainSentinel {
+			_ = DB.Close()
+		}
+		if MetricsDB != metricsSentinel {
+			_ = MetricsDB.Close()
+		}
+		if AuditDB != auditSentinel {
+			_ = AuditDB.Close()
+		}
+		_ = mainSentinel.Close()
+		_ = metricsSentinel.Close()
+		_ = auditSentinel.Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+
+	// When
+	err = Initialize(dir)
+
+	// Then
+	if err == nil {
+		t.Fatal("Initialize() error=nil, want initialization failure")
+	}
+	if DB != mainSentinel || MetricsDB != metricsSentinel || AuditDB != auditSentinel {
+		t.Fatalf("database globals changed after failure: DB=%p MetricsDB=%p AuditDB=%p", DB, MetricsDB, AuditDB)
+	}
+	if pingErr := openedMain.Ping(); pingErr == nil {
+		t.Fatal("new main database remains open after initialization failure")
+	}
+}
+
 func TestInitialize_adds_certificate_deployment_retry_columns(t *testing.T) {
 	// Given
 	dir := t.TempDir()

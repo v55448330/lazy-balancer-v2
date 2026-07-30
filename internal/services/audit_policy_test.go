@@ -106,6 +106,85 @@ func TestClassifyAuditRouteMatrix(t *testing.T) {
 	}
 }
 
+func TestAuditRoutePolicies_coverAllRegisteredWriteRoutes(t *testing.T) {
+	// Keep this list synchronized with POST/PUT/PATCH/DELETE registrations in
+	// internal/middleware/middleware.go; services cannot import middleware.
+	registeredWriteRoutes := []string{
+		"POST /api/v1/auth/login",
+		"POST /api/v1/auth/setup",
+		"POST /api/v1/cluster/register",
+		"POST /api/v1/cluster/nodes/report",
+		"POST /api/v1/auth/logout",
+		"POST /api/v1/users",
+		"PUT /api/v1/users/:id",
+		"PUT /api/v1/users/:id/status",
+		"POST /api/v1/users/:id/reset-password",
+		"DELETE /api/v1/users/:id",
+		"POST /api/v1/api-keys",
+		"PATCH /api/v1/api-keys/:id/status",
+		"DELETE /api/v1/api-keys/:id",
+		"PUT /api/v1/ca-providers/:id",
+		"POST /api/v1/ca-providers/:id/test",
+		"POST /api/v1/cluster/register-tokens",
+		"POST /api/v1/cluster/nodes/:id/approve",
+		"POST /api/v1/cluster/nodes/:id/reject",
+		"DELETE /api/v1/cluster/nodes/:id",
+		"POST /api/v1/cluster/mode",
+		"POST /api/v1/cluster/promote",
+		"POST /api/v1/cluster/sync/pull",
+		"PUT /api/v1/cluster/settings",
+		"POST /api/v1/config/preview",
+		"PUT /api/v1/config",
+		"POST /api/v1/config/reload",
+		"POST /api/v1/config/validate",
+		"POST /api/v1/config/import",
+		"POST /api/v1/config/import/validate",
+		"POST /api/v1/config/import/v1",
+		"PATCH /api/v1/users/me",
+		"POST /api/v1/users/me/api-keys",
+		"PATCH /api/v1/users/me/api-keys/:id",
+		"DELETE /api/v1/users/me/api-keys/:id",
+		"POST /api/v1/rules/cert-info",
+		"POST /api/v1/rules",
+		"PUT /api/v1/rules/:caddy_id",
+		"POST /api/v1/rules/:caddy_id/acl",
+		"DELETE /api/v1/rules/:caddy_id",
+		"POST /api/v1/rules/:caddy_id/enable",
+		"PUT /api/v1/rules/:caddy_id/disable",
+		"POST /api/v1/rules/:caddy_id/duplicate",
+		"POST /api/v1/certificate-configs",
+		"PUT /api/v1/certificate-configs/:id",
+		"DELETE /api/v1/certificate-configs/:id",
+		"POST /api/v1/certificate-configs/test",
+		"POST /api/v1/certificate-configs/:id/test",
+		"PUT /api/v1/admin-tls",
+		"POST /api/v1/admin-tls/inspect",
+		"POST /api/v1/system/restart",
+		"PUT /api/v1/caddy/config",
+		"POST /api/v1/caddy/start",
+		"POST /api/v1/caddy/stop",
+		"POST /api/v1/caddy/restart",
+		"POST /api/v1/certificates/issue",
+		"POST /api/v1/certificates/parse",
+		"POST /api/v1/certificates/jobs/:id/retry",
+		"DELETE /api/v1/certificates/jobs/:id",
+	}
+	seen := make(map[string]struct{}, len(registeredWriteRoutes))
+	for _, route := range registeredWriteRoutes {
+		if _, duplicate := seen[route]; duplicate {
+			t.Fatalf("duplicate registered write route: %s", route)
+		}
+		seen[route] = struct{}{}
+		policy, classified := auditRoutePolicies[route]
+		if !classified {
+			t.Fatalf("registered write route has no explicit audit classification: %s", route)
+		}
+		if policy != AuditPolicyExplicit && policy != AuditPolicyGeneric && policy != AuditPolicySkip {
+			t.Fatalf("registered write route has invalid audit policy %d: %s", policy, route)
+		}
+	}
+}
+
 func TestAuditResultText_translates_partial_result(t *testing.T) {
 	if got := AuditResultText("partial"); got != "部分成功" {
 		t.Fatalf("AuditResultText(partial)=%q, want 部分成功", got)

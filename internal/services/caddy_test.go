@@ -13,6 +13,36 @@ import (
 	"lazy-balancer-v2/internal/config"
 )
 
+func TestCaddyService_BackupConfig_failure_prevents_apply(t *testing.T) {
+	// Given
+	var applyRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet && request.URL.Path == "/config/" {
+			http.Error(writer, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if request.Method == http.MethodPost && request.URL.Path == "/load" {
+			applyRequests++
+		}
+	}))
+	defer server.Close()
+	service := NewCaddyService(server.URL)
+
+	// When
+	err := service.BackupConfig()
+	if err == nil {
+		err = service.ApplyConfig(map[string]interface{}{})
+	}
+
+	// Then
+	if err == nil {
+		t.Fatal("backup failure reported success")
+	}
+	if applyRequests != 0 {
+		t.Fatalf("Caddy received %d apply requests after backup failed", applyRequests)
+	}
+}
+
 func TestGenerateSingleRuleCaddyConfig_HTTPAllowACL_appendsForbiddenFallback(t *testing.T) {
 	// Given
 	rule := baseHTTPRule()

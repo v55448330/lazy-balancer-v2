@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,12 +9,16 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
+
+const compensationTimeout = 10 * time.Second
+const minimumPasswordLength = 6
 
 type Handlers struct {
 	cfg               *config.Config
@@ -43,6 +48,14 @@ func NewHandlers(deps Dependencies) *Handlers {
 		clusterService:    deps.ClusterService,
 		caProviderService: deps.CAProviderService,
 	}
+}
+
+func compensationContext(requestCtx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(requestCtx), compensationTimeout)
+}
+
+func passwordTooShort(password string) bool {
+	return password != "" && utf8.RuneCountInString(password) < minimumPasswordLength
 }
 
 type EnableCertJobAction int

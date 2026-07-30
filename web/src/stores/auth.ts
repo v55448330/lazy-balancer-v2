@@ -97,6 +97,7 @@ export const useAuthStore = defineStore('auth', () => {
           id: res.user.id,
           username: res.user.username,
           role: res.user.role,
+          is_enabled: res.user.is_enabled,
           display_name: normalizeDisplayName(res.user.display_name, res.user.username),
         }
       }
@@ -113,7 +114,7 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('token')
   }
 
-  function showToast(type: 'success' | 'error' | 'info', title: string, message?: string) {
+  function showToast(type: 'success' | 'error' | 'info' | 'warning', title: string, message?: string) {
     ElMessage({
       message: message || title,
       type,

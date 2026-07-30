@@ -421,7 +421,6 @@ func TestUpdateRule_serializes_snapshot_commit_apply_and_restore(t *testing.T) {
 	seedAuditRule(t, "lb_concurrent", "original", "concurrent.example.test", 8080, true, "manual", false)
 	seedAuditUpstream(t, "lb_concurrent")
 	firstRouteEntered := harness.firstRouteEntered
-	releaseFirstRoute := harness.releaseFirstRoute
 	router := gin.New()
 	router.PUT("/rules/:caddy_id", handler.UpdateRule)
 	firstResponse := httptest.NewRecorder()
@@ -444,7 +443,7 @@ func TestUpdateRule_serializes_snapshot_commit_apply_and_restore(t *testing.T) {
 	<-harness.secondValidation
 
 	// When
-	close(releaseFirstRoute)
+	harness.release()
 	<-firstDone
 	<-secondDone
 
@@ -508,6 +507,8 @@ type updateAuditHarness struct {
 	firstRouteEntered chan struct{}
 	releaseFirstRoute chan struct{}
 	secondValidation  chan struct{}
+	blockOnRoutePost  int32
+	release           func()
 }
 
 func newUpdateAuditRuleHandlers(t *testing.T, caddyID string, failedLoads int32, failFirstRoute bool) *updateAuditHarness {
@@ -521,6 +522,10 @@ func newUpdateAuditRuleHandlers(t *testing.T, caddyID string, failedLoads int32,
 	firstRouteEntered := make(chan struct{})
 	releaseFirstRoute := make(chan struct{})
 	secondValidation := make(chan struct{})
+	harness := &updateAuditHarness{blockOnRoutePost: 2}
+	var releaseOnce sync.Once
+	harness.release = func() { releaseOnce.Do(func() { close(releaseFirstRoute) }) }
+	t.Cleanup(harness.release)
 	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
 		switch {
@@ -545,7 +550,7 @@ func newUpdateAuditRuleHandlers(t *testing.T, caddyID string, failedLoads int32,
 				response.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			if routePosts.Add(1) == 2 && failFirstRoute {
+			if routePosts.Add(1) == harness.blockOnRoutePost && failFirstRoute {
 				close(firstRouteEntered)
 				<-releaseFirstRoute
 				response.WriteHeader(http.StatusBadRequest)
@@ -580,22 +585,21 @@ func newUpdateAuditRuleHandlers(t *testing.T, caddyID string, failedLoads int32,
 	}))
 	t.Cleanup(fakeCaddy.Close)
 	cfg := &config.Config{CaddyAdminURL: fakeCaddy.URL}
-	return &updateAuditHarness{
-		handler: &Handlers{
-			cfg:            cfg,
-			caddyService:   services.NewCaddyService(fakeCaddy.URL),
-			clusterService: services.NewClusterService(db.DB, nil),
-		},
-		loadCalls: &loadCalls,
-		currentConfig: func() string {
-			stateMu.Lock()
-			defer stateMu.Unlock()
-			return currentConfig
-		},
-		firstRouteEntered: firstRouteEntered,
-		releaseFirstRoute: releaseFirstRoute,
-		secondValidation:  secondValidation,
+	harness.handler = &Handlers{
+		cfg:            cfg,
+		caddyService:   services.NewCaddyService(fakeCaddy.URL),
+		clusterService: services.NewClusterService(db.DB, nil),
 	}
+	harness.loadCalls = &loadCalls
+	harness.currentConfig = func() string {
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		return currentConfig
+	}
+	harness.firstRouteEntered = firstRouteEntered
+	harness.releaseFirstRoute = releaseFirstRoute
+	harness.secondValidation = secondValidation
+	return harness
 }
 
 func newAuditRuleHandlers(t *testing.T, failedLoads int32) (*Handlers, *atomic.Int32, *string) {

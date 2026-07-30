@@ -1260,7 +1260,7 @@ const fetchCertJobs = async () => {
   }
   certJobsInFlight = true
   try {
-    do {
+    for (let attempt = 0; attempt < 2; attempt++) {
       certJobsPending = false
       const res = await request.get<APIResponse<CertJob[]>>('/certificates/jobs')
       const jobs: CertJob[] = res.data || []
@@ -1281,15 +1281,12 @@ const fetchCertJobs = async () => {
         .map(([ruleId]) => ruleId)
       certJobMap.value = map
       if (newlyIssuedRuleIds.length > 0) await fetchCertInfo(newlyIssuedRuleIds)
-    } while (certJobsPending)
-  } catch {
-    certJobsInFlight = false
-    if (certJobsPending) {
-      certJobsPending = false
-      await fetchCertJobs()
+      if (!certJobsPending) break
     }
+  } catch {
     return
   } finally {
+    certJobsPending = false
     certJobsInFlight = false
   }
 }
@@ -1473,7 +1470,7 @@ const fetchHealthStatus = async () => {
   }
   healthInFlight = true
   try {
-    do {
+    for (let attempt = 0; attempt < 2; attempt++) {
       healthPending = false
       const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health')
       const healthData = res.data || {}
@@ -1519,15 +1516,12 @@ const fetchHealthStatus = async () => {
         }
       }
       healthStatus.value = mapped
-    } while (healthPending)
+      if (!healthPending) break
+    }
   } catch (e) {
     console.error('Failed to fetch health status:', e)
-    healthInFlight = false
-    if (healthPending) {
-      healthPending = false
-      await fetchHealthStatus()
-    }
   } finally {
+    healthPending = false
     healthInFlight = false
   }
 }

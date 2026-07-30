@@ -189,12 +189,35 @@ type importValidateResponse struct {
 	Warnings []string       `json:"warnings,omitempty"`
 }
 
+const maxConfigImportBytes int64 = 16 << 20
+
+func limitConfigImportBody(c *gin.Context) bool {
+	if c.Request.ContentLength > maxConfigImportBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 16MB"})
+		return false
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxConfigImportBytes)
+	return true
+}
+
+func isRequestBodyTooLarge(err error) bool {
+	var maxBytesErr *http.MaxBytesError
+	return errors.As(err, &maxBytesErr)
+}
+
 func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 	if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err != nil || !isMaster {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导入配置"})
 		return
 	}
+	if !limitConfigImportBody(c) {
+		return
+	}
 	body, err := c.GetRawData()
+	if isRequestBodyTooLarge(err) {
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 16MB"})
+		return
+	}
 	if err != nil || len(body) == 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份文件内容为空"})
 		return
@@ -262,7 +285,14 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导入配置"})
 		return
 	}
+	if !limitConfigImportBody(c) {
+		return
+	}
 	body, err := c.GetRawData()
+	if isRequestBodyTooLarge(err) {
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 16MB"})
+		return
+	}
 	if err != nil || len(body) == 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份文件内容为空"})
 		return
@@ -292,6 +322,9 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	// 与 UpdateRule 同一锁序：先 caddyOpMu 后 DB 事务，避免与规则写路径循环等待
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
+	if queueManager := services.GetCAQueueManager(); queueManager != nil {
+		queueManager.CancelAllJobs()
+	}
 
 	tx, err := db.DB.BeginTx(ctx, nil)
 	if err != nil {

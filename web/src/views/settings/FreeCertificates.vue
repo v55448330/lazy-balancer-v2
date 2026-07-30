@@ -68,7 +68,7 @@
         </el-table-column>
         <el-table-column label="操作" width="140" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" :loading="testingCAId === row.id" :disabled="isReadOnly" @click="testCAProvider(row)">测试</el-button>
+            <el-button link type="primary" size="small" :loading="testingCAId === row.id" :disabled="isReadOnly || isTesting" @click="testCAProvider(row)">测试</el-button>
             <el-button link type="primary" size="small" :disabled="isReadOnly || savingCA" @click="openCAProviderDialog(row)">编辑</el-button>
           </template>
         </el-table-column>
@@ -99,7 +99,7 @@
         </el-table-column>
         <el-table-column label="操作" width="180" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" :loading="testingId === row.id" :disabled="isReadOnly" @click="testConfig(row)">测试</el-button>
+            <el-button link type="primary" size="small" :loading="testingId === row.id" :disabled="isReadOnly || isTesting" @click="testConfig(row)">测试</el-button>
             <el-button link type="primary" size="small" :disabled="isReadOnly || saving" @click="openConfigDialog(row)">编辑</el-button>
             <el-button link type="danger" size="small" :disabled="isReadOnly" @click="deleteConfig(row)">删除</el-button>
           </template>
@@ -311,6 +311,7 @@ const form = ref<{
 const caProviders = ref<CAProvider[]>([])
 const loadingCAProviders = ref(false)
 const testingCAId = ref<number | null>(null)
+const isTesting = computed(() => testingId.value !== null || testingCAId.value !== null)
 const caDialogVisible = ref(false)
 const savingCA = ref(false)
 const editingCAProvider = ref<CAProvider | null>(null)
@@ -458,6 +459,7 @@ const saveCAProvider = async () => {
 }
 
 const testCAProvider = async (p: CAProvider) => {
+  if (isTesting.value) return
   testingCAId.value = p.id
   try {
     const res = await request.post<APIResponse>(`/ca-providers/${p.id}/test`)
@@ -605,10 +607,11 @@ const promptTestDomain = async (isSave = false): Promise<string | null> => {
 }
 
 const testConfig = async (config: CertConfig) => {
-  const domain = await promptTestDomain(false)
-  if (!domain) return
-  testingId.value = config.id || null
+  if (isTesting.value || !config.id) return
+  testingId.value = config.id
   try {
+    const domain = await promptTestDomain(false)
+    if (!domain) return
     const res = await request.post(`/certificate-configs/${config.id}/test`, { domain })
     ElMessage.success(res.message || '凭证有效')
   } catch (caught: unknown) {

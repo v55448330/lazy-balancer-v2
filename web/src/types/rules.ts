@@ -1,9 +1,6 @@
-export type IpAclMode = '' | 'allow' | 'deny'
+import type { NullableTime } from './index'
 
-export interface NullableTime {
-  Time: string
-  Valid: boolean
-}
+export type IpAclMode = '' | 'allow' | 'deny'
 
 export interface Upstream {
   id: number

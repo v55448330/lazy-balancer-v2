@@ -815,8 +815,11 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
     // Also fetch actual status to confirm
     if (statusRefreshTimer) clearTimeout(statusRefreshTimer)
     if (statusConfirmTimer) clearTimeout(statusConfirmTimer)
-    statusRefreshTimer = window.setTimeout(fetchAllData, 1000)
-    statusConfirmTimer = window.setTimeout(fetchAllData, 2500)
+    statusRefreshTimer = window.setTimeout(() => {
+      void fetchAllData().then(() => {
+        statusConfirmTimer = window.setTimeout(fetchAllData, 1500)
+      })
+    }, 1000)
   } catch (error: unknown) {
     if (error === 'cancel') return
     const msg = error instanceof Error ? error.message : '操作失败'
@@ -933,7 +936,6 @@ onUnmounted(() => {
 
 .text-primary { color: #111827; }
 .text-secondary { color: #6b7280; }
-.font-medium { font-weight: 500; }
 
 .status-codes {
   display: flex;
@@ -951,8 +953,6 @@ onUnmounted(() => {
 .status-3xx { background: #eff6ff; color: #2563eb; }
 .status-4xx { background: #fffbeb; color: #d97706; }
 .status-5xx { background: #fef2f2; color: #dc2626; }
-.rule-name-link { color: var(--el-color-primary); cursor: pointer; text-decoration: none; font-weight: 500; }
-.rule-name-link:hover { text-decoration: underline; }
 .dialog-title { display: inline-flex; align-items: center; white-space: nowrap; overflow: hidden; }
 .dialog-title > * { line-height: 1; }
 .dialog-title-icon { font-size: 20px; color: var(--el-color-primary); flex-shrink: 0; margin-right: 12px; }
@@ -965,6 +965,5 @@ onUnmounted(() => {
 .history-card :deep(.el-card__body) { padding: 10px 14px; }
 .history-card-header { display: flex; align-items: center; font-size: 14px; font-weight: 600; color: #374151; line-height: 1; }
 .history-card-header .el-icon { color: var(--el-color-primary); font-size: 16px; margin-right: 8px; }
-.history-chart-title { font-size: 13px; font-weight: 600; color: #374151; margin: 12px 0 6px; }
 
 </style>

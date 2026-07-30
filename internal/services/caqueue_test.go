@@ -265,6 +265,51 @@ func TestCAQueueManager_Stop_waits_for_running_execution(t *testing.T) {
 	<-stopDone
 }
 
+func TestCAQueueManager_CancelAllJobs_cancels_pending_and_waits_for_running(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO cert_jobs (id, rule_id, domain, status) VALUES (42, 'lb_all', 'example.com', 'creating_order')`); err != nil {
+		t.Fatalf("seed certificate job: %v", err)
+	}
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
+	go queue.loop()
+	queue.executeFn = func(ctx context.Context, _ queueItem, _ models.CAProvider) error {
+		close(started)
+		<-ctx.Done()
+		close(finished)
+		return ctx.Err()
+	}
+	queue.enqueue(queueItem{jobID: 42, ruleID: "lb_all", domains: "example.com"})
+	queue.enqueue(queueItem{jobID: 43, ruleID: "lb_pending", domains: "pending.example.com"})
+	queue.mu.Lock()
+	execution, ok := queue.prepareExecutionLocked(queue.ctx)
+	queue.mu.Unlock()
+	if !ok {
+		t.Fatal("pending execution was not prepared")
+	}
+	go queue.execute(execution)
+	<-started
+	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
+
+	// When
+	manager.CancelAllJobs()
+
+	// Then
+	<-finished
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if len(queue.pending) != 0 || queue.running != 0 || len(queue.active) != 0 {
+		t.Fatalf("queue pending=%d running=%d active=%d", len(queue.pending), queue.running, len(queue.active))
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if !manager.active || len(manager.queues) != 0 {
+		t.Fatalf("manager active=%v queues=%d, want active empty manager", manager.active, len(manager.queues))
+	}
+}
+
 func TestCAQueue_execute_requeues_job_when_lifecycle_is_canceled(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)

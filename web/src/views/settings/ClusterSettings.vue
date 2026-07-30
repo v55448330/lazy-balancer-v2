@@ -124,7 +124,7 @@ const refreshCluster = async (): Promise<void> => {
   }
   refreshInFlight = (async () => {
     let refreshError: unknown = null
-    do {
+    for (let attempt = 0; attempt < 2; attempt++) {
       refreshPending = false
       try {
         const currentStatus = await fetchStatus()
@@ -137,12 +137,14 @@ const refreshCluster = async (): Promise<void> => {
       } catch (error: unknown) {
         refreshError = error
       }
-    } while (refreshPending)
+      if (!refreshPending) break
+    }
     if (refreshError) throw refreshError
   })()
   try {
     await refreshInFlight
   } finally {
+    refreshPending = false
     refreshInFlight = null
   }
 }
@@ -291,12 +293,12 @@ const removeNode = async (node: ClusterNode): Promise<void> => {
 
 onMounted(async () => {
   try {
-    await refreshCluster()
+    await refreshCluster().catch(() => undefined)
   } finally {
     initialLoading.value = false
   }
   refreshTimer = setInterval(() => {
-    void refreshCluster()
+    void refreshCluster().catch(() => undefined)
   }, 15000)
 })
 

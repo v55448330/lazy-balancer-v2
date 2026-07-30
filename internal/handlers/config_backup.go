@@ -252,8 +252,15 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导入配置"})
 		return
 	}
+	if !limitConfigImportBody(c) {
+		return
+	}
 	var backup configBackup
 	if err := c.ShouldBindJSON(&backup); err != nil {
+		if isRequestBodyTooLarge(err) {
+			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "备份文件不能超过 16MB"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份文件格式不正确"})
 		return
 	}
@@ -270,6 +277,9 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	// 与 UpdateRule 同一锁序：先 caddyOpMu 后 DB 事务，避免与规则写路径循环等待
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
+	if queueManager := services.GetCAQueueManager(); queueManager != nil {
+		queueManager.CancelAllJobs()
+	}
 
 	tx, err := db.DB.BeginTx(ctx, nil)
 	if err != nil {

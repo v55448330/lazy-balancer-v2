@@ -2,9 +2,12 @@ package handlers
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -203,6 +206,11 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "配置验证失败: " + err.Error()})
 		return
 	}
+	oldRuntimeConfig, err := h.caddyService.GetConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前 Caddy 配置失败: " + err.Error()})
+		return
+	}
 
 	// Validation passed — write in a transaction; Caddy applies the uncommitted
 	// state and the transaction only commits after a successful apply, so a
@@ -215,7 +223,9 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback()
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				log.Printf("UpdateConfig rollback failed: %v", rollbackErr)
+			}
 		}
 	}()
 	res, err := tx.Exec(`
@@ -269,31 +279,57 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	oldDNSPodID, hadDNSPodID := os.LookupEnv("DNSPOD_ID")
 	oldDNSPodToken, hadDNSPodToken := os.LookupEnv("DNSPOD_TOKEN")
 	envChanged := false
+	restoreEnv := func() error {
+		if !envChanged {
+			return nil
+		}
+		var restoreErrors []error
+		for _, variable := range []struct {
+			key     string
+			value   string
+			existed bool
+		}{{"DNSPOD_ID", oldDNSPodID, hadDNSPodID}, {"DNSPOD_TOKEN", oldDNSPodToken, hadDNSPodToken}} {
+			var restoreErr error
+			if variable.existed {
+				restoreErr = os.Setenv(variable.key, variable.value)
+			} else {
+				restoreErr = os.Unsetenv(variable.key)
+			}
+			if restoreErr != nil {
+				restoreErrors = append(restoreErrors, fmt.Errorf("restore %s: %w", variable.key, restoreErr))
+			}
+		}
+		return errors.Join(restoreErrors...)
+	}
 	if req.DNSCredentials != nil {
 		parts := strings.Split(*req.DNSCredentials, ",")
 		if len(parts) >= 2 {
-			os.Setenv("DNSPOD_ID", parts[0])
-			os.Setenv("DNSPOD_TOKEN", parts[1])
 			envChanged = true
+			if err := os.Setenv("DNSPOD_ID", parts[0]); err != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新 DNSPOD_ID 环境变量失败: " + err.Error()})
+				return
+			}
+			if err := os.Setenv("DNSPOD_TOKEN", parts[1]); err != nil {
+				err = errors.Join(err, restoreEnv())
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新 DNSPOD_TOKEN 环境变量失败: " + err.Error()})
+				return
+			}
 		}
 	}
 
 	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
-		if envChanged {
-			restoreEnv := func(key, value string, existed bool) {
-				if existed {
-					os.Setenv(key, value)
-				} else {
-					os.Unsetenv(key)
-				}
-			}
-			restoreEnv("DNSPOD_ID", oldDNSPodID, hadDNSPodID)
-			restoreEnv("DNSPOD_TOKEN", oldDNSPodToken, hadDNSPodToken)
-		}
+		restoreErr := errors.Join(restoreEnv(), h.caddyService.ApplyConfig(oldRuntimeConfig))
+		err = errors.Join(err, restoreErr)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，配置未保存: " + err.Error()})
 		return
 	}
 	if err := tx.Commit(); err != nil {
+		rollbackErr := tx.Rollback()
+		if errors.Is(rollbackErr, sql.ErrTxDone) {
+			rollbackErr = nil
+		}
+		restoreErr := errors.Join(restoreEnv(), h.caddyService.ApplyConfig(oldRuntimeConfig))
+		err = errors.Join(err, rollbackErr, restoreErr)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交配置失败: " + err.Error()})
 		return
 	}
@@ -469,6 +505,9 @@ func convertLogTimezone(content string) string {
 }
 
 func (h *Handlers) PutCaddyConfig(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	var req struct {
 		Content string `json:"content"`
 	}
@@ -477,35 +516,61 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		return
 	}
 
-	var configData interface{}
+	var configData map[string]interface{}
 	if err := json.Unmarshal([]byte(req.Content), &configData); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid JSON config"})
 		return
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	body, err := json.Marshal(configData)
+	runtimeSnapshot, err := h.snapshotImportRuntime(nil)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Failed to marshal config"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前 Caddy 配置失败: " + err.Error()})
 		return
 	}
-
-	resp, err := client.Post("http://localhost:2019/config/", "application/json", bytes.NewReader(body))
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to connect to Caddy: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启 Caddy 配置事务失败: " + err.Error()})
 		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy rejected config: " + string(respBody)})
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				log.Printf("PutCaddyConfig rollback failed: %v", rollbackErr)
+			}
+		}
+	}()
+	result, err := tx.ExecContext(c.Request.Context(), "UPDATE global_config SET caddy_config=?, updated_at=datetime('now') WHERE id=1", req.Content)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 Caddy 配置失败: " + err.Error()})
 		return
 	}
-	if _, err := db.DB.ExecContext(c.Request.Context(), "UPDATE global_config SET caddy_config=?, updated_at=datetime('now') WHERE id=1", req.Content); err != nil {
+	rowsAffected, err := result.RowsAffected()
+	if err != nil || rowsAffected == 0 {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 Caddy 配置失败"})
 		return
 	}
+	if err := h.caddyService.ApplyConfig(configData); err != nil {
+		rollbackErr := tx.Rollback()
+		if errors.Is(rollbackErr, sql.ErrTxDone) {
+			rollbackErr = nil
+		}
+		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
+		err = errors.Join(err, rollbackErr, restoreErr)
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy rejected config: " + err.Error()})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		rollbackErr := tx.Rollback()
+		if errors.Is(rollbackErr, sql.ErrTxDone) {
+			rollbackErr = nil
+		}
+		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
+		err = errors.Join(err, rollbackErr, restoreErr)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交 Caddy 配置失败: " + err.Error()})
+		return
+	}
+	committed = true
 
 	recordAudit(c, "更新", "Caddy配置", "保存 Caddy 全局配置")
 	recordAudit(c, "重载", "Caddy配置", "保存配置后自动重载")

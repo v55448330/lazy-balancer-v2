@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -152,40 +154,64 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
 	}
-
-	var oldDisplayName string
-	if err := db.DB.QueryRow("SELECT COALESCE(display_name,'') FROM users WHERE id = ?", userIDInt).Scan(&oldDisplayName); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
+	if passwordTooShort(req.Password) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码至少 6 位"})
 		return
 	}
 
-	// Update display name
-	changed := []string{}
-	if req.DisplayName != nil && *req.DisplayName != oldDisplayName {
-		if _, err := db.DB.Exec("UPDATE users SET display_name = ? WHERE id = ?", *req.DisplayName, userIDInt); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新显示名失败"})
-			return
-		}
-		changed = append(changed, "昵称")
-	}
-
-	// Update password if provided
+	var passwordHash string
 	if req.Password != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "密码加密失败"})
 			return
 		}
-		if _, err := db.DB.Exec("UPDATE users SET password_hash = ?, password_changed_at = datetime('now') WHERE id = ?", string(hash), userIDInt); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新密码失败"})
-			return
-		}
-		changed = append(changed, "密码")
+		passwordHash = string(hash)
 	}
 
-	// Return updated user
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户失败"})
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				log.Printf("UpdateCurrentUser rollback failed for id=%d: %v", userIDInt, rollbackErr)
+			}
+		}
+	}()
+
+	var oldDisplayName string
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(display_name,'') FROM users WHERE id = ?", userIDInt).Scan(&oldDisplayName); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
+		return
+	}
+
+	changed := []string{}
+	sets := make([]string, 0, 3)
+	args := make([]any, 0, 3)
+	if req.DisplayName != nil && *req.DisplayName != oldDisplayName {
+		sets = append(sets, "display_name = ?")
+		args = append(args, *req.DisplayName)
+		changed = append(changed, "昵称")
+	}
+	if passwordHash != "" {
+		sets = append(sets, "password_hash = ?", "password_changed_at = datetime('now')")
+		args = append(args, passwordHash)
+		changed = append(changed, "密码")
+	}
+	if len(sets) > 0 {
+		args = append(args, userIDInt)
+		if _, err := tx.ExecContext(c.Request.Context(), "UPDATE users SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户失败"})
+			return
+		}
+	}
+
 	var user models.User
-	err := db.DB.QueryRow(`
+	err = tx.QueryRowContext(c.Request.Context(), `
 		SELECT id, username, role, display_name, is_enabled, created_at, last_login 
 		FROM users WHERE id = ?
 	`, userIDInt).Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin)
@@ -194,6 +220,11 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
 		return
 	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交用户更新失败"})
+		return
+	}
+	committed = true
 
 	if len(changed) == 0 {
 		recordAudit(c, "更新资料", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", userIDInt), "无修改"))

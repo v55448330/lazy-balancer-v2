@@ -122,7 +122,7 @@ type GlobalConfig struct {
 	ID                         int          `json:"id"`
 	CaddyConfig                string       `json:"caddy_config"`
 	DNSProvider                string       `json:"dns_provider"`
-	DNSCredentials             string       `json:"-"`
+	DNSCredentials             string       `json:"dns_credentials"`
 	ACMEEmail                  string       `json:"acme_email"`
 	CertExpiryDays             int          `json:"cert_expiry_days"`
 	CertRenewalDays            int          `json:"cert_renewal_days"`
@@ -362,7 +362,7 @@ type CreateRuleRequest struct {
 	HealthCheckHealthyThreshold   int        `json:"health_check_healthy_threshold"`
 	EnableActiveHealthCheck       bool       `json:"enable_active_health_check"`
 	TCPHealthCheckPort            int        `json:"tcp_health_check_port"`
-	TCPProxyProtocol              bool         `json:"tcp_proxy_protocol"`
+	TCPProxyProtocol              bool       `json:"tcp_proxy_protocol"`
 	TCPTryDuration                int        `json:"tcp_try_duration"`
 	TCPTryInterval                int        `json:"tcp_try_interval"`
 	RequestBodyMaxSizeMB          int        `json:"request_body_max_size_mb"`

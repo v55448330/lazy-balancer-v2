@@ -32,7 +32,11 @@ func (h *Handlers) ListCurrentUserAPIKeys(c *gin.Context) {
 		return
 	}
 	defer rows.Close()
-	keys := scanAPIKeys(rows)
+	keys, err := scanAPIKeys(rows)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+		return
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: keys})
 }
 
@@ -80,17 +84,22 @@ type apiKeyWithUser struct {
 	CreatedAt time.Time    `json:"created_at"`
 }
 
-func scanAPIKeys(rows *sql.Rows) []apiKeyWithUser {
+func scanAPIKeys(rows *sql.Rows) ([]apiKeyWithUser, error) {
 	var keys []apiKeyWithUser
 	for rows.Next() {
 		var k apiKeyWithUser
-		rows.Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.CreatedBy, &k.LastUsed, &k.ExpiresAt, &k.IsEnabled, &k.CreatedAt, &k.Username)
+		if err := rows.Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.CreatedBy, &k.LastUsed, &k.ExpiresAt, &k.IsEnabled, &k.CreatedAt, &k.Username); err != nil {
+			return nil, fmt.Errorf("scan API key: %w", err)
+		}
 		keys = append(keys, k)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate API keys: %w", err)
 	}
 	if keys == nil {
 		keys = []apiKeyWithUser{}
 	}
-	return keys
+	return keys, nil
 }
 
 func createAPIKeyForUser(c *gin.Context, userID int) {
@@ -147,7 +156,12 @@ func (h *Handlers) ListAPIKeys(c *gin.Context) {
 		return
 	}
 	defer rows.Close()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: scanAPIKeys(rows)})
+	keys, err := scanAPIKeys(rows)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: keys})
 }
 
 func (h *Handlers) CreateAPIKey(c *gin.Context) {

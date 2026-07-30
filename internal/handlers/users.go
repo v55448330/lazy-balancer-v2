@@ -53,6 +53,10 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid role"})
 		return
 	}
+	if passwordTooShort(req.Password) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Password must be at least 6 characters"})
+		return
+	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
@@ -96,6 +100,10 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 
 	if req.Role != nil && *req.Role != "" && *req.Role != "admin" && *req.Role != "user" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid role"})
+		return
+	}
+	if req.Password != nil && passwordTooShort(*req.Password) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Password must be at least 6 characters"})
 		return
 	}
 	var passwordHash string
@@ -217,7 +225,11 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 }
 
 func (h *Handlers) ToggleUserStatus(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid user ID"})
+		return
+	}
 
 	var req struct {
 		IsEnabled bool `json:"is_enabled"`
@@ -227,9 +239,18 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		return
 	}
 
-	_, err := db.DB.Exec("UPDATE users SET is_enabled = ? WHERE id = ?", req.IsEnabled, id)
+	result, err := db.DB.Exec("UPDATE users SET is_enabled = ? WHERE id = ?", req.IsEnabled, id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user status"})
+		return
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user status"})
+		return
+	}
+	if rowsAffected == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
 		return
 	}
 
@@ -242,12 +263,16 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 }
 
 func (h *Handlers) ResetUserPassword(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid user ID"})
+		return
+	}
 
 	var req struct {
 		NewPassword string `json:"new_password"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.NewPassword == "" {
+	if err := c.ShouldBindJSON(&req); err != nil || req.NewPassword == "" || passwordTooShort(req.NewPassword) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
 		return
 	}
@@ -258,9 +283,18 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 		return
 	}
 
-	_, err = db.DB.Exec("UPDATE users SET password_hash = ?, password_changed_at = datetime('now') WHERE id = ?", string(hash), id)
+	result, err := db.DB.Exec("UPDATE users SET password_hash = ?, password_changed_at = datetime('now') WHERE id = ?", string(hash), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to reset password"})
+		return
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to reset password"})
+		return
+	}
+	if rowsAffected == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
 		return
 	}
 

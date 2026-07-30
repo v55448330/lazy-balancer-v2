@@ -284,6 +284,39 @@ func TestCertificateService_recoverCertJobs_preserves_deployment_retry_state(t *
 	}
 }
 
+func TestCertificateDeploymentRetry_succeeds_when_provider_deleted(t *testing.T) {
+	// Given
+	jobID, _ := seedCertificateJob(t, "downloaded")
+	useTemporaryCertDir(t)
+	const providerID = 999
+	if _, err := db.DB.Exec(`UPDATE cert_jobs SET cert_pem='persisted-cert', key_pem='persisted-key', expires_at=datetime('now','+90 days'), ca_provider_id=? WHERE id=?`, providerID, jobID); err != nil {
+		t.Fatalf("seed downloaded certificate: %v", err)
+	}
+	if _, err := db.DB.Exec("DELETE FROM ca_providers"); err != nil {
+		t.Fatalf("delete CA providers: %v", err)
+	}
+	reloads := 0
+
+	// When
+	err := retryCertificateDeployment(jobID, func() error {
+		reloads++
+		return nil
+	})
+
+	// Then
+	if err != nil {
+		t.Fatalf("retry downloaded certificate deployment: %v", err)
+	}
+	var status string
+	var gotProviderID int
+	if err := db.DB.QueryRow("SELECT status, ca_provider_id FROM cert_jobs WHERE id=?", jobID).Scan(&status, &gotProviderID); err != nil {
+		t.Fatalf("read deployed certificate job: %v", err)
+	}
+	if status != "issued" || gotProviderID != providerID || reloads != 1 {
+		t.Fatalf("job status=%q provider=%d reloads=%d, want issued with provider %d and one reload", status, gotProviderID, reloads, providerID)
+	}
+}
+
 func installCertJobVersionTrigger(t *testing.T) {
 	t.Helper()
 	if _, err := db.DB.Exec(`CREATE TRIGGER test_cluster_version_cert_jobs_update

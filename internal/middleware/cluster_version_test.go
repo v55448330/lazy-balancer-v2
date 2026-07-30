@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/services"
 )
 
 func TestIsSynchronizedWrite_classifies_only_snapshot_content_mutations(t *testing.T) {
@@ -135,7 +136,7 @@ func TestClusterVersionTriggers_bump_for_snapshot_insert_update_delete(t *testin
 		{name: "path_rules", seed: `INSERT INTO lb_rules (caddy_id,name,protocol,listen_port) VALUES ('matrix_parent','parent','http',8080)`, insert: `INSERT INTO path_rules (rule_id,path) VALUES ('matrix_parent','/old')`, update: `UPDATE path_rules SET path='/new' WHERE rule_id='matrix_parent'`, delete: `DELETE FROM path_rules WHERE rule_id='matrix_parent'`},
 		{name: "users", insert: `INSERT INTO users (username,password_hash) VALUES ('matrix_user','hash')`, update: `UPDATE users SET display_name='updated' WHERE username='matrix_user'`, delete: `DELETE FROM users WHERE username='matrix_user'`},
 		{name: "api_keys", seed: `INSERT INTO users (username,password_hash) VALUES ('matrix_owner','hash')`, insert: `INSERT INTO api_keys (name,key_hash,key_prefix,created_by) VALUES ('matrix_key','hash','prefix',1)`, update: `UPDATE api_keys SET name='updated' WHERE key_prefix='prefix'`, delete: `DELETE FROM api_keys WHERE key_prefix='prefix'`},
-		{name: "cert_jobs", insert: `INSERT INTO cert_jobs (rule_id,domain) VALUES ('matrix_rule','example.com')`, update: `UPDATE cert_jobs SET cert_pem='certificate' WHERE rule_id='matrix_rule'`, delete: `DELETE FROM cert_jobs WHERE rule_id='matrix_rule'`},
+		{name: "cert_jobs", insert: `INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('matrix_rule','example.com','issued')`, update: `UPDATE cert_jobs SET cert_pem='certificate' WHERE rule_id='matrix_rule'`, delete: `DELETE FROM cert_jobs WHERE rule_id='matrix_rule'`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -238,6 +239,62 @@ func TestClusterVersionTriggers_doNotBumpForCertificateProgress(t *testing.T) {
 	// Then
 	if got := clusterVersion(t, database); got != 0 {
 		t.Fatalf("version after certificate progress update=%d, want 0", got)
+	}
+}
+
+func TestClusterVersionTriggers_refreshCachedSnapshotWhenCertificateEntersAndLeavesIssued(t *testing.T) {
+	// Given
+	database := newClusterVersionTestDB(t)
+	if _, err := database.Exec("UPDATE global_config SET is_master=1, cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatalf("seed master: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem) VALUES ('status_rule','example.com','downloaded','certificate','key')`); err != nil {
+		t.Fatalf("seed downloaded certificate: %v", err)
+	}
+	if err := installClusterVersionTriggers(database); err != nil {
+		t.Fatalf("install triggers: %v", err)
+	}
+	cluster := services.NewClusterService(database, nil)
+	downloadedSnapshot, _, err := cluster.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatalf("build downloaded snapshot: %v", err)
+	}
+	if len(downloadedSnapshot.Certs) != 0 {
+		t.Fatalf("downloaded snapshot certificates=%d, want 0", len(downloadedSnapshot.Certs))
+	}
+
+	// When
+	if _, err := database.Exec("UPDATE cert_jobs SET status='issued' WHERE rule_id='status_rule'"); err != nil {
+		t.Fatalf("mark certificate issued: %v", err)
+	}
+	issuedSnapshot, _, err := cluster.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatalf("build issued snapshot: %v", err)
+	}
+
+	// Then
+	if got := clusterVersion(t, database); got != 1 {
+		t.Fatalf("version after issued=%d, want 1", got)
+	}
+	if len(issuedSnapshot.Certs) != 1 || issuedSnapshot.Certs[0].RuleID != "status_rule" {
+		t.Fatalf("issued snapshot certificates=%+v, want status_rule", issuedSnapshot.Certs)
+	}
+
+	// When
+	if _, err := database.Exec("UPDATE cert_jobs SET status='disabled' WHERE rule_id='status_rule'"); err != nil {
+		t.Fatalf("disable certificate: %v", err)
+	}
+	disabledSnapshot, _, err := cluster.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatalf("build disabled snapshot: %v", err)
+	}
+
+	// Then
+	if got := clusterVersion(t, database); got != 2 {
+		t.Fatalf("version after disabled=%d, want 2", got)
+	}
+	if len(disabledSnapshot.Certs) != 0 {
+		t.Fatalf("disabled snapshot certificates=%+v, want none", disabledSnapshot.Certs)
 	}
 }
 

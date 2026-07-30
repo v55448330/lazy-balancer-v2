@@ -41,22 +41,45 @@ func installClusterVersionTriggers(database *sql.DB) error {
 		for _, operation := range []string{"INSERT", "UPDATE", "DELETE"} {
 			triggerName := fmt.Sprintf("cluster_version_%s_%s", table.name, strings.ToLower(operation))
 			operationClause := operation
+			whenClause := "(SELECT COALESCE(is_master,0) FROM global_config WHERE id=1)=1"
 			if operation == "UPDATE" {
 				if _, err := database.Exec("DROP TRIGGER IF EXISTS " + triggerName); err != nil {
 					return fmt.Errorf("replace cluster version trigger for %s %s: %w", operation, table.name, err)
 				}
 				operationClause += " OF " + table.snapshotColumns
 			}
+			if table.name == "cert_jobs" {
+				switch operation {
+				case "INSERT":
+					whenClause += " AND NEW.status='issued'"
+				case "UPDATE":
+					whenClause += " AND OLD.status='issued' AND NEW.status='issued'"
+				case "DELETE":
+					whenClause += " AND OLD.status='issued'"
+				}
+			}
 			statement := fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS cluster_version_%s_%s
 				AFTER %s ON %s
-				WHEN (SELECT COALESCE(is_master,0) FROM global_config WHERE id=1)=1
+				WHEN %s
 				BEGIN
 					UPDATE global_config SET cluster_version=COALESCE(cluster_version,0)+1 WHERE id=1;
-				END`, table.name, strings.ToLower(operation), operationClause, table.name)
+				END`, table.name, strings.ToLower(operation), operationClause, table.name, whenClause)
 			if _, err := database.Exec(statement); err != nil {
 				return fmt.Errorf("install cluster version trigger for %s %s: %w", operation, table.name, err)
 			}
 		}
+	}
+	if _, err := database.Exec("DROP TRIGGER IF EXISTS cluster_version_cert_jobs_status_update"); err != nil {
+		return fmt.Errorf("replace cluster version trigger for cert_jobs status UPDATE: %w", err)
+	}
+	if _, err := database.Exec(`CREATE TRIGGER cluster_version_cert_jobs_status_update
+		AFTER UPDATE OF status ON cert_jobs
+		WHEN (SELECT COALESCE(is_master,0) FROM global_config WHERE id=1)=1
+			AND (OLD.status='issued')<>(NEW.status='issued')
+		BEGIN
+			UPDATE global_config SET cluster_version=COALESCE(cluster_version,0)+1 WHERE id=1;
+		END`); err != nil {
+		return fmt.Errorf("install cluster version trigger for cert_jobs status UPDATE: %w", err)
 	}
 	if _, err := database.Exec("DROP TRIGGER IF EXISTS cluster_version_global_config_update"); err != nil {
 		return fmt.Errorf("replace cluster version trigger for global_config UPDATE: %w", err)

@@ -32,7 +32,7 @@
           </el-col>
           <el-col :span="12">
             <el-form-item label="密码">
-              <el-input v-model="form.password" type="password" show-password :placeholder="editingUser ? '留空则不修改密码' : '请输入密码'" />
+              <el-input v-model="form.password" type="password" show-password minlength="6" :placeholder="editingUser ? '留空则不修改密码（至少6位）' : '请输入至少6位密码'" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -109,10 +109,10 @@
             <el-button v-if="row.id !== authStore.user?.id" type="primary" link size="small" :disabled="isReadOnly || submitting" @click="editUser(row)">
               编辑
             </el-button>
-            <el-button v-if="row.id !== authStore.user?.id" type="warning" link size="small" :disabled="isReadOnly || submittingUserId === row.id" @click="resetPassword(row.id)">
+            <el-button v-if="row.id !== authStore.user?.id" type="warning" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id)" @click="resetPassword(row.id)">
               重置密码
             </el-button>
-            <el-button v-if="row.id !== authStore.user?.id" type="danger" link size="small" :disabled="isReadOnly || submittingUserId === row.id" @click="deleteUser(row.id)">
+            <el-button v-if="row.id !== authStore.user?.id" type="danger" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id)" @click="deleteUser(row.id)">
               删除
             </el-button>
           </template>
@@ -137,6 +137,7 @@ const users = ref<UserListItem[]>([])
 const showForm = ref(false)
 const submitting = ref(false)
 const submittingUserId = ref<number | null>(null)
+const operatingUserIds = ref(new Set<number>())
 
 const openCreateForm = () => {
   if (submitting.value) return
@@ -169,6 +170,10 @@ const fetchUsers = async () => {
 
 const handleSubmit = async () => {
   if (isReadOnly.value || submitting.value) return
+  if ((!editingUser.value && !form.value.password) || (form.value.password && form.value.password.length < 6)) {
+    ElMessage.warning('密码长度至少6位')
+    return
+  }
   submittingUserId.value = editingUser.value?.id ?? null
   submitting.value = true
   try {
@@ -212,7 +217,8 @@ const closeForm = () => {
 }
 
 const deleteUser = async (id: number) => {
-  if (isReadOnly.value || submittingUserId.value === id) return
+  if (isReadOnly.value || submittingUserId.value === id || operatingUserIds.value.has(id)) return
+  operatingUserIds.value.add(id)
   try {
     await ElMessageBox.confirm('确定要删除这个用户吗？', '警告', { type: 'warning' })
     await request.delete(`/users/${id}`)
@@ -220,11 +226,13 @@ const deleteUser = async (id: number) => {
     fetchUsers()
   } catch (e) {
     // User cancelled, do nothing
+  } finally {
+    operatingUserIds.value.delete(id)
   }
 }
 
 const handleToggleStatus = async (id: number, isEnabled: boolean) => {
-  if (isReadOnly.value || switchingIds.value.has(id) || submittingUserId.value === id) return
+  if (isReadOnly.value || switchingIds.value.has(id) || submittingUserId.value === id || operatingUserIds.value.has(id)) return
   switchingIds.value.add(id)
   try {
     await request.put(`/users/${id}/status`, { is_enabled: isEnabled })
@@ -238,7 +246,8 @@ const handleToggleStatus = async (id: number, isEnabled: boolean) => {
 }
 
 const resetPassword = async (id: number) => {
-  if (isReadOnly.value || submittingUserId.value === id) return
+  if (isReadOnly.value || submittingUserId.value === id || operatingUserIds.value.has(id)) return
+  operatingUserIds.value.add(id)
   try {
     const { value } = await ElMessageBox.prompt('请输入新密码', '重置密码', {
       confirmButtonText: '确定',
@@ -257,6 +266,8 @@ const resetPassword = async (id: number) => {
     }
   } catch (e) {
     // User cancelled, do nothing
+  } finally {
+    operatingUserIds.value.delete(id)
   }
 }
 

@@ -3,18 +3,23 @@ export interface NullableString {
   Valid: boolean
 }
 
+export interface NullableTime {
+  Time: string
+  Valid: boolean
+}
+
 export interface CurrentUser {
   id: number
   username: string
   role: 'admin' | 'user'
-  is_enabled?: boolean
+  is_enabled: boolean
   display_name?: string | NullableString | null
 }
 
 export interface UserListItem extends Omit<CurrentUser, 'is_enabled'> {
   is_enabled: boolean
   created_at?: string | null
-  last_login?: string | null
+  last_login?: NullableTime | null
 }
 
 
