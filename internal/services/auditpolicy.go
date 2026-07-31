@@ -12,6 +12,7 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/auth/login":                   AuditPolicyExplicit,
 	"POST /api/v1/auth/logout":                  AuditPolicyExplicit,
 	"POST /api/v1/auth/setup":                   AuditPolicyExplicit,
+	"POST /api/v1/mcp":                          AuditPolicySkip,
 	"POST /api/v1/users":                        AuditPolicyExplicit,
 	"PUT /api/v1/users/:id":                     AuditPolicyExplicit,
 	"PUT /api/v1/users/:id/status":              AuditPolicyExplicit,
@@ -69,6 +70,19 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"DELETE /api/v1/certificates/jobs/:id":      AuditPolicyExplicit,
 }
 
+var readOnlyWriteRoutes = map[string]struct{}{
+	"POST /api/v1/admin-tls/inspect":            {},
+	"POST /api/v1/ca-providers/:id/test":        {},
+	"POST /api/v1/certificate-configs/:id/test": {},
+	"POST /api/v1/certificate-configs/test":     {},
+	"POST /api/v1/certificates/parse":           {},
+	"POST /api/v1/config/import/validate":       {},
+	"POST /api/v1/config/preview":               {},
+	"POST /api/v1/config/validate":              {},
+	"POST /api/v1/mcp":                          {},
+	"POST /api/v1/rules/cert-info":              {},
+}
+
 func ClassifyAuditRoute(method, path string) AuditPolicy {
 	if policy, ok := auditRoutePolicies[method+" "+path]; ok {
 		return policy
@@ -78,6 +92,11 @@ func ClassifyAuditRoute(method, path string) AuditPolicy {
 
 func IsAuditedWriteRoute(method, path string) bool {
 	_, exists := auditRoutePolicies[method+" "+path]
+	return exists
+}
+
+func IsReadOnlyWriteRoute(method, path string) bool {
+	_, exists := readOnlyWriteRoutes[method+" "+path]
 	return exists
 }
 

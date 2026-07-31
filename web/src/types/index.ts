@@ -12,6 +12,35 @@ export interface UserListItem extends Omit<CurrentUser, 'is_enabled'> {
   last_login?: string | null
 }
 
+export interface APIKey {
+  readonly id: number
+  readonly name: string
+  readonly key_prefix: string
+  readonly created_by: number
+  readonly username: string
+  readonly is_enabled: boolean
+  readonly mcp_enabled: boolean
+  readonly read_only: boolean
+  readonly mcp_ip_whitelist: string
+  readonly last_used?: string | null
+  readonly expires_at?: string | null
+  readonly created_at: string
+}
+
+export interface CreateAPIKeyInput {
+  readonly name: string
+  readonly mcp_enabled: boolean
+  readonly read_only: boolean
+  readonly mcp_ip_whitelist: string
+}
+
+export interface UpdateAPIKeyInput {
+  readonly is_enabled?: boolean
+  readonly mcp_enabled?: boolean
+  readonly read_only?: boolean
+  readonly mcp_ip_whitelist?: string
+}
+
 
 export interface SystemInfo {
   hostname: string

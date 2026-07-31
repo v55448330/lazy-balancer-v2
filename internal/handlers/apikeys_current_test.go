@@ -55,6 +55,9 @@ func setupAPIKeyTestDB(t *testing.T) *sql.DB {
 		last_used DATETIME,
 		expires_at DATETIME,
 		is_enabled BOOLEAN DEFAULT TRUE,
+		mcp_enabled INTEGER DEFAULT 0,
+		read_only INTEGER DEFAULT 0,
+		mcp_ip_whitelist TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', 'x', 'user'), (2, 'bob', 'x', 'user');
@@ -380,5 +383,43 @@ func TestCreateCurrentUserAPIKeyReturnsPlaintextOnce(t *testing.T) {
 	}
 	if !strings.HasPrefix(body.Data.Key, "lb_sk_") {
 		t.Fatalf("key prefix invalid: %q", body.Data.Key)
+	}
+}
+
+func TestCreateCurrentUserAPIKeyNormalizesMCPWhitelist(t *testing.T) {
+	database := setupAPIKeyTestDB(t)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/users/me/api-keys", strings.NewReader(`{"name":"mcp","mcp_enabled":true,"read_only":true,"mcp_ip_whitelist":["192.168.1.5","2001:db8::1"]}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("user_id", 1)
+
+	(&Handlers{}).CreateCurrentUserAPIKey(ctx)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var mcpEnabled, readOnly bool
+	var whitelist string
+	if err := database.QueryRow("SELECT mcp_enabled,read_only,mcp_ip_whitelist FROM api_keys WHERE name='mcp'").Scan(&mcpEnabled, &readOnly, &whitelist); err != nil {
+		t.Fatal(err)
+	}
+	if !mcpEnabled || !readOnly || whitelist != `["192.168.1.5/32","2001:db8::1/128"]` {
+		t.Fatalf("mcp_enabled=%v read_only=%v whitelist=%q", mcpEnabled, readOnly, whitelist)
+	}
+}
+
+func TestUpdateAPIKeyRejectsInvalidMCPWhitelist(t *testing.T) {
+	setupAPIKeyTestDB(t)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPatch, "/api/v1/api-keys/10/status", strings.NewReader(`{"mcp_ip_whitelist":["invalid"]}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Params = gin.Params{{Key: "id", Value: "10"}}
+
+	(&Handlers{}).UpdateAPIKeyStatus(ctx)
+
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "MCP IP 白名单无效") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }

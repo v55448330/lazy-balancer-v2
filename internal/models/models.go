@@ -47,26 +47,32 @@ func NewUserResponse(user User) UserResponse {
 
 // APIKey represents an API key
 type APIKey struct {
-	ID        int          `json:"id"`
-	Name      string       `json:"name"`
-	KeyHash   string       `json:"-"`
-	KeyPrefix string       `json:"key_prefix"`
-	CreatedBy int          `json:"created_by"`
-	LastUsed  sql.NullTime `json:"last_used"`
-	ExpiresAt sql.NullTime `json:"expires_at"`
-	IsEnabled bool         `json:"is_enabled"`
-	CreatedAt time.Time    `json:"created_at"`
+	ID             int          `json:"id"`
+	Name           string       `json:"name"`
+	KeyHash        string       `json:"-"`
+	KeyPrefix      string       `json:"key_prefix"`
+	CreatedBy      int          `json:"created_by"`
+	LastUsed       sql.NullTime `json:"last_used"`
+	ExpiresAt      sql.NullTime `json:"expires_at"`
+	IsEnabled      bool         `json:"is_enabled"`
+	MCPEnabled     bool         `json:"mcp_enabled"`
+	ReadOnly       bool         `json:"read_only"`
+	MCPIPWhitelist []string     `json:"mcp_ip_whitelist"`
+	CreatedAt      time.Time    `json:"created_at"`
 }
 
 type APIKeyResponse struct {
-	ID        int        `json:"id"`
-	Name      string     `json:"name"`
-	KeyPrefix string     `json:"key_prefix"`
-	CreatedBy int        `json:"created_by"`
-	LastUsed  *time.Time `json:"last_used"`
-	ExpiresAt *time.Time `json:"expires_at"`
-	IsEnabled bool       `json:"is_enabled"`
-	CreatedAt time.Time  `json:"created_at"`
+	ID             int        `json:"id"`
+	Name           string     `json:"name"`
+	KeyPrefix      string     `json:"key_prefix"`
+	CreatedBy      int        `json:"created_by"`
+	LastUsed       *time.Time `json:"last_used"`
+	ExpiresAt      *time.Time `json:"expires_at"`
+	IsEnabled      bool       `json:"is_enabled"`
+	MCPEnabled     bool       `json:"mcp_enabled"`
+	ReadOnly       bool       `json:"read_only"`
+	MCPIPWhitelist []string   `json:"mcp_ip_whitelist"`
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 type APIKeyWithUserResponse struct {
@@ -76,12 +82,15 @@ type APIKeyWithUserResponse struct {
 
 func NewAPIKeyResponse(key APIKey) APIKeyResponse {
 	response := APIKeyResponse{
-		ID:        key.ID,
-		Name:      key.Name,
-		KeyPrefix: key.KeyPrefix,
-		CreatedBy: key.CreatedBy,
-		IsEnabled: key.IsEnabled,
-		CreatedAt: key.CreatedAt,
+		ID:             key.ID,
+		Name:           key.Name,
+		KeyPrefix:      key.KeyPrefix,
+		CreatedBy:      key.CreatedBy,
+		IsEnabled:      key.IsEnabled,
+		MCPEnabled:     key.MCPEnabled,
+		ReadOnly:       key.ReadOnly,
+		MCPIPWhitelist: key.MCPIPWhitelist,
+		CreatedAt:      key.CreatedAt,
 	}
 	if key.LastUsed.Valid {
 		response.LastUsed = &key.LastUsed.Time
@@ -353,8 +362,18 @@ type CreateUserRequest struct {
 }
 
 type CreateAPIKeyRequest struct {
-	Name      string     `json:"name" binding:"required"`
-	ExpiresAt *time.Time `json:"expires_at"`
+	Name           string     `json:"name" binding:"required"`
+	ExpiresAt      *time.Time `json:"expires_at"`
+	MCPEnabled     bool       `json:"mcp_enabled"`
+	ReadOnly       bool       `json:"read_only"`
+	MCPIPWhitelist []string   `json:"mcp_ip_whitelist"`
+}
+
+type UpdateAPIKeyRequest struct {
+	IsEnabled      *bool     `json:"is_enabled"`
+	MCPEnabled     *bool     `json:"mcp_enabled"`
+	ReadOnly       *bool     `json:"read_only"`
+	MCPIPWhitelist *[]string `json:"mcp_ip_whitelist"`
 }
 
 type CreateRuleRequest struct {

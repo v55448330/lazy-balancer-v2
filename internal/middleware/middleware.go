@@ -4,12 +4,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/handlers"
+	"lazy-balancer-v2/internal/mcpserver"
 	"lazy-balancer-v2/internal/services"
 
 	"github.com/gin-contrib/gzip"
@@ -56,6 +58,8 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	// API routes
 	v1 := r.Group("/api/v1")
 	{
+		mcpHandler := mcpserver.New(fmt.Sprintf("http://127.0.0.1:%d/api/v1", cfg.Port), nil)
+		v1.POST("/mcp", apiKeyAuth(cfg), mcpAccessGuard(), gin.WrapH(mcpHandler))
 		v1.GET("/openapi.yaml", h.GetOpenAPIYAML)
 		v1.GET("/docs", h.GetAPIDocs)
 		v1.POST("/auth/login", h.Login)
@@ -69,6 +73,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 		v1.Use(apiKeyAuth(cfg))
 		v1.Use(jwtAuth(cfg))
+		v1.Use(apiKeyReadOnlyGuard())
 		{
 			v1.GET("/caddy/metrics", h.GetCaddyMetrics)
 			v1.POST("/auth/logout", h.Logout)
@@ -366,15 +371,18 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 
 		var keyID, userID int
 		var keyName, username, role string
+		var mcpEnabled, readOnly bool
+		var mcpIPWhitelist string
 		err := db.DB.QueryRow(`
-			SELECT k.id, k.name, u.id, u.username, u.role
+			SELECT k.id, k.name, u.id, u.username, u.role,
+			       COALESCE(k.mcp_enabled,0), COALESCE(k.read_only,0), COALESCE(k.mcp_ip_whitelist,'')
 			FROM api_keys k
 			JOIN users u ON u.id = k.created_by
 			WHERE k.key_prefix = ? AND k.key_hash = ?
 			  AND k.is_enabled = 1
 			  AND u.is_enabled = 1
 			  AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))
-		`, prefix, keyHash).Scan(&keyID, &keyName, &userID, &username, &role)
+		`, prefix, keyHash).Scan(&keyID, &keyName, &userID, &username, &role, &mcpEnabled, &readOnly, &mcpIPWhitelist)
 		if err != nil {
 			if hasJWTBearer(c) {
 				c.Next()
@@ -385,15 +393,39 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		db.DB.Exec("UPDATE api_keys SET last_used = datetime('now') WHERE id = ?", keyID)
+		if _, err := db.DB.Exec("UPDATE api_keys SET last_used = datetime('now') WHERE id = ?", keyID); err != nil {
+			log.Printf("update API key last_used for key %d: %v", keyID, err)
+		}
 		c.Set("user_id", userID)
 		c.Set("username", username)
 		c.Set("role", role)
 		c.Set("auth_type", "api_key")
 		c.Set("api_key_id", keyID)
 		c.Set("api_key_name", keyName)
+		c.Set("api_key_mcp_enabled", mcpEnabled)
+		c.Set("api_key_read_only", readOnly)
+		c.Set("api_key_mcp_ip_whitelist", mcpIPWhitelist)
 
 		c.Next()
+	}
+}
+
+func apiKeyReadOnlyGuard() gin.HandlerFunc {
+	writeMethods := map[string]bool{"POST": true, "PUT": true, "PATCH": true, "DELETE": true}
+	return func(c *gin.Context) {
+		if c.GetString("auth_type") != "api_key" || !c.GetBool("api_key_read_only") || !writeMethods[c.Request.Method] {
+			c.Next()
+			return
+		}
+		path := c.FullPath()
+		if path == "" {
+			path = c.Request.URL.Path
+		}
+		if services.IsReadOnlyWriteRoute(c.Request.Method, path) {
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "只读 API 密钥禁止写操作"})
 	}
 }
 

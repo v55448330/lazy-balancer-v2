@@ -142,6 +142,7 @@ func TestAPIDocRoutes_cover_public_router_contract(t *testing.T) {
 		"POST /config/preview",
 		"POST /config/reload",
 		"POST /config/validate",
+		"POST /mcp",
 		"POST /rules",
 		"POST /rules/:caddy_id/acl",
 		"POST /rules/:caddy_id/duplicate",

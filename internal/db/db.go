@@ -145,6 +145,9 @@ func createTables() error {
 		last_used DATETIME,
 		expires_at DATETIME,
 		is_enabled BOOLEAN DEFAULT TRUE,
+		mcp_enabled INTEGER DEFAULT 0,
+		read_only INTEGER DEFAULT 0,
+		mcp_ip_whitelist TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (created_by) REFERENCES users(id)
 	);
@@ -405,6 +408,21 @@ func runMigrations() error {
 	if colCount == 0 {
 		if _, err := DB.Exec("ALTER TABLE api_keys ADD COLUMN is_enabled BOOLEAN DEFAULT 1"); err != nil {
 			return fmt.Errorf("failed to add api_keys.is_enabled: %w", err)
+		}
+	}
+	apiKeyColumns := map[string]string{
+		"mcp_enabled":      "INTEGER DEFAULT 0",
+		"read_only":        "INTEGER DEFAULT 0",
+		"mcp_ip_whitelist": "TEXT DEFAULT ''",
+	}
+	for name, dtype := range apiKeyColumns {
+		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('api_keys') WHERE name=?", name).Scan(&colCount); err != nil {
+			return fmt.Errorf("failed to check api_keys.%s: %w", name, err)
+		}
+		if colCount == 0 {
+			if _, err := DB.Exec("ALTER TABLE api_keys ADD COLUMN " + name + " " + dtype); err != nil {
+				return fmt.Errorf("failed to add api_keys.%s: %w", name, err)
+			}
 		}
 	}
 

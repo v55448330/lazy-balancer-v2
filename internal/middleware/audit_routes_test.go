@@ -17,6 +17,7 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 		"POST /api/v1/config/import/validate": {},
 		"POST /api/v1/config/preview":         {},
 		"POST /api/v1/config/validate":        {},
+		"POST /api/v1/mcp":                    {},
 		"POST /api/v1/rules/cert-info":        {},
 	}
 	writeMethods := map[string]struct{}{
