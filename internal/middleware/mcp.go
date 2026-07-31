@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -41,5 +43,20 @@ func mcpAccessGuard() gin.HandlerFunc {
 			}
 		}
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "来源 IP 不在白名单"})
+	}
+}
+
+// loopbackAPIClient 是 MCP 工具内部转发专用的本机回环客户端；
+// 面板强制 HTTPS 使用自签证书，回环自调用跳过证书校验；
+// 不自动跟随重定向，由转发层按原方法重试（Go 的 301 会把 POST 变 GET）
+func loopbackAPIClient() *http.Client {
+	return &http.Client{
+		Timeout: 60 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 }

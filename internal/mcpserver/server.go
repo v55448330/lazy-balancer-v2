@@ -135,6 +135,36 @@ func forward(ctx context.Context, client *http.Client, baseURL string, spec tool
 	if err != nil {
 		return nil, fmt.Errorf("内部 API 请求失败: %w", err)
 	}
+	// 面板启用 HTTPS 时 HTTP 请求会收到 301；客户端不自动跟随（避免 POST 变 GET），
+	// 这里按原方法原请求体重试一次重定向地址
+	if response.StatusCode == http.StatusMovedPermanently || response.StatusCode == http.StatusTemporaryRedirect || response.StatusCode == http.StatusPermanentRedirect {
+		location := response.Header.Get("Location")
+		response.Body.Close()
+		if location == "" {
+			return nil, fmt.Errorf("内部 API 重定向缺少目标地址")
+		}
+		var retryBody io.Reader
+		if body != nil {
+			if readSeeker, ok := body.(io.ReadSeeker); ok {
+				if _, err := readSeeker.Seek(0, io.SeekStart); err != nil {
+					return nil, fmt.Errorf("重置请求体失败: %w", err)
+				}
+				retryBody = readSeeker
+			}
+		}
+		request, err = http.NewRequestWithContext(ctx, spec.method, location, retryBody)
+		if err != nil {
+			return nil, fmt.Errorf("创建重定向请求失败: %w", err)
+		}
+		if retryBody != nil {
+			request.Header.Set("Content-Type", "application/json")
+		}
+		request.Header.Set("X-API-Key", extractAPIKey(call.Header))
+		response, err = client.Do(request)
+		if err != nil {
+			return nil, fmt.Errorf("内部 API 请求失败: %w", err)
+		}
+	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {

@@ -58,7 +58,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	// API routes
 	v1 := r.Group("/api/v1")
 	{
-		mcpHandler := mcpserver.New(fmt.Sprintf("http://127.0.0.1:%d/api/v1", cfg.Port), nil)
+		mcpHandler := mcpserver.New(fmt.Sprintf("http://127.0.0.1:%d/api/v1", cfg.Port), loopbackAPIClient())
 		v1.POST("/mcp", apiKeyAuth(cfg), mcpAccessGuard(), gin.WrapH(mcpHandler))
 		v1.GET("/openapi.yaml", h.GetOpenAPIYAML)
 		v1.GET("/docs", h.GetAPIDocs)
