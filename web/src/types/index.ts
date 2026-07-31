@@ -21,7 +21,7 @@ export interface APIKey {
   readonly is_enabled: boolean
   readonly mcp_enabled: boolean
   readonly read_only: boolean
-  readonly mcp_ip_whitelist: string
+  readonly mcp_ip_whitelist: string[]
   readonly last_used?: string | null
   readonly expires_at?: string | null
   readonly created_at: string
@@ -31,14 +31,14 @@ export interface CreateAPIKeyInput {
   readonly name: string
   readonly mcp_enabled: boolean
   readonly read_only: boolean
-  readonly mcp_ip_whitelist: string
+  readonly mcp_ip_whitelist: string[]
 }
 
 export interface UpdateAPIKeyInput {
   readonly is_enabled?: boolean
   readonly mcp_enabled?: boolean
   readonly read_only?: boolean
-  readonly mcp_ip_whitelist?: string
+  readonly mcp_ip_whitelist?: string[]
 }
 
 

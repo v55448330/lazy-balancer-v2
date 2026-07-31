@@ -284,7 +284,8 @@ const normalizeCidr = (rawValue: string): string => {
   return value.includes(':') ? `${value}/128` : `${value}/32`
 }
 
-const parseWhitelist = (value: string): string => {
+const parseWhitelist = (value: string[] | string): string => {
+  if (Array.isArray(value)) return value.join('\n')
   if (!value) return ''
   try {
     const parsed: unknown = JSON.parse(value)
@@ -294,13 +295,13 @@ const parseWhitelist = (value: string): string => {
   }
 }
 
-const serializeWhitelist = (value: string): { readonly value: string; readonly error: string } => {
+const serializeWhitelist = (value: string): { readonly value: string[]; readonly error: string } => {
   const rows = value.split(/\r?\n/)
     .map((cidr, originalIndex) => ({ cidr: normalizeCidr(cidr), originalIndex }))
     .filter((row) => row.cidr !== '')
   const invalidRow = rows.find((row) => !isValidCidr(row.cidr))
-  if (invalidRow) return { value: '', error: `第 ${invalidRow.originalIndex + 1} 行 IP 或 CIDR 格式不正确` }
-  return { value: rows.length > 0 ? JSON.stringify(rows.map((row) => row.cidr)) : '', error: '' }
+  if (invalidRow) return { value: [], error: `第 ${invalidRow.originalIndex + 1} 行 IP 或 CIDR 格式不正确` }
+  return { value: rows.map((row) => row.cidr), error: '' }
 }
 
 const openCreateDialog = (): void => {
