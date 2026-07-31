@@ -155,7 +155,7 @@ const showProfile = ref(false)
 const saving = ref(false)
 
 const currentPage = computed(() => authStore.currentPage)
-const isReadOnly = computed(() => authStore.readOnlyReason !== null)
+const isReadOnly = computed(() => authStore.readOnlyReason === 'slave')
 const hasCustomDisplayName = computed(() => {
   const displayName = authStore.normalizeDisplayName(authStore.user?.display_name ?? null, '')
   return displayName !== '' && displayName !== authStore.user?.username

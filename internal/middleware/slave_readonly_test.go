@@ -300,9 +300,23 @@ func TestReadOnlyGuard_does_not_whitelist_admin_users_route(t *testing.T) {
 	}
 }
 
-func TestReadOnlyGuard_blocks_slave_profile_update(t *testing.T) {
-	// Given
+func TestReadOnlyGuard_allows_non_admin_profile_update(t *testing.T) {
+	// Given：主节点非管理员可修改自己的密码和显示名
 	router := newReadOnlyGuardTestRouter(t, true, "user")
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPatch, "/api/v1/users/me", nil))
+
+	// Then
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", response.Code)
+	}
+}
+
+func TestReadOnlyGuard_blocks_slave_profile_update(t *testing.T) {
+	// Given：从节点全站只读，个人资料修改同样拒绝
+	router := newReadOnlyGuardTestRouter(t, false, "admin")
 
 	// When
 	response := httptest.NewRecorder()
