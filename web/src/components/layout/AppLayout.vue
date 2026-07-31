@@ -117,21 +117,21 @@
     </el-container>
 
     <el-dialog v-model="showProfile" title="个人资料" width="min(480px, 92vw)" :close-on-click-modal="false" :before-close="beforeProfileClose">
-      <el-alert v-if="isSlave" title="从节点只读，请在主节点操作" type="info" :closable="false" show-icon class="profile-readonly-alert" />
+      <el-alert v-if="isReadOnly" :title="authStore.readOnlyMessage" type="info" :closable="false" show-icon class="profile-readonly-alert" />
       <el-form :model="profileForm" label-width="80px" class="profile-form" :disabled="saving">
         <el-form-item label="用户名">
           <el-input v-model="profileForm.username" disabled />
         </el-form-item>
         <el-form-item label="显示名">
-          <el-input v-model="profileForm.display_name" :disabled="isSlave" placeholder="选填" />
+          <el-input v-model="profileForm.display_name" :disabled="isReadOnly" placeholder="选填" />
         </el-form-item>
         <el-form-item label="新密码">
-          <el-input v-model="profileForm.password" :disabled="isSlave" type="password" minlength="6" placeholder="如不修改请留空（至少6位）" show-password />
+          <el-input v-model="profileForm.password" :disabled="isReadOnly" type="password" minlength="6" placeholder="如不修改请留空（至少6位）" show-password />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button :disabled="saving" @click="closeProfile">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="isSlave || saving" @click="saveProfile">保存</el-button>
+        <el-button type="primary" :loading="saving" :disabled="isReadOnly || saving" @click="saveProfile">保存</el-button>
       </template>
     </el-dialog>
   </el-container>
@@ -155,7 +155,7 @@ const showProfile = ref(false)
 const saving = ref(false)
 
 const currentPage = computed(() => authStore.currentPage)
-const isSlave = computed(() => authStore.nodeMode === 'slave')
+const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 const hasCustomDisplayName = computed(() => {
   const displayName = authStore.normalizeDisplayName(authStore.user?.display_name ?? null, '')
   return displayName !== '' && displayName !== authStore.user?.username
@@ -210,7 +210,7 @@ const closeProfile = (): void => {
 }
 
 const saveProfile = async () => {
-  if (isSlave.value || saving.value) return
+  if (isReadOnly.value || saving.value) return
   if (profileForm.value.password && profileForm.value.password.length < 6) {
     authStore.showToast('warning', '密码长度至少6位')
     return
