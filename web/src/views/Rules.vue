@@ -900,7 +900,7 @@
           <div ref="ruleLogContainerRef" class="rule-log-viewer" v-html="ruleLogHtml" />
         </el-tab-pane>
         <el-tab-pane label="统计" name="stats">
-          <div v-if="ruleLogStatsLoading" class="stats-state" aria-live="polite">
+          <div v-if="ruleLogStatsLoading || (!ruleLogStats && !ruleLogStatsError)" class="stats-state" aria-live="polite">
             <el-text type="info">正在统计日志...</el-text>
             <el-skeleton :rows="6" animated />
           </div>
