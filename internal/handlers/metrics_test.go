@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -102,6 +103,24 @@ func TestGetCaddyMetrics_propagates_request_cancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		close(release)
 		t.Fatal("metrics request did not stop after client cancellation")
+	}
+}
+
+func TestGetCaddyMetrics_returns_bad_gateway_on_caddy_error_status(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("unavailable"))
+	}))
+	defer server.Close()
+	h := &Handlers{cfg: &config.Config{CaddyAdminURL: server.URL}}
+	router := gin.New()
+	router.GET("/metrics", h.GetCaddyMetrics)
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "采集 Caddy 指标失败") {
+		t.Fatalf("status=%d body=%s, want 502 with collection error", response.Code, response.Body.String())
 	}
 }
 

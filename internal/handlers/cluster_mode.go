@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -41,6 +42,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	}
 	if err := h.clusterService.BecomeSlave(c.Request.Context(), strings.TrimRight(req.MasterURL, "/"), registration); err != nil {
 		log.Printf("cluster registration %d requires manual cleanup after local mode transition failed: %v", registration.RegistrationID, err)
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", fmt.Sprintf("registration_id：%d", registration.RegistrationID), err.Error()))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{
 			Code:    http.StatusInternalServerError,
 			Message: "保存从节点模式失败；远端注册已创建，请管理员清理后重试",

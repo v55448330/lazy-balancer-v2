@@ -59,4 +59,11 @@ func TestSetClusterMode_returns_registration_id_when_local_transition_fails(t *t
 	if !ok || data["registration_id"] != float64(73) {
 		t.Fatalf("response data=%#v, want registration_id 73", envelope.Data)
 	}
+	var action, detail string
+	if err := db.AuditDB.QueryRow("SELECT action, detail FROM audit_log ORDER BY id DESC LIMIT 1").Scan(&action, &detail); err != nil {
+		t.Fatalf("query failure audit: %v", err)
+	}
+	if action != "切换失败" || !strings.Contains(detail, "registration_id：73") {
+		t.Fatalf("audit action=%q detail=%q", action, detail)
+	}
 }

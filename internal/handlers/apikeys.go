@@ -45,7 +45,11 @@ func (h *Handlers) CreateCurrentUserAPIKey(c *gin.Context) {
 }
 
 func (h *Handlers) DeleteCurrentUserAPIKey(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid id parameter"})
+		return
+	}
 	userID := currentUserID(c)
 	var name string
 	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ? AND created_by = ?", id, userID).Scan(&name); err != nil {
@@ -176,7 +180,11 @@ func (h *Handlers) UpdateAPIKeyStatus(c *gin.Context) {
 }
 
 func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid id parameter"})
+		return
+	}
 	userID := currentUserID(c)
 	var req struct {
 		IsEnabled bool `json:"is_enabled"`
@@ -225,7 +233,11 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 }
 
 func (h *Handlers) DeleteAPIKey(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid id parameter"})
+		return
+	}
 	var name string
 	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ?", id).Scan(&name); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})

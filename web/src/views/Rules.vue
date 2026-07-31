@@ -1211,9 +1211,8 @@ const users = ref<UserListItem[]>([])
 const certInfoMap = ref<Record<string, CertInfo | null>>({})
 const certJobMap = ref<Record<string, CertJob>>({})
 const ruleTogglePending = ref<Record<string, boolean>>({})
-let certInfoFullSeq = 0
-let certInfoPatchSeq = 0
-let certInfoFullAppliedSeq = 0
+const certInfoGenerations = new Map<string, number>()
+let certInfoGeneration = 0
 let rulesRequestSeq = 0
 
 const getUpdaterName = (userId?: number) => {
@@ -1246,14 +1245,20 @@ const fetchRules = async () => {
 
 const fetchCertInfo = async (caddyIds?: readonly string[]) => {
   const requestedIds = caddyIds ? new Set(caddyIds) : null
-  const requestSeq = requestedIds ? ++certInfoPatchSeq : ++certInfoFullSeq
-  const fullAppliedSeqAtStart = certInfoFullAppliedSeq
   const tlsRules = rules.value.filter(r => r.enable_tls && (!requestedIds || requestedIds.has(r.caddy_id)))
+  const targetIds = tlsRules.map(r => r.caddy_id)
+  const targetIdSet = new Set(targetIds)
+  const generation = ++certInfoGeneration
+  const generationIds = requestedIds ? [...requestedIds] : [...new Set([...certInfoGenerations.keys(), ...targetIds])]
+  generationIds.forEach(id => certInfoGenerations.set(id, generation))
+  if (!requestedIds) {
+    certInfoMap.value = Object.fromEntries(Object.entries(certInfoMap.value).filter(([id]) => targetIdSet.has(id)))
+  } else {
+    requestedIds.forEach(id => {
+      if (!targetIdSet.has(id)) delete certInfoMap.value[id]
+    })
+  }
   if (tlsRules.length === 0) {
-    if (!requestedIds) {
-      certInfoMap.value = {}
-      certInfoFullAppliedSeq = requestSeq
-    }
     return
   }
   try {
@@ -1261,15 +1266,11 @@ const fetchCertInfo = async (caddyIds?: readonly string[]) => {
       caddy_ids: tlsRules.map(r => r.caddy_id)
     })
     const certInfo = res.data || {}
-    if (!requestedIds && requestSeq === certInfoFullSeq) {
-      certInfoMap.value = certInfo
-      certInfoFullAppliedSeq = requestSeq
-    } else if (requestedIds && requestSeq === certInfoPatchSeq) {
-      const patch = certInfoFullAppliedSeq > fullAppliedSeqAtStart
-        ? Object.fromEntries(Object.entries(certInfo).filter(([id]) => !(id in certInfoMap.value)))
-        : certInfo
-      certInfoMap.value = { ...certInfoMap.value, ...patch }
-    }
+    const patch: Record<string, CertInfo | null> = {}
+    targetIds.forEach(id => {
+      if (certInfoGenerations.get(id) === generation) patch[id] = certInfo[id] ?? null
+    })
+    certInfoMap.value = { ...certInfoMap.value, ...patch }
   } catch {
     return
   }
@@ -1684,6 +1685,7 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
       wizardForm.listen_port = 8080
     }
     wizardForm.enable_tls = false
+    if (wizardForm.strategy === 'cookie') wizardForm.strategy = 'weighted_round_robin'
     wizardForm.custom_routes_enabled = false
     wizardForm.path_rules = []
     wizardForm.upstreams.forEach(u => {
@@ -2239,6 +2241,14 @@ const submitWizard = async () => {
   const allowedProtocols: readonly UpstreamProtocol[] = wizardForm.protocol === 'tcp' ? ['tcp', 'tls'] : ['http', 'https']
   if (wizardForm.upstreams.some(u => !allowedProtocols.includes(u.protocol))) {
     ElMessage.warning(`${wizardForm.protocol.toUpperCase()} 规则包含协议族不匹配的上游服务器`)
+    saving.value = false
+    return
+  }
+  const allowedStrategies = wizardForm.protocol === 'tcp'
+    ? ['weighted_round_robin', 'ip_hash', 'least_conn', 'random', 'first']
+    : ['weighted_round_robin', 'ip_hash', 'least_conn', 'random', 'first', 'cookie']
+  if (!allowedStrategies.includes(wizardForm.strategy)) {
+    ElMessage.warning(`${wizardForm.protocol.toUpperCase()} 规则包含协议族不匹配的负载策略`)
     saving.value = false
     return
   }

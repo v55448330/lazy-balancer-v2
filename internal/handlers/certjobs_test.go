@@ -97,7 +97,7 @@ func TestDeleteCertJob_requeues_running_job_when_delete_fails(t *testing.T) {
 	if status != "queued" {
 		t.Fatalf("status=%q, want queued", status)
 	}
-	if !services.GetCAQueueManager().IsJobActiveForTest(1) {
+	if !services.GetCAQueueManager().IsJobActive(1) {
 		t.Fatal("restored running job is not active in the CA queue")
 	}
 }

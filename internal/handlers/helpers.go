@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +21,9 @@ import (
 )
 
 var startTime = time.Now()
+
+var systemMetricsReadFile = os.ReadFile
+var systemMetricsDFCommand = func() *exec.Cmd { return exec.Command("df", "-B1", "/") }
 
 func generateRandomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -264,49 +266,23 @@ func getUptime() int64 {
 }
 
 func getSystemMetrics() (models.SystemMetrics, error) {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-
-	memoryTotal := m.TotalAlloc
-	memoryUsed := m.Alloc
-
-	vmStat, err := os.ReadFile("/proc/meminfo")
-	var memTotal, memAvailable, diskUsed, diskTotal uint64
-	if err == nil {
-		lines := strings.Split(string(vmStat), "\n")
-		for _, line := range lines {
-			if strings.HasPrefix(line, "MemTotal:") {
-				fields := strings.Fields(line)
-				if len(fields) >= 2 {
-					memTotal, _ = strconv.ParseUint(fields[1], 10, 64)
-					memTotal *= 1024
-				}
-			}
-			if strings.HasPrefix(line, "MemAvailable:") {
-				fields := strings.Fields(line)
-				if len(fields) >= 2 {
-					memAvailable, _ = strconv.ParseUint(fields[1], 10, 64)
-					memAvailable *= 1024
-				}
-			}
-		}
-		if memTotal > 0 && memAvailable > 0 {
-			memoryTotal = memTotal
-			memoryUsed = memTotal - memAvailable
-		}
+	vmStat, err := systemMetricsReadFile("/proc/meminfo")
+	if err != nil {
+		return models.SystemMetrics{}, fmt.Errorf("读取系统内存指标失败: %w", err)
+	}
+	memoryTotal, memoryUsed, err := parseMemInfo(string(vmStat))
+	if err != nil {
+		return models.SystemMetrics{}, err
 	}
 
-	diskStat, err := os.Stat("/")
-	if err == nil {
-		diskTotal = uint64(diskStat.Size())
-	}
-
-	dfCmd := exec.Command("df", "-B1", "/")
+	dfCmd := systemMetricsDFCommand()
 	dfOutput, err := dfCmd.Output()
-	if err == nil {
-		if total, used, ok := parseDFOutput(string(dfOutput)); ok {
-			diskTotal, diskUsed = total, used
-		}
+	if err != nil {
+		return models.SystemMetrics{}, fmt.Errorf("读取系统磁盘指标失败: %w", err)
+	}
+	diskTotal, diskUsed, ok := parseDFOutput(string(dfOutput))
+	if !ok {
+		return models.SystemMetrics{}, fmt.Errorf("解析系统磁盘指标失败")
 	}
 
 	cpuPercent := getCPUPercent()
@@ -329,6 +305,26 @@ func getSystemMetrics() (models.SystemMetrics, error) {
 		DiskUsed:      diskUsed,
 		DiskPercent:   diskPercent,
 	}, nil
+}
+
+func parseMemInfo(input string) (uint64, uint64, error) {
+	values := make(map[string]uint64, 2)
+	for _, line := range strings.Split(input, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || (fields[0] != "MemTotal:" && fields[0] != "MemAvailable:") {
+			continue
+		}
+		value, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("解析系统内存指标失败: %w", err)
+		}
+		values[fields[0]] = value * 1024
+	}
+	total, available := values["MemTotal:"], values["MemAvailable:"]
+	if total == 0 || available > total {
+		return 0, 0, fmt.Errorf("解析系统内存指标失败: MemTotal 或 MemAvailable 无效")
+	}
+	return total, total - available, nil
 }
 
 func getCPUPercent() float64 {
@@ -368,18 +364,9 @@ func getRealtimeTraffic() (models.RealtimeTraffic, error) {
 		return models.RealtimeTraffic{}, err
 	}
 
-	var totalBytesIn, totalBytesOut uint64
-	lines := strings.Split(string(netStat), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, "eth0") || strings.Contains(line, "ens") || strings.Contains(line, "docker0") {
-			fields := strings.Fields(line)
-			if len(fields) >= 11 {
-				bytesIn, _ := strconv.ParseUint(fields[1], 10, 64)
-				bytesOut, _ := strconv.ParseUint(fields[9], 10, 64)
-				totalBytesIn += bytesIn
-				totalBytesOut += bytesOut
-			}
-		}
+	totalBytesIn, totalBytesOut, err := parseNetDevTotals(string(netStat))
+	if err != nil {
+		return models.RealtimeTraffic{}, err
 	}
 
 	now := time.Now()
@@ -409,6 +396,31 @@ func getRealtimeTraffic() (models.RealtimeTraffic, error) {
 		BytesIn:  rateIn,
 		BytesOut: rateOut,
 	}, nil
+}
+
+func parseNetDevTotals(input string) (uint64, uint64, error) {
+	var totalBytesIn, totalBytesOut uint64
+	for _, line := range strings.Split(input, "\n") {
+		name, counters, ok := strings.Cut(line, ":")
+		if !ok || strings.TrimSpace(name) == "lo" {
+			continue
+		}
+		fields := strings.Fields(counters)
+		if len(fields) < 16 {
+			return 0, 0, fmt.Errorf("解析网卡 %s 流量失败: 计数器字段不足", strings.TrimSpace(name))
+		}
+		bytesIn, err := strconv.ParseUint(fields[0], 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("解析网卡 %s 接收流量失败: %w", strings.TrimSpace(name), err)
+		}
+		bytesOut, err := strconv.ParseUint(fields[8], 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("解析网卡 %s 发送流量失败: %w", strings.TrimSpace(name), err)
+		}
+		totalBytesIn += bytesIn
+		totalBytesOut += bytesOut
+	}
+	return totalBytesIn, totalBytesOut, nil
 }
 
 type cpuSnapshot struct {
@@ -467,7 +479,12 @@ func getConnectionStats() (models.ConnectionStats, error) {
 		return stats, fmt.Errorf("execute netstat -tan: %w", err)
 	}
 
-	lines := strings.Split(string(output), "\n")
+	return parseConnectionStats(string(output)), nil
+}
+
+func parseConnectionStats(output string) models.ConnectionStats {
+	stats := models.ConnectionStats{}
+	lines := strings.Split(output, "\n")
 	stateCounts := make(map[string]int64)
 
 	for i, line := range lines {
@@ -480,27 +497,27 @@ func getConnectionStats() (models.ConnectionStats, error) {
 			continue
 		}
 
-		state := fields[5]
+		state := strings.ReplaceAll(fields[5], "-", "_")
 		switch state {
 		case "ESTABLISHED":
 			stateCounts["established"]++
-		case "SYN-SENT":
+		case "SYN_SENT":
 			stateCounts["syn_sent"]++
-		case "SYN-RECV":
+		case "SYN_RECV":
 			stateCounts["syn_recv"]++
-		case "FIN-WAIT1":
+		case "FIN_WAIT1":
 			stateCounts["fin_wait1"]++
-		case "FIN-WAIT2":
+		case "FIN_WAIT2":
 			stateCounts["fin_wait2"]++
-		case "CLOSE-WAIT":
+		case "CLOSE_WAIT":
 			stateCounts["close_wait"]++
 		case "CLOSING":
 			stateCounts["closing"]++
-		case "LAST-ACK":
+		case "LAST_ACK":
 			stateCounts["last_ack"]++
 		case "LISTEN":
 			stateCounts["listening"]++
-		case "TIME-WAIT":
+		case "TIME_WAIT":
 			stateCounts["time_wait"]++
 		}
 	}
@@ -519,7 +536,7 @@ func getConnectionStats() (models.ConnectionStats, error) {
 	stats.Total = stats.Established + stats.SynSent + stats.SynRecv + stats.FinWait1 +
 		stats.FinWait2 + stats.CloseWait + stats.Closing + stats.LastAck + stats.TimeWait
 
-	return stats, nil
+	return stats
 }
 
 var netstatCommand = func() *exec.Cmd {

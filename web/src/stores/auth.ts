@@ -115,9 +115,9 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('token')
   }
 
-  function showToast(type: 'success' | 'error' | 'info' | 'warning', title: string, message?: string) {
+  function showToast(type: 'success' | 'error' | 'info' | 'warning', message: string) {
     ElMessage({
-      message: message || title,
+      message,
       type,
       duration: 3000,
     })

@@ -132,24 +132,6 @@ func TestCAQueue_prepareExecution_registers_cancel_atomically(t *testing.T) {
 	}
 }
 
-func TestIsTerminalJobStatus_returns_true_for_disabled_job(t *testing.T) {
-	// Given
-	_, database := newClusterTestService(t)
-	result, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status) VALUES ('lb_disabled', 'example.com', 'disabled')`)
-	if err != nil {
-		t.Fatalf("seed disabled job: %v", err)
-	}
-	jobID, err := result.LastInsertId()
-	if err != nil {
-		t.Fatalf("read job ID: %v", err)
-	}
-
-	// When / Then
-	if !isTerminalJobStatus(int(jobID)) {
-		t.Fatal("disabled job is not terminal")
-	}
-}
-
 func TestWorkerWriteback_preserves_disabled_job(t *testing.T) {
 	tests := []struct {
 		name  string

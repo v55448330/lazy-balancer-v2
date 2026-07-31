@@ -615,8 +615,8 @@ const trafficChartOption = computed<EChartsOption>(() => ({
     splitLine: { lineStyle: { color: '#f3f4f6' } }
   },
   series: [
-    { name: '入站', type: 'line', data: trafficInHistory.value, smooth: true, showSymbol: false, lineStyle: { color: '#3b82f6', width: 2 }, areaStyle: { color: 'rgba(59,130,246,0.1)' } },
-    { name: '出站', type: 'line', data: trafficOutHistory.value, smooth: true, showSymbol: false, lineStyle: { color: '#10b981', width: 2 }, areaStyle: { color: 'rgba(16,185,129,0.1)' } },
+    { name: '入站', type: 'line', data: trafficInHistory.value, smooth: true, showSymbol: trafficInHistory.value.length < 2, lineStyle: { color: '#3b82f6', width: 2 }, areaStyle: { color: 'rgba(59,130,246,0.1)' } },
+    { name: '出站', type: 'line', data: trafficOutHistory.value, smooth: true, showSymbol: trafficOutHistory.value.length < 2, lineStyle: { color: '#10b981', width: 2 }, areaStyle: { color: 'rgba(16,185,129,0.1)' } },
   ],
 }))
 
@@ -637,8 +637,8 @@ const connChartOption = computed<EChartsOption>(() => ({
     splitLine: { lineStyle: { color: '#f3f4f6' } }
   },
   series: [
-    { name: '已建立', type: 'line', data: connEstablishedHistory.value, smooth: true, showSymbol: false, lineStyle: { color: '#10b981', width: 2 } },
-    { name: '等待释放', type: 'line', data: connTimeWaitHistory.value, smooth: true, showSymbol: false, lineStyle: { color: '#f59e0b', width: 2 } },
+    { name: '已建立', type: 'line', data: connEstablishedHistory.value, smooth: true, showSymbol: connEstablishedHistory.value.length < 2, lineStyle: { color: '#10b981', width: 2 } },
+    { name: '等待释放', type: 'line', data: connTimeWaitHistory.value, smooth: true, showSymbol: connTimeWaitHistory.value.length < 2, lineStyle: { color: '#f59e0b', width: 2 } },
   ],
 }))
 
@@ -671,12 +671,6 @@ const fetchAllData = (): Promise<void> => {
       if (!res.data) return
       const data = res.data
       const now = Date.now()
-      // 首样本补一个前 5s 的基线点，折线图立即成线而不是空白等到第二轮轮询
-      if (trafficTimestamps.value.length === 0) {
-        trafficInHistory.value = [data?.bytes_in || 0]
-        trafficOutHistory.value = [data?.bytes_out || 0]
-        trafficTimestamps.value = [now - 5000]
-      }
       trafficInHistory.value = [...trafficInHistory.value, data?.bytes_in || 0].slice(-60)
       trafficOutHistory.value = [...trafficOutHistory.value, data?.bytes_out || 0].slice(-60)
       trafficTimestamps.value = [...trafficTimestamps.value, now].slice(-60)
@@ -709,11 +703,6 @@ const fetchAllData = (): Promise<void> => {
       if (!res.data) return
       const connData = res.data
       const now = Date.now()
-      if (connTimestamps.value.length === 0) {
-        connEstablishedHistory.value = [connData?.established || 0]
-        connTimeWaitHistory.value = [connData?.time_wait || 0]
-        connTimestamps.value = [now - 5000]
-      }
       connEstablishedHistory.value = [...connEstablishedHistory.value, connData?.established || 0].slice(-60)
       connTimeWaitHistory.value = [...connTimeWaitHistory.value, connData?.time_wait || 0].slice(-60)
       connTimestamps.value = [...connTimestamps.value, now].slice(-60)

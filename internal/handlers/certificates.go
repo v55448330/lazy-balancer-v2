@@ -84,7 +84,11 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 
 func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid id parameter"})
+		return
+	}
 
 	var req models.UpdateCertificateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -167,7 +171,11 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 
 func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid id parameter"})
+		return
+	}
 	var name, provider string
 	if err := db.DB.QueryRow("SELECT name, dns_provider FROM certificate_configs WHERE id = ?", id).Scan(&name, &provider); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Config not found"})

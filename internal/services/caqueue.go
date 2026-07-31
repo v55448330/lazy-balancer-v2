@@ -172,7 +172,8 @@ func (m *CAQueueManager) IsPaused() bool {
 	return !m.active
 }
 
-func (m *CAQueueManager) IsJobActiveForTest(jobID int) bool {
+// IsJobActive reports whether the job is currently queued or running.
+func (m *CAQueueManager) IsJobActive(jobID int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, queue := range m.queues {
@@ -477,14 +478,6 @@ func handleQueueExecutionError(jobID int, err error) {
 		return
 	}
 	failJob(jobID, fmt.Sprintf("CA 签发失败: %v", err))
-}
-
-func isTerminalJobStatus(jobID int) bool {
-	var status string
-	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
-		return false
-	}
-	return status == "issued" || status == "failed" || status == "disabled"
 }
 
 // jobExists returns true if a cert_jobs row with the given id still exists.

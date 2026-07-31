@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -67,7 +68,12 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 	var oldMaxConcurrent, oldMinIntervalMS int
 	var oldEnabled bool
 	if err := db.DB.QueryRow(`SELECT name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled FROM ca_providers WHERE id=?`, id).Scan(&oldName, &oldProvider, &oldDirectoryURL, &oldCredentials, &oldMaxConcurrent, &oldMinIntervalMS, &oldEnabled); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA provider not found"})
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA provider not found"})
+			return
+		}
+		log.Printf("Failed to query CA provider %d: %v", id, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query CA provider"})
 		return
 	}
 	changed := []string{}
@@ -146,7 +152,15 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 		return
 	}
 	var providerName string
-	db.DB.QueryRow("SELECT name FROM ca_providers WHERE id=?", id).Scan(&providerName)
+	if err := db.DB.QueryRow("SELECT name FROM ca_providers WHERE id=?", id).Scan(&providerName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA provider not found"})
+			return
+		}
+		log.Printf("Failed to query CA provider %d before test: %v", id, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query CA provider"})
+		return
+	}
 
 	if err := h.caProviderService.TestCAProviderWithContext(c.Request.Context(), id); err != nil {
 		result := "provider_error"

@@ -36,6 +36,7 @@ type SyncService struct {
 	cluster             *ClusterService
 	client              *http.Client
 	lifecycleMu         sync.Mutex
+	pullAdmissionMu     sync.Mutex
 	pullApplyMu         sync.Mutex
 	pullMu              sync.Mutex
 	mu                  sync.Mutex
@@ -47,6 +48,8 @@ type SyncService struct {
 	runFn               func(context.Context)
 	loadRunState        func(context.Context) (bool, string, int, error)
 	waitRunDelay        func(context.Context, time.Duration) bool
+	beforeBeginPull     func()
+	afterStopAdmission  func()
 	beforeApplySnapshot func()
 }
 
@@ -125,9 +128,11 @@ func (s *SyncService) migrateMasterURLScheme(scheme string) {
 func (s *SyncService) Start() {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
+	s.pullAdmissionMu.Lock()
+	s.pullsStopped = false
+	s.pullAdmissionMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pullsStopped = false
 	if s.cancel != nil {
 		return
 	}
@@ -160,13 +165,16 @@ func (s *SyncService) finishRun(generation uint64) {
 func (s *SyncService) Stop() {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
-	s.pullApplyMu.Lock()
-	s.mu.Lock()
+	s.pullAdmissionMu.Lock()
 	s.pullsStopped = true
+	s.pullAdmissionMu.Unlock()
+	if s.afterStopAdmission != nil {
+		s.afterStopAdmission()
+	}
+	s.mu.Lock()
 	cancel := s.cancel
 	done := s.done
 	s.mu.Unlock()
-	s.pullApplyMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
@@ -270,9 +278,9 @@ func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
 		s.beforeApplySnapshot()
 	}
 	s.pullApplyMu.Lock()
-	s.mu.Lock()
+	s.pullAdmissionMu.Lock()
 	pullsStopped := s.pullsStopped
-	s.mu.Unlock()
+	s.pullAdmissionMu.Unlock()
 	if pullsStopped {
 		s.pullApplyMu.Unlock()
 		return SyncResult{}, errors.New("集群同步已停止，拒绝应用快照")
@@ -288,10 +296,11 @@ func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
 }
 
 func (s *SyncService) beginPull() error {
-	s.lifecycleMu.Lock()
-	defer s.lifecycleMu.Unlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.beforeBeginPull != nil {
+		s.beforeBeginPull()
+	}
+	s.pullAdmissionMu.Lock()
+	defer s.pullAdmissionMu.Unlock()
 	if s.pullsStopped {
 		return errors.New("集群同步已停止")
 	}

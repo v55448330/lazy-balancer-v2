@@ -351,8 +351,13 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败: " + err.Error()})
 		return
 	}
-	if rows, err := res.RowsAffected(); err == nil && rows == 0 {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败: 未找到配置记录"})
+	rows, err := res.RowsAffected()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败: " + err.Error()})
+		return
+	}
+	if rows != 1 {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("配置写入数据库失败: 影响记录数为 %d", rows)})
 		return
 	}
 

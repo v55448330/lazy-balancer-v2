@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/models"
@@ -33,10 +34,35 @@ type blockingRoundTripper struct {
 	entered chan struct{}
 }
 
+func waitSyncTest[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for synchronization point")
+		var zero T
+		return zero
+	}
+}
+
+func waitSyncBarrier(ch <-chan struct{}) {
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case <-ch:
+	case <-timer.C:
+	}
+}
+
 func (r blockingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	close(r.entered)
-	<-req.Context().Done()
-	return nil, req.Context().Err()
+	select {
+	case <-req.Context().Done():
+		return nil, req.Context().Err()
+	case <-time.After(time.Second):
+		return nil, context.DeadlineExceeded
+	}
 }
 
 func TestSyncService_RegisterWithMaster_parent_cancellation_returns_immediately(t *testing.T) {
@@ -48,9 +74,9 @@ func TestSyncService_RegisterWithMaster_parent_cancellation_returns_immediately(
 		_, err := service.RegisterWithMaster(ctx, "http://master.example", models.ClusterRegisterRequest{})
 		done <- err
 	}()
-	<-entered
+	waitSyncTest(t, entered)
 	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
+	if err := waitSyncTest(t, done); !errors.Is(err, context.Canceled) {
 		t.Fatalf("registration error=%v, want context canceled", err)
 	}
 }
@@ -69,7 +95,7 @@ func TestSyncService_Pull_rejects_old_response_after_new_snapshot_applied(t *tes
 		if request == 1 {
 			version = 1
 			close(oldRequestEntered)
-			<-releaseOldResponse
+			waitSyncBarrier(releaseOldResponse)
 		}
 		response.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(response).Encode(map[string]any{"data": signedTestSnapshot(version, token)})
@@ -89,24 +115,24 @@ func TestSyncService_Pull_rejects_old_response_after_new_snapshot_applied(t *tes
 		_, err := oldPull.Pull(context.Background())
 		oldDone <- err
 	}()
-	<-oldRequestEntered
+	waitSyncTest(t, oldRequestEntered)
 	newDone := make(chan error, 1)
 	go func() {
 		_, err := newPull.Pull(context.Background())
 		newDone <- err
 	}()
-	if got := <-requestNumber; got != 1 {
+	if got := waitSyncTest(t, requestNumber); got != 1 {
 		t.Fatalf("first request number=%d", got)
 	}
-	if got := <-requestNumber; got != 2 {
+	if got := waitSyncTest(t, requestNumber); got != 2 {
 		t.Fatalf("second request number=%d", got)
 	}
-	if err := <-newDone; err != nil {
+	if err := waitSyncTest(t, newDone); err != nil {
 		t.Fatalf("apply newer snapshot: %v", err)
 	}
 	close(releaseOldResponse)
 
-	if err := <-oldDone; err == nil {
+	if err := waitSyncTest(t, oldDone); err == nil {
 		t.Fatal("late older snapshot was accepted")
 	}
 	var appliedVersion int
@@ -134,7 +160,7 @@ func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *test
 	releaseApply := make(chan struct{})
 	syncService.beforeApplySnapshot = func() {
 		close(beforeApply)
-		<-releaseApply
+		waitSyncBarrier(releaseApply)
 	}
 	lifecycle := &syncDrainLifecycle{sync: syncService, stopEntered: make(chan struct{})}
 	cluster := NewClusterService(database, lifecycle)
@@ -143,10 +169,10 @@ func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *test
 		_, err := syncService.Pull(context.Background())
 		pullDone <- err
 	}()
-	<-beforeApply
+	waitSyncTest(t, beforeApply)
 	promoteDone := make(chan error, 1)
 	go func() { promoteDone <- cluster.Promote(context.Background()) }()
-	<-lifecycle.stopEntered
+	waitSyncTest(t, lifecycle.stopEntered)
 	select {
 	case err := <-promoteDone:
 		t.Fatalf("promote returned before active pull drained: %v", err)
@@ -154,10 +180,10 @@ func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *test
 	}
 
 	close(releaseApply)
-	if err := <-pullDone; err == nil {
+	if err := waitSyncTest(t, pullDone); err == nil {
 		t.Fatal("pull applied snapshot after promotion")
 	}
-	if err := <-promoteDone; err != nil {
+	if err := waitSyncTest(t, promoteDone); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
 	var isMaster bool
@@ -171,6 +197,32 @@ func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *test
 	if _, err := syncService.Pull(context.Background()); err == nil {
 		t.Fatal("new pull was accepted after sync stopped")
 	}
+}
+
+func TestSyncService_Stop_returns_when_run_is_waiting_before_pull_admission(t *testing.T) {
+	beforeAdmission := make(chan struct{})
+	releaseAdmission := make(chan struct{})
+	admissionStopped := make(chan struct{})
+	service := &SyncService{}
+	service.beforeBeginPull = func() {
+		close(beforeAdmission)
+		waitSyncBarrier(releaseAdmission)
+	}
+	service.afterStopAdmission = func() { close(admissionStopped) }
+	service.runFn = func(ctx context.Context) {
+		_, _ = service.Pull(ctx)
+	}
+
+	service.Start()
+	waitSyncTest(t, beforeAdmission)
+	stopped := make(chan struct{})
+	go func() {
+		service.Stop()
+		close(stopped)
+	}()
+	waitSyncTest(t, admissionStopped)
+	close(releaseAdmission)
+	waitSyncTest(t, stopped)
 }
 
 func signedTestSnapshot(version int, token string) models.ClusterSnapshot {

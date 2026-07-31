@@ -4,12 +4,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
-	"log"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -29,22 +29,37 @@ type AdminTLSConfig struct {
 	Port       int
 }
 
-var runtimeAdminTLS atomic.Value
+type adminTLSFingerprint struct {
+	Enabled     bool
+	Mode        string
+	Certificate [sha256.Size]byte
+}
+
+var runtimeAdminTLS atomic.Pointer[adminTLSFingerprint]
+
+func fingerprintAdminTLS(cfg AdminTLSConfig) adminTLSFingerprint {
+	return adminTLSFingerprint{
+		Enabled:     cfg.Enabled,
+		Mode:        cfg.Mode,
+		Certificate: sha256.Sum256([]byte(cfg.Cert + cfg.Key)),
+	}
+}
 
 // RecordRuntimeAdminTLS captures the state the process actually started with;
 // the sync applier compares later states against it.
 func RecordRuntimeAdminTLS(cfg AdminTLSConfig) {
-	runtimeAdminTLS.Store([2]interface{}{cfg.Enabled, cfg.Mode})
+	fingerprint := fingerprintAdminTLS(cfg)
+	runtimeAdminTLS.Store(&fingerprint)
 }
 
 // RuntimeAdminTLSChanged reports whether the given config differs from the
 // state the process started with, meaning a restart is required to apply it.
 func RuntimeAdminTLSChanged(cfg AdminTLSConfig) bool {
-	v, ok := runtimeAdminTLS.Load().([2]interface{})
-	if !ok {
+	v := runtimeAdminTLS.Load()
+	if v == nil {
 		return false
 	}
-	return v[0] != cfg.Enabled || v[1] != cfg.Mode
+	return *v != fingerprintAdminTLS(cfg)
 }
 
 func LoadAdminTLSConfig() AdminTLSConfig {
@@ -122,11 +137,12 @@ func selfSignedCert(dataDir string) (tls.Certificate, error) {
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
-		log.Printf("自签名证书写入失败: %v", err)
-	}
-	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
-		log.Printf("自签名私钥写入失败: %v", err)
+	if err := writeAdminTLSCertPair(certPath, keyPath, certPEM, keyPEM); err != nil {
+		return tls.Certificate{}, fmt.Errorf("保存自签名证书: %w", err)
 	}
 	return tls.X509KeyPair(certPEM, keyPEM)
+}
+
+func writeAdminTLSCertPair(certPath, keyPath string, certPEM, keyPEM []byte) error {
+	return writeCertPair(certPath, keyPath, string(certPEM), string(keyPEM))
 }

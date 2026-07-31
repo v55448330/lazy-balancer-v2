@@ -74,6 +74,7 @@ func (h *Handlers) Login(c *gin.Context) {
 		expireMinutes = 20
 	}
 	expireDuration := time.Duration(expireMinutes) * time.Minute
+	now := time.Now()
 	// Generate JWT token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id":   user.ID,
@@ -81,8 +82,8 @@ func (h *Handlers) Login(c *gin.Context) {
 		"role":      user.Role,
 		"node_mode": nodeMode,
 		"pwd_ver":   passwordVersion,
-		"iat":       time.Now().Unix(),
-		"exp":       time.Now().Add(expireDuration).Unix(),
+		"iat":       now.Unix(),
+		"exp":       now.Add(expireDuration).Unix(),
 	})
 
 	tokenString, err := token.SignedString([]byte(h.cfg.JWTSecret))

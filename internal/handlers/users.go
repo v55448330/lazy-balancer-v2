@@ -191,7 +191,11 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 }
 
 func (h *Handlers) DeleteUser(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid user ID"})
+		return
+	}
 
 	userID, _ := c.Get("user_id")
 	var userIDInt int

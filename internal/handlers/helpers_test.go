@@ -8,12 +8,80 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestParseConnectionStats_parses_linux_netstat_underscore_states(t *testing.T) {
+	fixture := `Proto Recv-Q Send-Q Local Address           Foreign Address         State
+tcp        0      0 10.0.0.1:443           10.0.0.2:50000         ESTABLISHED
+tcp        0      1 10.0.0.1:50001         10.0.0.2:443           SYN_SENT
+tcp        0      0 10.0.0.1:443           10.0.0.2:50002         SYN_RECV
+tcp        0      0 10.0.0.1:443           10.0.0.2:50003         FIN_WAIT1
+tcp        0      0 10.0.0.1:443           10.0.0.2:50004         FIN_WAIT2
+tcp        1      0 10.0.0.1:443           10.0.0.2:50005         CLOSE_WAIT
+tcp        0      0 10.0.0.1:443           10.0.0.2:50006         CLOSING
+tcp        0      0 10.0.0.1:443           10.0.0.2:50007         LAST_ACK
+tcp        0      0 0.0.0.0:443            0.0.0.0:*               LISTEN
+tcp        0      0 10.0.0.1:443           10.0.0.2:50008         TIME_WAIT`
+
+	stats := parseConnectionStats(fixture)
+	if stats.Established != 1 || stats.SynSent != 1 || stats.SynRecv != 1 || stats.FinWait1 != 1 ||
+		stats.FinWait2 != 1 || stats.CloseWait != 1 || stats.Closing != 1 || stats.LastAck != 1 ||
+		stats.Listening != 1 || stats.TimeWait != 1 || stats.Total != 9 {
+		t.Fatalf("unexpected connection stats: %#v", stats)
+	}
+}
+
+func TestParseNetDevTotals_sums_all_non_loopback_interfaces(t *testing.T) {
+	fixture := `Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 100 1 0 0 0 0 0 0 200 1 0 0 0 0 0 0
+  enp3s0: 1000 1 0 0 0 0 0 0 2000 1 0 0 0 0 0 0
+   bond0: 3000 1 0 0 0 0 0 0 4000 1 0 0 0 0 0 0
+ wlan0: 5000 1 0 0 0 0 0 0 6000 1 0 0 0 0 0 0
+   br-app: 7000 1 0 0 0 0 0 0 8000 1 0 0 0 0 0 0`
+
+	bytesIn, bytesOut, err := parseNetDevTotals(fixture)
+	if err != nil {
+		t.Fatalf("parse net dev fixture: %v", err)
+	}
+	if bytesIn != 16000 || bytesOut != 20000 {
+		t.Fatalf("bytesIn=%d bytesOut=%d, want 16000/20000", bytesIn, bytesOut)
+	}
+}
+
+func TestGetSystemMetrics_returns_error_when_meminfo_read_fails(t *testing.T) {
+	original := systemMetricsReadFile
+	systemMetricsReadFile = func(string) ([]byte, error) { return nil, errors.New("permission denied") }
+	t.Cleanup(func() { systemMetricsReadFile = original })
+
+	metrics, err := getSystemMetrics()
+	if err == nil || !strings.Contains(err.Error(), "读取系统内存指标失败") {
+		t.Fatalf("metrics=%#v error=%v, want explicit memory error", metrics, err)
+	}
+}
+
+func TestGetSystemMetrics_returns_error_when_df_output_is_invalid(t *testing.T) {
+	originalReadFile, originalDFCommand := systemMetricsReadFile, systemMetricsDFCommand
+	systemMetricsReadFile = func(string) ([]byte, error) {
+		return []byte("MemTotal: 1000 kB\nMemAvailable: 400 kB\n"), nil
+	}
+	systemMetricsDFCommand = func() *exec.Cmd { return exec.Command("sh", "-c", "printf invalid") }
+	t.Cleanup(func() {
+		systemMetricsReadFile = originalReadFile
+		systemMetricsDFCommand = originalDFCommand
+	})
+
+	metrics, err := getSystemMetrics()
+	if err == nil || !strings.Contains(err.Error(), "解析系统磁盘指标失败") {
+		t.Fatalf("metrics=%#v error=%v, want explicit disk parse error", metrics, err)
+	}
+}
 
 func TestGetConnectionStats_returns_netstat_error(t *testing.T) {
 	original := netstatCommand

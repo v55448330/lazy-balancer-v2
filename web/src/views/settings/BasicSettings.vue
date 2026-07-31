@@ -292,8 +292,10 @@ watch(appLogAutoRefresh, (enabled) => {
 onUnmounted(() => {
   disposed = true
   stopAppLogTimer()
-  if (tlsProtocolPollTimer) clearInterval(tlsProtocolPollTimer)
-  tlsProtocolPollTimer = null
+  if (tlsProtocolRedirectTimer) clearTimeout(tlsProtocolRedirectTimer)
+  if (tlsProtocolFallbackTimer) clearTimeout(tlsProtocolFallbackTimer)
+  tlsProtocolRedirectTimer = null
+  tlsProtocolFallbackTimer = null
 })
 
 const exportBackup = async (): Promise<void> => {
@@ -489,7 +491,8 @@ const formDataOf = (fields: Record<string, string>): FormData => {
 }
 
 let tlsInspectSeq = 0
-let tlsProtocolPollTimer: ReturnType<typeof setInterval> | null = null
+let tlsProtocolRedirectTimer: ReturnType<typeof setTimeout> | null = null
+let tlsProtocolFallbackTimer: ReturnType<typeof setTimeout> | null = null
 let disposed = false
 
 const onTlsFile = async (e: Event, kind: 'cert' | 'key') => {
@@ -531,25 +534,14 @@ const notifyTlsRestarting = (toHttps: boolean) => {
     closeOnPressEscape: false,
   }).catch(() => {})
   const target = `${toHttps ? 'https' : 'http'}://${location.host}/`
-  const started = Date.now()
-  if (tlsProtocolPollTimer) clearInterval(tlsProtocolPollTimer)
-  tlsProtocolPollTimer = setInterval(async () => {
-    if (disposed) return
-    if (Date.now() - started > 15000) {
-      if (tlsProtocolPollTimer) clearInterval(tlsProtocolPollTimer)
-      tlsProtocolPollTimer = null
-      return
-    }
-    try {
-      const probeUrl = new URL('/api/v1/branding', target)
-      probeUrl.searchParams.set('ts', String(Date.now()))
-      const response = await fetch(probeUrl, { cache: 'no-store', redirect: 'manual' })
-      if (disposed || !response.ok) return
-      if (tlsProtocolPollTimer) clearInterval(tlsProtocolPollTimer)
-      tlsProtocolPollTimer = null
-      window.location.href = target
-    } catch { /* not up yet */ }
-  }, 600)
+  if (tlsProtocolRedirectTimer) clearTimeout(tlsProtocolRedirectTimer)
+  if (tlsProtocolFallbackTimer) clearTimeout(tlsProtocolFallbackTimer)
+  tlsProtocolRedirectTimer = setTimeout(() => {
+    if (!disposed) window.location.replace(target)
+  }, 1500)
+  tlsProtocolFallbackTimer = setTimeout(() => {
+    if (!disposed) ElMessage.warning(`若未自动跳转请手动访问新地址：${target}`)
+  }, 15000)
 }
 
 const saveAdminTls = async () => {

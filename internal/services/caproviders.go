@@ -324,14 +324,6 @@ type CAProviderTestError struct {
 func (e *CAProviderTestError) Error() string { return e.Err.Error() }
 func (e *CAProviderTestError) Unwrap() error { return e.Err }
 
-// TestCAProvider validates a CA provider by registering an ACME account.
-// It does not attempt to issue a certificate or validate domain ownership;
-// it only verifies that the CA is reachable and the credentials are accepted.
-// Deprecated: request handlers must call TestCAProviderWithContext with the request context.
-func (s *CAProviderService) TestCAProvider(id int) error {
-	return s.TestCAProviderWithContext(context.Background(), id)
-}
-
 func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id int) error {
 	log.Printf("Testing CA provider %d", id)
 	if err := ctx.Err(); err != nil {

@@ -217,13 +217,19 @@ const saveProfile = async () => {
   }
   saving.value = true
   try {
+    const passwordChanged = Boolean(profileForm.value.password)
     await request.patch('/users/me', {
       display_name: profileForm.value.display_name,
       ...(profileForm.value.password && { password: profileForm.value.password }),
     })
-    authStore.showToast('success', '保存成功')
     showProfile.value = false
-    await authStore.fetchUser()
+    if (passwordChanged) {
+      authStore.showToast('success', '密码已修改，请重新登录')
+      authStore.logout()
+    } else {
+      authStore.showToast('success', '保存成功')
+      await authStore.fetchUser()
+    }
   } finally {
     saving.value = false
   }

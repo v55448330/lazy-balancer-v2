@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -28,7 +29,14 @@ func fetchCaddyMetrics(ctx context.Context, url string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("Caddy 指标接口返回状态码 %d", resp.StatusCode)
+	}
 	return io.ReadAll(resp.Body)
+}
+
+func caddyMetricsError(c *gin.Context, err error) {
+	c.JSON(http.StatusBadGateway, models.APIResponse{Code: http.StatusBadGateway, Message: "采集 Caddy 指标失败: " + err.Error()})
 }
 
 func (h *Handlers) GetMetricsOverview(c *gin.Context) {
@@ -53,7 +61,7 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 
 	body, err := fetchCaddyMetrics(c.Request.Context(), h.cfg.CaddyAdminURL+"/metrics")
 	if err != nil {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: emptyRuleMetrics()})
+		caddyMetricsError(c, err)
 		return
 	}
 
@@ -61,7 +69,7 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	if rule.Protocol == "tcp" {
 		upstreams, err := loadRuleUpstreams(ruleID)
 		if err != nil {
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: emptyRuleMetrics()})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则上游失败: " + err.Error()})
 			return
 		}
 		metrics = parseTCPRuleMetricsFromPrometheus(string(body), upstreams)
@@ -216,7 +224,7 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 func (h *Handlers) GetCaddyMetrics(c *gin.Context) {
 	body, err := fetchCaddyMetrics(c.Request.Context(), h.cfg.CaddyAdminURL+"/metrics")
 	if err != nil {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: models.CaddyMetrics{}})
+		caddyMetricsError(c, err)
 		return
 	}
 	metrics := parsePrometheusMetrics(string(body))
@@ -227,7 +235,7 @@ func (h *Handlers) GetCaddyMetrics(c *gin.Context) {
 func (h *Handlers) GetHostMetrics(c *gin.Context) {
 	body, err := fetchCaddyMetrics(c.Request.Context(), h.cfg.CaddyAdminURL+"/metrics")
 	if err != nil {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: []models.HostMetrics{}})
+		caddyMetricsError(c, err)
 		return
 	}
 	metrics := parseHostMetrics(string(body))
