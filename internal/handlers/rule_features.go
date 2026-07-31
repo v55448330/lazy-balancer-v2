@@ -339,8 +339,7 @@ func (h *Handlers) UpdateRuleACL(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 
 	var protocol, oldMode, oldListJSON string
-	if err := db.DB.QueryRow("SELECT protocol, COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol, &oldMode, &oldListJSON); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+	if err := db.DB.QueryRow("SELECT protocol, COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol, &oldMode, &oldListJSON); dbQueryNotFound(c, err, "规则不存在", "UpdateRuleACL query rule") {
 		return
 	}
 	input := ruleFeatureInput{Protocol: protocol, IPACLMode: req.IPACLMode, IPACLList: req.IPACLList}

@@ -51,7 +51,7 @@ func (h *Handlers) RegisterClusterNode(c *gin.Context) {
 
 func (h *Handlers) GetClusterRegistrationStatus(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
+	if err != nil || id <= 0 {
 		clusterError(c, http.StatusBadRequest, "注册编号无效", err)
 		return
 	}
@@ -80,7 +80,7 @@ func (h *Handlers) clusterNodeAction(c *gin.Context, action string, operation fu
 		return
 	}
 	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
+	if err != nil || id <= 0 {
 		clusterError(c, http.StatusBadRequest, "节点编号无效", err)
 		return
 	}

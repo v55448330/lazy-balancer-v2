@@ -285,7 +285,10 @@ func getSystemMetrics() (models.SystemMetrics, error) {
 		return models.SystemMetrics{}, fmt.Errorf("解析系统磁盘指标失败")
 	}
 
-	cpuPercent := getCPUPercent()
+	cpuPercent, err := getCPUPercent()
+	if err != nil {
+		return models.SystemMetrics{}, fmt.Errorf("读取系统 CPU 指标失败: %w", err)
+	}
 
 	var memPercent float64
 	if memoryTotal > 0 {
@@ -327,28 +330,31 @@ func parseMemInfo(input string) (uint64, uint64, error) {
 	return total, total - available, nil
 }
 
-func getCPUPercent() float64 {
-	stat, err := os.ReadFile("/proc/stat")
+func getCPUPercent() (float64, error) {
+	stat, err := systemMetricsReadFile("/proc/stat")
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	current, ok := parseCPUSnapshot(string(stat))
 	if !ok {
-		return 0
+		return 0, fmt.Errorf("解析 /proc/stat 失败")
 	}
 	lastCPUStats.mu.Lock()
 	defer lastCPUStats.mu.Unlock()
 	previous := lastCPUStats.snapshot
 	lastCPUStats.snapshot = current
-	if previous.total == 0 || current.total <= previous.total || current.idle < previous.idle {
-		return 0
+	if previous.total == 0 {
+		return 0, nil
+	}
+	if current.total <= previous.total || current.idle < previous.idle {
+		return 0, fmt.Errorf("CPU 计数器无效")
 	}
 	totalDelta := current.total - previous.total
 	idleDelta := current.idle - previous.idle
 	if idleDelta > totalDelta {
-		return 0
+		return 0, fmt.Errorf("CPU 空闲计数器增量无效")
 	}
-	return float64(totalDelta-idleDelta) / float64(totalDelta) * 100
+	return float64(totalDelta-idleDelta) / float64(totalDelta) * 100, nil
 }
 
 var lastNetStats struct {
@@ -399,10 +405,17 @@ func getRealtimeTraffic() (models.RealtimeTraffic, error) {
 }
 
 func parseNetDevTotals(input string) (uint64, uint64, error) {
-	var totalBytesIn, totalBytesOut uint64
+	route, err := systemMetricsReadFile("/proc/net/route")
+	if err != nil {
+		return 0, 0, fmt.Errorf("读取默认路由失败: %w", err)
+	}
+	defaultInterface, err := parseDefaultRouteInterface(string(route))
+	if err != nil {
+		return 0, 0, err
+	}
 	for _, line := range strings.Split(input, "\n") {
 		name, counters, ok := strings.Cut(line, ":")
-		if !ok || strings.TrimSpace(name) == "lo" {
+		if !ok || strings.TrimSpace(name) != defaultInterface {
 			continue
 		}
 		fields := strings.Fields(counters)
@@ -417,10 +430,25 @@ func parseNetDevTotals(input string) (uint64, uint64, error) {
 		if err != nil {
 			return 0, 0, fmt.Errorf("解析网卡 %s 发送流量失败: %w", strings.TrimSpace(name), err)
 		}
-		totalBytesIn += bytesIn
-		totalBytesOut += bytesOut
+		return bytesIn, bytesOut, nil
 	}
-	return totalBytesIn, totalBytesOut, nil
+	return 0, 0, fmt.Errorf("默认路由接口 %s 不存在于 /proc/net/dev", defaultInterface)
+}
+
+func parseDefaultRouteInterface(input string) (string, error) {
+	for _, line := range strings.Split(input, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 4 && fields[0] != "Iface" && fields[1] == "00000000" {
+			flags, err := strconv.ParseUint(fields[3], 16, 64)
+			if err != nil {
+				return "", fmt.Errorf("解析默认路由标志失败: %w", err)
+			}
+			if flags&1 != 0 {
+				return fields[0], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("无法确定默认路由出口接口")
 }
 
 type cpuSnapshot struct {
@@ -445,7 +473,9 @@ func parseCPUSnapshot(stat string) (cpuSnapshot, bool) {
 		if err != nil {
 			return cpuSnapshot{}, false
 		}
-		snapshot.total += value
+		if index < 8 {
+			snapshot.total += value
+		}
 		if index == 3 || index == 4 {
 			snapshot.idle += value
 		}
@@ -543,19 +573,42 @@ var netstatCommand = func() *exec.Cmd {
 	return exec.Command("netstat", "-tan")
 }
 
-func parsePrometheusMetrics(body string) models.CaddyMetrics {
-	m := models.CaddyMetrics{}
-	lines := strings.Split(body, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "#") {
+type prometheusSample struct {
+	name  string
+	value float64
+}
+
+func parsePrometheusSamples(body string) ([]prometheusSample, error) {
+	var samples []prometheusSample
+	for lineNumber, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			continue
 		}
-		name := fields[0]
-		value, _ := strconv.ParseFloat(fields[1], 64)
+		value, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil {
+			return nil, fmt.Errorf("解析 Prometheus 第 %d 行样本值 %q 失败: %w", lineNumber+1, fields[1], err)
+		}
+		samples = append(samples, prometheusSample{name: fields[0], value: value})
+	}
+	if len(samples) == 0 {
+		return nil, fmt.Errorf("Prometheus 正文不包含有效样本")
+	}
+	return samples, nil
+}
+
+func parsePrometheusMetrics(body string) (models.CaddyMetrics, error) {
+	m := models.CaddyMetrics{}
+	samples, err := parsePrometheusSamples(body)
+	if err != nil {
+		return m, err
+	}
+	for _, sample := range samples {
+		name, value := sample.name, sample.value
 		switch {
 		case strings.HasPrefix(name, "caddy_http_requests_total{"):
 			v := int64(value)
@@ -563,7 +616,7 @@ func parsePrometheusMetrics(body string) models.CaddyMetrics {
 		case strings.HasPrefix(name, "caddy_http_request_duration_seconds_count{"):
 			code := extractLabel(name, "code")
 			v := int64(value)
-			switch classifyStatusCode(code) {
+			switch bucket, _ := classifyStatusCode(code); bucket {
 			case "status_2xx":
 				m.Status2xx += v
 			case "status_3xx":
@@ -585,22 +638,17 @@ func parsePrometheusMetrics(body string) models.CaddyMetrics {
 			m.BytesOut += int64(value)
 		}
 	}
-	return m
+	return m, nil
 }
 
-func parseHostMetrics(body string) []models.HostMetrics {
+func parseHostMetrics(body string) ([]models.HostMetrics, error) {
 	hostMap := make(map[string]*models.HostMetrics)
-	lines := strings.Split(body, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		name := fields[0]
-		value, _ := strconv.ParseFloat(fields[1], 64)
+	samples, err := parsePrometheusSamples(body)
+	if err != nil {
+		return nil, err
+	}
+	for _, sample := range samples {
+		name, value := sample.name, sample.value
 
 		host := extractLabel(name, "host")
 		if host == "" {
@@ -618,7 +666,7 @@ func parseHostMetrics(body string) []models.HostMetrics {
 		case strings.HasPrefix(name, "caddy_http_request_duration_seconds_count{"):
 			code := extractLabel(name, "code")
 			v := int64(value)
-			switch classifyStatusCode(code) {
+			switch bucket, _ := classifyStatusCode(code); bucket {
 			case "status_2xx":
 				h.Status2xx += v
 			case "status_3xx":
@@ -640,7 +688,7 @@ func parseHostMetrics(body string) []models.HostMetrics {
 	for _, h := range hostMap {
 		result = append(result, *h)
 	}
-	return result
+	return result, nil
 }
 
 func extractLabel(metricName string, label string) string {
@@ -656,8 +704,10 @@ func extractLabel(metricName string, label string) string {
 	return metricName[start : start+end]
 }
 
-func parseTCPRuleMetricsFromPrometheus(body string, upstreams []models.Upstream) gin.H {
+func parseTCPRuleMetricsFromPrometheus(body string, upstreams []models.Upstream) (gin.H, error) {
 	result := emptyRuleMetrics()
+	// TCP 没有健康信号来源，不输出 healthy 字段，前端显示为无数据
+	delete(result, "healthy")
 
 	upstreamSet := make(map[string]struct{})
 	for _, u := range upstreams {
@@ -665,23 +715,18 @@ func parseTCPRuleMetricsFromPrometheus(body string, upstreams []models.Upstream)
 			upstreamSet[fmt.Sprintf("%s:%d", u.Host, u.Port)] = struct{}{}
 		}
 	}
+	samples, err := parsePrometheusSamples(body)
+	if err != nil {
+		return nil, err
+	}
 	if len(upstreamSet) == 0 {
-		return result
+		return result, nil
 	}
 
 	var connectionsTotal, activeConnections int64
 
-	lines := strings.Split(body, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		name := fields[0]
-		value, _ := strconv.ParseFloat(fields[1], 64)
+	for _, sample := range samples {
+		name, value := sample.name, sample.value
 
 		upstream := extractLabel(name, "upstream")
 		if upstream == "" {
@@ -703,13 +748,17 @@ func parseTCPRuleMetricsFromPrometheus(body string, upstreams []models.Upstream)
 
 	result["requests_total"] = connectionsTotal
 	result["requests_in_flight"] = activeConnections
-	return result
+	return result, nil
 }
 
-func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protocol string, enableTLS bool) gin.H {
+func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protocol string, enableTLS bool) (gin.H, error) {
 	result := emptyRuleMetrics()
+	samples, err := parsePrometheusSamples(body)
+	if err != nil {
+		return nil, err
+	}
 	if domain == "" {
-		return result
+		return result, nil
 	}
 
 	domains := strings.Split(domain, ",")
@@ -730,17 +779,8 @@ func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protoco
 		}
 	}
 
-	lines := strings.Split(body, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		name := fields[0]
-		value, _ := strconv.ParseFloat(fields[1], 64)
+	for _, sample := range samples {
+		name, value := sample.name, sample.value
 
 		host := extractLabel(name, "host")
 		if host == "" {
@@ -757,8 +797,9 @@ func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protoco
 		case strings.HasPrefix(name, "caddy_http_request_duration_seconds_count{"):
 			code := extractLabel(name, "code")
 			v := int64(value)
-			bucket := classifyStatusCode(code)
-			result[bucket] = result[bucket].(int64) + v
+			if bucket, ok := classifyStatusCode(code); ok {
+				result[bucket] = result[bucket].(int64) + v
+			}
 		case strings.HasPrefix(name, "caddy_http_requests_in_flight{"):
 			result["requests_in_flight"] = result["requests_in_flight"].(int64) + int64(value)
 		case strings.Contains(name, "caddy_http_request_size_bytes_sum"):
@@ -768,25 +809,25 @@ func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protoco
 		}
 	}
 
-	return result
+	return result, nil
 }
 
-func classifyStatusCode(code string) string {
+func classifyStatusCode(code string) (string, bool) {
 	if code == "" {
-		return "status_2xx"
+		return "", false
 	}
 	prefix := code[:1]
 	switch prefix {
 	case "2":
-		return "status_2xx"
+		return "status_2xx", true
 	case "3":
-		return "status_3xx"
+		return "status_3xx", true
 	case "4":
-		return "status_4xx"
+		return "status_4xx", true
 	case "5":
-		return "status_5xx"
+		return "status_5xx", true
 	default:
-		return "status_2xx"
+		return "", false
 	}
 }
 

@@ -216,8 +216,9 @@ const saveProfile = async () => {
     return
   }
   saving.value = true
+  const passwordChanged = Boolean(profileForm.value.password)
+  if (passwordChanged) authStore.intentionalLogout = true
   try {
-    const passwordChanged = Boolean(profileForm.value.password)
     await request.patch('/users/me', {
       display_name: profileForm.value.display_name,
       ...(profileForm.value.password && { password: profileForm.value.password }),
@@ -231,6 +232,7 @@ const saveProfile = async () => {
       await authStore.fetchUser()
     }
   } finally {
+    if (passwordChanged && authStore.token) authStore.intentionalLogout = false
     saving.value = false
   }
 }

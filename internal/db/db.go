@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -13,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	_ "github.com/glebarez/sqlite"
 )
@@ -1225,14 +1225,16 @@ func Close() error {
 // generateCaddyIDForMigration generates a unique caddy_id for migration
 func generateCaddyIDForMigration() string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	randomBytes := make([]byte, 10)
+	if _, err := rand.Read(randomBytes); err != nil {
+		panic(fmt.Sprintf("crypto/rand unavailable for migration id: %v", err))
+	}
 	id := make([]byte, 13)
 	id[0] = 'l'
 	id[1] = 'b'
 	id[2] = '_'
 	for i := 3; i < 13; i++ {
-		n := len(charset)
-		r := int(uint64(time.Now().UnixNano()) % uint64(n))
-		id[i] = charset[r]
+		id[i] = charset[int(randomBytes[i-3])%len(charset)]
 	}
 	return string(id)
 }

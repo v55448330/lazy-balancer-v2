@@ -68,7 +68,6 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.POST("/cluster/nodes/report", clusterTokenAuth(db.DB), h.ReportClusterNode)
 
 		v1.Use(apiKeyAuth(cfg))
-
 		v1.Use(jwtAuth(cfg))
 		{
 			v1.GET("/caddy/metrics", h.GetCaddyMetrics)
@@ -353,6 +352,10 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 		if len(apiKey) < 13 {
+			if hasJWTBearer(c) {
+				c.Next()
+				return
+			}
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid API key"})
 			c.Abort()
 			return
@@ -373,6 +376,10 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 			  AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))
 		`, prefix, keyHash).Scan(&keyID, &keyName, &userID, &username, &role)
 		if err != nil {
+			if hasJWTBearer(c) {
+				c.Next()
+				return
+			}
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid API key"})
 			c.Abort()
 			return
@@ -388,6 +395,11 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func hasJWTBearer(c *gin.Context) bool {
+	authHeader := c.GetHeader("Authorization")
+	return strings.HasPrefix(authHeader, "Bearer ") && !strings.HasPrefix(authHeader, "Bearer lb_sk_")
 }
 
 func adminOnly() gin.HandlerFunc {

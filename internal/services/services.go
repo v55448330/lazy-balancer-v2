@@ -23,6 +23,7 @@ type MetricsService struct {
 	interval      int
 	client        *http.Client
 	stopCh        chan struct{}
+	stopOnce      sync.Once
 	overview      models.MetricsOverview
 	mu            sync.RWMutex
 	lastTotal     int64
@@ -62,7 +63,7 @@ func (m *MetricsService) Start() {
 }
 
 func (m *MetricsService) Stop() {
-	close(m.stopCh)
+	m.stopOnce.Do(func() { close(m.stopCh) })
 }
 
 func (m *MetricsService) collect() {
@@ -267,7 +268,7 @@ type perHostMetrics struct {
 
 // parsePerHostMetrics extracts cumulative request/byte counters grouped by
 // host label so per-rule history rows can be stored alongside the global row.
-func parsePerHostMetrics(text string) map[string]*perHostMetrics {
+func parsePerHostMetrics(text string) (map[string]*perHostMetrics, error) {
 	hosts := map[string]*perHostMetrics{}
 	get := func(host string) *perHostMetrics {
 		h, ok := hosts[host]
@@ -277,35 +278,50 @@ func parsePerHostMetrics(text string) map[string]*perHostMetrics {
 		}
 		return h
 	}
-	reCount := regexp.MustCompile(`caddy_http_request_duration_seconds_count\{[^}]*code="(\d+)"[^}]*host="([^"]+)"[^}]*\} (\d+)`)
+	reCount := regexp.MustCompile(`caddy_http_request_duration_seconds_count\{[^}]*code="(\d+)"[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
 	for _, m := range reCount.FindAllStringSubmatch(text, -1) {
 		if len(m) < 4 {
 			continue
 		}
-		code, _ := strconv.Atoi(m[1])
-		v, _ := strconv.ParseInt(m[3], 10, 64)
+		code, err := strconv.Atoi(m[1])
+		if err != nil {
+			return nil, fmt.Errorf("parse per-host HTTP status code %q: %w", m[1], err)
+		}
+		v, err := parsePrometheusInteger(m[3])
+		if err != nil {
+			return nil, fmt.Errorf("parse per-host request count %q: %w", m[3], err)
+		}
 		h := get(m[2])
 		h.requests += v
 		h.codes[code] += v
 	}
-	reRespSize := regexp.MustCompile(`caddy_http_response_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\} (\d+)`)
+	reRespSize := regexp.MustCompile(`caddy_http_response_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
 	for _, m := range reRespSize.FindAllStringSubmatch(text, -1) {
-		v, _ := strconv.ParseInt(m[2], 10, 64)
+		v, err := parsePrometheusInteger(m[2])
+		if err != nil {
+			return nil, fmt.Errorf("parse per-host response size %q: %w", m[2], err)
+		}
 		get(m[1]).bytesOut += v
 	}
-	reReqSize := regexp.MustCompile(`caddy_http_request_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\} (\d+)`)
+	reReqSize := regexp.MustCompile(`caddy_http_request_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
 	for _, m := range reReqSize.FindAllStringSubmatch(text, -1) {
-		v, _ := strconv.ParseInt(m[2], 10, 64)
+		v, err := parsePrometheusInteger(m[2])
+		if err != nil {
+			return nil, fmt.Errorf("parse per-host request size %q: %w", m[2], err)
+		}
 		get(m[1]).bytesIn += v
 	}
-	return hosts
+	return hosts, nil
 }
 
 // storePerHostMetrics maps host labels to HTTP rules by domain and writes a
 // cumulative history row per rule; TCP rules produce no rows because caddy-l4
 // exports no per-rule traffic counters.
 func (m *MetricsService) storePerHostMetrics(text string) error {
-	hosts := parsePerHostMetrics(text)
+	hosts, err := parsePerHostMetrics(text)
+	if err != nil {
+		return err
+	}
 	if len(hosts) == 0 {
 		return nil
 	}

@@ -197,20 +197,20 @@ func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains stri
 	return m.enqueueLocked(providerID, jobID, ruleID, domains)
 }
 
-func (m *CAQueueManager) EnqueueIfActive(providerID int, jobID int, ruleID, domains string, transition func() (bool, error)) (bool, error) {
+func (m *CAQueueManager) EnqueueIfActive(providerID int, jobID int, ruleID, domains string, transition func() (int, bool, error)) (int, bool, error) {
 	if m.beforeActiveEnqueue != nil {
 		m.beforeActiveEnqueue()
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.active {
-		return false, nil
+		return jobID, false, nil
 	}
-	changed, err := transition()
+	jobID, changed, err := transition()
 	if err != nil || !changed {
-		return changed, err
+		return jobID, changed, err
 	}
-	return true, m.enqueueLocked(providerID, jobID, ruleID, domains)
+	return jobID, true, m.enqueueLocked(providerID, jobID, ruleID, domains)
 }
 
 func (m *CAQueueManager) enqueueLocked(providerID int, jobID int, ruleID, domains string) error {

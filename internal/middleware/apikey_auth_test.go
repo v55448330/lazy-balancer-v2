@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
@@ -72,6 +73,52 @@ func TestAPIKeyAuthBindsOwningUser(t *testing.T) {
 	}
 	if !lastUsed.Valid || time.Since(lastUsed.Time) > time.Minute {
 		t.Fatalf("last_used not updated: %#v", lastUsed)
+	}
+}
+
+func TestJWTAuthAllowsValidJWTWithInvalidAPIKeyHeader(t *testing.T) {
+	oldDB := db.DB
+	database, err := sql.Open("sqlite", t.TempDir()+"/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.DB = database
+	db.SetDB(database)
+	t.Cleanup(func() {
+		db.DB = oldDB
+		db.SetDB(oldDB)
+		database.Close()
+	})
+	if _, err := database.Exec(`CREATE TABLE users (
+		id INTEGER PRIMARY KEY, username VARCHAR(50), role VARCHAR(20), is_enabled BOOLEAN DEFAULT TRUE,
+		password_version INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE TABLE api_keys (
+		id INTEGER PRIMARY KEY, name VARCHAR(100), key_hash VARCHAR(255), key_prefix VARCHAR(20),
+		created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN DEFAULT TRUE
+	);
+	INSERT INTO users VALUES (7, 'alice', 'user', 1, 0);`); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{JWTSecret: "test-secret"}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id": float64(7), "username": "alice", "pwd_ver": float64(0),
+	}).SignedString([]byte(cfg.JWTSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.Use(apiKeyAuth(cfg), jwtAuth(cfg))
+	router.GET("/probe", func(c *gin.Context) { c.Status(http.StatusOK) })
+	request := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-API-Key", "invalid")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
 }
 

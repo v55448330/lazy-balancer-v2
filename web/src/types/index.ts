@@ -76,6 +76,7 @@ export interface RuleMetrics {
   requests_in_flight?: number
   total_requests?: number
   healthy?: boolean
+  degraded?: boolean
   status_2xx: number
   status_3xx: number
   status_4xx: number

@@ -173,7 +173,7 @@ func (s *CaddyService) ApplyConfig(config map[string]interface{}) (err error) {
 }
 
 // ValidateConfig validates Caddy configuration using the /load API with validate=true
-func (s *CaddyService) ValidateConfig(config map[string]interface{}, uniqueID string) (err error) {
+func (s *CaddyService) ValidateConfig(config map[string]interface{}) (err error) {
 	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {
 		return errors.New(message)
 	}
@@ -215,7 +215,7 @@ func caddyPayload(config map[string]interface{}) map[string]interface{} {
 
 // ValidateRouteMergedConfig simulates PrependRouteToServer and validates the merged full config
 // This ensures the final merged config (existing routes + new route) is valid before any DB write
-func (s *CaddyService) ValidateRouteMergedConfig(serverName string, routeConfig map[string]interface{}, uniqueID string) error {
+func (s *CaddyService) ValidateRouteMergedConfig(serverName string, routeConfig map[string]interface{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -278,11 +278,11 @@ func (s *CaddyService) ValidateRouteMergedConfig(serverName string, routeConfig 
 	fullConfig["apps"] = apps
 
 	// Validate the merged full config
-	return s.validateConfigInternal(fullConfig, uniqueID)
+	return s.validateConfigInternal(fullConfig)
 }
 
 // validateConfigInternal validates config using Caddy /load API with validate=true
-func (s *CaddyService) validateConfigInternal(config map[string]interface{}, uniqueID string) error {
+func (s *CaddyService) validateConfigInternal(config map[string]interface{}) error {
 	data, err := json.Marshal(config)
 	if err != nil {
 		return err
@@ -1053,13 +1053,6 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 									detail.Unknown = true
 								}
 
-								if detail.Unknown {
-									// No failure evidence either way; assume healthy
-									// until Caddy reports otherwise.
-									detail.Unknown = false
-									detail.Healthy = true
-								}
-
 								healthStatus[serverName][dial] = detail
 							}
 						}
@@ -1089,10 +1082,6 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 									detail.Unknown = true
 								}
 
-								if detail.Unknown {
-									detail.Unknown = false
-									detail.Healthy = true
-								}
 
 								healthStatus[serverName][dial] = detail
 							}

@@ -86,8 +86,7 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 	var caProviderID int
 	var updatedAt sql.NullTime
 	err = db.DB.QueryRow("SELECT rule_id, domain, status, updated_at, ca_provider_id FROM cert_jobs WHERE id=?", id).Scan(&ruleID, &domain, &status, &updatedAt, &caProviderID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "任务不存在"})
+	if dbQueryNotFound(c, err, "任务不存在", "RetryCertJob query job") {
 		return
 	}
 
@@ -102,7 +101,7 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA queue manager not initialized"})
 		return
 	}
-	changed, err := qm.EnqueueIfActive(caProviderID, id, ruleID, domain, func() (bool, error) {
+	_, changed, err := qm.EnqueueIfActive(caProviderID, id, ruleID, domain, func() (int, bool, error) {
 		result, err := db.DB.Exec(`UPDATE cert_jobs
 			SET status='queued', message='重新排队签发', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now')
 			WHERE id=? AND status=? AND EXISTS (
@@ -110,10 +109,10 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 				WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND domain=?
 			)`, id, status, ruleID, domain)
 		if err != nil {
-			return false, err
+			return id, false, err
 		}
 		rowsAffected, err := result.RowsAffected()
-		return rowsAffected != 0, err
+		return id, rowsAffected != 0, err
 	})
 	if err != nil {
 		log.Printf("Manual retry enqueue failed for job %d: %v", id, err)
@@ -161,8 +160,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	defer operationLock.Unlock()
 	var ruleID, domain, status string
 	var caProviderID int
-	if err := db.DB.QueryRow("SELECT rule_id, domain, status, COALESCE(ca_provider_id,0) FROM cert_jobs WHERE id = ?", id).Scan(&ruleID, &domain, &status, &caProviderID); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
+	if err := db.DB.QueryRow("SELECT rule_id, domain, status, COALESCE(ca_provider_id,0) FROM cert_jobs WHERE id = ?", id).Scan(&ruleID, &domain, &status, &caProviderID); dbQueryNotFound(c, err, "Job not found", "DeleteCertJob query job") {
 		return
 	}
 	result, err := db.DB.Exec("UPDATE cert_jobs SET status='disabled', updated_at=datetime('now') WHERE id=? AND status=?", id, status)
@@ -190,16 +188,16 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 			if qm == nil {
 				restoreErr = errors.New("CA queue manager not initialized")
 			} else {
-				changed, restoreErr = qm.EnqueueIfActive(caProviderID, id, ruleID, domain, func() (bool, error) {
+				_, changed, restoreErr = qm.EnqueueIfActive(caProviderID, id, ruleID, domain, func() (int, bool, error) {
 					updateResult, updateErr := db.DB.Exec(`UPDATE cert_jobs SET status='queued', message='删除失败，重新排队签发', updated_at=datetime('now')
 						WHERE id=? AND status='disabled' AND EXISTS (
 							SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND domain=?
 						)`, id, ruleID, domain)
 					if updateErr != nil {
-						return false, updateErr
+						return id, false, updateErr
 					}
 					rows, rowsErr := updateResult.RowsAffected()
-					return rows == 1, rowsErr
+					return id, rows == 1, rowsErr
 				})
 			}
 			if restoreErr != nil || !changed {
@@ -231,19 +229,14 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 
 func (h *Handlers) GetCertJob(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
+	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
 		return
 	}
 	var j models.CertJob
 	err = db.DB.QueryRow("SELECT id, rule_id, domain, status, COALESCE(message,'') AS message, expires_at, created_at, updated_at, ca_available_after FROM cert_jobs WHERE id=?", id).
 		Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.Message, &j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt, &j.CAAvailableAfter)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get job"})
+	if dbQueryNotFound(c, err, "Job not found", "GetCertJob query job") {
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: j})
@@ -251,14 +244,13 @@ func (h *Handlers) GetCertJob(c *gin.Context) {
 
 func (h *Handlers) GetCertJobLogs(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
+	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
 		return
 	}
 
 	var ruleID string
-	if err := db.DB.QueryRow("SELECT rule_id FROM cert_jobs WHERE id=?", id).Scan(&ruleID); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Cert job not found"})
+	if err := db.DB.QueryRow("SELECT rule_id FROM cert_jobs WHERE id=?", id).Scan(&ruleID); dbQueryNotFound(c, err, "Cert job not found", "GetCertJobLogs query job") {
 		return
 	}
 

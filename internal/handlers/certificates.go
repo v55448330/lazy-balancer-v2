@@ -98,8 +98,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 
 	var oldName, oldProvider, oldCredentials string
 	var oldEnabled bool
-	if err := db.DB.QueryRow("SELECT name, dns_provider, COALESCE(dns_credentials,''), COALESCE(enabled,1) FROM certificate_configs WHERE id=?", id).Scan(&oldName, &oldProvider, &oldCredentials, &oldEnabled); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Config not found"})
+	if err := db.DB.QueryRow("SELECT name, dns_provider, COALESCE(dns_credentials,''), COALESCE(enabled,1) FROM certificate_configs WHERE id=?", id).Scan(&oldName, &oldProvider, &oldCredentials, &oldEnabled); dbQueryNotFound(c, err, "Config not found", "UpdateCertificateConfig query config") {
 		return
 	}
 	effectiveProvider := oldProvider
@@ -177,8 +176,7 @@ func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 		return
 	}
 	var name, provider string
-	if err := db.DB.QueryRow("SELECT name, dns_provider FROM certificate_configs WHERE id = ?", id).Scan(&name, &provider); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Config not found"})
+	if err := db.DB.QueryRow("SELECT name, dns_provider FROM certificate_configs WHERE id = ?", id).Scan(&name, &provider); dbQueryNotFound(c, err, "Config not found", "DeleteCertificateConfig query config") {
 		return
 	}
 	if _, err := db.DB.Exec("DELETE FROM certificate_configs WHERE id = ?", id); err != nil {
@@ -228,13 +226,19 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 		return
 	}
 
-	id, idErr := strconv.Atoi(c.Param("id"))
+	idParam := c.Param("id")
+	id, idErr := strconv.Atoi(idParam)
+	if idParam != "" && (idErr != nil || id <= 0) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid id parameter"})
+		return
+	}
 	var configName string
-	if idErr == nil && id > 0 {
+	if idParam != "" {
 		err := db.DB.QueryRow("SELECT name, dns_provider, COALESCE(dns_credentials,'') FROM certificate_configs WHERE id=?", id).Scan(&configName, &provider, &credentials)
-		if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			recordAudit(c, "测试失败", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), services.AuditResultPart("not_found")))
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Config not found"})
+		}
+		if dbQueryNotFound(c, err, "Config not found", "TestCertificateConfig query config") {
 			return
 		}
 		json.Unmarshal([]byte(credentials), &creds)
@@ -329,8 +333,13 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		err := db.DB.QueryRow(`SELECT COALESCE(enabled,0), COALESCE(enable_tls,0), COALESCE(protocol,''), COALESCE(tls_source,''), COALESCE(domain,'') FROM lb_rules WHERE caddy_id = ?`, req.CaddyID).
 			Scan(&enabled, &enableTLS, &protocol, &tlsSource, &ruleDomain)
 		if err != nil {
-			auditFailure("failed", "规则不存在")
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+			if errors.Is(err, sql.ErrNoRows) {
+				auditFailure("failed", "规则不存在")
+			} else {
+				auditFailure("failed", "查询规则失败")
+			}
+		}
+		if dbQueryNotFound(c, err, "规则不存在", "IssueCertificate query rule") {
 			return
 		}
 		if !enabled || protocol != "http" || !enableTLS || tlsSource != "acme_dns" {

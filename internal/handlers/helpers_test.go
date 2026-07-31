@@ -38,6 +38,14 @@ tcp        0      0 10.0.0.1:443           10.0.0.2:50008         TIME_WAIT`
 }
 
 func TestParseNetDevTotals_sums_all_non_loopback_interfaces(t *testing.T) {
+	original := systemMetricsReadFile
+	systemMetricsReadFile = func(path string) ([]byte, error) {
+		if path == "/proc/net/route" {
+			return []byte("Iface Destination Gateway Flags\nenp3s0 00000000 0100000A 0003\n"), nil
+		}
+		return original(path)
+	}
+	t.Cleanup(func() { systemMetricsReadFile = original })
 	fixture := `Inter-|   Receive                                                |  Transmit
  face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
     lo: 100 1 0 0 0 0 0 0 200 1 0 0 0 0 0 0
@@ -50,8 +58,8 @@ func TestParseNetDevTotals_sums_all_non_loopback_interfaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse net dev fixture: %v", err)
 	}
-	if bytesIn != 16000 || bytesOut != 20000 {
-		t.Fatalf("bytesIn=%d bytesOut=%d, want 16000/20000", bytesIn, bytesOut)
+	if bytesIn != 1000 || bytesOut != 2000 {
+		t.Fatalf("bytesIn=%d bytesOut=%d, want 1000/2000", bytesIn, bytesOut)
 	}
 }
 

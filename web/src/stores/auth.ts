@@ -28,6 +28,7 @@ export const useAuthStore = defineStore('auth', () => {
   const nodeMode = ref<ClusterNodeMode>('master')
   const timezone = ref<string>('Asia/Shanghai')
   const loading = ref(false)
+  const intentionalLogout = ref(false)
   const currentPage = ref<PageId>(initialCurrentPage)
 
   const isLoggedIn = computed(() => !!token.value && !isTokenExpired(token.value))
@@ -90,6 +91,7 @@ export const useAuthStore = defineStore('auth', () => {
         readonly node_mode: ClusterNodeMode
         readonly user?: CurrentUser
       }>('/auth/login', { username, password })
+      intentionalLogout.value = false
       token.value = res.token
       nodeMode.value = res.node_mode
       localStorage.setItem('token', res.token)
@@ -109,6 +111,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function logout() {
+    intentionalLogout.value = true
     user.value = null
     token.value = null
     nodeMode.value = 'master'
@@ -148,6 +151,7 @@ export const useAuthStore = defineStore('auth', () => {
     nodeMode,
     timezone,
     loading,
+    intentionalLogout,
     currentPage,
     isLoggedIn,
     readOnlyReason,

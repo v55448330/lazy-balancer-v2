@@ -52,8 +52,7 @@ func (h *Handlers) DeleteCurrentUserAPIKey(c *gin.Context) {
 	}
 	userID := currentUserID(c)
 	var name string
-	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ? AND created_by = ?", id, userID).Scan(&name); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
+	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ? AND created_by = ?", id, userID).Scan(&name); dbQueryNotFound(c, err, "API key not found", "DeleteCurrentUserAPIKey query key") {
 		return
 	}
 	result, err := db.DB.Exec("DELETE FROM api_keys WHERE id = ? AND created_by = ?", id, userID)
@@ -200,8 +199,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		args = append(args, userID)
 	}
 	var name string
-	if err := db.DB.QueryRow(query, args...).Scan(&name); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
+	if err := db.DB.QueryRow(query, args...).Scan(&name); dbQueryNotFound(c, err, "API key not found", "updateAPIKeyStatus query key") {
 		return
 	}
 	update := "UPDATE api_keys SET is_enabled = ? WHERE id = ?"
@@ -239,8 +237,7 @@ func (h *Handlers) DeleteAPIKey(c *gin.Context) {
 		return
 	}
 	var name string
-	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ?", id).Scan(&name); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
+	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ?", id).Scan(&name); dbQueryNotFound(c, err, "API key not found", "DeleteAPIKey query key") {
 		return
 	}
 	result, err := db.DB.Exec("DELETE FROM api_keys WHERE id = ?", id)

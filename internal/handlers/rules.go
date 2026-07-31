@@ -749,8 +749,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.ListenPort > 0 {
 		var currentPort int
 		err := db.DB.QueryRow("SELECT listen_port FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&currentPort)
-		if err != nil {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+		if dbQueryNotFound(c, err, "规则不存在", "UpdateRule query listen port") {
 			return
 		}
 		// Allow HTTP (80) -> HTTPS (443) upgrade when enabling TLS.
@@ -1308,7 +1307,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新规则失败"})
 		return
 	}
-	rowsAffected, _ := res.RowsAffected()
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		tx.Rollback()
+		log.Printf("UpdateRule RowsAffected error for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "确认规则更新结果失败"})
+		return
+	}
 	log.Printf("UpdateRule executed for caddy_id=%s: rows_affected=%d ca_provider_id_included=%v", caddyID, rowsAffected, req.CAProviderID != nil)
 	if rowsAffected == 0 {
 		tx.Rollback()
@@ -1549,8 +1554,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	var listenPort int
 	var domain string
 	err := db.DB.QueryRow("SELECT COALESCE(caddy_id,''), COALESCE(protocol,''), listen_port, COALESCE(domain,'') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&caddyID, &protocol, &listenPort, &domain)
-	if err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+	if dbQueryNotFound(c, err, "规则不存在", "DeleteRule query rule") {
 		return
 	}
 

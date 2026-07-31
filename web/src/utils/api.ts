@@ -92,32 +92,37 @@ service.interceptors.response.use(
     }
     return res
   },
-  (error) => {
+  async (error) => {
     if (axios.isCancel(error)) return Promise.reject(error)
     const status = error.response?.status
     const backendMsg = error.response?.data?.message
     const message = backendMsg || error.message || '网络错误'
-      if (status === 401) {
-        const isLoginRequest = error.config?.url?.includes('/auth/login')
-        if (!isLoginRequest) {
-          if (!sessionExpiredDialogOpen) {
-            sessionExpiredDialogOpen = true
-            ElMessageBox.confirm(backendMsg || '登录已过期，请重新登录', '会话失效', {
-              confirmButtonText: '确定',
-              cancelButtonText: '取消',
-              type: 'warning',
-            }).then(() => {
-              localStorage.removeItem('token')
-              window.location.reload()
-            }).catch(() => {
-              localStorage.removeItem('token')
-              window.location.reload()
-            })
-          }
+    if (status === 401) {
+      const isLoginRequest = error.config?.url?.includes('/auth/login')
+      if (!isLoginRequest) {
+        const { useAuthStore } = await import('@/stores/auth')
+        const authStore = useAuthStore()
+        if (authStore.intentionalLogout || !authStore.token || !localStorage.getItem('token')) {
+          return Promise.reject(new Error(message))
+        }
+        if (!sessionExpiredDialogOpen) {
+          sessionExpiredDialogOpen = true
+          ElMessageBox.confirm(backendMsg || '登录已过期，请重新登录', '会话失效', {
+            confirmButtonText: '确定',
+            cancelButtonText: '取消',
+            type: 'warning',
+          }).then(() => {
+            localStorage.removeItem('token')
+            window.location.reload()
+          }).catch(() => {
+            localStorage.removeItem('token')
+            window.location.reload()
+          })
+        }
       }
-      } else if (!error.config?.url?.includes('/auth/login')) {
-        ElMessage.error(message)
-      }
+    } else if (!error.config?.url?.includes('/auth/login')) {
+      ElMessage.error(message)
+    }
     return Promise.reject(new Error(message))
   }
 )

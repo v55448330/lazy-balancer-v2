@@ -625,7 +625,7 @@ func TestValidateRouteMergedConfig_insertsBeforeCatchAll_regardlessOfCatchAllInd
 	defer server.Close()
 
 	// When
-	err := NewCaddyService(server.URL).ValidateRouteMergedConfig("http_80", map[string]interface{}{"@id": "rule-new"}, "validation-id")
+	err := NewCaddyService(server.URL).ValidateRouteMergedConfig("http_80", map[string]interface{}{"@id": "rule-new"})
 
 	// Then
 	if err != nil {

@@ -77,7 +77,7 @@
                   <el-icon><Document /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ (caddyMetrics?.requests_total || 0).toLocaleString() }}</div>
+                  <div class="stat-value">{{ caddyMetricsUnavailable ? '采集失败' : caddyMetrics ? caddyMetrics.requests_total.toLocaleString() : '-' }}</div>
                   <div class="stat-label">总请求数</div>
                 </div>
               </div>
@@ -88,7 +88,7 @@
                   <el-icon><Loading /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ caddyMetrics?.requests_in_flight || 0 }}</div>
+                  <div class="stat-value">{{ caddyMetricsUnavailable ? '采集失败' : caddyMetrics ? caddyMetrics.requests_in_flight : '-' }}</div>
                   <div class="stat-label">进行中请求</div>
                 </div>
               </div>
@@ -99,7 +99,7 @@
                   <el-icon><CircleCheck /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ hostMetrics.length }}</div>
+                  <div class="stat-value">{{ hostMetricsUnavailable ? '采集失败' : hostMetrics ? hostMetrics.length : '-' }}</div>
                   <div class="stat-label">域名统计</div>
                 </div>
               </div>
@@ -112,7 +112,7 @@
                   <el-icon><TrendCharts /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ (overview?.requests_per_sec || 0).toFixed(2) }}</div>
+                  <div class="stat-value">{{ overviewUnavailable ? '采集失败' : overview ? overview.requests_per_sec.toFixed(2) : '-' }}</div>
                   <div class="stat-label">请求速率 /s</div>
                 </div>
               </div>
@@ -123,7 +123,7 @@
                   <el-icon><Odometer /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ overview?.latency_p50 || 0 }}ms</div>
+                  <div class="stat-value">{{ overviewUnavailable ? '采集失败' : overview ? `${overview.latency_p50}ms` : '-' }}</div>
                   <div class="stat-label">延迟 P50</div>
                 </div>
               </div>
@@ -134,7 +134,7 @@
                   <el-icon><Odometer /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ overview?.latency_p95 || 0 }}ms</div>
+                  <div class="stat-value">{{ overviewUnavailable ? '采集失败' : overview ? `${overview.latency_p95}ms` : '-' }}</div>
                   <div class="stat-label">延迟 P95</div>
                 </div>
               </div>
@@ -145,7 +145,7 @@
                   <el-icon><Odometer /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ overview?.latency_p99 || 0 }}ms</div>
+                  <div class="stat-value">{{ overviewUnavailable ? '采集失败' : overview ? `${overview.latency_p99}ms` : '-' }}</div>
                   <div class="stat-label">延迟 P99</div>
                 </div>
               </div>
@@ -166,14 +166,15 @@
               </div>
             </div>
           </template>
-          <el-row :gutter="32">
+          <div v-if="systemMetricsUnavailable" class="collection-state">采集失败</div>
+          <el-row v-else-if="systemMetrics" :gutter="32">
             <el-col :span="8">
               <div class="resource-item">
                 <div class="resource-header">
                   <span class="resource-label">CPU 使用率</span>
-                  <span class="resource-value text-blue">{{ (systemMetrics?.cpu_percent || 0).toFixed(1) }}%</span>
+                  <span class="resource-value text-blue">{{ systemMetrics.cpu_percent.toFixed(1) }}%</span>
                 </div>
-                <el-progress :percentage="Math.min(systemMetrics?.cpu_percent || 0, 100)" :stroke-width="6" color="#3b82f6" :show-text="false" />
+                <el-progress :percentage="Math.min(systemMetrics.cpu_percent, 100)" :stroke-width="6" color="#3b82f6" :show-text="false" />
               </div>
             </el-col>
             <el-col :span="8">
@@ -181,11 +182,11 @@
                 <div class="resource-header">
                   <span class="resource-label">内存使用</span>
                   <span class="resource-value text-purple">
-                    {{ formatBytes(systemMetrics?.memory_used || 0) }}
-                    <span class="resource-total">/ {{ formatBytes(systemMetrics?.memory_total || 0) }}</span>
+                    {{ formatBytes(systemMetrics.memory_used) }}
+                    <span class="resource-total">/ {{ formatBytes(systemMetrics.memory_total) }}</span>
                   </span>
                 </div>
-                <el-progress :percentage="Math.min(systemMetrics?.memory_percent || 0, 100)" :stroke-width="6" color="#8b5cf6" :show-text="false" />
+                <el-progress :percentage="Math.min(systemMetrics.memory_percent, 100)" :stroke-width="6" color="#8b5cf6" :show-text="false" />
               </div>
             </el-col>
             <el-col :span="8">
@@ -193,14 +194,15 @@
                 <div class="resource-header">
                   <span class="resource-label">磁盘使用</span>
                   <span class="resource-value text-cyan">
-                    {{ formatBytes(systemMetrics?.disk_used || 0) }}
-                    <span class="resource-total">/ {{ formatBytes(systemMetrics?.disk_total || 0) }}</span>
+                    {{ formatBytes(systemMetrics.disk_used) }}
+                    <span class="resource-total">/ {{ formatBytes(systemMetrics.disk_total) }}</span>
                   </span>
                 </div>
-                <el-progress :percentage="Math.min(systemMetrics?.disk_percent || 0, 100)" :stroke-width="6" color="#06b6d4" :show-text="false" />
+                <el-progress :percentage="Math.min(systemMetrics.disk_percent, 100)" :stroke-width="6" color="#06b6d4" :show-text="false" />
               </div>
             </el-col>
           </el-row>
+          <div v-else class="collection-state">-</div>
         </el-card>
       </el-col>
     </el-row>
@@ -216,7 +218,8 @@
               </div>
             </div>
           </template>
-          <div class="chart-container">
+          <div v-if="trafficUnavailable" class="chart-container collection-state">采集失败</div>
+          <div v-else class="chart-container">
             <v-chart :option="trafficChartOption" autoresize />
           </div>
         </el-card>
@@ -231,7 +234,8 @@
               </div>
             </div>
           </template>
-          <div class="chart-container">
+          <div v-if="connectionsUnavailable" class="chart-container collection-state">采集失败</div>
+          <div v-else class="chart-container">
             <v-chart :option="connChartOption" autoresize />
           </div>
         </el-card>
@@ -278,17 +282,18 @@
             </el-table-column>
             <el-table-column label="请求数" width="90" align="right">
               <template #default="{ row }">
-                <span class="text-primary">{{ (ruleMetrics[row.caddy_id]?.requests_total ?? 0).toLocaleString() }}</span>
+                <span class="text-primary">{{ ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-' }}</span>
               </template>
             </el-table-column>
             <el-table-column label="状态码" width="220" align="center">
               <template #default="{ row }">
                 <div v-if="row.protocol === 'tcp'" class="text-secondary">-</div>
-                <div v-else-if="(ruleMetrics[row.caddy_id]?.requests_total ?? 0) > 0" class="status-codes">
-                  <span class="status-code status-2xx" title="成功">2xx {{ ruleMetrics[row.caddy_id]?.status_2xx ?? 0 }}</span>
-                  <span class="status-code status-3xx" title="重定向">3xx {{ ruleMetrics[row.caddy_id]?.status_3xx ?? 0 }}</span>
-                  <span class="status-code status-4xx" title="客户端错误">4xx {{ ruleMetrics[row.caddy_id]?.status_4xx ?? 0 }}</span>
-                  <span class="status-code status-5xx" title="服务器错误">5xx {{ ruleMetrics[row.caddy_id]?.status_5xx ?? 0 }}</span>
+                <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">采集失败</span>
+                <div v-else-if="hasRuleRequests(row.caddy_id)" class="status-codes">
+                  <span class="status-code status-2xx" title="成功">2xx {{ ruleMetrics[row.caddy_id].status_2xx }}</span>
+                  <span class="status-code status-3xx" title="重定向">3xx {{ ruleMetrics[row.caddy_id].status_3xx }}</span>
+                  <span class="status-code status-4xx" title="客户端错误">4xx {{ ruleMetrics[row.caddy_id].status_4xx }}</span>
+                  <span class="status-code status-5xx" title="服务器错误">5xx {{ ruleMetrics[row.caddy_id].status_5xx }}</span>
                 </div>
                 <span v-else class="text-secondary">-</span>
               </template>
@@ -296,27 +301,29 @@
             <el-table-column label="入站流量" width="100" align="right">
               <template #default="{ row }">
                 <span v-if="row.protocol === 'tcp'" class="text-secondary">-</span>
-                <span v-else class="text-secondary">{{ formatBytes(ruleMetrics[row.caddy_id]?.bytes_in ?? 0) }}</span>
+                <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">采集失败</span>
+                <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_in) : '-' }}</span>
               </template>
             </el-table-column>
             <el-table-column label="出站流量" width="100" align="right">
               <template #default="{ row }">
                 <span v-if="row.protocol === 'tcp'" class="text-secondary">-</span>
-                <span v-else class="text-secondary">{{ formatBytes(ruleMetrics[row.caddy_id]?.bytes_out ?? 0) }}</span>
+                <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">采集失败</span>
+                <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_out) : '-' }}</span>
               </template>
             </el-table-column>
             <el-table-column label="处理中" width="70" align="center">
               <template #default="{ row }">
-                <span class="text-secondary">{{ ruleMetrics[row.caddy_id]?.requests_in_flight ?? 0 }}</span>
+                <span class="text-secondary">{{ ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-' }}</span>
               </template>
             </el-table-column>
             <el-table-column label="健康状态" width="80" align="center">
               <template #default="{ row }">
                 <el-tag v-if="!row.enabled" type="info" size="small" effect="plain">-</el-tag>
-                <el-tag v-else-if="ruleMetrics[row.caddy_id]?.healthy === undefined" type="info" size="small" effect="plain">-</el-tag>
-                <el-tag v-else :type="ruleMetrics[row.caddy_id]?.healthy ? 'success' : 'danger'" size="small" effect="plain">
-                  {{ ruleMetrics[row.caddy_id]?.healthy ? '健康' : '异常' }}
-                </el-tag>
+                <el-tag v-else-if="ruleHealthUnavailable || !ruleHealth[row.caddy_id] || ruleHealth[row.caddy_id] === 'unknown'" type="info" size="small" effect="plain">-</el-tag>
+                <el-tag v-else-if="ruleHealth[row.caddy_id] === 'unhealthy'" type="danger" size="small" effect="plain">异常</el-tag>
+                <el-tag v-else-if="ruleHealth[row.caddy_id] === 'degraded'" type="warning" size="small" effect="plain">降级</el-tag>
+                <el-tag v-else type="success" size="small" effect="plain">健康</el-tag>
               </template>
             </el-table-column>
             <template #empty>
@@ -408,8 +415,18 @@ const caddyStatus = ref('unknown')
 const caddyLoading = ref(false)
 const rules = ref<Rule[]>([])
 const ruleMetrics = ref<Record<string, RuleMetrics>>({})
-const hostMetrics = ref<HostMetrics[]>([])
+const ruleMetricsUnavailable = ref<Record<string, boolean>>({})
+type RuleHealth = 'unknown' | 'unhealthy' | 'degraded' | 'healthy'
+const ruleHealth = ref<Record<string, RuleHealth>>({})
+const ruleHealthUnavailable = ref(false)
+const hostMetrics = ref<HostMetrics[] | null>(null)
 const overview = ref<MetricsOverview | null>(null)
+const systemMetricsUnavailable = ref(false)
+const caddyMetricsUnavailable = ref(false)
+const hostMetricsUnavailable = ref(false)
+const overviewUnavailable = ref(false)
+const trafficUnavailable = ref(false)
+const connectionsUnavailable = ref(false)
 
 const trafficInHistory = ref<number[]>([])
 const trafficOutHistory = ref<number[]>([])
@@ -449,6 +466,7 @@ interface RuleHistoryResponse {
 interface UpstreamHealth {
   healthy?: boolean
   unknown?: boolean
+  degraded?: boolean
 }
 
 type HealthResponse = Record<string, Record<string, UpstreamHealth>>
@@ -557,6 +575,11 @@ const sortedRules = computed(() =>
   ),
 )
 
+const hasRuleRequests = (caddyId: string): boolean => {
+  const requests = ruleMetrics.value[caddyId]?.requests_total
+  return requests !== undefined && requests > 0
+}
+
 const ipList = computed(() => {
   const ips = systemInfo.value?.network_ips
   if (!ips || typeof ips !== 'object') return []
@@ -664,25 +687,44 @@ const fetchAllData = (): Promise<void> => {
     }),
     request.get('/system/metrics', config).then((res) => {
       if (disposed) return
-      if (res.data) systemMetrics.value = res.data
-    }),
+      if (!res.data) {
+        systemMetricsUnavailable.value = true
+        return
+      }
+      systemMetrics.value = res.data
+      systemMetricsUnavailable.value = false
+    }).catch(() => { if (!disposed) systemMetricsUnavailable.value = true }),
     request.get('/metrics/realtime', config).then((res) => {
       if (disposed) return
-      if (!res.data) return
+      if (!res.data) {
+        trafficUnavailable.value = true
+        return
+      }
       const data = res.data
       const now = Date.now()
-      trafficInHistory.value = [...trafficInHistory.value, data?.bytes_in || 0].slice(-60)
-      trafficOutHistory.value = [...trafficOutHistory.value, data?.bytes_out || 0].slice(-60)
+      trafficInHistory.value = [...trafficInHistory.value, data.bytes_in].slice(-60)
+      trafficOutHistory.value = [...trafficOutHistory.value, data.bytes_out].slice(-60)
       trafficTimestamps.value = [...trafficTimestamps.value, now].slice(-60)
-    }),
+      trafficUnavailable.value = false
+    }).catch(() => { if (!disposed) trafficUnavailable.value = true }),
     request.get('/caddy/metrics', config).then((res) => {
       if (disposed) return
-      if (res.data) caddyMetrics.value = res.data
-    }),
+      if (!res.data) {
+        caddyMetricsUnavailable.value = true
+        return
+      }
+      caddyMetrics.value = res.data
+      caddyMetricsUnavailable.value = false
+    }).catch(() => { if (!disposed) caddyMetricsUnavailable.value = true }),
     request.get('/caddy/host-metrics', config).then((res) => {
       if (disposed) return
-      if (res.data) hostMetrics.value = res.data || []
-    }),
+      if (!res.data) {
+        hostMetricsUnavailable.value = true
+        return
+      }
+      hostMetrics.value = res.data
+      hostMetricsUnavailable.value = false
+    }).catch(() => { if (!disposed) hostMetricsUnavailable.value = true }),
     request.get('/rules', config).then(async (res) => {
       if (disposed) return
       if (!res.data) return
@@ -696,17 +738,26 @@ const fetchAllData = (): Promise<void> => {
     }),
     request.get('/metrics/overview', config).then((res) => {
       if (disposed) return
-      if (res.data) overview.value = res.data
-    }),
+      if (!res.data) {
+        overviewUnavailable.value = true
+        return
+      }
+      overview.value = res.data
+      overviewUnavailable.value = false
+    }).catch(() => { if (!disposed) overviewUnavailable.value = true }),
     request.get('/metrics/connections', config).then((res) => {
       if (disposed) return
-      if (!res.data) return
+      if (!res.data) {
+        connectionsUnavailable.value = true
+        return
+      }
       const connData = res.data
       const now = Date.now()
-      connEstablishedHistory.value = [...connEstablishedHistory.value, connData?.established || 0].slice(-60)
-      connTimeWaitHistory.value = [...connTimeWaitHistory.value, connData?.time_wait || 0].slice(-60)
+      connEstablishedHistory.value = [...connEstablishedHistory.value, connData.established].slice(-60)
+      connTimeWaitHistory.value = [...connTimeWaitHistory.value, connData.time_wait].slice(-60)
       connTimestamps.value = [...connTimestamps.value, now].slice(-60)
-    }),
+      connectionsUnavailable.value = false
+    }).catch(() => { if (!disposed) connectionsUnavailable.value = true }),
     request.get('/caddy/status', config).then((res) => {
       if (disposed) return
       if (res.data) caddyStatus.value = res.data.status || 'unknown'
@@ -725,23 +776,14 @@ const fetchRuleHealth = async (currentRules: Rule[], version: number) => {
     const res = await request.get<APIResponse<HealthResponse>>('/config/health', { signal: abortController.signal })
     if (disposed || version !== rulesVersion) return
     const healthData = res.data || {}
-    const newRuleMetrics: Record<string, RuleMetrics> = {}
+    const nextRuleHealth: Record<string, RuleHealth> = {}
     currentRules.forEach((rule: Rule) => {
       const enabledUpstreams = rule.upstreams?.filter((upstream) => upstream.enabled !== false) || []
-      const metrics: RuleMetrics = { ...(ruleMetrics.value[rule.caddy_id] || {
-        requests_total: 0,
-        requests_in_flight: 0,
-        status_2xx: 0,
-        status_3xx: 0,
-        status_4xx: 0,
-        status_5xx: 0,
-        bytes_in: 0,
-        bytes_out: 0,
-      }), healthy: undefined }
-      if (rule.enabled && enabledUpstreams.length) {
-        let allFound = true
-        let allHealthy = true
+      let status: RuleHealth = 'unknown'
+      if (rule.enabled && rule.protocol !== 'tcp' && enabledUpstreams.length) {
         let hasUnknown = false
+        let hasUnhealthy = false
+        let hasDegraded = false
 
         enabledUpstreams.forEach((u) => {
           const key = `${u.host}:${u.port}`
@@ -753,25 +795,32 @@ const fetchRuleHealth = async (currentRules: Rule[], version: number) => {
               if (upHealth.unknown) {
                 hasUnknown = true
               } else if (!upHealth.healthy) {
-                allHealthy = false
+                hasUnhealthy = true
+              } else if (upHealth.degraded) {
+                hasDegraded = true
               }
               break
             }
           }
-          if (!found) allFound = false
+          if (!found) hasUnknown = true
         })
 
-        if (!allFound || hasUnknown) {
-          metrics.healthy = undefined
-        } else {
-          metrics.healthy = allHealthy
-        }
+        if (hasUnknown) status = 'unknown'
+        else if (hasUnhealthy) status = 'unhealthy'
+        else if (hasDegraded) status = 'degraded'
+        else status = 'healthy'
       }
-      newRuleMetrics[rule.caddy_id] = metrics
+      nextRuleHealth[rule.caddy_id] = status
     })
-    if (!disposed && version === rulesVersion) ruleMetrics.value = newRuleMetrics
+    if (!disposed && version === rulesVersion) {
+      ruleHealth.value = nextRuleHealth
+      ruleHealthUnavailable.value = false
+    }
   } catch (e) {
-    if (!disposed) console.error('Failed to fetch rule health:', e)
+    if (!disposed) {
+      ruleHealthUnavailable.value = true
+      console.error('Failed to fetch rule health:', e)
+    }
   } finally {
     isFetchingRuleHealth = false
   }
@@ -787,23 +836,24 @@ const fetchRuleMetrics = async (currentRules: Rule[], version: number) => {
     )
     const metricsResults = await Promise.allSettled(metricsPromises)
     if (disposed || version !== rulesVersion) return
-    const newRuleMetrics: Record<string, RuleMetrics> = {}
+    const nextRuleMetrics: Record<string, RuleMetrics> = {}
+    const nextUnavailable: Record<string, boolean> = {}
     metricsResults.forEach((result, index) => {
       const rule = currentRules[index]
       if (!rule) return
       if (result.status === 'fulfilled' && result.value?.data) {
-        newRuleMetrics[rule.caddy_id] = result.value.data
+        nextRuleMetrics[rule.caddy_id] = result.value.data
+        nextUnavailable[rule.caddy_id] = false
+      } else {
+        const existing = ruleMetrics.value[rule.caddy_id]
+        if (existing) nextRuleMetrics[rule.caddy_id] = existing
+        nextUnavailable[rule.caddy_id] = true
       }
     })
-    // Preserve existing health values until health endpoint updates them
-    Object.keys(ruleMetrics.value).forEach((caddyId: string) => {
-      const existing = (ruleMetrics.value as Record<string, RuleMetrics>)[caddyId]
-      const next = newRuleMetrics[caddyId]
-      if (next && existing && existing.healthy !== undefined) {
-        next.healthy = existing.healthy
-      }
-    })
-    if (!disposed && version === rulesVersion) ruleMetrics.value = newRuleMetrics
+    if (!disposed && version === rulesVersion) {
+      ruleMetrics.value = nextRuleMetrics
+      ruleMetricsUnavailable.value = nextUnavailable
+    }
   } catch (e) {
     if (!disposed) console.error('Failed to fetch rule metrics:', e)
   } finally {
@@ -973,6 +1023,7 @@ onUnmounted(() => {
 
 .chart-card :deep(.el-card__body) { height: 240px; padding: 16px; box-sizing: border-box; }
 .chart-container { height: 200px; }
+.collection-state { display: flex; align-items: center; justify-content: center; min-height: 80px; color: #909399; }
 
 .text-primary { color: #111827; }
 .text-secondary { color: #6b7280; }

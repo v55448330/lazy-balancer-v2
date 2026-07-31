@@ -283,7 +283,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 
 	// Generate config with requested overrides — DB is NOT touched yet
 	testConfig := services.GenerateCaddyConfig(h.cfg, &req)
-	if err := h.caddyService.ValidateConfig(testConfig, "global_config_validation"); err != nil {
+	if err := h.caddyService.ValidateConfig(testConfig); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "配置验证失败: " + err.Error()})
 		return
 	}
@@ -439,7 +439,7 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid config JSON"})
 		return
 	}
-	if err := h.caddyService.ValidateConfig(configData, ""); err != nil {
+	if err := h.caddyService.ValidateConfig(configData); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Config validation failed", Data: err.Error()})
 		return
 	}

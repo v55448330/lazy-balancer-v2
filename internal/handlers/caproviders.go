@@ -27,7 +27,7 @@ func (h *Handlers) ListCAProviders(c *gin.Context) {
 
 func (h *Handlers) GetCAProvider(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
+	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid id parameter"})
 		return
 	}
@@ -54,7 +54,7 @@ func credentialsMeaningfullyChanged(newCredentials, oldCredentials string) bool 
 
 func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
+	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid id parameter"})
 		return
 	}
@@ -147,7 +147,7 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 
 func (h *Handlers) TestCAProvider(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
+	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的 ID 参数"})
 		return
 	}

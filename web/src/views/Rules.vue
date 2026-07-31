@@ -874,7 +874,8 @@
         </el-table>
         
         <el-divider content-position="left">Caddy 配置 (JSON)</el-divider>
-        <pre class="config-code">{{ JSON.stringify(ruleConfig.config, null, 2) }}</pre>
+        <el-empty v-if="ruleConfig.config_not_exists" description="配置不存在" :image-size="60" />
+        <pre v-else class="config-code">{{ JSON.stringify(ruleConfig.config, null, 2) }}</pre>
       </div>
       <div v-else class="config-empty">
         <el-empty description="未找到该规则的配置信息" :image-size="60" />
@@ -1031,10 +1032,6 @@ interface CAProvider {
   updated_at: string
 }
 
-interface GlobalConfigSummary {
-  default_ca_provider_id?: number
-}
-
 interface UpstreamHealthDetail {
   healthy: boolean
   unknown: boolean
@@ -1094,6 +1091,7 @@ interface RuleConfigView {
   upstreams: Upstream[]
   enabled: boolean
   config: object | null
+  config_not_exists: boolean
 }
 
 interface RuleLogData {
@@ -1249,7 +1247,12 @@ const fetchCertInfo = async (caddyIds?: readonly string[]) => {
   const targetIds = tlsRules.map(r => r.caddy_id)
   const targetIdSet = new Set(targetIds)
   const generation = ++certInfoGeneration
-  const generationIds = requestedIds ? [...requestedIds] : [...new Set([...certInfoGenerations.keys(), ...targetIds])]
+  if (!requestedIds) {
+    for (const id of certInfoGenerations.keys()) {
+      if (!targetIdSet.has(id)) certInfoGenerations.delete(id)
+    }
+  }
+  const generationIds = requestedIds ? [...requestedIds] : targetIds
   generationIds.forEach(id => certInfoGenerations.set(id, generation))
   if (!requestedIds) {
     certInfoMap.value = Object.fromEntries(Object.entries(certInfoMap.value).filter(([id]) => targetIdSet.has(id)))
@@ -1262,10 +1265,14 @@ const fetchCertInfo = async (caddyIds?: readonly string[]) => {
     return
   }
   try {
-    const res = await request.post<APIResponse<Record<string, CertInfo | null>>>('/rules/cert-info', {
-      caddy_ids: tlsRules.map(r => r.caddy_id)
-    })
-    const certInfo = res.data || {}
+    const certInfo: Record<string, CertInfo | null> = {}
+    for (let index = 0; index < targetIds.length; index += 200) {
+      const batchIds = targetIds.slice(index, index + 200)
+      const res = await request.post<APIResponse<Record<string, CertInfo | null>>>('/rules/cert-info', {
+        caddy_ids: batchIds,
+      })
+      Object.assign(certInfo, res.data || {})
+    }
     const patch: Record<string, CertInfo | null> = {}
     targetIds.forEach(id => {
       if (certInfoGenerations.get(id) === generation) patch[id] = certInfo[id] ?? null
@@ -1388,7 +1395,6 @@ const upstreamTouched = ref<boolean[]>([])
 const certConfigs = ref<CertificateConfig[]>([])
 const caProviders = ref<CAProvider[]>([])
 const enabledCAProviders = computed(() => caProviders.value.filter(p => p.enabled))
-const globalConfig = ref<GlobalConfigSummary>({})
 const healthStatus = ref<Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }>>({})
 let healthPollTimer: ReturnType<typeof setInterval> | null = null
 let certJobPollTimer: ReturnType<typeof setInterval> | null = null
@@ -1817,15 +1823,6 @@ const fetchCAProviders = async () => {
     caProviders.value = res.data || []
   } catch (e) {
     console.error('Failed to load CA providers:', e)
-  }
-}
-
-const fetchGlobalConfig = async () => {
-  try {
-    const res = await request.get<APIResponse<GlobalConfigSummary>>('/config')
-    globalConfig.value = res.data || {}
-  } catch (e) {
-    console.error('Failed to load global config:', e)
   }
 }
 
@@ -2517,7 +2514,8 @@ const viewConfig = async (rule: Rule) => {
       server_tokens_hidden: rule.server_tokens_hidden || 0,
       upstreams: rule.upstreams || [],
       enabled: rule.enabled !== false,
-      config: res.data?.config || {}
+      config: res.data?.config ?? null,
+      config_not_exists: res.data?.config_not_exists === true,
     }
   } catch (error: unknown) {
     if (requestSeq !== configRequestSeq || !configDialogVisible.value) return
@@ -2553,7 +2551,8 @@ const viewConfig = async (rule: Rule) => {
       server_tokens_hidden: rule.server_tokens_hidden || 0,
       upstreams: rule.upstreams || [],
       enabled: rule.enabled !== false,
-      config: { error: '获取配置失败', details: error instanceof Error ? error.message : undefined }
+      config: { error: '获取配置失败', details: error instanceof Error ? error.message : undefined },
+      config_not_exists: false,
     }
   } finally {
     if (requestSeq === configRequestSeq) configLoading.value = false
@@ -2833,7 +2832,6 @@ onMounted(() => {
   fetchUsers()
   fetchCertConfigs()
   fetchCAProviders()
-  fetchGlobalConfig()
   fetchHealthStatus()
   healthPollTimer = setInterval(fetchHealthStatus, 15000)
   certJobPollTimer = setInterval(() => {

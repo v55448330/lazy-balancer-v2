@@ -58,17 +58,18 @@ func TestDisableCertJobsExceptDomain_disables_all_retired_jobs(t *testing.T) {
 	}
 }
 
-func TestCreateOrRequeueCertJob_returns_job_id_when_enqueue_fails(t *testing.T) {
+func TestCreateOrRequeueCertJob_returns_persisted_job_id(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
-	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: false}
+	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: true}
+	t.Cleanup(manager.Stop)
 
 	// When
 	jobID, err := CreateOrRequeueCertJob("lb_job_id", "example.com", 1, manager)
 
 	// Then
-	if err == nil || jobID <= 0 {
-		t.Fatalf("create result jobID=%d err=%v, want persisted ID and enqueue error", jobID, err)
+	if err != nil || jobID <= 0 {
+		t.Fatalf("create result jobID=%d err=%v, want persisted ID", jobID, err)
 	}
 	var storedID int
 	if err := database.QueryRow("SELECT id FROM cert_jobs WHERE rule_id='lb_job_id'").Scan(&storedID); err != nil {
@@ -86,10 +87,11 @@ func TestCreateOrRequeueCertJob_resets_retry_fields_before_enqueue(t *testing.T)
 		VALUES ('lb_retry_reset','retry.example','failed',4,datetime('now','-1 hour'),'rate_limited')`); err != nil {
 		t.Fatalf("seed retry job: %v", err)
 	}
-	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: false}
+	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: true}
+	t.Cleanup(manager.Stop)
 
-	if _, err := CreateOrRequeueCertJob("lb_retry_reset", "retry.example", 1, manager); err == nil {
-		t.Fatal("enqueue error=nil, want inactive queue error")
+	if _, err := CreateOrRequeueCertJob("lb_retry_reset", "retry.example", 1, manager); err != nil {
+		t.Fatalf("create or requeue job: %v", err)
 	}
 
 	var attempts int
@@ -100,6 +102,31 @@ func TestCreateOrRequeueCertJob_resets_retry_fields_before_enqueue(t *testing.T)
 	}
 	if attempts != 0 || availableAfter != nil || errorCode != nil {
 		t.Fatalf("retry fields=(%d,%v,%v), want zero and NULLs", attempts, availableAfter, errorCode)
+	}
+}
+
+func TestCreateOrRequeueCertJob_paused_queue_does_not_upsert(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO cert_jobs
+		(rule_id,domain,status,renewal_attempts,last_error_code)
+		VALUES ('lb_paused','paused.example','failed',4,'rate_limited')`); err != nil {
+		t.Fatalf("seed paused job: %v", err)
+	}
+	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: false}
+
+	jobID, err := CreateOrRequeueCertJob("lb_paused", "paused.example", 1, manager)
+
+	if err == nil || jobID != 0 {
+		t.Fatalf("result jobID=%d err=%v, want paused error without ID", jobID, err)
+	}
+	var status, errorCode string
+	var attempts int
+	if err := database.QueryRow(`SELECT status,renewal_attempts,last_error_code FROM cert_jobs
+		WHERE rule_id='lb_paused'`).Scan(&status, &attempts, &errorCode); err != nil {
+		t.Fatalf("read paused job: %v", err)
+	}
+	if status != "failed" || attempts != 4 || errorCode != "rate_limited" {
+		t.Fatalf("paused job=(%q,%d,%q), want original values", status, attempts, errorCode)
 	}
 }
 

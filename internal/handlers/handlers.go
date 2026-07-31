@@ -506,14 +506,14 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 	}
 
 	if data.Protocol == "tcp" {
-		return h.caddyService.ValidateConfig(services.GenerateSingleRuleCaddyConfig(ruleConfig), uniqueID+"_l4")
+		return h.caddyService.ValidateConfig(services.GenerateSingleRuleCaddyConfig(ruleConfig))
 	}
 
 	routeConfig, routeErr := services.GenerateRouteObject(ruleConfig)
 	if routeErr != nil {
 		return fmt.Errorf("路由配置生成失败: %v", routeErr)
 	}
-	if mergeErr := h.caddyService.ValidateRouteMergedConfig(serverName, routeConfig, uniqueID+"_merge"); mergeErr != nil {
+	if mergeErr := h.caddyService.ValidateRouteMergedConfig(serverName, routeConfig); mergeErr != nil {
 		return fmt.Errorf("Caddy 配置验证失败: %v", mergeErr)
 	}
 

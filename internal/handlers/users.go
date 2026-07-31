@@ -214,8 +214,7 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	}
 
 	var targetUsername string
-	if err := db.DB.QueryRow("SELECT username FROM users WHERE id = ?", id).Scan(&targetUsername); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+	if err := db.DB.QueryRow("SELECT username FROM users WHERE id = ?", id).Scan(&targetUsername); dbQueryNotFound(c, err, "User not found", "DeleteUser query user") {
 		return
 	}
 	result, err := db.DB.Exec("DELETE FROM users WHERE id = ?", id)

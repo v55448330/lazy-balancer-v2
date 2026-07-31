@@ -72,9 +72,13 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则上游失败: " + err.Error()})
 			return
 		}
-		metrics = parseTCPRuleMetricsFromPrometheus(string(body), upstreams)
+		metrics, err = parseTCPRuleMetricsFromPrometheus(string(body), upstreams)
 	} else {
-		metrics = parseRuleMetricsFromPrometheus(string(body), rule.Domain, rule.ListenPort, rule.Protocol, rule.EnableTLS)
+		metrics, err = parseRuleMetricsFromPrometheus(string(body), rule.Domain, rule.ListenPort, rule.Protocol, rule.EnableTLS)
+	}
+	if err != nil {
+		caddyMetricsError(c, err)
+		return
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
@@ -111,8 +115,7 @@ func metricsIntervalModifier(interval string) string {
 func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 	var protocol string
-	if err := db.DB.QueryRow("SELECT COALESCE(protocol,'') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol); err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+	if err := db.DB.QueryRow("SELECT COALESCE(protocol,'') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol); dbQueryNotFound(c, err, "规则不存在", "GetRuleMetricsHistory query rule") {
 		return
 	}
 	if protocol != "http" {
@@ -227,7 +230,11 @@ func (h *Handlers) GetCaddyMetrics(c *gin.Context) {
 		caddyMetricsError(c, err)
 		return
 	}
-	metrics := parsePrometheusMetrics(string(body))
+	metrics, err := parsePrometheusMetrics(string(body))
+	if err != nil {
+		caddyMetricsError(c, err)
+		return
+	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
 }
@@ -238,7 +245,11 @@ func (h *Handlers) GetHostMetrics(c *gin.Context) {
 		caddyMetricsError(c, err)
 		return
 	}
-	metrics := parseHostMetrics(string(body))
+	metrics, err := parseHostMetrics(string(body))
+	if err != nil {
+		caddyMetricsError(c, err)
+		return
+	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
 }

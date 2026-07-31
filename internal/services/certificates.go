@@ -420,16 +420,16 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 		if err := rows.Scan(&jobID, &ruleID, &domain, &caProviderID); err != nil {
 			continue
 		}
-		changed, err := qm.EnqueueIfActive(caProviderID, jobID, ruleID, domain, func() (bool, error) {
+		_, changed, err := qm.EnqueueIfActive(caProviderID, jobID, ruleID, domain, func() (int, bool, error) {
 			res, err := db.DB.Exec(
 				"UPDATE cert_jobs SET status='queued', message='冷却结束，重新排队签发', updated_at=datetime('now') WHERE id=? AND status='waiting_ca' AND (ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))",
 				jobID,
 			)
 			if err != nil {
-				return false, err
+				return jobID, false, err
 			}
 			rows, err := res.RowsAffected()
-			return rows != 0, err
+			return jobID, rows != 0, err
 		})
 		if err != nil {
 			log.Printf("waiting_ca scan: failed to requeue job %d: %v", jobID, err)
@@ -558,40 +558,48 @@ func CreateOrRequeueCertJob(ruleID, domains string, caProviderID int, qm *CAQueu
 	}
 	log.Printf("CreateOrRequeueCertJob rule=%s domain=%s ca_provider_id=%d", ruleID, joined, caProviderID)
 
-	var jobID int
-	err := db.DB.QueryRow(`
-		INSERT INTO cert_jobs (rule_id, domain, status, message, ca_provider_id)
-		VALUES (?, ?, 'queued', '等待排队签发', ?)
-		ON CONFLICT(rule_id, domain) DO UPDATE SET
-			status = CASE
-				WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.status
-				ELSE 'queued'
-			END,
-			message = CASE
-				WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.message
-				ELSE '重新排队签发'
-			END,
-			renewal_attempts = CASE
-				WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.renewal_attempts
-				ELSE 0
-			END,
-			ca_available_after = CASE
-				WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.ca_available_after
-				ELSE NULL
-			END,
-			last_error_code = CASE
-				WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.last_error_code
-				ELSE NULL
-			END,
-			ca_provider_id = excluded.ca_provider_id,
-			updated_at = datetime('now')
-		RETURNING id
-	`, ruleID, joined, caProviderID).Scan(&jobID)
-	if err != nil {
-		return 0, fmt.Errorf("upsert cert job: %w", err)
+	if qm == nil {
+		return 0, fmt.Errorf("CA queue manager not initialized")
 	}
-
-	return jobID, qm.Enqueue(caProviderID, jobID, ruleID, joined)
+	jobID, changed, err := qm.EnqueueIfActive(caProviderID, 0, ruleID, joined, func() (int, bool, error) {
+		var id int
+		err := db.DB.QueryRow(`
+			INSERT INTO cert_jobs (rule_id, domain, status, message, ca_provider_id)
+			VALUES (?, ?, 'queued', '等待排队签发', ?)
+			ON CONFLICT(rule_id, domain) DO UPDATE SET
+				status = CASE
+					WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.status
+					ELSE 'queued'
+				END,
+				message = CASE
+					WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.message
+					ELSE '重新排队签发'
+				END,
+				renewal_attempts = CASE
+					WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.renewal_attempts
+					ELSE 0
+				END,
+				ca_available_after = CASE
+					WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.ca_available_after
+					ELSE NULL
+				END,
+				last_error_code = CASE
+					WHEN cert_jobs.status = 'creating_account' AND cert_jobs.updated_at > datetime('now','-2 minutes') THEN cert_jobs.last_error_code
+					ELSE NULL
+				END,
+				ca_provider_id = excluded.ca_provider_id,
+				updated_at = datetime('now')
+			RETURNING id
+		`, ruleID, joined, caProviderID).Scan(&id)
+		return id, err == nil, err
+	})
+	if err != nil {
+		return jobID, fmt.Errorf("create or enqueue cert job: %w", err)
+	}
+	if !changed {
+		return 0, fmt.Errorf("CA queue is paused")
+	}
+	return jobID, nil
 }
 
 // HasCertJob reports whether any certificate job row exists for the given
@@ -654,16 +662,16 @@ func (s *CertificateService) renewExpiringCertificates() {
 			log.Printf("Renewal: CA queue manager not initialized")
 			return
 		}
-		changed, err := qm.EnqueueIfActive(j.CAProviderID, j.ID, j.RuleID, j.Domain, func() (bool, error) {
+		_, changed, err := qm.EnqueueIfActive(j.CAProviderID, j.ID, j.RuleID, j.Domain, func() (int, bool, error) {
 			res, err := db.DB.Exec(
 				"UPDATE cert_jobs SET status='queued', message='等待排队续期', updated_at=datetime('now') WHERE id=? AND status IN ('issued','failed','waiting_ca') AND (ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))",
 				j.ID,
 			)
 			if err != nil {
-				return false, err
+				return j.ID, false, err
 			}
 			rows, err := res.RowsAffected()
-			return rows != 0, err
+			return j.ID, rows != 0, err
 		})
 		if err != nil {
 			log.Printf("Renewal: failed to update job %d status: %v", j.ID, err)
