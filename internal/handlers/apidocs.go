@@ -22,6 +22,7 @@ type apiDocRoute struct {
 
 var apiDocRoutes = []apiDocRoute{
 	{"POST", "/auth/login", "认证", "用户登录", `{"username":"admin","password":"..."}`, `{"token":"jwt","user":{},"node_mode":"master"}`, []string{"400 invalid_request", "401 invalid_credentials"}, "密码仅用于验证，不返回。"},
+	{"POST", "/auth/ticket-login", "认证", "从节点票据登录", `{"ticket":"base64url(payload).base64url(signature)"}`, `{"token":"jwt","user":{},"node_mode":"slave"}`, []string{"400 invalid_request", "401 invalid_or_expired_ticket"}, "公开接口；仅从节点接受所属节点的一次性 60 秒登录票据。"},
 	{"GET", "/auth/setup", "认证", "检查是否需要初始化", "", `{"needs_setup":true}`, []string{}, "用户表为空时返回 needs_setup=true，前端应引导创建首个管理员。"},
 	{"POST", "/auth/setup", "认证", "创建首个管理员", `{"username":"admin","password":"...","display_name":""}`, `{"message":"管理员账号创建成功，请登录"}`, []string{"400 invalid_request", "403 already_initialized"}, "仅当用户表为空时可用。"},
 	{"GET", "/branding", "系统", "品牌文案配置", "", `{"app_name":"Lazy Balancer","footer_text":"Copyright © ..."}`, []string{}, "公开接口；读取 data/branding.json，不存在时以默认值播种。"},
@@ -86,6 +87,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"GET", "/cluster/register/:id/status", "集群机器接口", "轮询注册审批状态", "", `{"code":0,"data":{"status":"approved","cluster_token":"lb_cluster_..."}}`, []string{"401 注册凭证无效"}, "X-Registration-Secret 或 Bearer registration_secret；cluster_token 仅在首次 approved 响应返回。"},
 	{"POST", "/cluster/nodes/:id/approve", "集群", "批准待审批节点", "", `{"code":0,"message":"审批节点成功"}`, []string{"403 仅主节点管理员", "404 节点不存在"}, "admin JWT 或管理员 API Key；签发节点专属长期集群令牌，仅保存 SHA-256 哈希。"},
 	{"POST", "/cluster/nodes/:id/reject", "集群", "拒绝待审批节点", "", `{"code":0,"message":"拒绝节点成功"}`, []string{"403 仅主节点管理员", "404 节点不存在"}, "admin JWT 或管理员 API Key；删除节点记录。"},
+	{"POST", "/cluster/nodes/:id/login-ticket", "集群", "生成从节点登录票据", "", `{"ticket":"...","url":"https://10.0.0.2:8000"}`, []string{"403 仅主节点管理员", "409 节点不在线"}, "admin JWT 或管理员 API Key；票据 60 秒有效且只能使用一次。"},
 	{"DELETE", "/cluster/nodes/:id", "集群", "移除集群节点", "", `{"code":0,"message":"删除节点成功"}`, []string{"403 仅主节点管理员", "404 节点不存在"}, "admin JWT 或管理员 API Key；删除节点及其长期令牌哈希。"},
 	{"POST", "/cluster/mode", "集群", "主节点注册并切换为从节点", `{"mode":"slave","master_url":"https://master:8000","register_token":"...","node_name":"slave-a"}`, `{"code":0,"message":"已切换为从节点，等待主节点审批"}`, []string{"400 参数无效", "502 向目标主节点注册失败"}, "admin JWT 或管理员 API Key；仅在目标主节点注册成功后持久化 slave。http:// 地址成功但 message 包含明文传输警告。"},
 	{"POST", "/cluster/promote", "集群", "从节点提升为主节点", "", `{"code":0,"message":"已提升为主节点"}`, []string{"500 提升失败"}, "admin JWT 或管理员 API Key；清空主节点地址和集群令牌、停止同步、启动 ACME 并递增版本。"},

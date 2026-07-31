@@ -34,10 +34,12 @@ type ClusterService struct {
 	lifecycle            ClusterLifecycle
 	roleMu               sync.Mutex
 	beforeUpdateSettings func()
+	usedTicketMu         sync.Mutex
+	usedTickets          map[string]time.Time
 }
 
 func NewClusterService(database *sql.DB, lifecycle ClusterLifecycle) *ClusterService {
-	return &ClusterService{db: database, lifecycle: lifecycle}
+	return &ClusterService{db: database, lifecycle: lifecycle, usedTickets: make(map[string]time.Time)}
 }
 
 func randomHex(byteCount int) (string, error) {
@@ -75,6 +77,9 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 	if req.Port == 0 {
 		req.Port = 8000
 	}
+	if req.Protocol == "" {
+		req.Protocol = "http"
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return models.ClusterRegistration{}, fmt.Errorf("开始注册事务: %w", err)
@@ -99,9 +104,9 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 	err = tx.QueryRowContext(ctx, "SELECT id FROM nodes WHERE ip_address=? AND port=?", req.IPAddress, req.Port).Scan(&nodeID)
 	switch {
 	case err == nil:
-		_, err = tx.ExecContext(ctx, `UPDATE nodes SET name=?, status='pending', is_approved=0, registration_secret=?, registration_secret_expires_at=NULL, cluster_token_hash=NULL, cluster_token_delivered=0, reported_version=0, health_json=NULL, last_seen=NULL WHERE id=?`, req.Name, tokenHash(secret), nodeID)
+		_, err = tx.ExecContext(ctx, `UPDATE nodes SET name=?, protocol=?, status='pending', is_approved=0, registration_secret=?, registration_secret_expires_at=NULL, cluster_token_hash=NULL, cluster_token_delivered=0, reported_version=0, health_json=NULL, last_seen=NULL WHERE id=?`, req.Name, req.Protocol, tokenHash(secret), nodeID)
 	case errors.Is(err, sql.ErrNoRows):
-		insert, insertErr := tx.ExecContext(ctx, `INSERT INTO nodes (name, mode, ip_address, port, status, is_approved, registration_secret) VALUES (?, 'slave', ?, ?, 'pending', 0, ?)`, req.Name, req.IPAddress, req.Port, tokenHash(secret))
+		insert, insertErr := tx.ExecContext(ctx, `INSERT INTO nodes (name, mode, ip_address, port, protocol, status, is_approved, registration_secret) VALUES (?, 'slave', ?, ?, ?, 'pending', 0, ?)`, req.Name, req.IPAddress, req.Port, req.Protocol, tokenHash(secret))
 		if insertErr != nil {
 			return models.ClusterRegistration{}, fmt.Errorf("创建待审批节点: %w", insertErr)
 		}

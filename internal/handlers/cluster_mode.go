@@ -33,7 +33,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		name = h.cfg.NodeName
 	}
 	registration, err := h.syncService.RegisterWithMaster(c.Request.Context(), req.MasterURL, models.ClusterRegisterRequest{
-		Token: req.RegisterToken, Name: name, IPAddress: localOutboundIP(), Port: h.cfg.Port,
+		Token: req.RegisterToken, Name: name, IPAddress: localOutboundIP(), Port: h.cfg.Port, Protocol: requestProtocol(c),
 	})
 	if err != nil {
 		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", err.Error()))
@@ -56,6 +56,13 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		message += "；警告：证书私钥将经明文 HTTP 传输，建议使用 HTTPS"
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message})
+}
+
+func requestProtocol(c *gin.Context) string {
+	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
+		return "https"
+	}
+	return "http"
 }
 
 func (h *Handlers) PromoteClusterNode(c *gin.Context) {

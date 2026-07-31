@@ -1,8 +1,10 @@
 package middleware
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -78,12 +80,14 @@ func TestSetupRouter_registers_cluster_contract_and_removes_legacy_routes(t *tes
 		"GET /api/v1/cluster/register/:id/status",
 		"POST /api/v1/cluster/nodes/:id/approve",
 		"POST /api/v1/cluster/nodes/:id/reject",
+		"POST /api/v1/cluster/nodes/:id/login-ticket",
 		"DELETE /api/v1/cluster/nodes/:id",
 		"POST /api/v1/cluster/mode",
 		"POST /api/v1/cluster/promote",
 		"GET /api/v1/cluster/sync/snapshot",
 		"POST /api/v1/cluster/sync/pull",
 		"POST /api/v1/cluster/nodes/report",
+		"POST /api/v1/auth/ticket-login",
 		"PUT /api/v1/cluster/settings",
 	}
 	for _, route := range expected {
@@ -95,6 +99,43 @@ func TestSetupRouter_registers_cluster_contract_and_removes_legacy_routes(t *tes
 		if route == "POST /api/v1/nodes/register" || route == "GET /api/v1/sync/status" || route == "GET /api/v1/sync/config" || route == "POST /api/v1/sync/pull" || route == "POST /api/v1/nodes/:id/heartbeat" {
 			t.Errorf("legacy route remains registered: %s", route)
 		}
+	}
+}
+
+func TestClusterLoginTicketSignsAndLogsIntoSlave(t *testing.T) {
+	router := newMiddlewareTestRouter(t)
+	key := "lb_sk_ticket-admin-secret"
+	clusterToken := "lb_cluster_ticket-secret"
+	addClusterRouteTestAPIKey(t, 103, "ticket-admin", "admin", key)
+	hash := sha256.Sum256([]byte(clusterToken))
+	if _, err := db.DB.Exec(`INSERT INTO nodes (id,name,ip_address,port,protocol,status,is_approved,cluster_token_hash) VALUES (9,'slave', '10.0.0.9',8443,'https','online',1,?)`, hex.EncodeToString(hash[:])); err != nil {
+		t.Fatal(err)
+	}
+
+	issued := requestWithAPIKey(router, http.MethodPost, "/api/v1/cluster/nodes/9/login-ticket", key)
+	if issued.Code != http.StatusOK {
+		t.Fatalf("issue status=%d body=%s", issued.Code, issued.Body.String())
+	}
+	var ticketResponse struct {
+		Ticket string `json:"ticket"`
+		URL    string `json:"url"`
+	}
+	if err := json.Unmarshal(issued.Body.Bytes(), &ticketResponse); err != nil {
+		t.Fatal(err)
+	}
+	if ticketResponse.URL != "https://10.0.0.9:8443" {
+		t.Fatalf("url=%q", ticketResponse.URL)
+	}
+	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0,cluster_token=?,registration_id=9 WHERE id=1", clusterToken); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]string{"ticket": ticketResponse.Ticket})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/ticket-login", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"node_mode":"slave"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"token":`)) {
+		t.Fatalf("login status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

@@ -38,7 +38,7 @@ docker run -d \
   -v $(pwd)/logs:/app/logs \
   -v $(pwd)/certs:/app/certs \
   -e LOG_FILE=/app/logs/lazy-balancer.log \
-  v55448330/lazy-balancer-v2:v2.0.5
+  v55448330/lazy-balancer-v2:v2.0.6
 ```
 
 > 镜像与 Caddy 需要直接绑定宿主机端口（80/443 及自定义监听端口），建议使用 `--network host`（Linux）。macOS/Windows 下可用 `-p 8000:8000 -p 80:80 -p 443:443` 桥接映射。
@@ -117,7 +117,7 @@ Go 1.26 · Gin · SQLite · Caddy v2.11.4 + caddy-l4 v0.1.2 · Vue 3 · Element 
 ## 镜像
 
 ```
-v55448330/lazy-balancer-v2:v2.0.5
+v55448330/lazy-balancer-v2:v2.0.6
 ```
 
 ## License

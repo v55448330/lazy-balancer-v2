@@ -3,8 +3,10 @@ package middleware
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 
@@ -63,6 +65,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.GET("/openapi.yaml", h.GetOpenAPIYAML)
 		v1.GET("/docs", h.GetAPIDocs)
 		v1.POST("/auth/login", h.Login)
+		v1.POST("/auth/ticket-login", h.TicketLogin)
 		v1.GET("/auth/setup", h.GetSetupStatus)
 		v1.POST("/auth/setup", h.SetupAdmin)
 		v1.GET("/branding", h.GetBranding)
@@ -99,6 +102,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/cluster/register-tokens", h.GenerateClusterRegisterToken)
 				admin.POST("/cluster/nodes/:id/approve", h.ApproveClusterNode)
 				admin.POST("/cluster/nodes/:id/reject", h.RejectClusterNode)
+				admin.POST("/cluster/nodes/:id/login-ticket", h.GenerateClusterLoginTicket)
 				admin.DELETE("/cluster/nodes/:id", h.DeleteClusterNode)
 				admin.POST("/cluster/mode", h.SetClusterMode)
 				admin.POST("/cluster/promote", h.PromoteClusterNode)
@@ -391,6 +395,30 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid API key"})
 			c.Abort()
 			return
+		}
+		if mcpIPWhitelist != "" {
+			var whitelist []string
+			if err := json.Unmarshal([]byte(mcpIPWhitelist), &whitelist); err != nil {
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "API Key IP 白名单配置无效"})
+				return
+			}
+			clientIP := net.ParseIP(c.ClientIP())
+			allowed := false
+			for _, cidr := range whitelist {
+				_, network, err := net.ParseCIDR(cidr)
+				if err != nil {
+					c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "API Key IP 白名单配置无效"})
+					return
+				}
+				if network.Contains(clientIP) {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "来源 IP 不在白名单"})
+				return
+			}
 		}
 
 		if _, err := db.DB.Exec("UPDATE api_keys SET last_used = datetime('now') WHERE id = ?", keyID); err != nil {

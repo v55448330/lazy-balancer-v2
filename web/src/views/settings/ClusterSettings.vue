@@ -20,12 +20,14 @@
       :token-loading="tokenLoading"
       :settings-loading="settingsLoading"
       :pending-node-id="pendingNodeId"
+      :login-node-id="loginNodeId"
       :read-only="isNonAdminReadOnly"
       @generate-token="generateRegisterToken"
       @update-sync="updateSyncSetting"
       @approve="approveNode"
       @reject="rejectNode"
       @remove="removeNode"
+      @login="loginNode"
     />
 
     <ClusterSlavePanel
@@ -79,6 +81,11 @@ interface ActionResponse {
   readonly message: string
 }
 
+interface LoginTicketResponse {
+  readonly ticket: string
+  readonly url: string
+}
+
 const authStore = useAuthStore()
 const status = ref<ClusterStatus | null>(null)
 const nodes = ref<readonly ClusterNode[]>([])
@@ -91,6 +98,7 @@ const syncing = ref(false)
 const promoting = ref(false)
 const intervalSaving = ref(false)
 const pendingNodeId = ref<number | null>(null)
+const loginNodeId = ref<number | null>(null)
 const registrationRequest = ref(0)
 const tokenDialogVisible = ref(false)
 const registerToken = ref<ClusterRegisterToken | null>(null)
@@ -286,6 +294,28 @@ const rejectNode = async (node: ClusterNode): Promise<void> => {
 const removeNode = async (node: ClusterNode): Promise<void> => {
   const confirmed = await confirmAction(`确定删除节点“${node.name}”吗？删除后该节点将无法继续同步。`, '删除确认')
   if (confirmed) await runNodeAction(node, 'remove')
+}
+
+const loginNode = async (node: ClusterNode): Promise<void> => {
+  if (isNonAdminReadOnly.value || node.status !== 'online' || loginNodeId.value !== null) return
+  const loginWindow = window.open('', '_blank')
+  if (!loginWindow) {
+    ElMessage.warning('浏览器阻止了新窗口，请允许弹出窗口后重试')
+    return
+  }
+  loginWindow.opener = null
+  loginNodeId.value = node.id
+  try {
+    const response = await request.post<LoginTicketResponse>(`/cluster/nodes/${node.id}/login-ticket`)
+    const target = new URL('/', response.url)
+    target.searchParams.set('login_ticket', response.ticket)
+    loginWindow.location.replace(target.toString())
+  } catch (error: unknown) {
+    loginWindow.close()
+    throw error
+  } finally {
+    loginNodeId.value = null
+  }
 }
 
 onMounted(async () => {

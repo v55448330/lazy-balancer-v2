@@ -113,7 +113,7 @@ func (s *ClusterService) Nodes(ctx context.Context, now time.Time) ([]models.Clu
 	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(cluster_version,0), COALESCE(sync_interval,60) FROM global_config WHERE id=1").Scan(&currentVersion, &syncInterval); err != nil {
 		return nil, fmt.Errorf("读取集群版本: %w", err)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,ip_address,port,is_approved,COALESCE(reported_version,0),COALESCE(health_json,''),last_seen,created_at FROM nodes ORDER BY id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,ip_address,port,COALESCE(protocol,'http'),is_approved,COALESCE(reported_version,0),COALESCE(health_json,''),last_seen,created_at FROM nodes ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取节点列表: %w", err)
 	}
@@ -123,7 +123,7 @@ func (s *ClusterService) Nodes(ctx context.Context, now time.Time) ([]models.Clu
 		var node models.ClusterNodeView
 		var lastSeen, createdAt sql.NullTime
 		var healthJSON string
-		if err := rows.Scan(&node.ID, &node.Name, &node.IPAddress, &node.Port, &node.IsApproved, &node.ReportedVersion, &healthJSON, &lastSeen, &createdAt); err != nil {
+		if err := rows.Scan(&node.ID, &node.Name, &node.IPAddress, &node.Port, &node.Protocol, &node.IsApproved, &node.ReportedVersion, &healthJSON, &lastSeen, &createdAt); err != nil {
 			return nil, fmt.Errorf("扫描节点列表: %w", err)
 		}
 		node.CurrentVersion = currentVersion

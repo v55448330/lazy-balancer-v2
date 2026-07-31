@@ -2,8 +2,6 @@ package middleware
 
 import (
 	"crypto/tls"
-	"encoding/json"
-	"net"
 	"net/http"
 	"time"
 
@@ -20,29 +18,7 @@ func mcpAccessGuard() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "MCP 功能未开启"})
 			return
 		}
-		encoded := c.GetString("api_key_mcp_ip_whitelist")
-		if encoded == "" {
-			c.Next()
-			return
-		}
-		var whitelist []string
-		if err := json.Unmarshal([]byte(encoded), &whitelist); err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "MCP IP 白名单配置无效"})
-			return
-		}
-		clientIP := net.ParseIP(c.ClientIP())
-		for _, cidr := range whitelist {
-			_, network, err := net.ParseCIDR(cidr)
-			if err != nil {
-				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "MCP IP 白名单配置无效"})
-				return
-			}
-			if network.Contains(clientIP) {
-				c.Next()
-				return
-			}
-		}
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "来源 IP 不在白名单"})
+		c.Next()
 	}
 }
 

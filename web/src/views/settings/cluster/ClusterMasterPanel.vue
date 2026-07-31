@@ -62,13 +62,16 @@
       <el-table-column label="最后上报时间" min-width="170">
         <template #default="{ row }">{{ formatDate(row.last_seen) || '-' }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="150" fixed="right" align="center">
+      <el-table-column label="操作" width="180" fixed="right" align="center">
         <template #default="{ row }">
           <template v-if="row.status === 'pending' || !row.is_approved">
             <el-button link type="primary" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('approve', row)">确认</el-button>
             <el-button link type="danger" size="small" :disabled="readOnly || pendingNodeId !== null" @click="$emit('reject', row)">拒绝</el-button>
           </template>
-          <el-button v-else link type="danger" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('remove', row)">删除</el-button>
+          <template v-else>
+            <el-button v-if="!readOnly" link type="primary" size="small" :loading="loginNodeId === row.id" :disabled="row.status !== 'online' || loginNodeId !== null" @click="$emit('login', row)">登录</el-button>
+            <el-button link type="danger" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('remove', row)">删除</el-button>
+          </template>
         </template>
       </el-table-column>
       <template #empty><el-empty description="暂无集群节点" :image-size="60" /></template>
@@ -88,6 +91,7 @@ const props = defineProps<{
   readonly tokenLoading: boolean
   readonly settingsLoading: boolean
   readonly pendingNodeId: number | null
+  readonly loginNodeId: number | null
   readonly readOnly: boolean
 }>()
 
@@ -97,6 +101,7 @@ const emit = defineEmits<{
   (event: 'approve', node: ClusterNode): void
   (event: 'reject', node: ClusterNode): void
   (event: 'remove', node: ClusterNode): void
+  (event: 'login', node: ClusterNode): void
 }>()
 
 const handleSyncChange = (value: string | number | boolean): void => {

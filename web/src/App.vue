@@ -21,6 +21,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { isTokenExpired } from '@/utils/api'
+import { ElMessage } from 'element-plus'
 import Login from '@/views/Login.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Dashboard from '@/views/Dashboard.vue'
@@ -36,7 +37,28 @@ const loading = ref(true)
 const currentPage = computed(() => authStore.currentPage)
 
 onMounted(async () => {
-  await authStore.init()
-  loading.value = false
+  const url = new URL(window.location.href)
+  const hasLoginTicket = url.searchParams.has('login_ticket')
+  const loginTicket = url.searchParams.get('login_ticket') ?? ''
+  if (hasLoginTicket) {
+    url.searchParams.delete('login_ticket')
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+  }
+
+  try {
+    if (hasLoginTicket) {
+      try {
+        await authStore.loginWithTicket(loginTicket)
+        authStore.setCurrentPage('dashboard')
+      } catch {
+        authStore.logout()
+        ElMessage.error('登录票据无效或已过期，请重新登录')
+      }
+    } else {
+      await authStore.init()
+    }
+  } finally {
+    loading.value = false
+  }
 })
 </script>

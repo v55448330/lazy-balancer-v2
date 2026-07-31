@@ -97,8 +97,8 @@ service.interceptors.response.use(
     const status = error.response?.status
     const backendMsg = error.response?.data?.message
     const message = backendMsg || error.message || '网络错误'
+    const isLoginRequest = error.config?.url?.includes('/auth/login') || error.config?.url?.includes('/auth/ticket-login')
     if (status === 401) {
-      const isLoginRequest = error.config?.url?.includes('/auth/login')
       if (!isLoginRequest) {
         const { useAuthStore } = await import('@/stores/auth')
         const authStore = useAuthStore()
@@ -120,7 +120,7 @@ service.interceptors.response.use(
           })
         }
       }
-    } else if (!error.config?.url?.includes('/auth/login')) {
+    } else if (!isLoginRequest) {
       ElMessage.error(message)
     }
     return Promise.reject(new Error(message))

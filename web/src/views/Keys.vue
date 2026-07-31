@@ -50,6 +50,9 @@
                 <el-tag :type="key.read_only ? 'warning' : 'success'" size="small" effect="plain">
                   {{ key.read_only ? '只读' : '读写' }}
                 </el-tag>
+                <el-tooltip v-if="whitelistEntries(key.mcp_ip_whitelist).length" :content="whitelistSummary(key.mcp_ip_whitelist)" placement="top">
+                  <el-tag type="warning" size="small" effect="plain">IP 白名单</el-tag>
+                </el-tooltip>
               </div>
             </el-descriptions-item>
             <el-descriptions-item label="创建时间">
@@ -123,7 +126,7 @@
           :closable="false"
           show-icon
         />
-        <el-form-item v-if="createForm.mcp_enabled" label="IP 白名单" :error="createWhitelistError">
+        <el-form-item label="IP 白名单" :error="createWhitelistError">
           <el-input
             v-model="createForm.whitelistText"
             type="textarea"
@@ -134,7 +137,7 @@
           />
         </el-form-item>
         <el-alert
-          title="MCP 服务地址为 /api/v1/mcp，使用 API Key 认证。IP 白名单仅在 MCP 功能开启时生效。"
+          title="IP 白名单对该密钥的所有请求生效（含 MCP 与 REST API）。"
           type="info"
           :closable="false"
           show-icon
@@ -170,7 +173,7 @@
           :closable="false"
           show-icon
         />
-        <el-form-item v-if="featureForm.mcp_enabled" label="IP 白名单" :error="featureWhitelistError">
+        <el-form-item label="IP 白名单" :error="featureWhitelistError">
           <el-input
             v-model="featureForm.whitelistText"
             type="textarea"
@@ -181,7 +184,7 @@
           />
         </el-form-item>
         <el-alert
-          title="MCP 服务地址为 /api/v1/mcp，使用 API Key 认证。IP 白名单仅在 MCP 功能开启时生效。"
+          title="IP 白名单对该密钥的所有请求生效（含 MCP 与 REST API）。"
           type="info"
           :closable="false"
           show-icon
@@ -295,6 +298,14 @@ const parseWhitelist = (value: string[] | string): string => {
   }
 }
 
+const whitelistEntries = (value: string[] | string): string[] => parseWhitelist(value).split('\n').filter(Boolean)
+
+const whitelistSummary = (value: string[] | string): string => {
+  const entries = whitelistEntries(value)
+  const preview = entries.slice(0, 3).join('、')
+  return `${entries.length} 条：${preview}${entries.length > 3 ? ' 等' : ''}`
+}
+
 const serializeWhitelist = (value: string): { readonly value: string[]; readonly error: string } => {
   const rows = value.split(/\r?\n/)
     .map((cidr, originalIndex) => ({ cidr: normalizeCidr(cidr), originalIndex }))
@@ -324,7 +335,7 @@ async function createKey() {
     return
   }
   const whitelist = serializeWhitelist(createForm.value.whitelistText)
-  if (createForm.value.mcp_enabled && whitelist.error) {
+  if (whitelist.error) {
     createWhitelistError.value = whitelist.error
     return
   }
@@ -371,7 +382,7 @@ const resetFeatureForm = (): void => {
 const saveFeatures = async (): Promise<void> => {
   if (isReadOnly.value || featureSaving.value || !featureTarget.value) return
   const whitelist = serializeWhitelist(featureForm.value.whitelistText)
-  if (featureForm.value.mcp_enabled && whitelist.error) {
+  if (whitelist.error) {
     featureWhitelistError.value = whitelist.error
     return
   }

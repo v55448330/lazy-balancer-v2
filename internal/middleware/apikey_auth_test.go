@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,6 +75,49 @@ func TestAPIKeyAuthBindsOwningUser(t *testing.T) {
 	}
 	if !lastUsed.Valid || time.Since(lastUsed.Time) > time.Minute {
 		t.Fatalf("last_used not updated: %#v", lastUsed)
+	}
+}
+
+func TestAPIKeyAuthAppliesIPWhitelistToRESTRequests(t *testing.T) {
+	oldDB := db.DB
+	database, err := sql.Open("sqlite", t.TempDir()+"/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.DB = database
+	db.SetDB(database)
+	t.Cleanup(func() {
+		db.DB = oldDB
+		db.SetDB(oldDB)
+		database.Close()
+	})
+	if _, err := database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT, is_enabled BOOLEAN);
+		CREATE TABLE api_keys (id INTEGER PRIMARY KEY, name TEXT, key_hash TEXT, key_prefix TEXT, created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN, mcp_enabled BOOLEAN, read_only BOOLEAN, mcp_ip_whitelist TEXT);
+		INSERT INTO users VALUES (1,'rest-user','user',1);`); err != nil {
+		t.Fatal(err)
+	}
+	plain := "lb_sk_rest-whitelist-secret"
+	hash := sha256.Sum256([]byte(plain))
+	if _, err := database.Exec(`INSERT INTO api_keys VALUES (1,'rest',?,?,1,NULL,NULL,1,0,0,'["192.0.2.0/24"]')`, hex.EncodeToString(hash[:]), plain[:12]); err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.Use(apiKeyAuth(&config.Config{}))
+	router.GET("/api/v1/rules", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	request := func(remoteAddr string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/rules", nil)
+		req.RemoteAddr = remoteAddr
+		req.Header.Set("X-API-Key", plain)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		return response
+	}
+	if denied := request("198.51.100.8:1234"); denied.Code != http.StatusForbidden || !strings.Contains(denied.Body.String(), "来源 IP 不在白名单") {
+		t.Fatalf("denied status=%d body=%s", denied.Code, denied.Body.String())
+	}
+	if allowed := request("192.0.2.8:1234"); allowed.Code != http.StatusOK {
+		t.Fatalf("allowed status=%d body=%s", allowed.Code, allowed.Body.String())
 	}
 }
 

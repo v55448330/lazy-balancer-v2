@@ -55,9 +55,13 @@ func (h *Handlers) Login(c *gin.Context) {
 		return
 	}
 
+	h.respondLogin(c, user, passwordVersion)
+}
+
+func (h *Handlers) respondLogin(c *gin.Context, user models.User, passwordVersion int64) {
 	lastLogin := time.Now().UTC()
 	if _, err := db.DB.Exec("UPDATE users SET last_login = ? WHERE id = ?", lastLogin, user.ID); err != nil {
-		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
+		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新登录时间失败"})
 		return
 	}
@@ -88,7 +92,7 @@ func (h *Handlers) Login(c *gin.Context) {
 
 	tokenString, err := token.SignedString([]byte(h.cfg.JWTSecret))
 	if err != nil {
-		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
+		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "签发登录令牌失败"})
 		return
 	}

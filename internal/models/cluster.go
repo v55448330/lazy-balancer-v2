@@ -5,6 +5,24 @@ type ClusterRegisterRequest struct {
 	Name      string `json:"name" binding:"required"`
 	IPAddress string `json:"ip_address" binding:"required,ip"`
 	Port      int    `json:"port" binding:"omitempty,min=1,max=65535"`
+	Protocol  string `json:"protocol" binding:"omitempty,oneof=http https"`
+}
+
+type ClusterLoginTicketRequest struct {
+	Ticket string `json:"ticket" binding:"required"`
+}
+
+type ClusterLoginTicketClaims struct {
+	UserID    int    `json:"user_id"`
+	Username  string `json:"username"`
+	Role      string `json:"role"`
+	NodeID    int    `json:"node_id"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
+type ClusterLoginTicketResponse struct {
+	Ticket string `json:"ticket"`
+	URL    string `json:"url"`
 }
 
 type ClusterModeRequest struct {
@@ -130,6 +148,7 @@ type ClusterNodeView struct {
 	Name            string         `json:"name"`
 	IPAddress       string         `json:"ip_address"`
 	Port            int            `json:"port"`
+	Protocol        string         `json:"protocol"`
 	Status          string         `json:"status"`
 	IsApproved      bool           `json:"is_approved"`
 	ReportedVersion int            `json:"reported_version"`

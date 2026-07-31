@@ -22,6 +22,12 @@ const storedCurrentPage = localStorage.getItem('currentPage')
 const initialCurrentPage: PageId = storedCurrentPage && isPageId(storedCurrentPage) ? storedCurrentPage : 'dashboard'
 if (storedCurrentPage !== initialCurrentPage) localStorage.setItem('currentPage', initialCurrentPage)
 
+interface AuthResponse {
+  readonly token: string
+  readonly node_mode: ClusterNodeMode
+  readonly user?: CurrentUser
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<CurrentUser | null>(null)
   const token = ref<string | null>(localStorage.getItem('token'))
@@ -86,24 +92,35 @@ export const useAuthStore = defineStore('auth', () => {
   async function login(username: string, password: string) {
     loading.value = true
     try {
-      const res = await request.post<{
-        readonly token: string
-        readonly node_mode: ClusterNodeMode
-        readonly user?: CurrentUser
-      }>('/auth/login', { username, password })
-      intentionalLogout.value = false
-      token.value = res.token
-      nodeMode.value = res.node_mode
-      localStorage.setItem('token', res.token)
-      if (res.user) {
-        user.value = {
-          id: res.user.id,
-          username: res.user.username,
-          role: res.user.role,
-          is_enabled: res.user.is_enabled,
-          display_name: normalizeDisplayName(res.user.display_name, res.user.username),
-        }
+      const res = await request.post<AuthResponse>('/auth/login', { username, password })
+      applyAuthResponse(res)
+      await fetchConfig()
+    } finally {
+      loading.value = false
+    }
+  }
+
+  function applyAuthResponse(res: AuthResponse) {
+    intentionalLogout.value = false
+    token.value = res.token
+    nodeMode.value = res.node_mode
+    localStorage.setItem('token', res.token)
+    if (res.user) {
+      user.value = {
+        id: res.user.id,
+        username: res.user.username,
+        role: res.user.role,
+        is_enabled: res.user.is_enabled,
+        display_name: normalizeDisplayName(res.user.display_name, res.user.username),
       }
+    }
+  }
+
+  async function loginWithTicket(ticket: string) {
+    loading.value = true
+    try {
+      const res = await request.post<AuthResponse>('/auth/ticket-login', { ticket })
+      applyAuthResponse(res)
       await fetchConfig()
     } finally {
       loading.value = false
@@ -159,6 +176,7 @@ export const useAuthStore = defineStore('auth', () => {
     normalizeDisplayName,
     displayName,
     login,
+    loginWithTicket,
     logout,
     fetchUser,
     fetchConfig,
