@@ -409,30 +409,58 @@ func parseNetDevTotals(input string) (uint64, uint64, error) {
 	if err != nil {
 		return 0, 0, fmt.Errorf("读取默认路由失败: %w", err)
 	}
-	defaultInterface, err := parseDefaultRouteInterface(string(route))
-	if err != nil {
-		return 0, 0, err
+	if defaultInterface, err := parseDefaultRouteInterface(string(route)); err == nil {
+		for _, line := range strings.Split(input, "\n") {
+			name, counters, ok := strings.Cut(line, ":")
+			if !ok || strings.TrimSpace(name) != defaultInterface {
+				continue
+			}
+			fields := strings.Fields(counters)
+			if len(fields) < 16 {
+				return 0, 0, fmt.Errorf("解析网卡 %s 流量失败: 计数器字段不足", strings.TrimSpace(name))
+			}
+			bytesIn, err := strconv.ParseUint(fields[0], 10, 64)
+			if err != nil {
+				return 0, 0, fmt.Errorf("解析网卡 %s 接收流量失败: %w", strings.TrimSpace(name), err)
+			}
+			bytesOut, err := strconv.ParseUint(fields[8], 10, 64)
+			if err != nil {
+				return 0, 0, fmt.Errorf("解析网卡 %s 发送流量失败: %w", strings.TrimSpace(name), err)
+			}
+			return bytesIn, bytesOut, nil
+		}
+		return 0, 0, fmt.Errorf("默认路由接口 %s 不存在于 /proc/net/dev", defaultInterface)
 	}
+	// 无默认路由（如容器 netns 只有子网路由）：统计物理类接口，排除 lo 与
+	// 会重复计数的虚拟叠加层（veth/docker 网桥/br-*）
+	var totalIn, totalOut uint64
+	matched := false
 	for _, line := range strings.Split(input, "\n") {
 		name, counters, ok := strings.Cut(line, ":")
-		if !ok || strings.TrimSpace(name) != defaultInterface {
+		if !ok {
+			continue
+		}
+		iface := strings.TrimSpace(name)
+		if iface == "" || iface == "lo" || strings.HasPrefix(iface, "veth") || strings.HasPrefix(iface, "docker") || strings.HasPrefix(iface, "br-") {
 			continue
 		}
 		fields := strings.Fields(counters)
 		if len(fields) < 16 {
-			return 0, 0, fmt.Errorf("解析网卡 %s 流量失败: 计数器字段不足", strings.TrimSpace(name))
+			continue
 		}
-		bytesIn, err := strconv.ParseUint(fields[0], 10, 64)
-		if err != nil {
-			return 0, 0, fmt.Errorf("解析网卡 %s 接收流量失败: %w", strings.TrimSpace(name), err)
+		bytesIn, errIn := strconv.ParseUint(fields[0], 10, 64)
+		bytesOut, errOut := strconv.ParseUint(fields[8], 10, 64)
+		if errIn != nil || errOut != nil {
+			continue
 		}
-		bytesOut, err := strconv.ParseUint(fields[8], 10, 64)
-		if err != nil {
-			return 0, 0, fmt.Errorf("解析网卡 %s 发送流量失败: %w", strings.TrimSpace(name), err)
-		}
-		return bytesIn, bytesOut, nil
+		totalIn += bytesIn
+		totalOut += bytesOut
+		matched = true
 	}
-	return 0, 0, fmt.Errorf("默认路由接口 %s 不存在于 /proc/net/dev", defaultInterface)
+	if !matched {
+		return 0, 0, fmt.Errorf("无法确定默认路由出口接口且无可用物理网卡")
+	}
+	return totalIn, totalOut, nil
 }
 
 func parseDefaultRouteInterface(input string) (string, error) {

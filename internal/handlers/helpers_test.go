@@ -63,6 +63,36 @@ func TestParseNetDevTotals_sums_all_non_loopback_interfaces(t *testing.T) {
 	}
 }
 
+func TestParseNetDevTotals_falls_back_to_physical_interfaces_when_no_default_route(t *testing.T) {
+	// Given：容器 netns 无默认路由（Docker Desktop 场景），仅有子网路由
+	original := systemMetricsReadFile
+	systemMetricsReadFile = func(path string) ([]byte, error) {
+		if path == "/proc/net/route" {
+			return []byte("Iface Destination Gateway Flags\nlo 0000007F 00000000 0001\neth0 0041A8C0 00000000 0001\n"), nil
+		}
+		return original(path)
+	}
+	t.Cleanup(func() { systemMetricsReadFile = original })
+	fixture := `Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 100 1 0 0 0 0 0 0 200 1 0 0 0 0 0 0
+  eth0: 1000 1 0 0 0 0 0 0 2000 1 0 0 0 0 0 0
+ veth1234: 3000 1 0 0 0 0 0 0 4000 1 0 0 0 0 0 0
+ docker0: 5000 1 0 0 0 0 0 0 6000 1 0 0 0 0 0 0
+   br-abc: 7000 1 0 0 0 0 0 0 8000 1 0 0 0 0 0 0`
+
+	// When
+	bytesIn, bytesOut, err := parseNetDevTotals(fixture)
+
+	// Then：只统计 eth0，虚拟叠加层不重复计入
+	if err != nil {
+		t.Fatalf("parse without default route: %v", err)
+	}
+	if bytesIn != 1000 || bytesOut != 2000 {
+		t.Fatalf("bytesIn=%d bytesOut=%d, want 1000/2000 (eth0 only)", bytesIn, bytesOut)
+	}
+}
+
 func TestGetSystemMetrics_returns_error_when_meminfo_read_fails(t *testing.T) {
 	original := systemMetricsReadFile
 	systemMetricsReadFile = func(string) ([]byte, error) { return nil, errors.New("permission denied") }
