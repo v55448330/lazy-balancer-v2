@@ -378,6 +378,12 @@ func createTables() error {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	CREATE INDEX IF NOT EXISTS idx_cluster_register_tokens_hash ON cluster_register_tokens(token_hash);
+
+	CREATE TABLE IF NOT EXISTS used_login_tickets (
+		jti_hash TEXT PRIMARY KEY,
+		expires_at DATETIME NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_used_login_tickets_expires_at ON used_login_tickets(expires_at);
 	`
 
 	_, err := DB.Exec(schema)
@@ -583,6 +589,15 @@ func runMigrations() error {
 	}
 	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cluster_register_tokens_hash ON cluster_register_tokens(token_hash)"); err != nil {
 		return fmt.Errorf("failed to index cluster_register_tokens: %w", err)
+	}
+	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS used_login_tickets (
+		jti_hash TEXT PRIMARY KEY,
+		expires_at DATETIME NOT NULL
+	)`); err != nil {
+		return fmt.Errorf("failed to create used_login_tickets: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_used_login_tickets_expires_at ON used_login_tickets(expires_at)"); err != nil {
+		return fmt.Errorf("failed to index used_login_tickets expiration: %w", err)
 	}
 	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS path_rules (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,

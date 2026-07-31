@@ -1,10 +1,13 @@
 package middleware
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -61,7 +64,21 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	v1 := r.Group("/api/v1")
 	{
 		mcpHandler := mcpserver.New(fmt.Sprintf("http://127.0.0.1:%d/api/v1", cfg.Port), loopbackAPIClient())
-		v1.POST("/mcp", apiKeyAuth(cfg), mcpAccessGuard(), gin.WrapH(mcpHandler))
+		v1.POST("/mcp", apiKeyAuth(cfg), mcpAccessGuard(), func(c *gin.Context) {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+			body, err := io.ReadAll(c.Request.Body)
+			if err != nil {
+				var maxBytesError *http.MaxBytesError
+				if errors.As(err, &maxBytesError) {
+					c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"code": http.StatusRequestEntityTooLarge, "message": "Request body too large"})
+					return
+				}
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "Invalid request body"})
+				return
+			}
+			c.Request.Body = io.NopCloser(bytes.NewReader(body))
+			gin.WrapH(mcpHandler)(c)
+		})
 		v1.GET("/openapi.yaml", h.GetOpenAPIYAML)
 		v1.GET("/docs", h.GetAPIDocs)
 		v1.POST("/auth/login", h.Login)

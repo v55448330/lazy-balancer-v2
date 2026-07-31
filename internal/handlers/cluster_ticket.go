@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -25,7 +23,7 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 		return
 	}
 	response, err := h.clusterService.GenerateLoginTicket(c.Request.Context(), models.ClusterLoginTicketClaims{
-		UserID: currentUserID(c), Username: c.GetString("username"), Role: c.GetString("role"), NodeID: nodeID,
+		UserID: currentUserID(c), Username: c.GetString("username"), NodeID: nodeID,
 	}, time.Now())
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -42,29 +40,35 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 func (h *Handlers) TicketLogin(c *gin.Context) {
 	var req models.ClusterLoginTicketRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		recordTicketLoginFailure(c, "", "invalid_request")
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
 	}
-	claims, err := h.clusterService.ValidateLoginTicket(c.Request.Context(), req.Ticket, time.Now())
+	claims, user, passwordVersion, err := h.clusterService.ValidateLoginTicket(c.Request.Context(), req.Ticket, time.Now())
 	if err != nil {
 		status := http.StatusInternalServerError
+		reason := "database_error"
 		if errors.Is(err, services.ErrInvalidLoginTicket) {
 			status = http.StatusUnauthorized
+			reason = "invalid_ticket"
+			switch {
+			case errors.Is(err, services.ErrLoginTicketSignature):
+				reason = "invalid_signature"
+			case errors.Is(err, services.ErrLoginTicketExpired):
+				reason = "expired"
+			case errors.Is(err, services.ErrLoginTicketReplay):
+				reason = "replay"
+			case errors.Is(err, services.ErrLoginTicketUserUnavailable):
+				reason = "user_unavailable"
+			}
 		}
+		recordTicketLoginFailure(c, claims.Username, reason)
 		c.JSON(status, models.APIResponse{Code: status, Message: "登录票据无效或已过期"})
 		return
 	}
-	var user models.User
-	var passwordVersion int64
-	err = db.DB.QueryRow(`SELECT id,username,role,display_name,is_enabled,created_at,last_login,password_version FROM users WHERE id=?`, claims.UserID).
-		Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &passwordVersion)
-	if errors.Is(err, sql.ErrNoRows) || err == nil && (!user.IsEnabled || user.Username != claims.Username) {
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "用户不存在或已禁用"})
-		return
-	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
-		return
-	}
 	h.respondLogin(c, user, passwordVersion)
+}
+
+func recordTicketLoginFailure(c *gin.Context, username, reason string) {
+	services.RecordAuditLog(username, "登录失败", "集群登录票据", services.AuditResultPart(reason), c.ClientIP())
 }

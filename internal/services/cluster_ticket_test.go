@@ -20,7 +20,10 @@ func issueClusterLoginTicket(t *testing.T, now time.Time) (*ClusterService, stri
 	if _, err := database.Exec(`INSERT INTO nodes (id,name,ip_address,port,status,is_approved,cluster_token_hash) VALUES (7,'slave','10.0.0.7',8000,'online',1,?)`, hex.EncodeToString(key[:])); err != nil {
 		t.Fatal(err)
 	}
-	response, err := service.GenerateLoginTicket(context.Background(), models.ClusterLoginTicketClaims{UserID: 3, Username: "alice", Role: "admin", NodeID: 7}, now)
+	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (3,'alice','hash','admin',1)`); err != nil {
+		t.Fatal(err)
+	}
+	response, err := service.GenerateLoginTicket(context.Background(), models.ClusterLoginTicketClaims{UserID: 3, Username: "alice", NodeID: 7}, now)
 	if err != nil {
 		t.Fatalf("generate ticket: %v", err)
 	}
@@ -33,7 +36,7 @@ func issueClusterLoginTicket(t *testing.T, now time.Time) (*ClusterService, stri
 func TestClusterLoginTicketRejectsExpiredTicket(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	service, ticket := issueClusterLoginTicket(t, now)
-	if _, err := service.ValidateLoginTicket(context.Background(), ticket, now.Add(61*time.Second)); !errors.Is(err, ErrInvalidLoginTicket) {
+	if _, _, _, err := service.ValidateLoginTicket(context.Background(), ticket, now.Add(61*time.Second)); !errors.Is(err, ErrInvalidLoginTicket) {
 		t.Fatalf("expired ticket error=%v", err)
 	}
 }
@@ -47,7 +50,7 @@ func TestClusterLoginTicketRejectsInvalidSignature(t *testing.T) {
 	} else {
 		parts[1] = "A" + parts[1][1:]
 	}
-	if _, err := service.ValidateLoginTicket(context.Background(), strings.Join(parts, "."), now); !errors.Is(err, ErrInvalidLoginTicket) {
+	if _, _, _, err := service.ValidateLoginTicket(context.Background(), strings.Join(parts, "."), now); !errors.Is(err, ErrInvalidLoginTicket) {
 		t.Fatalf("invalid signature error=%v", err)
 	}
 }
@@ -55,10 +58,10 @@ func TestClusterLoginTicketRejectsInvalidSignature(t *testing.T) {
 func TestClusterLoginTicketRejectsReplay(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	service, ticket := issueClusterLoginTicket(t, now)
-	if _, err := service.ValidateLoginTicket(context.Background(), ticket, now); err != nil {
+	if _, _, _, err := service.ValidateLoginTicket(context.Background(), ticket, now); err != nil {
 		t.Fatalf("first validation: %v", err)
 	}
-	if _, err := service.ValidateLoginTicket(context.Background(), ticket, now); !errors.Is(err, ErrInvalidLoginTicket) {
+	if _, _, _, err := service.ValidateLoginTicket(context.Background(), ticket, now); !errors.Is(err, ErrInvalidLoginTicket) {
 		t.Fatalf("replayed ticket error=%v", err)
 	}
 }
@@ -71,11 +74,40 @@ func TestClusterLoginTicketPrefersAccessURL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	response, err := service.GenerateLoginTicket(context.Background(), models.ClusterLoginTicketClaims{UserID: 3, Username: "alice", Role: "admin", NodeID: 8}, now)
+	response, err := service.GenerateLoginTicket(context.Background(), models.ClusterLoginTicketClaims{UserID: 3, Username: "alice", NodeID: 8}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if response.URL != "https://node.example:8443" {
 		t.Fatalf("url=%q", response.URL)
+	}
+}
+
+func TestClusterLoginTicketRejectsReplayAfterServiceRebuild(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	service, ticket := issueClusterLoginTicket(t, now)
+	if _, _, _, err := service.ValidateLoginTicket(context.Background(), ticket, now); err != nil {
+		t.Fatalf("first validation: %v", err)
+	}
+	rebuilt := NewClusterService(service.db, nil)
+	if _, _, _, err := rebuilt.ValidateLoginTicket(context.Background(), ticket, now); !errors.Is(err, ErrLoginTicketReplay) {
+		t.Fatalf("replayed ticket after rebuild error=%v", err)
+	}
+}
+
+func TestClusterLoginTicketDatabaseFailureDoesNotConsumeTicket(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	service, ticket := issueClusterLoginTicket(t, now)
+	if _, err := service.db.Exec(`CREATE TRIGGER reject_used_login_ticket BEFORE INSERT ON used_login_tickets BEGIN SELECT RAISE(ABORT, 'ticket store unavailable'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := service.ValidateLoginTicket(context.Background(), ticket, now); err == nil || errors.Is(err, ErrInvalidLoginTicket) {
+		t.Fatalf("database failure error=%v", err)
+	}
+	if _, err := service.db.Exec("DROP TRIGGER reject_used_login_ticket"); err != nil {
+		t.Fatal(err)
+	}
+	if _, user, _, err := service.ValidateLoginTicket(context.Background(), ticket, now); err != nil || user.Role != "admin" {
+		t.Fatalf("validation after database recovery user=%#v err=%v", user, err)
 	}
 }

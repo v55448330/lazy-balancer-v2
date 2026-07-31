@@ -33,7 +33,7 @@ func TestUpdateUser_rejects_invalid_id_and_body(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Given
 			h := newBackupTestHandlers(t)
-			if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name')"); err != nil {
+			if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name'), (99, 'backup-admin', 'x', 'admin', '')"); err != nil {
 				t.Fatalf("seed user: %v", err)
 			}
 			router := gin.New()
@@ -57,7 +57,7 @@ func TestUpdateUser_rejects_invalid_id_and_body(t *testing.T) {
 func TestUpdateUser_preserves_omitted_display_name(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
-	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name')"); err != nil {
+	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name'), (99, 'backup-admin', 'x', 'admin', '')"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	router := gin.New()
@@ -79,7 +79,7 @@ func TestUpdateUser_preserves_omitted_display_name(t *testing.T) {
 func TestUpdateUser_preserves_all_fields_when_password_hashing_fails(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
-	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name')"); err != nil {
+	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name'), (99, 'backup-admin', 'x', 'admin', '')"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	router := gin.New()
@@ -102,7 +102,7 @@ func TestUpdateUser_preserves_all_fields_when_password_hashing_fails(t *testing.
 func TestUpdateUser_preserves_all_fields_when_update_fails(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
-	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name')"); err != nil {
+	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name'), (99, 'backup-admin', 'x', 'admin', '')"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	if _, err := db.DB.Exec("CREATE TRIGGER fail_user_role_update BEFORE UPDATE ON users WHEN NEW.role='user' BEGIN SELECT RAISE(ABORT,'role update failed'); END"); err != nil {

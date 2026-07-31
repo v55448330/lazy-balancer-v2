@@ -157,7 +157,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的证书来源：当前仅支持自签名或上传证书"})
 			return
 		}
-		probe := services.AdminTLSConfig{Enabled: true, Mode: mode, Cert: cert, Key: key, Port: port}
+		probe := services.AdminTLSConfig{Enabled: true, Mode: mode, Cert: cert, Key: key}
 		if _, err := probe.ResolveCertificate(h.cfg.DataDir); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书不可用: " + err.Error()})
 			return

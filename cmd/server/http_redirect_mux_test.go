@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
 	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +22,38 @@ func (temporaryAcceptError) Temporary() bool { return true }
 type acceptResult struct {
 	connection net.Conn
 	err        error
+}
+
+func TestRedirectHTTP_closesConnectionForOversizedRequestLine(t *testing.T) {
+	assertOversizedRedirectRequestIsClosed(t, "GET /"+strings.Repeat("x", maxHTTPRedirectHeaderBytes)+" HTTP/1.1\r\nHost: example.com\r\n\r\n")
+}
+
+func TestRedirectHTTP_closesConnectionForOversizedHostHeader(t *testing.T) {
+	assertOversizedRedirectRequestIsClosed(t, "GET / HTTP/1.1\r\nHost: "+strings.Repeat("x", maxHTTPRedirectHeaderBytes)+"\r\n\r\n")
+}
+
+func assertOversizedRedirectRequestIsClosed(t *testing.T, request string) {
+	t.Helper()
+	server, client := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		redirectHTTP(bufio.NewReader(server), server)
+		close(done)
+	}()
+	if _, err := client.Write([]byte(request)); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	buffer := make([]byte, 1)
+	if count, err := client.Read(buffer); count != 0 || err == nil {
+		t.Fatalf("oversized request received %d response bytes with error %v", count, err)
+	}
+	_ = client.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("redirect handler did not close oversized connection")
+	}
 }
 
 type fakeListener struct {

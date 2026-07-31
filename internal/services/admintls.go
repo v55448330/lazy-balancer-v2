@@ -21,12 +21,10 @@ import (
 
 // AdminTLSConfig holds the admin-panel HTTPS settings stored in global_config.
 type AdminTLSConfig struct {
-	Enabled    bool
-	Mode       string // selfsigned | upload | acme
-	Cert       string
-	Key        string
-	ACMERuleID string
-	Port       int
+	Enabled bool
+	Mode    string // selfsigned | upload | acme
+	Cert    string
+	Key     string
 }
 
 type adminTLSFingerprint struct {
@@ -63,16 +61,15 @@ func RuntimeAdminTLSChanged(cfg AdminTLSConfig) bool {
 }
 
 func LoadAdminTLSConfig() AdminTLSConfig {
-	cfg := AdminTLSConfig{Mode: "selfsigned", Port: 8443}
+	cfg := AdminTLSConfig{Mode: "selfsigned"}
 	if db.DB == nil {
 		return cfg
 	}
 	var enabled int
-	var mode, cert, key, ruleID string
-	var port int
+	var mode, cert, key string
 	err := db.DB.QueryRow(`SELECT COALESCE(admin_tls_enabled,0), COALESCE(admin_tls_mode,'selfsigned'),
-		COALESCE(admin_tls_cert,''), COALESCE(admin_tls_key,''), COALESCE(admin_tls_acme_rule_id,''), COALESCE(admin_tls_port,8443)
-		FROM global_config WHERE id=1`).Scan(&enabled, &mode, &cert, &key, &ruleID, &port)
+		COALESCE(admin_tls_cert,''), COALESCE(admin_tls_key,'')
+		FROM global_config WHERE id=1`).Scan(&enabled, &mode, &cert, &key)
 	if err != nil {
 		return cfg
 	}
@@ -80,10 +77,6 @@ func LoadAdminTLSConfig() AdminTLSConfig {
 	cfg.Mode = mode
 	cfg.Cert = cert
 	cfg.Key = key
-	cfg.ACMERuleID = ruleID
-	if port > 0 {
-		cfg.Port = port
-	}
 	return cfg
 }
 

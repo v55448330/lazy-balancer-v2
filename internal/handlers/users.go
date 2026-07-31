@@ -131,7 +131,8 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	}()
 
 	var oldUsername, oldRole, oldDisplayName string
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, role, COALESCE(display_name,'') FROM users WHERE id = ?", id).Scan(&oldUsername, &oldRole, &oldDisplayName); err != nil {
+	var oldEnabled bool
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, role, COALESCE(display_name,''), is_enabled FROM users WHERE id = ?", id).Scan(&oldUsername, &oldRole, &oldDisplayName, &oldEnabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
 		} else {
@@ -165,8 +166,23 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	}
 	if len(sets) > 0 {
 		args = append(args, id)
-		if _, err := tx.ExecContext(c.Request.Context(), "UPDATE users SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...); err != nil {
+		query := "UPDATE users SET " + strings.Join(sets, ", ") + " WHERE id = ?"
+		if oldEnabled && oldRole == "admin" && req.Role != nil && *req.Role == "user" {
+			query += " AND EXISTS (SELECT 1 FROM users WHERE id <> ? AND role = 'admin' AND is_enabled = 1)"
+			args = append(args, id)
+		}
+		result, err := tx.ExecContext(c.Request.Context(), query, args...)
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user"})
+			return
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user"})
+			return
+		}
+		if rowsAffected == 0 {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "Cannot remove the last enabled administrator"})
 			return
 		}
 	}
@@ -213,11 +229,43 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 		return
 	}
 
-	var targetUsername string
-	if err := db.DB.QueryRow("SELECT username FROM users WHERE id = ?", id).Scan(&targetUsername); dbQueryNotFound(c, err, "User not found", "DeleteUser query user") {
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete user"})
 		return
 	}
-	result, err := db.DB.Exec("DELETE FROM users WHERE id = ?", id)
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			log.Printf("DeleteUser rollback failed for id=%d: %v", id, err)
+		}
+	}()
+
+	var targetUsername, targetRole string
+	var targetEnabled bool
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, role, is_enabled FROM users WHERE id = ?", id).Scan(&targetUsername, &targetRole, &targetEnabled); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query user"})
+		}
+		return
+	}
+	if targetRole == "admin" && targetEnabled {
+		var otherAdmins int
+		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM users WHERE id <> ? AND role = 'admin' AND is_enabled = 1", id).Scan(&otherAdmins); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete user"})
+			return
+		}
+		if otherAdmins == 0 {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "Cannot delete the last enabled administrator"})
+			return
+		}
+	}
+	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM api_keys WHERE created_by = ?", id); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete user"})
+		return
+	}
+	result, err := tx.ExecContext(c.Request.Context(), "DELETE FROM users WHERE id = ?", id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete user"})
 		return
@@ -230,6 +278,10 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	}
 	if rowsAffected == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete user"})
 		return
 	}
 
@@ -252,7 +304,23 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		return
 	}
 
-	result, err := db.DB.Exec("UPDATE users SET is_enabled = ? WHERE id = ?", req.IsEnabled, id)
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user status"})
+		return
+	}
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			log.Printf("ToggleUserStatus rollback failed for id=%d: %v", id, err)
+		}
+	}()
+	query := "UPDATE users SET is_enabled = ? WHERE id = ?"
+	args := []any{req.IsEnabled, id}
+	if !req.IsEnabled {
+		query += " AND (role <> 'admin' OR is_enabled = 0 OR EXISTS (SELECT 1 FROM users WHERE id <> ? AND role = 'admin' AND is_enabled = 1))"
+		args = append(args, id)
+	}
+	result, err := tx.ExecContext(c.Request.Context(), query, args...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user status"})
 		return
@@ -263,7 +331,18 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		return
 	}
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+		var exists int
+		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM users WHERE id = ?", id).Scan(&exists); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user status"})
+		} else if exists == 0 {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+		} else {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "Cannot disable the last enabled administrator"})
+		}
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user status"})
 		return
 	}
 

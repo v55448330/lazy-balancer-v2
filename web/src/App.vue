@@ -20,7 +20,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { isTokenExpired } from '@/utils/api'
+import { ApiRequestError, isTokenExpired } from '@/utils/api'
 import { ElMessage } from 'element-plus'
 import Login from '@/views/Login.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -38,21 +38,24 @@ const currentPage = computed(() => authStore.currentPage)
 
 onMounted(async () => {
   const url = new URL(window.location.href)
-  const hasLoginTicket = url.searchParams.has('login_ticket')
-  const loginTicket = url.searchParams.get('login_ticket') ?? ''
+  const fragment = new URLSearchParams(url.hash.slice(1))
+  const hasLoginTicket = fragment.has('login_ticket')
+  const loginTicket = fragment.get('login_ticket') ?? ''
   if (hasLoginTicket) {
-    url.searchParams.delete('login_ticket')
-    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+    fragment.delete('login_ticket')
+    const remainingHash = fragment.toString()
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${remainingHash ? `#${remainingHash}` : ''}`)
   }
 
   try {
     if (hasLoginTicket) {
+      const hadValidSession = authStore.isLoggedIn
       try {
         await authStore.loginWithTicket(loginTicket)
         authStore.setCurrentPage('dashboard')
-      } catch {
-        authStore.logout()
-        ElMessage.error('登录票据无效或已过期，请重新登录')
+      } catch (error: unknown) {
+        if (hadValidSession) await authStore.init()
+        ElMessage.error(error instanceof ApiRequestError && error.status === 401 ? '票据无效或已过期' : '登录服务异常')
       }
     } else {
       await authStore.init()

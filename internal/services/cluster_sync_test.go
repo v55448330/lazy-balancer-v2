@@ -6,9 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -65,19 +66,52 @@ func (r blockingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 	}
 }
 
-func TestSyncService_RegisterWithMaster_parent_cancellation_returns_immediately(t *testing.T) {
-	entered := make(chan struct{})
-	service := &SyncService{client: &http.Client{Transport: blockingRoundTripper{entered: entered}}}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		_, err := service.RegisterWithMaster(ctx, "http://master.example", models.ClusterRegisterRequest{})
-		done <- err
-	}()
-	waitSyncTest(t, entered)
-	cancel()
-	if err := waitSyncTest(t, done); !errors.Is(err, context.Canceled) {
-		t.Fatalf("registration error=%v, want context canceled", err)
+func TestSyncService_RegisterWithMaster_rejectsHTTP(t *testing.T) {
+	service := &SyncService{client: &http.Client{Timeout: time.Second}}
+	_, err := service.RegisterWithMaster(context.Background(), "http://master.example", models.ClusterRegisterRequest{})
+	if err == nil || !strings.Contains(err.Error(), "HTTPS") {
+		t.Fatalf("registration error=%v, want HTTPS rejection", err)
+	}
+}
+
+func TestSyncService_do_rejectsCertificateFingerprintMismatchBeforeSendingToken(t *testing.T) {
+	dataDir := t.TempDir()
+	var probeToken string
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/branding" {
+			probeToken = request.Header.Get("X-Cluster-Token")
+		}
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer master.Close()
+	service := NewSyncService(nil, &config.Config{DataDir: dataDir}, nil)
+	req, err := http.NewRequest(http.MethodGet, master.URL+"/api/v1/cluster/sync/snapshot", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Cluster-Token", "secret-token")
+	response, err := service.do(req)
+	if err != nil {
+		t.Fatalf("first TOFU request: %v", err)
+	}
+	response.Body.Close()
+	if probeToken != "" {
+		t.Fatalf("TLS preflight leaked cluster token %q", probeToken)
+	}
+	pinPath, err := service.clusterPinPath(req.URL.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pinPath, []byte(strings.Repeat("0", sha256.Size*2)+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := http.NewRequest(http.MethodGet, master.URL+"/api/v1/cluster/sync/snapshot", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry.Header.Set("X-Cluster-Token", "secret-token")
+	if _, err := service.do(retry); err == nil || !strings.Contains(err.Error(), "指纹不匹配") {
+		t.Fatalf("mismatched certificate error=%v", err)
 	}
 }
 
@@ -88,11 +122,15 @@ func TestSyncService_Pull_rejects_old_response_after_new_snapshot_applied(t *tes
 	releaseOldResponse := make(chan struct{})
 	requestNumber := make(chan int, 2)
 	var requests atomic.Int32
-	master := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		request := int(requests.Add(1))
-		requestNumber <- request
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/branding" {
+			response.WriteHeader(http.StatusOK)
+			return
+		}
+		number := int(requests.Add(1))
+		requestNumber <- number
 		version := 2
-		if request == 1 {
+		if number == 1 {
 			version = 1
 			close(oldRequestEntered)
 			waitSyncBarrier(releaseOldResponse)
@@ -108,8 +146,9 @@ func TestSyncService_Pull_rejects_old_response_after_new_snapshot_applied(t *tes
 	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token=? WHERE id=1", master.URL, token); err != nil {
 		t.Fatalf("seed slave state: %v", err)
 	}
-	oldPull := NewSyncService(database, &config.Config{CaddyAdminURL: caddy.URL}, NewCaddyService(caddy.URL))
-	newPull := NewSyncService(database, &config.Config{CaddyAdminURL: caddy.URL}, NewCaddyService(caddy.URL))
+	dataDir := t.TempDir()
+	oldPull := NewSyncService(database, &config.Config{CaddyAdminURL: caddy.URL, DataDir: dataDir}, NewCaddyService(caddy.URL))
+	newPull := NewSyncService(database, &config.Config{CaddyAdminURL: caddy.URL, DataDir: dataDir}, NewCaddyService(caddy.URL))
 	oldDone := make(chan error, 1)
 	go func() {
 		_, err := oldPull.Pull(context.Background())
@@ -144,10 +183,22 @@ func TestSyncService_Pull_rejects_old_response_after_new_snapshot_applied(t *tes
 	}
 }
 
+func TestVerifySnapshotIntegrityRejectsSameAppliedVersion(t *testing.T) {
+	const token = "cluster-token"
+	snapshot := signedTestSnapshot(7, token)
+	if err := verifySnapshotIntegrity(snapshot, token, 7); err == nil {
+		t.Fatal("same snapshot version was accepted")
+	}
+}
+
 func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *testing.T) {
 	_, database := newClusterTestService(t)
 	const token = "cluster-token"
-	master := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/branding" {
+			response.WriteHeader(http.StatusOK)
+			return
+		}
 		response.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(response).Encode(map[string]any{"data": signedTestSnapshot(8, token)})
 	}))
@@ -155,7 +206,7 @@ func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *test
 	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token=? WHERE id=1", master.URL, token); err != nil {
 		t.Fatalf("seed slave state: %v", err)
 	}
-	syncService := NewSyncService(database, &config.Config{}, NewCaddyService(master.URL))
+	syncService := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(master.URL))
 	beforeApply := make(chan struct{})
 	releaseApply := make(chan struct{})
 	syncService.beforeApplySnapshot = func() {

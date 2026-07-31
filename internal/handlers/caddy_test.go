@@ -96,3 +96,17 @@ func TestValidateConfig_validates_submitted_config(t *testing.T) {
 		t.Fatalf("Caddy validation requests=%d, want 2 (malformed JSON must stop at the handler)", requests)
 	}
 }
+
+func TestGetUpstreamHealth_returnsBadGatewayWithoutLeakingCollectorError(t *testing.T) {
+	h := &Handlers{caddyService: services.NewCaddyService("http://127.0.0.1:1/private-admin")}
+	router := gin.New()
+	router.GET("/health", h.GetUpstreamHealth)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s, want 502", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "127.0.0.1") || strings.Contains(response.Body.String(), "private-admin") {
+		t.Fatalf("response leaked collector details: %s", response.Body.String())
+	}
+}

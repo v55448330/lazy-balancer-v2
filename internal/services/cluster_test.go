@@ -102,6 +102,21 @@ func TestClusterService_RegisterNodeStoresAndUpdatesAccessURL(t *testing.T) {
 	}
 }
 
+func TestClusterAccessURLValidation(t *testing.T) {
+	valid := []string{"", "http://node.example:8000", "https://[2001:db8::1]:8443"}
+	invalid := []string{"ftp://node.example/file", "file:///tmp/socket", "http:node.example", "https://user:pass@node.example"}
+	for _, value := range valid {
+		if err := models.ValidateClusterAccessURL(value); err != nil {
+			t.Errorf("valid URL %q rejected: %v", value, err)
+		}
+	}
+	for _, value := range invalid {
+		if err := models.ValidateClusterAccessURL(value); !errors.Is(err, models.ErrInvalidClusterAccessURL) {
+			t.Errorf("invalid URL %q error=%v", value, err)
+		}
+	}
+}
+
 func TestClusterService_RegisterToken_rejects_expired_token(t *testing.T) {
 	// Given
 	service, _ := newClusterTestService(t)
@@ -606,6 +621,46 @@ func TestClusterSnapshot_syncs_password_version_and_changed_at(t *testing.T) {
 	}
 }
 
+func TestClusterSnapshotPreservesAPIKeyRestrictionsAndRuleTimestamps(t *testing.T) {
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (20,'owner','hash','admin',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist) VALUES (30,'restricted','hash','lb_key',20,1,1,1,'["192.0.2.0/24"]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,created_at,updated_at) VALUES ('lb_times','times','http',8080,'2026-07-01 01:02:03','2026-07-02 04:05:06')`); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _, err := service.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.SchemaVersion != CurrentSnapshotSchema || snapshot.MinReaderVersion != CurrentSnapshotSchema {
+		t.Fatalf("snapshot schema=%d min_reader=%d", snapshot.SchemaVersion, snapshot.MinReaderVersion)
+	}
+	if len(snapshot.APIKeys) != 1 || !snapshot.APIKeys[0].MCPEnabled || !snapshot.APIKeys[0].ReadOnly || len(snapshot.APIKeys[0].MCPIPWhitelist) != 1 {
+		t.Fatalf("snapshot API key=%#v", snapshot.APIKeys)
+	}
+	if err := replaceSnapshotDB(context.Background(), database, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Promote(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var mcpEnabled, readOnly bool
+	var whitelist, createdAt, updatedAt string
+	if err := database.QueryRow(`SELECT k.mcp_enabled,k.read_only,k.mcp_ip_whitelist,strftime('%Y-%m-%d %H:%M:%S',r.created_at),strftime('%Y-%m-%d %H:%M:%S',r.updated_at) FROM api_keys k CROSS JOIN lb_rules r WHERE k.id=30 AND r.caddy_id='lb_times'`).Scan(&mcpEnabled, &readOnly, &whitelist, &createdAt, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !mcpEnabled || !readOnly || whitelist != `["192.0.2.0/24"]` || createdAt != "2026-07-01 01:02:03" || updatedAt != "2026-07-02 04:05:06" {
+		t.Fatalf("restored key/times mcp=%v read_only=%v whitelist=%q created=%q updated=%q", mcpEnabled, readOnly, whitelist, createdAt, updatedAt)
+	}
+}
+
 func TestSyncService_applySnapshot_inherits_version_for_promotion(t *testing.T) {
 	service, database := newClusterTestService(t)
 	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
@@ -753,7 +808,7 @@ func TestSyncService_restart_callback_runs_when_synced_admin_TLS_changes(t *test
 func TestSyncService_pollRegistration_clears_temporary_secret_after_approval(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
-	master := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("X-Registration-Secret") != "temporary-secret" {
 			response.WriteHeader(http.StatusUnauthorized)
 			return
@@ -785,7 +840,7 @@ func TestSyncService_Report_sends_status_with_space_format_last_sync(t *testing.
 	_, database := newClusterTestService(t)
 	var gotAuth string
 	var gotBody []byte
-	master := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		gotAuth = request.Header.Get("X-Cluster-Token")
 		if request.Body != nil {
 			buf := make([]byte, 4096)

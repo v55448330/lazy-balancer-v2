@@ -321,8 +321,8 @@ const loginNode = async (node: ClusterNode): Promise<void> => {
   loginNodeId.value = node.id
   try {
     const response = await request.post<LoginTicketResponse>(`/cluster/nodes/${node.id}/login-ticket`)
-    const target = new URL('/', response.url)
-    target.searchParams.set('login_ticket', response.ticket)
+    const target = new URL(response.url)
+    target.hash = `login_ticket=${encodeURIComponent(response.ticket)}`
     loginWindow.location.replace(target.toString())
   } catch (error: unknown) {
     loginWindow.close()

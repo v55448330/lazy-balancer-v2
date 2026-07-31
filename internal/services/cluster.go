@@ -34,12 +34,10 @@ type ClusterService struct {
 	lifecycle            ClusterLifecycle
 	roleMu               sync.Mutex
 	beforeUpdateSettings func()
-	usedTicketMu         sync.Mutex
-	usedTickets          map[string]time.Time
 }
 
 func NewClusterService(database *sql.DB, lifecycle ClusterLifecycle) *ClusterService {
-	return &ClusterService{db: database, lifecycle: lifecycle, usedTickets: make(map[string]time.Time)}
+	return &ClusterService{db: database, lifecycle: lifecycle}
 }
 
 func randomHex(byteCount int) (string, error) {
@@ -74,6 +72,9 @@ func (s *ClusterService) GenerateRegisterToken(ctx context.Context, createdBy in
 }
 
 func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterRegisterRequest, now time.Time) (models.ClusterRegistration, error) {
+	if err := models.ValidateClusterAccessURL(req.AccessURL); err != nil {
+		return models.ClusterRegistration{}, err
+	}
 	if req.Port == 0 {
 		req.Port = 8000
 	}
@@ -129,6 +130,9 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 }
 
 func (s *ClusterService) UpdateNodeAccessURL(ctx context.Context, nodeID int, accessURL string) error {
+	if err := models.ValidateClusterAccessURL(accessURL); err != nil {
+		return err
+	}
 	result, err := s.db.ExecContext(ctx, "UPDATE nodes SET access_url=? WHERE id=?", accessURL, nodeID)
 	if err != nil {
 		return fmt.Errorf("更新节点访问地址: %w", err)

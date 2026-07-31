@@ -222,6 +222,25 @@ func TestClusterVersionTriggers_doNotBumpForAPIKeyLastUsed(t *testing.T) {
 	}
 }
 
+func TestClusterVersionTriggersBumpForAPIKeyRestrictions(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash) VALUES (1,'owner','hash'); INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by) VALUES (1,'key','hash','prefix',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := installClusterVersionTriggers(database); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET is_master=1,cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE api_keys SET mcp_enabled=1,read_only=1,mcp_ip_whitelist='["192.0.2.0/24"]' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 1 {
+		t.Fatalf("version after API key restriction update=%d, want 1", got)
+	}
+}
+
 func TestClusterVersionTriggers_bumpForUserPasswordVersion(t *testing.T) {
 	database := newClusterVersionTestDB(t)
 	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,password_version) VALUES (1,'alice','hash',0)`); err != nil {
@@ -255,7 +274,7 @@ func TestClusterPasswordVersionSync_rejects_old_JWT(t *testing.T) {
 	mac := hmac.New(sha256.New, []byte(clusterToken))
 	_, _ = mac.Write(content)
 	snapshot.Signature = hex.EncodeToString(mac.Sum(nil))
-	master := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(response).Encode(map[string]any{"data": snapshot})
 	}))

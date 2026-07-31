@@ -56,13 +56,14 @@ var tools = []toolSpec{
 }
 
 const emptySchema = `{"type":"object","properties":{},"additionalProperties":false}`
+const maxResponseSize = 4 << 20
 
 const createRuleSchema = `{"type":"object","required":["name","protocol","listen_port","upstreams"],"properties":{"name":{"type":"string"},"description":{"type":"string"},"protocol":{"type":"string","enum":["http","tcp"]},"domain":{"type":"string"},"listen_port":{"type":"integer","minimum":1,"maximum":65535},"strategy":{"type":"string"},"dynamic_dns":{"type":"boolean"},"enable_dns_server":{"type":"boolean"},"dns_server":{"type":"string"},"dns_family":{"type":"string","enum":["ipv4","ipv6","both"]},"health_check_path":{"type":"string"},"health_check_interval":{"type":"integer"},"health_check_timeout":{"type":"integer"},"health_check_unhealthy_threshold":{"type":"integer"},"health_check_healthy_threshold":{"type":"integer"},"enable_active_health_check":{"type":"boolean"},"tcp_health_check_port":{"type":"integer"},"tcp_proxy_protocol":{"type":"boolean"},"tcp_try_duration":{"type":"integer"},"tcp_try_interval":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"server_tokens_hidden":{"type":"integer"},"ip_acl_mode":{"type":"string","enum":["","allow","deny"]},"ip_acl_list":{"type":"array","items":{"type":"string"}},"custom_routes_enabled":{"type":"boolean"},"proxy_dial_timeout":{"type":"integer"},"proxy_response_header_timeout":{"type":"integer"},"proxy_read_timeout":{"type":"integer"},"proxy_write_timeout":{"type":"integer"},"proxy_stream_timeout":{"type":"integer"},"path_rules":{"type":"array","items":{"type":"object"}},"host_header":{"type":"string"},"upstreams":{"type":"array","items":{"type":"object","required":["host","port"],"properties":{"host":{"type":"string"},"port":{"type":"integer"},"weight":{"type":"integer"},"domain":{"type":"string"},"dynamic_dns":{"type":"boolean"},"enabled":{"type":"boolean"},"protocol":{"type":"string"},"dns_server":{"type":"string"},"max_connections":{"type":"integer"}}}},"enable_tls":{"type":"boolean"},"tls_source":{"type":"string"},"acme_config_id":{"type":"integer"},"ca_provider_id":{"type":"integer"},"tls_cert":{"type":"string"},"tls_key":{"type":"string"},"tls_http_redirect":{"type":"boolean"},"enable_compress":{"type":"boolean"},"compress_types":{"type":"string"},"log_enabled":{"type":"boolean"}},"additionalProperties":false}`
 
 const updateRuleSchema = `{"type":"object","required":["caddy_id"],"properties":{"caddy_id":{"type":"string"},"name":{"type":"string"},"description":{"type":"string"},"protocol":{"type":"string"},"domain":{"type":"string"},"listen_port":{"type":"integer"},"strategy":{"type":"string"},"dynamic_dns":{"type":"boolean"},"enable_dns_server":{"type":"boolean"},"dns_server":{"type":"string"},"dns_family":{"type":"string"},"health_check_path":{"type":"string"},"health_check_interval":{"type":"integer"},"health_check_timeout":{"type":"integer"},"health_check_unhealthy_threshold":{"type":"integer"},"health_check_healthy_threshold":{"type":"integer"},"enable_active_health_check":{"type":"boolean"},"tcp_health_check_port":{"type":"integer"},"tcp_proxy_protocol":{"type":"boolean"},"tcp_try_duration":{"type":"integer"},"tcp_try_interval":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"server_tokens_hidden":{"type":"integer"},"ip_acl_mode":{"type":"string"},"ip_acl_list":{"type":"array","items":{"type":"string"}},"custom_routes_enabled":{"type":"boolean"},"proxy_dial_timeout":{"type":"integer"},"proxy_response_header_timeout":{"type":"integer"},"proxy_read_timeout":{"type":"integer"},"proxy_write_timeout":{"type":"integer"},"proxy_stream_timeout":{"type":"integer"},"path_rules":{"type":"array","items":{"type":"object"}},"host_header":{"type":"string"},"upstreams":{"type":"array","items":{"type":"object"}},"enable_tls":{"type":"boolean"},"tls_source":{"type":"string"},"acme_config_id":{"type":"integer"},"ca_provider_id":{"type":"integer"},"tls_cert":{"type":"string"},"tls_key":{"type":"string"},"tls_http_redirect":{"type":"boolean"},"enable_compress":{"type":"boolean"},"compress_types":{"type":"string"},"enabled":{"type":"boolean"},"log_enabled":{"type":"boolean"}},"additionalProperties":false}`
 
 const aclSchema = `{"type":"object","required":["caddy_id","ip_acl_mode","ip_acl_list"],"properties":{"caddy_id":{"type":"string"},"ip_acl_mode":{"type":"string","enum":["","allow","deny"]},"ip_acl_list":{"type":"array","items":{"type":"string"}}},"additionalProperties":false}`
-const issueCertificateSchema = `{"type":"object","properties":{"caddy_id":{"type":"string"},"domain":{"type":"string"}},"additionalProperties":false}`
+const issueCertificateSchema = `{"type":"object","properties":{"caddy_id":{"type":"string"},"domain":{"type":"string"}},"oneOf":[{"maxProperties":0},{"required":["caddy_id","domain"]}],"additionalProperties":false}`
 const auditLogsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20}},"additionalProperties":false}`
 const updateConfigSchema = `{"type":"object","properties":{"source":{"type":"string"},"dns_provider":{"type":"string"},"dns_credentials":{"type":"string"},"acme_email":{"type":"string"},"cert_expiry_days":{"type":"integer"},"cert_renewal_days":{"type":"integer"},"cert_renewal_attempts":{"type":"integer"},"log_level":{"type":"string"},"caddy_log_level":{"type":"string"},"caddy_log_size_mb":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"http_read_timeout":{"type":"integer"},"http_write_timeout":{"type":"integer"},"http_idle_timeout":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"proxy_dial_timeout":{"type":"integer"},"proxy_response_header_timeout":{"type":"integer"},"proxy_read_timeout":{"type":"integer"},"proxy_write_timeout":{"type":"integer"},"proxy_stream_timeout":{"type":"integer"},"server_tokens_hidden":{"type":"boolean"},"cert_job_log_size_mb":{"type":"integer"},"runtime_log_size_mb":{"type":"integer"},"access_log_json":{"type":"boolean"},"access_log_format":{"type":"string"},"audit_retention_months":{"type":"integer"},"jwt_expire_minutes":{"type":"integer"},"timezone":{"type":"string"},"default_ca_provider_id":{"type":"integer"}},"additionalProperties":false}`
 
@@ -106,18 +107,32 @@ func forward(ctx context.Context, client *http.Client, baseURL string, spec tool
 	for key, value := range arguments {
 		bodyArguments[key] = value
 	}
+	if spec.name == "create_rule" {
+		if upstreams, ok := bodyArguments["upstreams"].([]any); ok {
+			for _, upstream := range upstreams {
+				if fields, ok := upstream.(map[string]any); ok {
+					if _, exists := fields["enabled"]; !exists {
+						fields["enabled"] = true
+					}
+				}
+			}
+		}
+	}
 	for _, name := range append(append([]string{}, spec.pathArgs...), spec.queryArgs...) {
 		delete(bodyArguments, name)
 	}
-	var body io.Reader
+	var bodyBytes []byte
 	if spec.method == http.MethodPost || spec.method == http.MethodPut || spec.method == http.MethodPatch {
 		if len(bodyArguments) > 0 {
-			encoded, err := json.Marshal(bodyArguments)
+			bodyBytes, err = json.Marshal(bodyArguments)
 			if err != nil {
 				return nil, fmt.Errorf("序列化工具参数: %w", err)
 			}
-			body = bytes.NewReader(encoded)
 		}
+	}
+	var body io.Reader
+	if bodyBytes != nil {
+		body = bytes.NewReader(bodyBytes)
 	}
 	request, err := http.NewRequestWithContext(ctx, spec.method, endpoint.String(), body)
 	if err != nil {
@@ -131,7 +146,11 @@ func forward(ctx context.Context, client *http.Client, baseURL string, spec tool
 	} else {
 		return nil, fmt.Errorf("MCP 请求缺少 API 密钥")
 	}
-	response, err := client.Do(request)
+	redirectlessClient := *client
+	redirectlessClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	response, err := redirectlessClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("内部 API 请求失败: %w", err)
 	}
@@ -143,16 +162,18 @@ func forward(ctx context.Context, client *http.Client, baseURL string, spec tool
 		if location == "" {
 			return nil, fmt.Errorf("内部 API 重定向缺少目标地址")
 		}
-		var retryBody io.Reader
-		if body != nil {
-			if readSeeker, ok := body.(io.ReadSeeker); ok {
-				if _, err := readSeeker.Seek(0, io.SeekStart); err != nil {
-					return nil, fmt.Errorf("重置请求体失败: %w", err)
-				}
-				retryBody = readSeeker
-			}
+		redirectURL, err := request.URL.Parse(location)
+		if err != nil {
+			return nil, fmt.Errorf("解析内部 API 重定向地址: %w", err)
 		}
-		request, err = http.NewRequestWithContext(ctx, spec.method, location, retryBody)
+		if !isLoopbackHTTPURL(redirectURL) {
+			return nil, fmt.Errorf("拒绝非回环内部 API 重定向地址")
+		}
+		var retryBody io.Reader
+		if bodyBytes != nil {
+			retryBody = bytes.NewReader(bodyBytes)
+		}
+		request, err = http.NewRequestWithContext(ctx, spec.method, redirectURL.String(), retryBody)
 		if err != nil {
 			return nil, fmt.Errorf("创建重定向请求失败: %w", err)
 		}
@@ -160,15 +181,24 @@ func forward(ctx context.Context, client *http.Client, baseURL string, spec tool
 			request.Header.Set("Content-Type", "application/json")
 		}
 		request.Header.Set("X-API-Key", extractAPIKey(call.Header))
-		response, err = client.Do(request)
+		response, err = redirectlessClient.Do(request)
 		if err != nil {
 			return nil, fmt.Errorf("内部 API 请求失败: %w", err)
 		}
+		if response.StatusCode == http.StatusMovedPermanently || response.StatusCode == http.StatusTemporaryRedirect || response.StatusCode == http.StatusPermanentRedirect {
+			response.Body.Close()
+			return nil, fmt.Errorf("内部 API 重定向次数超过限制")
+		}
 	}
 	defer response.Body.Close()
-	responseBody, err := io.ReadAll(response.Body)
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("读取内部 API 响应: %w", err)
+	}
+	if len(responseBody) > maxResponseSize {
+		result := mcp.NewToolResultText("内部 API 响应超过 4 MiB 上限，请改用分页或专用导出工具")
+		result.IsError = true
+		return result, nil
 	}
 	if len(responseBody) == 0 {
 		responseBody = []byte(`{}`)
@@ -178,6 +208,11 @@ func forward(ctx context.Context, client *http.Client, baseURL string, spec tool
 		result.IsError = true
 	}
 	return result, nil
+}
+
+func isLoopbackHTTPURL(target *url.URL) bool {
+	return (target.Scheme == "http" || target.Scheme == "https") &&
+		(target.Hostname() == "127.0.0.1" || target.Hostname() == "localhost")
 }
 
 func extractAPIKey(header http.Header) string {

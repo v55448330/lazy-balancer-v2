@@ -74,7 +74,7 @@
             </el-avatar>
             <transition name="fade">
               <div v-if="!effectiveCollapsed" class="user-detail">
-                <div class="user-name">{{ authStore.displayName || '用户' }}</div>
+                <div class="user-name">{{ menuDisplayName }}</div>
                 <div v-if="hasCustomDisplayName" class="user-role">{{ authStore.user?.username || '-' }}</div>
               </div>
             </transition>
@@ -156,8 +156,9 @@ const saving = ref(false)
 
 const currentPage = computed(() => authStore.currentPage)
 const isReadOnly = computed(() => authStore.readOnlyReason === 'slave')
+const menuDisplayName = computed(() => authStore.user?.display_name || authStore.user?.username || '用户')
 const hasCustomDisplayName = computed(() => {
-  const displayName = authStore.normalizeDisplayName(authStore.user?.display_name ?? null, '')
+  const displayName = authStore.user?.display_name || ''
   return displayName !== '' && displayName !== authStore.user?.username
 })
 
@@ -182,7 +183,7 @@ const profileForm = ref({
 const syncProfileForm = () => {
   profileForm.value = {
     username: authStore.user?.username || '',
-    display_name: authStore.normalizeDisplayName(authStore.user?.display_name ?? null, ''),
+    display_name: authStore.user?.display_name || '',
     password: '',
   }
 }
@@ -217,7 +218,6 @@ const saveProfile = async () => {
   }
   saving.value = true
   const passwordChanged = Boolean(profileForm.value.password)
-  if (passwordChanged) authStore.intentionalLogout = true
   try {
     await request.patch('/users/me', {
       display_name: profileForm.value.display_name,
@@ -232,7 +232,6 @@ const saveProfile = async () => {
       await authStore.fetchUser()
     }
   } finally {
-    if (passwordChanged && authStore.token) authStore.intentionalLogout = false
     saving.value = false
   }
 }

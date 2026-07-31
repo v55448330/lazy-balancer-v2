@@ -142,8 +142,12 @@ func run() error {
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Starting lazy-balancer-v2 %s on %s", version, addr)
 	server := &http.Server{
-		Addr:    addr,
-		Handler: router,
+		Addr:              addr,
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	tlsCfg := services.LoadAdminTLSConfig()
@@ -162,10 +166,6 @@ func run() error {
 			Certificates: []tls.Certificate{cert},
 			MinVersion:   tls.VersionTLS12,
 		}
-		server.ReadHeaderTimeout = 10 * time.Second
-		server.ReadTimeout = 30 * time.Second
-		server.WriteTimeout = 60 * time.Second
-		server.IdleTimeout = 120 * time.Second
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
 			return fmt.Errorf("HTTPS 监听失败: %w", err)

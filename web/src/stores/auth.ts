@@ -49,15 +49,6 @@ export const useAuthStore = defineStore('auth', () => {
     return ''
   })
 
-  const normalizeDisplayName = (value: CurrentUser['display_name'], username?: string) => {
-    return value || username || ''
-  }
-
-  const displayName = computed(() => {
-    if (!user.value) return ''
-    return normalizeDisplayName(user.value.display_name, user.value.username)
-  })
-
   async function fetchUser() {
     if (!token.value) return
     try {
@@ -68,7 +59,7 @@ export const useAuthStore = defineStore('auth', () => {
           username: res.data.username,
           role: res.data.role,
           is_enabled: res.data.is_enabled,
-          display_name: normalizeDisplayName(res.data.display_name, res.data.username),
+          display_name: res.data.display_name,
         }
       }
     } catch (e) {
@@ -111,7 +102,7 @@ export const useAuthStore = defineStore('auth', () => {
         username: res.user.username,
         role: res.user.role,
         is_enabled: res.user.is_enabled,
-        display_name: normalizeDisplayName(res.user.display_name, res.user.username),
+        display_name: res.user.display_name,
       }
     }
   }
@@ -173,8 +164,6 @@ export const useAuthStore = defineStore('auth', () => {
     isLoggedIn,
     readOnlyReason,
     readOnlyMessage,
-    normalizeDisplayName,
-    displayName,
     login,
     loginWithTicket,
     logout,

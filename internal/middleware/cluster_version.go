@@ -34,7 +34,7 @@ func installClusterVersionTriggers(database *sql.DB) error {
 		{name: "upstreams", snapshotColumns: "id,rule_id,host,port,weight,domain,dynamic_dns,enabled,protocol,dns_server,max_connections"},
 		{name: "path_rules", snapshotColumns: "id,rule_id,sort_order,match_type,path,upstreams_json"},
 		{name: "users", snapshotColumns: "id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at"},
-		{name: "api_keys", snapshotColumns: "id,name,key_hash,key_prefix,created_by,expires_at,is_enabled"},
+		{name: "api_keys", snapshotColumns: "id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist"},
 		{name: "cert_jobs", snapshotColumns: "rule_id,cert_pem,key_pem,expires_at"},
 	}
 	for _, table := range tables {

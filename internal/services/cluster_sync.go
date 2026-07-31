@@ -15,6 +15,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,72 +59,116 @@ func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *
 	return &SyncService{
 		db: database, cfg: cfg, caddy: caddy,
 		cluster: NewClusterService(database, nil),
-		// Self-signed admin certificates on the master must not break sync.
-		client: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}},
+		client:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
-// do transparently migrates the scheme when the master toggles enforced
-// admin TLS: plain HTTP hitting an HTTPS server (400) upgrades to HTTPS, and
-// HTTPS hitting a plain HTTP server (client error) downgrades to HTTP. A
-// successful migration is persisted to master_url so later cycles skip the
-// probe entirely.
 func (s *SyncService) do(req *http.Request) (*http.Response, error) {
-	resp, err := s.client.Do(req)
-	if err == nil && req.URL.Scheme == "http" && resp.StatusCode == http.StatusBadRequest {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if !strings.Contains(string(body), "HTTP request to an HTTPS server") {
-			resp.Body = io.NopCloser(bytes.NewReader(body))
-			return resp, nil
-		}
-		resp, err = s.client.Do(s.cloneRequest(req, "https"))
-		if err == nil {
-			s.migrateMasterURLScheme("https")
-		}
-		return resp, err
+	if req.URL.Scheme != "https" {
+		return nil, errors.New("集群主节点地址必须使用 HTTPS")
 	}
-	// Never downgrade to plain HTTP automatically: an on-path attacker could
-	// force it and then read the cluster token in cleartext. HTTPS failures
-	// surface as errors instead.
-	return resp, err
-}
-
-// cloneRequest rebuilds a request with a different scheme, replaying the body
-// via GetBody so POST retries (registration) keep their payload.
-func (s *SyncService) cloneRequest(req *http.Request, scheme string) *http.Request {
-	u := *req.URL
-	u.Scheme = scheme
-	clone, err := http.NewRequestWithContext(req.Context(), req.Method, u.String(), nil)
+	pinPath, err := s.clusterPinPath(req.URL.Host)
 	if err != nil {
-		return req
+		return nil, err
 	}
-	clone.Header = req.Header.Clone()
-	if req.GetBody != nil {
-		clone.Body, _ = req.GetBody()
+	observedFingerprint := ""
+	transport := &http.Transport{TLSClientConfig: &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true,
+		VerifyConnection: func(state tls.ConnectionState) error {
+			if len(state.PeerCertificates) == 0 {
+				return errors.New("主节点未提供 TLS 证书")
+			}
+			fingerprint := sha256.Sum256(state.PeerCertificates[0].Raw)
+			encoded := hex.EncodeToString(fingerprint[:])
+			stored, err := os.ReadFile(pinPath)
+			if errors.Is(err, os.ErrNotExist) {
+				observedFingerprint = encoded
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("读取主节点 TLS 证书指纹: %w", err)
+			}
+			if strings.TrimSpace(string(stored)) != encoded {
+				return errors.New("主节点 TLS 证书指纹不匹配")
+			}
+			return nil
+		},
+	}}
+	client := &http.Client{Timeout: s.client.Timeout, Transport: transport}
+
+	// TOFU accepts the first observed certificate. The unauthenticated probe
+	// persists it before a fresh handshake is allowed to carry credentials.
+	probe, err := http.NewRequestWithContext(req.Context(), http.MethodGet, "https://"+req.URL.Host+"/api/v1/branding", nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建主节点 TLS 预检请求: %w", err)
 	}
-	clone.ContentLength = req.ContentLength
-	return clone
+	probeResp, err := client.Do(probe)
+	if err != nil {
+		return nil, fmt.Errorf("主节点 TLS 预检失败: %w", err)
+	}
+	if _, err := io.Copy(io.Discard, io.LimitReader(probeResp.Body, 1<<20)); err != nil {
+		return nil, errors.Join(fmt.Errorf("读取主节点 TLS 预检响应: %w", err), probeResp.Body.Close())
+	}
+	if err := probeResp.Body.Close(); err != nil {
+		return nil, fmt.Errorf("关闭主节点 TLS 预检响应: %w", err)
+	}
+	if observedFingerprint != "" {
+		if err := verifyOrStoreClusterPin(pinPath, observedFingerprint); err != nil {
+			return nil, err
+		}
+	}
+	transport.CloseIdleConnections()
+	return client.Do(req)
 }
 
-// migrateMasterURLScheme persists the scheme that just worked so subsequent
-// sync cycles use it directly.
-func (s *SyncService) migrateMasterURLScheme(scheme string) {
-	var masterURL string
-	if err := s.db.QueryRow("SELECT COALESCE(master_url,'') FROM global_config WHERE id=1").Scan(&masterURL); err != nil || masterURL == "" {
-		return
+func (s *SyncService) clusterPinPath(host string) (string, error) {
+	dataDir := ""
+	if s.cfg != nil {
+		dataDir = s.cfg.DataDir
 	}
-	u, err := url.Parse(masterURL)
-	if err != nil || u.Scheme == scheme {
-		return
+	if dataDir == "" && s.db != nil {
+		var sequence int
+		var name, databasePath string
+		if err := s.db.QueryRow("PRAGMA database_list").Scan(&sequence, &name, &databasePath); err == nil && databasePath != "" {
+			dataDir = filepath.Dir(databasePath)
+		}
 	}
-	u.Scheme = scheme
-	if _, err := s.db.Exec("UPDATE global_config SET master_url=? WHERE id=1", u.String()); err == nil {
-		log.Printf("集群主节点地址协议已自动切换为 %s", scheme)
-		RecordAuditLog("system", "更新", "集群同步", fmt.Sprintf("主节点地址协议自动切换为 %s", scheme), "")
+	if dataDir == "" {
+		return "", errors.New("无法确定集群证书指纹存储目录")
 	}
+	hostHash := sha256.Sum256([]byte(strings.ToLower(host)))
+	return filepath.Join(dataDir, "cluster_ca_pins", hex.EncodeToString(hostHash[:])), nil
+}
+
+func verifyOrStoreClusterPin(path, fingerprint string) error {
+	stored, err := os.ReadFile(path)
+	if err == nil {
+		if strings.TrimSpace(string(stored)) != fingerprint {
+			return errors.New("主节点 TLS 证书指纹不匹配")
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("读取主节点 TLS 证书指纹: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("创建集群证书指纹目录: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if errors.Is(err, os.ErrExist) {
+		return verifyOrStoreClusterPin(path, fingerprint)
+	}
+	if err != nil {
+		return fmt.Errorf("保存主节点 TLS 证书指纹: %w", err)
+	}
+	if _, err := file.WriteString(fingerprint + "\n"); err != nil {
+		return errors.Join(fmt.Errorf("保存主节点 TLS 证书指纹: %w", err), file.Close())
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("保存主节点 TLS 证书指纹: %w", err)
+	}
+	return nil
 }
 
 func (s *SyncService) Start() {
@@ -339,8 +385,8 @@ func verifySnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken strin
 	}
 	// Signed snapshots must also move forward; replaying a captured older one
 	// must not resurrect deleted credentials or roll back configuration.
-	if snapshot.Version < appliedVersion {
-		return fmt.Errorf("快照版本回退：收到 %d，已应用 %d，疑似重放攻击", snapshot.Version, appliedVersion)
+	if appliedVersion > 0 && snapshot.Version <= appliedVersion {
+		return fmt.Errorf("快照版本未递增：收到 %d，已应用 %d，疑似重放攻击", snapshot.Version, appliedVersion)
 	}
 	if snapshot.Fingerprint != "" {
 		if err := verifySnapshotFingerprint(snapshot); err != nil {

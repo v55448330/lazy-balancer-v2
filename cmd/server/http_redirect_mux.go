@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 )
 
 const maxProtocolSniffers = 128
+const maxHTTPRedirectHeaderBytes = 16 << 10
 
 // prefixConn replays the bytes Peek consumed so the TLS handshake is intact.
 type prefixConn struct {
@@ -134,7 +136,12 @@ func (m *httpRedirectMux) finish(err error) {
 func redirectHTTP(reader *bufio.Reader, connection net.Conn) {
 	defer connection.Close()
 	_ = connection.SetReadDeadline(time.Now().Add(3 * time.Second))
-	head, _ := reader.ReadString('\n')
+	reader = bufio.NewReader(io.LimitReader(reader, maxHTTPRedirectHeaderBytes+1))
+	remaining := maxHTTPRedirectHeaderBytes
+	head, err := readRedirectHeaderLine(reader, &remaining)
+	if err != nil {
+		return
+	}
 	host := ""
 	var location string
 	parts := strings.Fields(head)
@@ -142,8 +149,11 @@ func redirectHTTP(reader *bufio.Reader, connection net.Conn) {
 		location = parts[1]
 	}
 	for {
-		line, err := reader.ReadString('\n')
-		if err != nil || line == "\r\n" || line == "\n" {
+		line, err := readRedirectHeaderLine(reader, &remaining)
+		if err != nil {
+			return
+		}
+		if line == "\r\n" || line == "\n" {
 			break
 		}
 		if strings.HasPrefix(strings.ToLower(line), "host:") {
@@ -155,4 +165,16 @@ func redirectHTTP(reader *bufio.Reader, connection net.Conn) {
 	}
 	response := fmt.Sprintf("HTTP/1.1 301 Moved Permanently\r\nContent-Length: 0\r\nConnection: close\r\nLocation: https://%s%s\r\n\r\n", host, location)
 	_, _ = connection.Write([]byte(response))
+}
+
+func readRedirectHeaderLine(reader *bufio.Reader, remaining *int) (string, error) {
+	if *remaining <= 0 {
+		return "", fmt.Errorf("HTTP redirect header exceeds %d bytes", maxHTTPRedirectHeaderBytes)
+	}
+	line, err := reader.ReadString('\n')
+	*remaining -= len(line)
+	if *remaining < 0 {
+		return "", fmt.Errorf("HTTP redirect header exceeds %d bytes", maxHTTPRedirectHeaderBytes)
+	}
+	return line, err
 }

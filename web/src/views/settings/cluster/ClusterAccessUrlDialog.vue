@@ -68,6 +68,10 @@ const validateAccessUrl = (_rule: unknown, value: string, callback: (error?: Err
       callback(new Error('访问地址必须使用 HTTP 或 HTTPS'))
       return
     }
+    if (parsed.username || parsed.password) {
+      callback(new Error('访问地址不能包含用户名或密码'))
+      return
+    }
     callback()
   } catch (error: unknown) {
     if (error instanceof TypeError) {

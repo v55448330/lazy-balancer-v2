@@ -1,16 +1,34 @@
 package models
 
+import (
+	"errors"
+	"net/url"
+)
+
+var ErrInvalidClusterAccessURL = errors.New("访问地址必须是无凭证的 HTTP 或 HTTPS URL")
+
 type ClusterRegisterRequest struct {
 	Token     string `json:"token" binding:"required"`
 	Name      string `json:"name" binding:"required"`
 	IPAddress string `json:"ip_address" binding:"required,ip"`
 	Port      int    `json:"port" binding:"omitempty,min=1,max=65535"`
 	Protocol  string `json:"protocol" binding:"omitempty,oneof=http https"`
-	AccessURL string `json:"access_url" binding:"omitempty,url"`
+	AccessURL string `json:"access_url"`
 }
 
 type ClusterNodeAccessURLRequest struct {
-	AccessURL string `json:"access_url" binding:"omitempty,url"`
+	AccessURL string `json:"access_url"`
+}
+
+func ValidateClusterAccessURL(value string) error {
+	if value == "" {
+		return nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.Opaque != "" {
+		return ErrInvalidClusterAccessURL
+	}
+	return nil
 }
 
 type ClusterLoginTicketRequest struct {
@@ -20,8 +38,8 @@ type ClusterLoginTicketRequest struct {
 type ClusterLoginTicketClaims struct {
 	UserID    int    `json:"user_id"`
 	Username  string `json:"username"`
-	Role      string `json:"role"`
 	NodeID    int    `json:"node_id"`
+	JTI       string `json:"jti"`
 	ExpiresAt int64  `json:"expires_at"`
 }
 
@@ -118,13 +136,16 @@ type ClusterUser struct {
 }
 
 type ClusterAPIKey struct {
-	ID        int    `json:"id"`
-	Name      string `json:"name"`
-	KeyHash   string `json:"key_hash"`
-	KeyPrefix string `json:"key_prefix"`
-	CreatedBy int    `json:"created_by"`
-	ExpiresAt string `json:"expires_at"`
-	IsEnabled bool   `json:"is_enabled"`
+	ID             int      `json:"id"`
+	Name           string   `json:"name"`
+	KeyHash        string   `json:"key_hash"`
+	KeyPrefix      string   `json:"key_prefix"`
+	CreatedBy      int      `json:"created_by"`
+	ExpiresAt      string   `json:"expires_at"`
+	IsEnabled      bool     `json:"is_enabled"`
+	MCPEnabled     bool     `json:"mcp_enabled"`
+	ReadOnly       bool     `json:"read_only"`
+	MCPIPWhitelist []string `json:"mcp_ip_whitelist"`
 }
 
 type ClusterCertificate struct {

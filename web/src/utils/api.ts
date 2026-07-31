@@ -65,6 +65,13 @@ interface RequestClient {
 
 let sessionExpiredDialogOpen = false
 
+export class ApiRequestError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message)
+    this.name = 'ApiRequestError'
+  }
+}
+
 const service: AxiosInstance = axios.create({
   baseURL: '/api/v1',
   timeout: 30000,
@@ -123,7 +130,7 @@ service.interceptors.response.use(
     } else if (!isLoginRequest) {
       ElMessage.error(message)
     }
-    return Promise.reject(new Error(message))
+    return Promise.reject(new ApiRequestError(message, status))
   }
 )
 

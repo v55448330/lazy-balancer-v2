@@ -97,3 +97,23 @@ func TestMCPEndpointAuthenticationGatesAndProtocol(t *testing.T) {
 		t.Fatalf("tool count=%d, want 26", len(payload.Result.Tools))
 	}
 }
+
+func TestMCPEndpointRejectsRequestBodyLargerThanOneMiB(t *testing.T) {
+	router := newMiddlewareTestRouter(t)
+	key := "lb_sk_mcp-oversize"
+	hash := sha256.Sum256([]byte(key))
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (31,'mcp-large','x','admin',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,mcp_enabled) VALUES ('mcp-large',?,?,31,1,1)`, hex.EncodeToString(hash[:]), key[:12]); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/mcp", bytes.NewReader(bytes.Repeat([]byte("x"), (1<<20)+1)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", key)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d body=%q, want 413", response.Code, response.Body.String())
+	}
+}

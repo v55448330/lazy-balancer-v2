@@ -13,10 +13,8 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
-// CurrentSnapshotSchema 是本方能够读取的快照结构版本。仅做增量字段时不递增
-// （旧读取端会忽略未知字段）；发生破坏性结构变更时递增，并在构建快照时同步
-// 抬高 MinReaderVersion，让过旧的读取端明确拒绝而不是静默降级。
-const CurrentSnapshotSchema = 1
+// API Key 安全属性不能由旧读取端静默降级为宽权限默认值。
+const CurrentSnapshotSchema = 2
 
 type clusterSnapshotCache struct {
 	mu          sync.Mutex
@@ -46,7 +44,7 @@ func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientF
 		return models.ClusterSnapshot{}, false, err
 	}
 	snapshot.SchemaVersion = CurrentSnapshotSchema
-	snapshot.MinReaderVersion = 1
+	snapshot.MinReaderVersion = CurrentSnapshotSchema
 	canonical := snapshot
 	canonical.Fingerprint = ""
 	canonical.Version = 0
@@ -167,7 +165,7 @@ func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore)
 		COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
 		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
 		COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
-		COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), COALESCE(enabled,1), COALESCE(log_enabled,0), COALESCE(created_by,0), COALESCE(updated_by,0)
+		COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), COALESCE(enabled,1), COALESCE(log_enabled,0), COALESCE(created_by,0), COALESCE(updated_by,0), created_at, updated_at
 		FROM lb_rules ORDER BY caddy_id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照规则: %w", err)
@@ -185,7 +183,7 @@ func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore)
 			&rule.IPACLMode, &ipACLListJSON, &rule.CustomRoutesEnabled,
 			&rule.ProxyDialTimeout, &rule.ProxyResponseHeaderTimeout, &rule.ProxyReadTimeout, &rule.ProxyWriteTimeout, &rule.ProxyStreamTimeout,
 			&rule.EnableTLS, &rule.TLSSource, &rule.ACMEConfigID, &rule.CAProviderID, &rule.TLSCert, &rule.TLSKey,
-			&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.LogEnabled, &rule.CreatedBy, &rule.UpdatedBy); err != nil {
+			&rule.TLSHTTPRedirect, &rule.EnableCompress, &rule.CompressTypes, &rule.Enabled, &rule.LogEnabled, &rule.CreatedBy, &rule.UpdatedBy, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("扫描快照规则: %w", err)
 		}
 		if err := json.Unmarshal([]byte(ipACLListJSON), &rule.IPACLList); err != nil {
@@ -275,7 +273,7 @@ func (s *ClusterService) snapshotUsers(ctx context.Context, store snapshotStore)
 }
 
 func (s *ClusterService) snapshotAPIKeys(ctx context.Context, store snapshotStore) ([]models.ClusterAPIKey, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id, name, key_hash, key_prefix, created_by, COALESCE(expires_at,''), COALESCE(is_enabled,1) FROM api_keys ORDER BY id`)
+	rows, err := store.QueryContext(ctx, `SELECT id, name, key_hash, key_prefix, created_by, COALESCE(expires_at,''), COALESCE(is_enabled,1), COALESCE(mcp_enabled,0), COALESCE(read_only,0), COALESCE(mcp_ip_whitelist,'') FROM api_keys ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照密钥: %w", err)
 	}
@@ -283,8 +281,14 @@ func (s *ClusterService) snapshotAPIKeys(ctx context.Context, store snapshotStor
 	keys := make([]models.ClusterAPIKey, 0)
 	for rows.Next() {
 		var key models.ClusterAPIKey
-		if err := rows.Scan(&key.ID, &key.Name, &key.KeyHash, &key.KeyPrefix, &key.CreatedBy, &key.ExpiresAt, &key.IsEnabled); err != nil {
+		var whitelistJSON string
+		if err := rows.Scan(&key.ID, &key.Name, &key.KeyHash, &key.KeyPrefix, &key.CreatedBy, &key.ExpiresAt, &key.IsEnabled, &key.MCPEnabled, &key.ReadOnly, &whitelistJSON); err != nil {
 			return nil, fmt.Errorf("扫描快照密钥: %w", err)
+		}
+		if whitelistJSON != "" {
+			if err := json.Unmarshal([]byte(whitelistJSON), &key.MCPIPWhitelist); err != nil {
+				return nil, fmt.Errorf("解析快照密钥 %d 的 MCP IP 白名单: %w", key.ID, err)
+			}
 		}
 		keys = append(keys, key)
 	}
