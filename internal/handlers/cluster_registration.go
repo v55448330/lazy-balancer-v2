@@ -75,6 +75,17 @@ func (h *Handlers) DeleteClusterNode(c *gin.Context) {
 	h.clusterNodeAction(c, "删除", func(id int) error { return h.clusterService.DeleteNode(c.Request.Context(), id) })
 }
 
+func (h *Handlers) UpdateClusterNodeAccessURL(c *gin.Context) {
+	var req models.ClusterNodeAccessURLRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		clusterError(c, http.StatusBadRequest, "访问地址格式错误", err)
+		return
+	}
+	h.clusterNodeAction(c, "更新访问地址", func(id int) error {
+		return h.clusterService.UpdateNodeAccessURL(c.Request.Context(), id, req.AccessURL)
+	})
+}
+
 func (h *Handlers) clusterNodeAction(c *gin.Context, action string, operation func(int) error) {
 	if !h.requireMaster(c) {
 		return

@@ -122,6 +122,9 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
 		return
 	}
+	if c.GetString("role") != "admin" {
+		req.ReadOnly = true
+	}
 	whitelist, err := services.NormalizeCIDRs(req.MCPIPWhitelist)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "MCP IP 白名单无效: " + err.Error()})
@@ -220,6 +223,14 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	if req.IsEnabled == nil && req.MCPEnabled == nil && req.ReadOnly == nil && req.MCPIPWhitelist == nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "At least one field is required"})
 		return
+	}
+	if currentUserOnly && c.GetString("role") != "admin" && req.ReadOnly != nil && !*req.ReadOnly {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "普通用户密钥必须为只读"})
+		return
+	}
+	if currentUserOnly && c.GetString("role") != "admin" {
+		readOnly := true
+		req.ReadOnly = &readOnly
 	}
 	var whitelistJSON *string
 	if req.MCPIPWhitelist != nil {

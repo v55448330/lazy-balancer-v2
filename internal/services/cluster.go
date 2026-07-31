@@ -104,9 +104,9 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 	err = tx.QueryRowContext(ctx, "SELECT id FROM nodes WHERE ip_address=? AND port=?", req.IPAddress, req.Port).Scan(&nodeID)
 	switch {
 	case err == nil:
-		_, err = tx.ExecContext(ctx, `UPDATE nodes SET name=?, protocol=?, status='pending', is_approved=0, registration_secret=?, registration_secret_expires_at=NULL, cluster_token_hash=NULL, cluster_token_delivered=0, reported_version=0, health_json=NULL, last_seen=NULL WHERE id=?`, req.Name, req.Protocol, tokenHash(secret), nodeID)
+		_, err = tx.ExecContext(ctx, `UPDATE nodes SET name=?, protocol=?, access_url=?, status='pending', is_approved=0, registration_secret=?, registration_secret_expires_at=NULL, cluster_token_hash=NULL, cluster_token_delivered=0, reported_version=0, health_json=NULL, last_seen=NULL WHERE id=?`, req.Name, req.Protocol, req.AccessURL, tokenHash(secret), nodeID)
 	case errors.Is(err, sql.ErrNoRows):
-		insert, insertErr := tx.ExecContext(ctx, `INSERT INTO nodes (name, mode, ip_address, port, protocol, status, is_approved, registration_secret) VALUES (?, 'slave', ?, ?, ?, 'pending', 0, ?)`, req.Name, req.IPAddress, req.Port, req.Protocol, tokenHash(secret))
+		insert, insertErr := tx.ExecContext(ctx, `INSERT INTO nodes (name, mode, ip_address, port, protocol, access_url, status, is_approved, registration_secret) VALUES (?, 'slave', ?, ?, ?, ?, 'pending', 0, ?)`, req.Name, req.IPAddress, req.Port, req.Protocol, req.AccessURL, tokenHash(secret))
 		if insertErr != nil {
 			return models.ClusterRegistration{}, fmt.Errorf("创建待审批节点: %w", insertErr)
 		}
@@ -126,6 +126,21 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 		return models.ClusterRegistration{}, fmt.Errorf("提交节点注册: %w", err)
 	}
 	return models.ClusterRegistration{RegistrationID: nodeID, RegistrationSecret: secret}, nil
+}
+
+func (s *ClusterService) UpdateNodeAccessURL(ctx context.Context, nodeID int, accessURL string) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE nodes SET access_url=? WHERE id=?", accessURL, nodeID)
+	if err != nil {
+		return fmt.Errorf("更新节点访问地址: %w", err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("读取节点访问地址更新结果: %w", err)
+	}
+	if updated != 1 {
+		return ErrNodeNotFound
+	}
+	return nil
 }
 
 func (s *ClusterService) ApproveNode(ctx context.Context, nodeID int) error {

@@ -62,3 +62,20 @@ func TestClusterLoginTicketRejectsReplay(t *testing.T) {
 		t.Fatalf("replayed ticket error=%v", err)
 	}
 }
+
+func TestClusterLoginTicketPrefersAccessURL(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	service, database := newClusterTestService(t)
+	key := sha256.Sum256([]byte("cluster-token"))
+	if _, err := database.Exec(`INSERT INTO nodes (id,name,ip_address,port,protocol,access_url,status,is_approved,cluster_token_hash) VALUES (8,'slave','172.18.0.2',8000,'http','https://node.example:8443','online',1,?)`, hex.EncodeToString(key[:])); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := service.GenerateLoginTicket(context.Background(), models.ClusterLoginTicketClaims{UserID: 3, Username: "alice", Role: "admin", NodeID: 8}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.URL != "https://node.example:8443" {
+		t.Fatalf("url=%q", response.URL)
+	}
+}

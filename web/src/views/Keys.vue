@@ -116,12 +116,14 @@
           <el-switch v-model="createForm.mcp_enabled" />
         </el-form-item>
         <el-form-item label="只读模式">
-          <el-switch v-model="createForm.read_only" />
+          <el-tooltip :disabled="isAdmin" content="普通用户密钥仅支持只读权限" placement="top">
+            <el-switch v-model="createForm.read_only" :disabled="!isAdmin" />
+          </el-tooltip>
         </el-form-item>
         <el-alert
           v-if="createForm.read_only"
           class="readonly-alert"
-          title="只读模式开启后，该密钥的所有写操作都将被拒绝（包括 MCP 写操作）。"
+          :title="isAdmin ? '只读模式开启后，该密钥的所有写操作都将被拒绝（包括 MCP 写操作）。' : '普通用户密钥仅支持只读权限'"
           type="warning"
           :closable="false"
           show-icon
@@ -163,12 +165,14 @@
           <el-switch v-model="featureForm.mcp_enabled" />
         </el-form-item>
         <el-form-item label="只读模式">
-          <el-switch v-model="featureForm.read_only" />
+          <el-tooltip :disabled="isAdmin" content="普通用户密钥仅支持只读权限" placement="top">
+            <el-switch v-model="featureForm.read_only" :disabled="!isAdmin" />
+          </el-tooltip>
         </el-form-item>
         <el-alert
           v-if="featureForm.read_only"
           class="readonly-alert"
-          title="只读模式开启后，该密钥的所有写操作都将被拒绝（包括 MCP 写操作）。"
+          :title="isAdmin ? '只读模式开启后，该密钥的所有写操作都将被拒绝（包括 MCP 写操作）。' : '普通用户密钥仅支持只读权限'"
           type="warning"
           :closable="false"
           show-icon
@@ -250,7 +254,8 @@ defineProps<{
 }>()
 
 const authStore = useAuthStore()
-const isReadOnly = computed(() => authStore.readOnlyReason !== null)
+const isReadOnly = computed(() => authStore.nodeMode === 'slave')
+const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const keys = ref<readonly APIKey[]>([])
 const loading = ref(false)
@@ -258,7 +263,7 @@ const creating = ref(false)
 const createDialogVisible = ref(false)
 const createNameError = ref('')
 const createWhitelistError = ref('')
-const createForm = ref({ name: '', mcp_enabled: false, read_only: false, whitelistText: '' })
+const createForm = ref({ name: '', mcp_enabled: false, read_only: true, whitelistText: '' })
 const featureDialogVisible = ref(false)
 const featureSaving = ref(false)
 const featureTarget = ref<APIKey | null>(null)
@@ -322,7 +327,7 @@ const openCreateDialog = (): void => {
 }
 
 const resetCreateForm = (): void => {
-  createForm.value = { name: '', mcp_enabled: false, read_only: false, whitelistText: '' }
+  createForm.value = { name: '', mcp_enabled: false, read_only: !isAdmin.value, whitelistText: '' }
   createNameError.value = ''
   createWhitelistError.value = ''
 }
@@ -345,7 +350,7 @@ async function createKey() {
     const payload: CreateAPIKeyInput = {
       name,
       mcp_enabled: createForm.value.mcp_enabled,
-      read_only: createForm.value.read_only,
+      read_only: isAdmin.value ? createForm.value.read_only : true,
       mcp_ip_whitelist: whitelist.value,
     }
     const res = await request.post<CreateAPIKeyResponse>('/users/me/api-keys', payload)
@@ -366,7 +371,7 @@ const openFeatureDialog = (key: APIKey): void => {
   featureTarget.value = key
   featureForm.value = {
     mcp_enabled: key.mcp_enabled,
-    read_only: key.read_only,
+    read_only: isAdmin.value ? key.read_only : true,
     whitelistText: parseWhitelist(key.mcp_ip_whitelist),
   }
   featureWhitelistError.value = ''
@@ -391,7 +396,7 @@ const saveFeatures = async (): Promise<void> => {
   try {
     const payload: UpdateAPIKeyInput = {
       mcp_enabled: featureForm.value.mcp_enabled,
-      read_only: featureForm.value.read_only,
+      read_only: isAdmin.value ? featureForm.value.read_only : true,
       mcp_ip_whitelist: whitelist.value,
     }
     await request.patch(`/users/me/api-keys/${featureTarget.value.id}`, payload)

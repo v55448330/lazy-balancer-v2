@@ -81,6 +81,7 @@ func TestSetupRouter_registers_cluster_contract_and_removes_legacy_routes(t *tes
 		"POST /api/v1/cluster/nodes/:id/approve",
 		"POST /api/v1/cluster/nodes/:id/reject",
 		"POST /api/v1/cluster/nodes/:id/login-ticket",
+		"PUT /api/v1/cluster/nodes/:id/access-url",
 		"DELETE /api/v1/cluster/nodes/:id",
 		"POST /api/v1/cluster/mode",
 		"POST /api/v1/cluster/promote",
@@ -99,6 +100,33 @@ func TestSetupRouter_registers_cluster_contract_and_removes_legacy_routes(t *tes
 		if route == "POST /api/v1/nodes/register" || route == "GET /api/v1/sync/status" || route == "GET /api/v1/sync/config" || route == "POST /api/v1/sync/pull" || route == "POST /api/v1/nodes/:id/heartbeat" {
 			t.Errorf("legacy route remains registered: %s", route)
 		}
+	}
+}
+
+func TestUpdateClusterNodeAccessURL(t *testing.T) {
+	router := newMiddlewareTestRouter(t)
+	key := "lb_sk_access-url-admin-test"
+	addClusterRouteTestAPIKey(t, 104, "access-admin", "admin", key)
+	if _, err := db.DB.Exec("INSERT INTO nodes (id,name,ip_address,port) VALUES (12,'slave','172.18.0.2',8000)"); err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"access_url":"http://127.0.0.1:8001"}`)
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/cluster/nodes/12/access-url", body)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", key)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var accessURL string
+	if err := db.DB.QueryRow("SELECT access_url FROM nodes WHERE id=12").Scan(&accessURL); err != nil {
+		t.Fatal(err)
+	}
+	if accessURL != "http://127.0.0.1:8001" {
+		t.Fatalf("access_url=%q", accessURL)
 	}
 }
 

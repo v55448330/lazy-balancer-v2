@@ -210,6 +210,8 @@ func newReadOnlyGuardTestRouter(t *testing.T, isMaster bool, role string) *gin.E
 	router.POST("/api/v1/users", noContent)
 	router.PATCH("/api/v1/users/me", noContent)
 	router.POST("/api/v1/users/me/api-keys", noContent)
+	router.PATCH("/api/v1/users/me/api-keys/:id", noContent)
+	router.DELETE("/api/v1/users/me/api-keys/:id", noContent)
 	router.POST("/api/v1/cluster/nodes/report", noContent)
 	router.POST("/api/v1/auth/login", noContent)
 	router.POST("/api/v1/rules/cert-info", noContent)
@@ -312,17 +314,20 @@ func TestReadOnlyGuard_blocks_slave_profile_update(t *testing.T) {
 	}
 }
 
-func TestReadOnlyGuard_blocks_slave_api_key_creation(t *testing.T) {
+func TestReadOnlyGuard_allows_non_admin_self_managed_api_keys(t *testing.T) {
 	// Given
 	router := newReadOnlyGuardTestRouter(t, true, "user")
 
-	// When
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/users/me/api-keys", nil))
-
-	// Then
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", response.Code)
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/api/v1/users/me/api-keys", nil),
+		httptest.NewRequest(http.MethodPatch, "/api/v1/users/me/api-keys/1", nil),
+		httptest.NewRequest(http.MethodDelete, "/api/v1/users/me/api-keys/1", nil),
+	} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("%s %s status = %d, want 204", request.Method, request.URL.Path, response.Code)
+		}
 	}
 }
 

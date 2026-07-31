@@ -6,6 +6,11 @@ type ClusterRegisterRequest struct {
 	IPAddress string `json:"ip_address" binding:"required,ip"`
 	Port      int    `json:"port" binding:"omitempty,min=1,max=65535"`
 	Protocol  string `json:"protocol" binding:"omitempty,oneof=http https"`
+	AccessURL string `json:"access_url" binding:"omitempty,url"`
+}
+
+type ClusterNodeAccessURLRequest struct {
+	AccessURL string `json:"access_url" binding:"omitempty,url"`
 }
 
 type ClusterLoginTicketRequest struct {
@@ -149,6 +154,7 @@ type ClusterNodeView struct {
 	IPAddress       string         `json:"ip_address"`
 	Port            int            `json:"port"`
 	Protocol        string         `json:"protocol"`
+	AccessURL       string         `json:"access_url"`
 	Status          string         `json:"status"`
 	IsApproved      bool           `json:"is_approved"`
 	ReportedVersion int            `json:"reported_version"`

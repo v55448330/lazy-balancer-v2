@@ -21,11 +21,11 @@ import (
 var ErrInvalidLoginTicket = errors.New("登录票据无效或已过期")
 
 func (s *ClusterService) GenerateLoginTicket(ctx context.Context, claims models.ClusterLoginTicketClaims, now time.Time) (models.ClusterLoginTicketResponse, error) {
-	var ipAddress, protocol, keyHash, status string
+	var ipAddress, protocol, accessURL, keyHash, status string
 	var port int
 	var approved bool
-	if err := s.db.QueryRowContext(ctx, `SELECT ip_address,port,COALESCE(protocol,'http'),COALESCE(cluster_token_hash,''),status,is_approved FROM nodes WHERE id=?`, claims.NodeID).
-		Scan(&ipAddress, &port, &protocol, &keyHash, &status, &approved); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT ip_address,port,COALESCE(protocol,'http'),COALESCE(access_url,''),COALESCE(cluster_token_hash,''),status,is_approved FROM nodes WHERE id=?`, claims.NodeID).
+		Scan(&ipAddress, &port, &protocol, &accessURL, &keyHash, &status, &approved); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.ClusterLoginTicketResponse{}, ErrNodeNotFound
 		}
@@ -50,7 +50,10 @@ func (s *ClusterService) GenerateLoginTicket(ctx context.Context, claims models.
 	if protocol != "https" {
 		protocol = "http"
 	}
-	return models.ClusterLoginTicketResponse{Ticket: ticket, URL: protocol + "://" + net.JoinHostPort(ipAddress, strconv.Itoa(port))}, nil
+	if accessURL == "" {
+		accessURL = protocol + "://" + net.JoinHostPort(ipAddress, strconv.Itoa(port))
+	}
+	return models.ClusterLoginTicketResponse{Ticket: ticket, URL: accessURL}, nil
 }
 
 func (s *ClusterService) ValidateLoginTicket(ctx context.Context, ticket string, now time.Time) (models.ClusterLoginTicketClaims, error) {

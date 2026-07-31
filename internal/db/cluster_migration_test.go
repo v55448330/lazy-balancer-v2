@@ -48,7 +48,7 @@ func TestInitialize_migrates_cluster_columns_and_token_table(t *testing.T) {
 	if tokenTable != 1 {
 		t.Fatalf("cluster_register_tokens count=%d, want 1", tokenTable)
 	}
-	for _, column := range []string{"cluster_token_hash", "registration_secret", "reported_version", "health_json", "last_sync_at", "last_sync_error"} {
+	for _, column := range []string{"cluster_token_hash", "registration_secret", "reported_version", "health_json", "last_sync_at", "last_sync_error", "access_url"} {
 		var count int
 		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('nodes') WHERE name=?", column).Scan(&count); err != nil {
 			t.Fatalf("query nodes column %s: %v", column, err)

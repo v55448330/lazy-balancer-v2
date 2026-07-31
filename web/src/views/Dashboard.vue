@@ -166,7 +166,8 @@
               </div>
             </div>
           </template>
-          <div v-if="systemMetricsUnavailable" class="collection-state">采集失败</div>
+          <el-skeleton v-if="initialLoading" :rows="2" animated />
+          <div v-else-if="systemMetricsUnavailable" class="collection-state">采集失败</div>
           <el-row v-else-if="systemMetrics" :gutter="32">
             <el-col :span="8">
               <div class="resource-item">
@@ -218,7 +219,8 @@
               </div>
             </div>
           </template>
-          <div v-if="trafficUnavailable" class="chart-container collection-state">采集失败</div>
+          <el-skeleton v-if="initialLoading" :rows="4" animated class="chart-skeleton" />
+          <div v-else-if="trafficUnavailable" class="chart-container collection-state">采集失败</div>
           <div v-else class="chart-container">
             <v-chart :option="trafficChartOption" autoresize />
           </div>
@@ -234,7 +236,8 @@
               </div>
             </div>
           </template>
-          <div v-if="connectionsUnavailable" class="chart-container collection-state">采集失败</div>
+          <el-skeleton v-if="initialLoading" :rows="4" animated class="chart-skeleton" />
+          <div v-else-if="connectionsUnavailable" class="chart-container collection-state">采集失败</div>
           <div v-else class="chart-container">
             <v-chart :option="connChartOption" autoresize />
           </div>
@@ -254,7 +257,13 @@
               <el-badge :value="rules.length" type="primary" />
             </div>
           </template>
-          <el-table :data="sortedRules" stripe :header-cell-style="{ background: '#f9fafb' }">
+          <el-table
+            v-loading="initialLoading"
+            element-loading-text="加载中"
+            :data="sortedRules"
+            stripe
+            :header-cell-style="{ background: '#f9fafb' }"
+          >
             <el-table-column prop="name" label="规则名称" min-width="150">
               <template #default="{ row }">
                 <el-link type="primary" :underline="false" role="button" tabindex="0" @click.prevent="openRuleHistory(row)" @keydown.enter.prevent="openRuleHistory(row)" @keydown.space.prevent="openRuleHistory(row)">{{ row.name }}</el-link>
@@ -327,7 +336,7 @@
               </template>
             </el-table-column>
             <template #empty>
-              <el-empty description="暂无负载均衡规则" :image-size="80" />
+              <el-empty :description="rulesUnavailable ? '采集失败' : '暂无负载均衡规则'" :image-size="80" />
             </template>
           </el-table>
         </el-card>
@@ -427,6 +436,8 @@ const hostMetricsUnavailable = ref(false)
 const overviewUnavailable = ref(false)
 const trafficUnavailable = ref(false)
 const connectionsUnavailable = ref(false)
+const rulesUnavailable = ref(false)
+const initialLoading = ref(true)
 
 const trafficInHistory = ref<number[]>([])
 const trafficOutHistory = ref<number[]>([])
@@ -638,8 +649,8 @@ const trafficChartOption = computed<EChartsOption>(() => ({
     splitLine: { lineStyle: { color: '#f3f4f6' } }
   },
   series: [
-    { name: '入站', type: 'line', data: trafficInHistory.value, smooth: true, showSymbol: trafficInHistory.value.length < 2, lineStyle: { color: '#3b82f6', width: 2 }, areaStyle: { color: 'rgba(59,130,246,0.1)' } },
-    { name: '出站', type: 'line', data: trafficOutHistory.value, smooth: true, showSymbol: trafficOutHistory.value.length < 2, lineStyle: { color: '#10b981', width: 2 }, areaStyle: { color: 'rgba(16,185,129,0.1)' } },
+    { name: '入站', type: 'line', color: '#3b82f6', data: trafficInHistory.value, smooth: true, showSymbol: trafficInHistory.value.length < 2, lineStyle: { color: '#3b82f6', width: 2 }, areaStyle: { color: 'rgba(59,130,246,0.1)' } },
+    { name: '出站', type: 'line', color: '#10b981', data: trafficOutHistory.value, smooth: true, showSymbol: trafficOutHistory.value.length < 2, lineStyle: { color: '#10b981', width: 2 }, areaStyle: { color: 'rgba(16,185,129,0.1)' } },
   ],
 }))
 
@@ -660,8 +671,8 @@ const connChartOption = computed<EChartsOption>(() => ({
     splitLine: { lineStyle: { color: '#f3f4f6' } }
   },
   series: [
-    { name: '已建立', type: 'line', data: connEstablishedHistory.value, smooth: true, showSymbol: connEstablishedHistory.value.length < 2, lineStyle: { color: '#10b981', width: 2 } },
-    { name: '等待释放', type: 'line', data: connTimeWaitHistory.value, smooth: true, showSymbol: connTimeWaitHistory.value.length < 2, lineStyle: { color: '#f59e0b', width: 2 } },
+    { name: '已建立', type: 'line', color: '#10b981', data: connEstablishedHistory.value, smooth: true, showSymbol: connEstablishedHistory.value.length < 2, lineStyle: { color: '#10b981', width: 2 } },
+    { name: '等待释放', type: 'line', color: '#f59e0b', data: connTimeWaitHistory.value, smooth: true, showSymbol: connTimeWaitHistory.value.length < 2, lineStyle: { color: '#f59e0b', width: 2 } },
   ],
 }))
 
@@ -727,15 +738,19 @@ const fetchAllData = (): Promise<void> => {
     }).catch(() => { if (!disposed) hostMetricsUnavailable.value = true }),
     request.get('/rules', config).then(async (res) => {
       if (disposed) return
-      if (!res.data) return
+      if (!res.data) {
+        rulesUnavailable.value = true
+        return
+      }
       rules.value = res.data || []
+      rulesUnavailable.value = false
       const version = ++rulesVersion
       const currentRules = rules.value
       await Promise.allSettled([
         fetchRuleMetrics(currentRules, version),
         fetchRuleHealth(currentRules, version),
       ])
-    }),
+    }).catch(() => { if (!disposed) rulesUnavailable.value = true }),
     request.get('/metrics/overview', config).then((res) => {
       if (disposed) return
       if (!res.data) {
@@ -763,6 +778,7 @@ const fetchAllData = (): Promise<void> => {
       if (res.data) caddyStatus.value = res.data.status || 'unknown'
     }),
   ]).then(() => undefined).finally(() => {
+    if (!disposed) initialLoading.value = false
     fetchAllDataPromise = null
   })
 
@@ -1023,6 +1039,7 @@ onUnmounted(() => {
 
 .chart-card :deep(.el-card__body) { height: 240px; padding: 16px; box-sizing: border-box; }
 .chart-container { height: 200px; }
+.chart-skeleton { height: 200px; }
 .collection-state { display: flex; align-items: center; justify-content: center; min-height: 80px; color: #909399; }
 
 .text-primary { color: #111827; }

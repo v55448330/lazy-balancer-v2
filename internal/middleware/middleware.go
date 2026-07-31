@@ -103,6 +103,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/cluster/nodes/:id/approve", h.ApproveClusterNode)
 				admin.POST("/cluster/nodes/:id/reject", h.RejectClusterNode)
 				admin.POST("/cluster/nodes/:id/login-ticket", h.GenerateClusterLoginTicket)
+				admin.PUT("/cluster/nodes/:id/access-url", h.UpdateClusterNodeAccessURL)
 				admin.DELETE("/cluster/nodes/:id", h.DeleteClusterNode)
 				admin.POST("/cluster/mode", h.SetClusterMode)
 				admin.POST("/cluster/promote", h.PromoteClusterNode)

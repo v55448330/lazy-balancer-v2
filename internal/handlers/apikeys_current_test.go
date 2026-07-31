@@ -359,13 +359,14 @@ func TestUpdateAPIKeyStatus_returns_not_found_when_row_disappears_before_update(
 }
 
 func TestCreateCurrentUserAPIKeyReturnsPlaintextOnce(t *testing.T) {
-	setupAPIKeyTestDB(t)
+	database := setupAPIKeyTestDB(t)
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/users/me/api-keys", strings.NewReader(`{"name":"ci"}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Set("user_id", 1)
+	ctx.Set("role", "user")
 
 	h := &Handlers{}
 	h.CreateCurrentUserAPIKey(ctx)
@@ -383,6 +384,104 @@ func TestCreateCurrentUserAPIKeyReturnsPlaintextOnce(t *testing.T) {
 	}
 	if !strings.HasPrefix(body.Data.Key, "lb_sk_") {
 		t.Fatalf("key prefix invalid: %q", body.Data.Key)
+	}
+	var readOnly bool
+	if err := database.QueryRow("SELECT read_only FROM api_keys WHERE name='ci'").Scan(&readOnly); err != nil {
+		t.Fatal(err)
+	}
+	if !readOnly {
+		t.Fatal("non-admin API key was not forced to read-only")
+	}
+}
+
+func TestUpdateCurrentUserAPIKeyRejectsDisablingReadOnly(t *testing.T) {
+	setupAPIKeyTestDB(t)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPatch, "/api/v1/users/me/api-keys/10", strings.NewReader(`{"read_only":false}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Params = gin.Params{{Key: "id", Value: "10"}}
+	ctx.Set("user_id", 1)
+	ctx.Set("role", "user")
+
+	(&Handlers{}).UpdateCurrentUserAPIKeyStatus(ctx)
+
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "普通用户密钥必须为只读") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestUpdateCurrentUserAPIKeyForcesLegacyKeyReadOnly(t *testing.T) {
+	database := setupAPIKeyTestDB(t)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPatch, "/api/v1/users/me/api-keys/10", strings.NewReader(`{"mcp_enabled":true}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Params = gin.Params{{Key: "id", Value: "10"}}
+	ctx.Set("user_id", 1)
+	ctx.Set("role", "user")
+
+	(&Handlers{}).UpdateCurrentUserAPIKeyStatus(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var readOnly bool
+	if err := database.QueryRow("SELECT read_only FROM api_keys WHERE id=10").Scan(&readOnly); err != nil {
+		t.Fatal(err)
+	}
+	if !readOnly {
+		t.Fatal("legacy non-admin API key remained writable")
+	}
+}
+
+func TestAdminAPIKeyReadOnlySettingIsUnchanged(t *testing.T) {
+	database := setupAPIKeyTestDB(t)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/api-keys", strings.NewReader(`{"name":"admin-write","read_only":false}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("user_id", 1)
+	ctx.Set("role", "admin")
+
+	(&Handlers{}).CreateAPIKey(ctx)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var readOnly bool
+	if err := database.QueryRow("SELECT read_only FROM api_keys WHERE name='admin-write'").Scan(&readOnly); err != nil {
+		t.Fatal(err)
+	}
+	if readOnly {
+		t.Fatal("admin API key read_only=false was overridden")
+	}
+}
+
+func TestAdminCanDisableReadOnlyOnOwnAPIKey(t *testing.T) {
+	database := setupAPIKeyTestDB(t)
+	if _, err := database.Exec("UPDATE api_keys SET read_only=1 WHERE id=10"); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPatch, "/api/v1/users/me/api-keys/10", strings.NewReader(`{"read_only":false}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Params = gin.Params{{Key: "id", Value: "10"}}
+	ctx.Set("user_id", 1)
+	ctx.Set("role", "admin")
+
+	(&Handlers{}).UpdateCurrentUserAPIKeyStatus(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var readOnly bool
+	if err := database.QueryRow("SELECT read_only FROM api_keys WHERE id=10").Scan(&readOnly); err != nil {
+		t.Fatal(err)
+	}
+	if readOnly {
+		t.Fatal("admin could not disable read_only on own API key")
 	}
 }
 
