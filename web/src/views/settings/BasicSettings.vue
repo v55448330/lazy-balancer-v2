@@ -538,12 +538,13 @@ const notifyTlsRestarting = (toHttps: boolean) => {
     if (Date.now() - started > 15000) {
       if (tlsProtocolPollTimer) clearInterval(tlsProtocolPollTimer)
       tlsProtocolPollTimer = null
-      window.location.href = target
       return
     }
     try {
-      await fetch(`/api/v1/branding?ts=${Date.now()}`, { cache: 'no-store', redirect: 'manual' })
-      if (disposed) return
+      const probeUrl = new URL('/api/v1/branding', target)
+      probeUrl.searchParams.set('ts', String(Date.now()))
+      const response = await fetch(probeUrl, { cache: 'no-store', redirect: 'manual' })
+      if (disposed || !response.ok) return
       if (tlsProtocolPollTimer) clearInterval(tlsProtocolPollTimer)
       tlsProtocolPollTimer = null
       window.location.href = target

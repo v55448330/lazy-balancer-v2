@@ -121,11 +121,7 @@ func TestSyncService_Pull_rejects_old_response_after_new_snapshot_applied(t *tes
 func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *testing.T) {
 	_, database := newClusterTestService(t)
 	const token = "cluster-token"
-	requestEntered := make(chan struct{})
-	releaseResponse := make(chan struct{})
 	master := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		close(requestEntered)
-		<-releaseResponse
 		response.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(response).Encode(map[string]any{"data": signedTestSnapshot(8, token)})
 	}))
@@ -134,6 +130,12 @@ func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *test
 		t.Fatalf("seed slave state: %v", err)
 	}
 	syncService := NewSyncService(database, &config.Config{}, NewCaddyService(master.URL))
+	beforeApply := make(chan struct{})
+	releaseApply := make(chan struct{})
+	syncService.beforeApplySnapshot = func() {
+		close(beforeApply)
+		<-releaseApply
+	}
 	lifecycle := &syncDrainLifecycle{sync: syncService, stopEntered: make(chan struct{})}
 	cluster := NewClusterService(database, lifecycle)
 	pullDone := make(chan error, 1)
@@ -141,7 +143,7 @@ func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *test
 		_, err := syncService.Pull(context.Background())
 		pullDone <- err
 	}()
-	<-requestEntered
+	<-beforeApply
 	promoteDone := make(chan error, 1)
 	go func() { promoteDone <- cluster.Promote(context.Background()) }()
 	<-lifecycle.stopEntered
@@ -151,7 +153,7 @@ func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *test
 	default:
 	}
 
-	close(releaseResponse)
+	close(releaseApply)
 	if err := <-pullDone; err == nil {
 		t.Fatal("pull applied snapshot after promotion")
 	}

@@ -133,6 +133,44 @@ func TestLogin_signs_password_version_claim(t *testing.T) {
 	}
 }
 
+func TestLogin_clamps_excessive_jwt_expiration(t *testing.T) {
+	database := setupAuthTestDB(t)
+	if _, err := database.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY, is_master BOOLEAN, jwt_expire_minutes INTEGER); INSERT INTO global_config VALUES (1,1,999999)`); err != nil {
+		t.Fatalf("create global config: %v", err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO users (username,password_hash,role,is_enabled) VALUES ('root',?,'admin',1)`, string(hash)); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	h := &Handlers{cfg: &config.Config{JWTSecret: "test-secret"}}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"root","password":"secret123"}`))
+	request.Header.Set("Content-Type", "application/json")
+	context, _ := gin.CreateTestContext(response)
+	context.Request = request
+	h.Login(context)
+	if response.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	token, err := jwt.Parse(body.Token, func(*jwt.Token) (any, error) { return []byte("test-secret"), nil })
+	if err != nil {
+		t.Fatalf("parse login token: %v", err)
+	}
+	claims := token.Claims.(jwt.MapClaims)
+	if duration := int64(claims["exp"].(float64) - claims["iat"].(float64)); duration != int64((20 * time.Minute).Seconds()) {
+		t.Fatalf("token lifetime=%d seconds, want 1200", duration)
+	}
+}
+
 func TestLogin_returns_error_when_last_login_update_fails(t *testing.T) {
 	// Given
 	database := setupAuthTestDB(t)

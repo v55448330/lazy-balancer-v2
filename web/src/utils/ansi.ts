@@ -11,7 +11,7 @@ export function escapeHtml(text: string): string {
 
 /**
  * Convert ANSI escape sequences in a string to HTML.
- * Handles common SGR codes (reset, bold, italic, underline, 3/4-bit colors).
+ * Handles common SGR codes (reset, text styles, and basic/indexed/RGB colors).
  * Newlines are preserved by the caller via CSS (white-space: pre-wrap).
  */
 export function ansiToHtml(text: string): string {
@@ -61,9 +61,31 @@ export function ansiToHtml(text: string): string {
   let foreground = ''
   let background = ''
 
-  const html = escaped.replace(/\u001b\[((?:\d+;?)+)m/g, (_match, codes) => {
-    const codeList: number[] = String(codes).split(';').map(Number)
-    for (const c of codeList) {
+  const ansiColor = (index: number): string => {
+    const base = [
+      '#000000', '#800000', '#008000', '#808000', '#000080', '#800080', '#008080', '#c0c0c0',
+      '#808080', '#ff0000', '#00ff00', '#ffff00', '#0000ff', '#ff00ff', '#00ffff', '#ffffff',
+    ]
+    if (index < 16) return base[index] ?? ''
+    if (index < 232) {
+      const value = index - 16
+      const levels = [0, 95, 135, 175, 215, 255]
+      const r = levels[Math.floor(value / 36)]
+      const g = levels[Math.floor((value % 36) / 6)]
+      const b = levels[value % 6]
+      return `rgb(${r},${g},${b})`
+    }
+    if (index < 256) {
+      const level = 8 + (index - 232) * 10
+      return `rgb(${level},${level},${level})`
+    }
+    return ''
+  }
+
+  const html = escaped.replace(/\u001b\[([\d;]*)m/g, (_match, codes) => {
+    const codeList: number[] = codes === '' ? [0] : String(codes).split(';').map(code => code === '' ? 0 : Number(code))
+    for (let i = 0; i < codeList.length; i += 1) {
+      const c = codeList[i]
       if (c === 0) {
         bold = false
         italic = false
@@ -73,6 +95,25 @@ export function ansiToHtml(text: string): string {
       } else if (c === 1) bold = true
       else if (c === 3) italic = true
       else if (c === 4) underline = true
+      else if (c === 22) bold = false
+      else if (c === 23) italic = false
+      else if (c === 24) underline = false
+      else if (c === 39) foreground = ''
+      else if (c === 49) background = ''
+      else if ((c === 38 || c === 48) && codeList[i + 1] === 5 && codeList[i + 2] !== undefined) {
+        const color = ansiColor(codeList[i + 2])
+        if (color) {
+          if (c === 38) foreground = color
+          else background = color
+        }
+        i += 2
+      } else if ((c === 38 || c === 48) && codeList[i + 1] === 2 && codeList.slice(i + 2, i + 5).length === 3) {
+        const [r, g, b] = codeList.slice(i + 2, i + 5).map(value => Math.min(255, Math.max(0, value)))
+        const color = `rgb(${r},${g},${b})`
+        if (c === 38) foreground = color
+        else background = color
+        i += 4
+      }
       else if (fgColors[c]) foreground = fgColors[c]
       else if (bgColors[c]) background = bgColors[c]
     }

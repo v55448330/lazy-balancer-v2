@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -159,7 +160,8 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	operationLock.Lock()
 	defer operationLock.Unlock()
 	var ruleID, domain, status string
-	if err := db.DB.QueryRow("SELECT rule_id, domain, status FROM cert_jobs WHERE id = ?", id).Scan(&ruleID, &domain, &status); err != nil {
+	var caProviderID int
+	if err := db.DB.QueryRow("SELECT rule_id, domain, status, COALESCE(ca_provider_id,0) FROM cert_jobs WHERE id = ?", id).Scan(&ruleID, &domain, &status, &caProviderID); err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
 		return
 	}
@@ -176,11 +178,41 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	cancelCertJob(id)
 	result, err = db.DB.Exec("DELETE FROM cert_jobs WHERE id = ?", id)
 	if err != nil {
-		if _, restoreErr := db.DB.Exec("UPDATE cert_jobs SET status=?, updated_at=datetime('now') WHERE id=?", status, id); restoreErr != nil {
-			log.Printf("DeleteCertJob failed to restore job %d after delete failure: %v", id, restoreErr)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete job and restore status"})
-			return
+		deleteErr := err
+		if status == "issued" || status == "failed" {
+			if _, restoreErr := db.DB.Exec("UPDATE cert_jobs SET status=?, updated_at=datetime('now') WHERE id=?", status, id); restoreErr != nil {
+				deleteErr = errors.Join(deleteErr, restoreErr)
+			}
+		} else {
+			qm := services.GetCAQueueManager()
+			var restoreErr error
+			changed := false
+			if qm == nil {
+				restoreErr = errors.New("CA queue manager not initialized")
+			} else {
+				changed, restoreErr = qm.EnqueueIfActive(caProviderID, id, ruleID, domain, func() (bool, error) {
+					updateResult, updateErr := db.DB.Exec(`UPDATE cert_jobs SET status='queued', message='删除失败，重新排队签发', updated_at=datetime('now')
+						WHERE id=? AND status='disabled' AND EXISTS (
+							SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND domain=?
+						)`, id, ruleID, domain)
+					if updateErr != nil {
+						return false, updateErr
+					}
+					rows, rowsErr := updateResult.RowsAffected()
+					return rows == 1, rowsErr
+				})
+			}
+			if restoreErr != nil || !changed {
+				if restoreErr == nil {
+					restoreErr = errors.New("job was not restored to active queue")
+				}
+				if _, failErr := db.DB.Exec("UPDATE cert_jobs SET status='failed', message='删除失败且恢复队列失败', updated_at=datetime('now') WHERE id=?", id); failErr != nil {
+					restoreErr = errors.Join(restoreErr, failErr)
+				}
+				deleteErr = errors.Join(deleteErr, restoreErr)
+			}
 		}
+		log.Printf("DeleteCertJob failed for job %d: %v", id, deleteErr)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete job"})
 		return
 	}

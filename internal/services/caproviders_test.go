@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"lazy-balancer-v2/internal/models"
 )
 
 func TestCAProviderQueries_mask_list_but_not_business_load(t *testing.T) {
@@ -82,5 +84,33 @@ func TestCAProviderService_TestCAProviderWithContext_cancels_while_query_waits(t
 		}
 	case <-time.After(time.Second):
 		t.Fatal("provider query did not stop after context cancellation")
+	}
+}
+
+func TestCAProviderService_UpdateCAProvider_rejects_disabling_last_enabled(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec("DELETE FROM ca_providers"); err != nil {
+		t.Fatalf("clear CA providers: %v", err)
+	}
+	result, err := database.Exec(`INSERT INTO ca_providers (name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled) VALUES ('only','letsencrypt',?,'',1,1000,1)`, LetsEncryptDirectoryURL)
+	if err != nil {
+		t.Fatalf("seed CA provider: %v", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read CA provider ID: %v", err)
+	}
+	disabled := false
+
+	err = NewCAProviderService().UpdateCAProvider(int(id), models.UpdateCAProviderRequest{Enabled: &disabled})
+	if !errors.Is(err, ErrCAProviderLastEnabled) {
+		t.Fatalf("disable last provider error=%v, want %v", err, ErrCAProviderLastEnabled)
+	}
+	var enabled bool
+	if err := database.QueryRow("SELECT enabled FROM ca_providers WHERE id=?", id).Scan(&enabled); err != nil {
+		t.Fatalf("read CA provider after rollback: %v", err)
+	}
+	if !enabled {
+		t.Fatal("last CA provider was disabled despite rollback")
 	}
 }

@@ -18,12 +18,13 @@ import (
 
 type clusterLifecycleFake struct {
 	acmeStarted bool
+	syncStarted bool
 	syncStopped bool
 }
 
 func (f *clusterLifecycleFake) StartACME() { f.acmeStarted = true }
 func (f *clusterLifecycleFake) StopACME()  {}
-func (f *clusterLifecycleFake) StartSync() {}
+func (f *clusterLifecycleFake) StartSync() { f.syncStarted = true }
 func (f *clusterLifecycleFake) StopSync()  { f.syncStopped = true }
 
 func newClusterTestService(t *testing.T) (*ClusterService, *sql.DB) {
@@ -445,6 +446,33 @@ func TestClusterService_Promote_resets_slave_state(t *testing.T) {
 	}
 }
 
+func TestClusterService_Promote_restarts_sync_when_transaction_fails(t *testing.T) {
+	_, database := newClusterTestService(t)
+	lifecycle := &clusterLifecycleFake{}
+	service := NewClusterService(database, lifecycle)
+	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
+		t.Fatalf("seed slave state: %v", err)
+	}
+	if _, err := database.Exec(`CREATE TRIGGER reject_promotion BEFORE UPDATE OF is_master ON global_config
+		WHEN NEW.is_master=1 BEGIN SELECT RAISE(ABORT, 'reject promotion'); END`); err != nil {
+		t.Fatalf("install promotion failure trigger: %v", err)
+	}
+
+	if err := service.Promote(context.Background()); err == nil {
+		t.Fatal("promotion unexpectedly succeeded")
+	}
+	if !lifecycle.syncStopped || !lifecycle.syncStarted {
+		t.Fatalf("lifecycle syncStopped=%v syncStarted=%v", lifecycle.syncStopped, lifecycle.syncStarted)
+	}
+	var isMaster bool
+	if err := database.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
+		t.Fatalf("read role after failed promotion: %v", err)
+	}
+	if isMaster {
+		t.Fatal("failed promotion committed master role")
+	}
+}
+
 func TestReplaceSnapshotDB_replaces_resources_without_overwriting_role(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
@@ -497,6 +525,23 @@ func TestReplaceSnapshotDB_replaces_resources_without_overwriting_role(t *testin
 	}
 	if ipACLMode != "allow" || ipACLList != `["192.0.2.0/24"]` || ruleDialTimeout != 3 || path != "/metrics/" || globalDialTimeout != 8 {
 		t.Fatalf("new snapshot fields mode=%q list=%q rule_dial=%d path=%q global_dial=%d", ipACLMode, ipACLList, ruleDialTimeout, path, globalDialTimeout)
+	}
+}
+
+func TestReplaceSnapshotDB_clamps_invalid_jwt_expiry(t *testing.T) {
+	_, database := newClusterTestService(t)
+	for _, expiry := range []int{0, -1, 1441} {
+		snapshot := models.ClusterSnapshot{BasicSettings: models.ClusterBasicSettings{JWTExpireMinutes: expiry}}
+		if err := replaceSnapshotDB(context.Background(), database, snapshot); err != nil {
+			t.Fatalf("replace snapshot with JWT expiry %d: %v", expiry, err)
+		}
+		var got int
+		if err := database.QueryRow("SELECT jwt_expire_minutes FROM global_config WHERE id=1").Scan(&got); err != nil {
+			t.Fatalf("read JWT expiry: %v", err)
+		}
+		if got != 20 {
+			t.Fatalf("JWT expiry after snapshot value %d = %d, want 20", expiry, got)
+		}
 	}
 }
 
@@ -776,6 +821,37 @@ func TestClusterService_UpdateSettings_sync_interval_master_only(t *testing.T) {
 	}
 	if gotInterval != 45 || gotVersion != 1 {
 		t.Fatalf("interval=%d version=%d", gotInterval, gotVersion)
+	}
+}
+
+func TestClusterService_UpdateSettings_rejects_role_change_before_update(t *testing.T) {
+	service, database := newClusterTestService(t)
+	checkedRole := make(chan struct{})
+	continueUpdate := make(chan struct{})
+	service.beforeUpdateSettings = func() {
+		close(checkedRole)
+		<-continueUpdate
+	}
+	interval := 45
+	updateDone := make(chan error, 1)
+	go func() {
+		updateDone <- service.UpdateSettings(context.Background(), models.ClusterSettingsRequest{SyncInterval: &interval})
+	}()
+	<-checkedRole
+	if err := service.BecomeSlave(context.Background(), "https://master", models.ClusterRegistration{}); err != nil {
+		t.Fatalf("become slave: %v", err)
+	}
+	close(continueUpdate)
+	if err := <-updateDone; err == nil {
+		t.Fatal("settings update succeeded after role changed to slave")
+	}
+	var gotInterval int
+	var isMaster bool
+	if err := database.QueryRow("SELECT sync_interval,is_master FROM global_config WHERE id=1").Scan(&gotInterval, &isMaster); err != nil {
+		t.Fatalf("read settings after role change: %v", err)
+	}
+	if isMaster || gotInterval == interval {
+		t.Fatalf("role/settings after interleaving is_master=%v sync_interval=%d", isMaster, gotInterval)
 	}
 }
 

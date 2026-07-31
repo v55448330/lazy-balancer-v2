@@ -30,9 +30,10 @@ type ClusterLifecycle interface {
 }
 
 type ClusterService struct {
-	db        *sql.DB
-	lifecycle ClusterLifecycle
-	roleMu    sync.Mutex
+	db                   *sql.DB
+	lifecycle            ClusterLifecycle
+	roleMu               sync.Mutex
+	beforeUpdateSettings func()
 }
 
 func NewClusterService(database *sql.DB, lifecycle ClusterLifecycle) *ClusterService {
@@ -193,6 +194,15 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if isMaster {
 		return ErrAlreadyMaster
 	}
+	if s.lifecycle != nil {
+		s.lifecycle.StopSync()
+	}
+	promoted := false
+	defer func() {
+		if !promoted && s.lifecycle != nil {
+			s.lifecycle.StartSync()
+		}
+	}()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("开始提升事务: %w", err)
@@ -204,8 +214,8 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("提交提升事务: %w", err)
 	}
+	promoted = true
 	if s.lifecycle != nil {
-		s.lifecycle.StopSync()
 		s.lifecycle.StartACME()
 	}
 	return nil

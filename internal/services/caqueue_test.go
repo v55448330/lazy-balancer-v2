@@ -150,6 +150,40 @@ func TestIsTerminalJobStatus_returns_true_for_disabled_job(t *testing.T) {
 	}
 }
 
+func TestWorkerWriteback_preserves_disabled_job(t *testing.T) {
+	tests := []struct {
+		name  string
+		write func(int)
+	}{
+		{name: "rate limit", write: func(jobID int) { handleQueueExecutionError(jobID, &CAProviderRateLimitError{RetryAfter: time.Minute}) }},
+		{name: "failure", write: func(jobID int) { failJob(jobID, "worker failed") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, database := newClusterTestService(t)
+			result, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status) VALUES ('lb_disabled', 'example.com', 'disabled')`)
+			if err != nil {
+				t.Fatalf("seed disabled job: %v", err)
+			}
+			jobID, err := result.LastInsertId()
+			if err != nil {
+				t.Fatalf("read job ID: %v", err)
+			}
+
+			tt.write(int(jobID))
+
+			var status string
+			var attempts int
+			if err := database.QueryRow("SELECT status, COALESCE(renewal_attempts,0) FROM cert_jobs WHERE id=?", jobID).Scan(&status, &attempts); err != nil {
+				t.Fatalf("read disabled job: %v", err)
+			}
+			if status != "disabled" || attempts != 0 {
+				t.Fatalf("disabled job status=%q attempts=%d, want disabled/0", status, attempts)
+			}
+		})
+	}
+}
+
 func TestHandleQueueExecutionError_preserves_downloaded_deployment_failure(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)

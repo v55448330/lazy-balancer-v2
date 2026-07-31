@@ -247,6 +247,34 @@ func TestInitialize_upgrades_legacy_cert_jobs_before_creating_indexes(t *testing
 	}
 }
 
+func TestInitialize_normalizes_out_of_range_jwt_expiration(t *testing.T) {
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	if _, err := DB.Exec("UPDATE global_config SET jwt_expire_minutes=999999 WHERE id=1"); err != nil {
+		t.Fatalf("seed invalid JWT expiration: %v", err)
+	}
+	if err := Close(); err != nil {
+		t.Fatalf("close database before restart: %v", err)
+	}
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("reinitialize database: %v", err)
+	}
+	var expireMinutes int
+	if err := DB.QueryRow("SELECT jwt_expire_minutes FROM global_config WHERE id=1").Scan(&expireMinutes); err != nil {
+		t.Fatalf("read normalized JWT expiration: %v", err)
+	}
+	if expireMinutes != 20 {
+		t.Fatalf("jwt_expire_minutes=%d, want 20", expireMinutes)
+	}
+}
+
 func TestInitialize_returns_error_when_global_config_singleton_insert_fails(t *testing.T) {
 	// Given
 	dir := t.TempDir()

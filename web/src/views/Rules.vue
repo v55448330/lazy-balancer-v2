@@ -1211,7 +1211,9 @@ const users = ref<UserListItem[]>([])
 const certInfoMap = ref<Record<string, CertInfo | null>>({})
 const certJobMap = ref<Record<string, CertJob>>({})
 const ruleTogglePending = ref<Record<string, boolean>>({})
-let certInfoRequestSeq = 0
+let certInfoFullSeq = 0
+let certInfoPatchSeq = 0
+let certInfoFullAppliedSeq = 0
 let rulesRequestSeq = 0
 
 const getUpdaterName = (userId?: number) => {
@@ -1243,11 +1245,15 @@ const fetchRules = async () => {
 }
 
 const fetchCertInfo = async (caddyIds?: readonly string[]) => {
-  const requestSeq = ++certInfoRequestSeq
   const requestedIds = caddyIds ? new Set(caddyIds) : null
+  const requestSeq = requestedIds ? ++certInfoPatchSeq : ++certInfoFullSeq
+  const fullAppliedSeqAtStart = certInfoFullAppliedSeq
   const tlsRules = rules.value.filter(r => r.enable_tls && (!requestedIds || requestedIds.has(r.caddy_id)))
   if (tlsRules.length === 0) {
-    if (!requestedIds) certInfoMap.value = {}
+    if (!requestedIds) {
+      certInfoMap.value = {}
+      certInfoFullAppliedSeq = requestSeq
+    }
     return
   }
   try {
@@ -1255,8 +1261,14 @@ const fetchCertInfo = async (caddyIds?: readonly string[]) => {
       caddy_ids: tlsRules.map(r => r.caddy_id)
     })
     const certInfo = res.data || {}
-    if (requestSeq === certInfoRequestSeq) {
-      certInfoMap.value = requestedIds ? { ...certInfoMap.value, ...certInfo } : certInfo
+    if (!requestedIds && requestSeq === certInfoFullSeq) {
+      certInfoMap.value = certInfo
+      certInfoFullAppliedSeq = requestSeq
+    } else if (requestedIds && requestSeq === certInfoPatchSeq) {
+      const patch = certInfoFullAppliedSeq > fullAppliedSeqAtStart
+        ? Object.fromEntries(Object.entries(certInfo).filter(([id]) => !(id in certInfoMap.value)))
+        : certInfo
+      certInfoMap.value = { ...certInfoMap.value, ...patch }
     }
   } catch {
     return
@@ -1445,6 +1457,7 @@ const getHealthTagType = (status: HealthSummary) => {
   if (status.unhealthy + status.degraded === status.total) return 'danger'
   if (status.unhealthy + status.degraded > 0) return 'warning'
   if (status.unknown === status.total) return 'info'
+  if (status.unknown > 0) return 'warning'
   return 'success'
 }
 
@@ -1452,6 +1465,7 @@ const getHealthLabel = (status: HealthSummary) => {
   if (status.unhealthy + status.degraded === status.total) return '异常'
   if (status.unhealthy + status.degraded > 0) return '异常'
   if (status.unknown === status.total) return '未知'
+  if (status.unknown > 0) return '部分未知'
   return '正常'
 }
 

@@ -4,7 +4,7 @@ import type { ApiResponse, ClusterNodeMode, CurrentUser } from '@/types'
 import { isTokenExpired, request } from '@/utils/api'
 import { ElMessage } from 'element-plus'
 
-const validPages = new Set([
+const pages = [
   'dashboard',
   'rules',
   'caddy',
@@ -14,9 +14,12 @@ const validPages = new Set([
   'settings-cluster',
   'settings-certificates',
   'settings-apikeys',
-])
+] as const
+export type PageId = (typeof pages)[number]
+const validPages: ReadonlySet<string> = new Set(pages)
+const isPageId = (page: string): page is PageId => validPages.has(page)
 const storedCurrentPage = localStorage.getItem('currentPage')
-const initialCurrentPage = storedCurrentPage && validPages.has(storedCurrentPage) ? storedCurrentPage : 'dashboard'
+const initialCurrentPage: PageId = storedCurrentPage && isPageId(storedCurrentPage) ? storedCurrentPage : 'dashboard'
 if (storedCurrentPage !== initialCurrentPage) localStorage.setItem('currentPage', initialCurrentPage)
 
 export const useAuthStore = defineStore('auth', () => {
@@ -25,7 +28,7 @@ export const useAuthStore = defineStore('auth', () => {
   const nodeMode = ref<ClusterNodeMode>('master')
   const timezone = ref<string>('Asia/Shanghai')
   const loading = ref(false)
-  const currentPage = ref<string>(initialCurrentPage)
+  const currentPage = ref<PageId>(initialCurrentPage)
 
   const isLoggedIn = computed(() => !!token.value && !isTokenExpired(token.value))
   const readOnlyReason = computed<'slave' | 'non-admin' | null>(() => {
@@ -120,7 +123,8 @@ export const useAuthStore = defineStore('auth', () => {
     })
   }
 
-  function setCurrentPage(page: string) {
+  function setCurrentPage(page: PageId) {
+    if (!validPages.has(page)) return
     currentPage.value = page
     localStorage.setItem('currentPage', page)
   }

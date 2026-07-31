@@ -30,22 +30,24 @@ type SyncResult struct {
 }
 
 type SyncService struct {
-	db           *sql.DB
-	cfg          *config.Config
-	caddy        *CaddyService
-	cluster      *ClusterService
-	client       *http.Client
-	lifecycleMu  sync.Mutex
-	pullMu       sync.Mutex
-	mu           sync.Mutex
-	cancel       context.CancelFunc
-	done         chan struct{}
-	generation   uint64
-	pullsStopped bool
-	pullWG       sync.WaitGroup
-	runFn        func(context.Context)
-	loadRunState func(context.Context) (bool, string, int, error)
-	waitRunDelay func(context.Context, time.Duration) bool
+	db                  *sql.DB
+	cfg                 *config.Config
+	caddy               *CaddyService
+	cluster             *ClusterService
+	client              *http.Client
+	lifecycleMu         sync.Mutex
+	pullApplyMu         sync.Mutex
+	pullMu              sync.Mutex
+	mu                  sync.Mutex
+	cancel              context.CancelFunc
+	done                chan struct{}
+	generation          uint64
+	pullsStopped        bool
+	pullWG              sync.WaitGroup
+	runFn               func(context.Context)
+	loadRunState        func(context.Context) (bool, string, int, error)
+	waitRunDelay        func(context.Context, time.Duration) bool
+	beforeApplySnapshot func()
 }
 
 func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *SyncService {
@@ -158,11 +160,13 @@ func (s *SyncService) finishRun(generation uint64) {
 func (s *SyncService) Stop() {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
+	s.pullApplyMu.Lock()
 	s.mu.Lock()
 	s.pullsStopped = true
 	cancel := s.cancel
 	done := s.done
 	s.mu.Unlock()
+	s.pullApplyMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
@@ -262,11 +266,24 @@ func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
 		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
 		return SyncResult{}, err
 	}
+	if s.beforeApplySnapshot != nil {
+		s.beforeApplySnapshot()
+	}
+	s.pullApplyMu.Lock()
+	s.mu.Lock()
+	pullsStopped := s.pullsStopped
+	s.mu.Unlock()
+	if pullsStopped {
+		s.pullApplyMu.Unlock()
+		return SyncResult{}, errors.New("集群同步已停止，拒绝应用快照")
+	}
 	if err := s.applySnapshot(ctx, envelope.Data); err != nil {
+		s.pullApplyMu.Unlock()
 		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", err.Error())
 		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
 		return SyncResult{}, err
 	}
+	s.pullApplyMu.Unlock()
 	return SyncResult{AppliedVersion: envelope.Data.Version, Changed: true}, nil
 }
 

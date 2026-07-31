@@ -586,6 +586,7 @@ func runMigrations() error {
 
 	// Set recommended defaults for timeout fields that are still 0
 	defaultUpdates := []string{
+		"UPDATE global_config SET jwt_expire_minutes=20 WHERE jwt_expire_minutes IS NULL OR jwt_expire_minutes<=0 OR jwt_expire_minutes>1440",
 		"UPDATE global_config SET http_read_timeout=60 WHERE http_read_timeout=0",
 		"UPDATE global_config SET http_write_timeout=60 WHERE http_write_timeout=0",
 		"UPDATE global_config SET http_idle_timeout=120 WHERE http_idle_timeout=0",
@@ -1210,17 +1211,13 @@ func migrateCertJobsStatusConstraint() error {
 func Close() error {
 	var err error
 	if AuditDB != nil {
-		err = AuditDB.Close()
+		err = errors.Join(err, AuditDB.Close())
 	}
 	if MetricsDB != nil {
-		if closeErr := MetricsDB.Close(); err == nil {
-			err = closeErr
-		}
+		err = errors.Join(err, MetricsDB.Close())
 	}
 	if DB != nil {
-		if closeErr := DB.Close(); err == nil {
-			err = closeErr
-		}
+		err = errors.Join(err, DB.Close())
 	}
 	return err
 }

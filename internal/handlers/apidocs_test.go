@@ -223,7 +223,7 @@ func TestAPIDocRoutes_match_snapshot_authorization_and_request_contracts(t *test
 		t.Errorf("snapshot schema_version=%d, want 1", snapshotExample.Data.SchemaVersion)
 	}
 
-	for _, key := range []string{"GET /api-keys", "GET /config/health", "GET /cluster/nodes"} {
+	for _, key := range []string{"GET /api-keys", "GET /config/health"} {
 		route := routes[key]
 		if !strings.Contains(route.Description, "所有已登录用户可读") {
 			t.Errorf("%s does not document authenticated read access", key)
@@ -234,8 +234,28 @@ func TestAPIDocRoutes_match_snapshot_authorization_and_request_contracts(t *test
 			}
 		}
 	}
-	if description := routes["GET /cluster/nodes"].Description; !strings.Contains(description, "JWT") || !strings.Contains(description, "仅主节点") {
-		t.Errorf("GET /cluster/nodes lost JWT or master-node semantics: %q", description)
+	for _, key := range []string{
+		"GET /cluster/status",
+		"GET /cluster/nodes",
+		"POST /cluster/register-tokens",
+		"POST /cluster/nodes/:id/approve",
+		"POST /cluster/nodes/:id/reject",
+		"DELETE /cluster/nodes/:id",
+		"POST /cluster/mode",
+		"POST /cluster/promote",
+		"POST /cluster/sync/pull",
+		"PUT /cluster/settings",
+	} {
+		description := routes[key].Description
+		if !strings.Contains(description, "JWT") || !strings.Contains(description, "API Key") {
+			t.Errorf("%s does not document JWT and API Key authentication: %q", key, description)
+		}
+		if strings.Contains(description, "仅接受 JWT") {
+			t.Errorf("%s retains JWT-only authentication description: %q", key, description)
+		}
+	}
+	if description := routes["GET /cluster/nodes"].Description; !strings.Contains(description, "仅主节点") {
+		t.Errorf("GET /cluster/nodes lost master-node semantics: %q", description)
 	}
 	if request := routes["POST /rules/:caddy_id/duplicate"].Request; request != "" {
 		t.Errorf("duplicate rule documents unused request body: %s", request)

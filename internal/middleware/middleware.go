@@ -10,7 +10,6 @@ import (
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/handlers"
-	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 
 	"github.com/gin-contrib/gzip"
@@ -93,14 +92,14 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.PUT("/ca-providers/:id", h.UpdateCAProvider)
 				admin.POST("/ca-providers/:id/test", h.TestCAProvider)
 
-				admin.POST("/cluster/register-tokens", jwtOnly(), h.GenerateClusterRegisterToken)
-				admin.POST("/cluster/nodes/:id/approve", jwtOnly(), h.ApproveClusterNode)
-				admin.POST("/cluster/nodes/:id/reject", jwtOnly(), h.RejectClusterNode)
-				admin.DELETE("/cluster/nodes/:id", jwtOnly(), h.DeleteClusterNode)
-				admin.POST("/cluster/mode", jwtOnly(), h.SetClusterMode)
-				admin.POST("/cluster/promote", jwtOnly(), h.PromoteClusterNode)
-				admin.POST("/cluster/sync/pull", jwtOnly(), h.PullClusterSnapshot)
-				admin.PUT("/cluster/settings", jwtOnly(), h.UpdateClusterSettings)
+				admin.POST("/cluster/register-tokens", h.GenerateClusterRegisterToken)
+				admin.POST("/cluster/nodes/:id/approve", h.ApproveClusterNode)
+				admin.POST("/cluster/nodes/:id/reject", h.RejectClusterNode)
+				admin.DELETE("/cluster/nodes/:id", h.DeleteClusterNode)
+				admin.POST("/cluster/mode", h.SetClusterMode)
+				admin.POST("/cluster/promote", h.PromoteClusterNode)
+				admin.POST("/cluster/sync/pull", h.PullClusterSnapshot)
+				admin.PUT("/cluster/settings", h.UpdateClusterSettings)
 
 				// Config
 				admin.POST("/config/preview", h.PreviewConfigUpdate)
@@ -129,7 +128,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				// Read-only lists (all authenticated users)
 				business.GET("/users", h.ListUsers)
 				business.GET("/api-keys", h.ListAPIKeys)
-				business.GET("/cluster/nodes", jwtOnly(), h.ListClusterNodes)
+				business.GET("/cluster/nodes", h.ListClusterNodes)
 				business.GET("/config/health", h.GetUpstreamHealth)
 
 				// Rules
@@ -162,7 +161,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 				// Config (read only for non-admin)
 				business.GET("/config", h.GetConfig)
-				business.GET("/cluster/status", jwtOnly(), h.GetClusterStatus)
+				business.GET("/cluster/status", h.GetClusterStatus)
 
 				// Metrics
 				business.GET("/metrics/overview", h.GetMetricsOverview)
@@ -397,16 +396,6 @@ func adminOnly() gin.HandlerFunc {
 		if !exists || role != "admin" {
 			c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "Admin access required"})
 			c.Abort()
-			return
-		}
-		c.Next()
-	}
-}
-
-func jwtOnly() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if c.GetString("auth_type") == "api_key" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "集群管理接口仅接受管理员 JWT"})
 			return
 		}
 		c.Next()

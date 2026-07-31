@@ -148,7 +148,7 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 	var providerName string
 	db.DB.QueryRow("SELECT name FROM ca_providers WHERE id=?", id).Scan(&providerName)
 
-	if err := h.caProviderService.TestCAProvider(id); err != nil {
+	if err := h.caProviderService.TestCAProviderWithContext(c.Request.Context(), id); err != nil {
 		result := "provider_error"
 		if errors.Is(err, services.ErrCAProviderNotFound) {
 			result = "not_found"

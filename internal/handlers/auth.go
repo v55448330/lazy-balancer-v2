@@ -70,7 +70,7 @@ func (h *Handlers) Login(c *gin.Context) {
 	}
 
 	expireMinutes := 20
-	if err := db.DB.QueryRow("SELECT COALESCE(jwt_expire_minutes,20) FROM global_config WHERE id=1").Scan(&expireMinutes); err != nil || expireMinutes <= 0 {
+	if err := db.DB.QueryRow("SELECT COALESCE(jwt_expire_minutes,20) FROM global_config WHERE id=1").Scan(&expireMinutes); err != nil || expireMinutes <= 0 || expireMinutes > 1440 {
 		expireMinutes = 20
 	}
 	expireDuration := time.Duration(expireMinutes) * time.Minute

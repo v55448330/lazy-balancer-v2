@@ -215,6 +215,9 @@ func insertSnapshotPathRules(ctx context.Context, tx *sql.Tx, ruleID string, pat
 
 func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
 	settings := snapshot.BasicSettings
+	if settings.JWTExpireMinutes <= 0 || settings.JWTExpireMinutes > 1440 {
+		settings.JWTExpireMinutes = 20
+	}
 	query := `UPDATE global_config SET log_level=?,access_log_json=?,access_log_format=?,cert_job_log_size_mb=?,runtime_log_size_mb=?,audit_retention_months=?,jwt_expire_minutes=?,timezone=?,acme_email=?,cert_expiry_days=?,cert_renewal_days=?,cert_renewal_attempts=?,default_ca_provider_id=?,dns_provider=?,dns_credentials=?,sync_interval=?,admin_tls_enabled=?,admin_tls_mode=?,admin_tls_cert=?,admin_tls_key=?`
 	args := []any{settings.LogLevel, settings.AccessLogJSON, settings.AccessLogFormat, settings.CertJobLogSizeMB, settings.RuntimeLogSizeMB, settings.AuditRetentionMonths, settings.JWTExpireMinutes, settings.Timezone, settings.ACMEEmail, settings.CertExpiryDays, settings.CertRenewalDays, settings.CertRenewalAttempts, settings.DefaultCAProviderID, settings.DNSProvider, settings.DNSCredentials, settings.SyncInterval, settings.AdminTLSEnabled, settings.AdminTLSMode, settings.AdminTLSCert, settings.AdminTLSKey}
 	if snapshot.CaddyConfig != nil {

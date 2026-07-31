@@ -243,6 +243,38 @@ func TestConfigBackup_export_import_roundtrip(t *testing.T) {
 	}
 }
 
+func TestImportConfigBackup_clamps_excessive_jwt_expiration(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	completeTables := make(map[string][]map[string]any, len(configBackupTables))
+	for _, table := range configBackupTables {
+		completeTables[table] = []map[string]any{}
+	}
+	body, err := json.Marshal(configBackup{
+		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2},
+		Config: map[string]any{"jwt_expire_minutes": 999999},
+		Tables: completeTables,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(string(body)))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s", response.Code, response.Body.String())
+	}
+	var expireMinutes int
+	if err := db.DB.QueryRow("SELECT jwt_expire_minutes FROM global_config WHERE id=1").Scan(&expireMinutes); err != nil {
+		t.Fatalf("read imported JWT expiration: %v", err)
+	}
+	if expireMinutes != 20 {
+		t.Fatalf("jwt_expire_minutes=%d, want 20", expireMinutes)
+	}
+}
+
 func TestImportConfigBackup_accepts_historical_v1_core_tables(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	body, err := json.Marshal(configBackup{

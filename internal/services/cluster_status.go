@@ -43,19 +43,38 @@ func (s *ClusterService) UpdateSettings(ctx context.Context, req models.ClusterS
 	if req.SyncCaddyConfig != nil && !isMaster {
 		return errors.New("从节点不能修改 Caddy 配置同步开关")
 	}
+	if s.beforeUpdateSettings != nil {
+		s.beforeUpdateSettings()
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("开始集群设置事务: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	if req.SyncInterval != nil {
-		if _, err := tx.ExecContext(ctx, "UPDATE global_config SET sync_interval=? WHERE id=1", *req.SyncInterval); err != nil {
+		result, err := tx.ExecContext(ctx, "UPDATE global_config SET sync_interval=? WHERE id=1 AND is_master=1", *req.SyncInterval)
+		if err != nil {
 			return fmt.Errorf("更新同步间隔: %w", err)
+		}
+		updated, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("读取同步间隔更新结果: %w", err)
+		}
+		if updated != 1 {
+			return errors.New("从节点不能修改同步间隔，由主节点统一下发")
 		}
 	}
 	if req.SyncCaddyConfig != nil {
-		if _, err := tx.ExecContext(ctx, "UPDATE global_config SET sync_caddy_config=? WHERE id=1", *req.SyncCaddyConfig); err != nil {
+		result, err := tx.ExecContext(ctx, "UPDATE global_config SET sync_caddy_config=? WHERE id=1 AND is_master=1", *req.SyncCaddyConfig)
+		if err != nil {
 			return fmt.Errorf("更新 Caddy 同步开关: %w", err)
+		}
+		updated, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("读取 Caddy 同步开关更新结果: %w", err)
+		}
+		if updated != 1 {
+			return errors.New("从节点不能修改 Caddy 配置同步开关")
 		}
 	}
 	if err := tx.Commit(); err != nil {

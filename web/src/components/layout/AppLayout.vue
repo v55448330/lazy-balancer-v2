@@ -141,6 +141,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useAuthStore } from '@/stores/auth'
+import type { PageId } from '@/stores/auth'
 import { request } from '@/utils/api'
 import { DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document } from '@element-plus/icons-vue'
 import AppLogo from '@/components/AppLogo.vue'
@@ -186,7 +187,7 @@ const syncProfileForm = () => {
   }
 }
 
-const goPage = (page: string) => {
+const goPage = (page: PageId) => {
   authStore.setCurrentPage(page)
 }
 

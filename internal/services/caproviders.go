@@ -211,6 +211,7 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 	if req.MinIntervalMS != nil {
 		existing.MinIntervalMS = *req.MinIntervalMS
 	}
+	wasEnabled := existing.Enabled
 	if req.Enabled != nil {
 		existing.Enabled = *req.Enabled
 	}
@@ -261,7 +262,7 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 		return ErrCAProviderMinIntervalTooHigh
 	}
 
-	if req.Enabled != nil && !*req.Enabled && existing.Enabled {
+	if req.Enabled != nil && !*req.Enabled && wasEnabled {
 		var enabledCount int
 		err := tx.QueryRow(`
 			SELECT COUNT(*) FROM ca_providers WHERE id != ? AND enabled=1
@@ -326,6 +327,7 @@ func (e *CAProviderTestError) Unwrap() error { return e.Err }
 // TestCAProvider validates a CA provider by registering an ACME account.
 // It does not attempt to issue a certificate or validate domain ownership;
 // it only verifies that the CA is reachable and the credentials are accepted.
+// Deprecated: request handlers must call TestCAProviderWithContext with the request context.
 func (s *CAProviderService) TestCAProvider(id int) error {
 	return s.TestCAProviderWithContext(context.Background(), id)
 }

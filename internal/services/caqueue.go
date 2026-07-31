@@ -172,6 +172,20 @@ func (m *CAQueueManager) IsPaused() bool {
 	return !m.active
 }
 
+func (m *CAQueueManager) IsJobActiveForTest(jobID int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, queue := range m.queues {
+		queue.mu.Lock()
+		_, active := queue.active[jobID]
+		queue.mu.Unlock()
+		if active {
+			return true
+		}
+	}
+	return false
+}
+
 // Enqueue adds or re-enqueues a cert job.
 func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains string) error {
 	m.mu.Lock()
@@ -454,7 +468,7 @@ func requeueCanceledJob(jobID int) {
 
 func handleQueueExecutionError(jobID int, err error) {
 	var deploymentErr *certificateDeploymentError
-	if errors.As(err, &deploymentErr) || isTerminalJobStatus(jobID) {
+	if errors.As(err, &deploymentErr) {
 		return
 	}
 	var rateLimitErr *CAProviderRateLimitError
@@ -522,32 +536,43 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 	display := available.In(loc)
 
 	if attempts >= maxAttempts {
-		WriteCertJobLog(jobID, "ERROR", "failed", fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts))
-		if _, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=?, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?", fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts), attempts, jobID); err != nil {
+		result, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=?, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=? AND status NOT IN ('issued','failed','disabled')", fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts), attempts, jobID)
+		if err != nil {
 			log.Printf("CA queue: failed to mark job %d as failed at max attempts: %v", jobID, err)
-		} else {
+			return
+		}
+		updated, err := result.RowsAffected()
+		if err != nil {
+			log.Printf("CA queue: failed to read max-attempt result for job %d: %v", jobID, err)
+			return
+		}
+		if updated == 1 {
+			WriteCertJobLog(jobID, "ERROR", "failed", fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts))
 			RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("max_attempts")), "")
 		}
 		return
 	}
 
-	WriteCertJobLog(jobID, "WARN", "waiting_ca", fmt.Sprintf("CA 频率限制，第 %d 次，将在 %s 后重试", attempts, display.Format("2006-01-02 15:04:05 -07:00")))
-	if _, err := db.DB.Exec(
-		"UPDATE cert_jobs SET status='waiting_ca', message='等待 CA 频率限制冷却', ca_available_after=?, last_error_code='429', renewal_attempts=?, updated_at=datetime('now') WHERE id=?",
+	result, err := db.DB.Exec(
+		"UPDATE cert_jobs SET status='waiting_ca', message='等待 CA 频率限制冷却', ca_available_after=?, last_error_code='429', renewal_attempts=?, updated_at=datetime('now') WHERE id=? AND status NOT IN ('issued','failed','disabled')",
 		available.UTC().Format("2006-01-02 15:04:05"), attempts, jobID,
-	); err != nil {
+	)
+	if err != nil {
 		log.Printf("CA queue: failed to mark job %d as waiting_ca: %v", jobID, err)
-	} else {
+		return
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		log.Printf("CA queue: failed to read waiting_ca result for job %d: %v", jobID, err)
+		return
+	}
+	if updated == 1 {
+		WriteCertJobLog(jobID, "WARN", "waiting_ca", fmt.Sprintf("CA 频率限制，第 %d 次，将在 %s 后重试", attempts, display.Format("2006-01-02 15:04:05 -07:00")))
 		RecordAuditLog("system", "CA限流", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), fmt.Sprintf("第 %d 次限流", attempts), fmt.Sprintf("恢复时间：%s", display.Format("2006-01-02 15:04:05"))), "")
 	}
 }
 func failJob(jobID int, message string) {
-	if !jobExists(jobID) {
-		log.Printf("CA queue: cannot fail missing job %d: %s", jobID, message)
-		return
-	}
-	WriteCertJobLog(jobID, "ERROR", "failed", message)
-	result, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=COALESCE(renewal_attempts,0)+1, updated_at=datetime('now') WHERE id=? AND status!='disabled'", message, jobID)
+	result, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=COALESCE(renewal_attempts,0)+1, updated_at=datetime('now') WHERE id=? AND status NOT IN ('issued','failed','disabled')", message, jobID)
 	if err != nil {
 		log.Printf("CA queue: failed to mark job %d as failed: %v", jobID, err)
 		return
@@ -558,6 +583,7 @@ func failJob(jobID int, message string) {
 		return
 	}
 	if updated == 1 {
+		WriteCertJobLog(jobID, "ERROR", "failed", message)
 		RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("failed")), "")
 	}
 }

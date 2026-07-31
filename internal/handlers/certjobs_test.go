@@ -72,6 +72,36 @@ func TestDeleteCertJob_keeps_row_when_delete_fails(t *testing.T) {
 	}
 }
 
+func TestDeleteCertJob_requeues_running_job_when_delete_fails(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_running','running','http','running.example.test',8080,1,1,'acme_dns');
+		INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_running','running.example.test','creating_order');
+		CREATE TRIGGER fail_running_job_delete BEFORE DELETE ON cert_jobs BEGIN SELECT RAISE(ABORT,'delete failed'); END`); err != nil {
+		t.Fatalf("seed running job and trigger: %v", err)
+	}
+	router := gin.New()
+	router.DELETE("/jobs/:id", h.DeleteCertJob)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/jobs/1", nil))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=1").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "queued" {
+		t.Fatalf("status=%q, want queued", status)
+	}
+	if !services.GetCAQueueManager().IsJobActiveForTest(1) {
+		t.Fatal("restored running job is not active in the CA queue")
+	}
+}
+
 func TestCertJobOperationLock_serializes_retry_and_delete(t *testing.T) {
 	lock := certJobOperationLock(9876)
 	firstEntered := make(chan struct{})

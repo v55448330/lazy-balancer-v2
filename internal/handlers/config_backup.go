@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"time"
 
@@ -244,6 +245,24 @@ func validateV2Backup(backup configBackup) error {
 	return nil
 }
 
+func clampBackupJWTExpireMinutes(value any) (any, bool) {
+	switch minutes := value.(type) {
+	case float64:
+		if minutes >= 1 && minutes <= 1440 && minutes == math.Trunc(minutes) {
+			return value, false
+		}
+	case int:
+		if minutes >= 1 && minutes <= 1440 {
+			return value, false
+		}
+	case int64:
+		if minutes >= 1 && minutes <= 1440 {
+			return value, false
+		}
+	}
+	return 20, true
+}
+
 func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 	if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err != nil || !isMaster {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导出配置"})
@@ -306,6 +325,10 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	if err := validateV2Backup(backup); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
+	}
+	jwtExpireClamped := false
+	if value, exists := backup.Config["jwt_expire_minutes"]; exists {
+		backup.Config["jwt_expire_minutes"], jwtExpireClamped = clampBackupJWTExpireMinutes(value)
 	}
 	ctx := c.Request.Context()
 	// 与 UpdateRule 同一锁序：先 caddyOpMu 后 DB 事务，避免与规则写路径循环等待
@@ -455,7 +478,12 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置已导入但证书任务恢复失败: " + err.Error(), Data: gin.H{"summary": counts}})
 		return
 	}
-	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail("来源：v2 备份（覆盖导入）", counts, services.AuditResultPart("success")))
+	auditParts := []string{"来源：v2 备份（覆盖导入）", counts}
+	if jwtExpireClamped {
+		auditParts = append(auditParts, "jwt_expire_minutes 越界，已重置为 20")
+	}
+	auditParts = append(auditParts, services.AuditResultPart("success"))
+	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
 	recordAudit(c, "重载", "Caddy配置", "导入配置后自动重载")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置导入成功", Data: gin.H{"summary": counts}})
 }
