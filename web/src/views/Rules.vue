@@ -900,7 +900,21 @@
           <div ref="ruleLogContainerRef" class="rule-log-viewer" v-html="ruleLogHtml" />
         </el-tab-pane>
         <el-tab-pane label="统计" name="stats">
-          <template v-if="ruleLogStats">
+          <div v-if="ruleLogStatsLoading" class="stats-state" aria-live="polite">
+            <el-text type="info">正在统计日志...</el-text>
+            <el-skeleton :rows="6" animated />
+          </div>
+          <el-result
+            v-else-if="ruleLogStatsError"
+            icon="error"
+            title="日志统计加载失败"
+            :sub-title="ruleLogStatsError"
+          >
+            <template #extra>
+              <el-button type="primary" @click="startLogStats">重试</el-button>
+            </template>
+          </el-result>
+          <template v-else-if="ruleLogStats">
             <div class="stats-summary">
               <el-tag size="small" type="info" effect="plain">共 {{ ruleLogStats.total }} 次请求</el-tag>
               <el-text type="info" size="small" style="margin-left: 8px;">自 {{ ruleLogStats.started_at }} 起，每 5 秒实时统计</el-text>
@@ -2536,11 +2550,14 @@ const openRuleLogDialog = (rule: Rule) => {
 
 const ruleLogTab = ref('log')
 const ruleLogStats = ref<RuleLogStats | null>(null)
+const ruleLogStatsLoading = ref(false)
+const ruleLogStatsError = ref('')
 const logStatsOffset = ref(0)
 const logStatsMaps = ref<{ ip: Record<string, number>; ua: Record<string, number>; uri: Record<string, number>; total: number; startedAt: string } | null>(null)
 const logStatsInFlight = ref(false)
 const MAX_LOG_STAT_KEYS = 500
 const OTHER_LOG_STAT_KEY = '其他'
+const LOG_STAT_CHUNK_SIZE = 200
 
 const generalizeUA = (ua: string): string => {
   if (!ua) return '-'
@@ -2597,6 +2614,26 @@ const consumeLogLine = (maps: { ip: Record<string, number>; ua: Record<string, n
   incrementCappedStat(maps.ua, g)
 }
 
+const consumeLogLinesChunked = async (
+  lines: readonly string[],
+  maps: { ip: Record<string, number>; ua: Record<string, number>; uri: Record<string, number>; total: number },
+  isCurrent: () => boolean,
+): Promise<boolean> => {
+  for (let start = 0; start < lines.length; start += LOG_STAT_CHUNK_SIZE) {
+    if (!isCurrent()) return false
+    const end = Math.min(start + LOG_STAT_CHUNK_SIZE, lines.length)
+    for (let index = start; index < end; index++) {
+      const line = lines[index]
+      if (line?.trim()) consumeLogLine(maps, line)
+    }
+    if (end < lines.length) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      if (!isCurrent()) return false
+    }
+  }
+  return isCurrent()
+}
+
 const incrementCappedStat = (map: Record<string, number>, key: string): void => {
   if (Object.prototype.hasOwnProperty.call(map, key)) {
     map[key] += 1
@@ -2614,9 +2651,7 @@ const topN = (m: Record<string, number>, n: number) =>
     .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
     .slice(0, n)
 
-const rebuildStatsView = () => {
-  if (!logStatsMaps.value) return
-  const m = logStatsMaps.value
+const rebuildStatsView = (m: { ip: Record<string, number>; ua: Record<string, number>; uri: Record<string, number>; total: number; startedAt: string }) => {
   ruleLogStats.value = {
     total: m.total,
     started_at: m.startedAt,
@@ -2627,7 +2662,7 @@ const rebuildStatsView = () => {
 }
 
 const fetchLogStream = async () => {
-  if (!ruleLogCaddyId.value || logStatsInFlight.value) return
+  if (!ruleLogCaddyId.value || ruleLogStatsLoading.value || logStatsInFlight.value) return
   const targetId = ruleLogCaddyId.value
   const targetMaps = logStatsMaps.value
   const targetOffset = logStatsOffset.value
@@ -2639,8 +2674,15 @@ const fetchLogStream = async () => {
     if (requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== targetMaps) return
     const lines: string[] = res.data?.lines || []
     if (lines.length) {
-      for (const line of lines) consumeLogLine(targetMaps, line)
-      rebuildStatsView()
+      const completed = await consumeLogLinesChunked(lines, targetMaps, () => (
+        requestSeq === ruleLogRequestSeq
+        && ruleLogDialogVisible.value
+        && ruleLogTab.value === 'stats'
+        && ruleLogCaddyId.value === targetId
+        && logStatsMaps.value === targetMaps
+      ))
+      if (!completed) return
+      rebuildStatsView(targetMaps)
     }
     logStatsOffset.value = res.data?.offset ?? targetOffset
   } catch (error: unknown) {
@@ -2657,18 +2699,29 @@ const startLogStats = async () => {
   const maps = { ip: {}, ua: {}, uri: {}, total: 0, startedAt: new Date().toLocaleString() }
   logStatsMaps.value = maps
   ruleLogStats.value = null
+  ruleLogStatsLoading.value = true
+  ruleLogStatsError.value = ''
   logStatsOffset.value = 0
   try {
     const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`)
     if (requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== maps) return
     const content: string = res.data?.content || ''
-    for (const line of content.split('\n')) {
-      if (line.trim()) consumeLogLine(maps, line)
-    }
-    rebuildStatsView()
+    const completed = await consumeLogLinesChunked(content.split('\n'), maps, () => (
+      requestSeq === ruleLogRequestSeq
+      && ruleLogDialogVisible.value
+      && ruleLogTab.value === 'stats'
+      && ruleLogCaddyId.value === targetId
+      && logStatsMaps.value === maps
+    ))
+    if (!completed) return
+    rebuildStatsView(maps)
     logStatsOffset.value = res.data?.offset ?? 0
   } catch (error: unknown) {
+    if (requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== maps) return
     console.error('Failed to init log stats:', error)
+    ruleLogStatsError.value = error instanceof Error ? error.message : '请稍后重试'
+  } finally {
+    if (requestSeq === ruleLogRequestSeq) ruleLogStatsLoading.value = false
   }
 }
 
@@ -2676,6 +2729,8 @@ const onRuleLogTabChange = (tab: string) => {
   ruleLogRequestSeq++
   ruleLogLoading.value = false
   logStatsInFlight.value = false
+  ruleLogStatsLoading.value = false
+  ruleLogStatsError.value = ''
   if (tab === 'stats') {
     startLogStats()
   } else {
@@ -2698,6 +2753,8 @@ const onRuleLogDialogClosed = () => {
   ruleLogCaddyId.value = ''
   logStatsMaps.value = null
   ruleLogStats.value = null
+  ruleLogStatsLoading.value = false
+  ruleLogStatsError.value = ''
   logStatsOffset.value = 0
   ruleLogLoading.value = false
   logStatsInFlight.value = false
@@ -3284,6 +3341,7 @@ onUnmounted(() => {
 }
 
 .stats-summary { margin-bottom: 14px; display: flex; align-items: center; }
+.stats-state { min-height: 280px; display: flex; flex-direction: column; gap: 16px; padding: 12px 4px; }
 .stats-grid { display: grid; grid-template-columns: 1fr 1.5fr 1.5fr; gap: 14px; }
 @media (max-width: 767px) {
   .stats-grid { grid-template-columns: 1fr; }
