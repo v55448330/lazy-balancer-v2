@@ -496,7 +496,7 @@ func scanLbRules(rows *sql.Rows) ([]models.LbRule, error) {
 			r.CreatedAt = createdAt.Time
 		}
 		if updatedAt.Valid {
-			r.UpdatedAt = updatedAt
+			r.UpdatedAt = models.JSONNullTime{NullTime: updatedAt}
 		}
 		if updatedBy.Valid {
 			r.UpdatedBy = int(updatedBy.Int64)

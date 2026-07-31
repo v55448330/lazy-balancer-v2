@@ -157,15 +157,7 @@ type LbRule struct {
 	CreatedBy                     int          `json:"created_by"`
 	UpdatedBy                     int          `json:"updated_by"`
 	CreatedAt                     time.Time    `json:"created_at"`
-	UpdatedAt                     sql.NullTime `json:"updated_at"`
-}
-
-func (r LbRule) MarshalJSON() ([]byte, error) {
-	type alias LbRule
-	return json.Marshal(struct {
-		alias
-		UpdatedAt JSONNullTime `json:"updated_at"`
-	}{alias: alias(r), UpdatedAt: JSONNullTime{NullTime: r.UpdatedAt}})
+	UpdatedAt                     JSONNullTime `json:"updated_at"`
 }
 
 // CAProvider represents an ACME certificate authority configuration.
@@ -321,6 +313,21 @@ func (n JSONNullTime) MarshalJSON() ([]byte, error) {
 		return []byte("null"), nil
 	}
 	return n.Time.MarshalJSON()
+}
+
+func (n *JSONNullTime) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		n.Valid = false
+		n.Time = time.Time{}
+		return nil
+	}
+	var parsed time.Time
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return err
+	}
+	n.Valid = true
+	n.Time = parsed
+	return nil
 }
 
 // CertJob represents an ACME certificate issuance job

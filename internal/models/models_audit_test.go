@@ -78,7 +78,7 @@ func TestAPIKeyResponse_serializes_nullable_times_as_values_or_null(t *testing.T
 func TestPublicModelsSerializeNullableTimesAsStringsOrNull(t *testing.T) {
 	value := JSONNullTime{NullTime: sql.NullTime{Time: time.Date(2026, time.July, 30, 1, 2, 3, 0, time.UTC), Valid: true}}
 	data, err := json.Marshal([]any{
-		LbRule{UpdatedAt: value.NullTime}, GlobalConfig{LastSync: value}, GlobalConfig{}, CertificateConfig{UpdatedAt: value}, CertificateConfig{},
+		LbRule{UpdatedAt: value}, GlobalConfig{LastSync: value}, GlobalConfig{}, CertificateConfig{UpdatedAt: value}, CertificateConfig{},
 	})
 	if err != nil {
 		t.Fatalf("marshal public models: %v", err)
