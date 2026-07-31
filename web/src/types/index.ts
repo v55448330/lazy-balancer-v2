@@ -153,6 +153,7 @@ export interface ClusterNode {
   readonly name: string
   readonly ip_address: string
   readonly port: number
+  readonly access_url: string
   readonly status: ClusterNodeStatus
   readonly is_approved: boolean
   readonly reported_version: number

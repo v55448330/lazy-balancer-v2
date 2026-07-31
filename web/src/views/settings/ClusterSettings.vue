@@ -21,6 +21,7 @@
       :settings-loading="settingsLoading"
       :pending-node-id="pendingNodeId"
       :login-node-id="loginNodeId"
+      :access-url-saving="accessUrlSaving"
       :read-only="isNonAdminReadOnly"
       @generate-token="generateRegisterToken"
       @update-sync="updateSyncSetting"
@@ -28,6 +29,7 @@
       @reject="rejectNode"
       @remove="removeNode"
       @login="loginNode"
+      @edit-access-url="openAccessUrlDialog"
     />
 
     <ClusterSlavePanel
@@ -39,6 +41,14 @@
       @sync="syncNow"
       @promote="promoteToMaster"
       @reregister="requestRegistration"
+    />
+
+    <ClusterAccessUrlDialog
+      :visible="accessUrlDialogVisible"
+      :node="editingAccessUrlNode"
+      :saving="accessUrlSaving"
+      @close="closeAccessUrlDialog"
+      @save="updateAccessUrl"
     />
 
     <el-dialog v-model="tokenDialogVisible" title="一次性注册令牌" width="min(560px, 92vw)" :close-on-click-modal="false">
@@ -72,6 +82,7 @@ import type {
   ClusterSyncResult,
 } from '@/types'
 import ClusterMasterPanel from './cluster/ClusterMasterPanel.vue'
+import ClusterAccessUrlDialog from './cluster/ClusterAccessUrlDialog.vue'
 import ClusterModeCard from './cluster/ClusterModeCard.vue'
 import ClusterSlavePanel from './cluster/ClusterSlavePanel.vue'
 import ClusterStatusCard from './cluster/ClusterStatusCard.vue'
@@ -99,6 +110,9 @@ const promoting = ref(false)
 const intervalSaving = ref(false)
 const pendingNodeId = ref<number | null>(null)
 const loginNodeId = ref<number | null>(null)
+const accessUrlDialogVisible = ref(false)
+const editingAccessUrlNode = ref<ClusterNode | null>(null)
+const accessUrlSaving = ref(false)
 const registrationRequest = ref(0)
 const tokenDialogVisible = ref(false)
 const registerToken = ref<ClusterRegisterToken | null>(null)
@@ -315,6 +329,33 @@ const loginNode = async (node: ClusterNode): Promise<void> => {
     throw error
   } finally {
     loginNodeId.value = null
+  }
+}
+
+const openAccessUrlDialog = (node: ClusterNode): void => {
+  if (isNonAdminReadOnly.value || accessUrlSaving.value) return
+  editingAccessUrlNode.value = node
+  accessUrlDialogVisible.value = true
+}
+
+const closeAccessUrlDialog = (): void => {
+  if (accessUrlSaving.value) return
+  accessUrlDialogVisible.value = false
+  editingAccessUrlNode.value = null
+}
+
+const updateAccessUrl = async (accessUrl: string): Promise<void> => {
+  const node = editingAccessUrlNode.value
+  if (!node || isNonAdminReadOnly.value || accessUrlSaving.value) return
+  accessUrlSaving.value = true
+  try {
+    await request.put<ActionResponse>(`/cluster/nodes/${node.id}/access-url`, { access_url: accessUrl })
+    ElMessage.success('访问地址已更新')
+    accessUrlDialogVisible.value = false
+    editingAccessUrlNode.value = null
+    await fetchNodes()
+  } finally {
+    accessUrlSaving.value = false
   }
 }
 

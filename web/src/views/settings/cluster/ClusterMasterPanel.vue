@@ -34,6 +34,16 @@
       <el-table-column label="地址" min-width="150">
         <template #default="{ row }"><span class="mono-value">{{ row.ip_address }}:{{ row.port }}</span></template>
       </el-table-column>
+      <el-table-column label="访问地址" min-width="220">
+        <template #default="{ row }">
+          <el-tooltip v-if="row.access_url" :content="row.access_url" placement="top" :show-after="400">
+            <el-link class="access-url-link" type="primary" :href="row.access_url" target="_blank" rel="noopener noreferrer">
+              {{ row.access_url }}
+            </el-link>
+          </el-tooltip>
+          <span v-else class="form-tip">-</span>
+        </template>
+      </el-table-column>
       <el-table-column label="状态" width="90" align="center">
         <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag></template>
       </el-table-column>
@@ -62,14 +72,16 @@
       <el-table-column label="最后上报时间" min-width="170">
         <template #default="{ row }">{{ formatDate(row.last_seen) || '-' }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right" align="center">
+      <el-table-column label="操作" width="180" :fixed="operationColumnFixed" align="center">
         <template #default="{ row }">
           <template v-if="row.status === 'pending' || !row.is_approved">
             <el-button link type="primary" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('approve', row)">确认</el-button>
+            <el-button v-if="!readOnly" link type="primary" size="small" :disabled="accessUrlSaving" @click="$emit('edit-access-url', row)">编辑</el-button>
             <el-button link type="danger" size="small" :disabled="readOnly || pendingNodeId !== null" @click="$emit('reject', row)">拒绝</el-button>
           </template>
           <template v-else>
             <el-button v-if="!readOnly" link type="primary" size="small" :loading="loginNodeId === row.id" :disabled="row.status !== 'online' || loginNodeId !== null" @click="$emit('login', row)">登录</el-button>
+            <el-button v-if="!readOnly" link type="primary" size="small" :disabled="accessUrlSaving" @click="$emit('edit-access-url', row)">编辑</el-button>
             <el-button link type="danger" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('remove', row)">删除</el-button>
           </template>
         </template>
@@ -80,6 +92,8 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useWindowSize } from '@vueuse/core'
 import { formatDate } from '@/utils/date'
 import { CircleCheckFilled, CircleCloseFilled, List, Setting } from '@element-plus/icons-vue'
 import type { ClusterNode, ClusterNodeStatus, ClusterStatus } from '@/types'
@@ -92,6 +106,7 @@ const props = defineProps<{
   readonly settingsLoading: boolean
   readonly pendingNodeId: number | null
   readonly loginNodeId: number | null
+  readonly accessUrlSaving: boolean
   readonly readOnly: boolean
 }>()
 
@@ -102,7 +117,11 @@ const emit = defineEmits<{
   (event: 'reject', node: ClusterNode): void
   (event: 'remove', node: ClusterNode): void
   (event: 'login', node: ClusterNode): void
+  (event: 'edit-access-url', node: ClusterNode): void
 }>()
+
+const { width: viewportWidth } = useWindowSize()
+const operationColumnFixed = computed<'right' | false>(() => viewportWidth.value > 1024 ? 'right' : false)
 
 const handleSyncChange = (value: string | number | boolean): void => {
   if (props.readOnly) return
@@ -131,6 +150,8 @@ const statusLabel = (status: ClusterNodeStatus): string => {
 .form-tip { color: var(--text-muted); font-size: 12px; }
 .setting-row .form-tip { margin-top: 4px; }
 .mono-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.access-url-link { display: inline-flex; max-width: 100%; vertical-align: middle; }
+.access-url-link :deep(.el-link__inner) { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .version-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .health-cell { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
 .health-cell > span { display: inline-flex; align-items: center; gap: 4px; }
