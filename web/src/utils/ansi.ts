@@ -55,31 +55,41 @@ export function ansiToHtml(text: string): string {
 
   const escaped = escapeHtml(text)
   let open = false
+  let bold = false
+  let italic = false
+  let underline = false
+  let foreground = ''
+  let background = ''
 
   const html = escaped.replace(/\u001b\[((?:\d+;?)+)m/g, (_match, codes) => {
     const codeList: number[] = String(codes).split(';').map(Number)
-
-    if (codeList.includes(0)) {
-      const close = open ? '</span>' : ''
-      open = false
-      return close
-    }
-
-    const styles: string[] = []
     for (const c of codeList) {
-      if (c === 1) styles.push('font-weight:bold')
-      else if (c === 3) styles.push('font-style:italic')
-      else if (c === 4) styles.push('text-decoration:underline')
-      else if (fgColors[c]) styles.push(`color:${fgColors[c]}`)
-      else if (bgColors[c]) styles.push(`background-color:${bgColors[c]}`)
+      if (c === 0) {
+        bold = false
+        italic = false
+        underline = false
+        foreground = ''
+        background = ''
+      } else if (c === 1) bold = true
+      else if (c === 3) italic = true
+      else if (c === 4) underline = true
+      else if (fgColors[c]) foreground = fgColors[c]
+      else if (bgColors[c]) background = bgColors[c]
     }
 
     const close = open ? '</span>' : ''
-    open = true
+    const styles: string[] = []
+    if (bold) styles.push('font-weight:bold')
+    if (italic) styles.push('font-style:italic')
+    if (underline) styles.push('text-decoration:underline')
+    if (foreground) styles.push(`color:${foreground}`)
+    if (background) styles.push(`background-color:${background}`)
 
     if (styles.length === 0) {
-      return close + '<span>'
+      open = false
+      return close
     }
+    open = true
     return `${close}<span style="${styles.join(';')}">`
   })
 

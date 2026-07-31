@@ -254,7 +254,7 @@ func (s *ClusterService) snapshotUpstreams(ctx context.Context, store snapshotSt
 
 func (s *ClusterService) snapshotUsers(ctx context.Context, store snapshotStore) ([]models.ClusterUser, error) {
 	rows, err := store.QueryContext(ctx, `SELECT id, username, password_hash, role, COALESCE(display_name,''), COALESCE(is_enabled,1),
-		strftime('%Y-%m-%dT%H:%M:%fZ', password_changed_at) FROM users ORDER BY username`)
+		COALESCE(password_version,0), strftime('%Y-%m-%dT%H:%M:%fZ', password_changed_at) FROM users ORDER BY username`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照用户: %w", err)
 	}
@@ -263,7 +263,7 @@ func (s *ClusterService) snapshotUsers(ctx context.Context, store snapshotStore)
 	for rows.Next() {
 		var user models.ClusterUser
 		var passwordChangedAt sql.NullString
-		if err := rows.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &passwordChangedAt); err != nil {
+		if err := rows.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.PasswordVersion, &passwordChangedAt); err != nil {
 			return nil, fmt.Errorf("扫描快照用户: %w", err)
 		}
 		if passwordChangedAt.Valid {

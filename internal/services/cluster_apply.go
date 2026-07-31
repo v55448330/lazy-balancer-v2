@@ -148,7 +148,7 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 		return err
 	}
 	for _, user := range snapshot.Users {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,password_changed_at) VALUES (?,?,?,?,?,?,?)`, user.ID, user.Username, user.PasswordHash, user.Role, user.DisplayName, user.IsEnabled, user.PasswordChangedAt); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at) VALUES (?,?,?,?,?,?,?,?)`, user.ID, user.Username, user.PasswordHash, user.Role, user.DisplayName, user.IsEnabled, user.PasswordVersion, user.PasswordChangedAt); err != nil {
 			return fmt.Errorf("写入快照用户 %s: %w", user.Username, err)
 		}
 	}

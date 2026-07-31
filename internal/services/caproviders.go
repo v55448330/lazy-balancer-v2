@@ -337,7 +337,7 @@ func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id in
 	}
 
 	var p models.CAProvider
-	err := scanCAProvider(db.DB.QueryRow("SELECT "+caProviderColumns+" FROM ca_providers WHERE id=? AND enabled=1", id), &p)
+	err := scanCAProvider(db.DB.QueryRowContext(ctx, "SELECT "+caProviderColumns+" FROM ca_providers WHERE id=? AND enabled=1", id), &p)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrCAProviderNotFound
@@ -346,7 +346,7 @@ func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id in
 	}
 
 	var acmeEmail string
-	if err := db.DB.QueryRow("SELECT COALESCE(acme_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail); err != nil {
+	if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(acme_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return &CAProviderTestError{Phase: "email", Err: errors.New("ACME email is not configured")}
 		}
@@ -354,6 +354,9 @@ func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id in
 	}
 	if acmeEmail == "" {
 		return &CAProviderTestError{Phase: "email", Err: errors.New("ACME email is not configured")}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	client, err := acme.NewClientForProvider(p, acmeEmail)

@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -794,21 +795,14 @@ func migrateLegacyDNSCredentials() error {
 	if err != nil {
 		return fmt.Errorf("failed to begin legacy certificate credential migration: %w", err)
 	}
-	rollback := func(migrationErr error) error {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			return errors.Join(migrationErr, rollbackErr)
-		}
-		return migrationErr
-	}
-
 	var columnCount int
 	if err := tx.QueryRow("SELECT COUNT(*) FROM pragma_table_info('certificate_configs') WHERE name IN ('dns_id','dns_key')").Scan(&columnCount); err != nil {
-		return rollback(fmt.Errorf("failed to check legacy certificate credential columns: %w", err))
+		return rollbackMigration(tx, fmt.Errorf("failed to check legacy certificate credential columns: %w", err))
 	}
 	if columnCount == 2 {
 		rows, err := tx.Query("SELECT id, dns_id, dns_key FROM certificate_configs WHERE dns_credentials IS NULL OR dns_credentials = ''")
 		if err != nil {
-			return rollback(fmt.Errorf("failed to query legacy certificate credentials: %w", err))
+			return rollbackMigration(tx, fmt.Errorf("failed to query legacy certificate credentials: %w", err))
 		}
 		type legacyCredential struct {
 			id            int
@@ -819,16 +813,16 @@ func migrateLegacyDNSCredentials() error {
 			var credential legacyCredential
 			if err := rows.Scan(&credential.id, &credential.dnsID, &credential.dnsKey); err != nil {
 				closeErr := rows.Close()
-				return rollback(errors.Join(fmt.Errorf("failed to scan legacy certificate credentials: %w", err), closeErr))
+				return rollbackMigration(tx, errors.Join(fmt.Errorf("failed to scan legacy certificate credentials: %w", err), closeErr))
 			}
 			credentials = append(credentials, credential)
 		}
 		if err := rows.Err(); err != nil {
 			closeErr := rows.Close()
-			return rollback(errors.Join(fmt.Errorf("failed to iterate legacy certificate credentials: %w", err), closeErr))
+			return rollbackMigration(tx, errors.Join(fmt.Errorf("failed to iterate legacy certificate credentials: %w", err), closeErr))
 		}
 		if err := rows.Close(); err != nil {
-			return rollback(fmt.Errorf("failed to close legacy certificate credential rows: %w", err))
+			return rollbackMigration(tx, fmt.Errorf("failed to close legacy certificate credential rows: %w", err))
 		}
 		for _, credential := range credentials {
 			if credential.dnsID == "" && credential.dnsKey == "" {
@@ -836,10 +830,10 @@ func migrateLegacyDNSCredentials() error {
 			}
 			encoded, err := json.Marshal(map[string]string{"app_id": credential.dnsID, "app_token": credential.dnsKey})
 			if err != nil {
-				return rollback(fmt.Errorf("failed to encode legacy certificate credentials: %w", err))
+				return rollbackMigration(tx, fmt.Errorf("failed to encode legacy certificate credentials: %w", err))
 			}
 			if _, err := tx.Exec("UPDATE certificate_configs SET dns_credentials = ? WHERE id = ?", string(encoded), credential.id); err != nil {
-				return rollback(fmt.Errorf("failed to migrate certificate credentials for config %d: %w", credential.id, err))
+				return rollbackMigration(tx, fmt.Errorf("failed to migrate certificate credentials for config %d: %w", credential.id, err))
 			}
 		}
 	}
@@ -847,6 +841,13 @@ func migrateLegacyDNSCredentials() error {
 		return fmt.Errorf("failed to commit legacy certificate credential migration: %w", err)
 	}
 	return nil
+}
+
+func rollbackMigration(tx *sql.Tx, migrationErr error) error {
+	if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+		return errors.Join(migrationErr, rollbackErr)
+	}
+	return migrationErr
 }
 
 // migrateLbRulesPrimaryKey rebuilds lb_rules and upstreams tables to use caddy_id as primary key
@@ -942,8 +943,7 @@ func migrateLbRulesPrimaryKey() error {
 		)
 	`)
 	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to create lb_rules_new: %w", err)
+		return rollbackMigration(tx, fmt.Errorf("failed to create lb_rules_new: %w", err))
 	}
 
 	// Copy data from old table to new table
@@ -978,22 +978,19 @@ func migrateLbRulesPrimaryKey() error {
 		FROM lb_rules
 	`)
 	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to copy lb_rules data: %w", err)
+		return rollbackMigration(tx, fmt.Errorf("failed to copy lb_rules data: %w", err))
 	}
 
 	// Drop old table
 	_, err = tx.Exec("DROP TABLE lb_rules")
 	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to drop old lb_rules: %w", err)
+		return rollbackMigration(tx, fmt.Errorf("failed to drop old lb_rules: %w", err))
 	}
 
 	// Rename new table
 	_, err = tx.Exec("ALTER TABLE lb_rules_new RENAME TO lb_rules")
 	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to rename lb_rules_new: %w", err)
+		return rollbackMigration(tx, fmt.Errorf("failed to rename lb_rules_new: %w", err))
 	}
 
 	// Create new upstreams table with VARCHAR rule_id
@@ -1016,8 +1013,7 @@ func migrateLbRulesPrimaryKey() error {
 		)
 	`)
 	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to create upstreams_new: %w", err)
+		return rollbackMigration(tx, fmt.Errorf("failed to create upstreams_new: %w", err))
 	}
 
 	// Copy data from old upstreams table to new (convert rule_id from int to string)
@@ -1029,22 +1025,19 @@ func migrateLbRulesPrimaryKey() error {
 		JOIN lb_rules r ON u.rule_id = r.id
 	`)
 	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to copy upstreams data: %w", err)
+		return rollbackMigration(tx, fmt.Errorf("failed to copy upstreams data: %w", err))
 	}
 
 	// Drop old upstreams table
 	_, err = tx.Exec("DROP TABLE upstreams")
 	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to drop old upstreams: %w", err)
+		return rollbackMigration(tx, fmt.Errorf("failed to drop old upstreams: %w", err))
 	}
 
 	// Rename new upstreams table
 	_, err = tx.Exec("ALTER TABLE upstreams_new RENAME TO upstreams")
 	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to rename upstreams_new: %w", err)
+		return rollbackMigration(tx, fmt.Errorf("failed to rename upstreams_new: %w", err))
 	}
 
 	// Commit transaction
@@ -1060,9 +1053,38 @@ func migrateLbRulesPrimaryKey() error {
 	return nil
 }
 
-// migrateCertJobsStatusConstraint rebuilds cert_jobs (and cert_job_logs, which
-// references it) to enforce the allowed status CHECK constraint and the
-// 'queued' default value on existing databases.
+var statusInConstraintPattern = regexp.MustCompile(`(?i)\bstatus\s+IN\s*\(([^)]*)\)`)
+
+func hasExactStatusConstraint(tableSQL string, requiredStatuses []string) bool {
+	match := statusInConstraintPattern.FindStringSubmatch(tableSQL)
+	if len(match) != 2 {
+		return false
+	}
+	statuses := strings.Split(match[1], ",")
+	if len(statuses) != len(requiredStatuses) {
+		return false
+	}
+	required := make(map[string]struct{}, len(requiredStatuses))
+	for _, status := range requiredStatuses {
+		required[status] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(statuses))
+	for _, rawStatus := range statuses {
+		rawStatus = strings.Join(strings.Fields(rawStatus), "")
+		if len(rawStatus) < 2 || rawStatus[0] != rawStatus[len(rawStatus)-1] || (rawStatus[0] != '\'' && rawStatus[0] != '"') {
+			return false
+		}
+		status := rawStatus[1 : len(rawStatus)-1]
+		if _, ok := required[status]; !ok {
+			return false
+		}
+		seen[status] = struct{}{}
+	}
+	return len(seen) == len(required)
+}
+
+// migrateCertJobsStatusConstraint rebuilds cert_jobs to enforce the allowed
+// status CHECK constraint and the 'queued' default value on existing databases.
 func migrateCertJobsStatusConstraint() error {
 	var tableSQL string
 	if err := DB.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='cert_jobs'").Scan(&tableSQL); err != nil {
@@ -1075,13 +1097,7 @@ func migrateCertJobsStatusConstraint() error {
 		"downloaded", "issued", "failed", "waiting_ca", "disabled", "waiting_order_ready", "order_ready",
 		"waiting_order_valid", "order_valid",
 	}
-	constraintComplete := true
-	for _, status := range requiredStatuses {
-		if !strings.Contains(tableSQL, "'"+status+"'") {
-			constraintComplete = false
-			break
-		}
-	}
+	constraintComplete := hasExactStatusConstraint(tableSQL, requiredStatuses)
 	defaultQueued := false
 	rows, err := DB.Query("PRAGMA table_info(cert_jobs)")
 	if err != nil {
@@ -1133,20 +1149,7 @@ func migrateCertJobsStatusConstraint() error {
 	}
 
 	if _, err := tx.Exec("ALTER TABLE cert_jobs RENAME TO cert_jobs_old"); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to rename cert_jobs: %w", err)
-	}
-
-	var logsExist int
-	if err := tx.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cert_job_logs'").Scan(&logsExist); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to check cert_job_logs table: %w", err)
-	}
-	if logsExist > 0 {
-		if _, err := tx.Exec("ALTER TABLE cert_job_logs RENAME TO cert_job_logs_old"); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to rename cert_job_logs: %w", err)
-		}
+		return rollbackMigration(tx, fmt.Errorf("failed to rename cert_jobs: %w", err))
 	}
 
 	if _, err := tx.Exec(`
@@ -1169,8 +1172,7 @@ func migrateCertJobsStatusConstraint() error {
 			updated_at DATETIME
 		)
 	`); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to create new cert_jobs table: %w", err)
+		return rollbackMigration(tx, fmt.Errorf("failed to create new cert_jobs table: %w", err))
 	}
 
 	if _, err := tx.Exec(`
@@ -1187,45 +1189,11 @@ func migrateCertJobsStatusConstraint() error {
 			created_at, updated_at
 		FROM cert_jobs_old
 	`); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to copy cert_jobs data: %w", err)
-	}
-
-	if logsExist > 0 {
-		if _, err := tx.Exec(`
-			CREATE TABLE cert_job_logs (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				job_id INTEGER NOT NULL,
-				level VARCHAR(10) DEFAULT 'info',
-				message TEXT NOT NULL,
-				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-				FOREIGN KEY (job_id) REFERENCES cert_jobs(id) ON DELETE CASCADE
-			)
-		`); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to create new cert_job_logs table: %w", err)
-		}
-		if _, err := tx.Exec(`
-			INSERT INTO cert_job_logs (id, job_id, level, message, created_at)
-			SELECT id, job_id, level, message, created_at
-			FROM cert_job_logs_old
-		`); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to copy cert_job_logs data: %w", err)
-		}
-		if _, err := tx.Exec("CREATE INDEX IF NOT EXISTS idx_cert_job_logs_job ON cert_job_logs(job_id)"); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to recreate cert_job_logs index: %w", err)
-		}
-		if _, err := tx.Exec("DROP TABLE cert_job_logs_old"); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to drop old cert_job_logs table: %w", err)
-		}
+		return rollbackMigration(tx, fmt.Errorf("failed to copy cert_jobs data: %w", err))
 	}
 
 	if _, err := tx.Exec("DROP TABLE cert_jobs_old"); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to drop old cert_jobs table: %w", err)
+		return rollbackMigration(tx, fmt.Errorf("failed to drop old cert_jobs table: %w", err))
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit cert_jobs migration: %w", err)

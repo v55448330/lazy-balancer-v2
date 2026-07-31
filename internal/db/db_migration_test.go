@@ -76,6 +76,30 @@ func TestMigrateCertJobsStatusConstraint_rebuilds_incomplete_expanded_constraint
 	}
 }
 
+func TestMigrateCertJobsStatusConstraint_rebuilds_constraint_with_deprecated_status(t *testing.T) {
+	database := openMigrationTestDB(t)
+	allStatuses := "'queued', 'pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid','deprecated'"
+	createLegacyCertJobs(t, database, "'queued'", allStatuses)
+	if _, err := database.Exec("INSERT INTO cert_jobs (rule_id, domain, status) VALUES ('lb_old', 'old.example', 'deprecated')"); err != nil {
+		t.Fatalf("seed deprecated certificate job status: %v", err)
+	}
+
+	if err := migrateCertJobsStatusConstraint(); err != nil {
+		t.Fatalf("migrate certificate job constraint: %v", err)
+	}
+
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_old'").Scan(&status); err != nil {
+		t.Fatalf("read migrated certificate job status: %v", err)
+	}
+	if status != "queued" {
+		t.Fatalf("migrated deprecated status=%q, want queued", status)
+	}
+	if _, err := database.Exec("INSERT INTO cert_jobs (rule_id, domain, status) VALUES ('lb_rejected', 'rejected.example', 'deprecated')"); err == nil {
+		t.Fatal("deprecated status accepted after migration")
+	}
+}
+
 func TestMigrateCertJobsStatusConstraint_preserves_paused_and_acme_stage_statuses(t *testing.T) {
 	// Given
 	database := openMigrationTestDB(t)

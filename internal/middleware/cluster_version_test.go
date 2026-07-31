@@ -2,14 +2,21 @@ package middleware
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	jwt "github.com/golang-jwt/jwt/v5"
 
+	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -212,6 +219,71 @@ func TestClusterVersionTriggers_doNotBumpForAPIKeyLastUsed(t *testing.T) {
 	// Then
 	if got := clusterVersion(t, database); got != 0 {
 		t.Fatalf("version after last_used update=%d, want 0", got)
+	}
+}
+
+func TestClusterVersionTriggers_bumpForUserPasswordVersion(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,password_version) VALUES (1,'alice','hash',0)`); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if err := installClusterVersionTriggers(database); err != nil {
+		t.Fatalf("install triggers: %v", err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET is_master=1,cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatalf("seed master: %v", err)
+	}
+	if _, err := database.Exec("UPDATE users SET password_version=1,password_changed_at=CURRENT_TIMESTAMP WHERE id=1"); err != nil {
+		t.Fatalf("change password version: %v", err)
+	}
+	if got := clusterVersion(t, database); got != 1 {
+		t.Fatalf("version after password change=%d, want 1", got)
+	}
+}
+
+func TestClusterPasswordVersionSync_rejects_old_JWT(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,password_version) VALUES (1,'alice','hash','admin',1,0)`); err != nil {
+		t.Fatalf("seed slave user: %v", err)
+	}
+	const clusterToken = "cluster-token"
+	snapshot := models.ClusterSnapshot{Version: 1, Users: []models.ClusterUser{{ID: 1, Username: "alice", PasswordHash: "new-hash", Role: "admin", IsEnabled: true, PasswordVersion: 1}}}
+	content, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	mac := hmac.New(sha256.New, []byte(clusterToken))
+	_, _ = mac.Write(content)
+	snapshot.Signature = hex.EncodeToString(mac.Sum(nil))
+	master := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(map[string]any{"data": snapshot})
+	}))
+	defer master.Close()
+	caddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddy.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0,master_url=?,cluster_token=? WHERE id=1", master.URL, clusterToken); err != nil {
+		t.Fatalf("seed slave state: %v", err)
+	}
+	cfg := &config.Config{JWTSecret: "jwt-secret", CaddyAdminURL: caddy.URL}
+	if _, err := services.NewSyncService(database, cfg, services.NewCaddyService(caddy.URL)).Pull(context.Background()); err != nil {
+		t.Fatalf("sync changed password version: %v", err)
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"user_id": float64(1), "username": "alice", "pwd_ver": float64(0)}).SignedString([]byte(cfg.JWTSecret))
+	if err != nil {
+		t.Fatalf("sign old JWT: %v", err)
+	}
+	router := gin.New()
+	router.Use(jwtAuth(cfg))
+	router.GET("/protected", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("old JWT status=%d body=%q, want 401", response.Code, response.Body.String())
 	}
 }
 

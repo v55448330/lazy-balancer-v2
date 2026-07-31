@@ -1483,14 +1483,11 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 		}
 	}
 
-	// Filter out rules with no enabled upstreams
-	var filteredRules []ruleWithUpstreams
 	for _, ru := range allRules {
-		if len(ru.upstreams) > 0 {
-			filteredRules = append(filteredRules, ru)
+		if len(ru.upstreams) == 0 {
+			return generationFailure("enabled rule %s has no enabled upstreams", ru.rule.CaddyID)
 		}
 	}
-	allRules = filteredRules
 
 	materials := make([]CertMaterial, 0)
 	for _, ru := range allRules {
@@ -1720,10 +1717,6 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 				}
 			}
 
-			if len(ruleConfig.Upstreams) == 0 {
-				continue
-			}
-
 			ruleRoutes, _, err := generateHTTPRouteObjects(ruleConfig)
 			if err != nil {
 				return generationFailure("generate HTTP routes for rule %s: %v", r.CaddyID, err)
@@ -1869,10 +1862,6 @@ func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, ov
 				})
 			}
 		}
-		if len(ruleConfig.Upstreams) == 0 {
-			continue
-		}
-
 		layer4Servers[fmt.Sprintf("tcp_%d", port)] = buildTCPServer(ruleConfig)
 	}
 
@@ -2089,38 +2078,6 @@ func buildCaddyLogging(level string, sizeMB int) map[string]interface{} {
 				"include": []string{"http.handlers.reverse_proxy"},
 			},
 		},
-	}
-}
-
-func defaultCaddyConfig() map[string]interface{} {
-	return map[string]interface{}{
-		"admin": map[string]interface{}{
-			"listen": "127.0.0.1:2019",
-		},
-		"apps": map[string]interface{}{
-			"http": map[string]interface{}{
-				"metrics": map[string]interface{}{
-					"per_host":               true,
-					"observe_catchall_hosts": true,
-				},
-				"servers": map[string]interface{}{
-					"http_80": map[string]interface{}{
-						"listen": []string{":80"},
-						"routes": []interface{}{
-							map[string]interface{}{
-								"handle": []interface{}{
-									map[string]interface{}{
-										"handler": "static_response",
-										"body":    "Lazy Balancer V2 is running!",
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		"logging": buildCaddyLogging("info", 100),
 	}
 }
 

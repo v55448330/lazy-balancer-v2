@@ -258,8 +258,8 @@
             </el-table-column>
             <el-table-column label="协议" width="90">
               <template #default="{ row }">
-                <el-tag :type="row.protocol === 'https' ? 'success' : row.protocol === 'http' ? 'primary' : 'warning'" size="small" effect="plain">
-                  {{ row.protocol?.toUpperCase() }}
+                <el-tag :type="getRuleProtocolTagType(row)" size="small" effect="plain">
+                  {{ getRuleProtocolLabel(row) }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -332,7 +332,7 @@
         <div class="dialog-title">
           <el-icon class="dialog-title-icon"><TrendCharts /></el-icon>
           <span class="dialog-title-main">历史统计</span>
-          <el-text type="info" size="small" class="dialog-title-sub">{{ ruleHistoryRule?.name }} · {{ ruleHistoryRule?.protocol?.toUpperCase() }} · :{{ ruleHistoryRule?.listen_port }}</el-text>
+          <el-text type="info" size="small" class="dialog-title-sub">{{ ruleHistoryRule?.name }} · {{ ruleHistoryRule ? getRuleProtocolLabel(ruleHistoryRule) : '' }} · :{{ ruleHistoryRule?.listen_port }}</el-text>
         </div>
       </template>
       <div class="history-toolbar">
@@ -474,6 +474,7 @@ const fetchRuleHistory = async () => {
   const seq = ++ruleHistorySeq
   ruleHistoryLoading.value = true
   ruleHistoryUnsupported.value = false
+  ruleHistoryRows.value = []
   try {
     const res = await request.get<APIResponse<RuleHistoryResponse>>(`/rules/${ruleHistoryRule.value.caddy_id}/metrics-history`, {
       params: { range: ruleHistoryRange.value },
@@ -573,6 +574,16 @@ const getStrategyLabel = (strategy: string) => {
   return labels[strategy] || strategy
 }
 
+const getRuleProtocolLabel = (rule: Rule): 'HTTP' | 'HTTPS' | 'TCP' => {
+  if (rule.protocol === 'tcp') return 'TCP'
+  return rule.enable_tls ? 'HTTPS' : 'HTTP'
+}
+
+const getRuleProtocolTagType = (rule: Rule): 'primary' | 'success' | 'warning' => {
+  if (rule.protocol === 'tcp') return 'warning'
+  return rule.enable_tls ? 'success' : 'primary'
+}
+
 const trafficChartOption = computed<EChartsOption>(() => ({
   tooltip: { 
     trigger: 'axis', 
@@ -638,6 +649,7 @@ let disposed = false
 let fetchAllDataPromise: Promise<void> | null = null
 let isFetchingRuleHealth = false
 let isFetchingRuleMetrics = false
+let rulesVersion = 0
 
 const fetchAllData = (): Promise<void> => {
   if (disposed) return Promise.resolve()
@@ -671,12 +683,16 @@ const fetchAllData = (): Promise<void> => {
       if (disposed) return
       if (res.data) hostMetrics.value = res.data || []
     }),
-    request.get('/rules', config).then((res) => {
+    request.get('/rules', config).then(async (res) => {
       if (disposed) return
       if (!res.data) return
       rules.value = res.data || []
-      if (disposed) return
-      void Promise.allSettled([fetchRuleMetrics(), fetchRuleHealth()])
+      const version = ++rulesVersion
+      const currentRules = rules.value
+      await Promise.allSettled([
+        fetchRuleMetrics(currentRules, version),
+        fetchRuleHealth(currentRules, version),
+      ])
     }),
     request.get('/metrics/overview', config).then((res) => {
       if (disposed) return
@@ -702,18 +718,17 @@ const fetchAllData = (): Promise<void> => {
   return fetchAllDataPromise
 }
 
-const fetchRuleHealth = async () => {
-  if (disposed || rules.value.length === 0 || isFetchingRuleHealth) return
+const fetchRuleHealth = async (currentRules: Rule[], version: number) => {
+  if (disposed || currentRules.length === 0 || isFetchingRuleHealth) return
   isFetchingRuleHealth = true
-  const currentRules = rules.value
   try {
     const res = await request.get<APIResponse<HealthResponse>>('/config/health', { signal: abortController.signal })
-    if (disposed) return
+    if (disposed || version !== rulesVersion) return
     const healthData = res.data || {}
-    const newRuleMetrics: Record<string, RuleMetrics> = { ...ruleMetrics.value }
+    const newRuleMetrics: Record<string, RuleMetrics> = {}
     currentRules.forEach((rule: Rule) => {
       const enabledUpstreams = rule.upstreams?.filter((upstream) => upstream.enabled !== false) || []
-      const metrics = newRuleMetrics[rule.caddy_id] || {
+      const metrics: RuleMetrics = { ...(ruleMetrics.value[rule.caddy_id] || {
         requests_total: 0,
         requests_in_flight: 0,
         status_2xx: 0,
@@ -722,8 +737,7 @@ const fetchRuleHealth = async () => {
         status_5xx: 0,
         bytes_in: 0,
         bytes_out: 0,
-      }
-      metrics.healthy = false
+      }), healthy: undefined }
       if (rule.enabled && enabledUpstreams.length) {
         let allFound = true
         let allHealthy = true
@@ -755,7 +769,7 @@ const fetchRuleHealth = async () => {
       }
       newRuleMetrics[rule.caddy_id] = metrics
     })
-    if (!disposed) ruleMetrics.value = newRuleMetrics
+    if (!disposed && version === rulesVersion) ruleMetrics.value = newRuleMetrics
   } catch (e) {
     if (!disposed) console.error('Failed to fetch rule health:', e)
   } finally {
@@ -763,17 +777,16 @@ const fetchRuleHealth = async () => {
   }
 }
 
-const fetchRuleMetrics = async () => {
-  if (disposed || rules.value.length === 0 || isFetchingRuleMetrics) return
+const fetchRuleMetrics = async (currentRules: Rule[], version: number) => {
+  if (disposed || isFetchingRuleMetrics) return
   isFetchingRuleMetrics = true
-  const currentRules = rules.value
   try {
     const headers = { Authorization: `Bearer ${authStore.token}` }
     const metricsPromises = currentRules.map((rule: Rule) =>
       request.get<APIResponse<RuleMetrics>>(`/metrics/rule/${rule.caddy_id}`, { headers, signal: abortController.signal })
     )
     const metricsResults = await Promise.allSettled(metricsPromises)
-    if (disposed) return
+    if (disposed || version !== rulesVersion) return
     const newRuleMetrics: Record<string, RuleMetrics> = {}
     metricsResults.forEach((result, index) => {
       const rule = currentRules[index]
@@ -790,7 +803,7 @@ const fetchRuleMetrics = async () => {
         next.healthy = existing.healthy
       }
     })
-    if (!disposed) ruleMetrics.value = newRuleMetrics
+    if (!disposed && version === rulesVersion) ruleMetrics.value = newRuleMetrics
   } catch (e) {
     if (!disposed) console.error('Failed to fetch rule metrics:', e)
   } finally {

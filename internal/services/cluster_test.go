@@ -500,10 +500,10 @@ func TestReplaceSnapshotDB_replaces_resources_without_overwriting_role(t *testin
 	}
 }
 
-func TestClusterSnapshot_syncs_password_changed_at(t *testing.T) {
+func TestClusterSnapshot_syncs_password_version_and_changed_at(t *testing.T) {
 	service, database := newClusterTestService(t)
-	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,password_changed_at)
-		VALUES (20,'admin-master','hash','admin',1,'2026-07-31 01:02:03')`); err != nil {
+	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,password_version,password_changed_at)
+		VALUES (20,'admin-master','hash','admin',1,9,'2026-07-31 01:02:03')`); err != nil {
 		t.Fatalf("seed user password timestamp: %v", err)
 	}
 
@@ -511,8 +511,8 @@ func TestClusterSnapshot_syncs_password_changed_at(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
-	if len(snapshot.Users) != 1 || snapshot.Users[0].PasswordChangedAt == nil || *snapshot.Users[0].PasswordChangedAt != "2026-07-31T01:02:03.000Z" {
-		t.Fatalf("snapshot password_changed_at=%#v", snapshot.Users)
+	if len(snapshot.Users) != 1 || snapshot.Users[0].PasswordVersion != 9 || snapshot.Users[0].PasswordChangedAt == nil || *snapshot.Users[0].PasswordChangedAt != "2026-07-31T01:02:03.000Z" {
+		t.Fatalf("snapshot password fields=%#v", snapshot.Users)
 	}
 	if _, err := database.Exec("DELETE FROM users"); err != nil {
 		t.Fatalf("clear users: %v", err)
@@ -521,11 +521,12 @@ func TestClusterSnapshot_syncs_password_changed_at(t *testing.T) {
 		t.Fatalf("apply snapshot: %v", err)
 	}
 	var restored string
-	if err := database.QueryRow("SELECT strftime('%Y-%m-%dT%H:%M:%fZ',password_changed_at) FROM users WHERE id=20").Scan(&restored); err != nil {
+	var restoredVersion int64
+	if err := database.QueryRow("SELECT password_version,strftime('%Y-%m-%dT%H:%M:%fZ',password_changed_at) FROM users WHERE id=20").Scan(&restoredVersion, &restored); err != nil {
 		t.Fatalf("read restored password timestamp: %v", err)
 	}
-	if restored != "2026-07-31T01:02:03.000Z" {
-		t.Fatalf("restored password_changed_at=%q", restored)
+	if restoredVersion != 9 || restored != "2026-07-31T01:02:03.000Z" {
+		t.Fatalf("restored password_version=%d password_changed_at=%q", restoredVersion, restored)
 	}
 }
 

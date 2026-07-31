@@ -90,6 +90,7 @@ type ClusterUser struct {
 	Role              string  `json:"role"`
 	DisplayName       string  `json:"display_name"`
 	IsEnabled         bool    `json:"is_enabled"`
+	PasswordVersion   int64   `json:"password_version"`
 	PasswordChangedAt *string `json:"password_changed_at"`
 }
 

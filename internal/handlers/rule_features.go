@@ -369,7 +369,8 @@ func (h *Handlers) UpdateRuleACL(c *gin.Context) {
 		return
 	}
 
-	recordAudit(c, "更新", "访问控制", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("模式：%s", boolText(input.IPACLMode != "")), fmt.Sprintf("CIDR 数：%d", len(input.IPACLList))))
+	aclModeText := map[string]string{"allow": "白名单", "deny": "黑名单", "": "已关闭"}[input.IPACLMode]
+	recordAudit(c, "更新", "访问控制", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("模式：%s", aclModeText), fmt.Sprintf("CIDR 数：%d", len(input.IPACLList))))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "访问控制已保存"})
 }
 

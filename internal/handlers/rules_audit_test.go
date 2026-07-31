@@ -516,7 +516,7 @@ func TestUpdateRule_cancels_job_before_restore_when_create_returns_jobID_and_err
 		return 77, errors.New("enqueue failed")
 	}
 	cancelled := make(chan int, 1)
-	cancelCertJob = func(_ *services.CAQueueManager, jobID int) { cancelled <- jobID }
+	cancelCertJob = func(jobID int) { cancelled <- jobID }
 	t.Cleanup(func() {
 		createOrRequeueCertJob = oldCreate
 		cancelCertJob = oldCancel

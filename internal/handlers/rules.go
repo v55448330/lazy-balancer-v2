@@ -20,7 +20,6 @@ import (
 
 var (
 	createOrRequeueCertJob = services.CreateOrRequeueCertJob
-	cancelCertJob          = func(manager *services.CAQueueManager, jobID int) { manager.CancelJob(jobID) }
 )
 
 func (h *Handlers) ListRules(c *gin.Context) {
@@ -718,6 +717,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的请求: " + err.Error()})
 		return
 	}
+	aclUpdated := req.IPACLMode != nil || req.IPACLList != nil
 
 	// caddyOpMu 必须覆盖 读取→合并→验证→快照→提交→应用→恢复 全程：锁外读取合并时，
 	// 并发的成功请求会用旧快照合并值覆盖彼此已提交的字段（丢失更新）。
@@ -1446,7 +1446,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			var queueManager *services.CAQueueManager
 			restoreACMEState := func() error {
 				if enqueuedJobID > 0 && queueManager != nil {
-					cancelCertJob(queueManager, enqueuedJobID)
+					cancelCertJob(enqueuedJobID)
 				}
 				return errors.Join(h.restoreImportRuntime(runtimeSnapshot), restoreRuleDBSnapshot(), services.RestoreCertJobsForRule(certJobsSnapshot))
 			}
@@ -1523,7 +1523,16 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	log.Printf("Rule %s updated", caddyID)
-	recordAudit(c, "更新", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), domain, fmt.Sprintf("TLS：%s", boolText(*req.EnableTLS))))
+	tlsPart := ""
+	if req.Protocol == "http" {
+		tlsPart = fmt.Sprintf("TLS：%s", boolText(*req.EnableTLS))
+	}
+	auditParts := []string{services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), domain, tlsPart}
+	if aclUpdated {
+		aclModeText := map[string]string{"allow": "白名单", "deny": "黑名单", "": "已关闭"}[features.IPACLMode]
+		auditParts = append(auditParts, fmt.Sprintf("模式：%s", aclModeText), fmt.Sprintf("CIDR 数：%d", len(features.IPACLList)))
+	}
+	recordAudit(c, "更新", "负载均衡规则", services.FormatAuditDetail(auditParts...))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_update"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新"})
 }
@@ -1832,7 +1841,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	var queueManager *services.CAQueueManager
 	restoreEnabledState := func() error {
 		if enqueuedJobID > 0 && queueManager != nil {
-			cancelCertJob(queueManager, enqueuedJobID)
+			cancelCertJob(enqueuedJobID)
 		}
 		var caddyErr, dbErr, jobsErr error
 		if isACME {

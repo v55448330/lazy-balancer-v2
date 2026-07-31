@@ -3,8 +3,10 @@ package services
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCAProviderQueries_mask_list_but_not_business_load(t *testing.T) {
@@ -52,5 +54,33 @@ func TestCAProviderService_TestCAProviderWithContext_honors_parent_cancellation(
 	err := NewCAProviderService().TestCAProviderWithContext(ctx, 1)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("test provider error=%v, want context canceled", err)
+	}
+}
+
+func TestCAProviderService_TestCAProviderWithContext_cancels_while_query_waits(t *testing.T) {
+	_, database := newClusterTestService(t)
+	database.SetMaxOpenConns(1)
+	connection, err := database.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("hold database connection: %v", err)
+	}
+	defer connection.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- NewCAProviderService().TestCAProviderWithContext(ctx, 1)
+	}()
+	for database.Stats().WaitCount == 0 {
+		runtime.Gosched()
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("test provider error=%v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provider query did not stop after context cancellation")
 	}
 }

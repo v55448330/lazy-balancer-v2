@@ -22,8 +22,18 @@ import (
 
 var certJobOperationLocks [64]sync.Mutex
 
+var cancelCertJob = func(id int) {
+	if qm := services.GetCAQueueManager(); qm != nil {
+		qm.CancelJob(id)
+	}
+}
+
 func certJobOperationLock(id int) *sync.Mutex {
-	return &certJobOperationLocks[id%len(certJobOperationLocks)]
+	index := id % len(certJobOperationLocks)
+	if index < 0 {
+		index += len(certJobOperationLocks)
+	}
+	return &certJobOperationLocks[index]
 }
 
 func (h *Handlers) ListCertJobs(c *gin.Context) {
@@ -141,7 +151,7 @@ func certJobRetryBlocked(status string, updatedAt sql.NullTime, now time.Time) (
 func (h *Handlers) DeleteCertJob(c *gin.Context) {
 
 	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
+	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
 		return
 	}
@@ -153,12 +163,28 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
 		return
 	}
-	result, err := db.DB.Exec("DELETE FROM cert_jobs WHERE id = ?", id)
+	result, err := db.DB.Exec("UPDATE cert_jobs SET status='disabled', updated_at=datetime('now') WHERE id=? AND status=?", id, status)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete job"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to disable job"})
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
+	if err != nil || rowsAffected != 1 {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to verify disabled job"})
+		return
+	}
+	cancelCertJob(id)
+	result, err = db.DB.Exec("DELETE FROM cert_jobs WHERE id = ?", id)
+	if err != nil {
+		if _, restoreErr := db.DB.Exec("UPDATE cert_jobs SET status=?, updated_at=datetime('now') WHERE id=?", status, id); restoreErr != nil {
+			log.Printf("DeleteCertJob failed to restore job %d after delete failure: %v", id, restoreErr)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete job and restore status"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete job"})
+		return
+	}
+	rowsAffected, err = result.RowsAffected()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to verify deleted job"})
 		return
@@ -166,9 +192,6 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	if rowsAffected == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
 		return
-	}
-	if qm := services.GetCAQueueManager(); qm != nil {
-		qm.CancelJob(id)
 	}
 	recordAudit(c, "删除", "证书签发任务", services.FormatAuditDetail(services.AuditJobPart(id), services.AuditRulePart(ruleID), domain, fmt.Sprintf("原状态：%s", status)))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Job deleted"})

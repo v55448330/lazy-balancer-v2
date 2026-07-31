@@ -387,7 +387,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		if ctx.Err() != nil {
 			return fmt.Errorf("certificate issuance canceled: %w", ctx.Err())
 		}
-		if raErr := detectRateLimit(err, provider.Provider); raErr != nil {
+		if raErr := detectRateLimit(err); raErr != nil {
 			return raErr
 		}
 		failJob(jobID, err.Error())
@@ -528,7 +528,7 @@ func restoreCertificateDeployment(snapshot CertFilesSnapshot, reloader func() er
 	return nil
 }
 
-func detectRateLimit(err error, providerType string) *CAProviderRateLimitError {
+func detectRateLimit(err error) *CAProviderRateLimitError {
 	if err == nil {
 		return nil
 	}

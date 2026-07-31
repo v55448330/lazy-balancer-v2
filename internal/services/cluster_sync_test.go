@@ -16,6 +16,19 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
+type syncDrainLifecycle struct {
+	sync        *SyncService
+	stopEntered chan struct{}
+}
+
+func (l *syncDrainLifecycle) StartACME() {}
+func (l *syncDrainLifecycle) StopACME()  {}
+func (l *syncDrainLifecycle) StartSync() { l.sync.Start() }
+func (l *syncDrainLifecycle) StopSync() {
+	close(l.stopEntered)
+	l.sync.Stop()
+}
+
 type blockingRoundTripper struct {
 	entered chan struct{}
 }
@@ -102,6 +115,59 @@ func TestSyncService_Pull_rejects_old_response_after_new_snapshot_applied(t *tes
 	}
 	if appliedVersion != 2 {
 		t.Fatalf("applied version=%d, want 2", appliedVersion)
+	}
+}
+
+func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *testing.T) {
+	_, database := newClusterTestService(t)
+	const token = "cluster-token"
+	requestEntered := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	master := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		close(requestEntered)
+		<-releaseResponse
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(map[string]any{"data": signedTestSnapshot(8, token)})
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token=? WHERE id=1", master.URL, token); err != nil {
+		t.Fatalf("seed slave state: %v", err)
+	}
+	syncService := NewSyncService(database, &config.Config{}, NewCaddyService(master.URL))
+	lifecycle := &syncDrainLifecycle{sync: syncService, stopEntered: make(chan struct{})}
+	cluster := NewClusterService(database, lifecycle)
+	pullDone := make(chan error, 1)
+	go func() {
+		_, err := syncService.Pull(context.Background())
+		pullDone <- err
+	}()
+	<-requestEntered
+	promoteDone := make(chan error, 1)
+	go func() { promoteDone <- cluster.Promote(context.Background()) }()
+	<-lifecycle.stopEntered
+	select {
+	case err := <-promoteDone:
+		t.Fatalf("promote returned before active pull drained: %v", err)
+	default:
+	}
+
+	close(releaseResponse)
+	if err := <-pullDone; err == nil {
+		t.Fatal("pull applied snapshot after promotion")
+	}
+	if err := <-promoteDone; err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	var isMaster bool
+	var appliedVersion int
+	if err := database.QueryRow("SELECT is_master,applied_version FROM global_config WHERE id=1").Scan(&isMaster, &appliedVersion); err != nil {
+		t.Fatalf("read promoted state: %v", err)
+	}
+	if !isMaster || appliedVersion != 0 {
+		t.Fatalf("promoted state is_master=%v applied_version=%d", isMaster, appliedVersion)
+	}
+	if _, err := syncService.Pull(context.Background()); err == nil {
+		t.Fatal("new pull was accepted after sync stopped")
 	}
 }
 

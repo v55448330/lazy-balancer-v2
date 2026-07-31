@@ -41,6 +41,8 @@ type SyncService struct {
 	cancel       context.CancelFunc
 	done         chan struct{}
 	generation   uint64
+	pullsStopped bool
+	pullWG       sync.WaitGroup
 	runFn        func(context.Context)
 	loadRunState func(context.Context) (bool, string, int, error)
 	waitRunDelay func(context.Context, time.Duration) bool
@@ -123,6 +125,7 @@ func (s *SyncService) Start() {
 	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pullsStopped = false
 	if s.cancel != nil {
 		return
 	}
@@ -156,6 +159,7 @@ func (s *SyncService) Stop() {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
+	s.pullsStopped = true
 	cancel := s.cancel
 	done := s.done
 	s.mu.Unlock()
@@ -165,6 +169,7 @@ func (s *SyncService) Stop() {
 	if done != nil {
 		<-done
 	}
+	s.pullWG.Wait()
 }
 
 func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, req models.ClusterRegisterRequest) (models.ClusterRegistration, error) {
@@ -201,6 +206,11 @@ func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, 
 }
 
 func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
+	if err := s.beginPull(); err != nil {
+		return SyncResult{}, err
+	}
+	defer s.pullWG.Done()
+
 	s.pullMu.Lock()
 	defer s.pullMu.Unlock()
 
@@ -240,8 +250,12 @@ func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return SyncResult{}, fmt.Errorf("解析集群快照: %w", err)
 	}
-	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(applied_version,0) FROM global_config WHERE id=1").Scan(&appliedVersion); err != nil {
-		return SyncResult{}, fmt.Errorf("重读已应用版本: %w", err)
+	var currentMasterURL, currentToken string
+	if err := s.db.QueryRowContext(ctx, `SELECT is_master, COALESCE(master_url,''), COALESCE(cluster_token,''), COALESCE(applied_version,0) FROM global_config WHERE id=1`).Scan(&isMaster, &currentMasterURL, &currentToken, &appliedVersion); err != nil {
+		return SyncResult{}, fmt.Errorf("重读同步状态: %w", err)
+	}
+	if isMaster || currentMasterURL != masterURL || currentToken != token {
+		return SyncResult{}, errors.New("同步角色或主节点凭据已变更，拒绝应用快照")
 	}
 	if err := verifySnapshotIntegrity(envelope.Data, token, appliedVersion); err != nil {
 		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", err.Error())
@@ -254,6 +268,18 @@ func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
 		return SyncResult{}, err
 	}
 	return SyncResult{AppliedVersion: envelope.Data.Version, Changed: true}, nil
+}
+
+func (s *SyncService) beginPull() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pullsStopped {
+		return errors.New("集群同步已停止")
+	}
+	s.pullWG.Add(1)
+	return nil
 }
 
 // recordSyncError surfaces pull/report failures in last_sync_error so the

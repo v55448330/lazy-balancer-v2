@@ -140,7 +140,7 @@
                   </div>
                 </template>
                 <template v-else>
-                  <div v-for="upstream in row.upstreams" :key="upstream.id" class="upstream-item">
+                  <div v-for="upstream in getEnabledUpstreams(row)" :key="upstream.id" class="upstream-item">
                     <div class="upstream-item-row">
                       <span class="upstream-address">{{ upstream.host }}:{{ upstream.port }}</span>
                       <span class="upstream-status">
@@ -1424,6 +1424,9 @@ const upstreamHostWarning = computed(() => {
 
 interface HealthSummary { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number }
 
+const getEnabledUpstreams = (rule: Rule): Upstream[] =>
+  rule.upstreams?.filter((upstream) => upstream.enabled !== false) || []
+
 const getHealthTagType = (status: HealthSummary) => {
   if (status.unhealthy + status.degraded === status.total) return 'danger'
   if (status.unhealthy + status.degraded > 0) return 'warning'
@@ -1476,7 +1479,7 @@ const fetchHealthStatus = async () => {
     const healthData = res.data || {}
     const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
     for (const rule of rules.value) {
-      const enabledUpstreams = rule.upstreams?.filter((upstream) => upstream.enabled !== false) || []
+      const enabledUpstreams = getEnabledUpstreams(rule)
       if (enabledUpstreams.length > 0) {
         let healthy = 0
         let unhealthy = 0
