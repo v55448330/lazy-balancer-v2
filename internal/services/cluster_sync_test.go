@@ -241,6 +241,76 @@ func TestSyncService_Pull_persistsEveryFailure(t *testing.T) {
 	}
 }
 
+func TestSyncService_Pull_persistsFailureAfterParentContextCanceled(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// When
+	_, pullErr := service.Pull(ctx)
+	var stored string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then
+	if pullErr == nil || !strings.Contains(stored, pullErr.Error()) {
+		t.Fatalf("pull error=%v stored=%q", pullErr, stored)
+	}
+}
+
+func TestSyncService_Pull_clearsLastSyncErrorOnNotModified(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=7, last_sync_error='stale failure' WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
+
+	// When
+	result, pullErr := service.Pull(context.Background())
+	var stored string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then
+	if pullErr != nil || result.Changed || result.AppliedVersion != 7 || stored != "" {
+		t.Fatalf("result=%#v error=%v last_sync_error=%q", result, pullErr, stored)
+	}
+}
+
+func TestSyncService_Pull_persistsResultWhileHoldingPullMutex(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url='', cluster_token='' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
+	serialized := false
+	service.beforeRecordSyncStatus = func() {
+		if service.pullMu.TryLock() {
+			service.pullMu.Unlock()
+			return
+		}
+		serialized = true
+	}
+
+	// When
+	_, pullErr := service.Pull(context.Background())
+
+	// Then
+	if pullErr == nil || !serialized {
+		t.Fatalf("pull error=%v serialized=%v", pullErr, serialized)
+	}
+}
+
 func TestSyncService_do_repeatedRequestsDoNotContinuouslyIncreaseGoroutines(t *testing.T) {
 	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusOK)
@@ -354,6 +424,42 @@ func TestVerifySnapshotIntegrityRejectsSameAppliedVersion(t *testing.T) {
 	}
 }
 
+func TestSyncService_Pull_rejectsSchemaV1SnapshotWithoutWritingDatabase(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	const token = "cluster-token"
+	v1 := models.ClusterSnapshot{
+		Version:       1,
+		SchemaVersion: 1,
+		Users:         []models.ClusterUser{{ID: 99, Username: "v1-user", PasswordHash: "hash", Role: "admin", IsEnabled: true}},
+	}
+	v1 = signTestSnapshot(v1, token)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(map[string]any{"data": v1})
+	}))
+	defer master.Close()
+	if _, err := database.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (10,'local-user','hash','admin',1)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token=? WHERE id=1", master.URL, token); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
+
+	// When
+	_, pullErr := service.Pull(context.Background())
+	var username string
+	if err := database.QueryRow("SELECT username FROM users WHERE id=10").Scan(&username); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then
+	if pullErr == nil || !strings.Contains(pullErr.Error(), "主节点") || username != "local-user" {
+		t.Fatalf("pull error=%v local username=%q", pullErr, username)
+	}
+}
+
 func TestSyncService_Promote_drains_blocked_manual_pull_without_applying(t *testing.T) {
 	_, database := newClusterTestService(t)
 	const token = "cluster-token"
@@ -440,7 +546,11 @@ func TestSyncService_Stop_returns_when_run_is_waiting_before_pull_admission(t *t
 }
 
 func signedTestSnapshot(version int, token string) models.ClusterSnapshot {
-	snapshot := models.ClusterSnapshot{Version: version}
+	snapshot := models.ClusterSnapshot{Version: version, SchemaVersion: CurrentSnapshotSchema, MinReaderVersion: CurrentSnapshotSchema}
+	return signTestSnapshot(snapshot, token)
+}
+
+func signTestSnapshot(snapshot models.ClusterSnapshot, token string) models.ClusterSnapshot {
 	content, err := json.Marshal(snapshot)
 	if err != nil {
 		panic(err)

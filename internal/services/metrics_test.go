@@ -179,7 +179,7 @@ func TestMetricsService_storePerHostMetrics_normalizes_bracketed_IPv6_host(t *te
 	}
 }
 
-func TestMetricsService_storePerHostMetrics_logs_domain_conflict_and_keeps_smallest_rule_ID(t *testing.T) {
+func TestMetricsService_storePerHostMetrics_logs_unchanged_domain_conflict_once(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
 	for _, ruleID := range []string{"lb_z", "lb_a"} {
@@ -196,6 +196,9 @@ func TestMetricsService_storePerHostMetrics_logs_domain_conflict_and_keeps_small
 
 	// When
 	err := service.storePerHostMetrics(text)
+	if err == nil {
+		err = service.storePerHostMetrics(text)
+	}
 
 	// Then
 	if err != nil {
@@ -207,6 +210,9 @@ func TestMetricsService_storePerHostMetrics_logs_domain_conflict_and_keeps_small
 	}
 	if ruleID != "lb_a" {
 		t.Fatalf("ruleID=%q, want lexicographically smallest lb_a", ruleID)
+	}
+	if count := strings.Count(logs.String(), "Metrics domain conflict:"); count != 1 {
+		t.Fatalf("conflict log count=%d logs=%q, want 1", count, logs.String())
 	}
 	if !strings.Contains(logs.String(), "shared.example.com") {
 		t.Fatalf("conflict log %q does not identify shared.example.com", logs.String())

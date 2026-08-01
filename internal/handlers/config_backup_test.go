@@ -245,6 +245,38 @@ func TestImportConfigBackup_accepts_enabled_admin_and_increments_password_versio
 	}
 }
 
+func TestImportConfigBackup_rejects_invalid_certificate_job_status(t *testing.T) {
+	tests := []struct {
+		name   string
+		status any
+	}{
+		{name: "NULL status", status: nil},
+		{name: "status outside allowed set", status: "unknown"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			h := newBackupTestHandlers(t)
+			backup := completeBackupJSON(t, map[string][]map[string]any{
+				"cert_jobs": {{"id": 1, "rule_id": "lb_invalid", "domain": "invalid.example", "status": test.status}},
+			})
+			router := gin.New()
+			router.POST("/config/import", h.ImportConfigBackup)
+			request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// When
+			router.ServeHTTP(response, request)
+
+			// Then
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestConfigBackup_export_import_roundtrip(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)

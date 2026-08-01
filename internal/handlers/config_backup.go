@@ -20,6 +20,14 @@ import (
 var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs"}
 var configBackupV1Tables = []string{"lb_rules", "upstreams", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs"}
 
+var configBackupCertJobStatuses = map[string]struct{}{
+	"queued": {}, "pending": {}, "processing": {}, "creating_account": {}, "creating_order": {}, "order_created": {},
+	"cleanup_dns": {}, "cleanup_warning": {}, "presenting_dns": {}, "waiting_propagation": {}, "dns_propagated": {},
+	"accepting_challenge": {}, "validating": {}, "validated": {}, "finalizing": {}, "finalized": {}, "downloading": {},
+	"downloaded": {}, "issued": {}, "failed": {}, "waiting_ca": {}, "disabled": {}, "waiting_order_ready": {}, "order_ready": {},
+	"waiting_order_valid": {}, "order_valid": {},
+}
+
 var configBackupProtectedConfigKeys = map[string]bool{
 	"id": true, "is_master": true, "master_url": true, "cluster_token": true,
 	"registration_id": true, "registration_secret": true, "applied_version": true,
@@ -240,6 +248,15 @@ func validateV2Backup(backup configBackup) error {
 	for _, table := range configBackupTables {
 		if _, exists := backup.Tables[table]; !exists {
 			backup.Tables[table] = []map[string]any{}
+		}
+	}
+	for _, job := range backup.Tables["cert_jobs"] {
+		status, ok := job["status"].(string)
+		if !ok {
+			return errors.New("证书任务状态不能为空")
+		}
+		if _, allowed := configBackupCertJobStatuses[status]; !allowed {
+			return fmt.Errorf("无效的证书任务状态: %s", status)
 		}
 	}
 	for _, user := range backup.Tables["users"] {

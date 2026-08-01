@@ -33,31 +33,32 @@ type SyncResult struct {
 }
 
 type SyncService struct {
-	db                  *sql.DB
-	cfg                 *config.Config
-	caddy               *CaddyService
-	cluster             *ClusterService
-	client              *http.Client
-	transport           *http.Transport
-	transportOnce       sync.Once
-	pinMu               sync.Mutex
-	verifiedPins        map[string]string
-	lifecycleMu         sync.Mutex
-	pullAdmissionMu     sync.Mutex
-	pullApplyMu         sync.Mutex
-	pullMu              sync.Mutex
-	mu                  sync.Mutex
-	cancel              context.CancelFunc
-	done                chan struct{}
-	generation          uint64
-	pullsStopped        bool
-	pullWG              sync.WaitGroup
-	runFn               func(context.Context)
-	loadRunState        func(context.Context) (bool, string, int, error)
-	waitRunDelay        func(context.Context, time.Duration) bool
-	beforeBeginPull     func()
-	afterStopAdmission  func()
-	beforeApplySnapshot func()
+	db                     *sql.DB
+	cfg                    *config.Config
+	caddy                  *CaddyService
+	cluster                *ClusterService
+	client                 *http.Client
+	transport              *http.Transport
+	transportOnce          sync.Once
+	pinMu                  sync.Mutex
+	verifiedPins           map[string]string
+	lifecycleMu            sync.Mutex
+	pullAdmissionMu        sync.Mutex
+	pullApplyMu            sync.Mutex
+	pullMu                 sync.Mutex
+	mu                     sync.Mutex
+	cancel                 context.CancelFunc
+	done                   chan struct{}
+	generation             uint64
+	pullsStopped           bool
+	pullWG                 sync.WaitGroup
+	runFn                  func(context.Context)
+	loadRunState           func(context.Context) (bool, string, int, error)
+	waitRunDelay           func(context.Context, time.Duration) bool
+	beforeBeginPull        func()
+	afterStopAdmission     func()
+	beforeApplySnapshot    func()
+	beforeRecordSyncStatus func()
 }
 
 func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *SyncService {
@@ -374,18 +375,24 @@ func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, 
 }
 
 func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
-	defer func() {
-		if err != nil && s.db != nil {
+	if err := s.beginPull(); err != nil {
+		if s.db != nil {
 			s.recordSyncError(ctx, err, nil)
 		}
-	}()
-	if err := s.beginPull(); err != nil {
 		return SyncResult{}, err
 	}
 	defer s.pullWG.Done()
 
 	s.pullMu.Lock()
 	defer s.pullMu.Unlock()
+	defer func() {
+		if s.db != nil {
+			if s.beforeRecordSyncStatus != nil {
+				s.beforeRecordSyncStatus()
+			}
+			s.recordSyncError(ctx, err, nil)
+		}
+	}()
 
 	var masterURL, token, fingerprint string
 	var isMaster bool
@@ -477,7 +484,9 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 	} else if reportErr != nil {
 		msg = "状态上报失败: " + reportErr.Error()
 	}
-	if _, err := s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", msg); err != nil {
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	if _, err := s.db.ExecContext(persistCtx, "UPDATE global_config SET last_sync_error=? WHERE id=1", msg); err != nil {
 		log.Printf("cluster sync error persistence failed: %v", err)
 	}
 }
@@ -497,6 +506,9 @@ func verifySnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken strin
 	}
 	if snapshot.MinReaderVersion > CurrentSnapshotSchema {
 		return fmt.Errorf("快照需要更新的读取端（要求 schema v%d，当前支持 v%d），请先升级本节点", snapshot.MinReaderVersion, CurrentSnapshotSchema)
+	}
+	if snapshot.SchemaVersion < CurrentSnapshotSchema {
+		return fmt.Errorf("快照 schema v%d 过旧：主节点需升级到支持 schema v%d 的版本", snapshot.SchemaVersion, CurrentSnapshotSchema)
 	}
 	// Signed snapshots must also move forward; replaying a captured older one
 	// must not resurrect deleted credentials or roll back configuration.

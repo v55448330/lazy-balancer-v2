@@ -453,6 +453,53 @@ func TestCertificateService_CheckExpiration_returns_only_current_enabled_acme_do
 	}
 }
 
+func TestCertificateService_CheckExpiration_compares_offset_and_fractional_timestamps_as_datetimes(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec("UPDATE global_config SET cert_renewal_days=1 WHERE id=1"); err != nil {
+		t.Fatalf("set renewal window: %v", err)
+	}
+	threshold := time.Now().UTC().Add(24 * time.Hour)
+	positiveOffset := time.FixedZone("plus-fourteen", 14*60*60)
+	negativeOffset := time.FixedZone("minus-twelve", -12*60*60)
+	tests := []struct {
+		ruleID    string
+		expiresAt string
+		want      bool
+	}{
+		{ruleID: "lb_due_positive_offset", expiresAt: threshold.Add(-30 * time.Minute).In(positiveOffset).Format("2006-01-02 15:04:05-07:00"), want: true},
+		{ruleID: "lb_future_negative_offset", expiresAt: threshold.Add(30 * time.Minute).In(negativeOffset).Format("2006-01-02 15:04:05-07:00"), want: false},
+		{ruleID: "lb_due_fraction", expiresAt: threshold.Add(-time.Hour).Format("2006-01-02 15:04:05.999"), want: true},
+		{ruleID: "lb_future_fraction", expiresAt: threshold.Add(time.Hour).Format("2006-01-02 15:04:05.001"), want: false},
+	}
+	for _, test := range tests {
+		domain := test.ruleID + ".example.com"
+		if _, err := database.Exec(`INSERT INTO lb_rules
+			(caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source)
+			VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, test.ruleID, test.ruleID, domain); err != nil {
+			t.Fatalf("seed rule %s: %v", test.ruleID, err)
+		}
+		if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at)
+			VALUES (?,?,'issued',?)`, test.ruleID, domain, test.expiresAt); err != nil {
+			t.Fatalf("seed job %s: %v", test.ruleID, err)
+		}
+	}
+
+	// When
+	jobs := NewCertificateService().CheckExpiration()
+
+	// Then
+	found := make(map[string]bool, len(jobs))
+	for _, job := range jobs {
+		found[job.RuleID] = true
+	}
+	for _, test := range tests {
+		if found[test.ruleID] != test.want {
+			t.Fatalf("job %s included=%v, want %v for expires_at %q", test.ruleID, found[test.ruleID], test.want, test.expiresAt)
+		}
+	}
+}
+
 func TestCertJobsSnapshot_restore_replaces_upserted_and_new_rows(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"sync"
@@ -35,6 +36,9 @@ type ClusterService struct {
 	db                   *sql.DB
 	lifecycle            ClusterLifecycle
 	roleMu               sync.Mutex
+	pinCleanupMu         sync.Mutex
+	pendingPinPath       string
+	pendingPinAuditURL   string
 	beforeUpdateSettings func()
 }
 
@@ -251,18 +255,44 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if masterURL != "" {
 		parsedMasterURL, err := url.Parse(masterURL)
 		if err != nil {
-			return fmt.Errorf("解析旧主节点地址: %w", err)
+			log.Printf("parse old cluster master URL after promotion: %v", err)
+			RecordAuditLog("system", "清理证书指纹失败", "集群节点", FormatAuditDetail("旧主节点地址无效", err.Error()), "")
+			return nil
 		}
 		pinPath, err := clusterPinPathForDatabase(s.db, parsedMasterURL.Host)
 		if err != nil {
-			return fmt.Errorf("定位旧主节点证书指纹: %w", err)
+			log.Printf("locate old cluster master pin after promotion: %v", err)
+			RecordAuditLog("system", "清理证书指纹失败", "集群节点", FormatAuditDetail("旧主节点："+parsedMasterURL.Scheme+"://"+parsedMasterURL.Host, err.Error()), "")
+			return nil
 		}
-		if err := os.Remove(pinPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("删除旧主节点证书指纹: %w", err)
-		}
-		RecordAuditLog("system", "清理证书指纹", "集群节点", FormatAuditDetail("旧主节点："+masterURL, AuditResultPart("success")), "")
+		s.cleanupClusterPin(pinPath, parsedMasterURL.Scheme+"://"+parsedMasterURL.Host)
 	}
 	return nil
+}
+
+func (s *ClusterService) cleanupClusterPin(pinPath, auditURL string) {
+	s.pinCleanupMu.Lock()
+	defer s.pinCleanupMu.Unlock()
+	if err := os.Remove(pinPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.pendingPinPath = pinPath
+		s.pendingPinAuditURL = auditURL
+		log.Printf("cluster pin cleanup deferred: %v", err)
+		RecordAuditLog("system", "清理证书指纹失败", "集群节点", FormatAuditDetail("旧主节点："+auditURL, err.Error()), "")
+		return
+	}
+	s.pendingPinPath = ""
+	s.pendingPinAuditURL = ""
+	RecordAuditLog("system", "清理证书指纹", "集群节点", FormatAuditDetail("旧主节点："+auditURL, AuditResultPart("success")), "")
+}
+
+func (s *ClusterService) retryPendingPinCleanup() {
+	s.pinCleanupMu.Lock()
+	pinPath := s.pendingPinPath
+	auditURL := s.pendingPinAuditURL
+	s.pinCleanupMu.Unlock()
+	if pinPath != "" {
+		s.cleanupClusterPin(pinPath, auditURL)
+	}
 }
 
 func ComputeNodeStatus(approved bool, lastSeen time.Time, syncInterval int, now time.Time) string {

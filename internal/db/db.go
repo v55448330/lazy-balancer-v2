@@ -275,7 +275,7 @@ func createTables() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		rule_id VARCHAR(20) NOT NULL,
 		domain VARCHAR(255) NOT NULL,
-		status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid')),
+		status VARCHAR(20) NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid')),
 		message TEXT,
 		expires_at DATETIME,
 		cert_pem TEXT,
@@ -1203,6 +1203,7 @@ func migrateCertJobsStatusConstraint() error {
 	}
 	constraintComplete := hasExactStatusConstraint(tableSQL, requiredStatuses)
 	defaultQueued := false
+	statusNotNull := false
 	rows, err := DB.Query("PRAGMA table_info(cert_jobs)")
 	if err != nil {
 		return fmt.Errorf("failed to read cert_jobs columns: %w", err)
@@ -1217,6 +1218,7 @@ func migrateCertJobsStatusConstraint() error {
 		}
 		if name == "status" {
 			defaultQueued = defaultValue.Valid && strings.Trim(defaultValue.String, "'\"") == "queued"
+			statusNotNull = notNull == 1
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -1226,7 +1228,7 @@ func migrateCertJobsStatusConstraint() error {
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("failed to close cert_jobs columns: %w", err)
 	}
-	if constraintComplete && defaultQueued {
+	if constraintComplete && defaultQueued && statusNotNull {
 		return nil
 	}
 
@@ -1261,7 +1263,7 @@ func migrateCertJobsStatusConstraint() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			rule_id VARCHAR(20) NOT NULL,
 			domain VARCHAR(255) NOT NULL,
-			status VARCHAR(20) DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid')),
+			status VARCHAR(20) NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid')),
 			message TEXT,
 			expires_at DATETIME,
 			cert_pem TEXT,
@@ -1287,7 +1289,7 @@ func migrateCertJobsStatusConstraint() error {
 		)
 		SELECT
 			id, rule_id, domain,
-			CASE WHEN status IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid') THEN status ELSE 'queued' END,
+			CASE WHEN COALESCE(status,'queued') IN ('queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid') THEN COALESCE(status,'queued') ELSE 'queued' END,
 			message, expires_at, cert_pem, key_pem,
 			ca_provider_id, renewal_attempts, ca_available_after, last_error_code, deployment_attempts, deployment_available_after,
 			created_at, updated_at

@@ -83,7 +83,7 @@ func run() error {
 	// Initialize services
 	caddyService := services.NewCaddyService(cfg.CaddyAdminURL)
 	caddyReloader := func() error {
-		return caddyService.ApplyConfig(services.GenerateCaddyConfig())
+		return caddyService.GenerateAndApplyConfig()
 	}
 	services.InitCAQueueManager(caddyReloader, cfg.DataDir)
 	metricsService := services.NewMetricsService(cfg.CaddyMetricsURL, cfg.MetricsInterval)

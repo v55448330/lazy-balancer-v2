@@ -19,6 +19,17 @@ type DNSCredentials struct {
 
 // NewProviderFromCredentials parses the stored JSON credentials and returns the appropriate Provider.
 func NewProviderFromCredentials(rawJSON string) (Provider, error) {
+	return newProviderFromCredentials(rawJSON, "")
+}
+
+func NewPersistentProviderFromCredentials(rawJSON, dataDir string) (Provider, error) {
+	if dataDir == "" {
+		return nil, fmt.Errorf("DNS ownership data directory is required")
+	}
+	return newProviderFromCredentials(rawJSON, dataDir)
+}
+
+func newProviderFromCredentials(rawJSON, dataDir string) (Provider, error) {
 	var creds DNSCredentials
 	if err := json.Unmarshal([]byte(rawJSON), &creds); err != nil {
 		return nil, fmt.Errorf("invalid dns credentials: %w", err)
@@ -53,10 +64,16 @@ func NewProviderFromCredentials(rawJSON string) (Provider, error) {
 		if creds.APIToken == "" {
 			return nil, fmt.Errorf("DNSPod credentials require api_token")
 		}
+		if dataDir != "" {
+			return dnspod.NewPersistent(creds.APIToken, dataDir)
+		}
 		return dnspod.New(creds.APIToken), nil
 	case "tencent":
 		if creds.SecretID == "" || creds.SecretKey == "" {
 			return nil, fmt.Errorf("Tencent Cloud credentials require secret_id and secret_key")
+		}
+		if dataDir != "" {
+			return tencent.NewPersistent(creds.SecretID, creds.SecretKey, dataDir)
 		}
 		return tencent.New(creds.SecretID, creds.SecretKey)
 	default:

@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -38,6 +39,8 @@ type Client struct {
 	Email          string
 	acme           *acme.Client
 	accountKey     crypto.Signer
+	accountKeyPath string
+	eabKID         string
 	eab            *acme.ExternalAccountBinding
 	finalizedMu    sync.Mutex
 	finalizedCerts map[string][][]byte
@@ -102,6 +105,8 @@ func newClient(directoryURL, email, dataDir string, eab *acme.ExternalAccountBin
 			},
 		},
 		accountKey:     key,
+		accountKeyPath: acmeAccountKeyPath(dataDir, directoryURL, email, eabKID, eabKey),
+		eabKID:         eabKID,
 		eab:            eab,
 		finalizedCerts: make(map[string][][]byte),
 	}, nil
@@ -111,9 +116,15 @@ var acmeAccountKeyMu sync.Mutex
 
 func acmeAccountKeyPath(dataDir, directoryURL, email, eabKID string, eabKey []byte) string {
 	eabKeySum := sha256.Sum256(eabKey)
-	eabKeyDigest := hex.EncodeToString(eabKeySum[:16])
+	eabKeyDigest := hex.EncodeToString(eabKeySum[:])
 	sum := sha256.Sum256([]byte(directoryURL + "|" + email + "|" + eabKID + "|" + eabKeyDigest))
 	return filepath.Join(dataDir, "acme_accounts", hex.EncodeToString(sum[:])+".key")
+}
+
+type accountKeyMetadata struct {
+	DirectoryURL string `json:"directory_url"`
+	Email        string `json:"email"`
+	EABKID       string `json:"eab_kid"`
 }
 
 func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string, eabKey []byte) (*ecdsa.PrivateKey, error) {
@@ -124,6 +135,9 @@ func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string, eabKey 
 		block, _ := pem.Decode(data)
 		if block != nil {
 			if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
+				if err := writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID); err != nil {
+					return nil, err
+				}
 				return key, nil
 			}
 		}
@@ -148,7 +162,27 @@ func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string, eabKey 
 		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("部署 ACME 账户密钥: %w", err)
 	}
+	if err := writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID); err != nil {
+		return nil, err
+	}
 	return key, nil
+}
+
+func writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID string) error {
+	data, err := json.Marshal(accountKeyMetadata{DirectoryURL: directoryURL, Email: email, EABKID: eabKID})
+	if err != nil {
+		return fmt.Errorf("编码 ACME 账户密钥元数据: %w", err)
+	}
+	metadataPath := keyPath + ".json"
+	tmp := metadataPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return fmt.Errorf("写入 ACME 账户密钥元数据: %w", err)
+	}
+	if err := os.Rename(tmp, metadataPath); err != nil {
+		removeErr := os.Remove(tmp)
+		return fmt.Errorf("部署 ACME 账户密钥元数据: %w", errors.Join(err, removeErr))
+	}
+	return nil
 }
 
 // RegisterAccount registers a new ACME account or returns nil if already registered.
@@ -162,11 +196,46 @@ func (c *Client) RegisterAccount(ctx context.Context) error {
 	_, err := c.acme.Register(ctx, acct, acme.AcceptTOS)
 	if err != nil {
 		lower := strings.ToLower(err.Error())
-		if strings.Contains(lower, "account already exists") || strings.Contains(lower, "already registered") {
-			return nil
+		if !strings.Contains(lower, "account already exists") && !strings.Contains(lower, "already registered") {
+			return err
 		}
 	}
-	return err
+	return c.removeStaleAccountKeys()
+}
+
+func (c *Client) removeStaleAccountKeys() error {
+	acmeAccountKeyMu.Lock()
+	defer acmeAccountKeyMu.Unlock()
+	entries, err := os.ReadDir(filepath.Dir(c.accountKeyPath))
+	if err != nil {
+		return fmt.Errorf("读取 ACME 账户目录: %w", err)
+	}
+	want := accountKeyMetadata{DirectoryURL: c.DirectoryURL, Email: c.Email, EABKID: c.eabKID}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".key.json") {
+			continue
+		}
+		metadataPath := filepath.Join(filepath.Dir(c.accountKeyPath), entry.Name())
+		data, err := os.ReadFile(metadataPath)
+		if err != nil {
+			return fmt.Errorf("读取 ACME 账户密钥元数据 %s: %w", entry.Name(), err)
+		}
+		var metadata accountKeyMetadata
+		if err := json.Unmarshal(data, &metadata); err != nil {
+			return fmt.Errorf("解析 ACME 账户密钥元数据 %s: %w", entry.Name(), err)
+		}
+		keyPath := strings.TrimSuffix(metadataPath, ".json")
+		if metadata != want || keyPath == c.accountKeyPath {
+			continue
+		}
+		if err := os.Remove(keyPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("删除失效 ACME 账户密钥 %s: %w", filepath.Base(keyPath), err)
+		}
+		if err := os.Remove(metadataPath); err != nil {
+			return fmt.Errorf("删除失效 ACME 账户密钥元数据 %s: %w", entry.Name(), err)
+		}
+	}
+	return nil
 }
 
 // AuthorizeOrder creates a new order for the given domains.

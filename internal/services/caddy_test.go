@@ -3,6 +3,7 @@ package services
 import (
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -39,6 +40,48 @@ func TestCaddyService_BackupConfig_failure_prevents_apply(t *testing.T) {
 	}
 	if applyRequests != 0 {
 		t.Fatalf("Caddy received %d apply requests after backup failed", applyRequests)
+	}
+}
+
+func TestCaddyService_GenerateAndApplyConfig_generates_after_waiting_for_config_lock(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedGenerationRule(t, database, "lb_atomic_reload", false)
+	if _, err := database.Exec("UPDATE lb_rules SET domain='old.example.test' WHERE caddy_id='lb_atomic_reload'"); err != nil {
+		t.Fatalf("seed old rule domain: %v", err)
+	}
+	applied := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Errorf("read applied config: %v", err)
+			return
+		}
+		applied <- string(body)
+	}))
+	t.Cleanup(server.Close)
+	service := NewCaddyService(server.URL)
+	service.mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- service.GenerateAndApplyConfig()
+	}()
+	if _, err := database.Exec("UPDATE lb_rules SET domain='new.example.test' WHERE caddy_id='lb_atomic_reload'"); err != nil {
+		service.mu.Unlock()
+		t.Fatalf("write new rule domain: %v", err)
+	}
+
+	// When
+	service.mu.Unlock()
+	err := <-done
+
+	// Then
+	if err != nil {
+		t.Fatalf("generate and apply current config: %v", err)
+	}
+	body := <-applied
+	if !strings.Contains(body, "new.example.test") || strings.Contains(body, "old.example.test") {
+		t.Fatalf("applied config does not match current DB: %s", body)
 	}
 }
 
@@ -447,6 +490,46 @@ func TestGenerateCaddyConfig_propagatesCertificateMaterializationFailure(t *test
 	}
 	if requests != 0 {
 		t.Fatalf("Caddy received %d requests after certificate materialization failed", requests)
+	}
+}
+
+func TestGenerateCaddyConfig_loads_certificate_for_canonical_multi_domain_job(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules
+		(caddy_id,name,protocol,domain,listen_port,strategy,health_check_path,enabled,enable_tls,tls_source)
+		VALUES ('lb-multi-domain','multi-domain','http','www.example.com, example.com',443,'weighted_round_robin','',1,1,'acme_dns')`); err != nil {
+		t.Fatalf("seed multi-domain rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol)
+		VALUES ('lb-multi-domain','127.0.0.1',8080,1,1,'http')`); err != nil {
+		t.Fatalf("seed multi-domain upstream: %v", err)
+	}
+	issuedCert, issuedKey := matchingCertificatePair(t, "example.com")
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem)
+		VALUES ('lb-multi-domain','example.com,www.example.com','issued',?,?)`, issuedCert, issuedKey); err != nil {
+		t.Fatalf("seed multi-domain certificate job: %v", err)
+	}
+
+	// When
+	generated := GenerateCaddyConfig()
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generate Caddy config: %s", message)
+	}
+	certPath, keyPath := CertFilePaths("lb-multi-domain")
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatalf("read materialized certificate: %v", err)
+	}
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read materialized key: %v", err)
+	}
+	if string(certPEM) != issuedCert || string(keyPEM) != issuedKey {
+		t.Fatalf("materialized pair=(%q,%q), want issued multi-domain pair", certPEM, keyPEM)
 	}
 }
 

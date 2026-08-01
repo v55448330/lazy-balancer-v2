@@ -24,6 +24,7 @@ import (
 const (
 	caddyConfigGenerationErrorKey = "__lazy_balancer_generation_error"
 	caddyCertFilesSnapshotKey     = "__lazy_balancer_cert_files_snapshot"
+	caddyConfigStoreKey           = "__lazy_balancer_config_store"
 )
 
 // CaddyService handles Caddy configuration management
@@ -139,6 +140,19 @@ func (s *CaddyService) ClearBackup() {
 func (s *CaddyService) ApplyConfig(config map[string]interface{}) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if store, ok := config[caddyConfigStoreKey].(caddyConfigStore); ok {
+		config = generateCaddyConfigFromStore(store)
+	}
+	return s.applyConfigLocked(config)
+}
+
+func (s *CaddyService) GenerateAndApplyConfig() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.applyConfigLocked(generateCaddyConfigFromStore(db.DB))
+}
+
+func (s *CaddyService) applyConfigLocked(config map[string]interface{}) (err error) {
 	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {
 		return errors.New(message)
 	}
@@ -205,7 +219,7 @@ func (s *CaddyService) ValidateConfig(config map[string]interface{}) (err error)
 func caddyPayload(config map[string]interface{}) map[string]interface{} {
 	payload := make(map[string]interface{}, len(config))
 	for key, value := range config {
-		if key != caddyCertFilesSnapshotKey {
+		if key != caddyCertFilesSnapshotKey && key != caddyConfigStoreKey {
 			payload[key] = value
 		}
 	}
@@ -1993,6 +2007,9 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 	if filesSnapshot != nil {
 		conf[caddyCertFilesSnapshotKey] = filesSnapshot
 	}
+	if _, transactional := store.(*sql.Tx); transactional {
+		conf[caddyConfigStoreKey] = store
+	}
 
 	return conf
 }
@@ -2072,29 +2089,28 @@ func buildCaddyLogging(level string, sizeMB int) map[string]interface{} {
 // loadACMECertificate reads the issued ACME certificate and key from cert_jobs
 // for the given rule and domain. Returns (certPEM, keyPEM, true) if issued.
 func loadACMECertificateFromStore(store caddyConfigStore, caddyID, domain string) (string, string, bool) {
-	parts := strings.Split(domain, ",")
-	domains := make([]string, 0, len(parts))
-	for _, d := range parts {
-		d = strings.TrimSpace(d)
-		if d != "" {
-			domains = append(domains, d)
-		}
-	}
-	if len(domains) == 0 {
+	canonicalDomains, err := CanonicalACMEDomains(domain)
+	if err != nil {
 		return "", "", false
 	}
-	for _, d := range domains {
+	candidates := []string{canonicalDomains}
+	for _, singleDomain := range strings.Split(canonicalDomains, ",") {
+		if singleDomain != canonicalDomains {
+			candidates = append(candidates, singleDomain)
+		}
+	}
+	for _, candidate := range candidates {
 		var id int
 		var status string
 		var certPEM, keyPEM string
 		err := store.QueryRow(`
 			SELECT id, status, cert_pem, key_pem
 			FROM cert_jobs
-			WHERE rule_id=? AND (domain=? OR domain=?)
+			WHERE rule_id=? AND domain=?
 			  AND cert_pem IS NOT NULL AND cert_pem <> ''
 			  AND key_pem IS NOT NULL AND key_pem <> ''
 			ORDER BY updated_at DESC LIMIT 1`,
-			caddyID, d, domains[0],
+			caddyID, candidate,
 		).Scan(&id, &status, &certPEM, &keyPEM)
 		if err != nil {
 			if err != sql.ErrNoRows {
@@ -2995,7 +3011,9 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 // ApplyConfigFromTx renders the Caddy config from an uncommitted transaction
 // and applies it, keeping the database unchanged when Caddy rejects the config.
 func (s *CaddyService) ApplyConfigFromTx(tx *sql.Tx) error {
-	return s.ApplyConfig(generateCaddyConfigFromStore(tx))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.applyConfigLocked(generateCaddyConfigFromStore(tx))
 }
 
 func normalizeWeights(weights []int) []int {

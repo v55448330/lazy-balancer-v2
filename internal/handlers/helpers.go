@@ -347,8 +347,9 @@ func getCPUPercent() (float64, error) {
 		lastCPUStats.snapshot = current
 		return 0, nil
 	}
-	if current.total <= previous.total || current.idle < previous.idle {
-		return 0, fmt.Errorf("CPU 计数器无效")
+	if current.total < previous.total || current.idle < previous.idle {
+		lastCPUStats.snapshot = current
+		return 0, nil
 	}
 	totalDelta := current.total - previous.total
 	idleDelta := current.idle - previous.idle
@@ -356,6 +357,9 @@ func getCPUPercent() (float64, error) {
 		return 0, fmt.Errorf("CPU 空闲计数器增量无效")
 	}
 	lastCPUStats.snapshot = current
+	if totalDelta == 0 {
+		return 0, nil
+	}
 	return float64(totalDelta-idleDelta) / float64(totalDelta) * 100, nil
 }
 
@@ -385,7 +389,8 @@ func getRealtimeTraffic() (models.RealtimeTraffic, error) {
 
 	if !lastNetStats.time.IsZero() {
 		elapsed := now.Sub(lastNetStats.time).Seconds()
-		if elapsed > 0 {
+		countersRolledBack := totalBytesIn < lastNetStats.bytesIn || totalBytesOut < lastNetStats.bytesOut
+		if elapsed > 0 && !countersRolledBack {
 			rateIn = int64(float64(totalBytesIn-lastNetStats.bytesIn) / elapsed)
 			rateOut = int64(float64(totalBytesOut-lastNetStats.bytesOut) / elapsed)
 			if rateIn < 0 {

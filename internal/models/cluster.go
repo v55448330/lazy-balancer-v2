@@ -3,9 +3,10 @@ package models
 import (
 	"errors"
 	"net/url"
+	"time"
 )
 
-var ErrInvalidClusterAccessURL = errors.New("访问地址必须是无凭证的 HTTP 或 HTTPS URL")
+var ErrInvalidClusterAccessURL = errors.New("访问地址必须是无凭证、查询参数或片段的 HTTP 或 HTTPS URL")
 
 type ClusterRegisterRequest struct {
 	Token     string `json:"token" binding:"required"`
@@ -25,7 +26,7 @@ func ValidateClusterAccessURL(value string) error {
 		return nil
 	}
 	parsed, err := url.Parse(value)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.Opaque != "" {
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return ErrInvalidClusterAccessURL
 	}
 	return nil
@@ -125,14 +126,16 @@ type ClusterBasicSettings struct {
 }
 
 type ClusterUser struct {
-	ID                int     `json:"id"`
-	Username          string  `json:"username"`
-	PasswordHash      string  `json:"password_hash"`
-	Role              string  `json:"role"`
-	DisplayName       string  `json:"display_name"`
-	IsEnabled         bool    `json:"is_enabled"`
-	PasswordVersion   int64   `json:"password_version"`
-	PasswordChangedAt *string `json:"password_changed_at"`
+	ID                int          `json:"id"`
+	Username          string       `json:"username"`
+	PasswordHash      string       `json:"password_hash"`
+	Role              string       `json:"role"`
+	DisplayName       string       `json:"display_name"`
+	IsEnabled         bool         `json:"is_enabled"`
+	PasswordVersion   int64        `json:"password_version"`
+	PasswordChangedAt *string      `json:"password_changed_at"`
+	CreatedAt         time.Time    `json:"created_at"`
+	LastLogin         JSONNullTime `json:"last_login"`
 }
 
 type ClusterAPIKey struct {

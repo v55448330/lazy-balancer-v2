@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -106,7 +107,7 @@ func TestClusterService_RegisterNodeStoresAndUpdatesAccessURL(t *testing.T) {
 
 func TestClusterAccessURLValidation(t *testing.T) {
 	valid := []string{"", "http://node.example:8000", "https://[2001:db8::1]:8443"}
-	invalid := []string{"ftp://node.example/file", "file:///tmp/socket", "http:node.example", "https://user:pass@node.example"}
+	invalid := []string{"ftp://node.example/file", "file:///tmp/socket", "http:node.example", "https://user:pass@node.example", "https://node.example?token=secret", "https://node.example#fragment"}
 	for _, value := range valid {
 		if err := models.ValidateClusterAccessURL(value); err != nil {
 			t.Errorf("valid URL %q rejected: %v", value, err)
@@ -531,6 +532,46 @@ func TestClusterService_Promote_removes_old_master_pin_and_audits(t *testing.T) 
 	}
 }
 
+func TestClusterService_Promote_succeeds_when_pin_cleanup_fails_then_retries_on_snapshot(t *testing.T) {
+	// Given
+	service, database := newClusterTestService(t)
+	masterURL := "https://master.example:8443"
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='secret' WHERE id=1", masterURL); err != nil {
+		t.Fatal(err)
+	}
+	pinPath, err := clusterPinPathForDatabase(database, "master.example:8443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(pinPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(pinPath, "blocker")
+	if err := os.WriteFile(blocker, []byte("block removal"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	promoteErr := service.Promote(context.Background())
+	_, residualErr := os.Stat(pinPath)
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	_, _, snapshotErr := service.Snapshot(context.Background(), 0, "", "")
+	_, finalErr := os.Stat(pinPath)
+
+	// Then
+	if promoteErr != nil {
+		t.Fatalf("promote returned pin cleanup failure: %v", promoteErr)
+	}
+	if residualErr != nil {
+		t.Fatalf("failed cleanup did not leave retryable pin: %v", residualErr)
+	}
+	if snapshotErr != nil || !errors.Is(finalErr, os.ErrNotExist) {
+		t.Fatalf("snapshot retry error=%v final pin stat=%v", snapshotErr, finalErr)
+	}
+}
+
 func TestClusterService_Promote_restarts_sync_when_transaction_fails(t *testing.T) {
 	_, database := newClusterTestService(t)
 	lifecycle := &clusterLifecycleFake{}
@@ -657,6 +698,54 @@ func TestClusterSnapshot_syncs_password_version_and_changed_at(t *testing.T) {
 	}
 	if restoredVersion != 9 || restored != "2026-07-31T01:02:03.000Z" {
 		t.Fatalf("restored password_version=%d password_changed_at=%q", restoredVersion, restored)
+	}
+}
+
+func TestClusterSnapshot_preservesUserTimesAndLegacyRuleID(t *testing.T) {
+	// Given
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,created_at,last_login)
+		VALUES (21,'time-user','hash','admin',1,'2026-07-01 01:02:03','2026-07-31 04:05:06')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (id,caddy_id,name,protocol,listen_port) VALUES (4242,'lb_legacy_id','legacy id','http',8080)`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	snapshot, _, err := service.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(snapshot.Users[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded models.ClusterUser
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceSnapshotDB(context.Background(), database, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	var createdAt, lastLogin string
+	var legacyID int
+	if err := database.QueryRow(`SELECT strftime('%Y-%m-%dT%H:%M:%fZ',u.created_at),strftime('%Y-%m-%dT%H:%M:%fZ',u.last_login),r.id FROM users u CROSS JOIN lb_rules r WHERE u.id=21 AND r.caddy_id='lb_legacy_id'`).Scan(&createdAt, &lastLogin, &legacyID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then
+	if len(snapshot.Users) != 1 || len(snapshot.Rules) != 1 {
+		t.Fatalf("users=%d rules=%d", len(snapshot.Users), len(snapshot.Rules))
+	}
+	if !decoded.LastLogin.Valid || decoded.CreatedAt.IsZero() {
+		t.Fatalf("decoded user times=%#v", decoded)
+	}
+	if snapshot.Rules[0].ID != 4242 || legacyID != 4242 {
+		t.Fatalf("snapshot rule id=%d restored id=%d", snapshot.Rules[0].ID, legacyID)
+	}
+	if createdAt != "2026-07-01T01:02:03.000Z" || lastLogin != "2026-07-31T04:05:06.000Z" {
+		t.Fatalf("restored created_at=%q last_login=%q", createdAt, lastLogin)
 	}
 }
 

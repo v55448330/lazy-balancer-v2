@@ -783,7 +783,7 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 		FROM cert_jobs j
 		JOIN lb_rules r ON r.caddy_id=j.rule_id
 		WHERE j.expires_at IS NOT NULL
-		  AND j.expires_at <= datetime('now', '+' || ? || ' days')
+		  AND datetime(j.expires_at) <= datetime('now', '+' || ? || ' days')
 		  AND j.status IN ('issued', 'failed', 'waiting_ca')
 		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' AND r.domain=j.domain
 		ORDER BY j.expires_at ASC

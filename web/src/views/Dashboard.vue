@@ -461,6 +461,7 @@ interface RuleHistoryRow {
 }
 
 interface RuleHistoryDelta {
+  epochReset: boolean
   requests: number
   s2xx: number
   s3xx: number
@@ -472,8 +473,15 @@ interface RuleHistoryDelta {
 
 const diffCounters = (prev: RuleHistoryRow, curr: RuleHistoryRow): RuleHistoryDelta => {
   const epochReset = curr.requests_total < prev.requests_total
+    || curr.requests_2xx < prev.requests_2xx
+    || curr.requests_3xx < prev.requests_3xx
+    || curr.requests_4xx < prev.requests_4xx
+    || curr.requests_5xx < prev.requests_5xx
+    || curr.bytes_in < prev.bytes_in
+    || curr.bytes_out < prev.bytes_out
   const diff = (previous: number, current: number): number => epochReset ? current : current - previous
   return {
+    epochReset,
     requests: diff(prev.requests_total, curr.requests_total),
     s2xx: diff(prev.requests_2xx, curr.requests_2xx),
     s3xx: diff(prev.requests_3xx, curr.requests_3xx),
@@ -568,7 +576,7 @@ const historyChartBase = (legend: string[], series: LineSeriesOption[], valueFor
 
 const ruleRequestsChartOption = computed<EChartsOption>(() => {
   const d = ruleHistoryDeltas.value.deltas
-  const mk = (name: string, key: keyof RuleHistoryDelta, color: string): LineSeriesOption => ({ name, type: 'line', data: d.map((row) => row[key]), smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
+  const mk = (name: string, key: Exclude<keyof RuleHistoryDelta, 'epochReset'>, color: string): LineSeriesOption => ({ name, type: 'line', data: d.map((row) => row.epochReset ? null : row[key]), smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
   return historyChartBase(['总请求', '2xx', '3xx', '4xx', '5xx'], [
     mk('总请求', 'requests', '#3b82f6'),
     mk('2xx', 's2xx', '#10b981'),
@@ -580,7 +588,7 @@ const ruleRequestsChartOption = computed<EChartsOption>(() => {
 
 const ruleBytesChartOption = computed<EChartsOption>(() => {
   const d = ruleHistoryDeltas.value.deltas
-  const mk = (name: string, key: keyof RuleHistoryDelta, color: string): LineSeriesOption => ({ name, type: 'line', data: d.map((row) => row[key]), smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
+  const mk = (name: string, key: Exclude<keyof RuleHistoryDelta, 'epochReset'>, color: string): LineSeriesOption => ({ name, type: 'line', data: d.map((row) => row.epochReset ? null : row[key]), smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
   return historyChartBase(['入站', '出站'], [mk('入站', 'bin', '#3b82f6'), mk('出站', 'bout', '#10b981')], formatBytes)
 })
 

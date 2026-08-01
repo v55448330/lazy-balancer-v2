@@ -266,7 +266,7 @@ func TestClusterPasswordVersionSync_rejects_old_JWT(t *testing.T) {
 		t.Fatalf("seed slave user: %v", err)
 	}
 	const clusterToken = "cluster-token"
-	snapshot := models.ClusterSnapshot{Version: 1, Users: []models.ClusterUser{{ID: 1, Username: "alice", PasswordHash: "new-hash", Role: "admin", IsEnabled: true, PasswordVersion: 1}}}
+	snapshot := models.ClusterSnapshot{Version: 1, SchemaVersion: services.CurrentSnapshotSchema, MinReaderVersion: services.CurrentSnapshotSchema, Users: []models.ClusterUser{{ID: 1, Username: "alice", PasswordHash: "new-hash", Role: "admin", IsEnabled: true, PasswordVersion: 1}}}
 	content, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)

@@ -974,6 +974,7 @@ import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
 import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight, Search, WarningFilled, Location, Monitor, Link} from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
+import axios from 'axios'
 import { ansiToHtml } from '@/utils/ansi'
 import { formatDate } from '@/utils/date'
 import type {
@@ -1239,6 +1240,9 @@ const fetchRules = async () => {
     fetchCertInfo()
     // Fetch cert job statuses for ACME rules
     fetchCertJobs()
+  } catch (error: unknown) {
+    if (axios.isCancel(error)) return
+    throw error
   } finally {
     if (!disposed && requestSeq === rulesRequestSeq) loading.value = false
   }

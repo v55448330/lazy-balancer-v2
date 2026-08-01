@@ -364,7 +364,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		return fmt.Errorf("no enabled DNS provider selected for rule")
 	}
 
-	dnsProvider, err := dnsprovider.NewProviderFromCredentials(dnsCredentialsJSON)
+	dnsProvider, err := dnsprovider.NewPersistentProviderFromCredentials(dnsCredentialsJSON, s.dataDir)
 	if err != nil {
 		failJob(jobID, err.Error())
 		return err

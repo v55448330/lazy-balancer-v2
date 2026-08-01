@@ -543,6 +543,46 @@ func TestGetCPUPercent_serializes_sample_read_with_baseline_update(t *testing.T)
 	}
 }
 
+func TestGetCPUPercent_rebaselines_after_counter_rollback(t *testing.T) {
+	// Given
+	originalReader := systemMetricsReadFile
+	lastCPUStats.mu.Lock()
+	originalSnapshot := lastCPUStats.snapshot
+	lastCPUStats.snapshot = cpuSnapshot{total: 100, idle: 50}
+	lastCPUStats.mu.Unlock()
+	samples := [][]byte{
+		[]byte("cpu 20 0 0 20\n"),
+		[]byte("cpu 50 0 0 30\n"),
+	}
+	call := 0
+	systemMetricsReadFile = func(path string) ([]byte, error) {
+		if path != "/proc/stat" {
+			return nil, errors.New("unexpected path: " + path)
+		}
+		sample := samples[call]
+		call++
+		return sample, nil
+	}
+	t.Cleanup(func() {
+		systemMetricsReadFile = originalReader
+		lastCPUStats.mu.Lock()
+		lastCPUStats.snapshot = originalSnapshot
+		lastCPUStats.mu.Unlock()
+	})
+
+	// When
+	rollbackPercent, rollbackErr := getCPUPercent()
+	nextPercent, nextErr := getCPUPercent()
+
+	// Then
+	if rollbackErr != nil || rollbackPercent != 0 {
+		t.Fatalf("rollback sample percent=%v error=%v, want 0/nil", rollbackPercent, rollbackErr)
+	}
+	if nextErr != nil || nextPercent != 75 {
+		t.Fatalf("post-rollback sample percent=%v error=%v, want 75/nil", nextPercent, nextErr)
+	}
+}
+
 func TestGetRealtimeTraffic_serializes_sample_read_with_baseline_update(t *testing.T) {
 	// Given
 	originalReader := systemMetricsReadFile
@@ -617,6 +657,48 @@ func TestGetRealtimeTraffic_serializes_sample_read_with_baseline_update(t *testi
 	lastNetStats.mu.Unlock()
 	if finalBytesIn != 400 || finalBytesOut != 600 {
 		t.Fatalf("final network snapshot=%d/%d, want newer 400/600", finalBytesIn, finalBytesOut)
+	}
+}
+
+func TestGetRealtimeTraffic_rebaselines_after_counter_rollback(t *testing.T) {
+	// Given
+	originalReader := systemMetricsReadFile
+	lastNetStats.mu.Lock()
+	originalBytesIn, originalBytesOut, originalTime := lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.time
+	lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.time = 1000, 2000, time.Now().Add(-5*time.Second)
+	lastNetStats.mu.Unlock()
+	systemMetricsReadFile = func(path string) ([]byte, error) {
+		switch path {
+		case "/proc/net/dev":
+			return []byte("Inter-| Receive | Transmit\neth0: 100 0 0 0 0 0 0 0 200 0 0 0 0 0 0 0\n"), nil
+		case "/proc/net/route":
+			return []byte("Iface Destination Gateway Flags\neth0 00000000 0100000A 0003\n"), nil
+		default:
+			return nil, errors.New("unexpected path: " + path)
+		}
+	}
+	t.Cleanup(func() {
+		systemMetricsReadFile = originalReader
+		lastNetStats.mu.Lock()
+		lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.time = originalBytesIn, originalBytesOut, originalTime
+		lastNetStats.mu.Unlock()
+	})
+
+	// When
+	traffic, err := getRealtimeTraffic()
+
+	// Then
+	if err != nil {
+		t.Fatalf("sample rollback traffic: %v", err)
+	}
+	if traffic.BytesIn != 0 || traffic.BytesOut != 0 {
+		t.Fatalf("rollback traffic=%+v, want zero rates", traffic)
+	}
+	lastNetStats.mu.Lock()
+	bytesIn, bytesOut := lastNetStats.bytesIn, lastNetStats.bytesOut
+	lastNetStats.mu.Unlock()
+	if bytesIn != 100 || bytesOut != 200 {
+		t.Fatalf("network baseline=%d/%d, want 100/200", bytesIn, bytesOut)
 	}
 }
 

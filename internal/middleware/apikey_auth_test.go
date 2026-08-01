@@ -143,6 +143,7 @@ func TestJWTAuthAllowsValidJWTWithInvalidAPIKeyHeader(t *testing.T) {
 		created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN DEFAULT TRUE,
 		mcp_enabled INTEGER DEFAULT 0, read_only INTEGER DEFAULT 0, mcp_ip_whitelist TEXT DEFAULT ''
 	);
+	CREATE TABLE revoked_jti (jti_hash TEXT PRIMARY KEY, expires_at DATETIME NOT NULL);
 	INSERT INTO users VALUES (7, 'alice', 'user', 1, 0);`); err != nil {
 		t.Fatal(err)
 	}

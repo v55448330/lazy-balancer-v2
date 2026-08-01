@@ -65,3 +65,35 @@ func TestProvider_CleanUp_deletes_only_record_created_by_provider(t *testing.T) 
 		t.Fatalf("remaining records=%v, want only unrelated record", transport.records)
 	}
 }
+
+func TestProvider_CleanUp_deletes_persisted_record_after_restart(t *testing.T) {
+	// Given
+	dataDir := t.TempDir()
+	transport := &dnsPodRecordTransport{records: map[string]string{"100": "another-task"}}
+	first, err := NewPersistent("id,token", dataDir)
+	if err != nil {
+		t.Fatalf("create persistent provider: %v", err)
+	}
+	first.client.Transport = transport
+	if err := first.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "this-task", 600); err != nil {
+		t.Fatalf("present persisted record: %v", err)
+	}
+	restarted, err := NewPersistent("id,token", dataDir)
+	if err != nil {
+		t.Fatalf("restart persistent provider: %v", err)
+	}
+	restarted.client.Transport = transport
+
+	// When
+	err = restarted.CleanUp(t.Context(), "example.com", "_acme-challenge.example.com.")
+
+	// Then
+	if err != nil {
+		t.Fatalf("clean up persisted record: %v", err)
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	if len(transport.records) != 1 || transport.records["100"] != "another-task" {
+		t.Fatalf("remaining records=%v, want only unrelated record", transport.records)
+	}
+}

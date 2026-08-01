@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
 	dnspod "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/dnspod/v20210323"
+	"lazy-balancer-v2/internal/dnsprovider/ownership"
 )
 
 // Provider implements dnsprovider.Provider for Tencent Cloud DNSPod.
@@ -19,6 +21,20 @@ type Provider struct {
 	client    *dnspod.Client
 	mu        sync.Mutex
 	owned     map[string][]uint64
+	ownership *ownership.Store
+}
+
+func NewPersistent(secretID, secretKey, dataDir string) (*Provider, error) {
+	provider, err := New(secretID, secretKey)
+	if err != nil {
+		return nil, err
+	}
+	store, err := ownership.New(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	provider.ownership = store
+	return provider, nil
 }
 
 // New creates a Tencent Cloud DNSPod provider.
@@ -48,9 +64,16 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 	if err != nil {
 		return err
 	}
-	p.mu.Lock()
-	p.owned[zone+"|"+subDomain] = append(p.owned[zone+"|"+subDomain], recordID)
-	p.mu.Unlock()
+	if p.ownership != nil {
+		record := ownership.Record{Provider: "tencent", Zone: zone, FQDN: tokenFQDN, Value: value, RecordID: strconv.FormatUint(recordID, 10)}
+		if err := p.ownership.Add(record); err != nil {
+			return errors.Join(err, p.deleteRecord(ctx, zone, recordID))
+		}
+	} else {
+		p.mu.Lock()
+		p.owned[zone+"|"+subDomain] = append(p.owned[zone+"|"+subDomain], recordID)
+		p.mu.Unlock()
+	}
 	return nil
 }
 
@@ -61,30 +84,56 @@ func (p *Provider) CleanUp(ctx context.Context, zone, tokenFQDN string) error {
 	subDomain = strings.TrimSuffix(subDomain, "."+zone)
 
 	key := zone + "|" + subDomain
-	p.mu.Lock()
-	recordIDs := append([]uint64(nil), p.owned[key]...)
-	delete(p.owned, key)
-	p.mu.Unlock()
+	var records []ownership.Record
+	var recordIDs []uint64
+	if p.ownership != nil {
+		var err error
+		records, err = p.ownership.Matching("tencent", zone, tokenFQDN)
+		if err != nil {
+			return err
+		}
+		for _, record := range records {
+			recordID, err := strconv.ParseUint(record.RecordID, 10, 64)
+			if err != nil {
+				return fmt.Errorf("parse persisted Tencent record ID %q: %w", record.RecordID, err)
+			}
+			recordIDs = append(recordIDs, recordID)
+		}
+	} else {
+		p.mu.Lock()
+		recordIDs = append([]uint64(nil), p.owned[key]...)
+		delete(p.owned, key)
+		p.mu.Unlock()
+	}
 	var cleanupErr error
 	var failed []uint64
-	for _, recordID := range recordIDs {
-		req := dnspod.NewDeleteRecordRequest()
-		req.Domain = common.StringPtr(zone)
-		req.RecordId = common.Uint64Ptr(recordID)
-		if _, err := p.client.DeleteRecordWithContext(ctx, req); err != nil {
+	for index, recordID := range recordIDs {
+		if err := p.deleteRecord(ctx, zone, recordID); err != nil {
 			if ctx.Err() != nil {
 				err = ctx.Err()
 			}
 			failed = append(failed, recordID)
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("DeleteRecord failed: %w", err))
+			continue
+		}
+		if p.ownership != nil {
+			cleanupErr = errors.Join(cleanupErr, p.ownership.Remove(records[index]))
 		}
 	}
-	if len(failed) > 0 {
+	if p.ownership == nil && len(failed) > 0 {
 		p.mu.Lock()
 		p.owned[key] = append(p.owned[key], failed...)
 		p.mu.Unlock()
 	}
 	return cleanupErr
+}
+
+func (p *Provider) deleteRecord(ctx context.Context, zone string, recordID uint64) error {
+	req := dnspod.NewDeleteRecordRequest()
+	req.Domain = common.StringPtr(zone)
+	req.RecordId = common.Uint64Ptr(recordID)
+	_, err := p.client.DeleteRecordWithContext(ctx, req)
+	return err
 }
 
 func (p *Provider) findRecordID(ctx context.Context, zone, subDomain string) (uint64, error) {

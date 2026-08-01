@@ -93,12 +93,79 @@ func TestJWTLogout_revokes_legacy_token_without_jti(t *testing.T) {
 	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled,password_version) VALUES (2,'legacy-logout','hash','user',1,0)"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
+	sign := func(session string) string {
+		t.Helper()
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+			"user_id": 2, "username": "legacy-logout", "exp": time.Now().Add(time.Hour).Unix(), "pwd_ver": 0, "session": session,
+		})
+		signed, err := token.SignedString([]byte(cfg.JWTSecret))
+		if err != nil {
+			t.Fatalf("sign token: %v", err)
+		}
+		return signed
+	}
+	loggedOutToken := sign("logged-out")
+	otherToken := sign("other")
+	h := handlers.NewHandlers(handlers.Dependencies{Config: cfg})
+	router := gin.New()
+	router.Use(jwtAuth(cfg))
+	router.POST("/logout", h.Logout)
+	router.GET("/protected", noContent)
+	request := func(method, path, token string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		router.ServeHTTP(response, req)
+		return response
+	}
+
+	// When
+	logout := request(http.MethodPost, "/logout", loggedOutToken)
+	afterLogout := request(http.MethodGet, "/protected", loggedOutToken)
+	otherSession := request(http.MethodGet, "/protected", otherToken)
+
+	// Then
+	if logout.Code != http.StatusOK || afterLogout.Code != http.StatusUnauthorized || otherSession.Code != http.StatusNoContent {
+		t.Fatalf("logout=%d revoked=%d other=%d body=%q", logout.Code, afterLogout.Code, otherSession.Code, afterLogout.Body.String())
+	}
+	var passwordVersion int64
+	if err := db.DB.QueryRow("SELECT password_version FROM users WHERE id=2").Scan(&passwordVersion); err != nil {
+		t.Fatal(err)
+	}
+	if passwordVersion != 0 {
+		t.Fatalf("password_version=%d, logout must not revoke all sessions", passwordVersion)
+	}
+}
+
+func TestJWTLogout_revocation_usesUTCTextAcrossNegativeTimezoneQueryAndCleanup(t *testing.T) {
+	// Given
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalLocal := time.Local
+	time.Local = location
+	t.Cleanup(func() { time.Local = originalLocal })
+	cfg := &config.Config{JWTSecret: "timezone-logout-secret"}
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldDB)
+	})
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled,password_version) VALUES (3,'timezone-logout','hash','user',1,0)"); err != nil {
+		t.Fatal(err)
+	}
+	expiresAt := time.Now().Add(time.Hour).Unix()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id": 2, "username": "legacy-logout", "exp": time.Now().Add(time.Hour).Unix(), "pwd_ver": 0,
+		"user_id": 3, "username": "timezone-logout", "exp": expiresAt, "pwd_ver": 0, "jti": "timezone-jti",
 	})
 	signed, err := token.SignedString([]byte(cfg.JWTSecret))
 	if err != nil {
-		t.Fatalf("sign token: %v", err)
+		t.Fatal(err)
 	}
 	h := handlers.NewHandlers(handlers.Dependencies{Config: cfg})
 	router := gin.New()
@@ -115,11 +182,28 @@ func TestJWTLogout_revokes_legacy_token_without_jti(t *testing.T) {
 
 	// When
 	logout := request(http.MethodPost, "/logout")
-	afterLogout := request(http.MethodGet, "/protected")
+	revoked := request(http.MethodGet, "/protected")
+	var stored string
+	if err := db.DB.QueryRow("SELECT expires_at FROM revoked_jti").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	var active int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM revoked_jti WHERE expires_at > ?", time.Now().UTC().Format("2006-01-02T15:04:05Z")).Scan(&active); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := &revokedJTICleanup{}
+	cleanupErr := cleanup.run(db.DB, time.Unix(expiresAt+1, 0))
+	var remaining int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM revoked_jti").Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
 
 	// Then
-	if logout.Code != http.StatusOK || afterLogout.Code != http.StatusUnauthorized {
-		t.Fatalf("logout=%d protected=%d body=%q", logout.Code, afterLogout.Code, afterLogout.Body.String())
+	if logout.Code != http.StatusOK || revoked.Code != http.StatusUnauthorized {
+		t.Fatalf("logout=%d revoked=%d", logout.Code, revoked.Code)
+	}
+	if !strings.HasSuffix(stored, "Z") || active != 1 || cleanupErr != nil || remaining != 0 {
+		t.Fatalf("stored=%q active=%d cleanup=%v remaining=%d", stored, active, cleanupErr, remaining)
 	}
 }
 

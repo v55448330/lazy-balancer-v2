@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -26,6 +27,16 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	}
 	if req.MasterURL == "" || req.RegisterToken == "" {
 		clusterError(c, http.StatusBadRequest, "主节点地址和注册令牌不能为空", nil)
+		return
+	}
+	parsedMasterURL, parseErr := url.Parse(req.MasterURL)
+	masterAuditURL := "主节点地址无效"
+	if parseErr == nil && parsedMasterURL.Scheme != "" && parsedMasterURL.Host != "" {
+		masterAuditURL = parsedMasterURL.Scheme + "://" + parsedMasterURL.Host
+	}
+	if err := models.ValidateClusterAccessURL(req.MasterURL); err != nil {
+		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标："+masterAuditURL, err.Error()))
+		clusterError(c, http.StatusBadRequest, err.Error(), err)
 		return
 	}
 	name := req.NodeName
@@ -50,7 +61,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		})
 		return
 	}
-	recordAudit(c, "切换", "集群模式", services.FormatAuditDetail("主节点 → 从节点", req.MasterURL, "等待审批"))
+	recordAudit(c, "切换", "集群模式", services.FormatAuditDetail("主节点 → 从节点", masterAuditURL, "等待审批"))
 	message := "已切换为从节点，等待主节点审批"
 	if strings.HasPrefix(strings.ToLower(req.MasterURL), "http://") {
 		message += "；警告：证书私钥将经明文 HTTP 传输，建议使用 HTTPS"

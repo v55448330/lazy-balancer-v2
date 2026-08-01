@@ -31,16 +31,18 @@ var (
 
 // MetricsService collects and stores metrics from Caddy
 type MetricsService struct {
-	metricsURL    string
-	interval      int
-	client        *http.Client
-	stopCh        chan struct{}
-	stopOnce      sync.Once
-	overview      models.MetricsOverview
-	mu            sync.RWMutex
-	lastTotal     int64
-	lastSampleAt  time.Time
-	hasLastSample bool
+	metricsURL                 string
+	interval                   int
+	client                     *http.Client
+	stopCh                     chan struct{}
+	stopOnce                   sync.Once
+	overview                   models.MetricsOverview
+	mu                         sync.RWMutex
+	lastTotal                  int64
+	lastSampleAt               time.Time
+	hasLastSample              bool
+	domainConflictMu           sync.Mutex
+	domainConflictFingerprints map[string]string
 }
 
 func NewMetricsService(metricsURL string, interval int) *MetricsService {
@@ -353,6 +355,7 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 	}
 	defer rows.Close()
 	domainToRule := map[string]string{}
+	domainConflicts := map[string][]string{}
 	for rows.Next() {
 		var id, domains string
 		if err := rows.Scan(&id, &domains); err != nil {
@@ -362,7 +365,10 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 			if d = strings.TrimSpace(d); d != "" {
 				if existingID, exists := domainToRule[d]; exists {
 					if existingID != id {
-						log.Printf("Metrics domain conflict: domain %q maps to rules %q and %q; keeping %q", d, existingID, id, existingID)
+						if _, recorded := domainConflicts[d]; !recorded {
+							domainConflicts[d] = []string{existingID}
+						}
+						domainConflicts[d] = append(domainConflicts[d], id)
 					}
 					continue
 				}
@@ -372,6 +378,25 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate enabled HTTP rules for per-host metrics: %w", err)
+	}
+	currentConflicts := make(map[string]string, len(domainConflicts))
+	type conflictLog struct {
+		domain  string
+		ruleIDs []string
+	}
+	newConflicts := make([]conflictLog, 0, len(domainConflicts))
+	m.domainConflictMu.Lock()
+	for domain, ruleIDs := range domainConflicts {
+		fingerprint := strings.Join(ruleIDs, "\x00")
+		currentConflicts[domain] = fingerprint
+		if m.domainConflictFingerprints[domain] != fingerprint {
+			newConflicts = append(newConflicts, conflictLog{domain: domain, ruleIDs: ruleIDs})
+		}
+	}
+	m.domainConflictFingerprints = currentConflicts
+	m.domainConflictMu.Unlock()
+	for _, conflict := range newConflicts {
+		log.Printf("Metrics domain conflict: domain %q maps to rules %q; keeping %q", conflict.domain, strings.Join(conflict.ruleIDs, ","), conflict.ruleIDs[0])
 	}
 	for host, h := range hosts {
 		ruleID, ok := domainToRule[host]

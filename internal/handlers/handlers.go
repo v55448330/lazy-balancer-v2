@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -104,11 +103,7 @@ func boolText(value bool) string {
 }
 
 func (h *Handlers) applyCaddyConfig() {
-	// Generate Caddy config from DB
-	config := services.GenerateCaddyConfig()
-
-	// Push to Caddy
-	if err := h.caddyService.ApplyConfig(config); err != nil {
+	if err := h.caddyService.GenerateAndApplyConfig(); err != nil {
 		log.Printf("Failed to apply Caddy config: %v", err)
 	}
 }
@@ -116,8 +111,7 @@ func (h *Handlers) applyCaddyConfig() {
 func (h *Handlers) applyCaddyConfigE() error {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
-	config := services.GenerateCaddyConfig()
-	return h.caddyService.ApplyConfig(config)
+	return h.caddyService.GenerateAndApplyConfig()
 }
 
 func (h *Handlers) applyCaddyConfigWithRollback() error {
@@ -134,14 +128,7 @@ func (h *Handlers) applyCaddyConfigWithRollbackLocked() error {
 		return fmt.Errorf("备份 Caddy 配置失败: %w", err)
 	}
 
-	// Generate Caddy config from DB
-	config := services.GenerateCaddyConfig()
-
-	configJSON, _ := json.Marshal(config)
-	log.Printf("Generated Caddy config: %s", string(configJSON))
-
-	// Push to Caddy
-	if err := h.caddyService.ApplyConfig(config); err != nil {
+	if err := h.caddyService.GenerateAndApplyConfig(); err != nil {
 		log.Printf("Failed to apply Caddy config: %v", err)
 
 		// Attempt rollback

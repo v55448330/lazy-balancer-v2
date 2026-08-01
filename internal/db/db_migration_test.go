@@ -222,6 +222,40 @@ func TestMigrateCertJobsStatusConstraint_repairs_incorrect_status_default(t *tes
 	}
 }
 
+func TestMigrateCertJobsStatusConstraint_backfills_null_status_and_is_idempotent(t *testing.T) {
+	// Given
+	database := openMigrationTestDB(t)
+	allStatuses := "'queued','pending','processing','creating_account','creating_order','order_created','cleanup_dns','cleanup_warning','presenting_dns','waiting_propagation','dns_propagated','accepting_challenge','validating','validated','finalizing','finalized','downloading','downloaded','issued','failed','waiting_ca','disabled','waiting_order_ready','order_ready','waiting_order_valid','order_valid'"
+	createLegacyCertJobs(t, database, "'queued'", allStatuses)
+	if _, err := database.Exec("INSERT INTO cert_jobs (rule_id, domain, status) VALUES ('lb_null', 'null.example', NULL)"); err != nil {
+		t.Fatalf("seed NULL certificate job status: %v", err)
+	}
+
+	// When
+	if err := migrateCertJobsStatusConstraint(); err != nil {
+		t.Fatalf("migrate certificate job status: %v", err)
+	}
+	if err := migrateCertJobsStatusConstraint(); err != nil {
+		t.Fatalf("repeat certificate job status migration: %v", err)
+	}
+
+	// Then
+	var notNull int
+	var status string
+	if err := database.QueryRow("SELECT \"notnull\" FROM pragma_table_info('cert_jobs') WHERE name='status'").Scan(&notNull); err != nil {
+		t.Fatalf("read cert_jobs.status schema: %v", err)
+	}
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_null'").Scan(&status); err != nil {
+		t.Fatalf("read migrated certificate job status: %v", err)
+	}
+	if notNull != 1 || status != "queued" {
+		t.Fatalf("cert_jobs.status notnull=%d value=%q, want 1/queued", notNull, status)
+	}
+	if _, err := database.Exec("UPDATE cert_jobs SET status=NULL WHERE rule_id='lb_null'"); err == nil {
+		t.Fatal("cert_jobs.status accepted NULL after migration")
+	}
+}
+
 func TestMigrateCertJobsStatusConstraint_rebuilds_after_startup_index_creation(t *testing.T) {
 	database := openMigrationTestDB(t)
 	createLegacyCertJobs(t, database, "'queued'", "'queued','disabled'")

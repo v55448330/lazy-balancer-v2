@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -65,5 +66,55 @@ func TestSetClusterMode_returns_registration_id_when_local_transition_fails(t *t
 	}
 	if action != "切换失败" || !strings.Contains(detail, "registration_id：73") {
 		t.Fatalf("audit action=%q detail=%q", action, detail)
+	}
+}
+
+func TestSetClusterMode_rejectsCredentialedMasterURLWithoutAuditingCredentials(t *testing.T) {
+	// Given
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	master := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("credentialed master URL reached the remote server")
+	}))
+	defer master.Close()
+	parsed, err := url.Parse(master.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialedURL := parsed.Scheme + "://audit-user:audit-password@" + parsed.Host
+	cfg := &config.Config{NodeName: "node-test", Port: 8000}
+	h := &Handlers{
+		cfg:            cfg,
+		syncService:    services.NewSyncService(db.DB, cfg, services.NewCaddyService("http://127.0.0.1:1")),
+		clusterService: services.NewClusterService(db.DB, nil),
+	}
+	router := gin.New()
+	router.POST("/cluster/mode", h.SetClusterMode)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/cluster/mode", strings.NewReader(`{"mode":"slave","master_url":"`+credentialedURL+`","register_token":"one-time"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	// When
+	router.ServeHTTP(response, request)
+	var auditDetail string
+	if err := db.AuditDB.QueryRow("SELECT detail FROM audit_log ORDER BY id DESC LIMIT 1").Scan(&auditDetail); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(auditDetail, "audit-user") || strings.Contains(auditDetail, "audit-password") {
+		t.Fatalf("audit leaked credentials: %q", auditDetail)
+	}
+	if !strings.Contains(auditDetail, parsed.Scheme+"://"+parsed.Host) {
+		t.Fatalf("audit detail=%q, want canonical master host", auditDetail)
 	}
 }

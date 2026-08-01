@@ -31,6 +31,8 @@ import (
 
 var internalMCPAuthSecret = rand.Text()
 
+const revokedTokenTimeFormat = "2006-01-02T15:04:05Z"
+
 type revokedJTICleanup struct {
 	mu      sync.Mutex
 	lastRun time.Time
@@ -42,7 +44,7 @@ func (cleanup *revokedJTICleanup) run(database *sql.DB, now time.Time) error {
 	if !cleanup.lastRun.IsZero() && now.Sub(cleanup.lastRun) < time.Hour {
 		return nil
 	}
-	if _, err := database.Exec("DELETE FROM revoked_jti WHERE expires_at <= ?", now.UTC()); err != nil {
+	if _, err := database.Exec("DELETE FROM revoked_jti WHERE expires_at <= ?", now.UTC().Format(revokedTokenTimeFormat)); err != nil {
 		return fmt.Errorf("cleanup revoked JWT IDs: %w", err)
 	}
 	cleanup.lastRun = now
@@ -347,29 +349,33 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		now := time.Now().UTC()
+		if err := cleanup.run(db.DB, now); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "认证状态检查失败"})
+			c.Abort()
+			return
+		}
+		revocationSource := tokenString
 		if jti, exists := claims["jti"].(string); exists && jti != "" {
-			now := time.Now().UTC()
-			if err := cleanup.run(db.DB, now); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "认证状态检查失败"})
-				c.Abort()
-				return
-			}
-			hash := sha256.Sum256([]byte(jti))
-			var revoked int
-			if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM revoked_jti WHERE jti_hash=? AND expires_at > ?)", hex.EncodeToString(hash[:]), now).Scan(&revoked); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "认证状态检查失败"})
-				c.Abort()
-				return
-			}
-			if revoked != 0 {
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录状态已失效，请重新登录"})
-				c.Abort()
-				return
-			}
-			if exp, valid := claims["exp"].(float64); valid {
-				c.Set("token_jti", jti)
-				c.Set("token_expires_at", time.Unix(int64(exp), 0))
-			}
+			revocationSource = jti
+			c.Set("token_jti", jti)
+		}
+		revocationHash := sha256.Sum256([]byte(revocationSource))
+		encodedRevocationHash := hex.EncodeToString(revocationHash[:])
+		var revoked int
+		if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM revoked_jti WHERE jti_hash=? AND expires_at > ?)", encodedRevocationHash, now.Format(revokedTokenTimeFormat)).Scan(&revoked); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "认证状态检查失败"})
+			c.Abort()
+			return
+		}
+		if revoked != 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录状态已失效，请重新登录"})
+			c.Abort()
+			return
+		}
+		if exp, valid := claims["exp"].(float64); valid {
+			c.Set("token_revocation_hash", encodedRevocationHash)
+			c.Set("token_expires_at", time.Unix(int64(exp), 0).UTC())
 		}
 
 		// Resolve the current role and enabled state from the database so that

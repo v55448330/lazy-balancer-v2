@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -20,6 +19,8 @@ import (
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
+
+const revokedTokenTimeFormat = "2006-01-02T15:04:05Z"
 
 func (h *Handlers) Login(c *gin.Context) {
 	var req models.LoginRequest
@@ -118,28 +119,16 @@ func (h *Handlers) respondLogin(c *gin.Context, user models.User, passwordVersio
 func (h *Handlers) Logout(c *gin.Context) {
 	username, _ := c.Get("username")
 	usernameStr, _ := username.(string)
-	if jti := c.GetString("token_jti"); jti != "" {
-		expiresAt, ok := c.Get("token_expires_at")
-		expiresAtTime, valid := expiresAt.(time.Time)
-		if !ok || !valid {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})
-			return
-		}
-		hash := sha256.Sum256([]byte(jti))
-		if _, err := db.DB.Exec("INSERT INTO revoked_jti (jti_hash,expires_at) VALUES (?,?) ON CONFLICT(jti_hash) DO UPDATE SET expires_at=excluded.expires_at", hex.EncodeToString(hash[:]), expiresAtTime); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})
-			return
-		}
-	} else {
-		userID, exists := c.Get("user_id")
-		if !exists {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})
-			return
-		}
-		if _, err := db.DB.Exec("UPDATE users SET password_version=password_version+1 WHERE id=?", userID); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})
-			return
-		}
+	revocationHash := c.GetString("token_revocation_hash")
+	expiresAt, ok := c.Get("token_expires_at")
+	expiresAtTime, valid := expiresAt.(time.Time)
+	if revocationHash == "" || !ok || !valid {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})
+		return
+	}
+	if _, err := db.DB.Exec("INSERT INTO revoked_jti (jti_hash,expires_at) VALUES (?,?) ON CONFLICT(jti_hash) DO UPDATE SET expires_at=excluded.expires_at", revocationHash, expiresAtTime.UTC().Format(revokedTokenTimeFormat)); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})
+		return
 	}
 	services.RecordAuditLog(usernameStr, "登出", "用户认证", services.AuditResultPart("success"), c.ClientIP())
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Logged out"})
