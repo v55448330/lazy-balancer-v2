@@ -18,6 +18,7 @@ type CAQueueManager struct {
 	queues              map[int]*caQueue
 	reloader            func() error
 	active              bool
+	dataDir             string
 	beforeEnqueue       func()
 	beforeActiveEnqueue func()
 }
@@ -30,12 +31,17 @@ var (
 // InitCAQueueManager initializes the singleton queue manager with the given
 // Caddy reloader. It must be called once during application startup before
 // GetCAQueueManager is used.
-func InitCAQueueManager(reloader func() error) {
+func InitCAQueueManager(reloader func() error, dataDir ...string) {
 	caQueueManagerOnce.Do(func() {
+		var accountDataDir string
+		if len(dataDir) > 0 {
+			accountDataDir = dataDir[0]
+		}
 		caQueueManager = &CAQueueManager{
 			queues:   make(map[int]*caQueue),
 			reloader: reloader,
 			active:   true,
+			dataDir:  accountDataDir,
 		}
 	})
 }
@@ -231,7 +237,7 @@ func (m *CAQueueManager) enqueueLocked(providerID int, jobID int, ruleID, domain
 
 	q, ok := m.queues[provider.ID]
 	if !ok {
-		q = newCAQueue(provider, m.reloader)
+		q = newCAQueue(provider, m.reloader, m.dataDir)
 		m.queues[provider.ID] = q
 		go q.loop()
 	} else {
@@ -292,7 +298,7 @@ type queueExecution struct {
 	cancel   context.CancelFunc
 }
 
-func newCAQueue(provider models.CAProvider, reloader func() error) *caQueue {
+func newCAQueue(provider models.CAProvider, reloader func() error, dataDir ...string) *caQueue {
 	if provider.MaxConcurrent <= 0 {
 		provider.MaxConcurrent = 1
 	}
@@ -310,7 +316,7 @@ func newCAQueue(provider models.CAProvider, reloader func() error) *caQueue {
 		cancel:        cancel,
 	}
 	q.executeFn = func(ctx context.Context, item queueItem, provider models.CAProvider) error {
-		return NewCertIssuer(q.reloader).Issue(ctx, item.jobID, item.ruleID, item.domains, provider)
+		return NewCertIssuer(q.reloader, dataDir...).Issue(ctx, item.jobID, item.ruleID, item.domains, provider)
 	}
 	return q
 }

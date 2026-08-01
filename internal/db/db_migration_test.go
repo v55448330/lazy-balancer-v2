@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+func TestCreateTables_omits_dead_upstream_accessURL_column(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name='access_url'").Scan(&count); err != nil {
+		t.Fatalf("query upstream schema: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("upstreams.access_url count=%d, want 0", count)
+	}
+}
+
 func TestMigrateLbRulesPrimaryKey_preserves_upstream_connection_settings(t *testing.T) {
 	// Given
 	database := openMigrationTestDB(t)

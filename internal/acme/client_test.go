@@ -13,11 +13,12 @@ func TestACMEAccountKeyPath_includes_EAB_KID_and_full_hash(t *testing.T) {
 	// Given
 	directoryURL := "https://acme.example/directory"
 	email := "admin@example.com"
+	dataDir := t.TempDir()
 
 	// When
-	first := acmeAccountKeyPath(directoryURL, email, "kid-a")
-	repeated := acmeAccountKeyPath(directoryURL, email, "kid-a")
-	second := acmeAccountKeyPath(directoryURL, email, "kid-b")
+	first := acmeAccountKeyPath(dataDir, directoryURL, email, "kid-a")
+	repeated := acmeAccountKeyPath(dataDir, directoryURL, email, "kid-a")
+	second := acmeAccountKeyPath(dataDir, directoryURL, email, "kid-b")
 
 	// Then
 	if first != repeated {
@@ -29,6 +30,9 @@ func TestACMEAccountKeyPath_includes_EAB_KID_and_full_hash(t *testing.T) {
 	base := strings.TrimSuffix(filepath.Base(first), ".key")
 	if len(base) != 64 {
 		t.Fatalf("account hash length=%d, want 64", len(base))
+	}
+	if filepath.Dir(first) != filepath.Join(dataDir, "acme_accounts") {
+		t.Fatalf("account directory=%q, want data directory", filepath.Dir(first))
 	}
 }
 

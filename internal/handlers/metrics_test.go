@@ -145,11 +145,11 @@ func TestGetRuleMetricsHistory_returns_error_when_cursor_fails(t *testing.T) {
 	h := &Handlers{}
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.GET("/rules/:caddy_id/history", h.GetRuleMetricsHistory)
+	router.GET("/rules/:caddy_id/metrics-history", h.GetRuleMetricsHistory)
 
 	// When
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/rules/lb_history/history", nil))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/rules/lb_history/metrics-history", nil))
 
 	// Then
 	if response.Code != http.StatusInternalServerError {

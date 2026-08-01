@@ -44,7 +44,7 @@ type Client struct {
 }
 
 // NewClientForProvider creates an ACME client based on a CA provider configuration.
-func NewClientForProvider(provider models.CAProvider, email string) (*Client, error) {
+func NewClientForProvider(provider models.CAProvider, email, dataDir string) (*Client, error) {
 	var eab *acme.ExternalAccountBinding
 	if provider.Provider == "zerossl" {
 		var creds models.CAProviderCredentials
@@ -71,15 +71,15 @@ func NewClientForProvider(provider models.CAProvider, email string) (*Client, er
 			Key: hmacKey,
 		}
 	}
-	return newClient(provider.DirectoryURL, email, eab)
+	return newClient(provider.DirectoryURL, email, dataDir, eab)
 }
 
-func newClient(directoryURL, email string, eab *acme.ExternalAccountBinding) (*Client, error) {
+func newClient(directoryURL, email, dataDir string, eab *acme.ExternalAccountBinding) (*Client, error) {
 	eabKID := ""
 	if eab != nil {
 		eabKID = eab.KID
 	}
-	key, err := loadOrCreateAccountKey(directoryURL, email, eabKID)
+	key, err := loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID)
 	if err != nil {
 		return nil, err
 	}
@@ -103,20 +103,17 @@ func newClient(directoryURL, email string, eab *acme.ExternalAccountBinding) (*C
 	}, nil
 }
 
-// 账户密钥按 CA+邮箱+EAB KID 维度持久化复用；EAB 密钥本身不参与文件名计算。
-const acmeAccountDir = "/app/data/acme_accounts"
-
 var acmeAccountKeyMu sync.Mutex
 
-func acmeAccountKeyPath(directoryURL, email, eabKID string) string {
+func acmeAccountKeyPath(dataDir, directoryURL, email, eabKID string) string {
 	sum := sha256.Sum256([]byte(directoryURL + "|" + email + "|" + eabKID))
-	return filepath.Join(acmeAccountDir, hex.EncodeToString(sum[:])+".key")
+	return filepath.Join(dataDir, "acme_accounts", hex.EncodeToString(sum[:])+".key")
 }
 
-func loadOrCreateAccountKey(directoryURL, email, eabKID string) (*ecdsa.PrivateKey, error) {
+func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string) (*ecdsa.PrivateKey, error) {
 	acmeAccountKeyMu.Lock()
 	defer acmeAccountKeyMu.Unlock()
-	keyPath := acmeAccountKeyPath(directoryURL, email, eabKID)
+	keyPath := acmeAccountKeyPath(dataDir, directoryURL, email, eabKID)
 	if data, err := os.ReadFile(keyPath); err == nil {
 		block, _ := pem.Decode(data)
 		if block != nil {
@@ -130,7 +127,7 @@ func loadOrCreateAccountKey(directoryURL, email, eabKID string) (*ecdsa.PrivateK
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(acmeAccountDir, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0755); err != nil {
 		return nil, fmt.Errorf("创建 ACME 账户目录: %w", err)
 	}
 	der, err := x509.MarshalECPrivateKey(key)

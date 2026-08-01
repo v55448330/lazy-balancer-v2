@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -37,6 +38,10 @@ type SyncService struct {
 	caddy               *CaddyService
 	cluster             *ClusterService
 	client              *http.Client
+	transport           *http.Transport
+	transportOnce       sync.Once
+	pinMu               sync.Mutex
+	verifiedPins        map[string]string
 	lifecycleMu         sync.Mutex
 	pullAdmissionMu     sync.Mutex
 	pullApplyMu         sync.Mutex
@@ -56,70 +61,86 @@ type SyncService struct {
 }
 
 func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *SyncService {
-	return &SyncService{
+	service := &SyncService{
 		db: database, cfg: cfg, caddy: caddy,
 		cluster: NewClusterService(database, nil),
-		client:  &http.Client{Timeout: 30 * time.Second},
 	}
+	service.initClusterClient()
+	return service
 }
 
 func (s *SyncService) do(req *http.Request) (*http.Response, error) {
 	if req.URL.Scheme != "https" {
 		return nil, errors.New("集群主节点地址必须使用 HTTPS")
 	}
+	s.initClusterClient()
 	pinPath, err := s.clusterPinPath(req.URL.Host)
 	if err != nil {
 		return nil, err
 	}
-	observedFingerprint := ""
-	transport := &http.Transport{TLSClientConfig: &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: true,
-		VerifyConnection: func(state tls.ConnectionState) error {
-			if len(state.PeerCertificates) == 0 {
-				return errors.New("主节点未提供 TLS 证书")
-			}
-			fingerprint := sha256.Sum256(state.PeerCertificates[0].Raw)
-			encoded := hex.EncodeToString(fingerprint[:])
-			stored, err := os.ReadFile(pinPath)
-			if errors.Is(err, os.ErrNotExist) {
-				observedFingerprint = encoded
-				return nil
-			}
-			if err != nil {
-				return fmt.Errorf("读取主节点 TLS 证书指纹: %w", err)
-			}
-			if strings.TrimSpace(string(stored)) != encoded {
-				return errors.New("主节点 TLS 证书指纹不匹配")
-			}
-			return nil
-		},
-	}}
-	client := &http.Client{Timeout: s.client.Timeout, Transport: transport}
-
-	// TOFU accepts the first observed certificate. The unauthenticated probe
-	// persists it before a fresh handshake is allowed to carry credentials.
-	probe, err := http.NewRequestWithContext(req.Context(), http.MethodGet, "https://"+req.URL.Host+"/api/v1/branding", nil)
-	if err != nil {
-		return nil, fmt.Errorf("创建主节点 TLS 预检请求: %w", err)
-	}
-	probeResp, err := client.Do(probe)
-	if err != nil {
-		return nil, fmt.Errorf("主节点 TLS 预检失败: %w", err)
-	}
-	if _, err := io.Copy(io.Discard, io.LimitReader(probeResp.Body, 1<<20)); err != nil {
-		return nil, errors.Join(fmt.Errorf("读取主节点 TLS 预检响应: %w", err), probeResp.Body.Close())
-	}
-	if err := probeResp.Body.Close(); err != nil {
-		return nil, fmt.Errorf("关闭主节点 TLS 预检响应: %w", err)
-	}
-	if observedFingerprint != "" {
-		if err := verifyOrStoreClusterPin(pinPath, observedFingerprint); err != nil {
+	s.pinMu.Lock()
+	verifiedFingerprint, verified := s.verifiedPins[pinPath]
+	s.pinMu.Unlock()
+	if verified {
+		if err := verifyOrStoreClusterPin(pinPath, verifiedFingerprint); err != nil {
 			return nil, err
 		}
 	}
-	transport.CloseIdleConnections()
-	return client.Do(req)
+	return s.client.Do(req)
+}
+
+func (s *SyncService) initClusterClient() {
+	s.transportOnce.Do(func() {
+		tlsConfig := &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: true,
+		}
+		transport := &http.Transport{
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   10,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: time.Second,
+			ForceAttemptHTTP2:     true,
+			TLSClientConfig:       tlsConfig,
+		}
+		transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			configForAddress := tlsConfig.Clone()
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, fmt.Errorf("解析主节点 TLS 地址: %w", err)
+			}
+			configForAddress.ServerName = host
+			configForAddress.VerifyConnection = func(state tls.ConnectionState) error {
+				if len(state.PeerCertificates) == 0 {
+					return errors.New("主节点未提供 TLS 证书")
+				}
+				pinPath, err := s.clusterPinPath(address)
+				if err != nil {
+					return err
+				}
+				fingerprint := sha256.Sum256(state.PeerCertificates[0].Raw)
+				encoded := hex.EncodeToString(fingerprint[:])
+				if err := verifyOrStoreClusterPin(pinPath, encoded); err != nil {
+					return err
+				}
+				s.pinMu.Lock()
+				s.verifiedPins[pinPath] = encoded
+				s.pinMu.Unlock()
+				return nil
+			}
+			return (&tls.Dialer{Config: configForAddress}).DialContext(ctx, network, address)
+		}
+		s.transport = transport
+		s.verifiedPins = make(map[string]string)
+		if s.client == nil {
+			s.client = &http.Client{Timeout: 30 * time.Second}
+		}
+		s.client.Transport = transport
+		s.client.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	})
 }
 
 func (s *SyncService) clusterPinPath(host string) (string, error) {
@@ -137,11 +158,35 @@ func (s *SyncService) clusterPinPath(host string) (string, error) {
 	if dataDir == "" {
 		return "", errors.New("无法确定集群证书指纹存储目录")
 	}
-	hostHash := sha256.Sum256([]byte(strings.ToLower(host)))
+	parsed := &url.URL{Host: host}
+	hostname := strings.ToLower(parsed.Hostname())
+	if hostname == "" {
+		return "", errors.New("主节点地址缺少主机名")
+	}
+	port := parsed.Port()
+	if port == "" {
+		port = "443"
+	}
+	hostHash := sha256.Sum256([]byte(net.JoinHostPort(hostname, port)))
 	return filepath.Join(dataDir, "cluster_ca_pins", hex.EncodeToString(hostHash[:])), nil
 }
 
 func verifyOrStoreClusterPin(path, fingerprint string) error {
+	directory := filepath.Dir(path)
+	if err := verifyClusterPinDirectory(directory); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	info, statErr := os.Lstat(path)
+	if statErr == nil {
+		if !info.Mode().IsRegular() {
+			return errors.New("主节点 TLS 证书指纹必须是普通文件")
+		}
+		if info.Mode().Perm()&^os.FileMode(0600) != 0 {
+			return fmt.Errorf("主节点 TLS 证书指纹文件权限过宽: %04o", info.Mode().Perm())
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("检查主节点 TLS 证书指纹: %w", statErr)
+	}
 	stored, err := os.ReadFile(path)
 	if err == nil {
 		if strings.TrimSpace(string(stored)) != fingerprint {
@@ -152,8 +197,11 @@ func verifyOrStoreClusterPin(path, fingerprint string) error {
 	if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("读取主节点 TLS 证书指纹: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := os.MkdirAll(directory, 0700); err != nil {
 		return fmt.Errorf("创建集群证书指纹目录: %w", err)
+	}
+	if err := verifyClusterPinDirectory(directory); err != nil {
+		return err
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if errors.Is(err, os.ErrExist) {
@@ -167,6 +215,20 @@ func verifyOrStoreClusterPin(path, fingerprint string) error {
 	}
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("保存主节点 TLS 证书指纹: %w", err)
+	}
+	return nil
+}
+
+func verifyClusterPinDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("集群证书指纹目录必须是普通目录")
+	}
+	if info.Mode().Perm()&^os.FileMode(0700) != 0 {
+		return fmt.Errorf("集群证书指纹目录权限过宽: %04o", info.Mode().Perm())
 	}
 	return nil
 }

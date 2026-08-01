@@ -212,6 +212,44 @@ func TestIssueCertificate_rejects_recent_running_job_without_requeue(t *testing.
 	}
 }
 
+func TestIssueCertificate_batch_preserves_running_jobs(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	if _, err := db.DB.Exec(`
+		INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source) VALUES
+			('lb_batch_order','order','http','order.example',8443,1,1,'acme_dns'),
+			('lb_batch_download','download','http','download.example',9443,1,1,'acme_dns');
+		INSERT INTO cert_jobs (rule_id,domain,status,message,updated_at) VALUES
+			('lb_batch_order','order.example','creating_order','active message',datetime('now')),
+			('lb_batch_download','download.example','downloaded','active message',datetime('now'));
+	`); err != nil {
+		t.Fatalf("seed running jobs: %v", err)
+	}
+	router := gin.New()
+	router.POST("/certificates/issue", h.IssueCertificate)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/certificates/issue", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"queued":0`) {
+		t.Fatalf("body=%s, want no unchanged running jobs counted as queued", response.Body.String())
+	}
+	for ruleID, wantStatus := range map[string]string{"lb_batch_order": "creating_order", "lb_batch_download": "downloaded"} {
+		var status, message string
+		if err := db.DB.QueryRow("SELECT status,message FROM cert_jobs WHERE rule_id=?", ruleID).Scan(&status, &message); err != nil {
+			t.Fatalf("read %s job: %v", ruleID, err)
+		}
+		if status != wantStatus || message != "active message" {
+			t.Fatalf("%s job=(%q,%q), want (%q,%q)", ruleID, status, message, wantStatus, "active message")
+		}
+	}
+}
+
 func assertLatestCertificateAudit(t *testing.T, wantScope, wantResult string) {
 	t.Helper()
 	var action, detail string

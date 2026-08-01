@@ -83,16 +83,16 @@ func run() error {
 	// Initialize services
 	caddyService := services.NewCaddyService(cfg.CaddyAdminURL)
 	caddyReloader := func() error {
-		return caddyService.ApplyConfig(services.GenerateCaddyConfig(cfg))
+		return caddyService.ApplyConfig(services.GenerateCaddyConfig())
 	}
-	services.InitCAQueueManager(caddyReloader)
+	services.InitCAQueueManager(caddyReloader, cfg.DataDir)
 	metricsService := services.NewMetricsService(cfg.CaddyMetricsURL, cfg.MetricsInterval)
 	syncService := services.NewSyncService(db.DB, cfg, caddyService)
 	lifecycle := newRuntimeLifecycle(syncService, func() certificateWorker {
 		return services.NewCertificateService()
 	})
 	clusterService := services.NewClusterService(db.DB, lifecycle)
-	caProviderService := services.NewCAProviderService()
+	caProviderService := services.NewCAProviderService(cfg.DataDir)
 
 	h := handlers.NewHandlers(handlers.Dependencies{
 		Config: cfg, CaddyService: caddyService, MetricsService: metricsService,

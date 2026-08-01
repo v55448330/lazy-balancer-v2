@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -63,6 +64,16 @@ func TestIssueCertificateSchemaRequiresBothFieldsOrNeither(t *testing.T) {
 	}
 	if len(schema.OneOf) != 2 || schema.OneOf[0].MaxProperties == nil || *schema.OneOf[0].MaxProperties != 0 || strings.Join(schema.OneOf[1].Required, ",") != "caddy_id,domain" {
 		t.Fatalf("oneOf=%+v", schema.OneOf)
+	}
+}
+
+func TestIsLoopbackHTTPURLAllowsIPv6Loopback(t *testing.T) {
+	target, err := url.Parse("http://[::1]:8000/api/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isLoopbackHTTPURL(target) {
+		t.Fatal("IPv6 loopback URL was rejected")
 	}
 }
 

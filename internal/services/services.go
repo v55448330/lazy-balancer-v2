@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"regexp"
 	"sort"
@@ -139,11 +140,20 @@ func (m *MetricsService) parsePrometheusMetrics(text string) (parsedMetrics, err
 	metrics := parsedMetrics{}
 	codes := make(map[int]int64)
 
-	// Parse request counters
-	// caddy_http_requests_total{code="200",...}
-	re := regexp.MustCompile(`caddy_http_requests_total\{[^}]*code="(\d+)".*?\}\s+(\S+)`)
-	matches := re.FindAllStringSubmatch(text, -1)
-	for _, match := range matches {
+	// Request totals come from caddy_http_requests_total, which carries no
+	// code label; status classes come from caddy_http_request_duration_seconds_count.
+	reTotal := regexp.MustCompile(`caddy_http_requests_total\{[^}]*\}\s+(\S+)`)
+	for _, match := range reTotal.FindAllStringSubmatch(text, -1) {
+		if len(match) >= 2 {
+			value, err := parsePrometheusInteger(match[1])
+			if err != nil {
+				return parsedMetrics{}, fmt.Errorf("parse request count %q: %w", match[1], err)
+			}
+			metrics.requestsTotal += value
+		}
+	}
+	reCodes := regexp.MustCompile(`caddy_http_request_duration_seconds_count\{[^}]*code="(\d+)"[^}]*\}\s+(\S+)`)
+	for _, match := range reCodes.FindAllStringSubmatch(text, -1) {
 		if len(match) >= 3 {
 			code, err := strconv.ParseInt(match[1], 10, 64)
 			if err != nil {
@@ -151,9 +161,8 @@ func (m *MetricsService) parsePrometheusMetrics(text string) (parsedMetrics, err
 			}
 			value, err := parsePrometheusInteger(match[2])
 			if err != nil {
-				return parsedMetrics{}, fmt.Errorf("parse request count %q: %w", match[2], err)
+				return parsedMetrics{}, fmt.Errorf("parse status class count %q: %w", match[2], err)
 			}
-			metrics.requestsTotal += value
 			codes[int(code)] += value
 		}
 	}
@@ -166,7 +175,7 @@ func (m *MetricsService) parsePrometheusMetrics(text string) (parsedMetrics, err
 	// Parse response size
 	// caddy_http_response_size_bytes_sum{...}
 	reSize := regexp.MustCompile(`caddy_http_response_size_bytes_sum.*?\}\s+(\S+)`)
-	matches = reSize.FindAllStringSubmatch(text, -1)
+	matches := reSize.FindAllStringSubmatch(text, -1)
 	for _, match := range matches {
 		if len(match) >= 2 {
 			value, err := parsePrometheusInteger(match[1])
@@ -347,6 +356,11 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 	}
 	for host, h := range hosts {
 		ruleID, ok := domainToRule[host]
+		if !ok {
+			if bare, _, err := net.SplitHostPort(host); err == nil {
+				ruleID, ok = domainToRule[bare]
+			}
+		}
 		if !ok {
 			continue
 		}

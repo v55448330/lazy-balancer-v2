@@ -55,6 +55,13 @@ func TestInitialize_migrates_cluster_columns_and_token_table(t *testing.T) {
 	if usedTicketTable != 1 {
 		t.Fatalf("used_login_tickets count=%d, want 1", usedTicketTable)
 	}
+	var revokedJTITable int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='revoked_jti'").Scan(&revokedJTITable); err != nil {
+		t.Fatalf("query revoked JWT table: %v", err)
+	}
+	if revokedJTITable != 1 {
+		t.Fatalf("revoked_jti count=%d, want 1", revokedJTITable)
+	}
 	for _, column := range []string{"cluster_token_hash", "registration_secret", "reported_version", "health_json", "last_sync_at", "last_sync_error", "access_url"} {
 		var count int
 		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('nodes') WHERE name=?", column).Scan(&count); err != nil {

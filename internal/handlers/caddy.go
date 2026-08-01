@@ -283,7 +283,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	}
 
 	// Generate config with requested overrides — DB is NOT touched yet
-	testConfig := services.GenerateCaddyConfig(h.cfg, &req)
+	testConfig := services.GenerateCaddyConfig(&req)
 	if err := h.caddyService.ValidateConfig(testConfig); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "配置验证失败: " + err.Error()})
 		return
@@ -404,7 +404,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 
-	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
+	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
 		restoreErr := errors.Join(restoreEnv(), h.caddyService.ApplyConfig(oldRuntimeConfig))
 		err = errors.Join(err, restoreErr)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，配置未保存: " + err.Error()})
@@ -665,6 +665,9 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 }
 
 func (h *Handlers) StartCaddy(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	if err := startCaddy(h.cfg.CaddyAdminURL); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -673,6 +676,9 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 }
 
 func (h *Handlers) StopCaddy(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	if err := stopCaddy(h.cfg.CaddyAdminURL); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -681,6 +687,9 @@ func (h *Handlers) StopCaddy(c *gin.Context) {
 }
 
 func (h *Handlers) RestartCaddy(c *gin.Context) {
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
+
 	if err := stopCaddy(h.cfg.CaddyAdminURL); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return

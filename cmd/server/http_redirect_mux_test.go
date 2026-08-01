@@ -32,6 +32,28 @@ func TestRedirectHTTP_closesConnectionForOversizedHostHeader(t *testing.T) {
 	assertOversizedRedirectRequestIsClosed(t, "GET / HTTP/1.1\r\nHost: "+strings.Repeat("x", maxHTTPRedirectHeaderBytes)+"\r\n\r\n")
 }
 
+func TestRedirectHTTP_absoluteFormUsesPathAndQuery(t *testing.T) {
+	server, client := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		redirectHTTP(bufio.NewReader(server), server)
+		close(done)
+	}()
+	if _, err := client.Write([]byte("GET http://example.com/a%2Fb?q=1 HTTP/1.1\r\nHost: public.example\r\n\r\n")); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(client), &http.Request{Method: http.MethodGet})
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if location := response.Header.Get("Location"); location != "https://public.example/a%2Fb?q=1" {
+		t.Fatalf("Location=%q", location)
+	}
+	_ = response.Body.Close()
+	_ = client.Close()
+	<-done
+}
+
 func assertOversizedRedirectRequestIsClosed(t *testing.T, request string) {
 	t.Helper()
 	server, client := net.Pipe()

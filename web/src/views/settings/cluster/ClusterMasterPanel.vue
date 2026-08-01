@@ -31,16 +31,14 @@
 
     <el-table :data="nodes" v-loading="loading" stripe :header-cell-style="{ background: 'var(--bg-secondary)' }" empty-text="">
       <el-table-column prop="name" label="名称" min-width="130" />
-      <el-table-column label="地址" min-width="150">
+      <el-table-column label="地址" min-width="200" show-overflow-tooltip>
         <template #default="{ row }"><span class="mono-value">{{ row.ip_address }}:{{ row.port }}</span></template>
       </el-table-column>
-      <el-table-column label="访问地址" min-width="220">
+      <el-table-column label="访问地址" min-width="220" show-overflow-tooltip>
         <template #default="{ row }">
-          <el-tooltip :disabled="!row.access_url" :content="row.access_url" placement="top" :show-after="400">
-            <el-link class="access-url-link" type="primary" :disabled="readOnly || accessUrlSaving" @click="$emit('edit-access-url', row)">
-              {{ row.access_url || '-' }}
-            </el-link>
-          </el-tooltip>
+          <el-link class="access-url-link" type="primary" :disabled="readOnly || accessUrlSaving" @click="$emit('edit-access-url', row)">
+            {{ row.access_url || '-' }}
+          </el-link>
         </template>
       </el-table-column>
       <el-table-column label="状态" width="90" align="center">
@@ -54,18 +52,14 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="健康" min-width="210">
+      <el-table-column label="健康" width="90" align="center">
         <template #default="{ row }">
-          <div v-if="row.health" class="health-cell">
-            <span :class="row.health.caddy_ok ? 'health-ok' : 'health-error'">
-              <el-icon><CircleCheckFilled v-if="row.health.caddy_ok" /><CircleCloseFilled v-else /></el-icon>
-              Caddy {{ row.health.caddy_ok ? '正常' : '异常' }}
-            </span>
-            <span>规则 {{ row.health.rules_count }}</span>
-            <span>30 天内到期 {{ row.health.certs_expiring_30d }}</span>
-            <span v-if="row.health.last_sync_error" class="health-error" :title="row.health.last_sync_error">{{ row.health.last_sync_error }}</span>
-          </div>
-          <span v-else class="form-tip">暂无健康信息</span>
+          <el-tooltip v-if="row.health" :content="healthSummary(row.health)" placement="top">
+            <el-tag :type="row.health.caddy_ok ? 'success' : 'danger'" size="small">
+              {{ row.health.caddy_ok ? '正常' : '异常' }}
+            </el-tag>
+          </el-tooltip>
+          <span v-else class="form-tip">暂无</span>
         </template>
       </el-table-column>
       <el-table-column label="最后上报时间" min-width="170">
@@ -92,8 +86,8 @@
 import { computed } from 'vue'
 import { useWindowSize } from '@vueuse/core'
 import { formatDate } from '@/utils/date'
-import { CircleCheckFilled, CircleCloseFilled, List, Setting } from '@element-plus/icons-vue'
-import type { ClusterNode, ClusterNodeStatus, ClusterStatus } from '@/types'
+import { List, Setting } from '@element-plus/icons-vue'
+import type { ClusterHealth, ClusterNode, ClusterNodeStatus, ClusterStatus } from '@/types'
 
 const props = defineProps<{
   readonly status: ClusterStatus
@@ -118,7 +112,7 @@ const emit = defineEmits<{
 }>()
 
 const { width: viewportWidth } = useWindowSize()
-const operationColumnFixed = computed<'right' | false>(() => viewportWidth.value > 1024 ? 'right' : false)
+const operationColumnFixed = computed<'right' | false>(() => viewportWidth.value > 1440 ? 'right' : false)
 
 const handleSyncChange = (value: string | number | boolean): void => {
   if (props.readOnly) return
@@ -137,6 +131,11 @@ const statusLabel = (status: ClusterNodeStatus): string => {
   return '离线'
 }
 
+const healthSummary = (health: ClusterHealth): string => {
+  const summary = `Caddy ${health.caddy_ok ? '正常' : '异常'} · 规则 ${health.rules_count} · 30 天内到期 ${health.certs_expiring_30d}`
+  return health.last_sync_error ? `${summary} · ${health.last_sync_error}` : summary
+}
+
 </script>
 
 <style scoped>
@@ -150,10 +149,6 @@ const statusLabel = (status: ClusterNodeStatus): string => {
 .access-url-link { display: inline-flex; max-width: 100%; vertical-align: middle; }
 .access-url-link :deep(.el-link__inner) { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .version-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.health-cell { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
-.health-cell > span { display: inline-flex; align-items: center; gap: 4px; }
-.health-ok { color: var(--success); }
-.health-error { color: var(--danger); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (max-width: 768px) {
   .card-header { align-items: flex-start; flex-direction: column; }

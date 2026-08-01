@@ -427,7 +427,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "准备证书文件失败: " + err.Error()})
 		return
 	}
-	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
+	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
 		err = restoreRuntime(err)
 		err = finishImportFailure(tx, &recovery, err)
 		recordAudit(c, "导入失败", "配置备份", "Caddy 配置验证未通过，数据库未变更: "+err.Error())

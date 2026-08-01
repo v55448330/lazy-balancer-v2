@@ -268,7 +268,7 @@ const fetchJobs = async () => {
   loading.value = true
   try {
     const [jobsRes, configRes] = await Promise.all([
-      request.get('/certificates/jobs', { params: props.ruleId ? { rule_id: props.ruleId } : {} }),
+      request.get<APIResponse<CertJob[]>>('/certificates/jobs', { params: props.ruleId ? { rule_id: props.ruleId } : {} }),
       request.get('/config'),
     ])
     jobs.value = jobsRes.data || []

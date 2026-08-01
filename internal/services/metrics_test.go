@@ -33,7 +33,8 @@ func TestMetricsService_parsePrometheusMetrics_accepts_decimal_and_scientific_sa
 	// Given
 	service := &MetricsService{}
 	text := strings.Join([]string{
-		`caddy_http_requests_total{code="200"} 2e1`,
+		`caddy_http_requests_total{handler="reverse_proxy",host="example.com",server="http_443"} 2e1`,
+		`caddy_http_request_duration_seconds_count{code="200",handler="reverse_proxy",host="example.com",method="GET",server="http_443"} 2e1`,
 		`caddy_http_response_size_bytes_sum{host="example.com"} 12.75`,
 		`caddy_http_request_size_bytes_sum{host="example.com"} 1.5e2`,
 	}, "\n")

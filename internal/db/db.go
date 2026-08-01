@@ -226,7 +226,6 @@ func createTables() error {
 		dynamic_dns BOOLEAN DEFAULT FALSE,
 		enabled BOOLEAN DEFAULT TRUE,
 		protocol VARCHAR(10) DEFAULT 'http',
-		access_url VARCHAR(255) DEFAULT '',
 		host_header VARCHAR(255),
 		dns_server VARCHAR(255) DEFAULT '',
 		max_connections INTEGER DEFAULT 0,
@@ -384,6 +383,12 @@ func createTables() error {
 		expires_at DATETIME NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_used_login_tickets_expires_at ON used_login_tickets(expires_at);
+
+	CREATE TABLE IF NOT EXISTS revoked_jti (
+		jti_hash TEXT PRIMARY KEY,
+		expires_at DATETIME NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_revoked_jti_expires_at ON revoked_jti(expires_at);
 	`
 
 	_, err := DB.Exec(schema)

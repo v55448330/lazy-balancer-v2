@@ -354,7 +354,7 @@ const onAuthModeChange = () => {
 
 const fetchConfigs = async () => {
   try {
-    const res = await request.get('/certificate-configs')
+    const res = await request.get<APIResponse<CertConfig[]>>('/certificate-configs')
     configs.value = res.data || []
   } catch (error) {
     console.error('Failed to fetch cert configs:', error)
@@ -363,7 +363,7 @@ const fetchConfigs = async () => {
 
 const fetchProviders = async () => {
   try {
-    const res = await request.get('/dns-providers')
+    const res = await request.get<APIResponse<DNSProvider[]>>('/dns-providers')
     providers.value = res.data || []
   } catch (error) {
     console.error('Failed to fetch DNS providers:', error)

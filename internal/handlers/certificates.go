@@ -373,12 +373,15 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败"})
 			return
 		}
-		if _, err := services.CreateOrRequeueCertJob(req.CaddyID, req.Domain, 0, qm); err != nil {
+		_, changed, err := services.CreateOrRequeueCertJobWithChange(req.CaddyID, req.Domain, 0, qm)
+		if err != nil {
 			auditFailure("failed", "创建签发任务失败: "+err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建签发任务失败: " + err.Error()})
 			return
 		}
-		queued++
+		if changed {
+			queued++
+		}
 	} else {
 		rows, err := db.DB.Query("SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND protocol='http' AND COALESCE(domain,'') != ''")
 		if err != nil {
@@ -387,6 +390,11 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			return
 		}
 		var failed []string
+		type certTarget struct {
+			ruleID string
+			domain string
+		}
+		var targets []certTarget
 		for rows.Next() {
 			var ruleID, domain string
 			if err := rows.Scan(&ruleID, &domain); err != nil {
@@ -395,11 +403,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 ACME 规则失败: " + err.Error()})
 				return
 			}
-			if _, err := services.CreateOrRequeueCertJob(ruleID, domain, 0, qm); err != nil {
-				failed = append(failed, fmt.Sprintf("%s(%v)", domain, err))
-				continue
-			}
-			queued++
+			targets = append(targets, certTarget{ruleID: ruleID, domain: domain})
 		}
 		if err := rows.Err(); err != nil {
 			err = errors.Join(err, rows.Close())
@@ -411,6 +415,16 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			auditFailure("failed", "关闭 ACME 规则结果失败: "+err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "关闭 ACME 规则结果失败: " + err.Error()})
 			return
+		}
+		for _, target := range targets {
+			_, changed, err := services.CreateOrRequeueCertJobWithChange(target.ruleID, target.domain, 0, qm)
+			if err != nil {
+				failed = append(failed, fmt.Sprintf("%s(%v)", target.domain, err))
+				continue
+			}
+			if changed {
+				queued++
+			}
 		}
 		if queued == 0 && len(failed) > 0 {
 			auditFailure("failed")

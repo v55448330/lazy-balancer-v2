@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -143,10 +144,10 @@ func redirectHTTP(reader *bufio.Reader, connection net.Conn) {
 		return
 	}
 	host := ""
-	var location string
+	location := "/"
 	parts := strings.Fields(head)
 	if len(parts) >= 2 {
-		location = parts[1]
+		location = redirectLocation(parts[1])
 	}
 	for {
 		line, err := readRedirectHeaderLine(reader, &remaining)
@@ -165,6 +166,24 @@ func redirectHTTP(reader *bufio.Reader, connection net.Conn) {
 	}
 	response := fmt.Sprintf("HTTP/1.1 301 Moved Permanently\r\nContent-Length: 0\r\nConnection: close\r\nLocation: https://%s%s\r\n\r\n", host, location)
 	_, _ = connection.Write([]byte(response))
+}
+
+func redirectLocation(requestTarget string) string {
+	if !strings.HasPrefix(requestTarget, "/") && !strings.Contains(requestTarget, "://") {
+		return "/"
+	}
+	parsed, err := url.ParseRequestURI(requestTarget)
+	if err != nil {
+		return "/"
+	}
+	path := parsed.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	if parsed.RawQuery != "" {
+		path += "?" + parsed.RawQuery
+	}
+	return path
 }
 
 func readRedirectHeaderLine(reader *bufio.Reader, remaining *int) (string, error) {

@@ -6,9 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -76,11 +79,9 @@ func TestSyncService_RegisterWithMaster_rejectsHTTP(t *testing.T) {
 
 func TestSyncService_do_rejectsCertificateFingerprintMismatchBeforeSendingToken(t *testing.T) {
 	dataDir := t.TempDir()
-	var probeToken string
+	receivedTokens := make(chan string, 2)
 	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/api/v1/branding" {
-			probeToken = request.Header.Get("X-Cluster-Token")
-		}
+		receivedTokens <- request.Header.Get("X-Cluster-Token")
 		response.WriteHeader(http.StatusOK)
 	}))
 	defer master.Close()
@@ -95,8 +96,8 @@ func TestSyncService_do_rejectsCertificateFingerprintMismatchBeforeSendingToken(
 		t.Fatalf("first TOFU request: %v", err)
 	}
 	response.Body.Close()
-	if probeToken != "" {
-		t.Fatalf("TLS preflight leaked cluster token %q", probeToken)
+	if token := waitSyncTest(t, receivedTokens); token != "secret-token" {
+		t.Fatalf("first request token=%q, want secret-token", token)
 	}
 	pinPath, err := service.clusterPinPath(req.URL.Host)
 	if err != nil {
@@ -112,6 +113,123 @@ func TestSyncService_do_rejectsCertificateFingerprintMismatchBeforeSendingToken(
 	retry.Header.Set("X-Cluster-Token", "secret-token")
 	if _, err := service.do(retry); err == nil || !strings.Contains(err.Error(), "指纹不匹配") {
 		t.Fatalf("mismatched certificate error=%v", err)
+	}
+	select {
+	case token := <-receivedTokens:
+		t.Fatalf("fingerprint-mismatched request sent token %q", token)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestSyncService_do_doesNotFollowHTTPRedirectOrForwardCredentials(t *testing.T) {
+	received := make(chan http.Header, 1)
+	plaintext := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		received <- request.Header.Clone()
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer plaintext.Close()
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, plaintext.URL, http.StatusFound)
+	}))
+	defer master.Close()
+
+	service := NewSyncService(nil, &config.Config{DataDir: t.TempDir()}, nil)
+	req, err := http.NewRequest(http.MethodGet, master.URL+"/api/v1/cluster/sync/snapshot", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Cluster-Token", "cluster-secret")
+	req.Header.Set("X-Registration-Secret", "registration-secret")
+	response, err := service.do(req)
+	if err != nil {
+		t.Fatalf("redirect request: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d, want %d", response.StatusCode, http.StatusFound)
+	}
+	select {
+	case header := <-received:
+		t.Fatalf("plaintext redirect was followed with cluster_token=%q registration_secret=%q", header.Get("X-Cluster-Token"), header.Get("X-Registration-Secret"))
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestSyncService_clusterPinPath_normalizesDefaultHTTPSPort(t *testing.T) {
+	service := NewSyncService(nil, &config.Config{DataDir: t.TempDir()}, nil)
+	implicit, err := service.clusterPinPath("MASTER.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicit, err := service.clusterPinPath("master.example:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if implicit != explicit {
+		t.Fatalf("implicit pin path %q differs from explicit path %q", implicit, explicit)
+	}
+}
+
+func TestVerifyOrStoreClusterPin_rejectsWidePermissions(t *testing.T) {
+	const fingerprint = "fingerprint"
+	t.Run("directory", func(t *testing.T) {
+		directory := filepath.Join(t.TempDir(), "cluster_ca_pins")
+		if err := os.Mkdir(directory, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyOrStoreClusterPin(filepath.Join(directory, "pin"), fingerprint); err == nil || !strings.Contains(err.Error(), "目录权限过宽") {
+			t.Fatalf("error=%v, want wide directory permission rejection", err)
+		}
+	})
+	t.Run("file", func(t *testing.T) {
+		directory := filepath.Join(t.TempDir(), "cluster_ca_pins")
+		if err := os.Mkdir(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(directory, "pin")
+		if err := os.WriteFile(path, []byte(fingerprint+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyOrStoreClusterPin(path, fingerprint); err == nil || !strings.Contains(err.Error(), "文件权限过宽") {
+			t.Fatalf("error=%v, want wide file permission rejection", err)
+		}
+	})
+}
+
+func TestSyncService_do_repeatedRequestsDoNotContinuouslyIncreaseGoroutines(t *testing.T) {
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer master.Close()
+	service := NewSyncService(nil, &config.Config{DataDir: t.TempDir()}, nil)
+
+	request := func() {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, master.URL+"/api/v1/cluster/sync/snapshot", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := service.do(req)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		if _, err := io.Copy(io.Discard, response.Body); err != nil {
+			t.Fatalf("drain response: %v", err)
+		}
+		if err := response.Body.Close(); err != nil {
+			t.Fatalf("close response: %v", err)
+		}
+	}
+
+	request()
+	baseline := runtime.NumGoroutine()
+	for range 60 {
+		request()
+	}
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond)
+	if increase := runtime.NumGoroutine() - baseline; increase > 15 {
+		t.Fatalf("goroutines increased by %d after repeated requests", increase)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -211,8 +212,11 @@ func forward(ctx context.Context, client *http.Client, baseURL string, spec tool
 }
 
 func isLoopbackHTTPURL(target *url.URL) bool {
-	return (target.Scheme == "http" || target.Scheme == "https") &&
-		(target.Hostname() == "127.0.0.1" || target.Hostname() == "localhost")
+	if target.Scheme != "http" && target.Scheme != "https" {
+		return false
+	}
+	hostname := target.Hostname()
+	return hostname == "localhost" || net.ParseIP(hostname).IsLoopback()
 }
 
 func extractAPIKey(header http.Header) string {

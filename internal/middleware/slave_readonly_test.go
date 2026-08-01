@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,10 +12,71 @@ import (
 	"github.com/gin-gonic/gin"
 	jwt "github.com/golang-jwt/jwt/v5"
 
+	"golang.org/x/crypto/bcrypt"
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/handlers"
 )
+
+func TestJWTLogout_revokes_only_current_token(t *testing.T) {
+	cfg := &config.Config{JWTSecret: "logout-secret"}
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("init database: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldDB)
+	})
+	hash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'admin',?,'admin',1)", string(hash)); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	h := handlers.NewHandlers(handlers.Dependencies{Config: cfg})
+	login := func() string {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(`{"username":"admin","password":"secret123"}`))
+		request.Header.Set("Content-Type", "application/json")
+		context, _ := gin.CreateTestContext(response)
+		context.Request = request
+		h.Login(context)
+		if response.Code != http.StatusOK {
+			t.Fatalf("login status=%d body=%s", response.Code, response.Body.String())
+		}
+		var body struct {
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode login: %v", err)
+		}
+		return body.Token
+	}
+	firstToken := login()
+	router := gin.New()
+	router.Use(jwtAuth(cfg))
+	router.POST("/logout", h.Logout)
+	router.GET("/protected", noContent)
+	request := func(method, path, token string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		router.ServeHTTP(response, req)
+		return response
+	}
+	if response := request(http.MethodPost, "/logout", firstToken); response.Code != http.StatusOK {
+		t.Fatalf("logout status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := request(http.MethodGet, "/protected", firstToken); response.Code != http.StatusUnauthorized {
+		t.Fatalf("logged-out token status=%d, want 401", response.Code)
+	}
+	if response := request(http.MethodGet, "/protected", login()); response.Code != http.StatusNoContent {
+		t.Fatalf("new token status=%d body=%s", response.Code, response.Body.String())
+	}
+}
 
 func TestJWTAuth_rejects_first_token_after_two_same_second_password_changes(t *testing.T) {
 	cfg := &config.Config{JWTSecret: "password-version-secret"}

@@ -17,7 +17,6 @@ import (
 	"sync"
 	"time"
 
-	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
@@ -884,6 +883,7 @@ func (s *CaddyService) GetUpstreamHealth() (map[string]map[string]bool, error) {
 								healthStatus[serverName][dial] = true
 							}
 						}
+
 					}
 				}
 			}
@@ -1082,7 +1082,6 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 									detail.Unknown = true
 								}
 
-
 								healthStatus[serverName][dial] = detail
 							}
 						}
@@ -1274,11 +1273,11 @@ type caddyConfigStore interface {
 	Exec(string, ...any) (sql.Result, error)
 }
 
-func GenerateCaddyConfig(cfg *config.Config, overrides ...*models.UpdateConfigRequest) map[string]interface{} {
-	return generateCaddyConfigFromStore(cfg, db.DB, overrides...)
+func GenerateCaddyConfig(overrides ...*models.UpdateConfigRequest) map[string]interface{} {
+	return generateCaddyConfigFromStore(db.DB, overrides...)
 }
 
-func generateCaddyConfigFromStore(cfg *config.Config, store caddyConfigStore, overrides ...*models.UpdateConfigRequest) map[string]interface{} {
+func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.UpdateConfigRequest) map[string]interface{} {
 	var filesSnapshot CertFilesSnapshot
 	generationFailure := func(format string, args ...any) map[string]interface{} {
 		err := fmt.Errorf(format, args...)
@@ -2995,8 +2994,8 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 
 // ApplyConfigFromTx renders the Caddy config from an uncommitted transaction
 // and applies it, keeping the database unchanged when Caddy rejects the config.
-func (s *CaddyService) ApplyConfigFromTx(cfg *config.Config, tx *sql.Tx) error {
-	return s.ApplyConfig(generateCaddyConfigFromStore(cfg, tx))
+func (s *CaddyService) ApplyConfigFromTx(tx *sql.Tx) error {
+	return s.ApplyConfig(generateCaddyConfigFromStore(tx))
 }
 
 func normalizeWeights(weights []int) []int {

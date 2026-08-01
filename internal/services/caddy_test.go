@@ -10,8 +10,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"lazy-balancer-v2/internal/config"
 )
 
 func TestCaddyService_BackupConfig_failure_prevents_apply(t *testing.T) {
@@ -53,7 +51,7 @@ func TestGenerateCaddyConfig_upstream_scan_error_returns_generation_failure(t *t
 		t.Fatalf("seed invalid upstream: %v", err)
 	}
 
-	generated := generateCaddyConfigFromStore(&config.Config{}, database)
+	generated := generateCaddyConfigFromStore(database)
 	message, ok := generated[caddyConfigGenerationErrorKey].(string)
 	if !ok || !strings.Contains(message, "scan upstream") {
 		t.Fatalf("generation result=%#v, want upstream scan error", generated)
@@ -125,7 +123,7 @@ func TestGenerateCaddyConfig_fail_closed_errors_do_not_call_load(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			}))
 			defer server.Close()
-			generated := generateCaddyConfigFromStore(&config.Config{}, database)
+			generated := generateCaddyConfigFromStore(database)
 			message, ok := generated[caddyConfigGenerationErrorKey].(string)
 			if !ok || !strings.Contains(message, test.want) {
 				t.Fatalf("generation result=%#v, want %q failure", generated, test.want)
@@ -441,7 +439,7 @@ func TestGenerateCaddyConfig_propagatesCertificateMaterializationFailure(t *test
 	defer server.Close()
 
 	// When
-	err := NewCaddyService(server.URL).ApplyConfig(GenerateCaddyConfig(&config.Config{}))
+	err := NewCaddyService(server.URL).ApplyConfig(GenerateCaddyConfig())
 
 	// Then
 	if err == nil || !strings.Contains(err.Error(), "invalid") {
@@ -482,7 +480,7 @@ func TestGenerateCaddyConfig_restoresCertificateSnapshotWhenMaterializationFails
 	defer server.Close()
 
 	// When
-	err := NewCaddyService(server.URL).ApplyConfig(GenerateCaddyConfig(&config.Config{}))
+	err := NewCaddyService(server.URL).ApplyConfig(GenerateCaddyConfig())
 
 	// Then
 	if err == nil {
@@ -526,7 +524,7 @@ func TestApplyConfig_restoresCertificateSnapshotWhenLoadRejects(t *testing.T) {
 	defer server.Close()
 
 	// When
-	err := NewCaddyService(server.URL).ApplyConfig(GenerateCaddyConfig(&config.Config{}))
+	err := NewCaddyService(server.URL).ApplyConfig(GenerateCaddyConfig())
 
 	// Then
 	if err == nil {

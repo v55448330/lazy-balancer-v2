@@ -56,11 +56,11 @@ interface RequestClient {
   get(url: '/caddy/status', config?: AxiosRequestConfig): Promise<ApiResponse<{ status: string }>>
   get(url: '/config', config?: AxiosRequestConfig): Promise<ApiResponse<GlobalConfigData>>
   get(url: '/admin-tls', config?: AxiosRequestConfig): Promise<ApiResponse<{ enabled: boolean; mode: string }>>
-  get<T = ApiResponse>(url: string, config?: AxiosRequestConfig): Promise<T>
-  post<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
-  put<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
-  patch<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
-  delete<T = ApiResponse>(url: string, config?: AxiosRequestConfig): Promise<T>
+  get<T = ApiResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T>
+  post<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  put<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  patch<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  delete<T = ApiResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T>
 }
 
 let sessionExpiredDialogOpen = false
@@ -135,19 +135,19 @@ service.interceptors.response.use(
 )
 
 export const request: RequestClient = {
-  get<T = ApiResponse>(url: string, config?: AxiosRequestConfig): Promise<T> {
+  get<T = ApiResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T> {
     return service.get(url, config)
   },
-  post<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
+  post<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
     return service.post(url, data, config)
   },
-  put<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
+  put<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
     return service.put(url, data, config)
   },
-  patch<T = ApiResponse>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
+  patch<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
     return service.patch(url, data, config)
   },
-  delete<T = ApiResponse>(url: string, config?: AxiosRequestConfig): Promise<T> {
+  delete<T = ApiResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T> {
     return service.delete(url, config)
   },
 }

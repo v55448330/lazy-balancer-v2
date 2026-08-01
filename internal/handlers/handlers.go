@@ -105,7 +105,7 @@ func boolText(value bool) string {
 
 func (h *Handlers) applyCaddyConfig() {
 	// Generate Caddy config from DB
-	config := services.GenerateCaddyConfig(h.cfg)
+	config := services.GenerateCaddyConfig()
 
 	// Push to Caddy
 	if err := h.caddyService.ApplyConfig(config); err != nil {
@@ -116,7 +116,7 @@ func (h *Handlers) applyCaddyConfig() {
 func (h *Handlers) applyCaddyConfigE() error {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
-	config := services.GenerateCaddyConfig(h.cfg)
+	config := services.GenerateCaddyConfig()
 	return h.caddyService.ApplyConfig(config)
 }
 
@@ -135,7 +135,7 @@ func (h *Handlers) applyCaddyConfigWithRollbackLocked() error {
 	}
 
 	// Generate Caddy config from DB
-	config := services.GenerateCaddyConfig(h.cfg)
+	config := services.GenerateCaddyConfig()
 
 	configJSON, _ := json.Marshal(config)
 	log.Printf("Generated Caddy config: %s", string(configJSON))

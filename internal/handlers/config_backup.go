@@ -242,7 +242,27 @@ func validateV2Backup(backup configBackup) error {
 			backup.Tables[table] = []map[string]any{}
 		}
 	}
-	return nil
+	for _, user := range backup.Tables["users"] {
+		if role, _ := user["role"].(string); role == "admin" && !backupBooleanFalse(user["is_enabled"]) {
+			return nil
+		}
+	}
+	return errors.New("备份必须至少包含一个已启用的管理员账号")
+}
+
+func backupBooleanFalse(value any) bool {
+	switch value := value.(type) {
+	case bool:
+		return !value
+	case float64:
+		return value == 0
+	case int:
+		return value == 0
+	case int64:
+		return value == 0
+	default:
+		return false
+	}
 }
 
 func clampBackupJWTExpireMinutes(value any) (any, bool) {
@@ -452,7 +472,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "准备证书文件失败: " + err.Error()})
 		return
 	}
-	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
+	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
 		err = restoreRuntime(err)
 		err = finishImportFailure(tx, &recovery, err)
 		recordAudit(c, "导入失败", "配置备份", "Caddy 配置验证未通过，数据库未变更: "+err.Error())

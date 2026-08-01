@@ -62,11 +62,17 @@ type CAProviderListItem struct {
 }
 
 // CAProviderService manages CA provider business logic.
-type CAProviderService struct{}
+type CAProviderService struct {
+	dataDir string
+}
 
 // NewCAProviderService creates a new CAProviderService.
-func NewCAProviderService() *CAProviderService {
-	return &CAProviderService{}
+func NewCAProviderService(dataDir ...string) *CAProviderService {
+	service := &CAProviderService{}
+	if len(dataDir) > 0 {
+		service.dataDir = dataDir[0]
+	}
+	return service
 }
 
 // maskCredentials masks the EAB HMAC key in a credentials JSON string.
@@ -353,7 +359,7 @@ func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id in
 		return err
 	}
 
-	client, err := acme.NewClientForProvider(p, acmeEmail)
+	client, err := acme.NewClientForProvider(p, acmeEmail, s.dataDir)
 	if err != nil {
 		return &CAProviderTestError{Phase: "config", Err: err}
 	}

@@ -27,6 +27,7 @@ import (
 type CertIssuer struct {
 	caddyReloader   func() error
 	deploymentRetry func(int, issuedCertificate, time.Duration)
+	dataDir         string
 }
 
 const maxCertificateDeploymentAttempts = 10
@@ -91,8 +92,12 @@ func computeBackoff(attempts int, retryAfter time.Duration) time.Duration {
 
 // NewCertIssuer creates a new CertIssuer. The reloader is called after a
 // certificate is successfully issued so Caddy picks up the new cert.
-func NewCertIssuer(reloader func() error) *CertIssuer {
-	return &CertIssuer{caddyReloader: reloader, deploymentRetry: scheduleCertificateDeploymentRetry}
+func NewCertIssuer(reloader func() error, dataDir ...string) *CertIssuer {
+	issuer := &CertIssuer{caddyReloader: reloader, deploymentRetry: scheduleCertificateDeploymentRetry}
+	if len(dataDir) > 0 {
+		issuer.dataDir = dataDir[0]
+	}
+	return issuer
 }
 
 func scheduleCertificateDeploymentRetry(jobID int, material issuedCertificate, delay time.Duration) {
@@ -305,7 +310,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// real issuance flow. If the CA is down (e.g. ZeroSSL 504), fail fast and
 	// let the retry scheduler handle the next attempt.
 	logger.Log("creating_account", fmt.Sprintf("测试 CA 提供商 %s (%s) 连通性", provider.Name, provider.Provider))
-	if err := NewCAProviderService().TestCAProviderWithContext(ctx, provider.ID); err != nil {
+	if err := NewCAProviderService(s.dataDir).TestCAProviderWithContext(ctx, provider.ID); err != nil {
 		logger.Log("failed", fmt.Sprintf("CA 提供商测试失败: %v", err))
 		failJob(jobID, fmt.Sprintf("CA 提供商测试失败: %v", err))
 		return fmt.Errorf("CA provider test failed: %w", err)
@@ -369,7 +374,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		failJob(jobID, "ACME 邮箱未配置，请在「系统设置 / 免费证书」中填写邮箱")
 		return fmt.Errorf("ACME 邮箱未配置")
 	}
-	client, err := acme.NewClientForProvider(provider, acmeEmail)
+	client, err := acme.NewClientForProvider(provider, acmeEmail, s.dataDir)
 	if err != nil {
 		failJob(jobID, err.Error())
 		return err

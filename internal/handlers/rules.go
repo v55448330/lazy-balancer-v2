@@ -128,7 +128,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	}
 
 	// Build the surrounding server/TLS context so the dialog shows certificates and policies
-	fullConfig := services.GenerateCaddyConfig(h.cfg)
+	fullConfig := services.GenerateCaddyConfig()
 	ruleContext := buildRuleCaddyContext(fullConfig, r.CaddyID, r.ListenPort)
 
 	responseData["config"] = map[string]interface{}{
@@ -624,7 +624,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return errors.Join(h.caddyService.ApplyConfig(oldRuntimeConfig), removeCreatedRule())
 	}
 	if req.Protocol == "tcp" {
-		fullConfig := services.GenerateCaddyConfig(h.cfg)
+		fullConfig := services.GenerateCaddyConfig()
 		if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
 			log.Printf("CreateRule Caddy apply failed for TCP rule caddy_id=%s: %v, rolling back database", caddyID, err)
 			if restoreErr := restoreCreatedRule(); restoreErr != nil {
@@ -670,7 +670,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 
 		if req.EnableTLS {
 			log.Printf("Reloading full Caddy config to apply TLS for caddy_id=%s", caddyID)
-			fullConfig := services.GenerateCaddyConfig(h.cfg)
+			fullConfig := services.GenerateCaddyConfig()
 			if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
 				if restoreErr := restoreCreatedRule(); restoreErr != nil {
 					log.Printf("CRITICAL: CreateRule TLS apply compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
@@ -1253,7 +1253,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	// Backup current full Caddy config for rollback (used for TCP rules; HTTP rules use @id-based rollback)
-	oldFullConfig := services.GenerateCaddyConfig(h.cfg)
+	oldFullConfig := services.GenerateCaddyConfig()
 
 	// Backup current Caddy route config for rollback
 	var oldRouteConfig map[string]interface{}
@@ -1361,7 +1361,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	if req.Protocol == "tcp" {
-		newFullConfig := services.GenerateCaddyConfig(h.cfg)
+		newFullConfig := services.GenerateCaddyConfig()
 		if err := h.caddyService.ApplyConfig(newFullConfig); err != nil {
 			var caddyRestoreErr error
 			if oldFullConfig != nil {
@@ -1413,7 +1413,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// Reload full Caddy config to apply TLS certificates
 		if *req.EnableTLS || req.TLSCert != "" || req.TLSKey != "" || req.TLSSource == "acme_dns" {
 			log.Printf("Reloading full Caddy config after rule update for caddy_id=%s", caddyID)
-			fullConfig := services.GenerateCaddyConfig(h.cfg)
+			fullConfig := services.GenerateCaddyConfig()
 			if err := h.caddyService.ApplyConfig(fullConfig); err != nil {
 				restoreErr := errors.Join(h.restoreImportRuntime(runtimeSnapshot), restoreRuleDBSnapshot())
 				if restoreErr != nil {
@@ -1594,7 +1594,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
 		return
 	}
-	if err := h.caddyService.ApplyConfigFromTx(h.cfg, tx); err != nil {
+	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		if restoreErr != nil {
 			log.Printf("CRITICAL: DeleteRule Caddy apply and runtime restore failed for caddy_id=%s: apply=%v restore=%v", caddyID, err, restoreErr)

@@ -164,6 +164,7 @@ func completeBackupJSON(t *testing.T, tables map[string][]map[string]any) string
 	for _, table := range configBackupTables {
 		completeTables[table] = []map[string]any{}
 	}
+	completeTables["users"] = []map[string]any{{"id": 1, "username": "backup-admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
 	for table, rows := range tables {
 		completeTables[table] = rows
 	}
@@ -176,6 +177,43 @@ func completeBackupJSON(t *testing.T, tables map[string][]map[string]any) string
 		t.Fatalf("marshal complete backup: %v", err)
 	}
 	return string(data)
+}
+
+func TestImportConfigBackup_rejects_backup_without_enabled_admin_and_preserves_current_admin(t *testing.T) {
+	tests := []struct {
+		name  string
+		users []map[string]any
+	}{
+		{name: "empty users", users: []map[string]any{}},
+		{name: "users only", users: []map[string]any{{"id": 2, "username": "reader", "password_hash": "hash", "role": "user", "is_enabled": 1}}},
+		{name: "all admins disabled", users: []map[string]any{{"id": 2, "username": "disabled-admin", "password_hash": "hash", "role": "admin", "is_enabled": false}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newBackupTestHandlers(t)
+			if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'current-admin','hash','admin',1)"); err != nil {
+				t.Fatalf("seed current admin: %v", err)
+			}
+			router := gin.New()
+			router.POST("/config/import", h.ImportConfigBackup)
+			request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(completeBackupJSON(t, map[string][]map[string]any{"users": tt.users})))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+			}
+			var count int
+			if err := db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username='current-admin' AND role='admin' AND is_enabled=1").Scan(&count); err != nil {
+				t.Fatalf("read current admin: %v", err)
+			}
+			if count != 1 {
+				t.Fatalf("current enabled admin count=%d, want 1", count)
+			}
+		})
+	}
 }
 
 func TestConfigBackup_export_import_roundtrip(t *testing.T) {
@@ -249,6 +287,7 @@ func TestImportConfigBackup_clamps_excessive_jwt_expiration(t *testing.T) {
 	for _, table := range configBackupTables {
 		completeTables[table] = []map[string]any{}
 	}
+	completeTables["users"] = []map[string]any{{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
 	body, err := json.Marshal(configBackup{
 		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2},
 		Config: map[string]any{"jwt_expire_minutes": 999999},
@@ -281,7 +320,7 @@ func TestImportConfigBackup_accepts_historical_v1_core_tables(t *testing.T) {
 		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 1},
 		Config: map[string]any{},
 		Tables: map[string][]map[string]any{
-			"lb_rules": {}, "upstreams": {}, "users": {}, "api_keys": {},
+			"lb_rules": {}, "upstreams": {}, "users": {{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}, "api_keys": {},
 			"ca_providers": {}, "certificate_configs": {}, "cert_jobs": {},
 		},
 	})
@@ -306,6 +345,7 @@ func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *t
 	services.InitCAQueueManager(func() error { return nil })
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_requeue_v2','requeue','http','requeue.example.test',8080,1,1,'acme_dns');
+		INSERT INTO users (username,password_hash,role,is_enabled) VALUES ('admin','hash','admin',1);
 		INSERT INTO upstreams (rule_id,host,port,weight,enabled) VALUES ('lb_requeue_v2','127.0.0.1',9000,1,1);
 		INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES ('lb_requeue_v2','requeue.example.test','creating_order',999999)`); err != nil {
 		t.Fatalf("seed non-terminal job: %v", err)
@@ -347,6 +387,9 @@ func TestImportConfigBackup_reports_partial_failure_when_certificate_job_recover
 	oldRequeue := requeueNonTerminalCertJobs
 	requeueNonTerminalCertJobs = func() error { return errors.New("requeue failed") }
 	t.Cleanup(func() { requeueNonTerminalCertJobs = oldRequeue })
+	if _, err := db.DB.Exec("INSERT INTO users (username,password_hash,role,is_enabled) VALUES ('admin','hash','admin',1)"); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
 	router := gin.New()
 	router.GET("/config/export", h.ExportConfigBackup)
 	router.POST("/config/import", h.ImportConfigBackup)

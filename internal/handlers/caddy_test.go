@@ -7,12 +7,98 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/services"
 )
+
+func TestCaddyLifecycleHandlers_wait_for_rule_operation_lock(t *testing.T) {
+	tests := []struct {
+		name  string
+		mount func(*gin.Engine, *Handlers)
+	}{
+		{name: "start", mount: func(r *gin.Engine, h *Handlers) { r.POST("/lifecycle", h.StartCaddy) }},
+		{name: "stop", mount: func(r *gin.Engine, h *Handlers) { r.POST("/lifecycle", h.StopCaddy) }},
+		{name: "restart", mount: func(r *gin.Engine, h *Handlers) { r.POST("/lifecycle", h.RestartCaddy) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &Handlers{cfg: &config.Config{CaddyAdminURL: "http://127.0.0.1:1"}}
+			router := gin.New()
+			tt.mount(router, h)
+			h.caddyOpMu.Lock()
+			started := make(chan struct{})
+			done := make(chan struct{})
+			go func() {
+				close(started)
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/lifecycle", nil))
+				close(done)
+			}()
+			<-started
+			select {
+			case <-done:
+				h.caddyOpMu.Unlock()
+				t.Fatal("lifecycle handler ran while rule operation lock was held")
+			case <-time.After(50 * time.Millisecond):
+			}
+			h.caddyOpMu.Unlock()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("lifecycle handler did not resume after rule operation lock release")
+			}
+		})
+	}
+}
+
+func TestStartCaddy_does_not_overlap_UpdateRule(t *testing.T) {
+	harness := newUpdateAuditRuleHandlers(t, "lb_lifecycle", 0, true)
+	seedAuditRule(t, "lb_lifecycle", "original", "lifecycle.example.test", 8080, true, "manual", false)
+	seedAuditUpstream(t, "lb_lifecycle")
+	original := caddyRunCommand
+	startInvoked := make(chan struct{})
+	caddyRunCommand = func() *exec.Cmd {
+		close(startInvoked)
+		return exec.Command("sh", "-c", "exit 7")
+	}
+	t.Cleanup(func() { caddyRunCommand = original })
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", harness.handler.UpdateRule)
+	router.POST("/caddy/start", harness.handler.StartCaddy)
+	updateDone := make(chan struct{})
+	go func() {
+		request := httptest.NewRequest(http.MethodPut, "/rules/lb_lifecycle", strings.NewReader(`{"name":"updated"}`))
+		request.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(httptest.NewRecorder(), request)
+		close(updateDone)
+	}()
+	<-harness.firstRouteEntered
+	startDone := make(chan struct{})
+	go func() {
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/caddy/start", nil))
+		close(startDone)
+	}()
+	select {
+	case <-startInvoked:
+		t.Fatal("StartCaddy entered process mutation while UpdateRule held the operation lock")
+	case <-time.After(50 * time.Millisecond):
+	}
+	harness.release()
+	select {
+	case <-updateDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("UpdateRule did not finish after barrier release")
+	}
+	select {
+	case <-startDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartCaddy did not run after UpdateRule finished")
+	}
+}
 
 func TestStartCaddy_returns_500_when_process_exits_before_ready(t *testing.T) {
 	original := caddyRunCommand

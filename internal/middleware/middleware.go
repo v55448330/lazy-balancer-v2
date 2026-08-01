@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
@@ -320,6 +321,29 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录凭证无效"})
 			c.Abort()
 			return
+		}
+		if jti, exists := claims["jti"].(string); exists && jti != "" {
+			if _, err := db.DB.Exec("DELETE FROM revoked_jti WHERE datetime(expires_at) <= datetime('now')"); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "认证状态检查失败"})
+				c.Abort()
+				return
+			}
+			hash := sha256.Sum256([]byte(jti))
+			var revoked int
+			if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM revoked_jti WHERE jti_hash=? AND datetime(expires_at) > datetime('now'))", hex.EncodeToString(hash[:])).Scan(&revoked); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "认证状态检查失败"})
+				c.Abort()
+				return
+			}
+			if revoked != 0 {
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录状态已失效，请重新登录"})
+				c.Abort()
+				return
+			}
+			if exp, valid := claims["exp"].(float64); valid {
+				c.Set("token_jti", jti)
+				c.Set("token_expires_at", time.Unix(int64(exp), 0))
+			}
 		}
 
 		// Resolve the current role and enabled state from the database so that

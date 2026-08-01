@@ -62,14 +62,22 @@ const validateAccessUrl = (_rule: unknown, value: string, callback: (error?: Err
     callback()
     return
   }
+  if (!/^https?:\/\//.test(normalized)) {
+    callback(new Error('访问地址必须使用 HTTP 或 HTTPS'))
+    return
+  }
   try {
     const parsed = new URL(normalized)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      callback(new Error('访问地址必须使用 HTTP 或 HTTPS'))
+    if (!parsed.host) {
+      callback(new Error('访问地址必须包含主机'))
       return
     }
     if (parsed.username || parsed.password) {
       callback(new Error('访问地址不能包含用户名或密码'))
+      return
+    }
+    if (parsed.hash) {
+      callback(new Error('访问地址不能包含片段'))
       return
     }
     callback()

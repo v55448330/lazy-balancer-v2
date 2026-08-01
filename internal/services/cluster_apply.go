@@ -64,21 +64,21 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if err := materializeSnapshotCerts(snapshot.Certs); err != nil {
 		return errors.Join(fmt.Errorf("写入同步证书: %w", err), restoreSnapshotCerts(previous.Certs, snapshot.Certs))
 	}
-	if err := s.caddy.ApplyConfig(generateCaddyConfigFromStore(s.cfg, tx)); err != nil {
+	if err := s.caddy.ApplyConfig(generateCaddyConfigFromStore(tx)); err != nil {
 		return errors.Join(fmt.Errorf("重载 Caddy 失败，数据库已回滚: %w", err), restoreSnapshotCerts(previous.Certs, snapshot.Certs))
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE global_config SET applied_version=?, cluster_version=?, sync_fingerprint=?, last_sync=datetime('now'), last_sync_error='' WHERE id=1`, snapshot.Version, snapshot.Version, snapshot.Fingerprint); err != nil {
 		return errors.Join(
 			fmt.Errorf("记录同步状态: %w", err),
 			restoreSnapshotCerts(previous.Certs, snapshot.Certs),
-			wrapSnapshotRestoreError(s.caddy.ApplyConfig(GenerateCaddyConfig(s.cfg))),
+			wrapSnapshotRestoreError(s.caddy.ApplyConfig(GenerateCaddyConfig())),
 		)
 	}
 	if err := tx.Commit(); err != nil {
 		return errors.Join(
 			fmt.Errorf("提交快照事务: %w", err),
 			restoreSnapshotCerts(previous.Certs, snapshot.Certs),
-			wrapSnapshotRestoreError(s.caddy.ApplyConfig(GenerateCaddyConfig(s.cfg))),
+			wrapSnapshotRestoreError(s.caddy.ApplyConfig(GenerateCaddyConfig())),
 		)
 	}
 	clusterSnapshotCaches.Delete(s.db)

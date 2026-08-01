@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -79,6 +82,12 @@ func (h *Handlers) respondLogin(c *gin.Context, user models.User, passwordVersio
 	}
 	expireDuration := time.Duration(expireMinutes) * time.Minute
 	now := time.Now()
+	jtiBytes := make([]byte, 32)
+	if _, err := rand.Read(jtiBytes); err != nil {
+		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "签发登录令牌失败"})
+		return
+	}
 	// Generate JWT token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id":   user.ID,
@@ -86,6 +95,7 @@ func (h *Handlers) respondLogin(c *gin.Context, user models.User, passwordVersio
 		"role":      user.Role,
 		"node_mode": nodeMode,
 		"pwd_ver":   passwordVersion,
+		"jti":       hex.EncodeToString(jtiBytes),
 		"iat":       now.Unix(),
 		"exp":       now.Add(expireDuration).Unix(),
 	})
@@ -108,6 +118,19 @@ func (h *Handlers) respondLogin(c *gin.Context, user models.User, passwordVersio
 func (h *Handlers) Logout(c *gin.Context) {
 	username, _ := c.Get("username")
 	usernameStr, _ := username.(string)
+	if jti := c.GetString("token_jti"); jti != "" {
+		expiresAt, ok := c.Get("token_expires_at")
+		expiresAtTime, valid := expiresAt.(time.Time)
+		if !ok || !valid {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})
+			return
+		}
+		hash := sha256.Sum256([]byte(jti))
+		if _, err := db.DB.Exec("INSERT INTO revoked_jti (jti_hash,expires_at) VALUES (?,?) ON CONFLICT(jti_hash) DO UPDATE SET expires_at=excluded.expires_at", hex.EncodeToString(hash[:]), expiresAtTime); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})
+			return
+		}
+	}
 	services.RecordAuditLog(usernameStr, "登出", "用户认证", services.AuditResultPart("success"), c.ClientIP())
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Logged out"})
 }
