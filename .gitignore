@@ -57,3 +57,7 @@ openspec/
 dist/
 .superpowers/
 .worktrees/
+
+# QA artifacts
+.playwright-mcp/
+round*-*.png
