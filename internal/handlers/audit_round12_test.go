@@ -226,8 +226,6 @@ func TestUpdateRule_stops_before_database_commit_when_route_snapshot_fails(t *te
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/config/":
-			_, _ = w.Write([]byte(`{"apps":{"http":{"servers":{"http_8080":{"routes":[{"@id":"lb_snapshot_fail","handle":[]}]}}}}}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/id/lb_snapshot_fail":
 			http.Error(w, "snapshot failed", http.StatusInternalServerError)
 		default:
 			w.WriteHeader(http.StatusOK)
@@ -259,10 +257,9 @@ func TestUpdateRule_stops_before_database_commit_when_route_snapshot_fails(t *te
 }
 
 func TestUpdateRule_restores_database_when_request_is_canceled_before_compensation(t *testing.T) {
-	// Given：每次 UpdateRule 有两次 POST /config/（验证临时路由清理 + SetConfigByID），
-	// 第二个请求在其 SetConfigByID（第 4 次）处阻塞以制造取消窗口
+	// Given
 	harness := newUpdateAuditRuleHandlers(t, "lb_cancel_restore", 0, true)
-	harness.blockOnRoutePost = 4
+	harness.blockOnRoutePost = 2
 	seedAuditRule(t, "lb_cancel_restore", "before", "cancel-restore.example.test", 8080, true, "manual", false)
 	seedAuditUpstream(t, "lb_cancel_restore")
 	router := gin.New()

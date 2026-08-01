@@ -315,7 +315,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
 	}
-	if (req.CaddyID == "") != (req.Domain == "") {
+	if req.CaddyID == "" && req.Domain != "" {
 		auditFailure("invalid_request")
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
@@ -327,7 +327,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		return
 	}
 	queued := 0
-	if req.CaddyID != "" && req.Domain != "" {
+	if req.CaddyID != "" {
 		var enabled, enableTLS bool
 		var protocol, tlsSource, ruleDomain string
 		err := db.DB.QueryRow(`SELECT COALESCE(enabled,0), COALESCE(enable_tls,0), COALESCE(protocol,''), COALESCE(tls_source,''), COALESCE(domain,'') FROM lb_rules WHERE caddy_id = ?`, req.CaddyID).
@@ -347,21 +347,23 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则不是启用状态的 ACME HTTPS 规则"})
 			return
 		}
-		domainOK := false
-		for _, d := range strings.Split(ruleDomain, ",") {
-			if strings.TrimSpace(d) == req.Domain {
-				domainOK = true
-				break
-			}
-		}
-		if !domainOK {
-			auditFailure("failed", "域名不属于该规则")
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名不属于该规则"})
+		canonicalRuleDomain, canonicalErr := services.CanonicalACMEDomains(ruleDomain)
+		if canonicalErr != nil {
+			auditFailure("failed", "规则域名无效")
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则域名不符合 ACME 签发要求"})
 			return
+		}
+		if req.Domain != "" {
+			canonicalRequestDomain, canonicalErr := services.CanonicalACMEDomains(req.Domain)
+			if canonicalErr != nil || canonicalRequestDomain != canonicalRuleDomain {
+				auditFailure("failed", "域名集合与规则不一致")
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名集合与规则不一致"})
+				return
+			}
 		}
 		var jobStatus string
 		var jobUpdatedAt sql.NullTime
-		err = db.DB.QueryRow("SELECT status, updated_at FROM cert_jobs WHERE rule_id=? AND domain=?", req.CaddyID, req.Domain).Scan(&jobStatus, &jobUpdatedAt)
+		err = db.DB.QueryRow("SELECT status, updated_at FROM cert_jobs WHERE rule_id=? AND domain=?", req.CaddyID, canonicalRuleDomain).Scan(&jobStatus, &jobUpdatedAt)
 		if err == nil {
 			if blocked, message := certJobRetryBlocked(jobStatus, jobUpdatedAt, time.Now()); blocked {
 				auditFailure("blocked", "证书任务正在执行")
@@ -373,7 +375,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败"})
 			return
 		}
-		_, changed, err := services.CreateOrRequeueCertJobWithChange(req.CaddyID, req.Domain, 0, qm)
+		_, changed, err := services.CreateOrRequeueCertJobWithChange(req.CaddyID, canonicalRuleDomain, 0, qm)
 		if err != nil {
 			auditFailure("failed", "创建签发任务失败: "+err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建签发任务失败: " + err.Error()})

@@ -84,7 +84,7 @@
       </el-form-item>
       <div class="form-actions">
         <el-button type="primary" :loading="saving" :disabled="isReadOnly" @click="handleSave">保存</el-button>
-        <el-button type="warning" :disabled="isReadOnly" @click="handleReloadCaddy">重载 Caddy</el-button>
+        <el-button type="warning" :loading="reloading" :disabled="isReadOnly || reloading" @click="handleReloadCaddy">重载 Caddy</el-button>
       </div>
     </el-form>
   </el-card>
@@ -158,6 +158,7 @@ const emit = defineEmits<{ (event: 'save'): void }>()
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 const saving = ref(false)
+const reloading = ref(false)
 const logDialogVisible = ref(false)
 const logContent = ref('')
 const activeLogTab = ref('runtime')
@@ -200,20 +201,28 @@ const handleSave = async (): Promise<void> => {
 }
 
 const handleReloadCaddy = async (): Promise<void> => {
-  if (isReadOnly.value) return
+  if (isReadOnly.value || reloading.value) return
   try {
     await ElMessageBox.confirm('此操作将重新加载 Caddy 配置，是否继续？', '确认重载', {
       confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning',
     })
+  } catch (error: unknown) {
+    if (error === 'cancel' || error === 'close') return
+    throw error
+  }
+  if (reloading.value) return
+  reloading.value = true
+  try {
     await request.post('/config/reload')
     ElMessage.success('Caddy 配置已重载')
   } catch (error: unknown) {
-    if (error === 'cancel' || error === 'close') return
     if (error instanceof Error) {
       console.error('Failed to reload Caddy:', error)
       return
     }
     throw error
+  } finally {
+    reloading.value = false
   }
 }
 

@@ -129,6 +129,25 @@ func TestCertIssuer_deployIssuedCertificate_finalizes_post_cleanup_state(t *test
 	}
 }
 
+func TestConfirmCertificateDeployment_accepts_equivalent_normalized_domain_set(t *testing.T) {
+	// Given
+	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	if _, err := db.DB.Exec("UPDATE lb_rules SET domain='WWW.Example.com, example.com' WHERE caddy_id=?", ruleID); err != nil {
+		t.Fatalf("set dual-domain rule: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET domain='example.com,www.example.com' WHERE id=?", jobID); err != nil {
+		t.Fatalf("set canonical job domains: %v", err)
+	}
+
+	// When
+	err := confirmCertificateDeployment(context.Background(), jobID, issuedCertificate{ruleID: ruleID}, false)
+
+	// Then
+	if err != nil {
+		t.Fatalf("confirm equivalent domain set: %v", err)
+	}
+}
+
 func TestCertIssuer_deployIssuedCertificate_restores_files_when_job_disabled_before_finalize(t *testing.T) {
 	// Given
 	jobID, ruleID := seedCertificateJob(t, "downloaded")

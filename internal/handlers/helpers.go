@@ -331,6 +331,9 @@ func parseMemInfo(input string) (uint64, uint64, error) {
 }
 
 func getCPUPercent() (float64, error) {
+	lastCPUStats.mu.Lock()
+	defer lastCPUStats.mu.Unlock()
+
 	stat, err := systemMetricsReadFile("/proc/stat")
 	if err != nil {
 		return 0, err
@@ -339,11 +342,9 @@ func getCPUPercent() (float64, error) {
 	if !ok {
 		return 0, fmt.Errorf("解析 /proc/stat 失败")
 	}
-	lastCPUStats.mu.Lock()
-	defer lastCPUStats.mu.Unlock()
 	previous := lastCPUStats.snapshot
-	lastCPUStats.snapshot = current
 	if previous.total == 0 {
+		lastCPUStats.snapshot = current
 		return 0, nil
 	}
 	if current.total <= previous.total || current.idle < previous.idle {
@@ -354,6 +355,7 @@ func getCPUPercent() (float64, error) {
 	if idleDelta > totalDelta {
 		return 0, fmt.Errorf("CPU 空闲计数器增量无效")
 	}
+	lastCPUStats.snapshot = current
 	return float64(totalDelta-idleDelta) / float64(totalDelta) * 100, nil
 }
 
@@ -365,7 +367,10 @@ var lastNetStats struct {
 }
 
 func getRealtimeTraffic() (models.RealtimeTraffic, error) {
-	netStat, err := os.ReadFile("/proc/net/dev")
+	lastNetStats.mu.Lock()
+	defer lastNetStats.mu.Unlock()
+
+	netStat, err := systemMetricsReadFile("/proc/net/dev")
 	if err != nil {
 		return models.RealtimeTraffic{}, err
 	}
@@ -377,8 +382,6 @@ func getRealtimeTraffic() (models.RealtimeTraffic, error) {
 
 	now := time.Now()
 	var rateIn, rateOut int64
-	lastNetStats.mu.Lock()
-	defer lastNetStats.mu.Unlock()
 
 	if !lastNetStats.time.IsZero() {
 		elapsed := now.Sub(lastNetStats.time).Seconds()
@@ -797,12 +800,14 @@ func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protoco
 			continue
 		}
 		hostSet[d] = struct{}{}
-		if !strings.Contains(d, ":") {
-			hostSet[d+":"+strconv.Itoa(listenPort)] = struct{}{}
+		if host, _, err := net.SplitHostPort(d); err == nil {
+			hostSet[host] = struct{}{}
+		} else {
+			hostSet[net.JoinHostPort(d, strconv.Itoa(listenPort))] = struct{}{}
 			if enableTLS {
-				hostSet[d+":443"] = struct{}{}
+				hostSet[net.JoinHostPort(d, "443")] = struct{}{}
 			} else if listenPort == 80 || listenPort == 0 {
-				hostSet[d+":80"] = struct{}{}
+				hostSet[net.JoinHostPort(d, "80")] = struct{}{}
 			}
 		}
 	}
@@ -815,7 +820,13 @@ func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protoco
 			continue
 		}
 		if _, ok := hostSet[host]; !ok {
-			continue
+			bareHost, _, err := net.SplitHostPort(host)
+			if err != nil {
+				continue
+			}
+			if _, ok := hostSet[bareHost]; !ok {
+				continue
+			}
 		}
 
 		switch {

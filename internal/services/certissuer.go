@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -501,15 +502,26 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 }
 
 func confirmCertificateDeployment(ctx context.Context, jobID int, material issuedCertificate, allowIssued bool) error {
-	var status string
-	err := db.DB.QueryRowContext(ctx, `SELECT j.status FROM cert_jobs j
+	var status, jobDomains, ruleDomains string
+	err := db.DB.QueryRowContext(ctx, `SELECT j.status, j.domain, r.domain FROM cert_jobs j
 		JOIN lb_rules r ON r.caddy_id=j.rule_id
 		JOIN global_config g ON g.id=1
 		WHERE j.id=? AND j.rule_id=?
-		  AND r.enabled=1 AND r.domain=j.domain AND g.is_master=1
-	`, jobID, material.ruleID).Scan(&status)
+		  AND r.enabled=1 AND g.is_master=1
+	`, jobID, material.ruleID).Scan(&status, &jobDomains, &ruleDomains)
 	if err != nil {
 		return fmt.Errorf("confirm certificate deployment: %w", err)
+	}
+	canonicalJobDomains, err := CanonicalACMEDomains(jobDomains)
+	if err != nil {
+		return fmt.Errorf("confirm certificate job domains: %w", err)
+	}
+	canonicalRuleDomains, err := CanonicalACMEDomains(ruleDomains)
+	if err != nil {
+		return fmt.Errorf("confirm certificate rule domains: %w", err)
+	}
+	if canonicalJobDomains != canonicalRuleDomains {
+		return fmt.Errorf("certificate job %d domains no longer match rule", jobID)
 	}
 	deployable := status == "downloaded" || status == "cleanup_dns" || status == "cleanup_warning"
 	if allowIssued {
@@ -606,6 +618,14 @@ func ValidateACMEDomains(domains string) error {
 	return nil
 }
 
+func CanonicalACMEDomains(domains string) (string, error) {
+	list := normalizeAndValidateDomains(domains)
+	if list == nil {
+		return "", fmt.Errorf("invalid ACME domains: %s", domains)
+	}
+	return strings.Join(list, ","), nil
+}
+
 // normalizeAndValidateDomains returns a cleaned domain list if it is either
 // a single domain or a root domain plus its www subdomain. Otherwise nil.
 func normalizeAndValidateDomains(domains string) []string {
@@ -637,6 +657,7 @@ func normalizeAndValidateDomains(domains string) []string {
 	// Must be root + www.root (either ordering)
 	a, b := list[0], list[1]
 	if b == "www."+a || a == "www."+b {
+		sort.Strings(list)
 		return list
 	}
 	return nil

@@ -18,6 +18,10 @@ import (
 )
 
 func newMiddlewareTestRouter(t *testing.T) *gin.Engine {
+	return newMiddlewareTestRouterAtPort(t, 8000)
+}
+
+func newMiddlewareTestRouterAtPort(t *testing.T, port int) *gin.Engine {
 	t.Helper()
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	if err := db.Initialize(t.TempDir()); err != nil {
@@ -29,7 +33,7 @@ func newMiddlewareTestRouter(t *testing.T) *gin.Engine {
 		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
 	})
 	cfg := &config.Config{
-		Port: 8000, StaticDir: t.TempDir(), CaddyAdminURL: "http://127.0.0.1:1",
+		Port: port, StaticDir: t.TempDir(), CaddyAdminURL: "http://127.0.0.1:1",
 		CaddyMetricsURL: "http://127.0.0.1:1/metrics", MetricsInterval: 60,
 		NodeName: "node-test", JWTSecret: "test-secret",
 	}

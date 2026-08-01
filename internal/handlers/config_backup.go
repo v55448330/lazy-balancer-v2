@@ -243,23 +243,23 @@ func validateV2Backup(backup configBackup) error {
 		}
 	}
 	for _, user := range backup.Tables["users"] {
-		if role, _ := user["role"].(string); role == "admin" && !backupBooleanFalse(user["is_enabled"]) {
+		if role, _ := user["role"].(string); role == "admin" && backupBooleanEnabled(user["is_enabled"]) {
 			return nil
 		}
 	}
 	return errors.New("备份必须至少包含一个已启用的管理员账号")
 }
 
-func backupBooleanFalse(value any) bool {
+func backupBooleanEnabled(value any) bool {
 	switch value := value.(type) {
 	case bool:
-		return !value
+		return value
 	case float64:
-		return value == 0
+		return value == 1
 	case int:
-		return value == 0
+		return value == 1
 	case int64:
-		return value == 0
+		return value == 1
 	default:
 		return false
 	}
@@ -321,6 +321,9 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(importCountsDetail(backup.Tables), services.AuditResultPart("success")))
+	c.Header("Cache-Control", "no-store, private")
+	c.Header("Pragma", "no-cache")
+	c.Header("X-Content-Type-Options", "nosniff")
 	c.Header("Content-Disposition", "attachment; filename=lazy-balancer-backup-"+time.Now().Format("20060102-150405")+".json")
 	c.JSON(http.StatusOK, backup)
 }
@@ -402,6 +405,22 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入失败，已回滚: " + err.Error()})
 			return
 		}
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE users SET password_version=COALESCE(password_version,0)+1"); err != nil {
+		err = finishImportFailure(tx, &recovery, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "吊销现有登录会话失败，已回滚: " + err.Error()})
+		return
+	}
+	var enabledAdmins int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE role='admin' AND is_enabled=1").Scan(&enabledAdmins); err != nil {
+		err = finishImportFailure(tx, &recovery, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "确认管理员账号失败，已回滚: " + err.Error()})
+		return
+	}
+	if enabledAdmins == 0 {
+		err = finishImportFailure(tx, &recovery, errors.New("导入后必须至少保留一个已启用的管理员账号"))
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
 	}
 	importUserID := int(contextUserID(c))
 	if _, err := tx.ExecContext(ctx, "UPDATE lb_rules SET updated_by=? WHERE id IN (SELECT id FROM lb_rules)", importUserID); err != nil {

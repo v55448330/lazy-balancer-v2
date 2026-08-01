@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -95,6 +96,42 @@ func TestMCPEndpointAuthenticationGatesAndProtocol(t *testing.T) {
 	}
 	if len(payload.Result.Tools) != 26 {
 		t.Fatalf("tool count=%d, want 26", len(payload.Result.Tools))
+	}
+}
+
+func TestMCPEndpointToolCallAllowsOriginalClientIPWhitelist(t *testing.T) {
+	// Given
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	router := newMiddlewareTestRouterAtPort(t, port)
+	server := &httptest.Server{Listener: listener, Config: &http.Server{Handler: router}}
+	server.Start()
+	t.Cleanup(server.Close)
+	key := "lb_sk_mcp-whitelist"
+	hash := sha256.Sum256([]byte(key))
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (32,'mcp-whitelist','x','admin',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,mcp_enabled,mcp_ip_whitelist)
+		VALUES ('mcp-whitelist',?,?,32,1,1,'["192.0.2.0/24"]')`, hex.EncodeToString(hash[:]), key[:12]); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_rules","arguments":{}}}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/mcp", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("X-API-Key", key)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "来源 IP 不在白名单") || !strings.Contains(response.Body.String(), `\"code\":0`) {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
 	}
 }
 

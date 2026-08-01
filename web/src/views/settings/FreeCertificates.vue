@@ -101,7 +101,7 @@
           <template #default="{ row }">
             <el-button link type="primary" size="small" :loading="testingId === row.id" :disabled="isReadOnly || isTesting" @click="testConfig(row)">测试</el-button>
             <el-button link type="primary" size="small" :disabled="isReadOnly || saving" @click="openConfigDialog(row)">编辑</el-button>
-            <el-button link type="danger" size="small" :disabled="isReadOnly" @click="deleteConfig(row)">删除</el-button>
+            <el-button link type="danger" size="small" :loading="deletingId === row.id" :disabled="isReadOnly || deletingId !== null" @click="deleteConfig(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -296,6 +296,7 @@ const providers = ref<DNSProvider[]>([])
 const dialogVisible = ref(false)
 const editingId = ref<number | null>(null)
 const testingId = ref<number | null>(null)
+const deletingId = ref<number | null>(null)
 const form = ref<{
   name: string
   dns_provider: string
@@ -570,15 +571,25 @@ const saveConfig = async () => {
 }
 
 const deleteConfig = async (config: CertConfig) => {
+  if (isReadOnly.value || deletingId.value !== null) return
+  const configId = config.id
+  if (configId === undefined) return
   try {
     await ElMessageBox.confirm(`确定要删除配置 "${config.name}" 吗？`, '删除确认', { type: 'warning' })
-    await request.delete(`/certificate-configs/${config.id}`)
+  } catch (error: unknown) {
+    if (error === 'cancel' || error === 'close') return
+    throw error
+  }
+  if (deletingId.value !== null) return
+  deletingId.value = configId
+  try {
+    await request.delete(`/certificate-configs/${configId}`)
     ElMessage.success('配置已删除')
     fetchConfigs()
-  } catch (error) {
-    if (error !== 'cancel') {
-      console.error('Failed to delete cert config:', error)
-    }
+  } catch (error: unknown) {
+    console.error('Failed to delete cert config:', error)
+  } finally {
+    if (deletingId.value === configId) deletingId.value = null
   }
 }
 

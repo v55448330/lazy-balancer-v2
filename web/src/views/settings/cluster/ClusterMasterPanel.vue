@@ -29,7 +29,7 @@
       </div>
     </template>
 
-    <el-table :data="nodes" v-loading="loading" stripe :header-cell-style="{ background: 'var(--bg-secondary)' }" empty-text="">
+    <el-table :data="nodes" row-key="id" v-loading="loading" stripe :header-cell-style="{ background: 'var(--bg-secondary)' }" empty-text="">
       <el-table-column prop="name" label="名称" min-width="130" />
       <el-table-column label="地址" min-width="200" show-overflow-tooltip>
         <template #default="{ row }"><span class="mono-value">{{ row.ip_address }}:{{ row.port }}</span></template>

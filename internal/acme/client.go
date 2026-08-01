@@ -79,7 +79,11 @@ func newClient(directoryURL, email, dataDir string, eab *acme.ExternalAccountBin
 	if eab != nil {
 		eabKID = eab.KID
 	}
-	key, err := loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID)
+	var eabKey []byte
+	if eab != nil {
+		eabKey = eab.Key
+	}
+	key, err := loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID, eabKey)
 	if err != nil {
 		return nil, err
 	}
@@ -105,15 +109,17 @@ func newClient(directoryURL, email, dataDir string, eab *acme.ExternalAccountBin
 
 var acmeAccountKeyMu sync.Mutex
 
-func acmeAccountKeyPath(dataDir, directoryURL, email, eabKID string) string {
-	sum := sha256.Sum256([]byte(directoryURL + "|" + email + "|" + eabKID))
+func acmeAccountKeyPath(dataDir, directoryURL, email, eabKID string, eabKey []byte) string {
+	eabKeySum := sha256.Sum256(eabKey)
+	eabKeyDigest := hex.EncodeToString(eabKeySum[:16])
+	sum := sha256.Sum256([]byte(directoryURL + "|" + email + "|" + eabKID + "|" + eabKeyDigest))
 	return filepath.Join(dataDir, "acme_accounts", hex.EncodeToString(sum[:])+".key")
 }
 
-func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string) (*ecdsa.PrivateKey, error) {
+func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string, eabKey []byte) (*ecdsa.PrivateKey, error) {
 	acmeAccountKeyMu.Lock()
 	defer acmeAccountKeyMu.Unlock()
-	keyPath := acmeAccountKeyPath(dataDir, directoryURL, email, eabKID)
+	keyPath := acmeAccountKeyPath(dataDir, directoryURL, email, eabKID, eabKey)
 	if data, err := os.ReadFile(keyPath); err == nil {
 		block, _ := pem.Decode(data)
 		if block != nil {

@@ -191,6 +191,15 @@ func newRuleFeatureTestHandlersWithCapture(t *testing.T) (*Handlers, *string) {
 			}
 			postedConfig = string(body)
 		}
+		if request.Method == http.MethodPost && request.URL.Path == "/load" {
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				response.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			postedConfig = string(body)
+			fullConfig = string(body)
+		}
 		response.WriteHeader(http.StatusOK)
 		_, _ = response.Write([]byte(`{}`))
 	}))

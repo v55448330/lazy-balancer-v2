@@ -89,7 +89,6 @@ func TestIssueCertificate_rejects_partial_rule_selector_without_creating_jobs(t 
 		body      string
 		wantScope string
 	}{
-		{name: "only caddy ID", body: `{"caddy_id":"lb_partial"}`, wantScope: "规则：lb_partial"},
 		{name: "only domain", body: `{"domain":"partial.example"}`, wantScope: "范围：全部 ACME 规则"},
 	}
 	for _, tt := range tests {
@@ -209,6 +208,39 @@ func TestIssueCertificate_rejects_recent_running_job_without_requeue(t *testing.
 	}
 	if status != "creating_order" || message != "active message" {
 		t.Fatalf("running job=(%q,%q), want unchanged", status, message)
+	}
+}
+
+func TestIssueCertificate_targeted_dual_domain_rule_queues_complete_domain_set(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules
+		(caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_dual','dual','http','WWW.Example.com, example.com',8443,1,1,'acme_dns')`); err != nil {
+		t.Fatalf("seed dual-domain rule: %v", err)
+	}
+	router := gin.New()
+	router.POST("/certificates/issue", h.IssueCertificate)
+	request := httptest.NewRequest(http.MethodPost, "/certificates/issue", strings.NewReader(`{"caddy_id":"lb_dual"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var domain string
+	if err := db.DB.QueryRow("SELECT domain FROM cert_jobs WHERE rule_id='lb_dual'").Scan(&domain); err != nil {
+		t.Fatalf("read dual-domain certificate job: %v", err)
+	}
+	if domain != "example.com,www.example.com" {
+		t.Fatalf("queued domain=%q, want complete normalized set", domain)
 	}
 }
 

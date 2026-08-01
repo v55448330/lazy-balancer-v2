@@ -76,6 +76,42 @@ func TestUpdateRule_rejects_duplicate_domain_after_merging_existing_protocol(t *
 	}
 }
 
+func TestRuleWrites_reject_overlapping_domain_lists(t *testing.T) {
+	tests := []struct {
+		name  string
+		mount func(*gin.Engine, *Handlers)
+		path  string
+		body  string
+	}{
+		{name: "create", mount: func(router *gin.Engine, handler *Handlers) { router.POST("/rules", handler.CreateRule) }, path: "/rules", body: `{"name":"overlap","protocol":"http","domain":"a.example.test, b.example.test","listen_port":8080,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`},
+		{name: "update", mount: func(router *gin.Engine, handler *Handlers) { router.PUT("/rules/:caddy_id", handler.UpdateRule) }, path: "/rules/lb_target", body: `{"domain":"a.example.test, b.example.test"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			handler := newRuleFeatureTestHandlers(t)
+			seedAuditRule(t, "lb_existing", "existing", "b.example.test,c.example.test", 8081, true, "manual", false)
+			if test.name == "update" {
+				seedAuditRule(t, "lb_target", "target", "old.example.test", 8080, true, "manual", false)
+				seedAuditUpstream(t, "lb_target")
+			}
+			router := gin.New()
+			test.mount(router, handler)
+			request := httptest.NewRequest(map[string]string{"create": http.MethodPost, "update": http.MethodPut}[test.name], test.path, strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// When
+			router.ServeHTTP(response, request)
+
+			// Then
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "域名已被") {
+				t.Fatalf("status=%d body=%s, want domain conflict", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestUpdateRule_stops_when_existing_upstream_scan_fails(t *testing.T) {
 	// Given
 	handler := newRuleFeatureTestHandlers(t)
@@ -176,8 +212,8 @@ func TestEnableRule_restores_disabled_state_when_ACME_queue_is_unavailable(t *te
 	if err := db.DB.QueryRow("SELECT enabled FROM lb_rules WHERE caddy_id='lb_enable_acme'").Scan(&enabled); err != nil {
 		t.Fatalf("read enabled state: %v", err)
 	}
-	if enabled || loadCalls.Load() < 2 {
-		t.Fatalf("enabled=%v Caddy loads=%d, want disabled with runtime rollback", enabled, loadCalls.Load())
+	if enabled || loadCalls.Load() == 0 {
+		t.Fatalf("enabled=%v Caddy loads=%d, want disabled with candidate apply", enabled, loadCalls.Load())
 	}
 }
 
@@ -328,6 +364,129 @@ func TestRuleToggle_restores_original_state_when_Caddy_apply_fails(t *testing.T)
 	}
 }
 
+func TestRuleWriteEndpoints_roll_back_database_when_Caddy_apply_fails(t *testing.T) {
+	tests := []struct {
+		name   string
+		seed   func(*testing.T)
+		mount  func(*gin.Engine, *Handlers)
+		method string
+		path   string
+		body   string
+		assert func(*testing.T)
+	}{
+		{
+			name: "create", method: http.MethodPost, path: "/rules", body: `{"name":"candidate","protocol":"tcp","listen_port":19001,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`,
+			seed: func(t *testing.T) {
+				if _, err := db.DB.Exec(`CREATE TRIGGER block_create_compensation BEFORE DELETE ON lb_rules WHEN OLD.name='candidate' BEGIN SELECT RAISE(ABORT,'delete blocked'); END`); err != nil {
+					t.Fatalf("create compensation blocker: %v", err)
+				}
+			},
+			mount: func(router *gin.Engine, handler *Handlers) { router.POST("/rules", handler.CreateRule) },
+			assert: func(t *testing.T) {
+				var count int
+				if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE name='candidate'").Scan(&count); err != nil {
+					t.Fatalf("count candidate rule: %v", err)
+				}
+				if count != 0 {
+					t.Fatalf("candidate rule count=%d, want transaction rollback", count)
+				}
+			},
+		},
+		{
+			name: "update", method: http.MethodPut, path: "/rules/lb_tx_update", body: `{"name":"candidate"}`,
+			seed: func(t *testing.T) {
+				seedAuditRule(t, "lb_tx_update", "before", "update.example.test", 19002, true, "manual", false)
+				if _, err := db.DB.Exec("INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_tx_update','127.0.0.1',9000,1,1,'tcp')"); err != nil {
+					t.Fatalf("seed TCP upstream: %v", err)
+				}
+				if _, err := db.DB.Exec(`UPDATE lb_rules SET protocol='tcp' WHERE caddy_id='lb_tx_update'; CREATE TRIGGER block_update_compensation BEFORE DELETE ON lb_rules WHEN OLD.name='candidate' BEGIN SELECT RAISE(ABORT,'delete blocked'); END`); err != nil {
+					t.Fatalf("prepare update compensation blocker: %v", err)
+				}
+			},
+			mount: func(router *gin.Engine, handler *Handlers) { router.PUT("/rules/:caddy_id", handler.UpdateRule) },
+			assert: func(t *testing.T) {
+				var name string
+				if err := db.DB.QueryRow("SELECT name FROM lb_rules WHERE caddy_id='lb_tx_update'").Scan(&name); err != nil {
+					t.Fatalf("read updated rule: %v", err)
+				}
+				if name != "before" {
+					t.Fatalf("rule name=%q, want transaction rollback", name)
+				}
+			},
+		},
+		{
+			name: "enable", method: http.MethodPost, path: "/rules/lb_tx_enable/enable",
+			seed: func(t *testing.T) {
+				seedAuditRule(t, "lb_tx_enable", "enable", "enable-tx.example.test", 8080, false, "manual", false)
+				seedAuditUpstream(t, "lb_tx_enable")
+				if _, err := db.DB.Exec(`CREATE TRIGGER block_enable_compensation BEFORE UPDATE ON lb_rules WHEN OLD.enabled=1 AND NEW.enabled=0 BEGIN SELECT RAISE(ABORT,'restore blocked'); END`); err != nil {
+					t.Fatalf("create enable compensation blocker: %v", err)
+				}
+			},
+			mount: func(router *gin.Engine, handler *Handlers) {
+				router.POST("/rules/:caddy_id/enable", handler.EnableRule)
+			},
+			assert: func(t *testing.T) {
+				var enabled bool
+				if err := db.DB.QueryRow("SELECT enabled FROM lb_rules WHERE caddy_id='lb_tx_enable'").Scan(&enabled); err != nil {
+					t.Fatalf("read enabled state: %v", err)
+				}
+				if enabled {
+					t.Fatal("enable write remained after failed Caddy apply")
+				}
+			},
+		},
+		{
+			name: "disable", method: http.MethodPost, path: "/rules/lb_tx_disable/disable",
+			seed: func(t *testing.T) {
+				seedAuditRule(t, "lb_tx_disable", "disable", "disable-tx.example.test", 8080, true, "manual", false)
+				seedAuditUpstream(t, "lb_tx_disable")
+				if _, err := db.DB.Exec(`CREATE TRIGGER block_disable_compensation BEFORE UPDATE ON lb_rules WHEN OLD.enabled=0 AND NEW.enabled=1 BEGIN SELECT RAISE(ABORT,'restore blocked'); END`); err != nil {
+					t.Fatalf("create disable compensation blocker: %v", err)
+				}
+			},
+			mount: func(router *gin.Engine, handler *Handlers) {
+				router.POST("/rules/:caddy_id/disable", handler.DisableRule)
+			},
+			assert: func(t *testing.T) {
+				var enabled bool
+				if err := db.DB.QueryRow("SELECT enabled FROM lb_rules WHERE caddy_id='lb_tx_disable'").Scan(&enabled); err != nil {
+					t.Fatalf("read disabled state: %v", err)
+				}
+				if !enabled {
+					t.Fatal("disable write remained after failed Caddy apply")
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			var handler *Handlers
+			if test.name == "create" || test.name == "update" {
+				handler = newUpdateAuditRuleHandlers(t, "lb_tx_update", 1, false).handler
+			} else {
+				handler, _, _ = newAuditRuleHandlers(t, 1)
+			}
+			test.seed(t)
+			router := gin.New()
+			test.mount(router, handler)
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// When
+			router.ServeHTTP(response, request)
+
+			// Then
+			if response.Code == http.StatusOK || response.Code == http.StatusCreated {
+				t.Fatalf("write unexpectedly succeeded: %s", response.Body.String())
+			}
+			test.assert(t)
+		})
+	}
+}
+
 func TestDisableRule_returns_error_instead_of_panicking_when_cert_job_update_fails(t *testing.T) {
 	// Given
 	handler, _, _ := newAuditRuleHandlers(t, 0)
@@ -423,8 +582,8 @@ func TestUpdateRule_applies_explicit_false_boolean_fields(t *testing.T) {
 	if enabledCount != 0 {
 		t.Fatalf("explicit false fields left %d enabled values", enabledCount)
 	}
-	if !strings.Contains(currentConfig(), `"lb_bool_false"`) {
-		t.Fatalf("Caddy config lost updated route: %s", currentConfig())
+	if strings.Contains(currentConfig(), `"lb_bool_false"`) {
+		t.Fatalf("disabled route remained in Caddy config: %s", currentConfig())
 	}
 }
 
@@ -656,7 +815,7 @@ func TestUpdateRule_serializes_snapshot_commit_apply_and_restore(t *testing.T) {
 	}
 }
 
-func TestUpdateRuleACL_reports_database_restore_failure_separately(t *testing.T) {
+func TestUpdateRuleACL_rolls_back_database_when_Caddy_apply_fails(t *testing.T) {
 	// Given
 	handler, _, _ := newAuditRuleHandlers(t, 1)
 	seedAuditRule(t, "lb_acl_restore", "acl", "acl.example.test", 8080, true, "manual", false)
@@ -676,8 +835,15 @@ func TestUpdateRuleACL_reports_database_restore_failure_separately(t *testing.T)
 	router.ServeHTTP(response, request)
 
 	// Then
-	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "Caddy 与 DB 恢复均失败") {
+	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("ACL update status=%d body=%s", response.Code, response.Body.String())
+	}
+	var mode, list string
+	if err := db.DB.QueryRow("SELECT ip_acl_mode,ip_acl_list FROM lb_rules WHERE caddy_id='lb_acl_restore'").Scan(&mode, &list); err != nil {
+		t.Fatalf("read ACL after failed apply: %v", err)
+	}
+	if mode != "allow" || list != `["192.0.2.0/24"]` {
+		t.Fatalf("ACL=(%q,%q), want transaction rollback", mode, list)
 	}
 }
 
@@ -718,7 +884,7 @@ func newUpdateAuditRuleHandlers(t *testing.T, caddyID string, failedLoads int32,
 	firstRouteEntered := make(chan struct{})
 	releaseFirstRoute := make(chan struct{})
 	secondValidation := make(chan struct{})
-	harness := &updateAuditHarness{blockOnRoutePost: 2}
+	harness := &updateAuditHarness{blockOnRoutePost: 1}
 	var releaseOnce sync.Once
 	harness.release = func() { releaseOnce.Do(func() { close(releaseFirstRoute) }) }
 	t.Cleanup(harness.release)
@@ -746,13 +912,6 @@ func newUpdateAuditRuleHandlers(t *testing.T, caddyID string, failedLoads int32,
 				response.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			if routePosts.Add(1) == harness.blockOnRoutePost && failFirstRoute {
-				close(firstRouteEntered)
-				<-releaseFirstRoute
-				response.WriteHeader(http.StatusBadRequest)
-				_, _ = response.Write([]byte("route rejected"))
-				return
-			}
 			stateMu.Lock()
 			currentConfig = string(body)
 			stateMu.Unlock()
@@ -762,6 +921,13 @@ func newUpdateAuditRuleHandlers(t *testing.T, caddyID string, failedLoads int32,
 			body, err := io.ReadAll(request.Body)
 			if err != nil {
 				response.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			if routePosts.Add(1) == harness.blockOnRoutePost && failFirstRoute {
+				close(firstRouteEntered)
+				<-releaseFirstRoute
+				response.WriteHeader(http.StatusBadRequest)
+				_, _ = response.Write([]byte("load rejected"))
 				return
 			}
 			if loadCalls.Add(1) <= failedLoads {

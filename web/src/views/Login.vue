@@ -152,10 +152,11 @@ const loading = ref(false)
 const errorMessage = (caught: unknown, fallback: string): string => caught instanceof Error ? caught.message : fallback
 
 const handleLogin = async () => {
+  if (loading.value) return
   if (!formRef.value) return
 
   await formRef.value.validate(async (valid) => {
-    if (!valid) return
+    if (!valid || loading.value) return
 
     error.value = ''
     loading.value = true
@@ -170,10 +171,11 @@ const handleLogin = async () => {
 }
 
 const handleSetup = async () => {
+  if (loading.value) return
   if (!setupFormRef.value) return
 
   await setupFormRef.value.validate(async (valid) => {
-    if (!valid) return
+    if (!valid || loading.value) return
 
     error.value = ''
     loading.value = true

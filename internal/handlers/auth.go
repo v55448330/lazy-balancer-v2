@@ -130,6 +130,16 @@ func (h *Handlers) Logout(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})
 			return
 		}
+	} else {
+		userID, exists := c.Get("user_id")
+		if !exists {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})
+			return
+		}
+		if _, err := db.DB.Exec("UPDATE users SET password_version=password_version+1 WHERE id=?", userID); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})
+			return
+		}
 	}
 	services.RecordAuditLog(usernameStr, "登出", "用户认证", services.AuditResultPart("success"), c.ClientIP())
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Logged out"})

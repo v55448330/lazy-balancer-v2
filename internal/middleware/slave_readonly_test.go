@@ -78,6 +78,135 @@ func TestJWTLogout_revokes_only_current_token(t *testing.T) {
 	}
 }
 
+func TestJWTLogout_revokes_legacy_token_without_jti(t *testing.T) {
+	// Given
+	cfg := &config.Config{JWTSecret: "legacy-logout-secret"}
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("init database: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldDB)
+	})
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled,password_version) VALUES (2,'legacy-logout','hash','user',1,0)"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id": 2, "username": "legacy-logout", "exp": time.Now().Add(time.Hour).Unix(), "pwd_ver": 0,
+	})
+	signed, err := token.SignedString([]byte(cfg.JWTSecret))
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+	h := handlers.NewHandlers(handlers.Dependencies{Config: cfg})
+	router := gin.New()
+	router.Use(jwtAuth(cfg))
+	router.POST("/logout", h.Logout)
+	router.GET("/protected", noContent)
+	request := func(method, path string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer "+signed)
+		router.ServeHTTP(response, req)
+		return response
+	}
+
+	// When
+	logout := request(http.MethodPost, "/logout")
+	afterLogout := request(http.MethodGet, "/protected")
+
+	// Then
+	if logout.Code != http.StatusOK || afterLogout.Code != http.StatusUnauthorized {
+		t.Fatalf("logout=%d protected=%d body=%q", logout.Code, afterLogout.Code, afterLogout.Body.String())
+	}
+}
+
+func TestRevokedJTICleanup_runs_at_most_hourly(t *testing.T) {
+	// Given
+	database, err := sql.Open("sqlite", t.TempDir()+"/cleanup.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if _, err := database.Exec("CREATE TABLE revoked_jti (jti_hash TEXT PRIMARY KEY, expires_at DATETIME NOT NULL)"); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := &revokedJTICleanup{}
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	insertExpired := func(hash string) {
+		if _, err := database.Exec("INSERT INTO revoked_jti VALUES (?, ?)", hash, base.Add(-time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func() int {
+		var value int
+		if err := database.QueryRow("SELECT COUNT(*) FROM revoked_jti").Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+
+	// When
+	insertExpired("first")
+	if err := cleanup.run(database, base); err != nil {
+		t.Fatal(err)
+	}
+	insertExpired("within")
+	if err := cleanup.run(database, base.Add(59*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	withinCount := count()
+	if err := cleanup.run(database, base.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	afterCount := count()
+
+	// Then
+	if withinCount != 1 || afterCount != 0 {
+		t.Fatalf("within count=%d after count=%d", withinCount, afterCount)
+	}
+}
+
+func TestJWTAuth_rejects_username_mismatch_for_same_user_id(t *testing.T) {
+	// Given
+	cfg := &config.Config{JWTSecret: "username-secret"}
+	oldDB := db.DB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB = oldDB
+		db.SetDB(oldDB)
+	})
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled,password_version) VALUES (12,'current-name','hash','admin',1,0)"); err != nil {
+		t.Fatal(err)
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id": 12, "username": "imported-name", "exp": time.Now().Add(time.Hour).Unix(), "pwd_ver": 0,
+	})
+	signed, err := token.SignedString([]byte(cfg.JWTSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.Use(jwtAuth(cfg))
+	router.GET("/protected", noContent)
+	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	request.Header.Set("Authorization", "Bearer "+signed)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%q, want 401", response.Code, response.Body.String())
+	}
+}
+
 func TestJWTAuth_rejects_first_token_after_two_same_second_password_changes(t *testing.T) {
 	cfg := &config.Config{JWTSecret: "password-version-secret"}
 	oldDB := db.DB

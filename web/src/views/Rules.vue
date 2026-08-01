@@ -18,7 +18,7 @@
       <div class="table-toolbar">
         <el-input v-model="searchQuery" placeholder="搜索规则名 / 域名 / 端口" clearable :prefix-icon="Search" class="search-input" />
       </div>
-      <el-table :data="pagedRules" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+      <el-table :data="pagedRules" row-key="caddy_id" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <el-table-column prop="name" label="规则名称" min-width="140">
           <template #default="{ row }">
             <div class="rule-name-cell">
@@ -1134,6 +1134,8 @@ interface RuleLogStats {
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
+const abortController = new AbortController()
+let disposed = false
 
 const certTypeLabels = {
   auto: 'ACME 自动证书',
@@ -1224,11 +1226,12 @@ const getUpdaterName = (userId?: number) => {
 }
 
 const fetchRules = async () => {
+  if (disposed) return
   const requestSeq = ++rulesRequestSeq
   loading.value = true
   try {
-    const res = await request.get<APIResponse<Rule[]>>('/rules')
-    if (requestSeq !== rulesRequestSeq) return
+    const res = await request.get<APIResponse<Rule[]>>('/rules', { signal: abortController.signal })
+    if (disposed || requestSeq !== rulesRequestSeq) return
     rules.value = res.data || []
     // Fetch health status after rules are loaded
     fetchHealthStatus()
@@ -1237,11 +1240,12 @@ const fetchRules = async () => {
     // Fetch cert job statuses for ACME rules
     fetchCertJobs()
   } finally {
-    if (requestSeq === rulesRequestSeq) loading.value = false
+    if (!disposed && requestSeq === rulesRequestSeq) loading.value = false
   }
 }
 
 const fetchCertInfo = async (caddyIds?: readonly string[]) => {
+  if (disposed) return
   const requestedIds = caddyIds ? new Set(caddyIds) : null
   const tlsRules = rules.value.filter(r => r.enable_tls && (!requestedIds || requestedIds.has(r.caddy_id)))
   const targetIds = tlsRules.map(r => r.caddy_id)
@@ -1270,9 +1274,11 @@ const fetchCertInfo = async (caddyIds?: readonly string[]) => {
       const batchIds = targetIds.slice(index, index + 200)
       const res = await request.post<APIResponse<Record<string, CertInfo | null>>>('/rules/cert-info', {
         caddy_ids: batchIds,
-      })
+      }, { signal: abortController.signal })
+      if (disposed) return
       Object.assign(certInfo, res.data || {})
     }
+    if (disposed) return
     const patch: Record<string, CertInfo | null> = {}
     targetIds.forEach(id => {
       if (certInfoGenerations.get(id) === generation) patch[id] = certInfo[id] ?? null
@@ -1286,6 +1292,7 @@ const fetchCertInfo = async (caddyIds?: readonly string[]) => {
 let certJobsInFlight = false
 let certJobsPending = false
 const fetchCertJobs = async () => {
+  if (disposed) return
   if (certJobsInFlight) {
     certJobsPending = true
     return
@@ -1293,7 +1300,8 @@ const fetchCertJobs = async () => {
   certJobsInFlight = true
   certJobsPending = false
   try {
-    const res = await request.get<APIResponse<CertJob[]>>('/certificates/jobs')
+    const res = await request.get<APIResponse<CertJob[]>>('/certificates/jobs', { signal: abortController.signal })
+    if (disposed) return
     const jobs: CertJob[] = res.data || []
     const map: Record<string, CertJob> = {}
     jobs.forEach(job => {
@@ -1310,12 +1318,13 @@ const fetchCertJobs = async () => {
         return previousStatus !== undefined && previousStatus !== 'issued' && job.status === 'issued'
       })
       .map(([ruleId]) => ruleId)
+    if (disposed) return
     certJobMap.value = map
     if (newlyIssuedRuleIds.length > 0) await fetchCertInfo(newlyIssuedRuleIds)
   } catch {
     return
   } finally {
-    const shouldDrain = certJobsPending
+    const shouldDrain = !disposed && certJobsPending
     certJobsPending = false
     certJobsInFlight = false
     if (shouldDrain) {
@@ -1392,6 +1401,7 @@ const WIZARD_STEP = {
 type WizardStep = (typeof WIZARD_STEP)[keyof typeof WIZARD_STEP]
 const currentStep = ref<WizardStep>(WIZARD_STEP.BASIC)
 const upstreamTouched = ref<boolean[]>([])
+let nextTemporaryPathRuleId = -1
 const certConfigs = ref<CertificateConfig[]>([])
 const caProviders = ref<CAProvider[]>([])
 const enabledCAProviders = computed(() => caProviders.value.filter(p => p.enabled))
@@ -1503,6 +1513,7 @@ const formatUpdatedTime = (updatedAt: Rule['updated_at']): string => {
 let healthInFlight = false
 let healthPending = false
 const fetchHealthStatus = async () => {
+  if (disposed) return
   if (healthInFlight) {
     healthPending = true
     return
@@ -1510,7 +1521,8 @@ const fetchHealthStatus = async () => {
   healthInFlight = true
   healthPending = false
   try {
-    const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health')
+    const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health', { signal: abortController.signal })
+    if (disposed) return
     const healthData = res.data || {}
     const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
     for (const rule of rules.value) {
@@ -1554,11 +1566,11 @@ const fetchHealthStatus = async () => {
         }
       }
     }
-    healthStatus.value = mapped
+    if (!disposed) healthStatus.value = mapped
   } catch (error: unknown) {
-    console.error('Failed to fetch health status:', error)
+    if (!disposed) console.error('Failed to fetch health status:', error)
   } finally {
-    const shouldDrain = healthPending
+    const shouldDrain = !disposed && healthPending
     healthPending = false
     healthInFlight = false
     if (shouldDrain) {
@@ -1662,6 +1674,16 @@ const wizardForm = reactive<RuleForm>({
   proxy_write_timeout: 0,
   proxy_stream_timeout: 0,
 })
+
+watch(() => wizardForm.path_rules, (pathRules) => {
+  pathRules.forEach((pathRule) => {
+    if (pathRule.id === undefined) {
+      pathRule.id = nextTemporaryPathRuleId
+      nextTemporaryPathRuleId -= 1
+    }
+  })
+}, { deep: true })
+
 let hydratingWizard = false
 
 // Watch for enable_tls toggle to adjust default listen port
@@ -2115,7 +2137,8 @@ const removeUpstream = (index: number) => {
 
 const onCustomRoutesToggle = (enabled: string | number | boolean): void => {
   if (Boolean(enabled) && wizardForm.path_rules.length === 0) {
-    wizardForm.path_rules.push({ match_type: 'prefix', path: '/', sort_order: 0, upstreams: null })
+    wizardForm.path_rules.push({ id: nextTemporaryPathRuleId, match_type: 'prefix', path: '/', sort_order: 0, upstreams: null })
+    nextTemporaryPathRuleId -= 1
   }
   if (!enabled) wizardForm.path_rules = []
 }
@@ -2312,7 +2335,9 @@ const submitWizard = async () => {
       custom_routes_enabled: wizardForm.protocol === 'http' && wizardForm.custom_routes_enabled,
       path_rules: wizardForm.protocol === 'http' && wizardForm.custom_routes_enabled
         ? wizardForm.path_rules.map((pathRule, index) => ({
-            ...pathRule,
+            ...(pathRule.id !== undefined && pathRule.id > 0 ? { id: pathRule.id } : {}),
+            match_type: pathRule.match_type,
+            path: pathRule.path,
             sort_order: index,
             upstreams: pathRule.upstreams?.map((upstream) => ({ ...upstream })) || null,
           }))
@@ -2685,7 +2710,7 @@ const rebuildStatsView = (m: { ip: Record<string, number>; ua: Record<string, nu
 }
 
 const fetchLogStream = async () => {
-  if (!ruleLogCaddyId.value || ruleLogStatsLoading.value || logStatsInFlight.value) return
+  if (disposed || !ruleLogCaddyId.value || ruleLogStatsLoading.value || logStatsInFlight.value) return
   const targetId = ruleLogCaddyId.value
   const targetMaps = logStatsMaps.value
   const targetOffset = logStatsOffset.value
@@ -2693,12 +2718,13 @@ const fetchLogStream = async () => {
   if (!targetMaps) return
   logStatsInFlight.value = true
   try {
-    const res = await request.get<APIResponse<RuleLogStreamData>>(`/rules/${targetId}/log-stream`, { params: { offset: targetOffset } })
-    if (requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== targetMaps) return
+    const res = await request.get<APIResponse<RuleLogStreamData>>(`/rules/${targetId}/log-stream`, { params: { offset: targetOffset }, signal: abortController.signal })
+    if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== targetMaps) return
     const lines: string[] = res.data?.lines || []
     if (lines.length) {
       const completed = await consumeLogLinesChunked(lines, targetMaps, () => (
-        requestSeq === ruleLogRequestSeq
+        !disposed
+        && requestSeq === ruleLogRequestSeq
         && ruleLogDialogVisible.value
         && ruleLogTab.value === 'stats'
         && ruleLogCaddyId.value === targetId
@@ -2709,13 +2735,14 @@ const fetchLogStream = async () => {
     }
     logStatsOffset.value = res.data?.offset ?? targetOffset
   } catch (error: unknown) {
-    console.error('Failed to fetch log stream:', error)
+    if (!disposed) console.error('Failed to fetch log stream:', error)
   } finally {
-    if (requestSeq === ruleLogRequestSeq) logStatsInFlight.value = false
+    if (!disposed && requestSeq === ruleLogRequestSeq) logStatsInFlight.value = false
   }
 }
 
 const startLogStats = async () => {
+  if (disposed) return
   const targetId = ruleLogCaddyId.value
   if (!targetId) return
   const requestSeq = ++ruleLogRequestSeq
@@ -2726,11 +2753,12 @@ const startLogStats = async () => {
   ruleLogStatsError.value = ''
   logStatsOffset.value = 0
   try {
-    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`)
-    if (requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== maps) return
+    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`, { signal: abortController.signal })
+    if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== maps) return
     const content: string = res.data?.content || ''
     const completed = await consumeLogLinesChunked(content.split('\n'), maps, () => (
-      requestSeq === ruleLogRequestSeq
+      !disposed
+      && requestSeq === ruleLogRequestSeq
       && ruleLogDialogVisible.value
       && ruleLogTab.value === 'stats'
       && ruleLogCaddyId.value === targetId
@@ -2740,11 +2768,11 @@ const startLogStats = async () => {
     rebuildStatsView(maps)
     logStatsOffset.value = res.data?.offset ?? 0
   } catch (error: unknown) {
-    if (requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== maps) return
+    if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== maps) return
     console.error('Failed to init log stats:', error)
     ruleLogStatsError.value = error instanceof Error ? error.message : '请稍后重试'
   } finally {
-    if (requestSeq === ruleLogRequestSeq) ruleLogStatsLoading.value = false
+    if (!disposed && requestSeq === ruleLogRequestSeq) ruleLogStatsLoading.value = false
   }
 }
 
@@ -2798,6 +2826,7 @@ const stopRuleLogPolling = () => {
 }
 
 const refreshRuleLogs = async () => {
+  if (disposed) return
   if (ruleLogTab.value === 'stats') {
     fetchLogStream()
     return
@@ -2807,17 +2836,18 @@ const refreshRuleLogs = async () => {
   const requestSeq = ++ruleLogRequestSeq
   ruleLogLoading.value = true
   try {
-    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`)
-    if (requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'log' || ruleLogCaddyId.value !== targetId) return
+    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`, { signal: abortController.signal })
+    if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'log' || ruleLogCaddyId.value !== targetId) return
     ruleLogContent.value = res.data?.content || ''
     nextTick(() => {
+      if (disposed) return
       const el = ruleLogContainerRef.value
       if (el) el.scrollTop = el.scrollHeight
     })
   } catch (error: unknown) {
-    console.error('Failed to fetch rule logs:', error)
+    if (!disposed) console.error('Failed to fetch rule logs:', error)
   } finally {
-    if (requestSeq === ruleLogRequestSeq) ruleLogLoading.value = false
+    if (!disposed && requestSeq === ruleLogRequestSeq) ruleLogLoading.value = false
   }
 }
 
@@ -2842,6 +2872,14 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  disposed = true
+  abortController.abort()
+  rulesRequestSeq++
+  configRequestSeq++
+  ruleLogRequestSeq++
+  certInfoGeneration++
+  healthPending = false
+  certJobsPending = false
   stopRuleLogPolling()
   if (healthPollTimer) {
     clearInterval(healthPollTimer)

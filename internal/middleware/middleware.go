@@ -2,7 +2,10 @@ package middleware
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"lazy-balancer-v2/internal/config"
@@ -24,6 +28,26 @@ import (
 	"github.com/gin-gonic/gin"
 	jwt "github.com/golang-jwt/jwt/v5"
 )
+
+var internalMCPAuthSecret = rand.Text()
+
+type revokedJTICleanup struct {
+	mu      sync.Mutex
+	lastRun time.Time
+}
+
+func (cleanup *revokedJTICleanup) run(database *sql.DB, now time.Time) error {
+	cleanup.mu.Lock()
+	defer cleanup.mu.Unlock()
+	if !cleanup.lastRun.IsZero() && now.Sub(cleanup.lastRun) < time.Hour {
+		return nil
+	}
+	if _, err := database.Exec("DELETE FROM revoked_jti WHERE expires_at <= ?", now.UTC()); err != nil {
+		return fmt.Errorf("cleanup revoked JWT IDs: %w", err)
+	}
+	cleanup.lastRun = now
+	return nil
+}
 
 func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	services.ApplyLogLevel()
@@ -64,7 +88,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	// API routes
 	v1 := r.Group("/api/v1")
 	{
-		mcpHandler := mcpserver.New(fmt.Sprintf("http://127.0.0.1:%d/api/v1", cfg.Port), loopbackAPIClient())
+		mcpHandler := mcpserver.NewWithInternalAuth(fmt.Sprintf("http://127.0.0.1:%d/api/v1", cfg.Port), loopbackAPIClient(), internalMCPAuthSecret)
 		v1.POST("/mcp", apiKeyAuth(cfg), mcpAccessGuard(), func(c *gin.Context) {
 			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 			body, err := io.ReadAll(c.Request.Body)
@@ -287,6 +311,7 @@ func corsMiddleware() gin.HandlerFunc {
 }
 
 func jwtAuth(cfg *config.Config) gin.HandlerFunc {
+	cleanup := &revokedJTICleanup{}
 	return func(c *gin.Context) {
 		if c.GetString("auth_type") == "api_key" {
 			c.Next()
@@ -323,14 +348,15 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 		if jti, exists := claims["jti"].(string); exists && jti != "" {
-			if _, err := db.DB.Exec("DELETE FROM revoked_jti WHERE datetime(expires_at) <= datetime('now')"); err != nil {
+			now := time.Now().UTC()
+			if err := cleanup.run(db.DB, now); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "认证状态检查失败"})
 				c.Abort()
 				return
 			}
 			hash := sha256.Sum256([]byte(jti))
 			var revoked int
-			if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM revoked_jti WHERE jti_hash=? AND datetime(expires_at) > datetime('now'))", hex.EncodeToString(hash[:])).Scan(&revoked); err != nil {
+			if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM revoked_jti WHERE jti_hash=? AND expires_at > ?)", hex.EncodeToString(hash[:]), now).Scan(&revoked); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "认证状态检查失败"})
 				c.Abort()
 				return
@@ -354,11 +380,17 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		var dbRole string
+		var dbUsername, dbRole string
 		var dbEnabled bool
 		var passwordVersion int64
-		if err := db.DB.QueryRow("SELECT role, COALESCE(is_enabled,1), password_version FROM users WHERE id = ?", int64(userIDFloat)).Scan(&dbRole, &dbEnabled, &passwordVersion); err != nil || !dbEnabled {
+		if err := db.DB.QueryRow("SELECT username, role, COALESCE(is_enabled,1), password_version FROM users WHERE id = ?", int64(userIDFloat)).Scan(&dbUsername, &dbRole, &dbEnabled, &passwordVersion); err != nil || !dbEnabled {
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在或已禁用"})
+			c.Abort()
+			return
+		}
+		claimUsername, valid := claims["username"].(string)
+		if !valid || claimUsername != dbUsername {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录凭证无效"})
 			c.Abort()
 			return
 		}
@@ -438,7 +470,8 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if mcpIPWhitelist != "" {
+		trustedInternalMCP := subtle.ConstantTimeCompare([]byte(c.GetHeader(mcpserver.InternalAuthHeader)), []byte(internalMCPAuthSecret)) == 1
+		if mcpIPWhitelist != "" && !trustedInternalMCP {
 			var whitelist []string
 			if err := json.Unmarshal([]byte(mcpIPWhitelist), &whitelist); err != nil {
 				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "API Key IP 白名单配置无效"})

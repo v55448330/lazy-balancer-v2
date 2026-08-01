@@ -98,6 +98,9 @@ interface LoginTicketResponse {
 }
 
 const authStore = useAuthStore()
+const abortController = new AbortController()
+let disposed = false
+let requestSequence = 0
 const status = ref<ClusterStatus | null>(null)
 const nodes = ref<readonly ClusterNode[]>([])
 const initialLoading = ref(true)
@@ -121,25 +124,31 @@ const clusterModeChanging = computed(() => syncing.value || promoting.value || m
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 const fetchStatus = async (): Promise<ClusterStatus> => {
-  const response = await request.get<ApiResponse<ClusterStatus>>('/cluster/status')
-  status.value = response.data
-  authStore.setNodeMode(response.data.node_mode)
+  const requestSeq = requestSequence
+  const response = await request.get<ApiResponse<ClusterStatus>>('/cluster/status', { signal: abortController.signal })
+  if (!disposed && requestSeq === requestSequence) {
+    status.value = response.data
+    authStore.setNodeMode(response.data.node_mode)
+  }
   return response.data
 }
 
 const fetchNodes = async (): Promise<void> => {
+  if (disposed) return
+  const requestSeq = requestSequence
   nodesLoading.value = true
   try {
-    const response = await request.get<ApiResponse<readonly ClusterNode[]>>('/cluster/nodes')
-    nodes.value = response.data
+    const response = await request.get<ApiResponse<readonly ClusterNode[]>>('/cluster/nodes', { signal: abortController.signal })
+    if (!disposed && requestSeq === requestSequence) nodes.value = response.data
   } finally {
-    nodesLoading.value = false
+    if (!disposed && requestSeq === requestSequence) nodesLoading.value = false
   }
 }
 
 let refreshInFlight: Promise<void> | null = null
 let refreshPending = false
 const refreshCluster = async (): Promise<void> => {
+  if (disposed) return
   if (refreshInFlight) {
     refreshPending = true
     await refreshInFlight
@@ -148,6 +157,7 @@ const refreshCluster = async (): Promise<void> => {
   refreshPending = false
   refreshInFlight = (async () => {
     const currentStatus = await fetchStatus()
+    if (disposed) return
     if (currentStatus.node_mode === 'master') {
       await fetchNodes()
     } else {
@@ -157,7 +167,7 @@ const refreshCluster = async (): Promise<void> => {
   try {
     await refreshInFlight
   } finally {
-    const shouldDrain = refreshPending
+    const shouldDrain = !disposed && refreshPending
     refreshPending = false
     refreshInFlight = null
     if (shouldDrain) {
@@ -363,14 +373,19 @@ onMounted(async () => {
   try {
     await refreshCluster().catch(() => undefined)
   } finally {
-    initialLoading.value = false
+    if (!disposed) initialLoading.value = false
   }
+  if (disposed) return
   refreshTimer = setInterval(() => {
     void refreshCluster().catch(() => undefined)
   }, 15000)
 })
 
 onUnmounted(() => {
+  disposed = true
+  requestSequence++
+  abortController.abort()
+  refreshPending = false
   if (refreshTimer) clearInterval(refreshTimer)
 })
 </script>

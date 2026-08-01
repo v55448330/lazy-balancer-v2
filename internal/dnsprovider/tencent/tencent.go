@@ -2,8 +2,10 @@ package tencent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
@@ -15,6 +17,8 @@ type Provider struct {
 	SecretID  string
 	SecretKey string
 	client    *dnspod.Client
+	mu        sync.Mutex
+	owned     map[string][]uint64
 }
 
 // New creates a Tencent Cloud DNSPod provider.
@@ -30,6 +34,7 @@ func New(secretID, secretKey string) (*Provider, error) {
 		SecretID:  secretID,
 		SecretKey: secretKey,
 		client:    client,
+		owned:     make(map[string][]uint64),
 	}, nil
 }
 
@@ -39,14 +44,14 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 	subDomain := strings.TrimSuffix(tokenFQDN, ".")
 	subDomain = strings.TrimSuffix(subDomain, "."+zone)
 
-	recordID, err := p.findRecordID(ctx, zone, subDomain)
+	recordID, err := p.createRecord(ctx, zone, subDomain, value, ttl)
 	if err != nil {
 		return err
 	}
-	if recordID != 0 {
-		return p.modifyRecord(ctx, zone, recordID, subDomain, value, ttl)
-	}
-	return p.createRecord(ctx, zone, subDomain, value, ttl)
+	p.mu.Lock()
+	p.owned[zone+"|"+subDomain] = append(p.owned[zone+"|"+subDomain], recordID)
+	p.mu.Unlock()
+	return nil
 }
 
 // CleanUp removes the _acme-challenge TXT record.
@@ -55,19 +60,31 @@ func (p *Provider) CleanUp(ctx context.Context, zone, tokenFQDN string) error {
 	subDomain := strings.TrimSuffix(tokenFQDN, ".")
 	subDomain = strings.TrimSuffix(subDomain, "."+zone)
 
-	recordID, err := p.findRecordID(ctx, zone, subDomain)
-	if err != nil || recordID == 0 {
-		return err
+	key := zone + "|" + subDomain
+	p.mu.Lock()
+	recordIDs := append([]uint64(nil), p.owned[key]...)
+	delete(p.owned, key)
+	p.mu.Unlock()
+	var cleanupErr error
+	var failed []uint64
+	for _, recordID := range recordIDs {
+		req := dnspod.NewDeleteRecordRequest()
+		req.Domain = common.StringPtr(zone)
+		req.RecordId = common.Uint64Ptr(recordID)
+		if _, err := p.client.DeleteRecordWithContext(ctx, req); err != nil {
+			if ctx.Err() != nil {
+				err = ctx.Err()
+			}
+			failed = append(failed, recordID)
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("DeleteRecord failed: %w", err))
+		}
 	}
-
-	req := dnspod.NewDeleteRecordRequest()
-	req.Domain = common.StringPtr(zone)
-	req.RecordId = common.Uint64Ptr(recordID)
-	_, err = p.client.DeleteRecord(req)
-	if err != nil {
-		return fmt.Errorf("DeleteRecord failed: %w", err)
+	if len(failed) > 0 {
+		p.mu.Lock()
+		p.owned[key] = append(p.owned[key], failed...)
+		p.mu.Unlock()
 	}
-	return nil
+	return cleanupErr
 }
 
 func (p *Provider) findRecordID(ctx context.Context, zone, subDomain string) (uint64, error) {
@@ -75,8 +92,11 @@ func (p *Provider) findRecordID(ctx context.Context, zone, subDomain string) (ui
 	req.Domain = common.StringPtr(zone)
 	req.Subdomain = common.StringPtr(subDomain)
 
-	resp, err := p.client.DescribeRecordList(req)
+	resp, err := p.client.DescribeRecordListWithContext(ctx, req)
 	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		return 0, fmt.Errorf("DescribeRecordList failed: %w", err)
 	}
 	if resp.Response == nil || resp.Response.RecordList == nil {
@@ -90,7 +110,7 @@ func (p *Provider) findRecordID(ctx context.Context, zone, subDomain string) (ui
 	return 0, nil
 }
 
-func (p *Provider) createRecord(ctx context.Context, zone, subDomain, value string, ttl int) error {
+func (p *Provider) createRecord(ctx context.Context, zone, subDomain, value string, ttl int) (uint64, error) {
 	req := dnspod.NewCreateRecordRequest()
 	req.Domain = common.StringPtr(zone)
 	req.RecordType = common.StringPtr("TXT")
@@ -99,11 +119,17 @@ func (p *Provider) createRecord(ctx context.Context, zone, subDomain, value stri
 	req.SubDomain = common.StringPtr(subDomain)
 	req.TTL = common.Uint64Ptr(uint64(ttl))
 
-	_, err := p.client.CreateRecord(req)
+	resp, err := p.client.CreateRecordWithContext(ctx, req)
 	if err != nil {
-		return fmt.Errorf("CreateRecord failed: %w", err)
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		return 0, fmt.Errorf("CreateRecord failed: %w", err)
 	}
-	return nil
+	if resp.Response == nil || resp.Response.RecordId == nil {
+		return 0, fmt.Errorf("CreateRecord returned no record ID")
+	}
+	return *resp.Response.RecordId, nil
 }
 
 func (p *Provider) modifyRecord(ctx context.Context, zone string, recordID uint64, subDomain, value string, ttl int) error {
@@ -116,8 +142,11 @@ func (p *Provider) modifyRecord(ctx context.Context, zone string, recordID uint6
 	req.SubDomain = common.StringPtr(subDomain)
 	req.TTL = common.Uint64Ptr(uint64(ttl))
 
-	_, err := p.client.ModifyRecord(req)
+	_, err := p.client.ModifyRecordWithContext(ctx, req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("ModifyRecord failed: %w", err)
 	}
 	return nil

@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -136,6 +137,45 @@ func TestImportV1Config_rolls_back_when_certificate_materialization_fails(t *tes
 	}
 	if oldRules != 1 {
 		t.Fatalf("old rule count=%d, want 1", oldRules)
+	}
+}
+
+func TestValidateConfigImport_rejects_disabled_v1_rule_with_out_of_range_port(t *testing.T) {
+	tests := []struct {
+		name       string
+		listenPort int
+		upstream   int
+	}{
+		{name: "zero listen port", listenPort: 0, upstream: 9000},
+		{name: "listen port above maximum", listenPort: 65536, upstream: 9000},
+		{name: "zero upstream port", listenPort: 8080, upstream: 0},
+		{name: "upstream port above maximum", listenPort: 8080, upstream: 65536},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			h := newBackupTestHandlers(t)
+			backup := fmt.Sprintf(`{"proxy_config":{"config":[{"pk":1,"fields":{"proxy_name":"disabled","protocol":true,"listen":%d,"server_name":"disabled.example.test","status":false,"upstream_list":[1]}}]},"upstream_config":{"config":[{"pk":1,"fields":{"status":true,"address":"127.0.0.1","port":%d,"weight":100}}]}}`, test.listenPort, test.upstream)
+			router := gin.New()
+			router.POST("/config/validate", h.ValidateConfigImport)
+			request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(backup))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// When
+			router.ServeHTTP(response, request)
+
+			// Then
+			var envelope struct {
+				Data importValidateResponse `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("decode validation response: %v", err)
+			}
+			if envelope.Data.Valid {
+				t.Fatalf("validation accepted invalid disabled rule: %s", response.Body.String())
+			}
+		})
 	}
 }
 

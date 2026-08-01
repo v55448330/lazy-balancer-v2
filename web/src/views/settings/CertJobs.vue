@@ -2,6 +2,7 @@
   <el-table
     v-if="loading || jobs.length > 0"
     :data="jobs"
+    row-key="id"
     size="small"
     v-loading="loading"
     class="cert-jobs-table"
@@ -59,7 +60,7 @@
         <el-button link type="primary" size="small" @click="viewLogs(row)">日志</el-button>
         <el-tooltip :disabled="!retryDisabledReason(row)" :content="retryDisabledReason(row)">
           <span>
-            <el-button link type="primary" size="small" :disabled="isReadOnly || !canRetry(row)" @click="retryJob(row)">重签</el-button>
+            <el-button link type="primary" size="small" :loading="retryingJobIds.has(row.id)" :disabled="isReadOnly || !canRetry(row) || retryingJobIds.has(row.id)" @click="retryJob(row)">重签</el-button>
           </span>
         </el-tooltip>
       </template>
@@ -127,11 +128,15 @@ const props = defineProps<{
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
+const abortController = new AbortController()
+let disposed = false
+let jobsRequestSeq = 0
 
 const jobs = ref<CertJob[]>([])
 const loading = ref(false)
 const certInfoMap = ref<Record<number, CertInfo>>({})
 const certRenewalDays = ref(30)
+const retryingJobIds = ref(new Set<number>())
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const logDialogVisible = ref(false)
@@ -153,6 +158,7 @@ const logHtml = computed(() => {
 
 const scrollToBottom = async () => {
   await nextTick()
+  if (disposed) return
   if (logContainerRef.value) {
     logContainerRef.value.scrollTop = logContainerRef.value.scrollHeight
   }
@@ -264,20 +270,22 @@ const formatCoolingTime = (iso: string): string => {
 }
 
 const fetchJobs = async () => {
-  if (loading.value) return
+  if (disposed || loading.value) return
+  const requestSeq = ++jobsRequestSeq
   loading.value = true
   try {
     const [jobsRes, configRes] = await Promise.all([
-      request.get<APIResponse<CertJob[]>>('/certificates/jobs', { params: props.ruleId ? { rule_id: props.ruleId } : {} }),
-      request.get('/config'),
+      request.get<APIResponse<CertJob[]>>('/certificates/jobs', { params: props.ruleId ? { rule_id: props.ruleId } : {}, signal: abortController.signal }),
+      request.get('/config', { signal: abortController.signal }),
     ])
+    if (disposed || requestSeq !== jobsRequestSeq) return
     jobs.value = jobsRes.data || []
     certRenewalDays.value = configRes.data?.cert_renewal_days ?? 30
     await fetchCertInfo()
-  } catch (error) {
-    console.error('Failed to fetch cert jobs:', error)
+  } catch (error: unknown) {
+    if (!disposed && requestSeq === jobsRequestSeq) console.error('Failed to fetch cert jobs:', error)
   } finally {
-    loading.value = false
+    if (!disposed && requestSeq === jobsRequestSeq) loading.value = false
   }
 }
 
@@ -310,6 +318,7 @@ const parseCertInfo = (certPEM: string): CertInfo | null => {
 }
 
 const fetchCertInfo = async () => {
+  if (disposed) return
   const issuedJobs = jobs.value.filter(j => j.status === 'issued' && j.cert_pem)
   const newMap: Record<number, CertInfo> = {}
   for (const job of issuedJobs) {
@@ -322,7 +331,7 @@ const fetchCertInfo = async () => {
 }
 
 const retryJob = async (row: CertJob) => {
-  if (isReadOnly.value || !canRetry(row)) return
+  if (isReadOnly.value || !canRetry(row) || retryingJobIds.value.has(row.id)) return
   const isWaitingCA = row.status === 'waiting_ca'
   const message = isWaitingCA
     ? '任务当前处于"等待 CA"状态（可能仍在频率冷却中）。确定要立即重新签发吗？如果使用同一 CA 且冷却未到，可能再次被拒绝。'
@@ -332,13 +341,22 @@ const retryJob = async (row: CertJob) => {
   } catch {
     return
   }
+  if (disposed || retryingJobIds.value.has(row.id)) return
+  retryingJobIds.value = new Set(retryingJobIds.value).add(row.id)
   try {
-    await request.post(`/certificates/jobs/${row.id}/retry`)
+    await request.post(`/certificates/jobs/${row.id}/retry`, undefined, { signal: abortController.signal })
+    if (disposed) return
     ElMessage.success('重新签发已触发')
-    fetchJobs()
+    await fetchJobs()
   } catch (error: unknown) {
     // Error toast is already shown by the global axios interceptor.
-    console.error('Failed to retry cert job:', error)
+    if (!disposed) console.error('Failed to retry cert job:', error)
+  } finally {
+    if (!disposed) {
+      const nextRetryingIds = new Set(retryingJobIds.value)
+      nextRetryingIds.delete(row.id)
+      retryingJobIds.value = nextRetryingIds
+    }
   }
 }
 
@@ -374,22 +392,22 @@ const stopLogPolling = () => {
 }
 
 const refreshLogs = async () => {
-  if (!currentJob.value || logLoading.value) return
+  if (disposed || !currentJob.value || logLoading.value) return
   const jobId = currentJob.value.id
   const requestSeq = ++logRequestSeq
   logLoading.value = true
   try {
-    const res = await request.get<APIResponse<{ content: string }>>(`/certificates/jobs/${jobId}/logs`)
-    if (!logDialogVisible.value || currentJob.value?.id !== jobId || requestSeq !== logRequestSeq) return
+    const res = await request.get<APIResponse<{ content: string }>>(`/certificates/jobs/${jobId}/logs`, { signal: abortController.signal })
+    if (disposed || !logDialogVisible.value || currentJob.value?.id !== jobId || requestSeq !== logRequestSeq) return
     logContent.value = res.data?.content || ''
     await scrollToBottom()
   } catch (error) {
-    if (logDialogVisible.value && currentJob.value?.id === jobId && requestSeq === logRequestSeq) {
+    if (!disposed && logDialogVisible.value && currentJob.value?.id === jobId && requestSeq === logRequestSeq) {
       console.error('Failed to fetch cert job logs:', error)
       ElMessage.error('获取日志失败')
     }
   } finally {
-    if (requestSeq === logRequestSeq) logLoading.value = false
+    if (!disposed && requestSeq === logRequestSeq) logLoading.value = false
   }
 }
 
@@ -399,6 +417,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  disposed = true
+  jobsRequestSeq++
+  logRequestSeq++
+  abortController.abort()
   if (pollTimer) clearInterval(pollTimer)
   stopLogPolling()
 })

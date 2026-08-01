@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -473,5 +474,197 @@ func TestParseCPUSnapshot_includes_idle_and_iowait(t *testing.T) {
 	snapshot, ok := parseCPUSnapshot("cpu  10 20 30 40 5 6 7 8 0 0\ncpu0 1 2 3 4")
 	if !ok || snapshot.total != 126 || snapshot.idle != 45 {
 		t.Fatalf("parseCPUSnapshot()=%+v,%v, want total=126 idle=45", snapshot, ok)
+	}
+}
+
+func TestGetCPUPercent_serializes_sample_read_with_baseline_update(t *testing.T) {
+	// Given
+	originalReader := systemMetricsReadFile
+	lastCPUStats.mu.Lock()
+	originalSnapshot := lastCPUStats.snapshot
+	lastCPUStats.snapshot = cpuSnapshot{total: 100, idle: 50}
+	lastCPUStats.mu.Unlock()
+	t.Cleanup(func() {
+		systemMetricsReadFile = originalReader
+		lastCPUStats.mu.Lock()
+		lastCPUStats.snapshot = originalSnapshot
+		lastCPUStats.mu.Unlock()
+	})
+	firstRead := make(chan struct{})
+	secondRead := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var callMu sync.Mutex
+	callCount := 0
+	systemMetricsReadFile = func(path string) ([]byte, error) {
+		if path != "/proc/stat" {
+			return nil, errors.New("unexpected path: " + path)
+		}
+		callMu.Lock()
+		callCount++
+		call := callCount
+		callMu.Unlock()
+		if call == 1 {
+			close(firstRead)
+			<-releaseFirst
+			return []byte("cpu 100 0 0 100 0\n"), nil
+		}
+		close(secondRead)
+		return []byte("cpu 200 0 0 200 0\n"), nil
+	}
+	errorsCh := make(chan error, 2)
+
+	// When
+	go func() {
+		_, err := getCPUPercent()
+		errorsCh <- err
+	}()
+	<-firstRead
+	go func() {
+		_, err := getCPUPercent()
+		errorsCh <- err
+	}()
+	select {
+	case <-secondRead:
+		close(releaseFirst)
+	case <-time.After(100 * time.Millisecond):
+		close(releaseFirst)
+	}
+	firstErr, secondErr := <-errorsCh, <-errorsCh
+
+	// Then
+	if firstErr != nil || secondErr != nil {
+		t.Fatalf("interleaved CPU samples returned errors: %v, %v", firstErr, secondErr)
+	}
+	lastCPUStats.mu.Lock()
+	finalSnapshot := lastCPUStats.snapshot
+	lastCPUStats.mu.Unlock()
+	if finalSnapshot.total != 400 || finalSnapshot.idle != 200 {
+		t.Fatalf("final CPU snapshot=%+v, want newer total=400 idle=200", finalSnapshot)
+	}
+}
+
+func TestGetRealtimeTraffic_serializes_sample_read_with_baseline_update(t *testing.T) {
+	// Given
+	originalReader := systemMetricsReadFile
+	lastNetStats.mu.Lock()
+	originalBytesIn, originalBytesOut, originalTime := lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.time
+	lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.time = 100, 200, time.Now().Add(-time.Second)
+	lastNetStats.mu.Unlock()
+	t.Cleanup(func() {
+		systemMetricsReadFile = originalReader
+		lastNetStats.mu.Lock()
+		lastNetStats.bytesIn, lastNetStats.bytesOut, lastNetStats.time = originalBytesIn, originalBytesOut, originalTime
+		lastNetStats.mu.Unlock()
+	})
+	firstRead := make(chan struct{})
+	secondRead := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var callMu sync.Mutex
+	callCount := 0
+	netDevSamples := [][]byte{
+		[]byte("Inter-| Receive | Transmit\neth0: 200 0 0 0 0 0 0 0 300 0 0 0 0 0 0 0\n"),
+		[]byte("Inter-| Receive | Transmit\neth0: 400 0 0 0 0 0 0 0 600 0 0 0 0 0 0 0\n"),
+	}
+	systemMetricsReadFile = func(path string) ([]byte, error) {
+		if path == "/proc/net/route" {
+			return []byte("Iface Destination Gateway Flags\neth0 00000000 0100000A 0003\n"), nil
+		}
+		if path != "/proc/net/dev" {
+			return nil, errors.New("unexpected path: " + path)
+		}
+		callMu.Lock()
+		call := callCount
+		callCount++
+		callMu.Unlock()
+		if call == 0 {
+			close(firstRead)
+			<-releaseFirst
+		} else {
+			close(secondRead)
+		}
+		return netDevSamples[call], nil
+	}
+	errorsCh := make(chan error, 2)
+
+	// When
+	go func() {
+		_, err := getRealtimeTraffic()
+		errorsCh <- err
+	}()
+	select {
+	case <-firstRead:
+	case <-time.After(time.Second):
+		t.Fatal("realtime traffic sampler did not use the injectable system metrics reader")
+	}
+	go func() {
+		_, err := getRealtimeTraffic()
+		errorsCh <- err
+	}()
+	select {
+	case <-secondRead:
+		close(releaseFirst)
+	case <-time.After(100 * time.Millisecond):
+		close(releaseFirst)
+	}
+	firstErr, secondErr := <-errorsCh, <-errorsCh
+
+	// Then
+	if firstErr != nil || secondErr != nil {
+		t.Fatalf("interleaved network samples returned errors: %v, %v", firstErr, secondErr)
+	}
+	lastNetStats.mu.Lock()
+	finalBytesIn, finalBytesOut := lastNetStats.bytesIn, lastNetStats.bytesOut
+	lastNetStats.mu.Unlock()
+	if finalBytesIn != 400 || finalBytesOut != 600 {
+		t.Fatalf("final network snapshot=%d/%d, want newer 400/600", finalBytesIn, finalBytesOut)
+	}
+}
+
+func TestParsePrometheusMetrics_does_not_double_count_requests_from_status_histogram(t *testing.T) {
+	// Given
+	body := strings.Join([]string{
+		`caddy_http_requests_total{handler="reverse_proxy",host="example.com"} 9`,
+		`caddy_http_request_duration_seconds_count{code="200",handler="reverse_proxy",host="example.com"} 9`,
+	}, "\n")
+
+	// When
+	metrics, err := parsePrometheusMetrics(body)
+
+	// Then
+	if err != nil {
+		t.Fatalf("parse metrics: %v", err)
+	}
+	if metrics.RequestsTotal != 9 || metrics.Status2xx != 9 {
+		t.Fatalf("requestsTotal=%d status2xx=%d, want 9/9", metrics.RequestsTotal, metrics.Status2xx)
+	}
+}
+
+func TestParseRuleMetricsFromPrometheus_normalizes_configured_hosts(t *testing.T) {
+	tests := []struct {
+		name       string
+		domain     string
+		listenPort int
+		metricHost string
+	}{
+		{name: "custom HTTP port", domain: "example.com", listenPort: 8080, metricHost: "example.com:8080"},
+		{name: "bracketed IPv6 with port", domain: "::1", listenPort: 8080, metricHost: "[::1]:8080"},
+		{name: "bare IPv6", domain: "::1", listenPort: 8080, metricHost: "::1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			body := `caddy_http_requests_total{handler="reverse_proxy",host="` + test.metricHost + `"} 5`
+
+			// When
+			metrics, err := parseRuleMetricsFromPrometheus(body, test.domain, test.listenPort, "http", false)
+
+			// Then
+			if err != nil {
+				t.Fatalf("parse rule metrics: %v", err)
+			}
+			if metrics["requests_total"] != int64(5) {
+				t.Fatalf("requests_total=%v, want 5", metrics["requests_total"])
+			}
+		})
 	}
 }

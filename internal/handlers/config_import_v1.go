@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -183,6 +184,41 @@ func convertV1Rules(proxies []v1Proxy, upstreams map[int]v1Upstream) []converted
 	return rules
 }
 
+func validateConvertedV1Rules(rules []convertedRule) error {
+	for index, rule := range rules {
+		if rule.ListenPort < 1 || rule.ListenPort > 65535 {
+			return fmt.Errorf("规则 #%d：监听端口必须在 1-65535 之间", index+1)
+		}
+		if rule.Protocol != "http" && rule.Protocol != "tcp" {
+			return fmt.Errorf("规则 #%d：协议无效", index+1)
+		}
+		if rule.Protocol == "http" {
+			for _, domain := range strings.Split(rule.Domain, ",") {
+				domain = strings.TrimSpace(domain)
+				if domain != "" && !isValidDomain(domain) {
+					return fmt.Errorf("规则 #%d：域名 %q 无效", index+1, domain)
+				}
+			}
+		}
+		enabledUpstreams := 0
+		for upstreamIndex, upstream := range rule.Upstreams {
+			if !isValidHost(upstream.Host) {
+				return fmt.Errorf("规则 #%d 上游 #%d：主机无效", index+1, upstreamIndex+1)
+			}
+			if upstream.Port < 1 || upstream.Port > 65535 {
+				return fmt.Errorf("规则 #%d 上游 #%d：端口必须在 1-65535 之间", index+1, upstreamIndex+1)
+			}
+			if upstream.Enabled {
+				enabledUpstreams++
+			}
+		}
+		if enabledUpstreams == 0 {
+			return fmt.Errorf("规则 #%d：至少需要一个已启用的上游服务器", index+1)
+		}
+	}
+	return nil
+}
+
 type importValidateResponse struct {
 	Valid    bool           `json:"valid"`
 	Type     string         `json:"type"`
@@ -255,6 +291,10 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			return
 		}
 		rules := convertV1Rules(proxies, upstreams)
+		if err := validateConvertedV1Rules(rules); err != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v1", Error: err.Error()}})
+			return
+		}
 		tlsCount := 0
 		upstreamCount := 0
 		for _, r := range rules {
@@ -311,6 +351,10 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		return
 	}
 	rules := convertV1Rules(proxies, upstreams)
+	if err := validateConvertedV1Rules(rules); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
 	if len(rules) == 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份中没有可导入的规则"})
 		return

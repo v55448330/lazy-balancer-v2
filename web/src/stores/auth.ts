@@ -81,6 +81,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function login(username: string, password: string) {
+    if (loading.value) return
     loading.value = true
     try {
       const res = await request.post<AuthResponse>('/auth/login', { username, password })
@@ -108,6 +109,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function loginWithTicket(ticket: string) {
+    if (loading.value) return
     loading.value = true
     try {
       const res = await request.post<AuthResponse>('/auth/ticket-login', { ticket })
@@ -118,12 +120,18 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  function logout() {
+  async function logout() {
     intentionalLogout.value = true
-    user.value = null
-    token.value = null
-    nodeMode.value = 'master'
-    localStorage.removeItem('token')
+    try {
+      if (token.value) await request.post('/auth/logout')
+    } catch (caught: unknown) {
+      console.warn('服务端注销失败，已执行本地退出', caught)
+    } finally {
+      user.value = null
+      token.value = null
+      nodeMode.value = 'master'
+      localStorage.removeItem('token')
+    }
   }
 
   function showToast(type: 'success' | 'error' | 'info' | 'warning', message: string) {
@@ -146,7 +154,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function init() {
     if (!token.value || isTokenExpired(token.value)) {
-      logout()
+      await logout()
       return
     }
     await fetchUser()

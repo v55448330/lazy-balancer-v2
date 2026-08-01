@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -489,6 +491,43 @@ func TestClusterService_Promote_resets_slave_state(t *testing.T) {
 	}
 	if !lifecycle.syncStopped || !lifecycle.acmeStarted {
 		t.Fatalf("lifecycle syncStopped=%v acmeStarted=%v", lifecycle.syncStopped, lifecycle.acmeStarted)
+	}
+}
+
+func TestClusterService_Promote_removes_old_master_pin_and_audits(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	service := NewClusterService(database, nil)
+	masterURL := "https://master.example:8443"
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='secret' WHERE id=1", masterURL); err != nil {
+		t.Fatal(err)
+	}
+	pinPath, err := clusterPinPathForDatabase(database, "master.example:8443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(pinPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pinPath, []byte("fingerprint\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	if err := service.Promote(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then
+	if _, err := os.Stat(pinPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pin stat error=%v, want not exist", err)
+	}
+	var action, detail string
+	if err := db.AuditDB.QueryRow("SELECT action,detail FROM audit_log ORDER BY id DESC LIMIT 1").Scan(&action, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if action != "清理证书指纹" || !strings.Contains(detail, masterURL) {
+		t.Fatalf("audit action=%q detail=%q", action, detail)
 	}
 }
 

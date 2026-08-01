@@ -16,9 +16,9 @@ func TestACMEAccountKeyPath_includes_EAB_KID_and_full_hash(t *testing.T) {
 	dataDir := t.TempDir()
 
 	// When
-	first := acmeAccountKeyPath(dataDir, directoryURL, email, "kid-a")
-	repeated := acmeAccountKeyPath(dataDir, directoryURL, email, "kid-a")
-	second := acmeAccountKeyPath(dataDir, directoryURL, email, "kid-b")
+	first := acmeAccountKeyPath(dataDir, directoryURL, email, "kid-a", []byte("secret-a"))
+	repeated := acmeAccountKeyPath(dataDir, directoryURL, email, "kid-a", []byte("secret-a"))
+	second := acmeAccountKeyPath(dataDir, directoryURL, email, "kid-b", []byte("secret-a"))
 
 	// Then
 	if first != repeated {
@@ -33,6 +33,22 @@ func TestACMEAccountKeyPath_includes_EAB_KID_and_full_hash(t *testing.T) {
 	}
 	if filepath.Dir(first) != filepath.Join(dataDir, "acme_accounts") {
 		t.Fatalf("account directory=%q, want data directory", filepath.Dir(first))
+	}
+}
+
+func TestACMEAccountKeyPath_changes_when_EAB_HMAC_changes(t *testing.T) {
+	// Given
+	dataDir := t.TempDir()
+	directoryURL := "https://acme.example/directory"
+	email := "admin@example.com"
+
+	// When
+	first := acmeAccountKeyPath(dataDir, directoryURL, email, "same-kid", []byte("first-secret"))
+	second := acmeAccountKeyPath(dataDir, directoryURL, email, "same-kid", []byte("second-secret"))
+
+	// Then
+	if first == second {
+		t.Fatalf("different EAB HMAC keys share account key path %q", first)
 	}
 }
 

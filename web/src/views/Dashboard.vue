@@ -261,6 +261,7 @@
             v-loading="initialLoading"
             element-loading-text="加载中"
             :data="sortedRules"
+            row-key="caddy_id"
             stripe
             :header-cell-style="{ background: '#f9fafb' }"
           >
@@ -469,6 +470,20 @@ interface RuleHistoryDelta {
   bout: number
 }
 
+const diffCounters = (prev: RuleHistoryRow, curr: RuleHistoryRow): RuleHistoryDelta => {
+  const epochReset = curr.requests_total < prev.requests_total
+  const diff = (previous: number, current: number): number => epochReset ? current : current - previous
+  return {
+    requests: diff(prev.requests_total, curr.requests_total),
+    s2xx: diff(prev.requests_2xx, curr.requests_2xx),
+    s3xx: diff(prev.requests_3xx, curr.requests_3xx),
+    s4xx: diff(prev.requests_4xx, curr.requests_4xx),
+    s5xx: diff(prev.requests_5xx, curr.requests_5xx),
+    bin: diff(prev.bytes_in, curr.bytes_in),
+    bout: diff(prev.bytes_out, curr.bytes_out),
+  }
+}
+
 interface RuleHistoryResponse {
   supported?: boolean
   rows?: RuleHistoryRow[]
@@ -536,19 +551,8 @@ const ruleHistoryDeltas = computed(() => {
   for (let i = 1; i < rows.length; i++) {
     const prev = rows[i - 1]
     const curr = rows[i]
-    // Caddy reload resets counters; when current < previous, the current
-    // value itself is the interval's traffic.
-    const diff = (a: number, b: number) => (b >= a ? b - a : b)
     labels.push(curr.timestamp?.slice(5, 16) || '')
-    deltas.push({
-      requests: diff(prev.requests_total, curr.requests_total),
-      s2xx: diff(prev.requests_2xx, curr.requests_2xx),
-      s3xx: diff(prev.requests_3xx, curr.requests_3xx),
-      s4xx: diff(prev.requests_4xx, curr.requests_4xx),
-      s5xx: diff(prev.requests_5xx, curr.requests_5xx),
-      bin: diff(prev.bytes_in, curr.bytes_in),
-      bout: diff(prev.bytes_out, curr.bytes_out),
-    })
+    deltas.push(diffCounters(prev, curr))
   }
   return { labels, deltas }
 })

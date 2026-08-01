@@ -127,7 +127,7 @@ func createTables() error {
 		password_hash VARCHAR(255) NOT NULL,
 		role VARCHAR(20) NOT NULL DEFAULT 'user',
 		display_name VARCHAR(100),
-		is_enabled BOOLEAN DEFAULT TRUE,
+		is_enabled BOOLEAN NOT NULL DEFAULT 1,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		last_login DATETIME
 	);
@@ -582,6 +582,9 @@ func runMigrations() error {
 			}
 		}
 	}
+	if err := migrateUsersIsEnabledNotNull(); err != nil {
+		return fmt.Errorf("failed to migrate users.is_enabled: %w", err)
+	}
 	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS cluster_register_tokens (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		token_hash VARCHAR(64) UNIQUE NOT NULL,
@@ -830,6 +833,64 @@ func runMigrations() error {
 		return fmt.Errorf("failed to backfill CA provider timestamps: %w", err)
 	}
 
+	return nil
+}
+
+func migrateUsersIsEnabledNotNull() error {
+	var notNull int
+	if err := DB.QueryRow("SELECT \"notnull\" FROM pragma_table_info('users') WHERE name='is_enabled'").Scan(&notNull); err != nil {
+		return fmt.Errorf("inspect users.is_enabled: %w", err)
+	}
+	if notNull == 1 {
+		return nil
+	}
+	ctx := context.Background()
+	conn, err := DB.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		return fmt.Errorf("disable foreign keys: %w", err)
+	}
+	defer func() {
+		if _, enableErr := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); enableErr != nil {
+			log.Printf("failed to re-enable foreign keys after users migration: %v", enableErr)
+		}
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin users migration: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.Exec(`UPDATE users SET is_enabled=1 WHERE is_enabled IS NULL;
+		CREATE TABLE users_not_null (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username VARCHAR(50) UNIQUE NOT NULL,
+			password_hash VARCHAR(255) NOT NULL,
+			role VARCHAR(20) NOT NULL DEFAULT 'user',
+			display_name VARCHAR(100),
+			is_enabled BOOLEAN NOT NULL DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			last_login DATETIME,
+			password_changed_at DATETIME,
+			password_version INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT INTO users_not_null (id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version)
+		SELECT id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version FROM users;
+		DROP TABLE users;
+		ALTER TABLE users_not_null RENAME TO users;`); err != nil {
+		return fmt.Errorf("rebuild users table: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit users migration: %w", err)
+	}
+	committed = true
 	return nil
 }
 

@@ -153,6 +153,7 @@ const isNarrowViewport = useMediaQuery('(max-width: 768px)')
 const effectiveCollapsed = computed(() => collapsed.value || isNarrowViewport.value)
 const showProfile = ref(false)
 const saving = ref(false)
+const loggingOut = ref(false)
 
 const currentPage = computed(() => authStore.currentPage)
 const isReadOnly = computed(() => authStore.readOnlyReason === 'slave')
@@ -192,13 +193,23 @@ const goPage = (page: PageId) => {
   authStore.setCurrentPage(page)
 }
 
-const handleCommand = (command: string) => {
+const logout = async (): Promise<void> => {
+  if (loggingOut.value) return
+  loggingOut.value = true
+  try {
+    await authStore.logout()
+  } finally {
+    loggingOut.value = false
+  }
+}
+
+const handleCommand = async (command: string): Promise<void> => {
   if (command === 'profile') {
     if (saving.value) return
     syncProfileForm()
     showProfile.value = true
   } else if (command === 'logout') {
-    authStore.logout()
+    await logout()
   }
 }
 
@@ -226,7 +237,7 @@ const saveProfile = async () => {
     showProfile.value = false
     if (passwordChanged) {
       authStore.showToast('success', '密码已修改，请重新登录')
-      authStore.logout()
+      await logout()
     } else {
       authStore.showToast('success', '保存成功')
       await authStore.fetchUser()

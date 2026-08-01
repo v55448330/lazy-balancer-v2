@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
 	"sync"
 	"time"
 
@@ -218,6 +220,10 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if isMaster {
 		return ErrAlreadyMaster
 	}
+	var masterURL string
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(master_url,'') FROM global_config WHERE id=1").Scan(&masterURL); err != nil {
+		return fmt.Errorf("读取旧主节点地址: %w", err)
+	}
 	if s.lifecycle != nil {
 		s.lifecycle.StopSync()
 	}
@@ -241,6 +247,20 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	promoted = true
 	if s.lifecycle != nil {
 		s.lifecycle.StartACME()
+	}
+	if masterURL != "" {
+		parsedMasterURL, err := url.Parse(masterURL)
+		if err != nil {
+			return fmt.Errorf("解析旧主节点地址: %w", err)
+		}
+		pinPath, err := clusterPinPathForDatabase(s.db, parsedMasterURL.Host)
+		if err != nil {
+			return fmt.Errorf("定位旧主节点证书指纹: %w", err)
+		}
+		if err := os.Remove(pinPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("删除旧主节点证书指纹: %w", err)
+		}
+		RecordAuditLog("system", "清理证书指纹", "集群节点", FormatAuditDetail("旧主节点："+masterURL, AuditResultPart("success")), "")
 	}
 	return nil
 }

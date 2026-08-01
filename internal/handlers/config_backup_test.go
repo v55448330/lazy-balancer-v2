@@ -187,6 +187,7 @@ func TestImportConfigBackup_rejects_backup_without_enabled_admin_and_preserves_c
 		{name: "empty users", users: []map[string]any{}},
 		{name: "users only", users: []map[string]any{{"id": 2, "username": "reader", "password_hash": "hash", "role": "user", "is_enabled": 1}}},
 		{name: "all admins disabled", users: []map[string]any{{"id": 2, "username": "disabled-admin", "password_hash": "hash", "role": "admin", "is_enabled": false}}},
+		{name: "null enabled admin", users: []map[string]any{{"id": 2, "username": "null-admin", "password_hash": "hash", "role": "admin", "is_enabled": nil}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -213,6 +214,34 @@ func TestImportConfigBackup_rejects_backup_without_enabled_admin_and_preserves_c
 				t.Fatalf("current enabled admin count=%d, want 1", count)
 			}
 		})
+	}
+}
+
+func TestImportConfigBackup_accepts_enabled_admin_and_increments_password_version(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"users": {{"id": 7, "username": "enabled-admin", "password_hash": "hash", "role": "admin", "is_enabled": true, "password_version": 12}},
+	})
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var passwordVersion int
+	if err := db.DB.QueryRow("SELECT password_version FROM users WHERE username='enabled-admin'").Scan(&passwordVersion); err != nil {
+		t.Fatalf("read imported password version: %v", err)
+	}
+	if passwordVersion != 13 {
+		t.Fatalf("password_version=%d, want 13", passwordVersion)
 	}
 }
 
@@ -246,6 +275,15 @@ func TestConfigBackup_export_import_roundtrip(t *testing.T) {
 	// Then
 	if exportResponse.Code != http.StatusOK || !strings.Contains(exportResponse.Body.String(), "lazy-balancer-v2") {
 		t.Fatalf("export status=%d body=%.200s", exportResponse.Code, exportResponse.Body.String())
+	}
+	for header, expected := range map[string]string{
+		"Cache-Control":          "no-store, private",
+		"Pragma":                 "no-cache",
+		"X-Content-Type-Options": "nosniff",
+	} {
+		if got := exportResponse.Header().Get(header); got != expected {
+			t.Fatalf("%s=%q, want %q", header, got, expected)
+		}
 	}
 	backup := exportResponse.Body.String()
 
@@ -620,7 +658,7 @@ func TestImportConfigBackup_restores_partial_certificate_materialization(t *test
 		Config: map[string]any{},
 		Tables: map[string][]map[string]any{
 			"upstreams": {}, "path_rules": {}, "api_keys": {}, "ca_providers": {}, "certificate_configs": {}, "cert_jobs": {},
-			"users": {{"id": 2, "username": "new-user", "password_hash": "hash", "role": "admin"}},
+			"users": {{"id": 2, "username": "new-user", "password_hash": "hash", "role": "admin", "is_enabled": 1}},
 			"lb_rules": {
 				{"caddy_id": firstRuleID, "name": "first-rule", "protocol": "http", "domain": "partial.example.test", "listen_port": 8443, "enabled": 1, "enable_tls": 1, "tls_source": "manual", "tls_cert": validCert, "tls_key": validKey},
 				{"caddy_id": "lb_partial_invalid", "name": "second-rule", "protocol": "http", "domain": "invalid.example.test", "listen_port": 9443, "enabled": 1, "enable_tls": 1, "tls_source": "manual", "tls_cert": "invalid-cert", "tls_key": "invalid-key"},

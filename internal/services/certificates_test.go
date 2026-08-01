@@ -105,6 +105,49 @@ func TestCreateOrRequeueCertJob_resets_retry_fields_before_enqueue(t *testing.T)
 	}
 }
 
+func TestCreateOrRequeueCertJob_requeues_disabled_job_for_reenabled_rule(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`
+		INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_reenabled','reenabled','example.com','http',8443,1,1,'acme_dns');
+		INSERT INTO cert_jobs (rule_id,domain,status,expires_at,ca_provider_id)
+		VALUES ('lb_reenabled','example.com','disabled',NULL,1);
+	`); err != nil {
+		t.Fatalf("seed reenabled certificate job: %v", err)
+	}
+	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: true}
+	transitioned := make(chan struct{})
+	release := make(chan struct{})
+	manager.beforeEnqueue = func() {
+		close(transitioned)
+		<-release
+	}
+	t.Cleanup(manager.Stop)
+	done := make(chan error, 1)
+	go func() {
+		_, err := CreateOrRequeueCertJob("lb_reenabled", "example.com", 1, manager)
+		done <- err
+	}()
+	<-transitioned
+
+	// When
+	var status string
+	err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_reenabled'").Scan(&status)
+	close(release)
+
+	// Then
+	if err != nil {
+		t.Fatalf("read reenabled certificate job: %v", err)
+	}
+	if enqueueErr := <-done; enqueueErr != nil {
+		t.Fatalf("requeue disabled certificate job: %v", enqueueErr)
+	}
+	if status != "queued" {
+		t.Fatalf("reenabled job status=%q, want queued", status)
+	}
+}
+
 func TestCreateOrRequeueCertJob_paused_queue_does_not_upsert(t *testing.T) {
 	_, database := newClusterTestService(t)
 	if _, err := database.Exec(`INSERT INTO cert_jobs

@@ -22,6 +22,49 @@ func TestCreateTables_omits_dead_upstream_accessURL_column(t *testing.T) {
 	}
 }
 
+func TestRunMigrations_makes_users_isEnabled_notNull_and_backfills_null(t *testing.T) {
+	// Given
+	database := openMigrationTestDB(t)
+	if _, err := database.Exec(`CREATE TABLE users (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		username TEXT UNIQUE NOT NULL,
+		password_hash TEXT NOT NULL,
+		role TEXT NOT NULL DEFAULT 'user',
+		display_name TEXT,
+		is_enabled BOOLEAN DEFAULT 1,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		last_login DATETIME,
+		password_changed_at DATETIME,
+		password_version INTEGER NOT NULL DEFAULT 0
+	);
+	INSERT INTO users (username,password_hash,role,is_enabled) VALUES ('legacy','hash','admin',NULL);`); err != nil {
+		t.Fatalf("seed legacy users: %v", err)
+	}
+
+	// When
+	if err := migrateUsersIsEnabledNotNull(); err != nil {
+		t.Fatalf("migrate users.is_enabled: %v", err)
+	}
+	if err := migrateUsersIsEnabledNotNull(); err != nil {
+		t.Fatalf("repeat users.is_enabled migration: %v", err)
+	}
+
+	// Then
+	var notNull, enabled int
+	if err := database.QueryRow("SELECT \"notnull\" FROM pragma_table_info('users') WHERE name='is_enabled'").Scan(&notNull); err != nil {
+		t.Fatalf("read users.is_enabled schema: %v", err)
+	}
+	if err := database.QueryRow("SELECT is_enabled FROM users WHERE username='legacy'").Scan(&enabled); err != nil {
+		t.Fatalf("read migrated user: %v", err)
+	}
+	if notNull != 1 || enabled != 1 {
+		t.Fatalf("is_enabled notnull=%d value=%d, want 1/1", notNull, enabled)
+	}
+	if _, err := database.Exec("UPDATE users SET is_enabled=NULL WHERE username='legacy'"); err == nil {
+		t.Fatal("users.is_enabled accepted NULL after migration")
+	}
+}
+
 func TestMigrateLbRulesPrimaryKey_preserves_upstream_connection_settings(t *testing.T) {
 	// Given
 	database := openMigrationTestDB(t)

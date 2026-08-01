@@ -148,10 +148,18 @@ func (s *SyncService) clusterPinPath(host string) (string, error) {
 	if s.cfg != nil {
 		dataDir = s.cfg.DataDir
 	}
-	if dataDir == "" && s.db != nil {
+	return clusterPinPath(dataDir, s.db, host)
+}
+
+func clusterPinPathForDatabase(database *sql.DB, host string) (string, error) {
+	return clusterPinPath("", database, host)
+}
+
+func clusterPinPath(dataDir string, database *sql.DB, host string) (string, error) {
+	if dataDir == "" && database != nil {
 		var sequence int
 		var name, databasePath string
-		if err := s.db.QueryRow("PRAGMA database_list").Scan(&sequence, &name, &databasePath); err == nil && databasePath != "" {
+		if err := database.QueryRow("PRAGMA database_list").Scan(&sequence, &name, &databasePath); err == nil && databasePath != "" {
 			dataDir = filepath.Dir(databasePath)
 		}
 	}
@@ -203,18 +211,58 @@ func verifyOrStoreClusterPin(path, fingerprint string) error {
 	if err := verifyClusterPinDirectory(directory); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if errors.Is(err, os.ErrExist) {
-		return verifyOrStoreClusterPin(path, fingerprint)
-	}
+	return storeClusterPin(path, fingerprint, func(file *os.File) error {
+		if _, err := file.WriteString(fingerprint + "\n"); err != nil {
+			return fmt.Errorf("write fingerprint: %w", err)
+		}
+		return nil
+	})
+}
+
+func storeClusterPin(path, fingerprint string, write func(*os.File) error) (err error) {
+	directory := filepath.Dir(path)
+	temporary, err := os.CreateTemp(directory, ".cluster-pin-*")
 	if err != nil {
-		return fmt.Errorf("保存主节点 TLS 证书指纹: %w", err)
+		return fmt.Errorf("创建主节点 TLS 证书指纹临时文件: %w", err)
 	}
-	if _, err := file.WriteString(fingerprint + "\n"); err != nil {
-		return errors.Join(fmt.Errorf("保存主节点 TLS 证书指纹: %w", err), file.Close())
+	temporaryPath := temporary.Name()
+	published := false
+	defer func() {
+		removeErr := os.Remove(temporaryPath)
+		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			err = errors.Join(err, removeErr)
+		}
+		if err != nil && published {
+			if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				err = errors.Join(err, removeErr)
+			}
+		}
+	}()
+	if err := write(temporary); err != nil {
+		return errors.Join(err, temporary.Close())
 	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("保存主节点 TLS 证书指纹: %w", err)
+	if err := temporary.Sync(); err != nil {
+		return errors.Join(fmt.Errorf("同步主节点 TLS 证书指纹: %w", err), temporary.Close())
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("关闭主节点 TLS 证书指纹临时文件: %w", err)
+	}
+	if err := os.Link(temporaryPath, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return verifyOrStoreClusterPin(path, fingerprint)
+		}
+		return fmt.Errorf("发布主节点 TLS 证书指纹: %w", err)
+	}
+	published = true
+	directoryHandle, err := os.Open(directory)
+	if err != nil {
+		return fmt.Errorf("打开集群证书指纹目录: %w", err)
+	}
+	if err := directoryHandle.Sync(); err != nil {
+		return errors.Join(fmt.Errorf("同步集群证书指纹目录: %w", err), directoryHandle.Close())
+	}
+	if err := directoryHandle.Close(); err != nil {
+		return fmt.Errorf("关闭集群证书指纹目录: %w", err)
 	}
 	return nil
 }
@@ -325,7 +373,12 @@ func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, 
 	return envelope.Data, nil
 }
 
-func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
+func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
+	defer func() {
+		if err != nil && s.db != nil {
+			s.recordSyncError(ctx, err, nil)
+		}
+	}()
 	if err := s.beginPull(); err != nil {
 		return SyncResult{}, err
 	}
@@ -378,7 +431,6 @@ func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
 		return SyncResult{}, errors.New("同步角色或主节点凭据已变更，拒绝应用快照")
 	}
 	if err := verifySnapshotIntegrity(envelope.Data, token, appliedVersion); err != nil {
-		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", err.Error())
 		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
 		return SyncResult{}, err
 	}
@@ -395,7 +447,6 @@ func (s *SyncService) Pull(ctx context.Context) (SyncResult, error) {
 	}
 	if err := s.applySnapshot(ctx, envelope.Data); err != nil {
 		s.pullApplyMu.Unlock()
-		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", err.Error())
 		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
 		return SyncResult{}, err
 	}
@@ -426,7 +477,9 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 	} else if reportErr != nil {
 		msg = "状态上报失败: " + reportErr.Error()
 	}
-	_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", msg)
+	if _, err := s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", msg); err != nil {
+		log.Printf("cluster sync error persistence failed: %v", err)
+	}
 }
 
 // verifySnapshotIntegrity re-computes the snapshot fingerprint the same way

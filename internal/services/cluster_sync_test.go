@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -194,6 +195,50 @@ func TestVerifyOrStoreClusterPin_rejectsWidePermissions(t *testing.T) {
 			t.Fatalf("error=%v, want wide file permission rejection", err)
 		}
 	})
+}
+
+func TestStoreClusterPin_writeFailureLeavesNoPartialDestination(t *testing.T) {
+	// Given
+	directory := filepath.Join(t.TempDir(), "cluster_ca_pins")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "pin")
+	writeFailure := errors.New("injected write failure")
+
+	// When
+	err := storeClusterPin(path, "first", func(*os.File) error { return writeFailure })
+	retryErr := verifyOrStoreClusterPin(path, "second")
+
+	// Then
+	if !errors.Is(err, writeFailure) || retryErr != nil {
+		t.Fatalf("write error=%v retry error=%v", err, retryErr)
+	}
+	stored, readErr := os.ReadFile(path)
+	if readErr != nil || strings.TrimSpace(string(stored)) != "second" {
+		t.Fatalf("stored=%q read error=%v", stored, readErr)
+	}
+}
+
+func TestSyncService_Pull_persistsEveryFailure(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url='', cluster_token='' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
+
+	// When
+	_, pullErr := service.Pull(context.Background())
+
+	// Then
+	var stored string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if pullErr == nil || !strings.Contains(stored, pullErr.Error()) {
+		t.Fatalf("pull error=%v stored=%q", pullErr, stored)
+	}
 }
 
 func TestSyncService_do_repeatedRequestsDoNotContinuouslyIncreaseGoroutines(t *testing.T) {

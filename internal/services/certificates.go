@@ -542,8 +542,14 @@ func (s *CertificateService) Stop() {
 // CreateOrRequeueCertJob creates a queued cert job for the rule and enqueues it.
 // Uses an atomic INSERT ... ON CONFLICT to avoid races between concurrent callers.
 func CreateOrRequeueCertJob(ruleID, domains string, caProviderID int, qm *CAQueueManager) (int, error) {
-	jobID, _, err := CreateOrRequeueCertJobWithChange(ruleID, domains, caProviderID, qm)
-	return jobID, err
+	jobID, changed, err := CreateOrRequeueCertJobWithChange(ruleID, domains, caProviderID, qm)
+	if err != nil || changed {
+		return jobID, err
+	}
+	if jobID > 0 && qm.IsJobActive(jobID) {
+		return jobID, nil
+	}
+	return jobID, fmt.Errorf("certificate job %d was not queued", jobID)
 }
 
 func CreateOrRequeueCertJobWithChange(ruleID, domains string, caProviderID int, qm *CAQueueManager) (int, bool, error) {
@@ -552,6 +558,10 @@ func CreateOrRequeueCertJobWithChange(ruleID, domains string, caProviderID int, 
 		return 0, false, fmt.Errorf("invalid ACME domains: %s", domains)
 	}
 	joined := strings.Join(list, ",")
+	reversed := joined
+	if len(list) == 2 {
+		reversed = list[1] + "," + list[0]
+	}
 
 	// Defensive: if no explicit CA provider was supplied, use the rule's own
 	// setting rather than falling back to the global default.
@@ -580,8 +590,13 @@ func CreateOrRequeueCertJobWithChange(ruleID, domains string, caProviderID int, 
 				ca_provider_id = excluded.ca_provider_id,
 				updated_at = datetime('now')
 			WHERE cert_jobs.status IN ('waiting_ca','issued','failed')
+			   OR (cert_jobs.status='disabled' AND EXISTS (
+				SELECT 1 FROM lb_rules r
+				WHERE r.caddy_id=cert_jobs.rule_id AND r.enabled=1 AND r.enable_tls=1
+				  AND r.tls_source='acme_dns' AND lower(replace(r.domain,' ','')) IN (?,?)
+			   ))
 			RETURNING id
-		`, ruleID, joined, caProviderID).Scan(&id)
+		`, ruleID, joined, caProviderID, joined, reversed).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
 			if err := db.DB.QueryRow("SELECT id FROM cert_jobs WHERE rule_id=? AND domain=?", ruleID, joined).Scan(&id); err != nil {
 				return 0, false, err

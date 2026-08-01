@@ -3,11 +3,13 @@ package dnspod
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,6 +19,8 @@ const apiBase = "https://dnsapi.cn/"
 type Provider struct {
 	LoginToken string
 	client     *http.Client
+	mu         sync.Mutex
+	owned      map[string][]string
 }
 
 // New creates a DNSPod provider. loginToken must be "id,key" format.
@@ -24,6 +28,7 @@ func New(loginToken string) *Provider {
 	return &Provider{
 		LoginToken: loginToken,
 		client:     &http.Client{Timeout: 30 * time.Second},
+		owned:      make(map[string][]string),
 	}
 }
 
@@ -38,15 +43,14 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 		return err
 	}
 
-	records, err := p.listRecords(ctx, domainID, subDomain)
+	recordID, err := p.createRecord(ctx, domainID, subDomain, value, ttl)
 	if err != nil {
 		return err
 	}
-
-	if len(records) > 0 {
-		return p.modifyRecord(ctx, domainID, records[0].ID.String(), subDomain, value, ttl)
-	}
-	return p.createRecord(ctx, domainID, subDomain, value, ttl)
+	p.mu.Lock()
+	p.owned[domainID+"|"+subDomain] = append(p.owned[domainID+"|"+subDomain], recordID)
+	p.mu.Unlock()
+	return nil
 }
 
 // CleanUp removes the _acme-challenge TXT record.
@@ -60,18 +64,25 @@ func (p *Provider) CleanUp(ctx context.Context, zone, tokenFQDN string) error {
 		return err
 	}
 
-	records, err := p.listRecords(ctx, domainID, subDomain)
-	if err != nil {
-		return err
-	}
-
-	var lastErr error
-	for _, r := range records {
-		if err := p.deleteRecord(ctx, domainID, r.ID.String()); err != nil {
-			lastErr = err
+	key := domainID + "|" + subDomain
+	p.mu.Lock()
+	recordIDs := append([]string(nil), p.owned[key]...)
+	delete(p.owned, key)
+	p.mu.Unlock()
+	var cleanupErr error
+	var failed []string
+	for _, recordID := range recordIDs {
+		if err := p.deleteRecord(ctx, domainID, recordID); err != nil {
+			failed = append(failed, recordID)
+			cleanupErr = errors.Join(cleanupErr, err)
 		}
 	}
-	return lastErr
+	if len(failed) > 0 {
+		p.mu.Lock()
+		p.owned[key] = append(p.owned[key], failed...)
+		p.mu.Unlock()
+	}
+	return cleanupErr
 }
 
 type apiStatus struct {
@@ -166,7 +177,7 @@ func (p *Provider) listRecords(ctx context.Context, domainID, subDomain string) 
 	return out, nil
 }
 
-func (p *Provider) createRecord(ctx context.Context, domainID, subDomain, value string, ttl int) error {
+func (p *Provider) createRecord(ctx context.Context, domainID, subDomain, value string, ttl int) (string, error) {
 	params := url.Values{}
 	params.Set("domain_id", domainID)
 	params.Set("sub_domain", subDomain)
@@ -177,14 +188,20 @@ func (p *Provider) createRecord(ctx context.Context, domainID, subDomain, value 
 
 	var result struct {
 		Status apiStatus `json:"status"`
+		Record struct {
+			ID json.Number `json:"id"`
+		} `json:"record"`
 	}
 	if err := p.apiCall(ctx, "Record.Create", params, &result); err != nil {
-		return err
+		return "", err
 	}
 	if result.Status.Code.String() != "1" {
-		return fmt.Errorf("Record.Create failed: %s", result.Status.Message)
+		return "", fmt.Errorf("Record.Create failed: %s", result.Status.Message)
 	}
-	return nil
+	if result.Record.ID.String() == "" {
+		return "", fmt.Errorf("Record.Create returned no record ID")
+	}
+	return result.Record.ID.String(), nil
 }
 
 func (p *Provider) modifyRecord(ctx context.Context, domainID, recordID, subDomain, value string, ttl int) error {

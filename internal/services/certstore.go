@@ -1,6 +1,8 @@
 package services
 
 import (
+	"bytes"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -115,10 +117,10 @@ func writeCertPair(certPath, keyPath, certPEM, keyPEM string) error {
 	}
 
 	certTmp, keyTmp := certPath+".tmp", keyPath+".tmp"
-	if err := os.WriteFile(certTmp, []byte(certPEM), 0644); err != nil {
+	if err := writeSyncedFile(certTmp, []byte(certPEM), 0644); err != nil {
 		return fmt.Errorf("写入证书: %w", err)
 	}
-	if err := os.WriteFile(keyTmp, []byte(keyPEM), 0600); err != nil {
+	if err := writeSyncedFile(keyTmp, []byte(keyPEM), 0600); err != nil {
 		return errors.Join(fmt.Errorf("写入私钥: %w", err), removeTemporaryCertFile(certTmp))
 	}
 	if err := os.Rename(certTmp, certPath); err != nil {
@@ -128,7 +130,7 @@ func writeCertPair(certPath, keyPath, certPEM, keyPEM string) error {
 		deployErr := fmt.Errorf("部署私钥: %w", err)
 		cleanupErr := removeTemporaryCertFile(keyTmp)
 		if certExisted {
-			if restoreErr := os.WriteFile(certPath, previousCert, previousMode); restoreErr != nil {
+			if restoreErr := writeSyncedFile(certPath, previousCert, previousMode); restoreErr != nil {
 				return errors.Join(deployErr, cleanupErr, fmt.Errorf("恢复原证书: %w", restoreErr))
 			}
 		} else if removeErr := os.Remove(certPath); removeErr != nil && !os.IsNotExist(removeErr) {
@@ -136,7 +138,35 @@ func writeCertPair(certPath, keyPath, certPEM, keyPEM string) error {
 		}
 		return errors.Join(deployErr, cleanupErr)
 	}
+	if err := syncParentDir(certPath); err != nil {
+		return fmt.Errorf("同步证书目录: %w", err)
+	}
 	return nil
+}
+
+func writeSyncedFile(path string, data []byte, mode os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	if err := file.Sync(); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	return file.Close()
+}
+
+func syncParentDir(path string) error {
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	if err := dir.Sync(); err != nil {
+		return errors.Join(err, dir.Close())
+	}
+	return dir.Close()
 }
 
 func removeTemporaryCertFile(path string) error {
@@ -248,6 +278,9 @@ func MaterializeCertPairs(materials []CertMaterial) (CertFilesSnapshot, error) {
 
 	ruleIDs := make([]string, len(materials))
 	for i, material := range materials {
+		if _, err := tls.X509KeyPair([]byte(material.CertPEM), []byte(material.KeyPEM)); err != nil {
+			return nil, fmt.Errorf("证书与私钥不匹配 %s: %w", material.RuleID, err)
+		}
 		ruleIDs[i] = material.RuleID
 	}
 	snapshot, err := snapshotCertFilesLocked(ruleIDs)
@@ -292,14 +325,14 @@ func restoreCertFile(path string, snapshot CertFileSnapshot) error {
 		return nil
 	}
 	temporaryPath := path + ".restore"
-	if err := os.WriteFile(temporaryPath, snapshot.Data, snapshot.Mode); err != nil {
+	if err := writeSyncedFile(temporaryPath, snapshot.Data, snapshot.Mode); err != nil {
 		return err
 	}
 	if err := os.Rename(temporaryPath, path); err != nil {
 		removeErr := os.Remove(temporaryPath)
 		return errors.Join(err, removeErr)
 	}
-	return nil
+	return syncParentDir(path)
 }
 
 func MaterializeAllCertsFromDB() {
@@ -321,7 +354,7 @@ func MaterializeAllCertsFromDB() {
 				log.Printf("certstore: scan manual cert failed: %v", err)
 				continue
 			}
-			if err := WriteCertFiles(ruleID, certPEM, keyPEM); err != nil {
+			if err := materializeCertPair(ruleID, certPEM, keyPEM); err != nil {
 				log.Printf("certstore: write manual cert %s failed: %v", ruleID, err)
 				RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditRulePart(ruleID), "类型：手动证书", AuditResultPart("io_error")), "")
 			} else {
@@ -334,7 +367,7 @@ func MaterializeAllCertsFromDB() {
 		rows.Close()
 	}
 
-	rows2, err := db.DB.Query(`SELECT rule_id, cert_pem, key_pem FROM cert_jobs WHERE status='issued' AND COALESCE(cert_pem,'')!='' AND COALESCE(key_pem,'')!=''`)
+	rows2, err := db.DB.Query(`SELECT rule_id, cert_pem, key_pem FROM cert_jobs WHERE status IN ('downloaded','issued') AND COALESCE(cert_pem,'')!='' AND COALESCE(key_pem,'')!=''`)
 	if err != nil {
 		log.Printf("certstore: query ACME certs failed: %v", err)
 		RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), "类型：ACME证书", AuditResultPart("query_failed")), "")
@@ -345,7 +378,7 @@ func MaterializeAllCertsFromDB() {
 				log.Printf("certstore: scan ACME cert failed: %v", err)
 				continue
 			}
-			if err := WriteCertFiles(ruleID, certPEM, keyPEM); err != nil {
+			if err := materializeCertPair(ruleID, certPEM, keyPEM); err != nil {
 				log.Printf("certstore: write ACME cert %s failed: %v", ruleID, err)
 				RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditRulePart(ruleID), "类型：ACME证书", AuditResultPart("io_error")), "")
 			} else {
@@ -360,4 +393,22 @@ func MaterializeAllCertsFromDB() {
 	if manualRecovered > 0 || acmeRecovered > 0 {
 		RecordAuditLog("system", "恢复", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), fmt.Sprintf("手动证书 %d 个", manualRecovered), fmt.Sprintf("ACME证书 %d 个", acmeRecovered)), "")
 	}
+}
+
+func materializeCertPair(ruleID, certPEM, keyPEM string) error {
+	if _, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM)); err != nil {
+		return fmt.Errorf("证书与私钥不匹配: %w", err)
+	}
+	certPath, keyPath := CertFilePaths(ruleID)
+	if certPath == "" {
+		return fmt.Errorf("非法的规则编号: %q", ruleID)
+	}
+	diskCert, certErr := os.ReadFile(certPath)
+	diskKey, keyErr := os.ReadFile(keyPath)
+	if certErr == nil && keyErr == nil && bytes.Equal(diskCert, []byte(certPEM)) && bytes.Equal(diskKey, []byte(keyPEM)) {
+		if _, err := tls.X509KeyPair(diskCert, diskKey); err == nil {
+			return nil
+		}
+	}
+	return WriteCertFiles(ruleID, certPEM, keyPEM)
 }

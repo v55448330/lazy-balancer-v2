@@ -18,6 +18,17 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
+var (
+	prometheusRequestTotalPattern    = regexp.MustCompile(`caddy_http_requests_total\{[^}]*\}\s+(\S+)`)
+	prometheusStatusCountPattern     = regexp.MustCompile(`caddy_http_request_duration_seconds_count\{[^}]*code="(\d+)"[^}]*\}\s+(\S+)`)
+	prometheusResponseSizePattern    = regexp.MustCompile(`caddy_http_response_size_bytes_sum.*?\}\s+(\S+)`)
+	prometheusRequestSizePattern     = regexp.MustCompile(`caddy_http_request_size_bytes_sum.*?\}\s+(\S+)`)
+	prometheusLatencyBucketPattern   = regexp.MustCompile(`caddy_http_request_duration_seconds_bucket\{[^}]*le="([^"]+)"[^}]*\}\s+(\S+)`)
+	prometheusHostStatusPattern      = regexp.MustCompile(`caddy_http_request_duration_seconds_count\{[^}]*code="(\d+)"[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
+	prometheusHostResponsePattern    = regexp.MustCompile(`caddy_http_response_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
+	prometheusHostRequestSizePattern = regexp.MustCompile(`caddy_http_request_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
+)
+
 // MetricsService collects and stores metrics from Caddy
 type MetricsService struct {
 	metricsURL    string
@@ -142,8 +153,7 @@ func (m *MetricsService) parsePrometheusMetrics(text string) (parsedMetrics, err
 
 	// Request totals come from caddy_http_requests_total, which carries no
 	// code label; status classes come from caddy_http_request_duration_seconds_count.
-	reTotal := regexp.MustCompile(`caddy_http_requests_total\{[^}]*\}\s+(\S+)`)
-	for _, match := range reTotal.FindAllStringSubmatch(text, -1) {
+	for _, match := range prometheusRequestTotalPattern.FindAllStringSubmatch(text, -1) {
 		if len(match) >= 2 {
 			value, err := parsePrometheusInteger(match[1])
 			if err != nil {
@@ -152,8 +162,7 @@ func (m *MetricsService) parsePrometheusMetrics(text string) (parsedMetrics, err
 			metrics.requestsTotal += value
 		}
 	}
-	reCodes := regexp.MustCompile(`caddy_http_request_duration_seconds_count\{[^}]*code="(\d+)"[^}]*\}\s+(\S+)`)
-	for _, match := range reCodes.FindAllStringSubmatch(text, -1) {
+	for _, match := range prometheusStatusCountPattern.FindAllStringSubmatch(text, -1) {
 		if len(match) >= 3 {
 			code, err := strconv.ParseInt(match[1], 10, 64)
 			if err != nil {
@@ -174,8 +183,7 @@ func (m *MetricsService) parsePrometheusMetrics(text string) (parsedMetrics, err
 
 	// Parse response size
 	// caddy_http_response_size_bytes_sum{...}
-	reSize := regexp.MustCompile(`caddy_http_response_size_bytes_sum.*?\}\s+(\S+)`)
-	matches := reSize.FindAllStringSubmatch(text, -1)
+	matches := prometheusResponseSizePattern.FindAllStringSubmatch(text, -1)
 	for _, match := range matches {
 		if len(match) >= 2 {
 			value, err := parsePrometheusInteger(match[1])
@@ -187,8 +195,7 @@ func (m *MetricsService) parsePrometheusMetrics(text string) (parsedMetrics, err
 	}
 
 	// Parse request size
-	reReqSize := regexp.MustCompile(`caddy_http_request_size_bytes_sum.*?\}\s+(\S+)`)
-	matches = reReqSize.FindAllStringSubmatch(text, -1)
+	matches = prometheusRequestSizePattern.FindAllStringSubmatch(text, -1)
 	for _, match := range matches {
 		if len(match) >= 2 {
 			value, err := parsePrometheusInteger(match[1])
@@ -199,7 +206,11 @@ func (m *MetricsService) parsePrometheusMetrics(text string) (parsedMetrics, err
 		}
 	}
 
-	metrics.latencyP50, metrics.latencyP95, metrics.latencyP99 = estimateLatencyPercentiles(text)
+	latencyP50, latencyP95, latencyP99, err := estimateLatencyPercentiles(text)
+	if err != nil {
+		return parsedMetrics{}, err
+	}
+	metrics.latencyP50, metrics.latencyP95, metrics.latencyP99 = latencyP50, latencyP95, latencyP99
 
 	return metrics, nil
 }
@@ -217,9 +228,8 @@ func parsePrometheusInteger(raw string) (int64, error) {
 
 // estimateLatencyPercentiles computes p50/p95/p99 in milliseconds from the
 // cumulative caddy_http_request_duration_seconds_bucket histogram.
-func estimateLatencyPercentiles(text string) (int, int, int) {
-	re := regexp.MustCompile(`caddy_http_request_duration_seconds_bucket\{[^}]*le="([^"]+)"[^}]*\} (\d+)`)
-	matches := re.FindAllStringSubmatch(text, -1)
+func estimateLatencyPercentiles(text string) (int, int, int, error) {
+	matches := prometheusLatencyBucketPattern.FindAllStringSubmatch(text, -1)
 	type bucket struct {
 		le    float64
 		count int64
@@ -228,13 +238,19 @@ func estimateLatencyPercentiles(text string) (int, int, int) {
 	for _, m := range matches {
 		le, err := strconv.ParseFloat(m[1], 64)
 		if err != nil {
-			continue
+			return 0, 0, 0, fmt.Errorf("parse latency bucket boundary %q: %w", m[1], err)
 		}
-		count, _ := strconv.ParseInt(m[2], 10, 64)
+		count, err := parsePrometheusInteger(m[2])
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("parse latency bucket count %q: %w", m[2], err)
+		}
+		if count < 0 {
+			return 0, 0, 0, fmt.Errorf("latency bucket count %q is negative", m[2])
+		}
 		byLE[le] += count
 	}
 	if len(byLE) == 0 {
-		return 0, 0, 0
+		return 0, 0, 0, nil
 	}
 	buckets := make([]bucket, 0, len(byLE))
 	var total int64
@@ -265,7 +281,7 @@ func estimateLatencyPercentiles(text string) (int, int, int) {
 		}
 		return 0
 	}
-	return percentile(0.5), percentile(0.95), percentile(0.99)
+	return percentile(0.5), percentile(0.95), percentile(0.99), nil
 }
 
 type perHostMetrics struct {
@@ -287,8 +303,7 @@ func parsePerHostMetrics(text string) (map[string]*perHostMetrics, error) {
 		}
 		return h
 	}
-	reCount := regexp.MustCompile(`caddy_http_request_duration_seconds_count\{[^}]*code="(\d+)"[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
-	for _, m := range reCount.FindAllStringSubmatch(text, -1) {
+	for _, m := range prometheusHostStatusPattern.FindAllStringSubmatch(text, -1) {
 		if len(m) < 4 {
 			continue
 		}
@@ -304,16 +319,14 @@ func parsePerHostMetrics(text string) (map[string]*perHostMetrics, error) {
 		h.requests += v
 		h.codes[code] += v
 	}
-	reRespSize := regexp.MustCompile(`caddy_http_response_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
-	for _, m := range reRespSize.FindAllStringSubmatch(text, -1) {
+	for _, m := range prometheusHostResponsePattern.FindAllStringSubmatch(text, -1) {
 		v, err := parsePrometheusInteger(m[2])
 		if err != nil {
 			return nil, fmt.Errorf("parse per-host response size %q: %w", m[2], err)
 		}
 		get(m[1]).bytesOut += v
 	}
-	reReqSize := regexp.MustCompile(`caddy_http_request_size_bytes_sum\{[^}]*host="([^"]+)"[^}]*\}\s+(\S+)`)
-	for _, m := range reReqSize.FindAllStringSubmatch(text, -1) {
+	for _, m := range prometheusHostRequestSizePattern.FindAllStringSubmatch(text, -1) {
 		v, err := parsePrometheusInteger(m[2])
 		if err != nil {
 			return nil, fmt.Errorf("parse per-host request size %q: %w", m[2], err)
@@ -334,7 +347,7 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 	if len(hosts) == 0 {
 		return nil
 	}
-	rows, err := db.DB.Query(`SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND enabled=1`)
+	rows, err := db.DB.Query(`SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND enabled=1 ORDER BY caddy_id`)
 	if err != nil {
 		return fmt.Errorf("query enabled HTTP rules for per-host metrics: %w", err)
 	}
@@ -347,6 +360,12 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 		}
 		for _, d := range strings.Split(domains, ",") {
 			if d = strings.TrimSpace(d); d != "" {
+				if existingID, exists := domainToRule[d]; exists {
+					if existingID != id {
+						log.Printf("Metrics domain conflict: domain %q maps to rules %q and %q; keeping %q", d, existingID, id, existingID)
+					}
+					continue
+				}
 				domainToRule[d] = id
 			}
 		}

@@ -1,12 +1,22 @@
 package services
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 func useTemporaryCertDir(t *testing.T) string {
@@ -187,4 +197,72 @@ func TestRestoreCertFiles_rolls_back_all_rules_when_later_restore_fails(t *testi
 			t.Fatalf("%s pair after rollback=(%q,%q), want current pair", ruleID, cert, key)
 		}
 	}
+}
+
+func TestMaterializeAllCertsFromDB_repairs_mismatched_downloaded_pair(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	useTemporaryCertDir(t)
+	wantCert, wantKey := matchingCertificatePair(t, "example.com")
+	otherCert, _ := matchingCertificatePair(t, "other.example.com")
+	if _, err := database.Exec(`
+		INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_materialize','materialize','example.com','http',8443,1,1,'acme_dns');
+		INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,ca_provider_id)
+		VALUES ('lb_materialize','example.com','downloaded',?,?,1)
+	`, wantCert, wantKey); err != nil {
+		t.Fatalf("seed downloaded certificate: %v", err)
+	}
+	certPath, keyPath := CertFilePaths("lb_materialize")
+	if err := os.WriteFile(certPath, []byte(otherCert), 0644); err != nil {
+		t.Fatalf("write mismatched certificate: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte(wantKey), 0600); err != nil {
+		t.Fatalf("write mismatched private key: %v", err)
+	}
+
+	// When
+	MaterializeAllCertsFromDB()
+
+	// Then
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatalf("read materialized certificate: %v", err)
+	}
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read materialized private key: %v", err)
+	}
+	if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
+		t.Fatalf("materialized pair does not match: %v", err)
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_materialize'").Scan(&status); err != nil {
+		t.Fatalf("read materialized job status: %v", err)
+	}
+	if status != "downloaded" {
+		t.Fatalf("materialized job status=%q, want downloaded", status)
+	}
+}
+
+func matchingCertificatePair(t *testing.T, domain string) (string, string) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("generate certificate key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: domain},
+		DNSNames:     []string{domain},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	return string(certPEM), string(keyPEM)
 }

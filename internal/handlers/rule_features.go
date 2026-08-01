@@ -338,8 +338,8 @@ func (h *Handlers) UpdateRuleACL(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 
-	var protocol, oldMode, oldListJSON string
-	if err := db.DB.QueryRow("SELECT protocol, COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol, &oldMode, &oldListJSON); dbQueryNotFound(c, err, "规则不存在", "UpdateRuleACL query rule") {
+	var protocol string
+	if err := db.DB.QueryRow("SELECT protocol FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol); dbQueryNotFound(c, err, "规则不存在", "UpdateRuleACL query rule") {
 		return
 	}
 	input := ruleFeatureInput{Protocol: protocol, IPACLMode: req.IPACLMode, IPACLList: req.IPACLList}
@@ -353,20 +353,39 @@ func (h *Handlers) UpdateRuleACL(c *gin.Context) {
 		return
 	}
 
-	if _, err := db.DB.Exec("UPDATE lb_rules SET ip_acl_mode = ?, ip_acl_list = ?, updated_at = datetime('now') WHERE caddy_id = ?", input.IPACLMode, newListJSON, caddyID); err != nil {
+	runtimeSnapshot, err := h.snapshotImportRuntime([]string{caddyID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
+		return
+	}
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				log.Printf("UpdateRuleACL transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
+			}
+		}
+	}()
+	if _, err := tx.Exec("UPDATE lb_rules SET ip_acl_mode = ?, ip_acl_list = ?, updated_at = datetime('now') WHERE caddy_id = ?", input.IPACLMode, newListJSON, caddyID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新访问控制失败"})
 		return
 	}
-
-	if err := h.applyCaddyConfigWithRollbackLocked(); err != nil {
-		if _, restoreErr := db.DB.Exec("UPDATE lb_rules SET ip_acl_mode = ?, ip_acl_list = ?, updated_at = datetime('now') WHERE caddy_id = ?", oldMode, oldListJSON, caddyID); restoreErr != nil {
-			log.Printf("CRITICAL: UpdateRuleACL Caddy apply and DB restore failed for caddy_id=%s: caddy=%v db=%v", caddyID, err, restoreErr)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 与 DB 恢复均失败: Caddy: %v; DB: %v", err, restoreErr)})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用失败，已回滚: %v", err)})
+	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
+		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用失败，数据库未写入: %v", errors.Join(err, restoreErr))})
 		return
 	}
+	if err := tx.Commit(); err != nil {
+		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("提交访问控制失败: %v", errors.Join(err, restoreErr))})
+		return
+	}
+	committed = true
 
 	aclModeText := map[string]string{"allow": "白名单", "deny": "黑名单", "": "已关闭"}[input.IPACLMode]
 	recordAudit(c, "更新", "访问控制", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("模式：%s", aclModeText), fmt.Sprintf("CIDR 数：%d", len(input.IPACLList))))
