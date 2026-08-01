@@ -41,6 +41,14 @@ export interface UpdateAPIKeyInput {
   readonly mcp_ip_whitelist?: string[]
 }
 
+export interface MCPToolSpec {
+  readonly name: string
+  readonly description: string
+  readonly method: string
+  readonly path: string
+  readonly read_only: boolean
+}
+
 
 export interface SystemInfo {
   hostname: string

@@ -13,6 +13,10 @@
           <el-icon><Document /></el-icon>
           接口文档
         </el-button>
+        <el-button @click="mcpDocsVisible = true">
+          <el-icon><Connection /></el-icon>
+          MCP 文档
+        </el-button>
         <el-button type="primary" :disabled="isReadOnly || creating" @click="openCreateDialog">
           <el-icon><Plus /></el-icon>
           创建密钥
@@ -91,6 +95,72 @@
     <el-card v-if="!loading && keys.length === 0" class="empty-card">
       <el-empty description="暂无 API 密钥" :image-size="80" />
     </el-card>
+
+    <el-dialog
+      v-model="mcpDocsVisible"
+      class="mcp-docs-dialog"
+      title="MCP 接入文档"
+      width="min(1000px, 96vw)"
+      @opened="fetchMCPTools"
+    >
+      <el-form label-position="top">
+        <el-form-item label="MCP 服务地址（Streamable HTTP）">
+          <el-input :model-value="mcpServiceURL" readonly>
+            <template #append>
+              <el-button aria-label="复制 MCP 服务地址" @click="copyMCPServiceURL">
+                <el-icon><CopyDocument /></el-icon>
+                复制
+              </el-button>
+            </template>
+          </el-input>
+        </el-form-item>
+      </el-form>
+
+      <el-alert
+        class="mcp-auth-alert"
+        title="认证方式"
+        description="请求需通过 X-API-Key 头携带 API Key，且该 Key 必须开启 MCP 功能。read_only Key 仅能看到只读工具；配置 IP 白名单后，请求来源还必须命中白名单。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+
+      <div class="mcp-tools-title">工具清单</div>
+      <div class="mcp-table-scroll-hint">左右滑动表格可查看方法、REST 路径和类型</div>
+      <div v-loading="mcpToolsLoading" class="mcp-tools-table">
+        <el-alert
+          v-if="mcpToolsError"
+          :title="mcpToolsError"
+          type="error"
+          :closable="false"
+          show-icon
+        >
+          <template #default>
+            <el-button size="small" @click="fetchMCPTools">重新加载</el-button>
+          </template>
+        </el-alert>
+        <el-table v-else :data="mcpTools" stripe max-height="38vh" empty-text="暂无工具">
+          <el-table-column prop="name" label="名称" min-width="180" />
+          <el-table-column label="详细描述" min-width="260">
+            <template #default="scope">
+              <span class="mcp-tool-description">{{ scope.row.description }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="方法与 REST 路径" min-width="260">
+            <template #default="scope">
+              <code>{{ scope.row.method }} {{ scope.row.path }}</code>
+            </template>
+          </el-table-column>
+          <el-table-column label="类型" width="90" align="center">
+            <template #default="scope">
+              <el-tag :type="scope.row.read_only ? 'success' : 'warning'" size="small">
+                {{ scope.row.read_only ? '只读' : '写' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </el-dialog>
 
     <el-dialog
       v-model="createDialogVisible"
@@ -227,8 +297,8 @@ import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateShort } from '@/utils/date'
 import { isValidCidr } from '@/utils/ruleValidation'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import { CopyDocument, Delete, Document, Key, Plus, Setting, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
-import type { APIKey, CreateAPIKeyInput, UpdateAPIKeyInput } from '@/types'
+import { Connection, CopyDocument, Delete, Document, Key, Plus, Setting, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
+import type { APIKey, ApiResponse, CreateAPIKeyInput, MCPToolSpec, UpdateAPIKeyInput } from '@/types'
 
 interface APIKeyListResponse {
   readonly data?: readonly APIKey[]
@@ -262,6 +332,12 @@ const togglePendingId = ref<number | null>(null)
 const deletingIds = ref(new Set<number>())
 const createdKey = ref('')
 const createdKeyVisible = ref(false)
+const mcpDocsVisible = ref(false)
+const mcpTools = ref<readonly MCPToolSpec[]>([])
+const mcpToolsLoading = ref(false)
+const mcpToolsLoaded = ref(false)
+const mcpToolsError = ref('')
+const mcpServiceURL = new URL('/api/v1/mcp', window.location.origin).toString()
 let keysRequestSeq = 0
 
 const fetchKeys = async () => {
@@ -454,6 +530,41 @@ const copyCreatedKey = async () => {
   }
 }
 
+const fetchMCPTools = async (): Promise<void> => {
+  if (mcpToolsLoading.value || mcpToolsLoaded.value) return
+  mcpToolsLoading.value = true
+  mcpToolsError.value = ''
+  try {
+    const response = await request.get<ApiResponse<readonly MCPToolSpec[]>>('/mcp/tools')
+    mcpTools.value = [...response.data].sort((left, right) => {
+      const categoryOrder = Number(right.read_only) - Number(left.read_only)
+      return categoryOrder || left.name.localeCompare(right.name)
+    })
+    mcpToolsLoaded.value = true
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      mcpToolsError.value = `工具清单加载失败：${error.message}`
+      return
+    }
+    throw error
+  } finally {
+    mcpToolsLoading.value = false
+  }
+}
+
+const copyMCPServiceURL = async (): Promise<void> => {
+  try {
+    await navigator.clipboard.writeText(mcpServiceURL)
+    ElMessage.success('MCP 服务地址已复制')
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      ElMessage.error('复制失败，请手动复制 MCP 服务地址')
+      return
+    }
+    throw error
+  }
+}
+
 onMounted(() => {
   fetchKeys()
 })
@@ -490,6 +601,15 @@ onMounted(() => {
 
 .readonly-alert { margin: -2px 0 18px; }
 
+.mcp-auth-alert { margin-bottom: 20px; }
+.mcp-tools-title { margin-bottom: 12px; font-weight: 600; }
+.mcp-table-scroll-hint { display: none; }
+.mcp-tools-table { min-height: 120px; overflow-x: auto; }
+.mcp-tools-table :deep(.el-table) { min-width: 800px; }
+.mcp-tool-description { line-height: 1.5; white-space: normal; }
+
+:deep(.mcp-docs-dialog .el-dialog__body) { max-height: calc(100dvh - 200px); overflow-y: auto; }
+
 .created-key-box { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding: 12px; border-radius: 6px; background: #f9fafb; }
 
 .created-key-text { flex: 1; min-width: 0; color: #111827; font-family: 'SF Mono', monospace; font-size: 12px; word-break: break-all; }
@@ -501,5 +621,9 @@ onMounted(() => {
   .page-header { align-items: flex-start; flex-direction: column; gap: 12px; }
   .header-actions { width: 100%; flex-wrap: wrap; }
   .key-actions { flex-wrap: wrap; }
+}
+
+@media (max-width: 1023px) {
+  .mcp-table-scroll-hint { display: block; margin: -4px 0 8px; color: var(--el-text-color-secondary); font-size: 12px; }
 }
 </style>

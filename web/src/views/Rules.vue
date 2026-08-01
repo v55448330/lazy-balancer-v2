@@ -115,6 +115,10 @@
                   <span class="cert-label">错误</span>
                   <span class="cert-error" :title="certInfoMap[row.caddy_id]?.error">{{ certInfoMap[row.caddy_id]?.error }}</span>
                 </div>
+                <div class="cert-row" v-if="certInfoMap[row.caddy_id]?.status === 'valid' && certJobMap[row.caddy_id]?.status === 'failed'">
+                  <span class="cert-label">最近重签</span>
+                  <span class="cert-error" :title="certJobMap[row.caddy_id]?.message">失败：{{ certJobMap[row.caddy_id]?.message || '未知错误' }}</span>
+                </div>
               </div>
             </el-popover>
             <span v-else class="text-secondary">-</span>
@@ -1356,11 +1360,13 @@ const tlsTagType = (row: Rule) => {
   const cert = certInfoMap.value[row.caddy_id]
   if (cert?.status === 'expired') return 'danger'
   if (cert?.status === 'expiring') return 'warning'
+  if (cert?.status === 'valid') return 'success'
   if (row.tls_source === 'acme_dns') {
     const status = certJobMap.value[row.caddy_id]?.status
     if (status === 'issued') return 'success'
     if (status === 'failed') return 'danger'
-    return 'warning'
+    if (status) return 'warning'
+    return 'info'
   }
   return 'primary'
 }
@@ -1369,10 +1375,11 @@ const tlsTagLabel = (row: Rule) => {
   const cert = certInfoMap.value[row.caddy_id]
   if (cert?.status === 'expired') return '已过期'
   if (cert?.status === 'expiring') return `临期 ${cert.days_remaining} 天`
+  if (cert?.status === 'valid') return row.tls_source === 'acme_dns' ? '已签发' : '手动'
   if (row.tls_source === 'acme_dns') {
     const status = certJobMap.value[row.caddy_id]?.status
     const label = status ? certJobStatusLabel(status) : ''
-    return label ? `ACME ${label}` : 'ACME'
+    return label ? `ACME ${label}` : '未签发'
   }
   return '手动'
 }

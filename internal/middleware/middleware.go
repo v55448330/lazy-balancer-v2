@@ -229,6 +229,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.DELETE("/users/me/api-keys/:id", h.DeleteCurrentUserAPIKey)
 
 				// Read-only lists (all authenticated users)
+				business.GET("/mcp/tools", h.GetMCPTools)
 				business.GET("/users", h.ListUsers)
 				business.GET("/api-keys", h.ListAPIKeys)
 				business.GET("/cluster/nodes", h.ListClusterNodes)

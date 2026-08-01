@@ -481,6 +481,7 @@ func newReadOnlyGuardTestRouter(t *testing.T, isMaster bool, role string) *gin.E
 		})
 	}
 	router.Use(readOnlyGuard(database))
+	router.GET("/api/v1/mcp/tools", noContent)
 	router.POST("/api/v1/rules", noContent)
 	router.POST("/api/v1/users", noContent)
 	router.PATCH("/api/v1/users/me", noContent)
@@ -512,6 +513,20 @@ func TestReadOnlyGuard_blocks_non_admin_business_write(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "非管理员用户只读") {
 		t.Fatalf("body = %q, want non-admin read-only message", response.Body.String())
+	}
+}
+
+func TestReadOnlyGuard_allows_slave_mcp_tool_registry(t *testing.T) {
+	// Given
+	router := newReadOnlyGuardTestRouter(t, false, "user")
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/mcp/tools", nil))
+
+	// Then
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", response.Code)
 	}
 }
 
