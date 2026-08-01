@@ -229,6 +229,70 @@ func TestCertIssuer_Issue_fast_path_returns_reload_error_and_keeps_downloaded(t 
 	}
 }
 
+func TestCertIssuer_Issue_queued_valid_certificate_runs_CA_flow(t *testing.T) {
+	// Given
+	jobID, ruleID := seedCertificateJob(t, "queued")
+	useTemporaryCertDir(t)
+	certPEM := testCertificatePEM(t, time.Now().Add(90*24*time.Hour))
+	const providerID = 999
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET cert_pem=?, key_pem='old-key', ca_provider_id=? WHERE id=?", certPEM, providerID, jobID); err != nil {
+		t.Fatalf("seed queued certificate material: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE lb_rules SET ca_provider_id=? WHERE caddy_id=?", providerID, ruleID); err != nil {
+		t.Fatalf("seed rule CA provider: %v", err)
+	}
+	reloads := 0
+	issuer := NewCertIssuer(func() error {
+		reloads++
+		return nil
+	})
+
+	// When
+	err := issuer.Issue(context.Background(), jobID, ruleID, "example.com", models.CAProvider{ID: providerID})
+
+	// Then
+	if !errors.Is(err, ErrCAProviderNotFound) {
+		t.Fatalf("queued issuance error=%v, want CA provider lookup failure", err)
+	}
+	if reloads != 0 {
+		t.Fatalf("queued issuance reloaded Caddy %d times, want 0", reloads)
+	}
+}
+
+func TestCertIssuer_Issue_downloaded_valid_certificate_uses_fast_path(t *testing.T) {
+	// Given
+	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	useTemporaryCertDir(t)
+	certPEM := testCertificatePEM(t, time.Now().Add(90*24*time.Hour))
+	const providerID = 999
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET cert_pem=?, key_pem='persisted-key', ca_provider_id=? WHERE id=?", certPEM, providerID, jobID); err != nil {
+		t.Fatalf("seed downloaded certificate material: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE lb_rules SET ca_provider_id=? WHERE caddy_id=?", providerID, ruleID); err != nil {
+		t.Fatalf("seed rule CA provider: %v", err)
+	}
+	reloads := 0
+	issuer := NewCertIssuer(func() error {
+		reloads++
+		return nil
+	})
+
+	// When
+	err := issuer.Issue(context.Background(), jobID, ruleID, "example.com", models.CAProvider{ID: providerID})
+
+	// Then
+	if err != nil {
+		t.Fatalf("redeploy downloaded certificate: %v", err)
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+		t.Fatalf("read redeployed certificate job: %v", err)
+	}
+	if status != "issued" || reloads != 1 {
+		t.Fatalf("redeployed job status=%q reloads=%d, want issued and 1", status, reloads)
+	}
+}
+
 func TestCAQueueManager_CancelJobsForRule_waits_for_fast_path_rollback(t *testing.T) {
 	jobID, ruleID := seedCertificateJob(t, "issued")
 	useTemporaryCertDir(t)

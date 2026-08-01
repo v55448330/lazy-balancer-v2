@@ -716,7 +716,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 	requestedProtocol := req.Protocol
-	upstreamsProvided := len(req.Upstreams) > 0
 	aclUpdated := req.IPACLMode != nil || req.IPACLList != nil
 
 	// caddyOpMu 必须覆盖 读取→合并→验证→快照→提交→应用→恢复 全程：锁外读取合并时，
@@ -938,6 +937,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		zero, disabled := 0, false
 		switch req.Protocol {
 		case "tcp":
+			if req.Strategy == "cookie" {
+				req.Strategy = "weighted_round_robin"
+			}
 			req.Domain = ""
 			req.EnableTLS = &disabled
 			req.TLSSource = "manual"
@@ -987,12 +989,23 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if len(req.Upstreams) == 0 {
 		req.Upstreams = oldUpstreams
 	}
-	if protocolChanged && !upstreamsProvided {
+	if protocolChanged {
 		for index := range req.Upstreams {
-			if req.Protocol == "tcp" {
-				req.Upstreams[index].Protocol = "tcp"
-			} else {
-				req.Upstreams[index].Protocol = "http"
+			switch req.Protocol {
+			case "tcp":
+				switch req.Upstreams[index].Protocol {
+				case "", "http":
+					req.Upstreams[index].Protocol = "tcp"
+				case "https":
+					req.Upstreams[index].Protocol = "tls"
+				}
+			case "http":
+				switch req.Upstreams[index].Protocol {
+				case "", "tcp":
+					req.Upstreams[index].Protocol = "http"
+				case "tls":
+					req.Upstreams[index].Protocol = "https"
+				}
 			}
 		}
 	}
@@ -1350,6 +1363,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		log.Printf("UpdateRule path_rules replace error for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新自定义路径规则失败"})
 		return
+	}
+	if protocolChanged && req.Protocol == "tcp" {
+		if err := services.RemoveCertFiles(caddyID); err != nil {
+			restoreErr := services.RestoreCertFiles(runtimeSnapshot.certFiles)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理旧证书文件失败: " + errors.Join(err, restoreErr).Error()})
+			return
+		}
 	}
 
 	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
@@ -1738,6 +1758,15 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已启用"})
 		return
 	}
+	if err := validateStoredRuleConfig(c.Request.Context(), caddyID); err != nil {
+		var validationErr *configValidationError
+		if errors.As(err, &validationErr) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: validationErr.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "预校验规则配置失败: " + err.Error()})
+		return
+	}
 	if err := h.validatePort(ruleProtocol, rulePort, caddyID); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "端口冲突，无法启用: " + err.Error()})
 		return
@@ -1788,7 +1817,12 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	}
 	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Failed to apply Caddy config: %v", errors.Join(err, restoreErr))})
+		var validationErr *configValidationError
+		if errors.As(err, &validationErr) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置验证失败: " + errors.Join(validationErr, restoreErr).Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("应用 Caddy 配置失败: %v", errors.Join(err, restoreErr))})
 		return
 	}
 	if err := tx.Commit(); err != nil {

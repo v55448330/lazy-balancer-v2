@@ -292,12 +292,13 @@
             </el-table-column>
             <el-table-column label="请求数" width="90" align="right">
               <template #default="{ row }">
-                <span class="text-primary">{{ ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-' }}</span>
+                <span class="text-primary">{{ isRuleDisabled(row) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-' }}</span>
               </template>
             </el-table-column>
             <el-table-column label="状态码" width="220" align="center">
               <template #default="{ row }">
-                <div v-if="row.protocol === 'tcp'" class="text-secondary">-</div>
+                <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
+                <div v-else-if="row.protocol === 'tcp'" class="text-secondary">-</div>
                 <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">采集失败</span>
                 <div v-else-if="hasRuleRequests(row.caddy_id)" class="status-codes">
                   <span class="status-code status-2xx" title="成功">2xx {{ ruleMetrics[row.caddy_id].status_2xx }}</span>
@@ -310,21 +311,23 @@
             </el-table-column>
             <el-table-column label="入站流量" width="100" align="right">
               <template #default="{ row }">
-                <span v-if="row.protocol === 'tcp'" class="text-secondary">-</span>
+                <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
+                <span v-else-if="row.protocol === 'tcp'" class="text-secondary">-</span>
                 <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">采集失败</span>
                 <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_in) : '-' }}</span>
               </template>
             </el-table-column>
             <el-table-column label="出站流量" width="100" align="right">
               <template #default="{ row }">
-                <span v-if="row.protocol === 'tcp'" class="text-secondary">-</span>
+                <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
+                <span v-else-if="row.protocol === 'tcp'" class="text-secondary">-</span>
                 <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">采集失败</span>
                 <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_out) : '-' }}</span>
               </template>
             </el-table-column>
             <el-table-column label="处理中" width="70" align="center">
               <template #default="{ row }">
-                <span class="text-secondary">{{ ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-' }}</span>
+                <span class="text-secondary">{{ isRuleDisabled(row) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-' }}</span>
               </template>
             </el-table-column>
             <el-table-column label="健康状态" width="80" align="center">
@@ -424,7 +427,10 @@ const caddyMetrics = ref<CaddyMetrics | null>(null)
 const caddyStatus = ref('unknown')
 const caddyLoading = ref(false)
 const rules = ref<Rule[]>([])
-const ruleMetrics = ref<Record<string, RuleMetrics>>({})
+interface DashboardRuleMetrics extends RuleMetrics {
+  enabled?: boolean
+}
+const ruleMetrics = ref<Record<string, DashboardRuleMetrics>>({})
 const ruleMetricsUnavailable = ref<Record<string, boolean>>({})
 type RuleHealth = 'unknown' | 'unhealthy' | 'degraded' | 'healthy'
 const ruleHealth = ref<Record<string, RuleHealth>>({})
@@ -460,6 +466,16 @@ interface RuleHistoryRow {
   bytes_out: number
 }
 
+interface RuleHistoryDelta {
+  requests: number
+  status2xx: number
+  status3xx: number
+  status4xx: number
+  status5xx: number
+  bytesIn: number
+  bytesOut: number
+}
+
 interface RuleHistoryResponse {
   supported?: boolean
   bucket_interval_seconds?: number
@@ -470,7 +486,7 @@ interface DashboardMetricsResponse {
   global: CaddyMetrics
   hosts: HostMetrics[]
   overview: MetricsOverview
-  rules: Record<string, RuleMetrics>
+  rules: Record<string, DashboardRuleMetrics>
 }
 
 interface UpstreamHealth {
@@ -530,29 +546,62 @@ const fetchRuleHistory = async () => {
   }
 }
 
+const diffCounters = (previous: RuleHistoryRow, current: RuleHistoryRow): RuleHistoryDelta | null => {
+  const reset = current.requests_total < previous.requests_total
+    || current.requests_2xx < previous.requests_2xx
+    || current.requests_3xx < previous.requests_3xx
+    || current.requests_4xx < previous.requests_4xx
+    || current.requests_5xx < previous.requests_5xx
+    || current.bytes_in < previous.bytes_in
+    || current.bytes_out < previous.bytes_out
+  if (reset) return null
+  return {
+    requests: current.requests_total - previous.requests_total,
+    status2xx: current.requests_2xx - previous.requests_2xx,
+    status3xx: current.requests_3xx - previous.requests_3xx,
+    status4xx: current.requests_4xx - previous.requests_4xx,
+    status5xx: current.requests_5xx - previous.requests_5xx,
+    bytesIn: current.bytes_in - previous.bytes_in,
+    bytesOut: current.bytes_out - previous.bytes_out,
+  }
+}
+
+const ruleHistoryDeltas = computed(() => {
+  const labels: string[] = []
+  const deltas: Array<RuleHistoryDelta | null> = []
+  for (let index = 1; index < ruleHistoryRows.value.length; index += 1) {
+    const previous = ruleHistoryRows.value[index - 1]
+    const current = ruleHistoryRows.value[index]
+    if (!previous || !current) continue
+    labels.push(current.timestamp.slice(5, 16))
+    deltas.push(diffCounters(previous, current))
+  }
+  return { labels, deltas }
+})
+
 const historyChartBase = (legend: string[], series: LineSeriesOption[], valueFormatter?: (value: number) => string): EChartsOption => ({
   tooltip: { trigger: 'axis', backgroundColor: 'rgba(255,255,255,0.95)', borderColor: '#e5e7eb', textStyle: { color: '#374151', fontSize: 12 } },
   legend: { data: legend, bottom: 0, textStyle: { fontSize: 11, color: '#6b7280' } },
   grid: { left: 55, right: 15, top: 15, bottom: 40 },
-  xAxis: { type: 'category', data: ruleHistoryRows.value.map((row) => row.timestamp.slice(5, 16)), axisLine: { lineStyle: { color: '#e5e7eb' } }, axisLabel: { fontSize: 10, color: '#9ca3af', interval: ruleHistoryBucketSeconds.value >= 900 ? 'auto' : undefined } },
+  xAxis: { type: 'category', data: ruleHistoryDeltas.value.labels, axisLine: { lineStyle: { color: '#e5e7eb' } }, axisLabel: { fontSize: 10, color: '#9ca3af', interval: ruleHistoryBucketSeconds.value >= 900 ? 'auto' : undefined } },
   yAxis: { type: 'value', axisLine: { show: false }, axisLabel: { fontSize: 10, color: '#9ca3af', ...(valueFormatter ? { formatter: valueFormatter } : {}) }, splitLine: { lineStyle: { color: '#f3f4f6' } } },
   series,
 })
 
 const ruleRequestsChartOption = computed<EChartsOption>(() => {
-  const mk = (name: string, key: keyof Omit<RuleHistoryRow, 'timestamp'>, color: string): LineSeriesOption => ({ name, type: 'line', data: ruleHistoryRows.value.map((row) => row[key]), sampling: 'lttb', smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
+  const mk = (name: string, key: keyof RuleHistoryDelta, color: string): LineSeriesOption => ({ name, type: 'line', data: ruleHistoryDeltas.value.deltas.map((row) => row === null ? null : row[key]), sampling: 'lttb', connectNulls: false, smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
   return historyChartBase(['总请求', '2xx', '3xx', '4xx', '5xx'], [
-    mk('总请求', 'requests_total', '#3b82f6'),
-    mk('2xx', 'requests_2xx', '#10b981'),
-    mk('3xx', 'requests_3xx', '#f59e0b'),
-    mk('4xx', 'requests_4xx', '#f97316'),
-    mk('5xx', 'requests_5xx', '#ef4444'),
+    mk('总请求', 'requests', '#3b82f6'),
+    mk('2xx', 'status2xx', '#10b981'),
+    mk('3xx', 'status3xx', '#f59e0b'),
+    mk('4xx', 'status4xx', '#f97316'),
+    mk('5xx', 'status5xx', '#ef4444'),
   ])
 })
 
 const ruleBytesChartOption = computed<EChartsOption>(() => {
-  const mk = (name: string, key: 'bytes_in' | 'bytes_out', color: string): LineSeriesOption => ({ name, type: 'line', data: ruleHistoryRows.value.map((row) => row[key]), sampling: 'lttb', smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
-  return historyChartBase(['入站', '出站'], [mk('入站', 'bytes_in', '#3b82f6'), mk('出站', 'bytes_out', '#10b981')], formatBytes)
+  const mk = (name: string, key: 'bytesIn' | 'bytesOut', color: string): LineSeriesOption => ({ name, type: 'line', data: ruleHistoryDeltas.value.deltas.map((row) => row === null ? null : row[key]), sampling: 'lttb', connectNulls: false, smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
+  return historyChartBase(['入站', '出站'], [mk('入站', 'bytesIn', '#3b82f6'), mk('出站', 'bytesOut', '#10b981')], formatBytes)
 })
 
 const sortedRules = computed(() =>
@@ -565,6 +614,8 @@ const hasRuleRequests = (caddyId: string): boolean => {
   const requests = ruleMetrics.value[caddyId]?.requests_total
   return requests !== undefined && requests > 0
 }
+
+const isRuleDisabled = (rule: Rule): boolean => !rule.enabled || ruleMetrics.value[rule.caddy_id]?.enabled === false
 
 const ipList = computed(() => {
   const ips = systemInfo.value?.network_ips
@@ -704,7 +755,7 @@ const fetchAllData = (): Promise<void> => {
       hostMetrics.value = data.hosts
       overview.value = data.overview
       ruleMetrics.value = data.rules
-      ruleMetricsUnavailable.value = Object.fromEntries(rules.value.map((rule) => [rule.caddy_id, data.rules[rule.caddy_id] === undefined]))
+      ruleMetricsUnavailable.value = Object.fromEntries(rules.value.map((rule) => [rule.caddy_id, rule.enabled && data.rules[rule.caddy_id] === undefined]))
       caddyMetricsUnavailable.value = false
       hostMetricsUnavailable.value = false
       overviewUnavailable.value = false
@@ -713,7 +764,7 @@ const fetchAllData = (): Promise<void> => {
       caddyMetricsUnavailable.value = true
       hostMetricsUnavailable.value = true
       overviewUnavailable.value = true
-      ruleMetricsUnavailable.value = Object.fromEntries(rules.value.map((rule) => [rule.caddy_id, true]))
+      ruleMetricsUnavailable.value = Object.fromEntries(rules.value.map((rule) => [rule.caddy_id, rule.enabled]))
     }),
     request.get('/rules', config).then(async (res) => {
       if (disposed) return

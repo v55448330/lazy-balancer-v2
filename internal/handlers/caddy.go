@@ -297,6 +297,15 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			return
 		}
 	}
+	if err := validateEnabledStoredRuleConfigs(c.Request.Context()); err != nil {
+		var validationErr *configValidationError
+		if errors.As(err, &validationErr) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: validationErr.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "预校验规则配置失败: " + err.Error()})
+		return
+	}
 
 	// Generate config with requested overrides — DB is NOT touched yet
 	testConfig := services.GenerateCaddyConfig(&req)
@@ -423,6 +432,11 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
 		restoreErr := errors.Join(restoreEnv(), h.caddyService.ApplyConfig(oldRuntimeConfig))
 		err = errors.Join(err, restoreErr)
+		var validationErr *configValidationError
+		if errors.As(err, &validationErr) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置验证失败: " + validationErr.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，配置未保存: " + err.Error()})
 		return
 	}

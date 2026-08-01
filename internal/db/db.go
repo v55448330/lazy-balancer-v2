@@ -39,7 +39,7 @@ func SetDB(d *sql.DB) {
 }
 
 func logDBError(operation string, err error) {
-	log.Printf("%s: %v", operation, err)
+	log.Printf("ERROR: %s: %v", operation, err)
 }
 
 // GetDB returns the handle registered via Initialize/SetDB, safe for

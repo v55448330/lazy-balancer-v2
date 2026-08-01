@@ -184,33 +184,16 @@ lb_ + 10位随机字符 = 13位
 
 ## 7. 配置同步流程
 
-### 7.1 创建规则 (CreateRule)
+### 7.1 创建/更新/启停规则（统一写路径）
 
 ```
-1. 请求验证 (validateCaddyConfigBeforeSave)
-2. Caddy 预验证 (ValidateRouteMergedConfig)
-3. 写入 Caddy (CreateServerIfNotExists + PrependRouteToServer)
-4. 验证路由 (VerifyRouteExists)
-5. 写入数据库 (lb_rules + upstreams)
-6. 失败回滚 (RemoveRouteFromServer)
+1. 请求验证（端口/上游/域名等）
+2. 开启数据库事务并写入变更
+3. 从事务内数据生成全量 Caddy 配置并应用（ApplyConfigFromTx，含 Caddy 验证）
+4. 应用成功则提交事务；任何失败回滚事务（数据库零写入）并恢复运行时快照
 ```
 
-### 7.2 更新规则 (UpdateRule)
-
-```
-1. 请求验证
-2. 读取现有配置
-3. 写入 Caddy (SetConfigByID - 按 @id 替换)
-4. 验证路由
-5. 更新数据库
-```
-
-### 7.3 启用/禁用规则
-
-```
-启用: PrependRouteToServer (添加) + 更新数据库
-禁用: RemoveRouteFromServer (移除) + 更新数据库
-```
+> 历史版本曾使用逐条增量写 Caddy Admin API 的方式（按 @id 增删路由），现已统一为上述"事务内全量生成、应用、提交"模型。
 
 ---
 

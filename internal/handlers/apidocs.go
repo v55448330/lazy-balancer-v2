@@ -86,7 +86,8 @@ var apiDocRoutes = []apiDocRoute{
 	{"GET", "/cluster/nodes", "集群", "主节点查看从节点", "", `{"code":0,"data":[{"id":2,"name":"slave-a","ip_address":"10.0.0.2","port":8000,"access_url":"http://127.0.0.1:8001","status":"online","is_approved":true,"reported_version":3,"current_version":3,"health":{"caddy_ok":true,"rules_count":5,"certs_expiring_30d":0,"last_sync_at":"2026-07-18T12:00:00Z","last_sync_error":"","uptime_sec":3600},"last_seen":"2026-07-18T12:00:00Z","created_at":"2026-07-18T11:00:00Z"}]}`, []string{"401 unauthenticated"}, "所有已认证用户可读；接受 JWT 或 API Key，仅主节点返回节点列表；离线状态按 last_seen 超过 2×sync_interval 在读取时计算。"},
 	{"POST", "/cluster/register-tokens", "集群", "生成一次性注册令牌", "", `{"code":0,"message":"注册令牌已生成，仅显示一次","data":{"token":"...","expires_at":"2026-07-18T12:30:00Z"}}`, []string{"403 仅主节点管理员"}, "admin JWT 或管理员 API Key；明文仅返回一次，服务端仅保存 SHA-256 哈希，30 分钟过期。"},
 	{"POST", "/cluster/register", "集群机器接口", "从节点注册", `{"token":"...","name":"slave-a","ip_address":"10.0.0.2","port":8000,"access_url":"http://127.0.0.1:8001"}`, `{"code":0,"message":"注册成功，等待主节点审批","data":{"registration_id":2,"registration_secret":"..."}}`, []string{"401 注册令牌无效或已过期"}, "不使用 JWT；access_url 可选；注册令牌一次性。相同 IP+端口待审批注册幂等更新。"},
-	{"GET", "/cluster/register/:id/status", "集群机器接口", "轮询注册审批状态", "", `{"code":0,"data":{"status":"approved","cluster_token":"lb_cluster_..."}}`, []string{"401 注册凭证无效"}, "X-Registration-Secret 或 Bearer registration_secret；审批后可在交付确认前重复领取 cluster_token，首次成功快照同步后失效。"},
+	{"GET", "/cluster/register/:id/status", "集群机器接口", "轮询注册审批状态", "", `{"code":0,"data":{"status":"approved","cluster_token":"lb_cluster_..."}}`, []string{"401 注册凭证无效"}, "X-Registration-Secret 或 Bearer registration_secret；审批后可在交付确认前重复领取 cluster_token。从节点持久化 cluster_token 后调用注册交付确认接口，确认成功立即使 registration_secret 失效。"},
+	{"POST", "/cluster/registration/confirm", "集群机器接口", "确认集群令牌交付", "", `{"code":0,"message":"集群注册已确认"}`, []string{"401 集群凭证无效", "403 仅主节点"}, "X-Cluster-Token 或 Bearer cluster token；从节点持久化令牌后调用，立即清除 registration_secret。"},
 	{"POST", "/cluster/nodes/:id/approve", "集群", "批准待审批节点", "", `{"code":0,"message":"审批节点成功"}`, []string{"403 仅主节点管理员", "404 节点不存在"}, "admin JWT 或管理员 API Key；签发节点专属长期集群令牌，仅保存 SHA-256 哈希。"},
 	{"POST", "/cluster/nodes/:id/reject", "集群", "拒绝待审批节点", "", `{"code":0,"message":"拒绝节点成功"}`, []string{"403 仅主节点管理员", "404 节点不存在"}, "admin JWT 或管理员 API Key；删除节点记录。"},
 	{"POST", "/cluster/nodes/:id/login-ticket", "集群", "生成从节点登录票据", "", `{"ticket":"...","url":"https://10.0.0.2:8000"}`, []string{"403 仅主节点管理员", "409 节点不在线"}, "admin JWT 或管理员 API Key；票据 60 秒有效且只能使用一次。客户端必须将返回地址拼接为 URL#login_ticket=<percent-encoded-ticket>；从节点消费后无论成功或失败都必须清除 fragment。"},
@@ -120,6 +121,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"GET", "/caddy/host-metrics", "Caddy", "按域名统计指标", "", `[{"host":"example.com","requests_total":0}]`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/certificates/jobs/:id", "证书", "证书签发任务详情", "", `{"id":1,"rule_id":"lb_...","status":"issued"}`, []string{"404 not_found"}, ""},
 	{"GET", "/certificates/jobs/:id/logs", "证书", "证书签发任务日志", "", `{"content":"..."}`, []string{"404 not_found"}, ""},
+	{"GET", "/metrics/dashboard", "指标", "聚合监控面板指标", "", `{"global":{},"hosts":[],"overview":{},"rules":{}}`, []string{"401 unauthenticated", "500 query_failed", "502 caddy_metrics_unavailable"}, "单次采集并聚合全局、主机、总览及全部已启用规则指标。"},
 	{"GET", "/metrics/overview", "指标", "指标总览", "", `{"total_requests":0,"requests_per_sec":0}`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/metrics/rule/:caddy_id", "指标", "单规则指标", "", `{"requests_total":0,"bytes_in":0,"bytes_out":0}`, []string{"404 not_found"}, ""},
 	{"GET", "/metrics/history", "指标", "历史指标", "", `[{"timestamp":"...","bytes_in":0,"bytes_out":0}]`, []string{"401 unauthenticated"}, ""},
@@ -215,6 +217,7 @@ var apiDocContracts = map[string]apiDocContract{
 	"GET /branding":                        {security: "public"},
 	"POST /cluster/register":               {security: "public"},
 	"GET /cluster/register/:id/status":     {security: "registration"},
+	"POST /cluster/registration/confirm":   {security: "cluster"},
 	"GET /cluster/sync/snapshot":           {security: "cluster", emptySuccessStatuses: []int{http.StatusNotModified}, queryParameters: []apiDocParameter{{"since_version", "integer", "客户端已应用的快照版本"}, {"fingerprint", "string", "客户端已应用的快照指纹"}}},
 	"POST /cluster/nodes/report":           {security: "cluster"},
 	"POST /mcp":                            {rawResponse: true, security: "mcp"},
@@ -307,6 +310,8 @@ func operationDescription(route apiDocRoute) string {
 		retry = "可安全重试：重复登出保持令牌已吊销状态。"
 	case "POST /cluster/register":
 		retry = "可安全重试：相同 IP 和端口的待审批注册会更新原记录。"
+	case "POST /cluster/registration/confirm":
+		retry = "可安全重试：重复确认保持 registration_secret 已失效。"
 	case "POST /rules/:caddy_id/enable", "PUT /rules/:caddy_id/disable":
 		retry = "可安全重试：重复调用保持规则为目标启停状态并返回成功。"
 	case "POST /cluster/register-tokens":

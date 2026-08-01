@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,7 +51,7 @@ func StartTimezoneRefresh(ctx context.Context) <-chan struct{} {
 	go func() {
 		defer close(done)
 		if err := refreshLocation(); err != nil {
-			log.Printf("refresh timezone: %v", err)
+			Logf("error", "refresh timezone: %v", err)
 		}
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -57,7 +59,7 @@ func StartTimezoneRefresh(ctx context.Context) <-chan struct{} {
 			select {
 			case <-ticker.C:
 				if err := refreshLocation(); err != nil {
-					log.Printf("refresh timezone: %v", err)
+					Logf("error", "refresh timezone: %v", err)
 				}
 			case <-workerCtx.Done():
 				return
@@ -164,9 +166,41 @@ func ShouldLog(level string) bool {
 }
 
 func Logf(level, format string, args ...any) {
-	if ShouldLog(level) {
+	if !ShouldLog(level) {
+		return
+	}
+	switch level {
+	case "warn":
+		log.Printf("WARNING: "+format, args...)
+	case "error":
+		log.Printf("ERROR: "+format, args...)
+	default:
 		log.Printf(format, args...)
 	}
+}
+
+type applicationLogWriter struct {
+	w io.Writer
+}
+
+func NewApplicationLogWriter(writer io.Writer) io.Writer {
+	return &applicationLogWriter{w: writer}
+}
+
+func (writer *applicationLogWriter) Write(p []byte) (int, error) {
+	line := strings.ToUpper(strings.TrimSpace(string(p)))
+	threshold := applicationLogLevel.Load()
+	if threshold >= logLevelError && !strings.HasPrefix(line, "ERROR") {
+		return len(p), nil
+	}
+	if threshold == logLevelWarn && !strings.HasPrefix(line, "WARN") && !strings.HasPrefix(line, "ERROR") {
+		return len(p), nil
+	}
+	written, err := writer.w.Write(p)
+	if err != nil {
+		return written, err
+	}
+	return len(p), nil
 }
 
 func ApplyLogLevel() {
@@ -175,6 +209,6 @@ func ApplyLogLevel() {
 		_ = db.DB.QueryRow("SELECT COALESCE(log_level,'info') FROM global_config WHERE id=1").Scan(&level)
 	}
 	if err := ConfigureLogLevel(level); err != nil {
-		log.Printf("apply application log level: %v", err)
+		Logf("error", "apply application log level: %v", err)
 	}
 }

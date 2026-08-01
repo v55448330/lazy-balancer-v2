@@ -21,19 +21,33 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed, defineAsyncComponent } from 'vue'
+import type { AsyncComponentLoader } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { ApiRequestError, isTokenExpired } from '@/utils/api'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import Login from '@/views/Login.vue'
+import AsyncPageError from '@/views/AsyncPageError.vue'
 
-const Login = defineAsyncComponent(() => import('@/views/Login.vue'))
-const Dashboard = defineAsyncComponent(() => import('@/views/Dashboard.vue'))
-const Rules = defineAsyncComponent(() => import('@/views/Rules.vue'))
-const Settings = defineAsyncComponent(() => import('@/views/Settings.vue'))
-const CaddyConfig = defineAsyncComponent(() => import('@/views/CaddyConfig.vue'))
-const Users = defineAsyncComponent(() => import('@/views/Users.vue'))
-const AuditLog = defineAsyncComponent(() => import('@/views/AuditLog.vue'))
+const createAsyncPage = (loader: AsyncComponentLoader) => defineAsyncComponent({
+  loader,
+  errorComponent: AsyncPageError,
+  onError: (_error, retry, fail, attempts) => {
+    if (attempts <= 1) {
+      retry()
+      return
+    }
+    fail()
+  },
+})
+
+const Dashboard = createAsyncPage(() => import('@/views/Dashboard.vue'))
+const Rules = createAsyncPage(() => import('@/views/Rules.vue'))
+const Settings = createAsyncPage(() => import('@/views/Settings.vue'))
+const CaddyConfig = createAsyncPage(() => import('@/views/CaddyConfig.vue'))
+const Users = createAsyncPage(() => import('@/views/Users.vue'))
+const AuditLog = createAsyncPage(() => import('@/views/AuditLog.vue'))
 
 const authStore = useAuthStore()
 const loading = ref(true)

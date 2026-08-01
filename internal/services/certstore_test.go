@@ -227,6 +227,42 @@ func TestMaterializeCertPairs_skipsWrites_whenPairIsUnchanged(t *testing.T) {
 	}
 }
 
+func TestMaterializeCertPairs_restores_permissions_whenContentIsUnchanged(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	certPEM, keyPEM := matchingCertificatePair(t, "permissions.example.test")
+	material := CertMaterial{RuleID: "lb_permissions", CertPEM: certPEM, KeyPEM: keyPEM}
+	if _, err := MaterializeCertPairs([]CertMaterial{material}); err != nil {
+		t.Fatalf("initial materialization: %v", err)
+	}
+	certPath, keyPath := CertFilePaths(material.RuleID)
+	if err := os.Chmod(certPath, 0600); err != nil {
+		t.Fatalf("tighten certificate permissions: %v", err)
+	}
+	if err := os.Chmod(keyPath, 0644); err != nil {
+		t.Fatalf("loosen private key permissions: %v", err)
+	}
+
+	// When
+	_, err := MaterializeCertPairs([]CertMaterial{material})
+
+	// Then
+	if err != nil {
+		t.Fatalf("rematerialize unchanged pair: %v", err)
+	}
+	certInfo, err := os.Stat(certPath)
+	if err != nil {
+		t.Fatalf("stat rematerialized certificate: %v", err)
+	}
+	keyInfo, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("stat rematerialized private key: %v", err)
+	}
+	if certInfo.Mode().Perm() != 0644 || keyInfo.Mode().Perm() != 0600 {
+		t.Fatalf("materialized modes=(%#o,%#o), want (0644,0600)", certInfo.Mode().Perm(), keyInfo.Mode().Perm())
+	}
+}
+
 func TestMaterializeAllCertsFromDB_repairs_mismatched_downloaded_pair(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)

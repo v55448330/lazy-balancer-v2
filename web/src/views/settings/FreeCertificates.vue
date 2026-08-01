@@ -220,7 +220,7 @@ import { ref, onMounted, computed, reactive } from 'vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Check } from '@element-plus/icons-vue'
+import { Check, Connection, Document, OfficeBuilding, Plus, Setting } from '@element-plus/icons-vue'
 import CertJobs from './CertJobs.vue'
 import type { APIResponse } from '@/types'
 

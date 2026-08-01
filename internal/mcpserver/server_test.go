@@ -124,15 +124,22 @@ func TestToolsListHidesWriteTools_forReadOnlyAPIKey(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("parse tools/list response: %v", err)
 	}
-	if len(payload.Result.Tools) != 14 {
-		t.Fatalf("read-only tool count=%d, want 14", len(payload.Result.Tools))
+	if len(payload.Result.Tools) != 15 {
+		t.Fatalf("read-only tool count=%d, want 15", len(payload.Result.Tools))
 	}
+	dashboardVisible := false
 	for _, tool := range payload.Result.Tools {
+		if tool.Name == "get_metrics_dashboard" {
+			dashboardVisible = true
+		}
 		for _, spec := range tools {
 			if spec.name == tool.Name && spec.method != http.MethodGet {
 				t.Errorf("read-only tools/list exposes write tool %s", tool.Name)
 			}
 		}
+	}
+	if !dashboardVisible {
+		t.Fatal("read-only tools/list hides get_metrics_dashboard")
 	}
 }
 

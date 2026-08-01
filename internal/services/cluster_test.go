@@ -211,14 +211,8 @@ func TestClusterService_ApproveNode_redelivers_cluster_token_until_confirmed(t *
 	if _, _, err := service.Snapshot(context.Background(), 0, "", first.ClusterToken); err != nil {
 		t.Fatalf("authenticate snapshot: %v", err)
 	}
-	if _, err := service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret); err != nil {
-		t.Fatalf("GET snapshot invalidated registration secret: %v", err)
-	}
-	if err := service.ConfirmRegistration(context.Background(), first.ClusterToken); err != nil {
-		t.Fatalf("confirm registration: %v", err)
-	}
 	if _, err := service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret); !errors.Is(err, ErrInvalidClusterAuth) {
-		t.Fatalf("registration secret remained valid after confirmation: %v", err)
+		t.Fatalf("registration secret remained valid after authenticated snapshot delivery: %v", err)
 	}
 }
 
@@ -986,6 +980,43 @@ func TestSyncService_pollRegistration_clears_temporary_secret_after_approval(t *
 	}
 	if clusterToken != "lb_cluster_approved" || registrationSecret != "" {
 		t.Fatalf("approved credentials token=%q temporary_secret=%q", clusterToken, registrationSecret)
+	}
+}
+
+func TestSyncService_pollRegistration_uses_legacy_snapshot_confirmation_when_confirm_missing(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	snapshotRequested := false
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/cluster/register/7/status":
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{"code":0,"data":{"status":"approved","cluster_token":"lb_cluster_legacy"}}`))
+		case "/api/v1/cluster/registration/confirm":
+			response.WriteHeader(http.StatusNotFound)
+		case "/api/v1/cluster/sync/snapshot":
+			snapshotRequested = request.Header.Get("X-Cluster-Token") == "lb_cluster_legacy"
+			response.WriteHeader(http.StatusInternalServerError)
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, registration_id=7, registration_secret='temporary-secret', cluster_token='' WHERE id=1", master.URL); err != nil {
+		t.Fatalf("seed pending registration: %v", err)
+	}
+	syncService := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(master.URL))
+
+	// When
+	syncService.pollRegistration(context.Background())
+
+	// Then
+	var clusterToken string
+	if err := database.QueryRow("SELECT cluster_token FROM global_config WHERE id=1").Scan(&clusterToken); err != nil {
+		t.Fatalf("read approved token: %v", err)
+	}
+	if clusterToken != "lb_cluster_legacy" || !snapshotRequested {
+		t.Fatalf("legacy token=%q snapshot_requested=%v", clusterToken, snapshotRequested)
 	}
 }
 

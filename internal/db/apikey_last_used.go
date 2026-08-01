@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"sync"
@@ -85,12 +86,26 @@ func startAPIKeyLastUsedFlusher() {
 					if _, err := database.Exec("DELETE FROM revoked_jti WHERE expires_at<=datetime('now')"); err != nil {
 						logDBError("cleanup revoked JWT IDs", err)
 					}
+					if err := cleanupExpiredRegistrationSecrets(ctx, database); err != nil {
+						logDBError("cleanup expired cluster registration secrets", err)
+					}
 				}
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
+}
+
+func cleanupExpiredRegistrationSecrets(ctx context.Context, database *sql.DB) error {
+	if _, err := database.ExecContext(ctx, `UPDATE nodes
+		SET registration_secret=NULL, registration_secret_expires_at=NULL
+		WHERE registration_secret IS NOT NULL
+		  AND registration_secret_expires_at IS NOT NULL
+		  AND registration_secret_expires_at<=datetime('now')`); err != nil {
+		return fmt.Errorf("cleanup expired cluster registration secrets: %w", err)
+	}
+	return nil
 }
 
 func stopAPIKeyLastUsedFlusher() {

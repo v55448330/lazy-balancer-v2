@@ -439,7 +439,11 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		if importFailurePhase(err) == importPhaseQueue {
 			message = "配置已导入但证书任务恢复失败: " + err.Error()
 		}
-		recordAudit(c, "导入失败", "配置备份", err.Error())
+		auditAction := "导入失败"
+		if importFailurePhase(err) == importPhaseQueue {
+			auditAction = "导入部分失败"
+		}
+		recordAudit(c, auditAction, "配置备份", err.Error())
 		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{"imported": imported}})
 		return
 	}

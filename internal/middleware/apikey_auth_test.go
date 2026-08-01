@@ -140,6 +140,82 @@ func TestJWTAuthQueriesAuthenticationStateOnce(t *testing.T) {
 	}
 }
 
+func TestJWTAuthReportsRevokedBeforeMissingUser(t *testing.T) {
+	// Given
+	oldDB := db.DB
+	database, err := sql.Open("sqlite", t.TempDir()+"/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.DB = database
+	db.SetDB(database)
+	t.Cleanup(func() {
+		db.DB = oldDB
+		db.SetDB(oldDB)
+		_ = database.Close()
+	})
+	if _, err := database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT, is_enabled BOOLEAN, password_version INTEGER NOT NULL DEFAULT 0);
+		CREATE TABLE revoked_jti (jti_hash TEXT PRIMARY KEY, expires_at DATETIME NOT NULL);`); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{JWTSecret: "test-secret"}
+	const jti = "revoked-missing-user"
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id": float64(99), "username": "removed", "pwd_ver": float64(0), "jti": jti, "exp": time.Now().Add(time.Hour).Unix(),
+	}).SignedString([]byte(cfg.JWTSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256([]byte(jti))
+	if _, err := database.Exec("INSERT INTO revoked_jti VALUES (?,?)", hex.EncodeToString(hash[:]), time.Now().Add(time.Hour).UTC().Format(revokedTokenTimeFormat)); err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.Use(jwtAuth(cfg))
+	router.GET("/probe", func(c *gin.Context) { c.Status(http.StatusOK) })
+	request := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), "登录状态已失效") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAuthenticationSecurityAuditRateLimitsSameReasonPathAndIP(t *testing.T) {
+	// Given
+	oldRecorder := recordAuthenticationSecurityAudit
+	oldNow := authenticationSecurityAuditNow
+	securityAuditLimiter.reset()
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	authenticationSecurityAuditNow = func() time.Time { return now }
+	recorded := 0
+	recordAuthenticationSecurityAudit = func(_, _, _, _, _ string) { recorded++ }
+	t.Cleanup(func() {
+		recordAuthenticationSecurityAudit = oldRecorder
+		authenticationSecurityAuditNow = oldNow
+		securityAuditLimiter.reset()
+	})
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/v1/rules", nil)
+	context.Request.RemoteAddr = "198.51.100.9:1234"
+
+	// When
+	recordAuthenticationRejection(context, "jwt_revoked")
+	recordAuthenticationRejection(context, "jwt_revoked")
+	now = now.Add(time.Minute)
+	recordAuthenticationRejection(context, "jwt_revoked")
+
+	// Then
+	if recorded != 2 {
+		t.Fatalf("security audit events=%d, want 2", recorded)
+	}
+}
+
 func TestAPIKeyAuthAppliesIPWhitelistToRESTRequests(t *testing.T) {
 	oldDB := db.DB
 	database, err := sql.Open("sqlite", t.TempDir()+"/test.db")

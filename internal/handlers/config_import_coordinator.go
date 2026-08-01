@@ -26,8 +26,33 @@ type importCoordinatorError struct {
 	err   error
 }
 
-func (err *importCoordinatorError) Error() string { return err.err.Error() }
+func (err *importCoordinatorError) Error() string { return importFailureAuditDescription(err) }
 func (err *importCoordinatorError) Unwrap() error { return err.err }
+
+func importFailureAuditDescription(err error) string {
+	var coordinatorErr *importCoordinatorError
+	if !errors.As(err, &coordinatorErr) {
+		return "导入失败：" + err.Error()
+	}
+	var description string
+	switch coordinatorErr.phase {
+	case importPhaseSnapshot:
+		description = "导入失败（运行配置快照失败，数据库未变更）"
+	case importPhaseCertificate:
+		description = "导入失败（证书准备失败，数据库未变更）"
+	case importPhaseCaddy:
+		description = "导入失败（Caddy 验证失败，数据库未变更）"
+	case importPhaseVersion:
+		description = "导入失败（集群版本更新失败，数据库未变更）"
+	case importPhaseCommit:
+		description = "导入失败（数据库提交失败，数据库未变更）"
+	case importPhaseQueue:
+		description = "导入部分失败（数据库已提交，证书任务恢复失败）"
+	default:
+		description = "导入失败"
+	}
+	return description + "：" + coordinatorErr.err.Error()
+}
 
 type configImportSession struct {
 	h               *Handlers

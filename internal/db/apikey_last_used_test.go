@@ -1,10 +1,39 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
 )
+
+func TestCleanupExpiredRegistrationSecretsClearsDeliveredSecretAfterWindow(t *testing.T) {
+	// Given
+	database := openMigrationTestDB(t)
+	if _, err := database.Exec(`CREATE TABLE nodes (id INTEGER PRIMARY KEY, registration_secret TEXT, registration_secret_expires_at DATETIME);
+		INSERT INTO nodes VALUES (1,'expired',datetime('now','-1 second'));
+		INSERT INTO nodes VALUES (2,'active',datetime('now','+1 hour'));`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	err := cleanupExpiredRegistrationSecrets(context.Background(), database)
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expired, active sql.NullString
+	if err := database.QueryRow("SELECT registration_secret FROM nodes WHERE id=1").Scan(&expired); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow("SELECT registration_secret FROM nodes WHERE id=2").Scan(&active); err != nil {
+		t.Fatal(err)
+	}
+	if expired.Valid || !active.Valid || active.String != "active" {
+		t.Fatalf("expired=%#v active=%#v", expired, active)
+	}
+}
 
 func TestFlushAPIKeyLastUsedBatchesDirtyKeys(t *testing.T) {
 	// Given

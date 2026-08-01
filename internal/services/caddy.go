@@ -842,8 +842,9 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 	}
 
 	upstreamRows, err := store.Query(`
-		SELECT rule_id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0)
-		FROM upstreams WHERE enabled = 1 ORDER BY rule_id, id
+		SELECT u.rule_id, u.host, u.port, COALESCE(u.weight,1), COALESCE(u.domain,''), COALESCE(u.dynamic_dns,0), u.enabled, COALESCE(u.protocol,'http'), COALESCE(u.max_connections,0)
+		FROM upstreams u JOIN lb_rules r ON r.caddy_id = u.rule_id
+		WHERE u.enabled = 1 AND r.enabled = 1 ORDER BY u.rule_id, u.id
 	`)
 	if err != nil {
 		return generationFailure("query enabled upstreams: %v", err)
@@ -869,8 +870,10 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 
 	if hasCustomRoutes {
 		pathRows, pathErr := store.Query(`
-			SELECT rule_id, sort_order, match_type, path, upstreams_json
-			FROM path_rules ORDER BY rule_id, sort_order, id
+			SELECT p.rule_id, p.sort_order, p.match_type, p.path, p.upstreams_json
+			FROM path_rules p JOIN lb_rules r ON r.caddy_id = p.rule_id
+			WHERE r.enabled = 1 AND r.custom_routes_enabled = 1
+			ORDER BY p.rule_id, p.sort_order, p.id
 		`)
 		if pathErr != nil {
 			return generationFailure("query path rules: %v", pathErr)

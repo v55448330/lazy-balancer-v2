@@ -35,6 +35,50 @@ var jwtAuthenticationQuery = func(query string, args ...any) *sql.Row {
 
 const revokedTokenTimeFormat = "2006-01-02T15:04:05Z"
 
+var recordAuthenticationSecurityAudit = services.RecordAuditLog
+var authenticationSecurityAuditNow = time.Now
+
+var securityAuditLimiter = authenticationAuditLimiter{events: make(map[string]time.Time)}
+
+type authenticationAuditLimiter struct {
+	mu     sync.Mutex
+	events map[string]time.Time
+}
+
+func (limiter *authenticationAuditLimiter) allow(key string, now time.Time) bool {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	if last, exists := limiter.events[key]; exists && now.Sub(last) < time.Minute {
+		return false
+	}
+	for eventKey, last := range limiter.events {
+		if now.Sub(last) >= 2*time.Minute {
+			delete(limiter.events, eventKey)
+		}
+	}
+	limiter.events[key] = now
+	return true
+}
+
+func (limiter *authenticationAuditLimiter) reset() {
+	limiter.mu.Lock()
+	limiter.events = make(map[string]time.Time)
+	limiter.mu.Unlock()
+}
+
+func recordAuthenticationRejection(c *gin.Context, reason string) {
+	path := c.FullPath()
+	if path == "" {
+		path = c.Request.URL.Path
+	}
+	ipAddress := c.ClientIP()
+	if !securityAuditLimiter.allow(reason+"\x00"+path+"\x00"+ipAddress, authenticationSecurityAuditNow()) {
+		return
+	}
+	detail := services.FormatAuditDetail("路径："+path, "原因类别："+reason)
+	recordAuthenticationSecurityAudit("system", "认证拒绝", "安全审计", detail, ipAddress)
+}
+
 type revokedJTICleanup struct {
 	mu      sync.Mutex
 	lastRun time.Time
@@ -338,6 +382,7 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		}
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
+			recordAuthenticationRejection(c, "jwt_missing")
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "缺少认证信息"})
 			c.Abort()
 			return
@@ -345,6 +390,7 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 		if tokenString == authHeader {
+			recordAuthenticationRejection(c, "jwt_format_invalid")
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "认证格式无效"})
 			c.Abort()
 			return
@@ -355,6 +401,7 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		})
 
 		if err != nil || !token.Valid {
+			recordAuthenticationRejection(c, "jwt_expired_or_invalid")
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录状态已过期，请重新登录"})
 			c.Abort()
 			return
@@ -362,6 +409,7 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
+			recordAuthenticationRejection(c, "jwt_claims_invalid")
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录凭证无效"})
 			c.Abort()
 			return
@@ -383,40 +431,49 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		// demotion or disabling takes effect immediately, not at token expiry.
 		userIDFloat, ok := claims["user_id"].(float64)
 		if !ok {
+			recordAuthenticationRejection(c, "jwt_subject_invalid")
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录凭证无效"})
 			c.Abort()
 			return
 		}
-		var dbUsername, dbRole string
-		var dbEnabled bool
-		var passwordVersion int64
+		var dbUsername, dbRole sql.NullString
+		var dbEnabled sql.NullBool
+		var passwordVersion sql.NullInt64
 		var revoked bool
-		if err := jwtAuthenticationQuery(`SELECT username, role, COALESCE(is_enabled,1), password_version,
-			EXISTS(SELECT 1 FROM revoked_jti WHERE jti_hash=? AND expires_at>?)
-			FROM users WHERE id=?`, encodedRevocationHash, now.Format(revokedTokenTimeFormat), int64(userIDFloat)).Scan(&dbUsername, &dbRole, &dbEnabled, &passwordVersion, &revoked); err != nil || !dbEnabled {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在或已禁用"})
-			c.Abort()
-			return
-		}
-		if revoked {
+		queryErr := jwtAuthenticationQuery(`WITH auth_state AS (
+			SELECT EXISTS(SELECT 1 FROM revoked_jti WHERE jti_hash=? AND expires_at>?) AS revoked
+		)
+		SELECT auth_state.revoked, u.username, u.role, COALESCE(u.is_enabled,0), u.password_version
+		FROM auth_state LEFT JOIN users u ON u.id=?`, encodedRevocationHash, now.Format(revokedTokenTimeFormat), int64(userIDFloat)).Scan(&revoked, &dbUsername, &dbRole, &dbEnabled, &passwordVersion)
+		if queryErr == nil && revoked {
+			recordAuthenticationRejection(c, "jwt_revoked")
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录状态已失效，请重新登录"})
 			c.Abort()
 			return
 		}
+		if queryErr != nil || !dbUsername.Valid || !dbRole.Valid || !dbEnabled.Valid || !dbEnabled.Bool || !passwordVersion.Valid {
+			recordAuthenticationRejection(c, "jwt_user_unavailable")
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在或已禁用"})
+			c.Abort()
+			return
+		}
 		claimUsername, valid := claims["username"].(string)
-		if !valid || claimUsername != dbUsername {
+		if !valid || claimUsername != dbUsername.String {
+			recordAuthenticationRejection(c, "jwt_identity_mismatch")
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录凭证无效"})
 			c.Abort()
 			return
 		}
 		if claim, exists := claims["pwd_ver"]; exists {
 			claimVersion, valid := claim.(float64)
-			if !valid || claimVersion != float64(passwordVersion) {
+			if !valid || claimVersion != float64(passwordVersion.Int64) {
+				recordAuthenticationRejection(c, "jwt_password_changed")
 				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "密码已修改，请重新登录"})
 				c.Abort()
 				return
 			}
-		} else if passwordVersion != 0 {
+		} else if passwordVersion.Int64 != 0 {
+			recordAuthenticationRejection(c, "jwt_password_changed")
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "密码已修改，请重新登录"})
 			c.Abort()
 			return
@@ -424,7 +481,7 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 
 		c.Set("user_id", claims["user_id"])
 		c.Set("username", claims["username"])
-		c.Set("role", dbRole)
+		c.Set("role", dbRole.String)
 
 		c.Next()
 	}
@@ -454,6 +511,7 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 				c.Next()
 				return
 			}
+			recordAuthenticationRejection(c, "api_key_invalid")
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid API key"})
 			c.Abort()
 			return
@@ -481,6 +539,7 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 				c.Next()
 				return
 			}
+			recordAuthenticationRejection(c, "api_key_invalid")
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid API key"})
 			c.Abort()
 			return
@@ -506,6 +565,7 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 				}
 			}
 			if !allowed {
+				recordAuthenticationRejection(c, "api_key_ip_denied")
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "来源 IP 不在白名单"})
 				return
 			}

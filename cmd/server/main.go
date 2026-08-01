@@ -29,7 +29,7 @@ var (
 
 func main() {
 	if err := run(); err != nil {
-		log.Printf("HTTP server stopped unexpectedly: %v", err)
+		services.Logf("error", "HTTP server stopped unexpectedly: %v", err)
 		os.Exit(1)
 	}
 }
@@ -53,14 +53,20 @@ func run() error {
 			runtimeLogFile = logFile
 		}
 	}
-	log.SetOutput(&tzLogWriter{w: logWriter})
+	log.SetOutput(services.NewApplicationLogWriter(&tzLogWriter{w: logWriter}))
 
 	// Initialize database
 	if err := db.Initialize(cfg.DataDir); err != nil {
 		return fmt.Errorf("initialize database: %w", err)
 	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			services.Logf("error", "close databases during shutdown: %v", err)
+		}
+	}()
+	services.ApplyLogLevel()
 	if err := handlers.SeedDefaultBranding(cfg.DataDir); err != nil {
-		log.Printf("Warning: failed to seed default branding: %v", err)
+		services.Logf("warn", "failed to seed default branding: %v", err)
 	}
 	if runtimeLogFile != "" {
 		services.StartRuntimeLogCleanup(runtimeLogFile)
@@ -74,9 +80,9 @@ func run() error {
 	var tz string
 	if err := db.DB.QueryRow("SELECT COALESCE(timezone,'Asia/Shanghai') FROM global_config WHERE id=1").Scan(&tz); err == nil && tz != "" {
 		if err := os.Setenv("TZ", tz); err != nil {
-			log.Printf("Failed to set TZ environment: %v", err)
+			services.Logf("error", "failed to set TZ environment: %v", err)
 		} else if loc, err := services.ConfigureLocation(tz); err != nil {
-			log.Printf("Failed to load timezone %s: %v", tz, err)
+			services.Logf("error", "failed to load timezone %s: %v", tz, err)
 		} else {
 			time.Local = loc
 			log.Printf("Timezone set to %s", tz)
@@ -105,7 +111,7 @@ func run() error {
 	// Materialize cert files from DB, then apply Caddy config on startup
 	services.MaterializeAllCertsFromDB()
 	if err := h.ApplyConfigOnStartup(); err != nil {
-		log.Printf("Warning: Failed to apply Caddy config on startup: %v", err)
+		services.Logf("error", "failed to apply Caddy config on startup: %v", err)
 	}
 
 	// Setup router
@@ -122,7 +128,7 @@ func run() error {
 	}()
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
-		log.Printf("Warning: failed to read cluster role: %v", err)
+		services.Logf("error", "failed to read cluster role: %v", err)
 		isMaster = true
 	}
 	if isMaster {
@@ -213,9 +219,9 @@ func waitForServerStop(server *http.Server, signals serverStopSignals) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("HTTP server shutdown failed: %v", err)
+		services.Logf("error", "HTTP server shutdown failed: %v", err)
 		if closeErr := server.Close(); closeErr != nil {
-			log.Printf("HTTP server forced close failed: %v", closeErr)
+			services.Logf("error", "HTTP server forced close failed: %v", closeErr)
 		}
 	}
 	return nil

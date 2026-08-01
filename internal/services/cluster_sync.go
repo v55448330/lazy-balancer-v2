@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -487,7 +486,7 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 	if _, err := s.db.ExecContext(persistCtx, "UPDATE global_config SET last_sync_error=? WHERE id=1", msg); err != nil {
-		log.Printf("cluster sync error persistence failed: %v", err)
+		Logf("error", "cluster sync error persistence failed: %v", err)
 	}
 }
 
@@ -602,9 +601,9 @@ func (s *SyncService) run(ctx context.Context) {
 				return
 			}
 			message := "读取同步状态失败: " + err.Error()
-			log.Printf("cluster sync state read failed; retrying: %v", err)
+			Logf("error", "cluster sync state read failed; retrying: %v", err)
 			if _, updateErr := s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", message); updateErr != nil {
-				log.Printf("cluster sync state error persistence failed: %v", updateErr)
+				Logf("error", "cluster sync state error persistence failed: %v", updateErr)
 			}
 			if !waitDelay(ctx, retryDelay) {
 				return
@@ -680,6 +679,15 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 		}
 		defer confirmed.Body.Close()
 		if confirmed.StatusCode >= http.StatusBadRequest {
+			if confirmed.StatusCode != http.StatusNotFound && confirmed.StatusCode != http.StatusMethodNotAllowed {
+				return
+			}
+			if _, err := s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token=? WHERE id=1", envelope.Data.ClusterToken); err != nil {
+				return
+			}
+			if _, err := s.Pull(ctx); err == nil {
+				_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET registration_secret='' WHERE id=1")
+			}
 			return
 		}
 		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token=?, registration_secret='' WHERE id=1", envelope.Data.ClusterToken)

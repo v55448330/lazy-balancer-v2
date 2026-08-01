@@ -56,7 +56,7 @@
 | 数据库 | `internal/db/db.go` | Initialize, runMigrations |
 | 数据模型 | `internal/models/models.go` | LbRule, Upstream |
 | API 处理器 | `internal/handlers/handlers.go` | CreateRule, UpdateRule, EnableRule, DisableRule, DeleteRule |
-| Caddy 编排 | `internal/services/caddy.go` | GenerateCaddyConfig, SetConfigByID, PrependRouteToServer, VerifyRouteExists |
+| Caddy 编排 | `internal/services/caddy.go` | GenerateCaddyConfig, ApplyConfigFromTx, GenerateAndApplyConfig |
 | 认证 | `internal/middleware/middleware.go` | jwtAuth, apiKeyAuth |
 | 前端 | `web/src/views/Rules.vue` | 规则管理界面 |
 

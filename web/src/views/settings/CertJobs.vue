@@ -72,7 +72,7 @@
       v-model:current-page="currentPage"
       v-model:page-size="pageSize"
       :page-sizes="[10, 20, 50, 100]"
-      :total="estimatedTotal"
+      :total="total"
       layout="total, sizes, prev, pager, next"
       @current-change="jobsPolling.run"
       @size-change="onPageSizeChange"
@@ -121,11 +121,20 @@ interface CertJob {
   updated_at?: string | null
   issuer?: string
   days_remaining: number
-  certificate_status: string
+  certificate_status: CertificateStatus
   ca_provider_name?: string
   renewal_attempts?: number
   ca_available_after?: string | null
   last_error_code?: string
+}
+
+type CertificateStatus = 'expired' | 'expiring' | 'unknown' | 'valid'
+
+interface CertJobsPage {
+  readonly list: CertJob[]
+  readonly total: number
+  readonly page: number
+  readonly page_size: number
 }
 
 const authStore = useAuthStore()
@@ -136,10 +145,9 @@ let jobsRequestSeq = 0
 const jobs = ref<CertJob[]>([])
 const loading = ref(false)
 const certRenewalDays = ref(30)
-const certExpiryDays = ref(30)
 const currentPage = ref(1)
 const pageSize = ref(20)
-const estimatedTotal = computed(() => (currentPage.value - 1) * pageSize.value + jobs.value.length + (jobs.value.length === pageSize.value ? 1 : 0))
+const total = ref(0)
 const retryingJobIds = ref(new Set<number>())
 
 const logDialogVisible = ref(false)
@@ -261,11 +269,7 @@ const renewalInfo = (row: CertJob): { renewalDate?: string } => {
   return { renewalDate: formatDate(renewal.toISOString()) }
 }
 
-const certificateStatus = (row: CertJob): 'expired' | 'expiring' | 'valid' => {
-  if (row.days_remaining <= 0) return 'expired'
-  if (row.days_remaining <= certExpiryDays.value) return 'expiring'
-  return 'valid'
-}
+const certificateStatus = (row: CertJob): CertificateStatus => row.certificate_status
 
 const formatCoolingTime = (iso: string): string => {
   const t = new Date(iso)
@@ -282,14 +286,17 @@ const fetchJobs = async () => {
   const requestSeq = ++jobsRequestSeq
   loading.value = true
   try {
-    const jobsRes = await request.get<APIResponse<CertJob[]>>('/certificates/jobs', {
+    const jobsRes = await request.get<APIResponse<CertJobsPage>>('/certificates/jobs', {
       params: { page: currentPage.value, page_size: pageSize.value },
       signal: jobsPolling.signal,
     })
     if (disposed || requestSeq !== jobsRequestSeq) return
-    jobs.value = jobsRes.data || []
-    if (jobs.value.length === 0 && currentPage.value > 1) {
-      currentPage.value -= 1
+    if (!jobsRes.data) throw new TypeError('证书任务分页响应缺少 data')
+    jobs.value = jobsRes.data.list
+    total.value = jobsRes.data.total
+    const lastPage = Math.max(1, Math.ceil(total.value / pageSize.value))
+    if (currentPage.value > lastPage) {
+      currentPage.value = lastPage
       queueMicrotask(() => void jobsPolling.run())
     }
   } catch (error: unknown) {
@@ -391,13 +398,15 @@ const jobsPolling = usePollingTask(async () => fetchJobs(), {
 })
 
 onMounted(async () => {
-  const configRes = await request.get('/config', { signal: jobsPolling.signal })
-  if (!disposed) {
-    certRenewalDays.value = configRes.data?.cert_renewal_days ?? 30
-    certExpiryDays.value = configRes.data?.cert_expiry_days ?? 30
+  try {
+    const configRes = await request.get('/config', { signal: jobsPolling.signal })
+    if (!disposed) certRenewalDays.value = configRes.data?.cert_renewal_days ?? 30
+  } catch (error: unknown) {
+    if (!disposed) console.error('Failed to fetch certificate config:', error)
+  } finally {
+    void jobsPolling.run()
+    jobsPolling.start()
   }
-  void jobsPolling.run()
-  jobsPolling.start()
 })
 
 onUnmounted(() => {

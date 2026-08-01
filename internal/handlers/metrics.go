@@ -59,11 +59,11 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 	type dashboardRule struct {
 		id, domain, protocol string
 		listenPort           int
-		enableTLS            bool
+		enableTLS, enabled   bool
 	}
 	ruleRows, err := db.DB.QueryContext(c.Request.Context(), `
-		SELECT caddy_id, COALESCE(domain,''), listen_port, COALESCE(protocol,''), COALESCE(enable_tls,0)
-		FROM lb_rules WHERE enabled=1 ORDER BY caddy_id`)
+		SELECT caddy_id, COALESCE(domain,''), listen_port, COALESCE(protocol,''), COALESCE(enable_tls,0), COALESCE(enabled,1)
+		FROM lb_rules ORDER BY caddy_id`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则指标配置失败"})
 		return
@@ -72,7 +72,7 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 	rules := make([]dashboardRule, 0)
 	for ruleRows.Next() {
 		var rule dashboardRule
-		if err := ruleRows.Scan(&rule.id, &rule.domain, &rule.listenPort, &rule.protocol, &rule.enableTLS); err != nil {
+		if err := ruleRows.Scan(&rule.id, &rule.domain, &rule.listenPort, &rule.protocol, &rule.enableTLS, &rule.enabled); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则指标配置失败"})
 			return
 		}
@@ -107,11 +107,16 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 
 	ruleMetrics := make(map[string]gin.H, len(rules))
 	for _, rule := range rules {
-		if rule.protocol == "tcp" {
-			ruleMetrics[rule.id] = parseTCPRuleMetricsFromSamples(samples, upstreamsByRule[rule.id])
+		metrics := emptyRuleMetrics()
+		if rule.enabled && rule.protocol == "tcp" {
+			metrics = parseTCPRuleMetricsFromSamples(samples, upstreamsByRule[rule.id])
+		} else if rule.enabled {
+			metrics = parseRuleMetricsFromSamples(samples, ruleMetricTarget{domain: rule.domain, listenPort: rule.listenPort, enableTLS: rule.enableTLS})
 		} else {
-			ruleMetrics[rule.id] = parseRuleMetricsFromSamples(samples, ruleMetricTarget{domain: rule.domain, listenPort: rule.listenPort, enableTLS: rule.enableTLS})
+			metrics["enabled"] = false
 		}
+		metrics["enabled"] = rule.enabled
+		ruleMetrics[rule.id] = metrics
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
 		"global":   parsePrometheusMetricsFromSamples(samples),
@@ -186,16 +191,16 @@ func metricsIntervalModifier(interval string) string {
 	}
 }
 
-func metricsHistoryRange(value string) (string, int) {
+func metricsHistoryRange(value string) (string, int, int) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "1h":
-		return "-1 hours", 5
+		return "-1 hours", 5, 720
 	case "6h":
-		return "-6 hours", 30
+		return "-6 hours", 30, 720
 	case "7d":
-		return "-7 days", 900
+		return "-7 days", 900, 672
 	default:
-		return "-24 hours", 120
+		return "-24 hours", 120, 720
 	}
 }
 
@@ -212,16 +217,25 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"protocol": protocol, "supported": false, "rows": []any{}}})
 		return
 	}
-	modifier, bucketSeconds := metricsHistoryRange(c.DefaultQuery("range", "24h"))
+	modifier, bucketSeconds, bucketCount := metricsHistoryRange(c.DefaultQuery("range", "24h"))
 	rows, err := db.MetricsDB.Query(`
-		SELECT datetime((CAST(strftime('%s', timestamp) AS INTEGER) / ?) * ?, 'unixepoch'),
-		       MAX(requests_total), MAX(requests_2xx), MAX(requests_3xx),
-		       MAX(requests_4xx), MAX(requests_5xx), MAX(bytes_in), MAX(bytes_out)
-		FROM metrics_history
-		WHERE rule_id = ? AND timestamp > datetime('now', ?)
-		GROUP BY CAST(strftime('%s', timestamp) AS INTEGER) / ?
-		ORDER BY 1
-	`, bucketSeconds, bucketSeconds, caddyID, modifier, bucketSeconds)
+		WITH ranked AS (
+			SELECT CAST(strftime('%s', timestamp) AS INTEGER) / ? AS bucket,
+			       requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, bytes_in, bytes_out,
+			       ROW_NUMBER() OVER (
+				   PARTITION BY CAST(strftime('%s', timestamp) AS INTEGER) / ?
+				   ORDER BY timestamp DESC, id DESC
+			   ) AS sample_rank
+			FROM metrics_history
+			WHERE rule_id = ? AND timestamp > datetime('now', ?)
+		), recent AS (
+			SELECT bucket, requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, bytes_in, bytes_out
+			FROM ranked WHERE sample_rank = 1 ORDER BY bucket DESC LIMIT ?
+		)
+		SELECT datetime(bucket * ?, 'unixepoch'), requests_total, requests_2xx, requests_3xx,
+		       requests_4xx, requests_5xx, bytes_in, bytes_out
+		FROM recent ORDER BY bucket
+	`, bucketSeconds, bucketSeconds, caddyID, modifier, bucketCount, bucketSeconds)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取历史指标失败: " + err.Error()})
 		return

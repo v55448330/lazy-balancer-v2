@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -36,6 +37,8 @@ var cancelCertJob = func(id int) {
 	}
 }
 
+const maxCertJobPage int64 = 1_000_000
+
 func certJobOperationLock(id int) *sync.Mutex {
 	index := id % len(certJobOperationLocks)
 	if index < 0 {
@@ -62,9 +65,9 @@ func ensureCertJobListIndex() error {
 
 func (h *Handlers) ListCertJobs(c *gin.Context) {
 	ruleID := c.Query("rule_id")
-	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
-	if err != nil || page < 1 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "page 必须为正整数"})
+	page, err := strconv.ParseInt(c.DefaultQuery("page", "1"), 10, 64)
+	if err != nil || page < 1 || page > maxCertJobPage {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("page 必须为 1-%d 之间的整数", maxCertJobPage)})
 		return
 	}
 	pageSize, err := strconv.Atoi(c.DefaultQuery("page_size", "50"))
@@ -76,14 +79,32 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "初始化证书任务分页索引失败"})
 		return
 	}
-	query := `SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.message,'') AS message, COALESCE(j.cert_pem,'') AS cert_pem, j.expires_at, j.created_at, j.updated_at, COALESCE(j.renewal_attempts,0) AS renewal_attempts, j.ca_available_after, COALESCE(j.last_error_code,'') AS last_error_code, COALESCE(j.ca_provider_id,0) AS ca_provider_id, COALESCE(p.name,'') AS ca_provider_name FROM cert_jobs j LEFT JOIN ca_providers p ON p.id = j.ca_provider_id`
-	var args []interface{}
-	if ruleID != "" {
-		query += " WHERE j.rule_id = ?"
-		args = append(args, ruleID)
+	if page-1 > math.MaxInt64/int64(pageSize) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "page 超出可查询范围"})
+		return
 	}
+	offset := (page - 1) * int64(pageSize)
+	whereClause := ""
+	var filterArgs []interface{}
+	if ruleID != "" {
+		whereClause = " WHERE j.rule_id = ?"
+		filterArgs = append(filterArgs, ruleID)
+	}
+	var total int64
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs j"+whereClause, filterArgs...).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计证书任务失败"})
+		return
+	}
+	var expiryDays int
+	if err := db.DB.QueryRow("SELECT COALESCE(cert_expiry_days,30) FROM global_config WHERE id=1").Scan(&expiryDays); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书过期提醒配置失败"})
+		return
+	}
+	query := `SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.message,'') AS message, COALESCE(j.cert_pem,'') AS cert_pem, j.expires_at, j.created_at, j.updated_at, COALESCE(j.renewal_attempts,0) AS renewal_attempts, j.ca_available_after, COALESCE(j.last_error_code,'') AS last_error_code, COALESCE(j.ca_provider_id,0) AS ca_provider_id, COALESCE(p.name,'') AS ca_provider_name FROM cert_jobs j LEFT JOIN ca_providers p ON p.id = j.ca_provider_id`
+	query += whereClause
+	args := append([]interface{}{}, filterArgs...)
 	query += " ORDER BY j.created_at DESC LIMIT ? OFFSET ?"
-	args = append(args, pageSize, (page-1)*pageSize)
+	args = append(args, pageSize, offset)
 
 	rows, err := db.DB.Query(query, args...)
 	if err != nil {
@@ -124,13 +145,17 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 		j.Issuer = certificateIssuer(certPEM)
 		j.CertificateStatus = "unknown"
 		if j.ExpiresAt.Valid {
-			j.DaysRemaining = int(j.ExpiresAt.Time.Sub(now).Hours() / 24)
+			remaining := j.ExpiresAt.Time.Sub(now)
 			if !now.Before(j.ExpiresAt.Time) {
+				j.DaysRemaining = int(math.Floor(remaining.Hours() / 24))
 				j.CertificateStatus = "expired"
-			} else if j.DaysRemaining <= 30 {
-				j.CertificateStatus = "expiring"
 			} else {
-				j.CertificateStatus = "valid"
+				j.DaysRemaining = int(math.Ceil(remaining.Hours() / 24))
+				if remaining <= time.Duration(expiryDays)*24*time.Hour {
+					j.CertificateStatus = "expiring"
+				} else {
+					j.CertificateStatus = "valid"
+				}
 			}
 		}
 		jobs = append(jobs, j)
@@ -139,9 +164,10 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败: " + err.Error()})
 		return
 	}
-	c.Header("X-Page", strconv.Itoa(page))
+	c.Header("X-Page", strconv.FormatInt(page, 10))
 	c.Header("X-Page-Size", strconv.Itoa(pageSize))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: jobs})
+	c.Header("X-Total", strconv.FormatInt(total, 10))
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"list": jobs, "total": total, "page": page, "page_size": pageSize}})
 }
 
 func certificateIssuer(certPEM string) string {

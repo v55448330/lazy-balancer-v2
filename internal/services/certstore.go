@@ -302,7 +302,7 @@ func MaterializeCertPairs(materials []CertMaterial) (CertFilesSnapshot, error) {
 		if err != nil {
 			return nil, fmt.Errorf("快照私钥 %s: %w", material.RuleID, err)
 		}
-		if cert.Exists && key.Exists && bytes.Equal(cert.Data, []byte(material.CertPEM)) && bytes.Equal(key.Data, []byte(material.KeyPEM)) {
+		if cert.Exists && cert.Mode == 0644 && key.Exists && key.Mode == 0600 && bytes.Equal(cert.Data, []byte(material.CertPEM)) && bytes.Equal(key.Data, []byte(material.KeyPEM)) {
 			continue
 		}
 		snapshot[material.RuleID] = CertPairSnapshot{Cert: cert, Key: key}

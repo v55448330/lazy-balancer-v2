@@ -64,6 +64,9 @@ func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientF
 		mac := hmac.New(sha256.New, []byte(tokenKey))
 		mac.Write(signedContent)
 		snapshot.Signature = hex.EncodeToString(mac.Sum(nil))
+		if _, err := s.db.ExecContext(ctx, "UPDATE nodes SET registration_secret=NULL, registration_secret_expires_at=NULL WHERE cluster_token_hash=? AND registration_secret IS NOT NULL", tokenHash(tokenKey)); err != nil {
+			return models.ClusterSnapshot{}, false, fmt.Errorf("确认旧协议集群令牌交付: %w", err)
+		}
 	}
 	if sinceVersion >= snapshot.Version && clientFingerprint != "" && clientFingerprint == snapshot.Fingerprint {
 		return snapshot, false, nil

@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -22,6 +23,7 @@ type adminTLSCertInfo struct {
 	Issuer   string `json:"issuer"`
 	NotAfter string `json:"not_after"`
 	DaysLeft int    `json:"days_left"`
+	Expired  bool   `json:"expired"`
 }
 
 func parseAdminTLSCertInfo(certPEM string) (*adminTLSCertInfo, error) {
@@ -41,11 +43,18 @@ func parseAdminTLSCertInfo(certPEM string) (*adminTLSCertInfo, error) {
 	if issuer == "" {
 		issuer = cert.Issuer.String()
 	}
+	remaining := time.Until(cert.NotAfter)
+	daysLeft := int(math.Floor(remaining.Hours() / 24))
+	expired := remaining <= 0
+	if !expired {
+		daysLeft = int(math.Ceil(remaining.Hours() / 24))
+	}
 	info := &adminTLSCertInfo{
 		Domain:   domain,
 		Issuer:   issuer,
 		NotAfter: cert.NotAfter.In(services.CurrentLocation()).Format("2006-01-02 15:04:05"),
-		DaysLeft: int(time.Until(cert.NotAfter).Hours() / 24),
+		DaysLeft: daysLeft,
+		Expired:  expired,
 	}
 	return info, nil
 }

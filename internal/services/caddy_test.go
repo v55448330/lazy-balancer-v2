@@ -87,6 +87,64 @@ func TestGenerateCaddyConfig_upstream_scan_error_returns_generation_failure(t *t
 	}
 }
 
+func TestGenerateCaddyConfig_ignores_malformed_upstream_for_disabled_rule(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedGenerationRule(t, database, "lb_enabled", false)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_disabled','disabled','http',8081,0)`); err != nil {
+		t.Fatalf("seed disabled rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,enabled) VALUES ('lb_disabled','127.0.0.1','not-a-port',1)`); err != nil {
+		t.Fatalf("seed malformed disabled upstream: %v", err)
+	}
+
+	// When
+	generated := generateCaddyConfigFromStore(database)
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("disabled upstream blocked config generation: %s", message)
+	}
+}
+
+func TestGenerateCaddyConfig_ignores_malformed_path_rule_for_disabled_rule(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedGenerationRule(t, database, "lb_enabled_routes", true)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled,custom_routes_enabled) VALUES ('lb_disabled_routes','disabled routes','http',8081,0,1)`); err != nil {
+		t.Fatalf("seed disabled custom-route rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO path_rules (rule_id,sort_order,match_type,path) VALUES ('lb_disabled_routes','not-an-order','prefix','/disabled')`); err != nil {
+		t.Fatalf("seed malformed disabled path rule: %v", err)
+	}
+
+	// When
+	generated := generateCaddyConfigFromStore(database)
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("disabled path rule blocked config generation: %s", message)
+	}
+}
+
+func TestGenerateCaddyConfig_ignores_malformed_path_rule_when_custom_routes_disabled(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedGenerationRule(t, database, "lb_enabled_routes", true)
+	seedGenerationRule(t, database, "lb_routes_off", false)
+	if _, err := database.Exec(`INSERT INTO path_rules (rule_id,sort_order,match_type,path) VALUES ('lb_routes_off','not-an-order','prefix','/disabled')`); err != nil {
+		t.Fatalf("seed malformed inactive path rule: %v", err)
+	}
+
+	// When
+	generated := generateCaddyConfigFromStore(database)
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("inactive path rule blocked config generation: %s", message)
+	}
+}
+
 func TestGenerateCaddyConfig_fail_closed_errors_do_not_call_load(t *testing.T) {
 	tests := []struct {
 		name  string

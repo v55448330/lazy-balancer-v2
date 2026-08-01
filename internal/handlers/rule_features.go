@@ -299,6 +299,15 @@ func (h *Handlers) UpdateRuleACL(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	if err := validateStoredRuleConfig(c.Request.Context(), caddyID); err != nil {
+		var validationErr *configValidationError
+		if errors.As(err, &validationErr) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: validationErr.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "预校验规则配置失败: " + err.Error()})
+		return
+	}
 	newListJSON, err := encodeIPACLList(input.IPACLList)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -329,6 +338,11 @@ func (h *Handlers) UpdateRuleACL(c *gin.Context) {
 	}
 	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
+		var validationErr *configValidationError
+		if errors.As(err, &validationErr) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置验证失败: " + errors.Join(validationErr, restoreErr).Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用失败，数据库未写入: %v", errors.Join(err, restoreErr))})
 		return
 	}
@@ -555,4 +569,76 @@ func hydrateRuleRelations(ctx context.Context, rules []models.LbRule) error {
 		rules[i].PathRules = pathRulesMap[rules[i].CaddyID]
 	}
 	return nil
+}
+
+type configValidationError struct {
+	message string
+}
+
+func (e *configValidationError) Error() string {
+	return e.message
+}
+
+func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
+	rules, err := loadRulesForConfigValidation(ctx, " WHERE caddy_id = ?", caddyID)
+	if err != nil {
+		return err
+	}
+	if len(rules) != 1 {
+		return fmt.Errorf("规则不存在")
+	}
+	return validateRuleConfigGeneration(rules[0])
+}
+
+func validateEnabledStoredRuleConfigs(ctx context.Context) error {
+	rules, err := loadRulesForConfigValidation(ctx, " WHERE enabled = 1")
+	if err != nil {
+		return err
+	}
+	for _, rule := range rules {
+		if err := validateRuleConfigGeneration(rule); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func loadRulesForConfigValidation(ctx context.Context, suffix string, args ...any) ([]models.LbRule, error) {
+	rows, err := db.DB.QueryContext(ctx, "SELECT "+lbRuleColumns+" FROM lb_rules"+suffix, args...)
+	if err != nil {
+		return nil, fmt.Errorf("读取待验证规则: %w", err)
+	}
+	rules, scanErr := scanLbRules(rows)
+	closeErr := rows.Close()
+	if err := errors.Join(scanErr, closeErr); err != nil {
+		return nil, fmt.Errorf("读取待验证规则: %w", err)
+	}
+	if err := hydrateRuleRelations(ctx, rules); err != nil {
+		return nil, fmt.Errorf("读取待验证规则关联配置: %w", err)
+	}
+	return rules, nil
+}
+
+func validateRuleConfigGeneration(rule models.LbRule) error {
+	upstreams := make([]services.UpstreamConfig, 0, len(rule.Upstreams))
+	for _, upstream := range rule.Upstreams {
+		upstreams = append(upstreams, services.UpstreamConfig{
+			Host: upstream.Host, Port: upstream.Port, Weight: upstream.Weight,
+			Protocol: upstream.Protocol, Enabled: upstream.Enabled, MaxConnections: upstream.MaxConnections,
+		})
+	}
+	config := services.GenerateSingleRuleCaddyConfig(services.SingleRuleConfig{
+		CaddyID: rule.CaddyID, Protocol: rule.Protocol, Domain: rule.Domain, ListenPort: rule.ListenPort,
+		Strategy: rule.Strategy, DynamicDNS: rule.DynamicDNS, EnableDnsServer: rule.EnableDnsServer,
+		DnsServer: rule.DnsServer, DnsFamily: rule.DnsFamily, CustomRoutesEnabled: rule.CustomRoutesEnabled,
+		PathRules: toPathRuleConfigs(rule.PathRules), Upstreams: upstreams,
+	})
+	message, invalid := config["error"].(string)
+	if !invalid {
+		return nil
+	}
+	if !strings.Contains(message, "dynamic DNS requires exactly one enabled upstream") {
+		return nil
+	}
+	return &configValidationError{message: "动态 DNS 模式仅支持一个启用的上游"}
 }
