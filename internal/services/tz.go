@@ -14,6 +14,14 @@ import (
 )
 
 var currentLocation atomic.Value
+var applicationLogLevel atomic.Int32
+
+const (
+	logLevelDebug int32 = iota
+	logLevelInfo
+	logLevelWarn
+	logLevelError
+)
 
 var timezoneRefresh struct {
 	sync.Mutex
@@ -23,6 +31,7 @@ var timezoneRefresh struct {
 
 func init() {
 	currentLocation.Store(time.FixedZone("CST", 8*3600))
+	applicationLogLevel.Store(logLevelInfo)
 	StartTimezoneRefresh(context.Background())
 }
 
@@ -101,14 +110,71 @@ func CurrentLocation() *time.Location {
 	return time.UTC
 }
 
+func ConfigureLogLevel(level string) error {
+	var threshold int32
+	switch level {
+	case "debug":
+		threshold = logLevelDebug
+	case "info":
+		threshold = logLevelInfo
+	case "warn":
+		threshold = logLevelWarn
+	case "error":
+		threshold = logLevelError
+	default:
+		return fmt.Errorf("unsupported application log level %q", level)
+	}
+	applicationLogLevel.Store(threshold)
+	if threshold == logLevelDebug {
+		gin.SetMode(gin.DebugMode)
+	} else {
+		gin.SetMode(gin.ReleaseMode)
+	}
+	return nil
+}
+
+func CurrentLogLevel() string {
+	switch applicationLogLevel.Load() {
+	case logLevelDebug:
+		return "debug"
+	case logLevelWarn:
+		return "warn"
+	case logLevelError:
+		return "error"
+	default:
+		return "info"
+	}
+}
+
+func ShouldLog(level string) bool {
+	var candidate int32
+	switch level {
+	case "debug":
+		candidate = logLevelDebug
+	case "info":
+		candidate = logLevelInfo
+	case "warn":
+		candidate = logLevelWarn
+	case "error":
+		candidate = logLevelError
+	default:
+		return false
+	}
+	return candidate >= applicationLogLevel.Load()
+}
+
+func Logf(level, format string, args ...any) {
+	if ShouldLog(level) {
+		log.Printf(format, args...)
+	}
+}
+
 func ApplyLogLevel() {
 	level := "info"
 	if db.DB != nil {
 		_ = db.DB.QueryRow("SELECT COALESCE(log_level,'info') FROM global_config WHERE id=1").Scan(&level)
 	}
-	if level == "debug" {
-		gin.SetMode(gin.DebugMode)
-	} else {
-		gin.SetMode(gin.ReleaseMode)
+	if err := ConfigureLogLevel(level); err != nil {
+		log.Printf("apply application log level: %v", err)
 	}
 }

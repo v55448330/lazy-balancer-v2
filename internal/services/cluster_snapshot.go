@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sync"
 
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -35,11 +36,6 @@ type snapshotStore interface {
 // authenticity, not just integrity; leave empty to skip signing (legacy path).
 func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientFingerprint string, tokenKey string) (models.ClusterSnapshot, bool, error) {
 	s.retryPendingPinCleanup()
-	if tokenKey != "" {
-		if _, err := s.db.ExecContext(ctx, "UPDATE nodes SET registration_secret=NULL WHERE cluster_token_hash=?", tokenHash(tokenKey)); err != nil {
-			return models.ClusterSnapshot{}, false, fmt.Errorf("确认集群令牌交付: %w", err)
-		}
-	}
 	snapshot, err := s.cachedSnapshot(ctx)
 	if err != nil {
 		return models.ClusterSnapshot{}, false, err
@@ -73,6 +69,21 @@ func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientF
 		return snapshot, false, nil
 	}
 	return snapshot, true, nil
+}
+
+func (s *ClusterService) ConfirmRegistration(ctx context.Context, token string) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE nodes SET registration_secret=NULL WHERE cluster_token_hash=?", tokenHash(token))
+	if err != nil {
+		return fmt.Errorf("确认集群令牌交付: %w", err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("读取集群令牌确认结果: %w", err)
+	}
+	if updated == 0 {
+		return ErrInvalidClusterAuth
+	}
+	return nil
 }
 
 func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnapshot, error) {
@@ -209,29 +220,7 @@ func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore)
 }
 
 func (s *ClusterService) snapshotPathRules(ctx context.Context, store snapshotStore, ruleID string) ([]models.PathRule, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id,rule_id,sort_order,match_type,path,upstreams_json FROM path_rules WHERE rule_id=? ORDER BY sort_order,id`, ruleID)
-	if err != nil {
-		return nil, fmt.Errorf("读取规则路径 %s: %w", ruleID, err)
-	}
-	defer rows.Close()
-	pathRules := make([]models.PathRule, 0)
-	for rows.Next() {
-		var pathRule models.PathRule
-		var upstreamsJSON sql.NullString
-		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &upstreamsJSON); err != nil {
-			return nil, fmt.Errorf("扫描规则路径 %s: %w", ruleID, err)
-		}
-		if upstreamsJSON.Valid {
-			if err := json.Unmarshal([]byte(upstreamsJSON.String), &pathRule.Upstreams); err != nil {
-				return nil, fmt.Errorf("解析规则路径 %d 的上游: %w", pathRule.ID, err)
-			}
-		}
-		pathRules = append(pathRules, pathRule)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("遍历规则路径 %s: %w", ruleID, err)
-	}
-	return pathRules, nil
+	return db.LoadPathRules(ctx, store, ruleID)
 }
 
 func (s *ClusterService) snapshotUpstreams(ctx context.Context, store snapshotStore, ruleID string) ([]models.Upstream, error) {

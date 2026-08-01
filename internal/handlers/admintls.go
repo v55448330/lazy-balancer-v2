@@ -50,6 +50,24 @@ func parseAdminTLSCertInfo(certPEM string) (*adminTLSCertInfo, error) {
 	return info, nil
 }
 
+func validateAdminTLSCertPeriod(certPEM string, now time.Time) error {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		return errInvalidCert
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return err
+	}
+	if now.Before(cert.NotBefore) {
+		return fmtErrorf("证书尚未生效，生效时间：" + cert.NotBefore.In(services.CurrentLocation()).Format("2006-01-02 15:04:05"))
+	}
+	if !now.Before(cert.NotAfter) {
+		return fmtErrorf("证书已过期，过期时间：" + cert.NotAfter.In(services.CurrentLocation()).Format("2006-01-02 15:04:05"))
+	}
+	return nil
+}
+
 var errInvalidCert = fmtErrorf("无效的证书 PEM")
 
 func fmtErrorf(msg string) error { return &adminTLSError{msg} }
@@ -71,6 +89,10 @@ func (h *Handlers) InspectAdminTLSCert(c *gin.Context) {
 	}
 	if _, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM)); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书与私钥不匹配: " + err.Error()})
+		return
+	}
+	if err := validateAdminTLSCertPeriod(certPEM, time.Now()); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
 	info, err := parseAdminTLSCertInfo(certPEM)
@@ -138,6 +160,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		mode = v
 	}
 	cert, key := current.Cert, current.Key
+	uploadedCertificate := false
 	port := h.cfg.Port
 	if mode == "upload" {
 		certFiles := c.Request.MultipartForm.File["cert_file"]
@@ -149,6 +172,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 				return
 			}
 			cert, key = certPEM, keyPEM
+			uploadedCertificate = true
 		}
 	}
 
@@ -160,6 +184,16 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		probe := services.AdminTLSConfig{Enabled: true, Mode: mode, Cert: cert, Key: key}
 		if _, err := probe.ResolveCertificate(h.cfg.DataDir); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书不可用: " + err.Error()})
+			return
+		}
+	}
+	if mode == "upload" && (enabled || uploadedCertificate) {
+		if _, err := tls.X509KeyPair([]byte(cert), []byte(key)); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书与私钥不匹配: " + err.Error()})
+			return
+		}
+		if err := validateAdminTLSCertPeriod(cert, time.Now()); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
 	}

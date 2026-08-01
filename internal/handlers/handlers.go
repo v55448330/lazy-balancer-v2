@@ -114,37 +114,6 @@ func (h *Handlers) applyCaddyConfigE() error {
 	return h.caddyService.GenerateAndApplyConfig()
 }
 
-func (h *Handlers) applyCaddyConfigWithRollback() error {
-	h.caddyOpMu.Lock()
-	defer h.caddyOpMu.Unlock()
-	return h.applyCaddyConfigWithRollbackLocked()
-}
-
-// applyCaddyConfigWithRollbackLocked 供已持有 caddyOpMu 的调用方使用，避免重入死锁
-func (h *Handlers) applyCaddyConfigWithRollbackLocked() error {
-	// Backup current Caddy config before applying; without a restore point
-	// the rollback contract cannot be honored, so abort instead of applying.
-	if err := h.caddyService.BackupConfig(); err != nil {
-		return fmt.Errorf("备份 Caddy 配置失败: %w", err)
-	}
-
-	if err := h.caddyService.GenerateAndApplyConfig(); err != nil {
-		log.Printf("Failed to apply Caddy config: %v", err)
-
-		// Attempt rollback
-		if rollbackErr := h.caddyService.Rollback(); rollbackErr != nil {
-			log.Printf("CRITICAL: Failed to rollback Caddy config: %v", rollbackErr)
-			return fmt.Errorf("配置应用失败且回滚也失败: %v（回滚错误: %v）", err, rollbackErr)
-		}
-
-		return fmt.Errorf("配置应用失败，已回滚到之前的配置: %v", err)
-	}
-
-	// Clear backup after successful apply
-	h.caddyService.ClearBackup()
-	return nil
-}
-
 func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleFeatureInput, uniqueID string, serverName string) error {
 	type requestUpstream struct {
 		Host           string

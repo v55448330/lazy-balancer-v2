@@ -172,12 +172,6 @@ func (m *CAQueueManager) Resume() {
 	resumeCertificateDeploymentRetries()
 }
 
-func (m *CAQueueManager) IsPaused() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return !m.active
-}
-
 // IsJobActive reports whether the job is currently queued or running.
 func (m *CAQueueManager) IsJobActive(jobID int) bool {
 	m.mu.Lock()

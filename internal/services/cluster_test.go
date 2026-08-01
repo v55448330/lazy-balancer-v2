@@ -44,6 +44,18 @@ func newClusterTestService(t *testing.T) (*ClusterService, *sql.DB) {
 	return NewClusterService(database, nil), database
 }
 
+func replaceSnapshotDB(ctx context.Context, database *sql.DB, snapshot models.ClusterSnapshot) error {
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := replaceSnapshotTx(ctx, tx, snapshot); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func TestClusterService_RegisterToken_is_one_time(t *testing.T) {
 	// Given
 	service, database := newClusterTestService(t)
@@ -140,7 +152,7 @@ func TestClusterService_RegisterToken_rejects_expired_token(t *testing.T) {
 	}
 }
 
-func TestClusterService_ApproveNode_redelivers_cluster_token_until_authenticated(t *testing.T) {
+func TestClusterService_ApproveNode_redelivers_cluster_token_until_confirmed(t *testing.T) {
 	// Given
 	service, database := newClusterTestService(t)
 	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
@@ -199,8 +211,14 @@ func TestClusterService_ApproveNode_redelivers_cluster_token_until_authenticated
 	if _, _, err := service.Snapshot(context.Background(), 0, "", first.ClusterToken); err != nil {
 		t.Fatalf("authenticate snapshot: %v", err)
 	}
+	if _, err := service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret); err != nil {
+		t.Fatalf("GET snapshot invalidated registration secret: %v", err)
+	}
+	if err := service.ConfirmRegistration(context.Background(), first.ClusterToken); err != nil {
+		t.Fatalf("confirm registration: %v", err)
+	}
 	if _, err := service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret); !errors.Is(err, ErrInvalidClusterAuth) {
-		t.Fatalf("registration secret remained valid after token authentication: %v", err)
+		t.Fatalf("registration secret remained valid after confirmation: %v", err)
 	}
 }
 
@@ -937,6 +955,14 @@ func TestSyncService_pollRegistration_clears_temporary_secret_after_approval(t *
 	// Given
 	_, database := newClusterTestService(t)
 	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost && request.URL.Path == "/api/v1/cluster/registration/confirm" {
+			if request.Header.Get("X-Cluster-Token") != "lb_cluster_approved" {
+				response.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			response.WriteHeader(http.StatusOK)
+			return
+		}
 		if request.Header.Get("X-Registration-Secret") != "temporary-secret" {
 			response.WriteHeader(http.StatusUnauthorized)
 			return

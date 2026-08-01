@@ -669,6 +669,19 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 		Data models.ClusterRegistrationStatus `json:"data"`
 	}
 	if json.NewDecoder(resp.Body).Decode(&envelope) == nil && envelope.Data.Status == "approved" && envelope.Data.ClusterToken != "" {
+		confirm, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(masterURL, "/")+"/api/v1/cluster/registration/confirm", nil)
+		if err != nil {
+			return
+		}
+		confirm.Header.Set("X-Cluster-Token", envelope.Data.ClusterToken)
+		confirmed, err := s.do(confirm)
+		if err != nil {
+			return
+		}
+		defer confirmed.Body.Close()
+		if confirmed.StatusCode >= http.StatusBadRequest {
+			return
+		}
 		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token=?, registration_secret='' WHERE id=1", envelope.Data.ClusterToken)
 	}
 }

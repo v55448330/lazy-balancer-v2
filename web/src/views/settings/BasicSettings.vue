@@ -146,7 +146,7 @@
       </el-form>
       <template #footer>
         <el-button @click="adminTlsDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="adminTlsSaving" :disabled="adminTlsForm.mode === 'upload' && !adminTlsForm.certInfo" @click="saveAdminTls">保存</el-button>
+        <el-button type="primary" :loading="adminTlsSaving" :disabled="adminTlsForm.mode === 'upload' && (!adminTlsForm.certInfo || adminTlsForm.certInfo.days_left <= 0)" @click="saveAdminTls">保存</el-button>
       </template>
     </el-dialog>
 
@@ -550,7 +550,7 @@ const saveAdminTls = async () => {
     const fd = formDataOf({ enabled: 'true', mode: adminTlsForm.value.mode })
     if (adminTlsForm.value.mode === 'upload') {
       const { certFile, keyFile } = adminTlsForm.value
-      if (!certFile || !keyFile) return
+      if (!certFile || !keyFile || !adminTlsForm.value.certInfo || adminTlsForm.value.certInfo.days_left <= 0) return
       fd.append('cert_file', certFile)
       fd.append('key_file', keyFile)
     }

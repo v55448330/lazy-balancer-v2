@@ -199,6 +199,34 @@ func TestRestoreCertFiles_rolls_back_all_rules_when_later_restore_fails(t *testi
 	}
 }
 
+func TestMaterializeCertPairs_skipsWrites_whenPairIsUnchanged(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	certPEM, keyPEM := matchingCertificatePair(t, "unchanged.example.test")
+	material := CertMaterial{RuleID: "lb_unchanged", CertPEM: certPEM, KeyPEM: keyPEM}
+	if _, err := MaterializeCertPairs([]CertMaterial{material}); err != nil {
+		t.Fatalf("initial materialization: %v", err)
+	}
+	certPath, keyPath := CertFilePaths(material.RuleID)
+	if err := os.Mkdir(certPath+".tmp", 0700); err != nil {
+		t.Fatalf("block certificate temporary path: %v", err)
+	}
+	if err := os.Mkdir(keyPath+".tmp", 0700); err != nil {
+		t.Fatalf("block key temporary path: %v", err)
+	}
+
+	// When
+	snapshot, err := MaterializeCertPairs([]CertMaterial{material})
+
+	// Then
+	if err != nil {
+		t.Fatalf("unchanged materialization attempted a write: %v", err)
+	}
+	if snapshot != nil {
+		t.Fatalf("unchanged materialization snapshot=%#v, want nil", snapshot)
+	}
+}
+
 func TestMaterializeAllCertsFromDB_repairs_mismatched_downloaded_pair(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)

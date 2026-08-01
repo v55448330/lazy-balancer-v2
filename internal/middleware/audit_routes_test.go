@@ -11,14 +11,15 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 	// Given
 	router := newMiddlewareTestRouter(t)
 	intentionalSkip := map[string]struct{}{
-		"POST /api/v1/admin-tls/inspect":      {},
-		"POST /api/v1/certificates/parse":     {},
-		"POST /api/v1/cluster/nodes/report":   {},
-		"POST /api/v1/config/import/validate": {},
-		"POST /api/v1/config/preview":         {},
-		"POST /api/v1/config/validate":        {},
-		"POST /api/v1/mcp":                    {},
-		"POST /api/v1/rules/cert-info":        {},
+		"POST /api/v1/admin-tls/inspect":            {},
+		"POST /api/v1/certificates/parse":           {},
+		"POST /api/v1/cluster/nodes/report":         {},
+		"POST /api/v1/cluster/registration/confirm": {},
+		"POST /api/v1/config/import/validate":       {},
+		"POST /api/v1/config/preview":               {},
+		"POST /api/v1/config/validate":              {},
+		"POST /api/v1/mcp":                          {},
+		"POST /api/v1/rules/cert-info":              {},
 	}
 	writeMethods := map[string]struct{}{
 		http.MethodPost: {}, http.MethodPut: {}, http.MethodPatch: {}, http.MethodDelete: {},

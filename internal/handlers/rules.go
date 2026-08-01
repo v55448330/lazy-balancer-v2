@@ -79,7 +79,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		Enabled    bool
 	}
 
-	log.Printf("GetRuleCaddyConfig: querying rule caddy_id=%s", caddyID)
+	services.Logf("debug", "GetRuleCaddyConfig: querying rule caddy_id=%s", caddyID)
 
 	err := db.DB.QueryRow(`
 		SELECT COALESCE(caddy_id,''), listen_port, COALESCE(enabled,0)
@@ -103,7 +103,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		return
 	}
 
-	log.Printf("GetRuleCaddyConfig: caddyID=%s, port=%d, upstreams=%d, enabled=%v",
+	services.Logf("debug", "GetRuleCaddyConfig: caddyID=%s, port=%d, upstreams=%d, enabled=%v",
 		r.CaddyID, r.ListenPort, upstreamCount, r.Enabled)
 
 	responseData := map[string]interface{}{
@@ -715,6 +715,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的请求: " + err.Error()})
 		return
 	}
+	requestedProtocol := req.Protocol
+	upstreamsProvided := len(req.Upstreams) > 0
 	aclUpdated := req.IPACLMode != nil || req.IPACLList != nil
 
 	// caddyOpMu 必须覆盖 读取→合并→验证→快照→提交→应用→恢复 全程：锁外读取合并时，
@@ -730,7 +732,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 	}
 
-	log.Printf("UpdateRule request for caddy_id=%s: enable_tls=%v, tls_source=%s, ca_provider_id=%v, cert_len=%d, key_len=%d",
+	services.Logf("debug", "UpdateRule request for caddy_id=%s: enable_tls=%v, tls_source=%s, ca_provider_id=%v, cert_len=%d, key_len=%d",
 		caddyID, derefBool(req.EnableTLS), req.TLSSource, func() interface{} {
 			if req.CAProviderID == nil {
 				return "<nil>"
@@ -742,51 +744,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// For updates the port is fixed, so we only apply the default when an explicit port was not supplied.
 	if req.Protocol == "http" && req.EnableTLS != nil && *req.EnableTLS && req.ListenPort == 0 {
 		req.ListenPort = 443
-	}
-
-	if req.ListenPort > 0 {
-		var currentPort int
-		err := db.DB.QueryRow("SELECT listen_port FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&currentPort)
-		if dbQueryNotFound(c, err, "规则不存在", "UpdateRule query listen port") {
-			return
-		}
-		// Allow HTTP (80) -> HTTPS (443) upgrade when enabling TLS.
-		isHTTPUpgrade := currentPort == 80 && req.ListenPort == 443 && req.EnableTLS != nil && *req.EnableTLS
-		if currentPort != req.ListenPort && !isHTTPUpgrade {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "端口创建后不能修改"})
-			return
-		}
-	}
-
-	// Determine server name for validation - port can't change so use req.ListenPort or query existing
-	var validationServerName string
-	validationPort := req.ListenPort
-	if validationPort == 0 {
-		db.DB.QueryRow("SELECT listen_port FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&validationPort)
-	}
-	validationProtocol := req.Protocol
-	validationEnableTLS := false
-	if req.EnableTLS != nil {
-		validationEnableTLS = *req.EnableTLS
-	}
-	if validationProtocol == "" {
-		db.DB.QueryRow("SELECT COALESCE(protocol,'') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&validationProtocol)
-	}
-	if !validationEnableTLS {
-		db.DB.QueryRow("SELECT COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&validationEnableTLS)
-	}
-	if validationProtocol == "http" {
-		if validationEnableTLS && validationPort == 443 {
-			validationServerName = "http_443"
-		} else if validationPort == 80 {
-			validationServerName = "http_80"
-		} else if validationEnableTLS {
-			validationServerName = fmt.Sprintf("http_%d", validationPort)
-		} else {
-			validationServerName = fmt.Sprintf("http_%d", validationPort)
-		}
-	} else {
-		validationServerName = fmt.Sprintf("tcp_%d", validationPort)
 	}
 
 	// Fill in missing fields from database so validation and the update use complete data.
@@ -969,6 +926,49 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		req.Description = existingRule.Description
 	}
 
+	protocolChanged := requestedProtocol != "" && requestedProtocol != existingRule.Protocol
+	portChanged := req.ListenPort != existingRule.ListenPort
+	isHTTPUpgrade := existingRule.ListenPort == 80 && req.ListenPort == 443 && req.EnableTLS != nil && *req.EnableTLS
+	if portChanged && !protocolChanged && !isHTTPUpgrade {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "仅协议切换时允许迁移监听端口"})
+		return
+	}
+
+	if protocolChanged {
+		zero, disabled := 0, false
+		switch req.Protocol {
+		case "tcp":
+			req.Domain = ""
+			req.EnableTLS = &disabled
+			req.TLSSource = "manual"
+			req.ACMEConfigID = 0
+			req.CAProviderID = &zero
+			req.TLSCert = ""
+			req.TLSKey = ""
+			req.TLSHTTPRedirect = &disabled
+			req.HealthCheckPath = ""
+			req.RequestBodyMaxSizeMB = &zero
+			req.UpstreamKeepaliveTimeout = &zero
+			req.ServerTokensHidden = &zero
+			req.CustomRoutesEnabled = &disabled
+			emptyPathRules := []models.PathRule{}
+			req.PathRules = &emptyPathRules
+			req.ProxyDialTimeout = &zero
+			req.ProxyResponseHeaderTimeout = &zero
+			req.ProxyReadTimeout = &zero
+			req.ProxyWriteTimeout = &zero
+			req.ProxyStreamTimeout = &zero
+			req.HostHeader = ""
+			req.EnableCompress = &disabled
+			req.CompressTypes = ""
+		case "http":
+			req.TCPHealthCheckPort = 0
+			req.TCPProxyProtocol = &disabled
+			req.TCPTryDuration = 0
+			req.TCPTryInterval = 0
+		}
+	}
+
 	if req.Protocol == "http" && req.Domain != "" {
 		req.Domain = strings.Join(normalizedRuleDomains(req.Domain), ",")
 		existing, err := ruleDomainConflict(req.Domain, caddyID)
@@ -987,6 +987,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if len(req.Upstreams) == 0 {
 		req.Upstreams = oldUpstreams
 	}
+	if protocolChanged && !upstreamsProvided {
+		for index := range req.Upstreams {
+			if req.Protocol == "tcp" {
+				req.Upstreams[index].Protocol = "tcp"
+			} else {
+				req.Upstreams[index].Protocol = "http"
+			}
+		}
+	}
 
 	if req.RequestBodyMaxSizeMB != nil && *req.RequestBodyMaxSizeMB < 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求体大小限制不能为负数"})
@@ -1001,10 +1010,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 	features := updateRuleFeatures(req, existingRule)
+	features.Protocol = req.Protocol
 	if err := validateRuleFeatures(features); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	validationServerName := fmt.Sprintf("%s_%d", req.Protocol, req.ListenPort)
 	ipACLListJSON, err := encodeIPACLList(features.IPACLList)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -1119,11 +1130,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		query += "ca_provider_id = ?, "
 		args = append(args, *req.CAProviderID)
 	}
-	if req.TLSCert != "" {
+	if req.TLSCert != "" || protocolChanged {
 		query += "tls_cert = ?, "
 		args = append(args, req.TLSCert)
 	}
-	if req.TLSKey != "" {
+	if req.TLSKey != "" || protocolChanged {
 		query += "tls_key = ?, "
 		args = append(args, req.TLSKey)
 	}
@@ -1294,11 +1305,18 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "确认规则更新结果失败"})
 		return
 	}
-	log.Printf("UpdateRule executed for caddy_id=%s: rows_affected=%d ca_provider_id_included=%v", caddyID, rowsAffected, req.CAProviderID != nil)
+	services.Logf("debug", "UpdateRule executed for caddy_id=%s: rows_affected=%d ca_provider_id_included=%v", caddyID, rowsAffected, req.CAProviderID != nil)
 	if rowsAffected == 0 {
 		tx.Rollback()
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书申请中，请等待完成或失败后再修改规则"})
 		return
+	}
+	if protocolChanged && req.Protocol == "tcp" {
+		if _, err := tx.Exec("DELETE FROM cert_jobs WHERE rule_id = ?", caddyID); err != nil {
+			log.Printf("UpdateRule certificate cleanup error for caddy_id=%s: %v", caddyID, err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理旧证书任务失败"})
+			return
+		}
 	}
 
 	if _, err := tx.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID); err != nil {

@@ -30,7 +30,16 @@ var (
 // SetDB registers the handle background goroutines should use; tests that
 // swap DB directly should call this too so refresh loops follow.
 func SetDB(d *sql.DB) {
+	if current := GetDB(); current != nil && current != d {
+		if err := FlushAPIKeyLastUsed(); err != nil {
+			logDBError("flush API key usage before database swap", err)
+		}
+	}
 	currentDB.Store(d)
+}
+
+func logDBError(operation string, err error) {
+	log.Printf("%s: %v", operation, err)
 }
 
 // GetDB returns the handle registered via Initialize/SetDB, safe for
@@ -112,7 +121,8 @@ func Initialize(dataDir string) (err error) {
 		return fmt.Errorf("failed to initialize audit database: %w", initErr)
 	}
 	auditDB = AuditDB
-	currentDB.Store(database)
+	SetDB(database)
+	startAPIKeyLastUsedFlusher()
 
 	log.Println("Database initialized successfully")
 	return nil
@@ -151,6 +161,7 @@ func createTables() error {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (created_by) REFERENCES users(id)
 	);
+	CREATE INDEX IF NOT EXISTS idx_api_keys_prefix_hash ON api_keys(key_prefix, key_hash);
 
 	-- LB Rules table (caddy_id is now the primary key)
 	CREATE TABLE IF NOT EXISTS lb_rules (
@@ -232,6 +243,7 @@ func createTables() error {
 		proxy_protocol VARCHAR(10) DEFAULT '',
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
 	);
+	CREATE INDEX IF NOT EXISTS idx_upstreams_rule_enabled_id ON upstreams(rule_id, enabled, id);
 
 	CREATE TABLE IF NOT EXISTS path_rules (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -245,19 +257,6 @@ func createTables() error {
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
 	);
 	CREATE INDEX IF NOT EXISTS idx_path_rules_rule_order ON path_rules(rule_id, sort_order, id);
-
-	-- TLS Certificates table for Let's Encrypt
-	CREATE TABLE IF NOT EXISTS tls_certificates (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		domain VARCHAR(255) UNIQUE NOT NULL,
-		cert_pem TEXT NOT NULL,
-		key_pem TEXT NOT NULL,
-		issuer VARCHAR(50) DEFAULT 'self-signed',
-		acme_email VARCHAR(255),
-		expires_at DATETIME,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME
-	);
 
 	-- Certificate Configs table for ACME DNS providers
 	CREATE TABLE IF NOT EXISTS certificate_configs (
@@ -347,9 +346,7 @@ func createTables() error {
 		protocol VARCHAR(10) DEFAULT 'http',
 		master_id INTEGER,
 		is_approved BOOLEAN DEFAULT FALSE,
-		sync_enabled BOOLEAN DEFAULT TRUE,
 		sync_interval INTEGER DEFAULT 60,
-		sync_scope VARCHAR(50) DEFAULT 'all',
 		status VARCHAR(20) DEFAULT 'offline',
 		cluster_token_hash VARCHAR(64),
 		registration_secret VARCHAR(64),
@@ -585,40 +582,17 @@ func runMigrations() error {
 	if err := migrateUsersIsEnabledNotNull(); err != nil {
 		return fmt.Errorf("failed to migrate users.is_enabled: %w", err)
 	}
-	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS cluster_register_tokens (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		token_hash VARCHAR(64) UNIQUE NOT NULL,
-		expires_at DATETIME NOT NULL,
-		used_at DATETIME,
-		created_by INTEGER,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	)`); err != nil {
-		return fmt.Errorf("failed to create cluster_register_tokens: %w", err)
+	if err := migrateNodesDeadColumns(); err != nil {
+		return fmt.Errorf("failed to migrate nodes legacy columns: %w", err)
 	}
-	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cluster_register_tokens_hash ON cluster_register_tokens(token_hash)"); err != nil {
-		return fmt.Errorf("failed to index cluster_register_tokens: %w", err)
+	if _, err := DB.Exec("DROP TABLE IF EXISTS tls_certificates"); err != nil {
+		return fmt.Errorf("failed to drop tls_certificates: %w", err)
 	}
-	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS used_login_tickets (
-		jti_hash TEXT PRIMARY KEY,
-		expires_at DATETIME NOT NULL
-	)`); err != nil {
-		return fmt.Errorf("failed to create used_login_tickets: %w", err)
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_api_keys_prefix_hash ON api_keys(key_prefix,key_hash)"); err != nil {
+		return fmt.Errorf("failed to index API key authentication: %w", err)
 	}
-	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_used_login_tickets_expires_at ON used_login_tickets(expires_at)"); err != nil {
-		return fmt.Errorf("failed to index used_login_tickets expiration: %w", err)
-	}
-	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS path_rules (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		rule_id VARCHAR(20) NOT NULL,
-		sort_order INTEGER NOT NULL DEFAULT 0,
-		match_type TEXT NOT NULL DEFAULT 'prefix',
-		path TEXT NOT NULL,
-		upstreams_json TEXT,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME,
-		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
-	)`); err != nil {
-		return fmt.Errorf("failed to create path_rules: %w", err)
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_upstreams_rule_enabled_id ON upstreams(rule_id,enabled,id)"); err != nil {
+		return fmt.Errorf("failed to index upstream rule loading: %w", err)
 	}
 	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_path_rules_rule_order ON path_rules(rule_id, sort_order, id)"); err != nil {
 		return fmt.Errorf("failed to index path_rules: %w", err)
@@ -675,36 +649,6 @@ func runMigrations() error {
 		if _, err := DB.Exec("UPDATE global_config SET access_log_format = ? WHERE id=1", lf2+"\nrequest>headers>X-API-Key -> delete"); err != nil {
 			return fmt.Errorf("failed to redact API key access log header: %w", err)
 		}
-	}
-
-	// Create upstreams table if not exists
-	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS upstreams (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		rule_id VARCHAR(20) NOT NULL,
-		host VARCHAR(255) NOT NULL,
-		port INTEGER NOT NULL,
-		weight INTEGER DEFAULT 1,
-		domain VARCHAR(255),
-		dynamic_dns BOOLEAN DEFAULT 0,
-		enabled BOOLEAN DEFAULT 1,
-		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
-	)`); err != nil {
-		return fmt.Errorf("failed to create upstreams: %w", err)
-	}
-
-	// Create tls_certificates table if not exists
-	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS tls_certificates (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		domain VARCHAR(255) UNIQUE NOT NULL,
-		cert_pem TEXT NOT NULL,
-		key_pem TEXT NOT NULL,
-		issuer VARCHAR(50) DEFAULT 'self-signed',
-		acme_email VARCHAR(255),
-		expires_at DATETIME,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME
-	)`); err != nil {
-		return fmt.Errorf("failed to create tls_certificates: %w", err)
 	}
 
 	if _, err := DB.Exec(`DELETE FROM cert_jobs WHERE id NOT IN (
@@ -891,6 +835,55 @@ func migrateUsersIsEnabledNotNull() error {
 		return fmt.Errorf("commit users migration: %w", err)
 	}
 	committed = true
+	return nil
+}
+
+func migrateNodesDeadColumns() error {
+	var legacyColumns int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('nodes') WHERE name IN ('sync_enabled','sync_scope')").Scan(&legacyColumns); err != nil {
+		return fmt.Errorf("inspect nodes legacy columns: %w", err)
+	}
+	if legacyColumns == 0 {
+		return nil
+	}
+	ctx := context.Background()
+	conn, err := DB.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire nodes migration connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		return fmt.Errorf("disable foreign keys: %w", err)
+	}
+	defer func() {
+		if _, enableErr := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); enableErr != nil {
+			log.Printf("failed to re-enable foreign keys after nodes migration: %v", enableErr)
+		}
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin nodes migration: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`CREATE TABLE nodes_without_legacy_sync (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(100) NOT NULL, mode VARCHAR(10) NOT NULL DEFAULT 'slave',
+		ip_address VARCHAR(45) NOT NULL, port INTEGER DEFAULT 8000, protocol VARCHAR(10) DEFAULT 'http', access_url VARCHAR(255) DEFAULT '',
+		master_id INTEGER, is_approved BOOLEAN DEFAULT FALSE, sync_interval INTEGER DEFAULT 60, status VARCHAR(20) DEFAULT 'offline',
+		cluster_token_hash VARCHAR(64), registration_secret VARCHAR(64), registration_secret_expires_at DATETIME,
+		cluster_token_delivered BOOLEAN DEFAULT 0, reported_version INTEGER DEFAULT 0, health_json TEXT,
+		last_sync_at DATETIME, last_sync_error TEXT, last_seen DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (master_id) REFERENCES nodes_without_legacy_sync(id));
+		INSERT INTO nodes_without_legacy_sync (id,name,mode,ip_address,port,protocol,access_url,master_id,is_approved,sync_interval,status,cluster_token_hash,registration_secret,registration_secret_expires_at,cluster_token_delivered,reported_version,health_json,last_sync_at,last_sync_error,last_seen,created_at)
+		SELECT id,name,COALESCE(mode,'slave'),ip_address,port,COALESCE(protocol,'http'),COALESCE(access_url,''),master_id,is_approved,sync_interval,status,cluster_token_hash,registration_secret,registration_secret_expires_at,cluster_token_delivered,reported_version,health_json,last_sync_at,last_sync_error,last_seen,created_at FROM nodes;
+		DROP TABLE nodes;
+		ALTER TABLE nodes_without_legacy_sync RENAME TO nodes;
+		CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);
+		CREATE INDEX IF NOT EXISTS idx_nodes_master ON nodes(master_id);`); err != nil {
+		return fmt.Errorf("rebuild nodes table: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit nodes migration: %w", err)
+	}
 	return nil
 }
 
@@ -1314,7 +1307,10 @@ func migrateCertJobsStatusConstraint() error {
 }
 
 func Close() error {
+	stopAPIKeyLastUsedFlusher()
+	flushErr := FlushAPIKeyLastUsed()
 	var err error
+	err = errors.Join(err, flushErr)
 	if AuditDB != nil {
 		err = errors.Join(err, AuditDB.Close())
 	}

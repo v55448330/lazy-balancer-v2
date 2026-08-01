@@ -126,13 +126,6 @@ type apiStatus struct {
 	Message string      `json:"message"`
 }
 
-type record struct {
-	ID    json.Number `json:"id"`
-	Name  string      `json:"name"`
-	Type  string      `json:"type"`
-	Value string      `json:"value"`
-}
-
 func (p *Provider) apiCall(ctx context.Context, method string, params url.Values, result interface{}) error {
 	params.Set("login_token", p.LoginToken)
 	params.Set("format", "json")
@@ -183,34 +176,6 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 		}
 	}
 	return "", fmt.Errorf("domain %s not found", zone)
-}
-
-func (p *Provider) listRecords(ctx context.Context, domainID, subDomain string) ([]record, error) {
-	params := url.Values{}
-	params.Set("domain_id", domainID)
-	if subDomain != "" {
-		params.Set("sub_domain", subDomain)
-	}
-	var result struct {
-		Status  apiStatus `json:"status"`
-		Records []record  `json:"records"`
-	}
-	if err := p.apiCall(ctx, "Record.List", params, &result); err != nil {
-		return nil, err
-	}
-	if result.Status.Code.String() != "1" {
-		if result.Status.Code.String() == "10" {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("Record.List failed: %s", result.Status.Message)
-	}
-	var out []record
-	for _, r := range result.Records {
-		if r.Type == "TXT" {
-			out = append(out, r)
-		}
-	}
-	return out, nil
 }
 
 func (p *Provider) createRecord(ctx context.Context, domainID, subDomain, value string, ttl int) (string, error) {

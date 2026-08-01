@@ -20,7 +20,7 @@ import (
 func (h *Handlers) ListUsers(c *gin.Context) {
 	rows, err := db.DB.Query("SELECT id, username, role, display_name, is_enabled, created_at, last_login FROM users ORDER BY id")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return
 	}
 	defer rows.Close()
@@ -29,13 +29,13 @@ func (h *Handlers) ListUsers(c *gin.Context) {
 	for rows.Next() {
 		var u models.User
 		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.DisplayName, &u.IsEnabled, &u.CreatedAt, &u.LastLogin); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 			return
 		}
 		users = append(users, models.NewUserResponse(u))
 	}
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return
 	}
 
@@ -45,22 +45,22 @@ func (h *Handlers) ListUsers(c *gin.Context) {
 func (h *Handlers) CreateUser(c *gin.Context) {
 	var req models.CreateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
 	}
 
 	if req.Role != "admin" && req.Role != "user" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid role"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "角色无效"})
 		return
 	}
 	if passwordTooShort(req.Password) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Password must be at least 6 characters"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码至少 6 位"})
 		return
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to hash password"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "密码加密失败"})
 		return
 	}
 
@@ -68,7 +68,7 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 		req.Username, string(hash), req.Role, req.DisplayName)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "already exists") {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "用户名已存在"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "用户名已存在"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建用户失败"})
@@ -77,13 +77,13 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 
 	id, _ := result.LastInsertId()
 	recordAudit(c, "创建", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), req.Username, fmt.Sprintf("角色：%s", req.Role)))
-	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "User created", Data: gin.H{"id": id}})
+	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "用户创建成功", Data: gin.H{"id": id}})
 }
 
 func (h *Handlers) UpdateUser(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid user ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "用户 ID 无效"})
 		return
 	}
 
@@ -94,23 +94,23 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		DisplayName *string `json:"display_name"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
 	}
 
 	if req.Role != nil && *req.Role != "" && *req.Role != "admin" && *req.Role != "user" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid role"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "角色无效"})
 		return
 	}
 	if req.Password != nil && passwordTooShort(*req.Password) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Password must be at least 6 characters"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码至少 6 位"})
 		return
 	}
 	var passwordHash string
 	if req.Password != nil && *req.Password != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(*req.Password), bcrypt.DefaultCost)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to hash password"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "密码加密失败"})
 			return
 		}
 		passwordHash = string(hash)
@@ -118,7 +118,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户失败"})
 		return
 	}
 	committed := false
@@ -134,9 +134,9 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	var oldEnabled bool
 	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, role, COALESCE(display_name,''), is_enabled FROM users WHERE id = ?", id).Scan(&oldUsername, &oldRole, &oldDisplayName, &oldEnabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "用户不存在"})
 		} else {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query user"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
 		}
 		return
 	}
@@ -173,27 +173,31 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		}
 		result, err := tx.ExecContext(c.Request.Context(), query, args...)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user"})
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "already exists") {
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "用户名已存在"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户失败"})
 			return
 		}
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户失败"})
 			return
 		}
 		if rowsAffected == 0 {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "Cannot remove the last enabled administrator"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "不能移除最后一个已启用管理员"})
 			return
 		}
 	}
 	var user models.User
 	if err := tx.QueryRowContext(c.Request.Context(), `SELECT id,username,role,display_name,is_enabled,created_at,last_login FROM users WHERE id=?`, id).
 		Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query user"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户失败"})
 		return
 	}
 	committed = true
@@ -203,13 +207,13 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	} else {
 		recordAudit(c, "更新", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "User updated", Data: models.NewUserResponse(user)})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "用户更新成功", Data: models.NewUserResponse(user)})
 }
 
 func (h *Handlers) DeleteUser(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid user ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "用户 ID 无效"})
 		return
 	}
 
@@ -225,13 +229,13 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	}
 
 	if userIDInt == id {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Cannot delete yourself"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "不能删除当前登录用户"})
 		return
 	}
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete user"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除用户失败"})
 		return
 	}
 	defer func() {
@@ -244,55 +248,55 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	var targetEnabled bool
 	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, role, is_enabled FROM users WHERE id = ?", id).Scan(&targetUsername, &targetRole, &targetEnabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "用户不存在"})
 		} else {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query user"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
 		}
 		return
 	}
 	if targetRole == "admin" && targetEnabled {
 		var otherAdmins int
 		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM users WHERE id <> ? AND role = 'admin' AND is_enabled = 1", id).Scan(&otherAdmins); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete user"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除用户失败"})
 			return
 		}
 		if otherAdmins == 0 {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "Cannot delete the last enabled administrator"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "不能删除最后一个已启用管理员"})
 			return
 		}
 	}
 	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM api_keys WHERE created_by = ?", id); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete user"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除用户失败"})
 		return
 	}
 	result, err := tx.ExecContext(c.Request.Context(), "DELETE FROM users WHERE id = ?", id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete user"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除用户失败"})
 		return
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete user"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除用户失败"})
 		return
 	}
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "用户不存在"})
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete user"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除用户失败"})
 		return
 	}
 
 	recordAudit(c, "删除", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), targetUsername))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "User deleted"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "用户删除成功"})
 }
 
 func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid user ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "用户 ID 无效"})
 		return
 	}
 
@@ -300,13 +304,13 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		IsEnabled bool `json:"is_enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
 	}
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user status"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户状态失败"})
 		return
 	}
 	defer func() {
@@ -322,27 +326,27 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 	}
 	result, err := tx.ExecContext(c.Request.Context(), query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user status"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户状态失败"})
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user status"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户状态失败"})
 		return
 	}
 	if rowsAffected == 0 {
 		var exists int
 		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM users WHERE id = ?", id).Scan(&exists); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user status"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户状态失败"})
 		} else if exists == 0 {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "用户不存在"})
 		} else {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "Cannot disable the last enabled administrator"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "不能禁用最后一个已启用管理员"})
 		}
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update user status"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户状态失败"})
 		return
 	}
 
@@ -351,13 +355,13 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		status = "enabled"
 	}
 	recordAudit(c, "修改状态", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), services.AuditResultPart(status)))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "User status updated"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "用户状态更新成功"})
 }
 
 func (h *Handlers) ResetUserPassword(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid user ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "用户 ID 无效"})
 		return
 	}
 
@@ -365,31 +369,31 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 		NewPassword string `json:"new_password"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.NewPassword == "" || passwordTooShort(req.NewPassword) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to hash password"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "密码加密失败"})
 		return
 	}
 
 	result, err := db.DB.Exec("UPDATE users SET password_hash = ?, password_changed_at = datetime('now'), password_version = password_version + 1 WHERE id = ?", string(hash), id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to reset password"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重置密码失败"})
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to reset password"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重置密码失败"})
 		return
 	}
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "User not found"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "用户不存在"})
 		return
 	}
 
 	recordAudit(c, "重置密码", "用户", services.FormatAuditDetail(fmt.Sprintf("用户 %d", id), services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Password reset successfully"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "密码重置成功"})
 }

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -15,7 +16,7 @@ import (
 type brandingConfig struct {
 	AppName    string `json:"app_name"`
 	FooterText string `json:"footer_text"`
-	Version    string `json:"version"`
+	Version    string `json:"version,omitempty"`
 }
 
 var defaultBranding = brandingConfig{
@@ -23,18 +24,29 @@ var defaultBranding = brandingConfig{
 	FooterText: "Copyright © 2026 XiaoBao. All rights reserved.",
 }
 
+func SeedDefaultBranding(dataDir string) error {
+	path := filepath.Join(dataDir, "branding.json")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("检查品牌配置文件: %w", err)
+	}
+	data, err := json.MarshalIndent(defaultBranding, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化默认品牌配置: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("写入默认品牌配置: %w", err)
+	}
+	return nil
+}
+
 func (h *Handlers) GetBranding(c *gin.Context) {
 	cfg := defaultBranding
 	path := filepath.Join(h.cfg.DataDir, "branding.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			if defaults, merr := json.MarshalIndent(cfg, "", "  "); merr == nil {
-				if werr := os.WriteFile(path, defaults, 0644); werr != nil {
-					log.Printf("GetBranding: failed to write default branding file %s: %v", path, werr)
-				}
-			}
-		} else {
+		if !os.IsNotExist(err) {
 			log.Printf("GetBranding: failed to read branding file %s, using defaults: %v", path, err)
 		}
 		cfg.Version = h.cfg.Version

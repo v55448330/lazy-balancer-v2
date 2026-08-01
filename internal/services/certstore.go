@@ -276,25 +276,46 @@ func MaterializeCertPairs(materials []CertMaterial) (CertFilesSnapshot, error) {
 	certWriteMu.Lock()
 	defer certWriteMu.Unlock()
 
-	ruleIDs := make([]string, len(materials))
+	lastMaterialByRule := make(map[string]int, len(materials))
 	for i, material := range materials {
 		if _, err := tls.X509KeyPair([]byte(material.CertPEM), []byte(material.KeyPEM)); err != nil {
 			return nil, fmt.Errorf("证书与私钥不匹配 %s: %w", material.RuleID, err)
 		}
-		ruleIDs[i] = material.RuleID
+		if certPath, _ := CertFilePaths(material.RuleID); certPath == "" {
+			return nil, fmt.Errorf("非法的规则编号: %q", material.RuleID)
+		}
+		lastMaterialByRule[material.RuleID] = i
 	}
-	snapshot, err := snapshotCertFilesLocked(ruleIDs)
-	if err != nil {
-		return nil, err
+
+	changedMaterials := make([]CertMaterial, 0, len(lastMaterialByRule))
+	snapshot := make(CertFilesSnapshot, len(lastMaterialByRule))
+	for i, material := range materials {
+		if lastMaterialByRule[material.RuleID] != i {
+			continue
+		}
+		certPath, keyPath := CertFilePaths(material.RuleID)
+		cert, err := snapshotCertFile(certPath)
+		if err != nil {
+			return nil, fmt.Errorf("快照证书 %s: %w", material.RuleID, err)
+		}
+		key, err := snapshotCertFile(keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("快照私钥 %s: %w", material.RuleID, err)
+		}
+		if cert.Exists && key.Exists && bytes.Equal(cert.Data, []byte(material.CertPEM)) && bytes.Equal(key.Data, []byte(material.KeyPEM)) {
+			continue
+		}
+		snapshot[material.RuleID] = CertPairSnapshot{Cert: cert, Key: key}
+		changedMaterials = append(changedMaterials, material)
+	}
+	if len(changedMaterials) == 0 {
+		return nil, nil
 	}
 	if err := os.MkdirAll(certDir, 0755); err != nil {
 		return nil, fmt.Errorf("创建证书目录: %w", err)
 	}
-	for _, material := range materials {
+	for _, material := range changedMaterials {
 		certPath, keyPath := CertFilePaths(material.RuleID)
-		if certPath == "" {
-			return nil, errors.Join(fmt.Errorf("非法的规则编号: %q", material.RuleID), restoreCertFilesLocked(snapshot))
-		}
 		if err := writeCertPair(certPath, keyPath, material.CertPEM, material.KeyPEM); err != nil {
 			return nil, errors.Join(fmt.Errorf("物化证书 %s: %w", material.RuleID, err), restoreCertFilesLocked(snapshot))
 		}

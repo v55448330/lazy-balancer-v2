@@ -1,5 +1,7 @@
 # Lazy Balancer V2 - 详细架构
 
+> **已归档**：本文为历史设计文档，不代表当前实现（当前：首次访问初始化管理员、集群角色存于数据库、凭证在页面配置）。
+
 **文档版本**: 1.0
 **更新日期**: 2026-04-17
 **目的**: 函数级代码细节，支持复杂 Bug 调试和深度修改
@@ -303,67 +305,20 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 }
 ```
 
-### 4.5 SetConfigByID 函数
+### 4.5 ApplyConfigFromTx 函数
 
-**位置**: `caddy.go:374-450` (approximately)
-
-**功能**: 通过 @id 替换路由配置
+**功能**: 从未提交事务的可见状态生成并加载完整 Caddy 配置
 
 ```go
-func (s *CaddyService) SetConfigByID(id string, config map[string]interface{}) error {
-    // 1. 获取当前完整配置 GET /config/
-    // 2. 遍历所有服务器的所有路由
-    // 3. 找到 @id 匹配的路由
-    // 4. 在原位置替换为新 config
-    // 5. POST 完整配置到 /config/
-    // 6. 如果找不到对应 @id，返回错误
+func (s *CaddyService) ApplyConfigFromTx(tx *sql.Tx) error {
+    // 1. 获取 Caddy 配置写锁
+    // 2. 从 tx 读取启用规则及关联数据并生成完整配置
+    // 3. POST 完整配置到 /load，由 Caddy 校验并加载
+    // 4. 失败时返回错误，由处理器回滚事务并恢复运行时快照
 }
 ```
 
-### 4.6 PrependRouteToServer 函数
-
-**位置**: `caddy.go:674-730` (approximately)
-
-**功能**: 将路由预置到服务器首位 (新路由优先级高)
-
-```go
-func (s *CaddyService) PrependRouteToServer(serverName string, routeConfig map[string]interface{}) error {
-    // 1. 获取服务器配置
-    // 2. 将新路由插入到 routes 数组首位
-    // 3. 提交配置
-}
-```
-
-### 4.7 RemoveRouteFromServer 函数
-
-**位置**: `caddy.go:730-800` (approximately)
-
-**功能**: 通过 @id 从服务器移除路由
-
-```go
-func (s *CaddyService) RemoveRouteFromServer(serverName string, routeID string) error {
-    // 1. 获取服务器配置
-    // 2. 过滤掉 @id 匹配的路由
-    // 3. 提交配置
-}
-```
-
-### 4.8 VerifyRouteExists 函数
-
-**位置**: `caddy.go:758-850` (approximately)
-
-**功能**: 验证路由是否已成功写入 Caddy
-
-```go
-func (s *CaddyService) VerifyRouteExists(caddyID string) error {
-    // 1. GET /config/ 获取当前配置
-    // 2. 遍历所有服务器的所有路由
-    // 3. 查找 @id 匹配的路由
-    // 4. 找到返回 nil, 找不到返回错误
-}
-```
-
-### 4.9 ValidateRouteMergedConfig 函数
+### 4.6 ValidateRouteMergedConfig 函数
 
 **位置**: `caddy.go:600-670` (approximately)
 
@@ -412,142 +367,20 @@ func NewHandlers(cfg *config.Config, caddyService *services.CaddyService, ...) *
 }
 ```
 
-### 5.3 CreateRule 函数
+### 5.3 规则写端点
 
-**位置**: `handlers.go` (约 1300-1500 行)
-
-**功能**: 创建负载规则
-
-**流程**:
+`CreateRule`、`UpdateRule`、`EnableRule`、`DisableRule` 和 `DeleteRule` 使用同一事务内全量应用流程：
 
 ```go
-func (h *Handlers) CreateRule(c *gin.Context) {
-    // 1. 绑定请求
-    var req models.CreateRuleRequest
-    c.BindJSON(&req)
-
-    // 2. 验证参数 (validateCaddyConfigBeforeSave)
-    if err := h.validateCaddyConfigBeforeSave(req, caddyID, serverName); err != nil {
-        c.JSON(400, gin.H{"code": 400, "message": err.Error()})
-        return
-    }
-
-    // 3. 生成 caddy_id
-    caddyID, _ := services.GenerateCaddyID()
-
-    // 4. 写入 Caddy (关键: 先 Caddy 后数据库)
-    routeConfig := services.GenerateSingleRuleCaddyConfig(ruleConfig)
-    if err := h.caddyService.ValidateRouteMergedConfig(...); err != nil {
-        c.JSON(400, ...)  // Caddy 验证失败，不写数据库
-        return
-    }
-    if err := h.caddyService.PrependRouteToServer(...); err != nil {
-        c.JSON(400, ...)
-        return
-    }
-    if err := h.caddyService.VerifyRouteExists(caddyID); err != nil {
-        h.caddyService.RemoveRouteFromServer(...)  // 回滚
-        c.JSON(500, ...)
-        return
-    }
-
-    // 5. 写入数据库
-    result, err := db.DB.Exec("INSERT INTO lb_rules ...")
-    if err != nil {
-        h.caddyService.RemoveRouteFromServer(...)  // 回滚 Caddy
-        c.JSON(500, ...)
-        return
-    }
-
-    // 6. 写入 upstreams
-    for _, u := range req.Upstreams {
-        db.DB.Exec("INSERT INTO upstreams ...")
-    }
-
-    c.JSON(200, gin.H{"caddy_id": caddyID})
-}
+tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+// 1. 在 tx 中写入、更新状态或删除规则关联数据
+// 2. 捕获当前运行时快照
+// 3. ApplyConfigFromTx(tx) 从事务内状态生成并加载完整 Caddy 配置
+// 4. Caddy 应用成功后提交 tx
+// 5. 应用或提交失败时回滚 tx 并恢复运行时快照
 ```
 
-### 5.4 UpdateRule 函数
-
-**位置**: `handlers.go` (约 1500-1700 行)
-
-**流程**:
-
-```go
-func (h *Handlers) UpdateRule(c *gin.Context) {
-    caddyID := c.Param("caddy_id")
-
-    // 1. 读取现有规则
-    // 2. 合并配置
-    // 3. 验证
-    // 4. 写入 Caddy (SetConfigByID - 在原位置替换)
-    if err := h.caddyService.SetConfigByID(caddyID, routeConfig); err != nil {
-        c.JSON(500, ...)  // Caddy 写入失败，不更新数据库
-        return
-    }
-
-    // 5. 更新数据库
-    db.DB.Exec("UPDATE lb_rules SET ...")
-
-    // 6. 更新 upstreams (DELETE + INSERT)
-    db.DB.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID)
-    for _, u := range req.Upstreams {
-        db.DB.Exec("INSERT INTO upstreams ...")
-    }
-}
-```
-
-### 5.5 EnableRule / DisableRule 函数
-
-**位置**: `handlers.go` (约 1700-1900 行)
-
-```go
-func (h *Handlers) EnableRule(c *gin.Context) {
-    caddyID := c.Param("caddy_id")
-
-    // 1. 检查路由是否已存在
-    if !h.caddyService.RouteExistsInServer(serverName, caddyID) {
-        // 2. 读取完整规则配置
-        // 3. 创建服务器 (如果需要)
-        // 4. 写入 Caddy
-        h.caddyService.PrependRouteToServer(...)
-    }
-
-    // 5. 更新数据库
-    db.DB.Exec("UPDATE lb_rules SET enabled = 1 WHERE caddy_id = ?", caddyID)
-}
-
-func (h *Handlers) DisableRule(c *gin.Context) {
-    caddyID := c.Param("caddy_id")
-
-    // 1. 更新数据库
-    db.DB.Exec("UPDATE lb_rules SET enabled = 0 WHERE caddy_id = ?", caddyID)
-
-    // 2. 从 Caddy 移除
-    h.caddyService.RemoveRouteFromServer(serverName, caddyID)
-}
-```
-
-### 5.6 DeleteRule 函数
-
-**位置**: `handlers.go`
-
-```go
-func (h *Handlers) DeleteRule(c *gin.Context) {
-    caddyID := c.Param("caddy_id")
-
-    // 1. 删除关联数据 (按顺序)
-    db.DB.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID)
-    db.DB.Exec("DELETE FROM metrics_history WHERE rule_id = ?", caddyID)
-
-    // 2. 从 Caddy 移除路由 (如果存在)
-    h.caddyService.RemoveRouteFromServer(serverName, caddyID)
-
-    // 3. 删除规则
-    db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID)
-}
-```
+创建和更新端点在事务中同时维护 `lb_rules`、`upstreams` 和 `path_rules`。启用和禁用端点在事务中更新 `enabled` 及相关证书任务状态。删除端点在事务中删除规则关联数据，提交后再清理指标与运行文件。提交后的 ACME 操作失败时执行数据库、Caddy 和证书任务补偿。
 
 ### 5.7 validateCaddyConfigBeforeSave 函数
 
@@ -678,85 +511,33 @@ type Config struct {
 ### 8.1 创建规则完整流程
 
 ```
-客户端                          服务端                              Caddy
-  │                               │                                  │
-  │ POST /api/rules              │                                  │
-  │ {name, protocol, ...}        │                                  │
-  │────────────────────────────►│                                  │
-  │                               │                                  │
-  │                    ┌─────────▼─────────┐                        │
-  │                    │ validateCaddyConfigBeforeSave              │
-  │                    │ - Protocol, Port   │                        │
-  │                    │ - Domain, Strategy│                        │
-  │                    │ - Upstreams       │                        │
-  │                    └───────────────────┘                        │
-  │                               │                                  │
-  │                    ┌─────────▼─────────┐                        │
-  │                    │ GenerateCaddyID   │                        │
-  │                    │ lb_abc123xyz12    │                        │
-  │                    └───────────────────┘                        │
-  │                               │                                  │
-  │                    ┌─────────▼─────────┐                        │
-  │                    │ ValidateRouteMergedConfig                  │
-  │                    │ POST /load?validate=true                   │
-  │                    └───────────────────┘                        │
-  │                               │                                  │
-  │                    ┌─────────▼─────────┐                        │
-  │                    │ PrependRouteToServer                       │
-  │                    │ POST /config/      │                        │
-  │                    └───────────────────┘                        │
-  │                               │                                  │
-  │                    ┌─────────▼─────────┐                        │
-  │                    │ VerifyRouteExists │                        │
-  │                    │ GET /config/       │                        │
-  │                    └───────────────────┘                        │
-  │                               │                                  │
-  │                    ┌─────────▼─────────┐                        │
-  │                    │ INSERT lb_rules   │                        │
-  │                    │ INSERT upstreams  │                        │
-  │                    └───────────────────┘                        │
-  │                               │                                  │
-  │     {code: 200, caddy_id}    │                                  │
-  │◄──────────────────────────────│                                  │
-  │                               │                                  │
+客户端                  服务端数据库事务                    Caddy
+  │ POST /api/v1/rules         │                               │
+  │───────────────────────────►│                               │
+  │                            │ 校验并写入规则关联数据         │
+  │                            │ 捕获运行时快照                 │
+  │                            │ ApplyConfigFromTx(tx)          │
+  │                            │──────── POST /load ───────────►│
+  │                            │◄────── 校验并加载结果 ─────────│
+  │                            │ 成功：commit                   │
+  │                            │ 失败：rollback + 恢复快照      │
+  │◄────────── 响应 ───────────│                               │
 ```
 
 ### 8.2 更新规则完整流程
 
 ```
-客户端                          服务端                              Caddy
-  │                               │                                  │
-  │ PUT /api/rules/lb_xxx         │                                  │
-  │ {name, protocol, ...}          │                                  │
-  │────────────────────────────►│                                  │
-  │                               │                                  │
-  │                    ┌─────────▼─────────┐                        │
-  │                    │ validateCaddyConfigBeforeSave              │
-  │                    └───────────────────┘                        │
-  │                               │                                  │
-  │                    ┌─────────▼─────────┐                        │
-  │                    │ SELECT FROM lb_rules WHERE caddy_id=?     │
-  │                    │ SELECT FROM upstreams WHERE rule_id=?     │
-  │                    └───────────────────┘                        │
-  │                               │                                  │
-  │                    ┌─────────▼─────────┐                        │
-  │                    │ GenerateSingleRuleCaddyConfig              │
-  │                    │ (生成路由 JSON)    │                        │
-  │                    └───────────────────┘                        │
-  │                               │                                  │
-  │                    ┌─────────▼─────────┐                        │
-  │                    │ SetConfigByID     │                        │
-  │                    │ (按 @id 替换路由)  │                        │
-  │                    │ PUT /config/      │                        │
-  │                    └───────────────────┘                        │
-  │                               │                                  │
-  │                    ┌─────────▼─────────┐                        │
-  │                    │ UPDATE lb_rules   │                        │
-  │                    │ DELETE + INSERT upstreams                  │
-  │                    └───────────────────┘                        │
-  │                               │                                  │
-  │     {code: 200}              │                                  │
-  │◄──────────────────────────────│                                  │
+客户端                  服务端数据库事务                    Caddy
+  │ PUT /api/v1/rules/lb_xxx   │                               │
+  │───────────────────────────►│                               │
+  │                            │ 校验并更新规则关联数据         │
+  │                            │ 捕获运行时快照                 │
+  │                            │ ApplyConfigFromTx(tx)          │
+  │                            │──────── POST /load ───────────►│
+  │                            │◄────── 校验并加载结果 ─────────│
+  │                            │ 成功：commit                   │
+  │                            │ 失败：rollback + 恢复快照      │
+  │◄────────── 响应 ───────────│                               │
 ```
 
 ---

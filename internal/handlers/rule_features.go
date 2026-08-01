@@ -238,63 +238,15 @@ func replacePathRulesTx(ctx context.Context, tx *sql.Tx, ruleID string, pathRule
 }
 
 func loadPathRules(ctx context.Context, queryer pathRuleQueryer, ruleID string) ([]models.PathRule, error) {
-	rows, err := queryer.QueryContext(ctx, `SELECT id,rule_id,sort_order,match_type,path,upstreams_json FROM path_rules WHERE rule_id=? ORDER BY sort_order,id`, ruleID)
-	if err != nil {
-		return nil, fmt.Errorf("读取规则 %s 的路径规则: %w", ruleID, err)
-	}
-	defer rows.Close()
-
-	pathRules := make([]models.PathRule, 0)
-	for rows.Next() {
-		var pathRule models.PathRule
-		var upstreamsJSON sql.NullString
-		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &upstreamsJSON); err != nil {
-			return nil, fmt.Errorf("扫描规则 %s 的路径规则: %w", ruleID, err)
-		}
-		if upstreamsJSON.Valid {
-			if err := json.Unmarshal([]byte(upstreamsJSON.String), &pathRule.Upstreams); err != nil {
-				return nil, fmt.Errorf("解析路径规则 %d 的上游: %w", pathRule.ID, err)
-			}
-		}
-		pathRules = append(pathRules, pathRule)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("遍历规则 %s 的路径规则: %w", ruleID, err)
-	}
-	return pathRules, nil
+	return db.LoadPathRules(ctx, queryer, ruleID)
 }
 
 func dumpRowsByKey(ctx context.Context, table, keyColumn string, keyValue any) ([]map[string]any, error) {
-	rows, err := db.DB.QueryContext(ctx, fmt.Sprintf("SELECT * FROM %s WHERE %s = ?", table, keyColumn), keyValue)
-	if err != nil {
-		return nil, fmt.Errorf("读取 %s 快照: %w", table, err)
-	}
-	defer rows.Close()
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-	result := make([]map[string]any, 0)
-	for rows.Next() {
-		values := make([]any, len(columns))
-		targets := make([]any, len(columns))
-		for i := range values {
-			targets[i] = &values[i]
-		}
-		if err := rows.Scan(targets...); err != nil {
-			return nil, fmt.Errorf("扫描 %s 快照: %w", table, err)
-		}
-		row := map[string]any{}
-		for i, column := range columns {
-			if bytes, ok := values[i].([]byte); ok {
-				row[column] = string(bytes)
-			} else {
-				row[column] = values[i]
-			}
-		}
-		result = append(result, row)
-	}
-	return result, rows.Err()
+	return queryRowsAsMaps(ctx, db.DB, rowQuery{
+		label: table + " 快照",
+		query: fmt.Sprintf("SELECT * FROM %s WHERE %s = ?", table, keyColumn),
+		args:  []any{keyValue},
+	})
 }
 
 func dumpRowByKey(ctx context.Context, table, keyColumn string, keyValue any) (map[string]any, error) {

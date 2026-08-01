@@ -22,6 +22,75 @@ func TestCreateTables_omits_dead_upstream_accessURL_column(t *testing.T) {
 	}
 }
 
+func TestRunMigrationsCreatesAuthenticationAndUpstreamIndexes(t *testing.T) {
+	// Given
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec("INSERT INTO global_config (id,caddy_config) VALUES (1,'{}')"); err != nil {
+		t.Fatalf("seed global config: %v", err)
+	}
+
+	// When
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	// Then
+	for _, index := range []string{"idx_api_keys_prefix_hash", "idx_upstreams_rule_enabled_id"} {
+		var count int
+		if err := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?", index).Scan(&count); err != nil {
+			t.Fatalf("query index %s: %v", index, err)
+		}
+		if count != 1 {
+			t.Fatalf("index %s count=%d, want 1", index, count)
+		}
+	}
+}
+
+func TestRunMigrationsDropsLegacyTLSCertificatesAndNodeSyncColumnsIdempotently(t *testing.T) {
+	// Given
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO global_config (id,caddy_config) VALUES (1,'{}');
+		ALTER TABLE nodes ADD COLUMN sync_enabled BOOLEAN DEFAULT 1;
+		ALTER TABLE nodes ADD COLUMN sync_scope TEXT DEFAULT 'all';
+		INSERT INTO nodes (id,name,ip_address,port,status,sync_enabled,sync_scope) VALUES (7,'legacy-node','10.0.0.7',9000,'online',1,'all');
+		CREATE TABLE tls_certificates (id INTEGER PRIMARY KEY, domain TEXT);`); err != nil {
+		t.Fatalf("seed legacy schema: %v", err)
+	}
+
+	// When
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	if err := runMigrations(); err != nil {
+		t.Fatalf("repeat migrations: %v", err)
+	}
+
+	// Then
+	var tableCount, columnCount, port int
+	var nodeName, status string
+	if err := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tls_certificates'").Scan(&tableCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow("SELECT COUNT(*) FROM pragma_table_info('nodes') WHERE name IN ('sync_enabled','sync_scope')").Scan(&columnCount); err != nil {
+		t.Fatal(err)
+	}
+	if tableCount != 0 || columnCount != 0 {
+		t.Fatalf("legacy table=%d columns=%d, want 0/0", tableCount, columnCount)
+	}
+	if err := database.QueryRow("SELECT name,port,status FROM nodes WHERE id=7").Scan(&nodeName, &port, &status); err != nil {
+		t.Fatal(err)
+	}
+	if nodeName != "legacy-node" || port != 9000 || status != "online" {
+		t.Fatalf("migrated node=(%q,%d,%q)", nodeName, port, status)
+	}
+}
+
 func TestRunMigrations_makes_users_isEnabled_notNull_and_backfills_null(t *testing.T) {
 	// Given
 	database := openMigrationTestDB(t)

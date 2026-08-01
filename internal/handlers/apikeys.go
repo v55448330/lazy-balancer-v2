@@ -31,13 +31,13 @@ func (h *Handlers) ListCurrentUserAPIKeys(c *gin.Context) {
 		ORDER BY k.id
 	`, userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return
 	}
 	defer rows.Close()
 	keys, err := scanAPIKeys(rows)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: keys})
@@ -50,30 +50,30 @@ func (h *Handlers) CreateCurrentUserAPIKey(c *gin.Context) {
 func (h *Handlers) DeleteCurrentUserAPIKey(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid id parameter"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ID 参数无效"})
 		return
 	}
 	userID := currentUserID(c)
 	var name string
-	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ? AND created_by = ?", id, userID).Scan(&name); dbQueryNotFound(c, err, "API key not found", "DeleteCurrentUserAPIKey query key") {
+	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ? AND created_by = ?", id, userID).Scan(&name); dbQueryNotFound(c, err, "API 密钥不存在", "DeleteCurrentUserAPIKey query key") {
 		return
 	}
 	result, err := db.DB.Exec("DELETE FROM api_keys WHERE id = ? AND created_by = ?", id, userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete API key"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除 API 密钥失败"})
 		return
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to verify API key deletion"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "确认 API 密钥删除结果失败"})
 		return
 	}
 	if rows == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API 密钥不存在"})
 		return
 	}
 	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API key deleted"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API 密钥已删除"})
 }
 
 func currentUserID(c *gin.Context) int {
@@ -119,7 +119,7 @@ func scanAPIKeys(rows *sql.Rows) ([]models.APIKeyWithUserResponse, error) {
 func createAPIKeyForUser(c *gin.Context, userID int) {
 	var req models.CreateAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
 	}
 	if c.GetString("role") != "admin" {
@@ -155,12 +155,12 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, req.Name, keyHash, keyPrefix, userID, expiresAt, req.MCPEnabled, req.ReadOnly, whitelistJSON)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to create API key"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建 API 密钥失败"})
 		return
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read created API key ID"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取新建 API 密钥 ID 失败"})
 		return
 	}
 	expiry := "永不过期"
@@ -171,7 +171,7 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Data: gin.H{
 		"id":      id,
 		"key":     apiKey,
-		"message": "This key will only be shown once. Please save it securely.",
+		"message": "完整密钥仅显示一次，请妥善保存。",
 	}})
 }
 
@@ -184,13 +184,13 @@ func (h *Handlers) ListAPIKeys(c *gin.Context) {
 		ORDER BY k.id
 	`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return
 	}
 	defer rows.Close()
 	keys, err := scanAPIKeys(rows)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Database error"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: keys})
@@ -211,17 +211,17 @@ func (h *Handlers) UpdateAPIKeyStatus(c *gin.Context) {
 func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid id parameter"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ID 参数无效"})
 		return
 	}
 	userID := currentUserID(c)
 	var req models.UpdateAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
 	}
 	if req.IsEnabled == nil && req.MCPEnabled == nil && req.ReadOnly == nil && req.MCPIPWhitelist == nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "At least one field is required"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "至少需要提交一个字段"})
 		return
 	}
 	if currentUserOnly && c.GetString("role") != "admin" && req.ReadOnly != nil && !*req.ReadOnly {
@@ -253,7 +253,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		args = append(args, userID)
 	}
 	var name string
-	if err := db.DB.QueryRow(query, args...).Scan(&name); dbQueryNotFound(c, err, "API key not found", "updateAPIKeyStatus query key") {
+	if err := db.DB.QueryRow(query, args...).Scan(&name); dbQueryNotFound(c, err, "API 密钥不存在", "updateAPIKeyStatus query key") {
 		return
 	}
 	setClauses := make([]string, 0, 4)
@@ -283,20 +283,20 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	}
 	result, err := db.DB.Exec(update, updateArgs...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update API key status"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新 API 密钥失败"})
 		return
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to verify API key status update"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "确认 API 密钥更新结果失败"})
 		return
 	}
 	if rows == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API 密钥不存在"})
 		return
 	}
 	recordAudit(c, "更新", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API key updated"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API 密钥已更新"})
 }
 
 func encodeMCPIPWhitelist(whitelist []string) (string, error) {
@@ -313,27 +313,27 @@ func encodeMCPIPWhitelist(whitelist []string) (string, error) {
 func (h *Handlers) DeleteAPIKey(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid id parameter"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ID 参数无效"})
 		return
 	}
 	var name string
-	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ?", id).Scan(&name); dbQueryNotFound(c, err, "API key not found", "DeleteAPIKey query key") {
+	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE id = ?", id).Scan(&name); dbQueryNotFound(c, err, "API 密钥不存在", "DeleteAPIKey query key") {
 		return
 	}
 	result, err := db.DB.Exec("DELETE FROM api_keys WHERE id = ?", id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete API key"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除 API 密钥失败"})
 		return
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to verify API key deletion"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "确认 API 密钥删除结果失败"})
 		return
 	}
 	if rows == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API key not found"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API 密钥不存在"})
 		return
 	}
 	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API key deleted"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API 密钥已删除"})
 }

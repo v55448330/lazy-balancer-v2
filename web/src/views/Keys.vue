@@ -1,6 +1,6 @@
 <template>
-  <div class="page" :class="{ 'hide-header': hideHeader }">
-    <div v-if="!hideHeader" class="page-header">
+  <div class="page">
+    <div class="page-header">
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Key /></el-icon>
@@ -18,13 +18,6 @@
           创建密钥
         </el-button>
       </div>
-    </div>
-
-    <div v-else class="toolbar">
-      <el-button type="primary" :disabled="isReadOnly || creating" @click="openCreateDialog">
-        <el-icon><Plus /></el-icon>
-        创建密钥
-      </el-button>
     </div>
 
     <el-row v-loading="loading" :gutter="20">
@@ -248,10 +241,6 @@ interface CreateAPIKeyResponse {
     readonly message: string
   }
 }
-
-defineProps<{
-  hideHeader?: boolean
-}>()
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.nodeMode === 'slave')
@@ -477,8 +466,6 @@ onMounted(() => {
 
 .toolbar { display: flex; justify-content: flex-end; margin-bottom: 20px; }
 
-.hide-header .page-header,
-.hide-header .toolbar { display: none; }
 
 .header-left { flex: 1; }
 .header-actions { display: flex; gap: 8px; }

@@ -59,6 +59,9 @@ func run() error {
 	if err := db.Initialize(cfg.DataDir); err != nil {
 		return fmt.Errorf("initialize database: %w", err)
 	}
+	if err := handlers.SeedDefaultBranding(cfg.DataDir); err != nil {
+		log.Printf("Warning: failed to seed default branding: %v", err)
+	}
 	if runtimeLogFile != "" {
 		services.StartRuntimeLogCleanup(runtimeLogFile)
 	}

@@ -29,6 +29,7 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"PUT /api/v1/ca-providers/:id":                AuditPolicyExplicit,
 	"POST /api/v1/ca-providers/:id/test":          AuditPolicyExplicit,
 	"POST /api/v1/cluster/register":               AuditPolicyExplicit,
+	"POST /api/v1/cluster/registration/confirm":   AuditPolicySkip,
 	"POST /api/v1/cluster/register-tokens":        AuditPolicyExplicit,
 	"POST /api/v1/cluster/nodes/:id/approve":      AuditPolicyExplicit,
 	"POST /api/v1/cluster/nodes/:id/reject":       AuditPolicyExplicit,

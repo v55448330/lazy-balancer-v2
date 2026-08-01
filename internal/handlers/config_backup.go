@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"net/http"
 	"time"
@@ -76,36 +75,7 @@ type tableQuerier interface {
 }
 
 func dumpTable(ctx context.Context, database tableQuerier, table string) ([]map[string]any, error) {
-	rows, err := database.QueryContext(ctx, "SELECT * FROM "+table)
-	if err != nil {
-		return nil, fmt.Errorf("读取表 %s: %w", table, err)
-	}
-	defer rows.Close()
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-	result := make([]map[string]any, 0)
-	for rows.Next() {
-		values := make([]any, len(columns))
-		targets := make([]any, len(columns))
-		for i := range values {
-			targets[i] = &values[i]
-		}
-		if err := rows.Scan(targets...); err != nil {
-			return nil, fmt.Errorf("扫描表 %s: %w", table, err)
-		}
-		row := map[string]any{}
-		for i, column := range columns {
-			if bytes, ok := values[i].([]byte); ok {
-				row[column] = string(bytes)
-			} else {
-				row[column] = values[i]
-			}
-		}
-		result = append(result, row)
-	}
-	return result, rows.Err()
+	return queryRowsAsMaps(ctx, database, rowQuery{label: "表 " + table, query: "SELECT * FROM " + table})
 }
 
 func tableColumns(ctx context.Context, database *sql.DB, table string) (map[string]bool, error) {
@@ -371,40 +341,20 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		backup.Config["jwt_expire_minutes"], jwtExpireClamped = clampBackupJWTExpireMinutes(value)
 	}
 	ctx := c.Request.Context()
-	// 与 UpdateRule 同一锁序：先 caddyOpMu 后 DB 事务，避免与规则写路径循环等待
-	h.caddyOpMu.Lock()
-	defer h.caddyOpMu.Unlock()
-	existingRuleIDs, err := currentRuleIDs(ctx)
+	session, err := h.beginConfigImport(ctx)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有规则失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	recovery := importQueueRecovery{manager: services.GetCAQueueManager()}
-	if recovery.manager != nil {
-		recovery.manager.PauseAndDrain()
-	}
-
-	tx, err := db.DB.BeginTx(ctx, nil)
-	if err != nil {
-		err = finishImportFailure(nil, &recovery, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开始导入事务失败: " + err.Error()})
-		return
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				log.Printf("ImportConfigBackup transaction rollback failed: %v", rollbackErr)
-			}
-		}
-	}()
+	defer session.close()
+	tx := session.tx
 	deleteOrder := []string{"api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs"}
 	for _, table := range deleteOrder {
 		if _, exists := backup.Tables[table]; !exists {
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
-			err = finishImportFailure(tx, &recovery, err)
+			err = session.abort(err)
 			recordAudit(c, "导入失败", "配置备份", err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清空表 " + table + " 失败，已回滚: " + err.Error()})
 			return
@@ -417,37 +367,37 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			continue
 		}
 		if err := restoreTable(ctx, tx, db.DB, table, rows); err != nil {
-			err = finishImportFailure(tx, &recovery, err)
+			err = session.abort(err)
 			recordAudit(c, "导入失败", "配置备份", err.Error())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入失败，已回滚: " + err.Error()})
 			return
 		}
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE users SET password_version=COALESCE(password_version,0)+1"); err != nil {
-		err = finishImportFailure(tx, &recovery, err)
+		err = session.abort(err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "吊销现有登录会话失败，已回滚: " + err.Error()})
 		return
 	}
 	var enabledAdmins int
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE role='admin' AND is_enabled=1").Scan(&enabledAdmins); err != nil {
-		err = finishImportFailure(tx, &recovery, err)
+		err = session.abort(err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "确认管理员账号失败，已回滚: " + err.Error()})
 		return
 	}
 	if enabledAdmins == 0 {
-		err = finishImportFailure(tx, &recovery, errors.New("导入后必须至少保留一个已启用的管理员账号"))
+		err = session.abort(errors.New("导入后必须至少保留一个已启用的管理员账号"))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
 	importUserID := int(contextUserID(c))
 	if _, err := tx.ExecContext(ctx, "UPDATE lb_rules SET updated_by=? WHERE id IN (SELECT id FROM lb_rules)", importUserID); err != nil {
-		err = finishImportFailure(tx, &recovery, err)
+		err = session.abort(err)
 		recordAudit(c, "导入失败", "配置备份", "更新规则操作者失败: "+err.Error())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新规则操作者失败，已回滚: " + err.Error()})
 		return
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id NOT IN (SELECT caddy_id FROM lb_rules)"); err != nil {
-		err = finishImportFailure(tx, &recovery, err)
+		err = session.abort(err)
 		recordAudit(c, "导入失败", "配置备份", "清理孤儿证书任务失败: "+err.Error())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理孤儿证书任务失败，已回滚: " + err.Error()})
 		return
@@ -455,7 +405,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	if backup.Config != nil {
 		valid, err := tableColumns(ctx, db.DB, "global_config")
 		if err != nil {
-			err = finishImportFailure(tx, &recovery, err)
+			err = session.abort(err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取配置结构失败: " + err.Error()})
 			return
 		}
@@ -470,14 +420,14 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		}
 		if len(sets) > 0 {
 			if _, err := tx.ExecContext(ctx, "UPDATE global_config SET "+joinStrings(sets, ",")+" WHERE id=1", values...); err != nil {
-				err = finishImportFailure(tx, &recovery, err)
+				err = session.abort(err)
 				recordAudit(c, "导入失败", "配置备份", err.Error())
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入全局配置失败，已回滚: " + err.Error()})
 				return
 			}
 		}
 	}
-	affectedRuleIDs := append([]string(nil), existingRuleIDs...)
+	affectedRuleIDs := append([]string(nil), session.existingRuleIDs...)
 	pendingCertificates := make([]importCertificate, 0)
 	for _, row := range backup.Tables["lb_rules"] {
 		if caddyID, ok := row["caddy_id"].(string); ok && caddyID != "" {
@@ -489,49 +439,19 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			}
 		}
 	}
-	runtimeSnapshot, err := h.snapshotImportRuntime(affectedRuleIDs)
-	if err != nil {
-		err = finishImportFailure(tx, &recovery, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败: " + err.Error()})
-		return
-	}
-	restoreRuntime := func(importErr error) error {
-		if restoreErr := h.restoreImportRuntime(runtimeSnapshot); restoreErr != nil {
-			return errors.Join(importErr, fmt.Errorf("恢复运行配置失败: %w", restoreErr))
-		}
-		return importErr
-	}
-	if err := materializeImportCertificates(pendingCertificates); err != nil {
-		err = restoreRuntime(err)
-		err = finishImportFailure(tx, &recovery, err)
-		recordAudit(c, "导入失败", "配置备份", err.Error())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "准备证书文件失败: " + err.Error()})
-		return
-	}
-	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
-		err = restoreRuntime(err)
-		err = finishImportFailure(tx, &recovery, err)
-		recordAudit(c, "导入失败", "配置备份", "Caddy 配置验证未通过，数据库未变更: "+err.Error())
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份生成的配置未通过 Caddy 验证，未执行导入: " + err.Error()})
-		return
-	}
-	if err := services.BumpClusterVersion(ctx, tx); err != nil {
-		err = restoreRuntime(err)
-		err = finishImportFailure(tx, &recovery, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新配置版本失败: " + err.Error()})
-		return
-	}
-	if err := tx.Commit(); err != nil {
-		err = restoreRuntime(err)
-		err = finishImportFailure(tx, &recovery, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交导入失败: " + err.Error()})
-		return
-	}
-	committed = true
 	counts := importCountsDetail(backup.Tables)
-	if err := recovery.finish(); err != nil {
-		recordAudit(c, "导入部分失败", "配置备份", err.Error())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置已导入但证书任务恢复失败: " + err.Error(), Data: gin.H{"summary": counts}})
+	if err := session.commit(affectedRuleIDs, pendingCertificates); err != nil {
+		status := http.StatusInternalServerError
+		message := "配置导入失败: " + err.Error()
+		if importFailurePhase(err) == importPhaseCaddy {
+			status = http.StatusBadRequest
+			message = "备份生成的配置未通过 Caddy 验证，未执行导入: " + err.Error()
+		}
+		if importFailurePhase(err) == importPhaseQueue {
+			message = "配置已导入但证书任务恢复失败: " + err.Error()
+		}
+		recordAudit(c, "导入失败", "配置备份", err.Error())
+		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{"summary": counts}})
 		return
 	}
 	auditParts := []string{"来源：v2 备份（覆盖导入）", counts}

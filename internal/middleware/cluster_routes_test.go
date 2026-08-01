@@ -90,6 +90,7 @@ func TestSetupRouter_registers_cluster_contract_and_removes_legacy_routes(t *tes
 		"POST /api/v1/cluster/mode",
 		"POST /api/v1/cluster/promote",
 		"GET /api/v1/cluster/sync/snapshot",
+		"POST /api/v1/cluster/registration/confirm",
 		"POST /api/v1/cluster/sync/pull",
 		"POST /api/v1/cluster/nodes/report",
 		"POST /api/v1/auth/ticket-login",
@@ -198,5 +199,34 @@ func TestClusterWriteRouteRejectsUserAPIKey(t *testing.T) {
 	recorder := requestWithAPIKey(router, http.MethodPost, "/api/v1/cluster/sync/pull", key)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestConfirmClusterRegistrationClearsSecretAfterExplicitPost(t *testing.T) {
+	// Given
+	router := newMiddlewareTestRouter(t)
+	token := "lb_cluster_confirm-secret"
+	secret := "registration-secret-hash"
+	hash := sha256.Sum256([]byte(token))
+	if _, err := db.DB.Exec(`INSERT INTO nodes (id,name,ip_address,is_approved,cluster_token_hash,registration_secret) VALUES (31,'confirm-node','10.0.0.31',1,?,?)`, hex.EncodeToString(hash[:]), secret); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/registration/confirm", nil)
+	request.Header.Set("X-Cluster-Token", token)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var cleared int
+	if err := db.DB.QueryRow("SELECT registration_secret IS NULL FROM nodes WHERE id=31").Scan(&cleared); err != nil {
+		t.Fatal(err)
+	}
+	if cleared != 1 {
+		t.Fatal("registration_secret was not cleared")
 	}
 }

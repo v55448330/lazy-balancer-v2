@@ -13,34 +13,20 @@ import (
 	"testing"
 )
 
-func TestCaddyService_BackupConfig_failure_prevents_apply(t *testing.T) {
-	// Given
-	var applyRequests int
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodGet && request.URL.Path == "/config/" {
-			http.Error(writer, "unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		if request.Method == http.MethodPost && request.URL.Path == "/load" {
-			applyRequests++
-		}
-	}))
-	defer server.Close()
-	service := NewCaddyService(server.URL)
+type countingCaddyStore struct {
+	*sql.DB
+	queryCalls    int
+	queryRowCalls int
+}
 
-	// When
-	err := service.BackupConfig()
-	if err == nil {
-		err = service.ApplyConfig(map[string]interface{}{})
-	}
+func (s *countingCaddyStore) Query(query string, args ...any) (*sql.Rows, error) {
+	s.queryCalls++
+	return s.DB.Query(query, args...)
+}
 
-	// Then
-	if err == nil {
-		t.Fatal("backup failure reported success")
-	}
-	if applyRequests != 0 {
-		t.Fatalf("Caddy received %d apply requests after backup failed", applyRequests)
-	}
+func (s *countingCaddyStore) QueryRow(query string, args ...any) *sql.Row {
+	s.queryRowCalls++
+	return s.DB.QueryRow(query, args...)
 }
 
 func TestCaddyService_GenerateAndApplyConfig_generates_after_waiting_for_config_lock(t *testing.T) {
@@ -181,6 +167,49 @@ func TestGenerateCaddyConfig_fail_closed_errors_do_not_call_load(t *testing.T) {
 	}
 }
 
+func TestGenerateCaddyConfig_usesConstantQueries_whenRuleCountGrows(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	certPEM, keyPEM := matchingCertificatePair(t, "example.test")
+	seed := func(ruleID string) {
+		t.Helper()
+		seedGenerationRule(t, database, ruleID, true)
+		if _, err := database.Exec("UPDATE lb_rules SET enable_tls=1,tls_source='acme_dns' WHERE caddy_id=?", ruleID); err != nil {
+			t.Fatalf("enable ACME for %s: %v", ruleID, err)
+		}
+		if _, err := database.Exec("INSERT INTO path_rules (rule_id,sort_order,match_type,path) VALUES (?,1,'prefix','/api')", ruleID); err != nil {
+			t.Fatalf("seed path rule for %s: %v", ruleID, err)
+		}
+		if _, err := database.Exec("INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem) VALUES (?,'example.test','issued',?,?)", ruleID, certPEM, keyPEM); err != nil {
+			t.Fatalf("seed certificate for %s: %v", ruleID, err)
+		}
+	}
+	seed("lb_query_one")
+	store := &countingCaddyStore{DB: database}
+	first := generateCaddyConfigFromStore(store)
+	if message, failed := first[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generate one-rule config: %s", message)
+	}
+	wantQueries, wantQueryRows := store.queryCalls, store.queryRowCalls
+	for _, ruleID := range []string{"lb_query_two", "lb_query_three"} {
+		seed(ruleID)
+	}
+	store.queryCalls = 0
+	store.queryRowCalls = 0
+
+	// When
+	generated := generateCaddyConfigFromStore(store)
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generate three-rule config: %s", message)
+	}
+	if store.queryCalls != wantQueries || store.queryRowCalls != wantQueryRows {
+		t.Fatalf("query calls grew from Query=%d QueryRow=%d to Query=%d QueryRow=%d", wantQueries, wantQueryRows, store.queryCalls, store.queryRowCalls)
+	}
+}
+
 func seedGenerationRule(t *testing.T, database *sql.DB, ruleID string, customRoutes bool) {
 	t.Helper()
 	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,health_check_path,health_check_interval,enabled,custom_routes_enabled)
@@ -300,7 +329,7 @@ func TestGenerateSingleRuleCaddyConfig_CustomPathRules_ordersAndSelectsUpstreams
 		t.Fatalf("expected two path routes, main route, and ACL fallback; got %d", len(routes))
 	}
 	apiMatcher := routeMatcher(t, routes[0])
-	assertEqual(t, apiMatcher["path"], []string{"/api/*"})
+	assertEqual(t, apiMatcher["path"], []string{"/api", "/api/*"})
 	assertIPRanges(t, apiMatcher["client_ip"], rule.IPACLList)
 	apiProxy := reverseProxyHandler(t, routes[0])
 	assertUpstreamDials(t, apiProxy["upstreams"], []string{"10.0.0.10:8080", "10.0.0.11:8080"})
@@ -322,6 +351,82 @@ func TestGenerateSingleRuleCaddyConfig_CustomPathRules_ordersAndSelectsUpstreams
 	if fallback["status_code"] != 403 {
 		t.Fatalf("expected terminal ACL fallback, got %#v", fallback)
 	}
+}
+
+func TestGenerateRouteObject_prefixPath_matchesRootAndDescendants(t *testing.T) {
+	// Given
+	rule := baseHTTPRule()
+	rule.CustomRoutesEnabled = true
+	rule.PathRules = []PathRuleConfig{
+		{SortOrder: 1, MatchType: "prefix", Path: "/api"},
+		{SortOrder: 2, MatchType: "prefix", Path: "/"},
+	}
+
+	// When
+	routes, _, err := generateHTTPRouteObjects(rule)
+
+	// Then
+	if err != nil {
+		t.Fatalf("generate routes: %v", err)
+	}
+	assertEqual(t, routes[0]["match"].([]interface{})[0].(map[string]interface{})["path"], []string{"/api", "/api/*"})
+	assertEqual(t, routes[1]["match"].([]interface{})[0].(map[string]interface{})["path"], []string{"/*"})
+}
+
+func TestGenerateRouteObject_rejectsMultiplePathUpstreams_whenDynamicDNS(t *testing.T) {
+	// Given
+	rule := baseHTTPRule()
+	rule.DynamicDNS = true
+	rule.CustomRoutesEnabled = true
+	rule.PathRules = []PathRuleConfig{{
+		SortOrder: 1,
+		MatchType: "prefix",
+		Path:      "/api",
+		Upstreams: []UpstreamConfig{
+			{Host: "one.example.test", Port: 8080, Enabled: true},
+			{Host: "two.example.test", Port: 8080, Enabled: true},
+		},
+	}}
+
+	// When
+	_, err := GenerateRouteObject(rule)
+
+	// Then
+	if err == nil || !strings.Contains(err.Error(), "dynamic DNS") {
+		t.Fatalf("error=%v, want explicit dynamic DNS multi-upstream rejection", err)
+	}
+}
+
+func TestGenerateRouteObject_joinsIPv6UpstreamAddresses(t *testing.T) {
+	// Given
+	httpRule := baseHTTPRule()
+	httpRule.Upstreams = []UpstreamConfig{{Host: "2001:db8::1", Port: 8080, Weight: 1, Enabled: true}}
+	httpRule.CustomRoutesEnabled = true
+	httpRule.PathRules = []PathRuleConfig{{
+		SortOrder: 1,
+		MatchType: "exact",
+		Path:      "/v6",
+		Upstreams: []UpstreamConfig{{Host: "2001:db8::2", Port: 9090, Weight: 1, Enabled: true}},
+	}}
+	tcpRule := SingleRuleConfig{
+		CaddyID:   "rule-v6-tcp",
+		Protocol:  "tcp",
+		Upstreams: []UpstreamConfig{{Host: "2001:db8::3", Port: 3306, Weight: 1, Enabled: true}},
+	}
+
+	// When
+	httpRoutes, _, httpErr := generateHTTPRouteObjects(httpRule)
+	tcpRoute, tcpErr := GenerateRouteObject(tcpRule)
+
+	// Then
+	if httpErr != nil || tcpErr != nil {
+		t.Fatalf("generate IPv6 routes: HTTP=%v TCP=%v", httpErr, tcpErr)
+	}
+	assertUpstreamDials(t, reverseProxyHandler(t, httpRoutes[0])["upstreams"], []string{"[2001:db8::2]:9090"})
+	assertUpstreamDials(t, reverseProxyHandler(t, httpRoutes[1])["upstreams"], []string{"[2001:db8::1]:8080"})
+	tcpProxy := firstHandler(t, tcpRoute)
+	tcpUpstreams := tcpProxy["upstreams"].([]interface{})
+	assertEqual(t, tcpUpstreams[0].(map[string]interface{})["dial"], []string{"[2001:db8::3]:3306"})
 }
 
 func TestGenerateRouteObject_ProxyTimeouts_resolveRuleThenGlobal(t *testing.T) {
@@ -380,90 +485,6 @@ func TestGenerateRouteObject_HealthCheckTimeout_doesNotSetTransportDialTimeout(t
 	if active["timeout"] != "9s" {
 		t.Fatalf("expected active health timeout to remain 9s, got %#v", active["timeout"])
 	}
-}
-
-func TestSetConfigByID_replacesOwnedRouteSet_andPreservesSiblingRoutes(t *testing.T) {
-	// Given
-	defaultRoute := runningDefaultRoute()
-	current := testHTTPConfig([]interface{}{
-		map[string]interface{}{"@id": "rule-target_acl_deny"},
-		map[string]interface{}{"@id": "rule-sibling_path_0"},
-		map[string]interface{}{"@id": "rule-target"},
-		map[string]interface{}{"@id": "rule-target_acl_allow"},
-		map[string]interface{}{"handle": []interface{}{map[string]interface{}{"handler": "headers"}}},
-		defaultRoute,
-	})
-	replacement := map[string]interface{}{"@id": "rule-target", "handle": []interface{}{map[string]interface{}{"handler": "subroute"}}}
-	var applied map[string]interface{}
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch {
-		case request.Method == http.MethodGet && request.URL.Path == "/config/":
-			if err := json.NewEncoder(writer).Encode(current); err != nil {
-				t.Errorf("encode current config: %v", err)
-			}
-		case request.Method == http.MethodPost && request.URL.Path == "/config/":
-			if err := json.NewDecoder(request.Body).Decode(&applied); err != nil {
-				t.Errorf("decode applied config: %v", err)
-			}
-		default:
-			http.NotFound(writer, request)
-		}
-	}))
-	defer server.Close()
-
-	// When
-	err := NewCaddyService(server.URL).SetConfigByID("rule-target", replacement)
-
-	// Then
-	if err != nil {
-		t.Fatalf("replace route set: %v", err)
-	}
-	routes := httpRoutesFromConfig(t, applied)
-	assertRouteIDs(t, routes, []string{"rule-sibling_path_0", "rule-target", "", ""})
-}
-
-func TestSetConfigByID_preservesTLSRedirectOnHTTPServer(t *testing.T) {
-	// Given
-	current := map[string]interface{}{
-		"apps": map[string]interface{}{
-			"http": map[string]interface{}{
-				"servers": map[string]interface{}{
-					"http_80": map[string]interface{}{"routes": []interface{}{
-						map[string]interface{}{"@id": "rule-target_redirect"},
-						runningDefaultRoute(),
-					}},
-					"http_443": map[string]interface{}{"routes": []interface{}{
-						map[string]interface{}{"@id": "rule-target"},
-						map[string]interface{}{"@id": "rule-sibling"},
-					}},
-				},
-			},
-		},
-	}
-	replacement := map[string]interface{}{"@id": "rule-target", "handle": []interface{}{map[string]interface{}{"handler": "subroute"}}}
-	var applied map[string]interface{}
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodGet {
-			if err := json.NewEncoder(writer).Encode(current); err != nil {
-				t.Errorf("encode current config: %v", err)
-			}
-			return
-		}
-		if err := json.NewDecoder(request.Body).Decode(&applied); err != nil {
-			t.Errorf("decode applied config: %v", err)
-		}
-	}))
-	defer server.Close()
-
-	// When
-	err := NewCaddyService(server.URL).SetConfigByID("rule-target", replacement)
-
-	// Then
-	if err != nil {
-		t.Fatalf("replace TLS route: %v", err)
-	}
-	assertRouteIDs(t, httpRoutesFromServer(t, applied, "http_80"), []string{"rule-target_redirect", ""})
-	assertRouteIDs(t, httpRoutesFromServer(t, applied, "http_443"), []string{"rule-target", "rule-sibling"})
 }
 
 func TestGenerateCaddyConfig_propagatesCertificateMaterializationFailure(t *testing.T) {
@@ -656,36 +677,6 @@ func TestDeleteRouteByID_removesOnlyOwnedRouteSet(t *testing.T) {
 		t.Fatalf("delete route set: %v", err)
 	}
 	assertRouteIDs(t, httpRoutesFromConfig(t, applied), []string{"rule-sibling", ""})
-}
-
-func TestPrependRouteToServer_insertsBeforeCatchAll_regardlessOfCatchAllIndex(t *testing.T) {
-	// Given
-	existing := map[string]interface{}{"@id": "rule-existing"}
-	catchAll := runningDefaultRoute()
-	current := testHTTPConfig([]interface{}{existing, catchAll})
-	var applied map[string]interface{}
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodGet {
-			if err := json.NewEncoder(writer).Encode(current); err != nil {
-				t.Errorf("encode current config: %v", err)
-			}
-			return
-		}
-		if err := json.NewDecoder(request.Body).Decode(&applied); err != nil {
-			t.Errorf("decode applied config: %v", err)
-		}
-	}))
-	defer server.Close()
-	newRoute := map[string]interface{}{"@id": "rule-new"}
-
-	// When
-	err := NewCaddyService(server.URL).PrependRouteToServer("http_80", newRoute)
-
-	// Then
-	if err != nil {
-		t.Fatalf("prepend route: %v", err)
-	}
-	assertRouteIDs(t, httpRoutesFromConfig(t, applied), []string{"rule-existing", "rule-new", ""})
 }
 
 func TestValidateRouteMergedConfig_insertsBeforeCatchAll_regardlessOfCatchAllIndex(t *testing.T) {

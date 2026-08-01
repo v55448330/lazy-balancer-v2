@@ -192,6 +192,16 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 
 	// Log path is managed by the system and cannot be changed through the UI/API.
 	req.CaddyLogPath = nil
+	if req.LogLevel != nil {
+		level := strings.ToLower(strings.TrimSpace(*req.LogLevel))
+		switch level {
+		case "debug", "info", "warn", "error":
+			*req.LogLevel = level
+		default:
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid application log level"})
+			return
+		}
+	}
 
 	if req.CaddyLogLevel != nil {
 		switch strings.ToLower(*req.CaddyLogLevel) {
@@ -261,6 +271,12 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	if req.JWTExpireMinutes != nil && (*req.JWTExpireMinutes <= 0 || *req.JWTExpireMinutes > 1440) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "jwt_expire_minutes must be between 1 and 1440"})
 		return
+	}
+	if req.Timezone != nil {
+		if _, err := time.LoadLocation(*req.Timezone); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的时区: " + err.Error()})
+			return
+		}
 	}
 
 	old, err := loadConfigSnapshot()
@@ -422,6 +438,12 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	}
 	committed = true
 	services.ApplyLogLevel()
+	if req.Timezone != nil {
+		if _, err := services.ConfigureLocation(*req.Timezone); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "应用时区失败: " + err.Error()})
+			return
+		}
+	}
 
 	if len(plan.SectionChanges) > 0 {
 		for section, fields := range plan.SectionChanges {
@@ -739,6 +761,9 @@ func validateAccessLogFormat(format string) error {
 	if !fieldKept("request>headers") {
 		return fmt.Errorf("日志格式不能删除请求头（request>headers），UA 统计依赖该字段")
 	}
+	if !fieldKept("request>headers>User-Agent") {
+		return fmt.Errorf("日志格式不能删除 User-Agent 字段（request>headers>User-Agent），UA 统计依赖该字段")
+	}
 	renameAlias := func(paths []string, allowed []string) error {
 		for _, p := range paths {
 			for _, r := range rules {
@@ -763,6 +788,11 @@ func validateAccessLogFormat(format string) error {
 	}
 	if err := renameAlias([]string{"request>uri"}, []string{"uri_path"}); err != nil {
 		return err
+	}
+	for _, r := range rules {
+		if r.path == "request>headers>User-Agent" && r.action != "" && r.action != "delete" {
+			return fmt.Errorf("User-Agent 字段不能重命名（request>headers>User-Agent），UA 统计依赖固定字段名")
+		}
 	}
 	return nil
 }

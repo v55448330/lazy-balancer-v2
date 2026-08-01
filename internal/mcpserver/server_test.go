@@ -2,13 +2,17 @@ package mcpserver
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 func TestCreateRuleToolForwardsBodyAndAPIKey(t *testing.T) {
@@ -52,18 +56,111 @@ func TestCreateRuleToolForwardsBodyAndAPIKey(t *testing.T) {
 	}
 }
 
-func TestIssueCertificateSchemaRequiresBothFieldsOrNeither(t *testing.T) {
+func TestIssueCertificateSchemaAllowsEmptyOrCaddyIDWithOptionalDomain(t *testing.T) {
+	// Given
 	var schema struct {
 		OneOf []struct {
 			Required      []string `json:"required"`
 			MaxProperties *int     `json:"maxProperties"`
 		} `json:"oneOf"`
 	}
+
+	// When
 	if err := json.Unmarshal([]byte(issueCertificateSchema), &schema); err != nil {
 		t.Fatal(err)
 	}
-	if len(schema.OneOf) != 2 || schema.OneOf[0].MaxProperties == nil || *schema.OneOf[0].MaxProperties != 0 || strings.Join(schema.OneOf[1].Required, ",") != "caddy_id,domain" {
+
+	// Then
+	if len(schema.OneOf) != 2 || schema.OneOf[0].MaxProperties == nil || *schema.OneOf[0].MaxProperties != 0 || strings.Join(schema.OneOf[1].Required, ",") != "caddy_id" {
 		t.Fatalf("oneOf=%+v", schema.OneOf)
+	}
+}
+
+func TestUpdateConfigSchemaIncludesCaddyLogPath(t *testing.T) {
+	// Given
+	var schema struct {
+		Properties map[string]any `json:"properties"`
+	}
+
+	// When
+	err := json.Unmarshal([]byte(updateConfigSchema), &schema)
+
+	// Then
+	if err != nil {
+		t.Fatalf("parse update config schema: %v", err)
+	}
+	if _, exists := schema.Properties["caddy_log_path"]; !exists {
+		t.Fatal("update_config schema missing caddy_log_path")
+	}
+}
+
+func TestToolsListHidesWriteTools_forReadOnlyAPIKey(t *testing.T) {
+	// Given
+	resolver := func(apiKey string) (bool, error) {
+		return apiKey == "lb_sk_read-only", nil
+	}
+	handler := newWithReadOnlyResolver("http://127.0.0.1/api/v1", http.DefaultClient, "", resolver)
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/mcp", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("X-API-Key", "lb_sk_read-only")
+	response := httptest.NewRecorder()
+
+	// When
+	handler.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("parse tools/list response: %v", err)
+	}
+	if len(payload.Result.Tools) != 14 {
+		t.Fatalf("read-only tool count=%d, want 14", len(payload.Result.Tools))
+	}
+	for _, tool := range payload.Result.Tools {
+		for _, spec := range tools {
+			if spec.name == tool.Name && spec.method != http.MethodGet {
+				t.Errorf("read-only tools/list exposes write tool %s", tool.Name)
+			}
+		}
+	}
+}
+
+func TestResolveAPIKeyReadOnly_returnsPersistedPermission(t *testing.T) {
+	// Given
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
+	})
+	apiKey := "lb_sk_persisted-read-only"
+	hash := sha256.Sum256([]byte(apiKey))
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (91,'mcp-read-only','x','admin',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,mcp_enabled,read_only) VALUES ('mcp-read-only',?,?,91,1,1,1)`, fmt.Sprintf("%x", hash[:]), apiKey[:12]); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	readOnly, err := resolveAPIKeyReadOnly(apiKey)
+
+	// Then
+	if err != nil || !readOnly {
+		t.Fatalf("readOnly=%v err=%v", readOnly, err)
 	}
 }
 

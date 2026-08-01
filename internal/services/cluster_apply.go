@@ -123,21 +123,6 @@ func wrapSnapshotRestoreError(err error) error {
 	return fmt.Errorf("恢复旧 Caddy 配置: %w", err)
 }
 
-func replaceSnapshotDB(ctx context.Context, database *sql.DB, snapshot models.ClusterSnapshot) error {
-	tx, err := database.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("开始快照事务: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err := replaceSnapshotTx(ctx, tx, snapshot); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("提交快照事务: %w", err)
-	}
-	return nil
-}
-
 func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
 	for _, statement := range []string{"DELETE FROM path_rules", "DELETE FROM upstreams", "DELETE FROM cert_jobs", "DELETE FROM lb_rules", "DELETE FROM api_keys", "DELETE FROM users"} {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {

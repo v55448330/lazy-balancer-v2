@@ -1,5 +1,7 @@
 # Lazy Balancer V2 - 配置规则规范
 
+> **已归档**：本文为历史设计文档，不代表当前实现（当前：首次访问初始化管理员、集群角色存于数据库、凭证在页面配置）。
+
 **文档版本**: 1.0
 **更新日期**: 2026-04-17
 **目的**: Caddy 配置生成规范和操作流程，用于功能迭代和 Bug 修复
@@ -10,19 +12,20 @@
 
 ### 1.1 配置同步原则
 
-1. **验证优先**: 所有配置必须先通过 Caddy API 验证，才能写入数据库
-2. **数据库为源**: 写入 Caddy 的配置必须从数据库重新读取，确保数据一致性
-3. **原子性**: 数据库和 Caddy 配置必须保持同步
+1. **数据库为源**: 规则写端点先在数据库事务中完成变更，Caddy 配置只从数据库状态生成
+2. **事务内生成**: 提交事务前通过 `ApplyConfigFromTx` 读取事务内可见数据并生成完整配置
+3. **全量应用**: 完整配置通过 Caddy `/load` 校验并加载，不做单服务器或单路由增量写入
+4. **原子性**: Caddy 应用失败则回滚事务；提交失败或后续步骤失败时恢复运行时快照并补偿
 
 ### 1.2 Caddy 写入顺序
 
 | 操作 | 顺序 | 说明 |
 |------|------|------|
-| CreateRule | Caddy → 数据库 | Caddy 验证失败不写数据库 |
-| UpdateRule | Caddy → 数据库 | Caddy 写入失败不更新数据库 |
-| EnableRule | Caddy → 数据库 | - |
-| DisableRule | 数据库 → Caddy | - |
-| DeleteRule | 数据库 → Caddy | - |
+| CreateRule | DB tx → full config → Caddy load → commit | 失败时回滚并恢复运行时快照 |
+| UpdateRule | DB tx → full config → Caddy load → commit | 失败时回滚并恢复运行时快照 |
+| EnableRule | DB tx → full config → Caddy load → commit | 后续 ACME 失败时补偿 |
+| DisableRule | DB tx → full config → Caddy load → commit | 证书任务状态在同一事务更新 |
+| DeleteRule | DB tx → full config → Caddy load → commit | 提交后清理运行文件 |
 
 ---
 
@@ -61,9 +64,9 @@ TCP规则(port=8080) + TCP规则(port=8080) → 允许（同一端口可放多�
 
 - 每个规则有唯一的 `caddy_id`（13位随机字符串，格式 `lb_xxxxxxxxx`）
 - 路由对象通过 `@id` 标识
-- **更新时在原位置替换路由**（SetConfigByID）
-- **启用时预置路由到服务器首位**（PrependRouteToServer）
-- **禁用时从服务器移除路由**（RemoveRouteFromServer）
+- `@id` 用于在完整配置中稳定标识规则及关联运行数据
+- 创建、更新、启用、禁用和删除均由数据库状态驱动全量配置重建
+- Caddy 写入不依赖按 `@id` 操作单条路由的增量 API
 
 ### 3.2 @id 使用示例
 
@@ -91,117 +94,50 @@ TCP规则(port=8080) + TCP规则(port=8080) → 允许（同一端口可放多�
 ### 4.1 CreateRule（创建规则）
 
 ```
-1. 请求参数验证
-   ├── 必填字段检查（name, protocol, port, upstreams）
-   ├── 端口冲突检查（validatePort）
-   └── 设置默认值（strategy, health_check_interval 等）
-
-2. 统一验证 validateCaddyConfigBeforeSave
-   ├── 验证 Protocol（http/https/tcp）
-   ├── 验证 ListenPort（1-65535）
-   ├── 验证 Strategy（round_robin/ip_hash/least_conn/random/first/least_time）
-   ├── 验证 Domain（格式验证）
-   ├── 验证 Upstreams（至少一个、host格式、端口，去重、至少一个启用）
-   ├── 验证 TLSHSTS（>= 0）
-   ├── 验证 HealthCheckInterval/Timeout（>= 1）
-   └── 调用 ValidateRouteMergedConfig 验证合并后的完整配置
-
-3. 写入 Caddy（Caddy 验证通过后才写数据库）
-   ├── 创建服务器（如需要）CreateServerIfNotExists
-   ├── 生成路由对象 GenerateSingleRuleCaddyConfig
-   ├── 预置路由到服务器 PrependRouteToServer（路由添加到服务器首位）
-   └── VerifyRouteExists 确认路由已写入 Caddy
-
-4. 验证失败处理
-   └── 如果 Caddy 验证失败，返回错误，不写入数据库
-
-5. 写入数据库（Caddy 验证通过后才写入）
-   ├── 写入 lb_rules 表
-   └── 写入 upstreams 表
-
-6. 数据库写入失败处理
-   └── 如果数据库写入失败，回滚 Caddy（RemoveRouteFromServer）
-
-7. 返回成功响应
+1. 校验请求参数、端口冲突和完整规则配置
+2. 开启数据库事务，写入 lb_rules、upstreams 和 path_rules
+3. ApplyConfigFromTx(tx) 读取事务内状态，生成全量配置并调用 Caddy /load
+4. Caddy 应用成功后提交事务
+5. Caddy 应用或事务提交失败时回滚事务并恢复运行时快照
+6. 提交后的 ACME 操作失败时补偿数据库、Caddy 和证书任务状态
 ```
 
 ### 4.2 UpdateRule（更新规则）
 
 ```
-1. 请求参数验证
-   ├── 端口不可更改检查
-   └── validateCaddyConfigBeforeSave 统一验证
-
-2. 获取现有规则信息
-   ├── 从数据库读取 caddy_id
-   └── 读取现有 protocol/domain/listen_port
-
-3. 构建路由配置
-   ├── 从请求和数据库合并完整 ruleConfig
-   └── 生成路由对象 GenerateSingleRuleCaddyConfig
-
-4. 写入 Caddy（关键：数据库更新在 Caddy 写入之后）
-   ├── SetConfigByID 替换匹配 @id 的路由
-   └── VerifyRouteExists 确认路由已正确替换
-
-5. 更新数据库（Caddy 验证通过后才更新）
-   ├── UPDATE lb_rules 表
-   └── DELETE + INSERT upstreams 表
-
-6. 返回成功响应
+1. 校验请求参数、不可变字段和完整规则配置
+2. 开启数据库事务，更新 lb_rules 并替换 upstreams、path_rules
+3. ApplyConfigFromTx(tx) 读取事务内状态，生成全量配置并调用 Caddy /load
+4. Caddy 应用成功后提交事务
+5. Caddy 应用或事务提交失败时回滚事务并恢复运行时快照
+6. 提交后的 ACME 操作失败时恢复规则、Caddy 和证书任务快照
 ```
 
 ### 4.3 EnableRule（启用规则）
 
 ```
-1. 检查路由是否已存在
-   └── RouteExistsInServer 检查 @id 路由是否在服务器中
-   └── 如果已存在，直接更新数据库 enabled=1
-
-2. 从数据库读取完整规则配置
-
-3. 创建服务器
-   └── CreateServerIfNotExists（如需要）
-
-4. 生成路由对象
-   └── GenerateSingleRuleCaddyConfig
-
-5. 写入 Caddy
-   ├── PrependRouteToServer 预置路由到服务器
-   └── VerifyRouteExists 确认写入
-
-6. 更新数据库
-   └── enabled = 1
-
-注意：Enable 不需要验证逻辑，因为配置未改变
+1. 开启数据库事务并设置 enabled = 1
+2. ApplyConfigFromTx(tx) 从事务内状态生成并加载完整 Caddy 配置
+3. Caddy 应用成功后提交事务；应用或提交失败时回滚并恢复运行时快照
+4. ACME 后续操作失败时恢复数据库、Caddy 和证书任务状态
 ```
 
 ### 4.4 DisableRule（禁用规则）
 
 ```
-1. 更新数据库
-   └── enabled = 0
-
-2. 写入 Caddy
-   └── RemoveRouteFromServer 通过 @id 机制从服务器移除路由
-
-注意：Disable 不需要验证逻辑
+1. 开启数据库事务并设置 enabled = 0
+2. 在同一事务中暂停关联的证书任务
+3. ApplyConfigFromTx(tx) 从事务内状态生成并加载完整 Caddy 配置
+4. Caddy 应用成功后提交事务；应用或提交失败时回滚并恢复运行时快照
 ```
 
 ### 4.5 DeleteRule（删除规则）
 
 ```
-1. 删除关联的上游服务器
-   └── DELETE FROM upstreams WHERE rule_id = ?
-
-2. 删除关联的指标历史
-   └── DELETE FROM metrics_history WHERE rule_id = ?
-
-3. 从 Caddy 移除路由（如有必要）
-   └── RemoveRouteFromServer（如果 caddy_id 存在）
-
-4. 删除规则
-   └── DELETE FROM lb_rules WHERE caddy_id = ?
+1. 开启数据库事务并删除 cert_jobs、upstreams 和 lb_rules 记录
+2. ApplyConfigFromTx(tx) 从事务内状态生成不含该规则的完整 Caddy 配置并加载
+3. Caddy 应用成功后提交事务；应用或提交失败时回滚并恢复运行时快照
+4. 提交后清理指标历史、证书文件和规则日志文件
 ```
 
 ---
@@ -455,68 +391,19 @@ func (s *CaddyService) ValidateRouteMergedConfig(serverName string, routeConfig 
 3. 调用 `/load?validate=true` 验证
 4. 验证失败返回具体错误信息
 
-### 7.3 VerifyRouteExists
+### 7.3 ApplyConfigFromTx
 
-**位置**: `caddy.go` (约 758-850 行)
-
-**功能**: 验证路由是否已成功写入 Caddy
+**功能**: 规则写端点在提交事务前，从事务内可见状态生成并加载完整配置
 
 ```go
-func (s *CaddyService) VerifyRouteExists(caddyID string) error
+func (s *CaddyService) ApplyConfigFromTx(tx *sql.Tx) error
 ```
 
 **流程**:
-1. 调用 `/config/` 获取当前完整配置
-2. 遍历所有服务器的所有路由
-3. 查找是否存在 @id 匹配的路由
-4. 找到返回 nil，找不到返回错误
-
-### 7.4 SetConfigByID
-
-**位置**: `caddy.go` (约 374-450 行)
-
-**功能**: 通过 @id 替换路由配置
-
-```go
-func (s *CaddyService) SetConfigByID(id string, config map[string]interface{}) error
-```
-
-**流程**:
-1. 获取当前完整配置
-2. 遍历所有服务器的所有路由
-3. 找到 @id 匹配的路由，在原位置替换为新 config
-4. 将完整配置 POST 到 `/config/`
-5. 如果找不到对应 @id，返回错误
-
-### 7.5 PrependRouteToServer
-
-**位置**: `caddy.go` (约 674-730 行)
-
-**功能**: 将路由预置到服务器首位（用于新路由优先级高于默认站点）
-
-```go
-func (s *CaddyService) PrependRouteToServer(serverName string, routeConfig map[string]interface{}) error
-```
-
-### 7.6 CreateServerIfNotExists
-
-**位置**: `caddy.go` (约 550-600 行)
-
-**功能**: 创建服务器（如果不存在）
-
-```go
-func (s *CaddyService) CreateServerIfNotExists(serverName string, listenPort int) error
-```
-
-### 7.7 RouteExistsInServer
-
-**位置**: `caddy.go` (约 700-750 行)
-
-**功能**: 检查路由是否已存在于服务器中
-
-```go
-func (s *CaddyService) RouteExistsInServer(serverName string, routeID string) bool
-```
+1. 在 Caddy 配置写锁内读取事务中的启用规则及关联数据
+2. 生成完整 Caddy 配置
+3. 调用 Caddy `/load` 校验并加载完整配置
+4. 失败时返回错误，由调用方回滚事务并恢复运行时快照
 
 ---
 
@@ -526,14 +413,10 @@ func (s *CaddyService) RouteExistsInServer(serverName string, routeID string) bo
 |------|---------|
 | validateCaddyConfigBeforeSave | 返回 400，不写入数据库 |
 | ValidateRouteMergedConfig | 返回 400，不写入数据库 |
-| CreateServerIfNotExists | 返回 400，不写入数据库 |
-| PrependRouteToServer | 返回 400，不写入数据库 |
-| VerifyRouteExists | 返回 500，**回滚 Caddy 路由**，返回错误 |
-| SetConfigByID | 返回 500，不更新数据库 |
-| 数据库写入（Create） | 返回 500，**回滚 Caddy 路由** |
-| 数据库更新（Update） | 返回 500，不更新 Caddy |
-| RemoveRouteFromServer | 错误仅记录，不影响主流程 |
-| DisableRule/DeleteRule | 错误仅记录，不影响主流程 |
+| 事务内数据库写入 | 返回 500，回滚事务，不应用新配置 |
+| ApplyConfigFromTx | 返回 400/500，回滚事务并恢复运行时快照 |
+| 事务提交 | 返回 500，恢复运行时快照 |
+| 提交后的 ACME 操作 | 执行数据库、Caddy 和证书任务补偿 |
 
 ---
 
@@ -542,37 +425,37 @@ func (s *CaddyService) RouteExistsInServer(serverName string, routeID string) bo
 ### 9.1 CreateRule
 
 ```
-验证 → Caddy 写入 → 验证 → 数据库写入 → 成功返回
-                ↓ 失败
-             返回错误（不写入数据库）
+验证 → 事务内写入 → 从 tx 生成并加载全量配置 → commit → 成功返回
+                           ↓ 失败              ↓ 失败
+                     rollback + 恢复运行时快照
 ```
 
 ### 9.2 UpdateRule
 
 ```
-验证 → Caddy 写入 → 验证 → 数据库更新 → 成功返回
-           ↓ 失败
-        返回错误（不更新数据库）
+验证 → 事务内更新 → 从 tx 生成并加载全量配置 → commit → 成功返回
+                           ↓ 失败              ↓ 失败
+                     rollback + 恢复运行时快照
 ```
 
 ### 9.3 EnableRule
 
 ```
-检查存在 → Caddy 写入 → 验证 → 数据库更新 → 成功返回
-                ↓ 失败
-             返回错误
+事务内 enabled=1 → 从 tx 生成并加载全量配置 → commit → 后续 ACME 操作
+                           ↓ 失败              ↓ 失败
+                     rollback + 恢复/补偿
 ```
 
 ### 9.4 DisableRule
 
 ```
-数据库更新 → Caddy 移除 → 返回
+事务内 enabled=0 → 从 tx 生成并加载全量配置 → commit → 返回
 ```
 
 ### 9.5 DeleteRule
 
 ```
-数据库删除（含 metrics_history） → Caddy 移除 → 返回
+事务内删除规则关联数据 → 从 tx 生成并加载全量配置 → commit → 清理运行文件
 ```
 
 ---

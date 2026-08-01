@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +25,31 @@ var startTime = time.Now()
 
 var systemMetricsReadFile = os.ReadFile
 var systemMetricsDFCommand = func() *exec.Cmd { return exec.Command("df", "-B1", "/") }
+
+const systemSampleTTL = 5 * time.Second
+
+var staticSystemInfo = struct {
+	hostname, osInfo, kernel, architecture, caddyVersion string
+}{
+	hostname:     loadHostname(),
+	osInfo:       loadOSInfo(),
+	kernel:       loadCommandOutput("uname", "-r"),
+	architecture: runtime.GOARCH,
+	caddyVersion: loadCaddyVersion(),
+}
+
+var diskUsageCache struct {
+	sync.Mutex
+	total     uint64
+	used      uint64
+	expiresAt time.Time
+}
+
+var connectionStatsCache struct {
+	sync.Mutex
+	stats     models.ConnectionStats
+	expiresAt time.Time
+}
 
 func generateRandomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -162,24 +188,20 @@ func getOutboundIP() string {
 	return localAddr.IP.String()
 }
 
-func getHostname() string {
-	cmd := exec.Command("hostname")
-	output, err := cmd.Output()
+func loadHostname() string {
+	hostname, err := os.Hostname()
 	if err != nil {
 		return "unknown"
 	}
-	return strings.TrimSpace(string(output))
+	return hostname
 }
 
-func getOSInfo() string {
+func getHostname() string { return staticSystemInfo.hostname }
+
+func loadOSInfo() string {
 	data, err := os.ReadFile("/etc/os-release")
 	if err != nil {
-		cmd := exec.Command("uname", "-s")
-		output, err := cmd.Output()
-		if err != nil {
-			return "unknown"
-		}
-		return strings.TrimSpace(string(output))
+		return loadCommandOutput("uname", "-s")
 	}
 	lines := strings.Split(string(data), "\n")
 	var prettyName, name string
@@ -200,8 +222,10 @@ func getOSInfo() string {
 	return "Linux"
 }
 
-func getKernel() string {
-	cmd := exec.Command("uname", "-r")
+func getOSInfo() string { return staticSystemInfo.osInfo }
+
+func loadCommandOutput(name string, args ...string) string {
+	cmd := exec.Command(name, args...)
 	output, err := cmd.Output()
 	if err != nil {
 		return "unknown"
@@ -209,14 +233,8 @@ func getKernel() string {
 	return strings.TrimSpace(string(output))
 }
 
-func getArchitecture() string {
-	cmd := exec.Command("arch")
-	output, err := cmd.Output()
-	if err != nil {
-		return "unknown"
-	}
-	return strings.TrimSpace(string(output))
-}
+func getKernel() string       { return staticSystemInfo.kernel }
+func getArchitecture() string { return staticSystemInfo.architecture }
 
 func getNetworkIPs() map[string]string {
 	ips := make(map[string]string)
@@ -248,7 +266,7 @@ func getNetworkIPs() map[string]string {
 	return ips
 }
 
-func getCaddyVersion() string {
+func loadCaddyVersion() string {
 	cmd := exec.Command("caddy", "version")
 	output, err := cmd.Output()
 	if err != nil {
@@ -260,6 +278,8 @@ func getCaddyVersion() string {
 	}
 	return strings.TrimSpace(string(output))
 }
+
+func getCaddyVersion() string { return staticSystemInfo.caddyVersion }
 
 func getUptime() int64 {
 	return int64(time.Since(startTime).Seconds())
@@ -275,14 +295,9 @@ func getSystemMetrics() (models.SystemMetrics, error) {
 		return models.SystemMetrics{}, err
 	}
 
-	dfCmd := systemMetricsDFCommand()
-	dfOutput, err := dfCmd.Output()
+	diskTotal, diskUsed, err := getCachedDiskUsage(time.Now())
 	if err != nil {
-		return models.SystemMetrics{}, fmt.Errorf("读取系统磁盘指标失败: %w", err)
-	}
-	diskTotal, diskUsed, ok := parseDFOutput(string(dfOutput))
-	if !ok {
-		return models.SystemMetrics{}, fmt.Errorf("解析系统磁盘指标失败")
+		return models.SystemMetrics{}, err
 	}
 
 	cpuPercent, err := getCPUPercent()
@@ -308,6 +323,26 @@ func getSystemMetrics() (models.SystemMetrics, error) {
 		DiskUsed:      diskUsed,
 		DiskPercent:   diskPercent,
 	}, nil
+}
+
+func getCachedDiskUsage(now time.Time) (uint64, uint64, error) {
+	diskUsageCache.Lock()
+	defer diskUsageCache.Unlock()
+	if now.Before(diskUsageCache.expiresAt) {
+		return diskUsageCache.total, diskUsageCache.used, nil
+	}
+	dfOutput, err := systemMetricsDFCommand().Output()
+	if err != nil {
+		return 0, 0, fmt.Errorf("读取系统磁盘指标失败: %w", err)
+	}
+	total, used, ok := parseDFOutput(string(dfOutput))
+	if !ok {
+		return 0, 0, fmt.Errorf("解析系统磁盘指标失败")
+	}
+	diskUsageCache.total = total
+	diskUsageCache.used = used
+	diskUsageCache.expiresAt = now.Add(systemSampleTTL)
+	return total, used, nil
 }
 
 func parseMemInfo(input string) (uint64, uint64, error) {
@@ -537,15 +572,19 @@ func parseDFOutput(output string) (uint64, uint64, bool) {
 }
 
 func getConnectionStats() (models.ConnectionStats, error) {
-	stats := models.ConnectionStats{}
-
-	cmd := netstatCommand()
-	output, err := cmd.Output()
-	if err != nil {
-		return stats, fmt.Errorf("execute netstat -tan: %w", err)
+	now := time.Now()
+	connectionStatsCache.Lock()
+	defer connectionStatsCache.Unlock()
+	if now.Before(connectionStatsCache.expiresAt) {
+		return connectionStatsCache.stats, nil
 	}
-
-	return parseConnectionStats(string(output)), nil
+	output, err := netstatCommand().Output()
+	if err != nil {
+		return models.ConnectionStats{}, fmt.Errorf("execute netstat -tan: %w", err)
+	}
+	connectionStatsCache.stats = parseConnectionStats(string(output))
+	connectionStatsCache.expiresAt = now.Add(systemSampleTTL)
+	return connectionStatsCache.stats, nil
 }
 
 func parseConnectionStats(output string) models.ConnectionStats {
@@ -614,6 +653,12 @@ type prometheusSample struct {
 	value float64
 }
 
+type ruleMetricTarget struct {
+	domain     string
+	listenPort int
+	enableTLS  bool
+}
+
 func parsePrometheusSamples(body string) ([]prometheusSample, error) {
 	var samples []prometheusSample
 	for lineNumber, line := range strings.Split(body, "\n") {
@@ -638,11 +683,15 @@ func parsePrometheusSamples(body string) ([]prometheusSample, error) {
 }
 
 func parsePrometheusMetrics(body string) (models.CaddyMetrics, error) {
-	m := models.CaddyMetrics{}
 	samples, err := parsePrometheusSamples(body)
 	if err != nil {
-		return m, err
+		return models.CaddyMetrics{}, err
 	}
+	return parsePrometheusMetricsFromSamples(samples), nil
+}
+
+func parsePrometheusMetricsFromSamples(samples []prometheusSample) models.CaddyMetrics {
+	m := models.CaddyMetrics{}
 	for _, sample := range samples {
 		name, value := sample.name, sample.value
 		switch {
@@ -674,15 +723,19 @@ func parsePrometheusMetrics(body string) (models.CaddyMetrics, error) {
 			m.BytesOut += int64(value)
 		}
 	}
-	return m, nil
+	return m
 }
 
 func parseHostMetrics(body string) ([]models.HostMetrics, error) {
-	hostMap := make(map[string]*models.HostMetrics)
 	samples, err := parsePrometheusSamples(body)
 	if err != nil {
 		return nil, err
 	}
+	return parseHostMetricsFromSamples(samples), nil
+}
+
+func parseHostMetricsFromSamples(samples []prometheusSample) []models.HostMetrics {
+	hostMap := make(map[string]*models.HostMetrics)
 	for _, sample := range samples {
 		name, value := sample.name, sample.value
 
@@ -724,7 +777,7 @@ func parseHostMetrics(body string) ([]models.HostMetrics, error) {
 	for _, h := range hostMap {
 		result = append(result, *h)
 	}
-	return result, nil
+	return result
 }
 
 func extractLabel(metricName string, label string) string {
@@ -741,22 +794,24 @@ func extractLabel(metricName string, label string) string {
 }
 
 func parseTCPRuleMetricsFromPrometheus(body string, upstreams []models.Upstream) (gin.H, error) {
-	result := emptyRuleMetrics()
-	// TCP 没有健康信号来源，不输出 healthy 字段，前端显示为无数据
-	delete(result, "healthy")
+	samples, err := parsePrometheusSamples(body)
+	if err != nil {
+		return nil, err
+	}
+	return parseTCPRuleMetricsFromSamples(samples, upstreams), nil
+}
 
+func parseTCPRuleMetricsFromSamples(samples []prometheusSample, upstreams []models.Upstream) gin.H {
+	result := emptyRuleMetrics()
+	delete(result, "healthy")
 	upstreamSet := make(map[string]struct{})
 	for _, u := range upstreams {
 		if u.Enabled {
 			upstreamSet[fmt.Sprintf("%s:%d", u.Host, u.Port)] = struct{}{}
 		}
 	}
-	samples, err := parsePrometheusSamples(body)
-	if err != nil {
-		return nil, err
-	}
 	if len(upstreamSet) == 0 {
-		return result, nil
+		return result
 	}
 
 	var connectionsTotal, activeConnections int64
@@ -784,20 +839,24 @@ func parseTCPRuleMetricsFromPrometheus(body string, upstreams []models.Upstream)
 
 	result["requests_total"] = connectionsTotal
 	result["requests_in_flight"] = activeConnections
-	return result, nil
+	return result
 }
 
 func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protocol string, enableTLS bool) (gin.H, error) {
-	result := emptyRuleMetrics()
 	samples, err := parsePrometheusSamples(body)
 	if err != nil {
 		return nil, err
 	}
-	if domain == "" {
-		return result, nil
+	return parseRuleMetricsFromSamples(samples, ruleMetricTarget{domain: domain, listenPort: listenPort, enableTLS: enableTLS}), nil
+}
+
+func parseRuleMetricsFromSamples(samples []prometheusSample, target ruleMetricTarget) gin.H {
+	result := emptyRuleMetrics()
+	if target.domain == "" {
+		return result
 	}
 
-	domains := strings.Split(domain, ",")
+	domains := strings.Split(target.domain, ",")
 	hostSet := make(map[string]struct{})
 	for _, d := range domains {
 		d = strings.TrimSpace(d)
@@ -808,10 +867,10 @@ func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protoco
 		if host, _, err := net.SplitHostPort(d); err == nil {
 			hostSet[host] = struct{}{}
 		} else {
-			hostSet[net.JoinHostPort(d, strconv.Itoa(listenPort))] = struct{}{}
-			if enableTLS {
+			hostSet[net.JoinHostPort(d, strconv.Itoa(target.listenPort))] = struct{}{}
+			if target.enableTLS {
 				hostSet[net.JoinHostPort(d, "443")] = struct{}{}
-			} else if listenPort == 80 || listenPort == 0 {
+			} else if target.listenPort == 80 || target.listenPort == 0 {
 				hostSet[net.JoinHostPort(d, "80")] = struct{}{}
 			}
 		}
@@ -853,7 +912,7 @@ func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protoco
 		}
 	}
 
-	return result, nil
+	return result
 }
 
 func classifyStatusCode(code string) (string, bool) {
@@ -940,6 +999,12 @@ func isValidDomain(domain string) bool {
 			return false
 		}
 		if len(part) > 63 {
+			return false
+		}
+		isAlphaNumeric := func(c byte) bool {
+			return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+		}
+		if !isAlphaNumeric(part[0]) || !isAlphaNumeric(part[len(part)-1]) {
 			return false
 		}
 		for _, c := range part {

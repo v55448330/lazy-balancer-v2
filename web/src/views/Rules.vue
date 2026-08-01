@@ -638,7 +638,7 @@
 
               <el-form-item label="启用动态上游">
                 <div class="dynamic-dns-content">
-                  <el-switch v-model="wizardForm.dynamic_dns" />
+                  <el-switch v-model="wizardForm.dynamic_dns" @change="onDynamicDnsToggle" />
                   <span class="form-tip-inline">启用后，通过 DNS A/AAAA 记录动态发现上游 IP 变化（仅使用第一个上游条目）</span>
                 </div>
               </el-form-item>
@@ -999,6 +999,7 @@ import { validatePathRules } from '@/utils/ruleValidation'
 import { MAX_UPSTREAM_ROWS, normalizeWeights, redistributeWeight } from '@/utils/upstreamWeights'
 import { certJobStatusLabel } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
+import { usePollingTask } from '@/composables/usePollingTask'
 
 interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id'> {
   id?: number
@@ -1135,7 +1136,6 @@ interface RuleLogStats {
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
-const abortController = new AbortController()
 let disposed = false
 
 const certTypeLabels = {
@@ -1231,15 +1231,15 @@ const fetchRules = async () => {
   const requestSeq = ++rulesRequestSeq
   loading.value = true
   try {
-    const res = await request.get<APIResponse<Rule[]>>('/rules', { signal: abortController.signal })
+    const res = await request.get<APIResponse<Rule[]>>('/rules', { signal: healthPolling.signal })
     if (disposed || requestSeq !== rulesRequestSeq) return
     rules.value = res.data || []
     // Fetch health status after rules are loaded
-    fetchHealthStatus()
+    void healthPolling.run()
     // Fetch certificate info for TLS-enabled rules
     fetchCertInfo()
     // Fetch cert job statuses for ACME rules
-    fetchCertJobs()
+    void certJobsPolling.run()
   } catch (error: unknown) {
     if (axios.isCancel(error)) return
     throw error
@@ -1278,7 +1278,7 @@ const fetchCertInfo = async (caddyIds?: readonly string[]) => {
       const batchIds = targetIds.slice(index, index + 200)
       const res = await request.post<APIResponse<Record<string, CertInfo | null>>>('/rules/cert-info', {
         caddy_ids: batchIds,
-      }, { signal: abortController.signal })
+      }, { signal: healthPolling.signal })
       if (disposed) return
       Object.assign(certInfo, res.data || {})
     }
@@ -1293,20 +1293,22 @@ const fetchCertInfo = async (caddyIds?: readonly string[]) => {
   }
 }
 
-let certJobsInFlight = false
-let certJobsPending = false
 const fetchCertJobs = async () => {
   if (disposed) return
-  if (certJobsInFlight) {
-    certJobsPending = true
-    return
-  }
-  certJobsInFlight = true
-  certJobsPending = false
   try {
-    const res = await request.get<APIResponse<CertJob[]>>('/certificates/jobs', { signal: abortController.signal })
+    const jobs: CertJob[] = []
+    let page = 1
+    while (!disposed) {
+      const res = await request.get<APIResponse<CertJob[]>>('/certificates/jobs', {
+        params: { page, page_size: 200 },
+        signal: certJobsPolling.signal,
+      })
+      const pageJobs = res.data || []
+      jobs.push(...pageJobs)
+      if (pageJobs.length < 200) break
+      page += 1
+    }
     if (disposed) return
-    const jobs: CertJob[] = res.data || []
     const map: Record<string, CertJob> = {}
     jobs.forEach(job => {
       if (job.rule_id) {
@@ -1327,15 +1329,6 @@ const fetchCertJobs = async () => {
     if (newlyIssuedRuleIds.length > 0) await fetchCertInfo(newlyIssuedRuleIds)
   } catch {
     return
-  } finally {
-    const shouldDrain = !disposed && certJobsPending
-    certJobsPending = false
-    certJobsInFlight = false
-    if (shouldDrain) {
-      queueMicrotask(() => {
-        void fetchCertJobs()
-      })
-    }
   }
 }
 
@@ -1410,9 +1403,6 @@ const certConfigs = ref<CertificateConfig[]>([])
 const caProviders = ref<CAProvider[]>([])
 const enabledCAProviders = computed(() => caProviders.value.filter(p => p.enabled))
 const healthStatus = ref<Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }>>({})
-let healthPollTimer: ReturnType<typeof setInterval> | null = null
-let certJobPollTimer: ReturnType<typeof setInterval> | null = null
-
 // Config viewing
 const configDialogVisible = ref(false)
 const configLoading = ref(false)
@@ -1514,18 +1504,10 @@ const formatUpdatedTime = (updatedAt: Rule['updated_at']): string => {
   return formatDate(updatedAt) || '-'
 }
 
-let healthInFlight = false
-let healthPending = false
 const fetchHealthStatus = async () => {
   if (disposed) return
-  if (healthInFlight) {
-    healthPending = true
-    return
-  }
-  healthInFlight = true
-  healthPending = false
   try {
-    const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health', { signal: abortController.signal })
+    const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health', { signal: healthPolling.signal })
     if (disposed) return
     const healthData = res.data || {}
     const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
@@ -1573,22 +1555,13 @@ const fetchHealthStatus = async () => {
     if (!disposed) healthStatus.value = mapped
   } catch (error: unknown) {
     if (!disposed) console.error('Failed to fetch health status:', error)
-  } finally {
-    const shouldDrain = !disposed && healthPending
-    healthPending = false
-    healthInFlight = false
-    if (shouldDrain) {
-      queueMicrotask(() => {
-        void fetchHealthStatus()
-      })
-    }
   }
 }
 
 const defaultUpstream = (protocol: UpstreamProtocol = 'http'): UpstreamInput => ({
   host: '',
   port: protocol === 'tcp' ? 8080 : 80,
-  weight: 1,
+  weight: 100,
   domain: '',
   dynamic_dns: false,
   enabled: true,
@@ -2028,6 +2001,7 @@ const openWizard = (rule?: Rule) => {
       proxy_stream_timeout: rule.proxy_stream_timeout || 0,
     })
     weightsToPercent(wizardForm.upstreams)
+    if (wizardForm.dynamic_dns) onDynamicDnsToggle(true)
   } else {
     editingRule.value = null
     Object.assign(wizardForm, {
@@ -2050,7 +2024,7 @@ const openWizard = (rule?: Rule) => {
       tcp_try_interval: 250,
       host_header: '',
       dns_server: '',
-  dns_family: ['ipv4'],
+      dns_family: ['ipv4'],
       upstreams: [defaultUpstream()],
       enable_tls: false,
       tls_source: 'manual',
@@ -2102,6 +2076,27 @@ const beforeWizardClose = (done: () => void): void => {
 const onWeightChange = (changedIdx: number): void => redistributeWeight(wizardForm.upstreams, changedIdx)
 
 const weightsToPercent = (upstreams: UpstreamInput[]): void => normalizeWeights(upstreams)
+
+const onDynamicDnsToggle = (enabled: string | number | boolean): void => {
+  if (!Boolean(enabled)) return
+  const enabledUpstreams = wizardForm.upstreams.filter((upstream) => upstream.enabled !== false)
+  enabledUpstreams.slice(1).forEach((upstream) => {
+    upstream.enabled = false
+    upstream.weight = 0
+  })
+  const retained = enabledUpstreams[0]
+  if (retained) retained.weight = 100
+}
+
+const validateEnabledUpstreams = (): string => {
+  const enabledUpstreams = wizardForm.upstreams.filter((upstream) => upstream.enabled !== false)
+  if (enabledUpstreams.length === 0) return '至少需要一个启用的上游服务器'
+  if (wizardForm.dynamic_dns && enabledUpstreams.length !== 1) return '动态上游模式仅允许一个启用的上游服务器'
+  if (wizardForm.dynamic_dns && wizardForm.dns_family.length === 0) return '动态上游模式至少需要选择一种协议栈'
+  const totalWeight = enabledUpstreams.reduce((total, upstream) => total + (upstream.weight || 0), 0)
+  if (totalWeight !== 100) return `启用的上游权重总和必须为 100%，当前为 ${totalWeight}%`
+  return ''
+}
 
 const weightPercent = (upstreams: readonly (Upstream | UpstreamInput)[] | undefined, row: Upstream | UpstreamInput): number => {
   if (!upstreams?.length) return 0
@@ -2203,9 +2198,9 @@ const nextStep = (): void => {
       return
     }
     // Check if at least one upstream is enabled
-    const enabledCount = wizardForm.upstreams.filter(u => u.enabled).length
-    if (enabledCount === 0) {
-      ElMessage.warning('至少需要一个启用的上游服务器')
+    const upstreamError = validateEnabledUpstreams()
+    if (upstreamError) {
+      ElMessage.warning(upstreamError)
       return
     }
     moveToAdjacentWizardStep(1)
@@ -2221,6 +2216,10 @@ const nextStep = (): void => {
       ElMessage.warning(pathRuleError)
       return
     }
+  }
+  if (currentStep.value === WIZARD_STEP.ADVANCED && wizardForm.dynamic_dns && wizardForm.dns_family.length === 0) {
+    ElMessage.warning('动态上游模式至少需要选择一种协议栈')
+    return
   }
   moveToAdjacentWizardStep(1)
 }
@@ -2256,9 +2255,9 @@ const submitWizard = async () => {
     }
   }
 
-  const enabledUpstreams = wizardForm.upstreams.filter(u => u.enabled)
-  if (enabledUpstreams.length === 0) {
-    ElMessage.warning('至少需要一个启用的上游服务器')
+  const upstreamError = validateEnabledUpstreams()
+  if (upstreamError) {
+    ElMessage.warning(upstreamError)
     saving.value = false
     return
   }
@@ -2307,7 +2306,7 @@ const submitWizard = async () => {
       dynamic_dns: wizardForm.dynamic_dns,
       enable_dns_server: wizardForm.enable_dns_server,
       dns_server: wizardForm.dns_server,
-      dns_family: (() => { const families = wizardForm.dns_family || []; if (families.length === 2) return 'both'; return families[0] || 'ipv4'; })(),
+      dns_family: wizardForm.dns_family.length === 2 ? 'both' : wizardForm.dns_family[0],
       health_check_path: wizardForm.enable_active_health_check ? (wizardForm.health_check_path || '/') : '',
       health_check_interval: wizardForm.health_check_interval,
       health_check_timeout: wizardForm.health_check_timeout,
@@ -2493,6 +2492,8 @@ const openCopyWizard = (rule: Rule) => {
       compress_types: compressType,
       enabled: false,
     })
+  weightsToPercent(wizardForm.upstreams)
+  if (wizardForm.dynamic_dns) onDynamicDnsToggle(true)
   hydratingWizard = false
   currentStep.value = WIZARD_STEP.BASIC
   wizardVisible.value = true
@@ -2722,7 +2723,7 @@ const fetchLogStream = async () => {
   if (!targetMaps) return
   logStatsInFlight.value = true
   try {
-    const res = await request.get<APIResponse<RuleLogStreamData>>(`/rules/${targetId}/log-stream`, { params: { offset: targetOffset }, signal: abortController.signal })
+    const res = await request.get<APIResponse<RuleLogStreamData>>(`/rules/${targetId}/log-stream`, { params: { offset: targetOffset }, signal: healthPolling.signal })
     if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== targetMaps) return
     const lines: string[] = res.data?.lines || []
     if (lines.length) {
@@ -2757,7 +2758,7 @@ const startLogStats = async () => {
   ruleLogStatsError.value = ''
   logStatsOffset.value = 0
   try {
-    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`, { signal: abortController.signal })
+    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`, { signal: healthPolling.signal })
     if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== maps) return
     const content: string = res.data?.content || ''
     const completed = await consumeLogLinesChunked(content.split('\n'), maps, () => (
@@ -2840,7 +2841,7 @@ const refreshRuleLogs = async () => {
   const requestSeq = ++ruleLogRequestSeq
   ruleLogLoading.value = true
   try {
-    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`, { signal: abortController.signal })
+    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`, { signal: healthPolling.signal })
     if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'log' || ruleLogCaddyId.value !== targetId) return
     ruleLogContent.value = res.data?.content || ''
     nextTick(() => {
@@ -2861,38 +2862,34 @@ watch(ruleLogAutoRefresh, (val) => {
   else stopRuleLogPolling()
 })
 
+const healthPolling = usePollingTask(async () => fetchHealthStatus(), {
+  interval: 15000,
+  onError: (error) => console.error('Failed to poll health status:', error),
+})
+const certJobsPolling = usePollingTask(async () => {
+  if (rules.value.some((rule) => rule.tls_source === 'acme_dns')) await fetchCertJobs()
+}, {
+  interval: 5000,
+  onError: (error) => console.error('Failed to poll certificate jobs:', error),
+})
+
 onMounted(() => {
-  fetchRules()
-  fetchUsers()
-  fetchCertConfigs()
-  fetchCAProviders()
-  fetchHealthStatus()
-  healthPollTimer = setInterval(fetchHealthStatus, 15000)
-  certJobPollTimer = setInterval(() => {
-    if (rules.value.some(r => r.tls_source === 'acme_dns')) {
-      fetchCertJobs()
-    }
-  }, 5000)
+  void fetchRules()
+  void fetchUsers()
+  void fetchCertConfigs()
+  void fetchCAProviders()
+  void healthPolling.run()
+  healthPolling.start()
+  certJobsPolling.start()
 })
 
 onUnmounted(() => {
   disposed = true
-  abortController.abort()
   rulesRequestSeq++
   configRequestSeq++
   ruleLogRequestSeq++
   certInfoGeneration++
-  healthPending = false
-  certJobsPending = false
   stopRuleLogPolling()
-  if (healthPollTimer) {
-    clearInterval(healthPollTimer)
-    healthPollTimer = null
-  }
-  if (certJobPollTimer) {
-    clearInterval(certJobPollTimer)
-    certJobPollTimer = null
-  }
 })
 </script>
 
@@ -2927,8 +2924,6 @@ onUnmounted(() => {
   margin: 4px 0 0 28px;
 }
 
-.mb-5 { margin-bottom: 20px; }
-
 .rule-name-cell { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; white-space: nowrap; }
 .acl-lock-icon { flex: 0 0 auto; cursor: pointer; }
 .acl-lock-icon.is-allow { color: var(--el-color-success); }
@@ -2961,7 +2956,6 @@ onUnmounted(() => {
 .form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
 .form-tip-line { font-size: 12px; color: #9ca3af; margin-top: 4px; }
 .form-tip-tight { font-size: 12px; color: #9ca3af; margin-top: 2px; }
-.form-tip-below { font-size: 12px; color: #9ca3af; margin-top: 8px; display: block; }
 .port-warning { color: #eab308; }
 
 /* Fix table cell padding */
@@ -3062,10 +3056,6 @@ onUnmounted(() => {
   color: #3b82f6;
 }
 
-.metric-sep {
-  color: #d1d5db;
-}
-
 .metric-fails {
   color: #ef4444;
 }
@@ -3156,12 +3146,6 @@ onUnmounted(() => {
   line-height: 1;
 }
 
-/* Dynamic DNS alignment */
-.dynamic-dns-item :deep(.el-form-item__content) {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-}
 .dynamic-dns-content {
   display: flex;
   align-items: center;
@@ -3250,12 +3234,6 @@ onUnmounted(() => {
   padding: 0 20px;
 }
 
-.upstream-title {
-  font-size: 14px;
-  font-weight: 500;
-  color: #111827;
-}
-
 .upstream-table { width: 100%; margin-bottom: 8px; }
 
 .upstream-input { width: 100%; }
@@ -3301,20 +3279,10 @@ onUnmounted(() => {
   width: calc(50% - 30px);
 }
 
-.health-check-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .active-check-control {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.section-wrapper {
-  padding: 0;
 }
 
 .strategy-card:hover {
@@ -3341,19 +3309,10 @@ onUnmounted(() => {
   margin-top: 2px;
 }
 
-.strategy-item {
-  margin-bottom: 12px;
-}
-
 .active-check-control {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.summary-desc {
-  font-size: 12px;
-  color: #6b7280;
 }
 
 .wizard-footer {

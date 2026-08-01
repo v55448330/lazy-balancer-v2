@@ -401,11 +401,11 @@ import { request, formatBytes } from '@/utils/api'
 import { ElMessageBox } from 'element-plus'
 import { Monitor, Cpu, Document, Loading, CircleCheck, Odometer, TrendCharts, DataLine, List } from '@element-plus/icons-vue'
 import type { APIResponse, SystemInfo, SystemMetrics, CaddyMetrics, Rule, RuleMetrics, HostMetrics, MetricsOverview } from '@/types'
+import { usePollingTask } from '@/composables/usePollingTask'
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent])
 
 const authStore = useAuthStore()
-const abortController = new AbortController()
 
 const formatUptime = (seconds?: number): string => {
   if (!seconds || seconds < 0) return '-'
@@ -460,41 +460,17 @@ interface RuleHistoryRow {
   bytes_out: number
 }
 
-interface RuleHistoryDelta {
-  epochReset: boolean
-  requests: number
-  s2xx: number
-  s3xx: number
-  s4xx: number
-  s5xx: number
-  bin: number
-  bout: number
-}
-
-const diffCounters = (prev: RuleHistoryRow, curr: RuleHistoryRow): RuleHistoryDelta => {
-  const epochReset = curr.requests_total < prev.requests_total
-    || curr.requests_2xx < prev.requests_2xx
-    || curr.requests_3xx < prev.requests_3xx
-    || curr.requests_4xx < prev.requests_4xx
-    || curr.requests_5xx < prev.requests_5xx
-    || curr.bytes_in < prev.bytes_in
-    || curr.bytes_out < prev.bytes_out
-  const diff = (previous: number, current: number): number => epochReset ? current : current - previous
-  return {
-    epochReset,
-    requests: diff(prev.requests_total, curr.requests_total),
-    s2xx: diff(prev.requests_2xx, curr.requests_2xx),
-    s3xx: diff(prev.requests_3xx, curr.requests_3xx),
-    s4xx: diff(prev.requests_4xx, curr.requests_4xx),
-    s5xx: diff(prev.requests_5xx, curr.requests_5xx),
-    bin: diff(prev.bytes_in, curr.bytes_in),
-    bout: diff(prev.bytes_out, curr.bytes_out),
-  }
-}
-
 interface RuleHistoryResponse {
   supported?: boolean
+  bucket_interval_seconds?: number
   rows?: RuleHistoryRow[]
+}
+
+interface DashboardMetricsResponse {
+  global: CaddyMetrics
+  hosts: HostMetrics[]
+  overview: MetricsOverview
+  rules: Record<string, RuleMetrics>
 }
 
 interface UpstreamHealth {
@@ -509,6 +485,7 @@ const ruleHistoryVisible = ref(false)
 const ruleHistoryRule = ref<Rule | null>(null)
 const ruleHistoryRange = ref('24h')
 const ruleHistoryRows = ref<RuleHistoryRow[]>([])
+const ruleHistoryBucketSeconds = ref(0)
 const ruleHistoryLoading = ref(false)
 const ruleHistoryUnsupported = ref(false)
 
@@ -527,10 +504,11 @@ const fetchRuleHistory = async () => {
   ruleHistoryLoading.value = true
   ruleHistoryUnsupported.value = false
   ruleHistoryRows.value = []
+  ruleHistoryBucketSeconds.value = 0
   try {
     const res = await request.get<APIResponse<RuleHistoryResponse>>(`/rules/${ruleHistoryRule.value.caddy_id}/metrics-history`, {
       params: { range: ruleHistoryRange.value },
-      signal: abortController.signal,
+      signal: dashboardPolling.signal,
     })
     if (disposed || seq !== ruleHistorySeq) return
     if (res.data?.supported === false) {
@@ -538,6 +516,7 @@ const fetchRuleHistory = async () => {
       ruleHistoryRows.value = []
     } else {
       ruleHistoryRows.value = res.data?.rows || []
+      ruleHistoryBucketSeconds.value = res.data?.bucket_interval_seconds || 0
     }
   } catch (error: unknown) {
     if (!disposed && seq === ruleHistorySeq) {
@@ -551,45 +530,29 @@ const fetchRuleHistory = async () => {
   }
 }
 
-// rows store cumulative counters; charts show per-interval deltas
-const ruleHistoryDeltas = computed(() => {
-  const rows = ruleHistoryRows.value
-  const labels: string[] = []
-  const deltas: RuleHistoryDelta[] = []
-  for (let i = 1; i < rows.length; i++) {
-    const prev = rows[i - 1]
-    const curr = rows[i]
-    labels.push(curr.timestamp?.slice(5, 16) || '')
-    deltas.push(diffCounters(prev, curr))
-  }
-  return { labels, deltas }
-})
-
 const historyChartBase = (legend: string[], series: LineSeriesOption[], valueFormatter?: (value: number) => string): EChartsOption => ({
   tooltip: { trigger: 'axis', backgroundColor: 'rgba(255,255,255,0.95)', borderColor: '#e5e7eb', textStyle: { color: '#374151', fontSize: 12 } },
   legend: { data: legend, bottom: 0, textStyle: { fontSize: 11, color: '#6b7280' } },
   grid: { left: 55, right: 15, top: 15, bottom: 40 },
-  xAxis: { type: 'category', data: ruleHistoryDeltas.value.labels, axisLine: { lineStyle: { color: '#e5e7eb' } }, axisLabel: { fontSize: 10, color: '#9ca3af' } },
+  xAxis: { type: 'category', data: ruleHistoryRows.value.map((row) => row.timestamp.slice(5, 16)), axisLine: { lineStyle: { color: '#e5e7eb' } }, axisLabel: { fontSize: 10, color: '#9ca3af', interval: ruleHistoryBucketSeconds.value >= 900 ? 'auto' : undefined } },
   yAxis: { type: 'value', axisLine: { show: false }, axisLabel: { fontSize: 10, color: '#9ca3af', ...(valueFormatter ? { formatter: valueFormatter } : {}) }, splitLine: { lineStyle: { color: '#f3f4f6' } } },
   series,
 })
 
 const ruleRequestsChartOption = computed<EChartsOption>(() => {
-  const d = ruleHistoryDeltas.value.deltas
-  const mk = (name: string, key: Exclude<keyof RuleHistoryDelta, 'epochReset'>, color: string): LineSeriesOption => ({ name, type: 'line', data: d.map((row) => row.epochReset ? null : row[key]), smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
+  const mk = (name: string, key: keyof Omit<RuleHistoryRow, 'timestamp'>, color: string): LineSeriesOption => ({ name, type: 'line', data: ruleHistoryRows.value.map((row) => row[key]), sampling: 'lttb', smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
   return historyChartBase(['总请求', '2xx', '3xx', '4xx', '5xx'], [
-    mk('总请求', 'requests', '#3b82f6'),
-    mk('2xx', 's2xx', '#10b981'),
-    mk('3xx', 's3xx', '#f59e0b'),
-    mk('4xx', 's4xx', '#f97316'),
-    mk('5xx', 's5xx', '#ef4444'),
+    mk('总请求', 'requests_total', '#3b82f6'),
+    mk('2xx', 'requests_2xx', '#10b981'),
+    mk('3xx', 'requests_3xx', '#f59e0b'),
+    mk('4xx', 'requests_4xx', '#f97316'),
+    mk('5xx', 'requests_5xx', '#ef4444'),
   ])
 })
 
 const ruleBytesChartOption = computed<EChartsOption>(() => {
-  const d = ruleHistoryDeltas.value.deltas
-  const mk = (name: string, key: Exclude<keyof RuleHistoryDelta, 'epochReset'>, color: string): LineSeriesOption => ({ name, type: 'line', data: d.map((row) => row.epochReset ? null : row[key]), smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
-  return historyChartBase(['入站', '出站'], [mk('入站', 'bin', '#3b82f6'), mk('出站', 'bout', '#10b981')], formatBytes)
+  const mk = (name: string, key: 'bytes_in' | 'bytes_out', color: string): LineSeriesOption => ({ name, type: 'line', data: ruleHistoryRows.value.map((row) => row[key]), sampling: 'lttb', smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
+  return historyChartBase(['入站', '出站'], [mk('入站', 'bytes_in', '#3b82f6'), mk('出站', 'bytes_out', '#10b981')], formatBytes)
 })
 
 const sortedRules = computed(() =>
@@ -688,13 +651,11 @@ const connChartOption = computed<EChartsOption>(() => ({
   ],
 }))
 
-let timer: number | null = null
 let statusRefreshTimer: number | null = null
 let statusConfirmTimer: number | null = null
 let disposed = false
 let fetchAllDataPromise: Promise<void> | null = null
 let isFetchingRuleHealth = false
-let isFetchingRuleMetrics = false
 let rulesVersion = 0
 
 const fetchAllData = (): Promise<void> => {
@@ -702,7 +663,7 @@ const fetchAllData = (): Promise<void> => {
   if (fetchAllDataPromise) return fetchAllDataPromise
 
   const headers = { Authorization: `Bearer ${authStore.token}` }
-  const config = { headers, signal: abortController.signal }
+  const config = { headers, signal: dashboardPolling.signal }
   fetchAllDataPromise = Promise.allSettled([
     request.get('/system/info', config).then((res) => {
       if (disposed) return
@@ -730,24 +691,30 @@ const fetchAllData = (): Promise<void> => {
       trafficTimestamps.value = [...trafficTimestamps.value, now].slice(-60)
       trafficUnavailable.value = false
     }).catch(() => { if (!disposed) trafficUnavailable.value = true }),
-    request.get('/caddy/metrics', config).then((res) => {
+    request.get<APIResponse<DashboardMetricsResponse>>('/metrics/dashboard', config).then((res) => {
       if (disposed) return
-      if (!res.data) {
+      const data = res.data
+      if (!data) {
         caddyMetricsUnavailable.value = true
-        return
-      }
-      caddyMetrics.value = res.data
-      caddyMetricsUnavailable.value = false
-    }).catch(() => { if (!disposed) caddyMetricsUnavailable.value = true }),
-    request.get('/caddy/host-metrics', config).then((res) => {
-      if (disposed) return
-      if (!res.data) {
         hostMetricsUnavailable.value = true
+        overviewUnavailable.value = true
         return
       }
-      hostMetrics.value = res.data
+      caddyMetrics.value = data.global
+      hostMetrics.value = data.hosts
+      overview.value = data.overview
+      ruleMetrics.value = data.rules
+      ruleMetricsUnavailable.value = Object.fromEntries(rules.value.map((rule) => [rule.caddy_id, data.rules[rule.caddy_id] === undefined]))
+      caddyMetricsUnavailable.value = false
       hostMetricsUnavailable.value = false
-    }).catch(() => { if (!disposed) hostMetricsUnavailable.value = true }),
+      overviewUnavailable.value = false
+    }).catch(() => {
+      if (disposed) return
+      caddyMetricsUnavailable.value = true
+      hostMetricsUnavailable.value = true
+      overviewUnavailable.value = true
+      ruleMetricsUnavailable.value = Object.fromEntries(rules.value.map((rule) => [rule.caddy_id, true]))
+    }),
     request.get('/rules', config).then(async (res) => {
       if (disposed) return
       if (!res.data) {
@@ -758,20 +725,8 @@ const fetchAllData = (): Promise<void> => {
       rulesUnavailable.value = false
       const version = ++rulesVersion
       const currentRules = rules.value
-      await Promise.allSettled([
-        fetchRuleMetrics(currentRules, version),
-        fetchRuleHealth(currentRules, version),
-      ])
-    }).catch(() => { if (!disposed) rulesUnavailable.value = true }),
-    request.get('/metrics/overview', config).then((res) => {
-      if (disposed) return
-      if (!res.data) {
-        overviewUnavailable.value = true
-        return
-      }
-      overview.value = res.data
-      overviewUnavailable.value = false
-    }).catch(() => { if (!disposed) overviewUnavailable.value = true }),
+       await fetchRuleHealth(currentRules, version)
+     }).catch(() => { if (!disposed) rulesUnavailable.value = true }),
     request.get('/metrics/connections', config).then((res) => {
       if (disposed) return
       if (!res.data) {
@@ -801,14 +756,14 @@ const fetchRuleHealth = async (currentRules: Rule[], version: number) => {
   if (disposed || currentRules.length === 0 || isFetchingRuleHealth) return
   isFetchingRuleHealth = true
   try {
-    const res = await request.get<APIResponse<HealthResponse>>('/config/health', { signal: abortController.signal })
+    const res = await request.get<APIResponse<HealthResponse>>('/config/health', { signal: dashboardPolling.signal })
     if (disposed || version !== rulesVersion) return
     const healthData = res.data || {}
     const nextRuleHealth: Record<string, RuleHealth> = {}
     currentRules.forEach((rule: Rule) => {
       const enabledUpstreams = rule.upstreams?.filter((upstream) => upstream.enabled !== false) || []
       let status: RuleHealth = 'unknown'
-      if (rule.enabled && rule.protocol !== 'tcp' && enabledUpstreams.length) {
+      if (rule.enabled && enabledUpstreams.length) {
         let hasUnknown = false
         let hasUnhealthy = false
         let hasDegraded = false
@@ -833,9 +788,9 @@ const fetchRuleHealth = async (currentRules: Rule[], version: number) => {
           if (!found) hasUnknown = true
         })
 
-        if (hasUnknown) status = 'unknown'
-        else if (hasUnhealthy) status = 'unhealthy'
+        if (hasUnhealthy) status = 'unhealthy'
         else if (hasDegraded) status = 'degraded'
+        else if (hasUnknown) status = 'unknown'
         else status = 'healthy'
       }
       nextRuleHealth[rule.caddy_id] = status
@@ -851,41 +806,6 @@ const fetchRuleHealth = async (currentRules: Rule[], version: number) => {
     }
   } finally {
     isFetchingRuleHealth = false
-  }
-}
-
-const fetchRuleMetrics = async (currentRules: Rule[], version: number) => {
-  if (disposed || isFetchingRuleMetrics) return
-  isFetchingRuleMetrics = true
-  try {
-    const headers = { Authorization: `Bearer ${authStore.token}` }
-    const metricsPromises = currentRules.map((rule: Rule) =>
-      request.get<APIResponse<RuleMetrics>>(`/metrics/rule/${rule.caddy_id}`, { headers, signal: abortController.signal })
-    )
-    const metricsResults = await Promise.allSettled(metricsPromises)
-    if (disposed || version !== rulesVersion) return
-    const nextRuleMetrics: Record<string, RuleMetrics> = {}
-    const nextUnavailable: Record<string, boolean> = {}
-    metricsResults.forEach((result, index) => {
-      const rule = currentRules[index]
-      if (!rule) return
-      if (result.status === 'fulfilled' && result.value?.data) {
-        nextRuleMetrics[rule.caddy_id] = result.value.data
-        nextUnavailable[rule.caddy_id] = false
-      } else {
-        const existing = ruleMetrics.value[rule.caddy_id]
-        if (existing) nextRuleMetrics[rule.caddy_id] = existing
-        nextUnavailable[rule.caddy_id] = true
-      }
-    })
-    if (!disposed && version === rulesVersion) {
-      ruleMetrics.value = nextRuleMetrics
-      ruleMetricsUnavailable.value = nextUnavailable
-    }
-  } catch (e) {
-    if (!disposed) console.error('Failed to fetch rule metrics:', e)
-  } finally {
-    isFetchingRuleMetrics = false
   }
 }
 
@@ -908,12 +828,12 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
     if (disposed) return
     
     caddyLoading.value = true
-    await request.post(`/caddy/${action}`, undefined, { signal: abortController.signal })
+    await request.post(`/caddy/${action}`, undefined, { signal: dashboardPolling.signal })
     if (disposed) return
     
     // After start or restart, reload config from database
     if (action === 'start' || action === 'restart') {
-      await request.post('/config/reload', undefined, { signal: abortController.signal })
+      await request.post('/config/reload', undefined, { signal: dashboardPolling.signal })
       if (disposed) return
     }
     
@@ -945,17 +865,18 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
   }
 }
 
+const dashboardPolling = usePollingTask(async () => fetchAllData(), {
+  interval: 5000,
+  onError: (error) => console.error('Failed to poll dashboard:', error),
+})
+
 onMounted(() => {
-  fetchAllData()
-  timer = window.setInterval(() => {
-    fetchAllData()
-  }, 5000)
+  void dashboardPolling.run()
+  dashboardPolling.start()
 })
 
 onUnmounted(() => {
   disposed = true
-  abortController.abort()
-  if (timer) clearInterval(timer)
   if (statusRefreshTimer) clearTimeout(statusRefreshTimer)
   if (statusConfirmTimer) clearTimeout(statusConfirmTimer)
 })

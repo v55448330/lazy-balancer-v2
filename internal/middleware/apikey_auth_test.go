@@ -69,12 +69,74 @@ func TestAPIKeyAuthBindsOwningUser(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
 	}
+	var pendingLastUsed sql.NullTime
+	if err := database.QueryRow("SELECT last_used FROM api_keys WHERE id=9").Scan(&pendingLastUsed); err != nil {
+		t.Fatal(err)
+	}
+	if pendingLastUsed.Valid {
+		t.Fatal("last_used was written synchronously during authentication")
+	}
+	if err := db.FlushAPIKeyLastUsed(); err != nil {
+		t.Fatal(err)
+	}
 	var lastUsed sql.NullTime
 	if err := database.QueryRow("SELECT last_used FROM api_keys WHERE id=9").Scan(&lastUsed); err != nil {
 		t.Fatal(err)
 	}
 	if !lastUsed.Valid || time.Since(lastUsed.Time) > time.Minute {
 		t.Fatalf("last_used not updated: %#v", lastUsed)
+	}
+}
+
+func TestJWTAuthQueriesAuthenticationStateOnce(t *testing.T) {
+	// Given
+	oldDB := db.DB
+	database, err := sql.Open("sqlite", t.TempDir()+"/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.DB = database
+	db.SetDB(database)
+	t.Cleanup(func() {
+		db.DB = oldDB
+		db.SetDB(oldDB)
+		_ = database.Close()
+	})
+	if _, err := database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT, is_enabled BOOLEAN, password_version INTEGER NOT NULL DEFAULT 0);
+		CREATE TABLE revoked_jti (jti_hash TEXT PRIMARY KEY, expires_at DATETIME NOT NULL);
+		INSERT INTO users VALUES (7,'alice','user',1,0);`); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{JWTSecret: "test-secret"}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id": float64(7), "username": "alice", "pwd_ver": float64(0), "jti": "one-query",
+	}).SignedString([]byte(cfg.JWTSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldQuery := jwtAuthenticationQuery
+	queryCount := 0
+	jwtAuthenticationQuery = func(query string, args ...any) *sql.Row {
+		queryCount++
+		return database.QueryRow(query, args...)
+	}
+	t.Cleanup(func() { jwtAuthenticationQuery = oldQuery })
+	router := gin.New()
+	router.Use(jwtAuth(cfg))
+	router.GET("/probe", func(c *gin.Context) { c.Status(http.StatusOK) })
+	request := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if queryCount != 1 {
+		t.Fatalf("authentication queries=%d, want 1", queryCount)
 	}
 }
 

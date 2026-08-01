@@ -86,6 +86,7 @@ import ClusterAccessUrlDialog from './cluster/ClusterAccessUrlDialog.vue'
 import ClusterModeCard from './cluster/ClusterModeCard.vue'
 import ClusterSlavePanel from './cluster/ClusterSlavePanel.vue'
 import ClusterStatusCard from './cluster/ClusterStatusCard.vue'
+import { usePollingTask } from '@/composables/usePollingTask'
 
 interface ActionResponse {
   readonly code: number
@@ -98,7 +99,6 @@ interface LoginTicketResponse {
 }
 
 const authStore = useAuthStore()
-const abortController = new AbortController()
 let disposed = false
 let requestSequence = 0
 const status = ref<ClusterStatus | null>(null)
@@ -121,11 +121,9 @@ const tokenDialogVisible = ref(false)
 const registerToken = ref<ClusterRegisterToken | null>(null)
 const isNonAdminReadOnly = computed(() => authStore.readOnlyReason === 'non-admin')
 const clusterModeChanging = computed(() => syncing.value || promoting.value || modeLoading.value)
-let refreshTimer: ReturnType<typeof setInterval> | null = null
-
 const fetchStatus = async (): Promise<ClusterStatus> => {
   const requestSeq = requestSequence
-  const response = await request.get<ApiResponse<ClusterStatus>>('/cluster/status', { signal: abortController.signal })
+  const response = await request.get<ApiResponse<ClusterStatus>>('/cluster/status', { signal: clusterPolling.signal })
   if (!disposed && requestSeq === requestSequence) {
     status.value = response.data
     authStore.setNodeMode(response.data.node_mode)
@@ -138,43 +136,21 @@ const fetchNodes = async (): Promise<void> => {
   const requestSeq = requestSequence
   nodesLoading.value = true
   try {
-    const response = await request.get<ApiResponse<readonly ClusterNode[]>>('/cluster/nodes', { signal: abortController.signal })
+    const response = await request.get<ApiResponse<readonly ClusterNode[]>>('/cluster/nodes', { signal: clusterPolling.signal })
     if (!disposed && requestSeq === requestSequence) nodes.value = response.data
   } finally {
     if (!disposed && requestSeq === requestSequence) nodesLoading.value = false
   }
 }
 
-let refreshInFlight: Promise<void> | null = null
-let refreshPending = false
 const refreshCluster = async (): Promise<void> => {
   if (disposed) return
-  if (refreshInFlight) {
-    refreshPending = true
-    await refreshInFlight
-    return
-  }
-  refreshPending = false
-  refreshInFlight = (async () => {
-    const currentStatus = await fetchStatus()
-    if (disposed) return
-    if (currentStatus.node_mode === 'master') {
-      await fetchNodes()
-    } else {
-      nodes.value = []
-    }
-  })()
-  try {
-    await refreshInFlight
-  } finally {
-    const shouldDrain = !disposed && refreshPending
-    refreshPending = false
-    refreshInFlight = null
-    if (shouldDrain) {
-      queueMicrotask(() => {
-        void refreshCluster().catch(() => undefined)
-      })
-    }
+  const currentStatus = await fetchStatus()
+  if (disposed) return
+  if (currentStatus.node_mode === 'master') {
+    await fetchNodes()
+  } else {
+    nodes.value = []
   }
 }
 
@@ -200,7 +176,7 @@ const registerAsSlave = async (input: ClusterRegistrationInput): Promise<void> =
     if (!confirmed) return
     await request.post<ApiResponse<ClusterModeResult>>('/cluster/mode', { mode: 'slave', ...input })
     ElMessage.success('注册请求已提交，等待主节点审批')
-    await refreshCluster()
+    await clusterPolling.run()
   } finally {
     modeLoading.value = false
   }
@@ -214,7 +190,7 @@ const promoteToMaster = async (): Promise<void> => {
     if (!confirmed) return
     await request.post<ActionResponse>('/cluster/promote')
     ElMessage.success('已提升为主节点')
-    await refreshCluster()
+    await clusterPolling.run()
   } finally {
     promoting.value = false
   }
@@ -297,7 +273,7 @@ const runNodeAction = async (node: ClusterNode, action: 'approve' | 'reject' | '
       await request.delete<ActionResponse>(`/cluster/nodes/${node.id}`)
       ElMessage.success('节点已删除')
     }
-    await refreshCluster()
+    await clusterPolling.run()
   } finally {
     pendingNodeId.value = null
   }
@@ -369,24 +345,24 @@ const updateAccessUrl = async (accessUrl: string): Promise<void> => {
   }
 }
 
+const clusterPolling = usePollingTask(async () => refreshCluster(), {
+  interval: 15000,
+  onError: (error) => console.error('Failed to poll cluster status:', error),
+})
+
 onMounted(async () => {
   try {
-    await refreshCluster().catch(() => undefined)
+    await clusterPolling.run()
   } finally {
     if (!disposed) initialLoading.value = false
   }
   if (disposed) return
-  refreshTimer = setInterval(() => {
-    void refreshCluster().catch(() => undefined)
-  }, 15000)
+  clusterPolling.start()
 })
 
 onUnmounted(() => {
   disposed = true
   requestSequence++
-  abortController.abort()
-  refreshPending = false
-  if (refreshTimer) clearInterval(refreshTimer)
 })
 </script>
 

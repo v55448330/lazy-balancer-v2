@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/x509"
 	"database/sql"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +25,11 @@ import (
 
 var certJobOperationLocks [64]sync.Mutex
 
+var certJobIndexState struct {
+	sync.Mutex
+	databases map[*sql.DB]struct{}
+}
+
 var cancelCertJob = func(id int) {
 	if qm := services.GetCAQueueManager(); qm != nil {
 		qm.CancelJob(id)
@@ -37,15 +44,46 @@ func certJobOperationLock(id int) *sync.Mutex {
 	return &certJobOperationLocks[index]
 }
 
+func ensureCertJobListIndex() error {
+	certJobIndexState.Lock()
+	defer certJobIndexState.Unlock()
+	if certJobIndexState.databases == nil {
+		certJobIndexState.databases = make(map[*sql.DB]struct{})
+	}
+	if _, exists := certJobIndexState.databases[db.DB]; exists {
+		return nil
+	}
+	if _, err := db.DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_created_at_desc ON cert_jobs(created_at DESC)"); err != nil {
+		return err
+	}
+	certJobIndexState.databases[db.DB] = struct{}{}
+	return nil
+}
+
 func (h *Handlers) ListCertJobs(c *gin.Context) {
 	ruleID := c.Query("rule_id")
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil || page < 1 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "page 必须为正整数"})
+		return
+	}
+	pageSize, err := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+	if err != nil || pageSize < 1 || pageSize > 200 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "page_size 必须在 1-200 之间"})
+		return
+	}
+	if err := ensureCertJobListIndex(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "初始化证书任务分页索引失败"})
+		return
+	}
 	query := `SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.message,'') AS message, COALESCE(j.cert_pem,'') AS cert_pem, j.expires_at, j.created_at, j.updated_at, COALESCE(j.renewal_attempts,0) AS renewal_attempts, j.ca_available_after, COALESCE(j.last_error_code,'') AS last_error_code, COALESCE(j.ca_provider_id,0) AS ca_provider_id, COALESCE(p.name,'') AS ca_provider_name FROM cert_jobs j LEFT JOIN ca_providers p ON p.id = j.ca_provider_id`
 	var args []interface{}
 	if ruleID != "" {
 		query += " WHERE j.rule_id = ?"
 		args = append(args, ruleID)
 	}
-	query += " ORDER BY j.created_at DESC"
+	query += " ORDER BY j.created_at DESC LIMIT ? OFFSET ?"
+	args = append(args, pageSize, (page-1)*pageSize)
 
 	rows, err := db.DB.Query(query, args...)
 	if err != nil {
@@ -54,14 +92,46 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var jobs []models.CertJob
+	type certJobListItem struct {
+		ID                int                 `json:"id"`
+		RuleID            string              `json:"rule_id"`
+		Domain            string              `json:"domain"`
+		CAProviderID      int                 `json:"ca_provider_id"`
+		CAProviderName    string              `json:"ca_provider_name,omitempty"`
+		Status            string              `json:"status"`
+		Message           string              `json:"message"`
+		Issuer            string              `json:"issuer"`
+		DaysRemaining     int                 `json:"days_remaining"`
+		CertificateStatus string              `json:"certificate_status"`
+		RenewalAttempts   int                 `json:"renewal_attempts,omitempty"`
+		CAAvailableAfter  models.JSONNullTime `json:"ca_available_after,omitempty"`
+		LastErrorCode     string              `json:"last_error_code,omitempty"`
+		ExpiresAt         models.JSONNullTime `json:"expires_at"`
+		CreatedAt         time.Time           `json:"created_at"`
+		UpdatedAt         models.JSONNullTime `json:"updated_at"`
+	}
+	jobs := make([]certJobListItem, 0, pageSize)
+	now := time.Now()
 	for rows.Next() {
-		var j models.CertJob
-		if err := rows.Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.Message, &j.CertPEM,
+		var j certJobListItem
+		var certPEM string
+		if err := rows.Scan(&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.Message, &certPEM,
 			&j.ExpiresAt, &j.CreatedAt, &j.UpdatedAt, &j.RenewalAttempts, &j.CAAvailableAfter, &j.LastErrorCode, &j.CAProviderID, &j.CAProviderName,
 		); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败: " + err.Error()})
 			return
+		}
+		j.Issuer = certificateIssuer(certPEM)
+		j.CertificateStatus = "unknown"
+		if j.ExpiresAt.Valid {
+			j.DaysRemaining = int(j.ExpiresAt.Time.Sub(now).Hours() / 24)
+			if !now.Before(j.ExpiresAt.Time) {
+				j.CertificateStatus = "expired"
+			} else if j.DaysRemaining <= 30 {
+				j.CertificateStatus = "expiring"
+			} else {
+				j.CertificateStatus = "valid"
+			}
 		}
 		jobs = append(jobs, j)
 	}
@@ -69,7 +139,24 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败: " + err.Error()})
 		return
 	}
+	c.Header("X-Page", strconv.Itoa(page))
+	c.Header("X-Page-Size", strconv.Itoa(pageSize))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: jobs})
+}
+
+func certificateIssuer(certPEM string) string {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		return ""
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return ""
+	}
+	if len(cert.Issuer.Organization) > 0 && cert.Issuer.Organization[0] != "" {
+		return cert.Issuer.Organization[0]
+	}
+	return cert.Issuer.CommonName
 }
 
 func (h *Handlers) RetryCertJob(c *gin.Context) {

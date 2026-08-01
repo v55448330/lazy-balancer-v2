@@ -93,16 +93,6 @@ func (l *CertJobFileLogger) Log(stage, message string) {
 	l.write("INFO", stage, message)
 }
 
-// LogError writes an error-level entry.
-func (l *CertJobFileLogger) LogError(stage, message string) {
-	l.write("ERROR", stage, message)
-}
-
-// LogWarning writes a warning-level entry.
-func (l *CertJobFileLogger) LogWarning(stage, message string) {
-	l.write("WARN", stage, message)
-}
-
 // WriteCertJobLog is a package-level helper for code paths that only have a
 // jobID (e.g. failJob, markJobWaitingCA). It resolves the ruleID from the
 // database and delegates to a CertJobFileLogger.

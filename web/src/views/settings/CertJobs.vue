@@ -17,12 +17,12 @@
     </el-table-column>
     <el-table-column label="颁发者" width="110" show-overflow-tooltip>
       <template #default="{ row }">
-        <span :class="row.ca_provider_name ? 'cell-text' : 'cell-empty'">{{ row.ca_provider_name || '-' }}</span>
+        <span :class="row.issuer ? 'cell-text' : 'cell-empty'">{{ row.issuer || '-' }}</span>
       </template>
     </el-table-column>
     <el-table-column label="过期时间" width="180">
       <template #default="{ row }">
-        <span v-if="row.status === 'issued' && certInfoMap[row.id]" class="cell-text">{{ certInfoMap[row.id].not_after || '-' }}</span>
+        <span v-if="row.status === 'issued' && row.expires_at" class="cell-text">{{ formatDate(row.expires_at) || '-' }}</span>
         <span v-else class="cell-empty">-</span>
       </template>
     </el-table-column>
@@ -33,7 +33,7 @@
     </el-table-column>
     <el-table-column label="自动重签时间" width="180">
       <template #default="{ row }">
-        <span v-if="row.status === 'issued' && certInfoMap[row.id]" class="cell-text">{{ renewalInfo(row).renewalDate || '-' }}</span>
+        <span v-if="row.status === 'issued' && row.expires_at" class="cell-text">{{ renewalInfo(row).renewalDate || '-' }}</span>
         <span v-else class="cell-empty">-</span>
       </template>
     </el-table-column>
@@ -51,7 +51,7 @@
     </el-table-column>
     <el-table-column label="剩余天数" width="90">
       <template #default="{ row }">
-        <span v-if="row.status === 'issued' && certInfoMap[row.id]" :class="['cert-days', certInfoMap[row.id].status]">{{ certInfoMap[row.id].days_remaining }} 天</span>
+        <span v-if="row.status === 'issued' && row.expires_at" :class="['cert-days', certificateStatus(row)]">{{ row.days_remaining }} 天</span>
         <span v-else class="cell-empty">-</span>
       </template>
     </el-table-column>
@@ -67,6 +67,17 @@
     </el-table-column>
   </el-table>
   <el-empty v-if="!loading && jobs.length === 0" description="暂无签发任务" :image-size="60" />
+  <div v-if="jobs.length > 0 || currentPage > 1" class="cert-jobs-pagination">
+    <el-pagination
+      v-model:current-page="currentPage"
+      v-model:page-size="pageSize"
+      :page-sizes="[10, 20, 50, 100]"
+      :total="estimatedTotal"
+      layout="total, sizes, prev, pager, next"
+      @current-change="jobsPolling.run"
+      @size-change="onPageSizeChange"
+    />
+  </div>
 
   <el-dialog
     v-model="logDialogVisible"
@@ -95,11 +106,10 @@ import { formatDate } from '@/utils/date'
 import { escapeHtml } from '@/utils/ansi'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import * as pkijs from 'pkijs'
-import * as asn1js from 'asn1js'
 import type { APIResponse } from '@/types'
 import { assertNever, certJobStatusLabel } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
+import { usePollingTask } from '@/composables/usePollingTask'
 
 interface CertJob {
   id: number
@@ -109,35 +119,28 @@ interface CertJob {
   message: string
   expires_at?: string | null
   updated_at?: string | null
-  cert_pem?: string
+  issuer?: string
+  days_remaining: number
+  certificate_status: string
   ca_provider_name?: string
   renewal_attempts?: number
   ca_available_after?: string | null
   last_error_code?: string
 }
 
-interface CertInfo {
-  not_after: string
-  days_remaining: number
-  status: string
-}
-
-const props = defineProps<{
-  ruleId?: string
-}>()
-
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
-const abortController = new AbortController()
 let disposed = false
 let jobsRequestSeq = 0
 
 const jobs = ref<CertJob[]>([])
 const loading = ref(false)
-const certInfoMap = ref<Record<number, CertInfo>>({})
 const certRenewalDays = ref(30)
+const certExpiryDays = ref(30)
+const currentPage = ref(1)
+const pageSize = ref(20)
+const estimatedTotal = computed(() => (currentPage.value - 1) * pageSize.value + jobs.value.length + (jobs.value.length === pageSize.value ? 1 : 0))
 const retryingJobIds = ref(new Set<number>())
-let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const logDialogVisible = ref(false)
 const logLoading = ref(false)
@@ -251,12 +254,17 @@ const retryDisabledReason = (row: CertJob): string => {
 }
 
 const renewalInfo = (row: CertJob): { renewalDate?: string } => {
-  const info = certInfoMap.value[row.id]
-  if (!info) return {}
-  const expiry = new Date(info.not_after)
+  if (!row.expires_at) return {}
+  const expiry = new Date(row.expires_at)
   if (isNaN(expiry.getTime())) return {}
   const renewal = new Date(expiry.getTime() - certRenewalDays.value * 24 * 60 * 60 * 1000)
   return { renewalDate: formatDate(renewal.toISOString()) }
+}
+
+const certificateStatus = (row: CertJob): 'expired' | 'expiring' | 'valid' => {
+  if (row.days_remaining <= 0) return 'expired'
+  if (row.days_remaining <= certExpiryDays.value) return 'expiring'
+  return 'valid'
 }
 
 const formatCoolingTime = (iso: string): string => {
@@ -274,14 +282,16 @@ const fetchJobs = async () => {
   const requestSeq = ++jobsRequestSeq
   loading.value = true
   try {
-    const [jobsRes, configRes] = await Promise.all([
-      request.get<APIResponse<CertJob[]>>('/certificates/jobs', { params: props.ruleId ? { rule_id: props.ruleId } : {}, signal: abortController.signal }),
-      request.get('/config', { signal: abortController.signal }),
-    ])
+    const jobsRes = await request.get<APIResponse<CertJob[]>>('/certificates/jobs', {
+      params: { page: currentPage.value, page_size: pageSize.value },
+      signal: jobsPolling.signal,
+    })
     if (disposed || requestSeq !== jobsRequestSeq) return
     jobs.value = jobsRes.data || []
-    certRenewalDays.value = configRes.data?.cert_renewal_days ?? 30
-    await fetchCertInfo()
+    if (jobs.value.length === 0 && currentPage.value > 1) {
+      currentPage.value -= 1
+      queueMicrotask(() => void jobsPolling.run())
+    }
   } catch (error: unknown) {
     if (!disposed && requestSeq === jobsRequestSeq) console.error('Failed to fetch cert jobs:', error)
   } finally {
@@ -289,45 +299,9 @@ const fetchJobs = async () => {
   }
 }
 
-const parseCertInfo = (certPEM: string): CertInfo | null => {
-  if (!certPEM) return null
-  try {
-    const match = certPEM.match(/-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/)
-    if (!match) return null
-    const base64 = match[1].replace(/\s/g, '')
-    const binary = atob(base64)
-    const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i)
-    }
-    const asn1 = asn1js.fromBER(bytes.buffer)
-    const cert = new pkijs.Certificate({ schema: asn1.result })
-    const notAfterValue = cert.notAfter.value as Date
-    const notAfter = notAfterValue.toISOString ? notAfterValue.toISOString() : String(notAfterValue)
-    const now = new Date()
-    const expiry = new Date(notAfterValue)
-    const daysRemaining = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-    return {
-      not_after: formatDate(notAfter),
-      days_remaining: daysRemaining,
-      status: daysRemaining <= 0 ? 'expired' : (daysRemaining <= 30 ? 'expiring' : 'valid'),
-    }
-  } catch (e) {
-    return null
-  }
-}
-
-const fetchCertInfo = async () => {
-  if (disposed) return
-  const issuedJobs = jobs.value.filter(j => j.status === 'issued' && j.cert_pem)
-  const newMap: Record<number, CertInfo> = {}
-  for (const job of issuedJobs) {
-    const info = parseCertInfo(job.cert_pem || '')
-    if (info) {
-      newMap[job.id] = info
-    }
-  }
-  certInfoMap.value = newMap
+const onPageSizeChange = (): void => {
+  currentPage.value = 1
+  void jobsPolling.run()
 }
 
 const retryJob = async (row: CertJob) => {
@@ -344,10 +318,10 @@ const retryJob = async (row: CertJob) => {
   if (disposed || retryingJobIds.value.has(row.id)) return
   retryingJobIds.value = new Set(retryingJobIds.value).add(row.id)
   try {
-    await request.post(`/certificates/jobs/${row.id}/retry`, undefined, { signal: abortController.signal })
+    await request.post(`/certificates/jobs/${row.id}/retry`, undefined, { signal: jobsPolling.signal })
     if (disposed) return
     ElMessage.success('重新签发已触发')
-    await fetchJobs()
+    await jobsPolling.run()
   } catch (error: unknown) {
     // Error toast is already shown by the global axios interceptor.
     if (!disposed) console.error('Failed to retry cert job:', error)
@@ -397,7 +371,7 @@ const refreshLogs = async () => {
   const requestSeq = ++logRequestSeq
   logLoading.value = true
   try {
-    const res = await request.get<APIResponse<{ content: string }>>(`/certificates/jobs/${jobId}/logs`, { signal: abortController.signal })
+    const res = await request.get<APIResponse<{ content: string }>>(`/certificates/jobs/${jobId}/logs`, { signal: jobsPolling.signal })
     if (disposed || !logDialogVisible.value || currentJob.value?.id !== jobId || requestSeq !== logRequestSeq) return
     logContent.value = res.data?.content || ''
     await scrollToBottom()
@@ -411,17 +385,25 @@ const refreshLogs = async () => {
   }
 }
 
-onMounted(() => {
-  fetchJobs()
-  pollTimer = setInterval(fetchJobs, 5000)
+const jobsPolling = usePollingTask(async () => fetchJobs(), {
+  interval: 5000,
+  onError: (error) => console.error('Failed to poll certificate jobs:', error),
+})
+
+onMounted(async () => {
+  const configRes = await request.get('/config', { signal: jobsPolling.signal })
+  if (!disposed) {
+    certRenewalDays.value = configRes.data?.cert_renewal_days ?? 30
+    certExpiryDays.value = configRes.data?.cert_expiry_days ?? 30
+  }
+  void jobsPolling.run()
+  jobsPolling.start()
 })
 
 onUnmounted(() => {
   disposed = true
   jobsRequestSeq++
   logRequestSeq++
-  abortController.abort()
-  if (pollTimer) clearInterval(pollTimer)
   stopLogPolling()
 })
 </script>
@@ -467,6 +449,7 @@ onUnmounted(() => {
 .cert-jobs-table {
   width: 100%;
 }
+.cert-jobs-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 .cert-jobs-table :deep(.el-table__cell) {
   vertical-align: middle;
 }

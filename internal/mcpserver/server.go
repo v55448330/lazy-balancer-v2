@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -65,26 +66,32 @@ const createRuleSchema = `{"type":"object","required":["name","protocol","listen
 const updateRuleSchema = `{"type":"object","required":["caddy_id"],"properties":{"caddy_id":{"type":"string"},"name":{"type":"string"},"description":{"type":"string"},"protocol":{"type":"string"},"domain":{"type":"string"},"listen_port":{"type":"integer"},"strategy":{"type":"string"},"dynamic_dns":{"type":"boolean"},"enable_dns_server":{"type":"boolean"},"dns_server":{"type":"string"},"dns_family":{"type":"string"},"health_check_path":{"type":"string"},"health_check_interval":{"type":"integer"},"health_check_timeout":{"type":"integer"},"health_check_unhealthy_threshold":{"type":"integer"},"health_check_healthy_threshold":{"type":"integer"},"enable_active_health_check":{"type":"boolean"},"tcp_health_check_port":{"type":"integer"},"tcp_proxy_protocol":{"type":"boolean"},"tcp_try_duration":{"type":"integer"},"tcp_try_interval":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"server_tokens_hidden":{"type":"integer"},"ip_acl_mode":{"type":"string"},"ip_acl_list":{"type":"array","items":{"type":"string"}},"custom_routes_enabled":{"type":"boolean"},"proxy_dial_timeout":{"type":"integer"},"proxy_response_header_timeout":{"type":"integer"},"proxy_read_timeout":{"type":"integer"},"proxy_write_timeout":{"type":"integer"},"proxy_stream_timeout":{"type":"integer"},"path_rules":{"type":"array","items":{"type":"object"}},"host_header":{"type":"string"},"upstreams":{"type":"array","items":{"type":"object"}},"enable_tls":{"type":"boolean"},"tls_source":{"type":"string"},"acme_config_id":{"type":"integer"},"ca_provider_id":{"type":"integer"},"tls_cert":{"type":"string"},"tls_key":{"type":"string"},"tls_http_redirect":{"type":"boolean"},"enable_compress":{"type":"boolean"},"compress_types":{"type":"string"},"enabled":{"type":"boolean"},"log_enabled":{"type":"boolean"}},"additionalProperties":false}`
 
 const aclSchema = `{"type":"object","required":["caddy_id","ip_acl_mode","ip_acl_list"],"properties":{"caddy_id":{"type":"string"},"ip_acl_mode":{"type":"string","enum":["","allow","deny"]},"ip_acl_list":{"type":"array","items":{"type":"string"}}},"additionalProperties":false}`
-const issueCertificateSchema = `{"type":"object","properties":{"caddy_id":{"type":"string"},"domain":{"type":"string"}},"oneOf":[{"maxProperties":0},{"required":["caddy_id","domain"]}],"additionalProperties":false}`
+const issueCertificateSchema = `{"type":"object","properties":{"caddy_id":{"type":"string"},"domain":{"type":"string"}},"oneOf":[{"maxProperties":0},{"required":["caddy_id"]}],"additionalProperties":false}`
 const auditLogsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20}},"additionalProperties":false}`
-const updateConfigSchema = `{"type":"object","properties":{"source":{"type":"string"},"dns_provider":{"type":"string"},"dns_credentials":{"type":"string"},"acme_email":{"type":"string"},"cert_expiry_days":{"type":"integer"},"cert_renewal_days":{"type":"integer"},"cert_renewal_attempts":{"type":"integer"},"log_level":{"type":"string"},"caddy_log_level":{"type":"string"},"caddy_log_size_mb":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"http_read_timeout":{"type":"integer"},"http_write_timeout":{"type":"integer"},"http_idle_timeout":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"proxy_dial_timeout":{"type":"integer"},"proxy_response_header_timeout":{"type":"integer"},"proxy_read_timeout":{"type":"integer"},"proxy_write_timeout":{"type":"integer"},"proxy_stream_timeout":{"type":"integer"},"server_tokens_hidden":{"type":"boolean"},"cert_job_log_size_mb":{"type":"integer"},"runtime_log_size_mb":{"type":"integer"},"access_log_json":{"type":"boolean"},"access_log_format":{"type":"string"},"audit_retention_months":{"type":"integer"},"jwt_expire_minutes":{"type":"integer"},"timezone":{"type":"string"},"default_ca_provider_id":{"type":"integer"}},"additionalProperties":false}`
+const updateConfigSchema = `{"type":"object","properties":{"source":{"type":"string"},"dns_provider":{"type":"string"},"dns_credentials":{"type":"string"},"acme_email":{"type":"string"},"cert_expiry_days":{"type":"integer"},"cert_renewal_days":{"type":"integer"},"cert_renewal_attempts":{"type":"integer"},"log_level":{"type":"string"},"caddy_log_level":{"type":"string"},"caddy_log_path":{"type":"string"},"caddy_log_size_mb":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"http_read_timeout":{"type":"integer"},"http_write_timeout":{"type":"integer"},"http_idle_timeout":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"proxy_dial_timeout":{"type":"integer"},"proxy_response_header_timeout":{"type":"integer"},"proxy_read_timeout":{"type":"integer"},"proxy_write_timeout":{"type":"integer"},"proxy_stream_timeout":{"type":"integer"},"server_tokens_hidden":{"type":"boolean"},"cert_job_log_size_mb":{"type":"integer"},"runtime_log_size_mb":{"type":"integer"},"access_log_json":{"type":"boolean"},"access_log_format":{"type":"string"},"audit_retention_months":{"type":"integer"},"jwt_expire_minutes":{"type":"integer"},"timezone":{"type":"string"},"default_ca_provider_id":{"type":"integer"}},"additionalProperties":false}`
 
 func New(baseURL string, client *http.Client) http.Handler {
 	return NewWithInternalAuth(baseURL, client, "")
 }
 
 func NewWithInternalAuth(baseURL string, client *http.Client, internalAuthSecret string) http.Handler {
+	return newWithReadOnlyResolver(baseURL, client, internalAuthSecret, resolveAPIKeyReadOnly)
+}
+
+func newWithReadOnlyResolver(baseURL string, client *http.Client, internalAuthSecret string, resolver readOnlyResolver) http.Handler {
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
 	}
 	mcpServer := server.NewMCPServer("Lazy Balancer V2", "1.0.0", server.WithToolCapabilities(false))
 	for _, spec := range tools {
-		spec := spec
 		mcpServer.AddTool(mcp.NewToolWithRawSchema(spec.name, spec.description, json.RawMessage(spec.schema)), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return forward(ctx, client, baseURL, internalAuthSecret, spec, request)
 		})
 	}
-	return server.NewStreamableHTTPServer(mcpServer, server.WithStateLess(true), server.WithEndpointPath("/api/v1/mcp"))
+	streamable := server.NewStreamableHTTPServer(mcpServer, server.WithStateLess(true), server.WithEndpointPath("/api/v1/mcp"))
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		serveWithToolVisibility(writer, request, streamable, resolver)
+	})
 }
 
 func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecret string, spec toolSpec, call mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -110,9 +117,7 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 	endpoint.RawQuery = query.Encode()
 
 	bodyArguments := make(map[string]any, len(arguments))
-	for key, value := range arguments {
-		bodyArguments[key] = value
-	}
+	maps.Copy(bodyArguments, arguments)
 	if spec.name == "create_rule" {
 		if upstreams, ok := bodyArguments["upstreams"].([]any); ok {
 			for _, upstream := range upstreams {

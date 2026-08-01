@@ -44,6 +44,83 @@ func (h *Handlers) GetMetricsOverview(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: overview})
 }
 
+func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
+	body, err := fetchCaddyMetrics(c.Request.Context(), h.cfg.CaddyAdminURL+"/metrics")
+	if err != nil {
+		caddyMetricsError(c, err)
+		return
+	}
+	samples, err := parsePrometheusSamples(string(body))
+	if err != nil {
+		caddyMetricsError(c, err)
+		return
+	}
+
+	type dashboardRule struct {
+		id, domain, protocol string
+		listenPort           int
+		enableTLS            bool
+	}
+	ruleRows, err := db.DB.QueryContext(c.Request.Context(), `
+		SELECT caddy_id, COALESCE(domain,''), listen_port, COALESCE(protocol,''), COALESCE(enable_tls,0)
+		FROM lb_rules WHERE enabled=1 ORDER BY caddy_id`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则指标配置失败"})
+		return
+	}
+	defer ruleRows.Close()
+	rules := make([]dashboardRule, 0)
+	for ruleRows.Next() {
+		var rule dashboardRule
+		if err := ruleRows.Scan(&rule.id, &rule.domain, &rule.listenPort, &rule.protocol, &rule.enableTLS); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则指标配置失败"})
+			return
+		}
+		rules = append(rules, rule)
+	}
+	if err := ruleRows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则指标配置失败"})
+		return
+	}
+
+	upstreamRows, err := db.DB.QueryContext(c.Request.Context(), `
+		SELECT rule_id, COALESCE(host,''), COALESCE(port,0), COALESCE(enabled,0)
+		FROM upstreams WHERE enabled=1`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则上游失败"})
+		return
+	}
+	defer upstreamRows.Close()
+	upstreamsByRule := make(map[string][]models.Upstream)
+	for upstreamRows.Next() {
+		var upstream models.Upstream
+		if err := upstreamRows.Scan(&upstream.RuleID, &upstream.Host, &upstream.Port, &upstream.Enabled); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则上游失败"})
+			return
+		}
+		upstreamsByRule[upstream.RuleID] = append(upstreamsByRule[upstream.RuleID], upstream)
+	}
+	if err := upstreamRows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则上游失败"})
+		return
+	}
+
+	ruleMetrics := make(map[string]gin.H, len(rules))
+	for _, rule := range rules {
+		if rule.protocol == "tcp" {
+			ruleMetrics[rule.id] = parseTCPRuleMetricsFromSamples(samples, upstreamsByRule[rule.id])
+		} else {
+			ruleMetrics[rule.id] = parseRuleMetricsFromSamples(samples, ruleMetricTarget{domain: rule.domain, listenPort: rule.listenPort, enableTLS: rule.enableTLS})
+		}
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
+		"global":   parsePrometheusMetricsFromSamples(samples),
+		"hosts":    parseHostMetricsFromSamples(samples),
+		"overview": h.metricsService.GetOverview(),
+		"rules":    ruleMetrics,
+	}})
+}
+
 func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	ruleID := c.Param("caddy_id")
 
@@ -109,6 +186,19 @@ func metricsIntervalModifier(interval string) string {
 	}
 }
 
+func metricsHistoryRange(value string) (string, int) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1h":
+		return "-1 hours", 5
+	case "6h":
+		return "-6 hours", 30
+	case "7d":
+		return "-7 days", 900
+	default:
+		return "-24 hours", 120
+	}
+}
+
 // GetRuleMetricsHistory returns cumulative history rows for one HTTP rule
 // within the requested range (1h/6h/24h/7d). TCP rules have no per-rule
 // traffic counters from caddy-l4 and return an empty list with a note.
@@ -122,14 +212,16 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"protocol": protocol, "supported": false, "rows": []any{}}})
 		return
 	}
-	modifier := metricsIntervalModifier(c.DefaultQuery("range", "24h"))
+	modifier, bucketSeconds := metricsHistoryRange(c.DefaultQuery("range", "24h"))
 	rows, err := db.MetricsDB.Query(`
-		SELECT timestamp, requests_total, requests_2xx, requests_3xx,
-		       requests_4xx, requests_5xx, bytes_in, bytes_out
+		SELECT datetime((CAST(strftime('%s', timestamp) AS INTEGER) / ?) * ?, 'unixepoch'),
+		       MAX(requests_total), MAX(requests_2xx), MAX(requests_3xx),
+		       MAX(requests_4xx), MAX(requests_5xx), MAX(bytes_in), MAX(bytes_out)
 		FROM metrics_history
 		WHERE rule_id = ? AND timestamp > datetime('now', ?)
-		ORDER BY timestamp
-	`, caddyID, modifier)
+		GROUP BY CAST(strftime('%s', timestamp) AS INTEGER) / ?
+		ORDER BY 1
+	`, bucketSeconds, bucketSeconds, caddyID, modifier, bucketSeconds)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取历史指标失败: " + err.Error()})
 		return
@@ -148,9 +240,14 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 	result := []row{}
 	for rows.Next() {
 		var r row
-		var ts time.Time
-		if err := rows.Scan(&ts, &r.Requests, &r.Status2xx, &r.Status3xx, &r.Status4xx, &r.Status5xx, &r.BytesIn, &r.BytesOut); err != nil {
+		var timestamp string
+		if err := rows.Scan(&timestamp, &r.Requests, &r.Status2xx, &r.Status3xx, &r.Status4xx, &r.Status5xx, &r.BytesIn, &r.BytesOut); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取历史指标失败: " + err.Error()})
+			return
+		}
+		ts, err := time.ParseInLocation("2006-01-02 15:04:05", timestamp, time.UTC)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析历史指标时间失败: " + err.Error()})
 			return
 		}
 		r.Timestamp = ts.In(services.CurrentLocation()).Format("2006-01-02 15:04:05")
@@ -160,7 +257,7 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取历史指标失败: " + err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"protocol": protocol, "supported": true, "rows": result}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"protocol": protocol, "supported": true, "bucket_interval_seconds": bucketSeconds, "rows": result}})
 }
 
 func (h *Handlers) GetMetricsHistory(c *gin.Context) {

@@ -63,6 +63,17 @@ func (h *Handlers) GetClusterRegistrationStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "注册状态查询成功", Data: status})
 }
 
+func (h *Handlers) ConfirmClusterRegistration(c *gin.Context) {
+	if !h.requireMaster(c) {
+		return
+	}
+	if err := h.clusterService.ConfirmRegistration(c.Request.Context(), authenticatedClusterToken(c)); err != nil {
+		clusterError(c, http.StatusUnauthorized, "确认集群注册失败", err)
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "集群注册已确认"})
+}
+
 func (h *Handlers) ApproveClusterNode(c *gin.Context) {
 	h.clusterNodeAction(c, "审批", func(id int) error { return h.clusterService.ApproveNode(c.Request.Context(), id) })
 }

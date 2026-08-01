@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE: Lazy Balancer V2
 
 **Generated:** 2026-04-24
-**Stack:** Go 1.26, Caddy v2.11.2, Vue 3, TypeScript, Vite, SQLite
+**Stack:** Go 1.26, Caddy v2.11.4, Vue 3, TypeScript, Vite, SQLite
 
 ## OVERVIEW
 Lazy Balancer V2 is a full-stack load balancer management system that orchestrates Caddy server configurations to provide dynamic routing, health checking, and traffic balancing.

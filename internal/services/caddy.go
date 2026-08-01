@@ -10,9 +10,11 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,10 +31,9 @@ const (
 
 // CaddyService handles Caddy configuration management
 type CaddyService struct {
-	adminURL     string
-	client       *http.Client
-	mu           sync.Mutex
-	backupConfig map[string]interface{}
+	adminURL string
+	client   *http.Client
+	mu       sync.Mutex
 }
 
 func NewCaddyService(adminURL string) *CaddyService {
@@ -58,82 +59,6 @@ func GenerateCaddyID() (string, error) {
 		id[i] = charset[idx.Int64()]
 	}
 	return string(id), nil
-}
-
-// BackupConfig stores the current Caddy configuration for potential rollback
-func (s *CaddyService) BackupConfig() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	config, err := s.GetConfig()
-	if err != nil {
-		s.backupConfig = nil
-		return fmt.Errorf("get Caddy config for backup: %w", err)
-	}
-	if len(config) == 0 {
-		s.backupConfig = nil
-		return errors.New("Caddy config backup is empty")
-	}
-
-	configBytes, err := json.Marshal(config)
-	if err != nil {
-		s.backupConfig = nil
-		return fmt.Errorf("marshal Caddy config backup: %w", err)
-	}
-
-	var backupConfig map[string]interface{}
-	if err := json.Unmarshal(configBytes, &backupConfig); err != nil {
-		s.backupConfig = nil
-		return fmt.Errorf("unmarshal Caddy config backup: %w", err)
-	}
-	if len(backupConfig) == 0 {
-		s.backupConfig = nil
-		return errors.New("Caddy config backup is empty")
-	}
-
-	s.backupConfig = backupConfig
-	log.Printf("Caddy config backed up successfully")
-	return nil
-}
-
-// Rollback restores the Caddy configuration to the previously backed up state
-func (s *CaddyService) Rollback() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.backupConfig == nil {
-		log.Printf("No backup config available for rollback")
-		return fmt.Errorf("no backup config available for rollback")
-	}
-
-	log.Printf("Rolling back Caddy config to backup...")
-
-	data, err := json.Marshal(s.backupConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal rollback config: %w", err)
-	}
-
-	resp, err := s.client.Post(s.adminURL+"/load", "application/json", bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("failed to rollback config: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("rollback failed: %s", string(body))
-	}
-
-	log.Printf("Caddy config rolled back successfully")
-	s.backupConfig = nil
-	return nil
-}
-
-// ClearBackup clears the backup config after successful apply
-func (s *CaddyService) ClearBackup() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.backupConfig = nil
 }
 
 // ApplyConfig pushes configuration to Caddy
@@ -226,8 +151,7 @@ func caddyPayload(config map[string]interface{}) map[string]interface{} {
 	return payload
 }
 
-// ValidateRouteMergedConfig simulates PrependRouteToServer and validates the merged full config
-// This ensures the final merged config (existing routes + new route) is valid before any DB write
+// ValidateRouteMergedConfig validates the full config after inserting a route before the catch-all.
 func (s *CaddyService) ValidateRouteMergedConfig(serverName string, routeConfig map[string]interface{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -277,7 +201,6 @@ func (s *CaddyService) ValidateRouteMergedConfig(serverName string, routeConfig 
 		newRoutes = append(newRoutes, r)
 	}
 
-	// Prepend the new route (same logic as PrependRouteToServer)
 	newRoutes = append(newRoutes, routeConfig)
 
 	if defaultRoute != nil {
@@ -316,136 +239,6 @@ func (s *CaddyService) validateConfigInternal(config map[string]interface{}) err
 	return nil
 }
 
-func (s *CaddyService) DeleteServer(serverName string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	path := fmt.Sprintf("/config/apps/http/servers/%s", serverName)
-	req, err := http.NewRequest("DELETE", s.adminURL+path, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to delete server: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("delete server failed: %s", string(body))
-	}
-
-	return nil
-}
-
-func (s *CaddyService) SetConfigByID(id string, config map[string]interface{}) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	configResp, err := s.client.Get(s.adminURL + "/config/")
-	if err != nil {
-		return fmt.Errorf("failed to get config: %w", err)
-	}
-	var fullConfig map[string]interface{}
-	if err := json.NewDecoder(configResp.Body).Decode(&fullConfig); err != nil {
-		configResp.Body.Close()
-		return fmt.Errorf("failed to decode config: %w", err)
-	}
-	configResp.Body.Close()
-
-	apps, ok := fullConfig["apps"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("apps not found")
-	}
-	httpApp, ok := apps["http"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("http app not found")
-	}
-	servers, ok := httpApp["servers"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("servers not found")
-	}
-
-	replaced := false
-	for serverName, serverData := range servers {
-		server, ok := serverData.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		routes, ok := server["routes"].([]interface{})
-		if !ok {
-			continue
-		}
-		hasMainRoute := false
-		for _, route := range routes {
-			routeMap, routeOK := route.(map[string]interface{})
-			if routeOK && routeMap["@id"] == id {
-				hasMainRoute = true
-				break
-			}
-		}
-		if !hasMainRoute {
-			continue
-		}
-
-		newRoutes := make([]interface{}, 0, len(routes))
-		serverChanged := false
-		inserted := false
-
-		for _, r := range routes {
-			routeMap, ok := r.(map[string]interface{})
-			if !ok {
-				newRoutes = append(newRoutes, r)
-				continue
-			}
-
-			existingID, hasID := routeMap["@id"].(string)
-			if hasID && routeIDBelongsToRule(existingID, id) {
-				if existingID == id && !inserted {
-					newRoutes = append(newRoutes, config)
-					inserted = true
-				}
-				serverChanged = true
-				replaced = true
-				continue
-			}
-			newRoutes = append(newRoutes, r)
-		}
-
-		if serverChanged {
-			server["routes"] = newRoutes
-			servers[serverName] = server
-		}
-	}
-
-	if !replaced {
-		return fmt.Errorf("route with @id '%s' not found in config", id)
-	}
-
-	apps["http"] = httpApp
-	fullConfig["apps"] = apps
-
-	data, err := json.Marshal(fullConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
-	}
-
-	resp, err := s.client.Post(s.adminURL+"/config/", "application/json", bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("failed to apply config: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("set config failed: %s", string(body))
-	}
-
-	return nil
-}
-
 func (s *CaddyService) GetConfigByID(id string) (map[string]interface{}, error) {
 	req, err := http.NewRequest("GET", s.adminURL+"/id/"+id, nil)
 	if err != nil {
@@ -469,247 +262,6 @@ func (s *CaddyService) GetConfigByID(id string) (map[string]interface{}, error) 
 	}
 
 	return result, nil
-}
-
-func (s *CaddyService) PrependRouteToServer(serverName string, routeConfig map[string]interface{}) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	fullConfig, err := s.GetConfig()
-	if err != nil {
-		return fmt.Errorf("failed to get current config: %w", err)
-	}
-
-	apps, ok := fullConfig["apps"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("apps not found in config")
-	}
-	httpApp, ok := apps["http"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("http app not found")
-	}
-	servers, ok := httpApp["servers"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("servers not found")
-	}
-
-	server, ok := servers[serverName].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("server %s not found", serverName)
-	}
-
-	routes, ok := server["routes"].([]interface{})
-	if !ok {
-		routes = []interface{}{}
-	}
-
-	var defaultRoute interface{}
-	newRoutes := make([]interface{}, 0, len(routes)+1)
-
-	for _, r := range routes {
-		if routeMap, ok := r.(map[string]interface{}); ok {
-			if isRunningDefaultRoute(routeMap) {
-				defaultRoute = r
-				continue
-			}
-		}
-		newRoutes = append(newRoutes, r)
-	}
-
-	newRoutes = append(newRoutes, routeConfig)
-
-	if defaultRoute != nil {
-		newRoutes = append(newRoutes, defaultRoute)
-	}
-
-	server["routes"] = newRoutes
-	servers[serverName] = server
-	httpApp["servers"] = servers
-	apps["http"] = httpApp
-	fullConfig["apps"] = apps
-
-	data, err := json.Marshal(fullConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
-	}
-
-	resp, err := s.client.Post(s.adminURL+"/config/", "application/json", bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("failed to apply config: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("prepend route failed: %s", string(body))
-	}
-
-	return nil
-}
-
-// VerifyRouteExists checks if a route with the given @id exists in the Caddy config
-func (s *CaddyService) VerifyRouteExists(caddyID string) error {
-	config, err := s.GetConfig()
-	if err != nil {
-		return fmt.Errorf("failed to get config for verification: %w", err)
-	}
-
-	apps, ok := config["apps"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("apps not found in config")
-	}
-	httpApp, ok := apps["http"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("http app not found")
-	}
-	servers, ok := httpApp["servers"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("servers not found")
-	}
-
-	for _, server := range servers {
-		serverMap, ok := server.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		routes, ok := serverMap["routes"].([]interface{})
-		if !ok {
-			continue
-		}
-		for _, route := range routes {
-			routeMap, ok := route.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if routeMap["@id"] == caddyID {
-				return nil // Found the route
-			}
-		}
-	}
-
-	return fmt.Errorf("route with @id '%s' not found in Caddy config - write may have failed", caddyID)
-}
-
-func (s *CaddyService) ServerExists(serverName string) (bool, error) {
-	config, err := s.GetConfig()
-	if err != nil {
-		return false, err
-	}
-
-	apps, ok := config["apps"].(map[string]interface{})
-	if !ok {
-		return false, nil
-	}
-
-	httpApp, ok := apps["http"].(map[string]interface{})
-	if !ok {
-		return false, nil
-	}
-
-	servers, ok := httpApp["servers"].(map[string]interface{})
-	if !ok {
-		return false, nil
-	}
-
-	_, ok = servers[serverName]
-	return ok, nil
-}
-
-func (s *CaddyService) CreateServerIfNotExists(serverName string, listenPort int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	exists, _ := s.ServerExists(serverName)
-	if exists {
-		return nil
-	}
-
-	server := map[string]interface{}{
-		"listen": []string{fmt.Sprintf(":%d", listenPort)},
-		"routes": []interface{}{},
-	}
-
-	data, err := json.Marshal(server)
-	if err != nil {
-		return fmt.Errorf("failed to marshal server config: %w", err)
-	}
-
-	path := fmt.Sprintf("/config/apps/http/servers/%s", serverName)
-	req, err := http.NewRequest("PUT", s.adminURL+path, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to create server: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("create server failed: %s", string(body))
-	}
-
-	return nil
-}
-
-func (s *CaddyService) RemoveRouteFromServer(serverName string, routeID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	config, err := s.GetConfig()
-	if err != nil {
-		return fmt.Errorf("failed to get config: %w", err)
-	}
-
-	apps, ok := config["apps"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("apps not found in config")
-	}
-
-	httpApp, ok := apps["http"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("http app not found")
-	}
-
-	servers, ok := httpApp["servers"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("servers not found")
-	}
-
-	server, ok := servers[serverName].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-
-	routes, ok := server["routes"].([]interface{})
-	if !ok {
-		return nil
-	}
-
-	filteredRoutes := make([]interface{}, 0, len(routes))
-	for _, r := range routes {
-		routeMap, ok := r.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		existingID, hasID := routeMap["@id"].(string)
-		if hasID && routeIDBelongsToRule(existingID, routeID) {
-			continue
-		}
-		filteredRoutes = append(filteredRoutes, r)
-	}
-
-	server["routes"] = filteredRoutes
-	servers[serverName] = server
-	httpApp["servers"] = servers
-	apps["http"] = httpApp
-	config["apps"] = apps
-
-	return s.applyConfigRaw(config)
 }
 
 func (s *CaddyService) DeleteRouteByID(serverName string, caddyID string) error {
@@ -817,152 +369,6 @@ func (s *CaddyService) GetConfig() (map[string]interface{}, error) {
 	}
 
 	return config, nil
-}
-
-// GetUpstreamHealth returns health status of all upstreams from Caddy
-func (s *CaddyService) GetUpstreamHealth() (map[string]map[string]bool, error) {
-	healthStatus := make(map[string]map[string]bool)
-
-	upstreamHealth := s.getUpstreamHealthFromMetrics()
-
-	resp, err := s.client.Get(s.adminURL + "/config/")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var config map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
-		return nil, err
-	}
-
-	apps, ok := config["apps"].(map[string]interface{})
-	if !ok {
-		return healthStatus, nil
-	}
-
-	if httpApp, ok := apps["http"].(map[string]interface{}); ok {
-		if servers, ok := httpApp["servers"].(map[string]interface{}); ok {
-			for serverName, serverVal := range servers {
-				server, ok := serverVal.(map[string]interface{})
-				if !ok {
-					continue
-				}
-
-				routes, ok := server["routes"].([]interface{})
-				if !ok {
-					continue
-				}
-
-				for _, route := range routes {
-					routeMap, ok := route.(map[string]interface{})
-					if !ok {
-						continue
-					}
-
-					handleGroups, ok := routeMap["handle"].([]interface{})
-					if !ok {
-						continue
-					}
-
-					for _, handleGroup := range handleGroups {
-						handle, ok := handleGroup.(map[string]interface{})
-						if !ok || handle["handler"] != "reverse_proxy" {
-							continue
-						}
-
-						upstreams, ok := handle["upstreams"].([]interface{})
-						if !ok {
-							continue
-						}
-
-						if _, exists := healthStatus[serverName]; !exists {
-							healthStatus[serverName] = make(map[string]bool)
-						}
-						for _, upstream := range upstreams {
-							up, ok := upstream.(map[string]interface{})
-							if !ok {
-								continue
-							}
-
-							dial, _ := up["dial"].(string)
-							if dial == "" {
-								continue
-							}
-							if observedHealthy, ok := upstreamHealth[dial]; ok {
-								healthStatus[serverName][dial] = observedHealthy
-							} else {
-								// No metric observation yet; assume healthy so the UI does not
-								// show everything as unknown while Caddy is still collecting.
-								healthStatus[serverName][dial] = true
-							}
-						}
-
-					}
-				}
-			}
-		}
-	}
-
-	if layer4App, ok := apps["layer4"].(map[string]interface{}); ok {
-		if servers, ok := layer4App["servers"].(map[string]interface{}); ok {
-			for serverName, serverVal := range servers {
-				server, ok := serverVal.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				routes, ok := server["routes"].([]interface{})
-				if !ok {
-					continue
-				}
-				for _, route := range routes {
-					routeMap, ok := route.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					handleGroups, ok := routeMap["handle"].([]interface{})
-					if !ok {
-						continue
-					}
-					for _, handleGroup := range handleGroups {
-						handle, ok := handleGroup.(map[string]interface{})
-						if !ok || handle["handler"] != "proxy" {
-							continue
-						}
-						upstreams, ok := handle["upstreams"].([]interface{})
-						if !ok {
-							continue
-						}
-						if _, exists := healthStatus[serverName]; !exists {
-							healthStatus[serverName] = make(map[string]bool)
-						}
-						for _, upstream := range upstreams {
-							up, ok := upstream.(map[string]interface{})
-							if !ok {
-								continue
-							}
-							dialList, ok := up["dial"].([]interface{})
-							if !ok || len(dialList) == 0 {
-								continue
-							}
-							dial, _ := dialList[0].(string)
-							if dial == "" {
-								continue
-							}
-							if observedHealthy, ok := upstreamHealth[dial]; ok {
-								healthStatus[serverName][dial] = observedHealthy
-							} else {
-								// No metric observation yet; assume healthy.
-								healthStatus[serverName][dial] = true
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return healthStatus, nil
 }
 
 // UpstreamHealthDetail contains detailed health information for an upstream
@@ -1076,7 +482,7 @@ func (s *CaddyService) GetUpstreamHealthDetailed() (map[string]map[string]*Upstr
 							name, _ := dynamicUpstreams["name"].(string)
 							port, _ := dynamicUpstreams["port"].(string)
 							if name != "" {
-								dial := name + ":" + port
+								dial := net.JoinHostPort(name, port)
 
 								detail := &UpstreamHealthDetail{}
 
@@ -1295,6 +701,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 	var filesSnapshot CertFilesSnapshot
 	generationFailure := func(format string, args ...any) map[string]interface{} {
 		err := fmt.Errorf(format, args...)
+		log.Printf("Caddy config generation failed: %v", err)
 		if filesSnapshot != nil {
 			err = errors.Join(err, RestoreCertFiles(filesSnapshot))
 			filesSnapshot = nil
@@ -1425,63 +832,77 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		return generationFailure("close enabled rules: %v", err)
 	}
 
-	// Load upstreams for each rule after closing rules cursor
+	rulesByID := make(map[string]*ruleWithUpstreams, len(allRules))
+	hasCustomRoutes := false
+	hasACMETLS := false
 	for i := range allRules {
-		r := &allRules[i]
-		upstreamRows, err := store.Query(`
-			SELECT host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0)
-			FROM upstreams WHERE rule_id = ? AND enabled = 1
-		`, r.rule.CaddyID)
-		if err != nil {
-			return generationFailure("query upstreams for rule %s: %v", r.rule.CaddyID, err)
+		rulesByID[allRules[i].rule.CaddyID] = &allRules[i]
+		hasCustomRoutes = hasCustomRoutes || allRules[i].rule.CustomRoutesEnabled
+		hasACMETLS = hasACMETLS || (allRules[i].rule.EnableTLS && allRules[i].rule.TLSSource == "acme_dns")
+	}
+
+	upstreamRows, err := store.Query(`
+		SELECT rule_id, host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0)
+		FROM upstreams WHERE enabled = 1 ORDER BY rule_id, id
+	`)
+	if err != nil {
+		return generationFailure("query enabled upstreams: %v", err)
+	}
+	for upstreamRows.Next() {
+		var ruleID string
+		var u upstream
+		if err := upstreamRows.Scan(&ruleID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
+			closeErr := upstreamRows.Close()
+			return generationFailure("scan upstream: %v", errors.Join(err, closeErr))
 		}
-		for upstreamRows.Next() {
-			var u upstream
-			if err := upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
-				closeErr := upstreamRows.Close()
-				return generationFailure("scan upstream for rule %s: %v", r.rule.CaddyID, errors.Join(err, closeErr))
-			}
+		if r := rulesByID[ruleID]; r != nil {
 			r.upstreams = append(r.upstreams, u)
 		}
-		if err := upstreamRows.Err(); err != nil {
-			closeErr := upstreamRows.Close()
-			return generationFailure("iterate upstreams for rule %s: %v", r.rule.CaddyID, errors.Join(err, closeErr))
+	}
+	if err := upstreamRows.Err(); err != nil {
+		closeErr := upstreamRows.Close()
+		return generationFailure("iterate enabled upstreams: %v", errors.Join(err, closeErr))
+	}
+	if err := upstreamRows.Close(); err != nil {
+		return generationFailure("close enabled upstreams: %v", err)
+	}
+
+	if hasCustomRoutes {
+		pathRows, pathErr := store.Query(`
+			SELECT rule_id, sort_order, match_type, path, upstreams_json
+			FROM path_rules ORDER BY rule_id, sort_order, id
+		`)
+		if pathErr != nil {
+			return generationFailure("query path rules: %v", pathErr)
 		}
-		if err := upstreamRows.Close(); err != nil {
-			return generationFailure("close upstreams for rule %s: %v", r.rule.CaddyID, err)
-		}
-		if r.rule.CustomRoutesEnabled {
-			pathRows, pathErr := store.Query(`
-				SELECT sort_order, match_type, path, upstreams_json
-				FROM path_rules WHERE rule_id = ? ORDER BY sort_order, id
-			`, r.rule.CaddyID)
-			if pathErr != nil {
-				return generationFailure("query path rules for rule %s: %v", r.rule.CaddyID, pathErr)
-			}
-			for pathRows.Next() {
-				var pathRule PathRuleConfig
-				var upstreamsJSON sql.NullString
-				if scanErr := pathRows.Scan(&pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &upstreamsJSON); scanErr != nil {
-					closeErr := pathRows.Close()
-					return generationFailure("scan path rule for rule %s: %v", r.rule.CaddyID, errors.Join(scanErr, closeErr))
-				}
-				if upstreamsJSON.Valid {
-					pathUpstreams, unmarshalErr := decodePathUpstreams(upstreamsJSON.String)
-					if unmarshalErr != nil {
-						closeErr := pathRows.Close()
-						return generationFailure("decode path upstreams for rule %s: %v", r.rule.CaddyID, errors.Join(unmarshalErr, closeErr))
-					}
-					pathRule.Upstreams = pathUpstreams
-				}
-				r.rule.PathRules = append(r.rule.PathRules, pathRule)
-			}
-			if err := pathRows.Err(); err != nil {
+		for pathRows.Next() {
+			var ruleID string
+			var pathRule PathRuleConfig
+			var upstreamsJSON sql.NullString
+			if scanErr := pathRows.Scan(&ruleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &upstreamsJSON); scanErr != nil {
 				closeErr := pathRows.Close()
-				return generationFailure("iterate path rules for rule %s: %v", r.rule.CaddyID, errors.Join(err, closeErr))
+				return generationFailure("scan path rule: %v", errors.Join(scanErr, closeErr))
 			}
-			if err := pathRows.Close(); err != nil {
-				return generationFailure("close path rules for rule %s: %v", r.rule.CaddyID, err)
+			r := rulesByID[ruleID]
+			if r == nil || !r.rule.CustomRoutesEnabled {
+				continue
 			}
+			if upstreamsJSON.Valid {
+				pathUpstreams, unmarshalErr := decodePathUpstreams(upstreamsJSON.String)
+				if unmarshalErr != nil {
+					closeErr := pathRows.Close()
+					return generationFailure("decode path upstreams for rule %s: %v", ruleID, errors.Join(unmarshalErr, closeErr))
+				}
+				pathRule.Upstreams = pathUpstreams
+			}
+			r.rule.PathRules = append(r.rule.PathRules, pathRule)
+		}
+		if err := pathRows.Err(); err != nil {
+			closeErr := pathRows.Close()
+			return generationFailure("iterate path rules: %v", errors.Join(err, closeErr))
+		}
+		if err := pathRows.Close(); err != nil {
+			return generationFailure("close path rules: %v", err)
 		}
 	}
 
@@ -1491,6 +912,59 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		}
 	}
 
+	acmeCerts := make(map[string]map[string]CertMaterial)
+	if hasACMETLS {
+		certRows, certErr := store.Query(`
+			SELECT rule_id, domain, cert_pem, key_pem
+			FROM cert_jobs
+			WHERE cert_pem IS NOT NULL AND cert_pem <> ''
+			  AND key_pem IS NOT NULL AND key_pem <> ''
+			ORDER BY updated_at DESC
+		`)
+		if certErr != nil {
+			log.Printf("load ACME certificates: query failed: %v", certErr)
+		} else {
+			for certRows.Next() {
+				var ruleID, domain, certPEM, keyPEM string
+				if scanErr := certRows.Scan(&ruleID, &domain, &certPEM, &keyPEM); scanErr != nil {
+					log.Printf("load ACME certificates: scan failed: %v", scanErr)
+					continue
+				}
+				byDomain := acmeCerts[ruleID]
+				if byDomain == nil {
+					byDomain = make(map[string]CertMaterial)
+					acmeCerts[ruleID] = byDomain
+				}
+				if _, exists := byDomain[domain]; !exists {
+					byDomain[domain] = CertMaterial{RuleID: ruleID, CertPEM: certPEM, KeyPEM: keyPEM}
+				}
+			}
+			if rowsErr := certRows.Err(); rowsErr != nil {
+				log.Printf("load ACME certificates: iteration failed: %v", rowsErr)
+			}
+			if closeErr := certRows.Close(); closeErr != nil {
+				log.Printf("load ACME certificates: close failed: %v", closeErr)
+			}
+		}
+	}
+	resolveACMECert := func(ruleID, domain string) (CertMaterial, bool) {
+		canonicalDomains, canonicalErr := CanonicalACMEDomains(domain)
+		if canonicalErr != nil {
+			return CertMaterial{}, false
+		}
+		byDomain := acmeCerts[ruleID]
+		if material, ok := byDomain[canonicalDomains]; ok {
+			return material, true
+		}
+		for _, singleDomain := range strings.Split(canonicalDomains, ",") {
+			if material, ok := byDomain[singleDomain]; ok {
+				return material, true
+			}
+		}
+		return CertMaterial{}, false
+	}
+
+	availableCerts := make(map[string]CertMaterial)
 	materials := make([]CertMaterial, 0)
 	for _, ru := range allRules {
 		r := ru.rule
@@ -1498,13 +972,16 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 			continue
 		}
 		if r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
-			materials = append(materials, CertMaterial{RuleID: r.CaddyID, CertPEM: r.TLSCert, KeyPEM: r.TLSKey})
+			material := CertMaterial{RuleID: r.CaddyID, CertPEM: r.TLSCert, KeyPEM: r.TLSKey}
+			availableCerts[r.CaddyID] = material
+			materials = append(materials, material)
 			continue
 		}
 		if r.TLSSource == "acme_dns" {
-			certPEM, keyPEM, issued := loadACMECertificateFromStore(store, r.CaddyID, r.Domain)
-			if issued {
-				materials = append(materials, CertMaterial{RuleID: r.CaddyID, CertPEM: certPEM, KeyPEM: keyPEM})
+			material, available := resolveACMECert(r.CaddyID, r.Domain)
+			if available {
+				availableCerts[r.CaddyID] = material
+				materials = append(materials, material)
 			}
 		}
 	}
@@ -1624,7 +1101,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		var upstreamDial []string
 		for _, u := range ups {
 			if u.Enabled {
-				upstreamDial = append(upstreamDial, fmt.Sprintf("%s:%d", u.Host, u.Port))
+				upstreamDial = append(upstreamDial, joinUpstreamAddress(u.Host, u.Port))
 			}
 		}
 
@@ -1734,17 +1211,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		var tlsPolicies []interface{}
 		for _, ru := range rules {
 			r := ru.rule
-			if !r.EnableTLS {
-				continue
-			}
-			hasCert := false
-			if r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
-				hasCert = true
-			} else if r.TLSSource == "acme_dns" {
-				_, _, issued := loadACMECertificateFromStore(store, r.CaddyID, r.Domain)
-				hasCert = issued
-			}
-			if hasCert {
+			if _, hasCert := availableCerts[r.CaddyID]; hasCert {
 				domainHosts := splitAndTrim(r.Domain)
 				tlsPolicies = append(tlsPolicies, map[string]interface{}{
 					"match": map[string]interface{}{
@@ -1775,9 +1242,10 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 	for _, ru := range allRules {
 		r := ru.rule
 		if r.Protocol == "http" && r.EnableTLS && r.TLSHTTPRedirect {
-			// Only redirect to HTTPS if the certificate is actually available.
-			if r.TLSSource == "acme_dns" && !isACMECertIssuedFromStore(store, r.CaddyID, r.Domain) {
-				continue
+			if r.TLSSource == "acme_dns" {
+				if _, hasCert := availableCerts[r.CaddyID]; !hasCert {
+					continue
+				}
 			}
 			domainHosts := splitAndTrim(r.Domain)
 			if len(domainHosts) > 0 {
@@ -1809,22 +1277,13 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		if !r.EnableTLS {
 			continue
 		}
-		certPath, keyPath := CertFilePaths(r.CaddyID)
-		if r.TLSSource == "manual" && r.TLSCert != "" && r.TLSKey != "" {
+		if _, hasCert := availableCerts[r.CaddyID]; hasCert {
+			certPath, keyPath := CertFilePaths(r.CaddyID)
 			tlsCertFiles = append(tlsCertFiles, map[string]interface{}{
 				"certificate": certPath,
 				"key":         keyPath,
 				"tags":        []string{r.CaddyID},
 			})
-		} else if r.TLSSource == "acme_dns" {
-			_, _, issued := loadACMECertificateFromStore(store, r.CaddyID, r.Domain)
-			if issued {
-				tlsCertFiles = append(tlsCertFiles, map[string]interface{}{
-					"certificate": certPath,
-					"key":         keyPath,
-					"tags":        []string{r.CaddyID},
-				})
-			}
 		}
 	}
 
@@ -2302,6 +1761,11 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			"error": "no enabled upstreams",
 		}
 	}
+	if rule.DynamicDNS && len(enabledUpstreams) > 1 {
+		return map[string]interface{}{
+			"error": fmt.Sprintf("dynamic DNS requires exactly one enabled upstream, got %d", len(enabledUpstreams)),
+		}
+	}
 
 	servers := make(map[string]interface{})
 
@@ -2335,7 +1799,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 				}
 				upstreamList = append(upstreamList, upstreamEntry)
 			} else {
-				dial := fmt.Sprintf("%s:%d", u.Host, u.Port)
+				dial := joinUpstreamAddress(u.Host, u.Port)
 				upstreamEntry := map[string]interface{}{"dial": dial}
 				if u.MaxConnections > 0 {
 					upstreamEntry["max_requests"] = u.MaxConnections
@@ -2544,15 +2008,11 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 				}
 				pathHandle, err := buildHTTPHandleChain(rule, pathUpstreams)
 				if err != nil {
-					continue
-				}
-				pathSpec := pathRule.Path
-				if pathRule.MatchType == "prefix" {
-					pathSpec = strings.TrimRight(pathSpec, "/*") + "/*"
+					return map[string]interface{}{"error": err.Error()}
 				}
 				pathMatcher := map[string]interface{}{
 					"host": domainHosts,
-					"path": []string{pathSpec},
+					"path": pathMatcherSpecs(pathRule),
 				}
 				if rule.IPACLMode == "allow" {
 					pathMatcher["client_ip"] = map[string]interface{}{"ranges": rule.IPACLList}
@@ -2661,8 +2121,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 	return conf
 }
 
-// GenerateRouteObject generates a Caddy route object (not full config) for a single rule
-// This is used for @id-based incremental updates via SetConfigByID/PatchConfigByID
+// GenerateRouteObject generates a Caddy route object (not full config) for a single rule.
 func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) {
 	if rule.Strategy == "" {
 		rule.Strategy = "weighted_round_robin"
@@ -2747,13 +2206,9 @@ func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, 
 			if handleErr != nil {
 				return nil, nil, handleErr
 			}
-			pathSpec := pathRule.Path
-			if pathRule.MatchType == "prefix" {
-				pathSpec = strings.TrimRight(pathSpec, "/*") + "/*"
-			}
 			matcher := map[string]interface{}{
 				"host": domainHosts,
-				"path": []string{pathSpec},
+				"path": pathMatcherSpecs(pathRule),
 			}
 			if rule.IPACLMode == "allow" {
 				matcher["client_ip"] = map[string]interface{}{"ranges": rule.IPACLList}
@@ -2798,6 +2253,21 @@ func tagRuleRoute(route map[string]interface{}, ruleID, suffix string) {
 	}
 }
 
+func pathMatcherSpecs(pathRule PathRuleConfig) []string {
+	if pathRule.MatchType != "prefix" {
+		return []string{pathRule.Path}
+	}
+	root := strings.TrimRight(pathRule.Path, "/*")
+	if root == "" {
+		return []string{"/*"}
+	}
+	return []string{root, root + "/*"}
+}
+
+func joinUpstreamAddress(host string, port int) string {
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
 func decodePathUpstreams(raw string) ([]UpstreamConfig, error) {
 	var stored []struct {
 		Address  string `json:"address"`
@@ -2830,6 +2300,9 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 	}
 	if len(enabledUpstreams) == 0 {
 		return nil, fmt.Errorf("no enabled upstreams")
+	}
+	if rule.DynamicDNS && len(enabledUpstreams) > 1 {
+		return nil, fmt.Errorf("dynamic DNS requires exactly one enabled upstream, got %d", len(enabledUpstreams))
 	}
 
 	var handleChain []interface{}
@@ -2868,7 +2341,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 				"versions": versions,
 			})
 		} else {
-			entry := map[string]interface{}{"dial": fmt.Sprintf("%s:%d", upstream.Host, upstream.Port)}
+			entry := map[string]interface{}{"dial": joinUpstreamAddress(upstream.Host, upstream.Port)}
 			if upstream.MaxConnections > 0 {
 				entry["max_requests"] = upstream.MaxConnections
 			}
@@ -3049,7 +2522,7 @@ func buildTCPProxyRoute(rule SingleRuleConfig) map[string]interface{} {
 		if !u.Enabled {
 			continue
 		}
-		dial := fmt.Sprintf("%s:%d", u.Host, u.Port)
+		dial := joinUpstreamAddress(u.Host, u.Port)
 		upstreamEntry := map[string]interface{}{
 			"dial": []string{dial},
 		}

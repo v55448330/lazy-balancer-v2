@@ -136,29 +136,6 @@ func (p *Provider) deleteRecord(ctx context.Context, zone string, recordID uint6
 	return err
 }
 
-func (p *Provider) findRecordID(ctx context.Context, zone, subDomain string) (uint64, error) {
-	req := dnspod.NewDescribeRecordListRequest()
-	req.Domain = common.StringPtr(zone)
-	req.Subdomain = common.StringPtr(subDomain)
-
-	resp, err := p.client.DescribeRecordListWithContext(ctx, req)
-	if err != nil {
-		if ctx.Err() != nil {
-			err = ctx.Err()
-		}
-		return 0, fmt.Errorf("DescribeRecordList failed: %w", err)
-	}
-	if resp.Response == nil || resp.Response.RecordList == nil {
-		return 0, nil
-	}
-	for _, r := range resp.Response.RecordList {
-		if r.Type != nil && *r.Type == "TXT" && r.Name != nil && *r.Name == subDomain {
-			return *r.RecordId, nil
-		}
-	}
-	return 0, nil
-}
-
 func (p *Provider) createRecord(ctx context.Context, zone, subDomain, value string, ttl int) (uint64, error) {
 	req := dnspod.NewCreateRecordRequest()
 	req.Domain = common.StringPtr(zone)
@@ -179,24 +156,4 @@ func (p *Provider) createRecord(ctx context.Context, zone, subDomain, value stri
 		return 0, fmt.Errorf("CreateRecord returned no record ID")
 	}
 	return *resp.Response.RecordId, nil
-}
-
-func (p *Provider) modifyRecord(ctx context.Context, zone string, recordID uint64, subDomain, value string, ttl int) error {
-	req := dnspod.NewModifyRecordRequest()
-	req.Domain = common.StringPtr(zone)
-	req.RecordId = common.Uint64Ptr(recordID)
-	req.RecordType = common.StringPtr("TXT")
-	req.RecordLine = common.StringPtr("默认")
-	req.Value = common.StringPtr(value)
-	req.SubDomain = common.StringPtr(subDomain)
-	req.TTL = common.Uint64Ptr(uint64(ttl))
-
-	_, err := p.client.ModifyRecordWithContext(ctx, req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return fmt.Errorf("ModifyRecord failed: %w", err)
-	}
-	return nil
 }

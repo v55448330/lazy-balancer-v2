@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"time"
 )
 
 type Config struct {
@@ -30,8 +29,7 @@ type Config struct {
 	// Log
 
 	// JWT
-	JWTSecret string        `json:"jwt_secret"`
-	JWTExpire time.Duration `json:"jwt_expire"`
+	JWTSecret string `json:"jwt_secret"`
 
 	// Admin
 }
@@ -48,7 +46,6 @@ func Load(path string) *Config {
 		NodeName:        getEnv("NODE_NAME", "node-1"),
 		JWTSecret:       getEnv("JWT_SECRET", ""),
 		Version:         getEnv("APP_VERSION", "2.0.6"),
-		JWTExpire:       24 * time.Hour,
 	}
 
 	// Load from config file if provided

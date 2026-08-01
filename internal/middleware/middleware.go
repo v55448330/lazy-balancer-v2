@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -30,6 +29,9 @@ import (
 )
 
 var internalMCPAuthSecret = rand.Text()
+var jwtAuthenticationQuery = func(query string, args ...any) *sql.Row {
+	return db.DB.QueryRow(query, args...)
+}
 
 const revokedTokenTimeFormat = "2006-01-02T15:04:05Z"
 
@@ -44,7 +46,7 @@ func (cleanup *revokedJTICleanup) run(database *sql.DB, now time.Time) error {
 	if !cleanup.lastRun.IsZero() && now.Sub(cleanup.lastRun) < time.Hour {
 		return nil
 	}
-	if _, err := database.Exec("DELETE FROM revoked_jti WHERE expires_at <= ?", now.UTC().Format(revokedTokenTimeFormat)); err != nil {
+	if _, err := database.Exec("DELETE FROM revoked_jti WHERE expires_at<=?", now.UTC().Format(revokedTokenTimeFormat)); err != nil {
 		return fmt.Errorf("cleanup revoked JWT IDs: %w", err)
 	}
 	cleanup.lastRun = now
@@ -56,6 +58,9 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 	r := gin.New()
 	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
+		if !shouldLogRequest(param.StatusCode, param.Latency) {
+			return ""
+		}
 		return fmt.Sprintf("[%s] %s | %3d | %13v | %15s | %-7s %#v\n",
 			param.TimeStamp.In(services.CurrentLocation()).Format("2006/01/02 15:04:05"),
 			param.Method, param.StatusCode, param.Latency, param.ClientIP, param.Method, param.Path)
@@ -116,6 +121,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.POST("/cluster/register", h.RegisterClusterNode)
 		v1.GET("/cluster/register/:id/status", registrationAuth(db.DB), h.GetClusterRegistrationStatus)
 		v1.GET("/cluster/sync/snapshot", clusterTokenAuth(db.DB), h.GetClusterSnapshot)
+		v1.POST("/cluster/registration/confirm", clusterTokenAuth(db.DB), h.ConfirmClusterRegistration)
 		v1.POST("/cluster/nodes/report", clusterTokenAuth(db.DB), h.ReportClusterNode)
 
 		v1.Use(apiKeyAuth(cfg))
@@ -217,6 +223,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/cluster/status", h.GetClusterStatus)
 
 				// Metrics
+				business.GET("/metrics/dashboard", h.GetMetricsDashboard)
 				business.GET("/metrics/overview", h.GetMetricsOverview)
 				business.GET("/metrics/rule/:caddy_id", h.GetRuleMetrics)
 				business.GET("/metrics/history", h.GetMetricsHistory)
@@ -260,6 +267,17 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	services.StartAuditCleanup()
 
 	return r
+}
+
+func shouldLogRequest(statusCode int, latency time.Duration) bool {
+	switch services.CurrentLogLevel() {
+	case "warn":
+		return statusCode >= http.StatusBadRequest || latency >= time.Second
+	case "error":
+		return statusCode >= http.StatusInternalServerError
+	default:
+		return true
+	}
 }
 
 func auditMiddleware() gin.HandlerFunc {
@@ -313,7 +331,6 @@ func corsMiddleware() gin.HandlerFunc {
 }
 
 func jwtAuth(cfg *config.Config) gin.HandlerFunc {
-	cleanup := &revokedJTICleanup{}
 	return func(c *gin.Context) {
 		if c.GetString("auth_type") == "api_key" {
 			c.Next()
@@ -350,11 +367,6 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 		now := time.Now().UTC()
-		if err := cleanup.run(db.DB, now); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "认证状态检查失败"})
-			c.Abort()
-			return
-		}
 		revocationSource := tokenString
 		if jti, exists := claims["jti"].(string); exists && jti != "" {
 			revocationSource = jti
@@ -362,17 +374,6 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		}
 		revocationHash := sha256.Sum256([]byte(revocationSource))
 		encodedRevocationHash := hex.EncodeToString(revocationHash[:])
-		var revoked int
-		if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM revoked_jti WHERE jti_hash=? AND expires_at > ?)", encodedRevocationHash, now.Format(revokedTokenTimeFormat)).Scan(&revoked); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "认证状态检查失败"})
-			c.Abort()
-			return
-		}
-		if revoked != 0 {
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录状态已失效，请重新登录"})
-			c.Abort()
-			return
-		}
 		if exp, valid := claims["exp"].(float64); valid {
 			c.Set("token_revocation_hash", encodedRevocationHash)
 			c.Set("token_expires_at", time.Unix(int64(exp), 0).UTC())
@@ -389,8 +390,16 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		var dbUsername, dbRole string
 		var dbEnabled bool
 		var passwordVersion int64
-		if err := db.DB.QueryRow("SELECT username, role, COALESCE(is_enabled,1), password_version FROM users WHERE id = ?", int64(userIDFloat)).Scan(&dbUsername, &dbRole, &dbEnabled, &passwordVersion); err != nil || !dbEnabled {
+		var revoked bool
+		if err := jwtAuthenticationQuery(`SELECT username, role, COALESCE(is_enabled,1), password_version,
+			EXISTS(SELECT 1 FROM revoked_jti WHERE jti_hash=? AND expires_at>?)
+			FROM users WHERE id=?`, encodedRevocationHash, now.Format(revokedTokenTimeFormat), int64(userIDFloat)).Scan(&dbUsername, &dbRole, &dbEnabled, &passwordVersion, &revoked); err != nil || !dbEnabled {
 			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在或已禁用"})
+			c.Abort()
+			return
+		}
+		if revoked {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录状态已失效，请重新登录"})
 			c.Abort()
 			return
 		}
@@ -502,9 +511,7 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 			}
 		}
 
-		if _, err := db.DB.Exec("UPDATE api_keys SET last_used = datetime('now') WHERE id = ?", keyID); err != nil {
-			log.Printf("update API key last_used for key %d: %v", keyID, err)
-		}
+		db.MarkAPIKeyUsed(keyID)
 		c.Set("user_id", userID)
 		c.Set("username", username)
 		c.Set("role", role)

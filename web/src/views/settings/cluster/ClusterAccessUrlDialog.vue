@@ -80,6 +80,10 @@ const validateAccessUrl = (_rule: unknown, value: string, callback: (error?: Err
       callback(new Error('访问地址不能包含片段'))
       return
     }
+    if (parsed.search) {
+      callback(new Error('访问地址不能包含查询参数'))
+      return
+    }
     callback()
   } catch (error: unknown) {
     if (error instanceof TypeError) {
