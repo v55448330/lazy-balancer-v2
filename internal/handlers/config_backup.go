@@ -421,11 +421,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		if len(sets) > 0 {
 			if _, err := tx.ExecContext(ctx, "UPDATE global_config SET "+joinStrings(sets, ",")+" WHERE id=1", values...); err != nil {
 				err = session.abort(err)
-		auditAction := "导入失败"
-		if importFailurePhase(err) == importPhaseQueue {
-			auditAction = "导入部分失败"
-		}
-		recordAudit(c, auditAction, "配置备份", err.Error())
+				recordAudit(c, "导入失败", "配置备份", err.Error())
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入全局配置失败，已回滚: " + err.Error()})
 				return
 			}
@@ -454,7 +450,11 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		if importFailurePhase(err) == importPhaseQueue {
 			message = "配置已导入但证书任务恢复失败: " + err.Error()
 		}
-		recordAudit(c, "导入失败", "配置备份", err.Error())
+		auditAction := "导入失败"
+		if importFailurePhase(err) == importPhaseQueue {
+			auditAction = "导入部分失败"
+		}
+		recordAudit(c, auditAction, "配置备份", err.Error())
 		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{"summary": counts}})
 		return
 	}

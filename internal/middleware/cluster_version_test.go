@@ -339,7 +339,10 @@ func TestClusterVersionTriggers_refreshCachedSnapshotWhenCertificateEntersAndLea
 	if _, err := database.Exec("UPDATE global_config SET is_master=1, cluster_version=0 WHERE id=1"); err != nil {
 		t.Fatalf("seed master: %v", err)
 	}
-	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem) VALUES ('status_rule','example.com','downloaded','certificate','key')`); err != nil {
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id, name, protocol, listen_port, domain, enable_tls, tls_source, enabled) VALUES ('status_rule', 'status rule', 'http', 443, 'example.com', 1, 'acme_dns', 1)`); err != nil {
+		t.Fatalf("seed enabled ACME rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,expires_at) VALUES ('status_rule','example.com','downloaded','certificate','key',datetime('now','+60 days'))`); err != nil {
 		t.Fatalf("seed downloaded certificate: %v", err)
 	}
 	if err := installClusterVersionTriggers(database); err != nil {
@@ -350,8 +353,8 @@ func TestClusterVersionTriggers_refreshCachedSnapshotWhenCertificateEntersAndLea
 	if err != nil {
 		t.Fatalf("build downloaded snapshot: %v", err)
 	}
-	if len(downloadedSnapshot.Certs) != 0 {
-		t.Fatalf("downloaded snapshot certificates=%d, want 0", len(downloadedSnapshot.Certs))
+	if len(downloadedSnapshot.Certs) != 1 || downloadedSnapshot.Certs[0].RuleID != "status_rule" {
+		t.Fatalf("downloaded snapshot certificates=%+v, want status_rule", downloadedSnapshot.Certs)
 	}
 
 	// When
