@@ -26,6 +26,7 @@ type Handlers struct {
 	syncService       *services.SyncService
 	clusterService    *services.ClusterService
 	caProviderService *services.CAProviderService
+	removeCertFiles   func(string) error
 	caddyOpMu         sync.Mutex
 }
 
@@ -36,6 +37,13 @@ type Dependencies struct {
 	SyncService       *services.SyncService
 	ClusterService    *services.ClusterService
 	CAProviderService *services.CAProviderService
+}
+
+func (h *Handlers) removeRuleCertFiles(ruleID string) error {
+	if h.removeCertFiles != nil {
+		return h.removeCertFiles(ruleID)
+	}
+	return services.RemoveCertFiles(ruleID)
 }
 
 func NewHandlers(deps Dependencies) *Handlers {

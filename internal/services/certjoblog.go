@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -11,7 +12,7 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-const certJobLogDir = "/app/logs"
+var certJobLogDir = "/app/logs"
 
 const maxRotatedFiles = 5
 
@@ -110,4 +111,19 @@ func WriteCertJobLogByRule(ruleID, level, stage, message string) {
 		return
 	}
 	NewCertJobFileLogger(ruleID).write(level, stage, message)
+}
+
+func RemoveCertJobLogFiles(ruleID string) error {
+	path := CertJobLogPath(ruleID)
+	var cleanupErrors []error
+	for index := 0; index <= maxRotatedFiles; index++ {
+		candidate := path
+		if index > 0 {
+			candidate = fmt.Sprintf("%s.%d", path, index)
+		}
+		if err := os.Remove(candidate); err != nil && !os.IsNotExist(err) {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("删除证书任务日志 %s: %w", candidate, err))
+		}
+	}
+	return errors.Join(cleanupErrors...)
 }

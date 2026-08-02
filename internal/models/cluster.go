@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"errors"
 	"net/url"
 	"time"
@@ -152,10 +153,19 @@ type ClusterAPIKey struct {
 }
 
 type ClusterCertificate struct {
-	RuleID    string `json:"rule_id"`
-	CertPEM   string `json:"cert_pem"`
-	KeyPEM    string `json:"key_pem"`
-	ExpiresAt string `json:"expires_at"`
+	RuleID       string `json:"rule_id"`
+	Domain       string `json:"domain,omitempty"`
+	CertPEM      string `json:"cert_pem"`
+	KeyPEM       string `json:"key_pem"`
+	ExpiresAt    string `json:"expires_at"`
+	CAProviderID int    `json:"ca_provider_id,omitempty"`
+	SourceStatus string `json:"source_status,omitempty"`
+}
+
+type ClusterACMEState struct {
+	CAProviders        []CAProvider        `json:"ca_providers"`
+	CertificateConfigs []CertificateConfig `json:"certificate_configs"`
+	DNSOwnership       json.RawMessage     `json:"dns_ownership"`
 }
 
 type ClusterSnapshot struct {
@@ -170,6 +180,7 @@ type ClusterSnapshot struct {
 	BasicSettings    ClusterBasicSettings `json:"basic_settings"`
 	CaddyConfig      *string              `json:"caddy_config,omitempty"`
 	Certs            []ClusterCertificate `json:"certs"`
+	ACME             *ClusterACMEState    `json:"acme,omitempty"`
 }
 
 type ClusterNodeView struct {

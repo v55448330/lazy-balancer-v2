@@ -7,7 +7,10 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"lazy-balancer-v2/internal/db"
@@ -168,7 +171,84 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 	if snapshot.Certs, err = s.snapshotCertificates(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
+	if snapshot.ACME, err = s.snapshotACME(ctx, store); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
 	return snapshot, nil
+}
+
+func (s *ClusterService) snapshotACME(ctx context.Context, store snapshotStore) (*models.ClusterACMEState, error) {
+	state := &models.ClusterACMEState{}
+	rows, err := store.QueryContext(ctx, `SELECT id,name,provider,directory_url,COALESCE(credentials,''),COALESCE(max_concurrent,1),COALESCE(min_interval_ms,2000),COALESCE(enabled,1),created_at,updated_at FROM ca_providers ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("读取快照 CA 提供商: %w", err)
+	}
+	for rows.Next() {
+		var provider models.CAProvider
+		if err := rows.Scan(&provider.ID, &provider.Name, &provider.Provider, &provider.DirectoryURL, &provider.Credentials, &provider.MaxConcurrent, &provider.MinIntervalMS, &provider.Enabled, &provider.CreatedAt, &provider.UpdatedAt); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("扫描快照 CA 提供商: %w", err)
+		}
+		state.CAProviders = append(state.CAProviders, provider)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("关闭 CA 提供商结果: %w", err)
+	}
+
+	rows, err = store.QueryContext(ctx, `SELECT id,name,COALESCE(dns_provider,'dnspod'),COALESCE(dns_credentials,''),COALESCE(enabled,1),created_at,updated_at FROM certificate_configs ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("读取快照证书配置: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var config models.CertificateConfig
+		if err := rows.Scan(&config.ID, &config.Name, &config.DNSProvider, &config.DNSCredentials, &config.Enabled, &config.CreatedAt, &config.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("扫描快照证书配置: %w", err)
+		}
+		state.CertificateConfigs = append(state.CertificateConfigs, config)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历快照证书配置: %w", err)
+	}
+	dataDir, err := clusterSnapshotDataDir(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	ownership, err := os.ReadFile(filepath.Join(dataDir, "acme_dns_ownership.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		ownership = []byte(`{"version":1,"records":[]}`)
+	} else if err != nil {
+		return nil, fmt.Errorf("读取 DNS 所有权状态: %w", err)
+	}
+	if !json.Valid(ownership) {
+		return nil, errors.New("DNS 所有权状态不是有效 JSON")
+	}
+	state.DNSOwnership = ownership
+	return state, nil
+}
+
+func clusterSnapshotDataDir(ctx context.Context, store snapshotStore) (string, error) {
+	var sequence int
+	var name, databasePath string
+	if err := store.QueryRowContext(ctx, "PRAGMA database_list").Scan(&sequence, &name, &databasePath); err != nil {
+		return "", fmt.Errorf("读取集群数据库路径: %w", err)
+	}
+	if databasePath == "" {
+		return "", errors.New("无法确定集群数据目录")
+	}
+	return filepath.Dir(databasePath), nil
+}
+
+func clusterDatabaseDir(database *sql.DB) (string, error) {
+	var sequence int
+	var name, databasePath string
+	if err := database.QueryRow("PRAGMA database_list").Scan(&sequence, &name, &databasePath); err != nil {
+		return "", fmt.Errorf("读取集群数据库路径: %w", err)
+	}
+	if databasePath == "" {
+		return "", errors.New("无法确定集群数据目录")
+	}
+	return filepath.Dir(databasePath), nil
 }
 
 func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore) ([]models.LbRule, error) {
@@ -289,19 +369,56 @@ func (s *ClusterService) snapshotAPIKeys(ctx context.Context, store snapshotStor
 }
 
 func (s *ClusterService) snapshotCertificates(ctx context.Context, store snapshotStore) ([]models.ClusterCertificate, error) {
-	rows, err := store.QueryContext(ctx, `SELECT caddy_id, tls_cert, tls_key, '' FROM lb_rules WHERE enable_tls=1 AND tls_source='manual' AND COALESCE(tls_cert,'')<>'' AND COALESCE(tls_key,'')<>''
-		UNION ALL SELECT rule_id, cert_pem, key_pem, COALESCE(expires_at,'') FROM cert_jobs WHERE status='issued' AND COALESCE(cert_pem,'')<>'' AND COALESCE(key_pem,'')<>'' ORDER BY 1`)
+	rows, err := store.QueryContext(ctx, `SELECT caddy_id, tls_cert, tls_key FROM lb_rules WHERE enable_tls=1 AND tls_source='manual' AND COALESCE(tls_cert,'')<>'' AND COALESCE(tls_key,'')<>'' ORDER BY caddy_id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照证书: %w", err)
 	}
-	defer rows.Close()
 	certs := make([]models.ClusterCertificate, 0)
 	for rows.Next() {
 		var cert models.ClusterCertificate
-		if err := rows.Scan(&cert.RuleID, &cert.CertPEM, &cert.KeyPEM, &cert.ExpiresAt); err != nil {
+		if err := rows.Scan(&cert.RuleID, &cert.CertPEM, &cert.KeyPEM); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("扫描快照证书: %w", err)
 		}
 		certs = append(certs, cert)
 	}
-	return certs, rows.Err()
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("关闭手工证书结果: %w", err)
+	}
+
+	rows, err = store.QueryContext(ctx, `SELECT r.caddy_id,r.domain,j.domain,j.cert_pem,j.key_pem,COALESCE(j.expires_at,''),COALESCE(j.ca_provider_id,0),j.status
+		FROM lb_rules r JOIN cert_jobs j ON j.rule_id=r.caddy_id
+		WHERE r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' AND j.status<>'disabled'
+		AND COALESCE(j.cert_pem,'')<>'' AND COALESCE(j.key_pem,'')<>'' AND datetime(j.expires_at)>datetime('now')
+		ORDER BY r.caddy_id,COALESCE(j.updated_at,j.created_at) DESC,j.id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("读取快照 ACME 证书: %w", err)
+	}
+	defer rows.Close()
+	selected := make(map[string]struct{})
+	for rows.Next() {
+		var cert models.ClusterCertificate
+		var ruleDomain string
+		if err := rows.Scan(&cert.RuleID, &ruleDomain, &cert.Domain, &cert.CertPEM, &cert.KeyPEM, &cert.ExpiresAt, &cert.CAProviderID, &cert.SourceStatus); err != nil {
+			return nil, fmt.Errorf("扫描快照 ACME 证书: %w", err)
+		}
+		if _, exists := selected[cert.RuleID]; exists {
+			continue
+		}
+		canonicalRuleDomain, err := CanonicalACMEDomains(ruleDomain)
+		if err != nil {
+			return nil, fmt.Errorf("规范化快照规则 %s 域名: %w", cert.RuleID, err)
+		}
+		canonicalJobDomain, err := CanonicalACMEDomains(cert.Domain)
+		if err != nil || canonicalJobDomain != canonicalRuleDomain {
+			continue
+		}
+		cert.Domain = canonicalJobDomain
+		selected[cert.RuleID] = struct{}{}
+		certs = append(certs, cert)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历快照 ACME 证书: %w", err)
+	}
+	return certs, nil
 }

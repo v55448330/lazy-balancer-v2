@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -426,6 +427,7 @@ func (q *caQueue) execute(execution queueExecution) {
 	}()
 
 	if err := execution.ctx.Err(); err != nil {
+		q.handleExecutionCancellation(execution)
 		return
 	}
 
@@ -438,10 +440,20 @@ func (q *caQueue) execute(execution queueExecution) {
 	if err := q.executeFn(execution.ctx, item, execution.provider); err != nil {
 		log.Printf("CA queue execution failed for job %d rule %s: %v", item.jobID, item.ruleID, err)
 		if execution.ctx.Err() != nil {
-			requeueCanceledJob(item.jobID)
+			q.handleExecutionCancellation(execution)
 			return
 		}
 		handleQueueExecutionError(item.jobID, err)
+	}
+}
+
+func (q *caQueue) handleExecutionCancellation(execution queueExecution) {
+	if q.ctx.Err() != nil {
+		requeueCanceledJob(execution.item.jobID)
+		return
+	}
+	if errors.Is(execution.ctx.Err(), context.DeadlineExceeded) {
+		failJob(execution.item.jobID, "证书签发执行超时")
 	}
 }
 
@@ -566,6 +578,15 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 }
 func failJob(jobID int, message string) {
 	result, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=COALESCE(renewal_attempts,0)+1, updated_at=datetime('now') WHERE id=? AND status NOT IN ('issued','failed','disabled')", message, jobID)
+	recordFailedJobTransition(jobID, message, result, err)
+}
+
+func failJobFromStatus(jobID int, expectedStatus, message string) {
+	result, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=COALESCE(renewal_attempts,0)+1, updated_at=datetime('now') WHERE id=? AND status=?", message, jobID, expectedStatus)
+	recordFailedJobTransition(jobID, message, result, err)
+}
+
+func recordFailedJobTransition(jobID int, message string, result sql.Result, err error) {
 	if err != nil {
 		log.Printf("CA queue: failed to mark job %d as failed: %v", jobID, err)
 		return

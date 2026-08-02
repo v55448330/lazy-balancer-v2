@@ -424,6 +424,39 @@ func TestVerifySnapshotIntegrityRejectsSameAppliedVersion(t *testing.T) {
 	}
 }
 
+func TestVerifySnapshotIntegrity_rejects_tamperedACMECredentials(t *testing.T) {
+	// Given
+	const token = "cluster-token"
+	snapshot := models.ClusterSnapshot{
+		Version: 3, SchemaVersion: CurrentSnapshotSchema, MinReaderVersion: CurrentSnapshotSchema,
+		ACME: &models.ClusterACMEState{CAProviders: []models.CAProvider{{ID: 7, Credentials: `{"eab_kid":"kid","eab_hmac_key":"secret"}`}}},
+	}
+	snapshot = signTestSnapshot(snapshot, token)
+
+	// When
+	snapshot.ACME.CAProviders[0].Credentials = `{"eab_kid":"kid","eab_hmac_key":"tampered"}`
+	err := verifySnapshotIntegrity(snapshot, token, 0)
+
+	// Then
+	if err == nil || !strings.Contains(err.Error(), "签名校验失败") {
+		t.Fatalf("tampered ACME credentials error=%v", err)
+	}
+}
+
+func TestClusterSnapshot_decode_ignores_unknownACMEFields(t *testing.T) {
+	// Given
+	payload := []byte(`{"version":2,"acme":{"ca_providers":[{"id":7,"name":"provider"}],"future_field":{"enabled":true}},"future_root":"ignored"}`)
+
+	// When
+	var snapshot models.ClusterSnapshot
+	err := json.Unmarshal(payload, &snapshot)
+
+	// Then
+	if err != nil || snapshot.ACME == nil || len(snapshot.ACME.CAProviders) != 1 || snapshot.ACME.CAProviders[0].ID != 7 {
+		t.Fatalf("decoded snapshot=%#v error=%v", snapshot, err)
+	}
+}
+
 func TestSyncService_Pull_rejectsSchemaV1SnapshotWithoutWritingDatabase(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)

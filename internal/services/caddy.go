@@ -3,8 +3,10 @@ package services
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/x509"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -697,6 +699,23 @@ func GenerateCaddyConfig(overrides ...*models.UpdateConfigRequest) map[string]in
 	return generateCaddyConfigFromStore(db.DB, overrides...)
 }
 
+func certificateCoversDomains(certPEM string, domains []string) bool {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return false
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return false
+	}
+	for _, domain := range domains {
+		if err := certificate.VerifyHostname(domain); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.UpdateConfigRequest) map[string]interface{} {
 	var filesSnapshot CertFilesSnapshot
 	generationFailure := func(format string, args ...any) map[string]interface{} {
@@ -961,6 +980,12 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		}
 		for _, singleDomain := range strings.Split(canonicalDomains, ",") {
 			if material, ok := byDomain[singleDomain]; ok {
+				return material, true
+			}
+		}
+		domains := strings.Split(canonicalDomains, ",")
+		for _, material := range byDomain {
+			if certificateCoversDomains(material.CertPEM, domains) {
 				return material, true
 			}
 		}

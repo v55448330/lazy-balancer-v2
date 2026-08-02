@@ -1559,6 +1559,16 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置应用失败，规则未删除: " + err.Error()})
 		return
 	}
+	if err := h.removeRuleCertFiles(caddyID); err != nil {
+		certPath, keyPath := services.CertFilePaths(caddyID)
+		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
+		recordAudit(c, "清理失败", "规则证书文件", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("残留路径：%s, %s", certPath, keyPath), err.Error()))
+		if restoreErr != nil {
+			log.Printf("CRITICAL: DeleteRule certificate cleanup and runtime restore failed for caddy_id=%s: cleanup=%v restore=%v", caddyID, err, restoreErr)
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理规则证书文件失败，删除已回滚: " + errors.Join(err, restoreErr).Error()})
+		return
+	}
 	if err := tx.Commit(); err != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		log.Printf("DeleteRule transaction commit failed for caddy_id=%s: %v", caddyID, err)
@@ -1581,8 +1591,10 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		}
 	}
 
-	services.RemoveCertFiles(caddyID)
 	services.RemoveRuleLogFiles(caddyID)
+	if err := services.RemoveCertJobLogFiles(caddyID); err != nil {
+		log.Printf("DeleteRule cert-job log cleanup failed for caddy_id=%s: %v", caddyID, err)
+	}
 
 	recordAudit(c, "删除", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("协议：%s", protocol), fmt.Sprintf("端口：%d", listenPort), domain))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_delete"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
@@ -1866,9 +1878,9 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 
 		var jobStatus, jobMsg string
 		var jobExpiresAt sql.NullTime
-		var jobID int
+		var jobID, jobProviderID int
 		hasJob := false
-		err := db.DB.QueryRow("SELECT id, status, COALESCE(message,''), expires_at FROM cert_jobs WHERE rule_id=? AND domain=? ORDER BY id DESC LIMIT 1", caddyID, domain).Scan(&jobID, &jobStatus, &jobMsg, &jobExpiresAt)
+		err := db.DB.QueryRow("SELECT id, status, COALESCE(message,''), expires_at, COALESCE(ca_provider_id,0) FROM cert_jobs WHERE rule_id=? AND domain=? ORDER BY id DESC LIMIT 1", caddyID, domain).Scan(&jobID, &jobStatus, &jobMsg, &jobExpiresAt, &jobProviderID)
 		if err == nil {
 			hasJob = true
 		} else if err != sql.ErrNoRows {
@@ -1886,6 +1898,9 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			expiryPtr = &expiry
 		}
 		action := ResolveEnableCertJobAction(hasJob, jobStatus, expiryPtr, time.Now(), renewalDays)
+		if hasJob && jobProviderID != caProviderID {
+			action = EnableCertJobRetry
+		}
 
 		switch action {
 		case EnableCertJobCreate:

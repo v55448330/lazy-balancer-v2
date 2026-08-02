@@ -312,8 +312,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// let the retry scheduler handle the next attempt.
 	logger.Log("creating_account", fmt.Sprintf("测试 CA 提供商 %s (%s) 连通性", provider.Name, provider.Provider))
 	if err := NewCAProviderService(s.dataDir).TestCAProviderWithContext(ctx, provider.ID); err != nil {
-		logger.Log("failed", fmt.Sprintf("CA 提供商测试失败: %v", err))
-		failJob(jobID, fmt.Sprintf("CA 提供商测试失败: %v", err))
+		failJobFromStatus(jobID, "creating_account", fmt.Sprintf("CA 提供商测试失败: %v", err))
 		return fmt.Errorf("CA provider test failed: %w", err)
 	}
 	logger.Log("creating_account", "CA 提供商测试通过")

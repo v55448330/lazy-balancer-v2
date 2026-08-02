@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -59,25 +60,28 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		return err
 	}
 	if err := removeMissingSnapshotCerts(previous.Certs, snapshot.Certs); err != nil {
-		return errors.Join(fmt.Errorf("删除本地旧证书: %w", err), restoreSnapshotCerts(previous.Certs, snapshot.Certs))
+		return errors.Join(fmt.Errorf("删除本地旧证书: %w", err), s.restoreSnapshotArtifacts(previous, snapshot))
 	}
 	if err := materializeSnapshotCerts(snapshot.Certs); err != nil {
-		return errors.Join(fmt.Errorf("写入同步证书: %w", err), restoreSnapshotCerts(previous.Certs, snapshot.Certs))
+		return errors.Join(fmt.Errorf("写入同步证书: %w", err), s.restoreSnapshotArtifacts(previous, snapshot))
+	}
+	if err := s.materializeSnapshotDNSOwnership(snapshot.ACME); err != nil {
+		return errors.Join(fmt.Errorf("写入同步 DNS 所有权状态: %w", err), s.restoreSnapshotArtifacts(previous, snapshot))
 	}
 	if err := s.caddy.ApplyConfig(generateCaddyConfigFromStore(tx)); err != nil {
-		return errors.Join(fmt.Errorf("重载 Caddy 失败，数据库已回滚: %w", err), restoreSnapshotCerts(previous.Certs, snapshot.Certs))
+		return errors.Join(fmt.Errorf("重载 Caddy 失败，数据库已回滚: %w", err), s.restoreSnapshotArtifacts(previous, snapshot))
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE global_config SET applied_version=?, cluster_version=?, sync_fingerprint=?, last_sync=datetime('now'), last_sync_error='' WHERE id=1`, snapshot.Version, snapshot.Version, snapshot.Fingerprint); err != nil {
 		return errors.Join(
 			fmt.Errorf("记录同步状态: %w", err),
-			restoreSnapshotCerts(previous.Certs, snapshot.Certs),
+			s.restoreSnapshotArtifacts(previous, snapshot),
 			wrapSnapshotRestoreError(s.caddy.ApplyConfig(GenerateCaddyConfig())),
 		)
 	}
 	if err := tx.Commit(); err != nil {
 		return errors.Join(
 			fmt.Errorf("提交快照事务: %w", err),
-			restoreSnapshotCerts(previous.Certs, snapshot.Certs),
+			s.restoreSnapshotArtifacts(previous, snapshot),
 			wrapSnapshotRestoreError(s.caddy.ApplyConfig(GenerateCaddyConfig())),
 		)
 	}
@@ -93,6 +97,53 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	}
 	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs)), "基本设置：已同步", fmt.Sprintf("Caddy 全局配置：%s", caddySync)), "")
 	RecordAuditLog("system", "重载", "Caddy配置", "同步应用后自动重载", "")
+	return nil
+}
+
+func (s *SyncService) restoreSnapshotArtifacts(previous, current models.ClusterSnapshot) error {
+	return errors.Join(restoreSnapshotCerts(previous.Certs, current.Certs), s.materializeSnapshotDNSOwnership(previous.ACME))
+}
+
+func (s *SyncService) materializeSnapshotDNSOwnership(acme *models.ClusterACMEState) error {
+	if acme == nil {
+		return nil
+	}
+	if !json.Valid(acme.DNSOwnership) {
+		return errors.New("DNS 所有权状态不是有效 JSON")
+	}
+	dataDir := ""
+	if s.cfg != nil {
+		dataDir = s.cfg.DataDir
+	}
+	if dataDir == "" {
+		var err error
+		dataDir, err = clusterDatabaseDir(s.db)
+		if err != nil {
+			return err
+		}
+	}
+	path := filepath.Join(dataDir, "acme_dns_ownership.json")
+	temporary, err := os.CreateTemp(dataDir, ".acme-dns-ownership-*")
+	if err != nil {
+		return fmt.Errorf("创建 DNS 所有权临时文件: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0600); err != nil {
+		return errors.Join(fmt.Errorf("设置 DNS 所有权文件权限: %w", err), temporary.Close())
+	}
+	if _, err := temporary.Write(acme.DNSOwnership); err != nil {
+		return errors.Join(fmt.Errorf("写入 DNS 所有权临时文件: %w", err), temporary.Close())
+	}
+	if err := temporary.Sync(); err != nil {
+		return errors.Join(fmt.Errorf("同步 DNS 所有权临时文件: %w", err), temporary.Close())
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("关闭 DNS 所有权临时文件: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("替换 DNS 所有权状态: %w", err)
+	}
 	return nil
 }
 
@@ -124,9 +175,25 @@ func wrapSnapshotRestoreError(err error) error {
 }
 
 func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
-	for _, statement := range []string{"DELETE FROM path_rules", "DELETE FROM upstreams", "DELETE FROM cert_jobs", "DELETE FROM lb_rules", "DELETE FROM api_keys", "DELETE FROM users"} {
+	statements := []string{"DELETE FROM path_rules", "DELETE FROM upstreams", "DELETE FROM cert_jobs", "DELETE FROM lb_rules", "DELETE FROM api_keys", "DELETE FROM users"}
+	if snapshot.ACME != nil {
+		statements = append(statements, "DELETE FROM certificate_configs", "DELETE FROM ca_providers")
+	}
+	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("清理快照数据: %w", err)
+		}
+	}
+	if snapshot.ACME != nil {
+		for _, provider := range snapshot.ACME.CAProviders {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO ca_providers (id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`, provider.ID, provider.Name, provider.Provider, provider.DirectoryURL, nullableString(provider.Credentials), provider.MaxConcurrent, provider.MinIntervalMS, provider.Enabled, provider.CreatedAt, provider.UpdatedAt); err != nil {
+				return fmt.Errorf("写入快照 CA 提供商 %d: %w", provider.ID, err)
+			}
+		}
+		for _, config := range snapshot.ACME.CertificateConfigs {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO certificate_configs (id,name,dns_provider,dns_credentials,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`, config.ID, config.Name, config.DNSProvider, nullableString(config.DNSCredentials), config.Enabled, config.CreatedAt, nullableTime(config.UpdatedAt.NullTime)); err != nil {
+				return fmt.Errorf("写入快照证书配置 %d: %w", config.ID, err)
+			}
 		}
 	}
 	if err := insertSnapshotRules(ctx, tx, snapshot.Rules); err != nil {
@@ -147,7 +214,11 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 		}
 	}
 	for _, cert := range snapshot.Certs {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO cert_jobs (rule_id,domain,status,message,expires_at,cert_pem,key_pem) SELECT ?,COALESCE(domain,''),'issued','从主节点同步',?,?,? FROM lb_rules WHERE caddy_id=? AND tls_source='acme_dns'`, cert.RuleID, nullableString(cert.ExpiresAt), cert.CertPEM, cert.KeyPEM, cert.RuleID); err != nil {
+		message := "从主节点同步"
+		if cert.SourceStatus != "" {
+			message += "，源任务状态：" + cert.SourceStatus
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO cert_jobs (rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id) SELECT ?,COALESCE(NULLIF(?,''),domain),'issued',?,?,?,?,? FROM lb_rules WHERE caddy_id=? AND tls_source='acme_dns'`, cert.RuleID, cert.Domain, message, nullableString(cert.ExpiresAt), cert.CertPEM, cert.KeyPEM, cert.CAProviderID, cert.RuleID); err != nil {
 			return fmt.Errorf("写入快照证书 %s: %w", cert.RuleID, err)
 		}
 	}
