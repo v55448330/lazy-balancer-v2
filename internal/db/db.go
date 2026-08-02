@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -52,12 +51,14 @@ func GetDB() *sql.DB {
 }
 
 func Initialize(dataDir string) (err error) {
-	// Create data directory
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := secureDataDirectory(dataDir); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
 	dbPath := filepath.Join(dataDir, "lazy-balancer.db")
+	if err := prepareSQLiteDatabase(dbPath); err != nil {
+		return fmt.Errorf("failed to secure database file: %w", err)
+	}
 
 	database, err := openDatabase("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=30000&_synchronous=NORMAL&_txlock=immediate")
 	if err != nil {
@@ -121,6 +122,9 @@ func Initialize(dataDir string) (err error) {
 		return fmt.Errorf("failed to initialize audit database: %w", initErr)
 	}
 	auditDB = AuditDB
+	if err := secureSQLiteArtifacts(dbPath); err != nil {
+		return fmt.Errorf("failed to secure database artifacts: %w", err)
+	}
 	SetDB(database)
 	startAPIKeyLastUsedFlusher()
 
@@ -672,6 +676,9 @@ func runMigrations() error {
 	}
 	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_status_expires ON cert_jobs(status, expires_at)"); err != nil {
 		return fmt.Errorf("failed to index cert_jobs expiration: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_updated_id_expires ON cert_jobs(rule_id, updated_at DESC, id DESC, expires_at)"); err != nil {
+		return fmt.Errorf("failed to index cluster certificate selection: %w", err)
 	}
 
 	// Normalize ca_available_after to SQLite canonical UTC datetime format.

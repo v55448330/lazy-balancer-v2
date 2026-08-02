@@ -80,7 +80,7 @@ func RecordAuditLog(username, action, resource, detail, ipAddress string) {
 	}
 	if _, err := db.AuditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address) VALUES (?, ?, ?, ?, ?)",
 		username, action, resource, detail, ipAddress); err != nil {
-		log.Printf("audit log write failed: %v", err)
+		Logf("error", "audit log write failed: %v", err)
 	}
 }
 

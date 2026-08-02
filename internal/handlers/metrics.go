@@ -55,6 +55,7 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 		caddyMetricsError(c, err)
 		return
 	}
+	metricsIndex := buildPrometheusMetricsIndex(samples)
 
 	type dashboardRule struct {
 		id, domain, protocol string
@@ -109,9 +110,9 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 	for _, rule := range rules {
 		metrics := emptyRuleMetrics()
 		if rule.enabled && rule.protocol == "tcp" {
-			metrics = parseTCPRuleMetricsFromSamples(samples, upstreamsByRule[rule.id])
+			metrics = metricsIndex.tcpRuleMetrics(upstreamsByRule[rule.id])
 		} else if rule.enabled {
-			metrics = parseRuleMetricsFromSamples(samples, ruleMetricTarget{domain: rule.domain, listenPort: rule.listenPort, enableTLS: rule.enableTLS})
+			metrics = metricsIndex.ruleMetrics(ruleMetricTarget{domain: rule.domain, listenPort: rule.listenPort, enableTLS: rule.enableTLS})
 		} else {
 			metrics["enabled"] = false
 		}
@@ -119,8 +120,8 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 		ruleMetrics[rule.id] = metrics
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
-		"global":   parsePrometheusMetricsFromSamples(samples),
-		"hosts":    parseHostMetricsFromSamples(samples),
+		"global":   metricsIndex.globalMetrics(),
+		"hosts":    metricsIndex.hostMetrics(),
 		"overview": h.metricsService.GetOverview(),
 		"rules":    ruleMetrics,
 	}})

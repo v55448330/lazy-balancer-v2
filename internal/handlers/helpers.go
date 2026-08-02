@@ -659,6 +659,234 @@ type ruleMetricTarget struct {
 	enableTLS  bool
 }
 
+type ruleMetricsAggregate struct {
+	requestsTotal    int64
+	requestsInFlight int64
+	status2xx        int64
+	status3xx        int64
+	status4xx        int64
+	status5xx        int64
+	bytesIn          int64
+	bytesOut         int64
+}
+
+type prometheusMetricsIndex struct {
+	global        ruleMetricsAggregate
+	goroutines    int64
+	hosts         map[string]*ruleMetricsAggregate
+	httpHosts     map[string]*ruleMetricsAggregate
+	httpBareHosts map[string]*ruleMetricsAggregate
+	tcpUpstreams  map[string]*ruleMetricsAggregate
+}
+
+func buildPrometheusMetricsIndex(samples []prometheusSample) prometheusMetricsIndex {
+	index := prometheusMetricsIndex{
+		hosts:         make(map[string]*ruleMetricsAggregate),
+		httpHosts:     make(map[string]*ruleMetricsAggregate),
+		httpBareHosts: make(map[string]*ruleMetricsAggregate),
+		tcpUpstreams:  make(map[string]*ruleMetricsAggregate),
+	}
+	for _, sample := range samples {
+		index.addSample(sample)
+	}
+	return index
+}
+
+func (index prometheusMetricsIndex) globalMetrics() models.CaddyMetrics {
+	return models.CaddyMetrics{
+		RequestsTotal:    index.global.requestsTotal,
+		RequestsInFlight: index.global.requestsInFlight,
+		Status2xx:        index.global.status2xx,
+		Status3xx:        index.global.status3xx,
+		Status4xx:        index.global.status4xx,
+		Status5xx:        index.global.status5xx,
+		BytesIn:          index.global.bytesIn,
+		BytesOut:         index.global.bytesOut,
+		Goroutines:       index.goroutines,
+	}
+}
+
+func (index prometheusMetricsIndex) hostMetrics() []models.HostMetrics {
+	result := make([]models.HostMetrics, 0, len(index.hosts))
+	for host, metrics := range index.hosts {
+		result = append(result, models.HostMetrics{
+			Host:             host,
+			RequestsTotal:    metrics.requestsTotal,
+			RequestsInFlight: metrics.requestsInFlight,
+			Status2xx:        metrics.status2xx,
+			Status3xx:        metrics.status3xx,
+			Status4xx:        metrics.status4xx,
+			Status5xx:        metrics.status5xx,
+			BytesIn:          metrics.bytesIn,
+			BytesOut:         metrics.bytesOut,
+		})
+	}
+	return result
+}
+
+func (index prometheusMetricsIndex) ruleMetrics(target ruleMetricTarget) gin.H {
+	if target.domain == "" {
+		return emptyRuleMetrics()
+	}
+	hosts := ruleMetricHosts(target)
+	var result ruleMetricsAggregate
+	for host := range hosts {
+		result.add(index.httpHosts[host])
+		result.add(index.httpBareHosts[host])
+	}
+	for host := range hosts {
+		bareHost, _, err := net.SplitHostPort(host)
+		if err != nil {
+			continue
+		}
+		if _, ok := hosts[bareHost]; ok {
+			result.subtract(index.httpHosts[host])
+		}
+	}
+	return result.ruleMetrics(true)
+}
+
+func (index prometheusMetricsIndex) tcpRuleMetrics(upstreams []models.Upstream) gin.H {
+	var result ruleMetricsAggregate
+	for _, upstream := range upstreams {
+		if upstream.Enabled {
+			result.add(index.tcpUpstreams[fmt.Sprintf("%s:%d", upstream.Host, upstream.Port)])
+		}
+	}
+	return result.ruleMetrics(false)
+}
+
+func (metrics *ruleMetricsAggregate) add(other *ruleMetricsAggregate) {
+	if other == nil {
+		return
+	}
+	metrics.requestsTotal += other.requestsTotal
+	metrics.requestsInFlight += other.requestsInFlight
+	metrics.status2xx += other.status2xx
+	metrics.status3xx += other.status3xx
+	metrics.status4xx += other.status4xx
+	metrics.status5xx += other.status5xx
+	metrics.bytesIn += other.bytesIn
+	metrics.bytesOut += other.bytesOut
+}
+
+func (metrics *ruleMetricsAggregate) observeHTTP(name string, value float64) {
+	switch {
+	case strings.HasPrefix(name, "caddy_http_requests_total{"):
+		metrics.requestsTotal += int64(value)
+	case strings.HasPrefix(name, "caddy_http_request_duration_seconds_count{"):
+		v := int64(value)
+		switch bucket, _ := classifyStatusCode(extractLabel(name, "code")); bucket {
+		case "status_2xx":
+			metrics.status2xx += v
+		case "status_3xx":
+			metrics.status3xx += v
+		case "status_4xx":
+			metrics.status4xx += v
+		case "status_5xx":
+			metrics.status5xx += v
+		}
+	case strings.HasPrefix(name, "caddy_http_requests_in_flight{"):
+		metrics.requestsInFlight += int64(value)
+	case strings.Contains(name, "caddy_http_request_size_bytes_sum"):
+		metrics.bytesIn += int64(value)
+	case strings.Contains(name, "caddy_http_response_size_bytes_sum"):
+		metrics.bytesOut += int64(value)
+	}
+}
+
+func (metrics *ruleMetricsAggregate) subtract(other *ruleMetricsAggregate) {
+	if other == nil {
+		return
+	}
+	metrics.requestsTotal -= other.requestsTotal
+	metrics.requestsInFlight -= other.requestsInFlight
+	metrics.status2xx -= other.status2xx
+	metrics.status3xx -= other.status3xx
+	metrics.status4xx -= other.status4xx
+	metrics.status5xx -= other.status5xx
+	metrics.bytesIn -= other.bytesIn
+	metrics.bytesOut -= other.bytesOut
+}
+
+func (metrics ruleMetricsAggregate) ruleMetrics(includeHealthy bool) gin.H {
+	result := gin.H{
+		"requests_total":     metrics.requestsTotal,
+		"requests_in_flight": metrics.requestsInFlight,
+		"status_2xx":         metrics.status2xx,
+		"status_3xx":         metrics.status3xx,
+		"status_4xx":         metrics.status4xx,
+		"status_5xx":         metrics.status5xx,
+		"bytes_in":           metrics.bytesIn,
+		"bytes_out":          metrics.bytesOut,
+	}
+	if includeHealthy {
+		result["healthy"] = false
+	}
+	return result
+}
+
+func ruleMetricHosts(target ruleMetricTarget) map[string]struct{} {
+	hosts := make(map[string]struct{})
+	for _, domain := range strings.Split(target.domain, ",") {
+		domain = strings.TrimSpace(domain)
+		if domain == "" {
+			continue
+		}
+		hosts[domain] = struct{}{}
+		if host, _, err := net.SplitHostPort(domain); err == nil {
+			hosts[host] = struct{}{}
+			continue
+		}
+		hosts[net.JoinHostPort(domain, strconv.Itoa(target.listenPort))] = struct{}{}
+		if target.enableTLS {
+			hosts[net.JoinHostPort(domain, "443")] = struct{}{}
+		} else if target.listenPort == 80 || target.listenPort == 0 {
+			hosts[net.JoinHostPort(domain, "80")] = struct{}{}
+		}
+	}
+	return hosts
+}
+
+func (index *prometheusMetricsIndex) addSample(sample prometheusSample) {
+	name, value := sample.name, sample.value
+	var metric ruleMetricsAggregate
+	metric.observeHTTP(name, value)
+	index.global.add(&metric)
+	if name == "go_goroutines" {
+		index.goroutines = int64(value)
+	}
+
+	if host := extractLabel(name, "host"); host != "" {
+		index.aggregateFor(index.hosts, host).add(&metric)
+		index.aggregateFor(index.httpHosts, host).add(&metric)
+		if bareHost, _, err := net.SplitHostPort(host); err == nil {
+			index.aggregateFor(index.httpBareHosts, bareHost).add(&metric)
+		}
+	}
+
+	if upstream := extractLabel(name, "upstream"); upstream != "" {
+		aggregate := index.aggregateFor(index.tcpUpstreams, upstream)
+		switch {
+		case strings.HasPrefix(name, "caddy_layer4_proxy_connections_total{"),
+			strings.HasPrefix(name, "caddy_layer4_proxy_connections_total "):
+			aggregate.requestsTotal += int64(value)
+		case strings.HasPrefix(name, "caddy_layer4_proxy_active_connections{"),
+			strings.HasPrefix(name, "caddy_layer4_proxy_active_connections "):
+			aggregate.requestsInFlight += int64(value)
+		}
+	}
+}
+
+func (index *prometheusMetricsIndex) aggregateFor(aggregates map[string]*ruleMetricsAggregate, key string) *ruleMetricsAggregate {
+	aggregate := aggregates[key]
+	if aggregate == nil {
+		aggregate = &ruleMetricsAggregate{}
+		aggregates[key] = aggregate
+	}
+	return aggregate
+}
+
 func parsePrometheusSamples(body string) ([]prometheusSample, error) {
 	var samples []prometheusSample
 	for lineNumber, line := range strings.Split(body, "\n") {
@@ -691,39 +919,7 @@ func parsePrometheusMetrics(body string) (models.CaddyMetrics, error) {
 }
 
 func parsePrometheusMetricsFromSamples(samples []prometheusSample) models.CaddyMetrics {
-	m := models.CaddyMetrics{}
-	for _, sample := range samples {
-		name, value := sample.name, sample.value
-		switch {
-		case strings.HasPrefix(name, "caddy_http_requests_total{"):
-			v := int64(value)
-			m.RequestsTotal += v
-		case strings.HasPrefix(name, "caddy_http_request_duration_seconds_count{"):
-			code := extractLabel(name, "code")
-			v := int64(value)
-			switch bucket, _ := classifyStatusCode(code); bucket {
-			case "status_2xx":
-				m.Status2xx += v
-			case "status_3xx":
-				m.Status3xx += v
-			case "status_4xx":
-				m.Status4xx += v
-			case "status_5xx":
-				m.Status5xx += v
-			}
-		case strings.HasPrefix(name, "caddy_http_requests_in_flight{"):
-			m.RequestsInFlight += int64(value)
-		case name == "go_goroutines":
-			m.Goroutines = int64(value)
-		}
-		if strings.Contains(name, "caddy_http_request_size_bytes_sum") {
-			m.BytesIn += int64(value)
-		}
-		if strings.Contains(name, "caddy_http_response_size_bytes_sum") {
-			m.BytesOut += int64(value)
-		}
-	}
-	return m
+	return buildPrometheusMetricsIndex(samples).globalMetrics()
 }
 
 func parseHostMetrics(body string) ([]models.HostMetrics, error) {
@@ -735,49 +931,7 @@ func parseHostMetrics(body string) ([]models.HostMetrics, error) {
 }
 
 func parseHostMetricsFromSamples(samples []prometheusSample) []models.HostMetrics {
-	hostMap := make(map[string]*models.HostMetrics)
-	for _, sample := range samples {
-		name, value := sample.name, sample.value
-
-		host := extractLabel(name, "host")
-		if host == "" {
-			continue
-		}
-		if _, ok := hostMap[host]; !ok {
-			hostMap[host] = &models.HostMetrics{Host: host}
-		}
-		h := hostMap[host]
-
-		switch {
-		case strings.HasPrefix(name, "caddy_http_requests_total{"):
-			v := int64(value)
-			h.RequestsTotal += v
-		case strings.HasPrefix(name, "caddy_http_request_duration_seconds_count{"):
-			code := extractLabel(name, "code")
-			v := int64(value)
-			switch bucket, _ := classifyStatusCode(code); bucket {
-			case "status_2xx":
-				h.Status2xx += v
-			case "status_3xx":
-				h.Status3xx += v
-			case "status_4xx":
-				h.Status4xx += v
-			case "status_5xx":
-				h.Status5xx += v
-			}
-		case strings.HasPrefix(name, "caddy_http_requests_in_flight{"):
-			h.RequestsInFlight += int64(value)
-		case strings.Contains(name, "caddy_http_request_size_bytes_sum"):
-			h.BytesIn += int64(value)
-		case strings.Contains(name, "caddy_http_response_size_bytes_sum"):
-			h.BytesOut += int64(value)
-		}
-	}
-	result := make([]models.HostMetrics, 0, len(hostMap))
-	for _, h := range hostMap {
-		result = append(result, *h)
-	}
-	return result
+	return buildPrometheusMetricsIndex(samples).hostMetrics()
 }
 
 func extractLabel(metricName string, label string) string {
@@ -802,44 +956,7 @@ func parseTCPRuleMetricsFromPrometheus(body string, upstreams []models.Upstream)
 }
 
 func parseTCPRuleMetricsFromSamples(samples []prometheusSample, upstreams []models.Upstream) gin.H {
-	result := emptyRuleMetrics()
-	delete(result, "healthy")
-	upstreamSet := make(map[string]struct{})
-	for _, u := range upstreams {
-		if u.Enabled {
-			upstreamSet[fmt.Sprintf("%s:%d", u.Host, u.Port)] = struct{}{}
-		}
-	}
-	if len(upstreamSet) == 0 {
-		return result
-	}
-
-	var connectionsTotal, activeConnections int64
-
-	for _, sample := range samples {
-		name, value := sample.name, sample.value
-
-		upstream := extractLabel(name, "upstream")
-		if upstream == "" {
-			continue
-		}
-		if _, ok := upstreamSet[upstream]; !ok {
-			continue
-		}
-
-		switch {
-		case strings.HasPrefix(name, "caddy_layer4_proxy_connections_total{"),
-			strings.HasPrefix(name, "caddy_layer4_proxy_connections_total "):
-			connectionsTotal += int64(value)
-		case strings.HasPrefix(name, "caddy_layer4_proxy_active_connections{"),
-			strings.HasPrefix(name, "caddy_layer4_proxy_active_connections "):
-			activeConnections += int64(value)
-		}
-	}
-
-	result["requests_total"] = connectionsTotal
-	result["requests_in_flight"] = activeConnections
-	return result
+	return buildPrometheusMetricsIndex(samples).tcpRuleMetrics(upstreams)
 }
 
 func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protocol string, enableTLS bool) (gin.H, error) {
@@ -851,68 +968,7 @@ func parseRuleMetricsFromPrometheus(body, domain string, listenPort int, protoco
 }
 
 func parseRuleMetricsFromSamples(samples []prometheusSample, target ruleMetricTarget) gin.H {
-	result := emptyRuleMetrics()
-	if target.domain == "" {
-		return result
-	}
-
-	domains := strings.Split(target.domain, ",")
-	hostSet := make(map[string]struct{})
-	for _, d := range domains {
-		d = strings.TrimSpace(d)
-		if d == "" {
-			continue
-		}
-		hostSet[d] = struct{}{}
-		if host, _, err := net.SplitHostPort(d); err == nil {
-			hostSet[host] = struct{}{}
-		} else {
-			hostSet[net.JoinHostPort(d, strconv.Itoa(target.listenPort))] = struct{}{}
-			if target.enableTLS {
-				hostSet[net.JoinHostPort(d, "443")] = struct{}{}
-			} else if target.listenPort == 80 || target.listenPort == 0 {
-				hostSet[net.JoinHostPort(d, "80")] = struct{}{}
-			}
-		}
-	}
-
-	for _, sample := range samples {
-		name, value := sample.name, sample.value
-
-		host := extractLabel(name, "host")
-		if host == "" {
-			continue
-		}
-		if _, ok := hostSet[host]; !ok {
-			bareHost, _, err := net.SplitHostPort(host)
-			if err != nil {
-				continue
-			}
-			if _, ok := hostSet[bareHost]; !ok {
-				continue
-			}
-		}
-
-		switch {
-		case strings.HasPrefix(name, "caddy_http_requests_total{"):
-			v := int64(value)
-			result["requests_total"] = result["requests_total"].(int64) + v
-		case strings.HasPrefix(name, "caddy_http_request_duration_seconds_count{"):
-			code := extractLabel(name, "code")
-			v := int64(value)
-			if bucket, ok := classifyStatusCode(code); ok {
-				result[bucket] = result[bucket].(int64) + v
-			}
-		case strings.HasPrefix(name, "caddy_http_requests_in_flight{"):
-			result["requests_in_flight"] = result["requests_in_flight"].(int64) + int64(value)
-		case strings.Contains(name, "caddy_http_request_size_bytes_sum"):
-			result["bytes_in"] = result["bytes_in"].(int64) + int64(value)
-		case strings.Contains(name, "caddy_http_response_size_bytes_sum"):
-			result["bytes_out"] = result["bytes_out"].(int64) + int64(value)
-		}
-	}
-
-	return result
+	return buildPrometheusMetricsIndex(samples).ruleMetrics(target)
 }
 
 func classifyStatusCode(code string) (string, bool) {

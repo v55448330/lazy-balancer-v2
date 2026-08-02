@@ -139,6 +139,13 @@ export interface APIResponse<T = never> {
   data?: T
 }
 
+export interface CertJobsPage<TJob> {
+  readonly list: readonly TJob[]
+  readonly total: number
+  readonly page: number
+  readonly page_size: number
+}
+
 export interface ApiResponse<T = never> extends Omit<APIResponse<T>, 'data'> {
   data: T
 }

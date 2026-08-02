@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/x509"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -132,23 +134,28 @@ func TestClusterVersionMiddleware_rolls_back_business_write_when_version_bump_fa
 
 func TestClusterVersionTriggers_bump_for_snapshot_insert_update_delete(t *testing.T) {
 	tests := []struct {
-		name   string
-		seed   string
-		insert string
-		update string
-		delete string
+		name       string
+		seed       string
+		insert     string
+		insertArgs []any
+		update     string
+		delete     string
 	}{
 		{name: "lb_rules", insert: `INSERT INTO lb_rules (caddy_id,name,protocol,listen_port) VALUES ('matrix_rule','rule','http',8080)`, update: `UPDATE lb_rules SET name='updated' WHERE caddy_id='matrix_rule'`, delete: `DELETE FROM lb_rules WHERE caddy_id='matrix_rule'`},
 		{name: "upstreams", seed: `INSERT INTO lb_rules (caddy_id,name,protocol,listen_port) VALUES ('matrix_parent','parent','http',8080)`, insert: `INSERT INTO upstreams (rule_id,host,port) VALUES ('matrix_parent','127.0.0.1',80)`, update: `UPDATE upstreams SET host='127.0.0.2' WHERE rule_id='matrix_parent'`, delete: `DELETE FROM upstreams WHERE rule_id='matrix_parent'`},
 		{name: "path_rules", seed: `INSERT INTO lb_rules (caddy_id,name,protocol,listen_port) VALUES ('matrix_parent','parent','http',8080)`, insert: `INSERT INTO path_rules (rule_id,path) VALUES ('matrix_parent','/old')`, update: `UPDATE path_rules SET path='/new' WHERE rule_id='matrix_parent'`, delete: `DELETE FROM path_rules WHERE rule_id='matrix_parent'`},
 		{name: "users", insert: `INSERT INTO users (username,password_hash) VALUES ('matrix_user','hash')`, update: `UPDATE users SET display_name='updated' WHERE username='matrix_user'`, delete: `DELETE FROM users WHERE username='matrix_user'`},
 		{name: "api_keys", seed: `INSERT INTO users (username,password_hash) VALUES ('matrix_owner','hash')`, insert: `INSERT INTO api_keys (name,key_hash,key_prefix,created_by) VALUES ('matrix_key','hash','prefix',1)`, update: `UPDATE api_keys SET name='updated' WHERE key_prefix='prefix'`, delete: `DELETE FROM api_keys WHERE key_prefix='prefix'`},
-		{name: "cert_jobs", insert: `INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('matrix_rule','example.com','issued')`, update: `UPDATE cert_jobs SET cert_pem='certificate' WHERE rule_id='matrix_rule'`, delete: `DELETE FROM cert_jobs WHERE rule_id='matrix_rule'`},
+		{name: "cert_jobs", insert: `INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,expires_at) VALUES ('matrix_rule','example.com','failed',?,?,datetime('now','+30 days'))`, update: `UPDATE cert_jobs SET expires_at=datetime('now','+60 days') WHERE rule_id='matrix_rule'`, delete: `DELETE FROM cert_jobs WHERE rule_id='matrix_rule'`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			// Given
 			database := newClusterVersionTestDB(t)
+			if test.name == "cert_jobs" {
+				certPEM, keyPEM := clusterVersionCertificatePair(t)
+				test.insertArgs = []any{certPEM, keyPEM}
+			}
 			if test.seed != "" {
 				if _, err := database.Exec(test.seed); err != nil {
 					t.Fatalf("seed dependency: %v", err)
@@ -167,15 +174,16 @@ func TestClusterVersionTriggers_bump_for_snapshot_insert_update_delete(t *testin
 			operations := []struct {
 				name      string
 				statement string
+				args      []any
 				version   int
 			}{
-				{name: "insert", statement: test.insert, version: 1},
+				{name: "insert", statement: test.insert, args: test.insertArgs, version: 1},
 				{name: "update", statement: test.update, version: 2},
 				{name: "delete", statement: test.delete, version: 3},
 			}
 			for _, operation := range operations {
 				// When
-				if _, err := database.Exec(operation.statement); err != nil {
+				if _, err := database.Exec(operation.statement, operation.args...); err != nil {
 					t.Fatalf("%s row: %v", operation.name, err)
 				}
 
@@ -336,13 +344,14 @@ func TestClusterVersionTriggers_doNotBumpForCertificateProgress(t *testing.T) {
 func TestClusterVersionTriggers_refreshCachedSnapshotWhenCertificateEntersAndLeavesIssued(t *testing.T) {
 	// Given
 	database := newClusterVersionTestDB(t)
+	certPEM, keyPEM := clusterVersionCertificatePair(t)
 	if _, err := database.Exec("UPDATE global_config SET is_master=1, cluster_version=0 WHERE id=1"); err != nil {
 		t.Fatalf("seed master: %v", err)
 	}
 	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id, name, protocol, listen_port, domain, enable_tls, tls_source, enabled) VALUES ('status_rule', 'status rule', 'http', 443, 'example.com', 1, 'acme_dns', 1)`); err != nil {
 		t.Fatalf("seed enabled ACME rule: %v", err)
 	}
-	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,expires_at) VALUES ('status_rule','example.com','downloaded','certificate','key',datetime('now','+60 days'))`); err != nil {
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,expires_at) VALUES ('status_rule','example.com','downloaded',?,?,datetime('now','+60 days'))`, certPEM, keyPEM); err != nil {
 		t.Fatalf("seed downloaded certificate: %v", err)
 	}
 	if err := installClusterVersionTriggers(database); err != nil {
@@ -390,6 +399,18 @@ func TestClusterVersionTriggers_refreshCachedSnapshotWhenCertificateEntersAndLea
 	if len(disabledSnapshot.Certs) != 0 {
 		t.Fatalf("disabled snapshot certificates=%+v, want none", disabledSnapshot.Certs)
 	}
+}
+
+func clusterVersionCertificatePair(t *testing.T) (string, string) {
+	t.Helper()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	pair := server.TLS.Certificates[0]
+	keyDER, err := x509.MarshalPKCS8PrivateKey(pair.PrivateKey)
+	if err != nil {
+		t.Fatalf("marshal test certificate key: %v", err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate[0]})), string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
 }
 
 func TestClusterVersionTriggers_doNotBumpForGlobalSyncMetadata(t *testing.T) {

@@ -436,10 +436,12 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	if isMaster || currentMasterURL != masterURL || currentToken != token {
 		return SyncResult{}, errors.New("同步角色或主节点凭据已变更，拒绝应用快照")
 	}
-	if err := verifySnapshotIntegrity(envelope.Data, token, appliedVersion); err != nil {
+	verifiedSnapshot, err := verifiedSnapshotIntegrity(envelope.Data, token, appliedVersion)
+	if err != nil {
 		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
 		return SyncResult{}, err
 	}
+	envelope.Data = verifiedSnapshot
 	if s.beforeApplySnapshot != nil {
 		s.beforeApplySnapshot()
 	}
@@ -494,35 +496,69 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 // the master does and checks referential consistency, so a corrupted or
 // truncated payload is rejected before anything is applied.
 func verifySnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken string, appliedVersion int) error {
+	_, err := verifiedSnapshotIntegrity(snapshot, clusterToken, appliedVersion)
+	return err
+}
+
+func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken string, appliedVersion int) (models.ClusterSnapshot, error) {
 	// The signature is mandatory: it is the only authenticity proof over the
 	// (verification-skipped) transport, and an unsigned payload could be forged
 	// by any on-path actor. Masters that predate signing must be upgraded.
 	if snapshot.Signature == "" {
-		return fmt.Errorf("快照缺少签名：主节点版本过旧，请先升级主节点")
+		return models.ClusterSnapshot{}, fmt.Errorf("快照缺少签名：主节点版本过旧，请先升级主节点")
+	}
+	if len(snapshot.CanonicalPayload) > 0 && snapshot.Fingerprint == "" {
+		return models.ClusterSnapshot{}, errors.New("快照规范内容缺少指纹")
 	}
 	if err := verifySnapshotSignature(snapshot, clusterToken); err != nil {
-		return err
+		return models.ClusterSnapshot{}, err
+	}
+	if len(snapshot.CanonicalPayload) > 0 {
+		var canonical models.ClusterSnapshot
+		if err := json.Unmarshal(snapshot.CanonicalPayload, &canonical); err != nil {
+			return models.ClusterSnapshot{}, fmt.Errorf("解析规范快照内容: %w", err)
+		}
+		if len(canonical.CanonicalPayload) > 0 || canonical.Version != snapshot.Version || canonical.SchemaVersion != snapshot.SchemaVersion || canonical.MinReaderVersion != snapshot.MinReaderVersion {
+			return models.ClusterSnapshot{}, errors.New("快照规范内容与元数据不一致")
+		}
+		canonical.Fingerprint = snapshot.Fingerprint
+		canonical.Signature = snapshot.Signature
+		canonical.CanonicalPayload = append(json.RawMessage(nil), snapshot.CanonicalPayload...)
+		snapshot = canonical
 	}
 	if snapshot.MinReaderVersion > CurrentSnapshotSchema {
-		return fmt.Errorf("快照需要更新的读取端（要求 schema v%d，当前支持 v%d），请先升级本节点", snapshot.MinReaderVersion, CurrentSnapshotSchema)
+		return models.ClusterSnapshot{}, fmt.Errorf("快照需要更新的读取端（要求 schema v%d，当前支持 v%d），请先升级本节点", snapshot.MinReaderVersion, CurrentSnapshotSchema)
 	}
 	if snapshot.SchemaVersion < CurrentSnapshotSchema {
-		return fmt.Errorf("快照 schema v%d 过旧：主节点需升级到支持 schema v%d 的版本", snapshot.SchemaVersion, CurrentSnapshotSchema)
+		return models.ClusterSnapshot{}, fmt.Errorf("快照 schema v%d 过旧：主节点需升级到支持 schema v%d 的版本", snapshot.SchemaVersion, CurrentSnapshotSchema)
 	}
 	// Signed snapshots must also move forward; replaying a captured older one
 	// must not resurrect deleted credentials or roll back configuration.
 	if appliedVersion > 0 && snapshot.Version <= appliedVersion {
-		return fmt.Errorf("快照版本未递增：收到 %d，已应用 %d，疑似重放攻击", snapshot.Version, appliedVersion)
+		return models.ClusterSnapshot{}, fmt.Errorf("快照版本未递增：收到 %d，已应用 %d，疑似重放攻击", snapshot.Version, appliedVersion)
 	}
 	if snapshot.Fingerprint != "" {
 		if err := verifySnapshotFingerprint(snapshot); err != nil {
-			return err
+			return models.ClusterSnapshot{}, err
 		}
 	}
-	return verifySnapshotConsistency(snapshot)
+	if err := verifySnapshotConsistency(snapshot); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
+	if err := validateSnapshotACMEState(snapshot); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
+	return snapshot, nil
 }
 
 func verifySnapshotFingerprint(snapshot models.ClusterSnapshot) error {
+	if len(snapshot.CanonicalPayload) > 0 {
+		hash := sha256.Sum256(snapshot.CanonicalPayload)
+		if hex.EncodeToString(hash[:]) != snapshot.Fingerprint {
+			return fmt.Errorf("快照指纹校验失败：数据可能被截断或篡改")
+		}
+		return nil
+	}
 	canonical := snapshot
 	canonical.Fingerprint = ""
 	canonical.Signature = ""
@@ -544,12 +580,16 @@ func verifySnapshotSignature(snapshot models.ClusterSnapshot, clusterToken strin
 	if clusterToken == "" {
 		return fmt.Errorf("快照签名校验失败：本节点缺少集群令牌")
 	}
-	canonical := snapshot
-	canonical.Fingerprint = ""
-	canonical.Signature = ""
-	content, err := json.Marshal(canonical)
-	if err != nil {
-		return fmt.Errorf("快照序列化失败: %w", err)
+	content := []byte(snapshot.CanonicalPayload)
+	if len(content) == 0 {
+		canonical := snapshot
+		canonical.Fingerprint = ""
+		canonical.Signature = ""
+		var err error
+		content, err = json.Marshal(canonical)
+		if err != nil {
+			return fmt.Errorf("快照序列化失败: %w", err)
+		}
 	}
 	mac := hmac.New(sha256.New, []byte(clusterToken))
 	mac.Write(content)

@@ -20,15 +20,21 @@ func TestSyncService_applySnapshot_keeps_valid_certificate_while_master_job_is_q
 	certDir = t.TempDir()
 	t.Cleanup(func() { certDir = originalCertDir })
 	certPEM, keyPEM := matchingCertificatePair(t, "example.com")
-	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enable_tls,tls_source,ca_provider_id,enabled)
-		VALUES ('lb_queued_cert','queued cert','http','WWW.Example.COM, example.com',443,1,'acme_dns',7,1)`); err != nil {
+	if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,credentials,enabled) VALUES (7,'queued cert CA','letsencrypt','https://acme-v02.api.letsencrypt.org/directory','{}',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO certificate_configs (id,name,dns_provider,dns_credentials,enabled) VALUES (11,'queued cert DNS','dnspod','{}',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enable_tls,tls_source,acme_config_id,ca_provider_id,enabled)
+		VALUES ('lb_queued_cert','queued cert','http','Example.COM',443,1,'acme_dns',11,7,1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,enabled) VALUES ('lb_queued_cert','127.0.0.1',8080,1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,cert_pem,key_pem,ca_provider_id,updated_at)
-		VALUES ('lb_queued_cert','example.com,www.example.com','queued',datetime('now','+30 days'),?,?,7,datetime('now'))`, certPEM, keyPEM); err != nil {
+		VALUES ('lb_queued_cert','example.com','queued',datetime('now','+30 days'),?,?,7,datetime('now'))`, certPEM, keyPEM); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,cert_pem,key_pem,ca_provider_id,updated_at)

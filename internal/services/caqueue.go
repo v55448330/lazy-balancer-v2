@@ -19,6 +19,7 @@ type CAQueueManager struct {
 	queues              map[int]*caQueue
 	reloader            func() error
 	active              bool
+	blockedRules        map[string]struct{}
 	dataDir             string
 	beforeEnqueue       func()
 	beforeActiveEnqueue func()
@@ -39,10 +40,11 @@ func InitCAQueueManager(reloader func() error, dataDir ...string) {
 			accountDataDir = dataDir[0]
 		}
 		caQueueManager = &CAQueueManager{
-			queues:   make(map[int]*caQueue),
-			reloader: reloader,
-			active:   true,
-			dataDir:  accountDataDir,
+			queues:       make(map[int]*caQueue),
+			blockedRules: make(map[string]struct{}),
+			reloader:     reloader,
+			active:       true,
+			dataDir:      accountDataDir,
 		}
 	})
 }
@@ -136,6 +138,23 @@ func (m *CAQueueManager) CancelJobsForRule(ruleID string) {
 	}
 }
 
+// BlockJobsForRule prevents new queue admission until UnblockJobsForRule is called.
+func (m *CAQueueManager) BlockJobsForRule(ruleID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.blockedRules == nil {
+		m.blockedRules = make(map[string]struct{})
+	}
+	m.blockedRules[ruleID] = struct{}{}
+}
+
+// UnblockJobsForRule restores queue admission for a rule after compensation.
+func (m *CAQueueManager) UnblockJobsForRule(ruleID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.blockedRules, ruleID)
+}
+
 // PauseAndDrain prevents new work, cancels every queue, and waits for all
 // workers to exit before returning.
 func (m *CAQueueManager) PauseAndDrain() {
@@ -195,6 +214,9 @@ func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains stri
 	if !m.active {
 		return errors.New("从节点不运行证书签发队列")
 	}
+	if _, blocked := m.blockedRules[ruleID]; blocked {
+		return fmt.Errorf("certificate queue admission blocked for rule %s", ruleID)
+	}
 	return m.enqueueLocked(providerID, jobID, ruleID, domains)
 }
 
@@ -206,6 +228,9 @@ func (m *CAQueueManager) EnqueueIfActive(providerID int, jobID int, ruleID, doma
 	defer m.mu.Unlock()
 	if !m.active {
 		return jobID, false, nil
+	}
+	if _, blocked := m.blockedRules[ruleID]; blocked {
+		return jobID, false, fmt.Errorf("certificate queue admission blocked for rule %s", ruleID)
 	}
 	jobID, changed, err := transition()
 	if err != nil || !changed {
@@ -524,6 +549,18 @@ func loadCAProvider(id int) (models.CAProvider, error) {
 		return p, fmt.Errorf("load CA provider %d: %w", id, err)
 	}
 	return p, nil
+}
+
+// ResolveCAProviderID resolves provider zero using the same default selection as queue admission.
+func ResolveCAProviderID(id int) (int, error) {
+	if id != 0 {
+		return id, nil
+	}
+	provider, err := loadCAProvider(id)
+	if err != nil {
+		return 0, err
+	}
+	return provider.ID, nil
 }
 
 func markJobWaitingCA(jobID int, retryAfter time.Duration) {

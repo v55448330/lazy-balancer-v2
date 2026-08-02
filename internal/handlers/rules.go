@@ -685,14 +685,14 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		qm := services.GetCAQueueManager()
 		if qm == nil {
 			if restoreErr := restoreCreatedRule(); restoreErr != nil {
-				log.Printf("CRITICAL: CreateRule ACME compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
+				services.Logf("error", "CRITICAL: CreateRule ACME compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
 			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化"})
 			return
 		}
 		if _, err := services.CreateOrRequeueCertJob(caddyID, req.Domain, req.CAProviderID, qm); err != nil {
 			if restoreErr := restoreCreatedRule(); restoreErr != nil {
-				log.Printf("CRITICAL: CreateRule ACME compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
+				services.Logf("error", "CRITICAL: CreateRule ACME compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
 			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书签发任务失败: " + err.Error()})
 			return
@@ -1280,7 +1280,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		restoreCtx, cancelRestore := compensationContext(c.Request.Context())
 		defer cancelRestore()
 		if err := restoreRuleSnapshot(restoreCtx, caddyID, oldRuleRow, oldUpstreamRowsMap, existingRule.PathRules); err != nil {
-			log.Printf("CRITICAL: UpdateRule DB restore failed for caddy_id=%s: %v", caddyID, err)
+			services.Logf("error", "CRITICAL: UpdateRule DB restore failed for caddy_id=%s: %v", caddyID, err)
 			return err
 		}
 		return nil
@@ -1390,15 +1390,23 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		if req.CAProviderID != nil {
 			caProviderID = *req.CAProviderID
 		}
+		resolvedCAProviderID, resolveErr := services.ResolveCAProviderID(caProviderID)
+		resolvedExistingCAProviderID, resolveExistingErr := services.ResolveCAProviderID(existingRule.CAProviderID)
+		if resolveErr != nil || resolveExistingErr != nil {
+			restoreErr := errors.Join(h.restoreImportRuntime(runtimeSnapshot), restoreRuleDBSnapshot())
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析 CA 提供商失败: " + errors.Join(resolveErr, resolveExistingErr, restoreErr).Error()})
+			return
+		}
+		caProviderID = resolvedCAProviderID
 		domainChanged := domain != existingRule.Domain
-		caProviderChanged := caProviderID != existingRule.CAProviderID
+		caProviderChanged := resolvedCAProviderID != resolvedExistingCAProviderID
 		wasReEnabled := !existingRule.Enabled && *req.Enabled
 		tlsSourceChangedToACME := existingRule.TLSSource != "acme_dns"
 		certJobsSnapshot, err := services.SnapshotCertJobsForRule(caddyID)
 		if err != nil {
 			restoreErr := errors.Join(h.restoreImportRuntime(runtimeSnapshot), restoreRuleDBSnapshot())
 			if restoreErr != nil {
-				log.Printf("CRITICAL: UpdateRule cert job snapshot failed and restore failed for caddy_id=%s: snapshot=%v restore=%v", caddyID, err, restoreErr)
+				services.Logf("error", "CRITICAL: UpdateRule cert job snapshot failed and restore failed for caddy_id=%s: snapshot=%v restore=%v", caddyID, err, restoreErr)
 			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份证书任务失败: " + errors.Join(err, restoreErr).Error()})
 			return
@@ -1414,15 +1422,22 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		resumedValidJob := false
 		if wasReEnabled {
 			var jobID int
+			var jobProviderID int
 			var jobStatus string
 			var jobExpiresAt sql.NullTime
-			jobErr := db.DB.QueryRow("SELECT id,status,expires_at FROM cert_jobs WHERE rule_id=? AND domain=? ORDER BY id DESC LIMIT 1", caddyID, domain).Scan(&jobID, &jobStatus, &jobExpiresAt)
+			jobErr := db.DB.QueryRow("SELECT id,status,expires_at,COALESCE(ca_provider_id,0) FROM cert_jobs WHERE rule_id=? AND domain=? ORDER BY id DESC LIMIT 1", caddyID, domain).Scan(&jobID, &jobStatus, &jobExpiresAt, &jobProviderID)
 			if jobErr != nil && !errors.Is(jobErr, sql.ErrNoRows) {
 				restoreErr := restoreACMEState()
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败: " + errors.Join(jobErr, restoreErr).Error()})
 				return
 			}
 			if jobErr == nil {
+				resolvedJobProviderID, resolveJobErr := services.ResolveCAProviderID(jobProviderID)
+				if resolveJobErr != nil {
+					restoreErr := restoreACMEState()
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析证书任务 CA 提供商失败: " + errors.Join(resolveJobErr, restoreErr).Error()})
+					return
+				}
 				var renewalDays int
 				if err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays); err != nil {
 					restoreErr := restoreACMEState()
@@ -1434,7 +1449,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 					expiry := jobExpiresAt.Time
 					expiryPtr = &expiry
 				}
-				if ResolveEnableCertJobAction(true, jobStatus, expiryPtr, time.Now(), renewalDays) == EnableCertJobResume {
+				if !domainChanged && !caProviderChanged && resolvedJobProviderID == caProviderID && ResolveEnableCertJobAction(true, jobStatus, expiryPtr, time.Now(), renewalDays) == EnableCertJobResume {
 					if _, err := db.DB.Exec("UPDATE cert_jobs SET status='issued',message='证书有效，已恢复使用',renewal_attempts=0,ca_available_after=NULL,last_error_code=NULL,updated_at=datetime('now') WHERE id=?", jobID); err != nil {
 						restoreErr := restoreACMEState()
 						c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "恢复证书任务失败: " + errors.Join(err, restoreErr).Error()})
@@ -1452,7 +1467,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			if queueManager == nil {
 				restoreErr := restoreACMEState()
 				if restoreErr != nil {
-					log.Printf("CRITICAL: UpdateRule ACME enqueue failed and restore failed for caddy_id=%s: restore=%v", caddyID, restoreErr)
+					services.Logf("error", "CRITICAL: UpdateRule ACME enqueue failed and restore failed for caddy_id=%s: restore=%v", caddyID, restoreErr)
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("CA 队列未初始化且恢复失败: %v", restoreErr)})
 					return
 				}
@@ -1465,7 +1480,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			if err != nil {
 				restoreErr := restoreACMEState()
 				if restoreErr != nil {
-					log.Printf("CRITICAL: UpdateRule ACME enqueue failed and restore failed for caddy_id=%s: enqueue=%v restore=%v", caddyID, err, restoreErr)
+					services.Logf("error", "CRITICAL: UpdateRule ACME enqueue failed and restore failed for caddy_id=%s: enqueue=%v restore=%v", caddyID, err, restoreErr)
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("创建证书签发任务失败且恢复失败: %v; %v", err, restoreErr)})
 					return
 				}
@@ -1512,6 +1527,33 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	if dbQueryNotFound(c, err, "规则不存在", "DeleteRule query rule") {
 		return
 	}
+	certJobsSnapshot, err := services.SnapshotCertJobsForRule(caddyID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份证书任务失败: " + err.Error()})
+		return
+	}
+	queueManager := services.GetCAQueueManager()
+	jobsCanceled := queueManager != nil
+	deleteCompleted := false
+	if queueManager != nil {
+		// No DB transaction is held while waiting, so worker rollback/reload paths can exit.
+		queueManager.BlockJobsForRule(caddyID)
+		queueManager.CancelJobsForRule(caddyID)
+	}
+	defer func() {
+		if !jobsCanceled || deleteCompleted {
+			return
+		}
+		restoreErr := services.RestoreCertJobsForRule(certJobsSnapshot)
+		queueManager.UnblockJobsForRule(caddyID)
+		if restoreErr != nil {
+			services.Logf("error", "CRITICAL: DeleteRule certificate job restore failed for caddy_id=%s: %v", caddyID, restoreErr)
+			return
+		}
+		if requeueErr := services.RequeueNonTerminalCertJobs(); requeueErr != nil {
+			services.Logf("error", "CRITICAL: DeleteRule certificate job requeue failed for caddy_id=%s: %v", caddyID, requeueErr)
+		}
+	}()
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
@@ -1552,7 +1594,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		if restoreErr != nil {
-			log.Printf("CRITICAL: DeleteRule Caddy apply and runtime restore failed for caddy_id=%s: apply=%v restore=%v", caddyID, err, restoreErr)
+			services.Logf("error", "CRITICAL: DeleteRule Caddy apply and runtime restore failed for caddy_id=%s: apply=%v restore=%v", caddyID, err, restoreErr)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用与恢复均失败: %v; %v", err, restoreErr)})
 			return
 		}
@@ -1564,7 +1606,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		recordAudit(c, "清理失败", "规则证书文件", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("残留路径：%s, %s", certPath, keyPath), err.Error()))
 		if restoreErr != nil {
-			log.Printf("CRITICAL: DeleteRule certificate cleanup and runtime restore failed for caddy_id=%s: cleanup=%v restore=%v", caddyID, err, restoreErr)
+			services.Logf("error", "CRITICAL: DeleteRule certificate cleanup and runtime restore failed for caddy_id=%s: cleanup=%v restore=%v", caddyID, err, restoreErr)
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理规则证书文件失败，删除已回滚: " + errors.Join(err, restoreErr).Error()})
 		return
@@ -1573,16 +1615,15 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		log.Printf("DeleteRule transaction commit failed for caddy_id=%s: %v", caddyID, err)
 		if restoreErr != nil {
-			log.Printf("CRITICAL: DeleteRule commit and runtime restore failed for caddy_id=%s: commit=%v restore=%v", caddyID, err, restoreErr)
+			services.Logf("error", "CRITICAL: DeleteRule commit and runtime restore failed for caddy_id=%s: commit=%v restore=%v", caddyID, err, restoreErr)
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交规则删除失败"})
 		return
 	}
 	committed = true
-
-	// 取消仍在排队或执行中的签发协程，避免已删规则继续占用 CA 配额
-	if qm := services.GetCAQueueManager(); qm != nil {
-		qm.CancelJobsForRule(caddyID)
+	deleteCompleted = true
+	if queueManager != nil {
+		queueManager.UnblockJobsForRule(caddyID)
 	}
 
 	if db.MetricsDB != nil {
@@ -1594,6 +1635,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	services.RemoveRuleLogFiles(caddyID)
 	if err := services.RemoveCertJobLogFiles(caddyID); err != nil {
 		log.Printf("DeleteRule cert-job log cleanup failed for caddy_id=%s: %v", caddyID, err)
+		recordAudit(c, "清理失败", "证书任务日志", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("路径：%s", services.CertJobLogPath(caddyID)), err.Error()))
 	}
 
 	recordAudit(c, "删除", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("协议：%s", protocol), fmt.Sprintf("端口：%d", listenPort), domain))
@@ -1864,7 +1906,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	}
 	failEnable := func(message string) {
 		if restoreErr := restoreEnabledState(); restoreErr != nil {
-			log.Printf("CRITICAL: EnableRule compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
+			services.Logf("error", "CRITICAL: EnableRule compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: message + "；规则与 Caddy 恢复失败: " + restoreErr.Error()})
 			return
 		}
@@ -1874,6 +1916,12 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	domain := ruleDomain
 	log.Printf("EnableRule TLS state for caddy_id=%s: enableTLS=%v tlsSource=%s domain=%s caProviderID=%d", caddyID, enableTLS, tlsSource, domain, caProviderID)
 	if isACME {
+		resolvedCAProviderID, resolveErr := services.ResolveCAProviderID(caProviderID)
+		if resolveErr != nil {
+			failEnable("解析 CA 提供商失败: " + resolveErr.Error())
+			return
+		}
+		caProviderID = resolvedCAProviderID
 		queueManager = services.GetCAQueueManager()
 
 		var jobStatus, jobMsg string
@@ -1898,8 +1946,15 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			expiryPtr = &expiry
 		}
 		action := ResolveEnableCertJobAction(hasJob, jobStatus, expiryPtr, time.Now(), renewalDays)
-		if hasJob && jobProviderID != caProviderID {
-			action = EnableCertJobRetry
+		if hasJob {
+			resolvedJobProviderID, resolveJobErr := services.ResolveCAProviderID(jobProviderID)
+			if resolveJobErr != nil {
+				failEnable("解析证书任务 CA 提供商失败: " + resolveJobErr.Error())
+				return
+			}
+			if resolvedJobProviderID != caProviderID {
+				action = EnableCertJobRetry
+			}
 		}
 
 		switch action {

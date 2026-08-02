@@ -18,10 +18,11 @@ func TestCertJobs_rejectsNullStatus(t *testing.T) {
 func TestClusterVersionTriggers_bumpWhenCertificateStatusTransitionsToIssued(t *testing.T) {
 	// Given
 	database := newClusterVersionTestDB(t)
+	certPEM, keyPEM := clusterVersionCertificatePair(t)
 	if _, err := database.Exec("UPDATE global_config SET is_master=1, cluster_version=0 WHERE id=1"); err != nil {
 		t.Fatalf("seed master: %v", err)
 	}
-	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('pending_rule','example.com','pending')`); err != nil {
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,expires_at) VALUES ('pending_rule','example.com','pending',?,?,datetime('now','+30 days'))`, certPEM, keyPEM); err != nil {
 		t.Fatalf("seed pending certificate: %v", err)
 	}
 	if err := installClusterVersionTriggers(database); err != nil {

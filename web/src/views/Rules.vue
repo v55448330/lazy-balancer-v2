@@ -983,6 +983,7 @@ import { ansiToHtml } from '@/utils/ansi'
 import { formatDate } from '@/utils/date'
 import type {
   APIResponse,
+  CertJobsPage,
   CreateRuleRequest,
   IpAclMode,
   ProxyTimeoutConfig,
@@ -1299,41 +1300,38 @@ const fetchCertInfo = async (caddyIds?: readonly string[]) => {
 
 const fetchCertJobs = async () => {
   if (disposed) return
-  try {
-    const jobs: CertJob[] = []
-    let page = 1
-    while (!disposed) {
-      const res = await request.get<APIResponse<CertJob[]>>('/certificates/jobs', {
-        params: { page, page_size: 200 },
-        signal: certJobsPolling.signal,
-      })
-      const pageJobs = res.data || []
-      jobs.push(...pageJobs)
-      if (pageJobs.length < 200) break
-      page += 1
-    }
-    if (disposed) return
-    const map: Record<string, CertJob> = {}
-    jobs.forEach(job => {
-      if (job.rule_id) {
-        const existing = map[job.rule_id]
-        if (!existing || certJobPriority(job.status) > certJobPriority(existing.status)) {
-          map[job.rule_id] = job
-        }
-      }
+  const jobs: CertJob[] = []
+  let page = 1
+  while (!disposed) {
+    const res = await request.get<APIResponse<CertJobsPage<CertJob>>>('/certificates/jobs', {
+      params: { page, page_size: 200 },
+      signal: certJobsPolling.signal,
     })
-    const newlyIssuedRuleIds = Object.entries(map)
-      .filter(([ruleId, job]) => {
-        const previousStatus = certJobMap.value[ruleId]?.status
-        return previousStatus !== undefined && previousStatus !== 'issued' && job.status === 'issued'
-      })
-      .map(([ruleId]) => ruleId)
-    if (disposed) return
-    certJobMap.value = map
-    if (newlyIssuedRuleIds.length > 0) await fetchCertInfo(newlyIssuedRuleIds)
-  } catch {
-    return
+    if (!res.data) throw new TypeError('证书任务分页响应缺少 data')
+    const pageJobs = res.data.list
+    jobs.push(...pageJobs)
+    if (jobs.length >= res.data.total || pageJobs.length < res.data.page_size) break
+    page += 1
   }
+  if (disposed) return
+  const map: Record<string, CertJob> = {}
+  jobs.forEach(job => {
+    if (job.rule_id) {
+      const existing = map[job.rule_id]
+      if (!existing || certJobPriority(job.status) > certJobPriority(existing.status)) {
+        map[job.rule_id] = job
+      }
+    }
+  })
+  const newlyIssuedRuleIds = Object.entries(map)
+    .filter(([ruleId, job]) => {
+      const previousStatus = certJobMap.value[ruleId]?.status
+      return previousStatus !== undefined && previousStatus !== 'issued' && job.status === 'issued'
+    })
+    .map(([ruleId]) => ruleId)
+  if (disposed) return
+  certJobMap.value = map
+  if (newlyIssuedRuleIds.length > 0) await fetchCertInfo(newlyIssuedRuleIds)
 }
 
 const isCertJobActive = (status?: CertJobStatus) => {

@@ -35,27 +35,31 @@ func installClusterVersionTriggers(database *sql.DB) error {
 		{name: "path_rules", snapshotColumns: "id,rule_id,sort_order,match_type,path,upstreams_json"},
 		{name: "users", snapshotColumns: "id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at"},
 		{name: "api_keys", snapshotColumns: "id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist"},
-		{name: "cert_jobs", snapshotColumns: "rule_id,cert_pem,key_pem,expires_at"},
+		{name: "ca_providers", snapshotColumns: "id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled,created_at,updated_at"},
+		{name: "certificate_configs", snapshotColumns: "id,name,dns_provider,dns_credentials,enabled,created_at,updated_at"},
+		{name: "cert_jobs", snapshotColumns: "rule_id,domain,status,cert_pem,key_pem,expires_at,ca_provider_id,renewal_attempts,ca_available_after,last_error_code"},
 	}
+	const newCertificateMember = "NEW.status<>'disabled' AND COALESCE(NEW.cert_pem,'')<>'' AND COALESCE(NEW.key_pem,'')<>'' AND datetime(NEW.expires_at)>datetime('now')"
+	const oldCertificateMember = "OLD.status<>'disabled' AND COALESCE(OLD.cert_pem,'')<>'' AND COALESCE(OLD.key_pem,'')<>'' AND datetime(OLD.expires_at)>datetime('now')"
 	for _, table := range tables {
 		for _, operation := range []string{"INSERT", "UPDATE", "DELETE"} {
 			triggerName := fmt.Sprintf("cluster_version_%s_%s", table.name, strings.ToLower(operation))
+			if _, err := database.Exec("DROP TRIGGER IF EXISTS " + triggerName); err != nil {
+				return fmt.Errorf("replace cluster version trigger for %s %s: %w", operation, table.name, err)
+			}
 			operationClause := operation
 			whenClause := "(SELECT COALESCE(is_master,0) FROM global_config WHERE id=1)=1"
 			if operation == "UPDATE" {
-				if _, err := database.Exec("DROP TRIGGER IF EXISTS " + triggerName); err != nil {
-					return fmt.Errorf("replace cluster version trigger for %s %s: %w", operation, table.name, err)
-				}
 				operationClause += " OF " + table.snapshotColumns
 			}
 			if table.name == "cert_jobs" {
 				switch operation {
 				case "INSERT":
-					whenClause += " AND NEW.status='issued'"
+					whenClause += " AND " + newCertificateMember
 				case "UPDATE":
-					whenClause += " AND OLD.status='issued' AND NEW.status='issued'"
+					whenClause += " AND ((" + oldCertificateMember + ") OR (" + newCertificateMember + "))"
 				case "DELETE":
-					whenClause += " AND OLD.status='issued'"
+					whenClause += " AND " + oldCertificateMember
 				}
 			}
 			statement := fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS cluster_version_%s_%s
@@ -71,15 +75,6 @@ func installClusterVersionTriggers(database *sql.DB) error {
 	}
 	if _, err := database.Exec("DROP TRIGGER IF EXISTS cluster_version_cert_jobs_status_update"); err != nil {
 		return fmt.Errorf("replace cluster version trigger for cert_jobs status UPDATE: %w", err)
-	}
-	if _, err := database.Exec(`CREATE TRIGGER cluster_version_cert_jobs_status_update
-		AFTER UPDATE OF status ON cert_jobs
-		WHEN (SELECT COALESCE(is_master,0) FROM global_config WHERE id=1)=1
-			AND COALESCE(OLD.status='issued',0)<>COALESCE(NEW.status='issued',0)
-		BEGIN
-			UPDATE global_config SET cluster_version=COALESCE(cluster_version,0)+1 WHERE id=1;
-		END`); err != nil {
-		return fmt.Errorf("install cluster version trigger for cert_jobs status UPDATE: %w", err)
 	}
 	if _, err := database.Exec("DROP TRIGGER IF EXISTS cluster_version_global_config_update"); err != nil {
 		return fmt.Errorf("replace cluster version trigger for global_config UPDATE: %w", err)

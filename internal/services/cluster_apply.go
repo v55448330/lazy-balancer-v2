@@ -47,6 +47,9 @@ func requestRestart() {
 }
 
 func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.ClusterSnapshot) error {
+	if err := validateSnapshotACMEState(snapshot); err != nil {
+		return err
+	}
 	previous, _, err := s.cluster.Snapshot(ctx, 0, "", "")
 	if err != nil {
 		return fmt.Errorf("备份本地快照: %w", err)
@@ -108,8 +111,8 @@ func (s *SyncService) materializeSnapshotDNSOwnership(acme *models.ClusterACMESt
 	if acme == nil {
 		return nil
 	}
-	if !json.Valid(acme.DNSOwnership) {
-		return errors.New("DNS 所有权状态不是有效 JSON")
+	if err := validateDNSOwnership(acme.DNSOwnership); err != nil {
+		return err
 	}
 	dataDir := ""
 	if s.cfg != nil {
@@ -143,6 +146,9 @@ func (s *SyncService) materializeSnapshotDNSOwnership(acme *models.ClusterACMESt
 	}
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return fmt.Errorf("替换 DNS 所有权状态: %w", err)
+	}
+	if err := syncParentDir(path); err != nil {
+		return fmt.Errorf("同步 DNS 所有权目录: %w", err)
 	}
 	return nil
 }
@@ -218,12 +224,58 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 		if cert.SourceStatus != "" {
 			message += "，源任务状态：" + cert.SourceStatus
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO cert_jobs (rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id) SELECT ?,COALESCE(NULLIF(?,''),domain),'issued',?,?,?,?,? FROM lb_rules WHERE caddy_id=? AND tls_source='acme_dns'`, cert.RuleID, cert.Domain, message, nullableString(cert.ExpiresAt), cert.CertPEM, cert.KeyPEM, cert.CAProviderID, cert.RuleID); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO cert_jobs (rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,renewal_attempts,ca_available_after,last_error_code) SELECT ?,COALESCE(NULLIF(?,''),domain),'issued',?,?,?,?,?,?,?,? FROM lb_rules WHERE caddy_id=? AND tls_source='acme_dns'`, cert.RuleID, cert.Domain, message, nullableString(cert.ExpiresAt), cert.CertPEM, cert.KeyPEM, cert.CAProviderID, cert.RenewalAttempts, nullableTime(cert.CAAvailableAfter.NullTime), nullableString(cert.LastErrorCode), cert.RuleID); err != nil {
 			return fmt.Errorf("写入快照证书 %s: %w", cert.RuleID, err)
 		}
 	}
 	if err := updateSnapshotSettings(ctx, tx, snapshot); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateSnapshotACMEState(snapshot models.ClusterSnapshot) error {
+	if snapshot.ACME == nil {
+		return nil
+	}
+	if snapshot.ACME.CAProviders == nil || snapshot.ACME.CertificateConfigs == nil || len(snapshot.ACME.DNSOwnership) == 0 {
+		return errors.New("快照 ACME 区段缺少 ca_providers、certificate_configs 或 dns_ownership")
+	}
+	if err := validateDNSOwnership(snapshot.ACME.DNSOwnership); err != nil {
+		return err
+	}
+	providers := make(map[int]struct{}, len(snapshot.ACME.CAProviders))
+	for _, provider := range snapshot.ACME.CAProviders {
+		if provider.ID <= 0 || provider.Name == "" || provider.Provider == "" || provider.DirectoryURL == "" {
+			return fmt.Errorf("快照 CA 提供商 %d 字段不完整", provider.ID)
+		}
+		providers[provider.ID] = struct{}{}
+	}
+	configs := make(map[int]struct{}, len(snapshot.ACME.CertificateConfigs))
+	for _, config := range snapshot.ACME.CertificateConfigs {
+		if config.ID <= 0 || config.Name == "" || config.DNSProvider == "" {
+			return fmt.Errorf("快照证书配置 %d 字段不完整", config.ID)
+		}
+		configs[config.ID] = struct{}{}
+	}
+	for _, rule := range snapshot.Rules {
+		if rule.TLSSource != "acme_dns" {
+			continue
+		}
+		if _, exists := configs[rule.ACMEConfigID]; !exists {
+			return fmt.Errorf("快照规则 %s 引用了不存在的证书配置 %d", rule.CaddyID, rule.ACMEConfigID)
+		}
+		if _, exists := providers[rule.CAProviderID]; !exists {
+			return fmt.Errorf("快照规则 %s 引用了不存在的 CA 提供商 %d", rule.CaddyID, rule.CAProviderID)
+		}
+	}
+	for _, cert := range snapshot.Certs {
+		if cert.CAProviderID == 0 {
+			continue
+		}
+		if _, exists := providers[cert.CAProviderID]; !exists {
+			return fmt.Errorf("快照证书 %s 引用了不存在的 CA 提供商 %d", cert.RuleID, cert.CAProviderID)
+		}
 	}
 	return nil
 }

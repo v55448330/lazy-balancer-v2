@@ -4,17 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"path/filepath"
 )
 
 const auditDBFilename = "lazy-balancer-audit.db"
 
 func InitializeAuditDB(dataDir string) error {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := secureDataDirectory(dataDir); err != nil {
 		return fmt.Errorf("failed to create audit data directory: %w", err)
 	}
 	path := filepath.Join(dataDir, auditDBFilename)
+	if err := prepareSQLiteDatabase(path); err != nil {
+		return fmt.Errorf("failed to secure audit database: %w", err)
+	}
 	auditDB, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=30000&_synchronous=NORMAL")
 	if err != nil {
 		return fmt.Errorf("failed to open audit database: %w", err)
@@ -40,6 +42,10 @@ func InitializeAuditDB(dataDir string) error {
 	`); err != nil {
 		auditDB.Close()
 		return fmt.Errorf("failed to create audit schema: %w", err)
+	}
+	if err := secureSQLiteArtifacts(path); err != nil {
+		auditDB.Close()
+		return fmt.Errorf("failed to secure audit database artifacts: %w", err)
 	}
 	AuditDB = auditDB
 	return migrateLegacyAuditLogs(DB, path)

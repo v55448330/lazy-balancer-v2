@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -11,7 +13,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -25,6 +30,8 @@ type clusterSnapshotCache struct {
 	initialized bool
 	version     int
 	snapshot    models.ClusterSnapshot
+	canonical   json.RawMessage
+	fingerprint string
 }
 
 var clusterSnapshotCaches sync.Map
@@ -39,33 +46,17 @@ type snapshotStore interface {
 // authenticity, not just integrity; leave empty to skip signing (legacy path).
 func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientFingerprint string, tokenKey string) (models.ClusterSnapshot, bool, error) {
 	s.retryPendingPinCleanup()
-	snapshot, err := s.cachedSnapshot(ctx)
+	snapshot, canonical, fingerprint, err := s.cachedSnapshot(ctx)
 	if err != nil {
 		return models.ClusterSnapshot{}, false, err
 	}
-	snapshot.SchemaVersion = CurrentSnapshotSchema
-	snapshot.MinReaderVersion = CurrentSnapshotSchema
-	canonical := snapshot
-	canonical.Fingerprint = ""
-	canonical.Version = 0
-	content, err := json.Marshal(canonical)
-	if err != nil {
-		return models.ClusterSnapshot{}, false, fmt.Errorf("序列化集群快照: %w", err)
-	}
-	hash := sha256.Sum256(content)
-	snapshot.Fingerprint = hex.EncodeToString(hash[:])
+	snapshot.Fingerprint = fingerprint
+	snapshot.CanonicalPayload = append(json.RawMessage(nil), canonical...)
 	if tokenKey != "" {
 		// The signature additionally binds the version, so a captured older
 		// snapshot cannot be replayed even though its content hash is valid.
-		signed := snapshot
-		signed.Fingerprint = ""
-		signed.Signature = ""
-		signedContent, err := json.Marshal(signed)
-		if err != nil {
-			return models.ClusterSnapshot{}, false, fmt.Errorf("序列化快照签名内容: %w", err)
-		}
 		mac := hmac.New(sha256.New, []byte(tokenKey))
-		mac.Write(signedContent)
+		_, _ = mac.Write(canonical)
 		snapshot.Signature = hex.EncodeToString(mac.Sum(nil))
 		if _, err := s.db.ExecContext(ctx, "UPDATE nodes SET registration_secret=NULL, registration_secret_expires_at=NULL WHERE cluster_token_hash=? AND registration_secret IS NOT NULL", tokenHash(tokenKey)); err != nil {
 			return models.ClusterSnapshot{}, false, fmt.Errorf("确认旧协议集群令牌交付: %w", err)
@@ -92,7 +83,7 @@ func (s *ClusterService) ConfirmRegistration(ctx context.Context, token string) 
 	return nil
 }
 
-func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnapshot, error) {
+func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnapshot, json.RawMessage, string, error) {
 	value, _ := clusterSnapshotCaches.LoadOrStore(s.db, &clusterSnapshotCache{})
 	cache := value.(*clusterSnapshotCache)
 	cache.mu.Lock()
@@ -100,28 +91,42 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return models.ClusterSnapshot{}, fmt.Errorf("开启集群快照事务: %w", err)
+		return models.ClusterSnapshot{}, nil, "", fmt.Errorf("开启集群快照事务: %w", err)
 	}
 	defer tx.Rollback()
 
 	var version int
 	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(cluster_version,0) FROM global_config WHERE id=1").Scan(&version); err != nil {
-		return models.ClusterSnapshot{}, fmt.Errorf("读取集群版本: %w", err)
+		return models.ClusterSnapshot{}, nil, "", fmt.Errorf("读取集群版本: %w", err)
 	}
 	if cache.initialized && cache.version == version {
-		return cache.snapshot, nil
+		return cache.snapshot, cache.canonical, cache.fingerprint, nil
 	}
 	snapshot, err := s.buildSnapshot(ctx, tx)
 	if err != nil {
-		return models.ClusterSnapshot{}, err
+		return models.ClusterSnapshot{}, nil, "", err
 	}
+	snapshot.SchemaVersion = CurrentSnapshotSchema
+	snapshot.MinReaderVersion = CurrentSnapshotSchema
+	canonicalSnapshot := snapshot
+	canonicalSnapshot.Fingerprint = ""
+	canonicalSnapshot.Signature = ""
+	canonicalSnapshot.CanonicalPayload = nil
+	canonical, err := json.Marshal(canonicalSnapshot)
+	if err != nil {
+		return models.ClusterSnapshot{}, nil, "", fmt.Errorf("序列化集群快照: %w", err)
+	}
+	hash := sha256.Sum256(canonical)
+	fingerprint := hex.EncodeToString(hash[:])
 	if err := tx.Commit(); err != nil {
-		return models.ClusterSnapshot{}, fmt.Errorf("提交集群快照事务: %w", err)
+		return models.ClusterSnapshot{}, nil, "", fmt.Errorf("提交集群快照事务: %w", err)
 	}
 	cache.initialized = true
 	cache.version = snapshot.Version
 	cache.snapshot = snapshot
-	return snapshot, nil
+	cache.canonical = canonical
+	cache.fingerprint = fingerprint
+	return snapshot, canonical, fingerprint, nil
 }
 
 func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore) (models.ClusterSnapshot, error) {
@@ -178,7 +183,7 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 }
 
 func (s *ClusterService) snapshotACME(ctx context.Context, store snapshotStore) (*models.ClusterACMEState, error) {
-	state := &models.ClusterACMEState{}
+	state := &models.ClusterACMEState{CAProviders: make([]models.CAProvider, 0), CertificateConfigs: make([]models.CertificateConfig, 0)}
 	rows, err := store.QueryContext(ctx, `SELECT id,name,provider,directory_url,COALESCE(credentials,''),COALESCE(max_concurrent,1),COALESCE(min_interval_ms,2000),COALESCE(enabled,1),created_at,updated_at FROM ca_providers ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照 CA 提供商: %w", err)
@@ -220,8 +225,8 @@ func (s *ClusterService) snapshotACME(ctx context.Context, store snapshotStore) 
 	} else if err != nil {
 		return nil, fmt.Errorf("读取 DNS 所有权状态: %w", err)
 	}
-	if !json.Valid(ownership) {
-		return nil, errors.New("DNS 所有权状态不是有效 JSON")
+	if err := validateDNSOwnership(ownership); err != nil {
+		return nil, err
 	}
 	state.DNSOwnership = ownership
 	return state, nil
@@ -386,39 +391,104 @@ func (s *ClusterService) snapshotCertificates(ctx context.Context, store snapsho
 		return nil, fmt.Errorf("关闭手工证书结果: %w", err)
 	}
 
-	rows, err = store.QueryContext(ctx, `SELECT r.caddy_id,r.domain,j.domain,j.cert_pem,j.key_pem,COALESCE(j.expires_at,''),COALESCE(j.ca_provider_id,0),j.status
+	rows, err = store.QueryContext(ctx, `SELECT r.caddy_id,r.domain,j.domain,j.cert_pem,j.key_pem,COALESCE(j.expires_at,''),COALESCE(j.ca_provider_id,0),j.status,
+		COALESCE(j.renewal_attempts,0),j.ca_available_after,COALESCE(j.last_error_code,''),COALESCE(julianday(COALESCE(j.updated_at,j.created_at)),0),j.id
 		FROM lb_rules r JOIN cert_jobs j ON j.rule_id=r.caddy_id
 		WHERE r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' AND j.status<>'disabled'
 		AND COALESCE(j.cert_pem,'')<>'' AND COALESCE(j.key_pem,'')<>'' AND datetime(j.expires_at)>datetime('now')
-		ORDER BY r.caddy_id,COALESCE(j.updated_at,j.created_at) DESC,j.id DESC`)
+		ORDER BY r.caddy_id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照 ACME 证书: %w", err)
 	}
 	defer rows.Close()
-	selected := make(map[string]struct{})
+	type certificateCandidate struct {
+		certificate models.ClusterCertificate
+		notAfter    time.Time
+		updatedAt   float64
+		id          int
+		exact       bool
+	}
+	selected := make(map[string]certificateCandidate)
+	now := time.Now()
 	for rows.Next() {
 		var cert models.ClusterCertificate
 		var ruleDomain string
-		if err := rows.Scan(&cert.RuleID, &ruleDomain, &cert.Domain, &cert.CertPEM, &cert.KeyPEM, &cert.ExpiresAt, &cert.CAProviderID, &cert.SourceStatus); err != nil {
+		var updatedAt float64
+		var id int
+		if err := rows.Scan(&cert.RuleID, &ruleDomain, &cert.Domain, &cert.CertPEM, &cert.KeyPEM, &cert.ExpiresAt, &cert.CAProviderID, &cert.SourceStatus, &cert.RenewalAttempts, &cert.CAAvailableAfter, &cert.LastErrorCode, &updatedAt, &id); err != nil {
 			return nil, fmt.Errorf("扫描快照 ACME 证书: %w", err)
-		}
-		if _, exists := selected[cert.RuleID]; exists {
-			continue
 		}
 		canonicalRuleDomain, err := CanonicalACMEDomains(ruleDomain)
 		if err != nil {
 			return nil, fmt.Errorf("规范化快照规则 %s 域名: %w", cert.RuleID, err)
 		}
 		canonicalJobDomain, err := CanonicalACMEDomains(cert.Domain)
-		if err != nil || canonicalJobDomain != canonicalRuleDomain {
+		if err != nil {
 			continue
 		}
-		cert.Domain = canonicalJobDomain
-		selected[cert.RuleID] = struct{}{}
-		certs = append(certs, cert)
+		pair, err := tls.X509KeyPair([]byte(cert.CertPEM), []byte(cert.KeyPEM))
+		if err != nil || len(pair.Certificate) == 0 {
+			continue
+		}
+		parsed, err := x509.ParseCertificate(pair.Certificate[0])
+		if err != nil || now.Before(parsed.NotBefore) || !now.Before(parsed.NotAfter) {
+			continue
+		}
+		covered := true
+		for _, domain := range strings.Split(canonicalRuleDomain, ",") {
+			if err := parsed.VerifyHostname(domain); err != nil {
+				covered = false
+				break
+			}
+		}
+		if !covered {
+			continue
+		}
+		exact := canonicalJobDomain == canonicalRuleDomain
+		cert.Domain = canonicalRuleDomain
+		candidate := certificateCandidate{certificate: cert, notAfter: parsed.NotAfter, updatedAt: updatedAt, id: id, exact: exact}
+		current, exists := selected[cert.RuleID]
+		if !exists || candidate.exact && !current.exact || candidate.exact == current.exact && (candidate.notAfter.After(current.notAfter) || candidate.notAfter.Equal(current.notAfter) && (candidate.updatedAt > current.updatedAt || candidate.updatedAt == current.updatedAt && candidate.id > current.id)) {
+			selected[cert.RuleID] = candidate
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("遍历快照 ACME 证书: %w", err)
 	}
+	ruleIDs := make([]string, 0, len(selected))
+	for ruleID := range selected {
+		ruleIDs = append(ruleIDs, ruleID)
+	}
+	sort.Strings(ruleIDs)
+	for _, ruleID := range ruleIDs {
+		certs = append(certs, selected[ruleID].certificate)
+	}
 	return certs, nil
+}
+
+type dnsOwnershipState struct {
+	Version int                  `json:"version"`
+	Records []dnsOwnershipRecord `json:"records"`
+}
+
+type dnsOwnershipRecord struct {
+	Provider string `json:"provider"`
+	FQDN     string `json:"fqdn"`
+	RecordID string `json:"record_id"`
+}
+
+func validateDNSOwnership(data []byte) error {
+	var ownership dnsOwnershipState
+	if err := json.Unmarshal(data, &ownership); err != nil {
+		return fmt.Errorf("DNS 所有权状态不是有效 JSON: %w", err)
+	}
+	if ownership.Version != 1 || ownership.Records == nil {
+		return errors.New("DNS 所有权状态格式无效")
+	}
+	for _, record := range ownership.Records {
+		if record.Provider == "" || record.FQDN == "" || record.RecordID == "" {
+			return errors.New("DNS 所有权记录缺少 provider、fqdn 或 record_id")
+		}
+	}
+	return nil
 }

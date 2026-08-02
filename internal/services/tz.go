@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -188,12 +187,15 @@ func NewApplicationLogWriter(writer io.Writer) io.Writer {
 }
 
 func (writer *applicationLogWriter) Write(p []byte) (int, error) {
-	line := strings.ToUpper(strings.TrimSpace(string(p)))
 	threshold := applicationLogLevel.Load()
-	if threshold >= logLevelError && !strings.HasPrefix(line, "ERROR") {
+	if threshold <= logLevelInfo {
+		return writer.w.Write(p)
+	}
+	line := trimLeadingASCIIWhitespace(p)
+	if threshold >= logLevelError && !hasASCIIPrefixFold(line, "ERROR") {
 		return len(p), nil
 	}
-	if threshold == logLevelWarn && !strings.HasPrefix(line, "WARN") && !strings.HasPrefix(line, "ERROR") {
+	if threshold == logLevelWarn && !hasASCIIPrefixFold(line, "WARN") && !hasASCIIPrefixFold(line, "ERROR") {
 		return len(p), nil
 	}
 	written, err := writer.w.Write(p)
@@ -201,6 +203,34 @@ func (writer *applicationLogWriter) Write(p []byte) (int, error) {
 		return written, err
 	}
 	return len(p), nil
+}
+
+func trimLeadingASCIIWhitespace(value []byte) []byte {
+	for len(value) > 0 {
+		switch value[0] {
+		case ' ', '\t', '\n', '\r', '\v', '\f':
+			value = value[1:]
+		default:
+			return value
+		}
+	}
+	return value
+}
+
+func hasASCIIPrefixFold(value []byte, prefix string) bool {
+	if len(value) < len(prefix) {
+		return false
+	}
+	for index := range len(prefix) {
+		candidate := value[index]
+		if candidate >= 'a' && candidate <= 'z' {
+			candidate -= 'a' - 'A'
+		}
+		if candidate != prefix[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func ApplyLogLevel() {

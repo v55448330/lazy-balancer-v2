@@ -10,6 +10,12 @@ import (
 
 func InitializeMetricsDB(dataDir string) (err error) {
 	dbPath := filepath.Join(dataDir, "lazy-balancer-metrics.db")
+	if err := secureDataDirectory(dataDir); err != nil {
+		return fmt.Errorf("failed to secure metrics data directory: %w", err)
+	}
+	if err := prepareSQLiteDatabase(dbPath); err != nil {
+		return fmt.Errorf("failed to secure metrics database: %w", err)
+	}
 
 	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=30000&_synchronous=NORMAL")
 	if err != nil {
@@ -53,6 +59,9 @@ func InitializeMetricsDB(dataDir string) (err error) {
 
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("failed to initialize metrics database schema: %w", err)
+	}
+	if err := secureSQLiteArtifacts(dbPath); err != nil {
+		return fmt.Errorf("failed to secure metrics database artifacts: %w", err)
 	}
 
 	MetricsDB = db

@@ -700,14 +700,29 @@ func GenerateCaddyConfig(overrides ...*models.UpdateConfigRequest) map[string]in
 }
 
 func certificateCoversDomains(certPEM string, domains []string) bool {
+	certificate, valid := currentlyValidCertificate(certPEM, time.Now())
+	if !valid {
+		return false
+	}
+	return certificateCoversDomainsParsed(certificate, domains)
+}
+
+func currentlyValidCertificate(certPEM string, now time.Time) (*x509.Certificate, bool) {
 	block, _ := pem.Decode([]byte(certPEM))
 	if block == nil || block.Type != "CERTIFICATE" {
-		return false
+		return nil, false
 	}
 	certificate, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return false
+		return nil, false
 	}
+	if now.Before(certificate.NotBefore) || now.After(certificate.NotAfter) {
+		return nil, false
+	}
+	return certificate, true
+}
+
+func certificateCoversDomainsParsed(certificate *x509.Certificate, domains []string) bool {
 	for _, domain := range domains {
 		if err := certificate.VerifyHostname(domain); err != nil {
 			return false
@@ -934,39 +949,46 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		}
 	}
 
-	acmeCerts := make(map[string]map[string]CertMaterial)
+	type acmeCertCandidate struct {
+		domain      string
+		material    CertMaterial
+		certificate *x509.Certificate
+	}
+	acmeCerts := make(map[string][]acmeCertCandidate)
 	if hasACMETLS {
+		now := time.Now()
 		certRows, certErr := store.Query(`
 			SELECT rule_id, domain, cert_pem, key_pem
 			FROM cert_jobs
 			WHERE cert_pem IS NOT NULL AND cert_pem <> ''
 			  AND key_pem IS NOT NULL AND key_pem <> ''
-			ORDER BY updated_at DESC
+			ORDER BY updated_at DESC, id DESC
 		`)
 		if certErr != nil {
-			log.Printf("load ACME certificates: query failed: %v", certErr)
-		} else {
-			for certRows.Next() {
-				var ruleID, domain, certPEM, keyPEM string
-				if scanErr := certRows.Scan(&ruleID, &domain, &certPEM, &keyPEM); scanErr != nil {
-					log.Printf("load ACME certificates: scan failed: %v", scanErr)
-					continue
-				}
-				byDomain := acmeCerts[ruleID]
-				if byDomain == nil {
-					byDomain = make(map[string]CertMaterial)
-					acmeCerts[ruleID] = byDomain
-				}
-				if _, exists := byDomain[domain]; !exists {
-					byDomain[domain] = CertMaterial{RuleID: ruleID, CertPEM: certPEM, KeyPEM: keyPEM}
-				}
+			return generationFailure("query ACME certificates: %v", certErr)
+		}
+		for certRows.Next() {
+			var ruleID, domain, certPEM, keyPEM string
+			if scanErr := certRows.Scan(&ruleID, &domain, &certPEM, &keyPEM); scanErr != nil {
+				closeErr := certRows.Close()
+				return generationFailure("scan ACME certificate: %v", errors.Join(scanErr, closeErr))
 			}
-			if rowsErr := certRows.Err(); rowsErr != nil {
-				log.Printf("load ACME certificates: iteration failed: %v", rowsErr)
+			certificate, valid := currentlyValidCertificate(certPEM, now)
+			if !valid {
+				continue
 			}
-			if closeErr := certRows.Close(); closeErr != nil {
-				log.Printf("load ACME certificates: close failed: %v", closeErr)
-			}
+			acmeCerts[ruleID] = append(acmeCerts[ruleID], acmeCertCandidate{
+				domain:      domain,
+				material:    CertMaterial{RuleID: ruleID, CertPEM: certPEM, KeyPEM: keyPEM},
+				certificate: certificate,
+			})
+		}
+		if rowsErr := certRows.Err(); rowsErr != nil {
+			closeErr := certRows.Close()
+			return generationFailure("iterate ACME certificates: %v", errors.Join(rowsErr, closeErr))
+		}
+		if closeErr := certRows.Close(); closeErr != nil {
+			return generationFailure("close ACME certificates: %v", closeErr)
 		}
 	}
 	resolveACMECert := func(ruleID, domain string) (CertMaterial, bool) {
@@ -974,20 +996,46 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		if canonicalErr != nil {
 			return CertMaterial{}, false
 		}
-		byDomain := acmeCerts[ruleID]
-		if material, ok := byDomain[canonicalDomains]; ok {
-			return material, true
-		}
-		for _, singleDomain := range strings.Split(canonicalDomains, ",") {
-			if material, ok := byDomain[singleDomain]; ok {
-				return material, true
-			}
-		}
 		domains := strings.Split(canonicalDomains, ",")
-		for _, material := range byDomain {
-			if certificateCoversDomains(material.CertPEM, domains) {
-				return material, true
+		candidates := acmeCerts[ruleID]
+		selectLatest := func(matches func(*acmeCertCandidate) bool) *acmeCertCandidate {
+			var selected *acmeCertCandidate
+			for index := range candidates {
+				candidate := &candidates[index]
+				if !matches(candidate) {
+					continue
+				}
+				if selected == nil || candidate.certificate.NotAfter.After(selected.certificate.NotAfter) {
+					selected = candidate
+				}
 			}
+			return selected
+		}
+		selected := selectLatest(func(candidate *acmeCertCandidate) bool {
+			canonicalCandidate, err := CanonicalACMEDomains(candidate.domain)
+			return err == nil && canonicalCandidate == canonicalDomains
+		})
+		if selected == nil {
+			selected = selectLatest(func(candidate *acmeCertCandidate) bool {
+				canonicalCandidate, err := CanonicalACMEDomains(candidate.domain)
+				if err != nil {
+					return false
+				}
+				for _, domain := range domains {
+					if canonicalCandidate == domain {
+						return true
+					}
+				}
+				return false
+			})
+		}
+		if selected == nil {
+			selected = selectLatest(func(candidate *acmeCertCandidate) bool {
+				return certificateCoversDomainsParsed(candidate.certificate, domains)
+			})
+		}
+		if selected != nil {
+			return selected.material, true
 		}
 		return CertMaterial{}, false
 	}

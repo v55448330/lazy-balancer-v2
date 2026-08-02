@@ -153,13 +153,16 @@ type ClusterAPIKey struct {
 }
 
 type ClusterCertificate struct {
-	RuleID       string `json:"rule_id"`
-	Domain       string `json:"domain,omitempty"`
-	CertPEM      string `json:"cert_pem"`
-	KeyPEM       string `json:"key_pem"`
-	ExpiresAt    string `json:"expires_at"`
-	CAProviderID int    `json:"ca_provider_id,omitempty"`
-	SourceStatus string `json:"source_status,omitempty"`
+	RuleID           string       `json:"rule_id"`
+	Domain           string       `json:"domain,omitempty"`
+	CertPEM          string       `json:"cert_pem"`
+	KeyPEM           string       `json:"key_pem"`
+	ExpiresAt        string       `json:"expires_at"`
+	CAProviderID     int          `json:"ca_provider_id,omitempty"`
+	SourceStatus     string       `json:"source_status,omitempty"`
+	RenewalAttempts  int          `json:"renewal_attempts,omitempty"`
+	CAAvailableAfter JSONNullTime `json:"ca_available_after"`
+	LastErrorCode    string       `json:"last_error_code,omitempty"`
 }
 
 type ClusterACMEState struct {
@@ -174,6 +177,7 @@ type ClusterSnapshot struct {
 	MinReaderVersion int                  `json:"min_reader_version,omitempty"`
 	Fingerprint      string               `json:"fingerprint"`
 	Signature        string               `json:"signature,omitempty"`
+	CanonicalPayload json.RawMessage      `json:"canonical_payload,omitempty"`
 	Rules            []LbRule             `json:"rules"`
 	Users            []ClusterUser        `json:"users"`
 	APIKeys          []ClusterAPIKey      `json:"api_keys"`

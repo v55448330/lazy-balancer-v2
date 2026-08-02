@@ -458,7 +458,7 @@ func RequeueNonTerminalCertJobs() error {
 func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, issuedCertificate, time.Duration)) error {
 	rows, err := db.DB.QueryContext(ctx, `
 		SELECT j.id, j.rule_id, j.domain, j.status, j.ca_provider_id, COALESCE(j.deployment_attempts,0), j.deployment_available_after,
-		       CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' AND r.domain=j.domain THEN 1 ELSE 0 END
+		       COALESCE(r.domain,''), CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' THEN 1 ELSE 0 END
 		FROM cert_jobs j
 		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
 		WHERE j.status NOT IN ('issued','failed','disabled')
@@ -469,14 +469,14 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 	}
 	type recoveryJob struct {
 		id, providerID, deploymentAttempts int
-		ruleID, domain, status             string
+		ruleID, domain, status, ruleDomain string
 		deploymentAvailableAfter           sql.NullTime
 		applicable                         bool
 	}
 	var jobs []recoveryJob
 	for rows.Next() {
 		var job recoveryJob
-		if err := rows.Scan(&job.id, &job.ruleID, &job.domain, &job.status, &job.providerID, &job.deploymentAttempts, &job.deploymentAvailableAfter, &job.applicable); err != nil {
+		if err := rows.Scan(&job.id, &job.ruleID, &job.domain, &job.status, &job.providerID, &job.deploymentAttempts, &job.deploymentAvailableAfter, &job.ruleDomain, &job.applicable); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan non-terminal certificate job: %w", err)
 		}
@@ -493,6 +493,11 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 	for _, job := range jobs {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if job.applicable {
+			canonicalRule, ruleErr := CanonicalACMEDomains(job.ruleDomain)
+			canonicalJob, jobErr := CanonicalACMEDomains(job.domain)
+			job.applicable = ruleErr == nil && jobErr == nil && canonicalRule == canonicalJob
 		}
 		if !job.applicable {
 			if _, err := db.DB.ExecContext(ctx, "UPDATE cert_jobs SET status='disabled', message='关联规则已不再使用当前 ACME 证书任务', updated_at=datetime('now') WHERE id=? AND status NOT IN ('issued','failed','disabled')", job.id); err != nil {
@@ -779,13 +784,13 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 	}
 
 	rows, err := db.DB.Query(`
-		SELECT j.id, j.rule_id, j.domain, j.status, j.expires_at, j.ca_provider_id, COALESCE(j.renewal_attempts,0), j.ca_available_after, COALESCE(j.last_error_code,'')
+		SELECT j.id, j.rule_id, j.domain, j.status, j.expires_at, j.ca_provider_id, COALESCE(j.renewal_attempts,0), j.ca_available_after, COALESCE(j.last_error_code,''),r.domain
 		FROM cert_jobs j
 		JOIN lb_rules r ON r.caddy_id=j.rule_id
 		WHERE j.expires_at IS NOT NULL
 		  AND datetime(j.expires_at) <= datetime('now', '+' || ? || ' days')
 		  AND j.status IN ('issued', 'failed', 'waiting_ca')
-		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' AND r.domain=j.domain
+		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns'
 		ORDER BY j.expires_at ASC
 	`, days)
 	if err != nil {
@@ -797,9 +802,15 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 	var jobs []models.CertJob
 	for rows.Next() {
 		var j models.CertJob
+		var ruleDomain string
 		if err := rows.Scan(
-			&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.ExpiresAt, &j.CAProviderID, &j.RenewalAttempts, &j.CAAvailableAfter, &j.LastErrorCode,
+			&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.ExpiresAt, &j.CAProviderID, &j.RenewalAttempts, &j.CAAvailableAfter, &j.LastErrorCode, &ruleDomain,
 		); err != nil {
+			continue
+		}
+		canonicalRule, ruleErr := CanonicalACMEDomains(ruleDomain)
+		canonicalJob, jobErr := CanonicalACMEDomains(j.Domain)
+		if ruleErr != nil || jobErr != nil || canonicalRule != canonicalJob {
 			continue
 		}
 		jobs = append(jobs, j)
