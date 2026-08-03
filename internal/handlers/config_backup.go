@@ -220,6 +220,16 @@ func validateV2Backup(backup configBackup) error {
 			backup.Tables[table] = []map[string]any{}
 		}
 	}
+	for index, rule := range backup.Tables["lb_rules"] {
+		protocol, _ := rule["protocol"].(string)
+		listenPort, validPort := backupInteger(rule["listen_port"])
+		if !validPort {
+			return fmt.Errorf("规则 #%d：监听端口必须为整数", index+1)
+		}
+		if err := validateRuleListenPort(protocol, listenPort); err != nil {
+			return fmt.Errorf("规则 #%d：%w", index+1, err)
+		}
+	}
 	for _, job := range backup.Tables["cert_jobs"] {
 		status, ok := job["status"].(string)
 		if !ok {
@@ -487,8 +497,12 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		if importFailurePhase(err) == importPhaseQueue {
 			auditAction = "导入部分失败"
 		}
-		recordAudit(c, auditAction, "配置备份", err.Error())
-		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{"summary": counts}})
+		auditDetail := err.Error()
+		if importFailurePhase(err) == importPhaseQueue && len(disabledConflicts) > 0 {
+			auditDetail = services.FormatAuditDetail(auditDetail, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
+		}
+		recordAudit(c, auditAction, "配置备份", auditDetail)
+		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts}})
 		return
 	}
 	auditParts := []string{"来源：v2 备份（覆盖导入）", counts}

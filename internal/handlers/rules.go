@@ -299,6 +299,19 @@ func normalizedRuleDomains(value string) []string {
 	return domains
 }
 
+func validateRuleListenPort(protocol string, port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("端口必须在 1-65535 之间")
+	}
+	if port == 8000 || port == 2019 {
+		return fmt.Errorf("端口 %d 为管理端口，不可使用", port)
+	}
+	if protocol == "tcp" && (port == 80 || port == 443) {
+		return fmt.Errorf("端口 %d 为 HTTP/HTTPS 保留端口", port)
+	}
+	return nil
+}
+
 func ruleDomainConflict(domain, excludeCaddyID string) (bool, error) {
 	candidates := normalizedRuleDomains(domain)
 	if len(candidates) == 0 {
@@ -380,7 +393,11 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		req.DnsFamily = "ipv4"
 	}
 
-	if err := h.validatePort(req.Protocol, req.ListenPort, ""); err != nil {
+	if err := validateRuleListenPort(req.Protocol, req.ListenPort); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	if err := h.validatePortFromDB(req.Protocol, req.ListenPort, ""); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -1090,7 +1107,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	args = append(args, req.Domain)
 	query += "listen_port = ?, "
 	args = append(args, req.ListenPort)
-	if err := h.validatePort(req.Protocol, req.ListenPort, caddyID); err != nil {
+	if err := validateRuleListenPort(req.Protocol, req.ListenPort); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	if err := h.validatePortFromDB(req.Protocol, req.ListenPort, caddyID); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -1847,7 +1868,11 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "预校验规则配置失败: " + err.Error()})
 		return
 	}
-	if err := h.validatePort(ruleProtocol, rulePort, caddyID); err != nil {
+	if err := validateRuleListenPort(ruleProtocol, rulePort); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "端口冲突，无法启用: " + err.Error()})
+		return
+	}
+	if err := h.validatePortFromDB(ruleProtocol, rulePort, caddyID); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "端口冲突，无法启用: " + err.Error()})
 		return
 	}

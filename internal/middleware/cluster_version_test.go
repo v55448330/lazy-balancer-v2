@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	jwt "github.com/golang-jwt/jwt/v5"
@@ -305,7 +306,7 @@ func TestClusterPasswordVersionSync_rejects_old_JWT(t *testing.T) {
 	if _, err := services.NewSyncService(database, cfg, services.NewCaddyService(caddy.URL)).Pull(context.Background()); err != nil {
 		t.Fatalf("sync changed password version: %v", err)
 	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"user_id": float64(1), "username": "alice", "pwd_ver": float64(0)}).SignedString([]byte(cfg.JWTSecret))
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"user_id": float64(1), "username": "alice", "pwd_ver": float64(0), "exp": time.Now().Add(time.Hour).Unix()}).SignedString([]byte(cfg.JWTSecret))
 	if err != nil {
 		t.Fatalf("sign old JWT: %v", err)
 	}

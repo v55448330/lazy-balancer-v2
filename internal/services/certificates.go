@@ -528,6 +528,14 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("close non-terminal certificate jobs: %w", err)
 	}
+	renewalDays := 30
+	_ = db.DB.QueryRowContext(ctx, "SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays)
+	if renewalDays <= 0 {
+		renewalDays = 30
+	}
+	now := time.Now()
+	selectedByRule := make(map[string]CertificateSelection)
+	selectionLoaded := make(map[string]bool)
 
 	for _, job := range jobs {
 		if err := ctx.Err(); err != nil {
@@ -543,6 +551,29 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 				return fmt.Errorf("disable ineligible recovered certificate job %d: %w", job.id, err)
 			}
 			continue
+		}
+		if job.status != "downloaded" {
+			selection, loaded := selectedByRule[job.ruleID]
+			if !selectionLoaded[job.ruleID] {
+				selection, loaded, err = selectStoredRuleCertificate(ctx, job.ruleID, job.ruleDomain, now)
+				if err != nil {
+					return fmt.Errorf("select existing certificate for recovered job %d: %w", job.id, err)
+				}
+				selectionLoaded[job.ruleID] = true
+				if loaded {
+					selectedByRule[job.ruleID] = selection
+				}
+			}
+			if loaded {
+				canonicalSelected, selectedErr := CanonicalACMEDomains(selection.Candidate.Domain)
+				canonicalRule, ruleErr := CanonicalACMEDomains(job.ruleDomain)
+				if selectedErr == nil && ruleErr == nil && canonicalSelected == canonicalRule && selection.Certificate.NotAfter.After(now.Add(time.Duration(renewalDays)*24*time.Hour)) {
+					if _, err := db.DB.ExecContext(ctx, "UPDATE cert_jobs SET status='issued', message='检测到已有有效证书，跳过恢复签发', updated_at=datetime('now') WHERE id=? AND status NOT IN ('issued','failed','disabled')", job.id); err != nil {
+						return fmt.Errorf("complete recovered certificate job %d with existing certificate: %w", job.id, err)
+					}
+					continue
+				}
+			}
 		}
 		if job.status == "downloaded" {
 			delay := time.Duration(0)
@@ -839,6 +870,9 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 	defer rows.Close()
 
 	var jobs []models.CertJob
+	now := time.Now()
+	selectedByRule := make(map[string]CertificateSelection)
+	selectionLoaded := make(map[string]bool)
 	for rows.Next() {
 		var j models.CertJob
 		var ruleDomain string
@@ -852,7 +886,48 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 		if ruleErr != nil || jobErr != nil || canonicalRule != canonicalJob {
 			continue
 		}
+		selection, selected := selectedByRule[j.RuleID]
+		if !selectionLoaded[j.RuleID] {
+			selection, selected, err = selectStoredRuleCertificate(context.Background(), j.RuleID, ruleDomain, now)
+			selectionLoaded[j.RuleID] = true
+			if err != nil {
+				log.Printf("Failed to select current certificate for rule %s: %v", j.RuleID, err)
+				continue
+			}
+			if selected {
+				selectedByRule[j.RuleID] = selection
+			}
+		}
+		if selected {
+			canonicalSelected, selectedErr := CanonicalACMEDomains(selection.Candidate.Domain)
+			if selectedErr == nil && canonicalSelected == canonicalRule && selection.Certificate.NotAfter.After(now.Add(time.Duration(days)*24*time.Hour)) {
+				continue
+			}
+		}
 		jobs = append(jobs, j)
 	}
 	return jobs
+}
+
+func selectStoredRuleCertificate(ctx context.Context, ruleID, ruleDomains string, now time.Time) (CertificateSelection, bool, error) {
+	rows, err := db.DB.QueryContext(ctx, `SELECT id,domain,status,COALESCE(cert_pem,''),COALESCE(key_pem,''),
+		COALESCE(julianday(COALESCE(updated_at,created_at)),0)
+		FROM cert_jobs WHERE rule_id=? AND COALESCE(cert_pem,'')<>'' AND COALESCE(key_pem,'')<>''`, ruleID)
+	if err != nil {
+		return CertificateSelection{}, false, err
+	}
+	defer rows.Close()
+	candidates := make([]CertificateCandidate, 0)
+	for rows.Next() {
+		var candidate CertificateCandidate
+		if err := rows.Scan(&candidate.ID, &candidate.Domain, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); err != nil {
+			return CertificateSelection{}, false, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return CertificateSelection{}, false, err
+	}
+	selection, selected := SelectCertificate(candidates, ruleDomains, now)
+	return selection, selected, nil
 }

@@ -184,6 +184,11 @@
             <ul v-if="importValidation.warnings?.length" class="import-warnings">
               <li v-for="(warning, index) in importValidation.warnings" :key="index">{{ warning }}</li>
             </ul>
+            <ul v-if="importValidation.disabled_conflicts.length" class="import-warnings import-conflicts">
+              <li v-for="conflict in importValidation.disabled_conflicts" :key="conflict.caddy_id || conflict.name">
+                {{ formatImportConflict(conflict) }}
+              </li>
+            </ul>
             <el-alert
               v-if="importValidation.type !== 'v1'"
               title="导入将覆盖当前全部配置（规则、用户、密钥、证书任务）"
@@ -213,7 +218,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
@@ -321,6 +326,32 @@ interface ImportValidation {
   error?: string
   summary?: Record<string, number>
   warnings?: string[]
+  disabled_conflicts: DisabledRuleConflict[]
+}
+
+interface RuleConflictOpponent {
+  name?: string
+  caddy_id?: string
+  reason: string
+}
+
+interface DisabledRuleConflict {
+  name?: string
+  caddy_id?: string
+  reason: string
+  conflicts_with: RuleConflictOpponent[]
+}
+
+interface ImportResult {
+  imported?: number
+  summary?: string
+  warnings?: string[]
+  disabled_conflicts: DisabledRuleConflict[]
+}
+
+interface ImportResponse {
+  message?: string
+  data?: ImportResult
 }
 
 const importDialogVisible = ref(false)
@@ -341,6 +372,15 @@ const summaryLabels: Record<string, string> = {
   cert_jobs: '证书任务',
   rules: '规则',
   tls_rules: '其中 TLS 规则',
+}
+
+const conflictIdentifier = (conflict: { name?: string; caddy_id?: string }): string => conflict.name || conflict.caddy_id || '未命名规则'
+
+const formatImportConflict = (conflict: DisabledRuleConflict): string => {
+  const opponents = conflict.conflicts_with
+    .map((opponent) => `${conflictIdentifier(opponent)}（${opponent.reason}）`)
+    .join('；')
+  return `规则 ${conflictIdentifier(conflict)} 将被禁用：与${opponents}冲突`
 }
 
 const triggerImport = (): void => {
@@ -381,7 +421,7 @@ const handleImportFile = async (event: Event): Promise<void> => {
     importValidation.value = res.data
   } catch {
     if (validationSeq === importValidationSeq) {
-      importValidation.value = { valid: false, error: '校验请求失败，请重试' }
+      importValidation.value = { valid: false, error: '校验请求失败，请重试', disabled_conflicts: [] }
     }
   } finally {
     if (validationSeq === importValidationSeq) {
@@ -396,12 +436,28 @@ const confirmImport = async (): Promise<void> => {
   importing.value = true
   try {
     const endpoint = validation.type === 'v1' ? '/config/import/v1' : '/config/import'
-    const res = await request.post<{ message?: string }>(endpoint, importFileContent.value, {
+    const res = await request.post<ImportResponse>(endpoint, importFileContent.value, {
       headers: { 'Content-Type': 'application/json' },
     })
     importDialogVisible.value = false
-    ElMessage.success({ message: `${res.message || '配置导入成功'}，正在刷新…`, duration: 800 })
-    setTimeout(() => window.location.reload(), 800)
+    const disabledConflicts = res.data?.disabled_conflicts ?? []
+    const resultLines = [
+      res.message || '配置导入成功',
+      `冲突置为禁用：${disabledConflicts.length} 条`,
+      ...disabledConflicts.map(formatImportConflict),
+    ]
+    await ElMessageBox.alert(
+      h('div', resultLines.map((line) => h('div', line))),
+      '导入完成',
+      {
+        confirmButtonText: '刷新页面',
+        type: disabledConflicts.length > 0 ? 'warning' : 'success',
+        showClose: false,
+        closeOnClickModal: false,
+        closeOnPressEscape: false,
+      },
+    )
+    window.location.reload()
   } finally {
     importing.value = false
   }
@@ -654,5 +710,6 @@ const handleSave = async () => {
 .import-result { display: flex; flex-direction: column; gap: 12px; }
 .import-summary { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; color: var(--el-text-color-primary); }
 .import-warnings { margin: 0; padding-left: 18px; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.8; }
+.import-conflicts { color: var(--el-color-warning-dark-2); }
 .import-alert { margin-top: 4px; }
 </style>

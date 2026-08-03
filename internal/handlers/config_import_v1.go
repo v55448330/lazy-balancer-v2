@@ -65,6 +65,7 @@ type convertedRule struct {
 	Domain      string
 	ListenPort  int
 	Protocol    string
+	Strategy    string
 	EnableTLS   bool
 	TLSCert     string
 	TLSKey      string
@@ -93,7 +94,14 @@ type ruleConflictCandidate struct {
 }
 
 type disabledRuleConflict struct {
-	index   int
+	index         int
+	Name          string                 `json:"name,omitempty"`
+	CaddyID       string                 `json:"caddy_id,omitempty"`
+	Reason        string                 `json:"reason"`
+	ConflictsWith []ruleConflictOpponent `json:"conflicts_with"`
+}
+
+type ruleConflictOpponent struct {
 	Name    string `json:"name,omitempty"`
 	CaddyID string `json:"caddy_id,omitempty"`
 	Reason  string `json:"reason"`
@@ -101,18 +109,12 @@ type disabledRuleConflict struct {
 
 func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRuleConflict {
 	reasons := make(map[int][]string)
+	opponents := make(map[int][]ruleConflictOpponent)
 	for leftIndex, left := range candidates {
 		for rightIndex := leftIndex + 1; rightIndex < len(candidates); rightIndex++ {
 			right := candidates[rightIndex]
-			if left.listenPort != right.listenPort {
-				continue
-			}
 			reason := ""
 			switch {
-			case left.protocol == "tcp" && right.protocol == "tcp":
-				reason = fmt.Sprintf("TCP 监听端口 %d 重复", left.listenPort)
-			case left.protocol == "tcp" || right.protocol == "tcp":
-				reason = fmt.Sprintf("TCP 与 HTTP 监听端口 %d 冲突", left.listenPort)
 			case left.protocol == "http" && right.protocol == "http":
 				leftDomains := make(map[string]struct{})
 				for _, domain := range normalizedRuleDomains(left.domain) {
@@ -124,10 +126,18 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 						break
 					}
 				}
+			case left.listenPort != right.listenPort:
+				continue
+			case left.protocol == "tcp" && right.protocol == "tcp":
+				reason = fmt.Sprintf("TCP 监听端口 %d 重复", left.listenPort)
+			case left.protocol == "tcp" || right.protocol == "tcp":
+				reason = fmt.Sprintf("TCP 与 HTTP 监听端口 %d 冲突", left.listenPort)
 			}
 			if reason != "" {
 				reasons[leftIndex] = append(reasons[leftIndex], reason)
 				reasons[rightIndex] = append(reasons[rightIndex], reason)
+				opponents[leftIndex] = append(opponents[leftIndex], ruleConflictOpponent{Name: right.name, CaddyID: right.caddyID, Reason: reason})
+				opponents[rightIndex] = append(opponents[rightIndex], ruleConflictOpponent{Name: left.name, CaddyID: left.caddyID, Reason: reason})
 			}
 		}
 	}
@@ -136,7 +146,7 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 		if candidateReasons := reasons[index]; len(candidateReasons) > 0 {
 			conflicts = append(conflicts, disabledRuleConflict{
 				index: index, Name: candidate.name, CaddyID: candidate.caddyID,
-				Reason: strings.Join(candidateReasons, "；"),
+				Reason: strings.Join(candidateReasons, "；"), ConflictsWith: opponents[index],
 			})
 		}
 	}
@@ -164,7 +174,15 @@ func formatDisabledRuleConflicts(conflicts []disabledRuleConflict) string {
 		if identifier == "" {
 			identifier = conflict.CaddyID
 		}
-		parts = append(parts, fmt.Sprintf("%s（%s）", identifier, conflict.Reason))
+		opponentParts := make([]string, 0, len(conflict.ConflictsWith))
+		for _, opponent := range conflict.ConflictsWith {
+			opponentIdentifier := opponent.Name
+			if opponentIdentifier == "" {
+				opponentIdentifier = opponent.CaddyID
+			}
+			opponentParts = append(opponentParts, fmt.Sprintf("%s：%s", opponentIdentifier, opponent.Reason))
+		}
+		parts = append(parts, fmt.Sprintf("%s（冲突对象：%s）", identifier, strings.Join(opponentParts, "、")))
 	}
 	return strings.Join(parts, "；")
 }
@@ -207,15 +225,21 @@ func unwrapJSONString(raw json.RawMessage) (json.RawMessage, error) {
 	return raw, nil
 }
 
-func convertV1Rules(proxies []v1Proxy, upstreams map[int]v1Upstream) []convertedRule {
+func convertV1Rules(proxies []v1Proxy, upstreams map[int]v1Upstream) ([]convertedRule, []string) {
 	rules := make([]convertedRule, 0, len(proxies))
+	warnings := make([]string, 0)
 	for _, p := range proxies {
 		f := p.Fields
+		strategy, mapped := mapV1BalancerStrategy(f.BalancerType)
+		if !mapped {
+			warnings = append(warnings, fmt.Sprintf("规则 %s 的负载策略 %q 无法映射，已使用 weighted_round_robin", f.ProxyName, f.BalancerType))
+		}
 		rule := convertedRule{
 			Name:        f.ProxyName,
 			Domain:      f.ServerName,
 			ListenPort:  f.Listen,
 			Protocol:    "http",
+			Strategy:    strategy,
 			EnableTLS:   f.SSL,
 			Redirect:    f.SSLRedirectHTTPS,
 			Compress:    f.Gzip,
@@ -260,13 +284,26 @@ func convertV1Rules(proxies []v1Proxy, upstreams map[int]v1Upstream) []converted
 		}
 		rules = append(rules, rule)
 	}
-	return rules
+	return rules, warnings
+}
+
+func mapV1BalancerStrategy(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "least_conn":
+		return "least_conn", true
+	case "ip_hash":
+		return "ip_hash", true
+	case "round_robin", "weighted":
+		return "weighted_round_robin", true
+	default:
+		return "weighted_round_robin", false
+	}
 }
 
 func validateConvertedV1Rules(rules []convertedRule) error {
 	for index, rule := range rules {
-		if rule.ListenPort < 1 || rule.ListenPort > 65535 {
-			return fmt.Errorf("规则 #%d：监听端口必须在 1-65535 之间", index+1)
+		if err := validateRuleListenPort(rule.Protocol, rule.ListenPort); err != nil {
+			return fmt.Errorf("规则 #%d：%w", index+1, err)
 		}
 		if rule.Protocol != "http" && rule.Protocol != "tcp" {
 			return fmt.Errorf("规则 #%d：协议无效", index+1)
@@ -371,7 +408,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v1", Error: err.Error()}})
 			return
 		}
-		rules := convertV1Rules(proxies, upstreams)
+		rules, strategyWarnings := convertV1Rules(proxies, upstreams)
 		if err := validateConvertedV1Rules(rules); err != nil {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v1", Error: err.Error()}})
 			return
@@ -385,6 +422,12 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			}
 			upstreamCount += len(r.Upstreams)
 		}
+		warnings := []string{
+			"仅导入负载均衡规则（用户、全局配置、证书任务不导入）",
+			"v1 不支持 ACME，HTTPS 规则的证书与私钥将以手动方式随规则导入",
+			"nginx 特有配置（custom_config、日志路径等）已忽略",
+		}
+		warnings = append(warnings, strategyWarnings...)
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{
 			Valid: true,
 			Type:  "v1",
@@ -393,11 +436,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 				"tls_rules": tlsCount,
 				"upstreams": upstreamCount,
 			},
-			Warnings: []string{
-				"仅导入负载均衡规则（用户、全局配置、证书任务不导入）",
-				"v1 不支持 ACME，HTTPS 规则的证书与私钥将以手动方式随规则导入",
-				"nginx 特有配置（custom_config、日志路径等）已忽略",
-			},
+			Warnings:          warnings,
 			DisabledConflicts: disabledConflicts,
 		}})
 		return
@@ -433,7 +472,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	rules := convertV1Rules(proxies, upstreams)
+	rules, strategyWarnings := convertV1Rules(proxies, upstreams)
 	if err := validateConvertedV1Rules(rules); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -488,7 +527,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
 			enable_compress, compress_types, enabled, created_by, updated_by, updated_at, caddy_id, log_enabled)
 		VALUES (?, ?, ?, ?, ?, ?, 0, 0, '', '', ?, 5, ?, 2, ?, 0, 0, 250, 0, 0, 0, ?, ?, ?, 0, 0, ?, ?, ?, ?, 'gzip', ?, ?, ?, datetime('now'), ?, 0)`,
-			r.Name, r.Description, r.Protocol, r.Domain, r.ListenPort, "weighted_round_robin",
+			r.Name, r.Description, r.Protocol, r.Domain, r.ListenPort, r.Strategy,
 			r.HealthInt, r.HealthFails, r.ActiveHC,
 			r.HostHeader, r.EnableTLS, tlsSource(r), r.TLSCert, r.TLSKey, r.Redirect,
 			r.Compress, r.Enabled, userID, userID, caddyID)
@@ -530,18 +569,25 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		if importFailurePhase(err) == importPhaseQueue {
 			auditAction = "导入部分失败"
 		}
-		recordAudit(c, auditAction, "配置备份", err.Error())
-		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{"imported": imported}})
+		auditDetail := err.Error()
+		if importFailurePhase(err) == importPhaseQueue && len(disabledConflicts) > 0 {
+			auditDetail = services.FormatAuditDetail(auditDetail, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
+		}
+		recordAudit(c, auditAction, "配置备份", auditDetail)
+		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{"imported": imported, "disabled_conflicts": disabledConflicts}})
 		return
 	}
 	auditParts := []string{"来源：v1 备份（覆盖导入规则）", fmt.Sprintf("规则 %d 条", imported), fmt.Sprintf("TLS 规则 %d 条", tlsCount), fmt.Sprintf("上游 %d 个", upstreamCount)}
 	if len(disabledConflicts) > 0 {
 		auditParts = append(auditParts, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
 	}
+	if len(strategyWarnings) > 0 {
+		auditParts = append(auditParts, "策略转换警告："+strings.Join(strategyWarnings, "；"))
+	}
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
 	recordAudit(c, "重载", "Caddy配置", "导入配置后自动重载")
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已导入 %d 条规则", imported), Data: gin.H{"imported": imported, "disabled_conflicts": disabledConflicts}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已导入 %d 条规则", imported), Data: gin.H{"imported": imported, "disabled_conflicts": disabledConflicts, "warnings": strategyWarnings}})
 }
 
 func tlsSource(r convertedRule) string {

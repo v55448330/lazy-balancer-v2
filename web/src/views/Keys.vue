@@ -130,7 +130,7 @@
             </template>
           </el-input>
           <div class="mcp-config-hints">
-            自签证书环境：<code>NODE_TLS_REJECT_UNAUTHORIZED=0</code> 已内置于 env（Node.js 客户端生效）；其他客户端请在其 TLS 设置中关闭证书校验。密钥需保持 MCP 开启，只读 Key 仅暴露只读工具。
+            如客户端报证书错误，可在启动环境加 <code>NODE_TLS_REJECT_UNAUTHORIZED=0</code>，或将面板证书加入系统信任。密钥需保持 MCP 开启，只读 Key 仅暴露只读工具。
           </div>
         </el-form-item>
       </el-form>
@@ -156,10 +156,10 @@
 
 3) 调用工具（示例：获取指标总览）
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_metrics_overview","arguments":{}}}</pre>
-            <div class="mcp-guide-subtitle">自签证书（独立部署默认启用）</div>
-            <div class="mcp-guide-text">Node.js 客户端在启动环境中设置 <code>NODE_TLS_REJECT_UNAUTHORIZED=0</code>，或将面板证书加入系统信任；其他客户端请在其 TLS 设置中关闭证书校验。</div>
+            <div class="mcp-guide-subtitle">自签证书（可选配置）</div>
+            <div class="mcp-guide-text">如客户端报证书错误，在启动环境加 <code>NODE_TLS_REJECT_UNAUTHORIZED=0</code>，或将面板证书加入系统信任。</div>
             <div class="mcp-guide-subtitle">常见错误</div>
-            <div class="mcp-guide-text">401：密钥无效或未开启 MCP；403：MCP 未开启 / 只读 Key 调用写工具 / 来源 IP 不在白名单；-32602：参数不符合工具的 input_schema。</div>
+            <div class="mcp-guide-text">401：密钥无效或缺失 / JWT 无效；403：MCP 未开启 / 只读 Key 调用写工具 / 来源 IP 不在白名单；-32602：参数不符合工具的 input_schema。</div>
           </div>
         </el-collapse-item>
       </el-collapse>
@@ -347,6 +347,7 @@ import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateShort } from '@/utils/date'
 import { isValidCidr } from '@/utils/ruleValidation'
+import { copyText } from '@/utils/copy'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { Connection, CopyDocument, Delete, Document, Key, Plus, Setting, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
 import type { APIKey, ApiResponse, CreateAPIKeyInput, MCPToolSpec, UpdateAPIKeyInput } from '@/types'
@@ -395,21 +396,15 @@ const mcpConfigJSON = computed(() => JSON.stringify({
       transport: 'streamable_http',
       url: mcpServiceURL,
       headers: { 'X-API-Key': '<YOUR_API_KEY>' },
-      env: { NODE_TLS_REJECT_UNAUTHORIZED: '0' },
     },
   },
 }, null, 2))
 const copyMCPConfig = async (): Promise<void> => {
-  try {
-    await navigator.clipboard.writeText(mcpConfigJSON.value)
+  if (await copyText(mcpConfigJSON.value)) {
     ElMessage.success('MCP 配置已复制')
-  } catch (error: unknown) {
-    if (error instanceof Error) {
-      ElMessage.error('复制失败，请手动复制配置')
-      return
-    }
-    throw error
+    return
   }
+  ElMessage.error('复制失败，请手动复制配置')
 }
 const formatSchema = (schema: Record<string, unknown>): string => JSON.stringify(schema, null, 2)
 let keysRequestSeq = 0
@@ -627,16 +622,11 @@ const fetchMCPTools = async (): Promise<void> => {
 }
 
 const copyMCPServiceURL = async (): Promise<void> => {
-  try {
-    await navigator.clipboard.writeText(mcpServiceURL)
+  if (await copyText(mcpServiceURL)) {
     ElMessage.success('MCP 服务地址已复制')
-  } catch (error: unknown) {
-    if (error instanceof Error) {
-      ElMessage.error('复制失败，请手动复制 MCP 服务地址')
-      return
-    }
-    throw error
+    return
   }
+  ElMessage.error('复制失败，请手动复制 MCP 服务地址')
 }
 
 onMounted(() => {

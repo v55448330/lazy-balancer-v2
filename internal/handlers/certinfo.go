@@ -80,7 +80,9 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 	}
 
 	jobRows, err := db.DB.QueryContext(c.Request.Context(), fmt.Sprintf(`
-		SELECT rule_id, status, COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs
+		SELECT rule_id, id, status, COALESCE(cert_pem,''), COALESCE(key_pem,''),
+		       COALESCE(julianday(COALESCE(updated_at, created_at)), 0)
+		FROM cert_jobs
 		WHERE rule_id IN (%s) AND COALESCE(cert_pem,'')<>'' AND COALESCE(key_pem,'')<>''
 		ORDER BY rule_id, updated_at DESC, id DESC`, placeholders), args...)
 	if err != nil {
@@ -93,7 +95,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 	for jobRows.Next() {
 		var id string
 		var candidate services.CertInfoCandidate
-		if err := jobRows.Scan(&id, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM); err != nil {
+		if err := jobRows.Scan(&id, &candidate.ID, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "批量读取签发证书失败"})
 			return
 		}

@@ -109,7 +109,7 @@ func TestJWTAuthQueriesAuthenticationStateOnce(t *testing.T) {
 	}
 	cfg := &config.Config{JWTSecret: "test-secret"}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id": float64(7), "username": "alice", "pwd_ver": float64(0), "jti": "one-query",
+		"user_id": float64(7), "username": "alice", "pwd_ver": float64(0), "jti": "one-query", "exp": time.Now().Add(time.Hour).Unix(),
 	}).SignedString([]byte(cfg.JWTSecret))
 	if err != nil {
 		t.Fatal(err)
@@ -287,7 +287,7 @@ func TestJWTAuthAllowsValidJWTWithInvalidAPIKeyHeader(t *testing.T) {
 	}
 	cfg := &config.Config{JWTSecret: "test-secret"}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id": float64(7), "username": "alice", "pwd_ver": float64(0),
+		"user_id": float64(7), "username": "alice", "pwd_ver": float64(0), "exp": time.Now().Add(time.Hour).Unix(),
 	}).SignedString([]byte(cfg.JWTSecret))
 	if err != nil {
 		t.Fatal(err)

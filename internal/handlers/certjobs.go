@@ -181,7 +181,8 @@ func (h *Handlers) GetCurrentCertJobs(c *gin.Context) {
 		return
 	}
 	if len(req.RuleIDs) > 200 {
-		req.RuleIDs = req.RuleIDs[:200]
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "invalid_request：rule_ids 数量不能超过 200"})
+		return
 	}
 	result := make(map[string]*models.CertJob, len(req.RuleIDs))
 	for _, id := range req.RuleIDs {

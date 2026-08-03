@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,35 @@ import (
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
+
+func TestGetCurrentCertJobs_rejects_more_than_200_rule_ids(t *testing.T) {
+	// Given
+	handler := newBackupTestHandlers(t)
+	ruleIDs := make([]string, 201)
+	for index := range ruleIDs {
+		ruleIDs[index] = "lb_" + strconv.Itoa(index)
+	}
+	payload, err := json.Marshal(map[string][]string{"rule_ids": ruleIDs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.POST("/jobs/current", handler.GetCurrentCertJobs)
+	request := httptest.NewRequest(http.MethodPost, "/jobs/current", strings.NewReader(string(payload)))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%q, want 400", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "invalid_request") || !strings.Contains(response.Body.String(), "200") {
+		t.Fatalf("body=%q, want Chinese invalid_request limit message", response.Body.String())
+	}
+}
 
 func TestCertJobRetryBlocked_rejects_disabled_job_without_timestamp(t *testing.T) {
 	blocked, _ := certJobRetryBlocked("disabled", sql.NullTime{}, time.Now())

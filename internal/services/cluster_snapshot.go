@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -14,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -445,79 +442,65 @@ func (s *ClusterService) snapshotCertificates(ctx context.Context, store snapsho
 		COALESCE(j.renewal_attempts,0),j.ca_available_after,COALESCE(j.last_error_code,''),COALESCE(julianday(COALESCE(j.updated_at,j.created_at)),0),j.id
 		FROM lb_rules r JOIN cert_jobs j ON j.rule_id=r.caddy_id
 		WHERE r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' AND j.status<>'disabled'
-		AND COALESCE(j.cert_pem,'')<>'' AND COALESCE(j.key_pem,'')<>'' AND datetime(j.expires_at)>datetime('now')
+		AND COALESCE(j.cert_pem,'')<>'' AND COALESCE(j.key_pem,'')<>''
 		ORDER BY r.caddy_id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照 ACME 证书: %w", err)
 	}
 	defer rows.Close()
-	type certificateCandidate struct {
-		certificate models.ClusterCertificate
-		notAfter    time.Time
-		updatedAt   float64
-		id          int
-		exact       bool
+	type snapshotCertificateCandidate struct {
+		selection CertificateCandidate
+		snapshot  models.ClusterCertificate
 	}
-	selected := make(map[string]certificateCandidate)
+	candidatesByRule := make(map[string][]snapshotCertificateCandidate)
+	ruleDomains := make(map[string]string)
 	now := s.snapshotNow()
 	for rows.Next() {
 		var cert models.ClusterCertificate
 		var ruleDomain string
-		var updatedAt float64
-		var id int
-		if err := rows.Scan(&cert.RuleID, &ruleDomain, &cert.Domain, &cert.CertPEM, &cert.KeyPEM, &cert.ExpiresAt, &cert.CAProviderID, &cert.SourceStatus, &cert.RenewalAttempts, &cert.CAAvailableAfter, &cert.LastErrorCode, &updatedAt, &id); err != nil {
+		var candidate CertificateCandidate
+		if err := rows.Scan(&cert.RuleID, &ruleDomain, &cert.Domain, &cert.CertPEM, &cert.KeyPEM, &cert.ExpiresAt, &cert.CAProviderID, &cert.SourceStatus, &cert.RenewalAttempts, &cert.CAAvailableAfter, &cert.LastErrorCode, &candidate.UpdatedAt, &candidate.ID); err != nil {
 			return nil, fmt.Errorf("扫描快照 ACME 证书: %w", err)
 		}
 		canonicalRuleDomain, err := CanonicalACMEDomains(ruleDomain)
 		if err != nil {
 			return nil, fmt.Errorf("规范化快照规则 %s 域名: %w", cert.RuleID, err)
 		}
-		canonicalJobDomain, err := CanonicalACMEDomains(cert.Domain)
-		if err != nil {
-			warnSnapshotCertificateCandidate(cert.RuleID, id, err, now)
+		candidate.Domain = cert.Domain
+		candidate.Status = cert.SourceStatus
+		candidate.CertPEM = cert.CertPEM
+		candidate.KeyPEM = cert.KeyPEM
+		if _, valid := SelectCertificate([]CertificateCandidate{candidate}, canonicalRuleDomain, now); !valid {
+			warnSnapshotCertificateCandidate(cert.RuleID, int(candidate.ID), errors.New("证书、私钥、有效期或域名覆盖无效"), now)
 			continue
 		}
-		pair, err := tls.X509KeyPair([]byte(cert.CertPEM), []byte(cert.KeyPEM))
-		if err != nil || len(pair.Certificate) == 0 {
-			warnSnapshotCertificateCandidate(cert.RuleID, id, errors.New("证书或私钥格式无效"), now)
-			continue
-		}
-		parsed := pair.Leaf
-		if parsed == nil {
-			parsed, err = x509.ParseCertificate(pair.Certificate[0])
-		}
-		if err != nil || now.Before(parsed.NotBefore) || !now.Before(parsed.NotAfter) {
-			warnSnapshotCertificateCandidate(cert.RuleID, id, errors.New("证书解析失败或不在有效期内"), now)
-			continue
-		}
-		covered := true
-		for _, domain := range strings.Split(canonicalRuleDomain, ",") {
-			if err := parsed.VerifyHostname(domain); err != nil {
-				covered = false
-				break
-			}
-		}
-		if !covered {
-			continue
-		}
-		exact := canonicalJobDomain == canonicalRuleDomain
 		cert.Domain = canonicalRuleDomain
-		candidate := certificateCandidate{certificate: cert, notAfter: parsed.NotAfter, updatedAt: updatedAt, id: id, exact: exact}
-		current, exists := selected[cert.RuleID]
-		if !exists || candidate.notAfter.After(current.notAfter) || candidate.notAfter.Equal(current.notAfter) && (candidate.exact && !current.exact || candidate.exact == current.exact && (candidate.updatedAt > current.updatedAt || candidate.updatedAt == current.updatedAt && candidate.id > current.id)) {
-			selected[cert.RuleID] = candidate
-		}
+		ruleDomains[cert.RuleID] = canonicalRuleDomain
+		candidatesByRule[cert.RuleID] = append(candidatesByRule[cert.RuleID], snapshotCertificateCandidate{selection: candidate, snapshot: cert})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("遍历快照 ACME 证书: %w", err)
 	}
-	ruleIDs := make([]string, 0, len(selected))
-	for ruleID := range selected {
+	ruleIDs := make([]string, 0, len(candidatesByRule))
+	for ruleID := range candidatesByRule {
 		ruleIDs = append(ruleIDs, ruleID)
 	}
 	sort.Strings(ruleIDs)
 	for _, ruleID := range ruleIDs {
-		certs = append(certs, selected[ruleID].certificate)
+		selectionCandidates := make([]CertificateCandidate, 0, len(candidatesByRule[ruleID]))
+		for _, candidate := range candidatesByRule[ruleID] {
+			selectionCandidates = append(selectionCandidates, candidate.selection)
+		}
+		selection, selected := SelectCertificate(selectionCandidates, ruleDomains[ruleID], now)
+		if !selected {
+			continue
+		}
+		for _, candidate := range candidatesByRule[ruleID] {
+			if candidate.selection.ID == selection.Candidate.ID {
+				certs = append(certs, candidate.snapshot)
+				break
+			}
+		}
 	}
 	return certs, nil
 }

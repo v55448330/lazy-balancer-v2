@@ -400,7 +400,7 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 			return []byte(cfg.JWTSecret), nil
-		})
+		}, jwt.WithExpirationRequired(), jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 
 		if err != nil || !token.Valid {
 			recordAuthenticationRejection(c, "jwt_expired_or_invalid")
@@ -603,6 +603,7 @@ func apiKeyReadOnlyGuard() gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		recordAuthenticationRejection(c, "api_key_read_only")
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "只读 API 密钥禁止写操作"})
 	}
 }
@@ -616,6 +617,7 @@ func adminOnly() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role, exists := c.Get("role")
 		if !exists || role != "admin" {
+			recordAuthenticationRejection(c, "admin_required")
 			c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "Admin access required"})
 			c.Abort()
 			return

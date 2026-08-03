@@ -33,6 +33,7 @@ func readOnlyGuard(database *sql.DB) gin.HandlerFunc {
 				c.Next()
 				return
 			}
+			recordAuthenticationRejection(c, "slave_write_denied")
 			c.AbortWithStatusJSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "从节点只读，请在主节点操作"})
 			return
 		}
@@ -42,6 +43,7 @@ func readOnlyGuard(database *sql.DB) gin.HandlerFunc {
 				c.Next()
 				return
 			}
+			recordAuthenticationRejection(c, "slave_write_denied")
 			c.AbortWithStatusJSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "非管理员用户只读"})
 			return
 		}

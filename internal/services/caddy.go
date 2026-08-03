@@ -3,10 +3,8 @@ package services
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/x509"
 	"database/sql"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -699,38 +697,6 @@ func GenerateCaddyConfig(overrides ...*models.UpdateConfigRequest) map[string]in
 	return generateCaddyConfigFromStore(db.DB, overrides...)
 }
 
-func certificateCoversDomains(certPEM string, domains []string) bool {
-	certificate, valid := currentlyValidCertificate(certPEM, time.Now())
-	if !valid {
-		return false
-	}
-	return certificateCoversDomainsParsed(certificate, domains)
-}
-
-func currentlyValidCertificate(certPEM string, now time.Time) (*x509.Certificate, bool) {
-	block, _ := pem.Decode([]byte(certPEM))
-	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, false
-	}
-	certificate, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, false
-	}
-	if now.Before(certificate.NotBefore) || now.After(certificate.NotAfter) {
-		return nil, false
-	}
-	return certificate, true
-}
-
-func certificateCoversDomainsParsed(certificate *x509.Certificate, domains []string) bool {
-	for _, domain := range domains {
-		if err := certificate.VerifyHostname(domain); err != nil {
-			return false
-		}
-	}
-	return true
-}
-
 func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.UpdateConfigRequest) map[string]interface{} {
 	var filesSnapshot CertFilesSnapshot
 	generationFailure := func(format string, args ...any) map[string]interface{} {
@@ -949,16 +915,11 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		}
 	}
 
-	type acmeCertCandidate struct {
-		domain      string
-		material    CertMaterial
-		certificate *x509.Certificate
-	}
-	acmeCerts := make(map[string][]acmeCertCandidate)
+	acmeCerts := make(map[string][]CertificateCandidate)
 	if hasACMETLS {
-		now := time.Now()
 		certRows, certErr := store.Query(`
-			SELECT rule_id, domain, cert_pem, key_pem
+			SELECT rule_id, id, domain, status, cert_pem, key_pem,
+			       COALESCE(julianday(COALESCE(updated_at, created_at)), 0)
 			FROM cert_jobs
 			WHERE cert_pem IS NOT NULL AND cert_pem <> ''
 			  AND key_pem IS NOT NULL AND key_pem <> ''
@@ -968,20 +929,13 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 			return generationFailure("读取 ACME 证书阶段查询失败: %v", certErr)
 		}
 		for certRows.Next() {
-			var ruleID, domain, certPEM, keyPEM string
-			if scanErr := certRows.Scan(&ruleID, &domain, &certPEM, &keyPEM); scanErr != nil {
+			var ruleID string
+			var candidate CertificateCandidate
+			if scanErr := certRows.Scan(&ruleID, &candidate.ID, &candidate.Domain, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); scanErr != nil {
 				closeErr := certRows.Close()
 				return generationFailure("读取 ACME 证书阶段解析失败: %v", errors.Join(scanErr, closeErr))
 			}
-			certificate, valid := currentlyValidCertificate(certPEM, now)
-			if !valid {
-				continue
-			}
-			acmeCerts[ruleID] = append(acmeCerts[ruleID], acmeCertCandidate{
-				domain:      domain,
-				material:    CertMaterial{RuleID: ruleID, CertPEM: certPEM, KeyPEM: keyPEM},
-				certificate: certificate,
-			})
+			acmeCerts[ruleID] = append(acmeCerts[ruleID], candidate)
 		}
 		if rowsErr := certRows.Err(); rowsErr != nil {
 			closeErr := certRows.Close()
@@ -991,51 +945,11 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 			return generationFailure("读取 ACME 证书阶段关闭结果集失败: %v", closeErr)
 		}
 	}
+	selectionNow := time.Now()
 	resolveACMECert := func(ruleID, domain string) (CertMaterial, bool) {
-		canonicalDomains, canonicalErr := CanonicalACMEDomains(domain)
-		if canonicalErr != nil {
-			return CertMaterial{}, false
-		}
-		domains := strings.Split(canonicalDomains, ",")
-		candidates := acmeCerts[ruleID]
-		selectLatest := func(matches func(*acmeCertCandidate) bool) *acmeCertCandidate {
-			var selected *acmeCertCandidate
-			for index := range candidates {
-				candidate := &candidates[index]
-				if !certificateCoversDomainsParsed(candidate.certificate, domains) || !matches(candidate) {
-					continue
-				}
-				if selected == nil || candidate.certificate.NotAfter.After(selected.certificate.NotAfter) {
-					selected = candidate
-				}
-			}
-			return selected
-		}
-		selected := selectLatest(func(candidate *acmeCertCandidate) bool {
-			canonicalCandidate, err := CanonicalACMEDomains(candidate.domain)
-			return err == nil && canonicalCandidate == canonicalDomains
-		})
-		if selected == nil {
-			selected = selectLatest(func(candidate *acmeCertCandidate) bool {
-				canonicalCandidate, err := CanonicalACMEDomains(candidate.domain)
-				if err != nil {
-					return false
-				}
-				for _, domain := range domains {
-					if canonicalCandidate == domain {
-						return true
-					}
-				}
-				return false
-			})
-		}
-		if selected == nil {
-			selected = selectLatest(func(candidate *acmeCertCandidate) bool {
-				return true
-			})
-		}
-		if selected != nil {
-			return selected.material, true
+		selected, ok := SelectCertificate(acmeCerts[ruleID], domain, selectionNow)
+		if ok {
+			return CertMaterial{RuleID: ruleID, CertPEM: selected.Candidate.CertPEM, KeyPEM: selected.Candidate.KeyPEM}, true
 		}
 		return CertMaterial{}, false
 	}
@@ -1624,51 +1538,33 @@ func buildCaddyLogging(level string, sizeMB int) map[string]interface{} {
 // loadACMECertificate reads the issued ACME certificate and key from cert_jobs
 // for the given rule and domain. Returns (certPEM, keyPEM, true) if issued.
 func loadACMECertificateFromStore(store caddyConfigStore, caddyID, domain string) (string, string, bool) {
-	canonicalDomains, err := CanonicalACMEDomains(domain)
+	rows, err := store.Query(`
+		SELECT id, domain, status, cert_pem, key_pem,
+		       COALESCE(julianday(COALESCE(updated_at, created_at)), 0)
+		FROM cert_jobs
+		WHERE rule_id=?
+		  AND cert_pem IS NOT NULL AND cert_pem <> ''
+		  AND key_pem IS NOT NULL AND key_pem <> ''
+		ORDER BY updated_at DESC, id DESC`, caddyID)
 	if err != nil {
+		log.Printf("loadACMECertificate: query failed for rule %s: %v", caddyID, err)
 		return "", "", false
 	}
-	candidates := []string{canonicalDomains}
-	for _, singleDomain := range strings.Split(canonicalDomains, ",") {
-		if singleDomain != canonicalDomains {
-			candidates = append(candidates, singleDomain)
+	defer rows.Close()
+	candidates := make([]CertificateCandidate, 0)
+	for rows.Next() {
+		var candidate CertificateCandidate
+		if err := rows.Scan(&candidate.ID, &candidate.Domain, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); err != nil {
+			return "", "", false
 		}
+		candidates = append(candidates, candidate)
 	}
-	for _, candidate := range candidates {
-		var id int
-		var status string
-		var certPEM, keyPEM string
-		err := store.QueryRow(`
-			SELECT id, status, cert_pem, key_pem
-			FROM cert_jobs
-			WHERE rule_id=? AND domain=?
-			  AND cert_pem IS NOT NULL AND cert_pem <> ''
-			  AND key_pem IS NOT NULL AND key_pem <> ''
-			ORDER BY updated_at DESC LIMIT 1`,
-			caddyID, candidate,
-		).Scan(&id, &status, &certPEM, &keyPEM)
-		if err != nil {
-			if err != sql.ErrNoRows {
-				log.Printf("loadACMECertificate: query failed for rule %s: %v", caddyID, err)
-			}
-			continue
-		}
-		if certPEM == "" || keyPEM == "" {
-			// Defensive: only mark as failed if the job was already issued.
-			// Don't disrupt in-progress jobs (creating_account, waiting_ca, etc.).
-			if status == "issued" {
-				if _, updErr := store.Exec(
-					"UPDATE cert_jobs SET status='failed', message='证书数据缺失', updated_at=datetime('now') WHERE id=?",
-					id,
-				); updErr != nil {
-					log.Printf("loadACMECertificate: failed to mark issued job %d as failed: %v", id, updErr)
-				} else {
-					RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(id), AuditRulePart(caddyID), AuditResultPart("missing_material")), "")
-				}
-			}
-			continue
-		}
-		return certPEM, keyPEM, true
+	if err := rows.Err(); err != nil {
+		return "", "", false
+	}
+	selected, ok := SelectCertificate(candidates, domain, time.Now())
+	if ok {
+		return selected.Candidate.CertPEM, selected.Candidate.KeyPEM, true
 	}
 	return "", "", false
 }

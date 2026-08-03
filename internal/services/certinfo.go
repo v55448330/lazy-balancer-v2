@@ -1,7 +1,6 @@
 package services
 
 import (
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -13,40 +12,12 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
-type CertInfoCandidate struct {
-	Status  string
-	CertPEM string
-	KeyPEM  string
-}
+type CertInfoCandidate = CertificateCandidate
 
 func SelectRuleCertificate(candidates []CertInfoCandidate, ruleDomains string, now time.Time) (string, bool) {
-	canonicalDomains, err := CanonicalACMEDomains(ruleDomains)
-	if err != nil {
-		return "", false
-	}
-	domains := strings.Split(canonicalDomains, ",")
-	for _, candidate := range candidates {
-		if candidate.Status == "disabled" {
-			continue
-		}
-		pair, err := tls.X509KeyPair([]byte(candidate.CertPEM), []byte(candidate.KeyPEM))
-		if err != nil || len(pair.Certificate) == 0 {
-			continue
-		}
-		certificate, err := x509.ParseCertificate(pair.Certificate[0])
-		if err != nil || now.Before(certificate.NotBefore) || !now.Before(certificate.NotAfter) {
-			continue
-		}
-		coversDomains := true
-		for _, domain := range domains {
-			if certificate.VerifyHostname(domain) != nil {
-				coversDomains = false
-				break
-			}
-		}
-		if coversDomains {
-			return candidate.CertPEM, true
-		}
+	selection, selected := SelectCertificate(candidates, ruleDomains, now)
+	if selected {
+		return selection.Candidate.CertPEM, true
 	}
 	return "", false
 }
@@ -146,7 +117,7 @@ func ParseCertInfo(certPEM, source, ruleDomains string) *models.RuleCertInfo {
 	daysRemaining := int(cert.NotAfter.Sub(now).Hours() / 24)
 	info.DaysRemaining = daysRemaining
 
-	if now.After(cert.NotAfter) {
+	if !now.Before(cert.NotAfter) {
 		info.Status = "expired"
 	} else if daysRemaining <= GetCertExpiryThreshold() {
 		info.Status = "expiring"
@@ -192,7 +163,9 @@ func GetRuleCertInfo(caddyID string) *models.RuleCertInfo {
 // It reads the issued certificate from cert_jobs.cert_pem.
 func getACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
 	rows, err := db.DB.Query(`
-		SELECT status, COALESCE(cert_pem, ''), COALESCE(key_pem, '') FROM cert_jobs
+		SELECT id, status, COALESCE(cert_pem, ''), COALESCE(key_pem, ''),
+		       COALESCE(julianday(COALESCE(updated_at, created_at)), 0)
+		FROM cert_jobs
 		WHERE rule_id = ? AND COALESCE(cert_pem, '') != '' AND COALESCE(key_pem, '') != ''
 		ORDER BY updated_at DESC, id DESC`, caddyID)
 	if err != nil {
@@ -203,7 +176,7 @@ func getACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
 	candidates := make([]CertInfoCandidate, 0)
 	for rows.Next() {
 		var candidate CertInfoCandidate
-		if err := rows.Scan(&candidate.Status, &candidate.CertPEM, &candidate.KeyPEM); err != nil {
+		if err := rows.Scan(&candidate.ID, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); err != nil {
 			log.Printf("GetRuleCertInfo: failed to scan ACME certificate for %s: %v", caddyID, err)
 			return missingACMECertInfo(caddyID, ruleDomain)
 		}
