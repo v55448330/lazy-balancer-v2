@@ -434,7 +434,7 @@ func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *t
 	response := httptest.NewRecorder()
 	block := make(chan struct{})
 	acmeMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-block }))
-	t.Cleanup(func() { close(block); acmeMock.Close() })
+	t.Cleanup(func() { close(block); services.GetCAQueueManager().PauseAndDrain(); acmeMock.Close() })
 	if _, err := db.DB.Exec("UPDATE ca_providers SET provider='letsencrypt', directory_url=? WHERE enabled=1", acmeMock.URL); err != nil {
 		t.Fatalf("redirect ACME directory: %v", err)
 	}

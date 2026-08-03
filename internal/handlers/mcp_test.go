@@ -47,7 +47,7 @@ func TestGetMCPTools_returns_complete_public_registry(t *testing.T) {
 	if !hasReadOnly || !hasWrite {
 		t.Fatalf("registry classifications read=%v write=%v", hasReadOnly, hasWrite)
 	}
-	if strings.Contains(response.Body.String(), "schema") {
-		t.Fatalf("handler leaked internal schema: %s", response.Body.String())
+	if strings.Contains(response.Body.String(), "path_args") || strings.Contains(response.Body.String(), "query_args") {
+		t.Fatalf("handler leaked internal path_args/query_args: %s", response.Body.String())
 	}
 }

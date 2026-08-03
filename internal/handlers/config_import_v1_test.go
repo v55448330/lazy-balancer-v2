@@ -201,7 +201,7 @@ func TestImportV1Config_requeues_original_non_terminal_jobs_after_rollback(t *te
 	response := httptest.NewRecorder()
 	block := make(chan struct{})
 	acmeMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-block }))
-	t.Cleanup(func() { close(block); acmeMock.Close() })
+	t.Cleanup(func() { close(block); services.GetCAQueueManager().PauseAndDrain(); acmeMock.Close() })
 	if _, err := db.DB.Exec("UPDATE ca_providers SET provider='letsencrypt', directory_url=? WHERE enabled=1", acmeMock.URL); err != nil {
 		t.Fatalf("redirect ACME directory: %v", err)
 	}

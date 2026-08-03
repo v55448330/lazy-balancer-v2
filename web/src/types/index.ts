@@ -47,6 +47,8 @@ export interface MCPToolSpec {
   readonly method: string
   readonly path: string
   readonly read_only: boolean
+  readonly input_schema?: Record<string, unknown>
+  readonly usage?: string
 }
 
 

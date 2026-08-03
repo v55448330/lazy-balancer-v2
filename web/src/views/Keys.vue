@@ -74,6 +74,15 @@
               功能配置
             </el-button>
             <el-button
+              v-if="key.mcp_enabled"
+              size="small"
+              plain
+              @click="openMCPConfigDialog(key)"
+            >
+              <el-icon><Connection /></el-icon>
+              MCP 配置
+            </el-button>
+            <el-button
               size="small"
               :type="key.is_enabled ? 'warning' : 'success'"
               :loading="togglePendingId === key.id"
@@ -119,11 +128,31 @@
       <el-alert
         class="mcp-auth-alert"
         title="认证方式"
-        description="请求需通过 X-API-Key 头携带 API Key，且该 Key 必须开启 MCP 功能。read_only Key 仅能看到只读工具；配置 IP 白名单后，请求来源还必须命中白名单。"
+        description="请求需通过 X-API-Key 头携带 API Key（兼容 Authorization: Bearer lb_sk_... 形式），且该 Key 必须开启 MCP 功能。read_only Key 仅能看到只读工具；配置 IP 白名单后，请求来源还必须命中白名单。"
         type="info"
         :closable="false"
         show-icon
       />
+
+      <el-collapse class="mcp-agent-guide">
+        <el-collapse-item title="AI Agent 接入指南（协议流程 / 自签证书 / 错误码）" name="agent-guide">
+          <div class="mcp-guide-block">
+            <div class="mcp-guide-subtitle">协议：Streamable HTTP（JSON-RPC 2.0，POST {{ mcpServiceURL }}）</div>
+            <pre class="mcp-guide-pre">1) 初始化
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"your-agent","version":"1.0"}}}
+
+2) 获取工具清单
+{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+
+3) 调用工具（示例：获取指标总览）
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_metrics_overview","arguments":{}}}</pre>
+            <div class="mcp-guide-subtitle">自签证书（独立部署默认启用）</div>
+            <div class="mcp-guide-text">Node.js 客户端在启动环境中设置 <code>NODE_TLS_REJECT_UNAUTHORIZED=0</code>，或将面板证书加入系统信任；其他客户端请在其 TLS 设置中关闭证书校验。</div>
+            <div class="mcp-guide-subtitle">常见错误</div>
+            <div class="mcp-guide-text">401：密钥无效或未开启 MCP；403：MCP 未开启 / 只读 Key 调用写工具 / 来源 IP 不在白名单；-32602：参数不符合工具的 input_schema。</div>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
 
       <div class="mcp-tools-title">工具清单</div>
       <div class="mcp-table-scroll-hint">左右滑动表格可查看方法、REST 路径和类型</div>
@@ -140,6 +169,18 @@
           </template>
         </el-alert>
         <el-table v-else :data="mcpTools" stripe max-height="38vh" empty-text="暂无工具">
+          <el-table-column type="expand">
+            <template #default="scope">
+              <div class="mcp-tool-expand">
+                <div v-if="scope.row.usage" class="mcp-tool-usage"><span class="mcp-expand-label">使用场景：</span>{{ scope.row.usage }}</div>
+                <template v-if="scope.row.input_schema">
+                  <div class="mcp-expand-label">参数契约（input_schema）：</div>
+                  <pre class="mcp-schema-pre">{{ formatSchema(scope.row.input_schema) }}</pre>
+                </template>
+                <div v-else class="mcp-tool-usage"><span class="mcp-expand-label">参数：</span>无（空对象调用）</div>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column prop="name" label="名称" min-width="180" />
           <el-table-column label="详细描述" min-width="260">
             <template #default="scope">
@@ -160,6 +201,37 @@
           </el-table-column>
         </el-table>
       </div>
+    </el-dialog>
+
+    <el-dialog
+      v-model="mcpConfigVisible"
+      title="MCP 接入配置"
+      width="min(640px, 94vw)"
+    >
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="将配置粘贴到 MCP 客户端（Claude Desktop / Cherry Studio 等），并把 <YOUR_API_KEY> 替换为密钥全文。"
+      />
+      <el-input
+        class="mcp-config-json"
+        type="textarea"
+        :model-value="mcpConfigJSON"
+        readonly
+        :rows="14"
+      />
+      <div class="mcp-config-hints">
+        <div>· 自签证书环境：<code>NODE_TLS_REJECT_UNAUTHORIZED=0</code> 已内置于 env（Node.js 客户端生效）；其他客户端请在其 TLS 设置中关闭证书校验。</div>
+        <div>· 密钥需保持 MCP 开启；只读 Key 仅暴露只读工具。</div>
+        <div>· 密钥来源卡片：{{ mcpConfigKeyName }}</div>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="copyMCPConfig">
+          <el-icon><CopyDocument /></el-icon>
+          复制配置
+        </el-button>
+      </template>
     </el-dialog>
 
     <el-dialog
@@ -338,6 +410,35 @@ const mcpToolsLoading = ref(false)
 const mcpToolsLoaded = ref(false)
 const mcpToolsError = ref('')
 const mcpServiceURL = new URL('/api/v1/mcp', window.location.origin).toString()
+const mcpConfigVisible = ref(false)
+const mcpConfigKeyName = ref('')
+const mcpConfigJSON = computed(() => JSON.stringify({
+  mcpServers: {
+    'lazy-balancer': {
+      transport: 'streamable_http',
+      url: mcpServiceURL,
+      headers: { 'X-API-Key': '<YOUR_API_KEY>' },
+      env: { NODE_TLS_REJECT_UNAUTHORIZED: '0' },
+    },
+  },
+}, null, 2))
+const openMCPConfigDialog = (key: APIKey) => {
+  mcpConfigKeyName.value = key.name
+  mcpConfigVisible.value = true
+}
+const copyMCPConfig = async (): Promise<void> => {
+  try {
+    await navigator.clipboard.writeText(mcpConfigJSON.value)
+    ElMessage.success('MCP 配置已复制')
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      ElMessage.error('复制失败，请手动复制配置')
+      return
+    }
+    throw error
+  }
+}
+const formatSchema = (schema: Record<string, unknown>): string => JSON.stringify(schema, null, 2)
 let keysRequestSeq = 0
 
 const fetchKeys = async () => {
@@ -603,6 +704,18 @@ onMounted(() => {
 
 .mcp-auth-alert { margin-bottom: 20px; }
 .mcp-tools-title { margin-bottom: 12px; font-weight: 600; }
+
+.mcp-agent-guide { margin-bottom: 20px; }
+.mcp-guide-subtitle { font-weight: 600; margin: 10px 0 6px; }
+.mcp-guide-text { color: var(--el-text-color-regular); font-size: 13px; line-height: 1.6; }
+.mcp-guide-pre, .mcp-schema-pre { background: #f6f8fa; border-radius: 6px; padding: 10px 12px; font-family: 'SF Mono', Menlo, monospace; font-size: 12px; line-height: 1.55; overflow-x: auto; white-space: pre; }
+.mcp-schema-pre { max-height: 320px; overflow-y: auto; }
+.mcp-config-json { margin-top: 12px; }
+.mcp-config-json :deep(textarea) { font-family: 'SF Mono', Menlo, monospace; font-size: 12px; }
+.mcp-config-hints { margin-top: 10px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.8; }
+.mcp-tool-expand { padding: 4px 12px 10px; }
+.mcp-tool-usage { font-size: 13px; line-height: 1.6; margin-bottom: 8px; }
+.mcp-expand-label { font-weight: 600; }
 .mcp-table-scroll-hint { display: none; }
 .mcp-tools-table { min-height: 120px; overflow-x: auto; }
 .mcp-tools-table :deep(.el-table) { min-width: 800px; }

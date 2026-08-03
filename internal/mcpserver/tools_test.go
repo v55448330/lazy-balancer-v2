@@ -26,7 +26,7 @@ func TestListToolSpecs_returns_sanitized_independent_copy(t *testing.T) {
 	if second[0].Name == "changed_by_caller" {
 		t.Fatal("ListToolSpecs returned caller-mutable registry state")
 	}
-	if strings.Contains(string(encoded), "schema") || strings.Contains(string(encoded), "path_args") || strings.Contains(string(encoded), "query_args") {
+	if strings.Contains(string(encoded), "path_args") || strings.Contains(string(encoded), "query_args") {
 		t.Fatalf("public registry leaks internal fields: %s", encoded)
 	}
 	for index, spec := range second {
@@ -35,6 +35,12 @@ func TestListToolSpecs_returns_sanitized_independent_copy(t *testing.T) {
 		}
 		if spec.ReadOnly != (spec.Method == http.MethodGet) {
 			t.Fatalf("tool %s read_only=%v method=%s", spec.Name, spec.ReadOnly, spec.Method)
+		}
+		if len(spec.InputSchema) > 0 {
+			var shape map[string]any
+			if err := json.Unmarshal(spec.InputSchema, &shape); err != nil || shape["type"] != "object" {
+				t.Fatalf("tool %s input_schema is not a valid JSON schema object: %s", spec.Name, spec.InputSchema)
+			}
 		}
 	}
 }

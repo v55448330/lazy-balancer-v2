@@ -88,7 +88,7 @@ func TestDeleteCertJob_requeues_running_job_when_delete_fails(t *testing.T) {
 	t.Cleanup(func() { testServicesCertDir = oldCertDir })
 	block := make(chan struct{})
 	acmeMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-block }))
-	t.Cleanup(func() { close(block); acmeMock.Close() })
+	t.Cleanup(func() { close(block); services.GetCAQueueManager().PauseAndDrain(); acmeMock.Close() })
 	if _, err := db.DB.Exec("UPDATE ca_providers SET provider='letsencrypt', directory_url=? WHERE enabled=1", acmeMock.URL); err != nil {
 		t.Fatalf("redirect ACME directory: %v", err)
 	}
