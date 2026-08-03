@@ -1323,7 +1323,7 @@ const fetchCertJobs = async (): Promise<void> => {
   if (disposed) return
   const requestedRuleIds = pagedRules.value.map((rule) => rule.caddy_id)
   const requestedRuleIdSet = new Set(requestedRuleIds)
-  const res = await request.post<APIResponse<Record<string, CertJob>>>('/certificates/jobs/current', {
+  const res = await request.post<APIResponse<Record<string, CertJob | null>>>('/certificates/jobs/current', {
     rule_ids: requestedRuleIds,
   }, { signal: certJobsPolling.signal })
   if (!res.data) throw new TypeError('当前证书任务响应缺少 data')
@@ -1331,6 +1331,7 @@ const fetchCertJobs = async (): Promise<void> => {
   const nextMap = { ...certJobMap.value }
   requestedRuleIds.forEach((ruleId) => delete nextMap[ruleId])
   Object.entries(res.data).forEach(([ruleId, job]) => {
+    if (job === null) return
     if (!requestedRuleIdSet.has(ruleId) || job.rule_id !== ruleId) {
       throw new TypeError(`当前证书任务响应包含未请求的规则 ${ruleId}`)
     }
@@ -1338,6 +1339,7 @@ const fetchCertJobs = async (): Promise<void> => {
   })
   const newlyIssuedRuleIds = Object.entries(res.data)
     .filter(([ruleId, job]) => {
+      if (job === null) return false
       const previousStatus = certJobMap.value[ruleId]?.status
       return previousStatus !== undefined && previousStatus !== 'issued' && job.status === 'issued'
     })
