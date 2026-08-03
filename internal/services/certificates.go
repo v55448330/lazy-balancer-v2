@@ -101,14 +101,12 @@ func DisableCertJobsExceptDomain(ruleID, keepDomain string) error {
 		return fmt.Errorf("close retired certificate jobs: %w", err)
 	}
 
-	result, err := tx.Exec(`UPDATE cert_jobs SET status='disabled', message='规则域名已变更，任务已退役', updated_at=datetime('now')
-		WHERE rule_id=? AND domain<>? AND status<>'disabled'`, ruleID, keepDomain)
-	if err != nil {
-		return fmt.Errorf("disable retired certificate jobs: %w", err)
-	}
-	updated, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read retired certificate job count: %w", err)
+	updated := 0
+	for _, jobID := range jobIDs {
+		if err := transitionJob(tx, jobID, jobStatusesExceptDisabled, "disabled", map[string]any{"message": "规则域名已变更，任务已退役"}); err != nil {
+			return fmt.Errorf("disable retired certificate job %d: %w", jobID, err)
+		}
+		updated++
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit certificate job retirement: %w", err)
@@ -205,7 +203,7 @@ func requeueCertJobsSnapshot(ctx context.Context, snapshot CertJobsSnapshot, man
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if job.status == "issued" || job.status == "failed" || job.status == "disabled" {
+		if JobIsTerminal(job.status) {
 			continue
 		}
 		canonicalJob, err := CanonicalACMEDomains(job.domain)
@@ -460,15 +458,11 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 			continue
 		}
 		_, changed, err := qm.EnqueueIfActive(caProviderID, jobID, ruleID, domain, func() (int, bool, error) {
-			res, err := db.DB.Exec(
-				"UPDATE cert_jobs SET status='queued', message='冷却结束，重新排队签发', updated_at=datetime('now') WHERE id=? AND status='waiting_ca' AND (ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))",
-				jobID,
-			)
-			if err != nil {
-				return jobID, false, err
+			err := transitionJob(db.DB, jobID, []string{"waiting_ca"}, "queued", map[string]any{"message": "冷却结束，重新排队签发"})
+			if errors.Is(err, ErrJobTransitionConflict) {
+				return jobID, false, nil
 			}
-			rows, err := res.RowsAffected()
-			return jobID, rows != 0, err
+			return jobID, err == nil, err
 		})
 		if err != nil {
 			log.Printf("waiting_ca scan: failed to requeue job %d: %v", jobID, err)
@@ -500,7 +494,7 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 		       COALESCE(r.domain,''), CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' THEN 1 ELSE 0 END
 		FROM cert_jobs j
 		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
-		WHERE j.status NOT IN ('issued','failed','disabled')
+		WHERE j.status != 'disabled'
 		  AND (j.status != 'waiting_ca' OR j.ca_available_after IS NULL OR datetime(j.ca_available_after) <= datetime('now'))
 	`)
 	if err != nil {
@@ -541,18 +535,21 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if JobIsTerminal(job.status) {
+			continue
+		}
 		if job.applicable {
 			canonicalRule, ruleErr := CanonicalACMEDomains(job.ruleDomain)
 			canonicalJob, jobErr := CanonicalACMEDomains(job.domain)
 			job.applicable = ruleErr == nil && jobErr == nil && canonicalRule == canonicalJob
 		}
 		if !job.applicable {
-			if _, err := db.DB.ExecContext(ctx, "UPDATE cert_jobs SET status='disabled', message='关联规则已不再使用当前 ACME 证书任务', updated_at=datetime('now') WHERE id=? AND status NOT IN ('issued','failed','disabled')", job.id); err != nil {
+			if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "disabled", map[string]any{"message": "关联规则已不再使用当前 ACME 证书任务"}); err != nil {
 				return fmt.Errorf("disable ineligible recovered certificate job %d: %w", job.id, err)
 			}
 			continue
 		}
-		if job.status != "downloaded" {
+		if JobLifecycle(job.status) != JobLifecycleDownloaded {
 			selection, loaded := selectedByRule[job.ruleID]
 			if !selectionLoaded[job.ruleID] {
 				selection, loaded, err = selectStoredRuleCertificate(ctx, job.ruleID, job.ruleDomain, now)
@@ -568,14 +565,14 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 				canonicalSelected, selectedErr := CanonicalACMEDomains(selection.Candidate.Domain)
 				canonicalRule, ruleErr := CanonicalACMEDomains(job.ruleDomain)
 				if selectedErr == nil && ruleErr == nil && canonicalSelected == canonicalRule && selection.Certificate.NotAfter.After(now.Add(time.Duration(renewalDays)*24*time.Hour)) {
-					if _, err := db.DB.ExecContext(ctx, "UPDATE cert_jobs SET status='issued', message='检测到已有有效证书，跳过恢复签发', updated_at=datetime('now') WHERE id=? AND status NOT IN ('issued','failed','disabled')", job.id); err != nil {
+					if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "issued", map[string]any{"message": "检测到已有有效证书，跳过恢复签发"}); err != nil {
 						return fmt.Errorf("complete recovered certificate job %d with existing certificate: %w", job.id, err)
 					}
 					continue
 				}
 			}
 		}
-		if job.status == "downloaded" {
+		if JobLifecycle(job.status) == JobLifecycleDownloaded {
 			delay := time.Duration(0)
 			if job.deploymentAvailableAfter.Valid {
 				delay = time.Until(job.deploymentAvailableAfter.Time)
@@ -587,10 +584,7 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 			continue
 		}
 
-		if _, err := db.DB.ExecContext(ctx,
-			"UPDATE cert_jobs SET status='queued', message='等待排队签发', updated_at=datetime('now') WHERE id=?",
-			job.id,
-		); err != nil {
+		if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "queued", map[string]any{"message": "等待排队签发"}); err != nil {
 			return fmt.Errorf("queue recovered certificate job %d: %w", job.id, err)
 		}
 		RecordAuditLog("system", "恢复排队", "证书签发任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("startup_recovery")), "")
@@ -736,10 +730,7 @@ func (s *CertificateService) renewExpiringCertificates() {
 	for _, j := range jobs {
 		if j.RenewalAttempts >= maxAttempts {
 			if j.Status == "waiting_ca" {
-				if _, err := db.DB.Exec(
-					"UPDATE cert_jobs SET status='failed', message='已达到最大重试次数，请检查 CA 配置后手动重签', updated_at=datetime('now') WHERE id=?",
-					j.ID,
-				); err != nil {
+				if err := transitionJob(db.DB, j.ID, []string{"waiting_ca"}, "failed", map[string]any{"message": "已达到最大重试次数，请检查 CA 配置后手动重签"}); err != nil {
 					log.Printf("Renewal: failed to convert waiting_ca job %d to failed: %v", j.ID, err)
 				} else {
 					RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditResultPart("max_attempts")), "")
@@ -753,15 +744,11 @@ func (s *CertificateService) renewExpiringCertificates() {
 			return
 		}
 		_, changed, err := qm.EnqueueIfActive(j.CAProviderID, j.ID, j.RuleID, j.Domain, func() (int, bool, error) {
-			res, err := db.DB.Exec(
-				"UPDATE cert_jobs SET status='queued', message='等待排队续期', updated_at=datetime('now') WHERE id=? AND status IN ('issued','failed','waiting_ca') AND (ca_available_after IS NULL OR datetime(ca_available_after) <= datetime('now'))",
-				j.ID,
-			)
-			if err != nil {
-				return j.ID, false, err
+			err := transitionJob(db.DB, j.ID, []string{"issued", "failed", "waiting_ca"}, "queued", map[string]any{"message": "等待排队续期"})
+			if errors.Is(err, ErrJobTransitionConflict) {
+				return j.ID, false, nil
 			}
-			rows, err := res.RowsAffected()
-			return j.ID, rows != 0, err
+			return j.ID, err == nil, err
 		})
 		if err != nil {
 			log.Printf("Renewal: failed to update job %d status: %v", j.ID, err)

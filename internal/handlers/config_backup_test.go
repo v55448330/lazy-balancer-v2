@@ -384,6 +384,70 @@ func TestImportConfigBackup_clamps_excessive_jwt_expiration(t *testing.T) {
 	}
 }
 
+func TestImportConfigBackup_remaps_rule_updated_by_to_restored_user(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"users":      {{"id": 7, "username": "importer", "password_hash": "hash", "role": "admin", "is_enabled": true, "password_version": 0}},
+		"lb_rules":   {{"caddy_id": "lb_remap", "name": "remap", "protocol": "http", "domain": "remap.example.test", "listen_port": 8080, "enabled": true}},
+		"upstreams":  {{"rule_id": "lb_remap", "host": "127.0.0.1", "port": 9000, "weight": 1, "enabled": true}},
+		"cert_jobs":  {},
+		"api_keys":   {},
+		"path_rules": {},
+	})
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("username", "importer"); c.Next() })
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var updatedBy sql.NullInt64
+	if err := db.DB.QueryRow("SELECT updated_by FROM lb_rules WHERE caddy_id='lb_remap'").Scan(&updatedBy); err != nil {
+		t.Fatalf("read updated_by: %v", err)
+	}
+	if !updatedBy.Valid || updatedBy.Int64 != 7 {
+		t.Fatalf("updated_by=%+v, want 7 (restored user id)", updatedBy)
+	}
+}
+
+func TestImportConfigBackup_nulls_rule_updated_by_when_operator_missing(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"lb_rules":  {{"caddy_id": "lb_ghost", "name": "ghost", "protocol": "http", "domain": "ghost.example.test", "listen_port": 8081, "enabled": true}},
+		"upstreams": {{"rule_id": "lb_ghost", "host": "127.0.0.1", "port": 9000, "weight": 1, "enabled": true}},
+	})
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("username", "ghost"); c.Next() })
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var updatedBy sql.NullInt64
+	if err := db.DB.QueryRow("SELECT updated_by FROM lb_rules WHERE caddy_id='lb_ghost'").Scan(&updatedBy); err != nil {
+		t.Fatalf("read updated_by: %v", err)
+	}
+	if updatedBy.Valid {
+		t.Fatalf("updated_by=%+v, want NULL when operator is not in backup", updatedBy)
+	}
+}
+
 func TestImportConfigBackup_accepts_historical_v1_core_tables(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	body, err := json.Marshal(configBackup{

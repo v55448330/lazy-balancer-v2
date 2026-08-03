@@ -18,7 +18,13 @@ func readOnlyGuard(database *sql.DB) gin.HandlerFunc {
 		if routePath == "" {
 			routePath = path
 		}
-		if !services.IsAuditedWriteRoute(c.Request.Method, routePath) || services.ClassifyAuditRoute(c.Request.Method, routePath) == services.AuditPolicySkip {
+		switch c.Request.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		default:
+			c.Next()
+			return
+		}
+		if services.IsReadOnlyWriteRoute(c.Request.Method, routePath) {
 			c.Next()
 			return
 		}

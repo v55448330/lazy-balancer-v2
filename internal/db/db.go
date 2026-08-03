@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"sync/atomic"
 
 	_ "github.com/glebarez/sqlite"
+	"golang.org/x/net/idna"
 )
 
 var (
@@ -24,7 +26,37 @@ var (
 	AuditDB        *sql.DB
 	BackgroundDBMu sync.Mutex
 	openDatabase   = sql.Open
+	domainProfile  = idna.New(idna.MapForLookup(), idna.BidiRule(), idna.VerifyDNSLength(true))
 )
+
+func CanonicalDomains(value string) (string, error) {
+	seen := make(map[string]struct{})
+	domains := make([]string, 0)
+	for _, rawDomain := range strings.Split(value, ",") {
+		domain := strings.TrimSpace(strings.ToLower(rawDomain))
+		domain = strings.TrimSuffix(domain, ".")
+		if domain == "" {
+			continue
+		}
+		ascii, err := domainProfile.ToASCII(domain)
+		if err != nil {
+			return "", fmt.Errorf("invalid domain %q: %w", rawDomain, err)
+		}
+		ascii = strings.TrimSuffix(strings.ToLower(ascii), ".")
+		if ascii == "" || net.ParseIP(ascii) != nil {
+			return "", fmt.Errorf("invalid domain %q", rawDomain)
+		}
+		if _, exists := seen[ascii]; exists {
+			continue
+		}
+		seen[ascii] = struct{}{}
+		domains = append(domains, ascii)
+	}
+	if len(domains) == 0 {
+		return "", fmt.Errorf("domain is empty")
+	}
+	return strings.Join(domains, ","), nil
+}
 
 // SetDB registers the handle background goroutines should use; tests that
 // swap DB directly should call this too so refresh loops follow.
@@ -655,10 +687,8 @@ func runMigrations() error {
 		}
 	}
 
-	if _, err := DB.Exec(`DELETE FROM cert_jobs WHERE id NOT IN (
-		SELECT MAX(id) FROM cert_jobs GROUP BY rule_id, domain
-	)`); err != nil {
-		return fmt.Errorf("failed to deduplicate cert_jobs: %w", err)
+	if err := migrateCanonicalDomains(); err != nil {
+		return fmt.Errorf("failed to normalize stored domains: %w", err)
 	}
 
 	// Enforce cert_jobs status CHECK constraint and queued default on existing DBs.
@@ -784,6 +814,96 @@ func runMigrations() error {
 		return fmt.Errorf("failed to backfill CA provider timestamps: %w", err)
 	}
 
+	return nil
+}
+
+type canonicalDomainMigrationRow struct {
+	table  string
+	key    any
+	value  string
+	column string
+}
+
+func migrateCanonicalDomains() error {
+	tx, err := DB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin domain normalization: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.Exec("DROP INDEX IF EXISTS idx_cert_jobs_rule_domain_unique"); err != nil {
+		return fmt.Errorf("drop cert_jobs domain index: %w", err)
+	}
+
+	queries := []struct {
+		table  string
+		column string
+		query  string
+	}{
+		{table: "lb_rules", column: "domain", query: "SELECT caddy_id, domain FROM lb_rules WHERE domain IS NOT NULL AND trim(domain) != ''"},
+		{table: "cert_jobs", column: "domain", query: "SELECT id, domain FROM cert_jobs WHERE trim(domain) != ''"},
+		{table: "upstreams", column: "host", query: "SELECT id, host FROM upstreams WHERE trim(host) != ''"},
+	}
+	rowsToNormalize := make([]canonicalDomainMigrationRow, 0)
+	for _, source := range queries {
+		rows, err := tx.Query(source.query)
+		if err != nil {
+			return fmt.Errorf("query %s.%s: %w", source.table, source.column, err)
+		}
+		for rows.Next() {
+			var key any
+			var value string
+			if err := rows.Scan(&key, &value); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan %s.%s: %w", source.table, source.column, err)
+			}
+			rowsToNormalize = append(rowsToNormalize, canonicalDomainMigrationRow{table: source.table, key: key, value: value, column: source.column})
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterate %s.%s: %w", source.table, source.column, err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close %s.%s rows: %w", source.table, source.column, err)
+		}
+	}
+
+	for _, row := range rowsToNormalize {
+		if row.table == "upstreams" && net.ParseIP(strings.TrimSpace(row.value)) != nil {
+			continue
+		}
+		canonical, err := CanonicalDomains(row.value)
+		if err != nil {
+			log.Printf("Skipping invalid domain during migration: table=%s column=%s row=%v value=%q: %v", row.table, row.column, row.key, row.value, err)
+			continue
+		}
+		if canonical == row.value {
+			continue
+		}
+		keyColumn := "id"
+		if row.table == "lb_rules" {
+			keyColumn = "caddy_id"
+		}
+		if _, err := tx.Exec("UPDATE "+row.table+" SET "+row.column+"=? WHERE "+keyColumn+"=?", canonical, row.key); err != nil {
+			return fmt.Errorf("update %s.%s row %v: %w", row.table, row.column, row.key, err)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM cert_jobs WHERE id NOT IN (
+		SELECT MAX(id) FROM cert_jobs GROUP BY rule_id, domain
+	)`); err != nil {
+		return fmt.Errorf("deduplicate cert_jobs: %w", err)
+	}
+	if _, err := tx.Exec("CREATE UNIQUE INDEX idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)"); err != nil {
+		return fmt.Errorf("create cert_jobs domain index: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit domain normalization: %w", err)
+	}
+	committed = true
 	return nil
 }
 

@@ -189,14 +189,11 @@ func (s *CertIssuer) deploymentFailed(jobID int, material issuedCertificate, mes
 	if status == "downloaded" {
 		availableAfter = time.Now().UTC().Add(delay).Format("2006-01-02 15:04:05")
 	}
-	result, updateErr := db.DB.Exec("UPDATE cert_jobs SET status=?, message=?, deployment_attempts=?, deployment_available_after=?, updated_at=datetime('now') WHERE id=? AND status!='disabled'", status, storedMessage, attempt, availableAfter, jobID)
-	if updateErr == nil {
-		var updated int64
-		updated, updateErr = result.RowsAffected()
-		if updateErr == nil && updated != 1 {
-			updateErr = fmt.Errorf("certificate job is no longer deployable")
-		}
-	}
+	updateErr := transitionJob(db.DB, jobID, jobStatusesExceptDisabled, status, map[string]any{
+		"message":                    storedMessage,
+		"deployment_attempts":        attempt,
+		"deployment_available_after": availableAfter,
+	})
 	if updateErr == nil && status == "downloaded" && s.deploymentRetry != nil {
 		material.deploymentAttempt = attempt
 		s.deploymentRetry(jobID, material, delay)
@@ -227,8 +224,7 @@ type jobLogger struct {
 
 func (l *jobLogger) Log(stage, message string) {
 	l.file.Log(stage, message)
-	if _, err := db.DB.Exec("UPDATE cert_jobs SET status=?, message=?, updated_at=datetime('now') WHERE id=? AND status!='disabled'",
-		stage, message, l.jobID); err != nil {
+	if err := transitionJob(db.DB, l.jobID, jobStatusesExceptDisabled, stage, map[string]any{"message": message}); err != nil {
 		log.Printf("cert job %d status update failed: %v", l.jobID, err)
 	}
 }
@@ -297,16 +293,11 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 				if err := ctx.Err(); err != nil {
 					return errors.Join(err, restoreCertificateDeployment(snapshot, s.caddyReloader))
 				}
-				result, err := db.DB.ExecContext(ctx, `UPDATE cert_jobs SET status='issued', message='证书文件重新部署成功', deployment_attempts=0, deployment_available_after=NULL, updated_at=datetime('now')
-					WHERE id=? AND status='downloaded' AND EXISTS (SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1)
-					AND EXISTS (SELECT 1 FROM global_config WHERE id=1 AND is_master=1)`, jobID, ruleID)
-				if err == nil {
-					var updated int64
-					updated, err = result.RowsAffected()
-					if err == nil && updated != 1 {
-						err = fmt.Errorf("certificate job is no longer deployable")
-					}
-				}
+				err := transitionJob(db.DB, jobID, []string{"downloaded"}, "issued", map[string]any{
+					"message":                    "证书文件重新部署成功",
+					"deployment_attempts":        0,
+					"deployment_available_after": nil,
+				})
 				if err != nil {
 					return errors.Join(fmt.Errorf("finalize certificate redeploy: %w", err), restoreCertificateDeployment(snapshot, s.caddyReloader))
 				}
@@ -327,25 +318,13 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	logger.Log("creating_account", "CA 提供商测试通过")
 
 	// Reset the existing job row (queue manager already created/reused it).
-	res, err := db.DB.Exec(
-		"UPDATE cert_jobs SET status='creating_account', message='开始申请证书', updated_at=datetime('now') WHERE id=? AND status!='disabled'",
-		jobID,
-	)
-	if err != nil {
+	if err := transitionJob(db.DB, jobID, jobStatusesExceptDisabled, "creating_account", map[string]any{"message": "开始申请证书"}); err != nil {
 		return fmt.Errorf("update cert job status: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		failJob(jobID, "证书任务不存在")
-		return fmt.Errorf("cert job %d not found", jobID)
 	}
 
 	// Resolve ACME config for the rule.
 	var acmeConfigID int
-	err = db.DB.QueryRow("SELECT COALESCE(acme_config_id,0) FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&acmeConfigID)
+	err := db.DB.QueryRow("SELECT COALESCE(acme_config_id,0) FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&acmeConfigID)
 	if err != nil {
 		failJob(jobID, "读取规则 ACME 配置失败")
 		return fmt.Errorf("read rule acme config: %w", err)
@@ -440,19 +419,16 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 		return err
 	}
 
-	result, err := db.DB.ExecContext(ctx, `UPDATE cert_jobs SET status='downloaded', cert_pem=?, key_pem=?, expires_at=?, ca_provider_id=?, deployment_attempts=0, deployment_available_after=NULL, updated_at=datetime('now')
-		WHERE id=? AND status IN ('downloaded','cleanup_dns','cleanup_warning') AND EXISTS (SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1)
-		AND EXISTS (SELECT 1 FROM global_config WHERE id=1 AND is_master=1)`,
-		material.certPEM, material.keyPEM, material.notAfter, material.providerID, jobID, material.ruleID)
+	err := transitionJob(db.DB, jobID, []string{"downloaded", "cleanup_dns", "cleanup_warning"}, "downloaded", map[string]any{
+		"cert_pem":                   material.certPEM,
+		"key_pem":                    material.keyPEM,
+		"expires_at":                 material.notAfter,
+		"ca_provider_id":             material.providerID,
+		"deployment_attempts":        0,
+		"deployment_available_after": nil,
+	})
 	if err != nil {
 		return fmt.Errorf("persist downloaded certificate: %w", err)
-	}
-	updated, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read downloaded certificate update result: %w", err)
-	}
-	if updated != 1 {
-		return fmt.Errorf("certificate job %d is no longer deployable", jobID)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -487,16 +463,14 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 		return errors.Join(fmt.Errorf("begin certificate transaction: %w", err), restoreCertificateDeployment(snapshot, s.caddyReloader))
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err = tx.ExecContext(ctx, `UPDATE cert_jobs SET status='issued', message='签发成功', renewal_attempts=0,
-		ca_available_after=NULL, last_error_code=NULL, deployment_attempts=0, deployment_available_after=NULL, updated_at=datetime('now')
-		WHERE id=? AND status IN ('downloaded','cleanup_dns','cleanup_warning') AND EXISTS (SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1)
-		AND EXISTS (SELECT 1 FROM global_config WHERE id=1 AND is_master=1)`, jobID, material.ruleID)
-	if err == nil {
-		updated, err = result.RowsAffected()
-		if err == nil && updated != 1 {
-			err = fmt.Errorf("certificate job is no longer deployable")
-		}
-	}
+	err = transitionJob(tx, jobID, []string{"downloaded", "cleanup_dns", "cleanup_warning"}, "issued", map[string]any{
+		"message":                    "签发成功",
+		"renewal_attempts":           0,
+		"ca_available_after":         nil,
+		"last_error_code":            nil,
+		"deployment_attempts":        0,
+		"deployment_available_after": nil,
+	})
 	if err == nil {
 		err = tx.Commit()
 	}

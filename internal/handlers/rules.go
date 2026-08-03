@@ -283,20 +283,11 @@ func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string, li
 }
 
 func normalizedRuleDomains(value string) []string {
-	seen := make(map[string]struct{})
-	domains := make([]string, 0)
-	for _, domain := range strings.Split(value, ",") {
-		domain = strings.ToLower(strings.TrimSpace(domain))
-		if domain == "" {
-			continue
-		}
-		if _, exists := seen[domain]; exists {
-			continue
-		}
-		seen[domain] = struct{}{}
-		domains = append(domains, domain)
+	canonical, err := db.CanonicalDomains(value)
+	if err != nil {
+		return nil
 	}
-	return domains
+	return strings.Split(canonical, ",")
 }
 
 func validateRuleListenPort(protocol string, port int) error {
@@ -381,7 +372,14 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return
 	}
 
-	// Validate ACME domain restrictions
+	if req.Protocol == "http" && req.Domain != "" {
+		canonicalDomain, err := db.CanonicalDomains(req.Domain)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名格式无效"})
+			return
+		}
+		req.Domain = canonicalDomain
+	}
 	if req.EnableTLS && req.TLSSource == "acme_dns" && req.Domain != "" {
 		if err := services.ValidateACMEDomains(req.Domain); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -404,7 +402,6 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 
 	// Domain uniqueness: HTTP/HTTPS rules cannot share the same domain.
 	if req.Protocol == "http" && req.Domain != "" {
-		req.Domain = strings.Join(normalizedRuleDomains(req.Domain), ",")
 		existing, err := ruleDomainConflict(req.Domain, "")
 		if err != nil {
 			log.Printf("CreateRule domain conflict query failed for domain=%s: %v", req.Domain, err)
@@ -755,14 +752,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 
-	// Validate ACME domain restrictions
-	if req.EnableTLS != nil && *req.EnableTLS && req.TLSSource == "acme_dns" && req.Domain != "" {
-		if err := services.ValidateACMEDomains(req.Domain); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-			return
-		}
-	}
-
 	services.Logf("debug", "UpdateRule request for caddy_id=%s: enable_tls=%v, tls_source=%s, ca_provider_id=%v, cert_len=%d, key_len=%d",
 		caddyID, derefBool(req.EnableTLS), req.TLSSource, func() interface{} {
 			if req.CAProviderID == nil {
@@ -1004,7 +993,18 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	if req.Protocol == "http" && req.Domain != "" {
-		req.Domain = strings.Join(normalizedRuleDomains(req.Domain), ",")
+		canonicalDomain, err := db.CanonicalDomains(req.Domain)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名格式无效"})
+			return
+		}
+		req.Domain = canonicalDomain
+		if req.EnableTLS != nil && *req.EnableTLS && req.TLSSource == "acme_dns" {
+			if err := services.ValidateACMEDomains(req.Domain); err != nil {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+				return
+			}
+		}
 		existing, err := ruleDomainConflict(req.Domain, caddyID)
 		if err != nil {
 			log.Printf("UpdateRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)
@@ -1712,6 +1712,13 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		return
 	}
 	rule := rules[0]
+	if rule.Protocol == "http" && rule.Domain != "" {
+		rule.Domain, err = db.CanonicalDomains(rule.Domain)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名格式无效"})
+			return
+		}
+	}
 	ipACLListBytes, err := json.Marshal(rule.IPACLList)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "序列化 IP 访问控制列表失败"})
@@ -1855,6 +1862,13 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
 		return
 	}
+	if ruleProtocol == "http" && ruleDomain != "" {
+		ruleDomain, err = db.CanonicalDomains(ruleDomain)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名格式无效"})
+			return
+		}
+	}
 	if originalEnabled {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已启用"})
 		return
@@ -1916,7 +1930,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			}
 		}
 	}()
-	if _, err := tx.Exec("UPDATE lb_rules SET enabled = 1, updated_at = datetime('now') WHERE caddy_id = ?", caddyID); err != nil {
+	if _, err := tx.Exec("UPDATE lb_rules SET enabled = 1, domain = ?, updated_at = datetime('now') WHERE caddy_id = ?", ruleDomain, caddyID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "启用规则失败"})
 		return
 	}

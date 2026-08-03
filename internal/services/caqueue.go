@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -667,7 +666,7 @@ func (q *caQueue) wait() {
 }
 
 func requeueCanceledJob(jobID int) {
-	if _, err := db.DB.Exec(`UPDATE cert_jobs SET status='queued', message='节点生命周期切换，等待恢复签发', updated_at=datetime('now') WHERE id=? AND status!='disabled'`, jobID); err != nil {
+	if err := transitionJob(db.DB, jobID, jobStatusesExceptDisabled, "queued", map[string]any{"message": "节点生命周期切换，等待恢复签发"}); err != nil && !errors.Is(err, ErrJobTransitionConflict) {
 		log.Printf("CA queue: failed to requeue canceled job %d: %v", jobID, err)
 	}
 }
@@ -746,63 +745,63 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 	display := available.In(loc)
 
 	if attempts >= maxAttempts {
-		result, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=?, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=? AND status NOT IN ('issued','failed','disabled')", fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts), attempts, jobID)
-		if err != nil {
+		message := fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts)
+		err := transitionJob(db.DB, jobID, nonTerminalJobStatuses, "failed", map[string]any{
+			"message":            message,
+			"renewal_attempts":   attempts,
+			"ca_available_after": nil,
+			"last_error_code":    nil,
+		})
+		if err != nil && !errors.Is(err, ErrJobTransitionConflict) {
 			log.Printf("CA queue: failed to mark job %d as failed at max attempts: %v", jobID, err)
 			return
 		}
-		updated, err := result.RowsAffected()
-		if err != nil {
-			log.Printf("CA queue: failed to read max-attempt result for job %d: %v", jobID, err)
-			return
-		}
-		if updated == 1 {
-			WriteCertJobLog(jobID, "ERROR", "failed", fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts))
+		if err == nil {
+			WriteCertJobLog(jobID, "ERROR", "failed", message)
 			RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("max_attempts")), "")
 		}
 		return
 	}
 
-	result, err := db.DB.Exec(
-		"UPDATE cert_jobs SET status='waiting_ca', message='等待 CA 频率限制冷却', ca_available_after=?, last_error_code='429', renewal_attempts=?, updated_at=datetime('now') WHERE id=? AND status NOT IN ('issued','failed','disabled')",
-		available.UTC().Format("2006-01-02 15:04:05"), attempts, jobID,
-	)
-	if err != nil {
+	err := transitionJob(db.DB, jobID, nonTerminalJobStatuses, "waiting_ca", map[string]any{
+		"message":            "等待 CA 频率限制冷却",
+		"ca_available_after": available.UTC().Format("2006-01-02 15:04:05"),
+		"last_error_code":    "429",
+		"renewal_attempts":   attempts,
+	})
+	if err != nil && !errors.Is(err, ErrJobTransitionConflict) {
 		log.Printf("CA queue: failed to mark job %d as waiting_ca: %v", jobID, err)
 		return
 	}
-	updated, err := result.RowsAffected()
-	if err != nil {
-		log.Printf("CA queue: failed to read waiting_ca result for job %d: %v", jobID, err)
-		return
-	}
-	if updated == 1 {
+	if err == nil {
 		WriteCertJobLog(jobID, "WARN", "waiting_ca", fmt.Sprintf("CA 频率限制，第 %d 次，将在 %s 后重试", attempts, display.Format("2006-01-02 15:04:05 -07:00")))
 		RecordAuditLog("system", "CA限流", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), fmt.Sprintf("第 %d 次限流", attempts), fmt.Sprintf("恢复时间：%s", display.Format("2006-01-02 15:04:05"))), "")
 	}
 }
 func failJob(jobID int, message string) {
-	result, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=COALESCE(renewal_attempts,0)+1, updated_at=datetime('now') WHERE id=? AND status NOT IN ('issued','failed','disabled')", message, jobID)
-	recordFailedJobTransition(jobID, message, result, err)
+	err := transitionJob(db.DB, jobID, nonTerminalJobStatuses, "failed", map[string]any{
+		"message":          message,
+		"renewal_attempts": jobSQLExpression("COALESCE(renewal_attempts,0)+1"),
+	})
+	recordFailedJobTransition(jobID, message, err)
 }
 
 func failJobFromStatus(jobID int, expectedStatus, message string) {
-	result, err := db.DB.Exec("UPDATE cert_jobs SET status='failed', message=?, renewal_attempts=COALESCE(renewal_attempts,0)+1, updated_at=datetime('now') WHERE id=? AND status=?", message, jobID, expectedStatus)
-	recordFailedJobTransition(jobID, message, result, err)
+	err := transitionJob(db.DB, jobID, []string{expectedStatus}, "failed", map[string]any{
+		"message":          message,
+		"renewal_attempts": jobSQLExpression("COALESCE(renewal_attempts,0)+1"),
+	})
+	recordFailedJobTransition(jobID, message, err)
 }
 
-func recordFailedJobTransition(jobID int, message string, result sql.Result, err error) {
-	if err != nil {
+func recordFailedJobTransition(jobID int, message string, err error) {
+	if err != nil && !errors.Is(err, ErrJobTransitionConflict) {
 		log.Printf("CA queue: failed to mark job %d as failed: %v", jobID, err)
 		return
 	}
-	updated, err := result.RowsAffected()
 	if err != nil {
-		log.Printf("CA queue: failed to read fail result for job %d: %v", jobID, err)
 		return
 	}
-	if updated == 1 {
-		WriteCertJobLog(jobID, "ERROR", "failed", message)
-		RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("failed")), "")
-	}
+	WriteCertJobLog(jobID, "ERROR", "failed", message)
+	RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("failed")), "")
 }

@@ -384,6 +384,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		backup.Config["jwt_expire_minutes"], jwtExpireClamped = clampBackupJWTExpireMinutes(value)
 	}
 	ctx := c.Request.Context()
+	importUsername := c.GetString("username")
 	session, err := h.beginConfigImport(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -432,8 +433,17 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	importUserID := int(contextUserID(c))
-	if _, err := tx.ExecContext(ctx, "UPDATE lb_rules SET updated_by=? WHERE id IN (SELECT id FROM lb_rules)", importUserID); err != nil {
+	var importUserID sql.NullInt64
+	if importUsername != "" {
+		err := tx.QueryRowContext(ctx, "SELECT id FROM users WHERE username=?", importUsername).Scan(&importUserID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			err = session.abort(err)
+			recordAudit(c, "导入失败", "配置备份", "重映射规则操作者失败: "+err.Error())
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重映射规则操作者失败，已回滚: " + err.Error()})
+			return
+		}
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE lb_rules SET updated_by=?", importUserID); err != nil {
 		err = session.abort(err)
 		recordAudit(c, "导入失败", "配置备份", "更新规则操作者失败: "+err.Error())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新规则操作者失败，已回滚: " + err.Error()})

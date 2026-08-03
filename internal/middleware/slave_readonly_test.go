@@ -492,6 +492,8 @@ func newReadOnlyGuardTestRouter(t *testing.T, isMaster bool, role string) *gin.E
 	router.POST("/api/v1/auth/login", noContent)
 	router.POST("/api/v1/rules/cert-info", noContent)
 	router.POST("/api/v1/config/preview", noContent)
+	router.POST("/api/v1/certificates/jobs/current", noContent)
+	router.POST("/api/v1/future-write", noContent)
 	return router
 }
 
@@ -695,5 +697,32 @@ func TestReadOnlyGuard_allows_slave_readonly_post_routes(t *testing.T) {
 	// Then
 	if certInfo.Code != http.StatusNoContent || preview.Code != http.StatusNoContent {
 		t.Fatalf("cert-info status = %d, preview status = %d, want both 204", certInfo.Code, preview.Code)
+	}
+}
+
+func TestReadOnlyGuard_writeRouteClassificationIsIndependentFromAuditPolicy(t *testing.T) {
+	// Given
+	router := newReadOnlyGuardTestRouter(t, false, "admin")
+	tests := []struct {
+		name       string
+		path       string
+		wantStatus int
+	}{
+		{name: "non-whitelisted write route", path: "/api/v1/rules", wantStatus: http.StatusForbidden},
+		{name: "whitelisted read-only POST", path: "/api/v1/certificates/jobs/current", wantStatus: http.StatusNoContent},
+		{name: "audit-skip route outside whitelist", path: "/api/v1/future-write", wantStatus: http.StatusForbidden},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// When
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, test.path, nil))
+
+			// Then
+			if response.Code != test.wantStatus {
+				t.Fatalf("status=%d, want %d", response.Code, test.wantStatus)
+			}
+		})
 	}
 }
