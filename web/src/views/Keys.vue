@@ -74,15 +74,6 @@
               功能配置
             </el-button>
             <el-button
-              v-if="key.mcp_enabled"
-              size="small"
-              plain
-              @click="openMCPConfigDialog(key)"
-            >
-              <el-icon><Connection /></el-icon>
-              MCP 配置
-            </el-button>
-            <el-button
               size="small"
               :type="key.is_enabled ? 'warning' : 'success'"
               :loading="togglePendingId === key.id"
@@ -122,6 +113,25 @@
               </el-button>
             </template>
           </el-input>
+        </el-form-item>
+        <el-form-item label="MCP 客户端配置 JSON（粘贴到客户端，替换 <YOUR_API_KEY> 为密钥全文）">
+          <el-input
+            class="mcp-config-json"
+            type="textarea"
+            :model-value="mcpConfigJSON"
+            readonly
+            :rows="13"
+          >
+            <template #append>
+              <el-button aria-label="复制 MCP 配置" @click="copyMCPConfig">
+                <el-icon><CopyDocument /></el-icon>
+                复制
+              </el-button>
+            </template>
+          </el-input>
+          <div class="mcp-config-hints">
+            自签证书环境：<code>NODE_TLS_REJECT_UNAUTHORIZED=0</code> 已内置于 env（Node.js 客户端生效）；其他客户端请在其 TLS 设置中关闭证书校验。密钥需保持 MCP 开启，只读 Key 仅暴露只读工具。
+          </div>
         </el-form-item>
       </el-form>
 
@@ -201,37 +211,6 @@
           </el-table-column>
         </el-table>
       </div>
-    </el-dialog>
-
-    <el-dialog
-      v-model="mcpConfigVisible"
-      title="MCP 接入配置"
-      width="min(640px, 94vw)"
-    >
-      <el-alert
-        type="info"
-        :closable="false"
-        show-icon
-        title="将配置粘贴到 MCP 客户端（Claude Desktop / Cherry Studio 等），并把 <YOUR_API_KEY> 替换为密钥全文。"
-      />
-      <el-input
-        class="mcp-config-json"
-        type="textarea"
-        :model-value="mcpConfigJSON"
-        readonly
-        :rows="14"
-      />
-      <div class="mcp-config-hints">
-        <div>· 自签证书环境：<code>NODE_TLS_REJECT_UNAUTHORIZED=0</code> 已内置于 env（Node.js 客户端生效）；其他客户端请在其 TLS 设置中关闭证书校验。</div>
-        <div>· 密钥需保持 MCP 开启；只读 Key 仅暴露只读工具。</div>
-        <div>· 密钥来源卡片：{{ mcpConfigKeyName }}</div>
-      </div>
-      <template #footer>
-        <el-button type="primary" @click="copyMCPConfig">
-          <el-icon><CopyDocument /></el-icon>
-          复制配置
-        </el-button>
-      </template>
     </el-dialog>
 
     <el-dialog
@@ -410,8 +389,6 @@ const mcpToolsLoading = ref(false)
 const mcpToolsLoaded = ref(false)
 const mcpToolsError = ref('')
 const mcpServiceURL = new URL('/api/v1/mcp', window.location.origin).toString()
-const mcpConfigVisible = ref(false)
-const mcpConfigKeyName = ref('')
 const mcpConfigJSON = computed(() => JSON.stringify({
   mcpServers: {
     'lazy-balancer': {
@@ -422,10 +399,6 @@ const mcpConfigJSON = computed(() => JSON.stringify({
     },
   },
 }, null, 2))
-const openMCPConfigDialog = (key: APIKey) => {
-  mcpConfigKeyName.value = key.name
-  mcpConfigVisible.value = true
-}
 const copyMCPConfig = async (): Promise<void> => {
   try {
     await navigator.clipboard.writeText(mcpConfigJSON.value)
