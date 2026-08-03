@@ -288,6 +288,19 @@ func TestSyncService_Pull_clearsLastSyncErrorOnNotModified(t *testing.T) {
 	}
 }
 
+func TestDecodeSyncError_preservesLegacyPlainText(t *testing.T) {
+	// Given
+	const legacy = "同步拉取失败: legacy failure"
+
+	// When
+	message, code := decodeSyncError(legacy)
+
+	// Then
+	if message != legacy || code != "" {
+		t.Fatalf("message=%q code=%q", message, code)
+	}
+}
+
 func TestSyncService_Pull_persistsResultWhileHoldingPullMutex(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
@@ -445,17 +458,41 @@ func TestVerifySnapshotIntegrity_rejects_tamperedACMECredentials(t *testing.T) {
 	}
 }
 
-func TestVerifySnapshotIntegrity_rejectsHigherSchemaBeforeSignatureVerification(t *testing.T) {
+func TestVerifySnapshotIntegrity_rejectsForgedHigherSchemaAsSignatureInvalid(t *testing.T) {
 	// Given
-	snapshot := models.ClusterSnapshot{SchemaVersion: CurrentSnapshotSchema + 1}
+	snapshot := models.ClusterSnapshot{
+		Version:          1,
+		SchemaVersion:    CurrentSnapshotSchema + 1,
+		MinReaderVersion: CurrentSnapshotSchema,
+		Fingerprint:      strings.Repeat("0", sha256.Size*2),
+		Signature:        strings.Repeat("0", sha256.Size*2),
+		CanonicalPayload: json.RawMessage(`{"version":1,"schema_version":4,"min_reader_version":3}`),
+	}
 
 	// When
 	err := verifySnapshotIntegrity(snapshot, "cluster-token", 0)
 
 	// Then
-	want := fmt.Sprintf("主节点快照版本 v%d 超出本节点支持范围 v%d，请升级从节点", CurrentSnapshotSchema+1, CurrentSnapshotSchema)
-	if err == nil || err.Error() != want {
-		t.Fatalf("schema error=%v, want %q", err, want)
+	var schemaTooNew *SnapshotSchemaTooNewError
+	if err == nil || errors.As(err, &schemaTooNew) || !strings.Contains(err.Error(), "签名校验失败") {
+		t.Fatalf("forged higher-schema error=%v", err)
+	}
+}
+
+func TestVerifySnapshotIntegrity_classifiesAuthenticatedHigherSchema(t *testing.T) {
+	// Given
+	const token = "cluster-token"
+	snapshot := signTestSnapshot(models.ClusterSnapshot{
+		Version: 1, SchemaVersion: CurrentSnapshotSchema + 1, MinReaderVersion: CurrentSnapshotSchema,
+	}, token)
+
+	// When
+	err := verifySnapshotIntegrity(snapshot, token, 0)
+
+	// Then
+	var schemaTooNew *SnapshotSchemaTooNewError
+	if !errors.As(err, &schemaTooNew) {
+		t.Fatalf("authenticated higher-schema error=%v", err)
 	}
 }
 
@@ -468,7 +505,9 @@ func TestSyncService_run_stopsAfterReportingHigherMasterSchema(t *testing.T) {
 		switch request.URL.Path {
 		case "/api/v1/cluster/sync/snapshot":
 			snapshotRequests.Add(1)
-			_ = json.NewEncoder(response).Encode(map[string]any{"data": models.ClusterSnapshot{SchemaVersion: CurrentSnapshotSchema + 1}})
+			_ = json.NewEncoder(response).Encode(map[string]any{"data": signTestSnapshot(models.ClusterSnapshot{
+				Version: 1, SchemaVersion: CurrentSnapshotSchema + 1, MinReaderVersion: CurrentSnapshotSchema,
+			}, "cluster-token")})
 		case "/api/v1/cluster/nodes/report":
 			var report models.ClusterReport
 			_ = json.NewDecoder(request.Body).Decode(&report)
@@ -493,12 +532,95 @@ func TestSyncService_run_stopsAfterReportingHigherMasterSchema(t *testing.T) {
 	// When
 	service.run(context.Background())
 	report := waitSyncTest(t, reported)
+	insert, err := database.Exec(`INSERT INTO nodes (name,ip_address,is_approved,status) VALUES ('slave-a','127.0.0.1',1,'online')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeID, err := insert.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := NewClusterService(database, nil)
+	if err := cluster.ReportNode(context.Background(), int(nodeID), report, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := cluster.Nodes(context.Background(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Then
 	want := fmt.Sprintf("主节点快照版本 v%d 超出本节点支持范围 v%d，请升级从节点", CurrentSnapshotSchema+1, CurrentSnapshotSchema)
-	if snapshotRequests.Load() != 1 || waits != 0 || !strings.Contains(report.LastSyncError, want) || report.ServiceStatus != "degraded" {
-		t.Fatalf("requests=%d waits=%d report=%#v", snapshotRequests.Load(), waits, report)
+	if snapshotRequests.Load() != 1 || waits != 0 || !strings.Contains(report.LastSyncError, want) || report.SyncErrorCode != models.SyncErrorCodeSchemaTooNew || report.ServiceStatus != "degraded" || len(nodes) != 1 || nodes[0].Health == nil || nodes[0].Health.SyncErrorCode != models.SyncErrorCodeSchemaTooNew {
+		t.Fatalf("requests=%d waits=%d report=%#v nodes=%#v", snapshotRequests.Load(), waits, report, nodes)
 	}
+}
+
+func TestSyncService_manualPullResumesHaltedWorker(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	const token = "cluster-token"
+	var version atomic.Int32
+	version.Store(-1)
+	reported := make(chan models.ClusterReport, 4)
+	snapshotRequested := make(chan int, 4)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/cluster/sync/snapshot":
+			current := int(version.Load())
+			snapshotRequested <- current
+			if current < 0 {
+				_ = json.NewEncoder(response).Encode(map[string]any{"data": signTestSnapshot(models.ClusterSnapshot{
+					Version: 1, SchemaVersion: CurrentSnapshotSchema + 1, MinReaderVersion: CurrentSnapshotSchema,
+				}, token)})
+				return
+			}
+			_ = json.NewEncoder(response).Encode(map[string]any{"data": signedTestSnapshot(current, token)})
+		case "/api/v1/cluster/nodes/report":
+			var report models.ClusterReport
+			_ = json.NewDecoder(request.Body).Decode(&report)
+			reported <- report
+		default:
+			response.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer master.Close()
+	caddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
+	defer caddy.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token=?, sync_interval=60 WHERE id=1", master.URL, token); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(caddy.URL))
+	service.Start()
+	t.Cleanup(service.Stop)
+	waitSyncTest(t, reported)
+	version.Store(1)
+
+	// When
+	manual, pullErr := service.Pull(context.Background())
+	version.Store(2)
+	service.Resume()
+	resumedVersion := waitSyncTest(t, snapshotRequested)
+	for resumedVersion != 2 {
+		resumedVersion = waitSyncTest(t, snapshotRequested)
+	}
+
+	// Then
+	if pullErr != nil || !manual.Changed {
+		t.Fatalf("manual result=%#v error=%v", manual, pullErr)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		var applied int
+		if err := database.QueryRow("SELECT applied_version FROM global_config WHERE id=1").Scan(&applied); err != nil {
+			t.Fatal(err)
+		}
+		if applied == 2 {
+			return
+		}
+		runtime.Gosched()
+	}
+	t.Fatal("resumed worker did not apply the next master version")
 }
 
 func TestSyncService_Pull_manualSuccessClearsHigherSchemaTerminalError(t *testing.T) {

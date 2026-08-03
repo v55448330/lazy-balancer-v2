@@ -392,8 +392,8 @@ func TestDeleteRule_returns_timeout_and_preserves_rule_when_worker_does_not_exit
 	if err := db.DB.QueryRow(`SELECT COUNT(*),(SELECT status FROM cert_jobs WHERE rule_id='lb_delete_timeout'),(SELECT message FROM cert_jobs WHERE rule_id='lb_delete_timeout') FROM lb_rules WHERE caddy_id='lb_delete_timeout'`).Scan(&ruleCount, &jobStatus, &jobMessage); err != nil {
 		t.Fatalf("read preserved state: %v", err)
 	}
-	if ruleCount != 1 || jobStatus != "queued" {
-		t.Fatalf("preserved state rule=%d job=(%q,%q), want rule preserved and job restored to pipeline", ruleCount, jobStatus, jobMessage)
+	if ruleCount != 1 || jobStatus != "creating_order" || jobMessage != "unchanged" {
+		t.Fatalf("preserved state rule=%d job=(%q,%q), want rule preserved and job state untouched", ruleCount, jobStatus, jobMessage)
 	}
 	select {
 	case <-drained:

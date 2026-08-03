@@ -94,9 +94,13 @@ import { formatDate } from '@/utils/date'
 import { List, Setting } from '@element-plus/icons-vue'
 import type { ClusterHealth, ClusterNode, ClusterNodeStatus, ClusterStatus } from '@/types'
 
+type SyncErrorCode = 'schema_too_new' | 'schema_too_old' | 'signature_invalid' | 'replay_detected' | 'pin_mismatch' | 'validation_failed' | 'apply_failed' | 'transport_error'
+type ClusterHealthWithSyncError = ClusterHealth & { readonly sync_error_code?: SyncErrorCode }
+type ClusterNodeWithSyncError = Omit<ClusterNode, 'health'> & { readonly health: ClusterHealthWithSyncError | null }
+
 const props = defineProps<{
   readonly status: ClusterStatus
-  readonly nodes: readonly ClusterNode[]
+  readonly nodes: readonly ClusterNodeWithSyncError[]
   readonly loading: boolean
   readonly tokenLoading: boolean
   readonly settingsLoading: boolean
@@ -141,10 +145,14 @@ const healthSummary = (health: ClusterHealth): string => {
   return health.last_sync_error ? `${summary} · ${health.last_sync_error}` : summary
 }
 
-const versionIncompatibilityError = (node: ClusterNode): string => {
-  const error = node.health?.last_sync_error.trim() ?? ''
-  if (!error) return ''
-  const normalized = error.toLowerCase()
+const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => {
+	const error = node.health?.last_sync_error.trim() ?? ''
+	if (!error) return ''
+	const code = node.health?.sync_error_code
+	if (code) {
+		return code === 'schema_too_new' || code === 'schema_too_old' ? error : ''
+	}
+	const normalized = error.toLowerCase()
   const isSnapshotError = normalized.includes('快照') || normalized.includes('snapshot')
   const hasVersionMismatch = normalized.includes('版本过旧')
     || normalized.includes('version incompatible')

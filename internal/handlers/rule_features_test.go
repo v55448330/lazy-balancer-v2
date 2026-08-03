@@ -3,12 +3,14 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -337,16 +339,102 @@ func TestCreateRule_persists_requested_DNS_family(t *testing.T) {
 	}
 }
 
-func TestCreateRule_resolves_default_CA_provider_before_persisting(t *testing.T) {
+func TestCreateRule_does_not_require_CA_provider_outside_ACME(t *testing.T) {
+	tests := []struct {
+		name string
+		body func(t *testing.T) string
+		port int
+	}{
+		{
+			name: "TCP rule",
+			body: func(*testing.T) string {
+				return `{"name":"tcp-no-ca","protocol":"tcp","listen_port":13003,"ca_provider_id":999,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`
+			},
+			port: 13003,
+		},
+		{
+			name: "manual TLS rule",
+			body: func(t *testing.T) string {
+				certPEM, keyPEM, err := generateTestCert("manual.example.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+				if err != nil {
+					t.Fatalf("generate certificate: %v", err)
+				}
+				payload, err := json.Marshal(map[string]any{
+					"name": "manual-no-ca", "protocol": "http", "domain": "manual.example.test", "listen_port": 13004,
+					"enable_tls": true, "tls_source": "manual", "tls_cert": certPEM, "tls_key": keyPEM,
+					"upstreams": []map[string]any{{"host": "127.0.0.1", "port": 9000, "enabled": true}},
+				})
+				if err != nil {
+					t.Fatalf("encode request: %v", err)
+				}
+				return string(payload)
+			},
+			port: 13004,
+		},
+		{
+			name: "HTTP rule without TLS",
+			body: func(*testing.T) string {
+				return `{"name":"http-no-ca","protocol":"http","domain":"plain.example.test","listen_port":13005,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`
+			},
+			port: 13005,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			oldCertDir := testServicesCertDir
+			testServicesCertDir = t.TempDir()
+			t.Cleanup(func() { testServicesCertDir = oldCertDir })
+			handler, _ := newRuleFeatureTestHandlersWithCapture(t)
+			if _, err := db.DB.Exec("UPDATE ca_providers SET enabled=0"); err != nil {
+				t.Fatalf("disable CA providers: %v", err)
+			}
+			router := gin.New()
+			router.POST("/rules", handler.CreateRule)
+			request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(test.body(t)))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// When
+			router.ServeHTTP(response, request)
+
+			// Then
+			if response.Code != http.StatusCreated {
+				t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+			}
+			var providerID int
+			if err := db.DB.QueryRow("SELECT ca_provider_id FROM lb_rules WHERE listen_port=?", test.port).Scan(&providerID); err != nil {
+				t.Fatalf("read persisted CA provider: %v", err)
+			}
+			if providerID != 0 {
+				t.Fatalf("persisted provider=%d, want 0", providerID)
+			}
+		})
+	}
+}
+
+func TestCreateRule_resolves_default_CA_provider_for_ACME(t *testing.T) {
 	// Given
 	handler, _ := newRuleFeatureTestHandlersWithCapture(t)
 	var defaultProviderID int
 	if err := db.DB.QueryRow("SELECT default_ca_provider_id FROM global_config WHERE id=1").Scan(&defaultProviderID); err != nil {
 		t.Fatalf("read default CA provider: %v", err)
 	}
+	result, err := db.DB.Exec(`INSERT INTO certificate_configs (name,dns_provider,dns_credentials,enabled) VALUES ('default-ca-dns','dnspod','{"token":"test"}',1)`)
+	if err != nil {
+		t.Fatalf("seed DNS provider: %v", err)
+	}
+	dnsConfigID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read DNS provider ID: %v", err)
+	}
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
 	router := gin.New()
 	router.POST("/rules", handler.CreateRule)
-	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{"name":"default-ca","protocol":"tcp","listen_port":13003,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`))
+	requestBody := fmt.Sprintf(`{"name":"default-ca","protocol":"http","domain":"default-ca.example.test","listen_port":13006,"enable_tls":true,"tls_source":"acme_dns","acme_config_id":%d,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`, dnsConfigID)
+	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(requestBody))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
@@ -358,7 +446,7 @@ func TestCreateRule_resolves_default_CA_provider_before_persisting(t *testing.T)
 		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
 	}
 	var providerID int
-	if err := db.DB.QueryRow("SELECT ca_provider_id FROM lb_rules WHERE listen_port=13003").Scan(&providerID); err != nil {
+	if err := db.DB.QueryRow("SELECT ca_provider_id FROM lb_rules WHERE listen_port=13006").Scan(&providerID); err != nil {
 		t.Fatalf("read persisted CA provider: %v", err)
 	}
 	if providerID != defaultProviderID || providerID == 0 {

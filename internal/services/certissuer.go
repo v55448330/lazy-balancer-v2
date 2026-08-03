@@ -116,13 +116,14 @@ func scheduleCertificateDeploymentRetry(jobID int, material issuedCertificate, d
 	service.scheduleDeploymentRetry(jobID, material.ruleID, delay)
 }
 
-func cancelCertificateDeploymentRetriesForRule(ruleID string) {
+func signalCancelCertificateDeploymentRetriesForRule(ruleID string) []<-chan struct{} {
 	certificateServiceMu.Lock()
 	service := certificateService
 	certificateServiceMu.Unlock()
 	if service != nil {
-		service.cancelDeploymentRetriesForRule(ruleID)
+		return service.signalCancelDeploymentRetriesForRule(ruleID)
 	}
+	return nil
 }
 
 func cancelCertificateDeploymentRetry(jobID int) {

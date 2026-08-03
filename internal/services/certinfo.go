@@ -1,6 +1,7 @@
 package services
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -11,6 +12,44 @@ import (
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
+
+type CertInfoCandidate struct {
+	Status  string
+	CertPEM string
+	KeyPEM  string
+}
+
+func SelectRuleCertificate(candidates []CertInfoCandidate, ruleDomains string, now time.Time) (string, bool) {
+	canonicalDomains, err := CanonicalACMEDomains(ruleDomains)
+	if err != nil {
+		return "", false
+	}
+	domains := strings.Split(canonicalDomains, ",")
+	for _, candidate := range candidates {
+		if candidate.Status == "disabled" {
+			continue
+		}
+		pair, err := tls.X509KeyPair([]byte(candidate.CertPEM), []byte(candidate.KeyPEM))
+		if err != nil || len(pair.Certificate) == 0 {
+			continue
+		}
+		certificate, err := x509.ParseCertificate(pair.Certificate[0])
+		if err != nil || now.Before(certificate.NotBefore) || !now.Before(certificate.NotAfter) {
+			continue
+		}
+		coversDomains := true
+		for _, domain := range domains {
+			if certificate.VerifyHostname(domain) != nil {
+				coversDomains = false
+				break
+			}
+		}
+		if coversDomains {
+			return candidate.CertPEM, true
+		}
+	}
+	return "", false
+}
 
 // GetCertExpiryThreshold returns the configured cert expiry warning threshold in days.
 func GetCertExpiryThreshold() int {
@@ -152,25 +191,44 @@ func GetRuleCertInfo(caddyID string) *models.RuleCertInfo {
 // getACMECertInfo returns parsed certificate info for an ACME-issued rule.
 // It reads the issued certificate from cert_jobs.cert_pem.
 func getACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
-	var certPEM string
-	err := db.DB.QueryRow(`
-		SELECT COALESCE(cert_pem, '') FROM cert_jobs
-		WHERE rule_id = ? AND cert_pem IS NOT NULL AND cert_pem != ''
-		ORDER BY updated_at DESC LIMIT 1`, caddyID).Scan(&certPEM)
-	if err == nil && certPEM != "" {
+	rows, err := db.DB.Query(`
+		SELECT status, COALESCE(cert_pem, ''), COALESCE(key_pem, '') FROM cert_jobs
+		WHERE rule_id = ? AND COALESCE(cert_pem, '') != '' AND COALESCE(key_pem, '') != ''
+		ORDER BY updated_at DESC, id DESC`, caddyID)
+	if err != nil {
+		log.Printf("GetRuleCertInfo: failed to read ACME certificates for %s: %v", caddyID, err)
+		return missingACMECertInfo(caddyID, ruleDomain)
+	}
+	defer rows.Close()
+	candidates := make([]CertInfoCandidate, 0)
+	for rows.Next() {
+		var candidate CertInfoCandidate
+		if err := rows.Scan(&candidate.Status, &candidate.CertPEM, &candidate.KeyPEM); err != nil {
+			log.Printf("GetRuleCertInfo: failed to scan ACME certificate for %s: %v", caddyID, err)
+			return missingACMECertInfo(caddyID, ruleDomain)
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("GetRuleCertInfo: failed to iterate ACME certificates for %s: %v", caddyID, err)
+		return missingACMECertInfo(caddyID, ruleDomain)
+	}
+	if certPEM, selected := SelectRuleCertificate(candidates, ruleDomain, time.Now()); selected {
 		info := ParseCertInfo(certPEM, "acme_dns", ruleDomain)
 		info.CaddyID = caddyID
 		return info
 	}
+	return missingACMECertInfo(caddyID, ruleDomain)
+}
 
-	info := &models.RuleCertInfo{
+func missingACMECertInfo(caddyID, ruleDomain string) *models.RuleCertInfo {
+	return &models.RuleCertInfo{
 		CaddyID: caddyID,
 		Source:  "acme_dns",
 		Domains: ruleDomain,
 		Status:  "unknown",
 		Error:   "ACME 证书尚未签发或不存在",
 	}
-	return info
 }
 
 // GetRulesCertInfo returns parsed certificate info for multiple rules.

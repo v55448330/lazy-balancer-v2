@@ -19,10 +19,28 @@ type CAQueueManager struct {
 	queues              map[int]*caQueue
 	reloader            func() error
 	active              bool
-	blockedRules        map[string]struct{}
+	blockedRules        map[string]map[RuleBlockToken]struct{}
+	nextBlockToken      RuleBlockToken
+	compensationCtx     context.Context
+	compensationCancel  context.CancelFunc
+	compensationWG      sync.WaitGroup
+	compensationBackoff func(int) time.Duration
+	compensationTimeout time.Duration
+	compensationDrain   func(context.Context, string) error
+	compensationRestore func(context.Context, CertJobsSnapshot) error
+	compensationRequeue func(context.Context, CertJobsSnapshot, *CAQueueManager) error
 	dataDir             string
 	beforeEnqueue       func()
 	beforeActiveEnqueue func()
+}
+
+type RuleBlockToken uint64
+
+type RuleDeletionCompensation struct {
+	RuleID   string
+	Token    RuleBlockToken
+	Snapshot CertJobsSnapshot
+	Drain    func(context.Context) error
 }
 
 var (
@@ -39,12 +57,15 @@ func InitCAQueueManager(reloader func() error, dataDir ...string) {
 		if len(dataDir) > 0 {
 			accountDataDir = dataDir[0]
 		}
+		compensationCtx, compensationCancel := context.WithCancel(context.Background())
 		caQueueManager = &CAQueueManager{
-			queues:       make(map[int]*caQueue),
-			blockedRules: make(map[string]struct{}),
-			reloader:     reloader,
-			active:       true,
-			dataDir:      accountDataDir,
+			queues:             make(map[int]*caQueue),
+			blockedRules:       make(map[string]map[RuleBlockToken]struct{}),
+			reloader:           reloader,
+			active:             true,
+			dataDir:            accountDataDir,
+			compensationCtx:    compensationCtx,
+			compensationCancel: compensationCancel,
 		}
 	})
 }
@@ -102,7 +123,7 @@ func (m *CAQueueManager) CancelJob(jobID int) {
 }
 
 func (m *CAQueueManager) CancelJobsForRule(ctx context.Context, ruleID string) error {
-	cancelCertificateDeploymentRetriesForRule(ruleID)
+	deploymentDone := signalCancelCertificateDeploymentRetriesForRule(ruleID)
 	m.mu.Lock()
 	var done []<-chan struct{}
 	var cancels []context.CancelFunc
@@ -133,47 +154,141 @@ func (m *CAQueueManager) CancelJobsForRule(ctx context.Context, ruleID string) e
 	for _, cancel := range cancels {
 		cancel()
 	}
+	done = append(done, deploymentDone...)
 	for _, executionDone := range done {
 		select {
 		case <-executionDone:
 		case <-ctx.Done():
-			cancelCertificateDeploymentRetriesForRule(ruleID)
 			return fmt.Errorf("等待规则 %s 的证书任务退出: %w", ruleID, ctx.Err())
 		}
 	}
-	cancelCertificateDeploymentRetriesForRule(ruleID)
 	return nil
 }
 
-// BlockJobsForRule prevents new queue admission until UnblockJobsForRule is called.
-func (m *CAQueueManager) BlockJobsForRule(ruleID string) {
+// BlockJobsForRule prevents new queue admission until its token is released.
+func (m *CAQueueManager) BlockJobsForRule(ruleID string) RuleBlockToken {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.blockedRules == nil {
-		m.blockedRules = make(map[string]struct{})
+		m.blockedRules = make(map[string]map[RuleBlockToken]struct{})
 	}
-	m.blockedRules[ruleID] = struct{}{}
+	m.nextBlockToken++
+	token := m.nextBlockToken
+	if m.blockedRules[ruleID] == nil {
+		m.blockedRules[ruleID] = make(map[RuleBlockToken]struct{})
+	}
+	m.blockedRules[ruleID][token] = struct{}{}
+	return token
 }
 
-// UnblockJobsForRule restores queue admission for a rule after compensation.
-func (m *CAQueueManager) UnblockJobsForRule(ruleID string) {
+// UnblockJobsForRule releases only the barrier created by the matching token.
+func (m *CAQueueManager) UnblockJobsForRule(ruleID string, tokens ...RuleBlockToken) {
+	if len(tokens) != 1 {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.blockedRules, ruleID)
+	barriers := m.blockedRules[ruleID]
+	delete(barriers, tokens[0])
+	if len(barriers) == 0 {
+		delete(m.blockedRules, ruleID)
+	}
 }
 
 func (m *CAQueueManager) IsRuleBlocked(ruleID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, blocked := m.blockedRules[ruleID]
-	return blocked
+	return len(m.blockedRules[ruleID]) != 0
 }
 
 func (m *CAQueueManager) isRuleBlocked(ruleID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, blocked := m.blockedRules[ruleID]
-	return blocked
+	return len(m.blockedRules[ruleID]) != 0
+}
+
+func (m *CAQueueManager) StartRuleDeletionCompensation(compensation RuleDeletionCompensation) error {
+	m.mu.Lock()
+	if m.compensationCtx == nil || m.compensationCtx.Err() != nil {
+		m.mu.Unlock()
+		return errors.New("certificate queue manager is stopped")
+	}
+	ctx := m.compensationCtx
+	m.compensationWG.Add(1)
+	m.mu.Unlock()
+
+	go func() {
+		defer m.compensationWG.Done()
+		for attempt := 1; ; attempt++ {
+			timeout := m.compensationTimeout
+			if timeout <= 0 {
+				timeout = 2 * time.Minute
+			}
+			attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+			err := m.compensateRuleDeletion(attemptCtx, compensation)
+			cancel()
+			if err == nil {
+				return
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			Logf("error", "CRITICAL: DeleteRule certificate compensation failed for caddy_id=%s attempt=%d: %v", compensation.RuleID, attempt, err)
+			delay := ruleDeletionCompensationBackoff(attempt)
+			if m.compensationBackoff != nil {
+				delay = m.compensationBackoff(attempt)
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			}
+		}
+	}()
+	return nil
+}
+
+func (m *CAQueueManager) compensateRuleDeletion(ctx context.Context, compensation RuleDeletionCompensation) error {
+	var drainErr error
+	if compensation.Drain != nil {
+		drainErr = compensation.Drain(ctx)
+	} else if m.compensationDrain != nil {
+		drainErr = m.compensationDrain(ctx, compensation.RuleID)
+	} else {
+		drainErr = m.CancelJobsForRule(ctx, compensation.RuleID)
+	}
+	if drainErr != nil {
+		return drainErr
+	}
+	restore := m.compensationRestore
+	if restore == nil {
+		restore = restoreCertJobsForRule
+	}
+	if err := restore(ctx, compensation.Snapshot); err != nil {
+		return err
+	}
+	requeue := m.compensationRequeue
+	if requeue == nil {
+		requeue = requeueCertJobsSnapshot
+	}
+	if err := requeue(ctx, compensation.Snapshot, m); err != nil {
+		return err
+	}
+	m.UnblockJobsForRule(compensation.RuleID, compensation.Token)
+	return nil
+}
+
+func ruleDeletionCompensationBackoff(attempt int) time.Duration {
+	delay := time.Minute
+	for i := 1; i < attempt && delay < 10*time.Minute; i++ {
+		delay *= 2
+	}
+	if delay > 10*time.Minute {
+		return 10 * time.Minute
+	}
+	return delay
 }
 
 // PauseAndDrain prevents new work, cancels every queue, and waits for all
@@ -235,7 +350,7 @@ func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains stri
 	if !m.active {
 		return errors.New("从节点不运行证书签发队列")
 	}
-	if _, blocked := m.blockedRules[ruleID]; blocked {
+	if len(m.blockedRules[ruleID]) != 0 {
 		return fmt.Errorf("certificate queue admission blocked for rule %s", ruleID)
 	}
 	return m.enqueueLocked(providerID, jobID, ruleID, domains)
@@ -250,7 +365,7 @@ func (m *CAQueueManager) EnqueueIfActive(providerID int, jobID int, ruleID, doma
 	if !m.active {
 		return jobID, false, nil
 	}
-	if _, blocked := m.blockedRules[ruleID]; blocked {
+	if len(m.blockedRules[ruleID]) != 0 {
 		return jobID, false, fmt.Errorf("certificate queue admission blocked for rule %s", ruleID)
 	}
 	jobID, changed, err := transition()
@@ -298,11 +413,35 @@ func (m *CAQueueManager) enqueueLocked(providerID int, jobID int, ruleID, domain
 	return nil
 }
 
+func (m *CAQueueManager) enqueueCompensation(providerID int, jobID int, ruleID, domains string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.active {
+		return errors.New("certificate queue manager is stopped")
+	}
+	if len(m.blockedRules[ruleID]) == 0 {
+		return fmt.Errorf("certificate compensation lease missing for rule %s", ruleID)
+	}
+	return m.enqueueLocked(providerID, jobID, ruleID, domains)
+}
+
 func (m *CAQueueManager) Start() {
-	m.Resume()
+	m.mu.Lock()
+	if m.compensationCtx == nil || m.compensationCtx.Err() != nil {
+		m.compensationCtx, m.compensationCancel = context.WithCancel(context.Background())
+	}
+	m.active = true
+	m.mu.Unlock()
+	resumeCertificateDeploymentRetries()
 }
 
 func (m *CAQueueManager) Stop() {
+	m.mu.Lock()
+	if m.compensationCancel != nil {
+		m.compensationCancel()
+	}
+	m.mu.Unlock()
+	m.compensationWG.Wait()
 	m.PauseAndDrain()
 }
 

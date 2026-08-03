@@ -126,14 +126,14 @@ func TestTCPRuleMetrics_deduplicates_and_joins_upstream_addresses(t *testing.T) 
 func TestGetRulesCertInfo_ignores_retired_certificate_for_previous_domain(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
-	certPEM, _, err := generateTestCert("old.example.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	certPEM, keyPEM, err := generateTestCert("old.example.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
 	if err != nil {
 		t.Fatalf("generate certificate: %v", err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_changed','changed','http','new.example.test',443,1,1,'acme_dns');
-		INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,expires_at,updated_at)
-		VALUES ('lb_changed','old.example.test','disabled',?,?,datetime('now'))`, certPEM, time.Now().Add(24*time.Hour)); err != nil {
+		INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,expires_at,updated_at)
+		VALUES ('lb_changed','old.example.test','disabled',?,?,?,datetime('now'))`, certPEM, keyPEM, time.Now().Add(24*time.Hour)); err != nil {
 		t.Fatalf("seed rule and old certificate: %v", err)
 	}
 	router := gin.New()
@@ -155,6 +155,39 @@ func TestGetRulesCertInfo_ignores_retired_certificate_for_previous_domain(t *tes
 	info := envelope.Data["lb_changed"]
 	if info == nil || info.Status != "unknown" {
 		t.Fatalf("certificate info=%#v, want unknown", info)
+	}
+}
+
+func TestGetRuleCertInfo_ignores_certificate_for_previous_domain(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	certPEM, keyPEM, err := generateTestCert("old.example.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("generate certificate: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_single_changed','changed','http','new.example.test',443,1,1,'acme_dns');
+		INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,expires_at,updated_at)
+		VALUES ('lb_single_changed','old.example.test','issued',?,?,?,datetime('now'))`, certPEM, keyPEM, time.Now().Add(24*time.Hour)); err != nil {
+		t.Fatalf("seed rule and old certificate: %v", err)
+	}
+	router := gin.New()
+	router.GET("/rules/:caddy_id/cert-info", h.GetRuleCertInfo)
+	request := httptest.NewRequest(http.MethodGet, "/rules/lb_single_changed/cert-info", nil)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	var envelope struct {
+		Data *models.RuleCertInfo `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if envelope.Data == nil || envelope.Data.Status != "unknown" {
+		t.Fatalf("certificate info=%#v, want unknown", envelope.Data)
 	}
 }
 

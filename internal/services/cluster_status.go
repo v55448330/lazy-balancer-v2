@@ -88,11 +88,13 @@ func (s *ClusterService) Status(ctx context.Context) (models.ClusterStatus, erro
 	var isMaster bool
 	var clusterToken string
 	var lastSync sql.NullTime
+	var storedSyncError string
 	err := s.db.QueryRowContext(ctx, `SELECT is_master, COALESCE(cluster_version,0), COALESCE(master_url,''), COALESCE(sync_interval,60), COALESCE(sync_caddy_config,0), COALESCE(cluster_token,''), COALESCE(applied_version,0), last_sync, COALESCE(last_sync_error,'') FROM global_config WHERE id=1`).Scan(
-		&isMaster, &status.ClusterVersion, &status.MasterURL, &status.SyncInterval, &status.SyncCaddyConfig, &clusterToken, &status.AppliedVersion, &lastSync, &status.LastSyncError)
+		&isMaster, &status.ClusterVersion, &status.MasterURL, &status.SyncInterval, &status.SyncCaddyConfig, &clusterToken, &status.AppliedVersion, &lastSync, &storedSyncError)
 	if err != nil {
 		return models.ClusterStatus{}, fmt.Errorf("读取集群状态: %w", err)
 	}
+	status.LastSyncError, status.SyncErrorCode = decodeSyncError(storedSyncError)
 	status.NodeMode = "slave"
 	status.ClusterActive = clusterToken != ""
 	if isMaster {
@@ -148,6 +150,7 @@ func (s *ClusterService) ReportNode(ctx context.Context, nodeID int, report mode
 	health := report.Health
 	health.LastSyncAt = report.LastSyncAt
 	health.LastSyncError = report.LastSyncError
+	health.SyncErrorCode = report.SyncErrorCode
 	encoded, err := json.Marshal(health)
 	if err != nil {
 		return fmt.Errorf("编码节点健康状态: %w", err)

@@ -88,6 +88,11 @@ import ClusterSlavePanel from './cluster/ClusterSlavePanel.vue'
 import ClusterStatusCard from './cluster/ClusterStatusCard.vue'
 import { usePollingTask } from '@/composables/usePollingTask'
 
+type SyncErrorCode = 'schema_too_new' | 'schema_too_old' | 'signature_invalid' | 'replay_detected' | 'pin_mismatch' | 'validation_failed' | 'apply_failed' | 'transport_error'
+type ClusterNodeWithSyncError = Omit<ClusterNode, 'health'> & {
+	readonly health: (NonNullable<ClusterNode['health']> & { readonly sync_error_code?: SyncErrorCode }) | null
+}
+
 interface ActionResponse {
   readonly code: number
   readonly message: string
@@ -102,7 +107,7 @@ const authStore = useAuthStore()
 let disposed = false
 let requestSequence = 0
 const status = ref<ClusterStatus | null>(null)
-const nodes = ref<readonly ClusterNode[]>([])
+const nodes = ref<readonly ClusterNodeWithSyncError[]>([])
 const initialLoading = ref(true)
 const nodesLoading = ref(false)
 const modeLoading = ref(false)
@@ -136,7 +141,7 @@ const fetchNodes = async (): Promise<void> => {
   const requestSeq = requestSequence
   nodesLoading.value = true
   try {
-    const response = await request.get<ApiResponse<readonly ClusterNode[]>>('/cluster/nodes', { signal: clusterPolling.signal })
+		const response = await request.get<ApiResponse<readonly ClusterNodeWithSyncError[]>>('/cluster/nodes', { signal: clusterPolling.signal })
     if (!disposed && requestSeq === requestSequence) nodes.value = response.data
   } finally {
     if (!disposed && requestSeq === requestSequence) nodesLoading.value = false

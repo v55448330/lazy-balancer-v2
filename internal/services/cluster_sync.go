@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"lazy-balancer-v2/internal/config"
@@ -35,6 +36,34 @@ type SnapshotSchemaTooNewError struct {
 	Actual    int
 	Supported int
 }
+
+type SnapshotSchemaTooOldError struct {
+	Actual    int
+	Supported int
+}
+
+func (err *SnapshotSchemaTooOldError) Error() string {
+	return fmt.Sprintf("快照 schema v%d 过旧：主节点需升级到支持 schema v%d 的版本", err.Actual, err.Supported)
+}
+
+type syncFailure struct {
+	code models.SyncErrorCode
+	err  error
+}
+
+func (failure *syncFailure) Error() string { return failure.err.Error() }
+func (failure *syncFailure) Unwrap() error { return failure.err }
+
+type syncLifecycleState uint32
+
+const (
+	syncStateStopped syncLifecycleState = iota
+	syncStateRunning
+	syncStateDegraded
+	syncStateHalted
+)
+
+var errClusterPinMismatch = errors.New("主节点 TLS 证书指纹不匹配")
 
 func (err *SnapshotSchemaTooNewError) Error() string {
 	return fmt.Sprintf("主节点快照版本 v%d 超出本节点支持范围 v%d，请升级从节点", err.Actual, err.Supported)
@@ -58,6 +87,7 @@ type SyncService struct {
 	cancel                 context.CancelFunc
 	done                   chan struct{}
 	generation             uint64
+	state                  atomic.Uint32
 	pullsStopped           bool
 	pullWG                 sync.WaitGroup
 	runFn                  func(context.Context)
@@ -207,7 +237,7 @@ func verifyOrStoreClusterPin(path, fingerprint string) error {
 	stored, err := os.ReadFile(path)
 	if err == nil {
 		if strings.TrimSpace(string(stored)) != fingerprint {
-			return errors.New("主节点 TLS 证书指纹不匹配")
+			return errClusterPinMismatch
 		}
 		return nil
 	}
@@ -293,20 +323,46 @@ func verifyClusterPinDirectory(path string) error {
 func (s *SyncService) Start() {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
+	s.startLocked(false)
+}
+
+func (s *SyncService) Resume() {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if syncLifecycleState(s.state.Load()) != syncStateHalted {
+		return
+	}
+	s.mu.Lock()
+	done := s.done
+	s.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+	s.startLocked(true)
+}
+
+func (s *SyncService) startLocked(resume bool) {
+	if syncLifecycleState(s.state.Load()) == syncStateHalted && !resume {
+		return
+	}
+	s.mu.Lock()
+	if s.cancel != nil {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
 	s.pullAdmissionMu.Lock()
 	s.pullsStopped = false
 	s.pullAdmissionMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.cancel != nil {
-		return
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.generation++
 	generation := s.generation
 	s.cancel = cancel
 	done := make(chan struct{})
 	s.done = done
+	s.state.Store(uint32(syncStateRunning))
 	go func() {
 		if s.runFn != nil {
 			s.runFn(ctx)
@@ -324,6 +380,9 @@ func (s *SyncService) finishRun(generation uint64) {
 	if s.generation == generation {
 		s.cancel = nil
 		s.done = nil
+		if syncLifecycleState(s.state.Load()) != syncStateHalted {
+			s.state.Store(uint32(syncStateStopped))
+		}
 	}
 }
 
@@ -347,6 +406,9 @@ func (s *SyncService) Stop() {
 		<-done
 	}
 	s.pullWG.Wait()
+	if syncLifecycleState(s.state.Load()) != syncStateHalted {
+		s.state.Store(uint32(syncStateStopped))
+	}
 }
 
 func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, req models.ClusterRegisterRequest) (models.ClusterRegistration, error) {
@@ -384,6 +446,7 @@ func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, 
 
 func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	if err := s.beginPull(); err != nil {
+		err = newSyncFailure(models.SyncErrorCodeValidationFailed, err)
 		if s.db != nil {
 			s.recordSyncError(ctx, err, nil)
 		}
@@ -406,7 +469,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	var isMaster bool
 	var appliedVersion int
 	if err := s.db.QueryRowContext(ctx, `SELECT is_master, COALESCE(master_url,''), COALESCE(cluster_token,''), COALESCE(applied_version,0), COALESCE(sync_fingerprint,'') FROM global_config WHERE id=1`).Scan(&isMaster, &masterURL, &token, &appliedVersion, &fingerprint); err != nil {
-		return SyncResult{}, fmt.Errorf("读取同步状态: %w", err)
+		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError, fmt.Errorf("读取同步状态: %w", err))
 	}
 	if isMaster {
 		return SyncResult{}, errors.New("主节点不能从其他节点同步")
@@ -417,12 +480,16 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	endpoint := strings.TrimRight(masterURL, "/") + "/api/v1/cluster/sync/snapshot?since_version=" + strconv.Itoa(appliedVersion) + "&fingerprint=" + url.QueryEscape(fingerprint)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("创建快照请求: %w", err)
+		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("创建快照请求: %w", err))
 	}
 	req.Header.Set("X-Cluster-Token", token)
 	resp, err := s.do(req)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("拉取主节点快照: %w", err)
+		code := models.SyncErrorCodeTransportError
+		if errors.Is(err, errClusterPinMismatch) {
+			code = models.SyncErrorCodePinMismatch
+		}
+		return SyncResult{}, newSyncFailure(code, fmt.Errorf("拉取主节点快照: %w", err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotModified {
@@ -430,20 +497,20 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return SyncResult{}, fmt.Errorf("主节点快照请求失败(%d): %s", resp.StatusCode, string(body))
+		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError, fmt.Errorf("主节点快照请求失败(%d): %s", resp.StatusCode, string(body)))
 	}
 	var envelope struct {
 		Data models.ClusterSnapshot `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
-		return SyncResult{}, fmt.Errorf("解析集群快照: %w", err)
+		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("解析集群快照: %w", err))
 	}
 	var currentMasterURL, currentToken string
 	if err := s.db.QueryRowContext(ctx, `SELECT is_master, COALESCE(master_url,''), COALESCE(cluster_token,''), COALESCE(applied_version,0) FROM global_config WHERE id=1`).Scan(&isMaster, &currentMasterURL, &currentToken, &appliedVersion); err != nil {
-		return SyncResult{}, fmt.Errorf("重读同步状态: %w", err)
+		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError, fmt.Errorf("重读同步状态: %w", err))
 	}
 	if isMaster || currentMasterURL != masterURL || currentToken != token {
-		return SyncResult{}, errors.New("同步角色或主节点凭据已变更，拒绝应用快照")
+		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("同步角色或主节点凭据已变更，拒绝应用快照"))
 	}
 	verifiedSnapshot, err := verifiedSnapshotIntegrity(envelope.Data, token, appliedVersion)
 	if err != nil {
@@ -460,12 +527,12 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	s.pullAdmissionMu.Unlock()
 	if pullsStopped {
 		s.pullApplyMu.Unlock()
-		return SyncResult{}, errors.New("集群同步已停止，拒绝应用快照")
+		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("集群同步已停止，拒绝应用快照"))
 	}
 	if err := s.applySnapshot(ctx, envelope.Data); err != nil {
 		s.pullApplyMu.Unlock()
 		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
-		return SyncResult{}, err
+		return SyncResult{}, newSyncFailure(models.SyncErrorCodeApplyFailed, err)
 	}
 	s.pullApplyMu.Unlock()
 	return SyncResult{AppliedVersion: envelope.Data.Version, Changed: true}, nil
@@ -487,18 +554,75 @@ func (s *SyncService) beginPull() error {
 // recordSyncError surfaces pull/report failures in last_sync_error so the
 // node page shows the real problem instead of a silently stuck state;
 // a fully successful cycle clears it.
-func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr error) {
-	msg := ""
-	if pullErr != nil {
-		msg = "同步拉取失败: " + pullErr.Error()
-	} else if reportErr != nil {
-		msg = "状态上报失败: " + reportErr.Error()
+func newSyncFailure(code models.SyncErrorCode, err error) error {
+	return &syncFailure{code: code, err: err}
+}
+
+func syncErrorCode(err error) models.SyncErrorCode {
+	if err == nil {
+		return ""
 	}
+	var schemaTooNew *SnapshotSchemaTooNewError
+	if errors.As(err, &schemaTooNew) {
+		return models.SyncErrorCodeSchemaTooNew
+	}
+	var schemaTooOld *SnapshotSchemaTooOldError
+	if errors.As(err, &schemaTooOld) {
+		return models.SyncErrorCodeSchemaTooOld
+	}
+	var failure *syncFailure
+	if errors.As(err, &failure) {
+		return failure.code
+	}
+	return models.SyncErrorCodeValidationFailed
+}
+
+type persistedSyncError struct {
+	Code    models.SyncErrorCode `json:"code"`
+	Message string               `json:"message"`
+}
+
+func encodeSyncError(message string, code models.SyncErrorCode) string {
+	if message == "" {
+		return ""
+	}
+	encoded, err := json.Marshal(persistedSyncError{Code: code, Message: message})
+	if err != nil {
+		return message
+	}
+	return string(encoded)
+}
+
+func decodeSyncError(stored string) (string, models.SyncErrorCode) {
+	if stored == "" {
+		return "", ""
+	}
+	var persisted persistedSyncError
+	if json.Unmarshal([]byte(stored), &persisted) == nil && persisted.Message != "" {
+		return persisted.Message, persisted.Code
+	}
+	return stored, ""
+}
+
+func (s *SyncService) persistSyncError(ctx context.Context, message string, code models.SyncErrorCode) {
 	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
-	if _, err := s.db.ExecContext(persistCtx, "UPDATE global_config SET last_sync_error=? WHERE id=1", msg); err != nil {
+	if _, err := s.db.ExecContext(persistCtx, "UPDATE global_config SET last_sync_error=? WHERE id=1", encodeSyncError(message, code)); err != nil {
 		Logf("error", "cluster sync error persistence failed: %v", err)
 	}
+}
+
+func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr error) {
+	msg := ""
+	code := models.SyncErrorCode("")
+	if pullErr != nil {
+		msg = "同步拉取失败: " + pullErr.Error()
+		code = syncErrorCode(pullErr)
+	} else if reportErr != nil {
+		msg = "状态上报失败: " + reportErr.Error()
+		code = models.SyncErrorCodeTransportError
+	}
+	s.persistSyncError(ctx, msg, code)
 }
 
 // verifySnapshotIntegrity re-computes the snapshot fingerprint the same way
@@ -510,58 +634,58 @@ func verifySnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken strin
 }
 
 func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken string, appliedVersion int) (models.ClusterSnapshot, error) {
-	if snapshot.SchemaVersion > CurrentSnapshotSchema {
-		return models.ClusterSnapshot{}, &SnapshotSchemaTooNewError{Actual: snapshot.SchemaVersion, Supported: CurrentSnapshotSchema}
-	}
-	if snapshot.SchemaVersion >= 3 && len(snapshot.CanonicalPayload) == 0 {
-		return models.ClusterSnapshot{}, errors.New("schema v3 快照缺少 canonical_payload")
+	if snapshot.MinReaderVersion > CurrentSnapshotSchema {
+		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("快照需要更新的读取端（要求 schema v%d，当前支持 v%d），请先升级本节点", snapshot.MinReaderVersion, CurrentSnapshotSchema))
 	}
 	// The signature is mandatory: it is the only authenticity proof over the
 	// (verification-skipped) transport, and an unsigned payload could be forged
 	// by any on-path actor. Masters that predate signing must be upgraded.
 	if snapshot.Signature == "" {
-		return models.ClusterSnapshot{}, fmt.Errorf("快照缺少签名：主节点版本过旧，请先升级主节点")
-	}
-	if len(snapshot.CanonicalPayload) > 0 && snapshot.Fingerprint == "" {
-		return models.ClusterSnapshot{}, errors.New("快照规范内容缺少指纹")
+		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeSignatureInvalid, errors.New("快照缺少签名：主节点版本过旧，请先升级主节点"))
 	}
 	if err := verifySnapshotSignature(snapshot, clusterToken); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
-	if len(snapshot.CanonicalPayload) > 0 {
-		var canonical models.ClusterSnapshot
-		if err := json.Unmarshal(snapshot.CanonicalPayload, &canonical); err != nil {
-			return models.ClusterSnapshot{}, fmt.Errorf("解析规范快照内容: %w", err)
-		}
-		if len(canonical.CanonicalPayload) > 0 || canonical.Version != snapshot.Version || canonical.SchemaVersion != snapshot.SchemaVersion || canonical.MinReaderVersion != snapshot.MinReaderVersion {
-			return models.ClusterSnapshot{}, errors.New("快照规范内容与元数据不一致")
-		}
-		canonical.Fingerprint = snapshot.Fingerprint
-		canonical.Signature = snapshot.Signature
-		canonical.CanonicalPayload = append(json.RawMessage(nil), snapshot.CanonicalPayload...)
-		snapshot = canonical
-	}
-	if snapshot.MinReaderVersion > CurrentSnapshotSchema {
-		return models.ClusterSnapshot{}, fmt.Errorf("快照需要更新的读取端（要求 schema v%d，当前支持 v%d），请先升级本节点", snapshot.MinReaderVersion, CurrentSnapshotSchema)
-	}
-	if snapshot.SchemaVersion < CurrentSnapshotSchema {
-		return models.ClusterSnapshot{}, fmt.Errorf("快照 schema v%d 过旧：主节点需升级到支持 schema v%d 的版本", snapshot.SchemaVersion, CurrentSnapshotSchema)
-	}
-	// Signed snapshots must also move forward; replaying a captured older one
-	// must not resurrect deleted credentials or roll back configuration.
-	if appliedVersion > 0 && snapshot.Version <= appliedVersion {
-		return models.ClusterSnapshot{}, fmt.Errorf("快照版本未递增：收到 %d，已应用 %d，疑似重放攻击", snapshot.Version, appliedVersion)
+	if len(snapshot.CanonicalPayload) > 0 && snapshot.Fingerprint == "" {
+		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("快照规范内容缺少指纹"))
 	}
 	if snapshot.Fingerprint != "" {
 		if err := verifySnapshotFingerprint(snapshot); err != nil {
 			return models.ClusterSnapshot{}, err
 		}
 	}
+	if snapshot.SchemaVersion >= 3 && len(snapshot.CanonicalPayload) == 0 {
+		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("schema v3 快照缺少 canonical_payload"))
+	}
+	if len(snapshot.CanonicalPayload) > 0 {
+		var canonical models.ClusterSnapshot
+		if err := json.Unmarshal(snapshot.CanonicalPayload, &canonical); err != nil {
+			return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("解析规范快照内容: %w", err))
+		}
+		if len(canonical.CanonicalPayload) > 0 || canonical.Version != snapshot.Version || canonical.SchemaVersion != snapshot.SchemaVersion || canonical.MinReaderVersion != snapshot.MinReaderVersion {
+			return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("快照规范内容与元数据不一致"))
+		}
+		canonical.Fingerprint = snapshot.Fingerprint
+		canonical.Signature = snapshot.Signature
+		canonical.CanonicalPayload = append(json.RawMessage(nil), snapshot.CanonicalPayload...)
+		snapshot = canonical
+	}
+	if snapshot.SchemaVersion > CurrentSnapshotSchema {
+		return models.ClusterSnapshot{}, &SnapshotSchemaTooNewError{Actual: snapshot.SchemaVersion, Supported: CurrentSnapshotSchema}
+	}
+	if snapshot.SchemaVersion < CurrentSnapshotSchema {
+		return models.ClusterSnapshot{}, &SnapshotSchemaTooOldError{Actual: snapshot.SchemaVersion, Supported: CurrentSnapshotSchema}
+	}
+	// Signed snapshots must also move forward; replaying a captured older one
+	// must not resurrect deleted credentials or roll back configuration.
+	if appliedVersion > 0 && snapshot.Version <= appliedVersion {
+		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeReplayDetected, fmt.Errorf("快照版本未递增：收到 %d，已应用 %d，疑似重放攻击", snapshot.Version, appliedVersion))
+	}
 	if err := verifySnapshotConsistency(snapshot); err != nil {
-		return models.ClusterSnapshot{}, err
+		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, err)
 	}
 	if err := validateSnapshotACMEState(snapshot); err != nil {
-		return models.ClusterSnapshot{}, err
+		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, err)
 	}
 	return snapshot, nil
 }
@@ -570,7 +694,7 @@ func verifySnapshotFingerprint(snapshot models.ClusterSnapshot) error {
 	if len(snapshot.CanonicalPayload) > 0 {
 		hash := sha256.Sum256(snapshot.CanonicalPayload)
 		if hex.EncodeToString(hash[:]) != snapshot.Fingerprint {
-			return fmt.Errorf("快照指纹校验失败：数据可能被截断或篡改")
+			return newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("快照指纹校验失败：数据可能被截断或篡改"))
 		}
 		return nil
 	}
@@ -584,7 +708,7 @@ func verifySnapshotFingerprint(snapshot models.ClusterSnapshot) error {
 	}
 	hash := sha256.Sum256(content)
 	if hex.EncodeToString(hash[:]) != snapshot.Fingerprint {
-		return fmt.Errorf("快照指纹校验失败：数据可能被截断或篡改")
+		return newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("快照指纹校验失败：数据可能被截断或篡改"))
 	}
 	return nil
 }
@@ -593,7 +717,7 @@ func verifySnapshotFingerprint(snapshot models.ClusterSnapshot) error {
 // canonical snapshot using this node's cluster token as the key.
 func verifySnapshotSignature(snapshot models.ClusterSnapshot, clusterToken string) error {
 	if clusterToken == "" {
-		return fmt.Errorf("快照签名校验失败：本节点缺少集群令牌")
+		return newSyncFailure(models.SyncErrorCodeSignatureInvalid, fmt.Errorf("快照签名校验失败：本节点缺少集群令牌"))
 	}
 	content := []byte(snapshot.CanonicalPayload)
 	if len(content) == 0 {
@@ -610,7 +734,7 @@ func verifySnapshotSignature(snapshot models.ClusterSnapshot, clusterToken strin
 	mac.Write(content)
 	expected := hex.EncodeToString(mac.Sum(nil))
 	if !hmac.Equal([]byte(expected), []byte(snapshot.Signature)) {
-		return fmt.Errorf("快照签名校验失败：来源无法验证，可能存在中间人攻击")
+		return newSyncFailure(models.SyncErrorCodeSignatureInvalid, fmt.Errorf("快照签名校验失败：来源无法验证，可能存在中间人攻击"))
 	}
 	return nil
 }
@@ -656,10 +780,9 @@ func (s *SyncService) run(ctx context.Context) {
 				return
 			}
 			message := "读取同步状态失败: " + err.Error()
+			s.state.Store(uint32(syncStateDegraded))
 			Logf("error", "cluster sync state read failed; retrying: %v", err)
-			if _, updateErr := s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", message); updateErr != nil {
-				Logf("error", "cluster sync state error persistence failed: %v", updateErr)
-			}
+			s.persistSyncError(ctx, message, models.SyncErrorCodeTransportError)
 			if !waitDelay(ctx, retryDelay) {
 				return
 			}
@@ -674,7 +797,6 @@ func (s *SyncService) run(ctx context.Context) {
 		if isMaster {
 			return
 		}
-		retryDelay = time.Second
 		if token == "" {
 			s.pollRegistration(ctx)
 		} else {
@@ -682,19 +804,38 @@ func (s *SyncService) run(ctx context.Context) {
 			if pullErr == nil && !result.Changed {
 				RecordAuditLog("system", "同步", "集群同步", "配置无变化", "")
 			}
+			var schemaTooNew *SnapshotSchemaTooNewError
+			var schemaTooOld *SnapshotSchemaTooOldError
+			terminal := errors.As(pullErr, &schemaTooNew) || errors.As(pullErr, &schemaTooOld)
+			if terminal {
+				s.state.Store(uint32(syncStateHalted))
+			}
 			reportErr := s.Report(ctx)
 			s.recordSyncError(ctx, pullErr, reportErr)
-			var schemaTooNew *SnapshotSchemaTooNewError
-			if errors.As(pullErr, &schemaTooNew) {
+			if terminal {
 				return
+			}
+			if pullErr != nil || reportErr != nil {
+				s.state.Store(uint32(syncStateDegraded))
+			} else {
+				s.state.Store(uint32(syncStateRunning))
+				retryDelay = time.Second
 			}
 		}
 		delay := time.Duration(interval) * time.Second
 		if token == "" {
 			delay = 10 * time.Second
+		} else if syncLifecycleState(s.state.Load()) == syncStateDegraded {
+			delay = retryDelay
 		}
 		if !waitDelay(ctx, delay) {
 			return
+		}
+		if syncLifecycleState(s.state.Load()) == syncStateDegraded && retryDelay < 30*time.Second {
+			retryDelay *= 2
+			if retryDelay > 30*time.Second {
+				retryDelay = 30 * time.Second
+			}
 		}
 	}
 }
@@ -718,7 +859,7 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 	if resp.StatusCode >= http.StatusBadRequest {
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 			message := "注册已被主节点拒绝或移除，请重新注册或提升为主节点"
-			_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET last_sync_error=? WHERE id=1", message)
+			s.persistSyncError(ctx, message, models.SyncErrorCodeValidationFailed)
 			RecordAuditLog("system", "注册失败", "集群节点", message, "")
 		}
 		return

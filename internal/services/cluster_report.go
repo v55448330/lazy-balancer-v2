@@ -16,12 +16,13 @@ import (
 var clusterProcessStartedAt = time.Now()
 
 func (s *SyncService) Report(ctx context.Context) error {
-	var masterURL, token, lastSyncError string
+	var masterURL, token, storedSyncError string
 	var appliedVersion int
 	var lastSync sql.NullTime
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(master_url,''), COALESCE(cluster_token,''), COALESCE(applied_version,0), last_sync, COALESCE(last_sync_error,'') FROM global_config WHERE id=1`).Scan(&masterURL, &token, &appliedVersion, &lastSync, &lastSyncError); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(master_url,''), COALESCE(cluster_token,''), COALESCE(applied_version,0), last_sync, COALESCE(last_sync_error,'') FROM global_config WHERE id=1`).Scan(&masterURL, &token, &appliedVersion, &lastSync, &storedSyncError); err != nil {
 		return fmt.Errorf("读取上报状态: %w", err)
 	}
+	lastSyncError, syncErrorCode := decodeSyncError(storedSyncError)
 	lastSyncAt := ""
 	if lastSync.Valid {
 		lastSyncAt = lastSync.Time.UTC().Format(time.RFC3339)
@@ -43,11 +44,13 @@ func (s *SyncService) Report(ctx context.Context) error {
 		ServiceStatus:  serviceStatus,
 		LastSyncAt:     lastSyncAt,
 		LastSyncError:  lastSyncError,
+		SyncErrorCode:  syncErrorCode,
 		Health: models.ClusterHealth{
 			CaddyOK:          caddyErr == nil,
 			RulesCount:       rulesCount,
 			CertsExpiring30d: expiringCount,
 			UptimeSec:        int64(time.Since(clusterProcessStartedAt).Seconds()),
+			SyncErrorCode:    syncErrorCode,
 		},
 	}
 	payload, err := json.Marshal(report)

@@ -159,16 +159,20 @@ func SnapshotCertJobsForRule(ruleID string) (CertJobsSnapshot, error) {
 // RestoreCertJobsForRule restores UPSERT-overwritten rows and removes jobs
 // created after SnapshotCertJobsForRule captured the rule state.
 func RestoreCertJobsForRule(snapshot CertJobsSnapshot) error {
-	tx, err := db.DB.Begin()
+	return restoreCertJobsForRule(context.Background(), snapshot)
+}
+
+func restoreCertJobsForRule(ctx context.Context, snapshot CertJobsSnapshot) error {
+	tx, err := db.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin certificate job restore: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec("DELETE FROM cert_jobs WHERE rule_id=?", snapshot.ruleID); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id=?", snapshot.ruleID); err != nil {
 		return fmt.Errorf("clear certificate jobs for restore: %w", err)
 	}
 	for _, job := range snapshot.jobs {
-		if _, err := tx.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO cert_jobs (id,rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,
 			renewal_attempts,ca_available_after,last_error_code,deployment_attempts,deployment_available_after,created_at,updated_at)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, job.id, job.ruleID, job.domain, job.status, job.message,
 			job.expiresAt, job.certPEM, job.keyPEM, job.caProviderID, job.renewalAttempts, job.caAvailableAfter,
@@ -178,6 +182,39 @@ func RestoreCertJobsForRule(snapshot CertJobsSnapshot) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit certificate job restore: %w", err)
+	}
+	return nil
+}
+
+func requeueCertJobsSnapshot(ctx context.Context, snapshot CertJobsSnapshot, manager *CAQueueManager) error {
+	var ruleDomain string
+	var enabled, enableTLS bool
+	var tlsSource string
+	if err := db.DB.QueryRowContext(ctx, `SELECT domain,enabled,enable_tls,COALESCE(tls_source,'manual') FROM lb_rules WHERE caddy_id=?`, snapshot.ruleID).
+		Scan(&ruleDomain, &enabled, &enableTLS, &tlsSource); err != nil {
+		return fmt.Errorf("load rule for certificate job requeue: %w", err)
+	}
+	if !enabled || !enableTLS || tlsSource != "acme_dns" {
+		return nil
+	}
+	canonicalRule, err := CanonicalACMEDomains(ruleDomain)
+	if err != nil {
+		return fmt.Errorf("canonicalize rule certificate domains: %w", err)
+	}
+	for _, job := range snapshot.jobs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if job.status == "issued" || job.status == "failed" || job.status == "disabled" {
+			continue
+		}
+		canonicalJob, err := CanonicalACMEDomains(job.domain)
+		if err != nil || canonicalJob != canonicalRule {
+			continue
+		}
+		if err := manager.enqueueCompensation(job.caProviderID, job.id, job.ruleID, job.domain); err != nil {
+			return fmt.Errorf("requeue restored certificate job %d: %w", job.id, err)
+		}
 	}
 	return nil
 }
@@ -293,7 +330,7 @@ func (s *CertificateService) cancelDeploymentRetry(jobID int) {
 	}
 }
 
-func (s *CertificateService) cancelDeploymentRetriesForRule(ruleID string) {
+func (s *CertificateService) signalCancelDeploymentRetriesForRule(ruleID string) []<-chan struct{} {
 	s.timerMu.Lock()
 	waitFor := make(map[*deploymentTimer]struct{})
 	for jobID, entry := range s.deploymentTimers {
@@ -319,9 +356,11 @@ func (s *CertificateService) cancelDeploymentRetriesForRule(ruleID string) {
 		}
 	}
 	s.timerMu.Unlock()
+	done := make([]<-chan struct{}, 0, len(waitFor))
 	for entry := range waitFor {
-		<-entry.done
+		done = append(done, entry.done)
 	}
+	return done
 }
 
 func (s *CertificateService) pauseDeploymentRetries() {

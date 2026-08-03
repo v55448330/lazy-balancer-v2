@@ -563,12 +563,16 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	resolvedCAProviderID, err := services.ResolveCAProviderID(req.CAProviderID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析 CA 提供商失败: " + err.Error()})
-		return
+	if req.Protocol == "http" && req.EnableTLS && req.TLSSource == "acme_dns" {
+		resolvedCAProviderID, resolveErr := services.ResolveCAProviderID(req.CAProviderID)
+		if resolveErr != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析 CA 提供商失败: " + resolveErr.Error()})
+			return
+		}
+		req.CAProviderID = resolvedCAProviderID
+	} else {
+		req.CAProviderID = 0
 	}
-	req.CAProviderID = resolvedCAProviderID
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
@@ -1546,29 +1550,21 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	queueManager := services.GetCAQueueManager()
 	jobsCanceled := false
 	deleteCompleted := false
+	var blockToken services.RuleBlockToken
 	if queueManager != nil {
 		// No DB transaction is held while waiting, so worker rollback/reload paths can exit.
-		queueManager.BlockJobsForRule(caddyID)
+		blockToken = queueManager.BlockJobsForRule(caddyID)
+		drainRuleJobs := cancelRuleJobs
 		cancelCtx, cancel := context.WithTimeout(c.Request.Context(), cancelRuleJobsTimeout)
-		cancelErr := cancelRuleJobs(cancelCtx, queueManager, caddyID)
+		cancelErr := drainRuleJobs(cancelCtx, queueManager, caddyID)
 		cancel()
 		if cancelErr != nil {
-			drainCtx := context.WithoutCancel(c.Request.Context())
-			go func() {
-				if err := cancelRuleJobs(drainCtx, queueManager, caddyID); err != nil {
-					services.Logf("error", "CRITICAL: DeleteRule asynchronous certificate drain failed for caddy_id=%s: %v", caddyID, err)
-					return
-				}
-				restoreErr := services.RestoreCertJobsForRule(certJobsSnapshot)
-				queueManager.UnblockJobsForRule(caddyID)
-				if restoreErr != nil {
-					services.Logf("error", "CRITICAL: DeleteRule certificate restore after timeout failed for caddy_id=%s: %v", caddyID, restoreErr)
-					return
-				}
-				if requeueErr := services.RequeueNonTerminalCertJobs(); requeueErr != nil {
-					services.Logf("error", "CRITICAL: DeleteRule certificate requeue after timeout failed for caddy_id=%s: %v", caddyID, requeueErr)
-				}
-			}()
+			if err := queueManager.StartRuleDeletionCompensation(services.RuleDeletionCompensation{
+				RuleID: caddyID, Token: blockToken, Snapshot: certJobsSnapshot,
+				Drain: func(ctx context.Context) error { return drainRuleJobs(ctx, queueManager, caddyID) },
+			}); err != nil {
+				services.Logf("error", "CRITICAL: DeleteRule failed to start certificate compensation for caddy_id=%s: %v", caddyID, err)
+			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "取消证书任务超时，规则与证书保持不变: " + cancelErr.Error()})
 			return
 		}
@@ -1578,14 +1574,10 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		if !jobsCanceled || deleteCompleted {
 			return
 		}
-		restoreErr := services.RestoreCertJobsForRule(certJobsSnapshot)
-		queueManager.UnblockJobsForRule(caddyID)
-		if restoreErr != nil {
-			services.Logf("error", "CRITICAL: DeleteRule certificate job restore failed for caddy_id=%s: %v", caddyID, restoreErr)
-			return
-		}
-		if requeueErr := services.RequeueNonTerminalCertJobs(); requeueErr != nil {
-			services.Logf("error", "CRITICAL: DeleteRule certificate job requeue failed for caddy_id=%s: %v", caddyID, requeueErr)
+		if err := queueManager.StartRuleDeletionCompensation(services.RuleDeletionCompensation{
+			RuleID: caddyID, Token: blockToken, Snapshot: certJobsSnapshot,
+		}); err != nil {
+			services.Logf("error", "CRITICAL: DeleteRule failed to start certificate rollback compensation for caddy_id=%s: %v", caddyID, err)
 		}
 	}()
 
@@ -1657,7 +1649,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	committed = true
 	deleteCompleted = true
 	if queueManager != nil {
-		queueManager.UnblockJobsForRule(caddyID)
+		queueManager.UnblockJobsForRule(caddyID, blockToken)
 	}
 
 	if db.MetricsDB != nil {

@@ -80,27 +80,24 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 	}
 
 	jobRows, err := db.DB.QueryContext(c.Request.Context(), fmt.Sprintf(`
-		SELECT rule_id, COALESCE(cert_pem,'') FROM cert_jobs
-		WHERE rule_id IN (%s) AND status<>'disabled' AND COALESCE(cert_pem,'')<>''
+		SELECT rule_id, status, COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs
+		WHERE rule_id IN (%s) AND COALESCE(cert_pem,'')<>'' AND COALESCE(key_pem,'')<>''
 		ORDER BY rule_id, updated_at DESC, id DESC`, placeholders), args...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "批量读取签发证书失败"})
 		return
 	}
 	defer jobRows.Close()
-	issuedCertificates := make(map[string]string, len(rules))
+	candidates := make(map[string][]services.CertInfoCandidate, len(rules))
 	now := time.Now()
 	for jobRows.Next() {
-		var id, certPEM string
-		if err := jobRows.Scan(&id, &certPEM); err != nil {
+		var id string
+		var candidate services.CertInfoCandidate
+		if err := jobRows.Scan(&id, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "批量读取签发证书失败"})
 			return
 		}
-		rule, ruleExists := rules[id]
-		_, certificateSelected := issuedCertificates[id]
-		if ruleExists && !certificateSelected && certificateCoversRuleDomains(certPEM, rule.domains, now) {
-			issuedCertificates[id] = certPEM
-		}
+		candidates[id] = append(candidates[id], candidate)
 	}
 	if err := jobRows.Err(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "批量读取签发证书失败"})
@@ -116,7 +113,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		}
 		certPEM := rule.certPEM
 		if rule.source == "acme_dns" {
-			certPEM = issuedCertificates[id]
+			certPEM, _ = services.SelectRuleCertificate(candidates[id], rule.domains, now)
 		}
 		result[id] = parseBatchRuleCertInfo(batchRuleCertInput{
 			id: id, certPEM: certPEM, source: rule.source, ruleDomains: rule.domains,
@@ -124,25 +121,6 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		})
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: result})
-}
-
-func certificateCoversRuleDomains(certPEM, ruleDomains string, now time.Time) bool {
-	block, _ := pem.Decode([]byte(certPEM))
-	if block == nil {
-		return false
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil || now.Before(cert.NotBefore) || !now.Before(cert.NotAfter) {
-		return false
-	}
-	for _, domain := range normalizedRuleDomains(ruleDomains) {
-		if err := cert.VerifyHostname(domain); err != nil {
-			if len(cert.DNSNames) != 0 || !strings.EqualFold(strings.TrimSpace(cert.Subject.CommonName), domain) {
-				return false
-			}
-		}
-	}
-	return len(normalizedRuleDomains(ruleDomains)) > 0
 }
 
 func parseBatchRuleCertInfo(input batchRuleCertInput) *models.RuleCertInfo {

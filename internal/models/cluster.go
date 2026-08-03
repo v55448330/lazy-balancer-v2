@@ -72,13 +72,27 @@ type ClusterRegistrationStatus struct {
 	ClusterToken string `json:"cluster_token,omitempty"`
 }
 
+type SyncErrorCode string
+
+const (
+	SyncErrorCodeSchemaTooNew     SyncErrorCode = "schema_too_new"
+	SyncErrorCodeSchemaTooOld     SyncErrorCode = "schema_too_old"
+	SyncErrorCodeSignatureInvalid SyncErrorCode = "signature_invalid"
+	SyncErrorCodeReplayDetected   SyncErrorCode = "replay_detected"
+	SyncErrorCodePinMismatch      SyncErrorCode = "pin_mismatch"
+	SyncErrorCodeValidationFailed SyncErrorCode = "validation_failed"
+	SyncErrorCodeApplyFailed      SyncErrorCode = "apply_failed"
+	SyncErrorCodeTransportError   SyncErrorCode = "transport_error"
+)
+
 type ClusterHealth struct {
-	CaddyOK          bool   `json:"caddy_ok"`
-	RulesCount       int    `json:"rules_count"`
-	CertsExpiring30d int    `json:"certs_expiring_30d"`
-	LastSyncAt       string `json:"last_sync_at"`
-	LastSyncError    string `json:"last_sync_error"`
-	UptimeSec        int64  `json:"uptime_sec"`
+	CaddyOK          bool          `json:"caddy_ok"`
+	RulesCount       int           `json:"rules_count"`
+	CertsExpiring30d int           `json:"certs_expiring_30d"`
+	LastSyncAt       string        `json:"last_sync_at"`
+	LastSyncError    string        `json:"last_sync_error"`
+	SyncErrorCode    SyncErrorCode `json:"sync_error_code,omitempty"`
+	UptimeSec        int64         `json:"uptime_sec"`
 }
 
 type ClusterReport struct {
@@ -87,6 +101,7 @@ type ClusterReport struct {
 	Health         ClusterHealth `json:"health"`
 	LastSyncAt     string        `json:"last_sync_at"`
 	LastSyncError  string        `json:"last_sync_error"`
+	SyncErrorCode  SyncErrorCode `json:"sync_error_code,omitempty" binding:"omitempty,oneof=schema_too_new schema_too_old signature_invalid replay_detected pin_mismatch validation_failed apply_failed transport_error"`
 }
 
 type ClusterBasicSettings struct {
@@ -226,15 +241,16 @@ type ClusterNodeView struct {
 }
 
 type ClusterStatus struct {
-	NodeMode        string `json:"node_mode"`
-	ClusterVersion  int    `json:"cluster_version"`
-	MasterURL       string `json:"master_url"`
-	SyncInterval    int    `json:"sync_interval"`
-	SyncCaddyConfig bool   `json:"sync_caddy_config"`
-	ClusterActive   bool   `json:"cluster_active"`
-	AppliedVersion  int    `json:"applied_version"`
-	LastSyncAt      string `json:"last_sync_at"`
-	LastSyncError   string `json:"last_sync_error"`
-	PendingCount    int    `json:"pending_count"`
-	ApprovedCount   int    `json:"approved_count"`
+	NodeMode        string        `json:"node_mode"`
+	ClusterVersion  int           `json:"cluster_version"`
+	MasterURL       string        `json:"master_url"`
+	SyncInterval    int           `json:"sync_interval"`
+	SyncCaddyConfig bool          `json:"sync_caddy_config"`
+	ClusterActive   bool          `json:"cluster_active"`
+	AppliedVersion  int           `json:"applied_version"`
+	LastSyncAt      string        `json:"last_sync_at"`
+	LastSyncError   string        `json:"last_sync_error"`
+	SyncErrorCode   SyncErrorCode `json:"sync_error_code,omitempty"`
+	PendingCount    int           `json:"pending_count"`
+	ApprovedCount   int           `json:"approved_count"`
 }
