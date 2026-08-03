@@ -654,6 +654,8 @@ onMounted(() => {
 
 .header-left { flex: 1; }
 .header-actions { display: flex; gap: 8px; }
+.header-actions :deep(a.el-button) { text-decoration: none; }
+.header-actions :deep(.el-button .el-icon) { margin-right: 4px; }
 
 .page-title { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; color: #111827; margin: 0; }
 
