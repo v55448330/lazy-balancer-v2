@@ -19,11 +19,12 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/dnsprovider/ownership"
 	"lazy-balancer-v2/internal/models"
 )
 
 // API Key 安全属性不能由旧读取端静默降级为宽权限默认值。
-const CurrentSnapshotSchema = 2
+const CurrentSnapshotSchema = 3
 
 type clusterSnapshotCache struct {
 	mu          sync.Mutex
@@ -32,6 +33,8 @@ type clusterSnapshotCache struct {
 	snapshot    models.ClusterSnapshot
 	canonical   json.RawMessage
 	fingerprint string
+	ownership   [sha256.Size]byte
+	expiresAt   time.Time
 }
 
 var clusterSnapshotCaches sync.Map
@@ -99,7 +102,12 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(cluster_version,0) FROM global_config WHERE id=1").Scan(&version); err != nil {
 		return models.ClusterSnapshot{}, nil, "", fmt.Errorf("读取集群版本: %w", err)
 	}
-	if cache.initialized && cache.version == version {
+	ownershipHash, err := snapshotOwnershipHash(ctx, tx)
+	if err != nil {
+		return models.ClusterSnapshot{}, nil, "", err
+	}
+	now := s.snapshotNow()
+	if cache.initialized && cache.version == version && cache.ownership == ownershipHash && (cache.expiresAt.IsZero() || now.Before(cache.expiresAt)) {
 		return cache.snapshot, cache.canonical, cache.fingerprint, nil
 	}
 	snapshot, err := s.buildSnapshot(ctx, tx)
@@ -126,7 +134,49 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	cache.snapshot = snapshot
 	cache.canonical = canonical
 	cache.fingerprint = fingerprint
+	cache.ownership = ownershipHash
+	cache.expiresAt = nearestSnapshotCertificateExpiry(snapshot.Certs)
 	return snapshot, canonical, fingerprint, nil
+}
+
+func snapshotOwnershipHash(ctx context.Context, store snapshotStore) ([sha256.Size]byte, error) {
+	dataDir, err := clusterSnapshotDataDir(ctx, store)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	content, err := os.ReadFile(filepath.Join(dataDir, "acme_dns_ownership.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		content = []byte(`{"version":1,"records":[]}`)
+	} else if err != nil {
+		return [sha256.Size]byte{}, fmt.Errorf("读取 DNS 所有权状态: %w", err)
+	}
+	if err := validateDNSOwnership(content); err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return sha256.Sum256(content), nil
+}
+
+func nearestSnapshotCertificateExpiry(certificates []models.ClusterCertificate) time.Time {
+	var nearest time.Time
+	for _, certificate := range certificates {
+		if certificate.ExpiresAt == "" {
+			continue
+		}
+		expiresAt, err := parseSnapshotExpiry(certificate.ExpiresAt)
+		if err == nil && (nearest.IsZero() || expiresAt.Before(nearest)) {
+			nearest = expiresAt
+		}
+	}
+	return nearest
+}
+
+func parseSnapshotExpiry(value string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999-07:00", "2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("无法解析证书过期时间 %q", value)
 }
 
 func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore) (models.ClusterSnapshot, error) {
@@ -409,7 +459,7 @@ func (s *ClusterService) snapshotCertificates(ctx context.Context, store snapsho
 		exact       bool
 	}
 	selected := make(map[string]certificateCandidate)
-	now := time.Now()
+	now := s.snapshotNow()
 	for rows.Next() {
 		var cert models.ClusterCertificate
 		var ruleDomain string
@@ -424,14 +474,20 @@ func (s *ClusterService) snapshotCertificates(ctx context.Context, store snapsho
 		}
 		canonicalJobDomain, err := CanonicalACMEDomains(cert.Domain)
 		if err != nil {
+			warnSnapshotCertificateCandidate(cert.RuleID, id, err, now)
 			continue
 		}
 		pair, err := tls.X509KeyPair([]byte(cert.CertPEM), []byte(cert.KeyPEM))
 		if err != nil || len(pair.Certificate) == 0 {
+			warnSnapshotCertificateCandidate(cert.RuleID, id, errors.New("证书或私钥格式无效"), now)
 			continue
 		}
-		parsed, err := x509.ParseCertificate(pair.Certificate[0])
+		parsed := pair.Leaf
+		if parsed == nil {
+			parsed, err = x509.ParseCertificate(pair.Certificate[0])
+		}
 		if err != nil || now.Before(parsed.NotBefore) || !now.Before(parsed.NotAfter) {
+			warnSnapshotCertificateCandidate(cert.RuleID, id, errors.New("证书解析失败或不在有效期内"), now)
 			continue
 		}
 		covered := true
@@ -448,7 +504,7 @@ func (s *ClusterService) snapshotCertificates(ctx context.Context, store snapsho
 		cert.Domain = canonicalRuleDomain
 		candidate := certificateCandidate{certificate: cert, notAfter: parsed.NotAfter, updatedAt: updatedAt, id: id, exact: exact}
 		current, exists := selected[cert.RuleID]
-		if !exists || candidate.exact && !current.exact || candidate.exact == current.exact && (candidate.notAfter.After(current.notAfter) || candidate.notAfter.Equal(current.notAfter) && (candidate.updatedAt > current.updatedAt || candidate.updatedAt == current.updatedAt && candidate.id > current.id)) {
+		if !exists || candidate.notAfter.After(current.notAfter) || candidate.notAfter.Equal(current.notAfter) && (candidate.exact && !current.exact || candidate.exact == current.exact && (candidate.updatedAt > current.updatedAt || candidate.updatedAt == current.updatedAt && candidate.id > current.id)) {
 			selected[cert.RuleID] = candidate
 		}
 	}
@@ -466,28 +522,38 @@ func (s *ClusterService) snapshotCertificates(ctx context.Context, store snapsho
 	return certs, nil
 }
 
-type dnsOwnershipState struct {
-	Version int                  `json:"version"`
-	Records []dnsOwnershipRecord `json:"records"`
-}
+var snapshotCertificateWarnings = struct {
+	sync.Mutex
+	last map[string]time.Time
+}{last: make(map[string]time.Time)}
 
-type dnsOwnershipRecord struct {
-	Provider string `json:"provider"`
-	FQDN     string `json:"fqdn"`
-	RecordID string `json:"record_id"`
+func warnSnapshotCertificateCandidate(ruleID string, jobID int, cause error, now time.Time) {
+	key := fmt.Sprintf("%s/%d", ruleID, jobID)
+	snapshotCertificateWarnings.Lock()
+	last := snapshotCertificateWarnings.last[key]
+	if !last.IsZero() && now.Sub(last) < 5*time.Minute {
+		snapshotCertificateWarnings.Unlock()
+		return
+	}
+	snapshotCertificateWarnings.last[key] = now
+	snapshotCertificateWarnings.Unlock()
+	Logf("warn", "cluster snapshot skipped malformed certificate candidate: rule_id=%s job_id=%d error=%v", ruleID, jobID, cause)
 }
 
 func validateDNSOwnership(data []byte) error {
-	var ownership dnsOwnershipState
-	if err := json.Unmarshal(data, &ownership); err != nil {
+	var state struct {
+		Version int                `json:"version"`
+		Records []ownership.Record `json:"records"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
 		return fmt.Errorf("DNS 所有权状态不是有效 JSON: %w", err)
 	}
-	if ownership.Version != 1 || ownership.Records == nil {
+	if state.Version != 1 || state.Records == nil {
 		return errors.New("DNS 所有权状态格式无效")
 	}
-	for _, record := range ownership.Records {
-		if record.Provider == "" || record.FQDN == "" || record.RecordID == "" {
-			return errors.New("DNS 所有权记录缺少 provider、fqdn 或 record_id")
+	for _, record := range state.Records {
+		if record.Provider == "" || record.Zone == "" || record.FQDN == "" || record.Value == "" || record.RecordID == "" {
+			return errors.New("DNS 所有权记录缺少 provider、zone、fqdn、value 或 record_id")
 		}
 	}
 	return nil

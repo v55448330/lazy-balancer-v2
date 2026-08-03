@@ -252,6 +252,38 @@ func backupBooleanEnabled(value any) bool {
 	}
 }
 
+func backupInteger(value any) (int, bool) {
+	switch value := value.(type) {
+	case float64:
+		if value == math.Trunc(value) && value >= math.MinInt && value <= math.MaxInt {
+			return int(value), true
+		}
+	case int:
+		return value, true
+	case int64:
+		if value >= math.MinInt && value <= math.MaxInt {
+			return int(value), true
+		}
+	}
+	return 0, false
+}
+
+func disableV2RuleConflicts(rows []map[string]any) []disabledRuleConflict {
+	candidates := make([]ruleConflictCandidate, len(rows))
+	for index, row := range rows {
+		candidates[index].name, _ = row["name"].(string)
+		candidates[index].caddyID, _ = row["caddy_id"].(string)
+		candidates[index].protocol, _ = row["protocol"].(string)
+		candidates[index].domain, _ = row["domain"].(string)
+		candidates[index].listenPort, _ = backupInteger(row["listen_port"])
+	}
+	conflicts := validateRuleConflictMatrix(candidates)
+	for _, conflict := range conflicts {
+		rows[conflict.index]["enabled"] = 0
+	}
+	return conflicts
+}
+
 func clampBackupJWTExpireMinutes(value any) (any, bool) {
 	switch minutes := value.(type) {
 	case float64:
@@ -336,6 +368,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	disabledConflicts := disableV2RuleConflicts(backup.Tables["lb_rules"])
 	jwtExpireClamped := false
 	if value, exists := backup.Config["jwt_expire_minutes"]; exists {
 		backup.Config["jwt_expire_minutes"], jwtExpireClamped = clampBackupJWTExpireMinutes(value)
@@ -462,10 +495,13 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	if jwtExpireClamped {
 		auditParts = append(auditParts, "jwt_expire_minutes 越界，已重置为 20")
 	}
+	if len(disabledConflicts) > 0 {
+		auditParts = append(auditParts, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
+	}
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
 	recordAudit(c, "重载", "Caddy配置", "导入配置后自动重载")
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置导入成功", Data: gin.H{"summary": counts}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置导入成功", Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts}})
 }
 
 func importCountsDetail(tables map[string][]map[string]any) string {

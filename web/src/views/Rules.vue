@@ -14,6 +14,16 @@
       </el-button>
     </div>
 
+    <el-alert v-if="certPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert">
+      <template #title>
+        <div class="polling-error-title">
+          <span>证书状态加载失败：{{ certPollingError.errorMessage.value }}</span>
+          <el-button link type="danger" :loading="loading" @click="retryCertPolling">立即重试</el-button>
+        </div>
+      </template>
+      <div class="polling-error-meta">{{ certPollingErrorDescription }}</div>
+    </el-alert>
+
     <el-card>
       <div class="table-toolbar">
         <el-input v-model="searchQuery" placeholder="搜索规则名 / 域名 / 端口" clearable :prefix-icon="Search" class="search-input" />
@@ -983,7 +993,6 @@ import { ansiToHtml } from '@/utils/ansi'
 import { formatDate } from '@/utils/date'
 import type {
   APIResponse,
-  CertJobsPage,
   CreateRuleRequest,
   IpAclMode,
   ProxyTimeoutConfig,
@@ -1005,6 +1014,7 @@ import { MAX_UPSTREAM_ROWS, normalizeWeights, redistributeWeight } from '@/utils
 import { certJobStatusLabel } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
 import { usePollingTask } from '@/composables/usePollingTask'
+import { usePollingErrorState } from '@/composables/usePollingErrorState'
 
 interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id'> {
   id?: number
@@ -1176,6 +1186,14 @@ interface CertJob {
   ca_available_after?: string | null
 }
 
+class CertInfoRefreshError extends Error {
+  readonly name = 'CertInfoRefreshError'
+
+  constructor() {
+    super('证书任务已更新，但证书详情刷新失败')
+  }
+}
+
 const rules = ref<Rule[]>([])
 const searchQuery = ref('')
 const currentPage = ref(1)
@@ -1216,6 +1234,7 @@ watch([() => filteredRules.value.length, pageSize], ([ruleCount, size]) => {
 const users = ref<UserListItem[]>([])
 const certInfoMap = ref<Record<string, CertInfo | null>>({})
 const certJobMap = ref<Record<string, CertJob>>({})
+const pendingCertInfoRefresh = new Set<string>()
 const ruleTogglePending = ref<Record<string, boolean>>({})
 const certInfoGenerations = new Map<string, number>()
 let certInfoGeneration = 0
@@ -1242,7 +1261,7 @@ const fetchRules = async () => {
     // Fetch health status after rules are loaded
     void healthPolling.run()
     // Fetch certificate info for TLS-enabled rules
-    fetchCertInfo()
+    void fetchCertInfo()
     // Fetch cert job statuses for ACME rules
     void certJobsPolling.run()
   } catch (error: unknown) {
@@ -1253,8 +1272,8 @@ const fetchRules = async () => {
   }
 }
 
-const fetchCertInfo = async (caddyIds?: readonly string[]) => {
-  if (disposed) return
+const fetchCertInfo = async (caddyIds?: readonly string[]): Promise<boolean> => {
+  if (disposed) return false
   const requestedIds = caddyIds ? new Set(caddyIds) : null
   const tlsRules = rules.value.filter(r => r.enable_tls && (!requestedIds || requestedIds.has(r.caddy_id)))
   const targetIds = tlsRules.map(r => r.caddy_id)
@@ -1275,7 +1294,7 @@ const fetchCertInfo = async (caddyIds?: readonly string[]) => {
     })
   }
   if (tlsRules.length === 0) {
-    return
+    return true
   }
   try {
     const certInfo: Record<string, CertInfo | null> = {}
@@ -1284,66 +1303,58 @@ const fetchCertInfo = async (caddyIds?: readonly string[]) => {
       const res = await request.post<APIResponse<Record<string, CertInfo | null>>>('/rules/cert-info', {
         caddy_ids: batchIds,
       }, { signal: healthPolling.signal })
-      if (disposed) return
+      if (disposed) return false
       Object.assign(certInfo, res.data || {})
     }
-    if (disposed) return
+    if (disposed) return false
     const patch: Record<string, CertInfo | null> = {}
     targetIds.forEach(id => {
       if (certInfoGenerations.get(id) === generation) patch[id] = certInfo[id] ?? null
     })
     certInfoMap.value = { ...certInfoMap.value, ...patch }
-  } catch {
-    return
+    return true
+  } catch (error: unknown) {
+    if (!axios.isCancel(error) && !disposed) console.error('Failed to fetch certificate info:', error)
+    return false
   }
 }
 
-const fetchCertJobs = async () => {
+const fetchCertJobs = async (): Promise<void> => {
   if (disposed) return
-  const jobs: CertJob[] = []
-  let page = 1
-  while (!disposed) {
-    const res = await request.get<APIResponse<CertJobsPage<CertJob>>>('/certificates/jobs', {
-      params: { page, page_size: 200 },
-      signal: certJobsPolling.signal,
-    })
-    if (!res.data) throw new TypeError('证书任务分页响应缺少 data')
-    const pageJobs = res.data.list
-    jobs.push(...pageJobs)
-    if (jobs.length >= res.data.total || pageJobs.length < res.data.page_size) break
-    page += 1
-  }
+  const requestedRuleIds = pagedRules.value.map((rule) => rule.caddy_id)
+  const requestedRuleIdSet = new Set(requestedRuleIds)
+  const res = await request.post<APIResponse<Record<string, CertJob>>>('/certificates/jobs/current', {
+    rule_ids: requestedRuleIds,
+  }, { signal: certJobsPolling.signal })
+  if (!res.data) throw new TypeError('当前证书任务响应缺少 data')
   if (disposed) return
-  const map: Record<string, CertJob> = {}
-  jobs.forEach(job => {
-    if (job.rule_id) {
-      const existing = map[job.rule_id]
-      if (!existing || certJobPriority(job.status) > certJobPriority(existing.status)) {
-        map[job.rule_id] = job
-      }
+  const nextMap = { ...certJobMap.value }
+  requestedRuleIds.forEach((ruleId) => delete nextMap[ruleId])
+  Object.entries(res.data).forEach(([ruleId, job]) => {
+    if (!requestedRuleIdSet.has(ruleId) || job.rule_id !== ruleId) {
+      throw new TypeError(`当前证书任务响应包含未请求的规则 ${ruleId}`)
     }
+    nextMap[ruleId] = job
   })
-  const newlyIssuedRuleIds = Object.entries(map)
+  const newlyIssuedRuleIds = Object.entries(res.data)
     .filter(([ruleId, job]) => {
       const previousStatus = certJobMap.value[ruleId]?.status
       return previousStatus !== undefined && previousStatus !== 'issued' && job.status === 'issued'
     })
     .map(([ruleId]) => ruleId)
   if (disposed) return
-  certJobMap.value = map
-  if (newlyIssuedRuleIds.length > 0) await fetchCertInfo(newlyIssuedRuleIds)
+  certJobMap.value = nextMap
+  newlyIssuedRuleIds.forEach((ruleId) => pendingCertInfoRefresh.add(ruleId))
+  if (pendingCertInfoRefresh.size === 0) return
+  const refreshRuleIds = [...pendingCertInfoRefresh]
+  const refreshed = await fetchCertInfo(refreshRuleIds)
+  if (!refreshed && !disposed) throw new CertInfoRefreshError()
+  if (refreshed) refreshRuleIds.forEach((ruleId) => pendingCertInfoRefresh.delete(ruleId))
 }
 
 const isCertJobActive = (status?: CertJobStatus) => {
   if (!status) return false
   return !['issued', 'failed', 'disabled'].includes(status)
-}
-
-const certJobPriority = (status: CertJobStatus): number => {
-  if (status === 'waiting_ca' || status === 'failed') return 2
-  if (isCertJobActive(status)) return 3
-  if (status === 'issued') return 1
-  return 0
 }
 
 const canEditRule = (row: Rule) => {
@@ -1363,6 +1374,7 @@ const tlsTagType = (row: Rule) => {
     const status = certJobMap.value[row.caddy_id]?.status
     if (status === 'issued') return 'success'
     if (status === 'failed') return 'danger'
+    if (status === 'disabled') return 'info'
     if (status) return 'warning'
     return 'info'
   }
@@ -2871,12 +2883,37 @@ const healthPolling = usePollingTask(async () => fetchHealthStatus(), {
   interval: 15000,
   onError: (error) => console.error('Failed to poll health status:', error),
 })
+const certPollingError = usePollingErrorState()
+const certPollingErrorDescription = computed(() => {
+  const lastError = formatDate(certPollingError.lastErrorAt.value)
+  const retryAt = formatDate(certPollingError.retryAt.value)
+  return retryAt
+    ? `最后错误：${lastError}；契约响应异常，自动重试已退避至 ${retryAt}`
+    : `最后错误：${lastError}`
+})
 const certJobsPolling = usePollingTask(async () => {
-  if (rules.value.some((rule) => rule.tls_source === 'acme_dns')) await fetchCertJobs()
+  if (!certPollingError.canRun()) return
+  if (rules.value.some((rule) => rule.tls_source === 'acme_dns') || pendingCertInfoRefresh.size > 0) {
+    await fetchCertJobs()
+  }
+  certPollingError.clear()
 }, {
   interval: 5000,
-  onError: (error) => console.error('Failed to poll certificate jobs:', error),
+  onError: (error) => {
+    console.error('Failed to poll certificate jobs:', error)
+    certPollingError.recordError(error)
+  },
 })
+
+const retryCertPolling = async (): Promise<void> => {
+  certPollingError.resetBackoff()
+  await certJobsPolling.run()
+}
+
+watch(
+  () => pagedRules.value.map((rule) => rule.caddy_id).join('\u0000'),
+  () => void certJobsPolling.run(),
+)
 
 onMounted(() => {
   void fetchRules()
@@ -2902,6 +2939,9 @@ onUnmounted(() => {
 .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .search-input { width: 280px; }
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
+.polling-error-alert { margin-bottom: 16px; }
+.polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+.polling-error-meta { font-size: 12px; }
 .page-header {
   display: flex;
   justify-content: space-between;

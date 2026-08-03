@@ -1,4 +1,13 @@
 <template>
+  <el-alert v-if="jobsPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert">
+    <template #title>
+      <div class="polling-error-title">
+        <span>证书任务加载失败：{{ jobsPollingError.errorMessage.value }}</span>
+        <el-button link type="danger" :loading="loading" @click="retryJobsPolling">立即重试</el-button>
+      </div>
+    </template>
+    <div class="polling-error-meta">{{ jobsPollingErrorDescription }}</div>
+  </el-alert>
   <el-table
     v-if="loading || jobs.length > 0"
     :data="jobs"
@@ -106,10 +115,11 @@ import { formatDate } from '@/utils/date'
 import { escapeHtml } from '@/utils/ansi'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import type { APIResponse } from '@/types'
+import type { APIResponse, CertJobsPage } from '@/types'
 import { assertNever, certJobStatusLabel } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
 import { usePollingTask } from '@/composables/usePollingTask'
+import { usePollingErrorState } from '@/composables/usePollingErrorState'
 
 interface CertJob {
   id: number
@@ -129,13 +139,6 @@ interface CertJob {
 }
 
 type CertificateStatus = 'expired' | 'expiring' | 'unknown' | 'valid'
-
-interface CertJobsPage {
-  readonly list: CertJob[]
-  readonly total: number
-  readonly page: number
-  readonly page_size: number
-}
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
@@ -286,21 +289,19 @@ const fetchJobs = async () => {
   const requestSeq = ++jobsRequestSeq
   loading.value = true
   try {
-    const jobsRes = await request.get<APIResponse<CertJobsPage>>('/certificates/jobs', {
+    const jobsRes = await request.get<APIResponse<CertJobsPage<CertJob>>>('/certificates/jobs', {
       params: { page: currentPage.value, page_size: pageSize.value },
       signal: jobsPolling.signal,
     })
     if (disposed || requestSeq !== jobsRequestSeq) return
     if (!jobsRes.data) throw new TypeError('证书任务分页响应缺少 data')
-    jobs.value = jobsRes.data.list
+    jobs.value = [...jobsRes.data.list]
     total.value = jobsRes.data.total
     const lastPage = Math.max(1, Math.ceil(total.value / pageSize.value))
     if (currentPage.value > lastPage) {
       currentPage.value = lastPage
       queueMicrotask(() => void jobsPolling.run())
     }
-  } catch (error: unknown) {
-    if (!disposed && requestSeq === jobsRequestSeq) console.error('Failed to fetch cert jobs:', error)
   } finally {
     if (!disposed && requestSeq === jobsRequestSeq) loading.value = false
   }
@@ -392,10 +393,30 @@ const refreshLogs = async () => {
   }
 }
 
-const jobsPolling = usePollingTask(async () => fetchJobs(), {
-  interval: 5000,
-  onError: (error) => console.error('Failed to poll certificate jobs:', error),
+const jobsPollingError = usePollingErrorState()
+const jobsPollingErrorDescription = computed(() => {
+  const lastError = formatDate(jobsPollingError.lastErrorAt.value)
+  const retryAt = formatDate(jobsPollingError.retryAt.value)
+  return retryAt
+    ? `最后错误：${lastError}；契约响应异常，自动重试已退避至 ${retryAt}`
+    : `最后错误：${lastError}`
 })
+const jobsPolling = usePollingTask(async () => {
+  if (!jobsPollingError.canRun()) return
+  await fetchJobs()
+  jobsPollingError.clear()
+}, {
+  interval: 5000,
+  onError: (error) => {
+    console.error('Failed to poll certificate jobs:', error)
+    jobsPollingError.recordError(error)
+  },
+})
+
+const retryJobsPolling = async (): Promise<void> => {
+  jobsPollingError.resetBackoff()
+  await jobsPolling.run()
+}
 
 onMounted(async () => {
   try {
@@ -459,6 +480,9 @@ onUnmounted(() => {
   width: 100%;
 }
 .cert-jobs-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
+.polling-error-alert { margin-bottom: 16px; }
+.polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+.polling-error-meta { font-size: 12px; }
 .cert-jobs-table :deep(.el-table__cell) {
   vertical-align: middle;
 }

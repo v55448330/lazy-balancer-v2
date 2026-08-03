@@ -70,6 +70,7 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/caddy/restart":                  AuditPolicyGeneric,
 	"POST /api/v1/certificates/issue":             AuditPolicyExplicit,
 	"POST /api/v1/certificates/parse":             AuditPolicySkip,
+	"POST /api/v1/certificates/jobs/current":      AuditPolicySkip,
 	"POST /api/v1/certificates/jobs/:id/retry":    AuditPolicyExplicit,
 	"DELETE /api/v1/certificates/jobs/:id":        AuditPolicyExplicit,
 }
@@ -78,6 +79,7 @@ var readOnlyWriteRoutes = map[string]struct{}{
 	"POST /api/v1/admin-tls/inspect":            {},
 	"POST /api/v1/ca-providers/:id/test":        {},
 	"POST /api/v1/certificate-configs/:id/test": {},
+	"POST /api/v1/certificates/jobs/current":    {},
 	"POST /api/v1/certificate-configs/test":     {},
 	"POST /api/v1/certificates/parse":           {},
 	"POST /api/v1/config/import/validate":       {},

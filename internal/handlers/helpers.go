@@ -748,10 +748,14 @@ func (index prometheusMetricsIndex) ruleMetrics(target ruleMetricTarget) gin.H {
 
 func (index prometheusMetricsIndex) tcpRuleMetrics(upstreams []models.Upstream) gin.H {
 	var result ruleMetricsAggregate
+	addresses := make(map[string]struct{}, len(upstreams))
 	for _, upstream := range upstreams {
 		if upstream.Enabled {
-			result.add(index.tcpUpstreams[fmt.Sprintf("%s:%d", upstream.Host, upstream.Port)])
+			addresses[net.JoinHostPort(upstream.Host, strconv.Itoa(upstream.Port))] = struct{}{}
 		}
+	}
+	for address := range addresses {
+		result.add(index.tcpUpstreams[address])
 	}
 	return result.ruleMetrics(false)
 }

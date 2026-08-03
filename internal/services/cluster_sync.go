@@ -31,6 +31,15 @@ type SyncResult struct {
 	Changed        bool `json:"changed"`
 }
 
+type SnapshotSchemaTooNewError struct {
+	Actual    int
+	Supported int
+}
+
+func (err *SnapshotSchemaTooNewError) Error() string {
+	return fmt.Sprintf("主节点快照版本 v%d 超出本节点支持范围 v%d，请升级从节点", err.Actual, err.Supported)
+}
+
 type SyncService struct {
 	db                     *sql.DB
 	cfg                    *config.Config
@@ -501,6 +510,12 @@ func verifySnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken strin
 }
 
 func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken string, appliedVersion int) (models.ClusterSnapshot, error) {
+	if snapshot.SchemaVersion > CurrentSnapshotSchema {
+		return models.ClusterSnapshot{}, &SnapshotSchemaTooNewError{Actual: snapshot.SchemaVersion, Supported: CurrentSnapshotSchema}
+	}
+	if snapshot.SchemaVersion >= 3 && len(snapshot.CanonicalPayload) == 0 {
+		return models.ClusterSnapshot{}, errors.New("schema v3 快照缺少 canonical_payload")
+	}
 	// The signature is mandatory: it is the only authenticity proof over the
 	// (verification-skipped) transport, and an unsigned payload could be forged
 	// by any on-path actor. Masters that predate signing must be upgraded.
@@ -669,6 +684,10 @@ func (s *SyncService) run(ctx context.Context) {
 			}
 			reportErr := s.Report(ctx)
 			s.recordSyncError(ctx, pullErr, reportErr)
+			var schemaTooNew *SnapshotSchemaTooNewError
+			if errors.As(pullErr, &schemaTooNew) {
+				return
+			}
 		}
 		delay := time.Duration(interval) * time.Second
 		if token == "" {

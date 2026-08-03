@@ -13,6 +13,7 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 	intentionalSkip := map[string]struct{}{
 		"POST /api/v1/admin-tls/inspect":            {},
 		"POST /api/v1/certificates/parse":           {},
+		"POST /api/v1/certificates/jobs/current":    {},
 		"POST /api/v1/cluster/nodes/report":         {},
 		"POST /api/v1/cluster/registration/confirm": {},
 		"POST /api/v1/config/import/validate":       {},

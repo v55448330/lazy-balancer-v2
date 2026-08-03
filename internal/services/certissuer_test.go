@@ -332,7 +332,9 @@ func TestCAQueueManager_CancelJobsForRule_waits_for_fast_path_rollback(t *testin
 	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
 	cancelDone := make(chan struct{})
 	go func() {
-		manager.CancelJobsForRule(ruleID)
+		if err := manager.CancelJobsForRule(context.Background(), ruleID); err != nil {
+			t.Errorf("cancel rule jobs: %v", err)
+		}
 		close(cancelDone)
 	}()
 	<-execution.ctx.Done()

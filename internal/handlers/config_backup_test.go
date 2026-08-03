@@ -414,6 +414,7 @@ func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *t
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil })
 	t.Cleanup(services.ResetCAQueueManagerForTest)
+	services.GetCAQueueManager().PauseAndDrain()
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_requeue_v2','requeue','http','requeue.example.test',8080,1,1,'acme_dns');
 		INSERT INTO users (username,password_hash,role,is_enabled) VALUES ('admin','hash','admin',1);
 		INSERT INTO upstreams (rule_id,host,port,weight,enabled) VALUES ('lb_requeue_v2','127.0.0.1',9000,1,1);
@@ -431,6 +432,15 @@ func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *t
 	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(exportResponse.Body.String()))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
+	block := make(chan struct{})
+	acmeMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-block }))
+	t.Cleanup(func() { close(block); acmeMock.Close() })
+	if _, err := db.DB.Exec("UPDATE ca_providers SET provider='letsencrypt', directory_url=? WHERE enabled=1", acmeMock.URL); err != nil {
+		t.Fatalf("redirect ACME directory: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE global_config SET acme_email='acme@example.test' WHERE id=1"); err != nil {
+		t.Fatalf("set ACME email: %v", err)
+	}
 
 	// When
 	router.ServeHTTP(response, request)
@@ -443,8 +453,8 @@ func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *t
 	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_requeue_v2'").Scan(&status); err != nil {
 		t.Fatalf("read recovered certificate job: %v", err)
 	}
-	if status != "queued" {
-		t.Fatalf("recovered certificate job status=%q, want queued", status)
+	if status != "queued" && status != "creating_account" {
+		t.Fatalf("recovered certificate job status=%q, want queued or creating_account (pipeline active)", status)
 	}
 }
 

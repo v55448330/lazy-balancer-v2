@@ -40,10 +40,11 @@ type ClusterService struct {
 	pendingPinPath       string
 	pendingPinAuditURL   string
 	beforeUpdateSettings func()
+	snapshotNow          func() time.Time
 }
 
 func NewClusterService(database *sql.DB, lifecycle ClusterLifecycle) *ClusterService {
-	return &ClusterService{db: database, lifecycle: lifecycle}
+	return &ClusterService{db: database, lifecycle: lifecycle, snapshotNow: time.Now}
 }
 
 func randomHex(byteCount int) (string, error) {

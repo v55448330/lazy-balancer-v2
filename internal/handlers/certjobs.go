@@ -170,6 +170,58 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"list": jobs, "total": total, "page": page, "page_size": pageSize}})
 }
 
+// GetCurrentCertJobs returns the latest non-disabled job per requested rule so
+// polling does not depend on offset pagination (which drifts under inserts).
+func (h *Handlers) GetCurrentCertJobs(c *gin.Context) {
+	var req struct {
+		RuleIDs []string `json:"rule_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误: " + err.Error()})
+		return
+	}
+	if len(req.RuleIDs) > 200 {
+		req.RuleIDs = req.RuleIDs[:200]
+	}
+	result := make(map[string]*models.CertJob, len(req.RuleIDs))
+	for _, id := range req.RuleIDs {
+		result[id] = nil
+	}
+	if len(req.RuleIDs) == 0 {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: result})
+		return
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(req.RuleIDs)), ",")
+	args := make([]interface{}, len(req.RuleIDs))
+	for i, id := range req.RuleIDs {
+		args[i] = id
+	}
+	rows, err := db.DB.QueryContext(c.Request.Context(), `SELECT j.id, j.rule_id, j.domain, COALESCE(j.ca_provider_id,0), COALESCE(p.name,''), j.status, COALESCE(j.message,''), COALESCE(j.renewal_attempts,0), j.ca_available_after, COALESCE(j.last_error_code,''), j.expires_at, j.created_at, j.updated_at
+		FROM cert_jobs j LEFT JOIN ca_providers p ON p.id = j.ca_provider_id
+		WHERE j.rule_id IN (`+placeholders+`) AND j.status <> 'disabled'
+		ORDER BY j.rule_id, j.created_at DESC, j.id DESC`, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询证书任务失败"})
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var job models.CertJob
+		if err := rows.Scan(&job.ID, &job.RuleID, &job.Domain, &job.CAProviderID, &job.CAProviderName, &job.Status, &job.Message, &job.RenewalAttempts, &job.CAAvailableAfter, &job.LastErrorCode, &job.ExpiresAt, &job.CreatedAt, &job.UpdatedAt); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败: " + err.Error()})
+			return
+		}
+		if result[job.RuleID] == nil {
+			result[job.RuleID] = &job
+		}
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: result})
+}
+
 func certificateIssuer(certPEM string) string {
 	block, _ := pem.Decode([]byte(certPEM))
 	if block == nil {

@@ -309,16 +309,19 @@ func TestMaterializeAllCertsFromDB_repairs_mismatched_downloaded_pair(t *testing
 	}
 }
 
-func matchingCertificatePair(t *testing.T, domain string) (string, string) {
+func matchingCertificatePair(t *testing.T, domains ...string) (string, string) {
 	t.Helper()
+	if len(domains) == 0 {
+		t.Fatal("certificate domains must not be empty")
+	}
 	key, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
 		t.Fatalf("generate certificate key: %v", err)
 	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: domain},
-		DNSNames:     []string{domain},
+		Subject:      pkix.Name{CommonName: domains[0]},
+		DNSNames:     domains,
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}

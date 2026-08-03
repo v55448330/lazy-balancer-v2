@@ -187,6 +187,28 @@ type ClusterSnapshot struct {
 	ACME             *ClusterACMEState    `json:"acme,omitempty"`
 }
 
+func (snapshot ClusterSnapshot) MarshalJSON() ([]byte, error) {
+	type snapshotAlias ClusterSnapshot
+	if snapshot.SchemaVersion < 3 || len(snapshot.CanonicalPayload) == 0 {
+		return json.Marshal(snapshotAlias(snapshot))
+	}
+	return json.Marshal(struct {
+		SchemaVersion    int             `json:"schema_version"`
+		MinReaderVersion int             `json:"min_reader_version"`
+		Version          int             `json:"version"`
+		Fingerprint      string          `json:"fingerprint"`
+		Signature        string          `json:"signature"`
+		CanonicalPayload json.RawMessage `json:"canonical_payload"`
+	}{
+		SchemaVersion:    snapshot.SchemaVersion,
+		MinReaderVersion: snapshot.MinReaderVersion,
+		Version:          snapshot.Version,
+		Fingerprint:      snapshot.Fingerprint,
+		Signature:        snapshot.Signature,
+		CanonicalPayload: snapshot.CanonicalPayload,
+	})
+}
+
 type ClusterNodeView struct {
 	ID              int            `json:"id"`
 	Name            string         `json:"name"`

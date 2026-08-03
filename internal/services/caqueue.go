@@ -101,7 +101,7 @@ func (m *CAQueueManager) CancelJob(jobID int) {
 	}
 }
 
-func (m *CAQueueManager) CancelJobsForRule(ruleID string) {
+func (m *CAQueueManager) CancelJobsForRule(ctx context.Context, ruleID string) error {
 	cancelCertificateDeploymentRetriesForRule(ruleID)
 	m.mu.Lock()
 	var done []<-chan struct{}
@@ -134,8 +134,15 @@ func (m *CAQueueManager) CancelJobsForRule(ruleID string) {
 		cancel()
 	}
 	for _, executionDone := range done {
-		<-executionDone
+		select {
+		case <-executionDone:
+		case <-ctx.Done():
+			cancelCertificateDeploymentRetriesForRule(ruleID)
+			return fmt.Errorf("等待规则 %s 的证书任务退出: %w", ruleID, ctx.Err())
+		}
 	}
+	cancelCertificateDeploymentRetriesForRule(ruleID)
+	return nil
 }
 
 // BlockJobsForRule prevents new queue admission until UnblockJobsForRule is called.
@@ -153,6 +160,20 @@ func (m *CAQueueManager) UnblockJobsForRule(ruleID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.blockedRules, ruleID)
+}
+
+func (m *CAQueueManager) IsRuleBlocked(ruleID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, blocked := m.blockedRules[ruleID]
+	return blocked
+}
+
+func (m *CAQueueManager) isRuleBlocked(ruleID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, blocked := m.blockedRules[ruleID]
+	return blocked
 }
 
 // PauseAndDrain prevents new work, cancels every queue, and waits for all
@@ -303,6 +324,7 @@ type caQueue struct {
 	reloader      func() error
 	mu            sync.Mutex
 	stopCh        chan struct{}
+	wakeCh        chan struct{}
 	ctx           context.Context
 	cancel        context.CancelFunc
 	loopDone      chan struct{}
@@ -331,6 +353,7 @@ func newCAQueue(provider models.CAProvider, reloader func() error, dataDir ...st
 		executionDone: make(map[int]chan struct{}),
 		runningRules:  make(map[int]string),
 		stopCh:        make(chan struct{}),
+		wakeCh:        make(chan struct{}, 1),
 		loopDone:      make(chan struct{}),
 		ctx:           ctx,
 		cancel:        cancel,
@@ -349,6 +372,10 @@ func (q *caQueue) enqueue(item queueItem) {
 	}
 	q.pending = append(q.pending, item)
 	q.active[item.jobID] = struct{}{}
+	select {
+	case q.wakeCh <- struct{}{}:
+	default:
+	}
 }
 
 func (q *caQueue) loop() {
@@ -359,6 +386,8 @@ func (q *caQueue) loop() {
 		select {
 		case <-q.stopCh:
 			return
+		case <-q.wakeCh:
+			q.tick()
 		case <-ticker.C:
 			q.tick()
 		}

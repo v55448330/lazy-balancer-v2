@@ -42,7 +42,12 @@
         </template>
       </el-table-column>
       <el-table-column label="状态" width="90" align="center">
-        <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag></template>
+        <template #default="{ row }">
+          <el-tooltip v-if="versionIncompatibilityError(row)" :content="versionIncompatibilityError(row)" placement="top">
+            <el-tag type="danger" size="small">版本不兼容</el-tag>
+          </el-tooltip>
+          <el-tag v-else :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+        </template>
       </el-table-column>
       <el-table-column label="配置版本" min-width="170">
         <template #default="{ row }">
@@ -134,6 +139,24 @@ const statusLabel = (status: ClusterNodeStatus): string => {
 const healthSummary = (health: ClusterHealth): string => {
   const summary = `Caddy ${health.caddy_ok ? '正常' : '异常'} · 规则 ${health.rules_count} · 30 天内到期 ${health.certs_expiring_30d}`
   return health.last_sync_error ? `${summary} · ${health.last_sync_error}` : summary
+}
+
+const versionIncompatibilityError = (node: ClusterNode): string => {
+  const error = node.health?.last_sync_error.trim() ?? ''
+  if (!error) return ''
+  const normalized = error.toLowerCase()
+  const isSnapshotError = normalized.includes('快照') || normalized.includes('snapshot')
+  const hasVersionMismatch = normalized.includes('版本过旧')
+    || normalized.includes('version incompatible')
+    || normalized.includes('version mismatch')
+    || (normalized.includes('schema') && (
+      normalized.includes('过旧')
+      || normalized.includes('要求')
+      || normalized.includes('支持')
+      || normalized.includes('upgrade')
+      || normalized.includes('incompatible')
+    ))
+  return isSnapshotError && hasVersionMismatch ? error : ''
 }
 
 </script>

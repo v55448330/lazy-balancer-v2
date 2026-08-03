@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,10 @@ import (
 
 var (
 	createOrRequeueCertJob = services.CreateOrRequeueCertJob
+	cancelRuleJobs         = func(ctx context.Context, manager *services.CAQueueManager, ruleID string) error {
+		return manager.CancelJobsForRule(ctx, ruleID)
+	}
+	cancelRuleJobsTimeout = 2 * time.Minute
 )
 
 func (h *Handlers) ListRules(c *gin.Context) {
@@ -558,6 +563,12 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	resolvedCAProviderID, err := services.ResolveCAProviderID(req.CAProviderID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析 CA 提供商失败: " + err.Error()})
+		return
+	}
+	req.CAProviderID = resolvedCAProviderID
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
@@ -1419,44 +1430,44 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			}
 			return errors.Join(h.restoreImportRuntime(runtimeSnapshot), restoreRuleDBSnapshot(), services.RestoreCertJobsForRule(certJobsSnapshot))
 		}
-		resumedValidJob := false
-		if wasReEnabled {
-			var jobID int
-			var jobProviderID int
-			var jobStatus string
-			var jobExpiresAt sql.NullTime
-			jobErr := db.DB.QueryRow("SELECT id,status,expires_at,COALESCE(ca_provider_id,0) FROM cert_jobs WHERE rule_id=? AND domain=? ORDER BY id DESC LIMIT 1", caddyID, domain).Scan(&jobID, &jobStatus, &jobExpiresAt, &jobProviderID)
-			if jobErr != nil && !errors.Is(jobErr, sql.ErrNoRows) {
+		var jobID, jobProviderID int
+		var jobStatus string
+		var jobExpiresAt sql.NullTime
+		jobErr := db.DB.QueryRow("SELECT id,status,expires_at,COALESCE(ca_provider_id,0) FROM cert_jobs WHERE rule_id=? AND domain=? ORDER BY id DESC LIMIT 1", caddyID, domain).Scan(&jobID, &jobStatus, &jobExpiresAt, &jobProviderID)
+		if jobErr != nil && !errors.Is(jobErr, sql.ErrNoRows) {
+			restoreErr := restoreACMEState()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败: " + errors.Join(jobErr, restoreErr).Error()})
+			return
+		}
+		if jobErr == nil {
+			resolvedJobProviderID, resolveJobErr := services.ResolveCAProviderID(jobProviderID)
+			if resolveJobErr != nil {
 				restoreErr := restoreACMEState()
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败: " + errors.Join(jobErr, restoreErr).Error()})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析证书任务 CA 提供商失败: " + errors.Join(resolveJobErr, restoreErr).Error()})
 				return
 			}
-			if jobErr == nil {
-				resolvedJobProviderID, resolveJobErr := services.ResolveCAProviderID(jobProviderID)
-				if resolveJobErr != nil {
+			caProviderChanged = caProviderChanged || resolvedJobProviderID != caProviderID
+		}
+		resumedValidJob := false
+		if wasReEnabled && jobErr == nil {
+			var renewalDays int
+			if err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays); err != nil {
+				restoreErr := restoreACMEState()
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书续签配置失败: " + errors.Join(err, restoreErr).Error()})
+				return
+			}
+			var expiryPtr *time.Time
+			if jobExpiresAt.Valid {
+				expiry := jobExpiresAt.Time
+				expiryPtr = &expiry
+			}
+			if !domainChanged && !caProviderChanged && ResolveEnableCertJobAction(true, jobStatus, expiryPtr, time.Now(), renewalDays) == EnableCertJobResume {
+				if _, err := db.DB.Exec("UPDATE cert_jobs SET status='issued',message='证书有效，已恢复使用',renewal_attempts=0,ca_available_after=NULL,last_error_code=NULL,updated_at=datetime('now') WHERE id=?", jobID); err != nil {
 					restoreErr := restoreACMEState()
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析证书任务 CA 提供商失败: " + errors.Join(resolveJobErr, restoreErr).Error()})
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "恢复证书任务失败: " + errors.Join(err, restoreErr).Error()})
 					return
 				}
-				var renewalDays int
-				if err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays); err != nil {
-					restoreErr := restoreACMEState()
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书续签配置失败: " + errors.Join(err, restoreErr).Error()})
-					return
-				}
-				var expiryPtr *time.Time
-				if jobExpiresAt.Valid {
-					expiry := jobExpiresAt.Time
-					expiryPtr = &expiry
-				}
-				if !domainChanged && !caProviderChanged && resolvedJobProviderID == caProviderID && ResolveEnableCertJobAction(true, jobStatus, expiryPtr, time.Now(), renewalDays) == EnableCertJobResume {
-					if _, err := db.DB.Exec("UPDATE cert_jobs SET status='issued',message='证书有效，已恢复使用',renewal_attempts=0,ca_available_after=NULL,last_error_code=NULL,updated_at=datetime('now') WHERE id=?", jobID); err != nil {
-						restoreErr := restoreACMEState()
-						c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "恢复证书任务失败: " + errors.Join(err, restoreErr).Error()})
-						return
-					}
-					resumedValidJob = true
-				}
+				resumedValidJob = true
 			}
 		}
 		needJob := domainChanged || caProviderChanged || !services.IsACMECertIssued(caddyID, domain) ||
@@ -1533,12 +1544,35 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		return
 	}
 	queueManager := services.GetCAQueueManager()
-	jobsCanceled := queueManager != nil
+	jobsCanceled := false
 	deleteCompleted := false
 	if queueManager != nil {
 		// No DB transaction is held while waiting, so worker rollback/reload paths can exit.
 		queueManager.BlockJobsForRule(caddyID)
-		queueManager.CancelJobsForRule(caddyID)
+		cancelCtx, cancel := context.WithTimeout(c.Request.Context(), cancelRuleJobsTimeout)
+		cancelErr := cancelRuleJobs(cancelCtx, queueManager, caddyID)
+		cancel()
+		if cancelErr != nil {
+			drainCtx := context.WithoutCancel(c.Request.Context())
+			go func() {
+				if err := cancelRuleJobs(drainCtx, queueManager, caddyID); err != nil {
+					services.Logf("error", "CRITICAL: DeleteRule asynchronous certificate drain failed for caddy_id=%s: %v", caddyID, err)
+					return
+				}
+				restoreErr := services.RestoreCertJobsForRule(certJobsSnapshot)
+				queueManager.UnblockJobsForRule(caddyID)
+				if restoreErr != nil {
+					services.Logf("error", "CRITICAL: DeleteRule certificate restore after timeout failed for caddy_id=%s: %v", caddyID, restoreErr)
+					return
+				}
+				if requeueErr := services.RequeueNonTerminalCertJobs(); requeueErr != nil {
+					services.Logf("error", "CRITICAL: DeleteRule certificate requeue after timeout failed for caddy_id=%s: %v", caddyID, requeueErr)
+				}
+			}()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "取消证书任务超时，规则与证书保持不变: " + cancelErr.Error()})
+			return
+		}
+		jobsCanceled = true
 	}
 	defer func() {
 		if !jobsCanceled || deleteCompleted {
@@ -2084,7 +2118,11 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 
 	// 取消仍在排队或执行中的签发协程，避免已禁用规则继续占用 CA 配额
 	if qm := services.GetCAQueueManager(); qm != nil {
-		qm.CancelJobsForRule(caddyID)
+		cancelCtx, cancel := context.WithTimeout(c.Request.Context(), cancelRuleJobsTimeout)
+		if err := cancelRuleJobs(cancelCtx, qm, caddyID); err != nil {
+			log.Printf("DisableRule certificate cancellation timed out for caddy_id=%s: %v", caddyID, err)
+		}
+		cancel()
 	}
 
 	recordAudit(c, "禁用", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已禁用"))

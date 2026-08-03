@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -269,6 +270,139 @@ func TestUpdateRule_allows_edit_with_disabled_ACME_job(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+}
+
+func TestUpdateRule_reissues_when_default_CA_differs_from_latest_job_provider(t *testing.T) {
+	// Given
+	harness := newUpdateAuditRuleHandlers(t, "lb_default_ca_switch", 0, false)
+	seedAuditRule(t, "lb_default_ca_switch", "before", "switch.example.test", 8080, true, "acme_dns", true)
+	seedAuditUpstream(t, "lb_default_ca_switch")
+	var oldProviderID int
+	if err := db.DB.QueryRow("SELECT default_ca_provider_id FROM global_config WHERE id=1").Scan(&oldProviderID); err != nil {
+		t.Fatalf("read old default provider: %v", err)
+	}
+	result, err := db.DB.Exec(`INSERT INTO ca_providers (name,provider,directory_url,enabled) VALUES ('new-default','letsencrypt','https://new.example/directory',1)`)
+	if err != nil {
+		t.Fatalf("seed new provider: %v", err)
+	}
+	newProviderID64, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read new provider ID: %v", err)
+	}
+	newProviderID := int(newProviderID64)
+	if _, err := db.DB.Exec("UPDATE global_config SET default_ca_provider_id=? WHERE id=1", newProviderID); err != nil {
+		t.Fatalf("switch default provider: %v", err)
+	}
+	dnsResult, err := db.DB.Exec(`INSERT INTO certificate_configs (name,dns_provider,dns_credentials,enabled) VALUES ('dns','dnspod','{"token":"x"}',1)`)
+	if err != nil {
+		t.Fatalf("seed dns config: %v", err)
+	}
+	dnsConfigID, err := dnsResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("read dns config ID: %v", err)
+	}
+	if _, err := db.DB.Exec(`UPDATE lb_rules SET acme_config_id=? WHERE caddy_id='lb_default_ca_switch'`, dnsConfigID); err != nil {
+		t.Fatalf("bind dns config to rule: %v", err)
+	}
+	certPEM, keyPEM, err := generateTestCert("switch.example.test", time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour))
+	if err != nil {
+		t.Fatalf("generate issued certificate: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,expires_at,ca_provider_id)
+		VALUES ('lb_default_ca_switch','switch.example.test','issued',?,?,datetime('now','+90 days'),?)`, certPEM, keyPEM, oldProviderID); err != nil {
+		t.Fatalf("seed historical certificate job: %v", err)
+	}
+	oldCertDir := testServicesCertDir
+	testServicesCertDir = t.TempDir()
+	t.Cleanup(func() { testServicesCertDir = oldCertDir })
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(nil)
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	oldCreate := createOrRequeueCertJob
+	enqueuedProvider := make(chan int, 1)
+	createOrRequeueCertJob = func(_ string, _ string, providerID int, _ *services.CAQueueManager) (int, error) {
+		enqueuedProvider <- providerID
+		return 77, nil
+	}
+	t.Cleanup(func() { createOrRequeueCertJob = oldCreate })
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", harness.handler.UpdateRule)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_default_ca_switch", strings.NewReader(`{"name":"after"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", response.Code, response.Body.String())
+	}
+	select {
+	case providerID := <-enqueuedProvider:
+		if providerID != newProviderID {
+			t.Fatalf("reissue provider=%d, want new default %d", providerID, newProviderID)
+		}
+	default:
+		t.Fatal("ordinary edit did not trigger reissue after default CA switch")
+	}
+}
+
+func TestDeleteRule_returns_timeout_and_preserves_rule_when_worker_does_not_exit(t *testing.T) {
+	// Given
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_delete_timeout", "timeout", "timeout.example.test", 8080, true, "acme_dns", true)
+	seedAuditUpstream(t, "lb_delete_timeout")
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,message) VALUES ('lb_delete_timeout','timeout.example.test','creating_order','unchanged')`); err != nil {
+		t.Fatalf("seed certificate job: %v", err)
+	}
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(nil)
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	services.GetCAQueueManager().PauseAndDrain()
+	oldTimeout := cancelRuleJobsTimeout
+	cancelRuleJobsTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { cancelRuleJobsTimeout = oldTimeout })
+	oldCancel := cancelRuleJobs
+	drained := make(chan struct{})
+	var calls atomic.Int32
+	cancelRuleJobs = func(ctx context.Context, _ *services.CAQueueManager, _ string) error {
+		if calls.Add(1) == 1 {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		close(drained)
+		return nil
+	}
+	t.Cleanup(func() { cancelRuleJobs = oldCancel })
+	router := gin.New()
+	router.DELETE("/rules/:caddy_id", handler.DeleteRule)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/rules/lb_delete_timeout", nil))
+
+	// Then
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "取消证书任务超时") {
+		t.Fatalf("delete status=%d body=%s", response.Code, response.Body.String())
+	}
+	var ruleCount int
+	var jobStatus, jobMessage string
+	if err := db.DB.QueryRow(`SELECT COUNT(*),(SELECT status FROM cert_jobs WHERE rule_id='lb_delete_timeout'),(SELECT message FROM cert_jobs WHERE rule_id='lb_delete_timeout') FROM lb_rules WHERE caddy_id='lb_delete_timeout'`).Scan(&ruleCount, &jobStatus, &jobMessage); err != nil {
+		t.Fatalf("read preserved state: %v", err)
+	}
+	if ruleCount != 1 || jobStatus != "queued" {
+		t.Fatalf("preserved state rule=%d job=(%q,%q), want rule preserved and job restored to pipeline", ruleCount, jobStatus, jobMessage)
+	}
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		t.Fatal("asynchronous cancellation drain did not finish")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for services.GetCAQueueManager().IsRuleBlocked("lb_delete_timeout") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

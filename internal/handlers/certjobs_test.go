@@ -83,6 +83,18 @@ func TestDeleteCertJob_requeues_running_job_when_delete_fails(t *testing.T) {
 		CREATE TRIGGER fail_running_job_delete BEFORE DELETE ON cert_jobs BEGIN SELECT RAISE(ABORT,'delete failed'); END`); err != nil {
 		t.Fatalf("seed running job and trigger: %v", err)
 	}
+	oldCertDir := testServicesCertDir
+	testServicesCertDir = t.TempDir()
+	t.Cleanup(func() { testServicesCertDir = oldCertDir })
+	block := make(chan struct{})
+	acmeMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-block }))
+	t.Cleanup(func() { close(block); acmeMock.Close() })
+	if _, err := db.DB.Exec("UPDATE ca_providers SET provider='letsencrypt', directory_url=? WHERE enabled=1", acmeMock.URL); err != nil {
+		t.Fatalf("redirect ACME directory: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE global_config SET acme_email='acme@example.test' WHERE id=1"); err != nil {
+		t.Fatalf("set ACME email: %v", err)
+	}
 	router := gin.New()
 	router.DELETE("/jobs/:id", h.DeleteCertJob)
 	response := httptest.NewRecorder()
@@ -94,8 +106,8 @@ func TestDeleteCertJob_requeues_running_job_when_delete_fails(t *testing.T) {
 	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=1").Scan(&status); err != nil {
 		t.Fatal(err)
 	}
-	if status != "queued" {
-		t.Fatalf("status=%q, want queued", status)
+	if status != "queued" && status != "creating_account" {
+		t.Fatalf("status=%q, want queued or creating_account (pipeline active)", status)
 	}
 	if !services.GetCAQueueManager().IsJobActive(1) {
 		t.Fatal("restored running job is not active in the CA queue")

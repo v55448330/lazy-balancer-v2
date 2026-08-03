@@ -585,7 +585,7 @@ func TestGenerateCaddyConfig_loads_certificate_for_canonical_multi_domain_job(t 
 		VALUES ('lb-multi-domain','127.0.0.1',8080,1,1,'http')`); err != nil {
 		t.Fatalf("seed multi-domain upstream: %v", err)
 	}
-	issuedCert, issuedKey := matchingCertificatePair(t, "example.com")
+	issuedCert, issuedKey := matchingCertificatePair(t, "example.com", "www.example.com")
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem)
 		VALUES ('lb-multi-domain','example.com,www.example.com','issued',?,?)`, issuedCert, issuedKey); err != nil {
 		t.Fatalf("seed multi-domain certificate job: %v", err)
@@ -609,6 +609,41 @@ func TestGenerateCaddyConfig_loads_certificate_for_canonical_multi_domain_job(t 
 	}
 	if string(certPEM) != issuedCert || string(keyPEM) != issuedKey {
 		t.Fatalf("materialized pair=(%q,%q), want issued multi-domain pair", certPEM, keyPEM)
+	}
+}
+
+func TestGenerateCaddyConfig_does_not_select_single_domain_certificate_after_domain_expansion(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules
+		(caddy_id,name,protocol,domain,listen_port,strategy,health_check_path,enabled,enable_tls,tls_source)
+		VALUES ('lb-expanded-domain','expanded','http','example.com,www.example.com',443,'weighted_round_robin','',1,1,'acme_dns')`); err != nil {
+		t.Fatalf("seed expanded rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol)
+		VALUES ('lb-expanded-domain','127.0.0.1',8080,1,1,'http')`); err != nil {
+		t.Fatalf("seed expanded upstream: %v", err)
+	}
+	oldCert, oldKey := matchingCertificatePair(t, "example.com")
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem)
+		VALUES ('lb-expanded-domain','example.com','issued',?,?)`, oldCert, oldKey); err != nil {
+		t.Fatalf("seed old certificate: %v", err)
+	}
+
+	// When
+	generated := GenerateCaddyConfig()
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generate Caddy config: %s", message)
+	}
+	certPath, keyPath := CertFilePaths("lb-expanded-domain")
+	if _, err := os.Stat(certPath); !os.IsNotExist(err) {
+		t.Fatalf("single-domain certificate was materialized: %v", err)
+	}
+	if _, err := os.Stat(keyPath); !os.IsNotExist(err) {
+		t.Fatalf("single-domain key was materialized: %v", err)
 	}
 }
 

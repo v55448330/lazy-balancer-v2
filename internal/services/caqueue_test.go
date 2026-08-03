@@ -1,6 +1,7 @@
 package services
 
 import (
+	"lazy-balancer-v2/internal/db"
 	"context"
 	"errors"
 	"runtime"
@@ -91,7 +92,9 @@ func TestCAQueueManager_CancelJobsForRule_removes_pending_and_cancels_running(t 
 	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
 
 	// When
-	manager.CancelJobsForRule("lb-target")
+	if err := manager.CancelJobsForRule(context.Background(), "lb-target"); err != nil {
+		t.Fatalf("cancel rule jobs: %v", err)
+	}
 
 	// Then
 	queue.mu.Lock()
@@ -466,7 +469,9 @@ func TestCAQueueManager_CancelJobsForRule_cancels_and_waits_for_deployment_callb
 	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: true}
 	cancelDone := make(chan struct{})
 	go func() {
-		manager.CancelJobsForRule("lb_deleted")
+		if err := manager.CancelJobsForRule(context.Background(), "lb_deleted"); err != nil {
+			t.Errorf("cancel rule jobs: %v", err)
+		}
 		close(cancelDone)
 	}()
 	<-cancellationObserved
@@ -485,6 +490,119 @@ func TestCAQueueManager_CancelJobsForRule_cancels_and_waits_for_deployment_callb
 	case <-wroteFiles:
 		t.Fatal("deployment callback wrote files after rule cancellation")
 	default:
+	}
+}
+
+func TestCAQueueManager_CancelJobsForRule_blocks_retry_created_during_worker_exit(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status) VALUES (42,'lb_deleted','example.com','downloaded')`); err != nil {
+		t.Fatalf("seed deployment job: %v", err)
+	}
+	service := NewCertificateService()
+	newClusterTestService(t)
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_provider_id) VALUES (42,'lb_deleted','example.com','creating_order',0)`); err != nil {
+		t.Fatalf("seed certificate job: %v", err)
+	}
+	retryRan := make(chan struct{}, 1)
+	service.retryDeployment = func(context.Context, int) error {
+		retryRan <- struct{}{}
+		return nil
+	}
+	workerStarted := make(chan struct{})
+	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
+	queue.executeFn = func(ctx context.Context, item queueItem, _ models.CAProvider) error {
+		close(workerStarted)
+		<-ctx.Done()
+		scheduleCertificateDeploymentRetry(item.jobID, issuedCertificate{ruleID: item.ruleID}, 0)
+		return ctx.Err()
+	}
+	queue.enqueue(queueItem{jobID: 42, ruleID: "lb_deleted", domains: "example.com"})
+	queue.mu.Lock()
+	execution, ok := queue.prepareExecutionLocked(queue.ctx)
+	queue.mu.Unlock()
+	if !ok {
+		t.Fatal("worker execution was not prepared")
+	}
+	go queue.loop()
+	go queue.execute(execution)
+	<-workerStarted
+	ResetCAQueueManagerForTest()
+	InitCAQueueManager(nil)
+	t.Cleanup(ResetCAQueueManagerForTest)
+	manager := GetCAQueueManager()
+	manager.mu.Lock()
+	manager.queues[1] = queue
+	manager.mu.Unlock()
+	manager.BlockJobsForRule("lb_deleted")
+
+	// When
+	if err := manager.CancelJobsForRule(context.Background(), "lb_deleted"); err != nil {
+		t.Fatalf("cancel rule jobs: %v", err)
+	}
+	manager.UnblockJobsForRule("lb_deleted")
+
+	// Then
+	select {
+	case <-retryRan:
+		t.Fatal("deployment retry revived after rule cancellation")
+	case <-time.After(50 * time.Millisecond):
+	}
+	service.pauseDeploymentRetries()
+}
+
+func TestCAQueueManager_CancelJobsForRule_returns_context_error_for_stuck_worker(t *testing.T) {
+	// Given
+	newClusterTestService(t)
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_provider_id) VALUES (42,'lb_stuck','example.com','creating_order',0)`); err != nil {
+		t.Fatalf("seed certificate job: %v", err)
+	}
+	workerStarted := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
+	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error {
+		close(workerStarted)
+		<-releaseWorker
+		return nil
+	}
+	queue.enqueue(queueItem{jobID: 42, ruleID: "lb_stuck", domains: "example.com"})
+	queue.mu.Lock()
+	execution, ok := queue.prepareExecutionLocked(queue.ctx)
+	queue.mu.Unlock()
+	if !ok {
+		t.Fatal("worker execution was not prepared")
+	}
+	go queue.execute(execution)
+	<-workerStarted
+	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	// When
+	err := manager.CancelJobsForRule(ctx, "lb_stuck")
+
+	// Then
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("cancel error=%v, want deadline exceeded", err)
+	}
+	close(releaseWorker)
+	if err := manager.CancelJobsForRule(context.Background(), "lb_stuck"); err != nil {
+		t.Fatalf("drain released worker: %v", err)
+	}
+}
+
+func TestCAQueue_enqueue_notifies_worker_loop(t *testing.T) {
+	// Given
+	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
+
+	// When
+	queue.enqueue(queueItem{jobID: 42, ruleID: "lb_wake", domains: "example.com"})
+
+	// Then
+	select {
+	case <-queue.wakeCh:
+	default:
+		t.Fatal("enqueue did not signal the worker loop")
 	}
 }
 

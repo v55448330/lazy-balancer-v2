@@ -274,13 +274,20 @@ func TestClusterPasswordVersionSync_rejects_old_JWT(t *testing.T) {
 		t.Fatalf("seed slave user: %v", err)
 	}
 	const clusterToken = "cluster-token"
-	snapshot := models.ClusterSnapshot{Version: 1, SchemaVersion: services.CurrentSnapshotSchema, MinReaderVersion: services.CurrentSnapshotSchema, Users: []models.ClusterUser{{ID: 1, Username: "alice", PasswordHash: "new-hash", Role: "admin", IsEnabled: true, PasswordVersion: 1}}}
-	content, err := json.Marshal(snapshot)
+	snapshot := models.ClusterSnapshot{Version: 1, SchemaVersion: services.CurrentSnapshotSchema, MinReaderVersion: services.CurrentSnapshotSchema, Users: []models.ClusterUser{{ID: 1, Username: "alice", PasswordHash: "new-hash", Role: "admin", IsEnabled: true, PasswordVersion: 1}}, ACME: &models.ClusterACMEState{CAProviders: []models.CAProvider{}, CertificateConfigs: []models.CertificateConfig{}, DNSOwnership: json.RawMessage(`{"version":1,"records":[]}`)}}
+	canonicalSnapshot := snapshot
+	canonicalSnapshot.Fingerprint = ""
+	canonicalSnapshot.Signature = ""
+	canonicalSnapshot.CanonicalPayload = nil
+	payload, err := json.Marshal(canonicalSnapshot)
 	if err != nil {
-		t.Fatalf("marshal snapshot: %v", err)
+		t.Fatalf("marshal canonical snapshot: %v", err)
 	}
+	fingerprint := sha256.Sum256(payload)
+	snapshot.Fingerprint = hex.EncodeToString(fingerprint[:])
+	snapshot.CanonicalPayload = payload
 	mac := hmac.New(sha256.New, []byte(clusterToken))
-	_, _ = mac.Write(content)
+	_, _ = mac.Write(payload)
 	snapshot.Signature = hex.EncodeToString(mac.Sum(nil))
 	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "application/json")

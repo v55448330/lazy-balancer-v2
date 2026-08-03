@@ -1,12 +1,14 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -434,12 +436,106 @@ func TestVerifySnapshotIntegrity_rejects_tamperedACMECredentials(t *testing.T) {
 	snapshot = signTestSnapshot(snapshot, token)
 
 	// When
-	snapshot.ACME.CAProviders[0].Credentials = `{"eab_kid":"kid","eab_hmac_key":"tampered"}`
+	snapshot.CanonicalPayload = bytes.Replace(snapshot.CanonicalPayload, []byte("secret"), []byte("tampered"), 1)
 	err := verifySnapshotIntegrity(snapshot, token, 0)
 
 	// Then
 	if err == nil || !strings.Contains(err.Error(), "签名校验失败") {
 		t.Fatalf("tampered ACME credentials error=%v", err)
+	}
+}
+
+func TestVerifySnapshotIntegrity_rejectsHigherSchemaBeforeSignatureVerification(t *testing.T) {
+	// Given
+	snapshot := models.ClusterSnapshot{SchemaVersion: CurrentSnapshotSchema + 1}
+
+	// When
+	err := verifySnapshotIntegrity(snapshot, "cluster-token", 0)
+
+	// Then
+	want := fmt.Sprintf("主节点快照版本 v%d 超出本节点支持范围 v%d，请升级从节点", CurrentSnapshotSchema+1, CurrentSnapshotSchema)
+	if err == nil || err.Error() != want {
+		t.Fatalf("schema error=%v, want %q", err, want)
+	}
+}
+
+func TestSyncService_run_stopsAfterReportingHigherMasterSchema(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	var snapshotRequests atomic.Int32
+	reported := make(chan models.ClusterReport, 1)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/cluster/sync/snapshot":
+			snapshotRequests.Add(1)
+			_ = json.NewEncoder(response).Encode(map[string]any{"data": models.ClusterSnapshot{SchemaVersion: CurrentSnapshotSchema + 1}})
+		case "/api/v1/cluster/nodes/report":
+			var report models.ClusterReport
+			_ = json.NewDecoder(request.Body).Decode(&report)
+			reported <- report
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer master.Close()
+	caddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
+	defer caddy.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='cluster-token', sync_interval=5 WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(caddy.URL))
+	waits := 0
+	service.waitRunDelay = func(context.Context, time.Duration) bool {
+		waits++
+		return false
+	}
+
+	// When
+	service.run(context.Background())
+	report := waitSyncTest(t, reported)
+
+	// Then
+	want := fmt.Sprintf("主节点快照版本 v%d 超出本节点支持范围 v%d，请升级从节点", CurrentSnapshotSchema+1, CurrentSnapshotSchema)
+	if snapshotRequests.Load() != 1 || waits != 0 || !strings.Contains(report.LastSyncError, want) || report.ServiceStatus != "degraded" {
+		t.Fatalf("requests=%d waits=%d report=%#v", snapshotRequests.Load(), waits, report)
+	}
+}
+
+func TestSyncService_Pull_manualSuccessClearsHigherSchemaTerminalError(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	const token = "cluster-token"
+	higherSchema := atomic.Bool{}
+	higherSchema.Store(true)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		if higherSchema.Load() {
+			_ = json.NewEncoder(response).Encode(map[string]any{"data": models.ClusterSnapshot{SchemaVersion: CurrentSnapshotSchema + 1}})
+			return
+		}
+		_ = json.NewEncoder(response).Encode(map[string]any{"data": signedTestSnapshot(1, token)})
+	}))
+	defer master.Close()
+	caddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
+	defer caddy.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token=? WHERE id=1", master.URL, token); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(caddy.URL))
+	if _, err := service.Pull(context.Background()); err == nil {
+		t.Fatal("higher schema pull unexpectedly succeeded")
+	}
+	higherSchema.Store(false)
+
+	// When
+	result, err := service.Pull(context.Background())
+	var stored string
+	if queryErr := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); queryErr != nil {
+		t.Fatal(queryErr)
+	}
+
+	// Then
+	if err != nil || !result.Changed || stored != "" {
+		t.Fatalf("result=%#v error=%v last_sync_error=%q", result, err, stored)
 	}
 }
 
@@ -579,14 +675,26 @@ func TestSyncService_Stop_returns_when_run_is_waiting_before_pull_admission(t *t
 }
 
 func signedTestSnapshot(version int, token string) models.ClusterSnapshot {
-	snapshot := models.ClusterSnapshot{Version: version, SchemaVersion: CurrentSnapshotSchema, MinReaderVersion: CurrentSnapshotSchema}
+	snapshot := models.ClusterSnapshot{
+		Version: version, SchemaVersion: CurrentSnapshotSchema, MinReaderVersion: CurrentSnapshotSchema,
+		ACME: &models.ClusterACMEState{CAProviders: []models.CAProvider{}, CertificateConfigs: []models.CertificateConfig{}, DNSOwnership: json.RawMessage(`{"version":1,"records":[]}`)},
+	}
 	return signTestSnapshot(snapshot, token)
 }
 
 func signTestSnapshot(snapshot models.ClusterSnapshot, token string) models.ClusterSnapshot {
-	content, err := json.Marshal(snapshot)
+	canonical := snapshot
+	canonical.Fingerprint = ""
+	canonical.Signature = ""
+	canonical.CanonicalPayload = nil
+	content, err := json.Marshal(canonical)
 	if err != nil {
 		panic(err)
+	}
+	if snapshot.SchemaVersion >= 3 {
+		hash := sha256.Sum256(content)
+		snapshot.Fingerprint = hex.EncodeToString(hash[:])
+		snapshot.CanonicalPayload = content
 	}
 	mac := hmac.New(sha256.New, []byte(token))
 	_, _ = mac.Write(content)

@@ -236,6 +236,9 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 
 func validateSnapshotACMEState(snapshot models.ClusterSnapshot) error {
 	if snapshot.ACME == nil {
+		if snapshot.SchemaVersion >= 3 {
+			return errors.New("schema v3 快照缺少必需的 ACME 区段")
+		}
 		return nil
 	}
 	if snapshot.ACME.CAProviders == nil || snapshot.ACME.CertificateConfigs == nil || len(snapshot.ACME.DNSOwnership) == 0 {
@@ -259,13 +262,19 @@ func validateSnapshotACMEState(snapshot models.ClusterSnapshot) error {
 		configs[config.ID] = struct{}{}
 	}
 	for _, rule := range snapshot.Rules {
-		if rule.TLSSource != "acme_dns" {
+		if !rule.EnableTLS || rule.TLSSource != "acme_dns" {
 			continue
+		}
+		if rule.ACMEConfigID == 0 {
+			return fmt.Errorf("快照规则 %s 未设置证书配置", rule.CaddyID)
 		}
 		if _, exists := configs[rule.ACMEConfigID]; !exists {
 			return fmt.Errorf("快照规则 %s 引用了不存在的证书配置 %d", rule.CaddyID, rule.ACMEConfigID)
 		}
-		if _, exists := providers[rule.CAProviderID]; !exists {
+		if rule.CAProviderID != 0 {
+			if _, exists := providers[rule.CAProviderID]; exists {
+				continue
+			}
 			return fmt.Errorf("快照规则 %s 引用了不存在的 CA 提供商 %d", rule.CaddyID, rule.CAProviderID)
 		}
 	}

@@ -31,28 +31,29 @@ export const usePollingTask = (
   let pending = false
   let timer: ReturnType<typeof setInterval> | null = null
 
-  const run = async (): Promise<void> => {
-    if (disposed) return
-    if (inFlight) {
-      pending = true
-      await inFlight
-      return
-    }
-
-    pending = false
-    const taskSequence = ++sequence
-    const isCurrent = (): boolean => !disposed && taskSequence === sequence
-    inFlight = task({ signal: controller.signal, sequence: taskSequence, isCurrent })
-    try {
-      await inFlight
-    } catch (error: unknown) {
-      if (!controller.signal.aborted) options.onError?.(error)
-    } finally {
-      const shouldDrain = !disposed && pending
+  const drain = async (): Promise<void> => {
+    while (!disposed && pending) {
       pending = false
-      inFlight = null
-      if (shouldDrain) queueMicrotask(() => void run())
+      const taskSequence = ++sequence
+      const isCurrent = (): boolean => !disposed && taskSequence === sequence
+      try {
+        await task({ signal: controller.signal, sequence: taskSequence, isCurrent })
+      } catch (error: unknown) {
+        if (!controller.signal.aborted) options.onError?.(error)
+      }
     }
+  }
+
+  const run = (): Promise<void> => {
+    if (disposed) return Promise.resolve()
+    pending = true
+    if (!inFlight) {
+      const drainPromise = drain().finally(() => {
+        if (inFlight === drainPromise) inFlight = null
+      })
+      inFlight = drainPromise
+    }
+    return inFlight
   }
 
   const start = (): void => {

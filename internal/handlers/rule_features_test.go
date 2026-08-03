@@ -337,6 +337,35 @@ func TestCreateRule_persists_requested_DNS_family(t *testing.T) {
 	}
 }
 
+func TestCreateRule_resolves_default_CA_provider_before_persisting(t *testing.T) {
+	// Given
+	handler, _ := newRuleFeatureTestHandlersWithCapture(t)
+	var defaultProviderID int
+	if err := db.DB.QueryRow("SELECT default_ca_provider_id FROM global_config WHERE id=1").Scan(&defaultProviderID); err != nil {
+		t.Fatalf("read default CA provider: %v", err)
+	}
+	router := gin.New()
+	router.POST("/rules", handler.CreateRule)
+	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{"name":"default-ca","protocol":"tcp","listen_port":13003,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var providerID int
+	if err := db.DB.QueryRow("SELECT ca_provider_id FROM lb_rules WHERE listen_port=13003").Scan(&providerID); err != nil {
+		t.Fatalf("read persisted CA provider: %v", err)
+	}
+	if providerID != defaultProviderID || providerID == 0 {
+		t.Fatalf("persisted provider=%d, want resolved default %d", providerID, defaultProviderID)
+	}
+}
+
 func TestReplacePathRulesTx_replaces_all_rows_and_preserves_nullable_upstreams(t *testing.T) {
 	// Given
 	database := initializeRuleFeatureTestDB(t)

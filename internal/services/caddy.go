@@ -735,7 +735,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 	var filesSnapshot CertFilesSnapshot
 	generationFailure := func(format string, args ...any) map[string]interface{} {
 		err := fmt.Errorf(format, args...)
-		log.Printf("Caddy config generation failed: %v", err)
+		log.Printf("Caddy 配置生成失败；状态：旧配置已保留（启动期则未加载）：%v", err)
 		if filesSnapshot != nil {
 			err = errors.Join(err, RestoreCertFiles(filesSnapshot))
 			filesSnapshot = nil
@@ -965,13 +965,13 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 			ORDER BY updated_at DESC, id DESC
 		`)
 		if certErr != nil {
-			return generationFailure("query ACME certificates: %v", certErr)
+			return generationFailure("读取 ACME 证书阶段查询失败: %v", certErr)
 		}
 		for certRows.Next() {
 			var ruleID, domain, certPEM, keyPEM string
 			if scanErr := certRows.Scan(&ruleID, &domain, &certPEM, &keyPEM); scanErr != nil {
 				closeErr := certRows.Close()
-				return generationFailure("scan ACME certificate: %v", errors.Join(scanErr, closeErr))
+				return generationFailure("读取 ACME 证书阶段解析失败: %v", errors.Join(scanErr, closeErr))
 			}
 			certificate, valid := currentlyValidCertificate(certPEM, now)
 			if !valid {
@@ -985,10 +985,10 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		}
 		if rowsErr := certRows.Err(); rowsErr != nil {
 			closeErr := certRows.Close()
-			return generationFailure("iterate ACME certificates: %v", errors.Join(rowsErr, closeErr))
+			return generationFailure("读取 ACME 证书阶段遍历失败: %v", errors.Join(rowsErr, closeErr))
 		}
 		if closeErr := certRows.Close(); closeErr != nil {
-			return generationFailure("close ACME certificates: %v", closeErr)
+			return generationFailure("读取 ACME 证书阶段关闭结果集失败: %v", closeErr)
 		}
 	}
 	resolveACMECert := func(ruleID, domain string) (CertMaterial, bool) {
@@ -1002,7 +1002,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 			var selected *acmeCertCandidate
 			for index := range candidates {
 				candidate := &candidates[index]
-				if !matches(candidate) {
+				if !certificateCoversDomainsParsed(candidate.certificate, domains) || !matches(candidate) {
 					continue
 				}
 				if selected == nil || candidate.certificate.NotAfter.After(selected.certificate.NotAfter) {
@@ -1031,7 +1031,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		}
 		if selected == nil {
 			selected = selectLatest(func(candidate *acmeCertCandidate) bool {
-				return certificateCoversDomainsParsed(candidate.certificate, domains)
+				return true
 			})
 		}
 		if selected != nil {
