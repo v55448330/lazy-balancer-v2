@@ -61,3 +61,6 @@ dist/
 # QA artifacts
 .playwright-mcp/
 round*-*.png
+
+# ACME test artifacts
+**/acme_accounts/
