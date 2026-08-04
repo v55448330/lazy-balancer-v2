@@ -1,9 +1,9 @@
 package services
 
 import (
-	"lazy-balancer-v2/internal/db"
 	"context"
 	"errors"
+	"lazy-balancer-v2/internal/db"
 	"runtime"
 	"strings"
 	"testing"
@@ -109,6 +109,30 @@ func TestCAQueueManager_CancelJobsForRule_removes_pending_and_cancels_running(t 
 	case <-runningCtx.Done():
 	default:
 		t.Fatal("running rule job was not cancelled")
+	}
+}
+
+func TestCAQueue_prepareExecution_covers_issuer_worst_case_budget(t *testing.T) {
+	// Given
+	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
+	queue.enqueue(queueItem{jobID: 42, ruleID: "lb_timeout", domains: "example.com"})
+
+	// When
+	queue.mu.Lock()
+	execution, ok := queue.prepareExecutionLocked(context.Background())
+	queue.mu.Unlock()
+
+	// Then
+	if !ok {
+		t.Fatal("pending job was not prepared")
+	}
+	defer execution.cancel()
+	deadline, hasDeadline := execution.ctx.Deadline()
+	if !hasDeadline {
+		t.Fatal("execution context has no deadline")
+	}
+	if remaining := time.Until(deadline); remaining < caExecutionTimeout-time.Minute || remaining > caExecutionTimeout {
+		t.Fatalf("execution timeout=%v, want ~%v", remaining, caExecutionTimeout)
 	}
 }
 

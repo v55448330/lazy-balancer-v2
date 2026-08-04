@@ -47,6 +47,10 @@ var (
 	caQueueManagerOnce sync.Once
 )
 
+// caExecutionTimeout 必须覆盖签发器内部最坏耗时预算
+// （注册 30s + DNS 传播 5m + 验证 10m + 订单就绪 3m + 订单有效 5m ≈ 23.5m）
+const caExecutionTimeout = 30 * time.Minute
+
 // InitCAQueueManager initializes the singleton queue manager with the given
 // Caddy reloader. It must be called once during application startup before
 // GetCAQueueManager is used.
@@ -591,7 +595,7 @@ func (q *caQueue) prepareExecutionLocked(parent context.Context) (queueExecution
 	q.pending = q.pending[1:]
 	q.running++
 	q.executions.Add(1)
-	ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, caExecutionTimeout)
 	q.cancels[item.jobID] = cancel
 	done := make(chan struct{})
 	q.executionDone[item.jobID] = done
