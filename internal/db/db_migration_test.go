@@ -407,6 +407,66 @@ func TestInitialize_upgrades_legacy_cert_jobs_before_creating_indexes(t *testing
 	}
 }
 
+func TestInitialize_canonicalizes_lb_rule_domain_after_caddy_id_backfill(t *testing.T) {
+	// Given a legacy database whose lb_rules predate the caddy_id column
+	dir := t.TempDir()
+	legacy, err := sql.Open("sqlite", filepath.Join(dir, "lazy-balancer.db"))
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	if _, err := legacy.Exec(`
+		CREATE TABLE lb_rules (
+			id INTEGER PRIMARY KEY, name TEXT, description TEXT, protocol TEXT, domain TEXT, listen_port INTEGER,
+			strategy TEXT, dynamic_dns BOOLEAN, enable_dns_server BOOLEAN, dns_server TEXT, dns_family TEXT,
+			health_check_path TEXT, health_check_interval INTEGER, health_check_timeout INTEGER,
+			health_check_unhealthy_threshold INTEGER, health_check_healthy_threshold INTEGER,
+			enable_active_health_check BOOLEAN, tcp_health_check_port INTEGER, tcp_proxy_protocol BOOLEAN,
+			tcp_try_duration INTEGER, tcp_try_interval INTEGER, request_body_max_size_mb INTEGER,
+			upstream_keepalive_timeout INTEGER, server_tokens_hidden INTEGER, ip_acl_mode TEXT, ip_acl_list TEXT,
+			custom_routes_enabled BOOLEAN, proxy_dial_timeout INTEGER, proxy_response_header_timeout INTEGER,
+			proxy_read_timeout INTEGER, proxy_write_timeout INTEGER, proxy_stream_timeout INTEGER,
+			host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
+			tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
+			compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
+			updated_at DATETIME, updated_by INTEGER
+		);
+		INSERT INTO lb_rules (id, name, protocol, listen_port, domain) VALUES (7, 'legacy', 'http', 80, 'Example.COM.');`); err != nil {
+		t.Fatalf("seed legacy lb_rules: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+
+	// When the legacy database is upgraded and then restarted
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := Initialize(dir); err != nil {
+			t.Fatalf("initialize legacy database attempt %d: %v", attempt, err)
+		}
+		if attempt == 1 {
+			if err := Close(); err != nil {
+				t.Fatalf("close upgraded database: %v", err)
+			}
+		}
+	}
+
+	// Then the domain is canonical on first boot and caddy_id is backfilled
+	var domain, caddyID string
+	if err := DB.QueryRow("SELECT domain, caddy_id FROM lb_rules WHERE id=7").Scan(&domain, &caddyID); err != nil {
+		t.Fatalf("read migrated lb_rule: %v", err)
+	}
+	if domain != "example.com" {
+		t.Fatalf("domain=%q, want canonical %q", domain, "example.com")
+	}
+	if caddyID == "" {
+		t.Fatal("caddy_id is empty, want backfilled value")
+	}
+}
+
 func TestInitialize_normalizes_out_of_range_jwt_expiration(t *testing.T) {
 	dir := t.TempDir()
 	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB

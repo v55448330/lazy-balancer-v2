@@ -687,6 +687,45 @@ func runMigrations() error {
 		}
 	}
 
+	// Migrate existing data: set caddy_id for rows that don't have it.
+	// Must run before migrateCanonicalDomains, which keys lb_rules updates
+	// by caddy_id and would match zero rows while it is still NULL.
+	var count int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id IS NULL OR caddy_id = ''").Scan(&count); err != nil {
+		return fmt.Errorf("failed to count lb_rules without caddy_id: %w", err)
+	}
+	if count > 0 {
+		// Generate caddy_id for existing rules. Collect ids before writing: an
+		// open SELECT cursor on one pooled connection blocks the UPDATE on
+		// another under _txlock=immediate.
+		rows, err := DB.Query("SELECT id FROM lb_rules WHERE caddy_id IS NULL OR caddy_id = ''")
+		if err != nil {
+			return fmt.Errorf("failed to query lb_rules without caddy_id: %w", err)
+		}
+		var ruleIDs []int
+		for rows.Next() {
+			var ruleID int
+			if err := rows.Scan(&ruleID); err != nil {
+				rows.Close()
+				return fmt.Errorf("failed to scan lb_rule without caddy_id: %w", err)
+			}
+			ruleIDs = append(ruleIDs, ruleID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to iterate lb_rules without caddy_id: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("failed to close lb_rules migration rows: %w", err)
+		}
+		for _, ruleID := range ruleIDs {
+			caddyID := generateCaddyIDForMigration()
+			if _, err := DB.Exec("UPDATE lb_rules SET caddy_id = ? WHERE id = ?", caddyID, ruleID); err != nil {
+				return fmt.Errorf("failed to set caddy_id for lb_rule %d: %w", ruleID, err)
+			}
+		}
+	}
+
 	if err := migrateCanonicalDomains(); err != nil {
 		return fmt.Errorf("failed to normalize stored domains: %w", err)
 	}
@@ -735,38 +774,6 @@ func runMigrations() error {
 				return fmt.Errorf("failed to drop legacy lb_rules.%s: %w", col, err)
 			}
 			log.Printf("Dropped legacy column %s from lb_rules", col)
-		}
-	}
-
-	// Migrate existing data: set caddy_id for rows that don't have it
-	var count int
-	if err := DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id IS NULL OR caddy_id = ''").Scan(&count); err != nil {
-		return fmt.Errorf("failed to count lb_rules without caddy_id: %w", err)
-	}
-	if count > 0 {
-		// Generate caddy_id for existing rules
-		rows, err := DB.Query("SELECT id FROM lb_rules WHERE caddy_id IS NULL OR caddy_id = ''")
-		if err != nil {
-			return fmt.Errorf("failed to query lb_rules without caddy_id: %w", err)
-		}
-		for rows.Next() {
-			var ruleID int
-			if err := rows.Scan(&ruleID); err != nil {
-				rows.Close()
-				return fmt.Errorf("failed to scan lb_rule without caddy_id: %w", err)
-			}
-			caddyID := generateCaddyIDForMigration()
-			if _, err := DB.Exec("UPDATE lb_rules SET caddy_id = ? WHERE id = ?", caddyID, ruleID); err != nil {
-				rows.Close()
-				return fmt.Errorf("failed to set caddy_id for lb_rule %d: %w", ruleID, err)
-			}
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return fmt.Errorf("failed to iterate lb_rules without caddy_id: %w", err)
-		}
-		if err := rows.Close(); err != nil {
-			return fmt.Errorf("failed to close lb_rules migration rows: %w", err)
 		}
 	}
 
