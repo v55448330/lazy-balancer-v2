@@ -78,6 +78,35 @@ func TestRetryCertJob_rejects_inactive_rule_atomically(t *testing.T) {
 	}
 }
 
+func TestRetryCertJob_accepts_www_first_rule_domain(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	// cert_jobs.domain 存排序规范形式，lb_rules.domain 保留用户 www 在前的输入顺序
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_www_first','www-first','http','www.example.test,example.test',8080,1,1,'acme_dns');
+		INSERT INTO cert_jobs (rule_id,domain,status,updated_at) VALUES ('lb_www_first','example.test,www.example.test','failed',datetime('now','-10 minutes'))`); err != nil {
+		t.Fatalf("seed www-first rule and job: %v", err)
+	}
+	block := make(chan struct{})
+	acmeMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-block }))
+	t.Cleanup(func() { close(block); services.GetCAQueueManager().PauseAndDrain(); acmeMock.Close() })
+	if _, err := db.DB.Exec("UPDATE ca_providers SET provider='letsencrypt', directory_url=? WHERE enabled=1", acmeMock.URL); err != nil {
+		t.Fatalf("redirect ACME directory: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE global_config SET acme_email='acme@example.test' WHERE id=1"); err != nil {
+		t.Fatalf("set ACME email: %v", err)
+	}
+	router := gin.New()
+	router.POST("/jobs/:id/retry", h.RetryCertJob)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/jobs/1/retry", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 (www-first rule domain must match sorted job domain)", response.Code, response.Body.String())
+	}
+}
+
 func TestDeleteCertJob_keeps_row_when_delete_fails(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_keep','keep.example.test','issued');

@@ -267,13 +267,19 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA queue manager not initialized"})
 		return
 	}
+	// cert_jobs.domain 按排序后的规范形式存储，而 lb_rules.domain 保留用户输入顺序，
+	// 规则侧用 joined+reversed 双形式匹配（ACME 域名至多根域+www 两个）。
+	reversedDomain := domain
+	if parts := strings.Split(domain, ","); len(parts) == 2 {
+		reversedDomain = parts[1] + "," + parts[0]
+	}
 	_, changed, err := qm.EnqueueIfActive(caProviderID, id, ruleID, domain, func() (int, bool, error) {
 		result, err := db.DB.Exec(`UPDATE cert_jobs
 			SET status='queued', message='重新排队签发', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now')
 			WHERE id=? AND status=? AND EXISTS (
 				SELECT 1 FROM lb_rules
-				WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND domain=?
-			)`, id, status, ruleID, domain)
+				WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND lower(replace(domain,' ','')) IN (?,?)
+			)`, id, status, ruleID, domain, reversedDomain)
 		if err != nil {
 			return id, false, err
 		}
@@ -354,11 +360,15 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 			if qm == nil {
 				restoreErr = errors.New("CA queue manager not initialized")
 			} else {
+				reversedDomain := domain
+				if parts := strings.Split(domain, ","); len(parts) == 2 {
+					reversedDomain = parts[1] + "," + parts[0]
+				}
 				_, changed, restoreErr = qm.EnqueueIfActive(caProviderID, id, ruleID, domain, func() (int, bool, error) {
 					updateResult, updateErr := db.DB.Exec(`UPDATE cert_jobs SET status='queued', message='删除失败，重新排队签发', updated_at=datetime('now')
 						WHERE id=? AND status='disabled' AND EXISTS (
-							SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND domain=?
-						)`, id, ruleID, domain)
+							SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND lower(replace(domain,' ','')) IN (?,?)
+						)`, id, ruleID, domain, reversedDomain)
 					if updateErr != nil {
 						return id, false, updateErr
 					}
