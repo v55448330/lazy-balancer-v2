@@ -491,7 +491,8 @@ func RequeueNonTerminalCertJobs() error {
 func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, issuedCertificate, time.Duration)) error {
 	rows, err := db.DB.QueryContext(ctx, `
 		SELECT j.id, j.rule_id, j.domain, j.status, j.ca_provider_id, COALESCE(j.deployment_attempts,0), j.deployment_available_after,
-		       COALESCE(r.domain,''), CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' THEN 1 ELSE 0 END
+		       COALESCE(r.domain,''), CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' THEN 1 ELSE 0 END,
+		       CASE WHEN COALESCE(j.cert_pem,'') <> '' AND COALESCE(j.key_pem,'') <> '' THEN 1 ELSE 0 END
 		FROM cert_jobs j
 		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
 		WHERE j.status != 'disabled'
@@ -504,12 +505,12 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 		id, providerID, deploymentAttempts int
 		ruleID, domain, status, ruleDomain string
 		deploymentAvailableAfter           sql.NullTime
-		applicable                         bool
+		applicable, hasCertMaterial        bool
 	}
 	var jobs []recoveryJob
 	for rows.Next() {
 		var job recoveryJob
-		if err := rows.Scan(&job.id, &job.ruleID, &job.domain, &job.status, &job.providerID, &job.deploymentAttempts, &job.deploymentAvailableAfter, &job.ruleDomain, &job.applicable); err != nil {
+		if err := rows.Scan(&job.id, &job.ruleID, &job.domain, &job.status, &job.providerID, &job.deploymentAttempts, &job.deploymentAvailableAfter, &job.ruleDomain, &job.applicable, &job.hasCertMaterial); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan non-terminal certificate job: %w", err)
 		}
@@ -572,7 +573,7 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 				}
 			}
 		}
-		if JobLifecycle(job.status) == JobLifecycleDownloaded {
+		if JobLifecycle(job.status) == JobLifecycleDownloaded && job.hasCertMaterial {
 			delay := time.Duration(0)
 			if job.deploymentAvailableAfter.Valid {
 				delay = time.Until(job.deploymentAvailableAfter.Time)

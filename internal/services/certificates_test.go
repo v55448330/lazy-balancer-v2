@@ -176,6 +176,9 @@ func TestCreateOrRequeueCertJob_paused_queue_does_not_upsert(t *testing.T) {
 func TestRequeueNonTerminalCertJobs_schedules_downloaded_deployment(t *testing.T) {
 	// Given
 	jobID, _ := seedCertificateJob(t, "downloaded")
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET cert_pem='cert', key_pem='key' WHERE id=?", jobID); err != nil {
+		t.Fatalf("attach certificate material: %v", err)
+	}
 	service := NewCertificateService()
 	retried := make(chan int, 1)
 	service.retryDeployment = func(_ context.Context, gotJobID int) error {
@@ -194,6 +197,38 @@ func TestRequeueNonTerminalCertJobs_schedules_downloaded_deployment(t *testing.T
 		t.Fatalf("retried job ID=%d, want %d", gotJobID, jobID)
 	}
 	service.pauseDeploymentRetries()
+}
+
+func TestRequeueNonTerminalCertJobs_requeues_downloaded_job_missing_cert_material(t *testing.T) {
+	// Given
+	jobID, _ := seedCertificateJob(t, "cleanup_dns")
+	ResetCAQueueManagerForTest()
+	InitCAQueueManager(func() error { return nil })
+	GetCAQueueManager().PauseAndDrain()
+	t.Cleanup(ResetCAQueueManagerForTest)
+	retried := make(chan int, 1)
+
+	// When
+	err := requeueNonTerminalCertJobs(context.Background(), func(gotJobID int, _ issuedCertificate, _ time.Duration) {
+		retried <- gotJobID
+	})
+
+	// Then: 暂停的队列管理器只会在状态迁移之后拒绝入队
+	if err == nil {
+		t.Fatal("expected enqueue rejection from the paused queue manager")
+	}
+	select {
+	case gotJobID := <-retried:
+		t.Fatalf("deployment retry scheduled for job %d without certificate material", gotJobID)
+	default:
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+		t.Fatalf("read recovered job: %v", err)
+	}
+	if status != "queued" {
+		t.Fatalf("job status=%q, want queued", status)
+	}
 }
 
 func TestCertificateService_deployment_retry_deduplicates_job_id(t *testing.T) {

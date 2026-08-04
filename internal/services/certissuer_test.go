@@ -407,7 +407,7 @@ func TestCertificateService_recoverCertJobs_preserves_deployment_retry_state(t *
 	// Given
 	jobID, _ := seedCertificateJob(t, "downloaded")
 	available := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
-	if _, err := db.DB.Exec("UPDATE cert_jobs SET deployment_attempts=4, deployment_available_after=? WHERE id=?", available.Format("2006-01-02 15:04:05"), jobID); err != nil {
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET cert_pem='cert', key_pem='key', deployment_attempts=4, deployment_available_after=? WHERE id=?", available.Format("2006-01-02 15:04:05"), jobID); err != nil {
 		t.Fatalf("seed deployment retry state: %v", err)
 	}
 	service := NewCertificateService()
