@@ -735,7 +735,7 @@ const fetchAllData = (): Promise<void> => {
   if (fetchAllDataPromise) return fetchAllDataPromise
 
   const headers = { Authorization: `Bearer ${authStore.token}` }
-  const config = { headers, signal: dashboardPolling.signal }
+  const config = { headers, signal: dashboardPolling.signal, silent: true }
   fetchAllDataPromise = Promise.allSettled([
     request.get('/system/info', config).then((res) => {
       if (disposed) return
@@ -828,7 +828,7 @@ const fetchRuleHealth = async (currentRules: Rule[], version: number) => {
   if (disposed || currentRules.length === 0 || isFetchingRuleHealth) return
   isFetchingRuleHealth = true
   try {
-    const res = await request.get<APIResponse<HealthResponse>>('/config/health', { signal: dashboardPolling.signal })
+    const res = await request.get<APIResponse<HealthResponse>>('/config/health', { signal: dashboardPolling.signal, silent: true })
     if (disposed || version !== rulesVersion) return
     const healthData = res.data || {}
     const nextRuleHealth: Record<string, RuleHealth> = {}

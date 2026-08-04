@@ -292,6 +292,7 @@ const fetchJobs = async () => {
     const jobsRes = await request.get<APIResponse<CertJobsPage<CertJob>>>('/certificates/jobs', {
       params: { page: currentPage.value, page_size: pageSize.value },
       signal: jobsPolling.signal,
+      silent: true,
     })
     if (disposed || requestSeq !== jobsRequestSeq) return
     if (!jobsRes.data) throw new TypeError('证书任务分页响应缺少 data')

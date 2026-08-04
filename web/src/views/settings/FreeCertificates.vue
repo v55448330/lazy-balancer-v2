@@ -280,8 +280,6 @@ interface ConfigPreviewResponse {
   }
 }
 
-const requestErrorMessage = (caught: unknown, fallback: string): string => caught instanceof Error ? caught.message : fallback
-
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 
@@ -397,7 +395,8 @@ const fetchCAProviders = async () => {
     const res = await request.get<APIResponse<CAProvider[]>>('/ca-providers')
     caProviders.value = res.data || []
   } catch (caught: unknown) {
-    ElMessage.error(requestErrorMessage(caught, '获取 CA 提供商失败'))
+    // Error toast is already shown by the global axios interceptor.
+    console.error('Failed to fetch CA providers:', caught)
   } finally {
     loadingCAProviders.value = false
   }
@@ -453,7 +452,8 @@ const saveCAProvider = async () => {
     caDialogVisible.value = false
     fetchCAProviders()
   } catch (caught: unknown) {
-    ElMessage.error(requestErrorMessage(caught, '保存失败'))
+    // Error toast is already shown by the global axios interceptor.
+    console.error('Failed to save CA provider:', caught)
   } finally {
     savingCA.value = false
   }
@@ -548,7 +548,8 @@ const saveConfig = async () => {
       : '/certificate-configs/test'
     await request.post(url, { ...payload, domain })
   } catch (caught: unknown) {
-    ElMessage.error(requestErrorMessage(caught, '凭证验证失败'))
+    // Error toast is already shown by the global axios interceptor.
+    console.error('Failed to verify DNS credentials:', caught)
     saving.value = false
     return
   }
@@ -564,7 +565,8 @@ const saveConfig = async () => {
     dialogVisible.value = false
     fetchConfigs()
   } catch (caught: unknown) {
-    ElMessage.error(requestErrorMessage(caught, '保存失败'))
+    // Error toast is already shown by the global axios interceptor.
+    console.error('Failed to save cert config:', caught)
   } finally {
     saving.value = false
   }
@@ -626,7 +628,8 @@ const testConfig = async (config: CertConfig) => {
     const res = await request.post(`/certificate-configs/${config.id}/test`, { domain })
     ElMessage.success(res.message || '凭证有效')
   } catch (caught: unknown) {
-    ElMessage.error(requestErrorMessage(caught, '测试失败'))
+    // Error toast is already shown by the global axios interceptor.
+    console.error('Failed to test cert config:', caught)
   } finally {
     testingId.value = null
   }

@@ -13,6 +13,13 @@ import type {
   SystemMetrics,
 } from '@/types'
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /** Skip the global error toast for this request (used by background pollers). */
+    silent?: boolean
+  }
+}
+
 interface GlobalConfigData {
   log_level: string
   caddy_log_path: string
@@ -94,7 +101,9 @@ service.interceptors.response.use(
   (response) => {
     const res = response.data
     if (res.code !== undefined && res.code !== 0 && res.code !== 200) {
-      ElMessage.error(res.message || '请求失败')
+      if (!response.config.silent) {
+        ElMessage.error(res.message || '请求失败')
+      }
       return Promise.reject(new Error(res.message || '请求失败'))
     }
     return res
@@ -128,7 +137,9 @@ service.interceptors.response.use(
         }
       }
     } else if (!isLoginRequest) {
-      ElMessage.error(message)
+      if (!error.config?.silent) {
+        ElMessage.error(message)
+      }
     }
     return Promise.reject(new ApiRequestError(message, status))
   }

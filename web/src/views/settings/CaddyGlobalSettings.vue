@@ -190,11 +190,8 @@ const handleSave = async (): Promise<void> => {
     emit('save')
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
-    if (error instanceof Error) {
-      ElMessage.error(`保存失败：${error.message || '配置验证未通过'}`)
-      return
-    }
-    throw error
+    // Error toast is already shown by the global axios interceptor.
+    console.error('Failed to save Caddy global settings:', error)
   } finally {
     saving.value = false
   }
