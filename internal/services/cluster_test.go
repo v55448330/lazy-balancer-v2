@@ -1135,3 +1135,111 @@ func installGlobalConfigVersionTrigger(t *testing.T, database *sql.DB) {
 		t.Fatalf("install global config version trigger: %v", err)
 	}
 }
+
+func TestClusterSnapshot_accessLogSettingsFollowSyncCaddyConfigGate(t *testing.T) {
+	// Given
+	service, database := newClusterTestService(t)
+	ctx := context.Background()
+	if _, err := database.ExecContext(ctx, "UPDATE global_config SET access_log_json=1, access_log_format='{request}' WHERE id=1"); err != nil {
+		t.Fatalf("seed access log settings: %v", err)
+	}
+	build := func(t *testing.T) models.ClusterSnapshot {
+		t.Helper()
+		tx, err := database.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			t.Fatalf("begin snapshot tx: %v", err)
+		}
+		defer tx.Rollback()
+		snapshot, err := service.buildSnapshot(ctx, tx)
+		if err != nil {
+			t.Fatalf("build snapshot: %v", err)
+		}
+		return snapshot
+	}
+
+	// When sync off
+	if _, err := database.ExecContext(ctx, "UPDATE global_config SET sync_caddy_config=0 WHERE id=1"); err != nil {
+		t.Fatalf("disable caddy sync: %v", err)
+	}
+	off := build(t)
+
+	// Then caddy-gated fields stay at zero values
+	if off.CaddyConfig != nil {
+		t.Fatal("caddy config present with sync off")
+	}
+	if off.BasicSettings.AccessLogJSON || off.BasicSettings.AccessLogFormat != "" || off.BasicSettings.CaddyLogLevel != "" {
+		t.Fatalf("access log settings leaked with sync off: %#v", off.BasicSettings)
+	}
+
+	// When sync on
+	if _, err := database.ExecContext(ctx, "UPDATE global_config SET sync_caddy_config=1 WHERE id=1"); err != nil {
+		t.Fatalf("enable caddy sync: %v", err)
+	}
+	on := build(t)
+	if on.CaddyConfig == nil {
+		t.Fatal("caddy config missing with sync on")
+	}
+	if !on.BasicSettings.AccessLogJSON || on.BasicSettings.AccessLogFormat != "{request}" {
+		t.Fatalf("access log settings missing with sync on: %#v", on.BasicSettings)
+	}
+}
+
+func TestUpdateSnapshotSettings_preservesSlaveAccessLogSettingsWhenCaddySyncOff(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	ctx := context.Background()
+	if _, err := database.ExecContext(ctx, "UPDATE global_config SET access_log_json=0, access_log_format='slave-format' WHERE id=1"); err != nil {
+		t.Fatalf("seed slave access log settings: %v", err)
+	}
+	apply := func(t *testing.T, snapshot models.ClusterSnapshot) {
+		t.Helper()
+		tx, err := database.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("begin apply tx: %v", err)
+		}
+		defer tx.Rollback()
+		if err := updateSnapshotSettings(ctx, tx, snapshot); err != nil {
+			t.Fatalf("apply settings: %v", err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit apply tx: %v", err)
+		}
+	}
+	readAccessLog := func(t *testing.T) (bool, string) {
+		t.Helper()
+		var jsonOut bool
+		var format string
+		if err := database.QueryRowContext(ctx, "SELECT access_log_json, access_log_format FROM global_config WHERE id=1").Scan(&jsonOut, &format); err != nil {
+			t.Fatalf("read access log settings: %v", err)
+		}
+		return jsonOut, format
+	}
+
+	// When snapshot carries no caddy config (sync off)
+	apply(t, models.ClusterSnapshot{BasicSettings: models.ClusterBasicSettings{
+		LogLevel: "debug", AccessLogJSON: true, AccessLogFormat: "master-format", JWTExpireMinutes: 20,
+	}})
+
+	// Then slave-local access log settings survive, ungated settings applied
+	gotJSON, gotFormat := readAccessLog(t)
+	if gotJSON || gotFormat != "slave-format" {
+		t.Fatalf("access log settings overwritten without caddy sync: json=%v format=%q", gotJSON, gotFormat)
+	}
+	var logLevel string
+	if err := database.QueryRowContext(ctx, "SELECT log_level FROM global_config WHERE id=1").Scan(&logLevel); err != nil {
+		t.Fatalf("read log level: %v", err)
+	}
+	if logLevel != "debug" {
+		t.Fatalf("ungated log level not applied: %q", logLevel)
+	}
+
+	// When snapshot carries caddy config (sync on)
+	caddyConfig := "{}"
+	apply(t, models.ClusterSnapshot{CaddyConfig: &caddyConfig, BasicSettings: models.ClusterBasicSettings{
+		AccessLogJSON: true, AccessLogFormat: "master-format", JWTExpireMinutes: 20,
+	}})
+	gotJSON, gotFormat = readAccessLog(t)
+	if !gotJSON || gotFormat != "master-format" {
+		t.Fatalf("access log settings not applied with caddy sync: json=%v format=%q", gotJSON, gotFormat)
+	}
+}
