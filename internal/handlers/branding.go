@@ -57,6 +57,8 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 		log.Printf("GetBranding: invalid branding file %s, using defaults: %v", path, err)
 		cfg = defaultBranding
 	}
-	cfg.Version = h.cfg.Version
+	if cfg.Version == "" {
+		cfg.Version = h.cfg.Version
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
 }

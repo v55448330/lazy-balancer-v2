@@ -405,6 +405,27 @@ func TestGetBranding_returnsDefaults_withoutWritingMissingFile(t *testing.T) {
 	}
 }
 
+func TestGetBranding_fileVersion_overridesBuildVersion(t *testing.T) {
+	// Given
+	dataDir := t.TempDir()
+	custom := `{"app_name":"Lazy Balancer","footer_text":"x","version":"9.9.9-custom"}`
+	if err := os.WriteFile(filepath.Join(dataDir, "branding.json"), []byte(custom), 0o644); err != nil {
+		t.Fatalf("write branding: %v", err)
+	}
+	h := NewHandlers(Dependencies{Config: &config.Config{DataDir: dataDir, Version: "2.0.7"}})
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Request = httptest.NewRequest(http.MethodGet, "/branding", nil)
+
+	// When
+	h.GetBranding(context)
+
+	// Then
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"version":"9.9.9-custom"`) {
+		t.Fatalf("file version must win over build version: status=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
 func TestSeedDefaultBranding_createsFile_once(t *testing.T) {
 	// Given
 	dataDir := t.TempDir()
