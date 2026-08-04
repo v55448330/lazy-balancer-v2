@@ -160,6 +160,19 @@
             <div class="mcp-guide-text">如客户端报证书错误，在启动环境加 <code>NODE_TLS_REJECT_UNAUTHORIZED=0</code>，或将面板证书加入系统信任。</div>
             <div class="mcp-guide-subtitle">常见错误</div>
             <div class="mcp-guide-text">401：密钥无效或缺失 / JWT 无效；403：MCP 未开启 / 只读 Key 调用写工具 / 来源 IP 不在白名单；-32602：参数不符合工具的 input_schema。</div>
+            <div class="mcp-guide-subtitle">权限范围（scope）</div>
+            <div class="mcp-guide-text">只读 Key 仅能调用 GET 查询类工具；写工具（POST/PUT/DELETE）需非只读 Key 且仅在主节点可用（从节点一律 403）。写操作校验后即时生效，失败自动回滚，无需手动 reload。</div>
+            <div class="mcp-guide-subtitle">常用流程</div>
+            <pre class="mcp-guide-pre">新建 HTTP 代理：create_rule（protocol=http + domain + listen_port + upstreams）
+  → 需要免费证书再 issue_certificate 传 caddy_id
+新建 TCP 代理：create_rule（protocol=tcp + listen_port + upstreams，不填 domain）
+  → 后端需真实客户端 IP 加 tcp_proxy_protocol=true
+排查流量异常：get_upstream_health → get_metrics_dashboard → list_audit_logs
+快速看全局指标：get_metrics_overview（轻量）
+  dashboard 为全量聚合、数据量大，非必要不用</pre>
+            <div class="mcp-guide-subtitle">完整操作手册（MCP 资源）</div>
+            <div class="mcp-guide-text">Agent 连上后可通过 <code>resources/read</code> 读取 <code>lazy-balancer://docs/ops-playbook</code> 获取完整操作手册（接入/scope/工作流/排障/纪律/性能建议），无需访问代码仓库。</div>
+            <el-button size="small" :loading="mcpPlaybookDownloading" @click="downloadMCPPlaybook">下载手册正文（markdown）</el-button>
           </div>
         </el-collapse-item>
       </el-collapse>
@@ -407,6 +420,24 @@ const copyMCPConfig = async (): Promise<void> => {
   ElMessage.error('复制失败，请手动复制配置')
 }
 const formatSchema = (schema: Record<string, unknown>): string => JSON.stringify(schema, null, 2)
+const mcpPlaybookDownloading = ref(false)
+const downloadMCPPlaybook = async (): Promise<void> => {
+  if (mcpPlaybookDownloading.value) return
+  mcpPlaybookDownloading.value = true
+  try {
+    const blob = await request.get<Blob>('/mcp/ops-playbook', { responseType: 'blob' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'lazy-balancer-mcp-ops-playbook.md'
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch {
+    ElMessage.error('下载失败，请重试')
+  } finally {
+    mcpPlaybookDownloading.value = false
+  }
+}
 let keysRequestSeq = 0
 
 const fetchKeys = async () => {
