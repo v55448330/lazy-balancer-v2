@@ -490,6 +490,11 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	}
 	defer session.close()
 	tx := session.tx
+	if _, err := tx.ExecContext(ctx, "DELETE FROM path_rules"); err != nil {
+		err = session.abort(err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理旧路径规则失败，已回滚: " + err.Error()})
+		return
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM upstreams"); err != nil {
 		err = session.abort(err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理旧上游失败，已回滚: " + err.Error()})

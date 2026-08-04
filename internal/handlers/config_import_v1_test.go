@@ -140,6 +140,40 @@ func TestImportV1Config_rolls_back_when_certificate_materialization_fails(t *tes
 	}
 }
 
+func TestImportV1Config_removes_orphaned_path_rules(t *testing.T) {
+	// Given：导入前存在规则及其路径规则，v1 导入覆盖后不得留下孤儿 path_rules
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id, name, protocol, domain, listen_port, enabled) VALUES ('lb_orphan_v1', 'old-rule', 'http', 'orphan.example.test', 8080, 1);
+		INSERT INTO path_rules (rule_id, sort_order, match_type, path) VALUES ('lb_orphan_v1', 0, 'prefix', '/legacy/')`); err != nil {
+		t.Fatalf("seed rule with path rules: %v", err)
+	}
+	backup := `{
+		"proxy_config":{"config":[{"pk":1,"fields":{"proxy_name":"new-rule","protocol":true,"listen":8443,"server_name":"example.test","status":true,"upstream_list":[1]}}]},
+		"upstream_config":{"config":[{"pk":1,"fields":{"status":true,"address":"127.0.0.1","port":9000,"weight":100}}]}
+	}`
+	router := gin.New()
+	router.POST("/config/import/v1", h.ImportV1Config)
+	request := httptest.NewRequest(http.MethodPost, "/config/import/v1", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var pathRuleCount int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM path_rules").Scan(&pathRuleCount); err != nil {
+		t.Fatalf("count path_rules: %v", err)
+	}
+	if pathRuleCount != 0 {
+		t.Fatalf("orphaned path_rules count=%d, want 0", pathRuleCount)
+	}
+}
+
 func TestValidateConfigImport_rejects_disabled_v1_rule_with_out_of_range_port(t *testing.T) {
 	tests := []struct {
 		name       string
