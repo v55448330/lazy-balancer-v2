@@ -79,11 +79,12 @@ docker run -d \
 ```json
 {
   "app_name": "Lazy Balancer",
-  "footer_text": "Copyright © 2026 XiaoBao. All rights reserved."
+  "footer_text": "Copyright © 2026 XiaoBao. All rights reserved.",
+  "version": "2.0.7-custom"
 }
 ```
 
-影响页面标题、导航栏、面包屑、登录框与页脚。
+影响页面标题、导航栏、面包屑、登录框与页脚。`version` 留空或省略时显示构建版本号。
 
 ### config.json（可选，启动参数覆盖）
 
