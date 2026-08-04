@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -62,6 +63,42 @@ const emptySchema = `{"type":"object","properties":{},"additionalProperties":fal
 const maxResponseSize = 4 << 20
 const InternalAuthHeader = "X-Lazy-Balancer-Internal-MCP-Auth"
 
+// serverInstructions 随 initialize 响应下发给客户端，说明认证方式、权限范围与常用流程，
+// 让 Agent 在首次选工具前就能选对路径、减少试错往返
+const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证：X-API-Key 头或 Authorization: Bearer lb_sk_...，Key 需开启 MCP 功能。
+
+权限范围：
+- 只读 Key（read_only）仅能调用 GET 查询类工具；写工具（POST/PUT/DELETE）需非只读 Key
+- 写操作仅在主节点可用，从节点一律 403；所有写操作校验后即时生效（失败自动回滚），无需手动 reload
+- 配置 IP 白名单的 Key 还需来源 IP 命中白名单（MCP 内部转发不受白名单影响）
+
+常用流程：
+- 新建 HTTP 代理：create_rule（protocol=http + domain + listen_port + upstreams）→ 需要免费证书时 issue_certificate 传 caddy_id
+- 新建 TCP 代理：create_rule（protocol=tcp + listen_port + upstreams，不要填 domain）；后端需真实客户端 IP 时加 tcp_proxy_protocol=true
+- 排查流量异常：get_upstream_health → get_metrics_dashboard → list_audit_logs（page/page_size 分页，page_size≤100）
+- 快速看全局指标：get_metrics_overview（轻量）；get_metrics_dashboard 为全量聚合，数据量大，非必要不用
+- 修改规则前先 get_rule 取完整现状；delete_rule 不可恢复，调用前必须确认
+
+错误约定：401=密钥无效或未开启 MCP；403=只读 Key 调写工具/从节点写操作/IP 白名单拦截；-32602=参数不符合工具的 input_schema（先看 schema 再重试，不要猜测字段名）。
+
+完整操作手册：resources/read 读取 lazy-balancer://docs/ops-playbook（接入/scope/工作流/排障/纪律/性能建议）。`
+
+//go:embed playbook.md
+var opsPlaybook string
+
+const opsPlaybookURI = "lazy-balancer://docs/ops-playbook"
+
+// OpsPlaybook 返回手册正文，供 MCP 资源与 REST 下载端点共用同一来源
+func OpsPlaybook() string { return opsPlaybook }
+
+// toolDescription 组合一句话描述与用法提示，随 tools/list 暴露给客户端
+func toolDescription(spec toolSpec) string {
+	if usage := toolUsage[spec.name]; usage != "" {
+		return spec.description + "。用法：" + usage
+	}
+	return spec.description
+}
+
 const createRuleSchema = `{"type":"object","required":["name","protocol","listen_port","upstreams"],"properties":{"name":{"type":"string"},"description":{"type":"string"},"protocol":{"type":"string","enum":["http","tcp"]},"domain":{"type":"string"},"listen_port":{"type":"integer","minimum":1,"maximum":65535},"strategy":{"type":"string"},"dynamic_dns":{"type":"boolean"},"enable_dns_server":{"type":"boolean"},"dns_server":{"type":"string"},"dns_family":{"type":"string","enum":["ipv4","ipv6","both"]},"health_check_path":{"type":"string"},"health_check_interval":{"type":"integer"},"health_check_timeout":{"type":"integer"},"health_check_unhealthy_threshold":{"type":"integer"},"health_check_healthy_threshold":{"type":"integer"},"enable_active_health_check":{"type":"boolean"},"tcp_health_check_port":{"type":"integer"},"tcp_proxy_protocol":{"type":"boolean"},"tcp_try_duration":{"type":"integer"},"tcp_try_interval":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"server_tokens_hidden":{"type":"integer"},"ip_acl_mode":{"type":"string","enum":["","allow","deny"]},"ip_acl_list":{"type":"array","items":{"type":"string"}},"custom_routes_enabled":{"type":"boolean"},"proxy_dial_timeout":{"type":"integer"},"proxy_response_header_timeout":{"type":"integer"},"proxy_read_timeout":{"type":"integer"},"proxy_write_timeout":{"type":"integer"},"proxy_stream_timeout":{"type":"integer"},"path_rules":{"type":"array","items":{"type":"object"}},"host_header":{"type":"string"},"upstreams":{"type":"array","items":{"type":"object","required":["host","port"],"properties":{"host":{"type":"string"},"port":{"type":"integer"},"weight":{"type":"integer"},"domain":{"type":"string"},"dynamic_dns":{"type":"boolean"},"enabled":{"type":"boolean"},"protocol":{"type":"string"},"dns_server":{"type":"string"},"max_connections":{"type":"integer"}}}},"enable_tls":{"type":"boolean"},"tls_source":{"type":"string"},"acme_config_id":{"type":"integer"},"ca_provider_id":{"type":"integer"},"tls_cert":{"type":"string"},"tls_key":{"type":"string"},"tls_http_redirect":{"type":"boolean"},"enable_compress":{"type":"boolean"},"compress_types":{"type":"string"},"log_enabled":{"type":"boolean"}},"additionalProperties":false}`
 
 const updateRuleSchema = `{"type":"object","required":["caddy_id"],"properties":{"caddy_id":{"type":"string"},"name":{"type":"string"},"description":{"type":"string"},"protocol":{"type":"string"},"domain":{"type":"string"},"listen_port":{"type":"integer"},"strategy":{"type":"string"},"dynamic_dns":{"type":"boolean"},"enable_dns_server":{"type":"boolean"},"dns_server":{"type":"string"},"dns_family":{"type":"string"},"health_check_path":{"type":"string"},"health_check_interval":{"type":"integer"},"health_check_timeout":{"type":"integer"},"health_check_unhealthy_threshold":{"type":"integer"},"health_check_healthy_threshold":{"type":"integer"},"enable_active_health_check":{"type":"boolean"},"tcp_health_check_port":{"type":"integer"},"tcp_proxy_protocol":{"type":"boolean"},"tcp_try_duration":{"type":"integer"},"tcp_try_interval":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"server_tokens_hidden":{"type":"integer"},"ip_acl_mode":{"type":"string"},"ip_acl_list":{"type":"array","items":{"type":"string"}},"custom_routes_enabled":{"type":"boolean"},"proxy_dial_timeout":{"type":"integer"},"proxy_response_header_timeout":{"type":"integer"},"proxy_read_timeout":{"type":"integer"},"proxy_write_timeout":{"type":"integer"},"proxy_stream_timeout":{"type":"integer"},"path_rules":{"type":"array","items":{"type":"object"}},"host_header":{"type":"string"},"upstreams":{"type":"array","items":{"type":"object"}},"enable_tls":{"type":"boolean"},"tls_source":{"type":"string"},"acme_config_id":{"type":"integer"},"ca_provider_id":{"type":"integer"},"tls_cert":{"type":"string"},"tls_key":{"type":"string"},"tls_http_redirect":{"type":"boolean"},"enable_compress":{"type":"boolean"},"compress_types":{"type":"string"},"enabled":{"type":"boolean"},"log_enabled":{"type":"boolean"}},"additionalProperties":false}`
@@ -83,9 +120,15 @@ func newWithReadOnlyResolver(baseURL string, client *http.Client, internalAuthSe
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
 	}
-	mcpServer := server.NewMCPServer("Lazy Balancer V2", "1.0.0", server.WithToolCapabilities(false))
+	mcpServer := server.NewMCPServer("Lazy Balancer V2", "1.0.0", server.WithToolCapabilities(false), server.WithInstructions(serverInstructions))
+	mcpServer.AddResource(
+		mcp.NewResource(opsPlaybookURI, "ops-playbook", mcp.WithResourceDescription("Lazy Balancer V2 MCP 完整操作手册（接入/权限范围/工作流/排障/纪律/性能建议）"), mcp.WithMIMEType("text/markdown")),
+		func(context.Context, mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+			return []mcp.ResourceContents{mcp.TextResourceContents{URI: opsPlaybookURI, MIMEType: "text/markdown", Text: opsPlaybook}}, nil
+		},
+	)
 	for _, spec := range tools {
-		mcpServer.AddTool(mcp.NewToolWithRawSchema(spec.name, spec.description, json.RawMessage(spec.schema)), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		mcpServer.AddTool(mcp.NewToolWithRawSchema(spec.name, toolDescription(spec), json.RawMessage(spec.schema)), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return forward(ctx, client, baseURL, internalAuthSecret, spec, request)
 		})
 	}
