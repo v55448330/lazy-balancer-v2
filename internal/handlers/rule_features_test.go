@@ -113,7 +113,7 @@ func TestCreateRule_rejects_invalid_IP_ACL_mode(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/rules", handler.CreateRule)
-	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{"name":"invalid-acl","protocol":"http","listen_port":8080,"ip_acl_mode":"block","upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`))
+	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{"name":"invalid-acl","protocol":"http","domain":"invalid-acl.example.test","listen_port":8080,"ip_acl_mode":"block","upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
@@ -123,6 +123,69 @@ func TestCreateRule_rejects_invalid_IP_ACL_mode(t *testing.T) {
 	// Then
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "IP 访问控制模式") {
 		t.Fatalf("create invalid ACL status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestCreateRule_rejects_empty_domain_for_HTTP(t *testing.T) {
+	// Given
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/rules", handler.CreateRule)
+	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{"name":"no-domain","protocol":"http","listen_port":8080,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "域名不能为空") {
+		t.Fatalf("create empty-domain status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+}
+
+func TestUpdateRule_rejects_empty_domain_for_HTTP(t *testing.T) {
+	// Given：存量空域名 HTTP 规则（历史/导入数据），更新后仍为空域名必须拒绝
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,health_check_path,enabled,enable_compress) VALUES ('lb_nodomain','legacy','','http','',8080,'weighted_round_robin','',1,1)`); err != nil {
+		t.Fatalf("seed legacy empty-domain rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_nodomain','127.0.0.1',9000,1,1,'http')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_nodomain", strings.NewReader(`{"name":"after"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "域名不能为空") {
+		t.Fatalf("update empty-domain status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+}
+
+func TestCreateRule_rejects_manual_TLS_without_certificate(t *testing.T) {
+	// Given
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/rules", handler.CreateRule)
+	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{"name":"manual-nocert","protocol":"http","domain":"manual-nocert.example.test","listen_port":8443,"enable_tls":true,"tls_source":"manual","upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "手动证书模式下必须提供 TLS 证书和私钥") {
+		t.Fatalf("create manual TLS without material status=%d body=%s, want 400", response.Code, response.Body.String())
 	}
 }
 

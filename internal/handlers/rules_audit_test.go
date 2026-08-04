@@ -431,6 +431,104 @@ func TestEnableRule_uses_latest_job_for_current_domain(t *testing.T) {
 	}
 }
 
+func TestEnableRule_resumes_issued_job_for_www_first_domain(t *testing.T) {
+	// Given：规则域名 www 在前（用户输入顺序），任务域名排序存储
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_www_enable", "www-enable", "www.example.test,example.test", 8080, false, "acme_dns", true)
+	seedAuditUpstream(t, "lb_www_enable")
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at) VALUES ('lb_www_enable','example.test,www.example.test','disabled',datetime('now','+90 days'))`); err != nil {
+		t.Fatalf("seed www-first job: %v", err)
+	}
+	router := gin.New()
+	router.POST("/rules/:caddy_id/enable", handler.EnableRule)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/lb_www_enable/enable", nil))
+
+	// Then：任务必须被查到并恢复为 issued，而不是重复创建
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_www_enable' AND domain='example.test,www.example.test'").Scan(&status); err != nil {
+		t.Fatalf("read www-first job: %v", err)
+	}
+	if status != "issued" {
+		t.Fatalf("www-first job status=%q, want issued (resumed)", status)
+	}
+}
+
+func TestEnableRule_rejects_domain_overlap_with_enabled_rule(t *testing.T) {
+	// Given：A(a,b) 与 B(b) 均禁用；启用 A 后启用 B 必须按拆分域名判定冲突
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_overlap_a", "overlap-a", "a.example.test,b.example.test", 8080, false, "manual", false)
+	seedAuditRule(t, "lb_overlap_b", "overlap-b", "b.example.test", 8081, false, "manual", false)
+	seedAuditUpstream(t, "lb_overlap_a")
+	seedAuditUpstream(t, "lb_overlap_b")
+	router := gin.New()
+	router.POST("/rules/:caddy_id/enable", handler.EnableRule)
+
+	// When
+	firstResponse := httptest.NewRecorder()
+	router.ServeHTTP(firstResponse, httptest.NewRequest(http.MethodPost, "/rules/lb_overlap_a/enable", nil))
+	secondResponse := httptest.NewRecorder()
+	router.ServeHTTP(secondResponse, httptest.NewRequest(http.MethodPost, "/rules/lb_overlap_b/enable", nil))
+
+	// Then
+	if firstResponse.Code != http.StatusOK {
+		t.Fatalf("enable A status=%d body=%s, want 200", firstResponse.Code, firstResponse.Body.String())
+	}
+	if secondResponse.Code != http.StatusBadRequest || !strings.Contains(secondResponse.Body.String(), "已被其他启用中的规则使用") {
+		t.Fatalf("enable B status=%d body=%s, want 400 domain conflict", secondResponse.Code, secondResponse.Body.String())
+	}
+	var enabled bool
+	if err := db.DB.QueryRow("SELECT enabled FROM lb_rules WHERE caddy_id='lb_overlap_b'").Scan(&enabled); err != nil {
+		t.Fatalf("read B enabled state: %v", err)
+	}
+	if enabled {
+		t.Fatal("rule B stayed enabled after rejected enable")
+	}
+}
+
+func TestEnableRule_rejects_manual_TLS_without_certificate(t *testing.T) {
+	// Given：存量手动 TLS 规则缺少证书材料
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_manual_nocert", "nocert", "nocert.example.test", 8080, false, "manual", true)
+	seedAuditUpstream(t, "lb_manual_nocert")
+	router := gin.New()
+	router.POST("/rules/:caddy_id/enable", handler.EnableRule)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/lb_manual_nocert/enable", nil))
+
+	// Then
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "手动证书模式下必须提供 TLS 证书和私钥") {
+		t.Fatalf("status=%d body=%s, want 400 manual TLS material required", response.Code, response.Body.String())
+	}
+}
+
+func TestUpdateRule_rejects_manual_TLS_without_certificate(t *testing.T) {
+	// Given：存量手动 TLS 规则缺少证书材料，任意更新都必须拒绝（合并后语义）
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_manual_legacy", "legacy", "legacy.example.test", 8080, true, "manual", true)
+	seedAuditUpstream(t, "lb_manual_legacy")
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_manual_legacy", strings.NewReader(`{"name":"after"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "手动证书模式下必须提供 TLS 证书和私钥") {
+		t.Fatalf("status=%d body=%s, want 400 manual TLS material required", response.Code, response.Body.String())
+	}
+}
+
 func TestRuleToggle_is_idempotent_when_rule_already_has_target_state(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -654,10 +752,17 @@ func TestDisableRule_returns_error_instead_of_panicking_when_cert_job_update_fai
 
 func TestUpdateRule_preserves_omitted_boolean_fields(t *testing.T) {
 	// Given
+	oldCertDir := testServicesCertDir
+	testServicesCertDir = t.TempDir()
+	t.Cleanup(func() { testServicesCertDir = oldCertDir })
 	harness := newUpdateAuditRuleHandlers(t, "lb_bool_keep", 0, false)
 	handler, currentConfig := harness.handler, harness.currentConfig
 	seedAuditRule(t, "lb_bool_keep", "before", "bool-keep.example.test", 8080, true, "manual", true)
-	if _, err := db.DB.Exec(`UPDATE lb_rules SET dynamic_dns=1,enable_dns_server=1,enable_active_health_check=1,tcp_proxy_protocol=1,tls_http_redirect=1,enable_compress=1,log_enabled=1 WHERE caddy_id='lb_bool_keep'`); err != nil {
+	certPEM, keyPEM, err := generateTestCert("bool-keep.example.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("generate certificate: %v", err)
+	}
+	if _, err := db.DB.Exec(`UPDATE lb_rules SET tls_cert=?, tls_key=?, dynamic_dns=1,enable_dns_server=1,enable_active_health_check=1,tcp_proxy_protocol=1,tls_http_redirect=1,enable_compress=1,log_enabled=1 WHERE caddy_id='lb_bool_keep'`, certPEM, keyPEM); err != nil {
 		t.Fatalf("seed boolean fields: %v", err)
 	}
 	seedAuditUpstream(t, "lb_bool_keep")

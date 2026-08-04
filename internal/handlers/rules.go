@@ -290,6 +290,16 @@ func normalizedRuleDomains(value string) []string {
 	return strings.Split(canonical, ",")
 }
 
+// canonicalACMEDomainForJobLookup 返回 cert_jobs.domain 使用的排序规范形式，
+// 使任务查询不受 lb_rules.domain 用户输入顺序影响；非合法 ACME 域名集时回退原值。
+func canonicalACMEDomainForJobLookup(domain string) string {
+	canonical, err := services.CanonicalACMEDomains(domain)
+	if err != nil {
+		return domain
+	}
+	return canonical
+}
+
 func validateRuleListenPort(protocol string, port int) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("端口必须在 1-65535 之间")
@@ -304,6 +314,14 @@ func validateRuleListenPort(protocol string, port int) error {
 }
 
 func ruleDomainConflict(domain, excludeCaddyID string) (bool, error) {
+	return queryRuleDomainConflict(domain, excludeCaddyID, "")
+}
+
+func enabledRuleDomainConflict(domain, excludeCaddyID string) (bool, error) {
+	return queryRuleDomainConflict(domain, excludeCaddyID, " AND enabled = 1")
+}
+
+func queryRuleDomainConflict(domain, excludeCaddyID, extraWhere string) (bool, error) {
 	candidates := normalizedRuleDomains(domain)
 	if len(candidates) == 0 {
 		return false, nil
@@ -312,7 +330,7 @@ func ruleDomainConflict(domain, excludeCaddyID string) (bool, error) {
 	for _, candidate := range candidates {
 		wanted[candidate] = struct{}{}
 	}
-	rows, err := db.DB.Query("SELECT COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND caddy_id != ?", excludeCaddyID)
+	rows, err := db.DB.Query("SELECT COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND caddy_id != ?"+extraWhere, excludeCaddyID)
 	if err != nil {
 		return false, err
 	}
@@ -372,6 +390,10 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return
 	}
 
+	if req.Protocol == "http" && strings.TrimSpace(req.Domain) == "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "HTTP/HTTPS 规则的域名不能为空"})
+		return
+	}
 	if req.Protocol == "http" && req.Domain != "" {
 		canonicalDomain, err := db.CanonicalDomains(req.Domain)
 		if err != nil {
@@ -426,6 +448,10 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 	// Validate TLS certificate if provided (manual source only)
 	if req.EnableTLS && req.TLSSource == "manual" {
+		if strings.TrimSpace(req.TLSCert) == "" || strings.TrimSpace(req.TLSKey) == "" {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "手动证书模式下必须提供 TLS 证书和私钥"})
+			return
+		}
 		if err := validateTLSCertificate(req.TLSCert, req.TLSKey); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "TLS 证书校验失败: " + err.Error()})
 			return
@@ -992,6 +1018,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 	}
 
+	if req.Protocol == "http" && strings.TrimSpace(req.Domain) == "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "HTTP/HTTPS 规则的域名不能为空"})
+		return
+	}
 	if req.Protocol == "http" && req.Domain != "" {
 		canonicalDomain, err := db.CanonicalDomains(req.Domain)
 		if err != nil {
@@ -1077,6 +1107,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 		if tlsKey == "" {
 			tlsKey = existingRule.TLSKey
+		}
+		if *req.EnableTLS && (strings.TrimSpace(tlsCert) == "" || strings.TrimSpace(tlsKey) == "") {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "手动证书模式下必须提供 TLS 证书和私钥"})
+			return
 		}
 		if tlsCert != "" && tlsKey != "" {
 			if err := validateTLSCertificate(tlsCert, tlsKey); err != nil {
@@ -1458,7 +1492,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		var jobID, jobProviderID int
 		var jobStatus string
 		var jobExpiresAt sql.NullTime
-		jobErr := db.DB.QueryRow("SELECT id,status,expires_at,COALESCE(ca_provider_id,0) FROM cert_jobs WHERE rule_id=? AND domain=? ORDER BY id DESC LIMIT 1", caddyID, domain).Scan(&jobID, &jobStatus, &jobExpiresAt, &jobProviderID)
+		jobErr := db.DB.QueryRow("SELECT id,status,expires_at,COALESCE(ca_provider_id,0) FROM cert_jobs WHERE rule_id=? AND domain=? ORDER BY id DESC LIMIT 1", caddyID, canonicalACMEDomainForJobLookup(domain)).Scan(&jobID, &jobStatus, &jobExpiresAt, &jobProviderID)
 		if jobErr != nil && !errors.Is(jobErr, sql.ErrNoRows) {
 			restoreErr := restoreACMEState()
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书任务失败: " + errors.Join(jobErr, restoreErr).Error()})
@@ -1891,14 +1925,13 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		return
 	}
 	if ruleProtocol == "http" && ruleDomain != "" {
-		var dupCount int
-		err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE protocol = 'http' AND domain = ? AND caddy_id != ? AND enabled = 1", ruleDomain, caddyID).Scan(&dupCount)
-		if err != nil && err != sql.ErrNoRows {
+		conflict, err := enabledRuleDomainConflict(ruleDomain, caddyID)
+		if err != nil {
 			log.Printf("EnableRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, ruleDomain, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
 			return
 		}
-		if dupCount > 0 {
+		if conflict {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已被其他启用中的规则使用，无法启用", ruleDomain)})
 			return
 		}
@@ -1993,7 +2026,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		var jobExpiresAt sql.NullTime
 		var jobID, jobProviderID int
 		hasJob := false
-		err := db.DB.QueryRow("SELECT id, status, COALESCE(message,''), expires_at, COALESCE(ca_provider_id,0) FROM cert_jobs WHERE rule_id=? AND domain=? ORDER BY id DESC LIMIT 1", caddyID, domain).Scan(&jobID, &jobStatus, &jobMsg, &jobExpiresAt, &jobProviderID)
+		err := db.DB.QueryRow("SELECT id, status, COALESCE(message,''), expires_at, COALESCE(ca_provider_id,0) FROM cert_jobs WHERE rule_id=? AND domain=? ORDER BY id DESC LIMIT 1", caddyID, canonicalACMEDomainForJobLookup(domain)).Scan(&jobID, &jobStatus, &jobMsg, &jobExpiresAt, &jobProviderID)
 		if err == nil {
 			hasJob = true
 		} else if err != sql.ErrNoRows {

@@ -587,7 +587,12 @@ func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 	if len(rules) != 1 {
 		return fmt.Errorf("规则不存在")
 	}
-	return validateRuleConfigGeneration(rules[0])
+	rule := rules[0]
+	if rule.Protocol == "http" && rule.EnableTLS && rule.TLSSource == "manual" &&
+		(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
+		return &configValidationError{message: "手动证书模式下必须提供 TLS 证书和私钥"}
+	}
+	return validateRuleConfigGeneration(rule)
 }
 
 func validateEnabledStoredRuleConfigs(ctx context.Context) error {

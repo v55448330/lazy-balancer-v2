@@ -85,7 +85,7 @@ func parseTLSCertificate(certPEM, keyPEM string) (*CertificateInfo, error) {
 	info := &CertificateInfo{}
 
 	if certPEM == "" || keyPEM == "" {
-		return info, nil // Allow empty (will use auto cert or no TLS)
+		return info, nil // 允许为空：是否强制要求证书材料由调用方按 tls_source 校验
 	}
 
 	// Parse certificate
