@@ -254,7 +254,13 @@
                 <el-icon class="title-icon rules-icon"><List /></el-icon>
                 <span>负载均衡规则</span>
               </div>
-              <el-badge :value="rules.length" type="primary" />
+              <div class="card-header-actions">
+                <el-radio-group v-model="rankBy" size="small">
+                  <el-radio-button value="requests">按请求数</el-radio-button>
+                  <el-radio-button value="bytes">按流量</el-radio-button>
+                </el-radio-group>
+                <el-badge :value="rankableRules.length" type="primary" />
+              </div>
             </div>
           </template>
           <el-table
@@ -340,7 +346,7 @@
               </template>
             </el-table-column>
             <template #empty>
-              <el-empty :description="rulesUnavailable ? '采集失败' : '暂无负载均衡规则'" :image-size="80" />
+              <el-empty :description="rulesEmptyText" :image-size="80" />
             </template>
           </el-table>
         </el-card>
@@ -432,6 +438,7 @@ interface DashboardRuleMetrics extends RuleMetrics {
 }
 const ruleMetrics = ref<Record<string, DashboardRuleMetrics>>({})
 const ruleMetricsUnavailable = ref<Record<string, boolean>>({})
+const rankBy = ref<'requests' | 'bytes'>('requests')
 type RuleHealth = 'unknown' | 'unhealthy' | 'degraded' | 'healthy'
 const ruleHealth = ref<Record<string, RuleHealth>>({})
 const ruleHealthUnavailable = ref(false)
@@ -604,11 +611,25 @@ const ruleBytesChartOption = computed<EChartsOption>(() => {
   return historyChartBase(['入站', '出站'], [mk('入站', 'bytesIn', '#3b82f6'), mk('出站', 'bytesOut', '#10b981')], formatBytes)
 })
 
-const sortedRules = computed(() =>
-  [...rules.value].sort(
-    (a, b) => (ruleMetrics.value[b.caddy_id]?.requests_total ?? 0) - (ruleMetrics.value[a.caddy_id]?.requests_total ?? 0),
-  ),
+const ruleRankValue = (caddyId: string): number => {
+  const metrics = ruleMetrics.value[caddyId]
+  if (!metrics) return 0
+  return rankBy.value === 'requests' ? (metrics.requests_total ?? 0) : (metrics.bytes_in ?? 0) + (metrics.bytes_out ?? 0)
+}
+
+const rankableRules = computed(() =>
+  rules.value
+    .filter((rule) => ruleRankValue(rule.caddy_id) > 0)
+    .sort((a, b) => ruleRankValue(b.caddy_id) - ruleRankValue(a.caddy_id)),
 )
+
+const sortedRules = computed(() => rankableRules.value.slice(0, 10))
+
+const rulesEmptyText = computed(() => {
+  if (rulesUnavailable.value) return '采集失败'
+  if (rules.value.length === 0) return '暂无负载均衡规则'
+  return rankBy.value === 'bytes' ? '暂无流量数据' : '暂无请求数据'
+})
 
 const hasRuleRequests = (caddyId: string): boolean => {
   const requests = ruleMetrics.value[caddyId]?.requests_total
@@ -941,6 +962,12 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.card-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .card-title {
