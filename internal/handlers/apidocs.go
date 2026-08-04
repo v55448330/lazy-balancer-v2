@@ -114,7 +114,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"GET", "/rules/:caddy_id/logs", "规则", "规则访问日志（最近 1000 行）", "", `{"content":"...","offset":12345}`, []string{"404 not_found"}, "需规则开启访问日志；offset 为尾部结束位置，供 log-stream 续读。"},
 	{"GET", "/rules/:caddy_id/log-stream", "规则", "规则日志增量流", "", `{"offset":12456,"lines":["{...}"]}`, []string{"404 not_found"}, "query: offset（字节偏移，上次返回值）。返回 offset 之后的新日志行与新 offset，供前端增量统计，无服务端状态。"},
 	{"GET", "/rules/:caddy_id/caddy-config", "规则", "单规则 Caddy 配置预览", "", `{...}`, []string{"404 not_found"}, ""},
-	{"POST", "/rules/cert-info", "规则", "批量查询规则证书信息", `{"caddy_ids":["lb_..."]}`, `{"lb_...":{"expires_at":"...","days_left":30}}`, []string{"401 unauthenticated"}, "只读，不写操作日志。"},
+	{"POST", "/rules/cert-info", "规则", "批量查询规则证书信息", `{"caddy_ids":["lb_..."]}`, `{"lb_...":{"expires_at":"...","days_left":30}}`, []string{"400 caddy_ids 数量超过 200", "401 unauthenticated"}, "只读，不写操作日志。caddy_ids 单次最多 200 个，超过返回 400。"},
 	{"GET", "/rules/:caddy_id/cert-info", "规则", "查询单规则证书信息", "", `{"expires_at":"...","days_left":30}`, []string{"404 not_found"}, "只读，不写操作日志。"},
 	{"POST", "/config/import/v1", "配置", "导入 v1（nginx 版）备份", "v1 备份 JSON", `{"message":"已导入 26 条规则"}`, []string{"400 invalid_backup", "403 slave_or_admin_required", "500 rollback"}, "仅主节点；自动转换负载均衡规则（含内联证书），仅导入规则部分。"},
 	{"GET", "/caddy/logs", "Caddy", "Caddy 日志", "", `{"content":"..."}`, []string{"401 unauthenticated"}, "query: type（server/proxy/tls/access）。"},

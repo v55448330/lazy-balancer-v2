@@ -43,7 +43,8 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 
 	// Limit batch size to prevent abuse
 	if len(req.CaddyIDs) > 200 {
-		req.CaddyIDs = req.CaddyIDs[:200]
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "invalid_request：caddy_ids 数量不能超过 200"})
+		return
 	}
 
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(req.CaddyIDs)), ",")

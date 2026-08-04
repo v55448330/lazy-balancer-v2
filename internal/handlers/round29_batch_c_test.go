@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -120,6 +121,35 @@ func TestTCPRuleMetrics_deduplicates_and_joins_upstream_addresses(t *testing.T) 
 				t.Fatalf("requests_total=%v, want 7", got)
 			}
 		})
+	}
+}
+
+func TestGetRulesCertInfo_rejects_more_than_200_caddy_ids(t *testing.T) {
+	// Given
+	handler := newBackupTestHandlers(t)
+	caddyIDs := make([]string, 201)
+	for index := range caddyIDs {
+		caddyIDs[index] = "lb_" + strconv.Itoa(index)
+	}
+	payload, err := json.Marshal(map[string][]string{"caddy_ids": caddyIDs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.POST("/rules/cert-info", handler.GetRulesCertInfo)
+	request := httptest.NewRequest(http.MethodPost, "/rules/cert-info", strings.NewReader(string(payload)))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%q, want 400", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "invalid_request") || !strings.Contains(response.Body.String(), "200") {
+		t.Fatalf("body=%q, want invalid_request limit message", response.Body.String())
 	}
 }
 
