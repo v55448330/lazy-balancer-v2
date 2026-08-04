@@ -583,7 +583,7 @@ const deleteKey = async (id: number) => {
     await fetchKeys()
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
-    throw error
+    console.error('Failed to delete API key:', error)
   } finally {
     deletingIds.value.delete(id)
   }
@@ -600,9 +600,8 @@ const toggleKey = async (key: APIKey) => {
         confirmButtonText: '确认禁用',
         cancelButtonText: '取消',
       })
-    } catch (error: unknown) {
-      if (error === 'cancel' || error === 'close') return
-      throw error
+    } catch {
+      return
     }
   }
 
@@ -612,6 +611,9 @@ const toggleKey = async (key: APIKey) => {
     await request.patch(`/users/me/api-keys/${key.id}`, payload)
     ElMessage.success(isEnabled ? '密钥已启用' : '密钥已禁用')
     await fetchKeys()
+  } catch (error: unknown) {
+    // Error toast is already shown by the global axios interceptor.
+    console.error('Failed to toggle API key:', error)
   } finally {
     togglePendingId.value = null
   }
@@ -626,7 +628,7 @@ const copyCreatedKey = async () => {
       ElMessage.error('复制失败，请手动复制密钥')
       return
     }
-    throw error
+    console.error('Failed to copy key:', error)
   }
 }
 
@@ -646,7 +648,7 @@ const fetchMCPTools = async (): Promise<void> => {
       mcpToolsError.value = `工具清单加载失败：${error.message}`
       return
     }
-    throw error
+    console.error('Failed to fetch MCP tools:', error)
   } finally {
     mcpToolsLoading.value = false
   }

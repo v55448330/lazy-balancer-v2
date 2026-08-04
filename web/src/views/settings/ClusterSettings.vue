@@ -127,8 +127,8 @@ const registerToken = ref<ClusterRegisterToken | null>(null)
 const isNonAdminReadOnly = computed(() => authStore.readOnlyReason === 'non-admin')
 const clusterModeChanging = computed(() => syncing.value || promoting.value || modeLoading.value)
 const fetchStatus = async (): Promise<ClusterStatus> => {
-  const requestSeq = requestSequence
-  const response = await request.get<ApiResponse<ClusterStatus>>('/cluster/status', { signal: clusterPolling.signal })
+  const requestSeq = ++requestSequence
+  const response = await request.get<ApiResponse<ClusterStatus>>('/cluster/status', { signal: clusterPolling.signal, silent: true })
   if (!disposed && requestSeq === requestSequence) {
     status.value = response.data
     authStore.setNodeMode(response.data.node_mode)
@@ -138,10 +138,10 @@ const fetchStatus = async (): Promise<ClusterStatus> => {
 
 const fetchNodes = async (): Promise<void> => {
   if (disposed) return
-  const requestSeq = requestSequence
+  const requestSeq = ++requestSequence
   nodesLoading.value = true
   try {
-		const response = await request.get<ApiResponse<readonly ClusterNodeWithSyncError[]>>('/cluster/nodes', { signal: clusterPolling.signal })
+		const response = await request.get<ApiResponse<readonly ClusterNodeWithSyncError[]>>('/cluster/nodes', { signal: clusterPolling.signal, silent: true })
     if (!disposed && requestSeq === requestSequence) nodes.value = response.data
   } finally {
     if (!disposed && requestSeq === requestSequence) nodesLoading.value = false

@@ -636,11 +636,15 @@ const restarting = ref(false)
 
 const handleRestart = async () => {
   if (isReadOnly.value || restarting.value) return
-  await ElMessageBox.confirm('重启期间服务短暂不可用（约 10 秒），容器将自动拉起。确认重启？', '重启服务', {
-    confirmButtonText: '重启',
-    cancelButtonText: '取消',
-    type: 'warning',
-  })
+  try {
+    await ElMessageBox.confirm('重启期间服务短暂不可用（约 10 秒），容器将自动拉起。确认重启？', '重启服务', {
+      confirmButtonText: '重启',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
   restarting.value = true
   try {
     await request.post('/system/restart')

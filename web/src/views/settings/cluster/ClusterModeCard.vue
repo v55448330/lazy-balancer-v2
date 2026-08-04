@@ -174,7 +174,7 @@ const saveSyncInterval = (): void => {
 const submitRegistration = async (): Promise<void> => {
   if (props.readOnly) return
   if (!formRef.value) return
-  const valid = await formRef.value.validate()
+  const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
   const nodeName = form.node_name.trim()
   emit('register', {

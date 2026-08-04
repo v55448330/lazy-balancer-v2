@@ -1325,7 +1325,7 @@ const fetchCertJobs = async (): Promise<void> => {
   const requestedRuleIdSet = new Set(requestedRuleIds)
   const res = await request.post<APIResponse<Record<string, CertJob | null>>>('/certificates/jobs/current', {
     rule_ids: requestedRuleIds,
-  }, { signal: certJobsPolling.signal })
+  }, { signal: certJobsPolling.signal, silent: true })
   if (!res.data) throw new TypeError('当前证书任务响应缺少 data')
   if (disposed) return
   const nextMap = { ...certJobMap.value }
@@ -1526,7 +1526,7 @@ const formatUpdatedTime = (updatedAt: Rule['updated_at']): string => {
 const fetchHealthStatus = async () => {
   if (disposed) return
   try {
-    const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health', { signal: healthPolling.signal })
+    const res = await request.get<APIResponse<UpstreamHealthResponse>>('/config/health', { signal: healthPolling.signal, silent: true })
     if (disposed) return
     const healthData = res.data || {}
     const mapped: Record<string, { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number; upstreams: Record<string, { healthy: boolean; unknown: boolean; degraded?: boolean; num_requests?: number; fails?: number }> }> = {}
@@ -2402,7 +2402,12 @@ const toggleRule = async (rule: Rule) => {
       await request.put<APIResponse>(`/rules/${rule.caddy_id}/disable`)
     }
     ElMessage.success(`${action}成功`)
-    await fetchRules()
+    try {
+      await fetchRules()
+    } catch (error: unknown) {
+      // 启停已在服务端生效，刷新失败不回退开关，等待下次轮询同步
+      console.error('Failed to refresh rules after toggle:', error)
+    }
   } catch (e) {
     rule.enabled = !nextEnabled
   } finally {
@@ -2419,11 +2424,7 @@ const deleteRule = async (rule: Rule) => {
     fetchRules()
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
-    if (error instanceof Error) {
-      console.error('delete rule failed', error)
-      return
-    }
-    throw error
+    console.error('delete rule failed', error)
   }
 }
 
@@ -2434,11 +2435,7 @@ const duplicateRule = async (rule: Rule) => {
     openCopyWizard(rule)
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
-    if (error instanceof Error) {
-      console.error('duplicate rule failed', error)
-      return
-    }
-    throw error
+    console.error('duplicate rule failed', error)
   }
 }
 

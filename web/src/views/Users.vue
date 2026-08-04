@@ -186,6 +186,10 @@ const handleSubmit = async () => {
       await request.post('/users', form.value)
       ElMessage.success('创建成功')
     }
+  } catch (error: unknown) {
+    // Error toast is already shown by the global axios interceptor.
+    console.error('Failed to submit user:', error)
+    return
   } finally {
     submitting.value = false
     submittingUserId.value = null

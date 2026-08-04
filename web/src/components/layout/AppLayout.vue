@@ -242,6 +242,9 @@ const saveProfile = async () => {
       authStore.showToast('success', '保存成功')
       await authStore.fetchUser()
     }
+  } catch (error: unknown) {
+    // Error toast is already shown by the global axios interceptor.
+    console.error('Failed to save profile:', error)
   } finally {
     saving.value = false
   }
