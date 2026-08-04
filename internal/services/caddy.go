@@ -911,7 +911,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 
 	for _, ru := range allRules {
 		if len(ru.upstreams) == 0 {
-			return generationFailure("enabled rule %s has no enabled upstreams", ru.rule.CaddyID)
+			log.Printf("规则 %s (%s) 没有可用上游，已跳过该规则的配置生成", ru.rule.Name, ru.rule.CaddyID)
 		}
 	}
 
@@ -1231,6 +1231,9 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 	var redirectRoutes []interface{}
 	for _, ru := range allRules {
 		r := ru.rule
+		if len(ru.upstreams) == 0 {
+			continue
+		}
 		if r.Protocol == "http" && r.EnableTLS && r.TLSHTTPRedirect {
 			if r.TLSSource == "acme_dns" {
 				if _, hasCert := availableCerts[r.CaddyID]; !hasCert {
@@ -1251,7 +1254,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 							"handler":     "static_response",
 							"status_code": 301,
 							"headers": map[string]interface{}{
-								"Location": []string{fmt.Sprintf("https://%s", domainHosts[0])},
+								"Location": []string{httpsRedirectLocation(domainHosts[0], r.ListenPort)},
 							},
 						},
 					},
@@ -1594,6 +1597,13 @@ func splitAndTrim(s string) []string {
 	return result
 }
 
+func httpsRedirectLocation(host string, listenPort int) string {
+	if listenPort != 443 {
+		return fmt.Sprintf("https://%s:%d", host, listenPort)
+	}
+	return fmt.Sprintf("https://%s", host)
+}
+
 type SingleRuleConfig struct {
 	CaddyID                          string
 	Protocol                         string
@@ -1768,6 +1778,11 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 					"name":     u.Host,
 					"port":     fmt.Sprintf("%d", u.Port),
 					"versions": versions,
+				}
+				if rule.EnableDnsServer && rule.DnsServer != "" {
+					upstreamEntry["resolver"] = map[string]interface{}{
+						"addresses": []string{rule.DnsServer},
+					}
 				}
 				upstreamList = append(upstreamList, upstreamEntry)
 			} else {
@@ -1955,7 +1970,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 						"handler":     "static_response",
 						"status_code": 301,
 						"headers": map[string]interface{}{
-							"Location": []string{fmt.Sprintf("https://%s", domainHosts[0])},
+							"Location": []string{httpsRedirectLocation(domainHosts[0], rule.ListenPort)},
 						},
 					},
 				},
@@ -2306,12 +2321,18 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 				versions["ipv4"] = true
 				versions["ipv6"] = true
 			}
-			upstreamList = append(upstreamList, map[string]interface{}{
+			upstreamEntry := map[string]interface{}{
 				"source":   "a",
 				"name":     upstream.Host,
 				"port":     fmt.Sprintf("%d", upstream.Port),
 				"versions": versions,
-			})
+			}
+			if rule.EnableDnsServer && rule.DnsServer != "" {
+				upstreamEntry["resolver"] = map[string]interface{}{
+					"addresses": []string{rule.DnsServer},
+				}
+			}
+			upstreamList = append(upstreamList, upstreamEntry)
 		} else {
 			entry := map[string]interface{}{"dial": joinUpstreamAddress(upstream.Host, upstream.Port)}
 			if upstream.MaxConnections > 0 {

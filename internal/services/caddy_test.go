@@ -1077,3 +1077,136 @@ func assertRouteIDs(t *testing.T, routes []interface{}, want []string) {
 	}
 	assertEqual(t, got, want)
 }
+
+func TestGenerateSingleRuleCaddyConfig_dynamicDNS_emitsResolverInsideDynamicUpstreams(t *testing.T) {
+	// Given
+	rule := baseHTTPRule()
+	rule.DynamicDNS = true
+	rule.EnableDnsServer = true
+	rule.DnsServer = "10.0.0.53:53"
+	rule.Upstreams = []UpstreamConfig{{Host: "dynamic.example.test", Port: 8080, Enabled: true}}
+
+	// When
+	routes := renderedHTTPRoutes(t, GenerateSingleRuleCaddyConfig(rule))
+
+	// Then
+	proxy := reverseProxyHandler(t, routes[len(routes)-1])
+	dynamic := mustMap(t, proxy["dynamic_upstreams"], "dynamic upstreams")
+	resolver := mustMap(t, dynamic["resolver"], "dynamic upstream resolver")
+	assertEqual(t, resolver["addresses"], []string{"10.0.0.53:53"})
+}
+
+func TestGenerateRouteObject_dynamicDNS_emitsResolverInsideDynamicUpstreams(t *testing.T) {
+	// Given
+	rule := baseHTTPRule()
+	rule.DynamicDNS = true
+	rule.EnableDnsServer = true
+	rule.DnsServer = "10.0.0.53:53"
+	rule.Upstreams = []UpstreamConfig{{Host: "dynamic.example.test", Port: 8080, Enabled: true}}
+
+	// When
+	routes, _, err := generateHTTPRouteObjects(rule)
+
+	// Then
+	if err != nil {
+		t.Fatalf("generate routes: %v", err)
+	}
+	proxy := reverseProxyHandler(t, routes[len(routes)-1])
+	dynamic := mustMap(t, proxy["dynamic_upstreams"], "dynamic upstreams")
+	resolver := mustMap(t, dynamic["resolver"], "dynamic upstream resolver")
+	assertEqual(t, resolver["addresses"], []string{"10.0.0.53:53"})
+}
+
+func TestGenerateSingleRuleCaddyConfig_httpsRedirect_includesNonStandardListenPort(t *testing.T) {
+	// Given
+	rule := baseHTTPRule()
+	rule.EnableTLS = true
+	rule.TLSHTTPRedirect = true
+	rule.ListenPort = 8443
+
+	// When
+	config := GenerateSingleRuleCaddyConfig(rule)
+
+	// Then
+	routes := httpRoutesFromServer(t, config, "http_8443")
+	response := firstHandler(t, routes[0])
+	if response["handler"] != "static_response" || response["status_code"] != 301 {
+		t.Fatalf("unexpected redirect handler: %#v", response)
+	}
+	headers := mustMap(t, response["headers"], "redirect headers")
+	assertEqual(t, headers["Location"], []string{"https://example.com:8443"})
+
+	// When the rule listens on the default HTTPS port
+	rule.ListenPort = 443
+	config = GenerateSingleRuleCaddyConfig(rule)
+
+	// Then the port is omitted
+	routes = httpRoutesFromServer(t, config, "http_443")
+	headers = mustMap(t, firstHandler(t, routes[0])["headers"], "redirect headers")
+	assertEqual(t, headers["Location"], []string{"https://example.com"})
+}
+
+func TestGenerateCaddyConfig_httpsRedirect_includesNonStandardListenPort(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	certPEM, keyPEM := matchingCertificatePair(t, "tls.example.test")
+	seedGenerationRule(t, database, "lb_tls_redirect", false)
+	if _, err := database.Exec(`UPDATE lb_rules SET domain='tls.example.test', listen_port=8443,
+		enable_tls=1, tls_source='manual', tls_cert=?, tls_key=?, tls_http_redirect=1
+		WHERE caddy_id='lb_tls_redirect'`, certPEM, keyPEM); err != nil {
+		t.Fatalf("enable TLS redirect: %v", err)
+	}
+
+	// When
+	generated := generateCaddyConfigFromStore(database)
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generate config: %s", message)
+	}
+	routes := httpRoutesFromServer(t, generated, "http_80")
+	response := firstHandler(t, routes[0])
+	if response["handler"] != "static_response" || response["status_code"] != 301 {
+		t.Fatalf("unexpected redirect handler: %#v", response)
+	}
+	headers := mustMap(t, response["headers"], "redirect headers")
+	assertEqual(t, headers["Location"], []string{"https://tls.example.test:8443"})
+}
+
+func TestGenerateCaddyConfig_skipsRulesWithoutUpstreams(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	seedGenerationRule(t, database, "lb_healthy", false)
+	certPEM, keyPEM := matchingCertificatePair(t, "empty.example.test")
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enabled,enable_tls,tls_source,tls_cert,tls_key,tls_http_redirect)
+		VALUES ('lb_empty','lb_empty','http','empty.example.test',8443,'weighted_round_robin',1,1,'manual',?,?,1)`, certPEM, keyPEM); err != nil {
+		t.Fatalf("seed zero-upstream TLS rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enabled)
+		VALUES ('lb_empty_tcp','lb_empty_tcp','tcp','',9000,'weighted_round_robin',1)`); err != nil {
+		t.Fatalf("seed zero-upstream TCP rule: %v", err)
+	}
+
+	// When
+	generated := generateCaddyConfigFromStore(database)
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generation failed: %s", message)
+	}
+	apps := mustMap(t, generated["apps"], "apps")
+	httpApp := mustMap(t, apps["http"], "http app")
+	servers := mustMap(t, httpApp["servers"], "http servers")
+	if _, exists := servers["http_8080"]; !exists {
+		t.Fatal("healthy rule server missing")
+	}
+	if _, exists := servers["http_8443"]; exists {
+		t.Fatal("zero-upstream rule server was generated")
+	}
+	assertRouteIDs(t, httpRoutesFromServer(t, generated, "http_80"), []string{""})
+	if _, exists := apps["layer4"]; exists {
+		t.Fatal("zero-upstream TCP rule server was generated")
+	}
+}
