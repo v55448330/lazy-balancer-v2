@@ -1581,7 +1581,6 @@ const defaultUpstream = (protocol: UpstreamProtocol = 'http'): UpstreamInput => 
   host: '',
   port: protocol === 'tcp' ? 8080 : 80,
   weight: 100,
-  domain: '',
   dynamic_dns: false,
   enabled: true,
   protocol,

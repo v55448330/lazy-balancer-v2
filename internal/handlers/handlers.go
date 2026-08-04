@@ -127,7 +127,6 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		Host           string
 		Port           int
 		Weight         int
-		Domain         string
 		DynamicDNS     bool
 		Enabled        bool
 		Protocol       string
@@ -195,7 +194,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		data.ServerTokensHidden = r.ServerTokensHidden
 		for _, u := range r.Upstreams {
 			upstreams = append(upstreams, requestUpstream{
-				Host: u.Host, Port: u.Port, Weight: u.Weight, Domain: u.Domain,
+				Host: u.Host, Port: u.Port, Weight: u.Weight,
 				DynamicDNS: u.DynamicDNS, Enabled: u.Enabled, Protocol: u.Protocol,
 				MaxConnections: u.MaxConnections,
 			})
@@ -245,7 +244,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		}
 		for _, u := range r.Upstreams {
 			upstreams = append(upstreams, requestUpstream{
-				Host: u.Host, Port: u.Port, Weight: u.Weight, Domain: u.Domain,
+				Host: u.Host, Port: u.Port, Weight: u.Weight,
 				DynamicDNS: u.DynamicDNS, Enabled: u.Enabled, Protocol: u.Protocol,
 				MaxConnections: u.MaxConnections,
 			})

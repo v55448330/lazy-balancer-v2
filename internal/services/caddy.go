@@ -761,7 +761,6 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		Host           string
 		Port           int
 		Weight         int
-		Domain         string
 		DynamicDNS     bool
 		Enabled        bool
 		Protocol       string
@@ -842,7 +841,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 	}
 
 	upstreamRows, err := store.Query(`
-		SELECT u.rule_id, u.host, u.port, COALESCE(u.weight,1), COALESCE(u.domain,''), COALESCE(u.dynamic_dns,0), u.enabled, COALESCE(u.protocol,'http'), COALESCE(u.max_connections,0)
+		SELECT u.rule_id, u.host, u.port, COALESCE(u.weight,1), COALESCE(u.dynamic_dns,0), u.enabled, COALESCE(u.protocol,'http'), COALESCE(u.max_connections,0)
 		FROM upstreams u JOIN lb_rules r ON r.caddy_id = u.rule_id
 		WHERE u.enabled = 1 AND r.enabled = 1 ORDER BY u.rule_id, u.id
 	`)
@@ -852,7 +851,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 	for upstreamRows.Next() {
 		var ruleID string
 		var u upstream
-		if err := upstreamRows.Scan(&ruleID, &u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
+		if err := upstreamRows.Scan(&ruleID, &u.Host, &u.Port, &u.Weight, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
 			closeErr := upstreamRows.Close()
 			return generationFailure("scan upstream: %v", errors.Join(err, closeErr))
 		}

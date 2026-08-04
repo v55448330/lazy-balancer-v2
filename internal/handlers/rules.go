@@ -667,9 +667,9 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 				u.Protocol = "http"
 			}
 		}
-		_, err = tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections) 
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			caddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections)
+		_, err = tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			caddyID, u.Host, u.Port, u.Weight, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections)
 		if err != nil {
 			tx.Rollback()
 			log.Printf("CreateRule upstream insert error: %v", err)
@@ -842,7 +842,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	// Capture old upstreams for potential DB rollback
 	var oldUpstreams []models.Upstream
-	oldUpstreamRows, err := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(domain,''), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id = ?", caddyID)
+	oldUpstreamRows, err := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id = ?", caddyID)
 	if err != nil {
 		log.Printf("UpdateRule failed to read existing upstreams for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
@@ -850,7 +850,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	for oldUpstreamRows.Next() {
 		var u models.Upstream
-		if err := oldUpstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
+		if err := oldUpstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
 			if closeErr := oldUpstreamRows.Close(); closeErr != nil {
 				log.Printf("UpdateRule failed to close existing upstream cursor for caddy_id=%s: %v", caddyID, closeErr)
 			}
@@ -1419,9 +1419,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				u.Protocol = "http"
 			}
 		}
-		if _, err := tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections) 
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			caddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections); err != nil {
+		if _, err := tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			caddyID, u.Host, u.Port, u.Weight, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections); err != nil {
 			tx.Rollback()
 			log.Printf("UpdateRule upstream insert error for caddy_id=%s: %v", caddyID, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新上游服务器失败"})
@@ -1812,7 +1812,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	}
 
 	upstreamRows, err := tx.Query(`
-		SELECT host, port, weight, COALESCE(domain,''), dynamic_dns, enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0)
+		SELECT host, port, weight, dynamic_dns, enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0)
 		FROM upstreams WHERE rule_id = ?
 	`, caddyID)
 	if err != nil {
@@ -1824,21 +1824,20 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			Host           string
 			Port           int
 			Weight         int
-			Domain         string
 			DynamicDNS     bool
 			Enabled        bool
 			Protocol       string
 			MaxConnections int
 		}
-		if err := upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.Domain, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
+		if err := upstreamRows.Scan(&u.Host, &u.Port, &u.Weight, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
 			upstreamRows.Close()
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "扫描上游失败，已回滚: " + err.Error()})
 			return
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO upstreams (rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, max_connections)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, newCaddyID, u.Host, u.Port, u.Weight, u.Domain, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections); err != nil {
+			INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, newCaddyID, u.Host, u.Port, u.Weight, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections); err != nil {
 			upstreamRows.Close()
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "复制上游失败，已回滚: " + err.Error()})
 			return

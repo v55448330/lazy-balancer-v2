@@ -8,7 +8,6 @@ export interface Upstream {
   host: string
   port: number
   weight: number
-  domain: string
   dynamic_dns: boolean
   enabled: boolean
   protocol: UpstreamProtocol

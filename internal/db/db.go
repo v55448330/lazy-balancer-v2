@@ -269,11 +269,9 @@ func createTables() error {
 		host VARCHAR(255) NOT NULL,
 		port INTEGER NOT NULL,
 		weight INTEGER DEFAULT 1,
-		domain VARCHAR(255),
 		dynamic_dns BOOLEAN DEFAULT FALSE,
 		enabled BOOLEAN DEFAULT TRUE,
 		protocol VARCHAR(10) DEFAULT 'http',
-		host_header VARCHAR(255),
 		dns_server VARCHAR(255) DEFAULT '',
 		max_connections INTEGER DEFAULT 0,
 		proxy_protocol VARCHAR(10) DEFAULT '',
@@ -783,6 +781,34 @@ func runMigrations() error {
 		return fmt.Errorf("failed to migrate lb_rules primary key: %w", err)
 	}
 
+	// Drop legacy columns from upstreams if they still exist (no longer used).
+	legacyUpstreamHostHeaderColumns := []string{"host_header"}
+	for _, col := range legacyUpstreamHostHeaderColumns {
+		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name=?", col).Scan(&colCount); err != nil {
+			return fmt.Errorf("failed to check legacy upstreams.%s: %w", col, err)
+		}
+		if colCount > 0 {
+			if _, err := DB.Exec("ALTER TABLE upstreams DROP COLUMN " + col); err != nil {
+				return fmt.Errorf("failed to drop legacy upstreams.%s: %w", col, err)
+			}
+			log.Printf("Dropped legacy column %s from upstreams", col)
+		}
+	}
+
+	// Drop legacy columns from upstreams if they still exist (no longer used).
+	legacyUpstreamDomainColumns := []string{"domain"}
+	for _, col := range legacyUpstreamDomainColumns {
+		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name=?", col).Scan(&colCount); err != nil {
+			return fmt.Errorf("failed to check legacy upstreams.%s: %w", col, err)
+		}
+		if colCount > 0 {
+			if _, err := DB.Exec("ALTER TABLE upstreams DROP COLUMN " + col); err != nil {
+				return fmt.Errorf("failed to drop legacy upstreams.%s: %w", col, err)
+			}
+			log.Printf("Dropped legacy column %s from upstreams", col)
+		}
+	}
+
 	// Seed default CA providers if table is empty.
 	var caCount int
 	if err := DB.QueryRow("SELECT COUNT(*) FROM ca_providers").Scan(&caCount); err != nil {
@@ -1229,28 +1255,26 @@ func migrateLbRulesPrimaryKey() error {
 		CREATE TABLE upstreams_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			rule_id VARCHAR(20) NOT NULL,
-			host VARCHAR(255) NOT NULL,
-			port INTEGER NOT NULL,
-			weight INTEGER DEFAULT 1,
-			domain VARCHAR(255),
-			dynamic_dns BOOLEAN DEFAULT FALSE,
-			enabled BOOLEAN DEFAULT TRUE,
-			protocol VARCHAR(10) DEFAULT 'http',
-			host_header VARCHAR(255),
-			dns_server VARCHAR(255) DEFAULT '',
-			max_connections INTEGER DEFAULT 0,
-			proxy_protocol VARCHAR(10) DEFAULT '',
-			FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
-		)
-	`)
+		host VARCHAR(255) NOT NULL,
+		port INTEGER NOT NULL,
+		weight INTEGER DEFAULT 1,
+		dynamic_dns BOOLEAN DEFAULT FALSE,
+		enabled BOOLEAN DEFAULT TRUE,
+		protocol VARCHAR(10) DEFAULT 'http',
+		dns_server VARCHAR(255) DEFAULT '',
+		max_connections INTEGER DEFAULT 0,
+		proxy_protocol VARCHAR(10) DEFAULT '',
+		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
+	)
+`)
 	if err != nil {
 		return rollbackMigration(tx, fmt.Errorf("failed to create upstreams_new: %w", err))
 	}
 
 	// Copy data from old upstreams table to new (convert rule_id from int to string)
 	_, err = tx.Exec(`
-		INSERT INTO upstreams_new (id, rule_id, host, port, weight, domain, dynamic_dns, enabled, protocol, host_header, dns_server, max_connections, proxy_protocol)
-		SELECT u.id, r.caddy_id, u.host, u.port, u.weight, u.domain, u.dynamic_dns, u.enabled, u.protocol, u.host_header, 
+	INSERT INTO upstreams_new (id, rule_id, host, port, weight, dynamic_dns, enabled, protocol, dns_server, max_connections, proxy_protocol)
+	SELECT u.id, r.caddy_id, u.host, u.port, u.weight, u.dynamic_dns, u.enabled, u.protocol,
 		       COALESCE(u.dns_server, ''), COALESCE(u.max_connections, 0), COALESCE(u.proxy_protocol, '')
 		FROM upstreams u
 		JOIN lb_rules r ON u.rule_id = r.id

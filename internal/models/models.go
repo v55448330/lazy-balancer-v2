@@ -246,7 +246,6 @@ type Upstream struct {
 	Host           string `json:"host"`
 	Port           int    `json:"port"`
 	Weight         int    `json:"weight"`
-	Domain         string `json:"domain"`
 	DynamicDNS     bool   `json:"dynamic_dns"`
 	Enabled        bool   `json:"enabled"`
 	Protocol       string `json:"protocol"`

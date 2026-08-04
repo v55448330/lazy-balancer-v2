@@ -300,7 +300,7 @@ func insertSnapshotRules(ctx context.Context, tx *sql.Tx, rules []models.LbRule)
 			return fmt.Errorf("写入快照规则 %s: %w", rule.CaddyID, err)
 		}
 		for _, upstream := range rule.Upstreams {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO upstreams (id,rule_id,host,port,weight,domain,dynamic_dns,enabled,protocol,dns_server,max_connections) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, upstream.ID, rule.CaddyID, upstream.Host, upstream.Port, upstream.Weight, upstream.Domain, upstream.DynamicDNS, upstream.Enabled, upstream.Protocol, upstream.DnsServer, upstream.MaxConnections); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO upstreams (id,rule_id,host,port,weight,dynamic_dns,enabled,protocol,dns_server,max_connections) VALUES (?,?,?,?,?,?,?,?,?,?)`, upstream.ID, rule.CaddyID, upstream.Host, upstream.Port, upstream.Weight, upstream.DynamicDNS, upstream.Enabled, upstream.Protocol, upstream.DnsServer, upstream.MaxConnections); err != nil {
 				return fmt.Errorf("写入快照上游 %s: %w", rule.CaddyID, err)
 			}
 		}
