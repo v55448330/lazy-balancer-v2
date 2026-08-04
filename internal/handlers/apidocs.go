@@ -230,6 +230,7 @@ var apiDocContracts = map[string]apiDocContract{
 	"POST /certificate-configs":            {successStatus: http.StatusCreated},
 	"POST /certificates/issue":             {requestOptional: true},
 	"GET /config/export":                   {rawResponse: true},
+	"GET /mcp/ops-playbook":                {rawResponse: true, responseContentType: "text/markdown"},
 	"PUT /admin-tls":                       {requestContentType: "multipart/form-data"},
 	"POST /admin-tls/inspect":              {requestContentType: "multipart/form-data"},
 	"GET /rules/:caddy_id/metrics-history": {queryParameters: []apiDocParameter{{"range", "string", "时间范围：1h、6h、24h 或 7d，默认 24h"}}},

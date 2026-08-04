@@ -10,4 +10,13 @@ func init() {
 		Errors:      []string{"401 unauthenticated"},
 		Description: "所有已登录用户可读；返回 MCP 工具名称、描述、映射的 REST 请求与读写分类，不包含内部参数 schema。",
 	})
+	apiDocRoutes = append(apiDocRoutes, apiDocRoute{
+		Method:      "GET",
+		Path:        "/mcp/ops-playbook",
+		Tag:         "MCP",
+		Summary:     "下载 MCP 操作手册",
+		Response:    `{"markdown":"（手册全文以 text/markdown 文件流返回，attachment 下载）"}`,
+		Errors:      []string{"401 unauthenticated"},
+		Description: "所有已登录用户可读；返回 MCP 操作手册 markdown 正文，与 MCP 资源 lazy-balancer://docs/ops-playbook 同一来源。",
+	})
 }

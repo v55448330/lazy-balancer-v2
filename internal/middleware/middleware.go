@@ -230,6 +230,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 				// Read-only lists (all authenticated users)
 				business.GET("/mcp/tools", h.GetMCPTools)
+				business.GET("/mcp/ops-playbook", h.GetMCPOpsPlaybook)
 				business.GET("/users", h.ListUsers)
 				business.GET("/api-keys", h.ListAPIKeys)
 				business.GET("/cluster/nodes", h.ListClusterNodes)
