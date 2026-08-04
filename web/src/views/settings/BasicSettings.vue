@@ -62,7 +62,8 @@
           <el-form-item label="强制 HTTPS">
             <el-switch v-model="adminTls.enabled" @change="onAdminTlsToggle" />
             <el-button v-if="adminTls.enabled" size="small" style="margin-left: 8px;" @click="openAdminTlsDialog">配置证书</el-button>
-            <el-text type="info" size="small" class="tip-inline">启用后 :8000 仅经 HTTPS 访问（HTTP 不再生效），需重启服务生效</el-text>
+            <el-text v-if="adminTlsDirty" type="warning" size="small" class="tip-inline">已暂存，点击下方保存后生效</el-text>
+            <el-text v-else type="info" size="small" class="tip-inline">启用后 :8000 仅经 HTTPS 访问（HTTP 不再生效），需重启服务生效</el-text>
           </el-form-item>
           <el-form-item label="运行日志">
             <el-button size="small" :icon="View" @click="openAppLogDialog">查看日志</el-button>
@@ -146,7 +147,7 @@
       </el-form>
       <template #footer>
         <el-button @click="adminTlsDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="adminTlsSaving" :disabled="adminTlsForm.mode === 'upload' && (!adminTlsForm.certInfo || adminTlsForm.certInfo.days_left <= 0)" @click="saveAdminTls">保存</el-button>
+        <el-button type="primary" :disabled="adminTlsForm.mode === 'upload' && (!adminTlsForm.certInfo || adminTlsForm.certInfo.days_left <= 0)" @click="confirmAdminTls">确定</el-button>
       </template>
     </el-dialog>
 
@@ -503,41 +504,59 @@ const emit = defineEmits<{
 const saving = ref(false)
 
 const adminTls = ref({ enabled: false, mode: 'selfsigned' })
+const adminTlsSaved = ref({ enabled: false, mode: 'selfsigned' })
+const adminTlsHasCert = ref(false)
 const adminTlsForm = ref<AdminTlsForm>({ mode: 'selfsigned', certFile: null, keyFile: null, certInfo: null, inspecting: false })
+const stagedAdminTlsCert = ref<{ certFile: File; keyFile: File; certInfo: AdminTlsCertInfo } | null>(null)
 const adminTlsDialogVisible = ref(false)
-const adminTlsSaving = ref(false)
+
+const adminTlsDirty = computed(() => {
+  if (adminTls.value.enabled !== adminTlsSaved.value.enabled) return true
+  if (!adminTls.value.enabled) return false
+  return adminTls.value.mode !== adminTlsSaved.value.mode || stagedAdminTlsCert.value !== null
+})
 
 const loadAdminTls = async () => {
   try {
     const res = await request.get('/admin-tls')
     if (res.data) {
-      adminTls.value = { enabled: res.data.enabled, mode: res.data.mode || 'selfsigned' }
+      const saved = { enabled: res.data.enabled, mode: res.data.mode || 'selfsigned' }
+      adminTlsSaved.value = saved
+      adminTls.value = { ...saved }
+      adminTlsHasCert.value = res.data.cert_info != null || saved.mode === 'selfsigned'
+      stagedAdminTlsCert.value = null
     }
   } catch { /* ignore */ }
 }
 
 const openAdminTlsDialog = () => {
-  adminTlsForm.value = { mode: adminTls.value.mode === 'upload' ? 'upload' : 'selfsigned', certFile: null, keyFile: null, certInfo: null, inspecting: false }
+  adminTlsForm.value = {
+    mode: adminTls.value.mode === 'upload' ? 'upload' : 'selfsigned',
+    certFile: stagedAdminTlsCert.value?.certFile ?? null,
+    keyFile: stagedAdminTlsCert.value?.keyFile ?? null,
+    certInfo: stagedAdminTlsCert.value?.certInfo ?? null,
+    inspecting: false,
+  }
   adminTlsDialogVisible.value = true
 }
 
 const onAdminTlsDialogClose = () => {
   tlsInspectSeq++
   adminTlsForm.value = { mode: 'selfsigned', certFile: null, keyFile: null, certInfo: null, inspecting: false }
-  loadAdminTls()
+  // 由开关触发的弹窗若未点「确定」就关闭，开关回退到已保存状态
+  if (tlsDialogFromToggle) {
+    tlsDialogFromToggle = false
+    adminTls.value.enabled = adminTlsSaved.value.enabled
+  }
 }
 
-const onAdminTlsToggle = async (val: string | number | boolean) => {
-  if (!val) {
-    try {
-      await request.put('/admin-tls', formDataOf({ enabled: 'false' }))
-      notifyTlsRestarting(false)
-    } catch {
-      adminTls.value.enabled = true
-    }
-    return
+// 开关仅暂存，实际生效由底部「保存」统一提交（含关闭操作）
+let tlsDialogFromToggle = false
+const onAdminTlsToggle = (val: string | number | boolean) => {
+  if (val) {
+    tlsDialogFromToggle = true
+    openAdminTlsDialog()
   }
-  openAdminTlsDialog()
 }
 
 const formDataOf = (fields: Record<string, string>): FormData => {
@@ -600,22 +619,16 @@ const notifyTlsRestarting = (toHttps: boolean) => {
   }, 15000)
 }
 
-const saveAdminTls = async () => {
-  adminTlsSaving.value = true
-  try {
-    const fd = formDataOf({ enabled: 'true', mode: adminTlsForm.value.mode })
-    if (adminTlsForm.value.mode === 'upload') {
-      const { certFile, keyFile } = adminTlsForm.value
-      if (!certFile || !keyFile || !adminTlsForm.value.certInfo || adminTlsForm.value.certInfo.days_left <= 0) return
-      fd.append('cert_file', certFile)
-      fd.append('key_file', keyFile)
-    }
-    await request.put('/admin-tls', fd)
-    adminTlsDialogVisible.value = false
-    notifyTlsRestarting(true)
-  } finally {
-    adminTlsSaving.value = false
-  }
+// 弹窗「确定」仅暂存证书选择，不发请求；随底部「保存」统一提交
+const confirmAdminTls = () => {
+  const { mode, certFile, keyFile, certInfo } = adminTlsForm.value
+  if (mode === 'upload' && (!certFile || !keyFile || !certInfo || certInfo.days_left <= 0)) return
+  tlsDialogFromToggle = false
+  adminTls.value.mode = mode
+  stagedAdminTlsCert.value = mode === 'upload' && certFile && keyFile && certInfo
+    ? { certFile, keyFile, certInfo }
+    : null
+  adminTlsDialogVisible.value = false
 }
 
 loadAdminTls()
@@ -641,6 +654,11 @@ const handleRestart = async () => {
 const handleSave = async () => {
   if (isReadOnly.value) return
   if (saving.value) return
+  const tlsPending = adminTlsDirty.value
+  if (tlsPending && adminTls.value.enabled && adminTls.value.mode === 'upload' && !stagedAdminTlsCert.value && !adminTlsHasCert.value) {
+    ElMessage.warning('请先在「配置证书」中选择并校验上传证书')
+    return
+  }
   saving.value = true
   try {
     const payload = {
@@ -653,16 +671,37 @@ const handleSave = async () => {
       source: 'basic',
     }
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
-    if (preview.data?.changed) {
-      const changes = preview.data.changes.length > 0 ? preview.data.changes.join('；') : '检测到配置变更'
-      await ElMessageBox.confirm(changes, `确认保存${preview.data.section || '基础设置'}？`, {
+    const changes = [...(preview.data?.changes ?? [])]
+    if (tlsPending) {
+      changes.unshift(
+        adminTls.value.enabled
+          ? `强制 HTTPS：启用（${adminTls.value.mode === 'upload' ? '上传证书' : '本地自签名证书'}），保存后服务将重启`
+          : '强制 HTTPS：禁用，保存后服务将重启',
+      )
+    }
+    if (preview.data?.changed || tlsPending) {
+      await ElMessageBox.confirm(changes.length > 0 ? changes.join('；') : '检测到配置变更', `确认保存${preview.data?.section || '基础设置'}？`, {
         confirmButtonText: '确认',
         cancelButtonText: '取消',
         type: 'warning',
       })
     }
     await request.put('/config', payload)
-    ElMessage.success('保存成功')
+    if (tlsPending) {
+      const fd = formDataOf({ enabled: String(adminTls.value.enabled), mode: adminTls.value.mode })
+      const staged = stagedAdminTlsCert.value
+      if (adminTls.value.enabled && adminTls.value.mode === 'upload' && staged) {
+        fd.append('cert_file', staged.certFile)
+        fd.append('key_file', staged.keyFile)
+      }
+      await request.put('/admin-tls', fd)
+      adminTlsSaved.value = { ...adminTls.value }
+      adminTlsHasCert.value = adminTlsHasCert.value || adminTls.value.enabled
+      stagedAdminTlsCert.value = null
+      notifyTlsRestarting(adminTls.value.enabled)
+    } else {
+      ElMessage.success('保存成功')
+    }
     emit('save')
   } catch (error) {
     console.error('Failed to save basic settings:', error)
