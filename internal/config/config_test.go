@@ -38,3 +38,33 @@ func TestLoad_parses_metrics_interval_with_safe_minimum(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_resolves_log_file_with_default(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+	tests := []struct {
+		name        string
+		envValue    string
+		wantPath    string
+		wantEnabled bool
+	}{
+		{name: "env override", envValue: "/tmp/custom.log", wantPath: "/tmp/custom.log", wantEnabled: true},
+		{name: "empty env falls back to default", envValue: "", wantPath: "/app/logs/lazy-balancer.log", wantEnabled: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			t.Setenv("LOG_FILE", test.envValue)
+
+			// When
+			loaded := Load("")
+
+			// Then
+			if loaded.LogFile != test.wantPath {
+				t.Fatalf("log file=%q, want %q", loaded.LogFile, test.wantPath)
+			}
+			if loaded.LogFileEnabled != test.wantEnabled {
+				t.Fatalf("log file enabled=%v, want %v", loaded.LogFileEnabled, test.wantEnabled)
+			}
+		})
+	}
+}

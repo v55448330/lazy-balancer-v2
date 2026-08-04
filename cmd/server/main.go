@@ -46,11 +46,11 @@ func run() error {
 	log.SetFlags(0)
 	var logWriter io.Writer = os.Stdout
 	var runtimeLogFile string
-	if logFile := os.Getenv("LOG_FILE"); logFile != "" {
-		if w, err := services.NewRotatingFileWriter(logFile); err == nil {
+	if cfg.LogFileEnabled {
+		if w, err := services.NewRotatingFileWriter(cfg.LogFile); err == nil {
 			logWriter = io.MultiWriter(os.Stdout, w)
 			defer w.Close()
-			runtimeLogFile = logFile
+			runtimeLogFile = cfg.LogFile
 		}
 	}
 	log.SetOutput(services.NewApplicationLogWriter(&tzLogWriter{w: logWriter}))

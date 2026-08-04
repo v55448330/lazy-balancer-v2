@@ -74,7 +74,7 @@ func (h *Handlers) GetConnectionStats(c *gin.Context) {
 }
 
 func (h *Handlers) GetAppLogs(c *gin.Context) {
-	const logPath = "/app/logs/lazy-balancer.log"
+	logPath := h.cfg.LogFile
 	const maxBytes = 128 * 1024
 	const maxLines = 500
 

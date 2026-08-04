@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 )
 
+const defaultLogFile = "/app/logs/lazy-balancer.log"
+
 type Config struct {
 	// Server
 	Port      int    `json:"port"`
@@ -27,6 +29,8 @@ type Config struct {
 	NodeName string `json:"node_name"`
 
 	// Log
+	LogFile        string `json:"log_file"` // effective runtime log path (LOG_FILE env or default)
+	LogFileEnabled bool   `json:"-"`        // true only when LOG_FILE is explicitly set
 
 	// JWT
 	JWTSecret string `json:"jwt_secret"`
@@ -46,6 +50,8 @@ func Load(path string) *Config {
 		NodeName:        getEnv("NODE_NAME", "node-1"),
 		JWTSecret:       getEnv("JWT_SECRET", ""),
 		Version:         getEnv("APP_VERSION", "2.0.6"),
+		LogFile:         getEnv("LOG_FILE", defaultLogFile),
+		LogFileEnabled:  os.Getenv("LOG_FILE") != "",
 	}
 
 	// Load from config file if provided
