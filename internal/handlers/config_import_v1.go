@@ -587,7 +587,11 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
 	recordAudit(c, "重载", "Caddy配置", "导入配置后自动重载")
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已导入 %d 条规则", imported), Data: gin.H{"imported": imported, "disabled_conflicts": disabledConflicts, "warnings": strategyWarnings}})
+	tlsSuffix := ""
+	if tlsCount > 0 {
+		tlsSuffix = fmt.Sprintf("、TLS 规则 %d 条", tlsCount)
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：规则 %d 条、上游 %d 个%s", imported, upstreamCount, tlsSuffix), Data: gin.H{"imported": imported, "disabled_conflicts": disabledConflicts, "warnings": strategyWarnings}})
 }
 
 func tlsSource(r convertedRule) string {
