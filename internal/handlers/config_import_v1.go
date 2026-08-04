@@ -231,7 +231,7 @@ func convertV1Rules(proxies []v1Proxy, upstreams map[int]v1Upstream) ([]converte
 	for _, p := range proxies {
 		f := p.Fields
 		strategy, mapped := mapV1BalancerStrategy(f.BalancerType)
-		if !mapped {
+		if !mapped && f.BalancerType != "" {
 			warnings = append(warnings, fmt.Sprintf("规则 %s 的负载策略 %q 无法映射，已使用 weighted_round_robin", f.ProxyName, f.BalancerType))
 		}
 		rule := convertedRule{
