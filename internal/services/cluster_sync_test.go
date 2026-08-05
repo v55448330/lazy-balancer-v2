@@ -24,6 +24,25 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
+func TestVerifySnapshotConsistency_allows_zero_upstream_rule_with_warning(t *testing.T) {
+	// Given：主节点存在启用但零上游的规则（历史/导入残留的数据漂移）
+	snapshot := models.ClusterSnapshot{
+		Rules: []models.LbRule{
+			{CaddyID: "lb_drift", Enabled: true},
+			{CaddyID: "lb_healthy", Enabled: true, Upstreams: []models.Upstream{{Host: "127.0.0.1", Port: 8080}}},
+			{CaddyID: "lb_disabled", Enabled: false},
+		},
+	}
+
+	// When
+	err := verifySnapshotConsistency(snapshot)
+
+	// Then：不再拒绝快照，生成端会跳过该规则并告警
+	if err != nil {
+		t.Fatalf("zero-upstream snapshot rejected: %v", err)
+	}
+}
+
 type syncDrainLifecycle struct {
 	sync        *SyncService
 	stopEntered chan struct{}

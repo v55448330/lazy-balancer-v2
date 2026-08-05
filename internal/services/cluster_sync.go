@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -739,10 +740,13 @@ func verifySnapshotSignature(snapshot models.ClusterSnapshot, clusterToken strin
 	return nil
 }
 
+// verifySnapshotConsistency 记录快照中的数据漂移。启用但零上游的规则通常是
+// 历史数据或导入残留，需要人工清理；生成端已对该类规则跳过并告警，此处不再
+// 拒绝快照，避免主节点可运行而从节点永久降级。
 func verifySnapshotConsistency(snapshot models.ClusterSnapshot) error {
 	for _, rule := range snapshot.Rules {
 		if rule.Enabled && len(rule.Upstreams) == 0 {
-			return fmt.Errorf("快照一致性校验失败：规则 %s 没有上游", rule.CaddyID)
+			log.Printf("⚠️ 警告：快照中启用规则 %s 没有上游（数据漂移，需人工清理），生成配置时将跳过该规则", rule.CaddyID)
 		}
 	}
 	return nil
