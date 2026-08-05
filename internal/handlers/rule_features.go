@@ -85,15 +85,17 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 			}
 		}
 	}
+	// Round 38 B2: 对非指针字段（handler 已在调用前完成 merge），直接使用 req 值。
+	// 对指针字段，nil 时用 existing 值，非 nil 时解引用。
 	input := ruleFeatureInput{
 		Protocol:                   existing.Protocol,
-		Strategy:                   existing.Strategy,
+		Strategy:                   req.Strategy,
 		DynamicDNS:                 existing.DynamicDNS,
 		EnabledUpstreamCount:       enabledUpstreams,
-		HealthCheckInterval:        existing.HealthCheckInterval,
-		HealthCheckTimeout:         existing.HealthCheckTimeout,
+		HealthCheckInterval:        req.HealthCheckInterval,
+		HealthCheckTimeout:         req.HealthCheckTimeout,
 		EnableCompress:             existing.EnableCompress,
-		CompressTypes:              existing.CompressTypes,
+		CompressTypes:              req.CompressTypes,
 		IPACLMode:                  existing.IPACLMode,
 		IPACLList:                  existing.IPACLList,
 		CustomRoutesEnabled:        existing.CustomRoutesEnabled,
@@ -103,6 +105,12 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 		ProxyReadTimeout:           existing.ProxyReadTimeout,
 		ProxyWriteTimeout:          existing.ProxyWriteTimeout,
 		ProxyStreamTimeout:         existing.ProxyStreamTimeout,
+	}
+	if req.DynamicDNS != nil {
+		input.DynamicDNS = *req.DynamicDNS
+	}
+	if req.EnableCompress != nil {
+		input.EnableCompress = *req.EnableCompress
 	}
 	if req.IPACLMode != nil {
 		input.IPACLMode = *req.IPACLMode

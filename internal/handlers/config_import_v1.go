@@ -529,6 +529,18 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			return
 		}
 		affectedRuleIDs = append(affectedRuleIDs, caddyID)
+		// Round 38 B4: v1 导入规则也需通过 strategy 白名单校验。
+		mappedStrategy := r.Strategy
+		if mappedStrategy == "" {
+			mappedStrategy = "weighted_round_robin"
+		}
+		if validateErr := validateRuleFeatures(ruleFeatureInput{
+			Protocol: r.Protocol, Strategy: mappedStrategy,
+			CompressTypes: "gzip",
+		}); validateErr != nil {
+			conversionWarnings = append(conversionWarnings, fmt.Sprintf("规则 %s 跳过：%s", r.Name, validateErr.Error()))
+			continue
+		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,

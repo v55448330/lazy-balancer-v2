@@ -1838,6 +1838,28 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		}
 	}()
 
+	// Round 38 B3: DuplicateRule 必须经过与 CreateRule 一致的校验。
+	enabledUpstreamCount := 0
+	for _, u := range rule.Upstreams {
+		if u.Enabled {
+			enabledUpstreamCount++
+		}
+	}
+	if err := validateRuleFeatures(ruleFeatureInput{
+		Protocol: rule.Protocol, Strategy: rule.Strategy, DynamicDNS: rule.DynamicDNS,
+		EnabledUpstreamCount: enabledUpstreamCount,
+		HealthCheckInterval:  rule.HealthCheckInterval, HealthCheckTimeout: rule.HealthCheckTimeout,
+		EnableCompress: rule.EnableCompress, CompressTypes: rule.CompressTypes,
+		IPACLMode: rule.IPACLMode, IPACLList: rule.IPACLList,
+		CustomRoutesEnabled: rule.CustomRoutesEnabled, PathRules: rule.PathRules,
+		ProxyDialTimeout: rule.ProxyDialTimeout, ProxyResponseHeaderTimeout: rule.ProxyResponseHeaderTimeout,
+		ProxyReadTimeout: rule.ProxyReadTimeout, ProxyWriteTimeout: rule.ProxyWriteTimeout,
+		ProxyStreamTimeout: rule.ProxyStreamTimeout,
+	}); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "源规则配置不合法：" + err.Error()})
+		return
+	}
+
 	if _, err := tx.Exec(`
 		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
 			health_check_path, health_check_interval, health_check_timeout,
