@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -1289,6 +1290,52 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 	layer4Servers := make(map[string]interface{})
 
 	for port, rules := range tcpServersByPort {
+		// Round 35 I-6: TCP 规则暂不支持动态 DNS（caddy-l4 静态 dial）。
+		// fail-closed：检测到 DynamicDNS=true 的 TCP 规则，记告警并跳过整个端口的所有规则，
+		// 避免静默用静态地址误导用户。
+		hasDynamicDNS := false
+		for _, ru := range rules {
+			if ru.rule.DynamicDNS {
+				hasDynamicDNS = true
+				log.Printf("警告：TCP 规则 %s 启用了动态 DNS，但 TCP 协议暂不支持动态解析，端口 %d 的所有 TCP 规则已被跳过",
+					ru.rule.CaddyID, port)
+			}
+		}
+		if hasDynamicDNS {
+			continue
+		}
+
+		// Round 35 I-5: TCP 多规则同端口时，仅首条规则的服务器级配置生效。
+		// fail-closed：检测到多条规则在策略/健康检查/PROXY v2/IP ACL/超时上不一致时，
+		// 记告警并跳过整个端口的所有规则，强制用户解决冲突（对齐配置或换端口）。
+		if len(rules) > 1 {
+			first := rules[0].rule
+			conflict := false
+			for _, ru := range rules[1:] {
+				r := ru.rule
+				if r.Strategy != first.Strategy ||
+					r.HealthCheckInterval != first.HealthCheckInterval ||
+					r.HealthCheckTimeout != first.HealthCheckTimeout ||
+					r.HealthCheckUnhealthyThreshold != first.HealthCheckUnhealthyThreshold ||
+					r.HealthCheckHealthyThreshold != first.HealthCheckHealthyThreshold ||
+					r.EnableActiveHealthCheck != first.EnableActiveHealthCheck ||
+					r.TCPHealthCheckPort != first.TCPHealthCheckPort ||
+					r.TCPProxyProtocol != first.TCPProxyProtocol ||
+					r.TCPTryDuration != first.TCPTryDuration ||
+					r.TCPTryInterval != first.TCPTryInterval ||
+					r.IPACLMode != first.IPACLMode ||
+					!reflect.DeepEqual(r.IPACLList, first.IPACLList) {
+					conflict = true
+					log.Printf("警告：端口 %d 上存在多条 TCP 规则但服务器级配置不一致（规则 %s 与 %s），全部跳过以避免静默丢失配置。请对齐配置或使用不同端口",
+						port, first.CaddyID, r.CaddyID)
+					break
+				}
+			}
+			if conflict {
+				continue
+			}
+		}
+
 		r := rules[0].rule
 		ruleConfig := SingleRuleConfig{
 			CaddyID:                       r.CaddyID,
