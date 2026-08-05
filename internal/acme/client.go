@@ -135,6 +135,12 @@ func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string, eabKey 
 		block, _ := pem.Decode(data)
 		if block != nil {
 			if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
+				fi, _ := os.Stat(keyPath)
+				created := ""
+				if fi != nil {
+					created = fmt.Sprintf("，首次注册时间: %s", fi.ModTime().Format("2006-01-02 15:04:05"))
+				}
+				log.Printf("ACME 账户密钥 %s 已加载%s", filepath.Base(keyPath), created)
 				if err := writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID); err != nil {
 					return nil, err
 				}
@@ -199,6 +205,9 @@ func (c *Client) RegisterAccount(ctx context.Context) error {
 		if !strings.Contains(lower, "account already exists") && !strings.Contains(lower, "already registered") {
 			return err
 		}
+		log.Printf("ACME 账户已注册，复用现有账户（directory: %s）", c.DirectoryURL)
+	} else {
+		log.Printf("ACME 账户注册成功（directory: %s）", c.DirectoryURL)
 	}
 	return c.removeStaleAccountKeys()
 }
