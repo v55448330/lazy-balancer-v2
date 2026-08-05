@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"database/sql"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -339,8 +340,15 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// real issuance flow. If the CA is down (e.g. ZeroSSL 504), fail fast and
 	// let the retry scheduler handle the next attempt.
 	if provider.Provider == "zerossl" {
+		var credsBefore models.CAProviderCredentials
+		if provider.Credentials != "" {
+			json.Unmarshal([]byte(provider.Credentials), &credsBefore)
+		}
+		hasEAB := credsBefore.EABKID != "" && credsBefore.EABHMACKey != ""
 		if err := AutoProvisionZeroSSLEAB(ctx, &provider); err != nil {
 			logger.Log("creating_account", fmt.Sprintf("ZeroSSL EAB 自动获取失败: %v", err))
+		} else if !hasEAB {
+			logger.Log("creating_account", "ZeroSSL EAB 自动获取成功，已持久化")
 		}
 	}
 	logger.Log("creating_account", fmt.Sprintf("测试 CA 提供商 %s (%s) 连通性", provider.Name, provider.Provider))
