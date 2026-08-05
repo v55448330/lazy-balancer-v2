@@ -284,7 +284,7 @@ func TestConfigBackup_export_import_roundtrip(t *testing.T) {
 	if _, err := db.DB.Exec("INSERT INTO users (username, password_hash, role) VALUES ('keep', 'hash', 'admin')"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	if _, err := db.DB.Exec("INSERT INTO lb_rules (caddy_id, name, protocol, listen_port, enabled) VALUES ('lb_bak1', 'backup-rule', 'http', 8080, 1)"); err != nil {
+	if _, err := db.DB.Exec("INSERT INTO lb_rules (caddy_id, name, protocol, domain, listen_port, enabled) VALUES ('lb_bak1', 'backup-rule', 'http', 'backup.example.test', 8080, 1)"); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
 	if _, err := db.DB.Exec("INSERT INTO upstreams (rule_id, host, port, weight, enabled) VALUES ('lb_bak1', '127.0.0.1', 9000, 1, 1)"); err != nil {
@@ -562,7 +562,7 @@ func TestImportConfigBackup_joins_import_and_certificate_job_recovery_failures(t
 	requeueNonTerminalCertJobs = func() error { return errors.New("requeue failed") }
 	t.Cleanup(func() { requeueNonTerminalCertJobs = oldRequeue })
 	backup := completeBackupJSON(t, map[string][]map[string]any{
-		"lb_rules": {{"caddy_id": "lb_bad_recovery", "name": "bad", "protocol": "http", "listen_port": 8443, "enable_tls": 1, "tls_source": "manual", "tls_cert": "invalid-cert", "tls_key": "invalid-key"}},
+		"lb_rules": {{"caddy_id": "lb_bad_recovery", "name": "bad", "protocol": "http", "domain": "bad-recovery.example.test", "listen_port": 8443, "enable_tls": 1, "tls_source": "manual", "tls_cert": "invalid-cert", "tls_key": "invalid-key"}},
 	})
 	router := gin.New()
 	router.POST("/config/import", h.ImportConfigBackup)
@@ -739,6 +739,53 @@ func TestImportConfigBackup_rolls_back_when_certificate_materialization_fails(t 
 	}
 }
 
+func TestImportConfigBackup_skips_empty_domain_HTTP_rules(t *testing.T) {
+	// Given：v2 备份中一条 HTTP 规则域名为空，一条 HTTP 规则正常，一条 TCP 规则无域名
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"lb_rules": {
+			{"caddy_id": "lb_empty_domain", "name": "empty-domain", "protocol": "http", "domain": "", "listen_port": 8441, "enabled": 1},
+			{"caddy_id": "lb_valid", "name": "valid", "protocol": "http", "domain": "valid.example.test", "listen_port": 8442, "enabled": 1},
+			{"caddy_id": "lb_tcp", "name": "tcp", "protocol": "tcp", "listen_port": 8443, "enabled": 1},
+		},
+		"upstreams": {
+			{"rule_id": "lb_empty_domain", "host": "127.0.0.1", "port": 9001, "weight": 1, "enabled": 1},
+			{"rule_id": "lb_valid", "host": "127.0.0.1", "port": 9002, "weight": 1, "enabled": 1},
+			{"rule_id": "lb_tcp", "host": "127.0.0.1", "port": 9003, "weight": 1, "enabled": 1},
+		},
+	})
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then：空域名 HTTP 规则及其上游跳过并告警，其余规则正常导入
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "域名为空") {
+		t.Fatalf("import response missing skip warning: %s", response.Body.String())
+	}
+	var skippedRules, importedRules, orphanUpstreams int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_empty_domain'").Scan(&skippedRules); err != nil {
+		t.Fatalf("count skipped rules: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id IN ('lb_valid','lb_tcp')").Scan(&importedRules); err != nil {
+		t.Fatalf("count imported rules: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM upstreams WHERE rule_id='lb_empty_domain'").Scan(&orphanUpstreams); err != nil {
+		t.Fatalf("count orphan upstreams: %v", err)
+	}
+	if skippedRules != 0 || importedRules != 2 || orphanUpstreams != 0 {
+		t.Fatalf("after import: skipped=%d imported=%d orphan-upstreams=%d, want 0/2/0", skippedRules, importedRules, orphanUpstreams)
+	}
+}
+
 func TestImportConfigBackup_restores_partial_certificate_materialization(t *testing.T) {
 	// Given
 	harness := newImportRollbackHarness(t)
@@ -819,7 +866,7 @@ func TestImportConfigBackup_reports_import_and_runtime_restore_failures(t *testi
 	harness := newImportRollbackHarness(t)
 	harness.failRestore()
 	backup := completeBackupJSON(t, map[string][]map[string]any{
-		"lb_rules": {{"caddy_id": "lb_bad_restore", "name": "bad-cert", "protocol": "http", "listen_port": 8443, "enable_tls": 1, "tls_source": "manual", "tls_cert": "invalid-cert", "tls_key": "invalid-key"}},
+		"lb_rules": {{"caddy_id": "lb_bad_restore", "name": "bad-cert", "protocol": "http", "domain": "bad-restore.example.test", "listen_port": 8443, "enable_tls": 1, "tls_source": "manual", "tls_cert": "invalid-cert", "tls_key": "invalid-key"}},
 	})
 	router := gin.New()
 	router.POST("/config/import", harness.handler.ImportConfigBackup)

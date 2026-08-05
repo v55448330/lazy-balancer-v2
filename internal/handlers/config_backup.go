@@ -279,6 +279,53 @@ func backupInteger(value any) (int, bool) {
 	return 0, false
 }
 
+// skipEmptyDomainHTTPRules 移除域名为空的 HTTP 规则及其关联行（上游/路径规则/证书任务），
+// 返回跳过警告；TCP 规则无需域名，不受影响。
+func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) []string {
+	rows, exists := tables["lb_rules"]
+	if !exists {
+		return nil
+	}
+	skippedIDs := map[string]bool{}
+	warnings := []string{}
+	kept := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		protocol, _ := row["protocol"].(string)
+		domain, _ := row["domain"].(string)
+		if protocol != "http" || strings.TrimSpace(domain) != "" {
+			kept = append(kept, row)
+			continue
+		}
+		caddyID, _ := row["caddy_id"].(string)
+		name, _ := row["name"].(string)
+		if name == "" {
+			name = caddyID
+		}
+		skippedIDs[caddyID] = true
+		warnings = append(warnings, fmt.Sprintf("规则 %s 的域名为空，已跳过导入", name))
+	}
+	if len(skippedIDs) == 0 {
+		return nil
+	}
+	tables["lb_rules"] = kept
+	for _, table := range []string{"upstreams", "path_rules", "cert_jobs"} {
+		related, exists := tables[table]
+		if !exists {
+			continue
+		}
+		filtered := make([]map[string]any, 0, len(related))
+		for _, row := range related {
+			ruleID, _ := row["rule_id"].(string)
+			if skippedIDs[ruleID] {
+				continue
+			}
+			filtered = append(filtered, row)
+		}
+		tables[table] = filtered
+	}
+	return warnings
+}
+
 func disableV2RuleConflicts(rows []map[string]any) []disabledRuleConflict {
 	candidates := make([]ruleConflictCandidate, len(rows))
 	for index, row := range rows {
@@ -379,6 +426,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	skipWarnings := skipEmptyDomainHTTPRules(backup.Tables)
 	disabledConflicts := disableV2RuleConflicts(backup.Tables["lb_rules"])
 	jwtExpireClamped := false
 	if value, exists := backup.Config["jwt_expire_minutes"]; exists {
@@ -513,12 +561,15 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			auditDetail = services.FormatAuditDetail(auditDetail, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
 		}
 		recordAudit(c, auditAction, "配置备份", auditDetail)
-		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts}})
+		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": skipWarnings}})
 		return
 	}
 	auditParts := []string{"来源：v2 备份（覆盖导入）", counts}
 	if jwtExpireClamped {
 		auditParts = append(auditParts, "jwt_expire_minutes 越界，已重置为 20")
+	}
+	if len(skipWarnings) > 0 {
+		auditParts = append(auditParts, "空域名规则跳过："+strings.Join(skipWarnings, "；"))
 	}
 	if len(disabledConflicts) > 0 {
 		auditParts = append(auditParts, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
@@ -526,7 +577,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
 	recordAudit(c, "重载", "Caddy配置", "导入配置后自动重载")
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": skipWarnings}})
 }
 
 func importCountsDetail(tables map[string][]map[string]any) string {

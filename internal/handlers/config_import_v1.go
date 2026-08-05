@@ -252,6 +252,10 @@ func convertV1Rules(proxies []v1Proxy, upstreams map[int]v1Upstream) ([]converte
 		if !f.Protocol {
 			rule.Protocol = "tcp"
 		}
+		if rule.Protocol == "http" && strings.TrimSpace(rule.Domain) == "" {
+			warnings = append(warnings, fmt.Sprintf("规则 %s 的域名为空，已跳过导入", f.ProxyName))
+			continue
+		}
 		if rule.HealthFails <= 0 {
 			rule.HealthFails = 3
 		}
@@ -393,12 +397,13 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
 			return
 		}
+		skipWarnings := skipEmptyDomainHTTPRules(backup.Tables)
 		disabledConflicts := disableV2RuleConflicts(backup.Tables["lb_rules"])
 		summary := map[string]int{}
 		for table, rows := range backup.Tables {
 			summary[table] = len(rows)
 		}
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: true, Type: "v2", Summary: summary, DisabledConflicts: disabledConflicts}})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: true, Type: "v2", Summary: summary, Warnings: skipWarnings, DisabledConflicts: disabledConflicts}})
 		return
 	}
 	var v1 v1Backup
@@ -408,7 +413,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v1", Error: err.Error()}})
 			return
 		}
-		rules, strategyWarnings := convertV1Rules(proxies, upstreams)
+		rules, conversionWarnings := convertV1Rules(proxies, upstreams)
 		if err := validateConvertedV1Rules(rules); err != nil {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v1", Error: err.Error()}})
 			return
@@ -427,7 +432,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			"v1 不支持 ACME，HTTPS 规则的证书与私钥将以手动方式随规则导入",
 			"nginx 特有配置（custom_config、日志路径等）已忽略",
 		}
-		warnings = append(warnings, strategyWarnings...)
+		warnings = append(warnings, conversionWarnings...)
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{
 			Valid: true,
 			Type:  "v1",
@@ -472,7 +477,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	rules, strategyWarnings := convertV1Rules(proxies, upstreams)
+	rules, conversionWarnings := convertV1Rules(proxies, upstreams)
 	if err := validateConvertedV1Rules(rules); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -586,8 +591,8 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	if len(disabledConflicts) > 0 {
 		auditParts = append(auditParts, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
 	}
-	if len(strategyWarnings) > 0 {
-		auditParts = append(auditParts, "策略转换警告："+strings.Join(strategyWarnings, "；"))
+	if len(conversionWarnings) > 0 {
+		auditParts = append(auditParts, "转换警告："+strings.Join(conversionWarnings, "；"))
 	}
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
@@ -596,7 +601,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	if tlsCount > 0 {
 		tlsSuffix = fmt.Sprintf("、TLS 规则 %d 条", tlsCount)
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：规则 %d 条、上游 %d 个%s", imported, upstreamCount, tlsSuffix), Data: gin.H{"imported": imported, "disabled_conflicts": disabledConflicts, "warnings": strategyWarnings}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：规则 %d 条、上游 %d 个%s", imported, upstreamCount, tlsSuffix), Data: gin.H{"imported": imported, "disabled_conflicts": disabledConflicts, "warnings": conversionWarnings}})
 }
 
 func tlsSource(r convertedRule) string {

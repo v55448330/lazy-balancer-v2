@@ -213,6 +213,50 @@ func TestValidateConfigImport_rejects_disabled_v1_rule_with_out_of_range_port(t 
 	}
 }
 
+func TestImportV1Config_skips_empty_domain_HTTP_rules(t *testing.T) {
+	// Given：v1 备份中一条 HTTP 规则域名为空（无法创建的死规则），一条 HTTP 规则正常，一条 TCP 规则无域名
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	backup := `{
+		"proxy_config":{"config":[
+			{"pk":1,"fields":{"proxy_name":"empty-domain","protocol":true,"listen":8441,"server_name":"","status":true,"upstream_list":[1]}},
+			{"pk":2,"fields":{"proxy_name":"valid-rule","protocol":true,"listen":8442,"server_name":"valid.example.test","status":true,"upstream_list":[2]}},
+			{"pk":3,"fields":{"proxy_name":"tcp-rule","protocol":false,"listen":8443,"server_name":"","status":true,"upstream_list":[3]}}
+		]},
+		"upstream_config":{"config":[
+			{"pk":1,"fields":{"status":true,"address":"127.0.0.1","port":9001,"weight":100}},
+			{"pk":2,"fields":{"status":true,"address":"127.0.0.1","port":9002,"weight":100}},
+			{"pk":3,"fields":{"status":true,"address":"127.0.0.1","port":9003,"weight":100}}
+		]}
+	}`
+	router := gin.New()
+	router.POST("/config/import/v1", h.ImportV1Config)
+	request := httptest.NewRequest(http.MethodPost, "/config/import/v1", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then：空域名 HTTP 规则跳过并告警，其余规则正常导入
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "域名为空") {
+		t.Fatalf("import response missing skip warning: %s", response.Body.String())
+	}
+	var emptyDomainRules, importedRules int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE name='empty-domain'").Scan(&emptyDomainRules); err != nil {
+		t.Fatalf("count skipped rules: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE name IN ('valid-rule','tcp-rule')").Scan(&importedRules); err != nil {
+		t.Fatalf("count imported rules: %v", err)
+	}
+	if emptyDomainRules != 0 || importedRules != 2 {
+		t.Fatalf("rules after import: empty-domain=%d imported=%d, want 0 skipped and 2 imported", emptyDomainRules, importedRules)
+	}
+}
+
 func TestImportV1Config_requeues_original_non_terminal_jobs_after_rollback(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
