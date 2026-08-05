@@ -1715,11 +1715,20 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	if err := h.removeRuleCertFiles(caddyID); err != nil {
 		certPath, keyPath := services.CertFilePaths(caddyID)
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		recordAudit(c, "清理失败", "规则证书文件", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("残留路径：%s, %s", certPath, keyPath), err.Error()))
+		// Round 36 BLOCKING-2: 证书文件可能被部分删除（cert 已删 / key 残留 或反之），
+		// 即便 Caddy 配置和 DB 事务都恢复了，下次 reload 可能因找不到证书导致 TLS 静默失败。
+		// 用户决策：保留现有顺序（先删文件再 commit），但加 CRITICAL 告警 + audit + 安全事件，
+		// 让运维收到通知后人工恢复证书文件（从备份或其他节点同步）。
+		services.Logf("error", "CRITICAL: DeleteRule 证书文件清理失败，可能存在 DB-文件状态不一致。caddy_id=%s cert_path=%s key_path=%s cleanup_error=%v restore_error=%v。请人工检查证书文件并在必要时从备份恢复",
+			caddyID, certPath, keyPath, err, restoreErr)
+		recordAudit(c, "清理失败", "规则证书文件", services.FormatAuditDetail(
+			services.AuditRulePart(caddyID),
+			fmt.Sprintf("残留路径：%s, %s。错误：%v。请人工检查证书文件，必要时从备份恢复", certPath, keyPath, err),
+		))
 		if restoreErr != nil {
 			services.Logf("error", "CRITICAL: DeleteRule certificate cleanup and runtime restore failed for caddy_id=%s: cleanup=%v restore=%v", caddyID, err, restoreErr)
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理规则证书文件失败，删除已回滚: " + errors.Join(err, restoreErr).Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理规则证书文件失败，删除已回滚。规则已恢复但证书文件可能不一致，请检查日志并人工恢复证书: " + errors.Join(err, restoreErr).Error()})
 		return
 	}
 	if err := tx.Commit(); err != nil {
