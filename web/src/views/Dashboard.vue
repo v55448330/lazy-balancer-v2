@@ -785,6 +785,10 @@ const fetchAllData = (): Promise<void> => {
       caddyMetricsUnavailable.value = true
       hostMetricsUnavailable.value = true
       overviewUnavailable.value = true
+      // Round 35 I-25: 当规则列表也为空时（rules.value 为空数组），ruleMetricsUnavailable
+      // 会是空对象，模板读取 falsy 导致已禁用规则显示"已禁用"而非"采集失败"。
+      // 此处统一将 rulesUnavailable 标记为 true，由模板层显示统一提示。
+      rulesUnavailable.value = true
       ruleMetricsUnavailable.value = Object.fromEntries(rules.value.map((rule) => [rule.caddy_id, rule.enabled]))
     }),
     request.get('/rules', config).then(async (res) => {

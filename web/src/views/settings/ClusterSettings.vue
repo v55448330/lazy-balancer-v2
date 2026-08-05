@@ -88,7 +88,7 @@ import ClusterSlavePanel from './cluster/ClusterSlavePanel.vue'
 import ClusterStatusCard from './cluster/ClusterStatusCard.vue'
 import { usePollingTask } from '@/composables/usePollingTask'
 
-type SyncErrorCode = 'schema_too_new' | 'schema_too_old' | 'signature_invalid' | 'replay_detected' | 'pin_mismatch' | 'validation_failed' | 'apply_failed' | 'transport_error'
+type SyncErrorCode = 'schema_too_new' | 'schema_too_old' | 'signature_invalid' | 'pin_mismatch' | 'validation_failed' | 'apply_failed' | 'transport_error'
 type ClusterNodeWithSyncError = Omit<ClusterNode, 'health'> & {
 	readonly health: (NonNullable<ClusterNode['health']> & { readonly sync_error_code?: SyncErrorCode }) | null
 }

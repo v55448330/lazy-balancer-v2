@@ -26,10 +26,6 @@ export type CertJobStatus =
   | 'waiting_ca'
   | 'disabled'
 
-export const assertNever = (status: never): never => {
-  throw new Error(`Unexpected certificate job status: ${status}`)
-}
-
 export const certJobStatusLabel = (status: CertJobStatus): string => {
   switch (status) {
     case 'issued': return '已签发'
@@ -58,6 +54,9 @@ export const certJobStatusLabel = (status: CertJobStatus): string => {
     case 'finalized': return '订单完成'
     case 'downloading': return '下载证书'
     case 'downloaded': return '下载完成'
-    default: return assertNever(status)
+    // Round 35 I-24: 同 CertJobs.vue，未知状态返回占位符避免 throw。
+    default:
+      console.warn('Unknown cert job status:', status)
+      return String(status)
   }
 }

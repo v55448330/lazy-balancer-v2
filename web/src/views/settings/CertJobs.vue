@@ -116,7 +116,7 @@ import { escapeHtml } from '@/utils/ansi'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse, CertJobsPage } from '@/types'
-import { assertNever, certJobStatusLabel } from '@/utils/certJobStatus'
+import { certJobStatusLabel } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
@@ -207,7 +207,11 @@ const statusType = (status: CertJobStatus) => {
     case 'downloading':
     case 'downloaded':
       return 'warning'
-    default: return assertNever(status)
+    // Round 35 I-24: assertNever 在运行时 throw，后端未来新增状态会导致组件崩溃。
+    // 改为返回 'info' + console.warn，保证表格始终可渲染。
+    default:
+      console.warn('Unknown cert job status:', status)
+      return 'info'
   }
 }
 
@@ -241,7 +245,10 @@ const retryCooldownMinutes = (status: CertJobStatus): number | null => {
     case 'downloading':
     case 'downloaded':
       return 2
-    default: return assertNever(status)
+    // Round 35 I-24: 同 statusType，避免运行时 throw。
+    default:
+      console.warn('Unknown cert job status:', status)
+      return 0
   }
 }
 

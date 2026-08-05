@@ -94,7 +94,7 @@ import { formatDate } from '@/utils/date'
 import { List, Setting } from '@element-plus/icons-vue'
 import type { ClusterHealth, ClusterNode, ClusterNodeStatus, ClusterStatus } from '@/types'
 
-type SyncErrorCode = 'schema_too_new' | 'schema_too_old' | 'signature_invalid' | 'replay_detected' | 'pin_mismatch' | 'validation_failed' | 'apply_failed' | 'transport_error'
+type SyncErrorCode = 'schema_too_new' | 'schema_too_old' | 'signature_invalid' | 'pin_mismatch' | 'validation_failed' | 'apply_failed' | 'transport_error'
 type ClusterHealthWithSyncError = ClusterHealth & { readonly sync_error_code?: SyncErrorCode }
 type ClusterNodeWithSyncError = Omit<ClusterNode, 'health'> & { readonly health: ClusterHealthWithSyncError | null }
 
