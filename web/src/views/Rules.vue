@@ -2279,6 +2279,15 @@ const submitWizard = async () => {
     saving.value = false
     return
   }
+  // Round 38 I-4: 前端补全 health_check_timeout >= health_check_interval 关系校验（与后端 Round 37 I-6 对齐）。
+  if (wizardForm.enable_active_health_check
+      && wizardForm.health_check_interval > 0
+      && wizardForm.health_check_timeout > 0
+      && wizardForm.health_check_timeout >= wizardForm.health_check_interval) {
+    ElMessage.warning(`健康检查超时时间（${wizardForm.health_check_timeout} 秒）必须小于检查间隔（${wizardForm.health_check_interval} 秒）`)
+    saving.value = false
+    return
+  }
   const allowedProtocols: readonly UpstreamProtocol[] = wizardForm.protocol === 'tcp' ? ['tcp', 'tls'] : ['http', 'https']
   if (wizardForm.upstreams.some(u => !allowedProtocols.includes(u.protocol))) {
     ElMessage.warning(`${wizardForm.protocol.toUpperCase()} 规则包含协议族不匹配的上游服务器`)
