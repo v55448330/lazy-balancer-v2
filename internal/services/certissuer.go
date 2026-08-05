@@ -265,11 +265,10 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		Scan(&jobStatus, &jobProviderID, &deploymentAttempt, &ruleEnabled, &ruleProviderID); err == nil &&
 		(jobStatus == "issued" || jobStatus == "downloaded") && ruleEnabled {
 		var existingCert, existingKey string
-		// Round 35 I-2: 使用 QueryRowContext 以响应 worker 取消信号（此处函数无 ctx，用 Background 兜底）。
-		if err := db.DB.QueryRowContext(context.Background(), "SELECT COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&existingCert, &existingKey); err == nil && existingCert != "" && existingKey != "" {
+		// Round 36 I-1: Round 35 误用 context.Background()，Issue 函数本身有 ctx 参数。
+		if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&existingCert, &existingKey); err == nil && existingCert != "" && existingKey != "" {
 			renewalDays := 30
-			// Round 35 I-2: 同上，且不再用 _ 忽略错误。
-			if err := db.DB.QueryRowContext(context.Background(), "SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays); err != nil {
+			if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays); err != nil {
 				log.Printf("read cert_renewal_days failed, using default 30: %v", err)
 				renewalDays = 30
 			}
