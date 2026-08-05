@@ -930,8 +930,8 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
   } catch (error: unknown) {
     if (disposed) return
     if (error === 'cancel') return
-    const msg = error instanceof Error ? error.message : '操作失败'
-    authStore.showToast('error', msg)
+    // Error toast is already shown by the global axios interceptor.
+    console.error('Failed to control Caddy:', error)
   } finally {
     if (!disposed) caddyLoading.value = false
   }

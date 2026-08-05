@@ -255,11 +255,13 @@ const fetchAppLogs = async (): Promise<void> => {
   const requestSeq = ++appLogRequestSeq
   appLogLoading.value = true
   try {
-    const res = await request.get<{ data?: { content?: string } }>('/system/logs')
+    const res = await request.get<{ data?: { content?: string } }>('/system/logs', { silent: true })
     if (requestSeq !== appLogRequestSeq || !appLogVisible.value) return
     appLogContent.value = res.data?.content || ''
     await nextTick()
     if (appLogContainer.value) appLogContainer.value.scrollTop = appLogContainer.value.scrollHeight
+  } catch (error) {
+    console.error('Failed to fetch app logs:', error)
   } finally {
     if (requestSeq === appLogRequestSeq) appLogLoading.value = false
   }

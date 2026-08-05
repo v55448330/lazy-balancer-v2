@@ -234,7 +234,7 @@ const refreshLogs = async (): Promise<void> => {
   const requestSeq = ++logRequestSeq
   logLoading.value = true
   try {
-    const response = await request.get<CaddyLogsResponse>('/caddy/logs', { params: { type: targetTab } })
+    const response = await request.get<CaddyLogsResponse>('/caddy/logs', { params: { type: targetTab }, silent: true })
     if (requestSeq !== logRequestSeq || !logDialogVisible.value || activeLogTab.value !== targetTab) return
     logContent.value = response.data?.content || ''
     await nextTick()

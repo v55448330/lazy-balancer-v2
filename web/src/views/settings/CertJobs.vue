@@ -380,7 +380,7 @@ const refreshLogs = async () => {
   const requestSeq = ++logRequestSeq
   logLoading.value = true
   try {
-    const res = await request.get<APIResponse<{ content: string }>>(`/certificates/jobs/${jobId}/logs`, { signal: jobsPolling.signal })
+    const res = await request.get<APIResponse<{ content: string }>>(`/certificates/jobs/${jobId}/logs`, { signal: jobsPolling.signal, silent: true })
     if (disposed || !logDialogVisible.value || currentJob.value?.id !== jobId || requestSeq !== logRequestSeq) return
     logContent.value = res.data?.content || ''
     await scrollToBottom()
