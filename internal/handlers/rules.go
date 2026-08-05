@@ -361,13 +361,25 @@ func queryRuleDomainConflict(domain, excludeCaddyID, extraWhere string) (bool, e
 
 func (h *Handlers) CreateRule(c *gin.Context) {
 
+	// Round 36 BLOCKING-1: 限制请求体大小防止 OOM（与 config_backup.go limitConfigImportBody 一致策略）。
+	const maxCreateRuleBodyBytes int64 = 1 << 20 // 1MB
+	if c.Request.ContentLength > maxCreateRuleBodyBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxCreateRuleBodyBytes)
 	// Round 35 B2: io.ReadAll(c.Request.Body) 在 ShouldBindJSON 之后调用永远读到空。
 	// 改为先读原始 body 再放回，确保错误日志能记录到导致解析失败的实际请求内容。
 	rawBody, _ := io.ReadAll(c.Request.Body)
 	c.Request.Body = io.NopCloser(bytes.NewReader(rawBody))
 	var req models.CreateRuleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Printf("CreateRule bind error: %v, body: %s", err, string(rawBody))
+		// Round 36 BLOCKING-3: 截断 body 日志避免敏感信息（TLS 私钥/密码）泄漏。
+		bodyPreview := string(rawBody)
+		if len(bodyPreview) > 512 {
+			bodyPreview = bodyPreview[:512] + "...(truncated)"
+		}
+		log.Printf("CreateRule bind error: %v, body_length: %d, body_preview: %s", err, len(rawBody), bodyPreview)
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("Invalid request: %v", err)})
 		return
 	}
