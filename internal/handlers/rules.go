@@ -1970,7 +1970,8 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			}
 		}
 	}()
-	if _, err := tx.Exec("UPDATE lb_rules SET enabled = 1, domain = ?, updated_at = datetime('now') WHERE caddy_id = ?", ruleDomain, caddyID); err != nil {
+	userIDInt := contextUserID(c)
+	if _, err := tx.Exec("UPDATE lb_rules SET enabled = 1, domain = ?, updated_at = datetime('now'), updated_by = ? WHERE caddy_id = ?", ruleDomain, userIDInt, caddyID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "启用规则失败"})
 		return
 	}
@@ -2154,7 +2155,8 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 			}
 		}
 	}()
-	if _, err := tx.Exec("UPDATE lb_rules SET enabled = 0, updated_at = datetime('now') WHERE caddy_id = ?", caddyID); err != nil {
+	userIDInt := contextUserID(c)
+	if _, err := tx.Exec("UPDATE lb_rules SET enabled = 0, updated_at = datetime('now'), updated_by = ? WHERE caddy_id = ?", userIDInt, caddyID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "禁用规则失败"})
 		return
 	}

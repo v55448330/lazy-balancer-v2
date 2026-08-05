@@ -1135,6 +1135,92 @@ func TestUpdateRuleACL_rolls_back_database_when_Caddy_apply_fails(t *testing.T) 
 	}
 }
 
+func TestEnableRule_writes_updated_by_with_current_user(t *testing.T) {
+	// Given
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_enable_updby", "enable", "enable-updby.example.test", 8080, false, "manual", false)
+	router := gin.New()
+	router.POST("/rules/:caddy_id/enable", func(c *gin.Context) {
+		c.Set("user_id", 42)
+		handler.EnableRule(c)
+	})
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/lb_enable_updby/enable", nil))
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("enable status=%d body=%s", response.Code, response.Body.String())
+	}
+	var enabled bool
+	var updatedBy int64
+	if err := db.DB.QueryRow("SELECT enabled, updated_by FROM lb_rules WHERE caddy_id='lb_enable_updby'").Scan(&enabled, &updatedBy); err != nil {
+		t.Fatalf("read enable result: %v", err)
+	}
+	if !enabled || updatedBy != 42 {
+		t.Fatalf("enabled=%v updated_by=%d, want enabled with updated_by=42", enabled, updatedBy)
+	}
+}
+
+func TestDisableRule_writes_updated_by_with_current_user(t *testing.T) {
+	// Given
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_disable_updby", "disable", "disable-updby.example.test", 8080, true, "manual", false)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id/disable", func(c *gin.Context) {
+		c.Set("user_id", 42)
+		handler.DisableRule(c)
+	})
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/rules/lb_disable_updby/disable", nil))
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("disable status=%d body=%s", response.Code, response.Body.String())
+	}
+	var enabled bool
+	var updatedBy int64
+	if err := db.DB.QueryRow("SELECT enabled, updated_by FROM lb_rules WHERE caddy_id='lb_disable_updby'").Scan(&enabled, &updatedBy); err != nil {
+		t.Fatalf("read disable result: %v", err)
+	}
+	if enabled || updatedBy != 42 {
+		t.Fatalf("enabled=%v updated_by=%d, want disabled with updated_by=42", enabled, updatedBy)
+	}
+}
+
+func TestUpdateRuleACL_writes_updated_by_with_current_user(t *testing.T) {
+	// Given
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_acl_updby", "acl", "acl-updby.example.test", 8080, true, "manual", false)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id/acl", func(c *gin.Context) {
+		c.Set("user_id", 42)
+		handler.UpdateRuleACL(c)
+	})
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_acl_updby/acl", strings.NewReader(`{"ip_acl_mode":"deny","ip_acl_list":["198.51.100.0/24"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("ACL update status=%d body=%s", response.Code, response.Body.String())
+	}
+	var mode string
+	var updatedBy int64
+	if err := db.DB.QueryRow("SELECT ip_acl_mode, updated_by FROM lb_rules WHERE caddy_id='lb_acl_updby'").Scan(&mode, &updatedBy); err != nil {
+		t.Fatalf("read ACL result: %v", err)
+	}
+	if mode != "deny" || updatedBy != 42 {
+		t.Fatalf("mode=%q updated_by=%d, want deny with updated_by=42", mode, updatedBy)
+	}
+}
+
 func seedAuditRule(t *testing.T, id, name, domain string, port int, enabled bool, tlsSource string, enableTLS bool) {
 	t.Helper()
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,health_check_path,enabled,enable_compress,tls_source,enable_tls)
