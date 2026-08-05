@@ -94,13 +94,31 @@ func isSynchronizedWrite(method, path string) bool {
 	if method != http.MethodPost && method != http.MethodPut && method != http.MethodPatch && method != http.MethodDelete {
 		return false
 	}
-	if method == http.MethodPut && (path == "/api/v1/config" || path == "/api/v1/caddy/config") {
+	// Writes to synced global_config columns.
+	if method == http.MethodPut && (path == "/api/v1/config" || path == "/api/v1/caddy/config" || path == "/api/v1/cluster/settings" || path == "/api/v1/admin-tls") {
+		return true
+	}
+	// Config backup import rewrites rules/upstreams; the validate endpoint only previews.
+	if method == http.MethodPost && (path == "/api/v1/config/import" || path == "/api/v1/config/import/v1") {
+		return true
+	}
+	// Certificate issuance and job retry/delete write cert_jobs; parse and current-jobs queries are read-only.
+	if path == "/api/v1/certificates/issue" ||
+		(strings.HasPrefix(path, "/api/v1/certificates/jobs/") && (method == http.MethodDelete || (method == http.MethodPost && strings.HasSuffix(path, "/retry")))) {
+		return true
+	}
+	// CA provider updates write ca_providers; the POST test endpoint only probes credentials.
+	if method == http.MethodPut && strings.HasPrefix(path, "/api/v1/ca-providers") {
 		return true
 	}
 	if path == "/api/v1/rules/cert-info" {
 		return false
 	}
-	for _, prefix := range []string{"/api/v1/rules", "/api/v1/users", "/api/v1/api-keys"} {
+	// Certificate config test endpoints only probe DNS credentials without writing.
+	if method == http.MethodPost && strings.HasPrefix(path, "/api/v1/certificate-configs/") && strings.HasSuffix(path, "/test") {
+		return false
+	}
+	for _, prefix := range []string{"/api/v1/rules", "/api/v1/users", "/api/v1/api-keys", "/api/v1/certificate-configs"} {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}
