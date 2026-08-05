@@ -268,7 +268,9 @@ func (i *Issuer) waitForValidation(ctx context.Context, authURL, chalURL string)
 
 	var lastChalStatus, lastAuthStatus string
 	var lastChal *acme.Challenge
+	var tickerIterations int
 	for {
+		tickerIterations++
 		if chal, err := i.Client.GetChallenge(ctx, chalURL); err != nil {
 			log(fmt.Sprintf("查询 challenge 状态失败: %v", err))
 		} else {
@@ -302,6 +304,9 @@ func (i *Issuer) waitForValidation(ctx context.Context, authURL, chalURL string)
 			}
 		}
 
+		if tickerIterations%6 == 0 {
+			log(fmt.Sprintf("仍在等待 CA 验证 (challenge: %s, 授权: %s)", lastChalStatus, lastAuthStatus))
+		}
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("等待 CA 验证超时 (challenge: %s, 授权: %s)", lastChalStatus, lastAuthStatus)
