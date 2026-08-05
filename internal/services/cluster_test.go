@@ -983,43 +983,6 @@ func TestSyncService_pollRegistration_clears_temporary_secret_after_approval(t *
 	}
 }
 
-func TestSyncService_pollRegistration_uses_legacy_snapshot_confirmation_when_confirm_missing(t *testing.T) {
-	// Given
-	_, database := newClusterTestService(t)
-	snapshotRequested := false
-	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/api/v1/cluster/register/7/status":
-			response.Header().Set("Content-Type", "application/json")
-			_, _ = response.Write([]byte(`{"code":0,"data":{"status":"approved","cluster_token":"lb_cluster_legacy"}}`))
-		case "/api/v1/cluster/registration/confirm":
-			response.WriteHeader(http.StatusNotFound)
-		case "/api/v1/cluster/sync/snapshot":
-			snapshotRequested = request.Header.Get("X-Cluster-Token") == "lb_cluster_legacy"
-			response.WriteHeader(http.StatusInternalServerError)
-		default:
-			response.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer master.Close()
-	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, registration_id=7, registration_secret='temporary-secret', cluster_token='' WHERE id=1", master.URL); err != nil {
-		t.Fatalf("seed pending registration: %v", err)
-	}
-	syncService := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(master.URL))
-
-	// When
-	syncService.pollRegistration(context.Background())
-
-	// Then
-	var clusterToken string
-	if err := database.QueryRow("SELECT cluster_token FROM global_config WHERE id=1").Scan(&clusterToken); err != nil {
-		t.Fatalf("read approved token: %v", err)
-	}
-	if clusterToken != "lb_cluster_legacy" || !snapshotRequested {
-		t.Fatalf("legacy token=%q snapshot_requested=%v", clusterToken, snapshotRequested)
-	}
-}
-
 func TestSyncService_Report_sends_status_with_space_format_last_sync(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)

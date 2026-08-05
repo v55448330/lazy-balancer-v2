@@ -191,6 +191,10 @@ func (s *ClusterService) RegistrationStatus(ctx context.Context, nodeID int, sec
 	if approved {
 		response.Status = "approved"
 		clusterToken := permanentClusterToken(secret)
+		// 注意：registration_secret 在此保留，直到从节点首次 Snapshot 请求时由
+		// cluster_snapshot.go 的 Snapshot() 清除。这是有意设计：从节点可能在收到
+		// token 前遭遇网络问题，需要重复调用 RegistrationStatus 重新获取同一 token。
+		// 详见 TestClusterService_ApproveNode_redelivers_cluster_token_until_confirmed。
 		if _, err := tx.ExecContext(ctx, "UPDATE nodes SET cluster_token_hash=?, cluster_token_delivered=1 WHERE id=?", tokenHash(clusterToken), nodeID); err != nil {
 			return models.ClusterRegistrationStatus{}, fmt.Errorf("保存集群令牌: %w", err)
 		}

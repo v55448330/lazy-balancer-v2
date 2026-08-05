@@ -78,7 +78,6 @@ const (
 	SyncErrorCodeSchemaTooNew     SyncErrorCode = "schema_too_new"
 	SyncErrorCodeSchemaTooOld     SyncErrorCode = "schema_too_old"
 	SyncErrorCodeSignatureInvalid SyncErrorCode = "signature_invalid"
-	SyncErrorCodeReplayDetected   SyncErrorCode = "replay_detected"
 	SyncErrorCodePinMismatch      SyncErrorCode = "pin_mismatch"
 	SyncErrorCodeValidationFailed SyncErrorCode = "validation_failed"
 	SyncErrorCodeApplyFailed      SyncErrorCode = "apply_failed"
@@ -101,7 +100,7 @@ type ClusterReport struct {
 	Health         ClusterHealth `json:"health"`
 	LastSyncAt     string        `json:"last_sync_at"`
 	LastSyncError  string        `json:"last_sync_error"`
-	SyncErrorCode  SyncErrorCode `json:"sync_error_code,omitempty" binding:"omitempty,oneof=schema_too_new schema_too_old signature_invalid replay_detected pin_mismatch validation_failed apply_failed transport_error"`
+	SyncErrorCode  SyncErrorCode `json:"sync_error_code,omitempty" binding:"omitempty,oneof=schema_too_new schema_too_old signature_invalid pin_mismatch validation_failed apply_failed transport_error"`
 }
 
 type ClusterBasicSettings struct {

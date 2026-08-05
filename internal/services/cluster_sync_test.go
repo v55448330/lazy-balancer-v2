@@ -848,7 +848,9 @@ func TestSyncService_Pull_rejectsSchemaV1SnapshotWithoutWritingDatabase(t *testi
 	}
 
 	// Then
-	if pullErr == nil || !strings.Contains(pullErr.Error(), "主节点") || username != "local-user" {
+	// Round 35 S-11: 移除 v1/v2 legacy 回退后，v1 快照因缺少 canonical_payload
+	// 在签名校验阶段被拒绝。验证关键不变量：拒绝发生 + 本地数据未被覆盖。
+	if pullErr == nil || username != "local-user" {
 		t.Fatalf("pull error=%v local username=%q", pullErr, username)
 	}
 }

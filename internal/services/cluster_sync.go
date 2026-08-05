@@ -696,22 +696,11 @@ func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken str
 }
 
 func verifySnapshotFingerprint(snapshot models.ClusterSnapshot) error {
-	if len(snapshot.CanonicalPayload) > 0 {
-		hash := sha256.Sum256(snapshot.CanonicalPayload)
-		if hex.EncodeToString(hash[:]) != snapshot.Fingerprint {
-			return newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("快照指纹校验失败：数据可能被截断或篡改"))
-		}
-		return nil
+	// Round 35 S-11: schema v3 已强制要求 CanonicalPayload，移除 v1/v2 扁平回退路径。
+	if len(snapshot.CanonicalPayload) == 0 {
+		return newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("快照缺少 canonical_payload（schema v3 强制要求）"))
 	}
-	canonical := snapshot
-	canonical.Fingerprint = ""
-	canonical.Signature = ""
-	canonical.Version = 0
-	content, err := json.Marshal(canonical)
-	if err != nil {
-		return fmt.Errorf("快照序列化失败: %w", err)
-	}
-	hash := sha256.Sum256(content)
+	hash := sha256.Sum256(snapshot.CanonicalPayload)
 	if hex.EncodeToString(hash[:]) != snapshot.Fingerprint {
 		return newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("快照指纹校验失败：数据可能被截断或篡改"))
 	}
@@ -724,17 +713,11 @@ func verifySnapshotSignature(snapshot models.ClusterSnapshot, clusterToken strin
 	if clusterToken == "" {
 		return newSyncFailure(models.SyncErrorCodeSignatureInvalid, fmt.Errorf("快照签名校验失败：本节点缺少集群令牌"))
 	}
-	content := []byte(snapshot.CanonicalPayload)
-	if len(content) == 0 {
-		canonical := snapshot
-		canonical.Fingerprint = ""
-		canonical.Signature = ""
-		var err error
-		content, err = json.Marshal(canonical)
-		if err != nil {
-			return fmt.Errorf("快照序列化失败: %w", err)
-		}
+	// Round 35 S-11: schema v3 已强制要求 CanonicalPayload，移除 v1/v2 扁平回退路径。
+	if len(snapshot.CanonicalPayload) == 0 {
+		return newSyncFailure(models.SyncErrorCodeSignatureInvalid, fmt.Errorf("快照缺少 canonical_payload（schema v3 强制要求）"))
 	}
+	content := []byte(snapshot.CanonicalPayload)
 	mac := hmac.New(sha256.New, []byte(clusterToken))
 	mac.Write(content)
 	expected := hex.EncodeToString(mac.Sum(nil))
@@ -886,16 +869,9 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 			return
 		}
 		defer confirmed.Body.Close()
+		// Round 35 S-12: 移除 404/405 fallback 兼容（v2.0.7+ 主节点均支持 confirm 端点）。
+		// 任何 4xx/5xx 都视为注册失败，从节点不应继续存储 token。
 		if confirmed.StatusCode >= http.StatusBadRequest {
-			if confirmed.StatusCode != http.StatusNotFound && confirmed.StatusCode != http.StatusMethodNotAllowed {
-				return
-			}
-			if _, err := s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token=? WHERE id=1", envelope.Data.ClusterToken); err != nil {
-				return
-			}
-			if _, err := s.Pull(ctx); err == nil {
-				_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET registration_secret='' WHERE id=1")
-			}
 			return
 		}
 		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token=?, registration_secret='' WHERE id=1", envelope.Data.ClusterToken)

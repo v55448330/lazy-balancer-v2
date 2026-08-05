@@ -512,6 +512,10 @@ var snapshotCertificateWarnings = struct {
 	last map[string]time.Time
 }{last: make(map[string]time.Time)}
 
+// snapshotCertificateWarningsGCTtl 控制警告 map 中条目的最长保留时间。
+// 超过此时间未被再次更新的条目会在下次 warnSnapshotCertificateCandidate 调用时被清理。
+const snapshotCertificateWarningsGCTtl = time.Hour
+
 func warnSnapshotCertificateCandidate(ruleID string, jobID int, cause error, now time.Time) {
 	key := fmt.Sprintf("%s/%d", ruleID, jobID)
 	snapshotCertificateWarnings.Lock()
@@ -521,6 +525,12 @@ func warnSnapshotCertificateCandidate(ruleID string, jobID int, cause error, now
 		return
 	}
 	snapshotCertificateWarnings.last[key] = now
+	// Round 35 I-13: 顺手清理过期条目，防止长期运行 master 节点的 map 无限增长。
+	for k, t := range snapshotCertificateWarnings.last {
+		if now.Sub(t) > snapshotCertificateWarningsGCTtl {
+			delete(snapshotCertificateWarnings.last, k)
+		}
+	}
 	snapshotCertificateWarnings.Unlock()
 	Logf("warn", "cluster snapshot skipped malformed certificate candidate: rule_id=%s job_id=%d error=%v", ruleID, jobID, cause)
 }
