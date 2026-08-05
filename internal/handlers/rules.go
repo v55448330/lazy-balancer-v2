@@ -30,7 +30,7 @@ var (
 )
 
 func (h *Handlers) ListRules(c *gin.Context) {
-	rows, err := db.DB.Query(`SELECT ` + lbRuleColumns + ` FROM lb_rules ORDER BY id`)
+	rows, err := db.DB.Query(`SELECT ` + lbRuleListColumns + ` FROM lb_rules ORDER BY id`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
 		return
