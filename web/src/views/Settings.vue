@@ -21,7 +21,7 @@
       />
       <CaddyGlobalSettings
         v-model:settings="settings"
-        @save="handleSaveBasic"
+        @save="handleSaveCaddy"
       />
     </div>
     <ClusterSettings
@@ -136,43 +136,68 @@ const pageTitle = computed(() => titles[activeTab.value] || '系统设置')
 const pageDesc = computed(() => descs[activeTab.value] || '')
 let settingsRequestSeq = 0
 
+// Each card owns a subset of the shared `settings`/`global` objects. Apply
+// helpers merge only the saved card's keys back from the server so sibling
+// cards keep whatever the user typed that has not been saved yet.
+type ConfigPayload = SettingsConfig & CertificateConfig
+
+const applyBasicKeys = (data: ConfigPayload) => {
+  settings.value.log_level = data.log_level || 'info'
+  settings.value.cert_job_log_size_mb = data.cert_job_log_size_mb ?? 10
+  settings.value.runtime_log_size_mb = data.runtime_log_size_mb ?? 100
+  settings.value.audit_retention_months = data.audit_retention_months ?? 3
+  settings.value.jwt_expire_minutes = data.jwt_expire_minutes ?? 20
+  settings.value.timezone = data.timezone || 'Asia/Shanghai'
+}
+
+const applyCaddyKeys = (data: ConfigPayload) => {
+  settings.value.caddy_log_path = data.caddy_log_path || '/app/logs/caddy.log'
+  settings.value.caddy_log_level = data.caddy_log_level || 'info'
+  settings.value.caddy_log_size_mb = data.caddy_log_size_mb ?? 100
+  settings.value.request_body_max_size_mb = data.request_body_max_size_mb ?? 0
+  settings.value.http_read_timeout = data.http_read_timeout ?? 60
+  settings.value.http_write_timeout = data.http_write_timeout ?? 60
+  settings.value.http_idle_timeout = data.http_idle_timeout ?? 120
+  settings.value.upstream_keepalive_timeout = data.upstream_keepalive_timeout ?? 60
+  settings.value.proxy_dial_timeout = data.proxy_dial_timeout ?? 0
+  settings.value.proxy_response_header_timeout = data.proxy_response_header_timeout ?? 0
+  settings.value.proxy_read_timeout = data.proxy_read_timeout ?? 0
+  settings.value.proxy_write_timeout = data.proxy_write_timeout ?? 0
+  settings.value.proxy_stream_timeout = data.proxy_stream_timeout ?? 0
+  settings.value.server_tokens_hidden = data.server_tokens_hidden ?? false
+  settings.value.access_log_json = data.access_log_json ?? true
+  settings.value.access_log_format = data.access_log_format || settings.value.access_log_format
+}
+
+const applyCertKeys = (data: ConfigPayload) => {
+  global.value.acme_email = data.acme_email || ''
+  global.value.cert_expiry_days = data.cert_expiry_days ?? 30
+  global.value.cert_renewal_days = data.cert_renewal_days ?? 30
+  global.value.cert_renewal_attempts = data.cert_renewal_attempts ?? 5
+  global.value.default_ca_provider_id = data.default_ca_provider_id ?? 0
+  global.value.dns_provider = data.dns_provider || 'dnspod'
+}
+
 const fetchSettings = async () => {
   const requestSeq = ++settingsRequestSeq
   try {
     const res = await request.get('/config')
     if (requestSeq === settingsRequestSeq && res.data) {
-      settings.value = {
-        log_level: res.data.log_level || 'info',
-        caddy_log_path: res.data.caddy_log_path || '/app/logs/caddy.log',
-        caddy_log_level: res.data.caddy_log_level || 'info',
-        caddy_log_size_mb: res.data.caddy_log_size_mb ?? 100,
-        request_body_max_size_mb: res.data.request_body_max_size_mb ?? 0,
-        http_read_timeout: res.data.http_read_timeout ?? 60,
-        http_write_timeout: res.data.http_write_timeout ?? 60,
-        http_idle_timeout: res.data.http_idle_timeout ?? 120,
-        upstream_keepalive_timeout: res.data.upstream_keepalive_timeout ?? 60,
-        proxy_dial_timeout: res.data.proxy_dial_timeout ?? 0,
-        proxy_response_header_timeout: res.data.proxy_response_header_timeout ?? 0,
-        proxy_read_timeout: res.data.proxy_read_timeout ?? 0,
-        proxy_write_timeout: res.data.proxy_write_timeout ?? 0,
-        proxy_stream_timeout: res.data.proxy_stream_timeout ?? 0,
-        server_tokens_hidden: res.data.server_tokens_hidden ?? false,
-        cert_job_log_size_mb: res.data.cert_job_log_size_mb ?? 10,
-        runtime_log_size_mb: res.data.runtime_log_size_mb ?? 100,
-        access_log_json: res.data.access_log_json ?? true,
-        access_log_format: res.data.access_log_format || settings.value.access_log_format,
-        audit_retention_months: res.data.audit_retention_months ?? 3,
-        jwt_expire_minutes: res.data.jwt_expire_minutes ?? 20,
-        timezone: res.data.timezone || 'Asia/Shanghai',
-      }
-      global.value = {
-        acme_email: res.data.acme_email || '',
-        cert_expiry_days: res.data.cert_expiry_days ?? 30,
-        cert_renewal_days: res.data.cert_renewal_days ?? 30,
-        cert_renewal_attempts: res.data.cert_renewal_attempts ?? 5,
-        default_ca_provider_id: res.data.default_ca_provider_id ?? 0,
-        dns_provider: res.data.dns_provider || 'dnspod',
-      }
+      applyBasicKeys(res.data)
+      applyCaddyKeys(res.data)
+      applyCertKeys(res.data)
+    }
+  } catch (error) {
+    console.error('Failed to fetch settings:', error)
+  }
+}
+
+const refreshConfigSection = async (apply: (data: ConfigPayload) => void) => {
+  const requestSeq = ++settingsRequestSeq
+  try {
+    const res = await request.get('/config')
+    if (requestSeq === settingsRequestSeq && res.data) {
+      apply(res.data)
     }
   } catch (error) {
     console.error('Failed to fetch settings:', error)
@@ -180,11 +205,15 @@ const fetchSettings = async () => {
 }
 
 const handleSaveBasic = async () => {
-  await fetchSettings()
+  await refreshConfigSection(applyBasicKeys)
+}
+
+const handleSaveCaddy = async () => {
+  await refreshConfigSection(applyCaddyKeys)
 }
 
 const handleSaveCertificates = async () => {
-  await fetchSettings()
+  await refreshConfigSection(applyCertKeys)
 }
 
 const syncActiveTabFromPage = () => {
