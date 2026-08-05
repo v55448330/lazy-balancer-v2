@@ -580,6 +580,7 @@ func runMigrations() error {
 		"global_config.cluster_token":                 "TEXT DEFAULT ''",
 		"global_config.registration_id":               "INTEGER DEFAULT 0",
 		"global_config.registration_secret":           "TEXT DEFAULT ''",
+		"global_config.registration_confirm_failures": "INTEGER DEFAULT 0",
 		"global_config.applied_version":               "INTEGER DEFAULT 0",
 		"global_config.last_sync_error":               "TEXT DEFAULT ''",
 		"global_config.sync_fingerprint":              "TEXT DEFAULT ''",

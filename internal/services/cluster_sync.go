@@ -641,6 +641,14 @@ func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken str
 	if snapshot.Signature == "" {
 		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeSignatureInvalid, errors.New("快照缺少签名：主节点版本过旧，请先升级主节点"))
 	}
+	// Round 36 I-5: SchemaVersion 过旧时给出明确诊断（仍走签名失败码避免 halted DoS）。
+	// 攻击者可伪造 SchemaVersion 但无法伪造 HMAC，所以错误码保持 signature_invalid，
+	// 仅在消息中说明真实原因，便于运维识别"主节点版本过旧"场景。
+	if snapshot.SchemaVersion < CurrentSnapshotSchema && len(snapshot.CanonicalPayload) == 0 {
+		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeSignatureInvalid,
+			fmt.Errorf("主节点快照 schema v%d 过旧（本节点要求 v%d），缺少 canonical_payload。请升级主节点到支持 schema v%d 的版本",
+				snapshot.SchemaVersion, CurrentSnapshotSchema, CurrentSnapshotSchema))
+	}
 	if err := verifySnapshotSignature(snapshot, clusterToken); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
@@ -866,14 +874,58 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 		confirm.Header.Set("X-Cluster-Token", envelope.Data.ClusterToken)
 		confirmed, err := s.do(confirm)
 		if err != nil {
+			s.bumpRegistrationConfirmFailure(ctx, envelope.Data.ClusterToken, "confirm 端点网络错误: "+err.Error())
 			return
 		}
 		defer confirmed.Body.Close()
 		// Round 35 S-12: 移除 404/405 fallback 兼容（v2.0.8+ 主节点均支持 confirm 端点）。
-		// 任何 4xx/5xx 都视为注册失败，从节点不应继续存储 token。
+		// Round 36 I-6: 任何 4xx/5xx 不再静默重试。累计失败达到上限后停止注册循环，
+		// 持久化错误并提示用户人工处理（在 UI 重新注册或提升为主节点）。
 		if confirmed.StatusCode >= http.StatusBadRequest {
+			body, _ := io.ReadAll(io.LimitReader(confirmed.Body, 512))
+			s.bumpRegistrationConfirmFailure(ctx, envelope.Data.ClusterToken,
+				fmt.Sprintf("confirm 端点返回 %d（%s）。主节点可能版本过旧或 confirm 端点异常，请在集群管理页面重新注册或提升为主节点",
+					confirmed.StatusCode, strings.TrimSpace(string(body))))
 			return
 		}
+		s.resetRegistrationConfirmFailure(ctx)
 		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token=?, registration_secret='' WHERE id=1", envelope.Data.ClusterToken)
 	}
+}
+
+// registrationConfirmMaxFailures 定义 confirm 端点连续失败上限。达到后停止注册循环。
+const registrationConfirmMaxFailures = 5
+
+// bumpRegistrationConfirmFailure 累计 confirm 失败次数。达到上限后清除 registration_secret，
+// 让从节点脱离注册状态，并通过 persistSyncError 提示运维人工介入。
+func (s *SyncService) bumpRegistrationConfirmFailure(ctx context.Context, clusterToken, reason string) {
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE global_config SET registration_confirm_failures = COALESCE(registration_confirm_failures, 0) + 1 WHERE id=1")
+	if err != nil {
+		log.Printf("bumpRegistrationConfirmFailure: update failed: %v", err)
+	}
+	var failures int
+	if qerr := s.db.QueryRowContext(ctx, "SELECT COALESCE(registration_confirm_failures, 0) FROM global_config WHERE id=1").Scan(&failures); qerr != nil {
+		failures = registrationConfirmMaxFailures
+	}
+	if failures >= registrationConfirmMaxFailures {
+		message := fmt.Sprintf("集群注册确认连续失败 %d 次（最后一次：%s）。已停止自动重试，请在“集群管理”页面重新注册，或使用“提升为主节点”脱离集群",
+			failures, reason)
+		s.persistSyncError(ctx, message, models.SyncErrorCodeValidationFailed)
+		RecordAuditLog("system", "注册失败", "集群节点", message, "")
+		// 清除 registration_secret 触发从节点退出注册循环；clusterToken 已存入 global_config 但因 confirm 未成功，主节点未真正确认
+		if _, derr := s.db.ExecContext(ctx, "UPDATE global_config SET registration_secret='', registration_id=NULL, registration_confirm_failures=0 WHERE id=1"); derr != nil {
+			log.Printf("bumpRegistrationConfirmFailure: clear registration state failed: %v", derr)
+		}
+		if clusterToken != "" {
+			_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token='' WHERE id=1")
+		}
+	} else {
+		log.Printf("集群注册确认失败 %d/%d：%s", failures, registrationConfirmMaxFailures, reason)
+	}
+}
+
+// resetRegistrationConfirmFailure 在 confirm 成功后清零失败计数。
+func (s *SyncService) resetRegistrationConfirmFailure(ctx context.Context) {
+	_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET registration_confirm_failures=0 WHERE id=1")
 }
