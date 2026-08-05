@@ -370,7 +370,7 @@ func loadRuleUpstreams(ruleID string) ([]models.Upstream, error) {
 	rows, err := db.DB.Query(`
 		SELECT COALESCE(id,0), COALESCE(rule_id,''), COALESCE(host,''), COALESCE(port,0), COALESCE(weight,0),
 		       COALESCE(dynamic_dns,0), COALESCE(enabled,0), COALESCE(protocol,''),
-		       COALESCE(dns_server,''), COALESCE(max_connections,0)
+		       COALESCE(max_connections,0)
 		FROM upstreams WHERE rule_id = ? AND enabled = 1
 	`, ruleID)
 	if err != nil {
@@ -381,7 +381,7 @@ func loadRuleUpstreams(ruleID string) ([]models.Upstream, error) {
 	var upstreams []models.Upstream
 	for rows.Next() {
 		var u models.Upstream
-		if err := rows.Scan(&u.ID, &u.RuleID, &u.Host, &u.Port, &u.Weight, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.DnsServer, &u.MaxConnections); err != nil {
+		if err := rows.Scan(&u.ID, &u.RuleID, &u.Host, &u.Port, &u.Weight, &u.DynamicDNS, &u.Enabled, &u.Protocol, &u.MaxConnections); err != nil {
 			return nil, err
 		}
 		upstreams = append(upstreams, u)

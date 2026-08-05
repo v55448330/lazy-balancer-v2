@@ -361,7 +361,7 @@ func (s *ClusterService) snapshotPathRules(ctx context.Context, store snapshotSt
 }
 
 func (s *ClusterService) snapshotUpstreams(ctx context.Context, store snapshotStore, ruleID string) ([]models.Upstream, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), COALESCE(enabled,1), COALESCE(protocol,'http'), COALESCE(dns_server,''), COALESCE(max_connections,0) FROM upstreams WHERE rule_id=? ORDER BY id`, ruleID)
+	rows, err := store.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), COALESCE(enabled,1), COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id=? ORDER BY id`, ruleID)
 	if err != nil {
 		return nil, fmt.Errorf("读取规则上游 %s: %w", ruleID, err)
 	}
@@ -369,7 +369,7 @@ func (s *ClusterService) snapshotUpstreams(ctx context.Context, store snapshotSt
 	upstreams := make([]models.Upstream, 0)
 	for rows.Next() {
 		var upstream models.Upstream
-		if err := rows.Scan(&upstream.ID, &upstream.RuleID, &upstream.Host, &upstream.Port, &upstream.Weight, &upstream.DynamicDNS, &upstream.Enabled, &upstream.Protocol, &upstream.DnsServer, &upstream.MaxConnections); err != nil {
+		if err := rows.Scan(&upstream.ID, &upstream.RuleID, &upstream.Host, &upstream.Port, &upstream.Weight, &upstream.DynamicDNS, &upstream.Enabled, &upstream.Protocol, &upstream.MaxConnections); err != nil {
 			return nil, fmt.Errorf("扫描规则上游 %s: %w", ruleID, err)
 		}
 		upstreams = append(upstreams, upstream)

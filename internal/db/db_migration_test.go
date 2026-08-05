@@ -172,12 +172,21 @@ func TestMigrateLbRulesPrimaryKey_preserves_upstream_connection_settings(t *test
 
 	// Then
 	var maxConnections int
-	var proxyProtocol string
-	if err := database.QueryRow("SELECT max_connections, proxy_protocol FROM upstreams WHERE id=9").Scan(&maxConnections, &proxyProtocol); err != nil {
+	if err := database.QueryRow("SELECT max_connections FROM upstreams WHERE id=9").Scan(&maxConnections); err != nil {
 		t.Fatalf("read migrated upstream: %v", err)
 	}
-	if maxConnections != 37 || proxyProtocol != "v2" {
-		t.Fatalf("connection settings=(%d, %q), want (37, %q)", maxConnections, proxyProtocol, "v2")
+	if maxConnections != 37 {
+		t.Fatalf("max_connections=%d, want 37", maxConnections)
+	}
+	// Legacy dead columns are not carried into the rebuilt table.
+	for _, column := range []string{"domain", "host_header", "dns_server", "proxy_protocol"} {
+		var count int
+		if err := database.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name=?", column).Scan(&count); err != nil {
+			t.Fatalf("check migrated upstreams.%s: %v", column, err)
+		}
+		if count != 0 {
+			t.Fatalf("legacy column %s survived primary key migration", column)
+		}
 	}
 }
 

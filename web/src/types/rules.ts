@@ -11,14 +11,12 @@ export interface Upstream {
   dynamic_dns: boolean
   enabled: boolean
   protocol: UpstreamProtocol
-  dns_server: string
   max_connections: number
 }
 
-export type UpstreamInput = Omit<Upstream, 'id' | 'rule_id' | 'dns_server'> & {
+export type UpstreamInput = Omit<Upstream, 'id' | 'rule_id'> & {
   id?: number
   rule_id?: string
-  dns_server?: string
 }
 
 export interface PathRuleUpstream {

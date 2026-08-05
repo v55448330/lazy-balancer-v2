@@ -249,7 +249,6 @@ type Upstream struct {
 	DynamicDNS     bool   `json:"dynamic_dns"`
 	Enabled        bool   `json:"enabled"`
 	Protocol       string `json:"protocol"`
-	DnsServer      string `json:"dns_server"`
 	MaxConnections int    `json:"max_connections"`
 }
 

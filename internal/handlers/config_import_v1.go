@@ -543,8 +543,8 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			return
 		}
 		for _, u := range r.Upstreams {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, dns_server, max_connections)
-				VALUES (?, ?, ?, ?, 0, ?, ?, '', 0)`, caddyID, u.Host, u.Port, u.Weight, u.Enabled, u.Protocol); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
+				VALUES (?, ?, ?, ?, 0, ?, ?, 0)`, caddyID, u.Host, u.Port, u.Weight, u.Enabled, u.Protocol); err != nil {
 				err = session.abort(err)
 				recordAudit(c, "导入失败", "配置备份", fmt.Sprintf("规则 %s 上游: %v", r.Name, err))
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导入上游失败，已回滚: " + err.Error()})

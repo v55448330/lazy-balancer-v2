@@ -182,7 +182,7 @@ func TestLoadRuleUpstreams_coalesces_nullable_columns(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id, name, protocol, listen_port, enabled) VALUES ('lb_nullable', 'nullable', 'tcp', 9002, 1)`); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id, host, port, enabled, weight, dynamic_dns, protocol, dns_server, max_connections) VALUES ('lb_nullable', '127.0.0.1', 9000, 1, NULL, NULL, NULL, NULL, NULL)`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id, host, port, enabled, weight, dynamic_dns, protocol, max_connections) VALUES ('lb_nullable', '127.0.0.1', 9000, 1, NULL, NULL, NULL, NULL)`); err != nil {
 		t.Fatalf("seed nullable upstream: %v", err)
 	}
 

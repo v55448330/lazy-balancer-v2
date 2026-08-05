@@ -272,9 +272,7 @@ func createTables() error {
 		dynamic_dns BOOLEAN DEFAULT FALSE,
 		enabled BOOLEAN DEFAULT TRUE,
 		protocol VARCHAR(10) DEFAULT 'http',
-		dns_server VARCHAR(255) DEFAULT '',
 		max_connections INTEGER DEFAULT 0,
-		proxy_protocol VARCHAR(10) DEFAULT '',
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
 	);
 	CREATE INDEX IF NOT EXISTS idx_upstreams_rule_enabled_id ON upstreams(rule_id, enabled, id);
@@ -523,9 +521,7 @@ func runMigrations() error {
 		"lb_rules.request_body_max_size_mb":           "INTEGER DEFAULT 0",
 		"lb_rules.upstream_keepalive_timeout":         "INTEGER DEFAULT 0",
 		"lb_rules.server_tokens_hidden":               "INTEGER DEFAULT 0",
-		"upstreams.dns_server":                        "VARCHAR(255) DEFAULT ''",
 		"upstreams.max_connections":                   "INTEGER DEFAULT 0",
-		"upstreams.proxy_protocol":                    "VARCHAR(10) DEFAULT ''",
 		"certificate_configs.dns_credentials":         "TEXT",
 		"cert_jobs.ca_provider_id":                    "INTEGER DEFAULT 0",
 		"cert_jobs.renewal_attempts":                  "INTEGER DEFAULT 0",
@@ -798,6 +794,20 @@ func runMigrations() error {
 	// Drop legacy columns from upstreams if they still exist (no longer used).
 	legacyUpstreamDomainColumns := []string{"domain"}
 	for _, col := range legacyUpstreamDomainColumns {
+		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name=?", col).Scan(&colCount); err != nil {
+			return fmt.Errorf("failed to check legacy upstreams.%s: %w", col, err)
+		}
+		if colCount > 0 {
+			if _, err := DB.Exec("ALTER TABLE upstreams DROP COLUMN " + col); err != nil {
+				return fmt.Errorf("failed to drop legacy upstreams.%s: %w", col, err)
+			}
+			log.Printf("Dropped legacy column %s from upstreams", col)
+		}
+	}
+
+	// Drop legacy columns from upstreams if they still exist (no longer used).
+	legacyUpstreamDeadColumns := []string{"proxy_protocol", "dns_server"}
+	for _, col := range legacyUpstreamDeadColumns {
 		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name=?", col).Scan(&colCount); err != nil {
 			return fmt.Errorf("failed to check legacy upstreams.%s: %w", col, err)
 		}
@@ -1261,9 +1271,7 @@ func migrateLbRulesPrimaryKey() error {
 		dynamic_dns BOOLEAN DEFAULT FALSE,
 		enabled BOOLEAN DEFAULT TRUE,
 		protocol VARCHAR(10) DEFAULT 'http',
-		dns_server VARCHAR(255) DEFAULT '',
 		max_connections INTEGER DEFAULT 0,
-		proxy_protocol VARCHAR(10) DEFAULT '',
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
 	)
 `)
@@ -1273,9 +1281,9 @@ func migrateLbRulesPrimaryKey() error {
 
 	// Copy data from old upstreams table to new (convert rule_id from int to string)
 	_, err = tx.Exec(`
-	INSERT INTO upstreams_new (id, rule_id, host, port, weight, dynamic_dns, enabled, protocol, dns_server, max_connections, proxy_protocol)
+	INSERT INTO upstreams_new (id, rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
 	SELECT u.id, r.caddy_id, u.host, u.port, u.weight, u.dynamic_dns, u.enabled, u.protocol,
-		       COALESCE(u.dns_server, ''), COALESCE(u.max_connections, 0), COALESCE(u.proxy_protocol, '')
+		       COALESCE(u.max_connections, 0)
 		FROM upstreams u
 		JOIN lb_rules r ON u.rule_id = r.id
 	`)
