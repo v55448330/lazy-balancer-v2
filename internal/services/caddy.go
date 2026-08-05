@@ -1249,7 +1249,8 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 			domainHosts := splitAndTrim(r.Domain)
 			if len(domainHosts) > 0 {
 				redirectRoutes = append(redirectRoutes, map[string]interface{}{
-					"@id": r.CaddyID + "_redirect",
+					"@id":      r.CaddyID + "_redirect",
+					"terminal": true,
 					"match": []interface{}{
 						map[string]interface{}{
 							"host": domainHosts,
@@ -2050,8 +2051,9 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			mainMatcher["client_ip"] = map[string]interface{}{"ranges": rule.IPACLList}
 		}
 		route := map[string]interface{}{
-			"match":  []interface{}{mainMatcher},
-			"handle": handleChain,
+			"match":    []interface{}{mainMatcher},
+			"handle":   handleChain,
+			"terminal": true,
 		}
 		if rule.CaddyID != "" {
 			route["@id"] = rule.CaddyID
@@ -2199,8 +2201,9 @@ func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, 
 		mainMatcher["client_ip"] = map[string]interface{}{"ranges": rule.IPACLList}
 	}
 	mainRoute := map[string]interface{}{
-		"match":  []interface{}{mainMatcher},
-		"handle": mainHandle,
+		"match":    []interface{}{mainMatcher},
+		"handle":   mainHandle,
+		"terminal": true,
 	}
 	if rule.CaddyID != "" {
 		mainRoute["@id"] = rule.CaddyID
@@ -2234,8 +2237,9 @@ func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, 
 				matcher["client_ip"] = map[string]interface{}{"ranges": rule.IPACLList}
 			}
 			pathRoute := map[string]interface{}{
-				"match":  []interface{}{matcher},
-				"handle": handle,
+				"match":    []interface{}{matcher},
+				"handle":   handle,
+				"terminal": true,
 			}
 			tagRuleRoute(pathRoute, rule.CaddyID, fmt.Sprintf("path_%d", pathIndex))
 			routes = append(routes, pathRoute)
@@ -2256,7 +2260,8 @@ func forbiddenHTTPRoute(domainHosts, ranges []string, matchClientIP bool) map[st
 		matcher["client_ip"] = map[string]interface{}{"ranges": ranges}
 	}
 	return map[string]interface{}{
-		"match": []interface{}{matcher},
+		"terminal": true,
+		"match":    []interface{}{matcher},
 		"handle": []interface{}{
 			map[string]interface{}{
 				"handler":     "static_response",

@@ -642,7 +642,7 @@
                 </div>
               </el-form-item>
               <el-form-item label="压缩方式" v-if="wizardForm.enable_compress">
-                <el-select v-model="wizardForm.compress_types" placeholder="选择压缩方式" style="width: 200px;">
+                <el-select v-model="wizardForm.compress_types" multiple placeholder="选择压缩方式" style="width: 240px;">
                   <el-option value="gzip" label="gzip" />
                   <el-option value="zstd" label="zstd" />
                 </el-select>
@@ -750,7 +750,7 @@
               <template v-else>禁用</template>
             </el-descriptions-item>
             <el-descriptions-item label="压缩" v-if="wizardForm.protocol === 'http'">
-              {{ wizardForm.enable_compress ? (wizardForm.compress_types || 'gzip') : '禁用' }}
+              {{ wizardForm.enable_compress ? (wizardForm.compress_types.join(', ') || 'gzip') : '禁用' }}
             </el-descriptions-item>
             <el-descriptions-item label="访问控制">
               {{ aclPreview() }}
@@ -841,7 +841,7 @@
           </el-descriptions-item>
           <el-descriptions-item label="TLS" v-else>禁用</el-descriptions-item>
           <el-descriptions-item label="压缩" v-if="ruleConfig.protocol === 'http'">
-            {{ ruleConfig.enable_compress ? (ruleConfig.compress_types || 'gzip') : '禁用' }}
+            {{ ruleConfig.enable_compress ? (Array.isArray(ruleConfig.compress_types) ? ruleConfig.compress_types.join(', ') : (ruleConfig.compress_types || 'gzip')) : '禁用' }}
           </el-descriptions-item>
           <el-descriptions-item label="主动健康检查" v-if="ruleConfig.protocol === 'http' && ruleConfig.health_check_path">
             {{ ruleConfig.health_check_path }} ({{ ruleConfig.health_check_interval }}s/{{ ruleConfig.health_check_timeout }}s)
@@ -1016,13 +1016,14 @@ import type { CertJobStatus } from '@/utils/certJobStatus'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
 
-interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id'> {
+interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id' | 'compress_types'> {
   id?: number
   caddy_id: string
   dns_family: string[]
   upstreams: UpstreamInput[]
   acme_config_id?: number
   ca_provider_id?: number
+  compress_types: string[]
   enabled: boolean
 }
 
@@ -1093,7 +1094,7 @@ interface RuleConfigView {
   tls_source: string
   tls_http_redirect: boolean
   enable_compress: boolean
-  compress_types: string
+  compress_types: string[]
   health_check_path: string
   health_check_interval: number
   health_check_timeout: number
@@ -1653,7 +1654,7 @@ const wizardForm = reactive<RuleForm>({
   tls_key: '',
   tls_http_redirect: false,
   enable_compress: true,
-  compress_types: 'gzip',
+  compress_types: ['gzip'],
   request_body_max_size_mb: 0,
   upstream_keepalive_timeout: 0,
   server_tokens_hidden: 0,
@@ -1906,10 +1907,10 @@ const validateCertificate = async () => {
   }
 }
 
-const selectedCompressType = (value: string | string[]): string => {
-  if (Array.isArray(value) && value.length > 0) return value[0]
-  if (typeof value === 'string') return value.split(',')[0].trim()
-  return 'gzip'
+const selectedCompressTypes = (value: string | string[]): string[] => {
+  if (Array.isArray(value)) return value.length > 0 ? value : ['gzip']
+  if (typeof value === 'string' && value.trim()) return value.split(',').map(s => s.trim()).filter(Boolean)
+  return ['gzip']
 }
 
 const selectedDnsFamilies = (value: string | string[]): string[] => {
@@ -1960,7 +1961,7 @@ const openWizard = (rule?: Rule) => {
   isCopyMode.value = false
   if (rule) {
     editingRule.value = rule
-    const compressType = rule.compress_types ? selectedCompressType(rule.compress_types) : 'gzip'
+    const compressType = rule.compress_types ? selectedCompressTypes(rule.compress_types) : ['gzip']
     Object.assign(wizardForm, {
       name: rule.name,
       description: rule.description || '',
@@ -2052,7 +2053,7 @@ const openWizard = (rule?: Rule) => {
       tls_key: '',
       tls_http_redirect: false,
       enable_compress: true,
-      compress_types: 'gzip',
+      compress_types: ['gzip'],
       request_body_max_size_mb: 0,
       upstream_keepalive_timeout: 0,
       server_tokens_hidden: 0,
@@ -2354,7 +2355,7 @@ const submitWizard = async () => {
       tls_key: wizardForm.tls_source === 'manual' ? wizardForm.tls_key : '',
       tls_http_redirect: wizardForm.tls_http_redirect,
       enable_compress: wizardForm.enable_compress,
-      compress_types: wizardForm.compress_types || 'gzip',
+      compress_types: wizardForm.compress_types.join(',') || 'gzip',
       request_body_max_size_mb: wizardForm.request_body_max_size_mb || 0,
       upstream_keepalive_timeout: wizardForm.upstream_keepalive_timeout || 0,
       server_tokens_hidden: wizardForm.server_tokens_hidden || 0,
@@ -2456,7 +2457,7 @@ const openCopyWizard = (rule: Rule) => {
   upstreamTouched.value = []
   editingRule.value = null
   isCopyMode.value = true
-  const compressType = rule.compress_types ? selectedCompressType(rule.compress_types) : 'gzip'
+  const compressType = rule.compress_types ? selectedCompressTypes(rule.compress_types) : ['gzip']
   Object.assign(wizardForm, {
     caddy_id: '',
     id: undefined,
@@ -2536,7 +2537,7 @@ const viewConfig = async (rule: Rule) => {
     if (requestSeq !== configRequestSeq || !configDialogVisible.value) return
      
     // Build the display config
-    const compressType = rule.compress_types ? selectedCompressType(rule.compress_types) : 'gzip'
+    const compressType = rule.compress_types ? selectedCompressTypes(rule.compress_types) : ['gzip']
     
     ruleConfig.value = {
       id: rule.id || 0,
@@ -2591,7 +2592,7 @@ const viewConfig = async (rule: Rule) => {
       tls_source: rule.tls_source || 'manual',
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
-      compress_types: 'gzip',
+      compress_types: ['gzip'],
       health_check_path: rule.health_check_path || '',
       health_check_interval: rule.health_check_interval || 10,
       health_check_timeout: rule.health_check_timeout || 5,
