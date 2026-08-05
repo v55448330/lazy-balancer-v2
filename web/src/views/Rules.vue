@@ -1493,7 +1493,7 @@ const getHealthTagType = (status: HealthSummary) => {
 
 const getHealthLabel = (status: HealthSummary) => {
   if (status.unhealthy + status.degraded === status.total) return '异常'
-  if (status.unhealthy + status.degraded > 0) return '异常'
+  if (status.unhealthy + status.degraded > 0) return '降级'
   if (status.unknown === status.total) return '未知'
   if (status.unknown > 0) return '部分未知'
   return '正常'
