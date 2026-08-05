@@ -772,6 +772,36 @@ func TestDeleteRouteByID_removesOnlyOwnedRouteSet(t *testing.T) {
 	assertRouteIDs(t, httpRoutesFromConfig(t, applied), []string{"rule-sibling", ""})
 }
 
+func TestDeleteRouteByID_withoutMatchingRoute_skipsApply(t *testing.T) {
+	// Given
+	current := testHTTPConfig([]interface{}{
+		map[string]interface{}{"@id": "rule-other"},
+		runningDefaultRoute(),
+	})
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			if err := json.NewEncoder(writer).Encode(current); err != nil {
+				t.Errorf("encode current config: %v", err)
+			}
+			return
+		}
+		posts++
+	}))
+	defer server.Close()
+
+	// When
+	err := NewCaddyService(server.URL).DeleteRouteByID("http_80", "rule-missing")
+
+	// Then
+	if err != nil {
+		t.Fatalf("delete missing route set: %v", err)
+	}
+	if posts != 0 {
+		t.Fatalf("delete without matching route issued %d config posts, want 0", posts)
+	}
+}
+
 func TestValidateRouteMergedConfig_insertsBeforeCatchAll_regardlessOfCatchAllIndex(t *testing.T) {
 	// Given
 	current := testHTTPConfig([]interface{}{map[string]interface{}{"@id": "rule-existing"}, runningDefaultRoute()})

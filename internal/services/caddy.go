@@ -299,6 +299,7 @@ func (s *CaddyService) DeleteRouteByID(serverName string, caddyID string) error 
 	}
 
 	filteredRoutes := make([]interface{}, 0, len(routes))
+	removed := false
 	for _, r := range routes {
 		routeMap, ok := r.(map[string]interface{})
 		if !ok {
@@ -307,10 +308,16 @@ func (s *CaddyService) DeleteRouteByID(serverName string, caddyID string) error 
 		}
 
 		if existingID, hasID := routeMap["@id"].(string); hasID && routeIDBelongsToRule(existingID, caddyID) {
+			removed = true
 			continue
 		}
 
 		filteredRoutes = append(filteredRoutes, r)
+	}
+
+	// 未匹配到该规则的路由时配置未变化，跳过全量下发避免无谓的 Caddy 重载。
+	if !removed {
+		return nil
 	}
 
 	server["routes"] = filteredRoutes
