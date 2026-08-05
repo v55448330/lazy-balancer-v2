@@ -177,7 +177,8 @@ func retryCertificateDeployment(ctx context.Context, jobID int, reloader func() 
 
 func (s *CertIssuer) deploymentFailed(jobID int, material issuedCertificate, message string, err error) error {
 	var previousAttempt int
-	if queryErr := db.DB.QueryRow("SELECT COALESCE(deployment_attempts,0) FROM cert_jobs WHERE id=? AND status!='disabled'", jobID).Scan(&previousAttempt); queryErr != nil {
+	// Round 35 I-2: 使用 QueryRowContext 以响应 worker 取消信号（此处函数无 ctx，用 Background 兜底）。
+	if queryErr := db.DB.QueryRowContext(context.Background(), "SELECT COALESCE(deployment_attempts,0) FROM cert_jobs WHERE id=? AND status!='disabled'", jobID).Scan(&previousAttempt); queryErr != nil {
 		return &certificateDeploymentError{err: errors.Join(err, queryErr)}
 	}
 	if material.deploymentAttempt > previousAttempt {
@@ -258,14 +259,20 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	var deploymentAttempt int
 	var ruleEnabled bool
 	var ruleProviderID int
-	if err := db.DB.QueryRow(`SELECT j.status, COALESCE(j.ca_provider_id,0), COALESCE(j.deployment_attempts,0), COALESCE(r.enabled,0), COALESCE(r.ca_provider_id,0)
+	// Round 35 I-2: 使用 QueryRowContext 以响应 worker 取消信号。
+	if err := db.DB.QueryRowContext(ctx, `SELECT j.status, COALESCE(j.ca_provider_id,0), COALESCE(j.deployment_attempts,0), COALESCE(r.enabled,0), COALESCE(r.ca_provider_id,0)
 		FROM cert_jobs j LEFT JOIN lb_rules r ON r.caddy_id = j.rule_id WHERE j.id = ?`, jobID).
 		Scan(&jobStatus, &jobProviderID, &deploymentAttempt, &ruleEnabled, &ruleProviderID); err == nil &&
 		(jobStatus == "issued" || jobStatus == "downloaded") && ruleEnabled {
 		var existingCert, existingKey string
-		if err := db.DB.QueryRow("SELECT COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&existingCert, &existingKey); err == nil && existingCert != "" && existingKey != "" {
+		// Round 35 I-2: 使用 QueryRowContext 以响应 worker 取消信号（此处函数无 ctx，用 Background 兜底）。
+		if err := db.DB.QueryRowContext(context.Background(), "SELECT COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&existingCert, &existingKey); err == nil && existingCert != "" && existingKey != "" {
 			renewalDays := 30
-			_ = db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays)
+			// Round 35 I-2: 同上，且不再用 _ 忽略错误。
+			if err := db.DB.QueryRowContext(context.Background(), "SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays); err != nil {
+				log.Printf("read cert_renewal_days failed, using default 30: %v", err)
+				renewalDays = 30
+			}
 			if renewalDays <= 0 {
 				renewalDays = 30
 			}
@@ -342,7 +349,10 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	if provider.Provider == "zerossl" {
 		var credsBefore models.CAProviderCredentials
 		if provider.Credentials != "" {
-			json.Unmarshal([]byte(provider.Credentials), &credsBefore)
+			// Round 35 I-1: 不再吞没 json.Unmarshal 错误，否则凭证 JSON 损坏时会误触发 EAB 自动获取。
+			if err := json.Unmarshal([]byte(provider.Credentials), &credsBefore); err != nil {
+				logger.Log("creating_account", fmt.Sprintf("解析现有 CA 凭证 JSON 失败，将尝试 EAB 自动获取: %v", err))
+			}
 		}
 		hasEAB := credsBefore.EABKID != "" && credsBefore.EABHMACKey != ""
 		if err := AutoProvisionZeroSSLEAB(ctx, &provider); err != nil {
@@ -369,7 +379,8 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 
 	// Resolve ACME config for the rule.
 	var acmeConfigID int
-	err := db.DB.QueryRow("SELECT COALESCE(acme_config_id,0) FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&acmeConfigID)
+	// Round 35 I-2: 使用 QueryRowContext 以响应 worker 取消信号。
+	err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(acme_config_id,0) FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&acmeConfigID)
 	if err != nil {
 		failJob(jobID, "读取规则 ACME 配置失败")
 		return fmt.Errorf("read rule acme config: %w", err)
@@ -377,7 +388,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 
 	// Load ACME email from global config (single source of truth).
 	var acmeEmail string
-	if err := db.DB.QueryRow("SELECT COALESCE(acme_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail); err != nil {
+	if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(acme_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail); err != nil {
 		failJob(jobID, "读取 ACME 邮箱失败")
 		return fmt.Errorf("read global acme email: %w", err)
 	}
@@ -385,7 +396,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// Load DNS credentials from the rule's selected provider.
 	var dnsCredentialsJSON string
 	if acmeConfigID > 0 {
-		err = db.DB.QueryRow("SELECT COALESCE(dns_credentials,'') FROM certificate_configs WHERE id=? AND enabled=1", acmeConfigID).Scan(&dnsCredentialsJSON)
+		err = db.DB.QueryRowContext(ctx, "SELECT COALESCE(dns_credentials,'') FROM certificate_configs WHERE id=? AND enabled=1", acmeConfigID).Scan(&dnsCredentialsJSON)
 		if err != nil && err != sql.ErrNoRows {
 			failJob(jobID, "读取 DNS 凭证配置失败")
 			return fmt.Errorf("read certificate config: %w", err)
@@ -443,7 +454,11 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		return err
 	}
 	var isMaster bool
-	if err := db.DB.QueryRowContext(ctx, "SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+	// Round 35 I-3: 区分 DB 错误与角色变化，避免误报"节点切换为从节点"。
+	if err := db.DB.QueryRowContext(ctx, "SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
+		return fmt.Errorf("读取主从角色失败: %w", err)
+	}
+	if !isMaster {
 		return fmt.Errorf("节点已切换为从节点，停止保存签发结果")
 	}
 

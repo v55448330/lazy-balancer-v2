@@ -360,7 +360,10 @@ func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) e
 	}
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	// Round 35 B1: http.DefaultClient 无超时，ZeroSSL API 卡住会永久阻塞签发 worker。
+	// 显式指定 30 秒超时兜底，与 ctx 取消形成双重保护。
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("call zerossl EAB API: %w", err)
 	}
@@ -393,8 +396,19 @@ func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) e
 		return fmt.Errorf("persist zerossl EAB: %w", err)
 	}
 	provider.Credentials = string(credsJSON)
-	log.Printf("ZeroSSL EAB auto-provisioned for %s", acmeEmail)
+	// Round 35 I-4: 邮箱部分脱敏后再写日志，避免明文泄露管理员邮箱。
+	log.Printf("ZeroSSL EAB auto-provisioned for %s", maskEmail(acmeEmail))
 	return nil
+}
+
+// maskEmail 脱敏邮箱地址：保留首字符与域名，中间用 *** 替代。
+// 例如：admin@example.com → a***@example.com
+func maskEmail(email string) string {
+	at := strings.IndexByte(email, '@')
+	if at <= 0 || at == len(email)-1 {
+		return "***"
+	}
+	return string(email[0]) + "***" + email[at:]
 }
 
 func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id int) error {
