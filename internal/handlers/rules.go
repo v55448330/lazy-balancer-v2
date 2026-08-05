@@ -693,6 +693,11 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 				u.Protocol = "http"
 			}
 		}
+		// Round 37 I-11: HTTP 规则上游 protocol=tls 静默当 http 处理（与 TCP 行为不对称），显式拒绝。
+		if req.Protocol == "http" && u.Protocol == "tls" {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "HTTP 规则的上游协议不支持 tls，请使用 http 或 https"})
+			return
+		}
 		_, err = tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			caddyID, u.Host, u.Port, u.Weight, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections)
@@ -1448,6 +1453,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			} else {
 				u.Protocol = "http"
 			}
+		}
+		if req.Protocol == "http" && u.Protocol == "tls" {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "HTTP 规则的上游协议不支持 tls，请使用 http 或 https"})
+			return
 		}
 		if _, err := tx.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
