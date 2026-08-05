@@ -31,7 +31,7 @@ RUN npm run build
 
 # Final image
 FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
-ARG VERSION=2.0.12
+ARG VERSION=2.0.13
 ENV APP_VERSION=${VERSION}
 RUN apk add --no-cache ca-certificates shadow sqlite tzdata
 WORKDIR /app
