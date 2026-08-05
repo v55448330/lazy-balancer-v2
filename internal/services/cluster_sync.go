@@ -869,7 +869,7 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 			return
 		}
 		defer confirmed.Body.Close()
-		// Round 35 S-12: 移除 404/405 fallback 兼容（v2.0.7+ 主节点均支持 confirm 端点）。
+		// Round 35 S-12: 移除 404/405 fallback 兼容（v2.0.8+ 主节点均支持 confirm 端点）。
 		// 任何 4xx/5xx 都视为注册失败，从节点不应继续存储 token。
 		if confirmed.StatusCode >= http.StatusBadRequest {
 			return
