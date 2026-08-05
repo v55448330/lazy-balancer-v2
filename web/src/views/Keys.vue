@@ -620,16 +620,11 @@ const toggleKey = async (key: APIKey) => {
 }
 
 const copyCreatedKey = async () => {
-  try {
-    await navigator.clipboard.writeText(createdKey.value)
+  if (await copyText(createdKey.value)) {
     ElMessage.success('密钥已复制')
-  } catch (error: unknown) {
-    if (error instanceof Error) {
-      ElMessage.error('复制失败，请手动复制密钥')
-      return
-    }
-    console.error('Failed to copy key:', error)
+    return
   }
+  ElMessage.error('复制失败，请手动复制密钥')
 }
 
 const fetchMCPTools = async (): Promise<void> => {
