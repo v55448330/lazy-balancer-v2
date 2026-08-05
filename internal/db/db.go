@@ -743,6 +743,15 @@ func runMigrations() error {
 	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_updated_id_expires ON cert_jobs(rule_id, updated_at DESC, id DESC, expires_at)"); err != nil {
 		return fmt.Errorf("failed to index cluster certificate selection: %w", err)
 	}
+	// Round 35 I-18/I-19: lb_rules 高频 WHERE 字段补索引。
+	// listen_port 用于创建/更新规则的端口冲突检查（避免全表扫描）。
+	// enabled 用于 Caddy 配置生成与每 5s 指标采集。
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_lb_rules_listen_port ON lb_rules(listen_port)"); err != nil {
+		return fmt.Errorf("failed to index lb_rules listen_port: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_lb_rules_enabled ON lb_rules(enabled)"); err != nil {
+		return fmt.Errorf("failed to index lb_rules enabled: %w", err)
+	}
 
 	// Normalize ca_available_after to SQLite canonical UTC datetime format.
 	// Older rows may contain Go time.Time strings like

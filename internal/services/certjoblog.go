@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
@@ -44,9 +45,27 @@ func sanitizePathComponent(value string) string {
 	return string(out)
 }
 
-// getCertJobLogSizeBytes reads the configured max size (MB) from global_config.
-// Returns 10 MB when unset or invalid.
+// Round 35 I-17: 缓存 cert_job_log_size_mb 配置，避免每条日志写入都查 DB。
+// 缓存有效期 5 分钟，过期后下一次调用触发刷新。
+var (
+	certJobLogSizeCached     atomic.Int64
+	certJobLogSizeCachedAt   atomic.Int64
+	certJobLogSizeCacheTTLNs = int64(5 * time.Minute)
+	certJobLogSizeRefreshMu  sync.Mutex
+)
+
 func getCertJobLogSizeBytes() int64 {
+	now := time.Now().UnixNano()
+	cachedAt := certJobLogSizeCachedAt.Load()
+	if cachedAt != 0 && now-cachedAt < certJobLogSizeCacheTTLNs {
+		return certJobLogSizeCached.Load()
+	}
+	certJobLogSizeRefreshMu.Lock()
+	defer certJobLogSizeRefreshMu.Unlock()
+	// Double-check after acquiring lock to avoid thundering herd.
+	if cachedAt = certJobLogSizeCachedAt.Load(); cachedAt != 0 && time.Now().UnixNano()-cachedAt < certJobLogSizeCacheTTLNs {
+		return certJobLogSizeCached.Load()
+	}
 	var sizeMB int
 	if err := db.DB.QueryRow("SELECT COALESCE(cert_job_log_size_mb, 10) FROM global_config WHERE id = 1").Scan(&sizeMB); err != nil {
 		sizeMB = 10
@@ -54,7 +73,10 @@ func getCertJobLogSizeBytes() int64 {
 	if sizeMB <= 0 {
 		sizeMB = 10
 	}
-	return int64(sizeMB) * 1024 * 1024
+	bytes := int64(sizeMB) * 1024 * 1024
+	certJobLogSizeCached.Store(bytes)
+	certJobLogSizeCachedAt.Store(now)
+	return bytes
 }
 
 func (l *CertJobFileLogger) write(level, stage, message string) {
