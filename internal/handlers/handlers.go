@@ -494,12 +494,13 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 
 	for i := 0; i < maxRetries; i++ {
 		client := &http.Client{Timeout: 2 * time.Second}
+		// Round 35 I-21: 即使 err != nil，resp 也可能非 nil（如重定向），需统一关闭。
 		resp, err := client.Get("http://localhost:2019/config/")
-		if err == nil {
+		if resp != nil {
 			resp.Body.Close()
-			if resp.StatusCode < 500 {
-				break
-			}
+		}
+		if err == nil && resp.StatusCode < 500 {
+			break
 		}
 		time.Sleep(retryDelay)
 	}

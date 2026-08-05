@@ -806,17 +806,29 @@ func (s *CertificateService) checkManualCertExpiration() {
 	for rows.Next() {
 		var c certInfo
 		if err := rows.Scan(&c.caddyID, &c.name, &c.domain, &c.certPEM); err != nil {
+			// Round 35 B4: 静默 continue 会让证书过期检查遗漏，必须记录告警。
+			log.Printf("Warning: scan failed during expiration check, skipping row: %v", err)
 			continue
 		}
 		certs = append(certs, c)
 	}
-	rows.Close()
+	// Round 35 B4: 显式检查 rows.Err 和 rows.Close 错误，避免迭代期间错误被吞没。
+	if err := rows.Err(); err != nil {
+		log.Printf("Warning: iteration error during expiration check: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		log.Printf("Warning: close rows failed during expiration check: %v", err)
+	}
 
 	now := time.Now()
 	var expiredCount, expiringSoonCount int
 
+	// Round 35 I-20: 不再忽略 warnDays 错误，避免查询失败时所有证书都被误报即将过期。
 	warnDays := 30
-	_ = db.DB.QueryRow("SELECT COALESCE(cert_expiry_days,30) FROM global_config WHERE id=1").Scan(&warnDays)
+	if err := db.DB.QueryRow("SELECT COALESCE(cert_expiry_days,30) FROM global_config WHERE id=1").Scan(&warnDays); err != nil {
+		log.Printf("Warning: read cert_expiry_days failed, using default 30: %v", err)
+		warnDays = 30
+	}
 	for _, c := range certs {
 		block, _ := pem.Decode([]byte(c.certPEM))
 		if block == nil {

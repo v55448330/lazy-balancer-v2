@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -35,7 +36,10 @@ func (h *Handlers) ListRules(c *gin.Context) {
 		return
 	}
 	rules, err := scanLbRules(rows)
-	rows.Close()
+	// Round 35 I-22: rows.Close 错误也要记录，与 services 层 errors.Join 风格一致。
+	if closeErr := rows.Close(); closeErr != nil {
+		log.Printf("ListRules rows close error: %v", closeErr)
+	}
 	if err != nil {
 		log.Printf("ListRules scan error: %v", err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
@@ -57,7 +61,10 @@ func (h *Handlers) GetRule(c *gin.Context) {
 		return
 	}
 	rules, err := scanLbRules(rows)
-	rows.Close()
+	// Round 35 I-22: 同 ListRules。
+	if closeErr := rows.Close(); closeErr != nil {
+		log.Printf("GetRule rows close error for caddy_id=%s: %v", caddyID, closeErr)
+	}
 	if err != nil {
 		log.Printf("GetRule scan error for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
@@ -354,10 +361,13 @@ func queryRuleDomainConflict(domain, excludeCaddyID, extraWhere string) (bool, e
 
 func (h *Handlers) CreateRule(c *gin.Context) {
 
+	// Round 35 B2: io.ReadAll(c.Request.Body) 在 ShouldBindJSON 之后调用永远读到空。
+	// 改为先读原始 body 再放回，确保错误日志能记录到导致解析失败的实际请求内容。
+	rawBody, _ := io.ReadAll(c.Request.Body)
+	c.Request.Body = io.NopCloser(bytes.NewReader(rawBody))
 	var req models.CreateRuleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		body, _ := io.ReadAll(c.Request.Body)
-		log.Printf("CreateRule bind error: %v, body: %s", err, string(body))
+		log.Printf("CreateRule bind error: %v, body: %s", err, string(rawBody))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("Invalid request: %v", err)})
 		return
 	}
@@ -1743,7 +1753,10 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		return
 	}
 	rules, err := scanLbRules(rows)
-	rows.Close()
+	// Round 35 I-22: 同 ListRules。
+	if closeErr := rows.Close(); closeErr != nil {
+		log.Printf("DuplicateRule rows close error for caddy_id=%s: %v", caddyID, closeErr)
+	}
 	if err != nil {
 		log.Printf("DuplicateRule scan error for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
@@ -1788,7 +1801,10 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback()
+			// Round 35 B5: 与 CreateRule/UpdateRule/DeleteRule 模式一致，回滚错误需记录。
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				log.Printf("DuplicateRule transaction rollback failed: %v", rollbackErr)
+			}
 		}
 	}()
 

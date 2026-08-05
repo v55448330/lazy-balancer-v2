@@ -460,13 +460,20 @@ func (m *MetricsService) updateOverview(metrics parsedMetrics) {
 	defer m.mu.Unlock()
 
 	// Get active rules count (fast read-only query)
+	// Round 35 B3: 错误必须显式处理，否则 DB 故障时 overview 三项指标静默归零。
 	var activeRules, totalRules int
-	db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE enabled = 1").Scan(&activeRules)
-	db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules").Scan(&totalRules)
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE enabled = 1").Scan(&activeRules); err != nil {
+		log.Printf("updateOverview: query active rules failed: %v (keeping previous value=%d)", err, activeRules)
+	}
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules").Scan(&totalRules); err != nil {
+		log.Printf("updateOverview: query total rules failed: %v (keeping previous value=%d)", err, totalRules)
+	}
 
 	// Get online nodes count
 	var onlineNodes int
-	db.DB.QueryRow("SELECT COUNT(*) FROM nodes WHERE status = 'online'").Scan(&onlineNodes)
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM nodes WHERE status = 'online'").Scan(&onlineNodes); err != nil {
+		log.Printf("updateOverview: query online nodes failed: %v (keeping previous value=%d)", err, onlineNodes)
+	}
 
 	var rps float64
 	now := time.Now()
