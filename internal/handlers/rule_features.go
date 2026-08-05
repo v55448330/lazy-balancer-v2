@@ -20,6 +20,13 @@ import (
 
 type ruleFeatureInput struct {
 	Protocol                   string
+	Strategy                   string
+	DynamicDNS                 bool
+	EnabledUpstreamCount       int
+	HealthCheckInterval        int
+	HealthCheckTimeout         int
+	EnableCompress             bool
+	CompressTypes              string
 	IPACLMode                  string
 	IPACLList                  []string
 	CustomRoutesEnabled        bool
@@ -36,8 +43,21 @@ type pathRuleQueryer interface {
 }
 
 func createRuleFeatures(req models.CreateRuleRequest) ruleFeatureInput {
+	enabledUpstreams := 0
+	for _, u := range req.Upstreams {
+		if u.Enabled {
+			enabledUpstreams++
+		}
+	}
 	return ruleFeatureInput{
 		Protocol:                   req.Protocol,
+		Strategy:                   req.Strategy,
+		DynamicDNS:                 req.DynamicDNS,
+		EnabledUpstreamCount:       enabledUpstreams,
+		HealthCheckInterval:        req.HealthCheckInterval,
+		HealthCheckTimeout:         req.HealthCheckTimeout,
+		EnableCompress:             req.EnableCompress,
+		CompressTypes:              req.CompressTypes,
 		IPACLMode:                  req.IPACLMode,
 		IPACLList:                  req.IPACLList,
 		CustomRoutesEnabled:        req.CustomRoutesEnabled,
@@ -51,8 +71,29 @@ func createRuleFeatures(req models.CreateRuleRequest) ruleFeatureInput {
 }
 
 func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ruleFeatureInput {
+	enabledUpstreams := 0
+	if req.Upstreams != nil {
+		for _, u := range req.Upstreams {
+			if u.Enabled {
+				enabledUpstreams++
+			}
+		}
+	} else {
+		for _, u := range existing.Upstreams {
+			if u.Enabled {
+				enabledUpstreams++
+			}
+		}
+	}
 	input := ruleFeatureInput{
 		Protocol:                   existing.Protocol,
+		Strategy:                   existing.Strategy,
+		DynamicDNS:                 existing.DynamicDNS,
+		EnabledUpstreamCount:       enabledUpstreams,
+		HealthCheckInterval:        existing.HealthCheckInterval,
+		HealthCheckTimeout:         existing.HealthCheckTimeout,
+		EnableCompress:             existing.EnableCompress,
+		CompressTypes:              existing.CompressTypes,
 		IPACLMode:                  existing.IPACLMode,
 		IPACLList:                  existing.IPACLList,
 		CustomRoutesEnabled:        existing.CustomRoutesEnabled,
@@ -151,6 +192,37 @@ func decodeIPACLList(encoded string) ([]string, error) {
 }
 
 func validateRuleFeatures(input ruleFeatureInput) error {
+	// Round 37 I-5: strategy 白名单校验，非法值不再透传到 Caddy。
+	if input.Strategy != "" {
+		validStrategies := map[string]bool{
+			"weighted_round_robin": true, "least_conn": true,
+			"ip_hash": true, "cookie": true,
+			"random": true, "first": true,
+		}
+		if !validStrategies[input.Strategy] {
+			return fmt.Errorf("负载均衡策略 %q 不支持，支持的策略：weighted_round_robin / least_conn / ip_hash / cookie / random / first", input.Strategy)
+		}
+	}
+	// Round 37 I-6: 健康检查超时必须小于检查间隔（两者都 > 0 时）。
+	if input.HealthCheckInterval > 0 && input.HealthCheckTimeout > 0 && input.HealthCheckTimeout >= input.HealthCheckInterval {
+		return fmt.Errorf("健康检查超时时间（%d 秒）必须小于检查间隔（%d 秒）", input.HealthCheckTimeout, input.HealthCheckInterval)
+	}
+	// Round 37 I-7: compress_types 白名单校验，不支持编码不再静默丢弃。
+	if input.EnableCompress && input.CompressTypes != "" {
+		for _, ct := range strings.Split(input.CompressTypes, ",") {
+			ct = strings.TrimSpace(ct)
+			if ct == "" {
+				continue
+			}
+			if ct != "gzip" && ct != "zstd" {
+				return fmt.Errorf("压缩类型 %q 不支持，当前仅支持 gzip 和 zstd", ct)
+			}
+		}
+	}
+	// Round 37 I-8: dynamic_dns + 多 upstream 前置校验（原仅在 Caddy 渲染阶段检查，规则已入库）。
+	if input.DynamicDNS && input.EnabledUpstreamCount > 1 {
+		return fmt.Errorf("动态上游模式仅允许一个启用的上游服务器，当前有 %d 个", input.EnabledUpstreamCount)
+	}
 	switch input.IPACLMode {
 	case "", "allow", "deny":
 	default:
