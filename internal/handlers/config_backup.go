@@ -292,7 +292,8 @@ func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) []string {
 	for _, row := range rows {
 		protocol, _ := row["protocol"].(string)
 		domain, _ := row["domain"].(string)
-		if protocol != "http" || strings.TrimSpace(domain) != "" {
+		// Round 35 I-10: 空 protocol（非法但 v1 备份可能存在）也按 HTTP 处理，避免绕过空域名跳过逻辑。
+		if (protocol != "http" && protocol != "") || strings.TrimSpace(domain) != "" {
 			kept = append(kept, row)
 			continue
 		}
