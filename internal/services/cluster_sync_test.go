@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -382,7 +383,7 @@ func TestSyncService_do_repeatedRequestsDoNotContinuouslyIncreaseGoroutines(t *t
 	}
 }
 
-func TestSyncService_Pull_rejects_old_response_after_new_snapshot_applied(t *testing.T) {
+func TestSyncService_Pull_applies_old_response_after_new_snapshot_applied(t *testing.T) {
 	_, database := newClusterTestService(t)
 	const token = "cluster-token"
 	oldRequestEntered := make(chan struct{})
@@ -438,23 +439,101 @@ func TestSyncService_Pull_rejects_old_response_after_new_snapshot_applied(t *tes
 	}
 	close(releaseOldResponse)
 
-	if err := waitSyncTest(t, oldDone); err == nil {
-		t.Fatal("late older snapshot was accepted")
+	if err := waitSyncTest(t, oldDone); err != nil {
+		t.Fatalf("late older snapshot rejected: %v", err)
 	}
 	var appliedVersion int
 	if err := database.QueryRow("SELECT applied_version FROM global_config WHERE id=1").Scan(&appliedVersion); err != nil {
 		t.Fatalf("read applied version: %v", err)
 	}
-	if appliedVersion != 2 {
-		t.Fatalf("applied version=%d, want 2", appliedVersion)
+	if appliedVersion != 1 {
+		t.Fatalf("applied version=%d, want 1（从节点跟随主节点版本回退）", appliedVersion)
 	}
 }
 
-func TestVerifySnapshotIntegrityRejectsSameAppliedVersion(t *testing.T) {
+func TestVerifySnapshotIntegrity_acceptsSameAppliedVersion(t *testing.T) {
 	const token = "cluster-token"
 	snapshot := signedTestSnapshot(7, token)
-	if err := verifySnapshotIntegrity(snapshot, token, 7); err == nil {
-		t.Fatal("same snapshot version was accepted")
+	if err := verifySnapshotIntegrity(snapshot, token, 7); err != nil {
+		t.Fatalf("same snapshot version rejected: %v", err)
+	}
+}
+
+func TestVerifySnapshotIntegrity_acceptsMasterVersionRegressionWithWarning(t *testing.T) {
+	// Given
+	const token = "cluster-token"
+	snapshot := signedTestSnapshot(3, token)
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(previous)
+
+	// When
+	err := verifySnapshotIntegrity(snapshot, token, 7)
+
+	// Then
+	if err != nil {
+		t.Fatalf("regressed master version rejected: %v", err)
+	}
+	if !strings.Contains(logs.String(), "检测到主节点配置版本回退") {
+		t.Fatalf("missing regression warning, logs=%q", logs.String())
+	}
+}
+
+func TestVerifySnapshotIntegrity_classifiesAuthenticHigherMinReaderVersion(t *testing.T) {
+	// Given
+	const token = "cluster-token"
+	snapshot := signTestSnapshot(models.ClusterSnapshot{
+		Version: 1, SchemaVersion: CurrentSnapshotSchema, MinReaderVersion: CurrentSnapshotSchema + 1,
+	}, token)
+
+	// When
+	err := verifySnapshotIntegrity(snapshot, token, 0)
+
+	// Then
+	var schemaTooNew *SnapshotSchemaTooNewError
+	if !errors.As(err, &schemaTooNew) {
+		t.Fatalf("authentic higher min-reader error=%v", err)
+	}
+	if got := syncErrorCode(err); got != models.SyncErrorCodeSchemaTooNew {
+		t.Fatalf("sync error code=%q, want %q", got, models.SyncErrorCodeSchemaTooNew)
+	}
+}
+
+func TestVerifySnapshotIntegrity_rejectsForgedHigherMinReaderVersionAsSignatureInvalid(t *testing.T) {
+	// Given：伪造快照携带超高 min_reader_version 但签名无效，永不进入 schema_too_new 终止路径
+	snapshot := models.ClusterSnapshot{
+		Version:          1,
+		SchemaVersion:    CurrentSnapshotSchema,
+		MinReaderVersion: CurrentSnapshotSchema + 1,
+		Fingerprint:      strings.Repeat("0", sha256.Size*2),
+		Signature:        strings.Repeat("0", sha256.Size*2),
+		CanonicalPayload: json.RawMessage(`{"version":1,"schema_version":3,"min_reader_version":4}`),
+	}
+
+	// When
+	err := verifySnapshotIntegrity(snapshot, "cluster-token", 0)
+
+	// Then
+	var schemaTooNew *SnapshotSchemaTooNewError
+	if err == nil || errors.As(err, &schemaTooNew) || !strings.Contains(err.Error(), "签名校验失败") {
+		t.Fatalf("forged higher min-reader error=%v", err)
+	}
+}
+
+func TestVerifySnapshotIntegrity_rejectsUnsignedHigherMinReaderVersionAsSignatureInvalid(t *testing.T) {
+	// Given：未签名快照携带超高 min_reader_version，同样不得进入 schema_too_new 终止路径
+	snapshot := models.ClusterSnapshot{
+		Version: 1, SchemaVersion: CurrentSnapshotSchema, MinReaderVersion: CurrentSnapshotSchema + 1,
+	}
+
+	// When
+	err := verifySnapshotIntegrity(snapshot, "cluster-token", 0)
+
+	// Then
+	var schemaTooNew *SnapshotSchemaTooNewError
+	if err == nil || errors.As(err, &schemaTooNew) || !strings.Contains(err.Error(), "缺少签名") {
+		t.Fatalf("unsigned higher min-reader error=%v", err)
 	}
 }
 
@@ -572,6 +651,50 @@ func TestSyncService_run_stopsAfterReportingHigherMasterSchema(t *testing.T) {
 	want := fmt.Sprintf("主节点快照版本 v%d 超出本节点支持范围 v%d，请升级从节点", CurrentSnapshotSchema+1, CurrentSnapshotSchema)
 	if snapshotRequests.Load() != 1 || waits != 0 || !strings.Contains(report.LastSyncError, want) || report.SyncErrorCode != models.SyncErrorCodeSchemaTooNew || report.ServiceStatus != "degraded" || len(nodes) != 1 || nodes[0].Health == nil || nodes[0].Health.SyncErrorCode != models.SyncErrorCodeSchemaTooNew {
 		t.Fatalf("requests=%d waits=%d report=%#v nodes=%#v", snapshotRequests.Load(), waits, report, nodes)
+	}
+}
+
+func TestSyncService_run_haltsOnAuthenticHigherMinReaderVersion(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	var snapshotRequests atomic.Int32
+	reported := make(chan models.ClusterReport, 1)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/cluster/sync/snapshot":
+			snapshotRequests.Add(1)
+			_ = json.NewEncoder(response).Encode(map[string]any{"data": signTestSnapshot(models.ClusterSnapshot{
+				Version: 1, SchemaVersion: CurrentSnapshotSchema, MinReaderVersion: CurrentSnapshotSchema + 1,
+			}, "cluster-token")})
+		case "/api/v1/cluster/nodes/report":
+			var report models.ClusterReport
+			_ = json.NewDecoder(request.Body).Decode(&report)
+			reported <- report
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer master.Close()
+	caddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
+	defer caddy.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='cluster-token', sync_interval=5 WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(caddy.URL))
+	waits := 0
+	service.waitRunDelay = func(context.Context, time.Duration) bool {
+		waits++
+		return false
+	}
+
+	// When
+	service.run(context.Background())
+	report := waitSyncTest(t, reported)
+
+	// Then
+	want := fmt.Sprintf("主节点快照版本 v%d 超出本节点支持范围 v%d，请升级从节点", CurrentSnapshotSchema+1, CurrentSnapshotSchema)
+	if snapshotRequests.Load() != 1 || waits != 0 || !strings.Contains(report.LastSyncError, want) || report.SyncErrorCode != models.SyncErrorCodeSchemaTooNew || syncLifecycleState(service.state.Load()) != syncStateHalted {
+		t.Fatalf("requests=%d waits=%d state=%d report=%#v", snapshotRequests.Load(), waits, service.state.Load(), report)
 	}
 }
 

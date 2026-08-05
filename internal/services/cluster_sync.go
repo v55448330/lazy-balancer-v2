@@ -635,9 +635,6 @@ func verifySnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken strin
 }
 
 func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken string, appliedVersion int) (models.ClusterSnapshot, error) {
-	if snapshot.MinReaderVersion > CurrentSnapshotSchema {
-		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("快照需要更新的读取端（要求 schema v%d，当前支持 v%d），请先升级本节点", snapshot.MinReaderVersion, CurrentSnapshotSchema))
-	}
 	// The signature is mandatory: it is the only authenticity proof over the
 	// (verification-skipped) transport, and an unsigned payload could be forged
 	// by any on-path actor. Masters that predate signing must be upgraded.
@@ -646,6 +643,12 @@ func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken str
 	}
 	if err := verifySnapshotSignature(snapshot, clusterToken); err != nil {
 		return models.ClusterSnapshot{}, err
+	}
+	// 只有验签通过后才允许进入 schema_too_new 终止路径：伪造数据永不触发
+	// halted，只能降级。验签通过后若读取端版本不足，无法安全解析
+	// canonical_payload，必须终止同步并等待本节点升级。
+	if snapshot.MinReaderVersion > CurrentSnapshotSchema {
+		return models.ClusterSnapshot{}, &SnapshotSchemaTooNewError{Actual: snapshot.MinReaderVersion, Supported: CurrentSnapshotSchema}
 	}
 	if len(snapshot.CanonicalPayload) > 0 && snapshot.Fingerprint == "" {
 		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("快照规范内容缺少指纹"))
@@ -677,10 +680,11 @@ func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken str
 	if snapshot.SchemaVersion < CurrentSnapshotSchema {
 		return models.ClusterSnapshot{}, &SnapshotSchemaTooOldError{Actual: snapshot.SchemaVersion, Supported: CurrentSnapshotSchema}
 	}
-	// Signed snapshots must also move forward; replaying a captured older one
-	// must not resurrect deleted credentials or roll back configuration.
-	if appliedVersion > 0 && snapshot.Version <= appliedVersion {
-		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeReplayDetected, fmt.Errorf("快照版本未递增：收到 %d，已应用 %d，疑似重放攻击", snapshot.Version, appliedVersion))
+	// 验签通过即代表快照来自真实主节点，HMAC 签名是唯一真实性闸门：从节点
+	// 始终跟随主节点。主节点从旧备份恢复时其 cluster_version 会低于从节点
+	// 已应用版本，此时照常应用快照，仅对严格回退打印告警。
+	if appliedVersion > 0 && snapshot.Version < appliedVersion {
+		log.Printf("⚠️ 警告：检测到主节点配置版本回退（恢复场景）：收到快照版本 %d，本节点已应用版本 %d，从节点继续跟随主节点", snapshot.Version, appliedVersion)
 	}
 	if err := verifySnapshotConsistency(snapshot); err != nil {
 		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeValidationFailed, err)
