@@ -545,6 +545,9 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 			return err
 		}
 		if JobIsTerminal(job.status) {
+			// 失败任务不得在启动恢复时复活：即使它仍持有之前签发的有效证书，也不能
+			// 被"检测到已有有效证书"分支拉回 issued。证书维持之前部署的版本，下一次
+			// 尝试只能由续签巡检（CheckExpiration）或手动重签（RetryCertJob）驱动。
 			continue
 		}
 		if job.applicable {

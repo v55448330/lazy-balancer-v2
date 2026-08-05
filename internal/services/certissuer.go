@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -155,9 +156,12 @@ func resumeCertificateDeploymentRetries() {
 
 func retryCertificateDeployment(ctx context.Context, jobID int, reloader func() error) error {
 	var material issuedCertificate
+	// 部署重试须接受与 confirmCertificateDeployment 相同的可部署状态集：启动恢复把
+	// cleanup_dns/cleanup_warning 任务调度到这里，若只收 'downloaded' 会因定时器静默
+	// 吞掉 ErrNoRows 而永久卡死；放宽后重试循环才能推进（成功→issued，反复失败→failed）。
 	if err := db.DB.QueryRowContext(ctx, `SELECT rule_id, COALESCE(cert_pem,''), COALESCE(key_pem,''), expires_at,
 		COALESCE(ca_provider_id,0), COALESCE(deployment_attempts,0)
-		FROM cert_jobs WHERE id=? AND status='downloaded'`, jobID).Scan(
+		FROM cert_jobs WHERE id=? AND status IN ('downloaded','cleanup_dns','cleanup_warning')`, jobID).Scan(
 		&material.ruleID, &material.certPEM, &material.keyPEM, &material.notAfter,
 		&material.providerID, &material.deploymentAttempt,
 	); err != nil {
@@ -256,7 +260,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	if err := db.DB.QueryRow(`SELECT j.status, COALESCE(j.ca_provider_id,0), COALESCE(j.deployment_attempts,0), COALESCE(r.enabled,0), COALESCE(r.ca_provider_id,0)
 		FROM cert_jobs j LEFT JOIN lb_rules r ON r.caddy_id = j.rule_id WHERE j.id = ?`, jobID).
 		Scan(&jobStatus, &jobProviderID, &deploymentAttempt, &ruleEnabled, &ruleProviderID); err == nil &&
-		(jobStatus == "issued" || jobStatus == "downloaded") && ruleEnabled && ruleProviderID == jobProviderID {
+		(jobStatus == "issued" || jobStatus == "downloaded") && ruleEnabled {
 		var existingCert, existingKey string
 		if err := db.DB.QueryRow("SELECT COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&existingCert, &existingKey); err == nil && existingCert != "" && existingKey != "" {
 			renewalDays := 30
@@ -265,44 +269,68 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 				renewalDays = 30
 			}
 			if notAfter, perr := parseCertNotAfter(existingCert); perr == nil && time.Until(notAfter) > time.Duration(renewalDays)*24*time.Hour {
-				material := issuedCertificate{ruleID: ruleID, certPEM: existingCert, keyPEM: existingKey, notAfter: notAfter, providerID: jobProviderID, deploymentAttempt: deploymentAttempt}
-				unlock := DeployLock(ruleID)
-				defer unlock()
-				if err := confirmCertificateDeployment(ctx, jobID, material, true); err != nil {
-					return err
-				}
-				logger.Log("downloaded", "检测到已签发的有效证书，直接重新部署文件")
-				snapshot, snapshotErr := SnapshotCertFiles([]string{ruleID})
-				if snapshotErr != nil {
-					return s.deploymentFailed(jobID, material, "读取现有证书文件失败: "+snapshotErr.Error(), fmt.Errorf("snapshot existing certificate files: %w", snapshotErr))
-				}
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if err := WriteCertFiles(ruleID, existingCert, existingKey); err != nil {
-					return s.deploymentFailed(jobID, material, "已有证书重新部署失败: "+err.Error(), fmt.Errorf("redeploy existing certificate: %w", err))
-				}
-				if err := ctx.Err(); err != nil {
-					return errors.Join(err, restoreCertificateDeployment(snapshot, s.caddyReloader))
-				}
-				if s.caddyReloader != nil {
-					if err := s.caddyReloader(); err != nil {
-						return s.deploymentFailed(jobID, material, "重新部署后重载 Caddy 失败: "+err.Error(), fmt.Errorf("reload Caddy after certificate redeploy: %w", err))
+				// 规则 ca_provider_id=0（跟随默认）时不能拿 0 与任务中已解析的具体
+				// 提供商 ID 直接比较而误判为"提供商已切换"；先解析出规则实际使用的
+				// 提供商，只有真正切换才需要走完整签发流程。
+				resolvedRuleProvider, resolveErr := ResolveCAProviderID(ruleProviderID)
+				if resolveErr == nil && resolvedRuleProvider == jobProviderID {
+					material := issuedCertificate{ruleID: ruleID, certPEM: existingCert, keyPEM: existingKey, notAfter: notAfter, providerID: jobProviderID, deploymentAttempt: deploymentAttempt}
+					unlock := DeployLock(ruleID)
+					defer unlock()
+					if err := confirmCertificateDeployment(ctx, jobID, material, true); err != nil {
+						return err
 					}
+					// 快速路径改为证书内容比对：规则上已部署的证书与任务中的证书一致时
+					// 无需重新部署/重载，直接确认签发任务状态即可。
+					certPath, _ := CertFilePaths(ruleID)
+					deployedCert, readErr := os.ReadFile(certPath)
+					if readErr == nil && string(deployedCert) == existingCert {
+						if err := ctx.Err(); err != nil {
+							return err
+						}
+						if err := transitionJob(db.DB, jobID, []string{"downloaded", "issued"}, "issued", map[string]any{
+							"message":                    "证书已部署，无需重新部署",
+							"deployment_attempts":        0,
+							"deployment_available_after": nil,
+						}); err != nil {
+							return fmt.Errorf("finalize already deployed certificate: %w", err)
+						}
+						RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书已部署，无需重新部署", ruleID), "")
+						return nil
+					}
+					logger.Log("downloaded", "检测到已签发的有效证书，直接重新部署文件")
+					snapshot, snapshotErr := SnapshotCertFiles([]string{ruleID})
+					if snapshotErr != nil {
+						return s.deploymentFailed(jobID, material, "读取现有证书文件失败: "+snapshotErr.Error(), fmt.Errorf("snapshot existing certificate files: %w", snapshotErr))
+					}
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					if err := WriteCertFiles(ruleID, existingCert, existingKey); err != nil {
+						return s.deploymentFailed(jobID, material, "已有证书重新部署失败: "+err.Error(), fmt.Errorf("redeploy existing certificate: %w", err))
+					}
+					if err := ctx.Err(); err != nil {
+						return errors.Join(err, restoreCertificateDeployment(snapshot, s.caddyReloader))
+					}
+					if s.caddyReloader != nil {
+						if err := s.caddyReloader(); err != nil {
+							return s.deploymentFailed(jobID, material, "重新部署后重载 Caddy 失败: "+err.Error(), fmt.Errorf("reload Caddy after certificate redeploy: %w", err))
+						}
+					}
+					if err := ctx.Err(); err != nil {
+						return errors.Join(err, restoreCertificateDeployment(snapshot, s.caddyReloader))
+					}
+					err := transitionJob(db.DB, jobID, []string{"downloaded"}, "issued", map[string]any{
+						"message":                    "证书文件重新部署成功",
+						"deployment_attempts":        0,
+						"deployment_available_after": nil,
+					})
+					if err != nil {
+						return errors.Join(fmt.Errorf("finalize certificate redeploy: %w", err), restoreCertificateDeployment(snapshot, s.caddyReloader))
+					}
+					RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书重新部署成功", ruleID), "")
+					return nil
 				}
-				if err := ctx.Err(); err != nil {
-					return errors.Join(err, restoreCertificateDeployment(snapshot, s.caddyReloader))
-				}
-				err := transitionJob(db.DB, jobID, []string{"downloaded"}, "issued", map[string]any{
-					"message":                    "证书文件重新部署成功",
-					"deployment_attempts":        0,
-					"deployment_available_after": nil,
-				})
-				if err != nil {
-					return errors.Join(fmt.Errorf("finalize certificate redeploy: %w", err), restoreCertificateDeployment(snapshot, s.caddyReloader))
-				}
-				RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书重新部署成功", ruleID), "")
-				return nil
 			}
 		}
 	}

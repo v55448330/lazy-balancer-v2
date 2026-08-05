@@ -667,3 +667,55 @@ func TestCertJobsSnapshot_restore_replaces_upserted_and_new_rows(t *testing.T) {
 		t.Fatalf("restored count=%d id=%d status=%q message=%q provider=%d attempts=%d", count, gotID, status, message, providerID, attempts)
 	}
 }
+
+func TestRequeueNonTerminalCertJobs_does_not_resurrect_failed_job(t *testing.T) {
+	// Given：failed 任务虽持有之前签发的有效证书，也不得在启动恢复时被复活；
+	// queued 任务持有有效证书则仍走"检测到已有有效证书"的恢复优化
+	_, database := newClusterTestService(t)
+	failedCert, failedKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "failed.example.com")
+	queuedCert, queuedKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "queued.example.com")
+	for _, rule := range []struct{ id, domain string }{
+		{id: "lb_recover_failed", domain: "failed.example.com"},
+		{id: "lb_recover_queued", domain: "queued.example.com"},
+	} {
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, rule.id, rule.id, rule.domain); err != nil {
+			t.Fatalf("seed recovery rule %s: %v", rule.id, err)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,cert_pem,key_pem,ca_provider_id) VALUES ('lb_recover_failed','failed.example.com','failed',datetime('now','+90 days'),?,?,1)`, failedCert, failedKey); err != nil {
+		t.Fatalf("seed failed job: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,cert_pem,key_pem,ca_provider_id) VALUES ('lb_recover_queued','queued.example.com','queued',datetime('now','+90 days'),?,?,1)`, queuedCert, queuedKey); err != nil {
+		t.Fatalf("seed queued job: %v", err)
+	}
+
+	// When
+	err := requeueNonTerminalCertJobs(context.Background(), func(int, issuedCertificate, time.Duration) {})
+
+	// Then
+	if err != nil {
+		t.Fatalf("recover non-terminal jobs: %v", err)
+	}
+	statuses := make(map[string]string)
+	rows, err := database.Query("SELECT rule_id,status FROM cert_jobs")
+	if err != nil {
+		t.Fatalf("query recovered jobs: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ruleID, status string
+		if err := rows.Scan(&ruleID, &status); err != nil {
+			t.Fatalf("scan recovered job: %v", err)
+		}
+		statuses[ruleID] = status
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate recovered jobs: %v", err)
+	}
+	if statuses["lb_recover_failed"] != "failed" {
+		t.Fatalf("failed job was resurrected to %q, want failed", statuses["lb_recover_failed"])
+	}
+	if statuses["lb_recover_queued"] != "issued" {
+		t.Fatalf("queued job status=%q, want issued", statuses["lb_recover_queued"])
+	}
+}

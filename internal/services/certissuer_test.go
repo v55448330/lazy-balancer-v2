@@ -346,6 +346,124 @@ func TestCertIssuer_Issue_downloaded_valid_certificate_uses_fast_path(t *testing
 	}
 }
 
+func TestCertIssuer_Issue_fast_path_skips_redeploy_when_deployed_cert_matches(t *testing.T) {
+	// Given：规则跟随默认 CA（ca_provider_id=0），已部署证书与任务证书内容一致
+	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	useTemporaryCertDir(t)
+	certPEM := testCertificatePEM(t, time.Now().Add(90*24*time.Hour))
+	const providerID = 7
+	if _, err := db.DB.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled) VALUES (?, 'Default CA', 'letsencrypt', 'https://acme.example/directory', '{}', 1, 0, 1)`, providerID); err != nil {
+		t.Fatalf("seed default CA provider: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE global_config SET default_ca_provider_id=? WHERE id=1", providerID); err != nil {
+		t.Fatalf("set default CA provider: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET cert_pem=?, key_pem='persisted-key', ca_provider_id=? WHERE id=?", certPEM, providerID, jobID); err != nil {
+		t.Fatalf("seed downloaded certificate material: %v", err)
+	}
+	certPath, _ := CertFilePaths(ruleID)
+	if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
+		t.Fatalf("write deployed certificate file: %v", err)
+	}
+	reloads := 0
+	issuer := NewCertIssuer(func() error {
+		reloads++
+		return nil
+	})
+
+	// When
+	err := issuer.Issue(context.Background(), jobID, ruleID, "example.com", models.CAProvider{ID: providerID})
+
+	// Then：无需重新部署，也不触发 Caddy 重载
+	if err != nil {
+		t.Fatalf("issue with deployed certificate match: %v", err)
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+		t.Fatalf("read fast-path job: %v", err)
+	}
+	deployed, readErr := os.ReadFile(certPath)
+	if readErr != nil {
+		t.Fatalf("read deployed certificate file: %v", readErr)
+	}
+	if status != "issued" || reloads != 0 || string(deployed) != certPEM {
+		t.Fatalf("job status=%q reloads=%d file-unchanged=%v, want issued, 0, true", status, reloads, string(deployed) == certPEM)
+	}
+}
+
+func TestCertIssuer_Issue_fast_path_redeploys_when_deployed_cert_differs(t *testing.T) {
+	// Given：已部署证书内容与任务证书不同，走原有重新部署路径
+	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	useTemporaryCertDir(t)
+	certPEM := testCertificatePEM(t, time.Now().Add(90*24*time.Hour))
+	const providerID = 999
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET cert_pem=?, key_pem='persisted-key', ca_provider_id=? WHERE id=?", certPEM, providerID, jobID); err != nil {
+		t.Fatalf("seed downloaded certificate material: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE lb_rules SET ca_provider_id=? WHERE caddy_id=?", providerID, ruleID); err != nil {
+		t.Fatalf("seed rule CA provider: %v", err)
+	}
+	certPath, _ := CertFilePaths(ruleID)
+	if err := os.WriteFile(certPath, []byte("stale-deployed-cert"), 0644); err != nil {
+		t.Fatalf("write stale deployed certificate: %v", err)
+	}
+	reloads := 0
+	issuer := NewCertIssuer(func() error {
+		reloads++
+		return nil
+	})
+
+	// When
+	err := issuer.Issue(context.Background(), jobID, ruleID, "example.com", models.CAProvider{ID: providerID})
+
+	// Then
+	if err != nil {
+		t.Fatalf("redeploy downloaded certificate: %v", err)
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+		t.Fatalf("read redeployed certificate job: %v", err)
+	}
+	deployed, readErr := os.ReadFile(certPath)
+	if readErr != nil {
+		t.Fatalf("read deployed certificate file: %v", readErr)
+	}
+	if status != "issued" || reloads != 1 || string(deployed) != certPEM {
+		t.Fatalf("job status=%q reloads=%d deployed-match=%v, want issued, 1, true", status, reloads, string(deployed) == certPEM)
+	}
+}
+
+func TestCertIssuer_Issue_fast_path_skips_when_provider_changed(t *testing.T) {
+	// Given：规则明确切换了 CA 提供商（888），任务仍持有旧提供商（999）证书，须走完整签发
+	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	useTemporaryCertDir(t)
+	certPEM := testCertificatePEM(t, time.Now().Add(90*24*time.Hour))
+	const oldProviderID = 999
+	const newProviderID = 888
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET cert_pem=?, key_pem='persisted-key', ca_provider_id=? WHERE id=?", certPEM, oldProviderID, jobID); err != nil {
+		t.Fatalf("seed downloaded certificate material: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE lb_rules SET ca_provider_id=? WHERE caddy_id=?", newProviderID, ruleID); err != nil {
+		t.Fatalf("seed rule CA provider: %v", err)
+	}
+	reloads := 0
+	issuer := NewCertIssuer(func() error {
+		reloads++
+		return nil
+	})
+
+	// When
+	err := issuer.Issue(context.Background(), jobID, ruleID, "example.com", models.CAProvider{ID: oldProviderID})
+
+	// Then：落入完整签发流程，因旧提供商已不存在而在 CA 预检处失败
+	if !errors.Is(err, ErrCAProviderNotFound) {
+		t.Fatalf("issuance error=%v, want CA provider lookup failure", err)
+	}
+	if reloads != 0 {
+		t.Fatalf("provider-changed issuance reloaded Caddy %d times, want 0", reloads)
+	}
+}
+
 func TestCAQueueManager_CancelJobsForRule_waits_for_fast_path_rollback(t *testing.T) {
 	jobID, ruleID := seedCertificateJob(t, "issued")
 	useTemporaryCertDir(t)
@@ -518,6 +636,63 @@ func TestCertificateDeploymentRetry_succeeds_when_provider_deleted(t *testing.T)
 	}
 	if status != "issued" || gotProviderID != providerID || reloads != 1 {
 		t.Fatalf("job status=%q provider=%d reloads=%d, want issued with provider %d and one reload", status, gotProviderID, reloads, providerID)
+	}
+}
+
+func TestRetryCertificateDeployment_accepts_cleanup_dns_status(t *testing.T) {
+	// Given：任务停留在 cleanup_dns 且持有证书材料，部署重试必须能加载并推进到 issued
+	jobID, _ := seedCertificateJob(t, "cleanup_dns")
+	useTemporaryCertDir(t)
+	const providerID = 999
+	if _, err := db.DB.Exec(`UPDATE cert_jobs SET cert_pem='persisted-cert', key_pem='persisted-key', expires_at=datetime('now','+90 days'), ca_provider_id=? WHERE id=?`, providerID, jobID); err != nil {
+		t.Fatalf("seed cleanup_dns certificate: %v", err)
+	}
+	reloads := 0
+
+	// When
+	err := retryCertificateDeployment(context.Background(), jobID, func() error {
+		reloads++
+		return nil
+	})
+
+	// Then
+	if err != nil {
+		t.Fatalf("retry cleanup_dns certificate deployment: %v", err)
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+		t.Fatalf("read deployed certificate job: %v", err)
+	}
+	if status != "issued" || reloads != 1 {
+		t.Fatalf("job status=%q reloads=%d, want issued and one reload", status, reloads)
+	}
+}
+
+func TestRetryCertificateDeployment_cleanup_dns_job_fails_after_max_attempts(t *testing.T) {
+	// Given：长时间停留在 cleanup_dns 的任务，部署反复失败，重试到上限后必须落为 failed
+	jobID, _ := seedCertificateJob(t, "cleanup_dns")
+	useTemporaryCertDir(t)
+	const providerID = 999
+	if _, err := db.DB.Exec(`UPDATE cert_jobs SET cert_pem='persisted-cert', key_pem='persisted-key', expires_at=datetime('now','+90 days'), ca_provider_id=?, deployment_attempts=? WHERE id=?`, providerID, maxCertificateDeploymentAttempts-1, jobID); err != nil {
+		t.Fatalf("seed cleanup_dns certificate at last deployment attempt: %v", err)
+	}
+
+	// When
+	err := retryCertificateDeployment(context.Background(), jobID, func() error {
+		return errors.New("reload failed")
+	})
+
+	// Then
+	if err == nil {
+		t.Fatal("deployment succeeded despite reload failure")
+	}
+	var status string
+	var attempts int
+	if err := db.DB.QueryRow("SELECT status, deployment_attempts FROM cert_jobs WHERE id=?", jobID).Scan(&status, &attempts); err != nil {
+		t.Fatalf("read failed cleanup_dns job: %v", err)
+	}
+	if status != "failed" || attempts != maxCertificateDeploymentAttempts {
+		t.Fatalf("job status=%q attempts=%d, want failed with %d attempts", status, attempts, maxCertificateDeploymentAttempts)
 	}
 }
 
