@@ -80,7 +80,15 @@ func DisableCertJobsExceptDomain(ruleID, keepDomain string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	rows, err := tx.Query(`SELECT id FROM cert_jobs WHERE rule_id=? AND domain<>? AND status<>'disabled'`, ruleID, keepDomain)
+	// cert_jobs.domain 以规范化（排序）形式存储，而调用方按用户输入顺序传入
+	// keepDomain；此处用与入队路径相同的规范化处理，失败时回退原始值
+	// （与 HasCertJob 的容错策略一致）。
+	keep := keepDomain
+	if canonical, err := CanonicalACMEDomains(keepDomain); err == nil {
+		keep = canonical
+	}
+
+	rows, err := tx.Query(`SELECT id FROM cert_jobs WHERE rule_id=? AND domain<>? AND status<>'disabled'`, ruleID, keep)
 	if err != nil {
 		return fmt.Errorf("query retired certificate jobs: %w", err)
 	}
@@ -724,6 +732,7 @@ func (s *CertificateService) renewExpiringCertificates() {
 	// DB and the queue, so holding s.mu here would deadlock the renewal.
 	maxAttempts := GetCertRenewalAttempts()
 	jobs := s.CheckExpiration()
+	jobs = append(jobs, s.checkFailedFirstIssuance(maxAttempts)...)
 	if len(jobs) == 0 {
 		return
 	}
@@ -744,8 +753,16 @@ func (s *CertificateService) renewExpiringCertificates() {
 			log.Printf("Renewal: CA queue manager not initialized")
 			return
 		}
+		message := "等待排队续期"
+		action := "续签排队"
+		source := "renewal"
+		if !j.ExpiresAt.Valid {
+			message = "首次签发失败，冷却结束自动重试"
+			action = "重试排队"
+			source = "first_issuance_retry"
+		}
 		_, changed, err := qm.EnqueueIfActive(j.CAProviderID, j.ID, j.RuleID, j.Domain, func() (int, bool, error) {
-			err := transitionJob(db.DB, j.ID, []string{"issued", "failed", "waiting_ca"}, "queued", map[string]any{"message": "等待排队续期"})
+			err := transitionJob(db.DB, j.ID, []string{"issued", "failed", "waiting_ca"}, "queued", map[string]any{"message": message})
 			if errors.Is(err, ErrJobTransitionConflict) {
 				return j.ID, false, nil
 			}
@@ -758,7 +775,7 @@ func (s *CertificateService) renewExpiringCertificates() {
 		if !changed {
 			continue
 		}
-		RecordAuditLog("system", "续签排队", "证书签发任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditSourcePart("renewal")), "")
+		RecordAuditLog("system", action, "证书签发任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditSourcePart(source)), "")
 	}
 }
 
@@ -853,6 +870,78 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 	`, days)
 	if err != nil {
 		log.Printf("Failed to query expiring certificates: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var jobs []models.CertJob
+	now := time.Now()
+	selectedByRule := make(map[string]CertificateSelection)
+	selectionLoaded := make(map[string]bool)
+	for rows.Next() {
+		var j models.CertJob
+		var ruleDomain string
+		if err := rows.Scan(
+			&j.ID, &j.RuleID, &j.Domain, &j.Status, &j.ExpiresAt, &j.CAProviderID, &j.RenewalAttempts, &j.CAAvailableAfter, &j.LastErrorCode, &ruleDomain,
+		); err != nil {
+			continue
+		}
+		canonicalRule, ruleErr := CanonicalACMEDomains(ruleDomain)
+		canonicalJob, jobErr := CanonicalACMEDomains(j.Domain)
+		if ruleErr != nil || jobErr != nil || canonicalRule != canonicalJob {
+			continue
+		}
+		selection, selected := selectedByRule[j.RuleID]
+		if !selectionLoaded[j.RuleID] {
+			selection, selected, err = selectStoredRuleCertificate(context.Background(), j.RuleID, ruleDomain, now)
+			selectionLoaded[j.RuleID] = true
+			if err != nil {
+				log.Printf("Failed to select current certificate for rule %s: %v", j.RuleID, err)
+				continue
+			}
+			if selected {
+				selectedByRule[j.RuleID] = selection
+			}
+		}
+		if selected {
+			canonicalSelected, selectedErr := CanonicalACMEDomains(selection.Candidate.Domain)
+			if selectedErr == nil && canonicalSelected == canonicalRule && selection.Certificate.NotAfter.After(now.Add(time.Duration(days)*24*time.Hour)) {
+				continue
+			}
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs
+}
+
+const firstIssuanceRetryCooldownMinutes = 30
+
+// checkFailedFirstIssuance 返回首次签发失败（expires_at IS NULL，从未签发成功）、
+// 已过冷却期且未达最大重试次数的证书任务，供续期巡检自动重试。规则筛选与
+// 已有证书判读逻辑与 CheckExpiration 保持一致。
+func (s *CertificateService) checkFailedFirstIssuance(maxAttempts int) []models.CertJob {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var days int
+	err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&days)
+	if err != nil || days <= 0 {
+		days = 30
+	}
+
+	rows, err := db.DB.Query(`
+		SELECT j.id, j.rule_id, j.domain, j.status, j.expires_at, j.ca_provider_id, COALESCE(j.renewal_attempts,0), j.ca_available_after, COALESCE(j.last_error_code,''),r.domain
+		FROM cert_jobs j
+		JOIN lb_rules r ON r.caddy_id=j.rule_id
+		WHERE j.status = 'failed'
+		  AND j.expires_at IS NULL
+		  AND COALESCE(j.renewal_attempts,0) < ?
+		  AND datetime(COALESCE(j.updated_at,j.created_at)) <= datetime('now', '-' || ? || ' minutes')
+		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns'
+		ORDER BY j.updated_at ASC
+	`, maxAttempts, firstIssuanceRetryCooldownMinutes)
+	if err != nil {
+		log.Printf("Failed to query failed first-issuance certificates: %v", err)
 		return nil
 	}
 	defer rows.Close()

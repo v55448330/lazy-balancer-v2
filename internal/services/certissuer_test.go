@@ -8,7 +8,10 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sync"
 	"testing"
@@ -195,6 +198,56 @@ func TestCertIssuer_deployIssuedCertificate_restores_files_when_job_disabled_bef
 	}
 	if string(certPEM) != "old-cert" || string(keyPEM) != "old-key" || status != "disabled" || version != 0 || reloads != 2 {
 		t.Fatalf("files=(%q,%q) status=%q version=%d reloads=%d", certPEM, keyPEM, status, version, reloads)
+	}
+}
+
+func TestCertIssuer_Issue_preflight_rate_limit_enters_waiting_ca(t *testing.T) {
+	// Given：CA 预检连通性测试被 429 限流
+	jobID, ruleID := seedCertificateJob(t, "queued")
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Replay-Nonce", "test-nonce")
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/directory":
+			_, _ = fmt.Fprintf(response, `{"newNonce":%q,"newAccount":%q,"newOrder":%q}`, serverURL+"/nonce", serverURL+"/account", serverURL+"/order")
+		case "/nonce":
+			response.WriteHeader(http.StatusOK)
+		default:
+			response.Header().Set("Retry-After", "1")
+			response.WriteHeader(http.StatusTooManyRequests)
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+	result, err := db.DB.Exec(`INSERT INTO ca_providers (name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled) VALUES ('Rate Limited CA','letsencrypt',?,'{}',1,0,1)`, serverURL+"/directory")
+	if err != nil {
+		t.Fatalf("seed CA provider: %v", err)
+	}
+	providerID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read CA provider ID: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE global_config SET acme_email='admin@example.com' WHERE id=1"); err != nil {
+		t.Fatalf("seed ACME email: %v", err)
+	}
+	issuer := NewCertIssuer(func() error { return nil }, t.TempDir())
+
+	// When
+	issueErr := issuer.Issue(context.Background(), jobID, ruleID, "example.com", models.CAProvider{ID: int(providerID)})
+
+	// Then：预检 429 走限流冷却，而非直接失败
+	var rateLimitErr *CAProviderRateLimitError
+	if !errors.As(issueErr, &rateLimitErr) {
+		t.Fatalf("preflight error=%v, want CA rate limit", issueErr)
+	}
+	handleQueueExecutionError(jobID, issueErr)
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+		t.Fatalf("read job status: %v", err)
+	}
+	if status != "waiting_ca" {
+		t.Fatalf("job status=%q, want waiting_ca", status)
 	}
 }
 

@@ -58,6 +58,44 @@ func TestDisableCertJobsExceptDomain_disables_all_retired_jobs(t *testing.T) {
 	}
 }
 
+func TestDisableCertJobsExceptDomain_keeps_canonical_match_for_www_first_domain(t *testing.T) {
+	// Given：入队路径将根域+www 规范化排序存储，而调用方按用户输入顺序保留域名
+	_, database := newClusterTestService(t)
+	const ruleID = "lb_www_first"
+	if _, err := database.Exec("INSERT INTO cert_jobs (rule_id,domain,status) VALUES (?,?,?)", ruleID, "b.com,www.b.com", "queued"); err != nil {
+		t.Fatalf("seed canonical job: %v", err)
+	}
+	if _, err := database.Exec("INSERT INTO cert_jobs (rule_id,domain,status) VALUES (?,?,?)", ruleID, "old.example.com", "queued"); err != nil {
+		t.Fatalf("seed retired job: %v", err)
+	}
+
+	// When
+	err := DisableCertJobsExceptDomain(ruleID, "www.b.com,b.com")
+
+	// Then
+	if err != nil {
+		t.Fatalf("disable retired jobs: %v", err)
+	}
+	want := map[string]string{
+		"b.com,www.b.com": "queued",
+		"old.example.com": "disabled",
+	}
+	rows, err := database.Query("SELECT domain,status FROM cert_jobs WHERE rule_id=?", ruleID)
+	if err != nil {
+		t.Fatalf("query jobs: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var domain, status string
+		if err := rows.Scan(&domain, &status); err != nil {
+			t.Fatalf("scan job: %v", err)
+		}
+		if status != want[domain] {
+			t.Fatalf("job %s status=%q, want %q", domain, status, want[domain])
+		}
+	}
+}
+
 func TestCreateOrRequeueCertJob_returns_persisted_job_id(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
@@ -361,6 +399,58 @@ func TestCertificateService_periodic_scans_do_not_mutate_jobs_while_queue_paused
 			t.Fatalf("paused job %s status=%q, want %q", ruleID, status, wantStatus)
 		}
 	}
+}
+
+func TestCertificateService_renewExpiringCertificates_retries_failed_first_issuance_after_cooldown(t *testing.T) {
+	// Given：三个首次签发失败（expires_at 为 NULL）的任务——已过冷却、仍在冷却、已达重试上限
+	_, database := newClusterTestService(t)
+	ResetCAQueueManagerForTest()
+	InitCAQueueManager(func() error { return nil })
+	manager := GetCAQueueManager()
+	t.Cleanup(ResetCAQueueManagerForTest)
+	for _, ruleID := range []string{"lb_first_retry", "lb_first_cooling", "lb_first_capped"} {
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, ruleID, ruleID, ruleID+".example.com"); err != nil {
+			t.Fatalf("seed rule %s: %v", ruleID, err)
+		}
+	}
+	maxAttempts := GetCertRenewalAttempts()
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,renewal_attempts,updated_at,ca_provider_id) VALUES
+		('lb_first_retry','lb_first_retry.example.com','failed',1,datetime('now','-31 minutes'),1),
+		('lb_first_cooling','lb_first_cooling.example.com','failed',1,datetime('now','-5 minutes'),1),
+		('lb_first_capped','lb_first_capped.example.com','failed',?,datetime('now','-31 minutes'),1)`, maxAttempts); err != nil {
+		t.Fatalf("seed failed first-issuance jobs: %v", err)
+	}
+	transitioned := make(chan struct{})
+	release := make(chan struct{})
+	manager.beforeEnqueue = func() {
+		close(transitioned)
+		<-release
+	}
+	done := make(chan struct{})
+	go func() {
+		NewCertificateService().renewExpiringCertificates()
+		close(done)
+	}()
+
+	// When：巡检重新排队过冷却任务（beforeEnqueue 在状态迁移后、入队前阻塞）
+	<-transitioned
+
+	// Then
+	for ruleID, wantStatus := range map[string]string{
+		"lb_first_retry":   "queued",
+		"lb_first_cooling": "failed",
+		"lb_first_capped":  "failed",
+	} {
+		var status string
+		if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id=?", ruleID).Scan(&status); err != nil {
+			t.Fatalf("read job %s: %v", ruleID, err)
+		}
+		if status != wantStatus {
+			t.Fatalf("job %s status=%q, want %q", ruleID, status, wantStatus)
+		}
+	}
+	close(release)
+	<-done
 }
 
 func TestCertificateService_requeueWaitingCAJobs_pause_after_scan_start_leaves_job_waiting(t *testing.T) {

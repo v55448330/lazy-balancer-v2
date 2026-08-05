@@ -312,6 +312,10 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// let the retry scheduler handle the next attempt.
 	logger.Log("creating_account", fmt.Sprintf("测试 CA 提供商 %s (%s) 连通性", provider.Name, provider.Provider))
 	if err := NewCAProviderService(s.dataDir).TestCAProviderWithContext(ctx, provider.ID); err != nil {
+		// CA 返回 429 时进入限流冷却（waiting_ca），与签发阶段的限流处理保持一致
+		if raErr := detectRateLimit(err); raErr != nil {
+			return raErr
+		}
 		failJobFromStatus(jobID, "creating_account", fmt.Sprintf("CA 提供商测试失败: %v", err))
 		return fmt.Errorf("CA provider test failed: %w", err)
 	}
