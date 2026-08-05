@@ -852,7 +852,7 @@
           </el-descriptions-item>
           <el-descriptions-item label="主动健康检查" v-if="ruleConfig.protocol === 'tcp' && !ruleConfig.enable_active_health_check">未启用</el-descriptions-item>
           <el-descriptions-item label="被动健康检查" v-if="ruleConfig.protocol === 'http' || ruleConfig.protocol === 'tcp'">
-            失败 {{ ruleConfig.health_check_unhealthy_threshold || 3 }} 次视为不健康, 间隔 {{ ruleConfig.health_check_interval || 10 }}s, 超时 {{ ruleConfig.health_check_timeout || 5 }}s
+            失败 {{ ruleConfig.health_check_unhealthy_threshold || 3 }} 次视为不健康, 间隔 {{ ruleConfig.health_check_interval || 10 }}s, 超时 {{ ruleConfig.health_check_timeout || 2 }}s
           </el-descriptions-item>
           <el-descriptions-item label="连接重试" v-if="ruleConfig.protocol === 'tcp'">
             <template v-if="ruleConfig.tcp_try_duration > 0">
@@ -1636,7 +1636,7 @@ const wizardForm = reactive<RuleForm>({
   dns_family: ['ipv4'],
   health_check_path: '',
   health_check_interval: 10,
-  health_check_timeout: 5,
+  health_check_timeout: 2,
   health_check_healthy_threshold: 2,
   health_check_unhealthy_threshold: 3,
   enable_active_health_check: true,
@@ -1975,7 +1975,7 @@ const openWizard = (rule?: Rule) => {
       dns_family: selectedDnsFamilies(rule.dns_family),
       health_check_path: rule.health_check_path || '',
       health_check_interval: rule.health_check_interval || 10,
-      health_check_timeout: rule.health_check_timeout || 5,
+      health_check_timeout: rule.health_check_timeout || 2,
       health_check_healthy_threshold: rule.health_check_healthy_threshold || 2,
       health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
       enable_active_health_check: rule.enable_active_health_check === true,
@@ -2033,7 +2033,7 @@ const openWizard = (rule?: Rule) => {
       dynamic_dns: false,
       health_check_path: '',
       health_check_interval: 10,
-      health_check_timeout: 5,
+      health_check_timeout: 2,
       health_check_healthy_threshold: 2,
       health_check_unhealthy_threshold: 3,
       enable_active_health_check: true,
@@ -2473,7 +2473,7 @@ const openCopyWizard = (rule: Rule) => {
     dns_family: selectedDnsFamilies(rule.dns_family),
     health_check_path: rule.health_check_path || '',
     health_check_interval: rule.health_check_interval || 10,
-    health_check_timeout: rule.health_check_timeout || 5,
+    health_check_timeout: rule.health_check_timeout || 2,
     health_check_healthy_threshold: rule.health_check_healthy_threshold || 2,
     health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
     enable_active_health_check: rule.enable_active_health_check === true,
@@ -2558,7 +2558,7 @@ const viewConfig = async (rule: Rule) => {
       compress_types: compressType,
       health_check_path: rule.health_check_path || '',
       health_check_interval: rule.health_check_interval || 10,
-      health_check_timeout: rule.health_check_timeout || 5,
+      health_check_timeout: rule.health_check_timeout || 2,
       health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
       enable_active_health_check: rule.enable_active_health_check === true,
       tcp_health_check_port: rule.tcp_health_check_port || 0,
@@ -2595,7 +2595,7 @@ const viewConfig = async (rule: Rule) => {
       compress_types: ['gzip'],
       health_check_path: rule.health_check_path || '',
       health_check_interval: rule.health_check_interval || 10,
-      health_check_timeout: rule.health_check_timeout || 5,
+      health_check_timeout: rule.health_check_timeout || 2,
       health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
       enable_active_health_check: rule.enable_active_health_check === true,
       tcp_health_check_port: rule.tcp_health_check_port || 0,

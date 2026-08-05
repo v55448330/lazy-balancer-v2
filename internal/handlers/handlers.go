@@ -261,7 +261,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		data.HealthCheckInterval = 10
 	}
 	if data.HealthCheckTimeout == 0 {
-		data.HealthCheckTimeout = 5
+		data.HealthCheckTimeout = 2
 	}
 	if data.HealthCheckUnhealthyThreshold == 0 {
 		data.HealthCheckUnhealthyThreshold = 3

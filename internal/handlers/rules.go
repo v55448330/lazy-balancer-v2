@@ -466,7 +466,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		req.HealthCheckInterval = 10
 	}
 	if req.HealthCheckTimeout == 0 {
-		req.HealthCheckTimeout = 5
+		req.HealthCheckTimeout = 2
 	}
 	if req.EnableTLS && req.TLSSource != "manual" && req.TLSSource != "acme_dns" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "启用 TLS 时必须选择证书来源（manual 或 acme_dns）"})
@@ -832,7 +832,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			COALESCE(ca_provider_id,0),
 			COALESCE(enable_tls,0), COALESCE(tls_http_redirect,0),
 			COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
-			COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,5),
+			COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,2),
 			COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 			COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 			COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
