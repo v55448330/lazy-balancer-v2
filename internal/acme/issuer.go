@@ -17,9 +17,10 @@ import (
 
 // Issuer orchestrates the full ACME DNS-01 issuance flow.
 type Issuer struct {
-	Client   *Client
-	Provider dnsprovider.Provider
-	Logger   Logger
+	Client              *Client
+	Provider            dnsprovider.Provider
+	Logger              Logger
+	RequireRecursiveDNS bool
 }
 
 // Issue obtains a certificate for the given domains via DNS-01 challenge.
@@ -127,6 +128,13 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 			return "", "", challenges, fmt.Errorf("dns propagation %s: %w", ci.tokenFQDN, err)
 		}
 		log("dns_propagated", fmt.Sprintf("DNS 已传播 %s", ci.tokenFQDN))
+
+		if i.RequireRecursiveDNS {
+			if !i.checkRecursiveDNS(ctx, ci.tokenFQDN, keyAuth) {
+				return "", "", challenges, fmt.Errorf("recursive DNS propagation failed for %s: record not visible on public resolvers", ci.tokenFQDN)
+			}
+			log("dns_propagated", fmt.Sprintf("递归 DNS 已传播 %s", ci.tokenFQDN))
+		}
 
 		log("accepting_challenge", fmt.Sprintf("提交验证 %s", ci.domain))
 		if _, err := i.Client.AcceptChallenge(ctx, ci.chal); err != nil {
@@ -429,6 +437,30 @@ func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout 
 			return fmt.Errorf("dns propagation timeout for %s: expected %s, no TXT record found from any resolver",
 				fqdn, expected)
 		case <-ticker.C:
+		}
+	}
+}
+
+func (i *Issuer) checkRecursiveDNS(ctx context.Context, fqdn, expected string) bool {
+	resolvers := []string{"223.5.5.5:53", "119.29.29.29:53", "8.8.8.8:53", "1.1.1.1:53"}
+	deadline := time.After(30 * time.Second)
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline:
+			return false
+		case <-ticker.C:
+			for _, r := range resolvers {
+				if hit, _, _ := probeTXT(ctx, r, fqdn, expected, true); hit {
+					if i.Logger != nil {
+						i.Logger.Log("waiting_propagation", fmt.Sprintf("递归 DNS 已命中 %s @ %s", fqdn, r))
+					}
+					return true
+				}
+			}
 		}
 	}
 }

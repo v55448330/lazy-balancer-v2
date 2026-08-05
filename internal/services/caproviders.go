@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -329,6 +330,72 @@ type CAProviderTestError struct {
 
 func (e *CAProviderTestError) Error() string { return e.Err.Error() }
 func (e *CAProviderTestError) Unwrap() error { return e.Err }
+
+// AutoProvisionZeroSSLEAB fetches EAB credentials from the ZeroSSL API using
+// the configured ACME email when the provider lacks them. Credentials are
+// persisted to ca_providers.credentials for reuse.
+func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) error {
+	var creds models.CAProviderCredentials
+	if provider.Credentials != "" {
+		if err := json.Unmarshal([]byte(provider.Credentials), &creds); err != nil {
+			return fmt.Errorf("parse existing credentials: %w", err)
+		}
+	}
+	if creds.EABKID != "" && creds.EABHMACKey != "" {
+		return nil
+	}
+	var acmeEmail string
+	if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(acme_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail); err != nil {
+		return fmt.Errorf("read acme email: %w", err)
+	}
+	if acmeEmail == "" {
+		return fmt.Errorf("ACME email is required for ZeroSSL EAB auto-provision")
+	}
+
+	const zerosslEABURL = "https://api.zerossl.com/acme/eab-credentials-email"
+	reqBody := strings.NewReader("email=" + strings.TrimSpace(acmeEmail))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, zerosslEABURL, reqBody)
+	if err != nil {
+		return fmt.Errorf("build zerossl EAB request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("call zerossl EAB API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Success    bool   `json:"success"`
+		EABKID     string `json:"eab_kid"`
+		EABHMACKey string `json:"eab_hmac_key"`
+		Error      string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return fmt.Errorf("parse zerossl EAB response: %w", err)
+	}
+	if !body.Success || body.EABKID == "" || body.EABHMACKey == "" {
+		reason := body.Error
+		if reason == "" {
+			reason = "empty credentials"
+		}
+		return fmt.Errorf("zerossl EAB auto-provision failed: %s", reason)
+	}
+
+	creds.EABKID = body.EABKID
+	creds.EABHMACKey = body.EABHMACKey
+	credsJSON, err := json.Marshal(creds)
+	if err != nil {
+		return fmt.Errorf("encode EAB credentials: %w", err)
+	}
+	if _, err := db.DB.ExecContext(ctx, "UPDATE ca_providers SET credentials=? WHERE id=?", string(credsJSON), provider.ID); err != nil {
+		return fmt.Errorf("persist zerossl EAB: %w", err)
+	}
+	provider.Credentials = string(credsJSON)
+	log.Printf("ZeroSSL EAB auto-provisioned for %s", acmeEmail)
+	return nil
+}
 
 func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id int) error {
 	log.Printf("Testing CA provider %d", id)
