@@ -446,6 +446,10 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	if req.HealthCheckTimeout == 0 {
 		req.HealthCheckTimeout = 5
 	}
+	if req.EnableTLS && req.TLSSource != "manual" && req.TLSSource != "acme_dns" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "启用 TLS 时必须选择证书来源（manual 或 acme_dns）"})
+		return
+	}
 	// Validate TLS certificate if provided (manual source only)
 	if req.EnableTLS && req.TLSSource == "manual" {
 		if strings.TrimSpace(req.TLSCert) == "" || strings.TrimSpace(req.TLSKey) == "" {
@@ -1098,6 +1102,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	// Validate TLS certificate if provided (manual source only)
+	if *req.EnableTLS && req.TLSSource != "manual" && req.TLSSource != "acme_dns" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "启用 TLS 时必须选择证书来源（manual 或 acme_dns）"})
+		return
+	}
 	if (*req.EnableTLS || req.TLSCert != "" || req.TLSKey != "") && req.TLSSource == "manual" {
 		tlsCert := req.TLSCert
 		tlsKey := req.TLSKey

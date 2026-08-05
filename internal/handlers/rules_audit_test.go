@@ -529,6 +529,55 @@ func TestUpdateRule_rejects_manual_TLS_without_certificate(t *testing.T) {
 	}
 }
 
+func TestEnableRule_rejects_unknown_tls_source(t *testing.T) {
+	// Given：存量规则启用了 TLS 但证书来源为空（历史/导入数据），启用时必须拒绝
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_tls_no_source", "no-source", "no-source.example.test", 8080, false, "", true)
+	seedAuditUpstream(t, "lb_tls_no_source")
+	router := gin.New()
+	router.POST("/rules/:caddy_id/enable", handler.EnableRule)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/lb_tls_no_source/enable", nil))
+
+	// Then
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "证书来源") {
+		t.Fatalf("status=%d body=%s, want 400 unknown TLS source", response.Code, response.Body.String())
+	}
+}
+
+func TestUpdateRule_rejects_unknown_tls_source(t *testing.T) {
+	// Given：存量规则 tls_source 为空，请求或合并后启用 TLS 且来源非 manual/acme_dns 必须拒绝
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "bogus source in request", body: `{"enable_tls":true,"tls_source":"bogus"}`},
+		{name: "empty source after merge", body: `{"enable_tls":true}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler, _, _ := newAuditRuleHandlers(t, 0)
+			seedAuditRule(t, "lb_tls_bad_source", "bad-source", "bad-source.example.test", 8080, true, "", false)
+			seedAuditUpstream(t, "lb_tls_bad_source")
+			router := gin.New()
+			router.PUT("/rules/:caddy_id", handler.UpdateRule)
+			request := httptest.NewRequest(http.MethodPut, "/rules/lb_tls_bad_source", strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// When
+			router.ServeHTTP(response, request)
+
+			// Then
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "证书来源") {
+				t.Fatalf("status=%d body=%s, want 400 unknown TLS source", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestRuleToggle_is_idempotent_when_rule_already_has_target_state(t *testing.T) {
 	tests := []struct {
 		name    string

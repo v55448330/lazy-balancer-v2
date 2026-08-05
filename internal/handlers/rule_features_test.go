@@ -189,6 +189,38 @@ func TestCreateRule_rejects_manual_TLS_without_certificate(t *testing.T) {
 	}
 }
 
+func TestCreateRule_rejects_unknown_tls_source(t *testing.T) {
+	// Given：启用 TLS 时证书来源必须为 manual 或 acme_dns，否则保存为无证书材料的死 TLS
+	tests := []struct {
+		name      string
+		tlsSource string
+		domain    string
+	}{
+		{name: "empty source", tlsSource: "", domain: "tls-empty-source.example.test"},
+		{name: "bogus source", tlsSource: "bogus", domain: "tls-bogus-source.example.test"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler := newRuleFeatureTestHandlers(t)
+			gin.SetMode(gin.TestMode)
+			router := gin.New()
+			router.POST("/rules", handler.CreateRule)
+			body := fmt.Sprintf(`{"name":"tls-source","protocol":"http","domain":%q,"listen_port":0,"enable_tls":true,"tls_source":%q,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`, test.domain, test.tlsSource)
+			request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			// When
+			router.ServeHTTP(response, request)
+
+			// Then
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "证书来源") {
+				t.Fatalf("create tls_source=%q status=%d body=%s, want 400", test.tlsSource, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestUpdateRule_replaces_path_rules_wholesale_within_rule_save(t *testing.T) {
 	// Given
 	handler, postedConfig := newRuleFeatureTestHandlersWithCapture(t)
