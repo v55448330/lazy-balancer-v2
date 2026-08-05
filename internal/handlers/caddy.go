@@ -147,6 +147,14 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		return
 	}
 
+	// Round 38 I-5: 对 dns_credentials 做掩码处理，避免向非管理员用户泄露明文 DNS 凭据。
+	if cfg.DNSCredentials != "" {
+		role, _ := c.Get("role")
+		if role != "admin" {
+			cfg.DNSCredentials = "***"
+		}
+	}
+
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
 }
 
