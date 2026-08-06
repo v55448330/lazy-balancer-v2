@@ -87,7 +87,7 @@ func maskCredentials(credentials string) string {
 		log.Printf("warning: CA provider credentials are not valid JSON, masking as empty")
 		return "{}"
 	}
-	if _, ok := credMap["eab_hmac_key"]; ok {
+	if existing, ok := credMap["eab_hmac_key"]; ok && string(existing) != `""` {
 		credMap["eab_hmac_key"] = json.RawMessage(`"` + MaskedHMACKey + `"`)
 		masked, err := json.Marshal(credMap)
 		if err != nil {

@@ -375,7 +375,7 @@ const parseCACredentials = (raw: string): CAProviderCredentials => {
     const parsed = JSON.parse(raw)
     return {
       eab_kid: parsed.eab_kid || '',
-      eab_hmac_key: parsed.eab_hmac_key || '',
+      eab_hmac_key: (parsed.eab_hmac_key && parsed.eab_hmac_key !== '__MASKED__') ? parsed.eab_hmac_key : '',
     }
   } catch {
     return { eab_kid: '', eab_hmac_key: '' }
