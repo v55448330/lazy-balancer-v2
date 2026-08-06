@@ -642,10 +642,10 @@
                 </div>
               </el-form-item>
               <el-form-item label="压缩方式" v-if="wizardForm.enable_compress">
-                <el-select v-model="wizardForm.compress_types" multiple placeholder="选择压缩方式" style="width: 240px;">
-                  <el-option value="gzip" label="gzip" />
-                  <el-option value="zstd" label="zstd" />
-                </el-select>
+                <el-radio-group v-model="compressType">
+                  <el-radio value="gzip">gzip</el-radio>
+                  <el-radio value="zstd">zstd（更快、压缩比更高，需客户端支持）</el-radio>
+                </el-radio-group>
               </el-form-item>
 
               <el-divider content-position="left" class="compact-divider">动态上游</el-divider>
@@ -1653,7 +1653,7 @@ const wizardForm = reactive<RuleForm>({
   tls_cert: '',
   tls_key: '',
   tls_http_redirect: false,
-  enable_compress: true,
+  enable_compress: false,
   compress_types: ['gzip'],
   request_body_max_size_mb: 0,
   upstream_keepalive_timeout: 0,
@@ -1914,6 +1914,11 @@ const selectedCompressTypes = (value: string | string[]): string[] => {
   if (typeof value === 'string' && value.trim()) return value.split(',').map(s => s.trim()).filter(Boolean)
   return ['gzip']
 }
+
+const compressType = computed<string>({
+  get: () => wizardForm.compress_types[0] ?? 'gzip',
+  set: (v: string) => { wizardForm.compress_types = [v] },
+})
 
 const selectedDnsFamilies = (value: string | string[]): string[] => {
   if (Array.isArray(value)) return value
