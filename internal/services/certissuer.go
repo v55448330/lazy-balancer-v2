@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/x509"
 	"database/sql"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -345,21 +344,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// Pre-flight check: verify the CA provider is reachable before starting the
 	// real issuance flow. If the CA is down (e.g. ZeroSSL 504), fail fast and
 	// let the retry scheduler handle the next attempt.
-	if provider.Provider == "zerossl" {
-		var credsBefore models.CAProviderCredentials
-		if provider.Credentials != "" {
-			// Round 35 I-1: 不再吞没 json.Unmarshal 错误，否则凭证 JSON 损坏时会误触发 EAB 自动获取。
-			if err := json.Unmarshal([]byte(provider.Credentials), &credsBefore); err != nil {
-				logger.Log("creating_account", fmt.Sprintf("解析现有 CA 凭证 JSON 失败，将尝试 EAB 自动获取: %v", err))
-			}
-		}
-		hasEAB := credsBefore.EABKID != "" && credsBefore.EABHMACKey != ""
-		if err := AutoProvisionZeroSSLEAB(ctx, &provider); err != nil {
-			logger.Log("creating_account", fmt.Sprintf("ZeroSSL EAB 自动获取失败: %v", err))
-		} else if !hasEAB {
-			logger.Log("creating_account", "ZeroSSL EAB 自动获取成功，已持久化")
-		}
-	}
+	// ZeroSSL EAB auto-provisioning is handled inside TestCAProviderWithContext.
 	logger.Log("creating_account", fmt.Sprintf("测试 CA 提供商 %s (%s) 连通性", provider.Name, provider.Provider))
 	if err := NewCAProviderService(s.dataDir).TestCAProviderWithContext(ctx, provider.ID); err != nil {
 		// CA 返回 429 时进入限流冷却（waiting_ca），与签发阶段的限流处理保持一致

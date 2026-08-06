@@ -168,9 +168,6 @@ var ErrCAProviderDirectoryURLTooLong = errors.New("directory_url must be <= 255 
 // ErrCAProviderInvalidCredentials is returned when credentials are not valid JSON.
 var ErrCAProviderInvalidCredentials = errors.New("credentials must be valid JSON")
 
-// ErrCAProviderMissingZeroSSLCredentials is returned when ZeroSSL credentials are incomplete.
-var ErrCAProviderMissingZeroSSLCredentials = errors.New("zerossl credentials require eab_kid and eab_hmac_key")
-
 // ErrCAProviderLetsEncryptCredentialsNotEmpty is returned when letsencrypt credentials are provided.
 var ErrCAProviderLetsEncryptCredentialsNotEmpty = errors.New("letsencrypt credentials must be empty")
 
@@ -243,10 +240,6 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 		if err := json.Unmarshal([]byte(existing.Credentials), &creds); err != nil {
 			return ErrCAProviderInvalidCredentials
 		}
-	}
-	if existing.Provider == ProviderZeroSSL {
-		// EAB credentials are optional at save time; AutoProvisionZeroSSLEAB
-		// fetches them on demand during test/issue when left blank.
 	}
 	if existing.Provider == ProviderLetsEncrypt {
 		trimmed := strings.TrimSpace(existing.Credentials)
@@ -394,8 +387,14 @@ func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) e
 	if err != nil {
 		return fmt.Errorf("encode EAB credentials: %w", err)
 	}
-	if _, err := db.DB.ExecContext(ctx, "UPDATE ca_providers SET credentials=? WHERE id=?", string(credsJSON), provider.ID); err != nil {
+	result, err := db.DB.ExecContext(ctx,
+		"UPDATE ca_providers SET credentials=? WHERE id=? AND (credentials='' OR credentials IS NULL OR credentials=?)",
+		string(credsJSON), provider.ID, provider.Credentials)
+	if err != nil {
 		return fmt.Errorf("persist zerossl EAB: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		log.Printf("AutoProvisionZeroSSLEAB: provider %d credentials already set by concurrent worker, skipping persist", provider.ID)
 	}
 	provider.Credentials = string(credsJSON)
 	log.Printf("AutoProvisionZeroSSLEAB: success, EAB persisted for provider %d (%s)", provider.ID, maskEmail(acmeEmail))
@@ -409,7 +408,10 @@ func maskEmail(email string) string {
 	if at <= 0 || at == len(email)-1 {
 		return "***"
 	}
-	return string(email[0]) + "***" + email[at:]
+	if at <= 3 {
+		return "***" + email[at:]
+	}
+	return string(email[:2]) + "***" + email[at:]
 }
 
 func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id int) error {

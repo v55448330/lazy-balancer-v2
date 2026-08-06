@@ -121,8 +121,6 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "目录地址不能超过 255 个字符"})
 		case errors.Is(err, services.ErrCAProviderInvalidCredentials):
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "凭证必须是有效的 JSON"})
-		case errors.Is(err, services.ErrCAProviderMissingZeroSSLCredentials):
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ZeroSSL 凭证需要 eab_kid 和 eab_hmac_key"})
 		case errors.Is(err, services.ErrCAProviderLetsEncryptCredentialsNotEmpty):
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Let's Encrypt 凭证必须为空"})
 		case errors.Is(err, services.ErrCAProviderMaxConcurrentTooHigh):
