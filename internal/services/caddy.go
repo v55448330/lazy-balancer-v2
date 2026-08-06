@@ -759,6 +759,8 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		ProxyReadTimeout              int
 		ProxyWriteTimeout             int
 		ProxyStreamTimeout            int
+		ProxyFlushInterval            int
+		ProxyStreamCloseDelay         int
 		PathRules                     []PathRuleConfig
 		HostHeader                    string
 		LogEnabled                    bool
@@ -791,7 +793,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(host_header,''),
 		       IIF(log_enabled IN ('1',1),1,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), IIF(custom_routes_enabled IN ('1',1),1,0),
-		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0)
+		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0)
 		FROM lb_rules WHERE enabled = 1
 	`)
 	if err != nil {
@@ -809,7 +811,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 			&r.EnableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPProxyProtocol, &r.TCPTryDuration, &r.TCPTryInterval,
 			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.HostHeader, &r.LogEnabled,
 			&r.IPACLMode, &r.IPACLListJSON, &r.CustomRoutesEnabled, &r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout,
-			&r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout)
+			&r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout, &r.ProxyFlushInterval, &r.ProxyStreamCloseDelay)
 
 		if err != nil {
 			closeErr := rows.Close()
@@ -997,6 +999,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 	var global struct {
 		requestBodyMaxSizeMB, httpReadTimeout, httpWriteTimeout, httpIdleTimeout, upstreamKeepaliveTimeout    int
 		proxyDialTimeout, proxyResponseHeaderTimeout, proxyReadTimeout, proxyWriteTimeout, proxyStreamTimeout int
+		proxyFlushInterval, proxyStreamCloseDelay                                                             int
 		serverTokensHidden                                                                                    bool
 	}
 	if err := store.QueryRow(`
@@ -1005,13 +1008,13 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		       COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,0), COALESCE(http_write_timeout,0),
 		       COALESCE(http_idle_timeout,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE),
 		       COALESCE(access_log_json,TRUE), COALESCE(access_log_format,''), COALESCE(proxy_dial_timeout,0),
-		       COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0)
+		       COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0)
 		FROM global_config WHERE id = 1
 	`).Scan(&dnsProvider, &acmeEmail, &isMaster, &caddyLogPath, &caddyLogLevel, &caddyLogSizeMB,
 		&global.requestBodyMaxSizeMB, &global.httpReadTimeout, &global.httpWriteTimeout, &global.httpIdleTimeout,
 		&global.upstreamKeepaliveTimeout, &global.serverTokensHidden, &accessLogJSON, &accessLogFormat,
 		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout,
-		&global.proxyStreamTimeout); err != nil {
+		&global.proxyStreamTimeout, &global.proxyFlushInterval, &global.proxyStreamCloseDelay); err != nil {
 		return generationFailure("load global config: %v", err)
 	}
 
@@ -1055,6 +1058,12 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		}
 		if o.ProxyStreamTimeout != nil {
 			global.proxyStreamTimeout = *o.ProxyStreamTimeout
+		}
+		if o.ProxyFlushInterval != nil {
+			global.proxyFlushInterval = *o.ProxyFlushInterval
+		}
+		if o.ProxyStreamCloseDelay != nil {
+			global.proxyStreamCloseDelay = *o.ProxyStreamCloseDelay
 		}
 		if o.ServerTokensHidden != nil {
 			global.serverTokensHidden = *o.ServerTokensHidden
@@ -1169,11 +1178,15 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 				ProxyReadTimeout:                 r.ProxyReadTimeout,
 				ProxyWriteTimeout:                r.ProxyWriteTimeout,
 				ProxyStreamTimeout:               r.ProxyStreamTimeout,
+				ProxyFlushInterval:               r.ProxyFlushInterval,
+				ProxyStreamCloseDelay:            r.ProxyStreamCloseDelay,
 				GlobalProxyDialTimeout:           global.proxyDialTimeout,
 				GlobalProxyResponseHeaderTimeout: global.proxyResponseHeaderTimeout,
 				GlobalProxyReadTimeout:           global.proxyReadTimeout,
 				GlobalProxyWriteTimeout:          global.proxyWriteTimeout,
 				GlobalProxyStreamTimeout:         global.proxyStreamTimeout,
+				GlobalProxyFlushInterval:         global.proxyFlushInterval,
+				GlobalProxyStreamCloseDelay:      global.proxyStreamCloseDelay,
 			}
 			for _, u := range ups {
 				if u.Enabled {
@@ -1682,11 +1695,15 @@ type SingleRuleConfig struct {
 	ProxyReadTimeout                 int
 	ProxyWriteTimeout                int
 	ProxyStreamTimeout               int
+	ProxyFlushInterval               int
+	ProxyStreamCloseDelay            int
 	GlobalProxyDialTimeout           int
 	GlobalProxyResponseHeaderTimeout int
 	GlobalProxyReadTimeout           int
 	GlobalProxyWriteTimeout          int
 	GlobalProxyStreamTimeout         int
+	GlobalProxyFlushInterval         int
+	GlobalProxyStreamCloseDelay      int
 	Upstreams                        []UpstreamConfig
 }
 
@@ -1698,11 +1715,13 @@ type PathRuleConfig struct {
 }
 
 type proxyTimeouts struct {
-	dial           int
-	responseHeader int
-	read           int
-	write          int
-	stream         int
+	dial             int
+	responseHeader   int
+	read             int
+	write            int
+	stream           int
+	flushInterval    int
+	streamCloseDelay int
 }
 
 type UpstreamConfig struct {
@@ -1745,14 +1764,36 @@ func resolveProxyTimeouts(rule SingleRuleConfig) proxyTimeouts {
 		}
 		return 0
 	}
+	// flush_interval treats -1 as a meaningful "immediate flush" sentinel, not "unset".
+	// Any non-zero rule value wins; otherwise fall back to a non-zero global value.
+	resolveFlush := func(ruleValue, globalValue int) int {
+		if ruleValue != 0 {
+			return ruleValue
+		}
+		if globalValue != 0 {
+			return globalValue
+		}
+		return 0
+	}
 
 	return proxyTimeouts{
-		dial:           resolve(rule.ProxyDialTimeout, rule.GlobalProxyDialTimeout),
-		responseHeader: resolve(rule.ProxyResponseHeaderTimeout, rule.GlobalProxyResponseHeaderTimeout),
-		read:           resolve(rule.ProxyReadTimeout, rule.GlobalProxyReadTimeout),
-		write:          resolve(rule.ProxyWriteTimeout, rule.GlobalProxyWriteTimeout),
-		stream:         resolve(rule.ProxyStreamTimeout, rule.GlobalProxyStreamTimeout),
+		dial:             resolve(rule.ProxyDialTimeout, rule.GlobalProxyDialTimeout),
+		responseHeader:   resolve(rule.ProxyResponseHeaderTimeout, rule.GlobalProxyResponseHeaderTimeout),
+		read:             resolve(rule.ProxyReadTimeout, rule.GlobalProxyReadTimeout),
+		write:            resolve(rule.ProxyWriteTimeout, rule.GlobalProxyWriteTimeout),
+		stream:           resolve(rule.ProxyStreamTimeout, rule.GlobalProxyStreamTimeout),
+		flushInterval:    resolveFlush(rule.ProxyFlushInterval, rule.GlobalProxyFlushInterval),
+		streamCloseDelay: resolve(rule.ProxyStreamCloseDelay, rule.GlobalProxyStreamCloseDelay),
 	}
+}
+
+// formatFlushInterval renders proxy_flush_interval for Caddy JSON:
+// -1 → "-1s" (immediate flush, disables buffering); N>0 → "Ns".
+func formatFlushInterval(v int) string {
+	if v < 0 {
+		return "-1s"
+	}
+	return fmt.Sprintf("%ds", v)
 }
 
 func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{} {
@@ -1932,6 +1973,12 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		}
 		if effectiveProxyTimeouts.stream > 0 {
 			proxyConfig["stream_timeout"] = fmt.Sprintf("%ds", effectiveProxyTimeouts.stream)
+		}
+		if effectiveProxyTimeouts.flushInterval != 0 {
+			proxyConfig["flush_interval"] = formatFlushInterval(effectiveProxyTimeouts.flushInterval)
+		}
+		if effectiveProxyTimeouts.streamCloseDelay > 0 {
+			proxyConfig["stream_close_delay"] = fmt.Sprintf("%ds", effectiveProxyTimeouts.streamCloseDelay)
 		}
 
 		needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0 || effectiveProxyTimeouts.dial > 0 || effectiveProxyTimeouts.responseHeader > 0 || effectiveProxyTimeouts.read > 0 || effectiveProxyTimeouts.write > 0
@@ -2463,6 +2510,12 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 	timeouts := resolveProxyTimeouts(rule)
 	if timeouts.stream > 0 {
 		proxyConfig["stream_timeout"] = fmt.Sprintf("%ds", timeouts.stream)
+	}
+	if timeouts.flushInterval != 0 {
+		proxyConfig["flush_interval"] = formatFlushInterval(timeouts.flushInterval)
+	}
+	if timeouts.streamCloseDelay > 0 {
+		proxyConfig["stream_close_delay"] = fmt.Sprintf("%ds", timeouts.streamCloseDelay)
 	}
 	needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0 || timeouts.dial > 0 || timeouts.responseHeader > 0 || timeouts.read > 0 || timeouts.write > 0
 	if needsTransport {

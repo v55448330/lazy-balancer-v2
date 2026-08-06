@@ -65,6 +65,8 @@ interface SettingsConfig {
   proxy_read_timeout: number
   proxy_write_timeout: number
   proxy_stream_timeout: number
+  proxy_flush_interval: number
+  proxy_stream_close_delay: number
   server_tokens_hidden: boolean
   cert_job_log_size_mb: number
   runtime_log_size_mb: number
@@ -99,6 +101,8 @@ const settings = ref<SettingsConfig>({
   proxy_read_timeout: 0,
   proxy_write_timeout: 0,
   proxy_stream_timeout: 0,
+  proxy_flush_interval: 0,
+  proxy_stream_close_delay: 0,
   server_tokens_hidden: false,
   cert_job_log_size_mb: 10,
   runtime_log_size_mb: 100,
@@ -164,6 +168,8 @@ const applyCaddyKeys = (data: ConfigPayload) => {
   settings.value.proxy_read_timeout = data.proxy_read_timeout ?? 0
   settings.value.proxy_write_timeout = data.proxy_write_timeout ?? 0
   settings.value.proxy_stream_timeout = data.proxy_stream_timeout ?? 0
+  settings.value.proxy_flush_interval = data.proxy_flush_interval ?? 0
+  settings.value.proxy_stream_close_delay = data.proxy_stream_close_delay ?? 0
   settings.value.server_tokens_hidden = data.server_tokens_hidden ?? false
   settings.value.access_log_json = data.access_log_json ?? true
   settings.value.access_log_format = data.access_log_format || settings.value.access_log_format

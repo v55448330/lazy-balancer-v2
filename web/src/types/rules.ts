@@ -40,6 +40,8 @@ export interface ProxyTimeoutConfig {
   proxy_read_timeout: number
   proxy_write_timeout: number
   proxy_stream_timeout: number
+  proxy_flush_interval: number
+  proxy_stream_close_delay: number
 }
 
 export interface Rule extends ProxyTimeoutConfig {
@@ -156,6 +158,8 @@ export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
   proxy_read_timeout?: number
   proxy_write_timeout?: number
   proxy_stream_timeout?: number
+  proxy_flush_interval?: number
+  proxy_stream_close_delay?: number
   path_rules?: PathRule[]
   ca_provider_id?: number
   enabled: boolean

@@ -35,6 +35,8 @@ interface GlobalConfigData {
   proxy_read_timeout: number
   proxy_write_timeout: number
   proxy_stream_timeout: number
+  proxy_flush_interval: number
+  proxy_stream_close_delay: number
   server_tokens_hidden: boolean
   cert_job_log_size_mb: number
   runtime_log_size_mb: number

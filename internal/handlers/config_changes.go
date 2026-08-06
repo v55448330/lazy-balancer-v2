@@ -28,6 +28,8 @@ type configSnapshot struct {
 	ProxyReadTimeout           int
 	ProxyWriteTimeout          int
 	ProxyStreamTimeout         int
+	ProxyFlushInterval         int
+	ProxyStreamCloseDelay      int
 	ServerTokensHidden         bool
 	AccessLogJSON              bool
 	AccessLogFormat            string
@@ -53,7 +55,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100), COALESCE(request_body_max_size_mb,0),
 		COALESCE(http_read_timeout,60), COALESCE(http_write_timeout,60), COALESCE(http_idle_timeout,120),
 		COALESCE(upstream_keepalive_timeout,60),
-		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
+		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 		COALESCE(server_tokens_hidden,FALSE),
 		COALESCE(access_log_json,TRUE), COALESCE(access_log_format,''),
 		COALESCE(cert_job_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3), COALESCE(jwt_expire_minutes,20)
@@ -64,7 +66,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		&old.Timezone,
 		&old.CaddyLogLevel, &old.CaddyLogSizeMB, &old.RequestBodyMaxSizeMB,
 		&old.HTTPReadTimeout, &old.HTTPWriteTimeout, &old.HTTPIdleTimeout,
-		&old.UpstreamKeepaliveTimeout, &old.ProxyDialTimeout, &old.ProxyResponseHeaderTimeout, &old.ProxyReadTimeout, &old.ProxyWriteTimeout, &old.ProxyStreamTimeout,
+		&old.UpstreamKeepaliveTimeout, &old.ProxyDialTimeout, &old.ProxyResponseHeaderTimeout, &old.ProxyReadTimeout, &old.ProxyWriteTimeout, &old.ProxyStreamTimeout, &old.ProxyFlushInterval, &old.ProxyStreamCloseDelay,
 		&old.ServerTokensHidden,
 		&old.AccessLogJSON, &old.AccessLogFormat,
 		&old.CertJobLogSizeMB, &old.RuntimeLogSizeMB, &old.AuditRetentionMonths, &old.JWTExpireMinutes)
@@ -112,6 +114,8 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 	add("proxy_read_timeout", "代理读取超时", req.ProxyReadTimeout != nil && *req.ProxyReadTimeout != old.ProxyReadTimeout)
 	add("proxy_write_timeout", "代理写入超时", req.ProxyWriteTimeout != nil && *req.ProxyWriteTimeout != old.ProxyWriteTimeout)
 	add("proxy_stream_timeout", "代理流超时", req.ProxyStreamTimeout != nil && *req.ProxyStreamTimeout != old.ProxyStreamTimeout)
+	add("proxy_flush_interval", "代理刷新间隔", req.ProxyFlushInterval != nil && *req.ProxyFlushInterval != old.ProxyFlushInterval)
+	add("proxy_stream_close_delay", "代理流关闭延迟", req.ProxyStreamCloseDelay != nil && *req.ProxyStreamCloseDelay != old.ProxyStreamCloseDelay)
 	add("server_tokens_hidden", "Server Tokens", req.ServerTokensHidden != nil && *req.ServerTokensHidden != old.ServerTokensHidden)
 	add("access_log_json", "访问日志 JSON 开关", req.AccessLogJSON != nil && *req.AccessLogJSON != old.AccessLogJSON)
 	add("access_log_format", "日志格式模板", req.AccessLogFormat != nil && *req.AccessLogFormat != old.AccessLogFormat)

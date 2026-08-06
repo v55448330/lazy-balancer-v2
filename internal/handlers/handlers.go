@@ -394,15 +394,16 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 	var global struct {
 		requestBodyMaxSizeMB, upstreamKeepaliveTimeout                                                        int
 		proxyDialTimeout, proxyResponseHeaderTimeout, proxyReadTimeout, proxyWriteTimeout, proxyStreamTimeout int
+		proxyFlushInterval, proxyStreamCloseDelay                                                             int
 		serverTokensHidden                                                                                    bool
 	}
 	if err := db.DB.QueryRow(`
 		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0),
-			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
+			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 			COALESCE(server_tokens_hidden,FALSE)
 		FROM global_config WHERE id = 1
 	`).Scan(&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout,
-		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout, &global.proxyStreamTimeout,
+		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout, &global.proxyStreamTimeout, &global.proxyFlushInterval, &global.proxyStreamCloseDelay,
 		&global.serverTokensHidden); err != nil {
 		return fmt.Errorf("加载全局配置失败: %v", err)
 	}
@@ -442,11 +443,15 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		ProxyReadTimeout:                 features.ProxyReadTimeout,
 		ProxyWriteTimeout:                features.ProxyWriteTimeout,
 		ProxyStreamTimeout:               features.ProxyStreamTimeout,
+		ProxyFlushInterval:               features.ProxyFlushInterval,
+		ProxyStreamCloseDelay:            features.ProxyStreamCloseDelay,
 		GlobalProxyDialTimeout:           global.proxyDialTimeout,
 		GlobalProxyResponseHeaderTimeout: global.proxyResponseHeaderTimeout,
 		GlobalProxyReadTimeout:           global.proxyReadTimeout,
 		GlobalProxyWriteTimeout:          global.proxyWriteTimeout,
 		GlobalProxyStreamTimeout:         global.proxyStreamTimeout,
+		GlobalProxyFlushInterval:         global.proxyFlushInterval,
+		GlobalProxyStreamCloseDelay:      global.proxyStreamCloseDelay,
 		CaddyID:                          tempCaddyID,
 	}
 

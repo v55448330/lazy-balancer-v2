@@ -1669,6 +1669,8 @@ const wizardForm = reactive<RuleForm>({
   proxy_read_timeout: 0,
   proxy_write_timeout: 0,
   proxy_stream_timeout: 0,
+  proxy_flush_interval: 0,
+  proxy_stream_close_delay: 0,
 })
 
 watch(() => wizardForm.path_rules, (pathRules) => {
@@ -2018,6 +2020,8 @@ const openWizard = (rule?: Rule) => {
       proxy_read_timeout: rule.proxy_read_timeout || 0,
       proxy_write_timeout: rule.proxy_write_timeout || 0,
       proxy_stream_timeout: rule.proxy_stream_timeout || 0,
+      proxy_flush_interval: rule.proxy_flush_interval || 0,
+      proxy_stream_close_delay: rule.proxy_stream_close_delay || 0,
     })
     weightsToPercent(wizardForm.upstreams)
     if (wizardForm.dynamic_dns) onDynamicDnsToggle(true)
@@ -2069,6 +2073,8 @@ const openWizard = (rule?: Rule) => {
       proxy_read_timeout: 0,
       proxy_write_timeout: 0,
       proxy_stream_timeout: 0,
+      proxy_flush_interval: 0,
+      proxy_stream_close_delay: 0,
     })
   }
   hydratingWizard = false
@@ -2378,6 +2384,8 @@ const submitWizard = async () => {
       proxy_read_timeout: wizardForm.protocol === 'http' ? wizardForm.proxy_read_timeout : 0,
       proxy_write_timeout: wizardForm.protocol === 'http' ? wizardForm.proxy_write_timeout : 0,
       proxy_stream_timeout: wizardForm.protocol === 'http' ? wizardForm.proxy_stream_timeout : 0,
+      proxy_flush_interval: wizardForm.protocol === 'http' ? wizardForm.proxy_flush_interval : 0,
+      proxy_stream_close_delay: wizardForm.protocol === 'http' ? wizardForm.proxy_stream_close_delay : 0,
     }
 
     if (editingRule.value) {
@@ -2511,6 +2519,8 @@ const openCopyWizard = (rule: Rule) => {
     proxy_read_timeout: rule.proxy_read_timeout || 0,
     proxy_write_timeout: rule.proxy_write_timeout || 0,
     proxy_stream_timeout: rule.proxy_stream_timeout || 0,
+    proxy_flush_interval: rule.proxy_flush_interval || 0,
+    proxy_stream_close_delay: rule.proxy_stream_close_delay || 0,
       tls_key: rule.tls_key || '',
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,

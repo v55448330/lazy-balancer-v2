@@ -47,6 +47,8 @@ func TestBuildOpenAPIYAML_contains_cluster_contract_and_valid_yaml(t *testing.T)
 		"proxy_read_timeout",
 		"proxy_write_timeout",
 		"proxy_stream_timeout",
+		"proxy_flush_interval",
+		"proxy_stream_close_delay",
 		`"upstreams":null`,
 	} {
 		if !strings.Contains(openAPI, field) {

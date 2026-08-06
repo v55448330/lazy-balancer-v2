@@ -133,6 +133,8 @@ type ClusterBasicSettings struct {
 	ProxyReadTimeout           int    `json:"proxy_read_timeout,omitempty"`
 	ProxyWriteTimeout          int    `json:"proxy_write_timeout,omitempty"`
 	ProxyStreamTimeout         int    `json:"proxy_stream_timeout,omitempty"`
+	ProxyFlushInterval         int    `json:"proxy_flush_interval,omitempty"`
+	ProxyStreamCloseDelay      int    `json:"proxy_stream_close_delay,omitempty"`
 	ServerTokensHidden         bool   `json:"server_tokens_hidden,omitempty"`
 	AdminTLSEnabled            bool   `json:"admin_tls_enabled,omitempty"`
 	AdminTLSMode               string `json:"admin_tls_mode,omitempty"`

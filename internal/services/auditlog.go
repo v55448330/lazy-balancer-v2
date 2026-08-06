@@ -39,6 +39,8 @@ var configFieldSections = map[string]string{
 	"proxy_read_timeout":            "Caddy全局配置",
 	"proxy_write_timeout":           "Caddy全局配置",
 	"proxy_stream_timeout":          "Caddy全局配置",
+	"proxy_flush_interval":          "Caddy全局配置",
+	"proxy_stream_close_delay":      "Caddy全局配置",
 	"server_tokens_hidden":          "Caddy全局配置",
 	"access_log_json":               "Caddy全局配置",
 	"access_log_format":             "Caddy全局配置",

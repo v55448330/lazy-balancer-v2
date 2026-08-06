@@ -542,15 +542,16 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	var global struct {
 		requestBodyMaxSizeMB, upstreamKeepaliveTimeout                                                        int
 		proxyDialTimeout, proxyResponseHeaderTimeout, proxyReadTimeout, proxyWriteTimeout, proxyStreamTimeout int
+		proxyFlushInterval, proxyStreamCloseDelay                                                             int
 		serverTokensHidden                                                                                    bool
 	}
 	if err := db.DB.QueryRow(`
 		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0),
-			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
+			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 			COALESCE(server_tokens_hidden,FALSE)
 		FROM global_config WHERE id = 1
 	`).Scan(&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout,
-		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout, &global.proxyStreamTimeout,
+		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout, &global.proxyStreamTimeout, &global.proxyFlushInterval, &global.proxyStreamCloseDelay,
 		&global.serverTokensHidden); err != nil {
 		log.Printf("CreateRule failed to load global config: %v", err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取全局配置失败"})
@@ -591,11 +592,15 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		ProxyReadTimeout:                 features.ProxyReadTimeout,
 		ProxyWriteTimeout:                features.ProxyWriteTimeout,
 		ProxyStreamTimeout:               features.ProxyStreamTimeout,
+		ProxyFlushInterval:               features.ProxyFlushInterval,
+		ProxyStreamCloseDelay:            features.ProxyStreamCloseDelay,
 		GlobalProxyDialTimeout:           global.proxyDialTimeout,
 		GlobalProxyResponseHeaderTimeout: global.proxyResponseHeaderTimeout,
 		GlobalProxyReadTimeout:           global.proxyReadTimeout,
 		GlobalProxyWriteTimeout:          global.proxyWriteTimeout,
 		GlobalProxyStreamTimeout:         global.proxyStreamTimeout,
+		GlobalProxyFlushInterval:         global.proxyFlushInterval,
+		GlobalProxyStreamCloseDelay:      global.proxyStreamCloseDelay,
 		EnableTLS:                        req.EnableTLS,
 		TLSSource:                        req.TLSSource,
 		ACMEConfigID:                     req.ACMEConfigID,
@@ -661,17 +666,17 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			ip_acl_mode, ip_acl_list, custom_routes_enabled,
-			proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout,
+			proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay,
 			host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
 			enable_compress, compress_types, enabled, created_by, updated_at, caddy_id, log_enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer, req.DnsFamily,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
 		req.EnableActiveHealthCheck, req.TCPHealthCheckPort, req.TCPProxyProtocol, req.TCPTryDuration, req.TCPTryInterval,
 		req.RequestBodyMaxSizeMB, req.UpstreamKeepaliveTimeout, req.ServerTokensHidden,
 		features.IPACLMode, ipACLListJSON, features.CustomRoutesEnabled,
-		features.ProxyDialTimeout, features.ProxyResponseHeaderTimeout, features.ProxyReadTimeout, features.ProxyWriteTimeout, features.ProxyStreamTimeout,
+		features.ProxyDialTimeout, features.ProxyResponseHeaderTimeout, features.ProxyReadTimeout, features.ProxyWriteTimeout, features.ProxyStreamTimeout, features.ProxyFlushInterval, features.ProxyStreamCloseDelay,
 		req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.CAProviderID, req.TLSCert, req.TLSKey,
 		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, 1, userIDInt, time.Now().UTC().Format("2006-01-02 15:04:05"), caddyID, req.LogEnabled)
 
@@ -837,7 +842,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 			COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
 			COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
-			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
+			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 		COALESCE(host_header,''), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
 		COALESCE(enabled,1), COALESCE(log_enabled,0), name, description
 	FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(
@@ -851,7 +856,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		&existingRule.EnableActiveHealthCheck, &existingRule.TCPHealthCheckPort, &existingRule.TCPProxyProtocol, &existingRule.TCPTryDuration, &existingRule.TCPTryInterval,
 		&existingRule.RequestBodyMaxSizeMB, &existingRule.UpstreamKeepaliveTimeout, &existingRule.ServerTokensHidden,
 		&existingRule.IPACLMode, &existingIPACLListJSON, &existingRule.CustomRoutesEnabled,
-		&existingRule.ProxyDialTimeout, &existingRule.ProxyResponseHeaderTimeout, &existingRule.ProxyReadTimeout, &existingRule.ProxyWriteTimeout, &existingRule.ProxyStreamTimeout,
+		&existingRule.ProxyDialTimeout, &existingRule.ProxyResponseHeaderTimeout, &existingRule.ProxyReadTimeout, &existingRule.ProxyWriteTimeout, &existingRule.ProxyStreamTimeout, &existingRule.ProxyFlushInterval, &existingRule.ProxyStreamCloseDelay,
 		&existingRule.HostHeader, &existingRule.EnableCompress, &existingRule.CompressTypes,
 		&existingRule.Enabled, &existingRule.LogEnabled, &existingRule.Name, &existingRule.Description)
 	if err != nil {
@@ -1038,6 +1043,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			req.ProxyReadTimeout = &zero
 			req.ProxyWriteTimeout = &zero
 			req.ProxyStreamTimeout = &zero
+			req.ProxyFlushInterval = &zero
+			req.ProxyStreamCloseDelay = &zero
 			req.HostHeader = ""
 			req.EnableCompress = &disabled
 			req.CompressTypes = ""
@@ -1236,6 +1243,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	args = append(args, features.ProxyWriteTimeout)
 	query += "proxy_stream_timeout = ?, "
 	args = append(args, features.ProxyStreamTimeout)
+	query += "proxy_flush_interval = ?, "
+	args = append(args, features.ProxyFlushInterval)
+	query += "proxy_stream_close_delay = ?, "
+	args = append(args, features.ProxyStreamCloseDelay)
 	query += "host_header = ?, "
 	args = append(args, req.HostHeader)
 	query += "enable_tls = ?, "
@@ -1276,18 +1287,18 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	var global struct {
-		requestBodyMaxSizeMB, upstreamKeepaliveTimeout                                                        int
-		proxyDialTimeout, proxyResponseHeaderTimeout, proxyReadTimeout, proxyWriteTimeout, proxyStreamTimeout int
-		serverTokensHidden                                                                                    bool
+		requestBodyMaxSizeMB, upstreamKeepaliveTimeout                                                                                                   int
+		proxyDialTimeout, proxyResponseHeaderTimeout, proxyReadTimeout, proxyWriteTimeout, proxyStreamTimeout, proxyFlushInterval, proxyStreamCloseDelay int
+		serverTokensHidden                                                                                                                               bool
 	}
 	if err := db.DB.QueryRow(`
 		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0),
-			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
+			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 			COALESCE(server_tokens_hidden,FALSE)
 		FROM global_config WHERE id = 1
 	`).Scan(
 		&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout,
-		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout, &global.proxyStreamTimeout,
+		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout, &global.proxyStreamTimeout, &global.proxyFlushInterval, &global.proxyStreamCloseDelay,
 		&global.serverTokensHidden); err != nil {
 		log.Printf("UpdateRule failed to load global config for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取全局配置失败"})
@@ -1327,11 +1338,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		ProxyReadTimeout:                 features.ProxyReadTimeout,
 		ProxyWriteTimeout:                features.ProxyWriteTimeout,
 		ProxyStreamTimeout:               features.ProxyStreamTimeout,
+		ProxyFlushInterval:               features.ProxyFlushInterval,
+		ProxyStreamCloseDelay:            features.ProxyStreamCloseDelay,
 		GlobalProxyDialTimeout:           global.proxyDialTimeout,
 		GlobalProxyResponseHeaderTimeout: global.proxyResponseHeaderTimeout,
 		GlobalProxyReadTimeout:           global.proxyReadTimeout,
 		GlobalProxyWriteTimeout:          global.proxyWriteTimeout,
 		GlobalProxyStreamTimeout:         global.proxyStreamTimeout,
+		GlobalProxyFlushInterval:         global.proxyFlushInterval,
+		GlobalProxyStreamCloseDelay:      global.proxyStreamCloseDelay,
 		EnableTLS:                        *req.EnableTLS,
 		TLSSource:                        req.TLSSource,
 		ACMEConfigID:                     req.ACMEConfigID,
@@ -1854,7 +1869,8 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		CustomRoutesEnabled: rule.CustomRoutesEnabled, PathRules: rule.PathRules,
 		ProxyDialTimeout: rule.ProxyDialTimeout, ProxyResponseHeaderTimeout: rule.ProxyResponseHeaderTimeout,
 		ProxyReadTimeout: rule.ProxyReadTimeout, ProxyWriteTimeout: rule.ProxyWriteTimeout,
-		ProxyStreamTimeout: rule.ProxyStreamTimeout,
+		ProxyStreamTimeout: rule.ProxyStreamTimeout, ProxyFlushInterval: rule.ProxyFlushInterval,
+		ProxyStreamCloseDelay: rule.ProxyStreamCloseDelay,
 	}); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "源规则配置不合法：" + err.Error()})
 		return
@@ -1869,8 +1885,8 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key,
 		tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, log_enabled, caddy_id,
 		ip_acl_mode, ip_acl_list, custom_routes_enabled,
-		proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, rule.Name+"（副本）", rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 		rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 		rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
@@ -1880,7 +1896,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, 0, userIDInt, userIDInt,
 		now, now, rule.HostHeader, rule.LogEnabled, newCaddyID,
 		rule.IPACLMode, ipACLListJSON, rule.CustomRoutesEnabled,
-		rule.ProxyDialTimeout, rule.ProxyResponseHeaderTimeout, rule.ProxyReadTimeout, rule.ProxyWriteTimeout, rule.ProxyStreamTimeout,
+		rule.ProxyDialTimeout, rule.ProxyResponseHeaderTimeout, rule.ProxyReadTimeout, rule.ProxyWriteTimeout, rule.ProxyStreamTimeout, rule.ProxyFlushInterval, rule.ProxyStreamCloseDelay,
 	); err != nil {
 		log.Printf("Failed to duplicate rule %s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "复制规则失败，已回滚: " + err.Error()})

@@ -36,6 +36,8 @@ type ruleFeatureInput struct {
 	ProxyReadTimeout           int
 	ProxyWriteTimeout          int
 	ProxyStreamTimeout         int
+	ProxyFlushInterval         int
+	ProxyStreamCloseDelay      int
 }
 
 type pathRuleQueryer interface {
@@ -67,6 +69,8 @@ func createRuleFeatures(req models.CreateRuleRequest) ruleFeatureInput {
 		ProxyReadTimeout:           req.ProxyReadTimeout,
 		ProxyWriteTimeout:          req.ProxyWriteTimeout,
 		ProxyStreamTimeout:         req.ProxyStreamTimeout,
+		ProxyFlushInterval:         req.ProxyFlushInterval,
+		ProxyStreamCloseDelay:      req.ProxyStreamCloseDelay,
 	}
 }
 
@@ -105,6 +109,8 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 		ProxyReadTimeout:           existing.ProxyReadTimeout,
 		ProxyWriteTimeout:          existing.ProxyWriteTimeout,
 		ProxyStreamTimeout:         existing.ProxyStreamTimeout,
+		ProxyFlushInterval:         existing.ProxyFlushInterval,
+		ProxyStreamCloseDelay:      existing.ProxyStreamCloseDelay,
 	}
 	if req.DynamicDNS != nil {
 		input.DynamicDNS = *req.DynamicDNS
@@ -141,6 +147,12 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 	}
 	if req.ProxyStreamTimeout != nil {
 		input.ProxyStreamTimeout = *req.ProxyStreamTimeout
+	}
+	if req.ProxyFlushInterval != nil {
+		input.ProxyFlushInterval = *req.ProxyFlushInterval
+	}
+	if req.ProxyStreamCloseDelay != nil {
+		input.ProxyStreamCloseDelay = *req.ProxyStreamCloseDelay
 	}
 	return input
 }
@@ -251,7 +263,7 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		if input.CustomRoutesEnabled || len(input.PathRules) > 0 {
 			return fmt.Errorf("TCP 规则不支持自定义路径规则")
 		}
-		if input.ProxyDialTimeout > 0 || input.ProxyResponseHeaderTimeout > 0 || input.ProxyReadTimeout > 0 || input.ProxyWriteTimeout > 0 || input.ProxyStreamTimeout > 0 {
+		if input.ProxyDialTimeout > 0 || input.ProxyResponseHeaderTimeout > 0 || input.ProxyReadTimeout > 0 || input.ProxyWriteTimeout > 0 || input.ProxyStreamTimeout > 0 || input.ProxyFlushInterval != 0 || input.ProxyStreamCloseDelay > 0 {
 			return fmt.Errorf("TCP 规则不支持 HTTP 代理超时配置")
 		}
 	}
@@ -293,6 +305,13 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 	}
 	if input.ProxyDialTimeout < 0 || input.ProxyResponseHeaderTimeout < 0 || input.ProxyReadTimeout < 0 || input.ProxyWriteTimeout < 0 || input.ProxyStreamTimeout < 0 {
 		return fmt.Errorf("代理超时时间不能为负数")
+	}
+	// proxy_flush_interval: 0 = 自动（仅 text/event-stream 触发立即刷新），-1 = 立即刷新所有响应，>0 = 每 N 秒刷新一次
+	if input.ProxyFlushInterval < -1 {
+		return fmt.Errorf("代理刷新间隔不能小于 -1")
+	}
+	if input.ProxyStreamCloseDelay < 0 {
+		return fmt.Errorf("代理流关闭延迟不能为负数")
 	}
 	return nil
 }
@@ -505,7 +524,7 @@ const lbRuleListColumns = `COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE
 	COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 	COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
 	COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
-	COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
+	COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 	COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), '', '',
 	COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), COALESCE(enabled,1), COALESCE(log_enabled,0),
 	created_by, created_at, updated_at, updated_by, COALESCE(host_header,'')`
@@ -516,7 +535,7 @@ const lbRuleColumns = `COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE(des
 	COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 	COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
 	COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
-	COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0),
+	COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 	COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
 	COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), COALESCE(enabled,1), COALESCE(log_enabled,0),
 	created_by, created_at, updated_at, updated_by, COALESCE(host_header,'')`
@@ -537,7 +556,7 @@ func scanLbRules(rows *sql.Rows) ([]models.LbRule, error) {
 			&enableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPProxyProtocol, &r.TCPTryDuration, &r.TCPTryInterval,
 			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden,
 			&r.IPACLMode, &ipACLListJSON, &r.CustomRoutesEnabled,
-			&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout,
+			&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout, &r.ProxyFlushInterval, &r.ProxyStreamCloseDelay,
 			&enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &tlsCert, &tlsKey, &tlsHTTPRedirect,
 			&enableCompress, &compressTypes, &r.Enabled, &r.LogEnabled,
 			&createdBy, &createdAt, &updatedAt, &updatedBy, &hostHeader); err != nil {

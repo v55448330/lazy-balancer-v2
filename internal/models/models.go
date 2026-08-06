@@ -140,6 +140,8 @@ type LbRule struct {
 	ProxyReadTimeout              int          `json:"proxy_read_timeout"`
 	ProxyWriteTimeout             int          `json:"proxy_write_timeout"`
 	ProxyStreamTimeout            int          `json:"proxy_stream_timeout"`
+	ProxyFlushInterval            int          `json:"proxy_flush_interval"`
+	ProxyStreamCloseDelay         int          `json:"proxy_stream_close_delay"`
 	PathRules                     []PathRule   `json:"path_rules"`
 	Upstreams                     []Upstream   `json:"upstreams"`
 	HostHeader                    string       `json:"host_header"`
@@ -216,6 +218,8 @@ type GlobalConfig struct {
 	ProxyReadTimeout           int          `json:"proxy_read_timeout"`
 	ProxyWriteTimeout          int          `json:"proxy_write_timeout"`
 	ProxyStreamTimeout         int          `json:"proxy_stream_timeout"`
+	ProxyFlushInterval         int          `json:"proxy_flush_interval"`
+	ProxyStreamCloseDelay      int          `json:"proxy_stream_close_delay"`
 	ServerTokensHidden         bool         `json:"server_tokens_hidden"`
 	CertJobLogSizeMB           int          `json:"cert_job_log_size_mb"`
 	RuntimeLogSizeMB           int          `json:"runtime_log_size_mb"`
@@ -413,6 +417,8 @@ type CreateRuleRequest struct {
 	ProxyReadTimeout              int        `json:"proxy_read_timeout"`
 	ProxyWriteTimeout             int        `json:"proxy_write_timeout"`
 	ProxyStreamTimeout            int        `json:"proxy_stream_timeout"`
+	ProxyFlushInterval            int        `json:"proxy_flush_interval"`
+	ProxyStreamCloseDelay         int        `json:"proxy_stream_close_delay"`
 	PathRules                     []PathRule `json:"path_rules"`
 	HostHeader                    string     `json:"host_header"`
 	Upstreams                     []Upstream `json:"upstreams" binding:"required"`
@@ -460,6 +466,8 @@ type UpdateRuleRequest struct {
 	ProxyReadTimeout              *int        `json:"proxy_read_timeout"`
 	ProxyWriteTimeout             *int        `json:"proxy_write_timeout"`
 	ProxyStreamTimeout            *int        `json:"proxy_stream_timeout"`
+	ProxyFlushInterval            *int        `json:"proxy_flush_interval"`
+	ProxyStreamCloseDelay         *int        `json:"proxy_stream_close_delay"`
 	PathRules                     *[]PathRule `json:"path_rules"`
 	HostHeader                    string      `json:"host_header"`
 	Upstreams                     []Upstream  `json:"upstreams"`
@@ -498,6 +506,8 @@ type UpdateConfigRequest struct {
 	ProxyReadTimeout           *int    `json:"proxy_read_timeout"`
 	ProxyWriteTimeout          *int    `json:"proxy_write_timeout"`
 	ProxyStreamTimeout         *int    `json:"proxy_stream_timeout"`
+	ProxyFlushInterval         *int    `json:"proxy_flush_interval"`
+	ProxyStreamCloseDelay      *int    `json:"proxy_stream_close_delay"`
 	ServerTokensHidden         *bool   `json:"server_tokens_hidden"`
 	CertJobLogSizeMB           *int    `json:"cert_job_log_size_mb"`
 	RuntimeLogSizeMB           *int    `json:"runtime_log_size_mb"`
