@@ -991,7 +991,7 @@ func TestUpdateRule_cancels_job_before_restore_when_create_returns_jobID_and_err
 	}
 }
 
-func TestUpdateRule_cancels_requeued_job_before_restoring_when_retirement_fails(t *testing.T) {
+func TestUpdateRule_migrates_cert_job_domain_inplace(t *testing.T) {
 	// Given
 	harness := newUpdateAuditRuleHandlers(t, "lb_acme_retire", 0, false)
 	seedAuditRule(t, "lb_acme_retire", "before", "old.example.test", 8080, true, "acme_dns", true)
@@ -1004,14 +1004,12 @@ func TestUpdateRule_cancels_requeued_job_before_restoring_when_retirement_fails(
 		t.Fatalf("set rule CA provider: %v", err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES
-		('lb_acme_retire','old.example.test','issued',?),
-		('lb_acme_retire','new.example.test','failed',?)`, providerID, providerID); err != nil {
-		t.Fatalf("seed certificate jobs: %v", err)
+		('lb_acme_retire','old.example.test','issued',?)`, providerID); err != nil {
+		t.Fatalf("seed certificate job: %v", err)
 	}
-	if _, err := db.DB.Exec(`CREATE TRIGGER fail_retired_cert_job BEFORE UPDATE OF status ON cert_jobs
-		WHEN OLD.rule_id='lb_acme_retire' AND OLD.domain='old.example.test' AND NEW.status='disabled'
-		BEGIN SELECT RAISE(ABORT,'retirement failed'); END`); err != nil {
-		t.Fatalf("create retirement failure trigger: %v", err)
+	var originalJobID int
+	if err := db.DB.QueryRow("SELECT id FROM cert_jobs WHERE rule_id='lb_acme_retire'").Scan(&originalJobID); err != nil {
+		t.Fatalf("read original job ID: %v", err)
 	}
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil })
@@ -1025,35 +1023,34 @@ func TestUpdateRule_cancels_requeued_job_before_restoring_when_retirement_fails(
 	// When
 	router.ServeHTTP(response, request)
 
-	// Then
-	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "退役旧域名证书任务失败") {
+	// Then: domain updated in-place, no second job created
+	if response.Code != http.StatusOK {
 		t.Fatalf("update status=%d body=%s", response.Code, response.Body.String())
 	}
-	var domain string
-	if err := db.DB.QueryRow("SELECT domain FROM lb_rules WHERE caddy_id='lb_acme_retire'").Scan(&domain); err != nil {
-		t.Fatalf("read restored rule: %v", err)
+	var ruleDomain string
+	if err := db.DB.QueryRow("SELECT domain FROM lb_rules WHERE caddy_id='lb_acme_retire'").Scan(&ruleDomain); err != nil {
+		t.Fatalf("read rule domain: %v", err)
 	}
-	rows, err := db.DB.Query("SELECT domain,status FROM cert_jobs WHERE rule_id='lb_acme_retire' ORDER BY domain")
-	if err != nil {
-		t.Fatalf("read restored certificate jobs: %v", err)
+	if ruleDomain != "new.example.test" {
+		t.Fatalf("rule domain=%q, want new.example.test", ruleDomain)
 	}
-	defer rows.Close()
-	statuses := map[string]string{}
-	for rows.Next() {
-		var jobDomain, status string
-		if err := rows.Scan(&jobDomain, &status); err != nil {
-			t.Fatalf("scan restored certificate job: %v", err)
-		}
-		statuses[jobDomain] = status
+	var jobCount int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_acme_retire' AND status NOT IN ('retired')").Scan(&jobCount); err != nil {
+		t.Fatalf("count cert jobs: %v", err)
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate restored certificate jobs: %v", err)
+	if jobCount != 1 {
+		t.Fatalf("non-retired cert job count=%d, want 1 (domain should be migrated in-place)", jobCount)
 	}
-	if domain != "old.example.test" || statuses["new.example.test"] != "failed" || statuses["old.example.test"] != "issued" {
-		t.Fatalf("domain=%q statuses=%v, want original DB snapshot", domain, statuses)
+	var migratedJobID int
+	var migratedDomain string
+	if err := db.DB.QueryRow("SELECT id,domain FROM cert_jobs WHERE rule_id='lb_acme_retire' AND status NOT IN ('retired')").Scan(&migratedJobID, &migratedDomain); err != nil {
+		t.Fatalf("read migrated job: %v", err)
 	}
-	if harness.loadCalls.Load() < 2 || !strings.Contains(harness.currentConfig(), `"old":true`) {
-		t.Fatalf("Caddy loads=%d config=%s, want runtime restoration", harness.loadCalls.Load(), harness.currentConfig())
+	if migratedJobID != originalJobID {
+		t.Fatalf("migrated job ID=%d, want original %d (should be same job, not new)", migratedJobID, originalJobID)
+	}
+	if migratedDomain != "new.example.test" {
+		t.Fatalf("migrated job domain=%q, want new.example.test", migratedDomain)
 	}
 }
 

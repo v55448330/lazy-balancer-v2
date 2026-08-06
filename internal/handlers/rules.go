@@ -1523,6 +1523,29 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 		caProviderID = resolvedCAProviderID
 		domainChanged := domain != existingRule.Domain
+		// When domain changes, update the existing cert job's domain instead of
+		// creating a new job and disabling the old one. This preserves the job ID
+		// and maintains the "one rule = one cert job" invariant.
+		if domainChanged {
+			newCanonical := canonicalACMEDomainForJobLookup(domain)
+			var existingJobID int
+			if err := db.DB.QueryRow(
+				`SELECT id FROM cert_jobs WHERE rule_id=? AND status NOT IN ('retired') ORDER BY id DESC LIMIT 1`,
+				caddyID).Scan(&existingJobID); err == nil && existingJobID > 0 {
+				if _, err := db.DB.Exec(
+					`UPDATE cert_jobs SET domain=?, status='failed', message='域名已更新，等待重新签发', cert_pem='', key_pem='', expires_at=NULL, renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?`,
+					newCanonical, existingJobID); err != nil {
+					services.Logf("error", "UpdateRule: failed to update cert job %d domain for caddy_id=%s: %v", existingJobID, caddyID, err)
+				} else {
+					log.Printf("UpdateRule: migrated cert job %d domain to %s for caddy_id=%s", existingJobID, newCanonical, caddyID)
+				}
+				if _, err := db.DB.Exec(
+					`DELETE FROM cert_jobs WHERE rule_id=? AND id!=? AND status NOT IN ('retired')`,
+					caddyID, existingJobID); err != nil {
+					services.Logf("error", "UpdateRule: failed to clean up extra cert jobs for caddy_id=%s: %v", caddyID, err)
+				}
+			}
+		}
 		caProviderChanged := resolvedCAProviderID != resolvedExistingCAProviderID
 		wasReEnabled := !existingRule.Enabled && *req.Enabled
 		tlsSourceChangedToACME := existingRule.TLSSource != "acme_dns"
@@ -1610,13 +1633,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				}
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书签发任务失败: " + err.Error()})
 				return
-			}
-			if domainChanged {
-				if err := services.DisableCertJobsExceptDomain(caddyID, domain); err != nil {
-					restoreErr := restoreACMEState()
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "退役旧域名证书任务失败: " + errors.Join(err, restoreErr).Error()})
-					return
-				}
 			}
 		}
 	}
