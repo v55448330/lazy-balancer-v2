@@ -623,13 +623,13 @@ func TestReplaceSnapshotDB_replaces_resources_without_overwriting_role(t *testin
 		Rules: []models.LbRule{{
 			CaddyID: "lb_snapshot1", Name: "snapshot", Protocol: "http", ListenPort: 8080,
 			Strategy: "round_robin", Enabled: true, IPACLMode: "allow", IPACLList: []string{"192.0.2.0/24"}, CustomRoutesEnabled: true,
-			ProxyDialTimeout: 3, ProxyResponseHeaderTimeout: 4, ProxyReadTimeout: 5, ProxyWriteTimeout: 6, ProxyStreamTimeout: 7,
+			ProxyDialTimeout: 3, ProxyResponseHeaderTimeout: 4, ProxyReadTimeout: 5, ProxyWriteTimeout: 6, ProxyStreamTimeout: 7, ProxyFlushInterval: -1, ProxyStreamCloseDelay: 5,
 			Upstreams: []models.Upstream{{ID: 11, Host: "127.0.0.1", Port: 9000, Weight: 1, Enabled: true, Protocol: "http"}},
 			PathRules: []models.PathRule{{ID: 21, SortOrder: 2, MatchType: "prefix", Path: "/metrics/", Upstreams: nil}},
 		}},
 		Users:         []models.ClusterUser{{ID: 20, Username: "admin-master", PasswordHash: "hash", Role: "admin", IsEnabled: true}},
 		APIKeys:       []models.ClusterAPIKey{{ID: 30, Name: "ci", KeyHash: "key-hash", KeyPrefix: "lb_sk_master", CreatedBy: 20, IsEnabled: true}},
-		BasicSettings: models.ClusterBasicSettings{LogLevel: "debug", AccessLogJSON: true, Timezone: "Asia/Shanghai", SyncInterval: 120, ProxyDialTimeout: 8, ProxyResponseHeaderTimeout: 9, ProxyReadTimeout: 10, ProxyWriteTimeout: 11, ProxyStreamTimeout: 12},
+		BasicSettings: models.ClusterBasicSettings{LogLevel: "debug", AccessLogJSON: true, Timezone: "Asia/Shanghai", SyncInterval: 120, ProxyDialTimeout: 8, ProxyResponseHeaderTimeout: 9, ProxyReadTimeout: 10, ProxyWriteTimeout: 11, ProxyStreamTimeout: 12, ProxyFlushInterval: 0, ProxyStreamCloseDelay: 3},
 		CaddyConfig:   &caddyConfig,
 	}
 

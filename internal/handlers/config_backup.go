@@ -230,6 +230,20 @@ func validateV2Backup(backup configBackup) error {
 		if err := validateRuleListenPort(protocol, listenPort); err != nil {
 			return fmt.Errorf("规则 #%d：%w", index+1, err)
 		}
+		if err := validateRuleFeatures(ruleFeatureInput{
+			Protocol:                   protocol,
+			Strategy:                   backupString(rule["strategy"]),
+			ProxyDialTimeout:           backupInt(rule["proxy_dial_timeout"]),
+			ProxyResponseHeaderTimeout: backupInt(rule["proxy_response_header_timeout"]),
+			ProxyReadTimeout:           backupInt(rule["proxy_read_timeout"]),
+			ProxyWriteTimeout:          backupInt(rule["proxy_write_timeout"]),
+			ProxyStreamTimeout:         backupInt(rule["proxy_stream_timeout"]),
+			ProxyFlushInterval:         backupInt(rule["proxy_flush_interval"]),
+			ProxyStreamCloseDelay:      backupInt(rule["proxy_stream_close_delay"]),
+			CompressTypes:              backupString(rule["compress_types"]),
+		}); err != nil {
+			return fmt.Errorf("规则 #%d：%w", index+1, err)
+		}
 	}
 	for _, job := range backup.Tables["cert_jobs"] {
 		status, ok := job["status"].(string)
@@ -261,6 +275,20 @@ func backupBooleanEnabled(value any) bool {
 	default:
 		return false
 	}
+}
+
+func backupString(value any) string {
+	if s, ok := value.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func backupInt(value any) int {
+	if v, ok := backupInteger(value); ok {
+		return v
+	}
+	return 0
 }
 
 func backupInteger(value any) (int, bool) {

@@ -498,6 +498,8 @@ func TestGenerateRouteObject_ProxyTimeouts_resolveRuleThenGlobal(t *testing.T) {
 	rule.GlobalProxyWriteTimeout = 16
 	rule.ProxyStreamTimeout = 7
 	rule.GlobalProxyStreamTimeout = 17
+	rule.ProxyFlushInterval = -1
+	rule.ProxyStreamCloseDelay = 5
 
 	// When
 	route, err := GenerateRouteObject(rule)
