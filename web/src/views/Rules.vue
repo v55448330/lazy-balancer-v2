@@ -1968,7 +1968,7 @@ const openWizard = (rule?: Rule) => {
   isCopyMode.value = false
   if (rule) {
     editingRule.value = rule
-    const compressType = rule.compress_types ? selectedCompressTypes(rule.compress_types) : ['gzip']
+    const compressTypes = rule.compress_types ? selectedCompressTypes(rule.compress_types) : ['gzip']
     Object.assign(wizardForm, {
       name: rule.name,
       description: rule.description || '',
@@ -2005,7 +2005,7 @@ const openWizard = (rule?: Rule) => {
       tls_key: rule.tls_key || '',
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
-      compress_types: compressType,
+      compress_types: compressTypes,
       request_body_max_size_mb: rule.request_body_max_size_mb || 0,
       upstream_keepalive_timeout: rule.upstream_keepalive_timeout || 0,
       server_tokens_hidden: rule.server_tokens_hidden || 0,
@@ -2061,7 +2061,7 @@ const openWizard = (rule?: Rule) => {
       tls_cert: '',
       tls_key: '',
       tls_http_redirect: false,
-      enable_compress: true,
+      enable_compress: false,
       compress_types: ['gzip'],
       request_body_max_size_mb: 0,
       upstream_keepalive_timeout: 0,
@@ -2470,7 +2470,7 @@ const openCopyWizard = (rule: Rule) => {
   upstreamTouched.value = []
   editingRule.value = null
   isCopyMode.value = true
-  const compressType = rule.compress_types ? selectedCompressTypes(rule.compress_types) : ['gzip']
+  const compressTypes = rule.compress_types ? selectedCompressTypes(rule.compress_types) : ['gzip']
   Object.assign(wizardForm, {
     caddy_id: '',
     id: undefined,
@@ -2506,6 +2506,7 @@ const openCopyWizard = (rule: Rule) => {
     acme_config_id: rule.acme_config_id || undefined,
     ca_provider_id: rule.ca_provider_id ?? 0,
     tls_cert: rule.tls_cert || '',
+    tls_key: rule.tls_key || '',
     request_body_max_size_mb: rule.request_body_max_size_mb || 0,
     upstream_keepalive_timeout: rule.upstream_keepalive_timeout || 0,
     server_tokens_hidden: rule.server_tokens_hidden || 0,
@@ -2526,11 +2527,10 @@ const openCopyWizard = (rule: Rule) => {
     proxy_stream_timeout: rule.proxy_stream_timeout || 0,
     proxy_flush_interval: rule.proxy_flush_interval || 0,
     proxy_stream_close_delay: rule.proxy_stream_close_delay || 0,
-      tls_key: rule.tls_key || '',
-      tls_http_redirect: rule.tls_http_redirect || false,
-      enable_compress: rule.enable_compress !== false,
-      compress_types: compressType,
-      enabled: false,
+    tls_http_redirect: rule.tls_http_redirect || false,
+    enable_compress: rule.enable_compress !== false,
+    compress_types: compressTypes,
+    enabled: false,
     })
   weightsToPercent(wizardForm.upstreams)
   if (wizardForm.dynamic_dns) onDynamicDnsToggle(true)
@@ -2552,7 +2552,7 @@ const viewConfig = async (rule: Rule) => {
     if (requestSeq !== configRequestSeq || !configDialogVisible.value) return
      
     // Build the display config
-    const compressType = rule.compress_types ? selectedCompressTypes(rule.compress_types) : ['gzip']
+    const compressTypes = rule.compress_types ? selectedCompressTypes(rule.compress_types) : ['gzip']
     
     ruleConfig.value = {
       id: rule.id || 0,
@@ -2570,7 +2570,7 @@ const viewConfig = async (rule: Rule) => {
       tls_source: rule.tls_source || 'manual',
       tls_http_redirect: rule.tls_http_redirect || false,
       enable_compress: rule.enable_compress !== false,
-      compress_types: compressType,
+      compress_types: compressTypes,
       health_check_path: rule.health_check_path || '',
       health_check_interval: rule.health_check_interval || 10,
       health_check_timeout: rule.health_check_timeout || 2,
