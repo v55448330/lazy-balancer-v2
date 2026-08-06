@@ -46,8 +46,8 @@ const fields: readonly TimeoutField[] = [
   { key: 'proxy_read_timeout', label: '读超时', min: 0, desc: '两次读上游数据的间隔；流式需大于静默期', suggest: 60 },
   { key: 'proxy_write_timeout', label: '写超时', min: 0, desc: '两次写客户端的间隔；流式需大于静默期', suggest: 60 },
   { key: 'proxy_stream_timeout', label: '流式超时', min: 0, desc: '整个流式会话总时长；用于 SSE/LLM' },
-  { key: 'proxy_flush_interval', label: '刷新间隔', min: -1, desc: '-1=立即刷新无缓冲，&gt;0=每 N 秒一次' },
-  { key: 'proxy_stream_close_delay', label: '流关闭延迟', min: 0, desc: '&gt;0=reload 时延迟 N 秒关旧 WebSocket/SSE' },
+  { key: 'proxy_flush_interval', label: '刷新间隔', min: -1, desc: '默认仅 SSE 无缓冲；-1=所有响应无缓冲；>0=每 N 秒一次' },
+  { key: 'proxy_stream_close_delay', label: '流关闭延迟', min: 0, desc: '>0=reload 时延迟 N 秒关旧 WebSocket/SSE' },
 ]
 
 const update = (field: keyof ProxyTimeoutConfig, value: number | undefined): void => {
