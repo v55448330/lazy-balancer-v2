@@ -346,28 +346,34 @@ func (h *Handlers) GetOpenAPIYAML(c *gin.Context) {
 }
 
 func (h *Handlers) GetAPIDocs(c *gin.Context) {
-	var b strings.Builder
-	b.WriteString(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lazy Balancer API 文档</title><style>body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f9fafb;color:#111827}main{max-width:1200px;margin:32px auto;padding:0 20px}.card{background:white;border-radius:12px;padding:24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}code,pre{background:#f3f4f6;border-radius:6px;padding:2px 6px}pre{padding:12px;overflow:auto}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left;vertical-align:top}th{background:#f9fafb}.method{font-weight:700;color:#2563eb}</style></head><body><main><h1>Lazy Balancer API 文档</h1><div class="card"><p>Base URL：<code>/api/v1</code></p><p>认证：<code>Authorization: Bearer &lt;JWT 或 lb_sk_ API Key&gt;</code></p><p>统一响应：<code>{"code":0,"message":"...","data":...}</code>；错误使用相同结构并返回 4xx/5xx。</p><p>OpenAPI YAML：<a href="/api/v1/openapi.yaml">/api/v1/openapi.yaml</a></p></div>`)
-	for _, r := range apiDocRoutes {
-		fmt.Fprintf(&b, `<div class="card"><h2><span class="method">%s</span> <code>%s</code></h2><p><strong>%s</strong></p>`, r.Method, openAPIPath(r.Path), r.Summary)
-		if description := operationDescription(r); description != "" {
-			fmt.Fprintf(&b, `<p>%s</p>`, description)
-		}
-		b.WriteString(`<table><tr><th>请求体</th><th>成功响应</th><th>错误</th></tr><tr>`)
-		if r.Request == "" {
-			b.WriteString(`<td>-</td>`)
-		} else {
-			fmt.Fprintf(&b, `<td><pre>%s</pre></td>`, r.Request)
-		}
-		contract := apiDocContractFor(r)
-		fmt.Fprintf(&b, `<td><pre>%s %s\n%s</pre></td>`, strconv.Itoa(contract.successStatus), contract.responseContentType, documentedResponse(r, contract.rawResponse))
-		if len(r.Errors) == 0 {
-			b.WriteString(`<td>-</td>`)
-		} else {
-			fmt.Fprintf(&b, `<td>%s</td>`, strings.Join(r.Errors, "<br>"))
-		}
-		b.WriteString(`</tr></table></div>`)
-	}
-	b.WriteString(`</main></body></html>`)
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(b.String()))
+	html := `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Lazy Balancer API</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui.css">
+  <style>body{margin:0}</style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui-bundle.js" crossorigin></script>
+  <script>
+    window.addEventListener("DOMContentLoaded", () => {
+      window.ui = SwaggerUIBundle({
+        url: "/api/v1/openapi.yaml",
+        dom_id: "#swagger-ui",
+        deepLinking: true,
+        presets: [SwaggerUIBundle.presets.apis],
+        layout: "BaseLayout",
+        defaultModelsExpandDepth: -1,
+        docExpansion: "list",
+        filter: true,
+        tryItOutEnabled: false,
+      });
+    });
+  </script>
+</body>
+</html>`
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html))
 }
