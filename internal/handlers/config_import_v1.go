@@ -501,7 +501,9 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	}
 	rules, conversionWarnings := convertV1Rules(proxies, upstreams)
 	validRules, validationSkips := validateConvertedV1Rules(rules)
-	allWarnings := append(conversionWarnings, validationSkips...)
+	var allWarnings []string
+	allWarnings = append(allWarnings, conversionWarnings...)
+	allWarnings = append(allWarnings, validationSkips...)
 	if len(validRules) == 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份中没有可导入的有效规则"})
 		return
@@ -541,7 +543,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	upstreamCount := 0
 	affectedRuleIDs := append([]string(nil), session.existingRuleIDs...)
 	var pendingCerts []importCertificate
-	for _, r := range rules {
+	for _, r := range validRules {
 		caddyID, err := services.GenerateCaddyID()
 		if err != nil {
 			err = session.abort(err)
@@ -558,7 +560,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			Protocol: r.Protocol, Strategy: mappedStrategy,
 			CompressTypes: "gzip",
 		}); validateErr != nil {
-			conversionWarnings = append(conversionWarnings, fmt.Sprintf("规则 %s 跳过：%s", r.Name, validateErr.Error()))
+			allWarnings = append(allWarnings, fmt.Sprintf("规则 %s 跳过：%s", r.Name, validateErr.Error()))
 			continue
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server,

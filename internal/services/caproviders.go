@@ -44,7 +44,7 @@ func scanCAProvider(scanner caProviderScanner, provider *models.CAProvider) erro
 	return nil
 }
 
-// CAProviderListItem is a credential-safe view of a CA provider for list endpoints.
+// CAProviderListItem is a list view of a CA provider.
 type CAProviderListItem struct {
 	ID            int       `json:"id"`
 	Name          string    `json:"name"`
@@ -72,7 +72,7 @@ func NewCAProviderService(dataDir ...string) *CAProviderService {
 	return service
 }
 
-// ListCAProviders returns all CA providers with masked credentials.
+// ListCAProviders returns all CA providers with actual credentials.
 func (s *CAProviderService) ListCAProviders() ([]CAProviderListItem, error) {
 	rows, err := db.DB.Query("SELECT " + caProviderColumns + " FROM ca_providers ORDER BY id")
 	if err != nil {
@@ -101,7 +101,6 @@ func (s *CAProviderService) ListCAProviders() ([]CAProviderListItem, error) {
 }
 
 // GetCAProvider returns a CA provider by ID, including credentials.
-// The EAB HMAC key in credentials is masked to limit credential exposure.
 func (s *CAProviderService) GetCAProvider(id int) (models.CAProvider, error) {
 	var p models.CAProvider
 	err := scanCAProvider(db.DB.QueryRow("SELECT "+caProviderColumns+" FROM ca_providers WHERE id=?", id), &p)

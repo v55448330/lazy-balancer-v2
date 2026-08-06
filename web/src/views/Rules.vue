@@ -1974,7 +1974,7 @@ const openWizard = async (rule?: Rule) => {
         if (resp.code === 0 && resp.data) {
           fullRule = resp.data
         }
-      } catch { /* fallback to list data */ }
+    } catch { console.warn('[openWizard] Failed to fetch cert data for', rule.caddy_id) }
     }
     editingRule.value = fullRule
     const compressTypes = fullRule.compress_types ? selectedCompressTypes(fullRule.compress_types) : ['gzip']
@@ -2470,7 +2470,7 @@ const duplicateRule = async (rule: Rule) => {
   }
 }
 
-const openCopyWizard = (rule: Rule) => {
+const openCopyWizard = async (rule: Rule) => {
   if (saving.value) return
   hydratingWizard = true
   certValidationSessionSeq++
@@ -2479,65 +2479,72 @@ const openCopyWizard = (rule: Rule) => {
   upstreamTouched.value = []
   editingRule.value = null
   isCopyMode.value = true
-  const compressTypes = rule.compress_types ? selectedCompressTypes(rule.compress_types) : ['gzip']
+  let fullRule: Rule = rule
+  if (rule.enable_tls && rule.tls_source === 'manual') {
+    try {
+      const resp = await request.get<APIResponse<Rule>>(`/rules/${rule.caddy_id}`)
+      if (resp.code === 0 && resp.data) fullRule = resp.data
+    } catch { /* fallback to list data */ }
+  }
+  const compressTypes = fullRule.compress_types ? selectedCompressTypes(fullRule.compress_types) : ['gzip']
   Object.assign(wizardForm, {
     caddy_id: '',
     id: undefined,
-    name: `${rule.name}（副本）`,
-    description: rule.description || '',
-    protocol: rule.protocol,
-    domain: rule.domain || '',
-    listen_port: rule.listen_port,
-    strategy: rule.strategy || 'weighted_round_robin',
-    dynamic_dns: rule.dynamic_dns || false,
-    enable_dns_server: rule.enable_dns_server || false,
-    dns_server: rule.dns_server || '',
-    dns_family: selectedDnsFamilies(rule.dns_family),
-    health_check_path: rule.health_check_path || '',
-    health_check_interval: rule.health_check_interval || 10,
-    health_check_timeout: rule.health_check_timeout || 2,
-    health_check_healthy_threshold: rule.health_check_healthy_threshold || 2,
-    health_check_unhealthy_threshold: rule.health_check_unhealthy_threshold || 3,
-    enable_active_health_check: rule.enable_active_health_check === true,
-    tcp_health_check_port: rule.tcp_health_check_port || 0,
-    tcp_proxy_protocol: rule.tcp_proxy_protocol === true,
-    tcp_try_duration: rule.tcp_try_duration || 0,
-    tcp_try_interval: rule.tcp_try_interval ?? 250,
-    host_header: rule.host_header || '',
-    upstreams: rule.upstreams?.map(u => ({
+    name: `${fullRule.name}（副本）`,
+    description: fullRule.description || '',
+    protocol: fullRule.protocol,
+    domain: fullRule.domain || '',
+    listen_port: fullRule.listen_port,
+    strategy: fullRule.strategy || 'weighted_round_robin',
+    dynamic_dns: fullRule.dynamic_dns || false,
+    enable_dns_server: fullRule.enable_dns_server || false,
+    dns_server: fullRule.dns_server || '',
+    dns_family: selectedDnsFamilies(fullRule.dns_family),
+    health_check_path: fullRule.health_check_path || '',
+    health_check_interval: fullRule.health_check_interval || 10,
+    health_check_timeout: fullRule.health_check_timeout || 2,
+    health_check_healthy_threshold: fullRule.health_check_healthy_threshold || 2,
+    health_check_unhealthy_threshold: fullRule.health_check_unhealthy_threshold || 3,
+    enable_active_health_check: fullRule.enable_active_health_check === true,
+    tcp_health_check_port: fullRule.tcp_health_check_port || 0,
+    tcp_proxy_protocol: fullRule.tcp_proxy_protocol === true,
+    tcp_try_duration: fullRule.tcp_try_duration || 0,
+    tcp_try_interval: fullRule.tcp_try_interval ?? 250,
+    host_header: fullRule.host_header || '',
+    upstreams: fullRule.upstreams?.map(u => ({
       ...u,
       dynamic_dns: false,
       protocol: u.protocol || 'http',
       max_connections: u.max_connections ?? 0,
     })) || [],
-    enable_tls: rule.enable_tls || false,
-    tls_source: rule.tls_source || 'manual',
-    acme_config_id: rule.acme_config_id || undefined,
-    ca_provider_id: rule.ca_provider_id ?? 0,
-    tls_cert: rule.tls_cert || '',
-    tls_key: rule.tls_key || '',
-    request_body_max_size_mb: rule.request_body_max_size_mb || 0,
-    upstream_keepalive_timeout: rule.upstream_keepalive_timeout || 0,
-    server_tokens_hidden: rule.server_tokens_hidden || 0,
-    log_enabled: rule.log_enabled || false,
-    ip_acl_mode: rule.ip_acl_mode || '',
-    ip_acl_list: [...(rule.ip_acl_list || [])],
-    custom_routes_enabled: rule.custom_routes_enabled === true,
-    path_rules: [...(rule.path_rules || [])]
+    enable_tls: fullRule.enable_tls || false,
+    tls_source: fullRule.tls_source || 'manual',
+    acme_config_id: fullRule.acme_config_id || undefined,
+    ca_provider_id: fullRule.ca_provider_id ?? 0,
+    tls_cert: fullRule.tls_cert || '',
+    tls_key: fullRule.tls_key || '',
+    request_body_max_size_mb: fullRule.request_body_max_size_mb || 0,
+    upstream_keepalive_timeout: fullRule.upstream_keepalive_timeout || 0,
+    server_tokens_hidden: fullRule.server_tokens_hidden || 0,
+    log_enabled: fullRule.log_enabled || false,
+    ip_acl_mode: fullRule.ip_acl_mode || '',
+    ip_acl_list: [...(fullRule.ip_acl_list || [])],
+    custom_routes_enabled: fullRule.custom_routes_enabled === true,
+    path_rules: [...(fullRule.path_rules || [])]
       .sort((left, right) => left.sort_order - right.sort_order)
       .map((pathRule) => ({
         ...pathRule,
         upstreams: pathRuleUpstreamsToPercent(pathRule.upstreams),
       })),
-    proxy_dial_timeout: rule.proxy_dial_timeout || 0,
-    proxy_response_header_timeout: rule.proxy_response_header_timeout || 0,
-    proxy_read_timeout: rule.proxy_read_timeout || 0,
-    proxy_write_timeout: rule.proxy_write_timeout || 0,
-    proxy_stream_timeout: rule.proxy_stream_timeout || 0,
-    proxy_flush_interval: rule.proxy_flush_interval || 0,
-    proxy_stream_close_delay: rule.proxy_stream_close_delay || 0,
-    tls_http_redirect: rule.tls_http_redirect || false,
-    enable_compress: rule.enable_compress !== false,
+    proxy_dial_timeout: fullRule.proxy_dial_timeout || 0,
+    proxy_response_header_timeout: fullRule.proxy_response_header_timeout || 0,
+    proxy_read_timeout: fullRule.proxy_read_timeout || 0,
+    proxy_write_timeout: fullRule.proxy_write_timeout || 0,
+    proxy_stream_timeout: fullRule.proxy_stream_timeout || 0,
+    proxy_flush_interval: fullRule.proxy_flush_interval || 0,
+    proxy_stream_close_delay: fullRule.proxy_stream_close_delay || 0,
+    tls_http_redirect: fullRule.tls_http_redirect || false,
+    enable_compress: fullRule.enable_compress !== false,
     compress_types: compressTypes,
     enabled: false,
     })
