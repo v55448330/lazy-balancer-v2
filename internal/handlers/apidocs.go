@@ -352,14 +352,20 @@ func (h *Handlers) GetAPIDocs(c *gin.Context) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Lazy Balancer API</title>
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui.css">
-  <style>body{margin:0}</style>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui.css" onerror="this.remove();document.getElementById('fallback').style.display='block'">
+  <style>body{margin:0}#fallback{display:none;padding:32px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#374151}#fallback a{color:#2563eb}</style>
 </head>
 <body>
+  <div id="fallback">
+    <h2>API 文档加载失败</h2>
+    <p>无法从 CDN 加载 Swagger UI，可能是网络限制或离线环境。</p>
+    <p>可直接访问 OpenAPI YAML：<a href="/api/v1/openapi.yaml">/api/v1/openapi.yaml</a></p>
+  </div>
   <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui-bundle.js" crossorigin></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui-bundle.js" crossorigin onerror="document.getElementById('fallback').style.display='block';document.getElementById('swagger-ui').style.display='none'"></script>
   <script>
-    window.addEventListener("DOMContentLoaded", () => {
+    window.addEventListener("DOMContentLoaded", function() {
+      if (typeof SwaggerUIBundle === "undefined") return;
       window.ui = SwaggerUIBundle({
         url: "/api/v1/openapi.yaml",
         dom_id: "#swagger-ui",

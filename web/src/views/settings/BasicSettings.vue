@@ -609,7 +609,7 @@ const notifyTlsRestarting = (toHttps: boolean) => {
     showClose: false,
     closeOnClickModal: false,
     closeOnPressEscape: false,
-  }).catch(() => {})
+  }).catch((err) => { console.error('TLS restart notification failed:', err) })
   const target = `${toHttps ? 'https' : 'http'}://${location.host}/`
   if (tlsProtocolRedirectTimer) clearTimeout(tlsProtocolRedirectTimer)
   if (tlsProtocolFallbackTimer) clearTimeout(tlsProtocolFallbackTimer)

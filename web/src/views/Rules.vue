@@ -750,7 +750,7 @@
               <template v-else>禁用</template>
             </el-descriptions-item>
             <el-descriptions-item label="压缩" v-if="wizardForm.protocol === 'http'">
-              {{ wizardForm.enable_compress ? (wizardForm.compress_types.join(', ') || 'gzip') : '禁用' }}
+              {{ wizardForm.enable_compress ? compressType : '禁用' }}
             </el-descriptions-item>
             <el-descriptions-item label="访问控制">
               {{ aclPreview() }}
@@ -841,7 +841,7 @@
           </el-descriptions-item>
           <el-descriptions-item label="TLS" v-else>禁用</el-descriptions-item>
           <el-descriptions-item label="压缩" v-if="ruleConfig.protocol === 'http'">
-            {{ ruleConfig.enable_compress ? (Array.isArray(ruleConfig.compress_types) ? ruleConfig.compress_types.join(', ') : (ruleConfig.compress_types || 'gzip')) : '禁用' }}
+            {{ ruleConfig.enable_compress ? (Array.isArray(ruleConfig.compress_types) ? ruleConfig.compress_types[0] : (ruleConfig.compress_types || 'gzip')) : '禁用' }}
           </el-descriptions-item>
           <el-descriptions-item label="主动健康检查" v-if="ruleConfig.protocol === 'http' && ruleConfig.health_check_path">
             {{ ruleConfig.health_check_path }} ({{ ruleConfig.health_check_interval }}s/{{ ruleConfig.health_check_timeout }}s)

@@ -240,6 +240,7 @@ func validateV2Backup(backup configBackup) error {
 			ProxyStreamTimeout:         backupInt(rule["proxy_stream_timeout"]),
 			ProxyFlushInterval:         backupInt(rule["proxy_flush_interval"]),
 			ProxyStreamCloseDelay:      backupInt(rule["proxy_stream_close_delay"]),
+			EnableCompress:             backupBooleanEnabled(rule["enable_compress"]),
 			CompressTypes:              backupString(rule["compress_types"]),
 		}); err != nil {
 			return fmt.Errorf("规则 #%d：%w", index+1, err)
