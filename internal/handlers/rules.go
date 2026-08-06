@@ -1547,7 +1547,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 						services.Logf("error", "UpdateRule: failed to clean up extra cert jobs for caddy_id=%s: %v", caddyID, err)
 					}
 				}
-				_ = certTx.Commit()
+				if err := certTx.Commit(); err != nil {
+					services.Logf("error", "UpdateRule: cert job domain migration commit failed for caddy_id=%s: %v", caddyID, err)
+				}
 			}
 		}
 		caProviderChanged := resolvedCAProviderID != resolvedExistingCAProviderID

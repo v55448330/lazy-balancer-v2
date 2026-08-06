@@ -20,10 +20,6 @@ const (
 	ProviderLetsEncrypt = "letsencrypt"
 	ProviderZeroSSL     = "zerossl"
 
-	// MaskedHMACKey is the sentinel value clients send for eab_hmac_key to
-	// indicate that the existing stored HMAC key should be preserved.
-	MaskedHMACKey = "__MASKED__"
-
 	// Official directory URLs. These are fixed and not user-editable.
 	LetsEncryptDirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"
 	ZeroSSLDirectoryURL     = "https://acme.zerossl.com/v2/DV90"
@@ -74,29 +70,6 @@ func NewCAProviderService(dataDir ...string) *CAProviderService {
 		service.dataDir = dataDir[0]
 	}
 	return service
-}
-
-// maskCredentials masks the EAB HMAC key in a credentials JSON string.
-// If the credentials are not valid JSON, it returns an empty object "{}".
-func maskCredentials(credentials string) string {
-	if credentials == "" {
-		return ""
-	}
-	var credMap map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(credentials), &credMap); err != nil {
-		log.Printf("warning: CA provider credentials are not valid JSON, masking as empty")
-		return "{}"
-	}
-	if existing, ok := credMap["eab_hmac_key"]; ok && string(existing) != `""` {
-		credMap["eab_hmac_key"] = json.RawMessage(`"` + MaskedHMACKey + `"`)
-		masked, err := json.Marshal(credMap)
-		if err != nil {
-			log.Printf("warning: failed to marshal masked CA provider credentials, masking as empty")
-			return "{}"
-		}
-		return string(masked)
-	}
-	return credentials
 }
 
 // ListCAProviders returns all CA providers with masked credentials.
@@ -174,9 +147,6 @@ var ErrCAProviderMaxConcurrentTooHigh = errors.New("max_concurrent must be <= 10
 // ErrCAProviderMinIntervalTooHigh is returned when min_interval_ms exceeds the allowed upper bound.
 var ErrCAProviderMinIntervalTooHigh = errors.New("min_interval_ms must be <= 60000")
 
-// ErrCAProviderMaskedHMACNotAvailable is returned when the existing HMAC key cannot be determined for a masked update.
-var ErrCAProviderMaskedHMACNotAvailable = errors.New("existing HMAC key is not available")
-
 // UpdateCAProvider updates a CA provider. Returns ErrCAProviderNotFound if no rows were affected.
 func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProviderRequest) error {
 	tx, err := db.DB.Begin()
@@ -202,7 +172,6 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 	if req.DirectoryURL != nil {
 		existing.DirectoryURL = *req.DirectoryURL
 	}
-	originalCredentials := existing.Credentials
 	if req.Credentials != nil {
 		existing.Credentials = *req.Credentials
 	}
@@ -269,25 +238,6 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 		if enabledCount == 0 {
 			return ErrCAProviderLastEnabled
 		}
-	}
-
-	if req.Credentials != nil && creds.EABHMACKey == MaskedHMACKey {
-		if originalCredentials == "" {
-			return ErrCAProviderMaskedHMACNotAvailable
-		}
-		var existingCreds models.CAProviderCredentials
-		if err := json.Unmarshal([]byte(originalCredentials), &existingCreds); err != nil {
-			return fmt.Errorf("%w: %w", ErrCAProviderInvalidCredentials, err)
-		}
-		if existingCreds.EABHMACKey == "" || existingCreds.EABHMACKey == MaskedHMACKey {
-			return ErrCAProviderMaskedHMACNotAvailable
-		}
-		creds.EABHMACKey = existingCreds.EABHMACKey
-		updated, err := json.Marshal(creds)
-		if err != nil {
-			return err
-		}
-		existing.Credentials = string(updated)
 	}
 
 	res, err := tx.Exec(`

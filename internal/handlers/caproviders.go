@@ -46,7 +46,7 @@ func (h *Handlers) GetCAProvider(c *gin.Context) {
 
 func credentialsMeaningfullyChanged(newCredentials, oldCredentials string) bool {
 	trimmed := strings.TrimSpace(newCredentials)
-	if trimmed == "" || strings.Contains(trimmed, services.MaskedHMACKey) || strings.Trim(trimmed, "*") == "" {
+	if trimmed == "" || strings.Trim(trimmed, "*") == "" {
 		return false
 	}
 	return trimmed != oldCredentials
@@ -127,8 +127,6 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "最大并发不能超过 100"})
 		case errors.Is(err, services.ErrCAProviderMinIntervalTooHigh):
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "最小间隔不能超过 60000 毫秒"})
-		case errors.Is(err, services.ErrCAProviderMaskedHMACNotAvailable):
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无法保留现有 HMAC 密钥"})
 		default:
 			log.Printf("Failed to update CA provider %d: %v", id, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update CA provider"})

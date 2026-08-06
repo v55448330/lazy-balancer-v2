@@ -406,10 +406,14 @@ const openCAProviderDialog = (p: CAProvider) => {
   if (savingCA.value) return
   editingCAProvider.value = p
   Object.assign(caForm, {
-    ...p,
-    credentials: typeof p.credentials === 'string' ? p.credentials : JSON.stringify(p.credentials || {}),
+    name: p.name,
+    provider: p.provider,
+    directory_url: p.directory_url,
+    enabled: p.enabled,
+    max_concurrent: p.max_concurrent,
+    min_interval_ms: p.min_interval_ms,
   })
-  const parsed = parseCACredentials(caForm.credentials)
+  const parsed = parseCACredentials(typeof p.credentials === 'string' ? p.credentials : JSON.stringify(p.credentials || {}))
   caCreds.eab_kid = parsed.eab_kid
   caCreds.eab_hmac_key = parsed.eab_hmac_key
   caDialogVisible.value = true

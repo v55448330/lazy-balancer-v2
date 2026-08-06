@@ -109,7 +109,7 @@ docker run -d \
 ### 集群安全模型
 
 - **集群令牌存储**：从节点 `data/lazy-balancer.db` 中以**明文**保存 `cluster_token`（用于 HMAC-SHA256 快照验签，无法哈希存储）。容器启动时强制将数据库文件权限收敛为 `0600`、数据目录 `0700`（见 `internal/db/permissions.go`）。请勿以非 root 用户共享或挂载该目录。
-- **CA 凭证存储**：ZeroSSL EAB 凭证（`eab_kid` + `eab_hmac_key`）和 DNS 提供商凭证（`dns_credentials`）同样以**明文 JSON** 存储在 `data/lazy-balancer.db` 的 `ca_providers.credentials` 和 `global_config.dns_credentials` 字段中。API 返回时已对敏感字段做掩码脱敏，但数据库文件本身不加密。请妥善保护数据库文件权限。
+- **CA 凭证存储**：ZeroSSL EAB 凭证（`eab_kid` + `eab_hmac_key`）和 DNS 提供商凭证（`dns_credentials`）以**明文 JSON** 存储在 `data/lazy-balancer.db` 的 `ca_providers.credentials` 和 `global_config.dns_credentials` 字段中。API 直接返回实际凭证（不做掩码），数据库文件本身不加密。请妥善保护数据库文件权限。
 - **传输安全**：所有集群通信强制 HTTPS，首次连接采用 TOFU（Trust On First Use）记录主节点 TLS 指纹，后续比对防止 MITM。
 - **令牌生命周期**：集群令牌从注册密钥确定性地派生，无内置轮换机制。若怀疑令牌泄露，请删除该从节点记录后重新注册。
 
