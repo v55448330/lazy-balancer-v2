@@ -245,9 +245,8 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 		}
 	}
 	if existing.Provider == ProviderZeroSSL {
-		if creds.EABKID == "" || creds.EABHMACKey == "" {
-			return ErrCAProviderMissingZeroSSLCredentials
-		}
+		// EAB credentials are optional at save time; AutoProvisionZeroSSLEAB
+		// fetches them on demand during test/issue when left blank.
 	}
 	if existing.Provider == ProviderLetsEncrypt {
 		trimmed := strings.TrimSpace(existing.Credentials)
@@ -342,8 +341,10 @@ func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) e
 		}
 	}
 	if creds.EABKID != "" && creds.EABHMACKey != "" {
+		log.Printf("AutoProvisionZeroSSLEAB: provider %d already has EAB credentials, skipping", provider.ID)
 		return nil
 	}
+	log.Printf("AutoProvisionZeroSSLEAB: provider %d missing EAB, auto-fetching", provider.ID)
 	var acmeEmail string
 	if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(acme_email,'') FROM global_config WHERE id=1").Scan(&acmeEmail); err != nil {
 		return fmt.Errorf("read acme email: %w", err)
@@ -352,6 +353,7 @@ func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) e
 		return fmt.Errorf("ACME email is required for ZeroSSL EAB auto-provision")
 	}
 
+	log.Printf("AutoProvisionZeroSSLEAB: fetching EAB from ZeroSSL API for email %s", maskEmail(acmeEmail))
 	const zerosslEABURL = "https://api.zerossl.com/acme/eab-credentials-email"
 	reqBody := strings.NewReader("email=" + strings.TrimSpace(acmeEmail))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, zerosslEABURL, reqBody)
@@ -396,8 +398,7 @@ func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) e
 		return fmt.Errorf("persist zerossl EAB: %w", err)
 	}
 	provider.Credentials = string(credsJSON)
-	// Round 35 I-4: 邮箱部分脱敏后再写日志，避免明文泄露管理员邮箱。
-	log.Printf("ZeroSSL EAB auto-provisioned for %s", maskEmail(acmeEmail))
+	log.Printf("AutoProvisionZeroSSLEAB: success, EAB persisted for provider %d (%s)", provider.ID, maskEmail(acmeEmail))
 	return nil
 }
 
@@ -438,6 +439,13 @@ func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id in
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+
+	if p.Provider == ProviderZeroSSL {
+		log.Printf("TestCAProvider: ensuring ZeroSSL EAB for provider %d", id)
+		if err := AutoProvisionZeroSSLEAB(ctx, &p); err != nil {
+			return &CAProviderTestError{Phase: "config", Err: fmt.Errorf("ZeroSSL EAB 自动获取失败: %w", err)}
+		}
 	}
 
 	client, err := acme.NewClientForProvider(p, acmeEmail, s.dataDir)

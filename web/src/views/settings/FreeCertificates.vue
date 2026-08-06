@@ -191,16 +191,16 @@
           <el-input-number v-model="caForm.min_interval_ms" :min="1000" :max="60000" :step="1000" />
         </el-form-item>
         <template v-if="caForm.provider === 'zerossl'">
-          <el-form-item label="EAB KID" required>
-            <el-input v-model="caCreds.eab_kid" placeholder="ZeroSSL EAB KID" />
+          <el-form-item label="EAB KID">
+            <el-input v-model="caCreds.eab_kid" placeholder="留空则自动获取" />
             <el-text type="info" size="small" class="tip-block">
-              请前往
+              可选，留空时会在测试或签发时自动从 ZeroSSL API 获取；也可手动填写（见
               <a href="https://app.zerossl.com/developer" target="_blank" rel="noopener noreferrer" class="link">ZeroSSL Developer</a>
-              创建 EAB Credentials
+              ）
             </el-text>
           </el-form-item>
-          <el-form-item label="EAB HMAC Key" required>
-            <el-input v-model="caCreds.eab_hmac_key" type="password" placeholder="ZeroSSL EAB HMAC Key" show-password />
+          <el-form-item label="EAB HMAC Key">
+            <el-input v-model="caCreds.eab_hmac_key" type="password" placeholder="留空则自动获取" show-password />
           </el-form-item>
         </template>
         <el-form-item label="启用">
@@ -425,12 +425,6 @@ const closeCADialog = (): void => {
 
 const saveCAProvider = async () => {
   if (savingCA.value) return
-  if (caForm.provider === 'zerossl') {
-    if (!caCreds.eab_kid.trim() || !caCreds.eab_hmac_key.trim()) {
-      ElMessage.warning('ZeroSSL 必须填写 EAB KID 和 EAB HMAC Key')
-      return
-    }
-  }
 
   savingCA.value = true
   try {
