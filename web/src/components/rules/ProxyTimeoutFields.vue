@@ -12,7 +12,7 @@
         @update:model-value="update(field.key, $event)"
       />
       <el-text type="info" size="small" class="tip-inline">
-        秒，0 = {{ inheritLabel }}<template v-if="field.key === 'proxy_stream_timeout'">；用于 SSE/LLM 等长流式响应</template><template v-if="field.key === 'proxy_read_timeout' || field.key === 'proxy_write_timeout'">；SSE/WebSocket/LLM 场景需大于上游最长静默期，否则连接会被强制断开</template><template v-if="field.key === 'proxy_flush_interval'">；-1 = 立即刷新所有响应（无缓冲，强制对非 text/event-stream 流式也生效），&gt;0 = 每 N 秒刷新一次</template><template v-if="field.key === 'proxy_stream_close_delay'">；&gt;0 = 配置 reload 时延迟 N 秒关闭旧 WebSocket/SSE 连接，平滑过渡</template>
+        秒，0 = {{ inheritLabel }}<template v-if="field.desc">；{{ field.desc }}</template>
       </el-text>
     </el-form-item>
   </div>
@@ -32,14 +32,14 @@ const emit = defineEmits<{
 }>()
 
 const fields = [
-  { key: 'proxy_dial_timeout', label: '连接超时', min: 0 },
-  { key: 'proxy_response_header_timeout', label: '响应头超时', min: 0 },
-  { key: 'proxy_read_timeout', label: '读超时', min: 0 },
-  { key: 'proxy_write_timeout', label: '写超时', min: 0 },
-  { key: 'proxy_stream_timeout', label: '流式超时', min: 0 },
-  { key: 'proxy_flush_interval', label: '刷新间隔', min: -1 },
-  { key: 'proxy_stream_close_delay', label: '流关闭延迟', min: 0 },
-] as const satisfies readonly { readonly key: keyof ProxyTimeoutConfig; readonly label: string; readonly min: number }[]
+  { key: 'proxy_dial_timeout', label: '连接超时', min: 0, desc: '建立到上游 TCP 连接' },
+  { key: 'proxy_response_header_timeout', label: '响应头超时', min: 0, desc: '等待上游响应头返回' },
+  { key: 'proxy_read_timeout', label: '读超时', min: 0, desc: '两次读上游数据的间隔；流式需大于静默期' },
+  { key: 'proxy_write_timeout', label: '写超时', min: 0, desc: '两次写客户端的间隔；流式需大于静默期' },
+  { key: 'proxy_stream_timeout', label: '流式超时', min: 0, desc: '整个流式会话总时长；用于 SSE/LLM' },
+  { key: 'proxy_flush_interval', label: '刷新间隔', min: -1, desc: '-1=立即刷新无缓冲，&gt;0=每 N 秒一次' },
+  { key: 'proxy_stream_close_delay', label: '流关闭延迟', min: 0, desc: '&gt;0=reload 时延迟 N 秒关旧 WebSocket/SSE' },
+] as const satisfies readonly { readonly key: keyof ProxyTimeoutConfig; readonly label: string; readonly min: number; readonly desc: string }[]
 
 const update = (field: keyof ProxyTimeoutConfig, value: number | undefined): void => {
   emit('update', field, value ?? 0)
