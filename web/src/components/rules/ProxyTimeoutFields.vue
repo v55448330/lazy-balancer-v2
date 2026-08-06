@@ -12,7 +12,7 @@
         @update:model-value="update(field.key, $event)"
       />
       <el-text type="info" size="small" class="tip-inline">
-        秒，0 = {{ inheritLabel }}<template v-if="field.key === 'proxy_stream_timeout'">；用于 SSE/LLM 等长流式响应</template>
+        秒，0 = {{ inheritLabel }}<template v-if="field.key === 'proxy_stream_timeout'">；用于 SSE/LLM 等长流式响应</template><template v-if="field.key === 'proxy_read_timeout' || field.key === 'proxy_write_timeout'">；SSE/WebSocket/LLM 场景需大于上游最长静默期，否则连接会被强制断开</template>
       </el-text>
     </el-form-item>
   </div>
