@@ -115,7 +115,7 @@ func (s *CAProviderService) ListCAProviders() ([]CAProviderListItem, error) {
 		}
 		p := CAProviderListItem{
 			ID: provider.ID, Name: provider.Name, Provider: provider.Provider,
-			DirectoryURL: provider.DirectoryURL, Credentials: maskCredentials(provider.Credentials),
+			DirectoryURL: provider.DirectoryURL, Credentials: provider.Credentials,
 			MaxConcurrent: provider.MaxConcurrent, MinIntervalMS: provider.MinIntervalMS,
 			Enabled: provider.Enabled, CreatedAt: provider.CreatedAt, UpdatedAt: provider.UpdatedAt,
 		}
@@ -137,9 +137,6 @@ func (s *CAProviderService) GetCAProvider(id int) (models.CAProvider, error) {
 			return p, ErrCAProviderNotFound
 		}
 		return p, err
-	}
-	if p.Credentials != "" {
-		p.Credentials = maskCredentials(p.Credentials)
 	}
 	return p, nil
 }

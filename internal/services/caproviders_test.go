@@ -11,7 +11,7 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
-func TestCAProviderQueries_mask_list_but_not_business_load(t *testing.T) {
+func TestCAProviderQueries_returns_credentials(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
 	credentials := `{"eab_kid":"kid","eab_hmac_key":"secret"}`
@@ -34,7 +34,7 @@ func TestCAProviderQueries_mask_list_but_not_business_load(t *testing.T) {
 		t.Fatalf("load CA provider for business use: %v", err)
 	}
 
-	// Then
+	// Then: both list and business load return actual credentials
 	var listedCredentials string
 	for _, provider := range listed {
 		if provider.ID == int(providerID) {
@@ -42,11 +42,11 @@ func TestCAProviderQueries_mask_list_but_not_business_load(t *testing.T) {
 			break
 		}
 	}
-	if strings.Contains(listedCredentials, "secret") || !strings.Contains(listedCredentials, MaskedHMACKey) {
-		t.Fatalf("listed credentials=%q, want masked HMAC key", listedCredentials)
+	if !strings.Contains(listedCredentials, "secret") {
+		t.Fatalf("listed credentials=%q, want actual HMAC key", listedCredentials)
 	}
 	if loaded.Credentials != credentials {
-		t.Fatalf("business credentials=%q, want unmasked credentials", loaded.Credentials)
+		t.Fatalf("business credentials=%q, want actual credentials", loaded.Credentials)
 	}
 }
 
