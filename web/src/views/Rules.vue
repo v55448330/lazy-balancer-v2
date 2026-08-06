@@ -1392,7 +1392,7 @@ const tlsTagLabel = (row: Rule) => {
   if (row.tls_source === 'acme_dns') {
     const status = certJobMap.value[row.caddy_id]?.status
     const label = status ? certJobStatusLabel(status) : ''
-    return label ? `ACME ${label}` : '未签发'
+    return label || '未签发'
   }
   return '手动'
 }
