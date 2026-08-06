@@ -349,8 +349,11 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// TestCAProviderWithContext also calls it (for the standalone test button),
 	// but that updates its own local copy, not this one.
 	if provider.Provider == "zerossl" {
+		credsBefore := provider.Credentials
 		if err := AutoProvisionZeroSSLEAB(ctx, &provider); err != nil {
 			logger.Log("creating_account", fmt.Sprintf("ZeroSSL EAB 自动获取失败: %v", err))
+		} else if provider.Credentials != credsBefore {
+			logger.Log("creating_account", "ZeroSSL EAB 自动获取成功，凭证已持久化")
 		}
 	}
 	logger.Log("creating_account", fmt.Sprintf("测试 CA 提供商 %s (%s) 连通性", provider.Name, provider.Provider))
