@@ -52,7 +52,7 @@
       </el-form-item>
 
       <el-divider content-position="left">代理超时</el-divider>
-      <ProxyTimeoutFields :value="settings" inherit-label="Caddy 默认" :disabled="isReadOnly" @update="updateProxyTimeout" />
+      <ProxyTimeoutFields :value="settings" inherit-label="Caddy 默认" :disabled="isReadOnly" show-suggested @update="updateProxyTimeout" />
 
       <el-divider content-position="left">响应头</el-divider>
       <el-form-item label="Server Tokens">
