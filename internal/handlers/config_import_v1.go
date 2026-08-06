@@ -304,39 +304,59 @@ func mapV1BalancerStrategy(value string) (string, bool) {
 	}
 }
 
-func validateConvertedV1Rules(rules []convertedRule) error {
+func validateConvertedV1Rules(rules []convertedRule) ([]convertedRule, []string) {
+	var valid []convertedRule
+	var skips []string
 	for index, rule := range rules {
 		if err := validateRuleListenPort(rule.Protocol, rule.ListenPort); err != nil {
-			return fmt.Errorf("规则 #%d：%w", index+1, err)
+			skips = append(skips, fmt.Sprintf("规则 #%d（%s）：%v", index+1, rule.Name, err))
+			continue
 		}
 		if rule.Protocol != "http" && rule.Protocol != "tcp" {
-			return fmt.Errorf("规则 #%d：协议无效", index+1)
+			skips = append(skips, fmt.Sprintf("规则 #%d（%s）：协议无效", index+1, rule.Name))
+			continue
 		}
 		if rule.Protocol == "http" {
+			domainBad := false
 			for _, domain := range strings.Split(rule.Domain, ",") {
 				domain = strings.TrimSpace(domain)
 				if domain != "" && !isValidDomain(domain) {
-					return fmt.Errorf("规则 #%d：域名 %q 无效", index+1, domain)
+					skips = append(skips, fmt.Sprintf("规则 #%d（%s）：域名 %q 无效", index+1, rule.Name, domain))
+					domainBad = true
+					break
 				}
+			}
+			if domainBad {
+				continue
 			}
 		}
 		enabledUpstreams := 0
+		upstreamBad := false
 		for upstreamIndex, upstream := range rule.Upstreams {
 			if !isValidHost(upstream.Host) {
-				return fmt.Errorf("规则 #%d 上游 #%d：主机无效", index+1, upstreamIndex+1)
+				skips = append(skips, fmt.Sprintf("规则 #%d（%s）上游 #%d：主机无效", index+1, rule.Name, upstreamIndex+1))
+				upstreamBad = true
+				break
 			}
 			if upstream.Port < 1 || upstream.Port > 65535 {
-				return fmt.Errorf("规则 #%d 上游 #%d：端口必须在 1-65535 之间", index+1, upstreamIndex+1)
+				skips = append(skips, fmt.Sprintf("规则 #%d（%s）上游 #%d：端口必须在 1-65535 之间", index+1, rule.Name, upstreamIndex+1))
+				upstreamBad = true
+				break
 			}
 			if upstream.Enabled {
 				enabledUpstreams++
 			}
 		}
-		if enabledUpstreams == 0 {
-			return fmt.Errorf("规则 #%d：至少需要一个已启用的上游服务器", index+1)
+		if upstreamBad {
+			continue
 		}
+		if enabledUpstreams == 0 {
+			skips = append(skips, fmt.Sprintf("规则 #%d（%s）：至少需要一个已启用的上游服务器", index+1, rule.Name))
+			continue
+		}
+		valid = append(valid, rule)
 	}
-	return nil
+	return valid, skips
 }
 
 type importValidateResponse struct {
@@ -414,14 +434,16 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			return
 		}
 		rules, conversionWarnings := convertV1Rules(proxies, upstreams)
-		if err := validateConvertedV1Rules(rules); err != nil {
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v1", Error: err.Error()}})
+		validRules, validationSkips := validateConvertedV1Rules(rules)
+		allWarnings := append(conversionWarnings, validationSkips...)
+		if len(validRules) == 0 {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v1", Error: "所有规则均校验失败", Warnings: allWarnings}})
 			return
 		}
-		disabledConflicts := disableConvertedRuleConflicts(rules)
+		disabledConflicts := disableConvertedRuleConflicts(validRules)
 		tlsCount := 0
 		upstreamCount := 0
-		for _, r := range rules {
+		for _, r := range validRules {
 			if r.EnableTLS {
 				tlsCount++
 			}
@@ -432,12 +454,12 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			"v1 不支持 ACME，HTTPS 规则的证书与私钥将以手动方式随规则导入",
 			"nginx 特有配置（custom_config、日志路径等）已忽略",
 		}
-		warnings = append(warnings, conversionWarnings...)
+		warnings = append(warnings, allWarnings...)
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{
 			Valid: true,
 			Type:  "v1",
 			Summary: map[string]int{
-				"rules":     len(rules),
+				"rules":     len(validRules),
 				"tls_rules": tlsCount,
 				"upstreams": upstreamCount,
 			},
@@ -478,15 +500,13 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		return
 	}
 	rules, conversionWarnings := convertV1Rules(proxies, upstreams)
-	if err := validateConvertedV1Rules(rules); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+	validRules, validationSkips := validateConvertedV1Rules(rules)
+	allWarnings := append(conversionWarnings, validationSkips...)
+	if len(validRules) == 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份中没有可导入的有效规则"})
 		return
 	}
-	if len(rules) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份中没有可导入的规则"})
-		return
-	}
-	disabledConflicts := disableConvertedRuleConflicts(rules)
+	disabledConflicts := disableConvertedRuleConflicts(validRules)
 	ctx := c.Request.Context()
 	session, err := h.beginConfigImport(ctx)
 	if err != nil {
@@ -603,8 +623,8 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	if len(disabledConflicts) > 0 {
 		auditParts = append(auditParts, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))
 	}
-	if len(conversionWarnings) > 0 {
-		auditParts = append(auditParts, "转换警告："+strings.Join(conversionWarnings, "；"))
+	if len(allWarnings) > 0 {
+		auditParts = append(auditParts, "转换/跳过警告："+strings.Join(allWarnings, "；"))
 	}
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
@@ -613,7 +633,11 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	if tlsCount > 0 {
 		tlsSuffix = fmt.Sprintf("、TLS 规则 %d 条", tlsCount)
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：规则 %d 条、上游 %d 个%s", imported, upstreamCount, tlsSuffix), Data: gin.H{"imported": imported, "disabled_conflicts": disabledConflicts, "warnings": conversionWarnings}})
+	skipSuffix := ""
+	if len(validationSkips) > 0 {
+		skipSuffix = fmt.Sprintf("、跳过 %d 条", len(validationSkips))
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：规则 %d 条、上游 %d 个%s%s", imported, upstreamCount, tlsSuffix, skipSuffix), Data: gin.H{"imported": imported, "disabled_conflicts": disabledConflicts, "warnings": allWarnings}})
 }
 
 func tlsSource(r convertedRule) string {
