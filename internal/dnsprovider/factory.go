@@ -68,7 +68,7 @@ func newProviderFromCredentials(rawJSON, dataDir string) (Provider, error) {
 			return dnspod.NewPersistent(creds.APIToken, dataDir)
 		}
 		return dnspod.New(creds.APIToken), nil
-	case "tencent":
+	case "tencent", "tencent_cloud":
 		if creds.SecretID == "" || creds.SecretKey == "" {
 			return nil, fmt.Errorf("Tencent Cloud credentials require secret_id and secret_key")
 		}
