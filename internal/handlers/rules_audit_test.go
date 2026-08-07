@@ -91,7 +91,7 @@ func TestRuleWrites_reject_overlapping_domain_lists(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			// Given
 			handler := newRuleFeatureTestHandlers(t)
-			seedAuditRule(t, "lb_existing", "existing", "b.example.test,c.example.test", 8081, true, "manual", false)
+			seedAuditRule(t, "lb_existing", "existing", "b.example.test,c.example.test", 8080, true, "manual", false)
 			if test.name == "update" {
 				seedAuditRule(t, "lb_target", "target", "old.example.test", 8080, true, "manual", false)
 				seedAuditUpstream(t, "lb_target")
@@ -463,7 +463,7 @@ func TestEnableRule_rejects_domain_overlap_with_enabled_rule(t *testing.T) {
 	// Given：A(a,b) 与 B(b) 均禁用；启用 A 后启用 B 必须按拆分域名判定冲突
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_overlap_a", "overlap-a", "a.example.test,b.example.test", 8080, false, "manual", false)
-	seedAuditRule(t, "lb_overlap_b", "overlap-b", "b.example.test", 8081, false, "manual", false)
+	seedAuditRule(t, "lb_overlap_b", "overlap-b", "b.example.test", 8080, false, "manual", false)
 	seedAuditUpstream(t, "lb_overlap_a")
 	seedAuditUpstream(t, "lb_overlap_b")
 	router := gin.New()

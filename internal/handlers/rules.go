@@ -320,15 +320,15 @@ func validateRuleListenPort(protocol string, port int) error {
 	return nil
 }
 
-func ruleDomainConflict(domain, excludeCaddyID string) (bool, error) {
-	return queryRuleDomainConflict(domain, excludeCaddyID, "")
+func enabledRuleDomainConflict(domain string, listenPort int, excludeCaddyID string) (bool, error) {
+	return queryRuleDomainConflict(domain, listenPort, excludeCaddyID, " AND enabled = 1")
 }
 
-func enabledRuleDomainConflict(domain, excludeCaddyID string) (bool, error) {
-	return queryRuleDomainConflict(domain, excludeCaddyID, " AND enabled = 1")
+func ruleDomainConflict(domain string, listenPort int, excludeCaddyID string) (bool, error) {
+	return queryRuleDomainConflict(domain, listenPort, excludeCaddyID, "")
 }
 
-func queryRuleDomainConflict(domain, excludeCaddyID, extraWhere string) (bool, error) {
+func queryRuleDomainConflict(domain string, listenPort int, excludeCaddyID, extraWhere string) (bool, error) {
 	candidates := normalizedRuleDomains(domain)
 	if len(candidates) == 0 {
 		return false, nil
@@ -337,7 +337,7 @@ func queryRuleDomainConflict(domain, excludeCaddyID, extraWhere string) (bool, e
 	for _, candidate := range candidates {
 		wanted[candidate] = struct{}{}
 	}
-	rows, err := db.DB.Query("SELECT COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND caddy_id != ?"+extraWhere, excludeCaddyID)
+	rows, err := db.DB.Query("SELECT COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND listen_port = ? AND caddy_id != ?"+extraWhere, listenPort, excludeCaddyID)
 	if err != nil {
 		return false, err
 	}
@@ -446,7 +446,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 
 	// Domain uniqueness: HTTP/HTTPS rules cannot share the same domain.
 	if req.Protocol == "http" && req.Domain != "" {
-		existing, err := ruleDomainConflict(req.Domain, "")
+		existing, err := ruleDomainConflict(req.Domain, req.ListenPort, "")
 		if err != nil {
 			log.Printf("CreateRule domain conflict query failed for domain=%s: %v", req.Domain, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
@@ -1073,7 +1073,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				return
 			}
 		}
-		existing, err := ruleDomainConflict(req.Domain, caddyID)
+		existing, err := ruleDomainConflict(req.Domain, req.ListenPort, caddyID)
 		if err != nil {
 			log.Printf("UpdateRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
@@ -2038,7 +2038,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		return
 	}
 	if ruleProtocol == "http" && ruleDomain != "" {
-		conflict, err := enabledRuleDomainConflict(ruleDomain, caddyID)
+		conflict, err := enabledRuleDomainConflict(ruleDomain, rulePort, caddyID)
 		if err != nil {
 			log.Printf("EnableRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, ruleDomain, err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})

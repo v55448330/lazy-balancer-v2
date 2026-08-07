@@ -115,7 +115,7 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 			right := candidates[rightIndex]
 			reason := ""
 			switch {
-			case left.protocol == "http" && right.protocol == "http":
+			case left.protocol == "http" && right.protocol == "http" && left.listenPort == right.listenPort:
 				leftDomains := make(map[string]struct{})
 				for _, domain := range normalizedRuleDomains(left.domain) {
 					leftDomains[domain] = struct{}{}
