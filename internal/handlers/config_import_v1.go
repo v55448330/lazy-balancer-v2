@@ -236,7 +236,7 @@ func convertV1Rules(proxies []v1Proxy, upstreams map[int]v1Upstream) ([]converte
 		}
 		rule := convertedRule{
 			Name:        f.ProxyName,
-			Domain:      f.ServerName,
+			Domain:      strings.Join(strings.Fields(f.ServerName), ", "),
 			ListenPort:  f.Listen,
 			Protocol:    "http",
 			Strategy:    strategy,
