@@ -422,6 +422,53 @@ func createTables() error {
 		expires_at DATETIME NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_revoked_jti_expires_at ON revoked_jti(expires_at);
+
+	CREATE TABLE IF NOT EXISTS security_policies (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL,
+		description TEXT DEFAULT '',
+		mode TEXT DEFAULT 'off',
+		anomaly_threshold INTEGER DEFAULT 5,
+		ip_whitelist TEXT DEFAULT '[]',
+		ip_blacklist TEXT DEFAULT '[]',
+		rate_limit_enabled BOOLEAN DEFAULT FALSE,
+		rate_limit_rps INTEGER DEFAULT 0,
+		rate_limit_burst INTEGER DEFAULT 0,
+		crs_rule_groups TEXT DEFAULT '[]',
+		custom_rules TEXT DEFAULT '[]',
+		enabled BOOLEAN DEFAULT TRUE,
+		created_at DATETIME DEFAULT (datetime('now')),
+		updated_at DATETIME DEFAULT (datetime('now'))
+	);
+	CREATE TABLE IF NOT EXISTS security_policy_bindings (
+		rule_caddy_id TEXT NOT NULL,
+		policy_id INTEGER NOT NULL,
+		PRIMARY KEY (rule_caddy_id, policy_id)
+	);
+	CREATE TABLE IF NOT EXISTS security_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		event_time DATETIME NOT NULL DEFAULT (datetime('now')),
+		rule_caddy_id TEXT,
+		policy_id INTEGER,
+		client_ip TEXT,
+		method TEXT,
+		uri TEXT,
+		event_type TEXT,
+		rule_triggered TEXT,
+		rule_msg TEXT,
+		action TEXT,
+		anomaly_score INTEGER DEFAULT 0,
+		request_snippet TEXT DEFAULT '',
+		response_status INTEGER DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS idx_security_events_time ON security_events(event_time DESC);
+	CREATE INDEX IF NOT EXISTS idx_security_events_rule ON security_events(rule_caddy_id);
+	CREATE TABLE IF NOT EXISTS security_crs_version (
+		id INTEGER PRIMARY KEY,
+		version TEXT NOT NULL,
+		updated_at DATETIME DEFAULT (datetime('now')),
+		auto_update BOOLEAN DEFAULT TRUE
+	);
 	`
 
 	_, err := DB.Exec(schema)

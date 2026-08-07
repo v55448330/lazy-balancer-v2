@@ -30,6 +30,24 @@
           <el-icon><List /></el-icon>
           <template #title>负载均衡</template>
         </el-menu-item>
+        <el-sub-menu index="security">
+          <template #title>
+            <el-icon><Lock /></el-icon>
+            <span>安全防护</span>
+          </template>
+          <el-menu-item index="security-policies" @click="goPage('security-policies')">
+            <el-icon><Setting /></el-icon>
+            <template #title>安全策略</template>
+          </el-menu-item>
+          <el-menu-item index="security-rules" @click="goPage('security-rules')">
+            <el-icon><Document /></el-icon>
+            <template #title>规则集</template>
+          </el-menu-item>
+          <el-menu-item index="security-events" @click="goPage('security-events')">
+            <el-icon><Warning /></el-icon>
+            <template #title>事件日志</template>
+          </el-menu-item>
+        </el-sub-menu>
         <el-menu-item index="caddy" @click="goPage('caddy')">
           <el-icon><Cpu /></el-icon>
           <template #title>配置预览</template>

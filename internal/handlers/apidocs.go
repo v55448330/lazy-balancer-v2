@@ -131,6 +131,18 @@ var apiDocRoutes = []apiDocRoute{
 	{"GET", "/system/info", "系统", "系统信息", "", `{"ip_address":"...","hostname":"..."}`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/system/metrics", "系统", "系统指标", "", `{"cpu_percent":0,"memory_percent":0}`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/audit-logs", "审计", "操作日志", "", `{"list":[],"total":0,"page":1,"page_size":20}`, []string{"401 unauthenticated"}, "query: page, page_size。"},
+	{"GET", "/security/overview", "安全", "安全总览", "", `{"today_blocked":0,"today_detected":0,"active_policies":0,"crs_version":"v4.14.0"}`, []string{"401 unauthenticated"}, ""},
+	{"GET", "/security/policies", "安全", "安全策略列表", "", `[{"id":1,"name":"默认策略","mode":"blocking","enabled":true,"rule_count":3,"has_waf":true,"has_ip_control":true,"has_rate_limit":false}]`, []string{"401 unauthenticated"}, ""},
+	{"GET", "/security/policies/:id", "安全", "安全策略详情", "", `{"policy":{"id":1,"name":"默认策略","mode":"blocking"},"bindings":["lb_xxx"]}`, []string{"404 not_found"}, ""},
+	{"POST", "/security/policies", "安全", "创建安全策略", `{"name":"默认策略","mode":"detection","anomaly_threshold":5}`, `{"id":1}`, []string{"400 validation_failed", "403 slave_or_admin_required"}, "mode: off/detection/blocking。"},
+	{"PUT", "/security/policies/:id", "安全", "更新安全策略", `{"mode":"blocking","anomaly_threshold":5}`, `{"code":0}`, []string{"400 validation_failed", "403 slave_or_admin_required", "404 not_found"}, "只提交需要修改的字段。"},
+	{"DELETE", "/security/policies/:id", "安全", "删除安全策略", "", `{"code":0}`, []string{"403 slave_or_admin_required", "404 not_found"}, ""},
+	{"POST", "/security/policies/:id/bind", "安全", "关联规则到策略", `{"rule_caddy_id":"lb_xxx"}`, `{"code":0}`, []string{"403 slave_or_admin_required", "404 not_found"}, ""},
+	{"DELETE", "/security/policies/:id/bind/:caddy_id", "安全", "取消规则关联", "", `{"code":0}`, []string{"403 slave_or_admin_required"}, ""},
+	{"GET", "/security/rules/:caddy_id/policy", "安全", "查看规则关联的策略", "", `{"id":1,"name":"默认策略","mode":"blocking"}`, []string{"401 unauthenticated"}, ""},
+	{"GET", "/security/events", "安全", "安全事件日志", "", `{"events":[],"total":0,"page":1,"page_size":20}`, []string{"401 unauthenticated"}, "query: page, page_size, action, ip, rule_caddy_id。"},
+	{"GET", "/security/crs", "安全", "CRS 规则集信息", "", `{"version":"v4.14.0","auto_update":true,"rule_count":832}`, []string{"401 unauthenticated"}, ""},
+	{"PUT", "/security/crs/auto-update", "安全", "开关 CRS 自动更新", `{"auto_update":true}`, `{"code":0}`, []string{"403 slave_or_admin_required"}, ""},
 }
 
 func buildOpenAPIYAML() string {

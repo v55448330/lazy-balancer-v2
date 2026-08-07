@@ -10,7 +10,8 @@ WORKDIR /app
 ENV GOTOOLCHAIN=auto
 RUN xcaddy build v2.11.4 \
   --with github.com/mholt/caddy-l4@v0.1.2 \
-  --with github.com/caddyserver/transform-encoder
+  --with github.com/caddyserver/transform-encoder \
+  --with github.com/corazawaf/coraza-caddy/v2
 
 # Build Go backend
 FROM golang:1.26.1-alpine@sha256:2389ebfa5b7f43eeafbd6be0c3700cc46690ef842ad962f6c5bd6be49ed82039 AS backend
@@ -23,7 +24,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o lazy-balancer
 
 # Final image
 FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
-ARG VERSION=2.0.14
+ARG VERSION=2.1.0
 ENV APP_VERSION=${VERSION}
 RUN apk add --no-cache ca-certificates shadow sqlite tzdata
 WORKDIR /app
@@ -32,7 +33,15 @@ COPY --from=xcaddy-builder /app/caddy /usr/local/bin/caddy
 COPY --from=backend /app/cmd/server/lazy-balancer /usr/local/bin/lazy-balancer
 COPY web/dist /app/ui
 
-RUN mkdir -p /app/data /app/config /app/logs /app/certs
+RUN mkdir -p /app/data /app/config /app/logs /app/certs /app/waf/crs /app/waf/custom /app/waf/audit
+
+# Download OWASP CRS rules
+RUN apk add --no-cache git && \
+    git clone --depth 1 --branch v4.14.0 https://github.com/coreruleset/coreruleset.git /tmp/crs && \
+    cp -r /tmp/crs/rules /app/waf/crs/rules && \
+    cp /tmp/crs/crs-setup.conf.example /app/waf/crs/crs-setup.conf && \
+    rm -rf /tmp/crs && \
+    apk del git
 RUN adduser -u 1000 -s /bin/sh -D -h /app caddy
 
 COPY --from=backend /app/config /app/config

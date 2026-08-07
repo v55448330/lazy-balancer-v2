@@ -214,6 +214,14 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/config/import/validate", h.ValidateConfigImport)
 				admin.POST("/config/import/v1", h.ImportV1Config)
 
+				// Security (admin write)
+				admin.POST("/security/policies", h.CreateSecurityPolicy)
+				admin.PUT("/security/policies/:id", h.UpdateSecurityPolicy)
+				admin.DELETE("/security/policies/:id", h.DeleteSecurityPolicy)
+				admin.POST("/security/policies/:id/bind", h.BindRuleToPolicy)
+				admin.DELETE("/security/policies/:id/bind/:caddy_id", h.UnbindRuleFromPolicy)
+				admin.PUT("/security/crs/auto-update", h.UpdateCRSAutoUpdate)
+
 			}
 
 			// User + Admin
@@ -263,6 +271,14 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/ca-providers/:id", h.GetCAProvider)
 				business.POST("/certificate-configs/test", h.TestCertificateConfig)
 				business.POST("/certificate-configs/:id/test", h.TestCertificateConfig)
+
+				// Security (read for all, write for admin)
+				business.GET("/security/policies", h.ListSecurityPolicies)
+				business.GET("/security/policies/:id", h.GetSecurityPolicy)
+				business.GET("/security/overview", h.GetSecurityOverview)
+				business.GET("/security/events", h.ListSecurityEvents)
+				business.GET("/security/crs", h.GetCRSInfo)
+				business.GET("/security/rules/:caddy_id/policy", h.GetSecurityPolicyBindings)
 
 				// Config (read only for non-admin)
 				business.GET("/config", h.GetConfig)

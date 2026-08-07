@@ -7,6 +7,9 @@ import { ElMessage } from 'element-plus'
 const pages = [
   'dashboard',
   'rules',
+  'security-policies',
+  'security-rules',
+  'security-events',
   'caddy',
   'users',
   'audit-log',

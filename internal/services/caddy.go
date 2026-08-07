@@ -1876,6 +1876,16 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 		var handleChain []interface{}
 
+		// Security policy: insert coraza_waf handler if rule has an active policy
+		if secPolicy := GetSecurityPolicyForRule(rule.CaddyID); secPolicy != nil {
+			if directives := BuildCorazaDirectives(secPolicy); directives != "" {
+				handleChain = append(handleChain, map[string]interface{}{
+					"handler":    "waf",
+					"directives": directives,
+				})
+			}
+		}
+
 		effectiveRequestBodyMaxSizeMB, effectiveUpstreamKeepaliveTimeout, effectiveServerTokensHidden := resolveRuleOverrides(rule)
 		effectiveProxyTimeouts := resolveProxyTimeouts(rule)
 

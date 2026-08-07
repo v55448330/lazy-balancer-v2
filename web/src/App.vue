@@ -11,6 +11,9 @@
     <AppLayout v-else>
       <Dashboard v-if="currentPage === 'dashboard'" />
       <Rules v-else-if="currentPage === 'rules'" />
+      <SecurityPolicies v-else-if="currentPage === 'security-policies'" />
+      <SecurityRules v-else-if="currentPage === 'security-rules'" />
+      <SecurityEvents v-else-if="currentPage === 'security-events'" />
       <Settings v-else-if="currentPage === 'settings-basic' || currentPage === 'settings-cluster' || currentPage === 'settings-certificates' || currentPage === 'settings-apikeys'" />
       <CaddyConfig v-else-if="currentPage === 'caddy'" />
       <Users v-else-if="currentPage === 'users'" />
@@ -44,6 +47,9 @@ const createAsyncPage = (loader: AsyncComponentLoader) => defineAsyncComponent({
 
 const Dashboard = createAsyncPage(() => import('@/views/Dashboard.vue'))
 const Rules = createAsyncPage(() => import('@/views/Rules.vue'))
+const SecurityPolicies = createAsyncPage(() => import('@/views/security/SecurityPolicies.vue'))
+const SecurityRules = createAsyncPage(() => import('@/views/security/SecurityRules.vue'))
+const SecurityEvents = createAsyncPage(() => import('@/views/security/SecurityEvents.vue'))
 const Settings = createAsyncPage(() => import('@/views/Settings.vue'))
 const CaddyConfig = createAsyncPage(() => import('@/views/CaddyConfig.vue'))
 const Users = createAsyncPage(() => import('@/views/Users.vue'))
