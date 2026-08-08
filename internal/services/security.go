@@ -66,6 +66,15 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 		}
 	}
 
+	var excludedRules []string
+	json.Unmarshal(p.CRSExcludedRules, &excludedRules)
+	for _, ruleID := range excludedRules {
+		ruleID = strings.TrimSpace(ruleID)
+		if ruleID != "" {
+			sb.WriteString(fmt.Sprintf("SecRuleRemoveById %s\n", ruleID))
+		}
+	}
+
 	var customRules []models.CustomRule
 	json.Unmarshal(p.CustomRules, &customRules)
 	targetMap := map[string]string{"uri": "REQUEST_URI", "args": "ARGS", "body": "REQUEST_BODY", "headers": "REQUEST_HEADERS", "user_agent": "REQUEST_HEADERS.User-Agent"}

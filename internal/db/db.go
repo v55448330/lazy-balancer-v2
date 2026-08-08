@@ -435,6 +435,7 @@ func createTables() error {
 		rate_limit_rps INTEGER DEFAULT 0,
 		rate_limit_burst INTEGER DEFAULT 0,
 		crs_rule_groups TEXT DEFAULT '[]',
+		crs_excluded_rules TEXT DEFAULT '[]',
 		custom_rules TEXT DEFAULT '[]',
 		enabled BOOLEAN DEFAULT TRUE,
 		created_at DATETIME DEFAULT (datetime('now')),

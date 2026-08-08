@@ -14,6 +14,7 @@ type SecurityPolicy struct {
 	RateLimitRPS     int             `json:"rate_limit_rps"`
 	RateLimitBurst   int             `json:"rate_limit_burst"`
 	CRSRuleGroups    json.RawMessage `json:"crs_rule_groups"`
+	CRSExcludedRules json.RawMessage `json:"crs_excluded_rules"`
 	CustomRules      json.RawMessage `json:"custom_rules"`
 	Enabled          bool            `json:"enabled"`
 	CreatedAt        string          `json:"created_at"`
@@ -42,6 +43,7 @@ type CreateSecurityPolicyRequest struct {
 	RateLimitRPS     int    `json:"rate_limit_rps"`
 	RateLimitBurst   int    `json:"rate_limit_burst"`
 	CRSRuleGroups    string `json:"crs_rule_groups"`
+	CRSExcludedRules string `json:"crs_excluded_rules"`
 	CustomRules      string `json:"custom_rules"`
 	Enabled          *bool  `json:"enabled"`
 }
@@ -57,6 +59,7 @@ type UpdateSecurityPolicyRequest struct {
 	RateLimitRPS     *int    `json:"rate_limit_rps"`
 	RateLimitBurst   *int    `json:"rate_limit_burst"`
 	CRSRuleGroups    *string `json:"crs_rule_groups"`
+	CRSExcludedRules *string `json:"crs_excluded_rules"`
 	CustomRules      *string `json:"custom_rules"`
 	Enabled          *bool   `json:"enabled"`
 }

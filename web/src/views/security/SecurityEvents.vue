@@ -1,12 +1,18 @@
 <template>
-  <div class="p-6 max-w-7xl mx-auto">
-    <div class="flex items-center justify-between mb-6">
-      <h2 class="text-xl font-semibold text-gray-800">事件日志</h2>
+  <div class="page">
+    <div class="page-header">
+      <div class="header-left">
+        <h2 class="page-title">
+          <el-icon class="title-icon"><Warning /></el-icon>
+          事件日志
+        </h2>
+        <p class="page-desc">查看 WAF 拦截和检测的安全事件记录</p>
+      </div>
       <el-button :icon="Refresh" @click="fetchEvents">刷新</el-button>
     </div>
 
-    <el-card shadow="never" class="mb-4">
-      <div class="flex gap-3 mb-2">
+    <el-card>
+      <div class="flex gap-3 mb-4">
         <el-select v-model="filters.action" placeholder="动作" clearable style="width: 120px" @change="fetchEvents">
           <el-option label="全部" value="" />
           <el-option label="拦截" value="blocked" />
@@ -15,13 +21,12 @@
         <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 180px" @clear="fetchEvents" @keyup.enter="fetchEvents" />
       </div>
 
-      <el-table :data="events" v-loading="loading" stripe style="width: 100%" empty-text="暂无安全事件">
+      <el-table :data="events" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+        <template #empty><el-empty description="暂无安全事件" :image-size="60" /></template>
         <el-table-column prop="event_time" label="时间" width="170" />
         <el-table-column label="动作" width="90" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.action === 'blocked' ? 'danger' : 'warning'" size="small" effect="light">
-              {{ row.action === 'blocked' ? '拦截' : '检测' }}
-            </el-tag>
+            <el-tag :type="row.action === 'blocked' ? 'danger' : 'warning'" size="small" effect="light">{{ row.action === 'blocked' ? '拦截' : '检测' }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="rule_triggered" label="规则" width="130" />
@@ -32,13 +37,7 @@
       </el-table>
 
       <div class="flex justify-center mt-4">
-        <el-pagination
-          v-model:current-page="page"
-          :page-size="pageSize"
-          :total="total"
-          layout="prev, pager, next, total"
-          @current-change="fetchEvents"
-        />
+        <el-pagination v-model:current-page="page" :page-size="pageSize" :total="total" layout="prev, pager, next, total" @current-change="fetchEvents" />
       </div>
     </el-card>
   </div>
@@ -46,15 +45,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, Warning } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 
 interface APIResponse<T> { code: number; message: string; data: T }
-interface SecurityEvent {
-  id: number; event_time: string; rule_caddy_id: string; policy_id: number
-  client_ip: string; method: string; uri: string; event_type: string
-  rule_triggered: string; rule_msg: string; action: string; anomaly_score: number
-}
+interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string; policy_id: number; client_ip: string; method: string; uri: string; event_type: string; rule_triggered: string; rule_msg: string; action: string; anomaly_score: number }
 
 const loading = ref(false)
 const events = ref<SecurityEvent[]>([])
@@ -65,15 +60,7 @@ const filters = ref({ action: '', ip: '' })
 
 const fetchEvents = async () => {
   loading.value = true
-  try {
-    const params = new URLSearchParams({ page: String(page.value), page_size: String(pageSize) })
-    if (filters.value.action) params.set('action', filters.value.action)
-    if (filters.value.ip) params.set('ip', filters.value.ip)
-    const res = await request.get<APIResponse<{ events: SecurityEvent[]; total: number }>>(`/security/events?${params}`)
-    events.value = res.data?.events || []
-    total.value = res.data?.total || 0
-  } catch { events.value = [] } finally { loading.value = false }
+  try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize) }); if (filters.value.action) p.set('action', filters.value.action); if (filters.value.ip) p.set('ip', filters.value.ip); const res = await request.get<APIResponse<{ events: SecurityEvent[]; total: number }>>(`/security/events?${p}`); events.value = res.data?.events || []; total.value = res.data?.total || 0 } catch { events.value = [] } finally { loading.value = false }
 }
-
 onMounted(fetchEvents)
 </script>
