@@ -1,42 +1,46 @@
 <template>
-  <div class="p-6">
-    <h2 class="text-xl font-semibold text-gray-800 mb-4">事件日志</h2>
-
-    <div class="flex gap-3 mb-4">
-      <el-select v-model="filters.action" placeholder="动作" clearable style="width: 120px" @change="fetchEvents">
-        <el-option label="全部" value="" />
-        <el-option label="拦截" value="blocked" />
-        <el-option label="检测" value="logged" />
-      </el-select>
-      <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 160px" @clear="fetchEvents" @keyup.enter="fetchEvents" />
+  <div class="p-6 max-w-7xl mx-auto">
+    <div class="flex items-center justify-between mb-6">
+      <h2 class="text-xl font-semibold text-gray-800">事件日志</h2>
       <el-button :icon="Refresh" @click="fetchEvents">刷新</el-button>
     </div>
 
-    <el-table :data="events" v-loading="loading" stripe>
-      <el-table-column prop="event_time" label="时间" width="160" />
-      <el-table-column label="动作" width="80">
-        <template #default="{ row }">
-          <el-tag :type="row.action === 'blocked' ? 'danger' : 'warning'" size="small">
-            {{ row.action === 'blocked' ? '拦截' : '检测' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="rule_triggered" label="规则" width="120" />
-      <el-table-column prop="rule_msg" label="描述" min-width="180" show-overflow-tooltip />
-      <el-table-column prop="client_ip" label="客户端 IP" width="130" />
-      <el-table-column prop="method" label="方法" width="70" />
-      <el-table-column prop="uri" label="URI" min-width="200" show-overflow-tooltip />
-    </el-table>
+    <el-card shadow="never" class="mb-4">
+      <div class="flex gap-3 mb-2">
+        <el-select v-model="filters.action" placeholder="动作" clearable style="width: 120px" @change="fetchEvents">
+          <el-option label="全部" value="" />
+          <el-option label="拦截" value="blocked" />
+          <el-option label="检测" value="logged" />
+        </el-select>
+        <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 180px" @clear="fetchEvents" @keyup.enter="fetchEvents" />
+      </div>
 
-    <div class="flex justify-center mt-4">
-      <el-pagination
-        v-model:current-page="page"
-        :page-size="pageSize"
-        :total="total"
-        layout="prev, pager, next, total"
-        @current-change="fetchEvents"
-      />
-    </div>
+      <el-table :data="events" v-loading="loading" stripe style="width: 100%" empty-text="暂无安全事件">
+        <el-table-column prop="event_time" label="时间" width="170" />
+        <el-table-column label="动作" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.action === 'blocked' ? 'danger' : 'warning'" size="small" effect="light">
+              {{ row.action === 'blocked' ? '拦截' : '检测' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="rule_triggered" label="规则" width="130" />
+        <el-table-column prop="rule_msg" label="描述" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="client_ip" label="客户端 IP" width="140" />
+        <el-table-column prop="method" label="方法" width="70" align="center" />
+        <el-table-column prop="uri" label="URI" min-width="220" show-overflow-tooltip />
+      </el-table>
+
+      <div class="flex justify-center mt-4">
+        <el-pagination
+          v-model:current-page="page"
+          :page-size="pageSize"
+          :total="total"
+          layout="prev, pager, next, total"
+          @current-change="fetchEvents"
+        />
+      </div>
+    </el-card>
   </div>
 </template>
 

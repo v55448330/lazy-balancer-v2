@@ -201,6 +201,8 @@ type ClusterSnapshot struct {
 	CaddyConfig      *string              `json:"caddy_config,omitempty"`
 	Certs            []ClusterCertificate `json:"certs"`
 	ACME             *ClusterACMEState    `json:"acme,omitempty"`
+	SecurityPolicies json.RawMessage      `json:"security_policies,omitempty"`
+	SecurityBindings json.RawMessage      `json:"security_bindings,omitempty"`
 }
 
 func (snapshot ClusterSnapshot) MarshalJSON() ([]byte, error) {

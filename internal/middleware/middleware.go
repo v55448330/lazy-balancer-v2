@@ -279,6 +279,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/security/events", h.ListSecurityEvents)
 				business.GET("/security/crs", h.GetCRSInfo)
 				business.GET("/security/rules/:caddy_id/policy", h.GetSecurityPolicyBindings)
+				business.GET("/security/bindings", h.GetAllSecurityBindings)
 
 				// Config (read only for non-admin)
 				business.GET("/config", h.GetConfig)

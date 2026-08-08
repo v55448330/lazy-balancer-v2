@@ -228,7 +228,57 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 	if snapshot.ACME, err = s.snapshotACME(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
+	if snapshot.SecurityPolicies, err = s.snapshotSecurityPolicies(ctx, store); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
+	if snapshot.SecurityBindings, err = s.snapshotSecurityBindings(ctx, store); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
 	return snapshot, nil
+}
+
+func (s *ClusterService) snapshotSecurityPolicies(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
+	return s.dumpTableAsJSON(ctx, store, "security_policies", "id,name,description,mode,anomaly_threshold,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,custom_rules,enabled,created_at,updated_at", "id")
+}
+
+func (s *ClusterService) snapshotSecurityBindings(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
+	return s.dumpTableAsJSON(ctx, store, "security_policy_bindings", "rule_caddy_id,policy_id", "rule_caddy_id")
+}
+
+func (s *ClusterService) dumpTableAsJSON(ctx context.Context, store snapshotStore, table, columns, orderBy string) (json.RawMessage, error) {
+	rows, err := store.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM %s ORDER BY %s", columns, table, orderBy))
+	if err != nil {
+		return nil, fmt.Errorf("读取 %s: %w", table, err)
+	}
+	defer rows.Close()
+	colNames, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		values := make([]interface{}, len(colNames))
+		ptrs := make([]interface{}, len(colNames))
+		for i := range values {
+			ptrs[i] = &values[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, err
+		}
+		row := make(map[string]interface{})
+		for i, col := range colNames {
+			row[col] = values[i]
+		}
+		result = append(result, row)
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	if string(data) == "null" {
+		data = []byte("[]")
+	}
+	return data, nil
 }
 
 func (s *ClusterService) snapshotACME(ctx context.Context, store snapshotStore) (*models.ClusterACMEState, error) {

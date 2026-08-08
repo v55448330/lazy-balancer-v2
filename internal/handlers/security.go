@@ -329,6 +329,33 @@ func (h *Handlers) UpdateCRSAutoUpdate(c *gin.Context) {
 // GetSecurityPolicyForRule and BuildCorazaDirectives are in services/security.go
 // to avoid circular dependency (services can't import handlers).
 
+func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
+	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, p.mode, p.enabled, p.ip_whitelist, p.ip_blacklist, p.rate_limit_enabled
+		FROM security_policy_bindings b JOIN security_policies p ON b.policy_id = p.id`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	defer rows.Close()
+	type BindingInfo struct {
+		PolicyID    int             `json:"policy_id"`
+		Name        string          `json:"name"`
+		Mode        string          `json:"mode"`
+		Enabled     bool            `json:"enabled"`
+		IPWhitelist json.RawMessage `json:"ip_whitelist"`
+		IPBlacklist json.RawMessage `json:"ip_blacklist"`
+		RateLimit   bool            `json:"rate_limit_enabled"`
+	}
+	result := map[string]BindingInfo{}
+	for rows.Next() {
+		var ruleCaddyID string
+		var b BindingInfo
+		rows.Scan(&ruleCaddyID, &b.PolicyID, &b.Name, &b.Mode, &b.Enabled, &b.IPWhitelist, &b.IPBlacklist, &b.RateLimit)
+		result[ruleCaddyID] = b
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: result})
+}
+
 func scanSecurityPolicy(rows *sql.Rows, p *models.SecurityPolicy) error {
 	return rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPWhitelist, &p.IPBlacklist,
 		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.CRSRuleGroups, &p.CustomRules, &p.Enabled, &p.CreatedAt, &p.UpdatedAt)

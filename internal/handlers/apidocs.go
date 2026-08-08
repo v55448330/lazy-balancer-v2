@@ -140,6 +140,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"POST", "/security/policies/:id/bind", "安全", "关联规则到策略", `{"rule_caddy_id":"lb_xxx"}`, `{"code":0}`, []string{"403 slave_or_admin_required", "404 not_found"}, ""},
 	{"DELETE", "/security/policies/:id/bind/:caddy_id", "安全", "取消规则关联", "", `{"code":0}`, []string{"403 slave_or_admin_required"}, ""},
 	{"GET", "/security/rules/:caddy_id/policy", "安全", "查看规则关联的策略", "", `{"id":1,"name":"默认策略","mode":"blocking"}`, []string{"401 unauthenticated"}, ""},
+	{"GET", "/security/bindings", "安全", "所有规则的安全策略绑定", "", `{"lb_xxx":{"policy_id":1,"name":"默认策略","mode":"blocking","enabled":true}}`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/security/events", "安全", "安全事件日志", "", `{"events":[],"total":0,"page":1,"page_size":20}`, []string{"401 unauthenticated"}, "query: page, page_size, action, ip, rule_caddy_id。"},
 	{"GET", "/security/crs", "安全", "CRS 规则集信息", "", `{"version":"v4.14.0","auto_update":true,"rule_count":832}`, []string{"401 unauthenticated"}, ""},
 	{"PUT", "/security/crs/auto-update", "安全", "开关 CRS 自动更新", `{"auto_update":true}`, `{"code":0}`, []string{"403 slave_or_admin_required"}, ""},

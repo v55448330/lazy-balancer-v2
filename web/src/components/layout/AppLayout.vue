@@ -36,11 +36,11 @@
             <span>安全防护</span>
           </template>
           <el-menu-item index="security-policies" @click="goPage('security-policies')">
-            <el-icon><Setting /></el-icon>
+            <el-icon><Lock /></el-icon>
             <template #title>安全策略</template>
           </el-menu-item>
           <el-menu-item index="security-rules" @click="goPage('security-rules')">
-            <el-icon><Document /></el-icon>
+            <el-icon><Notebook /></el-icon>
             <template #title>规则集</template>
           </el-menu-item>
           <el-menu-item index="security-events" @click="goPage('security-events')">
@@ -161,7 +161,7 @@ import { useMediaQuery } from '@vueuse/core'
 import { useAuthStore } from '@/stores/auth'
 import type { PageId } from '@/stores/auth'
 import { request } from '@/utils/api'
-import { DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document } from '@element-plus/icons-vue'
+import { DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document, Warning, Notebook } from '@element-plus/icons-vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, footerText } from '@/utils/branding'
 

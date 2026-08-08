@@ -33,14 +33,13 @@
           <template #default="{ row }">
             <div class="rule-name-cell">
               <el-tooltip
-                v-if="row.ip_acl_mode === 'allow' || row.ip_acl_mode === 'deny'"
-                :content="row.ip_acl_mode === 'allow' ? `IP 白名单 · ${row.ip_acl_list?.length || 0} 条` : `IP 黑名单 · ${row.ip_acl_list?.length || 0} 条`"
+                v-if="hasSecurityIcon(row)"
+                :content="securityTooltip(row)"
               >
                 <el-icon
                   :size="14"
                   class="acl-lock-icon"
-                  :class="`is-${row.ip_acl_mode}`"
-                  :aria-label="row.ip_acl_mode === 'allow' ? `IP 白名单，${row.ip_acl_list?.length || 0} 条` : `IP 黑名单，${row.ip_acl_list?.length || 0} 条`"
+                  :class="`is-${row.ip_acl_mode || 'security'}`"
                   tabindex="0"
                 ><Lock /></el-icon>
               </el-tooltip>
@@ -1196,6 +1195,42 @@ class CertInfoRefreshError extends Error {
 }
 
 const rules = ref<Rule[]>([])
+const securityBindings = ref<Record<string, { policy_id: number; name: string; mode: string; enabled: boolean; ip_whitelist: string; ip_blacklist: string; rate_limit_enabled: boolean }>>({})
+
+const fetchSecurityBindings = async () => {
+  try {
+    const res = await request.get<APIResponse<typeof securityBindings.value>>('/security/bindings')
+    if (res.data) securityBindings.value = res.data
+  } catch { /* silent */ }
+}
+
+const hasSecurityIcon = (row: Rule): boolean => {
+  if (row.ip_acl_mode === 'allow' || row.ip_acl_mode === 'deny') return true
+  const binding = securityBindings.value[row.caddy_id]
+  if (!binding || !binding.enabled) return false
+  return binding.mode !== 'off' || binding.rate_limit_enabled ||
+    (binding.ip_whitelist != null && binding.ip_whitelist !== '[]') ||
+    (binding.ip_blacklist != null && binding.ip_blacklist !== '[]')
+}
+
+const securityTooltip = (row: Rule): string => {
+  const parts: string[] = []
+  if (row.ip_acl_mode === 'allow' || row.ip_acl_mode === 'deny') {
+    parts.push(`IP ${row.ip_acl_mode === 'allow' ? '白名单' : '黑名单'} · ${row.ip_acl_list?.length || 0} 条`)
+  }
+  const binding = securityBindings.value[row.caddy_id]
+  if (binding && binding.enabled) {
+    const feats: string[] = []
+    if (binding.mode === 'blocking') feats.push('WAF 拦截')
+    else if (binding.mode === 'detection') feats.push('WAF 检测')
+    const wl = binding.ip_whitelist && binding.ip_whitelist !== '[]' ? JSON.parse(binding.ip_whitelist).length : 0
+    const bl = binding.ip_blacklist && binding.ip_blacklist !== '[]' ? JSON.parse(binding.ip_blacklist).length : 0
+    if (wl > 0 || bl > 0) feats.push(`IP ${wl > 0 ? `白${wl}` : ''}${bl > 0 ? `黑${bl}` : ''}`)
+    if (binding.rate_limit_enabled) feats.push('限流')
+    if (feats.length > 0) parts.push(`${binding.name}: ${feats.join(' · ')}`)
+  }
+  return parts.join(' | ')
+}
 const searchQuery = ref('')
 const currentPage = ref(1)
 const pageSize = ref(10)
@@ -1259,6 +1294,7 @@ const fetchRules = async () => {
     const res = await request.get<APIResponse<Rule[]>>('/rules', { signal: healthPolling.signal })
     if (disposed || requestSeq !== rulesRequestSeq) return
     rules.value = res.data || []
+    void fetchSecurityBindings()
     // Fetch health status after rules are loaded
     void healthPolling.run()
     // Fetch certificate info for TLS-enabled rules

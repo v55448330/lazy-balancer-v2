@@ -231,6 +231,47 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 	if err := updateSnapshotSettings(ctx, tx, snapshot); err != nil {
 		return err
 	}
+	if err := applySecurityTables(ctx, tx, snapshot); err != nil {
+		return err
+	}
+	return nil
+}
+
+func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
+	if len(snapshot.SecurityPolicies) == 0 || string(snapshot.SecurityPolicies) == "[]" {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM security_policy_bindings"); err != nil {
+		return fmt.Errorf("清理 security_policy_bindings: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM security_policies"); err != nil {
+		return fmt.Errorf("清理 security_policies: %w", err)
+	}
+	var policies []map[string]interface{}
+	if err := json.Unmarshal(snapshot.SecurityPolicies, &policies); err != nil {
+		return fmt.Errorf("解析 security_policies: %w", err)
+	}
+	for _, p := range policies {
+		ipWL, _ := json.Marshal(p["ip_whitelist"])
+		ipBL, _ := json.Marshal(p["ip_blacklist"])
+		crsGroups, _ := json.Marshal(p["crs_rule_groups"])
+		customRules, _ := json.Marshal(p["custom_rules"])
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,custom_rules,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			p["id"], p["name"], p["description"], p["mode"], p["anomaly_threshold"],
+			string(ipWL), string(ipBL), p["rate_limit_enabled"], p["rate_limit_rps"], p["rate_limit_burst"],
+			string(crsGroups), string(customRules), p["enabled"], p["created_at"], p["updated_at"]); err != nil {
+			return fmt.Errorf("写入 security_policy: %w", err)
+		}
+	}
+	var bindings []map[string]interface{}
+	if err := json.Unmarshal(snapshot.SecurityBindings, &bindings); err != nil {
+		return fmt.Errorf("解析 security_bindings: %w", err)
+	}
+	for _, b := range bindings {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)`, b["rule_caddy_id"], b["policy_id"]); err != nil {
+			return fmt.Errorf("写入 security_policy_binding: %w", err)
+		}
+	}
 	return nil
 }
 
