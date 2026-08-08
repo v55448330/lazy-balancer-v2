@@ -280,6 +280,9 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/security/crs", h.GetCRSInfo)
 				business.GET("/security/rules/:caddy_id/policy", h.GetSecurityPolicyBindings)
 				business.GET("/security/bindings", h.GetAllSecurityBindings)
+				business.GET("/security/crs/rules", h.ListCRSRules)
+				business.GET("/security/crs/rules/:filename", h.GetCRSRuleContent)
+				business.GET("/security/crs/setup", h.GetCRSSetupConfig)
 
 				// Config (read only for non-admin)
 				business.GET("/config", h.GetConfig)

@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -382,4 +386,143 @@ func getContextUserID(c *gin.Context) string {
 
 func init() {
 	log.Println("Security handlers registered")
+}
+
+func (h *Handlers) ListCRSRules(c *gin.Context) {
+	rulesDir := "/app/waf/crs/rules"
+	entries, err := os.ReadDir(rulesDir)
+	if err != nil {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"rules": []interface{}{}, "total": 0}})
+		return
+	}
+
+	search := strings.ToLower(c.DefaultQuery("search", ""))
+	page := 1
+	pageSize := 50
+	fmt.Sscanf(c.DefaultQuery("page", "1"), "%d", &page)
+	fmt.Sscanf(c.DefaultQuery("page_size", "50"), "%d", &pageSize)
+	if page < 1 {
+		page = 1
+	}
+
+	type CRSRule struct {
+		Filename string `json:"filename"`
+		Category string `json:"category"`
+		Size     int64  `json:"size"`
+	}
+	var allRules []CRSRule
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".conf") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		cat := categorizeCRSFile(entry.Name())
+		if search != "" && !strings.Contains(strings.ToLower(entry.Name()), search) && !strings.Contains(strings.ToLower(cat), search) {
+			continue
+		}
+		allRules = append(allRules, CRSRule{
+			Filename: entry.Name(),
+			Category: cat,
+			Size:     info.Size(),
+		})
+	}
+	sort.Slice(allRules, func(i, j int) bool { return allRules[i].Filename < allRules[j].Filename })
+
+	total := len(allRules)
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	paged := allRules[start:end]
+	if paged == nil {
+		paged = []CRSRule{}
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"rules": paged, "total": total, "page": page, "page_size": pageSize}})
+}
+
+func (h *Handlers) GetCRSRuleContent(c *gin.Context) {
+	filename := c.Param("filename")
+	if strings.Contains(filename, "..") || strings.Contains(filename, "/") {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的文件名"})
+		return
+	}
+	filepath := filepath.Join("/app/waf/crs/rules", filename)
+	content, err := os.ReadFile(filepath)
+	if err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则文件不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"filename": filename, "content": string(content), "size": len(content)}})
+}
+
+func (h *Handlers) GetCRSSetupConfig(c *gin.Context) {
+	content, err := os.ReadFile("/app/waf/crs/crs-setup.conf")
+	if err != nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CRS 配置文件不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"content": string(content)}})
+}
+
+func categorizeCRSFile(filename string) string {
+	name := strings.ToUpper(filename)
+	switch {
+	case strings.Contains(name, "920-"):
+		return "协议异常"
+	case strings.Contains(name, "921-"):
+		return "协议攻击"
+	case strings.Contains(name, "930-"):
+		return "路径穿越 (LFI)"
+	case strings.Contains(name, "931-"):
+		return "远程文件包含 (RFI)"
+	case strings.Contains(name, "932-"):
+		return "远程代码执行 (RCE)"
+	case strings.Contains(name, "933-"):
+		return "PHP 攻击"
+	case strings.Contains(name, "934-"):
+		return "Node.js 攻击"
+	case strings.Contains(name, "941-"):
+		return "XSS 跨站脚本"
+	case strings.Contains(name, "942-"):
+		return "SQL 注入"
+	case strings.Contains(name, "943-"):
+		return "会话固定"
+	case strings.Contains(name, "944-"):
+		return "Java 攻击"
+	case strings.Contains(name, "949-"):
+		return "请求阻断评估"
+	case strings.Contains(name, "950-"):
+		return "响应信息泄露"
+	case strings.Contains(name, "951-"):
+		return "响应 SQL 泄露"
+	case strings.Contains(name, "953-"):
+		return "响应 PHP 泄露"
+	case strings.Contains(name, "959-"):
+		return "响应阻断评估"
+	case strings.Contains(name, "980-"):
+		return "事件关联"
+	case strings.Contains(name, "900-"):
+		return "初始化/排除"
+	case strings.Contains(name, "901-"):
+		return "初始化"
+	case strings.Contains(name, "905-"):
+		return "通用异常"
+	case strings.Contains(name, "911-"):
+		return "方法限制"
+	case strings.Contains(name, "912-"):
+		return "文件上传"
+	case strings.Contains(name, "913-"):
+		return "爬虫检测"
+	case strings.Contains(name, "915-"):
+		return "请求体限制"
+	default:
+		return "其他"
+	}
 }
