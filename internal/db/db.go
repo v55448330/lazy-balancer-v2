@@ -650,6 +650,7 @@ func runMigrations() error {
 		"nodes.health_json":                           "TEXT",
 		"nodes.last_sync_at":                          "DATETIME",
 		"nodes.last_sync_error":                       "TEXT",
+		"security_policies.crs_excluded_rules":        "TEXT DEFAULT '[]'",
 	}
 	for col, dtype := range newColumns {
 		parts := strings.Split(col, ".")
