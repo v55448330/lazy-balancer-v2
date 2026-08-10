@@ -194,7 +194,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	rows, err := db.DB.Query(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_type, block_page_content, block_page_id, enabled, created_at, updated_at
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, enabled, created_at, updated_at
 		FROM security_policies ORDER BY id`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -229,10 +229,10 @@ func (h *Handlers) GetSecurityPolicy(c *gin.Context) {
 	id := c.Param("id")
 	var p models.SecurityPolicy
 	err := db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_type, block_page_content, block_page_id, enabled, created_at, updated_at
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, enabled, created_at, updated_at
 		FROM security_policies WHERE id=?`, id).
 		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelist, &p.IPBlacklist,
-			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.CRSRuleGroups, &p.CRSExcludedRules, &p.CustomRules, &p.BlockPageType, &p.BlockPageContent, &p.BlockPageID, &p.Enabled, &p.CreatedAt, &p.UpdatedAt)
+			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.CRSRuleGroups, &p.CRSExcludedRules, &p.CustomRules, &p.BlockPageID, &p.Enabled, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
 		return
@@ -285,10 +285,10 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		enabled = *req.Enabled
 	}
 	result, err := db.DB.Exec(`INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_type, block_page_content, block_page_id, enabled)
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, enabled)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLList, req.IPACLList,
-		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageType, req.BlockPageContent, req.BlockPageID, enabled)
+		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, enabled)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -337,8 +337,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addStr("crs_rule_groups", req.CRSRuleGroups)
 	addStr("crs_excluded_rules", req.CRSExcludedRules)
 	addStr("custom_rules", req.CustomRules)
-	addStr("block_page_type", req.BlockPageType)
-	addStr("block_page_content", req.BlockPageContent)
+
 	if req.BlockPageID != nil {
 		query += ", block_page_id=?"
 		args = append(args, *req.BlockPageID)
@@ -417,10 +416,10 @@ func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 	}
 	var p models.SecurityPolicy
 	db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_type, block_page_content, block_page_id, enabled, created_at, updated_at
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, enabled, created_at, updated_at
 		FROM security_policies WHERE id=?`, policyID).
 		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelist, &p.IPBlacklist,
-			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.CRSRuleGroups, &p.CRSExcludedRules, &p.CustomRules, &p.BlockPageType, &p.BlockPageContent, &p.BlockPageID, &p.Enabled, &p.CreatedAt, &p.UpdatedAt)
+			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.CRSRuleGroups, &p.CRSExcludedRules, &p.CustomRules, &p.BlockPageID, &p.Enabled, &p.CreatedAt, &p.UpdatedAt)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: p})
 }
 
@@ -587,7 +586,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 
 func scanSecurityPolicy(rows *sql.Rows, p *models.SecurityPolicy) error {
 	return rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelist, &p.IPBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.CRSRuleGroups, &p.CRSExcludedRules, &p.CustomRules, &p.BlockPageType, &p.BlockPageContent, &p.BlockPageID, &p.Enabled, &p.CreatedAt, &p.UpdatedAt)
+		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.CRSRuleGroups, &p.CRSExcludedRules, &p.CustomRules, &p.BlockPageID, &p.Enabled, &p.CreatedAt, &p.UpdatedAt)
 }
 
 func max1(a, b int) int {

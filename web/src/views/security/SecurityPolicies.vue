@@ -131,7 +131,7 @@
           <el-select v-model="selectedCustomRules" multiple filterable placeholder="选择要包含的自定义规则" style="width: 100%">
             <el-option v-for="rule in allCustomRules" :key="rule.id" :label="rule.name" :value="rule.id" />
           </el-select>
-          <div class="text-secondary">自定义规则在"规则集"页面创建，<el-link type="primary" @click="goToCustomRulesPage">去创建/编辑</el-link></div>
+          <div class="text-secondary">自定义规则在"规则集"页面创建，<el-link type="primary" @click="goToCustomRulesPage" class="text-secondary">去创建/编辑</el-link></div>
         </el-form-item>
 
         <el-divider content-position="left">拦截页面</el-divider>
@@ -141,7 +141,7 @@
             <el-option v-for="p in blockPages" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
           <div v-if="blockPages.length === 0" class="text-secondary mt-1">
-            暂无拦截页面，<el-link type="primary" @click="goToBlockPagesPage">去创建</el-link>
+            暂无拦截页面，<el-link type="primary" @click="goToBlockPagesPage" class="text-secondary">去创建</el-link>
           </div>
         </el-form-item>
 

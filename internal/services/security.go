@@ -49,8 +49,6 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 		if content != "" {
 			sb.WriteString("SecDefaultAction \"phase:1,deny,status:403,log,msg:'Blocked by security policy'\"\nSecDefaultAction \"phase:2,deny,status:403,log,msg:'Blocked by security policy'\"\n")
 		}
-	} else if p.BlockPageType == "custom" && p.BlockPageContent != "" {
-		sb.WriteString("SecDefaultAction \"phase:1,deny,status:403,log,msg:'Blocked by security policy'\"\nSecDefaultAction \"phase:2,deny,status:403,log,msg:'Blocked by security policy'\"\n")
 	}
 
 	var ipWL []string

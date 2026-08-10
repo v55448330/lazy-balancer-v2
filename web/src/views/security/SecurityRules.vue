@@ -57,7 +57,7 @@
         <el-tab-pane label="CRS 配置" name="setup">
           <el-card v-loading="loadingSetup">
             <template #header><div class="flex items-center justify-between"><span class="font-medium">crs-setup.conf</span><el-button link type="primary" size="small" @click="fetchSetup">刷新</el-button></div></template>
-            <el-input type="textarea" :model-value="setupContent" readonly :rows="25" class="syntax-highlighted" style="font-family: monospace; font-size: 12px" />
+            <el-input type="textarea" :model-value="setupContent" readonly :rows="25" class="vjs-textarea" style="font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #e4e4e7; background: #1e1e2e" />
           </el-card>
         </el-tab-pane>
         <el-tab-pane label="自定义规则" name="custom">
@@ -103,7 +103,7 @@
     </el-card>
 
     <el-dialog v-model="contentDialogVisible" :title="currentFilename" width="900px" top="5vh">
-      <div v-loading="loadingContent"><pre class="crs-content syntax-highlighted">{{ currentContent }}</pre></div>
+      <div v-loading="loadingContent"><pre class="crs-content vjs-content">{{ currentContent }}</pre></div>
     </el-dialog>
 
     <el-dialog v-model="ruleDialogVisible" :title="editingRuleId ? '编辑自定义规则' : '新建自定义规则'" width="760px">
@@ -266,9 +266,9 @@ onMounted(() => { fetchCRS(); fetchRules(); fetchSetup(); fetchCustomRules() })
 </script>
 
 <style scoped>
-.crs-content { max-height: 70vh; overflow: auto; background: #f8f9fa; padding: 16px; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
-.syntax-highlighted { background: #f6f8fa; color: #24292f; }
-.syntax-highlighted :deep(textarea) { background: #f6f8fa; color: #24292f; }
+.crs-content { max-height: 70vh; overflow: auto; padding: 16px; border-radius: 6px; font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
+.vjs-content { background: #1e1e2e; color: #e4e4e7; }
+.vjs-textarea { border-radius: 6px; }
 .rule-condition-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; flex-wrap: wrap; }
 .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .search-input { width: 280px; }

@@ -20,8 +20,6 @@ type SecurityPolicy struct {
 	CRSExcludedRules json.RawMessage `json:"crs_excluded_rules"`
 	CustomRules      json.RawMessage `json:"custom_rules"`
 	BlockPageID      int             `json:"block_page_id"`
-	BlockPageType    string          `json:"block_page_type"`
-	BlockPageContent string          `json:"block_page_content"`
 	Enabled          bool            `json:"enabled"`
 	CreatedAt        string          `json:"created_at"`
 	UpdatedAt        string          `json:"updated_at"`
@@ -53,8 +51,6 @@ type CreateSecurityPolicyRequest struct {
 	CRSExcludedRules string `json:"crs_excluded_rules"`
 	CustomRules      string `json:"custom_rules"`
 	BlockPageID      int    `json:"block_page_id"`
-	BlockPageType    string `json:"block_page_type"`
-	BlockPageContent string `json:"block_page_content"`
 	Enabled          *bool  `json:"enabled"`
 }
 
@@ -73,8 +69,6 @@ type UpdateSecurityPolicyRequest struct {
 	CRSExcludedRules *string `json:"crs_excluded_rules"`
 	CustomRules      *string `json:"custom_rules"`
 	BlockPageID      *int    `json:"block_page_id"`
-	BlockPageType    *string `json:"block_page_type"`
-	BlockPageContent *string `json:"block_page_content"`
 	Enabled          *bool   `json:"enabled"`
 }
 
