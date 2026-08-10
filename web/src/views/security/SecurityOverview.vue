@@ -13,6 +13,14 @@
     <el-row :gutter="20" class="mb-5">
       <el-col :span="24">
         <el-card shadow="always" class="stat-card-wrapper">
+          <template #header>
+            <div class="card-header">
+              <div class="card-title">
+                <el-icon class="title-icon"><TrendCharts /></el-icon>
+                <span>7 天拦截趋势</span>
+              </div>
+            </div>
+          </template>
           <el-row :gutter="20">
             <el-col :span="6" class="stat-card-col">
               <div class="stat-label">今日拦截</div>
@@ -39,9 +47,11 @@
       <el-col :span="16">
         <el-card shadow="always">
           <template #header>
-            <div class="flex items-center gap-2">
-              <el-icon><TrendCharts /></el-icon>
-              <span class="font-medium">7 天拦截趋势</span>
+            <div class="card-header">
+              <div class="card-title">
+                <el-icon class="title-icon"><TrendCharts /></el-icon>
+                <span>7 天拦截趋势</span>
+              </div>
             </div>
           </template>
           <div class="chart-container">
@@ -53,9 +63,11 @@
       <el-col :span="8">
         <el-card shadow="always">
           <template #header>
-            <div class="flex items-center gap-2">
-              <el-icon><PieChart /></el-icon>
-              <span class="font-medium">攻击类型分布</span>
+            <div class="card-header">
+              <div class="card-title">
+                <el-icon class="title-icon"><PieChart /></el-icon>
+                <span>攻击类型分布</span>
+              </div>
             </div>
           </template>
           <div class="chart-container">
@@ -68,9 +80,11 @@
 
     <el-card shadow="always">
       <template #header>
-        <div class="flex items-center gap-2">
-          <el-icon><Location /></el-icon>
-          <span class="font-medium">Top 10 源 IP</span>
+        <div class="card-header">
+          <div class="card-title">
+            <el-icon class="title-icon"><Location /></el-icon>
+            <span>Top 10 源 IP</span>
+          </div>
         </div>
       </template>
       <el-table :data="overview.top_ips" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
@@ -142,6 +156,9 @@ onMounted(fetchData)
 </script>
 
 <style scoped>
+.card-header { display: flex; justify-content: space-between; align-items: center; }
+.card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
+.title-icon { font-size: 16px; color: #3b82f6; }
 .stat-card-wrapper { padding: 8px 0; }
 .stat-card-col { text-align: center; padding: 12px 0; }
 .stat-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
