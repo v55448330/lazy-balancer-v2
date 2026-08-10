@@ -61,7 +61,7 @@
         <el-tab-pane label="CRS 配置" name="setup">
           <el-card v-loading="loadingSetup">
             <template #header><div class="flex items-center justify-between"><span class="font-medium">crs-setup.conf</span><el-button link type="primary" size="small" @click="fetchSetup">刷新</el-button></div></template>
-            <el-input type="textarea" :model-value="setupContent" readonly :rows="25" class="vjs-textarea" style="font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #e4e4e7; background: #1e293b; width: 100%" v-html="setupContent" />
+            <SyntaxHighlight :content="setupContent" language="apacheconf" />
           </el-card>
         </el-tab-pane>
         <el-tab-pane label="自定义规则" name="custom">
@@ -107,7 +107,7 @@
     </el-card>
 
     <el-dialog v-model="contentDialogVisible" :title="currentFilename" width="900px" top="5vh">
-      <div v-loading="loadingContent"><pre class="crs-content">{{ currentContent }}</pre></div>
+      <div v-loading="loadingContent"><SyntaxHighlight :content="currentContent" language="apacheconf" /></div>
     </el-dialog>
 
     <el-dialog v-model="ruleDialogVisible" :title="editingRuleId ? '编辑自定义规则' : '新建自定义规则'" width="760px">
@@ -185,6 +185,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { Search, Notebook, Plus, WarningFilled } from '@element-plus/icons-vue'
 import { formatDate } from '@/utils/date'
+import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
@@ -274,11 +275,6 @@ onMounted(() => { fetchCRS(); fetchRules(); fetchSetup(); fetchCustomRules() })
 
 <style scoped>
 .crs-content { max-height: 70vh; overflow: auto; padding: 16px; border-radius: 6px; font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; background: #1e293b; color: #e4e4e7; }
-.crs-content .hl-keyword { color: #7dd3fc; }
-.crs-content .hl-string { color: #86efac; }
-.crs-content .hl-comment { color: #64748b; font-style: italic; }
-.crs-content .hl-directive { color: #f472b6; }
-.crs-content .hl-operator { color: #fbbf24; }
 .crs-content .hl-bracket { color: #a78bfa; }
 .vjs-textarea { border-radius: 6px; }
 .vjs-textarea :deep(.el-textarea__inner) { background: #1e293b; color: #e4e4e7; border: none; }

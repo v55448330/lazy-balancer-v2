@@ -51,7 +51,8 @@
         </el-form-item>
         <el-form-item label="内容" class="content-form-item">
           <div class="block-content-editor" style="width: 100%">
-            <el-input v-model="form.content" type="textarea" :rows="25" placeholder="HTML 内容，支持 CSS 样式" class="vjs-textarea" style="font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #e4e4e7; background: #1e293b; width: 100%" :readonly="currentPage?.is_default" />
+            <SyntaxHighlight v-if="currentPage?.is_default" :content="form.content" language="markup" />
+            <el-input v-else v-model="form.content" type="textarea" :rows="25" placeholder="HTML 内容，支持 CSS 样式" class="vjs-textarea" style="font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #e4e4e7; background: #1e293b; width: 100%" :readonly="currentPage?.is_default" />
           </div>
           <div class="form-tip-inline" style="display: block; margin-top: 4px; margin-left: 0;">
             {{ currentPage?.is_default ? '默认页面内容只读，仅可查看' : '拦截时返回给客户端的 HTML 页面，支持内联 CSS 样式' }}
@@ -77,6 +78,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
+import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import type { UserListItem } from '@/types'
 
 interface APIResponse<T> { code: number; message: string; data: T }
@@ -158,10 +160,6 @@ onMounted(fetchData)
 .vjs-textarea { border-radius: 6px; }
 .vjs-textarea :deep(.el-textarea__inner) { background: #1e293b; color: #e4e4e7; border: none; }
 .vjs-textarea :deep(.el-textarea__inner):focus { background: #1e293b; color: #e4e4e7; border: none; box-shadow: none; }
-.hl-tag { color: #7dd3fc; }
-.hl-attr { color: #f472b6; }
-.hl-value { color: #86efac; }
-.hl-comment { color: #64748b; font-style: italic; }
 .block-page-form .content-form-item .el-form-item__content { flex: 1; max-width: 100%; }
 .form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
 .block-page-form .form-tip-inline { display: block; margin-top: 4px; margin-left: 0; }
