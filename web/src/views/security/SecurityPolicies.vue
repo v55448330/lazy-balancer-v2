@@ -121,36 +121,12 @@
           <div class="text-secondary">排除的规则不会被检测或拦截</div>
         </el-form-item>
 
-        <el-divider content-position="left">自定义规则</el-divider>
-        <el-form-item label="规则列表">
-          <div style="width: 100%">
-            <div v-for="(rule, idx) in customRules" :key="idx" class="custom-rule-row">
-              <el-input v-model="rule.name" placeholder="规则名称" style="width: 140px" size="small" />
-              <el-select v-model="rule.target" style="width: 100px" size="small">
-                <el-option label="URI" value="uri" />
-                <el-option label="参数" value="args" />
-                <el-option label="请求体" value="body" />
-                <el-option label="请求头" value="headers" />
-                <el-option label="User-Agent" value="user_agent" />
-              </el-select>
-              <el-select v-model="rule.operator" style="width: 100px" size="small">
-                <el-option label="包含" value="contains" />
-                <el-option label="正则" value="regex" />
-                <el-option label="精确" value="equals" />
-                <el-option label="前缀" value="starts_with" />
-              </el-select>
-              <el-input v-model="rule.pattern" placeholder="匹配值" style="flex: 1" size="small" />
-              <el-select v-model="rule.action" style="width: 90px" size="small">
-                <el-option label="拦截" value="block" />
-                <el-option label="记录" value="log" />
-              </el-select>
-              <el-switch v-model="rule.enabled" size="small" />
-              <el-button link type="danger" size="small" @click="customRules.splice(idx, 1)">删除</el-button>
-            </div>
-            <el-button size="small" type="primary" plain @click="customRules.push({ name: '', enabled: true, target: 'uri', operator: 'contains', pattern: '', action: 'block', score: 5, status_code: 403 })">
-              + 添加规则
-            </el-button>
-          </div>
+        <el-divider content-position="left">自定义规则选择</el-divider>
+        <el-form-item label="已选规则">
+          <el-select v-model="selectedCustomRules" multiple filterable placeholder="选择要包含的自定义规则" style="width: 100%">
+            <el-option v-for="rule in allCustomRules" :key="rule.id" :label="rule.name" :value="rule.id" />
+          </el-select>
+          <div class="text-secondary">自定义规则在"规则集"页面创建，此处仅选择使用哪些</div>
         </el-form-item>
 
         <el-divider content-position="left">拦截页面</el-divider>
@@ -211,21 +187,24 @@ const crsExcludedRules = ref<string[]>([])
 const boundRules = ref<string[]>([])
 
 const form = ref({ name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 0 })
-const customRules = ref<Array<{ name: string; enabled: boolean; target: string; operator: string; pattern: string; action: string; score: number; status_code: number }>>([])
+const selectedCustomRules = ref<number[]>([])
+const allCustomRules = ref<Array<{ id: number; name: string }>>([])
 
 const fetchData = async () => {
   loading.value = true
   try {
-    const [polRes, ruleRes, crsRes, bpRes] = await Promise.all([
+    const [polRes, ruleRes, crsRes, bpRes, crRes] = await Promise.all([
       request.get<APIResponse<PolicySummary[]>>('/security/policies'),
       request.get<APIResponse<Rule[]>>('/rules'),
       request.get<APIResponse<{ rules: CRSRuleOption[] }>>('/security/crs/rules?page_size=100'),
       request.get<APIResponse<BlockPage[]>>('/security/block-pages'),
+      request.get<APIResponse<Array<{ id: number; name: string }>>>('/security/custom-rules'),
     ])
     policies.value = polRes.data || []
     allRules.value = ruleRes.data || []
     crsRuleOptions.value = crsRes.data?.rules || []
     blockPages.value = bpRes.data || []
+    allCustomRules.value = crRes.data || []
   } catch { ElMessage.error('加载数据失败') } finally { loading.value = false }
 }
 
@@ -238,7 +217,7 @@ async function openDialog(row?: PolicySummary) {
       form.value = { name: d.name, description: d.description, mode: d.mode, anomaly_threshold: d.anomaly_threshold, ip_acl_enabled: d.ip_acl_enabled, ip_acl_mode: d.ip_acl_mode || 'allow', rate_limit_enabled: d.rate_limit_enabled, rate_limit_rps: d.rate_limit_rps, rate_limit_burst: d.rate_limit_burst, block_page_id: d.block_page_id || 0 }
       ipACLList.value = JSON.parse(d.ip_acl_list || '[]')
       crsExcludedRules.value = JSON.parse(d.crs_excluded_rules || '[]')
-      customRules.value = JSON.parse(d.custom_rules || '[]')
+      selectedCustomRules.value = JSON.parse(d.custom_rules || '[]').map((r: any) => typeof r === 'number' ? r : r.id || 0).filter((id: number) => id > 0)
       boundRules.value = res.data.bindings || []
     } catch { ElMessage.error('加载策略详情失败') }
   } else { resetForm() }
@@ -247,14 +226,14 @@ async function openDialog(row?: PolicySummary) {
 
 const resetForm = () => {
   form.value = { name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 0 }
-  ipACLList.value = []; crsExcludedRules.value = []; customRules.value = []; boundRules.value = []; editingId.value = null
+  ipACLList.value = []; crsExcludedRules.value = []; selectedCustomRules.value = []; boundRules.value = []; editingId.value = null
 }
 
 const handleSave = async () => {
   if (!form.value.name.trim()) { ElMessage.warning('请输入策略名称'); return }
   saving.value = true
   try {
-    const payload = { ...form.value, ip_acl_list: JSON.stringify(ipACLList.value), crs_excluded_rules: JSON.stringify(crsExcludedRules.value), custom_rules: JSON.stringify(customRules.value) }
+    const payload = { ...form.value, ip_acl_list: JSON.stringify(ipACLList.value), crs_excluded_rules: JSON.stringify(crsExcludedRules.value), custom_rules: JSON.stringify(selectedCustomRules.value) }
     if (editingId.value) {
       await request.put(`/security/policies/${editingId.value}`, payload)
     } else {

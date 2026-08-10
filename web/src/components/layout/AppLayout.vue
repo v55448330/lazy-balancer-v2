@@ -35,6 +35,10 @@
             <el-icon><Lock /></el-icon>
             <span>安全防护</span>
           </template>
+          <el-menu-item index="security-overview" @click="goPage('security-overview')">
+            <el-icon><DataAnalysis /></el-icon>
+            <template #title>安全总览</template>
+          </el-menu-item>
           <el-menu-item index="security-policies" @click="goPage('security-policies')">
             <el-icon><Lock /></el-icon>
             <template #title>安全策略</template>
@@ -46,10 +50,6 @@
           <el-menu-item index="security-block-pages" @click="goPage('security-block-pages')">
             <el-icon><Document /></el-icon>
             <template #title>拦截页面</template>
-          </el-menu-item>
-          <el-menu-item index="security-overview" @click="goPage('security-overview')">
-            <el-icon><DataAnalysis /></el-icon>
-            <template #title>安全总览</template>
           </el-menu-item>
           <el-menu-item index="security-events" @click="goPage('security-events')">
             <el-icon><Warning /></el-icon>

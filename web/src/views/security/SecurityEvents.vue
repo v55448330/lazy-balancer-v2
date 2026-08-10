@@ -12,13 +12,13 @@
     </div>
 
     <el-card>
-      <div class="flex gap-3 mb-4">
-        <el-select v-model="filters.action" placeholder="动作" clearable style="width: 120px" @change="fetchEvents">
+      <div class="flex items-center gap-4 mb-4">
+        <el-select v-model="filters.action" placeholder="动作" clearable style="width: 140px" @change="fetchEvents">
           <el-option label="全部" value="" />
           <el-option label="拦截" value="blocked" />
           <el-option label="检测" value="logged" />
         </el-select>
-        <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 180px" @clear="fetchEvents" @keyup.enter="fetchEvents" />
+        <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 200px" @clear="fetchEvents" @keyup.enter="fetchEvents" />
       </div>
 
       <el-table :data="events" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">

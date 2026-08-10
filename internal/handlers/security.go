@@ -503,9 +503,13 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 
 func (h *Handlers) GetCRSInfo(c *gin.Context) {
 	info := models.CRSInfo{
-		Version:    "v4.14.0",
-		AutoUpdate: true,
-		RuleCount:  832,
+		Version:       "v4.14.0",
+		ServerVersion: "Caddy v2.11.4",
+		AutoUpdate:    true,
+		RuleCount:     832,
+		IsLatest:      true,
+		UpdateStatus:  "已最新",
+		UpdatedAt:     "2026-08-08",
 	}
 	var dbInfo struct {
 		Version    string

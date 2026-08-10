@@ -96,19 +96,19 @@ type SecurityEvent struct {
 }
 
 type SecurityOverview struct {
-	TodayBlocked   int                    `json:"today_blocked"`
-	TodayDetected  int                    `json:"today_detected"`
-	ActivePolicies int                    `json:"active_policies"`
-	CRSVersion     string                 `json:"crs_version"`
-	Trend          []SecurityTrendPoint   `json:"trend"`
-	TopIPs         []SecurityTopIP        `json:"top_ips"`
-	AttackTypes    []SecurityAttackType   `json:"attack_types"`
+	TodayBlocked   int                  `json:"today_blocked"`
+	TodayDetected  int                  `json:"today_detected"`
+	ActivePolicies int                  `json:"active_policies"`
+	CRSVersion     string               `json:"crs_version"`
+	Trend          []SecurityTrendPoint `json:"trend"`
+	TopIPs         []SecurityTopIP      `json:"top_ips"`
+	AttackTypes    []SecurityAttackType `json:"attack_types"`
 }
 
 type SecurityTrendPoint struct {
-	Date    string `json:"date"`
-	Blocked int    `json:"blocked"`
-	Detected int   `json:"detected"`
+	Date     string `json:"date"`
+	Blocked  int    `json:"blocked"`
+	Detected int    `json:"detected"`
 }
 
 type SecurityTopIP struct {
@@ -125,10 +125,14 @@ type SecurityAttackType struct {
 }
 
 type CRSInfo struct {
-	Version     string `json:"version"`
-	AutoUpdate  bool   `json:"auto_update"`
-	LastChecked string `json:"last_checked"`
-	RuleCount   int    `json:"rule_count"`
+	Version       string `json:"version"`
+	ServerVersion string `json:"server_version"`
+	AutoUpdate    bool   `json:"auto_update"`
+	LastChecked   string `json:"last_checked"`
+	UpdatedAt     string `json:"updated_at"`
+	RuleCount     int    `json:"rule_count"`
+	IsLatest      bool   `json:"is_latest"`
+	UpdateStatus  string `json:"update_status"`
 }
 
 type CustomRuleCondition struct {
@@ -138,29 +142,29 @@ type CustomRuleCondition struct {
 }
 
 type CustomRule struct {
-	ID         int                  `json:"id"`
-	Name       string               `json:"name"`
-	Enabled    bool                 `json:"enabled"`
+	ID         int                   `json:"id"`
+	Name       string                `json:"name"`
+	Enabled    bool                  `json:"enabled"`
 	Conditions []CustomRuleCondition `json:"conditions"`
-	Action     string               `json:"action"`
-	Score      int                  `json:"score"`
-	StatusCode int                  `json:"status_code"`
-	Target     string               `json:"target,omitempty"`
-	Operator   string               `json:"operator,omitempty"`
-	Pattern    string               `json:"pattern,omitempty"`
+	Action     string                `json:"action"`
+	Score      int                   `json:"score"`
+	StatusCode int                   `json:"status_code"`
+	Target     string                `json:"target,omitempty"`
+	Operator   string                `json:"operator,omitempty"`
+	Pattern    string                `json:"pattern,omitempty"`
 }
 
 type SecurityCustomRule struct {
-	ID          int                  `json:"id"`
-	Name        string               `json:"name"`
-	Description string               `json:"description"`
+	ID          int                   `json:"id"`
+	Name        string                `json:"name"`
+	Description string                `json:"description"`
 	Conditions  []CustomRuleCondition `json:"conditions"`
-	Action      string               `json:"action"`
-	Score       int                  `json:"score"`
-	StatusCode  int                  `json:"status_code"`
-	Enabled     bool                 `json:"enabled"`
-	CreatedAt   string               `json:"created_at"`
-	UpdatedAt   string               `json:"updated_at"`
+	Action      string                `json:"action"`
+	Score       int                   `json:"score"`
+	StatusCode  int                   `json:"status_code"`
+	Enabled     bool                  `json:"enabled"`
+	CreatedAt   string                `json:"created_at"`
+	UpdatedAt   string                `json:"updated_at"`
 }
 
 type SecurityBlockPage struct {

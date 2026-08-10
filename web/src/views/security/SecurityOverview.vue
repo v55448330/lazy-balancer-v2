@@ -10,32 +10,38 @@
       </div>
     </div>
 
-    <div class="grid grid-cols-4 gap-4 mb-4">
-      <el-card class="stat-card" shadow="hover">
-        <div class="stat-label">今日拦截</div>
-        <div class="stat-value" style="color: #f56c6c">{{ overview.today_blocked }}</div>
-      </el-card>
-      <el-card class="stat-card" shadow="hover">
-        <div class="stat-label">今日检测</div>
-        <div class="stat-value" style="color: #e6a23c">{{ overview.today_detected }}</div>
-      </el-card>
-      <el-card class="stat-card" shadow="hover">
-        <div class="stat-label">活跃策略</div>
-        <div class="stat-value" style="color: #409eff">{{ overview.active_policies }}</div>
-      </el-card>
-      <el-card class="stat-card" shadow="hover">
-        <div class="stat-label">CRS 版本</div>
-        <div class="stat-value" style="color: #67c23a">{{ overview.crs_version }}</div>
-      </el-card>
-    </div>
+    <el-row :gutter="20" class="mb-5">
+      <el-col :span="24">
+        <el-card shadow="hover" class="stat-card-wrapper">
+          <el-row :gutter="20">
+            <el-col :span="6" class="stat-card-col">
+              <div class="stat-label">今日拦截</div>
+              <div class="stat-value" style="color: #f56c6c">{{ overview.today_blocked }}</div>
+            </el-col>
+            <el-col :span="6" class="stat-card-col">
+              <div class="stat-label">今日检测</div>
+              <div class="stat-value" style="color: #e6a23c">{{ overview.today_detected }}</div>
+            </el-col>
+            <el-col :span="6" class="stat-card-col">
+              <div class="stat-label">活跃策略</div>
+              <div class="stat-value" style="color: #409eff">{{ overview.active_policies }}</div>
+            </el-col>
+            <el-col :span="6" class="stat-card-col">
+              <div class="stat-label">CRS 版本</div>
+              <div class="stat-value" style="color: #67c23a">{{ overview.crs_version }}</div>
+            </el-col>
+          </el-row>
+        </el-card>
+      </el-col>
+    </el-row>
 
-    <el-row :gutter="16" class="mb-4">
+    <el-row :gutter="20" class="mb-5">
       <el-col :span="16">
-        <el-card>
+        <el-card shadow="never">
           <template #header>
             <div class="flex items-center gap-2">
               <el-icon><TrendCharts /></el-icon>
-              <span>7 天拦截趋势</span>
+              <span class="font-medium">7 天拦截趋势</span>
             </div>
           </template>
           <div class="chart-container">
@@ -44,11 +50,11 @@
         </el-card>
       </el-col>
       <el-col :span="8">
-        <el-card>
+        <el-card shadow="never">
           <template #header>
             <div class="flex items-center gap-2">
               <el-icon><PieChart /></el-icon>
-              <span>攻击类型分布</span>
+              <span class="font-medium">攻击类型分布</span>
             </div>
           </template>
           <div class="chart-container">
@@ -58,11 +64,11 @@
       </el-col>
     </el-row>
 
-    <el-card>
+    <el-card shadow="never">
       <template #header>
         <div class="flex items-center gap-2">
           <el-icon><Location /></el-icon>
-          <span>Top 10 源 IP</span>
+          <span class="font-medium">Top 10 源 IP</span>
         </div>
       </template>
       <el-table :data="overview.top_ips" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
@@ -134,7 +140,8 @@ onMounted(fetchData)
 </script>
 
 <style scoped>
-.stat-card { text-align: center; padding: 12px 0; }
+.stat-card-wrapper { padding: 8px 0; }
+.stat-card-col { text-align: center; padding: 12px 0; }
 .stat-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
 .stat-value { font-size: 28px; font-weight: 600; }
 .chart-container { height: 260px; }
