@@ -21,9 +21,13 @@
       <el-descriptions :column="3" border>
         <el-descriptions-item label="CRS 版本">{{ crsInfo.version || '—' }}</el-descriptions-item>
         <el-descriptions-item label="规则文件数">{{ total }}</el-descriptions-item>
-        <el-descriptions-item label="更新时间">{{ crsInfo.updated_at || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="更新时间">{{ formatDate(crsInfo.updated_at) || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="下次更新">{{ crsInfo.next_update || '—' }}</el-descriptions-item>
         <el-descriptions-item label="自动更新">
-          <el-switch v-model="crsInfo.auto_update" :disabled="isReadOnly" @change="toggleAutoUpdate" />
+          <div class="flex items-center gap-2">
+            <el-switch v-model="crsInfo.auto_update" :disabled="isReadOnly" @change="toggleAutoUpdate" />
+            <el-button v-if="!isReadOnly" size="small" type="primary" plain @click="manualUpdate">立即更新</el-button>
+          </div>
         </el-descriptions-item>
         <el-descriptions-item label="更新状态">{{ crsInfo.update_status || '—' }}</el-descriptions-item>
       </el-descriptions>
@@ -103,7 +107,7 @@
     </el-card>
 
     <el-dialog v-model="contentDialogVisible" :title="currentFilename" width="900px" top="5vh">
-      <div v-loading="loadingContent"><pre class="crs-content" v-html="currentContent"></pre></div>
+      <div v-loading="loadingContent"><pre class="crs-content">{{ currentContent }}</pre></div>
     </el-dialog>
 
     <el-dialog v-model="ruleDialogVisible" :title="editingRuleId ? '编辑自定义规则' : '新建自定义规则'" width="760px">
@@ -146,7 +150,7 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="ruleForm.action === 'block'" label="状态码">
-          <el-select v-model="ruleForm.status_code" style="width: 200px">
+          <el-select v-model="ruleForm.status_code" style="width: 160px">
             <el-option :value="400" label="400 Bad Request" />
             <el-option :value="403" label="403 Forbidden" />
             <el-option :value="404" label="404 Not Found" />
@@ -156,7 +160,7 @@
           <div class="form-tip-inline">拦截时返回给客户端的 HTTP 状态码</div>
         </el-form-item>
         <el-form-item label="异常分值">
-          <el-select v-model="ruleForm.score" style="width: 200px">
+          <el-select v-model="ruleForm.score" style="width: 160px">
             <el-option :value="1" label="轻微（1）" />
             <el-option :value="3" label="较低（3）" />
             <el-option :value="5" label="中等（5）" />
@@ -180,6 +184,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { Search, Notebook, Plus, WarningFilled } from '@element-plus/icons-vue'
+import { formatDate } from '@/utils/date'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
@@ -192,7 +197,7 @@ interface CustomRule { id: number; name: string; description: string; conditions
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.user?.role !== 'admin')
 
-const crsInfo = ref({ version: '', server_version: '', auto_update: true, last_checked: '', updated_at: '', rule_count: 0, is_latest: false, update_status: '' })
+const crsInfo = ref({ version: '', server_version: '', auto_update: true, last_checked: '', updated_at: '', next_update: '', rule_count: 0, is_latest: false, update_status: '' })
 const activeTab = ref('rules')
 const loadingRules = ref(false)
 const rules = ref<CRSRuleFile[]>([])
@@ -226,23 +231,13 @@ const fetchRules = async () => {
   loadingRules.value = true
   try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (searchQuery.value) p.set('search', searchQuery.value); const res = await request.get<APIResponse<{ rules: CRSRuleFile[]; total: number }>>(`/security/crs/rules?${p}`); rules.value = res.data?.rules || []; total.value = res.data?.total || 0 } catch { rules.value = [] } finally { loadingRules.value = false }
 }
-const fetchSetup = async () => { loadingSetup.value = true; try { const res = await request.get<APIResponse<{ content: string }>>('/security/crs/setup'); setupContent.value = highlightConf(res.data?.content || '# 文件不存在') } catch { setupContent.value = '# 加载失败' } finally { loadingSetup.value = false } }
+const fetchSetup = async () => { loadingSetup.value = true; try { const res = await request.get<APIResponse<{ content: string }>>('/security/crs/setup'); setupContent.value = res.data?.content || '# 文件不存在' } catch { setupContent.value = '# 加载失败' } finally { loadingSetup.value = false } }
 const fetchCustomRules = async () => { loadingCustom.value = true; try { const res = await request.get<APIResponse<CustomRule[]>>('/security/custom-rules'); customRules.value = res.data || [] } catch { customRules.value = [] } finally { loadingCustom.value = false } }
 
-const highlightConf = (text: string): string => {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/^#.*$/gm, '<span class="hl-comment">$&</span>')
-    .replace(/\b(SecRule|SecAction|SecMarker|SecComponentSignature|SecDefaultAction|SecAuditEngine|SecAuditLog|SecAuditLogFormat|SecAuditLogParts|SecRequestBodyAccess|SecResponseBodyAccess|SecRuleEngine|SecRuleInheritance|SecUnicodeMapFile|SecUploadDir|SecUploadKeepFiles|SecUploadStore|SecTmpDir|SecTmpSaveUploadedFiles|SecDebugLog|SecDebugLogLevel|SecErrorPage|SecGuardianLog|SecInterceptOnError|SecLogServerInfo|SecMarker|SecRequestBodyLimit|SecRequestBodyNoFilesLimit|SecResponseBodyLimit|SecResponseBodyMimeType|SecResponseBodyMimeTypes|SecRule|SecRuleRemoveById|SecRuleRemoveByMsg|SecRuleRemoveByTag|SecRuleScript|SecRuleUpdateActionById|SecRuleUpdateTargetById|SecRuleUpdateTargetByMsg|SecRuleUpdateTargetByTag|SecServerSignature|SecStatusEngine|SecStreamInBodyInspection|SecStreamOutBodyInspection|SecUnicodeMap|SecUploadFileMode|SecUploadKeepFiles|SecWebAppId)\b/g, '<span class="hl-directive">$1</span>')
-    .replace(/"([^"]*)"/g, '<span class="hl-string">"$1"</span>')
-    .replace(/\b(On|Off|DetectionOnly|Relevant)\b/g, '<span class="hl-keyword">$1</span>')
-    .replace(/\b(@rx|@pm|@pmf|@pmFromFile|@streq|@eq|@contains|@beginsWith|@endsWith|@within|@inspectionManager|@detectXSS|@detectSQLi|@validateByteRange|@validateDate|@validateDateRange|@validateHash|@validateIdNumber|@validateCreditCard|@validateUrlEncoding|@validateUtf8Encoding|@validateJSON|@validateXML|@validateSchema|@fuzzyHash|@sha1|@md5|@rbl|@ipMatch|@ipMatchFromFile|@geoLookup|@lookup|@lookupNgx|@lookupDns|@lookupHttp|@lookupFile|@lookupString|@lookupIp|@lookupIpFromFile|@lookupIpFromFileNgx|@lookupIpFromFileHttp|@lookupIpFromFileDns|@lookupIpFromFileNgxHttp|@lookupIpFromFileNgxDns|@lookupIpFromFileNgxIp|@lookupIpFromFileNgxIpHttp|@lookupIpFromFileNgxIpDns|@lookupIpFromFileNgxIpIp|@lookupIpFromFileNgxIpIpHttp|@lookupIpFromFileNgxIpIpDns|@lookupIpFromFileNgxIpIpIp|@lookupIpFromFileNgxIpIpIpHttp|@lookupIpFromFileNgxIpIpIpDns|@lookupIpFromFileNgxIpIpIpIp|@lookupIpFromFileNgxIpIpIpIpHttp|@lookupIpFromFileNgxIpIpIpIpDns|@lookupIpFromFileNgxIpIpIpIpIp|@lookupIpFromFileNgxIpIpIpIpIpHttp|@lookupIpFromFileNgxIpIpIpIpIpDns|@lookupIpFromFileNgxIpIpIpIpIpIp|@lookupIpFromFileNgxIpIpIpIpIpIpHttp|@lookupIpFromFileNgxIpIpIpIpIpIpDns)\b/g, '<span class="hl-operator">$1</span>')
-}
-
-const openRuleContent = async (row: CRSRuleFile) => { currentFilename.value = row.filename; contentDialogVisible.value = true; loadingContent.value = true; currentContent.value = ''; try { const res = await request.get<APIResponse<{ content: string; size: number }>>(`/security/crs/rules/${encodeURIComponent(row.filename)}`); currentContent.value = highlightConf(res.data?.content || '(空文件)') } catch { currentContent.value = '加载失败' } finally { loadingContent.value = false } }
+const openRuleContent = async (row: CRSRuleFile) => { currentFilename.value = row.filename; contentDialogVisible.value = true; loadingContent.value = true; currentContent.value = ''; try { const res = await request.get<APIResponse<{ content: string; size: number }>>(`/security/crs/rules/${encodeURIComponent(row.filename)}`); currentContent.value = res.data?.content || '(空文件)' } catch { currentContent.value = '加载失败' } finally { loadingContent.value = false } }
 const toggleAutoUpdate = async (val: boolean) => { try { await request.put('/security/crs/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { ElMessage.error('更新失败') } }
+
+const manualUpdate = () => { ElMessage.info('手动更新功能将在后续版本中支持') }
 
 const openRuleDialog = (row?: CustomRule) => {
   editingRuleId.value = row?.id ?? null

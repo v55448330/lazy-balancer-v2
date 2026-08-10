@@ -72,7 +72,7 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="form.mode !== 'off'" label="异常阈值">
-          <el-select v-model="form.anomaly_threshold" style="width: 200px">
+          <el-select v-model="form.anomaly_threshold" style="width: 120px">
             <el-option :value="3" label="严格（3）" />
             <el-option :value="5" label="默认（5）" />
             <el-option :value="10" label="宽松（10）" />
@@ -104,11 +104,11 @@
         </el-form-item>
         <template v-if="form.rate_limit_enabled">
           <el-form-item label="每秒请求">
-            <el-input-number v-model="form.rate_limit_rps" :min="1" style="width: 200px" />
+            <el-input-number v-model="form.rate_limit_rps" :min="1" style="width: 120px" />
             <el-text class="form-tip-inline">次/秒，超过此速率后按突发量缓冲</el-text>
           </el-form-item>
           <el-form-item label="突发大小">
-            <el-input-number v-model="form.rate_limit_burst" :min="0" style="width: 200px" />
+            <el-input-number v-model="form.rate_limit_burst" :min="0" style="width: 120px" />
             <el-text class="form-tip-inline">次，突发量用完后超出的请求返回 429 Too Many Requests</el-text>
           </el-form-item>
         </template>

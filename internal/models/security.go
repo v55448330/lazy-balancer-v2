@@ -124,6 +124,7 @@ type CRSInfo struct {
 	AutoUpdate    bool   `json:"auto_update"`
 	LastChecked   string `json:"last_checked"`
 	UpdatedAt     string `json:"updated_at"`
+	NextUpdate    string `json:"next_update"`
 	RuleCount     int    `json:"rule_count"`
 	IsLatest      bool   `json:"is_latest"`
 	UpdateStatus  string `json:"update_status"`
