@@ -57,7 +57,7 @@
         <el-tab-pane label="CRS 配置" name="setup">
           <el-card v-loading="loadingSetup">
             <template #header><div class="flex items-center justify-between"><span class="font-medium">crs-setup.conf</span><el-button link type="primary" size="small" @click="fetchSetup">刷新</el-button></div></template>
-            <el-input type="textarea" :model-value="setupContent" readonly :rows="25" class="vjs-textarea" style="font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #e4e4e7; background: #1e1e2e" />
+            <el-input type="textarea" :model-value="setupContent" readonly :rows="25" class="vjs-textarea" style="font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #e4e4e7; background: #1e293b; width: 100%" />
           </el-card>
         </el-tab-pane>
         <el-tab-pane label="自定义规则" name="custom">
@@ -153,7 +153,7 @@
             <el-option :value="429" label="429 Too Many Requests" />
             <el-option :value="503" label="503 Service Unavailable" />
           </el-select>
-          <div class="text-secondary">拦截时返回给客户端的 HTTP 状态码</div>
+          <div class="form-tip-inline">拦截时返回给客户端的 HTTP 状态码</div>
         </el-form-item>
         <el-form-item label="异常分值">
           <el-select v-model="ruleForm.score" style="width: 200px">
@@ -163,7 +163,7 @@
             <el-option :value="10" label="较高（10）" />
             <el-option :value="20" label="严重（20）" />
           </el-select>
-          <div class="text-secondary">匹配此规则时增加的异常分数，达到策略阈值后触发拦截</div>
+          <div class="form-tip-inline">匹配此规则时增加的异常分数，达到策略阈值后触发拦截</div>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="ruleForm.enabled" />
@@ -267,10 +267,11 @@ onMounted(() => { fetchCRS(); fetchRules(); fetchSetup(); fetchCustomRules() })
 
 <style scoped>
 .crs-content { max-height: 70vh; overflow: auto; padding: 16px; border-radius: 6px; font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
-.vjs-content { background: #1e1e2e; color: #e4e4e7; }
+.vjs-content { background: #1e293b; color: #e4e4e7; }
 .vjs-textarea { border-radius: 6px; }
 .rule-condition-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; flex-wrap: wrap; }
 .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .search-input { width: 280px; }
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
+.form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
 </style>

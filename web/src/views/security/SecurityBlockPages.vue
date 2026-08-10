@@ -51,7 +51,7 @@
         </el-form-item>
         <el-form-item label="内容">
           <div class="block-content-editor">
-            <el-input v-model="form.content" type="textarea" :rows="25" placeholder="HTML 内容，支持 CSS 样式" class="vjs-textarea" style="font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #e4e4e7; background: #1e1e2e" :readonly="currentPage?.is_default" />
+            <el-input v-model="form.content" type="textarea" :rows="25" placeholder="HTML 内容，支持 CSS 样式" class="vjs-textarea" style="font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #e4e4e7; background: #1e293b; width: 100%" :readonly="currentPage?.is_default" />
           </div>
           <div class="text-secondary mt-1">
             {{ currentPage?.is_default ? '默认页面内容只读，可修改名称和描述' : '拦截时返回给客户端的 HTML 页面，支持内联 CSS 样式' }}

@@ -78,7 +78,7 @@
             <el-option :value="10" label="宽松（10）" />
             <el-option :value="20" label="极宽松（20）" />
           </el-select>
-          <el-text class="ml-2 text-secondary">越低越严格，达到此分数后触发拦截</el-text>
+          <el-text class="form-tip-inline">越低越严格，达到此分数后触发拦截</el-text>
         </el-form-item>
 
         <el-divider content-position="left">IP 访问控制</el-divider>
@@ -94,7 +94,7 @@
           </el-form-item>
           <el-form-item :label="form.ip_acl_mode === 'allow' ? '允许 IP' : '拒绝 IP'">
             <el-select v-model="ipACLList" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" style="width: 100%" />
-            <div class="text-secondary">{{ form.ip_acl_mode === 'allow' ? '列表中的 IP 将被允许，其他 IP 一律拒绝' : '列表中的 IP 将被拒绝，其他 IP 一律允许' }}</div>
+            <div class="form-tip-inline">{{ form.ip_acl_mode === 'allow' ? '列表中的 IP 将被允许，其他 IP 一律拒绝' : '列表中的 IP 将被拒绝，其他 IP 一律允许' }}</div>
           </el-form-item>
         </template>
 
@@ -105,11 +105,11 @@
         <template v-if="form.rate_limit_enabled">
           <el-form-item label="每秒请求">
             <el-input-number v-model="form.rate_limit_rps" :min="1" style="width: 200px" />
-            <el-text class="ml-2 text-secondary">次/秒，超过此速率后按突发量缓冲</el-text>
+            <el-text class="form-tip-inline">次/秒，超过此速率后按突发量缓冲</el-text>
           </el-form-item>
           <el-form-item label="突发大小">
             <el-input-number v-model="form.rate_limit_burst" :min="0" style="width: 200px" />
-            <el-text class="ml-2 text-secondary">次，突发量用完后超出的请求返回 429 Too Many Requests</el-text>
+            <el-text class="form-tip-inline">次，突发量用完后超出的请求返回 429 Too Many Requests</el-text>
           </el-form-item>
         </template>
 
@@ -123,7 +123,7 @@
               <el-option v-for="rule in customRuleOptions" :key="rule.name" :label="rule.name" :value="rule.name" />
             </el-option-group>
           </el-select>
-          <div class="text-secondary">排除的规则不会被检测或拦截</div>
+          <div class="form-tip-inline">排除的规则不会被检测或拦截</div>
         </el-form-item>
 
         <el-divider content-position="left">自定义规则</el-divider>
@@ -131,17 +131,16 @@
           <el-select v-model="selectedCustomRules" multiple filterable placeholder="选择要包含的自定义规则" style="width: 100%">
             <el-option v-for="rule in allCustomRules" :key="rule.id" :label="rule.name" :value="rule.id" />
           </el-select>
-          <div class="text-secondary">自定义规则在"规则集"页面创建，<el-link type="primary" @click="goToCustomRulesPage" class="text-secondary">去创建/编辑</el-link></div>
+          <div class="form-tip-inline">自定义规则在"规则集"页面创建，<el-link type="primary" @click="goToCustomRulesPage">去创建/编辑</el-link></div>
         </el-form-item>
 
         <el-divider content-position="left">拦截页面</el-divider>
         <el-form-item label="拦截页面">
           <el-select v-model="form.block_page_id" placeholder="选择拦截页面" style="width: 100%">
-            <el-option label="默认页面" :value="0" />
             <el-option v-for="p in blockPages" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
-          <div v-if="blockPages.length === 0" class="text-secondary mt-1">
-            暂无拦截页面，<el-link type="primary" @click="goToBlockPagesPage" class="text-secondary">去创建</el-link>
+          <div v-if="blockPages.length === 0" class="form-tip-inline">
+            暂无拦截页面，<el-link type="primary" @click="goToBlockPagesPage">去创建</el-link>
           </div>
         </el-form-item>
 
@@ -191,7 +190,7 @@ const ipACLList = ref<string[]>([])
 const crsExcludedRules = ref<string[]>([])
 const boundRules = ref<string[]>([])
 
-const form = ref({ name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 0 })
+const form = ref({ name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1 })
 const selectedCustomRules = ref<number[]>([])
 const allCustomRules = ref<Array<{ id: number; name: string }>>([])
 
@@ -219,7 +218,7 @@ async function openDialog(row?: PolicySummary) {
     try {
       const res = await request.get<APIResponse<{ policy: PolicyDetail; bindings: string[] }>>(`/security/policies/${row.id}`)
       const d = res.data.policy
-      form.value = { name: d.name, description: d.description, mode: d.mode, anomaly_threshold: d.anomaly_threshold, ip_acl_enabled: d.ip_acl_enabled, ip_acl_mode: d.ip_acl_mode || 'allow', rate_limit_enabled: d.rate_limit_enabled, rate_limit_rps: d.rate_limit_rps, rate_limit_burst: d.rate_limit_burst, block_page_id: d.block_page_id || 0 }
+      form.value = { name: d.name, description: d.description, mode: d.mode, anomaly_threshold: d.anomaly_threshold, ip_acl_enabled: d.ip_acl_enabled, ip_acl_mode: d.ip_acl_mode || 'allow', rate_limit_enabled: d.rate_limit_enabled, rate_limit_rps: d.rate_limit_rps, rate_limit_burst: d.rate_limit_burst, block_page_id: d.block_page_id || 1 }
       ipACLList.value = JSON.parse(d.ip_acl_list || '[]')
       crsExcludedRules.value = JSON.parse(d.crs_excluded_rules || '[]')
       selectedCustomRules.value = JSON.parse(d.custom_rules || '[]').map((r: any) => typeof r === 'number' ? r : r.id || 0).filter((id: number) => id > 0)
@@ -230,7 +229,7 @@ async function openDialog(row?: PolicySummary) {
 }
 
 const resetForm = () => {
-  form.value = { name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 0 }
+  form.value = { name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1 }
   ipACLList.value = []; crsExcludedRules.value = []; selectedCustomRules.value = []; boundRules.value = []; editingId.value = null
 }
 
@@ -262,5 +261,6 @@ onMounted(fetchData)
 </script>
 
 <style scoped>
+.form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
 .custom-rule-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; flex-wrap: wrap; }
 </style>
