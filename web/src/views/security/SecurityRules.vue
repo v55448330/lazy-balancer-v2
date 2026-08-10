@@ -57,7 +57,7 @@
         <el-tab-pane label="CRS 配置" name="setup">
           <el-card v-loading="loadingSetup">
             <template #header><div class="flex items-center justify-between"><span class="font-medium">crs-setup.conf</span><el-button link type="primary" size="small" @click="fetchSetup">刷新</el-button></div></template>
-            <el-input type="textarea" :model-value="setupContent" readonly :rows="25" class="vjs-textarea" style="font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #e4e4e7; background: #1e293b; width: 100%" />
+            <el-input type="textarea" :model-value="setupContent" readonly :rows="25" class="vjs-textarea" style="font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #e4e4e7; background: #1e293b; width: 100%" v-html="setupContent" />
           </el-card>
         </el-tab-pane>
         <el-tab-pane label="自定义规则" name="custom">
@@ -103,7 +103,7 @@
     </el-card>
 
     <el-dialog v-model="contentDialogVisible" :title="currentFilename" width="900px" top="5vh">
-      <div v-loading="loadingContent"><pre class="crs-content vjs-content">{{ currentContent }}</pre></div>
+      <div v-loading="loadingContent"><pre class="crs-content" v-html="currentContent"></pre></div>
     </el-dialog>
 
     <el-dialog v-model="ruleDialogVisible" :title="editingRuleId ? '编辑自定义规则' : '新建自定义规则'" width="760px">
@@ -226,10 +226,22 @@ const fetchRules = async () => {
   loadingRules.value = true
   try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (searchQuery.value) p.set('search', searchQuery.value); const res = await request.get<APIResponse<{ rules: CRSRuleFile[]; total: number }>>(`/security/crs/rules?${p}`); rules.value = res.data?.rules || []; total.value = res.data?.total || 0 } catch { rules.value = [] } finally { loadingRules.value = false }
 }
-const fetchSetup = async () => { loadingSetup.value = true; try { const res = await request.get<APIResponse<{ content: string }>>('/security/crs/setup'); setupContent.value = res.data?.content || '# 文件不存在' } catch { setupContent.value = '# 加载失败' } finally { loadingSetup.value = false } }
+const fetchSetup = async () => { loadingSetup.value = true; try { const res = await request.get<APIResponse<{ content: string }>>('/security/crs/setup'); setupContent.value = highlightConf(res.data?.content || '# 文件不存在') } catch { setupContent.value = '# 加载失败' } finally { loadingSetup.value = false } }
 const fetchCustomRules = async () => { loadingCustom.value = true; try { const res = await request.get<APIResponse<CustomRule[]>>('/security/custom-rules'); customRules.value = res.data || [] } catch { customRules.value = [] } finally { loadingCustom.value = false } }
 
-const openRuleContent = async (row: CRSRuleFile) => { currentFilename.value = row.filename; contentDialogVisible.value = true; loadingContent.value = true; currentContent.value = ''; try { const res = await request.get<APIResponse<{ content: string; size: number }>>(`/security/crs/rules/${encodeURIComponent(row.filename)}`); currentContent.value = res.data?.content || '(空文件)' } catch { currentContent.value = '加载失败' } finally { loadingContent.value = false } }
+const highlightConf = (text: string): string => {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/^#.*$/gm, '<span class="hl-comment">$&</span>')
+    .replace(/\b(SecRule|SecAction|SecMarker|SecComponentSignature|SecDefaultAction|SecAuditEngine|SecAuditLog|SecAuditLogFormat|SecAuditLogParts|SecRequestBodyAccess|SecResponseBodyAccess|SecRuleEngine|SecRuleInheritance|SecUnicodeMapFile|SecUploadDir|SecUploadKeepFiles|SecUploadStore|SecTmpDir|SecTmpSaveUploadedFiles|SecDebugLog|SecDebugLogLevel|SecErrorPage|SecGuardianLog|SecInterceptOnError|SecLogServerInfo|SecMarker|SecRequestBodyLimit|SecRequestBodyNoFilesLimit|SecResponseBodyLimit|SecResponseBodyMimeType|SecResponseBodyMimeTypes|SecRule|SecRuleRemoveById|SecRuleRemoveByMsg|SecRuleRemoveByTag|SecRuleScript|SecRuleUpdateActionById|SecRuleUpdateTargetById|SecRuleUpdateTargetByMsg|SecRuleUpdateTargetByTag|SecServerSignature|SecStatusEngine|SecStreamInBodyInspection|SecStreamOutBodyInspection|SecUnicodeMap|SecUploadFileMode|SecUploadKeepFiles|SecWebAppId)\b/g, '<span class="hl-directive">$1</span>')
+    .replace(/"([^"]*)"/g, '<span class="hl-string">"$1"</span>')
+    .replace(/\b(On|Off|DetectionOnly|Relevant)\b/g, '<span class="hl-keyword">$1</span>')
+    .replace(/\b(@rx|@pm|@pmf|@pmFromFile|@streq|@eq|@contains|@beginsWith|@endsWith|@within|@inspectionManager|@detectXSS|@detectSQLi|@validateByteRange|@validateDate|@validateDateRange|@validateHash|@validateIdNumber|@validateCreditCard|@validateUrlEncoding|@validateUtf8Encoding|@validateJSON|@validateXML|@validateSchema|@fuzzyHash|@sha1|@md5|@rbl|@ipMatch|@ipMatchFromFile|@geoLookup|@lookup|@lookupNgx|@lookupDns|@lookupHttp|@lookupFile|@lookupString|@lookupIp|@lookupIpFromFile|@lookupIpFromFileNgx|@lookupIpFromFileHttp|@lookupIpFromFileDns|@lookupIpFromFileNgxHttp|@lookupIpFromFileNgxDns|@lookupIpFromFileNgxIp|@lookupIpFromFileNgxIpHttp|@lookupIpFromFileNgxIpDns|@lookupIpFromFileNgxIpIp|@lookupIpFromFileNgxIpIpHttp|@lookupIpFromFileNgxIpIpDns|@lookupIpFromFileNgxIpIpIp|@lookupIpFromFileNgxIpIpIpHttp|@lookupIpFromFileNgxIpIpIpDns|@lookupIpFromFileNgxIpIpIpIp|@lookupIpFromFileNgxIpIpIpIpHttp|@lookupIpFromFileNgxIpIpIpIpDns|@lookupIpFromFileNgxIpIpIpIpIp|@lookupIpFromFileNgxIpIpIpIpIpHttp|@lookupIpFromFileNgxIpIpIpIpIpDns|@lookupIpFromFileNgxIpIpIpIpIpIp|@lookupIpFromFileNgxIpIpIpIpIpIpHttp|@lookupIpFromFileNgxIpIpIpIpIpIpDns)\b/g, '<span class="hl-operator">$1</span>')
+}
+
+const openRuleContent = async (row: CRSRuleFile) => { currentFilename.value = row.filename; contentDialogVisible.value = true; loadingContent.value = true; currentContent.value = ''; try { const res = await request.get<APIResponse<{ content: string; size: number }>>(`/security/crs/rules/${encodeURIComponent(row.filename)}`); currentContent.value = highlightConf(res.data?.content || '(空文件)') } catch { currentContent.value = '加载失败' } finally { loadingContent.value = false } }
 const toggleAutoUpdate = async (val: boolean) => { try { await request.put('/security/crs/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { ElMessage.error('更新失败') } }
 
 const openRuleDialog = (row?: CustomRule) => {
@@ -267,7 +279,12 @@ onMounted(() => { fetchCRS(); fetchRules(); fetchSetup(); fetchCustomRules() })
 
 <style scoped>
 .crs-content { max-height: 70vh; overflow: auto; padding: 16px; border-radius: 6px; font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; background: #1e293b; color: #e4e4e7; }
-.vjs-content { background: #1e293b; color: #e4e4e7; }
+.crs-content .hl-keyword { color: #7dd3fc; }
+.crs-content .hl-string { color: #86efac; }
+.crs-content .hl-comment { color: #64748b; font-style: italic; }
+.crs-content .hl-directive { color: #f472b6; }
+.crs-content .hl-operator { color: #fbbf24; }
+.crs-content .hl-bracket { color: #a78bfa; }
 .vjs-textarea { border-radius: 6px; }
 .vjs-textarea :deep(.el-textarea__inner) { background: #1e293b; color: #e4e4e7; border: none; }
 .vjs-textarea :deep(.el-textarea__inner):focus { background: #1e293b; color: #e4e4e7; border: none; box-shadow: none; }
