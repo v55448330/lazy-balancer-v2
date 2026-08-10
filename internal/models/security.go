@@ -8,6 +8,9 @@ type SecurityPolicy struct {
 	Description      string          `json:"description"`
 	Mode             string          `json:"mode"`
 	AnomalyThreshold int             `json:"anomaly_threshold"`
+	IPACLMode        string          `json:"ip_acl_mode"`
+	IPACLList        string          `json:"ip_acl_list"`
+	IPACLEnabled     bool            `json:"ip_acl_enabled"`
 	IPWhitelist      json.RawMessage `json:"ip_whitelist"`
 	IPBlacklist      json.RawMessage `json:"ip_blacklist"`
 	RateLimitEnabled bool            `json:"rate_limit_enabled"`
@@ -16,6 +19,8 @@ type SecurityPolicy struct {
 	CRSRuleGroups    json.RawMessage `json:"crs_rule_groups"`
 	CRSExcludedRules json.RawMessage `json:"crs_excluded_rules"`
 	CustomRules      json.RawMessage `json:"custom_rules"`
+	BlockPageType    string          `json:"block_page_type"`
+	BlockPageContent string          `json:"block_page_content"`
 	Enabled          bool            `json:"enabled"`
 	CreatedAt        string          `json:"created_at"`
 	UpdatedAt        string          `json:"updated_at"`
@@ -37,14 +42,17 @@ type CreateSecurityPolicyRequest struct {
 	Description      string `json:"description"`
 	Mode             string `json:"mode"`
 	AnomalyThreshold int    `json:"anomaly_threshold"`
-	IPWhitelist      string `json:"ip_whitelist"`
-	IPBlacklist      string `json:"ip_blacklist"`
+	IPACLMode        string `json:"ip_acl_mode"`
+	IPACLList        string `json:"ip_acl_list"`
+	IPACLEnabled     bool   `json:"ip_acl_enabled"`
 	RateLimitEnabled bool   `json:"rate_limit_enabled"`
 	RateLimitRPS     int    `json:"rate_limit_rps"`
 	RateLimitBurst   int    `json:"rate_limit_burst"`
 	CRSRuleGroups    string `json:"crs_rule_groups"`
 	CRSExcludedRules string `json:"crs_excluded_rules"`
 	CustomRules      string `json:"custom_rules"`
+	BlockPageType    string `json:"block_page_type"`
+	BlockPageContent string `json:"block_page_content"`
 	Enabled          *bool  `json:"enabled"`
 }
 
@@ -53,14 +61,17 @@ type UpdateSecurityPolicyRequest struct {
 	Description      *string `json:"description"`
 	Mode             *string `json:"mode"`
 	AnomalyThreshold *int    `json:"anomaly_threshold"`
-	IPWhitelist      *string `json:"ip_whitelist"`
-	IPBlacklist      *string `json:"ip_blacklist"`
+	IPACLMode        *string `json:"ip_acl_mode"`
+	IPACLList        *string `json:"ip_acl_list"`
+	IPACLEnabled     *bool   `json:"ip_acl_enabled"`
 	RateLimitEnabled *bool   `json:"rate_limit_enabled"`
 	RateLimitRPS     *int    `json:"rate_limit_rps"`
 	RateLimitBurst   *int    `json:"rate_limit_burst"`
 	CRSRuleGroups    *string `json:"crs_rule_groups"`
 	CRSExcludedRules *string `json:"crs_excluded_rules"`
 	CustomRules      *string `json:"custom_rules"`
+	BlockPageType    *string `json:"block_page_type"`
+	BlockPageContent *string `json:"block_page_content"`
 	Enabled          *bool   `json:"enabled"`
 }
 

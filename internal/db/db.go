@@ -429,6 +429,9 @@ func createTables() error {
 		description TEXT DEFAULT '',
 		mode TEXT DEFAULT 'off',
 		anomaly_threshold INTEGER DEFAULT 5,
+		ip_acl_mode TEXT DEFAULT '',
+		ip_acl_list TEXT DEFAULT '[]',
+		ip_acl_enabled BOOLEAN DEFAULT FALSE,
 		ip_whitelist TEXT DEFAULT '[]',
 		ip_blacklist TEXT DEFAULT '[]',
 		rate_limit_enabled BOOLEAN DEFAULT FALSE,
@@ -437,6 +440,8 @@ func createTables() error {
 		crs_rule_groups TEXT DEFAULT '[]',
 		crs_excluded_rules TEXT DEFAULT '[]',
 		custom_rules TEXT DEFAULT '[]',
+		block_page_type TEXT DEFAULT 'default',
+		block_page_content TEXT DEFAULT '',
 		enabled BOOLEAN DEFAULT TRUE,
 		created_at DATETIME DEFAULT (datetime('now')),
 		updated_at DATETIME DEFAULT (datetime('now'))
@@ -651,6 +656,11 @@ func runMigrations() error {
 		"nodes.last_sync_at":                          "DATETIME",
 		"nodes.last_sync_error":                       "TEXT",
 		"security_policies.crs_excluded_rules":        "TEXT DEFAULT '[]'",
+		"security_policies.ip_acl_mode":               "TEXT DEFAULT ''",
+		"security_policies.ip_acl_list":               "TEXT DEFAULT '[]'",
+		"security_policies.ip_acl_enabled":            "BOOLEAN DEFAULT FALSE",
+		"security_policies.block_page_type":           "TEXT DEFAULT 'default'",
+		"security_policies.block_page_content":        "TEXT DEFAULT ''",
 	}
 	for col, dtype := range newColumns {
 		parts := strings.Split(col, ".")

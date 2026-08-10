@@ -77,12 +77,21 @@
         </el-form-item>
 
         <el-divider content-position="left">IP 访问控制</el-divider>
-        <el-form-item label="白名单">
-          <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" style="width: 100%" />
+        <el-form-item label="启用">
+          <el-switch v-model="form.ip_acl_enabled" />
         </el-form-item>
-        <el-form-item label="黑名单">
-          <el-select v-model="ipBlacklist" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" style="width: 100%" />
-        </el-form-item>
+        <template v-if="form.ip_acl_enabled">
+          <el-form-item label="控制模式">
+            <el-radio-group v-model="form.ip_acl_mode">
+              <el-radio value="allow">白名单（仅允许列表中的 IP）</el-radio>
+              <el-radio value="deny">黑名单（拒绝列表中的 IP）</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item :label="form.ip_acl_mode === 'allow' ? '允许 IP' : '拒绝 IP'">
+            <el-select v-model="ipACLList" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" style="width: 100%" />
+            <div class="text-secondary">{{ form.ip_acl_mode === 'allow' ? '列表中的 IP 将被允许，其他 IP 一律拒绝' : '列表中的 IP 将被拒绝，其他 IP 一律允许' }}</div>
+          </el-form-item>
+        </template>
 
         <el-divider content-position="left">限流</el-divider>
         <el-form-item label="启用限流">
@@ -101,7 +110,51 @@
         <el-divider content-position="left">CRS 规则排除</el-divider>
         <el-form-item label="排除规则 ID">
           <el-select v-model="crsExcludedRules" multiple filterable allow-create default-first-option placeholder="输入 CRS 规则 ID（如 942100）后回车" style="width: 100%" />
-          <span class="text-secondary">排除的规则不会被检测或拦截</span>
+          <div class="text-secondary">排除的规则不会被检测或拦截</div>
+        </el-form-item>
+
+        <el-divider content-position="left">自定义规则</el-divider>
+        <el-form-item label="规则列表">
+          <div style="width: 100%">
+            <div v-for="(rule, idx) in customRules" :key="idx" class="custom-rule-row">
+              <el-input v-model="rule.name" placeholder="规则名称" style="width: 140px" size="small" />
+              <el-select v-model="rule.target" style="width: 100px" size="small">
+                <el-option label="URI" value="uri" />
+                <el-option label="参数" value="args" />
+                <el-option label="请求体" value="body" />
+                <el-option label="请求头" value="headers" />
+                <el-option label="User-Agent" value="user_agent" />
+              </el-select>
+              <el-select v-model="rule.operator" style="width: 100px" size="small">
+                <el-option label="包含" value="contains" />
+                <el-option label="正则" value="regex" />
+                <el-option label="精确" value="equals" />
+                <el-option label="前缀" value="starts_with" />
+              </el-select>
+              <el-input v-model="rule.pattern" placeholder="匹配值" style="flex: 1" size="small" />
+              <el-select v-model="rule.action" style="width: 90px" size="small">
+                <el-option label="拦截" value="block" />
+                <el-option label="记录" value="log" />
+              </el-select>
+              <el-switch v-model="rule.enabled" size="small" />
+              <el-button link type="danger" size="small" @click="customRules.splice(idx, 1)">删除</el-button>
+            </div>
+            <el-button size="small" type="primary" plain @click="customRules.push({ name: '', enabled: true, target: 'uri', operator: 'contains', pattern: '', action: 'block', score: 5, status_code: 403 })">
+              + 添加规则
+            </el-button>
+          </div>
+        </el-form-item>
+
+        <el-divider content-position="left">拦截页面</el-divider>
+        <el-form-item label="拦截页面">
+          <el-radio-group v-model="form.block_page_type">
+            <el-radio value="default">默认（403 Forbidden）</el-radio>
+            <el-radio value="custom">自定义内容</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="form.block_page_type === 'custom'" label="自定义内容">
+          <el-input v-model="form.block_page_content" type="textarea" :rows="4" placeholder="403 拦截时返回给客户端的 HTML 内容" />
+          <div class="text-secondary">支持 HTML 格式，如 &lt;h1&gt;访问被拒绝&lt;/h1&gt;</div>
         </el-form-item>
 
         <el-divider content-position="left">关联规则</el-divider>
@@ -128,7 +181,7 @@ import { useAuthStore } from '@/stores/auth'
 
 interface APIResponse<T> { code: number; message: string; data: T }
 interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean }
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_whitelist: string; ip_blacklist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; enabled: boolean }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_blacklist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_type: string; block_page_content: string; enabled: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number }
 
 const authStore = useAuthStore()
@@ -140,12 +193,12 @@ const policies = ref<PolicySummary[]>([])
 const allRules = ref<Rule[]>([])
 const dialogVisible = ref(false)
 const editingId = ref<number | null>(null)
-const ipWhitelist = ref<string[]>([])
-const ipBlacklist = ref<string[]>([])
+const ipACLList = ref<string[]>([])
 const crsExcludedRules = ref<string[]>([])
 const boundRules = ref<string[]>([])
 
-const form = ref({ name: '', description: '', mode: 'off', anomaly_threshold: 5, rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50 })
+const form = ref({ name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_type: 'default', block_page_content: '' })
+const customRules = ref<Array<{ name: string; enabled: boolean; target: string; operator: string; pattern: string; action: string; score: number; status_code: number }>>([])
 
 const fetchData = async () => {
   loading.value = true
@@ -165,10 +218,10 @@ const openDialog = async (row?: PolicySummary) => {
     try {
       const res = await request.get<APIResponse<{ policy: PolicyDetail; bindings: string[] }>>(`/security/policies/${row.id}`)
       const d = res.data.policy
-      form.value = { name: d.name, description: d.description, mode: d.mode, anomaly_threshold: d.anomaly_threshold, rate_limit_enabled: d.rate_limit_enabled, rate_limit_rps: d.rate_limit_rps, rate_limit_burst: d.rate_limit_burst }
-      ipWhitelist.value = JSON.parse(d.ip_whitelist || '[]')
-      ipBlacklist.value = JSON.parse(d.ip_blacklist || '[]')
+      form.value = { name: d.name, description: d.description, mode: d.mode, anomaly_threshold: d.anomaly_threshold, ip_acl_enabled: d.ip_acl_enabled, ip_acl_mode: d.ip_acl_mode || 'allow', rate_limit_enabled: d.rate_limit_enabled, rate_limit_rps: d.rate_limit_rps, rate_limit_burst: d.rate_limit_burst, block_page_type: d.block_page_type || 'default', block_page_content: d.block_page_content || '' }
+      ipACLList.value = JSON.parse(d.ip_acl_list || '[]')
       crsExcludedRules.value = JSON.parse(d.crs_excluded_rules || '[]')
+      customRules.value = JSON.parse(d.custom_rules || '[]')
       boundRules.value = res.data.bindings || []
     } catch { ElMessage.error('加载策略详情失败') }
   } else { resetForm() }
@@ -176,15 +229,15 @@ const openDialog = async (row?: PolicySummary) => {
 }
 
 const resetForm = () => {
-  form.value = { name: '', description: '', mode: 'off', anomaly_threshold: 5, rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50 }
-  ipWhitelist.value = []; ipBlacklist.value = []; crsExcludedRules.value = []; boundRules.value = []; editingId.value = null
+  form.value = { name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_type: 'default', block_page_content: '' }
+  ipACLList.value = []; crsExcludedRules.value = []; customRules.value = []; boundRules.value = []; editingId.value = null
 }
 
 const handleSave = async () => {
   if (!form.value.name.trim()) { ElMessage.warning('请输入策略名称'); return }
   saving.value = true
   try {
-    const payload = { ...form.value, ip_whitelist: JSON.stringify(ipWhitelist.value), ip_blacklist: JSON.stringify(ipBlacklist.value), crs_excluded_rules: JSON.stringify(crsExcludedRules.value) }
+    const payload = { ...form.value, ip_acl_list: JSON.stringify(ipACLList.value), crs_excluded_rules: JSON.stringify(crsExcludedRules.value), custom_rules: JSON.stringify(customRules.value) }
     if (editingId.value) {
       await request.put(`/security/policies/${editingId.value}`, payload)
     } else {
@@ -203,3 +256,7 @@ const handleDelete = (row: PolicySummary) => {
 
 onMounted(fetchData)
 </script>
+
+<style scoped>
+.custom-rule-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; flex-wrap: wrap; }
+</style>

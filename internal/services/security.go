@@ -43,16 +43,28 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 	}
 	sb.WriteString("SecRequestBodyAccess On\n")
 	sb.WriteString("SecAuditEngine Relevant\nSecAuditLog /app/waf/audit/audit.log\nSecAuditLogFormat JSON\nSecAuditLogParts ABIJDEFHZ\n")
+	if p.BlockPageType == "custom" && p.BlockPageContent != "" {
+		sb.WriteString("SecDefaultAction \"phase:1,deny,status:403,log,msg:'Blocked by security policy'\"\nSecDefaultAction \"phase:2,deny,status:403,log,msg:'Blocked by security policy'\"\n")
+	}
 
 	var ipWL []string
 	json.Unmarshal(p.IPWhitelist, &ipWL)
-	if len(ipWL) > 0 {
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:1,phase:1,pass,nolog,ctl:ruleEngine=Off\"\n", strings.Join(ipWL, ",")))
-	}
 	var ipBL []string
 	json.Unmarshal(p.IPBlacklist, &ipBL)
+	var ipACLList []string
+	json.Unmarshal([]byte(p.IPACLList), &ipACLList)
+	if p.IPACLEnabled && p.IPACLMode != "" {
+		if p.IPACLMode == "allow" && len(ipACLList) > 0 {
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:1,phase:1,pass,nolog\"\nSecRule REMOTE_ADDR \"@noMatch\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝'\"\n", strings.Join(ipACLList, ",")))
+		} else if p.IPACLMode == "deny" && len(ipACLList) > 0 {
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'\"\n", strings.Join(ipACLList, ",")))
+		}
+	}
+	if len(ipWL) > 0 {
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:3,phase:1,pass,nolog,ctl:ruleEngine=Off\"\n", strings.Join(ipWL, ",")))
+	}
 	if len(ipBL) > 0 {
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单'\"\n", strings.Join(ipBL, ",")))
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单'\"\n", strings.Join(ipBL, ",")))
 	}
 
 	var groups []string
