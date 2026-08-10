@@ -45,7 +45,8 @@
             </div>
           </template>
           <div class="chart-container">
-            <v-chart :option="trendChartOption" autoresize style="height: 260px" />
+            <v-chart v-if="overview.trend.length > 0" :option="trendChartOption" autoresize style="height: 260px" />
+            <el-empty v-else description="暂无趋势数据" :image-size="80" style="height: 260px; display: flex; align-items: center; justify-content: center" />
           </div>
         </el-card>
       </el-col>
@@ -58,7 +59,8 @@
             </div>
           </template>
           <div class="chart-container">
-            <v-chart :option="attackChartOption" autoresize style="height: 260px" />
+            <v-chart v-if="overview.attack_types.length > 0" :option="attackChartOption" autoresize style="height: 260px" />
+            <el-empty v-else description="暂无攻击数据" :image-size="80" style="height: 260px; display: flex; align-items: center; justify-content: center" />
           </div>
         </el-card>
       </el-col>

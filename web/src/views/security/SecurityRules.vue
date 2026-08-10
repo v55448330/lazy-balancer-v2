@@ -15,13 +15,11 @@
         <div class="flex items-center justify-between w-full">
           <div class="flex items-center gap-3">
             <span class="font-medium">OWASP CRS</span>
-            <el-tag type="success" size="small" effect="light">{{ crsInfo.version || '—' }}</el-tag>
-            <el-tag v-if="crsInfo.is_latest" type="info" size="small" effect="plain">已最新</el-tag>
           </div>
         </div>
       </template>
       <el-descriptions :column="3" border>
-        <el-descriptions-item label="版本">{{ crsInfo.version || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="CRS 版本">{{ crsInfo.version || '—' }}</el-descriptions-item>
         <el-descriptions-item label="规则文件数">{{ total }}</el-descriptions-item>
         <el-descriptions-item label="更新时间">{{ crsInfo.updated_at || '—' }}</el-descriptions-item>
         <el-descriptions-item label="自动更新">
@@ -59,7 +57,7 @@
         <el-tab-pane label="CRS 配置" name="setup">
           <el-card v-loading="loadingSetup">
             <template #header><div class="flex items-center justify-between"><span class="font-medium">crs-setup.conf</span><el-button link type="primary" size="small" @click="fetchSetup">刷新</el-button></div></template>
-            <el-input type="textarea" :model-value="setupContent" readonly :rows="25" style="font-family: monospace; font-size: 12px" />
+            <el-input type="textarea" :model-value="setupContent" readonly :rows="25" class="syntax-highlighted" style="font-family: monospace; font-size: 12px" />
           </el-card>
         </el-tab-pane>
         <el-tab-pane label="自定义规则" name="custom">
@@ -105,7 +103,7 @@
     </el-card>
 
     <el-dialog v-model="contentDialogVisible" :title="currentFilename" width="900px" top="5vh">
-      <div v-loading="loadingContent"><pre class="crs-content">{{ currentContent }}</pre></div>
+      <div v-loading="loadingContent"><pre class="crs-content syntax-highlighted">{{ currentContent }}</pre></div>
     </el-dialog>
 
     <el-dialog v-model="ruleDialogVisible" :title="editingRuleId ? '编辑自定义规则' : '新建自定义规则'" width="760px">
@@ -148,12 +146,24 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="ruleForm.action === 'block'" label="状态码">
-          <el-input-number v-model="ruleForm.status_code" :min="400" :max="599" style="width: 200px" />
-          <div class="text-secondary">拦截时返回给客户端的 HTTP 状态码，常用 403 Forbidden</div>
+          <el-select v-model="ruleForm.status_code" style="width: 200px">
+            <el-option :value="400" label="400 Bad Request" />
+            <el-option :value="403" label="403 Forbidden" />
+            <el-option :value="404" label="404 Not Found" />
+            <el-option :value="429" label="429 Too Many Requests" />
+            <el-option :value="503" label="503 Service Unavailable" />
+          </el-select>
+          <div class="text-secondary">拦截时返回给客户端的 HTTP 状态码</div>
         </el-form-item>
         <el-form-item label="异常分值">
-          <el-input-number v-model="ruleForm.score" :min="1" :max="100" style="width: 200px" />
-          <div class="text-secondary">匹配此规则时增加的异常分数，达到策略阈值后触发拦截，常用 5（默认级别）</div>
+          <el-select v-model="ruleForm.score" style="width: 200px">
+            <el-option :value="1" label="轻微（1）" />
+            <el-option :value="3" label="较低（3）" />
+            <el-option :value="5" label="中等（5）" />
+            <el-option :value="10" label="较高（10）" />
+            <el-option :value="20" label="严重（20）" />
+          </el-select>
+          <div class="text-secondary">匹配此规则时增加的异常分数，达到策略阈值后触发拦截</div>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="ruleForm.enabled" />
@@ -257,6 +267,8 @@ onMounted(() => { fetchCRS(); fetchRules(); fetchSetup(); fetchCustomRules() })
 
 <style scoped>
 .crs-content { max-height: 70vh; overflow: auto; background: #f8f9fa; padding: 16px; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+.syntax-highlighted { background: #f6f8fa; color: #24292f; }
+.syntax-highlighted :deep(textarea) { background: #f6f8fa; color: #24292f; }
 .rule-condition-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; flex-wrap: wrap; }
 .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .search-input { width: 280px; }

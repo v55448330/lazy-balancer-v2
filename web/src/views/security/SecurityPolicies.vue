@@ -72,8 +72,13 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="form.mode !== 'off'" label="异常阈值">
-          <el-input-number v-model="form.anomaly_threshold" :min="1" :max="100" />
-          <span class="ml-2 text-secondary">越低越严格，CRS 默认 5</span>
+          <el-select v-model="form.anomaly_threshold" style="width: 200px">
+            <el-option :value="3" label="严格（3）" />
+            <el-option :value="5" label="默认（5）" />
+            <el-option :value="10" label="宽松（10）" />
+            <el-option :value="20" label="极宽松（20）" />
+          </el-select>
+          <el-text class="ml-2 text-secondary">越低越严格，达到此分数后触发拦截</el-text>
         </el-form-item>
 
         <el-divider content-position="left">IP 访问控制</el-divider>
@@ -104,7 +109,7 @@
           </el-form-item>
           <el-form-item label="突发大小">
             <el-input-number v-model="form.rate_limit_burst" :min="0" style="width: 200px" />
-            <el-text class="ml-2 text-secondary">次，突发量用完后按限流速率为发送返回 429</el-text>
+            <el-text class="ml-2 text-secondary">次，突发量用完后超出的请求返回 429 Too Many Requests</el-text>
           </el-form-item>
         </template>
 

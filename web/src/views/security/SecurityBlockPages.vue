@@ -52,8 +52,9 @@
         <el-form-item label="内容">
           <div class="block-content-editor">
             <el-input v-model="form.content" type="textarea" :rows="25" placeholder="HTML 内容，支持 CSS 样式" style="font-family: monospace; font-size: 13px" :readonly="currentPage?.is_default" />
-            <div class="content-preview-label text-secondary">预览：</div>
-            <div class="content-preview" v-html="form.content || '<p style=\'color:#999;padding:20px;text-align:center\'>(空内容)</p>'" />
+          </div>
+          <div class="text-secondary mt-1">
+            {{ currentPage?.is_default ? '默认页面内容只读，可修改名称和描述' : '拦截时返回给客户端的 HTML 页面，支持内联 CSS 样式' }}
           </div>
           <div class="text-secondary mt-1">
             {{ currentPage?.is_default ? '默认页面内容只读，可修改名称和描述' : '拦截时返回给客户端的 HTML 页面，支持内联 CSS 样式' }}
@@ -143,7 +144,5 @@ onMounted(fetchData)
 </script>
 
 <style scoped>
-.block-content-editor { border: 1px solid #e4e7ed; border-radius: 6px; }
-.content-preview-label { padding: 6px 12px; font-size: 12px; border-top: 1px solid #e4e7ed; background: #f9fafb; }
-.content-preview { min-height: 60px; max-height: 300px; overflow: auto; padding: 12px; border-top: 1px solid #e4e7ed; }
+.block-content-editor { border: 1px solid #e4e7ed; border-radius: 6px; overflow: hidden; }
 </style>

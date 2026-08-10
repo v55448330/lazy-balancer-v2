@@ -39,10 +39,26 @@ func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: rules})
 }
 
+func validateSecurityCustomRule(rule *models.SecurityCustomRule) error {
+	validStatusCodes := map[int]bool{400: true, 403: true, 404: true, 429: true, 503: true}
+	if !validStatusCodes[rule.StatusCode] {
+		return fmt.Errorf("状态码必须为 400/403/404/429/503 之一，当前值 %d", rule.StatusCode)
+	}
+	validScores := map[int]bool{1: true, 3: true, 5: true, 10: true, 20: true}
+	if !validScores[rule.Score] {
+		return fmt.Errorf("异常分值必须为 1/3/5/10/20 之一，当前值 %d", rule.Score)
+	}
+	return nil
+}
+
 func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 	var req models.SecurityCustomRule
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	if err := validateSecurityCustomRule(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
 	conditionsJSON, _ := json.Marshal(req.Conditions)
@@ -61,6 +77,10 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	var req models.SecurityCustomRule
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	if err := validateSecurityCustomRule(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
 	conditionsJSON, _ := json.Marshal(req.Conditions)
