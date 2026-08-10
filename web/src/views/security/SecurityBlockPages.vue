@@ -19,12 +19,12 @@
         <template #empty>
           <el-empty description="暂无拦截页面" :image-size="60" />
         </template>
-        <el-table-column prop="name" label="页面名称" min-width="150">
+        <el-table-column prop="name" label="页面名称" min-width="180">
           <template #default="{ row }">
             <el-link :type="row.is_default ? 'info' : 'primary'" @click="previewPage(row)">{{ row.name }}{{ row.is_default ? ' (默认)' : '' }}</el-link>
           </template>
         </el-table-column>
-        <el-table-column prop="description" label="描述" min-width="250" show-overflow-tooltip />
+        <el-table-column prop="description" label="描述" min-width="280" show-overflow-tooltip />
         <el-table-column label="默认" width="90" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.is_default" type="success" size="small" effect="light">默认</el-tag>

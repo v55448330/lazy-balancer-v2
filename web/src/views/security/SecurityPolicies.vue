@@ -99,12 +99,12 @@
         </el-form-item>
         <template v-if="form.rate_limit_enabled">
           <el-form-item label="每秒请求">
-            <el-input-number v-model="form.rate_limit_rps" :min="1" style="width: 180px" />
-            <el-text class="ml-2 text-secondary">次/秒</el-text>
+            <el-input-number v-model="form.rate_limit_rps" :min="1" style="width: 200px" />
+            <el-text class="ml-2 text-secondary">次/秒，超过此速率后按突发量缓冲</el-text>
           </el-form-item>
           <el-form-item label="突发大小">
-            <el-input-number v-model="form.rate_limit_burst" :min="0" style="width: 180px" />
-            <el-text class="ml-2 text-secondary">次，超过突发量后按限流速率为发送返回 429</el-text>
+            <el-input-number v-model="form.rate_limit_burst" :min="0" style="width: 200px" />
+            <el-text class="ml-2 text-secondary">次，突发量用完后按限流速率为发送返回 429</el-text>
           </el-form-item>
         </template>
 
@@ -121,12 +121,12 @@
           <div class="text-secondary">排除的规则不会被检测或拦截</div>
         </el-form-item>
 
-        <el-divider content-position="left">自定义规则选择</el-divider>
+        <el-divider content-position="left">自定义规则</el-divider>
         <el-form-item label="已选规则">
           <el-select v-model="selectedCustomRules" multiple filterable placeholder="选择要包含的自定义规则" style="width: 100%">
             <el-option v-for="rule in allCustomRules" :key="rule.id" :label="rule.name" :value="rule.id" />
           </el-select>
-          <div class="text-secondary">自定义规则在"规则集"页面创建，此处仅选择使用哪些</div>
+          <div class="text-secondary">自定义规则在"规则集"页面创建，<el-link type="primary" @click="goToCustomRulesPage">去创建/编辑</el-link></div>
         </el-form-item>
 
         <el-divider content-position="left">拦截页面</el-divider>
@@ -136,11 +136,11 @@
             <el-option v-for="p in blockPages" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
           <div v-if="blockPages.length === 0" class="text-secondary mt-1">
-            暂无拦截页面，<el-link type="primary" @click="goBlockPages">去创建</el-link>
+            暂无拦截页面，<el-link type="primary" @click="goToBlockPagesPage">去创建</el-link>
           </div>
         </el-form-item>
 
-        <el-divider content-position="left">关联规则</el-divider>
+        <el-divider content-position="left">关联负载均衡规则</el-divider>
         <el-form-item label="已关联">
           <el-select v-model="boundRules" multiple filterable placeholder="选择要关联的负载均衡规则" style="width: 100%">
             <el-option v-for="r in allRules" :key="r.caddy_id" :label="`${r.name} (${r.domain}:${r.listen_port})`" :value="r.caddy_id" />
@@ -250,7 +250,8 @@ function handleDelete(row: PolicySummary) {
     .then(async () => { await request.delete(`/security/policies/${row.id}`); ElMessage.success('已删除'); fetchData() }).catch(() => {})
 }
 
-const goBlockPages = () => { useAuthStore().setCurrentPage('security-block-pages') }
+const goToCustomRulesPage = () => { authStore.setCurrentPage('security-rules') }
+const goToBlockPagesPage = () => { authStore.setCurrentPage('security-block-pages') }
 
 onMounted(fetchData)
 </script>

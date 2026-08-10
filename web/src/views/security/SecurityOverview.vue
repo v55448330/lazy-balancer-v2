@@ -12,7 +12,7 @@
 
     <el-row :gutter="20" class="mb-5">
       <el-col :span="24">
-        <el-card shadow="hover" class="stat-card-wrapper">
+        <el-card shadow="always" class="stat-card-wrapper">
           <el-row :gutter="20">
             <el-col :span="6" class="stat-card-col">
               <div class="stat-label">今日拦截</div>
@@ -37,7 +37,7 @@
 
     <el-row :gutter="20" class="mb-5">
       <el-col :span="16">
-        <el-card shadow="never">
+        <el-card shadow="always">
           <template #header>
             <div class="flex items-center gap-2">
               <el-icon><TrendCharts /></el-icon>
@@ -50,7 +50,7 @@
         </el-card>
       </el-col>
       <el-col :span="8">
-        <el-card shadow="never">
+        <el-card shadow="always">
           <template #header>
             <div class="flex items-center gap-2">
               <el-icon><PieChart /></el-icon>
@@ -64,7 +64,7 @@
       </el-col>
     </el-row>
 
-    <el-card shadow="never">
+    <el-card shadow="always">
       <template #header>
         <div class="flex items-center gap-2">
           <el-icon><Location /></el-icon>

@@ -10,7 +10,7 @@
       </div>
     </div>
 
-    <el-card class="mb-4">
+    <el-card class="mb-5">
       <template #header>
         <div class="flex items-center justify-between w-full">
           <div class="flex items-center gap-3">
@@ -18,10 +18,9 @@
             <el-tag type="success" size="small" effect="light">{{ crsInfo.version || '—' }}</el-tag>
             <el-tag v-if="crsInfo.is_latest" type="info" size="small" effect="plain">已最新</el-tag>
           </div>
-          <el-tag type="info" size="small" effect="plain">{{ crsInfo.server_version || '—' }}</el-tag>
         </div>
       </template>
-      <el-descriptions :column="4" border>
+      <el-descriptions :column="3" border>
         <el-descriptions-item label="版本">{{ crsInfo.version || '—' }}</el-descriptions-item>
         <el-descriptions-item label="规则文件数">{{ total }}</el-descriptions-item>
         <el-descriptions-item label="更新时间">{{ crsInfo.updated_at || '—' }}</el-descriptions-item>
@@ -35,11 +34,8 @@
     <el-card>
       <el-tabs v-model="activeTab">
         <el-tab-pane label="CRS 规则浏览" name="rules">
-          <div class="flex gap-3 mb-4">
-            <el-input v-model="searchQuery" placeholder="搜索规则文件名或分类" clearable style="width: 280px" @clear="fetchRules" @keyup.enter="fetchRules">
-              <template #prefix><el-icon><Search /></el-icon></template>
-            </el-input>
-            <el-button type="primary" plain :icon="Search" @click="fetchRules">搜索</el-button>
+          <div class="table-toolbar">
+            <el-input v-model="searchQuery" placeholder="搜索规则文件名或分类" clearable :prefix-icon="Search" class="search-input" @clear="fetchRules" @keyup.enter="fetchRules" />
           </div>
           <el-table :data="rules" v-loading="loadingRules" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="" @row-click="openRuleContent" style="cursor: pointer">
             <template #empty><el-empty description="暂无规则文件" :image-size="60" /></template>
@@ -55,7 +51,9 @@
             </el-table-column>
           </el-table>
           <div class="flex justify-center mt-4">
-            <el-pagination v-model:current-page="page" :page-size="pageSize" :total="total" layout="prev, pager, next, total" @current-change="fetchRules" />
+          <div class="rules-pagination">
+            <el-pagination v-model:current-page="page" :page-size="pageSize" :total="total" layout="total, sizes, prev, pager, next" @current-change="fetchRules" />
+          </div>
           </div>
         </el-tab-pane>
         <el-tab-pane label="CRS 配置" name="setup">
@@ -65,11 +63,10 @@
           </el-card>
         </el-tab-pane>
         <el-tab-pane label="自定义规则" name="custom">
-          <div class="flex items-center justify-between mb-4">
-            <span class="font-medium">自定义规则（{{ customRules.length }} 条）</span>
-            <el-button v-if="!isReadOnly" type="primary" size="small" :icon="Plus" @click="openRuleDialog()">新建规则</el-button>
-          </div>
-          <el-table :data="customRules" v-loading="loadingCustom" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+            <div class="table-toolbar">
+              <el-button v-if="!isReadOnly" type="primary" :icon="Plus" @click="openRuleDialog()">新建规则</el-button>
+            </div>
+            <el-table :data="customRules" v-loading="loadingCustom" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
             <template #empty><el-empty description="暂无自定义规则" :image-size="60" /></template>
             <el-table-column prop="name" label="规则名称" min-width="150">
               <template #default="{ row }">
@@ -98,9 +95,12 @@
                 <el-button size="small" link type="primary" @click="openRuleDialog(row)">编辑</el-button>
                 <el-button size="small" link type="danger" @click="deleteCustomRule(row)">删除</el-button>
             </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
+            </el-table-column>
+          </el-table>
+          <div class="rules-pagination">
+            <el-pagination v-model:current-page="customPage" :page-size="customPageSize" :total="customRules.length" layout="total, sizes, prev, pager, next" />
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </el-card>
 
@@ -132,7 +132,7 @@
                 <el-option label="精确" value="equals" />
                 <el-option label="前缀" value="starts_with" />
               </el-select>
-              <el-input v-model="cond.pattern" placeholder="匹配值" style="flex: 1" size="small" :class="{ 'is-error': cond.operator === 'regex' && !isValidRegex(cond.pattern) }" />
+              <el-input v-model="cond.pattern" :placeholder="cond.operator === 'regex' ? '如 /admin/.* 或 /api/v[0-9]+/' : '匹配值'" style="flex: 1" size="small" :class="{ 'is-error': cond.operator === 'regex' && !isValidRegex(cond.pattern) }" />
               <el-icon v-if="cond.operator === 'regex' && !isValidRegex(cond.pattern)" class="regex-error-icon"><WarningFilled /></el-icon>
               <el-button link type="danger" size="small" @click="ruleForm.conditions.splice(idx, 1)">删除</el-button>
             </div>
@@ -148,10 +148,12 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="ruleForm.action === 'block'" label="状态码">
-          <el-input-number v-model="ruleForm.status_code" :min="400" :max="599" style="width: 180px" />
+          <el-input-number v-model="ruleForm.status_code" :min="400" :max="599" style="width: 200px" />
+          <div class="text-secondary">拦截时返回给客户端的 HTTP 状态码，常用 403 Forbidden</div>
         </el-form-item>
         <el-form-item label="异常分值">
-          <el-input-number v-model="ruleForm.score" :min="1" :max="100" style="width: 180px" />
+          <el-input-number v-model="ruleForm.score" :min="1" :max="100" style="width: 200px" />
+          <div class="text-secondary">匹配此规则时增加的异常分数，达到策略阈值后触发拦截，常用 5（默认级别）</div>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="ruleForm.enabled" />
@@ -196,6 +198,8 @@ const currentFilename = ref('')
 const currentContent = ref('')
 
 const customRules = ref<CustomRule[]>([])
+const customPage = ref(1)
+const customPageSize = ref(10)
 const loadingCustom = ref(false)
 const ruleDialogVisible = ref(false)
 const editingRuleId = ref<number | null>(null)
@@ -254,4 +258,7 @@ onMounted(() => { fetchCRS(); fetchRules(); fetchSetup(); fetchCustomRules() })
 <style scoped>
 .crs-content { max-height: 70vh; overflow: auto; background: #f8f9fa; padding: 16px; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
 .rule-condition-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; flex-wrap: wrap; }
+.table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
+.search-input { width: 280px; }
+.rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 </style>

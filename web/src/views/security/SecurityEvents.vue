@@ -12,7 +12,7 @@
     </div>
 
     <el-card>
-      <div class="flex items-center gap-4 mb-4">
+      <div class="table-toolbar">
         <el-select v-model="filters.action" placeholder="动作" clearable style="width: 140px" @change="fetchEvents">
           <el-option label="全部" value="" />
           <el-option label="拦截" value="blocked" />
@@ -64,3 +64,7 @@ const fetchEvents = async () => {
 }
 onMounted(fetchEvents)
 </script>
+
+<style scoped>
+.table-toolbar { display: flex; gap: 12px; justify-content: flex-end; margin-bottom: 16px; }
+</style>

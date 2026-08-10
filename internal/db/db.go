@@ -446,6 +446,9 @@ func createTables() error {
 		updated_at DATETIME DEFAULT (datetime('now'))
 	);
 
+	INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, created_at, updated_at)
+		VALUES (1, '默认拦截页面', '系统默认 403 拦截页面', '<h1 style="color:#f56c6c;font-family:sans-serif;text-align:center;padding:40px 20px">Access Denied</h1><p style="color:#909399;font-family:sans-serif;text-align:center;padding:0 20px">Your request has been blocked by the security policy.</p>', TRUE, datetime('now'), datetime('now'));
+
 	CREATE TABLE IF NOT EXISTS security_policies (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL,
