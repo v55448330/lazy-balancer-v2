@@ -157,6 +157,7 @@ onMounted(fetchData)
 .block-content-editor { border: 1px solid #e4e7ed; border-radius: 6px; overflow: hidden; }
 .vjs-textarea { border-radius: 6px; }
 .vjs-textarea :deep(.el-textarea__inner) { background: #1e293b; color: #e4e4e7; border: none; }
+.vjs-textarea :deep(.el-textarea__inner):focus { background: #1e293b; color: #e4e4e7; border: none; box-shadow: none; }
 .block-page-form .content-form-item .el-form-item__content { flex: 1; }
 .form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
 </style>
