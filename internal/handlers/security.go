@@ -112,7 +112,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 }
 
 func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, name, description, content, is_default, created_by, created_at, updated_by, updated_at FROM security_block_pages ORDER BY is_default DESC, id")
+	rows, err := db.DB.Query("SELECT id, name, description, content, status_code, is_default, created_by, created_at, updated_by, updated_at FROM security_block_pages ORDER BY is_default DESC, id")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -121,7 +121,7 @@ func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
 	var pages []models.SecurityBlockPage
 	for rows.Next() {
 		var p models.SecurityBlockPage
-		rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.IsDefault, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt)
+		rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.StatusCode, &p.IsDefault, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt)
 		pages = append(pages, p)
 	}
 	if pages == nil {
@@ -136,8 +136,8 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
 	}
-	result, err := db.DB.Exec(`INSERT INTO security_block_pages (name, description, content, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?)`,
-		req.Name, req.Description, req.Content, req.IsDefault, getContextUserIDInt(c), getContextUserIDInt(c))
+	result, err := db.DB.Exec(`INSERT INTO security_block_pages (name, description, content, status_code, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?,?)`,
+		req.Name, req.Description, req.Content, req.StatusCode, req.IsDefault, getContextUserIDInt(c), getContextUserIDInt(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -159,8 +159,8 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "默认拦截页面不可编辑"})
 		return
 	}
-	result, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
-		req.Name, req.Description, req.Content, getContextUserIDInt(c), id)
+	result, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, status_code=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
+		req.Name, req.Description, req.Content, req.StatusCode, getContextUserIDInt(c), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return

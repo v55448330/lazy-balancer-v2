@@ -441,6 +441,7 @@ func createTables() error {
 		name TEXT NOT NULL,
 		description TEXT DEFAULT '',
 		content TEXT DEFAULT '',
+		status_code INTEGER DEFAULT 403,
 		is_default BOOLEAN DEFAULT FALSE,
 		created_by INTEGER DEFAULT 0,
 		created_at DATETIME DEFAULT (datetime('now')),
@@ -690,6 +691,7 @@ func runMigrations() error {
 		"security_policies.block_page_id":             "INTEGER DEFAULT 0",
 		"security_block_pages.created_by":             "INTEGER DEFAULT 0",
 		"security_block_pages.updated_by":             "INTEGER DEFAULT 0",
+		"security_block_pages.status_code":            "INTEGER DEFAULT 403",
 	}
 	for col, dtype := range newColumns {
 		parts := strings.Split(col, ".")

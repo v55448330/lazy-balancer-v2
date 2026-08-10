@@ -45,9 +45,13 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 	sb.WriteString("SecAuditEngine Relevant\nSecAuditLog /app/waf/audit/audit.log\nSecAuditLogFormat JSON\nSecAuditLogParts ABIJDEFHZ\n")
 	if p.BlockPageID > 0 {
 		var content string
-		db.DB.QueryRow("SELECT content FROM security_block_pages WHERE id=?", p.BlockPageID).Scan(&content)
+		var statusCode int
+		db.DB.QueryRow("SELECT content, status_code FROM security_block_pages WHERE id=?", p.BlockPageID).Scan(&content, &statusCode)
 		if content != "" {
-			sb.WriteString("SecDefaultAction \"phase:1,deny,status:403,log,msg:'Blocked by security policy'\"\nSecDefaultAction \"phase:2,deny,status:403,log,msg:'Blocked by security policy'\"\n")
+			if statusCode == 0 {
+				statusCode = 403
+			}
+			sb.WriteString(fmt.Sprintf("SecDefaultAction \"phase:1,deny,status:%d,log,msg:'Blocked by security policy'\"\nSecDefaultAction \"phase:2,deny,status:%d,log,msg:'Blocked by security policy'\"\n", statusCode, statusCode))
 		}
 	}
 

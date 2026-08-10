@@ -24,7 +24,12 @@
             <el-link type="primary" @click="previewPage(row)">{{ row.name }}</el-link>
           </template>
         </el-table-column>
-        <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
+        <el-table-column label="状态码" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain" :type="row.status_code === 403 ? 'danger' : 'warning'">{{ row.status_code }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="更新时间" width="170" align="center">
           <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
         </el-table-column>
@@ -41,13 +46,26 @@
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? (currentPage?.is_default ? '查看默认拦截页面' : '编辑拦截页面') : '新建拦截页面'" width="960px" top="3vh">
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="960px" top="3vh">
       <el-form :model="form" label-width="80px" label-position="right" class="block-page-form">
         <el-form-item label="名称" required>
           <el-input v-model="form.name" placeholder="页面名称" :readonly="currentPage?.is_default" />
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" placeholder="页面描述" :readonly="currentPage?.is_default" />
+        </el-form-item>
+        <el-form-item label="状态码">
+          <el-select v-model="form.status_code" style="width: 200px" :disabled="currentPage?.is_default">
+            <el-option :value="400" label="400 Bad Request" />
+            <el-option :value="401" label="401 Unauthorized" />
+            <el-option :value="403" label="403 Forbidden" />
+            <el-option :value="404" label="404 Not Found" />
+            <el-option :value="429" label="429 Too Many Requests" />
+            <el-option :value="503" label="503 Service Unavailable" />
+          </el-select>
+          <div class="form-tip-inline" style="display: block; margin-top: 4px; margin-left: 0;">
+            {{ currentPage?.is_default ? '默认页面状态码固定为 403' : '拦截时返回给客户端的 HTTP 状态码' }}
+          </div>
         </el-form-item>
         <el-form-item label="内容" class="content-form-item">
           <div class="block-content-editor" style="width: 100%">
@@ -82,7 +100,7 @@ import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import type { UserListItem } from '@/types'
 
 interface APIResponse<T> { code: number; message: string; data: T }
-interface BlockPage { id: number; name: string; description: string; content: string; is_default: boolean; created_at: string; updated_at: string; updated_by: number }
+interface BlockPage { id: number; name: string; description: string; content: string; status_code: number; is_default: boolean; created_at: string; updated_at: string; updated_by: number }
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.user?.role !== 'admin')
@@ -97,7 +115,12 @@ const previewContent = ref('')
 const editingId = ref<number | null>(null)
 const currentPage = ref<BlockPage | null>(null)
 
-const form = ref({ name: '', description: '', content: '' })
+const dialogTitle = computed(() => {
+  if (!editingId.value) return '新建拦截页面'
+  return currentPage.value?.is_default ? '查看拦截页面' : '编辑拦截页面'
+})
+
+const form = ref({ name: '', description: '', content: '', status_code: 403 })
 
 const fetchData = async () => {
   loading.value = true
@@ -121,9 +144,9 @@ const openDialog = (row?: BlockPage) => {
   editingId.value = row?.id ?? null
   currentPage.value = row ?? null
   if (row) {
-    form.value = { name: row.name, description: row.description, content: row.content }
+      form.value = { name: row.name, description: row.description, content: row.content, status_code: row.status_code || 403 }
   } else {
-    form.value = { name: '', description: '', content: '' }
+      form.value = { name: '', description: '', content: '', status_code: 403 }
   }
   dialogVisible.value = true
 }
