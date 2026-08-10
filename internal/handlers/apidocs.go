@@ -131,7 +131,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"GET", "/system/info", "系统", "系统信息", "", `{"ip_address":"...","hostname":"..."}`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/system/metrics", "系统", "系统指标", "", `{"cpu_percent":0,"memory_percent":0}`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/audit-logs", "审计", "操作日志", "", `{"list":[],"total":0,"page":1,"page_size":20}`, []string{"401 unauthenticated"}, "query: page, page_size。"},
-	{"GET", "/security/overview", "安全", "安全总览", "", `{"today_blocked":0,"today_detected":0,"active_policies":0,"crs_version":"v4.14.0"}`, []string{"401 unauthenticated"}, ""},
+	{"GET", "/security/overview", "安全", "安全总览", "", `{"today_blocked":0,"today_detected":0,"active_policies":0,"crs_version":"v4.14.0","trend":[{"date":"2026-08-04","blocked":0,"detected":0}],"top_ips":[{"ip":"1.2.3.4","blocked":5,"detected":10,"last_time":"2026-08-10 14:32:01","attack_type":"SQL注入"}],"attack_types":[{"name":"SQL注入","value":42}]}`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/security/policies", "安全", "安全策略列表", "", `[{"id":1,"name":"默认策略","mode":"blocking","enabled":true,"rule_count":3,"has_waf":true,"has_ip_control":true,"has_rate_limit":false}]`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/security/policies/:id", "安全", "安全策略详情", "", `{"policy":{"id":1,"name":"默认策略","mode":"blocking"},"bindings":["lb_xxx"]}`, []string{"404 not_found"}, ""},
 	{"POST", "/security/policies", "安全", "创建安全策略", `{"name":"默认策略","mode":"detection","anomaly_threshold":5}`, `{"id":1}`, []string{"400 validation_failed", "403 slave_or_admin_required"}, "mode: off/detection/blocking。"},

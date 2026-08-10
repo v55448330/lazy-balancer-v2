@@ -465,6 +465,7 @@ func createTables() error {
 		custom_rules TEXT DEFAULT '[]',
 		block_page_type TEXT DEFAULT 'default',
 		block_page_content TEXT DEFAULT '',
+		block_page_id INTEGER DEFAULT 0,
 		enabled BOOLEAN DEFAULT TRUE,
 		created_at DATETIME DEFAULT (datetime('now')),
 		updated_at DATETIME DEFAULT (datetime('now'))
@@ -684,6 +685,7 @@ func runMigrations() error {
 		"security_policies.ip_acl_enabled":            "BOOLEAN DEFAULT FALSE",
 		"security_policies.block_page_type":           "TEXT DEFAULT 'default'",
 		"security_policies.block_page_content":        "TEXT DEFAULT ''",
+		"security_policies.block_page_id":             "INTEGER DEFAULT 0",
 	}
 	for col, dtype := range newColumns {
 		parts := strings.Split(col, ".")

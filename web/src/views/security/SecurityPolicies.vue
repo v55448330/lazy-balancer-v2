@@ -155,14 +155,13 @@
 
         <el-divider content-position="left">拦截页面</el-divider>
         <el-form-item label="拦截页面">
-          <el-radio-group v-model="form.block_page_type">
-            <el-radio value="default">默认（403 Forbidden）</el-radio>
-            <el-radio value="custom">自定义内容</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="form.block_page_type === 'custom'" label="自定义内容">
-          <el-input v-model="form.block_page_content" type="textarea" :rows="4" placeholder="403 拦截时返回给客户端的 HTML 内容" />
-          <div class="text-secondary">支持 HTML 格式，如 &lt;h1&gt;访问被拒绝&lt;/h1&gt;</div>
+          <el-select v-model="form.block_page_id" placeholder="选择拦截页面" style="width: 100%">
+            <el-option label="默认页面" :value="0" />
+            <el-option v-for="p in blockPages" :key="p.id" :label="p.name" :value="p.id" />
+          </el-select>
+          <div v-if="blockPages.length === 0" class="text-secondary mt-1">
+            暂无拦截页面，<el-link type="primary" @click="goBlockPages">去创建</el-link>
+          </div>
         </el-form-item>
 
         <el-divider content-position="left">关联规则</el-divider>
@@ -189,9 +188,12 @@ import { useAuthStore } from '@/stores/auth'
 
 interface APIResponse<T> { code: number; message: string; data: T }
 interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean }
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_blacklist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_type: string; block_page_content: string; enabled: boolean }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_blacklist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; enabled: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number }
 interface CRSRuleOption { filename: string; category: string }
+interface BlockPage { id: number; name: string }
+
+const blockPages = ref<BlockPage[]>([])
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.user?.role !== 'admin')
@@ -208,20 +210,22 @@ const ipACLList = ref<string[]>([])
 const crsExcludedRules = ref<string[]>([])
 const boundRules = ref<string[]>([])
 
-const form = ref({ name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_type: 'default', block_page_content: '' })
+const form = ref({ name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 0 })
 const customRules = ref<Array<{ name: string; enabled: boolean; target: string; operator: string; pattern: string; action: string; score: number; status_code: number }>>([])
 
 const fetchData = async () => {
   loading.value = true
   try {
-    const [polRes, ruleRes, crsRes] = await Promise.all([
+    const [polRes, ruleRes, crsRes, bpRes] = await Promise.all([
       request.get<APIResponse<PolicySummary[]>>('/security/policies'),
       request.get<APIResponse<Rule[]>>('/rules'),
       request.get<APIResponse<{ rules: CRSRuleOption[] }>>('/security/crs/rules?page_size=100'),
+      request.get<APIResponse<BlockPage[]>>('/security/block-pages'),
     ])
     policies.value = polRes.data || []
     allRules.value = ruleRes.data || []
     crsRuleOptions.value = crsRes.data?.rules || []
+    blockPages.value = bpRes.data || []
   } catch { ElMessage.error('加载数据失败') } finally { loading.value = false }
 }
 
@@ -231,7 +235,7 @@ async function openDialog(row?: PolicySummary) {
     try {
       const res = await request.get<APIResponse<{ policy: PolicyDetail; bindings: string[] }>>(`/security/policies/${row.id}`)
       const d = res.data.policy
-      form.value = { name: d.name, description: d.description, mode: d.mode, anomaly_threshold: d.anomaly_threshold, ip_acl_enabled: d.ip_acl_enabled, ip_acl_mode: d.ip_acl_mode || 'allow', rate_limit_enabled: d.rate_limit_enabled, rate_limit_rps: d.rate_limit_rps, rate_limit_burst: d.rate_limit_burst, block_page_type: d.block_page_type || 'default', block_page_content: d.block_page_content || '' }
+      form.value = { name: d.name, description: d.description, mode: d.mode, anomaly_threshold: d.anomaly_threshold, ip_acl_enabled: d.ip_acl_enabled, ip_acl_mode: d.ip_acl_mode || 'allow', rate_limit_enabled: d.rate_limit_enabled, rate_limit_rps: d.rate_limit_rps, rate_limit_burst: d.rate_limit_burst, block_page_id: d.block_page_id || 0 }
       ipACLList.value = JSON.parse(d.ip_acl_list || '[]')
       crsExcludedRules.value = JSON.parse(d.crs_excluded_rules || '[]')
       customRules.value = JSON.parse(d.custom_rules || '[]')
@@ -242,7 +246,7 @@ async function openDialog(row?: PolicySummary) {
 }
 
 const resetForm = () => {
-  form.value = { name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_type: 'default', block_page_content: '' }
+  form.value = { name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 0 }
   ipACLList.value = []; crsExcludedRules.value = []; customRules.value = []; boundRules.value = []; editingId.value = null
 }
 
@@ -266,6 +270,8 @@ function handleDelete(row: PolicySummary) {
   ElMessageBox.confirm(`确定删除策略"${row.name}"？`, '确认', { type: 'warning' })
     .then(async () => { await request.delete(`/security/policies/${row.id}`); ElMessage.success('已删除'); fetchData() }).catch(() => {})
 }
+
+const goBlockPages = () => { useAuthStore().setCurrentPage('security-block-pages') }
 
 onMounted(fetchData)
 </script>

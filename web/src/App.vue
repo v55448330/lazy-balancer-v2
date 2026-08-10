@@ -14,6 +14,7 @@
       <SecurityPolicies v-else-if="currentPage === 'security-policies'" />
       <SecurityRules v-else-if="currentPage === 'security-rules'" />
       <SecurityBlockPages v-else-if="currentPage === 'security-block-pages'" />
+      <SecurityOverview v-else-if="currentPage === 'security-overview'" />
       <SecurityEvents v-else-if="currentPage === 'security-events'" />
       <Settings v-else-if="currentPage === 'settings-basic' || currentPage === 'settings-cluster' || currentPage === 'settings-certificates' || currentPage === 'settings-apikeys'" />
       <CaddyConfig v-else-if="currentPage === 'caddy'" />
@@ -51,6 +52,7 @@ const Rules = createAsyncPage(() => import('@/views/Rules.vue'))
 const SecurityPolicies = createAsyncPage(() => import('@/views/security/SecurityPolicies.vue'))
 const SecurityRules = createAsyncPage(() => import('@/views/security/SecurityRules.vue'))
 const SecurityBlockPages = createAsyncPage(() => import('@/views/security/SecurityBlockPages.vue'))
+const SecurityOverview = createAsyncPage(() => import('@/views/security/SecurityOverview.vue'))
 const SecurityEvents = createAsyncPage(() => import('@/views/security/SecurityEvents.vue'))
 const Settings = createAsyncPage(() => import('@/views/Settings.vue'))
 const CaddyConfig = createAsyncPage(() => import('@/views/CaddyConfig.vue'))

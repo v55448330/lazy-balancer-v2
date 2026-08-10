@@ -21,8 +21,7 @@
         </template>
         <el-table-column prop="name" label="页面名称" min-width="150">
           <template #default="{ row }">
-            <el-link v-if="!row.is_default" type="primary" @click="openDialog(row)">{{ row.name }}</el-link>
-            <el-link v-else type="info" @click="previewPage(row)">{{ row.name }} (默认)</el-link>
+            <el-link :type="row.is_default ? 'info' : 'primary'" @click="openDialog(row)">{{ row.name }}{{ row.is_default ? ' (默认)' : '' }}</el-link>
           </template>
         </el-table-column>
         <el-table-column prop="description" label="描述" min-width="250" show-overflow-tooltip />
@@ -35,14 +34,14 @@
         <el-table-column v-if="!isReadOnly" label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button size="small" link type="primary" @click="previewPage(row)">预览</el-button>
-            <el-button v-if="!row.is_default" size="small" link type="primary" @click="openDialog(row)">编辑</el-button>
+            <el-button size="small" link :type="row.is_default ? 'info' : 'primary'" @click="openDialog(row)">编辑</el-button>
             <el-button v-if="!row.is_default" size="small" link type="danger" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑拦截页面' : '新建拦截页面'" width="800px">
+    <el-dialog v-model="dialogVisible" :title="editingId ? (currentPage?.is_default ? '编辑默认拦截页面' : '编辑拦截页面') : '新建拦截页面'" width="860px" top="5vh">
       <el-form :model="form" label-width="80px" label-position="right">
         <el-form-item label="名称" required>
           <el-input v-model="form.name" placeholder="页面名称" />
@@ -51,8 +50,12 @@
           <el-input v-model="form.description" placeholder="页面描述" />
         </el-form-item>
         <el-form-item label="内容">
-          <el-input v-model="form.content" type="textarea" :rows="12" placeholder="HTML 内容，支持 CSS 样式" style="font-family: monospace; font-size: 13px" />
-          <div class="text-secondary">拦截时返回给客户端的 HTML 页面，支持内联 CSS 样式</div>
+          <div class="block-content-editor">
+            <el-input v-model="form.content" type="textarea" :rows="20" placeholder="HTML 内容，支持 CSS 样式" style="font-family: monospace; font-size: 13px" :readonly="currentPage?.is_default" />
+          </div>
+          <div class="text-secondary mt-1">
+            {{ currentPage?.is_default ? '默认页面内容只读，可修改名称和描述' : '拦截时返回给客户端的 HTML 页面，支持内联 CSS 样式' }}
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -87,6 +90,7 @@ const dialogVisible = ref(false)
 const previewVisible = ref(false)
 const previewContent = ref('')
 const editingId = ref<number | null>(null)
+const currentPage = ref<BlockPage | null>(null)
 
 const form = ref({ name: '', description: '', content: '' })
 
@@ -100,6 +104,7 @@ const fetchData = async () => {
 
 const openDialog = (row?: BlockPage) => {
   editingId.value = row?.id ?? null
+  currentPage.value = row ?? null
   if (row) {
     form.value = { name: row.name, description: row.description, content: row.content }
   } else {
@@ -107,7 +112,6 @@ const openDialog = (row?: BlockPage) => {
   }
   dialogVisible.value = true
 }
-
 const handleSave = async () => {
   if (!form.value.name.trim()) { ElMessage.warning('请输入页面名称'); return }
   saving.value = true

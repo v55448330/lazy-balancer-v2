@@ -19,6 +19,7 @@ type SecurityPolicy struct {
 	CRSRuleGroups    json.RawMessage `json:"crs_rule_groups"`
 	CRSExcludedRules json.RawMessage `json:"crs_excluded_rules"`
 	CustomRules      json.RawMessage `json:"custom_rules"`
+	BlockPageID      int             `json:"block_page_id"`
 	BlockPageType    string          `json:"block_page_type"`
 	BlockPageContent string          `json:"block_page_content"`
 	Enabled          bool            `json:"enabled"`
@@ -51,6 +52,7 @@ type CreateSecurityPolicyRequest struct {
 	CRSRuleGroups    string `json:"crs_rule_groups"`
 	CRSExcludedRules string `json:"crs_excluded_rules"`
 	CustomRules      string `json:"custom_rules"`
+	BlockPageID      int    `json:"block_page_id"`
 	BlockPageType    string `json:"block_page_type"`
 	BlockPageContent string `json:"block_page_content"`
 	Enabled          *bool  `json:"enabled"`
@@ -70,6 +72,7 @@ type UpdateSecurityPolicyRequest struct {
 	CRSRuleGroups    *string `json:"crs_rule_groups"`
 	CRSExcludedRules *string `json:"crs_excluded_rules"`
 	CustomRules      *string `json:"custom_rules"`
+	BlockPageID      *int    `json:"block_page_id"`
 	BlockPageType    *string `json:"block_page_type"`
 	BlockPageContent *string `json:"block_page_content"`
 	Enabled          *bool   `json:"enabled"`
@@ -93,10 +96,32 @@ type SecurityEvent struct {
 }
 
 type SecurityOverview struct {
-	TodayBlocked   int    `json:"today_blocked"`
-	TodayDetected  int    `json:"today_detected"`
-	ActivePolicies int    `json:"active_policies"`
-	CRSVersion     string `json:"crs_version"`
+	TodayBlocked   int                    `json:"today_blocked"`
+	TodayDetected  int                    `json:"today_detected"`
+	ActivePolicies int                    `json:"active_policies"`
+	CRSVersion     string                 `json:"crs_version"`
+	Trend          []SecurityTrendPoint   `json:"trend"`
+	TopIPs         []SecurityTopIP        `json:"top_ips"`
+	AttackTypes    []SecurityAttackType   `json:"attack_types"`
+}
+
+type SecurityTrendPoint struct {
+	Date    string `json:"date"`
+	Blocked int    `json:"blocked"`
+	Detected int   `json:"detected"`
+}
+
+type SecurityTopIP struct {
+	IP         string `json:"ip"`
+	Blocked    int    `json:"blocked"`
+	Detected   int    `json:"detected"`
+	LastTime   string `json:"last_time"`
+	AttackType string `json:"attack_type"`
+}
+
+type SecurityAttackType struct {
+	Name  string `json:"name"`
+	Value int    `json:"value"`
 }
 
 type CRSInfo struct {

@@ -47,6 +47,10 @@
             <el-icon><Document /></el-icon>
             <template #title>拦截页面</template>
           </el-menu-item>
+          <el-menu-item index="security-overview" @click="goPage('security-overview')">
+            <el-icon><DataAnalysis /></el-icon>
+            <template #title>安全总览</template>
+          </el-menu-item>
           <el-menu-item index="security-events" @click="goPage('security-events')">
             <el-icon><Warning /></el-icon>
             <template #title>事件日志</template>
