@@ -43,6 +43,10 @@
             <el-icon><Notebook /></el-icon>
             <template #title>规则集</template>
           </el-menu-item>
+          <el-menu-item index="security-block-pages" @click="goPage('security-block-pages')">
+            <el-icon><Document /></el-icon>
+            <template #title>拦截页面</template>
+          </el-menu-item>
           <el-menu-item index="security-events" @click="goPage('security-events')">
             <el-icon><Warning /></el-icon>
             <template #title>事件日志</template>

@@ -94,22 +94,30 @@
         </template>
 
         <el-divider content-position="left">限流</el-divider>
-        <el-form-item label="启用限流">
+        <el-form-item label="启用">
           <el-switch v-model="form.rate_limit_enabled" />
         </el-form-item>
         <template v-if="form.rate_limit_enabled">
           <el-form-item label="每秒请求">
-            <el-input-number v-model="form.rate_limit_rps" :min="1" />
-            <span class="ml-2 text-secondary">req/s</span>
+            <el-input-number v-model="form.rate_limit_rps" :min="1" style="width: 180px" />
+            <el-text class="ml-2 text-secondary">次/秒</el-text>
           </el-form-item>
           <el-form-item label="突发大小">
-            <el-input-number v-model="form.rate_limit_burst" :min="0" />
+            <el-input-number v-model="form.rate_limit_burst" :min="0" style="width: 180px" />
+            <el-text class="ml-2 text-secondary">次，超过突发量后按限流速率为发送返回 429</el-text>
           </el-form-item>
         </template>
 
         <el-divider content-position="left">CRS 规则排除</el-divider>
-        <el-form-item label="排除规则 ID">
-          <el-select v-model="crsExcludedRules" multiple filterable allow-create default-first-option placeholder="输入 CRS 规则 ID（如 942100）后回车" style="width: 100%" />
+        <el-form-item label="排除规则">
+          <el-select v-model="crsExcludedRules" multiple filterable placeholder="搜索并选择要排除的规则" style="width: 100%">
+            <el-option-group label="OWASP CRS 规则">
+              <el-option v-for="rule in crsRuleOptions" :key="rule.filename" :label="`${rule.filename} (${rule.category})`" :value="rule.filename" />
+            </el-option-group>
+            <el-option-group label="自定义规则" v-if="customRuleOptions.length > 0">
+              <el-option v-for="rule in customRuleOptions" :key="rule.name" :label="rule.name" :value="rule.name" />
+            </el-option-group>
+          </el-select>
           <div class="text-secondary">排除的规则不会被检测或拦截</div>
         </el-form-item>
 
@@ -183,10 +191,13 @@ interface APIResponse<T> { code: number; message: string; data: T }
 interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean }
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_blacklist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_type: string; block_page_content: string; enabled: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number }
+interface CRSRuleOption { filename: string; category: string }
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.user?.role !== 'admin')
 
+const crsRuleOptions = ref<CRSRuleOption[]>([])
+const customRuleOptions = ref<Array<{ name: string }>>([])
 const loading = ref(false)
 const saving = ref(false)
 const policies = ref<PolicySummary[]>([])
@@ -203,16 +214,18 @@ const customRules = ref<Array<{ name: string; enabled: boolean; target: string; 
 const fetchData = async () => {
   loading.value = true
   try {
-    const [polRes, ruleRes] = await Promise.all([
+    const [polRes, ruleRes, crsRes] = await Promise.all([
       request.get<APIResponse<PolicySummary[]>>('/security/policies'),
       request.get<APIResponse<Rule[]>>('/rules'),
+      request.get<APIResponse<{ rules: CRSRuleOption[] }>>('/security/crs/rules?page_size=100'),
     ])
     policies.value = polRes.data || []
     allRules.value = ruleRes.data || []
+    crsRuleOptions.value = crsRes.data?.rules || []
   } catch { ElMessage.error('加载数据失败') } finally { loading.value = false }
 }
 
-const openDialog = async (row?: PolicySummary) => {
+async function openDialog(row?: PolicySummary) {
   editingId.value = row?.id ?? null
   if (row) {
     try {
@@ -249,7 +262,7 @@ const handleSave = async () => {
   } catch { ElMessage.error('保存失败') } finally { saving.value = false }
 }
 
-const handleDelete = (row: PolicySummary) => {
+function handleDelete(row: PolicySummary) {
   ElMessageBox.confirm(`确定删除策略"${row.name}"？`, '确认', { type: 'warning' })
     .then(async () => { await request.delete(`/security/policies/${row.id}`); ElMessage.success('已删除'); fetchData() }).catch(() => {})
 }

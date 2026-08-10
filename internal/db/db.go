@@ -423,6 +423,29 @@ func createTables() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_revoked_jti_expires_at ON revoked_jti(expires_at);
 
+	CREATE TABLE IF NOT EXISTS security_custom_rules (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL,
+		description TEXT DEFAULT '',
+		conditions TEXT DEFAULT '[]',
+		action TEXT DEFAULT 'block',
+		score INTEGER DEFAULT 5,
+		status_code INTEGER DEFAULT 403,
+		enabled BOOLEAN DEFAULT TRUE,
+		created_at DATETIME DEFAULT (datetime('now')),
+		updated_at DATETIME DEFAULT (datetime('now'))
+	);
+
+	CREATE TABLE IF NOT EXISTS security_block_pages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL,
+		description TEXT DEFAULT '',
+		content TEXT DEFAULT '',
+		is_default BOOLEAN DEFAULT FALSE,
+		created_at DATETIME DEFAULT (datetime('now')),
+		updated_at DATETIME DEFAULT (datetime('now'))
+	);
+
 	CREATE TABLE IF NOT EXISTS security_policies (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL,

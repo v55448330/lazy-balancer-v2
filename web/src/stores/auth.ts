@@ -9,6 +9,7 @@ const pages = [
   'rules',
   'security-policies',
   'security-rules',
+  'security-block-pages',
   'security-events',
   'caddy',
   'users',

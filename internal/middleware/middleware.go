@@ -221,6 +221,12 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/security/policies/:id/bind", h.BindRuleToPolicy)
 				admin.DELETE("/security/policies/:id/bind/:caddy_id", h.UnbindRuleFromPolicy)
 				admin.PUT("/security/crs/auto-update", h.UpdateCRSAutoUpdate)
+				admin.POST("/security/custom-rules", h.CreateSecurityCustomRule)
+				admin.PUT("/security/custom-rules/:id", h.UpdateSecurityCustomRule)
+				admin.DELETE("/security/custom-rules/:id", h.DeleteSecurityCustomRule)
+				admin.POST("/security/block-pages", h.CreateSecurityBlockPage)
+				admin.PUT("/security/block-pages/:id", h.UpdateSecurityBlockPage)
+				admin.DELETE("/security/block-pages/:id", h.DeleteSecurityBlockPage)
 
 			}
 
@@ -280,6 +286,8 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/security/crs", h.GetCRSInfo)
 				business.GET("/security/rules/:caddy_id/policy", h.GetSecurityPolicyBindings)
 				business.GET("/security/bindings", h.GetAllSecurityBindings)
+				business.GET("/security/custom-rules", h.ListSecurityCustomRules)
+				business.GET("/security/block-pages", h.ListSecurityBlockPages)
 				business.GET("/security/crs/rules", h.ListCRSRules)
 				business.GET("/security/crs/rules/:filename", h.GetCRSRuleContent)
 				business.GET("/security/crs/setup", h.GetCRSSetupConfig)

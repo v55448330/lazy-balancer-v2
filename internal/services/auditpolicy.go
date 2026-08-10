@@ -78,7 +78,13 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"DELETE /api/v1/security/policies/:id":                AuditPolicyExplicit,
 	"POST /api/v1/security/policies/:id/bind":             AuditPolicyExplicit,
 	"DELETE /api/v1/security/policies/:id/bind/:caddy_id": AuditPolicyExplicit,
-	"PUT /api/v1/security/crs/auto-update":                AuditPolicyGeneric,
+	"PUT /api/v1/security/crs/auto-update":        AuditPolicyGeneric,
+	"POST /api/v1/security/custom-rules":          AuditPolicyExplicit,
+	"PUT /api/v1/security/custom-rules/:id":       AuditPolicyExplicit,
+	"DELETE /api/v1/security/custom-rules/:id":    AuditPolicyExplicit,
+	"POST /api/v1/security/block-pages":           AuditPolicyExplicit,
+	"PUT /api/v1/security/block-pages/:id":        AuditPolicyExplicit,
+	"DELETE /api/v1/security/block-pages/:id":     AuditPolicyExplicit,
 }
 
 var readOnlyWriteRoutes = map[string]struct{}{

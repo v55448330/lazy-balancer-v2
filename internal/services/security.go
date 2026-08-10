@@ -95,11 +95,6 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 		if !cr.Enabled {
 			continue
 		}
-		target := targetMap[cr.Target]
-		op := opMap[cr.Operator]
-		if target == "" || op == "" {
-			continue
-		}
 		action := "pass,log"
 		if cr.Action == "block" {
 			status := cr.StatusCode
@@ -108,7 +103,28 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 			}
 			action = fmt.Sprintf("deny,log,status:%d", status)
 		}
-		sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,%s\"\n", target, op, cr.Pattern, cr.ID+10000, action))
+		if len(cr.Conditions) > 0 {
+			chain := "chain"
+			for idx, cond := range cr.Conditions {
+				target := targetMap[cond.Target]
+				op := opMap[cond.Operator]
+				if target == "" || op == "" {
+					continue
+				}
+				chainAction := action
+				if idx < len(cr.Conditions)-1 {
+					chainAction = fmt.Sprintf("%s,chain", chain)
+				}
+				sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d%s%s\"\n", target, op, cond.Pattern, cr.ID+10000, chainAction, ""))
+			}
+		} else {
+			target := targetMap[cr.Target]
+			op := opMap[cr.Operator]
+			if target == "" || op == "" {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,%s\"\n", target, op, cr.Pattern, cr.ID+10000, action))
+		}
 	}
 
 	return sb.String()

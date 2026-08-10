@@ -18,6 +18,160 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
+	rows, err := db.DB.Query("SELECT id, name, description, conditions, action, score, status_code, enabled, created_at, updated_at FROM security_custom_rules ORDER BY id")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	defer rows.Close()
+	var rules []models.SecurityCustomRule
+	for rows.Next() {
+		var r models.SecurityCustomRule
+		var conditionsJSON string
+		rows.Scan(&r.ID, &r.Name, &r.Description, &conditionsJSON, &r.Action, &r.Score, &r.StatusCode, &r.Enabled, &r.CreatedAt, &r.UpdatedAt)
+		json.Unmarshal([]byte(conditionsJSON), &r.Conditions)
+		rules = append(rules, r)
+	}
+	if rules == nil {
+		rules = []models.SecurityCustomRule{}
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: rules})
+}
+
+func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
+	var req models.SecurityCustomRule
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	conditionsJSON, _ := json.Marshal(req.Conditions)
+	result, err := db.DB.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, status_code, enabled) VALUES (?,?,?,?,?,?,?)`,
+		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.StatusCode, req.Enabled)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	id, _ := result.LastInsertId()
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则创建成功", Data: gin.H{"id": id}})
+}
+
+func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
+	id := c.Param("id")
+	var req models.SecurityCustomRule
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	conditionsJSON, _ := json.Marshal(req.Conditions)
+	result, err := db.DB.Exec(`UPDATE security_custom_rules SET name=?, description=?, conditions=?, action=?, score=?, status_code=?, enabled=?, updated_at=datetime('now') WHERE id=?`,
+		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.StatusCode, req.Enabled, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新"})
+}
+
+func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
+	id := c.Param("id")
+	result, err := db.DB.Exec("DELETE FROM security_custom_rules WHERE id=?", id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已删除"})
+}
+
+func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
+	rows, err := db.DB.Query("SELECT id, name, description, content, is_default, created_at, updated_at FROM security_block_pages ORDER BY is_default DESC, id")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	defer rows.Close()
+	var pages []models.SecurityBlockPage
+	for rows.Next() {
+		var p models.SecurityBlockPage
+		rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.IsDefault, &p.CreatedAt, &p.UpdatedAt)
+		pages = append(pages, p)
+	}
+	if pages == nil {
+		pages = []models.SecurityBlockPage{}
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: pages})
+}
+
+func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
+	var req models.SecurityBlockPage
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	result, err := db.DB.Exec(`INSERT INTO security_block_pages (name, description, content, is_default) VALUES (?,?,?,?)`,
+		req.Name, req.Description, req.Content, req.IsDefault)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	id, _ := result.LastInsertId()
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面创建成功", Data: gin.H{"id": id}})
+}
+
+func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
+	id := c.Param("id")
+	var req models.SecurityBlockPage
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	var isDefault bool
+	db.DB.QueryRow("SELECT is_default FROM security_block_pages WHERE id=?", id).Scan(&isDefault)
+	if isDefault {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "默认拦截页面不可编辑"})
+		return
+	}
+	result, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, updated_at=datetime('now') WHERE id=?`,
+		req.Name, req.Description, req.Content, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面已更新"})
+}
+
+func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
+	id := c.Param("id")
+	var isDefault bool
+	db.DB.QueryRow("SELECT is_default FROM security_block_pages WHERE id=?", id).Scan(&isDefault)
+	if isDefault {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "默认拦截页面不可删除"})
+		return
+	}
+	result, err := db.DB.Exec("DELETE FROM security_block_pages WHERE id=?", id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面已删除"})
+}
+
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	rows, err := db.DB.Query(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
 		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_type, block_page_content, enabled, created_at, updated_at
