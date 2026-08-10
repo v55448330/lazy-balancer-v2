@@ -442,7 +442,9 @@ func createTables() error {
 		description TEXT DEFAULT '',
 		content TEXT DEFAULT '',
 		is_default BOOLEAN DEFAULT FALSE,
+		created_by INTEGER DEFAULT 0,
 		created_at DATETIME DEFAULT (datetime('now')),
+		updated_by INTEGER DEFAULT 0,
 		updated_at DATETIME DEFAULT (datetime('now'))
 	);
 
@@ -686,6 +688,8 @@ func runMigrations() error {
 		"security_policies.ip_acl_list":               "TEXT DEFAULT '[]'",
 		"security_policies.ip_acl_enabled":            "BOOLEAN DEFAULT FALSE",
 		"security_policies.block_page_id":             "INTEGER DEFAULT 0",
+		"security_block_pages.created_by":             "INTEGER DEFAULT 0",
+		"security_block_pages.updated_by":             "INTEGER DEFAULT 0",
 	}
 	for col, dtype := range newColumns {
 		parts := strings.Split(col, ".")

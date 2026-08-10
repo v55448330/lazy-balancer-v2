@@ -24,18 +24,20 @@
             <el-link type="primary" @click="previewPage(row)">{{ row.name }}</el-link>
           </template>
         </el-table-column>
-        <el-table-column prop="description" label="描述" min-width="280" show-overflow-tooltip />
+        <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="updated_at" label="更新时间" width="160" align="center" />
+        <el-table-column prop="updated_by" label="更新者" width="80" align="center" />
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button size="small" link type="primary" @click="previewPage(row)">预览</el-button>
-            <el-button size="small" link type="primary" @click="openDialog(row)">查看</el-button>
+            <el-button size="small" link :type="row.is_default ? 'info' : 'primary'" @click="openDialog(row)">{{ row.is_default ? '查看' : '编辑' }}</el-button>
             <el-button size="small" link type="danger" :disabled="row.is_default" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? (currentPage?.is_default ? '查看默认拦截页面' : '编辑拦截页面') : '新建拦截页面'" width="860px" top="5vh">
+    <el-dialog v-model="dialogVisible" :title="editingId ? (currentPage?.is_default ? '查看默认拦截页面' : '编辑拦截页面') : '新建拦截页面'" width="900px" top="3vh">
       <el-form :model="form" label-width="80px" label-position="right">
         <el-form-item label="名称" required>
           <el-input v-model="form.name" placeholder="页面名称" :readonly="currentPage?.is_default" />
@@ -72,7 +74,7 @@ import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 
 interface APIResponse<T> { code: number; message: string; data: T }
-interface BlockPage { id: number; name: string; description: string; content: string; is_default: boolean }
+interface BlockPage { id: number; name: string; description: string; content: string; is_default: boolean; created_at: string; updated_at: string; updated_by: number }
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.user?.role !== 'admin')
@@ -137,5 +139,6 @@ onMounted(fetchData)
 <style scoped>
 .block-content-editor { border: 1px solid #e4e7ed; border-radius: 6px; overflow: hidden; }
 .vjs-textarea { border-radius: 6px; }
+.vjs-textarea :deep(.el-textarea__inner) { background: #1e293b; color: #e4e4e7; border: none; }
 .form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
 </style>
