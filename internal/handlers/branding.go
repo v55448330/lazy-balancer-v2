@@ -75,7 +75,7 @@ func (h *Handlers) GetDefaultBlockPage(c *gin.Context) {
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f9fafb; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-.card { background: #fff; border-radius: 12px; padding: 48px 40px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,.08); max-width: 480px; width: 90%%; }
+.card { background: #fff; border-radius: 12px; padding: 48px 40px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,.08); max-width: 640px; width: 95%%; }
 .icon { font-size: 48px; margin-bottom: 16px; }
 h1 { font-size: 24px; color: #1f2937; margin-bottom: 12px; }
 p { font-size: 14px; color: #6b7280; line-height: 1.6; margin-bottom: 8px; }

@@ -31,7 +31,7 @@
 
     <el-card>
       <el-tabs v-model="activeTab">
-        <el-tab-pane label="CRS 规则浏览" name="rules">
+        <el-tab-pane label="CRS 规则" name="rules">
           <div class="table-toolbar">
             <el-input v-model="searchQuery" placeholder="搜索规则文件名或分类" clearable :prefix-icon="Search" class="search-input" @clear="fetchRules" @keyup.enter="fetchRules" />
           </div>
@@ -50,7 +50,7 @@
           </el-table>
           <div class="flex justify-center mt-4">
           <div class="rules-pagination">
-            <el-pagination v-model:current-page="page" :page-size="pageSize" :total="total" layout="total, sizes, prev, pager, next" @current-change="fetchRules" />
+            <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10, 20, 50, 100]" :total="total" layout="total, sizes, prev, pager, next" @current-change="fetchRules" @size-change="fetchRules" />
           </div>
           </div>
         </el-tab-pane>
@@ -198,7 +198,7 @@ const loadingRules = ref(false)
 const rules = ref<CRSRuleFile[]>([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = 50
+const pageSize = ref(50)
 const searchQuery = ref('')
 const loadingSetup = ref(false)
 const setupContent = ref('')
@@ -224,7 +224,7 @@ const isValidRegex = (pattern: string): boolean => {
 const fetchCRS = async () => { try { const res = await request.get<APIResponse<typeof crsInfo.value>>('/security/crs'); if (res.data) crsInfo.value = res.data } catch {} }
 const fetchRules = async () => {
   loadingRules.value = true
-  try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize) }); if (searchQuery.value) p.set('search', searchQuery.value); const res = await request.get<APIResponse<{ rules: CRSRuleFile[]; total: number }>>(`/security/crs/rules?${p}`); rules.value = res.data?.rules || []; total.value = res.data?.total || 0 } catch { rules.value = [] } finally { loadingRules.value = false }
+  try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (searchQuery.value) p.set('search', searchQuery.value); const res = await request.get<APIResponse<{ rules: CRSRuleFile[]; total: number }>>(`/security/crs/rules?${p}`); rules.value = res.data?.rules || []; total.value = res.data?.total || 0 } catch { rules.value = [] } finally { loadingRules.value = false }
 }
 const fetchSetup = async () => { loadingSetup.value = true; try { const res = await request.get<APIResponse<{ content: string }>>('/security/crs/setup'); setupContent.value = res.data?.content || '# 文件不存在' } catch { setupContent.value = '# 加载失败' } finally { loadingSetup.value = false } }
 const fetchCustomRules = async () => { loadingCustom.value = true; try { const res = await request.get<APIResponse<CustomRule[]>>('/security/custom-rules'); customRules.value = res.data || [] } catch { customRules.value = [] } finally { loadingCustom.value = false } }
