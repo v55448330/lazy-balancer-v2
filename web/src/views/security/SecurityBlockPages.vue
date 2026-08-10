@@ -21,46 +21,40 @@
         </template>
         <el-table-column prop="name" label="页面名称" min-width="180">
           <template #default="{ row }">
-            <el-link :type="row.is_default ? 'info' : 'primary'" @click="previewPage(row)">{{ row.name }}{{ row.is_default ? ' (默认)' : '' }}</el-link>
+            <el-link type="primary" @click="previewPage(row)">{{ row.name }}</el-link>
           </template>
         </el-table-column>
         <el-table-column prop="description" label="描述" min-width="280" show-overflow-tooltip />
-        <el-table-column label="默认" width="90" align="center">
-          <template #default="{ row }">
-            <el-tag v-if="row.is_default" type="success" size="small" effect="light">默认</el-tag>
-            <span v-else class="text-secondary">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column v-if="!isReadOnly" label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button size="small" link type="primary" @click="previewPage(row)">预览</el-button>
-            <el-button size="small" link :type="row.is_default ? 'info' : 'primary'" @click="openDialog(row)">编辑</el-button>
-            <el-button v-if="!row.is_default" size="small" link type="danger" @click="handleDelete(row)">删除</el-button>
+            <el-button size="small" link type="primary" @click="openDialog(row)">查看</el-button>
+            <el-button size="small" link type="danger" :disabled="row.is_default" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? (currentPage?.is_default ? '编辑默认拦截页面' : '编辑拦截页面') : '新建拦截页面'" width="860px" top="5vh">
+    <el-dialog v-model="dialogVisible" :title="editingId ? (currentPage?.is_default ? '查看默认拦截页面' : '编辑拦截页面') : '新建拦截页面'" width="860px" top="5vh">
       <el-form :model="form" label-width="80px" label-position="right">
         <el-form-item label="名称" required>
-          <el-input v-model="form.name" placeholder="页面名称" />
+          <el-input v-model="form.name" placeholder="页面名称" :readonly="currentPage?.is_default" />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="form.description" placeholder="页面描述" />
+          <el-input v-model="form.description" placeholder="页面描述" :readonly="currentPage?.is_default" />
         </el-form-item>
         <el-form-item label="内容">
           <div class="block-content-editor">
             <el-input v-model="form.content" type="textarea" :rows="25" placeholder="HTML 内容，支持 CSS 样式" class="vjs-textarea" style="font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #e4e4e7; background: #1e293b; width: 100%" :readonly="currentPage?.is_default" />
           </div>
-          <div class="text-secondary mt-1">
-            {{ currentPage?.is_default ? '默认页面内容只读，可修改名称和描述' : '拦截时返回给客户端的 HTML 页面，支持内联 CSS 样式' }}
+          <div class="form-tip-inline mt-1">
+            {{ currentPage?.is_default ? '默认页面内容只读，仅可查看' : '拦截时返回给客户端的 HTML 页面，支持内联 CSS 样式' }}
           </div>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
+        <el-button v-if="!currentPage?.is_default" type="primary" :loading="saving" @click="handleSave">保存</el-button>
       </template>
     </el-dialog>
 
@@ -143,4 +137,5 @@ onMounted(fetchData)
 <style scoped>
 .block-content-editor { border: 1px solid #e4e7ed; border-radius: 6px; overflow: hidden; }
 .vjs-textarea { border-radius: 6px; }
+.form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
 </style>

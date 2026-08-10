@@ -266,7 +266,7 @@ onMounted(() => { fetchCRS(); fetchRules(); fetchSetup(); fetchCustomRules() })
 </script>
 
 <style scoped>
-.crs-content { max-height: 70vh; overflow: auto; padding: 16px; border-radius: 6px; font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
+.crs-content { max-height: 70vh; overflow: auto; padding: 16px; border-radius: 6px; font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; background: #1e293b; color: #e4e4e7; }
 .vjs-content { background: #1e293b; color: #e4e4e7; }
 .vjs-textarea { border-radius: 6px; }
 .rule-condition-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; flex-wrap: wrap; }

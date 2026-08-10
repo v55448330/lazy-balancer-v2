@@ -447,7 +447,9 @@ func createTables() error {
 	);
 
 	INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, created_at, updated_at)
-		VALUES (1, '默认拦截页面', '系统默认 403 拦截页面', '<h1 style="color:#f56c6c;font-family:sans-serif;text-align:center;padding:40px 20px">Access Denied</h1><p style="color:#909399;font-family:sans-serif;text-align:center;padding:0 20px">Your request has been blocked by the security policy.</p>', TRUE, datetime('now'), datetime('now'));
+		VALUES (1, '默认拦截页面', '系统默认 403 拦截页面',
+			'<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access Denied</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f9fafb;display:flex;align-items:center;justify-content:center;min-height:100vh}.card{background:#fff;border-radius:12px;padding:48px 40px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.08);max-width:480px;width:90%}.icon{font-size:48px;margin-bottom:16px}h1{font-size:24px;color:#1f2937;margin-bottom:12px}p{font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:8px}.footer{margin-top:24px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af}.footer .name{font-weight:600;color:#4b5563}</style></head><body><div class="card"><div class="icon">🚫</div><h1>Access Denied</h1><p>Your request has been blocked by the security policy.</p><p>If you believe this is an error, please contact the administrator.</p><div class="footer">Powered by <span class="name">Lazy Balancer</span></div></div></body></html>',
+			TRUE, datetime('now'), datetime('now'));
 
 	CREATE TABLE IF NOT EXISTS security_policies (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
