@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
-	"net/http"
 	"strings"
 
 	"lazy-balancer-v2/internal/db"
@@ -27,8 +25,6 @@ type ruleFeatureInput struct {
 	HealthCheckTimeout         int
 	EnableCompress             bool
 	CompressTypes              string
-	IPACLMode                  string
-	IPACLList                  []string
 	CustomRoutesEnabled        bool
 	PathRules                  []models.PathRule
 	ProxyDialTimeout           int
@@ -60,8 +56,6 @@ func createRuleFeatures(req models.CreateRuleRequest) ruleFeatureInput {
 		HealthCheckTimeout:         req.HealthCheckTimeout,
 		EnableCompress:             req.EnableCompress,
 		CompressTypes:              req.CompressTypes,
-		IPACLMode:                  req.IPACLMode,
-		IPACLList:                  req.IPACLList,
 		CustomRoutesEnabled:        req.CustomRoutesEnabled,
 		PathRules:                  normalizePathRules(req.PathRules),
 		ProxyDialTimeout:           req.ProxyDialTimeout,
@@ -100,8 +94,6 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 		HealthCheckTimeout:         req.HealthCheckTimeout,
 		EnableCompress:             existing.EnableCompress,
 		CompressTypes:              req.CompressTypes,
-		IPACLMode:                  existing.IPACLMode,
-		IPACLList:                  existing.IPACLList,
 		CustomRoutesEnabled:        existing.CustomRoutesEnabled,
 		PathRules:                  existing.PathRules,
 		ProxyDialTimeout:           existing.ProxyDialTimeout,
@@ -117,12 +109,6 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 	}
 	if req.EnableCompress != nil {
 		input.EnableCompress = *req.EnableCompress
-	}
-	if req.IPACLMode != nil {
-		input.IPACLMode = *req.IPACLMode
-	}
-	if req.IPACLList != nil {
-		input.IPACLList = *req.IPACLList
 	}
 	if req.CustomRoutesEnabled != nil {
 		input.CustomRoutesEnabled = *req.CustomRoutesEnabled
@@ -192,17 +178,6 @@ func toPathRuleConfigs(pathRules []models.PathRule) []services.PathRuleConfig {
 	return configs
 }
 
-func encodeIPACLList(ipACLList []string) (string, error) {
-	if ipACLList == nil {
-		ipACLList = []string{}
-	}
-	encoded, err := json.Marshal(ipACLList)
-	if err != nil {
-		return "", fmt.Errorf("序列化 IP 访问控制列表: %w", err)
-	}
-	return string(encoded), nil
-}
-
 func decodeIPACLList(encoded string) ([]string, error) {
 	ipACLList := make([]string, 0)
 	if err := json.Unmarshal([]byte(encoded), &ipACLList); err != nil {
@@ -242,22 +217,6 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 	// Round 37 I-8: dynamic_dns + 多 upstream 前置校验（原仅在 Caddy 渲染阶段检查，规则已入库）。
 	if input.DynamicDNS && input.EnabledUpstreamCount > 1 {
 		return fmt.Errorf("动态上游模式仅允许一个启用的上游服务器，当前有 %d 个", input.EnabledUpstreamCount)
-	}
-	switch input.IPACLMode {
-	case "", "allow", "deny":
-	default:
-		return fmt.Errorf("IP 访问控制模式只能为空、allow 或 deny")
-	}
-	if input.IPACLMode != "" && len(input.IPACLList) == 0 {
-		return fmt.Errorf("白名单/黑名单模式需要至少一条 CIDR")
-	}
-	if input.IPACLMode == "" && len(input.IPACLList) > 0 {
-		return fmt.Errorf("IP 访问控制模式为空时列表必须为空")
-	}
-	for _, cidr := range input.IPACLList {
-		if _, _, err := net.ParseCIDR(cidr); err != nil {
-			return fmt.Errorf("IP 访问控制列表中的 %q 不是有效 CIDR", cidr)
-		}
 	}
 	if input.Protocol == "tcp" {
 		if input.CustomRoutesEnabled || len(input.PathRules) > 0 {
@@ -371,91 +330,6 @@ func insertRowFromMapTx(ctx context.Context, tx *sql.Tx, table string, row map[s
 	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", table, strings.Join(columns, ","), strings.Join(placeholders, ","))
 	_, err := tx.ExecContext(ctx, query, args...)
 	return err
-}
-
-func (h *Handlers) UpdateRuleACL(c *gin.Context) {
-	caddyID := c.Param("caddy_id")
-
-	var req struct {
-		IPACLMode string   `json:"ip_acl_mode"`
-		IPACLList []string `json:"ip_acl_list"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误: " + err.Error()})
-		return
-	}
-
-	// 与 UpdateRule 同一锁序：读旧值→写入→应用全程持锁，避免被全量更新覆盖丢失
-	h.caddyOpMu.Lock()
-	defer h.caddyOpMu.Unlock()
-
-	var protocol string
-	if err := db.DB.QueryRow("SELECT protocol FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol); dbQueryNotFound(c, err, "规则不存在", "UpdateRuleACL query rule") {
-		return
-	}
-	input := ruleFeatureInput{Protocol: protocol, IPACLMode: req.IPACLMode, IPACLList: req.IPACLList}
-	if err := validateRuleFeatures(input); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-		return
-	}
-	if err := validateStoredRuleConfig(c.Request.Context(), caddyID); err != nil {
-		var validationErr *configValidationError
-		if errors.As(err, &validationErr) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: validationErr.Error()})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "预校验规则配置失败: " + err.Error()})
-		return
-	}
-	newListJSON, err := encodeIPACLList(input.IPACLList)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-		return
-	}
-
-	runtimeSnapshot, err := h.snapshotImportRuntime([]string{caddyID})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
-		return
-	}
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
-		return
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				log.Printf("UpdateRuleACL transaction rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
-			}
-		}
-	}()
-	userIDInt := contextUserID(c)
-	if _, err := tx.Exec("UPDATE lb_rules SET ip_acl_mode = ?, ip_acl_list = ?, updated_at = datetime('now'), updated_by = ? WHERE caddy_id = ?", input.IPACLMode, newListJSON, userIDInt, caddyID); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新访问控制失败"})
-		return
-	}
-	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
-		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		var validationErr *configValidationError
-		if errors.As(err, &validationErr) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置验证失败: " + errors.Join(validationErr, restoreErr).Error()})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("Caddy 配置应用失败，数据库未写入: %v", errors.Join(err, restoreErr))})
-		return
-	}
-	if err := tx.Commit(); err != nil {
-		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("提交访问控制失败: %v", errors.Join(err, restoreErr))})
-		return
-	}
-	committed = true
-
-	aclModeText := map[string]string{"allow": "白名单", "deny": "黑名单", "": "已关闭"}[input.IPACLMode]
-	recordAudit(c, "更新", "访问控制", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("模式：%s", aclModeText), fmt.Sprintf("CIDR 数：%d", len(input.IPACLList))))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "访问控制已保存"})
 }
 
 func restoreRuleSnapshot(ctx context.Context, caddyID string, ruleRow map[string]any, upstreamRows []map[string]any, pathRules []models.PathRule) error {

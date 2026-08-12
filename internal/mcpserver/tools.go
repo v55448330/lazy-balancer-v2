@@ -38,14 +38,13 @@ func ListToolSpecs() []ToolSpec {
 
 var toolUsage = map[string]string{
 	"list_rules":            "先了解当前规则全貌（域名/端口/上游/启用状态），所有变更前的现状盘点入口",
-	"get_rule":              "在修改某条规则前获取其完整配置（上游/证书/ACL/路径路由/超时）",
+	"get_rule":              "在修改某条规则前获取其完整配置（上游/证书/路径路由/超时）",
 	"create_rule":           "新建 HTTP/TCP 代理规则。必填 name/protocol/listen_port/upstreams[{host,port}]；创建即重载生效，失败自动回滚",
 	"update_rule":           "修改现有规则的任意字段（部分更新）。协议切换会自动迁移上游协议并清理对侧字段",
 	"delete_rule":           "删除规则并清理关联上游/证书任务/证书文件。不可恢复，先 get_rule 确认",
 	"enable_rule":           "恢复被禁用规则的流量；ACME 规则会按需恢复/重排证书任务",
 	"disable_rule":          "临时下线规则但保留配置与证书；进行中的签发任务会暂停",
 	"duplicate_rule":        "以现有规则为模板快速克隆（新副本默认禁用，需再 enable）",
-	"update_rule_acl":       "配置规则级 IP 白/黑名单（CIDR 列表，mode=allow 或 deny）",
 	"list_cert_jobs":        "查看 ACME 签发/续签任务进度与失败原因，可按 rule_id 过滤",
 	"retry_cert_job":        "手动重试失败的签发任务（自动冷却期外的任务）",
 	"delete_cert_job":       "删除证书任务记录（已签发证书文件不受影响）",

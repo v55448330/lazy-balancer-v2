@@ -1,34 +1,18 @@
 <template>
-  <pre class="prism-code" :class="`language-${language}`" v-html="highlighted"></pre>
+  <pre class="prism-code" :class="`language-${language}`" :style="height ? { height, maxHeight: 'none' } : undefined" v-html="highlighted"></pre>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import Prism from 'prismjs'
-import 'prismjs/themes/prism-okaidia.css'
-import 'prismjs/components/prism-markup'
-import 'prismjs/components/prism-css'
-import 'prismjs/components/prism-clike'
-import 'prismjs/components/prism-apacheconf'
-import 'prismjs/components/prism-nginx'
-import 'prismjs/components/prism-http'
-import 'prismjs/components/prism-ini'
+import { highlightCode } from '@/utils/highlight'
 
 const props = defineProps<{
   readonly content: string
   readonly language: string
+  readonly height?: string
 }>()
 
-const highlighted = computed(() => {
-  if (!props.content) return ''
-  const lang = props.language || 'markup'
-  const grammar = Prism.languages[lang] || Prism.languages.markup
-  try {
-    return Prism.highlight(props.content, grammar, lang)
-  } catch {
-    return props.content
-  }
-})
+const highlighted = computed(() => highlightCode(props.content, props.language))
 </script>
 
 <style scoped>

@@ -71,22 +71,26 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if err := s.materializeSnapshotDNSOwnership(snapshot.ACME); err != nil {
 		return errors.Join(fmt.Errorf("写入同步 DNS 所有权状态: %w", err), s.restoreSnapshotArtifacts(previous, snapshot))
 	}
-	if err := s.caddy.ApplyConfig(generateCaddyConfigFromStore(tx)); err != nil {
-		return errors.Join(fmt.Errorf("重载 Caddy 失败，数据库已回滚: %w", err), s.restoreSnapshotArtifacts(previous, snapshot))
-	}
 	if _, err := tx.ExecContext(ctx, `UPDATE global_config SET applied_version=?, cluster_version=?, sync_fingerprint=?, last_sync=datetime('now'), last_sync_error='' WHERE id=1`, snapshot.Version, snapshot.Version, snapshot.Fingerprint); err != nil {
 		return errors.Join(
 			fmt.Errorf("记录同步状态: %w", err),
 			s.restoreSnapshotArtifacts(previous, snapshot),
-			wrapSnapshotRestoreError(s.caddy.ApplyConfig(GenerateCaddyConfig())),
 		)
 	}
 	if err := tx.Commit(); err != nil {
 		return errors.Join(
 			fmt.Errorf("提交快照事务: %w", err),
 			s.restoreSnapshotArtifacts(previous, snapshot),
-			wrapSnapshotRestoreError(s.caddy.ApplyConfig(GenerateCaddyConfig())),
 		)
+	}
+	// Caddy 重载必须在事务提交之后：buildWafHandler 等安全配置读取走 db.DB，
+	// 提交前的事务内生成看不到本次写入的 security_* 表。重载失败仅记录，
+	// 不回滚已提交的快照。
+	if err := s.caddy.ApplyConfig(GenerateCaddyConfig()); err != nil {
+		Logf("error", "集群同步后重载 Caddy 失败（快照已提交）: %v", err)
+		RecordAuditLog("system", "重载失败", "Caddy配置", fmt.Sprintf("同步应用后自动重载失败: %v", err), "")
+	} else {
+		RecordAuditLog("system", "重载", "Caddy配置", "同步应用后自动重载", "")
 	}
 	clusterSnapshotCaches.Delete(s.db)
 	caddySync := "未开启"
@@ -99,7 +103,6 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		requestRestart()
 	}
 	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs)), "基本设置：已同步", fmt.Sprintf("Caddy 全局配置：%s", caddySync)), "")
-	RecordAuditLog("system", "重载", "Caddy配置", "同步应用后自动重载", "")
 	return nil
 }
 
@@ -173,13 +176,6 @@ func removeMissingSnapshotCerts(previous, current []models.ClusterCertificate) e
 	return errors.Join(errs...)
 }
 
-func wrapSnapshotRestoreError(err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("恢复旧 Caddy 配置: %w", err)
-}
-
 func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
 	statements := []string{"DELETE FROM path_rules", "DELETE FROM upstreams", "DELETE FROM cert_jobs", "DELETE FROM lb_rules", "DELETE FROM api_keys", "DELETE FROM users"}
 	if snapshot.ACME != nil {
@@ -238,38 +234,127 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 }
 
 func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
-	if len(snapshot.SecurityPolicies) == 0 || string(snapshot.SecurityPolicies) == "[]" {
-		return nil
+	// 与规则/用户等表一致的全量替换语义：空载荷意味着主节点已清空，从节点必须
+	// 同步删除，不能因载荷为空而提前返回。
+	statements := []string{
+		"DELETE FROM security_policy_bindings",
+		"DELETE FROM security_policies",
+		"DELETE FROM security_custom_rules",
+		"DELETE FROM security_block_pages",
+		"DELETE FROM security_crs_version",
+		"DELETE FROM security_ip2region_version",
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM security_policy_bindings"); err != nil {
-		return fmt.Errorf("清理 security_policy_bindings: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM security_policies"); err != nil {
-		return fmt.Errorf("清理 security_policies: %w", err)
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("清理安全同步表: %w", err)
+		}
 	}
 	var policies []map[string]interface{}
-	if err := json.Unmarshal(snapshot.SecurityPolicies, &policies); err != nil {
-		return fmt.Errorf("解析 security_policies: %w", err)
+	if len(snapshot.SecurityPolicies) > 0 {
+		if err := json.Unmarshal(snapshot.SecurityPolicies, &policies); err != nil {
+			return fmt.Errorf("解析 security_policies: %w", err)
+		}
 	}
 	for _, p := range policies {
-		ipWL, _ := json.Marshal(p["ip_whitelist"])
-		ipBL, _ := json.Marshal(p["ip_blacklist"])
-		crsGroups, _ := json.Marshal(p["crs_rule_groups"])
-		customRules, _ := json.Marshal(p["custom_rules"])
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,custom_rules,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,rate_limit_response,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,enabled,created_at,updated_at,geoip_countries,geoip_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			p["id"], p["name"], p["description"], p["mode"], p["anomaly_threshold"],
-			string(ipWL), string(ipBL), p["rate_limit_enabled"], p["rate_limit_rps"], p["rate_limit_burst"],
-			string(crsGroups), string(customRules), p["enabled"], p["created_at"], p["updated_at"]); err != nil {
+			p["ip_acl_mode"], snapshotJSONText(p["ip_acl_list"]), p["ip_acl_enabled"],
+			snapshotJSONText(p["ip_whitelist"]), snapshotJSONText(p["ip_blacklist"]),
+			p["rate_limit_enabled"], p["rate_limit_rps"], p["rate_limit_burst"], p["rate_limit_response"],
+			snapshotJSONText(p["crs_rule_groups"]), snapshotJSONText(p["crs_excluded_rules"]), snapshotJSONText(p["custom_rules"]),
+			p["block_page_id"], p["enabled"], p["created_at"], p["updated_at"],
+			snapshotJSONText(p["geoip_countries"]), p["geoip_mode"]); err != nil {
 			return fmt.Errorf("写入 security_policy: %w", err)
 		}
 	}
 	var bindings []map[string]interface{}
-	if err := json.Unmarshal(snapshot.SecurityBindings, &bindings); err != nil {
-		return fmt.Errorf("解析 security_bindings: %w", err)
+	if len(snapshot.SecurityBindings) > 0 {
+		if err := json.Unmarshal(snapshot.SecurityBindings, &bindings); err != nil {
+			return fmt.Errorf("解析 security_bindings: %w", err)
+		}
 	}
 	for _, b := range bindings {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)`, b["rule_caddy_id"], b["policy_id"]); err != nil {
 			return fmt.Errorf("写入 security_policy_binding: %w", err)
+		}
+	}
+	if err := applySecurityCustomRules(ctx, tx, snapshot.SecurityCustomRules); err != nil {
+		return err
+	}
+	if err := applySecurityBlockPages(ctx, tx, snapshot.SecurityBlockPages); err != nil {
+		return err
+	}
+	if err := applySecurityCRSVersion(ctx, tx, snapshot.SecurityCRSVersion); err != nil {
+		return err
+	}
+	if err := applySecurityIP2RegionVersion(ctx, tx, snapshot.SecurityIP2RegionVersion); err != nil {
+		return err
+	}
+	return nil
+}
+
+// snapshotJSONText 写入快照中的 JSON 文本列。dumpTableAsJSON 已把该列作为
+// JSON 字符串携带，直接透传，避免二次编码成带引号的字面量。
+func snapshotJSONText(value interface{}) interface{} {
+	switch v := value.(type) {
+	case nil:
+		return nil
+	case string:
+		return v
+	default:
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			return nil
+		}
+		return string(encoded)
+	}
+}
+
+func applySecurityCustomRules(ctx context.Context, tx *sql.Tx, rules []models.SecurityCustomRule) error {
+	for _, rule := range rules {
+		conditions := rule.Conditions
+		if conditions == nil {
+			conditions = []models.CustomRuleCondition{}
+		}
+		conditionsJSON, err := json.Marshal(conditions)
+		if err != nil {
+			return fmt.Errorf("序列化快照自定义安全规则 %d 的条件: %w", rule.ID, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_custom_rules (id,name,description,conditions,action,score,status_code,enabled,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			rule.ID, rule.Name, rule.Description, string(conditionsJSON), rule.Action, rule.Score, rule.StatusCode, rule.Enabled, rule.UpdatedBy, rule.CreatedAt, rule.UpdatedAt); err != nil {
+			return fmt.Errorf("写入快照自定义安全规则 %d: %w", rule.ID, err)
+		}
+	}
+	return nil
+}
+
+func applySecurityBlockPages(ctx context.Context, tx *sql.Tx, pages []models.SecurityBlockPage) error {
+	for _, page := range pages {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_block_pages (id,name,description,content,status_code,is_default,created_by,created_at,updated_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			page.ID, page.Name, page.Description, page.Content, page.StatusCode, page.IsDefault, page.CreatedBy, page.CreatedAt, page.UpdatedBy, page.UpdatedAt); err != nil {
+			return fmt.Errorf("写入快照拦截页面 %d: %w", page.ID, err)
+		}
+	}
+	return nil
+}
+
+func applySecurityCRSVersion(ctx context.Context, tx *sql.Tx, versions []models.ClusterSecurityCRSVersion) error {
+	for _, version := range versions {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_crs_version (id,version,updated_at,auto_update,update_status,message,last_checked,next_update,trigger,started_at,finished_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			version.ID, version.Version, nullableString(version.UpdatedAt), version.AutoUpdate, version.UpdateStatus, version.Message,
+			nullableString(version.LastChecked), nullableString(version.NextUpdate), nullableString(version.Trigger), nullableString(version.StartedAt), nullableString(version.FinishedAt)); err != nil {
+			return fmt.Errorf("写入快照 CRS 版本 %d: %w", version.ID, err)
+		}
+	}
+	return nil
+}
+
+func applySecurityIP2RegionVersion(ctx context.Context, tx *sql.Tx, versions []models.ClusterSecurityIP2RegionVersion) error {
+	for _, version := range versions {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_ip2region_version (id,version,updated_at,auto_update,update_status,message,last_checked,next_update,trigger,started_at,finished_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			version.ID, version.Version, nullableString(version.UpdatedAt), version.AutoUpdate, version.UpdateStatus, version.Message,
+			nullableString(version.LastChecked), nullableString(version.NextUpdate), nullableString(version.Trigger), nullableString(version.StartedAt), nullableString(version.FinishedAt)); err != nil {
+			return fmt.Errorf("写入快照 ip2region 版本 %d: %w", version.ID, err)
 		}
 	}
 	return nil

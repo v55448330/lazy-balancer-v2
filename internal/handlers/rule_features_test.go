@@ -20,27 +20,12 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-func TestRuleFeatures_rejects_invalid_ACL_and_path_rule_inputs(t *testing.T) {
+func TestRuleFeatures_rejects_invalid_path_rule_inputs(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     ruleFeatureInput
 		wantError string
 	}{
-		{
-			name:      "invalid ACL mode",
-			input:     ruleFeatureInput{IPACLMode: "block"},
-			wantError: "IP 访问控制模式",
-		},
-		{
-			name:      "invalid CIDR",
-			input:     ruleFeatureInput{IPACLMode: "allow", IPACLList: []string{"192.0.2.1"}},
-			wantError: "CIDR",
-		},
-		{
-			name:      "ACL list without mode",
-			input:     ruleFeatureInput{IPACLList: []string{"192.0.2.0/24"}},
-			wantError: "模式为空",
-		},
 		{
 			name: "path rules while disabled",
 			input: ruleFeatureInput{PathRules: []models.PathRule{{
@@ -104,25 +89,6 @@ func TestRuleFeatures_rejects_invalid_ACL_and_path_rule_inputs(t *testing.T) {
 				t.Fatalf("validateRuleFeatures() error = %v, want containing %q", err, test.wantError)
 			}
 		})
-	}
-}
-
-func TestCreateRule_rejects_invalid_IP_ACL_mode(t *testing.T) {
-	// Given
-	handler := newRuleFeatureTestHandlers(t)
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.POST("/rules", handler.CreateRule)
-	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{"name":"invalid-acl","protocol":"http","domain":"invalid-acl.example.test","listen_port":8080,"ip_acl_mode":"block","upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`))
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-
-	// When
-	router.ServeHTTP(response, request)
-
-	// Then
-	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "IP 访问控制模式") {
-		t.Fatalf("create invalid ACL status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -236,7 +202,7 @@ func TestUpdateRule_replaces_path_rules_wholesale_within_rule_save(t *testing.T)
 	}
 	router := gin.New()
 	router.PUT("/rules/:caddy_id", handler.UpdateRule)
-	request := httptest.NewRequest(http.MethodPut, "/rules/lb_updatepaths", strings.NewReader(`{"ip_acl_mode":"allow","ip_acl_list":["192.0.2.0/24"],"custom_routes_enabled":true,"path_rules":[{"sort_order":5,"match_type":"prefix","path":"/new/","upstreams":null}]}`))
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_updatepaths", strings.NewReader(`{"custom_routes_enabled":true,"path_rules":[{"sort_order":5,"match_type":"prefix","path":"/new/","upstreams":null}]}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
@@ -247,16 +213,16 @@ func TestUpdateRule_replaces_path_rules_wholesale_within_rule_save(t *testing.T)
 	if response.Code != http.StatusOK {
 		t.Fatalf("update status=%d body=%s", response.Code, response.Body.String())
 	}
-	var mode, listJSON, path string
+	var path string
 	var count int
-	if err := db.DB.QueryRow(`SELECT ip_acl_mode,ip_acl_list,(SELECT COUNT(*) FROM path_rules WHERE rule_id='lb_updatepaths'),(SELECT path FROM path_rules WHERE rule_id='lb_updatepaths') FROM lb_rules WHERE caddy_id='lb_updatepaths'`).Scan(&mode, &listJSON, &count, &path); err != nil {
+	if err := db.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM path_rules WHERE rule_id='lb_updatepaths'),(SELECT path FROM path_rules WHERE rule_id='lb_updatepaths') FROM lb_rules WHERE caddy_id='lb_updatepaths'`).Scan(&count, &path); err != nil {
 		t.Fatalf("read updated rule features: %v", err)
 	}
-	if mode != "allow" || listJSON != `["192.0.2.0/24"]` || count != 1 || path != "/new/" {
-		t.Fatalf("updated rule features mode=%q list=%q count=%d path=%q", mode, listJSON, count, path)
+	if count != 1 || path != "/new/" {
+		t.Fatalf("updated rule features count=%d path=%q", count, path)
 	}
-	if !strings.Contains(*postedConfig, `"client_ip"`) || !strings.Contains(*postedConfig, `"/new/*"`) {
-		t.Fatalf("posted Caddy config missing ACL/path route: %s", *postedConfig)
+	if !strings.Contains(*postedConfig, `"/new/*"`) {
+		t.Fatalf("posted Caddy config missing path route: %s", *postedConfig)
 	}
 }
 
@@ -321,7 +287,6 @@ func TestCreateRule_accepts_API_key_user_ID_and_succeeds_with_all_feature_column
 	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{
 		"name":"全字段 TCP 规则","protocol":"tcp","listen_port":13000,
 		"tcp_health_check_port":9000,"tcp_proxy_protocol":true,"tcp_try_duration":5,"tcp_try_interval":250,
-		"ip_acl_mode":"deny","ip_acl_list":["203.0.113.0/24"],
 		"upstreams":[{"host":"127.0.0.1","port":9000,"weight":1,"enabled":true}]
 	}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -383,17 +348,17 @@ func TestDuplicateRule_accepts_API_key_user_ID_and_copies_rule_upstreams_and_pat
 	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
 		t.Fatalf("duplicate status=%d body=%s", response.Code, response.Body.String())
 	}
-	var newID, aclMode string
+	var newID string
 	var upstreamCount, pathCount, customRoutes int
 	var createdBy, updatedBy int64
-	if err := db.DB.QueryRow(`SELECT caddy_id, ip_acl_mode, custom_routes_enabled, created_by, updated_by,
+	if err := db.DB.QueryRow(`SELECT caddy_id, custom_routes_enabled, created_by, updated_by,
 		(SELECT COUNT(*) FROM upstreams WHERE rule_id=lb_rules.caddy_id),
 		(SELECT COUNT(*) FROM path_rules WHERE rule_id=lb_rules.caddy_id)
-		FROM lb_rules WHERE caddy_id != 'lb_dupsrc'`).Scan(&newID, &aclMode, &customRoutes, &createdBy, &updatedBy, &upstreamCount, &pathCount); err != nil {
+		FROM lb_rules WHERE caddy_id != 'lb_dupsrc'`).Scan(&newID, &customRoutes, &createdBy, &updatedBy, &upstreamCount, &pathCount); err != nil {
 		t.Fatalf("read duplicated rule: %v", err)
 	}
-	if newID == "" || aclMode != "allow" || customRoutes != 1 || createdBy != 1 || updatedBy != 1 || upstreamCount != 1 || pathCount != 1 {
-		t.Fatalf("duplicated rule incomplete: id=%q acl=%q custom=%d created_by=%d updated_by=%d ups=%d paths=%d", newID, aclMode, customRoutes, createdBy, updatedBy, upstreamCount, pathCount)
+	if newID == "" || customRoutes != 1 || createdBy != 1 || updatedBy != 1 || upstreamCount != 1 || pathCount != 1 {
+		t.Fatalf("duplicated rule incomplete: id=%q custom=%d created_by=%d updated_by=%d ups=%d paths=%d", newID, customRoutes, createdBy, updatedBy, upstreamCount, pathCount)
 	}
 }
 

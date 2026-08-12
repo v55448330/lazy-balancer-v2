@@ -827,7 +827,7 @@ func TestSyncService_applySnapshot_inherits_version_for_promotion(t *testing.T) 
 	}
 }
 
-func TestSyncService_applySnapshot_rolls_back_when_caddy_rejects_config(t *testing.T) {
+func TestSyncService_applySnapshot_keeps_committed_snapshot_when_caddy_rejects_config(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
 	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
@@ -848,24 +848,27 @@ func TestSyncService_applySnapshot_rolls_back_when_caddy_rejects_config(t *testi
 		Users:         []models.ClusterUser{{ID: 99, Username: "incoming", PasswordHash: "hash", Role: "admin", IsEnabled: true}},
 		BasicSettings: models.ClusterBasicSettings{LogLevel: "info", AccessLogJSON: true, Timezone: "Asia/Shanghai"},
 	}
-	var oldUsername string
-	if err := database.QueryRow("SELECT username FROM users ORDER BY id LIMIT 1").Scan(&oldUsername); err != nil {
-		t.Fatalf("read old user: %v", err)
-	}
 
 	// When
 	err := syncService.applySnapshot(context.Background(), snapshot)
 
-	// Then
-	if err == nil {
-		t.Fatal("snapshot apply succeeded despite Caddy rejection")
+	// Then: Caddy 重载发生在事务提交之后，拒绝仅记录日志与审计，不回滚快照
+	if err != nil {
+		t.Fatalf("snapshot apply returned error despite committed data: %v", err)
 	}
-	var oldCount, incomingCount int
-	if err := database.QueryRow("SELECT SUM(username=?), SUM(username='incoming') FROM users", oldUsername).Scan(&oldCount, &incomingCount); err != nil {
-		t.Fatalf("read rollback users: %v", err)
+	var incomingCount int
+	if err := database.QueryRow("SELECT COUNT(*) FROM users WHERE username='incoming'").Scan(&incomingCount); err != nil {
+		t.Fatalf("read committed users: %v", err)
 	}
-	if oldCount != 1 || incomingCount != 0 {
-		t.Fatalf("rollback users old=%d incoming=%d", oldCount, incomingCount)
+	if incomingCount != 1 {
+		t.Fatalf("committed incoming users=%d, want 1", incomingCount)
+	}
+	var reloadFailures int
+	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='重载失败' AND resource='Caddy配置'").Scan(&reloadFailures); err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	if reloadFailures != 1 {
+		t.Fatalf("reload failure audit entries=%d, want 1", reloadFailures)
 	}
 }
 
@@ -904,12 +907,13 @@ func TestSyncService_applySnapshot_invalidates_cache_only_after_commit(t *testin
 
 	reject = true
 	snapshotC := models.ClusterSnapshot{Version: 3, Users: []models.ClusterUser{{ID: 3, Username: "user-c", PasswordHash: "hash", Role: "admin", IsEnabled: true}}, BasicSettings: snapshotA.BasicSettings}
-	if err := syncService.applySnapshot(context.Background(), snapshotC); err == nil {
-		t.Fatal("snapshot C unexpectedly committed")
+	// Caddy 拒绝不再回滚快照：提交照常发生，缓存随之失效并重建为 user-c。
+	if err := syncService.applySnapshot(context.Background(), snapshotC); err != nil {
+		t.Fatalf("snapshot C apply: %v", err)
 	}
-	afterFailure, _, err := service.Snapshot(context.Background(), 0, "", "")
-	if err != nil || len(afterFailure.Users) != 1 || afterFailure.Users[0].Username != "user-b" {
-		t.Fatalf("cache after failed C=%#v err=%v", afterFailure.Users, err)
+	afterReloadFailure, _, err := service.Snapshot(context.Background(), 0, "", "")
+	if err != nil || len(afterReloadFailure.Users) != 1 || afterReloadFailure.Users[0].Username != "user-c" {
+		t.Fatalf("cache after C=%#v err=%v", afterReloadFailure.Users, err)
 	}
 }
 

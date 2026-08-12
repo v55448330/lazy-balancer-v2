@@ -29,7 +29,6 @@ func TestExplicitAuditRoutesAreHandledByHandlers(t *testing.T) {
 		{"POST", "/api/v1/cluster/promote"},
 		{"POST", "/api/v1/rules"},
 		{"PUT", "/api/v1/rules/:caddy_id"},
-		{"POST", "/api/v1/rules/:caddy_id/acl"},
 		{"DELETE", "/api/v1/rules/:caddy_id"},
 		{"POST", "/api/v1/rules/:caddy_id/enable"},
 		{"PUT", "/api/v1/rules/:caddy_id/disable"},
@@ -42,6 +41,16 @@ func TestExplicitAuditRoutesAreHandledByHandlers(t *testing.T) {
 		{"DELETE", "/api/v1/certificates/jobs/:id"},
 		{"POST", "/api/v1/cluster/sync/pull"},
 		{"PUT", "/api/v1/config"},
+		{"POST", "/api/v1/security/policies/:id/bind"},
+		{"DELETE", "/api/v1/security/policies/:id/bind/:caddy_id"},
+		{"PUT", "/api/v1/security/crs/auto-update"},
+		{"POST", "/api/v1/security/crs/update"},
+		{"POST", "/api/v1/security/custom-rules"},
+		{"PUT", "/api/v1/security/custom-rules/:id"},
+		{"DELETE", "/api/v1/security/custom-rules/:id"},
+		{"POST", "/api/v1/security/block-pages"},
+		{"PUT", "/api/v1/security/block-pages/:id"},
+		{"DELETE", "/api/v1/security/block-pages/:id"},
 	}
 	for _, tt := range explicitRoutes {
 		if !HasExplicitAuditEvent(tt.method, tt.path) {
@@ -92,6 +101,16 @@ func TestClassifyAuditRouteMatrix(t *testing.T) {
 		{"POST", "/api/v1/certificates/parse", AuditPolicySkip},
 		{"POST", "/api/v1/certificates/jobs/:id/retry", AuditPolicyExplicit},
 		{"DELETE", "/api/v1/certificates/jobs/:id", AuditPolicyExplicit},
+		{"POST", "/api/v1/security/policies/:id/bind", AuditPolicyExplicit},
+		{"DELETE", "/api/v1/security/policies/:id/bind/:caddy_id", AuditPolicyExplicit},
+		{"PUT", "/api/v1/security/crs/auto-update", AuditPolicyExplicit},
+		{"POST", "/api/v1/security/crs/update", AuditPolicyExplicit},
+		{"POST", "/api/v1/security/custom-rules", AuditPolicyExplicit},
+		{"PUT", "/api/v1/security/custom-rules/:id", AuditPolicyExplicit},
+		{"DELETE", "/api/v1/security/custom-rules/:id", AuditPolicyExplicit},
+		{"POST", "/api/v1/security/block-pages", AuditPolicyExplicit},
+		{"PUT", "/api/v1/security/block-pages/:id", AuditPolicyExplicit},
+		{"DELETE", "/api/v1/security/block-pages/:id", AuditPolicyExplicit},
 	}
 	seen := map[string]bool{}
 	for _, tt := range cases {
@@ -109,11 +128,5 @@ func TestClassifyAuditRouteMatrix(t *testing.T) {
 func TestAuditResultText_translates_partial_result(t *testing.T) {
 	if got := AuditResultText("partial"); got != "部分成功" {
 		t.Fatalf("AuditResultText(partial)=%q, want 部分成功", got)
-	}
-}
-
-func TestHasExplicitAuditEvent_suppresses_generic_ACL_audit(t *testing.T) {
-	if !HasExplicitAuditEvent("POST", "/api/v1/rules/:caddy_id/acl") {
-		t.Fatal("ACL update would receive a second generic audit event")
 	}
 }

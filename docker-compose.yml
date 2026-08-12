@@ -11,6 +11,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./certs:/app/certs
+      - ./waf:/app/waf
     environment:
       - TZ=Asia/Shanghai
       - NODE_NAME=master
@@ -31,6 +32,7 @@ services:
       - ./data-slave:/app/data
       - ./logs-slave:/app/logs
       - ./certs-slave:/app/certs
+      - ./waf:/app/waf
     environment:
       - TZ=Asia/Shanghai
       - NODE_NAME=slave-test

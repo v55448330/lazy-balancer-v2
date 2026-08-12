@@ -434,8 +434,6 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		GlobalRequestBodyMaxSizeMB:       global.requestBodyMaxSizeMB,
 		GlobalUpstreamKeepaliveTimeout:   global.upstreamKeepaliveTimeout,
 		GlobalServerTokensHidden:         global.serverTokensHidden,
-		IPACLMode:                        features.IPACLMode,
-		IPACLList:                        features.IPACLList,
 		CustomRoutesEnabled:              features.CustomRoutesEnabled,
 		PathRules:                        toPathRuleConfigs(features.PathRules),
 		ProxyDialTimeout:                 features.ProxyDialTimeout,

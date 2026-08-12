@@ -23,9 +23,13 @@ const pages = [
 export type PageId = (typeof pages)[number]
 const validPages: ReadonlySet<string> = new Set(pages)
 const isPageId = (page: string): page is PageId => validPages.has(page)
+const queryPage = new URLSearchParams(location.search).get('page')
+const queryPageValid: PageId | null = queryPage && isPageId(queryPage) ? queryPage : null
 const storedCurrentPage = localStorage.getItem('currentPage')
-const initialCurrentPage: PageId = storedCurrentPage && isPageId(storedCurrentPage) ? storedCurrentPage : 'dashboard'
-if (storedCurrentPage !== initialCurrentPage) localStorage.setItem('currentPage', initialCurrentPage)
+const initialCurrentPage: PageId =
+  queryPageValid ??
+  (storedCurrentPage && isPageId(storedCurrentPage) ? storedCurrentPage : 'dashboard')
+if (!queryPageValid && storedCurrentPage !== initialCurrentPage) localStorage.setItem('currentPage', initialCurrentPage)
 
 interface AuthResponse {
   readonly token: string

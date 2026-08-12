@@ -257,6 +257,10 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if s.lifecycle != nil {
 		s.lifecycle.StartACME()
 	}
+	if crsManager := GetCRSUpdateManager(); crsManager != nil {
+		crsManager.SetMasterRole(true)
+	}
+	SetSecurityEventsRetentionMasterRole(true)
 	if masterURL != "" {
 		parsedMasterURL, err := url.Parse(masterURL)
 		if err != nil {

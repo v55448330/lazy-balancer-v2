@@ -3,13 +3,16 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -19,7 +22,7 @@ import (
 )
 
 func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, name, description, conditions, action, score, status_code, enabled, created_at, updated_at FROM security_custom_rules ORDER BY id")
+	rows, err := db.DB.Query("SELECT id, name, description, conditions, action, score, status_code, enabled, created_at, updated_at, updated_by FROM security_custom_rules ORDER BY id")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -29,7 +32,7 @@ func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 	for rows.Next() {
 		var r models.SecurityCustomRule
 		var conditionsJSON string
-		rows.Scan(&r.ID, &r.Name, &r.Description, &conditionsJSON, &r.Action, &r.Score, &r.StatusCode, &r.Enabled, &r.CreatedAt, &r.UpdatedAt)
+		rows.Scan(&r.ID, &r.Name, &r.Description, &conditionsJSON, &r.Action, &r.Score, &r.StatusCode, &r.Enabled, &r.CreatedAt, &r.UpdatedAt, &r.UpdatedBy)
 		json.Unmarshal([]byte(conditionsJSON), &r.Conditions)
 		rules = append(rules, r)
 	}
@@ -62,13 +65,15 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 		return
 	}
 	conditionsJSON, _ := json.Marshal(req.Conditions)
-	result, err := db.DB.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, status_code, enabled) VALUES (?,?,?,?,?,?,?)`,
-		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.StatusCode, req.Enabled)
+	result, err := db.DB.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, status_code, enabled, updated_by) VALUES (?,?,?,?,?,?,?,?)`,
+		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.StatusCode, req.Enabled, getContextUserIDInt(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	id, _ := result.LastInsertId()
+	services.RecordAuditLog(getContextUserID(c), "创建", "自定义规则", fmt.Sprintf("名称：%s（#%d）", req.Name, id), "")
+	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则创建成功", Data: gin.H{"id": id}})
 }
 
@@ -84,8 +89,8 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		return
 	}
 	conditionsJSON, _ := json.Marshal(req.Conditions)
-	result, err := db.DB.Exec(`UPDATE security_custom_rules SET name=?, description=?, conditions=?, action=?, score=?, status_code=?, enabled=?, updated_at=datetime('now') WHERE id=?`,
-		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.StatusCode, req.Enabled, id)
+	result, err := db.DB.Exec(`UPDATE security_custom_rules SET name=?, description=?, conditions=?, action=?, score=?, status_code=?, enabled=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
+		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.StatusCode, req.Enabled, getContextUserIDInt(c), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -94,6 +99,8 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return
 	}
+	services.RecordAuditLog(getContextUserID(c), "更新", "自定义规则", fmt.Sprintf("名称：%s（#%s）", req.Name, id), "")
+	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新"})
 }
 
@@ -108,6 +115,8 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return
 	}
+	services.RecordAuditLog(getContextUserID(c), "删除", "自定义规则", fmt.Sprintf("规则 #%s", id), "")
+	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已删除"})
 }
 
@@ -143,6 +152,8 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	id, _ := result.LastInsertId()
+	services.RecordAuditLog(getContextUserID(c), "创建", "拦截页面", fmt.Sprintf("名称：%s（#%d）", req.Name, id), "")
+	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面创建成功", Data: gin.H{"id": id}})
 }
 
@@ -169,6 +180,8 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
 		return
 	}
+	services.RecordAuditLog(getContextUserID(c), "更新", "拦截页面", fmt.Sprintf("名称：%s（#%s）", req.Name, id), "")
+	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面已更新"})
 }
 
@@ -189,12 +202,14 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
 		return
 	}
+	services.RecordAuditLog(getContextUserID(c), "删除", "拦截页面", fmt.Sprintf("页面 #%s", id), "")
+	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面已删除"})
 }
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	rows, err := db.DB.Query(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, enabled, created_at, updated_at
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, rate_limit_response, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode
 		FROM security_policies ORDER BY id`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -209,14 +224,30 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		}
-		var ipWL, ipBL []string
-		json.Unmarshal(p.IPWhitelist, &ipWL)
-		json.Unmarshal(p.IPBlacklist, &ipBL)
+		var ipACLEntries []string
+		json.Unmarshal([]byte(p.IPACLList), &ipACLEntries)
+		var crsExcluded []json.RawMessage
+		json.Unmarshal(p.CRSExcludedRules, &crsExcluded)
+		var customRules []json.RawMessage
+		json.Unmarshal(p.CustomRules, &customRules)
 		var ruleCount int
 		db.DB.QueryRow("SELECT COUNT(*) FROM security_policy_bindings WHERE policy_id=?", p.ID).Scan(&ruleCount)
 		policies = append(policies, models.SecurityPolicySummary{
 			ID: p.ID, Name: p.Name, Mode: p.Mode, Enabled: p.Enabled, RuleCount: ruleCount,
-			HasWAF: p.Mode != "off", HasIPControl: len(ipWL) > 0 || len(ipBL) > 0, HasRateLimit: p.RateLimitEnabled,
+			HasWAF: p.Mode != "off", HasIPControl: p.IPACLEnabled && len(ipACLEntries) > 0, HasRateLimit: p.RateLimitEnabled,
+			AnomalyThreshold: p.AnomalyThreshold,
+			IPACLMode:        p.IPACLMode,
+			IPACLList:        p.IPACLList,
+			IPWhitelist:      rawJSONString(p.IPWhitelist),
+			IPBlacklist:      rawJSONString(p.IPBlacklist),
+			RateLimitRPS:     p.RateLimitRPS,
+			RateLimitBurst:   p.RateLimitBurst,
+			CRSExcludedCount: len(crsExcluded),
+			CustomRulesCount: len(customRules),
+			UpdatedBy:        p.UpdatedBy,
+			UpdatedAt:        p.UpdatedAt,
+			GeoIPCountries:   rawJSONString(p.GeoIPCountries),
+			GeoIPMode:        p.GeoIPMode,
 		})
 	}
 	if policies == nil {
@@ -228,11 +259,9 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 func (h *Handlers) GetSecurityPolicy(c *gin.Context) {
 	id := c.Param("id")
 	var p models.SecurityPolicy
-	err := db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, enabled, created_at, updated_at
-		FROM security_policies WHERE id=?`, id).
-		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelist, &p.IPBlacklist,
-			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.CRSRuleGroups, &p.CRSExcludedRules, &p.CustomRules, &p.BlockPageID, &p.Enabled, &p.CreatedAt, &p.UpdatedAt)
+	err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, rate_limit_response, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode
+		FROM security_policies WHERE id=?`, id), &p)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
 		return
@@ -253,7 +282,7 @@ func (h *Handlers) GetSecurityPolicy(c *gin.Context) {
 	if bindings == nil {
 		bindings = []string{}
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"policy": p, "bindings": bindings}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"policy": newSecurityPolicyDetail(&p), "bindings": bindings}})
 }
 
 func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
@@ -271,6 +300,12 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if req.IPACLList == "" {
 		req.IPACLList = "[]"
 	}
+	if req.IPWhitelist == "" {
+		req.IPWhitelist = "[]"
+	}
+	if req.IPBlacklist == "" {
+		req.IPBlacklist = "[]"
+	}
 	if req.CRSRuleGroups == "" {
 		req.CRSRuleGroups = "[]"
 	}
@@ -280,21 +315,49 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if req.CustomRules == "" {
 		req.CustomRules = "[]"
 	}
+	if req.GeoIPCountries == "" {
+		req.GeoIPCountries = "[]"
+	}
+	if req.GeoIPMode == "" {
+		req.GeoIPMode = "deny"
+	}
+	if err := validateGeoIPCountries(req.GeoIPCountries); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	for _, f := range []struct{ name, val string }{
+		{"ip_acl_list", req.IPACLList},
+		{"ip_whitelist", req.IPWhitelist},
+		{"ip_blacklist", req.IPBlacklist},
+	} {
+		if err := validateIPCIDRList(f.name, f.val); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+	}
+	if err := validateSecurityPolicyEnums(req.IPACLMode, req.RateLimitResponse, req.GeoIPMode); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	if req.RateLimitResponse == "" {
+		req.RateLimitResponse = "429"
+	}
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
 	result, err := db.DB.Exec(`INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, enabled)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLList, req.IPACLList,
-		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, enabled)
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, rate_limit_response, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, req.IPBlacklist,
+		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.RateLimitResponse, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	id, _ := result.LastInsertId()
 	services.RecordAuditLog(getContextUserID(c), "创建", "安全策略", fmt.Sprintf("名称：%s（#%d）", req.Name, id), "")
+	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略创建成功", Data: gin.H{"id": id}})
 }
 
@@ -304,6 +367,41 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
+	}
+	for _, f := range []struct {
+		name string
+		val  *string
+	}{
+		{"ip_acl_list", req.IPACLList},
+		{"ip_whitelist", req.IPWhitelist},
+		{"ip_blacklist", req.IPBlacklist},
+	} {
+		if f.val != nil {
+			if err := validateIPCIDRList(f.name, *f.val); err != nil {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+				return
+			}
+		}
+	}
+	var ipACLMode, rateLimitResponse, geoIPMode string
+	if req.IPACLMode != nil {
+		ipACLMode = *req.IPACLMode
+	}
+	if req.RateLimitResponse != nil {
+		rateLimitResponse = *req.RateLimitResponse
+	}
+	if req.GeoIPMode != nil {
+		geoIPMode = *req.GeoIPMode
+	}
+	if err := validateSecurityPolicyEnums(ipACLMode, rateLimitResponse, geoIPMode); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	if req.GeoIPCountries != nil {
+		if err := validateGeoIPCountries(*req.GeoIPCountries); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
 	}
 	query := "UPDATE security_policies SET updated_at=datetime('now')"
 	var args []interface{}
@@ -329,18 +427,30 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addStr("description", req.Description)
 	addStr("mode", req.Mode)
 	addInt("anomaly_threshold", req.AnomalyThreshold)
+	addStr("ip_acl_mode", req.IPACLMode)
 	addStr("ip_acl_list", req.IPACLList)
+	addBool("ip_acl_enabled", req.IPACLEnabled)
+	addStr("ip_whitelist", req.IPWhitelist)
+	addStr("ip_blacklist", req.IPBlacklist)
 
 	addBool("rate_limit_enabled", req.RateLimitEnabled)
 	addInt("rate_limit_rps", req.RateLimitRPS)
 	addInt("rate_limit_burst", req.RateLimitBurst)
+	addStr("rate_limit_response", req.RateLimitResponse)
 	addStr("crs_rule_groups", req.CRSRuleGroups)
 	addStr("crs_excluded_rules", req.CRSExcludedRules)
 	addStr("custom_rules", req.CustomRules)
+	addStr("geoip_countries", req.GeoIPCountries)
+	addStr("geoip_mode", req.GeoIPMode)
 
 	if req.BlockPageID != nil {
-		query += ", block_page_id=?"
+		query += ", block_page_id=?, block_status_code=?"
 		args = append(args, *req.BlockPageID)
+		if req.BlockStatusCode != nil {
+			args = append(args, *req.BlockStatusCode)
+		} else {
+			args = append(args, 403)
+		}
 	}
 	addBool("enabled", req.Enabled)
 	query += " WHERE id=?"
@@ -355,6 +465,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "更新", "安全策略", fmt.Sprintf("策略 #%s", id), "")
+	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略更新成功"})
 }
 
@@ -371,6 +482,7 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "删除", "安全策略", fmt.Sprintf("策略 #%s", id), "")
+	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略已删除"})
 }
 
@@ -383,11 +495,22 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
 	}
+	var policyExists int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_policies WHERE id=?", policyID).Scan(&policyExists); err != nil || policyExists == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+		return
+	}
+	if _, err := db.DB.Exec("DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", req.RuleCaddyID); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
 	_, err := db.DB.Exec("INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", req.RuleCaddyID, policyID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
+	services.RecordAuditLog(getContextUserID(c), "更新", "安全策略", fmt.Sprintf("绑定规则 %s 到策略 #%s", req.RuleCaddyID, policyID), "")
+	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已关联"})
 }
 
@@ -399,6 +522,8 @@ func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
+	services.RecordAuditLog(getContextUserID(c), "更新", "安全策略", fmt.Sprintf("解除规则 %s 与策略 #%s 的绑定", ruleCaddyID, policyID), "")
+	h.applyCaddyConfig()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已取消关联"})
 }
 
@@ -415,11 +540,12 @@ func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 		return
 	}
 	var p models.SecurityPolicy
-	db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, enabled, created_at, updated_at
-		FROM security_policies WHERE id=?`, policyID).
-		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelist, &p.IPBlacklist,
-			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.CRSRuleGroups, &p.CRSExcludedRules, &p.CustomRules, &p.BlockPageID, &p.Enabled, &p.CreatedAt, &p.UpdatedAt)
+	if err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, rate_limit_response, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode
+		FROM security_policies WHERE id=?`, policyID), &p); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: p})
 }
 
@@ -452,10 +578,12 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	}
 
 	var total int
-	db.DB.QueryRow("SELECT COUNT(*) FROM security_events"+where, args...).Scan(&total)
+	db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events"+where, args...).Scan(&total)
 
 	queryArgs := append(args, pageSize, offset)
-	rows, err := db.DB.Query("SELECT id, event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, anomaly_score, request_snippet, response_status FROM security_events"+where+" ORDER BY event_time DESC LIMIT ? OFFSET ?", queryArgs...)
+	rows, err := db.MetricsDB.Query(`SELECT e.id, e.event_time, e.rule_caddy_id, e.policy_id, e.client_ip, e.method, e.uri, e.event_type, e.rule_triggered, e.rule_msg, e.action, e.anomaly_score,
+		e.rule_name, e.policy_name
+		FROM security_events e`+where+" ORDER BY e.event_time DESC LIMIT ? OFFSET ?", queryArgs...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -465,7 +593,7 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	var events []models.SecurityEvent
 	for rows.Next() {
 		var e models.SecurityEvent
-		rows.Scan(&e.ID, &e.EventTime, &e.RuleCaddyID, &e.PolicyID, &e.ClientIP, &e.Method, &e.URI, &e.EventType, &e.RuleTriggered, &e.RuleMsg, &e.Action, &e.AnomalyScore, &e.RequestSnippet, &e.ResponseStatus)
+		rows.Scan(&e.ID, &e.EventTime, &e.RuleCaddyID, &e.PolicyID, &e.ClientIP, &e.Method, &e.URI, &e.EventType, &e.RuleTriggered, &e.RuleMsg, &e.Action, &e.AnomalyScore, &e.RuleName, &e.PolicyName)
 		events = append(events, e)
 	}
 	if events == nil {
@@ -474,71 +602,205 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"events": events, "total": total, "page": page, "page_size": pageSize}})
 }
 
+func categorizeAttack(ruleTriggered, ruleMsg string) string {
+	switch {
+	case strings.HasPrefix(ruleTriggered, "942"):
+		return "SQL注入"
+	case strings.HasPrefix(ruleTriggered, "941"):
+		return "XSS"
+	case strings.HasPrefix(ruleTriggered, "930"):
+		return "文件包含"
+	case strings.HasPrefix(ruleTriggered, "931"):
+		return "文件读取"
+	case strings.HasPrefix(ruleTriggered, "932"):
+		return "命令注入"
+	case strings.HasPrefix(ruleTriggered, "933"):
+		return "PHP注入"
+	case strings.HasPrefix(ruleTriggered, "934"):
+		return "代码执行"
+	case strings.HasPrefix(ruleTriggered, "920"):
+		return "协议攻击"
+	case strings.HasPrefix(ruleTriggered, "921"):
+		return "协议异常"
+	case strings.HasPrefix(ruleTriggered, "913"):
+		return "扫描探测"
+	case strings.HasPrefix(ruleTriggered, "949"):
+		return "评估拦截"
+	case strings.HasPrefix(ruleTriggered, "custom"):
+		return "自定义规则"
+	case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) == 5:
+		return "自定义规则"
+	case strings.Contains(ruleMsg, "IP 黑名单") || strings.Contains(ruleMsg, "IP 白名单") || strings.Contains(ruleMsg, "IP 访问控制") ||
+		ruleTriggered == "2" || ruleTriggered == "3" || ruleTriggered == "4":
+		return "IP 访问控制"
+	default:
+		return "其他"
+	}
+}
+
+// joinDistinctFamilies renders a per-IP attack_type: distinct families ordered by
+// frequency desc (name asc on ties), joined by 、. An empty map (no events) yields "".
+func joinDistinctFamilies(counts map[string]int) string {
+	families := make([]string, 0, len(counts))
+	for family := range counts {
+		families = append(families, family)
+	}
+	sort.Slice(families, func(i, j int) bool {
+		if counts[families[i]] != counts[families[j]] {
+			return counts[families[i]] > counts[families[j]]
+		}
+		return families[i] < families[j]
+	})
+	return strings.Join(families, "、")
+}
+
 func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	var overview models.SecurityOverview
-	db.DB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='blocked' AND date(event_time)=date('now')").Scan(&overview.TodayBlocked)
-	db.DB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='logged' AND date(event_time)=date('now')").Scan(&overview.TodayDetected)
+	db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='blocked' AND date(event_time)=date('now')").Scan(&overview.TodayBlocked)
+	db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='logged' AND date(event_time)=date('now')").Scan(&overview.TodayDetected)
 	db.DB.QueryRow("SELECT COUNT(*) FROM security_policies WHERE enabled=1 AND mode!='off'").Scan(&overview.ActivePolicies)
 
-	// 7-day trend
-	trendRows, _ := db.DB.Query(`SELECT date(event_time) as d, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l FROM security_events WHERE event_time >= date('now', '-6 days') GROUP BY d ORDER BY d`)
+	// 7-day trend: always the full today-6 … today slice (UTC, matching SQLite date('now')), zero-filled
+	trendByDate := map[string]models.SecurityTrendPoint{}
+	trendRows, _ := db.MetricsDB.Query(`SELECT date(event_time) as d, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l FROM security_events WHERE event_time >= date('now', '-6 days') GROUP BY d`)
 	for trendRows.Next() {
 		var t models.SecurityTrendPoint
 		trendRows.Scan(&t.Date, &t.Blocked, &t.Detected)
-		overview.Trend = append(overview.Trend, t)
+		trendByDate[t.Date] = t
 	}
 	trendRows.Close()
-	if overview.Trend == nil {
-		overview.Trend = []models.SecurityTrendPoint{}
+	overview.Trend = make([]models.SecurityTrendPoint, 0, 7)
+	today := time.Now().UTC()
+	for i := 6; i >= 0; i-- {
+		day := today.AddDate(0, 0, -i).Format("2006-01-02")
+		point := trendByDate[day]
+		point.Date = day
+		overview.Trend = append(overview.Trend, point)
 	}
 
-	// Top 10 IPs
-	ipRows, _ := db.DB.Query(`SELECT client_ip, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l, MAX(event_time) as last_time, GROUP_CONCAT(DISTINCT rule_msg) as at FROM security_events WHERE event_time >= date('now', '-6 days') GROUP BY client_ip ORDER BY b + l DESC LIMIT 10`)
+	// Top 10 IPs: counts + last time, then distinct attack families per IP
+	type topIPRow struct {
+		ip                string
+		blocked, detected int
+		lastTime          string
+	}
+	var topRows []topIPRow
+	ipRows, _ := db.MetricsDB.Query(`SELECT client_ip, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l, MAX(event_time) as last_time FROM security_events WHERE event_time >= date('now', '-6 days') GROUP BY client_ip ORDER BY b + l DESC LIMIT 10`)
 	for ipRows.Next() {
-		var ip models.SecurityTopIP
-		ipRows.Scan(&ip.IP, &ip.Blocked, &ip.Detected, &ip.LastTime, &ip.AttackType)
-		overview.TopIPs = append(overview.TopIPs, ip)
+		var row topIPRow
+		ipRows.Scan(&row.ip, &row.blocked, &row.detected, &row.lastTime)
+		topRows = append(topRows, row)
 	}
 	ipRows.Close()
-	if overview.TopIPs == nil {
-		overview.TopIPs = []models.SecurityTopIP{}
+	familyCountsByIP := map[string]map[string]int{}
+	famRows, _ := db.MetricsDB.Query(`SELECT client_ip, COALESCE(rule_triggered,''), COALESCE(rule_msg,'') FROM security_events WHERE event_time >= date('now', '-6 days')`)
+	for famRows.Next() {
+		var ip, ruleTriggered, ruleMsg string
+		famRows.Scan(&ip, &ruleTriggered, &ruleMsg)
+		counts := familyCountsByIP[ip]
+		if counts == nil {
+			counts = map[string]int{}
+			familyCountsByIP[ip] = counts
+		}
+		counts[categorizeAttack(ruleTriggered, ruleMsg)]++
+	}
+	famRows.Close()
+	overview.TopIPs = make([]models.SecurityTopIP, 0, len(topRows))
+	for _, row := range topRows {
+		overview.TopIPs = append(overview.TopIPs, models.SecurityTopIP{
+			IP:         row.ip,
+			Blocked:    row.blocked,
+			Detected:   row.detected,
+			LastTime:   row.lastTime,
+			AttackType: joinDistinctFamilies(familyCountsByIP[row.ip]),
+		})
 	}
 
-	// Attack types
-	typeRows, _ := db.DB.Query(`SELECT rule_triggered, COUNT(*) as cnt FROM security_events WHERE event_time >= date('now', '-6 days') GROUP BY rule_triggered ORDER BY cnt DESC LIMIT 10`)
+	// Attack types grouped by family
+	typeRows, _ := db.MetricsDB.Query(`SELECT COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= date('now', '-6 days') GROUP BY rule_triggered, rule_msg`)
+	familyCounts := map[string]int{}
 	for typeRows.Next() {
-		var at models.SecurityAttackType
-		typeRows.Scan(&at.Name, &at.Value)
-		overview.AttackTypes = append(overview.AttackTypes, at)
+		var ruleTriggered, ruleMsg string
+		var cnt int
+		typeRows.Scan(&ruleTriggered, &ruleMsg, &cnt)
+		familyCounts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
 	}
 	typeRows.Close()
-	if overview.AttackTypes == nil {
-		overview.AttackTypes = []models.SecurityAttackType{}
+	attackTypes := make([]models.SecurityAttackType, 0, len(familyCounts))
+	for name, value := range familyCounts {
+		attackTypes = append(attackTypes, models.SecurityAttackType{Name: name, Value: value})
 	}
+	sort.Slice(attackTypes, func(i, j int) bool {
+		if attackTypes[i].Value != attackTypes[j].Value {
+			return attackTypes[i].Value > attackTypes[j].Value
+		}
+		return attackTypes[i].Name < attackTypes[j].Name
+	})
+	if len(attackTypes) > 10 {
+		attackTypes = attackTypes[:10]
+	}
+	overview.AttackTypes = attackTypes
 
-	overview.CRSVersion = "v4.14.0"
+	overview.CRSVersion = services.CRSBundledVersion
+	overview.UpdateStatus = "idle"
+	var crsVersion, crsUpdateStatus string
+	if err := db.DB.QueryRow(`SELECT version, COALESCE(update_status,'idle') FROM security_crs_version WHERE id=1`).Scan(&crsVersion, &crsUpdateStatus); err == nil {
+		if crsVersion != "" {
+			overview.CRSVersion = crsVersion
+		}
+		overview.UpdateStatus = crsUpdateStatus
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: overview})
 }
 
 func (h *Handlers) GetCRSInfo(c *gin.Context) {
 	info := models.CRSInfo{
-		Version:       "v4.14.0",
-		ServerVersion: "Caddy v2.11.4",
+		Version:       services.CRSBundledVersion,
+		ServerVersion: getCaddyVersion(),
 		AutoUpdate:    true,
-		RuleCount:     832,
 		IsLatest:      true,
-		UpdateStatus:  "已最新",
-		UpdatedAt:     "2026-08-08 14:00:00",
-		NextUpdate:    "2026-08-09 14:00:00",
+		UpdateStatus:  "idle",
 	}
-	var dbInfo struct {
-		Version    string
-		AutoUpdate bool
+	var stored struct {
+		version, updatedAt, updateStatus, message, nextUpdate, lastChecked, trigger string
+		autoUpdate                                                                  bool
 	}
-	db.DB.QueryRow("SELECT version, auto_update FROM security_crs_version WHERE id=1").Scan(&dbInfo.Version, &dbInfo.AutoUpdate)
-	if dbInfo.Version != "" {
-		info.Version = dbInfo.Version
-		info.AutoUpdate = dbInfo.AutoUpdate
+	err := db.DB.QueryRow(`SELECT version, COALESCE(updated_at,''), COALESCE(update_status,'idle'),
+		COALESCE(message,''), COALESCE(next_update,''), COALESCE(last_checked,''), COALESCE(trigger,''), auto_update
+		FROM security_crs_version WHERE id=1`).
+		Scan(&stored.version, &stored.updatedAt, &stored.updateStatus, &stored.message,
+			&stored.nextUpdate, &stored.lastChecked, &stored.trigger, &stored.autoUpdate)
+	if err == nil {
+		if stored.version != "" {
+			info.Version = stored.version
+		}
+		info.UpdatedAt = stored.updatedAt
+		info.UpdateStatus = stored.updateStatus
+		info.Message = stored.message
+		info.LastChecked = stored.lastChecked
+		info.Trigger = stored.trigger
+		info.AutoUpdate = stored.autoUpdate
+		if stored.autoUpdate {
+			info.NextUpdate = stored.nextUpdate
+		}
+	}
+	if mgr := services.GetCRSUpdateManager(); mgr != nil {
+		if snap := mgr.StatusSnapshot(); services.IsActiveCRSStatus(snap.Status) {
+			info.UpdateStatus = snap.Status
+			info.Trigger = snap.Trigger
+			info.Message = snap.Message
+		}
+		info.RuleCount = mgr.RuleCount()
+		mgr.RefreshLatestAsync()
+		if latest, known := mgr.LatestVersionCached(); known {
+			if cmp, cmpErr := services.CompareCRSVersions(latest, info.Version); cmpErr == nil {
+				info.IsLatest = cmp <= 0
+			}
+		}
+	} else {
+		if count, countErr := services.CountSecRulesLive(); countErr == nil {
+			info.RuleCount = count
+		}
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: info})
 }
@@ -551,15 +813,154 @@ func (h *Handlers) UpdateCRSAutoUpdate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
 	}
-	db.DB.Exec("INSERT OR REPLACE INTO security_crs_version (id, version, auto_update) VALUES (1, ?, ?)", "v4.14.0", req.AutoUpdate)
+	if err := services.SetCRSAutoUpdate(req.AutoUpdate); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	autoUpdateText := "关闭"
+	if req.AutoUpdate {
+		autoUpdateText = "开启"
+	}
+	services.RecordAuditLog(getContextUserID(c), "更新", "CRS 规则库", fmt.Sprintf("自动更新已%s", autoUpdateText), "")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+}
+
+func (h *Handlers) StartCRSUpdate(c *gin.Context) {
+	mgr := services.GetCRSUpdateManager()
+	if mgr == nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CRS 更新服务未初始化"})
+		return
+	}
+	if err := mgr.StartUpdate("manual"); err != nil {
+		if errors.Is(err, services.ErrCRSUpdateRunning) {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	services.RecordAuditLog(getContextUserID(c), "更新", "CRS 规则库", "手动更新 CRS 规则库", "")
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
+}
+
+func (h *Handlers) GetCRSUpdateStatus(c *gin.Context) {
+	mgr := services.GetCRSUpdateManager()
+	if mgr == nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CRS 更新服务未初始化"})
+		return
+	}
+	snap := mgr.StatusSnapshot()
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
+		"status":      snap.Status,
+		"trigger":     snap.Trigger,
+		"started_at":  snap.StartedAt,
+		"finished_at": snap.FinishedAt,
+		"message":     snap.Message,
+		"version":     snap.Version,
+	}})
+}
+
+func (h *Handlers) GetCRSUpdateLogs(c *gin.Context) {
+	logPath := services.CRSUpdateLogPath()
+	content := readCertJobLogFile(logPath)
+	if oldData := readCertJobLogFile(logPath + ".1"); oldData != "" {
+		content = oldData + content
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": content}})
+}
+
+func (h *Handlers) GetIP2RegionInfo(c *gin.Context) {
+	info := models.IP2RegionInfo{
+		Version:      services.GetIP2RegionVersion(),
+		DbSize:       services.GetIP2RegionEntryCount(),
+		AutoUpdate:   false,
+		UpdateStatus: "idle",
+	}
+	err := db.DB.QueryRow(`SELECT COALESCE(updated_at,''), COALESCE(update_status,'idle'), COALESCE(message,''), COALESCE(trigger,''), COALESCE(last_checked,''), COALESCE(next_update,''), auto_update
+		FROM security_ip2region_version WHERE id=1`).
+		Scan(&info.UpdatedAt, &info.UpdateStatus, &info.Message, &info.Trigger, &info.LastChecked, &info.NextUpdate, &info.AutoUpdate)
+	if err == nil && info.Version == "" {
+		info.Version = "unknown"
+	}
+	if mgr := services.GetIP2RegionUpdateManager(); mgr != nil {
+		if snap := mgr.StatusSnapshot(); services.IsActiveIP2RegionStatus(snap.Status) {
+			info.UpdateStatus = snap.Status
+			info.Trigger = snap.Trigger
+			info.Message = snap.Message
+		}
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: info})
+}
+
+func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {
+	var req struct {
+		AutoUpdate bool `json:"auto_update"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	if err := services.SetIP2RegionAutoUpdate(req.AutoUpdate); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	autoUpdateText := "关闭"
+	if req.AutoUpdate {
+		autoUpdateText = "开启"
+	}
+	services.RecordAuditLog(getContextUserID(c), "更新", "IP2Region 数据库", fmt.Sprintf("自动更新已%s", autoUpdateText), "")
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+}
+
+func (h *Handlers) StartIP2RegionUpdate(c *gin.Context) {
+	mgr := services.GetIP2RegionUpdateManager()
+	if mgr == nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "IP2Region 更新服务未初始化"})
+		return
+	}
+	if err := mgr.StartUpdate("manual"); err != nil {
+		if errors.Is(err, services.ErrIP2RegionUpdateRunning) {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	services.RecordAuditLog(getContextUserID(c), "更新", "IP2Region 数据库", "手动更新 IP2Region 数据库", "")
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
+}
+
+func (h *Handlers) GetIP2RegionUpdateStatus(c *gin.Context) {
+	mgr := services.GetIP2RegionUpdateManager()
+	if mgr == nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "IP2Region 更新服务未初始化"})
+		return
+	}
+	snap := mgr.StatusSnapshot()
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
+		"status":      snap.Status,
+		"trigger":     snap.Trigger,
+		"started_at":  snap.StartedAt,
+		"finished_at": snap.FinishedAt,
+		"message":     snap.Message,
+		"version":     snap.Version,
+	}})
+}
+
+func (h *Handlers) GetIP2RegionUpdateLogs(c *gin.Context) {
+	logPath := services.IP2RegionUpdateLogPath()
+	content := readCertJobLogFile(logPath)
+	if oldData := readCertJobLogFile(logPath + ".1"); oldData != "" {
+		content = oldData + content
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": content}})
 }
 
 // GetSecurityPolicyForRule and BuildCorazaDirectives are in services/security.go
 // to avoid circular dependency (services can't import handlers).
 
 func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
-	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, p.mode, p.enabled, p.ip_whitelist, p.ip_blacklist, p.rate_limit_enabled
+	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, p.mode, p.enabled, p.rate_limit_enabled
 		FROM security_policy_bindings b JOIN security_policies p ON b.policy_id = p.id`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -567,27 +968,50 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 	}
 	defer rows.Close()
 	type BindingInfo struct {
-		PolicyID    int             `json:"policy_id"`
-		Name        string          `json:"name"`
-		Mode        string          `json:"mode"`
-		Enabled     bool            `json:"enabled"`
-		IPWhitelist json.RawMessage `json:"ip_whitelist"`
-		IPBlacklist json.RawMessage `json:"ip_blacklist"`
-		RateLimit   bool            `json:"rate_limit_enabled"`
+		PolicyID  int    `json:"policy_id"`
+		Name      string `json:"name"`
+		Mode      string `json:"mode"`
+		Enabled   bool   `json:"enabled"`
+		RateLimit bool   `json:"rate_limit_enabled"`
 	}
 	result := map[string]BindingInfo{}
 	for rows.Next() {
 		var ruleCaddyID string
 		var b BindingInfo
-		rows.Scan(&ruleCaddyID, &b.PolicyID, &b.Name, &b.Mode, &b.Enabled, &b.IPWhitelist, &b.IPBlacklist, &b.RateLimit)
+		rows.Scan(&ruleCaddyID, &b.PolicyID, &b.Name, &b.Mode, &b.Enabled, &b.RateLimit)
 		result[ruleCaddyID] = b
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: result})
 }
 
+func scanSecurityPolicyRow(row *sql.Row, p *models.SecurityPolicy) error {
+	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
+	if err := row.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
+		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.RateLimitResponse, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode); err != nil {
+		return err
+	}
+	p.IPWhitelist = json.RawMessage(ipWhitelist)
+	p.IPBlacklist = json.RawMessage(ipBlacklist)
+	p.CRSRuleGroups = json.RawMessage(crsRuleGroups)
+	p.CRSExcludedRules = json.RawMessage(crsExcludedRules)
+	p.CustomRules = json.RawMessage(customRules)
+	p.GeoIPCountries = json.RawMessage(geoipCountries)
+	return nil
+}
+
 func scanSecurityPolicy(rows *sql.Rows, p *models.SecurityPolicy) error {
-	return rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelist, &p.IPBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.CRSRuleGroups, &p.CRSExcludedRules, &p.CustomRules, &p.BlockPageID, &p.Enabled, &p.CreatedAt, &p.UpdatedAt)
+	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
+	if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
+		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.RateLimitResponse, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode); err != nil {
+		return err
+	}
+	p.IPWhitelist = json.RawMessage(ipWhitelist)
+	p.IPBlacklist = json.RawMessage(ipBlacklist)
+	p.CRSRuleGroups = json.RawMessage(crsRuleGroups)
+	p.CRSExcludedRules = json.RawMessage(crsExcludedRules)
+	p.CustomRules = json.RawMessage(customRules)
+	p.GeoIPCountries = json.RawMessage(geoipCountries)
+	return nil
 }
 
 func max1(a, b int) int {
@@ -595,6 +1019,121 @@ func max1(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func rawJSONString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "[]"
+	}
+	return string(raw)
+}
+
+type securityPolicyDetail struct {
+	ID                int    `json:"id"`
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	Mode              string `json:"mode"`
+	AnomalyThreshold  int    `json:"anomaly_threshold"`
+	IPACLMode         string `json:"ip_acl_mode"`
+	IPACLList         string `json:"ip_acl_list"`
+	IPACLEnabled      bool   `json:"ip_acl_enabled"`
+	IPWhitelist       string `json:"ip_whitelist"`
+	IPBlacklist       string `json:"ip_blacklist"`
+	RateLimitEnabled  bool   `json:"rate_limit_enabled"`
+	RateLimitRPS      int    `json:"rate_limit_rps"`
+	RateLimitBurst    int    `json:"rate_limit_burst"`
+	RateLimitResponse string `json:"rate_limit_response"`
+	CRSRuleGroups     string `json:"crs_rule_groups"`
+	CRSExcludedRules  string `json:"crs_excluded_rules"`
+	CustomRules       string `json:"custom_rules"`
+	BlockPageID       int    `json:"block_page_id"`
+	BlockStatusCode   int    `json:"block_status_code"`
+	Enabled           bool   `json:"enabled"`
+	CreatedAt         string `json:"created_at"`
+	UpdatedAt         string `json:"updated_at"`
+	GeoIPCountries    string `json:"geoip_countries"`
+	GeoIPMode         string `json:"geoip_mode"`
+}
+
+func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
+	return securityPolicyDetail{
+		ID:                p.ID,
+		Name:              p.Name,
+		Description:       p.Description,
+		Mode:              p.Mode,
+		AnomalyThreshold:  p.AnomalyThreshold,
+		IPACLMode:         p.IPACLMode,
+		IPACLList:         p.IPACLList,
+		IPACLEnabled:      p.IPACLEnabled,
+		IPWhitelist:       rawJSONString(p.IPWhitelist),
+		IPBlacklist:       rawJSONString(p.IPBlacklist),
+		RateLimitEnabled:  p.RateLimitEnabled,
+		RateLimitRPS:      p.RateLimitRPS,
+		RateLimitBurst:    p.RateLimitBurst,
+		RateLimitResponse: p.RateLimitResponse,
+		CRSRuleGroups:     rawJSONString(p.CRSRuleGroups),
+		CRSExcludedRules:  rawJSONString(p.CRSExcludedRules),
+		CustomRules:       rawJSONString(p.CustomRules),
+		BlockPageID:       p.BlockPageID,
+		BlockStatusCode:   p.BlockStatusCode,
+		Enabled:           p.Enabled,
+		CreatedAt:         p.CreatedAt,
+		UpdatedAt:         p.UpdatedAt,
+		GeoIPCountries:    rawJSONString(p.GeoIPCountries),
+		GeoIPMode:         p.GeoIPMode,
+	}
+}
+
+func validateSecurityPolicyEnums(ipACLMode, rateLimitResponse, geoIPMode string) error {
+	switch ipACLMode {
+	case "", "allow", "deny", "bypass":
+	default:
+		return fmt.Errorf("ip_acl_mode 必须为 allow、deny 或 bypass，当前值 %s", ipACLMode)
+	}
+	switch rateLimitResponse {
+	case "", "429", "block_page":
+	default:
+		return fmt.Errorf("rate_limit_response 必须为 429 或 block_page，当前值 %s", rateLimitResponse)
+	}
+	switch geoIPMode {
+	case "", "allow", "deny":
+	default:
+		return fmt.Errorf("geoip_mode 必须为 allow 或 deny，当前值 %s", geoIPMode)
+	}
+	return nil
+}
+
+// validateGeoIPCountries ensures geoip_countries is a JSON array of non-empty province names / "海外".
+func validateGeoIPCountries(raw string) error {
+	var entries []string
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return fmt.Errorf("geoip_countries 必须是 JSON 数组")
+	}
+	for _, entry := range entries {
+		if strings.TrimSpace(entry) == "" {
+			return fmt.Errorf("geoip_countries 不能包含空条目")
+		}
+	}
+	return nil
+}
+
+func validateIPCIDRList(field, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	var entries []string
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return fmt.Errorf("%s 必须是 JSON 数组", field)
+	}
+	for _, entry := range entries {
+		if _, err := netip.ParsePrefix(entry); err == nil {
+			continue
+		}
+		if _, err := netip.ParseAddr(entry); err != nil {
+			return fmt.Errorf("%s 包含无效的 IP/CIDR 条目：%s", field, entry)
+		}
+	}
+	return nil
 }
 
 func getContextUserIDInt(c *gin.Context) int {
@@ -643,9 +1182,10 @@ func (h *Handlers) ListCRSRules(c *gin.Context) {
 	}
 
 	type CRSRule struct {
-		Filename string `json:"filename"`
-		Category string `json:"category"`
-		Size     int64  `json:"size"`
+		Filename  string `json:"filename"`
+		Category  string `json:"category"`
+		Size      int64  `json:"size"`
+		UpdatedAt string `json:"updated_at"`
 	}
 	var allRules []CRSRule
 	for _, entry := range entries {
@@ -661,9 +1201,10 @@ func (h *Handlers) ListCRSRules(c *gin.Context) {
 			continue
 		}
 		allRules = append(allRules, CRSRule{
-			Filename: entry.Name(),
-			Category: cat,
-			Size:     info.Size(),
+			Filename:  entry.Name(),
+			Category:  cat,
+			Size:      info.Size(),
+			UpdatedAt: info.ModTime().UTC().Format("2006-01-02 15:04:05"),
 		})
 	}
 	sort.Slice(allRules, func(i, j int) bool { return allRules[i].Filename < allRules[j].Filename })

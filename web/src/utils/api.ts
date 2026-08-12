@@ -43,6 +43,8 @@ interface GlobalConfigData {
   access_log_json: boolean
   access_log_format: string
   audit_retention_months: number
+  security_events_retention_days: number
+  security_events_retention_max: number
   jwt_expire_minutes: number
   timezone: string
   acme_email: string

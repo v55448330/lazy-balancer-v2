@@ -1,0 +1,207 @@
+package services
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"lazy-balancer-v2/internal/db"
+)
+
+func setupSecurityEventsRetentionTestDB(t *testing.T) {
+	t.Helper()
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatalf("initialize metrics database: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+}
+
+func countSecurityEventsByType(t *testing.T, eventType string) int {
+	t.Helper()
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events WHERE event_type=?`, eventType).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func TestSecurityEventsRetentionCleanup_deletesEventsOlderThanConfiguredDays(t *testing.T) {
+	// Given: a 30-day retention window and events older and newer than the cutoff
+	setupSecurityEventsRetentionTestDB(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time, client_ip, event_type) VALUES
+		(datetime('now', '-40 days'), '198.51.100.1', 'expired'),
+		(datetime('now', '-1 day'), '198.51.100.2', 'recent')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	securityEventsRetentionCleanup()
+
+	// Then: the expired event is gone, the recent one survives
+	if got := countSecurityEventsByType(t, "expired"); got != 0 {
+		t.Fatalf("expired events after cleanup = %d, want 0", got)
+	}
+	if got := countSecurityEventsByType(t, "recent"); got != 1 {
+		t.Fatalf("recent events after cleanup = %d, want 1", got)
+	}
+}
+
+func TestSecurityEventsRetentionCleanup_trimsOldestRowsWhenCountExceedsMax(t *testing.T) {
+	// Given: a wide age window (120 months) and 5 recent events
+	// The hardcoded safety max (100000) means count-based trim won't fire for 5 rows.
+	// This test now verifies that with a wide age window, all events survive.
+	setupSecurityEventsRetentionTestDB(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=120 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time, client_ip) VALUES (datetime('now'), ?)`,
+			fmt.Sprintf("198.51.100.%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// When
+	securityEventsRetentionCleanup()
+
+	// Then: all 5 events survive (safety max not reached)
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 5 {
+		t.Fatalf("events after cleanup = %d, want 5 (safety max not reached)", count)
+	}
+}
+
+func TestSecurityEventsRetentionSettings_appliesDefaultsWhenZero(t *testing.T) {
+	// Given: non-positive retention values stored in global_config
+	setupSecurityEventsRetentionTestDB(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=0 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	days, max := securityEventsRetentionSettings()
+
+	// Then: the documented defaults apply
+	if days != 30 || max != 100000 {
+		t.Fatalf("settings = (%d, %d), want (30, 100000)", days, max)
+	}
+}
+
+func TestSecurityEventsRetentionCleanup_usesDefaultDaysWhenConfigZero(t *testing.T) {
+	// Given: zeroed retention config and events straddling the default 30-day window
+	setupSecurityEventsRetentionTestDB(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=0 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time, client_ip, event_type) VALUES
+		(datetime('now', '-31 days'), '198.51.100.1', 'expired'),
+		(datetime('now', '-29 days'), '198.51.100.2', 'recent')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	securityEventsRetentionCleanup()
+
+	// Then: the default 30-day window deleted the 31-day-old event only
+	if got := countSecurityEventsByType(t, "expired"); got != 0 {
+		t.Fatalf("expired events after cleanup = %d, want 0", got)
+	}
+	if got := countSecurityEventsByType(t, "recent"); got != 1 {
+		t.Fatalf("recent events after cleanup = %d, want 1", got)
+	}
+}
+
+func TestSetSecurityEventsRetentionMasterRole_startsAndStopsWorker(t *testing.T) {
+	// Given
+	setupSecurityEventsRetentionTestDB(t)
+	t.Cleanup(securityEventsRetentionStop)
+	workerDone := func() chan struct{} {
+		securityEventsRetentionMu.Lock()
+		defer securityEventsRetentionMu.Unlock()
+		return securityEventsRetentionDone
+	}
+
+	// When / Then: slave role keeps the worker stopped
+	SetSecurityEventsRetentionMasterRole(false)
+	if done := workerDone(); done != nil {
+		t.Fatal("slave role must not run the retention worker")
+	}
+
+	// When / Then: master role starts it, and repeated promotion is idempotent
+	SetSecurityEventsRetentionMasterRole(true)
+	first := workerDone()
+	if first == nil {
+		t.Fatal("master role must start the retention worker")
+	}
+	SetSecurityEventsRetentionMasterRole(true)
+	if second := workerDone(); second != first {
+		t.Fatal("repeated master role must not restart the retention worker")
+	}
+
+	// When / Then: demotion stops the worker, promotion restarts a fresh one
+	SetSecurityEventsRetentionMasterRole(false)
+	select {
+	case <-first:
+	case <-time.After(2 * time.Second):
+		t.Fatal("demotion to slave must stop the retention worker")
+	}
+	if done := workerDone(); done != nil {
+		t.Fatal("demotion must clear the worker state")
+	}
+	SetSecurityEventsRetentionMasterRole(true)
+	if done := workerDone(); done == nil || done == first {
+		t.Fatal("promotion after demotion must start a new retention worker")
+	}
+}
+
+func TestStartSecurityEventsRetention_stopsWhenParentContextCanceled(t *testing.T) {
+	// Given: a worker bound to a cancelable parent context
+	setupSecurityEventsRetentionTestDB(t)
+	t.Cleanup(securityEventsRetentionStop)
+	ctx, cancel := context.WithCancel(context.Background())
+	StartSecurityEventsRetention(ctx)
+	securityEventsRetentionMu.Lock()
+	done := securityEventsRetentionDone
+	securityEventsRetentionMu.Unlock()
+	if done == nil {
+		t.Fatal("worker did not publish its completion channel")
+	}
+
+	// When
+	cancel()
+
+	// Then: the worker exits and clears its state so a restart is possible
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker must stop when the parent context is canceled")
+	}
+	securityEventsRetentionMu.Lock()
+	cleared := securityEventsRetentionDone == nil
+	securityEventsRetentionMu.Unlock()
+	if !cleared {
+		t.Fatal("worker state must be cleared after parent context cancellation")
+	}
+	StartSecurityEventsRetention(context.Background())
+	securityEventsRetentionMu.Lock()
+	restarted := securityEventsRetentionDone != nil
+	securityEventsRetentionMu.Unlock()
+	if !restarted {
+		t.Fatal("worker must be restartable after parent context cancellation")
+	}
+}

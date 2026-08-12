@@ -234,15 +234,99 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 	if snapshot.SecurityBindings, err = s.snapshotSecurityBindings(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
+	if snapshot.SecurityCustomRules, err = s.snapshotSecurityCustomRules(ctx, store); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
+	if snapshot.SecurityBlockPages, err = s.snapshotSecurityBlockPages(ctx, store); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
+	if snapshot.SecurityCRSVersion, err = s.snapshotSecurityCRSVersion(ctx, store); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
+	if snapshot.SecurityIP2RegionVersion, err = s.snapshotSecurityIP2RegionVersion(ctx, store); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
 	return snapshot, nil
 }
 
 func (s *ClusterService) snapshotSecurityPolicies(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
-	return s.dumpTableAsJSON(ctx, store, "security_policies", "id,name,description,mode,anomaly_threshold,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,custom_rules,enabled,created_at,updated_at", "id")
+	return s.dumpTableAsJSON(ctx, store, "security_policies", "id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,rate_limit_response,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,enabled,created_at,updated_at,geoip_countries,geoip_mode", "id")
 }
 
 func (s *ClusterService) snapshotSecurityBindings(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
 	return s.dumpTableAsJSON(ctx, store, "security_policy_bindings", "rule_caddy_id,policy_id", "rule_caddy_id")
+}
+
+func (s *ClusterService) snapshotSecurityCustomRules(ctx context.Context, store snapshotStore) ([]models.SecurityCustomRule, error) {
+	rows, err := store.QueryContext(ctx, `SELECT id,name,COALESCE(description,''),COALESCE(conditions,'[]'),COALESCE(action,'block'),COALESCE(score,5),COALESCE(status_code,403),COALESCE(enabled,1),COALESCE(updated_by,0),created_at,updated_at FROM security_custom_rules ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("读取快照自定义安全规则: %w", err)
+	}
+	defer rows.Close()
+	rules := make([]models.SecurityCustomRule, 0)
+	for rows.Next() {
+		var rule models.SecurityCustomRule
+		var conditionsJSON string
+		if err := rows.Scan(&rule.ID, &rule.Name, &rule.Description, &conditionsJSON, &rule.Action, &rule.Score, &rule.StatusCode, &rule.Enabled, &rule.UpdatedBy, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("扫描快照自定义安全规则: %w", err)
+		}
+		if err := json.Unmarshal([]byte(conditionsJSON), &rule.Conditions); err != nil {
+			return nil, fmt.Errorf("解析快照自定义安全规则 %d 的条件: %w", rule.ID, err)
+		}
+		rules = append(rules, rule)
+	}
+	return rules, rows.Err()
+}
+
+func (s *ClusterService) snapshotSecurityBlockPages(ctx context.Context, store snapshotStore) ([]models.SecurityBlockPage, error) {
+	rows, err := store.QueryContext(ctx, `SELECT id,name,COALESCE(description,''),COALESCE(content,''),COALESCE(status_code,403),COALESCE(is_default,0),COALESCE(created_by,0),created_at,COALESCE(updated_by,0),updated_at FROM security_block_pages ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("读取快照拦截页面: %w", err)
+	}
+	defer rows.Close()
+	pages := make([]models.SecurityBlockPage, 0)
+	for rows.Next() {
+		var page models.SecurityBlockPage
+		if err := rows.Scan(&page.ID, &page.Name, &page.Description, &page.Content, &page.StatusCode, &page.IsDefault, &page.CreatedBy, &page.CreatedAt, &page.UpdatedBy, &page.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("扫描快照拦截页面: %w", err)
+		}
+		pages = append(pages, page)
+	}
+	return pages, rows.Err()
+}
+
+func (s *ClusterService) snapshotSecurityCRSVersion(ctx context.Context, store snapshotStore) ([]models.ClusterSecurityCRSVersion, error) {
+	rows, err := store.QueryContext(ctx, `SELECT id,version,COALESCE(updated_at,''),COALESCE(auto_update,1),COALESCE(update_status,'idle'),COALESCE(message,''),COALESCE(last_checked,''),COALESCE(next_update,''),COALESCE(trigger,''),COALESCE(started_at,''),COALESCE(finished_at,'') FROM security_crs_version ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("读取快照 CRS 版本: %w", err)
+	}
+	defer rows.Close()
+	versions := make([]models.ClusterSecurityCRSVersion, 0)
+	for rows.Next() {
+		var version models.ClusterSecurityCRSVersion
+		if err := rows.Scan(&version.ID, &version.Version, &version.UpdatedAt, &version.AutoUpdate, &version.UpdateStatus, &version.Message, &version.LastChecked, &version.NextUpdate, &version.Trigger, &version.StartedAt, &version.FinishedAt); err != nil {
+			return nil, fmt.Errorf("扫描快照 CRS 版本: %w", err)
+		}
+		versions = append(versions, version)
+	}
+	return versions, rows.Err()
+}
+
+func (s *ClusterService) snapshotSecurityIP2RegionVersion(ctx context.Context, store snapshotStore) ([]models.ClusterSecurityIP2RegionVersion, error) {
+	rows, err := store.QueryContext(ctx, `SELECT id,version,COALESCE(updated_at,''),COALESCE(auto_update,1),COALESCE(update_status,'idle'),COALESCE(message,''),COALESCE(last_checked,''),COALESCE(next_update,''),COALESCE(trigger,''),COALESCE(started_at,''),COALESCE(finished_at,'') FROM security_ip2region_version ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("读取快照 ip2region 版本: %w", err)
+	}
+	defer rows.Close()
+	versions := make([]models.ClusterSecurityIP2RegionVersion, 0)
+	for rows.Next() {
+		var version models.ClusterSecurityIP2RegionVersion
+		if err := rows.Scan(&version.ID, &version.Version, &version.UpdatedAt, &version.AutoUpdate, &version.UpdateStatus, &version.Message, &version.LastChecked, &version.NextUpdate, &version.Trigger, &version.StartedAt, &version.FinishedAt); err != nil {
+			return nil, fmt.Errorf("扫描快照 ip2region 版本: %w", err)
+		}
+		versions = append(versions, version)
+	}
+	return versions, rows.Err()
 }
 
 func (s *ClusterService) dumpTableAsJSON(ctx context.Context, store snapshotStore, table, columns, orderBy string) (json.RawMessage, error) {

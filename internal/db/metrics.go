@@ -55,6 +55,26 @@ func InitializeMetricsDB(dataDir string) (err error) {
 	CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics_history(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_metrics_rule ON metrics_history(rule_id);
 	CREATE INDEX IF NOT EXISTS idx_metrics_rule_timestamp ON metrics_history(rule_id, timestamp);
+
+	CREATE TABLE IF NOT EXISTS security_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		event_time DATETIME NOT NULL DEFAULT (datetime('now')),
+		rule_caddy_id TEXT DEFAULT '',
+		policy_id INTEGER DEFAULT 0,
+		client_ip TEXT DEFAULT '',
+		method TEXT DEFAULT '',
+		uri TEXT DEFAULT '',
+		event_type TEXT DEFAULT 'waf',
+		rule_triggered TEXT DEFAULT '',
+		rule_msg TEXT DEFAULT '',
+		action TEXT DEFAULT '',
+		anomaly_score INTEGER DEFAULT 0,
+		rule_name TEXT DEFAULT '',
+		policy_name TEXT DEFAULT ''
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_security_events_time ON security_events(event_time DESC);
+	CREATE INDEX IF NOT EXISTS idx_security_events_rule ON security_events(rule_caddy_id);
 	`
 
 	if _, err := db.Exec(schema); err != nil {

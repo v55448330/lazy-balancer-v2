@@ -26,20 +26,29 @@
 
     <el-card>
       <div class="table-toolbar">
-        <el-input v-model="searchQuery" placeholder="搜索规则名 / 域名 / 端口" clearable :prefix-icon="Search" class="search-input" />
+        <el-input v-model="searchQuery" placeholder="搜索规则名 / 域名 / 端口 / ID" clearable :prefix-icon="Search" class="search-input" />
       </div>
       <el-table :data="pagedRules" row-key="caddy_id" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <el-table-column prop="name" label="规则名称" min-width="140">
           <template #default="{ row }">
             <div class="rule-name-cell">
               <el-tooltip
-                v-if="hasSecurityIcon(row)"
-                :content="securityTooltip(row)"
+                v-if="ruleProtections(row.caddy_id).length > 0"
+                placement="top"
+                effect="light"
               >
+                <template #content>
+                  <div class="cert-tooltip security-tooltip">
+                    <div class="tooltip-title">安全防护已启用</div>
+                    <div v-for="protection in ruleProtections(row.caddy_id)" :key="protection.label" class="cert-row">
+                      <span class="cert-label">{{ protection.label }}</span>
+                      <span class="cert-value" :title="protection.detail">{{ protection.detail }}</span>
+                    </div>
+                  </div>
+                </template>
                 <el-icon
                   :size="14"
-                  class="acl-lock-icon"
-                  :class="`is-${row.ip_acl_mode || 'security'}`"
+                  class="acl-lock-icon is-allow"
                   tabindex="0"
                 ><Lock /></el-icon>
               </el-tooltip>
@@ -216,14 +225,9 @@
                   日志
                 </el-button>
               </div>
-              <div>
-                <el-button type="primary" link size="small" :disabled="isReadOnly" @click="openAclDialog(row)">
-                  访问控制
-                </el-button>
-              </div>
               <el-tooltip
-              :disabled="!isReadOnly && canEditRule(row)"
-              :content="isReadOnly ? authStore.readOnlyMessage : '证书申请中，请等待完成或失败后再删除规则'"
+                :disabled="!isReadOnly && canEditRule(row)"
+                :content="isReadOnly ? authStore.readOnlyMessage : '证书申请中，请等待完成或失败后再删除规则'"
               >
                 <div>
                 <el-button type="danger" link size="small" @click="deleteRule(row)" :disabled="isReadOnly || !canEditRule(row)">
@@ -247,16 +251,6 @@
         class="rules-pagination"
       />
     </el-card>
-
-    <RuleAclDialog
-      :visible="aclDialogVisible"
-      :rule-name="aclTarget?.name || ''"
-      :initial-mode="aclTarget?.ip_acl_mode || ''"
-      :initial-cidrs="aclTarget?.ip_acl_list || []"
-      :saving="aclSaving"
-      @update:visible="aclDialogVisible = $event"
-      @save="saveAcl"
-    />
 
     <el-dialog v-model="wizardVisible" :title="editingRule ? '编辑规则' : (isCopyMode ? '复制规则' : '新建规则')" width="min(800px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
       <el-steps :active="visualStepIndex" finish-status="success" align-center class="wizard-steps">
@@ -751,9 +745,6 @@
             <el-descriptions-item label="压缩" v-if="wizardForm.protocol === 'http'">
               {{ wizardForm.enable_compress ? compressType : '禁用' }}
             </el-descriptions-item>
-            <el-descriptions-item label="访问控制">
-              {{ aclPreview() }}
-            </el-descriptions-item>
             <el-descriptions-item label="自定义路由" v-if="wizardForm.protocol === 'http'">
               {{ customRoutesPreview() }}
             </el-descriptions-item>
@@ -888,7 +879,7 @@
         
         <el-divider content-position="left">Caddy 配置 (JSON)</el-divider>
         <el-empty v-if="ruleConfig.config_not_exists" description="配置不存在" :image-size="60" />
-        <pre v-else class="config-code">{{ JSON.stringify(ruleConfig.config, null, 2) }}</pre>
+        <SyntaxHighlight v-else :content="JSON.stringify(ruleConfig.config, null, 2)" language="json" />
       </div>
       <div v-else class="config-empty">
         <el-empty description="未找到该规则的配置信息" :image-size="60" />
@@ -993,19 +984,18 @@ import { formatDate } from '@/utils/date'
 import type {
   APIResponse,
   CreateRuleRequest,
-  IpAclMode,
   ProxyTimeoutConfig,
   PathRuleUpstream,
   Rule,
-  RuleProtocol,
   RuleAclRequest,
+  RuleProtocol,
   UpdateRuleRequest,
   Upstream,
   UpstreamInput,
   UpstreamProtocol,
   UserListItem,
 } from '@/types'
-import RuleAclDialog from '@/components/rules/RuleAclDialog.vue'
+import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import PathRulesEditor from '@/components/rules/PathRulesEditor.vue'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
 import { validatePathRules } from '@/utils/ruleValidation'
@@ -1015,7 +1005,7 @@ import type { CertJobStatus } from '@/utils/certJobStatus'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
 
-interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id' | 'compress_types'> {
+interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id' | 'compress_types' | keyof RuleAclRequest> {
   id?: number
   caddy_id: string
   dns_family: string[]
@@ -1197,39 +1187,65 @@ class CertInfoRefreshError extends Error {
 const rules = ref<Rule[]>([])
 const securityBindings = ref<Record<string, { policy_id: number; name: string; mode: string; enabled: boolean; ip_whitelist: string; ip_blacklist: string; rate_limit_enabled: boolean }>>({})
 
+interface SecurityPolicySummary {
+  id: number
+  mode: string
+  enabled: boolean
+  has_ip_control: boolean
+  has_rate_limit: boolean
+  ip_acl_mode: string
+  ip_acl_list: string
+  ip_whitelist: string
+  rate_limit_rps: number
+  rate_limit_burst: number
+}
+
+const securityPolicies = ref<SecurityPolicySummary[]>([])
+
 const fetchSecurityBindings = async () => {
   try {
-    const res = await request.get<APIResponse<typeof securityBindings.value>>('/security/bindings')
-    if (res.data) securityBindings.value = res.data
+    const [bindingsRes, policiesRes] = await Promise.all([
+      request.get<APIResponse<typeof securityBindings.value>>('/security/bindings'),
+      request.get<APIResponse<SecurityPolicySummary[]>>('/security/policies'),
+    ])
+    if (bindingsRes.data) securityBindings.value = bindingsRes.data
+    if (policiesRes.data) securityPolicies.value = policiesRes.data
   } catch { /* silent */ }
 }
 
-const hasSecurityIcon = (row: Rule): boolean => {
-  if (row.ip_acl_mode === 'allow' || row.ip_acl_mode === 'deny') return true
-  const binding = securityBindings.value[row.caddy_id]
-  if (!binding || !binding.enabled) return false
-  return binding.mode !== 'off' || binding.rate_limit_enabled ||
-    (binding.ip_whitelist != null && binding.ip_whitelist !== '[]') ||
-    (binding.ip_blacklist != null && binding.ip_blacklist !== '[]')
+interface ProtectionRow {
+  label: string
+  detail: string
 }
 
-const securityTooltip = (row: Rule): string => {
-  const parts: string[] = []
-  if (row.ip_acl_mode === 'allow' || row.ip_acl_mode === 'deny') {
-    parts.push(`IP ${row.ip_acl_mode === 'allow' ? '白名单' : '黑名单'} · ${row.ip_acl_list?.length || 0} 条`)
+const parseIPListCount = (raw: string): number => {
+  if (!raw) return 0
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.length : 0
+  } catch {
+    return 0
   }
-  const binding = securityBindings.value[row.caddy_id]
-  if (binding && binding.enabled) {
-    const feats: string[] = []
-    if (binding.mode === 'blocking') feats.push('WAF 拦截')
-    else if (binding.mode === 'detection') feats.push('WAF 检测')
-    const wl = binding.ip_whitelist && binding.ip_whitelist !== '[]' ? JSON.parse(binding.ip_whitelist).length : 0
-    const bl = binding.ip_blacklist && binding.ip_blacklist !== '[]' ? JSON.parse(binding.ip_blacklist).length : 0
-    if (wl > 0 || bl > 0) feats.push(`IP ${wl > 0 ? `白${wl}` : ''}${bl > 0 ? `黑${bl}` : ''}`)
-    if (binding.rate_limit_enabled) feats.push('限流')
-    if (feats.length > 0) parts.push(`${binding.name}: ${feats.join(' · ')}`)
+}
+
+const ruleProtections = (caddyID: string): ProtectionRow[] => {
+  const binding = securityBindings.value[caddyID]
+  if (!binding) return []
+  const rows: ProtectionRow[] = []
+  for (const policy of securityPolicies.value) {
+    if (policy.id !== binding.policy_id || !policy.enabled) continue
+    if (policy.mode === 'blocking') rows.push({ label: 'WAF（拦截）', detail: '命中即阻断' })
+    else if (policy.mode === 'detection') rows.push({ label: 'WAF（检测）', detail: '仅记录不阻断' })
+    if (policy.has_ip_control) {
+      const modeLabel = policy.ip_acl_mode === 'allow' ? '白名单模式' : (policy.ip_acl_mode === 'bypass' ? '免检测' : '黑名单模式')
+      const parts = [`${modeLabel} · ${parseIPListCount(policy.ip_acl_list)} 条`]
+      const trustCount = parseIPListCount(policy.ip_whitelist)
+      if (trustCount > 0 && policy.ip_acl_mode !== 'bypass') parts.push(`免检测 ${trustCount} 条`)
+      rows.push({ label: 'IP 访问控制', detail: parts.join(' · ') })
+    }
+    if (policy.has_rate_limit) rows.push({ label: '速率限制', detail: `${policy.rate_limit_rps} 次/秒 · 突发 ${policy.rate_limit_burst} 次` })
   }
-  return parts.join(' | ')
+  return rows
 }
 const searchQuery = ref('')
 const currentPage = ref(1)
@@ -1242,7 +1258,8 @@ const filteredRules = computed(() => {
         const name = (rule.name || '').toLowerCase()
         const domain = (rule.domain || '').toLowerCase()
         const port = String(rule.listen_port || '')
-        return name.includes(query) || domain.includes(query) || port.includes(query)
+        const caddyId = (rule.caddy_id || '').toLowerCase()
+        return name.includes(query) || domain.includes(query) || port.includes(query) || caddyId.includes(query)
       })
     : rules.value
   return [...base].sort((a, b) => ruleUpdatedAtMs(b) - ruleUpdatedAtMs(a))
@@ -1464,36 +1481,6 @@ const configDialogVisible = ref(false)
 const configLoading = ref(false)
 let configRequestSeq = 0
 
-const aclDialogVisible = ref(false)
-const aclSaving = ref(false)
-const aclTarget = ref<Rule | null>(null)
-
-const openAclDialog = (rule: Rule): void => {
-  if (isReadOnly.value) return
-  aclTarget.value = rule
-  aclDialogVisible.value = true
-}
-
-const saveAcl = async (value: { readonly mode: IpAclMode; readonly cidrs: readonly string[] }): Promise<void> => {
-  const target = aclTarget.value
-  if (!target || isReadOnly.value || aclSaving.value) return
-  aclSaving.value = true
-  try {
-    const payload: RuleAclRequest = {
-      ip_acl_mode: value.mode,
-      ip_acl_list: [...value.cidrs],
-    }
-    await request.post<APIResponse>(`/rules/${target.caddy_id}/acl`, payload)
-    ElMessage.success('访问控制已保存')
-    if (aclTarget.value?.caddy_id === target.caddy_id) {
-      aclDialogVisible.value = false
-    }
-    await fetchRules()
-  } finally {
-    aclSaving.value = false
-  }
-}
-
 const ruleLogDialogVisible = ref(false)
 const ruleLogRuleName = ref('')
 const ruleLogCaddyId = ref('')
@@ -1696,8 +1683,6 @@ const wizardForm = reactive<RuleForm>({
   server_tokens_hidden: 0,
   enabled: true,
   log_enabled: false,
-  ip_acl_mode: '',
-  ip_acl_list: [],
   custom_routes_enabled: false,
   path_rules: [],
   proxy_dial_timeout: 0,
@@ -2056,8 +2041,6 @@ const openWizard = async (rule?: Rule) => {
       server_tokens_hidden: fullRule.server_tokens_hidden || 0,
       enabled: fullRule.enabled,
       log_enabled: fullRule.log_enabled || false,
-      ip_acl_mode: fullRule.ip_acl_mode || '',
-      ip_acl_list: [...(fullRule.ip_acl_list || [])],
       custom_routes_enabled: fullRule.custom_routes_enabled === true,
       path_rules: [...(fullRule.path_rules || [])]
         .sort((left, right) => left.sort_order - right.sort_order)
@@ -2114,8 +2097,6 @@ const openWizard = async (rule?: Rule) => {
       enable_dns_server: false,
       log_enabled: false,
       enabled: true,
-      ip_acl_mode: '',
-      ip_acl_list: [],
       custom_routes_enabled: false,
       path_rules: [],
       proxy_dial_timeout: 0,
@@ -2187,11 +2168,6 @@ const addUpstream = () => {
   upstream.weight = 0
   wizardForm.upstreams.push(upstream)
   redistributeWeight(wizardForm.upstreams, wizardForm.upstreams.length - 1)
-}
-
-const aclPreview = (): string => {
-  const labels: Record<IpAclMode, string> = { '': '全部允许', allow: '白名单', deny: '黑名单' }
-  return `${labels[wizardForm.ip_acl_mode]} · ${wizardForm.ip_acl_list.length} 个 CIDR`
 }
 
 const customRoutesPreview = (): string => {
@@ -2417,8 +2393,6 @@ const submitWizard = async () => {
       server_tokens_hidden: wizardForm.server_tokens_hidden || 0,
       enabled: wizardForm.enabled,
       log_enabled: wizardForm.log_enabled || false,
-      ip_acl_mode: wizardForm.ip_acl_mode,
-      ip_acl_list: [...wizardForm.ip_acl_list],
       custom_routes_enabled: wizardForm.protocol === 'http' && wizardForm.custom_routes_enabled,
       path_rules: wizardForm.protocol === 'http' && wizardForm.custom_routes_enabled
         ? wizardForm.path_rules.map((pathRule, index) => ({
@@ -2563,8 +2537,6 @@ const openCopyWizard = async (rule: Rule) => {
     upstream_keepalive_timeout: fullRule.upstream_keepalive_timeout || 0,
     server_tokens_hidden: fullRule.server_tokens_hidden || 0,
     log_enabled: fullRule.log_enabled || false,
-    ip_acl_mode: fullRule.ip_acl_mode || '',
-    ip_acl_list: [...(fullRule.ip_acl_list || [])],
     custom_routes_enabled: fullRule.custom_routes_enabled === true,
     path_rules: [...(fullRule.path_rules || [])]
       .sort((left, right) => left.sort_order - right.sort_order)
@@ -2991,6 +2963,8 @@ watch(
 )
 
 onMounted(() => {
+  const ruleSearch = localStorage.getItem('rules-search')
+  if (ruleSearch) { searchQuery.value = ruleSearch; localStorage.removeItem('rules-search') }
   void fetchRules()
   void fetchUsers()
   void fetchCertConfigs()
@@ -3048,6 +3022,8 @@ onUnmounted(() => {
 .acl-lock-icon { flex: 0 0 auto; cursor: pointer; }
 .acl-lock-icon.is-allow { color: var(--el-color-success); }
 .acl-lock-icon.is-deny { color: var(--el-color-danger); }
+.security-tooltip { min-width: 200px; font-size: 13px; }
+.security-tooltip .cert-value { max-width: 240px; }
 .rule-name-link { 
   font-weight: 500; 
   color: #111827; 
@@ -3467,20 +3443,6 @@ onUnmounted(() => {
 
 .config-info :deep(.el-descriptions__content) {
   width: 70% !important;
-}
-
-.config-code {
-  background: #1e1e1e;
-  color: #d4d4d4;
-  padding: 16px;
-  border-radius: 6px;
-  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  overflow: auto;
-  max-height: 400px;
-  white-space: pre-wrap;
-  word-break: break-all;
 }
 
 .stats-summary { margin-bottom: 14px; display: flex; align-items: center; }

@@ -32,9 +32,11 @@ const parseDateValue = (date: unknown): Date | null => {
   let raw: unknown = date
   if (isRecord(date) && typeof date.String === 'string' && date.String) raw = date.String
   if (isRecord(date) && typeof date.Time === 'string' && date.Time) raw = date.Time
-  if (typeof raw === 'string' && !isIsoLike(raw)) return null
   if (typeof raw !== 'string') return null
-  const d = new Date(raw)
+  // DB datetimes ("2026-08-11 08:23:21") are stored in UTC; normalize to explicit UTC ISO
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(raw) ? raw.replace(' ', 'T') + 'Z' : raw
+  if (!isIsoLike(normalized)) return null
+  const d = new Date(normalized)
   return isNaN(d.getTime()) ? null : d
 }
 

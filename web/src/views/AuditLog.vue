@@ -15,7 +15,7 @@
         <template #empty>
           <el-empty description="暂无操作日志" :image-size="60" />
         </template>
-        <el-table-column prop="created_at" label="时间" width="190" />
+        <el-table-column prop="created_at" label="时间" width="190" :formatter="(row: AuditLogEntry) => formatDate(row.created_at)" />
         <el-table-column label="操作人" width="150">
           <template #default="{ row }">
             <span v-if="row.display_name && row.display_name !== row.username">{{ row.display_name }}（{{ row.username }}）</span>
@@ -50,6 +50,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { request } from '@/utils/api'
+import { formatDate } from '@/utils/date'
 import { Document } from '@element-plus/icons-vue'
 
 interface AuditLogEntry {

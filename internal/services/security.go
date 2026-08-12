@@ -1,34 +1,70 @@
 package services
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
 
+// crsDirectivesDir is a test seam (mirroring crsLiveDir in crsupdate.go);
+// emitted Include directives always use the container path.
+var crsDirectivesDir = "/app/waf/crs"
+
 func GetSecurityPolicyForRule(ruleCaddyID string) *models.SecurityPolicy {
 	if db.DB == nil {
 		return nil
 	}
 	var policyID int
-	err := db.DB.QueryRow("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=?", ruleCaddyID).Scan(&policyID)
+	err := db.DB.QueryRow("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id DESC LIMIT 1", ruleCaddyID).Scan(&policyID)
 	if err != nil {
 		return nil
 	}
 	var p models.SecurityPolicy
-	err = db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, custom_rules, enabled, created_at, updated_at
+	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
+	err = db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, created_at, updated_at, geoip_countries, geoip_mode
 		FROM security_policies WHERE id=? AND enabled=1`, policyID).
-		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPWhitelist, &p.IPBlacklist,
-			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.CRSRuleGroups, &p.CustomRules, &p.Enabled, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
+			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode)
 	if err != nil {
 		return nil
 	}
+	p.IPWhitelist = json.RawMessage(ipWhitelist)
+	p.IPBlacklist = json.RawMessage(ipBlacklist)
+	p.CRSExcludedRules = json.RawMessage(crsExcludedRules)
+	p.CRSRuleGroups = json.RawMessage(crsRuleGroups)
+	p.CustomRules = json.RawMessage(customRules)
+	p.GeoIPCountries = json.RawMessage(geoipCountries)
 	return &p
+}
+
+// geoipCountries parses the policy's geoip_countries JSON array, skipping
+// blank entries. A missing or malformed payload yields nil.
+func geoipCountries(p *models.SecurityPolicy) []string {
+	if p == nil || len(p.GeoIPCountries) == 0 {
+		return nil
+	}
+	var entries []string
+	if err := json.Unmarshal(p.GeoIPCountries, &entries); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if trimmed := strings.TrimSpace(entry); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// PolicyHasGeoIP reports whether the policy configures any geoip countries.
+func PolicyHasGeoIP(p *models.SecurityPolicy) bool {
+	return len(geoipCountries(p)) > 0
 }
 
 func BuildCorazaDirectives(p *models.SecurityPolicy) string {
@@ -42,18 +78,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 		return ""
 	}
 	sb.WriteString("SecRequestBodyAccess On\n")
-	sb.WriteString("SecAuditEngine Relevant\nSecAuditLog /app/waf/audit/audit.log\nSecAuditLogFormat JSON\nSecAuditLogParts ABIJDEFHZ\n")
-	if p.BlockPageID > 0 {
-		var content string
-		var statusCode int
-		db.DB.QueryRow("SELECT content, status_code FROM security_block_pages WHERE id=?", p.BlockPageID).Scan(&content, &statusCode)
-		if content != "" {
-			if statusCode == 0 {
-				statusCode = 403
-			}
-			sb.WriteString(fmt.Sprintf("SecDefaultAction \"phase:1,deny,status:%d,log,msg:'Blocked by security policy'\"\nSecDefaultAction \"phase:2,deny,status:%d,log,msg:'Blocked by security policy'\"\n", statusCode, statusCode))
-		}
-	}
+	sb.WriteString("SecAuditEngine RelevantOnly\nSecAuditLog /app/waf/audit/audit.log\nSecAuditLogFormat JSON\nSecAuditLogParts ABIJDEFHKZ\n")
 
 	var ipWL []string
 	json.Unmarshal(p.IPWhitelist, &ipWL)
@@ -61,15 +86,28 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 	json.Unmarshal(p.IPBlacklist, &ipBL)
 	var ipACLList []string
 	json.Unmarshal([]byte(p.IPACLList), &ipACLList)
-	if p.IPACLEnabled && p.IPACLMode != "" {
-		if p.IPACLMode == "allow" && len(ipACLList) > 0 {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:1,phase:1,pass,nolog\"\nSecRule REMOTE_ADDR \"@noMatch\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝'\"\n", strings.Join(ipACLList, ",")))
-		} else if p.IPACLMode == "deny" && len(ipACLList) > 0 {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'\"\n", strings.Join(ipACLList, ",")))
-		}
+	// SecRule id map: 2 = ACL allow/deny, 3 = bypass-mode (legacy), 4 = legacy
+	// blacklist, 5 = trust list. The trust list keeps the historical id:3 unless
+	// a bypass-mode rule already owns it. ctl:ruleEngine=Off short-circuits are
+	// emitted first so bypassed and trusted clients never reach the ACL denies.
+	bypassEmitted := false
+	if p.IPACLEnabled && p.IPACLMode == "bypass" && len(ipACLList) > 0 {
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:3,phase:1,pass,nolog,ctl:ruleEngine=Off\"\n", strings.Join(ipACLList, ",")))
+		bypassEmitted = true
 	}
 	if len(ipWL) > 0 {
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:3,phase:1,pass,nolog,ctl:ruleEngine=Off\"\n", strings.Join(ipWL, ",")))
+		trustID := 3
+		if bypassEmitted {
+			trustID = 5
+		}
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:%d,phase:1,pass,nolog,ctl:ruleEngine=Off\"\n", strings.Join(ipWL, ","), trustID))
+	}
+	if p.IPACLEnabled && len(ipACLList) > 0 {
+		if p.IPACLMode == "allow" {
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝'\"\n", strings.Join(ipACLList, ",")))
+		} else if p.IPACLMode == "deny" {
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'\"\n", strings.Join(ipACLList, ",")))
+		}
 	}
 	if len(ipBL) > 0 {
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单'\"\n", strings.Join(ipBL, ",")))
@@ -78,6 +116,12 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 	var groups []string
 	json.Unmarshal(p.CRSRuleGroups, &groups)
 	sb.WriteString("Include /app/waf/crs/crs-setup.conf\n")
+	if _, err := os.Stat(filepath.Join(crsDirectivesDir, "zz-user-overrides.conf")); err == nil {
+		sb.WriteString("Include /app/waf/crs/zz-user-overrides.conf\n")
+	}
+	if p.AnomalyThreshold > 0 {
+		sb.WriteString(fmt.Sprintf("SecAction \"id:900,phase:1,nolog,pass,setvar:tx.inbound_anomaly_score_threshold=%d\"\n", p.AnomalyThreshold))
+	}
 	if len(groups) == 0 {
 		sb.WriteString("Include /app/waf/crs/rules/*.conf\n")
 	} else {
@@ -95,35 +139,37 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 		}
 	}
 
-	var customRules []models.CustomRule
-	json.Unmarshal(p.CustomRules, &customRules)
-	targetMap := map[string]string{"uri": "REQUEST_URI", "args": "ARGS", "body": "REQUEST_BODY", "headers": "REQUEST_HEADERS", "user_agent": "REQUEST_HEADERS.User-Agent"}
+	customRules := resolvePolicyCustomRules(p.CustomRules)
+	targetMap := map[string]string{"uri": "REQUEST_URI", "args": "ARGS", "body": "REQUEST_BODY", "headers": "REQUEST_HEADERS", "user_agent": "REQUEST_HEADERS:User-Agent"}
 	opMap := map[string]string{"contains": "@contains", "regex": "@rx", "equals": "@pm", "starts_with": "@beginsWith"}
 	for _, cr := range customRules {
 		if !cr.Enabled {
 			continue
 		}
-		action := "pass,log"
+		safeName := strings.ReplaceAll(cr.Name, "'", "")
+		action := fmt.Sprintf("pass,log,msg:'自定义规则 %s 命中'", safeName)
 		if cr.Action == "block" {
-			status := cr.StatusCode
-			if status == 0 {
-				status = 403
-			}
-			action = fmt.Sprintf("deny,log,status:%d", status)
+			// 统一所有拦截走 coraza 默认 403 → 策略 errors.routes → 拦截页面配置的状态码
+			action = fmt.Sprintf("deny,log,msg:'自定义规则 %s 命中'", safeName)
 		}
 		if len(cr.Conditions) > 0 {
-			chain := "chain"
 			for idx, cond := range cr.Conditions {
 				target := targetMap[cond.Target]
 				op := opMap[cond.Operator]
 				if target == "" || op == "" {
 					continue
 				}
-				chainAction := action
-				if idx < len(cr.Conditions)-1 {
-					chainAction = fmt.Sprintf("%s,chain", chain)
+				// 链式规则仅起始条携带 id/phase/disruptive/msg；coraza v3 拒绝非起始条上的 disruptive 动作
+				var actions string
+				if idx == 0 {
+					actions = fmt.Sprintf("id:%d,phase:1,%s", cr.ID+10000, action)
+				} else {
+					actions = "phase:1"
 				}
-				sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d%s%s\"\n", target, op, cond.Pattern, cr.ID+10000, chainAction, ""))
+				if idx < len(cr.Conditions)-1 {
+					actions += ",chain"
+				}
+				sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"%s\"\n", target, op, cond.Pattern, actions))
 			}
 		} else {
 			target := targetMap[cr.Target]
@@ -136,6 +182,26 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 	}
 
 	return sb.String()
+}
+
+// SecurityPolicyHasIPControl reports whether the policy applies any IP-level
+// control: an enabled ACL with entries, a non-empty trust list, or legacy
+// bypass mode carrying an ACL list.
+func SecurityPolicyHasIPControl(p *models.SecurityPolicy) bool {
+	if p == nil {
+		return false
+	}
+	var ipACLList []string
+	json.Unmarshal([]byte(p.IPACLList), &ipACLList)
+	var ipWL []string
+	json.Unmarshal(p.IPWhitelist, &ipWL)
+	if len(ipWL) > 0 {
+		return true
+	}
+	if p.IPACLMode == "bypass" && len(ipACLList) > 0 {
+		return true
+	}
+	return p.IPACLEnabled && len(ipACLList) > 0
 }
 
 func SecurityPolicyHasFeatures(p *models.SecurityPolicy) bool {
@@ -157,4 +223,65 @@ func SecurityPolicyHasFeatures(p *models.SecurityPolicy) bool {
 	return false
 }
 
-var _ = sql.ErrNoRows
+// buildWafHandler returns the coraza WAF handler, or nil when the rule is not HTTP or has no active bound policy.
+func buildWafHandler(ruleCaddyID string) map[string]interface{} {
+	if db.DB == nil {
+		return nil
+	}
+	var protocol string
+	if err := db.DB.QueryRow("SELECT protocol FROM lb_rules WHERE caddy_id=?", ruleCaddyID).Scan(&protocol); err != nil || protocol != "http" {
+		return nil
+	}
+	policy := GetSecurityPolicyForRule(ruleCaddyID)
+	if policy == nil {
+		return nil
+	}
+	directives := BuildCorazaDirectives(policy)
+	if directives == "" {
+		return nil
+	}
+	return map[string]interface{}{
+		"handler":    "waf",
+		"directives": directives,
+	}
+}
+
+// resolvePolicyCustomRules 解析策略的自定义规则引用：当前端存储为规则 ID 数组时
+// 从 security_custom_rules 表解析为完整规则；兼容早期的对象内嵌形状。
+func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
+	if len(raw) == 0 {
+		return nil
+	}
+	var ids []int
+	if err := json.Unmarshal(raw, &ids); err == nil {
+		if len(ids) == 0 || db.DB == nil {
+			return nil
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+		args := make([]interface{}, len(ids))
+		for i, id := range ids {
+			args[i] = id
+		}
+		rows, err := db.DB.Query("SELECT id, name, conditions, action, score, status_code, enabled FROM security_custom_rules WHERE id IN ("+placeholders+")", args...)
+		if err != nil {
+			return nil
+		}
+		defer rows.Close()
+		var rules []models.CustomRule
+		for rows.Next() {
+			var cr models.CustomRule
+			var conditionsJSON string
+			if err := rows.Scan(&cr.ID, &cr.Name, &conditionsJSON, &cr.Action, &cr.Score, &cr.StatusCode, &cr.Enabled); err != nil {
+				continue
+			}
+			json.Unmarshal([]byte(conditionsJSON), &cr.Conditions)
+			rules = append(rules, cr)
+		}
+		return rules
+	}
+	var embedded []models.CustomRule
+	if err := json.Unmarshal(raw, &embedded); err == nil {
+		return embedded
+	}
+	return nil
+}

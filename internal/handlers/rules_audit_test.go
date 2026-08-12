@@ -1100,38 +1100,6 @@ func TestUpdateRule_serializes_snapshot_commit_apply_and_restore(t *testing.T) {
 	}
 }
 
-func TestUpdateRuleACL_rolls_back_database_when_Caddy_apply_fails(t *testing.T) {
-	// Given
-	handler, _, _ := newAuditRuleHandlers(t, 1)
-	seedAuditRule(t, "lb_acl_restore", "acl", "acl.example.test", 8080, true, "manual", false)
-	if _, err := db.DB.Exec(`UPDATE lb_rules SET ip_acl_mode='allow',ip_acl_list='["192.0.2.0/24"]' WHERE caddy_id='lb_acl_restore'`); err != nil {
-		t.Fatalf("seed ACL: %v", err)
-	}
-	if _, err := db.DB.Exec(`CREATE TRIGGER fail_acl_restore BEFORE UPDATE ON lb_rules WHEN OLD.ip_acl_mode='deny' AND NEW.ip_acl_mode='allow' BEGIN SELECT RAISE(ABORT,'restore failed'); END`); err != nil {
-		t.Fatalf("create ACL trigger: %v", err)
-	}
-	router := gin.New()
-	router.PUT("/rules/:caddy_id/acl", handler.UpdateRuleACL)
-	request := httptest.NewRequest(http.MethodPut, "/rules/lb_acl_restore/acl", strings.NewReader(`{"ip_acl_mode":"deny","ip_acl_list":["198.51.100.0/24"]}`))
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-
-	// When
-	router.ServeHTTP(response, request)
-
-	// Then
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("ACL update status=%d body=%s", response.Code, response.Body.String())
-	}
-	var mode, list string
-	if err := db.DB.QueryRow("SELECT ip_acl_mode,ip_acl_list FROM lb_rules WHERE caddy_id='lb_acl_restore'").Scan(&mode, &list); err != nil {
-		t.Fatalf("read ACL after failed apply: %v", err)
-	}
-	if mode != "allow" || list != `["192.0.2.0/24"]` {
-		t.Fatalf("ACL=(%q,%q), want transaction rollback", mode, list)
-	}
-}
-
 func TestEnableRule_writes_updated_by_with_current_user(t *testing.T) {
 	// Given
 	handler, _, _ := newAuditRuleHandlers(t, 0)
@@ -1185,36 +1153,6 @@ func TestDisableRule_writes_updated_by_with_current_user(t *testing.T) {
 	}
 	if enabled || updatedBy != 42 {
 		t.Fatalf("enabled=%v updated_by=%d, want disabled with updated_by=42", enabled, updatedBy)
-	}
-}
-
-func TestUpdateRuleACL_writes_updated_by_with_current_user(t *testing.T) {
-	// Given
-	handler, _, _ := newAuditRuleHandlers(t, 0)
-	seedAuditRule(t, "lb_acl_updby", "acl", "acl-updby.example.test", 8080, true, "manual", false)
-	router := gin.New()
-	router.PUT("/rules/:caddy_id/acl", func(c *gin.Context) {
-		c.Set("user_id", 42)
-		handler.UpdateRuleACL(c)
-	})
-	request := httptest.NewRequest(http.MethodPut, "/rules/lb_acl_updby/acl", strings.NewReader(`{"ip_acl_mode":"deny","ip_acl_list":["198.51.100.0/24"]}`))
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-
-	// When
-	router.ServeHTTP(response, request)
-
-	// Then
-	if response.Code != http.StatusOK {
-		t.Fatalf("ACL update status=%d body=%s", response.Code, response.Body.String())
-	}
-	var mode string
-	var updatedBy int64
-	if err := db.DB.QueryRow("SELECT ip_acl_mode, updated_by FROM lb_rules WHERE caddy_id='lb_acl_updby'").Scan(&mode, &updatedBy); err != nil {
-		t.Fatalf("read ACL result: %v", err)
-	}
-	if mode != "deny" || updatedBy != 42 {
-		t.Fatalf("mode=%q updated_by=%d, want deny with updated_by=42", mode, updatedBy)
 	}
 }
 
@@ -1391,7 +1329,7 @@ func newAuditRuleHandlers(t *testing.T, failedLoads int32) (*Handlers, *atomic.I
 }
 
 func TestRuleWriteEndpoints_share_one_lock_order_under_concurrency(t *testing.T) {
-	// Given：同一条规则上并发执行 Update/Delete/ACL/Create，旧锁序（DB 事务→caddyOpMu
+	// Given：同一条规则上并发执行 Update/Delete/Create，旧锁序（DB 事务→caddyOpMu
 	// 与 caddyOpMu→DB 并存）会 AB-BA 循环等待；统一锁序后全部请求必须在超时内完成。
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_lockorder", "lock", "lock.example.test", 8080, true, "manual", false)
@@ -1399,7 +1337,6 @@ func TestRuleWriteEndpoints_share_one_lock_order_under_concurrency(t *testing.T)
 	router := gin.New()
 	router.PUT("/rules/:caddy_id", handler.UpdateRule)
 	router.DELETE("/rules/:caddy_id", handler.DeleteRule)
-	router.POST("/rules/:caddy_id/acl", handler.UpdateRuleACL)
 	router.POST("/rules", handler.CreateRule)
 
 	done := make(chan struct{})
@@ -1409,19 +1346,15 @@ func TestRuleWriteEndpoints_share_one_lock_order_under_concurrency(t *testing.T)
 			wg.Add(1)
 			go func(n int) {
 				defer wg.Done()
-				switch n % 4 {
+				switch n % 3 {
 				case 0:
 					body := strings.NewReader(`{"description":"u"}`)
 					recorder := httptest.NewRecorder()
 					router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/rules/lb_lockorder", body))
 				case 1:
-					body := strings.NewReader(`{"ip_acl_mode":"allow","ip_acl_list":["192.0.2.0/24"]}`)
-					recorder := httptest.NewRecorder()
-					router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/rules/lb_lockorder/acl", body))
-				case 2:
 					recorder := httptest.NewRecorder()
 					router.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/rules/lb_lockorder", nil))
-				case 3:
+				case 2:
 					body := strings.NewReader(`{"name":"newbie","protocol":"tcp","listen_port":19000,"upstreams":[{"host":"127.0.0.1","port":9001}]}`)
 					recorder := httptest.NewRecorder()
 					router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/rules", body))

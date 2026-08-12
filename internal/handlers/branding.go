@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -41,35 +42,39 @@ func SeedDefaultBranding(dataDir string) error {
 	return nil
 }
 
-func (h *Handlers) GetBranding(c *gin.Context) {
+func loadBrandingConfig(dataDir string) brandingConfig {
 	cfg := defaultBranding
-	path := filepath.Join(h.cfg.DataDir, "branding.json")
+	path := filepath.Join(dataDir, "branding.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("GetBranding: failed to read branding file %s, using defaults: %v", path, err)
+			log.Printf("loadBrandingConfig: failed to read branding file %s, using defaults: %v", path, err)
 		}
-		cfg.Version = h.cfg.Version
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
-		return
+		return cfg
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		log.Printf("GetBranding: invalid branding file %s, using defaults: %v", path, err)
-		cfg = defaultBranding
+		log.Printf("loadBrandingConfig: invalid branding file %s, using defaults: %v", path, err)
+		return defaultBranding
 	}
+	return cfg
+}
+
+func (h *Handlers) GetBranding(c *gin.Context) {
+	cfg := loadBrandingConfig(h.cfg.DataDir)
 	if cfg.Version == "" {
 		cfg.Version = h.cfg.Version
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
 }
 
-func (h *Handlers) GetDefaultBlockPage(c *gin.Context) {
-	cfg := defaultBranding
-	path := filepath.Join(h.cfg.DataDir, "branding.json")
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &cfg)
+// renderDefaultBlockPage is the single renderer shared by GetDefaultBlockPage
+// and SeedDefaultBlockPage so both produce the identical branded page.
+func renderDefaultBlockPage(cfg brandingConfig) string {
+	footer := fmt.Sprintf(`Powered by <span class="name">%s</span>`, cfg.AppName)
+	if cfg.FooterText != "" {
+		footer += "<br>" + cfg.FooterText
 	}
-	html := fmt.Sprintf(`<!DOCTYPE html>
+	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access Denied — %s</title>
 <style>
@@ -89,9 +94,31 @@ p { font-size: 14px; color: #6b7280; line-height: 1.6; margin-bottom: 8px; }
 <h1>Access Denied</h1>
 <p>Your request has been blocked by the security policy.</p>
 <p>If you believe this is an error, please contact the administrator.</p>
-<div class="footer">Powered by <span class="name">%s</span></div>
+<div class="footer">%s</div>
 </div>
 </body>
-</html>`, cfg.AppName, cfg.AppName)
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html))
+</html>`, cfg.AppName, footer)
+}
+
+// SeedDefaultBlockPage re-renders the default block page row (is_default=1) from
+// branding.json. Idempotent: an unchanged render writes nothing (updated_at is
+// not churned); custom pages are never touched.
+func SeedDefaultBlockPage(dataDir string) error {
+	if db.DB == nil {
+		return nil
+	}
+	content := renderDefaultBlockPage(loadBrandingConfig(dataDir))
+	if _, err := db.DB.Exec(`UPDATE security_block_pages SET content=?, updated_at=datetime('now') WHERE is_default=1 AND content != ?`, content, content); err != nil {
+		return fmt.Errorf("更新默认拦截页面内容: %w", err)
+	}
+	return nil
+}
+
+func (h *Handlers) GetDefaultBlockPage(c *gin.Context) {
+	cfg := defaultBranding
+	path := filepath.Join(h.cfg.DataDir, "branding.json")
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &cfg)
+	}
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(renderDefaultBlockPage(cfg)))
 }

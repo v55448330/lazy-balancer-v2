@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -89,14 +88,15 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		CaddyID    string
 		ListenPort int
 		Enabled    bool
+		Domain     string
 	}
 
 	services.Logf("debug", "GetRuleCaddyConfig: querying rule caddy_id=%s", caddyID)
 
 	err := db.DB.QueryRow(`
-		SELECT COALESCE(caddy_id,''), listen_port, COALESCE(enabled,0)
+		SELECT COALESCE(caddy_id,''), listen_port, COALESCE(enabled,0), COALESCE(domain,'')
 		FROM lb_rules WHERE caddy_id = ?
-	`, caddyID).Scan(&r.CaddyID, &r.ListenPort, &r.Enabled)
+	`, caddyID).Scan(&r.CaddyID, &r.ListenPort, &r.Enabled, &r.Domain)
 
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
@@ -142,7 +142,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 
 	// Build the surrounding server/TLS context so the dialog shows certificates and policies
 	fullConfig := services.GenerateCaddyConfig()
-	ruleContext := buildRuleCaddyContext(fullConfig, r.CaddyID, r.ListenPort)
+	ruleContext := buildRuleCaddyContext(fullConfig, r.CaddyID, r.ListenPort, r.Domain)
 
 	responseData["config"] = map[string]interface{}{
 		"route":                   caddyActualConfig,
@@ -156,7 +156,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 }
 
 // buildRuleCaddyContext extracts the server and TLS context relevant to a rule from the full Caddy config.
-func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string, listenPort int) map[string]interface{} {
+func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string, listenPort int, domain string) map[string]interface{} {
 	result := map[string]interface{}{
 		"server":                  nil,
 		"tls_certificates":        []interface{}{},
@@ -184,14 +184,13 @@ func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string, li
 						continue
 					}
 					if route["@id"] == caddyID {
+						scopedPolicies := scopedTLSConnectionPolicies(server["tls_connection_policies"], caddyID, domain)
 						result["server"] = map[string]interface{}{
 							"server_name":             serverName,
 							"listen":                  server["listen"],
-							"tls_connection_policies": server["tls_connection_policies"],
+							"tls_connection_policies": scopedPolicies,
 						}
-						if policies, ok := server["tls_connection_policies"].([]interface{}); ok {
-							result["tls_connection_policies"] = policies
-						}
+						result["tls_connection_policies"] = scopedPolicies
 						break
 					}
 				}
@@ -282,11 +281,115 @@ func buildRuleCaddyContext(fullConfig map[string]interface{}, caddyID string, li
 
 	if automation, ok := tlsApp["automation"].(map[string]interface{}); ok {
 		if policies, ok := automation["policies"].([]interface{}); ok {
-			result["automation_policies"] = policies
+			wanted := make(map[string]struct{})
+			for _, ruleDomain := range normalizedRuleDomains(domain) {
+				wanted[ruleDomain] = struct{}{}
+			}
+			if len(wanted) > 0 {
+				scoped := make([]interface{}, 0, len(policies))
+				for _, policyVal := range policies {
+					policy, _ := policyVal.(map[string]interface{})
+					if policy == nil {
+						continue
+					}
+					matched := false
+					switch subjects := policy["subjects"].(type) {
+					case []interface{}:
+						for _, subject := range subjects {
+							name, ok := subject.(string)
+							if !ok {
+								continue
+							}
+							if _, hit := wanted[name]; hit {
+								matched = true
+								break
+							}
+						}
+					case []string:
+						for _, subject := range subjects {
+							if _, hit := wanted[subject]; hit {
+								matched = true
+								break
+							}
+						}
+					}
+					if matched {
+						scoped = append(scoped, policyVal)
+					}
+				}
+				result["automation_policies"] = scoped
+			}
 		}
 	}
 
 	return result
+}
+
+// scopedTLSConnectionPolicies 只保留属于当前规则的连接策略：
+// certificate_selection.any_tag 携带本规则 caddyID，或 match.sni 与规则规范域名相交。
+func scopedTLSConnectionPolicies(raw interface{}, caddyID string, domain string) []interface{} {
+	policies, ok := raw.([]interface{})
+	if !ok {
+		return []interface{}{}
+	}
+	wanted := make(map[string]struct{})
+	for _, ruleDomain := range normalizedRuleDomains(domain) {
+		wanted[ruleDomain] = struct{}{}
+	}
+	scoped := make([]interface{}, 0, len(policies))
+	for _, policyVal := range policies {
+		policy, _ := policyVal.(map[string]interface{})
+		if policy == nil {
+			continue
+		}
+		matched := false
+		if selection, ok := policy["certificate_selection"].(map[string]interface{}); ok {
+			switch tags := selection["any_tag"].(type) {
+			case []interface{}:
+				for _, tag := range tags {
+					if tag == caddyID {
+						matched = true
+						break
+					}
+				}
+			case []string:
+				for _, tag := range tags {
+					if tag == caddyID {
+						matched = true
+						break
+					}
+				}
+			}
+		}
+		if !matched && len(wanted) > 0 {
+			if match, ok := policy["match"].(map[string]interface{}); ok {
+				switch sni := match["sni"].(type) {
+				case []interface{}:
+					for _, name := range sni {
+						sniDomain, ok := name.(string)
+						if !ok {
+							continue
+						}
+						if _, hit := wanted[sniDomain]; hit {
+							matched = true
+							break
+						}
+					}
+				case []string:
+					for _, sniDomain := range sni {
+						if _, hit := wanted[sniDomain]; hit {
+							matched = true
+							break
+						}
+					}
+				}
+			}
+		}
+		if matched {
+			scoped = append(scoped, policyVal)
+		}
+	}
+	return scoped
 }
 
 func normalizedRuleDomains(value string) []string {
@@ -505,11 +608,6 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	ipACLListJSON, err := encodeIPACLList(features.IPACLList)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-		return
-	}
 
 	// Determine server name based on port, protocol and TLS status
 	var serverName string
@@ -583,8 +681,6 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		GlobalRequestBodyMaxSizeMB:       global.requestBodyMaxSizeMB,
 		GlobalUpstreamKeepaliveTimeout:   global.upstreamKeepaliveTimeout,
 		GlobalServerTokensHidden:         global.serverTokensHidden,
-		IPACLMode:                        features.IPACLMode,
-		IPACLList:                        features.IPACLList,
 		CustomRoutesEnabled:              features.CustomRoutesEnabled,
 		PathRules:                        toPathRuleConfigs(features.PathRules),
 		ProxyDialTimeout:                 features.ProxyDialTimeout,
@@ -664,18 +760,18 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
-			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
-			ip_acl_mode, ip_acl_list, custom_routes_enabled,
-			proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay,
-			host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
-			enable_compress, compress_types, enabled, created_by, updated_at, caddy_id, log_enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
+		custom_routes_enabled,
+		proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay,
+		host_header, enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key, tls_http_redirect,
+		enable_compress, compress_types, enabled, created_by, updated_at, caddy_id, log_enabled)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, req.Name, req.Description, req.Protocol, req.Domain, req.ListenPort, req.Strategy, req.DynamicDNS, req.EnableDnsServer, req.DnsServer, req.DnsFamily,
 		req.HealthCheckPath, req.HealthCheckInterval, req.HealthCheckTimeout,
 		req.HealthCheckUnhealthyThreshold, req.HealthCheckHealthyThreshold,
 		req.EnableActiveHealthCheck, req.TCPHealthCheckPort, req.TCPProxyProtocol, req.TCPTryDuration, req.TCPTryInterval,
 		req.RequestBodyMaxSizeMB, req.UpstreamKeepaliveTimeout, req.ServerTokensHidden,
-		features.IPACLMode, ipACLListJSON, features.CustomRoutesEnabled,
+		features.CustomRoutesEnabled,
 		features.ProxyDialTimeout, features.ProxyResponseHeaderTimeout, features.ProxyReadTimeout, features.ProxyWriteTimeout, features.ProxyStreamTimeout, features.ProxyFlushInterval, features.ProxyStreamCloseDelay,
 		req.HostHeader, req.EnableTLS, req.TLSSource, req.ACMEConfigID, req.CAProviderID, req.TLSCert, req.TLSKey,
 		req.TLSHTTPRedirect, req.EnableCompress, req.CompressTypes, 1, userIDInt, time.Now().UTC().Format("2006-01-02 15:04:05"), caddyID, req.LogEnabled)
@@ -807,7 +903,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 	requestedProtocol := req.Protocol
-	aclUpdated := req.IPACLMode != nil || req.IPACLList != nil
 
 	// caddyOpMu 必须覆盖 读取→合并→验证→快照→提交→应用→恢复 全程：锁外读取合并时，
 	// 并发的成功请求会用旧快照合并值覆盖彼此已提交的字段（丢失更新）。
@@ -830,7 +925,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	// Fill in missing fields from database so validation and the update use complete data.
 	var existingRule models.LbRule
-	var existingIPACLListJSON string
 	err := db.DB.QueryRow(`
 		SELECT COALESCE(protocol,''), COALESCE(domain,''), listen_port, COALESCE(strategy,'weighted_round_robin'),
 			COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0),
@@ -840,9 +934,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,2),
 			COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 			COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
-			COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
-			COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
-			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
+		COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
+		COALESCE(custom_routes_enabled,0),
+		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 		COALESCE(host_header,''), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
 		COALESCE(enabled,1), COALESCE(log_enabled,0), name, description
 	FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(
@@ -855,18 +949,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		&existingRule.HealthCheckUnhealthyThreshold, &existingRule.HealthCheckHealthyThreshold,
 		&existingRule.EnableActiveHealthCheck, &existingRule.TCPHealthCheckPort, &existingRule.TCPProxyProtocol, &existingRule.TCPTryDuration, &existingRule.TCPTryInterval,
 		&existingRule.RequestBodyMaxSizeMB, &existingRule.UpstreamKeepaliveTimeout, &existingRule.ServerTokensHidden,
-		&existingRule.IPACLMode, &existingIPACLListJSON, &existingRule.CustomRoutesEnabled,
+		&existingRule.CustomRoutesEnabled,
 		&existingRule.ProxyDialTimeout, &existingRule.ProxyResponseHeaderTimeout, &existingRule.ProxyReadTimeout, &existingRule.ProxyWriteTimeout, &existingRule.ProxyStreamTimeout, &existingRule.ProxyFlushInterval, &existingRule.ProxyStreamCloseDelay,
 		&existingRule.HostHeader, &existingRule.EnableCompress, &existingRule.CompressTypes,
 		&existingRule.Enabled, &existingRule.LogEnabled, &existingRule.Name, &existingRule.Description)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
-		return
-	}
-	existingRule.IPACLList, err = decodeIPACLList(existingIPACLListJSON)
-	if err != nil {
-		log.Printf("UpdateRule invalid ip_acl_list for caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 IP 访问控制列表失败"})
 		return
 	}
 	existingRule.PathRules, err = loadPathRules(c.Request.Context(), db.DB, caddyID)
@@ -1129,11 +1217,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 	validationServerName := fmt.Sprintf("%s_%d", req.Protocol, req.ListenPort)
-	ipACLListJSON, err := encodeIPACLList(features.IPACLList)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-		return
-	}
 
 	// Validate TLS certificate if provided (manual source only)
 	if *req.EnableTLS && req.TLSSource != "manual" && req.TLSSource != "acme_dns" {
@@ -1227,10 +1310,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	args = append(args, *req.UpstreamKeepaliveTimeout)
 	query += "server_tokens_hidden = ?, "
 	args = append(args, *req.ServerTokensHidden)
-	query += "ip_acl_mode = ?, "
-	args = append(args, features.IPACLMode)
-	query += "ip_acl_list = ?, "
-	args = append(args, ipACLListJSON)
 	query += "custom_routes_enabled = ?, "
 	args = append(args, features.CustomRoutesEnabled)
 	query += "proxy_dial_timeout = ?, "
@@ -1329,8 +1408,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		GlobalRequestBodyMaxSizeMB:       global.requestBodyMaxSizeMB,
 		GlobalUpstreamKeepaliveTimeout:   global.upstreamKeepaliveTimeout,
 		GlobalServerTokensHidden:         global.serverTokensHidden,
-		IPACLMode:                        features.IPACLMode,
-		IPACLList:                        features.IPACLList,
 		CustomRoutesEnabled:              features.CustomRoutesEnabled,
 		PathRules:                        toPathRuleConfigs(features.PathRules),
 		ProxyDialTimeout:                 features.ProxyDialTimeout,
@@ -1649,10 +1726,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		tlsPart = fmt.Sprintf("TLS：%s", boolText(*req.EnableTLS))
 	}
 	auditParts := []string{services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), domain, tlsPart}
-	if aclUpdated {
-		aclModeText := map[string]string{"allow": "白名单", "deny": "黑名单", "": "已关闭"}[features.IPACLMode]
-		auditParts = append(auditParts, fmt.Sprintf("模式：%s", aclModeText), fmt.Sprintf("CIDR 数：%d", len(features.IPACLList)))
-	}
 	recordAudit(c, "更新", "负载均衡规则", services.FormatAuditDetail(auditParts...))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_update"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新"})
@@ -1841,15 +1914,6 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			return
 		}
 	}
-	ipACLListBytes, err := json.Marshal(rule.IPACLList)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "序列化 IP 访问控制列表失败"})
-		return
-	}
-	ipACLListJSON := string(ipACLListBytes)
-	if ipACLListJSON == "null" {
-		ipACLListJSON = "[]"
-	}
 
 	userIDInt := contextUserID(c)
 
@@ -1887,7 +1951,6 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		EnabledUpstreamCount: enabledUpstreamCount,
 		HealthCheckInterval:  rule.HealthCheckInterval, HealthCheckTimeout: rule.HealthCheckTimeout,
 		EnableCompress: rule.EnableCompress, CompressTypes: rule.CompressTypes,
-		IPACLMode: rule.IPACLMode, IPACLList: rule.IPACLList,
 		CustomRoutesEnabled: rule.CustomRoutesEnabled, PathRules: rule.PathRules,
 		ProxyDialTimeout: rule.ProxyDialTimeout, ProxyResponseHeaderTimeout: rule.ProxyResponseHeaderTimeout,
 		ProxyReadTimeout: rule.ProxyReadTimeout, ProxyWriteTimeout: rule.ProxyWriteTimeout,
@@ -1905,10 +1968,10 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden,
 			enable_tls, tls_source, acme_config_id, ca_provider_id, tls_cert, tls_key,
-		tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, log_enabled, caddy_id,
-		ip_acl_mode, ip_acl_list, custom_routes_enabled,
+	tls_http_redirect, enable_compress, compress_types, enabled, created_by, updated_by, created_at, updated_at, host_header, log_enabled, caddy_id,
+		custom_routes_enabled,
 		proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, rule.Name+"（副本）", rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy,
 		rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout,
 		rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
@@ -1917,7 +1980,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.CAProviderID, rule.TLSCert, &rule.TLSKey,
 		rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, 0, userIDInt, userIDInt,
 		now, now, rule.HostHeader, rule.LogEnabled, newCaddyID,
-		rule.IPACLMode, ipACLListJSON, rule.CustomRoutesEnabled,
+		rule.CustomRoutesEnabled,
 		rule.ProxyDialTimeout, rule.ProxyResponseHeaderTimeout, rule.ProxyReadTimeout, rule.ProxyWriteTimeout, rule.ProxyStreamTimeout, rule.ProxyFlushInterval, rule.ProxyStreamCloseDelay,
 	); err != nil {
 		log.Printf("Failed to duplicate rule %s: %v", caddyID, err)

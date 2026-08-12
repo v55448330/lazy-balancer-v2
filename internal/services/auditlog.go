@@ -45,12 +45,14 @@ var configFieldSections = map[string]string{
 	"access_log_json":               "Caddy全局配置",
 	"access_log_format":             "Caddy全局配置",
 
-	"log_level":              "基础设置",
-	"cert_job_log_size_mb":   "基础设置",
-	"runtime_log_size_mb":    "基础设置",
-	"audit_retention_months": "基础设置",
-	"jwt_expire_minutes":     "基础设置",
-	"timezone":               "基础设置",
+	"log_level":                      "基础设置",
+	"cert_job_log_size_mb":           "基础设置",
+	"runtime_log_size_mb":            "基础设置",
+	"audit_retention_months":         "基础设置",
+	"security_events_retention_days": "基础设置",
+	"security_events_retention_max":  "基础设置",
+	"jwt_expire_minutes":             "基础设置",
+	"timezone":                       "基础设置",
 }
 
 func GetConfigSection(field string) string {

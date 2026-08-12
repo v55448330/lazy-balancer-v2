@@ -56,6 +56,21 @@ func TestIsSynchronizedWrite_classifies_only_snapshot_content_mutations(t *testi
 		{"DELETE", "/api/v1/certificate-configs/:id", true},
 		{"POST", "/api/v1/certificate-configs/test", false},
 		{"POST", "/api/v1/certificate-configs/:id/test", false},
+		{"POST", "/api/v1/security/policies", true},
+		{"PUT", "/api/v1/security/policies/:id", true},
+		{"DELETE", "/api/v1/security/policies/:id", true},
+		{"POST", "/api/v1/security/policies/:id/bind", true},
+		{"DELETE", "/api/v1/security/policies/:id/bind/:caddy_id", true},
+		{"POST", "/api/v1/security/custom-rules", true},
+		{"PUT", "/api/v1/security/custom-rules/:id", true},
+		{"DELETE", "/api/v1/security/custom-rules/:id", true},
+		{"POST", "/api/v1/security/block-pages", true},
+		{"PUT", "/api/v1/security/block-pages/:id", true},
+		{"DELETE", "/api/v1/security/block-pages/:id", true},
+		{"PUT", "/api/v1/security/crs/auto-update", true},
+		{"POST", "/api/v1/security/crs/update", true},
+		{"GET", "/api/v1/security/policies", false},
+		{"GET", "/api/v1/security/custom-rules", false},
 	}
 	for _, test := range tests {
 		if got := isSynchronizedWrite(test.method, test.path); got != test.want {
@@ -204,6 +219,82 @@ func TestClusterVersionTriggers_bump_for_snapshot_insert_update_delete(t *testin
 			for _, operation := range operations {
 				// When
 				if _, err := database.Exec(operation.statement, operation.args...); err != nil {
+					t.Fatalf("%s row: %v", operation.name, err)
+				}
+
+				// Then
+				if got := clusterVersion(t, database); got != operation.version {
+					t.Fatalf("version after %s=%d, want %d", operation.name, got, operation.version)
+				}
+			}
+		})
+	}
+}
+
+func TestClusterVersionTriggers_bump_for_security_tables(t *testing.T) {
+	tests := []struct {
+		name   string
+		insert string
+		update string
+		delete string
+	}{
+		{name: "security_policies",
+			insert: `INSERT INTO security_policies (id,name,mode) VALUES (7,'matrix policy','blocking')`,
+			update: `UPDATE security_policies SET ip_acl_mode='deny',ip_acl_list='["10.0.0.0/8"]' WHERE id=7`,
+			delete: `DELETE FROM security_policies WHERE id=7`},
+		{name: "security_policy_bindings",
+			insert: `INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_matrix',7)`,
+			update: `UPDATE security_policy_bindings SET policy_id=8 WHERE rule_caddy_id='lb_matrix'`,
+			delete: `DELETE FROM security_policy_bindings WHERE rule_caddy_id='lb_matrix'`},
+		{name: "security_custom_rules",
+			insert: `INSERT INTO security_custom_rules (id,name,conditions) VALUES (7,'matrix rule','[]')`,
+			update: `UPDATE security_custom_rules SET score=10 WHERE id=7`,
+			delete: `DELETE FROM security_custom_rules WHERE id=7`},
+		{name: "security_block_pages",
+			insert: `INSERT INTO security_block_pages (id,name,content) VALUES (7,'matrix page','<html>blocked</html>')`,
+			update: `UPDATE security_block_pages SET content='<html>v2</html>' WHERE id=7`,
+			delete: `DELETE FROM security_block_pages WHERE id=7`},
+		{name: "security_crs_version",
+			insert: `INSERT INTO security_crs_version (id,version) VALUES (1,'v4.14.0')`,
+			update: `UPDATE security_crs_version SET update_status='success',message='done' WHERE id=1`,
+			delete: `DELETE FROM security_crs_version WHERE id=1`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			database := newClusterVersionTestDB(t)
+			if _, err := database.Exec("UPDATE global_config SET is_master=1, cluster_version=100 WHERE id=1"); err != nil {
+				t.Fatalf("seed cluster version: %v", err)
+			}
+			if err := installClusterVersionTriggers(database); err != nil {
+				t.Fatalf("install triggers: %v", err)
+			}
+			for _, operation := range []string{"insert", "update", "delete"} {
+				triggerName := "cluster_version_" + test.name + "_" + operation
+				var count int
+				if err := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name=?", triggerName).Scan(&count); err != nil {
+					t.Fatalf("query trigger %s: %v", triggerName, err)
+				}
+				if count != 1 {
+					t.Fatalf("trigger %s missing from sqlite_master", triggerName)
+				}
+			}
+			if _, err := database.Exec("UPDATE global_config SET cluster_version=0 WHERE id=1"); err != nil {
+				t.Fatalf("reset cluster version: %v", err)
+			}
+
+			operations := []struct {
+				name      string
+				statement string
+				version   int
+			}{
+				{name: "insert", statement: test.insert, version: 1},
+				{name: "update", statement: test.update, version: 2},
+				{name: "delete", statement: test.delete, version: 3},
+			}
+			for _, operation := range operations {
+				// When
+				if _, err := database.Exec(operation.statement); err != nil {
 					t.Fatalf("%s row: %v", operation.name, err)
 				}
 

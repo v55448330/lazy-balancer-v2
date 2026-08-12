@@ -25,11 +25,6 @@
           </template>
         </el-table-column>
         <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
-        <el-table-column label="状态码" width="90" align="center">
-          <template #default="{ row }">
-            <el-tag size="small" effect="plain" :type="row.status_code === 403 ? 'danger' : 'warning'">{{ row.status_code }}</el-tag>
-          </template>
-        </el-table-column>
         <el-table-column label="更新时间" width="170" align="center">
           <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
         </el-table-column>
@@ -54,25 +49,12 @@
         <el-form-item label="描述">
           <el-input v-model="form.description" placeholder="页面描述" :readonly="currentPage?.is_default" />
         </el-form-item>
-        <el-form-item label="状态码">
-          <el-select v-model="form.status_code" style="width: 200px" :disabled="currentPage?.is_default">
-            <el-option :value="400" label="400 Bad Request" />
-            <el-option :value="401" label="401 Unauthorized" />
-            <el-option :value="403" label="403 Forbidden" />
-            <el-option :value="404" label="404 Not Found" />
-            <el-option :value="429" label="429 Too Many Requests" />
-            <el-option :value="503" label="503 Service Unavailable" />
-          </el-select>
-          <div class="form-tip-inline" style="display: block; margin-top: 4px; margin-left: 0;">
-            {{ currentPage?.is_default ? '默认页面状态码固定为 403' : '拦截时返回给客户端的 HTTP 状态码' }}
-          </div>
-        </el-form-item>
         <el-form-item label="内容" class="content-form-item">
           <div class="block-content-editor" style="width: 100%">
-            <SyntaxHighlight v-if="currentPage?.is_default" :content="form.content" language="markup" />
-            <el-input v-else v-model="form.content" type="textarea" :rows="25" placeholder="HTML 内容，支持 CSS 样式" class="vjs-textarea" style="font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #e4e4e7; background: #1e293b; width: 100%" :readonly="currentPage?.is_default" />
+            <SyntaxHighlight v-if="currentPage?.is_default" :content="form.content" language="markup" height="520px" />
+            <CodeEditor v-else v-model="form.content" language="markup" height="520px" placeholder="HTML 内容，支持内联 CSS 样式" />
           </div>
-          <div class="form-tip-inline" style="display: block; margin-top: 4px; margin-left: 0;">
+          <div class="form-tip-line">
             {{ currentPage?.is_default ? '默认页面内容只读，仅可查看' : '拦截时返回给客户端的 HTML 页面，支持内联 CSS 样式' }}
           </div>
         </el-form-item>
@@ -83,8 +65,8 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="previewVisible" title="拦截页面预览" width="min(960px, 94vw)" top="3vh">
-      <div v-html="previewContent" style="border: 1px solid #e4e7ed; border-radius: 6px; overflow: hidden; aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center; background: #f9fafb" />
+    <el-dialog v-model="previewVisible" title="拦截页面预览" width="min(960px, 94vw)" top="3vh" @close="previewContent = ''">
+      <iframe v-if="previewVisible && previewContent" :srcdoc="previewContent" sandbox="" :key="previewKey" style="width: 100%; aspect-ratio: 16/9; border: 1px solid #e4e7ed; border-radius: 6px; background: #fff; display: block" />
     </el-dialog>
   </div>
 </template>
@@ -97,6 +79,7 @@ import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
+import CodeEditor from '@/components/CodeEditor.vue'
 import type { UserListItem } from '@/types'
 
 interface APIResponse<T> { code: number; message: string; data: T }
@@ -112,6 +95,7 @@ const pages = ref<BlockPage[]>([])
 const dialogVisible = ref(false)
 const previewVisible = ref(false)
 const previewContent = ref('')
+const previewKey = ref(0)
 const editingId = ref<number | null>(null)
 const currentPage = ref<BlockPage | null>(null)
 
@@ -120,7 +104,7 @@ const dialogTitle = computed(() => {
   return currentPage.value?.is_default ? '查看拦截页面' : '编辑拦截页面'
 })
 
-const form = ref({ name: '', description: '', content: '', status_code: 403 })
+const form = ref({ name: '', description: '', content: '' })
 
 const fetchData = async () => {
   loading.value = true
@@ -144,9 +128,9 @@ const openDialog = (row?: BlockPage) => {
   editingId.value = row?.id ?? null
   currentPage.value = row ?? null
   if (row) {
-      form.value = { name: row.name, description: row.description, content: row.content, status_code: row.status_code || 403 }
+      form.value = { name: row.name, description: row.description, content: row.content }
   } else {
-      form.value = { name: '', description: '', content: '', status_code: 403 }
+      form.value = { name: '', description: '', content: '' }
   }
   dialogVisible.value = true
 }
@@ -161,7 +145,7 @@ const handleSave = async () => {
     }
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    fetchData()
+    await fetchData()
   } catch { ElMessage.error('保存失败') } finally { saving.value = false }
 }
 
@@ -172,6 +156,7 @@ const handleDelete = (row: BlockPage) => {
 
 const previewPage = (row: BlockPage) => {
   previewContent.value = row.content || '<p style="color: #999; padding: 20px; text-align: center">(空内容)</p>'
+  previewKey.value++
   previewVisible.value = true
 }
 
@@ -180,10 +165,7 @@ onMounted(fetchData)
 
 <style scoped>
 .block-content-editor { border: 1px solid #e4e7ed; border-radius: 6px; overflow: hidden; }
-.vjs-textarea { border-radius: 6px; }
-.vjs-textarea :deep(.el-textarea__inner) { background: #1e293b; color: #e4e4e7; border: none; }
-.vjs-textarea :deep(.el-textarea__inner):focus { background: #1e293b; color: #e4e4e7; border: none; box-shadow: none; }
 .block-page-form .content-form-item .el-form-item__content { flex: 1; max-width: 100%; }
+.form-tip-line { font-size: 12px; color: #9ca3af; margin-top: 6px; line-height: 1.5; }
 .form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
-.block-page-form .form-tip-inline { display: block; margin-top: 4px; margin-left: 0; }
 </style>

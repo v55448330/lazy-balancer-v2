@@ -13,7 +13,7 @@
 - **管理面板 HTTPS**：一键启用强制 HTTPS（自签名/上传证书），开关与证书选择先暂存、主保存确认后重启生效；HTTP 明文请求 301 自动跳转到 HTTPS（协议嗅探单端口复用）；从节点同步后自动重启
 - **MCP 服务**：AI Agent 经 Streamable HTTP + API Key 操作全部功能（只读 Key 自动收敛为只读工具集，支持 IP 白名单），服务端随连接下发挥 scope 与常用流程指引，完整操作手册以 MCP 资源形式内置、支持页面下载
 - **规则访问日志与统计**：按规则记录 JSON 访问日志（最近 1000 行查看，5s 实时刷新），日志统计 tab 实时聚合 IP / 客户端 / URI TOP 20（前端本地增量统计，无服务端状态）
-- **IP 访问控制**：规则级 IP 白名单/黑名单（CIDR 列表），HTTP 规则 403 拒绝、TCP 规则 L4 连接级拦截，独立弹框配置，默认全部允许
+- **IP 访问控制**：策略级 IP 白名单/黑名单/信任名单（CIDR 列表），按策略绑定到负载均衡规则，403 拒绝或免检测
 - **自定义路由**：HTTP 规则支持路径级路由（前缀/精确匹配、按序命中），可覆盖默认上游指向不同后端（http/https 协议、百分比权重互锁），向导独立步骤编辑与行内即时校验
 - **TCP PROXY v2**：TCP 规则可开启向上游发送 PROXY v2 协议头，后端获取真实客户端 IP
 - **代理超时**：连接/响应头/读/写/流式（SSE/LLM 长连接）超时，全局默认 + 规则级覆盖（规则优先）
@@ -38,6 +38,7 @@ docker run -d \
   -v $(pwd)/data:/app/data \
   -v $(pwd)/logs:/app/logs \
   -v $(pwd)/certs:/app/certs \
+  -v $(pwd)/waf:/app/waf \
   -e LOG_FILE=/app/logs/lazy-balancer.log \
   v55448330/lazy-balancer-v2:v2.1.0
 ```
@@ -55,6 +56,7 @@ docker run -d \
 | `/app/data` | 业务库（lazy-balancer.db）、审计库、指标库、`branding.json`、ACME 账户密钥（`acme_accounts/`，按 CA+邮箱 复用） | **必须**（持久化核心数据） |
 | `/app/certs` | 证书与私钥文件（手动上传与 ACME 签发） | **必须**（重启后证书不丢） |
 | `/app/logs` | 应用日志、Caddy 四类日志、规则级访问日志 | 建议 |
+| `/app/waf` | WAF/CRS 规则库（含手动更新下载的规则，跨重建保留） | 建议 |
 | `/app/config` | Caddyfile（仅高级自定义场景） | 可选 |
 
 > 数据库是所有配置的唯一事实来源；Caddy 配置由数据库实时渲染，无需手工维护 Caddyfile。

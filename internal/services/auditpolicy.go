@@ -52,7 +52,6 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/rules/cert-info":                        AuditPolicySkip,
 	"POST /api/v1/rules":                                  AuditPolicyExplicit,
 	"PUT /api/v1/rules/:caddy_id":                         AuditPolicyExplicit,
-	"POST /api/v1/rules/:caddy_id/acl":                    AuditPolicyExplicit,
 	"DELETE /api/v1/rules/:caddy_id":                      AuditPolicyExplicit,
 	"POST /api/v1/rules/:caddy_id/enable":                 AuditPolicyExplicit,
 	"PUT /api/v1/rules/:caddy_id/disable":                 AuditPolicyExplicit,
@@ -78,7 +77,10 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"DELETE /api/v1/security/policies/:id":                AuditPolicyExplicit,
 	"POST /api/v1/security/policies/:id/bind":             AuditPolicyExplicit,
 	"DELETE /api/v1/security/policies/:id/bind/:caddy_id": AuditPolicyExplicit,
-	"PUT /api/v1/security/crs/auto-update":                AuditPolicyGeneric,
+	"PUT /api/v1/security/crs/auto-update":                AuditPolicyExplicit,
+	"POST /api/v1/security/crs/update":                    AuditPolicyExplicit,
+	"PUT /api/v1/security/ip2region/auto-update":          AuditPolicyExplicit,
+	"POST /api/v1/security/ip2region/update":              AuditPolicyExplicit,
 	"POST /api/v1/security/custom-rules":                  AuditPolicyExplicit,
 	"PUT /api/v1/security/custom-rules/:id":               AuditPolicyExplicit,
 	"DELETE /api/v1/security/custom-rules/:id":            AuditPolicyExplicit,
@@ -149,7 +151,6 @@ func HasExplicitAuditEvent(method, path string) bool {
 		"PUT /api/v1/cluster/settings",
 		"POST /api/v1/rules",
 		"PUT /api/v1/rules/:caddy_id",
-		"POST /api/v1/rules/:caddy_id/acl",
 		"DELETE /api/v1/rules/:caddy_id",
 		"POST /api/v1/rules/:caddy_id/enable",
 		"PUT /api/v1/rules/:caddy_id/disable",
@@ -167,7 +168,19 @@ func HasExplicitAuditEvent(method, path string) bool {
 		"PUT /api/v1/caddy/config",
 		"POST /api/v1/config/import",
 		"POST /api/v1/config/import/v1",
-		"PUT /api/v1/config":
+		"PUT /api/v1/config",
+		"POST /api/v1/security/policies/:id/bind",
+		"DELETE /api/v1/security/policies/:id/bind/:caddy_id",
+		"PUT /api/v1/security/crs/auto-update",
+		"POST /api/v1/security/crs/update",
+		"PUT /api/v1/security/ip2region/auto-update",
+		"POST /api/v1/security/ip2region/update",
+		"POST /api/v1/security/custom-rules",
+		"PUT /api/v1/security/custom-rules/:id",
+		"DELETE /api/v1/security/custom-rules/:id",
+		"POST /api/v1/security/block-pages",
+		"PUT /api/v1/security/block-pages/:id",
+		"DELETE /api/v1/security/block-pages/:id":
 		return true
 	default:
 		return false

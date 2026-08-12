@@ -29,7 +29,7 @@
           </el-form-item>
           <el-form-item label="日志保留">
             <el-input-number v-model="settings.audit_retention_months" :min="1" :max="12" controls-position="right" style="width: 120px;" />
-            <el-text type="info" size="small" class="tip-inline">个月，操作与运行日志超期清理（建议 3-6）</el-text>
+            <el-text type="info" size="small" class="tip-inline">个月，操作/运行/安全事件日志超期清理（建议 3-6）</el-text>
           </el-form-item>
           <el-form-item label="登录过期">
             <el-input-number v-model="settings.jwt_expire_minutes" :min="5" :max="1440" controls-position="right" style="width: 120px;" />
@@ -471,6 +471,8 @@ interface BasicSettingsConfig {
   cert_job_log_size_mb: number
   runtime_log_size_mb: number
   audit_retention_months: number
+  security_events_retention_days: number
+  security_events_retention_max: number
   jwt_expire_minutes: number
   timezone: string
 }
@@ -672,6 +674,8 @@ const handleSave = async () => {
       cert_job_log_size_mb: settings.value.cert_job_log_size_mb,
       runtime_log_size_mb: settings.value.runtime_log_size_mb,
       audit_retention_months: settings.value.audit_retention_months,
+      security_events_retention_days: settings.value.security_events_retention_days,
+      security_events_retention_max: settings.value.security_events_retention_max,
       jwt_expire_minutes: settings.value.jwt_expire_minutes,
       timezone: settings.value.timezone,
       source: 'basic',

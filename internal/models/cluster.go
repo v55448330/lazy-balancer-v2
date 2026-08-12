@@ -188,21 +188,53 @@ type ClusterACMEState struct {
 }
 
 type ClusterSnapshot struct {
-	Version          int                  `json:"version"`
-	SchemaVersion    int                  `json:"schema_version,omitempty"`
-	MinReaderVersion int                  `json:"min_reader_version,omitempty"`
-	Fingerprint      string               `json:"fingerprint"`
-	Signature        string               `json:"signature,omitempty"`
-	CanonicalPayload json.RawMessage      `json:"canonical_payload,omitempty"`
-	Rules            []LbRule             `json:"rules"`
-	Users            []ClusterUser        `json:"users"`
-	APIKeys          []ClusterAPIKey      `json:"api_keys"`
-	BasicSettings    ClusterBasicSettings `json:"basic_settings"`
-	CaddyConfig      *string              `json:"caddy_config,omitempty"`
-	Certs            []ClusterCertificate `json:"certs"`
-	ACME             *ClusterACMEState    `json:"acme,omitempty"`
-	SecurityPolicies json.RawMessage      `json:"security_policies,omitempty"`
-	SecurityBindings json.RawMessage      `json:"security_bindings,omitempty"`
+	Version                  int                               `json:"version"`
+	SchemaVersion            int                               `json:"schema_version,omitempty"`
+	MinReaderVersion         int                               `json:"min_reader_version,omitempty"`
+	Fingerprint              string                            `json:"fingerprint"`
+	Signature                string                            `json:"signature,omitempty"`
+	CanonicalPayload         json.RawMessage                   `json:"canonical_payload,omitempty"`
+	Rules                    []LbRule                          `json:"rules"`
+	Users                    []ClusterUser                     `json:"users"`
+	APIKeys                  []ClusterAPIKey                   `json:"api_keys"`
+	BasicSettings            ClusterBasicSettings              `json:"basic_settings"`
+	CaddyConfig              *string                           `json:"caddy_config,omitempty"`
+	Certs                    []ClusterCertificate              `json:"certs"`
+	ACME                     *ClusterACMEState                 `json:"acme,omitempty"`
+	SecurityPolicies         json.RawMessage                   `json:"security_policies,omitempty"`
+	SecurityBindings         json.RawMessage                   `json:"security_bindings,omitempty"`
+	SecurityCustomRules      []SecurityCustomRule              `json:"security_custom_rules,omitempty"`
+	SecurityBlockPages       []SecurityBlockPage               `json:"security_block_pages,omitempty"`
+	SecurityCRSVersion       []ClusterSecurityCRSVersion       `json:"security_crs_version,omitempty"`
+	SecurityIP2RegionVersion []ClusterSecurityIP2RegionVersion `json:"security_ip2region_version,omitempty"`
+}
+
+type ClusterSecurityCRSVersion struct {
+	ID           int    `json:"id"`
+	Version      string `json:"version"`
+	UpdatedAt    string `json:"updated_at"`
+	AutoUpdate   bool   `json:"auto_update"`
+	UpdateStatus string `json:"update_status"`
+	Message      string `json:"message"`
+	LastChecked  string `json:"last_checked"`
+	NextUpdate   string `json:"next_update"`
+	Trigger      string `json:"trigger"`
+	StartedAt    string `json:"started_at"`
+	FinishedAt   string `json:"finished_at"`
+}
+
+type ClusterSecurityIP2RegionVersion struct {
+	ID           int    `json:"id"`
+	Version      string `json:"version"`
+	UpdatedAt    string `json:"updated_at"`
+	AutoUpdate   bool   `json:"auto_update"`
+	UpdateStatus string `json:"update_status"`
+	Message      string `json:"message"`
+	LastChecked  string `json:"last_checked"`
+	NextUpdate   string `json:"next_update"`
+	Trigger      string `json:"trigger"`
+	StartedAt    string `json:"started_at"`
+	FinishedAt   string `json:"finished_at"`
 }
 
 func (snapshot ClusterSnapshot) MarshalJSON() ([]byte, error) {

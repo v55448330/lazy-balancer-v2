@@ -17,7 +17,7 @@
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon"><TrendCharts /></el-icon>
-                <span>7 天拦截趋势</span>
+                <span>今日概况</span>
               </div>
             </div>
           </template>
@@ -37,6 +37,9 @@
             <el-col :span="6" class="stat-card-col">
               <div class="stat-label">CRS 版本</div>
               <div class="stat-value" style="color: #67c23a">{{ overview.crs_version }}</div>
+              <div v-if="overview.update_status" style="margin-top: 6px">
+                <el-tag :type="statusTagType(overview.update_status)" size="small" effect="plain">{{ statusLabel(overview.update_status) }}</el-tag>
+              </div>
             </el-col>
           </el-row>
         </el-card>
@@ -78,6 +81,57 @@
       </el-col>
     </el-row>
 
+    <el-row :gutter="20" class="mb-5 events-row">
+      <el-col :span="16">
+        <el-card shadow="always">
+          <template #header>
+            <div class="card-header">
+              <div class="card-title">
+                <el-icon class="title-icon"><Warning /></el-icon>
+                <span>最近拦截事件</span>
+              </div>
+              <el-link type="primary" @click="goToEvents">查看全部</el-link>
+            </div>
+          </template>
+          <el-table :data="blockedEvents" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+            <template #empty><el-empty description="暂无拦截事件" :image-size="60" /></template>
+            <el-table-column prop="event_time" label="时间" width="170" :formatter="(row: SecurityEvent) => formatDate(row.event_time)" />
+            <el-table-column prop="client_ip" label="来源 IP" min-width="130" />
+            <el-table-column label="规则" min-width="160" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.rule_name || row.rule_caddy_id || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="策略" min-width="140" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.policy_name || '—' }}</template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </el-col>
+      <el-col :span="8">
+        <el-card shadow="always">
+          <template #header>
+            <div class="card-header">
+              <div class="card-title">
+                <el-icon class="title-icon"><Odometer /></el-icon>
+                <span>限流拦截</span>
+              </div>
+              <el-tag type="info" size="small" effect="plain">累计（进程启动至今）</el-tag>
+            </div>
+          </template>
+          <div class="rate-limit-total">
+            <div class="stat-label">累计拦截次数</div>
+            <div class="stat-value" style="color: #f56c6c">{{ rateLimitBlocks.total }}</div>
+          </div>
+          <el-table v-if="rateLimitBlocks.hosts.length > 0" :data="rateLimitBlocks.hosts" stripe size="small" :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+            <el-table-column prop="host" label="域名" min-width="120" show-overflow-tooltip />
+            <el-table-column prop="count" label="拦截次数" width="90" align="center">
+              <template #default="{ row }"><el-tag type="danger" size="small" effect="plain">{{ row.count }}</el-tag></template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-else description="暂无限流拦截" :image-size="60" />
+        </el-card>
+      </el-col>
+    </el-row>
+
     <el-card shadow="always">
       <template #header>
         <div class="card-header">
@@ -97,7 +151,7 @@
           <template #default="{ row }"><el-tag type="warning" size="small" effect="plain">{{ row.detected }}</el-tag></template>
         </el-table-column>
         <el-table-column prop="attack_type" label="攻击类型" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="last_time" label="最后攻击" width="170" />
+        <el-table-column prop="last_time" label="最后攻击" width="170" :formatter="(row: TopIP) => formatDate(row.last_time)" />
       </el-table>
     </el-card>
   </div>
@@ -105,15 +159,64 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { DataAnalysis, TrendCharts, PieChart, Location } from '@element-plus/icons-vue'
+import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
+import { formatDate } from '@/utils/date'
+import { use } from 'echarts/core'
+import { CanvasRenderer } from 'echarts/renderers'
+import { BarChart, PieChart as PieSeries } from 'echarts/charts'
+import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
+
+use([CanvasRenderer, BarChart, PieSeries, GridComponent, TooltipComponent, LegendComponent])
 
 interface APIResponse<T> { code: number; message: string; data: T }
 interface TrendPoint { date: string; blocked: number; detected: number }
 interface TopIP { ip: string; blocked: number; detected: number; last_time: string; attack_type: string }
 interface AttackType { name: string; value: number }
-interface Overview { today_blocked: number; today_detected: number; active_policies: number; crs_version: string; trend: TrendPoint[]; top_ips: TopIP[]; attack_types: AttackType[] }
+interface Overview { today_blocked: number; today_detected: number; active_policies: number; crs_version: string; update_status?: string; trend: TrendPoint[]; top_ips: TopIP[]; attack_types: AttackType[] }
+interface SecurityEvent { id: number; event_time: string; client_ip: string; rule_caddy_id: string; rule_name: string; policy_name: string }
+interface RateLimitBlockHost { host: string; count: number }
+interface RateLimitBlocks { total: number; hosts: RateLimitBlockHost[] }
+
+type TagType = 'success' | 'warning' | 'danger' | 'info'
+
+function statusLabel(status: string): string {
+  switch (status) {
+    case 'idle':
+    case 'success':
+      return '已最新'
+    case 'checking':
+      return '检查中'
+    case 'downloading':
+      return '下载中'
+    case 'installing':
+      return '安装中'
+    case 'reloading':
+      return '重载中'
+    case 'failed':
+      return '更新失败'
+    default:
+      return status
+  }
+}
+
+function statusTagType(status: string): TagType {
+  switch (status) {
+    case 'idle':
+    case 'success':
+      return 'success'
+    case 'checking':
+    case 'downloading':
+    case 'installing':
+    case 'reloading':
+      return 'warning'
+    case 'failed':
+      return 'danger'
+    default:
+      return 'info'
+  }
+}
 
 const overview = ref<Overview>({ today_blocked: 0, today_detected: 0, active_policies: 0, crs_version: '', trend: [], top_ips: [], attack_types: [] })
 
@@ -152,7 +255,27 @@ const fetchData = async () => {
   } catch { /* silent */ }
 }
 
-onMounted(fetchData)
+const blockedEvents = ref<SecurityEvent[]>([])
+
+const fetchBlockedEvents = async () => {
+  try {
+    const res = await request.get<APIResponse<{ events: SecurityEvent[]; total: number }>>('/security/events?action=blocked&page_size=5')
+    blockedEvents.value = res.data?.events || []
+  } catch { blockedEvents.value = [] }
+}
+
+const goToEvents = () => { window.open('/?page=security-events', '_blank') }
+
+const rateLimitBlocks = ref<RateLimitBlocks>({ total: 0, hosts: [] })
+
+const fetchRateLimitBlocks = async () => {
+  try {
+    const res = await request.get<APIResponse<RateLimitBlocks>>('/security/rate-limit-blocks')
+    if (res.data) rateLimitBlocks.value = res.data
+  } catch { /* silent */ }
+}
+
+onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks() })
 </script>
 
 <style scoped>
@@ -164,4 +287,6 @@ onMounted(fetchData)
 .stat-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
 .stat-value { font-size: 28px; font-weight: 600; }
 .chart-container { height: 260px; }
+.events-row .el-card { height: 100%; }
+.rate-limit-total { text-align: center; padding: 4px 0 12px; }
 </style>

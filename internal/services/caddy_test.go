@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"lazy-balancer-v2/internal/models"
 )
 
 type countingCaddyStore struct {
@@ -162,12 +164,6 @@ func TestGenerateCaddyConfig_fail_closed_errors_do_not_call_load(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, want: "scan enabled rule"},
-		{name: "ACL JSON", setup: func(t *testing.T, database *sql.DB) {
-			seedGenerationRule(t, database, "lb_acl_json", false)
-			if _, err := database.Exec("UPDATE lb_rules SET ip_acl_list='{' WHERE caddy_id='lb_acl_json'"); err != nil {
-				t.Fatal(err)
-			}
-		}, want: "decode ACL"},
 		{name: "path query", setup: func(t *testing.T, database *sql.DB) {
 			seedGenerationRule(t, database, "lb_path_query", true)
 			if _, err := database.Exec("DROP TABLE path_rules"); err != nil {
@@ -279,97 +275,9 @@ func seedGenerationRule(t *testing.T, database *sql.DB, ruleID string, customRou
 	}
 }
 
-func TestGenerateSingleRuleCaddyConfig_HTTPAllowACL_appendsForbiddenFallback(t *testing.T) {
-	// Given
-	rule := baseHTTPRule()
-	rule.IPACLMode = "allow"
-	rule.IPACLList = []string{"10.0.0.0/8", "2001:db8::/32"}
-
-	// When
-	routes := renderedHTTPRoutes(t, GenerateSingleRuleCaddyConfig(rule))
-
-	// Then
-	if len(routes) != 2 {
-		t.Fatalf("expected main and fallback routes, got %d", len(routes))
-	}
-	mainMatcher := routeMatcher(t, routes[0])
-	assertEqual(t, mainMatcher["host"], []string{"example.com", "www.example.com"})
-	assertIPRanges(t, mainMatcher["client_ip"], rule.IPACLList)
-
-	fallbackMatcher := routeMatcher(t, routes[1])
-	assertEqual(t, fallbackMatcher["host"], []string{"example.com", "www.example.com"})
-	if _, exists := fallbackMatcher["client_ip"]; exists {
-		t.Fatal("allow fallback unexpectedly includes client_ip matcher")
-	}
-	response := firstHandler(t, routes[1])
-	if response["handler"] != "static_response" || response["status_code"] != 403 || response["body"] != "Forbidden" {
-		t.Fatalf("unexpected allow fallback handler: %#v", response)
-	}
-}
-
-func TestGenerateSingleRuleCaddyConfig_HTTPDenyACL_prependsForbiddenRoute(t *testing.T) {
-	// Given
-	rule := baseHTTPRule()
-	rule.IPACLMode = "deny"
-	rule.IPACLList = []string{"192.0.2.0/24"}
-
-	// When
-	routes := renderedHTTPRoutes(t, GenerateSingleRuleCaddyConfig(rule))
-
-	// Then
-	if len(routes) != 2 {
-		t.Fatalf("expected deny and main routes, got %d", len(routes))
-	}
-	denyMatcher := routeMatcher(t, routes[0])
-	assertEqual(t, denyMatcher["host"], []string{"example.com", "www.example.com"})
-	assertIPRanges(t, denyMatcher["client_ip"], rule.IPACLList)
-	response := firstHandler(t, routes[0])
-	if response["handler"] != "static_response" || response["status_code"] != 403 {
-		t.Fatalf("unexpected deny handler: %#v", response)
-	}
-
-	mainMatcher := routeMatcher(t, routes[1])
-	if _, exists := mainMatcher["client_ip"]; exists {
-		t.Fatal("deny main route unexpectedly includes client_ip matcher")
-	}
-}
-
-func TestGenerateRouteObject_L4ACL_rendersRemoteIPMatcher(t *testing.T) {
-	for _, mode := range []string{"allow", "deny"} {
-		t.Run(mode, func(t *testing.T) {
-			// Given
-			rule := SingleRuleConfig{
-				CaddyID: "rule-tcp", Protocol: "tcp",
-				Upstreams: []UpstreamConfig{{Host: "10.0.0.20", Port: 3306, Weight: 1, Enabled: true}},
-			}
-			rule.IPACLMode = mode
-			rule.IPACLList = []string{"10.0.0.0/8"}
-
-			// When
-			route, err := GenerateRouteObject(rule)
-			if err != nil {
-				t.Fatalf("generate route: %v", err)
-			}
-
-			// Then
-			matchers, ok := route["match"].([]interface{})
-			if !ok || len(matchers) != 1 {
-				t.Fatalf("unexpected L4 matchers: %#v", route["match"])
-			}
-			want := map[string]interface{}{"remote_ip": map[string]interface{}{"ranges": rule.IPACLList}}
-			if mode == "deny" {
-				want = map[string]interface{}{"not": []interface{}{want}}
-			}
-			assertEqual(t, matchers[0], want)
-		})
-	}
-}
-
 func TestGenerateSingleRuleCaddyConfig_CustomPathRules_ordersAndSelectsUpstreams(t *testing.T) {
 	// Given
 	rule := baseHTTPRule()
-	rule.IPACLMode = "allow"
-	rule.IPACLList = []string{"10.0.0.0/8"}
 	rule.CustomRoutesEnabled = true
 	rule.PathRules = []PathRuleConfig{
 		{SortOrder: 20, MatchType: "exact", Path: "/health", Upstreams: []UpstreamConfig{
@@ -383,18 +291,16 @@ func TestGenerateSingleRuleCaddyConfig_CustomPathRules_ordersAndSelectsUpstreams
 	routes := renderedHTTPRoutes(t, GenerateSingleRuleCaddyConfig(rule))
 
 	// Then
-	if len(routes) != 4 {
-		t.Fatalf("expected two path routes, main route, and ACL fallback; got %d", len(routes))
+	if len(routes) != 3 {
+		t.Fatalf("expected two path routes and main route; got %d", len(routes))
 	}
 	apiMatcher := routeMatcher(t, routes[0])
 	assertEqual(t, apiMatcher["path"], []string{"/api", "/api/*"})
-	assertIPRanges(t, apiMatcher["client_ip"], rule.IPACLList)
 	apiProxy := reverseProxyHandler(t, routes[0])
 	assertUpstreamDials(t, apiProxy["upstreams"], []string{"10.0.0.10:8080", "10.0.0.11:8080"})
 
 	healthMatcher := routeMatcher(t, routes[1])
 	assertEqual(t, healthMatcher["path"], []string{"/health"})
-	assertIPRanges(t, healthMatcher["client_ip"], rule.IPACLList)
 	healthProxy := reverseProxyHandler(t, routes[1])
 	assertUpstreamDials(t, healthProxy["upstreams"], []string{"10.0.1.20:9090", "10.0.1.21:9090"})
 	loadBalancing := mustMap(t, healthProxy["load_balancing"], "load_balancing")
@@ -404,10 +310,6 @@ func TestGenerateSingleRuleCaddyConfig_CustomPathRules_ordersAndSelectsUpstreams
 	mainMatcher := routeMatcher(t, routes[2])
 	if _, exists := mainMatcher["path"]; exists {
 		t.Fatal("main route unexpectedly includes path matcher")
-	}
-	fallback := firstHandler(t, routes[3])
-	if fallback["status_code"] != 403 {
-		t.Fatalf("expected terminal ACL fallback, got %#v", fallback)
 	}
 }
 
@@ -836,8 +738,6 @@ func TestGenerateSingleRuleCaddyConfig_tagsEveryOwnedAuxiliaryRoute(t *testing.T
 	rule := baseHTTPRule()
 	rule.EnableTLS = true
 	rule.TLSHTTPRedirect = true
-	rule.IPACLMode = "deny"
-	rule.IPACLList = []string{"192.0.2.0/24"}
 	rule.CustomRoutesEnabled = true
 	rule.PathRules = []PathRuleConfig{{SortOrder: 10, MatchType: "prefix", Path: "/api/"}}
 
@@ -845,14 +745,12 @@ func TestGenerateSingleRuleCaddyConfig_tagsEveryOwnedAuxiliaryRoute(t *testing.T
 	routes := renderedHTTPRoutes(t, GenerateSingleRuleCaddyConfig(rule))
 
 	// Then
-	assertRouteIDs(t, routes, []string{"rule-http_redirect", "rule-http_acl_deny", "rule-http_path_0", "rule-http"})
+	assertRouteIDs(t, routes, []string{"rule-http_redirect", "rule-http_path_0", "rule-http"})
 }
 
 func TestGenerateHTTPRouteObjects_tagsEveryOwnedAuxiliaryRoute(t *testing.T) {
 	// Given
 	rule := baseHTTPRule()
-	rule.IPACLMode = "allow"
-	rule.IPACLList = []string{"192.0.2.0/24"}
 	rule.CustomRoutesEnabled = true
 	rule.PathRules = []PathRuleConfig{{SortOrder: 10, MatchType: "prefix", Path: "/api/"}}
 
@@ -867,7 +765,7 @@ func TestGenerateHTTPRouteObjects_tagsEveryOwnedAuxiliaryRoute(t *testing.T) {
 	for index, route := range routes {
 		routeValues[index] = route
 	}
-	assertRouteIDs(t, routeValues, []string{"rule-http_path_0", "rule-http", "rule-http_acl_allow"})
+	assertRouteIDs(t, routeValues, []string{"rule-http_path_0", "rule-http"})
 }
 
 func TestDecodePathUpstreams_preservesHTTPSProtocol_andDefaultsEmptyProtocol(t *testing.T) {
@@ -1031,12 +929,6 @@ func mustMap(t *testing.T, value interface{}, name string) map[string]interface{
 		t.Fatalf("%s has type %T", name, value)
 	}
 	return result
-}
-
-func assertIPRanges(t *testing.T, value interface{}, want []string) {
-	t.Helper()
-	clientIP := mustMap(t, value, "IP matcher")
-	assertEqual(t, clientIP["ranges"], want)
 }
 
 func assertUpstreamDials(t *testing.T, value interface{}, want []string) {
@@ -1240,5 +1132,623 @@ func TestGenerateCaddyConfig_skipsRulesWithoutUpstreams(t *testing.T) {
 	assertRouteIDs(t, httpRoutesFromServer(t, generated, "http_80"), []string{""})
 	if _, exists := apps["layer4"]; exists {
 		t.Fatal("zero-upstream TCP rule server was generated")
+	}
+}
+
+func seedWafRuleRow(t *testing.T, database *sql.DB, caddyID, protocol string) {
+	t.Helper()
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES (?,?,?,8080,1)`, caddyID, "waf-test-"+caddyID, protocol); err != nil {
+		t.Fatalf("seed %s rule row: %v", protocol, err)
+	}
+}
+
+func seedBoundSecurityPolicy(t *testing.T, database *sql.DB, ruleCaddyID, mode string, enabled bool) {
+	t.Helper()
+	enabledValue := 0
+	if enabled {
+		enabledValue = 1
+	}
+	result, err := database.Exec(`INSERT INTO security_policies (name,mode,enabled) VALUES (?,?,?)`, "policy-"+ruleCaddyID, mode, enabledValue)
+	if err != nil {
+		t.Fatalf("seed security policy: %v", err)
+	}
+	policyID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read security policy id: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES (?,?)`, ruleCaddyID, policyID); err != nil {
+		t.Fatalf("bind security policy: %v", err)
+	}
+}
+
+func handlerChainNames(t *testing.T, routeValue interface{}) []string {
+	t.Helper()
+	route := mustMap(t, routeValue, "route")
+	handlers, ok := route["handle"].([]interface{})
+	if !ok {
+		t.Fatalf("handlers has type %T", route["handle"])
+	}
+	names := make([]string, 0, len(handlers))
+	for _, handlerValue := range handlers {
+		names = append(names, mustMap(t, handlerValue, "handler")["handler"].(string))
+	}
+	return names
+}
+
+func indexOfHandler(names []string, name string) int {
+	for i, candidate := range names {
+		if candidate == name {
+			return i
+		}
+	}
+	return -1
+}
+
+func findChainHandler(t *testing.T, routeValue interface{}, name string) map[string]interface{} {
+	t.Helper()
+	route := mustMap(t, routeValue, "route")
+	handlers, ok := route["handle"].([]interface{})
+	if !ok {
+		t.Fatalf("handlers has type %T", route["handle"])
+	}
+	for _, handlerValue := range handlers {
+		handler := mustMap(t, handlerValue, "handler")
+		if handler["handler"] == name {
+			return handler
+		}
+	}
+	return nil
+}
+
+func TestGenerateRouteObject_placesWafHandlerFirst_whenBlockingPolicyBound(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedWafRuleRow(t, database, "rule-http", "http")
+	seedBoundSecurityPolicy(t, database, "rule-http", "blocking", true)
+	rule := baseHTTPRule()
+	rule.RequestBodyMaxSizeMB = 8
+
+	// When
+	routes, _, err := generateHTTPRouteObjects(rule)
+
+	// Then
+	if err != nil {
+		t.Fatalf("generate routes: %v", err)
+	}
+	names := handlerChainNames(t, routes[0])
+	wafIndex := indexOfHandler(names, "waf")
+	if wafIndex != 0 {
+		t.Fatalf("waf handler index=%d, want first position in chain %v", wafIndex, names)
+	}
+	if proxyIndex := indexOfHandler(names, "reverse_proxy"); proxyIndex <= wafIndex {
+		t.Fatalf("waf must execute before reverse_proxy: chain %v", names)
+	}
+	if bodyIndex := indexOfHandler(names, "request_body"); bodyIndex <= wafIndex {
+		t.Fatalf("waf must execute before request_body: chain %v", names)
+	}
+}
+
+func TestGenerateRouteObject_rendersWafDetectionOnlyDirectives_whenDetectionPolicyBound(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedWafRuleRow(t, database, "rule-http", "http")
+	seedBoundSecurityPolicy(t, database, "rule-http", "detection", true)
+	rule := baseHTTPRule()
+
+	// When
+	routes, _, err := generateHTTPRouteObjects(rule)
+
+	// Then
+	if err != nil {
+		t.Fatalf("generate routes: %v", err)
+	}
+	waf := findChainHandler(t, routes[0], "waf")
+	if waf == nil {
+		t.Fatal("waf handler missing from handle chain")
+	}
+	directives, ok := waf["directives"].(string)
+	if !ok || !strings.Contains(directives, "SecRuleEngine DetectionOnly") {
+		t.Fatalf("waf directives=%#v, want SecRuleEngine DetectionOnly", waf["directives"])
+	}
+}
+
+func TestGenerateRouteObject_omitsWafHandler_whenBoundPolicyDisabled(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedWafRuleRow(t, database, "rule-http", "http")
+	seedBoundSecurityPolicy(t, database, "rule-http", "blocking", false)
+	rule := baseHTTPRule()
+
+	// When
+	routes, _, err := generateHTTPRouteObjects(rule)
+
+	// Then
+	if err != nil {
+		t.Fatalf("generate routes: %v", err)
+	}
+	if waf := findChainHandler(t, routes[0], "waf"); waf != nil {
+		t.Fatalf("waf handler present for disabled policy: %#v", waf)
+	}
+}
+
+func TestGenerateRouteObject_omitsWafHandler_whenRuleHasNoPolicyBinding(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedWafRuleRow(t, database, "rule-http", "http")
+	if _, err := database.Exec(`INSERT INTO security_policies (name,mode,enabled) VALUES ('unbound-policy','blocking',1)`); err != nil {
+		t.Fatalf("seed unbound policy: %v", err)
+	}
+	rule := baseHTTPRule()
+
+	// When
+	routes, _, err := generateHTTPRouteObjects(rule)
+
+	// Then
+	if err != nil {
+		t.Fatalf("generate routes: %v", err)
+	}
+	if waf := findChainHandler(t, routes[0], "waf"); waf != nil {
+		t.Fatalf("waf handler present for unbound rule: %#v", waf)
+	}
+}
+
+func TestGenerateSingleRuleCaddyConfig_omitsWafHandler_whenRuleIsTCP(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedWafRuleRow(t, database, "rule-tcp", "tcp")
+	seedBoundSecurityPolicy(t, database, "rule-tcp", "blocking", true)
+	rule := SingleRuleConfig{
+		CaddyID:    "rule-tcp",
+		Protocol:   "tcp",
+		ListenPort: 3306,
+		Upstreams:  []UpstreamConfig{{Host: "10.0.0.20", Port: 3306, Weight: 1, Enabled: true}},
+	}
+
+	// When
+	config := GenerateSingleRuleCaddyConfig(rule)
+
+	// Then
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal TCP rule config: %v", err)
+	}
+	if strings.Contains(string(encoded), `"handler":"waf"`) {
+		t.Fatalf("waf handler leaked into TCP rule config: %s", encoded)
+	}
+}
+
+func TestBuildWafHandler_nilMatrix(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedWafRuleRow(t, database, "waf-http-blocking", "http")
+	seedBoundSecurityPolicy(t, database, "waf-http-blocking", "blocking", true)
+	seedWafRuleRow(t, database, "waf-http-detection", "http")
+	seedBoundSecurityPolicy(t, database, "waf-http-detection", "detection", true)
+	seedWafRuleRow(t, database, "waf-http-disabled", "http")
+	seedBoundSecurityPolicy(t, database, "waf-http-disabled", "blocking", false)
+	seedWafRuleRow(t, database, "waf-http-unbound", "http")
+	seedWafRuleRow(t, database, "waf-http-off", "http")
+	seedBoundSecurityPolicy(t, database, "waf-http-off", "off", true)
+	seedWafRuleRow(t, database, "waf-tcp", "tcp")
+	seedBoundSecurityPolicy(t, database, "waf-tcp", "blocking", true)
+
+	cases := []struct {
+		name      string
+		caddyID   string
+		wantWaf   bool
+		directive string
+	}{
+		{"blocking policy bound to http rule", "waf-http-blocking", true, "SecRuleEngine On"},
+		{"detection policy bound to http rule", "waf-http-detection", true, "SecRuleEngine DetectionOnly"},
+		{"disabled policy", "waf-http-disabled", false, ""},
+		{"unbound http rule", "waf-http-unbound", false, ""},
+		{"policy with mode off yields empty directives", "waf-http-off", false, ""},
+		{"tcp rule", "waf-tcp", false, ""},
+		{"unknown rule", "waf-missing", false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// When
+			handler := buildWafHandler(tc.caddyID)
+
+			// Then
+			if !tc.wantWaf {
+				if handler != nil {
+					t.Fatalf("buildWafHandler(%q)=%#v, want nil", tc.caddyID, handler)
+				}
+				return
+			}
+			if handler == nil {
+				t.Fatalf("buildWafHandler(%q)=nil, want waf handler", tc.caddyID)
+			}
+			if handler["handler"] != "waf" {
+				t.Fatalf("handler name=%#v, want waf", handler["handler"])
+			}
+			directives, _ := handler["directives"].(string)
+			if !strings.Contains(directives, tc.directive) {
+				t.Fatalf("directives=%q, want substring %q", directives, tc.directive)
+			}
+		})
+	}
+}
+
+func seedBoundSecurityPolicyWithRateLimit(t *testing.T, database *sql.DB, ruleCaddyID, mode string, rps, burst int) {
+	t.Helper()
+	result, err := database.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,enabled) VALUES (?,?,1,?,?,1)`, "policy-rl-"+ruleCaddyID, mode, rps, burst)
+	if err != nil {
+		t.Fatalf("seed rate-limit policy: %v", err)
+	}
+	policyID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read rate-limit policy id: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES (?,?)`, ruleCaddyID, policyID); err != nil {
+		t.Fatalf("bind rate-limit policy: %v", err)
+	}
+}
+
+func TestGenerateRouteObject_placesRateLimitBeforeWaf_whenPolicyEnablesRateLimit(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedWafRuleRow(t, database, "rule-http", "http")
+	seedBoundSecurityPolicyWithRateLimit(t, database, "rule-http", "blocking", 100, 50)
+	rule := baseHTTPRule()
+
+	// When
+	routes, _, err := generateHTTPRouteObjects(rule)
+
+	// Then
+	if err != nil {
+		t.Fatalf("generate routes: %v", err)
+	}
+	names := handlerChainNames(t, routes[0])
+	rateLimitIndex := indexOfHandler(names, "rate_limit")
+	wafIndex := indexOfHandler(names, "waf")
+	proxyIndex := indexOfHandler(names, "reverse_proxy")
+	if rateLimitIndex < 0 {
+		t.Fatalf("rate_limit handler missing from chain %v", names)
+	}
+	if wafIndex < 0 {
+		t.Fatalf("waf handler missing from chain %v", names)
+	}
+	if !(rateLimitIndex < wafIndex && wafIndex < proxyIndex) {
+		t.Fatalf("want rate_limit < waf < reverse_proxy, got chain %v", names)
+	}
+	rateLimit := findChainHandler(t, routes[0], "rate_limit")
+	zones := mustMap(t, rateLimit["rate_limits"], "rate_limits")
+	if len(zones) != 2 {
+		t.Fatalf("want exactly two rate limit zones (sec/min) when burst > 0, got %v", zones)
+	}
+	secZone := mustMap(t, zones["sec"], "sec rate limit zone")
+	assertEqual(t, secZone["key"], "{http.request.remote.host}")
+	assertEqual(t, secZone["window"], "1s")
+	assertEqual(t, secZone["max_events"], 150)
+	minZone := mustMap(t, zones["min"], "min rate limit zone")
+	assertEqual(t, minZone["key"], "{http.request.remote.host}")
+	assertEqual(t, minZone["window"], "60s")
+	assertEqual(t, minZone["max_events"], 6000)
+}
+
+func TestGenerateRouteObject_rendersSingleRateLimitZone_whenBurstZero(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedWafRuleRow(t, database, "rule-http", "http")
+	seedBoundSecurityPolicyWithRateLimit(t, database, "rule-http", "blocking", 20, 0)
+	rule := baseHTTPRule()
+
+	// When
+	routes, _, err := generateHTTPRouteObjects(rule)
+
+	// Then
+	if err != nil {
+		t.Fatalf("generate routes: %v", err)
+	}
+	rateLimit := findChainHandler(t, routes[0], "rate_limit")
+	zones := mustMap(t, rateLimit["rate_limits"], "rate_limits")
+	if len(zones) != 1 {
+		t.Fatalf("want exactly one rate limit zone when burst is zero, got %v", zones)
+	}
+	zone := mustMap(t, zones["rule-http"], "rate limit zone")
+	assertEqual(t, zone["key"], "{http.request.remote.host}")
+	assertEqual(t, zone["window"], "1s")
+	assertEqual(t, zone["max_events"], 20)
+}
+
+func TestGenerateRouteObject_omitsRateLimitHandler_whenPolicyRateLimitDisabled(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedWafRuleRow(t, database, "rule-http", "http")
+	seedBoundSecurityPolicy(t, database, "rule-http", "blocking", true)
+	rule := baseHTTPRule()
+
+	// When
+	routes, _, err := generateHTTPRouteObjects(rule)
+
+	// Then
+	if err != nil {
+		t.Fatalf("generate routes: %v", err)
+	}
+	names := handlerChainNames(t, routes[0])
+	if indexOfHandler(names, "rate_limit") >= 0 {
+		t.Fatalf("rate_limit handler present for policy without rate limiting: chain %v", names)
+	}
+	if indexOfHandler(names, "waf") < 0 {
+		t.Fatalf("waf handler missing from chain %v", names)
+	}
+}
+
+func TestGenerateRouteObject_rendersRateLimitWithoutWaf_whenPolicyModeOff(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	seedWafRuleRow(t, database, "rule-http", "http")
+	seedBoundSecurityPolicyWithRateLimit(t, database, "rule-http", "off", 20, 0)
+	rule := baseHTTPRule()
+
+	// When
+	routes, _, err := generateHTTPRouteObjects(rule)
+
+	// Then
+	if err != nil {
+		t.Fatalf("generate routes: %v", err)
+	}
+	names := handlerChainNames(t, routes[0])
+	rateLimitIndex := indexOfHandler(names, "rate_limit")
+	if rateLimitIndex < 0 {
+		t.Fatalf("rate_limit handler missing for mode-off policy with rate limiting: chain %v", names)
+	}
+	if indexOfHandler(names, "waf") >= 0 {
+		t.Fatalf("waf handler present for mode-off policy: chain %v", names)
+	}
+	rateLimit := findChainHandler(t, routes[0], "rate_limit")
+	zone := mustMap(t, mustMap(t, rateLimit["rate_limits"], "rate_limits")["rule-http"], "rate limit zone")
+	assertEqual(t, zone["max_events"], 20)
+}
+
+func seedHTTPRuleForGeneration(t *testing.T, database *sql.DB, caddyID, domain string, listenPort int) {
+	t.Helper()
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enabled) VALUES (?,?,'http',?,?,'weighted_round_robin',1)`, caddyID, caddyID, domain, listenPort); err != nil {
+		t.Fatalf("seed http rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,enabled,protocol) VALUES (?,'127.0.0.1',9000,1,'http')`, caddyID); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+}
+
+func seedBoundSecurityPolicyWithBlockPage(t *testing.T, database *sql.DB, ruleCaddyID string, blockPageID int) {
+	t.Helper()
+	result, err := database.Exec(`INSERT INTO security_policies (name,mode,block_page_id,enabled) VALUES (?,'blocking',?,1)`, "policy-bp-"+ruleCaddyID, blockPageID)
+	if err != nil {
+		t.Fatalf("seed block-page policy: %v", err)
+	}
+	policyID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read block-page policy id: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES (?,?)`, ruleCaddyID, policyID); err != nil {
+		t.Fatalf("bind block-page policy: %v", err)
+	}
+}
+
+func seedSecurityBlockPage(t *testing.T, database *sql.DB, id int, content string, statusCode int) {
+	t.Helper()
+	if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,content,status_code) VALUES (?,?,?,?)`, id, "page", content, statusCode); err != nil {
+		t.Fatalf("seed block page: %v", err)
+	}
+}
+
+func serverErrorRoutes(t *testing.T, config map[string]interface{}, serverName string) ([]interface{}, map[string]interface{}) {
+	t.Helper()
+	apps := mustMap(t, config["apps"], "apps")
+	httpApp := mustMap(t, apps["http"], "http app")
+	servers := mustMap(t, httpApp["servers"], "servers")
+	server := mustMap(t, servers[serverName], serverName)
+	errorsValue, exists := server["errors"]
+	if !exists {
+		return nil, server
+	}
+	routes, ok := mustMap(t, errorsValue, "errors")["routes"].([]interface{})
+	if !ok {
+		t.Fatalf("errors.routes has unexpected type: %#v", errorsValue)
+	}
+	return routes, server
+}
+
+func TestGenerateCaddyConfig_rendersBlockPageErrorRoute_whenBoundPolicyHasBlockPage(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_blocked", "blocked.example.test", 8080)
+	seedSecurityBlockPage(t, database, 7, "<html>branded-block</html>", 451)
+	seedBoundSecurityPolicyWithBlockPage(t, database, "lb_blocked", 7)
+
+	// When
+	generated := generateCaddyConfigFromStore(database)
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generation failed: %s", message)
+	}
+	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
+	if len(errorRoutes) != 1 {
+		t.Fatalf("want exactly one error route, got %#v", errorRoutes)
+	}
+	route := mustMap(t, errorRoutes[0], "error route")
+	matcher := routeMatcher(t, route)
+	assertEqual(t, matcher["host"], []string{"blocked.example.test"})
+	// The matcher targets the actual deny status coraza produces (403); the
+	// response still renders the block page's own configured status code.
+	assertEqual(t, matcher["expression"], "{http.error.status_code} == 403")
+	handler := firstHandler(t, route)
+	assertEqual(t, handler["handler"], "static_response")
+	assertEqual(t, handler["body"], "<html>branded-block</html>")
+	assertEqual(t, handler["status_code"], 451)
+	if route["terminal"] != true {
+		t.Fatalf("error route must be terminal: %#v", route)
+	}
+}
+
+func TestGenerateCaddyConfig_rendersOneErrorRoutePerRule_whenServerHasMultipleBlockPagePolicies(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_alpha", "alpha.example.test", 8080)
+	seedHTTPRuleForGeneration(t, database, "lb_beta", "beta.example.test", 8080)
+	seedSecurityBlockPage(t, database, 7, "<html>alpha-block</html>", 451)
+	seedSecurityBlockPage(t, database, 8, "<html>beta-block</html>", 403)
+	seedBoundSecurityPolicyWithBlockPage(t, database, "lb_alpha", 7)
+	seedBoundSecurityPolicyWithBlockPage(t, database, "lb_beta", 8)
+
+	// When
+	generated := generateCaddyConfigFromStore(database)
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generation failed: %s", message)
+	}
+	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
+	if len(errorRoutes) != 2 {
+		t.Fatalf("want two host-matched error routes, got %#v", errorRoutes)
+	}
+	byHost := make(map[string]map[string]interface{}, len(errorRoutes))
+	for _, routeValue := range errorRoutes {
+		route := mustMap(t, routeValue, "error route")
+		matcher := routeMatcher(t, route)
+		hosts, ok := matcher["host"].([]string)
+		if !ok || len(hosts) != 1 {
+			t.Fatalf("error route matcher host=%#v, want single host", matcher["host"])
+		}
+		byHost[hosts[0]] = route
+	}
+	alpha := byHost["alpha.example.test"]
+	if alpha == nil {
+		t.Fatalf("no error route matched for alpha.example.test: %#v", errorRoutes)
+	}
+	assertEqual(t, routeMatcher(t, alpha)["expression"], "{http.error.status_code} == 403")
+	alphaHandler := firstHandler(t, alpha)
+	assertEqual(t, alphaHandler["body"], "<html>alpha-block</html>")
+	assertEqual(t, alphaHandler["status_code"], 451)
+	beta := byHost["beta.example.test"]
+	if beta == nil {
+		t.Fatalf("no error route matched for beta.example.test: %#v", errorRoutes)
+	}
+	betaHandler := firstHandler(t, beta)
+	assertEqual(t, betaHandler["body"], "<html>beta-block</html>")
+	assertEqual(t, betaHandler["status_code"], 403)
+}
+
+func TestGenerateCaddyConfig_omitsErrorRoutes_whenRuleHasNoPolicyBinding(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_plain", "plain.example.test", 8080)
+
+	// When
+	generated := generateCaddyConfigFromStore(database)
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generation failed: %s", message)
+	}
+	_, server := serverErrorRoutes(t, generated, "http_8080")
+	if _, exists := server["errors"]; exists {
+		t.Fatalf("server errors config present for unbound rule: %#v", server["errors"])
+	}
+}
+
+func TestBuildCorazaDirectives_emitsAclExclusionsThresholdAndBlockStatus(t *testing.T) {
+	_, database := newClusterTestService(t)
+	result, err := database.Exec(`INSERT INTO security_policies (name,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,crs_excluded_rules,block_page_id,enabled)
+		VALUES ('full-policy','blocking',10,'deny','["203.0.113.0/24"]',1,'["942100"]',1,1)`)
+	if err != nil {
+		t.Fatalf("seed full policy: %v", err)
+	}
+	policyID, _ := result.LastInsertId()
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_full',?)`, policyID); err != nil {
+		t.Fatalf("bind full policy: %v", err)
+	}
+
+	policy := GetSecurityPolicyForRule("lb_full")
+	if policy == nil {
+		t.Fatal("expected bound policy to load")
+	}
+	if !policy.IPACLEnabled || policy.IPACLMode != "deny" {
+		t.Fatalf("ip acl fields not loaded: enabled=%v mode=%q", policy.IPACLEnabled, policy.IPACLMode)
+	}
+	if len(policy.CRSExcludedRules) == 0 || policy.BlockPageID != 1 {
+		t.Fatalf("exclusions/block page not loaded: excluded=%s block_page_id=%d", policy.CRSExcludedRules, policy.BlockPageID)
+	}
+
+	directives := BuildCorazaDirectives(policy)
+	for _, want := range []string{
+		"@ipMatch 203.0.113.0/24",
+		"SecRuleRemoveById 942100",
+		"setvar:tx.inbound_anomaly_score_threshold=10",
+	} {
+		if !strings.Contains(directives, want) {
+			t.Fatalf("directives missing %q:\n%s", want, directives)
+		}
+	}
+	// SecDefaultAction must NOT be emitted: crs-setup.conf already defines one
+	// per phase and coraza rejects duplicates; blocking rides CRS 949 instead.
+	if strings.Contains(directives, "SecDefaultAction") {
+		t.Fatalf("directives must not redefine SecDefaultAction:\n%s", directives)
+	}
+}
+
+func TestBuildCorazaDirectives_allowModeDeniesNonListedIPs(t *testing.T) {
+	_, database := newClusterTestService(t)
+	result, err := database.Exec(`INSERT INTO security_policies (name,mode,ip_acl_mode,ip_acl_list,ip_acl_enabled,enabled)
+		VALUES ('allow-policy','blocking','allow','["198.51.100.7"]',1,1)`)
+	if err != nil {
+		t.Fatalf("seed allow policy: %v", err)
+	}
+	policyID, _ := result.LastInsertId()
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_allow',?)`, policyID); err != nil {
+		t.Fatalf("bind allow policy: %v", err)
+	}
+
+	directives := BuildCorazaDirectives(GetSecurityPolicyForRule("lb_allow"))
+	if !strings.Contains(directives, `!@ipMatch 198.51.100.7`) {
+		t.Fatalf("allow mode must deny non-listed IPs via negated match:\n%s", directives)
+	}
+	if strings.Contains(directives, "@noMatch") {
+		t.Fatalf("allow mode must not use the never-firing @noMatch operator:\n%s", directives)
+	}
+}
+
+func TestBuildCorazaDirectives_chainedCustomRuleCarriesActionsOnlyOnStarter(t *testing.T) {
+	policy := &models.SecurityPolicy{
+		Mode:          "blocking",
+		CRSRuleGroups: json.RawMessage(`["9"]`),
+		CustomRules: json.RawMessage(`[{"id":7,"name":"链式验证","enabled":true,"action":"block","status_code":403,"conditions":[` +
+			`{"target":"uri","operator":"contains","pattern":"/admin"},` +
+			`{"target":"args","operator":"contains","pattern":"debug=1"},` +
+			`{"target":"user_agent","operator":"contains","pattern":"sqlmap"}]` +
+			`}]`),
+	}
+	directives := BuildCorazaDirectives(policy)
+	lines := strings.Split(directives, "\n")
+	var chainLines []string
+	for _, line := range lines {
+		if strings.Contains(line, "id:10007") || (strings.Contains(line, "SecRule") && strings.Contains(line, "phase:1") && strings.Contains(line, "chain")) || strings.Contains(line, `"phase:1"`) {
+			chainLines = append(chainLines, line)
+		}
+	}
+	if len(chainLines) != 3 {
+		t.Fatalf("want 3 chained SecRule lines, got %d:\n%s", len(chainLines), directives)
+	}
+	if !strings.Contains(chainLines[0], "id:10007") || !strings.Contains(chainLines[0], "deny") || !strings.Contains(chainLines[0], ",chain") {
+		t.Fatalf("starter must carry id+disruptive+chain: %s", chainLines[0])
+	}
+	for i, line := range chainLines[1:] {
+		if strings.Contains(line, "deny") || strings.Contains(line, "msg:") || strings.Contains(line, "id:") {
+			t.Fatalf("non-starter line %d carries disruptive/meta actions (rejected by coraza v3): %s", i+1, line)
+		}
+	}
+	if !strings.Contains(chainLines[1], ",chain") {
+		t.Fatalf("intermediate rule must carry chain: %s", chainLines[1])
+	}
+	if strings.Contains(chainLines[2], ",chain") {
+		t.Fatalf("final rule must not carry chain: %s", chainLines[2])
 	}
 }

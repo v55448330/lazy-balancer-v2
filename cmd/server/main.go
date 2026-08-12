@@ -68,6 +68,9 @@ func run() error {
 	if err := handlers.SeedDefaultBranding(cfg.DataDir); err != nil {
 		services.Logf("warn", "failed to seed default branding: %v", err)
 	}
+	if err := handlers.SeedDefaultBlockPage(cfg.DataDir); err != nil {
+		services.Logf("warn", "failed to seed default block page: %v", err)
+	}
 	if runtimeLogFile != "" {
 		services.StartRuntimeLogCleanup(runtimeLogFile)
 	}
@@ -95,6 +98,9 @@ func run() error {
 		return caddyService.GenerateAndApplyConfig()
 	}
 	services.InitCAQueueManager(caddyReloader, cfg.DataDir)
+	services.InitCRSUpdateManager(caddyReloader)
+	services.InitIP2Region()
+	services.InitIP2RegionUpdateManager(caddyReloader)
 	metricsService := services.NewMetricsService(cfg.CaddyMetricsURL, cfg.MetricsInterval)
 	syncService := services.NewSyncService(db.DB, cfg, caddyService)
 	lifecycle := newRuntimeLifecycle(syncService, func() certificateWorker {
@@ -108,7 +114,10 @@ func run() error {
 		SyncService: syncService, ClusterService: clusterService, CAProviderService: caProviderService,
 	})
 
-	// Materialize cert files from DB, then apply Caddy config on startup
+	// Seed the CRS rules tree into a fresh /app/waf bind mount (a persisted
+	// snapshot with user-updated rules wins over the pristine image copy),
+	// then materialize cert files from DB, then apply Caddy config on startup
+	services.SeedCRSRules()
 	services.MaterializeAllCertsFromDB()
 	if err := h.ApplyConfigOnStartup(); err != nil {
 		services.Logf("error", "failed to apply Caddy config on startup: %v", err)
@@ -126,11 +135,20 @@ func run() error {
 		defer close(metricsDone)
 		metricsService.Start()
 	}()
+	crsManager := services.GetCRSUpdateManager()
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
 		services.Logf("error", "failed to read cluster role: %v", err)
 		isMaster = true
 	}
+	crsManager.SetMasterRole(isMaster)
+	if ip2RegionManager := services.GetIP2RegionUpdateManager(); ip2RegionManager != nil {
+		ip2RegionManager.SetMasterRole(isMaster)
+	}
+	// 事件保留清理针对本节点本地表，与集群角色无关（从节点也摄入事件）
+	services.StartSecurityEventsRetention(context.Background())
+	services.StartAuditLogRotation(context.Background())
+	go services.StartSecurityEventsIngestion(context.Background())
 	if isMaster {
 		lifecycle.StartACME()
 	} else {
@@ -140,6 +158,10 @@ func run() error {
 	defer func() {
 		metricsService.Stop()
 		<-metricsDone
+		crsManager.StopScheduler()
+		if ip2RegionManager := services.GetIP2RegionUpdateManager(); ip2RegionManager != nil {
+			ip2RegionManager.StopScheduler()
+		}
 		services.StopAuditCleanup()
 		services.StopTimezoneRefresh()
 		services.StopLogRotate()

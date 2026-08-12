@@ -750,9 +750,6 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		RequestBodyMaxSizeMB          int
 		UpstreamKeepaliveTimeout      int
 		ServerTokensHidden            int
-		IPACLMode                     string
-		IPACLListJSON                 string
-		IPACLList                     []string
 		CustomRoutesEnabled           bool
 		ProxyDialTimeout              int
 		ProxyResponseHeaderTimeout    int
@@ -792,7 +789,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		       IIF(enabled IN ('1',1),1,0), IIF(enable_compress IN ('1',1),1,0), COALESCE(compress_types,'gzip'),
 		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(host_header,''),
-		       IIF(log_enabled IN ('1',1),1,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), IIF(custom_routes_enabled IN ('1',1),1,0),
+		       IIF(log_enabled IN ('1',1),1,0), IIF(custom_routes_enabled IN ('1',1),1,0),
 		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0)
 		FROM lb_rules WHERE enabled = 1
 	`)
@@ -810,7 +807,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 			&r.TLSHTTPRedirect, &r.Enabled, &r.EnableCompress, &r.CompressTypes,
 			&r.EnableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPProxyProtocol, &r.TCPTryDuration, &r.TCPTryInterval,
 			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.HostHeader, &r.LogEnabled,
-			&r.IPACLMode, &r.IPACLListJSON, &r.CustomRoutesEnabled, &r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout,
+			&r.CustomRoutesEnabled, &r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout,
 			&r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout, &r.ProxyFlushInterval, &r.ProxyStreamCloseDelay)
 
 		if err != nil {
@@ -824,10 +821,6 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 
 		if !r.Enabled {
 			continue
-		}
-		if unmarshalErr := json.Unmarshal([]byte(r.IPACLListJSON), &r.IPACLList); unmarshalErr != nil {
-			closeErr := rows.Close()
-			return generationFailure("decode ACL for rule %s: %v", r.CaddyID, errors.Join(unmarshalErr, closeErr))
 		}
 
 		allRules = append(allRules, ruleWithUpstreams{rule: r})
@@ -1169,8 +1162,6 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 				GlobalRequestBodyMaxSizeMB:       global.requestBodyMaxSizeMB,
 				GlobalUpstreamKeepaliveTimeout:   global.upstreamKeepaliveTimeout,
 				GlobalServerTokensHidden:         global.serverTokensHidden,
-				IPACLMode:                        r.IPACLMode,
-				IPACLList:                        r.IPACLList,
 				CustomRoutesEnabled:              r.CustomRoutesEnabled,
 				PathRules:                        r.PathRules,
 				ProxyDialTimeout:                 r.ProxyDialTimeout,
@@ -1215,6 +1206,20 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		}
 
 		server["routes"] = routes
+
+		var errorRoutes []interface{}
+		for _, ru := range rules {
+			r := ru.rule
+			if errorRoute := buildBlockPageErrorRoute(r.CaddyID, splitAndTrim(r.Domain)); errorRoute != nil {
+				errorRoutes = append(errorRoutes, errorRoute)
+			}
+			if errorRoute := buildRateLimitErrorRoute(r.CaddyID, splitAndTrim(r.Domain)); errorRoute != nil {
+				errorRoutes = append(errorRoutes, errorRoute)
+			}
+		}
+		if len(errorRoutes) > 0 {
+			server["errors"] = map[string]interface{}{"routes": errorRoutes}
+		}
 
 		// Configure TLS for manual and ACME certificates
 		var tlsPolicies []interface{}
@@ -1345,8 +1350,6 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 			TCPProxyProtocol:              r.TCPProxyProtocol,
 			TCPTryDuration:                r.TCPTryDuration,
 			TCPTryInterval:                r.TCPTryInterval,
-			IPACLMode:                     r.IPACLMode,
-			IPACLList:                     r.IPACLList,
 		}
 		for _, ru := range rules {
 			for _, u := range ru.upstreams {
@@ -1686,8 +1689,6 @@ type SingleRuleConfig struct {
 	GlobalUpstreamKeepaliveTimeout   int
 	GlobalServerTokensHidden         bool
 	HostHeader                       string
-	IPACLMode                        string
-	IPACLList                        []string
 	CustomRoutesEnabled              bool
 	PathRules                        []PathRuleConfig
 	ProxyDialTimeout                 int
@@ -1876,14 +1877,16 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 		var handleChain []interface{}
 
-		// Security policy: insert coraza_waf handler if rule has an active policy
-		if secPolicy := GetSecurityPolicyForRule(rule.CaddyID); secPolicy != nil {
-			if directives := BuildCorazaDirectives(secPolicy); directives != "" {
-				handleChain = append(handleChain, map[string]interface{}{
-					"handler":    "waf",
-					"directives": directives,
-				})
+		// GeoIP resolution populates region placeholders for downstream handlers.
+		if policy := GetSecurityPolicyForRule(rule.CaddyID); PolicyHasGeoIP(policy) {
+			if geoipHandler := buildGeoipHandler(policy); geoipHandler != nil {
+				handleChain = append(handleChain, geoipHandler)
 			}
+		}
+
+		// Security policy: insert coraza waf handler if rule has an active policy
+		if wafHandler := buildWafHandler(rule.CaddyID); wafHandler != nil {
+			handleChain = append(handleChain, wafHandler)
 		}
 
 		effectiveRequestBodyMaxSizeMB, effectiveUpstreamKeepaliveTimeout, effectiveServerTokensHidden := resolveRuleOverrides(rule)
@@ -2049,6 +2052,14 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		handleChain = append(handleChain, proxyConfig)
 
 		var routes []interface{}
+		// GeoIP routes run before path rules and the main route: the pass route
+		// populates the region placeholders, then the block route rejects matches.
+		if policy := GetSecurityPolicyForRule(rule.CaddyID); PolicyHasGeoIP(policy) {
+			routes = append(routes, buildGeoipPassRoute(domainHosts, policy))
+			if blockRoute := buildGeoipBlockRoute(rule, policy); blockRoute != nil {
+				routes = append(routes, blockRoute)
+			}
+		}
 		if rule.EnableTLS && rule.TLSHTTPRedirect {
 			redirectRoute := map[string]interface{}{
 				"match": []interface{}{
@@ -2069,11 +2080,6 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			tagRuleRoute(redirectRoute, rule.CaddyID, "redirect")
 			routes = append(routes, redirectRoute)
 		}
-		if rule.IPACLMode == "deny" {
-			denyRoute := forbiddenHTTPRoute(domainHosts, rule.IPACLList, true)
-			tagRuleRoute(denyRoute, rule.CaddyID, "acl_deny")
-			routes = append(routes, denyRoute)
-		}
 		if rule.CustomRoutesEnabled {
 			pathRules := append([]PathRuleConfig(nil), rule.PathRules...)
 			sort.SliceStable(pathRules, func(i, j int) bool {
@@ -2092,9 +2098,6 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 					"host": domainHosts,
 					"path": pathMatcherSpecs(pathRule),
 				}
-				if rule.IPACLMode == "allow" {
-					pathMatcher["client_ip"] = map[string]interface{}{"ranges": rule.IPACLList}
-				}
 				pathRoute := map[string]interface{}{
 					"match":  []interface{}{pathMatcher},
 					"handle": pathHandle,
@@ -2104,9 +2107,6 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			}
 		}
 		mainMatcher := map[string]interface{}{"host": domainHosts}
-		if rule.IPACLMode == "allow" {
-			mainMatcher["client_ip"] = map[string]interface{}{"ranges": rule.IPACLList}
-		}
 		route := map[string]interface{}{
 			"match":    []interface{}{mainMatcher},
 			"handle":   handleChain,
@@ -2116,11 +2116,6 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			route["@id"] = rule.CaddyID
 		}
 		routes = append(routes, route)
-		if rule.IPACLMode == "allow" {
-			allowRoute := forbiddenHTTPRoute(domainHosts, nil, false)
-			tagRuleRoute(allowRoute, rule.CaddyID, "acl_allow")
-			routes = append(routes, allowRoute)
-		}
 
 		serverName := fmt.Sprintf("http_%d", rule.ListenPort)
 
@@ -2254,9 +2249,6 @@ func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, 
 	}
 
 	mainMatcher := map[string]interface{}{"host": domainHosts}
-	if rule.IPACLMode == "allow" {
-		mainMatcher["client_ip"] = map[string]interface{}{"ranges": rule.IPACLList}
-	}
 	mainRoute := map[string]interface{}{
 		"match":    []interface{}{mainMatcher},
 		"handle":   mainHandle,
@@ -2266,11 +2258,14 @@ func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, 
 		mainRoute["@id"] = rule.CaddyID
 	}
 
-	routes := make([]map[string]interface{}, 0, len(rule.PathRules)+2)
-	if rule.IPACLMode == "deny" {
-		denyRoute := forbiddenHTTPRoute(domainHosts, rule.IPACLList, true)
-		tagRuleRoute(denyRoute, rule.CaddyID, "acl_deny")
-		routes = append(routes, denyRoute)
+	routes := make([]map[string]interface{}, 0, len(rule.PathRules)+4)
+	// GeoIP routes run before path rules and the main route: the pass route
+	// populates the region placeholders, then the block route rejects matches.
+	if policy := GetSecurityPolicyForRule(rule.CaddyID); PolicyHasGeoIP(policy) {
+		routes = append(routes, buildGeoipPassRoute(domainHosts, policy))
+		if blockRoute := buildGeoipBlockRoute(rule, policy); blockRoute != nil {
+			routes = append(routes, blockRoute)
+		}
 	}
 	if rule.CustomRoutesEnabled {
 		pathRules := append([]PathRuleConfig(nil), rule.PathRules...)
@@ -2290,9 +2285,6 @@ func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, 
 				"host": domainHosts,
 				"path": pathMatcherSpecs(pathRule),
 			}
-			if rule.IPACLMode == "allow" {
-				matcher["client_ip"] = map[string]interface{}{"ranges": rule.IPACLList}
-			}
 			pathRoute := map[string]interface{}{
 				"match":    []interface{}{matcher},
 				"handle":   handle,
@@ -2303,30 +2295,7 @@ func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, 
 		}
 	}
 	routes = append(routes, mainRoute)
-	if rule.IPACLMode == "allow" {
-		allowRoute := forbiddenHTTPRoute(domainHosts, nil, false)
-		tagRuleRoute(allowRoute, rule.CaddyID, "acl_allow")
-		routes = append(routes, allowRoute)
-	}
 	return routes, mainRoute, nil
-}
-
-func forbiddenHTTPRoute(domainHosts, ranges []string, matchClientIP bool) map[string]interface{} {
-	matcher := map[string]interface{}{"host": domainHosts}
-	if matchClientIP {
-		matcher["client_ip"] = map[string]interface{}{"ranges": ranges}
-	}
-	return map[string]interface{}{
-		"terminal": true,
-		"match":    []interface{}{matcher},
-		"handle": []interface{}{
-			map[string]interface{}{
-				"handler":     "static_response",
-				"status_code": 403,
-				"body":        "Forbidden",
-			},
-		},
-	}
 }
 
 func tagRuleRoute(route map[string]interface{}, ruleID, suffix string) {
@@ -2373,6 +2342,187 @@ func decodePathUpstreams(raw string) ([]UpstreamConfig, error) {
 	return upstreams, nil
 }
 
+// buildBlockPageErrorRoute returns a server-level error route rendering the
+// branded block page of the rule's bound active policy, or nil when the rule
+// has no policy, no block page, or the stored page has no content.
+func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string) map[string]interface{} {
+	if db.DB == nil {
+		return nil
+	}
+	var content string
+	var statusCode int
+	err := db.DB.QueryRow(`SELECT bp.content, COALESCE(NULLIF(p.block_status_code, 0), bp.status_code, 403)
+		FROM security_policy_bindings b
+		JOIN security_policies p ON p.id = b.policy_id AND p.enabled = 1
+		JOIN security_block_pages bp ON bp.id = p.block_page_id
+		WHERE b.rule_caddy_id = ? AND p.block_page_id > 0`, ruleCaddyID).Scan(&content, &statusCode)
+	if err != nil || content == "" {
+		return nil
+	}
+	if statusCode == 0 {
+		statusCode = 403
+	}
+	return map[string]interface{}{
+		"match": []interface{}{
+			map[string]interface{}{
+				"host":       domainHosts,
+				"expression": "{http.error.status_code} == 403",
+			},
+		},
+		"handle": []interface{}{
+			map[string]interface{}{
+				"handler":     "static_response",
+				"body":        content,
+				"status_code": statusCode,
+			},
+		},
+		"terminal": true,
+	}
+}
+
+// buildRateLimitErrorRoute returns a server-level error route rendering the
+// bound policy's block page for rate-limited (429) requests, or nil when the
+// rule's bound active policy has no block page. Rate limiting always serves
+// the block page regardless of the legacy rate_limit_response value.
+// caddy-ratelimit rejects via caddyhttp.Error(429), so handle_errors fires.
+func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string) map[string]interface{} {
+	if db.DB == nil {
+		return nil
+	}
+	var content string
+	var statusCode int
+	err := db.DB.QueryRow(`SELECT bp.content, COALESCE(NULLIF(p.block_status_code, 0), bp.status_code, 403)
+		FROM security_policy_bindings b
+		JOIN security_policies p ON p.id = b.policy_id AND p.enabled = 1
+		JOIN security_block_pages bp ON bp.id = p.block_page_id
+		WHERE b.rule_caddy_id = ? AND p.block_page_id > 0 AND p.rate_limit_enabled = 1`, ruleCaddyID).Scan(&content, &statusCode)
+	if err != nil || content == "" {
+		return nil
+	}
+	if statusCode == 0 {
+		statusCode = 403
+	}
+	return map[string]interface{}{
+		"match": []interface{}{
+			map[string]interface{}{
+				"host":       domainHosts,
+				"expression": "{http.error.status_code} == 429",
+			},
+		},
+		"handle": []interface{}{
+			map[string]interface{}{
+				"handler":     "static_response",
+				"body":        content,
+				"status_code": statusCode,
+			},
+		},
+		"terminal": true,
+	}
+}
+
+// buildRateLimitHandler returns the rate_limit handler for a rule whose bound
+// active policy enables rate limiting, or nil otherwise. Zones are logical AND:
+// with burst > 0 a per-second zone caps instantaneous rate at rps+burst while a
+// per-minute zone caps sustained rate at rps; without burst a single per-second
+// zone caps at rps.
+func buildRateLimitHandler(ruleCaddyID string) map[string]interface{} {
+	if db.DB == nil {
+		return nil
+	}
+	policy := GetSecurityPolicyForRule(ruleCaddyID)
+	if policy == nil || !policy.RateLimitEnabled || policy.RateLimitRPS <= 0 {
+		return nil
+	}
+	rateLimits := map[string]interface{}{
+		ruleCaddyID: map[string]interface{}{
+			"key":        "{http.request.remote.host}",
+			"window":     "1s",
+			"max_events": policy.RateLimitRPS,
+		},
+	}
+	if policy.RateLimitBurst > 0 {
+		rateLimits = map[string]interface{}{
+			"sec": map[string]interface{}{
+				"key":        "{http.request.remote.host}",
+				"window":     "1s",
+				"max_events": policy.RateLimitRPS + policy.RateLimitBurst,
+			},
+			"min": map[string]interface{}{
+				"key":        "{http.request.remote.host}",
+				"window":     "60s",
+				"max_events": policy.RateLimitRPS * 60,
+			},
+		}
+	}
+	return map[string]interface{}{
+		"handler":     "rate_limit",
+		"rate_limits": rateLimits,
+	}
+}
+
+// buildGeoipHandler returns the geoip2region handler, or nil when geoip is disabled.
+func buildGeoipHandler(policy *models.SecurityPolicy) map[string]interface{} {
+	if !PolicyHasGeoIP(policy) {
+		return nil
+	}
+	return map[string]interface{}{"handler": "geoip2region"}
+}
+
+// buildGeoipPassRoute populates the region placeholders before the block matcher evaluates.
+func buildGeoipPassRoute(domainHosts []string, policy *models.SecurityPolicy) map[string]interface{} {
+	return map[string]interface{}{
+		"match":  []interface{}{map[string]interface{}{"host": domainHosts}},
+		"handle": []interface{}{buildGeoipHandler(policy)},
+	}
+}
+
+// buildGeoipBlockRoute returns a terminal 403 route for matched (deny) or non-matched (allow) regions.
+func buildGeoipBlockRoute(rule SingleRuleConfig, policy *models.SecurityPolicy) map[string]interface{} {
+	if !PolicyHasGeoIP(policy) {
+		return nil
+	}
+	expr := buildGeoipMatchExpression(policy)
+	if expr == "" {
+		return nil
+	}
+	return map[string]interface{}{
+		"match": []interface{}{
+			map[string]interface{}{
+				"host":       splitAndTrim(rule.Domain),
+				"expression": expr,
+			},
+		},
+		"handle": []interface{}{
+			map[string]interface{}{
+				"handler":     "static_response",
+				"status_code": 403,
+			},
+		},
+		"terminal": true,
+	}
+}
+
+// buildGeoipMatchExpression compiles geoip countries into a CEL expression over placeholders.
+func buildGeoipMatchExpression(policy *models.SecurityPolicy) string {
+	countries := geoipCountries(policy)
+	if len(countries) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(countries))
+	for _, country := range countries {
+		if country == "海外" {
+			parts = append(parts, `{http.vars.geoip.country_name} != "中国"`)
+			continue
+		}
+		parts = append(parts, fmt.Sprintf(`{http.vars.geoip.province} == %q`, country))
+	}
+	expr := strings.Join(parts, " || ")
+	if policy.GeoIPMode == "allow" {
+		expr = "!(" + expr + ")"
+	}
+	return expr
+}
+
 func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]interface{}, error) {
 	enabledUpstreams := make([]UpstreamConfig, 0, len(upstreams))
 	for _, upstream := range upstreams {
@@ -2388,6 +2538,18 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 	}
 
 	var handleChain []interface{}
+	// GeoIP resolution runs first so downstream handlers see the region vars.
+	if geoipHandler := buildGeoipHandler(GetSecurityPolicyForRule(rule.CaddyID)); geoipHandler != nil {
+		handleChain = append(handleChain, geoipHandler)
+	}
+	// Rate limiting runs before WAF inspection, body parsing, and proxying.
+	if rateLimitHandler := buildRateLimitHandler(rule.CaddyID); rateLimitHandler != nil {
+		handleChain = append(handleChain, rateLimitHandler)
+	}
+	// WAF inspection must run before body parsing and proxying.
+	if wafHandler := buildWafHandler(rule.CaddyID); wafHandler != nil {
+		handleChain = append(handleChain, wafHandler)
+	}
 	effectiveRequestBodyMaxSizeMB, effectiveUpstreamKeepaliveTimeout, effectiveServerTokensHidden := resolveRuleOverrides(rule)
 	if effectiveRequestBodyMaxSizeMB > 0 {
 		handleChain = append(handleChain, map[string]interface{}{
@@ -2711,24 +2873,6 @@ func buildTCPProxyRoute(rule SingleRuleConfig) map[string]interface{} {
 
 	route := map[string]interface{}{
 		"handle": []interface{}{proxyHandler},
-	}
-	switch rule.IPACLMode {
-	case "allow":
-		route["match"] = []interface{}{
-			map[string]interface{}{
-				"remote_ip": map[string]interface{}{"ranges": rule.IPACLList},
-			},
-		}
-	case "deny":
-		route["match"] = []interface{}{
-			map[string]interface{}{
-				"not": []interface{}{
-					map[string]interface{}{
-						"remote_ip": map[string]interface{}{"ranges": rule.IPACLList},
-					},
-				},
-			},
-		}
 	}
 	if rule.CaddyID != "" {
 		route["@id"] = rule.CaddyID
