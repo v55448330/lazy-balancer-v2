@@ -25,8 +25,19 @@
 
 ### Docker Compose（推荐）
 
+先构建前端静态资源，再构建镜像：
+
 ```bash
+cd web && npm install && npm run build && cd ..
 docker compose up -d --build
+```
+
+### 多架构镜像构建
+
+```bash
+cd web && npm install && npm run build && cd ..
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t <image>:<tag> --push .
 ```
 
 ### docker run

@@ -25,14 +25,6 @@ COPY . .
 WORKDIR /app/cmd/server
 RUN CGO_ENABLED=0 GOOS=linux go build -o lazy-balancer
 
-# Build frontend
-FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS frontend
-WORKDIR /app
-COPY web/package*.json ./
-RUN npm install
-COPY web/ ./
-RUN npm run build
-
 # Final image
 FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
 ARG VERSION=2.1.0
@@ -42,7 +34,7 @@ WORKDIR /app
 
 COPY --from=xcaddy-builder /app/caddy /usr/local/bin/caddy
 COPY --from=backend /app/cmd/server/lazy-balancer /usr/local/bin/lazy-balancer
-COPY --from=frontend /app/dist /app/ui
+COPY web/dist /app/ui
 
 RUN mkdir -p /app/data /app/config /app/logs /app/certs /app/waf/crs /app/waf/custom /app/waf/audit
 
@@ -55,7 +47,7 @@ RUN apk add --no-cache git && \
     apk del git
 # Pristine copy used to seed an empty bind-mounted /app/waf on first boot
 RUN cp -r /app/waf /app/waf.dist
-# Initial GeoIP database seed, carried inside the pristine copy for first-boot seeding
+# Initial GeoIP database seed
 RUN apk add --no-cache curl && \
     curl -sL -o /app/waf.dist/ip2region.xdb https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v4.xdb && \
     apk del curl
