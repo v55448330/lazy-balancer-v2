@@ -68,7 +68,7 @@ func run() error {
 	if err := handlers.SeedDefaultBranding(cfg.DataDir); err != nil {
 		services.Logf("warn", "failed to seed default branding: %v", err)
 	}
-	if err := handlers.SeedDefaultBlockPage(cfg.DataDir); err != nil {
+	if _, err := handlers.SeedDefaultBlockPage(cfg.DataDir); err != nil {
 		services.Logf("warn", "failed to seed default block page: %v", err)
 	}
 	if runtimeLogFile != "" {

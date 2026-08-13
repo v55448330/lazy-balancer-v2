@@ -109,7 +109,7 @@ func TestSeedDefaultBlockPage_renders_custom_branding_into_default_row(t *testin
 	}
 
 	// When
-	if err := SeedDefaultBlockPage(dataDir); err != nil {
+	if _, err := SeedDefaultBlockPage(dataDir); err != nil {
 		t.Fatalf("SeedDefaultBlockPage: %v", err)
 	}
 
@@ -140,7 +140,7 @@ func TestSeedDefaultBlockPage_uses_default_branding_when_file_missing(t *testing
 	dataDir := t.TempDir()
 
 	// When
-	if err := SeedDefaultBlockPage(dataDir); err != nil {
+	if _, err := SeedDefaultBlockPage(dataDir); err != nil {
 		t.Fatalf("SeedDefaultBlockPage: %v", err)
 	}
 
@@ -163,7 +163,7 @@ func TestSeedDefaultBlockPage_falls_back_to_defaults_on_invalid_json(t *testing.
 	}
 
 	// When
-	if err := SeedDefaultBlockPage(dataDir); err != nil {
+	if _, err := SeedDefaultBlockPage(dataDir); err != nil {
 		t.Fatalf("SeedDefaultBlockPage: %v", err)
 	}
 
@@ -184,7 +184,7 @@ func TestSeedDefaultBlockPage_keeps_updated_at_when_content_unchanged(t *testing
 	}
 
 	// When
-	if err := SeedDefaultBlockPage(dataDir); err != nil {
+	if _, err := SeedDefaultBlockPage(dataDir); err != nil {
 		t.Fatalf("SeedDefaultBlockPage: %v", err)
 	}
 
@@ -211,7 +211,7 @@ func TestSeedDefaultBlockPage_leaves_custom_pages_untouched(t *testing.T) {
 	}
 
 	// When
-	if err := SeedDefaultBlockPage(dataDir); err != nil {
+	if _, err := SeedDefaultBlockPage(dataDir); err != nil {
 		t.Fatalf("SeedDefaultBlockPage: %v", err)
 	}
 

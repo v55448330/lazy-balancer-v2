@@ -64,7 +64,9 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 	if cfg.Version == "" {
 		cfg.Version = h.cfg.Version
 	}
-	SeedDefaultBlockPage(h.cfg.DataDir)
+	if changed, _ := SeedDefaultBlockPage(h.cfg.DataDir); changed {
+		go h.applyCaddyConfig()
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
 }
 
@@ -104,15 +106,17 @@ p { font-size: 14px; color: #6b7280; line-height: 1.6; margin-bottom: 8px; }
 // SeedDefaultBlockPage re-renders the default block page row (is_default=1) from
 // branding.json. Idempotent: an unchanged render writes nothing (updated_at is
 // not churned); custom pages are never touched.
-func SeedDefaultBlockPage(dataDir string) error {
+func SeedDefaultBlockPage(dataDir string) (bool, error) {
 	if db.DB == nil {
-		return nil
+		return false, nil
 	}
 	content := renderDefaultBlockPage(loadBrandingConfig(dataDir))
-	if _, err := db.DB.Exec(`UPDATE security_block_pages SET content=?, updated_at=datetime('now') WHERE is_default=1 AND content != ?`, content, content); err != nil {
-		return fmt.Errorf("更新默认拦截页面内容: %w", err)
+	result, err := db.DB.Exec(`UPDATE security_block_pages SET content=?, updated_at=datetime('now') WHERE is_default=1 AND content != ?`, content, content)
+	if err != nil {
+		return false, fmt.Errorf("更新默认拦截页面内容: %w", err)
 	}
-	return nil
+	n, _ := result.RowsAffected()
+	return n > 0, nil
 }
 
 func (h *Handlers) GetDefaultBlockPage(c *gin.Context) {
