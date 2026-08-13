@@ -1877,13 +1877,6 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 		var handleChain []interface{}
 
-		// GeoIP resolution populates region placeholders for downstream handlers.
-		if policy := GetSecurityPolicyForRule(rule.CaddyID); PolicyHasGeoIP(policy) {
-			if geoipHandler := buildGeoipHandler(policy); geoipHandler != nil {
-				handleChain = append(handleChain, geoipHandler)
-			}
-		}
-
 		if rateLimitHandler := buildRateLimitHandler(rule.CaddyID); rateLimitHandler != nil {
 			handleChain = append(handleChain, rateLimitHandler)
 		}
