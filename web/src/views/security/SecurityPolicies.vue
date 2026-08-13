@@ -587,6 +587,10 @@ const jumpToStep = (step: WizardStep): void => {
 }
 
 const validateIpAclList = (): boolean => {
+  if (form.value.ip_acl_enabled && form.value.ip_acl_mode === 'allow' && ipACLList.value.length === 0) {
+    ElMessage.error('白名单模式下 IP 列表不能为空，否则所有请求将被拒绝')
+    return false
+  }
   const invalidEntry = ipACLList.value.find((entry) => !isValidCidr(entry))
   if (invalidEntry) {
     ElMessage.error(`IP/CIDR 条目格式不正确：${invalidEntry}`)
@@ -598,6 +602,10 @@ const validateIpAclList = (): boolean => {
       ElMessage.error(`信任名单中的 IP/CIDR 条目格式不正确：${invalidTrustEntry}`)
       return false
     }
+  }
+  if (form.value.geoip_enabled && geoipCountries.value.length === 0) {
+    ElMessage.error('区域控制启用后必须选择至少一个区域，否则所有请求将被拒绝')
+    return false
   }
   return true
 }

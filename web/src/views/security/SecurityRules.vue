@@ -469,9 +469,9 @@ const fetchCustomRules = async () => { loadingCustom.value = true; try { const r
 const fetchUsers = async () => { try { const res = await request.get<APIResponse<UserListItem[]>>('/users'); users.value = res.data || [] } catch {} }
 
 const openRuleContent = async (row: CRSRuleFile) => { currentFilename.value = row.filename; contentDialogVisible.value = true; loadingContent.value = true; currentContent.value = ''; try { const res = await request.get<APIResponse<{ content: string; size: number }>>(`/security/crs/rules/${encodeURIComponent(row.filename)}`); currentContent.value = res.data?.content || '(空文件)' } catch { currentContent.value = '加载失败' } finally { loadingContent.value = false } }
-const toggleAutoUpdate = async (val: boolean) => { try { await request.put('/security/crs/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { ElMessage.error('更新失败') } }
+const toggleAutoUpdate = async (val: boolean) => { try { await request.put('/security/crs/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { crsInfo.value.auto_update = !val; ElMessage.error('更新失败') } }
 const fetchIP2RegionInfo = async () => { try { const res = await request.get<APIResponse<typeof ip2regionInfo.value>>('/security/ip2region'); if (res.data) ip2regionInfo.value = res.data } catch {} }
-const toggleIP2RegionAutoUpdate = async (val: boolean) => { try { await request.put('/security/ip2region/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { ElMessage.error('更新失败') } }
+const toggleIP2RegionAutoUpdate = async (val: boolean) => { try { await request.put('/security/ip2region/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { ip2regionInfo.value.auto_update = !val; ElMessage.error('更新失败') } }
 
 const updateDialogVisible = ref(false)
 const updateInfo = ref<CRSUpdateInfo | null>(null)
@@ -513,7 +513,9 @@ const confirmUpdate = async () => {
   } finally {
     startingUpdate.value = false
   }
+  if (!updateDialogVisible.value) return
   await refreshUpdateStatus()
+  if (!updateDialogVisible.value) return
   startUpdatePolling()
 }
 
@@ -612,7 +614,9 @@ const confirmIP2RegionUpdate = async () => {
   } finally {
     startingIP2RegionUpdate.value = false
   }
+  if (!ip2regionUpdateDialogVisible.value) return
   await refreshIP2RegionUpdateStatus()
+  if (!ip2regionUpdateDialogVisible.value) return
   startIP2RegionPolling()
 }
 
