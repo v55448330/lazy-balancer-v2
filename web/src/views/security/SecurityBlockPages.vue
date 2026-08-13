@@ -83,10 +83,10 @@ import CodeEditor from '@/components/CodeEditor.vue'
 import type { UserListItem } from '@/types'
 
 interface APIResponse<T> { code: number; message: string; data: T }
-interface BlockPage { id: number; name: string; description: string; content: string; status_code: number; is_default: boolean; created_at: string; updated_at: string; updated_by: number }
+interface BlockPage { id: number; name: string; description: string; content: string; is_default: boolean; updated_at: string; updated_by: number }
 
 const authStore = useAuthStore()
-const isReadOnly = computed(() => authStore.user?.role !== 'admin')
+const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 
 const loading = ref(false)
 const saving = ref(false)

@@ -294,7 +294,7 @@ interface CRSUpdateInfo { readonly status: string; readonly trigger: string; rea
 interface IP2RegionUpdateInfo { readonly status: string; readonly trigger: string; readonly started_at: string; readonly finished_at: string; readonly message: string; readonly version: string }
 
 const authStore = useAuthStore()
-const isReadOnly = computed(() => authStore.user?.role !== 'admin')
+const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 
 const users = ref<UserListItem[]>([])
 const getUpdaterName = (userId?: number) => {
@@ -325,8 +325,7 @@ const crsStatusTagType = (s: string): 'success' | 'warning' | 'danger' | 'info' 
   return 'info'
 }
 
-const crsInfo = ref({ version: '', server_version: '', auto_update: true, last_checked: '', updated_at: '', next_update: '', rule_count: 0, is_latest: false, update_status: '', message: '', trigger: '' })
-// trigger label removed: status tags no longer show trigger suffix for consistency
+const crsInfo = ref({ version: '', auto_update: true, updated_at: '', next_update: '', update_status: '', message: '' })
 const crsFailureMessage = computed(() => {
   const s = crsInfo.value.update_status
   return (s === 'failed' || s === '更新失败') ? crsInfo.value.message : ''
@@ -348,7 +347,7 @@ const ip2regionStatusTagType = (s: string): 'success' | 'warning' | 'danger' | '
   if (s === 'failed') return 'danger'
   return 'info'
 }
-const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, last_checked: '', updated_at: '', next_update: '', update_status: '', message: '' })
+const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', next_update: '', update_status: '', message: '' })
 const ip2regionFailureMessage = computed(() => {
   const s = ip2regionInfo.value.update_status
   return (s === 'failed' || s === '更新失败') ? ip2regionInfo.value.message : ''
@@ -361,8 +360,6 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(10)
 const searchQuery = ref('')
-const loadingSetup = ref(false)
-const setupContent = ref('')
 const contentDialogVisible = ref(false)
 const loadingContent = ref(false)
 const currentFilename = ref('')
@@ -464,7 +461,6 @@ const fetchRules = async () => {
   loadingRules.value = true
   try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (searchQuery.value) p.set('search', searchQuery.value); const res = await request.get<APIResponse<{ rules: CRSRuleFile[]; total: number }>>(`/security/crs/rules?${p}`); rules.value = res.data?.rules || []; total.value = res.data?.total || 0 } catch { rules.value = [] } finally { loadingRules.value = false }
 }
-const fetchSetup = async () => { loadingSetup.value = true; try { const res = await request.get<APIResponse<{ content: string }>>('/security/crs/setup'); setupContent.value = res.data?.content || '# 文件不存在' } catch { setupContent.value = '# 加载失败' } finally { loadingSetup.value = false } }
 const fetchCustomRules = async () => { loadingCustom.value = true; try { const res = await request.get<APIResponse<CustomRule[]>>('/security/custom-rules'); customRules.value = res.data || [] } catch { customRules.value = [] } finally { loadingCustom.value = false } }
 const fetchUsers = async () => { try { const res = await request.get<APIResponse<UserListItem[]>>('/users'); users.value = res.data || [] } catch {} }
 
@@ -686,6 +682,10 @@ const openRuleDialog = (row?: CustomRule) => {
 
 const saveCustomRule = async () => {
   if (!ruleForm.value.name.trim()) { ElMessage.warning('请输入规则名称'); return }
+  for (const cond of ruleForm.value.conditions) {
+    if (!cond.pattern.trim()) { ElMessage.error('每个条件必须填写匹配值'); return }
+    if (cond.operator === 'regex' && !isValidRegex(cond.pattern)) { ElMessage.error(`正则表达式语法错误：${cond.pattern}`); return }
+  }
   savingRule.value = true
   try {
     if (editingRuleId.value) {
@@ -706,13 +706,13 @@ const formatSize = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024
 
 onMounted(() => {
   const urlTab = new URLSearchParams(location.search).get('tab')
-  if (urlTab && ['rules', 'setup', 'custom'].includes(urlTab)) {
+  if (urlTab && ['rules', 'custom'].includes(urlTab)) {
     activeTab.value = urlTab
   } else {
     const tab = localStorage.getItem('security-rules-tab')
     if (tab) { activeTab.value = tab; localStorage.removeItem('security-rules-tab') }
   }
-  fetchCRS(); fetchIP2RegionInfo(); fetchRules(); fetchSetup(); fetchCustomRules(); fetchUsers()
+  fetchCRS(); fetchIP2RegionInfo(); fetchRules(); fetchCustomRules(); fetchUsers()
 })
 
 onUnmounted(() => {

@@ -427,6 +427,18 @@ const formatUptime = (seconds?: number): string => {
   return `${Math.floor(seconds)} 秒`
 }
 
+const formatChartTime = (ms: number): string => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: authStore.timezone || 'Asia/Shanghai',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(ms))
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+  return `${get('hour')}:${get('minute')}:${get('second')}`
+}
+
 const systemInfo = ref<SystemInfo | null>(null)
 const systemMetrics = ref<SystemMetrics | null>(null)
 const caddyMetrics = ref<CaddyMetrics | null>(null)
@@ -685,7 +697,7 @@ const trafficChartOption = computed<EChartsOption>(() => ({
   grid: { left: 45, right: 15, top: 15, bottom: 40 },
   xAxis: { 
     type: 'category', 
-    data: trafficTimestamps.value.map(t => new Date(t).toLocaleTimeString()),
+     data: trafficTimestamps.value.map(t => formatChartTime(t)),
     axisLine: { lineStyle: { color: '#e5e7eb' } },
     axisLabel: { fontSize: 10, color: '#9ca3af' }
   },
@@ -707,7 +719,7 @@ const connChartOption = computed<EChartsOption>(() => ({
   grid: { left: 45, right: 15, top: 15, bottom: 40 },
   xAxis: { 
     type: 'category', 
-    data: connTimestamps.value.map(t => new Date(t).toLocaleTimeString()),
+     data: connTimestamps.value.map(t => formatChartTime(t)),
     axisLine: { lineStyle: { color: '#e5e7eb' } },
     axisLabel: { fontSize: 10, color: '#9ca3af' }
   },

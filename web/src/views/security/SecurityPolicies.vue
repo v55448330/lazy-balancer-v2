@@ -387,7 +387,7 @@ const blockPages = ref<BlockPage[]>([])
 const availableRegions = ref<string[]>([])
 
 const authStore = useAuthStore()
-const isReadOnly = computed(() => authStore.user?.role !== 'admin')
+const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 
 const users = ref<UserListItem[]>([])
 const getUpdaterName = (userId?: number) => {
@@ -753,7 +753,7 @@ const handleSave = async () => {
   }
   saving.value = true
   try {
-    const payload = { ...form.value, ip_acl_list: JSON.stringify(ipACLList.value), ip_whitelist: JSON.stringify(ipWhitelistEnabled.value ? ipWhitelist.value : []), crs_rule_groups: JSON.stringify(crsRuleGroups.value), crs_excluded_rules: JSON.stringify(crsExcludedRules.value), custom_rules: JSON.stringify(selectedCustomRules.value), geoip_countries: JSON.stringify(geoipCountries.value) }
+    const payload = { ...form.value, ip_acl_list: JSON.stringify(ipACLList.value), ip_whitelist: JSON.stringify(ipWhitelistEnabled.value ? ipWhitelist.value : []), crs_rule_groups: JSON.stringify(crsRuleGroups.value), crs_excluded_rules: JSON.stringify(crsExcludedRules.value), custom_rules: JSON.stringify(selectedCustomRules.value), geoip_countries: JSON.stringify(form.value.geoip_enabled ? geoipCountries.value : []) }
     if (editingId.value) {
       await request.put(`/security/policies/${editingId.value}`, payload)
     } else {
