@@ -177,7 +177,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 			if target == "" || op == "" {
 				continue
 			}
-			sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,%s\"\n", target, op, cr.Pattern, cr.ID+10000, action))
+			sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,%s\"\n", target, op, strings.ReplaceAll(cr.Pattern, "\"", "\\\""), cr.ID+10000, action))
 		}
 	}
 

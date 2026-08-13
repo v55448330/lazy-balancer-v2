@@ -38,7 +38,7 @@ func installClusterVersionTriggers(database *sql.DB) error {
 		{name: "ca_providers", snapshotColumns: "id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled,created_at,updated_at"},
 		{name: "certificate_configs", snapshotColumns: "id,name,dns_provider,dns_credentials,enabled,created_at,updated_at"},
 		{name: "cert_jobs", snapshotColumns: "rule_id,domain,status,cert_pem,key_pem,expires_at,ca_provider_id,renewal_attempts,ca_available_after,last_error_code"},
-		{name: "security_policies", snapshotColumns: "id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,enabled,created_at,updated_at"},
+		{name: "security_policies", snapshotColumns: "id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,created_at,updated_at,geoip_countries,geoip_mode"},
 		{name: "security_policy_bindings", snapshotColumns: "rule_caddy_id,policy_id"},
 		{name: "security_custom_rules", snapshotColumns: "id,name,description,conditions,action,score,status_code,enabled,updated_by,created_at,updated_at"},
 		{name: "security_block_pages", snapshotColumns: "id,name,description,content,status_code,is_default,created_by,created_at,updated_by,updated_at"},
@@ -86,7 +86,7 @@ func installClusterVersionTriggers(database *sql.DB) error {
 		return fmt.Errorf("replace cluster version trigger for global_config UPDATE: %w", err)
 	}
 	if _, err := database.Exec(`CREATE TRIGGER cluster_version_global_config_update
-		AFTER UPDATE OF sync_caddy_config,caddy_config,log_level,access_log_json,access_log_format,cert_job_log_size_mb,runtime_log_size_mb,audit_retention_months,jwt_expire_minutes,timezone,acme_email,cert_expiry_days,cert_renewal_days,cert_renewal_attempts,default_ca_provider_id,dns_provider,dns_credentials,sync_interval,admin_tls_enabled,admin_tls_mode,admin_tls_cert,admin_tls_key,caddy_log_path,caddy_log_level,caddy_log_size_mb,request_body_max_size_mb,http_read_timeout,http_write_timeout,http_idle_timeout,upstream_keepalive_timeout,proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,proxy_stream_timeout,proxy_flush_interval,proxy_stream_close_delay,server_tokens_hidden ON global_config
+		AFTER UPDATE OF sync_caddy_config,caddy_config,log_level,access_log_json,access_log_format,cert_job_log_size_mb,audit_log_size_mb,runtime_log_size_mb,audit_retention_months,jwt_expire_minutes,timezone,acme_email,cert_expiry_days,cert_renewal_days,cert_renewal_attempts,default_ca_provider_id,dns_provider,dns_credentials,sync_interval,admin_tls_enabled,admin_tls_mode,admin_tls_cert,admin_tls_key,caddy_log_path,caddy_log_level,caddy_log_size_mb,request_body_max_size_mb,http_read_timeout,http_write_timeout,http_idle_timeout,upstream_keepalive_timeout,proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,proxy_stream_timeout,proxy_flush_interval,proxy_stream_close_delay,server_tokens_hidden ON global_config
 		WHEN OLD.cluster_version IS NEW.cluster_version AND COALESCE(NEW.is_master,0)=1
 		BEGIN
 			UPDATE global_config SET cluster_version=COALESCE(cluster_version,0)+1 WHERE id=1;
