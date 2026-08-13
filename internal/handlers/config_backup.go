@@ -35,8 +35,6 @@ var configBackupProtectedConfigKeys = map[string]bool{
 	"id": true, "is_master": true, "master_url": true, "cluster_token": true,
 	"registration_id": true, "registration_secret": true, "applied_version": true,
 	"sync_fingerprint": true, "last_sync": true, "last_sync_error": true, "cluster_version": true,
-	"admin_tls_cert": true, "admin_tls_key": true, "admin_tls_enabled": true, "admin_tls_mode": true,
-	"admin_tls_port": true, "admin_tls_acme_rule_id": true, "dns_credentials": true, "acme_email": true,
 }
 
 var requeueNonTerminalCertJobs = services.RequeueNonTerminalCertJobs
