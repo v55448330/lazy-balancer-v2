@@ -40,13 +40,6 @@ func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书配置失败: " + err.Error()})
 		return
 	}
-	if role, _ := c.Get("role"); role != "admin" {
-		for i := range configs {
-			if configs[i].DNSCredentials != "" {
-				configs[i].DNSCredentials = "***"
-			}
-		}
-	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: configs})
 }
 
