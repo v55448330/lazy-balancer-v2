@@ -57,10 +57,6 @@ func (l *syncDrainLifecycle) StopSync() {
 	l.sync.Stop()
 }
 
-type blockingRoundTripper struct {
-	entered chan struct{}
-}
-
 func waitSyncTest[T any](t *testing.T, ch <-chan T) T {
 	t.Helper()
 	select {
@@ -79,16 +75,6 @@ func waitSyncBarrier(ch <-chan struct{}) {
 	select {
 	case <-ch:
 	case <-timer.C:
-	}
-}
-
-func (r blockingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	close(r.entered)
-	select {
-	case <-req.Context().Done():
-		return nil, req.Context().Err()
-	case <-time.After(time.Second):
-		return nil, context.DeadlineExceeded
 	}
 }
 

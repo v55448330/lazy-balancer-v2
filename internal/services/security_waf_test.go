@@ -1,7 +1,6 @@
 package services
 
 import (
-	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -216,30 +215,4 @@ func TestBuildCorazaDirectives_omitsUserOverridesWhenFileMissing(t *testing.T) {
 	if strings.Contains(directives, "zz-user-overrides") {
 		t.Fatalf("directives must not include a missing overrides file:\n%s", directives)
 	}
-}
-
-func seedBoundRateLimitPolicy(t *testing.T, database *sql.DB, ruleCaddyID, response string, blockPageID int) {
-	t.Helper()
-	result, err := database.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,block_status_code,block_page_id,enabled) VALUES (?,'blocking',1,100,50,?,?,1)`, "policy-rl-"+ruleCaddyID, response, blockPageID)
-	if err != nil {
-		t.Fatalf("seed rate-limit policy: %v", err)
-	}
-	policyID, err := result.LastInsertId()
-	if err != nil {
-		t.Fatalf("read rate-limit policy id: %v", err)
-	}
-	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES (?,?)`, ruleCaddyID, policyID); err != nil {
-		t.Fatalf("bind rate-limit policy: %v", err)
-	}
-}
-
-func findErrorRouteByExpression(t *testing.T, errorRoutes []interface{}, expression string) map[string]interface{} {
-	t.Helper()
-	for _, routeValue := range errorRoutes {
-		route := mustMap(t, routeValue, "error route")
-		if routeMatcher(t, route)["expression"] == expression {
-			return route
-		}
-	}
-	return nil
 }

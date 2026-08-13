@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -548,8 +547,4 @@ func TestUpdateSecurityPolicy_rejectsInvalidIPCIDR(t *testing.T) {
 			t.Fatalf("update status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
 		}
 	})
-}
-
-func itoa(v int) string {
-	return strconv.Itoa(v)
 }
