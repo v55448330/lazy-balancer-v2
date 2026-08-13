@@ -36,7 +36,7 @@ type IP2RegionUpdateManager struct {
 	runDone chan struct{}
 
 	reloader       func() error
-	fetchLatestTag func(ctx context.Context) (tag, commit string, err error)
+	fetchLatestTag func(ctx context.Context) (tag string, err error)
 	downloadXDB    func(ctx context.Context, tag, destPath string) error
 
 	schedulerMu       sync.Mutex
@@ -170,16 +170,13 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	}
 
 	m.setStage(IP2RegionStatusChecking, "查询最新 ip2region 版本")
-	tag, commit, err := m.fetchLatestTag(context.Background())
+	tag, err := m.fetchLatestTag(context.Background())
 	if _, dbErr := db.DB.Exec("UPDATE security_ip2region_version SET last_checked=datetime('now') WHERE id=1"); dbErr != nil {
 		log.Printf("ip2region update: failed to record last_checked: %v", dbErr)
 	}
 	if err != nil {
 		m.fail(err)
 		return
-	}
-	if tag == "" {
-		tag = commit[:12]
 	}
 	writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusChecking), fmt.Sprintf("最新版本 %s，当前版本 %s", tag, currentIP2RegionVersion()))
 
@@ -255,8 +252,8 @@ func (m *IP2RegionUpdateManager) fail(cause error) {
 }
 
 // downloadAndInstall downloads, validates and atomically swaps in the new xdb.
-func (m *IP2RegionUpdateManager) downloadAndInstall(commit string) error {
-	m.setStage(IP2RegionStatusDownloading, fmt.Sprintf("下载 %s", commit))
+func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
+	m.setStage(IP2RegionStatusDownloading, fmt.Sprintf("下载 %s", tag))
 	stagingDir := filepath.Join(filepath.Dir(ip2regionLivePath), ".staging")
 	if err := os.RemoveAll(stagingDir); err != nil {
 		return fmt.Errorf("清理 staging 目录: %w", err)
@@ -273,7 +270,7 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(commit string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	staged := filepath.Join(stagingDir, "ip2region_v4.xdb")
-	if err := m.downloadXDB(ctx, commit, staged); err != nil {
+	if err := m.downloadXDB(ctx, tag, staged); err != nil {
 		return fmt.Errorf("下载 ip2region xdb: %w", err)
 	}
 

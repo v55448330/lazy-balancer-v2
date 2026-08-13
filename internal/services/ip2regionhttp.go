@@ -13,35 +13,35 @@ import (
 
 var ip2RegionHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
-func defaultFetchIP2RegionLatestTag(ctx context.Context) (tag, commit string, err error) {
+func defaultFetchIP2RegionLatestTag(ctx context.Context) (tag string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		"https://api.github.com/repos/lionsoul2014/ip2region/releases/latest", nil)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := ip2RegionHTTPClient.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("查询 ip2region 最新版本: %w", err)
+		return "", fmt.Errorf("查询 ip2region 最新版本: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("查询 ip2region 最新版本: GitHub 返回 %d", resp.StatusCode)
+		return "", fmt.Errorf("查询 ip2region 最新版本: GitHub 返回 %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return "", "", fmt.Errorf("读取 GitHub 响应: %w", err)
+		return "", fmt.Errorf("读取 GitHub 响应: %w", err)
 	}
 	var release struct {
 		TagName string `json:"tag_name"`
 	}
 	if err := json.Unmarshal(body, &release); err != nil {
-		return "", "", fmt.Errorf("解析 GitHub releases 响应: %w", err)
+		return "", fmt.Errorf("解析 GitHub releases 响应: %w", err)
 	}
 	if release.TagName == "" {
-		return "", "", errors.New("GitHub releases 响应缺少 tag_name")
+		return "", errors.New("GitHub releases 响应缺少 tag_name")
 	}
-	return release.TagName, "", nil
+	return release.TagName, nil
 }
 
 // defaultDownloadIP2RegionXDB downloads the ip2region v4 xdb to destPath.

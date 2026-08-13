@@ -157,16 +157,18 @@ type ClusterUser struct {
 }
 
 type ClusterAPIKey struct {
-	ID             int      `json:"id"`
-	Name           string   `json:"name"`
-	KeyHash        string   `json:"key_hash"`
-	KeyPrefix      string   `json:"key_prefix"`
-	CreatedBy      int      `json:"created_by"`
-	ExpiresAt      string   `json:"expires_at"`
-	IsEnabled      bool     `json:"is_enabled"`
-	MCPEnabled     bool     `json:"mcp_enabled"`
-	ReadOnly       bool     `json:"read_only"`
-	MCPIPWhitelist []string `json:"mcp_ip_whitelist"`
+	ID             int          `json:"id"`
+	Name           string       `json:"name"`
+	KeyHash        string       `json:"key_hash"`
+	KeyPrefix      string       `json:"key_prefix"`
+	CreatedBy      int          `json:"created_by"`
+	LastUsed       JSONNullTime `json:"last_used"`
+	ExpiresAt      string       `json:"expires_at"`
+	IsEnabled      bool         `json:"is_enabled"`
+	MCPEnabled     bool         `json:"mcp_enabled"`
+	ReadOnly       bool         `json:"read_only"`
+	MCPIPWhitelist []string     `json:"mcp_ip_whitelist"`
+	CreatedAt      time.Time    `json:"created_at"`
 }
 
 type ClusterCertificate struct {

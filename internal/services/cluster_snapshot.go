@@ -249,7 +249,7 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 }
 
 func (s *ClusterService) snapshotSecurityPolicies(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
-	return s.dumpTableAsJSON(ctx, store, "security_policies", "id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,created_at,updated_at,geoip_countries,geoip_mode", "id")
+	return s.dumpTableAsJSON(ctx, store, "security_policies", "id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode", "id")
 }
 
 func (s *ClusterService) snapshotSecurityBindings(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
@@ -515,7 +515,7 @@ func (s *ClusterService) snapshotAllUpstreams(ctx context.Context, store snapsho
 }
 
 func (s *ClusterService) snapshotAllPathRules(ctx context.Context, store snapshotStore) (map[string][]models.PathRule, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id, rule_id, sort_order, match_type, path, upstreams_json FROM path_rules ORDER BY rule_id, sort_order, id`)
+	rows, err := store.QueryContext(ctx, `SELECT id, rule_id, sort_order, match_type, path, upstreams_json, created_at, updated_at FROM path_rules ORDER BY rule_id, sort_order, id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照路径规则: %w", err)
 	}
@@ -524,7 +524,7 @@ func (s *ClusterService) snapshotAllPathRules(ctx context.Context, store snapsho
 	for rows.Next() {
 		var pathRule models.PathRule
 		var upstreamsJSON sql.NullString
-		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &upstreamsJSON); err != nil {
+		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &upstreamsJSON, &pathRule.CreatedAt, &pathRule.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("扫描快照路径规则: %w", err)
 		}
 		if upstreamsJSON.Valid {
@@ -560,7 +560,7 @@ func (s *ClusterService) snapshotUsers(ctx context.Context, store snapshotStore)
 }
 
 func (s *ClusterService) snapshotAPIKeys(ctx context.Context, store snapshotStore) ([]models.ClusterAPIKey, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id, name, key_hash, key_prefix, created_by, COALESCE(expires_at,''), COALESCE(is_enabled,1), COALESCE(mcp_enabled,0), COALESCE(read_only,0), COALESCE(mcp_ip_whitelist,'') FROM api_keys ORDER BY id`)
+	rows, err := store.QueryContext(ctx, `SELECT id, name, key_hash, key_prefix, created_by, COALESCE(expires_at,''), COALESCE(is_enabled,1), COALESCE(mcp_enabled,0), COALESCE(read_only,0), COALESCE(mcp_ip_whitelist,''), last_used, created_at FROM api_keys ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照密钥: %w", err)
 	}
@@ -569,7 +569,7 @@ func (s *ClusterService) snapshotAPIKeys(ctx context.Context, store snapshotStor
 	for rows.Next() {
 		var key models.ClusterAPIKey
 		var whitelistJSON string
-		if err := rows.Scan(&key.ID, &key.Name, &key.KeyHash, &key.KeyPrefix, &key.CreatedBy, &key.ExpiresAt, &key.IsEnabled, &key.MCPEnabled, &key.ReadOnly, &whitelistJSON); err != nil {
+		if err := rows.Scan(&key.ID, &key.Name, &key.KeyHash, &key.KeyPrefix, &key.CreatedBy, &key.ExpiresAt, &key.IsEnabled, &key.MCPEnabled, &key.ReadOnly, &whitelistJSON, &key.LastUsed, &key.CreatedAt); err != nil {
 			return nil, fmt.Errorf("扫描快照密钥: %w", err)
 		}
 		if whitelistJSON != "" {

@@ -65,7 +65,7 @@ func TestIP2RegionUpdateRun_success(t *testing.T) {
 	m := newTestIP2RegionManager(t)
 	seedIP2RegionVersionRow(t, "v3.0.0", true)
 
-	m.fetchLatestTag = func(context.Context) (string, string, error) { return "v3.1.0", "sha-new123", nil }
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
 	m.downloadXDB = fakeIP2RegionDownload(t, true)
 	reloads := 0
 	m.reloader = func() error { reloads++; return nil }
@@ -104,7 +104,7 @@ func TestIP2RegionUpdateRun_skipWhenSameVersion(t *testing.T) {
 	m := newTestIP2RegionManager(t)
 	seedIP2RegionVersionRow(t, "v3.0.0", true)
 
-	m.fetchLatestTag = func(context.Context) (string, string, error) { return "v3.0.0", "sha-abc123", nil }
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.0.0", nil }
 	downloadCalled := false
 	m.downloadXDB = func(context.Context, string, string) error { downloadCalled = true; return nil }
 	reloads := 0
@@ -133,7 +133,7 @@ func TestIP2RegionUpdateRun_fetchFailure(t *testing.T) {
 	m := newTestIP2RegionManager(t)
 	seedIP2RegionVersionRow(t, "v3.0.0", true)
 
-	m.fetchLatestTag = func(context.Context) (string, string, error) { return "", "", errors.New("network error") }
+	m.fetchLatestTag = func(context.Context) (string, error) { return "", errors.New("network error") }
 	downloadCalled := false
 	m.downloadXDB = func(context.Context, string, string) error { downloadCalled = true; return nil }
 	reloads := 0
@@ -172,7 +172,7 @@ func TestIP2RegionUpdateRun_invalidDownloadFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m.fetchLatestTag = func(context.Context) (string, string, error) { return "v3.1.0", "sha-bad123", nil }
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
 	m.downloadXDB = fakeIP2RegionDownload(t, false)
 	reloads := 0
 	m.reloader = func() error { reloads++; return nil }
@@ -200,10 +200,10 @@ func TestStartIP2RegionUpdate_conflictWhenRunning(t *testing.T) {
 
 	block := make(chan struct{})
 	entered := make(chan struct{})
-	m.fetchLatestTag = func(context.Context) (string, string, error) {
+	m.fetchLatestTag = func(context.Context) (string, error) {
 		close(entered)
 		<-block
-		return "v3.0.0", "sha-abc123", nil
+		return "v3.0.0", nil
 	}
 	m.downloadXDB = func(context.Context, string, string) error { return nil }
 
@@ -234,9 +234,9 @@ func TestIP2RegionSchedulerTick_autoOffDoesNothing(t *testing.T) {
 	seedIP2RegionVersionRow(t, "v3.0.0", false)
 
 	fetchCalled := false
-	m.fetchLatestTag = func(context.Context) (string, string, error) {
+	m.fetchLatestTag = func(context.Context) (string, error) {
 		fetchCalled = true
-		return "v3.0.0", "sha-abc123", nil
+		return "v3.0.0", nil
 	}
 
 	// When the scheduler ticks with auto_update off
@@ -258,9 +258,9 @@ func TestIP2RegionSchedulerTick_initializesNextUpdate(t *testing.T) {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 
 	fetchCalled := false
-	m.fetchLatestTag = func(context.Context) (string, string, error) {
+	m.fetchLatestTag = func(context.Context) (string, error) {
 		fetchCalled = true
-		return "v3.0.0", "sha-abc123", nil
+		return "v3.0.0", nil
 	}
 
 	// When the scheduler ticks with auto on and no next_update recorded
@@ -289,12 +289,12 @@ func TestIP2RegionSchedulerTick_runsWhenDue(t *testing.T) {
 	fetched := make(chan struct{})
 	var fetchOnce func()
 	fetchOnce = func() { close(fetched) }
-	m.fetchLatestTag = func(context.Context) (string, string, error) {
+	m.fetchLatestTag = func(context.Context) (string, error) {
 		if fetchOnce != nil {
 			fetchOnce()
 			fetchOnce = nil
 		}
-		return "v3.0.0", "sha-abc123", nil // same version -> auto no-op, finishes fast
+		return "v3.0.0", nil // same version -> auto no-op, finishes fast
 	}
 
 	// When the scheduler ticks past next_update
@@ -321,9 +321,9 @@ func TestIP2RegionSchedulerTick_slaveSkips(t *testing.T) {
 	}
 
 	fetchCalled := false
-	m.fetchLatestTag = func(context.Context) (string, string, error) {
+	m.fetchLatestTag = func(context.Context) (string, error) {
 		fetchCalled = true
-		return "v3.0.0", "sha-abc123", nil
+		return "v3.0.0", nil
 	}
 
 	// When the scheduler ticks on a slave node
