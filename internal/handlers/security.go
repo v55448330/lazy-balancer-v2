@@ -885,6 +885,11 @@ func (h *Handlers) GetIP2RegionInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: info})
 }
 
+func (h *Handlers) GetIP2RegionRegions(c *gin.Context) {
+	regions := services.GetCachedProvinces()
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: regions})
+}
+
 func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {
 	var req struct {
 		AutoUpdate bool `json:"auto_update"`

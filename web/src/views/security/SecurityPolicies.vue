@@ -199,12 +199,9 @@
                   <el-radio value="allow">仅允许所选区域（其他拦截）</el-radio>
                 </el-radio-group>
               </el-form-item>
-              <el-form-item label="区域">
-                <el-form-item label="区域选择">
+              <el-form-item label="区域选择">
                 <el-select v-model="geoipCountries" multiple filterable allow-create default-first-option placeholder="选择或输入区域名称" style="width: 100%">
-                  <el-option v-for="r in CHINA_REGIONS" :key="r" :label="r" :value="r" />
-                </el-select>
-                  <el-option v-for="region in CHINA_REGIONS" :key="region" :label="region" :value="region" />
+                  <el-option v-for="r in availableRegions" :key="r" :label="r" :value="r" />
                 </el-select>
                 <div class="form-tip-line">基于 IP2Region 离线库判断访客所在区域，与 CIDR 规则同时生效</div>
               </el-form-item>
@@ -384,17 +381,10 @@ interface BlockPage { id: number; name: string }
 
 const blockPages = ref<BlockPage[]>([])
 
-// 中国 34 个省级行政区 + 海外（IP2Region 离线库对非中国大陆流量的统一标记）
-const CHINA_REGIONS: readonly string[] = [
-  '北京市', '天津市', '河北省', '山西省', '内蒙古自治区',
-  '辽宁省', '吉林省', '黑龙江省', '上海市', '江苏省',
-  '浙江省', '安徽省', '福建省', '江西省', '山东省',
-  '河南省', '湖北省', '湖南省', '广东省', '广西壮族自治区',
-  '海南省', '重庆市', '四川省', '贵州省', '云南省',
-  '西藏自治区', '陕西省', '甘肃省', '青海省', '宁夏回族自治区',
-  '新疆维吾尔自治区', '香港特别行政区', '澳门特别行政区', '台湾省',
-  '海外',
-]
+
+
+
+const availableRegions = ref<string[]>([])
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.user?.role !== 'admin')
@@ -789,10 +779,13 @@ const openRuleInNewTab = (caddyId: string): void => {
   window.open('/?page=rules', '_blank')
 }
 
+const fetchRegions = async () => { try { const res = await request.get<APIResponse<string[]>>('/security/ip2region/regions'); availableRegions.value = res.data || [] } catch { availableRegions.value = [] } }
+
 onMounted(() => {
   const search = localStorage.getItem('security-policies-search')
   if (search) { policySearch.value = search; localStorage.removeItem('security-policies-search') }
   fetchData()
+  fetchRegions()
 })
 </script>
 

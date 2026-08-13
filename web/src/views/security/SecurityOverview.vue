@@ -43,7 +43,10 @@
             </el-col>
             <el-col :span="4" class="stat-card-col">
               <div class="stat-label">IP 库版本</div>
-              <div class="stat-value" style="color: #67c23a; font-size: 16px">{{ ip2regionVersion }}</div>
+              <div class="stat-value" style="color: #67c23a">{{ ip2regionVersion }}</div>
+              <div v-if="ip2regionStatus" style="margin-top: 6px">
+                <el-tag :type="statusTagType(ip2regionStatus)" size="small" effect="plain">{{ statusLabel(ip2regionStatus) }}</el-tag>
+              </div>
             </el-col>
           </el-row>
         </el-card>
@@ -272,6 +275,7 @@ const goToEvents = () => { window.open('/?page=security-events', '_blank') }
 
 const rateLimitBlocks = ref<RateLimitBlocks>({ total: 0, hosts: [] })
 const ip2regionVersion = ref('—')
+const ip2regionStatus = ref('')
 
 const fetchRateLimitBlocks = async () => {
   try {
@@ -282,9 +286,10 @@ const fetchRateLimitBlocks = async () => {
 
 const fetchIP2RegionInfo = async () => {
   try {
-    const res = await request.get<APIResponse<{ version: string }>>('/security/ip2region')
+    const res = await request.get<APIResponse<{ version: string; update_status: string }>>('/security/ip2region')
     ip2regionVersion.value = res.data?.version || '—'
-  } catch { ip2regionVersion.value = '—' }
+    ip2regionStatus.value = res.data?.update_status || ''
+  } catch { ip2regionVersion.value = '—'; ip2regionStatus.value = '' }
 }
 
 onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fetchIP2RegionInfo() })

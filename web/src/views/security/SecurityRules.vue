@@ -734,9 +734,9 @@ onUnmounted(() => {
 .preset-header { cursor: pointer; padding: 2px 0; user-select: none; }
 .preset-toggle { font-size: 12px; color: #6b7280; }
 .preset-tags-block { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: #fff; border: 1px dashed #e5e7eb; border-radius: 4px; margin-left: 0; }
-.preset-group { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
-.preset-group-label { font-size: 12px; color: #6b7280; flex: 0 0 56px; padding-top: 4px; text-align: right; }
-.preset-group-tags { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; align-items: flex-start; padding-top: 1px; }
+.preset-group { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.preset-group-label { font-size: 12px; color: #6b7280; flex: 0 0 56px; text-align: right; line-height: 1; }
+.preset-group-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; flex: 1; align-items: center; }
 .preset-group-tags .el-tag { margin: 0; }
 .preset-group-tags .preset-tag { cursor: pointer; }
 .regex-extras { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; background: #fff; border: 1px dashed #e5e7eb; border-radius: 4px; }

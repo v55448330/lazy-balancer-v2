@@ -93,7 +93,7 @@ func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
 	caddyhttp.SetVar(ctx, "geoip.country_name", fields[0])
 	caddyhttp.SetVar(ctx, "geoip.region", region)
 	if len(fields) >= 3 {
-		caddyhttp.SetVar(ctx, "geoip.province", fields[2])
+		caddyhttp.SetVar(ctx, "geoip.province", fields[1])
 	}
 }
 

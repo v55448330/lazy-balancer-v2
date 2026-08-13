@@ -2,8 +2,11 @@ package services
 
 import (
 	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -52,6 +55,15 @@ func InitIP2Region() {
 	ip2regionMu.Lock()
 	swapIP2RegionSearcher(searcher)
 	ip2regionMu.Unlock()
+
+	cachePath := ip2regionLivePath + ".provinces.json"
+	if _, err := os.Stat(cachePath); err != nil {
+		provinces := GetIP2RegionProvinces()
+		if data, mErr := json.Marshal(provinces); mErr == nil {
+			os.WriteFile(cachePath, data, 0644)
+		}
+	}
+	log.Printf("ip2region: loaded %s", ip2regionLivePath)
 }
 
 // Reload hot-swaps the singleton searcher from the live xdb path. The
@@ -116,13 +128,31 @@ func GetIP2RegionVersion() string {
 	return version
 }
 
-// SetIP2RegionVersion records the installed GeoIP database version.
+// SetIP2RegionVersion records the installed GeoIP database version and caches provinces.
 func SetIP2RegionVersion(version string) {
 	if _, err := db.DB.Exec(`INSERT INTO security_ip2region_version (id, version, updated_at, auto_update)
 		VALUES (1, ?, datetime('now'), 0)
 		ON CONFLICT(id) DO UPDATE SET version=excluded.version, updated_at=excluded.updated_at`, version); err != nil {
 		log.Printf("ip2region: failed to store version %q: %v", version, err)
 	}
+	provinces := GetIP2RegionProvinces()
+	if data, err := json.Marshal(provinces); err == nil {
+		os.WriteFile(ip2regionLivePath+".provinces.json", data, 0644)
+	}
+}
+
+// GetCachedProvinces returns the province list from the JSON cache file,
+// falling back to a live lookup if the cache is missing or stale.
+func GetCachedProvinces() []string {
+	data, err := os.ReadFile(ip2regionLivePath + ".provinces.json")
+	if err != nil {
+		return GetIP2RegionProvinces()
+	}
+	var provinces []string
+	if err := json.Unmarshal(data, &provinces); err != nil {
+		return GetIP2RegionProvinces()
+	}
+	return provinces
 }
 
 // openIP2RegionSearcher opens the xdb at path with the whole file buffered
@@ -165,4 +195,38 @@ func GetIP2RegionEntryCount() int {
 		return 0
 	}
 	return int((maxPtr-minPtr)/14) + 1
+}
+
+func GetIP2RegionProvinces() []string {
+	ip2regionSearchMu.Lock()
+	searcher := ip2regionSearcher
+	ip2regionSearchMu.Unlock()
+	if searcher == nil {
+		return []string{"海外"}
+	}
+	chineseBlocks := []int{1, 14, 27, 36, 39, 42, 49, 58, 59, 60, 61, 101, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 139, 175, 180, 182, 183, 202, 210, 211, 218, 219, 220, 221, 222, 223}
+	seen := make(map[string]bool)
+	for _, b := range chineseBlocks {
+		for _, sub := range []int{0, 32, 64, 96, 128, 160, 192, 224} {
+			ip := fmt.Sprintf("%d.%d.1.1", b, sub)
+			region, err := searcher.Search(ip)
+			if err != nil {
+				continue
+			}
+			fields := strings.Split(region, "|")
+			if len(fields) >= 2 && fields[0] == "中国" {
+				prov := strings.TrimSpace(fields[1])
+				if prov != "" && prov != "0" {
+					seen[prov] = true
+				}
+			}
+		}
+	}
+	result := make([]string, 0, len(seen)+1)
+	for name := range seen {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	result = append(result, "海外")
+	return result
 }

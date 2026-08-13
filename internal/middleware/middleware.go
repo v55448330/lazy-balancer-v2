@@ -290,6 +290,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/security/crs/update/status", h.GetCRSUpdateStatus)
 				business.GET("/security/crs/update/logs", h.GetCRSUpdateLogs)
 				business.GET("/security/ip2region", h.GetIP2RegionInfo)
+				business.GET("/security/ip2region/regions", h.GetIP2RegionRegions)
 				business.GET("/security/ip2region/update/status", h.GetIP2RegionUpdateStatus)
 				business.GET("/security/ip2region/update/logs", h.GetIP2RegionUpdateLogs)
 				business.GET("/security/rules/:caddy_id/policy", h.GetSecurityPolicyBindings)
