@@ -60,7 +60,7 @@ func InitIP2Region() {
 	if _, err := os.Stat(cachePath); err != nil {
 		provinces := GetIP2RegionProvinces()
 		if data, mErr := json.Marshal(provinces); mErr == nil {
-			os.WriteFile(cachePath, data, 0644)
+			writeProvincesCache(cachePath, data)
 		}
 	}
 	log.Printf("ip2region: loaded %s", ip2regionLivePath)
@@ -137,8 +137,18 @@ func SetIP2RegionVersion(version string) {
 	}
 	provinces := GetIP2RegionProvinces()
 	if data, err := json.Marshal(provinces); err == nil {
-		os.WriteFile(ip2regionLivePath+".provinces.json", data, 0644)
+		writeProvincesCache(ip2regionLivePath+".provinces.json", data)
 	}
+}
+
+// writeProvincesCache atomically writes the province JSON cache by writing to a
+// temporary file then renaming, so concurrent readers never see a partial file.
+func writeProvincesCache(path string, data []byte) {
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return
+	}
+	os.Rename(tmpPath, path)
 }
 
 // GetCachedProvinces returns the province list from the JSON cache file,
@@ -198,12 +208,14 @@ func GetIP2RegionEntryCount() int {
 }
 
 func GetIP2RegionProvinces() []string {
-	ip2regionSearchMu.Lock()
+	ip2regionMu.RLock()
 	searcher := ip2regionSearcher
-	ip2regionSearchMu.Unlock()
+	ip2regionMu.RUnlock()
 	if searcher == nil {
 		return []string{"海外"}
 	}
+	ip2regionSearchMu.Lock()
+	defer ip2regionSearchMu.Unlock()
 	chineseBlocks := []int{1, 14, 27, 36, 39, 42, 49, 58, 59, 60, 61, 101, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 139, 175, 180, 182, 183, 202, 210, 211, 218, 219, 220, 221, 222, 223}
 	seen := make(map[string]bool)
 	for _, b := range chineseBlocks {
