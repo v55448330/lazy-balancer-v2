@@ -34,6 +34,7 @@ type configSnapshot struct {
 	AccessLogJSON              bool
 	AccessLogFormat            string
 	CertJobLogSizeMB           int
+	AuditLogSizeMB             int
 	RuntimeLogSizeMB           int
 	AuditRetentionMonths       int
 	JWTExpireMinutes           int
@@ -58,7 +59,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 		COALESCE(server_tokens_hidden,FALSE),
 		COALESCE(access_log_json,TRUE), COALESCE(access_log_format,''),
-		COALESCE(cert_job_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3),
+		COALESCE(cert_job_log_size_mb,10), COALESCE(audit_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3),
 		COALESCE(jwt_expire_minutes,20)
 		FROM global_config WHERE id=1`).Scan(
 		&old.ACMEEmail, &old.DNSProvider, &old.DNSCredentials,
@@ -70,7 +71,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		&old.UpstreamKeepaliveTimeout, &old.ProxyDialTimeout, &old.ProxyResponseHeaderTimeout, &old.ProxyReadTimeout, &old.ProxyWriteTimeout, &old.ProxyStreamTimeout, &old.ProxyFlushInterval, &old.ProxyStreamCloseDelay,
 		&old.ServerTokensHidden,
 		&old.AccessLogJSON, &old.AccessLogFormat,
-		&old.CertJobLogSizeMB, &old.RuntimeLogSizeMB, &old.AuditRetentionMonths, &old.JWTExpireMinutes)
+		&old.CertJobLogSizeMB, &old.AuditLogSizeMB, &old.RuntimeLogSizeMB, &old.AuditRetentionMonths, &old.JWTExpireMinutes)
 	return old, err
 }
 
@@ -102,6 +103,7 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 	add("audit_retention_months", "日志保留", req.AuditRetentionMonths != nil && *req.AuditRetentionMonths != old.AuditRetentionMonths)
 	add("jwt_expire_minutes", "登录过期时间", req.JWTExpireMinutes != nil && *req.JWTExpireMinutes != old.JWTExpireMinutes)
 	add("cert_job_log_size_mb", "证书日志大小", req.CertJobLogSizeMB != nil && *req.CertJobLogSizeMB != old.CertJobLogSizeMB)
+	add("audit_log_size_mb", "审计日志大小", req.AuditLogSizeMB != nil && *req.AuditLogSizeMB != old.AuditLogSizeMB)
 	add("runtime_log_size_mb", "运行日志大小", req.RuntimeLogSizeMB != nil && *req.RuntimeLogSizeMB != old.RuntimeLogSizeMB)
 	add("caddy_log_level", "Caddy日志级别", req.CaddyLogLevel != nil && *req.CaddyLogLevel != old.CaddyLogLevel)
 	add("caddy_log_size_mb", "日志大小", req.CaddyLogSizeMB != nil && *req.CaddyLogSizeMB != old.CaddyLogSizeMB)

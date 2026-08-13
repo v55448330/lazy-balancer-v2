@@ -222,6 +222,7 @@ type GlobalConfig struct {
 	ProxyStreamCloseDelay      int          `json:"proxy_stream_close_delay"`
 	ServerTokensHidden         bool         `json:"server_tokens_hidden"`
 	CertJobLogSizeMB           int          `json:"cert_job_log_size_mb"`
+	AuditLogSizeMB             int          `json:"audit_log_size_mb"`
 	RuntimeLogSizeMB           int          `json:"runtime_log_size_mb"`
 	AccessLogJSON              bool         `json:"access_log_json"`
 	AccessLogFormat            string       `json:"access_log_format"`
@@ -506,6 +507,7 @@ type UpdateConfigRequest struct {
 	ProxyStreamCloseDelay      *int    `json:"proxy_stream_close_delay"`
 	ServerTokensHidden         *bool   `json:"server_tokens_hidden"`
 	CertJobLogSizeMB           *int    `json:"cert_job_log_size_mb"`
+	AuditLogSizeMB             *int    `json:"audit_log_size_mb"`
 	RuntimeLogSizeMB           *int    `json:"runtime_log_size_mb"`
 	AccessLogJSON              *bool   `json:"access_log_json"`
 	AccessLogFormat            *string `json:"access_log_format"`

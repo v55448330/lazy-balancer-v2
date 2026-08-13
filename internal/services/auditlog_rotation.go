@@ -6,7 +6,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 const (
@@ -14,19 +17,23 @@ const (
 	auditLogCheckInterval = 5 * time.Minute
 )
 
+var auditLogRotationOnce sync.Once
+
 func StartAuditLogRotation(ctx context.Context) {
-	go func() {
-		ticker := time.NewTicker(auditLogCheckInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				rotateAuditLogIfNeeded()
+	auditLogRotationOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(auditLogCheckInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					rotateAuditLogIfNeeded()
+				}
 			}
-		}
-	}()
+		}()
+	})
 }
 
 func rotateAuditLogIfNeeded() {
@@ -34,7 +41,7 @@ func rotateAuditLogIfNeeded() {
 	if err != nil || info.Size() == 0 {
 		return
 	}
-	maxBytes := getCertJobLogSizeBytes()
+	maxBytes := getAuditLogSizeBytes()
 	if info.Size() < maxBytes {
 		return
 	}
@@ -56,4 +63,15 @@ func rotateAuditLogIfNeeded() {
 
 func auditLogBaseName() string {
 	return filepath.Base(auditLogPath)
+}
+
+func getAuditLogSizeBytes() int64 {
+	var sizeMB int
+	if err := db.DB.QueryRow("SELECT COALESCE(audit_log_size_mb, 10) FROM global_config WHERE id = 1").Scan(&sizeMB); err != nil {
+		sizeMB = 10
+	}
+	if sizeMB <= 0 {
+		sizeMB = 10
+	}
+	return int64(sizeMB) * 1024 * 1024
 }
