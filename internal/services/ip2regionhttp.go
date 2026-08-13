@@ -13,17 +13,6 @@ import (
 
 var ip2RegionHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
-func defaultFetchIP2RegionLatestCommit(ctx context.Context) (string, error) {
-	tag, commit, err := defaultFetchIP2RegionLatestTag(ctx)
-	if err != nil {
-		return "", err
-	}
-	if commit == "" {
-		return tag, nil
-	}
-	return commit, nil
-}
-
 func defaultFetchIP2RegionLatestTag(ctx context.Context) (tag, commit string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		"https://api.github.com/repos/lionsoul2014/ip2region/releases/latest", nil)
@@ -80,19 +69,4 @@ func defaultDownloadIP2RegionXDB(ctx context.Context, tag, destPath string) erro
 		return copyErr
 	}
 	return closeErr
-}
-
-// parseGitHubCommitSHA extracts the sha of the first commit from a GitHub
-// commits list response.
-func parseGitHubCommitSHA(body []byte) (string, error) {
-	var payload []struct {
-		SHA string `json:"sha"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", fmt.Errorf("解析 GitHub 响应失败: %w", err)
-	}
-	if len(payload) == 0 || payload[0].SHA == "" {
-		return "", errors.New("GitHub 响应缺少 commit sha")
-	}
-	return payload[0].SHA, nil
 }

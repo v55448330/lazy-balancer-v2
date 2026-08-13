@@ -205,28 +205,6 @@ func (p *Provider) createRecord(ctx context.Context, domainID, subDomain, value 
 	return result.Record.ID.String(), nil
 }
 
-func (p *Provider) modifyRecord(ctx context.Context, domainID, recordID, subDomain, value string, ttl int) error {
-	params := url.Values{}
-	params.Set("domain_id", domainID)
-	params.Set("record_id", recordID)
-	params.Set("sub_domain", subDomain)
-	params.Set("record_type", "TXT")
-	params.Set("record_line", "默认")
-	params.Set("value", value)
-	params.Set("ttl", strconv.Itoa(ttl))
-
-	var result struct {
-		Status apiStatus `json:"status"`
-	}
-	if err := p.apiCall(ctx, "Record.Modify", params, &result); err != nil {
-		return err
-	}
-	if result.Status.Code.String() != "1" {
-		return fmt.Errorf("Record.Modify failed: %s", result.Status.Message)
-	}
-	return nil
-}
-
 func (p *Provider) deleteRecord(ctx context.Context, domainID, recordID string) error {
 	params := url.Values{}
 	params.Set("domain_id", domainID)

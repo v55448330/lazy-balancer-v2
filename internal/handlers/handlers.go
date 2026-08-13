@@ -535,31 +535,6 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 	return nil
 }
 
-func (h *Handlers) validatePort(protocol string, port int, excludeCaddyID string) error {
-	adminPorts := []int{8000, 2019}
-	httpReservedPorts := []int{80, 443}
-
-	if port < 1 || port > 65535 {
-		return fmt.Errorf("端口必须在 1-65535 之间")
-	}
-
-	for _, p := range adminPorts {
-		if port == p {
-			return fmt.Errorf("端口 %d 为管理端口，不可使用", port)
-		}
-	}
-
-	if protocol == "tcp" {
-		for _, p := range httpReservedPorts {
-			if port == p {
-				return fmt.Errorf("端口 %d 为 HTTP/HTTPS 保留端口", p)
-			}
-		}
-	}
-
-	return h.validatePortFromDB(protocol, port, excludeCaddyID)
-}
-
 func (h *Handlers) validatePortFromDB(protocol string, port int, excludeCaddyID string) error {
 	// Check conflict with existing rules:
 	// - HTTP rules may share a port (Caddy routes by host), but cannot share with TCP.
