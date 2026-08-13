@@ -80,23 +80,28 @@ func TestGenerateHTTPRouteObjects_geoipOverseas_emitsHandlerAndBlockRoute(t *tes
 		t.Fatal(err)
 	}
 
-	// Then the block route carries the 海外 expression and returns 403
+	// Then the block route carries the 海外 expression and triggers a 403 error
 	block := findRouteByMatcherExpression(t, routes, `{http.vars.geoip.country_name} != "中国"`)
 	names := handlerNames(t, block)
-	if len(names) != 1 || names[0] != "static_response" {
-		t.Fatalf("block route handlers=%v, want [static_response]", names)
+	if len(names) != 1 || names[0] != "error" {
+		t.Fatalf("block route handlers=%v, want [error]", names)
 	}
-	status := mustMap(t, block["handle"].([]interface{})[0], "block handler")["status_code"]
-	if status != 403 {
-		t.Fatalf("block status_code=%#v, want 403", status)
+	errorHandler := mustMap(t, block["handle"].([]interface{})[0], "error handler")
+	status := errorHandler["status_code"]
+	if status != "403" && status != 403 {
+		t.Fatalf("block status_code=%#v, want \"403\" or 403", status)
 	}
 	if block["terminal"] != true {
 		t.Fatal("block route must be terminal")
 	}
 
-	// And the main route's chain starts with the geoip handler
-	if names := handlerNames(t, mainRoute); len(names) == 0 || names[0] != "geoip2region" {
-		t.Fatalf("main route handlers=%v, want first geoip2region", handlerNames(t, mainRoute))
+	// And the main route's chain no longer duplicates the geoip handler
+	// (it's already executed in the pass route above)
+	mainNames := handlerNames(t, mainRoute)
+	for _, n := range mainNames {
+		if n == "geoip2region" {
+			t.Fatalf("main route should not contain geoip2region (handled by pass route), handlers=%v", mainNames)
+		}
 	}
 
 	// And a pass route populates the geoip vars before the block matcher runs

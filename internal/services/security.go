@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"lazy-balancer-v2/internal/db"
@@ -135,7 +136,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 	for _, ruleID := range excludedRules {
 		ruleID = strings.TrimSpace(ruleID)
 		if ruleID != "" {
-			sb.WriteString(fmt.Sprintf("SecRuleRemoveById %s\n", ruleID))
+			sb.WriteString(fmt.Sprintf("SecRuleRemoveById %s\n", crsFilenameToRuleIDRange(ruleID)))
 		}
 	}
 
@@ -169,7 +170,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 				if idx < len(cr.Conditions)-1 {
 					actions += ",chain"
 				}
-				sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"%s\"\n", target, op, strings.ReplaceAll(cond.Pattern, "\"", "\\\""), actions))
+				sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"%s\"\n", target, op, escapeCorazaPattern(cond.Pattern), actions))
 			}
 		} else {
 			target := targetMap[cr.Target]
@@ -177,7 +178,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 			if target == "" || op == "" {
 				continue
 			}
-			sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,%s\"\n", target, op, strings.ReplaceAll(cr.Pattern, "\"", "\\\""), cr.ID+10000, action))
+			sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,%s\"\n", target, op, escapeCorazaPattern(cr.Pattern), cr.ID+10000, action))
 		}
 	}
 
@@ -284,4 +285,20 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 		return embedded
 	}
 	return nil
+}
+
+func crsFilenameToRuleIDRange(s string) string {
+	parts := strings.SplitN(s, "-", 3)
+	if len(parts) >= 2 {
+		if n, err := strconv.Atoi(parts[1]); err == nil && n >= 100 && n <= 999 {
+			return fmt.Sprintf("%d000-%d999", n, n)
+		}
+	}
+	return s
+}
+
+func escapeCorazaPattern(pattern string) string {
+	p := strings.ReplaceAll(pattern, "\\", "\\\\")
+	p = strings.ReplaceAll(p, "\"", "\\\"")
+	return p
 }
