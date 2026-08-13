@@ -23,6 +23,10 @@
             <el-input-number v-model="settings.cert_job_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
             <el-text type="info" size="small" class="tip-inline">MB，滚动阈值，保留 5 份（建议 10-50）</el-text>
           </el-form-item>
+          <el-form-item label="审计日志大小">
+            <el-input-number v-model="settings.audit_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
+            <el-text type="info" size="small" class="tip-inline">MB，WAF 审计日志轮转阈值（建议 10-100）</el-text>
+          </el-form-item>
           <el-form-item label="运行日志大小">
             <el-input-number v-model="settings.runtime_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
             <el-text type="info" size="small" class="tip-inline">MB，轮转阈值（建议 50-200）</el-text>
@@ -469,10 +473,9 @@ const confirmImport = async (): Promise<void> => {
 interface BasicSettingsConfig {
   log_level: string
   cert_job_log_size_mb: number
+  audit_log_size_mb: number
   runtime_log_size_mb: number
   audit_retention_months: number
-  security_events_retention_days: number
-  security_events_retention_max: number
   jwt_expire_minutes: number
   timezone: string
 }
@@ -672,10 +675,9 @@ const handleSave = async () => {
     const payload = {
       log_level: settings.value.log_level,
       cert_job_log_size_mb: settings.value.cert_job_log_size_mb,
+      audit_log_size_mb: settings.value.audit_log_size_mb,
       runtime_log_size_mb: settings.value.runtime_log_size_mb,
       audit_retention_months: settings.value.audit_retention_months,
-      security_events_retention_days: settings.value.security_events_retention_days,
-      security_events_retention_max: settings.value.security_events_retention_max,
       jwt_expire_minutes: settings.value.jwt_expire_minutes,
       timezone: settings.value.timezone,
       source: 'basic',

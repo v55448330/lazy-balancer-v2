@@ -39,12 +39,11 @@ interface GlobalConfigData {
   proxy_stream_close_delay: number
   server_tokens_hidden: boolean
   cert_job_log_size_mb: number
+  audit_log_size_mb: number
   runtime_log_size_mb: number
   access_log_json: boolean
   access_log_format: string
   audit_retention_months: number
-  security_events_retention_days: number
-  security_events_retention_max: number
   jwt_expire_minutes: number
   timezone: string
   acme_email: string

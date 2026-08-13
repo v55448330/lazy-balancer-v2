@@ -69,12 +69,11 @@ interface SettingsConfig {
   proxy_stream_close_delay: number
   server_tokens_hidden: boolean
   cert_job_log_size_mb: number
+  audit_log_size_mb: number
   runtime_log_size_mb: number
   access_log_json: boolean
   access_log_format: string
   audit_retention_months: number
-  security_events_retention_days: number
-  security_events_retention_max: number
   jwt_expire_minutes: number
   timezone: string
 }
@@ -107,12 +106,11 @@ const settings = ref<SettingsConfig>({
   proxy_stream_close_delay: 0,
   server_tokens_hidden: false,
   cert_job_log_size_mb: 10,
+  audit_log_size_mb: 10,
   runtime_log_size_mb: 100,
   access_log_json: true,
   access_log_format: 'resp_headers -> delete\nrequest>tls -> delete\nrequest>remote_port -> delete\nlevel -> delete\nlogger -> delete\nmsg -> delete\nrequest>remote_ip -> src\nrequest>client_ip -> src_ip\nrequest>method -> http_method\nrequest>host -> server\nrequest>uri -> uri_path\nrequest>proto -> protocol\nuser_id -> user\nts -> time_local\nsize -> bytes_out\nbytes_read -> bytes_in\nduration -> request_time',
   audit_retention_months: 3,
-  security_events_retention_days: 30,
-  security_events_retention_max: 100000,
   jwt_expire_minutes: 20,
   timezone: 'Asia/Shanghai',
 })
@@ -152,10 +150,9 @@ type ConfigPayload = SettingsConfig & CertificateConfig
 const applyBasicKeys = (data: ConfigPayload) => {
   settings.value.log_level = data.log_level || 'info'
   settings.value.cert_job_log_size_mb = data.cert_job_log_size_mb ?? 10
+  settings.value.audit_log_size_mb = data.audit_log_size_mb ?? 10
   settings.value.runtime_log_size_mb = data.runtime_log_size_mb ?? 100
   settings.value.audit_retention_months = data.audit_retention_months ?? 3
-  settings.value.security_events_retention_days = data.security_events_retention_days ?? 30
-  settings.value.security_events_retention_max = data.security_events_retention_max ?? 100000
   settings.value.jwt_expire_minutes = data.jwt_expire_minutes ?? 20
   settings.value.timezone = data.timezone || 'Asia/Shanghai'
 }
