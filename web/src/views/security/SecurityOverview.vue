@@ -328,6 +328,8 @@ onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fet
   padding: 16px;
   border-radius: 8px;
   border: 1px solid #f0f0f0;
+  height: 100%;
+  box-sizing: border-box;
   transition: border-color 0.2s;
 }
 .stat-box:hover { border-color: #d0d0d0; }

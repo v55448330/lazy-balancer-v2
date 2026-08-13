@@ -26,6 +26,11 @@ func (h *Handlers) RestartService(c *gin.Context) {
 }
 
 func (h *Handlers) GetSystemInfo(c *gin.Context) {
+	brandingCfg := loadBrandingConfig(h.cfg.DataDir)
+	version := h.cfg.Version
+	if brandingCfg.Version != "" {
+		version = brandingCfg.Version
+	}
 	info := models.SystemInfo{
 		NodeMode:      "master",
 		IPAddress:     getOutboundIP(),
@@ -37,7 +42,7 @@ func (h *Handlers) GetSystemInfo(c *gin.Context) {
 		CaddyVersion:  getCaddyVersion(),
 		RunningStatus: "running",
 		Uptime:        getUptime(),
-		Version:       h.cfg.Version,
+		Version:       version,
 	}
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err == nil && !isMaster {
