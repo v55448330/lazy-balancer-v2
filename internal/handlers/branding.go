@@ -64,6 +64,7 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 	if cfg.Version == "" {
 		cfg.Version = h.cfg.Version
 	}
+	SeedDefaultBlockPage(h.cfg.DataDir)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
 }
 
@@ -115,10 +116,6 @@ func SeedDefaultBlockPage(dataDir string) error {
 }
 
 func (h *Handlers) GetDefaultBlockPage(c *gin.Context) {
-	cfg := defaultBranding
-	path := filepath.Join(h.cfg.DataDir, "branding.json")
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &cfg)
-	}
+	cfg := loadBrandingConfig(h.cfg.DataDir)
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(renderDefaultBlockPage(cfg)))
 }
