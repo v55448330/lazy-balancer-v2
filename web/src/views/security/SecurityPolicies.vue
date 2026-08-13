@@ -708,13 +708,14 @@ async function openDialog(row?: PolicySummary) {
         rate_limit_burst: d.rate_limit_burst,
         block_page_id: d.block_page_id || 1,
         block_status_code: d.block_status_code || 403,
-        geoip_enabled: d.geoip_enabled ?? false,
+        geoip_enabled: false,
         geoip_mode: d.geoip_mode || 'deny',
-      }
-      ipACLList.value = parseJsonList(d.ip_acl_list)
-      ipWhitelist.value = parseJsonList(d.ip_whitelist)
-      ipWhitelistEnabled.value = ipWhitelist.value.length > 0
-      geoipCountries.value = parseJsonList(d.geoip_countries)
+    }
+    ipACLList.value = parseJsonList(d.ip_acl_list)
+    ipWhitelist.value = parseJsonList(d.ip_whitelist)
+    ipWhitelistEnabled.value = ipWhitelist.value.length > 0
+    geoipCountries.value = parseJsonList(d.geoip_countries)
+    form.value.geoip_enabled = d.geoip_enabled ?? (geoipCountries.value.length > 0)
       crsRuleGroups.value = normalizeCrsGroups(parseJsonList(d.crs_rule_groups))
       crsExcludedRules.value = parseJsonList(d.crs_excluded_rules)
       selectedCustomRules.value = parseCustomRuleIds(d.custom_rules)
