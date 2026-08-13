@@ -97,7 +97,73 @@ func (cleanup *revokedJTICleanup) run(database *sql.DB, now time.Time) error {
 	return nil
 }
 
+type loginRateBucket struct {
+	mu    sync.Mutex
+	count int
+	until time.Time
+}
+
+var loginRateBuckets = struct {
+	sync.Mutex
+	entries map[string]*loginRateBucket
+}{entries: make(map[string]*loginRateBucket)}
+
+func loginRateLimit() gin.HandlerFunc {
+	const limit = 10
+	return func(c *gin.Context) {
+		now := time.Now()
+		ip := c.ClientIP()
+
+		loginRateBuckets.Lock()
+		bucket, ok := loginRateBuckets.entries[ip]
+		if !ok {
+			bucket = &loginRateBucket{until: now.Add(time.Minute)}
+			loginRateBuckets.entries[ip] = bucket
+		}
+		loginRateBuckets.Unlock()
+
+		bucket.mu.Lock()
+		if now.After(bucket.until) {
+			bucket.count = 0
+			bucket.until = now.Add(time.Minute)
+		}
+		bucket.count++
+		exceeded := bucket.count > limit
+		bucket.mu.Unlock()
+
+		if exceeded {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": "登录尝试过于频繁，请稍后再试"})
+			return
+		}
+		c.Next()
+	}
+}
+
+var loginRateLimitCleanupOnce sync.Once
+
+func startLoginRateLimitCleanup() {
+	loginRateLimitCleanupOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				now := time.Now()
+				loginRateBuckets.Lock()
+				for ip, bucket := range loginRateBuckets.entries {
+					bucket.mu.Lock()
+					if now.After(bucket.until) {
+						delete(loginRateBuckets.entries, ip)
+					}
+					bucket.mu.Unlock()
+				}
+				loginRateBuckets.Unlock()
+			}
+		}()
+	})
+}
+
 func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
+	startLoginRateLimitCleanup()
 	services.ApplyLogLevel()
 
 	r := gin.New()
@@ -157,8 +223,8 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		})
 		v1.GET("/openapi.yaml", h.GetOpenAPIYAML)
 		v1.GET("/docs", h.GetAPIDocs)
-		v1.POST("/auth/login", h.Login)
-		v1.POST("/auth/ticket-login", h.TicketLogin)
+		v1.POST("/auth/login", loginRateLimit(), h.Login)
+		v1.POST("/auth/ticket-login", loginRateLimit(), h.TicketLogin)
 		v1.GET("/auth/setup", h.GetSetupStatus)
 		v1.POST("/auth/setup", h.SetupAdmin)
 		v1.GET("/branding", h.GetBranding)
@@ -401,7 +467,10 @@ func auditMiddleware() gin.HandlerFunc {
 
 func corsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
+		if origin := c.Request.Header.Get("Origin"); origin != "" {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Vary", "Origin")
+		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, X-Cluster-Token, X-Registration-Secret")
 

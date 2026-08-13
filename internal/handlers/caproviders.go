@@ -22,6 +22,13 @@ func (h *Handlers) ListCAProviders(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to list CA providers"})
 		return
 	}
+	if role, _ := c.Get("role"); role != "admin" {
+		for i := range list {
+			if list[i].Credentials != "" {
+				list[i].Credentials = "***"
+			}
+		}
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: list})
 }
 
@@ -40,6 +47,9 @@ func (h *Handlers) GetCAProvider(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get CA provider"})
 		return
+	}
+	if role, _ := c.Get("role"); role != "admin" && p.Credentials != "" {
+		p.Credentials = "***"
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: p})
 }
