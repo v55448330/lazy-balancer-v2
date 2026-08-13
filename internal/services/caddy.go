@@ -1884,6 +1884,10 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			}
 		}
 
+		if rateLimitHandler := buildRateLimitHandler(rule.CaddyID); rateLimitHandler != nil {
+			handleChain = append(handleChain, rateLimitHandler)
+		}
+
 		// Security policy: insert coraza waf handler if rule has an active policy
 		if wafHandler := buildWafHandler(rule.CaddyID); wafHandler != nil {
 			handleChain = append(handleChain, wafHandler)
@@ -1893,12 +1897,10 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		effectiveProxyTimeouts := resolveProxyTimeouts(rule)
 
 		if effectiveRequestBodyMaxSizeMB > 0 {
-			handleChain = append([]interface{}{
-				map[string]interface{}{
-					"handler":  "request_body",
-					"max_size": int64(effectiveRequestBodyMaxSizeMB) * 1024 * 1024,
-				},
-			}, handleChain...)
+			handleChain = append(handleChain, map[string]interface{}{
+				"handler":  "request_body",
+				"max_size": int64(effectiveRequestBodyMaxSizeMB) * 1024 * 1024,
+			})
 		}
 
 		if rule.EnableCompress && rule.CompressTypes != "" {
