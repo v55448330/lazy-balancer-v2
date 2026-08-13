@@ -450,7 +450,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			upstreamCount += len(r.Upstreams)
 		}
 		warnings := []string{
-			"仅导入负载均衡规则（用户、全局配置、证书任务不导入）",
+			"仅导入负载均衡规则（用户、全局配置不导入，证书任务保持不变）",
 			"v1 不支持 ACME，HTTPS 规则的证书与私钥将以手动方式随规则导入",
 			"nginx 特有配置（custom_config、日志路径等）已忽略",
 		}
@@ -530,11 +530,6 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM lb_rules"); err != nil {
 		err = session.abort(err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理旧规则失败，已回滚: " + err.Error()})
-		return
-	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id NOT IN (SELECT caddy_id FROM lb_rules)"); err != nil {
-		err = session.abort(err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理孤儿证书任务失败，已回滚: " + err.Error()})
 		return
 	}
 	userID := int(contextUserID(c))

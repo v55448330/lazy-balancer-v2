@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -17,7 +20,7 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs"}
+var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs", "security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages"}
 var configBackupV1Tables = []string{"lb_rules", "upstreams", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs"}
 
 var configBackupCertJobStatuses = map[string]struct{}{
@@ -32,6 +35,8 @@ var configBackupProtectedConfigKeys = map[string]bool{
 	"id": true, "is_master": true, "master_url": true, "cluster_token": true,
 	"registration_id": true, "registration_secret": true, "applied_version": true,
 	"sync_fingerprint": true, "last_sync": true, "last_sync_error": true, "cluster_version": true,
+	"admin_tls_cert": true, "admin_tls_key": true, "admin_tls_enabled": true, "admin_tls_mode": true,
+	"admin_tls_port": true, "admin_tls_acme_rule_id": true, "dns_credentials": true, "acme_email": true,
 }
 
 var requeueNonTerminalCertJobs = services.RequeueNonTerminalCertJobs
@@ -69,6 +74,7 @@ type configBackupMeta struct {
 	App        string `json:"app"`
 	Version    int    `json:"version"`
 	ExportedAt string `json:"exported_at"`
+	Checksum   string `json:"checksum,omitempty"`
 }
 
 type tableQuerier interface {
@@ -206,6 +212,16 @@ func validateV2Backup(backup configBackup) error {
 	}
 	if backup.Config == nil {
 		return errors.New("备份缺少全局配置")
+	}
+	if backup.Meta.Checksum != "" {
+		tablesJSON, err := json.Marshal(backup.Tables)
+		if err != nil {
+			return fmt.Errorf("计算备份校验和失败: %w", err)
+		}
+		sum := sha256.Sum256(tablesJSON)
+		if hex.EncodeToString(sum[:]) != backup.Meta.Checksum {
+			return errors.New("备份校验和不匹配，文件可能已被篡改或损坏")
+		}
 	}
 	requiredTables := configBackupTables
 	if backup.Meta.Version == 1 {
@@ -413,6 +429,9 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 	}
 	if len(configRows) > 0 {
 		backup.Config = configRows[0]
+		for key := range configBackupProtectedConfigKeys {
+			delete(backup.Config, key)
+		}
 	}
 	for _, table := range configBackupTables {
 		rows, err := dumpTable(ctx, tx, table)
@@ -423,6 +442,14 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		}
 		backup.Tables[table] = rows
 	}
+	tablesJSON, err := json.Marshal(backup.Tables)
+	if err != nil {
+		err = errors.Join(err, tx.Rollback())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
+		return
+	}
+	sum := sha256.Sum256(tablesJSON)
+	backup.Meta.Checksum = hex.EncodeToString(sum[:])
 	if err := tx.Commit(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
 		return
@@ -471,7 +498,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	}
 	defer session.close()
 	tx := session.tx
-	deleteOrder := []string{"api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs"}
+	deleteOrder := []string{"security_policy_bindings", "security_custom_rules", "security_block_pages", "security_policies", "api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs"}
 	for _, table := range deleteOrder {
 		if _, exists := backup.Tables[table]; !exists {
 			continue
@@ -483,7 +510,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			return
 		}
 	}
-	insertOrder := []string{"users", "lb_rules", "ca_providers", "certificate_configs", "api_keys", "upstreams", "path_rules", "cert_jobs"}
+	insertOrder := []string{"users", "lb_rules", "ca_providers", "certificate_configs", "api_keys", "upstreams", "path_rules", "cert_jobs", "security_policies", "security_block_pages", "security_custom_rules", "security_policy_bindings"}
 	for _, table := range insertOrder {
 		rows, exists := backup.Tables[table]
 		if !exists {
