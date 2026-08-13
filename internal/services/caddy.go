@@ -2078,6 +2078,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 						},
 					},
 				},
+				"terminal": true,
 			}
 			tagRuleRoute(redirectRoute, rule.CaddyID, "redirect")
 			routes = append(routes, redirectRoute)
@@ -2101,8 +2102,9 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 					"path": pathMatcherSpecs(pathRule),
 				}
 				pathRoute := map[string]interface{}{
-					"match":  []interface{}{pathMatcher},
-					"handle": pathHandle,
+					"match":    []interface{}{pathMatcher},
+					"handle":   pathHandle,
+					"terminal": true,
 				}
 				tagRuleRoute(pathRoute, rule.CaddyID, fmt.Sprintf("path_%d", pathIndex))
 				routes = append(routes, pathRoute)
@@ -2496,8 +2498,9 @@ func buildGeoipBlockRoute(rule SingleRuleConfig, policy *models.SecurityPolicy) 
 		},
 		"handle": []interface{}{
 			map[string]interface{}{
-				"handler":     "static_response",
+				"handler":     "error",
 				"status_code": 403,
+				"error":       "GeoIP blocked",
 			},
 		},
 		"terminal": true,
@@ -2540,10 +2543,6 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 	}
 
 	var handleChain []interface{}
-	// GeoIP resolution runs first so downstream handlers see the region vars.
-	if geoipHandler := buildGeoipHandler(GetSecurityPolicyForRule(rule.CaddyID)); geoipHandler != nil {
-		handleChain = append(handleChain, geoipHandler)
-	}
 	// Rate limiting runs before WAF inspection, body parsing, and proxying.
 	if rateLimitHandler := buildRateLimitHandler(rule.CaddyID); rateLimitHandler != nil {
 		handleChain = append(handleChain, rateLimitHandler)
