@@ -61,12 +61,10 @@ export interface SystemInfo {
   caddy_version: string
   uptime?: number
   network_ips: Record<string, string>
-  ip_addresses?: string
   version?: string
 }
 
 export interface MetricsOverview {
-  total_requests: number
   requests_per_sec: number
   bytes_in: number
   bytes_out: number
@@ -113,9 +111,6 @@ export * from './rules'
 export interface RuleMetrics {
   requests_total?: number
   requests_in_flight?: number
-  total_requests?: number
-  healthy?: boolean
-  degraded?: boolean
   status_2xx: number
   status_3xx: number
   status_4xx: number

@@ -970,7 +970,7 @@ onUnmounted(() => {
 
 <style scoped>
 .dashboard { max-width: 1500px; margin: 0 auto; }
-.mb-5 { margin-bottom: 20px; }
+
 
 .card-header {
   display: flex;
