@@ -169,7 +169,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 				if idx < len(cr.Conditions)-1 {
 					actions += ",chain"
 				}
-				sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"%s\"\n", target, op, cond.Pattern, actions))
+				sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"%s\"\n", target, op, strings.ReplaceAll(cond.Pattern, "\"", "\\\""), actions))
 			}
 		} else {
 			target := targetMap[cr.Target]

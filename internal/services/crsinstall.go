@@ -132,6 +132,17 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 		m.restoreBackup()
 		return fmt.Errorf("写入 crs-setup.stock.conf 基线: %w", err)
 	}
+
+	// Reload BEFORE deleting backups: if reload fails, restoreBackup can still roll back.
+	writeCRSUpdateLog("INFO", string(CRSStatusReloading), "应用新规则并重载 Caddy")
+	if m.reloader != nil {
+		if err := m.reloader(); err != nil {
+			writeCRSUpdateLog("ERROR", string(CRSStatusReloading), fmt.Sprintf("重载失败: %v", err))
+			m.restoreBackup()
+			return fmt.Errorf("重载 Caddy: %w", err)
+		}
+	}
+
 	os.RemoveAll(rulesBak)
 	os.Remove(setupBak)
 	return nil

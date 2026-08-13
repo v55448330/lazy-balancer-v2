@@ -260,6 +260,9 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if crsManager := GetCRSUpdateManager(); crsManager != nil {
 		crsManager.SetMasterRole(true)
 	}
+	if ip2regionMgr := GetIP2RegionUpdateManager(); ip2regionMgr != nil {
+		ip2regionMgr.SetMasterRole(true)
+	}
 	SetSecurityEventsRetentionMasterRole(true)
 	if masterURL != "" {
 		parsedMasterURL, err := url.Parse(masterURL)

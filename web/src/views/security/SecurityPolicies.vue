@@ -200,7 +200,10 @@
                 </el-radio-group>
               </el-form-item>
               <el-form-item label="区域">
+                <el-form-item label="区域选择">
                 <el-select v-model="geoipCountries" multiple filterable allow-create default-first-option placeholder="选择或输入区域名称" style="width: 100%">
+                  <el-option v-for="r in CHINA_REGIONS" :key="r" :label="r" :value="r" />
+                </el-select>
                   <el-option v-for="region in CHINA_REGIONS" :key="region" :label="region" :value="region" />
                 </el-select>
                 <div class="form-tip-line">基于 IP2Region 离线库判断访客所在区域，与 CIDR 规则同时生效</div>
@@ -216,13 +219,13 @@
               <el-switch v-model="form.rate_limit_enabled" />
             </el-form-item>
             <template v-if="form.rate_limit_enabled">
-              <el-form-item label="每秒请求">
+              <el-form-item label="速率上限">
                 <el-input-number v-model="form.rate_limit_rps" :min="1" style="width: 120px" />
-                <el-text class="form-tip-inline">正常状态下每秒允许的请求数</el-text>
+                <el-text class="form-tip-inline">次/秒，持续请求时的速率上限</el-text>
               </el-form-item>
-              <el-form-item label="突发大小">
+              <el-form-item label="突发余量">
                 <el-input-number v-model="form.rate_limit_burst" :min="0" style="width: 120px" />
-                <el-text class="form-tip-inline">允许短时间超出基准速率的请求数。例如基准 10 次/秒 + 突发 5 = 每秒最多 15 次，但持续请求时每分钟不超过 600 次</el-text>
+                <el-text class="form-tip-inline">次，短时允许超出速率上限的额外请求数</el-text>
               </el-form-item>
             </template>
           </el-form>

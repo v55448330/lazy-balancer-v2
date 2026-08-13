@@ -35,9 +35,9 @@ type IP2RegionUpdateManager struct {
 	state   ip2RegionTaskState
 	runDone chan struct{}
 
-	reloader          func() error
+	reloader       func() error
 	fetchLatestTag func(ctx context.Context) (tag, commit string, err error)
-	downloadXDB       func(ctx context.Context, destPath string) error
+	downloadXDB    func(ctx context.Context, destPath string) error
 
 	schedulerMu       sync.Mutex
 	schedulerStop     chan struct{}
@@ -53,7 +53,7 @@ var (
 func newIP2RegionUpdateManager(reloader func() error) *IP2RegionUpdateManager {
 	return &IP2RegionUpdateManager{
 		reloader:          reloader,
-		fetchLatestTag: defaultFetchIP2RegionLatestTag,
+		fetchLatestTag:    defaultFetchIP2RegionLatestTag,
 		downloadXDB:       defaultDownloadIP2RegionXDB,
 		schedulerInterval: time.Hour,
 		state:             ip2RegionTaskState{status: IP2RegionStatusIdle},

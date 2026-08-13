@@ -550,43 +550,6 @@ func TestUpdateSecurityPolicy_rejectsInvalidIPCIDR(t *testing.T) {
 	})
 }
 
-func TestSecurityPolicy_rateLimitResponseRoundTrips(t *testing.T) {
-	// Given a policy created with the block_page rate-limit response
-	setupSecurityPolicyTestDB(t)
-	router := newSecurityRouter(t)
-	recorder := postJSON(t, router, "/security/policies", map[string]any{"name": "回读验证", "mode": "blocking", "rate_limit_enabled": true, "rate_limit_rps": 10, "rate_limit_burst": 5, "rate_limit_response": "block_page", "enabled": true})
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("create status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-
-	// When the detail is fetched
-	var created struct {
-		Data struct {
-			ID int `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &created); err != nil {
-		t.Fatalf("parse create response: %v", err)
-	}
-	detail := httptest.NewRecorder()
-	router.ServeHTTP(detail, httptest.NewRequest(http.MethodGet, "/security/policies/"+itoa(created.Data.ID), nil))
-
-	// Then rate_limit_response round-trips instead of silently reverting
-	var resp struct {
-		Data struct {
-			Policy struct {
-				RateLimitResponse string `json:"rate_limit_response"`
-			} `json:"policy"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(detail.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("parse detail: %v", err)
-	}
-	if resp.Data.Policy.RateLimitResponse != "block_page" {
-		t.Fatalf("rate_limit_response = %q, want block_page (body: %s)", resp.Data.Policy.RateLimitResponse, detail.Body.String())
-	}
-}
-
 func itoa(v int) string {
 	return strconv.Itoa(v)
 }

@@ -22,24 +22,28 @@
             </div>
           </template>
           <el-row :gutter="20">
-            <el-col :span="6" class="stat-card-col">
+            <el-col :span="5" class="stat-card-col">
               <div class="stat-label">今日拦截</div>
               <div class="stat-value" style="color: #f56c6c">{{ overview.today_blocked }}</div>
             </el-col>
-            <el-col :span="6" class="stat-card-col">
+            <el-col :span="5" class="stat-card-col">
               <div class="stat-label">今日检测</div>
               <div class="stat-value" style="color: #e6a23c">{{ overview.today_detected }}</div>
             </el-col>
-            <el-col :span="6" class="stat-card-col">
+            <el-col :span="5" class="stat-card-col">
               <div class="stat-label">活跃策略</div>
               <div class="stat-value" style="color: #409eff">{{ overview.active_policies }}</div>
             </el-col>
-            <el-col :span="6" class="stat-card-col">
+            <el-col :span="5" class="stat-card-col">
               <div class="stat-label">CRS 版本</div>
               <div class="stat-value" style="color: #67c23a">{{ overview.crs_version }}</div>
               <div v-if="overview.update_status" style="margin-top: 6px">
                 <el-tag :type="statusTagType(overview.update_status)" size="small" effect="plain">{{ statusLabel(overview.update_status) }}</el-tag>
               </div>
+            </el-col>
+            <el-col :span="4" class="stat-card-col">
+              <div class="stat-label">IP 库版本</div>
+              <div class="stat-value" style="color: #67c23a; font-size: 16px">{{ ip2regionVersion }}</div>
             </el-col>
           </el-row>
         </el-card>
@@ -267,6 +271,7 @@ const fetchBlockedEvents = async () => {
 const goToEvents = () => { window.open('/?page=security-events', '_blank') }
 
 const rateLimitBlocks = ref<RateLimitBlocks>({ total: 0, hosts: [] })
+const ip2regionVersion = ref('—')
 
 const fetchRateLimitBlocks = async () => {
   try {
@@ -275,7 +280,14 @@ const fetchRateLimitBlocks = async () => {
   } catch { /* silent */ }
 }
 
-onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks() })
+const fetchIP2RegionInfo = async () => {
+  try {
+    const res = await request.get<APIResponse<{ version: string }>>('/security/ip2region')
+    ip2regionVersion.value = res.data?.version || '—'
+  } catch { ip2regionVersion.value = '—' }
+}
+
+onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fetchIP2RegionInfo() })
 </script>
 
 <style scoped>

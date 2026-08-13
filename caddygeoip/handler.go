@@ -95,15 +95,6 @@ func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
 	if len(fields) >= 3 {
 		caddyhttp.SetVar(ctx, "geoip.province", fields[2])
 	}
-	repl, ok := ctx.Value(caddy.ReplacerCtxKey).(*caddy.Replacer)
-	if ok && repl != nil {
-		repl.Set("geoip.country_code", fields[4])
-		repl.Set("geoip.country_name", fields[0])
-		repl.Set("geoip.region", region)
-		if len(fields) >= 3 {
-			repl.Set("geoip.province", fields[2])
-		}
-	}
 }
 
 // realClientIP extracts the true client IP: honors X-Forwarded-For / X-Real-IP

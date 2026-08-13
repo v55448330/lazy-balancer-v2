@@ -209,7 +209,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	rows, err := db.DB.Query(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, rate_limit_response, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode
 		FROM security_policies ORDER BY id`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -260,7 +260,7 @@ func (h *Handlers) GetSecurityPolicy(c *gin.Context) {
 	id := c.Param("id")
 	var p models.SecurityPolicy
 	err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, rate_limit_response, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode
 		FROM security_policies WHERE id=?`, id), &p)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
@@ -335,22 +335,19 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 			return
 		}
 	}
-	if err := validateSecurityPolicyEnums(req.IPACLMode, req.RateLimitResponse, req.GeoIPMode); err != nil {
+	if err := validateSecurityPolicyEnums(req.IPACLMode, req.GeoIPMode); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
-	}
-	if req.RateLimitResponse == "" {
-		req.RateLimitResponse = "429"
 	}
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
 	result, err := db.DB.Exec(`INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, rate_limit_response, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, req.IPBlacklist,
-		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.RateLimitResponse, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode)
+		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -383,17 +380,14 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			}
 		}
 	}
-	var ipACLMode, rateLimitResponse, geoIPMode string
+	var ipACLMode, geoIPMode string
 	if req.IPACLMode != nil {
 		ipACLMode = *req.IPACLMode
-	}
-	if req.RateLimitResponse != nil {
-		rateLimitResponse = *req.RateLimitResponse
 	}
 	if req.GeoIPMode != nil {
 		geoIPMode = *req.GeoIPMode
 	}
-	if err := validateSecurityPolicyEnums(ipACLMode, rateLimitResponse, geoIPMode); err != nil {
+	if err := validateSecurityPolicyEnums(ipACLMode, geoIPMode); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -436,7 +430,6 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addBool("rate_limit_enabled", req.RateLimitEnabled)
 	addInt("rate_limit_rps", req.RateLimitRPS)
 	addInt("rate_limit_burst", req.RateLimitBurst)
-	addStr("rate_limit_response", req.RateLimitResponse)
 	addStr("crs_rule_groups", req.CRSRuleGroups)
 	addStr("crs_excluded_rules", req.CRSExcludedRules)
 	addStr("custom_rules", req.CustomRules)
@@ -541,7 +534,7 @@ func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 	}
 	var p models.SecurityPolicy
 	if err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, rate_limit_response, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode
 		FROM security_policies WHERE id=?`, policyID), &p); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -987,7 +980,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 func scanSecurityPolicyRow(row *sql.Row, p *models.SecurityPolicy) error {
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
 	if err := row.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.RateLimitResponse, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode); err != nil {
+		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode); err != nil {
 		return err
 	}
 	p.IPWhitelist = json.RawMessage(ipWhitelist)
@@ -1002,7 +995,7 @@ func scanSecurityPolicyRow(row *sql.Row, p *models.SecurityPolicy) error {
 func scanSecurityPolicy(rows *sql.Rows, p *models.SecurityPolicy) error {
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
 	if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &p.RateLimitResponse, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode); err != nil {
+		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode); err != nil {
 		return err
 	}
 	p.IPWhitelist = json.RawMessage(ipWhitelist)
@@ -1029,71 +1022,64 @@ func rawJSONString(raw json.RawMessage) string {
 }
 
 type securityPolicyDetail struct {
-	ID                int    `json:"id"`
-	Name              string `json:"name"`
-	Description       string `json:"description"`
-	Mode              string `json:"mode"`
-	AnomalyThreshold  int    `json:"anomaly_threshold"`
-	IPACLMode         string `json:"ip_acl_mode"`
-	IPACLList         string `json:"ip_acl_list"`
-	IPACLEnabled      bool   `json:"ip_acl_enabled"`
-	IPWhitelist       string `json:"ip_whitelist"`
-	IPBlacklist       string `json:"ip_blacklist"`
-	RateLimitEnabled  bool   `json:"rate_limit_enabled"`
-	RateLimitRPS      int    `json:"rate_limit_rps"`
-	RateLimitBurst    int    `json:"rate_limit_burst"`
-	RateLimitResponse string `json:"rate_limit_response"`
-	CRSRuleGroups     string `json:"crs_rule_groups"`
-	CRSExcludedRules  string `json:"crs_excluded_rules"`
-	CustomRules       string `json:"custom_rules"`
-	BlockPageID       int    `json:"block_page_id"`
-	BlockStatusCode   int    `json:"block_status_code"`
-	Enabled           bool   `json:"enabled"`
-	CreatedAt         string `json:"created_at"`
-	UpdatedAt         string `json:"updated_at"`
-	GeoIPCountries    string `json:"geoip_countries"`
-	GeoIPMode         string `json:"geoip_mode"`
+	ID               int    `json:"id"`
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	Mode             string `json:"mode"`
+	AnomalyThreshold int    `json:"anomaly_threshold"`
+	IPACLMode        string `json:"ip_acl_mode"`
+	IPACLList        string `json:"ip_acl_list"`
+	IPACLEnabled     bool   `json:"ip_acl_enabled"`
+	IPWhitelist      string `json:"ip_whitelist"`
+	IPBlacklist      string `json:"ip_blacklist"`
+	RateLimitEnabled bool   `json:"rate_limit_enabled"`
+	RateLimitRPS     int    `json:"rate_limit_rps"`
+	RateLimitBurst   int    `json:"rate_limit_burst"`
+	CRSRuleGroups    string `json:"crs_rule_groups"`
+	CRSExcludedRules string `json:"crs_excluded_rules"`
+	CustomRules      string `json:"custom_rules"`
+	BlockPageID      int    `json:"block_page_id"`
+	BlockStatusCode  int    `json:"block_status_code"`
+	Enabled          bool   `json:"enabled"`
+	CreatedAt        string `json:"created_at"`
+	UpdatedAt        string `json:"updated_at"`
+	GeoIPCountries   string `json:"geoip_countries"`
+	GeoIPMode        string `json:"geoip_mode"`
 }
 
 func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 	return securityPolicyDetail{
-		ID:                p.ID,
-		Name:              p.Name,
-		Description:       p.Description,
-		Mode:              p.Mode,
-		AnomalyThreshold:  p.AnomalyThreshold,
-		IPACLMode:         p.IPACLMode,
-		IPACLList:         p.IPACLList,
-		IPACLEnabled:      p.IPACLEnabled,
-		IPWhitelist:       rawJSONString(p.IPWhitelist),
-		IPBlacklist:       rawJSONString(p.IPBlacklist),
-		RateLimitEnabled:  p.RateLimitEnabled,
-		RateLimitRPS:      p.RateLimitRPS,
-		RateLimitBurst:    p.RateLimitBurst,
-		RateLimitResponse: p.RateLimitResponse,
-		CRSRuleGroups:     rawJSONString(p.CRSRuleGroups),
-		CRSExcludedRules:  rawJSONString(p.CRSExcludedRules),
-		CustomRules:       rawJSONString(p.CustomRules),
-		BlockPageID:       p.BlockPageID,
-		BlockStatusCode:   p.BlockStatusCode,
-		Enabled:           p.Enabled,
-		CreatedAt:         p.CreatedAt,
-		UpdatedAt:         p.UpdatedAt,
-		GeoIPCountries:    rawJSONString(p.GeoIPCountries),
-		GeoIPMode:         p.GeoIPMode,
+		ID:               p.ID,
+		Name:             p.Name,
+		Description:      p.Description,
+		Mode:             p.Mode,
+		AnomalyThreshold: p.AnomalyThreshold,
+		IPACLMode:        p.IPACLMode,
+		IPACLList:        p.IPACLList,
+		IPACLEnabled:     p.IPACLEnabled,
+		IPWhitelist:      rawJSONString(p.IPWhitelist),
+		IPBlacklist:      rawJSONString(p.IPBlacklist),
+		RateLimitEnabled: p.RateLimitEnabled,
+		RateLimitRPS:     p.RateLimitRPS,
+		RateLimitBurst:   p.RateLimitBurst,
+		CRSRuleGroups:    rawJSONString(p.CRSRuleGroups),
+		CRSExcludedRules: rawJSONString(p.CRSExcludedRules),
+		CustomRules:      rawJSONString(p.CustomRules),
+		BlockPageID:      p.BlockPageID,
+		BlockStatusCode:  p.BlockStatusCode,
+		Enabled:          p.Enabled,
+		CreatedAt:        p.CreatedAt,
+		UpdatedAt:        p.UpdatedAt,
+		GeoIPCountries:   rawJSONString(p.GeoIPCountries),
+		GeoIPMode:        p.GeoIPMode,
 	}
 }
 
-func validateSecurityPolicyEnums(ipACLMode, rateLimitResponse, geoIPMode string) error {
+func validateSecurityPolicyEnums(ipACLMode, geoIPMode string) error {
 	switch ipACLMode {
 	case "", "allow", "deny", "bypass":
 	default:
 		return fmt.Errorf("ip_acl_mode 必须为 allow、deny 或 bypass，当前值 %s", ipACLMode)
-	}
-	switch rateLimitResponse {
-	case "", "429", "block_page":
-	default:
-		return fmt.Errorf("rate_limit_response 必须为 429 或 block_page，当前值 %s", rateLimitResponse)
 	}
 	switch geoIPMode {
 	case "", "allow", "deny":

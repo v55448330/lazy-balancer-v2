@@ -7,38 +7,36 @@ import (
 )
 
 type configSnapshot struct {
-	ACMEEmail                   string
-	DNSProvider                 string
-	DNSCredentials              string
-	CertExpiryDays              int
-	CertRenewalDays             int
-	CertRenewalAttempts         int
-	DefaultCAProviderID         int
-	LogLevel                    string
-	Timezone                    string
-	CaddyLogLevel               string
-	CaddyLogSizeMB              int
-	RequestBodyMaxSizeMB        int
-	HTTPReadTimeout             int
-	HTTPWriteTimeout            int
-	HTTPIdleTimeout             int
-	UpstreamKeepaliveTimeout    int
-	ProxyDialTimeout            int
-	ProxyResponseHeaderTimeout  int
-	ProxyReadTimeout            int
-	ProxyWriteTimeout           int
-	ProxyStreamTimeout          int
-	ProxyFlushInterval          int
-	ProxyStreamCloseDelay       int
-	ServerTokensHidden          bool
-	AccessLogJSON               bool
-	AccessLogFormat             string
-	CertJobLogSizeMB            int
-	RuntimeLogSizeMB            int
-	AuditRetentionMonths        int
-	SecurityEventsRetentionDays int
-	SecurityEventsRetentionMax  int
-	JWTExpireMinutes            int
+	ACMEEmail                  string
+	DNSProvider                string
+	DNSCredentials             string
+	CertExpiryDays             int
+	CertRenewalDays            int
+	CertRenewalAttempts        int
+	DefaultCAProviderID        int
+	LogLevel                   string
+	Timezone                   string
+	CaddyLogLevel              string
+	CaddyLogSizeMB             int
+	RequestBodyMaxSizeMB       int
+	HTTPReadTimeout            int
+	HTTPWriteTimeout           int
+	HTTPIdleTimeout            int
+	UpstreamKeepaliveTimeout   int
+	ProxyDialTimeout           int
+	ProxyResponseHeaderTimeout int
+	ProxyReadTimeout           int
+	ProxyWriteTimeout          int
+	ProxyStreamTimeout         int
+	ProxyFlushInterval         int
+	ProxyStreamCloseDelay      int
+	ServerTokensHidden         bool
+	AccessLogJSON              bool
+	AccessLogFormat            string
+	CertJobLogSizeMB           int
+	RuntimeLogSizeMB           int
+	AuditRetentionMonths       int
+	JWTExpireMinutes           int
 }
 
 type configChangePlan struct {
@@ -61,7 +59,6 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		COALESCE(server_tokens_hidden,FALSE),
 		COALESCE(access_log_json,TRUE), COALESCE(access_log_format,''),
 		COALESCE(cert_job_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3),
-		COALESCE(security_events_retention_days,30), COALESCE(security_events_retention_max,100000),
 		COALESCE(jwt_expire_minutes,20)
 		FROM global_config WHERE id=1`).Scan(
 		&old.ACMEEmail, &old.DNSProvider, &old.DNSCredentials,
@@ -73,7 +70,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		&old.UpstreamKeepaliveTimeout, &old.ProxyDialTimeout, &old.ProxyResponseHeaderTimeout, &old.ProxyReadTimeout, &old.ProxyWriteTimeout, &old.ProxyStreamTimeout, &old.ProxyFlushInterval, &old.ProxyStreamCloseDelay,
 		&old.ServerTokensHidden,
 		&old.AccessLogJSON, &old.AccessLogFormat,
-		&old.CertJobLogSizeMB, &old.RuntimeLogSizeMB, &old.AuditRetentionMonths, &old.SecurityEventsRetentionDays, &old.SecurityEventsRetentionMax, &old.JWTExpireMinutes)
+		&old.CertJobLogSizeMB, &old.RuntimeLogSizeMB, &old.AuditRetentionMonths, &old.JWTExpireMinutes)
 	return old, err
 }
 
@@ -103,8 +100,6 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 	add("log_level", "系统日志级别", req.LogLevel != nil && *req.LogLevel != old.LogLevel)
 	add("timezone", "时区", req.Timezone != nil && *req.Timezone != old.Timezone)
 	add("audit_retention_months", "日志保留", req.AuditRetentionMonths != nil && *req.AuditRetentionMonths != old.AuditRetentionMonths)
-	add("security_events_retention_days", "安全事件保留天数", req.SecurityEventsRetentionDays != nil && *req.SecurityEventsRetentionDays != old.SecurityEventsRetentionDays)
-	add("security_events_retention_max", "安全事件保留上限", req.SecurityEventsRetentionMax != nil && *req.SecurityEventsRetentionMax != old.SecurityEventsRetentionMax)
 	add("jwt_expire_minutes", "登录过期时间", req.JWTExpireMinutes != nil && *req.JWTExpireMinutes != old.JWTExpireMinutes)
 	add("cert_job_log_size_mb", "证书日志大小", req.CertJobLogSizeMB != nil && *req.CertJobLogSizeMB != old.CertJobLogSizeMB)
 	add("runtime_log_size_mb", "运行日志大小", req.RuntimeLogSizeMB != nil && *req.RuntimeLogSizeMB != old.RuntimeLogSizeMB)

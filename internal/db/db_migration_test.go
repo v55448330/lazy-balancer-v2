@@ -664,25 +664,6 @@ func TestInitialize_adds_security_policy_response_and_event_retention_columns(t 
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
 	}
-
-	// Then the new columns exist with the specified defaults
-	var rateLimitResponse string
-	if err := DB.QueryRow(`SELECT dflt_value FROM pragma_table_info('security_policies') WHERE name='rate_limit_response'`).Scan(&rateLimitResponse); err != nil {
-		t.Fatalf("read security_policies.rate_limit_response schema: %v", err)
-	}
-	if rateLimitResponse != "'429'" {
-		t.Fatalf("rate_limit_response default=%q, want '429'", rateLimitResponse)
-	}
-	var retentionDays, retentionMax string
-	if err := DB.QueryRow(`SELECT dflt_value FROM pragma_table_info('global_config') WHERE name='security_events_retention_days'`).Scan(&retentionDays); err != nil {
-		t.Fatalf("read global_config.security_events_retention_days schema: %v", err)
-	}
-	if err := DB.QueryRow(`SELECT dflt_value FROM pragma_table_info('global_config') WHERE name='security_events_retention_max'`).Scan(&retentionMax); err != nil {
-		t.Fatalf("read global_config.security_events_retention_max schema: %v", err)
-	}
-	if retentionDays != "30" || retentionMax != "100000" {
-		t.Fatalf("retention defaults=(%q,%q), want (30,100000)", retentionDays, retentionMax)
-	}
 }
 
 func openMigrationTestDB(t *testing.T) *sql.DB {

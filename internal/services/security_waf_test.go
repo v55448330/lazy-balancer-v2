@@ -148,7 +148,7 @@ func TestGetSecurityPolicyForRule_roundTripsIPWhitelistAndBlacklist(t *testing.T
 	// Given a bound policy persisted with trust list, blacklist, and ACL fields
 	_, database := newClusterTestService(t)
 	result, err := database.Exec(`INSERT INTO security_policies (name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,
-		rate_limit_enabled,rate_limit_rps,rate_limit_burst,rate_limit_response,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,enabled)
+		rate_limit_enabled,rate_limit_rps,rate_limit_burst,block_status_code,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,enabled)
 		VALUES ('roundtrip','desc','blocking',5,'allow','["203.0.113.0/24"]',1,'["192.0.2.0/24","2001:db8::1"]','["203.0.113.5"]',1,100,50,'429','[]','[]','[]',0,1)`)
 	if err != nil {
 		t.Fatalf("seed policy: %v", err)
@@ -220,7 +220,7 @@ func TestBuildCorazaDirectives_omitsUserOverridesWhenFileMissing(t *testing.T) {
 
 func seedBoundRateLimitPolicy(t *testing.T, database *sql.DB, ruleCaddyID, response string, blockPageID int) {
 	t.Helper()
-	result, err := database.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,rate_limit_response,block_page_id,enabled) VALUES (?,'blocking',1,100,50,?,?,1)`, "policy-rl-"+ruleCaddyID, response, blockPageID)
+	result, err := database.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,block_status_code,block_page_id,enabled) VALUES (?,'blocking',1,100,50,?,?,1)`, "policy-rl-"+ruleCaddyID, response, blockPageID)
 	if err != nil {
 		t.Fatalf("seed rate-limit policy: %v", err)
 	}
@@ -242,70 +242,4 @@ func findErrorRouteByExpression(t *testing.T, errorRoutes []interface{}, express
 		}
 	}
 	return nil
-}
-
-func TestGenerateCaddyConfig_rendersRateLimitErrorRoute_whenPolicyResponseIsBlockPage(t *testing.T) {
-	// Given an HTTP rule bound to a rate-limited policy whose 429 response renders the block page
-	useTemporaryCertDir(t)
-	_, database := newClusterTestService(t)
-	seedHTTPRuleForGeneration(t, database, "lb_ratelimit", "ratelimit.example.test", 8080)
-	seedSecurityBlockPage(t, database, 7, "<html>slow-down</html>", 451)
-	seedBoundRateLimitPolicy(t, database, "lb_ratelimit", "block_page", 7)
-
-	// When
-	generated := generateCaddyConfigFromStore(database)
-
-	// Then a host-matched 429 error route renders the block page with its own status
-	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
-		t.Fatalf("generation failed: %s", message)
-	}
-	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	route := findErrorRouteByExpression(t, errorRoutes, "{http.error.status_code} == 429")
-	if route == nil {
-		t.Fatalf("no 429 error route rendered: %#v", errorRoutes)
-	}
-	assertEqual(t, routeMatcher(t, route)["host"], []string{"ratelimit.example.test"})
-	handler := firstHandler(t, route)
-	assertEqual(t, handler["handler"], "static_response")
-	assertEqual(t, handler["body"], "<html>slow-down</html>")
-	assertEqual(t, handler["status_code"], 451)
-	if route["terminal"] != true {
-		t.Fatalf("429 error route must be terminal: %#v", route)
-	}
-	// And the WAF block-page route is still rendered alongside it, matched on
-	// the actual deny status coraza produces (403), not the page's status.
-	if wafRoute := findErrorRouteByExpression(t, errorRoutes, "{http.error.status_code} == 403"); wafRoute == nil {
-		t.Fatalf("WAF block-page error route missing: %#v", errorRoutes)
-	}
-}
-
-func TestGenerateCaddyConfig_rendersRateLimitErrorRoute_evenWhenPolicyResponseIs429(t *testing.T) {
-	// Given an HTTP rule bound to a rate-limited policy with a block page,
-	// configured with the legacy plain-429 response value
-	useTemporaryCertDir(t)
-	_, database := newClusterTestService(t)
-	seedHTTPRuleForGeneration(t, database, "lb_plain429", "plain429.example.test", 8080)
-	seedSecurityBlockPage(t, database, 7, "<html>blocked</html>", 451)
-	seedBoundRateLimitPolicy(t, database, "lb_plain429", "429", 7)
-
-	// When
-	generated := generateCaddyConfigFromStore(database)
-
-	// Then the 429 error route renders the block page regardless of the
-	// legacy rate_limit_response value, alongside the WAF block-page route
-	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
-		t.Fatalf("generation failed: %s", message)
-	}
-	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	route := findErrorRouteByExpression(t, errorRoutes, "{http.error.status_code} == 429")
-	if route == nil {
-		t.Fatalf("429 error route must render for any rate_limit_response value: %#v", errorRoutes)
-	}
-	handler := firstHandler(t, route)
-	assertEqual(t, handler["handler"], "static_response")
-	assertEqual(t, handler["body"], "<html>blocked</html>")
-	assertEqual(t, handler["status_code"], 451)
-	if route := findErrorRouteByExpression(t, errorRoutes, "{http.error.status_code} == 403"); route == nil {
-		t.Fatalf("WAF block-page error route missing: %#v", errorRoutes)
-	}
 }

@@ -34,7 +34,7 @@
         <el-descriptions-item label="更新状态">
           <div class="crs-cell-flex">
             <el-tooltip :disabled="!crsFailureMessage" :content="crsFailureMessage">
-              <el-tag :type="crsStatusTagType(crsInfo.update_status)" size="small" effect="light">{{ crsStatusLabel(crsInfo.update_status) }}<template v-if="crsTriggerLabel">（{{ crsTriggerLabel }}）</template></el-tag>
+              <el-tag :type="crsStatusTagType(crsInfo.update_status)" size="small" effect="light">{{ crsStatusLabel(crsInfo.update_status) }}</el-tag>
             </el-tooltip>
           </div>
         </el-descriptions-item>
@@ -88,17 +88,11 @@
           </div>
           </div>
         </el-tab-pane>
-        <el-tab-pane label="CRS 配置" name="setup">
-          <el-card v-loading="loadingSetup">
-            <template #header><div class="flex items-center justify-between"><span class="font-medium">crs-setup.conf</span><el-button link type="primary" size="small" @click="fetchSetup">刷新</el-button></div></template>
-            <SyntaxHighlight :content="setupContent" language="apacheconf" />
-          </el-card>
-        </el-tab-pane>
-        <el-tab-pane label="自定义规则" name="custom">
+      <el-tab-pane label="自定义规则" name="custom">
             <div class="table-toolbar">
               <el-button v-if="!isReadOnly" type="primary" :icon="Plus" @click="openRuleDialog()">新建规则</el-button>
             </div>
-            <el-table :data="customRules" v-loading="loadingCustom" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+            <el-table :data="customRulesPaged" v-loading="loadingCustom" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
             <template #empty><el-empty description="暂无自定义规则" :image-size="60" /></template>
             <el-table-column prop="name" label="规则名称" min-width="150">
               <template #default="{ row }">
@@ -136,7 +130,7 @@
             </el-table-column>
           </el-table>
           <div class="rules-pagination">
-            <el-pagination v-model:current-page="customPage" :page-size="customPageSize" :total="customRules.length" layout="total, sizes, prev, pager, next" />
+            <el-pagination v-model:current-page="customPage" v-model:page-size="customPageSize" :total="customRules.length" layout="total, sizes, prev, pager, next" @size-change="customPage = 1" />
           </div>
         </el-tab-pane>
       </el-tabs>
@@ -332,7 +326,7 @@ const crsStatusTagType = (s: string): 'success' | 'warning' | 'danger' | 'info' 
 }
 
 const crsInfo = ref({ version: '', server_version: '', auto_update: true, last_checked: '', updated_at: '', next_update: '', rule_count: 0, is_latest: false, update_status: '', message: '', trigger: '' })
-const crsTriggerLabel = computed(() => (crsInfo.value.trigger === 'manual' ? '手动' : crsInfo.value.trigger === 'auto' ? '自动' : ''))
+// trigger label removed: status tags no longer show trigger suffix for consistency
 const crsFailureMessage = computed(() => {
   const s = crsInfo.value.update_status
   return (s === 'failed' || s === '更新失败') ? crsInfo.value.message : ''
@@ -377,6 +371,10 @@ const currentContent = ref('')
 const customRules = ref<CustomRule[]>([])
 const customPage = ref(1)
 const customPageSize = ref(10)
+const customRulesPaged = computed(() => {
+  const start = (customPage.value - 1) * customPageSize.value
+  return customRules.value.slice(start, start + customPageSize.value)
+})
 const loadingCustom = ref(false)
 const ruleDialogVisible = ref(false)
 const editingRuleId = ref<number | null>(null)
@@ -736,9 +734,10 @@ onUnmounted(() => {
 .preset-header { cursor: pointer; padding: 2px 0; user-select: none; }
 .preset-toggle { font-size: 12px; color: #6b7280; }
 .preset-tags-block { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: #fff; border: 1px dashed #e5e7eb; border-radius: 4px; margin-left: 0; }
-.preset-group { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 2px; }
-.preset-group-label { font-size: 12px; color: #6b7280; flex: 0 0 56px; line-height: 24px; text-align: right; }
-.preset-group-tags { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
+.preset-group { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
+.preset-group-label { font-size: 12px; color: #6b7280; flex: 0 0 56px; padding-top: 4px; text-align: right; }
+.preset-group-tags { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; align-items: flex-start; padding-top: 1px; }
+.preset-group-tags .el-tag { margin: 0; }
 .preset-group-tags .preset-tag { cursor: pointer; }
 .regex-extras { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; background: #fff; border: 1px dashed #e5e7eb; border-radius: 4px; }
 .regex-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }

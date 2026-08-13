@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	auditLogPath         = "/app/waf/audit/audit.log"
+	auditLogPath          = "/app/waf/audit/audit.log"
 	auditLogCheckInterval = 5 * time.Minute
 )
 

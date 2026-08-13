@@ -16,6 +16,6 @@ export const highlightCode = (content: string, language: string): string => {
   try {
     return Prism.highlight(content, grammar, lang)
   } catch {
-    return content
+    return content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   }
 }

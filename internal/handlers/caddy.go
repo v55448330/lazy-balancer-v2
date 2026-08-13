@@ -129,8 +129,6 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       COALESCE(access_log_json,TRUE) as access_log_json,
 		       COALESCE(access_log_format,'') as access_log_format,
 		       COALESCE(audit_retention_months,3) as audit_retention_months,
-		       COALESCE(security_events_retention_days,30) as security_events_retention_days,
-		       COALESCE(security_events_retention_max,100000) as security_events_retention_max,
 		       COALESCE(jwt_expire_minutes,20) as jwt_expire_minutes,
 		       COALESCE(timezone,'Asia/Shanghai') as timezone,
 		       is_master, COALESCE(master_url, '') as master_url, sync_interval,
@@ -143,7 +141,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.CaddyLogPath, &cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
 		&cfg.RequestBodyMaxSizeMB, &cfg.HTTPReadTimeout, &cfg.HTTPWriteTimeout, &cfg.HTTPIdleTimeout,
 		&cfg.UpstreamKeepaliveTimeout, &cfg.ProxyDialTimeout, &cfg.ProxyResponseHeaderTimeout, &cfg.ProxyReadTimeout, &cfg.ProxyWriteTimeout, &cfg.ProxyStreamTimeout, &cfg.ProxyFlushInterval, &cfg.ProxyStreamCloseDelay,
-		&cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.RuntimeLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.SecurityEventsRetentionDays, &cfg.SecurityEventsRetentionMax, &cfg.JWTExpireMinutes, &cfg.Timezone,
+		&cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.RuntimeLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.JWTExpireMinutes, &cfg.Timezone,
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	if err != nil {
@@ -288,14 +286,6 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "运行日志大小必须大于 0"})
 		return
 	}
-	if req.SecurityEventsRetentionDays != nil && *req.SecurityEventsRetentionDays <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "安全事件保留天数必须大于 0"})
-		return
-	}
-	if req.SecurityEventsRetentionMax != nil && *req.SecurityEventsRetentionMax <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "安全事件保留条数必须大于 0"})
-		return
-	}
 	if req.JWTExpireMinutes != nil && (*req.JWTExpireMinutes <= 0 || *req.JWTExpireMinutes > 1440) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "jwt_expire_minutes must be between 1 and 1440"})
 		return
@@ -394,8 +384,6 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				access_log_json = COALESCE(?, access_log_json),
 				access_log_format = COALESCE(?, access_log_format),
 			audit_retention_months = COALESCE(?, audit_retention_months),
-			security_events_retention_days = COALESCE(?, security_events_retention_days),
-			security_events_retention_max = COALESCE(?, security_events_retention_max),
 			jwt_expire_minutes = COALESCE(?, jwt_expire_minutes),
 				timezone = COALESCE(?, timezone),
 				updated_at = datetime('now')
@@ -404,7 +392,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
 		req.UpstreamKeepaliveTimeout, req.ProxyDialTimeout, req.ProxyResponseHeaderTimeout, req.ProxyReadTimeout, req.ProxyWriteTimeout, req.ProxyStreamTimeout, req.ProxyFlushInterval, req.ProxyStreamCloseDelay,
-		req.ServerTokensHidden, req.CertJobLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AuditRetentionMonths, req.SecurityEventsRetentionDays, req.SecurityEventsRetentionMax, req.JWTExpireMinutes, req.Timezone)
+		req.ServerTokensHidden, req.CertJobLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败: " + err.Error()})
 		return

@@ -3,31 +3,30 @@ package models
 import "encoding/json"
 
 type SecurityPolicy struct {
-	ID                int             `json:"id"`
-	Name              string          `json:"name"`
-	Description       string          `json:"description"`
-	Mode              string          `json:"mode"`
-	AnomalyThreshold  int             `json:"anomaly_threshold"`
-	IPACLMode         string          `json:"ip_acl_mode"`
-	IPACLList         string          `json:"ip_acl_list"`
-	IPACLEnabled      bool            `json:"ip_acl_enabled"`
-	IPWhitelist       json.RawMessage `json:"ip_whitelist"`
-	IPBlacklist       json.RawMessage `json:"ip_blacklist"`
-	RateLimitEnabled  bool            `json:"rate_limit_enabled"`
-	RateLimitRPS      int             `json:"rate_limit_rps"`
-	RateLimitBurst    int             `json:"rate_limit_burst"`
-	RateLimitResponse string          `json:"rate_limit_response"`
-	CRSRuleGroups     json.RawMessage `json:"crs_rule_groups"`
-	CRSExcludedRules  json.RawMessage `json:"crs_excluded_rules"`
-	CustomRules       json.RawMessage `json:"custom_rules"`
-	BlockPageID     int                   `json:"block_page_id"`
-	BlockStatusCode int                   `json:"block_status_code"`
-	Enabled           bool            `json:"enabled"`
-	UpdatedBy         int             `json:"updated_by"`
-	CreatedAt         string          `json:"created_at"`
-	UpdatedAt         string          `json:"updated_at"`
-	GeoIPCountries    json.RawMessage `json:"geoip_countries"`
-	GeoIPMode         string          `json:"geoip_mode"`
+	ID               int             `json:"id"`
+	Name             string          `json:"name"`
+	Description      string          `json:"description"`
+	Mode             string          `json:"mode"`
+	AnomalyThreshold int             `json:"anomaly_threshold"`
+	IPACLMode        string          `json:"ip_acl_mode"`
+	IPACLList        string          `json:"ip_acl_list"`
+	IPACLEnabled     bool            `json:"ip_acl_enabled"`
+	IPWhitelist      json.RawMessage `json:"ip_whitelist"`
+	IPBlacklist      json.RawMessage `json:"ip_blacklist"`
+	RateLimitEnabled bool            `json:"rate_limit_enabled"`
+	RateLimitRPS     int             `json:"rate_limit_rps"`
+	RateLimitBurst   int             `json:"rate_limit_burst"`
+	CRSRuleGroups    json.RawMessage `json:"crs_rule_groups"`
+	CRSExcludedRules json.RawMessage `json:"crs_excluded_rules"`
+	CustomRules      json.RawMessage `json:"custom_rules"`
+	BlockPageID      int             `json:"block_page_id"`
+	BlockStatusCode  int             `json:"block_status_code"`
+	Enabled          bool            `json:"enabled"`
+	UpdatedBy        int             `json:"updated_by"`
+	CreatedAt        string          `json:"created_at"`
+	UpdatedAt        string          `json:"updated_at"`
+	GeoIPCountries   json.RawMessage `json:"geoip_countries"`
+	GeoIPMode        string          `json:"geoip_mode"`
 }
 
 type SecurityPolicySummary struct {
@@ -55,51 +54,49 @@ type SecurityPolicySummary struct {
 }
 
 type CreateSecurityPolicyRequest struct {
-	Name              string `json:"name" binding:"required"`
-	Description       string `json:"description"`
-	Mode              string `json:"mode"`
-	AnomalyThreshold  int    `json:"anomaly_threshold"`
-	IPACLMode         string `json:"ip_acl_mode"`
-	IPACLList         string `json:"ip_acl_list"`
-	IPACLEnabled      bool   `json:"ip_acl_enabled"`
-	IPWhitelist       string `json:"ip_whitelist"`
-	IPBlacklist       string `json:"ip_blacklist"`
-	RateLimitEnabled  bool   `json:"rate_limit_enabled"`
-	RateLimitRPS      int    `json:"rate_limit_rps"`
-	RateLimitBurst    int    `json:"rate_limit_burst"`
-	RateLimitResponse string `json:"rate_limit_response"`
-	CRSRuleGroups     string `json:"crs_rule_groups"`
-	CRSExcludedRules  string `json:"crs_excluded_rules"`
-	CustomRules       string `json:"custom_rules"`
-	BlockPageID       int    `json:"block_page_id"`
-	BlockStatusCode   int    `json:"block_status_code"`
-	Enabled           *bool  `json:"enabled"`
-	GeoIPCountries    string `json:"geoip_countries"`
-	GeoIPMode         string `json:"geoip_mode"`
+	Name             string `json:"name" binding:"required"`
+	Description      string `json:"description"`
+	Mode             string `json:"mode"`
+	AnomalyThreshold int    `json:"anomaly_threshold"`
+	IPACLMode        string `json:"ip_acl_mode"`
+	IPACLList        string `json:"ip_acl_list"`
+	IPACLEnabled     bool   `json:"ip_acl_enabled"`
+	IPWhitelist      string `json:"ip_whitelist"`
+	IPBlacklist      string `json:"ip_blacklist"`
+	RateLimitEnabled bool   `json:"rate_limit_enabled"`
+	RateLimitRPS     int    `json:"rate_limit_rps"`
+	RateLimitBurst   int    `json:"rate_limit_burst"`
+	CRSRuleGroups    string `json:"crs_rule_groups"`
+	CRSExcludedRules string `json:"crs_excluded_rules"`
+	CustomRules      string `json:"custom_rules"`
+	BlockPageID      int    `json:"block_page_id"`
+	BlockStatusCode  int    `json:"block_status_code"`
+	Enabled          *bool  `json:"enabled"`
+	GeoIPCountries   string `json:"geoip_countries"`
+	GeoIPMode        string `json:"geoip_mode"`
 }
 
 type UpdateSecurityPolicyRequest struct {
-	Name              *string `json:"name"`
-	Description       *string `json:"description"`
-	Mode              *string `json:"mode"`
-	AnomalyThreshold  *int    `json:"anomaly_threshold"`
-	IPACLMode         *string `json:"ip_acl_mode"`
-	IPACLList         *string `json:"ip_acl_list"`
-	IPACLEnabled      *bool   `json:"ip_acl_enabled"`
-	IPWhitelist       *string `json:"ip_whitelist"`
-	IPBlacklist       *string `json:"ip_blacklist"`
-	RateLimitEnabled  *bool   `json:"rate_limit_enabled"`
-	RateLimitRPS      *int    `json:"rate_limit_rps"`
-	RateLimitBurst    *int    `json:"rate_limit_burst"`
-	RateLimitResponse *string `json:"rate_limit_response"`
-	CRSRuleGroups     *string `json:"crs_rule_groups"`
-	CRSExcludedRules  *string `json:"crs_excluded_rules"`
-	CustomRules       *string `json:"custom_rules"`
-	BlockPageID       *int    `json:"block_page_id"`
-	BlockStatusCode   *int    `json:"block_status_code"`
-	Enabled           *bool   `json:"enabled"`
-	GeoIPCountries    *string `json:"geoip_countries"`
-	GeoIPMode         *string `json:"geoip_mode"`
+	Name             *string `json:"name"`
+	Description      *string `json:"description"`
+	Mode             *string `json:"mode"`
+	AnomalyThreshold *int    `json:"anomaly_threshold"`
+	IPACLMode        *string `json:"ip_acl_mode"`
+	IPACLList        *string `json:"ip_acl_list"`
+	IPACLEnabled     *bool   `json:"ip_acl_enabled"`
+	IPWhitelist      *string `json:"ip_whitelist"`
+	IPBlacklist      *string `json:"ip_blacklist"`
+	RateLimitEnabled *bool   `json:"rate_limit_enabled"`
+	RateLimitRPS     *int    `json:"rate_limit_rps"`
+	RateLimitBurst   *int    `json:"rate_limit_burst"`
+	CRSRuleGroups    *string `json:"crs_rule_groups"`
+	CRSExcludedRules *string `json:"crs_excluded_rules"`
+	CustomRules      *string `json:"custom_rules"`
+	BlockPageID      *int    `json:"block_page_id"`
+	BlockStatusCode  *int    `json:"block_status_code"`
+	Enabled          *bool   `json:"enabled"`
+	GeoIPCountries   *string `json:"geoip_countries"`
+	GeoIPMode        *string `json:"geoip_mode"`
 }
 
 type SecurityEvent struct {

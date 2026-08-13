@@ -244,12 +244,6 @@ func (m *CRSUpdateManager) run(trigger string) {
 		return
 	}
 
-	m.setStage(CRSStatusReloading, "重载 Caddy 配置")
-	if err := m.reloader(); err != nil {
-		m.fail(fmt.Errorf("重载 Caddy 配置失败: %w", err), true)
-		return
-	}
-
 	if _, err := db.DB.Exec(
 		"UPDATE security_crs_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now') WHERE id=1",
 		tag,

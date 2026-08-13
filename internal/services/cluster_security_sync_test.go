@@ -41,8 +41,8 @@ func TestClusterSnapshot_securityPoliciesIncludeFullColumnSet(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,content,status_code) VALUES (9,'snapshot page','<html>blocked</html>',451)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.Exec(`INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,enabled)
-		VALUES (5,'full policy','desc','blocking',7,'deny','["10.0.0.0/8"]',1,'["1.1.1.1"]','["2.2.2.2"]',1,100,200,'["900","901"]','["942100"]','[]',9,1)`); err != nil {
+	if _, err := database.Exec(`INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled)
+		VALUES (5,'full policy','desc','blocking',7,'deny','["10.0.0.0/8"]',1,'["1.1.1.1"]','["2.2.2.2"]',1,100,200,'["900","901"]','["942100"]','[]',9,403,1)`); err != nil {
 		t.Fatal(err)
 	}
 

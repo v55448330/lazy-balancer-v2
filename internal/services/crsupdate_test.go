@@ -151,7 +151,7 @@ func TestCRSUpdateRun_success(t *testing.T) {
 
 	// And Caddy was reloaded once, rule count rescanned, temp files cleaned
 	if reloads != 1 {
-		t.Fatalf("reloads=%d, want 1", reloads)
+		t.Fatalf("reloads=%d, want 1 (reload moved into install)", reloads)
 	}
 	if got := m.RuleCount(); got != 3 {
 		t.Fatalf("RuleCount()=%d, want 3", got)
