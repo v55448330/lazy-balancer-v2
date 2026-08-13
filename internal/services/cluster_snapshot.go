@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/dnsprovider/ownership"
 	"lazy-balancer-v2/internal/models"
 )
@@ -454,6 +453,16 @@ func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore)
 		return nil, fmt.Errorf("读取快照规则: %w", err)
 	}
 	defer rows.Close()
+
+	upstreamsByRule, err := s.snapshotAllUpstreams(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	pathRulesByRule, err := s.snapshotAllPathRules(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+
 	rules := make([]models.LbRule, 0)
 	for rows.Next() {
 		var rule models.LbRule
@@ -472,16 +481,14 @@ func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore)
 		if err := json.Unmarshal([]byte(ipACLListJSON), &rule.IPACLList); err != nil {
 			return nil, fmt.Errorf("解析快照规则 %s 的 IP 访问控制列表: %w", rule.CaddyID, err)
 		}
-		upstreams, upstreamErr := s.snapshotUpstreams(ctx, store, rule.CaddyID)
-		if upstreamErr != nil {
-			return nil, upstreamErr
+		rule.Upstreams = upstreamsByRule[rule.CaddyID]
+		if rule.Upstreams == nil {
+			rule.Upstreams = make([]models.Upstream, 0)
 		}
-		rule.Upstreams = upstreams
-		pathRules, pathRulesErr := s.snapshotPathRules(ctx, store, rule.CaddyID)
-		if pathRulesErr != nil {
-			return nil, pathRulesErr
+		rule.PathRules = pathRulesByRule[rule.CaddyID]
+		if rule.PathRules == nil {
+			rule.PathRules = make([]models.PathRule, 0)
 		}
-		rule.PathRules = pathRules
 		rules = append(rules, rule)
 	}
 	if err := rows.Err(); err != nil {
@@ -490,25 +497,44 @@ func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore)
 	return rules, nil
 }
 
-func (s *ClusterService) snapshotPathRules(ctx context.Context, store snapshotStore, ruleID string) ([]models.PathRule, error) {
-	return db.LoadPathRules(ctx, store, ruleID)
-}
-
-func (s *ClusterService) snapshotUpstreams(ctx context.Context, store snapshotStore, ruleID string) ([]models.Upstream, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), COALESCE(enabled,1), COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id=? ORDER BY id`, ruleID)
+func (s *ClusterService) snapshotAllUpstreams(ctx context.Context, store snapshotStore) (map[string][]models.Upstream, error) {
+	rows, err := store.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), COALESCE(enabled,1), COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams ORDER BY rule_id, id`)
 	if err != nil {
-		return nil, fmt.Errorf("读取规则上游 %s: %w", ruleID, err)
+		return nil, fmt.Errorf("读取快照上游: %w", err)
 	}
 	defer rows.Close()
-	upstreams := make([]models.Upstream, 0)
+	byRule := make(map[string][]models.Upstream)
 	for rows.Next() {
 		var upstream models.Upstream
 		if err := rows.Scan(&upstream.ID, &upstream.RuleID, &upstream.Host, &upstream.Port, &upstream.Weight, &upstream.DynamicDNS, &upstream.Enabled, &upstream.Protocol, &upstream.MaxConnections); err != nil {
-			return nil, fmt.Errorf("扫描规则上游 %s: %w", ruleID, err)
+			return nil, fmt.Errorf("扫描快照上游: %w", err)
 		}
-		upstreams = append(upstreams, upstream)
+		byRule[upstream.RuleID] = append(byRule[upstream.RuleID], upstream)
 	}
-	return upstreams, rows.Err()
+	return byRule, rows.Err()
+}
+
+func (s *ClusterService) snapshotAllPathRules(ctx context.Context, store snapshotStore) (map[string][]models.PathRule, error) {
+	rows, err := store.QueryContext(ctx, `SELECT id, rule_id, sort_order, match_type, path, upstreams_json FROM path_rules ORDER BY rule_id, sort_order, id`)
+	if err != nil {
+		return nil, fmt.Errorf("读取快照路径规则: %w", err)
+	}
+	defer rows.Close()
+	byRule := make(map[string][]models.PathRule)
+	for rows.Next() {
+		var pathRule models.PathRule
+		var upstreamsJSON sql.NullString
+		if err := rows.Scan(&pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &upstreamsJSON); err != nil {
+			return nil, fmt.Errorf("扫描快照路径规则: %w", err)
+		}
+		if upstreamsJSON.Valid {
+			if err := json.Unmarshal([]byte(upstreamsJSON.String), &pathRule.Upstreams); err != nil {
+				return nil, fmt.Errorf("解析快照路径规则 %d 的上游: %w", pathRule.ID, err)
+			}
+		}
+		byRule[pathRule.RuleID] = append(byRule[pathRule.RuleID], pathRule)
+	}
+	return byRule, rows.Err()
 }
 
 func (s *ClusterService) snapshotUsers(ctx context.Context, store snapshotStore) ([]models.ClusterUser, error) {

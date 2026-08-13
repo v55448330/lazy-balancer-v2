@@ -576,10 +576,8 @@ type SystemMetrics struct {
 
 // RealtimeTraffic contains real-time network traffic data
 type RealtimeTraffic struct {
-	BytesIn    int64 `json:"bytes_in"`
-	BytesOut   int64 `json:"bytes_out"`
-	PacketsIn  int64 `json:"packets_in"`
-	PacketsOut int64 `json:"packets_out"`
+	BytesIn  int64 `json:"bytes_in"`
+	BytesOut int64 `json:"bytes_out"`
 }
 
 // ConnectionStats contains TCP connection statistics

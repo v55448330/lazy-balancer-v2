@@ -281,21 +281,6 @@ func securityEventsFindNextDocument(f *os.File, from int64) (int64, bool, error)
 	return 0, false, nil
 }
 
-func securityEventsInsertEvent(rec *securityEventRecord, rule securityEventsRuleRef, policy securityEventsPolicyRef) error {
-	if db.DB == nil {
-		return errors.New("security events: database not initialized")
-	}
-	if _, err := db.MetricsDB.Exec(`INSERT INTO security_events
-		(event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, anomaly_score, rule_name, policy_name)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.EventTime, rule.caddyID, policy.id, rec.ClientIP, rec.Method, rec.URI,
-		rec.EventType, rec.RuleTriggered, rec.RuleMsg, rec.Action, rec.AnomalyScore,
-		rule.name, policy.name); err != nil {
-		return fmt.Errorf("security events: insert event: %w", err)
-	}
-	return nil
-}
-
 // securityEventsTailer streams new audit transactions from the log file,
 // persisting its byte offset between passes so restarts resume in place.
 type securityEventsTailer struct {
@@ -361,12 +346,27 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return offset, fmt.Errorf("security events: seek audit log: %w", err)
 	}
+	tx, err := db.MetricsDB.Begin()
+	if err != nil {
+		return offset, fmt.Errorf("security events: begin insert transaction: %w", err)
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`INSERT INTO security_events
+		(event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, anomaly_score, rule_name, policy_name)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return offset, fmt.Errorf("security events: prepare insert: %w", err)
+	}
+	defer stmt.Close()
 	decoderStart := offset
 	decoder := json.NewDecoder(f)
 	for {
 		var raw json.RawMessage
 		err := decoder.Decode(&raw)
 		if errors.Is(err, io.EOF) {
+			if cerr := tx.Commit(); cerr != nil {
+				return offset, fmt.Errorf("security events: commit inserts: %w", cerr)
+			}
 			return offset, nil
 		}
 		if err != nil {
@@ -377,6 +377,9 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 				return offset, rerr
 			}
 			if !found {
+				if cerr := tx.Commit(); cerr != nil {
+					return offset, fmt.Errorf("security events: commit inserts: %w", cerr)
+				}
 				return offset, nil
 			}
 			Logf("error", "security events ingestion: skipping unreadable audit data before offset %d: %v", next, err)
@@ -394,8 +397,10 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 			Logf("error", "security events ingestion: skipping malformed transaction id=%s: %v", securityEventsTransactionID(raw), perr)
 		} else {
 			rule, policy := securityEventsMapHost(rec.Host, rules, bindings)
-			if ierr := securityEventsInsertEvent(rec, rule, policy); ierr != nil {
-				return offset, ierr
+			if _, ierr := stmt.Exec(rec.EventTime, rule.caddyID, policy.id, rec.ClientIP, rec.Method, rec.URI,
+				rec.EventType, rec.RuleTriggered, rec.RuleMsg, rec.Action, rec.AnomalyScore,
+				rule.name, policy.name); ierr != nil {
+				return offset, fmt.Errorf("security events: insert event: %w", ierr)
 			}
 		}
 		offset = docEnd

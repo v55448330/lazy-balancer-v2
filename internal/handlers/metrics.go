@@ -177,16 +177,26 @@ func metricsIntervalModifier(interval string) string {
 	}
 	unit := interval[len(interval)-1:]
 	n := strings.TrimSuffix(interval, unit)
-	if _, err := strconv.Atoi(n); err != nil {
+	value, err := strconv.Atoi(n)
+	if err != nil {
 		return "-1 hours"
 	}
 	switch unit {
 	case "h":
-		return "-" + n + " hours"
+		if value > 720 {
+			value = 720
+		}
+		return "-" + strconv.Itoa(value) + " hours"
 	case "d":
-		return "-" + n + " days"
+		if value > 30 {
+			value = 30
+		}
+		return "-" + strconv.Itoa(value) + " days"
 	case "m":
-		return "-" + n + " months"
+		if value > 43200 {
+			value = 43200
+		}
+		return "-" + strconv.Itoa(value) + " minutes"
 	default:
 		return "-1 hours"
 	}
