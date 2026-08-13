@@ -12,40 +12,61 @@
 
     <el-row :gutter="20" class="mb-5">
       <el-col :span="24">
-        <el-card shadow="always" class="stat-card-wrapper">
+        <el-card shadow="always">
           <template #header>
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon"><TrendCharts /></el-icon>
-                <span>今日概况</span>
+                <span>防护概览</span>
               </div>
             </div>
           </template>
-          <el-row :gutter="20">
-            <el-col :span="5" class="stat-card-col">
-              <div class="stat-label">今日拦截</div>
-              <div class="stat-value" style="color: #f56c6c">{{ overview.today_blocked }}</div>
-            </el-col>
-            <el-col :span="5" class="stat-card-col">
-              <div class="stat-label">今日检测</div>
-              <div class="stat-value" style="color: #e6a23c">{{ overview.today_detected }}</div>
-            </el-col>
-            <el-col :span="5" class="stat-card-col">
-              <div class="stat-label">活跃策略</div>
-              <div class="stat-value" style="color: #409eff">{{ overview.active_policies }}</div>
-            </el-col>
-            <el-col :span="5" class="stat-card-col">
-              <div class="stat-label">CRS 版本</div>
-              <div class="stat-value" style="color: #67c23a">{{ overview.crs_version }}</div>
-              <div v-if="overview.update_status" style="margin-top: 6px">
-                <el-tag :type="statusTagType(overview.update_status)" size="small" effect="plain">{{ statusLabel(overview.update_status) }}</el-tag>
+          <el-row :gutter="16">
+            <el-col :span="5">
+              <div class="stat-box stat-box--danger">
+                <div class="stat-box__icon"><el-icon><CircleClose /></el-icon></div>
+                <div class="stat-box__body">
+                  <div class="stat-box__value">{{ overview.today_blocked }}</div>
+                  <div class="stat-box__label">今日拦截</div>
+                </div>
               </div>
             </el-col>
-            <el-col :span="4" class="stat-card-col">
-              <div class="stat-label">IP 库版本</div>
-              <div class="stat-value" style="color: #67c23a">{{ ip2regionVersion }}</div>
-              <div v-if="ip2regionStatus" style="margin-top: 6px">
-                <el-tag :type="statusTagType(ip2regionStatus)" size="small" effect="plain">{{ statusLabel(ip2regionStatus) }}</el-tag>
+            <el-col :span="5">
+              <div class="stat-box stat-box--warning">
+                <div class="stat-box__icon"><el-icon><Warning /></el-icon></div>
+                <div class="stat-box__body">
+                  <div class="stat-box__value">{{ overview.today_detected }}</div>
+                  <div class="stat-box__label">今日检测</div>
+                </div>
+              </div>
+            </el-col>
+            <el-col :span="5">
+              <div class="stat-box stat-box--primary">
+                <div class="stat-box__icon"><el-icon><Lock /></el-icon></div>
+                <div class="stat-box__body">
+                  <div class="stat-box__value">{{ overview.active_policies }}</div>
+                  <div class="stat-box__label">活跃策略</div>
+                </div>
+              </div>
+            </el-col>
+            <el-col :span="5">
+              <div class="stat-box stat-box--success">
+                <div class="stat-box__icon"><el-icon><Files /></el-icon></div>
+                <div class="stat-box__body">
+                  <div class="stat-box__value">{{ overview.crs_version }}</div>
+                  <div class="stat-box__label">CRS 规则库</div>
+                  <el-tag v-if="overview.update_status" :type="statusTagType(overview.update_status)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(overview.update_status) }}</el-tag>
+                </div>
+              </div>
+            </el-col>
+            <el-col :span="4">
+              <div class="stat-box stat-box--success">
+                <div class="stat-box__icon"><el-icon><Location /></el-icon></div>
+                <div class="stat-box__body">
+                  <div class="stat-box__value">{{ ip2regionVersion }}</div>
+                  <div class="stat-box__label">IP 地理库</div>
+                  <el-tag v-if="ip2regionStatus" :type="statusTagType(ip2regionStatus)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(ip2regionStatus) }}</el-tag>
+                </div>
               </div>
             </el-col>
           </el-row>
@@ -166,7 +187,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer } from '@element-plus/icons-vue'
+import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, CircleClose, Lock, Files } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { use } from 'echarts/core'
@@ -299,11 +320,43 @@ onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fet
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 .title-icon { font-size: 16px; color: #3b82f6; }
-.stat-card-wrapper { padding: 8px 0; }
-.stat-card-col { text-align: center; padding: 12px 0; }
-.stat-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
-.stat-value { font-size: 28px; font-weight: 600; }
+
+.stat-box {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid #f0f0f0;
+  transition: border-color 0.2s;
+}
+.stat-box:hover { border-color: #d0d0d0; }
+.stat-box__icon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+.stat-box__body { flex: 1; min-width: 0; }
+.stat-box__value { font-size: 22px; font-weight: 700; line-height: 1.3; }
+.stat-box__label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+.stat-box--danger .stat-box__icon { background: #fef0f0; color: #f56c6c; }
+.stat-box--danger .stat-box__value { color: #f56c6c; }
+.stat-box--warning .stat-box__icon { background: #fdf6ec; color: #e6a23c; }
+.stat-box--warning .stat-box__value { color: #e6a23c; }
+.stat-box--primary .stat-box__icon { background: #ecf5ff; color: #409eff; }
+.stat-box--primary .stat-box__value { color: #409eff; }
+.stat-box--success .stat-box__icon { background: #f0f9eb; color: #67c23a; }
+.stat-box--success .stat-box__value { color: #67c23a; }
+
 .chart-container { height: 260px; }
 .events-row .el-card { height: 100%; }
 .rate-limit-total { text-align: center; padding: 4px 0 12px; }
+.rate-limit-total .stat-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
+.rate-limit-total .stat-value { font-size: 28px; font-weight: 600; }
 </style>
