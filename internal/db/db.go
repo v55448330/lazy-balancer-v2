@@ -750,6 +750,9 @@ func runMigrations() error {
 	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_path_rules_rule_order ON path_rules(rule_id, sort_order, id)"); err != nil {
 		return fmt.Errorf("failed to index path_rules: %w", err)
 	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_security_bindings_policy ON security_policy_bindings(policy_id)"); err != nil {
+		return fmt.Errorf("failed to index security_policy_bindings: %w", err)
+	}
 
 	// Drop legacy cert_job_logs table — logs now stored in files under /app/logs/
 	if _, err := DB.Exec("DROP TABLE IF EXISTS cert_job_logs"); err != nil {

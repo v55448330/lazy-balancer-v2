@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/netip"
@@ -218,6 +219,18 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	defer rows.Close()
 
 	var policies []models.SecurityPolicySummary
+	bindingCounts := map[int]int{}
+	bindingRows, err := db.DB.Query("SELECT policy_id, COUNT(*) FROM security_policy_bindings GROUP BY policy_id")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	for bindingRows.Next() {
+		var pid, cnt int
+		bindingRows.Scan(&pid, &cnt)
+		bindingCounts[pid] = cnt
+	}
+	bindingRows.Close()
 	for rows.Next() {
 		var p models.SecurityPolicy
 		if err := scanSecurityPolicy(rows, &p); err != nil {
@@ -230,8 +243,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		json.Unmarshal(p.CRSExcludedRules, &crsExcluded)
 		var customRules []json.RawMessage
 		json.Unmarshal(p.CustomRules, &customRules)
-		var ruleCount int
-		db.DB.QueryRow("SELECT COUNT(*) FROM security_policy_bindings WHERE policy_id=?", p.ID).Scan(&ruleCount)
+		ruleCount := bindingCounts[p.ID]
 		policies = append(policies, models.SecurityPolicySummary{
 			ID: p.ID, Name: p.Name, Mode: p.Mode, Enabled: p.Enabled, RuleCount: ruleCount,
 			HasWAF: p.Mode != "off", HasIPControl: p.IPACLEnabled && len(ipACLEntries) > 0, HasRateLimit: p.RateLimitEnabled,
@@ -335,7 +347,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 			return
 		}
 	}
-	if err := validateSecurityPolicyEnums(req.IPACLMode, req.GeoIPMode); err != nil {
+	if err := validateSecurityPolicyEnums(req.Mode, req.IPACLMode, req.GeoIPMode); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -380,14 +392,17 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			}
 		}
 	}
-	var ipACLMode, geoIPMode string
+	var mode, ipACLMode, geoIPMode string
+	if req.Mode != nil {
+		mode = *req.Mode
+	}
 	if req.IPACLMode != nil {
 		ipACLMode = *req.IPACLMode
 	}
 	if req.GeoIPMode != nil {
 		geoIPMode = *req.GeoIPMode
 	}
-	if err := validateSecurityPolicyEnums(ipACLMode, geoIPMode); err != nil {
+	if err := validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -686,16 +701,17 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	}
 	ipRows.Close()
 	familyCountsByIP := map[string]map[string]int{}
-	famRows, _ := db.MetricsDB.Query(`SELECT client_ip, COALESCE(rule_triggered,''), COALESCE(rule_msg,'') FROM security_events WHERE event_time >= date('now', '-6 days')`)
+	famRows, _ := db.MetricsDB.Query(`SELECT client_ip, COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= date('now', '-6 days') GROUP BY client_ip, rule_triggered, rule_msg LIMIT 5000`)
 	for famRows.Next() {
 		var ip, ruleTriggered, ruleMsg string
-		famRows.Scan(&ip, &ruleTriggered, &ruleMsg)
+		var cnt int
+		famRows.Scan(&ip, &ruleTriggered, &ruleMsg, &cnt)
 		counts := familyCountsByIP[ip]
 		if counts == nil {
 			counts = map[string]int{}
 			familyCountsByIP[ip] = counts
 		}
-		counts[categorizeAttack(ruleTriggered, ruleMsg)]++
+		counts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
 	}
 	famRows.Close()
 	overview.TopIPs = make([]models.SecurityTopIP, 0, len(topRows))
@@ -1080,7 +1096,12 @@ func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 	}
 }
 
-func validateSecurityPolicyEnums(ipACLMode, geoIPMode string) error {
+func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string) error {
+	switch mode {
+	case "", "off", "detection", "blocking":
+	default:
+		return fmt.Errorf("mode 必须为 off、detection 或 blocking，当前值 %s", mode)
+	}
 	switch ipACLMode {
 	case "", "allow", "deny", "bypass":
 	default:
@@ -1223,9 +1244,15 @@ func (h *Handlers) GetCRSRuleContent(c *gin.Context) {
 		return
 	}
 	filepath := filepath.Join("/app/waf/crs/rules", filename)
-	content, err := os.ReadFile(filepath)
+	f, err := os.Open(filepath)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则文件不存在"})
+		return
+	}
+	defer f.Close()
+	content, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"filename": filename, "content": string(content), "size": len(content)}})

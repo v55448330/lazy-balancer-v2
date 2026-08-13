@@ -75,6 +75,8 @@ func InitializeMetricsDB(dataDir string) (err error) {
 
 	CREATE INDEX IF NOT EXISTS idx_security_events_time ON security_events(event_time DESC);
 	CREATE INDEX IF NOT EXISTS idx_security_events_rule ON security_events(rule_caddy_id);
+	CREATE INDEX IF NOT EXISTS idx_security_events_action ON security_events(action);
+	CREATE INDEX IF NOT EXISTS idx_security_events_ip ON security_events(client_ip);
 	`
 
 	if _, err := db.Exec(schema); err != nil {
