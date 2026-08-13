@@ -701,7 +701,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	}
 	ipRows.Close()
 	familyCountsByIP := map[string]map[string]int{}
-	famRows, _ := db.MetricsDB.Query(`SELECT client_ip, COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= date('now', '-6 days') GROUP BY client_ip, rule_triggered, rule_msg LIMIT 5000`)
+	famRows, _ := db.MetricsDB.Query(`SELECT client_ip, COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= date('now', '-6 days') GROUP BY client_ip, rule_triggered, rule_msg ORDER BY cnt DESC LIMIT 5000`)
 	for famRows.Next() {
 		var ip, ruleTriggered, ruleMsg string
 		var cnt int

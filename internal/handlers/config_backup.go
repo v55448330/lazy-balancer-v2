@@ -214,12 +214,20 @@ func validateV2Backup(backup configBackup) error {
 		return errors.New("备份缺少全局配置")
 	}
 	if backup.Meta.Checksum != "" {
-		tablesJSON, err := json.Marshal(backup.Tables)
+		checksumPayload, err := json.Marshal(struct {
+			Tables map[string][]map[string]any `json:"tables"`
+			Config map[string]any              `json:"config"`
+		}{backup.Tables, backup.Config})
 		if err != nil {
 			return fmt.Errorf("计算备份校验和失败: %w", err)
 		}
-		sum := sha256.Sum256(tablesJSON)
+		sum := sha256.Sum256(checksumPayload)
 		if hex.EncodeToString(sum[:]) != backup.Meta.Checksum {
+			tablesJSON, _ := json.Marshal(backup.Tables)
+			oldSum := sha256.Sum256(tablesJSON)
+			if hex.EncodeToString(oldSum[:]) == backup.Meta.Checksum {
+				return nil
+			}
 			return errors.New("备份校验和不匹配，文件可能已被篡改或损坏")
 		}
 	}
@@ -442,13 +450,16 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		}
 		backup.Tables[table] = rows
 	}
-	tablesJSON, err := json.Marshal(backup.Tables)
+	checksumPayload, err := json.Marshal(struct {
+		Tables map[string][]map[string]any `json:"tables"`
+		Config map[string]any              `json:"config"`
+	}{backup.Tables, backup.Config})
 	if err != nil {
 		err = errors.Join(err, tx.Rollback())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
 		return
 	}
-	sum := sha256.Sum256(tablesJSON)
+	sum := sha256.Sum256(checksumPayload)
 	backup.Meta.Checksum = hex.EncodeToString(sum[:])
 	if err := tx.Commit(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
