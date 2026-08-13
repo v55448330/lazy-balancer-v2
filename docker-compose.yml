@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        VERSION: 2.1.0
+        VERSION: 2.1.1
     container_name: lazy-balancer
     network_mode: host
     # Port mapping is not used with host network; Caddy binds directly to host ports.
@@ -24,7 +24,7 @@ services:
     build:
       context: .
       args:
-        VERSION: 2.1.0
+        VERSION: 2.1.1
     container_name: lazy-balancer-slave
     ports:
       - "8001:8000"
