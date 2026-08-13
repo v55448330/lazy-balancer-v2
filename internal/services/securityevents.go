@@ -346,39 +346,41 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return offset, fmt.Errorf("security events: seek audit log: %w", err)
 	}
+	committedOffset := offset
 	tx, err := db.MetricsDB.Begin()
 	if err != nil {
 		return offset, fmt.Errorf("security events: begin insert transaction: %w", err)
 	}
-	defer tx.Rollback()
 	stmt, err := tx.Prepare(`INSERT INTO security_events
 		(event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, anomaly_score, rule_name, policy_name)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
-		return offset, fmt.Errorf("security events: prepare insert: %w", err)
+		tx.Rollback()
+		return committedOffset, fmt.Errorf("security events: prepare insert: %w", err)
 	}
-	defer stmt.Close()
 	decoderStart := offset
 	decoder := json.NewDecoder(f)
+	const batchSize = 500
+	count := 0
 	for {
 		var raw json.RawMessage
 		err := decoder.Decode(&raw)
 		if errors.Is(err, io.EOF) {
+			stmt.Close()
 			if cerr := tx.Commit(); cerr != nil {
-				return offset, fmt.Errorf("security events: commit inserts: %w", cerr)
+				return committedOffset, fmt.Errorf("security events: commit inserts: %w", cerr)
 			}
 			return offset, nil
 		}
 		if err != nil {
-			// Corrupt bytes (e.g. a crash-truncated tail): resync to the next
-			// top-level document instead of stalling the tailer forever.
 			next, found, rerr := securityEventsFindNextDocument(f, decoderStart+decoder.InputOffset())
 			if rerr != nil {
-				return offset, rerr
+				return committedOffset, rerr
 			}
 			if !found {
+				stmt.Close()
 				if cerr := tx.Commit(); cerr != nil {
-					return offset, fmt.Errorf("security events: commit inserts: %w", cerr)
+					return committedOffset, fmt.Errorf("security events: commit inserts: %w", cerr)
 				}
 				return offset, nil
 			}
@@ -386,7 +388,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 			offset = next
 			decoderStart = next
 			if _, err := f.Seek(offset, io.SeekStart); err != nil {
-				return offset, fmt.Errorf("security events: seek after resync: %w", err)
+				return committedOffset, fmt.Errorf("security events: seek after resync: %w", err)
 			}
 			decoder = json.NewDecoder(f)
 			continue
@@ -400,7 +402,27 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 			if _, ierr := stmt.Exec(rec.EventTime, rule.caddyID, policy.id, rec.ClientIP, rec.Method, rec.URI,
 				rec.EventType, rec.RuleTriggered, rec.RuleMsg, rec.Action, rec.AnomalyScore,
 				rule.name, policy.name); ierr != nil {
-				return offset, fmt.Errorf("security events: insert event: %w", ierr)
+				return committedOffset, fmt.Errorf("security events: insert event: %w", ierr)
+			}
+			count++
+			if count >= batchSize {
+				stmt.Close()
+				if cerr := tx.Commit(); cerr != nil {
+					return committedOffset, fmt.Errorf("security events: commit batch: %w", cerr)
+				}
+				committedOffset = docEnd
+				tx, err = db.MetricsDB.Begin()
+				if err != nil {
+					return committedOffset, fmt.Errorf("security events: begin batch transaction: %w", err)
+				}
+				stmt, err = tx.Prepare(`INSERT INTO security_events
+					(event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, anomaly_score, rule_name, policy_name)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+				if err != nil {
+					tx.Rollback()
+					return committedOffset, fmt.Errorf("security events: prepare batch insert: %w", err)
+				}
+				count = 0
 			}
 		}
 		offset = docEnd
