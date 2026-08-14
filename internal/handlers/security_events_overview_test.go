@@ -240,7 +240,7 @@ func TestCategorizeAttack_familyMapping(t *testing.T) {
 		{"protocol attack", "920350", "Protocol Attack", "协议攻击"},
 		{"protocol anomaly", "921110", "HTTP Request Smuggling", "协议异常"},
 		{"scanner", "913100", "Scanner Detected", "扫描探测"},
-		{"blocking evaluation", "949110", "Inbound Anomaly Score Exceeded", "评分拦截（累计达到阈值）"},
+		{"blocking evaluation", "949110", "Inbound Anomaly Score Exceeded", "WAF 评分拦截"},
 		{"custom prefix", "custom_12", "自定义拦截", "自定义规则"},
 		{"ip blacklist via msg", "", "命中 IP 黑名单", "IP 访问控制"},
 		{"ip whitelist via msg", "", "命中 IP 白名单", "IP 访问控制"},

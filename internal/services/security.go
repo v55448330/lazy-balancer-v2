@@ -105,6 +105,11 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 		return ""
 	}
 	sb.WriteString("SecRequestBodyAccess On\n")
+	if p.WAFCheckResponse {
+		sb.WriteString("SecResponseBodyAccess On\n")
+	} else {
+		sb.WriteString("SecResponseBodyAccess Off\n")
+	}
 	sb.WriteString("SecAuditEngine RelevantOnly\nSecAuditLog /app/waf/audit/audit.log\nSecAuditLogFormat JSON\nSecAuditLogParts ABIJDEFHKZ\n")
 
 	// SecRule id map: 2 = ACL allow/deny, 3 = bypass-mode (legacy), 4 = legacy
@@ -154,7 +159,10 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 			sb.WriteString("Include /app/waf/crs/rules/*.conf\n")
 		} else {
 			for _, g := range groups {
-				sb.WriteString(fmt.Sprintf("Include /app/waf/crs/rules/REQUEST-9%[1]s-*.conf\nInclude /app/waf/crs/rules/RESPONSE-9%[1]s-*.conf\n", g))
+				sb.WriteString(fmt.Sprintf("Include /app/waf/crs/rules/REQUEST-9%[1]s-*.conf\n", g))
+				if p.WAFCheckResponse {
+					sb.WriteString(fmt.Sprintf("Include /app/waf/crs/rules/RESPONSE-9%[1]s-*.conf\n", g))
+				}
 			}
 		}
 

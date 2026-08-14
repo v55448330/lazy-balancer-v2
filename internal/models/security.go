@@ -27,6 +27,7 @@ type SecurityPolicy struct {
 	UpdatedAt        string          `json:"updated_at"`
 	GeoIPCountries   json.RawMessage `json:"geoip_countries"`
 	GeoIPMode        string          `json:"geoip_mode"`
+	WAFCheckResponse bool            `json:"waf_check_response"`
 }
 
 type SecurityPolicySummary struct {
@@ -51,6 +52,7 @@ type SecurityPolicySummary struct {
 	UpdatedAt        string `json:"updated_at"`
 	GeoIPCountries   string `json:"geoip_countries"`
 	GeoIPMode        string `json:"geoip_mode"`
+	WAFCheckResponse bool   `json:"waf_check_response"`
 }
 
 type CreateSecurityPolicyRequest struct {
@@ -74,6 +76,7 @@ type CreateSecurityPolicyRequest struct {
 	Enabled          *bool  `json:"enabled"`
 	GeoIPCountries   string `json:"geoip_countries"`
 	GeoIPMode        string `json:"geoip_mode"`
+	WAFCheckResponse bool   `json:"waf_check_response"`
 }
 
 type UpdateSecurityPolicyRequest struct {
@@ -97,6 +100,7 @@ type UpdateSecurityPolicyRequest struct {
 	Enabled          *bool   `json:"enabled"`
 	GeoIPCountries   *string `json:"geoip_countries"`
 	GeoIPMode        *string `json:"geoip_mode"`
+	WAFCheckResponse *bool   `json:"waf_check_response"`
 }
 
 type SecurityEvent struct {

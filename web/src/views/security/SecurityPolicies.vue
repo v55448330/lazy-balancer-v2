@@ -133,6 +133,10 @@
               </el-select>
               <div class="form-tip-line">选择后仅加载所选规则组，留空加载全部 CRS 规则</div>
             </el-form-item>
+            <el-form-item label="检查响应体">
+              <el-switch v-model="form.waf_check_response" :disabled="form.mode === 'off'" />
+              <el-text class="form-tip-inline">开启后 WAF 读取并检查上游响应内容（响应泄露类规则需要）；关闭可显著降低内存与 CPU 开销，大多数部署只需检查请求</el-text>
+            </el-form-item>
             <el-form-item label="排除规则">
               <el-select v-model="crsExcludedRules" :disabled="form.mode === 'off'" multiple filterable placeholder="搜索并选择要排除的规则" style="width: 100%">
                 <el-option-group label="OWASP CRS 规则">
@@ -371,7 +375,7 @@ import type { UserListItem } from '@/types'
 
 interface APIResponse<T> { code: number; message: string; data: T }
 interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled?: boolean; updated_by: number; updated_at: string }
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_by: number; updated_at: string; geoip_enabled?: boolean; geoip_mode?: string; geoip_countries?: string }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_by: number; updated_at: string; geoip_enabled?: boolean; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number }
 interface SecurityBinding { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean }
 interface CRSRuleOption { filename: string; category: string }
@@ -442,7 +446,7 @@ const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 const PICKER_PAGE_SIZE = 20
 
-const defaultForm = () => ({ name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny' })
+const defaultForm = () => ({ name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny', waf_check_response: false })
 const form = ref(defaultForm())
 const selectedCustomRules = ref<number[]>([])
 const allCustomRules = ref<Array<{ id: number; name: string }>>([])
@@ -707,6 +711,7 @@ async function openDialog(row?: PolicySummary) {
         block_status_code: d.block_status_code || 403,
         geoip_enabled: false,
         geoip_mode: d.geoip_mode || 'deny',
+        waf_check_response: d.waf_check_response ?? false,
     }
     ipACLList.value = parseJsonList(d.ip_acl_list)
     ipWhitelist.value = parseJsonList(d.ip_whitelist)

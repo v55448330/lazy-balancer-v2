@@ -83,7 +83,7 @@ const triggeredLabel = (row: SecurityEvent): string => {
   const t = row.rule_triggered
   if (!t) return '—'
   if (t === '2' || t === '3' || t === '4') return 'IP 访问控制'
-  if (t === '949110') return '评分拦截（累计达到阈值）'
+  if (t === '949110') return 'WAF 评分拦截'
   if (/^1\d{4}$/.test(t)) return '自定义规则'
   return t
 }

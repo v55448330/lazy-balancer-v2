@@ -481,7 +481,8 @@ func createTables() error {
 		created_at DATETIME DEFAULT (datetime('now')),
 		updated_at DATETIME DEFAULT (datetime('now')),
 		geoip_countries TEXT DEFAULT '[]',
-		geoip_mode TEXT DEFAULT 'deny'
+		geoip_mode TEXT DEFAULT 'deny',
+		waf_check_response INTEGER DEFAULT 0
 	);
 	CREATE TABLE IF NOT EXISTS security_policy_bindings (
 		rule_caddy_id TEXT NOT NULL,
@@ -717,6 +718,7 @@ func runMigrations() error {
 		"security_policies.updated_by":                "INTEGER DEFAULT 0",
 		"security_policies.geoip_countries":           "TEXT NOT NULL DEFAULT '[]'",
 		"security_policies.geoip_mode":                "TEXT NOT NULL DEFAULT 'deny'",
+		"security_policies.waf_check_response":        "INTEGER NOT NULL DEFAULT 0",
 		"security_policies.block_status_code":         "INTEGER NOT NULL DEFAULT 0",
 	}
 	for col, dtype := range newColumns {

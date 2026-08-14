@@ -2437,22 +2437,25 @@ func buildRateLimitHandler(ruleCaddyID string) map[string]interface{} {
 	}
 	rateLimits := map[string]interface{}{
 		ruleCaddyID: map[string]interface{}{
-			"key":        "{http.request.remote.host}",
-			"window":     "1s",
-			"max_events": policy.RateLimitRPS,
+			"key":            "{http.request.remote.host}",
+			"window":         "1s",
+			"max_events":     policy.RateLimitRPS,
+			"sweep_interval": "10m",
 		},
 	}
 	if policy.RateLimitBurst > 0 {
 		rateLimits = map[string]interface{}{
 			ruleCaddyID + "-sec": map[string]interface{}{
-				"key":        "{http.request.remote.host}",
-				"window":     "1s",
-				"max_events": policy.RateLimitRPS + policy.RateLimitBurst,
+				"key":            "{http.request.remote.host}",
+				"window":         "1s",
+				"max_events":     policy.RateLimitRPS + policy.RateLimitBurst,
+				"sweep_interval": "10m",
 			},
 			ruleCaddyID + "-min": map[string]interface{}{
-				"key":        "{http.request.remote.host}",
-				"window":     "60s",
-				"max_events": policy.RateLimitRPS * 60,
+				"key":            "{http.request.remote.host}",
+				"window":         "60s",
+				"max_events":     policy.RateLimitRPS * 60,
+				"sweep_interval": "10m",
 			},
 		}
 	}
