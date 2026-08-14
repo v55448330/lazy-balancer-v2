@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"os"
@@ -73,9 +74,11 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 // renderDefaultBlockPage is the single renderer shared by GetDefaultBlockPage
 // and SeedDefaultBlockPage so both produce the identical branded page.
 func renderDefaultBlockPage(cfg brandingConfig) string {
-	footer := fmt.Sprintf(`Powered by <span class="name">%s</span>`, cfg.AppName)
-	if cfg.FooterText != "" {
-		footer += "<br>" + cfg.FooterText
+	appName := html.EscapeString(cfg.AppName)
+	footerText := html.EscapeString(cfg.FooterText)
+	footer := fmt.Sprintf(`Powered by <span class="name">%s</span>`, appName)
+	if footerText != "" {
+		footer += "<br>" + footerText
 	}
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="zh-CN">
@@ -100,7 +103,7 @@ p { font-size: 14px; color: #6b7280; line-height: 1.6; margin-bottom: 8px; }
 <div class="footer">%s</div>
 </div>
 </body>
-</html>`, cfg.AppName, footer)
+</html>`, appName, footer)
 }
 
 // SeedDefaultBlockPage re-renders the default block page row (is_default=1) from
