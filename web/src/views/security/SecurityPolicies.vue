@@ -363,6 +363,7 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { Plus, Lock, InfoFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
+import { showSaveResult } from '@/utils/saveResult'
 import { isValidCidr } from '@/utils/ruleValidation'
 import { formatDate } from '@/utils/date'
 import { useAuthStore } from '@/stores/auth'
@@ -751,11 +752,12 @@ const handleSave = async () => {
   saving.value = true
   try {
     const payload = { ...form.value, ip_acl_list: JSON.stringify(ipACLList.value), ip_whitelist: JSON.stringify(ipWhitelistEnabled.value ? ipWhitelist.value : []), crs_rule_groups: JSON.stringify(crsRuleGroups.value), crs_excluded_rules: JSON.stringify(crsExcludedRules.value), custom_rules: JSON.stringify(selectedCustomRules.value), geoip_countries: JSON.stringify(form.value.geoip_enabled ? geoipCountries.value : []) }
+    let saveRes: APIResponse<{ id: number }> | undefined
     if (editingId.value) {
-      await request.put(`/security/policies/${editingId.value}`, payload)
+      saveRes = await request.put(`/security/policies/${editingId.value}`, payload)
     } else {
-      const res = await request.post<APIResponse<{ id: number }>>('/security/policies', payload)
-      editingId.value = res.data.id
+      saveRes = await request.post<APIResponse<{ id: number }>>('/security/policies', payload)
+      editingId.value = saveRes.data.id
     }
     const added = boundRules.value.filter((id) => !originalBoundRules.value.includes(id))
     const removed = originalBoundRules.value.filter((id) => !boundRules.value.includes(id))
@@ -768,7 +770,7 @@ const handleSave = async () => {
       ElMessage.error('关联规则同步失败，请重试')
       return
     }
-    ElMessage.success('保存成功'); dialogVisible.value = false; fetchData()
+    showSaveResult(saveRes, '保存成功'); dialogVisible.value = false; fetchData()
   } catch { ElMessage.error('保存失败') } finally { saving.value = false }
 }
 

@@ -128,25 +128,34 @@ func (h *Handlers) recordCaddyApplyResult(err error) {
 	}
 }
 
-func (h *Handlers) applyCaddyConfig() error {
-	err := h.caddyService.GenerateAndApplyConfig()
-	h.recordCaddyApplyResult(err)
-	return err
-}
-
 // caddyApplyNote returns a response-message suffix describing an apply
-// failure; empty string means the config applied cleanly.
+// failure; empty string means the config applied cleanly. Callers inside an
+// import session (which already holds caddyOpMu) must use
+// caddyApplyNoteLocked instead — applyCaddyConfigE is not reentrant.
 func (h *Handlers) caddyApplyNote() string {
-	if err := h.applyCaddyConfig(); err != nil {
+	if err := h.applyCaddyConfigE(); err != nil {
 		return "；但 Caddy 配置应用失败：" + err.Error()
 	}
 	return ""
 }
 
+func (h *Handlers) caddyApplyNoteLocked() string {
+	err := h.caddyService.GenerateAndApplyConfig()
+	h.recordCaddyApplyResult(err)
+	if err != nil {
+		return "；但 Caddy 配置应用失败：" + err.Error()
+	}
+	return ""
+}
+
+// applyCaddyConfigE serializes against rule/config writes (caddyOpMu) and
+// persists the apply outcome; all manual re-apply entry points must use it.
 func (h *Handlers) applyCaddyConfigE() error {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
-	return h.caddyService.GenerateAndApplyConfig()
+	err := h.caddyService.GenerateAndApplyConfig()
+	h.recordCaddyApplyResult(err)
+	return err
 }
 
 func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleFeatureInput, uniqueID string, serverName string) error {
@@ -555,7 +564,6 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 
 	log.Printf("Applying Caddy config on startup (enabled rules: %d)", count)
 	if err := h.applyCaddyConfigE(); err != nil {
-		h.recordCaddyApplyResult(err)
 		return fmt.Errorf("apply Caddy config on startup: %w", err)
 	}
 	services.RecordAuditLog("system", "载入", "系统配置", fmt.Sprintf("启动时从数据库载入配置并应用 Caddy；启用规则 %d 条", count), "")

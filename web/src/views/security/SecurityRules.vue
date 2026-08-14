@@ -284,6 +284,7 @@ import { formatDate } from '@/utils/date'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, ApiRequestError } from '@/utils/api'
+import { showSaveResult } from '@/utils/saveResult'
 import { useAuthStore } from '@/stores/auth'
 import type { UserListItem } from '@/types'
 
@@ -717,12 +718,10 @@ const saveCustomRule = async () => {
   }
   savingRule.value = true
   try {
-    if (editingRuleId.value) {
-      await request.put(`/security/custom-rules/${editingRuleId.value}`, ruleForm.value)
-    } else {
-      await request.post('/security/custom-rules', ruleForm.value)
-    }
-    ElMessage.success('保存成功'); ruleDialogVisible.value = false; fetchCustomRules()
+    const res = editingRuleId.value
+      ? await request.put(`/security/custom-rules/${editingRuleId.value}`, ruleForm.value)
+      : await request.post('/security/custom-rules', ruleForm.value)
+    showSaveResult(res, '保存成功'); ruleDialogVisible.value = false; fetchCustomRules()
   } catch { ElMessage.error('保存失败') } finally { savingRule.value = false }
 }
 

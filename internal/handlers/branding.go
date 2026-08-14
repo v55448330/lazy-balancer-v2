@@ -52,6 +52,7 @@ func SeedBrandingTemplate(dataDir string) error {
 	}
 	return nil
 }
+
 // loadBrandingConfig reads branding.json onto a zero config: absent file or
 // empty fields mean "use the default for that field"; non-empty fields are
 // rendered verbatim (never merged with defaults).
@@ -68,7 +69,8 @@ func loadBrandingConfig(dataDir string) brandingConfig {
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		log.Printf("loadBrandingConfig: invalid branding file %s, using defaults: %v", path, err)
-		return defaultBranding
+		cfg = brandingConfig{AppName: defaultBranding.AppName}
+		return cfg
 	}
 	if cfg.AppName == "" {
 		cfg.AppName = defaultBranding.AppName
@@ -99,7 +101,7 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 	}
 	if changed, _ := SeedDefaultBlockPage(h.cfg.DataDir); changed {
 		go func() {
-			if err := h.applyCaddyConfig(); err != nil {
+			if err := h.applyCaddyConfigE(); err != nil {
 				log.Printf("branding 触发的 Caddy 配置应用失败: %v", err)
 			}
 		}()

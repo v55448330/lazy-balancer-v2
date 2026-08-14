@@ -76,6 +76,7 @@ import { ref, onMounted, computed } from 'vue'
 import { Plus, Document } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
+import { showSaveResult } from '@/utils/saveResult'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
@@ -138,12 +139,10 @@ const handleSave = async () => {
   if (!form.value.name.trim()) { ElMessage.warning('请输入页面名称'); return }
   saving.value = true
   try {
-    if (editingId.value) {
-      await request.put(`/security/block-pages/${editingId.value}`, form.value)
-    } else {
-      await request.post('/security/block-pages', form.value)
-    }
-    ElMessage.success('保存成功')
+    const res = editingId.value
+      ? await request.put(`/security/block-pages/${editingId.value}`, form.value)
+      : await request.post('/security/block-pages', form.value)
+    showSaveResult(res, '保存成功')
     dialogVisible.value = false
     await fetchData()
   } catch { ElMessage.error('保存失败') } finally { saving.value = false }
