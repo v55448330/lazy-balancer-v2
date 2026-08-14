@@ -2371,6 +2371,9 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string) map[stri
 				"handler":     "static_response",
 				"body":        content,
 				"status_code": statusCode,
+				"headers": map[string]interface{}{
+					"Content-Type": []string{"text/html; charset=utf-8"},
+				},
 			},
 		},
 		"terminal": true,
@@ -2411,6 +2414,9 @@ func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string) map[stri
 				"handler":     "static_response",
 				"body":        content,
 				"status_code": statusCode,
+				"headers": map[string]interface{}{
+					"Content-Type": []string{"text/html; charset=utf-8"},
+				},
 			},
 		},
 		"terminal": true,
