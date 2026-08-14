@@ -418,7 +418,6 @@ const UA_PRESET_GROUPS: ReadonlyArray<{ label: string; values: ReadonlyArray<{ l
   { label: '系统', values: [
     { label: 'Windows', value: 'Windows NT' },
     { label: 'Linux 桌面', value: 'X11; Linux' },
-    { label: 'Linux 服务器', value: 'Linux x86_64' },
     { label: 'macOS', value: 'Macintosh' },
     { label: 'iPhone', value: 'iPhone' },
     { label: 'Android', value: 'Android' },
