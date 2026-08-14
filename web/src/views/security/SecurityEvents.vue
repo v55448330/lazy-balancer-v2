@@ -102,7 +102,16 @@ const filters = ref({ action: '', ip: '' })
 const handleSizeChange = () => { page.value = 1; fetchEvents() }
 
 const goToRule = (row: SecurityEvent) => { localStorage.setItem('rules-search', row.rule_caddy_id); window.open('/?page=rules', '_blank') }
-const goToPolicy = (row: SecurityEvent) => { localStorage.setItem('security-policies-search', row.policy_name); window.open('/?page=security-policies', '_blank') }
+const goToPolicy = (row: SecurityEvent) => {
+  if (row.policy_id > 0) {
+    localStorage.setItem('security-policies-focus-id', String(row.policy_id))
+  } else if (row.policy_name) {
+    localStorage.setItem('security-policies-search', row.policy_name)
+  } else {
+    return
+  }
+  window.open('/?page=security-policies', '_blank')
+}
 
 const fetchEvents = async () => {
   loading.value = true

@@ -786,10 +786,17 @@ const openRuleInNewTab = (caddyId: string): void => {
 
 const fetchRegions = async () => { try { const res = await request.get<APIResponse<string[]>>('/security/ip2region/regions'); availableRegions.value = res.data || [] } catch { availableRegions.value = [] } }
 
-onMounted(() => {
+onMounted(async () => {
   const search = localStorage.getItem('security-policies-search')
   if (search) { policySearch.value = search; localStorage.removeItem('security-policies-search') }
-  fetchData()
+  const focusId = Number(localStorage.getItem('security-policies-focus-id') || 0)
+  if (focusId) localStorage.removeItem('security-policies-focus-id')
+  await fetchData()
+  if (focusId) {
+    const row = policies.value.find((p) => p.id === focusId)
+    if (row) openDialog(row)
+    else ElMessage.warning(`策略 #${focusId} 已被删除，事件中显示的是事件发生时的名称`)
+  }
   fetchRegions()
 })
 </script>

@@ -177,9 +177,10 @@
                     <div v-for="g in UA_PRESET_GROUPS" :key="g.label" class="preset-group">
                       <span class="preset-group-label">{{ g.label }}</span>
                       <div class="preset-group-tags">
-                        <el-tag v-for="t in g.values" :key="t" size="small" effect="plain" class="preset-tag" @click="cond.pattern = t">{{ t }}</el-tag>
+                        <el-tag v-for="t in g.values" :key="t.value" size="small" effect="plain" class="preset-tag" @click="cond.pattern = t.value">{{ t.label }}</el-tag>
                       </div>
                     </div>
+                    <div class="preset-hint">标签写入真实 UA 片段（contains 精确匹配，区分大小写）</div>
                   </div>
                 </div>
                 <div v-if="cond.operator === 'regex'" class="preset-section">
@@ -390,12 +391,36 @@ const patternPlaceholder = (cond: CustomRuleCondition): string => {
   return PATTERN_PLACEHOLDERS[cond.target] ?? '匹配值'
 }
 
-// User-Agent 快捷预设：点击即填充到 pattern 输入框（不锁定，可继续手改）
-const UA_PRESET_GROUPS: ReadonlyArray<{ label: string; values: readonly string[] }> = [
-  { label: '攻击工具', values: ['sqlmap', 'nikto', 'nmap', 'masscan', 'hydra'] },
-  { label: '爬虫', values: ['bot', 'python-requests', 'curl', 'wget'] },
-  { label: '浏览器', values: ['Chrome', 'Firefox', 'Safari', 'Edge'] },
-  { label: '系统', values: ['Windows', 'Linux', 'MacOS', 'iPhone', 'Android'] },
+// User-Agent 快捷预设：标签为用户友好文案，value 为真实 UA 中的准确片段
+// （@contains 大小写敏感，value 必须与线上 UA 实际大小写一致才能命中）
+const UA_PRESET_GROUPS: ReadonlyArray<{ label: string; values: ReadonlyArray<{ label: string; value: string }> }> = [
+  { label: '攻击工具', values: [
+    { label: 'sqlmap', value: 'sqlmap/' },
+    { label: 'Nikto', value: 'Nikto/' },
+    { label: 'Nmap NSE', value: 'Nmap Scripting Engine' },
+    { label: 'masscan', value: 'masscan/' },
+    { label: 'hydra', value: 'hydra' },
+  ] },
+  { label: '爬虫', values: [
+    { label: '搜索引擎 Bot', value: 'bot' },
+    { label: 'Spider 爬虫', value: 'spider' },
+    { label: 'Python 脚本', value: 'python-requests' },
+    { label: 'curl', value: 'curl/' },
+    { label: 'Wget', value: 'Wget/' },
+  ] },
+  { label: '浏览器', values: [
+    { label: 'Chrome / Chromium 系', value: 'Chrome/' },
+    { label: 'Firefox', value: 'Firefox/' },
+    { label: 'Safari', value: 'Safari/' },
+    { label: 'Edge', value: 'Edg' },
+  ] },
+  { label: '系统', values: [
+    { label: 'Windows', value: 'Windows NT' },
+    { label: 'Linux 桌面', value: 'X11; Linux' },
+    { label: 'macOS', value: 'Macintosh' },
+    { label: 'iPhone', value: 'iPhone' },
+    { label: 'Android', value: 'Android' },
+  ] },
 ]
 
 // 正则模板：点击即填充
@@ -741,6 +766,7 @@ onUnmounted(() => {
 .preset-tags-block { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: #fff; border: 1px dashed #e5e7eb; border-radius: 4px; margin-left: 0; }
 .preset-group { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
 .preset-group-label { font-size: 12px; color: #6b7280; flex: 0 0 56px; text-align: right; line-height: 1; }
+.preset-hint { font-size: 12px; color: #9ca3af; margin-top: 6px; line-height: 1.4; }
 .preset-group-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; flex: 1; align-items: center; }
 .preset-group-tags .el-tag { margin: 0; }
 .preset-group-tags .preset-tag { cursor: pointer; }
