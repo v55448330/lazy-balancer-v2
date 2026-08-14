@@ -96,8 +96,7 @@
             <template #empty><el-empty description="暂无自定义规则" :image-size="60" /></template>
             <el-table-column prop="name" label="规则名称" min-width="150">
               <template #default="{ row }">
-                <el-link v-if="!isReadOnly" type="primary" @click="openRuleDialog(row)">{{ row.name }}</el-link>
-                <span v-else>{{ row.name }}</span>
+                <el-link type="primary" :disabled="isReadOnly" @click="openRuleDialog(row)">{{ row.name }}</el-link>
               </template>
             </el-table-column>
             <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
@@ -122,10 +121,10 @@
             <el-table-column label="更新者" width="100" align="center">
               <template #default="{ row }">{{ getUpdaterName(row.updated_by) }}</template>
             </el-table-column>
-            <el-table-column v-if="!isReadOnly" label="操作" width="140" fixed="right">
+            <el-table-column label="操作" width="140" fixed="right">
               <template #default="{ row }">
-                <el-button size="small" link type="primary" @click="openRuleDialog(row)">编辑</el-button>
-                <el-button size="small" link type="danger" @click="deleteCustomRule(row)">删除</el-button>
+                <el-button size="small" link type="primary" :disabled="isReadOnly" @click="openRuleDialog(row)">编辑</el-button>
+                <el-button size="small" link type="danger" :disabled="isReadOnly" @click="deleteCustomRule(row)">删除</el-button>
             </template>
             </el-table-column>
           </el-table>
@@ -140,8 +139,8 @@
       <div v-loading="loadingContent"><SyntaxHighlight :content="currentContent" language="apacheconf" /></div>
     </el-dialog>
 
-    <el-dialog v-model="ruleDialogVisible" :title="editingRuleId ? '编辑自定义规则' : '新建自定义规则'" width="760px">
-      <el-form :model="ruleForm" label-width="80px" label-position="right">
+    <el-dialog v-model="ruleDialogVisible" :title="editingRuleId ? (isReadOnly ? '查看自定义规则' : '编辑自定义规则') : '新建自定义规则'" width="760px">
+      <el-form :model="ruleForm" label-width="80px" label-position="right" :disabled="isReadOnly">
         <el-form-item label="名称" required>
           <el-input v-model="ruleForm.name" placeholder="规则名称" />
         </el-form-item>
@@ -227,7 +226,7 @@
       </el-form>
       <template #footer>
         <el-button @click="ruleDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="savingRule" @click="saveCustomRule">保存</el-button>
+        <el-button type="primary" :disabled="isReadOnly" :loading="savingRule" @click="saveCustomRule">保存</el-button>
       </template>
     </el-dialog>
 

@@ -110,6 +110,12 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	if err != nil {
 		return models.ClusterSnapshot{}, nil, "", err
 	}
+	if bundle := BuildWafFileBundle(); bundle != nil {
+		raw, mErr := json.Marshal(bundle)
+		if mErr == nil {
+			snapshot.WafFiles = (*json.RawMessage)(&raw)
+		}
+	}
 	snapshot.SchemaVersion = CurrentSnapshotSchema
 	snapshot.MinReaderVersion = CurrentSnapshotSchema
 	canonicalSnapshot := snapshot

@@ -83,6 +83,16 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			s.restoreSnapshotArtifacts(previous, snapshot),
 		)
 	}
+	if snapshot.WafFiles != nil {
+		var bundle WafFileBundle
+		if err := json.Unmarshal(*snapshot.WafFiles, &bundle); err == nil {
+			if changed, ferr := ApplyWafFileBundle(&bundle); ferr != nil {
+				Logf("error", "同步 WAF 规则文件失败（数据库版本行已同步）: %v", ferr)
+			} else if changed {
+				RecordAuditLog("system", "同步", "WAF 规则文件", "CRS 规则/IP2Region 数据库随集群同步更新", "")
+			}
+		}
+	}
 	// Caddy 重载必须在事务提交之后：buildWafHandler 等安全配置读取走 db.DB，
 	// 提交前的事务内生成看不到本次写入的 security_* 表。重载失败仅记录，
 	// 不回滚已提交的快照。

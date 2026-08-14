@@ -210,6 +210,7 @@ type ClusterSnapshot struct {
 	SecurityBlockPages       []SecurityBlockPage               `json:"security_block_pages,omitempty"`
 	SecurityCRSVersion       []ClusterSecurityCRSVersion       `json:"security_crs_version,omitempty"`
 	SecurityIP2RegionVersion []ClusterSecurityIP2RegionVersion `json:"security_ip2region_version,omitempty"`
+	WafFiles                 *json.RawMessage                  `json:"waf_files,omitempty"`
 }
 
 type ClusterSecurityCRSVersion struct {

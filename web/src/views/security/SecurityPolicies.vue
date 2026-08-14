@@ -83,7 +83,7 @@
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑策略' : '新建策略'" width="min(800px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
+    <el-dialog v-model="dialogVisible" :title="editingId ? (isReadOnly ? '查看策略' : '编辑策略') : '新建策略'" width="min(800px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
       <el-steps :active="currentStep" finish-status="success" align-center class="wizard-steps" :class="{ 'is-clickable': stepsClickable }">
         <el-step title="基础信息" :icon="InfoFilled" @click="jumpToStep(WIZARD_STEP.BASIC)" />
         <el-step title="WAF 规则" :icon="Lock" @click="jumpToStep(WIZARD_STEP.WAF_RULES)" />
@@ -96,7 +96,7 @@
       <div class="wizard-content">
         <!-- Step 0: 基础信息 -->
         <div v-show="currentStep === WIZARD_STEP.BASIC" class="step-content">
-          <el-form :model="form" label-width="100px">
+          <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="名称" required>
               <el-input v-model="form.name" placeholder="策略名称" />
             </el-form-item>
@@ -108,7 +108,7 @@
 
         <!-- Step 1: WAF 规则 -->
         <div v-show="currentStep === WIZARD_STEP.WAF_RULES" class="step-content">
-          <el-form :model="form" label-width="100px">
+          <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="WAF 模式">
               <el-radio-group v-model="form.mode">
                 <el-radio value="off">关闭</el-radio>
@@ -157,7 +157,7 @@
         <!-- Step 2: IP 访问控制 -->
         <div v-show="currentStep === WIZARD_STEP.IP_ACL" class="step-content">
           <el-divider content-position="left" class="acl-divider">访问控制</el-divider>
-          <el-form :model="form" label-width="100px">
+          <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="启用">
               <el-switch v-model="form.ip_acl_enabled" />
             </el-form-item>
@@ -177,7 +177,7 @@
             </template>
           </el-form>
           <el-divider content-position="left" class="acl-divider">信任名单</el-divider>
-          <el-form :model="form" label-width="100px">
+          <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="启用">
               <el-switch v-model="ipWhitelistEnabled" />
             </el-form-item>
@@ -189,7 +189,7 @@
             </template>
           </el-form>
           <el-divider content-position="left" class="acl-divider">区域控制</el-divider>
-          <el-form :model="form" label-width="100px">
+          <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="启用">
               <el-switch v-model="form.geoip_enabled" />
             </el-form-item>
@@ -212,7 +212,7 @@
 
         <!-- Step 3: 限流 -->
         <div v-show="currentStep === WIZARD_STEP.RATE_LIMIT" class="step-content">
-          <el-form :model="form" label-width="100px">
+          <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="启用">
               <el-switch v-model="form.rate_limit_enabled" />
             </el-form-item>
@@ -231,10 +231,10 @@
 
         <!-- Step 4: 关联规则 -->
         <div v-show="currentStep === WIZARD_STEP.BINDINGS" class="step-content">
-          <el-form :model="form" label-width="100px">
+          <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="已关联">
               <div class="rule-bind-field">
-                <div class="rule-picker-trigger" role="button" tabindex="0" @click="openRulePicker" @keydown.enter.prevent="openRulePicker" @keydown.space.prevent="openRulePicker">
+                <div class="rule-picker-trigger" role="button" tabindex="0" :class="{ 'is-locked': isReadOnly }" @click="!isReadOnly && openRulePicker()" @keydown.enter.prevent="!isReadOnly && openRulePicker()" @keydown.space.prevent="!isReadOnly && openRulePicker()">
                   <span :class="{ 'rule-picker-placeholder': boundRules.length === 0 }">{{ boundRules.length > 0 ? `已选 ${boundRules.length} 条` : '选择要关联的负载均衡规则' }}</span>
                   <el-icon class="rule-picker-arrow"><ArrowDown /></el-icon>
                 </div>
@@ -308,10 +308,10 @@
           <el-button v-if="hasPreviousStep" @click="prevStep">
             <el-icon><ArrowLeft /></el-icon>上一步
           </el-button>
-          <el-button v-if="hasNextStep" type="primary" @click="nextStep">
+          <el-button v-if="hasNextStep" type="primary" :disabled="isReadOnly" @click="nextStep">
             下一步<el-icon><ArrowRight /></el-icon>
           </el-button>
-          <el-button v-if="currentStep === WIZARD_STEP.PREVIEW" type="primary" :loading="saving" @click="handleSave">
+          <el-button v-if="currentStep === WIZARD_STEP.PREVIEW" type="primary" :disabled="isReadOnly" :loading="saving" @click="handleSave">
             <span>保存</span><el-icon style="margin-left: 6px;"><Check /></el-icon>
           </el-button>
         </div>
@@ -844,6 +844,7 @@ onMounted(async () => {
 
 .rule-bind-field { width: 100%; }
 
+.rule-picker-trigger.is-locked { cursor: not-allowed; opacity: .7; }
 .rule-picker-trigger {
   display: flex;
   align-items: center;
