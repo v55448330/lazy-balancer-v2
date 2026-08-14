@@ -146,8 +146,11 @@ func TestSeedDefaultBlockPage_uses_default_branding_when_file_missing(t *testing
 
 	// Then
 	content, _ := defaultBlockPageRow(t)
-	if !strings.Contains(content, defaultBranding.AppName) || !strings.Contains(content, defaultBranding.FooterText) {
+	if !strings.Contains(content, defaultBranding.AppName) || !strings.Contains(content, strings.Split(defaultBranding.FooterText, " · ")[0]) {
 		t.Errorf("default block page missing default branding:\n%s", content)
+	}
+	if !strings.Contains(content, `href="https://github.com/v55448330/lazy-balancer-v2"`) {
+		t.Errorf("default block page footer missing repo link:\n%s", content)
 	}
 	if content == before {
 		t.Error("default block page content was not updated")
@@ -169,7 +172,7 @@ func TestSeedDefaultBlockPage_falls_back_to_defaults_on_invalid_json(t *testing.
 
 	// Then
 	content, _ := defaultBlockPageRow(t)
-	if !strings.Contains(content, defaultBranding.AppName) || !strings.Contains(content, defaultBranding.FooterText) {
+	if !strings.Contains(content, defaultBranding.AppName) || !strings.Contains(content, strings.Split(defaultBranding.FooterText, " · ")[0]) {
 		t.Errorf("default block page missing default branding fallback:\n%s", content)
 	}
 }

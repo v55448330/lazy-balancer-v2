@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { request } from '@/utils/api'
 
 interface BrandingResponse {
@@ -10,8 +10,18 @@ interface BrandingResponse {
 }
 
 export const appName = ref('Lazy Balancer')
-export const footerText = ref('Copyright © 2026 XiaoBao. All rights reserved.')
+export const footerText = ref('Copyright © 2026 XiaoBao. All rights reserved. · https://github.com/v55448330/lazy-balancer-v2')
 export const appVersion = ref('v2.1.1')
+
+const escapeHtml = (text: string): string =>
+  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+export const footerHtml = computed(() =>
+  escapeHtml(footerText.value).replace(
+    /(https?:\/\/[^\s"'&]+)/g,
+    '<a href="$1" target="_blank" rel="noopener noreferrer" class="footer-link">$1</a>',
+  ),
+)
 
 export async function loadBranding(): Promise<void> {
   try {

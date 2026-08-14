@@ -138,7 +138,7 @@
         <slot />
       </el-main>
       <el-footer class="layout-footer">
-        <span>{{ footerText }}</span>
+        <span class="footer-text" v-html="footerHtml"></span>
       </el-footer>
     </el-container>
 
@@ -171,7 +171,7 @@ import type { PageId } from '@/stores/auth'
 import { request } from '@/utils/api'
 import { DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document, Warning, Notebook } from '@element-plus/icons-vue'
 import AppLogo from '@/components/AppLogo.vue'
-import { appName, footerText } from '@/utils/branding'
+import { appName, footerHtml } from '@/utils/branding'
 
 const authStore = useAuthStore()
 const collapsed = ref(false)
@@ -543,7 +543,14 @@ onMounted(() => {
   letter-spacing: 0.2px;
   flex-shrink: 0;
   background-color: #ffffff;
-  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.footer-text :deep(.footer-link) {
+  color: var(--el-color-primary);
+  text-decoration: none;
+}
+.footer-text :deep(.footer-link:hover) {
+  text-decoration: underline;
 }
 
 .fade-enter-active,

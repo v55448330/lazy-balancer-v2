@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -23,7 +25,7 @@ type brandingConfig struct {
 
 var defaultBranding = brandingConfig{
 	AppName:    "Lazy Balancer",
-	FooterText: "Copyright © 2026 XiaoBao. All rights reserved.",
+	FooterText: "Copyright © 2026 XiaoBao. All rights reserved. · https://github.com/v55448330/lazy-balancer-v2",
 }
 
 func SeedDefaultBranding(dataDir string) error {
@@ -75,10 +77,9 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 // and SeedDefaultBlockPage so both produce the identical branded page.
 func renderDefaultBlockPage(cfg brandingConfig) string {
 	appName := html.EscapeString(cfg.AppName)
-	footerText := html.EscapeString(cfg.FooterText)
 	footer := fmt.Sprintf(`Powered by <span class="name">%s</span>`, appName)
-	if footerText != "" {
-		footer += "<br>" + footerText
+	if cfg.FooterText != "" {
+		footer += "<br>" + blockPageFooterHTML(cfg.FooterText)
 	}
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="zh-CN">
@@ -92,6 +93,8 @@ h1 { font-size: 24px; color: #1f2937; margin-bottom: 12px; }
 p { font-size: 14px; color: #6b7280; line-height: 1.6; margin-bottom: 8px; }
 .footer { margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af; }
 .footer .name { font-weight: 600; color: #4b5563; }
+.footer a { color: inherit; text-decoration: underline; text-decoration-color: #d1d5db; }
+.footer a:hover { color: #4b5563; }
 </style>
 </head>
 <body>
@@ -105,6 +108,18 @@ p { font-size: 14px; color: #6b7280; line-height: 1.6; margin-bottom: 8px; }
 </body>
 </html>`, appName, footer)
 }
+
+// blockPageFooterHTML escapes the footer text and linkifies bare http(s) URLs,
+// keeping user-controlled branding content inert in the block page.
+func blockPageFooterHTML(text string) string {
+	esc := strings.ReplaceAll(text, "&", "&amp;")
+	esc = strings.ReplaceAll(esc, "<", "&lt;")
+	esc = strings.ReplaceAll(esc, ">", "&gt;")
+	esc = strings.ReplaceAll(esc, "\"", "&#34;")
+	return urlLinkRe.ReplaceAllString(esc, `<a href="$0" target="_blank" rel="noopener noreferrer">$0</a>`)
+}
+
+var urlLinkRe = regexp.MustCompile(`https?://[^\s"'&]+`)
 
 // SeedDefaultBlockPage re-renders the default block page row (is_default=1) from
 // branding.json. Idempotent: an unchanged render writes nothing (updated_at is
