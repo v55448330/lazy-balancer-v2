@@ -65,6 +65,9 @@ func run() error {
 		}
 	}()
 	services.ApplyLogLevel()
+	if err := handlers.SeedBrandingTemplate(cfg.DataDir); err != nil {
+		services.Logf("warn", "failed to seed branding template: %v", err)
+	}
 	if _, err := handlers.SeedDefaultBlockPage(cfg.DataDir); err != nil {
 		services.Logf("warn", "failed to seed default block page: %v", err)
 	}

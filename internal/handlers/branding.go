@@ -33,10 +33,28 @@ var defaultBranding = brandingConfig{
 	FooterText: defaultFooterText,
 }
 
+// SeedBrandingTemplate writes an all-empty branding.json on first boot so the
+// file exists as an editable template; empty values keep default rendering.
+func SeedBrandingTemplate(dataDir string) error {
+	path := filepath.Join(dataDir, "branding.json")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("检查品牌配置文件: %w", err)
+	}
+	template := brandingConfig{}
+	data, err := json.MarshalIndent(template, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化品牌配置模板: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("写入品牌配置模板: %w", err)
+	}
+	return nil
+}
 // loadBrandingConfig reads branding.json onto a zero config: absent file or
 // empty fields mean "use the default for that field"; non-empty fields are
-// rendered verbatim (never merged with defaults). FooterText intentionally
-// stays empty when unset so renderers can distinguish the default footer.
+// rendered verbatim (never merged with defaults).
 func loadBrandingConfig(dataDir string) brandingConfig {
 	var cfg brandingConfig
 	path := filepath.Join(dataDir, "branding.json")
