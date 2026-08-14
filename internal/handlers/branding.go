@@ -25,7 +25,7 @@ type brandingConfig struct {
 
 var defaultBranding = brandingConfig{
 	AppName:    "Lazy Balancer",
-	FooterText: "Copyright © 2026 XiaoBao. All rights reserved. · https://github.com/v55448330/lazy-balancer-v2",
+	FooterText: "Copyright © 2026 XiaoBao. All rights reserved.",
 }
 
 func SeedDefaultBranding(dataDir string) error {
@@ -81,6 +81,7 @@ func renderDefaultBlockPage(cfg brandingConfig) string {
 	if cfg.FooterText != "" {
 		footer += "<br>" + blockPageFooterHTML(cfg.FooterText)
 	}
+	footer += `<br><a href="https://github.com/v55448330/lazy-balancer-v2" target="_blank" rel="noopener noreferrer">GitHub</a>`
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access Denied — %s</title>
@@ -119,13 +120,20 @@ func blockPageFooterHTML(text string) string {
 	return urlLinkRe.ReplaceAllString(esc, `<a href="$0" target="_blank" rel="noopener noreferrer">$0</a>`)
 }
 
-var urlLinkRe = regexp.MustCompile(`https?://[^\s"'&]+`)
+var urlLinkRe = regexp.MustCompile(`https?://(?:[^\s"'&]|&amp;)+`)
 
 // SeedDefaultBlockPage re-renders the default block page row (is_default=1) from
 // branding.json. Idempotent: an unchanged render writes nothing (updated_at is
 // not churned); custom pages are never touched.
 func SeedDefaultBlockPage(dataDir string) (bool, error) {
 	if db.DB == nil {
+		return false, nil
+	}
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err == nil && !isMaster {
+		// The default block page content is owned by the master and arrives on
+		// slaves via cluster sync; branding.json is node-local, so re-rendering
+		// here would overwrite the synced content with local defaults.
 		return false, nil
 	}
 	content := renderDefaultBlockPage(loadBrandingConfig(dataDir))
