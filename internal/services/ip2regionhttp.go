@@ -47,7 +47,7 @@ func defaultFetchIP2RegionLatestTag(ctx context.Context) (tag string, err error)
 // defaultDownloadIP2RegionXDB downloads the ip2region v4 xdb to destPath.
 func defaultDownloadIP2RegionXDB(ctx context.Context, tag, destPath string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		"https://raw.githubusercontent.com/lionsoul2014/ip2region/"+tag+"/data/ip2region_v4.xdb", nil)
+		ghProxied("https://raw.githubusercontent.com/lionsoul2014/ip2region/"+tag+"/data/ip2region_v4.xdb"), nil)
 	if err != nil {
 		return err
 	}

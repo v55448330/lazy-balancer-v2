@@ -11,6 +11,17 @@ import (
 
 var crsHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+// ghFastProxy prefixes GitHub downloads through https://ghfast.top/ — direct
+// GitHub file access is unreliable from the deployment network. The proxy
+// supports raw.githubusercontent.com and github.com archive paths but NOT
+// codeload.github.com or api.github.com (verified 403), so the CRS tarball
+// uses the equivalent archive URL and release metadata stays direct.
+const ghFastProxy = "https://ghfast.top/"
+
+func ghProxied(rawURL string) string {
+	return ghFastProxy + rawURL
+}
+
 func defaultFetchCRSLatestTag(ctx context.Context) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		"https://api.github.com/repos/coreruleset/coreruleset/releases/latest", nil)
@@ -35,7 +46,7 @@ func defaultFetchCRSLatestTag(ctx context.Context) (string, error) {
 
 func defaultDownloadCRSTarball(ctx context.Context, tag, destPath string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		"https://codeload.github.com/coreruleset/coreruleset/tar.gz/refs/tags/"+tag, nil)
+		ghProxied("https://github.com/coreruleset/coreruleset/archive/refs/tags/"+tag+".tar.gz"), nil)
 	if err != nil {
 		return err
 	}

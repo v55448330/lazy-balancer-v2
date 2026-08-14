@@ -35,18 +35,21 @@ COPY web/dist /app/ui
 
 RUN mkdir -p /app/data /app/config /app/logs /app/certs /app/waf/crs /app/waf/custom /app/waf/audit
 
-# Download OWASP CRS rules
-RUN apk add --no-cache git && \
-    git clone --depth 1 --branch v4.14.0 https://github.com/coreruleset/coreruleset.git /tmp/crs && \
-    cp -r /tmp/crs/rules /app/waf/crs/rules && \
-    cp /tmp/crs/crs-setup.conf.example /app/waf/crs/crs-setup.conf && \
-    rm -rf /tmp/crs && \
-    apk del git
+# Download OWASP CRS rules (via ghfast.top proxy — direct GitHub access is
+# unreliable from the build network; proxy does not support git protocol,
+# so use the archive tarball instead of git clone)
+RUN apk add --no-cache curl && \
+    mkdir -p /tmp/crs-src && \
+    curl -sL "https://ghfast.top/https://github.com/coreruleset/coreruleset/archive/refs/tags/v4.14.0.tar.gz" | tar xz --strip-components=1 -C /tmp/crs-src && \
+    cp -r /tmp/crs-src/rules /app/waf/crs/rules && \
+    cp /tmp/crs-src/crs-setup.conf.example /app/waf/crs/crs-setup.conf && \
+    rm -rf /tmp/crs-src && \
+    apk del curl
 # Pristine copy used to seed an empty bind-mounted /app/waf on first boot
 RUN cp -r /app/waf /app/waf.dist
 # Initial GeoIP database seed
 RUN apk add --no-cache curl && \
-    curl -sL -o /app/waf.dist/ip2region.xdb https://raw.githubusercontent.com/lionsoul2014/ip2region/v3.17.0/data/ip2region_v4.xdb && \
+    curl -sL -o /app/waf.dist/ip2region.xdb "https://ghfast.top/https://raw.githubusercontent.com/lionsoul2014/ip2region/v3.17.0/data/ip2region_v4.xdb" && \
     apk del curl
 RUN adduser -u 1000 -s /bin/sh -D -h /app caddy
 
