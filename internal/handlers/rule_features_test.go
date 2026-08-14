@@ -320,11 +320,11 @@ func TestDuplicateRule_accepts_API_key_user_ID_and_copies_rule_upstreams_and_pat
 		request_body_max_size_mb,upstream_keepalive_timeout,server_tokens_hidden,
 		enable_tls,tls_source,acme_config_id,ca_provider_id,tls_cert,tls_key,tls_http_redirect,
 		enable_compress,compress_types,enabled,created_by,updated_by,host_header,log_enabled,
-		ip_acl_mode,ip_acl_list,custom_routes_enabled,
+		custom_routes_enabled,
 		proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,proxy_stream_timeout,proxy_flush_interval,proxy_stream_close_delay)
 		VALUES ('lb_dupsrc','源规则','','http','dup.example.test',8080,'weighted_round_robin',0,0,'','ipv4',
 		'',10,5,3,2,0,0,0,5,250,0,0,0,1,'manual',0,0,'','',0,1,'gzip',1,1,1,'',1,
-		'allow','["192.0.2.0/24"]',1,5,15,30,30,0,0,0)`); err != nil {
+		1,5,15,30,30,0,0,0)`); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_dupsrc','127.0.0.1',9000,1,1,'http')`); err != nil {

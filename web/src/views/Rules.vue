@@ -987,7 +987,6 @@ import type {
   ProxyTimeoutConfig,
   PathRuleUpstream,
   Rule,
-  RuleAclRequest,
   RuleProtocol,
   UpdateRuleRequest,
   Upstream,
@@ -1005,7 +1004,7 @@ import type { CertJobStatus } from '@/utils/certJobStatus'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
 
-interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id' | 'compress_types' | keyof RuleAclRequest> {
+interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id' | 'compress_types'> {
   id?: number
   caddy_id: string
   dns_family: string[]

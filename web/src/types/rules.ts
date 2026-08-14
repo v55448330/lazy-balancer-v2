@@ -1,4 +1,3 @@
-export type IpAclMode = '' | 'allow' | 'deny'
 export type RuleProtocol = 'http' | 'tcp'
 export type UpstreamProtocol = 'http' | 'https' | 'tcp' | 'tls'
 
@@ -83,8 +82,6 @@ export interface Rule extends ProxyTimeoutConfig {
   compress_types: string
   enabled: boolean
   log_enabled: boolean
-  ip_acl_mode: IpAclMode
-  ip_acl_list: string[]
   custom_routes_enabled: boolean
   path_rules: PathRule[]
   created_by: number
@@ -117,8 +114,6 @@ export interface CreateRuleRequest extends ProxyTimeoutConfig {
   request_body_max_size_mb: number
   upstream_keepalive_timeout: number
   server_tokens_hidden: number
-  ip_acl_mode: IpAclMode
-  ip_acl_list: string[]
   custom_routes_enabled: boolean
   path_rules: PathRule[]
   host_header: string
@@ -139,8 +134,6 @@ export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
   | 'request_body_max_size_mb'
   | 'upstream_keepalive_timeout'
   | 'server_tokens_hidden'
-  | 'ip_acl_mode'
-  | 'ip_acl_list'
   | 'custom_routes_enabled'
   | 'tcp_proxy_protocol'
   | keyof ProxyTimeoutConfig
@@ -149,8 +142,6 @@ export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
   request_body_max_size_mb?: number
   upstream_keepalive_timeout?: number
   server_tokens_hidden?: number
-  ip_acl_mode?: IpAclMode
-  ip_acl_list?: string[]
   custom_routes_enabled?: boolean
   tcp_proxy_protocol: boolean
   proxy_dial_timeout?: number
@@ -163,9 +154,4 @@ export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
   path_rules?: PathRule[]
   ca_provider_id?: number
   enabled: boolean
-}
-
-export interface RuleAclRequest {
-  ip_acl_mode: IpAclMode
-  ip_acl_list: string[]
 }

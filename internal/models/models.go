@@ -132,8 +132,6 @@ type LbRule struct {
 	RequestBodyMaxSizeMB          int          `json:"request_body_max_size_mb"`
 	UpstreamKeepaliveTimeout      int          `json:"upstream_keepalive_timeout"`
 	ServerTokensHidden            int          `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
-	IPACLMode                     string       `json:"ip_acl_mode"`
-	IPACLList                     []string     `json:"ip_acl_list"`
 	CustomRoutesEnabled           bool         `json:"custom_routes_enabled"`
 	ProxyDialTimeout              int          `json:"proxy_dial_timeout"`
 	ProxyResponseHeaderTimeout    int          `json:"proxy_response_header_timeout"`

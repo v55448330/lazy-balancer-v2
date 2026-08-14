@@ -622,7 +622,7 @@ func TestReplaceSnapshotDB_replaces_resources_without_overwriting_role(t *testin
 		Version: 9,
 		Rules: []models.LbRule{{
 			CaddyID: "lb_snapshot1", Name: "snapshot", Protocol: "http", ListenPort: 8080,
-			Strategy: "round_robin", Enabled: true, IPACLMode: "allow", IPACLList: []string{"192.0.2.0/24"}, CustomRoutesEnabled: true,
+			Strategy: "round_robin", Enabled: true, CustomRoutesEnabled: true,
 			ProxyDialTimeout: 3, ProxyResponseHeaderTimeout: 4, ProxyReadTimeout: 5, ProxyWriteTimeout: 6, ProxyStreamTimeout: 7, ProxyFlushInterval: -1, ProxyStreamCloseDelay: 5,
 			Upstreams: []models.Upstream{{ID: 11, Host: "127.0.0.1", Port: 9000, Weight: 1, Enabled: true, Protocol: "http"}},
 			PathRules: []models.PathRule{{ID: 21, SortOrder: 2, MatchType: "prefix", Path: "/metrics/", Upstreams: nil}},
@@ -656,13 +656,13 @@ func TestReplaceSnapshotDB_replaces_resources_without_overwriting_role(t *testin
 	if isMaster || masterURL != "https://master" || syncInterval != 120 {
 		t.Fatalf("role overwritten master=%v url=%q interval=%d", isMaster, masterURL, syncInterval)
 	}
-	var ipACLMode, ipACLList, path string
+	var path string
 	var ruleDialTimeout, globalDialTimeout int
-	if err := database.QueryRow(`SELECT r.ip_acl_mode,r.ip_acl_list,r.proxy_dial_timeout,p.path,g.proxy_dial_timeout FROM lb_rules r JOIN path_rules p ON p.rule_id=r.caddy_id JOIN global_config g ON g.id=1 WHERE r.caddy_id='lb_snapshot1'`).Scan(&ipACLMode, &ipACLList, &ruleDialTimeout, &path, &globalDialTimeout); err != nil {
+	if err := database.QueryRow(`SELECT r.proxy_dial_timeout,p.path,g.proxy_dial_timeout FROM lb_rules r JOIN path_rules p ON p.rule_id=r.caddy_id JOIN global_config g ON g.id=1 WHERE r.caddy_id='lb_snapshot1'`).Scan(&ruleDialTimeout, &path, &globalDialTimeout); err != nil {
 		t.Fatalf("read new snapshot fields: %v", err)
 	}
-	if ipACLMode != "allow" || ipACLList != `["192.0.2.0/24"]` || ruleDialTimeout != 3 || path != "/metrics/" || globalDialTimeout != 8 {
-		t.Fatalf("new snapshot fields mode=%q list=%q rule_dial=%d path=%q global_dial=%d", ipACLMode, ipACLList, ruleDialTimeout, path, globalDialTimeout)
+	if ruleDialTimeout != 3 || path != "/metrics/" || globalDialTimeout != 8 {
+		t.Fatalf("new snapshot fields rule_dial=%d path=%q global_dial=%d", ruleDialTimeout, path, globalDialTimeout)
 	}
 }
 

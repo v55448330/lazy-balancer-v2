@@ -63,7 +63,7 @@
     </el-card>
 
     <el-card>
-      <el-table :data="users" stripe :header-cell-style="{ background: '#f9fafb' }">
+      <el-table :data="paginatedUsers" stripe :header-cell-style="{ background: '#f9fafb' }">
         <el-table-column label="用户" min-width="160">
           <template #default="{ row }">
             <div class="user-cell">
@@ -118,6 +118,16 @@
           </template>
         </el-table-column>
       </el-table>
+      <div v-if="users.length > pageSize" style="margin-top: 16px; display: flex; justify-content: flex-end;">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :total="users.length"
+          :page-sizes="[10, 20, 50]"
+          layout="total, sizes, prev, pager, next"
+          background
+        />
+      </div>
     </el-card>
   </div>
 </template>
@@ -138,6 +148,12 @@ const showForm = ref(false)
 const submitting = ref(false)
 const submittingUserId = ref<number | null>(null)
 const operatingUserIds = ref(new Set<number>())
+const currentPage = ref(1)
+const pageSize = ref(10)
+const paginatedUsers = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return users.value.slice(start, start + pageSize.value)
+})
 
 const openCreateForm = () => {
   if (submitting.value) return

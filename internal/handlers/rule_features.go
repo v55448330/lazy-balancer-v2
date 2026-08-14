@@ -178,14 +178,6 @@ func toPathRuleConfigs(pathRules []models.PathRule) []services.PathRuleConfig {
 	return configs
 }
 
-func decodeIPACLList(encoded string) ([]string, error) {
-	ipACLList := make([]string, 0)
-	if err := json.Unmarshal([]byte(encoded), &ipACLList); err != nil {
-		return nil, fmt.Errorf("解析 IP 访问控制列表: %w", err)
-	}
-	return ipACLList, nil
-}
-
 func validateRuleFeatures(input ruleFeatureInput) error {
 	// Round 37 I-5: strategy 白名单校验，非法值不再透传到 Caddy。
 	if input.Strategy != "" {
@@ -397,7 +389,7 @@ const lbRuleListColumns = `COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE
 	COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,2), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 	COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 	COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
-	COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
+	COALESCE(custom_routes_enabled,0),
 	COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 	COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), '', '',
 	COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), COALESCE(enabled,1), COALESCE(log_enabled,0),
@@ -408,7 +400,7 @@ const lbRuleColumns = `COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE(des
 	COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,2), COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 	COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 	COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
-	COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(custom_routes_enabled,0),
+	COALESCE(custom_routes_enabled,0),
 	COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 	COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
 	COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), COALESCE(enabled,1), COALESCE(log_enabled,0),
@@ -419,7 +411,7 @@ func scanLbRules(rows *sql.Rows) ([]models.LbRule, error) {
 	rules := make([]models.LbRule, 0)
 	for rows.Next() {
 		var r models.LbRule
-		var description, domain, strategy, dnsFamily, ipACLListJSON, tlsSource, tlsCert, tlsKey, compressTypes, hostHeader string
+		var description, domain, strategy, dnsFamily, tlsSource, tlsCert, tlsKey, compressTypes, hostHeader string
 		var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect, enableCompress bool
 		var acmeConfigID, caProviderID int
 		var createdBy, updatedBy sql.NullInt64
@@ -429,7 +421,7 @@ func scanLbRules(rows *sql.Rows) ([]models.LbRule, error) {
 			&r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout, &r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
 			&enableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPProxyProtocol, &r.TCPTryDuration, &r.TCPTryInterval,
 			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden,
-			&r.IPACLMode, &ipACLListJSON, &r.CustomRoutesEnabled,
+			&r.CustomRoutesEnabled,
 			&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout, &r.ProxyFlushInterval, &r.ProxyStreamCloseDelay,
 			&enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &tlsCert, &tlsKey, &tlsHTTPRedirect,
 			&enableCompress, &compressTypes, &r.Enabled, &r.LogEnabled,
@@ -446,11 +438,6 @@ func scanLbRules(rows *sql.Rows) ([]models.LbRule, error) {
 		r.EnableDnsServer = enableDnsServer
 		r.DnsFamily = dnsFamily
 		r.EnableActiveHealthCheck = enableActiveHealthCheck
-		ipACLList, err := decodeIPACLList(ipACLListJSON)
-		if err != nil {
-			return nil, fmt.Errorf("规则 %s 的 IP 访问控制列表: %w", r.CaddyID, err)
-		}
-		r.IPACLList = ipACLList
 		r.EnableTLS = enableTLS
 		r.TLSSource = tlsSource
 		r.ACMEConfigID = acmeConfigID
