@@ -626,7 +626,7 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	case strings.HasPrefix(ruleTriggered, "913"):
 		return "扫描探测"
 	case strings.HasPrefix(ruleTriggered, "949"):
-		return "评估拦截"
+		return "评分拦截（累计达到阈值）"
 	case strings.HasPrefix(ruleTriggered, "custom"):
 		return "自定义规则"
 	case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) == 5:

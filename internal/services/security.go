@@ -134,6 +134,8 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单'\"\n", strings.Join(ipBL, ",")))
 	}
 
+	emitCustomRules(&sb, customRules)
+
 	if p.Mode == "detection" {
 		sb.WriteString("SecAction \"id:6,phase:1,nolog,pass,ctl:ruleEngine=DetectionOnly\"\n")
 	}
@@ -166,6 +168,14 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 		}
 	}
 
+	return sb.String()
+}
+
+// emitCustomRules writes user rules ahead of any DetectionOnly switch so a
+// rule-level "拦截" action always blocks regardless of the policy WAF mode,
+// mirroring how IP control behaves. "仅记录/计分" rules keep feeding the CRS
+// anomaly score, which the 949 evaluation (WAF-mode governed) consumes.
+func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 	targetMap := map[string]string{"uri": "REQUEST_URI", "args": "ARGS", "body": "REQUEST_BODY", "headers": "REQUEST_HEADERS", "user_agent": "REQUEST_HEADERS:User-Agent"}
 	opMap := map[string]string{"contains": "@contains", "regex": "@rx", "equals": "@pm", "starts_with": "@beginsWith"}
 	for _, cr := range customRules {
@@ -209,7 +219,6 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 		}
 	}
 
-	return sb.String()
 }
 
 // SecurityPolicyHasIPControl reports whether the policy applies any IP-level
