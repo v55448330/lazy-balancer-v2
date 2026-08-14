@@ -426,48 +426,6 @@ func TestGetBranding_fileVersion_overridesBuildVersion(t *testing.T) {
 	}
 }
 
-func TestSeedDefaultBranding_createsFile_once(t *testing.T) {
-	// Given
-	dataDir := t.TempDir()
-	path := filepath.Join(dataDir, "branding.json")
-
-	// When
-	err := SeedDefaultBranding(dataDir)
-
-	// Then
-	if err != nil {
-		t.Fatalf("seed default branding: %v", err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read seeded branding: %v", err)
-	}
-	if !strings.Contains(string(data), `"app_name": "Lazy Balancer"`) {
-		t.Fatalf("seeded branding=%q", data)
-	}
-}
-
-func TestSeedDefaultBranding_preservesExistingFile(t *testing.T) {
-	// Given
-	dataDir := t.TempDir()
-	path := filepath.Join(dataDir, "branding.json")
-	if err := os.WriteFile(path, []byte(`{"app_name":"Custom"}`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// When
-	err := SeedDefaultBranding(dataDir)
-
-	// Then
-	if err != nil {
-		t.Fatal(err)
-	}
-	preserved, err := os.ReadFile(path)
-	if err != nil || string(preserved) != `{"app_name":"Custom"}` {
-		t.Fatalf("existing branding was overwritten: data=%q err=%v", preserved, err)
-	}
-}
-
 func containsRouteError(errors []string, status string) bool {
 	for _, routeError := range errors {
 		if strings.HasPrefix(routeError, status+" ") {

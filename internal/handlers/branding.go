@@ -23,49 +23,61 @@ type brandingConfig struct {
 	Version    string `json:"version,omitempty"`
 }
 
+// defaultFooterText is the product footer rendered when branding.json is
+// absent or its footer_text is empty; the GitHub link is appended only in
+// this default rendering — a configured footer_text is rendered verbatim.
+const defaultFooterText = "Lazy Balancer V2 · Copyright © 2026 XiaoBao"
+
 var defaultBranding = brandingConfig{
 	AppName:    "Lazy Balancer",
-	FooterText: "Copyright © 2026 XiaoBao. All rights reserved.",
+	FooterText: defaultFooterText,
 }
 
-func SeedDefaultBranding(dataDir string) error {
-	path := filepath.Join(dataDir, "branding.json")
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("检查品牌配置文件: %w", err)
-	}
-	data, err := json.MarshalIndent(defaultBranding, "", "  ")
-	if err != nil {
-		return fmt.Errorf("序列化默认品牌配置: %w", err)
-	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("写入默认品牌配置: %w", err)
-	}
-	return nil
-}
-
+// loadBrandingConfig reads branding.json onto a zero config: absent file or
+// empty fields mean "use the default for that field"; non-empty fields are
+// rendered verbatim (never merged with defaults). FooterText intentionally
+// stays empty when unset so renderers can distinguish the default footer.
 func loadBrandingConfig(dataDir string) brandingConfig {
-	cfg := defaultBranding
+	var cfg brandingConfig
 	path := filepath.Join(dataDir, "branding.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			log.Printf("loadBrandingConfig: failed to read branding file %s, using defaults: %v", path, err)
 		}
+		cfg.AppName = defaultBranding.AppName
 		return cfg
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		log.Printf("loadBrandingConfig: invalid branding file %s, using defaults: %v", path, err)
 		return defaultBranding
 	}
+	if cfg.AppName == "" {
+		cfg.AppName = defaultBranding.AppName
+	}
 	return cfg
+}
+
+type brandingResponse struct {
+	AppName           string `json:"app_name"`
+	FooterText        string `json:"footer_text"`
+	Version           string `json:"version"`
+	FooterUsesDefault bool   `json:"footer_uses_default"`
 }
 
 func (h *Handlers) GetBranding(c *gin.Context) {
 	cfg := loadBrandingConfig(h.cfg.DataDir)
+	resp := brandingResponse{
+		AppName:           cfg.AppName,
+		FooterText:        cfg.FooterText,
+		FooterUsesDefault: cfg.FooterText == "",
+	}
 	if cfg.Version == "" {
 		cfg.Version = h.cfg.Version
+	}
+	resp.Version = cfg.Version
+	if resp.FooterUsesDefault {
+		resp.FooterText = defaultFooterText
 	}
 	if changed, _ := SeedDefaultBlockPage(h.cfg.DataDir); changed {
 		go func() {
@@ -74,7 +86,7 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 			}
 		}()
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: resp})
 }
 
 // renderDefaultBlockPage is the single renderer shared by GetDefaultBlockPage
@@ -84,8 +96,9 @@ func renderDefaultBlockPage(cfg brandingConfig) string {
 	footer := fmt.Sprintf(`Powered by <span class="name">%s</span>`, appName)
 	if cfg.FooterText != "" {
 		footer += "<br>" + blockPageFooterHTML(cfg.FooterText)
+	} else {
+		footer += "<br>" + html.EscapeString(defaultFooterText) + ` · <a href="https://github.com/v55448330/lazy-balancer-v2" target="_blank" rel="noopener noreferrer">GitHub</a>`
 	}
-	footer += `<br><a href="https://github.com/v55448330/lazy-balancer-v2" target="_blank" rel="noopener noreferrer">GitHub</a>`
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access Denied — %s</title>
