@@ -1247,8 +1247,8 @@ func TestGenerateRouteObject_rendersWafDetectionOnlyDirectives_whenDetectionPoli
 		t.Fatal("waf handler missing from handle chain")
 	}
 	directives, ok := waf["directives"].(string)
-	if !ok || !strings.Contains(directives, "SecRuleEngine DetectionOnly") {
-		t.Fatalf("waf directives=%#v, want SecRuleEngine DetectionOnly", waf["directives"])
+	if !ok || !strings.Contains(directives, "ctl:ruleEngine=DetectionOnly") || !strings.Contains(directives, "SecRuleEngine On") {
+		t.Fatalf("waf directives=%#v, want engine On with DetectionOnly switch", waf["directives"])
 	}
 }
 
@@ -1339,7 +1339,7 @@ func TestBuildWafHandler_nilMatrix(t *testing.T) {
 		directive string
 	}{
 		{"blocking policy bound to http rule", "waf-http-blocking", true, "SecRuleEngine On"},
-		{"detection policy bound to http rule", "waf-http-detection", true, "SecRuleEngine DetectionOnly"},
+		{"detection policy bound to http rule", "waf-http-detection", true, "ctl:ruleEngine=DetectionOnly"},
 		{"disabled policy", "waf-http-disabled", false, ""},
 		{"unbound http rule", "waf-http-unbound", false, ""},
 		{"policy with mode off yields empty directives", "waf-http-off", false, ""},
@@ -1419,11 +1419,11 @@ func TestGenerateRouteObject_placesRateLimitBeforeWaf_whenPolicyEnablesRateLimit
 	if len(zones) != 2 {
 		t.Fatalf("want exactly two rate limit zones (sec/min) when burst > 0, got %v", zones)
 	}
-	secZone := mustMap(t, zones["sec"], "sec rate limit zone")
+	secZone := mustMap(t, zones["rule-http-sec"], "sec rate limit zone")
 	assertEqual(t, secZone["key"], "{http.request.remote.host}")
 	assertEqual(t, secZone["window"], "1s")
 	assertEqual(t, secZone["max_events"], 150)
-	minZone := mustMap(t, zones["min"], "min rate limit zone")
+	minZone := mustMap(t, zones["rule-http-min"], "min rate limit zone")
 	assertEqual(t, minZone["key"], "{http.request.remote.host}")
 	assertEqual(t, minZone["window"], "60s")
 	assertEqual(t, minZone["max_events"], 6000)

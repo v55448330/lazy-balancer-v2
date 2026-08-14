@@ -93,11 +93,13 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 	case p.Mode == "blocking":
 		sb.WriteString("SecRuleEngine On\n")
 	case p.Mode == "detection":
-		sb.WriteString("SecRuleEngine DetectionOnly\n")
+		// Detection mode keeps IP-level control enforcing: the engine starts On
+		// so the ACL deny rules below actually block, then a phase:1 SecAction
+		// switches the rest of the transaction (CRS + custom rules) to
+		// DetectionOnly before the CRS includes are emitted.
+		sb.WriteString("SecRuleEngine On\n")
 	case emitIPControl || hasCustomRules:
 		// WAF (CRS) off, but IP control / custom rules still need the engine.
-		// DetectionOnly would neuter the IP ACL deny actions, so run On and
-		// simply include no CRS rules below.
 		sb.WriteString("SecRuleEngine On\n")
 	default:
 		return ""
@@ -130,6 +132,10 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 	}
 	if len(ipBL) > 0 {
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单'\"\n", strings.Join(ipBL, ",")))
+	}
+
+	if p.Mode == "detection" {
+		sb.WriteString("SecAction \"id:6,phase:1,nolog,pass,ctl:ruleEngine=DetectionOnly\"\n")
 	}
 
 	if p.Mode == "blocking" || p.Mode == "detection" {
@@ -167,10 +173,12 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 			continue
 		}
 		safeName := strings.ReplaceAll(cr.Name, "'", "")
-		action := fmt.Sprintf("pass,log,setvar:tx.anomaly_score=+%d,msg:'自定义规则 %s 命中'", cr.Score, safeName)
+		// CRS v4 blocking evaluation reads tx.inbound_anomaly_score_pl1..4 —
+		// never the legacy tx.anomaly_score.
+		action := fmt.Sprintf("pass,log,setvar:tx.inbound_anomaly_score_pl1=+%d,msg:'自定义规则 %s 命中'", cr.Score, safeName)
 		if cr.Action == "block" {
 			// 统一所有拦截走 coraza 默认 403 → 策略 errors.routes → 拦截页面配置的状态码
-			action = fmt.Sprintf("deny,log,setvar:tx.anomaly_score=+%d,msg:'自定义规则 %s 命中'", cr.Score, safeName)
+			action = fmt.Sprintf("deny,log,setvar:tx.inbound_anomaly_score_pl1=+%d,msg:'自定义规则 %s 命中'", cr.Score, safeName)
 		}
 		if len(cr.Conditions) > 0 {
 			for idx, cond := range cr.Conditions {
@@ -317,7 +325,8 @@ func crsFilenameToRuleIDRange(s string) string {
 }
 
 func escapeCorazaPattern(pattern string) string {
-	p := strings.ReplaceAll(pattern, "\\", "\\\\")
-	p = strings.ReplaceAll(p, "\"", "\\\"")
-	return p
+	// coraza UnescapeQuotedString only unescapes \" — every other backslash
+	// sequence (e.g. regex \d) must pass through verbatim, so only quotes are
+	// escaped here.
+	return strings.ReplaceAll(pattern, "\"", "\\\"")
 }
