@@ -47,6 +47,9 @@ func validateSecurityCustomRule(rule *models.SecurityCustomRule) error {
 	if rule.Name == "" {
 		return fmt.Errorf("规则名称不能为空")
 	}
+	if rule.Action != "block" && rule.Action != "log" && rule.Action != "pass" {
+		return fmt.Errorf("动作必须为 block 或 log，当前值 %s", rule.Action)
+	}
 	validScores := map[int]bool{1: true, 3: true, 5: true, 10: true, 20: true}
 	if !validScores[rule.Score] {
 		return fmt.Errorf("异常分值必须为 1/3/5/10/20 之一，当前值 %d", rule.Score)
@@ -314,9 +317,6 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if req.IPACLList == "" {
 		req.IPACLList = "[]"
 	}
-	if req.IPACLList == "" {
-		req.IPACLList = "[]"
-	}
 	if req.IPWhitelist == "" {
 		req.IPWhitelist = "[]"
 	}
@@ -361,10 +361,10 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		enabled = *req.Enabled
 	}
 	result, err := db.DB.Exec(`INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, updated_by)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, req.IPBlacklist,
-		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode)
+		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, getContextUserIDInt(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -457,17 +457,16 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addStr("geoip_mode", req.GeoIPMode)
 
 	if req.BlockPageID != nil {
-		query += ", block_page_id=?, block_status_code=?"
+		query += ", block_page_id=?"
 		args = append(args, *req.BlockPageID)
-		if req.BlockStatusCode != nil {
-			args = append(args, *req.BlockStatusCode)
-		} else {
-			args = append(args, 403)
-		}
+	}
+	if req.BlockStatusCode != nil {
+		query += ", block_status_code=?"
+		args = append(args, *req.BlockStatusCode)
 	}
 	addBool("enabled", req.Enabled)
-	query += " WHERE id=?"
-	args = append(args, id)
+	query += ", updated_by=? WHERE id=?"
+	args = append(args, getContextUserIDInt(c), id)
 	result, err := db.DB.Exec(query, args...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -644,7 +643,7 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) == 5:
 		return "自定义规则"
 	case strings.Contains(ruleMsg, "IP 黑名单") || strings.Contains(ruleMsg, "IP 白名单") || strings.Contains(ruleMsg, "IP 访问控制") ||
-		ruleTriggered == "2" || ruleTriggered == "3" || ruleTriggered == "4":
+		ruleTriggered == "2" || ruleTriggered == "3" || ruleTriggered == "4" || ruleTriggered == "5":
 		return "IP 访问控制"
 	default:
 		return "其他"
