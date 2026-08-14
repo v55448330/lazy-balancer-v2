@@ -213,8 +213,8 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 }
 
 // SecurityPolicyHasIPControl reports whether the policy applies any IP-level
-// control: an enabled ACL with entries, a non-empty trust list, or legacy
-// bypass mode carrying an ACL list.
+// control: an enabled ACL with entries, a non-empty trust list or legacy
+// blacklist, or legacy bypass mode carrying an ACL list.
 func SecurityPolicyHasIPControl(p *models.SecurityPolicy) bool {
 	if p == nil {
 		return false
@@ -224,6 +224,11 @@ func SecurityPolicyHasIPControl(p *models.SecurityPolicy) bool {
 	var ipWL []string
 	json.Unmarshal(p.IPWhitelist, &ipWL)
 	if len(ipWL) > 0 {
+		return true
+	}
+	var ipBL []string
+	json.Unmarshal(p.IPBlacklist, &ipBL)
+	if len(ipBL) > 0 {
 		return true
 	}
 	if p.IPACLMode == "bypass" && len(ipACLList) > 0 {

@@ -248,6 +248,7 @@ func TestCategorizeAttack_familyMapping(t *testing.T) {
 		{"ip acl via id 2", "2", "", "IP 访问控制"},
 		{"ip acl via id 3", "3", "", "IP 访问控制"},
 		{"ip acl via id 4", "4", "", "IP 访问控制"},
+		{"ip trust list via id 5", "5", "", "IP 访问控制"},
 		{"empty input", "", "", "其他"},
 		{"unmatched id", "123456", "something else", "其他"},
 	}

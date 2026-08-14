@@ -178,7 +178,11 @@ const getDisplayName = (row: UserListItem): string => {
 const fetchUsers = async () => {
   const requestSeq = ++usersRequestSeq
   const res = await request.get<ApiResponse<UserListItem[]>>('/users')
-  if (requestSeq === usersRequestSeq) users.value = res.data || []
+  if (requestSeq === usersRequestSeq) {
+    users.value = res.data || []
+    const maxPage = Math.max(1, Math.ceil(users.value.length / pageSize.value))
+    if (currentPage.value > maxPage) currentPage.value = maxPage
+  }
 }
 
 const handleSubmit = async () => {

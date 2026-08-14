@@ -48,7 +48,7 @@ func validateSecurityCustomRule(rule *models.SecurityCustomRule) error {
 		return fmt.Errorf("规则名称不能为空")
 	}
 	if rule.Action != "block" && rule.Action != "log" && rule.Action != "pass" {
-		return fmt.Errorf("动作必须为 block 或 log，当前值 %s", rule.Action)
+		return fmt.Errorf("动作必须为 block、log 或 pass，当前值 %s", rule.Action)
 	}
 	validScores := map[int]bool{1: true, 3: true, 5: true, 10: true, 20: true}
 	if !validScores[rule.Score] {
@@ -254,7 +254,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		ruleCount := bindingCounts[p.ID]
 		policies = append(policies, models.SecurityPolicySummary{
 			ID: p.ID, Name: p.Name, Mode: p.Mode, Enabled: p.Enabled, RuleCount: ruleCount,
-			HasWAF: p.Mode != "off", HasIPControl: p.IPACLEnabled && len(ipACLEntries) > 0, HasRateLimit: p.RateLimitEnabled,
+			HasWAF: p.Mode != "off", HasIPControl: services.SecurityPolicyHasIPControl(&p), HasRateLimit: p.RateLimitEnabled,
 			AnomalyThreshold: p.AnomalyThreshold,
 			IPACLMode:        p.IPACLMode,
 			IPACLList:        p.IPACLList,
