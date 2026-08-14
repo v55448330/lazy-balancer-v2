@@ -35,7 +35,7 @@ func TestBuildCorazaDirectives_customRuleDenyOmitsStatusCode(t *testing.T) {
 	policy := &models.SecurityPolicy{
 		Mode:          "blocking",
 		CRSRuleGroups: json.RawMessage(`["9"]`),
-		CustomRules: json.RawMessage(`[{"id":12,"name":"拒绝规则","enabled":true,"action":"block","status_code":418,"conditions":[` +
+		CustomRules: json.RawMessage(`[{"id":12,"name":"拒绝规则","enabled":true,"action":"block","score":5,"status_code":418,"conditions":[` +
 			`{"target":"uri","operator":"contains","pattern":"/blocked"}]}]`),
 	}
 
@@ -43,8 +43,8 @@ func TestBuildCorazaDirectives_customRuleDenyOmitsStatusCode(t *testing.T) {
 	directives := BuildCorazaDirectives(policy)
 
 	// Then the deny action carries no status override; the block page's status governs
-	if !strings.Contains(directives, `deny,log,msg:'自定义规则 拒绝规则 命中'`) {
-		t.Fatalf("custom deny must use the plain default-403 action:\n%s", directives)
+	if !strings.Contains(directives, `deny,log,setvar:tx.anomaly_score=+5,msg:'自定义规则 拒绝规则 命中'`) {
+		t.Fatalf("custom deny must carry the anomaly-score setvar without a status override:\n%s", directives)
 	}
 	if strings.Contains(directives, "status:") {
 		t.Fatalf("custom rule action must not emit status::\n%s", directives)
