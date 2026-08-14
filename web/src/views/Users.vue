@@ -118,7 +118,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <div v-if="users.length > pageSize" style="margin-top: 16px; display: flex; justify-content: flex-end;">
+      <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
         <el-pagination
           v-model:current-page="currentPage"
           v-model:page-size="pageSize"
