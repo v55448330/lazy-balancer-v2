@@ -14,7 +14,7 @@
       <template #header>
         <div class="crs-header">
           <div class="crs-header-title">
-            <span class="font-medium">安全规则库</span>
+            <span style="font-weight: 500;">安全规则库</span>
           </div>
           <div class="crs-header-actions">
             <el-button v-if="!isReadOnly" size="small" type="primary" plain @click="manualUpdate">CRS 更新</el-button>
