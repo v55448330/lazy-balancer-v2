@@ -402,14 +402,15 @@ const UA_PRESET_GROUPS: ReadonlyArray<{ label: string; values: ReadonlyArray<{ l
     { label: 'hydra', value: 'hydra' },
   ] },
   { label: '爬虫', values: [
-    { label: '搜索引擎 Bot', value: 'bot' },
+    { label: '机器人', value: 'bot' },
     { label: 'Spider 爬虫', value: 'spider' },
     { label: 'Python 脚本', value: 'python-requests' },
+    { label: 'Go 脚本', value: 'Go-http-client' },
     { label: 'curl', value: 'curl/' },
     { label: 'Wget', value: 'Wget/' },
   ] },
   { label: '浏览器', values: [
-    { label: 'Chrome / Chromium 系', value: 'Chrome/' },
+    { label: 'Chromium', value: 'Chrome/' },
     { label: 'Firefox', value: 'Firefox/' },
     { label: 'Safari', value: 'Safari/' },
     { label: 'Edge', value: 'Edg' },
@@ -417,6 +418,7 @@ const UA_PRESET_GROUPS: ReadonlyArray<{ label: string; values: ReadonlyArray<{ l
   { label: '系统', values: [
     { label: 'Windows', value: 'Windows NT' },
     { label: 'Linux 桌面', value: 'X11; Linux' },
+    { label: 'Linux 服务器', value: 'Linux x86_64' },
     { label: 'macOS', value: 'Macintosh' },
     { label: 'iPhone', value: 'iPhone' },
     { label: 'Android', value: 'Android' },
