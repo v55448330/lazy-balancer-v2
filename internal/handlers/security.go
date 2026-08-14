@@ -44,9 +44,8 @@ func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 }
 
 func validateSecurityCustomRule(rule *models.SecurityCustomRule) error {
-	validStatusCodes := map[int]bool{400: true, 403: true, 404: true, 429: true, 503: true}
-	if !validStatusCodes[rule.StatusCode] {
-		return fmt.Errorf("状态码必须为 400/403/404/429/503 之一，当前值 %d", rule.StatusCode)
+	if rule.Name == "" {
+		return fmt.Errorf("规则名称不能为空")
 	}
 	validScores := map[int]bool{1: true, 3: true, 5: true, 10: true, 20: true}
 	if !validScores[rule.Score] {
@@ -64,6 +63,9 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 	if err := validateSecurityCustomRule(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
+	}
+	if req.StatusCode == 0 {
+		req.StatusCode = 403
 	}
 	conditionsJSON, _ := json.Marshal(req.Conditions)
 	result, err := db.DB.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, status_code, enabled, updated_by) VALUES (?,?,?,?,?,?,?,?)`,
@@ -88,6 +90,9 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	if err := validateSecurityCustomRule(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
+	}
+	if req.StatusCode == 0 {
+		req.StatusCode = 403
 	}
 	conditionsJSON, _ := json.Marshal(req.Conditions)
 	result, err := db.DB.Exec(`UPDATE security_custom_rules SET name=?, description=?, conditions=?, action=?, score=?, status_code=?, enabled=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
