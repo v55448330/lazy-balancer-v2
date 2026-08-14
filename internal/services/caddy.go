@@ -2444,12 +2444,12 @@ func buildRateLimitHandler(ruleCaddyID string) map[string]interface{} {
 	}
 	if policy.RateLimitBurst > 0 {
 		rateLimits = map[string]interface{}{
-			"sec": map[string]interface{}{
+			ruleCaddyID + "-sec": map[string]interface{}{
 				"key":        "{http.request.remote.host}",
 				"window":     "1s",
 				"max_events": policy.RateLimitRPS + policy.RateLimitBurst,
 			},
-			"min": map[string]interface{}{
+			ruleCaddyID + "-min": map[string]interface{}{
 				"key":        "{http.request.remote.host}",
 				"window":     "60s",
 				"max_events": policy.RateLimitRPS * 60,
