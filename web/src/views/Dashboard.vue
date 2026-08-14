@@ -46,6 +46,9 @@
               <div class="card-title">
                 <el-icon class="title-icon caddy-icon"><Cpu /></el-icon>
                 <span>Caddy 服务状态</span>
+                <el-tooltip v-if="caddyApplyError" placement="bottom" :content="caddyApplyError">
+                  <el-tag type="danger" size="small" effect="plain" style="margin-left: 8px">配置应用失败</el-tag>
+                </el-tooltip>
               </div>
               <div class="header-actions">
                 <el-tag 
@@ -443,6 +446,7 @@ const systemInfo = ref<SystemInfo | null>(null)
 const systemMetrics = ref<SystemMetrics | null>(null)
 const caddyMetrics = ref<CaddyMetrics | null>(null)
 const caddyStatus = ref('unknown')
+const caddyApplyError = ref('')
 const caddyLoading = ref(false)
 const rules = ref<Rule[]>([])
 interface DashboardRuleMetrics extends RuleMetrics {
@@ -828,7 +832,10 @@ const fetchAllData = (): Promise<void> => {
     }).catch(() => { if (!disposed) connectionsUnavailable.value = true }),
     request.get('/caddy/status', config).then((res) => {
       if (disposed) return
-      if (res.data) caddyStatus.value = res.data.status || 'unknown'
+      if (res.data) {
+        caddyStatus.value = res.data.status || 'unknown'
+        caddyApplyError.value = res.data.apply_error || ''
+      }
     }),
   ]).then(() => undefined).finally(() => {
     if (!disposed) initialLoading.value = false

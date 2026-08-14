@@ -63,7 +63,7 @@ interface RequestClient {
   get(url: '/rules', config?: AxiosRequestConfig): Promise<ApiResponse<Rule[]>>
   get(url: '/metrics/overview', config?: AxiosRequestConfig): Promise<ApiResponse<MetricsOverview>>
   get(url: '/metrics/connections', config?: AxiosRequestConfig): Promise<ApiResponse<ConnectionStats>>
-  get(url: '/caddy/status', config?: AxiosRequestConfig): Promise<ApiResponse<{ status: string }>>
+  get(url: '/caddy/status', config?: AxiosRequestConfig): Promise<ApiResponse<{ status: string; apply_error?: string }>>
   get(url: '/config', config?: AxiosRequestConfig): Promise<ApiResponse<GlobalConfigData>>
   get(url: '/admin-tls', config?: AxiosRequestConfig): Promise<ApiResponse<{ enabled: boolean; mode: string; cert_info?: { domain: string; issuer: string; not_after: string; days_left: number } | null }>>
   get<T = ApiResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T>

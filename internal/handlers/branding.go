@@ -68,7 +68,11 @@ func (h *Handlers) GetBranding(c *gin.Context) {
 		cfg.Version = h.cfg.Version
 	}
 	if changed, _ := SeedDefaultBlockPage(h.cfg.DataDir); changed {
-		go h.applyCaddyConfig()
+		go func() {
+			if err := h.applyCaddyConfig(); err != nil {
+				log.Printf("branding 触发的 Caddy 配置应用失败: %v", err)
+			}
+		}()
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
 }

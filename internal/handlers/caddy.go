@@ -508,22 +508,26 @@ func (h *Handlers) ReloadCaddy(c *gin.Context) {
 }
 
 func (h *Handlers) GetCaddyStatus(c *gin.Context) {
+	applyError := ""
+	if db.DB != nil {
+		db.DB.QueryRow(`SELECT COALESCE(caddy_apply_error,'') FROM global_config WHERE id=1`).Scan(&applyError)
+	}
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get("http://localhost:2019/config/")
 	if err == nil {
 		resp.Body.Close()
 		if resp.StatusCode < 500 {
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"status": "running"}})
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"status": "running", "apply_error": applyError}})
 			return
 		}
 	}
 	cmd := exec.Command("sh", "-c", "pgrep -x caddy 2>/dev/null | head -1 | xargs -I{} ps -o state= -p {} 2>/dev/null | grep -E '^[RSD]' && echo running || echo stopped")
 	output, _ := cmd.Output()
 	if strings.Contains(string(output), "running") {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"status": "running"}})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"status": "running", "apply_error": applyError}})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"status": "stopped"}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"status": "stopped", "apply_error": applyError}})
 }
 
 func (h *Handlers) GetCaddyConfig(c *gin.Context) {

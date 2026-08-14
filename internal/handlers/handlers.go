@@ -110,10 +110,37 @@ func boolText(value bool) string {
 	return "禁用"
 }
 
-func (h *Handlers) applyCaddyConfig() {
-	if err := h.caddyService.GenerateAndApplyConfig(); err != nil {
-		log.Printf("Failed to apply Caddy config: %v", err)
+// recordCaddyApplyResult persists the last apply outcome and leaves an audit
+// trail. Failures keep the previous Caddy config running, so the error must
+// survive restarts and async paths to stay visible to operators.
+func (h *Handlers) recordCaddyApplyResult(err error) {
+	if err == nil {
+		if db.DB != nil {
+			db.DB.Exec(`UPDATE global_config SET caddy_apply_error='' WHERE id=1 AND caddy_apply_error<>''`)
+		}
+		return
 	}
+	wrapped := fmt.Sprintf("Caddy 配置应用失败（旧配置已保留）：%v", err)
+	services.Logf("error", "%s", wrapped)
+	services.RecordAuditLog("system", "错误", "Caddy 配置", wrapped, "")
+	if db.DB != nil {
+		db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, wrapped)
+	}
+}
+
+func (h *Handlers) applyCaddyConfig() error {
+	err := h.caddyService.GenerateAndApplyConfig()
+	h.recordCaddyApplyResult(err)
+	return err
+}
+
+// caddyApplyNote returns a response-message suffix describing an apply
+// failure; empty string means the config applied cleanly.
+func (h *Handlers) caddyApplyNote() string {
+	if err := h.applyCaddyConfig(); err != nil {
+		return "；但 Caddy 配置应用失败：" + err.Error()
+	}
+	return ""
 }
 
 func (h *Handlers) applyCaddyConfigE() error {
@@ -528,6 +555,7 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 
 	log.Printf("Applying Caddy config on startup (enabled rules: %d)", count)
 	if err := h.applyCaddyConfigE(); err != nil {
+		h.recordCaddyApplyResult(err)
 		return fmt.Errorf("apply Caddy config on startup: %w", err)
 	}
 	services.RecordAuditLog("system", "载入", "系统配置", fmt.Sprintf("启动时从数据库载入配置并应用 Caddy；启用规则 %d 条", count), "")

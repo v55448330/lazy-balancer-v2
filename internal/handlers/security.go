@@ -79,8 +79,7 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 	}
 	id, _ := result.LastInsertId()
 	services.RecordAuditLog(getContextUserID(c), "创建", "自定义规则", fmt.Sprintf("名称：%s（#%d）", req.Name, id), "")
-	h.applyCaddyConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则创建成功", Data: gin.H{"id": id}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则创建成功" + h.caddyApplyNote(), Data: gin.H{"id": id}})
 }
 
 func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
@@ -109,8 +108,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "更新", "自定义规则", fmt.Sprintf("名称：%s（#%s）", req.Name, id), "")
-	h.applyCaddyConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新" + h.caddyApplyNote()})
 }
 
 func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
@@ -125,8 +123,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "删除", "自定义规则", fmt.Sprintf("规则 #%s", id), "")
-	h.applyCaddyConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已删除"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已删除" + h.caddyApplyNote()})
 }
 
 func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
@@ -162,8 +159,7 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 	}
 	id, _ := result.LastInsertId()
 	services.RecordAuditLog(getContextUserID(c), "创建", "拦截页面", fmt.Sprintf("名称：%s（#%d）", req.Name, id), "")
-	h.applyCaddyConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面创建成功", Data: gin.H{"id": id}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面创建成功" + h.caddyApplyNote(), Data: gin.H{"id": id}})
 }
 
 func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
@@ -190,8 +186,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "更新", "拦截页面", fmt.Sprintf("名称：%s（#%s）", req.Name, id), "")
-	h.applyCaddyConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面已更新" + h.caddyApplyNote()})
 }
 
 func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
@@ -212,8 +207,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "删除", "拦截页面", fmt.Sprintf("页面 #%s", id), "")
-	h.applyCaddyConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面已删除"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面已删除" + h.caddyApplyNote()})
 }
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
@@ -371,8 +365,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	}
 	id, _ := result.LastInsertId()
 	services.RecordAuditLog(getContextUserID(c), "创建", "安全策略", fmt.Sprintf("名称：%s（#%d）", req.Name, id), "")
-	h.applyCaddyConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略创建成功", Data: gin.H{"id": id}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略创建成功" + h.caddyApplyNote(), Data: gin.H{"id": id}})
 }
 
 func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
@@ -477,8 +470,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "更新", "安全策略", fmt.Sprintf("策略 #%s", id), "")
-	h.applyCaddyConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略更新成功"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略更新成功" + h.caddyApplyNote()})
 }
 
 func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
@@ -494,8 +486,7 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "删除", "安全策略", fmt.Sprintf("策略 #%s", id), "")
-	h.applyCaddyConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略已删除"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略已删除" + h.caddyApplyNote()})
 }
 
 func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
@@ -522,8 +513,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "更新", "安全策略", fmt.Sprintf("绑定规则 %s 到策略 #%s", req.RuleCaddyID, policyID), "")
-	h.applyCaddyConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已关联"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已关联" + h.caddyApplyNote()})
 }
 
 func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
@@ -535,8 +525,7 @@ func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "更新", "安全策略", fmt.Sprintf("解除规则 %s 与策略 #%s 的绑定", ruleCaddyID, policyID), "")
-	h.applyCaddyConfig()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已取消关联"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已取消关联" + h.caddyApplyNote()})
 }
 
 func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
