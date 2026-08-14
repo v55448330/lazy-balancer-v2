@@ -333,7 +333,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.PUT("/rules/:caddy_id", h.UpdateRule)
 				business.DELETE("/rules/:caddy_id", h.DeleteRule)
 				business.POST("/rules/:caddy_id/enable", h.EnableRule)
-				business.PUT("/rules/:caddy_id/disable", h.DisableRule)
+				business.POST("/rules/:caddy_id/disable", h.DisableRule)
 				business.POST("/rules/:caddy_id/duplicate", h.DuplicateRule)
 
 				// Certificate Configs

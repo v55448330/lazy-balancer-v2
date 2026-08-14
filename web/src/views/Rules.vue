@@ -2440,7 +2440,7 @@ const toggleRule = async (rule: Rule) => {
     if (rule.enabled) {
       await request.post<APIResponse>(`/rules/${rule.caddy_id}/enable`)
     } else {
-      await request.put<APIResponse>(`/rules/${rule.caddy_id}/disable`)
+      await request.post<APIResponse>(`/rules/${rule.caddy_id}/disable`)
     }
     ElMessage.success(`${action}成功`)
     try {

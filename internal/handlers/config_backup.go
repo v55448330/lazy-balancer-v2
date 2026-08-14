@@ -636,6 +636,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	if hasDefaultBlockPage == 0 {
 		db.DB.Exec(`INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, created_at, updated_at) VALUES (1, '默认拦截页面', '系统默认 403 拦截页面', '', TRUE, datetime('now'), datetime('now'))`)
 		SeedDefaultBlockPage(h.cfg.DataDir)
+		h.applyCaddyConfig()
 	}
 
 	auditParts := []string{"来源：v2 备份（覆盖导入）", counts}

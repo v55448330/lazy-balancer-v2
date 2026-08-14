@@ -1133,14 +1133,14 @@ func TestDisableRule_writes_updated_by_with_current_user(t *testing.T) {
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_disable_updby", "disable", "disable-updby.example.test", 8080, true, "manual", false)
 	router := gin.New()
-	router.PUT("/rules/:caddy_id/disable", func(c *gin.Context) {
+	router.POST("/rules/:caddy_id/disable", func(c *gin.Context) {
 		c.Set("user_id", 42)
 		handler.DisableRule(c)
 	})
 	response := httptest.NewRecorder()
 
 	// When
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/rules/lb_disable_updby/disable", nil))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/lb_disable_updby/disable", nil))
 
 	// Then
 	if response.Code != http.StatusOK {

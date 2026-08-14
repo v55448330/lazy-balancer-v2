@@ -36,7 +36,7 @@ var tools = []toolSpec{
 	{"update_rule", "更新指定负载均衡规则", http.MethodPut, "/rules/{caddy_id}", []string{"caddy_id"}, nil, updateRuleSchema},
 	{"delete_rule", "删除指定负载均衡规则", http.MethodDelete, "/rules/{caddy_id}", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"enable_rule", "启用指定负载均衡规则", http.MethodPost, "/rules/{caddy_id}/enable", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
-	{"disable_rule", "禁用指定负载均衡规则", http.MethodPut, "/rules/{caddy_id}/disable", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
+	{"disable_rule", "禁用指定负载均衡规则", http.MethodPost, "/rules/{caddy_id}/disable", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"duplicate_rule", "复制指定负载均衡规则", http.MethodPost, "/rules/{caddy_id}/duplicate", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"list_cert_jobs", "列出证书签发任务", http.MethodGet, "/certificates/jobs", nil, []string{"rule_id"}, querySchema("rule_id", "按规则 ID 过滤", "string")},
 	{"retry_cert_job", "重试指定证书签发任务", http.MethodPost, "/certificates/jobs/{id}/retry", []string{"id"}, nil, idSchema("id", "证书任务 ID", "integer")},
@@ -159,6 +159,7 @@ const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证�
 
 权限范围：
 - 只读 Key（read_only）仅能调用 GET 查询类工具；写工具（POST/PUT/DELETE）需非只读 Key
+- 写操作需要管理员权限（API Key 所属用户角色为 admin），非管理员 Key 调用写工具返回 403
 - 写操作仅在主节点可用，从节点一律 403；所有写操作校验后即时生效（失败自动回滚），无需手动 reload
 - 配置 IP 白名单的 Key 还需来源 IP 命中白名单（MCP 内部转发不受白名单影响）
 
