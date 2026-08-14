@@ -100,20 +100,6 @@ func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
 // realClientIP extracts the true client IP: honors X-Forwarded-For / X-Real-IP
 // when present (trusted proxy scenario), falling back to RemoteAddr.
 func realClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		for _, part := range strings.Split(xff, ",") {
-			part = strings.TrimSpace(part)
-			if part != "" && net.ParseIP(part) != nil {
-				return part
-			}
-		}
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		xri = strings.TrimSpace(xri)
-		if net.ParseIP(xri) != nil {
-			return xri
-		}
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		if net.ParseIP(r.RemoteAddr) != nil {
