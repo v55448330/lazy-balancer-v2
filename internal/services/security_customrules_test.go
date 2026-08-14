@@ -43,7 +43,7 @@ func TestBuildCorazaDirectives_customRuleDenyOmitsStatusCode(t *testing.T) {
 	directives := BuildCorazaDirectives(policy)
 
 	// Then the deny action carries no status override; the block page's status governs
-	if !strings.Contains(directives, `deny,log,setvar:tx.anomaly_score=+5,msg:'自定义规则 拒绝规则 命中'`) {
+	if !strings.Contains(directives, `deny,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'自定义规则 拒绝规则 命中'`) {
 		t.Fatalf("custom deny must carry the anomaly-score setvar without a status override:\n%s", directives)
 	}
 	if strings.Contains(directives, "status:") {

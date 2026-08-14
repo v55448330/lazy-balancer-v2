@@ -399,7 +399,7 @@ const UA_PRESET_GROUPS: ReadonlyArray<{ label: string; values: ReadonlyArray<{ l
     { label: 'Nikto', value: 'Nikto/' },
     { label: 'Nmap NSE', value: 'Nmap Scripting Engine' },
     { label: 'masscan', value: 'masscan/' },
-    { label: 'hydra', value: 'hydra' },
+    { label: 'hydra', value: 'Hydra' },
   ] },
   { label: '爬虫', values: [
     { label: '机器人', value: 'bot' },
@@ -431,6 +431,8 @@ const REGEX_PRESETS: ReadonlyArray<{ label: string; value: string }> = [
   { label: '路径穿越', value: '\\.\\.[\\\\/]' },
   { label: '命令注入', value: '(?i)(;|\\|\\||&&|\\$\\()' },
   { label: '敏感文件', value: '(?i)(\\.(env|git|svn|htaccess))' },
+  { label: 'Linux 服务器', value: '(?i)linux (x86_64|aarch64|armv7l|armv6l|armv8l|i686|riscv64)' },
+  { label: '手机浏览器', value: '(?i)(iphone|android)' },
 ]
 
 // 每条 regex 条件的临时测试字符串（按 idx 索引；条件删除时同步重排避免错位）
