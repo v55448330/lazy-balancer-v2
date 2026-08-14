@@ -138,9 +138,6 @@
                 <el-option-group label="OWASP CRS 规则">
                   <el-option v-for="rule in crsRuleOptions" :key="rule.filename" :label="`${rule.filename} (${rule.category})`" :value="rule.filename" />
                 </el-option-group>
-                <el-option-group label="自定义规则" v-if="customRuleOptions.length > 0">
-                  <el-option v-for="rule in customRuleOptions" :key="rule.name" :label="rule.name" :value="rule.name" />
-                </el-option-group>
               </el-select>
               <div class="form-tip-line">排除的规则不会被检测或拦截</div>
             </el-form-item>
@@ -397,7 +394,6 @@ const getUpdaterName = (userId?: number) => {
 }
 
 const crsRuleOptions = ref<CRSRuleOption[]>([])
-const customRuleOptions = ref<Array<{ name: string }>>([])
 const loading = ref(false)
 const saving = ref(false)
 const policies = ref<PolicySummary[]>([])

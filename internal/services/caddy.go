@@ -2382,8 +2382,7 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string) map[stri
 
 // buildRateLimitErrorRoute returns a server-level error route rendering the
 // bound policy's block page for rate-limited (429) requests, or nil when the
-// rule's bound active policy has no block page. Rate limiting always serves
-// the block page regardless of the legacy rate_limit_response value.
+// rule's bound active policy has no block page.
 // caddy-ratelimit rejects via caddyhttp.Error(429), so handle_errors fires.
 func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string) map[string]interface{} {
 	if db.DB == nil {

@@ -100,22 +100,20 @@ type UpdateSecurityPolicyRequest struct {
 }
 
 type SecurityEvent struct {
-	ID             int    `json:"id"`
-	EventTime      string `json:"event_time"`
-	RuleCaddyID    string `json:"rule_caddy_id"`
-	PolicyID       int    `json:"policy_id"`
-	ClientIP       string `json:"client_ip"`
-	Method         string `json:"method"`
-	URI            string `json:"uri"`
-	EventType      string `json:"event_type"`
-	RuleTriggered  string `json:"rule_triggered"`
-	RuleMsg        string `json:"rule_msg"`
-	Action         string `json:"action"`
-	AnomalyScore   int    `json:"anomaly_score"`
-	RequestSnippet string `json:"request_snippet"`
-	ResponseStatus int    `json:"response_status"`
-	RuleName       string `json:"rule_name"`
-	PolicyName     string `json:"policy_name"`
+	ID            int    `json:"id"`
+	EventTime     string `json:"event_time"`
+	RuleCaddyID   string `json:"rule_caddy_id"`
+	PolicyID      int    `json:"policy_id"`
+	ClientIP      string `json:"client_ip"`
+	Method        string `json:"method"`
+	URI           string `json:"uri"`
+	EventType     string `json:"event_type"`
+	RuleTriggered string `json:"rule_triggered"`
+	RuleMsg       string `json:"rule_msg"`
+	Action        string `json:"action"`
+	AnomalyScore  int    `json:"anomaly_score"`
+	RuleName      string `json:"rule_name"`
+	PolicyName    string `json:"policy_name"`
 }
 
 type SecurityOverview struct {
