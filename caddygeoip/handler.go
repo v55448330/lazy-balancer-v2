@@ -97,8 +97,9 @@ func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
 	}
 }
 
-// realClientIP extracts the true client IP: honors X-Forwarded-For / X-Real-IP
-// when present (trusted proxy scenario), falling back to RemoteAddr.
+// realClientIP extracts the client IP from RemoteAddr only. X-Forwarded-For /
+// X-Real-IP are deliberately ignored: this handler runs on the edge proxy, so
+// honoring client-supplied headers would let attackers spoof their region.
 func realClientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

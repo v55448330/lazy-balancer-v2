@@ -120,20 +120,18 @@ func TestServeHTTP_sets_geoip_placeholders_for_known_ip(t *testing.T) {
 		return nil
 	})
 
+	// Then the geoip vars are set (published via caddyhttp.SetVar into the
+	// request vars map, readable downstream as {http.vars.geoip.*})
+	vars := map[string]any{}
+	req = req.WithContext(context.WithValue(req.Context(), caddyhttp.VarsCtxKey, vars))
 	if err := h.ServeHTTP(rec, req, next); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
-
-	// Then the country placeholders are set to non-empty values
-	cc, ok := repl.GetString("geoip.country_code")
-	if !ok {
-		t.Fatal("geoip.country_code placeholder was not set")
+	if cc, _ := vars["geoip.country_code"].(string); cc == "" {
+		t.Fatal("geoip.country_code var is empty for a known IP")
 	}
-	if cc == "" {
-		t.Fatal("geoip.country_code is empty for a known IP")
-	}
-	if name, ok := repl.GetString("geoip.country_name"); !ok || name == "" {
-		t.Fatalf("geoip.country_name = %q, want non-empty", name)
+	if name, _ := vars["geoip.country_name"].(string); name == "" {
+		t.Fatal("geoip.country_name var is empty for a known IP")
 	}
 }
 
@@ -148,9 +146,9 @@ func TestRealClientIP_honorsHeadersAndStripsPort(t *testing.T) {
 		{"ipv4 with port", "114.114.114.114:53981", "", "", "114.114.114.114"},
 		{"ipv6 with port", "[2001:db8::1]:443", "", "", "2001:db8::1"},
 		{"bare ipv4", "114.114.114.114", "", "", "114.114.114.114"},
-		{"xff first", "10.0.0.1:1234", "8.8.8.8, 10.0.0.1", "", "8.8.8.8"},
-		{"x-real-ip", "10.0.0.1:1234", "", "1.1.1.1", "1.1.1.1"},
-		{"xff invalid falls back", "114.114.114.114:80", "not-an-ip", "", "114.114.114.114"},
+		{"spoofed xff ignored", "10.0.0.1:1234", "8.8.8.8, 10.0.0.1", "", "10.0.0.1"},
+		{"spoofed x-real-ip ignored", "10.0.0.1:1234", "", "1.1.1.1", "10.0.0.1"},
+		{"invalid remote yields empty", "not-an-addr", "", "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
