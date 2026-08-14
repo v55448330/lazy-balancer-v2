@@ -630,6 +630,14 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(status, models.APIResponse{Code: status, Message: message, Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": skipWarnings}})
 		return
 	}
+
+	var hasDefaultBlockPage int
+	db.DB.QueryRow("SELECT COUNT(*) FROM security_block_pages WHERE is_default=1").Scan(&hasDefaultBlockPage)
+	if hasDefaultBlockPage == 0 {
+		db.DB.Exec(`INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, created_at, updated_at) VALUES (1, '默认拦截页面', '系统默认 403 拦截页面', '', TRUE, datetime('now'), datetime('now'))`)
+		SeedDefaultBlockPage(h.cfg.DataDir)
+	}
+
 	auditParts := []string{"来源：v2 备份（覆盖导入）", counts}
 	if jwtExpireClamped {
 		auditParts = append(auditParts, "jwt_expire_minutes 越界，已重置为 20")
