@@ -124,8 +124,8 @@ func TestToolsListHidesWriteTools_forReadOnlyAPIKey(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("parse tools/list response: %v", err)
 	}
-	if len(payload.Result.Tools) != 15 {
-		t.Fatalf("read-only tool count=%d, want 15", len(payload.Result.Tools))
+	if len(payload.Result.Tools) != 53 {
+		t.Fatalf("read-only tool count=%d, want 53", len(payload.Result.Tools))
 	}
 	dashboardVisible := false
 	for _, tool := range payload.Result.Tools {

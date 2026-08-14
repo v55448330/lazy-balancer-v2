@@ -94,8 +94,8 @@ func TestMCPEndpointAuthenticationGatesAndProtocol(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Result.Tools) != 26 {
-		t.Fatalf("tool count=%d, want 26", len(payload.Result.Tools))
+	if len(payload.Result.Tools) != 116 {
+		t.Fatalf("tool count=%d, want 116", len(payload.Result.Tools))
 	}
 }
 
