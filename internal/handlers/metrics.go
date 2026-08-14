@@ -149,18 +149,19 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	}
 
 	var metrics gin.H
+	var parseErr error
 	if rule.Protocol == "tcp" {
 		upstreams, err := loadRuleUpstreams(ruleID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则上游失败: " + err.Error()})
 			return
 		}
-		metrics, err = parseTCPRuleMetricsFromPrometheus(string(body), upstreams)
+		metrics, parseErr = parseTCPRuleMetricsFromPrometheus(string(body), upstreams)
 	} else {
-		metrics, err = parseRuleMetricsFromPrometheus(string(body), rule.Domain, rule.ListenPort, rule.Protocol, rule.EnableTLS)
+		metrics, parseErr = parseRuleMetricsFromPrometheus(string(body), rule.Domain, rule.ListenPort, rule.Protocol, rule.EnableTLS)
 	}
-	if err != nil {
-		caddyMetricsError(c, err)
+	if parseErr != nil {
+		caddyMetricsError(c, parseErr)
 		return
 	}
 
