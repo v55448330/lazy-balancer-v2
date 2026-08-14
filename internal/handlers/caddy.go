@@ -722,6 +722,12 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
+	// `caddy run` boots with the bare Caddyfile (welcome page); re-apply the
+	// database-generated config so every rule survives a Caddy restart.
+	if err := h.caddyService.GenerateAndApplyConfig(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy started but config apply failed: " + err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy started"})
 }
 
@@ -746,6 +752,11 @@ func (h *Handlers) RestartCaddy(c *gin.Context) {
 	}
 	if err := startCaddy(h.cfg.CaddyAdminURL); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	// Same as StartCaddy: a fresh `caddy run` only knows the Caddyfile.
+	if err := h.caddyService.GenerateAndApplyConfig(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy restarted but config apply failed: " + err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy restarted"})
