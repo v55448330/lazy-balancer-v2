@@ -1,9 +1,9 @@
 <template>
   <el-config-provider :locale="zhCn">
-    <div v-if="loading" class="min-h-screen flex items-center justify-center bg-slate-900">
-      <div class="flex flex-col items-center gap-4">
-        <div class="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-        <div class="text-slate-400">加载中...</div>
+    <div v-if="loading" class="app-loading">
+      <div class="app-loading__inner">
+        <div class="app-loading__spinner"></div>
+        <div class="app-loading__text">加载中...</div>
       </div>
     </div>
 
@@ -93,3 +93,34 @@ onMounted(async () => {
   }
 })
 </script>
+
+<style scoped>
+.app-loading {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0f172a;
+}
+.app-loading__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.app-loading__spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid #3b82f6;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: app-loading-spin 0.8s linear infinite;
+}
+.app-loading__text {
+  color: #94a3b8;
+  font-size: 14px;
+}
+@keyframes app-loading-spin {
+  to { transform: rotate(360deg); }
+}
+</style>

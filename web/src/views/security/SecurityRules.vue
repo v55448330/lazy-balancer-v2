@@ -82,7 +82,7 @@
               <template #default><el-button link type="primary" size="small">查看</el-button></template>
             </el-table-column>
           </el-table>
-          <div class="flex justify-center mt-4">
+          <div style="display: flex; justify-content: center; margin-top: 16px;">
           <div class="rules-pagination">
             <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10, 20, 50, 100]" :total="total" layout="total, sizes, prev, pager, next" @current-change="fetchRules" @size-change="fetchRules" />
           </div>
@@ -103,7 +103,7 @@
             <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
             <el-table-column label="条件" min-width="250">
               <template #default="{ row }">
-                <el-tag v-for="(cond, i) in row.conditions" :key="i" size="small" effect="plain" class="mr-1">{{ cond.target }} {{ cond.operator }} {{ cond.pattern }}</el-tag>
+                <el-tag v-for="(cond, i) in row.conditions" :key="i" size="small" effect="plain" style="margin-right: 4px;">{{ cond.target }} {{ cond.operator }} {{ cond.pattern }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="动作" width="80" align="center">
