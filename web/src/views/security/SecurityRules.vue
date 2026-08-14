@@ -785,7 +785,6 @@ onUnmounted(() => {
 .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .search-input { width: 280px; }
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
-.form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
 .update-status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .update-log-container { max-height: 480px; overflow: auto; background: #1e293b; border-radius: 6px; padding: 16px; }
 .update-log-content { margin: 0; color: #e4e4e7; font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; }

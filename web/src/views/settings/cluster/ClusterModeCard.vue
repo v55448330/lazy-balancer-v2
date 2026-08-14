@@ -15,7 +15,7 @@
           <el-radio value="master">主节点</el-radio>
           <el-radio value="slave">从节点</el-radio>
         </el-radio-group>
-        <div class="form-tip">主节点管理权威配置，从节点定期同步主节点数据</div>
+        <div class="form-tip-line">主节点管理权威配置，从节点定期同步主节点数据</div>
       </el-form-item>
 
       <el-form-item label="同步间隔">
@@ -24,7 +24,7 @@
           <span class="interval-unit">秒</span>
           <el-button v-if="!isSlave" :loading="intervalSaving" :disabled="intervalDisabled || syncInterval === status?.sync_interval" @click="saveSyncInterval">保存</el-button>
         </div>
-        <div class="form-tip">{{ isSlave ? '由主节点同步下发，从节点不可修改' : '从节点拉取同步与上报状态的周期（10–3600 秒）' }}</div>
+        <div class="form-tip-line">{{ isSlave ? '由主节点同步下发，从节点不可修改' : '从节点拉取同步与上报状态的周期（10–3600 秒）' }}</div>
       </el-form-item>
 
       <template v-if="showRegistration">
@@ -45,7 +45,7 @@
         />
         <el-form-item label="主节点地址" prop="master_url">
           <el-input v-model="form.master_url" placeholder="https://master.example.com:8000" />
-          <div class="form-tip">填写可从当前节点访问的主节点管理地址</div>
+          <div class="form-tip-line">填写可从当前节点访问的主节点管理地址</div>
         </el-form-item>
         <el-form-item label="注册令牌" prop="register_token">
           <el-input v-model="form.register_token" type="password" show-password placeholder="请输入一次性注册令牌" />
@@ -189,7 +189,6 @@ const submitRegistration = async (): Promise<void> => {
 .card-header { display: flex; align-items: center; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .settings-form { max-width: 760px; padding: 4px 0; }
-.form-tip { width: 100%; margin-top: 4px; color: var(--text-muted); font-size: 12px; }
 .registration-alert { margin-bottom: 16px; }
 .interval-row { display: flex; align-items: center; gap: 8px; }
 .interval-unit { color: var(--text-secondary); font-size: 13px; }

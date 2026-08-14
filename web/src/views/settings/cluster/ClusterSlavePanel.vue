@@ -35,7 +35,7 @@
       <el-button :disabled="readOnly || syncing || promoting" @click="$emit('reregister')">重新注册</el-button>
       <el-button type="danger" plain :loading="promoting" :disabled="readOnly || syncing" @click="$emit('promote')">提升为主节点</el-button>
     </div>
-    <div class="form-tip">提升后将脱离当前集群，本地数据将成为权威数据。</div>
+    <div class="form-tip-line">提升后将脱离当前集群，本地数据将成为权威数据。</div>
   </el-card>
 </template>
 
@@ -63,5 +63,4 @@ defineEmits<{
 .state-alert { margin-bottom: 16px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .actions :deep(.el-button + .el-button) { margin-left: 0; }
-.form-tip { margin-top: 12px; color: var(--text-muted); font-size: 12px; }
 </style>

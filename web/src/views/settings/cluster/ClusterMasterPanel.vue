@@ -12,7 +12,7 @@
     <div class="setting-row">
       <div>
         <div class="setting-label">同步 Caddy 全局配置</div>
-        <div class="form-tip">开启后，从节点同步主节点的 Caddy 全局配置</div>
+        <div class="form-tip-line">开启后，从节点同步主节点的 Caddy 全局配置</div>
       </div>
       <el-switch :model-value="status.sync_caddy_config" :loading="settingsLoading" :disabled="readOnly" @change="handleSyncChange" />
     </div>
@@ -25,7 +25,7 @@
           <el-icon><List /></el-icon>
           <span>节点列表</span>
         </div>
-        <span class="form-tip">每 15 秒自动刷新</span>
+        <span class="form-tip-line">每 15 秒自动刷新</span>
       </div>
     </template>
 
@@ -64,7 +64,7 @@
               {{ row.health.caddy_ok ? '正常' : '异常' }}
             </el-tag>
           </el-tooltip>
-          <span v-else class="form-tip">暂无</span>
+          <span v-else class="form-tip-line">暂无</span>
         </template>
       </el-table-column>
       <el-table-column label="最后上报时间" min-width="170">
@@ -174,8 +174,7 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .setting-label { color: var(--text-primary); font-size: 13px; font-weight: 500; }
-.form-tip { color: var(--text-muted); font-size: 12px; }
-.setting-row .form-tip { margin-top: 4px; }
+.setting-row .form-tip-line { margin-top: 4px; }
 .mono-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 .access-url-link { display: inline-flex; max-width: 100%; vertical-align: middle; }
 .access-url-link :deep(.el-link__inner) { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

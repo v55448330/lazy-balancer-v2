@@ -165,6 +165,4 @@ onMounted(fetchData)
 <style scoped>
 .block-content-editor { border: 1px solid #e4e7ed; border-radius: 6px; overflow: hidden; }
 .block-page-form .content-form-item .el-form-item__content { flex: 1; max-width: 100%; }
-.form-tip-line { font-size: 12px; color: #9ca3af; margin-top: 6px; line-height: 1.5; }
-.form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
 </style>

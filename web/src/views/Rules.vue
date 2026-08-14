@@ -279,7 +279,7 @@
 
             <el-form-item label="域名" required v-if="wizardForm.protocol === 'http'" class="domain-item">
               <el-input v-model="wizardForm.domain" placeholder="例如：example.com, www.example.com" />
-              <div class="form-tip-tight">多个域名用逗号分隔，用于 HTTPS 证书和 HTTP 重定向</div>
+              <div class="form-tip-line">多个域名用逗号分隔，用于 HTTPS 证书和 HTTP 重定向</div>
             </el-form-item>
 
             <el-form-item label="监听端口" required>
@@ -330,14 +330,14 @@
                 <el-select v-model="wizardForm.acme_config_id" placeholder="选择 DNS 提供商配置" style="width: 100%;">
                   <el-option v-for="cfg in certConfigs" :key="cfg.id" :label="cfg.name" :value="cfg.id" />
                 </el-select>
-                <div class="form-tip">请先在「系统设置 / 免费证书」中添加 DNS 提供商配置</div>
+                <div class="form-tip-line">请先在「系统设置 / 免费证书」中添加 DNS 提供商配置</div>
               </el-form-item>
               <el-form-item label="CA 提供商">
                 <el-select v-model="wizardForm.ca_provider_id" placeholder="系统默认" clearable style="width: 100%">
                   <el-option label="系统默认" :value="0" />
                   <el-option v-for="p in enabledCAProviders" :key="p.id" :label="p.name" :value="p.id" />
                 </el-select>
-                <div class="form-tip">选择自动签发证书使用的 CA 提供商，留空或「系统默认」将跟随全局默认设置</div>
+                <div class="form-tip-line">选择自动签发证书使用的 CA 提供商，留空或「系统默认」将跟随全局默认设置</div>
               </el-form-item>
             </template>
             <template v-else>
@@ -485,7 +485,7 @@
                 </template>
               </el-table-column>
             </el-table>
-            <div class="form-tip">
+            <div class="form-tip-line">
               <span v-if="upstreamHostWarning" class="port-warning">{{ upstreamHostWarning }}</span>
               <span v-else>权重：数字越大，分配到的请求越多；权重相同时即为普通轮询。至少需要添加一个上游服务器。</span>
             </div>
@@ -3047,10 +3047,6 @@ onUnmounted(() => {
   min-width: 44px;
 }
 .text-secondary { color: #6b7280; }
-.form-tip { font-size: 12px; color: #9ca3af; margin-top: 8px; }
-.form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
-.form-tip-line { font-size: 12px; color: #9ca3af; margin-top: 4px; }
-.form-tip-tight { font-size: 12px; color: #9ca3af; margin-top: 2px; }
 .port-warning { color: #eab308; }
 
 /* Fix table cell padding */

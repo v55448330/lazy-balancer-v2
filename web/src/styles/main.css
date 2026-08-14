@@ -123,3 +123,34 @@ body {
   color: var(--text-secondary);
   font-size: 13px;
 }
+
+/* ===== 表单描述标准样式（全项目统一，禁止组件内重复定义或新写） =====
+ * 用法规范（二选一，按描述位置选择）：
+ *   form-tip-inline — 与控件同一行的简短后缀描述。
+ *     模板：<span class="form-tip-inline">描述文字</span>
+ *     场景：单位后缀（"次/秒"）、单行短说明（"越低越严格"）。
+ *   form-tip-line — 控件下方独占一行的块级描述。
+ *     模板：<div class="form-tip-line">描述文字</div>
+ *     场景：解释性长文、含链接的引导（"去创建/编辑"）、开关/多行控件说明。
+ * 规则：不要使用 el-text 包裹（垂直对齐不一致）；不要在 scoped CSS 中
+ * 重新定义这两个类；需要强调时在 .form-tip-line 内用 el-link。 */
+.form-tip-inline {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-left: 8px;
+  vertical-align: middle;
+  line-height: 1;
+}
+
+.form-tip-line {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-top: 6px;
+  line-height: 1.5;
+  width: 100%;
+}
+
+.form-tip-line .el-link {
+  font-size: 12px;
+  vertical-align: baseline;
+}

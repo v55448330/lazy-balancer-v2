@@ -20,7 +20,7 @@
           :disabled="saving"
           @keyup.enter="save"
         />
-        <div class="form-tip">
+        <div class="form-tip-line">
           {{ form.access_url.trim() ? '请输入可从浏览器访问的 HTTP 或 HTTPS 地址' : '留空将回退使用注册地址' }}
         </div>
       </el-form-item>
@@ -135,5 +135,4 @@ const save = async (): Promise<void> => {
 </script>
 
 <style scoped>
-.form-tip { width: 100%; margin-top: 4px; color: var(--text-muted); font-size: 12px; }
 </style>

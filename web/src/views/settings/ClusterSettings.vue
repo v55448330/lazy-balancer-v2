@@ -59,7 +59,7 @@
           <el-icon><CopyDocument /></el-icon>复制令牌
         </el-button>
       </div>
-      <div class="form-tip">有效期至：{{ formatDate(registerToken?.expires_at ?? '') || '-' }}</div>
+      <div class="form-tip-line">有效期至：{{ formatDate(registerToken?.expires_at ?? '') || '-' }}</div>
       <template #footer><el-button type="primary" @click="tokenDialogVisible = false">我已保存</el-button></template>
     </el-dialog>
   </div>
@@ -375,7 +375,6 @@ onUnmounted(() => {
 .cluster-settings { display: flex; flex-direction: column; gap: 20px; }
 .token-box { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding: 12px; border-radius: var(--radius-md); background: var(--bg-secondary); }
 .token-box code { flex: 1; min-width: 0; color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; word-break: break-all; }
-.form-tip { margin-top: 12px; color: var(--text-muted); font-size: 12px; }
 
 @media (max-width: 768px) {
   .token-box { align-items: stretch; flex-direction: column; }

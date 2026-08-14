@@ -125,7 +125,7 @@
                 <el-option :value="10" label="宽松（10）" />
                 <el-option :value="20" label="极宽松（20）" />
               </el-select>
-              <el-text class="form-tip-inline">规则异常分值累计达到此阈值后触发拦截，越低越严格</el-text>
+              <span class="form-tip-inline">规则异常分值累计达到此阈值后触发拦截，越低越严格</span>
             </el-form-item>
             <el-form-item label="CRS 规则组">
               <el-select v-model="crsRuleGroups" :disabled="form.mode === 'off'" multiple filterable placeholder="留空加载全部 CRS 规则" style="width: 100%">
@@ -135,7 +135,7 @@
             </el-form-item>
             <el-form-item label="检查响应体">
               <el-switch v-model="form.waf_check_response" :disabled="form.mode === 'off'" />
-              <el-text class="form-tip-inline">开启后 WAF 读取并检查上游响应内容（响应泄露类规则需要）；关闭可显著降低内存与 CPU 开销，大多数部署只需检查请求</el-text>
+              <div class="form-tip-line">开启后 WAF 读取并检查上游响应内容（响应泄露类规则需要）；关闭可显著降低内存与 CPU 开销，大多数部署只需检查请求</div>
             </el-form-item>
             <el-form-item label="排除规则">
               <el-select v-model="crsExcludedRules" :disabled="form.mode === 'off'" multiple filterable placeholder="搜索并选择要排除的规则" style="width: 100%">
@@ -219,11 +219,11 @@
             <template v-if="form.rate_limit_enabled">
               <el-form-item label="速率上限">
                 <el-input-number v-model="form.rate_limit_rps" :min="1" style="width: 120px" />
-                <el-text class="form-tip-inline">次/秒，持续请求时的速率上限</el-text>
+                <span class="form-tip-inline">次/秒，持续请求时的速率上限</span>
               </el-form-item>
               <el-form-item label="突发余量">
                 <el-input-number v-model="form.rate_limit_burst" :min="0" style="width: 120px" />
-                <el-text class="form-tip-inline">次，短时允许超出速率上限的额外请求数</el-text>
+                <span class="form-tip-inline">次，短时允许超出速率上限的额外请求数</span>
               </el-form-item>
             </template>
           </el-form>
@@ -813,9 +813,6 @@ onMounted(async () => {
 .search-input { width: 280px; }
 
 .capability-tags { display: flex; gap: 6px; }
-.form-tip-inline { font-size: 12px; color: #9ca3af; margin-left: 8px; vertical-align: middle; line-height: 1; }
-.form-tip-line { font-size: 12px; color: #9ca3af; margin-top: 6px; line-height: 1.5; }
-.form-tip-line :deep(.el-link) { font-size: 12px; vertical-align: baseline; }
 
 .waf-off-hint {
   padding: 0 30px 0 120px;
