@@ -167,6 +167,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	services.ApplyLogLevel()
 
 	r := gin.New()
+	r.SetTrustedProxies(nil)
 	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
 		if !shouldLogRequest(param.StatusCode, param.Latency) {
 			return ""
