@@ -44,7 +44,7 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 			clusterError(c, http.StatusInternalServerError, "节点脱离处理失败", err)
 			return
 		}
-		services.RecordAuditLog("system", "脱离", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), services.AuditResultPart("success")), "")
+		services.RecordAuditLog("system", "脱离", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), services.AuditResultPart("success")), c.ClientIP())
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "节点已脱离集群"})
 		return
 	}

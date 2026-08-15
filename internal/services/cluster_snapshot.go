@@ -178,19 +178,28 @@ const snapshotCertMissingExpiryWindow = 30 * time.Second
 
 func nearestSnapshotCertificateExpiry(certificates []models.ClusterCertificate, now time.Time) time.Time {
 	var nearest time.Time
+	missingExpiry := false
 	for _, certificate := range certificates {
 		if certificate.ExpiresAt == "" {
 			// 手工证书（Domain 为空）不做有效期过滤，不参与失效判定；ACME 证书
 			// 缺失 expires_at 时给出最小重建窗口，避免每次 Pull 全量重建风暴，
 			// 同时保留自愈尝试的节奏。
 			if certificate.Domain != "" {
-				return now.Add(snapshotCertMissingExpiryWindow)
+				missingExpiry = true
 			}
 			continue
 		}
 		expiresAt, err := parseSnapshotExpiry(certificate.ExpiresAt)
 		if err == nil && (nearest.IsZero() || expiresAt.Before(nearest)) {
 			nearest = expiresAt
+		}
+	}
+	// 存在缺失过期时间的 ACME 证书时，重建窗口不能覆盖更早的真实到期时间：
+	// 取「最近到期」与「缺失窗口」中更早者，避免较近的真实到期被 30s 窗口吞掉。
+	if missingExpiry {
+		rebuild := now.Add(snapshotCertMissingExpiryWindow)
+		if nearest.IsZero() || rebuild.Before(nearest) {
+			return rebuild
 		}
 	}
 	return nearest

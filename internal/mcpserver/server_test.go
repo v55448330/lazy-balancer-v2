@@ -202,6 +202,37 @@ func TestResolveAPIKeyReadOnly_treatsDisabledOwnerAsNotReadOnly(t *testing.T) {
 	}
 }
 
+func TestResolveAPIKeyReadOnly_rejectsExpiredKey(t *testing.T) {
+	// Given
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
+	})
+	apiKey := "lb_sk_expired-key"
+	hash := sha256.Sum256([]byte(apiKey))
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (93,'expired-owner','x','admin',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,mcp_enabled,read_only,expires_at) VALUES ('expired-owner',?,?,93,1,1,1,datetime('now','-1 hour'))`, fmt.Sprintf("%x", hash[:]), apiKey[:12]); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	readOnly, err := resolveAPIKeyReadOnly(apiKey)
+
+	// Then：key 已过期时按 key-not-found 处理，不视为只读
+	if err == nil {
+		t.Fatalf("want key-not-found err for expired key, got nil")
+	}
+	if readOnly {
+		t.Fatalf("expired key treated as read-only")
+	}
+}
+
 func TestIsLoopbackHTTPURLAllowsIPv6Loopback(t *testing.T) {
 	target, err := url.Parse("http://[::1]:8000/api/v1")
 	if err != nil {

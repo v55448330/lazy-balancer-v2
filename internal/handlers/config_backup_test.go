@@ -358,10 +358,10 @@ func TestConfigBackup_roundtrips_security_version_tables(t *testing.T) {
 	if _, err := db.DB.Exec("INSERT INTO users (username, password_hash, role) VALUES ('keep', 'hash', 'admin')"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	if _, err := db.DB.Exec("INSERT OR REPLACE INTO security_crs_version (id, version, auto_update) VALUES (1, 'v4.14.0', 1)"); err != nil {
+	if _, err := db.DB.Exec("INSERT OR REPLACE INTO security_crs_version (id, version, auto_update, update_status, next_update) VALUES (1, 'v4.14.0', 1, 'checking', '2099-01-01 00:00:00')"); err != nil {
 		t.Fatalf("seed crs version: %v", err)
 	}
-	if _, err := db.DB.Exec("INSERT OR REPLACE INTO security_ip2region_version (id, version, auto_update) VALUES (1, 'v3.17.0', 0)"); err != nil {
+	if _, err := db.DB.Exec("INSERT OR REPLACE INTO security_ip2region_version (id, version, auto_update, update_status, next_update) VALUES (1, 'v3.17.0', 0, 'downloading', '2099-06-06 06:06:06')"); err != nil {
 		t.Fatalf("seed ip2region version: %v", err)
 	}
 	router := gin.New()
@@ -393,19 +393,36 @@ func TestConfigBackup_roundtrips_security_version_tables(t *testing.T) {
 	}
 	var crsVersion string
 	var crsAutoUpdate int
-	if err := db.DB.QueryRow("SELECT version, auto_update FROM security_crs_version WHERE id=1").Scan(&crsVersion, &crsAutoUpdate); err != nil {
+	var crsUpdateStatus, crsNextUpdate string
+	if err := db.DB.QueryRow("SELECT version, auto_update, COALESCE(update_status,''), COALESCE(next_update,'') FROM security_crs_version WHERE id=1").Scan(&crsVersion, &crsAutoUpdate, &crsUpdateStatus, &crsNextUpdate); err != nil {
 		t.Fatalf("read restored crs version: %v", err)
 	}
-	if crsVersion != "v4.14.0" || crsAutoUpdate != 1 {
-		t.Fatalf("restored crs version=%q auto_update=%d, want v4.14.0/1", crsVersion, crsAutoUpdate)
+	if crsVersion != "v4.14.0" || crsAutoUpdate != 1 || crsUpdateStatus != "checking" {
+		t.Fatalf("restored crs version=%q auto_update=%d update_status=%q, want v4.14.0/1/checking", crsVersion, crsAutoUpdate, crsUpdateStatus)
 	}
+	assertNextUpdateRoundTrip(t, crsNextUpdate, 2099, time.January, 1, 0, 0, 0)
 	var ip2regionVersion string
 	var ip2regionAutoUpdate int
-	if err := db.DB.QueryRow("SELECT version, auto_update FROM security_ip2region_version WHERE id=1").Scan(&ip2regionVersion, &ip2regionAutoUpdate); err != nil {
+	var ip2regionUpdateStatus, ip2regionNextUpdate string
+	if err := db.DB.QueryRow("SELECT version, auto_update, COALESCE(update_status,''), COALESCE(next_update,'') FROM security_ip2region_version WHERE id=1").Scan(&ip2regionVersion, &ip2regionAutoUpdate, &ip2regionUpdateStatus, &ip2regionNextUpdate); err != nil {
 		t.Fatalf("read restored ip2region version: %v", err)
 	}
-	if ip2regionVersion != "v3.17.0" || ip2regionAutoUpdate != 0 {
-		t.Fatalf("restored ip2region version=%q auto_update=%d, want v3.17.0/0", ip2regionVersion, ip2regionAutoUpdate)
+	if ip2regionVersion != "v3.17.0" || ip2regionAutoUpdate != 0 || ip2regionUpdateStatus != "downloading" {
+		t.Fatalf("restored ip2region version=%q auto_update=%d update_status=%q, want v3.17.0/0/downloading", ip2regionVersion, ip2regionAutoUpdate, ip2regionUpdateStatus)
+	}
+	assertNextUpdateRoundTrip(t, ip2regionNextUpdate, 2099, time.June, 6, 6, 6, 6)
+}
+
+func assertNextUpdateRoundTrip(t *testing.T, got string, year int, month time.Month, day, hour, minute, second int) {
+	t.Helper()
+	// next_update 为 DATETIME 列，导出经 JSON 序列化会被驱动规范化为 RFC3339 文本，
+	// 导入后按同一 UTC 时刻做语义比对，而非逐字节比较。
+	parsed, err := time.Parse(time.RFC3339, got)
+	if err != nil {
+		t.Fatalf("restored next_update %q is not RFC3339: %v", got, err)
+	}
+	if want := time.Date(year, month, day, hour, minute, second, 0, time.UTC); !parsed.Equal(want) {
+		t.Fatalf("restored next_update=%v, want %v", parsed, want)
 	}
 }
 

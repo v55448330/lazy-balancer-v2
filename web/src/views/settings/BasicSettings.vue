@@ -379,6 +379,8 @@ const summaryLabels: Record<string, string> = {
   cert_jobs: '证书任务',
   rules: '规则',
   tls_rules: '其中 TLS 规则',
+  security_crs_version: 'CRS 版本',
+  security_ip2region_version: 'IP2Region 版本',
 }
 
 const conflictIdentifier = (conflict: { name?: string; caddy_id?: string }): string => conflict.name || conflict.caddy_id || '未命名规则'
