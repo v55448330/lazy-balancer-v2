@@ -264,11 +264,6 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	}
 	promoted = true
 
-	// 通知旧主节点该从节点已脱离（best-effort：失败不阻断提升，主节点
-	// 会在上报超时后将其标记下线；成功则主节点节点列表立即更新并留痕）。
-	if masterURL != "" && oldToken != "" {
-		go notifyMasterDetach(context.WithoutCancel(ctx), s.db, masterURL, oldToken)
-	}
 	if registrationID > 0 {
 		RecordAuditLog("system", "提升", "集群节点", FormatAuditDetail(fmt.Sprintf("注册编号：%d", registrationID), "本节点已脱离集群并提升为主节点", AuditResultPart("success")), "")
 	}
@@ -294,6 +289,19 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 			log.Printf("locate old cluster master pin after promotion: %v", err)
 			RecordAuditLog("system", "清理证书指纹失败", "集群节点", FormatAuditDetail("旧主节点："+parsedMasterURL.Scheme+"://"+parsedMasterURL.Host, err.Error()), "")
 			return nil
+		}
+		// 先读取已知指纹，再清理并通知：脱离通知的 transport 按连接读取 pin 文件
+		//（TOFU 会在文件缺失时重新写回），必须在清理前取出指纹并让通知"仅比对
+		// 不落盘"，否则通知握手晚于清理会把旧主节点指纹重新写回、再次信任已脱离
+		// 的节点。
+		pinFingerprint := ""
+		if content, readErr := os.ReadFile(pinPath); readErr == nil {
+			pinFingerprint = strings.TrimSpace(string(content))
+		}
+		if oldToken != "" {
+			// 通知旧主节点该从节点已脱离（best-effort：失败不阻断提升，主节点
+			// 会在上报超时后将其标记下线；成功则主节点节点列表立即更新并留痕）。
+			go notifyMasterDetach(context.WithoutCancel(ctx), masterURL, oldToken, pinFingerprint)
 		}
 		s.cleanupClusterPin(pinPath, parsedMasterURL.Scheme+"://"+parsedMasterURL.Host)
 	}
@@ -325,11 +333,16 @@ func (s *ClusterService) retryPendingPinCleanup() {
 	}
 }
 
+// nodeOfflineMultiplier 判定节点离线时 last_seen 的允许超时倍率（× sync_interval 秒）。
+// MetricsService.updateOverview 的在线节点统计口径必须与此一致，共用本常量，
+// 避免阈值在两处各自硬编码导致口径漂移。
+const nodeOfflineMultiplier = 2
+
 func ComputeNodeStatus(approved bool, lastSeen time.Time, syncInterval int, now time.Time) string {
 	if !approved {
 		return "pending"
 	}
-	if lastSeen.IsZero() || now.Sub(lastSeen) > 2*time.Duration(syncInterval)*time.Second {
+	if lastSeen.IsZero() || now.Sub(lastSeen) > nodeOfflineMultiplier*time.Duration(syncInterval)*time.Second {
 		return "offline"
 	}
 	return "online"
@@ -349,8 +362,9 @@ func DecodeClusterHealth(value string) (*models.ClusterHealth, error) {
 // notifyMasterDetach best-effort 通知旧主节点本从节点已提升脱离。提升后本节点仍持有
 // 旧集群令牌，且旧主节点仍保留本节点行与该令牌哈希，旧令牌在主节点上仍能验签通过，
 // 因此携带 detached=true 的上报会令主节点删除本节点行（令牌随之撤销），节点列表即时收敛；
-// 沿用同步 Pull 的 TOFU 证书指纹校验客户端，超时 3 秒失败仅记录不阻断提升。
-func notifyMasterDetach(ctx context.Context, database *sql.DB, masterURL, token string) {
+// 客户端仅用已知指纹比对（不落盘），避免清理后的 pin 文件被 TOFU 重新写回；超时 3 秒
+// 失败仅记录不阻断提升。
+func notifyMasterDetach(ctx context.Context, masterURL, token, expectedPin string) {
 	report := models.ClusterReport{ServiceStatus: "ok", Detached: true}
 	payload, err := json.Marshal(report)
 	if err != nil {
@@ -363,7 +377,7 @@ func notifyMasterDetach(ctx context.Context, database *sql.DB, masterURL, token 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Cluster-Token", token)
-	client := &http.Client{Timeout: 3 * time.Second, Transport: newClusterTOFUTransport("", database, nil)}
+	client := &http.Client{Timeout: 3 * time.Second, Transport: newClusterDetachTransport(expectedPin)}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)
 	if err != nil {

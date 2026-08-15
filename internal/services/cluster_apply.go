@@ -62,16 +62,6 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			Security:     snapshot.MasterSyncSwitches.Security,
 		}
 	}
-	// 将主节点开关镜像到本地列：从节点 UI/Status 读取本地列展示真实同步范围。
-	// 触发器带 is_master=1 守卫，此写不会 bump cluster_version。
-	if snapshot.MasterSyncSwitches != nil {
-		s.db.Exec(`UPDATE global_config SET
-			sync_global_config=?, sync_users=?, sync_rules=?, sync_waf_files=?, sync_security=?
-			WHERE id=1 AND COALESCE(is_master,0)=0`,
-			snapshot.MasterSyncSwitches.GlobalConfig, snapshot.MasterSyncSwitches.Users,
-			snapshot.MasterSyncSwitches.Rules, snapshot.MasterSyncSwitches.WafFiles,
-			snapshot.MasterSyncSwitches.Security)
-	}
 	skip := computeSectionSkips(s.db, snapshot, switches)
 	previous, _, err := s.cluster.Snapshot(ctx, 0, "", "")
 	if err != nil {
@@ -82,6 +72,19 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		return fmt.Errorf("开始快照事务: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// 将主节点开关镜像到本地列：从节点 UI/Status 读取本地列展示真实同步范围。
+	// 移入事务内，apply 失败回滚时开关镜像一并回滚，避免半套开关落盘。
+	// 触发器带 is_master=1 守卫，此写不会 bump cluster_version。
+	if snapshot.MasterSyncSwitches != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET
+			sync_global_config=?, sync_users=?, sync_rules=?, sync_waf_files=?, sync_security=?
+			WHERE id=1 AND COALESCE(is_master,0)=0`,
+			snapshot.MasterSyncSwitches.GlobalConfig, snapshot.MasterSyncSwitches.Users,
+			snapshot.MasterSyncSwitches.Rules, snapshot.MasterSyncSwitches.WafFiles,
+			snapshot.MasterSyncSwitches.Security); err != nil {
+			return fmt.Errorf("镜像同步开关: %w", err)
+		}
+	}
 	if err := replaceSnapshotTx(ctx, tx, snapshot, skip); err != nil {
 		return err
 	}
@@ -218,9 +221,15 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 		skip = &sectionSkips{disabled: map[string]bool{}, unchanged: map[string]bool{}}
 	}
 	if !skip.skip("rules") {
-		if err := clearSyncTables(ctx, tx, "path_rules", "upstreams", "cert_jobs", "lb_rules"); err != nil {
+		if err := clearSyncTables(ctx, tx, "path_rules", "upstreams", "lb_rules"); err != nil {
 			return err
 		}
+	}
+	// cert_jobs 存主节点下发的证书（从节点自身不签发），与 ca_providers/certificate_configs
+	// 同为全量替换，不纳入 rules 节哈希跳过：rules 节命中哈希跳过后证书 INSERT 仍会重放，
+	// 残留旧行会撞 (rule_id,domain) 唯一索引，导致同步永久失败。
+	if err := clearSyncTables(ctx, tx, "cert_jobs"); err != nil {
+		return err
 	}
 	if !skip.skip("users") {
 		if err := clearSyncTables(ctx, tx, "api_keys", "users"); err != nil {

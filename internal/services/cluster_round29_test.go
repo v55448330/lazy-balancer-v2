@@ -277,7 +277,7 @@ func certificatePairForDomains(t *testing.T, notBefore, notAfter time.Time, doma
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
 }
 
-func TestNearestSnapshotCertificateExpiry_acmeWithEmptyExpiryExpiresImmediately(t *testing.T) {
+func TestNearestSnapshotCertificateExpiry_acmeWithEmptyExpiryUsesRebuildWindow(t *testing.T) {
 	// Given
 	now := time.Now().UTC()
 
@@ -287,8 +287,8 @@ func TestNearestSnapshotCertificateExpiry_acmeWithEmptyExpiryExpiresImmediately(
 	}, now)
 
 	// Then
-	if !got.Equal(now) {
-		t.Fatalf("expiry=%v, want immediate (%v)", got, now)
+	if !got.Equal(now.Add(snapshotCertMissingExpiryWindow)) {
+		t.Fatalf("expiry=%v, want rebuild window %v", got, now.Add(snapshotCertMissingExpiryWindow))
 	}
 }
 

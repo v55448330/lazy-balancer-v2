@@ -171,14 +171,20 @@ func snapshotOwnershipHash(ctx context.Context, store snapshotStore) ([sha256.Si
 	return sha256.Sum256(content), nil
 }
 
+// snapshotCertMissingExpiryWindow 是 ACME 证书缺失 expires_at 时的最小缓存重建窗口：
+// 缺失过期时间的证书无法参与有效期判定，若直接返回 now 会使缓存永远命中失败、每次
+// 从节点 Pull 都重建全量快照；给定 30s 窗口把自愈重试节奏限制在该周期内。
+const snapshotCertMissingExpiryWindow = 30 * time.Second
+
 func nearestSnapshotCertificateExpiry(certificates []models.ClusterCertificate, now time.Time) time.Time {
 	var nearest time.Time
 	for _, certificate := range certificates {
 		if certificate.ExpiresAt == "" {
 			// 手工证书（Domain 为空）不做有效期过滤，不参与失效判定；ACME 证书
-			// 缺失 expires_at 时视为立即过期，强制重建以自愈缺失的过期时间。
+			// 缺失 expires_at 时给出最小重建窗口，避免每次 Pull 全量重建风暴，
+			// 同时保留自愈尝试的节奏。
 			if certificate.Domain != "" {
-				return now
+				return now.Add(snapshotCertMissingExpiryWindow)
 			}
 			continue
 		}

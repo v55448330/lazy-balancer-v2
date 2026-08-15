@@ -217,6 +217,62 @@ func TestSyncService_applySnapshot_restarts_for_uploaded_admin_certificate_rotat
 	}
 }
 
+func TestSyncService_applySnapshot_replays_cert_jobs_when_rules_section_skipped(t *testing.T) {
+	// Given：从节点已应用过 rules 节（哈希一致将被跳过），但主节点另发来一张
+	// 证书。cert_jobs 有唯一索引 (rule_id,domain)，若 rules 节跳过时不清理
+	// cert_jobs，证书 INSERT 重放会撞唯一索引，导致同步永久失败。
+	_, database := newClusterTestService(t)
+	originalCertDir := certDir
+	certDir = t.TempDir()
+	t.Cleanup(func() { certDir = originalCertDir })
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enable_tls,tls_source,acme_config_id,ca_provider_id,enabled)
+		VALUES ('lb_b1','b1','http','example.com',443,1,'acme_dns',11,7,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,cert_pem,key_pem,ca_provider_id,updated_at)
+		VALUES ('lb_b1','example.com','issued',datetime('now','+30 days'),'old-cert','old-key',7,datetime('now'))`); err != nil {
+		t.Fatal(err)
+	}
+	newCertPEM, newKeyPEM := matchingCertificatePair(t, "example.com")
+	snapshot := models.ClusterSnapshot{
+		Version: 3,
+		Rules: []models.LbRule{{
+			CaddyID: "lb_b1", Name: "b1", Protocol: "http", Domain: "example.com",
+			ListenPort: 443, EnableTLS: true, TLSSource: "acme_dns",
+			ACMEConfigID: 11, CAProviderID: 7, Enabled: true,
+		}},
+		Certs: []models.ClusterCertificate{{
+			RuleID: "lb_b1", Domain: "example.com",
+			CertPEM: newCertPEM, KeyPEM: newKeyPEM, CAProviderID: 7,
+		}},
+	}
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	if _, err := database.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version) VALUES ('rules', ?, ?)`,
+		snapshot.SectionHashes["rules"], snapshot.Version); err != nil {
+		t.Fatal(err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	// When
+	err := syncService.applySnapshot(context.Background(), snapshot)
+
+	// Then
+	if err != nil {
+		t.Fatalf("apply snapshot: %v", err)
+	}
+	var certPEM string
+	if err := database.QueryRow(`SELECT cert_pem FROM cert_jobs WHERE rule_id='lb_b1' AND domain='example.com'`).Scan(&certPEM); err != nil {
+		t.Fatal(err)
+	}
+	if certPEM != newCertPEM {
+		t.Fatalf("cert_jobs 未被主节点证书替换: got %q", certPEM)
+	}
+}
+
 func TestClearSyncTables_propagatesDeleteError(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)

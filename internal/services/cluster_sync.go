@@ -152,8 +152,45 @@ func (s *SyncService) initClusterClient() {
 }
 
 // newClusterTOFUTransport 构建带 TOFU（首次信任）TLS 证书指纹校验的 transport，
-// 供同步 Pull 与提升后的脱离通知共用，避免自签名主节点握手失败。
+// 供同步 Pull 使用，避免自签名主节点握手失败。
 func newClusterTOFUTransport(dataDir string, database *sql.DB, onVerified func(pinPath, fingerprint string)) *http.Transport {
+	return newClusterVerifyTransport(func(state tls.ConnectionState, address string) error {
+		if len(state.PeerCertificates) == 0 {
+			return errors.New("主节点未提供 TLS 证书")
+		}
+		pinPath, err := clusterPinPath(dataDir, database, address)
+		if err != nil {
+			return err
+		}
+		fingerprint := sha256.Sum256(state.PeerCertificates[0].Raw)
+		encoded := hex.EncodeToString(fingerprint[:])
+		if err := verifyOrStoreClusterPin(pinPath, encoded); err != nil {
+			return err
+		}
+		if onVerified != nil {
+			onVerified(pinPath, encoded)
+		}
+		return nil
+	})
+}
+
+// newClusterDetachTransport 为提升后的脱离通知构建"仅比对不落盘"的 TLS 校验
+// transport：提升时旧主节点 pin 文件已被删除，若复用 TOFU transport 会在握手时
+// 把指纹重新写回、再次信任已脱离的旧主节点；此处仅与已知指纹比对，失败即拒绝。
+func newClusterDetachTransport(expectedPin string) *http.Transport {
+	return newClusterVerifyTransport(func(state tls.ConnectionState, _ string) error {
+		if len(state.PeerCertificates) == 0 {
+			return errors.New("主节点未提供 TLS 证书")
+		}
+		fingerprint := sha256.Sum256(state.PeerCertificates[0].Raw)
+		if hex.EncodeToString(fingerprint[:]) != expectedPin {
+			return errClusterPinMismatch
+		}
+		return nil
+	})
+}
+
+func newClusterVerifyTransport(verify func(state tls.ConnectionState, address string) error) *http.Transport {
 	tlsConfig := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: true,
@@ -175,22 +212,7 @@ func newClusterTOFUTransport(dataDir string, database *sql.DB, onVerified func(p
 		}
 		configForAddress.ServerName = host
 		configForAddress.VerifyConnection = func(state tls.ConnectionState) error {
-			if len(state.PeerCertificates) == 0 {
-				return errors.New("主节点未提供 TLS 证书")
-			}
-			pinPath, err := clusterPinPath(dataDir, database, address)
-			if err != nil {
-				return err
-			}
-			fingerprint := sha256.Sum256(state.PeerCertificates[0].Raw)
-			encoded := hex.EncodeToString(fingerprint[:])
-			if err := verifyOrStoreClusterPin(pinPath, encoded); err != nil {
-				return err
-			}
-			if onVerified != nil {
-				onVerified(pinPath, encoded)
-			}
-			return nil
+			return verify(state, address)
 		}
 		return (&tls.Dialer{Config: configForAddress}).DialContext(ctx, network, address)
 	}
