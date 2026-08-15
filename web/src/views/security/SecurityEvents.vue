@@ -79,18 +79,20 @@ import { formatDate } from '@/utils/date'
 interface APIResponse<T> { code: number; message: string; data: T }
 interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string; rule_name: string; policy_id: number; policy_name: string; client_ip: string; method: string; uri: string; event_type: string; rule_triggered: string; rule_msg: string; action: string; anomaly_score: number }
 
-// 触发规则 family 映射：'2'/'3'/'4' 为 IP 访问控制拦截，'949110' 为异常评分评估拦截，其余为 CRS 规则 ID
+// 触发规则 family 映射：'2'/'3'/'4' 为 IP 访问控制拦截，949 为异常评分评估拦截，920/921 为协议异常/攻击，其余为 CRS 规则 ID
 const triggeredLabel = (row: SecurityEvent): string => {
   const t = row.rule_triggered
   if (!t) return '—'
   if (t === '2' || t === '3' || t === '4') return 'IP 访问控制'
-  if (t === '949110') return '请求阻断评估'
+  if (/^949/.test(t)) return '请求阻断评估'
+  if (/^920/.test(t)) return '协议异常'
+  if (/^921/.test(t)) return '协议攻击'
   if (/^1\d{4}$/.test(t)) return '自定义规则'
   return t
 }
 const showTriggeredMsg = (row: SecurityEvent): boolean => {
   const t = row.rule_triggered
-  return !!t && t !== '2' && t !== '3' && t !== '4' && t !== '949110' && !!row.rule_msg
+  return !!t && t !== '2' && t !== '3' && t !== '4' && !/^949/.test(t) && !!row.rule_msg
 }
 
 const loading = ref(false)

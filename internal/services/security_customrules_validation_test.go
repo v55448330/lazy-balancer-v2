@@ -68,6 +68,28 @@ func TestValidateCustomRuleConditions_acceptsValid(t *testing.T) {
 	}
 }
 
+func TestValidateCustomRuleConditions_rejectsEmpty(t *testing.T) {
+	err := ValidateCustomRuleConditions(nil)
+	if err == nil || !strings.Contains(err.Error(), "至少需要一个匹配条件") {
+		t.Fatalf("empty conditions must be rejected, got %v", err)
+	}
+}
+
+func TestValidateCustomRuleConditions_rejectsTrailingBackslash(t *testing.T) {
+	for _, pat := range []string{`C:\`, `C:\\`} {
+		err := ValidateCustomRuleConditions([]models.CustomRuleCondition{{Target: "uri", Operator: "contains", Pattern: pat}})
+		if err == nil || !strings.Contains(err.Error(), "反斜杠结尾") {
+			t.Fatalf("pattern %q ending with backslash must be rejected, got %v", pat, err)
+		}
+	}
+}
+
+func TestValidateCustomRuleConditions_acceptsMidStringBackslash(t *testing.T) {
+	if err := ValidateCustomRuleConditions([]models.CustomRuleCondition{{Target: "uri", Operator: "contains", Pattern: `abc\def`}}); err != nil {
+		t.Fatalf("mid-string backslash must be accepted, got %v", err)
+	}
+}
+
 func TestValidateCustomRulesJSON_acceptsIDArrayAndEmbedded(t *testing.T) {
 	if err := ValidateCustomRulesJSON(`[1,2]`); err != nil {
 		t.Fatalf("id array must pass, got %v", err)

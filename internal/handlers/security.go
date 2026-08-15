@@ -1186,6 +1186,8 @@ func getContextUserIDInt(c *gin.Context) int {
 			return int(v)
 		case int:
 			return v
+		case int64:
+			return int(v)
 		}
 	}
 	return 0
@@ -1197,6 +1199,8 @@ func getContextUserID(c *gin.Context) string {
 		case float64:
 			return fmt.Sprintf("%d", int(v))
 		case int:
+			return fmt.Sprintf("%d", v)
+		case int64:
 			return fmt.Sprintf("%d", v)
 		}
 	}

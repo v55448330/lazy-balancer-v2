@@ -35,7 +35,7 @@ func TestBuildCorazaDirectives_customRuleDenyOmitsStatusCode(t *testing.T) {
 	policy := &models.SecurityPolicy{
 		Mode:          "blocking",
 		CRSRuleGroups: json.RawMessage(`["9"]`),
-		CustomRules: json.RawMessage(`[{"id":12,"name":"拒绝规则","enabled":true,"action":"block","score":5,"status_code":418,"conditions":[` +
+		CustomRules: json.RawMessage(`[{"id":12,"name":"拒绝规则","enabled":true,"action":"block","score":5,"conditions":[` +
 			`{"target":"uri","operator":"contains","pattern":"/blocked"}]}]`),
 	}
 

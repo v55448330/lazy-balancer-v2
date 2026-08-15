@@ -715,6 +715,7 @@ const saveCustomRule = async () => {
   if (!ruleForm.value.name.trim()) { ElMessage.warning('请输入规则名称'); return }
   for (const cond of ruleForm.value.conditions) {
     if (!cond.pattern.trim()) { ElMessage.error('每个条件必须填写匹配值'); return }
+    if (cond.pattern.endsWith('\\')) { ElMessage.error('匹配值不能以反斜杠结尾：末尾反斜杠会与结尾引号组合成转义引号，导致规则失效。请在末尾补充字符，或改用正则运算符并显式转义'); return }
     if (cond.operator === 'regex' && !isValidRegex(cond.pattern)) { ElMessage.error(`正则表达式语法错误：${cond.pattern}`); return }
   }
   savingRule.value = true

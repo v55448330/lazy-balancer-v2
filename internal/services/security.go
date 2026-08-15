@@ -93,10 +93,11 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 	case p.Mode == "blocking":
 		sb.WriteString("SecRuleEngine On\n")
 	case p.Mode == "detection":
-		// Detection mode keeps IP-level control enforcing: the engine starts On
-		// so the ACL deny rules below actually block, then a phase:1 SecAction
-		// switches the rest of the transaction (CRS + custom rules) to
-		// DetectionOnly before the CRS includes are emitted.
+		// 检测模式仍保持 IP 控制与自定义规则强制生效：引擎以 On 启动，使下方的
+		// IP ACL deny 规则与自定义拦截规则（在 DetectionOnly 切换之前发出）真实
+		// 阻断；随后通过 phase:1 的 SecAction 仅将 CRS 规则集切换为
+		// DetectionOnly（该切换在 CRS Include 之前生效），自定义拦截规则与 IP
+		// ACL 不受影响，仍在检测模式下强制阻断。
 		sb.WriteString("SecRuleEngine On\n")
 	case emitIPControl || hasCustomRules:
 		// WAF (CRS) off, but IP control / custom rules still need the engine.
@@ -341,10 +342,14 @@ func crsFilenameToRuleIDRange(s string) string {
 	return s
 }
 
-// ValidateCustomRuleConditions 校验单条规则的匹配条件：target/operator 必须在
-// 允许集合内，pattern 不得包含会截断 SecRule 行的控制字符；否则 emitCustomRules
-// 会静默跳过未知条件导致链式规则断裂或生成畸形 SecRule。
+// ValidateCustomRuleConditions 校验单条规则的匹配条件：至少需要一个条件；target/
+// operator 必须在允许集合内，pattern 不得包含会截断 SecRule 行的控制字符或以反
+// 斜杠结尾；否则 emitCustomRules 会静默跳过未知条件导致链式规则断裂或生成畸形
+// SecRule。
 func ValidateCustomRuleConditions(conditions []models.CustomRuleCondition) error {
+	if len(conditions) == 0 {
+		return fmt.Errorf("自定义规则至少需要一个匹配条件")
+	}
 	for i, cond := range conditions {
 		if _, ok := customRuleTargets[cond.Target]; !ok {
 			return fmt.Errorf("自定义规则条件 %d 的 target 无效：%q（可选：uri、args、body、headers、user_agent）", i+1, cond.Target)
@@ -397,12 +402,19 @@ func ValidateCustomRulesJSON(customRulesJSON string) error {
 	return nil
 }
 
-// validateCustomRulePattern 拒绝会截断 SecRule 行的真实控制字符（换行/回车/NUL）。
+// validateCustomRulePattern 拒绝两类会破坏 SecRule 行的模式：
+//  1. 真实控制字符（换行/回车/NUL）会截断 SecRule 行；
+//  2. 以反斜杠结尾的模式——coraza 的 UnescapeQuotedString 仅反转义 \"，其余
+//     反斜杠序列原样保留，末尾的反斜杠会与结尾引号组合成转义引号，使 SecRule
+//     行畸形并被 coraza 拒绝，进而导致之后所有配置重生成失败。
 func validateCustomRulePattern(pattern string) error {
 	for _, r := range pattern {
 		if r == '\n' || r == '\r' || r == '\x00' {
 			return fmt.Errorf("pattern 包含不允许的控制字符")
 		}
+	}
+	if strings.HasSuffix(pattern, `\`) {
+		return fmt.Errorf("pattern 不能以反斜杠结尾：末尾反斜杠会与结尾引号组合成转义引号，导致 SecRule 畸形并被 coraza 拒绝。请在末尾补充字符，或改用 regex 运算符并显式转义（\\\\）")
 	}
 	return nil
 }
