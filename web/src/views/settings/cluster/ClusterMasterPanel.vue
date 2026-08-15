@@ -9,10 +9,10 @@
         <el-button type="primary" size="small" :loading="tokenLoading" :disabled="readOnly" @click="$emit('generate-token')">生成注册令牌</el-button>
       </div>
     </template>
-    <el-form label-width="110px" class="settings-form" :disabled="readOnly">
+    <el-form label-width="auto" label-position="left" class="sync-settings-form" :disabled="readOnly">
       <el-form-item v-for="item in syncSwitchItems" :key="item.key" :label="item.label">
         <el-switch :model-value="status[item.key]" :loading="settingsLoading" @change="(v: string | number | boolean) => handleSwitchChange(item.key, v)" />
-        <div class="form-tip-line">{{ item.tip }}</div>
+        <span class="form-tip-inline" :title="item.tip">{{ item.tip }}</span>
       </el-form-item>
     </el-form>
   </el-card>
@@ -127,8 +127,8 @@ const syncSwitchItems = [
   { key: 'sync_global_config', label: '全局配置', tip: '日志级别、时区、Caddy 全局超时与日志等全局设置' },
   { key: 'sync_users', label: '系统数据', tip: '用户账号与 API 密钥' },
   { key: 'sync_rules', label: '负载均衡规则', tip: '规则、上游、路径规则与证书任务' },
-  { key: 'sync_waf_files', label: 'CRS/IP2Region 数据库', tip: 'CRS 规则文件与 GeoIP 数据库（哈希一致时跳过传输）' },
-  { key: 'sync_security', label: '安全策略及自定义规则', tip: '安全策略、绑定关系、自定义规则与拦截页面' },
+  { key: 'sync_waf_files', label: '规则库数据库', tip: 'CRS 规则文件与 IP2Region GeoIP 数据库（哈希一致时跳过传输）' },
+  { key: 'sync_security', label: '安全策略规则', tip: '安全策略、绑定关系、自定义规则与拦截页面' },
 ] as const
 
 const handleSwitchChange = (field: string, value: string | number | boolean): void => {
@@ -181,6 +181,9 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 :deep(.el-card__body), .el-card { height: 100%; }
 .card-tip { font-size: 12px; color: #9ca3af; white-space: nowrap; flex-shrink: 0; }
+.sync-settings-form :deep(.el-form-item__label) { white-space: nowrap; }
+.sync-settings-form :deep(.el-form-item__content) { flex-wrap: nowrap; }
+.sync-settings-form .form-tip-inline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .setting-label { color: var(--text-primary); font-size: 13px; font-weight: 500; }
