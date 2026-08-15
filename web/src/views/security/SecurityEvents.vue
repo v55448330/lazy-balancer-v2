@@ -19,6 +19,7 @@
           <el-option label="检测" value="logged" />
         </el-select>
         <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 200px" @clear="fetchEvents" @keyup.enter="fetchEvents" />
+        <el-input v-model="filters.rule_caddy_id" placeholder="规则 ID" clearable style="width: 200px" @clear="fetchEvents" @keyup.enter="fetchEvents" />
       </div>
 
       <el-table :data="events" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
@@ -83,7 +84,7 @@ const triggeredLabel = (row: SecurityEvent): string => {
   const t = row.rule_triggered
   if (!t) return '—'
   if (t === '2' || t === '3' || t === '4') return 'IP 访问控制'
-  if (t === '949110') return 'WAF 评分拦截'
+  if (t === '949110') return '请求阻断评估'
   if (/^1\d{4}$/.test(t)) return '自定义规则'
   return t
 }
@@ -97,7 +98,7 @@ const events = ref<SecurityEvent[]>([])
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const filters = ref({ action: '', ip: '' })
+const filters = ref({ action: '', ip: '', rule_caddy_id: '' })
 
 const handleSizeChange = () => { page.value = 1; fetchEvents() }
 
@@ -115,7 +116,7 @@ const goToPolicy = (row: SecurityEvent) => {
 
 const fetchEvents = async () => {
   loading.value = true
-  try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (filters.value.action) p.set('action', filters.value.action); if (filters.value.ip) p.set('ip', filters.value.ip); const res = await request.get<APIResponse<{ events: SecurityEvent[]; total: number }>>(`/security/events?${p}`); events.value = res.data?.events || []; total.value = res.data?.total || 0 } catch { events.value = [] } finally { loading.value = false }
+  try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (filters.value.action) p.set('action', filters.value.action); if (filters.value.ip) p.set('ip', filters.value.ip); if (filters.value.rule_caddy_id) p.set('rule_caddy_id', filters.value.rule_caddy_id); const res = await request.get<APIResponse<{ events: SecurityEvent[]; total: number }>>(`/security/events?${p}`); events.value = res.data?.events || []; total.value = res.data?.total || 0 } catch { events.value = [] } finally { loading.value = false }
 }
 onMounted(fetchEvents)
 </script>

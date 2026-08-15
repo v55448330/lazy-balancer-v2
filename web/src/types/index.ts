@@ -180,7 +180,6 @@ export interface ClusterStatus {
   readonly cluster_version: number
   readonly master_url: string
   readonly sync_interval: number
-  readonly sync_caddy_config: boolean
   readonly sync_global_config: boolean
   readonly sync_users: boolean
   readonly sync_rules: boolean

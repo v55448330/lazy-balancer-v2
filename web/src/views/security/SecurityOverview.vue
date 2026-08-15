@@ -54,7 +54,7 @@
                 <div class="stat-box__icon"><el-icon><Files /></el-icon></div>
                 <div class="stat-box__body">
                   <div class="stat-box__value">{{ overview.crs_version }}</div>
-                  <div class="stat-box__label">CRS 规则库</div>
+                  <div class="stat-box__label">CRS 规则集</div>
                   <el-tag v-if="overview.update_status" :type="statusTagType(overview.update_status)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(overview.update_status) }}</el-tag>
                 </div>
               </div>

@@ -4,7 +4,7 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Notebook /></el-icon>
-          规则集
+          CRS 规则集
         </h2>
         <p class="page-desc">浏览 OWASP CRS 规则和管理自定义规则</p>
       </div>
@@ -14,7 +14,7 @@
       <template #header>
         <div class="crs-header">
           <div class="crs-header-title">
-            <span style="font-weight: 500;">安全规则库</span>
+            <span style="font-weight: 500;">CRS 规则集</span>
           </div>
           <div class="crs-header-actions">
             <el-button v-if="!isReadOnly" size="small" type="primary" plain @click="manualUpdate">CRS 更新</el-button>
@@ -234,7 +234,7 @@
 
     <el-dialog
       v-model="updateDialogVisible"
-      title="更新 CRS 规则库"
+            title="更新 CRS 规则集"
       width="min(900px, 94vw)"
       destroy-on-close
       @opened="onUpdateDialogOpened"

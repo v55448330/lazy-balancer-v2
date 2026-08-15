@@ -45,7 +45,7 @@
           </el-menu-item>
           <el-menu-item index="security-rules" @click="goPage('security-rules')">
             <el-icon><Notebook /></el-icon>
-            <template #title>规则集</template>
+            <template #title>CRS 规则集</template>
           </el-menu-item>
           <el-menu-item index="security-block-pages" @click="goPage('security-block-pages')">
             <el-icon><Document /></el-icon>

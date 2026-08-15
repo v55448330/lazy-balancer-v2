@@ -137,6 +137,11 @@ watch(
   () => props.status,
   (status, oldStatus) => {
     if (!status) return
+    // 注册成功后 node_mode 变为 slave：立即关闭弹框（否则残留阻塞主界面）。
+    if (registrationOpen.value && status.node_mode === 'slave') {
+      registrationOpen.value = false
+      return
+    }
     if (registrationOpen.value) return
     selectedMode.value = status.node_mode
     if (!oldStatus || syncInterval.value === oldStatus.sync_interval) {
