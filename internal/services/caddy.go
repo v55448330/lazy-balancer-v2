@@ -1802,11 +1802,6 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		rule.Strategy = "weighted_round_robin"
 	}
 
-	domainHosts := strings.Split(rule.Domain, ",")
-	for i, d := range domainHosts {
-		domainHosts[i] = strings.TrimSpace(d)
-	}
-
 	enabledUpstreams := make([]UpstreamConfig, 0)
 	for _, u := range rule.Upstreams {
 		if u.Enabled {
@@ -1828,234 +1823,22 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 	servers := make(map[string]interface{})
 
 	if rule.Protocol == "http" {
-		var upstreamList []interface{}
-		var upstreamWeights []int
-		hasHTTPSUpstream := false
+		domainHosts := splitAndTrim(rule.Domain)
 
-		for _, u := range enabledUpstreams {
-			weight := u.Weight
-			if weight <= 0 {
-				weight = 1
-			}
-			upstreamWeights = append(upstreamWeights, weight)
-			if rule.DynamicDNS {
-				versions := map[string]bool{"ipv4": false, "ipv6": false}
-				switch rule.DnsFamily {
-				case "ipv4":
-					versions["ipv4"] = true
-				case "ipv6":
-					versions["ipv6"] = true
-				case "both":
-					versions["ipv4"] = true
-					versions["ipv6"] = true
-				}
-				upstreamEntry := map[string]interface{}{
-					"source":   "a",
-					"name":     u.Host,
-					"port":     fmt.Sprintf("%d", u.Port),
-					"versions": versions,
-				}
-				if rule.EnableDnsServer && rule.DnsServer != "" {
-					upstreamEntry["resolver"] = map[string]interface{}{
-						"addresses": []string{rule.DnsServer},
-					}
-				}
-				upstreamList = append(upstreamList, upstreamEntry)
-			} else {
-				dial := joinUpstreamAddress(u.Host, u.Port)
-				upstreamEntry := map[string]interface{}{"dial": dial}
-				if u.MaxConnections > 0 {
-					upstreamEntry["max_requests"] = u.MaxConnections
-				}
-				upstreamList = append(upstreamList, upstreamEntry)
-			}
-
-			if u.Protocol == "https" {
-				hasHTTPSUpstream = true
-			}
+		// 委托生产路径的构建器生成路由对象（GeoIP + 路径路由 + 主路由），
+		// 避免与 generateCaddyConfigFromStore 的逻辑分叉。
+		routes, _, err := generateHTTPRouteObjects(rule)
+		if err != nil {
+			return map[string]interface{}{"error": err.Error()}
 		}
 
-		var handleChain []interface{}
-
-		if rateLimitHandler := buildRateLimitHandler(rule.CaddyID); rateLimitHandler != nil {
-			handleChain = append(handleChain, rateLimitHandler)
-		}
-
-		// Security policy: insert coraza waf handler if rule has an active policy
-		if wafHandler := buildWafHandler(rule.CaddyID); wafHandler != nil {
-			handleChain = append(handleChain, wafHandler)
-		}
-
-		effectiveRequestBodyMaxSizeMB, effectiveUpstreamKeepaliveTimeout, effectiveServerTokensHidden := resolveRuleOverrides(rule)
-		effectiveProxyTimeouts := resolveProxyTimeouts(rule)
-
-		if effectiveRequestBodyMaxSizeMB > 0 {
-			handleChain = append(handleChain, map[string]interface{}{
-				"handler":  "request_body",
-				"max_size": int64(effectiveRequestBodyMaxSizeMB) * 1024 * 1024,
-			})
-		}
-
-		if rule.EnableCompress && rule.CompressTypes != "" {
-			encodings := make(map[string]interface{})
-			for _, ct := range splitAndTrim(rule.CompressTypes) {
-				if ct == "gzip" || ct == "zstd" {
-					encodings[ct] = map[string]interface{}{}
-				}
+		// HTTP→HTTPS 跳转路由插在 GeoIP 路由之后、路径/主路由之前：地区拦截
+		// 优先级高于跳转。generateHTTPRouteObjects 已将 GeoIP 路由前置到头部。
+		if rule.EnableTLS && rule.TLSHTTPRedirect && len(domainHosts) > 0 {
+			geoipCount := 0
+			if policy := GetSecurityPolicyForRule(rule.CaddyID); PolicyHasGeoIP(policy) {
+				geoipCount = 2 // pass route + block route
 			}
-			if len(encodings) > 0 {
-				handleChain = append(handleChain, map[string]interface{}{
-					"handler":        "encode",
-					"encodings":      encodings,
-					"minimum_length": 512,
-				})
-			}
-		}
-
-		proxyConfig := map[string]interface{}{
-			"handler": "reverse_proxy",
-		}
-		if rule.DynamicDNS && len(upstreamList) > 0 {
-			proxyConfig["dynamic_upstreams"] = upstreamList[0]
-		} else if !rule.DynamicDNS {
-			proxyConfig["upstreams"] = upstreamList
-		}
-
-		if rule.Strategy != "" {
-			selectionPolicy := map[string]interface{}{"policy": rule.Strategy}
-			if rule.Strategy == "cookie" {
-				selectionPolicy["name"] = "lb_sticky"
-			}
-			if rule.Strategy == "weighted_round_robin" && len(upstreamWeights) > 0 {
-				selectionPolicy["weights"] = normalizeWeights(upstreamWeights)
-			}
-			proxyConfig["load_balancing"] = map[string]interface{}{
-				"selection_policy": selectionPolicy,
-				"try_duration":     "5s",
-				"try_interval":     "250ms",
-			}
-		}
-
-		{
-			hcInterval := rule.HealthCheckInterval
-			if hcInterval <= 0 {
-				hcInterval = 10
-			}
-			hcThreshold := rule.HealthCheckUnhealthyThreshold
-			if hcThreshold <= 0 {
-				hcThreshold = 3
-			}
-			healthChecks := map[string]interface{}{
-				"passive": map[string]interface{}{
-					"fail_duration":    fmt.Sprintf("%ds", hcInterval*3),
-					"max_fails":        hcThreshold,
-					"unhealthy_status": []int{5},
-				},
-			}
-
-			if rule.EnableActiveHealthCheck {
-				hcPath := rule.HealthCheckPath
-				if hcPath == "" {
-					hcPath = "/"
-				}
-				hcPasses := rule.HealthCheckHealthyThreshold
-				if hcPasses <= 0 {
-					hcPasses = 2
-				}
-				active := map[string]interface{}{
-					"uri":      hcPath,
-					"timeout":  fmt.Sprintf("%ds", rule.HealthCheckTimeout),
-					"interval": fmt.Sprintf("%ds", rule.HealthCheckInterval),
-					"passes":   hcPasses,
-					"fails":    hcThreshold,
-				}
-				if rule.HostHeader != "" {
-					active["headers"] = map[string]interface{}{
-						"Host": []string{rule.HostHeader},
-					}
-				}
-				healthChecks["active"] = active
-			}
-
-			proxyConfig["health_checks"] = healthChecks
-		}
-		if effectiveProxyTimeouts.stream > 0 {
-			proxyConfig["stream_timeout"] = fmt.Sprintf("%ds", effectiveProxyTimeouts.stream)
-		}
-		if effectiveProxyTimeouts.flushInterval != 0 {
-			proxyConfig["flush_interval"] = formatFlushInterval(effectiveProxyTimeouts.flushInterval)
-		}
-		if effectiveProxyTimeouts.streamCloseDelay > 0 {
-			proxyConfig["stream_close_delay"] = fmt.Sprintf("%ds", effectiveProxyTimeouts.streamCloseDelay)
-		}
-
-		needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0 || effectiveProxyTimeouts.dial > 0 || effectiveProxyTimeouts.responseHeader > 0 || effectiveProxyTimeouts.read > 0 || effectiveProxyTimeouts.write > 0
-		if needsTransport {
-			transportConfig := map[string]interface{}{
-				"protocol": "http",
-			}
-			if hasHTTPSUpstream {
-				transportConfig["tls"] = map[string]interface{}{
-					"insecure_skip_verify": true,
-					"server_name":          rule.HostHeader,
-				}
-			}
-			if rule.EnableDnsServer && rule.DnsServer != "" {
-				transportConfig["resolver"] = map[string]interface{}{
-					"addresses": []string{rule.DnsServer},
-				}
-			}
-			if effectiveProxyTimeouts.dial > 0 {
-				transportConfig["dial_timeout"] = fmt.Sprintf("%ds", effectiveProxyTimeouts.dial)
-			}
-			if effectiveProxyTimeouts.responseHeader > 0 {
-				transportConfig["response_header_timeout"] = fmt.Sprintf("%ds", effectiveProxyTimeouts.responseHeader)
-			}
-			if effectiveProxyTimeouts.read > 0 {
-				transportConfig["read_timeout"] = fmt.Sprintf("%ds", effectiveProxyTimeouts.read)
-			}
-			if effectiveProxyTimeouts.write > 0 {
-				transportConfig["write_timeout"] = fmt.Sprintf("%ds", effectiveProxyTimeouts.write)
-			}
-			if effectiveUpstreamKeepaliveTimeout > 0 {
-				transportConfig["keep_alive"] = map[string]interface{}{
-					"idle_timeout": fmt.Sprintf("%ds", effectiveUpstreamKeepaliveTimeout),
-				}
-			}
-			proxyConfig["transport"] = transportConfig
-		}
-
-		if rule.HostHeader != "" {
-			proxyConfig["headers"] = map[string]interface{}{
-				"request": map[string]interface{}{
-					"set": map[string]interface{}{
-						"Host": []string{rule.HostHeader},
-					},
-				},
-			}
-		}
-
-		if effectiveServerTokensHidden {
-			handleChain = append(handleChain, map[string]interface{}{
-				"handler": "headers",
-				"response": map[string]interface{}{
-					"delete": []string{"Server"},
-				},
-			})
-		}
-
-		handleChain = append(handleChain, proxyConfig)
-
-		var routes []interface{}
-		// GeoIP routes run before path rules and the main route: the pass route
-		// populates the region placeholders, then the block route rejects matches.
-		if policy := GetSecurityPolicyForRule(rule.CaddyID); PolicyHasGeoIP(policy) {
-			routes = append(routes, buildGeoipPassRoute(domainHosts, policy))
-			if blockRoute := buildGeoipBlockRoute(rule, policy); blockRoute != nil {
-				routes = append(routes, blockRoute)
-			}
-		}
-		if rule.EnableTLS && rule.TLSHTTPRedirect {
 			redirectRoute := map[string]interface{}{
 				"match": []interface{}{
 					map[string]interface{}{
@@ -2074,51 +1857,23 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 				"terminal": true,
 			}
 			tagRuleRoute(redirectRoute, rule.CaddyID, "redirect")
-			routes = append(routes, redirectRoute)
+			withRedirect := make([]map[string]interface{}, 0, len(routes)+1)
+			withRedirect = append(withRedirect, routes[:geoipCount]...)
+			withRedirect = append(withRedirect, redirectRoute)
+			withRedirect = append(withRedirect, routes[geoipCount:]...)
+			routes = withRedirect
 		}
-		if rule.CustomRoutesEnabled {
-			pathRules := append([]PathRuleConfig(nil), rule.PathRules...)
-			sort.SliceStable(pathRules, func(i, j int) bool {
-				return pathRules[i].SortOrder < pathRules[j].SortOrder
-			})
-			for pathIndex, pathRule := range pathRules {
-				pathUpstreams := pathRule.Upstreams
-				if pathUpstreams == nil {
-					pathUpstreams = rule.Upstreams
-				}
-				pathHandle, err := buildHTTPHandleChain(rule, pathUpstreams)
-				if err != nil {
-					return map[string]interface{}{"error": err.Error()}
-				}
-				pathMatcher := map[string]interface{}{
-					"host": domainHosts,
-					"path": pathMatcherSpecs(pathRule),
-				}
-				pathRoute := map[string]interface{}{
-					"match":    []interface{}{pathMatcher},
-					"handle":   pathHandle,
-					"terminal": true,
-				}
-				tagRuleRoute(pathRoute, rule.CaddyID, fmt.Sprintf("path_%d", pathIndex))
-				routes = append(routes, pathRoute)
-			}
+
+		routeValues := make([]interface{}, len(routes))
+		for i, r := range routes {
+			routeValues[i] = r
 		}
-		mainMatcher := map[string]interface{}{"host": domainHosts}
-		route := map[string]interface{}{
-			"match":    []interface{}{mainMatcher},
-			"handle":   handleChain,
-			"terminal": true,
-		}
-		if rule.CaddyID != "" {
-			route["@id"] = rule.CaddyID
-		}
-		routes = append(routes, route)
 
 		serverName := fmt.Sprintf("http_%d", rule.ListenPort)
 
 		server := map[string]interface{}{
 			"listen": []string{fmt.Sprintf(":%d", rule.ListenPort)},
-			"routes": routes,
+			"routes": routeValues,
 		}
 
 		// Add TLS configuration for manual certificates
@@ -2348,7 +2103,7 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string) map[stri
 	}
 	var content string
 	var statusCode int
-	err := db.DB.QueryRow(`SELECT bp.content, COALESCE(NULLIF(p.block_status_code, 0), bp.status_code, 403)
+	err := db.DB.QueryRow(`SELECT bp.content, COALESCE(NULLIF(p.block_status_code, 0), 403)
 		FROM security_policy_bindings b
 		JOIN security_policies p ON p.id = b.policy_id AND p.enabled = 1
 		JOIN security_block_pages bp ON bp.id = p.block_page_id
@@ -2356,14 +2111,11 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string) map[stri
 	if err != nil || content == "" {
 		return nil
 	}
-	if statusCode == 0 {
-		statusCode = 403
-	}
 	return map[string]interface{}{
 		"match": []interface{}{
 			map[string]interface{}{
 				"host":       domainHosts,
-				"expression": "{http.error.status_code} == 403",
+				"expression": "{http.error.status_code} == 403 && {http.error.message} == 'interruption triggered'",
 			},
 		},
 		"handle": []interface{}{
@@ -2390,16 +2142,13 @@ func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string) map[stri
 	}
 	var content string
 	var statusCode int
-	err := db.DB.QueryRow(`SELECT bp.content, COALESCE(NULLIF(p.block_status_code, 0), bp.status_code, 403)
+	err := db.DB.QueryRow(`SELECT bp.content, COALESCE(NULLIF(p.block_status_code, 0), 403)
 		FROM security_policy_bindings b
 		JOIN security_policies p ON p.id = b.policy_id AND p.enabled = 1
 		JOIN security_block_pages bp ON bp.id = p.block_page_id
 		WHERE b.rule_caddy_id = ? AND p.block_page_id > 0 AND p.rate_limit_enabled = 1`, ruleCaddyID).Scan(&content, &statusCode)
 	if err != nil || content == "" {
 		return nil
-	}
-	if statusCode == 0 {
-		statusCode = 403
 	}
 	return map[string]interface{}{
 		"match": []interface{}{
@@ -2481,6 +2230,19 @@ func buildGeoipPassRoute(domainHosts []string, policy *models.SecurityPolicy) ma
 	}
 }
 
+// geoipPrivateRanges 内网/回环/链路本地 CIDR 集合。这些地址无法经 ip2region 解析到国家，
+// fail-closed 会将其误判为“海外”而拦截，故在 GeoIP 拦截链中一律放行（无论 deny/allow 模式）。
+var geoipPrivateRanges = []string{
+	"10.0.0.0/8",     // RFC1918 私网 A 类
+	"172.16.0.0/12",  // RFC1918 私网 B 类
+	"192.168.0.0/16", // RFC1918 私网 C 类
+	"127.0.0.0/8",    // IPv4 回环
+	"169.254.0.0/16", // IPv4 链路本地
+	"::1/128",        // IPv6 回环
+	"fc00::/7",       // IPv6 唯一本地地址 (ULA)
+	"fe80::/10",      // IPv6 链路本地
+}
+
 // buildGeoipBlockRoute returns a terminal 403 route for matched (deny) or non-matched (allow) regions.
 func buildGeoipBlockRoute(rule SingleRuleConfig, policy *models.SecurityPolicy) map[string]interface{} {
 	if !PolicyHasGeoIP(policy) {
@@ -2495,6 +2257,16 @@ func buildGeoipBlockRoute(rule SingleRuleConfig, policy *models.SecurityPolicy) 
 			map[string]interface{}{
 				"host":       splitAndTrim(rule.Domain),
 				"expression": expr,
+			},
+			// 内网/回环/链路本地地址放行：remote_ip not 匹配器与表达式取与，命中内网即不拦截。
+			map[string]interface{}{
+				"not": []interface{}{
+					map[string]interface{}{
+						"remote_ip": map[string]interface{}{
+							"ranges": geoipPrivateRanges,
+						},
+					},
+				},
 			},
 		},
 		"handle": []interface{}{

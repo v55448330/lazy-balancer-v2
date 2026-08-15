@@ -202,3 +202,69 @@ func handlerNamesAsString(t *testing.T, routeValue interface{}) string {
 	t.Helper()
 	return strings.Join(handlerNames(t, routeValue), ",")
 }
+
+// TestGenerateHTTPRouteObjects_geoipBlock_alwaysAllowsPrivateIPs verifies the
+// block route excludes private/loopback/link-local IPs so LAN clients are never
+// treated as 海外, regardless of deny/allow mode.
+func TestGenerateHTTPRouteObjects_geoipBlock_alwaysAllowsPrivateIPs(t *testing.T) {
+	for _, mode := range []string{"deny", "allow"} {
+		t.Run(mode, func(t *testing.T) {
+			// Given a geoip policy bound to a rule
+			setupGeoipConfigTestDB(t)
+			seedGeoipPolicy(t, "rule-http", `["海外"]`, mode)
+
+			// When the route objects are generated
+			routes, _, err := generateHTTPRouteObjects(baseHTTPRule())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Then the block route carries a remote_ip "not" matcher with all
+			// private/loopback/link-local CIDRs (single shared definition).
+			var block map[string]interface{}
+			for _, route := range routes {
+				matchers, ok := route["match"].([]interface{})
+				if !ok {
+					continue
+				}
+				for _, matcherValue := range matchers {
+					matcher := mustMap(t, matcherValue, "matcher")
+					if _, has := matcher["not"]; has {
+						block = route
+						break
+					}
+				}
+				if block != nil {
+					break
+				}
+			}
+			if block == nil {
+				t.Fatalf("block route missing private-IP not matcher: %#v", routes)
+			}
+
+			matchers := block["match"].([]interface{})
+			var notMatcher map[string]interface{}
+			for _, matcherValue := range matchers {
+				matcher := mustMap(t, matcherValue, "matcher")
+				if _, has := matcher["not"]; has {
+					notMatcher = matcher
+					break
+				}
+			}
+			notSets, ok := notMatcher["not"].([]interface{})
+			if !ok || len(notSets) != 1 {
+				t.Fatalf("not matcher sets=%#v, want single remote_ip set", notMatcher["not"])
+			}
+			remote := mustMap(t, mustMap(t, notSets[0], "not set")["remote_ip"], "remote_ip matcher")
+			ranges, ok := remote["ranges"].([]string)
+			if !ok {
+				t.Fatalf("remote_ip ranges has type %T", remote["ranges"])
+			}
+			assertEqual(t, ranges, []string{
+				"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+				"127.0.0.0/8", "169.254.0.0/16",
+				"::1/128", "fc00::/7", "fe80::/10",
+			})
+		})
+	}
+}

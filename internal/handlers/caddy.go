@@ -346,15 +346,18 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			}
 		}
 	}()
+	// 可空列（dns_credentials/acme_email/access_log_format/default_ca_provider_id）需支持
+	// 清空：传空值即置 NULL（COALESCE 无法区分“未传”与“清空”）。其余列保留 COALESCE 语义
+	// —— 未传(nil) 保持原值。CASE WHEN ? IS NULL 用于区分 nil 与空字符串。
 	res, err := tx.Exec(`
 			UPDATE global_config SET
 				dns_provider = COALESCE(?, dns_provider),
-				dns_credentials = COALESCE(?, dns_credentials),
-				acme_email = COALESCE(?, acme_email),
+				dns_credentials = CASE WHEN ? IS NULL THEN dns_credentials ELSE NULLIF(?, '') END,
+				acme_email = CASE WHEN ? IS NULL THEN acme_email ELSE NULLIF(?, '') END,
 				cert_expiry_days = COALESCE(?, cert_expiry_days),
 				cert_renewal_days = COALESCE(?, cert_renewal_days),
 				cert_renewal_attempts = COALESCE(?, cert_renewal_attempts),
-				default_ca_provider_id = COALESCE(?, default_ca_provider_id),
+				default_ca_provider_id = CASE WHEN ? IS NULL THEN default_ca_provider_id ELSE NULLIF(?, 0) END,
 				log_level = COALESCE(?, log_level),
 								caddy_log_path = COALESCE(?, caddy_log_path),
 				caddy_log_level = COALESCE(?, caddy_log_level),
@@ -376,17 +379,17 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				audit_log_size_mb = COALESCE(?, audit_log_size_mb),
 				runtime_log_size_mb = COALESCE(?, runtime_log_size_mb),
 				access_log_json = COALESCE(?, access_log_json),
-				access_log_format = COALESCE(?, access_log_format),
+				access_log_format = CASE WHEN ? IS NULL THEN access_log_format ELSE NULLIF(?, '') END,
 			audit_retention_months = COALESCE(?, audit_retention_months),
 			jwt_expire_minutes = COALESCE(?, jwt_expire_minutes),
 				timezone = COALESCE(?, timezone),
 				updated_at = datetime('now')
 			WHERE id = 1
-		`, req.DNSProvider, req.DNSCredentials, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.LogLevel,
+		`, req.DNSProvider, req.DNSCredentials, req.DNSCredentials, req.ACMEEmail, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.DefaultCAProviderID, req.LogLevel,
 		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
 		req.UpstreamKeepaliveTimeout, req.ProxyDialTimeout, req.ProxyResponseHeaderTimeout, req.ProxyReadTimeout, req.ProxyWriteTimeout, req.ProxyStreamTimeout, req.ProxyFlushInterval, req.ProxyStreamCloseDelay,
-		req.ServerTokensHidden, req.CertJobLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone)
+		req.ServerTokensHidden, req.CertJobLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败: " + err.Error()})
 		return

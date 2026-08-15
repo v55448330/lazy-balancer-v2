@@ -3,6 +3,7 @@ package services
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1317,6 +1318,61 @@ func TestGenerateSingleRuleCaddyConfig_omitsWafHandler_whenRuleIsTCP(t *testing.
 	}
 }
 
+// TestGenerateSingleRuleCaddyConfig_parityWithProductionBuilders asserts that
+// GenerateSingleRuleCaddyConfig delegates to the production builders so its
+// per-rule routes are byte-identical to generateHTTPRouteObjects / buildTCPServer.
+func TestGenerateSingleRuleCaddyConfig_parityWithProductionBuilders(t *testing.T) {
+	strategies := []string{"weighted_round_robin", "least_conn", "ip_hash", "cookie", "random", "first"}
+
+	for _, strategy := range strategies {
+		for _, withPaths := range []bool{false, true} {
+			for _, withExtras := range []bool{false, true} {
+				name := fmt.Sprintf("http/%s/paths=%v/extras=%v", strategy, withPaths, withExtras)
+				t.Run(name, func(t *testing.T) {
+					rule := baseHTTPRule()
+					rule.Strategy = strategy
+					if withPaths {
+						rule.CustomRoutesEnabled = true
+						rule.PathRules = []PathRuleConfig{{
+							SortOrder: 1, MatchType: "prefix", Path: "/api",
+							Upstreams: []UpstreamConfig{{Host: "10.0.1.20", Port: 9090, Weight: 3, Enabled: true}},
+						}}
+					}
+					if withExtras {
+						rule.HostHeader = "backend.internal"
+						rule.HealthCheckInterval = 30
+						rule.EnableActiveHealthCheck = true
+						rule.HealthCheckPath = "/healthz"
+					}
+
+					gotRoutes := httpRoutesFromServer(t, GenerateSingleRuleCaddyConfig(rule), fmt.Sprintf("http_%d", rule.ListenPort))
+					wantRoutes, _, err := generateHTTPRouteObjects(rule)
+					if err != nil {
+						t.Fatalf("generateHTTPRouteObjects: %v", err)
+					}
+					want := make([]interface{}, len(wantRoutes))
+					for i, r := range wantRoutes {
+						want[i] = r
+					}
+					assertEqual(t, gotRoutes, want)
+				})
+			}
+		}
+
+		t.Run("tcp/"+strategy, func(t *testing.T) {
+			rule := SingleRuleConfig{
+				CaddyID: "rule-tcp", Protocol: "tcp", ListenPort: 3306, Strategy: strategy,
+				Upstreams: []UpstreamConfig{{Host: "10.0.0.10", Port: 3306, Weight: 2, Enabled: true}},
+			}
+			config := GenerateSingleRuleCaddyConfig(rule)
+			apps := mustMap(t, config["apps"], "apps")
+			layer4 := mustMap(t, apps["layer4"], "layer4 app")
+			servers := mustMap(t, layer4["servers"], "layer4 servers")
+			assertEqual(t, servers["tcp_3306"], buildTCPServer(rule))
+		})
+	}
+}
+
 func TestBuildWafHandler_nilMatrix(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
@@ -1514,9 +1570,9 @@ func seedHTTPRuleForGeneration(t *testing.T, database *sql.DB, caddyID, domain s
 	}
 }
 
-func seedBoundSecurityPolicyWithBlockPage(t *testing.T, database *sql.DB, ruleCaddyID string, blockPageID int) {
+func seedBoundSecurityPolicyWithBlockPage(t *testing.T, database *sql.DB, ruleCaddyID string, blockPageID, blockStatusCode int) {
 	t.Helper()
-	result, err := database.Exec(`INSERT INTO security_policies (name,mode,block_page_id,enabled) VALUES (?,'blocking',?,1)`, "policy-bp-"+ruleCaddyID, blockPageID)
+	result, err := database.Exec(`INSERT INTO security_policies (name,mode,block_page_id,block_status_code,enabled) VALUES (?,'blocking',?,?,1)`, "policy-bp-"+ruleCaddyID, blockPageID, blockStatusCode)
 	if err != nil {
 		t.Fatalf("seed block-page policy: %v", err)
 	}
@@ -1529,9 +1585,9 @@ func seedBoundSecurityPolicyWithBlockPage(t *testing.T, database *sql.DB, ruleCa
 	}
 }
 
-func seedSecurityBlockPage(t *testing.T, database *sql.DB, id int, content string, statusCode int) {
+func seedSecurityBlockPage(t *testing.T, database *sql.DB, id int, content string) {
 	t.Helper()
-	if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,content,status_code) VALUES (?,?,?,?)`, id, "page", content, statusCode); err != nil {
+	if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,content) VALUES (?,?,?)`, id, "page", content); err != nil {
 		t.Fatalf("seed block page: %v", err)
 	}
 }
@@ -1558,8 +1614,8 @@ func TestGenerateCaddyConfig_rendersBlockPageErrorRoute_whenBoundPolicyHasBlockP
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_blocked", "blocked.example.test", 8080)
-	seedSecurityBlockPage(t, database, 7, "<html>branded-block</html>", 451)
-	seedBoundSecurityPolicyWithBlockPage(t, database, "lb_blocked", 7)
+	seedSecurityBlockPage(t, database, 7, "<html>branded-block</html>")
+	seedBoundSecurityPolicyWithBlockPage(t, database, "lb_blocked", 7, 451)
 
 	// When
 	generated := generateCaddyConfigFromStore(database)
@@ -1575,9 +1631,10 @@ func TestGenerateCaddyConfig_rendersBlockPageErrorRoute_whenBoundPolicyHasBlockP
 	route := mustMap(t, errorRoutes[0], "error route")
 	matcher := routeMatcher(t, route)
 	assertEqual(t, matcher["host"], []string{"blocked.example.test"})
-	// The matcher targets the actual deny status coraza produces (403); the
-	// response still renders the block page's own configured status code.
-	assertEqual(t, matcher["expression"], "{http.error.status_code} == 403")
+	// The matcher targets the deny status coraza produces (403, message
+	// "interruption triggered"); the response renders the policy's
+	// block_status_code (default 403 when unset).
+	assertEqual(t, matcher["expression"], "{http.error.status_code} == 403 && {http.error.message} == 'interruption triggered'")
 	handler := firstHandler(t, route)
 	assertEqual(t, handler["handler"], "static_response")
 	assertEqual(t, handler["body"], "<html>branded-block</html>")
@@ -1593,10 +1650,10 @@ func TestGenerateCaddyConfig_rendersOneErrorRoutePerRule_whenServerHasMultipleBl
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_alpha", "alpha.example.test", 8080)
 	seedHTTPRuleForGeneration(t, database, "lb_beta", "beta.example.test", 8080)
-	seedSecurityBlockPage(t, database, 7, "<html>alpha-block</html>", 451)
-	seedSecurityBlockPage(t, database, 8, "<html>beta-block</html>", 403)
-	seedBoundSecurityPolicyWithBlockPage(t, database, "lb_alpha", 7)
-	seedBoundSecurityPolicyWithBlockPage(t, database, "lb_beta", 8)
+	seedSecurityBlockPage(t, database, 7, "<html>alpha-block</html>")
+	seedSecurityBlockPage(t, database, 8, "<html>beta-block</html>")
+	seedBoundSecurityPolicyWithBlockPage(t, database, "lb_alpha", 7, 451)
+	seedBoundSecurityPolicyWithBlockPage(t, database, "lb_beta", 8, 0)
 
 	// When
 	generated := generateCaddyConfigFromStore(database)
@@ -1623,7 +1680,7 @@ func TestGenerateCaddyConfig_rendersOneErrorRoutePerRule_whenServerHasMultipleBl
 	if alpha == nil {
 		t.Fatalf("no error route matched for alpha.example.test: %#v", errorRoutes)
 	}
-	assertEqual(t, routeMatcher(t, alpha)["expression"], "{http.error.status_code} == 403")
+	assertEqual(t, routeMatcher(t, alpha)["expression"], "{http.error.status_code} == 403 && {http.error.message} == 'interruption triggered'")
 	alphaHandler := firstHandler(t, alpha)
 	assertEqual(t, alphaHandler["body"], "<html>alpha-block</html>")
 	assertEqual(t, alphaHandler["status_code"], 451)
