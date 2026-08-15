@@ -346,7 +346,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 			return
 		}
 	}
-	if err := validateSecurityPolicyEnums(req.Mode, req.IPACLMode, req.GeoIPMode); err != nil {
+	if err := validateSecurityPolicyEnums(req.Mode, req.IPACLMode, req.GeoIPMode, req.BlockStatusCode, req.AnomalyThreshold); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -400,7 +400,8 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	if req.GeoIPMode != nil {
 		geoIPMode = *req.GeoIPMode
 	}
-	if err := validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode); err != nil {
+	blockStatusCode, anomalyThreshold := derefInt(req.BlockStatusCode), derefInt(req.AnomalyThreshold)
+	if err := validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode, blockStatusCode, anomalyThreshold); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -1090,7 +1091,17 @@ func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 	}
 }
 
-func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string) error {
+func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string, blockStatusCode, anomalyThreshold int) error {
+	validBlockStatus := map[int]bool{400: true, 401: true, 403: true, 404: true, 429: true, 503: true}
+	if blockStatusCode != 0 && !validBlockStatus[blockStatusCode] {
+		return fmt.Errorf("拦截状态码必须为 400/401/403/404/429/503 之一，当前值 %d", blockStatusCode)
+	}
+	if anomalyThreshold != 0 {
+		validThresholds := map[int]bool{1: true, 3: true, 5: true, 10: true, 20: true}
+		if !validThresholds[anomalyThreshold] {
+			return fmt.Errorf("异常阈值必须为 1/3/5/10/20 之一，当前值 %d", anomalyThreshold)
+		}
+	}
 	switch mode {
 	case "", "off", "detection", "blocking":
 	default:
@@ -1315,4 +1326,11 @@ func categorizeCRSFile(filename string) string {
 	default:
 		return "其他"
 	}
+}
+
+func derefInt(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }

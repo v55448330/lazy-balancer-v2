@@ -28,10 +28,10 @@ func GetSecurityPolicyForRule(ruleCaddyID string) *models.SecurityPolicy {
 	var p models.SecurityPolicy
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
 	err = db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, created_at, updated_at, geoip_countries, geoip_mode
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, created_at, updated_at, geoip_countries, geoip_mode, waf_check_response
 		FROM security_policies WHERE id=? AND enabled=1`, policyID).
 		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
-			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode)
+			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse)
 	if err != nil {
 		return nil
 	}
@@ -256,25 +256,6 @@ func SecurityPolicyHasIPControl(p *models.SecurityPolicy) bool {
 		return true
 	}
 	return p.IPACLEnabled && len(ipACLList) > 0
-}
-
-func SecurityPolicyHasFeatures(p *models.SecurityPolicy) bool {
-	if p == nil {
-		return false
-	}
-	if p.Mode != "off" {
-		return true
-	}
-	var ipWL, ipBL []string
-	json.Unmarshal(p.IPWhitelist, &ipWL)
-	json.Unmarshal(p.IPBlacklist, &ipBL)
-	if len(ipWL) > 0 || len(ipBL) > 0 {
-		return true
-	}
-	if p.RateLimitEnabled {
-		return true
-	}
-	return false
 }
 
 // buildWafHandler returns the coraza WAF handler, or nil when the rule is not HTTP or has no active bound policy.

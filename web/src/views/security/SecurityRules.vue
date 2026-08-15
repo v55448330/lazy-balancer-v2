@@ -208,7 +208,9 @@
           <el-radio-group v-model="ruleForm.action">
             <el-radio value="block">拦截</el-radio>
             <el-radio value="log">仅记录</el-radio>
+            <el-radio value="pass">放行计分</el-radio>
           </el-radio-group>
+          <div class="form-tip-line">拦截=命中即阻断；仅记录=只记录事件；放行计分=记录并向异常分累加（由 WAF 评分拦截统一裁决）</div>
         </el-form-item>
         <el-form-item label="异常分值">
           <el-select v-model="ruleForm.score" style="width: 160px">
@@ -468,7 +470,7 @@ function buildJSRegex(pattern: string): { re: RegExp | null; valid: boolean } {
 	let src = pattern
 	const m = pattern.match(/^\(\?([a-z])\)(.*)/)
 	if (m) { flags = m[1]; src = m[2] }
-	if (/\(\?<?[=!]/.test(src)) { return { re: null, valid: false } }
+	if (/\(\?<?[=!]/.test(src) || /\\[1-9]/.test(src)) { return { re: null, valid: false } }
 	try { return { re: new RegExp(src, flags), valid: true } } catch { return { re: null, valid: false } }
 }
 

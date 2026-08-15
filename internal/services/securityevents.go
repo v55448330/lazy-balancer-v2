@@ -191,7 +191,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 
 	bindings := make(map[string]securityEventsPolicyRef)
 	bindRows, err := db.DB.Query(`SELECT b.rule_caddy_id, b.policy_id, COALESCE(p.name,'')
-		FROM security_policy_bindings b LEFT JOIN security_policies p ON p.id = b.policy_id ORDER BY b.rowid`)
+		FROM security_policy_bindings b LEFT JOIN security_policies p ON p.id = b.policy_id ORDER BY b.policy_id DESC`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("security events: load policy bindings: %w", err)
 	}

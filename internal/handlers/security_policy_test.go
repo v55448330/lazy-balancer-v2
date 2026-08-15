@@ -411,7 +411,7 @@ func TestSecurityPolicyList_summaryCarriesExtendedFields(t *testing.T) {
 	createTestPolicy(t, router, map[string]any{
 		"name":               "汇总策略",
 		"mode":               "blocking",
-		"anomaly_threshold":  9,
+		"anomaly_threshold":  5,
 		"ip_acl_mode":        "deny",
 		"ip_acl_list":        `["203.0.113.0/24","2001:db8::/32"]`,
 		"ip_acl_enabled":     true,
@@ -455,7 +455,7 @@ func TestSecurityPolicyList_summaryCarriesExtendedFields(t *testing.T) {
 		t.Fatalf("list len = %d, want 1: %s", len(resp.Data), recorder.Body.String())
 	}
 	got := resp.Data[0]
-	if got.AnomalyThreshold != 9 || got.IPACLMode != "deny" || got.RateLimitRPS != 50 || got.RateLimitBurst != 10 {
+	if got.AnomalyThreshold != 5 || got.IPACLMode != "deny" || got.RateLimitRPS != 50 || got.RateLimitBurst != 10 {
 		t.Fatalf("summary scalars = %+v", got)
 	}
 	if got.IPACLList != `["203.0.113.0/24","2001:db8::/32"]` || got.IPWhitelist != `["192.0.2.1"]` || got.IPBlacklist != `["198.51.100.0/24","203.0.113.5"]` {

@@ -12,7 +12,7 @@ interface BrandingResponse {
 
 export const appName = ref('Lazy Balancer')
 export const footerText = ref('Lazy Balancer V2 · Copyright © 2026 XiaoBao')
-export const appVersion = ref('v2.1.1')
+export const appVersion = ref('v2.1.2')
 const footerUsesDefault = ref(true)
 
 const escapeHtml = (text: string): string =>
