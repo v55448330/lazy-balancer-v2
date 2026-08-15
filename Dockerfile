@@ -1,7 +1,7 @@
-FROM golang:1.26.1-alpine@sha256:2389ebfa5b7f43eeafbd6be0c3700cc46690ef842ad962f6c5bd6be49ed82039 AS xcaddy-builder
+FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS xcaddy-builder
 RUN apk add --no-cache git
 ENV GOPROXY=https://goproxy.cn,direct
-RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.5
+RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
 WORKDIR /app
 
 ENV GOTOOLCHAIN=auto
@@ -14,7 +14,7 @@ RUN xcaddy build v2.11.4 \
   --with lazy-balancer-v2/caddygeoip=./caddygeoip
 
 # Build Go backend
-FROM golang:1.26.1-alpine@sha256:2389ebfa5b7f43eeafbd6be0c3700cc46690ef842ad962f6c5bd6be49ed82039 AS backend
+FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS backend
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -37,12 +37,15 @@ RUN mkdir -p /app/data /app/config /app/logs /app/certs /app/waf/crs /app/waf/cu
 
 # Download OWASP CRS rules (via ghfast.top proxy — direct GitHub access is
 # unreliable from the build network; proxy does not support git protocol,
-# so use the archive tarball instead of git clone)
+# so use the archive tarball instead of git clone). VERSION marker lets
+# startup reconciliation tell the bundled version from user-updated ones.
+ARG CRS_VERSION=v4.28.0
 RUN apk add --no-cache curl && \
     mkdir -p /tmp/crs-src && \
-    curl -sL "https://ghfast.top/https://github.com/coreruleset/coreruleset/archive/refs/tags/v4.14.0.tar.gz" | tar xz --strip-components=1 -C /tmp/crs-src && \
+    curl -sL "https://ghfast.top/https://github.com/coreruleset/coreruleset/archive/refs/tags/${CRS_VERSION}.tar.gz" | tar xz --strip-components=1 -C /tmp/crs-src && \
     cp -r /tmp/crs-src/rules /app/waf/crs/rules && \
     cp /tmp/crs-src/crs-setup.conf.example /app/waf/crs/crs-setup.conf && \
+    echo "${CRS_VERSION}" > /app/waf/crs/VERSION && \
     rm -rf /tmp/crs-src && \
     apk del curl
 # Pristine copy used to seed an empty bind-mounted /app/waf on first boot
