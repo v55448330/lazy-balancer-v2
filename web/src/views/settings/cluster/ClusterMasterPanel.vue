@@ -9,7 +9,7 @@
         <el-button type="primary" size="small" :loading="tokenLoading" :disabled="readOnly" @click="$emit('generate-token')">生成注册令牌</el-button>
       </div>
     </template>
-    <el-form label-width="auto" label-position="left" class="sync-settings-form" :disabled="readOnly">
+    <el-form label-width="120px" class="settings-form" :disabled="readOnly">
       <el-form-item v-for="item in syncSwitchItems" :key="item.key" :label="item.label">
         <el-switch :model-value="status[item.key]" :loading="settingsLoading" @change="(v: string | number | boolean) => handleSwitchChange(item.key, v)" />
         <span class="form-tip-inline" :title="item.tip">{{ item.tip }}</span>
@@ -181,9 +181,9 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 :deep(.el-card__body), .el-card { height: 100%; }
 .card-tip { font-size: 12px; color: #9ca3af; white-space: nowrap; flex-shrink: 0; }
-.sync-settings-form :deep(.el-form-item__label) { white-space: nowrap; }
-.sync-settings-form :deep(.el-form-item__content) { flex-wrap: nowrap; }
-.sync-settings-form .form-tip-inline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.settings-form :deep(.el-form-item__label) { white-space: nowrap; }
+.settings-form :deep(.el-form-item__content) { flex-wrap: nowrap; }
+.settings-form .form-tip-inline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .setting-label { color: var(--text-primary); font-size: 13px; font-weight: 500; }
