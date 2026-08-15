@@ -224,6 +224,8 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 		userIDInt = int(v)
 	case int:
 		userIDInt = v
+	case int64:
+		userIDInt = int(v)
 	default:
 		userIDInt = 0
 	}

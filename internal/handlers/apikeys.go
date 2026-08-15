@@ -83,6 +83,8 @@ func currentUserID(c *gin.Context) int {
 		return v
 	case float64:
 		return int(v)
+	case int64:
+		return int(v)
 	default:
 		return 0
 	}

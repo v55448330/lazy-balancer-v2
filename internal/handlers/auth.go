@@ -147,6 +147,8 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 		userIDInt = int(v)
 	case int:
 		userIDInt = v
+	case int64:
+		userIDInt = int(v)
 	default:
 		userIDInt = 0
 	}
@@ -183,6 +185,8 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		userIDInt = int(v)
 	case int:
 		userIDInt = v
+	case int64:
+		userIDInt = int(v)
 	default:
 		userIDInt = 0
 	}
