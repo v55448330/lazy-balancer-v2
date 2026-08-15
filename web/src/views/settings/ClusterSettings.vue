@@ -1,39 +1,44 @@
 <template>
   <div class="cluster-settings">
     <ClusterStatusCard :status="status" :loading="initialLoading" />
-    <ClusterModeCard
-      :status="status"
-      :loading="clusterModeChanging"
-      :registration-request="registrationRequest"
-      :read-only="isNonAdminReadOnly"
-      :interval-saving="intervalSaving"
-      @register="registerAsSlave"
-      @promote="promoteToMaster"
-      @update-interval="updateSyncInterval"
-    />
+    <el-row :gutter="16">
+      <el-col :xs="24" :sm="24" :md="12">
+        <ClusterModeCard
+          :status="status"
+          :loading="clusterModeChanging"
+          :registration-request="registrationRequest"
+          :read-only="isNonAdminReadOnly"
+          :interval-saving="intervalSaving"
+          @register="registerAsSlave"
+          @promote="promoteToMaster"
+          @update-interval="updateSyncInterval"
+        />
+      </el-col>
+      <el-col v-if="status?.node_mode === 'master'" :xs="24" :sm="24" :md="12">
+        <ClusterMasterPanel
 
-    <ClusterMasterPanel
-      v-if="status?.node_mode === 'master'"
-      :status="status"
-      :nodes="nodes"
-      :loading="nodesLoading"
-      :token-loading="tokenLoading"
-      :settings-loading="settingsLoading"
-      :pending-node-id="pendingNodeId"
-      :login-node-id="loginNodeId"
-      :access-url-saving="accessUrlSaving"
-      :read-only="isNonAdminReadOnly"
-      @generate-token="generateRegisterToken"
-      @update-sync-field="updateSyncField"
-      @approve="approveNode"
-      @reject="rejectNode"
-      @remove="removeNode"
-      @login="loginNode"
-      @edit-access-url="openAccessUrlDialog"
-    />
+          :status="status"
+          :nodes="nodes"
+          :loading="nodesLoading"
+          :token-loading="tokenLoading"
+          :settings-loading="settingsLoading"
+          :pending-node-id="pendingNodeId"
+          :login-node-id="loginNodeId"
+          :access-url-saving="accessUrlSaving"
+          :read-only="isNonAdminReadOnly"
+          @generate-token="generateRegisterToken"
+          @update-sync-field="updateSyncField"
+          @approve="approveNode"
+          @reject="rejectNode"
+          @remove="removeNode"
+          @login="loginNode"
+          @edit-access-url="openAccessUrlDialog"
+        />
+      </el-col>
+    </el-row>
 
     <ClusterSlavePanel
-      v-else-if="status"
+      v-if="status && status.node_mode !== 'master'"
       :status="status"
       :syncing="syncing"
       :promoting="promoting"

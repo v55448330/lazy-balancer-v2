@@ -199,7 +199,13 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 	if skip == nil || skip.disabled == nil {
 		skip = &sectionSkips{disabled: map[string]bool{}, unchanged: map[string]bool{}}
 	}
-	statements := []string{"DELETE FROM path_rules", "DELETE FROM upstreams", "DELETE FROM cert_jobs", "DELETE FROM lb_rules", "DELETE FROM api_keys", "DELETE FROM users"}
+	if !skip.skip("rules") {
+		clearSyncTables(ctx, tx, "path_rules", "upstreams", "cert_jobs", "lb_rules")
+	}
+	if !skip.skip("users") {
+		clearSyncTables(ctx, tx, "api_keys", "users")
+	}
+	var statements []string
 	if snapshot.ACME != nil {
 		statements = append(statements, "DELETE FROM certificate_configs", "DELETE FROM ca_providers")
 	}
@@ -220,10 +226,10 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 			}
 		}
 	}
-	if skip.skip("rules") {
-		clearSyncTables(ctx, tx, "path_rules", "upstreams", "cert_jobs", "lb_rules")
-	} else if err := insertSnapshotRules(ctx, tx, snapshot.Rules); err != nil {
-		return err
+	if !skip.skip("rules") {
+		if err := insertSnapshotRules(ctx, tx, snapshot.Rules); err != nil {
+			return err
+		}
 	}
 	if !skip.skip("users") {
 		if err := insertSnapshotUsersAndKeys(ctx, tx, snapshot); err != nil {
