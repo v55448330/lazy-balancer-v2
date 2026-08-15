@@ -150,7 +150,7 @@ const handleSave = async () => {
 
 const handleDelete = (row: BlockPage) => {
   ElMessageBox.confirm(`确定删除拦截页面"${row.name}"？`, '确认', { type: 'warning' })
-    .then(async () => { await request.delete(`/security/block-pages/${row.id}`); ElMessage.success('已删除'); fetchData() }).catch(() => {})
+    .then(async () => { const del = await request.delete(`/security/block-pages/${row.id}`); showSaveResult(del, '已删除'); fetchData() }).catch(() => {})
 }
 
 const previewPage = (row: BlockPage) => {

@@ -170,7 +170,7 @@ func parseTLSCertificate(certPEM, keyPEM string) (*CertificateInfo, error) {
 		if !ok {
 			return nil, fmt.Errorf("certificate and key public key types do not match")
 		}
-		if certPub.X.Cmp(keyPub.X) != 0 || certPub.Y.Cmp(keyPub.Y) != 0 {
+		if !certPub.Equal(keyPub) {
 			return nil, fmt.Errorf("certificate and private key do not match")
 		}
 	}

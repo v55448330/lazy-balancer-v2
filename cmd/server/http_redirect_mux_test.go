@@ -16,7 +16,7 @@ import (
 type temporaryAcceptError struct{}
 
 func (temporaryAcceptError) Error() string   { return "temporary accept error" }
-func (temporaryAcceptError) Timeout() bool   { return false }
+func (temporaryAcceptError) Timeout() bool   { return true }
 func (temporaryAcceptError) Temporary() bool { return true }
 
 type acceptResult struct {

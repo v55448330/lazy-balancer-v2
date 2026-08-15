@@ -30,6 +30,7 @@ type clusterSnapshotCache struct {
 	canonical   json.RawMessage
 	fingerprint string
 	ownership   [sha256.Size]byte
+	switches    string
 	expiresAt   time.Time
 }
 
@@ -103,7 +104,11 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 		return models.ClusterSnapshot{}, nil, "", err
 	}
 	now := s.snapshotNow()
-	if cache.initialized && cache.version == version && cache.ownership == ownershipHash && (cache.expiresAt.IsZero() || now.Before(cache.expiresAt)) {
+	switchesKey := ""
+	if sw, err := readSyncSwitches(s.db); err == nil {
+		switchesKey = fmt.Sprintf("%t%t%t%t%t", sw.GlobalConfig, sw.Users, sw.Rules, sw.WafFiles, sw.Security)
+	}
+	if cache.initialized && cache.version == version && cache.ownership == ownershipHash && cache.switches == switchesKey && (cache.expiresAt.IsZero() || now.Before(cache.expiresAt)) {
 		return cache.snapshot, cache.canonical, cache.fingerprint, nil
 	}
 	snapshot, err := s.buildSnapshot(ctx, tx)
@@ -111,6 +116,12 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 		return models.ClusterSnapshot{}, nil, "", err
 	}
 	snapshot.WafFiles = BuildWafFileRef()
+	if switches, swErr := readSyncSwitches(s.db); swErr == nil {
+		snapshot.MasterSyncSwitches = &models.ClusterSyncSwitchesPayload{
+			GlobalConfig: switches.GlobalConfig, Users: switches.Users,
+			Rules: switches.Rules, WafFiles: switches.WafFiles, Security: switches.Security,
+		}
+	}
 	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
 	snapshot.SchemaVersion = CurrentSnapshotSchema
 	snapshot.MinReaderVersion = CurrentSnapshotSchema
@@ -133,6 +144,7 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	cache.canonical = canonical
 	cache.fingerprint = fingerprint
 	cache.ownership = ownershipHash
+	cache.switches = switchesKey
 	cache.expiresAt = nearestSnapshotCertificateExpiry(snapshot.Certs)
 	return snapshot, canonical, fingerprint, nil
 }

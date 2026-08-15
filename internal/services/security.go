@@ -156,7 +156,11 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 			sb.WriteString(fmt.Sprintf("SecAction \"id:900,phase:1,nolog,pass,setvar:tx.inbound_anomaly_score_threshold=%d\"\n", p.AnomalyThreshold))
 		}
 		if len(groups) == 0 {
-			sb.WriteString("Include /app/waf/crs/rules/*.conf\n")
+			if p.WAFCheckResponse {
+				sb.WriteString("Include /app/waf/crs/rules/*.conf\n")
+			} else {
+				sb.WriteString("Include /app/waf/crs/rules/REQUEST-*.conf\n")
+			}
 		} else {
 			for _, g := range groups {
 				sb.WriteString(fmt.Sprintf("Include /app/waf/crs/rules/REQUEST-9%[1]s-*.conf\n", g))

@@ -185,9 +185,6 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 .settings-form :deep(.el-form-item__content) { flex-wrap: nowrap; }
 .settings-form .form-tip-inline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.setting-label { color: var(--text-primary); font-size: 13px; font-weight: 500; }
-.setting-row .form-tip-line { margin-top: 4px; }
 .mono-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 .access-url-link { display: inline-flex; max-width: 100%; vertical-align: middle; }
 .access-url-link :deep(.el-link__inner) { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -195,6 +192,5 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 
 @media (max-width: 768px) {
   .card-header { align-items: flex-start; flex-direction: column; }
-  .setting-row { align-items: flex-start; }
 }
 </style>

@@ -217,6 +217,17 @@ type ClusterSnapshot struct {
 	SecurityIP2RegionVersion []ClusterSecurityIP2RegionVersion `json:"security_ip2region_version,omitempty"`
 	WafFiles                 *ClusterWafFilesRef               `json:"waf_files,omitempty"`
 	SectionHashes            map[string]string                 `json:"section_hashes,omitempty"`
+	// MasterSyncSwitches 为主节点五类同步开关，随快照下发；从节点跳过判定
+	// 以此为准（从节点本地开关列不参与，避免永远默认全开导致开关失效）。
+	MasterSyncSwitches *ClusterSyncSwitchesPayload `json:"master_sync_switches,omitempty"`
+}
+
+type ClusterSyncSwitchesPayload struct {
+	GlobalConfig bool `json:"global_config"`
+	Users        bool `json:"users"`
+	Rules        bool `json:"rules"`
+	WafFiles     bool `json:"waf_files"`
+	Security     bool `json:"security"`
 }
 
 // ClusterWafFilesRef 是快照携带的 WAF 规则文件哈希引用（不含内容）：

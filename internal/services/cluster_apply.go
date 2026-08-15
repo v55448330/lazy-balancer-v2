@@ -50,11 +50,19 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if err := validateSnapshotACMEState(snapshot); err != nil {
 		return err
 	}
-	switches, swErr := readSyncSwitches(s.db)
-	skip := computeSectionSkips(s.db, snapshot, switches)
-	if swErr != nil {
-		return fmt.Errorf("读取同步开关: %w", swErr)
+	// 开关以主节点快照下发的 MasterSyncSwitches 为准（B3）；旧主节点快照
+	// 不携带开关时回退本地默认全开，保持 schema 兼容。
+	switches := SyncSwitches{GlobalConfig: true, Users: true, Rules: true, WafFiles: true, Security: true}
+	if snapshot.MasterSyncSwitches != nil {
+		switches = SyncSwitches{
+			GlobalConfig: snapshot.MasterSyncSwitches.GlobalConfig,
+			Users:        snapshot.MasterSyncSwitches.Users,
+			Rules:        snapshot.MasterSyncSwitches.Rules,
+			WafFiles:     snapshot.MasterSyncSwitches.WafFiles,
+			Security:     snapshot.MasterSyncSwitches.Security,
+		}
 	}
+	skip := computeSectionSkips(s.db, snapshot, switches)
 	previous, _, err := s.cluster.Snapshot(ctx, 0, "", "")
 	if err != nil {
 		return fmt.Errorf("备份本地快照: %w", err)

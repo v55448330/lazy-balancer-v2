@@ -1,11 +1,14 @@
 package services
 
 import (
+	"context"
 	"crypto/sha256"
+
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"lazy-balancer-v2/internal/db"
 
 	"lazy-balancer-v2/internal/models"
 )
@@ -98,13 +101,15 @@ func (sw SyncSwitches) sectionEnabled(key string) bool {
 
 // readSyncSwitches reads the node-local sync switches (defaults all-on for
 // missing columns/rows, e.g. pre-migration databases).
-func readSyncSwitches(dbh *sql.DB) (SyncSwitches, error) {
+func readSyncSwitches(dbh interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}) (SyncSwitches, error) {
 	sw := SyncSwitches{GlobalConfig: true, Users: true, Rules: true, WafFiles: true, Security: true}
 	if dbh == nil {
 		return sw, nil
 	}
 	var g, u, r, w, sec sql.NullBool
-	err := dbh.QueryRow(`SELECT
+	err := dbh.QueryRowContext(context.Background(), `SELECT
 		(SELECT sync_global_config FROM global_config WHERE id=1),
 		(SELECT sync_users FROM global_config WHERE id=1),
 		(SELECT sync_rules FROM global_config WHERE id=1),
@@ -222,7 +227,15 @@ func recordAppliedSectionHashes(dbh *sql.DB, snapshot models.ClusterSnapshot, sk
 // reference CRS files the node didn't sync, and waf-files updates skipped by
 // an off switch.
 func logSyncSwitchGuards(snapshot models.ClusterSnapshot, sk *sectionSkips, switches SyncSwitches) {
-	if !switches.WafFiles && snapshot.WafFiles != nil && wafFilesRefDiffers(snapshot.WafFiles) {
-		RecordAuditLog("system", "同步警告", "集群同步", "检测到主节点 CRS/IP2Region 文件已更新（同步开关关闭），本地文件保持不变", "")
+	if !switches.WafFiles || snapshot.WafFiles == nil || !wafFilesRefDiffers(snapshot.WafFiles) {
+		return
 	}
+	var lastWarnVersion int
+	if db.DB != nil {
+		db.DB.QueryRow("SELECT applied_version FROM cluster_applied_sections WHERE section='waf_files'").Scan(&lastWarnVersion)
+	}
+	if lastWarnVersion >= snapshot.Version {
+		return
+	}
+	RecordAuditLog("system", "同步警告", "集群同步", "检测到主节点 CRS/IP2Region 文件已更新（同步开关关闭），本地文件保持不变", "")
 }

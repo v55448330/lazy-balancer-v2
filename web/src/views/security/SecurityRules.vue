@@ -197,9 +197,9 @@
                   </div>
                 </div>
               </div>
-              <el-button link type="danger" size="small" @click="removeCondition(idx)">删除</el-button>
+              <el-button link type="danger" size="small" :disabled="isReadOnly" @click="removeCondition(idx)">删除</el-button>
             </div>
-            <el-button size="small" type="primary" plain class="add-condition-btn" @click="ruleForm.conditions.push({ target: 'uri', operator: 'contains', pattern: '' })">
+            <el-button v-if="!isReadOnly" size="small" type="primary" plain class="add-condition-btn" @click="ruleForm.conditions.push({ target: 'uri', operator: 'contains', pattern: '' })">
               + 添加条件
             </el-button>
           </div>
@@ -726,7 +726,7 @@ const saveCustomRule = async () => {
 
 const deleteCustomRule = (row: CustomRule) => {
   ElMessageBox.confirm(`确定删除规则"${row.name}"？`, '确认', { type: 'warning' })
-    .then(async () => { await request.delete(`/security/custom-rules/${row.id}`); ElMessage.success('已删除'); fetchCustomRules() }).catch(() => {})
+    .then(async () => { const del = await request.delete(`/security/custom-rules/${row.id}`); showSaveResult(del, '已删除'); fetchCustomRules() }).catch(() => {})
 }
 
 const formatSize = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1048576).toFixed(1)} MB`

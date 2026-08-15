@@ -781,7 +781,7 @@ const handleSave = async () => {
 
 function handleDelete(row: PolicySummary) {
   ElMessageBox.confirm(`确定删除策略"${row.name}"？`, '确认', { type: 'warning' })
-    .then(async () => { await request.delete(`/security/policies/${row.id}`); ElMessage.success('已删除'); fetchData() }).catch(() => {})
+    .then(async () => { const del = await request.delete(`/security/policies/${row.id}`); showSaveResult(del, '已删除'); fetchData() }).catch(() => {})
 }
 
 const goToCustomRulesPage = () => { window.open('/?page=security-rules&tab=custom', '_blank') }
