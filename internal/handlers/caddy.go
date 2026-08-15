@@ -404,50 +404,8 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	// Update DNS credentials in environment if provided
-	oldDNSPodID, hadDNSPodID := os.LookupEnv("DNSPOD_ID")
-	oldDNSPodToken, hadDNSPodToken := os.LookupEnv("DNSPOD_TOKEN")
-	envChanged := false
-	restoreEnv := func() error {
-		if !envChanged {
-			return nil
-		}
-		var restoreErrors []error
-		for _, variable := range []struct {
-			key     string
-			value   string
-			existed bool
-		}{{"DNSPOD_ID", oldDNSPodID, hadDNSPodID}, {"DNSPOD_TOKEN", oldDNSPodToken, hadDNSPodToken}} {
-			var restoreErr error
-			if variable.existed {
-				restoreErr = os.Setenv(variable.key, variable.value)
-			} else {
-				restoreErr = os.Unsetenv(variable.key)
-			}
-			if restoreErr != nil {
-				restoreErrors = append(restoreErrors, fmt.Errorf("restore %s: %w", variable.key, restoreErr))
-			}
-		}
-		return errors.Join(restoreErrors...)
-	}
-	if req.DNSCredentials != nil {
-		parts := strings.Split(*req.DNSCredentials, ",")
-		if len(parts) >= 2 {
-			envChanged = true
-			if err := os.Setenv("DNSPOD_ID", parts[0]); err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新 DNSPOD_ID 环境变量失败: " + err.Error()})
-				return
-			}
-			if err := os.Setenv("DNSPOD_TOKEN", parts[1]); err != nil {
-				err = errors.Join(err, restoreEnv())
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新 DNSPOD_TOKEN 环境变量失败: " + err.Error()})
-				return
-			}
-		}
-	}
-
 	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
-		restoreErr := errors.Join(restoreEnv(), h.caddyService.ApplyConfig(oldRuntimeConfig))
+		restoreErr := h.caddyService.ApplyConfig(oldRuntimeConfig)
 		err = errors.Join(err, restoreErr)
 		var validationErr *configValidationError
 		if errors.As(err, &validationErr) {
@@ -462,7 +420,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		if errors.Is(rollbackErr, sql.ErrTxDone) {
 			rollbackErr = nil
 		}
-		restoreErr := errors.Join(restoreEnv(), h.caddyService.ApplyConfig(oldRuntimeConfig))
+		restoreErr := h.caddyService.ApplyConfig(oldRuntimeConfig)
 		err = errors.Join(err, rollbackErr, restoreErr)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交配置失败: " + err.Error()})
 		return

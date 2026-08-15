@@ -2015,7 +2015,11 @@ func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, 
 	// populates the region placeholders, then the block route rejects matches.
 	if policy := GetSecurityPolicyForRule(rule.CaddyID); PolicyHasGeoIP(policy) {
 		routes = append(routes, buildGeoipPassRoute(domainHosts, policy))
-		if blockRoute := buildGeoipBlockRoute(rule, policy); blockRoute != nil {
+		statusCode := policy.BlockStatusCode
+		if statusCode == 0 {
+			statusCode = 403
+		}
+		if blockRoute := buildGeoipBlockRoute(rule, policy, statusCode); blockRoute != nil {
 			routes = append(routes, blockRoute)
 		}
 	}
@@ -2111,11 +2115,15 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string) map[stri
 	if err != nil || content == "" {
 		return nil
 	}
+	// coraza 命中恒以 403 + "interruption triggered" 中断；GeoIP 拦截链经 error
+	// handler 以 block_status_code + "GeoIP blocked" 中断。两者共用同一品牌拦截页，
+	// 故匹配表达式需同时覆盖两种状态码与消息。
+	expression := fmt.Sprintf("({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered') || ({http.error.status_code} == %d && {http.error.message} == 'GeoIP blocked')", statusCode)
 	return map[string]interface{}{
 		"match": []interface{}{
 			map[string]interface{}{
 				"host":       domainHosts,
-				"expression": "{http.error.status_code} == 403 && {http.error.message} == 'interruption triggered'",
+				"expression": expression,
 			},
 		},
 		"handle": []interface{}{
@@ -2142,7 +2150,7 @@ func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string) map[stri
 	}
 	var content string
 	var statusCode int
-	err := db.DB.QueryRow(`SELECT bp.content, COALESCE(NULLIF(p.block_status_code, 0), 403)
+	err := db.DB.QueryRow(`SELECT bp.content, COALESCE(NULLIF(p.block_status_code, 0), 429)
 		FROM security_policy_bindings b
 		JOIN security_policies p ON p.id = b.policy_id AND p.enabled = 1
 		JOIN security_block_pages bp ON bp.id = p.block_page_id
@@ -2238,13 +2246,16 @@ var geoipPrivateRanges = []string{
 	"192.168.0.0/16", // RFC1918 私网 C 类
 	"127.0.0.0/8",    // IPv4 回环
 	"169.254.0.0/16", // IPv4 链路本地
+	"::ffff:0:0/96",  // IPv4 映射 IPv6（双栈）
 	"::1/128",        // IPv6 回环
 	"fc00::/7",       // IPv6 唯一本地地址 (ULA)
 	"fe80::/10",      // IPv6 链路本地
 }
 
-// buildGeoipBlockRoute returns a terminal 403 route for matched (deny) or non-matched (allow) regions.
-func buildGeoipBlockRoute(rule SingleRuleConfig, policy *models.SecurityPolicy) map[string]interface{} {
+// buildGeoipBlockRoute returns a terminal error route for matched (deny) or non-matched (allow)
+// regions. statusCode 为策略拦截状态码（block_status_code 非零时取之，否则 403），与
+// buildBlockPageErrorRoute 的匹配表达式保持一致，从而复用品牌拦截页。
+func buildGeoipBlockRoute(rule SingleRuleConfig, policy *models.SecurityPolicy, statusCode int) map[string]interface{} {
 	if !PolicyHasGeoIP(policy) {
 		return nil
 	}
@@ -2272,7 +2283,7 @@ func buildGeoipBlockRoute(rule SingleRuleConfig, policy *models.SecurityPolicy) 
 		"handle": []interface{}{
 			map[string]interface{}{
 				"handler":     "error",
-				"status_code": 403,
+				"status_code": statusCode,
 				"error":       "GeoIP blocked",
 			},
 		},

@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -359,14 +358,12 @@ func TestPutCaddyConfig_uses_service_load_and_preserves_database_when_Caddy_reje
 	}
 }
 
-func TestUpdateConfig_restores_environment_and_Caddy_when_commit_fails(t *testing.T) {
+func TestUpdateConfig_restores_Caddy_when_commit_fails(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec("PRAGMA foreign_keys=ON; CREATE TABLE commit_parent(id INTEGER PRIMARY KEY); CREATE TABLE commit_guard(parent_id INTEGER, FOREIGN KEY(parent_id) REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_config_commit AFTER UPDATE ON global_config BEGIN INSERT INTO commit_guard(parent_id) VALUES (999); END"); err != nil {
 		t.Fatalf("install deferred commit failure: %v", err)
 	}
-	t.Setenv("DNSPOD_ID", "old-id")
-	t.Setenv("DNSPOD_TOKEN", "old-token")
 	var mu sync.Mutex
 	currentConfig := `{"old":true}`
 	loads := 0
@@ -406,9 +403,6 @@ func TestUpdateConfig_restores_environment_and_Caddy_when_commit_fails(t *testin
 	// Then
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
-	}
-	if os.Getenv("DNSPOD_ID") != "old-id" || os.Getenv("DNSPOD_TOKEN") != "old-token" {
-		t.Fatalf("DNSPod environment=(%q,%q), want original", os.Getenv("DNSPOD_ID"), os.Getenv("DNSPOD_TOKEN"))
 	}
 	mu.Lock()
 	defer mu.Unlock()

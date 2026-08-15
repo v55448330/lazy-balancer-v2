@@ -1592,6 +1592,21 @@ func seedSecurityBlockPage(t *testing.T, database *sql.DB, id int, content strin
 	}
 }
 
+func seedBoundSecurityPolicyWithRateLimitAndBlockPage(t *testing.T, database *sql.DB, ruleCaddyID string, blockPageID, blockStatusCode, rps, burst int) {
+	t.Helper()
+	result, err := database.Exec(`INSERT INTO security_policies (name,mode,block_page_id,block_status_code,rate_limit_enabled,rate_limit_rps,rate_limit_burst,enabled) VALUES (?,'blocking',?,?,1,?,?,1)`, "policy-rlbp-"+ruleCaddyID, blockPageID, blockStatusCode, rps, burst)
+	if err != nil {
+		t.Fatalf("seed rate-limit block-page policy: %v", err)
+	}
+	policyID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read rate-limit block-page policy id: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES (?,?)`, ruleCaddyID, policyID); err != nil {
+		t.Fatalf("bind rate-limit block-page policy: %v", err)
+	}
+}
+
 func serverErrorRoutes(t *testing.T, config map[string]interface{}, serverName string) ([]interface{}, map[string]interface{}) {
 	t.Helper()
 	apps := mustMap(t, config["apps"], "apps")
@@ -1631,10 +1646,11 @@ func TestGenerateCaddyConfig_rendersBlockPageErrorRoute_whenBoundPolicyHasBlockP
 	route := mustMap(t, errorRoutes[0], "error route")
 	matcher := routeMatcher(t, route)
 	assertEqual(t, matcher["host"], []string{"blocked.example.test"})
-	// The matcher targets the deny status coraza produces (403, message
-	// "interruption triggered"); the response renders the policy's
-	// block_status_code (default 403 when unset).
-	assertEqual(t, matcher["expression"], "{http.error.status_code} == 403 && {http.error.message} == 'interruption triggered'")
+	// The matcher targets coraza's deny status (403, message "interruption
+	// triggered") and GeoIP's block status (block_status_code, message
+	// "GeoIP blocked"); the response renders the policy's block_status_code
+	// (default 403 when unset).
+	assertEqual(t, matcher["expression"], "({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered') || ({http.error.status_code} == 451 && {http.error.message} == 'GeoIP blocked')")
 	handler := firstHandler(t, route)
 	assertEqual(t, handler["handler"], "static_response")
 	assertEqual(t, handler["body"], "<html>branded-block</html>")
@@ -1680,7 +1696,7 @@ func TestGenerateCaddyConfig_rendersOneErrorRoutePerRule_whenServerHasMultipleBl
 	if alpha == nil {
 		t.Fatalf("no error route matched for alpha.example.test: %#v", errorRoutes)
 	}
-	assertEqual(t, routeMatcher(t, alpha)["expression"], "{http.error.status_code} == 403 && {http.error.message} == 'interruption triggered'")
+	assertEqual(t, routeMatcher(t, alpha)["expression"], "({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered') || ({http.error.status_code} == 451 && {http.error.message} == 'GeoIP blocked')")
 	alphaHandler := firstHandler(t, alpha)
 	assertEqual(t, alphaHandler["body"], "<html>alpha-block</html>")
 	assertEqual(t, alphaHandler["status_code"], 451)
@@ -1710,6 +1726,60 @@ func TestGenerateCaddyConfig_omitsErrorRoutes_whenRuleHasNoPolicyBinding(t *test
 	if _, exists := server["errors"]; exists {
 		t.Fatalf("server errors config present for unbound rule: %#v", server["errors"])
 	}
+}
+
+func TestGenerateCaddyConfig_rendersRateLimitErrorRoute_defaultsTo429(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_rl", "rl.example.test", 8080)
+	seedSecurityBlockPage(t, database, 9, "<html>ratelimit-block</html>")
+	seedBoundSecurityPolicyWithRateLimitAndBlockPage(t, database, "lb_rl", 9, 0, 100, 50)
+
+	// When
+	generated := generateCaddyConfigFromStore(database)
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generation failed: %s", message)
+	}
+	route := findRateLimitErrorRoute(t, generated)
+	handler := firstHandler(t, route)
+	assertEqual(t, handler["handler"], "static_response")
+	assertEqual(t, handler["body"], "<html>ratelimit-block</html>")
+	assertEqual(t, handler["status_code"], 429)
+}
+
+func TestGenerateCaddyConfig_rendersRateLimitErrorRoute_honorsBlockStatusCode(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_rl", "rl.example.test", 8080)
+	seedSecurityBlockPage(t, database, 9, "<html>ratelimit-block</html>")
+	seedBoundSecurityPolicyWithRateLimitAndBlockPage(t, database, "lb_rl", 9, 451, 100, 50)
+
+	// When
+	generated := generateCaddyConfigFromStore(database)
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generation failed: %s", message)
+	}
+	route := findRateLimitErrorRoute(t, generated)
+	assertEqual(t, firstHandler(t, route)["status_code"], 451)
+}
+
+func findRateLimitErrorRoute(t *testing.T, generated map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
+	for _, routeValue := range errorRoutes {
+		route := mustMap(t, routeValue, "error route")
+		if expr, ok := routeMatcher(t, route)["expression"].(string); ok && expr == "{http.error.status_code} == 429" {
+			return route
+		}
+	}
+	t.Fatalf("rate-limit error route (matcher == 429) not found: %#v", errorRoutes)
+	return nil
 }
 
 func TestBuildCorazaDirectives_emitsAclExclusionsThresholdAndBlockStatus(t *testing.T) {
@@ -1777,7 +1847,7 @@ func TestBuildCorazaDirectives_chainedCustomRuleCarriesActionsOnlyOnStarter(t *t
 	policy := &models.SecurityPolicy{
 		Mode:          "blocking",
 		CRSRuleGroups: json.RawMessage(`["9"]`),
-		CustomRules: json.RawMessage(`[{"id":7,"name":"链式验证","enabled":true,"action":"block","status_code":403,"conditions":[` +
+		CustomRules: json.RawMessage(`[{"id":7,"name":"链式验证","enabled":true,"action":"block","conditions":[` +
 			`{"target":"uri","operator":"contains","pattern":"/admin"},` +
 			`{"target":"args","operator":"contains","pattern":"debug=1"},` +
 			`{"target":"user_agent","operator":"contains","pattern":"sqlmap"}]` +

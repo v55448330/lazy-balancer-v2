@@ -32,6 +32,19 @@ func seedGeoipPolicy(t *testing.T, ruleCaddyID, countries, mode string) {
 	}
 }
 
+func seedGeoipPolicyWithBlockStatus(t *testing.T, ruleCaddyID, countries, mode string, blockStatusCode int) {
+	t.Helper()
+	result, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, enabled, geoip_countries, geoip_mode, block_status_code)
+		VALUES ('geoip-test', 'off', 1, ?, ?, ?)`, countries, mode, blockStatusCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyID, _ := result.LastInsertId()
+	if _, err := db.DB.Exec("INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", ruleCaddyID, policyID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func findRouteByMatcherExpression(t *testing.T, routes []map[string]interface{}, wantExpr string) map[string]interface{} {
 	t.Helper()
 	for _, route := range routes {
@@ -155,6 +168,27 @@ func TestGenerateHTTPRouteObjects_geoipAllow_negatesBlockExpression(t *testing.T
 	}
 }
 
+// TestGenerateHTTPRouteObjects_geoipBlock_honorsBlockStatusCode verifies the
+// geoip block route emits the policy's block_status_code instead of hardcoding 403.
+func TestGenerateHTTPRouteObjects_geoipBlock_honorsBlockStatusCode(t *testing.T) {
+	// Given a deny-mode geoip policy with block_status_code 451
+	setupGeoipConfigTestDB(t)
+	seedGeoipPolicyWithBlockStatus(t, "rule-http", `["海外"]`, "deny", 451)
+
+	// When the route objects are generated
+	routes, _, err := generateHTTPRouteObjects(baseHTTPRule())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Then the block route's error handler carries the policy status code
+	block := findRouteByMatcherExpression(t, routes, `{http.vars.geoip.country_name} != "中国"`)
+	status := mustMap(t, block["handle"].([]interface{})[0], "block handler")["status_code"]
+	if status != 451 {
+		t.Fatalf("block status_code=%#v, want 451", status)
+	}
+}
+
 // TestGenerateHTTPRouteObjects_geoipDisabled_noBlockRoute verifies a policy
 // without geoip countries produces no geoip routes.
 func TestGenerateHTTPRouteObjects_geoipDisabled_noBlockRoute(t *testing.T) {
@@ -263,6 +297,7 @@ func TestGenerateHTTPRouteObjects_geoipBlock_alwaysAllowsPrivateIPs(t *testing.T
 			assertEqual(t, ranges, []string{
 				"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
 				"127.0.0.0/8", "169.254.0.0/16",
+				"::ffff:0:0/96",
 				"::1/128", "fc00::/7", "fe80::/10",
 			})
 		})
