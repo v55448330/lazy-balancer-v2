@@ -43,6 +43,12 @@ func (m *CRSUpdateManager) RefreshLatestAsync() {
 			log.Printf("crs update: background version check failed: %v", err)
 			return
 		}
+		// 上游 tag 检查是只读网络请求，从节点允许执行；但 last_checked 落库必须
+		// 仅主节点进行，避免从节点（只读）打开 CRS 页面时写本地库。
+		var isMaster bool
+		if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+			return
+		}
 		if _, dbErr := db.DB.Exec("UPDATE security_crs_version SET last_checked=datetime('now') WHERE id=1"); dbErr != nil {
 			log.Printf("crs update: failed to record last_checked: %v", dbErr)
 		}

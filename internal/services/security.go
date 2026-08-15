@@ -183,13 +183,19 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 	return sb.String()
 }
 
+// customRuleTargets / customRuleOperators 是自定义规则条件允许的目标与运算符
+// 映射；emitCustomRules 与校验函数共用同一份，避免两处硬编码漂移。
+var (
+	customRuleTargets   = map[string]string{"uri": "REQUEST_URI", "args": "ARGS", "body": "REQUEST_BODY", "headers": "REQUEST_HEADERS", "user_agent": "REQUEST_HEADERS:User-Agent"}
+	customRuleOperators = map[string]string{"contains": "@contains", "regex": "@rx", "equals": "@pm", "starts_with": "@beginsWith"}
+)
+
 // emitCustomRules writes user rules ahead of any DetectionOnly switch so a
 // rule-level "拦截" action always blocks regardless of the policy WAF mode,
-// mirroring how IP control behaves. "仅记录/计分" rules keep feeding the CRS
-// anomaly score, which the 949 evaluation (WAF-mode governed) consumes.
+// mirroring how IP control behaves. 动作语义与前端编辑器一致：拦截=命中即阻断；
+// 仅记录=只记录事件、不向异常分累加；放行计分=记录并向异常分累加，由 949
+// 评估（受 WAF 模式约束）统一裁决。
 func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
-	targetMap := map[string]string{"uri": "REQUEST_URI", "args": "ARGS", "body": "REQUEST_BODY", "headers": "REQUEST_HEADERS", "user_agent": "REQUEST_HEADERS:User-Agent"}
-	opMap := map[string]string{"contains": "@contains", "regex": "@rx", "equals": "@pm", "starts_with": "@beginsWith"}
 	for _, cr := range customRules {
 		if !cr.Enabled {
 			continue
@@ -197,15 +203,19 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 		safeName := strings.ReplaceAll(cr.Name, "'", "")
 		// CRS v4 blocking evaluation reads tx.inbound_anomaly_score_pl1..4 —
 		// never the legacy tx.anomaly_score.
+		// 默认动作 pass（放行计分）：记录事件并向异常分累加。
 		action := fmt.Sprintf("pass,log,setvar:tx.inbound_anomaly_score_pl1=+%d,msg:'自定义规则 %s 命中'", cr.Score, safeName)
 		if cr.Action == "block" {
 			// 统一所有拦截走 coraza 默认 403 → 策略 errors.routes → 拦截页面配置的状态码
 			action = fmt.Sprintf("deny,log,setvar:tx.inbound_anomaly_score_pl1=+%d,msg:'自定义规则 %s 命中'", cr.Score, safeName)
+		} else if cr.Action == "log" {
+			// 仅记录：不累加异常分，避免在拦截/检测模式下因该规则误伤。
+			action = fmt.Sprintf("pass,log,msg:'自定义规则 %s 命中'", safeName)
 		}
 		if len(cr.Conditions) > 0 {
 			for idx, cond := range cr.Conditions {
-				target := targetMap[cond.Target]
-				op := opMap[cond.Operator]
+				target := customRuleTargets[cond.Target]
+				op := customRuleOperators[cond.Operator]
 				if target == "" || op == "" {
 					continue
 				}
@@ -222,8 +232,8 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 				sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"%s\"\n", target, op, escapeCorazaPattern(cond.Pattern), actions))
 			}
 		} else {
-			target := targetMap[cr.Target]
-			op := opMap[cr.Operator]
+			target := customRuleTargets[cr.Target]
+			op := customRuleOperators[cr.Operator]
 			if target == "" || op == "" {
 				continue
 			}
@@ -297,7 +307,7 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 		for i, id := range ids {
 			args[i] = id
 		}
-		rows, err := db.DB.Query("SELECT id, name, conditions, action, score, status_code, enabled FROM security_custom_rules WHERE id IN ("+placeholders+")", args...)
+		rows, err := db.DB.Query("SELECT id, name, conditions, action, score, enabled FROM security_custom_rules WHERE id IN ("+placeholders+")", args...)
 		if err != nil {
 			return nil
 		}
@@ -306,7 +316,7 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 		for rows.Next() {
 			var cr models.CustomRule
 			var conditionsJSON string
-			if err := rows.Scan(&cr.ID, &cr.Name, &conditionsJSON, &cr.Action, &cr.Score, &cr.StatusCode, &cr.Enabled); err != nil {
+			if err := rows.Scan(&cr.ID, &cr.Name, &conditionsJSON, &cr.Action, &cr.Score, &cr.Enabled); err != nil {
 				continue
 			}
 			json.Unmarshal([]byte(conditionsJSON), &cr.Conditions)
@@ -331,9 +341,88 @@ func crsFilenameToRuleIDRange(s string) string {
 	return s
 }
 
+// ValidateCustomRuleConditions 校验单条规则的匹配条件：target/operator 必须在
+// 允许集合内，pattern 不得包含会截断 SecRule 行的控制字符；否则 emitCustomRules
+// 会静默跳过未知条件导致链式规则断裂或生成畸形 SecRule。
+func ValidateCustomRuleConditions(conditions []models.CustomRuleCondition) error {
+	for i, cond := range conditions {
+		if _, ok := customRuleTargets[cond.Target]; !ok {
+			return fmt.Errorf("自定义规则条件 %d 的 target 无效：%q（可选：uri、args、body、headers、user_agent）", i+1, cond.Target)
+		}
+		if _, ok := customRuleOperators[cond.Operator]; !ok {
+			return fmt.Errorf("自定义规则条件 %d 的 operator 无效：%q（可选：contains、regex、equals、starts_with）", i+1, cond.Operator)
+		}
+		if err := validateCustomRulePattern(cond.Pattern); err != nil {
+			return fmt.Errorf("自定义规则条件 %d：%w", i+1, err)
+		}
+	}
+	return nil
+}
+
+// ValidateCustomRulesJSON 校验策略 custom_rules 载荷，兼容规则 ID 数组与内嵌
+// 规则对象两种形状；内嵌形状逐条校验条件的目标/运算符/模式。
+func ValidateCustomRulesJSON(customRulesJSON string) error {
+	if strings.TrimSpace(customRulesJSON) == "" {
+		return nil
+	}
+	var ids []int
+	if err := json.Unmarshal([]byte(customRulesJSON), &ids); err == nil {
+		return nil
+	}
+	var rules []models.CustomRule
+	if err := json.Unmarshal([]byte(customRulesJSON), &rules); err != nil {
+		return fmt.Errorf("custom_rules 必须是规则 ID 数组或规则对象数组")
+	}
+	for i, r := range rules {
+		if len(r.Conditions) > 0 {
+			if err := ValidateCustomRuleConditions(r.Conditions); err != nil {
+				return fmt.Errorf("自定义规则 #%d：%w", i+1, err)
+			}
+			continue
+		}
+		// 兼容旧版单目标内嵌形状；target/operator 均为空时视为占位规则，跳过校验
+		if r.Target == "" && r.Operator == "" {
+			continue
+		}
+		if _, ok := customRuleTargets[r.Target]; !ok {
+			return fmt.Errorf("自定义规则 #%d 的 target 无效：%q（可选：uri、args、body、headers、user_agent）", i+1, r.Target)
+		}
+		if _, ok := customRuleOperators[r.Operator]; !ok {
+			return fmt.Errorf("自定义规则 #%d 的 operator 无效：%q（可选：contains、regex、equals、starts_with）", i+1, r.Operator)
+		}
+		if err := validateCustomRulePattern(r.Pattern); err != nil {
+			return fmt.Errorf("自定义规则 #%d：%w", i+1, err)
+		}
+	}
+	return nil
+}
+
+// validateCustomRulePattern 拒绝会截断 SecRule 行的真实控制字符（换行/回车/NUL）。
+func validateCustomRulePattern(pattern string) error {
+	for _, r := range pattern {
+		if r == '\n' || r == '\r' || r == '\x00' {
+			return fmt.Errorf("pattern 包含不允许的控制字符")
+		}
+	}
+	return nil
+}
+
 func escapeCorazaPattern(pattern string) string {
 	// coraza UnescapeQuotedString only unescapes \" — every other backslash
 	// sequence (e.g. regex \d) must pass through verbatim, so only quotes are
-	// escaped here.
-	return strings.ReplaceAll(pattern, "\"", "\\\"")
+	// escaped here. 额外的防御：真实的控制字符（换行/回车/NUL 等）会截断 SecRule
+	// 行，替换为空格；仅处理真实控制 rune，字面的 `\n` 两字符序列保持原样。
+	var sb strings.Builder
+	sb.Grow(len(pattern))
+	for _, r := range pattern {
+		switch {
+		case r == '"':
+			sb.WriteString(`\"`)
+		case r < 0x20 || r == 0x7f:
+			sb.WriteByte(' ')
+		default:
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
 }
