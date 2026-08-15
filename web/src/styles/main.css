@@ -150,6 +150,13 @@ body {
   width: 100%;
 }
 
+.card-header .form-tip-line {
+  width: auto;
+  margin-top: 0;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .form-tip-line .el-link {
   font-size: 12px;
   vertical-align: baseline;

@@ -96,7 +96,7 @@
             <template #empty><el-empty description="暂无自定义规则" :image-size="60" /></template>
             <el-table-column prop="name" label="规则名称" min-width="150">
               <template #default="{ row }">
-                <el-link type="primary" :disabled="isReadOnly" @click="openRuleDialog(row)">{{ row.name }}</el-link>
+                <el-link type="primary" @click="openRuleDialog(row)">{{ row.name }}</el-link>
               </template>
             </el-table-column>
             <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
@@ -123,7 +123,7 @@
             </el-table-column>
             <el-table-column label="操作" width="140" fixed="right">
               <template #default="{ row }">
-                <el-button size="small" link type="primary" :disabled="isReadOnly" @click="openRuleDialog(row)">编辑</el-button>
+                <el-button size="small" link type="primary" @click="openRuleDialog(row)">{{ isReadOnly ? '查看' : '编辑' }}</el-button>
                 <el-button size="small" link type="danger" :disabled="isReadOnly" @click="deleteCustomRule(row)">删除</el-button>
             </template>
             </el-table-column>

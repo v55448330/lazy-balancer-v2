@@ -308,7 +308,7 @@
           <el-button v-if="hasPreviousStep" @click="prevStep">
             <el-icon><ArrowLeft /></el-icon>上一步
           </el-button>
-          <el-button v-if="hasNextStep" type="primary" :disabled="isReadOnly" @click="nextStep">
+          <el-button v-if="hasNextStep" type="primary" @click="nextStep">
             下一步<el-icon><ArrowRight /></el-icon>
           </el-button>
           <el-button v-if="currentStep === WIZARD_STEP.PREVIEW" type="primary" :disabled="isReadOnly" :loading="saving" @click="handleSave">
