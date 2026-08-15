@@ -99,7 +99,7 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 		clusterError(c, http.StatusForbidden, err.Error(), err)
 		return
 	}
-	recordAudit(c, "更新", "集群设置", services.AuditResultPart("success"))
+	recordAudit(c, "更新", "集群设置", services.FormatAuditDetail(clusterSettingsChangeDetail(req), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "集群设置已更新"})
 }
 
@@ -114,4 +114,34 @@ func localOutboundIP() string {
 		return "127.0.0.1"
 	}
 	return address.IP.String()
+}
+
+func clusterSettingsChangeDetail(req models.ClusterSettingsRequest) string {
+	labels := map[string]string{
+		"sync_global_config": "全局配置", "sync_users": "系统数据", "sync_rules": "负载均衡规则",
+		"sync_waf_files": "规则库数据库", "sync_security": "安全策略规则", "sync_caddy_config": "Caddy全局配置",
+	}
+	var parts []string
+	toggles := []struct {
+		key string
+		val *bool
+	}{
+		{"sync_global_config", req.SyncGlobalConfig}, {"sync_users", req.SyncUsers},
+		{"sync_rules", req.SyncRules}, {"sync_waf_files", req.SyncWafFiles},
+		{"sync_security", req.SyncSecurity}, {"sync_caddy_config", req.SyncCaddyConfig},
+	}
+	for _, t := range toggles {
+		if t.val == nil {
+			continue
+		}
+		state := "关闭"
+		if *t.val {
+			state = "开启"
+		}
+		parts = append(parts, labels[t.key]+"："+state)
+	}
+	if req.SyncInterval != nil {
+		parts = append(parts, fmt.Sprintf("同步间隔：%d 秒", *req.SyncInterval))
+	}
+	return strings.Join(parts, "；")
 }

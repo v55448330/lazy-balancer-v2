@@ -14,8 +14,9 @@
           @update-interval="updateSyncInterval"
         />
       </el-col>
-      <el-col v-if="status?.node_mode === 'master'" :xs="24" :sm="24" :md="12">
+      <el-col :xs="24" :sm="24" :md="12">
         <ClusterMasterPanel
+          v-if="status"
           settings-only
           :status="status"
           :nodes="nodes"
@@ -25,7 +26,7 @@
           :pending-node-id="pendingNodeId"
           :login-node-id="loginNodeId"
           :access-url-saving="accessUrlSaving"
-          :read-only="isNonAdminReadOnly"
+          :read-only="isNonAdminReadOnly || status?.node_mode === 'slave'"
           @generate-token="generateRegisterToken"
           @update-sync-field="updateSyncField"
           @approve="approveNode"
@@ -265,8 +266,28 @@ const copyRegisterToken = async (): Promise<void> => {
   }
 }
 
+const syncSwitchLabels: Record<string, string> = {
+  sync_global_config: '全局配置',
+  sync_users: '系统数据',
+  sync_rules: '负载均衡规则',
+  sync_waf_files: '规则库数据库',
+  sync_security: '安全策略规则',
+}
+
 const updateSyncField = async (field: string, value: boolean): Promise<void> => {
   if (isNonAdminReadOnly.value) return
+  const label = syncSwitchLabels[field] ?? field
+  const action = value ? '开启' : '关闭'
+  try {
+    await ElMessageBox.confirm(
+      `确定要${action}「${label}」的集群同步吗？${value ? '开启后主节点该类变更将同步到所有从节点。' : '关闭后从节点将保留本地数据，不再接收主节点该类变更。'}`,
+      '同步设置确认',
+      { confirmButtonText: action, cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    await fetchStatus()
+    return
+  }
   settingsLoading.value = true
   try {
     await request.put<ActionResponse>('/cluster/settings', { [field]: value })
@@ -274,6 +295,7 @@ const updateSyncField = async (field: string, value: boolean): Promise<void> => 
     await fetchStatus()
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '更新失败')
+    await fetchStatus()
   } finally {
     settingsLoading.value = false
   }
