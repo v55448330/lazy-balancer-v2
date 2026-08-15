@@ -62,6 +62,16 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			Security:     snapshot.MasterSyncSwitches.Security,
 		}
 	}
+	// 将主节点开关镜像到本地列：从节点 UI/Status 读取本地列展示真实同步范围。
+	// 触发器带 is_master=1 守卫，此写不会 bump cluster_version。
+	if snapshot.MasterSyncSwitches != nil {
+		s.db.Exec(`UPDATE global_config SET
+			sync_global_config=?, sync_users=?, sync_rules=?, sync_waf_files=?, sync_security=?
+			WHERE id=1 AND COALESCE(is_master,0)=0`,
+			snapshot.MasterSyncSwitches.GlobalConfig, snapshot.MasterSyncSwitches.Users,
+			snapshot.MasterSyncSwitches.Rules, snapshot.MasterSyncSwitches.WafFiles,
+			snapshot.MasterSyncSwitches.Security)
+	}
 	skip := computeSectionSkips(s.db, snapshot, switches)
 	previous, _, err := s.cluster.Snapshot(ctx, 0, "", "")
 	if err != nil {

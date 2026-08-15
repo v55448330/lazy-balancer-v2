@@ -110,17 +110,6 @@ func (s *ClusterService) Status(ctx context.Context) (models.ClusterStatus, erro
 	}
 	status.LastSyncError, status.SyncErrorCode = decodeSyncError(storedSyncError)
 	status.NodeMode = "slave"
-	// 从节点展示主节点下发的同步开关（快照 MasterSyncSwitches），而非本地默认列；
-	// 旧主节点快照不携带开关时保持本地值（schema 兼容语义）。
-	if !isMaster {
-		if snapshot, _, err := s.Snapshot(ctx, 0, "", ""); err == nil && snapshot.MasterSyncSwitches != nil {
-			status.SyncGlobalConfig = snapshot.MasterSyncSwitches.GlobalConfig
-			status.SyncUsers = snapshot.MasterSyncSwitches.Users
-			status.SyncRules = snapshot.MasterSyncSwitches.Rules
-			status.SyncWafFiles = snapshot.MasterSyncSwitches.WafFiles
-			status.SyncSecurity = snapshot.MasterSyncSwitches.Security
-		}
-	}
 	status.ClusterActive = clusterToken != ""
 	if isMaster {
 		status.NodeMode = "master"

@@ -24,6 +24,13 @@ func (h *Handlers) GetClusterSnapshot(c *gin.Context) {
 		return
 	}
 	if !changed {
+		if nodeIDValue, exists := c.Get("cluster_node_id"); exists {
+			if nodeID, ok := nodeIDValue.(int); ok {
+				var nodeName string
+				_ = db.DB.QueryRow("SELECT COALESCE(name,'') FROM nodes WHERE id=?", nodeID).Scan(&nodeName)
+				services.RecordAuditLog("system", "同步下发", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %s", nodeName), "配置无变化"), c.ClientIP())
+			}
+		}
 		c.Status(http.StatusNotModified)
 		return
 	}
