@@ -57,11 +57,13 @@ func ComputeSnapshotSectionHashes(s *models.ClusterSnapshot) map[string]string {
 			payload = s.WafFiles
 		case "security":
 			payload = struct {
-				Policies    json.RawMessage             `json:"policies"`
-				Bindings    json.RawMessage             `json:"bindings"`
-				CustomRules []models.SecurityCustomRule `json:"custom_rules"`
-				BlockPages  []models.SecurityBlockPage  `json:"block_pages"`
-			}{s.SecurityPolicies, s.SecurityBindings, s.SecurityCustomRules, s.SecurityBlockPages}
+				Policies    json.RawMessage                          `json:"policies"`
+				Bindings    json.RawMessage                          `json:"bindings"`
+				CustomRules []models.SecurityCustomRule              `json:"custom_rules"`
+				BlockPages  []models.SecurityBlockPage               `json:"block_pages"`
+				CRSVersion  []models.ClusterSecurityCRSVersion       `json:"crs_version"`
+				IP2Region   []models.ClusterSecurityIP2RegionVersion `json:"ip2region_version"`
+			}{s.SecurityPolicies, s.SecurityBindings, s.SecurityCustomRules, s.SecurityBlockPages, s.SecurityCRSVersion, s.SecurityIP2RegionVersion}
 		}
 		data, err := json.Marshal(payload)
 		if err != nil {

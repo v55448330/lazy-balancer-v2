@@ -43,6 +43,9 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	if name == "" {
 		name = h.cfg.NodeName
 	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.MasterURL)), "http://") {
+		services.RecordAuditLog(getContextUserID(c), "警告", "集群模式", services.FormatAuditDetail("目标：从节点", "使用明文 HTTP 注册，证书私钥将明文传输，建议改用 HTTPS"), c.ClientIP())
+	}
 	registration, err := h.syncService.RegisterWithMaster(c.Request.Context(), req.MasterURL, models.ClusterRegisterRequest{
 		Token: req.RegisterToken, Name: name, IPAddress: localOutboundIP(), Port: h.cfg.Port, Protocol: requestProtocol(c),
 	})
@@ -82,6 +85,7 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 		if errors.Is(err, services.ErrAlreadyMaster) {
 			status = http.StatusBadRequest
 		}
+		recordAudit(c, "提升失败", "集群模式", err.Error())
 		clusterError(c, status, "提升为主节点失败: "+err.Error(), err)
 		return
 	}

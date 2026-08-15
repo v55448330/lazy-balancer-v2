@@ -267,6 +267,12 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 		if err := updateSnapshotSettings(ctx, tx, snapshot); err != nil {
 			return err
 		}
+	} else {
+		// 同步间隔属集群编排自身（快照侧始终下发），即使全局配置同步
+		// 关闭也必须应用，否则从节点轮询周期与 UI 显示双陈旧。
+		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET sync_interval=? WHERE id=1 AND COALESCE(is_master,0)=0`, snapshot.BasicSettings.SyncInterval); err != nil {
+			return fmt.Errorf("写入同步间隔: %w", err)
+		}
 	}
 	if !skip.skip("security") {
 		if err := applySecurityTables(ctx, tx, snapshot); err != nil {

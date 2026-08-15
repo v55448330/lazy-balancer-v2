@@ -78,11 +78,12 @@ func waitSyncBarrier(ch <-chan struct{}) {
 	}
 }
 
-func TestSyncService_RegisterWithMaster_rejectsHTTP(t *testing.T) {
-	service := &SyncService{client: &http.Client{Timeout: time.Second}}
-	_, err := service.RegisterWithMaster(context.Background(), "http://master.example", models.ClusterRegisterRequest{})
-	if err == nil || !strings.Contains(err.Error(), "HTTPS") {
-		t.Fatalf("registration error=%v, want HTTPS rejection", err)
+func TestSyncService_RegisterWithMaster_acceptsHTTP(t *testing.T) {
+	// HTTP 现在是允许的（建议但非必选 HTTPS）：对不可达地址返回传输错误而非协议拒绝。
+	service := &SyncService{client: &http.Client{Timeout: 500 * time.Millisecond}}
+	_, err := service.RegisterWithMaster(context.Background(), "http://127.0.0.1:1", models.ClusterRegisterRequest{})
+	if err == nil || strings.Contains(err.Error(), "必须使用 HTTPS") {
+		t.Fatalf("registration error=%v, want transport failure not HTTPS rejection", err)
 	}
 }
 

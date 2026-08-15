@@ -110,8 +110,8 @@ func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *
 }
 
 func (s *SyncService) do(req *http.Request) (*http.Response, error) {
-	if req.URL.Scheme != "https" {
-		return nil, errors.New("集群主节点地址必须使用 HTTPS")
+	if req.URL.Scheme != "https" && req.URL.Scheme != "http" {
+		return nil, errors.New("集群主节点地址必须使用 HTTP 或 HTTPS")
 	}
 	s.initClusterClient()
 	pinPath, err := s.clusterPinPath(req.URL.Host)

@@ -232,9 +232,7 @@ func (m *CRSUpdateManager) run(trigger string) {
 		m.state.message = "已是最新版本"
 		m.state.finishedAt = time.Now().UTC()
 		m.mu.Unlock()
-		if trigger == "auto" {
-			RecordAuditLog("system", "自动更新", "CRS 规则库", FormatAuditDetail("已是最新版本 "+tag, AuditResultPart("success")), "")
-		}
+		RecordAuditLog("system", "更新", "CRS 规则库", FormatAuditDetail("已是最新版本 "+tag, AuditResultPart("success")), "")
 		return
 	}
 
@@ -260,9 +258,7 @@ func (m *CRSUpdateManager) run(trigger string) {
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
 	writeCRSUpdateLog("INFO", string(CRSStatusSuccess), fmt.Sprintf("CRS 已更新到 %s", tag))
-	if trigger == "auto" {
-		RecordAuditLog("system", "自动更新", "CRS 规则库", FormatAuditDetail("版本："+tag, AuditResultPart("success")), "")
-	}
+	RecordAuditLog("system", "更新", "CRS 规则库", FormatAuditDetail("版本："+tag, AuditResultPart("success")), "")
 }
 
 func (m *CRSUpdateManager) fail(cause error, restore bool) {
@@ -279,15 +275,13 @@ func (m *CRSUpdateManager) fail(cause error, restore bool) {
 		log.Printf("crs update: failed to record failure: %v", err)
 	}
 	m.mu.Lock()
-	trigger := m.state.trigger
+	_ = m.state.trigger
 	m.state.status = CRSStatusFailed
 	m.state.message = cause.Error()
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
 	writeCRSUpdateLog("ERROR", string(CRSStatusFailed), cause.Error())
-	if trigger == "auto" {
-		RecordAuditLog("system", "自动更新", "CRS 规则库", FormatAuditDetail(cause.Error(), AuditResultPart("failed")), "")
-	}
+	RecordAuditLog("system", "更新", "CRS 规则库", FormatAuditDetail(cause.Error(), AuditResultPart("failed")), "")
 }
 
 // StatusSnapshot returns the in-memory task view, falling back to the stored

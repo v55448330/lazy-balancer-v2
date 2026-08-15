@@ -192,9 +192,7 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 		m.state.message = "已是最新版本"
 		m.state.finishedAt = time.Now().UTC()
 		m.mu.Unlock()
-		if trigger == "auto" {
-			RecordAuditLog("system", "自动更新", "IP2Region 数据库", FormatAuditDetail("已是最新版本 "+tag, AuditResultPart("success")), "")
-		}
+		RecordAuditLog("system", "更新", "IP2Region 数据库", FormatAuditDetail("已是最新版本 "+tag, AuditResultPart("success")), "")
 		return
 	}
 
@@ -227,9 +225,7 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
 	writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), fmt.Sprintf("ip2region 已更新到 %s", tag))
-	if trigger == "auto" {
-		RecordAuditLog("system", "自动更新", "IP2Region 数据库", FormatAuditDetail("版本："+tag, AuditResultPart("success")), "")
-	}
+	RecordAuditLog("system", "更新", "IP2Region 数据库", FormatAuditDetail("版本："+tag, AuditResultPart("success")), "")
 }
 
 func (m *IP2RegionUpdateManager) fail(cause error) {
@@ -240,15 +236,13 @@ func (m *IP2RegionUpdateManager) fail(cause error) {
 		log.Printf("ip2region update: failed to record failure: %v", err)
 	}
 	m.mu.Lock()
-	trigger := m.state.trigger
+	_ = m.state.trigger
 	m.state.status = IP2RegionStatusFailed
 	m.state.message = cause.Error()
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
 	writeIP2RegionUpdateLog("ERROR", string(IP2RegionStatusFailed), cause.Error())
-	if trigger == "auto" {
-		RecordAuditLog("system", "自动更新", "IP2Region 数据库", FormatAuditDetail(cause.Error(), AuditResultPart("failed")), "")
-	}
+	RecordAuditLog("system", "更新", "IP2Region 数据库", FormatAuditDetail(cause.Error(), AuditResultPart("failed")), "")
 }
 
 // downloadAndInstall downloads, validates and atomically swaps in the new xdb.

@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -242,6 +244,13 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 			s.lifecycle.StartSync()
 		}
 	}()
+	var registrationID int
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(registration_id,0) FROM global_config WHERE id=1").Scan(&registrationID); err != nil {
+		return fmt.Errorf("读取注册编号: %w", err)
+	}
+	var oldToken string
+	_ = s.db.QueryRowContext(ctx, "SELECT COALESCE(cluster_token,'') FROM global_config WHERE id=1").Scan(&oldToken)
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("开始提升事务: %w", err)
@@ -254,6 +263,15 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 		return fmt.Errorf("提交提升事务: %w", err)
 	}
 	promoted = true
+
+	// 通知旧主节点该从节点已脱离（best-effort：失败不阻断提升，主节点
+	// 会在上报超时后将其标记下线；成功则主节点节点列表立即更新并留痕）。
+	if masterURL != "" && oldToken != "" {
+		go notifyMasterDetach(context.WithoutCancel(ctx), masterURL, oldToken)
+	}
+	if registrationID > 0 {
+		RecordAuditLog("system", "提升", "集群节点", FormatAuditDetail(fmt.Sprintf("注册编号：%d", registrationID), "本节点已脱离集群并提升为主节点", AuditResultPart("success")), "")
+	}
 	if s.lifecycle != nil {
 		s.lifecycle.StartACME()
 	}
@@ -326,4 +344,22 @@ func DecodeClusterHealth(value string) (*models.ClusterHealth, error) {
 		return nil, fmt.Errorf("解析节点健康状态: %w", err)
 	}
 	return &health, nil
+}
+
+// notifyMasterDetach best-effort 通知旧主节点本从节点已提升脱离。主节点收到
+// 无效令牌（已重置）的请求会因验签失败忽略本请求，节点列表靠上报超时收敛；
+// 因此这里直接发一次空上报让主节点感知最后一次状态，超时 3 秒即放弃。
+func notifyMasterDetach(ctx context.Context, masterURL, token string) {
+	endpoint := strings.TrimRight(masterURL, "/") + "/api/v1/cluster/nodes/report"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("X-Cluster-Token", token)
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	resp.Body.Close()
 }
