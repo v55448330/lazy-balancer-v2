@@ -139,9 +139,8 @@ func readAdminTLSFiles(c *gin.Context) (string, string, error) {
 func (h *Handlers) GetAdminTLS(c *gin.Context) {
 	cfg := services.LoadAdminTLSConfig()
 	resp := gin.H{
-		"enabled":      cfg.Enabled,
-		"mode":         cfg.Mode,
-		"restart_hint": true,
+		"enabled": cfg.Enabled,
+		"mode":    cfg.Mode,
 	}
 	if cfg.Cert != "" {
 		if info, err := parseAdminTLSCertInfo(cfg.Cert); err == nil {
@@ -170,7 +169,6 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	}
 	cert, key := current.Cert, current.Key
 	uploadedCertificate := false
-	port := h.cfg.Port
 	if mode == "upload" {
 		certFiles := c.Request.MultipartForm.File["cert_file"]
 		keyFiles := c.Request.MultipartForm.File["key_file"]
@@ -207,8 +205,8 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		}
 	}
 
-	if _, err := db.DB.Exec(`UPDATE global_config SET admin_tls_enabled=?, admin_tls_mode=?, admin_tls_cert=?, admin_tls_key=?, admin_tls_acme_rule_id=?, admin_tls_port=?, updated_at=datetime('now') WHERE id=1`,
-		enabled, mode, cert, key, "", port); err != nil {
+	if _, err := db.DB.Exec(`UPDATE global_config SET admin_tls_enabled=?, admin_tls_mode=?, admin_tls_cert=?, admin_tls_key=?, updated_at=datetime('now') WHERE id=1`,
+		enabled, mode, cert, key); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 HTTPS 配置失败: " + err.Error()})
 		return
 	}
