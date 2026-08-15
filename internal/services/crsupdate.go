@@ -13,7 +13,7 @@ import (
 
 // CRSBundledVersion is the CRS release baked into the container image; it is
 // only used to seed security_crs_version when the row does not exist yet.
-const CRSBundledVersion = "v4.14.0"
+const CRSBundledVersion = "v4.28.0"
 
 var ErrCRSUpdateRunning = errors.New("CRS 更新任务正在进行中")
 

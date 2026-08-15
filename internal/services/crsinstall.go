@@ -145,6 +145,35 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 
 	os.RemoveAll(rulesBak)
 	os.Remove(setupBak)
+	// 标记磁盘实际版本 + 持久化到数据卷快照：未挂载 /app/waf 的部署在容器
+	// 重建后依赖该快照恢复用户更新的版本（见 ReconcileCRSState）。
+	writeCRSVersionMarker(m.crsDir, tag)
+	if err := persistCRSSnapshotFrom(m.crsDir, crsSnapshotDir, tag); err != nil {
+		log.Printf("crs update: failed to persist snapshot to %s: %v", crsSnapshotDir, err)
+	}
+	return nil
+}
+
+// persistCRSSnapshotFrom copies the live rules tree, setup files and version
+// marker into the data-volume snapshot dir so a rebuilt container (or a
+// wiped bind mount) can restore the user-updated version at startup.
+func persistCRSSnapshotFrom(liveDir, snapshotDir, version string) error {
+	if err := os.RemoveAll(snapshotDir); err != nil {
+		return fmt.Errorf("清理旧快照: %w", err)
+	}
+	if err := copyDir(filepath.Join(liveDir, "rules"), filepath.Join(snapshotDir, "rules")); err != nil {
+		return fmt.Errorf("快照 rules: %w", err)
+	}
+	for _, name := range []string{"crs-setup.conf", "crs-setup.stock.conf", "zz-user-overrides.conf"} {
+		if _, err := os.Stat(filepath.Join(liveDir, name)); err == nil {
+			if err := copyFile(filepath.Join(liveDir, name), filepath.Join(snapshotDir, name)); err != nil {
+				return fmt.Errorf("快照 %s: %w", name, err)
+			}
+		}
+	}
+	if err := os.WriteFile(filepath.Join(snapshotDir, crsVersionFile), []byte(version+"\n"), 0644); err != nil {
+		return fmt.Errorf("快照版本标记: %w", err)
+	}
 	return nil
 }
 

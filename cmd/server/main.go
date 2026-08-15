@@ -118,6 +118,7 @@ func run() error {
 	// snapshot with user-updated rules wins over the pristine image copy),
 	// then materialize cert files from DB, then apply Caddy config on startup
 	services.SeedCRSRules()
+	services.ReconcileCRSState()
 	services.MaterializeAllCertsFromDB()
 	if err := h.ApplyConfigOnStartup(); err != nil {
 		services.Logf("error", "failed to apply Caddy config on startup: %v", err)

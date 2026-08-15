@@ -1,10 +1,13 @@
 package services
 
 import (
+	"bytes"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 // CRS seed sources for an empty live rules tree.
@@ -52,8 +55,10 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 		snapshotVersion = "" // a snapshot without a rules tree is unusable
 	}
 	src := distDir
+	srcVersion := CRSBundledVersion
 	if decideCRSSeedSource(CRSBundledVersion, snapshotVersion, snapshotVersion != "") == crsSeedFromSnapshot {
 		src = snapshotDir
+		srcVersion = snapshotVersion
 	}
 	if err := copyDir(filepath.Join(src, "rules"), filepath.Join(liveDir, "rules")); err != nil {
 		log.Printf("crs seed: failed to seed rules from %s: %v", src, err)
@@ -65,5 +70,172 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 			log.Printf("crs seed: failed to seed crs-setup.conf from %s: %v", src, err)
 		}
 	}
+	for _, aux := range []string{"crs-setup.stock.conf", "zz-user-overrides.conf"} {
+		if _, err := os.Stat(filepath.Join(src, aux)); err == nil {
+			_ = copyFile(filepath.Join(src, aux), filepath.Join(liveDir, aux))
+		}
+	}
+	// 播种后落版本标记：对账逻辑据此区分「磁盘实际版本」与「数据库记录版本」。
+	writeCRSVersionMarker(liveDir, srcVersion)
 	log.Printf("crs seed: seeded %s from %s", liveDir, src)
+}
+
+// writeCRSVersionMarker records the on-disk CRS version under the live dir so
+// startup reconciliation can tell the disk version from the DB record.
+func writeCRSVersionMarker(liveDir, version string) {
+	if version == "" {
+		return
+	}
+	if err := os.WriteFile(filepath.Join(liveDir, crsVersionFile), []byte(version+"\n"), 0644); err != nil {
+		log.Printf("crs seed: failed to write version marker: %v", err)
+	}
+}
+
+func readCRSVersionMarker(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, crsVersionFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// crsVersionFile marks the on-disk CRS version inside a tree root (live dir
+// and snapshot dir both carry one).
+const crsVersionFile = "VERSION"
+
+// crsProbeFile is a representative rules file present in every CRS release;
+// byte-comparing it between trees is a cheap content check for the bootstrap
+// path where no version marker exists yet.
+const crsProbeFile = "rules/REQUEST-901-INITIALIZATION.conf"
+
+func crsTreeProbeMatches(a, b string) bool {
+	aData, aErr := os.ReadFile(filepath.Join(a, crsProbeFile))
+	bData, bErr := os.ReadFile(filepath.Join(b, crsProbeFile))
+	if aErr != nil || bErr != nil {
+		return false
+	}
+	return bytes.Equal(aData, bData)
+}
+
+type crsReconcileAction int
+
+const (
+	crsReconcileNone crsReconcileAction = iota
+	crsReconcileWriteMarker
+	crsReconcileRestoreSnapshot
+	crsReconcileCorrectDB
+)
+
+type crsReconcilePlan struct {
+	action crsReconcileAction
+	// markerVersion is the version written for WriteMarker/RestoreSnapshot.
+	markerVersion string
+	// dbVersion is the disk version the DB row is corrected to for CorrectDB.
+	dbVersion string
+	// ambiguous marks the legacy no-marker case where the disk version cannot
+	// be determined; callers only log an advice line and change nothing.
+	ambiguous bool
+}
+
+// planCRSReconcile decides how to realign the disk CRS tree, the data-volume
+// snapshot and the DB version row at startup. Cases covered:
+//   - marker == DB            → nothing to do (steady state)
+//   - DB == snapshot ≠ disk   → disk reverted (unmounted /app/waf rebuilt
+//     from the image) → restore the user-updated tree from the snapshot
+//   - disk ≠ DB, no snapshot  → disk is the truth (image-bundled rules
+//     changed by an upgrade, or user update lost with no snapshot) →
+//     correct the DB row to the disk version
+//   - no marker (legacy disk) → bootstrap the marker from the snapshot/DB
+//     when they agree and a content probe confirms, otherwise fall back to
+//     the bundled version — or stay hands-off when the disk version is
+//     genuinely unknowable.
+func planCRSReconcile(liveV, snapV, dbV, bundledV string, snapshotRulesExist, probeMatches bool) crsReconcilePlan {
+	if liveV == "" {
+		if snapshotRulesExist && snapV != "" && snapV == dbV {
+			if probeMatches {
+				return crsReconcilePlan{action: crsReconcileWriteMarker, markerVersion: dbV}
+			}
+			return crsReconcilePlan{action: crsReconcileRestoreSnapshot, markerVersion: snapV}
+		}
+		if dbV == bundledV {
+			return crsReconcilePlan{action: crsReconcileWriteMarker, markerVersion: bundledV}
+		}
+		// 旧部署磁盘既无标记、快照也对不上：无法确认磁盘版本，保持现状
+		// 并提示手动更新一次（更新会补齐标记与快照，之后完全自洽）。
+		return crsReconcilePlan{action: crsReconcileNone, ambiguous: true}
+	}
+	if liveV == dbV {
+		return crsReconcilePlan{action: crsReconcileNone}
+	}
+	if snapshotRulesExist && snapV != "" && snapV == dbV {
+		return crsReconcilePlan{action: crsReconcileRestoreSnapshot, markerVersion: snapV}
+	}
+	return crsReconcilePlan{action: crsReconcileCorrectDB, dbVersion: liveV}
+}
+
+// restoreCRSFromSnapshot copies the persisted snapshot tree back over the
+// live dir (rules + setup + user override files) and refreshes the marker.
+func restoreCRSFromSnapshot(liveDir, snapshotDir, version string) error {
+	if err := os.RemoveAll(filepath.Join(liveDir, "rules")); err != nil {
+		return err
+	}
+	if err := copyDir(filepath.Join(snapshotDir, "rules"), filepath.Join(liveDir, "rules")); err != nil {
+		return err
+	}
+	for _, name := range []string{"crs-setup.conf", "crs-setup.stock.conf", "zz-user-overrides.conf"} {
+		if _, err := os.Stat(filepath.Join(snapshotDir, name)); err == nil {
+			if err := copyFile(filepath.Join(snapshotDir, name), filepath.Join(liveDir, name)); err != nil {
+				return err
+			}
+		}
+	}
+	writeCRSVersionMarker(liveDir, version)
+	return nil
+}
+
+// ReconcileCRSState realigns the CRS disk tree, data-volume snapshot and DB
+// version row at startup. Master-only: a slave's CRS files and version row
+// are both governed by cluster sync, local reconciliation would fight it.
+func ReconcileCRSState() {
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,0) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		return
+	}
+	reconcileCRSStateFrom(crsLiveDir, crsSnapshotDir, currentCRSVersion())
+}
+
+func reconcileCRSStateFrom(liveDir, snapshotDir, dbV string) {
+	snapV := readCRSVersionMarker(snapshotDir)
+	snapshotRulesExist := false
+	if _, err := os.Stat(filepath.Join(snapshotDir, "rules")); err == nil {
+		snapshotRulesExist = true
+	} else {
+		snapV = ""
+	}
+	liveV := readCRSVersionMarker(liveDir)
+	plan := planCRSReconcile(liveV, snapV, dbV, CRSBundledVersion, snapshotRulesExist, crsTreeProbeMatches(liveDir, snapshotDir))
+	switch plan.action {
+	case crsReconcileNone:
+		if plan.ambiguous {
+			log.Printf("crs reconcile: 磁盘 CRS 无版本标记且与快照不一致（记录版本 %s），建议手动更新一次以补齐版本追踪", dbV)
+		}
+	case crsReconcileWriteMarker:
+		writeCRSVersionMarker(liveDir, plan.markerVersion)
+	case crsReconcileRestoreSnapshot:
+		if err := restoreCRSFromSnapshot(liveDir, snapshotDir, plan.markerVersion); err != nil {
+			log.Printf("crs reconcile: 从快照恢复 CRS %s 失败: %v", plan.markerVersion, err)
+			return
+		}
+		if m := GetCRSUpdateManager(); m != nil {
+			m.rescanRuleCount()
+		}
+		log.Printf("crs reconcile: 磁盘 CRS 已回退（容器重建），从数据卷快照恢复为 %s", plan.markerVersion)
+		RecordAuditLog("system", "恢复", "CRS 规则库", FormatAuditDetail("容器重建后从持久快照恢复 "+plan.markerVersion, AuditResultPart("success")), "")
+	case crsReconcileCorrectDB:
+		if _, err := db.DB.Exec("UPDATE security_crs_version SET version=?, updated_at=datetime('now') WHERE id=1", plan.dbVersion); err != nil {
+			log.Printf("crs reconcile: 校正版本记录为磁盘实际版本 %s 失败: %v", plan.dbVersion, err)
+			return
+		}
+		log.Printf("crs reconcile: 版本记录已校正为磁盘实际版本 %s（原记录 %s）", plan.dbVersion, dbV)
+	}
 }
