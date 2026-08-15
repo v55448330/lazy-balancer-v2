@@ -34,12 +34,18 @@ func TestInitialize_migrates_cluster_columns_and_token_table(t *testing.T) {
 
 	// Then
 	var clusterVersion int
-	var syncCaddy bool
-	if err := DB.QueryRow("SELECT cluster_version, sync_caddy_config FROM global_config WHERE id=1").Scan(&clusterVersion, &syncCaddy); err != nil {
+	if err := DB.QueryRow("SELECT cluster_version FROM global_config WHERE id=1").Scan(&clusterVersion); err != nil {
 		t.Fatalf("read cluster defaults: %v", err)
 	}
-	if clusterVersion != 0 || syncCaddy {
-		t.Fatalf("cluster defaults version=%d sync_caddy=%v", clusterVersion, syncCaddy)
+	if clusterVersion != 0 {
+		t.Fatalf("cluster version=%d, want 0", clusterVersion)
+	}
+	var syncCaddyColumn int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='sync_caddy_config'").Scan(&syncCaddyColumn); err != nil {
+		t.Fatalf("query sync_caddy_config column: %v", err)
+	}
+	if syncCaddyColumn != 0 {
+		t.Fatalf("sync_caddy_config column still present (count=%d), want dropped", syncCaddyColumn)
 	}
 	var tokenTable int
 	if err := DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cluster_register_tokens'").Scan(&tokenTable); err != nil {

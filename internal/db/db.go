@@ -372,7 +372,6 @@ func createTables() error {
 		last_sync_error TEXT DEFAULT '',
 		applied_version INTEGER DEFAULT 0,
 		cluster_version INTEGER DEFAULT 0,
-		sync_caddy_config BOOLEAN DEFAULT FALSE,
 		cluster_token TEXT DEFAULT '',
 		registration_id INTEGER DEFAULT 0,
 		registration_secret TEXT DEFAULT '',
@@ -438,7 +437,6 @@ func createTables() error {
 		conditions TEXT DEFAULT '[]',
 		action TEXT DEFAULT 'block',
 		score INTEGER DEFAULT 5,
-		status_code INTEGER DEFAULT 403,
 		enabled BOOLEAN DEFAULT TRUE,
 		updated_by INTEGER DEFAULT 0,
 		created_at DATETIME DEFAULT (datetime('now')),
@@ -450,7 +448,6 @@ func createTables() error {
 		name TEXT NOT NULL,
 		description TEXT DEFAULT '',
 		content TEXT DEFAULT '',
-		status_code INTEGER DEFAULT 403,
 		is_default BOOLEAN DEFAULT FALSE,
 		created_by INTEGER DEFAULT 0,
 		created_at DATETIME DEFAULT (datetime('now')),
@@ -666,8 +663,6 @@ func runMigrations() error {
 		"global_config.admin_tls_mode":                "VARCHAR(20) DEFAULT 'selfsigned'",
 		"global_config.admin_tls_cert":                "TEXT DEFAULT ''",
 		"global_config.admin_tls_key":                 "TEXT DEFAULT ''",
-		"global_config.admin_tls_acme_rule_id":        "VARCHAR(50) DEFAULT ''",
-		"global_config.admin_tls_port":                "INTEGER DEFAULT 8443",
 		"global_config.access_log_json":               "BOOLEAN DEFAULT TRUE",
 		"global_config.access_log_format":             "TEXT DEFAULT ''",
 		"global_config.audit_retention_months":        "INTEGER DEFAULT 3",
@@ -695,7 +690,6 @@ func runMigrations() error {
 		"users.password_changed_at":                   "DATETIME",
 		"users.password_version":                      "INTEGER NOT NULL DEFAULT 0",
 		"global_config.cluster_version":               "INTEGER DEFAULT 0",
-		"global_config.sync_caddy_config":             "BOOLEAN DEFAULT 0",
 		"global_config.sync_global_config":            "BOOLEAN DEFAULT 1",
 		"global_config.sync_users":                    "BOOLEAN DEFAULT 1",
 		"global_config.sync_rules":                    "BOOLEAN DEFAULT 1",
@@ -725,7 +719,6 @@ func runMigrations() error {
 		"security_policies.block_page_id":             "INTEGER DEFAULT 0",
 		"security_block_pages.created_by":             "INTEGER DEFAULT 0",
 		"security_block_pages.updated_by":             "INTEGER DEFAULT 0",
-		"security_block_pages.status_code":            "INTEGER DEFAULT 403",
 		"security_policies.updated_by":                "INTEGER DEFAULT 0",
 		"security_policies.geoip_countries":           "TEXT NOT NULL DEFAULT '[]'",
 		"security_policies.geoip_mode":                "TEXT NOT NULL DEFAULT 'deny'",
@@ -966,6 +959,46 @@ func runMigrations() error {
 				return fmt.Errorf("failed to drop legacy upstreams.%s: %w", col, err)
 			}
 			log.Printf("Dropped legacy column %s from upstreams", col)
+		}
+	}
+
+	// Drop legacy global_config.sync_caddy_config if it still exists. 旧开关仅覆盖
+	// Caddy 全局配置，已被 sync_global_config 取代，且不再被快照构建或同步开关读取，
+	// 切换它只会触发无意义的全量重拉。
+	legacyGlobalConfigDeadColumns := []string{"sync_caddy_config"}
+	for _, col := range legacyGlobalConfigDeadColumns {
+		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name=?", col).Scan(&colCount); err != nil {
+			return fmt.Errorf("failed to check legacy global_config.%s: %w", col, err)
+		}
+		if colCount > 0 {
+			if _, err := DB.Exec("ALTER TABLE global_config DROP COLUMN " + col); err != nil {
+				return fmt.Errorf("failed to drop legacy global_config.%s: %w", col, err)
+			}
+			log.Printf("Dropped legacy column %s from global_config", col)
+		}
+	}
+
+	// Drop dead columns that are no longer read or written anywhere:
+	// - security_block_pages.status_code / security_custom_rules.status_code
+	//   已由 security_policies.block_status_code 统一承载拦截状态码，页面与自定义
+	//   规则的状态码列不再写入也不被读取（Caddy 配置渲染统一走策略的 block_status_code）。
+	// - global_config.admin_tls_acme_rule_id / admin_tls_port 在 UpdateAdminTLS 中仅写入
+	//   空值/监听端口，从未被任何读取路径消费（管理面板 HTTPS 只使用 enabled/mode/cert/key）。
+	deadColumnDrops := []struct{ table, column string }{
+		{"security_block_pages", "status_code"},
+		{"security_custom_rules", "status_code"},
+		{"global_config", "admin_tls_acme_rule_id"},
+		{"global_config", "admin_tls_port"},
+	}
+	for _, drop := range deadColumnDrops {
+		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", drop.table, drop.column).Scan(&colCount); err != nil {
+			return fmt.Errorf("failed to check dead column %s.%s: %w", drop.table, drop.column, err)
+		}
+		if colCount > 0 {
+			if _, err := DB.Exec("ALTER TABLE " + drop.table + " DROP COLUMN " + drop.column); err != nil {
+				return fmt.Errorf("failed to drop dead column %s.%s: %w", drop.table, drop.column, err)
+			}
+			log.Printf("Dropped dead column %s from %s", drop.column, drop.table)
 		}
 	}
 
@@ -1673,9 +1706,10 @@ func migrateSyncSwitches() error {
 	if done {
 		return nil
 	}
-	// 新分类与旧 sync_caddy_config 语义不同（旧开关仅覆盖 Caddy 全局配置且默认关，
-	// 新开关覆盖日志/时区/Caddy 全部全局项且默认开），因此不搬运旧值；
-	// 曾依赖旧开关关闭同步的用户需在新设置卡片重新关闭对应类别。
+	// 新分类（sync_global_config 等五类）语义覆盖旧 sync_caddy_config 开关
+	// （旧开关仅覆盖 Caddy 全局配置且默认关，新开关覆盖日志/时区/Caddy 全部
+	// 全局项且默认开），因此不搬运旧值；曾依赖旧开关关闭同步的用户需在新设置
+	// 卡片重新关闭对应类别。旧 sync_caddy_config 列已随迁移删除。
 	_, err := DB.Exec("UPDATE global_config SET sync_switches_migrated=1 WHERE id=1")
 	return err
 }

@@ -91,6 +91,57 @@ func TestRunMigrationsDropsLegacyTLSCertificatesAndNodeSyncColumnsIdempotently(t
 	}
 }
 
+func TestRunMigrations_dropsDeadSecurityAndAdminTLSColumns(t *testing.T) {
+	// Given a schema that still carries the dead status_code / admin TLS columns
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO global_config (id,caddy_config) VALUES (1,'{}');
+		ALTER TABLE security_custom_rules ADD COLUMN status_code INTEGER DEFAULT 403;
+		ALTER TABLE security_block_pages ADD COLUMN status_code INTEGER DEFAULT 403;
+		ALTER TABLE global_config ADD COLUMN admin_tls_acme_rule_id VARCHAR(50) DEFAULT '';
+		ALTER TABLE global_config ADD COLUMN admin_tls_port INTEGER DEFAULT 8443;
+		INSERT INTO security_custom_rules (id,name,description,conditions,action,score,status_code,enabled,updated_by) VALUES (1,'legacy rule','','[]','block',5,451,1,0);
+		INSERT INTO security_block_pages (id,name,description,content,status_code,is_default,created_by,updated_by) VALUES (2,'legacy page','','<html>x</html>',499,0,0,0);`); err != nil {
+		t.Fatalf("seed legacy dead columns: %v", err)
+	}
+
+	// When migrations run (twice, to prove idempotence)
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	if err := runMigrations(); err != nil {
+		t.Fatalf("repeat migrations: %v", err)
+	}
+
+	// Then the dead columns are dropped while the rows survive
+	for _, drop := range []struct{ table, column string }{
+		{"security_custom_rules", "status_code"},
+		{"security_block_pages", "status_code"},
+		{"global_config", "admin_tls_acme_rule_id"},
+		{"global_config", "admin_tls_port"},
+	} {
+		var count int
+		if err := database.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", drop.table, drop.column).Scan(&count); err != nil {
+			t.Fatalf("query %s.%s: %v", drop.table, drop.column, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s.%s count=%d, want dropped", drop.table, drop.column, count)
+		}
+	}
+	var ruleName, pageName string
+	if err := database.QueryRow("SELECT name FROM security_custom_rules WHERE id=1").Scan(&ruleName); err != nil {
+		t.Fatalf("read migrated custom rule: %v", err)
+	}
+	if err := database.QueryRow("SELECT name FROM security_block_pages WHERE id=2").Scan(&pageName); err != nil {
+		t.Fatalf("read migrated block page: %v", err)
+	}
+	if ruleName != "legacy rule" || pageName != "legacy page" {
+		t.Fatalf("rows lost after drop: rule=%q page=%q", ruleName, pageName)
+	}
+}
+
 func TestRunMigrations_makes_users_isEnabled_notNull_and_backfills_null(t *testing.T) {
 	// Given
 	database := openMigrationTestDB(t)
