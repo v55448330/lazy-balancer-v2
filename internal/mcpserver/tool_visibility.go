@@ -52,11 +52,13 @@ func resolveAPIKeyReadOnly(apiKey string) (bool, error) {
 	hash := sha256.Sum256([]byte(apiKey))
 	var readOnly bool
 	err := db.DB.QueryRow(`
-		SELECT COALESCE(read_only,0)
-		FROM api_keys
-		WHERE key_hash = ?
-		  AND is_enabled = 1
-		  AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
+		SELECT COALESCE(k.read_only,0)
+		FROM api_keys k
+		JOIN users u ON u.id = k.created_by
+		WHERE k.key_hash = ?
+		  AND k.is_enabled = 1
+		  AND u.is_enabled = 1
+		  AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))
 	`, fmt.Sprintf("%x", hash[:])).Scan(&readOnly)
 	return readOnly, err
 }

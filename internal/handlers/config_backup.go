@@ -507,7 +507,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	}
 	defer session.close()
 	tx := session.tx
-	deleteOrder := []string{"security_policy_bindings", "security_custom_rules", "security_block_pages", "security_policies", "api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs"}
+	deleteOrder := []string{"security_policy_bindings", "security_crs_version", "security_ip2region_version", "security_custom_rules", "security_block_pages", "security_policies", "api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs"}
 	for _, table := range deleteOrder {
 		if _, exists := backup.Tables[table]; !exists {
 			continue
@@ -519,7 +519,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			return
 		}
 	}
-	insertOrder := []string{"users", "lb_rules", "ca_providers", "certificate_configs", "api_keys", "upstreams", "path_rules", "cert_jobs", "security_policies", "security_block_pages", "security_custom_rules", "security_policy_bindings"}
+	insertOrder := []string{"users", "lb_rules", "ca_providers", "certificate_configs", "api_keys", "upstreams", "path_rules", "cert_jobs", "security_policies", "security_crs_version", "security_ip2region_version", "security_block_pages", "security_custom_rules", "security_policy_bindings"}
 	for _, table := range insertOrder {
 		rows, exists := backup.Tables[table]
 		if !exists {
@@ -671,6 +671,8 @@ func importCountsDetail(tables map[string][]map[string]any) string {
 		{"ca_providers", "CA %d 个"},
 		{"certificate_configs", "DNS %d 个"},
 		{"cert_jobs", "任务 %d 个"},
+		{"security_crs_version", "CRS 版本 %d 条"},
+		{"security_ip2region_version", "IP2Region 版本 %d 条"},
 	}
 	for _, item := range labels {
 		if rows, ok := tables[item.table]; ok {

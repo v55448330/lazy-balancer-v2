@@ -171,6 +171,37 @@ func TestResolveAPIKeyReadOnly_returnsPersistedPermission(t *testing.T) {
 	}
 }
 
+func TestResolveAPIKeyReadOnly_treatsDisabledOwnerAsNotReadOnly(t *testing.T) {
+	// Given
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
+	})
+	apiKey := "lb_sk_disabled-owner"
+	hash := sha256.Sum256([]byte(apiKey))
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (92,'disabled-owner','x','admin',0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,mcp_enabled,read_only) VALUES ('disabled-owner',?,?,92,1,1,1)`, fmt.Sprintf("%x", hash[:]), apiKey[:12]); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	readOnly, err := resolveAPIKeyReadOnly(apiKey)
+
+	// Then：所有者被禁用时按 key-not-found 处理，不视为只读
+	if err == nil {
+		t.Fatalf("want key-not-found err for disabled owner, got nil")
+	}
+	if readOnly {
+		t.Fatalf("disabled owner key treated as read-only")
+	}
+}
+
 func TestIsLoopbackHTTPURLAllowsIPv6Loopback(t *testing.T) {
 	target, err := url.Parse("http://[::1]:8000/api/v1")
 	if err != nil {

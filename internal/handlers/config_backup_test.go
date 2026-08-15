@@ -351,6 +351,64 @@ func TestConfigBackup_export_import_roundtrip(t *testing.T) {
 	}
 }
 
+func TestConfigBackup_roundtrips_security_version_tables(t *testing.T) {
+	// Given：CRS/IP2Region 版本表含 auto_update 偏好，导出前先写入非默认值
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec("INSERT INTO users (username, password_hash, role) VALUES ('keep', 'hash', 'admin')"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT OR REPLACE INTO security_crs_version (id, version, auto_update) VALUES (1, 'v4.14.0', 1)"); err != nil {
+		t.Fatalf("seed crs version: %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT OR REPLACE INTO security_ip2region_version (id, version, auto_update) VALUES (1, 'v3.17.0', 0)"); err != nil {
+		t.Fatalf("seed ip2region version: %v", err)
+	}
+	router := gin.New()
+	router.GET("/config/export", h.ExportConfigBackup)
+	router.POST("/config/import", h.ImportConfigBackup)
+
+	// When: export
+	exportResponse := httptest.NewRecorder()
+	router.ServeHTTP(exportResponse, httptest.NewRequest(http.MethodGet, "/config/export", nil))
+	if exportResponse.Code != http.StatusOK {
+		t.Fatalf("export status=%d body=%s", exportResponse.Code, exportResponse.Body.String())
+	}
+	backup := exportResponse.Body.String()
+
+	// Given: 清空两张版本表（含 auto_update 偏好丢失）
+	if _, err := db.DB.Exec("DELETE FROM security_crs_version; DELETE FROM security_ip2region_version"); err != nil {
+		t.Fatalf("wipe version tables: %v", err)
+	}
+
+	// When: import
+	importResponse := httptest.NewRecorder()
+	importRequest := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	importRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(importResponse, importRequest)
+
+	// Then：两张表连同 auto_update 偏好一起恢复
+	if importResponse.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s", importResponse.Code, importResponse.Body.String())
+	}
+	var crsVersion string
+	var crsAutoUpdate int
+	if err := db.DB.QueryRow("SELECT version, auto_update FROM security_crs_version WHERE id=1").Scan(&crsVersion, &crsAutoUpdate); err != nil {
+		t.Fatalf("read restored crs version: %v", err)
+	}
+	if crsVersion != "v4.14.0" || crsAutoUpdate != 1 {
+		t.Fatalf("restored crs version=%q auto_update=%d, want v4.14.0/1", crsVersion, crsAutoUpdate)
+	}
+	var ip2regionVersion string
+	var ip2regionAutoUpdate int
+	if err := db.DB.QueryRow("SELECT version, auto_update FROM security_ip2region_version WHERE id=1").Scan(&ip2regionVersion, &ip2regionAutoUpdate); err != nil {
+		t.Fatalf("read restored ip2region version: %v", err)
+	}
+	if ip2regionVersion != "v3.17.0" || ip2regionAutoUpdate != 0 {
+		t.Fatalf("restored ip2region version=%q auto_update=%d, want v3.17.0/0", ip2regionVersion, ip2regionAutoUpdate)
+	}
+}
+
 func TestImportConfigBackup_clamps_excessive_jwt_expiration(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	completeTables := make(map[string][]map[string]any, len(configBackupTables))

@@ -236,3 +236,30 @@ func TestMetricsService_storePerHostMetrics_returns_rule_query_error(t *testing.
 		t.Fatal("closed rule database query error was swallowed")
 	}
 }
+
+func TestMetricsService_updateOverview_counts_online_nodes_dynamically(t *testing.T) {
+	// Given：4 个节点——新鲜在线、陈旧在线(status 仍为 online)、待审批、last_seen 为空
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.DB.Exec(`UPDATE global_config SET sync_interval=60 WHERE id=1`); err != nil {
+		t.Fatalf("seed sync_interval: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO nodes (id,name,mode,ip_address,is_approved,status,last_seen) VALUES
+		(1,'online','slave','10.0.0.1',1,'online',datetime('now')),
+		(2,'stale','slave','10.0.0.2',1,'online',datetime('now','-3 minutes')),
+		(3,'pending','slave','10.0.0.3',0,'pending',NULL),
+		(4,'no-seen','slave','10.0.0.4',1,'online',NULL)`); err != nil {
+		t.Fatalf("seed nodes: %v", err)
+	}
+	service := &MetricsService{}
+
+	// When
+	service.updateOverview(parsedMetrics{})
+
+	// Then：仅已批准且 last_seen 未超过 2×sync_interval 的节点计为在线
+	if got := service.GetOverview().OnlineNodes; got != 1 {
+		t.Fatalf("online nodes=%d, want 1 (stale/pending/NULL last_seen excluded)", got)
+	}
+}

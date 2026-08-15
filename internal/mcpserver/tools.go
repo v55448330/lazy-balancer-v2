@@ -66,7 +66,7 @@ var toolUsage = map[string]string{
 	"get_security_overview":        "安全总览：今日拦截/检测计数、攻击类型 TOP10、源 IP TOP10、事件趋势",
 	"list_security_policies":       "列出全部安全策略及其 WAF/CRS/IP ACL/GeoIP/限流配置",
 	"get_security_policy":          "获取指定策略完整配置（含自定义规则和绑定关系）",
-	"list_security_events":         "分页查询安全事件（WAF 拦截/IP 拒绝/限流 429），支持 page/page_size/rule_caddy_id",
+	"list_security_events":         "分页查询安全事件（WAF 拦截/IP ACL 拒绝），支持 page/page_size/rule_caddy_id",
 	"list_security_bindings":       "查看策略-规则绑定映射，了解哪些规则启用了安全防护",
 	"get_rule_security_policy":     "查看指定规则绑定的安全策略详情",
 	"list_custom_rules":            "列出全部自定义安全规则（多条件链式匹配）",

@@ -469,9 +469,16 @@ func (m *MetricsService) updateOverview(metrics parsedMetrics) {
 		log.Printf("updateOverview: query total rules failed: %v (keeping previous value=%d)", err, totalRules)
 	}
 
-	// Get online nodes count
+	// 在线节点数口径与 ComputeNodeStatus 统一：nodes.status 只在注册/上报时写入、
+	// 从不回写为 'offline'，按 status 字段统计会拿到陈旧值，改为动态判定——
+	// 已批准且 last_seen 未超过 2×sync_interval 秒（倍率常量 nodeOfflineMultiplier 共用）。
 	var onlineNodes int
-	if err := db.DB.QueryRow("SELECT COUNT(*) FROM nodes WHERE status = 'online'").Scan(&onlineNodes); err != nil {
+	if err := db.DB.QueryRow(`
+		SELECT COUNT(*) FROM nodes
+		WHERE is_approved = 1
+		  AND last_seen IS NOT NULL
+		  AND datetime(last_seen) > datetime('now', printf('-%d seconds', ? * COALESCE((SELECT sync_interval FROM global_config WHERE id=1), 60)))
+	`, nodeOfflineMultiplier).Scan(&onlineNodes); err != nil {
 		log.Printf("updateOverview: query online nodes failed: %v (keeping previous value=%d)", err, onlineNodes)
 	}
 
