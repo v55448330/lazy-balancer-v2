@@ -148,21 +148,23 @@ service.interceptors.response.use(
   }
 )
 
+// 响应拦截器已将 AxiosResponse 解包为 response.data，因此这里的运行时
+// 返回值即 T；axios 1.19 的泛型收紧后需在封装边界做一次窄断言对齐契约。
 export const request: RequestClient = {
   get<T = ApiResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T> {
-    return service.get(url, config)
+    return service.get(url, config) as Promise<T>
   },
   post<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
-    return service.post(url, data, config)
+    return service.post(url, data, config) as Promise<T>
   },
   put<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
-    return service.put(url, data, config)
+    return service.put(url, data, config) as Promise<T>
   },
   patch<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
-    return service.patch(url, data, config)
+    return service.patch(url, data, config) as Promise<T>
   },
   delete<T = ApiResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T> {
-    return service.delete(url, config)
+    return service.delete(url, config) as Promise<T>
   },
 }
 
