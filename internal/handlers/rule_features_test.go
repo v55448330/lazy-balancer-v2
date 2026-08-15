@@ -92,6 +92,84 @@ func TestRuleFeatures_rejects_invalid_path_rule_inputs(t *testing.T) {
 	}
 }
 
+func TestValidateRuleFeatures_protocol_aware_strategy_whitelist(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     ruleFeatureInput
+		wantError string
+	}{
+		{
+			name:      "TCP with cookie rejected",
+			input:     ruleFeatureInput{Protocol: "tcp", Strategy: "cookie"},
+			wantError: "TCP 规则仅支持",
+		},
+		{
+			name:      "HTTP with cookie allowed",
+			input:     ruleFeatureInput{Protocol: "http", Strategy: "cookie"},
+			wantError: "",
+		},
+		{
+			name:      "TCP with weighted_round_robin allowed",
+			input:     ruleFeatureInput{Protocol: "tcp", Strategy: "weighted_round_robin"},
+			wantError: "",
+		},
+		{
+			name:      "HTTP with bogus strategy rejected",
+			input:     ruleFeatureInput{Protocol: "http", Strategy: "bogus"},
+			wantError: "HTTP 规则仅支持",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateRuleFeatures(test.input)
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatalf("validateRuleFeatures() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("validateRuleFeatures() error = %v, want containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestDuplicateRule_rejects_TCP_with_cookie_strategy(t *testing.T) {
+	// Given：源规则为 TCP + cookie 策略，复制时必须拒绝（cookie 仅 HTTP 支持）
+	handler, _ := newRuleFeatureTestHandlersWithCapture(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,strategy,enabled,enable_compress) VALUES ('lb_duptcpcookie','tcp-cookie','tcp',13010,'cookie',1,1)`); err != nil {
+		t.Fatalf("seed tcp cookie rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_duptcpcookie','127.0.0.1',9000,1,1,'tcp')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+	router := gin.New()
+	router.POST("/rules/:caddy_id/duplicate", func(c *gin.Context) {
+		c.Set("user_id", 1)
+		handler.DuplicateRule(c)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/rules/lb_duptcpcookie/duplicate", nil)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "TCP 规则仅支持") {
+		t.Fatalf("duplicate tcp+cookie status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+	var count int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM lb_rules WHERE caddy_id != 'lb_duptcpcookie'`).Scan(&count); err != nil {
+		t.Fatalf("count duplicated rules: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("duplicated rule count=%d, want 0", count)
+	}
+}
+
 func TestCreateRule_rejects_empty_domain_for_HTTP(t *testing.T) {
 	// Given
 	handler := newRuleFeatureTestHandlers(t)

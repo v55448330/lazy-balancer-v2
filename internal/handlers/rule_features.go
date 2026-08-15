@@ -180,14 +180,27 @@ func toPathRuleConfigs(pathRules []models.PathRule) []services.PathRuleConfig {
 
 func validateRuleFeatures(input ruleFeatureInput) error {
 	// Round 37 I-5: strategy 白名单校验，非法值不再透传到 Caddy。
+	// 协议感知：cookie 仅 HTTP 支持，TCP 规则拒绝，与 handlers.go validateCaddyConfigBeforeSave 对齐。
 	if input.Strategy != "" {
-		validStrategies := map[string]bool{
+		httpStrategies := map[string]bool{
 			"weighted_round_robin": true, "least_conn": true,
 			"ip_hash": true, "cookie": true,
 			"random": true, "first": true,
 		}
-		if !validStrategies[input.Strategy] {
-			return fmt.Errorf("负载均衡策略 %q 不支持，支持的策略：weighted_round_robin / least_conn / ip_hash / cookie / random / first", input.Strategy)
+		tcpStrategies := map[string]bool{
+			"weighted_round_robin": true, "least_conn": true,
+			"ip_hash": true,
+			"random":  true, "first": true,
+		}
+		switch input.Protocol {
+		case "http":
+			if !httpStrategies[input.Strategy] {
+				return fmt.Errorf("无效的负载策略：HTTP 规则仅支持 weighted_round_robin / ip_hash / least_conn / random / first / cookie")
+			}
+		case "tcp":
+			if !tcpStrategies[input.Strategy] {
+				return fmt.Errorf("无效的负载策略：TCP 规则仅支持 weighted_round_robin / ip_hash / least_conn / random / first")
+			}
 		}
 	}
 	// Round 37 I-6: 健康检查超时必须小于检查间隔（两者都 > 0 时）。

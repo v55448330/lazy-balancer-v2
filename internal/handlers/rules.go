@@ -1977,7 +1977,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold,
 		rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPProxyProtocol, rule.TCPTryDuration, rule.TCPTryInterval,
 		rule.RequestBodyMaxSizeMB, rule.UpstreamKeepaliveTimeout, rule.ServerTokensHidden,
-		rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.CAProviderID, rule.TLSCert, &rule.TLSKey,
+		rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.CAProviderID, rule.TLSCert, rule.TLSKey,
 		rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, 0, userIDInt, userIDInt,
 		now, now, rule.HostHeader, rule.LogEnabled, newCaddyID,
 		rule.CustomRoutesEnabled,
