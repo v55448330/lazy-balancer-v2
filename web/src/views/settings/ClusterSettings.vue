@@ -1,7 +1,7 @@
 <template>
   <div class="cluster-settings">
     <ClusterStatusCard :status="status" :loading="initialLoading" />
-    <el-row :gutter="16">
+    <el-row :gutter="16" class="equal-height-row">
       <el-col :xs="24" :sm="24" :md="12">
         <ClusterModeCard
           :status="status"
@@ -16,7 +16,7 @@
       </el-col>
       <el-col v-if="status?.node_mode === 'master'" :xs="24" :sm="24" :md="12">
         <ClusterMasterPanel
-
+          settings-only
           :status="status"
           :nodes="nodes"
           :loading="nodesLoading"
@@ -36,6 +36,26 @@
         />
       </el-col>
     </el-row>
+
+    <ClusterMasterPanel
+      v-if="status?.node_mode === 'master'"
+      :status="status"
+      :nodes="nodes"
+      :loading="nodesLoading"
+      :token-loading="tokenLoading"
+      :settings-loading="settingsLoading"
+      :pending-node-id="pendingNodeId"
+      :login-node-id="loginNodeId"
+      :access-url-saving="accessUrlSaving"
+      :read-only="isNonAdminReadOnly"
+      @generate-token="generateRegisterToken"
+      @update-sync-field="updateSyncField"
+      @approve="approveNode"
+      @reject="rejectNode"
+      @remove="removeNode"
+      @login="loginNode"
+      @edit-access-url="openAccessUrlDialog"
+    />
 
     <ClusterSlavePanel
       v-if="status && status.node_mode !== 'master'"

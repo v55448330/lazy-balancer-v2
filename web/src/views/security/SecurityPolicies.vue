@@ -118,7 +118,7 @@
             </el-form-item>
             <div v-if="form.mode === 'off'" class="waf-off-hint">当前 WAF 已关闭，以下配置不生效</div>
             <el-form-item label="异常阈值">
-              <el-select v-model="form.anomaly_threshold" :disabled="form.mode === 'off'" style="width: 140px">
+              <el-select v-model="form.anomaly_threshold" :disabled="form.mode === 'off' || isReadOnly" style="width: 140px">
                 <el-option :value="1" label="极严格（1）" />
                 <el-option :value="3" label="严格（3）" />
                 <el-option :value="5" label="标准（5）" />
@@ -239,7 +239,7 @@
                   <el-icon class="rule-picker-arrow"><ArrowDown /></el-icon>
                 </div>
                 <div v-if="boundRuleList.length > 0" class="bound-rule-tags">
-                  <el-tag v-for="rule in boundRuleList" :key="rule.caddy_id" closable size="small" effect="plain" @close="removeBoundRule(rule.caddy_id)">{{ rule.name }}</el-tag>
+                  <el-tag v-for="rule in boundRuleList" :key="rule.caddy_id" :closable="!isReadOnly" size="small" effect="plain" @close="removeBoundRule(rule.caddy_id)">{{ rule.name }}</el-tag>
                 </div>
                 <div class="form-tip-line">策略将应用到所选负载均衡规则的入站流量</div>
               </div>

@@ -1,5 +1,5 @@
 <template>
-  <el-card class="settings-card controls-card">
+  <el-card v-if="settingsOnly" class="settings-card controls-card">
     <template #header>
       <div class="card-header">
         <div class="card-title">
@@ -9,23 +9,22 @@
         <el-button type="primary" size="small" :loading="tokenLoading" :disabled="readOnly" @click="$emit('generate-token')">生成注册令牌</el-button>
       </div>
     </template>
-    <div v-for="item in syncSwitchItems" :key="item.key" class="setting-row">
-      <div>
-        <div class="setting-label">{{ item.label }}</div>
+    <el-form label-width="110px" class="settings-form" :disabled="readOnly">
+      <el-form-item v-for="item in syncSwitchItems" :key="item.key" :label="item.label">
+        <el-switch :model-value="status[item.key]" :loading="settingsLoading" @change="(v: string | number | boolean) => handleSwitchChange(item.key, v)" />
         <div class="form-tip-line">{{ item.tip }}</div>
-      </div>
-      <el-switch :model-value="status[item.key]" :loading="settingsLoading" :disabled="readOnly" @change="(v: string | number | boolean) => handleSwitchChange(item.key, v)" />
-    </div>
+      </el-form-item>
+    </el-form>
   </el-card>
 
-  <el-card class="settings-card">
+  <el-card v-if="!settingsOnly" class="settings-card settings-list-card">
     <template #header>
       <div class="card-header">
         <div class="card-title">
           <el-icon><List /></el-icon>
           <span>节点列表</span>
         </div>
-        <span class="form-tip-line">每 15 秒自动刷新</span>
+        <span class="card-tip">每 15 秒自动刷新</span>
       </div>
     </template>
 
@@ -99,6 +98,7 @@ type ClusterHealthWithSyncError = ClusterHealth & { readonly sync_error_code?: S
 type ClusterNodeWithSyncError = Omit<ClusterNode, 'health'> & { readonly health: ClusterHealthWithSyncError | null }
 
 const props = defineProps<{
+  settingsOnly?: boolean
   readonly status: ClusterStatus
   readonly nodes: readonly ClusterNodeWithSyncError[]
   readonly loading: boolean
@@ -179,6 +179,8 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 
 <style scoped>
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+:deep(.el-card__body), .el-card { height: 100%; }
+.card-tip { font-size: 12px; color: #9ca3af; white-space: nowrap; flex-shrink: 0; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .setting-label { color: var(--text-primary); font-size: 13px; font-weight: 500; }

@@ -161,3 +161,9 @@ body {
   font-size: 12px;
   vertical-align: baseline;
 }
+
+
+/* 同行卡片等高：el-col 拉伸使内部 el-card 填满列高（内容不足留白） */
+.equal-height-row { display: flex; }
+.equal-height-row > .el-col { display: flex; flex-direction: column; }
+.equal-height-row > .el-col > .el-card { flex: 1; width: 100%; }
