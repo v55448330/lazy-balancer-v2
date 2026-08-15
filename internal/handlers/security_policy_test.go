@@ -548,3 +548,108 @@ func TestUpdateSecurityPolicy_rejectsInvalidIPCIDR(t *testing.T) {
 		}
 	})
 }
+
+func TestGetSecurityPolicy_detailCarriesWAFCheckResponse(t *testing.T) {
+	// Given a policy created with the response-body check enabled
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	id := createTestPolicy(t, router, map[string]any{
+		"name":               "响应体策略",
+		"waf_check_response": true,
+	})
+
+	// When the policy detail is requested
+	recorder := getRequest(t, router, fmt.Sprintf("/security/policies/%d", id))
+
+	// Then the detail round-trips waf_check_response so the frontend edit form
+	// does not silently reset it to false
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Policy struct {
+				WAFCheckResponse bool `json:"waf_check_response"`
+			} `json:"policy"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse detail response: %v", err)
+	}
+	if !resp.Data.Policy.WAFCheckResponse {
+		t.Fatalf("waf_check_response = false, want true in %s", recorder.Body.String())
+	}
+}
+
+func TestListSecurityPolicies_summaryCarriesWAFCheckResponse(t *testing.T) {
+	// Given a policy created with the response-body check enabled
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	createTestPolicy(t, router, map[string]any{
+		"name":               "汇总响应体策略",
+		"waf_check_response": true,
+	})
+
+	// When the policy list is requested
+	recorder := getRequest(t, router, "/security/policies")
+
+	// Then the summary carries waf_check_response for API consistency
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data []struct {
+			WAFCheckResponse bool `json:"waf_check_response"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse list response: %v", err)
+	}
+	if resp.Code != 0 || len(resp.Data) != 1 {
+		t.Fatalf("list response = %s", recorder.Body.String())
+	}
+	if !resp.Data[0].WAFCheckResponse {
+		t.Fatalf("summary.waf_check_response = false, want true in %s", recorder.Body.String())
+	}
+}
+
+func TestCreateSecurityPolicy_rejectsInvalidCustomRuleTarget(t *testing.T) {
+	// Given a payload whose embedded custom rule uses an unknown target
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+
+	// When the policy is created
+	recorder := postJSON(t, router, "/security/policies", map[string]any{
+		"name":         "坏目标规则",
+		"custom_rules": `[{"id":1,"name":"r","enabled":true,"conditions":[{"target":"cookie","operator":"contains","pattern":"x"}]}]`,
+	})
+
+	// Then the request is rejected with a message naming the bad target
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("create status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "target 无效") {
+		t.Fatalf("error body should flag the invalid target: %s", recorder.Body.String())
+	}
+}
+
+func TestCreateSecurityPolicy_rejectsControlCharPattern(t *testing.T) {
+	// Given a payload whose embedded custom rule pattern embeds a newline
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+
+	// When the policy is created
+	recorder := postJSON(t, router, "/security/policies", map[string]any{
+		"name":         "控制字符规则",
+		"custom_rules": `[{"id":1,"name":"r","enabled":true,"conditions":[{"target":"uri","operator":"contains","pattern":"foo\nbar"}]}]`,
+	})
+
+	// Then the request is rejected
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("create status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "控制字符") {
+		t.Fatalf("error body should flag the control char: %s", recorder.Body.String())
+	}
+}

@@ -14,7 +14,7 @@ func TestResolvePolicyCustomRules_idsLoadFromDB(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.DB.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, status_code, enabled) VALUES ('链式验证规则','', '[{"target":"uri","operator":"contains","pattern":"/admin"}]', 'block', 5, 403, 1)`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, enabled) VALUES ('链式验证规则','', '[{"target":"uri","operator":"contains","pattern":"/admin"}]', 'block', 5, 1)`); err != nil {
 		t.Fatal(err)
 	}
 	rules := resolvePolicyCustomRules(json.RawMessage(`[1]`))

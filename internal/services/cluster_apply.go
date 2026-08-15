@@ -218,10 +218,14 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 		skip = &sectionSkips{disabled: map[string]bool{}, unchanged: map[string]bool{}}
 	}
 	if !skip.skip("rules") {
-		clearSyncTables(ctx, tx, "path_rules", "upstreams", "cert_jobs", "lb_rules")
+		if err := clearSyncTables(ctx, tx, "path_rules", "upstreams", "cert_jobs", "lb_rules"); err != nil {
+			return err
+		}
 	}
 	if !skip.skip("users") {
-		clearSyncTables(ctx, tx, "api_keys", "users")
+		if err := clearSyncTables(ctx, tx, "api_keys", "users"); err != nil {
+			return err
+		}
 	}
 	var statements []string
 	if snapshot.ACME != nil {
@@ -282,10 +286,13 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 	return nil
 }
 
-func clearSyncTables(ctx context.Context, tx *sql.Tx, tables ...string) {
+func clearSyncTables(ctx context.Context, tx *sql.Tx, tables ...string) error {
 	for _, t := range tables {
-		tx.ExecContext(ctx, "DELETE FROM "+t)
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+t); err != nil {
+			return fmt.Errorf("清理同步表 %s 失败: %w", t, err)
+		}
 	}
+	return nil
 }
 
 func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
@@ -393,8 +400,8 @@ func applySecurityCustomRules(ctx context.Context, tx *sql.Tx, rules []models.Se
 		if err != nil {
 			return fmt.Errorf("序列化快照自定义安全规则 %d 的条件: %w", rule.ID, err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_custom_rules (id,name,description,conditions,action,score,status_code,enabled,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			rule.ID, rule.Name, rule.Description, string(conditionsJSON), rule.Action, rule.Score, rule.StatusCode, rule.Enabled, rule.UpdatedBy, rule.CreatedAt, rule.UpdatedAt); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_custom_rules (id,name,description,conditions,action,score,enabled,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			rule.ID, rule.Name, rule.Description, string(conditionsJSON), rule.Action, rule.Score, rule.Enabled, rule.UpdatedBy, rule.CreatedAt, rule.UpdatedAt); err != nil {
 			return fmt.Errorf("写入快照自定义安全规则 %d: %w", rule.ID, err)
 		}
 	}
@@ -403,8 +410,8 @@ func applySecurityCustomRules(ctx context.Context, tx *sql.Tx, rules []models.Se
 
 func applySecurityBlockPages(ctx context.Context, tx *sql.Tx, pages []models.SecurityBlockPage) error {
 	for _, page := range pages {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_block_pages (id,name,description,content,status_code,is_default,created_by,created_at,updated_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			page.ID, page.Name, page.Description, page.Content, page.StatusCode, page.IsDefault, page.CreatedBy, page.CreatedAt, page.UpdatedBy, page.UpdatedAt); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_block_pages (id,name,description,content,is_default,created_by,created_at,updated_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			page.ID, page.Name, page.Description, page.Content, page.IsDefault, page.CreatedBy, page.CreatedAt, page.UpdatedBy, page.UpdatedAt); err != nil {
 			return fmt.Errorf("写入快照拦截页面 %d: %w", page.ID, err)
 		}
 	}

@@ -23,7 +23,7 @@ import (
 )
 
 func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, name, description, conditions, action, score, status_code, enabled, created_at, updated_at, updated_by FROM security_custom_rules ORDER BY id")
+	rows, err := db.DB.Query("SELECT id, name, description, conditions, action, score, enabled, created_at, updated_at, updated_by FROM security_custom_rules ORDER BY id")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -33,7 +33,7 @@ func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 	for rows.Next() {
 		var r models.SecurityCustomRule
 		var conditionsJSON string
-		rows.Scan(&r.ID, &r.Name, &r.Description, &conditionsJSON, &r.Action, &r.Score, &r.StatusCode, &r.Enabled, &r.CreatedAt, &r.UpdatedAt, &r.UpdatedBy)
+		rows.Scan(&r.ID, &r.Name, &r.Description, &conditionsJSON, &r.Action, &r.Score, &r.Enabled, &r.CreatedAt, &r.UpdatedAt, &r.UpdatedBy)
 		json.Unmarshal([]byte(conditionsJSON), &r.Conditions)
 		rules = append(rules, r)
 	}
@@ -54,6 +54,9 @@ func validateSecurityCustomRule(rule *models.SecurityCustomRule) error {
 	if !validScores[rule.Score] {
 		return fmt.Errorf("异常分值必须为 1/3/5/10/20 之一，当前值 %d", rule.Score)
 	}
+	if err := services.ValidateCustomRuleConditions(rule.Conditions); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -67,12 +70,9 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	if req.StatusCode == 0 {
-		req.StatusCode = 403
-	}
 	conditionsJSON, _ := json.Marshal(req.Conditions)
-	result, err := db.DB.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, status_code, enabled, updated_by) VALUES (?,?,?,?,?,?,?,?)`,
-		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.StatusCode, req.Enabled, getContextUserIDInt(c))
+	result, err := db.DB.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, enabled, updated_by) VALUES (?,?,?,?,?,?,?)`,
+		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.Enabled, getContextUserIDInt(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -93,12 +93,9 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	if req.StatusCode == 0 {
-		req.StatusCode = 403
-	}
 	conditionsJSON, _ := json.Marshal(req.Conditions)
-	result, err := db.DB.Exec(`UPDATE security_custom_rules SET name=?, description=?, conditions=?, action=?, score=?, status_code=?, enabled=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
-		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.StatusCode, req.Enabled, getContextUserIDInt(c), id)
+	result, err := db.DB.Exec(`UPDATE security_custom_rules SET name=?, description=?, conditions=?, action=?, score=?, enabled=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
+		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.Enabled, getContextUserIDInt(c), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -127,7 +124,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 }
 
 func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, name, description, content, status_code, is_default, created_by, created_at, updated_by, updated_at FROM security_block_pages ORDER BY is_default DESC, id")
+	rows, err := db.DB.Query("SELECT id, name, description, content, is_default, created_by, created_at, updated_by, updated_at FROM security_block_pages ORDER BY is_default DESC, id")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -136,7 +133,7 @@ func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
 	var pages []models.SecurityBlockPage
 	for rows.Next() {
 		var p models.SecurityBlockPage
-		rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.StatusCode, &p.IsDefault, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt)
+		rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.IsDefault, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt)
 		pages = append(pages, p)
 	}
 	if pages == nil {
@@ -151,8 +148,8 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
 	}
-	result, err := db.DB.Exec(`INSERT INTO security_block_pages (name, description, content, status_code, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?,?)`,
-		req.Name, req.Description, req.Content, req.StatusCode, req.IsDefault, getContextUserIDInt(c), getContextUserIDInt(c))
+	result, err := db.DB.Exec(`INSERT INTO security_block_pages (name, description, content, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?)`,
+		req.Name, req.Description, req.Content, req.IsDefault, getContextUserIDInt(c), getContextUserIDInt(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -175,8 +172,8 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "默认拦截页面不可编辑"})
 		return
 	}
-	result, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, status_code=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
-		req.Name, req.Description, req.Content, req.StatusCode, getContextUserIDInt(c), id)
+	result, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
+		req.Name, req.Description, req.Content, getContextUserIDInt(c), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -262,6 +259,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			UpdatedAt:        p.UpdatedAt,
 			GeoIPCountries:   rawJSONString(p.GeoIPCountries),
 			GeoIPMode:        p.GeoIPMode,
+			WAFCheckResponse: p.WAFCheckResponse,
 		})
 	}
 	if policies == nil {
@@ -350,6 +348,10 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	if err := services.ValidateCustomRulesJSON(req.CustomRules); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
@@ -407,6 +409,12 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	}
 	if req.GeoIPCountries != nil {
 		if err := validateGeoIPCountries(*req.GeoIPCountries); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+	}
+	if req.CustomRules != nil {
+		if err := services.ValidateCustomRulesJSON(*req.CustomRules); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
@@ -620,17 +628,33 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	case strings.HasPrefix(ruleTriggered, "933"):
 		return "PHP注入"
 	case strings.HasPrefix(ruleTriggered, "934"):
-		return "代码执行"
+		return "Node.js 攻击"
 	case strings.HasPrefix(ruleTriggered, "920"):
-		return "协议攻击"
-	case strings.HasPrefix(ruleTriggered, "921"):
 		return "协议异常"
+	case strings.HasPrefix(ruleTriggered, "921"):
+		return "协议攻击"
+	case strings.HasPrefix(ruleTriggered, "911"):
+		return "方法限制"
+	case strings.HasPrefix(ruleTriggered, "912"):
+		return "文件上传"
+	case strings.HasPrefix(ruleTriggered, "915"):
+		return "请求体限制"
 	case strings.HasPrefix(ruleTriggered, "913"):
 		return "扫描探测"
+	case strings.HasPrefix(ruleTriggered, "943"):
+		return "会话固定"
+	case strings.HasPrefix(ruleTriggered, "944"):
+		return "Java 攻击"
+	case strings.HasPrefix(ruleTriggered, "950"):
+		return "响应信息泄露"
+	case strings.HasPrefix(ruleTriggered, "951"):
+		return "响应 SQL 泄露"
+	case strings.HasPrefix(ruleTriggered, "953"):
+		return "响应 PHP 泄露"
+	case strings.HasPrefix(ruleTriggered, "959"):
+		return "响应阻断评估"
 	case strings.HasPrefix(ruleTriggered, "949"):
-		return "WAF 评分拦截"
-	case strings.HasPrefix(ruleTriggered, "custom"):
-		return "自定义规则"
+		return "请求阻断评估"
 	case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) == 5:
 		return "自定义规则"
 	case strings.Contains(ruleMsg, "IP 黑名单") || strings.Contains(ruleMsg, "IP 白名单") || strings.Contains(ruleMsg, "IP 访问控制") ||
@@ -1061,6 +1085,7 @@ type securityPolicyDetail struct {
 	UpdatedAt        string `json:"updated_at"`
 	GeoIPCountries   string `json:"geoip_countries"`
 	GeoIPMode        string `json:"geoip_mode"`
+	WAFCheckResponse bool   `json:"waf_check_response"`
 }
 
 func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
@@ -1088,6 +1113,7 @@ func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 		UpdatedAt:        p.UpdatedAt,
 		GeoIPCountries:   rawJSONString(p.GeoIPCountries),
 		GeoIPMode:        p.GeoIPMode,
+		WAFCheckResponse: p.WAFCheckResponse,
 	}
 }
 

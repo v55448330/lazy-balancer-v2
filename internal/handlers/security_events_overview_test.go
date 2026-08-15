@@ -236,12 +236,12 @@ func TestCategorizeAttack_familyMapping(t *testing.T) {
 		{"file read", "931130", "Path Traversal", "文件读取"},
 		{"command injection", "932160", "Remote Command Execution", "命令注入"},
 		{"php injection", "933150", "PHP Injection", "PHP注入"},
-		{"code execution", "934100", "Code Execution", "代码执行"},
-		{"protocol attack", "920350", "Protocol Attack", "协议攻击"},
-		{"protocol anomaly", "921110", "HTTP Request Smuggling", "协议异常"},
+		{"node.js injection", "934100", "Node.js Injection", "Node.js 攻击"},
+		{"protocol enforcement", "920350", "Protocol Enforcement", "协议异常"},
+		{"protocol attack", "921110", "HTTP Request Smuggling", "协议攻击"},
 		{"scanner", "913100", "Scanner Detected", "扫描探测"},
-		{"blocking evaluation", "949110", "Inbound Anomaly Score Exceeded", "WAF 评分拦截"},
-		{"custom prefix", "custom_12", "自定义拦截", "自定义规则"},
+		{"blocking evaluation", "949110", "Inbound Anomaly Score Exceeded", "请求阻断评估"},
+		{"custom rule numeric id", "10001", "自定义拦截", "自定义规则"},
 		{"ip blacklist via msg", "", "命中 IP 黑名单", "IP 访问控制"},
 		{"ip whitelist via msg", "", "命中 IP 白名单", "IP 访问控制"},
 		{"ip acl via msg", "", "触发 IP 访问控制", "IP 访问控制"},
@@ -388,7 +388,7 @@ func TestGetSecurityOverview_topIPsListDistinctAttackFamilies(t *testing.T) {
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	seedSecurityEvent(t, now, "lb_x", 1, "942100", "SQL Injection")
 	seedSecurityEvent(t, now, "lb_x", 1, "942190", "SQL Injection")
-	seedSecurityEvent(t, now, "lb_x", 1, "custom_7", "自定义规则命中")
+	seedSecurityEvent(t, now, "lb_x", 1, "10001", "自定义规则命中")
 
 	// When the overview is requested
 	recorder := getRequest(t, router, "/security/overview")
@@ -454,7 +454,7 @@ func TestGetSecurityOverview_groupsAttackTypesByFamily(t *testing.T) {
 	seedRecent("942190", "SQL Injection", 1) // same family as 942100
 	seedRecent("941160", "XSS", 2)
 	seedRecent("932160", "RCE", 1)
-	seedRecent("custom_7", "自定义规则命中", 1)
+	seedRecent("10001", "自定义规则命中", 1)
 	seedRecent("3", "命中 IP 黑名单", 1)
 
 	// When the overview is requested

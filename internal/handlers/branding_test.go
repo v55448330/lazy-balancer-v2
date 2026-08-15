@@ -124,13 +124,6 @@ func TestSeedDefaultBlockPage_renders_custom_branding_into_default_row(t *testin
 	if content == before {
 		t.Error("default block page content was not updated")
 	}
-	var statusCode int
-	if err := db.DB.QueryRow("SELECT status_code FROM security_block_pages WHERE is_default=1").Scan(&statusCode); err != nil {
-		t.Fatalf("read status_code: %v", err)
-	}
-	if statusCode != 403 {
-		t.Errorf("status_code=%d, want 403 (seeder must not touch it)", statusCode)
-	}
 }
 
 func TestSeedDefaultBlockPage_uses_default_branding_when_file_missing(t *testing.T) {
@@ -208,8 +201,8 @@ func TestSeedDefaultBlockPage_leaves_custom_pages_untouched(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dataDir, "branding.json"), []byte(`{"app_name":"定制品牌","footer_text":"定制页脚"}`), 0644); err != nil {
 		t.Fatalf("write branding file: %v", err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO security_block_pages (name, description, content, status_code, is_default, created_by, updated_by)
-		VALUES ('自定义页面', '', 'SENTINEL-CONTENT', 451, 0, 0, 0)`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_block_pages (name, description, content, is_default, created_by, updated_by)
+		VALUES ('自定义页面', '', 'SENTINEL-CONTENT', 0, 0, 0)`); err != nil {
 		t.Fatalf("insert custom block page: %v", err)
 	}
 
@@ -220,15 +213,11 @@ func TestSeedDefaultBlockPage_leaves_custom_pages_untouched(t *testing.T) {
 
 	// Then
 	var content string
-	var statusCode int
-	err := db.DB.QueryRow("SELECT content, status_code FROM security_block_pages WHERE is_default=0 AND name='自定义页面'").Scan(&content, &statusCode)
+	err := db.DB.QueryRow("SELECT content FROM security_block_pages WHERE is_default=0 AND name='自定义页面'").Scan(&content)
 	if err != nil {
 		t.Fatalf("read custom block page: %v", err)
 	}
 	if content != "SENTINEL-CONTENT" {
 		t.Errorf("custom block page content=%q, want SENTINEL-CONTENT", content)
-	}
-	if statusCode != 451 {
-		t.Errorf("custom block page status_code=%d, want 451", statusCode)
 	}
 }

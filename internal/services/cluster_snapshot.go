@@ -125,6 +125,11 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
 	snapshot.SchemaVersion = CurrentSnapshotSchema
 	snapshot.MinReaderVersion = CurrentSnapshotSchema
+	// 主节点与从节点共用同一 ACME 状态校验：不一致快照会被从节点永久拒绝，
+	// 此处提前校验并记录错误以提升主节点可见性，但仍照常发布。
+	if err := validateSnapshotACMEState(snapshot); err != nil {
+		Logf("error", "cluster snapshot self-validation failed (still publishing): %v", err)
+	}
 	canonicalSnapshot := snapshot
 	canonicalSnapshot.Fingerprint = ""
 	canonicalSnapshot.Signature = ""
@@ -145,7 +150,7 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	cache.fingerprint = fingerprint
 	cache.ownership = ownershipHash
 	cache.switches = switchesKey
-	cache.expiresAt = nearestSnapshotCertificateExpiry(snapshot.Certs)
+	cache.expiresAt = nearestSnapshotCertificateExpiry(snapshot.Certs, now)
 	return snapshot, canonical, fingerprint, nil
 }
 
@@ -166,10 +171,15 @@ func snapshotOwnershipHash(ctx context.Context, store snapshotStore) ([sha256.Si
 	return sha256.Sum256(content), nil
 }
 
-func nearestSnapshotCertificateExpiry(certificates []models.ClusterCertificate) time.Time {
+func nearestSnapshotCertificateExpiry(certificates []models.ClusterCertificate, now time.Time) time.Time {
 	var nearest time.Time
 	for _, certificate := range certificates {
 		if certificate.ExpiresAt == "" {
+			// 手工证书（Domain 为空）不做有效期过滤，不参与失效判定；ACME 证书
+			// 缺失 expires_at 时视为立即过期，强制重建以自愈缺失的过期时间。
+			if certificate.Domain != "" {
+				return now
+			}
 			continue
 		}
 		expiresAt, err := parseSnapshotExpiry(certificate.ExpiresAt)
@@ -277,7 +287,7 @@ func (s *ClusterService) snapshotSecurityBindings(ctx context.Context, store sna
 }
 
 func (s *ClusterService) snapshotSecurityCustomRules(ctx context.Context, store snapshotStore) ([]models.SecurityCustomRule, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id,name,COALESCE(description,''),COALESCE(conditions,'[]'),COALESCE(action,'block'),COALESCE(score,5),COALESCE(status_code,403),COALESCE(enabled,1),COALESCE(updated_by,0),created_at,updated_at FROM security_custom_rules ORDER BY id`)
+	rows, err := store.QueryContext(ctx, `SELECT id,name,COALESCE(description,''),COALESCE(conditions,'[]'),COALESCE(action,'block'),COALESCE(score,5),COALESCE(enabled,1),COALESCE(updated_by,0),created_at,updated_at FROM security_custom_rules ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照自定义安全规则: %w", err)
 	}
@@ -286,7 +296,7 @@ func (s *ClusterService) snapshotSecurityCustomRules(ctx context.Context, store 
 	for rows.Next() {
 		var rule models.SecurityCustomRule
 		var conditionsJSON string
-		if err := rows.Scan(&rule.ID, &rule.Name, &rule.Description, &conditionsJSON, &rule.Action, &rule.Score, &rule.StatusCode, &rule.Enabled, &rule.UpdatedBy, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
+		if err := rows.Scan(&rule.ID, &rule.Name, &rule.Description, &conditionsJSON, &rule.Action, &rule.Score, &rule.Enabled, &rule.UpdatedBy, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("扫描快照自定义安全规则: %w", err)
 		}
 		if err := json.Unmarshal([]byte(conditionsJSON), &rule.Conditions); err != nil {
@@ -298,7 +308,7 @@ func (s *ClusterService) snapshotSecurityCustomRules(ctx context.Context, store 
 }
 
 func (s *ClusterService) snapshotSecurityBlockPages(ctx context.Context, store snapshotStore) ([]models.SecurityBlockPage, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id,name,COALESCE(description,''),COALESCE(content,''),COALESCE(status_code,403),COALESCE(is_default,0),COALESCE(created_by,0),created_at,COALESCE(updated_by,0),updated_at FROM security_block_pages ORDER BY id`)
+	rows, err := store.QueryContext(ctx, `SELECT id,name,COALESCE(description,''),COALESCE(content,''),COALESCE(is_default,0),COALESCE(created_by,0),created_at,COALESCE(updated_by,0),updated_at FROM security_block_pages ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照拦截页面: %w", err)
 	}
@@ -306,7 +316,7 @@ func (s *ClusterService) snapshotSecurityBlockPages(ctx context.Context, store s
 	pages := make([]models.SecurityBlockPage, 0)
 	for rows.Next() {
 		var page models.SecurityBlockPage
-		if err := rows.Scan(&page.ID, &page.Name, &page.Description, &page.Content, &page.StatusCode, &page.IsDefault, &page.CreatedBy, &page.CreatedAt, &page.UpdatedBy, &page.UpdatedAt); err != nil {
+		if err := rows.Scan(&page.ID, &page.Name, &page.Description, &page.Content, &page.IsDefault, &page.CreatedBy, &page.CreatedAt, &page.UpdatedBy, &page.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("扫描快照拦截页面: %w", err)
 		}
 		pages = append(pages, page)

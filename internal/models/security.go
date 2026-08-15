@@ -189,7 +189,6 @@ type CustomRule struct {
 	Conditions []CustomRuleCondition `json:"conditions"`
 	Action     string                `json:"action"`
 	Score      int                   `json:"score"`
-	StatusCode int                   `json:"status_code"`
 	Target     string                `json:"target,omitempty"`
 	Operator   string                `json:"operator,omitempty"`
 	Pattern    string                `json:"pattern,omitempty"`
@@ -202,7 +201,6 @@ type SecurityCustomRule struct {
 	Conditions  []CustomRuleCondition `json:"conditions"`
 	Action      string                `json:"action"`
 	Score       int                   `json:"score"`
-	StatusCode  int                   `json:"status_code"`
 	Enabled     bool                  `json:"enabled"`
 	UpdatedBy   int                   `json:"updated_by"`
 	CreatedAt   string                `json:"created_at"`
@@ -214,7 +212,6 @@ type SecurityBlockPage struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Content     string `json:"content"`
-	StatusCode  int    `json:"status_code"`
 	IsDefault   bool   `json:"is_default"`
 	CreatedBy   int    `json:"created_by"`
 	CreatedAt   string `json:"created_at"`

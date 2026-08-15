@@ -38,7 +38,7 @@ func snapshotScalarString(value interface{}) string {
 func TestClusterSnapshot_securityPoliciesIncludeFullColumnSet(t *testing.T) {
 	// Given
 	cluster, database := newClusterTestService(t)
-	if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,content,status_code) VALUES (9,'snapshot page','<html>blocked</html>',451)`); err != nil {
+	if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,content) VALUES (9,'snapshot page','<html>blocked</html>')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled)
@@ -81,12 +81,12 @@ func TestClusterSnapshot_securityAuxTablesRoundTrip(t *testing.T) {
 	// Given
 	cluster, database := newClusterTestService(t)
 	conditions := `[{"target":"uri","operator":"contains","pattern":"/admin"}]`
-	if _, err := database.Exec(`INSERT INTO security_custom_rules (id,name,description,conditions,action,score,status_code,enabled,updated_by)
-		VALUES (3,'aux rule','aux desc',?,'block',9,418,1,2)`, conditions); err != nil {
+	if _, err := database.Exec(`INSERT INTO security_custom_rules (id,name,description,conditions,action,score,enabled,updated_by)
+		VALUES (3,'aux rule','aux desc',?,'block',9,1,2)`, conditions); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,description,content,status_code,is_default,created_by,updated_by)
-		VALUES (4,'aux page','page desc','<html>aux</html>',499,0,1,2)`); err != nil {
+	if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,description,content,is_default,created_by,updated_by)
+		VALUES (4,'aux page','page desc','<html>aux</html>',0,1,2)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO security_crs_version (id,version,updated_at,auto_update,update_status,message,last_checked,next_update,trigger,started_at,finished_at)
@@ -105,7 +105,7 @@ func TestClusterSnapshot_securityAuxTablesRoundTrip(t *testing.T) {
 		t.Fatalf("custom rules=%d, want 1", len(snapshot.SecurityCustomRules))
 	}
 	rule := snapshot.SecurityCustomRules[0]
-	if rule.ID != 3 || rule.Name != "aux rule" || rule.Description != "aux desc" || rule.Action != "block" || rule.Score != 9 || rule.StatusCode != 418 || !rule.Enabled || rule.UpdatedBy != 2 {
+	if rule.ID != 3 || rule.Name != "aux rule" || rule.Description != "aux desc" || rule.Action != "block" || rule.Score != 9 || !rule.Enabled || rule.UpdatedBy != 2 {
 		t.Fatalf("custom rule mismatch: %+v", rule)
 	}
 	if len(rule.Conditions) != 1 || rule.Conditions[0] != (models.CustomRuleCondition{Target: "uri", Operator: "contains", Pattern: "/admin"}) {
@@ -120,7 +120,7 @@ func TestClusterSnapshot_securityAuxTablesRoundTrip(t *testing.T) {
 	if auxPage == nil {
 		t.Fatalf("block page 4 missing from snapshot: %+v", snapshot.SecurityBlockPages)
 	}
-	if auxPage.Name != "aux page" || auxPage.Description != "page desc" || auxPage.Content != "<html>aux</html>" || auxPage.StatusCode != 499 || auxPage.IsDefault || auxPage.CreatedBy != 1 || auxPage.UpdatedBy != 2 {
+	if auxPage.Name != "aux page" || auxPage.Description != "page desc" || auxPage.Content != "<html>aux</html>" || auxPage.IsDefault || auxPage.CreatedBy != 1 || auxPage.UpdatedBy != 2 {
 		t.Fatalf("block page mismatch: %+v", auxPage)
 	}
 	if len(snapshot.SecurityCRSVersion) != 1 {
