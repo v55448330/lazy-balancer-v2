@@ -6,8 +6,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"lazy-balancer-v2/internal/models"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,36 +30,89 @@ type WafFileBundle struct {
 	XdbB64       []byte `json:"xdb,omitempty"`
 }
 
-// BuildWafFileBundle collects the live rule files. It returns nil (skip sync)
-// when neither artifact exists on this node.
-func BuildWafFileBundle() *WafFileBundle {
-	bundle := &WafFileBundle{}
-	hasContent := false
-
+// BuildWafFileRef computes the live rule-file hashes without file content;
+// the snapshot embeds this reference so unchanged files never ride along.
+func BuildWafFileRef() *models.ClusterWafFilesRef {
+	ref := &models.ClusterWafFilesRef{}
+	seen := false
 	if _, err := os.Stat(filepath.Join(crsLiveDir, "rules")); err == nil {
-		data, sum, err := tarGzDir(crsLiveDir)
-		if err == nil && len(data) > 0 {
-			bundle.CRSTarGzB64 = data
-			bundle.CRSSha256 = sum
-			hasContent = true
+		if _, sum, err := tarGzDir(crsLiveDir); err == nil && sum != "" {
+			ref.CRSSha256 = sum
+			seen = true
 		}
 	}
 	if v, err := os.ReadFile(filepath.Join(crsLiveDir, "VERSION")); err == nil {
-		bundle.CRSVersion = strings.TrimSpace(string(v))
+		ref.CRSVersion = strings.TrimSpace(string(v))
 	}
-	if data, err := os.ReadFile(ip2regionLivePath); err == nil {
-		sum := sha256.Sum256(data)
-		bundle.XdbB64 = data
-		bundle.IP2RegionSha = hex.EncodeToString(sum[:])
-		hasContent = true
+	if sum := fileSha256(ip2regionLivePath); sum != "" {
+		ref.IP2RegionSha = sum
+		seen = true
 	}
 	if v, err := os.ReadFile(ip2regionLivePath + ".version"); err == nil {
-		bundle.IP2RegionTag = strings.TrimSpace(string(v))
+		ref.IP2RegionTag = strings.TrimSpace(string(v))
 	}
-	if !hasContent {
+	if !seen {
 		return nil
 	}
+	return ref
+}
+
+// BuildWafFileBundle collects the live rule files with content; served by the
+// on-demand endpoint, and never embedded in snapshots.
+func BuildWafFileBundle() *WafFileBundle {
+	ref := BuildWafFileRef()
+	if ref == nil {
+		return nil
+	}
+	bundle := &WafFileBundle{
+		CRSVersion:   ref.CRSVersion,
+		CRSSha256:    ref.CRSSha256,
+		IP2RegionTag: ref.IP2RegionTag,
+		IP2RegionSha: ref.IP2RegionSha,
+	}
+	if ref.CRSSha256 != "" {
+		if data, _, err := tarGzDir(crsLiveDir); err == nil && len(data) > 0 {
+			bundle.CRSTarGzB64 = data
+		}
+	}
+	if ref.IP2RegionSha != "" {
+		if data, err := os.ReadFile(ip2regionLivePath); err == nil {
+			bundle.XdbB64 = data
+		}
+	}
 	return bundle
+}
+
+// wafFilesRefDiffers reports whether the slave's live files fail to match
+// any artifact referenced by the snapshot.
+func wafFilesRefDiffers(r *models.ClusterWafFilesRef) bool {
+	if r == nil {
+		return false
+	}
+	if r.CRSSha256 != "" {
+		if _, sum, err := tarGzDir(crsLiveDir); err != nil || sum != r.CRSSha256 {
+			return true
+		}
+	}
+	if r.IP2RegionSha != "" && fileSha256(ip2regionLivePath) != r.IP2RegionSha {
+		return true
+	}
+	return false
+}
+
+// wafFilesRefMatchesBundle verifies fetched content against the reference
+// so a master mid-sync file update cannot silently install unverified bytes.
+func wafFilesRefMatchesBundle(r *models.ClusterWafFilesRef, b *WafFileBundle) bool {
+	if r == nil || b == nil {
+		return false
+	}
+	if r.CRSSha256 != "" && b.CRSSha256 != r.CRSSha256 {
+		return false
+	}
+	if r.IP2RegionSha != "" && b.IP2RegionSha != r.IP2RegionSha {
+		return false
+	}
+	return true
 }
 
 // ApplyWafFileBundle writes the bundle's files to disk when they differ from
@@ -246,3 +303,36 @@ func sortStrings(s []string) {
 }
 
 var _ = context.Background
+
+// fetchWafFiles pulls the full file bundle from the master's on-demand
+// endpoint and verifies it against the snapshot reference before use.
+func (s *SyncService) fetchWafFiles(ctx context.Context, ref *models.ClusterWafFilesRef) (*WafFileBundle, error) {
+	var masterURL, token string
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(master_url,''), COALESCE(cluster_token,'') FROM global_config WHERE id=1`).Scan(&masterURL, &token); err != nil {
+		return nil, fmt.Errorf("读取主节点地址: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(masterURL, "/")+"/api/v1/cluster/sync/waf-files", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Cluster-Token", token)
+	resp, err := s.do(req)
+	if err != nil {
+		return nil, fmt.Errorf("拉取 WAF 规则文件: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("拉取 WAF 规则文件失败(%d): %s", resp.StatusCode, string(body))
+	}
+	var envelope struct {
+		Data WafFileBundle `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&envelope); err != nil {
+		return nil, fmt.Errorf("解析 WAF 规则文件包: %w", err)
+	}
+	if !wafFilesRefMatchesBundle(ref, &envelope.Data) {
+		return nil, errors.New("WAF 规则文件包哈希与快照引用不一致（主节点文件可能在同步期间变更），将在下个周期重试")
+	}
+	return &envelope.Data, nil
+}

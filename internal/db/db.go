@@ -148,6 +148,12 @@ func Initialize(dataDir string) (err error) {
 	if err := runMigrations(); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
+	if err := migrateSyncSwitches(); err != nil {
+		return fmt.Errorf("failed to migrate sync switches: %w", err)
+	}
+	if err := ensureClusterAppliedSections(); err != nil {
+		return fmt.Errorf("failed to ensure cluster_applied_sections: %w", err)
+	}
 
 	if initErr := InitializeAuditDB(dataDir); initErr != nil {
 		auditDB = AuditDB
@@ -690,6 +696,11 @@ func runMigrations() error {
 		"users.password_version":                      "INTEGER NOT NULL DEFAULT 0",
 		"global_config.cluster_version":               "INTEGER DEFAULT 0",
 		"global_config.sync_caddy_config":             "BOOLEAN DEFAULT 0",
+		"global_config.sync_global_config":            "BOOLEAN DEFAULT 1",
+		"global_config.sync_users":                    "BOOLEAN DEFAULT 1",
+		"global_config.sync_rules":                    "BOOLEAN DEFAULT 1",
+		"global_config.sync_waf_files":                "BOOLEAN DEFAULT 1",
+		"global_config.sync_security":                 "BOOLEAN DEFAULT 1",
 		"global_config.cluster_token":                 "TEXT DEFAULT ''",
 		"global_config.registration_id":               "INTEGER DEFAULT 0",
 		"global_config.registration_secret":           "TEXT DEFAULT ''",
@@ -1643,4 +1654,38 @@ func generateCaddyIDForMigration() string {
 		id[i] = charset[int(randomBytes[i-3])%len(charset)]
 	}
 	return string(id)
+}
+
+func migrateSyncSwitches() error {
+	var marker int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='sync_switches_migrated'").Scan(&marker); err != nil {
+		return err
+	}
+	if marker == 0 {
+		if _, err := DB.Exec("ALTER TABLE global_config ADD COLUMN sync_switches_migrated BOOLEAN DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	var done bool
+	if err := DB.QueryRow("SELECT COALESCE(sync_switches_migrated,0) FROM global_config WHERE id=1").Scan(&done); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if done {
+		return nil
+	}
+	// 新分类与旧 sync_caddy_config 语义不同（旧开关仅覆盖 Caddy 全局配置且默认关，
+	// 新开关覆盖日志/时区/Caddy 全部全局项且默认开），因此不搬运旧值；
+	// 曾依赖旧开关关闭同步的用户需在新设置卡片重新关闭对应类别。
+	_, err := DB.Exec("UPDATE global_config SET sync_switches_migrated=1 WHERE id=1")
+	return err
+}
+
+func ensureClusterAppliedSections() error {
+	_, err := DB.Exec(`CREATE TABLE IF NOT EXISTS cluster_applied_sections (
+		section TEXT PRIMARY KEY,
+		hash TEXT NOT NULL DEFAULT '',
+		applied_version INTEGER NOT NULL DEFAULT 0,
+		applied_at DATETIME
+	)`)
+	return err
 }

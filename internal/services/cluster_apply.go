@@ -50,6 +50,11 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if err := validateSnapshotACMEState(snapshot); err != nil {
 		return err
 	}
+	switches, swErr := readSyncSwitches(s.db)
+	skip := computeSectionSkips(s.db, snapshot, switches)
+	if swErr != nil {
+		return fmt.Errorf("读取同步开关: %w", swErr)
+	}
 	previous, _, err := s.cluster.Snapshot(ctx, 0, "", "")
 	if err != nil {
 		return fmt.Errorf("备份本地快照: %w", err)
@@ -59,7 +64,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		return fmt.Errorf("开始快照事务: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := replaceSnapshotTx(ctx, tx, snapshot); err != nil {
+	if err := replaceSnapshotTx(ctx, tx, snapshot, skip); err != nil {
 		return err
 	}
 	if err := removeMissingSnapshotCerts(previous.Certs, snapshot.Certs); err != nil {
@@ -83,14 +88,18 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			s.restoreSnapshotArtifacts(previous, snapshot),
 		)
 	}
-	if snapshot.WafFiles != nil {
-		var bundle WafFileBundle
-		if err := json.Unmarshal(*snapshot.WafFiles, &bundle); err == nil {
-			if changed, ferr := ApplyWafFileBundle(&bundle); ferr != nil {
-				Logf("error", "同步 WAF 规则文件失败（数据库版本行已同步）: %v", ferr)
-			} else if changed {
-				RecordAuditLog("system", "同步", "WAF 规则文件", "CRS 规则/IP2Region 数据库随集群同步更新", "")
-			}
+	logSectionSyncOutcome(skip, snapshot.Version)
+	recordAppliedSectionHashes(s.db, snapshot, skip, switches)
+	logSyncSwitchGuards(snapshot, skip, switches)
+
+	if switches.WafFiles && wafFilesRefDiffers(snapshot.WafFiles) {
+		bundle, ferr := s.fetchWafFiles(ctx, snapshot.WafFiles)
+		if ferr != nil {
+			Logf("error", "同步 WAF 规则文件失败（数据库版本行已同步）: %v", ferr)
+		} else if changed, aerr := ApplyWafFileBundle(bundle); aerr != nil {
+			Logf("error", "落盘同步 WAF 规则文件失败: %v", aerr)
+		} else if changed {
+			RecordAuditLog("system", "同步", "WAF 规则文件", "CRS 规则/IP2Region 数据库随集群同步更新", "")
 		}
 	}
 	// Caddy 重载必须在事务提交之后：buildWafHandler 等安全配置读取走 db.DB，
@@ -186,7 +195,10 @@ func removeMissingSnapshotCerts(previous, current []models.ClusterCertificate) e
 	return errors.Join(errs...)
 }
 
-func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
+func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot, skip *sectionSkips) error {
+	if skip == nil || skip.disabled == nil {
+		skip = &sectionSkips{disabled: map[string]bool{}, unchanged: map[string]bool{}}
+	}
 	statements := []string{"DELETE FROM path_rules", "DELETE FROM upstreams", "DELETE FROM cert_jobs", "DELETE FROM lb_rules", "DELETE FROM api_keys", "DELETE FROM users"}
 	if snapshot.ACME != nil {
 		statements = append(statements, "DELETE FROM certificate_configs", "DELETE FROM ca_providers")
@@ -208,9 +220,45 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 			}
 		}
 	}
-	if err := insertSnapshotRules(ctx, tx, snapshot.Rules); err != nil {
+	if skip.skip("rules") {
+		clearSyncTables(ctx, tx, "path_rules", "upstreams", "cert_jobs", "lb_rules")
+	} else if err := insertSnapshotRules(ctx, tx, snapshot.Rules); err != nil {
 		return err
 	}
+	if !skip.skip("users") {
+		if err := insertSnapshotUsersAndKeys(ctx, tx, snapshot); err != nil {
+			return err
+		}
+	}
+	for _, cert := range snapshot.Certs {
+		message := "从主节点同步"
+		if cert.SourceStatus != "" {
+			message += "，源任务状态：" + cert.SourceStatus
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO cert_jobs (rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,renewal_attempts,ca_available_after,last_error_code) SELECT ?,COALESCE(NULLIF(?,''),domain),'issued',?,?,?,?,?,?,?,? FROM lb_rules WHERE caddy_id=? AND tls_source='acme_dns'`, cert.RuleID, cert.Domain, message, nullableString(cert.ExpiresAt), cert.CertPEM, cert.KeyPEM, cert.CAProviderID, cert.RenewalAttempts, nullableTime(cert.CAAvailableAfter.NullTime), nullableString(cert.LastErrorCode), cert.RuleID); err != nil {
+			return fmt.Errorf("写入快照证书 %s: %w", cert.RuleID, err)
+		}
+	}
+	if !skip.skip("global_config") {
+		if err := updateSnapshotSettings(ctx, tx, snapshot); err != nil {
+			return err
+		}
+	}
+	if !skip.skip("security") {
+		if err := applySecurityTables(ctx, tx, snapshot); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func clearSyncTables(ctx context.Context, tx *sql.Tx, tables ...string) {
+	for _, t := range tables {
+		tx.ExecContext(ctx, "DELETE FROM "+t)
+	}
+}
+
+func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
 	for _, user := range snapshot.Users {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at,created_at,last_login) VALUES (?,?,?,?,?,?,?,?,?,?)`, user.ID, user.Username, user.PasswordHash, user.Role, user.DisplayName, user.IsEnabled, user.PasswordVersion, user.PasswordChangedAt, user.CreatedAt, nullableTime(user.LastLogin.NullTime)); err != nil {
 			return fmt.Errorf("写入快照用户 %s: %w", user.Username, err)
@@ -224,21 +272,6 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 		if _, err := tx.ExecContext(ctx, `INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist,last_used,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, key.ID, key.Name, key.KeyHash, key.KeyPrefix, key.CreatedBy, nullableString(key.ExpiresAt), key.IsEnabled, key.MCPEnabled, key.ReadOnly, string(whitelistJSON), nullableTime(key.LastUsed.NullTime), key.CreatedAt); err != nil {
 			return fmt.Errorf("写入快照密钥 %d: %w", key.ID, err)
 		}
-	}
-	for _, cert := range snapshot.Certs {
-		message := "从主节点同步"
-		if cert.SourceStatus != "" {
-			message += "，源任务状态：" + cert.SourceStatus
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO cert_jobs (rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,renewal_attempts,ca_available_after,last_error_code) SELECT ?,COALESCE(NULLIF(?,''),domain),'issued',?,?,?,?,?,?,?,? FROM lb_rules WHERE caddy_id=? AND tls_source='acme_dns'`, cert.RuleID, cert.Domain, message, nullableString(cert.ExpiresAt), cert.CertPEM, cert.KeyPEM, cert.CAProviderID, cert.RenewalAttempts, nullableTime(cert.CAAvailableAfter.NullTime), nullableString(cert.LastErrorCode), cert.RuleID); err != nil {
-			return fmt.Errorf("写入快照证书 %s: %w", cert.RuleID, err)
-		}
-	}
-	if err := updateSnapshotSettings(ctx, tx, snapshot); err != nil {
-		return err
-	}
-	if err := applySecurityTables(ctx, tx, snapshot); err != nil {
-		return err
 	}
 	return nil
 }

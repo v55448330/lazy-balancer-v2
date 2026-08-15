@@ -50,7 +50,7 @@ func replaceSnapshotDB(ctx context.Context, database *sql.DB, snapshot models.Cl
 		return err
 	}
 	defer tx.Rollback()
-	if err := replaceSnapshotTx(ctx, tx, snapshot); err != nil {
+	if err := replaceSnapshotTx(ctx, tx, snapshot, &sectionSkips{disabled: map[string]bool{}, unchanged: map[string]bool{}}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1125,7 +1125,7 @@ func TestClusterSnapshot_accessLogSettingsFollowSyncCaddyConfigGate(t *testing.T
 	}
 
 	// When sync off
-	if _, err := database.ExecContext(ctx, "UPDATE global_config SET sync_caddy_config=0 WHERE id=1"); err != nil {
+	if _, err := database.ExecContext(ctx, "UPDATE global_config SET sync_global_config=0 WHERE id=1"); err != nil {
 		t.Fatalf("disable caddy sync: %v", err)
 	}
 	off := build(t)
@@ -1139,7 +1139,7 @@ func TestClusterSnapshot_accessLogSettingsFollowSyncCaddyConfigGate(t *testing.T
 	}
 
 	// When sync on
-	if _, err := database.ExecContext(ctx, "UPDATE global_config SET sync_caddy_config=1 WHERE id=1"); err != nil {
+	if _, err := database.ExecContext(ctx, "UPDATE global_config SET sync_global_config=1 WHERE id=1"); err != nil {
 		t.Fatalf("enable caddy sync: %v", err)
 	}
 	on := build(t)

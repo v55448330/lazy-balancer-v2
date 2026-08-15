@@ -110,12 +110,8 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	if err != nil {
 		return models.ClusterSnapshot{}, nil, "", err
 	}
-	if bundle := BuildWafFileBundle(); bundle != nil {
-		raw, mErr := json.Marshal(bundle)
-		if mErr == nil {
-			snapshot.WafFiles = (*json.RawMessage)(&raw)
-		}
-	}
+	snapshot.WafFiles = BuildWafFileRef()
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
 	snapshot.SchemaVersion = CurrentSnapshotSchema
 	snapshot.MinReaderVersion = CurrentSnapshotSchema
 	canonicalSnapshot := snapshot
@@ -185,7 +181,7 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 	var snapshot models.ClusterSnapshot
 	var syncCaddy bool
 	var caddyConfig string
-	err := store.QueryRowContext(ctx, `SELECT COALESCE(cluster_version,0), COALESCE(sync_caddy_config,0), COALESCE(caddy_config,'{}'),
+	err := store.QueryRowContext(ctx, `SELECT COALESCE(cluster_version,0), COALESCE(sync_global_config,1), COALESCE(caddy_config,'{}'),
 		COALESCE(log_level,'info'),
 		COALESCE(cert_job_log_size_mb,10), COALESCE(audit_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3), COALESCE(jwt_expire_minutes,20), COALESCE(timezone,'Asia/Shanghai'),
 		COALESCE(acme_email,''), COALESCE(cert_expiry_days,30), COALESCE(cert_renewal_days,30), COALESCE(cert_renewal_attempts,5),
@@ -199,6 +195,12 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 		&snapshot.BasicSettings.AdminTLSEnabled, &snapshot.BasicSettings.AdminTLSMode, &snapshot.BasicSettings.AdminTLSCert, &snapshot.BasicSettings.AdminTLSKey)
 	if err != nil {
 		return models.ClusterSnapshot{}, fmt.Errorf("读取集群基础设置: %w", err)
+	}
+	if !syncCaddy {
+		// 全局配置同步关闭：快照不携带 BasicSettings/CaddyConfig（除同步间隔
+		// 属集群编排自身，始终下发），从节点保留本地全局设置。
+		interval := snapshot.BasicSettings.SyncInterval
+		snapshot.BasicSettings = models.ClusterBasicSettings{SyncInterval: interval}
 	}
 	if syncCaddy {
 		snapshot.CaddyConfig = &caddyConfig

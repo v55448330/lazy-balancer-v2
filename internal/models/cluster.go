@@ -58,8 +58,13 @@ type ClusterModeRequest struct {
 }
 
 type ClusterSettingsRequest struct {
-	SyncInterval    *int  `json:"sync_interval" binding:"omitempty,min=5"`
-	SyncCaddyConfig *bool `json:"sync_caddy_config"`
+	SyncInterval     *int  `json:"sync_interval" binding:"omitempty,min=5"`
+	SyncCaddyConfig  *bool `json:"sync_caddy_config"`
+	SyncGlobalConfig *bool `json:"sync_global_config"`
+	SyncUsers        *bool `json:"sync_users"`
+	SyncRules        *bool `json:"sync_rules"`
+	SyncWafFiles     *bool `json:"sync_waf_files"`
+	SyncSecurity     *bool `json:"sync_security"`
 }
 
 type ClusterRegistration struct {
@@ -210,7 +215,18 @@ type ClusterSnapshot struct {
 	SecurityBlockPages       []SecurityBlockPage               `json:"security_block_pages,omitempty"`
 	SecurityCRSVersion       []ClusterSecurityCRSVersion       `json:"security_crs_version,omitempty"`
 	SecurityIP2RegionVersion []ClusterSecurityIP2RegionVersion `json:"security_ip2region_version,omitempty"`
-	WafFiles                 *json.RawMessage                  `json:"waf_files,omitempty"`
+	WafFiles                 *ClusterWafFilesRef               `json:"waf_files,omitempty"`
+	SectionHashes            map[string]string                 `json:"section_hashes,omitempty"`
+}
+
+// ClusterWafFilesRef 是快照携带的 WAF 规则文件哈希引用（不含内容）：
+// 从节点比对本地哈希，不一致才向主节点 /cluster/sync/waf-files 拉取，
+// 规则等 DB 变更引发的快照传输不再搭车 MB 级文件内容。
+type ClusterWafFilesRef struct {
+	CRSVersion   string `json:"crs_version"`
+	CRSSha256    string `json:"crs_sha256"`
+	IP2RegionTag string `json:"ip2region_version"`
+	IP2RegionSha string `json:"ip2region_sha256"`
 }
 
 type ClusterSecurityCRSVersion struct {
@@ -280,16 +296,21 @@ type ClusterNodeView struct {
 }
 
 type ClusterStatus struct {
-	NodeMode        string        `json:"node_mode"`
-	ClusterVersion  int           `json:"cluster_version"`
-	MasterURL       string        `json:"master_url"`
-	SyncInterval    int           `json:"sync_interval"`
-	SyncCaddyConfig bool          `json:"sync_caddy_config"`
-	ClusterActive   bool          `json:"cluster_active"`
-	AppliedVersion  int           `json:"applied_version"`
-	LastSyncAt      string        `json:"last_sync_at"`
-	LastSyncError   string        `json:"last_sync_error"`
-	SyncErrorCode   SyncErrorCode `json:"sync_error_code,omitempty"`
-	PendingCount    int           `json:"pending_count"`
-	ApprovedCount   int           `json:"approved_count"`
+	NodeMode         string        `json:"node_mode"`
+	ClusterVersion   int           `json:"cluster_version"`
+	MasterURL        string        `json:"master_url"`
+	SyncInterval     int           `json:"sync_interval"`
+	SyncCaddyConfig  bool          `json:"sync_caddy_config"`
+	SyncGlobalConfig bool          `json:"sync_global_config"`
+	SyncUsers        bool          `json:"sync_users"`
+	SyncRules        bool          `json:"sync_rules"`
+	SyncWafFiles     bool          `json:"sync_waf_files"`
+	SyncSecurity     bool          `json:"sync_security"`
+	ClusterActive    bool          `json:"cluster_active"`
+	AppliedVersion   int           `json:"applied_version"`
+	LastSyncAt       string        `json:"last_sync_at"`
+	LastSyncError    string        `json:"last_sync_error"`
+	SyncErrorCode    SyncErrorCode `json:"sync_error_code,omitempty"`
+	PendingCount     int           `json:"pending_count"`
+	ApprovedCount    int           `json:"approved_count"`
 }

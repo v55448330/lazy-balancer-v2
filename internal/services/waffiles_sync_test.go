@@ -25,8 +25,15 @@ func TestWafFileBundleRoundTrip(t *testing.T) {
 	if bundle == nil || len(bundle.CRSTarGzB64) == 0 || len(bundle.XdbB64) == 0 {
 		t.Fatalf("bundle incomplete: %+v", bundle)
 	}
-	if bundle.CRSSha256 == "" || bundle.IP2RegionSha == "" {
-		t.Fatalf("hashes missing")
+	ref := BuildWafFileRef()
+	if ref == nil || ref.CRSSha256 != bundle.CRSSha256 || ref.IP2RegionSha != bundle.IP2RegionSha {
+		t.Fatalf("ref/hash mismatch: %+v vs %+v", ref, bundle)
+	}
+	if wafFilesRefDiffers(ref) {
+		t.Fatalf("ref should match local after build")
+	}
+	if !wafFilesRefMatchesBundle(ref, bundle) {
+		t.Fatalf("bundle must match its ref")
 	}
 
 	// First apply to an empty live dir → changed
@@ -44,7 +51,10 @@ func TestWafFileBundleRoundTrip(t *testing.T) {
 		t.Fatalf("xdb not restored: %q", got)
 	}
 
-	// Second apply with identical content → no-op
+	// Identical content → differs=false and apply is a no-op
+	if wafFilesRefDiffers(ref) {
+		t.Fatalf("identical files must not be re-fetched")
+	}
 	changed, err = ApplyWafFileBundle(bundle)
 	if err != nil || changed {
 		t.Fatalf("idempotent apply changed=%v err=%v", changed, err)

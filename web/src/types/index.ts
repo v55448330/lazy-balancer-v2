@@ -181,6 +181,11 @@ export interface ClusterStatus {
   readonly master_url: string
   readonly sync_interval: number
   readonly sync_caddy_config: boolean
+  readonly sync_global_config: boolean
+  readonly sync_users: boolean
+  readonly sync_rules: boolean
+  readonly sync_waf_files: boolean
+  readonly sync_security: boolean
   readonly cluster_active: boolean
   readonly applied_version: number
   readonly last_sync_at: string

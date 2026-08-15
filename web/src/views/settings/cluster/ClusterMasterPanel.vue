@@ -9,12 +9,12 @@
         <el-button type="primary" size="small" :loading="tokenLoading" :disabled="readOnly" @click="$emit('generate-token')">生成注册令牌</el-button>
       </div>
     </template>
-    <div class="setting-row">
+    <div v-for="item in syncSwitchItems" :key="item.key" class="setting-row">
       <div>
-        <div class="setting-label">同步 Caddy 全局配置</div>
-        <div class="form-tip-line">开启后，从节点同步主节点的 Caddy 全局配置</div>
+        <div class="setting-label">{{ item.label }}</div>
+        <div class="form-tip-line">{{ item.tip }}</div>
       </div>
-      <el-switch :model-value="status.sync_caddy_config" :loading="settingsLoading" :disabled="readOnly" @change="handleSyncChange" />
+      <el-switch :model-value="status[item.key]" :loading="settingsLoading" :disabled="readOnly" @change="(v: string | number | boolean) => handleSwitchChange(item.key, v)" />
     </div>
   </el-card>
 
@@ -112,7 +112,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'generate-token'): void
-  (event: 'update-sync', value: boolean): void
+  (event: 'update-sync-field', field: string, value: boolean): void
   (event: 'approve', node: ClusterNode): void
   (event: 'reject', node: ClusterNode): void
   (event: 'remove', node: ClusterNode): void
@@ -123,9 +123,17 @@ const emit = defineEmits<{
 const { width: viewportWidth } = useWindowSize()
 const operationColumnFixed = computed<'right' | false>(() => viewportWidth.value > 1440 ? 'right' : false)
 
-const handleSyncChange = (value: string | number | boolean): void => {
+const syncSwitchItems = [
+  { key: 'sync_global_config', label: '全局配置', tip: '日志级别、时区、Caddy 全局超时与日志等全局设置' },
+  { key: 'sync_users', label: '系统数据', tip: '用户账号与 API 密钥' },
+  { key: 'sync_rules', label: '负载均衡规则', tip: '规则、上游、路径规则与证书任务' },
+  { key: 'sync_waf_files', label: 'CRS/IP2Region 数据库', tip: 'CRS 规则文件与 GeoIP 数据库（哈希一致时跳过传输）' },
+  { key: 'sync_security', label: '安全策略及自定义规则', tip: '安全策略、绑定关系、自定义规则与拦截页面' },
+] as const
+
+const handleSwitchChange = (field: string, value: string | number | boolean): void => {
   if (props.readOnly) return
-  if (typeof value === 'boolean') emit('update-sync', value)
+  if (typeof value === 'boolean') emit('update-sync-field', field, value)
 }
 
 const statusType = (status: ClusterNodeStatus): 'success' | 'info' | 'warning' => {

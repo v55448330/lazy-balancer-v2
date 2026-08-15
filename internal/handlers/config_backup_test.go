@@ -485,6 +485,17 @@ func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *t
 		INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES ('lb_requeue_v2','requeue.example.test','creating_order',999999)`); err != nil {
 		t.Fatalf("seed non-terminal job: %v", err)
 	}
+	block := make(chan struct{})
+	acmeMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-block }))
+	t.Cleanup(func() { close(block); services.GetCAQueueManager().PauseAndDrain(); acmeMock.Close() })
+	// acme_email 与 CA 目录必须在导出之前配置：导入会用备份里的 global_config 覆盖
+	// 当前值（f6977115 起 acme_email 随备份迁移），导出后再改会被旧值清掉。
+	if _, err := db.DB.Exec("UPDATE ca_providers SET provider='letsencrypt', directory_url=? WHERE enabled=1", acmeMock.URL); err != nil {
+		t.Fatalf("redirect ACME directory: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE global_config SET acme_email='acme@example.test' WHERE id=1"); err != nil {
+		t.Fatalf("set ACME email: %v", err)
+	}
 	router := gin.New()
 	router.GET("/config/export", h.ExportConfigBackup)
 	router.POST("/config/import", h.ImportConfigBackup)
@@ -496,16 +507,6 @@ func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *t
 	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(exportResponse.Body.String()))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
-	block := make(chan struct{})
-	acmeMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-block }))
-	t.Cleanup(func() { close(block); services.GetCAQueueManager().PauseAndDrain(); acmeMock.Close() })
-	if _, err := db.DB.Exec("UPDATE ca_providers SET provider='letsencrypt', directory_url=? WHERE enabled=1", acmeMock.URL); err != nil {
-		t.Fatalf("redirect ACME directory: %v", err)
-	}
-	if _, err := db.DB.Exec("UPDATE global_config SET acme_email='acme@example.test' WHERE id=1"); err != nil {
-		t.Fatalf("set ACME email: %v", err)
-	}
-
 	// When
 	router.ServeHTTP(response, request)
 

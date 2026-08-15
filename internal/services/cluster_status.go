@@ -64,17 +64,31 @@ func (s *ClusterService) UpdateSettings(ctx context.Context, req models.ClusterS
 			return errors.New("从节点不能修改同步间隔，由主节点统一下发")
 		}
 	}
-	if req.SyncCaddyConfig != nil {
-		result, err := tx.ExecContext(ctx, "UPDATE global_config SET sync_caddy_config=? WHERE id=1 AND is_master=1", *req.SyncCaddyConfig)
+	switchUpdates := []struct {
+		name string
+		val  *bool
+	}{
+		{"sync_caddy_config", req.SyncCaddyConfig},
+		{"sync_global_config", req.SyncGlobalConfig},
+		{"sync_users", req.SyncUsers},
+		{"sync_rules", req.SyncRules},
+		{"sync_waf_files", req.SyncWafFiles},
+		{"sync_security", req.SyncSecurity},
+	}
+	for _, sw := range switchUpdates {
+		if sw.val == nil {
+			continue
+		}
+		result, err := tx.ExecContext(ctx, "UPDATE global_config SET "+sw.name+"=? WHERE id=1 AND is_master=1", *sw.val)
 		if err != nil {
-			return fmt.Errorf("更新 Caddy 同步开关: %w", err)
+			return fmt.Errorf("更新 %s: %w", sw.name, err)
 		}
 		updated, err := result.RowsAffected()
 		if err != nil {
-			return fmt.Errorf("读取 Caddy 同步开关更新结果: %w", err)
+			return fmt.Errorf("读取 %s 更新结果: %w", sw.name, err)
 		}
 		if updated != 1 {
-			return errors.New("从节点不能修改 Caddy 配置同步开关")
+			return errors.New("从节点不能修改同步开关，请在主节点操作")
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -89,8 +103,8 @@ func (s *ClusterService) Status(ctx context.Context) (models.ClusterStatus, erro
 	var clusterToken string
 	var lastSync sql.NullTime
 	var storedSyncError string
-	err := s.db.QueryRowContext(ctx, `SELECT is_master, COALESCE(cluster_version,0), COALESCE(master_url,''), COALESCE(sync_interval,60), COALESCE(sync_caddy_config,0), COALESCE(cluster_token,''), COALESCE(applied_version,0), last_sync, COALESCE(last_sync_error,'') FROM global_config WHERE id=1`).Scan(
-		&isMaster, &status.ClusterVersion, &status.MasterURL, &status.SyncInterval, &status.SyncCaddyConfig, &clusterToken, &status.AppliedVersion, &lastSync, &storedSyncError)
+	err := s.db.QueryRowContext(ctx, `SELECT is_master, COALESCE(cluster_version,0), COALESCE(master_url,''), COALESCE(sync_interval,60), COALESCE(sync_caddy_config,0), COALESCE(sync_global_config,1), COALESCE(sync_users,1), COALESCE(sync_rules,1), COALESCE(sync_waf_files,1), COALESCE(sync_security,1), COALESCE(cluster_token,''), COALESCE(applied_version,0), last_sync, COALESCE(last_sync_error,'') FROM global_config WHERE id=1`).Scan(
+		&isMaster, &status.ClusterVersion, &status.MasterURL, &status.SyncInterval, &status.SyncCaddyConfig, &status.SyncGlobalConfig, &status.SyncUsers, &status.SyncRules, &status.SyncWafFiles, &status.SyncSecurity, &clusterToken, &status.AppliedVersion, &lastSync, &storedSyncError)
 	if err != nil {
 		return models.ClusterStatus{}, fmt.Errorf("读取集群状态: %w", err)
 	}

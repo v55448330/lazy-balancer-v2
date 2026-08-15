@@ -62,3 +62,14 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 	h.syncService.Resume()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "手动同步完成", Data: result})
 }
+
+// GetClusterWafFiles serves the full CRS/IP2Region file bundle on demand to
+// slaves whose snapshot-carried hash reference differs from their local files.
+func (h *Handlers) GetClusterWafFiles(c *gin.Context) {
+	bundle := services.BuildWafFileBundle()
+	if bundle == nil {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "主节点无 WAF 规则文件"})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: bundle})
+}

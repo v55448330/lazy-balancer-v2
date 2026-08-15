@@ -24,7 +24,7 @@
       :access-url-saving="accessUrlSaving"
       :read-only="isNonAdminReadOnly"
       @generate-token="generateRegisterToken"
-      @update-sync="updateSyncSetting"
+      @update-sync-field="updateSyncField"
       @approve="approveNode"
       @reject="rejectNode"
       @remove="removeNode"
@@ -240,13 +240,15 @@ const copyRegisterToken = async (): Promise<void> => {
   }
 }
 
-const updateSyncSetting = async (value: boolean): Promise<void> => {
+const updateSyncField = async (field: string, value: boolean): Promise<void> => {
   if (isNonAdminReadOnly.value) return
   settingsLoading.value = true
   try {
-    await request.put<ActionResponse>('/cluster/settings', { sync_caddy_config: value })
+    await request.put<ActionResponse>('/cluster/settings', { [field]: value })
     ElMessage.success('同步设置已更新')
     await fetchStatus()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '更新失败')
   } finally {
     settingsLoading.value = false
   }
