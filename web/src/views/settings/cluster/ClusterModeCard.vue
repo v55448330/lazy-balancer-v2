@@ -9,7 +9,7 @@
       </div>
     </template>
 
-    <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" class="settings-form" :disabled="readOnly">
+    <el-form :model="form" label-width="120px" class="settings-form" :disabled="readOnly">
       <el-form-item label="节点模式">
         <el-radio-group v-model="selectedMode" :disabled="loading || readOnly" @change="handleModeChange">
           <el-radio value="master">主节点</el-radio>
@@ -27,22 +27,31 @@
         <div class="form-tip-line">{{ isSlave ? '由主节点同步下发，从节点不可修改' : '从节点拉取同步与上报状态的周期（10–3600 秒）' }}</div>
       </el-form-item>
 
-      <template v-if="showRegistration">
-        <el-alert
-          title="切换后本地数据将被主节点全覆盖"
-          type="error"
-          :closable="false"
-          show-icon
-          class="registration-alert"
-        />
-        <el-alert
-          v-if="usesPlainHttp"
-          title="证书私钥将经明文 HTTP 传输，建议使用 HTTPS"
-          type="warning"
-          :closable="false"
-          show-icon
-          class="registration-alert"
-        />
+    </el-form>
+
+    <el-dialog
+      v-model="registrationOpen"
+      title="注册为从节点"
+      width="520px"
+      :close-on-click-modal="false"
+      append-to-body
+    >
+      <el-alert
+        title="切换后本地数据将被主节点全覆盖"
+        type="error"
+        :closable="false"
+        show-icon
+        class="registration-alert"
+      />
+      <el-alert
+        v-if="usesPlainHttp"
+        title="证书私钥将经明文 HTTP 传输，建议使用 HTTPS"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="registration-alert"
+      />
+      <el-form ref="dialogFormRef" :model="form" :rules="rules" label-width="100px" :disabled="readOnly">
         <el-form-item label="主节点地址" prop="master_url">
           <el-input v-model="form.master_url" placeholder="https://master.example.com:8000" />
           <div class="form-tip-line">填写可从当前节点访问的主节点管理地址</div>
@@ -53,12 +62,12 @@
         <el-form-item label="节点名称" prop="node_name">
           <el-input v-model="form.node_name" placeholder="选填，例如：上海从节点" />
         </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :loading="loading" :disabled="readOnly" @click="submitRegistration">注册并切换为从节点</el-button>
-          <el-button v-if="status?.node_mode === 'slave'" :disabled="loading || readOnly" @click="closeRegistration">取消</el-button>
-        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="loading || readOnly" @click="closeRegistration">取消</el-button>
+        <el-button type="primary" :loading="loading" :disabled="readOnly" @click="submitRegistration">注册并切换为从节点</el-button>
       </template>
-    </el-form>
+    </el-dialog>
   </el-card>
 </template>
 
@@ -88,7 +97,7 @@ const emit = defineEmits<{
   (event: 'update-interval', value: number): void
 }>()
 
-const formRef = ref<FormInstance>()
+const dialogFormRef = ref<FormInstance>()
 const selectedMode = ref<ClusterNodeMode>('master')
 const registrationOpen = ref(false)
 const syncInterval = ref(60)
@@ -120,7 +129,6 @@ const rules: FormRules<RegistrationForm> = {
   register_token: [{ required: true, message: '请输入注册令牌', trigger: 'blur' }],
 }
 
-const showRegistration = computed(() => selectedMode.value === 'slave' && registrationOpen.value)
 const usesPlainHttp = computed(() => form.master_url.trim().toLowerCase().startsWith('http://'))
 const isSlave = computed(() => props.status?.node_mode === 'slave')
 const intervalDisabled = computed(() => props.readOnly || props.intervalSaving || isSlave.value)
@@ -173,8 +181,8 @@ const saveSyncInterval = (): void => {
 
 const submitRegistration = async (): Promise<void> => {
   if (props.readOnly) return
-  if (!formRef.value) return
-  const valid = await formRef.value.validate().catch(() => false)
+  if (!dialogFormRef.value) return
+  const valid = await dialogFormRef.value.validate().catch(() => false)
   if (!valid) return
   const nodeName = form.node_name.trim()
   emit('register', {
