@@ -267,7 +267,7 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	// 通知旧主节点该从节点已脱离（best-effort：失败不阻断提升，主节点
 	// 会在上报超时后将其标记下线；成功则主节点节点列表立即更新并留痕）。
 	if masterURL != "" && oldToken != "" {
-		go notifyMasterDetach(context.WithoutCancel(ctx), masterURL, oldToken)
+		go notifyMasterDetach(context.WithoutCancel(ctx), s.db, masterURL, oldToken)
 	}
 	if registrationID > 0 {
 		RecordAuditLog("system", "提升", "集群节点", FormatAuditDetail(fmt.Sprintf("注册编号：%d", registrationID), "本节点已脱离集群并提升为主节点", AuditResultPart("success")), "")
@@ -346,20 +346,32 @@ func DecodeClusterHealth(value string) (*models.ClusterHealth, error) {
 	return &health, nil
 }
 
-// notifyMasterDetach best-effort 通知旧主节点本从节点已提升脱离。主节点收到
-// 无效令牌（已重置）的请求会因验签失败忽略本请求，节点列表靠上报超时收敛；
-// 因此这里直接发一次空上报让主节点感知最后一次状态，超时 3 秒即放弃。
-func notifyMasterDetach(ctx context.Context, masterURL, token string) {
-	endpoint := strings.TrimRight(masterURL, "/") + "/api/v1/cluster/nodes/report"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+// notifyMasterDetach best-effort 通知旧主节点本从节点已提升脱离。提升后本节点仍持有
+// 旧集群令牌，且旧主节点仍保留本节点行与该令牌哈希，旧令牌在主节点上仍能验签通过，
+// 因此携带 detached=true 的上报会令主节点删除本节点行（令牌随之撤销），节点列表即时收敛；
+// 沿用同步 Pull 的 TOFU 证书指纹校验客户端，超时 3 秒失败仅记录不阻断提升。
+func notifyMasterDetach(ctx context.Context, database *sql.DB, masterURL, token string) {
+	report := models.ClusterReport{ServiceStatus: "ok", Detached: true}
+	payload, err := json.Marshal(report)
 	if err != nil {
 		return
 	}
+	endpoint := strings.TrimRight(masterURL, "/") + "/api/v1/cluster/nodes/report"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(payload)))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Cluster-Token", token)
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := &http.Client{Timeout: 3 * time.Second, Transport: newClusterTOFUTransport("", database, nil)}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("cluster detach notify failed: %v", err)
 		return
 	}
 	resp.Body.Close()
+	if resp.StatusCode >= http.StatusBadRequest {
+		log.Printf("cluster detach notify rejected: %d", resp.StatusCode)
+	}
 }

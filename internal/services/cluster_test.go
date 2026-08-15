@@ -1103,7 +1103,7 @@ func installGlobalConfigVersionTrigger(t *testing.T, database *sql.DB) {
 	}
 }
 
-func TestClusterSnapshot_accessLogSettingsFollowSyncCaddyConfigGate(t *testing.T) {
+func TestClusterSnapshot_accessLogSettingsFollowGlobalConfigGate(t *testing.T) {
 	// Given
 	service, database := newClusterTestService(t)
 	ctx := context.Background()
@@ -1208,5 +1208,52 @@ func TestUpdateSnapshotSettings_preservesSlaveAccessLogSettingsWhenCaddySyncOff(
 	gotJSON, gotFormat = readAccessLog(t)
 	if !gotJSON || gotFormat != "master-format" {
 		t.Fatalf("access log settings not applied with caddy sync: json=%v format=%q", gotJSON, gotFormat)
+	}
+}
+
+func TestClusterService_Status_omitsSyncCaddyConfig(t *testing.T) {
+	// Given
+	service, _ := newClusterTestService(t)
+
+	// When
+	status, err := service.Status(context.Background())
+	if err != nil {
+		t.Fatalf("status error: %v", err)
+	}
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+
+	// Then
+	if strings.Contains(string(encoded), "sync_caddy_config") {
+		t.Fatalf("status JSON still contains sync_caddy_config: %s", encoded)
+	}
+}
+
+func TestClusterService_UpdateSettings_ignoresLegacySyncCaddyConfig(t *testing.T) {
+	// Given
+	service, database := newClusterTestService(t)
+	ctx := context.Background()
+	if _, err := database.ExecContext(ctx, "UPDATE global_config SET is_master=1 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// When legacy payload carries the removed switch, it must be ignored rather than error
+	var req models.ClusterSettingsRequest
+	if err := json.Unmarshal([]byte(`{"sync_caddy_config":false}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.UpdateSettings(ctx, req); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+
+	// Then
+	var columnCount int
+	if err := database.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='sync_caddy_config'").Scan(&columnCount); err != nil {
+		t.Fatal(err)
+	}
+	if columnCount != 0 {
+		t.Fatalf("sync_caddy_config column still exists")
 	}
 }

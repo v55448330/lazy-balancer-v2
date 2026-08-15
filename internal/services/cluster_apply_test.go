@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -213,5 +214,26 @@ func TestSyncService_applySnapshot_restarts_for_uploaded_admin_certificate_rotat
 	case <-restarted:
 	case <-time.After(time.Second):
 		t.Fatal("restart callback was not invoked for certificate rotation")
+	}
+}
+
+func TestClearSyncTables_propagatesDeleteError(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	tx, err := database.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// When
+	err = clearSyncTables(context.Background(), tx, "nonexistent_table")
+
+	// Then
+	if err == nil {
+		t.Fatal("expected delete error for nonexistent table")
+	}
+	if !strings.Contains(err.Error(), "清理同步表 nonexistent_table 失败") {
+		t.Fatalf("error=%v, want table context", err)
 	}
 }

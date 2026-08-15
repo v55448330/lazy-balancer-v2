@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
 
 func (h *Handlers) GetClusterStatus(c *gin.Context) {
@@ -36,7 +38,17 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 		clusterError(c, http.StatusBadRequest, "节点上报格式错误", err)
 		return
 	}
-	if err := h.clusterService.ReportNode(c.Request.Context(), c.GetInt("cluster_node_id"), req, time.Now()); err != nil {
+	nodeID := c.GetInt("cluster_node_id")
+	if req.Detached {
+		if err := h.clusterService.DeleteNode(c.Request.Context(), nodeID); err != nil {
+			clusterError(c, http.StatusInternalServerError, "节点脱离处理失败", err)
+			return
+		}
+		recordAudit(c, "脱离", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), services.AuditResultPart("success")))
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "节点已脱离集群"})
+		return
+	}
+	if err := h.clusterService.ReportNode(c.Request.Context(), nodeID, req, time.Now()); err != nil {
 		clusterError(c, http.StatusInternalServerError, "节点状态上报失败", err)
 		return
 	}

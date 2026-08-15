@@ -232,7 +232,6 @@ type GlobalConfig struct {
 	SyncInterval               int          `json:"sync_interval"`
 	DefaultCAProviderID        int          `json:"default_ca_provider_id"`
 	ClusterVersion             int          `json:"cluster_version"`
-	SyncCaddyConfig            bool         `json:"sync_caddy_config"`
 	ClusterToken               string       `json:"-"`
 	RegistrationID             int          `json:"-"`
 	RegistrationSecret         string       `json:"-"`

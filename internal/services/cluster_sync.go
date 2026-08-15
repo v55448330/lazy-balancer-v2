@@ -131,56 +131,70 @@ func (s *SyncService) do(req *http.Request) (*http.Response, error) {
 
 func (s *SyncService) initClusterClient() {
 	s.transportOnce.Do(func() {
-		tlsConfig := &tls.Config{
-			MinVersion:         tls.VersionTLS12,
-			InsecureSkipVerify: true,
+		dataDir := ""
+		if s.cfg != nil {
+			dataDir = s.cfg.DataDir
 		}
-		transport := &http.Transport{
-			MaxIdleConns:          100,
-			MaxIdleConnsPerHost:   10,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: time.Second,
-			ForceAttemptHTTP2:     true,
-			TLSClientConfig:       tlsConfig,
-		}
-		transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-			configForAddress := tlsConfig.Clone()
-			host, _, err := net.SplitHostPort(address)
-			if err != nil {
-				return nil, fmt.Errorf("解析主节点 TLS 地址: %w", err)
-			}
-			configForAddress.ServerName = host
-			configForAddress.VerifyConnection = func(state tls.ConnectionState) error {
-				if len(state.PeerCertificates) == 0 {
-					return errors.New("主节点未提供 TLS 证书")
-				}
-				pinPath, err := s.clusterPinPath(address)
-				if err != nil {
-					return err
-				}
-				fingerprint := sha256.Sum256(state.PeerCertificates[0].Raw)
-				encoded := hex.EncodeToString(fingerprint[:])
-				if err := verifyOrStoreClusterPin(pinPath, encoded); err != nil {
-					return err
-				}
-				s.pinMu.Lock()
-				s.verifiedPins[pinPath] = encoded
-				s.pinMu.Unlock()
-				return nil
-			}
-			return (&tls.Dialer{Config: configForAddress}).DialContext(ctx, network, address)
-		}
-		s.transport = transport
+		s.transport = newClusterTOFUTransport(dataDir, s.db, func(pinPath, fingerprint string) {
+			s.pinMu.Lock()
+			s.verifiedPins[pinPath] = fingerprint
+			s.pinMu.Unlock()
+		})
 		s.verifiedPins = make(map[string]string)
 		if s.client == nil {
 			s.client = &http.Client{Timeout: 30 * time.Second}
 		}
-		s.client.Transport = transport
+		s.client.Transport = s.transport
 		s.client.CheckRedirect = func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}
 	})
+}
+
+// newClusterTOFUTransport 构建带 TOFU（首次信任）TLS 证书指纹校验的 transport，
+// 供同步 Pull 与提升后的脱离通知共用，避免自签名主节点握手失败。
+func newClusterTOFUTransport(dataDir string, database *sql.DB, onVerified func(pinPath, fingerprint string)) *http.Transport {
+	tlsConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true,
+	}
+	transport := &http.Transport{
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		ForceAttemptHTTP2:     true,
+		TLSClientConfig:       tlsConfig,
+	}
+	transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		configForAddress := tlsConfig.Clone()
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("解析主节点 TLS 地址: %w", err)
+		}
+		configForAddress.ServerName = host
+		configForAddress.VerifyConnection = func(state tls.ConnectionState) error {
+			if len(state.PeerCertificates) == 0 {
+				return errors.New("主节点未提供 TLS 证书")
+			}
+			pinPath, err := clusterPinPath(dataDir, database, address)
+			if err != nil {
+				return err
+			}
+			fingerprint := sha256.Sum256(state.PeerCertificates[0].Raw)
+			encoded := hex.EncodeToString(fingerprint[:])
+			if err := verifyOrStoreClusterPin(pinPath, encoded); err != nil {
+				return err
+			}
+			if onVerified != nil {
+				onVerified(pinPath, encoded)
+			}
+			return nil
+		}
+		return (&tls.Dialer{Config: configForAddress}).DialContext(ctx, network, address)
+	}
+	return transport
 }
 
 func (s *SyncService) clusterPinPath(host string) (string, error) {

@@ -201,7 +201,13 @@ func TestClusterService_Snapshot_rateLimitsMalformedCertificateWarningByRuleAndJ
 	// Given
 	service, database := newClusterTestService(t)
 	now := time.Now().UTC()
-	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enable_tls,tls_source,enabled) VALUES ('lb_bad_candidate','bad','http','bad.example.com',443,1,'acme_dns',1)`); err != nil {
+	if _, err := database.Exec(`INSERT OR IGNORE INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'snapshot CA','letsencrypt','https://acme.example/directory',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT OR IGNORE INTO certificate_configs (id,name,dns_provider,enabled) VALUES (11,'snapshot DNS','dnspod',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enable_tls,tls_source,acme_config_id,ca_provider_id,enabled) VALUES ('lb_bad_candidate','bad','http','bad.example.com',443,1,'acme_dns',11,7,1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,expires_at,cert_pem,key_pem) VALUES (991,'lb_bad_candidate','bad.example.com','issued',?,'bad-cert','bad-key')`, now.Add(24*time.Hour)); err != nil {
@@ -269,4 +275,52 @@ func certificatePairForDomains(t *testing.T, notBefore, notAfter time.Time, doma
 		t.Fatal(err)
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+}
+
+func TestNearestSnapshotCertificateExpiry_acmeWithEmptyExpiryExpiresImmediately(t *testing.T) {
+	// Given
+	now := time.Now().UTC()
+
+	// When
+	got := nearestSnapshotCertificateExpiry([]models.ClusterCertificate{
+		{RuleID: "lb_acme", Domain: "example.com", CertPEM: "pem", ExpiresAt: ""},
+	}, now)
+
+	// Then
+	if !got.Equal(now) {
+		t.Fatalf("expiry=%v, want immediate (%v)", got, now)
+	}
+}
+
+func TestNearestSnapshotCertificateExpiry_manualCertWithoutExpirySkipped(t *testing.T) {
+	// Given
+	now := time.Now().UTC()
+
+	// When
+	got := nearestSnapshotCertificateExpiry([]models.ClusterCertificate{
+		{RuleID: "lb_manual", CertPEM: "pem", ExpiresAt: ""},
+	}, now)
+
+	// Then
+	if !got.IsZero() {
+		t.Fatalf("expiry=%v, want zero (manual cert skipped)", got)
+	}
+}
+
+func TestNearestSnapshotCertificateExpiry_returnsNearestFutureExpiry(t *testing.T) {
+	// Given
+	now := time.Now().UTC().Truncate(time.Second)
+	near := now.Add(24 * time.Hour).Format(time.RFC3339)
+	far := now.Add(90 * 24 * time.Hour).Format(time.RFC3339)
+
+	// When
+	got := nearestSnapshotCertificateExpiry([]models.ClusterCertificate{
+		{RuleID: "lb_far", Domain: "far.example.com", ExpiresAt: far},
+		{RuleID: "lb_near", Domain: "near.example.com", ExpiresAt: near},
+	}, now)
+
+	// Then
+	if !got.Equal(now.Add(24 * time.Hour)) {
+		t.Fatalf("expiry=%v, want nearest %v", got, now.Add(24*time.Hour))
+	}
 }

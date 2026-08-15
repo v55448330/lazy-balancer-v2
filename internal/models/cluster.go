@@ -59,7 +59,6 @@ type ClusterModeRequest struct {
 
 type ClusterSettingsRequest struct {
 	SyncInterval     *int  `json:"sync_interval" binding:"omitempty,min=5"`
-	SyncCaddyConfig  *bool `json:"sync_caddy_config"`
 	SyncGlobalConfig *bool `json:"sync_global_config"`
 	SyncUsers        *bool `json:"sync_users"`
 	SyncRules        *bool `json:"sync_rules"`
@@ -106,6 +105,8 @@ type ClusterReport struct {
 	LastSyncAt     string        `json:"last_sync_at"`
 	LastSyncError  string        `json:"last_sync_error"`
 	SyncErrorCode  SyncErrorCode `json:"sync_error_code,omitempty" binding:"omitempty,oneof=schema_too_new schema_too_old signature_invalid pin_mismatch validation_failed apply_failed transport_error"`
+	// Detached 为真表示从节点已提升脱离，请求主节点删除本节点记录（令牌随行撤销）。
+	Detached bool `json:"detached"`
 }
 
 type ClusterBasicSettings struct {
@@ -311,7 +312,6 @@ type ClusterStatus struct {
 	ClusterVersion   int           `json:"cluster_version"`
 	MasterURL        string        `json:"master_url"`
 	SyncInterval     int           `json:"sync_interval"`
-	SyncCaddyConfig  bool          `json:"sync_caddy_config"`
 	SyncGlobalConfig bool          `json:"sync_global_config"`
 	SyncUsers        bool          `json:"sync_users"`
 	SyncRules        bool          `json:"sync_rules"`
