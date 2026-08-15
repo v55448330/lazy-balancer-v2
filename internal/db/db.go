@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"lazy-balancer-v2/internal/models"
+
 	_ "github.com/glebarez/sqlite"
 	"golang.org/x/net/idna"
 )
@@ -1002,6 +1004,12 @@ func runMigrations() error {
 		}
 	}
 
+	// 一次性迁移：清理 R15 校验落地之前写入的存量自定义规则（尾部反斜杠/空条件），
+	// 避免它们在每次配置重生成时产出畸形 SecRule 行而被 coraza 整体拒绝。
+	if err := sanitizeLegacyCustomRulePatterns(); err != nil {
+		return fmt.Errorf("failed to sanitize legacy custom rule patterns: %w", err)
+	}
+
 	// Seed default CA providers if table is empty.
 	var caCount int
 	if err := DB.QueryRow("SELECT COUNT(*) FROM ca_providers").Scan(&caCount); err != nil {
@@ -1048,6 +1056,130 @@ type canonicalDomainMigrationRow struct {
 	key    any
 	value  string
 	column string
+}
+
+// sanitizeLegacyCustomRulePatterns 一次性迁移：清理 R15 校验落地之前写入的存量自定义
+// 规则。尾部反斜杠或空条件的规则在发射时会被跳过（见 services.emitCustomRules 的发射
+// 侧防御），这里改为「保留数据、禁用即可」，避免它们在配置重生成时产出畸形 SecRule。
+//
+//  1. security_custom_rules 表：conditions JSON 为空或任一 pattern 以 `\` 结尾 → enabled=0。
+//  2. security_policies.custom_rules 内嵌 JSON：条目 conditions 含尾部反斜杠 pattern 或
+//     为占位形状（无条件且无 target/operator）→ 将条目 enabled 置 false（内嵌形状的
+//     CustomRule 带 enabled 字段，无需整条删除）。
+//
+// 幂等：已禁用的行/条目保持禁用，重复执行无副作用；不可解析的 JSON 保持原样不动，
+// 绝不 brick 一条策略或一条规则。
+func sanitizeLegacyCustomRulePatterns() error {
+	hasTrailingBackslash := func(conditions []models.CustomRuleCondition, legacyPattern string) bool {
+		for _, cond := range conditions {
+			if strings.HasSuffix(cond.Pattern, `\`) {
+				return true
+			}
+		}
+		return strings.HasSuffix(legacyPattern, `\`)
+	}
+
+	disabled := 0
+
+	// 1. 独立自定义规则表
+	rows, err := DB.Query("SELECT id, conditions FROM security_custom_rules")
+	if err != nil {
+		return fmt.Errorf("failed to query security_custom_rules: %w", err)
+	}
+	type customRuleRow struct {
+		id         int
+		conditions string
+	}
+	var ruleRows []customRuleRow
+	for rows.Next() {
+		var row customRuleRow
+		if err := rows.Scan(&row.id, &row.conditions); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan security_custom_rules: %w", err)
+		}
+		ruleRows = append(ruleRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("failed to iterate security_custom_rules: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("failed to close security_custom_rules rows: %w", err)
+	}
+	for _, row := range ruleRows {
+		var conditions []models.CustomRuleCondition
+		// 不可解析的 conditions 一并禁用：发射阶段同样无法判定其合法性。
+		if err := json.Unmarshal([]byte(row.conditions), &conditions); err != nil || len(conditions) == 0 || hasTrailingBackslash(conditions, "") {
+			res, err := DB.Exec("UPDATE security_custom_rules SET enabled=0 WHERE id=? AND enabled=1", row.id)
+			if err != nil {
+				return fmt.Errorf("failed to disable security_custom_rule %d: %w", row.id, err)
+			}
+			if affected, _ := res.RowsAffected(); affected > 0 {
+				disabled++
+			}
+		}
+	}
+
+	// 2. 策略内嵌自定义规则
+	policyRows, err := DB.Query("SELECT id, custom_rules FROM security_policies")
+	if err != nil {
+		return fmt.Errorf("failed to query security_policies: %w", err)
+	}
+	type policyRow struct {
+		id          int
+		customRules string
+	}
+	var policies []policyRow
+	for policyRows.Next() {
+		var row policyRow
+		if err := policyRows.Scan(&row.id, &row.customRules); err != nil {
+			policyRows.Close()
+			return fmt.Errorf("failed to scan security_policies: %w", err)
+		}
+		policies = append(policies, row)
+	}
+	if err := policyRows.Err(); err != nil {
+		policyRows.Close()
+		return fmt.Errorf("failed to iterate security_policies: %w", err)
+	}
+	if err := policyRows.Close(); err != nil {
+		return fmt.Errorf("failed to close security_policies rows: %w", err)
+	}
+	for _, policy := range policies {
+		var embedded []models.CustomRule
+		// 规则 ID 数组或不可解析的 JSON 保持原样（ID 数组对应的独立规则已在上一步处理）。
+		if err := json.Unmarshal([]byte(policy.customRules), &embedded); err != nil {
+			continue
+		}
+		changed := false
+		for i := range embedded {
+			rule := &embedded[i]
+			isPlaceholder := len(rule.Conditions) == 0 && rule.Target == "" && rule.Operator == ""
+			if !isPlaceholder && !hasTrailingBackslash(rule.Conditions, rule.Pattern) {
+				continue
+			}
+			if rule.Enabled {
+				rule.Enabled = false
+				changed = true
+				disabled++
+			}
+		}
+		if !changed {
+			continue
+		}
+		encoded, err := json.Marshal(embedded)
+		if err != nil {
+			continue
+		}
+		if _, err := DB.Exec("UPDATE security_policies SET custom_rules=? WHERE id=?", string(encoded), policy.id); err != nil {
+			return fmt.Errorf("failed to update security_policy %d custom_rules: %w", policy.id, err)
+		}
+	}
+
+	if disabled > 0 {
+		log.Printf("已禁用 %d 条含非法 pattern 的存量自定义规则（尾部反斜杠/空条件）", disabled)
+	}
+	return nil
 }
 
 func migrateCanonicalDomains() error {

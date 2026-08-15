@@ -704,7 +704,9 @@ const scrollIP2RegionUpdateLogToBottom = async () => {
 const openRuleDialog = (row?: CustomRule) => {
   editingRuleId.value = row?.id ?? null
   if (row) {
-    ruleForm.value = { name: row.name, description: row.description, conditions: [...row.conditions], action: row.action, score: row.score, enabled: row.enabled }
+    // 存量空条件规则：自动补一条空条件行，让用户可见地修正而非卡在无法保存的死角
+    const conditions = row.conditions.length ? [...row.conditions] : [{ target: 'uri', operator: 'contains', pattern: '' }]
+    ruleForm.value = { name: row.name, description: row.description, conditions, action: row.action, score: row.score, enabled: row.enabled }
   } else {
     ruleForm.value = { name: '', description: '', conditions: [{ target: 'uri', operator: 'contains', pattern: '' }], action: 'block', score: 5, enabled: true }
   }
@@ -713,9 +715,15 @@ const openRuleDialog = (row?: CustomRule) => {
 
 const saveCustomRule = async () => {
   if (!ruleForm.value.name.trim()) { ElMessage.warning('请输入规则名称'); return }
+  if (!ruleForm.value.conditions.length) { ElMessage.warning('至少需要一个匹配条件'); return }
   for (const cond of ruleForm.value.conditions) {
     if (!cond.pattern.trim()) { ElMessage.error('每个条件必须填写匹配值'); return }
-    if (cond.pattern.endsWith('\\')) { ElMessage.error('匹配值不能以反斜杠结尾：末尾反斜杠会与结尾引号组合成转义引号，导致规则失效。请在末尾补充字符，或改用正则运算符并显式转义'); return }
+    if (cond.pattern.endsWith('\\')) {
+      ElMessage.error(cond.operator === 'regex'
+        ? '正则匹配内容不能以反斜杠结尾，可用 `\\$` 结尾锚定或末尾追加 `(?:)` 空组表达尾部反斜杠'
+        : '该运算符不支持以反斜杠结尾的匹配内容，请改用正则运算符（如 `\\$`）表达')
+      return
+    }
     if (cond.operator === 'regex' && !isValidRegex(cond.pattern)) { ElMessage.error(`正则表达式语法错误：${cond.pattern}`); return }
   }
   savingRule.value = true
@@ -724,7 +732,9 @@ const saveCustomRule = async () => {
       ? await request.put(`/security/custom-rules/${editingRuleId.value}`, ruleForm.value)
       : await request.post('/security/custom-rules', ruleForm.value)
     showSaveResult(res, '保存成功'); ruleDialogVisible.value = false; fetchCustomRules()
-  } catch { ElMessage.error('保存失败') } finally { savingRule.value = false }
+  } catch (error) {
+    ElMessage.error(error instanceof Error && error.message ? error.message : '保存失败')
+  } finally { savingRule.value = false }
 }
 
 const deleteCustomRule = (row: CustomRule) => {

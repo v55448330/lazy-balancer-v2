@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -191,6 +192,35 @@ var (
 	customRuleOperators = map[string]string{"contains": "@contains", "regex": "@rx", "equals": "@pm", "starts_with": "@beginsWith"}
 )
 
+// conditionsEmissionIssue 返回条件列表不可安全发射的原因（"含尾部反斜杠"/"空条件"），
+// 无问题时返回空串。供发射防御与集群同步预检共用，避免两处判定漂移。
+func conditionsEmissionIssue(conditions []models.CustomRuleCondition) string {
+	if len(conditions) == 0 {
+		return "空条件"
+	}
+	for _, cond := range conditions {
+		if strings.HasSuffix(cond.Pattern, `\`) {
+			return "含尾部反斜杠"
+		}
+	}
+	return ""
+}
+
+// customRuleEmissionIssue 在 conditionsEmissionIssue 基础上兼容旧版单目标内嵌形状
+// （无 conditions、靠 target/operator/pattern 发射）。
+func customRuleEmissionIssue(cr models.CustomRule) string {
+	if len(cr.Conditions) > 0 {
+		return conditionsEmissionIssue(cr.Conditions)
+	}
+	if strings.HasSuffix(cr.Pattern, `\`) {
+		return "含尾部反斜杠"
+	}
+	if cr.Target == "" || cr.Operator == "" {
+		return "空条件"
+	}
+	return ""
+}
+
 // emitCustomRules writes user rules ahead of any DetectionOnly switch so a
 // rule-level "拦截" action always blocks regardless of the policy WAF mode,
 // mirroring how IP control behaves. 动作语义与前端编辑器一致：拦截=命中即阻断；
@@ -199,6 +229,13 @@ var (
 func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 	for _, cr := range customRules {
 		if !cr.Enabled {
+			continue
+		}
+		// 发射侧防御：单条含尾部反斜杠或空条件的规则只跳过自身并告警，绝不让整份
+		// 配置生成失败——一条坏规则不得拖垮所有站点；存量脏规则与集群同步绕过的规则
+		// 均在此兜底。
+		if issue := customRuleEmissionIssue(cr); issue != "" {
+			log.Printf("自定义规则 %d(%s) %s，已跳过发射，请修正或禁用", cr.ID, cr.Name, issue)
 			continue
 		}
 		safeName := strings.ReplaceAll(cr.Name, "'", "")
@@ -357,7 +394,7 @@ func ValidateCustomRuleConditions(conditions []models.CustomRuleCondition) error
 		if _, ok := customRuleOperators[cond.Operator]; !ok {
 			return fmt.Errorf("自定义规则条件 %d 的 operator 无效：%q（可选：contains、regex、equals、starts_with）", i+1, cond.Operator)
 		}
-		if err := validateCustomRulePattern(cond.Pattern); err != nil {
+		if err := validateCustomRulePattern(cond.Operator, cond.Pattern); err != nil {
 			return fmt.Errorf("自定义规则条件 %d：%w", i+1, err)
 		}
 	}
@@ -379,14 +416,14 @@ func ValidateCustomRulesJSON(customRulesJSON string) error {
 		return fmt.Errorf("custom_rules 必须是规则 ID 数组或规则对象数组")
 	}
 	for i, r := range rules {
+		// 占位规则（无条件且无单目标）在发射阶段无任何可用条件，与单条件校验一致按空条件拒绝
+		if len(r.Conditions) == 0 && r.Target == "" && r.Operator == "" {
+			return fmt.Errorf("自定义规则 #%d：自定义规则至少需要一个匹配条件", i+1)
+		}
 		if len(r.Conditions) > 0 {
 			if err := ValidateCustomRuleConditions(r.Conditions); err != nil {
 				return fmt.Errorf("自定义规则 #%d：%w", i+1, err)
 			}
-			continue
-		}
-		// 兼容旧版单目标内嵌形状；target/operator 均为空时视为占位规则，跳过校验
-		if r.Target == "" && r.Operator == "" {
 			continue
 		}
 		if _, ok := customRuleTargets[r.Target]; !ok {
@@ -395,7 +432,7 @@ func ValidateCustomRulesJSON(customRulesJSON string) error {
 		if _, ok := customRuleOperators[r.Operator]; !ok {
 			return fmt.Errorf("自定义规则 #%d 的 operator 无效：%q（可选：contains、regex、equals、starts_with）", i+1, r.Operator)
 		}
-		if err := validateCustomRulePattern(r.Pattern); err != nil {
+		if err := validateCustomRulePattern(r.Operator, r.Pattern); err != nil {
 			return fmt.Errorf("自定义规则 #%d：%w", i+1, err)
 		}
 	}
@@ -403,18 +440,21 @@ func ValidateCustomRulesJSON(customRulesJSON string) error {
 }
 
 // validateCustomRulePattern 拒绝两类会破坏 SecRule 行的模式：
-//  1. 真实控制字符（换行/回车/NUL）会截断 SecRule 行；
+//  1. 真实控制字符（含换行/回车/NUL/制表符等）会截断 SecRule 行；
 //  2. 以反斜杠结尾的模式——coraza 的 UnescapeQuotedString 仅反转义 \"，其余
 //     反斜杠序列原样保留，末尾的反斜杠会与结尾引号组合成转义引号，使 SecRule
 //     行畸形并被 coraza 拒绝，进而导致之后所有配置重生成失败。
-func validateCustomRulePattern(pattern string) error {
+func validateCustomRulePattern(operator, pattern string) error {
 	for _, r := range pattern {
-		if r == '\n' || r == '\r' || r == '\x00' {
-			return fmt.Errorf("pattern 包含不允许的控制字符")
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("匹配内容不能包含控制字符（含制表符）")
 		}
 	}
 	if strings.HasSuffix(pattern, `\`) {
-		return fmt.Errorf("pattern 不能以反斜杠结尾：末尾反斜杠会与结尾引号组合成转义引号，导致 SecRule 畸形并被 coraza 拒绝。请在末尾补充字符，或改用 regex 运算符并显式转义（\\\\）")
+		if operator == "regex" {
+			return fmt.Errorf("正则匹配内容不能以反斜杠结尾：末尾反斜杠会与结尾引号组合成转义引号导致规则失效。正则可用 `\\$` 结尾锚定或末尾追加 `(?:)` 空组表达尾部反斜杠")
+		}
+		return fmt.Errorf("该运算符不支持以反斜杠结尾的匹配内容，请改用正则运算符（如 `\\$`）表达")
 	}
 	return nil
 }

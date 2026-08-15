@@ -56,9 +56,11 @@ func TestValidateCustomRuleConditions_rejectsInvalidOperator(t *testing.T) {
 }
 
 func TestValidateCustomRuleConditions_rejectsControlCharsInPattern(t *testing.T) {
-	err := ValidateCustomRuleConditions([]models.CustomRuleCondition{{Target: "uri", Operator: "contains", Pattern: "foo\nSecRule X"}})
-	if err == nil || !strings.Contains(err.Error(), "控制字符") {
-		t.Fatalf("control char in pattern must be rejected, got %v", err)
+	for _, pat := range []string{"foo\nSecRule X", "foo\tbar", "foo\x01bar", "foo\x7fbar"} {
+		err := ValidateCustomRuleConditions([]models.CustomRuleCondition{{Target: "uri", Operator: "contains", Pattern: pat}})
+		if err == nil || !strings.Contains(err.Error(), "控制字符") {
+			t.Fatalf("control char %q in pattern must be rejected, got %v", pat, err)
+		}
 	}
 }
 
@@ -87,6 +89,29 @@ func TestValidateCustomRuleConditions_rejectsTrailingBackslash(t *testing.T) {
 func TestValidateCustomRuleConditions_acceptsMidStringBackslash(t *testing.T) {
 	if err := ValidateCustomRuleConditions([]models.CustomRuleCondition{{Target: "uri", Operator: "contains", Pattern: `abc\def`}}); err != nil {
 		t.Fatalf("mid-string backslash must be accepted, got %v", err)
+	}
+}
+
+func TestValidateCustomRulePattern_operatorAwareTrailingBackslashMessage(t *testing.T) {
+	for _, op := range []string{"contains", "equals", "starts_with"} {
+		err := validateCustomRulePattern(op, `C:\`)
+		if err == nil || !strings.Contains(err.Error(), "改用正则运算符") {
+			t.Fatalf("operator %q trailing backslash must suggest switching to regex, got %v", op, err)
+		}
+	}
+	err := validateCustomRulePattern("regex", `C:\`)
+	if err == nil || !strings.Contains(err.Error(), "结尾锚定") {
+		t.Fatalf("regex trailing backslash must suggest anchor/empty-group, got %v", err)
+	}
+}
+
+func TestValidateCustomRulesJSON_rejectsPlaceholderEntry(t *testing.T) {
+	err := ValidateCustomRulesJSON(`[{"id":1,"name":"占位","enabled":true}]`)
+	if err == nil || !strings.Contains(err.Error(), "至少需要一个匹配条件") {
+		t.Fatalf("placeholder entry must be rejected, got %v", err)
+	}
+	if err := ValidateCustomRulesJSON(`[{"id":1,"name":"旧版","enabled":true,"target":"uri","operator":"contains","pattern":"/x"}]`); err != nil {
+		t.Fatalf("legacy single-target embedded shape must pass, got %v", err)
 	}
 }
 

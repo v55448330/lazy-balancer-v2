@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -714,6 +715,70 @@ func TestInitialize_adds_security_policy_response_and_event_retention_columns(t 
 	// When
 	if err := Initialize(dir); err != nil {
 		t.Fatalf("initialize database: %v", err)
+	}
+}
+
+func TestSanitizeLegacyCustomRulePatterns_disablesDirtyRulesIdempotently(t *testing.T) {
+	// Given a database carrying a dirty standalone rule, a clean rule, an empty-conditions
+	// rule, and a policy with an embedded dirty entry plus a clean entry
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO global_config (id,caddy_config) VALUES (1,'{}');
+		INSERT INTO security_custom_rules (id,name,conditions,action,score,enabled) VALUES
+			(1,'脏规则','[{"target":"uri","operator":"contains","pattern":"C:\\"}]','block',5,1),
+			(2,'干净规则','[{"target":"uri","operator":"contains","pattern":"/admin"}]','block',5,1),
+			(3,'空条件规则','[]','block',5,1);
+		INSERT INTO security_policies (id,name,custom_rules) VALUES
+			(1,'策略A','[{"id":10,"name":"内嵌脏","enabled":true,"conditions":[{"target":"uri","operator":"contains","pattern":"C:\\"}]},{"id":11,"name":"内嵌干净","enabled":true,"conditions":[{"target":"uri","operator":"contains","pattern":"/ok"}]}]');`); err != nil {
+		t.Fatalf("seed legacy dirty rules: %v", err)
+	}
+
+	// When the migration runs twice (idempotency)
+	if err := sanitizeLegacyCustomRulePatterns(); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	if err := sanitizeLegacyCustomRulePatterns(); err != nil {
+		t.Fatalf("repeat sanitize: %v", err)
+	}
+
+	// Then standalone dirty/empty rules are disabled and the clean rule is untouched
+	assertRuleEnabled := func(id, want int) {
+		t.Helper()
+		var enabled int
+		if err := database.QueryRow("SELECT enabled FROM security_custom_rules WHERE id=?", id).Scan(&enabled); err != nil {
+			t.Fatalf("read custom rule %d: %v", id, err)
+		}
+		if enabled != want {
+			t.Fatalf("custom rule %d enabled=%d, want %d", id, enabled, want)
+		}
+	}
+	assertRuleEnabled(1, 0)
+	assertRuleEnabled(2, 1)
+	assertRuleEnabled(3, 0)
+
+	// And the policy's embedded dirty entry is disabled while the clean entry survives
+	var raw string
+	if err := database.QueryRow("SELECT custom_rules FROM security_policies WHERE id=1").Scan(&raw); err != nil {
+		t.Fatalf("read policy custom_rules: %v", err)
+	}
+	var embedded []struct {
+		ID      int    `json:"id"`
+		Name    string `json:"name"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := json.Unmarshal([]byte(raw), &embedded); err != nil {
+		t.Fatalf("rewritten policy JSON unparseable: %v (%s)", err, raw)
+	}
+	if len(embedded) != 2 {
+		t.Fatalf("embedded entries=%d, want 2 (%s)", len(embedded), raw)
+	}
+	if embedded[0].Name != "内嵌脏" || embedded[0].Enabled {
+		t.Fatalf("embedded dirty entry = %+v, want disabled", embedded[0])
+	}
+	if embedded[1].Name != "内嵌干净" || !embedded[1].Enabled {
+		t.Fatalf("embedded clean entry = %+v, want enabled", embedded[1])
 	}
 }
 
