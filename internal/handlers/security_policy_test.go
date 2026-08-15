@@ -256,7 +256,7 @@ func TestGetSecurityPolicy_returnsRawJSONFieldsAsStrings(t *testing.T) {
 		"name":               "详情策略",
 		"crs_rule_groups":    `["REQUEST-942"]`,
 		"crs_excluded_rules": `["942100","942110"]`,
-		"custom_rules":       `[{"name":"r1"}]`,
+		"custom_rules":       `[{"id":1,"name":"r1","enabled":true,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`,
 		"ip_whitelist":       `["192.0.2.0/24"]`,
 		"ip_blacklist":       `["198.51.100.7"]`,
 	})
@@ -283,7 +283,7 @@ func TestGetSecurityPolicy_returnsRawJSONFieldsAsStrings(t *testing.T) {
 		"ip_blacklist":       `["198.51.100.7"]`,
 		"crs_rule_groups":    `["REQUEST-942"]`,
 		"crs_excluded_rules": `["942100","942110"]`,
-		"custom_rules":       `[{"name":"r1"}]`,
+		"custom_rules":       `[{"id":1,"name":"r1","enabled":true,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`,
 	}
 	for field, expected := range want {
 		raw, ok := resp.Data.Policy[field]
@@ -421,7 +421,7 @@ func TestSecurityPolicyList_summaryCarriesExtendedFields(t *testing.T) {
 		"rate_limit_rps":     50,
 		"rate_limit_burst":   10,
 		"crs_excluded_rules": `["942100","942110"]`,
-		"custom_rules":       `[{"name":"r1"}]`,
+		"custom_rules":       `[{"id":1,"name":"r1","enabled":true,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`,
 		"enabled":            true,
 	})
 

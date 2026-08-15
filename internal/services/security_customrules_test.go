@@ -65,3 +65,32 @@ func TestBuildCorazaDirectives_userAgentTargetUsesColonNotation(t *testing.T) {
 		t.Fatalf("dot notation rejected by coraza:\n%s", directives)
 	}
 }
+
+func TestEmitCustomRules_skipsDirtyRuleAmongCleanOnes(t *testing.T) {
+	// Given clean rules interleaved with a trailing-backslash rule and an empty-conditions rule
+	var sb strings.Builder
+	rules := []models.CustomRule{
+		{ID: 1, Name: "干净规则", Enabled: true, Action: "block", Score: 5, Conditions: []models.CustomRuleCondition{{Target: "uri", Operator: "contains", Pattern: "/admin"}}},
+		{ID: 2, Name: "脏规则", Enabled: true, Action: "block", Score: 5, Conditions: []models.CustomRuleCondition{{Target: "uri", Operator: "contains", Pattern: `C:\`}}},
+		{ID: 3, Name: "空条件规则", Enabled: true, Action: "block", Score: 5},
+		{ID: 4, Name: "干净规则二", Enabled: true, Action: "pass", Score: 3, Conditions: []models.CustomRuleCondition{{Target: "args", Operator: "equals", Pattern: "debug=1"}}},
+	}
+
+	// When emitted
+	emitCustomRules(&sb, rules)
+	got := sb.String()
+
+	// Then clean rules are emitted while dirty/empty rules are skipped without failing the whole config
+	if !strings.Contains(got, "自定义规则 干净规则 命中") {
+		t.Fatalf("first clean rule must be emitted:\n%s", got)
+	}
+	if !strings.Contains(got, "自定义规则 干净规则二 命中") {
+		t.Fatalf("second clean rule must be emitted:\n%s", got)
+	}
+	if strings.Contains(got, "脏规则") {
+		t.Fatalf("trailing-backslash rule must be skipped:\n%s", got)
+	}
+	if strings.Contains(got, "空条件规则") {
+		t.Fatalf("empty-conditions rule must be skipped:\n%s", got)
+	}
+}
