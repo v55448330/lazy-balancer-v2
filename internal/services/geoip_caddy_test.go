@@ -1,6 +1,7 @@
 package services
 
 import (
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -297,9 +298,40 @@ func TestGenerateHTTPRouteObjects_geoipBlock_alwaysAllowsPrivateIPs(t *testing.T
 			assertEqual(t, ranges, []string{
 				"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
 				"127.0.0.0/8", "169.254.0.0/16",
-				"::ffff:0:0/96",
+				"::ffff:10.0.0.0/104", "::ffff:172.16.0.0/108", "::ffff:192.168.0.0/112",
+				"::ffff:127.0.0.0/104", "::ffff:169.254.0.0/112",
 				"::1/128", "fc00::/7", "fe80::/10",
 			})
 		})
+	}
+}
+
+// TestGeoipPrivateRanges_excludesPublicMappedIPv4 verifies the fail-open fix:
+// a public IPv4-mapped address (::ffff:8.8.8.8) must NOT match any private
+// range, while mapped private (::ffff:192.168.1.1) and plain private
+// (192.168.1.1) addresses must. The prior ::ffff:0:0/96 entry matched the whole
+// mapped space and would have let public mapped clients bypass GeoIP blocking.
+func TestGeoipPrivateRanges_excludesPublicMappedIPv4(t *testing.T) {
+	prefixes := make([]netip.Prefix, 0, len(geoipPrivateRanges))
+	for _, cidr := range geoipPrivateRanges {
+		prefixes = append(prefixes, netip.MustParsePrefix(cidr))
+	}
+	containsAny := func(addr netip.Addr) bool {
+		for _, p := range prefixes {
+			if p.Contains(addr) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if containsAny(netip.MustParseAddr("::ffff:8.8.8.8")) {
+		t.Fatal("public mapped address ::ffff:8.8.8.8 must not match any private range")
+	}
+	if !containsAny(netip.MustParseAddr("::ffff:192.168.1.1")) {
+		t.Fatal("mapped private address ::ffff:192.168.1.1 should match a private range")
+	}
+	if !containsAny(netip.MustParseAddr("192.168.1.1")) {
+		t.Fatal("plain private address 192.168.1.1 should match a private range")
 	}
 }

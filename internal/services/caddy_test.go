@@ -1728,6 +1728,62 @@ func TestGenerateCaddyConfig_omitsErrorRoutes_whenRuleHasNoPolicyBinding(t *test
 	}
 }
 
+// TestGenerateCaddyConfig_blockPageErrorRoute_usesHighestPolicyID verifies the
+// block-page error route resolves the highest-policy_id binding (mirroring
+// GetSecurityPolicyForRule), so a newer bound policy wins over an older one.
+func TestGenerateCaddyConfig_blockPageErrorRoute_usesHighestPolicyID(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_multi", "multi.example.test", 8080)
+	seedSecurityBlockPage(t, database, 7, "<html>older-block</html>")
+	seedSecurityBlockPage(t, database, 8, "<html>newer-block</html>")
+	// 同一规则绑定两条策略（policy_id 递增），须取 policy_id 最大者。
+	seedBoundSecurityPolicyWithBlockPage(t, database, "lb_multi", 7, 451)
+	seedBoundSecurityPolicyWithBlockPage(t, database, "lb_multi", 8, 503)
+
+	// When
+	generated := generateCaddyConfigFromStore(database)
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generation failed: %s", message)
+	}
+	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
+	if len(errorRoutes) != 1 {
+		t.Fatalf("want exactly one error route, got %#v", errorRoutes)
+	}
+	handler := firstHandler(t, errorRoutes[0])
+	assertEqual(t, handler["body"], "<html>newer-block</html>")
+	assertEqual(t, handler["status_code"], 503)
+}
+
+// TestGenerateCaddyConfig_rateLimitErrorRoute_usesHighestPolicyID verifies the
+// rate-limit error route also resolves the highest-policy_id binding.
+func TestGenerateCaddyConfig_rateLimitErrorRoute_usesHighestPolicyID(t *testing.T) {
+	// Given
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_rl_multi", "rl-multi.example.test", 8080)
+	seedSecurityBlockPage(t, database, 7, "<html>older-rl-block</html>")
+	seedSecurityBlockPage(t, database, 8, "<html>newer-rl-block</html>")
+	// 同一规则绑定两条限流策略（policy_id 递增），须取 policy_id 最大者。
+	seedBoundSecurityPolicyWithRateLimitAndBlockPage(t, database, "lb_rl_multi", 7, 451, 100, 50)
+	seedBoundSecurityPolicyWithRateLimitAndBlockPage(t, database, "lb_rl_multi", 8, 503, 100, 50)
+
+	// When
+	generated := generateCaddyConfigFromStore(database)
+
+	// Then
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generation failed: %s", message)
+	}
+	route := findRateLimitErrorRoute(t, generated)
+	handler := firstHandler(t, route)
+	assertEqual(t, handler["body"], "<html>newer-rl-block</html>")
+	assertEqual(t, handler["status_code"], 503)
+}
+
 func TestGenerateCaddyConfig_rendersRateLimitErrorRoute_defaultsTo429(t *testing.T) {
 	// Given
 	useTemporaryCertDir(t)

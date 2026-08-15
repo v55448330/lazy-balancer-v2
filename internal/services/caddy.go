@@ -2111,7 +2111,8 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string) map[stri
 		FROM security_policy_bindings b
 		JOIN security_policies p ON p.id = b.policy_id AND p.enabled = 1
 		JOIN security_block_pages bp ON bp.id = p.block_page_id
-		WHERE b.rule_caddy_id = ? AND p.block_page_id > 0`, ruleCaddyID).Scan(&content, &statusCode)
+		WHERE b.rule_caddy_id = ? AND p.block_page_id > 0
+		ORDER BY b.policy_id DESC LIMIT 1`, ruleCaddyID).Scan(&content, &statusCode)
 	if err != nil || content == "" {
 		return nil
 	}
@@ -2154,7 +2155,8 @@ func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string) map[stri
 		FROM security_policy_bindings b
 		JOIN security_policies p ON p.id = b.policy_id AND p.enabled = 1
 		JOIN security_block_pages bp ON bp.id = p.block_page_id
-		WHERE b.rule_caddy_id = ? AND p.block_page_id > 0 AND p.rate_limit_enabled = 1`, ruleCaddyID).Scan(&content, &statusCode)
+		WHERE b.rule_caddy_id = ? AND p.block_page_id > 0 AND p.rate_limit_enabled = 1
+		ORDER BY b.policy_id DESC LIMIT 1`, ruleCaddyID).Scan(&content, &statusCode)
 	if err != nil || content == "" {
 		return nil
 	}
@@ -2240,16 +2242,22 @@ func buildGeoipPassRoute(domainHosts []string, policy *models.SecurityPolicy) ma
 
 // geoipPrivateRanges 内网/回环/链路本地 CIDR 集合。这些地址无法经 ip2region 解析到国家，
 // fail-closed 会将其误判为“海外”而拦截，故在 GeoIP 拦截链中一律放行（无论 deny/allow 模式）。
+// ::ffff: 前缀条目仅为 IPv4 映射的私网/回环/链路本地地址（双栈 RemoteAddr 的 16 字节形态），
+// 而非整个 ::ffff:0:0/96 映射空间——否则公网映射地址（如 ::ffff:8.8.8.8）也会被误放行。
 var geoipPrivateRanges = []string{
-	"10.0.0.0/8",     // RFC1918 私网 A 类
-	"172.16.0.0/12",  // RFC1918 私网 B 类
-	"192.168.0.0/16", // RFC1918 私网 C 类
-	"127.0.0.0/8",    // IPv4 回环
-	"169.254.0.0/16", // IPv4 链路本地
-	"::ffff:0:0/96",  // IPv4 映射 IPv6（双栈）
-	"::1/128",        // IPv6 回环
-	"fc00::/7",       // IPv6 唯一本地地址 (ULA)
-	"fe80::/10",      // IPv6 链路本地
+	"10.0.0.0/8",             // RFC1918 私网 A 类
+	"172.16.0.0/12",          // RFC1918 私网 B 类
+	"192.168.0.0/16",         // RFC1918 私网 C 类
+	"127.0.0.0/8",            // IPv4 回环
+	"169.254.0.0/16",         // IPv4 链路本地
+	"::ffff:10.0.0.0/104",    // IPv4 映射私网 A 类（10.0.0.0/8）
+	"::ffff:172.16.0.0/108",  // IPv4 映射私网 B 类（172.16.0.0/12）
+	"::ffff:192.168.0.0/112", // IPv4 映射私网 C 类（192.168.0.0/16）
+	"::ffff:127.0.0.0/104",   // IPv4 映射回环（127.0.0.0/8）
+	"::ffff:169.254.0.0/112", // IPv4 映射链路本地（169.254.0.0/16）
+	"::1/128",                // IPv6 回环
+	"fc00::/7",               // IPv6 唯一本地地址 (ULA)
+	"fe80::/10",              // IPv6 链路本地
 }
 
 // buildGeoipBlockRoute returns a terminal error route for matched (deny) or non-matched (allow)
