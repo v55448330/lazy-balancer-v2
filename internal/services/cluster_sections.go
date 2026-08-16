@@ -155,20 +155,22 @@ func formatSectionAction(action, key string) string {
 type sectionSkips struct {
 	disabled  map[string]bool
 	unchanged map[string]bool
+	// drifted 记录「记录哈希与主节点一致、但本地数据重建哈希与记录不符」的
+	// 节：本地数据在同步之外丢失/被改动，哈希跳过必须让位于强制重放。
+	drifted []string
 }
 
 func (sk *sectionSkips) skip(key string) bool {
 	return sk != nil && (sk.disabled[key] || sk.unchanged[key])
 }
 
-func computeSectionSkips(dbh *sql.DB, snapshot models.ClusterSnapshot, switches SyncSwitches) *sectionSkips {
-	sk := &sectionSkips{disabled: map[string]bool{}, unchanged: map[string]bool{}}
+func readAppliedSectionHashes(dbh *sql.DB) map[string]string {
 	if dbh == nil {
-		return sk
+		return nil
 	}
 	rows, err := dbh.Query(`SELECT section, hash FROM cluster_applied_sections`)
 	if err != nil {
-		return sk
+		return nil
 	}
 	defer rows.Close()
 	applied := map[string]string{}
@@ -178,16 +180,43 @@ func computeSectionSkips(dbh *sql.DB, snapshot models.ClusterSnapshot, switches 
 			applied[sec] = hash
 		}
 	}
+	return applied
+}
+
+// driftGuardSections 限定漂移检测范围：这些节是纯全量替换表，本地重建哈希
+// 在稳态下与主节点哈希一致，比对才有意义（global_config 含节点本地记账
+// 字段、waf_files 含文件态，本地重建哈希天然可能与主节点不同，不纳入）。
+var driftGuardSections = []string{"rules", "users", "security"}
+
+func computeSectionSkips(dbh *sql.DB, snapshot models.ClusterSnapshot, switches SyncSwitches, localHashes map[string]string) *sectionSkips {
+	sk := &sectionSkips{disabled: map[string]bool{}, unchanged: map[string]bool{}}
+	if dbh == nil {
+		return sk
+	}
+	applied := readAppliedSectionHashes(dbh)
 	for _, sec := range syncSections {
 		if !switches.sectionEnabled(sec.Key) {
 			sk.disabled[sec.Key] = true
 			continue
 		}
 		if h, ok := snapshot.SectionHashes[sec.Key]; ok && applied[sec.Key] == h {
+			if localHash, local := localHashes[sec.Key]; local && localHash != "" && localHash != applied[sec.Key] && driftGuardContains(sec.Key) {
+				sk.drifted = append(sk.drifted, sec.Key)
+				continue
+			}
 			sk.unchanged[sec.Key] = true
 		}
 	}
 	return sk
+}
+
+func driftGuardContains(key string) bool {
+	for _, k := range driftGuardSections {
+		if k == key {
+			return true
+		}
+	}
+	return false
 }
 
 func logSectionSyncOutcome(sk *sectionSkips, version int) {

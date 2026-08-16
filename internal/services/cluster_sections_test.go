@@ -32,7 +32,7 @@ func TestComputeSectionSkips_switchOffAndHashMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sk := computeSectionSkips(database, snapshot, switches)
+	sk := computeSectionSkips(database, snapshot, switches, nil)
 
 	if !sk.disabled["rules"] {
 		t.Fatal("rules switch off must mark section disabled")
@@ -59,7 +59,7 @@ func TestComputeSectionSkips_allOnFirstSyncAppliesEverything(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sk := computeSectionSkips(database, snapshot, switches)
+	sk := computeSectionSkips(database, snapshot, switches, nil)
 	for _, key := range []string{"global_config", "users", "rules", "waf_files", "security"} {
 		if sk.skip(key) {
 			t.Fatalf("first sync with all switches on must apply %s", key)

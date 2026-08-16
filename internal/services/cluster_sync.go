@@ -514,19 +514,35 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	if masterURL == "" || token == "" {
 		return SyncResult{}, errors.New("从节点尚未完成集群审批")
 	}
-	endpoint := strings.TrimRight(masterURL, "/") + "/api/v1/cluster/sync/snapshot?since_version=" + strconv.Itoa(appliedVersion) + "&fingerprint=" + url.QueryEscape(fingerprint)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("创建快照请求: %w", err))
-	}
-	req.Header.Set("X-Cluster-Token", token)
-	resp, err := s.do(req)
-	if err != nil {
-		code := models.SyncErrorCodeTransportError
-		if errors.Is(err, errClusterPinMismatch) {
-			code = models.SyncErrorCodePinMismatch
+	// 首轮按增量版本拉取；收到 304 且本地数据与同步记录不一致时，以
+	// since_version=0 重拉一次全量快照，让应用路径强制重放漂移的节。
+	sinceVersion, sinceFingerprint := appliedVersion, fingerprint
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		endpoint := strings.TrimRight(masterURL, "/") + "/api/v1/cluster/sync/snapshot?since_version=" + strconv.Itoa(sinceVersion) + "&fingerprint=" + url.QueryEscape(sinceFingerprint)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("创建快照请求: %w", err))
 		}
-		return SyncResult{}, newSyncFailure(code, fmt.Errorf("拉取主节点快照: %w", err))
+		req.Header.Set("X-Cluster-Token", token)
+		resp, err = s.do(req)
+		if err != nil {
+			code := models.SyncErrorCodeTransportError
+			if errors.Is(err, errClusterPinMismatch) {
+				code = models.SyncErrorCodePinMismatch
+			}
+			return SyncResult{}, newSyncFailure(code, fmt.Errorf("拉取主节点快照: %w", err))
+		}
+		if resp.StatusCode == http.StatusNotModified && attempt == 0 {
+			if drifted := s.driftedSections(ctx); drifted != "" {
+				Logf("warn", "本地数据与同步记录不一致（%s），以全量快照重新同步", drifted)
+				RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail(fmt.Sprintf("本地数据与记录不一致：%s", drifted), "配置无变化但本地数据缺失，已改为全量拉取"), "")
+				resp.Body.Close()
+				sinceVersion, sinceFingerprint = 0, ""
+				continue
+			}
+		}
+		break
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotModified {
@@ -573,6 +589,27 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	}
 	s.pullApplyMu.Unlock()
 	return SyncResult{AppliedVersion: envelope.Data.Version, Changed: true}, nil
+}
+
+// driftedSections 用本地数据重建节哈希，与已应用记录比对；不一致说明
+// 本地数据在同步之外丢失或被改动，返回漂移节名（空串表示无漂移）。
+// 仅覆盖 rules/users/security 三个纯全量替换节（见 driftGuardSections）。
+func (s *SyncService) driftedSections(ctx context.Context) string {
+	if s.cluster == nil || s.db == nil {
+		return ""
+	}
+	local, _, err := s.cluster.Snapshot(ctx, 0, "", "")
+	if err != nil {
+		return ""
+	}
+	applied := readAppliedSectionHashes(s.db)
+	var drifted []string
+	for _, key := range driftGuardSections {
+		if localHash := local.SectionHashes[key]; localHash != "" && applied[key] != "" && localHash != applied[key] {
+			drifted = append(drifted, key)
+		}
+	}
+	return strings.Join(drifted, "、")
 }
 
 func (s *SyncService) beginPull() error {

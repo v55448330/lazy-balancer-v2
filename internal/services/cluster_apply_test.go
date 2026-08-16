@@ -293,3 +293,43 @@ func TestClearSyncTables_propagatesDeleteError(t *testing.T) {
 		t.Fatalf("error=%v, want table context", err)
 	}
 }
+
+func TestSyncService_applySnapshot_heals_local_rules_drift(t *testing.T) {
+	// Given：从节点记录的 rules 哈希与主节点快照一致（将被哈希跳过），但本地
+	// lb_rules 为空 —— 数据在同步之外丢失。哈希跳过必须让位于强制重放。
+	_, database := newClusterTestService(t)
+	originalCertDir := certDir
+	certDir = t.TempDir()
+	t.Cleanup(func() { certDir = originalCertDir })
+	snapshot := models.ClusterSnapshot{
+		Version: 7,
+		Rules: []models.LbRule{{
+			CaddyID: "lb_d1", Name: "d1", Protocol: "http", Domain: "drift.example.com",
+			ListenPort: 80, Enabled: true,
+		}},
+	}
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	if _, err := database.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version) VALUES ('rules', ?, ?)`,
+		snapshot.SectionHashes["rules"], snapshot.Version); err != nil {
+		t.Fatal(err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	// When
+	if err := syncService.applySnapshot(context.Background(), snapshot); err != nil {
+		t.Fatalf("apply snapshot: %v", err)
+	}
+
+	// Then：规则被强制重放，本地数据自愈
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_d1'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rules drift 未自愈: lb_rules 行数=%d, want 1", count)
+	}
+}

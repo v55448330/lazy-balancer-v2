@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,11 +63,13 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			Security:     snapshot.MasterSyncSwitches.Security,
 		}
 	}
-	skip := computeSectionSkips(s.db, snapshot, switches)
 	previous, _, err := s.cluster.Snapshot(ctx, 0, "", "")
 	if err != nil {
 		return fmt.Errorf("备份本地快照: %w", err)
 	}
+	// 本地重建哈希用于漂移检测：记录哈希与主节点一致但本地数据不符时，
+	// 哈希跳过让位于强制重放，避免数据丢失被永久掩盖。
+	skip := computeSectionSkips(s.db, snapshot, switches, previous.SectionHashes)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("开始快照事务: %w", err)
@@ -110,6 +113,10 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		)
 	}
 	logSectionSyncOutcome(skip, snapshot.Version)
+	if len(skip.drifted) > 0 {
+		Logf("warn", "检测到本地数据与同步记录不一致（%s），已强制重新应用", strings.Join(skip.drifted, "、"))
+		RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail(fmt.Sprintf("本地数据与记录不一致：%s", strings.Join(skip.drifted, "、")), fmt.Sprintf("已强制重新应用版本：%d", snapshot.Version)), "")
+	}
 	recordAppliedSectionHashes(s.db, snapshot, skip, switches)
 	logSyncSwitchGuards(snapshot, skip, switches)
 
@@ -565,8 +572,8 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 	query := `UPDATE global_config SET log_level=?,cert_job_log_size_mb=?,audit_log_size_mb=?,runtime_log_size_mb=?,audit_retention_months=?,jwt_expire_minutes=?,timezone=?,acme_email=?,cert_expiry_days=?,cert_renewal_days=?,cert_renewal_attempts=?,default_ca_provider_id=?,dns_provider=?,dns_credentials=?,sync_interval=?,admin_tls_enabled=?,admin_tls_mode=?,admin_tls_cert=?,admin_tls_key=?`
 	args := []any{settings.LogLevel, settings.CertJobLogSizeMB, settings.AuditLogSizeMB, settings.RuntimeLogSizeMB, settings.AuditRetentionMonths, settings.JWTExpireMinutes, settings.Timezone, settings.ACMEEmail, settings.CertExpiryDays, settings.CertRenewalDays, settings.CertRenewalAttempts, settings.DefaultCAProviderID, settings.DNSProvider, settings.DNSCredentials, settings.SyncInterval, settings.AdminTLSEnabled, settings.AdminTLSMode, settings.AdminTLSCert, settings.AdminTLSKey}
 	if snapshot.CaddyConfig != nil {
-		query += ",caddy_config=?,access_log_json=?,access_log_format=?,caddy_log_path=?,caddy_log_level=?,caddy_log_size_mb=?,request_body_max_size_mb=?,http_read_timeout=?,http_write_timeout=?,http_idle_timeout=?,upstream_keepalive_timeout=?,proxy_dial_timeout=?,proxy_response_header_timeout=?,proxy_read_timeout=?,proxy_write_timeout=?,proxy_stream_timeout=?,proxy_flush_interval=?,proxy_stream_close_delay=?,server_tokens_hidden=?"
-		args = append(args, *snapshot.CaddyConfig, settings.AccessLogJSON, settings.AccessLogFormat, settings.CaddyLogPath, settings.CaddyLogLevel, settings.CaddyLogSizeMB,
+		query += ",caddy_config=?,access_log_json=?,access_log_format=?,caddy_log_level=?,caddy_log_size_mb=?,request_body_max_size_mb=?,http_read_timeout=?,http_write_timeout=?,http_idle_timeout=?,upstream_keepalive_timeout=?,proxy_dial_timeout=?,proxy_response_header_timeout=?,proxy_read_timeout=?,proxy_write_timeout=?,proxy_stream_timeout=?,proxy_flush_interval=?,proxy_stream_close_delay=?,server_tokens_hidden=?"
+		args = append(args, *snapshot.CaddyConfig, settings.AccessLogJSON, settings.AccessLogFormat, settings.CaddyLogLevel, settings.CaddyLogSizeMB,
 			settings.RequestBodyMaxSizeMB, settings.HTTPReadTimeout, settings.HTTPWriteTimeout, settings.HTTPIdleTimeout,
 			settings.UpstreamKeepaliveTimeout, settings.ProxyDialTimeout, settings.ProxyResponseHeaderTimeout, settings.ProxyReadTimeout, settings.ProxyWriteTimeout, settings.ProxyStreamTimeout, settings.ProxyFlushInterval, settings.ProxyStreamCloseDelay,
 			settings.ServerTokensHidden)

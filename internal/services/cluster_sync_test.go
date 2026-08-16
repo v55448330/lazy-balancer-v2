@@ -954,3 +954,65 @@ func signTestSnapshot(snapshot models.ClusterSnapshot, token string) models.Clus
 	snapshot.Signature = hex.EncodeToString(mac.Sum(nil))
 	return snapshot
 }
+
+func TestSyncService_Pull_refetchesFullSnapshotOnLocalDrift(t *testing.T) {
+	// Given：主节点对增量请求回 304；从节点记录的 rules 哈希与主节点一致
+	// 但本地 lb_rules 为空（数据丢失）——304 后必须以 since_version=0 重拉
+	// 全量快照并强制重放，而不是被「配置无变化」永久掩盖。
+	_, database := newClusterTestService(t)
+	snapshot := signedTestSnapshot(9, "token")
+	snapshot.Rules = []models.LbRule{{
+		CaddyID: "lb_drift", Name: "drift", Protocol: "http", Domain: "drift.example.com",
+		ListenPort: 80, Enabled: true,
+	}}
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	snapshot = signTestSnapshot(snapshot, "token")
+
+	requestedVersions := make(chan string, 2)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestedVersions <- request.URL.Query().Get("since_version")
+		if request.URL.Query().Get("since_version") == "0" {
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(models.APIResponse{Code: 0, Data: snapshot})
+			return
+		}
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9 WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version) VALUES ('rules', ?, 9)`,
+		snapshot.SectionHashes["rules"]); err != nil {
+		t.Fatal(err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	// When
+	result, pullErr := service.Pull(context.Background())
+
+	// Then
+	if pullErr != nil {
+		t.Fatalf("pull: %v", pullErr)
+	}
+	if !result.Changed || result.AppliedVersion != 9 {
+		t.Fatalf("result=%#v, want changed full-snapshot apply", result)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "9" {
+		t.Fatalf("first request since_version=%q, want 9", v)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "0" {
+		t.Fatalf("second request since_version=%q, want 0 (drift re-pull)", v)
+	}
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_drift'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("drift 未自愈: lb_rules 行数=%d, want 1", count)
+	}
+}
