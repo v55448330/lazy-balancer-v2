@@ -76,8 +76,8 @@ func TestIssueCertificateSchemaAllowsEmptyOrCaddyIDWithOptionalDomain(t *testing
 	}
 }
 
-func TestUpdateConfigSchemaIncludesCaddyLogPath(t *testing.T) {
-	// Given
+func TestUpdateConfigSchemaExcludesCaddyLogPath(t *testing.T) {
+	// Given：caddy_log_path 死配置已全链路摘除（db 列已 drop），schema 不得再收该字段
 	var schema struct {
 		Properties map[string]any `json:"properties"`
 	}
@@ -89,8 +89,14 @@ func TestUpdateConfigSchemaIncludesCaddyLogPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse update config schema: %v", err)
 	}
-	if _, exists := schema.Properties["caddy_log_path"]; !exists {
-		t.Fatal("update_config schema missing caddy_log_path")
+	if _, exists := schema.Properties["caddy_log_path"]; exists {
+		t.Fatal("update_config schema must not contain removed caddy_log_path")
+	}
+	if _, exists := schema.Properties["caddy_log_level"]; !exists {
+		t.Fatal("update_config schema missing caddy_log_level")
+	}
+	if _, exists := schema.Properties["caddy_log_size_mb"]; !exists {
+		t.Fatal("update_config schema missing caddy_log_size_mb")
 	}
 }
 

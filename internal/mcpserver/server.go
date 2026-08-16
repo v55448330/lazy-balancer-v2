@@ -59,7 +59,7 @@ var tools = []toolSpec{
 	{"get_security_overview", "获取安全总览（今日拦截/检测、攻击类型 TOP、源 IP TOP）", http.MethodGet, "/security/overview", nil, nil, emptySchema},
 	{"list_security_policies", "列出全部安全策略", http.MethodGet, "/security/policies", nil, nil, emptySchema},
 	{"get_security_policy", "获取指定安全策略详情", http.MethodGet, "/security/policies/{id}", []string{"id"}, nil, idSchema("id", "策略 ID", "integer")},
-	{"list_security_events", "分页列出安全事件（WAF 拦截/IP 拒绝/限流）", http.MethodGet, "/security/events", nil, []string{"page", "page_size", "rule_caddy_id"}, querySchema("page", "页码", "integer")},
+	{"list_security_events", "分页列出安全事件（WAF 拦截/IP ACL 拒绝）", http.MethodGet, "/security/events", nil, []string{"page", "page_size", "rule_caddy_id"}, querySchema("page", "页码", "integer")},
 	{"list_security_bindings", "列出安全策略与规则的绑定关系", http.MethodGet, "/security/bindings", nil, nil, emptySchema},
 	{"get_rule_security_policy", "获取指定规则绑定的安全策略", http.MethodGet, "/security/rules/{caddy_id}/policy", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"list_custom_rules", "列出全部自定义安全规则", http.MethodGet, "/security/custom-rules", nil, nil, emptySchema},

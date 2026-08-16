@@ -653,3 +653,114 @@ func TestCreateSecurityPolicy_rejectsControlCharPattern(t *testing.T) {
 		t.Fatalf("error body should flag the control char: %s", recorder.Body.String())
 	}
 }
+
+func TestListSecurityPolicies_ipACLDisabledHidesControlCapability(t *testing.T) {
+	// Given a policy whose ACL list still holds entries but ip_acl_enabled is off
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, ip_acl_enabled, ip_acl_mode, ip_acl_list, enabled) VALUES ('关闭ACL', 0, 'deny', '["203.0.113.0/24"]', 1)`); err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+
+	// When the list is requested
+	recorder := getRequest(t, router, "/security/policies")
+
+	// Then the summary reports the ACL as disabled and no IP-control capability
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data []struct {
+			HasIPControl bool `json:"has_ip_control"`
+			IPACLEnabled bool `json:"ip_acl_enabled"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse list response: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("list len = %d, want 1: %s", len(resp.Data), recorder.Body.String())
+	}
+	if resp.Data[0].HasIPControl {
+		t.Fatalf("has_ip_control = true, want false when ip_acl_enabled off: %s", recorder.Body.String())
+	}
+	if resp.Data[0].IPACLEnabled {
+		t.Fatalf("ip_acl_enabled = true, want false: %s", recorder.Body.String())
+	}
+}
+
+func TestListSecurityPolicies_bypassModeDisabledHidesControlCapability(t *testing.T) {
+	// Given a legacy bypass-mode policy whose ACL list is populated but disabled
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, ip_acl_enabled, ip_acl_mode, ip_acl_list, enabled) VALUES ('关闭bypass', 0, 'bypass', '["203.0.113.0/24"]', 1)`); err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+
+	// When the list is requested
+	recorder := getRequest(t, router, "/security/policies")
+
+	// Then bypass mode must not claim IP control while disabled (mirrors emission)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data []struct {
+			HasIPControl bool `json:"has_ip_control"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse list response: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("list len = %d, want 1: %s", len(resp.Data), recorder.Body.String())
+	}
+	if resp.Data[0].HasIPControl {
+		t.Fatalf("has_ip_control = true, want false for disabled bypass mode: %s", recorder.Body.String())
+	}
+}
+
+func TestListSecurityPolicies_customRulesCountExcludesDisabled(t *testing.T) {
+	// Given two referenced custom rules, one enabled and one disabled
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	res1, err := db.DB.Exec(`INSERT INTO security_custom_rules (name, conditions, action, score, enabled) VALUES ('启用规则', '[]', 'block', 5, 1)`)
+	if err != nil {
+		t.Fatalf("seed enabled rule: %v", err)
+	}
+	id1, _ := res1.LastInsertId()
+	res2, err := db.DB.Exec(`INSERT INTO security_custom_rules (name, conditions, action, score, enabled) VALUES ('禁用规则', '[]', 'block', 5, 0)`)
+	if err != nil {
+		t.Fatalf("seed disabled rule: %v", err)
+	}
+	id2, _ := res2.LastInsertId()
+	customJSON := fmt.Sprintf("[%d,%d]", id1, id2)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, custom_rules, enabled) VALUES ('规则计数', 'blocking', ?, 1)`, customJSON); err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+
+	// When the list is requested
+	recorder := getRequest(t, router, "/security/policies")
+
+	// Then custom_rules_count counts only the enabled rule (emission skips disabled)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data []struct {
+			CustomRulesCount int `json:"custom_rules_count"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse list response: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("list len = %d, want 1: %s", len(resp.Data), recorder.Body.String())
+	}
+	if got := resp.Data[0].CustomRulesCount; got != 1 {
+		t.Fatalf("custom_rules_count = %d, want 1 (disabled rule excluded): %s", got, recorder.Body.String())
+	}
+}

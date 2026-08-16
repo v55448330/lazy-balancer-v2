@@ -43,6 +43,18 @@ func dirBytes(path string) (int64, int64) {
 	return active, rotated
 }
 
+// sanitizeRuleID 与写入侧 sanitizePathComponent / sanitizeRuleLogName 同口径，
+// 只保留 caddy_id 字母表 [A-Za-z0-9_-]，其余字符剔除。
+func sanitizeRuleID(value string) string {
+	out := make([]rune, 0, len(value))
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			out = append(out, r)
+		}
+	}
+	return string(out)
+}
+
 func globalConfigInt(column string, fallback int64) int64 {
 	var v int64
 	if err := db.DB.QueryRow("SELECT COALESCE("+column+",?) FROM global_config WHERE id=1", fallback).Scan(&v); err != nil {
@@ -139,6 +151,15 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 	}
 
 	ruleID := strings.TrimSpace(c.Query("caddy_id"))
+	if ruleID != "" {
+		// caddy_id 仅允许 caddy_id 字母表（[A-Za-z0-9_-]）；读者侧与写入侧
+		// sanitizePathComponent/sanitizeRuleLogName 同口径校验，非法值（如路径穿越）
+		// 直接 400，绝不参与 filepath.Join 拼接。
+		if sanitized := sanitizeRuleID(ruleID); sanitized != ruleID {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的规则 ID"})
+			return
+		}
+	}
 	if info := byKey("certjob"); info != nil {
 		if ruleID != "" {
 			info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join(logsDir, "certjob-"+ruleID+".log"))

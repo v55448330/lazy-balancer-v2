@@ -90,7 +90,7 @@ var toolUsage = map[string]string{
 	"update_custom_rule":           "更新自定义规则的条件或动作",
 	"delete_custom_rule":           "删除自定义规则",
 	"create_block_page":            "创建自定义拦截页面 HTML",
-	"update_block_page":            "更新拦截页面内容或状态码",
+	"update_block_page":            "更新拦截页面内容",
 	"delete_block_page":            "删除拦截页面（默认页面不可删除）",
 	"toggle_crs_auto_update":       "开启/关闭 CRS 每日自动更新",
 	"trigger_crs_update":           "手动触发 CRS 规则库在线更新（检查→下载→安装→重载）",

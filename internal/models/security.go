@@ -41,6 +41,7 @@ type SecurityPolicySummary struct {
 	HasRateLimit     bool   `json:"has_rate_limit"`
 	AnomalyThreshold int    `json:"anomaly_threshold"`
 	IPACLMode        string `json:"ip_acl_mode"`
+	IPACLEnabled     bool   `json:"ip_acl_enabled"`
 	IPACLList        string `json:"ip_acl_list"`
 	IPWhitelist      string `json:"ip_whitelist"`
 	IPBlacklist      string `json:"ip_blacklist"`

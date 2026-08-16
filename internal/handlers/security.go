@@ -240,21 +240,20 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		json.Unmarshal([]byte(p.IPACLList), &ipACLEntries)
 		var crsExcluded []json.RawMessage
 		json.Unmarshal(p.CRSExcludedRules, &crsExcluded)
-		var customRules []json.RawMessage
-		json.Unmarshal(p.CustomRules, &customRules)
 		ruleCount := bindingCounts[p.ID]
 		policies = append(policies, models.SecurityPolicySummary{
 			ID: p.ID, Name: p.Name, Mode: p.Mode, Enabled: p.Enabled, RuleCount: ruleCount,
 			HasWAF: p.Mode != "off", HasIPControl: services.SecurityPolicyHasIPControl(&p), HasRateLimit: p.RateLimitEnabled,
 			AnomalyThreshold: p.AnomalyThreshold,
 			IPACLMode:        p.IPACLMode,
+			IPACLEnabled:     p.IPACLEnabled,
 			IPACLList:        p.IPACLList,
 			IPWhitelist:      rawJSONString(p.IPWhitelist),
 			IPBlacklist:      rawJSONString(p.IPBlacklist),
 			RateLimitRPS:     p.RateLimitRPS,
 			RateLimitBurst:   p.RateLimitBurst,
 			CRSExcludedCount: len(crsExcluded),
-			CustomRulesCount: len(customRules),
+			CustomRulesCount: services.CountEnabledCustomRules(p.CustomRules),
 			UpdatedBy:        p.UpdatedBy,
 			UpdatedAt:        p.UpdatedAt,
 			GeoIPCountries:   rawJSONString(p.GeoIPCountries),
@@ -719,9 +718,12 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='logged' AND event_time >= ?", todayStartUTC).Scan(&overview.TodayDetected)
 	db.DB.QueryRow("SELECT COUNT(*) FROM security_policies WHERE enabled=1 AND mode!='off'").Scan(&overview.ActivePolicies)
 
-	// 7-day trend: always the full today-6 … today slice (local dates), zero-filled
+	// 7-day trend: always the full today-6 … today slice (local dates), zero-filled.
+	// 时区偏移在 Go 侧拼好（负偏移如 America/New_York 为 "-240 minutes"）；SQLite 的
+	// printf('+%d', -240) 会产出非法修饰符 "+-240" 使 date() 返回 NULL，导致趋势全零。
+	tzModifier := fmt.Sprintf("%+d minutes", offsetMinutes)
 	trendByDate := map[string]models.SecurityTrendPoint{}
-	trendRows, _ := db.MetricsDB.Query(`SELECT date(event_time, printf('+%d minutes', ?)) as d, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY d`, offsetMinutes, todayStartUTC)
+	trendRows, _ := db.MetricsDB.Query(`SELECT date(event_time, ?) as d, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY d`, tzModifier, todayStartUTC)
 	for trendRows.Next() {
 		var t models.SecurityTrendPoint
 		trendRows.Scan(&t.Date, &t.Blocked, &t.Detected)

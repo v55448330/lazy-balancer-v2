@@ -282,8 +282,11 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 }
 
 // SecurityPolicyHasIPControl reports whether the policy applies any IP-level
-// control: an enabled ACL with entries, a non-empty trust list or legacy
-// blacklist, or legacy bypass mode carrying an ACL list.
+// control, mirroring the emission condition in BuildCorazaDirectives: a
+// non-empty trust list (ip_whitelist) or legacy blacklist (ip_blacklist)
+// always applies, while the ACL list (allow/deny/bypass) only applies when
+// ip_acl_enabled is on. This keeps the summary from claiming a capability the
+// emission would never produce.
 func SecurityPolicyHasIPControl(p *models.SecurityPolicy) bool {
 	if p == nil {
 		return false
@@ -300,10 +303,21 @@ func SecurityPolicyHasIPControl(p *models.SecurityPolicy) bool {
 	if len(ipBL) > 0 {
 		return true
 	}
-	if p.IPACLMode == "bypass" && len(ipACLList) > 0 {
-		return true
-	}
 	return p.IPACLEnabled && len(ipACLList) > 0
+}
+
+// CountEnabledCustomRules returns how many of the policy's referenced custom
+// rules are enabled, mirroring emission (emitCustomRules skips disabled rules).
+// The summary's custom_rules_count must not count disabled rules, otherwise the
+// policy list would advertise rules the WAF never emits.
+func CountEnabledCustomRules(raw json.RawMessage) int {
+	count := 0
+	for _, cr := range resolvePolicyCustomRules(raw) {
+		if cr.Enabled {
+			count++
+		}
+	}
+	return count
 }
 
 // buildWafHandler returns the coraza WAF handler, or nil when the rule is not HTTP or has no active bound policy.
