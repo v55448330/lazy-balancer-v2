@@ -12,7 +12,7 @@
     <el-form :model="settings" label-width="140px" class="caddy-form">
       <el-divider content-position="left">运行日志</el-divider>
       <el-form-item label="日志级别">
-        <el-select v-model="settings.caddy_log_level" :disabled="isReadOnly" class="compact-select">
+        <el-select v-model="settings.caddy_log_level" :disabled="isReadOnly" style="width: 140px">
           <el-option label="debug" value="debug" />
           <el-option label="info" value="info" />
           <el-option label="warn" value="warn" />

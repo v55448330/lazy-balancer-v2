@@ -3,16 +3,19 @@
     <el-tooltip :content="tooltipContent" placement="top">
       <div class="bar-body">
         <span class="name">{{ info.name }}</span>
-        <span class="sizes">{{ sizeText }}</span>
-        <el-progress
-          v-if="info.limit_bytes"
-          :percentage="percentage"
-          :stroke-width="6"
-          :show-text="false"
-          :color="progressColor"
-          class="bar"
-        />
-        <span class="note">{{ noteText }}</span>
+        <span v-if="isEmpty" class="note">暂无日志</span>
+        <template v-else>
+          <span class="sizes">{{ sizeText }}</span>
+          <el-progress
+            v-if="info.limit_bytes"
+            :percentage="percentage"
+            :stroke-width="6"
+            :show-text="false"
+            :color="progressColor"
+            class="bar"
+          />
+          <span class="note">{{ noteText }}</span>
+        </template>
       </div>
     </el-tooltip>
   </div>
@@ -49,6 +52,12 @@ const humanSize = (bytes: number): string => {
   }
   return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`
 }
+
+const isEmpty = computed(() => {
+  const i = info.value
+  if (!i) return false
+  return !!i.limit_bytes && i.size_bytes === 0 && i.rotated_bytes === 0
+})
 
 const percentage = computed(() => {
   if (!info.value?.limit_bytes) return 0

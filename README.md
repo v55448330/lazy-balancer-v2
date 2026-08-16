@@ -29,7 +29,7 @@ docker run -d --name lazy-balancer --network host \
   -v $(pwd)/data:/app/data -v $(pwd)/logs:/app/logs \
   -v $(pwd)/certs:/app/certs -v $(pwd)/waf:/app/waf \
   -e LOG_FILE=/app/logs/lazy-balancer.log \
-  v55448330/lazy-balancer-v2:v2.1.4
+  v55448330/lazy-balancer-v2:v2.1.5
 ```
 
 > 镜像需直接绑定宿主机 80/443 及自定义监听端口，Linux 建议 `--network host`；macOS/Windows 用 `-p 8000:8000 -p 80:80 -p 443:443`。首次访问 `http://<host>:8000` 进入初始化向导创建管理员，无默认账号密码。
@@ -125,7 +125,7 @@ docker run -d --name lazy-balancer --network host \
 Go 1.26 · Gin · SQLite · Caddy v2.11.4 + caddy-l4 v0.1.2 + caddy-ratelimit v0.1.0 · Coraza v3 · OWASP CRS v4 · IP2Region v3 · Vue 3 · Element Plus · Vite
 
 ```
-v55448330/lazy-balancer-v2:v2.1.4
+v55448330/lazy-balancer-v2:v2.1.5
 ```
 
 ## License
