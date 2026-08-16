@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -782,7 +783,22 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 		RecordAuditLog("system", "CA限流", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), fmt.Sprintf("第 %d 次限流", attempts), fmt.Sprintf("恢复时间：%s", display.Format("2006-01-02 15:04:05"))), "")
 	}
 }
+
+// maxRenewalAttemptsMessage 在续签失败累计达到上限时追加终态说明，
+// 与 429 路径（markJobWaitingCA）的「已达到最大重试次数」口径一致；
+// 幂等：已含标记的 message 不再重复追加。
+func maxRenewalAttemptsMessage(message string, maxAttempts int) string {
+	const marker = "已达到最大重试次数"
+	if strings.Contains(message, marker) {
+		return message
+	}
+	return fmt.Sprintf("%s（%s %d，停止自动重试，可手动重试）", message, marker, maxAttempts)
+}
+
 func failJob(jobID int, message string) {
+	if attempts := currentRenewalAttempts(jobID); attempts+1 >= GetCertRenewalAttempts() {
+		message = maxRenewalAttemptsMessage(message, GetCertRenewalAttempts())
+	}
 	err := transitionJob(db.DB, jobID, nonTerminalJobStatuses, "failed", map[string]any{
 		"message":          message,
 		"renewal_attempts": jobSQLExpression("COALESCE(renewal_attempts,0)+1"),
@@ -791,11 +807,24 @@ func failJob(jobID int, message string) {
 }
 
 func failJobFromStatus(jobID int, expectedStatus, message string) {
+	if attempts := currentRenewalAttempts(jobID); attempts+1 >= GetCertRenewalAttempts() {
+		message = maxRenewalAttemptsMessage(message, GetCertRenewalAttempts())
+	}
 	err := transitionJob(db.DB, jobID, []string{expectedStatus}, "failed", map[string]any{
 		"message":          message,
 		"renewal_attempts": jobSQLExpression("COALESCE(renewal_attempts,0)+1"),
 	})
 	recordFailedJobTransition(jobID, message, err)
+}
+
+// currentRenewalAttempts 读取任务当前续签失败次数（读取失败按 0 处理，
+// 宁可漏标也不阻塞失败路径本身）。
+func currentRenewalAttempts(jobID int) int {
+	var attempts int
+	if err := db.DB.QueryRow("SELECT COALESCE(renewal_attempts,0) FROM cert_jobs WHERE id=?", jobID).Scan(&attempts); err != nil {
+		return 0
+	}
+	return attempts
 }
 
 func recordFailedJobTransition(jobID int, message string, err error) {

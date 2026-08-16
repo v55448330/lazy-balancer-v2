@@ -148,7 +148,7 @@ func run() error {
 	}
 	// 事件保留清理针对本节点本地表，与集群角色无关（从节点也摄入事件）
 	services.StartSecurityEventsRetention(context.Background())
-	services.StartAuditLogRotation(context.Background())
+	// 审计日志轮转由事件摄入循环驱动（先采集后轮转），此处无需独立启动器
 	go services.StartSecurityEventsIngestion(context.Background())
 	if isMaster {
 		lifecycle.StartACME()

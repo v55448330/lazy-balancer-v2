@@ -458,9 +458,11 @@ func StartSecurityEventsIngestion(ctx context.Context) {
 	ticker := time.NewTicker(securityEventsPollInterval)
 	defer ticker.Stop()
 	for {
+		// 先采集后轮转：copytruncate 前把未摄取内容全部吃进，杜绝轮转窗口丢事件。
 		if err := tailer.securityEventsTick(); err != nil {
 			Logf("warn", "security events ingestion: tick failed: %v", err)
 		}
+		rotateAuditLogIfNeeded()
 		select {
 		case <-ctx.Done():
 			return

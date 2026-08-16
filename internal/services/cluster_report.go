@@ -31,7 +31,13 @@ func (s *SyncService) Report(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM lb_rules").Scan(&rulesCount); err != nil {
 		return fmt.Errorf("统计规则: %w", err)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cert_jobs WHERE status='issued' AND expires_at IS NOT NULL AND datetime(expires_at)<=datetime('now','+30 days')`).Scan(&expiringCount); err != nil {
+	// 到期口径跟随 cert_expiry_days 配置（与规则页「即将过期」状态一致）；
+	// JSON 字段名 certs_expiring_30d 为历史名，保留以兼容旧版主节点解析。
+	expiryDays := 30
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(cert_expiry_days,30) FROM global_config WHERE id=1").Scan(&expiryDays); err != nil || expiryDays <= 0 {
+		expiryDays = 30
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cert_jobs WHERE status='issued' AND expires_at IS NOT NULL AND datetime(expires_at)<=datetime('now','+`+fmt.Sprintf("%d", expiryDays)+` days')`).Scan(&expiringCount); err != nil {
 		return fmt.Errorf("统计即将到期证书: %w", err)
 	}
 	_, caddyErr := s.caddy.GetConfig()
