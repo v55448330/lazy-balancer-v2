@@ -369,7 +369,9 @@ func TestGetSecurityOverview_trendZeroFillsSevenDays(t *testing.T) {
 	// Given events on only 2 of the last 7 days (blocked today, logged 3 days ago)
 	setupSecurityPolicyTestDB(t)
 	router := newSecurityEventsRouter(t)
-	today := time.Now().UTC()
+	// 桶界按配置时区（Asia/Shanghai）计算，种子日期必须与 handler 同口径，
+	// 否则在本地午夜后的第一个小时内（本地新一天、UTC 仍是前一天）跨界错位。
+	today := time.Now().In(services.CurrentLocation())
 	day := func(offset int) string { return today.AddDate(0, 0, -offset).Format("2006-01-02") }
 	seedWithAction := func(eventTime, action string) {
 		t.Helper()

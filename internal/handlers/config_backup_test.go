@@ -1,10 +1,17 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -351,14 +358,22 @@ func TestConfigBackup_export_import_roundtrip(t *testing.T) {
 	}
 }
 
-func TestConfigBackup_export_redacts_sensitive_columns(t *testing.T) {
-	// Given：种入机器凭证与 TLS 私钥，同时保留用户密码哈希与 API Key 哈希
+func TestConfigBackup_export_preserves_sensitive_columns(t *testing.T) {
+	// Given：备份以完整恢复为目标——机器凭证与 TLS 私钥必须随导出走（用户裁决：
+	// 导出即完整恢复，剥离会破坏备份意义），与密码/密钥哈希一并完整保留。
 	h := newBackupTestHandlers(t)
 	gin.SetMode(gin.TestMode)
+	// 导入完整恢复会物化证书文件，certDir 指向临时目录
+	oldCertDir := testServicesCertDir
+	testServicesCertDir = t.TempDir()
+	t.Cleanup(func() { testServicesCertDir = oldCertDir })
 	if _, err := db.DB.Exec(`INSERT INTO users (username, password_hash, role) VALUES ('keep', 'hash', 'admin')`); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id, name, protocol, domain, listen_port, enabled, tls_cert, tls_key) VALUES ('lb_redact', 'redact', 'http', 'redact.example.test', 8080, 1, 'cert-pem', 'key-pem')`); err != nil {
+	// 完整导出的 tls_cert/tls_key 必须是合法 PEM：导入阶段 Caddy 会校验证书对，
+	// 假 PEM 会在导入时被拒（此前剥离测试靠置空跳过校验才不需要真证书）。
+	testCertPEM, testKeyPEM := selfSignedTestPair(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id, name, protocol, domain, listen_port, enabled, tls_cert, tls_key) VALUES ('lb_redact', 'redact', 'http', 'redact.example.test', 8080, 1, ?, ?)`, testCertPEM, testKeyPEM); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, enabled) VALUES ('lb_redact', '127.0.0.1', 9000, 1, 1)`); err != nil {
@@ -367,7 +382,7 @@ func TestConfigBackup_export_redacts_sensitive_columns(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO api_keys (name, key_hash, key_prefix, created_by) VALUES ('ci', 'kh-secret', 'lb_sk_x', 1)`); err != nil {
 		t.Fatalf("seed api key: %v", err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO ca_providers (name, provider, directory_url, credentials) VALUES ('le', 'letsencrypt', 'https://acme.test/dir', 'ca-cred')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO ca_providers (name, provider, directory_url, credentials) VALUES ('le2', 'zerossl', 'https://acme.test/dir2', '{"eab_kid":"ca-cred"}')`); err != nil {
 		t.Fatalf("seed ca provider: %v", err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO certificate_configs (name, dns_credentials) VALUES ('dnspod', 'dns-cred')`); err != nil {
@@ -384,7 +399,7 @@ func TestConfigBackup_export_redacts_sensitive_columns(t *testing.T) {
 	exportResponse := httptest.NewRecorder()
 	router.ServeHTTP(exportResponse, httptest.NewRequest(http.MethodGet, "/config/export", nil))
 
-	// Then：机器凭证与 TLS 私钥被剥离，密码/密钥哈希保留
+	// Then：全部敏感列完整导出（备份 = 完整恢复）
 	if exportResponse.Code != http.StatusOK {
 		t.Fatalf("export status=%d body=%s", exportResponse.Code, exportResponse.Body.String())
 	}
@@ -392,31 +407,38 @@ func TestConfigBackup_export_redacts_sensitive_columns(t *testing.T) {
 	if err := json.Unmarshal(exportResponse.Body.Bytes(), &backup); err != nil {
 		t.Fatalf("decode export: %v", err)
 	}
-	redactedChecks := []struct {
-		got  string
-		name string
-	}{
-		{backupString(backup.Config["dns_credentials"]), "global_config.dns_credentials"},
-		{backupString(backup.Config["admin_tls_cert"]), "global_config.admin_tls_cert"},
-		{backupString(backup.Config["admin_tls_key"]), "global_config.admin_tls_key"},
-		{backupString(backup.Tables["ca_providers"][0]["credentials"]), "ca_providers.credentials"},
-		{backupString(backup.Tables["certificate_configs"][0]["dns_credentials"]), "certificate_configs.dns_credentials"},
-		{backupString(backup.Tables["lb_rules"][0]["tls_cert"]), "lb_rules.tls_cert"},
-		{backupString(backup.Tables["lb_rules"][0]["tls_key"]), "lb_rules.tls_key"},
-	}
-	for _, check := range redactedChecks {
-		if check.got != "" {
-			t.Fatalf("%s=%q, want redacted to empty", check.name, check.got)
+	// ca_providers 含 Initialize 播种的默认行，按 name 定位种入行
+	var seededCA map[string]any
+	for _, row := range backup.Tables["ca_providers"] {
+		if backupString(row["name"]) == "le2" {
+			seededCA = row
 		}
 	}
-	if got := backupString(backup.Tables["users"][0]["password_hash"]); got != "hash" {
-		t.Fatalf("users.password_hash=%q, want intact", got)
+	if seededCA == nil {
+		t.Fatal("seeded ca_providers row not found in export")
 	}
-	if got := backupString(backup.Tables["api_keys"][0]["key_hash"]); got != "kh-secret" {
-		t.Fatalf("api_keys.key_hash=%q, want intact", got)
+	intactChecks := []struct {
+		got  string
+		want string
+		name string
+	}{
+		{backupString(backup.Config["dns_credentials"]), "dns-secret", "global_config.dns_credentials"},
+		{backupString(backup.Config["admin_tls_cert"]), "admin-cert", "global_config.admin_tls_cert"},
+		{backupString(backup.Config["admin_tls_key"]), "admin-key", "global_config.admin_tls_key"},
+		{backupString(seededCA["credentials"]), `{"eab_kid":"ca-cred"}`, "ca_providers.credentials"},
+		{backupString(backup.Tables["certificate_configs"][0]["dns_credentials"]), "dns-cred", "certificate_configs.dns_credentials"},
+		{backupString(backup.Tables["lb_rules"][0]["tls_cert"]), testCertPEM, "lb_rules.tls_cert"},
+		{backupString(backup.Tables["lb_rules"][0]["tls_key"]), testKeyPEM, "lb_rules.tls_key"},
+		{backupString(backup.Tables["users"][0]["password_hash"]), "hash", "users.password_hash"},
+		{backupString(backup.Tables["api_keys"][0]["key_hash"]), "kh-secret", "api_keys.key_hash"},
+	}
+	for _, check := range intactChecks {
+		if check.got != check.want {
+			t.Fatalf("%s=%q, want %q (export must be complete)", check.name, check.got, check.want)
+		}
 	}
 
-	// Given: destructive change, then import round-trip must still succeed
+	// Given: destructive change, then import round-trip must fully restore
 	if _, err := db.DB.Exec("DELETE FROM lb_rules; DELETE FROM users; DELETE FROM ca_providers; DELETE FROM certificate_configs; DELETE FROM api_keys"); err != nil {
 		t.Fatalf("destructive change: %v", err)
 	}
@@ -426,6 +448,10 @@ func TestConfigBackup_export_redacts_sensitive_columns(t *testing.T) {
 	router.ServeHTTP(importResponse, importRequest)
 	if importResponse.Code != http.StatusOK {
 		t.Fatalf("import status=%d body=%.300s", importResponse.Code, importResponse.Body.String())
+	}
+	var restored string
+	if err := db.DB.QueryRow(`SELECT tls_key FROM lb_rules WHERE caddy_id='lb_redact'`).Scan(&restored); err != nil || restored != testKeyPEM {
+		t.Fatalf("tls_key after import=%q err=%v, want seeded key PEM restored", restored, err)
 	}
 }
 
@@ -1039,4 +1065,36 @@ func TestImportConfigBackup_reports_import_and_runtime_restore_failures(t *testi
 	if strings.Contains(body, "已回滚") {
 		t.Fatalf("response falsely claims rollback success: %s", body)
 	}
+}
+
+// selfSignedTestPair 生成一对合法自签证书 PEM，供需要通过 Caddy 证书校验的测试种子使用。
+func selfSignedTestPair(t *testing.T) (certPEM, keyPEM string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		DNSNames:     []string{"redact.example.test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certBuf := &bytes.Buffer{}
+	if err := pem.Encode(certBuf, &pem.Block{Type: "CERTIFICATE", Bytes: der}); err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyBuf := &bytes.Buffer{}
+	if err := pem.Encode(keyBuf, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}); err != nil {
+		t.Fatal(err)
+	}
+	return certBuf.String(), keyBuf.String()
 }

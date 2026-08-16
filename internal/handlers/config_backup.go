@@ -37,35 +37,6 @@ var configBackupProtectedConfigKeys = map[string]bool{
 	"sync_fingerprint": true, "last_sync": true, "last_sync_error": true, "cluster_version": true,
 }
 
-// configBackupRedactedColumns 列出导出时需剥离的敏感列（机器凭证 / TLS 私钥）。
-// 有意保留 users.password_hash 与 api_keys.key_hash：剥离它们会让恢复后的账号无法
-// 登录、API Key 全部失效，使备份丧失"可恢复"意义；这两类哈希已由审计与 README 明示。
-// 仅剥离可重新录入的机器凭证（DNS/ACME 凭证、TLS 私钥、管理面板证书），恢复后置空。
-var configBackupRedactedColumns = map[string]map[string]bool{
-	"global_config":       {"dns_credentials": true, "admin_tls_cert": true, "admin_tls_key": true},
-	"ca_providers":        {"credentials": true},
-	"certificate_configs": {"dns_credentials": true},
-	"lb_rules":            {"tls_cert": true, "tls_key": true},
-}
-
-// redactConfigBackupRow 将表中命中的敏感列置空。仅在导出时调用，导入路径不感知；
-// 被剥离的列恢复时为空串，对应功能需管理员重新录入（已通过审计与 README 说明）。
-func redactConfigBackupRow(table string, row map[string]any) {
-	redacted := configBackupRedactedColumns[table]
-	if len(redacted) == 0 {
-		return
-	}
-	for column := range redacted {
-		value, exists := row[column]
-		if !exists || value == nil {
-			continue
-		}
-		if s, ok := value.(string); ok && s != "" {
-			row[column] = ""
-		}
-	}
-}
-
 var requeueNonTerminalCertJobs = services.RequeueNonTerminalCertJobs
 
 type importQueueRecovery struct {
@@ -467,7 +438,6 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		for key := range configBackupProtectedConfigKeys {
 			delete(backup.Config, key)
 		}
-		redactConfigBackupRow("global_config", backup.Config)
 	}
 	for _, table := range configBackupTables {
 		rows, err := dumpTable(ctx, tx, table)
@@ -475,9 +445,6 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 			err = errors.Join(err, tx.Rollback())
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
 			return
-		}
-		for _, row := range rows {
-			redactConfigBackupRow(table, row)
 		}
 		backup.Tables[table] = rows
 	}
@@ -496,7 +463,7 @@ func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "导出失败: " + err.Error()})
 		return
 	}
-	recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(importCountsDetail(backup.Tables), "导出已剥离 DNS/ACME 凭证与 TLS 私钥；含用户密码哈希", services.AuditResultPart("success")))
+	recordAudit(c, "导出", "配置备份", services.FormatAuditDetail(importCountsDetail(backup.Tables), "导出为完整备份（含凭证与证书材料），请妥善保管", services.AuditResultPart("success")))
 	c.Header("Cache-Control", "no-store, private")
 	c.Header("Pragma", "no-cache")
 	c.Header("X-Content-Type-Options", "nosniff")
