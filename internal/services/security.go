@@ -192,8 +192,11 @@ var (
 	customRuleOperators = map[string]string{"contains": "@contains", "regex": "@rx", "equals": "@pm", "starts_with": "@beginsWith"}
 )
 
-// conditionsEmissionIssue 返回条件列表不可安全发射的原因（"含尾部反斜杠"/"空条件"），
-// 无问题时返回空串。供发射防御与集群同步预检共用，避免两处判定漂移。
+// conditionsEmissionIssue 返回条件列表不可安全发射的原因（"含尾部反斜杠"/"空条件"/
+// "非法 target 或 operator"），无问题时返回空串。供发射防御与集群同步预检共用，
+// 避免两处判定漂移。target/operator 必须在允许集合内，否则发射循环会因映射不到
+// 对应变量而产出缺 ID 的畸形 SecRule（链式规则还会留下悬空 chain），导致 coraza
+// 整体拒绝配置。
 func conditionsEmissionIssue(conditions []models.CustomRuleCondition) string {
 	if len(conditions) == 0 {
 		return "空条件"
@@ -202,12 +205,19 @@ func conditionsEmissionIssue(conditions []models.CustomRuleCondition) string {
 		if strings.HasSuffix(cond.Pattern, `\`) {
 			return "含尾部反斜杠"
 		}
+		if customRuleTargets[cond.Target] == "" {
+			return "非法 target 或 operator"
+		}
+		if customRuleOperators[cond.Operator] == "" {
+			return "非法 target 或 operator"
+		}
 	}
 	return ""
 }
 
 // customRuleEmissionIssue 在 conditionsEmissionIssue 基础上兼容旧版单目标内嵌形状
-// （无 conditions、靠 target/operator/pattern 发射）。
+// （无 conditions、靠 target/operator/pattern 发射），并对该形状同样校验 target/
+// operator 合法性。
 func customRuleEmissionIssue(cr models.CustomRule) string {
 	if len(cr.Conditions) > 0 {
 		return conditionsEmissionIssue(cr.Conditions)
@@ -217,6 +227,9 @@ func customRuleEmissionIssue(cr models.CustomRule) string {
 	}
 	if cr.Target == "" || cr.Operator == "" {
 		return "空条件"
+	}
+	if customRuleTargets[cr.Target] == "" || customRuleOperators[cr.Operator] == "" {
+		return "非法 target 或 operator"
 	}
 	return ""
 }
@@ -252,11 +265,10 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 		}
 		if len(cr.Conditions) > 0 {
 			for idx, cond := range cr.Conditions {
+				// 非法 target/operator 已在上方 customRuleEmissionIssue 整条跳过，
+				// 此处不再静默丢弃单条条件，避免链式规则产生缺 ID 起始条或悬空 chain。
 				target := customRuleTargets[cond.Target]
 				op := customRuleOperators[cond.Operator]
-				if target == "" || op == "" {
-					continue
-				}
 				// 链式规则仅起始条携带 id/phase/disruptive/msg；coraza v3 拒绝非起始条上的 disruptive 动作
 				var actions string
 				if idx == 0 {
@@ -272,9 +284,6 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 		} else {
 			target := customRuleTargets[cr.Target]
 			op := customRuleOperators[cr.Operator]
-			if target == "" || op == "" {
-				continue
-			}
 			sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,%s\"\n", target, op, escapeCorazaPattern(cr.Pattern), cr.ID+10000, action))
 		}
 	}

@@ -407,8 +407,9 @@ func snapshotJSONText(value interface{}) interface{} {
 }
 
 func applySecurityCustomRules(ctx context.Context, tx *sql.Tx, rules []models.SecurityCustomRule) error {
-	// 只读预检：主节点下发的规则若含尾部反斜杠/空条件，发射侧会跳过它们（safe no-op），
-	// 此处仅记录一条告警，不阻断忠实复制（从节点与主节点保持一致）。
+	// 只读预检：主节点下发的规则若含尾部反斜杠/空条件/非法 target 或 operator，
+	// 发射侧会整条跳过它们（safe no-op），此处仅记录一条告警，不阻断忠实复制
+	// （从节点与主节点保持一致）。
 	invalid := false
 	for _, rule := range rules {
 		if conditionsEmissionIssue(rule.Conditions) != "" {
@@ -417,7 +418,7 @@ func applySecurityCustomRules(ctx context.Context, tx *sql.Tx, rules []models.Se
 		}
 	}
 	if invalid {
-		log.Printf("集群同步的自定义规则存在非法项（尾部反斜杠/空条件），发射时将跳过 — 主节点应尽快修复")
+		log.Printf("集群同步的自定义规则存在非法项（尾部反斜杠/空条件/非法 target 或 operator），发射时将跳过 — 主节点应尽快修复")
 	}
 	for _, rule := range rules {
 		conditions := rule.Conditions

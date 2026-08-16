@@ -70,7 +70,8 @@ func InitializeMetricsDB(dataDir string) (err error) {
 		action TEXT DEFAULT '',
 		anomaly_score INTEGER DEFAULT 0,
 		rule_name TEXT DEFAULT '',
-		policy_name TEXT DEFAULT ''
+		policy_name TEXT DEFAULT '',
+		transaction_id TEXT DEFAULT ''
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_security_events_time ON security_events(event_time DESC);
@@ -81,11 +82,33 @@ func InitializeMetricsDB(dataDir string) (err error) {
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("failed to initialize metrics database schema: %w", err)
 	}
+	// 幂等迁移：为既有指标库补齐 transaction_id 列（全新库由上面的建表语句直接带出）。
+	// 幂等唯一索引（部分索引 WHERE transaction_id != ''）让重复事务写入被 OR IGNORE
+	// 静默去重，同时保留历史遗留空 transaction_id 行不受唯一约束影响。
+	if err := migrateSecurityEventsTransactionID(db); err != nil {
+		return fmt.Errorf("failed to migrate metrics database schema: %w", err)
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_security_events_transaction ON security_events(transaction_id) WHERE transaction_id != ''`); err != nil {
+		return fmt.Errorf("failed to create security_events transaction index: %w", err)
+	}
 	if err := secureSQLiteArtifacts(dbPath); err != nil {
 		return fmt.Errorf("failed to secure metrics database artifacts: %w", err)
 	}
 
 	MetricsDB = db
+	return nil
+}
+
+func migrateSecurityEventsTransactionID(db *sql.DB) error {
+	var colCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('security_events') WHERE name='transaction_id'").Scan(&colCount); err != nil {
+		return fmt.Errorf("failed to check security_events.transaction_id: %w", err)
+	}
+	if colCount == 0 {
+		if _, err := db.Exec("ALTER TABLE security_events ADD COLUMN transaction_id TEXT DEFAULT ''"); err != nil {
+			return fmt.Errorf("failed to add security_events.transaction_id: %w", err)
+		}
+	}
 	return nil
 }
 

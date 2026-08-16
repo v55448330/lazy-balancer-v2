@@ -2268,14 +2268,16 @@ func buildGeoipBlockRoute(rule SingleRuleConfig, policy *models.SecurityPolicy, 
 	if expr == "" {
 		return nil
 	}
+	// Caddy match 数组语义：数组内各元素是“集合”，集合之间按 OR 组合；同一集合内的
+	// 各匹配器（host/expression/not）按 AND 组合。内网放行（not remote_ip in 内网）
+	// 必须并入 host/expression 所在的同一集合：若拆成第二个集合，集合间 OR 会让
+	// “非内网”对公网请求恒为真，导致 GeoIP 开启即拦截全部公网流量（内网放行意图
+	// 也一并失效）。三者 AND 后，仅当 host 命中且表达式命中且非内网时才会拦截。
 	return map[string]interface{}{
 		"match": []interface{}{
 			map[string]interface{}{
 				"host":       splitAndTrim(rule.Domain),
 				"expression": expr,
-			},
-			// 内网/回环/链路本地地址放行：remote_ip not 匹配器与表达式取与，命中内网即不拦截。
-			map[string]interface{}{
 				"not": []interface{}{
 					map[string]interface{}{
 						"remote_ip": map[string]interface{}{

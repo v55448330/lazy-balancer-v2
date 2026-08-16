@@ -254,8 +254,9 @@ func TestGenerateHTTPRouteObjects_geoipBlock_alwaysAllowsPrivateIPs(t *testing.T
 				t.Fatal(err)
 			}
 
-			// Then the block route carries a remote_ip "not" matcher with all
-			// private/loopback/link-local CIDRs (single shared definition).
+			// Then the block route carries a single match set that ANDs
+			// host + expression + remote_ip "not" (private/loopback/link-local
+			// CIDRs, single shared definition).
 			var block map[string]interface{}
 			for _, route := range routes {
 				matchers, ok := route["match"].([]interface{})
@@ -277,18 +278,23 @@ func TestGenerateHTTPRouteObjects_geoipBlock_alwaysAllowsPrivateIPs(t *testing.T
 				t.Fatalf("block route missing private-IP not matcher: %#v", routes)
 			}
 
+			// 结构断言：match 必须只有一个集合。Caddy match 数组内集合间按 OR 组合，
+			// 集合内各匹配器按 AND 组合。若 not 内网放行被拆成第二个集合，公网请求
+			// 将恒命中该集合而被全量拦截。
 			matchers := block["match"].([]interface{})
-			var notMatcher map[string]interface{}
-			for _, matcherValue := range matchers {
-				matcher := mustMap(t, matcherValue, "matcher")
-				if _, has := matcher["not"]; has {
-					notMatcher = matcher
-					break
+			if len(matchers) != 1 {
+				t.Fatalf("block match must be a single set (host+expression+not AND'ed), got %d sets: %#v", len(matchers), matchers)
+			}
+			matcher := mustMap(t, matchers[0], "block matcher")
+			for _, key := range []string{"host", "expression", "not"} {
+				if _, has := matcher[key]; !has {
+					t.Fatalf("block matcher missing %q key (private-IP allow must AND with host/expression): %#v", key, matcher)
 				}
 			}
-			notSets, ok := notMatcher["not"].([]interface{})
+
+			notSets, ok := matcher["not"].([]interface{})
 			if !ok || len(notSets) != 1 {
-				t.Fatalf("not matcher sets=%#v, want single remote_ip set", notMatcher["not"])
+				t.Fatalf("not matcher sets=%#v, want single remote_ip set", matcher["not"])
 			}
 			remote := mustMap(t, mustMap(t, notSets[0], "not set")["remote_ip"], "remote_ip matcher")
 			ranges, ok := remote["ranges"].([]string)

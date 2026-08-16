@@ -351,9 +351,9 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 	if err != nil {
 		return offset, fmt.Errorf("security events: begin insert transaction: %w", err)
 	}
-	stmt, err := tx.Prepare(`INSERT INTO security_events
-		(event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, anomaly_score, rule_name, policy_name)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO security_events
+		(event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, anomaly_score, rule_name, policy_name, transaction_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		tx.Rollback()
 		return committedOffset, fmt.Errorf("security events: prepare insert: %w", err)
@@ -375,6 +375,8 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 		if err != nil {
 			next, found, rerr := securityEventsFindNextDocument(f, decoderStart+decoder.InputOffset())
 			if rerr != nil {
+				_ = stmt.Close()
+				_ = tx.Rollback()
 				return committedOffset, rerr
 			}
 			if !found {
@@ -388,6 +390,8 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 			offset = next
 			decoderStart = next
 			if _, err := f.Seek(offset, io.SeekStart); err != nil {
+				_ = stmt.Close()
+				_ = tx.Rollback()
 				return committedOffset, fmt.Errorf("security events: seek after resync: %w", err)
 			}
 			decoder = json.NewDecoder(f)
@@ -401,7 +405,9 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 			rule, policy := securityEventsMapHost(rec.Host, rules, bindings)
 			if _, ierr := stmt.Exec(rec.EventTime, rule.caddyID, policy.id, rec.ClientIP, rec.Method, rec.URI,
 				rec.EventType, rec.RuleTriggered, rec.RuleMsg, rec.Action, rec.AnomalyScore,
-				rule.name, policy.name); ierr != nil {
+				rule.name, policy.name, rec.TransactionID); ierr != nil {
+				_ = stmt.Close()
+				_ = tx.Rollback()
 				return committedOffset, fmt.Errorf("security events: insert event: %w", ierr)
 			}
 			count++
@@ -415,9 +421,9 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 				if err != nil {
 					return committedOffset, fmt.Errorf("security events: begin batch transaction: %w", err)
 				}
-				stmt, err = tx.Prepare(`INSERT INTO security_events
-					(event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, anomaly_score, rule_name, policy_name)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+				stmt, err = tx.Prepare(`INSERT OR IGNORE INTO security_events
+					(event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, anomaly_score, rule_name, policy_name, transaction_id)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 				if err != nil {
 					tx.Rollback()
 					return committedOffset, fmt.Errorf("security events: prepare batch insert: %w", err)

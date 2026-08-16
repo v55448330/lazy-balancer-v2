@@ -473,6 +473,52 @@ func TestSecurityEventsTickIngestsFixtureLog(t *testing.T) {
 	}
 }
 
+func TestSecurityEventsTickDedupesDuplicateTransactionID(t *testing.T) {
+	// Given：审计日志中同一事务出现两次（模拟轮转/重放导致的重复读取）
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_rule1','test rule','http','go029.com',443,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',7)`); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	content := strings.Join([]string{securityEventsFixtureBlocked, securityEventsFixtureBlocked}, "\n") + "\n"
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+
+	// When：运行一次摄取
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	// Then：transaction_id 唯一索引去重，同一事务只落一行
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("duplicate transaction id must dedupe to 1 row, got %d", count)
+	}
+	var txID string
+	if err := db.MetricsDB.QueryRow(`SELECT transaction_id FROM security_events`).Scan(&txID); err != nil {
+		t.Fatal(err)
+	}
+	if txID != "tx-blocked-1" {
+		t.Fatalf("stored transaction_id=%q, want tx-blocked-1", txID)
+	}
+}
+
 func TestSecurityEventsTickSkipsMalformedAndContinues(t *testing.T) {
 	// Given: an audit log with garbage bytes and a non-transaction JSON between valid docs
 	dataDir := t.TempDir()

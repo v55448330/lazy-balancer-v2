@@ -1,7 +1,9 @@
 package services
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -291,6 +293,40 @@ func TestClearSyncTables_propagatesDeleteError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "清理同步表 nonexistent_table 失败") {
 		t.Fatalf("error=%v, want table context", err)
+	}
+}
+
+func TestSyncService_applySnapshot_warnsOnInvalidCustomRuleTarget(t *testing.T) {
+	// Given：主节点下发一条内嵌非法 target 的自定义规则（同步路径不校验 target/operator）
+	_, database := newClusterTestService(t)
+	snapshot := models.ClusterSnapshot{
+		Version: 11,
+		SecurityCustomRules: []models.SecurityCustomRule{{
+			ID: 3, Name: "bad-target", Action: "block", Score: 5, Enabled: true,
+			Conditions: []models.CustomRuleCondition{{Target: "cookie", Operator: "contains", Pattern: "x"}},
+		}},
+	}
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+
+	// When：应用快照
+	err := replaceSnapshotDB(context.Background(), database, snapshot)
+
+	// Then：同步成功（告警-only，不阻断忠实复制），规则仍被复制，且告警覆盖非法 target
+	if err != nil {
+		t.Fatalf("apply snapshot with invalid-target rule: %v", err)
+	}
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM security_custom_rules WHERE id=3").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("custom rule not faithfully replicated: count=%d, want 1", count)
+	}
+	if !strings.Contains(logs.String(), "非法 target 或 operator") {
+		t.Fatalf("sync warning must cover invalid target/operator, got %q", logs.String())
 	}
 }
 

@@ -94,3 +94,43 @@ func TestEmitCustomRules_skipsDirtyRuleAmongCleanOnes(t *testing.T) {
 		t.Fatalf("empty-conditions rule must be skipped:\n%s", got)
 	}
 }
+
+func TestEmitCustomRules_invalidTargetOrOperatorSkipsWholeRule(t *testing.T) {
+	// Given：一条含非法 target 的规则、一条含非法 operator 的规则、一条全合法的链式规则
+	var sb strings.Builder
+	rules := []models.CustomRule{
+		{ID: 10, Name: "非法target规则", Enabled: true, Action: "block", Score: 5, Conditions: []models.CustomRuleCondition{
+			{Target: "uri", Operator: "contains", Pattern: "/admin"},
+			{Target: "cookie", Operator: "contains", Pattern: "session=1"},
+		}},
+		{ID: 11, Name: "非法operator规则", Enabled: true, Action: "block", Score: 5, Conditions: []models.CustomRuleCondition{
+			{Target: "uri", Operator: "matches", Pattern: "/admin"},
+		}},
+		{ID: 12, Name: "合法链式规则", Enabled: true, Action: "block", Score: 3, Conditions: []models.CustomRuleCondition{
+			{Target: "uri", Operator: "contains", Pattern: "/x"},
+			{Target: "args", Operator: "contains", Pattern: "a=1"},
+		}},
+	}
+
+	// When emitted
+	emitCustomRules(&sb, rules)
+	got := sb.String()
+
+	// Then：非法 target/operator 的规则整条跳过（绝不产生缺 ID 起始条或悬空 chain 的部分发射）
+	if strings.Contains(got, "非法target规则") || strings.Contains(got, "非法operator规则") {
+		t.Fatalf("invalid target/operator rules must be skipped entirely:\n%s", got)
+	}
+	if strings.Contains(got, "cookie") || strings.Contains(got, "matches") {
+		t.Fatalf("invalid condition must not leak into emission:\n%s", got)
+	}
+	// And：全合法规则完整发射，两条条件构成完整 chain
+	if !strings.Contains(got, "自定义规则 合法链式规则 命中") {
+		t.Fatalf("valid rule must be emitted:\n%s", got)
+	}
+	if !strings.Contains(got, ",chain") {
+		t.Fatalf("valid chained rule must carry chain action:\n%s", got)
+	}
+	if gotCount := strings.Count(got, "SecRule "); gotCount != 2 {
+		t.Fatalf("SecRule count=%d, want 2 (only the valid chained rule):\n%s", gotCount, got)
+	}
+}
