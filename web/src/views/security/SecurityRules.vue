@@ -476,7 +476,7 @@ function buildJSRegex(pattern: string): { re: RegExp | null; valid: boolean } {
 	let src = pattern
 	const m = pattern.match(/^\(\?([a-z])\)(.*)/)
 	if (m) { flags = m[1]; src = m[2] }
-	if (/\(\?<?[=!]/.test(src) || /\\[1-9]/.test(src)) { return { re: null, valid: false } }
+	if (/\(\?<?[=!]/.test(src) || /\\[1-9]/.test(src) || /\\k</.test(src)) { return { re: null, valid: false } }
 	try { return { re: new RegExp(src, flags), valid: true } } catch { return { re: null, valid: false } }
 }
 
