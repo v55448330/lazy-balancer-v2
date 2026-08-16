@@ -122,7 +122,7 @@ docker run -d --name lazy-balancer --network host \
 
 ## 技术栈与镜像
 
-Go 1.26 · Gin · SQLite · Caddy v2.11.4+33（上游 b2693fb6，含 cel-go 0.29 适配）+ caddy-l4 v0.1.2 + caddy-ratelimit v0.1.0 · Coraza v3 · OWASP CRS v4 · IP2Region v3 · Vue 3 · Element Plus · Vite
+Go 1.26 · Gin · SQLite · Caddy v2.11.4 + caddy-l4 v0.1.2 + caddy-ratelimit v0.1.0 · Coraza v3 · OWASP CRS v4 · IP2Region v3 · Vue 3 · Element Plus · Vite
 
 ```
 v55448330/lazy-balancer-v2:v2.1.3

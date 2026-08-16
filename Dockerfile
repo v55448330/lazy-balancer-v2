@@ -6,7 +6,7 @@ WORKDIR /app
 
 ENV GOTOOLCHAIN=auto
 COPY . .
-RUN xcaddy build b2693fb63a30 \
+RUN xcaddy build v2.11.4 \
   --with github.com/mholt/caddy-l4@v0.1.2 \
   --with github.com/caddyserver/transform-encoder@ba4124974830222da7f12a091cf11ddf4d49363f \
   --with github.com/mholt/caddy-ratelimit@v0.1.0 \
@@ -17,7 +17,6 @@ RUN xcaddy build b2693fb63a30 \
 # （go version -m 的模块路径与版本之间是 TAB 分隔，用 [[:space:]] 匹配）
 RUN go version -m /app/caddy | tee /tmp/caddy-mods.txt && \
     grep -qE "google.golang.org/grpc[[:space:]]+v1\.8[2-9]" /tmp/caddy-mods.txt && \
-    grep -qE "github.com/google/cel-go[[:space:]]+v0\.29" /tmp/caddy-mods.txt && \
     grep -qE "go.opentelemetry.io/otel[[:space:]]+v1\.4[4-9]" /tmp/caddy-mods.txt && \
     grep -qE "golang.org/x/net[[:space:]]+v0\.5[6-9]" /tmp/caddy-mods.txt
 
