@@ -1,3 +1,5 @@
+注：本文档为历史设计稿，caddy_log_path 已于 v2.1.4 移除。
+
 # Caddy 全局配置卡片实现计划
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

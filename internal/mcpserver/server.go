@@ -59,7 +59,7 @@ var tools = []toolSpec{
 	{"get_security_overview", "获取安全总览（今日拦截/检测、攻击类型 TOP、源 IP TOP）", http.MethodGet, "/security/overview", nil, nil, emptySchema},
 	{"list_security_policies", "列出全部安全策略", http.MethodGet, "/security/policies", nil, nil, emptySchema},
 	{"get_security_policy", "获取指定安全策略详情", http.MethodGet, "/security/policies/{id}", []string{"id"}, nil, idSchema("id", "策略 ID", "integer")},
-	{"list_security_events", "分页列出安全事件（WAF 拦截/IP ACL 拒绝）", http.MethodGet, "/security/events", nil, []string{"page", "page_size", "rule_caddy_id"}, querySchema("page", "页码", "integer")},
+	{"list_security_events", "分页列出安全事件（WAF 拦截/IP ACL 拒绝）", http.MethodGet, "/security/events", nil, []string{"page", "page_size", "action", "ip", "rule_caddy_id", "start_time", "end_time"}, securityEventsSchema},
 	{"list_security_bindings", "列出安全策略与规则的绑定关系", http.MethodGet, "/security/bindings", nil, nil, emptySchema},
 	{"get_rule_security_policy", "获取指定规则绑定的安全策略", http.MethodGet, "/security/rules/{caddy_id}/policy", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"list_custom_rules", "列出全部自定义安全规则", http.MethodGet, "/security/custom-rules", nil, nil, emptySchema},
@@ -96,7 +96,7 @@ var tools = []toolSpec{
 	{"create_login_ticket", "为从节点生成登录票据", http.MethodPost, "/cluster/nodes/{id}/login-ticket", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
 	{"update_node_access_url", "更新从节点访问地址", http.MethodPut, "/cluster/nodes/{id}/access-url", []string{"id"}, nil, bodySchema},
 	{"delete_cluster_node", "删除指定集群节点", http.MethodDelete, "/cluster/nodes/{id}", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
-	{"set_cluster_mode", "设置集群角色（master/standalone）", http.MethodPost, "/cluster/mode", nil, nil, bodySchema},
+	{"set_cluster_mode", "注册并切换为从节点（standalone/master → slave，需主节点审批）", http.MethodPost, "/cluster/mode", nil, nil, bodySchema},
 	{"promote_cluster", "将从节点提升为主节点", http.MethodPost, "/cluster/promote", nil, nil, emptySchema},
 	{"pull_sync", "手动触发从节点同步", http.MethodPost, "/cluster/sync/pull", nil, nil, emptySchema},
 	{"update_cluster_settings", "更新集群同步设置", http.MethodPut, "/cluster/settings", nil, nil, bodySchema},
@@ -132,7 +132,7 @@ var tools = []toolSpec{
 	{"get_rule_cert_info", "获取指定规则的证书信息", http.MethodGet, "/rules/{caddy_id}/cert-info", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"get_caddy_status", "获取 Caddy 运行状态", http.MethodGet, "/caddy/status", nil, nil, emptySchema},
 	{"get_caddy_config", "获取 Caddy 当前配置", http.MethodGet, "/caddy/config", nil, nil, emptySchema},
-	{"get_caddy_logs", "获取 Caddy 日志", http.MethodGet, "/caddy/logs", nil, []string{"type"}, querySchema("type", "日志类型", "string")},
+	{"get_caddy_logs", "获取 Caddy 日志", http.MethodGet, "/caddy/logs", nil, []string{"type"}, caddyLogsSchema},
 	{"update_caddy_config", "直接更新 Caddy 配置", http.MethodPut, "/caddy/config", nil, nil, bodySchema},
 	{"start_caddy", "启动 Caddy", http.MethodPost, "/caddy/start", nil, nil, emptySchema},
 	{"stop_caddy", "停止 Caddy", http.MethodPost, "/caddy/stop", nil, nil, emptySchema},
@@ -196,6 +196,8 @@ const updateRuleSchema = `{"type":"object","required":["caddy_id"],"properties":
 
 const issueCertificateSchema = `{"type":"object","properties":{"caddy_id":{"type":"string"},"domain":{"type":"string"}},"oneOf":[{"maxProperties":0},{"required":["caddy_id"]}],"additionalProperties":false}`
 const auditLogsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20}},"additionalProperties":false}`
+const securityEventsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20},"action":{"type":"string"},"ip":{"type":"string"},"rule_caddy_id":{"type":"string"},"start_time":{"type":"string","description":"开始时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"},"end_time":{"type":"string","description":"结束时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"}},"additionalProperties":false}`
+const caddyLogsSchema = `{"type":"object","properties":{"type":{"type":"string","enum":["runtime","server","proxy","tls","access"]}},"additionalProperties":false}`
 const updateConfigSchema = `{"type":"object","properties":{"source":{"type":"string"},"dns_provider":{"type":"string"},"dns_credentials":{"type":"string"},"acme_email":{"type":"string"},"cert_expiry_days":{"type":"integer"},"cert_renewal_days":{"type":"integer"},"cert_renewal_attempts":{"type":"integer"},"log_level":{"type":"string"},"caddy_log_level":{"type":"string"},"caddy_log_size_mb":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"http_read_timeout":{"type":"integer"},"http_write_timeout":{"type":"integer"},"http_idle_timeout":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"proxy_dial_timeout":{"type":"integer","minimum":0},"proxy_response_header_timeout":{"type":"integer","minimum":0},"proxy_read_timeout":{"type":"integer","minimum":0},"proxy_write_timeout":{"type":"integer","minimum":0},"proxy_stream_timeout":{"type":"integer","minimum":0},"proxy_flush_interval":{"type":"integer","minimum":-1},"proxy_stream_close_delay":{"type":"integer","minimum":0},"server_tokens_hidden":{"type":"boolean"},"cert_job_log_size_mb":{"type":"integer"},"runtime_log_size_mb":{"type":"integer"},"access_log_json":{"type":"boolean"},"access_log_format":{"type":"string"},"audit_retention_months":{"type":"integer"},"jwt_expire_minutes":{"type":"integer"},"timezone":{"type":"string"},"default_ca_provider_id":{"type":"integer"}},"additionalProperties":false}`
 
 func New(baseURL string, client *http.Client) http.Handler {

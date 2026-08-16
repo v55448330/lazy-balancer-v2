@@ -143,6 +143,46 @@ func TestRunMigrations_dropsDeadSecurityAndAdminTLSColumns(t *testing.T) {
 	}
 }
 
+func TestRunMigrations_dropsDeadLbRulesIPACLColumns(t *testing.T) {
+	// Given a schema still carrying the dead rule-level IP ACL columns
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO global_config (id,caddy_config) VALUES (1,'{}');
+		ALTER TABLE lb_rules ADD COLUMN ip_acl_mode TEXT NOT NULL DEFAULT '';
+		ALTER TABLE lb_rules ADD COLUMN ip_acl_list TEXT NOT NULL DEFAULT '[]';
+		INSERT INTO lb_rules (name, protocol, listen_port, caddy_id) VALUES ('legacy rule', 'http', 80, 'lb_legacy');`); err != nil {
+		t.Fatalf("seed legacy dead columns: %v", err)
+	}
+
+	// When migrations run (twice, to prove idempotence)
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	if err := runMigrations(); err != nil {
+		t.Fatalf("repeat migrations: %v", err)
+	}
+
+	// Then the dead columns are dropped while the row survives
+	for _, column := range []string{"ip_acl_mode", "ip_acl_list"} {
+		var count int
+		if err := database.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_rules') WHERE name=?", column).Scan(&count); err != nil {
+			t.Fatalf("query lb_rules.%s: %v", column, err)
+		}
+		if count != 0 {
+			t.Fatalf("lb_rules.%s count=%d, want dropped", column, count)
+		}
+	}
+	var ruleName string
+	if err := database.QueryRow("SELECT name FROM lb_rules WHERE caddy_id='lb_legacy'").Scan(&ruleName); err != nil {
+		t.Fatalf("read migrated lb_rule: %v", err)
+	}
+	if ruleName != "legacy rule" {
+		t.Fatalf("row lost after drop: name=%q", ruleName)
+	}
+}
+
 func TestRunMigrations_makes_users_isEnabled_notNull_and_backfills_null(t *testing.T) {
 	// Given
 	database := openMigrationTestDB(t)

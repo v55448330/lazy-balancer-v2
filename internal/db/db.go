@@ -232,8 +232,6 @@ func createTables() error {
 		request_body_max_size_mb INTEGER DEFAULT 0,
 		upstream_keepalive_timeout INTEGER DEFAULT 0,
 		server_tokens_hidden INTEGER DEFAULT 0,
-		ip_acl_mode TEXT NOT NULL DEFAULT '',
-		ip_acl_list TEXT NOT NULL DEFAULT '[]',
 		custom_routes_enabled BOOLEAN NOT NULL DEFAULT 0,
 		proxy_dial_timeout INTEGER NOT NULL DEFAULT 0,
 		proxy_response_header_timeout INTEGER NOT NULL DEFAULT 0,
@@ -670,8 +668,6 @@ func runMigrations() error {
 		"global_config.jwt_expire_minutes":            "INTEGER DEFAULT 20",
 		"global_config.timezone":                      "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
 		"lb_rules.log_enabled":                        "BOOLEAN DEFAULT 0",
-		"lb_rules.ip_acl_mode":                        "TEXT NOT NULL DEFAULT ''",
-		"lb_rules.ip_acl_list":                        "TEXT NOT NULL DEFAULT '[]'",
 		"lb_rules.custom_routes_enabled":              "BOOLEAN NOT NULL DEFAULT 0",
 		"lb_rules.proxy_dial_timeout":                 "INTEGER NOT NULL DEFAULT 0",
 		"lb_rules.proxy_response_header_timeout":      "INTEGER NOT NULL DEFAULT 0",
@@ -984,12 +980,16 @@ func runMigrations() error {
 	//   规则的状态码列不再写入也不被读取（Caddy 配置渲染统一走策略的 block_status_code）。
 	// - global_config.admin_tls_acme_rule_id / admin_tls_port 在 UpdateAdminTLS 中仅写入
 	//   空值/监听端口，从未被任何读取路径消费（管理面板 HTTPS 只使用 enabled/mode/cert/key）。
+	// - lb_rules.ip_acl_mode / ip_acl_list 为规则级 IP 访问控制的遗留列，规则级 IP ACL 早已
+	//   迁入 security_policies（策略级 ip_acl_* 仍在使用），这两列不再被读取或写入。
 	deadColumnDrops := []struct{ table, column string }{
 		{"global_config", "caddy_log_path"}, // 读取但从未使用，日志文件名由渲染层硬编码
 		{"security_block_pages", "status_code"},
 		{"security_custom_rules", "status_code"},
 		{"global_config", "admin_tls_acme_rule_id"},
 		{"global_config", "admin_tls_port"},
+		{"lb_rules", "ip_acl_mode"},
+		{"lb_rules", "ip_acl_list"},
 	}
 	for _, drop := range deadColumnDrops {
 		if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", drop.table, drop.column).Scan(&colCount); err != nil {
@@ -1527,7 +1527,9 @@ func migrateLbRulesPrimaryKey() error {
 		return rollbackMigration(tx, fmt.Errorf("failed to create lb_rules_new: %w", err))
 	}
 
-	// Copy data from old table to new table
+	// Copy data from old table to new table。注意：ip_acl_mode / ip_acl_list 是已废弃的规则级
+	// IP ACL 列（已迁入 security_policies 的策略级 ip_acl_*），此处列清单与 INSERT...SELECT
+	// 映射有意排除它们，重建时随旧表一并丢弃。
 	_, err = tx.Exec(`
 		INSERT INTO lb_rules_new (
 			id, name, description, protocol, domain, listen_port,

@@ -324,6 +324,47 @@ func TestGetSecurityOverview_fallsBackToBundledCRSVersion(t *testing.T) {
 	}
 }
 
+func TestGetSecurityOverview_trendBucketsLocalDateForNegativeOffset(t *testing.T) {
+	// Given a western timezone (America/New_York, UTC-4 in summer) so the offset is negative
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityEventsRouter(t)
+	if _, err := time.LoadLocation("America/New_York"); err != nil {
+		t.Fatalf("load America/New_York: %v", err)
+	}
+	services.ConfigureLocation("America/New_York")
+	t.Cleanup(func() { services.ConfigureLocation("Asia/Shanghai") })
+
+	loc := services.CurrentLocation()
+	eventTime := time.Now().UTC()
+	seedSecurityEvent(t, eventTime.Format("2006-01-02 15:04:05"), "lb_neg", 1, "942100", "SQL Injection")
+
+	// When the overview is requested
+	recorder := getRequest(t, router, "/security/overview")
+
+	// Then the event lands in the correct local-date bucket (no all-zero trend from "+-240")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("overview status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int                     `json:"code"`
+		Data models.SecurityOverview `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse overview: %v", err)
+	}
+	wantDate := eventTime.In(loc).Format("2006-01-02")
+	for _, point := range resp.Data.Trend {
+		if point.Date != wantDate {
+			continue
+		}
+		if point.Blocked != 1 {
+			t.Fatalf("trend[%s].blocked = %d, want 1: %+v", wantDate, point.Blocked, resp.Data.Trend)
+		}
+		return
+	}
+	t.Fatalf("trend missing bucket %s (got %+v)", wantDate, resp.Data.Trend)
+}
+
 func TestGetSecurityOverview_trendZeroFillsSevenDays(t *testing.T) {
 	// Given events on only 2 of the last 7 days (blocked today, logged 3 days ago)
 	setupSecurityPolicyTestDB(t)
