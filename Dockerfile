@@ -6,12 +6,20 @@ WORKDIR /app
 
 ENV GOTOOLCHAIN=auto
 COPY . .
-RUN xcaddy build v2.11.4 \
+RUN xcaddy build b2693fb63a30 \
   --with github.com/mholt/caddy-l4@v0.1.2 \
   --with github.com/caddyserver/transform-encoder@ba4124974830222da7f12a091cf11ddf4d49363f \
   --with github.com/mholt/caddy-ratelimit@v0.1.0 \
   --with github.com/corazawaf/coraza-caddy/v2@v2.5.0 \
-  --with lazy-balancer-v2/caddygeoip=./caddygeoip
+  --with lazy-balancer-v2/caddygeoip=./caddygeoip \
+  --with lazy-balancer-v2/caddydeps=./caddydeps
+# 构建期断言：镜像扫描要求的最低依赖版本未被 MVS 抬升到位则直接失败
+# （go version -m 的模块路径与版本之间是 TAB 分隔，用 [[:space:]] 匹配）
+RUN go version -m /app/caddy | tee /tmp/caddy-mods.txt && \
+    grep -qE "google.golang.org/grpc[[:space:]]+v1\.8[2-9]" /tmp/caddy-mods.txt && \
+    grep -qE "github.com/google/cel-go[[:space:]]+v0\.29" /tmp/caddy-mods.txt && \
+    grep -qE "go.opentelemetry.io/otel[[:space:]]+v1\.4[4-9]" /tmp/caddy-mods.txt && \
+    grep -qE "golang.org/x/net[[:space:]]+v0\.5[6-9]" /tmp/caddy-mods.txt
 
 # Build Go backend
 FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS backend
@@ -23,7 +31,7 @@ WORKDIR /app/cmd/server
 RUN CGO_ENABLED=0 GOOS=linux go build -o lazy-balancer
 
 # Final image
-FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
+FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 ARG VERSION=2.1.3
 ENV APP_VERSION=${VERSION}
 RUN apk add --no-cache ca-certificates shadow sqlite tzdata
