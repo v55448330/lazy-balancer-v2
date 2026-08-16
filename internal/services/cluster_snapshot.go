@@ -111,24 +111,9 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	if cache.initialized && cache.version == version && cache.ownership == ownershipHash && cache.switches == switchesKey && (cache.expiresAt.IsZero() || now.Before(cache.expiresAt)) {
 		return cache.snapshot, cache.canonical, cache.fingerprint, nil
 	}
-	snapshot, err := s.buildSnapshot(ctx, tx)
+	snapshot, err := s.buildFullSnapshot(ctx, tx)
 	if err != nil {
 		return models.ClusterSnapshot{}, nil, "", err
-	}
-	snapshot.WafFiles = BuildWafFileRef()
-	if switches, swErr := readSyncSwitches(s.db); swErr == nil {
-		snapshot.MasterSyncSwitches = &models.ClusterSyncSwitchesPayload{
-			GlobalConfig: switches.GlobalConfig, Users: switches.Users,
-			Rules: switches.Rules, WafFiles: switches.WafFiles, Security: switches.Security,
-		}
-	}
-	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
-	snapshot.SchemaVersion = CurrentSnapshotSchema
-	snapshot.MinReaderVersion = CurrentSnapshotSchema
-	// 主节点与从节点共用同一 ACME 状态校验：不一致快照会被从节点永久拒绝，
-	// 此处提前校验并记录错误以提升主节点可见性，但仍照常发布。
-	if err := validateSnapshotACMEState(snapshot); err != nil {
-		Logf("error", "cluster snapshot self-validation failed (still publishing): %v", err)
 	}
 	canonicalSnapshot := snapshot
 	canonicalSnapshot.Fingerprint = ""
@@ -152,6 +137,53 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	cache.switches = switchesKey
 	cache.expiresAt = nearestSnapshotCertificateExpiry(snapshot.Certs, now)
 	return snapshot, canonical, fingerprint, nil
+}
+
+// buildFullSnapshot 完成快照构建与后处理（WAF 引用、主节点开关镜像、节哈希、
+// schema 版本、ACME 状态自校验），不触碰缓存。缓存命中路径与绕过路径共用此
+// 实现，保证两者产出一致的 SectionHashes 等字段。
+func (s *ClusterService) buildFullSnapshot(ctx context.Context, store snapshotStore) (models.ClusterSnapshot, error) {
+	snapshot, err := s.buildSnapshot(ctx, store)
+	if err != nil {
+		return models.ClusterSnapshot{}, err
+	}
+	snapshot.WafFiles = BuildWafFileRef()
+	if switches, swErr := readSyncSwitches(s.db); swErr == nil {
+		snapshot.MasterSyncSwitches = &models.ClusterSyncSwitchesPayload{
+			GlobalConfig: switches.GlobalConfig, Users: switches.Users,
+			Rules: switches.Rules, WafFiles: switches.WafFiles, Security: switches.Security,
+		}
+	}
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	snapshot.SchemaVersion = CurrentSnapshotSchema
+	snapshot.MinReaderVersion = CurrentSnapshotSchema
+	// 主节点与从节点共用同一 ACME 状态校验：不一致快照会被从节点永久拒绝，
+	// 此处提前校验并记录错误以提升主节点可见性，但仍照常发布。
+	if err := validateSnapshotACMEState(snapshot); err != nil {
+		Logf("error", "cluster snapshot self-validation failed (still publishing): %v", err)
+	}
+	return snapshot, nil
+}
+
+// clusterSnapshotBypassingCache 绕过共享快照缓存，直接从数据库全量重建快照。
+// 漂移检测（driftedSections）与 apply 路径的 previous 备份必须读取当前库状态：
+// 缓存键为 cluster_version/所有权/开关，从节点本地写入（如 users.last_login）
+// 不会递增 cluster_version，稳态下缓存永不失效，命中缓存会把真实漂移掩盖掉。
+// apply 频率低，全量重建开销可接受。
+func (s *ClusterService) clusterSnapshotBypassingCache(ctx context.Context) (models.ClusterSnapshot, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return models.ClusterSnapshot{}, fmt.Errorf("开启集群快照事务: %w", err)
+	}
+	defer tx.Rollback()
+	snapshot, err := s.buildFullSnapshot(ctx, tx)
+	if err != nil {
+		return models.ClusterSnapshot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return models.ClusterSnapshot{}, fmt.Errorf("提交集群快照事务: %w", err)
+	}
+	return snapshot, nil
 }
 
 func snapshotOwnershipHash(ctx context.Context, store snapshotStore) ([sha256.Size]byte, error) {

@@ -594,17 +594,29 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 // driftedSections 用本地数据重建节哈希，与已应用记录比对；不一致说明
 // 本地数据在同步之外丢失或被改动，返回漂移节名（空串表示无漂移）。
 // 仅覆盖 rules/users/security 三个纯全量替换节（见 driftGuardSections）。
+// 重建必须绕过快照缓存（见 clusterSnapshotBypassingCache）：从节点本地写入
+// 不递增 cluster_version，命中缓存会把稳态漂移永久掩盖。开关关闭的节跳过
+// 比对（镜像 computeSectionSkips 语义），避免「曾同步→开关关闭→本地改动」时
+// 每轮都触发全量重拉、apply 又跳过该节导致的死循环。
 func (s *SyncService) driftedSections(ctx context.Context) string {
 	if s.cluster == nil || s.db == nil {
 		return ""
 	}
-	local, _, err := s.cluster.Snapshot(ctx, 0, "", "")
+	local, err := s.cluster.clusterSnapshotBypassingCache(ctx)
 	if err != nil {
+		Logf("warn", "本地快照重建失败，跳过漂移检测: %v", err)
 		return ""
 	}
 	applied := readAppliedSectionHashes(s.db)
+	switches, err := readSyncSwitches(s.db)
+	if err != nil {
+		switches = SyncSwitches{GlobalConfig: true, Users: true, Rules: true, WafFiles: true, Security: true}
+	}
 	var drifted []string
 	for _, key := range driftGuardSections {
+		if !switches.sectionEnabled(key) {
+			continue
+		}
 		if localHash := local.SectionHashes[key]; localHash != "" && applied[key] != "" && localHash != applied[key] {
 			drifted = append(drifted, key)
 		}

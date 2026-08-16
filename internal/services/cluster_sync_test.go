@@ -1016,3 +1016,65 @@ func TestSyncService_Pull_refetchesFullSnapshotOnLocalDrift(t *testing.T) {
 		t.Fatalf("drift 未自愈: lb_rules 行数=%d, want 1", count)
 	}
 }
+
+func TestSyncService_driftedSections_bypassesStaleSnapshotCache(t *testing.T) {
+	// I-1 回归：本地规则在同步之外被删改但不递增 cluster_version，快照缓存
+	// 键（version/所有权/开关）不变 → 命中缓存会返回陈旧快照掩盖漂移。
+	// driftedSections 必须绕过缓存、直接重建本地快照才能检测到漂移。
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_a','a','http','a.example',80,1)`); err != nil {
+		t.Fatal(err)
+	}
+	// 预热快照缓存：记录与主节点一致的 rules 已应用哈希。
+	cluster := NewClusterService(database, nil)
+	snap, _, err := cluster.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedAppliedSection(t, database, "rules", snap.SectionHashes["rules"])
+
+	// 稳态下本地规则被删（不 bump cluster_version）。
+	if _, err := database.Exec(`DELETE FROM lb_rules WHERE caddy_id='lb_a'`); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
+	if drifted := service.driftedSections(context.Background()); drifted != "rules" {
+		t.Fatalf("drifted=%q, want rules（缓存命中掩盖了漂移）", drifted)
+	}
+}
+
+func TestSyncService_driftedSections_skipsDisabledSwitch(t *testing.T) {
+	// I-2 回归：曾同步过的节随后开关关闭 + 本地改动，若漂移检测不看开关会
+	// 每轮都报告漂移并全量重拉，而 apply 又跳过该节 → 永久死循环。
+	_, database := newClusterTestService(t)
+	seedAppliedSection(t, database, "users", "stale-applied-hash")
+	if _, err := database.Exec("UPDATE global_config SET sync_users=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'local','h','admin',1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
+	if drifted := service.driftedSections(context.Background()); drifted != "" {
+		t.Fatalf("drifted=%q, want \"\"（开关关闭的节不得触发重拉循环）", drifted)
+	}
+
+	// 开关重新打开且本地数据缺失 → 仍应检测漂移。
+	if _, err := database.Exec("UPDATE global_config SET sync_users=1 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	cluster := NewClusterService(database, nil)
+	snap, _, err := cluster.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedAppliedSection(t, database, "users", snap.SectionHashes["users"])
+	if _, err := database.Exec(`DELETE FROM users`); err != nil {
+		t.Fatal(err)
+	}
+	if drifted := service.driftedSections(context.Background()); drifted != "users" {
+		t.Fatalf("drifted=%q, want users（开关打开且数据缺失应检测）", drifted)
+	}
+}

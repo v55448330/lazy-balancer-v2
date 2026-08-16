@@ -50,7 +50,7 @@ func ComputeSnapshotSectionHashes(s *models.ClusterSnapshot) map[string]string {
 			payload = struct {
 				Users   []models.ClusterUser   `json:"users"`
 				APIKeys []models.ClusterAPIKey `json:"api_keys"`
-			}{s.Users, s.APIKeys}
+			}{sanitizeUsersForHash(s.Users), sanitizeAPIKeysForHash(s.APIKeys)}
 		case "rules":
 			payload = s.Rules
 		case "waf_files":
@@ -73,6 +73,37 @@ func ComputeSnapshotSectionHashes(s *models.ClusterSnapshot) map[string]string {
 		hashes[sec.Key] = hex.EncodeToString(sum[:])
 	}
 	return hashes
+}
+
+// sanitizeUsersForHash 返回用于 users 节哈希计算的用户副本：清零 last_login。
+// last_login 是节点本地记账（登录时间），从节点登录一次就会改变本地 users 哈希，
+// 与主节点下发的已应用记录不符，进而触发永久全量重拉；故哈希必须对其不敏感。
+// 只清零副本、不改动 s.Users 原值，快照线上格式（含 last_login）保持不变。
+// 残留影响：由 users 节其他字段变化触发的重放仍会覆盖从节点 last_login——
+// 属低频、外观性损失，可接受。
+func sanitizeUsersForHash(users []models.ClusterUser) []models.ClusterUser {
+	if len(users) == 0 {
+		return users
+	}
+	out := make([]models.ClusterUser, len(users))
+	for i, u := range users {
+		out[i] = u
+		out[i].LastLogin = models.JSONNullTime{}
+	}
+	return out
+}
+
+// sanitizeAPIKeysForHash 同理清零 api_keys 的 last_used（节点本地使用时间记账）。
+func sanitizeAPIKeysForHash(keys []models.ClusterAPIKey) []models.ClusterAPIKey {
+	if len(keys) == 0 {
+		return keys
+	}
+	out := make([]models.ClusterAPIKey, len(keys))
+	for i, k := range keys {
+		out[i] = k
+		out[i].LastUsed = models.JSONNullTime{}
+	}
+	return out
 }
 
 // LoadSyncSwitches reads the master-side sync switches; defaults all-on.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/models"
 )
@@ -101,5 +102,35 @@ func TestComputeSnapshotSectionHashes_stableAcrossRuns(t *testing.T) {
 	b.Users[0].Username = "changed"
 	if ComputeSnapshotSectionHashes(&b)["users"] == ha["users"] {
 		t.Fatal("users hash must change when payload changes")
+	}
+}
+
+func TestComputeSnapshotSectionHashes_ignoresLocalBookkeepingTimes(t *testing.T) {
+	// last_login / last_used 是节点本地记账，不应参与 users 节哈希——
+	// 否则从节点登录一次就改变本地哈希、触发永久全量重拉循环。
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	build := func(username, role string, withLocalTimes bool) models.ClusterSnapshot {
+		user := models.ClusterUser{ID: 1, Username: username, PasswordHash: "h", Role: role, IsEnabled: true}
+		key := models.ClusterAPIKey{ID: 1, Name: "k", KeyHash: "kh", KeyPrefix: "kp", IsEnabled: true}
+		if withLocalTimes {
+			user.LastLogin = models.JSONNullTime{NullTime: sql.NullTime{Valid: true, Time: now}}
+			key.LastUsed = models.JSONNullTime{NullTime: sql.NullTime{Valid: true, Time: now}}
+		}
+		return models.ClusterSnapshot{Users: []models.ClusterUser{user}, APIKeys: []models.ClusterAPIKey{key}}
+	}
+
+	base := build("admin", "admin", false)
+	withLocalTimes := build("admin", "admin", true)
+	if ComputeSnapshotSectionHashes(&base)["users"] != ComputeSnapshotSectionHashes(&withLocalTimes)["users"] {
+		t.Fatal("users hash must ignore last_login/last_used")
+	}
+
+	changedName := build("admin2", "admin", true)
+	if h := ComputeSnapshotSectionHashes(&changedName)["users"]; h == ComputeSnapshotSectionHashes(&withLocalTimes)["users"] {
+		t.Fatal("users hash must change when username changes")
+	}
+	changedRole := build("admin", "viewer", true)
+	if h := ComputeSnapshotSectionHashes(&changedRole)["users"]; h == ComputeSnapshotSectionHashes(&withLocalTimes)["users"] {
+		t.Fatal("users hash must change when role changes")
 	}
 }

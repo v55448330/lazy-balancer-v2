@@ -63,7 +63,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			Security:     snapshot.MasterSyncSwitches.Security,
 		}
 	}
-	previous, _, err := s.cluster.Snapshot(ctx, 0, "", "")
+	previous, err := s.cluster.clusterSnapshotBypassingCache(ctx)
 	if err != nil {
 		return fmt.Errorf("备份本地快照: %w", err)
 	}
