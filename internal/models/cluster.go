@@ -127,7 +127,6 @@ type ClusterBasicSettings struct {
 	DNSProvider                string `json:"dns_provider"`
 	DNSCredentials             string `json:"dns_credentials"`
 	SyncInterval               int    `json:"sync_interval"`
-	CaddyLogPath               string `json:"caddy_log_path,omitempty"`
 	CaddyLogLevel              string `json:"caddy_log_level,omitempty"`
 	CaddyLogSizeMB             int    `json:"caddy_log_size_mb,omitempty"`
 	RequestBodyMaxSizeMB       int    `json:"request_body_max_size_mb,omitempty"`

@@ -108,7 +108,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       COALESCE(cert_renewal_attempts,5) as cert_renewal_attempts,
 		       COALESCE(default_ca_provider_id,0) as default_ca_provider_id,
 		       log_level,
-		       COALESCE(caddy_log_path,'/app/logs/caddy.log') as caddy_log_path,
+
 		       COALESCE(caddy_log_level,'info') as caddy_log_level,
 		       COALESCE(caddy_log_size_mb,100) as caddy_log_size_mb,
 		       COALESCE(request_body_max_size_mb,0) as request_body_max_size_mb,
@@ -139,7 +139,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.ID, &cfg.CaddyConfig, &cfg.DNSProvider, &cfg.DNSCredentials,
 		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.CertRenewalDays, &cfg.CertRenewalAttempts, &cfg.DefaultCAProviderID,
 		&cfg.LogLevel,
-		&cfg.CaddyLogPath, &cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
+		&cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
 		&cfg.RequestBodyMaxSizeMB, &cfg.HTTPReadTimeout, &cfg.HTTPWriteTimeout, &cfg.HTTPIdleTimeout,
 		&cfg.UpstreamKeepaliveTimeout, &cfg.ProxyDialTimeout, &cfg.ProxyResponseHeaderTimeout, &cfg.ProxyReadTimeout, &cfg.ProxyWriteTimeout, &cfg.ProxyStreamTimeout, &cfg.ProxyFlushInterval, &cfg.ProxyStreamCloseDelay,
 		&cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.AuditLogSizeMB, &cfg.RuntimeLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.JWTExpireMinutes, &cfg.Timezone,
@@ -170,8 +170,6 @@ func (h *Handlers) PreviewConfigUpdate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
 		return
 	}
-	req.CaddyLogPath = nil
-
 	old, err := loadConfigSnapshot()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read current config"})
@@ -193,8 +191,6 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 
-	// Log path is managed by the system and cannot be changed through the UI/API.
-	req.CaddyLogPath = nil
 	if req.LogLevel != nil {
 		level := strings.ToLower(strings.TrimSpace(*req.LogLevel))
 		switch level {
@@ -359,7 +355,6 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				cert_renewal_attempts = COALESCE(?, cert_renewal_attempts),
 				default_ca_provider_id = CASE WHEN ? IS NULL THEN default_ca_provider_id ELSE NULLIF(?, 0) END,
 				log_level = COALESCE(?, log_level),
-								caddy_log_path = COALESCE(?, caddy_log_path),
 				caddy_log_level = COALESCE(?, caddy_log_level),
 				caddy_log_size_mb = COALESCE(?, caddy_log_size_mb),
 				request_body_max_size_mb = COALESCE(?, request_body_max_size_mb),
@@ -386,7 +381,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				updated_at = datetime('now')
 			WHERE id = 1
 		`, req.DNSProvider, req.DNSCredentials, req.DNSCredentials, req.ACMEEmail, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.DefaultCAProviderID, req.LogLevel,
-		req.CaddyLogPath, req.CaddyLogLevel, req.CaddyLogSizeMB,
+		req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
 		req.UpstreamKeepaliveTimeout, req.ProxyDialTimeout, req.ProxyResponseHeaderTimeout, req.ProxyReadTimeout, req.ProxyWriteTimeout, req.ProxyStreamTimeout, req.ProxyFlushInterval, req.ProxyStreamCloseDelay,
 		req.ServerTokensHidden, req.CertJobLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone)

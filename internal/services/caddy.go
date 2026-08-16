@@ -985,7 +985,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 
 	var dnsProvider, acmeEmail string
 	var isMaster bool
-	var caddyLogPath, caddyLogLevel string
+	var caddyLogLevel string
 	var caddyLogSizeMB int
 	var accessLogJSON bool
 	var accessLogFormat string
@@ -997,13 +997,13 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 	}
 	if err := store.QueryRow(`
 		SELECT COALESCE(dns_provider,''), COALESCE(acme_email,''), is_master,
-		       COALESCE(caddy_log_path,'/app/logs/caddy.log'), COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
+		       COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
 		       COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,0), COALESCE(http_write_timeout,0),
 		       COALESCE(http_idle_timeout,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE),
 		       COALESCE(access_log_json,TRUE), COALESCE(access_log_format,''), COALESCE(proxy_dial_timeout,0),
 		       COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0)
 		FROM global_config WHERE id = 1
-	`).Scan(&dnsProvider, &acmeEmail, &isMaster, &caddyLogPath, &caddyLogLevel, &caddyLogSizeMB,
+	`).Scan(&dnsProvider, &acmeEmail, &isMaster, &caddyLogLevel, &caddyLogSizeMB,
 		&global.requestBodyMaxSizeMB, &global.httpReadTimeout, &global.httpWriteTimeout, &global.httpIdleTimeout,
 		&global.upstreamKeepaliveTimeout, &global.serverTokensHidden, &accessLogJSON, &accessLogFormat,
 		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout,
@@ -1013,9 +1013,6 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 
 	if len(overrides) > 0 && overrides[0] != nil {
 		o := overrides[0]
-		if o.CaddyLogPath != nil {
-			caddyLogPath = *o.CaddyLogPath
-		}
 		if o.CaddyLogLevel != nil {
 			caddyLogLevel = *o.CaddyLogLevel
 		}

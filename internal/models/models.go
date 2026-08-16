@@ -203,7 +203,6 @@ type GlobalConfig struct {
 	CertRenewalDays            int          `json:"cert_renewal_days"`
 	CertRenewalAttempts        int          `json:"cert_renewal_attempts"`
 	LogLevel                   string       `json:"log_level"`
-	CaddyLogPath               string       `json:"caddy_log_path"`
 	CaddyLogLevel              string       `json:"caddy_log_level"`
 	CaddyLogSizeMB             int          `json:"caddy_log_size_mb"`
 	RequestBodyMaxSizeMB       int          `json:"request_body_max_size_mb"`
@@ -487,7 +486,6 @@ type UpdateConfigRequest struct {
 	CertRenewalDays            *int    `json:"cert_renewal_days"`
 	CertRenewalAttempts        *int    `json:"cert_renewal_attempts"`
 	LogLevel                   *string `json:"log_level"`
-	CaddyLogPath               *string `json:"caddy_log_path"`
 	CaddyLogLevel              *string `json:"caddy_log_level"`
 	CaddyLogSizeMB             *int    `json:"caddy_log_size_mb"`
 	RequestBodyMaxSizeMB       *int    `json:"request_body_max_size_mb"`

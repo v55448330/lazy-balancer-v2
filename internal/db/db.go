@@ -342,7 +342,6 @@ func createTables() error {
 		is_master BOOLEAN DEFAULT TRUE,
 		master_url VARCHAR(255),
 		sync_interval INTEGER DEFAULT 60,
-		caddy_log_path VARCHAR(500) DEFAULT '/app/logs/caddy.log',
 		caddy_log_level VARCHAR(10) DEFAULT 'info',
 		caddy_log_size_mb INTEGER DEFAULT 100,
 		request_body_max_size_mb INTEGER DEFAULT 0,
@@ -652,7 +651,6 @@ func runMigrations() error {
 		"global_config.cert_expiry_days":              "INTEGER DEFAULT 30",
 		"global_config.metrics_public":                "BOOLEAN DEFAULT 0",
 		"global_config.metrics_origins":               "VARCHAR(500)",
-		"global_config.caddy_log_path":                "VARCHAR(500) DEFAULT '/app/logs/caddy.log'",
 		"global_config.caddy_log_level":               "VARCHAR(10) DEFAULT 'info'",
 		"global_config.caddy_log_size_mb":             "INTEGER DEFAULT 100",
 		"global_config.request_body_max_size_mb":      "INTEGER DEFAULT 0",
@@ -987,6 +985,7 @@ func runMigrations() error {
 	// - global_config.admin_tls_acme_rule_id / admin_tls_port 在 UpdateAdminTLS 中仅写入
 	//   空值/监听端口，从未被任何读取路径消费（管理面板 HTTPS 只使用 enabled/mode/cert/key）。
 	deadColumnDrops := []struct{ table, column string }{
+		{"global_config", "caddy_log_path"}, // 读取但从未使用，日志文件名由渲染层硬编码
 		{"security_block_pages", "status_code"},
 		{"security_custom_rules", "status_code"},
 		{"global_config", "admin_tls_acme_rule_id"},
