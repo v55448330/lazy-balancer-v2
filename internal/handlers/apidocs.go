@@ -130,7 +130,9 @@ var apiDocRoutes = []apiDocRoute{
 	{"GET", "/metrics/connections", "指标", "连接统计", "", `{"established":0,"time_wait":0}`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/system/info", "系统", "系统信息", "", `{"ip_address":"...","hostname":"..."}`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/system/metrics", "系统", "系统指标", "", `{"cpu_percent":0,"memory_percent":0}`, []string{"401 unauthenticated"}, ""},
-	{"GET", "/audit-logs", "审计", "操作日志", "", `{"list":[],"total":0,"page":1,"page_size":20}`, []string{"401 unauthenticated"}, "query: page, page_size。"},
+	{"GET", "/audit-logs", "审计", "操作日志", "", `{"list":[],"total":0,"page":1,"page_size":20}`, []string{"401 unauthenticated"}, "query: page, page_size, username, action, resource, ip, keyword, start_time, end_time。"},
+	{"GET", "/audit-logs/options", "审计", "操作日志筛选选项", "", `{"usernames":[{"value":"admin","count":12}],"actions":[{"value":"更新","count":5}],"resources":[{"value":"全局配置","count":3}]}`, []string{"401 unauthenticated"}, "操作人/操作/对象的去重可选值（按频次排序，对象取高频前 50）。"},
+	{"GET", "/logs/stats", "日志", "日志存储状态", "", `{"logs":[{"key":"audit","name":"操作日志","size_bytes":1048576,"rotated_bytes":0,"keep_count":0,"rows":6895,"retention_note":"每日自动清理，保留 3 个月","config_source":"基础设置 · 日志保留"}]}`, []string{"401 unauthenticated"}, "7 类日志的当前大小/阈值/保留策略；caddy_id 参数收窄证书任务与规则访问到单规则。"},
 	{"GET", "/security/overview", "安全", "安全总览", "", `{"today_blocked":0,"today_detected":0,"active_policies":0,"crs_version":"v4.28.0","trend":[{"date":"2026-08-04","blocked":0,"detected":0}],"top_ips":[{"ip":"1.2.3.4","blocked":5,"detected":10,"last_time":"2026-08-10 14:32:01","attack_type":"SQL注入"}],"attack_types":[{"name":"SQL注入","value":42}]}`, []string{"401 unauthenticated"}, ""},
 	{"GET", "/security/rate-limit-blocks", "安全", "各站点限流拦截累计次数", "", `{"total":12,"hosts":[{"host":"go029.com","count":9}]}`, []string{"401 unauthenticated"}, "数据来自 Caddy /metrics 的 429（handler=rate_limit）计数，自 Caddy 进程启动以来累计，重启归零；采集失败时降级为空列表。"},
 	{"GET", "/security/policies", "安全", "安全策略列表", "", `[{"id":1,"name":"默认策略","mode":"blocking","enabled":true,"rule_count":3,"has_waf":true,"has_ip_control":true,"has_rate_limit":false}]`, []string{"401 unauthenticated"}, ""},
@@ -272,7 +274,8 @@ var apiDocContracts = map[string]apiDocContract{
 	"GET /certificates/jobs":               {queryParameters: []apiDocParameter{{"rule_id", "string", "按规则 ID 过滤"}}},
 	"GET /caddy/logs":                      {queryParameters: []apiDocParameter{{"type", "string", "日志类型：runtime、server、proxy、tls 或 access"}}},
 	"GET /metrics/history":                 {queryParameters: []apiDocParameter{{"rule_id", "string", "可选规则 ID"}, {"interval", "string", "时间范围，默认 1h"}}},
-	"GET /audit-logs":                      {queryParameters: []apiDocParameter{{"page", "integer", "页码，默认 1"}, {"page_size", "integer", "每页数量，默认 20"}}},
+	"GET /audit-logs":                      {queryParameters: []apiDocParameter{{"page", "integer", "页码，默认 1"}, {"page_size", "integer", "每页数量，默认 20"}, {"username", "string", "操作人模糊筛选"}, {"action", "string", "操作模糊筛选"}, {"resource", "string", "对象模糊筛选"}, {"ip", "string", "IP 模糊筛选"}, {"keyword", "string", "详情关键词"}, {"start_time", "string", "开始时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"}, {"end_time", "string", "结束时间（配置时区）"}}},
+	"GET /audit-logs/options":              {queryParameters: nil},
 }
 
 func apiDocContractFor(route apiDocRoute) apiDocContract {
