@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
@@ -68,21 +69,35 @@ func sizeLimitMB(column string, def int64) *int64 {
 	return &limit
 }
 
+// logPaths resolves the two distinct log roots GetLogStats probes:
+//   - fixedDir is the hardcoded writer directory (/app/logs) shared by the five
+//     hardcoded-writer log families — caddy 四份日志（caddy.log/caddy-tls.log/
+//     caddy-server.log/caddy-proxy.log）、crs-update.log、ip2region-update.log、
+//     certjob-*.log、rules/*.log。这些写入端写死 /app/logs，与 LOG_FILE 无关，
+//     故其路径拼接必须固定用 /app/logs；若跟随 LogFile 目录推导，自定义
+//     LOG_FILE 时这些日志会全部显示 0B。
+//   - runtimePath is the runtime log path, which follows LogFile
+//     （空 → /app/logs/lazy-balancer.log）。
+func logPaths(cfg *config.Config) (fixedDir, runtimePath string) {
+	fixedDir = "/app/logs"
+	runtimePath = "/app/logs/lazy-balancer.log"
+	if cfg == nil {
+		return fixedDir, runtimePath
+	}
+	if cfg.LogFile != "" {
+		runtimePath = cfg.LogFile
+	}
+	return fixedDir, runtimePath
+}
+
 // GetLogStats 返回全部日志存储的体量与治理信息，供各日志页显示
 // 「当前大小 / 阈值（保留 N 份）」与清理策略说明。caddy_id 参数可将
 // 证书任务/规则访问两项收窄到单规则。
 func (h *Handlers) GetLogStats(c *gin.Context) {
-	logsDir := "/app/logs"
-	runtimePath := "/app/logs/lazy-balancer.log"
+	fixedLogsDir, runtimePath := logPaths(h.cfg)
 	dataDir := "/app/data"
-	if h.cfg != nil {
-		if h.cfg.LogFile != "" {
-			runtimePath = h.cfg.LogFile
-			logsDir = filepath.Dir(runtimePath)
-		}
-		if h.cfg.DataDir != "" {
-			dataDir = h.cfg.DataDir
-		}
+	if h.cfg != nil && h.cfg.DataDir != "" {
+		dataDir = h.cfg.DataDir
 	}
 
 	retentionNote := "每日自动清理，保留 " + strconv.FormatInt(globalConfigInt("audit_retention_months", 3), 10) + " 个月"
@@ -134,7 +149,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 	if info := byKey("caddy"); info != nil {
 		var active, rotated int64
 		for _, name := range []string{"caddy.log", "caddy-tls.log", "caddy-server.log", "caddy-proxy.log"} {
-			a, r := dirBytes(filepath.Join(logsDir, name))
+			a, r := dirBytes(filepath.Join(fixedLogsDir, name))
 			active += a
 			rotated += r
 		}
@@ -144,10 +159,10 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join("/app/waf", "audit", "audit.log"))
 	}
 	if info := byKey("crs_update"); info != nil {
-		info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join(logsDir, "crs-update.log"))
+		info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join(fixedLogsDir, "crs-update.log"))
 	}
 	if info := byKey("ip2region_update"); info != nil {
-		info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join(logsDir, "ip2region-update.log"))
+		info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join(fixedLogsDir, "ip2region-update.log"))
 	}
 
 	ruleID := strings.TrimSpace(c.Query("caddy_id"))
@@ -162,15 +177,15 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 	}
 	if info := byKey("certjob"); info != nil {
 		if ruleID != "" {
-			info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join(logsDir, "certjob-"+ruleID+".log"))
+			info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join(fixedLogsDir, "certjob-"+ruleID+".log"))
 			info.Name = "证书任务日志 #" + ruleID
-		} else if entries, err := os.ReadDir(logsDir); err == nil {
+		} else if entries, err := os.ReadDir(fixedLogsDir); err == nil {
 			var active, rotated int64
 			for _, e := range entries {
 				if e.IsDir() || !strings.HasPrefix(e.Name(), "certjob-") || !strings.HasSuffix(e.Name(), ".log") {
 					continue
 				}
-				a, r := dirBytes(filepath.Join(logsDir, e.Name()))
+				a, r := dirBytes(filepath.Join(fixedLogsDir, e.Name()))
 				active += a
 				rotated += r
 			}
@@ -179,15 +194,15 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 	}
 	if info := byKey("rule_access"); info != nil {
 		if ruleID != "" {
-			info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join(logsDir, "rules", ruleID+".log"))
+			info.SizeBytes, info.RotatedBytes = dirBytes(filepath.Join(fixedLogsDir, "rules", ruleID+".log"))
 			info.Name = "访问日志 #" + ruleID
-		} else if entries, err := os.ReadDir(filepath.Join(logsDir, "rules")); err == nil {
+		} else if entries, err := os.ReadDir(filepath.Join(fixedLogsDir, "rules")); err == nil {
 			var active, rotated int64
 			for _, e := range entries {
 				if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") {
 					continue
 				}
-				a, r := dirBytes(filepath.Join(logsDir, "rules", e.Name()))
+				a, r := dirBytes(filepath.Join(fixedLogsDir, "rules", e.Name()))
 				active += a
 				rotated += r
 			}

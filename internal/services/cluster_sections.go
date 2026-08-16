@@ -36,36 +36,7 @@ func ComputeSnapshotSectionHashes(s *models.ClusterSnapshot) map[string]string {
 	}
 	hashes := make(map[string]string, len(syncSections)+1)
 	for _, sec := range syncSections {
-		var payload interface{}
-		switch sec.Key {
-		case "global_config":
-			payload = s.BasicSettings
-			if s.CaddyConfig != nil {
-				payload = struct {
-					Basic models.ClusterBasicSettings `json:"basic_settings"`
-					Caddy string                      `json:"caddy_config"`
-				}{s.BasicSettings, *s.CaddyConfig}
-			}
-		case "users":
-			payload = struct {
-				Users   []models.ClusterUser   `json:"users"`
-				APIKeys []models.ClusterAPIKey `json:"api_keys"`
-			}{sanitizeUsersForHash(s.Users), sanitizeAPIKeysForHash(s.APIKeys)}
-		case "rules":
-			payload = s.Rules
-		case "waf_files":
-			payload = s.WafFiles
-		case "security":
-			payload = struct {
-				Policies    json.RawMessage                          `json:"policies"`
-				Bindings    json.RawMessage                          `json:"bindings"`
-				CustomRules []models.SecurityCustomRule              `json:"custom_rules"`
-				BlockPages  []models.SecurityBlockPage               `json:"block_pages"`
-				CRSVersion  []models.ClusterSecurityCRSVersion       `json:"crs_version"`
-				IP2Region   []models.ClusterSecurityIP2RegionVersion `json:"ip2region_version"`
-			}{s.SecurityPolicies, s.SecurityBindings, s.SecurityCustomRules, s.SecurityBlockPages, s.SecurityCRSVersion, s.SecurityIP2RegionVersion}
-		}
-		data, err := json.Marshal(payload)
+		data, err := json.Marshal(sectionPayloadFor(sec.Key, s))
 		if err != nil {
 			continue
 		}
@@ -73,6 +44,42 @@ func ComputeSnapshotSectionHashes(s *models.ClusterSnapshot) map[string]string {
 		hashes[sec.Key] = hex.EncodeToString(sum[:])
 	}
 	return hashes
+}
+
+// sectionPayloadFor returns the JSON-marshaled payload a section hash is derived
+// from. Extracted so the full-snapshot hashing (ComputeSnapshotSectionHashes) and
+// the lightweight drift guard (driftGuardSectionHashes) share ONE canonical payload
+// definition — the hash parity invariant between the two depends on it.
+func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
+	switch key {
+	case "global_config":
+		if s.CaddyConfig != nil {
+			return struct {
+				Basic models.ClusterBasicSettings `json:"basic_settings"`
+				Caddy string                      `json:"caddy_config"`
+			}{s.BasicSettings, *s.CaddyConfig}
+		}
+		return s.BasicSettings
+	case "users":
+		return struct {
+			Users   []models.ClusterUser   `json:"users"`
+			APIKeys []models.ClusterAPIKey `json:"api_keys"`
+		}{sanitizeUsersForHash(s.Users), sanitizeAPIKeysForHash(s.APIKeys)}
+	case "rules":
+		return s.Rules
+	case "waf_files":
+		return s.WafFiles
+	case "security":
+		return struct {
+			Policies    json.RawMessage                          `json:"policies"`
+			Bindings    json.RawMessage                          `json:"bindings"`
+			CustomRules []models.SecurityCustomRule              `json:"custom_rules"`
+			BlockPages  []models.SecurityBlockPage               `json:"block_pages"`
+			CRSVersion  []models.ClusterSecurityCRSVersion       `json:"crs_version"`
+			IP2Region   []models.ClusterSecurityIP2RegionVersion `json:"ip2region_version"`
+		}{s.SecurityPolicies, s.SecurityBindings, s.SecurityCustomRules, s.SecurityBlockPages, s.SecurityCRSVersion, s.SecurityIP2RegionVersion}
+	}
+	return nil
 }
 
 // sanitizeUsersForHash 返回用于 users 节哈希计算的用户副本：清零 last_login。

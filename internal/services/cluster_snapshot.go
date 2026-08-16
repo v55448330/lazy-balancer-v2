@@ -166,10 +166,12 @@ func (s *ClusterService) buildFullSnapshot(ctx context.Context, store snapshotSt
 }
 
 // clusterSnapshotBypassingCache 绕过共享快照缓存，直接从数据库全量重建快照。
-// 漂移检测（driftedSections）与 apply 路径的 previous 备份必须读取当前库状态：
-// 缓存键为 cluster_version/所有权/开关，从节点本地写入（如 users.last_login）
-// 不会递增 cluster_version，稳态下缓存永不失效，命中缓存会把真实漂移掩盖掉。
-// apply 频率低，全量重建开销可接受。
+// apply 路径的 previous 备份必须读取当前库状态：缓存键为 cluster_version/所有权/
+// 开关，从节点本地写入（如 users.last_login）不会递增 cluster_version，稳态下
+// 缓存永不失效，命中缓存会把真实漂移掩盖掉。apply 频率低，全量重建开销可接受。
+// 注：漂移检测已改用轻量 driftGuardSectionHashes（见 cluster_snapshot.go），不再
+// 经过本函数；本函数仍需为 applySnapshot 的 previous 保留全量快照（证书清理与
+// 工件需要完整 Certs / WafFiles）。
 func (s *ClusterService) clusterSnapshotBypassingCache(ctx context.Context) (models.ClusterSnapshot, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -184,6 +186,67 @@ func (s *ClusterService) clusterSnapshotBypassingCache(ctx context.Context) (mod
 		return models.ClusterSnapshot{}, fmt.Errorf("提交集群快照事务: %w", err)
 	}
 	return snapshot, nil
+}
+
+// driftGuardSectionHashes 仅重建漂移守卫三节（rules/users/security）的节哈希，
+// 走只读事务、复用与全量快照完全一致的逐节 payload 构造（sectionPayloadFor）。
+// 它刻意不调用 BuildWafFileRef（全量 CRS 树 tar.gz+sha256）与 snapshotCertificates
+// （X.509 解析）：漂移比对只消费这三节的 SectionHashes，二者都不参与。
+// 本函数在每次 304（默认 60s）都会执行，必须保持轻量。
+//
+// 哈希奇偶不变式（正确性不变量）：对三个守卫键，本函数返回值必须等于
+// ComputeSnapshotSectionHashes(buildFullSnapshot())[key]——漂移比对拿轻量重建哈希
+// 去对比全量快照路径写入的已应用记录，二者口径必须一致（由 sectionPayloadFor
+// 共用同一 payload 构造保证）。
+func (s *ClusterService) driftGuardSectionHashes(ctx context.Context) (map[string]string, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("开启漂移守卫事务: %w", err)
+	}
+	defer tx.Rollback()
+
+	var snapshot models.ClusterSnapshot
+	if snapshot.Rules, err = s.snapshotRules(ctx, tx); err != nil {
+		return nil, err
+	}
+	if snapshot.Users, err = s.snapshotUsers(ctx, tx); err != nil {
+		return nil, err
+	}
+	if snapshot.APIKeys, err = s.snapshotAPIKeys(ctx, tx); err != nil {
+		return nil, err
+	}
+	if snapshot.SecurityPolicies, err = s.snapshotSecurityPolicies(ctx, tx); err != nil {
+		return nil, err
+	}
+	if snapshot.SecurityBindings, err = s.snapshotSecurityBindings(ctx, tx); err != nil {
+		return nil, err
+	}
+	if snapshot.SecurityCustomRules, err = s.snapshotSecurityCustomRules(ctx, tx); err != nil {
+		return nil, err
+	}
+	if snapshot.SecurityBlockPages, err = s.snapshotSecurityBlockPages(ctx, tx); err != nil {
+		return nil, err
+	}
+	if snapshot.SecurityCRSVersion, err = s.snapshotSecurityCRSVersion(ctx, tx); err != nil {
+		return nil, err
+	}
+	if snapshot.SecurityIP2RegionVersion, err = s.snapshotSecurityIP2RegionVersion(ctx, tx); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("提交漂移守卫事务: %w", err)
+	}
+
+	hashes := make(map[string]string, len(driftGuardSections))
+	for _, key := range driftGuardSections {
+		data, err := json.Marshal(sectionPayloadFor(key, &snapshot))
+		if err != nil {
+			return nil, fmt.Errorf("序列化漂移守卫节 %s: %w", key, err)
+		}
+		sum := sha256.Sum256(data)
+		hashes[key] = hex.EncodeToString(sum[:])
+	}
+	return hashes, nil
 }
 
 func snapshotOwnershipHash(ctx context.Context, store snapshotStore) ([sha256.Size]byte, error) {
