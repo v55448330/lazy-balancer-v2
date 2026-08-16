@@ -351,6 +351,84 @@ func TestConfigBackup_export_import_roundtrip(t *testing.T) {
 	}
 }
 
+func TestConfigBackup_export_redacts_sensitive_columns(t *testing.T) {
+	// Given：种入机器凭证与 TLS 私钥，同时保留用户密码哈希与 API Key 哈希
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec(`INSERT INTO users (username, password_hash, role) VALUES ('keep', 'hash', 'admin')`); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id, name, protocol, domain, listen_port, enabled, tls_cert, tls_key) VALUES ('lb_redact', 'redact', 'http', 'redact.example.test', 8080, 1, 'cert-pem', 'key-pem')`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id, host, port, weight, enabled) VALUES ('lb_redact', '127.0.0.1', 9000, 1, 1)`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO api_keys (name, key_hash, key_prefix, created_by) VALUES ('ci', 'kh-secret', 'lb_sk_x', 1)`); err != nil {
+		t.Fatalf("seed api key: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO ca_providers (name, provider, directory_url, credentials) VALUES ('le', 'letsencrypt', 'https://acme.test/dir', 'ca-cred')`); err != nil {
+		t.Fatalf("seed ca provider: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO certificate_configs (name, dns_credentials) VALUES ('dnspod', 'dns-cred')`); err != nil {
+		t.Fatalf("seed certificate config: %v", err)
+	}
+	if _, err := db.DB.Exec(`UPDATE global_config SET dns_credentials='dns-secret', admin_tls_cert='admin-cert', admin_tls_key='admin-key' WHERE id=1`); err != nil {
+		t.Fatalf("seed global config: %v", err)
+	}
+	router := gin.New()
+	router.GET("/config/export", h.ExportConfigBackup)
+	router.POST("/config/import", h.ImportConfigBackup)
+
+	// When: export
+	exportResponse := httptest.NewRecorder()
+	router.ServeHTTP(exportResponse, httptest.NewRequest(http.MethodGet, "/config/export", nil))
+
+	// Then：机器凭证与 TLS 私钥被剥离，密码/密钥哈希保留
+	if exportResponse.Code != http.StatusOK {
+		t.Fatalf("export status=%d body=%s", exportResponse.Code, exportResponse.Body.String())
+	}
+	var backup configBackup
+	if err := json.Unmarshal(exportResponse.Body.Bytes(), &backup); err != nil {
+		t.Fatalf("decode export: %v", err)
+	}
+	redactedChecks := []struct {
+		got  string
+		name string
+	}{
+		{backupString(backup.Config["dns_credentials"]), "global_config.dns_credentials"},
+		{backupString(backup.Config["admin_tls_cert"]), "global_config.admin_tls_cert"},
+		{backupString(backup.Config["admin_tls_key"]), "global_config.admin_tls_key"},
+		{backupString(backup.Tables["ca_providers"][0]["credentials"]), "ca_providers.credentials"},
+		{backupString(backup.Tables["certificate_configs"][0]["dns_credentials"]), "certificate_configs.dns_credentials"},
+		{backupString(backup.Tables["lb_rules"][0]["tls_cert"]), "lb_rules.tls_cert"},
+		{backupString(backup.Tables["lb_rules"][0]["tls_key"]), "lb_rules.tls_key"},
+	}
+	for _, check := range redactedChecks {
+		if check.got != "" {
+			t.Fatalf("%s=%q, want redacted to empty", check.name, check.got)
+		}
+	}
+	if got := backupString(backup.Tables["users"][0]["password_hash"]); got != "hash" {
+		t.Fatalf("users.password_hash=%q, want intact", got)
+	}
+	if got := backupString(backup.Tables["api_keys"][0]["key_hash"]); got != "kh-secret" {
+		t.Fatalf("api_keys.key_hash=%q, want intact", got)
+	}
+
+	// Given: destructive change, then import round-trip must still succeed
+	if _, err := db.DB.Exec("DELETE FROM lb_rules; DELETE FROM users; DELETE FROM ca_providers; DELETE FROM certificate_configs; DELETE FROM api_keys"); err != nil {
+		t.Fatalf("destructive change: %v", err)
+	}
+	importResponse := httptest.NewRecorder()
+	importRequest := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(exportResponse.Body.String()))
+	importRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(importResponse, importRequest)
+	if importResponse.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%.300s", importResponse.Code, importResponse.Body.String())
+	}
+}
+
 func TestConfigBackup_roundtrips_security_version_tables(t *testing.T) {
 	// Given：CRS/IP2Region 版本表含 auto_update 偏好，导出前先写入非默认值
 	h := newBackupTestHandlers(t)

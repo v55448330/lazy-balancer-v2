@@ -68,6 +68,11 @@ func permanentClusterToken(registrationSecret string) string {
 }
 
 func (s *ClusterService) GenerateRegisterToken(ctx context.Context, createdBy int, now time.Time) (string, time.Time, error) {
+	// A-M2 令牌卫生：生成新令牌前作废所有未使用令牌（一次性语义——重新生成即让旧令牌
+	// 失效），并顺带删除已过期记录（GC），避免令牌表无限增长、旧令牌残留可复用。
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM cluster_register_tokens WHERE used_at IS NULL OR expires_at < ?`, now.UTC()); err != nil {
+		return "", time.Time{}, fmt.Errorf("清理旧注册令牌: %w", err)
+	}
 	token, err := randomHex(32)
 	if err != nil {
 		return "", time.Time{}, err

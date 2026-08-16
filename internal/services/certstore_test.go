@@ -309,6 +309,44 @@ func TestMaterializeAllCertsFromDB_repairs_mismatched_downloaded_pair(t *testing
 	}
 }
 
+func TestReconcileMissingCertFiles_rebuilds_deleted_files(t *testing.T) {
+	// Given：已签发 ACME 任务在 DB 中持有 cert_pem/key_pem，但磁盘文件缺失（模拟被清理）
+	_, database := newClusterTestService(t)
+	useTemporaryCertDir(t)
+	wantCert, wantKey := matchingCertificatePair(t, "reconcile.example.com")
+	if _, err := database.Exec(`
+		INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_reconcile','reconcile','reconcile.example.com','http',8443,1,1,'acme_dns');
+		INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,ca_provider_id)
+		VALUES ('lb_reconcile','reconcile.example.com','issued',?,?,1)
+	`, wantCert, wantKey); err != nil {
+		t.Fatalf("seed issued certificate: %v", err)
+	}
+	certPath, keyPath := CertFilePaths("lb_reconcile")
+	if _, err := os.Stat(certPath); !os.IsNotExist(err) {
+		t.Fatalf("certificate file unexpectedly exists before reconcile")
+	}
+	if _, err := os.Stat(keyPath); !os.IsNotExist(err) {
+		t.Fatalf("key file unexpectedly exists before reconcile")
+	}
+
+	// When
+	reconcileMissingCertFiles(db.DB)
+
+	// Then
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatalf("read reconciled certificate: %v", err)
+	}
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read reconciled private key: %v", err)
+	}
+	if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
+		t.Fatalf("reconciled pair does not match: %v", err)
+	}
+}
+
 func matchingCertificatePair(t *testing.T, domains ...string) (string, string) {
 	t.Helper()
 	if len(domains) == 0 {

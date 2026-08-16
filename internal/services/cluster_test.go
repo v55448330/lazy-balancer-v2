@@ -56,6 +56,40 @@ func replaceSnapshotDB(ctx context.Context, database *sql.DB, snapshot models.Cl
 	return tx.Commit()
 }
 
+func TestClusterService_RegisterToken_regeneration_invalidates_previous_unused_token(t *testing.T) {
+	// Given
+	service, database := newClusterTestService(t)
+	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	first, _, err := service.GenerateRegisterToken(context.Background(), 1, now)
+	if err != nil {
+		t.Fatalf("generate first token: %v", err)
+	}
+
+	// When：重新生成令牌（旧令牌仍未使用、未过期）
+	second, _, err := service.GenerateRegisterToken(context.Background(), 1, now)
+	if err != nil {
+		t.Fatalf("generate second token: %v", err)
+	}
+
+	// Then：旧令牌被作废，新令牌可用，令牌表仅剩新令牌
+	req := models.ClusterRegisterRequest{Name: "slave-a", IPAddress: "10.0.0.2", Port: 8000}
+	req.Token = first
+	if _, err := service.RegisterNode(context.Background(), req, now); !errors.Is(err, ErrInvalidRegisterToken) {
+		t.Fatalf("register with stale token error=%v, want invalid token", err)
+	}
+	req.Token = second
+	if _, err := service.RegisterNode(context.Background(), req, now); err != nil {
+		t.Fatalf("register with fresh token: %v", err)
+	}
+	var tokenCount int
+	if err := database.QueryRow("SELECT COUNT(*) FROM cluster_register_tokens").Scan(&tokenCount); err != nil {
+		t.Fatalf("count register tokens: %v", err)
+	}
+	if tokenCount != 1 {
+		t.Fatalf("register token count=%d, want 1 (stale unused token GC'd)", tokenCount)
+	}
+}
+
 func TestClusterService_RegisterToken_is_one_time(t *testing.T) {
 	// Given
 	service, database := newClusterTestService(t)

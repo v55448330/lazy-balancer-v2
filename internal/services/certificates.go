@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -349,10 +350,12 @@ func (s *CertificateService) Start() {
 	renewalTicker := time.NewTicker(6 * time.Hour)
 	manualTicker := time.NewTicker(10 * time.Minute)
 	waitingCATicker := time.NewTicker(30 * time.Second)
+	reconcileTicker := time.NewTicker(6 * time.Hour)
 	defer initialRenewal.Stop()
 	defer renewalTicker.Stop()
 	defer manualTicker.Stop()
 	defer waitingCATicker.Stop()
+	defer reconcileTicker.Stop()
 	for {
 		select {
 		case <-initialRenewal.C:
@@ -363,6 +366,8 @@ func (s *CertificateService) Start() {
 			s.checkManualCertExpiration()
 		case <-waitingCATicker.C:
 			s.requeueWaitingCAJobs()
+		case <-reconcileTicker.C:
+			reconcileMissingCertFiles(db.DB)
 		case <-s.ctx.Done():
 			return
 		}
@@ -425,6 +430,54 @@ func (s *CertificateService) recoverCertJobs(ctx context.Context) {
 	if err := requeueNonTerminalCertJobs(ctx, s.deploymentRetry); err != nil {
 		log.Printf("Failed to recover non-terminal cert jobs: %v", err)
 	}
+}
+
+// reconcileMissingCertFiles 巡检已签发（issued/downloaded）的 ACME 证书任务，若其磁盘
+// 证书/私钥文件缺失，则从数据库 cert_pem/key_pem 重建，避免容器重建或磁盘清理后 Caddy
+// 因缺证书文件而拒绝加载。仅覆盖 ACME 任务：手动证书内联在 lb_rules.tls_cert，由启动时
+// MaterializeAllCertsFromDB 物化；本函数随证书服务（仅主节点）每 6 小时对账一次。
+func reconcileMissingCertFiles(dbh *sql.DB) {
+	rows, err := dbh.Query(`SELECT j.rule_id, j.domain, COALESCE(j.cert_pem,''), COALESCE(j.key_pem,'')
+		FROM cert_jobs j
+		WHERE j.status IN ('issued','downloaded')
+		  AND COALESCE(j.cert_pem,'') <> '' AND COALESCE(j.key_pem,'') <> ''`)
+	if err != nil {
+		log.Printf("cert reconcile: query issued certificates failed: %v", err)
+		return
+	}
+	defer rows.Close()
+	rebuilt := 0
+	for rows.Next() {
+		var ruleID, domain, certPEM, keyPEM string
+		if err := rows.Scan(&ruleID, &domain, &certPEM, &keyPEM); err != nil {
+			log.Printf("cert reconcile: scan certificate row failed: %v", err)
+			continue
+		}
+		certPath, keyPath := CertFilePaths(ruleID)
+		if certPath == "" {
+			continue
+		}
+		if fileExists(certPath) && fileExists(keyPath) {
+			continue
+		}
+		if err := materializeCertPair(ruleID, certPEM, keyPEM); err != nil {
+			log.Printf("cert reconcile: rebuild certificate files for %s failed: %v", ruleID, err)
+			continue
+		}
+		rebuilt++
+		log.Printf("证书文件缺失，已从数据库重建: %s", domain)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("cert reconcile: iterate issued certificates failed: %v", err)
+	}
+	if rebuilt > 0 {
+		RecordAuditLog("system", "重建", "证书文件", FormatAuditDetail(AuditSourcePart("runtime_reconcile"), fmt.Sprintf("重建 %d 个证书文件", rebuilt)), "")
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func RequeueNonTerminalCertJobs() error {
