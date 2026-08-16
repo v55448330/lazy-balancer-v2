@@ -481,6 +481,56 @@ func TestGetSecurityOverview_topIPsEmptyMessageYieldsOtherFamily(t *testing.T) {
 	}
 }
 
+func TestGetSecurityOverview_topIPsSharesLocalSixDayWindowWithTrend(t *testing.T) {
+	// Given a positive-offset timezone so local midnight precedes UTC midnight
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityEventsRouter(t)
+	services.ConfigureLocation("Asia/Shanghai")
+	t.Cleanup(func() { services.ConfigureLocation("Asia/Shanghai") })
+	loc := services.CurrentLocation()
+	now := time.Now().In(loc)
+	todayStartUTC := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).UTC()
+	// 落在本地 6 日窗口内、但早于 UTC 当日 0 点的事件：修复前 TopIPs 会漏掉。
+	boundary := todayStartUTC.AddDate(0, 0, -6).Add(time.Hour).Format("2006-01-02 15:04:05")
+	seedSecurityEvent(t, boundary, "lb_x", 1, "942100", "SQL Injection")
+
+	// When the overview is requested
+	recorder := getRequest(t, router, "/security/overview")
+
+	// Then the boundary event is counted in BOTH the trend and TopIPs
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("overview status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int                     `json:"code"`
+		Data models.SecurityOverview `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse overview: %v", err)
+	}
+	wantDate := todayStartUTC.AddDate(0, 0, -6).In(loc).Format("2006-01-02")
+	foundTrend := false
+	for _, point := range resp.Data.Trend {
+		if point.Date == wantDate && point.Blocked >= 1 {
+			foundTrend = true
+			break
+		}
+	}
+	if !foundTrend {
+		t.Fatalf("trend missing boundary event on %s: %+v", wantDate, resp.Data.Trend)
+	}
+	foundTop := false
+	for _, ip := range resp.Data.TopIPs {
+		if ip.IP == "192.0.2.9" && ip.Blocked+ip.Detected >= 1 {
+			foundTop = true
+			break
+		}
+	}
+	if !foundTop {
+		t.Fatalf("TopIPs missing boundary event (local window not applied): %+v", resp.Data.TopIPs)
+	}
+}
+
 func TestGetSecurityOverview_groupsAttackTypesByFamily(t *testing.T) {
 	// Given recent events spanning several families, with repeats inside a family
 	setupSecurityPolicyTestDB(t)

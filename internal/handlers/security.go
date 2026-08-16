@@ -746,7 +746,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		lastTime          string
 	}
 	var topRows []topIPRow
-	ipRows, _ := db.MetricsDB.Query(`SELECT client_ip, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l, MAX(event_time) as last_time FROM security_events WHERE event_time >= date('now', '-6 days') GROUP BY client_ip ORDER BY b + l DESC LIMIT 10`)
+	ipRows, _ := db.MetricsDB.Query(`SELECT client_ip, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l, MAX(event_time) as last_time FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY client_ip ORDER BY b + l DESC LIMIT 10`, todayStartUTC)
 	for ipRows.Next() {
 		var row topIPRow
 		ipRows.Scan(&row.ip, &row.blocked, &row.detected, &row.lastTime)
@@ -754,7 +754,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	}
 	ipRows.Close()
 	familyCountsByIP := map[string]map[string]int{}
-	famRows, _ := db.MetricsDB.Query(`SELECT client_ip, COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= date('now', '-6 days') GROUP BY client_ip, rule_triggered, rule_msg ORDER BY cnt DESC LIMIT 5000`)
+	famRows, _ := db.MetricsDB.Query(`SELECT client_ip, COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY client_ip, rule_triggered, rule_msg ORDER BY cnt DESC LIMIT 5000`, todayStartUTC)
 	for famRows.Next() {
 		var ip, ruleTriggered, ruleMsg string
 		var cnt int
@@ -779,7 +779,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	}
 
 	// Attack types grouped by family
-	typeRows, _ := db.MetricsDB.Query(`SELECT COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= date('now', '-6 days') GROUP BY rule_triggered, rule_msg`)
+	typeRows, _ := db.MetricsDB.Query(`SELECT COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY rule_triggered, rule_msg`, todayStartUTC)
 	familyCounts := map[string]int{}
 	for typeRows.Next() {
 		var ruleTriggered, ruleMsg string

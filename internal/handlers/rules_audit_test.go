@@ -113,6 +113,44 @@ func TestRuleWrites_reject_overlapping_domain_lists(t *testing.T) {
 	}
 }
 
+func TestValidatePortFromDB_ignores_disabled_rule(t *testing.T) {
+	// Given a disabled TCP rule occupying a port
+	handler := newRuleFeatureTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_port_off','off','tcp',19001,0)`); err != nil {
+		t.Fatalf("seed disabled rule: %v", err)
+	}
+
+	// When the port is checked for a new rule
+	err := handler.validatePortFromDB("tcp", 19001, "")
+
+	// Then the disabled rule does not block the port
+	if err != nil {
+		t.Fatalf("validatePortFromDB = %v, want nil (disabled rule must not occupy port)", err)
+	}
+}
+
+func TestCreateRule_succeeds_when_domain_owned_by_disabled_rule(t *testing.T) {
+	// Given a disabled HTTP rule that already owns a domain
+	handler, _ := newRuleFeatureTestHandlersWithCapture(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_domain_off','off','http','occupied.example.test',8080,0)`); err != nil {
+		t.Fatalf("seed disabled rule: %v", err)
+	}
+	router := gin.New()
+	router.POST("/rules", handler.CreateRule)
+	body := strings.NewReader(`{"name":"new-rule","protocol":"http","domain":"occupied.example.test","listen_port":8080,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`)
+	request := httptest.NewRequest(http.MethodPost, "/rules", body)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then the new rule is created despite the disabled owner
+	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s, want success", response.Code, response.Body.String())
+	}
+}
+
 func TestUpdateRule_stops_when_existing_upstream_scan_fails(t *testing.T) {
 	// Given
 	handler := newRuleFeatureTestHandlers(t)
@@ -166,6 +204,42 @@ func TestDeleteRule_rolls_back_database_and_runtime_when_Caddy_rejects_config(t 
 	}
 	if loadCalls.Load() != 2 || !strings.Contains(*lastLoad, `"old":true`) {
 		t.Fatalf("Caddy load calls=%d last=%s, want failed apply plus runtime restore", loadCalls.Load(), *lastLoad)
+	}
+}
+
+func TestDeleteRule_removes_security_policy_bindings(t *testing.T) {
+	// Given a rule bound to a security policy
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_delbind", "delbind", "delbind.example.test", 8080, true, "manual", false)
+	seedAuditUpstream(t, "lb_delbind")
+	policyRes, err := db.DB.Exec(`INSERT INTO security_policies (name) VALUES ('绑定策略')`)
+	if err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	policyID, err := policyRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("policy id: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES ('lb_delbind', ?)`, policyID); err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+	router := gin.New()
+	router.DELETE("/rules/:caddy_id", handler.DeleteRule)
+
+	// When the rule is deleted
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/rules/lb_delbind", nil))
+
+	// Then the rule and its security policy bindings are gone
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete status=%d body=%s", response.Code, response.Body.String())
+	}
+	var bindings int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_delbind'").Scan(&bindings); err != nil {
+		t.Fatalf("read bindings: %v", err)
+	}
+	if bindings != 0 {
+		t.Fatalf("bindings=%d, want 0 (orphan binding left behind)", bindings)
 	}
 }
 

@@ -191,8 +191,10 @@ func TestJWTLogout_revocation_usesUTCTextAcrossNegativeTimezoneQueryAndCleanup(t
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM revoked_jti WHERE expires_at > ?", time.Now().UTC().Format("2006-01-02T15:04:05Z")).Scan(&active); err != nil {
 		t.Fatal(err)
 	}
-	cleanup := &revokedJTICleanup{}
-	cleanupErr := cleanup.run(db.DB, time.Unix(expiresAt+1, 0))
+	var cleanupErr error
+	if _, err := db.DB.Exec("DELETE FROM revoked_jti WHERE expires_at<=?", time.Unix(expiresAt+1, 0).UTC().Format(revokedTokenTimeFormat)); err != nil {
+		cleanupErr = err
+	}
 	var remaining int
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM revoked_jti").Scan(&remaining); err != nil {
 		t.Fatal(err)
@@ -204,52 +206,6 @@ func TestJWTLogout_revocation_usesUTCTextAcrossNegativeTimezoneQueryAndCleanup(t
 	}
 	if !strings.HasSuffix(stored, "Z") || active != 1 || cleanupErr != nil || remaining != 0 {
 		t.Fatalf("stored=%q active=%d cleanup=%v remaining=%d", stored, active, cleanupErr, remaining)
-	}
-}
-
-func TestRevokedJTICleanup_runs_at_most_hourly(t *testing.T) {
-	// Given
-	database, err := sql.Open("sqlite", t.TempDir()+"/cleanup.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	if _, err := database.Exec("CREATE TABLE revoked_jti (jti_hash TEXT PRIMARY KEY, expires_at DATETIME NOT NULL)"); err != nil {
-		t.Fatal(err)
-	}
-	cleanup := &revokedJTICleanup{}
-	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	insertExpired := func(hash string) {
-		if _, err := database.Exec("INSERT INTO revoked_jti VALUES (?, ?)", hash, base.Add(-time.Minute)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	count := func() int {
-		var value int
-		if err := database.QueryRow("SELECT COUNT(*) FROM revoked_jti").Scan(&value); err != nil {
-			t.Fatal(err)
-		}
-		return value
-	}
-
-	// When
-	insertExpired("first")
-	if err := cleanup.run(database, base); err != nil {
-		t.Fatal(err)
-	}
-	insertExpired("within")
-	if err := cleanup.run(database, base.Add(59*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	withinCount := count()
-	if err := cleanup.run(database, base.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	afterCount := count()
-
-	// Then
-	if withinCount != 1 || afterCount != 0 {
-		t.Fatalf("within count=%d after count=%d", withinCount, afterCount)
 	}
 }
 

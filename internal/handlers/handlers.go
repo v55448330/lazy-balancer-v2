@@ -575,19 +575,21 @@ func (h *Handlers) validatePortFromDB(protocol string, port int, excludeCaddyID 
 	// Check conflict with existing rules:
 	// - HTTP rules may share a port (Caddy routes by host), but cannot share with TCP.
 	// - TCP rules are L4 and cannot share a port with any other rule (HTTP or TCP).
+	// 仅统计启用中的规则：禁用规则不占用端口，创建/更新时不应被其阻塞；启用时
+	// 本函数同样按 enabled=1 过滤，第二条禁用规则启用时会看到第一条已启用而冲突。
 	var count int
 	var err error
 	if excludeCaddyID != "" {
 		if protocol == "tcp" {
-			err = db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE listen_port = ? AND caddy_id != ?", port, excludeCaddyID).Scan(&count)
+			err = db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE listen_port = ? AND caddy_id != ? AND enabled = 1", port, excludeCaddyID).Scan(&count)
 		} else {
-			err = db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE listen_port = ? AND caddy_id != ? AND protocol = 'tcp'", port, excludeCaddyID).Scan(&count)
+			err = db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE listen_port = ? AND caddy_id != ? AND protocol = 'tcp' AND enabled = 1", port, excludeCaddyID).Scan(&count)
 		}
 	} else {
 		if protocol == "tcp" {
-			err = db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE listen_port = ?", port).Scan(&count)
+			err = db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE listen_port = ? AND enabled = 1", port).Scan(&count)
 		} else {
-			err = db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE listen_port = ? AND protocol = 'tcp'", port).Scan(&count)
+			err = db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE listen_port = ? AND protocol = 'tcp' AND enabled = 1", port).Scan(&count)
 		}
 	}
 	if err != nil {

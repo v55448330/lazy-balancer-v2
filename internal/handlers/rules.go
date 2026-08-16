@@ -428,7 +428,9 @@ func enabledRuleDomainConflict(domain string, listenPort int, excludeCaddyID str
 }
 
 func ruleDomainConflict(domain string, listenPort int, excludeCaddyID string) (bool, error) {
-	return queryRuleDomainConflict(domain, listenPort, excludeCaddyID, "")
+	// 仅统计启用中的规则：禁用规则不占用域名，创建/更新时不应被其阻塞；启用时
+	// 仍由 enabledRuleDomainConflict 二次把关，避免两条禁用规则同时启用产生冲突。
+	return enabledRuleDomainConflict(domain, listenPort, excludeCaddyID)
 }
 
 func queryRuleDomainConflict(domain string, listenPort int, excludeCaddyID, extraWhere string) (bool, error) {
@@ -851,6 +853,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		}()
 		for _, statement := range []string{
 			"DELETE FROM cert_jobs WHERE rule_id = ?",
+			"DELETE FROM security_policy_bindings WHERE rule_caddy_id = ?",
 			"DELETE FROM upstreams WHERE rule_id = ?",
 			"DELETE FROM lb_rules WHERE caddy_id = ?",
 		} {
@@ -1804,6 +1807,13 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除证书任务失败"})
 		return
 	}
+	// 删除规则时一并清理安全策略绑定，避免遗留孤儿绑定导致该规则 caddy_id
+	// 被新规则复用时错误继承旧策略（M1）。
+	if _, err := tx.Exec("DELETE FROM security_policy_bindings WHERE rule_caddy_id = ?", caddyID); err != nil {
+		log.Printf("DeleteRule security_policy_bindings delete error for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除安全策略绑定失败"})
+		return
+	}
 	if _, err := tx.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID); err != nil {
 		log.Printf("DeleteRule upstreams delete error for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除上游服务器失败"})
@@ -2049,7 +2059,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	committed = true
 
 	recordAudit(c, "复制", "负载均衡规则", services.FormatAuditDetail(fmt.Sprintf("源规则：%s", caddyID), fmt.Sprintf("新规则：%s", newCaddyID), rule.Name))
-	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "规则已复制", Data: gin.H{"caddy_id": newCaddyID}})
+	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "副本已创建（已禁用）：域名与源规则相同，启用前请修改域名或端口", Data: gin.H{"caddy_id": newCaddyID}})
 }
 
 func (h *Handlers) EnableRule(c *gin.Context) {

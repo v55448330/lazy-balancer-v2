@@ -119,6 +119,10 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 	canonicalSnapshot.Fingerprint = ""
 	canonicalSnapshot.Signature = ""
 	canonicalSnapshot.CanonicalPayload = nil
+	// 指纹与 users 节哈希同一口径：清零 last_login / last_used（节点本地记账），
+	// 避免主节点登录或密钥使用即改变指纹、触发从节点全量重拉窗口。
+	canonicalSnapshot.Users = sanitizeUsersForHash(snapshot.Users)
+	canonicalSnapshot.APIKeys = sanitizeAPIKeysForHash(snapshot.APIKeys)
 	canonical, err := json.Marshal(canonicalSnapshot)
 	if err != nil {
 		return models.ClusterSnapshot{}, nil, "", fmt.Errorf("序列化集群快照: %w", err)

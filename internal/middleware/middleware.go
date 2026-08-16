@@ -79,24 +79,6 @@ func recordAuthenticationRejection(c *gin.Context, reason string) {
 	recordAuthenticationSecurityAudit("system", "认证拒绝", "安全审计", detail, ipAddress)
 }
 
-type revokedJTICleanup struct {
-	mu      sync.Mutex
-	lastRun time.Time
-}
-
-func (cleanup *revokedJTICleanup) run(database *sql.DB, now time.Time) error {
-	cleanup.mu.Lock()
-	defer cleanup.mu.Unlock()
-	if !cleanup.lastRun.IsZero() && now.Sub(cleanup.lastRun) < time.Hour {
-		return nil
-	}
-	if _, err := database.Exec("DELETE FROM revoked_jti WHERE expires_at<=?", now.UTC().Format(revokedTokenTimeFormat)); err != nil {
-		return fmt.Errorf("cleanup revoked JWT IDs: %w", err)
-	}
-	cleanup.lastRun = now
-	return nil
-}
-
 type loginRateBucket struct {
 	mu    sync.Mutex
 	count int
