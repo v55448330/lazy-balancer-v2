@@ -24,13 +24,8 @@ func (h *Handlers) GetClusterSnapshot(c *gin.Context) {
 		return
 	}
 	if !changed {
-		if nodeIDValue, exists := c.Get("cluster_node_id"); exists {
-			if nodeID, ok := nodeIDValue.(int); ok {
-				var nodeName string
-				_ = db.DB.QueryRow("SELECT COALESCE(name,'') FROM nodes WHERE id=?", nodeID).Scan(&nodeName)
-				services.RecordAuditLog("system", "同步下发", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %s", nodeName), "配置无变化"), c.ClientIP())
-			}
-		}
+		// 304「配置无变化」只在从节点侧留痕；主节点每个同步周期都会被
+		// 轮询命中，记录只会制造噪音，无需在此审计。
 		c.Status(http.StatusNotModified)
 		return
 	}
