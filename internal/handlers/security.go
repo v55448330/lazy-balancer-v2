@@ -587,6 +587,30 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		where += " AND rule_caddy_id=?"
 		args = append(args, ruleID)
 	}
+	// 时间范围按配置时区解析（event_time 为 UTC），换算后比对；日期-only 补全天边界
+	loc := services.CurrentLocation()
+	parseBoundary := func(raw, endOfDay string) (string, bool) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return "", false
+		}
+		if len(raw) == 10 {
+			raw += " " + endOfDay
+		}
+		t, err := time.ParseInLocation("2006-01-02 15:04:05", raw, loc)
+		if err != nil {
+			return "", false
+		}
+		return t.UTC().Format("2006-01-02 15:04:05"), true
+	}
+	if v, ok := parseBoundary(c.Query("start_time"), "00:00:00"); ok {
+		where += " AND datetime(event_time) >= datetime(?)"
+		args = append(args, v)
+	}
+	if v, ok := parseBoundary(c.Query("end_time"), "23:59:59"); ok {
+		where += " AND datetime(event_time) <= datetime(?)"
+		args = append(args, v)
+	}
 
 	var total int
 	db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events"+where, args...).Scan(&total)
@@ -682,14 +706,22 @@ func joinDistinctFamilies(counts map[string]int) string {
 }
 
 func (h *Handlers) GetSecurityOverview(c *gin.Context) {
+	// 日界按配置时区计算：event_time 为 UTC，「今日」与 7 日趋势桶均以
+	// 配置时区的本地日期为准（printf modifier 将 UTC 事件时间平移到本地后取日期）。
+	loc := services.CurrentLocation()
+	_, offset := time.Now().In(loc).Zone()
+	offsetMinutes := offset / 60
+	now := time.Now().In(loc)
+	todayStartUTC := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).UTC().Format("2006-01-02 15:04:05")
+
 	var overview models.SecurityOverview
-	db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='blocked' AND date(event_time)=date('now')").Scan(&overview.TodayBlocked)
-	db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='logged' AND date(event_time)=date('now')").Scan(&overview.TodayDetected)
+	db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='blocked' AND event_time >= ?", todayStartUTC).Scan(&overview.TodayBlocked)
+	db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='logged' AND event_time >= ?", todayStartUTC).Scan(&overview.TodayDetected)
 	db.DB.QueryRow("SELECT COUNT(*) FROM security_policies WHERE enabled=1 AND mode!='off'").Scan(&overview.ActivePolicies)
 
-	// 7-day trend: always the full today-6 … today slice (UTC, matching SQLite date('now')), zero-filled
+	// 7-day trend: always the full today-6 … today slice (local dates), zero-filled
 	trendByDate := map[string]models.SecurityTrendPoint{}
-	trendRows, _ := db.MetricsDB.Query(`SELECT date(event_time) as d, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l FROM security_events WHERE event_time >= date('now', '-6 days') GROUP BY d`)
+	trendRows, _ := db.MetricsDB.Query(`SELECT date(event_time, printf('+%d minutes', ?)) as d, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY d`, offsetMinutes, todayStartUTC)
 	for trendRows.Next() {
 		var t models.SecurityTrendPoint
 		trendRows.Scan(&t.Date, &t.Blocked, &t.Detected)
@@ -697,7 +729,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	}
 	trendRows.Close()
 	overview.Trend = make([]models.SecurityTrendPoint, 0, 7)
-	today := time.Now().UTC()
+	today := time.Now().In(loc)
 	for i := 6; i >= 0; i-- {
 		day := today.AddDate(0, 0, -i).Format("2006-01-02")
 		point := trendByDate[day]

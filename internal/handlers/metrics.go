@@ -14,7 +14,6 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
-	"lazy-balancer-v2/internal/services"
 )
 
 var caddyMetricsHTTPClient = &http.Client{Timeout: 10 * time.Second}
@@ -276,7 +275,9 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析历史指标时间失败: " + err.Error()})
 			return
 		}
-		r.Timestamp = ts.In(services.CurrentLocation()).Format("2006-01-02 15:04:05")
+		// 统一口径：返回裸 UTC 字符串，由前端 formatDate 按配置时区转换
+		// （与 /metrics/history 的 RFC3339 UTC 及其它列表端点一致）。
+		r.Timestamp = ts.UTC().Format("2006-01-02 15:04:05")
 		result = append(result, r)
 	}
 	if err := rows.Err(); err != nil {

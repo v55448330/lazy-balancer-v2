@@ -328,6 +328,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/rules/:caddy_id/metrics-history", h.GetRuleMetricsHistory)
 				business.GET("/rules/:caddy_id/log-stream", h.GetRuleLogStream)
 				business.GET("/rules/:caddy_id/logs", h.GetRuleLogs)
+				business.GET("/logs/stats", h.GetLogStats)
 				business.GET("/rules/:caddy_id/cert-info", h.GetRuleCertInfo)
 				business.POST("/rules/cert-info", h.GetRulesCertInfo)
 				business.POST("/rules", h.CreateRule)
@@ -412,6 +413,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.DELETE("/certificates/jobs/:id", h.DeleteCertJob)
 
 				business.GET("/audit-logs", h.GetAuditLogs)
+				business.GET("/audit-logs/options", h.GetAuditLogOptions)
 			}
 		}
 	}
