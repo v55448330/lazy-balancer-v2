@@ -13,13 +13,27 @@
 
     <el-card>
       <div class="table-toolbar">
-        <el-select v-model="filters.action" placeholder="动作" clearable style="width: 140px" @change="fetchEvents">
-          <el-option label="全部" value="" />
+        <el-date-picker
+          v-model="filters.timeRange"
+          type="datetimerange"
+          range-separator="至"
+          start-placeholder="开始时间"
+          end-placeholder="结束时间"
+          format="YYYY-MM-DD HH:mm:ss"
+          value-format="YYYY-MM-DD HH:mm:ss"
+          :default-time="[new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)]"
+          class="filter-date-range"
+        />
+        <el-select v-model="filters.action" placeholder="动作" clearable style="width: 120px">
           <el-option label="拦截" value="blocked" />
           <el-option label="检测" value="logged" />
         </el-select>
-        <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 200px" @clear="fetchEvents" @keyup.enter="fetchEvents" />
-        <el-input v-model="filters.rule_caddy_id" placeholder="规则 ID" clearable style="width: 200px" @clear="fetchEvents" @keyup.enter="fetchEvents" />
+        <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 150px" @keyup.enter="applyFilters" />
+        <el-input v-model="filters.rule_caddy_id" placeholder="规则 ID" clearable style="width: 150px" @keyup.enter="applyFilters" />
+        <div class="filter-actions">
+          <el-button type="primary" @click="applyFilters">筛选</el-button>
+          <el-button @click="resetFilters">重置</el-button>
+        </div>
       </div>
 
       <el-table :data="events" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
@@ -55,7 +69,8 @@
         <el-table-column prop="uri" label="URI" min-width="220" show-overflow-tooltip />
       </el-table>
 
-      <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
+      <div style="margin-top: 16px; display: flex; align-items: center;">
+        <LogStorageBar log-key="security_events" style="margin-right: auto" />
         <el-pagination
           v-model:current-page="page"
           v-model:page-size="pageSize"
@@ -74,6 +89,7 @@
 import { ref, onMounted } from 'vue'
 import { Refresh, Warning } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
+import LogStorageBar from '@/components/LogStorageBar.vue'
 import { formatDate } from '@/utils/date'
 
 interface APIResponse<T> { code: number; message: string; data: T }
@@ -100,7 +116,15 @@ const events = ref<SecurityEvent[]>([])
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const filters = ref({ action: '', ip: '', rule_caddy_id: '' })
+const filters = ref({ action: '', ip: '', rule_caddy_id: '', timeRange: null as [string, string] | null })
+
+const applyFilters = () => { page.value = 1; fetchEvents() }
+
+const resetFilters = () => {
+  filters.value = { action: '', ip: '', rule_caddy_id: '', timeRange: null }
+  page.value = 1
+  fetchEvents()
+}
 
 const handleSizeChange = () => { page.value = 1; fetchEvents() }
 
@@ -118,12 +142,25 @@ const goToPolicy = (row: SecurityEvent) => {
 
 const fetchEvents = async () => {
   loading.value = true
-  try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (filters.value.action) p.set('action', filters.value.action); if (filters.value.ip) p.set('ip', filters.value.ip); if (filters.value.rule_caddy_id) p.set('rule_caddy_id', filters.value.rule_caddy_id); const res = await request.get<APIResponse<{ events: SecurityEvent[]; total: number }>>(`/security/events?${p}`); events.value = res.data?.events || []; total.value = res.data?.total || 0 } catch { events.value = [] } finally { loading.value = false }
+  try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (filters.value.action) p.set('action', filters.value.action); if (filters.value.ip) p.set('ip', filters.value.ip); if (filters.value.rule_caddy_id) p.set('rule_caddy_id', filters.value.rule_caddy_id); if (filters.value.timeRange?.[0]) p.set('start_time', filters.value.timeRange[0]); if (filters.value.timeRange?.[1]) p.set('end_time', filters.value.timeRange[1]); const res = await request.get<APIResponse<{ events: SecurityEvent[]; total: number }>>(`/security/events?${p}`); events.value = res.data?.events || []; total.value = res.data?.total || 0 } catch { events.value = [] } finally { loading.value = false }
 }
 onMounted(fetchEvents)
 </script>
 
 <style scoped>
-.table-toolbar { display: flex; gap: 12px; justify-content: flex-end; margin-bottom: 16px; }
+.table-toolbar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-start; margin-bottom: 16px; align-items: center; }
+.filter-actions { display: flex; gap: 0; margin-left: 8px; }
+.filter-actions .el-button + .el-button { margin-left: 8px; }
 .cell-tip { cursor: help; border-bottom: 1px dashed #c0c4cc; }
+</style>
+
+<style scoped>
+</style>
+
+<style>
+.filter-date-range.el-date-editor {
+  --el-date-editor-width: 360px;
+  width: 360px;
+  flex: 0 0 auto;
+}
 </style>

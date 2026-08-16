@@ -126,7 +126,6 @@ import type { ProxyTimeoutConfig } from '@/types'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
 
 type CaddySettingsConfig = ProxyTimeoutConfig & {
-  caddy_log_path: string
   caddy_log_level: string
   caddy_log_size_mb: number
   request_body_max_size_mb: number

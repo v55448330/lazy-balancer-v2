@@ -117,11 +117,11 @@
                 </div>
                 <div class="cert-row">
                   <span class="cert-label">生效时间</span>
-                  <span class="cert-value">{{ certInfoMap[row.caddy_id]?.not_before || '-' }}</span>
+                  <span class="cert-value">{{ formatDate(certInfoMap[row.caddy_id]?.not_before || '') || '-' }}</span>
                 </div>
                 <div class="cert-row">
                   <span class="cert-label">过期时间</span>
-                  <span class="cert-value">{{ certInfoMap[row.caddy_id]?.not_after || '-' }}</span>
+                  <span class="cert-value">{{ formatDate(certInfoMap[row.caddy_id]?.not_after || '') || '-' }}</span>
                 </div>
                 <div class="cert-row">
                   <span class="cert-label">剩余天数</span>
@@ -966,7 +966,10 @@
         </el-tab-pane>
       </el-tabs>
       <template #footer>
-        <el-button @click="ruleLogDialogVisible = false">关闭</el-button>
+        <div style="display: flex; align-items: center;">
+          <LogStorageBar log-key="rule_access" :caddy-id="ruleLogCaddyId" style="margin-right: auto" />
+          <el-button @click="ruleLogDialogVisible = false">关闭</el-button>
+        </div>
       </template>
     </el-dialog>
   </div>
@@ -981,6 +984,7 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 import axios from 'axios'
 import { ansiToHtml } from '@/utils/ansi'
 import { formatDate } from '@/utils/date'
+import LogStorageBar from '@/components/LogStorageBar.vue'
 import type {
   APIResponse,
   CreateRuleRequest,

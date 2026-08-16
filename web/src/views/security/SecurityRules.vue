@@ -4,9 +4,9 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Notebook /></el-icon>
-          CRS 规则集
+          规则集
         </h2>
-        <p class="page-desc">浏览 OWASP CRS 规则和管理自定义规则</p>
+        <p class="page-desc">管理 WAF 规则来源：OWASP CRS 规则库、IP2Region IP 库与自定义规则</p>
       </div>
     </div>
 
@@ -14,7 +14,7 @@
       <template #header>
         <div class="crs-header">
           <div class="crs-header-title">
-            <span style="font-weight: 500;">CRS 规则集</span>
+            <span style="font-weight: 500;">规则集</span>
           </div>
           <div class="crs-header-actions">
             <el-button v-if="!isReadOnly" size="small" type="primary" plain @click="manualUpdate">CRS 更新</el-button>
@@ -234,7 +234,7 @@
 
     <el-dialog
       v-model="updateDialogVisible"
-            title="更新 CRS 规则集"
+            title="更新 CRS 规则库"
       width="min(900px, 94vw)"
       destroy-on-close
       @opened="onUpdateDialogOpened"
@@ -249,8 +249,11 @@
         <el-empty v-else description="暂无更新日志" :image-size="60" />
       </div>
       <template #footer>
-        <el-button @click="updateDialogVisible = false">关闭</el-button>
+        <div style="display: flex; align-items: center;">
+          <LogStorageBar log-key="crs_update" style="margin-right: auto" />
+          <el-button @click="updateDialogVisible = false">关闭</el-button>
         <el-button v-if="!crsUpdateRunning" type="primary" :loading="startingUpdate" @click="confirmUpdate">立即更新</el-button>
+        </div>
       </template>
     </el-dialog>
 
@@ -271,8 +274,11 @@
         <el-empty v-else description="暂无更新日志" :image-size="60" />
       </div>
       <template #footer>
-        <el-button @click="ip2regionUpdateDialogVisible = false">关闭</el-button>
+        <div style="display: flex; align-items: center;">
+          <LogStorageBar log-key="ip2region_update" style="margin-right: auto" />
+          <el-button @click="ip2regionUpdateDialogVisible = false">关闭</el-button>
         <el-button v-if="!ip2regionUpdateRunning" type="primary" :loading="startingIP2RegionUpdate" @click="confirmIP2RegionUpdate">立即更新</el-button>
+        </div>
       </template>
     </el-dialog>
   </div>

@@ -52,7 +52,6 @@ const activeTab = ref('basic')
 
 interface SettingsConfig {
   log_level: string
-  caddy_log_path: string
   caddy_log_level: string
   caddy_log_size_mb: number
   request_body_max_size_mb: number
@@ -89,7 +88,6 @@ interface CertificateConfig {
 
 const settings = ref<SettingsConfig>({
   log_level: 'info',
-  caddy_log_path: '/app/logs/caddy.log',
   caddy_log_level: 'info',
   caddy_log_size_mb: 100,
   request_body_max_size_mb: 0,
@@ -158,7 +156,6 @@ const applyBasicKeys = (data: ConfigPayload) => {
 }
 
 const applyCaddyKeys = (data: ConfigPayload) => {
-  settings.value.caddy_log_path = data.caddy_log_path || '/app/logs/caddy.log'
   settings.value.caddy_log_level = data.caddy_log_level || 'info'
   settings.value.caddy_log_size_mb = data.caddy_log_size_mb ?? 100
   settings.value.request_body_max_size_mb = data.request_body_max_size_mb ?? 0
@@ -244,7 +241,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.basic-settings-grid { display: grid; grid-template-columns: 5fr 7fr; gap: 20px; align-items: start; }
+.basic-settings-grid { display: grid; grid-template-columns: 5.2fr 6.8fr; gap: 20px; align-items: start; }
 @media (max-width: 1100px) { .basic-settings-grid { grid-template-columns: 1fr; } }
 
 .page-header {

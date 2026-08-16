@@ -102,8 +102,11 @@
       <el-empty v-else description="暂无日志" :image-size="60" />
     </div>
     <template #footer>
-      <el-button @click="logDialogVisible = false">关闭</el-button>
-      <el-button type="primary" :loading="logLoading" @click="refreshLogs">刷新</el-button>
+      <div style="display: flex; align-items: center;">
+        <LogStorageBar v-if="currentJob" :key="currentJob.rule_id" log-key="certjob" :caddy-id="String(currentJob.rule_id)" style="margin-right: auto" />
+        <el-button @click="logDialogVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="logLoading" @click="refreshLogs">刷新</el-button>
+      </div>
     </template>
   </el-dialog>
 </template>
@@ -111,6 +114,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { request } from '@/utils/api'
+import LogStorageBar from '@/components/LogStorageBar.vue'
 import { formatDate } from '@/utils/date'
 import { escapeHtml } from '@/utils/ansi'
 import { ElMessage, ElMessageBox } from 'element-plus'

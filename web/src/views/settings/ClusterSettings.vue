@@ -229,6 +229,8 @@ const promoteToMaster = async (): Promise<void> => {
 
 const syncNow = async (): Promise<void> => {
   if (isNonAdminReadOnly.value || clusterModeChanging.value) return
+  const ok = await confirmAction('立即从主节点拉取并应用最新配置？', '手动同步')
+  if (!ok) return
   syncing.value = true
   try {
     const response = await request.post<ApiResponse<ClusterSyncResult>>('/cluster/sync/pull')

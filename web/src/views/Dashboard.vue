@@ -402,6 +402,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { formatDate } from '@/utils/date'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart } from 'echarts/charts'
@@ -596,7 +597,7 @@ const ruleHistoryDeltas = computed(() => {
     const previous = ruleHistoryRows.value[index - 1]
     const current = ruleHistoryRows.value[index]
     if (!previous || !current) continue
-    labels.push(current.timestamp.slice(5, 16))
+    labels.push(formatDate(current.timestamp)?.slice(5, 16) || current.timestamp.slice(5, 16))
     deltas.push(diffCounters(previous, current))
   }
   return { labels, deltas }

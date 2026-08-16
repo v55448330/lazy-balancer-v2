@@ -11,7 +11,7 @@
       </template>
         <el-form :model="settings" label-width="120px" class="settings-form" :disabled="isReadOnly">
           <el-form-item label="日志级别">
-            <el-select v-model="settings.log_level" class="compact-select">
+            <el-select v-model="settings.log_level" style="width: 140px">
               <el-option label="Debug" value="debug" />
               <el-option label="Info" value="info" />
               <el-option label="Warning" value="warn" />
@@ -19,9 +19,9 @@
             </el-select>
             <el-text type="info" size="small" class="tip-inline">控制 Lazy Balancer 自身日志详细程度</el-text>
           </el-form-item>
-          <el-form-item label="证书日志大小">
+          <el-form-item label="任务日志大小">
             <el-input-number v-model="settings.cert_job_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
-            <el-text type="info" size="small" class="tip-inline">MB，滚动阈值，保留 5 份（建议 10-50）</el-text>
+            <el-text type="info" size="small" class="tip-block">MB，证书签发 / CRS / IP 库更新日志轮转阈值，保留 5 份（建议 10-50）</el-text>
           </el-form-item>
           <el-form-item label="审计日志大小">
             <el-input-number v-model="settings.audit_log_size_mb" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
@@ -61,7 +61,7 @@
               <el-option label="Australia/Sydney (UTC+10)" value="Australia/Sydney" />
               <el-option label="UTC" value="UTC" />
             </el-select>
-            <el-text type="info" size="small" class="tip-inline">影响日志时间戳与证书时间；仅 Caddy 日志需重启服务生效</el-text>
+            <el-text type="info" size="small" class="tip-block">影响日志时间戳与证书时间；仅 Caddy 日志需重启服务生效</el-text>
           </el-form-item>
           <el-form-item label="强制 HTTPS">
             <el-switch v-model="adminTls.enabled" @change="onAdminTlsToggle" />
@@ -739,6 +739,7 @@ const handleSave = async () => {
 .settings-form { padding: 4px 0; }
 .compact-select { width: 240px; max-width: 100%; }
 .tip-inline { margin-left: 8px; line-height: 1.5; }
+.tip-block { display: block; margin-top: 4px; line-height: 1.5; }
 .info-list { padding: 4px 0; }
 .info-item {
   display: flex;

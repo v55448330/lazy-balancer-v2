@@ -22,7 +22,6 @@ declare module 'axios' {
 
 interface GlobalConfigData {
   log_level: string
-  caddy_log_path: string
   caddy_log_level: string
   caddy_log_size_mb: number
   request_body_max_size_mb: number

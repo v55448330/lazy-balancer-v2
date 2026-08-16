@@ -45,7 +45,7 @@
           </el-menu-item>
           <el-menu-item index="security-rules" @click="goPage('security-rules')">
             <el-icon><Notebook /></el-icon>
-            <template #title>CRS 规则集</template>
+            <template #title>规则集</template>
           </el-menu-item>
           <el-menu-item index="security-block-pages" @click="goPage('security-block-pages')">
             <el-icon><Document /></el-icon>
@@ -199,6 +199,11 @@ const pageTitle: Record<string, string> = {
   'settings-cluster': '系统设置 / 集群管理',
   'settings-certificates': '系统设置 / 免费证书',
   'settings-apikeys': '系统设置 / API 密钥',
+  'security-overview': '安全防护 / 安全总览',
+  'security-policies': '安全防护 / 安全策略',
+  'security-rules': '安全防护 / 规则集',
+  'security-block-pages': '安全防护 / 拦截页面',
+  'security-events': '安全防护 / 事件日志',
 }
 
 const profileForm = ref({
