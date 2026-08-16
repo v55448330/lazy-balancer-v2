@@ -254,8 +254,8 @@ const trendChartOption = computed(() => {
   const detected = overview.value.trend.map(t => t.detected)
   return {
     tooltip: { trigger: 'axis' },
-    legend: { data: ['拦截', '检测'] },
-    grid: { left: 40, right: 20, top: 40, bottom: 30 },
+    legend: { data: ['拦截', '检测'], top: 0, itemGap: 24 },
+    grid: { left: 40, right: 20, top: 36, bottom: 30, containLabel: false },
     xAxis: { type: 'category', data: dates },
     yAxis: { type: 'value' },
     series: [
@@ -267,9 +267,9 @@ const trendChartOption = computed(() => {
 
 const attackChartOption = computed(() => ({
   tooltip: { trigger: 'item' },
-  legend: { bottom: 0 },
+  legend: { bottom: 0, type: 'scroll' },
   series: [{
-    type: 'pie', radius: ['40%', '70%'], center: ['50%', '45%'],
+    type: 'pie', radius: ['40%', '65%'], center: ['50%', '42%'],
     data: overview.value.attack_types.map(a => ({ name: a.name, value: a.value })),
     itemStyle: { borderRadius: 4, borderColor: '#fff', borderWidth: 2 },
     label: { show: true, formatter: '{b}: {c}' },
