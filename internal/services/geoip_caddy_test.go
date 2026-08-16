@@ -1,7 +1,11 @@
 package services
 
 import (
+	"encoding/json"
 	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -317,6 +321,62 @@ func TestGenerateHTTPRouteObjects_geoipBlock_alwaysAllowsPrivateIPs(t *testing.T
 // range, while mapped private (::ffff:192.168.1.1) and plain private
 // (192.168.1.1) addresses must. The prior ::ffff:0:0/96 entry matched the whole
 // mapped space and would have let public mapped clients bypass GeoIP blocking.
+// TestGeoipBlockRoute_caddyValidate_singleSetNotSemantics locks the single-set
+// NOT semantics of the geoip block route against real Caddy JSON parsing: a
+// stock `caddy validate` must accept the block route as a complete config. The
+// block route uses only standard Caddy components (host/expression/not/remote_ip
+// matchers + error handler), so no geoip2region plugin is required to validate.
+// Skips when no caddy binary is in PATH — locally absent, but present in the
+// CI/docker build image where this runs.
+func TestGeoipBlockRoute_caddyValidate_singleSetNotSemantics(t *testing.T) {
+	caddyBin, err := exec.LookPath("caddy")
+	if err != nil {
+		t.Skip("caddy binary not in PATH; skipping Caddy JSON validate smoke test (runs in CI/docker where caddy is present)")
+	}
+
+	// Given a deny-mode overseas geoip policy bound to a rule
+	setupGeoipConfigTestDB(t)
+	seedGeoipPolicy(t, "rule-http", `["海外"]`, "deny")
+
+	policy := GetSecurityPolicyForRule("rule-http")
+	if policy == nil {
+		t.Fatal("expected geoip policy")
+	}
+	blockRoute := buildGeoipBlockRoute(baseHTTPRule(), policy, 403)
+	if blockRoute == nil {
+		t.Fatal("expected geoip block route")
+	}
+
+	// Build a minimal complete Caddy JSON config embedding the block route.
+	config := map[string]interface{}{
+		"apps": map[string]interface{}{
+			"http": map[string]interface{}{
+				"servers": map[string]interface{}{
+					"s0": map[string]interface{}{
+						"listen": []string{":80"},
+						"routes": []interface{}{blockRoute},
+					},
+				},
+			},
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// When Caddy validates the generated JSON (adapter "" = native JSON, no adaptation)
+	out, err := exec.Command(caddyBin, "validate", "--adapter", "", "--config", tmp).CombinedOutput()
+	if err != nil {
+		t.Fatalf("caddy validate failed: %v\n%s", err, out)
+	}
+}
+
 func TestGeoipPrivateRanges_excludesPublicMappedIPv4(t *testing.T) {
 	prefixes := make([]netip.Prefix, 0, len(geoipPrivateRanges))
 	for _, cidr := range geoipPrivateRanges {

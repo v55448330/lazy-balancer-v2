@@ -1,0 +1,26 @@
+# 构建上下文瘦身 + 防止本地敏感数据(数据库/私钥/日志)进入镜像中间层。
+# Dockerfile COPY 源(go.mod/cmd/internal/caddygeoip/caddydeps/web/dist/
+# docker-entrypoint.sh/config)均不在排除清单内。
+data/
+data-slave/
+logs/
+logs-slave/
+certs/
+certs-slave/
+waf/
+bin/
+server
+ui/
+.git/
+.gitignore
+.dockerignore
+web/node_modules/
+docs/
+.opencode/
+*.db
+*.pem
+*.key
+*.log
+.DS_Store
+README.zh-CN.md
+AGENTS.md

@@ -12,13 +12,11 @@ Lazy Balancer V2 is a full-stack load balancer management system that orchestrat
 ├── cmd/server/    # Backend entry point (main.go)
 ├── internal/     # Core business logic (DB, Handlers, Services)
 ├── web/          # Vue 3 + TS frontend source
-├── ui/           # Pre-built static assets/staging
 ├── config/       # Caddyfile templates
 ├── data/         # SQLite persistent storage (lazy-balancer.db)
 ├── bin/          # Compiled binary (⚠️ NOT committed to git - see ANTI-PATTERNS)
 ├── docs/         # Project documentation
-└── Dockerfile    # Multi-stage build (xcaddy-builder, Go backend, Node frontend)
-    Dockerfile.prebuilt  # Release build: skips frontend stage, COPY web/dist (run `npm run build` first)
+└── Dockerfile    # Unified build (xcaddy-builder → Go backend; frontend pre-built: `npm run build` first, Dockerfile COPYs web/dist)
 ```
 
 ## WHERE TO LOOK
@@ -52,6 +50,6 @@ docker compose down -v # Reset DB and containers
 
 ## NOTES
 - **Testing**: Go unit tests exist under `internal/` (run `go test ./...`). No frontend tests.
-- **UI Staging**: `/ui` directory is used for staging built assets; `/web` is the source of truth.
+- **UI Staging**: `/web/dist`（vite 产物）直接由 Dockerfile COPY 进镜像 `/app/ui`；宿主 `ui/` 目录已废弃（gitignored）。
 - **Build**: No Makefile - use `docker compose build` or compile Go directly with `go build -o bin/lazy-balancer ./cmd/server`
 ```

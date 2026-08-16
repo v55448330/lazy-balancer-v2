@@ -277,6 +277,17 @@ func validateV2Backup(backup configBackup) error {
 			return fmt.Errorf("无效的证书任务状态: %s", status)
 		}
 	}
+	const invalidCredentialsMsg = "备份包含无效的凭证格式（ca_providers.credentials / certificate_configs.dns_credentials 需为 JSON 对象）"
+	for _, provider := range backup.Tables["ca_providers"] {
+		if err := validateCredentialsJSONObject(backupString(provider["credentials"])); err != nil {
+			return errors.New(invalidCredentialsMsg)
+		}
+	}
+	for _, certCfg := range backup.Tables["certificate_configs"] {
+		if err := validateCredentialsJSONObject(backupString(certCfg["dns_credentials"])); err != nil {
+			return errors.New(invalidCredentialsMsg)
+		}
+	}
 	for _, user := range backup.Tables["users"] {
 		if role, _ := user["role"].(string); role == "admin" && backupBooleanEnabled(user["is_enabled"]) {
 			return nil
@@ -305,6 +316,18 @@ func backupString(value any) string {
 		return s
 	}
 	return ""
+}
+
+// validateCredentialsJSONObject allows empty strings but requires non-empty values to be JSON objects.
+func validateCredentialsJSONObject(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		return err
+	}
+	return nil
 }
 
 func backupInt(value any) int {

@@ -134,7 +134,7 @@ docker run -d \
 
 ## 技术栈
 
-Go 1.26 · Gin · SQLite · Caddy v2.11.4 + caddy-l4 v0.1.2 · Vue 3 · Element Plus · Vite
+Go 1.26 · Gin · SQLite · Caddy v2.11.4 + caddy-l4 v0.1.2 + caddy-ratelimit v0.1.0 · Coraza v3 · OWASP CRS v4 · IP2Region v3 · Vue 3 · Element Plus · Vite
 
 ## 镜像
 

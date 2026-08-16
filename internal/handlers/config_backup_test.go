@@ -385,7 +385,7 @@ func TestConfigBackup_export_preserves_sensitive_columns(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO ca_providers (name, provider, directory_url, credentials) VALUES ('le2', 'zerossl', 'https://acme.test/dir2', '{"eab_kid":"ca-cred"}')`); err != nil {
 		t.Fatalf("seed ca provider: %v", err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO certificate_configs (name, dns_credentials) VALUES ('dnspod', 'dns-cred')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO certificate_configs (name, dns_credentials) VALUES ('dnspod', '{"secret_id":"dns-cred","secret_key":"k"}')`); err != nil {
 		t.Fatalf("seed certificate config: %v", err)
 	}
 	if _, err := db.DB.Exec(`UPDATE global_config SET dns_credentials='dns-secret', admin_tls_cert='admin-cert', admin_tls_key='admin-key' WHERE id=1`); err != nil {
@@ -426,7 +426,7 @@ func TestConfigBackup_export_preserves_sensitive_columns(t *testing.T) {
 		{backupString(backup.Config["admin_tls_cert"]), "admin-cert", "global_config.admin_tls_cert"},
 		{backupString(backup.Config["admin_tls_key"]), "admin-key", "global_config.admin_tls_key"},
 		{backupString(seededCA["credentials"]), `{"eab_kid":"ca-cred"}`, "ca_providers.credentials"},
-		{backupString(backup.Tables["certificate_configs"][0]["dns_credentials"]), "dns-cred", "certificate_configs.dns_credentials"},
+		{backupString(backup.Tables["certificate_configs"][0]["dns_credentials"]), `{"secret_id":"dns-cred","secret_key":"k"}`, "certificate_configs.dns_credentials"},
 		{backupString(backup.Tables["lb_rules"][0]["tls_cert"]), testCertPEM, "lb_rules.tls_cert"},
 		{backupString(backup.Tables["lb_rules"][0]["tls_key"]), testKeyPEM, "lb_rules.tls_key"},
 		{backupString(backup.Tables["users"][0]["password_hash"]), "hash", "users.password_hash"},
@@ -877,6 +877,70 @@ func TestValidateConfigImport_rejects_v2_backup_missing_required_contract(t *tes
 				t.Fatalf("validation type=%q, want v2", envelope.Data.Type)
 			}
 		})
+	}
+}
+
+func TestValidateV2Backup_credentials_must_be_json_object(t *testing.T) {
+	tests := []struct {
+		name        string
+		caCred      string
+		dnsCred     string
+		wantErrText string
+	}{
+		{name: "ca_providers invalid", caCred: "not-json", wantErrText: "凭证格式"},
+		{name: "ca_providers valid object", caCred: `{"eab_kid":"x"}`},
+		{name: "ca_providers empty object", caCred: `{}`},
+		{name: "ca_providers empty string", caCred: ""},
+		{name: "ca_providers array rejected", caCred: `["a"]`, wantErrText: "凭证格式"},
+		{name: "certificate_configs invalid", dnsCred: "not-json", wantErrText: "凭证格式"},
+		{name: "certificate_configs valid object", dnsCred: `{"dns_id":"x"}`},
+		{name: "certificate_configs empty object", dnsCred: `{}`},
+		{name: "certificate_configs empty string", dnsCred: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backup := completeBackupJSON(t, map[string][]map[string]any{
+				"ca_providers":        {{"credentials": tt.caCred}},
+				"certificate_configs": {{"dns_credentials": tt.dnsCred}},
+			})
+			var b configBackup
+			if err := json.Unmarshal([]byte(backup), &b); err != nil {
+				t.Fatalf("unmarshal backup: %v", err)
+			}
+
+			err := validateV2Backup(b)
+			if tt.wantErrText != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
+					t.Fatalf("validateV2Backup err=%v, want contains %q", err, tt.wantErrText)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateV2Backup unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestImportConfigBackup_rejects_invalid_credentials_json(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"ca_providers": {{"credentials": "not-json"}},
+	})
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("import status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "凭证格式") {
+		t.Fatalf("import response missing credentials error: %s", response.Body.String())
 	}
 }
 

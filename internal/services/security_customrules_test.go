@@ -1,7 +1,9 @@
 package services
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"strings"
 	"testing"
 
@@ -132,5 +134,46 @@ func TestEmitCustomRules_invalidTargetOrOperatorSkipsWholeRule(t *testing.T) {
 	}
 	if gotCount := strings.Count(got, "SecRule "); gotCount != 2 {
 		t.Fatalf("SecRule count=%d, want 2 (only the valid chained rule):\n%s", gotCount, got)
+	}
+}
+
+// TestEmitCustomRules_invalidRuleLogsSkipAndSparesCleanRules verifies that a
+// dirty rule (invalid target/operator) is logged as skipped while clean rules
+// produce no skip log line — locking the emission-side log contract.
+func TestEmitCustomRules_invalidRuleLogsSkipAndSparesCleanRules(t *testing.T) {
+	var logs bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	// Given dirty rules interleaved with a fully valid chained rule
+	var sb strings.Builder
+	rules := []models.CustomRule{
+		{ID: 10, Name: "非法target规则", Enabled: true, Action: "block", Score: 5, Conditions: []models.CustomRuleCondition{
+			{Target: "uri", Operator: "contains", Pattern: "/admin"},
+			{Target: "cookie", Operator: "contains", Pattern: "session=1"},
+		}},
+		{ID: 11, Name: "非法operator规则", Enabled: true, Action: "block", Score: 5, Conditions: []models.CustomRuleCondition{
+			{Target: "uri", Operator: "matches", Pattern: "/admin"},
+		}},
+		{ID: 12, Name: "合法链式规则", Enabled: true, Action: "block", Score: 3, Conditions: []models.CustomRuleCondition{
+			{Target: "uri", Operator: "contains", Pattern: "/x"},
+			{Target: "args", Operator: "contains", Pattern: "a=1"},
+		}},
+	}
+
+	// When emitted
+	emitCustomRules(&sb, rules)
+	logged := logs.String()
+
+	// Then the two dirty rules are logged with their ID/name and the skip marker
+	for _, want := range []string{"自定义规则 10(非法target规则)", "自定义规则 11(非法operator规则)", "已跳过发射"} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("skip log missing %q:\n%s", want, logged)
+		}
+	}
+	// And the clean chained rule produces no skip log line
+	if strings.Contains(logged, "自定义规则 12") || strings.Contains(logged, "合法链式规则") {
+		t.Fatalf("clean rule must not be logged as skipped:\n%s", logged)
 	}
 }
