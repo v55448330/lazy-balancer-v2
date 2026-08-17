@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -84,7 +85,17 @@ func (s *SyncService) Report(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("主节点拒绝状态上报: %d", resp.StatusCode)
+		// 与传输失败相同的审计节流：主节点持续拒绝上报时同一错误只记录
+		// 一次；错误内容变化或上报恢复后再次失败时重记。
+		message := fmt.Sprintf("主节点拒绝状态上报: %d", resp.StatusCode)
+		s.reportAuditMu.Lock()
+		auditChanged := s.lastReportFailureMsg != message
+		s.lastReportFailureMsg = message
+		s.reportAuditMu.Unlock()
+		if auditChanged {
+			RecordAuditLog("system", "上报失败", "集群节点", message, "")
+		}
+		return errors.New(message)
 	}
 	s.reportAuditMu.Lock()
 	s.lastReportFailureMsg = ""

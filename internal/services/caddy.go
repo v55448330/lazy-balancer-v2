@@ -2525,8 +2525,12 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 	}
 	if effectiveServerTokensHidden {
 		handleChain = append(handleChain, map[string]interface{}{
-			"handler":  "headers",
-			"response": map[string]interface{}{"delete": []string{"Server"}},
+			"handler": "headers",
+			// deferred 必须为 true：非 deferred 的 response 头操作在路由调度阶段
+			// （reverse_proxy 执行之前）应用，reverseproxy 的 copyHeader 复制上游
+			// 响应头时会把上游的 Server 头重新写回，隐藏永远不生效；deferred 使
+			// 删除推迟到上游响应写入之后（Caddy v2.11.4 headers.go + reverseproxy.go）。
+			"response": map[string]interface{}{"deferred": true, "delete": []string{"Server"}},
 		})
 	}
 	handleChain = append(handleChain, proxyConfig)

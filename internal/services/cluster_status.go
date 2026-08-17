@@ -22,7 +22,7 @@ func (s *ClusterService) IsMaster(ctx context.Context) (bool, error) {
 func (s *ClusterService) BecomeSlave(ctx context.Context, masterURL string, registration models.ClusterRegistration) error {
 	s.roleMu.Lock()
 	defer s.roleMu.Unlock()
-	if _, err := s.db.ExecContext(ctx, `UPDATE global_config SET is_master=0, master_url=?, cluster_token='', registration_id=?, registration_secret=?, applied_version=0, sync_fingerprint='', last_sync_error='' WHERE id=1`, masterURL, registration.RegistrationID, registration.RegistrationSecret); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE global_config SET is_master=0, master_url=?, cluster_token='', registration_id=?, registration_secret=?, applied_version=0, sync_fingerprint='', last_sync_error='', registration_confirm_failures=0 WHERE id=1`, masterURL, registration.RegistrationID, registration.RegistrationSecret); err != nil {
 		return fmt.Errorf("保存从节点注册状态: %w", err)
 	}
 	if s.lifecycle != nil {

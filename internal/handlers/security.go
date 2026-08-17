@@ -202,6 +202,17 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "默认拦截页面不可删除"})
 		return
 	}
+	// 被启用策略引用的拦截页面不可删除：静默删除会让这些策略的拦截
+	// 响应退化回 Caddy 默认页面，必须先解除绑定。
+	var referenced int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_policies WHERE block_page_id=? AND enabled=1", id).Scan(&referenced); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if referenced > 0 {
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该拦截页面正被 %d 个启用的安全策略使用，请先解除绑定", referenced)})
+		return
+	}
 	result, err := db.DB.Exec("DELETE FROM security_block_pages WHERE id=?", id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -291,13 +302,17 @@ func (h *Handlers) GetSecurityPolicy(c *gin.Context) {
 	}
 
 	var bindings []string
-	rows, _ := db.DB.Query("SELECT rule_caddy_id FROM security_policy_bindings WHERE policy_id=?", id)
+	rows, err := db.DB.Query("SELECT rule_caddy_id FROM security_policy_bindings WHERE policy_id=?", id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	defer rows.Close()
 	for rows.Next() {
 		var b string
 		rows.Scan(&b)
 		bindings = append(bindings, b)
 	}
-	rows.Close()
 	if bindings == nil {
 		bindings = []string{}
 	}
@@ -399,6 +414,21 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			}
 		}
 	}
+	// 显式空串会把枚举列清空：mode 为 "" 时汇总口径（mode!="off" 即计入 WAF）
+	// 与发射口径（仅 blocking/detection 生效）随即漂移；geoip_mode 在创建时已
+	// 归一为 allow/deny，空串属于域外值。不修改请直接省略字段，而不是传空串。
+	for _, f := range []struct {
+		name string
+		val  *string
+	}{
+		{"mode", req.Mode},
+		{"geoip_mode", req.GeoIPMode},
+	} {
+		if f.val != nil && strings.TrimSpace(*f.val) == "" {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("不修改请省略该字段，%s 不能为空串", f.name)})
+			return
+		}
+	}
 	var mode, ipACLMode, geoIPMode string
 	if req.Mode != nil {
 		mode = *req.Mode
@@ -492,14 +522,29 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 
 func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 	id := c.Param("id")
-	db.DB.Exec("DELETE FROM security_policy_bindings WHERE policy_id=?", id)
-	result, err := db.DB.Exec("DELETE FROM security_policies WHERE id=?", id)
+	// 绑定清理与策略删除必须同事务：绑定删除失败时回滚，避免留下
+	// 指向已删策略的悬挂绑定（旧行为会静默忽略清理错误）。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec("DELETE FROM security_policies WHERE id=?", id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	if rows, _ := result.RowsAffected(); rows == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+		return
+	}
+	if _, err := tx.Exec("DELETE FROM security_policy_bindings WHERE policy_id=?", id); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理策略绑定失败: " + err.Error()})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "删除", "安全策略", fmt.Sprintf("策略 #%s", id), "")
@@ -587,8 +632,9 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		args = append(args, action)
 	}
 	if ip := c.Query("ip"); ip != "" {
-		where += " AND client_ip LIKE ?"
-		args = append(args, "%"+ip+"%")
+		// 前端输入为完整 IP：精确匹配，避免 LIKE 子串把 1.2.3.4 匹配到 11.2.3.40
+		where += " AND client_ip = ?"
+		args = append(args, ip)
 	}
 	if ruleID := c.Query("rule_caddy_id"); ruleID != "" {
 		where += " AND rule_caddy_id=?"
@@ -596,23 +642,33 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	}
 	// 时间范围按配置时区解析（event_time 为 UTC），换算后比对；日期-only 补全天边界
 	loc := services.CurrentLocation()
-	parseBoundary := func(raw, endOfDay string) (string, bool) {
+	parseBoundary := func(raw, endOfDay string) (string, bool, error) {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
-			return "", false
+			return "", false, nil
 		}
 		if len(raw) == 10 {
 			raw += " " + endOfDay
 		}
 		t, err := time.ParseInLocation("2006-01-02 15:04:05", raw, loc)
 		if err != nil {
-			return "", false
+			return "", false, errors.New("时间格式无效（需 YYYY-MM-DD[ HH:MM:SS]）")
 		}
-		return t.UTC().Format("2006-01-02 15:04:05"), true
+		return t.UTC().Format("2006-01-02 15:04:05"), true, nil
+	}
+	// 提供了时间参数却解析失败时直接拒绝：静默忽略会把拼写错误的区间
+	// 当成「无边界」返回全量数据，误导排查方向。
+	startBoundary, hasStart, err := parseBoundary(c.Query("start_time"), "00:00:00")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	endBoundary, hasEnd, err := parseBoundary(c.Query("end_time"), "23:59:59")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
 	}
 	// 同为合法时间且开始晚于结束时直接拒绝：语义错误的区间否则只会静默返回空页
-	startBoundary, hasStart := parseBoundary(c.Query("start_time"), "00:00:00")
-	endBoundary, hasEnd := parseBoundary(c.Query("end_time"), "23:59:59")
 	if hasStart && hasEnd && startBoundary > endBoundary {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "开始时间不能晚于结束时间"})
 		return

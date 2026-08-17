@@ -130,6 +130,28 @@ func TestValidateCustomRulesJSON_acceptsIDArrayAndEmbedded(t *testing.T) {
 	}
 }
 
+func TestValidateCustomRuleConditions_rejectsBlankPattern(t *testing.T) {
+	// 空或纯空白的 pattern 会生成 @contains "" 之类匹配一切请求的条件，等于全员拦截
+	for _, pat := range []string{"", "   "} {
+		err := ValidateCustomRuleConditions([]models.CustomRuleCondition{{Target: "uri", Operator: "contains", Pattern: pat}})
+		if err == nil || !strings.Contains(err.Error(), "匹配内容不能为空") {
+			t.Fatalf("blank pattern %q must be rejected, got %v", pat, err)
+		}
+	}
+	// 内嵌规则对象路径（ValidateCustomRulesJSON → ValidateCustomRuleConditions）
+	if err := ValidateCustomRulesJSON(`[{"id":1,"name":"r","enabled":true,"conditions":[{"target":"uri","operator":"contains","pattern":""}]}]`); err == nil || !strings.Contains(err.Error(), "匹配内容不能为空") {
+		t.Fatalf("embedded blank pattern must be rejected, got %v", err)
+	}
+	// 旧版单条件形状路径（ValidateCustomRulesJSON → validateCustomRulePattern）
+	if err := ValidateCustomRulesJSON(`[{"id":1,"name":"旧版","enabled":true,"target":"uri","operator":"equals","pattern":"  "}]`); err == nil || !strings.Contains(err.Error(), "匹配内容不能为空") {
+		t.Fatalf("legacy-shape blank pattern must be rejected, got %v", err)
+	}
+	// 正常模式不受影响
+	if err := ValidateCustomRuleConditions([]models.CustomRuleCondition{{Target: "uri", Operator: "contains", Pattern: "/admin"}}); err != nil {
+		t.Fatalf("normal pattern must pass, got %v", err)
+	}
+}
+
 func TestEscapeCorazaPattern_stripsControlCharsAndPreservesLiteralBackslashN(t *testing.T) {
 	got := escapeCorazaPattern("a\"b\nc\rd\x00e\\nf")
 	if strings.Contains(got, "\n") || strings.Contains(got, "\r") || strings.Contains(got, "\x00") {

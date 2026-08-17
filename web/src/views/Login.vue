@@ -15,10 +15,10 @@
         <el-form v-if="setupMode" ref="setupFormRef" :model="setupForm" :rules="setupRules" @submit.prevent="handleSetup" class="login-form">
           <el-alert title="首次启动，请创建管理员账号" type="info" show-icon :closable="false" class="login-error" />
           <el-form-item prop="username">
-            <el-input v-model="setupForm.username" placeholder="管理员用户名" size="large" :prefix-icon="User" clearable />
+            <el-input v-model="setupForm.username" placeholder="管理员用户名" size="large" :prefix-icon="User" maxlength="50" clearable />
           </el-form-item>
           <el-form-item prop="display_name">
-            <el-input v-model="setupForm.display_name" placeholder="显示名（选填）" size="large" :prefix-icon="Postcard" clearable />
+            <el-input v-model="setupForm.display_name" placeholder="显示名（选填）" size="large" :prefix-icon="Postcard" maxlength="50" clearable />
           </el-form-item>
           <el-form-item prop="password">
             <el-input v-model="setupForm.password" type="password" placeholder="密码（至少 6 位）" size="large" :prefix-icon="Lock" show-password />
@@ -127,6 +127,10 @@ const setupRules: FormRules = {
   username: [
     { required: true, message: '请输入管理员用户名', trigger: 'blur' },
     { min: 3, message: '用户名至少3位', trigger: 'blur' },
+    { max: 50, message: '用户名最多50位', trigger: 'blur' },
+  ],
+  display_name: [
+    { max: 50, message: '显示名最多50位', trigger: 'blur' },
   ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },

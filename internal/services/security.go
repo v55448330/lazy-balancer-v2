@@ -488,12 +488,16 @@ func ValidateCustomRulesJSON(customRulesJSON string) error {
 	return nil
 }
 
-// validateCustomRulePattern 拒绝两类会破坏 SecRule 行的模式：
-//  1. 真实控制字符（含换行/回车/NUL/制表符等）会截断 SecRule 行；
-//  2. 以反斜杠结尾的模式——coraza 的 UnescapeQuotedString 仅反转义 \"，其余
+// validateCustomRulePattern 拒绝三类会破坏 SecRule 行的模式：
+//  1. 空/纯空白模式——@contains "" 之类对空模式的匹配等于匹配一切请求，全员命中；
+//  2. 真实控制字符（含换行/回车/NUL/制表符等）会截断 SecRule 行；
+//  3. 以反斜杠结尾的模式——coraza 的 UnescapeQuotedString 仅反转义 \"，其余
 //     反斜杠序列原样保留，末尾的反斜杠会与结尾引号组合成转义引号，使 SecRule
 //     行畸形并被 coraza 拒绝，进而导致之后所有配置重生成失败。
 func validateCustomRulePattern(operator, pattern string) error {
+	if strings.TrimSpace(pattern) == "" {
+		return fmt.Errorf("匹配内容不能为空")
+	}
 	for _, r := range pattern {
 		if r < 0x20 || r == 0x7f {
 			return fmt.Errorf("匹配内容不能包含控制字符（含制表符）")

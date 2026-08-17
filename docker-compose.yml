@@ -32,7 +32,8 @@ services:
       - ./data-slave:/app/data
       - ./logs-slave:/app/logs
       - ./certs-slave:/app/certs
-      - ./waf:/app/waf
+      # 独立 WAF 目录：两节点的 CRS/IP2Region 每日更新会并发写共享目录，存在竞争
+      - ./waf-slave:/app/waf
     environment:
       - TZ=Asia/Shanghai
       - NODE_NAME=slave-test

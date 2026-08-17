@@ -1154,6 +1154,41 @@ func TestGenerateSingleRuleCaddyConfig_httpsRedirect_multiDomainUsesRequestHostP
 	assertEqual(t, headers["Location"], []string{"https://{http.request.host}:8443"})
 }
 
+func TestGenerateSingleRuleCaddyConfig_serverTokensHiddenDefersServerHeaderDelete(t *testing.T) {
+	// Given a rule with server tokens hidden (rule-level override = force hide)
+	rule := baseHTTPRule()
+	rule.ServerTokensHidden = 1
+
+	// When
+	config := GenerateSingleRuleCaddyConfig(rule)
+
+	// Then the emitted headers handler deletes Server with deferred=true：
+	// 非 deferred 的 response 头操作在路由调度阶段（reverse_proxy 执行之前）应用，
+	// reverseproxy 复制上游响应头时会把上游的 Server 头重新写回，隐藏永远不生效；
+	// deferred 使删除推迟到上游响应写入之后（Caddy v2.11.4 headers.go +
+	// reverseproxy.go copyHeader）。
+	routes := httpRoutesFromServer(t, config, "http_80")
+	route := mustMap(t, routes[0], "route")
+	handlers, ok := route["handle"].([]interface{})
+	if !ok {
+		t.Fatalf("unexpected route handlers: %#v", route["handle"])
+	}
+	var headersOps map[string]interface{}
+	for _, handlerValue := range handlers {
+		handler := mustMap(t, handlerValue, "handler")
+		if handler["handler"] == "headers" {
+			headersOps = handler
+			break
+		}
+	}
+	if headersOps == nil {
+		t.Fatalf("server_tokens_hidden must emit a headers handler: %#v", route["handle"])
+	}
+	response := mustMap(t, headersOps["response"], "headers response ops")
+	assertEqual(t, response["deferred"], true)
+	assertEqual(t, response["delete"], []string{"Server"})
+}
+
 func TestGenerateCaddyConfig_skipsRulesWithoutUpstreams(t *testing.T) {
 	// Given
 	useTemporaryCertDir(t)

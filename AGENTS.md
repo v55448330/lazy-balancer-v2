@@ -11,12 +11,16 @@ Lazy Balancer V2 is a full-stack load balancer management system that orchestrat
 ./
 ├── cmd/server/    # Backend entry point (main.go)
 ├── internal/     # Core business logic (DB, Handlers, Services)
+├── caddydeps/    # Local module pinning Caddy dependency floors (grpc/otel/x/net versions)
+├── caddygeoip/   # Custom Caddy plugin: IP2Region GeoIP tagging handler
 ├── web/          # Vue 3 + TS frontend source
 ├── config/       # Caddyfile templates
 ├── data/         # SQLite persistent storage (lazy-balancer.db)
 ├── bin/          # Compiled binary (⚠️ NOT committed to git - see ANTI-PATTERNS)
 ├── docs/         # Project documentation
-└── Dockerfile    # Unified build (xcaddy-builder → Go backend; frontend pre-built: `npm run build` first, Dockerfile COPYs web/dist)
+├── Dockerfile    # Unified build (xcaddy-builder → Go backend; frontend pre-built: `npm run build` first, Dockerfile COPYs web/dist)
+├── docker-compose.yml  # Primary + slave test instance orchestration
+└── .dockerignore # Build-context slimming (excludes data/certs/logs/secrets from image layers)
 ```
 
 ## WHERE TO LOOK
@@ -27,6 +31,7 @@ Lazy Balancer V2 is a full-stack load balancer management system that orchestrat
 | Frontend Source | `web/src/` | Vue components and state management |
 | Database Schema | `internal/db/db.go` | SQLite table definitions & migrations |
 | Caddy Logic | `internal/services/caddy.go` | Config generation, L4 builder (`buildTCPProxyRoute`/`buildTCPServer`) |
+| MCP Service | `internal/mcpserver/` | MCP tool specs (`tools.go`), server (`server.go`), bundled playbook resource |
 
 ## CONVENTIONS
 - **Backend**: Standard Go project layout. Private logic resides in `internal/`.

@@ -27,7 +27,7 @@
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="用户名">
-              <el-input v-model="form.username" :placeholder="editingUser ? '用户名不可修改' : '请输入用户名'" :disabled="!!editingUser" />
+              <el-input v-model="form.username" :placeholder="editingUser ? '用户名不可修改' : '请输入用户名'" :disabled="!!editingUser" maxlength="50" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -39,7 +39,7 @@
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="显示名称">
-              <el-input v-model="form.display_name" placeholder="选填" />
+              <el-input v-model="form.display_name" placeholder="选填" maxlength="50" />
             </el-form-item>
           </el-col>
           <el-col :span="12">

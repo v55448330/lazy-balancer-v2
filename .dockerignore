@@ -22,5 +22,7 @@ docs/
 *.key
 *.log
 .DS_Store
+.env
+*.env
 README.zh-CN.md
 AGENTS.md

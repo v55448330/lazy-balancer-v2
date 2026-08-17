@@ -14,11 +14,28 @@ RUN xcaddy build v2.11.4 \
   --with lazy-balancer-v2/caddygeoip=./caddygeoip \
   --with lazy-balancer-v2/caddydeps=./caddydeps
 # 构建期断言：镜像扫描要求的最低依赖版本未被 MVS 抬升到位则直接失败
-# （go version -m 的模块路径与版本之间是 TAB 分隔，用 [[:space:]] 匹配）
+# （版本下限：grpc>=v1.82、otel>=v1.44、x/net>=v0.56；go version -m 各列以 TAB 分隔，
+#  用 awk 做数值化语义比较，不设上限，依赖升到大版本也不会误报）
 RUN go version -m /app/caddy | tee /tmp/caddy-mods.txt && \
-    grep -qE "google.golang.org/grpc[[:space:]]+v1\.8[2-9]" /tmp/caddy-mods.txt && \
-    grep -qE "go.opentelemetry.io/otel[[:space:]]+v1\.4[4-9]" /tmp/caddy-mods.txt && \
-    grep -qE "golang.org/x/net[[:space:]]+v0\.5[6-9]" /tmp/caddy-mods.txt
+    awk -F'\t' '
+      function ge(ver, floor,   va, fa, i, a, b) {
+        split(substr(ver, 2), va, "."); split(substr(floor, 2), fa, ".")
+        for (i = 1; i <= 3; i++) {
+          a = va[i] + 0; b = fa[i] + 0
+          if (a > b) return 1
+          if (a < b) return 0
+        }
+        return 1
+      }
+      {
+        for (i = 1; i < NF; i++) {
+          if ($i == "google.golang.org/grpc") ok1 = ge($(i+1), "v1.82.0")
+          else if ($i == "go.opentelemetry.io/otel") ok2 = ge($(i+1), "v1.44.0")
+          else if ($i == "golang.org/x/net") ok3 = ge($(i+1), "v0.56.0")
+        }
+      }
+      END { exit (ok1 && ok2 && ok3) ? 0 : 1 }
+    ' /tmp/caddy-mods.txt
 
 # Build Go backend
 FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS backend

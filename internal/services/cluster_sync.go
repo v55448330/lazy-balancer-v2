@@ -66,6 +66,11 @@ const (
 
 var errClusterPinMismatch = errors.New("主节点 TLS 证书指纹不匹配")
 
+// errSyncTokenRevoked 表示主节点以 401/403 拒绝了本节点的快照拉取：
+// 集群令牌已被撤销（节点被主节点删除或注册被拒），继续按周期重试只会
+// 无限失败，属于需要人工介入（重新注册或提升为主节点）的终止类错误。
+var errSyncTokenRevoked = errors.New("集群令牌已被主节点撤销，请重新注册或提升为主节点")
+
 func (err *SnapshotSchemaTooNewError) Error() string {
 	return fmt.Sprintf("主节点快照版本 v%d 超出本节点支持范围 v%d，请升级从节点", err.Actual, err.Supported)
 }
@@ -552,6 +557,12 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		// 401/403 表示主节点已拒绝本节点凭据（节点被删除或注册被拒），
+		// 重试不可能自愈：返回终止类错误，由 run 循环 halt 等待人工介入。
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed,
+				fmt.Errorf("主节点拒绝本节点访问(%d): %w", resp.StatusCode, errSyncTokenRevoked))
+		}
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError, fmt.Errorf("主节点快照请求失败(%d): %s", resp.StatusCode, string(body)))
 	}
 	var envelope struct {
@@ -894,8 +905,13 @@ func (s *SyncService) run(ctx context.Context) {
 			var schemaTooNew *SnapshotSchemaTooNewError
 			var schemaTooOld *SnapshotSchemaTooOldError
 			terminal := errors.As(pullErr, &schemaTooNew) || errors.As(pullErr, &schemaTooOld)
-			if terminal {
+			if terminal || errors.Is(pullErr, errSyncTokenRevoked) {
 				s.state.Store(uint32(syncStateHalted))
+			}
+			if errors.Is(pullErr, errSyncTokenRevoked) {
+				// 主节点已撤销本节点令牌：上报必然再次被拒，跳过 Report
+				// 直接终止（错误已由 Pull 落库），等待人工重新注册或提升为主节点。
+				return
 			}
 			reportErr := s.Report(ctx)
 			s.recordSyncError(ctx, pullErr, reportErr)
