@@ -127,6 +127,10 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	if c.GetString("role") != "admin" {
 		req.ReadOnly = true
 	}
+	if req.ExpiresAt != nil && req.ExpiresAt.Before(time.Now()) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "过期时间不能早于当前时间"})
+		return
+	}
 	whitelist, err := services.NormalizeCIDRs(req.MCPIPWhitelist)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "MCP IP 白名单无效: " + err.Error()})

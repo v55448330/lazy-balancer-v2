@@ -148,6 +148,10 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
 	}
+	if strings.TrimSpace(req.Content) == "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面内容不能为空"})
+		return
+	}
 	result, err := db.DB.Exec(`INSERT INTO security_block_pages (name, description, content, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Content, req.IsDefault, getContextUserIDInt(c), getContextUserIDInt(c))
 	if err != nil {
@@ -164,6 +168,10 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 	var req models.SecurityBlockPage
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	if strings.TrimSpace(req.Content) == "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面内容不能为空"})
 		return
 	}
 	var isDefault bool

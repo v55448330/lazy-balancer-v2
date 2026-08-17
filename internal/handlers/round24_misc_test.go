@@ -84,7 +84,9 @@ func TestValidateRuleFeatures_rejects_invalid_path_upstream_host(t *testing.T) {
 		address   string
 		wantError string
 	}{
-		{name: "underscore host rejected", address: "bad_host.example.test", wantError: "主机"},
+		// R25：Docker Compose 服务名允许下划线，isValidHost 已放行 '_'（详见 round25_low_test.go）
+		{name: "docker underscore service accepted", address: "bad_host.example.test", wantError: ""},
+		{name: "leading hyphen label rejected", address: "-bad.example.test", wantError: "主机"},
 		{name: "space in host rejected", address: "bad host.example.test", wantError: "主机"},
 		{name: "valid domain accepted", address: "good.example.test", wantError: ""},
 		{name: "valid ip accepted", address: "127.0.0.1", wantError: ""},

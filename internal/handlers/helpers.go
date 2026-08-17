@@ -1021,7 +1021,10 @@ func isValidHost(host string) bool {
 		return false
 	}
 
-	// Basic domain validation - letters, numbers, dots, hyphens
+	// 基础域名/主机名校验：字母、数字、连字符；标签首尾须为字母或数字（RFC 1123）。
+	// 额外放行下划线 '_'：Docker Compose 服务名允许下划线（内嵌 DNS 可直接解析
+	// my_backend 这类名称）。RFC 主机名确实禁止下划线，但此处校验的是上游地址，
+	// 通常是容器服务名而非公网 DNS 主机名，故按 Docker 命名规则放宽。
 	valid := true
 	parts := strings.Split(host, ".")
 	for _, part := range parts {
@@ -1034,7 +1037,7 @@ func isValidHost(host string) bool {
 			break
 		}
 		for _, c := range part {
-			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.') {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
 				valid = false
 				break
 			}
@@ -1042,9 +1045,17 @@ func isValidHost(host string) bool {
 		if !valid {
 			break
 		}
+		if !isAlnumASCII(part[0]) || !isAlnumASCII(part[len(part)-1]) {
+			valid = false
+			break
+		}
 	}
 
 	return valid
+}
+
+func isAlnumASCII(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 func isValidDomain(domain string) bool {

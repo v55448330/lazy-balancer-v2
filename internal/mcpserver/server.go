@@ -3,11 +3,13 @@ package mcpserver
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -265,6 +267,17 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 			}
 		}
 	}
+	// reset_user_password：后端必填 new_password，而工具 schema 只暴露 id（随机值语义），
+	// 由 MCP 层生成随机密码注入请求体，成功后在结果文本中回显一次
+	generatedPassword := ""
+	if spec.name == "reset_user_password" {
+		password, err := generateRandomPassword(16)
+		if err != nil {
+			return nil, fmt.Errorf("生成随机密码: %w", err)
+		}
+		generatedPassword = password
+		bodyArguments["new_password"] = password
+	}
 	for _, name := range append(append([]string{}, spec.pathArgs...), spec.queryArgs...) {
 		delete(bodyArguments, name)
 	}
@@ -359,8 +372,25 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 	result := mcp.NewToolResultText(string(responseBody))
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		result.IsError = true
+	} else if generatedPassword != "" {
+		result = mcp.NewToolResultText(string(responseBody) + "\n（本次密码为系统生成：" + generatedPassword + "，请立即转交用户保存）")
 	}
 	return result, nil
+}
+
+const randomPasswordCharset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+// generateRandomPassword 用 crypto/rand 生成无偏字母数字密码，供 reset_user_password 注入后端请求体
+func generateRandomPassword(length int) (string, error) {
+	buffer := make([]byte, length)
+	for i := range buffer {
+		index, err := rand.Int(rand.Reader, big.NewInt(int64(len(randomPasswordCharset))))
+		if err != nil {
+			return "", fmt.Errorf("读取随机源: %w", err)
+		}
+		buffer[i] = randomPasswordCharset[index.Int64()]
+	}
+	return string(buffer), nil
 }
 
 func isLoopbackHTTPURL(target *url.URL) bool {

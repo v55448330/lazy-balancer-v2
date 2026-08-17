@@ -331,6 +331,71 @@ func TestOversizedResponseReturnsToolError(t *testing.T) {
 	}
 }
 
+func TestResetUserPasswordToolInjectsRandomPassword(t *testing.T) {
+	// Given：后端要求 new_password，工具层应注入 16 位随机字母数字密码并在成功结果中回显
+	var receivedPassword string
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/users/7/reset-password" {
+			t.Errorf("request=%s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		password, _ := body["new_password"].(string)
+		if len(password) != 16 {
+			t.Errorf("new_password=%q, want 16 chars", password)
+		}
+		for _, ch := range password {
+			if !strings.ContainsRune(randomPasswordCharset, ch) {
+				t.Errorf("new_password=%q contains non-alphanumeric rune %q", password, ch)
+			}
+		}
+		receivedPassword = password
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"密码重置成功"}`))
+	}))
+	defer rest.Close()
+
+	// When
+	result := callTool(t, New(rest.URL+"/api/v1", rest.Client()), "reset_user_password", `{"id":7}`)
+
+	// Then
+	if !strings.Contains(result, "密码重置成功") {
+		t.Fatalf("result=%q", result)
+	}
+	if !strings.Contains(result, "本次密码为系统生成："+receivedPassword) {
+		t.Fatalf("result must echo generated password %q, got %q", receivedPassword, result)
+	}
+}
+
+func TestResetUserPasswordToolDoesNotEchoPasswordOnFailure(t *testing.T) {
+	// Given：后端返回非 2xx 时不回显密码，避免重置失败却泄露已生成口令
+	var receivedPassword string
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		receivedPassword, _ = body["new_password"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":404,"message":"用户不存在"}`))
+	}))
+	defer rest.Close()
+
+	// When
+	result := callTool(t, New(rest.URL+"/api/v1", rest.Client()), "reset_user_password", `{"id":404}`)
+
+	// Then
+	if !strings.Contains(result, "用户不存在") || !strings.Contains(result, `"isError":true`) {
+		t.Fatalf("result=%q", result)
+	}
+	if strings.Contains(result, receivedPassword) {
+		t.Fatalf("result must not echo password on failure, got %q", result)
+	}
+}
+
 func callTool(t *testing.T, handler http.Handler, name, arguments string) string {
 	t.Helper()
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"` + name + `","arguments":` + arguments + `}}`

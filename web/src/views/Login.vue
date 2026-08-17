@@ -81,8 +81,9 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import { request } from '@/utils/api'
+import { ApiRequestError, request } from '@/utils/api'
 import { User, Lock, Postcard } from '@element-plus/icons-vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, appVersion } from '@/utils/branding'
@@ -196,10 +197,18 @@ const handleSetup = async () => {
 
 onMounted(async () => {
   try {
-    const res = await request.get<SetupStatusResponse>('/auth/setup')
+    // silent：初始化探测失败由本组件自行提示，避免全局拦截器叠加一条重复 toast
+    const res = await request.get<SetupStatusResponse>('/auth/setup', { silent: true })
     setupMode.value = res.data.needs_setup
-  } catch {
+  } catch (caught) {
+    // 429 限流/网络异常时无法判定系统是否已初始化，静默降级为登录页会让
+    // 未初始化系统的管理员误以为已有账号；此时保持登录表单但给出可见提示，
+    // 仅 403/404（已有管理员语义）才无提示切换
     setupMode.value = false
+    const status = caught instanceof ApiRequestError ? caught.status : undefined
+    if (status !== 403 && status !== 404) {
+      ElMessage.error('无法确认初始化状态，请稍后刷新')
+    }
   } finally {
     checkingSetup.value = false
   }

@@ -117,6 +117,60 @@ func TestLastAdministratorGuard_allowsChangeWhenAnotherEnabledAdministratorExist
 	}
 }
 
+func TestUpdateUser_validatesUsernameLength(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	seedUserAuditTest(t, 1, "admin", "admin", true)
+
+	// When: 用户名过短
+	response := serveUserMutation(h, http.MethodPut, "/users/1", `{"username":"ab"}`, 1, h.UpdateUser)
+
+	// Then
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("short username status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+
+	// When: 用户名满足 min=3
+	response = serveUserMutation(h, http.MethodPut, "/users/1", `{"username":"abc"}`, 1, h.UpdateUser)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("valid username status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+}
+
+func TestUpdateCurrentUser_validatesDisplayNameLength(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,display_name) VALUES (1,'current','old-hash','admin','Before')"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	router := gin.New()
+	router.PATCH("/users/me", func(c *gin.Context) { c.Set("user_id", 1); h.UpdateCurrentUser(c) })
+
+	// When: display_name 超过 50 字符
+	request := httptest.NewRequest(http.MethodPatch, "/users/me", strings.NewReader(`{"display_name":"`+strings.Repeat("名", 51)+`"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("51-char display_name status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+
+	// When: display_name 恰好 50 字符
+	request = httptest.NewRequest(http.MethodPatch, "/users/me", strings.NewReader(`{"display_name":"`+strings.Repeat("名", 50)+`"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("50-char display_name status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+}
+
 func seedUserAuditTest(t *testing.T, id int, username, role string, enabled bool) {
 	t.Helper()
 	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (?,?,?,?,?)", id, username, "hash", role, enabled); err != nil {

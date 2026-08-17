@@ -405,6 +405,10 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 			json.Unmarshal([]byte(conditionsJSON), &cr.Conditions)
 			rules = append(rules, cr)
 		}
+		// 悬空引用（规则已被删除）不改变解析行为，仅记录日志便于排查
+		if dropped := len(ids) - len(rules); dropped > 0 {
+			log.Printf("策略引用的自定义规则有 %d 个不存在，已跳过", dropped)
+		}
 		return rules
 	}
 	var embedded []models.CustomRule

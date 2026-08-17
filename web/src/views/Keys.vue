@@ -443,7 +443,8 @@ const downloadMCPPlaybook = async (): Promise<void> => {
     link.href = url
     link.download = 'lazy-balancer-mcp-ops-playbook.md'
     link.click()
-    URL.revokeObjectURL(url)
+    // Safari 下立即回收 objectURL 会截断下载文件，延迟 1s 再释放（与 BasicSettings 导出一致）
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
   } catch {
     ElMessage.error('下载失败，请重试')
   } finally {
@@ -532,6 +533,11 @@ async function createKey() {
   if (whitelist.error) {
     createWhitelistError.value = whitelist.error
     return
+  }
+  // 日期面板仅按天禁用过去日期，仍可选到当天早于现在的时刻；提交时钳制为当前时间
+  if (createForm.value.expiresAt && createForm.value.expiresAt.getTime() < Date.now()) {
+    createForm.value.expiresAt = new Date()
+    ElMessage.warning('过期时间早于当前时间，已自动调整为当前时间')
   }
 
   creating.value = true

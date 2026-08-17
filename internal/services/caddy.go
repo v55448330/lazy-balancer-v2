@@ -1276,7 +1276,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 							"handler":     "static_response",
 							"status_code": 301,
 							"headers": map[string]interface{}{
-								"Location": []string{httpsRedirectLocation(domainHosts[0], r.ListenPort)},
+								"Location": []string{httpsRedirectLocation(r.ListenPort)},
 							},
 						},
 					},
@@ -1644,11 +1644,15 @@ func splitAndTrim(s string) []string {
 	return result
 }
 
-func httpsRedirectLocation(host string, listenPort int) string {
+// httpsRedirectLocation 构造 HTTP→HTTPS 跳转的 Location 头。
+// 使用 {http.request.host} 占位符而非首个域名字面量：Caddy static_response
+// 的 headers 会在运行时经过 replacer 替换（v2.11.4 modules/caddyhttp/staticresp.go），
+// 因此多域名规则（a.com,b.com）访问 b.com 时会跳回 b.com，而不是被劫持到首个域名。
+func httpsRedirectLocation(listenPort int) string {
 	if listenPort != 443 {
-		return fmt.Sprintf("https://%s:%d", host, listenPort)
+		return fmt.Sprintf("https://{http.request.host}:%d", listenPort)
 	}
-	return fmt.Sprintf("https://%s", host)
+	return "https://{http.request.host}"
 }
 
 type SingleRuleConfig struct {
@@ -1847,7 +1851,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 						"handler":     "static_response",
 						"status_code": 301,
 						"headers": map[string]interface{}{
-							"Location": []string{httpsRedirectLocation(domainHosts[0], rule.ListenPort)},
+							"Location": []string{httpsRedirectLocation(rule.ListenPort)},
 						},
 					},
 				},

@@ -88,7 +88,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	}
 
 	var req struct {
-		Username    *string `json:"username"`
+		Username    *string `json:"username" binding:"omitempty,min=3,max=50"`
 		Password    *string `json:"password"`
 		Role        *string `json:"role"`
 		DisplayName *string `json:"display_name" binding:"omitempty,max=50"`

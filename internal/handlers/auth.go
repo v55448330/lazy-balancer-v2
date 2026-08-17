@@ -168,7 +168,7 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 }
 
 type UpdateCurrentUserRequest struct {
-	DisplayName *string `json:"display_name"`
+	DisplayName *string `json:"display_name" binding:"omitempty,max=50"`
 	Password    string  `json:"password"`
 }
 
