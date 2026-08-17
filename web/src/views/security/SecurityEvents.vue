@@ -88,6 +88,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { Refresh, Warning } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { request } from '@/utils/api'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import { formatDate } from '@/utils/date'
@@ -118,7 +119,17 @@ const pageSize = ref(20)
 const total = ref(0)
 const filters = ref({ action: '', ip: '', rule_caddy_id: '', timeRange: null as [string, string] | null })
 
-const applyFilters = () => { page.value = 1; fetchEvents() }
+const applyFilters = () => {
+  // 时间区间校验：开始晚于结束时提示并清除该筛选（后端同样兜底 400）。
+  // value-format 为 YYYY-MM-DD HH:mm:ss，字符串比较即时间先后比较。
+  const range = filters.value.timeRange
+  if (range?.[0] && range?.[1] && range[0] > range[1]) {
+    ElMessage.warning('开始时间不能晚于结束时间')
+    filters.value.timeRange = null
+  }
+  page.value = 1
+  fetchEvents()
+}
 
 const resetFilters = () => {
   filters.value = { action: '', ip: '', rule_caddy_id: '', timeRange: null }
@@ -140,9 +151,27 @@ const goToPolicy = (row: SecurityEvent) => {
   window.open('/?page=security-policies', '_blank')
 }
 
+let fetchEventsSeq = 0
 const fetchEvents = async () => {
+  // 乱序响应守卫：只有最新一次请求的响应才允许写入列表，避免旧响应覆盖新页
+  const requestSeq = ++fetchEventsSeq
   loading.value = true
-  try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (filters.value.action) p.set('action', filters.value.action); if (filters.value.ip) p.set('ip', filters.value.ip); if (filters.value.rule_caddy_id) p.set('rule_caddy_id', filters.value.rule_caddy_id); if (filters.value.timeRange?.[0]) p.set('start_time', filters.value.timeRange[0]); if (filters.value.timeRange?.[1]) p.set('end_time', filters.value.timeRange[1]); const res = await request.get<APIResponse<{ events: SecurityEvent[]; total: number }>>(`/security/events?${p}`); events.value = res.data?.events || []; total.value = res.data?.total || 0 } catch { events.value = [] } finally { loading.value = false }
+  try {
+    const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) })
+    if (filters.value.action) p.set('action', filters.value.action)
+    if (filters.value.ip) p.set('ip', filters.value.ip)
+    if (filters.value.rule_caddy_id) p.set('rule_caddy_id', filters.value.rule_caddy_id)
+    if (filters.value.timeRange?.[0]) p.set('start_time', filters.value.timeRange[0])
+    if (filters.value.timeRange?.[1]) p.set('end_time', filters.value.timeRange[1])
+    const res = await request.get<APIResponse<{ events: SecurityEvent[]; total: number }>>(`/security/events?${p}`)
+    if (requestSeq !== fetchEventsSeq) return
+    events.value = res.data?.events || []
+    total.value = res.data?.total || 0
+  } catch {
+    if (requestSeq === fetchEventsSeq) events.value = []
+  } finally {
+    if (requestSeq === fetchEventsSeq) loading.value = false
+  }
 }
 onMounted(fetchEvents)
 </script>

@@ -91,6 +91,8 @@ type SyncService struct {
 	state                  atomic.Uint32
 	pullsStopped           bool
 	pullWG                 sync.WaitGroup
+	reportAuditMu          sync.Mutex
+	lastReportFailureMsg   string
 	runFn                  func(context.Context)
 	loadRunState           func(context.Context) (bool, string, int, error)
 	waitRunDelay           func(context.Context, time.Duration) bool
@@ -886,10 +888,9 @@ func (s *SyncService) run(ctx context.Context) {
 		if token == "" {
 			s.pollRegistration(ctx)
 		} else {
-			result, pullErr := s.Pull(ctx)
-			if pullErr == nil && !result.Changed {
-				RecordAuditLog("system", "同步", "集群同步", "配置无变化", "")
-			}
+			// 304「配置无变化」是稳态事件，不留审计（曾按周期刷屏，R24 移除）；
+			// 有意义的状态跃迁（漂移自愈、失败）仍在各自路径留痕。
+			_, pullErr := s.Pull(ctx)
 			var schemaTooNew *SnapshotSchemaTooNewError
 			var schemaTooOld *SnapshotSchemaTooOldError
 			terminal := errors.As(pullErr, &schemaTooNew) || errors.As(pullErr, &schemaTooOld)

@@ -602,13 +602,20 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		}
 		return t.UTC().Format("2006-01-02 15:04:05"), true
 	}
-	if v, ok := parseBoundary(c.Query("start_time"), "00:00:00"); ok {
-		where += " AND datetime(event_time) >= datetime(?)"
-		args = append(args, v)
+	// 同为合法时间且开始晚于结束时直接拒绝：语义错误的区间否则只会静默返回空页
+	startBoundary, hasStart := parseBoundary(c.Query("start_time"), "00:00:00")
+	endBoundary, hasEnd := parseBoundary(c.Query("end_time"), "23:59:59")
+	if hasStart && hasEnd && startBoundary > endBoundary {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "开始时间不能晚于结束时间"})
+		return
 	}
-	if v, ok := parseBoundary(c.Query("end_time"), "23:59:59"); ok {
+	if hasStart {
+		where += " AND datetime(event_time) >= datetime(?)"
+		args = append(args, startBoundary)
+	}
+	if hasEnd {
 		where += " AND datetime(event_time) <= datetime(?)"
-		args = append(args, v)
+		args = append(args, endBoundary)
 	}
 
 	var total int
@@ -1260,6 +1267,9 @@ func (h *Handlers) ListCRSRules(c *gin.Context) {
 	fmt.Sscanf(c.DefaultQuery("page_size", "50"), "%d", &pageSize)
 	if page < 1 {
 		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 50
 	}
 
 	type CRSRule struct {

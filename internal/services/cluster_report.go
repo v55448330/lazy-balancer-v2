@@ -71,12 +71,23 @@ func (s *SyncService) Report(ctx context.Context) error {
 	req.Header.Set("X-Cluster-Token", token)
 	resp, err := s.do(req)
 	if err != nil {
-		RecordAuditLog("system", "上报失败", "集群节点", err.Error(), "")
+		// 审计节流：主节点持续宕机时上报每个同步周期都失败，同一错误只记录
+		// 一次；错误内容变化或上报恢复后再次失败时重记，避免按分钟刷审计日志。
+		s.reportAuditMu.Lock()
+		auditChanged := s.lastReportFailureMsg != err.Error()
+		s.lastReportFailureMsg = err.Error()
+		s.reportAuditMu.Unlock()
+		if auditChanged {
+			RecordAuditLog("system", "上报失败", "集群节点", err.Error(), "")
+		}
 		return fmt.Errorf("上报主节点失败: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusBadRequest {
 		return fmt.Errorf("主节点拒绝状态上报: %d", resp.StatusCode)
 	}
+	s.reportAuditMu.Lock()
+	s.lastReportFailureMsg = ""
+	s.reportAuditMu.Unlock()
 	return nil
 }

@@ -504,6 +504,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		}
 		ruleConfig.Upstreams = append(ruleConfig.Upstreams, services.UpstreamConfig{
 			Host: u.Host, Port: u.Port, Weight: weight, Protocol: protocol, Enabled: u.Enabled,
+			MaxConnections: u.MaxConnections,
 		})
 	}
 

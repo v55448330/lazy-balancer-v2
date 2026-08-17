@@ -722,6 +722,12 @@ async function openDialog(row?: PolicySummary) {
       crsExcludedRules.value = parseJsonList(d.crs_excluded_rules)
       selectedCustomRules.value = parseCustomRuleIds(d.custom_rules)
       boundRules.value = res.data.bindings || []
+      // 拦截页面失效兜底：策略引用的拦截页面可能已被删除，select 匹配不到时回退
+      // 默认页（优先 #1，其次第一个可用页），避免保存写回无效 id
+      if (blockPages.value.length > 0 && !blockPages.value.some((p) => p.id === form.value.block_page_id)) {
+        form.value.block_page_id = blockPages.value.find((p) => p.id === 1)?.id ?? blockPages.value[0].id
+        ElMessage.warning('原拦截页面已删除，已回退默认页面')
+      }
     } catch { ElMessage.error('加载策略详情失败') }
   } else { resetForm() }
   originalBoundRules.value = [...boundRules.value]
@@ -756,7 +762,11 @@ const handleSave = async () => {
   }
   saving.value = true
   try {
-    const payload = { ...form.value, ip_acl_list: JSON.stringify(ipACLList.value), ip_whitelist: JSON.stringify(ipWhitelistEnabled.value ? ipWhitelist.value : []), crs_rule_groups: JSON.stringify(crsRuleGroups.value), crs_excluded_rules: JSON.stringify(crsExcludedRules.value), custom_rules: JSON.stringify(selectedCustomRules.value), geoip_countries: JSON.stringify(form.value.geoip_enabled ? geoipCountries.value : []) }
+    // 名单保留语义（与 ip_acl_list 对齐）：关闭开关不再清空已配置的名单，保存时始终
+    // 回传当前名单内容，避免"关掉开关再打开"丢数据；ip_blacklist 本页不下发，后端
+    // 指针语义自动保留原值。注意：后端按"名单非空即生效"发射，信任名单/区域控制
+    // 的真正关闭方式是清空名单条目，开关仅控制编辑器显隐并在重开时按名单派生。
+    const payload = { ...form.value, ip_acl_list: JSON.stringify(ipACLList.value), ip_whitelist: JSON.stringify(ipWhitelist.value), crs_rule_groups: JSON.stringify(crsRuleGroups.value), crs_excluded_rules: JSON.stringify(crsExcludedRules.value), custom_rules: JSON.stringify(selectedCustomRules.value), geoip_countries: JSON.stringify(geoipCountries.value) }
     let saveRes: APIResponse<{ id: number }> | undefined
     if (editingId.value) {
       saveRes = await request.put(`/security/policies/${editingId.value}`, payload)

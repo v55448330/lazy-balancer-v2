@@ -113,7 +113,7 @@
           <span class="info-label">重启服务</span>
           <el-button size="small" type="danger" plain :disabled="isReadOnly" :loading="restarting" @click="handleRestart">重启</el-button>
         </div>
-        <el-text type="info" size="small" class="backup-tip">备份包含全部配置、规则、用户、密钥与证书任务；导入将覆盖当前配置，仅主节点可用</el-text>
+        <el-text type="info" size="small" class="backup-tip">备份包含全部配置、规则、用户、密钥与证书任务（含凭证与私钥，请加密保管）；导入将覆盖当前配置，仅主节点可用</el-text>
       </div>
     </el-card>
 
@@ -314,14 +314,18 @@ const exportBackup = async (): Promise<void> => {
   if (backupDisabled.value || exporting.value) return
   exporting.value = true
   try {
-    const blob = await request.get<Blob>('/config/export', { responseType: 'blob' })
+    // 备份含全部证书与私钥，体积可能很大，禁用 30s 默认超时
+    const blob = await request.get<Blob>('/config/export', { responseType: 'blob', timeout: 0 })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
     link.download = `lazy-balancer-backup-${new Date().toISOString().slice(0, 10)}.json`
     link.click()
-    URL.revokeObjectURL(url)
+    // Safari 下立即回收 objectURL 会截断下载文件，延迟 1s 再释放
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
     ElMessage.success('配置备份已导出')
+  } catch {
+    // 错误提示已由全局拦截器（含 Blob 错误体解析）展示
   } finally {
     exporting.value = false
   }

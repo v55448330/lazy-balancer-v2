@@ -158,9 +158,9 @@ func (s *CaddyService) ValidateRouteMergedConfig(serverName string, routeConfig 
 
 	fullConfig, err := s.GetConfig()
 	if err != nil {
-		// Server might not exist yet, which is fine - validation will be done on standalone config
-		// Treat this as validation passing (will be validated again when actually created)
-		return nil
+		// Round 24 C-N4: GetConfig 失败是传输/解码错误（管理接口不可达），不能静默按
+		// “校验通过”放行；“尚无任何已加载配置”的空配置走下方空结构早退。
+		return fmt.Errorf("无法连接 Caddy 管理接口，未能校验配置: %w", err)
 	}
 
 	apps, ok := fullConfig["apps"].(map[string]interface{})

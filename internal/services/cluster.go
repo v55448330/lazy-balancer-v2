@@ -261,7 +261,10 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 		return fmt.Errorf("开始提升事务: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `UPDATE global_config SET is_master=1, master_url='', cluster_token='', registration_id=0, registration_secret='' WHERE id=1`); err != nil {
+	// 与 BecomeSlave 的反向清理对称：提升时同步清空从节点的同步残留
+	//（applied_version/sync_fingerprint/last_sync_error/注册确认失败计数），
+	// 避免新主节点带着旧集群的同步指纹与错误状态运行。
+	if _, err := tx.ExecContext(ctx, `UPDATE global_config SET is_master=1, master_url='', cluster_token='', registration_id=0, registration_secret='', applied_version=0, sync_fingerprint='', last_sync_error='', registration_confirm_failures=0 WHERE id=1`); err != nil {
 		return fmt.Errorf("重置主节点状态: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

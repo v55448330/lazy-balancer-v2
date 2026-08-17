@@ -74,6 +74,21 @@ interface RequestClient {
 
 let sessionExpiredDialogOpen = false
 
+// Blob 下载（配置导出、MCP 手册）失败时，错误响应体是 Blob 而非 JSON，
+// 需读出文本后解析后端 message，否则只能展示 axios 的英文兜底文案。
+async function blobErrorMessage(responseData: unknown): Promise<string | undefined> {
+  if (!(responseData instanceof Blob) || responseData.size === 0) return undefined
+  try {
+    const parsed: unknown = JSON.parse(await responseData.text())
+    if (typeof parsed === 'object' && parsed !== null && 'message' in parsed && typeof (parsed as { message: unknown }).message === 'string') {
+      return (parsed as { message: string }).message
+    }
+  } catch {
+    return undefined
+  }
+  return undefined
+}
+
 export class ApiRequestError extends Error {
   constructor(message: string, readonly status?: number) {
     super(message)
@@ -113,8 +128,11 @@ service.interceptors.response.use(
   async (error) => {
     if (axios.isCancel(error)) return Promise.reject(error)
     const status = error.response?.status
-    const backendMsg = error.response?.data?.message
-    const message = backendMsg || error.message || '网络错误'
+    const backendMsg = error.response?.data?.message ?? (await blobErrorMessage(error.response?.data))
+    const message = backendMsg
+      || (!error.response && /timeout/i.test(String(error.message)) ? '请求超时，请稍后重试' : '')
+      || error.message
+      || '网络错误'
     const isLoginRequest = error.config?.url?.includes('/auth/login') || error.config?.url?.includes('/auth/ticket-login')
     if (status === 401) {
       if (!isLoginRequest) {

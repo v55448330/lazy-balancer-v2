@@ -516,7 +516,7 @@ func TestClusterService_Promote_resets_slave_state(t *testing.T) {
 	_, database := newClusterTestService(t)
 	lifecycle := &clusterLifecycleFake{}
 	service := NewClusterService(database, lifecycle)
-	if _, err := database.Exec(`UPDATE global_config SET is_master=0, master_url='https://master', cluster_token='secret', cluster_version=4 WHERE id=1`); err != nil {
+	if _, err := database.Exec(`UPDATE global_config SET is_master=0, master_url='https://master', cluster_token='secret', cluster_version=4, applied_version=3, sync_fingerprint='fp-1', last_sync_error='{"code":"transport_error","message":"同步拉取失败"}', registration_confirm_failures=2 WHERE id=1`); err != nil {
 		t.Fatalf("seed slave state: %v", err)
 	}
 	installGlobalConfigVersionTrigger(t, database)
@@ -529,12 +529,16 @@ func TestClusterService_Promote_resets_slave_state(t *testing.T) {
 	// Then
 	var isMaster bool
 	var masterURL, token string
-	var version int
-	if err := database.QueryRow("SELECT is_master, COALESCE(master_url,''), COALESCE(cluster_token,''), cluster_version FROM global_config WHERE id=1").Scan(&isMaster, &masterURL, &token, &version); err != nil {
+	var version, appliedVersion, confirmFailures int
+	var fingerprint, syncError string
+	if err := database.QueryRow(`SELECT is_master, COALESCE(master_url,''), COALESCE(cluster_token,''), cluster_version, COALESCE(applied_version,0), COALESCE(sync_fingerprint,''), COALESCE(last_sync_error,''), COALESCE(registration_confirm_failures,0) FROM global_config WHERE id=1`).Scan(&isMaster, &masterURL, &token, &version, &appliedVersion, &fingerprint, &syncError, &confirmFailures); err != nil {
 		t.Fatalf("read promoted state: %v", err)
 	}
 	if !isMaster || masterURL != "" || token != "" || version != 5 {
 		t.Fatalf("promoted state master=%v url=%q token=%q version=%d", isMaster, masterURL, token, version)
+	}
+	if appliedVersion != 0 || fingerprint != "" || syncError != "" || confirmFailures != 0 {
+		t.Fatalf("promote left slave residue: applied_version=%d fingerprint=%q sync_error=%q confirm_failures=%d", appliedVersion, fingerprint, syncError, confirmFailures)
 	}
 	if !lifecycle.syncStopped || !lifecycle.acmeStarted {
 		t.Fatalf("lifecycle syncStopped=%v acmeStarted=%v", lifecycle.syncStopped, lifecycle.acmeStarted)

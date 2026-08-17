@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +37,23 @@ func seedSecurityEvent(t *testing.T, eventTime, ruleCaddyID string, policyID any
 	if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, rule_name, policy_name)
 		VALUES (?, ?, ?, '192.0.2.9', 'GET', '/a', 'crs', ?, ?, 'blocked', ?, ?)`,
 		eventTime, ruleCaddyID, policyID, ruleTriggered, ruleMsg, ruleName, policyName); err != nil {
+	}
+}
+
+func TestListSecurityEvents_rejectsStartTimeAfterEndTime(t *testing.T) {
+	// Given an event store queried with an inverted time range
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityEventsRouter(t)
+
+	// When the range start is later than the end
+	recorder := getRequest(t, router, "/security/events?start_time=2026-08-12%2012:00:00&end_time=2026-08-12%2008:00:00")
+
+	// Then the request is rejected with an explicit message instead of silently returning an empty page
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "开始时间不能晚于结束时间") {
+		t.Fatalf("body=%s, want explicit rejection message", recorder.Body.String())
 	}
 }
 

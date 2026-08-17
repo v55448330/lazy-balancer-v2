@@ -64,7 +64,7 @@
       <el-tabs v-model="activeTab">
         <el-tab-pane label="CRS 规则" name="rules">
           <div class="table-toolbar">
-            <el-input v-model="searchQuery" placeholder="搜索规则文件名或分类" clearable :prefix-icon="Search" class="search-input" @clear="fetchRules" @keyup.enter="fetchRules" />
+            <el-input v-model="searchQuery" placeholder="搜索规则文件名或分类" clearable :prefix-icon="Search" class="search-input" @clear="fetchRules" @keyup.enter="searchRules" />
           </div>
           <el-table :data="rules" v-loading="loadingRules" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="" @row-click="openRuleContent" style="cursor: pointer">
             <template #empty><el-empty description="暂无规则文件" :image-size="60" /></template>
@@ -494,6 +494,8 @@ const removeCondition = (idx: number) => {
 }
 
 const fetchCRS = async () => { try { const res = await request.get<APIResponse<typeof crsInfo.value>>('/security/crs'); if (res.data) crsInfo.value = res.data } catch {} }
+// 搜索提交先回到第 1 页：高页码叠加收窄后的结果集会落在空页上
+const searchRules = () => { page.value = 1; fetchRules() }
 const fetchRules = async () => {
   loadingRules.value = true
   try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (searchQuery.value) p.set('search', searchQuery.value); const res = await request.get<APIResponse<{ rules: CRSRuleFile[]; total: number }>>(`/security/crs/rules?${p}`); rules.value = res.data?.rules || []; total.value = res.data?.total || 0 } catch { rules.value = [] } finally { loadingRules.value = false }
@@ -501,7 +503,25 @@ const fetchRules = async () => {
 const fetchCustomRules = async () => { loadingCustom.value = true; try { const res = await request.get<APIResponse<CustomRule[]>>('/security/custom-rules'); customRules.value = res.data || [] } catch { customRules.value = [] } finally { loadingCustom.value = false } }
 const fetchUsers = async () => { try { const res = await request.get<APIResponse<UserListItem[]>>('/users'); users.value = res.data || [] } catch {} }
 
-const openRuleContent = async (row: CRSRuleFile) => { currentFilename.value = row.filename; contentDialogVisible.value = true; loadingContent.value = true; currentContent.value = ''; try { const res = await request.get<APIResponse<{ content: string; size: number }>>(`/security/crs/rules/${encodeURIComponent(row.filename)}`); currentContent.value = res.data?.content || '(空文件)' } catch { currentContent.value = '加载失败' } finally { loadingContent.value = false } }
+let ruleContentSeq = 0
+const openRuleContent = async (row: CRSRuleFile) => {
+  // 乱序响应守卫：只有最新一次打开的文件才允许写入标题与内容，避免旧响应覆盖新文件
+  const requestSeq = ++ruleContentSeq
+  currentFilename.value = row.filename
+  contentDialogVisible.value = true
+  loadingContent.value = true
+  currentContent.value = ''
+  try {
+    const res = await request.get<APIResponse<{ content: string; size: number }>>(`/security/crs/rules/${encodeURIComponent(row.filename)}`)
+    if (requestSeq !== ruleContentSeq) return
+    currentContent.value = res.data?.content || '(空文件)'
+  } catch {
+    if (requestSeq !== ruleContentSeq) return
+    currentContent.value = '加载失败'
+  } finally {
+    if (requestSeq === ruleContentSeq) loadingContent.value = false
+  }
+}
 const toggleAutoUpdate = async (val: boolean) => { try { await request.put('/security/crs/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { crsInfo.value.auto_update = !val; ElMessage.error('更新失败') } }
 const fetchIP2RegionInfo = async () => { try { const res = await request.get<APIResponse<typeof ip2regionInfo.value>>('/security/ip2region'); if (res.data) ip2regionInfo.value = res.data } catch {} }
 const toggleIP2RegionAutoUpdate = async (val: boolean) => { try { await request.put('/security/ip2region/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { ip2regionInfo.value.auto_update = !val; ElMessage.error('更新失败') } }

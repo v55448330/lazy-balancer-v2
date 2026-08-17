@@ -91,7 +91,7 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		Username    *string `json:"username"`
 		Password    *string `json:"password"`
 		Role        *string `json:"role"`
-		DisplayName *string `json:"display_name"`
+		DisplayName *string `json:"display_name" binding:"omitempty,max=50"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
@@ -370,8 +370,12 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 	var req struct {
 		NewPassword string `json:"new_password"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.NewPassword == "" || passwordTooShort(req.NewPassword) {
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
+		return
+	}
+	if req.NewPassword == "" || passwordTooShort(req.NewPassword) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "密码至少 6 位"})
 		return
 	}
 

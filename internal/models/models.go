@@ -361,10 +361,10 @@ type LoginResponse struct {
 }
 
 type CreateUserRequest struct {
-	Username    string `json:"username" binding:"required"`
+	Username    string `json:"username" binding:"required,min=3,max=50"`
 	Password    string `json:"password" binding:"required"`
 	Role        string `json:"role" binding:"required"`
-	DisplayName string `json:"display_name"`
+	DisplayName string `json:"display_name" binding:"max=50"`
 }
 
 type CreateAPIKeyRequest struct {

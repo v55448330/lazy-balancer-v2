@@ -256,6 +256,9 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 			if strings.TrimSpace(upstream.Address) == "" {
 				return fmt.Errorf("第 %d 条路径规则的第 %d 个上游地址不能为空", index+1, upstreamIndex+1)
 			}
+			if !isValidHost(strings.TrimSpace(upstream.Address)) {
+				return fmt.Errorf("第 %d 条路径规则的第 %d 个上游：主机 '%s' 无效", index+1, upstreamIndex+1, upstream.Address)
+			}
 			if upstream.Port < 1 || upstream.Port > 65535 {
 				return fmt.Errorf("第 %d 条路径规则的第 %d 个上游端口必须在 1-65535 之间", index+1, upstreamIndex+1)
 			}

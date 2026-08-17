@@ -239,6 +239,21 @@ func customRuleEmissionIssue(cr models.CustomRule) string {
 // mirroring how IP control behaves. 动作语义与前端编辑器一致：拦截=命中即阻断；
 // 仅记录=只记录事件、不向异常分累加；放行计分=记录并向异常分累加，由 949
 // 评估（受 WAF 模式约束）统一裁决。
+// customRulePhase 按规则目标选择 coraza 相位：条件或旧版单目标形状命中 body
+// （REQUEST_BODY，仅 phase:2 可读）时返回 2，否则返回 1；链式规则所有条目共用
+// 该相位。
+func customRulePhase(cr models.CustomRule) int {
+	if cr.Target == "body" {
+		return 2
+	}
+	for _, cond := range cr.Conditions {
+		if cond.Target == "body" {
+			return 2
+		}
+	}
+	return 1
+}
+
 func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 	for _, cr := range customRules {
 		if !cr.Enabled {
@@ -263,6 +278,12 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 			// 仅记录：不累加异常分，避免在拦截/检测模式下因该规则误伤。
 			action = fmt.Sprintf("pass,log,msg:'自定义规则 %s 命中'", safeName)
 		}
+		// 相位选择：任一条件以请求体为目标时整条链发射 phase:2（REQUEST_BODY 仅在
+		// phase:2 可读，phase:1 发射的 body 规则永远不匹配）；其余一律 phase:1，保持
+		// 拦截规则先于 DetectionOnly 切换（id:6，phase:1）执行的检测模式保障。
+		// body 规则的检测模式限制说明：DetectionOnly 在 phase:1 切换，body 只能
+		// phase:2 —— 检测模式下 body 拦截规则仅记录不阻断，属 coraza 相位约束。
+		phase := customRulePhase(cr)
 		if len(cr.Conditions) > 0 {
 			for idx, cond := range cr.Conditions {
 				// 非法 target/operator 已在上方 customRuleEmissionIssue 整条跳过，
@@ -270,11 +291,12 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 				target := customRuleTargets[cond.Target]
 				op := customRuleOperators[cond.Operator]
 				// 链式规则仅起始条携带 id/phase/disruptive/msg；coraza v3 拒绝非起始条上的 disruptive 动作
+				// 链上所有条目共用同一相位（coraza 以起始条相位执行整条链）
 				var actions string
 				if idx == 0 {
-					actions = fmt.Sprintf("id:%d,phase:1,%s", cr.ID+10000, action)
+					actions = fmt.Sprintf("id:%d,phase:%d,%s", cr.ID+10000, phase, action)
 				} else {
-					actions = "phase:1"
+					actions = fmt.Sprintf("phase:%d", phase)
 				}
 				if idx < len(cr.Conditions)-1 {
 					actions += ",chain"
@@ -284,7 +306,7 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 		} else {
 			target := customRuleTargets[cr.Target]
 			op := customRuleOperators[cr.Operator]
-			sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,%s\"\n", target, op, escapeCorazaPattern(cr.Pattern), cr.ID+10000, action))
+			sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,phase:%d,%s\"\n", target, op, escapeCorazaPattern(cr.Pattern), cr.ID+10000, phase, action))
 		}
 	}
 

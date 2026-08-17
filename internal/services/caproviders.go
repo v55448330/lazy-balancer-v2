@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -25,6 +26,9 @@ const (
 	ZeroSSLDirectoryURL     = "https://acme.zerossl.com/v2/DV90"
 	caProviderColumns       = "id, name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled, created_at, updated_at"
 )
+
+// zerosslEABURL 是包级变量以便测试注入伪 ZeroSSL 端点。
+var zerosslEABURL = "https://api.zerossl.com/acme/eab-credentials-email"
 
 type caProviderScanner interface {
 	Scan(...any) error
@@ -293,8 +297,7 @@ func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) e
 	}
 
 	log.Printf("AutoProvisionZeroSSLEAB: fetching EAB from ZeroSSL API for email %s", maskEmail(acmeEmail))
-	const zerosslEABURL = "https://api.zerossl.com/acme/eab-credentials-email"
-	reqBody := strings.NewReader("email=" + strings.TrimSpace(acmeEmail))
+	reqBody := strings.NewReader("email=" + url.QueryEscape(strings.TrimSpace(acmeEmail)))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, zerosslEABURL, reqBody)
 	if err != nil {
 		return fmt.Errorf("build zerossl EAB request: %w", err)
@@ -340,7 +343,15 @@ func AutoProvisionZeroSSLEAB(ctx context.Context, provider *models.CAProvider) e
 		return fmt.Errorf("persist zerossl EAB: %w", err)
 	}
 	if rows, _ := result.RowsAffected(); rows == 0 {
+		// 并发 worker 已先行持久化：内存凭据必须回读 DB 实际值，
+		// 否则内存持有未持久化的新值，造成 DB/运行时凭据分裂。
+		var persisted string
+		if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(credentials,'') FROM ca_providers WHERE id=?", provider.ID).Scan(&persisted); err != nil {
+			return fmt.Errorf("re-read zerossl EAB credentials: %w", err)
+		}
+		provider.Credentials = persisted
 		log.Printf("AutoProvisionZeroSSLEAB: provider %d credentials already set by concurrent worker, skipping persist", provider.ID)
+		return nil
 	}
 	provider.Credentials = string(credsJSON)
 	log.Printf("AutoProvisionZeroSSLEAB: success, EAB persisted for provider %d (%s)", provider.ID, maskEmail(acmeEmail))

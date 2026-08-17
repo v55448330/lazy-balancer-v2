@@ -140,11 +140,13 @@ func (s *ClusterService) Nodes(ctx context.Context, now time.Time) ([]models.Clu
 		}
 		node.CurrentVersion = currentVersion
 		node.Status = ComputeNodeStatus(node.IsApproved, lastSeen.Time, syncInterval, now)
-		health, err := DecodeClusterHealth(healthJSON)
-		if err != nil {
-			return nil, err
+		// 单节点 health_json 损坏只降级该节点（Health=nil），不拖垮整个节点列表
+		health, decodeErr := DecodeClusterHealth(healthJSON)
+		if decodeErr != nil {
+			Logf("warn", "解析节点 %d 健康状态失败: %v", node.ID, decodeErr)
+		} else {
+			node.Health = health
 		}
-		node.Health = health
 		if lastSeen.Valid {
 			node.LastSeen = lastSeen.Time.UTC().Format(time.RFC3339)
 		}

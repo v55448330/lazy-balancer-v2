@@ -30,7 +30,8 @@
           <template #header>
             <div class="key-title-row">
               <span class="key-name">{{ key.name }}</span>
-              <el-tag :type="key.is_enabled ? 'success' : 'info'" size="small">
+              <el-tag v-if="keyExpired(key)" type="danger" size="small">已过期</el-tag>
+              <el-tag v-else :type="key.is_enabled ? 'success' : 'info'" size="small">
                 {{ key.is_enabled ? '已启用' : '已禁用' }}
               </el-tag>
             </div>
@@ -255,6 +256,17 @@
           :closable="false"
           show-icon
         />
+        <el-form-item label="过期时间">
+          <el-date-picker
+            v-model="createForm.expiresAt"
+            type="datetime"
+            clearable
+            format="YYYY-MM-DD HH:mm:ss"
+            :disabled-date="disablePastDate"
+            placeholder="留空表示永不过期"
+            style="width: 100%"
+          />
+        </el-form-item>
         <el-form-item label="IP 白名单" :error="createWhitelistError">
           <el-input
             v-model="createForm.whitelistText"
@@ -387,7 +399,7 @@ const creating = ref(false)
 const createDialogVisible = ref(false)
 const createNameError = ref('')
 const createWhitelistError = ref('')
-const createForm = ref({ name: '', mcp_enabled: false, read_only: true, whitelistText: '' })
+const createForm = ref({ name: '', mcp_enabled: false, read_only: true, whitelistText: '', expiresAt: null as Date | null })
 const featureDialogVisible = ref(false)
 const featureSaving = ref(false)
 const featureTarget = ref<APIKey | null>(null)
@@ -492,9 +504,21 @@ const openCreateDialog = (): void => {
 }
 
 const resetCreateForm = (): void => {
-  createForm.value = { name: '', mcp_enabled: false, read_only: !isAdmin.value, whitelistText: '' }
+  createForm.value = { name: '', mcp_enabled: false, read_only: !isAdmin.value, whitelistText: '', expiresAt: null }
   createNameError.value = ''
   createWhitelistError.value = ''
+}
+
+const keyExpired = (key: APIKey): boolean => {
+  if (!key.expires_at) return false
+  const expiresAt = new Date(key.expires_at).getTime()
+  return Number.isFinite(expiresAt) && expiresAt < Date.now()
+}
+
+const disablePastDate = (date: Date): boolean => {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return date.getTime() < today.getTime()
 }
 
 async function createKey() {
@@ -517,6 +541,7 @@ async function createKey() {
       mcp_enabled: createForm.value.mcp_enabled,
       read_only: isAdmin.value ? createForm.value.read_only : true,
       mcp_ip_whitelist: whitelist.value,
+      expires_at: createForm.value.expiresAt ? createForm.value.expiresAt.toISOString() : undefined,
     }
     const res = await request.post<CreateAPIKeyResponse>('/users/me/api-keys', payload)
     ElMessage.success('密钥创建成功')

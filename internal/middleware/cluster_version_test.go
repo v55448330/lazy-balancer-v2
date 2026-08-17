@@ -519,6 +519,71 @@ func TestClusterVersionTriggers_refreshCachedSnapshotWhenCertificateEntersAndLea
 	}
 }
 
+func TestClusterVersionTriggers_bumpForTimestampOnlyUpdates(t *testing.T) {
+	// R24：created_at/updated_at 属于快照 payload（cluster_snapshot.go 的 rules 与
+	// ACME 证书候选节），时间戳单列更新也必须递增 cluster_version，否则指纹漂移。
+	t.Run("lb_rules", func(t *testing.T) {
+		database := newClusterVersionTestDB(t)
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port) VALUES ('stamp_rule','rule','http',8080)`); err != nil {
+			t.Fatalf("seed rule: %v", err)
+		}
+		if err := installClusterVersionTriggers(database); err != nil {
+			t.Fatalf("install triggers: %v", err)
+		}
+		if _, err := database.Exec("UPDATE global_config SET is_master=1, cluster_version=0 WHERE id=1"); err != nil {
+			t.Fatalf("seed master: %v", err)
+		}
+
+		if _, err := database.Exec(`UPDATE lb_rules SET updated_at=datetime('now') WHERE caddy_id='stamp_rule'`); err != nil {
+			t.Fatalf("update rule timestamp: %v", err)
+		}
+		if got := clusterVersion(t, database); got != 1 {
+			t.Fatalf("version after rule updated_at=%d, want 1", got)
+		}
+	})
+
+	t.Run("cert_jobs member", func(t *testing.T) {
+		database := newClusterVersionTestDB(t)
+		certPEM, keyPEM := clusterVersionCertificatePair(t)
+		if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,expires_at) VALUES ('stamp_cert','example.com','issued',?,?,datetime('now','+30 days'))`, certPEM, keyPEM); err != nil {
+			t.Fatalf("seed issued job: %v", err)
+		}
+		if err := installClusterVersionTriggers(database); err != nil {
+			t.Fatalf("install triggers: %v", err)
+		}
+		if _, err := database.Exec("UPDATE global_config SET is_master=1, cluster_version=0 WHERE id=1"); err != nil {
+			t.Fatalf("seed master: %v", err)
+		}
+
+		if _, err := database.Exec(`UPDATE cert_jobs SET updated_at=datetime('now') WHERE rule_id='stamp_cert'`); err != nil {
+			t.Fatalf("update job timestamp: %v", err)
+		}
+		if got := clusterVersion(t, database); got != 1 {
+			t.Fatalf("version after member cert updated_at=%d, want 1", got)
+		}
+	})
+
+	t.Run("cert_jobs non-member", func(t *testing.T) {
+		database := newClusterVersionTestDB(t)
+		if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('stamp_progress','example.com','processing')`); err != nil {
+			t.Fatalf("seed progress job: %v", err)
+		}
+		if err := installClusterVersionTriggers(database); err != nil {
+			t.Fatalf("install triggers: %v", err)
+		}
+		if _, err := database.Exec("UPDATE global_config SET is_master=1, cluster_version=0 WHERE id=1"); err != nil {
+			t.Fatalf("seed master: %v", err)
+		}
+
+		if _, err := database.Exec(`UPDATE cert_jobs SET updated_at=datetime('now') WHERE rule_id='stamp_progress'`); err != nil {
+			t.Fatalf("update job timestamp: %v", err)
+		}
+		if got := clusterVersion(t, database); got != 0 {
+			t.Fatalf("version after non-member cert updated_at=%d, want 0", got)
+		}
+	})
+}
+
 func clusterVersionCertificatePair(t *testing.T) (string, string) {
 	t.Helper()
 	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))

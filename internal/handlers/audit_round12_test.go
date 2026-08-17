@@ -243,8 +243,10 @@ func TestUpdateRule_stops_before_database_commit_when_route_snapshot_fails(t *te
 	router.ServeHTTP(response, request)
 
 	// Then
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	// Round 24 C-N4：管理接口不可达不再被校验阶段吞掉，规则保存以 400 显式失败
+	//（原为静默通过后死于快照阶段的 500）；核心不变量仍是数据库未提交。
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
 	}
 	var name string
 	if err := db.DB.QueryRow("SELECT name FROM lb_rules WHERE caddy_id='lb_snapshot_fail'").Scan(&name); err != nil {

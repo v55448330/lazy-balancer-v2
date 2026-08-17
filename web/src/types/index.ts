@@ -32,6 +32,7 @@ export interface CreateAPIKeyInput {
   readonly mcp_enabled: boolean
   readonly read_only: boolean
   readonly mcp_ip_whitelist: string[]
+  readonly expires_at?: string
 }
 
 export interface UpdateAPIKeyInput {
