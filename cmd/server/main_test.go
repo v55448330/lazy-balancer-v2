@@ -55,7 +55,10 @@ func TestMain_exitsNonZero_whenHTTPListenFails(t *testing.T) {
 	port := listener.Addr().(*net.TCPAddr).Port
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.json")
-	configJSON := fmt.Sprintf(`{"port":%d,"data_dir":%q,"static_dir":%q,"metrics_interval":5}`, port, filepath.Join(tempDir, "data"), tempDir)
+	// caddy_admin_url 必须指向死端口：缺省会落到 config.go 的默认
+	// http://localhost:2019——helper 的 ApplyConfigOnStartup 会把零规则配置
+	// 应用到本机真实运行的 Caddy（host 网络共享 loopback），静默清空其路由。
+	configJSON := fmt.Sprintf(`{"port":%d,"data_dir":%q,"static_dir":%q,"metrics_interval":5,"caddy_admin_url":"http://127.0.0.1:1"}`, port, filepath.Join(tempDir, "data"), tempDir)
 	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
