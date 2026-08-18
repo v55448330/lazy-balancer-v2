@@ -219,6 +219,12 @@ func conditionsEmissionIssue(conditions []models.CustomRuleCondition) string {
 // （无 conditions、靠 target/operator/pattern 发射），并对该形状同样校验 target/
 // operator 合法性。
 func customRuleEmissionIssue(cr models.CustomRule) string {
+	// 规则名进入 msg 引号串：控制字符/双引号会截断规则行或提前闭合动作。
+	for _, r := range cr.Name {
+		if r < 0x20 || r == 0x7f || r == '"' {
+			return "规则名称含控制字符或双引号"
+		}
+	}
 	if len(cr.Conditions) > 0 {
 		return conditionsEmissionIssue(cr.Conditions)
 	}

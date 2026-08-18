@@ -44,8 +44,15 @@ func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 }
 
 func validateSecurityCustomRule(rule *models.SecurityCustomRule) error {
-	if rule.Name == "" {
+	if strings.TrimSpace(rule.Name) == "" {
 		return fmt.Errorf("规则名称不能为空")
+	}
+	// 规则名进入 SecRule msg 引号串：控制字符会截断规则行，双引号会提前闭合动作，
+	// 任一皆可致 coraza 拒绝整份配置。pattern 已有三重防护，name 对齐同口径。
+	for _, r := range rule.Name {
+		if r < 0x20 || r == 0x7f || r == '"' {
+			return fmt.Errorf("规则名称不能包含控制字符或双引号")
+		}
 	}
 	if rule.Action != "block" && rule.Action != "log" && rule.Action != "pass" {
 		return fmt.Errorf("动作必须为 block、log 或 pass，当前值 %s", rule.Action)
@@ -325,6 +332,10 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
 	}
+	if strings.TrimSpace(req.Name) == "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略名称不能为空"})
+		return
+	}
 	if req.Mode == "" {
 		req.Mode = "off"
 	}
@@ -342,6 +353,18 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	}
 	if req.CRSExcludedRules == "" {
 		req.CRSExcludedRules = "[]"
+	}
+	for _, f := range []struct {
+		name string
+		val  *string
+	}{
+		{"crs_rule_groups", &req.CRSRuleGroups},
+		{"crs_excluded_rules", &req.CRSExcludedRules},
+	} {
+		if err := validateAndNormalizeCRSField(f.name, f.val); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
 	}
 	if req.CustomRules == "" {
 		req.CustomRules = "[]"
@@ -390,6 +413,23 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	id, _ := result.LastInsertId()
 	services.RecordAuditLog(getContextUserID(c), "创建", "安全策略", fmt.Sprintf("名称：%s（#%d）", req.Name, id), "")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略创建成功" + h.caddyApplyNote(), Data: gin.H{"id": id}})
+}
+
+// validateAndNormalizeCRSField 统一 Create/Update 两条路径的 crs_* 形状校验：
+// 空串按归一为 "[]"，非空必须是字符串数组 JSON（防发射端解析失败静默置空）。
+func validateAndNormalizeCRSField(name string, val *string) error {
+	if val == nil {
+		return nil
+	}
+	if strings.TrimSpace(*val) == "" {
+		*val = "[]"
+		return nil
+	}
+	var entries []string
+	if err := json.Unmarshal([]byte(*val), &entries); err != nil {
+		return fmt.Errorf("%s 需为 JSON 数组字符串", name)
+	}
+	return nil
 }
 
 func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
@@ -469,16 +509,8 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		{"crs_rule_groups", req.CRSRuleGroups},
 		{"crs_excluded_rules", req.CRSExcludedRules},
 	} {
-		if f.val == nil {
-			continue
-		}
-		if strings.TrimSpace(*f.val) == "" {
-			*f.val = "[]"
-			continue
-		}
-		var entries []string
-		if err := json.Unmarshal([]byte(*f.val), &entries); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("%s 需为 JSON 数组字符串", f.name)})
+		if err := validateAndNormalizeCRSField(f.name, f.val); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
 	}
@@ -591,12 +623,22 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
 		return
 	}
-	if _, err := db.DB.Exec("DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", req.RuleCaddyID); err != nil {
+	// 绑定/解绑必须同事务：INSERT 失败时旧绑定已被 DELETE 删除，需回滚恢复。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	_, err := db.DB.Exec("INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", req.RuleCaddyID, policyID)
-	if err != nil {
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", req.RuleCaddyID); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if _, err := tx.ExecContext(c.Request.Context(), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", req.RuleCaddyID, policyID); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
@@ -699,12 +741,14 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "开始时间不能晚于结束时间"})
 		return
 	}
+	// event_time 恒为 'YYYY-MM-DD HH:MM:SS' UTC 字符串，参数同形 —— 直接字符串比较
+	// 即可走 idx_security_events_time 索引；两侧包 datetime() 会使索引失效（R28 修复）。
 	if hasStart {
-		where += " AND datetime(event_time) >= datetime(?)"
+		where += " AND event_time >= ?"
 		args = append(args, startBoundary)
 	}
 	if hasEnd {
-		where += " AND datetime(event_time) <= datetime(?)"
+		where += " AND event_time <= ?"
 		args = append(args, endBoundary)
 	}
 
