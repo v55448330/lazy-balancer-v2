@@ -1042,9 +1042,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 
-	// Capture old upstreams for potential DB rollback
+	// Capture old upstreams for potential DB rollback.
+	// Round 34 F-1: 存量 upstreams.enabled 无 NOT NULL，NULL 行裸 scan 进 bool 会 500；
+	// IIF 与生成侧（services/caddy.go）同口径：NULL 视同禁用，回写/回滚保持同一有效状态。
 	var oldUpstreams []models.Upstream
-	oldUpstreamRows, err := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id = ?", caddyID)
+	oldUpstreamRows, err := db.DB.Query("SELECT host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams WHERE rule_id = ?", caddyID)
 	if err != nil {
 		log.Printf("UpdateRule failed to read existing upstreams for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
@@ -2098,8 +2100,10 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		return
 	}
 
+	// Round 34 F-1: 同 UpdateRule——NULL enabled 行须 IIF 归一化（NULL 视同禁用），
+	// 复制出的新行显式落 0，避免裸 scan 500 与复制后意外启用。
 	upstreamRows, err := tx.Query(`
-		SELECT host, port, weight, dynamic_dns, enabled, COALESCE(protocol,'http'), COALESCE(max_connections,0)
+		SELECT host, port, weight, dynamic_dns, IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0)
 		FROM upstreams WHERE rule_id = ?
 	`, caddyID)
 	if err != nil {

@@ -370,18 +370,6 @@ func CountEnabledCustomRules(raw json.RawMessage) int {
 	return count
 }
 
-// buildWafHandler returns the coraza WAF handler, or nil when the rule is not HTTP or has no active bound policy.
-func buildWafHandler(ruleCaddyID string) map[string]interface{} {
-	if db.DB == nil {
-		return nil
-	}
-	var protocol string
-	if err := db.DB.QueryRow("SELECT protocol FROM lb_rules WHERE caddy_id=?", ruleCaddyID).Scan(&protocol); err != nil || protocol != "http" {
-		return nil
-	}
-	return buildWafHandlerWithPolicy(ruleCaddyID, GetSecurityPolicyForRule(ruleCaddyID))
-}
-
 // buildWafHandlerWithPolicy returns the coraza WAF handler for the given policy,
 // or nil when the policy is nil or emits no directives. Callers pass a policy
 // from the batch-preloaded context so generation stays on the store/tx channel.
@@ -401,6 +389,11 @@ func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy
 
 // resolvePolicyCustomRules 解析策略的自定义规则引用：当前端存储为规则 ID 数组时
 // 从 security_custom_rules 表解析为完整规则；兼容早期的对象内嵌形状。
+// policyCustomRuleChunkSize bounds each IN (...) placeholder batch:
+// SQLite caps bound variables at 32766, and an oversized IN previously
+// failed the whole query so custom rules were silently lost (WAF weakened).
+var policyCustomRuleChunkSize = 500
+
 func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 	if len(raw) == 0 {
 		return nil
@@ -410,25 +403,35 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 		if len(ids) == 0 || db.DB == nil {
 			return nil
 		}
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-		args := make([]interface{}, len(ids))
-		for i, id := range ids {
-			args[i] = id
-		}
-		rows, err := db.DB.Query("SELECT id, name, conditions, action, score, enabled FROM security_custom_rules WHERE id IN ("+placeholders+")", args...)
-		if err != nil {
-			return nil
-		}
-		defer rows.Close()
 		var rules []models.CustomRule
-		for rows.Next() {
-			var cr models.CustomRule
-			var conditionsJSON string
-			if err := rows.Scan(&cr.ID, &cr.Name, &conditionsJSON, &cr.Action, &cr.Score, &cr.Enabled); err != nil {
+		for start := 0; start < len(ids); start += policyCustomRuleChunkSize {
+			end := start + policyCustomRuleChunkSize
+			if end > len(ids) {
+				end = len(ids)
+			}
+			chunk := ids[start:end]
+			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+			args := make([]interface{}, len(chunk))
+			for i, id := range chunk {
+				args[i] = id
+			}
+			rows, err := db.DB.Query("SELECT id, name, conditions, action, score, enabled FROM security_custom_rules WHERE id IN ("+placeholders+")", args...)
+			if err != nil {
+				// Round 34 G: 单块失败只丢该块并留痕，其余块照常解析；
+				// 此前整查询失败静默返回 nil，WAF 规则全部丢失且无日志。
+				log.Printf("解析策略自定义规则分块查询失败（id 段 %d-%d）: %v", chunk[0], chunk[len(chunk)-1], err)
 				continue
 			}
-			json.Unmarshal([]byte(conditionsJSON), &cr.Conditions)
-			rules = append(rules, cr)
+			for rows.Next() {
+				var cr models.CustomRule
+				var conditionsJSON string
+				if err := rows.Scan(&cr.ID, &cr.Name, &conditionsJSON, &cr.Action, &cr.Score, &cr.Enabled); err != nil {
+					continue
+				}
+				json.Unmarshal([]byte(conditionsJSON), &cr.Conditions)
+				rules = append(rules, cr)
+			}
+			rows.Close()
 		}
 		// 悬空引用（规则已被删除）不改变解析行为，仅记录日志便于排查
 		if dropped := len(ids) - len(rules); dropped > 0 {
