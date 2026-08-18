@@ -283,7 +283,7 @@
             </el-form-item>
 
             <el-form-item label="监听端口" required>
-              <el-input-number v-model="wizardForm.listen_port" :min="1" :max="65535" controls-position="right" />
+              <el-input-number v-model="wizardForm.listen_port" :min="1" :max="65535" controls-position="right" @change="userExplicitPort = true" />
               <span class="form-tip-inline">
                 <span v-if="portWarning" class="port-warning">{{ portWarning }}</span>
                 <span v-else-if="wizardForm.protocol === 'http'">建议使用 80 或其他非保留端口</span>
@@ -1707,10 +1707,13 @@ watch(() => wizardForm.path_rules, (pathRules) => {
 }, { deep: true })
 
 let hydratingWizard = false
+// 用户是否显式修改过监听端口：置位后停止 80↔443/8080 的自动联动，避免静默改回默认端口
+const userExplicitPort = ref(false)
 
 // Watch for enable_tls toggle to adjust default listen port
 watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
   if (hydratingWizard) return
+  if (userExplicitPort.value) return
   if (wizardForm.protocol !== 'http') return
   if (newVal && !oldVal) {
     // Enabling HTTPS: default to 443 if currently using the HTTP default 80
@@ -1731,7 +1734,7 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
   if (newVal !== 'tcp') wizardForm.tcp_proxy_protocol = false
   if (newVal === 'tcp') {
     // Switching to TCP: use a neutral high port and plain TCP upstreams
-    if (wizardForm.listen_port === 80 || wizardForm.listen_port === 443) {
+    if (!userExplicitPort.value && (wizardForm.listen_port === 80 || wizardForm.listen_port === 443)) {
       wizardForm.listen_port = 8080
     }
     wizardForm.enable_tls = false
@@ -1801,9 +1804,10 @@ const hasNextStep = computed(() => visualStepIndex.value < visibleWizardSteps.va
 const portWarning = computed(() => {
   // Get existing ports (excluding current editing rule)
   const currentRule = editingRule.value
-  const existingRules = currentRule
+  // 与后端 validatePortFromDB 的 enabled-only 语义对齐：禁用规则不占端口（管理端口拦截保持无条件）
+  const existingRules = (currentRule
     ? rules.value.filter(r => r.caddy_id !== currentRule.caddy_id)
-    : rules.value
+    : rules.value).filter(r => r.enabled)
   const httpPorts = existingRules.filter(r => r.protocol === 'http').map(r => r.listen_port)
   const tcpPorts = existingRules.filter(r => r.protocol === 'tcp').map(r => r.listen_port)
   
@@ -1985,6 +1989,7 @@ const pasteFromFile = async (type: 'cert' | 'key') => {
 const openWizard = async (rule?: Rule) => {
   if (isReadOnly.value || saving.value) return
   hydratingWizard = true
+  userExplicitPort.value = false
   certValidationSessionSeq++
   certValidationSeq++
   resetCertInfo()
@@ -2486,6 +2491,7 @@ const duplicateRule = async (rule: Rule) => {
 const openCopyWizard = async (rule: Rule) => {
   if (saving.value) return
   hydratingWizard = true
+  userExplicitPort.value = false
   certValidationSessionSeq++
   certValidationSeq++
   resetCertInfo()

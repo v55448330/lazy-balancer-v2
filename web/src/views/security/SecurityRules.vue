@@ -522,9 +522,9 @@ const openRuleContent = async (row: CRSRuleFile) => {
     if (requestSeq === ruleContentSeq) loadingContent.value = false
   }
 }
-const toggleAutoUpdate = async (val: boolean) => { try { await request.put('/security/crs/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { crsInfo.value.auto_update = !val; ElMessage.error('更新失败') } }
+const toggleAutoUpdate = async (val: boolean) => { try { await request.put('/security/crs/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { crsInfo.value.auto_update = !val } }
 const fetchIP2RegionInfo = async () => { try { const res = await request.get<APIResponse<typeof ip2regionInfo.value>>('/security/ip2region'); if (res.data) ip2regionInfo.value = res.data } catch {} }
-const toggleIP2RegionAutoUpdate = async (val: boolean) => { try { await request.put('/security/ip2region/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { ip2regionInfo.value.auto_update = !val; ElMessage.error('更新失败') } }
+const toggleIP2RegionAutoUpdate = async (val: boolean) => { try { await request.put('/security/ip2region/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { ip2regionInfo.value.auto_update = !val } }
 
 const updateDialogVisible = ref(false)
 const updateInfo = ref<CRSUpdateInfo | null>(null)

@@ -786,7 +786,7 @@ const handleSave = async () => {
       return
     }
     showSaveResult(saveRes, '保存成功'); dialogVisible.value = false; fetchData()
-  } catch { ElMessage.error('保存失败') } finally { saving.value = false }
+  } catch { /* 具体错误已由全局 axios 拦截器统一展示 */ } finally { saving.value = false }
 }
 
 function handleDelete(row: PolicySummary) {

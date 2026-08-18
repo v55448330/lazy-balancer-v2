@@ -145,7 +145,7 @@ const handleSave = async () => {
     showSaveResult(res, '保存成功')
     dialogVisible.value = false
     await fetchData()
-  } catch { ElMessage.error('保存失败') } finally { saving.value = false }
+  } catch { /* 具体错误已由全局 axios 拦截器统一展示 */ } finally { saving.value = false }
 }
 
 const handleDelete = (row: BlockPage) => {
