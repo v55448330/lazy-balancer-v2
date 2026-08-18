@@ -1,10 +1,15 @@
 import { useAuthStore } from '@/stores/auth'
 
+// 与后端 COALESCE 默认一致的兜底时区：备份导入/集群同步路径可能写入未校验的 tz（如 "GMT+8"），
+// 非法值会使 Intl.DateTimeFormat 抛 RangeError，导致所有 formatDate 调用点渲染崩溃（D-1）。
+const DEFAULT_TZ = 'Asia/Shanghai'
+let warnedInvalidTz = false
+
 const configTz = (): string => {
   try {
-    return useAuthStore().timezone || 'Asia/Shanghai'
+    return useAuthStore().timezone || DEFAULT_TZ
   } catch {
-    return 'Asia/Shanghai'
+    return DEFAULT_TZ
   }
 }
 
@@ -16,14 +21,28 @@ const configTz = (): string => {
 
 const isIsoLike = (value: string): boolean => value.includes('T') || value.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(value)
 
-const formatInConfigTz = (d: Date, withTime: boolean): string => {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: configTz(),
+const tzFormat = (timeZone: string, withTime: boolean): Intl.DateTimeFormat =>
+  new Intl.DateTimeFormat('en-US', {
+    timeZone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     ...(withTime ? { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false } : {}),
-  }).formatToParts(d)
+  })
+
+const formatInConfigTz = (d: Date, withTime: boolean): string => {
+  const tz = configTz()
+  let formatter: Intl.DateTimeFormat
+  try {
+    formatter = tzFormat(tz, withTime)
+  } catch {
+    if (!warnedInvalidTz) {
+      warnedInvalidTz = true
+      console.warn(`[date] 无效的配置时区「${tz}」，已回退为「${DEFAULT_TZ}」`)
+    }
+    formatter = tzFormat(DEFAULT_TZ, withTime)
+  }
+  const parts = formatter.formatToParts(d)
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
   const date = `${get('year')}-${get('month')}-${get('day')}`
   if (!withTime) return date

@@ -1718,6 +1718,8 @@ const showTlsHint = (message: string) => {
 // 用户是否显式/已提交过监听端口：置位后停止 80↔443/8080 的自动联动，避免静默改回默认端口。
 // 编辑态打开即置位（DB 中的 listen_port 就是用户已提交的显式配置）；联动仅保留 create/复制流的默认便捷。
 const userExplicitPort = ref(false)
+// http→tcp 迁移前的 HTTP 态快照：回转 http 时判断「是否实际改过端口 / 是否被强制关闭过 TLS」（D-2）。
+let preTcpSnapshot: { listenPort: number; enableTls: boolean } | null = null
 
 // Watch for enable_tls toggle to adjust default listen port
 watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
@@ -1749,6 +1751,8 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
   if (hydratingWizard) return
   if (newVal !== 'tcp') wizardForm.tcp_proxy_protocol = false
   if (newVal === 'tcp') {
+    // 快照进入 TCP 前的 HTTP 态（须先于下方端口/ enable_tls 变更），供回转提示判断
+    preTcpSnapshot = { listenPort: wizardForm.listen_port, enableTls: wizardForm.enable_tls }
     // Switching to TCP: use a neutral high port and plain TCP upstreams.
     // 无条件迁移：DB 中不存在 TCP:80/443 存量规则（后端无条件拒绝），编辑态无需保留该值
     if (wizardForm.listen_port === 80 || wizardForm.listen_port === 443) {
@@ -1764,13 +1768,18 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
       if (u.protocol === 'https') u.protocol = 'tls'
     })
   } else if (newVal === 'http' && oldVal === 'tcp') {
-    if (!userExplicitPort.value && wizardForm.listen_port === 8080) {
-      wizardForm.listen_port = 80
-    }
+    const portChanged = !userExplicitPort.value && wizardForm.listen_port === 8080
+    const tlsWasOn = preTcpSnapshot?.enableTls === true
+    if (portChanged) wizardForm.listen_port = 80
     wizardForm.upstreams.forEach(u => {
       if (u.protocol === 'tcp') u.protocol = 'http'
       if (u.protocol === 'tls') u.protocol = 'https'
     })
+    // 回转提示：仅在实际改端口 / 曾强制关 TLS 时给出，走 showTlsHint 去重通道
+    const notes: string[] = []
+    if (portChanged) notes.push('监听端口已调整为 80')
+    if (tlsWasOn) notes.push('TLS 已在 TCP 模式下关闭，如需 HTTPS 请重新开启')
+    if (notes.length > 0) showTlsHint(`已切换为 HTTP，${notes.join('；')}`)
   }
 }, { flush: 'sync' })
 
