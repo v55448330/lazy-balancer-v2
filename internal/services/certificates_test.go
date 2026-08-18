@@ -366,12 +366,41 @@ func TestCertificateService_renewExpiringCertificates_retries_failed_first_issua
 	<-done
 }
 
+func TestCertificateService_requeueWaitingCAJobs_disables_orphaned_waiting_job(t *testing.T) {
+	// Given：waiting_ca 任务的规则已不存在（无 lb_rules 行），A-M1 守卫应按孤儿
+	// 转 disabled 而不是重排签发（与 6h 孤儿 sweep 同口径）。
+	_, database := newClusterTestService(t)
+	ResetCAQueueManagerForTest()
+	InitCAQueueManager(func() error { return nil })
+	t.Cleanup(ResetCAQueueManagerForTest)
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id) VALUES ('lb_gone','gone.example.com','waiting_ca',datetime('now','-1 minute'),1)`); err != nil {
+		t.Fatalf("seed orphan waiting job: %v", err)
+	}
+
+	// When
+	NewCertificateService().requeueWaitingCAJobs()
+
+	// Then
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_gone'").Scan(&status); err != nil {
+		t.Fatalf("read orphan job: %v", err)
+	}
+	if status != "disabled" {
+		t.Fatalf("orphan job status=%q, want disabled", status)
+	}
+}
+
 func TestCertificateService_requeueWaitingCAJobs_pause_after_scan_start_leaves_job_waiting(t *testing.T) {
 	_, database := newClusterTestService(t)
 	ResetCAQueueManagerForTest()
 	InitCAQueueManager(func() error { return nil })
 	manager := GetCAQueueManager()
 	t.Cleanup(ResetCAQueueManagerForTest)
+	// R28 A-M1 起 requeue 守卫要求任务仍被启用中的 acme_dns TLS 规则引用，
+	// 否则按孤儿转 disabled，不会进入 EnqueueIfActive 钩子路径。
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_pause_scan','lb_pause_scan','example.com','http',8080,1,1,'acme_dns')`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id) VALUES ('lb_pause_scan','example.com','waiting_ca',datetime('now','-1 minute'),1)`); err != nil {
 		t.Fatalf("seed waiting job: %v", err)
 	}

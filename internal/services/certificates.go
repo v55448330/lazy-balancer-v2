@@ -387,40 +387,69 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// 与孤儿 sweep 同口径：规则删除/迁移/停用后的 waiting_ca 任务不得重排签发。
 	rows, err := db.DB.Query(`
-		SELECT id, rule_id, domain, ca_provider_id
-		FROM cert_jobs
-		WHERE status = 'waiting_ca'
-		  AND ca_available_after IS NOT NULL
-		  AND datetime(ca_available_after) <= datetime('now')
+		SELECT j.id, j.rule_id, COALESCE(j.domain,''), j.ca_provider_id,
+		       COALESCE(r.domain,''),
+		       CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' THEN 1 ELSE 0 END
+		FROM cert_jobs j
+		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
+		WHERE j.status = 'waiting_ca'
+		  AND j.ca_available_after IS NOT NULL
+		  AND datetime(j.ca_available_after) <= datetime('now')
 	`)
 	if err != nil {
 		log.Printf("waiting_ca scan: query failed: %v", err)
 		return
 	}
-	defer rows.Close()
-
+	type waitingJob struct {
+		id           int
+		ruleID       string
+		domain       string
+		caProviderID int
+		ruleDomain   string
+		ruleBound    bool
+	}
+	var jobs []waitingJob
 	for rows.Next() {
-		var jobID, caProviderID int
-		var ruleID, domain string
-		if err := rows.Scan(&jobID, &ruleID, &domain, &caProviderID); err != nil {
+		var job waitingJob
+		if err := rows.Scan(&job.id, &job.ruleID, &job.domain, &job.caProviderID, &job.ruleDomain, &job.ruleBound); err != nil {
 			continue
 		}
-		_, changed, err := qm.EnqueueIfActive(caProviderID, jobID, ruleID, domain, func() (int, bool, error) {
-			err := transitionJob(db.DB, jobID, []string{"waiting_ca"}, "queued", map[string]any{"message": "冷却结束，重新排队签发"})
-			if errors.Is(err, ErrJobTransitionConflict) {
-				return jobID, false, nil
+		jobs = append(jobs, job)
+	}
+	// 先关闭读迭代器再写库：SQLite 连接池上行迭代未结束时 UPDATE 会触发 SQLITE_BUSY。
+	if err := rows.Close(); err != nil {
+		log.Printf("waiting_ca scan: close rows failed: %v", err)
+		return
+	}
+
+	for _, job := range jobs {
+		if !certJobRuleApplicable(job.ruleBound, job.ruleDomain, job.domain) {
+			if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "disabled", map[string]any{"message": "关联规则已不再使用当前 ACME 证书任务"}); err != nil {
+				if !errors.Is(err, ErrJobTransitionConflict) {
+					log.Printf("waiting_ca scan: disable orphaned job %d failed: %v", job.id, err)
+				}
+				continue
 			}
-			return jobID, err == nil, err
+			RecordAuditLog("system", "禁用", "证书签发任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("ca_cooldown")), "")
+			continue
+		}
+		_, changed, err := qm.EnqueueIfActive(job.caProviderID, job.id, job.ruleID, job.domain, func() (int, bool, error) {
+			err := transitionJob(db.DB, job.id, []string{"waiting_ca"}, "queued", map[string]any{"message": "冷却结束，重新排队签发"})
+			if errors.Is(err, ErrJobTransitionConflict) {
+				return job.id, false, nil
+			}
+			return job.id, err == nil, err
 		})
 		if err != nil {
-			log.Printf("waiting_ca scan: failed to requeue job %d: %v", jobID, err)
+			log.Printf("waiting_ca scan: failed to requeue job %d: %v", job.id, err)
 			continue
 		}
 		if !changed {
 			continue
 		}
-		RecordAuditLog("system", "重新排队", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditRulePart(ruleID), AuditSourcePart("ca_cooldown")), "")
+		RecordAuditLog("system", "重新排队", "证书签发任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("ca_cooldown")), "")
 	}
 }
 
