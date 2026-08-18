@@ -698,7 +698,9 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 	id := c.Param("id")
 	// 绑定清理与策略删除必须同事务：绑定删除失败时回滚，避免留下
 	// 指向已删策略的悬挂绑定（旧行为会静默忽略清理错误）。
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	// 可序列化隔离（glebarez 驱动 + _txlock=immediate → BEGIN IMMEDIATE）使
+	// 事务开启即持写锁，COUNT/DELETE/清理之间不存在并发绑定插队的写窗口（R35 D1）。
+	tx, err := db.DB.BeginTx(c.Request.Context(), &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
@@ -737,7 +739,9 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// 绑定/解绑必须同事务：存在性校验与写入同事务执行，避免检查与 INSERT 之间
 	// 规则/策略被并发删除产生悬挂绑定（无 FK，经集群同步扩散，R34 D）；INSERT
 	// 失败时旧绑定已被 DELETE 删除，需回滚恢复。
-	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	// 可序列化隔离使事务开启即持写锁：COUNT 校验与 DELETE/INSERT 之间，并发的
+	// 策略删除无法提交，闭合 R34 D 遗留的窄写窗口（R35 D1）。
+	tx, err := db.DB.BeginTx(c.Request.Context(), &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -882,7 +886,11 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	}
 
 	var total int
-	db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events"+where, args...).Scan(&total)
+	if err := db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events"+where, args...).Scan(&total); err != nil {
+		log.Printf("security events: count query failed: %v", err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+		return
+	}
 
 	queryArgs := append(args, pageSize, offset)
 	rows, err := db.MetricsDB.Query(`SELECT e.id, e.event_time, e.rule_caddy_id, e.policy_id, e.client_ip, e.method, e.uri, e.event_type, e.rule_triggered, e.rule_msg, e.action, e.anomaly_score,
@@ -897,8 +905,18 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	var events []models.SecurityEvent
 	for rows.Next() {
 		var e models.SecurityEvent
-		rows.Scan(&e.ID, &e.EventTime, &e.RuleCaddyID, &e.PolicyID, &e.ClientIP, &e.Method, &e.URI, &e.EventType, &e.RuleTriggered, &e.RuleMsg, &e.Action, &e.AnomalyScore, &e.RuleName, &e.PolicyName)
+		// Scan 失败必须中止：否则部分零值的事件行会被当作真实事件返回（R35 D3）
+		if err := rows.Scan(&e.ID, &e.EventTime, &e.RuleCaddyID, &e.PolicyID, &e.ClientIP, &e.Method, &e.URI, &e.EventType, &e.RuleTriggered, &e.RuleMsg, &e.Action, &e.AnomalyScore, &e.RuleName, &e.PolicyName); err != nil {
+			log.Printf("security events: scan failed: %v", err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+			return
+		}
 		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("security events: rows iteration failed: %v", err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+		return
 	}
 	if events == nil {
 		events = []models.SecurityEvent{}
@@ -987,22 +1005,33 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	todayStartUTC := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).UTC().Format("2006-01-02 15:04:05")
 
 	var overview models.SecurityOverview
-	db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='blocked' AND event_time >= ?", todayStartUTC).Scan(&overview.TodayBlocked)
-	db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='logged' AND event_time >= ?", todayStartUTC).Scan(&overview.TodayDetected)
-	db.DB.QueryRow("SELECT COUNT(*) FROM security_policies WHERE enabled=1 AND mode!='off'").Scan(&overview.ActivePolicies)
+	// 任一查询失败都必须在结束时显式报错：否则 metrics 库故障会静默返回
+	// 全零面板，与「无攻击」不可区分（R35 D2）。
+	var firstErr error
+	trackErr := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	trackErr(db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='blocked' AND event_time >= ?", todayStartUTC).Scan(&overview.TodayBlocked))
+	trackErr(db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events WHERE action='logged' AND event_time >= ?", todayStartUTC).Scan(&overview.TodayDetected))
+	trackErr(db.DB.QueryRow("SELECT COUNT(*) FROM security_policies WHERE enabled=1 AND mode!='off'").Scan(&overview.ActivePolicies))
 
 	// 7-day trend: always the full today-6 … today slice (local dates), zero-filled.
 	// 时区偏移在 Go 侧拼好（负偏移如 America/New_York 为 "-240 minutes"）；SQLite 的
 	// printf('+%d', -240) 会产出非法修饰符 "+-240" 使 date() 返回 NULL，导致趋势全零。
 	tzModifier := fmt.Sprintf("%+d minutes", offsetMinutes)
 	trendByDate := map[string]models.SecurityTrendPoint{}
-	trendRows, _ := db.MetricsDB.Query(`SELECT date(event_time, ?) as d, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY d`, tzModifier, todayStartUTC)
-	for trendRows.Next() {
+	trendRows, err := db.MetricsDB.Query(`SELECT date(event_time, ?) as d, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY d`, tzModifier, todayStartUTC)
+	trackErr(err)
+	for trendRows != nil && trendRows.Next() {
 		var t models.SecurityTrendPoint
-		trendRows.Scan(&t.Date, &t.Blocked, &t.Detected)
+		trackErr(trendRows.Scan(&t.Date, &t.Blocked, &t.Detected))
 		trendByDate[t.Date] = t
 	}
-	trendRows.Close()
+	if trendRows != nil {
+		trendRows.Close()
+	}
 	overview.Trend = make([]models.SecurityTrendPoint, 0, 7)
 	today := time.Now().In(loc)
 	for i := 6; i >= 0; i-- {
@@ -1019,19 +1048,23 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		lastTime          string
 	}
 	var topRows []topIPRow
-	ipRows, _ := db.MetricsDB.Query(`SELECT client_ip, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l, MAX(event_time) as last_time FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY client_ip ORDER BY b + l DESC LIMIT 10`, todayStartUTC)
-	for ipRows.Next() {
+	ipRows, err := db.MetricsDB.Query(`SELECT client_ip, SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b, SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l, MAX(event_time) as last_time FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY client_ip ORDER BY b + l DESC LIMIT 10`, todayStartUTC)
+	trackErr(err)
+	for ipRows != nil && ipRows.Next() {
 		var row topIPRow
-		ipRows.Scan(&row.ip, &row.blocked, &row.detected, &row.lastTime)
+		trackErr(ipRows.Scan(&row.ip, &row.blocked, &row.detected, &row.lastTime))
 		topRows = append(topRows, row)
 	}
-	ipRows.Close()
+	if ipRows != nil {
+		ipRows.Close()
+	}
 	familyCountsByIP := map[string]map[string]int{}
-	famRows, _ := db.MetricsDB.Query(`SELECT client_ip, COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY client_ip, rule_triggered, rule_msg ORDER BY cnt DESC LIMIT 5000`, todayStartUTC)
-	for famRows.Next() {
+	famRows, err := db.MetricsDB.Query(`SELECT client_ip, COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY client_ip, rule_triggered, rule_msg ORDER BY cnt DESC LIMIT 5000`, todayStartUTC)
+	trackErr(err)
+	for famRows != nil && famRows.Next() {
 		var ip, ruleTriggered, ruleMsg string
 		var cnt int
-		famRows.Scan(&ip, &ruleTriggered, &ruleMsg, &cnt)
+		trackErr(famRows.Scan(&ip, &ruleTriggered, &ruleMsg, &cnt))
 		counts := familyCountsByIP[ip]
 		if counts == nil {
 			counts = map[string]int{}
@@ -1039,7 +1072,9 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		}
 		counts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
 	}
-	famRows.Close()
+	if famRows != nil {
+		famRows.Close()
+	}
 	overview.TopIPs = make([]models.SecurityTopIP, 0, len(topRows))
 	for _, row := range topRows {
 		overview.TopIPs = append(overview.TopIPs, models.SecurityTopIP{
@@ -1052,15 +1087,18 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	}
 
 	// Attack types grouped by family
-	typeRows, _ := db.MetricsDB.Query(`SELECT COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY rule_triggered, rule_msg`, todayStartUTC)
+	typeRows, err := db.MetricsDB.Query(`SELECT COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY rule_triggered, rule_msg`, todayStartUTC)
+	trackErr(err)
 	familyCounts := map[string]int{}
-	for typeRows.Next() {
+	for typeRows != nil && typeRows.Next() {
 		var ruleTriggered, ruleMsg string
 		var cnt int
-		typeRows.Scan(&ruleTriggered, &ruleMsg, &cnt)
+		trackErr(typeRows.Scan(&ruleTriggered, &ruleMsg, &cnt))
 		familyCounts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
 	}
-	typeRows.Close()
+	if typeRows != nil {
+		typeRows.Close()
+	}
 	attackTypes := make([]models.SecurityAttackType, 0, len(familyCounts))
 	for name, value := range familyCounts {
 		attackTypes = append(attackTypes, models.SecurityAttackType{Name: name, Value: value})
@@ -1084,6 +1122,11 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 			overview.CRSVersion = crsVersion
 		}
 		overview.UpdateStatus = crsUpdateStatus
+	}
+	if firstErr != nil {
+		log.Printf("security overview: query failed: %v", firstErr)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全总览查询失败"})
+		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: overview})
 }

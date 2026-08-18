@@ -2,7 +2,30 @@ package services
 
 import (
 	"testing"
+	"time"
 )
+
+func TestUpdateRetryBackoff_sequence(t *testing.T) {
+	// 连续失败指数退避：1h→2h→4h→8h→24h 封顶（R35 I1）
+	cases := []struct {
+		failures int
+		want     time.Duration
+	}{
+		{0, time.Hour},
+		{1, time.Hour},
+		{2, 2 * time.Hour},
+		{3, 4 * time.Hour},
+		{4, 8 * time.Hour},
+		{5, 24 * time.Hour},
+		{6, 24 * time.Hour},
+		{10, 24 * time.Hour},
+	}
+	for _, c := range cases {
+		if got := updateRetryBackoff(c.failures); got != c.want {
+			t.Errorf("updateRetryBackoff(%d)=%v, want %v", c.failures, got, c.want)
+		}
+	}
+}
 
 func TestCRSUpdateManager_SetMasterRoleStartsAndStopsScheduler(t *testing.T) {
 	// Given

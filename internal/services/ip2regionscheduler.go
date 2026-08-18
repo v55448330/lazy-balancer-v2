@@ -92,8 +92,8 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time) {
 	err := m.StartUpdate("auto")
 	if err != nil && !errors.Is(err, ErrIP2RegionUpdateRunning) {
 		log.Printf("ip2region update: failed to start scheduled update: %v", err)
-		// 启动即失败：1 小时后再试，而不是等整整 24 小时（R34 I）
-		retry := now.Add(1 * time.Hour).Format(crsTimeLayout)
+		// 启动即失败：按连续失败次数指数退避重试（R34 I 起 1 小时，R35 I1 退避 1h→24h）
+		retry := now.Add(updateRetryBackoff(readConsecutiveFailures("security_ip2region_version"))).Format(crsTimeLayout)
 		if _, dbErr := db.DB.Exec("UPDATE security_ip2region_version SET next_update=? WHERE id=1", retry); dbErr != nil {
 			log.Printf("ip2region update: failed to record retry next_update: %v", dbErr)
 		}
@@ -119,7 +119,9 @@ func (m *IP2RegionUpdateManager) rearmAfterIP2RegionUpdate(now time.Time) {
 	if !failed {
 		return
 	}
-	retry := now.Add(1 * time.Hour).Format(crsTimeLayout)
+	// 失败按连续失败次数指数退避（1h→2h→4h→8h→24h 封顶，成功复位，R35 I1）；
+	// fail() 已把 consecutive_failures +1。
+	retry := now.Add(updateRetryBackoff(readConsecutiveFailures("security_ip2region_version"))).Format(crsTimeLayout)
 	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET next_update=? WHERE id=1", retry); err != nil {
 		log.Printf("ip2region update: failed to record retry next_update: %v", err)
 	}

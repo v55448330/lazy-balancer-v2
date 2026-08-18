@@ -140,8 +140,8 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time) {
 	err := m.StartUpdate("auto")
 	if err != nil && !errors.Is(err, ErrCRSUpdateRunning) {
 		log.Printf("crs update: failed to start scheduled update: %v", err)
-		// 启动即失败：1 小时后再试，而不是等整整 24 小时（R34 I）
-		retry := now.Add(1 * time.Hour).Format(crsTimeLayout)
+		// 启动即失败：按连续失败次数指数退避重试（R34 I 起 1 小时，R35 I1 退避 1h→24h）
+		retry := now.Add(updateRetryBackoff(readConsecutiveFailures("security_crs_version"))).Format(crsTimeLayout)
 		if _, dbErr := db.DB.Exec("UPDATE security_crs_version SET next_update=? WHERE id=1", retry); dbErr != nil {
 			log.Printf("crs update: failed to record retry next_update: %v", dbErr)
 		}
@@ -168,8 +168,33 @@ func (m *CRSUpdateManager) rearmAfterCRSUpdate(now time.Time) {
 	if !failed {
 		return
 	}
-	retry := now.Add(1 * time.Hour).Format(crsTimeLayout)
+	// 失败按连续失败次数指数退避（1h→2h→4h→8h→24h 封顶，成功复位，R35 I1）；
+	// fail() 已把 consecutive_failures +1。
+	retry := now.Add(updateRetryBackoff(readConsecutiveFailures("security_crs_version"))).Format(crsTimeLayout)
 	if _, err := db.DB.Exec("UPDATE security_crs_version SET next_update=? WHERE id=1", retry); err != nil {
 		log.Printf("crs update: failed to record retry next_update: %v", err)
 	}
+}
+
+// updateRetryBackoff 返回连续失败后的下次重试间隔：1h→2h→4h→8h→24h 封顶
+// （failures≥5 起固定 24h）。成功更新会把计数复位，退避随之回到 1h。
+func updateRetryBackoff(failures int) time.Duration {
+	backoff := time.Hour
+	for i := 2; i <= failures && i <= 4; i++ {
+		backoff *= 2
+	}
+	if failures >= 5 {
+		backoff = 24 * time.Hour
+	}
+	return backoff
+}
+
+// readConsecutiveFailures 读取组件状态表的连续失败计数（R35 I1 持久化列）；
+// 读取失败按 0 处理，退避退化为固定 1h，不影响排程推进。
+func readConsecutiveFailures(table string) int {
+	var failures int
+	if err := db.DB.QueryRow("SELECT consecutive_failures FROM " + table + " WHERE id=1").Scan(&failures); err != nil {
+		return 0
+	}
+	return failures
 }

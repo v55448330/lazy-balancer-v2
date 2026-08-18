@@ -183,7 +183,7 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	if tag == currentIP2RegionVersion() {
 		writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), "已是最新版本，无需更新")
 		if _, err := db.DB.Exec(
-			"UPDATE security_ip2region_version SET update_status='success', message='已是最新版本', finished_at=datetime('now') WHERE id=1",
+			"UPDATE security_ip2region_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0 WHERE id=1",
 		); err != nil {
 			log.Printf("ip2region update: failed to record latest-version skip: %v", err)
 		}
@@ -212,7 +212,7 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	}
 
 	if _, err := db.DB.Exec(
-		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now') WHERE id=1",
+		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0 WHERE id=1",
 		tag,
 	); err != nil {
 		log.Printf("ip2region update: failed to record success: %v", err)
@@ -229,11 +229,17 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 }
 
 func (m *IP2RegionUpdateManager) fail(cause error) {
+	// 连续失败计数 +1：仅首次失败写操作审计，后续重试只写组件日志（R35 I1），
+	// 避免代理持续故障时每小时刷一条操作日志稀释审计线索。
 	if _, err := db.DB.Exec(
-		"UPDATE security_ip2region_version SET update_status='failed', message=?, finished_at=datetime('now') WHERE id=1",
+		"UPDATE security_ip2region_version SET update_status='failed', message=?, finished_at=datetime('now'), consecutive_failures=consecutive_failures+1 WHERE id=1",
 		cause.Error(),
 	); err != nil {
 		log.Printf("ip2region update: failed to record failure: %v", err)
+	}
+	var failures int
+	if err := db.DB.QueryRow("SELECT consecutive_failures FROM security_ip2region_version WHERE id=1").Scan(&failures); err != nil {
+		failures = 1 // 计数读取失败时保守按首次失败处理（审计照常写入）
 	}
 	m.mu.Lock()
 	_ = m.state.trigger
@@ -242,7 +248,9 @@ func (m *IP2RegionUpdateManager) fail(cause error) {
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
 	writeIP2RegionUpdateLog("ERROR", string(IP2RegionStatusFailed), cause.Error())
-	RecordAuditLog("system", "更新", "IP2Region 数据库", FormatAuditDetail(cause.Error(), AuditResultPart("failed")), "")
+	if failures <= 1 {
+		RecordAuditLog("system", "更新", "IP2Region 数据库", FormatAuditDetail(cause.Error(), AuditResultPart("failed")), "")
+	}
 }
 
 // downloadAndInstall downloads, validates and atomically swaps in the new xdb.
