@@ -13,6 +13,7 @@ certs-slave/
 logs/
 logs-slave/
 waf/
+waf-slave/
 
 # Test UI (staging)
 test-ui/
