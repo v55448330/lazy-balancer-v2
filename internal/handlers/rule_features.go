@@ -707,8 +707,15 @@ func validateRuleConfigGeneration(rule models.LbRule) error {
 	if !invalid {
 		return nil
 	}
-	if !strings.Contains(message, "dynamic DNS requires exactly one enabled upstream") {
+	// Round 31 C-2: 仅特判零上游——全量渲染路径对零上游规则是跳过而非失败
+	// （caddy.go 按启用上游数 continue），该特判是有意的，保持与渲染侧一致；
+	// 其余生成错误（含 generateHTTPRouteObjects 的硬错误）一律返回，
+	// 避免 F4 聚合与 EnableRule 预校验漏报（此前全被吞掉）。
+	if message == "no enabled upstreams" {
 		return nil
 	}
-	return &configValidationError{message: "动态 DNS 模式仅支持一个启用的上游"}
+	if strings.Contains(message, "dynamic DNS requires exactly one enabled upstream") {
+		return &configValidationError{message: "动态 DNS 模式仅支持一个启用的上游"}
+	}
+	return fmt.Errorf("生成规则配置失败: %s", message)
 }

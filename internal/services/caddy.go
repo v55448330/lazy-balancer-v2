@@ -1297,7 +1297,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 						}
 					}
 					if len(filtered) == 0 {
-						Logf("warn", "跳转规则 %s（%s）的域名 %s 已有启用规则直接监听 80 端口，跳过该域名的 HTTPS 跳转生成（避免遮蔽 80 端口规则）", r.Name, r.CaddyID, shadowedBy)
+						Logf("warn", "跳转规则 %s（%s）的域名 %s 已有启用规则直接监听 80 端口，该规则所有域名的 HTTPS 跳转均被遮蔽，整条跳转不生成（避免遮蔽 80 端口规则）", r.Name, r.CaddyID, shadowedBy)
 						continue
 					}
 					Logf("warn", "跳转规则 %s（%s）的域名 %s 已有启用规则直接监听 80 端口，已从跳转中移除（其余域名仍生成跳转）", r.Name, r.CaddyID, shadowedBy)

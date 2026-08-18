@@ -129,14 +129,19 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 			reason := ""
 			switch {
 			case left.protocol == "http" && right.protocol == "http" && left.listenPort == right.listenPort:
-				leftDomains := make(map[string]struct{})
-				for _, domain := range normalizedRuleDomains(left.domain) {
-					leftDomains[domain] = struct{}{}
-				}
-				for _, domain := range normalizedRuleDomains(right.domain) {
-					if _, exists := leftDomains[domain]; exists {
-						reason = fmt.Sprintf("HTTP 域名 %s 重复", domain)
-						break
+				// Round 31 C-1: 禁用规则无运行时占用——与禁用行的「同端口同域名」不构成
+				// 真实冲突，不得把启用中的一方静默置禁用（与跨端口分支同口径门控）。
+				// R30 F1 放行禁用自环行后该组合首次可达此分支。
+				if left.enabled && right.enabled {
+					leftDomains := make(map[string]struct{})
+					for _, domain := range normalizedRuleDomains(left.domain) {
+						leftDomains[domain] = struct{}{}
+					}
+					for _, domain := range normalizedRuleDomains(right.domain) {
+						if _, exists := leftDomains[domain]; exists {
+							reason = fmt.Sprintf("HTTP 域名 %s 重复", domain)
+							break
+						}
 					}
 				}
 			case left.protocol == "http" && right.protocol == "http" && left.listenPort != right.listenPort:

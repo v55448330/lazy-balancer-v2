@@ -40,16 +40,32 @@ func TestValidateRuleConflictMatrix_reports_cross_rule_conflicts(t *testing.T) {
 		{
 			name: "HTTP rules overlap after domain normalization",
 			candidates: []ruleConflictCandidate{
-				{name: "http-one", protocol: "http", domain: "WWW.Example.Test, api.example.test", listenPort: 443},
-				{name: "http-two", protocol: "http", domain: "www.example.test", listenPort: 443},
+				{name: "http-one", protocol: "http", domain: "WWW.Example.Test, api.example.test", listenPort: 443, enabled: true},
+				{name: "http-two", protocol: "http", domain: "www.example.test", listenPort: 443, enabled: true},
 			},
 			wantCount: 2,
 		},
 		{
 			name: "HTTP rules use different domains on one port",
 			candidates: []ruleConflictCandidate{
-				{name: "http-one", protocol: "http", domain: "one.example.test", listenPort: 80},
-				{name: "http-two", protocol: "http", domain: "two.example.test", listenPort: 80},
+				{name: "http-one", protocol: "http", domain: "one.example.test", listenPort: 80, enabled: true},
+				{name: "http-two", protocol: "http", domain: "two.example.test", listenPort: 80, enabled: true},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "R31 C-1: 同端口同域名但一方禁用不构成冲突（禁用规则无运行时占用）",
+			candidates: []ruleConflictCandidate{
+				{name: "http-enabled", protocol: "http", domain: "shop.example.test", listenPort: 80, enabled: true},
+				{name: "http-disabled-legacy", protocol: "http", domain: "shop.example.test", listenPort: 80, enabled: false, enableTLS: true, tlsHTTPRedirect: true},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "R31 C-1: 双方禁用同样不判定",
+			candidates: []ruleConflictCandidate{
+				{name: "http-off-one", protocol: "http", domain: "off.example.test", listenPort: 8080, enabled: false},
+				{name: "http-off-two", protocol: "http", domain: "off.example.test", listenPort: 8080, enabled: false},
 			},
 			wantCount: 0,
 		},

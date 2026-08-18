@@ -392,12 +392,23 @@ func scopedTLSConnectionPolicies(raw interface{}, caddyID string, domain string)
 	return scoped
 }
 
+// normalizedRuleDomains 将逗号分隔域名转为规范化集合（小写+punycode）。
+// Round 31 C-2: CanonicalDomains 失败（手造脏数据）时回退小写拆分保留，
+// 与渲染侧 normalizedDomainSet（caddy.go）同口径——此前失败返回 nil 会把
+// 域名整体丢弃，导致遮蔽检查静默通过（两侧不对称且是漏洞方向）。
 func normalizedRuleDomains(value string) []string {
 	canonical, err := db.CanonicalDomains(value)
-	if err != nil {
-		return nil
+	if err == nil {
+		return strings.Split(canonical, ",")
 	}
-	return strings.Split(canonical, ",")
+	var result []string
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, strings.ToLower(part))
+		}
+	}
+	return result
 }
 
 // canonicalACMEDomainForJobLookup 返回 cert_jobs.domain 使用的排序规范形式，
