@@ -756,7 +756,7 @@ func CreateOrRequeueCertJobWithChange(ruleID, domains string, caProviderID int, 
 				last_error_code = NULL,
 				ca_provider_id = excluded.ca_provider_id,
 				updated_at = datetime('now')
-			WHERE cert_jobs.status IN ('waiting_ca','issued','failed')
+			WHERE cert_jobs.status IN ('waiting_ca','issued','failed','downloaded')
 			   OR (cert_jobs.status='disabled' AND EXISTS (
 				SELECT 1 FROM lb_rules r
 				WHERE r.caddy_id=cert_jobs.rule_id AND r.enabled=1 AND r.enable_tls=1

@@ -505,6 +505,12 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			if s.beforeRecordSyncStatus != nil {
 				s.beforeRecordSyncStatus()
 			}
+			// 本周期 apply 成功但 Caddy 重载失败时 applySnapshot 已写入
+			// apply_ok_reload_failed 标记；成功路径直接清空会让 304 分支的
+			// 标记检测同周期失效。真实拉取错误仍覆盖写入。
+			if err == nil && s.syncReloadFailureMarkerPresent(ctx) {
+				return
+			}
 			s.recordSyncError(ctx, err, nil)
 		}
 	}()
@@ -545,7 +551,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			// 需要全量重拉以补偿重试（不能靠 304 跳过期瞒）。
 			var lastSyncErr string
 			if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastSyncErr); err == nil {
-				if msg, _ := decodeSyncError(lastSyncErr); strings.HasPrefix(msg, "apply_ok_reload_failed") {
+				if msg, _ := decodeSyncError(lastSyncErr); strings.HasPrefix(msg, syncReloadFailureMarkerPrefix) {
 					Logf("warn", "检测到上次同步应用后 Caddy 重载失败（%s），全量重拉补偿重试", lastSyncErr)
 					RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("上次应用后重载失败", "配置无变化但运行配置不一致，已改为全量拉取"), "")
 					resp.Body.Close()
@@ -715,6 +721,21 @@ func decodeSyncError(stored string) (string, models.SyncErrorCode) {
 		return persisted.Message, persisted.Code
 	}
 	return stored, ""
+}
+
+// syncReloadFailureMarkerPrefix 标记「快照已应用但 Caddy 重载失败」：
+// applySnapshot 写入，Pull 的 304 分支识别后全量重拉补偿；Pull 成功路径
+// 清空 last_sync_error 前必须保留该标记到下周期。
+const syncReloadFailureMarkerPrefix = "apply_ok_reload_failed"
+
+// syncReloadFailureMarkerPresent 报告 last_sync_error 当前是否携带重载失败标记。
+func (s *SyncService) syncReloadFailureMarkerPresent(ctx context.Context) bool {
+	var stored string
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		return false
+	}
+	msg, _ := decodeSyncError(stored)
+	return strings.HasPrefix(msg, syncReloadFailureMarkerPrefix)
 }
 
 func (s *SyncService) persistSyncError(ctx context.Context, message string, code models.SyncErrorCode) {
@@ -1005,7 +1026,10 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 			return
 		}
 		s.resetRegistrationConfirmFailure(ctx)
-		_, _ = s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token=?, registration_secret='' WHERE id=1", envelope.Data.ClusterToken)
+		// 落库失败时下周期会重复 confirm（主节点 confirm 幂等），仅多一次请求。
+		if _, err := s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token=?, registration_secret='' WHERE id=1", envelope.Data.ClusterToken); err != nil {
+			log.Printf("保存集群令牌失败（下周期重复 confirm，主节点幂等）: %v", err)
+		}
 	}
 }
 

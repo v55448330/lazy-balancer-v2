@@ -36,7 +36,8 @@ func issueClusterLoginTicket(t *testing.T, now time.Time) (*ClusterService, stri
 func TestClusterLoginTicketRejectsExpiredTicket(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	service, ticket := issueClusterLoginTicket(t, now)
-	if _, _, _, err := service.ValidateLoginTicket(context.Background(), ticket, now.Add(61*time.Second)); !errors.Is(err, ErrInvalidLoginTicket) {
+	// 签发 TTL 为 90s（含时钟偏移容差），越过该窗口后必须拒绝
+	if _, _, _, err := service.ValidateLoginTicket(context.Background(), ticket, now.Add(91*time.Second)); !errors.Is(err, ErrInvalidLoginTicket) {
 		t.Fatalf("expired ticket error=%v", err)
 	}
 }

@@ -298,11 +298,13 @@ func ruleDeletionCompensationBackoff(attempt int) time.Duration {
 // PauseAndDrain prevents new work, cancels every queue, and waits for all
 // workers to exit before returning.
 func (m *CAQueueManager) PauseAndDrain() {
+	// 先暂停部署重试 timer 再停队列：若先置 active=false，部署 timer 回调
+	// 可能恰好越过 timersPaused 检查开始重载，破坏暂停屏障语义。
+	pauseCertificateDeploymentRetries()
 	m.mu.Lock()
 	m.active = false
 	queues := m.stopQueuesLocked()
 	m.mu.Unlock()
-	pauseCertificateDeploymentRetries()
 
 	for _, q := range queues {
 		q.wait()
@@ -352,7 +354,7 @@ func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains stri
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.active {
-		return errors.New("从节点不运行证书签发队列")
+		return errors.New("证书签发队列已暂停或未启动")
 	}
 	if len(m.blockedRules[ruleID]) != 0 {
 		return fmt.Errorf("certificate queue admission blocked for rule %s", ruleID)

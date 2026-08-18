@@ -49,7 +49,9 @@ func (s *ClusterService) GenerateLoginTicket(ctx context.Context, claims models.
 		return models.ClusterLoginTicketResponse{}, err
 	}
 	claims.JTI = jti
-	claims.ExpiresAt = now.UTC().Add(time.Minute).Unix()
+	// 签发侧预留时钟偏移（60s→90s）：从节点按自身时钟校验，两侧偏差超过
+	// 一分钟时票据恒被拒且无重试窗口。校验侧语义不变。
+	claims.ExpiresAt = now.UTC().Add(90 * time.Second).Unix()
 	payload, err := json.Marshal(claims)
 	if err != nil {
 		return models.ClusterLoginTicketResponse{}, fmt.Errorf("编码登录票据: %w", err)

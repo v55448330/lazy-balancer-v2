@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"lazy-balancer-v2/internal/config"
@@ -135,6 +136,84 @@ func TestSyncService_Pull_repulls_full_snapshot_after_reload_failure_marker(t *t
 	}
 	if lastSyncError != "" {
 		t.Fatalf("last_sync_error=%q, want cleared after successful retry", lastSyncError)
+	}
+}
+
+// R29 HIGH-1：apply 成功但 Caddy 重载失败时，标记必须在同一 Pull 周期内
+// 存活（defer 清空不得吞掉本周期写入的标记）；下一周期 304 时必须以
+// since_version=0 全量重拉补偿重试。
+func TestSyncService_Pull_reload_failure_marker_survives_defer_and_triggers_repull(t *testing.T) {
+	// Given：从节点 applied_version=9；主节点首个增量请求回快照、之后回 304；
+	// Caddy admin 对 /load 一律 500（重载失败）
+	_, database := newClusterTestService(t)
+	snapshot := signedTestSnapshot(9, "token")
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	snapshot = signTestSnapshot(snapshot, "token")
+
+	requestedVersions := make(chan string, 4)
+	var snapshotServed atomic.Int32
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		version := request.URL.Query().Get("since_version")
+		requestedVersions <- version
+		if version == "0" || snapshotServed.Add(1) == 1 {
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(models.APIResponse{Code: 0, Data: snapshot})
+			return
+		}
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9 WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer caddyServer.Close()
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	// When：第一轮 Pull —— 主节点回快照，apply 提交但重载失败
+	result, pullErr := service.Pull(context.Background())
+	if pullErr != nil {
+		t.Fatalf("first pull: %v", pullErr)
+	}
+	if !result.Changed || result.AppliedVersion != 9 {
+		t.Fatalf("first result=%#v, want changed apply of version 9", result)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "9" {
+		t.Fatalf("first request since_version=%q, want 9", v)
+	}
+
+	// Then：标记存活过 defer（成功路径不得清空本周期写入的标记）
+	var lastSyncError string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastSyncError); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(lastSyncError, "apply_ok_reload_failed") {
+		t.Fatalf("first pull last_sync_error=%q, want apply_ok_reload_failed marker", lastSyncError)
+	}
+
+	// When：第二轮 Pull —— 增量请求被回 304，标记必须触发 since_version=0 全量重拉
+	result, pullErr = service.Pull(context.Background())
+	if pullErr != nil {
+		t.Fatalf("second pull: %v", pullErr)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "9" {
+		t.Fatalf("second first request since_version=%q, want 9", v)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "0" {
+		t.Fatalf("second re-pull since_version=%q, want 0 (reload-failure marker)", v)
+	}
+	if !result.Changed || result.AppliedVersion != 9 {
+		t.Fatalf("second result=%#v, want changed re-apply", result)
+	}
+
+	// Then：重载仍失败，标记继续存活（下周期继续补偿）
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastSyncError); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(lastSyncError, "apply_ok_reload_failed") {
+		t.Fatalf("second pull last_sync_error=%q, want marker still present", lastSyncError)
 	}
 }
 

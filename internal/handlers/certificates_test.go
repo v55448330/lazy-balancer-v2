@@ -265,21 +265,37 @@ func TestIssueCertificate_batch_preserves_running_jobs(t *testing.T) {
 
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/certificates/issue", nil))
 
+	// 执行中的任务（creating_order）保持不变；已部署任务（downloaded）按
+	// R29 A-M1 重新排队——再次触发签发对已部署证书必须生效，不得静默空转。
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"queued":0`) {
-		t.Fatalf("body=%s, want no unchanged running jobs counted as queued", response.Body.String())
+	if !strings.Contains(response.Body.String(), `"queued":1`) {
+		t.Fatalf("body=%s, want downloaded job requeued, running job not counted", response.Body.String())
 	}
-	for ruleID, wantStatus := range map[string]string{"lb_batch_order": "creating_order", "lb_batch_download": "downloaded"} {
-		var status, message string
-		if err := db.DB.QueryRow("SELECT status,message FROM cert_jobs WHERE rule_id=?", ruleID).Scan(&status, &message); err != nil {
-			t.Fatalf("read %s job: %v", ruleID, err)
-		}
-		if status != wantStatus || message != "active message" {
-			t.Fatalf("%s job=(%q,%q), want (%q,%q)", ruleID, status, message, wantStatus, "active message")
-		}
+	// 取消后台签发 worker，使队列状态落定后再断言任务行。
+	var jobID int64
+	if err := db.DB.QueryRow("SELECT id FROM cert_jobs WHERE rule_id='lb_batch_download'").Scan(&jobID); err != nil {
+		t.Fatalf("read downloaded job id: %v", err)
 	}
+	services.GetCAQueueManager().CancelJob(int(jobID))
+	if status, message := readIssueBatchJob(t, "lb_batch_order"); status != "creating_order" || message != "active message" {
+		t.Fatalf("running job=(%q,%q), want unchanged", status, message)
+	}
+	// 重新排队是同步完成的；worker 在无外网环境会随即把任务置为 failed，
+	// 两者都是合法的落定状态——唯独不可能回到 downloaded。
+	if status, _ := readIssueBatchJob(t, "lb_batch_download"); status != "queued" && status != "failed" {
+		t.Fatalf("downloaded job status=%q, want queued or failed（已离开 downloaded 并重新排队）", status)
+	}
+}
+
+func readIssueBatchJob(t *testing.T, ruleID string) (string, string) {
+	t.Helper()
+	var status, message string
+	if err := db.DB.QueryRow("SELECT status,message FROM cert_jobs WHERE rule_id=?", ruleID).Scan(&status, &message); err != nil {
+		t.Fatalf("read %s job: %v", ruleID, err)
+	}
+	return status, message
 }
 
 func assertLatestCertificateAudit(t *testing.T, wantScope, wantResult string) {

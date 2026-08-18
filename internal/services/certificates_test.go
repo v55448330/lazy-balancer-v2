@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/models"
 )
 
 func TestCreateOrRequeueCertJob_returns_persisted_job_id(t *testing.T) {
@@ -96,6 +97,44 @@ func TestCreateOrRequeueCertJob_requeues_disabled_job_for_reenabled_rule(t *test
 	}
 	if status != "queued" {
 		t.Fatalf("reenabled job status=%q, want queued", status)
+	}
+}
+
+func TestCreateOrRequeueCertJob_requeues_downloaded_job(t *testing.T) {
+	// Given：已部署（downloaded）任务——用户再次触发签发必须重新排队，
+	// 不能静默空转（R29 A-M1）
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO cert_jobs
+		(rule_id,domain,status,ca_provider_id)
+		VALUES ('lb_downloaded','downloaded.example','downloaded',1)`); err != nil {
+		t.Fatalf("seed downloaded job: %v", err)
+	}
+	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: true}
+	queue := newCAQueue(models.CAProvider{ID: 1}, nil)
+	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error { return nil }
+	go queue.loop()
+	manager.queues[1] = queue
+	t.Cleanup(manager.Stop)
+
+	// When：触发签发路径（与 handlers/certificates.go 相同调用）
+	jobID, changed, err := CreateOrRequeueCertJobWithChange("lb_downloaded", "downloaded.example", 1, manager)
+
+	// Then：downloaded 任务转为 queued 重新排队
+	if err != nil {
+		t.Fatalf("requeue downloaded job: %v", err)
+	}
+	if !changed {
+		t.Fatalf("changed=false, want true（downloaded 任务必须重新排队）")
+	}
+	if jobID <= 0 {
+		t.Fatalf("jobID=%d, want > 0", jobID)
+	}
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+		t.Fatalf("read requeued job: %v", err)
+	}
+	if status != "queued" {
+		t.Fatalf("status=%q, want queued", status)
 	}
 }
 
