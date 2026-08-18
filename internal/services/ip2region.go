@@ -80,12 +80,16 @@ func Reload() {
 }
 
 // swapIP2RegionSearcher installs the new searcher and closes the old one.
-// Callers must hold ip2regionMu.
+// Callers must hold ip2regionMu. Closing happens under ip2regionSearchMu so a
+// concurrent in-flight Search on the retired instance is serialized against
+// Close instead of racing it.
 func swapIP2RegionSearcher(searcher *ip2regionService.Ip2Region) {
 	old := ip2regionSearcher
 	ip2regionSearcher = searcher
 	if old != nil {
+		ip2regionSearchMu.Lock()
 		old.Close()
+		ip2regionSearchMu.Unlock()
 	}
 }
 
@@ -207,6 +211,8 @@ func GetIP2RegionEntryCount() int {
 	return int((maxPtr-minPtr)/14) + 1
 }
 
+// GetIP2RegionProvinces returns the province list from the live searcher, or
+// ["海外"] when no database is loaded.
 func GetIP2RegionProvinces() []string {
 	ip2regionMu.RLock()
 	searcher := ip2regionSearcher
@@ -241,4 +247,16 @@ func GetIP2RegionProvinces() []string {
 	sort.Strings(result)
 	result = append(result, "海外")
 	return result
+}
+
+// GetIP2RegionProvinceList 返回省份列表，live searcher 优先、缓存兜底：校验端
+// （ValidateGeoIPCountries）与 UI 列表端（GetIP2RegionRegions）共用同一口径，
+// 避免带外替换 xdb 后缓存陈旧导致两端分叉。ip2region 未加载且无缓存时仅返回
+// ["海外"]（len<=1 即表示不可用）。
+func GetIP2RegionProvinceList() []string {
+	provinces := GetIP2RegionProvinces()
+	if len(provinces) <= 1 {
+		provinces = GetCachedProvinces()
+	}
+	return provinces
 }

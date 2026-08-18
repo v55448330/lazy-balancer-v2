@@ -260,6 +260,7 @@ func TestCategorizeAttack_familyMapping(t *testing.T) {
 		{"scanner", "913100", "Scanner Detected", "扫描探测"},
 		{"blocking evaluation", "949110", "Inbound Anomaly Score Exceeded", "请求阻断评估"},
 		{"custom rule numeric id", "10001", "自定义拦截", "自定义规则"},
+		{"synthetic custom rule id", "1000001", "旧版规则 命中", "自定义规则"},
 		{"ip blacklist via msg", "", "命中 IP 黑名单", "IP 访问控制"},
 		{"ip whitelist via msg", "", "命中 IP 白名单", "IP 访问控制"},
 		{"ip acl via msg", "", "触发 IP 访问控制", "IP 访问控制"},

@@ -448,8 +448,10 @@ func crsFilenameToRuleIDRange(s string) string {
 }
 
 // ValidateGeoIPCountries 校验 geoip_countries 载荷：必须是 JSON 数组且条目非空；
-// ip2region 已加载时条目必须属于已知省份或"海外"，未知省份在发射端永不匹配，
-// 会静默削弱地域控制。缓存为空（ip2region 未加载）时只查非空，避免启动期误拒。
+// ip2region 已加载（live 或缓存）时条目必须属于已知省份或"海外"，未知省份在
+// 发射端永不匹配，会静默削弱地域控制。ip2region 未加载且无缓存时同样拒绝未知
+// 省份（fail-closed）：启动期放行任意省份会让 deny 模式的地域拦截静默失效，
+// 提示未加载而非放行。
 func ValidateGeoIPCountries(raw string) error {
 	var entries []string
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
@@ -458,25 +460,25 @@ func ValidateGeoIPCountries(raw string) error {
 	// 校验源必须与发射源（caddy.go 的 live searcher geoip 标记）对齐：searcher
 	// 存在时优先用实时省份列表，避免陈旧缓存拒绝新省份或与 live 分叉；缓存仅在
 	// searcher 缺失（live 仅返回 ["海外"]）时兜底。
-	provinces := GetIP2RegionProvinces()
-	if len(provinces) <= 1 {
-		provinces = GetCachedProvinces()
-	}
+	provinces := GetIP2RegionProvinceList()
 	known := make(map[string]bool, len(provinces)+1)
 	for _, p := range provinces {
 		known[p] = true
 	}
 	known["海外"] = true
-	// GetCachedProvinces 在 ip2region 未加载时仅返回 ["海外"]（live 查询的 searcher
-	// 为空），此时无法判定条目归属，跳过成员校验避免启动期误拒。
+	// provinces 仅含 ["海外"]（live 与缓存均无数据）时无法判定省份归属：
+	// fail-closed 拒绝未知省份，避免 deny 模式拦截静默失效。
 	provincesLoaded := len(provinces) > 1
 	for _, entry := range entries {
 		trimmed := strings.TrimSpace(entry)
 		if trimmed == "" {
 			return fmt.Errorf("geoip_countries 不能包含空条目")
 		}
-		if provincesLoaded && !known[trimmed] {
-			return fmt.Errorf("geoip_countries 包含未知省份：%q", trimmed)
+		if !known[trimmed] {
+			if provincesLoaded {
+				return fmt.Errorf("geoip_countries 包含未知省份：%q", trimmed)
+			}
+			return fmt.Errorf("ip2region 未加载，暂无法使用非海外省份（geoip_countries 包含 %q）", trimmed)
 		}
 	}
 	return nil

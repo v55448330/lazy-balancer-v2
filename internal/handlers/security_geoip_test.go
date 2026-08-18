@@ -17,7 +17,7 @@ func TestCreateSecurityPolicy_geoipColumnsRoundTrip(t *testing.T) {
 	payload := map[string]any{
 		"name":            "地理围栏策略",
 		"mode":            "off",
-		"geoip_countries": `["海外","广东省"]`,
+		"geoip_countries": `["海外"]`,
 		"geoip_mode":      "deny",
 	}
 	id := createTestPolicy(t, router, payload)
@@ -38,8 +38,8 @@ func TestCreateSecurityPolicy_geoipColumnsRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("parse get response: %v", err)
 	}
-	if got := resp.Data.Policy["geoip_countries"]; got != `["海外","广东省"]` {
-		t.Fatalf("geoip_countries=%q, want %q", got, `["海外","广东省"]`)
+	if got := resp.Data.Policy["geoip_countries"]; got != `["海外"]` {
+		t.Fatalf("geoip_countries=%q, want %q", got, `["海外"]`)
 	}
 	if got := resp.Data.Policy["geoip_mode"]; got != "deny" {
 		t.Fatalf("geoip_mode=%q, want deny", got)

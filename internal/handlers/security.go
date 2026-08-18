@@ -548,6 +548,14 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			}
 		}
 	}
+	// 显式空串按 Create 口径归一为 "[]"，保持列形状一致，避免库内 "" 与 "[]"
+	// 并存（Create 在 :411-419 归一，custom_rules 在下方同口径归一）。
+	for _, val := range []**string{&req.IPACLList, &req.IPWhitelist, &req.IPBlacklist} {
+		if *val != nil && strings.TrimSpace(**val) == "" {
+			empty := "[]"
+			*val = &empty
+		}
+	}
 	// 显式空串会把枚举列清空：mode 为 "" 时汇总口径（mode!="off" 即计入 WAF）
 	// 与发射口径（仅 blocking/detection 生效）随即漂移；geoip_mode 在创建时已
 	// 归一为 allow/deny，空串属于域外值。不修改请直接省略字段，而不是传空串。
@@ -924,7 +932,10 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 		return "响应阻断评估"
 	case strings.HasPrefix(ruleTriggered, "949"):
 		return "请求阻断评估"
-	case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) == 5:
+	// 自定义规则触发 id 的两种形状：旧版内嵌规则 10000+id（5 位，10001-19999）
+	// 与 R30 起无 id 规则的合成 id 1000000+n（7 位，1000000-1999999）。6 位
+	// 1xxxxx 无归属源（CRS 保留段 100000-999999 的余数），保持"其他"。
+	case strings.HasPrefix(ruleTriggered, "1") && (len(ruleTriggered) == 5 || len(ruleTriggered) >= 7):
 		return "自定义规则"
 	case strings.Contains(ruleMsg, "IP 黑名单") || strings.Contains(ruleMsg, "IP 白名单") || strings.Contains(ruleMsg, "IP 访问控制") ||
 		ruleTriggered == "2" || ruleTriggered == "3" || ruleTriggered == "4" || ruleTriggered == "5":
@@ -1201,7 +1212,9 @@ func (h *Handlers) GetIP2RegionInfo(c *gin.Context) {
 }
 
 func (h *Handlers) GetIP2RegionRegions(c *gin.Context) {
-	regions := services.GetCachedProvinces()
+	// 与校验端（ValidateGeoIPCountries）同源：live searcher 优先、缓存兜底，
+	// 避免带外替换 xdb 后两端分叉。
+	regions := services.GetIP2RegionProvinceList()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: regions})
 }
 

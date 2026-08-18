@@ -271,11 +271,15 @@ func securityEventsShouldReset(offset, size int64, prev, curr os.FileInfo) bool 
 	return prev != nil && curr != nil && !os.SameFile(prev, curr)
 }
 
+// securityEventsScanWindowLimit 是一次解码失败后前向扫描文档头的最大字节数：
+// 扫描窗口内没有下一个 "\n{" 且窗口外仍有数据，即判定为无法自愈的畸形区。
+const securityEventsScanWindowLimit = 4 << 20
+
 // securityEventsFindNextDocument scans forward from `from` for the next `{`
 // at column 0, which in the pretty-printed multi-line format marks the start
 // of the next top-level transaction. found=false when none exists yet.
 func securityEventsFindNextDocument(f *os.File, from int64) (int64, bool, error) {
-	const scanLimit = 4 << 20
+	const scanLimit = securityEventsScanWindowLimit
 	buf := make([]byte, scanLimit)
 	n, err := f.ReadAt(buf, from)
 	if n > 0 {
@@ -388,6 +392,19 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 				return committedOffset, rerr
 			}
 			if !found {
+				// 未找到下一个文档头有两种可能：文件尾部的半条事务（正常，等待
+				// Coraza 写完，下次 tick 续读）与 ≥4MB 无 "\n{" 的畸形区（崩溃时
+				// 正在写入的超大残片等）。后者若原地成功返回，tick 会每 2s 从同一
+				// 位置解码失败、原地打转且无任何告警，后续所有事件永不被摄取。
+				// 仅当扫描窗口之外仍有数据时才判定为畸形区并返回错误，让 tick 走
+				// warn 暴露停摆；已解析文档先提交，偏移照常推进。
+				if info, serr := f.Stat(); serr == nil && decoderStart+decoder.InputOffset()+securityEventsScanWindowLimit < info.Size() {
+					_ = stmt.Close()
+					if cerr := tx.Commit(); cerr != nil {
+						return committedOffset, fmt.Errorf("security events: commit inserts: %w", cerr)
+					}
+					return offset, fmt.Errorf("security events: unreadable audit data beyond %d scan window at offset %d", securityEventsScanWindowLimit, decoderStart+decoder.InputOffset())
+				}
 				stmt.Close()
 				if cerr := tx.Commit(); cerr != nil {
 					return committedOffset, fmt.Errorf("security events: commit inserts: %w", cerr)

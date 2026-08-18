@@ -167,17 +167,25 @@ func TestUpdateSecurityPolicy_rejectsNonexistentReferences(t *testing.T) {
 	}
 }
 
-func TestCreateSecurityPolicy_geoipUnknownProvinceAllowedWhileCacheEmpty(t *testing.T) {
-	// Given：ip2region 未加载（无缓存文件，GetCachedProvinces 仅返回 ["海外"]）
+func TestCreateSecurityPolicy_geoipUnknownProvinceRejectedWhileCacheEmpty(t *testing.T) {
+	// Given：ip2region 未加载（无缓存文件，live 与缓存兜底均只返回 ["海外"]）
 	setupSecurityPolicyTestDB(t)
 	router := securityR29Router(t)
 
 	// When：创建策略使用任意非空省份名
 	recorder := postJSON(t, router, "/security/policies", map[string]any{"name": "启动期省份", "geoip_countries": `["未知省"]`})
 
-	// Then：放行——启动期无法判定条目归属，跳过成员校验只查非空，避免误拒
+	// Then：400 拒绝并提示未加载——fail-closed，避免 deny 模式地域拦截静默失效
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("create status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "未加载") {
+		t.Fatalf("body=%s, want 未加载 message", recorder.Body.String())
+	}
+	// And："海外" 是唯一可判定归属的条目，放行
+	recorder = postJSON(t, router, "/security/policies", map[string]any{"name": "海外放行", "geoip_countries": `["海外"]`})
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("create status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+		t.Fatalf("create 海外 status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -200,5 +208,33 @@ func TestUpdateSecurityPolicy_normalizesEmptyCustomRulesToArray(t *testing.T) {
 	}
 	if stored != "[]" {
 		t.Fatalf("stored custom_rules=%q, want \"[]\"", stored)
+	}
+}
+
+func TestUpdateSecurityPolicy_normalizesEmptyIPListsToArray(t *testing.T) {
+	// Given：一个已存在的策略
+	setupSecurityPolicyTestDB(t)
+	router := securityR29Router(t)
+	id := createTestPolicy(t, router, map[string]any{"name": "归一 IP 列表"})
+
+	// When：显式传三个 IP 列表字段为空串更新
+	recorder := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{
+		"ip_acl_list":  "",
+		"ip_whitelist": "",
+		"ip_blacklist": "",
+	})
+
+	// Then：200 且库内三个字段均存储 "[]"（与 Create/custom_rules 口径一致）
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	for _, col := range []string{"ip_acl_list", "ip_whitelist", "ip_blacklist"} {
+		var stored string
+		if err := db.DB.QueryRow(`SELECT `+col+` FROM security_policies WHERE id=?`, id).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored != "[]" {
+			t.Fatalf("stored %s=%q, want \"[]\"", col, stored)
+		}
 	}
 }
