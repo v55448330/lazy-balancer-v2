@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"time"
@@ -45,10 +44,16 @@ func defaultFetchIP2RegionLatestTag(ctx context.Context) (tag string, err error)
 	return release.TagName, nil
 }
 
+// ip2RegionXDBSourceURL 是 ip2region xdb 的真实来源 URL（含版本 tag，作为完整
+// 性基线的键）：下载函数与安装校验后的记录调用共用，避免 URL 构造分叉。
+func ip2RegionXDBSourceURL(tag string) string {
+	return ghProxied("https://raw.githubusercontent.com/lionsoul2014/ip2region/" + tag + "/data/ip2region_v4.xdb")
+}
+
 // defaultDownloadIP2RegionXDB downloads the ip2region v4 xdb to destPath.
 func defaultDownloadIP2RegionXDB(ctx context.Context, tag, destPath string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		ghProxied("https://raw.githubusercontent.com/lionsoul2014/ip2region/"+tag+"/data/ip2region_v4.xdb"), nil)
+		ip2RegionXDBSourceURL(tag), nil)
 	if err != nil {
 		return err
 	}
@@ -71,11 +76,6 @@ func defaultDownloadIP2RegionXDB(ctx context.Context, tag, destPath string) erro
 	}
 	if closeErr != nil {
 		return closeErr
-	}
-	// TOFU 完整性校验：与 CRS 下载一致，记录 size+SHA256 基线，同一 tag 内容
-	// 变化即告警（见 recordDownloadIntegrity）。
-	if ierr := recordDownloadIntegrity(req.URL.String(), destPath, "ip2region 数据库"); ierr != nil {
-		log.Printf("ip2region update: failed to record download integrity: %v", ierr)
 	}
 	return nil
 }

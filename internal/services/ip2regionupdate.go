@@ -272,6 +272,11 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 	if err := validateIP2RegionXDB(staged); err != nil {
 		return err
 	}
+	// TOFU 完整性基线在格式验证成功之后记录（R33 F6）：验证前的坏工件留下基线
+	// 会让下次同 tag 好下载误报。记录失败不阻断安装。
+	if ierr := recordDownloadIntegrity(ip2RegionXDBSourceURL(tag), staged, "ip2region 数据库"); ierr != nil {
+		log.Printf("ip2region update: failed to record download integrity: %v", ierr)
+	}
 	if err := os.Rename(staged, ip2regionLivePath); err != nil {
 		return fmt.Errorf("安装 ip2region xdb: %w", err)
 	}

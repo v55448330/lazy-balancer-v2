@@ -23,6 +23,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// crsRulesDir 是 CRS 规则文件目录；定义为变量以便测试注入临时目录。
+var crsRulesDir = "/app/waf/crs/rules"
+
 func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 	rows, err := db.DB.Query("SELECT id, name, description, conditions, action, score, enabled, created_at, updated_at, updated_by FROM security_custom_rules ORDER BY id")
 	if err != nil {
@@ -736,6 +739,13 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
 		return
 	}
+	// 绑定前校验规则真实存在：悬挂绑定虽在 JOIN 中不可见，但会经集群同步传播
+	// 并污染 GetAllSecurityBindings 消费方（R33 F10）。
+	var ruleExists int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id=?", req.RuleCaddyID).Scan(&ruleExists); err != nil || ruleExists == 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则不存在"})
+		return
+	}
 	// 绑定/解绑必须同事务：INSERT 失败时旧绑定已被 DELETE 删除，需回滚恢复。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
@@ -800,6 +810,10 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	fmt.Sscanf(c.DefaultQuery("page_size", "20"), "%d", &pageSize)
 	if page < 1 {
 		page = 1
+	}
+	// clamp 上限防 (page-1)*pageSize 整数溢出为负 → SQLite OFFSET 报错 500（R33 F7）
+	if page > 100000 {
+		page = 100000
 	}
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
@@ -1491,8 +1505,7 @@ func init() {
 }
 
 func (h *Handlers) ListCRSRules(c *gin.Context) {
-	rulesDir := "/app/waf/crs/rules"
-	entries, err := os.ReadDir(rulesDir)
+	entries, err := os.ReadDir(crsRulesDir)
 	if err != nil {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"rules": []interface{}{}, "total": 0}})
 		return
@@ -1505,6 +1518,10 @@ func (h *Handlers) ListCRSRules(c *gin.Context) {
 	fmt.Sscanf(c.DefaultQuery("page_size", "50"), "%d", &pageSize)
 	if page < 1 {
 		page = 1
+	}
+	// clamp 上限防 (page-1)*pageSize 整数溢出为负 → 切片越界 panic（R33 F7）
+	if page > 100000 {
+		page = 100000
 	}
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 50

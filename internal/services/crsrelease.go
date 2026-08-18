@@ -128,6 +128,10 @@ func parseGitHubLatestTag(body []byte) (string, error) {
 	return payload.TagName, nil
 }
 
+// crsExtractMaxBytes 是解压总字节上限（防 gzip 炸弹耗尽数据卷，R33 F8）：
+// tar 头声明的 hdr.Size 即解压后写入的确切字节数，跨条目累计超限即中止。
+const crsExtractMaxBytes = 500 << 20
+
 // extractCRSTarball extracts a GitHub release tar.gz into destDir, stripping
 // the single top-level root directory GitHub adds to every entry.
 func extractCRSTarball(tarballPath, destDir string) error {
@@ -143,6 +147,7 @@ func extractCRSTarball(tarballPath, destDir string) error {
 	defer gz.Close()
 
 	tr := tar.NewReader(gz)
+	var totalBytes int64
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -150,6 +155,10 @@ func extractCRSTarball(tarballPath, destDir string) error {
 		}
 		if err != nil {
 			return fmt.Errorf("读取 tar: %w", err)
+		}
+		totalBytes += hdr.Size
+		if totalBytes > crsExtractMaxBytes {
+			return fmt.Errorf("tarball 解压超过大小上限（%d MB）", crsExtractMaxBytes>>20)
 		}
 		rel, err := stripTarRoot(hdr.Name)
 		if err != nil {

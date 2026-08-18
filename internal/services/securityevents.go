@@ -408,6 +408,9 @@ func (t *securityEventsTailer) securityEventsTick() error {
 // database error stops the pass so the next tick retries the same offset; a
 // malformed transaction is logged and skipped without aborting the pass.
 func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int64, rules map[string]securityEventsRuleRef, bindings map[string]securityEventsPolicyRef) (int64, error) {
+	// 每个 pass 开始时重置停摆偏移：只有本 pass 实际 F1 停摆才会重新赋值，
+	// 避免同偏移的新停摆被上一轮 warn 的限流状态吞掉（R33 F2）。
+	t.failOffset = -1
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return offset, fmt.Errorf("security events: seek audit log: %w", err)
 	}

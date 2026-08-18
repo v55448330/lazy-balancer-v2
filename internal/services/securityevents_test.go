@@ -1340,3 +1340,102 @@ func TestRotateAuditLog_abortsRotationWhenMarkerWriteFails(t *testing.T) {
 		t.Fatalf("rows=%d, want 1 (no data loss)", count)
 	}
 }
+
+func TestRotateAuditLog_liveTailGarbageDoesNotBlockRotation(t *testing.T) {
+	// Given：日志含 A（tick 已摄取）+ ≥4MB 畸形区 + B（tick 被畸形区卡住停采）；
+	// copy 完成后 Coraza 再写入 ≥4MB 畸形区 C——活文件补采区间 [archSize, EOF)
+	// 整体为畸形区，旧行为（archive=false）F1 报错中止轮转：每 2s 周期反复复制
+	// 更大文件、永不截断（R33 F1 死锁）
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
+	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
+	auditLogSizeBytes = func() int64 { return 1 }
+	t.Cleanup(func() {
+		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile
+	})
+	garbage := strings.Repeat("x", securityEventsScanWindowLimit+4096)
+	content := securityEventsFixtureBlocked + "\n" + garbage + "\n" + securityEventsFixtureUnknownHost + "\n"
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+	if err := tailer.securityEventsTick(); err == nil || !strings.Contains(err.Error(), "scan window") {
+		t.Fatalf("tick err=%v, want beyond-scan-window error (precondition)", err)
+	}
+	// When：copy 完成后活文件尾部追加 ≥4MB 畸形区（补采区间全部不可解码）
+	auditLogCopyFile = func(src, dst string) error {
+		if err := copyAuditLogTo(src, dst); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(src, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = f.WriteString(strings.Repeat("z", securityEventsScanWindowLimit+4096) + "\n")
+		return err
+	}
+	rotateAuditLogIfNeeded()
+	// Then：轮转正常推进——活文件已截断、标记清除、B 入库（A + B 两行）
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("rows=%d, want 2 (A + B after garbage tail)", count)
+	}
+	var uri string
+	if err := db.MetricsDB.QueryRow(`SELECT uri FROM security_events WHERE transaction_id='tx-unknown-1'`).Scan(&uri); err != nil {
+		t.Fatal(err)
+	}
+	if uri != "/BlockedPath" {
+		t.Fatalf("event uri=%q, want /BlockedPath", uri)
+	}
+	if _, err := os.Stat(securityEventsPendingDeltaPath()); !os.IsNotExist(err) {
+		t.Fatalf("pending marker must be cleared after rotation, stat err=%v", err)
+	}
+	liveInfo, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveInfo.Size() != 0 {
+		t.Fatalf("live log size=%d, want 0 (rotation must truncate despite garbage tail)", liveInfo.Size())
+	}
+}
+
+func TestSecurityEventsBackscanDocumentStart_crossChunkBoundary(t *testing.T) {
+	// Given：唯一 "\n{" 跨 1MB 分块边界——'\n' 恰为 [0, 1MB) 块末字节、
+	// '{' 恰为 [1MB, ...) 块首字节（分块回扫必须识别跨块文档头，R33 F3）
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+	content := strings.Repeat("a", 1<<20-1) + "\n{" + strings.Repeat("b", 1<<20-2)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// When：回扫 [0, len) 找最近文档头
+	got, err := securityEventsBackscanDocumentStart(path, int64(len(content)))
+	// Then：返回跨块 '\n{' 的 '{' 位置（1MB），而非回退 from
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := int64(1 << 20); got != want {
+		t.Fatalf("backscan=%d, want %d (cross-chunk doc start)", got, want)
+	}
+	// And：文件超过 from 时结果与整块语义一致（截断点之前无文档头则回退 from）
+	if got, err := securityEventsBackscanDocumentStart(path, 100); err != nil || got != 100 {
+		t.Fatalf("backscan(100)=(%d,%v), want (100,nil)", got, err)
+	}
+	// And：from=0 直接返回 0（空读安全路径）
+	if got, err := securityEventsBackscanDocumentStart(path, 0); err != nil || got != 0 {
+		t.Fatalf("backscan(0)=(%d,%v), want (0,nil)", got, err)
+	}
+}

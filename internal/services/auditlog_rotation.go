@@ -109,7 +109,10 @@ func rotateAuditLogIfNeeded() {
 			log.Printf("audit log rotation: backscan live tail failed (not truncating): %v", berr)
 			return
 		}
-		if ierr := securityEventsIngestDeltaFrom(auditLogPath, ingestFrom, false); ierr != nil {
+		// 活文件补采以归档语义进行（archive=true）：补采区间有界且完整内容已在
+		// 刚拷贝的 .1 中以归档语义摄取，活文件畸形区（≥4MB 无文档头）可安全跳过；
+		// 若按活文件语义 F1 报错，轮转每 2s 周期反复中止，文件永不截断（R33 F1）。
+		if ierr := securityEventsIngestDeltaFrom(auditLogPath, ingestFrom, true); ierr != nil {
 			log.Printf("audit log rotation: ingest live tail [%d, %d) failed (not truncating): %v", ingestFrom, tailInfo.Size(), ierr)
 			return
 		}
@@ -147,20 +150,47 @@ func rotateAuditLogIfNeeded() {
 // 未找到（超大事务/畸形区）或打开失败时回退 from 本身。用于确定活文件补采起点：
 // copy 末次读可能截断在事务中部，从截断点直接解码会跳过该事务。回扫取全量区间
 // 而非固定窗口——回扫时活文件仍完好，from（归档大小）有界于轮转阈值（默认
-// 10MB），最坏一次 10MB ReadAt；固定 8MB 窗口会漏掉文档头更靠前的跨界事务
-// （前缀在 .1、后缀在活文件），两半皆失。
+// 10MB），固定 8MB 窗口会漏掉文档头更靠前的跨界事务（前缀在 .1、后缀在活文件），
+// 两半皆失。
+//
+// 实现为 1MB 分块从尾部向前读（而非一次 ReadAt 分配 from 字节）：阈值来自
+// audit_log_size_mb 且无上限校验，配置大值时整块分配会 OOM 崩溃循环（R33 F3）。
+// 文档头可跨块边界（前块末字节 '\n' + 后块首字节 '{'），跨块时返回后块起点。
 func securityEventsBackscanDocumentStart(path string, from int64) (int64, error) {
+	const chunkSize = 1 << 20
+	if from <= 0 {
+		return 0, nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return from, err
 	}
 	defer f.Close()
-	buf := make([]byte, from)
-	n, err := f.ReadAt(buf, 0)
-	if n > 0 {
-		if idx := bytes.LastIndex(buf[:n], []byte("\n{")); idx >= 0 {
-			return int64(idx) + 1, nil
+	var nextFirst byte // 已扫描的下一块（更高偏移）首字节，用于跨块 "\n{" 检测
+	hasNext := false
+	pos := from
+	for pos > 0 {
+		start := pos - chunkSize
+		if start < 0 {
+			start = 0
 		}
+		buf := make([]byte, pos-start)
+		n, _ := f.ReadAt(buf, start)
+		if n > 0 {
+			if hasNext && buf[n-1] == '\n' && nextFirst == '{' {
+				return pos, nil // "\n{" 跨块边界：`{` 在 pos 处
+			}
+			if idx := bytes.LastIndex(buf[:n], []byte("\n{")); idx >= 0 {
+				return start + int64(idx) + 1, nil
+			}
+			nextFirst = buf[0]
+			hasNext = true
+		}
+		if n < len(buf) {
+			// 文件小于 from（拷贝期间被截断/缩小）：更高偏移无更多数据
+			break
+		}
+		pos = start
 	}
 	return from, nil
 }

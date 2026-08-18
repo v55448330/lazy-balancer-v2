@@ -12,6 +12,9 @@ import (
 const (
 	securityEventsRetentionDefaultDays = 30
 	securityEventsRetentionDefaultMax  = 100000
+	// securityEventsRetentionDeleteBatch 是 count 超限裁剪的单批删除行数：
+	// 大批量单语句 DELETE 会长时间持指标库写锁，阻塞摄取 tick（R33 F9）。
+	securityEventsRetentionDeleteBatch = 5000
 )
 
 var (
@@ -57,8 +60,24 @@ func securityEventsRetentionCleanup() {
 		return
 	}
 	if overflow := count - max; overflow > 0 {
-		if _, err := database.Exec(`DELETE FROM security_events WHERE id IN (SELECT id FROM security_events ORDER BY id ASC LIMIT ?)`, overflow); err != nil {
-			log.Printf("security events retention: count-based cleanup failed: %v", err)
+		remaining := overflow
+		for remaining > 0 {
+			batch := remaining
+			if batch > securityEventsRetentionDeleteBatch {
+				batch = securityEventsRetentionDeleteBatch
+			}
+			res, err := database.Exec(`DELETE FROM security_events WHERE id IN (SELECT id FROM security_events ORDER BY id ASC LIMIT ?)`, batch)
+			if err != nil {
+				log.Printf("security events retention: count-based cleanup failed: %v", err)
+				break
+			}
+			affected, _ := res.RowsAffected()
+			if affected == 0 {
+				break
+			}
+			remaining -= int(affected)
+			// 批间短暂让出写锁，避免长时间阻塞摄取 INSERT
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 }

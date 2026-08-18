@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"time"
@@ -21,6 +20,12 @@ const ghFastProxy = "https://ghfast.top/"
 
 func ghProxied(rawURL string) string {
 	return ghFastProxy + rawURL
+}
+
+// crsTarballSourceURL 是 CRS 发布包的真实来源 URL（含版本 tag，作为完整性基线
+// 的键）：下载函数与安装校验后的记录调用共用，避免 URL 构造分叉。
+func crsTarballSourceURL(tag string) string {
+	return ghProxied("https://github.com/coreruleset/coreruleset/archive/refs/tags/" + tag + ".tar.gz")
 }
 
 func defaultFetchCRSLatestTag(ctx context.Context) (string, error) {
@@ -47,7 +52,7 @@ func defaultFetchCRSLatestTag(ctx context.Context) (string, error) {
 
 func defaultDownloadCRSTarball(ctx context.Context, tag, destPath string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		ghProxied("https://github.com/coreruleset/coreruleset/archive/refs/tags/"+tag+".tar.gz"), nil)
+		crsTarballSourceURL(tag), nil)
 	if err != nil {
 		return err
 	}
@@ -70,11 +75,6 @@ func defaultDownloadCRSTarball(ctx context.Context, tag, destPath string) error 
 	}
 	if closeErr != nil {
 		return closeErr
-	}
-	// TOFU 完整性校验：无上游官方校验和可钉，首次下载记录 size+SHA256 基线，
-	// 后续同一 tag 内容变化即告警（见 recordDownloadIntegrity）。
-	if ierr := recordDownloadIntegrity(req.URL.String(), destPath, "CRS 规则库"); ierr != nil {
-		log.Printf("crs update: failed to record download integrity: %v", ierr)
 	}
 	return nil
 }
