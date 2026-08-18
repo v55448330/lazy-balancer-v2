@@ -2157,6 +2157,7 @@ const openWizard = async (rule?: Rule) => {
 
 const resetWizard = () => {
   preTcpSnapshot = null
+  userExplicitPort.value = false
   certValidationSessionSeq++
   certValidationSeq++
   resetCertInfo()

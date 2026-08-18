@@ -30,12 +30,22 @@ const tzFormat = (timeZone: string, withTime: boolean): Intl.DateTimeFormat =>
     ...(withTime ? { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false } : {}),
   })
 
+// 模块级 formatter 缓存（S-01）：Dashboard 每轮询对 60 点 × 2 图表调用 tzFormatter，
+// 每 5s 约构造 120 个 Intl.DateTimeFormat（Intl 构造带 locale 数据解析，纯函数重复计算）。
+// key = `${tz}|${withTime}`；只缓存成功构造的实例，非法 tz 回退路径不受影响（回退后同样走缓存）。
+const tzFormatterCache = new Map<string, Intl.DateTimeFormat>()
+
 // 共享的受保护格式化器（D-1）：非法配置时区使 Intl 构造抛 RangeError 时回退 DEFAULT_TZ，
 // warnedInvalidTz 防止 warn 刷屏。所有 tz 格式化调用点必须经此入口，不得直接 new Intl.DateTimeFormat。
 const tzFormatter = (withTime: boolean): Intl.DateTimeFormat => {
   const tz = configTz()
+  const cacheKey = `${tz}|${withTime}`
+  const cached = tzFormatterCache.get(cacheKey)
+  if (cached) return cached
   try {
-    return tzFormat(tz, withTime)
+    const formatter = tzFormat(tz, withTime)
+    tzFormatterCache.set(cacheKey, formatter)
+    return formatter
   } catch {
     if (!warnedInvalidTz) {
       warnedInvalidTz = true

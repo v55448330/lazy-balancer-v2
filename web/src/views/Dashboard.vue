@@ -587,7 +587,9 @@ const ruleHistoryDeltas = computed(() => {
     const previous = ruleHistoryRows.value[index - 1]
     const current = ruleHistoryRows.value[index]
     if (!previous || !current) continue
-    labels.push(formatDate(current.timestamp)?.slice(5, 16) || current.timestamp.slice(5, 16))
+    // 缺 timestamp 的行给空标签而非抛 TypeError（S-02）：formatDate 恒返回 string，
+    // 原 `?.slice(5,16) || current.timestamp.slice(5,16)` 在行缺 timestamp 时触发 undefined.slice。
+    labels.push(current.timestamp ? (formatDate(current.timestamp).slice(5, 16) || '') : '')
     deltas.push(diffCounters(previous, current))
   }
   return { labels, deltas }
