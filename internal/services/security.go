@@ -190,6 +190,10 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 var (
 	customRuleTargets   = map[string]string{"uri": "REQUEST_URI", "args": "ARGS", "body": "REQUEST_BODY", "headers": "REQUEST_HEADERS", "user_agent": "REQUEST_HEADERS:User-Agent"}
 	customRuleOperators = map[string]string{"contains": "@contains", "regex": "@rx", "equals": "@pm", "starts_with": "@beginsWith"}
+	// customRuleValidScores / customRuleValidActions 是内嵌自定义规则允许的分值与
+	// 动作集合，与 handlers 侧 validateSecurityCustomRule 的独立规则口径一致。
+	customRuleValidScores  = map[int]bool{1: true, 3: true, 5: true, 10: true, 20: true}
+	customRuleValidActions = map[string]bool{"block": true, "log": true, "pass": true}
 )
 
 // conditionsEmissionIssue 返回条件列表不可安全发射的原因（"含尾部反斜杠"/"空条件"/
@@ -434,6 +438,35 @@ func crsFilenameToRuleIDRange(s string) string {
 	return s
 }
 
+// ValidateGeoIPCountries 校验 geoip_countries 载荷：必须是 JSON 数组且条目非空；
+// ip2region 已加载时条目必须属于已知省份或"海外"，未知省份在发射端永不匹配，
+// 会静默削弱地域控制。缓存为空（ip2region 未加载）时只查非空，避免启动期误拒。
+func ValidateGeoIPCountries(raw string) error {
+	var entries []string
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return fmt.Errorf("geoip_countries 必须是 JSON 数组")
+	}
+	provinces := GetCachedProvinces()
+	known := make(map[string]bool, len(provinces)+1)
+	for _, p := range provinces {
+		known[p] = true
+	}
+	known["海外"] = true
+	// GetCachedProvinces 在 ip2region 未加载时仅返回 ["海外"]（live 查询的 searcher
+	// 为空），此时无法判定条目归属，跳过成员校验避免启动期误拒。
+	provincesLoaded := len(provinces) > 1
+	for _, entry := range entries {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			return fmt.Errorf("geoip_countries 不能包含空条目")
+		}
+		if provincesLoaded && !known[trimmed] {
+			return fmt.Errorf("geoip_countries 包含未知省份：%q", trimmed)
+		}
+	}
+	return nil
+}
+
 // ValidateCustomRuleConditions 校验单条规则的匹配条件：至少需要一个条件；target/
 // operator 必须在允许集合内，pattern 不得包含会截断 SecRule 行的控制字符或以反
 // 斜杠结尾；否则 emitCustomRules 会静默跳过未知条件导致链式规则断裂或生成畸形
@@ -474,6 +507,15 @@ func ValidateCustomRulesJSON(customRulesJSON string) error {
 		// 占位规则（无条件且无单目标）在发射阶段无任何可用条件，与单条件校验一致按空条件拒绝
 		if len(r.Conditions) == 0 && r.Target == "" && r.Operator == "" {
 			return fmt.Errorf("自定义规则 #%d：自定义规则至少需要一个匹配条件", i+1)
+		}
+		// 内嵌形状的分值与动作直接进入发射动作串：score=-5 会生成
+		// setvar:...=+-5 被 coraza 拒绝，未知 action 会被发射端静默按 pass 处理；
+		// 0/空串视为旧版内嵌数据未提供，发射端按 pass/+0 处理无破坏性，保持放行。
+		if r.Score != 0 && !customRuleValidScores[r.Score] {
+			return fmt.Errorf("自定义规则 #%d 的异常分值无效：%d（可选：1/3/5/10/20）", i+1, r.Score)
+		}
+		if r.Action != "" && !customRuleValidActions[r.Action] {
+			return fmt.Errorf("自定义规则 #%d 的动作无效：%q（可选：block、log、pass）", i+1, r.Action)
 		}
 		if len(r.Conditions) > 0 {
 			if err := ValidateCustomRuleConditions(r.Conditions); err != nil {

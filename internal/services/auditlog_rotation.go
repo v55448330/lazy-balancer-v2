@@ -43,6 +43,10 @@ func rotateAuditLogIfNeeded() {
 	if info.Size() < maxBytes {
 		return
 	}
+	// 轮转前记录已持久化的摄取偏移：tick 读到 EOF 后、复制完成前 Coraza 新写入
+	// 的事件只存在于 .1，活文件截断后 tailer 重置偏移也不会再读 .1，需在归档后
+	// 从 [persistedOffset, .1 size) 区间补采。
+	persistedOffset, _ := securityEventsReadOffset(securityEventsOffsetPath)
 	dir := filepath.Dir(auditLogPath)
 	base := auditLogBaseName()
 	// 先滚动历史副本：.4→.5、.3→.4、.2→.3、.1→.2
@@ -67,6 +71,11 @@ func rotateAuditLogIfNeeded() {
 		return
 	}
 	log.Printf("audit log rotation: rotated %s (%d bytes → %s.1)", auditLogPath, info.Size(), base)
+	// 补采轮转窗口：归档大小可能因复制期间的新写入大于 stat 时的 size，
+	// 因此以 .1 实际大小作为窗口终点，覆盖复制竞态。
+	if err := securityEventsIngestRotatedDelta(persistedOffset); err != nil {
+		log.Printf("audit log rotation: ingest rotated delta failed (events in %s.1 may be lost): %v", base, err)
+	}
 }
 
 // copyAuditLogTo 将 src 完整复制到 dst，并保留原文件权限位；先写临时文件再

@@ -473,6 +473,91 @@ func TestSecurityEventsTickIngestsFixtureLog(t *testing.T) {
 	}
 }
 
+func TestSecurityEventsIngestRotatedDelta_recoversRotationWindowEvents(t *testing.T) {
+	// Given: DB with rule go029.com -> lb_rule1, an audit log with transaction A,
+	// and a tick that ingests A and persists its offset
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_rule1','test rule','http','go029.com',443,1)`); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	// 轮转函数与补采函数读包级路径/阈值，测试注入临时路径与极小阈值
+	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
+	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
+	auditLogSizeBytes = func() int64 { return 1 }
+	t.Cleanup(func() {
+		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
+	})
+	fixtureA := securityEventsFixtureBlocked + "\n"
+	if err := os.WriteFile(logPath, []byte(fixtureA), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rows after first tick=%d, want 1", count)
+	}
+
+	// When: transaction B is appended (the tick never saw it) and rotation runs
+	// — copytruncate moves [A+B] into audit.log.1 and truncates the live file,
+	// leaving B only in the archive
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(securityEventsFixtureUnknownHost + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rotateAuditLogIfNeeded()
+
+	// Then: the rotated-delta ingest recovered B from the archive window
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("rows after rotation=%d, want 2 (A + rotation-window B)", count)
+	}
+	var uri string
+	if err := db.MetricsDB.QueryRow(`SELECT uri FROM security_events WHERE transaction_id='tx-unknown-1'`).Scan(&uri); err != nil {
+		t.Fatal(err)
+	}
+	if uri != "/BlockedPath" {
+		t.Fatalf("recovered window event uri=%q, want /BlockedPath", uri)
+	}
+
+	// And: the tailer still resumes on the truncated live file — a new append C
+	// is ingested by the next tick without duplicating A/B
+	if err := os.WriteFile(logPath, []byte(securityEventsFixtureClean+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("post-rotation tick: %v", err)
+	}
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("rows after post-rotation tick=%d, want 3 (A + B + C)", count)
+	}
+}
+
 func TestSecurityEventsTickDedupesDuplicateTransactionID(t *testing.T) {
 	// Given：审计日志中同一事务出现两次（模拟轮转/重放导致的重复读取）
 	dataDir := t.TempDir()

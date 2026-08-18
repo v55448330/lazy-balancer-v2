@@ -130,6 +130,39 @@ func TestValidateCustomRulesJSON_acceptsIDArrayAndEmbedded(t *testing.T) {
 	}
 }
 
+func TestValidateCustomRulesJSON_rejectsInvalidEmbeddedScoreAndAction(t *testing.T) {
+	// Given: embedded rules whose score/action would corrupt emission
+	// score=-5 会生成 setvar:...=+-5 被 coraza 拒绝；未知动作被发射端静默降级
+	for _, payload := range []string{
+		`[{"id":1,"name":"负分","enabled":true,"action":"block","score":-5,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`,
+		`[{"id":2,"name":"越界分","enabled":true,"action":"block","score":7,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`,
+	} {
+		err := ValidateCustomRulesJSON(payload)
+		if err == nil || !strings.Contains(err.Error(), "异常分值无效") {
+			t.Fatalf("invalid score payload %s must be rejected with 异常分值无效, got %v", payload, err)
+		}
+	}
+	err := ValidateCustomRulesJSON(`[{"id":3,"name":"坏动作","enabled":true,"action":"evil","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`)
+	if err == nil || !strings.Contains(err.Error(), "动作无效") {
+		t.Fatalf("invalid action must be rejected with 动作无效, got %v", err)
+	}
+}
+
+func TestValidateCustomRulesJSON_acceptsValidEmbeddedScoreAndAction(t *testing.T) {
+	// Given: valid scores/actions on both the condition shape and the legacy
+	// single-target shape, plus legacy rules omitting score/action entirely
+	for _, payload := range []string{
+		`[{"id":1,"name":"合法","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`,
+		`[{"id":2,"name":"仅记录","enabled":true,"action":"log","score":1,"conditions":[{"target":"args","operator":"regex","pattern":"a"}]}]`,
+		`[{"id":3,"name":"放行计分","enabled":true,"action":"pass","score":20,"target":"uri","operator":"equals","pattern":"/p"}]`,
+		`[{"id":4,"name":"旧版缺省","enabled":true,"target":"uri","operator":"contains","pattern":"/x"}]`,
+	} {
+		if err := ValidateCustomRulesJSON(payload); err != nil {
+			t.Fatalf("valid embedded rule %s must pass, got %v", payload, err)
+		}
+	}
+}
+
 func TestValidateCustomRuleConditions_rejectsBlankPattern(t *testing.T) {
 	// 空或纯空白的 pattern 会生成 @contains "" 之类匹配一切请求的条件，等于全员拦截
 	for _, pat := range []string{"", "   "} {

@@ -449,6 +449,37 @@ func securityEventsTransactionID(raw json.RawMessage) string {
 	return probe.Transaction.ID
 }
 
+// securityEventsIngestRotatedDelta 补采轮转窗口内未摄取的安全事件：tick 读到 EOF
+// 后、copytruncate 完成前 Coraza 写入的尾部事件只存在于 audit.log.1，活文件截断
+// 后 tailer 重置偏移不会再读 .1，若不补采这些事件会永久丢失。复用
+// securityEventsProcessPass 的解析与 INSERT OR IGNORE 插入，transaction_id 唯一
+// 索引保证与 tick 已摄取内容幂等。
+func securityEventsIngestRotatedDelta(persistedOffset int64) error {
+	if db.DB == nil || db.MetricsDB == nil {
+		return nil
+	}
+	archive := auditLogPath + ".1"
+	info, err := os.Stat(archive)
+	if err != nil {
+		return fmt.Errorf("security events: stat rotated archive: %w", err)
+	}
+	if info.Size() <= persistedOffset {
+		return nil // 归档未包含超出已摄取偏移的内容
+	}
+	f, err := os.Open(archive)
+	if err != nil {
+		return fmt.Errorf("security events: open rotated archive: %w", err)
+	}
+	defer f.Close()
+	rules, bindings, err := securityEventsLoadMappings()
+	if err != nil {
+		return err
+	}
+	t := securityEventsNewTailer(auditLogPath, securityEventsOffsetPath)
+	_, passErr := t.securityEventsProcessPass(f, persistedOffset, rules, bindings)
+	return passErr
+}
+
 // StartSecurityEventsIngestion tails the Coraza WAF audit log and ingests new
 // transactions into security_events until ctx is cancelled. Blocking; call
 // from a goroutine.

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -117,6 +118,44 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 
 func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 	id := c.Param("id")
+	// 被启用策略引用的自定义规则不可删除：静默删除会产生悬空引用，发射阶段规则
+	// 被跳过且无提示，必须先解除绑定。仅 ID 数组形态计入引用（内嵌对象随策略
+	// 存储，删除单条规则不构成悬空）。
+	if idInt, err := strconv.Atoi(id); err == nil && idInt > 0 {
+		var referenced int
+		rows, err := db.DB.Query(`SELECT custom_rules FROM security_policies WHERE enabled=1`)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		for rows.Next() {
+			var raw string
+			if err := rows.Scan(&raw); err != nil {
+				rows.Close()
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+				return
+			}
+			var ids []int
+			if json.Unmarshal([]byte(raw), &ids) != nil {
+				continue // 内嵌对象形状不构成 ID 引用
+			}
+			for _, rid := range ids {
+				if rid == idInt {
+					referenced++
+					break
+				}
+			}
+		}
+		rows.Close()
+		if rowsErr := rows.Err(); rowsErr != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: rowsErr.Error()})
+			return
+		}
+		if referenced > 0 {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该自定义规则正被 %d 个启用的安全策略使用，请先解除绑定", referenced)})
+			return
+		}
+	}
 	result, err := db.DB.Exec("DELETE FROM security_custom_rules WHERE id=?", id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -326,6 +365,36 @@ func (h *Handlers) GetSecurityPolicy(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"policy": newSecurityPolicyDetail(&p), "bindings": bindings}})
 }
 
+// validateSecurityPolicyReferences 校验策略引用的拦截页面与自定义规则存在性：
+// block_page_id 非 0 时必须在 security_block_pages 中存在，否则拦截响应静默退化
+// 回 Caddy 默认页面；custom_rules 为 ID 数组时每个 ID 必须存在，悬空引用在发射
+// 阶段被静默跳过。内嵌对象形状随策略存储，不在此校验。返回非空 msg 表示校验
+// 失败（400），返回 err 表示数据库错误（500）。
+func validateSecurityPolicyReferences(blockPageID int, customRulesJSON string) (string, error) {
+	if blockPageID != 0 {
+		var exists int
+		if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_block_pages WHERE id=?", blockPageID).Scan(&exists); err != nil {
+			return "", err
+		}
+		if exists == 0 {
+			return fmt.Sprintf("拦截页面不存在（id=%d）", blockPageID), nil
+		}
+	}
+	var ids []int
+	if customRulesJSON != "" && json.Unmarshal([]byte(customRulesJSON), &ids) == nil {
+		for _, id := range ids {
+			var exists int
+			if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_custom_rules WHERE id=?", id).Scan(&exists); err != nil {
+				return "", err
+			}
+			if exists == 0 {
+				return fmt.Sprintf("自定义规则不存在（id=%d）", id), nil
+			}
+		}
+	}
+	return "", nil
+}
+
 func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	var req models.CreateSecurityPolicyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -375,7 +444,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if req.GeoIPMode == "" {
 		req.GeoIPMode = "deny"
 	}
-	if err := validateGeoIPCountries(req.GeoIPCountries); err != nil {
+	if err := services.ValidateGeoIPCountries(req.GeoIPCountries); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -395,6 +464,13 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	}
 	if err := services.ValidateCustomRulesJSON(req.CustomRules); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	if msg, err := validateSecurityPolicyReferences(req.BlockPageID, req.CustomRules); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	} else if msg != "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
 		return
 	}
 	enabled := true
@@ -503,7 +579,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		return
 	}
 	if req.GeoIPCountries != nil {
-		if err := validateGeoIPCountries(*req.GeoIPCountries); err != nil {
+		if err := services.ValidateGeoIPCountries(*req.GeoIPCountries); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
@@ -513,6 +589,15 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
+	}
+	// 引用存在性校验：显式提供的 block_page_id / custom_rules（ID 数组）必须指向
+	// 存在的拦截页/规则；未提供的字段不参与校验（保持存量列不变）。
+	if msg, err := validateSecurityPolicyReferences(derefInt(req.BlockPageID), derefStr(req.CustomRules)); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	} else if msg != "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
+		return
 	}
 	// crs_rule_groups / crs_excluded_rules：显式空串按 Create 口径归一为 "[]"，
 	// 非空值必须是字符串数组的 JSON，防止任意串直写列后在发射端解析失败。
@@ -1335,20 +1420,6 @@ func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string, blockStatusC
 	return nil
 }
 
-// validateGeoIPCountries ensures geoip_countries is a JSON array of non-empty province names / "海外".
-func validateGeoIPCountries(raw string) error {
-	var entries []string
-	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
-		return fmt.Errorf("geoip_countries 必须是 JSON 数组")
-	}
-	for _, entry := range entries {
-		if strings.TrimSpace(entry) == "" {
-			return fmt.Errorf("geoip_countries 不能包含空条目")
-		}
-	}
-	return nil
-}
-
 func validateIPCIDRList(field, raw string) error {
 	if raw == "" {
 		return nil
@@ -1553,6 +1624,13 @@ func categorizeCRSFile(filename string) string {
 func derefInt(p *int) int {
 	if p == nil {
 		return 0
+	}
+	return *p
+}
+
+func derefStr(p *string) string {
+	if p == nil {
+		return ""
 	}
 	return *p
 }
