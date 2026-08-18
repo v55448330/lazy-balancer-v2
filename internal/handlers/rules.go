@@ -427,6 +427,47 @@ func enabledRuleDomainConflict(domain string, listenPort int, excludeCaddyID str
 	return queryRuleDomainConflict(domain, listenPort, excludeCaddyID, " AND enabled = 1")
 }
 
+// queryRedirectShadowConflict 检查 80 端口跳转遮蔽：启用中的 TLS+HTTP 跳转规则会在
+// 80 端口服务器头部生成 terminal 跳转路由（caddy.go redirectRoutes），同域名直接
+// 监听 80 的规则会被遮蔽为死规则。两个方向同判：保存 80 端口规则时查跳转规则占用；
+// 保存/启用 TLS+跳转规则时查 80 端口规则占用。返回冲突规则描述与冲突域名。
+func queryRedirectShadowConflict(domain string, listenPort int, enableTLS, tlsHTTPRedirect bool, excludeCaddyID string) (string, string, error) {
+	candidates := normalizedRuleDomains(domain)
+	if len(candidates) == 0 {
+		return "", "", nil
+	}
+	wanted := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		wanted[candidate] = struct{}{}
+	}
+	var rows *sql.Rows
+	var err error
+	switch {
+	case listenPort == 80:
+		rows, err = db.DB.Query("SELECT caddy_id, name, COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND enabled=1 AND enable_tls=1 AND tls_http_redirect=1 AND caddy_id != ?", excludeCaddyID)
+	case enableTLS && tlsHTTPRedirect:
+		rows, err = db.DB.Query("SELECT caddy_id, name, COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND enabled=1 AND listen_port=80 AND caddy_id != ?", excludeCaddyID)
+	default:
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var otherID, otherName, otherDomain string
+		if err := rows.Scan(&otherID, &otherName, &otherDomain); err != nil {
+			return "", "", err
+		}
+		for _, existing := range normalizedRuleDomains(otherDomain) {
+			if _, hit := wanted[existing]; hit {
+				return otherName + "（" + otherID + "）", existing, nil
+			}
+		}
+	}
+	return "", "", rows.Err()
+}
+
 func ruleDomainConflict(domain string, listenPort int, excludeCaddyID string) (bool, error) {
 	// 仅统计启用中的规则：禁用规则不占用域名，创建/更新时不应被其阻塞；启用时
 	// 仍由 enabledRuleDomainConflict 二次把关，避免两条禁用规则同时启用产生冲突。
@@ -567,9 +608,21 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名已被其他 HTTP/HTTPS 规则使用"})
 			return
 		}
+		shadowRule, shadowDomain, err := queryRedirectShadowConflict(req.Domain, req.ListenPort, req.EnableTLS, req.TLSHTTPRedirect, "")
+		if err != nil {
+			log.Printf("CreateRule redirect shadow query failed for domain=%s: %v", req.Domain, err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
+			return
+		}
+		if shadowRule != "" {
+			if req.ListenPort == 80 {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已被规则 %s 的 HTTPS 跳转占用（跳转在 80 端口优先生效，保存后本规则将不可达）", shadowDomain, shadowRule)})
+			} else {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已有规则 %s 直接监听 80 端口，开启 HTTP 转 HTTPS 跳转会使其不可达，请先调整该规则", shadowDomain, shadowRule)})
+			}
+			return
+		}
 	}
-
-	// Set defaults before validation
 	if req.Strategy == "" {
 		req.Strategy = "weighted_round_robin"
 	}
@@ -1106,12 +1159,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	protocolChanged := requestedProtocol != "" && requestedProtocol != existingRule.Protocol
-	portChanged := req.ListenPort != existingRule.ListenPort
-	isHTTPUpgrade := existingRule.ListenPort == 80 && req.ListenPort == 443 && req.EnableTLS != nil && *req.EnableTLS
-	if portChanged && !protocolChanged && !isHTTPUpgrade {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "仅协议切换时允许迁移监听端口"})
-		return
-	}
 
 	if protocolChanged {
 		zero, disabled := 0, false
@@ -1178,6 +1225,20 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 		if existing {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名已被其他 HTTP/HTTPS 规则使用"})
+			return
+		}
+		shadowRule, shadowDomain, err := queryRedirectShadowConflict(req.Domain, req.ListenPort, *req.EnableTLS, *req.TLSHTTPRedirect, caddyID)
+		if err != nil {
+			log.Printf("UpdateRule redirect shadow query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
+			return
+		}
+		if shadowRule != "" {
+			if req.ListenPort == 80 {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已被规则 %s 的 HTTPS 跳转占用（跳转在 80 端口优先生效，保存后本规则将不可达）", shadowDomain, shadowRule)})
+			} else {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已有规则 %s 直接监听 80 端口，开启 HTTP 转 HTTPS 跳转会使其不可达，请先调整该规则", shadowDomain, shadowRule)})
+			}
 			return
 		}
 	}
@@ -2074,12 +2135,12 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 
-	var originalEnabled, enableTLS bool
+	var originalEnabled, enableTLS, tlsHTTPRedirect bool
 	var ruleProtocol, ruleDomain, tlsSource string
 	var rulePort, caProviderID int
 	err := db.DB.QueryRow(`SELECT COALESCE(enabled,1), COALESCE(protocol,''), COALESCE(domain,''), listen_port,
-		COALESCE(tls_source,''), COALESCE(enable_tls,0), COALESCE(ca_provider_id,0)
-		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&originalEnabled, &ruleProtocol, &ruleDomain, &rulePort, &tlsSource, &enableTLS, &caProviderID)
+		COALESCE(tls_source,''), COALESCE(enable_tls,0), COALESCE(tls_http_redirect,0), COALESCE(ca_provider_id,0)
+		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&originalEnabled, &ruleProtocol, &ruleDomain, &rulePort, &tlsSource, &enableTLS, &tlsHTTPRedirect, &caProviderID)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return
@@ -2125,6 +2186,20 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		}
 		if conflict {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已被其他启用中的规则使用，无法启用", ruleDomain)})
+			return
+		}
+		shadowRule, shadowDomain, err := queryRedirectShadowConflict(ruleDomain, rulePort, enableTLS, tlsHTTPRedirect, caddyID)
+		if err != nil {
+			log.Printf("EnableRule redirect shadow query failed for caddy_id=%s domain=%s: %v", caddyID, ruleDomain, err)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
+			return
+		}
+		if shadowRule != "" {
+			if rulePort == 80 {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已被规则 %s 的 HTTPS 跳转占用（跳转在 80 端口优先生效，启用后本规则将不可达），无法启用", shadowDomain, shadowRule)})
+			} else {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已有规则 %s 直接监听 80 端口，启用 HTTP 转 HTTPS 跳转会使其不可达，请先调整该规则", shadowDomain, shadowRule)})
+			}
 			return
 		}
 	}
