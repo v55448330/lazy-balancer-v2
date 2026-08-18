@@ -123,11 +123,13 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if switches.WafFiles && wafFilesRefDiffers(snapshot.WafFiles) {
 		bundle, ferr := s.fetchWafFiles(ctx, snapshot.WafFiles)
 		if ferr != nil {
-			Logf("error", "同步 WAF 规则文件失败（数据库版本行已同步）: %v", ferr)
-		} else if changed, aerr := ApplyWafFileBundle(bundle); aerr != nil {
-			Logf("error", "落盘同步 WAF 规则文件失败: %v", aerr)
-		} else if changed {
-			RecordAuditLog("system", "同步", "WAF 规则文件", "CRS 规则/IP2Region 数据库随集群同步更新", "")
+			Logf("error", "同步安全数据失败（数据库版本行已同步）: %v", ferr)
+			RecordAuditLog("system", "同步失败", "安全数据", fmt.Sprintf("拉取安全数据失败: %v", ferr), "")
+		} else if crsChanged, xdbChanged, aerr := ApplyWafFileBundle(bundle); aerr != nil {
+			Logf("error", "落盘同步安全数据失败: %v", aerr)
+			RecordAuditLog("system", "同步失败", "安全数据", fmt.Sprintf("落盘安全数据失败: %v", aerr), "")
+		} else if crsChanged || xdbChanged {
+			RecordAuditLog("system", "同步", "安全数据", wafBundleSyncDetail(bundle, crsChanged, xdbChanged), "")
 		}
 	}
 	// Caddy 重载必须在事务提交之后：buildWafHandler 等安全配置读取走 db.DB，
@@ -163,6 +165,26 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	}
 	RecordAuditLog("system", "同步", "集群同步", FormatAuditDetail(fmt.Sprintf("应用版本：%d", snapshot.Version), fmt.Sprintf("规则 %d 条", len(snapshot.Rules)), fmt.Sprintf("用户 %d 个", len(snapshot.Users)), fmt.Sprintf("密钥 %d 个", len(snapshot.APIKeys)), fmt.Sprintf("证书 %d 张", len(snapshot.Certs)), "基本设置：已同步", fmt.Sprintf("Caddy 全局配置：%s", caddySync)), "")
 	return nil
+}
+
+// wafBundleSyncDetail 按组件实际变化组合同步结果文案：更新的组件带版本号，
+// 未变化的标注已是最新——操作日志读者能直接看出本次同步更新了什么。
+func wafBundleSyncDetail(bundle *WafFileBundle, crsChanged, xdbChanged bool) string {
+	crsPart := "CRS 规则已是最新"
+	if crsChanged {
+		crsPart = "CRS 规则已更新"
+		if bundle.CRSVersion != "" {
+			crsPart = "CRS 规则已更新至 " + bundle.CRSVersion
+		}
+	}
+	xdbPart := "IP2Region 数据库已是最新"
+	if xdbChanged {
+		xdbPart = "IP2Region 数据库已更新"
+		if bundle.IP2RegionTag != "" {
+			xdbPart = "IP2Region 数据库已更新至 " + bundle.IP2RegionTag
+		}
+	}
+	return crsPart + "；" + xdbPart
 }
 
 func (s *SyncService) restoreSnapshotArtifacts(previous, current models.ClusterSnapshot) error {

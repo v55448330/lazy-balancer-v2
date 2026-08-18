@@ -117,21 +117,22 @@ func wafFilesRefMatchesBundle(r *models.ClusterWafFilesRef, b *WafFileBundle) bo
 
 // ApplyWafFileBundle writes the bundle's files to disk when they differ from
 // what is already live. It is idempotent: matching content is a no-op, so a
-// re-sync without rule changes costs only a hash comparison.
-func ApplyWafFileBundle(bundle *WafFileBundle) (changed bool, err error) {
+// re-sync without rule changes costs only a hash comparison. Per-component
+// changed flags let callers report exactly which dataset was updated.
+func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err error) {
 	if bundle == nil {
-		return false, nil
+		return false, false, nil
 	}
 	if len(bundle.CRSTarGzB64) > 0 {
 		liveSum, liveErr := tarGzDirSum(crsLiveDir)
 		if liveErr != nil || liveSum != bundle.CRSSha256 {
 			if err := untarGzTo(bundle.CRSTarGzB64, crsLiveDir); err != nil {
-				return changed, fmt.Errorf("写入同步 CRS 规则文件: %w", err)
+				return crsChanged, xdbChanged, fmt.Errorf("写入同步 CRS 规则文件: %w", err)
 			}
 			if bundle.CRSVersion != "" {
 				_ = os.WriteFile(filepath.Join(crsLiveDir, "VERSION"), []byte(bundle.CRSVersion), 0644)
 			}
-			changed = true
+			crsChanged = true
 		}
 	}
 	if len(bundle.XdbB64) > 0 {
@@ -139,18 +140,18 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (changed bool, err error) {
 		if liveSum != bundle.IP2RegionSha {
 			tmp := ip2regionLivePath + ".sync"
 			if err := os.WriteFile(tmp, bundle.XdbB64, 0644); err != nil {
-				return changed, fmt.Errorf("写入同步 IP2Region 数据库: %w", err)
+				return crsChanged, xdbChanged, fmt.Errorf("写入同步 IP2Region 数据库: %w", err)
 			}
 			if err := os.Rename(tmp, ip2regionLivePath); err != nil {
-				return changed, fmt.Errorf("落盘同步 IP2Region 数据库: %w", err)
+				return crsChanged, xdbChanged, fmt.Errorf("落盘同步 IP2Region 数据库: %w", err)
 			}
 			if bundle.IP2RegionTag != "" {
 				_ = os.WriteFile(ip2regionLivePath+".version", []byte(bundle.IP2RegionTag), 0644)
 			}
-			changed = true
+			xdbChanged = true
 		}
 	}
-	return changed, nil
+	return crsChanged, xdbChanged, nil
 }
 
 // tarGzDir deterministically archives dir (all contents, sorted, zeroed

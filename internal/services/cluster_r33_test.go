@@ -112,3 +112,28 @@ func TestSyncService_bumpRegistrationConfirmFailure_terminalWriteViaHelper(t *te
 		t.Fatalf("cluster_token=%q, want cleared", clusterToken)
 	}
 }
+
+func TestWafBundleSyncDetail_reportsPerComponentOutcome(t *testing.T) {
+	bundle := &WafFileBundle{CRSVersion: "v4.28.0", IP2RegionTag: "v3.17.0"}
+	tests := []struct {
+		name                   string
+		crsChanged, xdbChanged bool
+		want                   string
+	}{
+		{"both updated", true, true, "CRS 规则已更新至 v4.28.0；IP2Region 数据库已更新至 v3.17.0"},
+		{"only crs updated", true, false, "CRS 规则已更新至 v4.28.0；IP2Region 数据库已是最新"},
+		{"only xdb updated", false, true, "CRS 规则已是最新；IP2Region 数据库已更新至 v3.17.0"},
+		{"version missing falls back to bare update", true, false, "CRS 规则已更新；IP2Region 数据库已是最新"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := bundle
+			if tt.name == "version missing falls back to bare update" {
+				b = &WafFileBundle{}
+			}
+			if got := wafBundleSyncDetail(b, tt.crsChanged, tt.xdbChanged); got != tt.want {
+				t.Fatalf("detail=%q, want %q", got, tt.want)
+			}
+		})
+	}
+}

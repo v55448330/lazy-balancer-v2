@@ -36,13 +36,13 @@ func TestWafFileBundleRoundTrip(t *testing.T) {
 		t.Fatalf("bundle must match its ref")
 	}
 
-	// First apply to an empty live dir → changed
+	// First apply to an empty live dir → both components changed
 	os.RemoveAll(filepath.Join(src, "crs"))
 	os.MkdirAll(filepath.Join(src, "crs"), 0755)
 	os.Remove(ip2regionLivePath)
-	changed, err := ApplyWafFileBundle(bundle)
-	if err != nil || !changed {
-		t.Fatalf("first apply changed=%v err=%v", changed, err)
+	crsChanged, xdbChanged, err := ApplyWafFileBundle(bundle)
+	if err != nil || !crsChanged || !xdbChanged {
+		t.Fatalf("first apply crsChanged=%v xdbChanged=%v err=%v", crsChanged, xdbChanged, err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(rules, "a.conf")); string(got) != "SecRule X 1" {
 		t.Fatalf("rules not restored: %q", got)
@@ -55,8 +55,8 @@ func TestWafFileBundleRoundTrip(t *testing.T) {
 	if wafFilesRefDiffers(ref) {
 		t.Fatalf("identical files must not be re-fetched")
 	}
-	changed, err = ApplyWafFileBundle(bundle)
-	if err != nil || changed {
-		t.Fatalf("idempotent apply changed=%v err=%v", changed, err)
+	crsChanged, xdbChanged, err = ApplyWafFileBundle(bundle)
+	if err != nil || crsChanged || xdbChanged {
+		t.Fatalf("idempotent apply crsChanged=%v xdbChanged=%v err=%v", crsChanged, xdbChanged, err)
 	}
 }
