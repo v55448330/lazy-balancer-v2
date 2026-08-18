@@ -1173,17 +1173,33 @@ func TestGenerateSingleRuleCaddyConfig_serverTokensHiddenDefersServerHeaderDelet
 	if !ok {
 		t.Fatalf("unexpected route handlers: %#v", route["handle"])
 	}
-	var headersOps map[string]interface{}
-	for _, handlerValue := range handlers {
+	headersIndex, proxyIndex := -1, -1
+	for i, handlerValue := range handlers {
 		handler := mustMap(t, handlerValue, "handler")
-		if handler["handler"] == "headers" {
-			headersOps = handler
-			break
+		switch handler["handler"] {
+		case "headers":
+			if headersIndex < 0 {
+				headersIndex = i
+			}
+		case "reverse_proxy":
+			if proxyIndex < 0 {
+				proxyIndex = i
+			}
 		}
 	}
-	if headersOps == nil {
+	if headersIndex < 0 {
 		t.Fatalf("server_tokens_hidden must emit a headers handler: %#v", route["handle"])
 	}
+	if proxyIndex < 0 {
+		t.Fatalf("route must emit a reverse_proxy handler: %#v", route["handle"])
+	}
+	// headers 必须位于 reverse_proxy 之前（重构护栏）：reverse_proxy 是终结
+	// handler，排在它之后的 handler 永不执行，deferred 删除所依赖的响应包裹
+	// 也不会被安装，Server 头隐藏将整体失效。
+	if headersIndex >= proxyIndex {
+		t.Fatalf("headers handler (index %d) must precede reverse_proxy (index %d): %#v", headersIndex, proxyIndex, route["handle"])
+	}
+	headersOps := mustMap(t, handlers[headersIndex], "headers handler")
 	response := mustMap(t, headersOps["response"], "headers response ops")
 	assertEqual(t, response["deferred"], true)
 	assertEqual(t, response["delete"], []string{"Server"})

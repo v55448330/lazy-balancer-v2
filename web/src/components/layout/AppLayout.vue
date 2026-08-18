@@ -152,7 +152,7 @@
           <el-input v-model="profileForm.display_name" :disabled="isReadOnly" placeholder="选填" maxlength="50" />
         </el-form-item>
         <el-form-item label="新密码">
-          <el-input v-model="profileForm.password" :disabled="isReadOnly" type="password" minlength="6" placeholder="如不修改请留空（至少6位）" show-password />
+          <el-input v-model="profileForm.password" :disabled="isReadOnly" type="password" minlength="6" maxlength="72" placeholder="如不修改请留空（至少6位）" show-password />
         </el-form-item>
       </el-form>
       <template #footer>

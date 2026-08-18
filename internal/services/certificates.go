@@ -368,6 +368,7 @@ func (s *CertificateService) Start() {
 			s.requeueWaitingCAJobs()
 		case <-reconcileTicker.C:
 			reconcileMissingCertFiles(db.DB)
+			sweepOrphanedCertJobs(s.ctx)
 		case <-s.ctx.Done():
 			return
 		}
@@ -539,9 +540,7 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 			continue
 		}
 		if job.applicable {
-			canonicalRule, ruleErr := CanonicalACMEDomains(job.ruleDomain)
-			canonicalJob, jobErr := CanonicalACMEDomains(job.domain)
-			job.applicable = ruleErr == nil && jobErr == nil && canonicalRule == canonicalJob
+			job.applicable = certJobRuleApplicable(job.applicable, job.ruleDomain, job.domain)
 		}
 		if !job.applicable {
 			if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "disabled", map[string]any{"message": "关联规则已不再使用当前 ACME 证书任务"}); err != nil {
@@ -597,6 +596,76 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 		}
 	}
 	return nil
+}
+
+// certJobRuleApplicable 判断证书任务是否仍被规则引用：规则存在、启用、开启 TLS 且
+// 证书来源为 acme_dns（SQL CASE 结果，即 ruleBound），且任务域名与规则域名规范化后一致。
+func certJobRuleApplicable(ruleBound bool, ruleDomain, jobDomain string) bool {
+	if !ruleBound {
+		return false
+	}
+	canonicalRule, ruleErr := CanonicalACMEDomains(ruleDomain)
+	canonicalJob, jobErr := CanonicalACMEDomains(jobDomain)
+	return ruleErr == nil && jobErr == nil && canonicalRule == canonicalJob
+}
+
+// sweepOrphanedCertJobs 禁用规则已不再引用的非终态证书任务（域名迁移/规则停用/删除后
+// 遗留，启动恢复 requeueNonTerminalCertJobs 只在重启时处理一次），随 6 小时对账巡检执行，
+// 避免孤儿任务滞留到重启或被 waiting_ca 重排队白白签发。
+func sweepOrphanedCertJobs(ctx context.Context) {
+	rows, err := db.DB.QueryContext(ctx, `
+		SELECT j.id, j.rule_id, j.status, COALESCE(j.domain,''), COALESCE(r.domain,''),
+		       CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' THEN 1 ELSE 0 END
+		FROM cert_jobs j
+		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
+		WHERE j.status != 'disabled'
+	`)
+	if err != nil {
+		log.Printf("cert sweep: query certificate jobs failed: %v", err)
+		return
+	}
+	type orphanCandidate struct {
+		id         int
+		ruleID     string
+		status     string
+		jobDomain  string
+		ruleDomain string
+		ruleBound  bool
+	}
+	var orphans []orphanCandidate
+	for rows.Next() {
+		var job orphanCandidate
+		if err := rows.Scan(&job.id, &job.ruleID, &job.status, &job.jobDomain, &job.ruleDomain, &job.ruleBound); err != nil {
+			rows.Close()
+			log.Printf("cert sweep: scan certificate job failed: %v", err)
+			return
+		}
+		if JobIsTerminal(job.status) {
+			continue
+		}
+		if !certJobRuleApplicable(job.ruleBound, job.ruleDomain, job.jobDomain) {
+			orphans = append(orphans, job)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		log.Printf("cert sweep: iterate certificate jobs failed: %v", err)
+		return
+	}
+	rows.Close()
+	for _, job := range orphans {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "disabled", map[string]any{"message": "关联规则已不再使用当前 ACME 证书任务"}); err != nil {
+			if errors.Is(err, ErrJobTransitionConflict) {
+				continue
+			}
+			log.Printf("cert sweep: disable orphaned certificate job %d failed: %v", job.id, err)
+			continue
+		}
+		RecordAuditLog("system", "禁用", "证书签发任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("runtime_sweep")), "")
+	}
 }
 
 func (s *CertificateService) Stop() {

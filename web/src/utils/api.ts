@@ -129,10 +129,23 @@ service.interceptors.response.use(
     if (axios.isCancel(error)) return Promise.reject(error)
     const status = error.response?.status
     const backendMsg = error.response?.data?.message ?? (await blobErrorMessage(error.response?.data))
-    const message = backendMsg
-      || (!error.response && /timeout/i.test(String(error.message)) ? '请求超时，请稍后重试' : '')
-      || error.message
-      || '网络错误'
+    // 网络层失败（断网/DNS/CORS）没有任何响应体，502/504 网关错误返回的是 HTML
+    // 而非后端 JSON，两者都会把 axios 英文原文（"Network Error" /
+    // "Request failed with status code 502"）直接抛给用户，这里统一映射为
+    // 中文提示；后端 message 与 Blob 导出错误路径保持最高优先级。
+    let fallback = ''
+    if (!error.response) {
+      fallback = /timeout/i.test(String(error.message)) ? '请求超时，请稍后重试' : '网络连接失败，请检查网络连接'
+    } else if (!backendMsg) {
+      if (status === 502 || status === 503 || status === 504) {
+        fallback = '服务暂时不可用，请稍后重试'
+      } else if (status === 500) {
+        fallback = '服务器内部错误'
+      } else {
+        fallback = error.message
+      }
+    }
+    const message = backendMsg || fallback || '网络错误'
     const isLoginRequest = error.config?.url?.includes('/auth/login') || error.config?.url?.includes('/auth/ticket-login')
     if (status === 401) {
       if (!isLoginRequest) {

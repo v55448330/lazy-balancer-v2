@@ -19,6 +19,9 @@ import (
 type ruleFeatureInput struct {
 	Protocol                   string
 	Strategy                   string
+	ListenPort                 int
+	EnableTLS                  bool
+	TLSHTTPRedirect            bool
 	DynamicDNS                 bool
 	EnabledUpstreamCount       int
 	HealthCheckInterval        int
@@ -50,6 +53,9 @@ func createRuleFeatures(req models.CreateRuleRequest) ruleFeatureInput {
 	return ruleFeatureInput{
 		Protocol:                   req.Protocol,
 		Strategy:                   req.Strategy,
+		ListenPort:                 req.ListenPort,
+		EnableTLS:                  req.EnableTLS,
+		TLSHTTPRedirect:            req.TLSHTTPRedirect,
 		DynamicDNS:                 req.DynamicDNS,
 		EnabledUpstreamCount:       enabledUpstreams,
 		HealthCheckInterval:        req.HealthCheckInterval,
@@ -88,6 +94,9 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 	input := ruleFeatureInput{
 		Protocol:                   existing.Protocol,
 		Strategy:                   req.Strategy,
+		ListenPort:                 req.ListenPort,
+		EnableTLS:                  existing.EnableTLS,
+		TLSHTTPRedirect:            existing.TLSHTTPRedirect,
 		DynamicDNS:                 existing.DynamicDNS,
 		EnabledUpstreamCount:       enabledUpstreams,
 		HealthCheckInterval:        req.HealthCheckInterval,
@@ -106,6 +115,12 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 	}
 	if req.DynamicDNS != nil {
 		input.DynamicDNS = *req.DynamicDNS
+	}
+	if req.EnableTLS != nil {
+		input.EnableTLS = *req.EnableTLS
+	}
+	if req.TLSHTTPRedirect != nil {
+		input.TLSHTTPRedirect = *req.TLSHTTPRedirect
 	}
 	if req.EnableCompress != nil {
 		input.EnableCompress = *req.EnableCompress
@@ -223,6 +238,11 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 	if input.DynamicDNS && input.EnabledUpstreamCount > 1 {
 		return fmt.Errorf("动态上游模式仅允许一个启用的上游服务器，当前有 %d 个", input.EnabledUpstreamCount)
 	}
+	// C-F2: 80 端口 + TLS 跳转自环：跳转目标 https://host:80 与来源同为 80 端口，
+	// 请求会被跳回自身监听器形成循环，必须在保存前拒绝。
+	if input.Protocol == "http" && input.ListenPort == 80 && input.EnableTLS && input.TLSHTTPRedirect {
+		return fmt.Errorf("80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转")
+	}
 	if input.Protocol == "tcp" {
 		if input.CustomRoutesEnabled || len(input.PathRules) > 0 {
 			return fmt.Errorf("TCP 规则不支持自定义路径规则")
@@ -235,6 +255,9 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		return fmt.Errorf("自定义路径规则未启用，不能提交路径规则")
 	}
 	seenPaths := make(map[string]int, len(input.PathRules))
+	// C-F3: prefix 会渲染为 [路径, 路径/*] 双 matcher，同一路径再配 exact 必被遮蔽
+	// （路由按 SortOrder 排序、首条终结匹配），在保存前整组拒绝。
+	seenPathMatchTypes := make(map[string]string, len(input.PathRules))
 	for index, pathRule := range input.PathRules {
 		if !strings.HasPrefix(pathRule.Path, "/") {
 			return fmt.Errorf("第 %d 条路径规则的路径必须以 / 开头", index+1)
@@ -251,6 +274,16 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		case "prefix", "exact":
 		default:
 			return fmt.Errorf("第 %d 条路径规则的匹配类型只能是 prefix 或 exact", index+1)
+		}
+		normalizedPath := strings.TrimSpace(pathRule.Path)
+		if seenMatchType, exists := seenPathMatchTypes[normalizedPath]; exists && seenMatchType != pathRule.MatchType {
+			return fmt.Errorf("第 %d 条路径规则：同一路径同时存在前缀与精确匹配规则会造成遮蔽，请调整", index+1)
+		}
+		seenPathMatchTypes[normalizedPath] = pathRule.MatchType
+		// C-F4: upstreams 为空数组时生成阶段无回退（nil 才继承主上游），
+		// buildHTTPHandleChain 会因“无启用上游”失败并回滚整份配置，必须在保存前拒绝。
+		if pathRule.Upstreams != nil && len(pathRule.Upstreams) == 0 {
+			return fmt.Errorf("第 %d 条路径规则至少需要配置一个上游", index+1)
 		}
 		for upstreamIndex, upstream := range pathRule.Upstreams {
 			if strings.TrimSpace(upstream.Address) == "" {
@@ -578,6 +611,10 @@ func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 		return fmt.Errorf("规则不存在")
 	}
 	rule := rules[0]
+	// C-F2: 与 validateRuleFeatures 同口径，兜住历史存量/导入的 80 端口 + TLS 跳转自环规则。
+	if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS && rule.TLSHTTPRedirect {
+		return &configValidationError{message: "80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转"}
+	}
 	if rule.Protocol == "http" && rule.EnableTLS && rule.TLSSource != "manual" && rule.TLSSource != "acme_dns" {
 		return &configValidationError{message: "启用 TLS 时必须选择证书来源（manual 或 acme_dns）"}
 	}

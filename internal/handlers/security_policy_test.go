@@ -387,6 +387,37 @@ func TestUpdateSecurityPolicy_rejectsBlankEnumString(t *testing.T) {
 	}
 }
 
+func TestUpdateSecurityPolicy_rejectsBlankName(t *testing.T) {
+	// Given a named policy
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	id := createTestPolicy(t, router, map[string]any{"name": "原名策略"})
+
+	// When the update sends an explicit empty-string name
+	recorder := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"name": ""})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("blank name must be rejected with 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "策略名称不能为空") {
+		t.Fatalf("blank name rejection message mismatch, got %s", body)
+	}
+
+	// And a whitespace-only name is rejected too
+	recorder = putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"name": "   "})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("whitespace name must be rejected with 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	// And the stored name is untouched by the rejected requests
+	var name string
+	if err := db.DB.QueryRow("SELECT name FROM security_policies WHERE id=?", id).Scan(&name); err != nil {
+		t.Fatalf("read back name: %v", err)
+	}
+	if name != "原名策略" {
+		t.Fatalf("rejected updates must not touch name, got %q", name)
+	}
+}
+
 func TestUpdateSecurityPolicy_omittedModeLeavesFieldUnchanged(t *testing.T) {
 	// Given a policy in blocking mode
 	setupSecurityPolicyTestDB(t)
@@ -666,6 +697,60 @@ func TestListSecurityPolicies_summaryCarriesWAFCheckResponse(t *testing.T) {
 	}
 	if !resp.Data[0].WAFCheckResponse {
 		t.Fatalf("summary.waf_check_response = false, want true in %s", recorder.Body.String())
+	}
+}
+
+func TestUpdateSecurityPolicy_crsFieldsNormalizeAndValidate(t *testing.T) {
+	// Given a policy created with populated CRS fields
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	id := createTestPolicy(t, router, map[string]any{
+		"name":               "CRS字段策略",
+		"crs_rule_groups":    `["REQUEST-942"]`,
+		"crs_excluded_rules": `["942100"]`,
+	})
+
+	// When explicit empty strings arrive，Then they normalize to "[]"（镜像 Create 的 ""→"[]" 归一，
+	// 避免空串直写列后在发射端解析失败）
+	recorder := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{
+		"crs_rule_groups":    "",
+		"crs_excluded_rules": "  ",
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("empty-string update status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var groups, excluded string
+	if err := db.DB.QueryRow("SELECT crs_rule_groups, crs_excluded_rules FROM security_policies WHERE id=?", id).Scan(&groups, &excluded); err != nil {
+		t.Fatalf("read back policy: %v", err)
+	}
+	if groups != "[]" || excluded != "[]" {
+		t.Fatalf("normalized columns = (%q,%q), want ([],[])", groups, excluded)
+	}
+
+	// And a non-JSON-array payload is rejected with 400
+	recorder = putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"crs_rule_groups": "not-json"})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid crs_rule_groups must 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "需为 JSON 数组字符串") {
+		t.Fatalf("rejection must explain the JSON-array requirement: %s", recorder.Body.String())
+	}
+	// 数字数组同样不是字符串数组，必须拒绝
+	recorder = putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"crs_excluded_rules": `[942100]`})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("numeric-array crs_excluded_rules must 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	// And a valid array persists as-is
+	recorder = putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"crs_rule_groups": `["REQUEST-941","REQUEST-933"]`})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("valid update status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if err := db.DB.QueryRow("SELECT crs_rule_groups FROM security_policies WHERE id=?", id).Scan(&groups); err != nil {
+		t.Fatalf("read back groups: %v", err)
+	}
+	if groups != `["REQUEST-941","REQUEST-933"]` {
+		t.Fatalf("crs_rule_groups = %q, want stored as-is", groups)
 	}
 }
 

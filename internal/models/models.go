@@ -362,7 +362,7 @@ type LoginResponse struct {
 
 type CreateUserRequest struct {
 	Username    string `json:"username" binding:"required,min=3,max=50"`
-	Password    string `json:"password" binding:"required"`
+	Password    string `json:"password" binding:"required,max=72"`
 	Role        string `json:"role" binding:"required"`
 	DisplayName string `json:"display_name" binding:"max=50"`
 }

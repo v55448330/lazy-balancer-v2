@@ -183,9 +183,6 @@ onMounted(fetchEvents)
 .cell-tip { cursor: help; border-bottom: 1px dashed #c0c4cc; }
 </style>
 
-<style scoped>
-</style>
-
 <style>
 .filter-date-range.el-date-editor {
   --el-date-editor-width: 360px;

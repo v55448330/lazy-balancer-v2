@@ -196,6 +196,10 @@ func restoreCRSFromSnapshot(liveDir, snapshotDir, version string) error {
 // ReconcileCRSState realigns the CRS disk tree, data-volume snapshot and DB
 // version row at startup. Master-only: a slave's CRS files and version row
 // are both governed by cluster sync, local reconciliation would fight it.
+//
+// 前提：本函数仅在启动时调用（main.go 仅一处调用点）；运行期调用将持旧
+// WafFiles 引用直到下次版本 bump。若未来新增运行期调用点，restore 成功后
+// 须 BumpClusterVersion。
 func ReconcileCRSState() {
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT COALESCE(is_master,0) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {

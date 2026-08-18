@@ -1101,6 +1101,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		}
 
 		if len(upstreamDial) == 0 {
+			log.Printf("规则 %s 没有可用的启用上游，已跳过该规则", r.CaddyID)
 			continue
 		}
 

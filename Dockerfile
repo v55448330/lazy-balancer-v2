@@ -15,9 +15,11 @@ RUN xcaddy build v2.11.4 \
   --with lazy-balancer-v2/caddydeps=./caddydeps
 # 构建期断言：镜像扫描要求的最低依赖版本未被 MVS 抬升到位则直接失败
 # （版本下限：grpc>=v1.82、otel>=v1.44、x/net>=v0.56；go version -m 各列以 TAB 分隔，
-#  用 awk 做数值化语义比较，不设上限，依赖升到大版本也不会误报）
+#  用 awk 的 ge() 做逐段数值化语义比较，不设上限，依赖升到大版本也不会误报。
+#  ge() 的局部变量必须以多余形参声明，否则会覆盖主循环的 i 导致漏检；
+#  且 awk 程序必须保持单行——多行函数体会破坏 RUN 指令解析）
 RUN go version -m /app/caddy | tee /tmp/caddy-mods.txt && \
-    awk -F'\t' '{ for (i=1; i<NF; i++) { if ($i=="google.golang.org/grpc") ok1=($(i+1)>="v1.82"); else if ($i=="go.opentelemetry.io/otel") ok2=($(i+1)>="v1.44"); else if ($i=="golang.org/x/net") ok3=($(i+1)>="v0.56") } } END { exit (ok1 && ok2 && ok3) ? 0 : 1 }' /tmp/caddy-mods.txt
+    awk -F'\t' 'function ge(v, f,  a, b, av, bv, i) { split(substr(v, 2), a, "."); split(substr(f, 2), b, "."); for (i = 1; i <= 3; i++) { av = a[i] + 0; bv = b[i] + 0; if (av > bv) return 1; if (av < bv) return 0 } return 1 } { for (i = 1; i < NF; i++) { if ($i == "google.golang.org/grpc") ok1 = ge($(i+1), "v1.82.0"); else if ($i == "go.opentelemetry.io/otel") ok2 = ge($(i+1), "v1.44.0"); else if ($i == "golang.org/x/net") ok3 = ge($(i+1), "v0.56.0") } } END { exit (ok1 && ok2 && ok3) ? 0 : 1 }' /tmp/caddy-mods.txt
 
 # Build Go backend
 FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS backend

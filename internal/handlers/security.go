@@ -399,6 +399,10 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
 	}
+	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略名称不能为空"})
+		return
+	}
 	for _, f := range []struct {
 		name string
 		val  *string
@@ -453,6 +457,28 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	if req.CustomRules != nil {
 		if err := services.ValidateCustomRulesJSON(*req.CustomRules); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+	}
+	// crs_rule_groups / crs_excluded_rules：显式空串按 Create 口径归一为 "[]"，
+	// 非空值必须是字符串数组的 JSON，防止任意串直写列后在发射端解析失败。
+	for _, f := range []struct {
+		name string
+		val  *string
+	}{
+		{"crs_rule_groups", req.CRSRuleGroups},
+		{"crs_excluded_rules", req.CRSExcludedRules},
+	} {
+		if f.val == nil {
+			continue
+		}
+		if strings.TrimSpace(*f.val) == "" {
+			*f.val = "[]"
+			continue
+		}
+		var entries []string
+		if err := json.Unmarshal([]byte(*f.val), &entries); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("%s 需为 JSON 数组字符串", f.name)})
 			return
 		}
 	}

@@ -32,7 +32,7 @@
           </el-col>
           <el-col :span="12">
             <el-form-item label="密码">
-              <el-input v-model="form.password" type="password" show-password minlength="6" :placeholder="editingUser ? '留空则不修改密码（至少6位）' : '请输入至少6位密码'" />
+              <el-input v-model="form.password" type="password" show-password minlength="6" maxlength="72" :placeholder="editingUser ? '留空则不修改密码（至少6位）' : '请输入至少6位密码'" />
             </el-form-item>
           </el-col>
         </el-row>

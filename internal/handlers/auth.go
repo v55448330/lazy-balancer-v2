@@ -169,7 +169,8 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 
 type UpdateCurrentUserRequest struct {
 	DisplayName *string `json:"display_name" binding:"omitempty,max=50"`
-	Password    string  `json:"password"`
+	// bcrypt 只取前 72 字节（超出即静默截断），超长密码直接 400 而不是落库后被截断
+	Password string `json:"password" binding:"omitempty,max=72"`
 }
 
 func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
@@ -297,7 +298,7 @@ func (h *Handlers) SetupAdmin(c *gin.Context) {
 	}
 	var req struct {
 		Username    string `json:"username" binding:"required,min=3,max=50"`
-		Password    string `json:"password" binding:"required,min=6"`
+		Password    string `json:"password" binding:"required,min=6,max=72"`
 		DisplayName string `json:"display_name" binding:"max=50"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {

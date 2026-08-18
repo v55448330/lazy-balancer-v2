@@ -83,8 +83,9 @@ func TestUpdateUser_preserves_omitted_display_name(t *testing.T) {
 	assertUserState(t, "original", "user", "Original Name", "original-hash")
 }
 
-func TestUpdateUser_preserves_all_fields_when_password_hashing_fails(t *testing.T) {
-	// Given
+func TestUpdateUser_preserves_all_fields_when_password_rejected(t *testing.T) {
+	// Given（bcrypt 只取前 72 字节，73 字符密码在绑定层被 400 拒绝；
+	// 拒绝路径不得产生任何部分写入）
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (1, 'original', 'original-hash', 'admin', 'Original Name'), (99, 'backup-admin', 'x', 'admin', '')"); err != nil {
 		t.Fatalf("seed user: %v", err)
@@ -99,9 +100,9 @@ func TestUpdateUser_preserves_all_fields_when_password_hashing_fails(t *testing.
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 
-	// Then
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	// Then（原断言 500：超长密码以前只能在 bcrypt 阶段失败，现在绑定层提前拦截）
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
 	}
 	assertUserState(t, "original", "admin", "Original Name", "original-hash")
 }
