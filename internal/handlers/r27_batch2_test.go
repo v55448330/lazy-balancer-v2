@@ -44,6 +44,38 @@ func TestValidateRuleFeatures_rejects_prefix_exact_shadowing_on_same_path(t *tes
 			},
 			wantError: "同一路径同时存在前缀与精确匹配规则会造成遮蔽",
 		},
+		{
+			name: "prefix /api and prefix /api/ render identical matchers and are rejected as duplicate",
+			pathRules: []models.PathRule{
+				{SortOrder: 0, MatchType: "prefix", Path: "/api", Upstreams: []models.PathRuleUpstream{{Address: "127.0.0.1", Port: 9100, Weight: 1}}},
+				{SortOrder: 1, MatchType: "prefix", Path: "/api/", Upstreams: []models.PathRuleUpstream{{Address: "127.0.0.1", Port: 9101, Weight: 1}}},
+			},
+			wantError: "重复",
+		},
+		{
+			name: "prefix /api plus exact /api/ shadowed by normalized matcher",
+			pathRules: []models.PathRule{
+				{SortOrder: 0, MatchType: "prefix", Path: "/api", Upstreams: []models.PathRuleUpstream{{Address: "127.0.0.1", Port: 9100, Weight: 1}}},
+				{SortOrder: 1, MatchType: "exact", Path: "/api/", Upstreams: []models.PathRuleUpstream{{Address: "127.0.0.1", Port: 9101, Weight: 1}}},
+			},
+			wantError: "同一路径同时存在前缀与精确匹配规则会造成遮蔽",
+		},
+		{
+			name: "exact /api plus prefix /api/ shadowed regardless of slash side",
+			pathRules: []models.PathRule{
+				{SortOrder: 0, MatchType: "exact", Path: "/api", Upstreams: []models.PathRuleUpstream{{Address: "127.0.0.1", Port: 9101, Weight: 1}}},
+				{SortOrder: 1, MatchType: "prefix", Path: "/api/", Upstreams: []models.PathRuleUpstream{{Address: "127.0.0.1", Port: 9100, Weight: 1}}},
+			},
+			wantError: "同一路径同时存在前缀与精确匹配规则会造成遮蔽",
+		},
+		{
+			name: "exact /api and exact /api/ stay distinct matchers and are allowed",
+			pathRules: []models.PathRule{
+				{SortOrder: 0, MatchType: "exact", Path: "/api", Upstreams: []models.PathRuleUpstream{{Address: "127.0.0.1", Port: 9100, Weight: 1}}},
+				{SortOrder: 1, MatchType: "exact", Path: "/api/", Upstreams: []models.PathRuleUpstream{{Address: "127.0.0.1", Port: 9101, Weight: 1}}},
+			},
+			wantError: "",
+		},
 	}
 
 	for _, test := range tests {

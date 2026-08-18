@@ -257,7 +257,11 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 	seenPaths := make(map[string]int, len(input.PathRules))
 	// C-F3: prefix 会渲染为 [路径, 路径/*] 双 matcher，同一路径再配 exact 必被遮蔽
 	// （路由按 SortOrder 排序、首条终结匹配），在保存前整组拒绝。
-	seenPathMatchTypes := make(map[string]string, len(input.PathRules))
+	// C-F2: 查重/查遮蔽必须与渲染侧 pathMatcherSpecs 同源归一（TrimRight 尾 / 与 *），
+	// 否则 "/api" 与 "/api/"（或 "/api//"）原始串不同、渲染 matcher 完全相同，
+	// SortOrder 靠后的一条会成为整条死规则。
+	seenPrefixRoots := make(map[string]int, len(input.PathRules))
+	seenExactNorms := make(map[string]int, len(input.PathRules))
 	for index, pathRule := range input.PathRules {
 		if !strings.HasPrefix(pathRule.Path, "/") {
 			return fmt.Errorf("第 %d 条路径规则的路径必须以 / 开头", index+1)
@@ -265,21 +269,39 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		if strings.ContainsAny(pathRule.Path, "*?{}") {
 			return fmt.Errorf("第 %d 条路径规则的路径不能包含 * ? { } 通配字符", index+1)
 		}
-		duplicateKey := pathRule.MatchType + ":" + strings.TrimSpace(pathRule.Path)
-		if seenAt, exists := seenPaths[duplicateKey]; exists {
-			return fmt.Errorf("第 %d 条路径规则与第 %d 条重复（%s）", index+1, seenAt, pathRule.Path)
-		}
-		seenPaths[duplicateKey] = index + 1
 		switch pathRule.MatchType {
 		case "prefix", "exact":
 		default:
 			return fmt.Errorf("第 %d 条路径规则的匹配类型只能是 prefix 或 exact", index+1)
 		}
-		normalizedPath := strings.TrimSpace(pathRule.Path)
-		if seenMatchType, exists := seenPathMatchTypes[normalizedPath]; exists && seenMatchType != pathRule.MatchType {
-			return fmt.Errorf("第 %d 条路径规则：同一路径同时存在前缀与精确匹配规则会造成遮蔽，请调整", index+1)
+		trimmedPath := strings.TrimSpace(pathRule.Path)
+		canonicalPath := trimmedPath
+		if pathRule.MatchType == "prefix" {
+			canonicalPath = strings.TrimRight(trimmedPath, "/*")
+			if canonicalPath == "" {
+				canonicalPath = "/"
+			}
 		}
-		seenPathMatchTypes[normalizedPath] = pathRule.MatchType
+		duplicateKey := pathRule.MatchType + ":" + canonicalPath
+		if seenAt, exists := seenPaths[duplicateKey]; exists {
+			return fmt.Errorf("第 %d 条路径规则与第 %d 条重复（%s）", index+1, seenAt, pathRule.Path)
+		}
+		seenPaths[duplicateKey] = index + 1
+		if pathRule.MatchType == "prefix" {
+			if seenAt, exists := seenExactNorms[canonicalPath]; exists {
+				return fmt.Errorf("第 %d 条路径规则与第 %d 条：同一路径同时存在前缀与精确匹配规则会造成遮蔽，请调整", index+1, seenAt)
+			}
+			seenPrefixRoots[canonicalPath] = index + 1
+		} else {
+			normalizedExact := strings.TrimRight(trimmedPath, "/")
+			if normalizedExact == "" {
+				normalizedExact = "/"
+			}
+			if seenAt, exists := seenPrefixRoots[normalizedExact]; exists {
+				return fmt.Errorf("第 %d 条路径规则与第 %d 条：同一路径同时存在前缀与精确匹配规则会造成遮蔽，请调整", index+1, seenAt)
+			}
+			seenExactNorms[normalizedExact] = index + 1
+		}
 		// C-F4: upstreams 为空数组时生成阶段无回退（nil 才继承主上游），
 		// buildHTTPHandleChain 会因“无启用上游”失败并回滚整份配置，必须在保存前拒绝。
 		if pathRule.Upstreams != nil && len(pathRule.Upstreams) == 0 {
@@ -631,6 +653,11 @@ func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 		return err
 	}
 	for _, rule := range rules {
+		// 存量规则可能建于校验上线前：80 端口 + TLS 跳转生成自环 Location，
+		// 启动再生配置前按保存路径同口径拦截并指出具体规则。
+		if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS && rule.TLSHTTPRedirect {
+			return &configValidationError{message: fmt.Sprintf("规则 %s（%s）80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转", rule.Name, rule.CaddyID)}
+		}
 		if err := validateRuleConfigGeneration(rule); err != nil {
 			return err
 		}
