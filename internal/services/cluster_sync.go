@@ -579,14 +579,19 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 		return SyncResult{AppliedVersion: appliedVersion}, nil
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		// body 截断至 200B 并回退到合法 UTF-8 边界：错误消息经 last_sync_error
+		// 落库（512B 有界设计）并随 Report 上报主节点，超长 body 会击穿有界
+		// 并随 60s 周期持续膨胀主节点库（R33 F-2）。复用 pollRegistration 的
+		// 既有截断模式（本文件 :1111-1113）。
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		body = truncateValidUTF8Tail(body)
 		// 401/403 表示主节点已拒绝本节点凭据（节点被删除或注册被拒），
 		// 重试不可能自愈：返回终止类错误，由 run 循环 halt 等待人工介入。
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 			return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed,
 				fmt.Errorf("主节点拒绝本节点访问(%d): %w", resp.StatusCode, errSyncTokenRevoked))
 		}
-		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError, fmt.Errorf("主节点快照请求失败(%d): %s", resp.StatusCode, string(body)))
+		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError, fmt.Errorf("主节点快照请求失败(%d): %s", resp.StatusCode, strings.TrimSpace(string(body))))
 	}
 	var envelope struct {
 		Data models.ClusterSnapshot `json:"data"`
@@ -1165,7 +1170,9 @@ func (s *SyncService) bumpRegistrationConfirmFailure(ctx context.Context, cluste
 	if failures >= registrationConfirmMaxFailures {
 		message := fmt.Sprintf("集群注册确认连续失败 %d 次（最后一次：%s）。已停止自动重试，请在“集群管理”页面重新注册，或使用“提升为主节点”脱离集群",
 			failures, reason)
-		s.persistSyncError(ctx, message, models.SyncErrorCodeValidationFailed)
+		// 经 combineOrReplaceSyncError 落库（R33 F-1）：ValidationFailed 属终止类，
+		// helper 直接覆盖，与直写语义等价；闭合「所有写点经 helper」不变式。
+		s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeValidationFailed)
 		RecordAuditLog("system", "注册失败", "集群节点", message, "")
 		// 清除 registration_secret 触发从节点退出注册循环；clusterToken 已存入 global_config 但因 confirm 未成功，主节点未真正确认
 		if _, derr := s.db.ExecContext(ctx, "UPDATE global_config SET registration_secret='', registration_id=NULL, registration_confirm_failures=0 WHERE id=1"); derr != nil {
