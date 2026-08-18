@@ -270,6 +270,8 @@ const resetPassword = async (id: number) => {
   if (isReadOnly.value || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
   operatingUserIds.value.add(id)
   try {
+    // 说明：Element Plus 2.x 的 ElMessageBox.prompt 不支持 inputAttributes/maxlength，
+    // 因此与后端 max=72 对齐的上限校验只能通过 inputValidator 提示文案兜底。
     const { value } = await ElMessageBox.prompt('请输入新密码', '重置密码', {
       confirmButtonText: '确定',
       cancelButtonText: '取消',
@@ -277,6 +279,9 @@ const resetPassword = async (id: number) => {
       inputValidator: (value) => {
         if (!value || value.length < 6) {
           return '密码长度至少6位'
+        }
+        if (value.length > 72) {
+          return '密码长度不能超过72位'
         }
         return true
       }

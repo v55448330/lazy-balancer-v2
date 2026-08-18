@@ -1836,6 +1836,14 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 		// HTTP→HTTPS 跳转路由插在 GeoIP 路由之后、路径/主路由之前：地区拦截
 		// 优先级高于跳转。generateHTTPRouteObjects 已将 GeoIP 路由前置到头部。
+		//
+		// 可达性说明（防止误用）：此单规则跳转形态当前并无调用方会触发——
+		// handlers.go 的规则验证中 HTTP 协议走 GenerateRouteObject（合并进既有端口验证），
+		// 仅 TCP 协议调用 GenerateSingleRuleCaddyConfig；rule_features.go 的
+		// validateRuleConfigGeneration 也不填 EnableTLS/TLSHTTPRedirect 字段。
+		// 生产环境的 HTTP→HTTPS 跳转由 generateCaddyConfigFromStore 的 redirectRoutes
+		// 统一生成（端口 443 时 Location 不带自引用端口，见 httpsRedirectLocation）。
+		// 若未来需要在单规则配置里启用此分支，请先确认与全量生成逻辑保持一致。
 		if rule.EnableTLS && rule.TLSHTTPRedirect && len(domainHosts) > 0 {
 			geoipCount := 0
 			if policy := GetSecurityPolicyForRule(rule.CaddyID); PolicyHasGeoIP(policy) {
