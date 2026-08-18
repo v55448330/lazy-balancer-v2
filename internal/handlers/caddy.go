@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -479,22 +480,50 @@ func (h *Handlers) GetCaddyStatus(c *gin.Context) {
 	if db.DB != nil {
 		db.DB.QueryRow(`SELECT COALESCE(caddy_apply_error,'') FROM global_config WHERE id=1`).Scan(&applyError)
 	}
+	drift := services.CurrentConfigDrift()
+	statusData := func(state string) map[string]string {
+		return map[string]string{
+			"status":            state,
+			"apply_error":       applyError,
+			"config_consistent": strconv.FormatBool(drift.Consistent),
+			"config_drift":      driftBannerText(drift),
+		}
+	}
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get("http://localhost:2019/config/")
 	if err == nil {
 		resp.Body.Close()
 		if resp.StatusCode < 500 {
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"status": "running", "apply_error": applyError}})
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: statusData("running")})
 			return
 		}
 	}
 	cmd := exec.Command("sh", "-c", "pgrep -x caddy 2>/dev/null | head -1 | xargs -I{} ps -o state= -p {} 2>/dev/null | grep -E '^[RSD]' && echo running || echo stopped")
 	output, _ := cmd.Output()
 	if strings.Contains(string(output), "running") {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"status": "running", "apply_error": applyError}})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: statusData("running")})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"status": "stopped", "apply_error": applyError}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: statusData("stopped")})
+}
+
+// driftBannerText 生成前端全局横幅的展示文案（一致时为空串）。
+func driftBannerText(drift services.ConfigDriftStatus) string {
+	if drift.Consistent {
+		return ""
+	}
+	return formatDriftBanner(drift.Missing, drift.Extra, drift.Since)
+}
+
+func formatDriftBanner(missing, extra []string, since string) string {
+	parts := make([]string, 0, 2)
+	if len(missing) > 0 {
+		parts = append(parts, "缺失规则路由: "+strings.Join(missing, "、"))
+	}
+	if len(extra) > 0 {
+		parts = append(parts, "多余规则路由: "+strings.Join(extra, "、"))
+	}
+	return strings.Join(parts, "；") + "（检测于 " + since + " UTC）"
 }
 
 func (h *Handlers) GetCaddyConfig(c *gin.Context) {

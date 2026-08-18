@@ -134,6 +134,18 @@
         </div>
       </el-header>
 
+      <el-alert
+        v-if="configDrift"
+        type="error"
+        :closable="false"
+        class="config-drift-banner"
+      >
+        <template #title>
+          <span class="drift-text">运行配置与规则数据不一致：{{ configDrift }}</span>
+          <el-button size="small" type="danger" plain :loading="restarting" @click="handleRestartForDrift">重启服务恢复</el-button>
+        </template>
+      </el-alert>
+
       <el-main class="layout-main">
         <slot />
       </el-main>
@@ -164,11 +176,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useAuthStore } from '@/stores/auth'
 import type { PageId } from '@/stores/auth'
 import { request } from '@/utils/api'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document, Warning, Notebook } from '@element-plus/icons-vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, footerHtml } from '@/utils/branding'
@@ -281,13 +294,61 @@ const saveProfile = async () => {
   }
 }
 
+// 配置一致性看门狗横幅：轮询 /caddy/status，漂移时展示并给出重启恢复入口。
+const configDrift = ref('')
+const restarting = ref(false)
+let driftTimer: number | undefined
+
+const fetchDriftStatus = async () => {
+  try {
+    const res = await request.get('/caddy/status', { silent: true } as never)
+    configDrift.value = res.data?.config_consistent === 'false' ? (res.data?.config_drift || '规则路由与运行配置不一致') : ''
+  } catch {
+    // 状态查询失败静默——网络层错误已有全局处理
+  }
+}
+
+const handleRestartForDrift = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '将重启服务以重新应用全部规则配置，期间服务短暂不可用。确认重启？',
+      '重启服务恢复',
+      { confirmButtonText: '确认重启', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  restarting.value = true
+  try {
+    await request.post('/system/restart')
+    ElMessage.success('服务正在重启，稍后自动刷新页面')
+    setTimeout(() => window.location.reload(), 10000)
+  } finally {
+    restarting.value = false
+  }
+}
+
 onMounted(() => {
   syncProfileForm()
+  fetchDriftStatus()
+  driftTimer = window.setInterval(fetchDriftStatus, 60000)
+})
+
+onUnmounted(() => {
+  if (driftTimer) clearInterval(driftTimer)
 })
 </script>
 
 <style scoped>
 .layout-container { height: 100vh; }
+
+.config-drift-banner {
+  border-radius: 0;
+}
+.config-drift-banner .drift-text {
+  margin-right: 12px;
+  font-weight: 500;
+}
 
 .layout-aside {
   background: #ffffff;

@@ -123,6 +123,9 @@ func run() error {
 	if err := h.ApplyConfigOnStartup(); err != nil {
 		services.Logf("error", "failed to apply Caddy config on startup: %v", err)
 	}
+	// 配置一致性看门狗：周期比对 DB 规则与 Caddy 运行配置，不一致时三通道告知
+	// （系统日志/操作日志/前端横幅），恢复由用户手动重启完成。
+	services.StartConfigWatchdog(cfg.CaddyAdminURL)
 
 	// Setup router
 	router := middleware.SetupRouter(h, cfg)
