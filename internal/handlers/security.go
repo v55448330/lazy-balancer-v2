@@ -417,6 +417,8 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 
 // validateAndNormalizeCRSField 统一 Create/Update 两条路径的 crs_* 形状校验：
 // 空串按归一为 "[]"，非空必须是字符串数组 JSON（防发射端解析失败静默置空）。
+// 条目内容同样受限：组名进入 Include glob（REQUEST-9<code>-*.conf，兼容历史文件名前缀），
+// 排除项进入 SecRuleRemoveById 参数，空白/引号/控制字符都会生成非法配置行。
 func validateAndNormalizeCRSField(name string, val *string) error {
 	if val == nil {
 		return nil
@@ -428,6 +430,18 @@ func validateAndNormalizeCRSField(name string, val *string) error {
 	var entries []string
 	if err := json.Unmarshal([]byte(*val), &entries); err != nil {
 		return fmt.Errorf("%s 需为 JSON 数组字符串", name)
+	}
+	for _, entry := range entries {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			return fmt.Errorf("%s 条目不能为空", name)
+		}
+		for _, r := range trimmed {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
+				continue
+			}
+			return fmt.Errorf("%s 条目含非法字符（仅允许字母、数字、.、_、-）: %q", name, entry)
+		}
 	}
 	return nil
 }
