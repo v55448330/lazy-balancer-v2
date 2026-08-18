@@ -1707,6 +1707,14 @@ watch(() => wizardForm.path_rules, (pathRules) => {
 }, { deep: true })
 
 let hydratingWizard = false
+// TLS/端口提示去重：3 秒内最多一条，连续拨动不堆叠 toast。
+let lastTlsHintAt = 0
+const showTlsHint = (message: string) => {
+  const now = Date.now()
+  if (now - lastTlsHintAt <= 3000) return
+  lastTlsHintAt = now
+  ElMessage.info(message)
+}
 // 用户是否显式/已提交过监听端口：置位后停止 80↔443/8080 的自动联动，避免静默改回默认端口。
 // 编辑态打开即置位（DB 中的 listen_port 就是用户已提交的显式配置）；联动仅保留 create/复制流的默认便捷。
 const userExplicitPort = ref(false)
@@ -1714,9 +1722,12 @@ const userExplicitPort = ref(false)
 // Watch for enable_tls toggle to adjust default listen port
 watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
   if (hydratingWizard) return
-  // 编辑态下端口不做自动迁移（保留已提交配置），但开启 TLS 且端口仍为 80 时给出非静默提示
+  // 编辑态下端口不做自动迁移（保留已提交配置），但 TLS 开关与非常态端口组合时给出非静默提示
   if (newVal && !oldVal && userExplicitPort.value && wizardForm.listen_port === 80) {
-    ElMessage.info('端口当前为 80，如需 HTTPS 访问建议改为 443')
+    showTlsHint('端口当前为 80，如需 HTTPS 访问建议改为 443')
+  }
+  if (!newVal && oldVal && userExplicitPort.value && wizardForm.listen_port === 443) {
+    showTlsHint('端口当前为 443，关闭 TLS 后如需 HTTP 访问建议改为 80')
   }
   if (userExplicitPort.value) return
   if (wizardForm.protocol !== 'http') return
@@ -1742,6 +1753,7 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
     // 无条件迁移：DB 中不存在 TCP:80/443 存量规则（后端无条件拒绝），编辑态无需保留该值
     if (wizardForm.listen_port === 80 || wizardForm.listen_port === 443) {
       wizardForm.listen_port = 8080
+      ElMessage.info('已切换为 TCP，监听端口自动调整为 8080')
     }
     wizardForm.enable_tls = false
     if (wizardForm.strategy === 'cookie') wizardForm.strategy = 'weighted_round_robin'
