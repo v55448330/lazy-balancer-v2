@@ -705,8 +705,9 @@ const handleSave = async () => {
       })
     }
     await request.put('/config', payload)
-    // 保存成功后立即刷新全局配置，让 timezone 在 authStore 中立竿见影（date.ts formatDate 展示侧即时生效）
-    await authStore.fetchConfig()
+    // 保存成功后立即刷新全局配置，让 timezone 在 authStore 中立竿见影（date.ts formatDate 展示侧即时生效）；
+    // silent：保存已成功，随后的 GET /config 刷新失败不应再弹误导性错误 toast
+    await authStore.fetchConfig(true)
     if (tlsPending) {
       const fd = formDataOf({ enabled: String(adminTls.value.enabled), mode: adminTls.value.mode })
       const staged = stagedAdminTlsCert.value

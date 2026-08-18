@@ -8,9 +8,11 @@ const configTz = (): string => {
   }
 }
 
-// 时间筛选口径：el-date-picker 以 value-format="YYYY-MM-DD HH:mm:ss" 产出的墙钟字符串按「配置时区」
-// 被后端解析（auditlog.go / security.go 的 parseBoundary → ParseInLocation(configTz) 转 UTC 比较），
-// 与下方 formatInConfigTz 的展示口径一致（同为配置时区墙钟），两侧单次换算、口径统一，无需前端换算。
+// 时间筛选口径：el-date-picker 以 value-format="YYYY-MM-DD HH:mm:ss" 产出的墙钟字符串按
+// 「浏览器本地时区」生成（element-plus 无 timezone 配置项），后端按「配置时区」解析
+// （auditlog.go / security.go 的 parseBoundary → ParseInLocation(configTz) 转 UTC 比较）。
+// 仅当浏览器时区 == 配置时区（典型同机房部署）时与展示侧 formatInConfigTz 口径一致；
+// 管理员跨时区访问时筛选边界存在系统性偏移（已知限制），根治需改为 RFC3339 传参并同步后端解析契约。
 
 const isIsoLike = (value: string): boolean => value.includes('T') || value.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(value)
 

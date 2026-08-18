@@ -1707,7 +1707,8 @@ watch(() => wizardForm.path_rules, (pathRules) => {
 }, { deep: true })
 
 let hydratingWizard = false
-// 用户是否显式修改过监听端口：置位后停止 80↔443/8080 的自动联动，避免静默改回默认端口
+// 用户是否显式/已提交过监听端口：置位后停止 80↔443/8080 的自动联动，避免静默改回默认端口。
+// 编辑态打开即置位（DB 中的 listen_port 就是用户已提交的显式配置）；联动仅保留 create/复制流的默认便捷。
 const userExplicitPort = ref(false)
 
 // Watch for enable_tls toggle to adjust default listen port
@@ -1746,7 +1747,7 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
       if (u.protocol === 'https') u.protocol = 'tls'
     })
   } else if (newVal === 'http' && oldVal === 'tcp') {
-    if (wizardForm.listen_port === 8080) {
+    if (!userExplicitPort.value && wizardForm.listen_port === 8080) {
       wizardForm.listen_port = 80
     }
     wizardForm.upstreams.forEach(u => {
@@ -1996,6 +1997,8 @@ const openWizard = async (rule?: Rule) => {
   upstreamTouched.value = []
   isCopyMode.value = false
   if (rule) {
+    // 编辑态一律保留已存端口：DB 中的 listen_port 即用户显式配置，TLS/协议切换不再静默迁移端口
+    userExplicitPort.value = true
     let fullRule: Rule = rule
     if (rule.enable_tls && rule.tls_source === 'manual') {
       try {

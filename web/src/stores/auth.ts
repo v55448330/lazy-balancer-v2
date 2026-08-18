@@ -76,10 +76,10 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function fetchConfig() {
+  async function fetchConfig(silent = false) {
     if (!token.value) return
     try {
-      const res = await request.get<ApiResponse<{ readonly is_master: boolean; readonly timezone?: string }>>('/config')
+      const res = await request.get<ApiResponse<{ readonly is_master: boolean; readonly timezone?: string }>>('/config', { silent })
       if (res.data) {
         nodeMode.value = res.data.is_master ? 'master' : 'slave'
         if (res.data.timezone) timezone.value = res.data.timezone
