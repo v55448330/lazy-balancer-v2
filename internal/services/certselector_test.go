@@ -7,8 +7,9 @@ import (
 	"time"
 )
 
-func TestSelectCertificate_prefersLatestSuccessfulIssuance_overLaterExpiry(t *testing.T) {
-	// Given
+func TestSelectCertificate_prefersLaterExpiry_overRecentIssuance(t *testing.T) {
+	// Given：旧证书剩余有效期更长（90 天），新签发的证书先到期（30 天）——
+	// 剩余有效期是主排序键，最近签发不得压过更晚的 NotAfter
 	now := time.Now().UTC()
 	oldCert, oldKey := certificatePairForDomains(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "example.com")
 	newCert, newKey := certificatePairForDomains(t, now.Add(-time.Hour), now.Add(30*24*time.Hour), "example.com")
@@ -21,8 +22,8 @@ func TestSelectCertificate_prefersLatestSuccessfulIssuance_overLaterExpiry(t *te
 	selected, ok := SelectCertificate(candidates, "example.com", now)
 
 	// Then
-	if !ok || selected.Candidate.CertPEM != newCert {
-		t.Fatalf("selected latest certificate=%v, want newer issuance", ok)
+	if !ok || selected.Candidate.CertPEM != oldCert {
+		t.Fatalf("selected=%v, want later-expiry certificate", ok)
 	}
 }
 
@@ -49,10 +50,17 @@ func TestCertificateSelection_surfacesUseSameCertificate(t *testing.T) {
 			},
 		},
 		{
-			name: "new issuance wins over old later expiry", ruleDomains: "renew.example.com,www.renew.example.com", wantIndex: 1,
+			name: "longest remaining validity wins over recent issuance", ruleDomains: "renew.example.com,www.renew.example.com", wantIndex: 0,
 			jobs: []certificateSelectionFixture{
 				{jobDomains: "renew.example.com,www.renew.example.com", sanDomains: []string{"renew.example.com", "www.renew.example.com"}, updated: 1, validity: 90 * 24 * time.Hour},
 				{jobDomains: "renew.example.com", sanDomains: []string{"renew.example.com", "www.renew.example.com"}, updated: 2, validity: 30 * 24 * time.Hour},
+			},
+		},
+		{
+			name: "same expiry prefers exact domain over covering", ruleDomains: "tie.example.com,www.tie.example.com", wantIndex: 0,
+			jobs: []certificateSelectionFixture{
+				{jobDomains: "tie.example.com,www.tie.example.com", sanDomains: []string{"tie.example.com", "www.tie.example.com"}, updated: 1, validity: 60 * 24 * time.Hour},
+				{jobDomains: "tie.example.com,www.tie.example.com,api.tie.example.com", sanDomains: []string{"tie.example.com", "www.tie.example.com", "api.tie.example.com"}, updated: 2, validity: 60 * 24 * time.Hour},
 			},
 		},
 		{
@@ -90,7 +98,7 @@ func TestCertificateSelection_surfacesUseSameCertificate(t *testing.T) {
 				if _, err := database.Exec("UPDATE cert_jobs SET updated_at=? WHERE id=?", updatedAt, jobID); err != nil {
 					t.Fatalf("set candidate ordering: %v", err)
 				}
-				candidates = append(candidates, CertificateCandidate{ID: int64(jobID), Status: "issued", CertPEM: certPEM, KeyPEM: keyPEM, UpdatedAt: float64(updatedAt.Unix())})
+				candidates = append(candidates, CertificateCandidate{ID: int64(jobID), Domain: job.jobDomains, Status: "issued", CertPEM: certPEM, KeyPEM: keyPEM, UpdatedAt: float64(updatedAt.Unix())})
 			}
 			wantPEM := certificates[test.wantIndex]
 

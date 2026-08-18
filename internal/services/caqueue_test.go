@@ -717,3 +717,56 @@ func TestCAQueue_execute_requeues_job_when_lifecycle_is_canceled(t *testing.T) {
 		t.Fatalf("canceled job status=%q attempts=%d, want queued and 2", status, attempts)
 	}
 }
+
+// R30 F5：PauseAndDrain 会把在途签发置回 'queued'（requeueCanceledJob），
+// Resume 必须把这些滞留任务显式重入队，否则只能等到进程重启或快照替换。
+func TestCAQueueManager_Resume_requeuesLifecycleStrandedJobs(t *testing.T) {
+	// Given：队列暂停后滞留的 'queued' 与 'creating_order' 任务（规则仍存在且
+	// 适用）；'queued' 的孤儿任务（规则已删除）不重入队
+	_, database := newClusterTestService(t)
+	for _, rule := range []struct{ id, domain string }{
+		{id: "lb_resume_stranded", domain: "example.com"},
+		{id: "lb_resume_stranded2", domain: "www.example.com"},
+	} {
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, rule.id, rule.id, rule.domain); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'resume CA','letsencrypt','https://acme.example/directory',1)`); err != nil {
+		t.Fatal(err)
+	}
+	jobs := []struct {
+		id                     int64
+		status, ruleID, domain string
+	}{
+		{id: 51, status: "queued", ruleID: "lb_resume_stranded", domain: "example.com"},
+		{id: 52, status: "creating_order", ruleID: "lb_resume_stranded2", domain: "www.example.com"},
+		{id: 53, status: "queued", ruleID: "lb_deleted_rule", domain: "example.com"},
+	}
+	for _, job := range jobs {
+		if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_provider_id) VALUES (?,?,?,?,7)`, job.id, job.ruleID, job.domain, job.status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: false}
+	manager.Resume()
+
+	// Then：两个适用任务被重入队，孤儿任务保持滞留
+	enqueued := make(map[int64]bool)
+	for _, queue := range manager.queues {
+		queue.mu.Lock()
+		for jobID := range queue.active {
+			enqueued[int64(jobID)] = true
+		}
+		queue.mu.Unlock()
+	}
+	for _, job := range jobs[:2] {
+		if !enqueued[job.id] {
+			t.Fatalf("stranded job %d (%s) was not re-enqueued after Resume", job.id, job.status)
+		}
+	}
+	if enqueued[53] {
+		t.Fatal("orphaned job 53 was re-enqueued for a deleted rule")
+	}
+	manager.Stop()
+}

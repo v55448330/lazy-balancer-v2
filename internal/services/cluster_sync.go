@@ -756,6 +756,25 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 		msg = "状态上报失败: " + reportErr.Error()
 		code = models.SyncErrorCodeTransportError
 	}
+	if msg == "" {
+		// 成功路径不得清掉 apply_ok_reload_failed 标记：它必须在下一周期
+		// 304 分支触发全量重拉补偿（run 循环已在调用点跳过，此处兜底）。
+		if s.syncReloadFailureMarkerPresent(ctx) {
+			return
+		}
+	}
+	if code == models.SyncErrorCodeTransportError {
+		var stored string
+		if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err == nil {
+			// 传输层错误不得覆盖重载失败标记：标记是全量重拉补偿的唯一触发器，
+			// 覆盖后下一周期 304 将跳过补偿，陈旧运行配置保持到下次真实变更。
+			if storedMsg, _ := decodeSyncError(stored); strings.HasPrefix(storedMsg, syncReloadFailureMarkerPrefix) {
+				reason := strings.TrimSpace(strings.TrimPrefix(storedMsg, syncReloadFailureMarkerPrefix))
+				reason = strings.TrimSpace(strings.TrimPrefix(reason, ":"))
+				msg = syncReloadFailureMarkerPrefix + ": " + reason + " | " + msg
+			}
+		}
+	}
 	s.persistSyncError(ctx, msg, code)
 }
 
@@ -774,16 +793,14 @@ func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken str
 	if snapshot.Signature == "" {
 		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeSignatureInvalid, errors.New("快照缺少签名：主节点版本过旧，请先升级主节点"))
 	}
-	// Round 36 I-5: SchemaVersion 过旧时给出明确诊断（仍走签名失败码避免 halted DoS）。
-	// 攻击者可伪造 SchemaVersion 但无法伪造 HMAC，所以错误码保持 signature_invalid，
-	// 仅在消息中说明真实原因，便于运维识别"主节点版本过旧"场景。
-	if snapshot.SchemaVersion < CurrentSnapshotSchema && len(snapshot.CanonicalPayload) == 0 {
-		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeSignatureInvalid,
-			fmt.Errorf("主节点快照 schema v%d 过旧（本节点要求 v%d），缺少 canonical_payload。请升级主节点到支持 schema v%d 的版本",
-				snapshot.SchemaVersion, CurrentSnapshotSchema, CurrentSnapshotSchema))
-	}
 	if err := verifySnapshotSignature(snapshot, clusterToken); err != nil {
 		return models.ClusterSnapshot{}, err
+	}
+	// Round 30 F6: 缺少 canonical_payload 的旧主节点快照与 schema 过旧同根因，
+	// 走同一终止路径（halted 等人工升级）。该分支位于验签之后：攻击者可伪造
+	// SchemaVersion 但无法伪造 HMAC，伪造快照无法越过签名闸门触发 halted。
+	if snapshot.SchemaVersion < CurrentSnapshotSchema && len(snapshot.CanonicalPayload) == 0 {
+		return models.ClusterSnapshot{}, &SnapshotSchemaTooOldError{Actual: snapshot.SchemaVersion, Supported: CurrentSnapshotSchema}
 	}
 	// 只有验签通过后才允许进入 schema_too_new 终止路径：伪造数据永不触发
 	// halted，只能降级。验签通过后若读取端版本不足，无法安全解析
@@ -947,7 +964,12 @@ func (s *SyncService) run(ctx context.Context) {
 				return
 			}
 			reportErr := s.Report(ctx)
-			s.recordSyncError(ctx, pullErr, reportErr)
+			// 本周期 apply 成功但 Caddy 重载失败时 Pull 已落库 apply_ok_reload_failed
+			// 标记（Pull defer 为此保留它）；周期末的空错误清空会让 304 分支的
+			// 标记检测同周期失效，自愈补偿永远不触发。与 Pull defer 同口径跳过。
+			if !(pullErr == nil && reportErr == nil && s.syncReloadFailureMarkerPresent(ctx)) {
+				s.recordSyncError(ctx, pullErr, reportErr)
+			}
 			if terminal {
 				return
 			}
@@ -989,6 +1011,10 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 	req.Header.Set("X-Registration-Secret", secret)
 	resp, err := s.do(req)
 	if err != nil {
+		// 主节点 5xx/网络故障在注册轮询期同样要可见（否则节点页显示正常但一直
+		// 注册中）；随 401/404/410 走同一 persistSyncError 通道。
+		message := "查询注册状态失败: " + err.Error()
+		s.persistSyncError(ctx, message, models.SyncErrorCodeTransportError)
 		return
 	}
 	defer resp.Body.Close()
@@ -997,7 +1023,12 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 			message := "注册已被主节点拒绝或移除，请重新注册或提升为主节点"
 			s.persistSyncError(ctx, message, models.SyncErrorCodeValidationFailed)
 			RecordAuditLog("system", "注册失败", "集群节点", message, "")
+			return
 		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		body = truncateValidUTF8Tail(body)
+		message := fmt.Sprintf("查询注册状态失败（主节点返回 %d）：%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		s.persistSyncError(ctx, message, models.SyncErrorCodeTransportError)
 		return
 	}
 	var envelope struct {

@@ -334,10 +334,61 @@ func (s *CertificateService) pauseDeploymentRetries() {
 
 func (s *CertificateService) resumeDeploymentRetries() {
 	s.timerMu.Lock()
-	if !s.stopping {
-		s.timersPaused = false
+	if s.stopping {
+		s.timerMu.Unlock()
+		return
 	}
+	s.timersPaused = false
 	s.timerMu.Unlock()
+	s.rescanDroppedDeploymentRetries()
+}
+
+// rescanDroppedDeploymentRetries 重新调度暂停期间被丢弃的部署重试：暂停时
+// scheduleDeploymentRetry 直接返回，'downloaded' 且窗口已过的任务只能靠启动
+// 恢复重排；恢复暂停后补一次扫描，避免部署重试静默丢失直到进程重启。
+func (s *CertificateService) rescanDroppedDeploymentRetries() {
+	if db.DB == nil {
+		return
+	}
+	rows, err := db.DB.Query(`
+		SELECT j.id, COALESCE(j.rule_id,''), COALESCE(j.domain,''), COALESCE(j.ca_provider_id,0), COALESCE(j.deployment_attempts,0),
+		       COALESCE(r.domain,''),
+		       CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' THEN 1 ELSE 0 END,
+		       CASE WHEN COALESCE(j.cert_pem,'') <> '' AND COALESCE(j.key_pem,'') <> '' THEN 1 ELSE 0 END
+		FROM cert_jobs j
+		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
+		WHERE j.status='downloaded'
+		  AND j.deployment_available_after IS NOT NULL
+		  AND datetime(j.deployment_available_after) <= datetime('now')
+	`)
+	if err != nil {
+		log.Printf("resume deployment retries: scan failed: %v", err)
+		return
+	}
+	type droppedRetry struct {
+		id, providerID, deploymentAttempts int
+		ruleID, jobDomain, ruleDomain      string
+		applicable, hasCertMaterial        bool
+	}
+	var jobs []droppedRetry
+	for rows.Next() {
+		var job droppedRetry
+		if err := rows.Scan(&job.id, &job.ruleID, &job.jobDomain, &job.providerID, &job.deploymentAttempts, &job.ruleDomain, &job.applicable, &job.hasCertMaterial); err != nil {
+			continue
+		}
+		jobs = append(jobs, job)
+	}
+	// 先关闭读迭代器再写库：SQLite 连接池上行迭代未结束时写入会触发 SQLITE_BUSY。
+	if err := rows.Close(); err != nil {
+		log.Printf("resume deployment retries: close rows failed: %v", err)
+		return
+	}
+	for _, job := range jobs {
+		if !job.hasCertMaterial || !certJobRuleApplicable(job.applicable, job.ruleDomain, job.jobDomain) {
+			continue
+		}
+		s.deploymentRetry(job.id, issuedCertificate{ruleID: job.ruleID, providerID: job.providerID, deploymentAttempt: job.deploymentAttempts}, 0)
+	}
 }
 
 func (s *CertificateService) Start() {

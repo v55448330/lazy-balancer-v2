@@ -332,6 +332,67 @@ func (m *CAQueueManager) Resume() {
 	m.active = true
 	m.mu.Unlock()
 	resumeCertificateDeploymentRetries()
+	m.requeueLifecycleStrandedJobs()
+}
+
+// requeueLifecycleStrandedJobs 重入队因队列生命周期切换而滞留的任务：停止队列会把
+// 在途签发置回 'queued'（requeueCanceledJob），恢复后这些行不会自行回到调度器，
+// 只能靠重启或快照替换；Resume 时补一次显式重入队（EnqueueIfActive 幂等）。
+func (m *CAQueueManager) requeueLifecycleStrandedJobs() {
+	if db.DB == nil {
+		return
+	}
+	rows, err := db.DB.Query(`
+		SELECT j.id, COALESCE(j.rule_id,''), COALESCE(j.domain,''), j.status, COALESCE(j.ca_provider_id,0),
+		       COALESCE(r.domain,''),
+		       CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' THEN 1 ELSE 0 END
+		FROM cert_jobs j
+		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
+		WHERE j.status='queued' OR j.status LIKE 'creating\_%' ESCAPE '\'
+	`)
+	if err != nil {
+		log.Printf("CA queue resume: stranded job scan failed: %v", err)
+		return
+	}
+	type strandedJob struct {
+		id, providerID int
+		ruleID, domain string
+		status         string
+		ruleDomain     string
+		ruleBound      bool
+	}
+	var jobs []strandedJob
+	for rows.Next() {
+		var job strandedJob
+		if err := rows.Scan(&job.id, &job.ruleID, &job.domain, &job.status, &job.providerID, &job.ruleDomain, &job.ruleBound); err != nil {
+			continue
+		}
+		jobs = append(jobs, job)
+	}
+	// 先关闭读迭代器再写库：SQLite 连接池上行迭代未结束时写入会触发 SQLITE_BUSY。
+	if err := rows.Close(); err != nil {
+		log.Printf("CA queue resume: close rows failed: %v", err)
+		return
+	}
+	for _, job := range jobs {
+		if !certJobRuleApplicable(job.ruleBound, job.ruleDomain, job.domain) {
+			// 孤儿任务交给周期 sweep 禁用，此处不重复处理
+			continue
+		}
+		// 状态已 'queued' 的任务也走一次归一化转换（'queued'→'queued' 幂等），
+		// 让 EnqueueIfActive 以 changed=true 真正入队；并发改过状态的行由
+		// transitionJob 的 WHERE status IN (...) 守卫跳过。
+		_, _, err := m.EnqueueIfActive(job.providerID, job.id, job.ruleID, job.domain, func() (int, bool, error) {
+			err := transitionJob(db.DB, job.id, []string{job.status}, "queued", map[string]any{"message": "节点生命周期切换后恢复排队"})
+			if errors.Is(err, ErrJobTransitionConflict) {
+				return job.id, false, nil
+			}
+			return job.id, err == nil, err
+		})
+		if err != nil {
+			log.Printf("CA queue resume: requeue stranded job %d failed: %v", job.id, err)
+		}
+	}
 }
 
 // IsJobActive reports whether the job is currently queued or running.

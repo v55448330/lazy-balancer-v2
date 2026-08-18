@@ -700,3 +700,48 @@ func TestRequeueNonTerminalCertJobs_does_not_resurrect_failed_job(t *testing.T) 
 		t.Fatalf("queued job status=%q, want issued", statuses["lb_recover_queued"])
 	}
 }
+
+func TestCertificateService_resumeDeploymentRetries_reschedulesDroppedRetries(t *testing.T) {
+	// Given：暂停期间被丢弃的部署重试：任务 A 窗口已过且材料齐全（应重排），
+	// 任务 B 窗口在未来（不重排），任务 C 缺证书材料（不重排），
+	// 任务 D 规则已删除（不重排）
+	_, database := newClusterTestService(t)
+	for _, rule := range []struct{ id, domain string }{
+		{id: "lb_resume_retry", domain: "example.com"},
+		{id: "lb_resume_retry_future", domain: "future.example.com"},
+		{id: "lb_resume_retry_nomaterial", domain: "nomaterial.example.com"},
+	} {
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, rule.id, rule.id, rule.domain); err != nil {
+			t.Fatal(err)
+		}
+	}
+	certPEM, keyPEM := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
+	jobs := []struct {
+		id                                int
+		ruleID, domain, window, cert, key string
+	}{
+		{id: 1, ruleID: "lb_resume_retry", domain: "example.com", window: "datetime('now','-1 hour')", cert: certPEM, key: keyPEM},
+		{id: 2, ruleID: "lb_resume_retry_future", domain: "future.example.com", window: "datetime('now','+1 hour')", cert: certPEM, key: keyPEM},
+		{id: 3, ruleID: "lb_resume_retry_nomaterial", domain: "nomaterial.example.com", window: "datetime('now','-1 hour')", cert: "", key: ""},
+		{id: 4, ruleID: "lb_deleted_rule", domain: "example.com", window: "datetime('now','-1 hour')", cert: certPEM, key: keyPEM},
+	}
+	for _, job := range jobs {
+		if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,deployment_available_after,cert_pem,key_pem,ca_provider_id) VALUES (?,?,?,?,`+job.window+`,?,?,7)`, job.id, job.ruleID, job.domain, "downloaded", job.cert, job.key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := NewCertificateService()
+	var scheduled []int
+	service.deploymentRetry = func(jobID int, _ issuedCertificate, _ time.Duration) {
+		scheduled = append(scheduled, jobID)
+	}
+	service.pauseDeploymentRetries()
+
+	// When
+	service.resumeDeploymentRetries()
+
+	// Then：只有窗口已过且材料齐全的任务被重排
+	if len(scheduled) != 1 || scheduled[0] != 1 {
+		t.Fatalf("scheduled=%v, want only job 1", scheduled)
+	}
+}

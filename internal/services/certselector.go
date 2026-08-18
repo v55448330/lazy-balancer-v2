@@ -28,6 +28,7 @@ func SelectCertificate(candidates []CertificateCandidate, ruleDomains string, no
 	}
 	domains := strings.Split(canonicalDomains, ",")
 	var selected CertificateSelection
+	selectedExact := false
 	found := false
 	for _, candidate := range candidates {
 		if candidate.Status == "disabled" {
@@ -54,10 +55,30 @@ func SelectCertificate(candidates []CertificateCandidate, ruleDomains string, no
 		if !coversDomains {
 			continue
 		}
-		if !found || candidate.UpdatedAt > selected.Candidate.UpdatedAt || candidate.UpdatedAt == selected.Candidate.UpdatedAt && candidate.ID > selected.Candidate.ID {
-			selected = CertificateSelection{Candidate: candidate, Certificate: certificate}
+		candidateCanonical, canonicalErr := CanonicalACMEDomains(candidate.Domain)
+		candidateExact := canonicalErr == nil && candidateCanonical == canonicalDomains
+		candidateSelection := CertificateSelection{Candidate: candidate, Certificate: certificate}
+		if !found || betterCertificate(selected, candidateSelection, selectedExact, candidateExact) {
+			selected = candidateSelection
+			selectedExact = candidateExact
 			found = true
 		}
 	}
 	return selected, found
+}
+
+// betterCertificate 返回 candidate 是否优于 selected：NotAfter 越晚（剩余有效期
+// 越长）越优先，避免把快照到期更近的证书推给从节点；相同时精确域名匹配优先于
+// 覆盖匹配，再按 updated_at、id 倒序决胜。
+func betterCertificate(selected, candidate CertificateSelection, selectedExact, candidateExact bool) bool {
+	if !candidate.Certificate.NotAfter.Equal(selected.Certificate.NotAfter) {
+		return candidate.Certificate.NotAfter.After(selected.Certificate.NotAfter)
+	}
+	if candidateExact != selectedExact {
+		return candidateExact
+	}
+	if candidate.Candidate.UpdatedAt != selected.Candidate.UpdatedAt {
+		return candidate.Candidate.UpdatedAt > selected.Candidate.UpdatedAt
+	}
+	return candidate.Candidate.ID > selected.Candidate.ID
 }

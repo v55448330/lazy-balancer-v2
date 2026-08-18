@@ -179,7 +179,9 @@ func TestValidateSnapshotACMEState_distinguishesUnsetConfigFromMissingReference(
 }
 
 func TestClusterService_Snapshot_prefersLaterExpiryBeforeExactDomainMatch(t *testing.T) {
-	// Given
+	// Given：exact 证书（24h 后到期）updated_at 更晚；覆盖证书（90 天后到期）
+	// updated_at 更早——updated_at 顺序与 NotAfter 顺序相反，必须真正按
+	// NotAfter 降序选择覆盖证书，而不是靠种子巧合按 updated_at 选中
 	service, database := newClusterTestService(t)
 	now := time.Now().UTC()
 	service.snapshotNow = func() time.Time { return now }
@@ -187,6 +189,9 @@ func TestClusterService_Snapshot_prefersLaterExpiryBeforeExactDomainMatch(t *tes
 	coveringCert, coveringKey := certificatePairForDomains(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "example.com", "www.example.com")
 	seedSnapshotCertificate(t, database, "lb_selection", "example.com", "example.com", exactCert, exactKey, now.Add(24*time.Hour), 1)
 	seedSnapshotCertificateJob(t, database, "lb_selection", "example.com,www.example.com", coveringCert, coveringKey, now.Add(90*24*time.Hour), 2)
+	if _, err := database.Exec("UPDATE cert_jobs SET updated_at=? WHERE id=2", now.Add(-30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 
 	// When
 	snapshot, _, err := service.Snapshot(context.Background(), 0, "", "")

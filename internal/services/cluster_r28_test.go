@@ -3,11 +3,13 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/models"
@@ -247,6 +249,134 @@ func TestSyncService_Report_rejection_body_trims_partial_utf8_tail(t *testing.T)
 	}
 	if strings.Contains(err.Error(), "\uFFFD") {
 		t.Fatalf("report error=%q contains replacement rune", err.Error())
+	}
+}
+
+// R30 F1：run 循环周期末的 recordSyncError(nil,nil) 不得清掉本周期 Pull
+// 落库的 apply_ok_reload_failed 标记——R29 只修了 Pull defer，run 层第二处
+// 清空点让 304 分支的自愈补偿在生产中从未触发。测试必须走真实 run() 循环。
+func TestSyncService_run_reloadFailureMarker_survivesCycleEndAndTriggersRepull(t *testing.T) {
+	// Given：从节点 applied_version=9；主节点首次快照请求回快照、之后回 304
+	//（since_version=0 时始终回快照）；上报端点 200；Caddy 重载一律 500
+	_, database := newClusterTestService(t)
+	snapshot := signedTestSnapshot(9, "token")
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	snapshot = signTestSnapshot(snapshot, "token")
+
+	requestedVersions := make(chan string, 4)
+	var snapshotServed atomic.Bool
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/cluster/nodes/report" {
+			response.WriteHeader(http.StatusOK)
+			return
+		}
+		version := request.URL.Query().Get("since_version")
+		requestedVersions <- version
+		if version == "0" || !snapshotServed.Swap(true) {
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(models.APIResponse{Code: 0, Data: snapshot})
+			return
+		}
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9 WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer caddyServer.Close()
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+	// 只跑一个周期就退出循环：Pull → Report → 周期末 recordSyncError 清空点
+	service.waitRunDelay = func(context.Context, time.Duration) bool { return false }
+
+	// When：真实 run() 循环执行一个完整周期（apply 成功、重载失败、上报成功）
+	service.run(context.Background())
+
+	// Then：周期末清空点未吞掉标记
+	var lastSyncError string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastSyncError); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(lastSyncError, "apply_ok_reload_failed") {
+		t.Fatalf("after run cycle last_sync_error=%q, want apply_ok_reload_failed marker to survive cycle end", lastSyncError)
+	}
+
+	// When：下一周期 Pull —— 增量请求被回 304，标记必须触发 since_version=0 全量重拉
+	result, pullErr := service.Pull(context.Background())
+	if pullErr != nil {
+		t.Fatalf("second-cycle pull: %v", pullErr)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "9" {
+		t.Fatalf("run cycle request since_version=%q, want 9", v)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "9" {
+		t.Fatalf("second cycle first request since_version=%q, want 9", v)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "0" {
+		t.Fatalf("second cycle re-pull since_version=%q, want 0 (reload-failure marker)", v)
+	}
+
+	// Then：全量重拉完成补偿重试，重载仍失败，标记继续存活
+	if !result.Changed || result.AppliedVersion != 9 {
+		t.Fatalf("result=%#v, want changed re-apply of version 9", result)
+	}
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastSyncError); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(lastSyncError, "apply_ok_reload_failed") {
+		t.Fatalf("after repull last_sync_error=%q, want marker still present", lastSyncError)
+	}
+}
+
+// R30 F2：传输层错误不得覆盖 apply_ok_reload_failed 标记（标记是全量重拉补偿的
+// 唯一触发器）；组合消息保留前缀保证 304 分支 HasPrefix 检测仍命中。终止类错误
+// 允许覆盖。recordSyncError(nil,nil) 对标记同样保留（与 run 循环跳过同口径兜底）。
+func TestSyncService_recordSyncError_preservesReloadFailureMarkerOnTransportError(t *testing.T) {
+	// Given：last_sync_error 携带重载失败标记；本轮拉取遇到传输层错误
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec("UPDATE global_config SET last_sync_error=?", encodeSyncError("apply_ok_reload_failed: caddy down", models.SyncErrorCodeApplyFailed)); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService("http://127.0.0.1:1"))
+	transportErr := newSyncFailure(models.SyncErrorCodeTransportError, errors.New("连接主节点失败: 网络不可达"))
+
+	// When：记录传输层错误
+	service.recordSyncError(context.Background(), transportErr, nil)
+
+	// Then：组合消息保留标记前缀并附上传输错误详情
+	var stored string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	msg, code := decodeSyncError(stored)
+	if !strings.HasPrefix(msg, "apply_ok_reload_failed") || !strings.Contains(msg, "同步拉取失败") || code != models.SyncErrorCodeTransportError {
+		t.Fatalf("stored=%q msg=%q code=%q, want composed marker+transport error", stored, msg, code)
+	}
+
+	// When：recordSyncError(nil,nil)（周期末成功路径的兜底调用）
+	service.recordSyncError(context.Background(), nil, nil)
+
+	// Then：标记仍存活
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	msg, _ = decodeSyncError(stored)
+	if !strings.HasPrefix(msg, "apply_ok_reload_failed") {
+		t.Fatalf("after empty record last_sync_error=%q, want marker preserved", stored)
+	}
+
+	// When：终止类错误（令牌撤销）
+	service.recordSyncError(context.Background(), newSyncFailure(models.SyncErrorCodeValidationFailed, errSyncTokenRevoked), nil)
+
+	// Then：允许覆盖标记
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	msg, _ = decodeSyncError(stored)
+	if strings.HasPrefix(msg, "apply_ok_reload_failed") || !strings.Contains(msg, "同步拉取失败") {
+		t.Fatalf("after terminal error last_sync_error=%q, want overwritten", stored)
 	}
 }
 
