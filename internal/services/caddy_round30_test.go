@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -115,4 +116,59 @@ func findRouteByID(t *testing.T, routes []interface{}, id string) map[string]int
 		}
 	}
 	return nil
+}
+
+// Round 32 F-3: 路径规则上游为「空但非 nil 的数组」（DB 存量 upstreams_json="[]"
+// 形态）必须与 nil 一致回退主上游——此前仅 nil 回退，空数组触发
+// buildHTTPHandleChain "no enabled upstreams" 使全量渲染硬失败、预校验却放行
+// （不对称），现统一为 len(upstreams)==0 判定。
+func TestGenerateSingleRuleCaddyConfig_pathRuleEmptyUpstreamArray_fallsBackToMainUpstreams(t *testing.T) {
+	// Given
+	rule := baseHTTPRule()
+	rule.CustomRoutesEnabled = true
+	rule.PathRules = []PathRuleConfig{
+		{SortOrder: 1, MatchType: "prefix", Path: "/api", Upstreams: []UpstreamConfig{}},
+	}
+
+	// When
+	routes := renderedHTTPRoutes(t, GenerateSingleRuleCaddyConfig(rule))
+
+	// Then: 路径路由回退主上游（与既有 nil 上游用例同语义），整份配置无生成错误
+	if len(routes) != 2 {
+		t.Fatalf("expected path route + main route; got %d", len(routes))
+	}
+	apiMatcher := routeMatcher(t, routes[0])
+	assertEqual(t, apiMatcher["path"], []string{"/api", "/api/*"})
+	assertUpstreamDials(t, reverseProxyHandler(t, routes[0])["upstreams"], []string{"10.0.0.10:8080", "10.0.0.11:8080"})
+}
+
+// Round 32 F-3: 单规则生成 map 的 error 值必须是哨兵 error 本身（非字符串），
+// handlers 侧 errors.Is 特判依赖该类型；buildHTTPHandleChain 产出点经 %w
+// 包装哨兵，errors.Is 亦可命中。
+func TestGenerateSingleRuleCaddyConfig_zeroUpstreams_returnsErrNoEnabledUpstreamsSentinel(t *testing.T) {
+	// Given
+	rule := SingleRuleConfig{CaddyID: "lb_zero", Protocol: "tcp", ListenPort: 9000}
+
+	// When
+	config := GenerateSingleRuleCaddyConfig(rule)
+	genErr, isErr := config["error"].(error)
+
+	// Then
+	if !isErr {
+		t.Fatalf("error 键应为 error 类型，实际 %T", config["error"])
+	}
+	if !errors.Is(genErr, ErrNoEnabledUpstreams) {
+		t.Fatalf("应命中 ErrNoEnabledUpstreams 哨兵，实际: %v", genErr)
+	}
+
+	// When 路径上游为空且主上游亦为空 → buildHTTPHandleChain 产出点
+	_, chainErr := buildHTTPHandleChain(rule, []UpstreamConfig{})
+
+	// Then: %w 包装后 errors.Is 仍命中
+	if chainErr == nil {
+		t.Fatal("空上游必须返回错误")
+	}
+	if !errors.Is(chainErr, ErrNoEnabledUpstreams) {
+		t.Fatalf("buildHTTPHandleChain 错误必须可经 errors.Is 命中哨兵，实际: %v", chainErr)
+	}
 }

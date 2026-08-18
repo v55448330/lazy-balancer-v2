@@ -29,6 +29,12 @@ const (
 	caddyConfigStoreKey           = "__lazy_balancer_config_store"
 )
 
+// ErrNoEnabledUpstreams 规则（或路径规则）没有启用上游时生成的哨兵错误。
+// 生成侧两处产出点（GenerateSingleRuleCaddyConfig 直返、buildHTTPHandleChain
+// %w 包装）统一引用；handlers 侧以 errors.Is 特判零上游为「跳过而非失败」
+// 语义，未来追加规则上下文包装后特判不会静默失效。
+var ErrNoEnabledUpstreams = errors.New("no enabled upstreams")
+
 // CaddyService handles Caddy configuration management
 type CaddyService struct {
 	adminURL string
@@ -1881,12 +1887,12 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 	if len(enabledUpstreams) == 0 {
 		return map[string]interface{}{
-			"error": "no enabled upstreams",
+			"error": ErrNoEnabledUpstreams,
 		}
 	}
 	if rule.DynamicDNS && len(enabledUpstreams) > 1 {
 		return map[string]interface{}{
-			"error": fmt.Sprintf("dynamic DNS requires exactly one enabled upstream, got %d", len(enabledUpstreams)),
+			"error": fmt.Errorf("dynamic DNS requires exactly one enabled upstream, got %d", len(enabledUpstreams)),
 		}
 	}
 
@@ -1899,7 +1905,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		// 避免与 generateCaddyConfigFromStore 的逻辑分叉。
 		routes, _, err := generateHTTPRouteObjects(rule)
 		if err != nil {
-			return map[string]interface{}{"error": err.Error()}
+			return map[string]interface{}{"error": err}
 		}
 
 		// HTTP→HTTPS 跳转路由插在 GeoIP 路由之后、路径/主路由之前：地区拦截
@@ -2108,7 +2114,10 @@ func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, 
 		})
 		for pathIndex, pathRule := range pathRules {
 			upstreams := pathRule.Upstreams
-			if upstreams == nil {
+			// Round 32 F-3: 空数组与 nil 统一回退主上游——DB 中 upstreams_json="[]"
+			// 的存量路径规则此前因 `upstreams == nil` 不成立而走 buildHTTPHandleChain
+			// 硬失败（预校验特判放行、全量渲染失败的不对称），修复后两者语义一致。
+			if len(upstreams) == 0 {
 				upstreams = rule.Upstreams
 			}
 			handle, handleErr := buildHTTPHandleChain(rule, upstreams)
@@ -2408,7 +2417,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 		}
 	}
 	if len(enabledUpstreams) == 0 {
-		return nil, fmt.Errorf("no enabled upstreams")
+		return nil, fmt.Errorf("%w", ErrNoEnabledUpstreams)
 	}
 	if rule.DynamicDNS && len(enabledUpstreams) > 1 {
 		return nil, fmt.Errorf("dynamic DNS requires exactly one enabled upstream, got %d", len(enabledUpstreams))

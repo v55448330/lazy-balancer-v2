@@ -3,11 +3,13 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/services"
 )
 
 // Round 30 F-4: 启动校验必须一次报出全部坏规则——首错即 return 会让多条坏规则
@@ -84,6 +86,49 @@ func TestValidateRuleConfigGeneration_validRule_returnsNil(t *testing.T) {
 
 	if err := validateRuleConfigGeneration(rule); err != nil {
 		t.Fatalf("合法规则应返回 nil，实际: %v", err)
+	}
+}
+
+// Round 32 F-3: 路径规则上游为「空但非 nil 的数组」时预校验必须放行——渲染侧
+// 已与 nil 统一回退主上游（caddy.go len(upstreams)==0），此前空数组触发
+// buildHTTPHandleChain 硬失败，预校验与全量渲染语义不对称（F4 聚合被绕过）。
+func TestValidateRuleConfigGeneration_pathRuleEmptyUpstreams_returnsNil(t *testing.T) {
+	newBackupTestHandlers(t)
+	rule := models.LbRule{
+		CaddyID: "lb_path_empty", Protocol: "http", Domain: "path.example.test", ListenPort: 80,
+		CustomRoutesEnabled: true,
+		Upstreams: []models.Upstream{
+			{Host: "up1.example.test", Port: 8080, Enabled: true},
+		},
+		PathRules: []models.PathRule{
+			{SortOrder: 1, MatchType: "prefix", Path: "/api", Upstreams: []models.PathRuleUpstream{}},
+		},
+	}
+
+	if err := validateRuleConfigGeneration(rule); err != nil {
+		t.Fatalf("路径规则空数组应回退主上游并放行，实际: %v", err)
+	}
+}
+
+// Round 32 F-3: 零上游特判改哨兵后，错误经 fmt.Errorf %w 包装（未来追加规则
+// 上下文）仍被 errors.Is 命中；且单规则生成 map 的 error 值本身即为哨兵 error，
+// 特判不依赖精确字符串、不随包装静默失效。
+func TestValidateRuleConfigGeneration_zeroUpstreams_sentinelSurvivesWrapping(t *testing.T) {
+	// Given 生成侧 map 携带哨兵 error（非字符串）
+	config := services.GenerateSingleRuleCaddyConfig(services.SingleRuleConfig{
+		CaddyID: "lb_z", Protocol: "tcp", ListenPort: 9000,
+	})
+	genErr, isErr := config["error"].(error)
+	if !isErr {
+		t.Fatalf("error 键应为 error 类型，实际 %T", config["error"])
+	}
+
+	// When 包装后特判判定
+	wrapped := fmt.Errorf("规则 %s: %w", "lb_z", genErr)
+
+	// Then
+	if !errors.Is(wrapped, services.ErrNoEnabledUpstreams) {
+		t.Fatalf("包装后的哨兵必须仍被 errors.Is 命中，实际: %v", wrapped)
 	}
 }
 

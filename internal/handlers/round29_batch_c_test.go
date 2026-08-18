@@ -24,18 +24,42 @@ func TestValidateRuleConflictMatrix_reports_cross_rule_conflicts(t *testing.T) {
 		{
 			name: "TCP rules share a port",
 			candidates: []ruleConflictCandidate{
-				{name: "tcp-one", protocol: "tcp", listenPort: 9000},
-				{name: "tcp-two", protocol: "tcp", listenPort: 9000},
+				{name: "tcp-one", protocol: "tcp", listenPort: 9000, enabled: true},
+				{name: "tcp-two", protocol: "tcp", listenPort: 9000, enabled: true},
 			},
 			wantCount: 2,
 		},
 		{
 			name: "TCP and HTTP rules share a port",
 			candidates: []ruleConflictCandidate{
-				{name: "tcp", protocol: "tcp", listenPort: 8443},
-				{name: "http", protocol: "http", domain: "http.example.test", listenPort: 8443},
+				{name: "tcp", protocol: "tcp", listenPort: 8443, enabled: true},
+				{name: "http", protocol: "http", domain: "http.example.test", listenPort: 8443, enabled: true},
 			},
 			wantCount: 2,
+		},
+		{
+			name: "R32 F-2: 禁用 TCP 与启用 TCP 同端口不构成冲突（禁用规则无运行时占用）",
+			candidates: []ruleConflictCandidate{
+				{name: "tcp-disabled", protocol: "tcp", listenPort: 9001, enabled: false},
+				{name: "tcp-enabled", protocol: "tcp", listenPort: 9001, enabled: true},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "R32 F-2: 禁用 TCP 与启用 HTTP 同端口不构成冲突",
+			candidates: []ruleConflictCandidate{
+				{name: "tcp-disabled", protocol: "tcp", listenPort: 8445, enabled: false},
+				{name: "http-enabled", protocol: "http", domain: "http.example.test", listenPort: 8445, enabled: true},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "R32 F-2: 双方禁用 TCP 同端口不判定",
+			candidates: []ruleConflictCandidate{
+				{name: "tcp-off-one", protocol: "tcp", listenPort: 9002, enabled: false},
+				{name: "tcp-off-two", protocol: "tcp", listenPort: 9002, enabled: false},
+			},
+			wantCount: 0,
 		},
 		{
 			name: "HTTP rules overlap after domain normalization",
@@ -82,6 +106,30 @@ func TestValidateRuleConflictMatrix_reports_cross_rule_conflicts(t *testing.T) {
 				t.Fatalf("conflicts=%#v, want %d entries", conflicts, test.wantCount)
 			}
 		})
+	}
+}
+
+// Round 32 F-1: v2 导入冲突矩阵对缺 enabled 列的手造备份必须按启用处理
+// （与校验侧 backupRuleEnabled 同口径、与表 COALESCE(enabled,1) 一致）；
+// 此前缺键按禁用跳过判定，两条同端口同域名规则双双启用导入、运行时相互遮蔽。
+func TestDisableV2RuleConflicts_missingEnabledColumn_treatsAsEnabled(t *testing.T) {
+	// Given 手造备份行省略 enabled 列（JSON 反序列化后键不存在）
+	rows := []map[string]any{
+		{"name": "rule-a", "caddy_id": "lb_a", "protocol": "tcp", "domain": "", "listen_port": float64(9000)},
+		{"name": "rule-b", "caddy_id": "lb_b", "protocol": "tcp", "domain": "", "listen_port": float64(9000)},
+	}
+
+	// When
+	conflicts := disableV2RuleConflicts(rows)
+
+	// Then: 两行均视为启用 → 同端口判冲突且双双置禁用（rows 就地改写 enabled=0）
+	if len(conflicts) != 2 {
+		t.Fatalf("缺 enabled 列的两行应视为启用并判冲突，实际 %d 条: %#v", len(conflicts), conflicts)
+	}
+	for index, row := range rows {
+		if backupBooleanEnabled(row["enabled"]) {
+			t.Fatalf("rows[%d] 应在冲突后置禁用，实际 enabled=%#v", index, row["enabled"])
+		}
 	}
 }
 

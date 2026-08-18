@@ -484,7 +484,11 @@ func disableV2RuleConflicts(rows []map[string]any) []disabledRuleConflict {
 		candidates[index] = newRuleConflictCandidate(
 			backupString(row["name"]), backupString(row["caddy_id"]), backupString(row["protocol"]), backupString(row["domain"]),
 			backupInt(row["listen_port"]),
-			backupBooleanEnabled(row["enabled"]), backupBooleanEnabled(row["enable_tls"]), backupBooleanEnabled(row["tls_http_redirect"]),
+			// Round 32 F-1: 与校验侧 backupRuleEnabled（config_backup.go:284）同口径——
+			// 手造备份缺 enabled 列时按表结构 COALESCE(enabled,1) 视为启用；此前用
+			// backupBooleanEnabled 缺键按禁用，C1 门控下校验按启用、矩阵按禁用跳过，
+			// 两条同端口同域名规则双双启用导入、运行时相互遮蔽。
+			backupRuleEnabled(row), backupBooleanEnabled(row["enable_tls"]), backupBooleanEnabled(row["tls_http_redirect"]),
 		)
 	}
 	conflicts := validateRuleConflictMatrix(candidates)

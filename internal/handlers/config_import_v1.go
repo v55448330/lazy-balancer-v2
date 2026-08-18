@@ -158,9 +158,16 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 			case left.listenPort != right.listenPort:
 				continue
 			case left.protocol == "tcp" && right.protocol == "tcp":
-				reason = fmt.Sprintf("TCP 监听端口 %d 重复", left.listenPort)
+				// Round 32 F-2: 与 HTTP 同端口分支（Round 31 C-1）同口径门控——
+				// 禁用 TCP 规则不渲染（caddy.go WHERE enabled=1）、无运行时端口占用，
+				// 不得把启用中的一方静默置禁用。
+				if left.enabled && right.enabled {
+					reason = fmt.Sprintf("TCP 监听端口 %d 重复", left.listenPort)
+				}
 			case left.protocol == "tcp" || right.protocol == "tcp":
-				reason = fmt.Sprintf("TCP 与 HTTP 监听端口 %d 冲突", left.listenPort)
+				if left.enabled && right.enabled {
+					reason = fmt.Sprintf("TCP 与 HTTP 监听端口 %d 冲突", left.listenPort)
+				}
 			}
 			if reason != "" {
 				reasons[leftIndex] = append(reasons[leftIndex], reason)

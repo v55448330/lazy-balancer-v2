@@ -305,8 +305,8 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 			}
 			seenExactNorms[normalizedExact] = index + 1
 		}
-		// C-F4: upstreams 为空数组时生成阶段无回退（nil 才继承主上游），
-		// buildHTTPHandleChain 会因“无启用上游”失败并回滚整份配置，必须在保存前拒绝。
+		// C-F4: 空数组虽在生成阶段已回退主上游（Round 32 F-3，与 nil 同语义），
+		// 仍禁止写入上游表占位的空 upstreams_json——保存前拒绝保持数据整洁。
 		if pathRule.Upstreams != nil && len(pathRule.Upstreams) == 0 {
 			return fmt.Errorf("第 %d 条路径规则至少需要配置一个上游", index+1)
 		}
@@ -703,19 +703,22 @@ func validateRuleConfigGeneration(rule models.LbRule) error {
 		DnsServer: rule.DnsServer, DnsFamily: rule.DnsFamily, CustomRoutesEnabled: rule.CustomRoutesEnabled,
 		PathRules: toPathRuleConfigs(rule.PathRules), Upstreams: upstreams,
 	})
-	message, invalid := config["error"].(string)
-	if !invalid {
+	genErr, hasErr := config["error"].(error)
+	if !hasErr {
 		return nil
 	}
 	// Round 31 C-2: 仅特判零上游——全量渲染路径对零上游规则是跳过而非失败
 	// （caddy.go 按启用上游数 continue），该特判是有意的，保持与渲染侧一致；
 	// 其余生成错误（含 generateHTTPRouteObjects 的硬错误）一律返回，
 	// 避免 F4 聚合与 EnableRule 预校验漏报（此前全被吞掉）。
-	if message == "no enabled upstreams" {
+	// Round 32 F-3: 精确串比较改哨兵 errors.Is——生成侧两处产出点
+	// （GenerateSingleRuleCaddyConfig 直返 / buildHTTPHandleChain %w 包装）
+	// 统一引用 services.ErrNoEnabledUpstreams，未来加规则上下文包装仍能命中。
+	if errors.Is(genErr, services.ErrNoEnabledUpstreams) {
 		return nil
 	}
-	if strings.Contains(message, "dynamic DNS requires exactly one enabled upstream") {
+	if strings.Contains(genErr.Error(), "dynamic DNS requires exactly one enabled upstream") {
 		return &configValidationError{message: "动态 DNS 模式仅支持一个启用的上游"}
 	}
-	return fmt.Errorf("生成规则配置失败: %s", message)
+	return fmt.Errorf("生成规则配置失败: %s", genErr.Error())
 }

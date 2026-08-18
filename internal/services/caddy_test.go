@@ -183,9 +183,16 @@ func TestGenerateCaddyConfig_fail_closed_errors_do_not_call_load(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, want: "decode path upstreams"},
+		// Round 32 F-3: 原用例以 path_rules 空数组 upstreams_json='[]' 触发
+		// "generate HTTP routes" 失败——该场景现按修复语义回退主上游（与 nil 同口径，
+		// 见 TestGenerateSingleRuleCaddyConfig_pathRuleEmptyUpstreamArray_...），
+		// 改用 dynamic-DNS 双上游维持 fail-closed 校验覆盖。
 		{name: "HTTP route", setup: func(t *testing.T, database *sql.DB) {
 			seedGenerationRule(t, database, "lb_route", true)
-			if _, err := database.Exec("INSERT INTO path_rules (rule_id,sort_order,match_type,path,upstreams_json) VALUES ('lb_route',1,'prefix','/api','[]')"); err != nil {
+			if _, err := database.Exec("INSERT INTO upstreams (rule_id,host,port,enabled,protocol) VALUES ('lb_route','127.0.0.1',9001,1,'http')"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.Exec("UPDATE lb_rules SET dynamic_dns=1 WHERE caddy_id='lb_route'"); err != nil {
 				t.Fatal(err)
 			}
 		}, want: "generate HTTP routes"},

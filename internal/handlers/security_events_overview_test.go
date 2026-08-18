@@ -558,8 +558,11 @@ func TestGetSecurityOverview_groupsAttackTypesByFamily(t *testing.T) {
 	router := newSecurityEventsRouter(t)
 	seedRecent := func(ruleTriggered, ruleMsg string, count int) {
 		t.Helper()
+		// 事件时间必须落在总览「今日-6 天」窗口内：固定日期会随窗口推移掉出
+		// 窗口（定时炸弹，跨午夜即现），按当前时间动态生成。
+		eventTime := time.Now().UTC().Add(-time.Hour).Format("2006-01-02 15:04:05")
 		for i := 0; i < count; i++ {
-			seedSecurityEvent(t, "2026-08-12 10:00:00", "lb_x", 1, ruleTriggered, ruleMsg)
+			seedSecurityEvent(t, eventTime, "lb_x", 1, ruleTriggered, ruleMsg)
 		}
 	}
 	seedRecent("942100", "SQL Injection", 3)
