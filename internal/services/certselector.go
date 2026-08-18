@@ -14,6 +14,9 @@ type CertificateCandidate struct {
 	CertPEM   string
 	KeyPEM    string
 	UpdatedAt float64
+	// Leaf 是调用方预解析的证书（快照组选统一解析后传入，避免二次 X509KeyPair
+	// 解析）；为空时 SelectCertificate 自行解析。
+	Leaf *x509.Certificate
 }
 
 type CertificateSelection struct {
@@ -34,15 +37,21 @@ func SelectCertificate(candidates []CertificateCandidate, ruleDomains string, no
 		if candidate.Status == "disabled" {
 			continue
 		}
-		pair, err := tls.X509KeyPair([]byte(candidate.CertPEM), []byte(candidate.KeyPEM))
-		if err != nil || len(pair.Certificate) == 0 {
-			continue
-		}
-		certificate := pair.Leaf
+		certificate := candidate.Leaf
 		if certificate == nil {
-			certificate, err = x509.ParseCertificate(pair.Certificate[0])
+			pair, err := tls.X509KeyPair([]byte(candidate.CertPEM), []byte(candidate.KeyPEM))
+			if err != nil || len(pair.Certificate) == 0 {
+				continue
+			}
+			certificate = pair.Leaf
+			if certificate == nil {
+				certificate, err = x509.ParseCertificate(pair.Certificate[0])
+			}
+			if err != nil {
+				continue
+			}
 		}
-		if err != nil || now.Before(certificate.NotBefore) || !now.Before(certificate.NotAfter) {
+		if now.Before(certificate.NotBefore) || !now.Before(certificate.NotAfter) {
 			continue
 		}
 		coversDomains := true

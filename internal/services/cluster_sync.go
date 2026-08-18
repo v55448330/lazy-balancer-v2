@@ -66,6 +66,11 @@ const (
 
 var errClusterPinMismatch = errors.New("主节点 TLS 证书指纹不匹配")
 
+// errSyncPullStopped 是 beginPull 在停机竞态（Stop 期间）下的哨兵错误：该路径
+// 不得落库覆盖 apply_ok_reload_failed 标记（见 recordSyncError），错误本身仍
+// 返回给调用方（含手动 Pull 的 API 响应）。
+var errSyncPullStopped = errors.New("集群同步已停止")
+
 // errSyncTokenRevoked 表示主节点以 401/403 拒绝了本节点的快照拉取：
 // 集群令牌已被撤销（节点被主节点删除或注册被拒），继续按周期重试只会
 // 无限失败，属于需要人工介入（重新注册或提升为主节点）的终止类错误。
@@ -599,6 +604,11 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	verifiedSnapshot, err := verifiedSnapshotIntegrity(envelope.Data, token, appliedVersion)
 	if err != nil {
 		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
+		// 验签/版本校验失败除审计外落 last_sync_error：主节点节点列表经 Report
+		// 通道可见真实失败原因（否则仅本地日志，节点页显示健康但同步停滞）。
+		if s.db != nil {
+			s.recordSyncError(ctx, err, nil)
+		}
 		return SyncResult{}, err
 	}
 	envelope.Data = verifiedSnapshot
@@ -664,7 +674,7 @@ func (s *SyncService) beginPull() error {
 	s.pullAdmissionMu.Lock()
 	defer s.pullAdmissionMu.Unlock()
 	if s.pullsStopped {
-		return errors.New("集群同步已停止")
+		return errSyncPullStopped
 	}
 	s.pullWG.Add(1)
 	return nil
@@ -728,6 +738,14 @@ func decodeSyncError(stored string) (string, models.SyncErrorCode) {
 // 清空 last_sync_error 前必须保留该标记到下周期。
 const syncReloadFailureMarkerPrefix = "apply_ok_reload_failed"
 
+// syncFailureCountPrefix/syncFailureCountSuffix 界定组合消息中的「连续失败计数」
+// 片段：组合时只保留标记段首个失败原因 + 递增计数，消息长度因此有界，不会随
+// 连续失败把整条历史追加为前缀（O(n²) 累计写入，且经 Report 上抛膨胀主节点库）。
+const (
+	syncFailureCountPrefix = "同步失败（已连续 "
+	syncFailureCountSuffix = " 次）"
+)
+
 // syncReloadFailureMarkerPresent 报告 last_sync_error 当前是否携带重载失败标记。
 func (s *SyncService) syncReloadFailureMarkerPresent(ctx context.Context) bool {
 	var stored string
@@ -750,6 +768,12 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 	msg := ""
 	code := models.SyncErrorCode("")
 	if pullErr != nil {
+		// 停机竞态（Stop 期间 beginPull 被拒）不落库：进程即将退出，且写入
+		// ValidationFailed 会覆盖重载失败标记——标记必须跨重启存活以触发首轮
+		// 304 全量重拉补偿；错误本身已返回给调用方（含手动 Pull 的 API 响应）。
+		if errors.Is(pullErr, errSyncPullStopped) {
+			return
+		}
 		msg = "同步拉取失败: " + pullErr.Error()
 		code = syncErrorCode(pullErr)
 	} else if reportErr != nil {
@@ -763,19 +787,58 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 			return
 		}
 	}
-	if code == models.SyncErrorCodeTransportError {
+	if syncErrorPreservesReloadMarker(code) {
 		var stored string
 		if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err == nil {
-			// 传输层错误不得覆盖重载失败标记：标记是全量重拉补偿的唯一触发器，
-			// 覆盖后下一周期 304 将跳过补偿，陈旧运行配置保持到下次真实变更。
+			// 可恢复类错误（传输故障/主节点指纹不匹配）不得覆盖重载失败标记：
+			// 标记是全量重拉补偿的唯一触发器，覆盖后下一周期 304 将跳过补偿，
+			// 陈旧运行配置保持到下次真实变更。组合只保留首个失败原因 + 计数。
 			if storedMsg, _ := decodeSyncError(stored); strings.HasPrefix(storedMsg, syncReloadFailureMarkerPrefix) {
-				reason := strings.TrimSpace(strings.TrimPrefix(storedMsg, syncReloadFailureMarkerPrefix))
-				reason = strings.TrimSpace(strings.TrimPrefix(reason, ":"))
-				msg = syncReloadFailureMarkerPrefix + ": " + reason + " | " + msg
+				msg = combineSyncErrorWithMarker(storedMsg, msg)
 			}
 		}
 	}
 	s.persistSyncError(ctx, msg, code)
+}
+
+// syncErrorPreservesReloadMarker 判定错误是否属于「可恢复类」：传输故障与主节点
+// 指纹不匹配都是网络/主节点侧的临时问题，下一周期可能恢复并返回 304；此时重载
+// 失败标记必须保留。终止类错误（schema 版本不匹配、签名无效、令牌撤销、校验/
+// 应用失败）允许覆盖：它们要么让 run 循环 halt 等待人工介入，要么已失去补偿意义。
+func syncErrorPreservesReloadMarker(code models.SyncErrorCode) bool {
+	return code == models.SyncErrorCodeTransportError || code == models.SyncErrorCodePinMismatch
+}
+
+// combineSyncErrorWithMarker 在重载失败标记上追加新的可恢复类错误：标记段只保留
+// 首个失败原因（按 " | " 切分取第一段，丢弃历史累加的传输错误部分），传输错误以
+// 「已连续 N 次」计数表示（旧消息已含计数则递增），消息长度因此有界。
+func combineSyncErrorWithMarker(storedMsg, newMsg string) string {
+	markerSegment := storedMsg
+	if idx := strings.Index(storedMsg, " | "); idx >= 0 {
+		markerSegment = storedMsg[:idx]
+	}
+	reason := strings.TrimSpace(strings.TrimPrefix(markerSegment, syncReloadFailureMarkerPrefix))
+	reason = strings.TrimSpace(strings.TrimPrefix(reason, ":"))
+	count := syncFailureCountIn(storedMsg) + 1
+	return syncReloadFailureMarkerPrefix + ": " + reason + " | " + syncFailureCountPrefix + strconv.Itoa(count) + syncFailureCountSuffix + ": " + newMsg
+}
+
+// syncFailureCountIn 从旧消息解析「已连续 N 次」计数；消息不含计数片段时返回 0。
+func syncFailureCountIn(message string) int {
+	start := strings.Index(message, syncFailureCountPrefix)
+	if start < 0 {
+		return 0
+	}
+	digits := message[start+len(syncFailureCountPrefix):]
+	end := strings.Index(digits, syncFailureCountSuffix)
+	if end < 0 {
+		return 0
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(digits[:end]))
+	if err != nil || count < 0 {
+		return 0
+	}
+	return count
 }
 
 // verifySnapshotIntegrity re-computes the snapshot fingerprint the same way

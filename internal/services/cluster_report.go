@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -40,7 +41,10 @@ func (s *SyncService) Report(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(cert_expiry_days,30) FROM global_config WHERE id=1").Scan(&expiryDays); err != nil || expiryDays <= 0 {
 		expiryDays = 30
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cert_jobs WHERE status='issued' AND expires_at IS NOT NULL AND datetime(expires_at)<=datetime('now','+`+fmt.Sprintf("%d", expiryDays)+` days')`).Scan(&expiringCount); err != nil {
+	// expiryDays 经 Scan 已是纯整数（非法/非数字值回退 30），strconv.Itoa 只产生
+	// 数字修饰符；SQLite datetime 修饰符无法参数化，格式化必须保证纯数字。
+	expiryModifier := strconv.Itoa(expiryDays)
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cert_jobs WHERE status='issued' AND expires_at IS NOT NULL AND datetime(expires_at)<=datetime('now','+`+expiryModifier+` days')`).Scan(&expiringCount); err != nil {
 		return fmt.Errorf("统计即将到期证书: %w", err)
 	}
 	_, caddyErr := s.caddy.GetConfig()

@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -772,10 +775,6 @@ func (s *ClusterService) snapshotCertificates(ctx context.Context, store snapsho
 		candidate.Status = cert.SourceStatus
 		candidate.CertPEM = cert.CertPEM
 		candidate.KeyPEM = cert.KeyPEM
-		if _, valid := SelectCertificate([]CertificateCandidate{candidate}, canonicalRuleDomain, now); !valid {
-			warnSnapshotCertificateCandidate(cert.RuleID, int(candidate.ID), errors.New("证书、私钥、有效期或域名覆盖无效"), now)
-			continue
-		}
 		cert.Domain = canonicalRuleDomain
 		ruleDomains[cert.RuleID] = canonicalRuleDomain
 		candidatesByRule[cert.RuleID] = append(candidatesByRule[cert.RuleID], snapshotCertificateCandidate{selection: candidate, snapshot: cert})
@@ -789,8 +788,40 @@ func (s *ClusterService) snapshotCertificates(ctx context.Context, store snapsho
 	}
 	sort.Strings(ruleIDs)
 	for _, ruleID := range ruleIDs {
+		// 组选阶段统一解析候选证书（R31 M6：行扫描阶段不再逐候选做 X509KeyPair
+		// 全量解析，消除每候选双解析）。解析/有效期/域名覆盖失败的候选按 rule/job
+		// 限频告警后跳过；解析结果存入 Leaf 供 SelectCertificate 复用。
+		canonicalDomains, err := CanonicalACMEDomains(ruleDomains[ruleID])
+		if err != nil {
+			continue
+		}
+		domains := strings.Split(canonicalDomains, ",")
 		selectionCandidates := make([]CertificateCandidate, 0, len(candidatesByRule[ruleID]))
 		for _, candidate := range candidatesByRule[ruleID] {
+			pair, err := tls.X509KeyPair([]byte(candidate.selection.CertPEM), []byte(candidate.selection.KeyPEM))
+			if err != nil || len(pair.Certificate) == 0 {
+				warnSnapshotCertificateCandidate(candidate.snapshot.RuleID, int(candidate.selection.ID), errors.New("证书、私钥、有效期或域名覆盖无效"), now)
+				continue
+			}
+			leaf := pair.Leaf
+			if leaf == nil {
+				if leaf, err = x509.ParseCertificate(pair.Certificate[0]); err != nil {
+					warnSnapshotCertificateCandidate(candidate.snapshot.RuleID, int(candidate.selection.ID), errors.New("证书、私钥、有效期或域名覆盖无效"), now)
+					continue
+				}
+			}
+			coversDomains := true
+			for _, domain := range domains {
+				if leaf.VerifyHostname(domain) != nil {
+					coversDomains = false
+					break
+				}
+			}
+			if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) || !coversDomains {
+				warnSnapshotCertificateCandidate(candidate.snapshot.RuleID, int(candidate.selection.ID), errors.New("证书、私钥、有效期或域名覆盖无效"), now)
+				continue
+			}
+			candidate.selection.Leaf = leaf
 			selectionCandidates = append(selectionCandidates, candidate.selection)
 		}
 		selection, selected := SelectCertificate(selectionCandidates, ruleDomains[ruleID], now)

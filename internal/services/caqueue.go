@@ -191,11 +191,20 @@ func (m *CAQueueManager) UnblockJobsForRule(ruleID string, tokens ...RuleBlockTo
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	barriers := m.blockedRules[ruleID]
 	delete(barriers, tokens[0])
+	lastBarrierReleased := false
 	if len(barriers) == 0 {
 		delete(m.blockedRules, ruleID)
+		lastBarrierReleased = true
+	}
+	m.mu.Unlock()
+	if lastBarrierReleased {
+		// 规则解锁后补扫一次部署重试（R31 M5）：阻塞期间被
+		// scheduleCertificateDeploymentRetry 丢弃的 'downloaded' 任务（窗口已过）
+		// 需重新调度，否则滞停到下次 Resume/Start。走全局函数通道，且必须先释放
+		// 队列锁——补扫回调会再次查询 isRuleBlocked（重入本锁）。
+		rescanDroppedCertificateDeploymentRetries()
 	}
 }
 
@@ -375,6 +384,13 @@ func (m *CAQueueManager) requeueLifecycleStrandedJobs() {
 		return
 	}
 	for _, job := range jobs {
+		if m.IsJobActive(job.id) {
+			// 防御（R31 M4）：任务正被队列执行时不得扫描重入队——把在途任务
+			// 的 DB 状态置回 'queued' 会让执行结束后的状态转换失败并误标 failed。
+			// 当前生产调用点（PauseAndDrain 之后）不会触发，测试直接调用 Resume
+			// 时依赖此守卫。
+			continue
+		}
 		if !certJobRuleApplicable(job.ruleBound, job.ruleDomain, job.domain) {
 			// 孤儿任务交给周期 sweep 禁用，此处不重复处理
 			continue

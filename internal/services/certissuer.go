@@ -154,6 +154,18 @@ func resumeCertificateDeploymentRetries() {
 	}
 }
 
+// rescanDroppedCertificateDeploymentRetries 触发证书服务补扫被规则阻塞丢弃的
+// 部署重试；供 caqueue 解锁后调用，与 resumeCertificateDeploymentRetries 同走
+// 全局函数通道（避免服务层互相直接持有）。
+func rescanDroppedCertificateDeploymentRetries() {
+	certificateServiceMu.Lock()
+	service := certificateService
+	certificateServiceMu.Unlock()
+	if service != nil {
+		service.rescanDroppedDeploymentRetries()
+	}
+}
+
 func retryCertificateDeployment(ctx context.Context, jobID int, reloader func() error) error {
 	var material issuedCertificate
 	// 部署重试须接受与 confirmCertificateDeployment 相同的可部署状态集：启动恢复把
