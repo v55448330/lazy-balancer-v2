@@ -1714,6 +1714,10 @@ const userExplicitPort = ref(false)
 // Watch for enable_tls toggle to adjust default listen port
 watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
   if (hydratingWizard) return
+  // 编辑态下端口不做自动迁移（保留已提交配置），但开启 TLS 且端口仍为 80 时给出非静默提示
+  if (newVal && !oldVal && userExplicitPort.value && wizardForm.listen_port === 80) {
+    ElMessage.info('端口当前为 80，如需 HTTPS 访问建议改为 443')
+  }
   if (userExplicitPort.value) return
   if (wizardForm.protocol !== 'http') return
   if (newVal && !oldVal) {
@@ -1734,8 +1738,9 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
   if (hydratingWizard) return
   if (newVal !== 'tcp') wizardForm.tcp_proxy_protocol = false
   if (newVal === 'tcp') {
-    // Switching to TCP: use a neutral high port and plain TCP upstreams
-    if (!userExplicitPort.value && (wizardForm.listen_port === 80 || wizardForm.listen_port === 443)) {
+    // Switching to TCP: use a neutral high port and plain TCP upstreams.
+    // 无条件迁移：DB 中不存在 TCP:80/443 存量规则（后端无条件拒绝），编辑态无需保留该值
+    if (wizardForm.listen_port === 80 || wizardForm.listen_port === 443) {
       wizardForm.listen_port = 8080
     }
     wizardForm.enable_tls = false
