@@ -293,16 +293,69 @@ func securityEventsFindNextDocument(f *os.File, from int64) (int64, bool, error)
 	return 0, false, nil
 }
 
+// securityEventsScanNextDocumentBounded 有界前向扫描 [from, limit) 内下一个
+// "\n{" 文档头（返回 `{` 的字节位置）：供归档 pass（文件大小有界、不再增长）
+// 在 4MB 扫描窗口之外继续找文档头，跳过畸形区恢复摄取其后的事件。
+func securityEventsScanNextDocumentBounded(f *os.File, from, limit int64) (int64, bool, error) {
+	const chunkSize = 1 << 20
+	if from >= limit {
+		return 0, false, nil
+	}
+	pos := from
+	var prev byte
+	first := true
+	for pos < limit {
+		chunk := int64(chunkSize)
+		if limit-pos < chunk {
+			chunk = limit - pos
+		}
+		buf := make([]byte, chunk)
+		n, err := f.ReadAt(buf, pos)
+		if n > 0 {
+			if !first && prev == '\n' && buf[0] == '{' {
+				return pos - 1, true, nil // "\n{" 跨块边界，返回 `{` 的位置
+			}
+			if idx := bytes.Index(buf[:n], []byte("\n{")); idx >= 0 {
+				return pos + int64(idx) + 1, true, nil
+			}
+			prev = buf[n-1]
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return 0, false, err
+		}
+		if int64(n) < chunk {
+			break
+		}
+		pos += int64(n)
+		first = false
+	}
+	return 0, false, nil
+}
+
 // securityEventsTailer streams new audit transactions from the log file,
 // persisting its byte offset between passes so restarts resume in place.
 type securityEventsTailer struct {
 	logPath    string
 	offsetPath string
 	lastInfo   os.FileInfo
+	// archivePass 标记归档补采（.1 补采 / pending 重试）：归档大小有界且不再增长，
+	// 遇到 ≥4MB 畸形区时改为有界 scan-to-EOF 恢复，而不是 F1 报错（见
+	// securityEventsProcessPass）。
+	archivePass bool
+	// failOffset 是本 pass 中 F1 停摆（畸形区）的偏移，仅 F1 错误路径设置；
+	// -1 表示本次 tick 未触发 F1。
+	failOffset int64
+	// S1: F1 停摆告警限流——上次 warn 的畸形区偏移与时间，偏移不变时每分钟
+	// 最多一条 warn，偏移前进即重置立即告警。
+	lastWarnOffset int64
+	lastWarnTime   time.Time
 }
 
 func securityEventsNewTailer(logPath, offsetPath string) *securityEventsTailer {
-	return &securityEventsTailer{logPath: logPath, offsetPath: offsetPath}
+	return &securityEventsTailer{logPath: logPath, offsetPath: offsetPath, failOffset: -1}
 }
 
 // securityEventsTick runs one ingest pass over the audit log.
@@ -398,12 +451,44 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 				// 位置解码失败、原地打转且无任何告警，后续所有事件永不被摄取。
 				// 仅当扫描窗口之外仍有数据时才判定为畸形区并返回错误，让 tick 走
 				// warn 暴露停摆；已解析文档先提交，偏移照常推进。
+				// 归档 pass（.1 补采 / pending 重试）的文件大小有界且不再增长，
+				// F1 错误会让 pending 标记永不清除、轮转永久停摆，故改为有界
+				// scan-to-EOF 找下一个 "\n{"：找到则跳过畸形区（一条 error 日志）
+				// 继续摄取其后事件；找不到则记一次 error 日志并结束本 pass（该
+				// 区域不可恢复，但不再阻塞轮转）。
 				if info, serr := f.Stat(); serr == nil && decoderStart+decoder.InputOffset()+securityEventsScanWindowLimit < info.Size() {
-					_ = stmt.Close()
-					if cerr := tx.Commit(); cerr != nil {
-						return committedOffset, fmt.Errorf("security events: commit inserts: %w", cerr)
+					if !t.archivePass {
+						_ = stmt.Close()
+						if cerr := tx.Commit(); cerr != nil {
+							return committedOffset, fmt.Errorf("security events: commit inserts: %w", cerr)
+						}
+						t.failOffset = decoderStart + decoder.InputOffset()
+						return offset, fmt.Errorf("security events: unreadable audit data beyond %d scan window at offset %d", securityEventsScanWindowLimit, decoderStart+decoder.InputOffset())
 					}
-					return offset, fmt.Errorf("security events: unreadable audit data beyond %d scan window at offset %d", securityEventsScanWindowLimit, decoderStart+decoder.InputOffset())
+					next, found, rerr := securityEventsScanNextDocumentBounded(f, decoderStart+decoder.InputOffset(), info.Size())
+					if rerr != nil {
+						_ = stmt.Close()
+						_ = tx.Rollback()
+						return committedOffset, fmt.Errorf("security events: archive resync scan: %w", rerr)
+					}
+					if !found {
+						_ = stmt.Close()
+						if cerr := tx.Commit(); cerr != nil {
+							return committedOffset, fmt.Errorf("security events: commit inserts: %w", cerr)
+						}
+						Logf("error", "security events ingestion: unrecoverable unreadable audit data at offset %d in archive, ending pass", decoderStart+decoder.InputOffset())
+						return offset, nil
+					}
+					Logf("error", "security events ingestion: skipping unreadable audit data before offset %d: %v", next, err)
+					offset = next
+					decoderStart = next
+					if _, err := f.Seek(offset, io.SeekStart); err != nil {
+						_ = stmt.Close()
+						_ = tx.Rollback()
+						return committedOffset, fmt.Errorf("security events: seek after resync: %w", err)
+					}
+					decoder = json.NewDecoder(f)
+					continue
 				}
 				stmt.Close()
 				if cerr := tx.Commit(); cerr != nil {
@@ -497,14 +582,16 @@ func securityEventsIngestRotatedDelta(persistedOffset int64) error {
 	if info.Size() <= persistedOffset {
 		return nil // 归档未包含超出已摄取偏移的内容
 	}
-	return securityEventsIngestDeltaFrom(archive, persistedOffset)
+	return securityEventsIngestDeltaFrom(archive, persistedOffset, true)
 }
 
 // securityEventsIngestDeltaFrom 从 path 的 from 偏移补采到 EOF 的安全事件：
 // 解析与 INSERT OR IGNORE 插入复用 securityEventsProcessPass，transaction_id
 // 唯一索引保证幂等。轮转后的 .1 归档（securityEventsIngestRotatedDelta）与
 // copy 完成后 truncate 前的活文件尾部（rotateAuditLogIfNeeded）共用此路径。
-func securityEventsIngestDeltaFrom(path string, from int64) error {
+// archive=true 表示归档补采（.1 / pending 重试）：文件大小有界且不再增长，
+// 畸形区走 scan-to-EOF 恢复而非 F1 报错（见 securityEventsProcessPass）。
+func securityEventsIngestDeltaFrom(path string, from int64, archive bool) error {
 	if db.DB == nil || db.MetricsDB == nil {
 		return nil
 	}
@@ -518,8 +605,25 @@ func securityEventsIngestDeltaFrom(path string, from int64) error {
 		return err
 	}
 	t := securityEventsNewTailer(auditLogPath, securityEventsOffsetPath)
+	t.archivePass = archive
 	_, passErr := t.securityEventsProcessPass(f, from, rules, bindings)
 	return passErr
+}
+
+// securityEventsRateLimitedWarn 输出 tick 失败告警并对 F1 停摆错误（畸形区）
+// 限流：同一畸形区偏移每分钟最多一条 warn（tailer 记录 lastWarnOffset +
+// lastWarnTime），偏移前进即重置立即告警；其他错误照常输出。
+func (t *securityEventsTailer) securityEventsRateLimitedWarn(err error) {
+	if t.failOffset < 0 || !strings.Contains(err.Error(), "scan window at offset") {
+		Logf("warn", "security events ingestion: tick failed: %v", err)
+		return
+	}
+	now := time.Now()
+	if t.failOffset != t.lastWarnOffset || now.Sub(t.lastWarnTime) >= time.Minute {
+		Logf("warn", "security events ingestion: tick failed: %v", err)
+		t.lastWarnOffset = t.failOffset
+		t.lastWarnTime = now
+	}
 }
 
 // StartSecurityEventsIngestion tails the Coraza WAF audit log and ingests new
@@ -533,7 +637,7 @@ func StartSecurityEventsIngestion(ctx context.Context) {
 	for {
 		// 先采集后轮转：copytruncate 前把未摄取内容全部吃进，杜绝轮转窗口丢事件。
 		if err := tailer.securityEventsTick(); err != nil {
-			Logf("warn", "security events ingestion: tick failed: %v", err)
+			tailer.securityEventsRateLimitedWarn(err)
 		}
 		rotateAuditLogIfNeeded()
 		select {

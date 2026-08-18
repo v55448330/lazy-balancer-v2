@@ -999,7 +999,9 @@ func TestSecurityEventsPendingDeltaMarker_atomicWriteAndRead(t *testing.T) {
 	p := securityEventsPendingDelta{Path: filepath.Join(dir, "audit.log.1"), Offset: 1234, Size: 5678}
 
 	// When：写入标记
-	securityEventsWritePendingDelta(p)
+	if err := securityEventsWritePendingDelta(p); err != nil {
+		t.Fatal(err)
+	}
 
 	// Then：原子落盘完成（无 .tmp 残留），内容完整可读回
 	if _, err := os.Stat(securityEventsPendingDeltaPath() + ".tmp"); !os.IsNotExist(err) {
@@ -1015,5 +1017,326 @@ func TestSecurityEventsPendingDeltaMarker_atomicWriteAndRead(t *testing.T) {
 	}
 	if got := securityEventsReadPendingDelta(); got != nil {
 		t.Fatalf("corrupt marker must read as nil, got %+v", got)
+	}
+}
+
+func TestSecurityEventsTick_warnRateLimitedPerOffset(t *testing.T) {
+	// Given：日志含正常事务 + ≥4MB 无文档头畸形区 + 后续事务（F1 停摆场景，
+	// 偏移永久卡在畸形区前）
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	content := securityEventsFixtureBlocked + "\n" + strings.Repeat("x", securityEventsScanWindowLimit+4096) + "\n" + securityEventsFixtureClean + "\n"
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldAuditLog, oldAuditLogPath, oldOffsetPath, oldInterval := auditLogPath, securityEventsAuditLogPath, securityEventsOffsetPath, securityEventsPollInterval
+	auditLogPath, securityEventsAuditLogPath, securityEventsOffsetPath = logPath, logPath, offsetPath
+	securityEventsPollInterval = 100 * time.Millisecond
+	t.Cleanup(func() {
+		auditLogPath, securityEventsAuditLogPath, securityEventsOffsetPath, securityEventsPollInterval = oldAuditLog, oldAuditLogPath, oldOffsetPath, oldInterval
+	})
+	var buf bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	// When：摄取循环运行多个 tick（同一偏移反复 F1，旧行为每 tick 一条 warn）
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		StartSecurityEventsIngestion(ctx)
+		close(done)
+	}()
+	time.Sleep(1200 * time.Millisecond) // ≥ 10 个 tick
+	cancel()
+	<-done
+
+	// Then：同一偏移的停摆告警只出现一条（按偏移限流），而非每 tick 刷屏
+	warns := strings.Count(buf.String(), "tick failed")
+	if warns != 1 {
+		t.Fatalf("warn count=%d, want 1 (rate-limited per offset), captured: %s", warns, buf.String())
+	}
+}
+
+func TestRotateAuditLog_skipsMalformedRegionInArchive(t *testing.T) {
+	// Given：日志含 A（tick 已摄取）+ ≥4MB 畸形区 + B（tick 被畸形区卡住停采）——
+	// 轮转归档后补采必须跳过畸形区恢复摄取 B，否则 pending 标记永留、轮转死锁
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
+	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
+	auditLogSizeBytes = func() int64 { return 1 }
+	t.Cleanup(func() {
+		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
+	})
+	content := securityEventsFixtureBlocked + "\n" + strings.Repeat("x", securityEventsScanWindowLimit+4096) + "\n" + securityEventsFixtureUnknownHost + "\n"
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+	if err := tailer.securityEventsTick(); err == nil || !strings.Contains(err.Error(), "scan window") {
+		t.Fatalf("tick err=%v, want beyond-scan-window error (precondition)", err)
+	}
+
+	// When：轮转——归档含畸形区 + B，补采走归档 scan-to-EOF 恢复
+	rotateAuditLogIfNeeded()
+
+	// Then：畸形区之后的 B 入库、轮转正常推进（标记清除、活文件已截断）
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("rows=%d, want 2 (A + B after garbage)", count)
+	}
+	var uri string
+	if err := db.MetricsDB.QueryRow(`SELECT uri FROM security_events WHERE transaction_id='tx-unknown-1'`).Scan(&uri); err != nil {
+		t.Fatal(err)
+	}
+	if uri != "/BlockedPath" {
+		t.Fatalf("recovered event uri=%q, want /BlockedPath", uri)
+	}
+	if _, err := os.Stat(securityEventsPendingDeltaPath()); !os.IsNotExist(err) {
+		t.Fatalf("pending marker must be cleared after successful archive ingest, stat err=%v", err)
+	}
+	liveInfo, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveInfo.Size() != 0 {
+		t.Fatalf("live log size=%d, want 0 (rotation truncated)", liveInfo.Size())
+	}
+	if !strings.Contains(buf.String(), "skipping unreadable audit data") {
+		t.Fatalf("expected one skip error log, captured: %s", buf.String())
+	}
+}
+
+func TestRotateAuditLog_endsPassWhenArchiveGarbageUnrecoverable(t *testing.T) {
+	// Given：日志含 A + ≥4MB 畸形区在尾部（无后续事件，scan-to-EOF 找不到文档头）
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
+	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
+	auditLogSizeBytes = func() int64 { return 1 }
+	t.Cleanup(func() {
+		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
+	})
+	content := securityEventsFixtureBlocked + "\n" + strings.Repeat("x", securityEventsScanWindowLimit+4096)
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+	if err := tailer.securityEventsTick(); err == nil || !strings.Contains(err.Error(), "scan window") {
+		t.Fatalf("tick err=%v, want beyond-scan-window error (precondition)", err)
+	}
+
+	// When：轮转——归档补采 scan-to-EOF 找不到下一个文档头
+	rotateAuditLogIfNeeded()
+
+	// Then：记一条 error 日志并结束该 pass（区域不可恢复），轮转照常推进：
+	// 标记清除、活文件已截断、已摄取事件保留
+	if !strings.Contains(buf.String(), "unrecoverable unreadable audit data") {
+		t.Fatalf("expected unrecoverable-region error log, captured: %s", buf.String())
+	}
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rows=%d, want 1 (A only)", count)
+	}
+	if _, err := os.Stat(securityEventsPendingDeltaPath()); !os.IsNotExist(err) {
+		t.Fatalf("pending marker must be cleared, stat err=%v", err)
+	}
+	liveInfo, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveInfo.Size() != 0 {
+		t.Fatalf("live log size=%d, want 0 (rotation truncated)", liveInfo.Size())
+	}
+}
+
+func TestRotateAuditLog_backscanFindsStraddleDocStartBeyond8MB(t *testing.T) {
+	// Given：日志含 A + 事务 T 的前缀，T 文档头在归档起点 8MB 之前（旧固定 8MB
+	// 窗口回扫会漏掉文档头，跨界事务 T 两半皆失）；copy 完成后补写 T 的后缀
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
+	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
+	auditLogSizeBytes = func() int64 { return 1 }
+	t.Cleanup(func() {
+		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile
+	})
+	// 单个事务超过 8MB（巨型 uri 字符串），前缀 9MB > 8MB 固定窗口
+	fixtureT := `{
+  "transaction": {
+    "timestamp": "2026/08/11 19:16:57",
+    "unix_timestamp": 1786447017841320426,
+    "id": "tx-huge-straddle",
+    "client_ip": "198.51.100.8",
+    "server_id": "go029.com",
+    "request": { "method": "GET", "uri": "/huge/` + strings.Repeat("a", 9<<20) + `", "headers": { "host": ["go029.com"] } },
+    "is_interrupted": true
+  },
+  "messages": []
+}`
+	split := 9 << 20 // 截断点深入 uri 字符串内部
+	prefix, suffix := fixtureT[:split], fixtureT[split:]
+	if err := os.WriteFile(logPath, []byte(securityEventsFixtureBlocked+"\n"+prefix), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+	if err := tailer.securityEventsTick(); err == nil || !strings.Contains(err.Error(), "scan window") {
+		t.Fatalf("tick err=%v, want beyond-scan-window error (incomplete straddle prefix)", err)
+	}
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rows after tick=%d, want 1 (A only)", count)
+	}
+
+	// When：copy 完成后 Coraza 补写完 T 的后缀（后缀只在活文件，.1 中 T 仍不完整）
+	auditLogCopyFile = func(src, dst string) error {
+		if err := copyAuditLogTo(src, dst); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(src, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = f.WriteString(suffix)
+		return err
+	}
+	rotateAuditLogIfNeeded()
+
+	// Then：全量回扫找到 8MB 之前的文档头 → 跨界事务 T 完整入库、轮转正常推进
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("rows after rotation=%d, want 2 (A + straddled T)", count)
+	}
+	var uri string
+	if err := db.MetricsDB.QueryRow(`SELECT uri FROM security_events WHERE transaction_id='tx-huge-straddle'`).Scan(&uri); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(uri, "/huge/") || len(uri) != len("/huge/")+9<<20 {
+		t.Fatalf("straddled event uri length=%d, want full 9MB uri", len(uri))
+	}
+	if _, err := os.Stat(securityEventsPendingDeltaPath()); !os.IsNotExist(err) {
+		t.Fatalf("pending marker must be cleared, stat err=%v", err)
+	}
+	liveInfo, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveInfo.Size() != 0 {
+		t.Fatalf("live log size=%d, want 0 (rotation truncated)", liveInfo.Size())
+	}
+}
+
+func TestRotateAuditLog_abortsRotationWhenMarkerWriteFails(t *testing.T) {
+	// Given：日志含 A（tick 已摄取）、超过轮转阈值
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
+	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
+	auditLogSizeBytes = func() int64 { return 1 }
+	t.Cleanup(func() {
+		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
+	})
+	if err := os.WriteFile(logPath, []byte(securityEventsFixtureBlocked+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rows after tick=%d, want 1", count)
+	}
+
+	// When：pending 标记路径被目录占据导致原子 rename 失败（模拟标记写失败）
+	if err := os.MkdirAll(securityEventsPendingDeltaPath(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	liveSize := func() int64 {
+		info, err := os.Stat(logPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.Size()
+	}
+	before := liveSize()
+	rotateAuditLogIfNeeded()
+
+	// Then：轮转在 truncate 前中止——活文件内容完整（绝不无标记截断），
+	// 已摄取事件保留，下周期重试
+	if after := liveSize(); after != before {
+		t.Fatalf("live log size=%d, want %d (must not truncate without marker)", after, before)
+	}
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rows=%d, want 1 (no data loss)", count)
 	}
 }

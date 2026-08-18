@@ -43,7 +43,7 @@ func rotateAuditLogIfNeeded() {
 		if _, err := os.Stat(pending.Path); os.IsNotExist(err) {
 			log.Printf("audit log rotation: pending delta archive %s missing, dropping marker", pending.Path)
 			_ = os.Remove(securityEventsPendingDeltaPath())
-		} else if err := securityEventsIngestDeltaFrom(pending.Path, pending.Offset); err != nil {
+		} else if err := securityEventsIngestDeltaFrom(pending.Path, pending.Offset, true); err != nil {
 			log.Printf("audit log rotation: pending delta ingest retry failed (rotation deferred): %v", err)
 			return
 		} else {
@@ -92,8 +92,9 @@ func rotateAuditLogIfNeeded() {
 	// 从活文件直接补采。补采失败绝不截断——尾部事件仍完整留在活文件中，下次 tick
 	// 自然续读，不会丢失。
 	// 有界循环（最多 3 轮）：补采 INSERT 耗时期间新写入的尾部也一并收敛，把残余
-	// 窗口压缩到最后一轮 stat→truncate 的系统调用间隙（该间隙内的写入随下次轮转
-	// 的 .1 归档补采恢复，可接受）。
+	// 窗口压缩到最后一轮 stat→truncate 的系统调用间隙。该间隙内的写入两边都不在
+	// （copy 早已完成、未进 .1；truncate 后活文件里也没有），下次轮转的 .1 补采
+	// 覆盖不到，为可接受的尽力而为缺口（毫秒级，仅损失该瞬间的尾部事件）。
 	// 补采起点不取 archSize 本身，而是后向回扫到最近一个文档头：copy 末次读可能
 	// 截断在正在写入的事务中部（前缀在 .1、后缀在活文件），从截断点直接解码会
 	// 前向跳过该事务后半，.1 补采又因前缀 JSON 不完整无法解码——跨界事务将两半
@@ -108,16 +109,21 @@ func rotateAuditLogIfNeeded() {
 			log.Printf("audit log rotation: backscan live tail failed (not truncating): %v", berr)
 			return
 		}
-		if ierr := securityEventsIngestDeltaFrom(auditLogPath, ingestFrom); ierr != nil {
+		if ierr := securityEventsIngestDeltaFrom(auditLogPath, ingestFrom, false); ierr != nil {
 			log.Printf("audit log rotation: ingest live tail [%d, %d) failed (not truncating): %v", ingestFrom, tailInfo.Size(), ierr)
 			return
 		}
 		archSize = tailInfo.Size()
 	}
-	// F5: truncate 前先落 pending 标记。truncate 成功与补采完成之间的任何崩溃点，
-	// 标记都已在盘上（补采成功即删除、失败保留），下次轮转 shift 前先重试，
-	// 双向崩溃安全；truncate 失败则移除标记——活文件未截断、内容完整，无需补采。
-	securityEventsWritePendingDelta(securityEventsPendingDelta{Path: current, Offset: persistedOffset, Size: archSize})
+	// F5: truncate 前先落 pending 标记。标记写失败绝不在无标记状态下截断——
+	// 活文件仍完好、内容无损失，本轮中止下周期重试。truncate 成功与补采完成之间
+	// 的任何崩溃点，标记都已在盘上（补采成功即删除、失败保留），下次轮转 shift 前
+	// 先重试，双向崩溃安全；truncate 失败则移除标记——活文件未截断、内容完整，
+	// 无需补采。
+	if err := securityEventsWritePendingDelta(securityEventsPendingDelta{Path: current, Offset: persistedOffset, Size: archSize}); err != nil {
+		log.Printf("audit log rotation: write pending delta marker failed, aborting rotation without truncate: %v", err)
+		return
+	}
 	// 截断失败不影响数据安全（下次轮转会重试），仅记录日志。
 	if err := os.Truncate(auditLogPath, 0); err != nil {
 		_ = os.Remove(securityEventsPendingDeltaPath())
@@ -136,26 +142,24 @@ func rotateAuditLogIfNeeded() {
 	}
 }
 
-// securityEventsBackscanDocumentStart 后向扫描 [from-8MB, from) 内最近一个文档头
-// "\n{"（pretty-print 格式中下一个顶层文档的起始 `{`），返回该 `{` 的字节位置；
-// 窗口内未找到（超大事务/畸形区）或打开失败时回退 from 本身。用于确定活文件
-// 补采起点：copy 末次读可能截断在事务中部，从截断点直接解码会跳过该事务。
+// securityEventsBackscanDocumentStart 后向扫描 [0, from) 内最近一个文档头 "\n{"
+// （pretty-print 格式中下一个顶层文档的起始 `{`），返回该 `{` 的字节位置；
+// 未找到（超大事务/畸形区）或打开失败时回退 from 本身。用于确定活文件补采起点：
+// copy 末次读可能截断在事务中部，从截断点直接解码会跳过该事务。回扫取全量区间
+// 而非固定窗口——回扫时活文件仍完好，from（归档大小）有界于轮转阈值（默认
+// 10MB），最坏一次 10MB ReadAt；固定 8MB 窗口会漏掉文档头更靠前的跨界事务
+// （前缀在 .1、后缀在活文件），两半皆失。
 func securityEventsBackscanDocumentStart(path string, from int64) (int64, error) {
-	const backscanWindow = 8 << 20
 	f, err := os.Open(path)
 	if err != nil {
 		return from, err
 	}
 	defer f.Close()
-	start := from - backscanWindow
-	if start < 0 {
-		start = 0
-	}
-	buf := make([]byte, from-start)
-	n, err := f.ReadAt(buf, start)
+	buf := make([]byte, from)
+	n, err := f.ReadAt(buf, 0)
 	if n > 0 {
 		if idx := bytes.LastIndex(buf[:n], []byte("\n{")); idx >= 0 {
-			return start + int64(idx) + 1, nil
+			return int64(idx) + 1, nil
 		}
 	}
 	return from, nil
@@ -214,22 +218,22 @@ func securityEventsPendingDeltaPath() string {
 
 // securityEventsWritePendingDelta 持久化待补采标记：先写临时文件再原子重命名
 // （与 securityEventsWriteOffset 同模式），避免半写 JSON 被 ReadPendingDelta
-// 静默视为无标记而丢失轮转窗口；写失败仅记录日志，不阻断轮转（标记是尽力恢复，
-// 不是数据通路本身）。
-func securityEventsWritePendingDelta(p securityEventsPendingDelta) {
+// 静默视为无标记而丢失轮转窗口。标记是轮转窗口事件的唯一安全网：写失败必须让
+// 调用方在 truncate 前中止轮转（绝不无标记截断），故返回错误而非仅记日志。
+func securityEventsWritePendingDelta(p securityEventsPendingDelta) error {
 	data, err := json.Marshal(p)
 	if err != nil {
-		return
+		return err
 	}
 	path := securityEventsPendingDeltaPath()
 	tmp := path + ".tmp"
 	if werr := os.WriteFile(tmp, data, 0o644); werr != nil {
-		log.Printf("audit log rotation: write pending delta marker failed: %v", werr)
-		return
+		return werr
 	}
 	if werr := os.Rename(tmp, path); werr != nil {
-		log.Printf("audit log rotation: write pending delta marker failed: %v", werr)
+		return werr
 	}
+	return nil
 }
 
 // securityEventsReadPendingDelta 读取待补采标记；不存在或损坏返回 nil。

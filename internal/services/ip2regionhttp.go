@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -68,5 +69,13 @@ func defaultDownloadIP2RegionXDB(ctx context.Context, tag, destPath string) erro
 	if copyErr != nil {
 		return copyErr
 	}
-	return closeErr
+	if closeErr != nil {
+		return closeErr
+	}
+	// TOFU 完整性校验：与 CRS 下载一致，记录 size+SHA256 基线，同一 tag 内容
+	// 变化即告警（见 recordDownloadIntegrity）。
+	if ierr := recordDownloadIntegrity(req.URL.String(), destPath, "ip2region 数据库"); ierr != nil {
+		log.Printf("ip2region update: failed to record download integrity: %v", ierr)
+	}
+	return nil
 }

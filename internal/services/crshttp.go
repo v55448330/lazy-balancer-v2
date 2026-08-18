@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -67,5 +68,13 @@ func defaultDownloadCRSTarball(ctx context.Context, tag, destPath string) error 
 	if copyErr != nil {
 		return copyErr
 	}
-	return closeErr
+	if closeErr != nil {
+		return closeErr
+	}
+	// TOFU 完整性校验：无上游官方校验和可钉，首次下载记录 size+SHA256 基线，
+	// 后续同一 tag 内容变化即告警（见 recordDownloadIntegrity）。
+	if ierr := recordDownloadIntegrity(req.URL.String(), destPath, "CRS 规则库"); ierr != nil {
+		log.Printf("crs update: failed to record download integrity: %v", ierr)
+	}
+	return nil
 }
