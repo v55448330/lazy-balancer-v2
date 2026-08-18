@@ -32,6 +32,37 @@ func TestResolvePolicyCustomRules_legacyEmbeddedObjects(t *testing.T) {
 	}
 }
 
+// Round 34 G: IN 占位符分块——引用数超过单批上限（测试收窄为 2）时全部解析，
+// 不再整查询超限失败导致 WAF 自定义规则静默丢失。
+func TestResolvePolicyCustomRules_chunkedIDsAcrossBatches(t *testing.T) {
+	// Given
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	oldChunk := policyCustomRuleChunkSize
+	policyCustomRuleChunkSize = 2
+	t.Cleanup(func() { policyCustomRuleChunkSize = oldChunk })
+	for i := 1; i <= 5; i++ {
+		if _, err := db.DB.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, enabled) VALUES (?, '', '[]', 'pass', 1, 1)`, "规则"+string(rune('0'+i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// When 引用 5 条（跨 3 批查询）
+	rules := resolvePolicyCustomRules(json.RawMessage(`[1,2,3,4,5]`))
+
+	// Then 全部解析，无丢失
+	if len(rules) != 5 {
+		t.Fatalf("len=%d, want 5: %+v", len(rules), rules)
+	}
+	for i, want := range []string{"规则1", "规则2", "规则3", "规则4", "规则5"} {
+		if rules[i].Name != want {
+			t.Fatalf("rules[%d].Name=%q, want %q", i, rules[i].Name, want)
+		}
+	}
+}
+
 func TestBuildCorazaDirectives_customRuleDenyOmitsStatusCode(t *testing.T) {
 	// Given a blocking policy with a custom block rule carrying a custom status code
 	policy := &models.SecurityPolicy{

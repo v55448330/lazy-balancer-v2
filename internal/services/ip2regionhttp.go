@@ -69,7 +69,7 @@ func defaultDownloadIP2RegionXDB(ctx context.Context, tag, destPath string) erro
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.Copy(out, resp.Body)
+	copyErr := writeRuleSetDownload(out, resp, ruleSetDownloadSizeCap)
 	closeErr := out.Close()
 	if copyErr != nil {
 		return copyErr

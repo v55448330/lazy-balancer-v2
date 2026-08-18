@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,5 +204,41 @@ func TestStartSecurityEventsRetention_stopsWhenParentContextCanceled(t *testing.
 	securityEventsRetentionMu.Unlock()
 	if !restarted {
 		t.Fatal("worker must be restartable after parent context cancellation")
+	}
+}
+
+func TestSecurityEventsRetentionCleanup_batchesAgeDelete(t *testing.T) {
+	// Given: 12000 expired events（超过单批 5000，必须分批循环）+ 1 条近期事件
+	setupSecurityEventsRetentionTestDB(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	var sb strings.Builder
+	for start := 0; start < 12000; start += 1000 {
+		sb.Reset()
+		sb.WriteString("INSERT INTO security_events (event_time, client_ip, event_type) VALUES ")
+		for i := 0; i < 1000; i++ {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			fmt.Fprintf(&sb, "(datetime('now', '-40 days'), '198.51.100.%d', 'expired')", (start+i)%250)
+		}
+		if _, err := db.MetricsDB.Exec(sb.String()); err != nil {
+			t.Fatalf("seed expired batch: %v", err)
+		}
+	}
+	if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time, client_ip, event_type) VALUES (datetime('now'), '198.51.100.250', 'recent')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	securityEventsRetentionCleanup()
+
+	// Then：全部过期事件被分批删除，近期事件保留
+	if got := countSecurityEventsByType(t, "expired"); got != 0 {
+		t.Fatalf("expired events after cleanup = %d, want 0", got)
+	}
+	if got := countSecurityEventsByType(t, "recent"); got != 1 {
+		t.Fatalf("recent events after cleanup = %d, want 1", got)
 	}
 }

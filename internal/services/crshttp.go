@@ -11,6 +11,26 @@ import (
 
 var crsHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+// ruleSetDownloadSizeCap 是 CRS/ip2region 下载的最大字节数（2GB）：代理在超时
+// 窗口内可无限流式灌入，无界 io.Copy 会写爆数据卷 staging 目录（R34 A）。
+const ruleSetDownloadSizeCap = int64(2 << 30)
+
+// writeRuleSetDownload 将响应体限界写入目标文件：Content-Length 超上限先拒绝
+// 落盘，流式拷贝超上限即报错中止（R34 A）。
+func writeRuleSetDownload(out *os.File, resp *http.Response, cap int64) error {
+	if resp.ContentLength > cap {
+		return fmt.Errorf("下载声明 Content-Length=%d 超过大小上限 %d 字节", resp.ContentLength, cap)
+	}
+	n, err := io.Copy(out, io.LimitReader(resp.Body, cap+1))
+	if err != nil {
+		return err
+	}
+	if n > cap {
+		return fmt.Errorf("下载超过大小上限 %d 字节，已中止", cap)
+	}
+	return nil
+}
+
 // ghFastProxy prefixes GitHub downloads through https://ghfast.top/ — direct
 // GitHub file access is unreliable from the deployment network. The proxy
 // supports raw.githubusercontent.com and github.com archive paths but NOT
@@ -68,7 +88,7 @@ func defaultDownloadCRSTarball(ctx context.Context, tag, destPath string) error 
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.Copy(out, resp.Body)
+	copyErr := writeRuleSetDownload(out, resp, ruleSetDownloadSizeCap)
 	closeErr := out.Close()
 	if copyErr != nil {
 		return copyErr

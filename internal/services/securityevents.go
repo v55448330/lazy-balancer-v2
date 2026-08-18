@@ -313,7 +313,7 @@ func securityEventsScanNextDocumentBounded(f *os.File, from, limit int64) (int64
 		n, err := f.ReadAt(buf, pos)
 		if n > 0 {
 			if !first && prev == '\n' && buf[0] == '{' {
-				return pos - 1, true, nil // "\n{" 跨块边界，返回 `{` 的位置
+				return pos, true, nil // "\n{" 跨块边界，返回 `{` 的位置
 			}
 			if idx := bytes.Index(buf[:n], []byte("\n{")); idx >= 0 {
 				return pos + int64(idx) + 1, true, nil

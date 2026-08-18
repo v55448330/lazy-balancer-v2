@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -108,5 +109,61 @@ func TestBindRuleToPolicy_rejectsMissingRule(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("dangling binding written for missing rule")
+	}
+}
+
+// TestBindRuleToPolicy_concurrentRuleDeleteLeavesNoDanglingBinding 验证存在性
+// 检查与写入同事务（R34 D TOCTOU）：绑定与规则删除并发时，任何交错都不会留下
+// 悬挂绑定（check 通过后、INSERT 前规则被删的窗口已关闭）。绑定/删除两端
+// 各自使用事务，_txlock=immediate 使写事务在 BEGIN 处串行，断言确定无竞争。
+func TestBindRuleToPolicy_concurrentRuleDeleteLeavesNoDanglingBinding(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	policyID := createTestPolicy(t, router, map[string]any{"name": "并发策略", "mode": "blocking", "enabled": true})
+	caddyID := "lb_race"
+	danglingCount := func() int {
+		var n int
+		err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings b LEFT JOIN lb_rules r ON b.rule_caddy_id = r.caddy_id WHERE r.caddy_id IS NULL`).Scan(&n)
+		if err != nil {
+			t.Fatalf("count dangling bindings: %v", err)
+		}
+		return n
+	}
+	for i := 0; i < 15; i++ {
+		if _, err := db.DB.Exec("INSERT INTO lb_rules (caddy_id, name, protocol, listen_port, enabled) VALUES (?, 'race-rule', 'http', 8080, 1)", caddyID); err != nil {
+			t.Fatalf("round %d: seed rule: %v", i, err)
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			// 绑定请求：存在性校验 + DELETE + INSERT 在同一事务内
+			postJSON(t, router, "/security/policies/"+strconv.Itoa(policyID)+"/bind", map[string]any{"rule_caddy_id": caddyID})
+		}()
+		go func() {
+			defer wg.Done()
+			// 模拟 DeleteRule 的原子清理：绑定与规则同事务删除
+			tx, err := db.DB.Begin()
+			if err != nil {
+				t.Errorf("round %d: begin delete tx: %v", i, err)
+				return
+			}
+			defer tx.Rollback()
+			if _, err := tx.Exec("DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", caddyID); err != nil {
+				t.Errorf("round %d: delete bindings: %v", i, err)
+				return
+			}
+			if _, err := tx.Exec("DELETE FROM lb_rules WHERE caddy_id=?", caddyID); err != nil {
+				t.Errorf("round %d: delete rule: %v", i, err)
+				return
+			}
+			if err := tx.Commit(); err != nil {
+				t.Errorf("round %d: commit delete tx: %v", i, err)
+			}
+		}()
+		wg.Wait()
+		if n := danglingCount(); n != 0 {
+			t.Fatalf("round %d: %d dangling binding(s) after concurrent rule delete", i, n)
+		}
 	}
 }

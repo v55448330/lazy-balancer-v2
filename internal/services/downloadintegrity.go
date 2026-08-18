@@ -90,7 +90,14 @@ func loadDownloadIntegrityRecords() (map[string]downloadIntegrityRecord, error) 
 		// （rename 为 .corrupt-<ts>）保留取证现场，error 日志 + 审计记录告警，
 		// 并从头重建基线。调用方须持有 downloadIntegrityMu。
 		quarantined := downloadIntegrityPath + ".corrupt-" + time.Now().UTC().Format("20060102-150405")
-		_ = os.Rename(downloadIntegrityPath, quarantined)
+		if err := os.Rename(downloadIntegrityPath, quarantined); err != nil {
+			// 隔离失败时如实记录：文件仍在原位，后续 persist（tmp+rename）会覆盖
+			// 重建，但取证副本缺失（R34 F）。
+			Logf("error", "download integrity: records file %s is corrupt, quarantine rename to %s failed: %v（原文件保留，直接重建基线）", downloadIntegrityPath, quarantined, err)
+			RecordAuditLog("system", "下载完整性", "完整性记录文件损坏",
+				FormatAuditDetail(fmt.Sprintf("记录文件 %s 解析失败，隔离为 %s 失败：%v", downloadIntegrityPath, quarantined, err)), "")
+			return map[string]downloadIntegrityRecord{}, nil
+		}
 		Logf("error", "download integrity: records file %s is corrupt, quarantined to %s and baselines rebuilt", downloadIntegrityPath, quarantined)
 		RecordAuditLog("system", "下载完整性", "完整性记录文件损坏",
 			FormatAuditDetail(fmt.Sprintf("记录文件 %s 解析失败，已隔离为 %s 并重建基线", downloadIntegrityPath, quarantined)), "")

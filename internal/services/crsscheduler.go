@@ -137,7 +137,39 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time) {
 	if nextStr == "" {
 		return // first tick only schedules the first run
 	}
-	if err := m.StartUpdate("auto"); err != nil && !errors.Is(err, ErrCRSUpdateRunning) {
+	err := m.StartUpdate("auto")
+	if err != nil && !errors.Is(err, ErrCRSUpdateRunning) {
 		log.Printf("crs update: failed to start scheduled update: %v", err)
+		// 启动即失败：1 小时后再试，而不是等整整 24 小时（R34 I）
+		retry := now.Add(1 * time.Hour).Format(crsTimeLayout)
+		if _, dbErr := db.DB.Exec("UPDATE security_crs_version SET next_update=? WHERE id=1", retry); dbErr != nil {
+			log.Printf("crs update: failed to record retry next_update: %v", dbErr)
+		}
+		return
+	}
+	if err == nil {
+		m.rearmAfterCRSUpdate(now)
+	}
+}
+
+// rearmAfterCRSUpdate 等待异步更新结束后复查结果：失败（网络瞬断等）时把
+// next_update 改为 1 小时后重试，成功维持运行前写入的 +24h 排程（R34 I：
+// 原先运行前写死 +24h，失败整天不重试）。
+func (m *CRSUpdateManager) rearmAfterCRSUpdate(now time.Time) {
+	m.mu.Lock()
+	runDone := m.runDone
+	m.mu.Unlock()
+	if runDone != nil {
+		<-runDone
+	}
+	m.mu.Lock()
+	failed := m.state.status == CRSStatusFailed
+	m.mu.Unlock()
+	if !failed {
+		return
+	}
+	retry := now.Add(1 * time.Hour).Format(crsTimeLayout)
+	if _, err := db.DB.Exec("UPDATE security_crs_version SET next_update=? WHERE id=1", retry); err != nil {
+		log.Printf("crs update: failed to record retry next_update: %v", err)
 	}
 }

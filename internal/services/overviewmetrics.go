@@ -22,6 +22,10 @@ type RateLimitHostBlocks struct {
 	Count float64 `json:"count"`
 }
 
+// overviewMetricsReadLimit 是 Caddy /metrics 响应体的读取上限：指标基数异常膨胀
+// 时防止大块内存分配拖垮仪表盘请求（R34 H）。
+const overviewMetricsReadLimit = int64(16 << 20)
+
 // ScrapeRateLimitBlocks 抓取 Caddy admin /metrics 并按站点聚合 429 限流拦截计数。
 // 计数自 Caddy 进程启动以来累计（重启归零），非按天口径。任何抓取/解析失败
 // 都返回 error，由调用方决定降级策略，绝不静默返回空列表。
@@ -34,9 +38,12 @@ func ScrapeRateLimitBlocks(metricsURL string) ([]RateLimitHostBlocks, error) {
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("Caddy 指标接口返回状态码 %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, overviewMetricsReadLimit+1))
 	if err != nil {
 		return nil, fmt.Errorf("读取 Caddy 指标响应失败: %w", err)
+	}
+	if int64(len(body)) > overviewMetricsReadLimit {
+		return nil, fmt.Errorf("Caddy 指标响应超过 %d 字节上限", overviewMetricsReadLimit)
 	}
 	counts := parseRateLimit429Counts(string(body))
 	blocks := make([]RateLimitHostBlocks, 0, len(counts))

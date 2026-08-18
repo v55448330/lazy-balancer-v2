@@ -10,7 +10,7 @@ import (
 )
 
 // 回归锁定（R12-H1）：GetSecurityPolicyForRule 必须加载 waf_check_response，
-// 否则 buildWafHandler→BuildCorazaDirectives 看到恒 false，
+// 否则 buildWafHandlerWithPolicy→BuildCorazaDirectives 看到恒 false，
 // 「检查响应体」开关在 Caddy 渲染层被静默关闭。
 func TestGetSecurityPolicyForRule_LoadsWafCheckResponse(t *testing.T) {
 	dir := t.TempDir()

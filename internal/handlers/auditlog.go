@@ -113,6 +113,11 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	if page < 1 {
 		page = 1
 	}
+	// clamp 上限防 (page-1)*pageSize 整数溢出为负 → SQLite OFFSET 报错 500
+	// （与 ListSecurityEvents security.go:815 同口径，R34 C）。
+	if page > 100000 {
+		page = 100000
+	}
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20

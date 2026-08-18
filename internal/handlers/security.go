@@ -734,25 +734,27 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
 	}
-	var policyExists int
-	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_policies WHERE id=?", policyID).Scan(&policyExists); err != nil || policyExists == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
-		return
-	}
-	// 绑定前校验规则真实存在：悬挂绑定虽在 JOIN 中不可见，但会经集群同步传播
-	// 并污染 GetAllSecurityBindings 消费方（R33 F10）。
-	var ruleExists int
-	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id=?", req.RuleCaddyID).Scan(&ruleExists); err != nil || ruleExists == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则不存在"})
-		return
-	}
-	// 绑定/解绑必须同事务：INSERT 失败时旧绑定已被 DELETE 删除，需回滚恢复。
+	// 绑定/解绑必须同事务：存在性校验与写入同事务执行，避免检查与 INSERT 之间
+	// 规则/策略被并发删除产生悬挂绑定（无 FK，经集群同步扩散，R34 D）；INSERT
+	// 失败时旧绑定已被 DELETE 删除，需回滚恢复。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	defer tx.Rollback()
+	var policyExists int
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policies WHERE id=?", policyID).Scan(&policyExists); err != nil || policyExists == 0 {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+		return
+	}
+	// 绑定前校验规则真实存在：悬挂绑定虽在 JOIN 中不可见，但会经集群同步传播
+	// 并污染 GetAllSecurityBindings 消费方（R33 F10）。
+	var ruleExists int
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM lb_rules WHERE caddy_id=?", req.RuleCaddyID).Scan(&ruleExists); err != nil || ruleExists == 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则不存在"})
+		return
+	}
 	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", req.RuleCaddyID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return

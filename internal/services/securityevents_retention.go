@@ -51,8 +51,20 @@ func securityEventsRetentionCleanup() {
 		return
 	}
 	days, max := securityEventsRetentionSettings()
-	if _, err := database.Exec(`DELETE FROM security_events WHERE event_time < datetime('now', printf('-%d days', ?))`, days); err != nil {
-		log.Printf("security events retention: age-based cleanup failed: %v", err)
+	// 年龄裁剪同样分批执行（与 count 裁剪同口径）：大表单条 DELETE 长时间持
+	// 指标库写锁，阻塞摄取 tick（R34 E）。
+	for {
+		res, err := database.Exec(`DELETE FROM security_events WHERE id IN (SELECT id FROM security_events WHERE event_time < datetime('now', printf('-%d days', ?)) ORDER BY id ASC LIMIT ?)`, days, securityEventsRetentionDeleteBatch)
+		if err != nil {
+			log.Printf("security events retention: age-based cleanup failed: %v", err)
+			break
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			break
+		}
+		// 批间短暂让出写锁，避免长时间阻塞摄取 INSERT
+		time.Sleep(10 * time.Millisecond)
 	}
 	var count int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {

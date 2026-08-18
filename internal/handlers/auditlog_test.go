@@ -268,3 +268,62 @@ func TestGetAuditLogOptions_groupsDistinctValues(t *testing.T) {
 		t.Fatalf("resources should exclude empty, got %+v", body.Data.Resources)
 	}
 }
+
+func TestGetAuditLogs_hugePageDoesNot500(t *testing.T) {
+	// Given：审计库有一条记录（复用 raw-UTC 测试的建库方式）
+	oldDB, oldAuditDB := db.DB, db.AuditDB
+	mainDB, err := sql.Open("sqlite", t.TempDir()+"/main.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditDB, err := sql.Open("sqlite", t.TempDir()+"/audit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.DB, db.AuditDB = mainDB, auditDB
+	t.Cleanup(func() {
+		db.DB, db.AuditDB = oldDB, oldAuditDB
+		mainDB.Close()
+		auditDB.Close()
+	})
+	if _, err := mainDB.Exec("CREATE TABLE global_config (id INTEGER PRIMARY KEY, timezone VARCHAR(50)); INSERT INTO global_config VALUES (1, 'Asia/Shanghai')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auditDB.Exec("CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, username VARCHAR(50), action VARCHAR(50), resource VARCHAR(100), detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auditDB.Exec("INSERT INTO audit_log (username, action, created_at) VALUES ('admin', '登录成功', '2026-07-19 12:00:00')"); err != nil {
+		t.Fatal(err)
+	}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/audit-logs", (&Handlers{}).GetAuditLogs)
+
+	// When：page 为 int64 最大值（(page-1)*pageSize 溢出为负 OFFSET）
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/audit-logs?page=9223372036854775807", nil))
+
+	// Then：200 空页而非 500（clamp 到 100000 后 OFFSET 合法，R34 C）
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			List []json.RawMessage `json:"list"`
+			Page int               `json:"page"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Code != 0 {
+		t.Fatalf("code=%d body=%s, want 0", resp.Code, recorder.Body.String())
+	}
+	if len(resp.Data.List) != 0 {
+		t.Fatalf("list len=%d, want empty (offset beyond one row)", len(resp.Data.List))
+	}
+	if resp.Data.Page != 100000 {
+		t.Fatalf("page=%d, want clamped 100000", resp.Data.Page)
+	}
+}
