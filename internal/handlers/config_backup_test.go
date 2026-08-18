@@ -923,6 +923,47 @@ func TestValidateV2Backup_credentials_must_be_json_object(t *testing.T) {
 	}
 }
 
+func TestValidateV2Backup_rejects_self_loop_80_tls_redirect_rule(t *testing.T) {
+	tests := []struct {
+		name        string
+		rule        map[string]any
+		wantErrText string
+	}{
+		{
+			name:        "80 端口 + TLS 跳转自环规则被拒",
+			rule:        map[string]any{"caddy_id": "lb_backup_loop", "name": "备份自环", "protocol": "http", "domain": "loop.test", "listen_port": 80, "enable_tls": 1, "tls_http_redirect": 1},
+			wantErrText: "80 端口开启 TLS 跳转无意义",
+		},
+		{
+			name: "443 端口 + TLS 跳转规则正常",
+			rule: map[string]any{"caddy_id": "lb_backup_ok", "name": "备份正常", "protocol": "http", "domain": "ok.test", "listen_port": 443, "enable_tls": 1, "tls_http_redirect": 1},
+		},
+		{
+			name: "80 端口普通规则正常",
+			rule: map[string]any{"caddy_id": "lb_backup_plain", "name": "备份普通", "protocol": "http", "domain": "plain.test", "listen_port": 80},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backup := completeBackupJSON(t, map[string][]map[string]any{"lb_rules": {tt.rule}})
+			var b configBackup
+			if err := json.Unmarshal([]byte(backup), &b); err != nil {
+				t.Fatalf("unmarshal backup: %v", err)
+			}
+			err := validateV2Backup(b)
+			if tt.wantErrText != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
+					t.Fatalf("validateV2Backup err=%v, want contains %q", err, tt.wantErrText)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateV2Backup unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestImportConfigBackup_rejects_invalid_credentials_json(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	gin.SetMode(gin.TestMode)

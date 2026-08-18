@@ -164,6 +164,9 @@ func normalizePathRules(pathRules []models.PathRule) []models.PathRule {
 		if normalized[index].MatchType == "" {
 			normalized[index].MatchType = "prefix"
 		}
+		// Round 29 G-6: 存储前 TrimSpace，与校验侧（validateRuleFeatures 277 行先 TrimSpace
+		// 再归一）及渲染侧 pathMatcherSpecs 对齐，避免空格路径校验误报冲突。
+		normalized[index].Path = strings.TrimSpace(normalized[index].Path)
 	}
 	return normalized
 }
@@ -659,7 +662,7 @@ func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 			return &configValidationError{message: fmt.Sprintf("规则 %s（%s）80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转", rule.Name, rule.CaddyID)}
 		}
 		if err := validateRuleConfigGeneration(rule); err != nil {
-			return err
+			return fmt.Errorf("规则 %s（%s）配置无效：%w", rule.Name, rule.CaddyID, err)
 		}
 	}
 	return nil

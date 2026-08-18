@@ -527,6 +527,14 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 }
 
 func (h *Handlers) ApplyConfigOnStartup() error {
+	// Round 29 G-3: 启动路径补存量规则校验（保存/导入/启用路径已有自环与遮蔽拦截），
+	// 命中即响亮报错并记审计，但不阻断启动：单条坏规则不应拖垮整个服务，与
+	// 「启动应用失败仅记日志保旧配置」的既有取舍一致（main.go 调用侧同样不退出）。
+	if err := validateEnabledStoredRuleConfigs(context.Background()); err != nil {
+		services.Logf("error", "启动校验发现无效规则配置，继续启动（保留旧配置）：%v", err)
+		services.RecordAuditLog("system", "启动警告", "系统配置", "启动校验发现无效规则配置："+err.Error(), "")
+	}
+
 	// Wait for Caddy to be ready (up to 10 seconds)
 	maxRetries := 20
 	retryDelay := 500 * time.Millisecond

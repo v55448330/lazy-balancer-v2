@@ -2041,3 +2041,59 @@ func TestBuildCorazaDirectives_chainedCustomRuleCarriesActionsOnlyOnStarter(t *t
 		t.Fatalf("final rule must not carry chain: %s", chainLines[2])
 	}
 }
+
+func TestGenerateCaddyConfig_skips_redirect_route_when_same_domain_port80_rule_exists(t *testing.T) {
+	useTemporaryCertDir(t)
+	certPEM, keyPEM := matchingCertificatePair(t, "shadow.test")
+	seed := func(t *testing.T, database *sql.DB, caddyID, domain string, listenPort int, tlsRedirect bool) {
+		t.Helper()
+		enableTLS, redirect := 0, 0
+		tlsCert, tlsKey := "", ""
+		if tlsRedirect {
+			enableTLS, redirect = 1, 1
+			tlsCert, tlsKey = certPEM, keyPEM
+		}
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enabled,enable_compress,enable_tls,tls_source,tls_cert,tls_key,tls_http_redirect)
+			VALUES (?,?,'http',?,?,'weighted_round_robin',1,1,?,'manual',?,?,?)`,
+			caddyID, caddyID, domain, listenPort, enableTLS, tlsCert, tlsKey, redirect); err != nil {
+			t.Fatalf("seed rule %s: %v", caddyID, err)
+		}
+		if _, err := database.Exec("INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES (?,'127.0.0.1',9000,1,1,'http')", caddyID); err != nil {
+			t.Fatalf("seed upstream %s: %v", caddyID, err)
+		}
+	}
+	render := func(t *testing.T, seedFn func(*sql.DB)) string {
+		t.Helper()
+		_, database := newClusterTestService(t)
+		seedFn(database)
+		generated := generateCaddyConfigFromStore(database)
+		if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+			t.Fatalf("generate config: %s", message)
+		}
+		configJSON, err := json.Marshal(generated)
+		if err != nil {
+			t.Fatalf("marshal generated config: %v", err)
+		}
+		return string(configJSON)
+	}
+
+	t.Run("同域名 80 规则存在时跳过跳转路由生成", func(t *testing.T) {
+		configJSON := render(t, func(database *sql.DB) {
+			seed(t, database, "lb_redir_same", "shadow.test", 443, true)
+			seed(t, database, "lb_80_same", "shadow.test", 80, false)
+		})
+		if strings.Contains(configJSON, "lb_redir_same_redirect") {
+			t.Fatalf("同域名 80 规则存在时不应生成跳转路由: %s", configJSON)
+		}
+	})
+
+	t.Run("不同域名正常生成跳转路由", func(t *testing.T) {
+		configJSON := render(t, func(database *sql.DB) {
+			seed(t, database, "lb_redir_other", "redirect.test", 443, true)
+			seed(t, database, "lb_80_other", "plain.test", 80, false)
+		})
+		if !strings.Contains(configJSON, "lb_redir_other_redirect") {
+			t.Fatalf("不同域名应生成跳转路由: %s", configJSON)
+		}
+	})
+}

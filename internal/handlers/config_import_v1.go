@@ -91,6 +91,9 @@ type convertedUpstream struct {
 type ruleConflictCandidate struct {
 	name, caddyID, protocol, domain string
 	listenPort                      int
+	enabled                         bool
+	enableTLS                       bool
+	tlsHTTPRedirect                 bool
 }
 
 type disabledRuleConflict struct {
@@ -126,6 +129,17 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 						break
 					}
 				}
+			case left.protocol == "http" && right.protocol == "http" && left.listenPort != right.listenPort:
+				// Round 29 G-1: 跨端口跳转遮蔽方向——TLS+跳转规则在 80 端口服务器头部
+				// 生成 terminal 301（caddy.go redirectRoutes），同域名直接监听 80 的规则
+				// 会被静默遮蔽为死规则。仅双方均启用时判定，按矩阵惯例冲突双方置禁用。
+				if left.enabled && right.enabled {
+					if left.listenPort == 80 && right.enableTLS && right.tlsHTTPRedirect {
+						reason = httpRedirectShadowReason(left.domain, right.domain)
+					} else if right.listenPort == 80 && left.enableTLS && left.tlsHTTPRedirect {
+						reason = httpRedirectShadowReason(right.domain, left.domain)
+					}
+				}
 			case left.listenPort != right.listenPort:
 				continue
 			case left.protocol == "tcp" && right.protocol == "tcp":
@@ -158,6 +172,7 @@ func disableConvertedRuleConflicts(rules []convertedRule) []disabledRuleConflict
 	for _, rule := range rules {
 		candidates = append(candidates, ruleConflictCandidate{
 			name: rule.Name, protocol: rule.Protocol, domain: rule.Domain, listenPort: rule.ListenPort,
+			enabled: rule.Enabled, enableTLS: rule.EnableTLS, tlsHTTPRedirect: rule.Redirect,
 		})
 	}
 	conflicts := validateRuleConflictMatrix(candidates)
@@ -165,6 +180,21 @@ func disableConvertedRuleConflicts(rules []convertedRule) []disabledRuleConflict
 		rules[conflict.index].Enabled = false
 	}
 	return conflicts
+}
+
+// httpRedirectShadowReason 判定 80 端口规则域名是否被 TLS+跳转规则域名遮蔽，
+// 命中返回遮蔽原因，未命中返回空串。
+func httpRedirectShadowReason(port80Domain, redirectDomain string) string {
+	leftDomains := make(map[string]struct{})
+	for _, domain := range normalizedRuleDomains(port80Domain) {
+		leftDomains[domain] = struct{}{}
+	}
+	for _, domain := range normalizedRuleDomains(redirectDomain) {
+		if _, exists := leftDomains[domain]; exists {
+			return fmt.Sprintf("HTTP 域名 %s 被 HTTPS 跳转遮蔽", domain)
+		}
+	}
+	return ""
 }
 
 func formatDisabledRuleConflicts(conflicts []disabledRuleConflict) string {
@@ -551,8 +581,10 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		if mappedStrategy == "" {
 			mappedStrategy = "weighted_round_robin"
 		}
+		// Round 29 G-1: 补传端口/TLS/跳转字段，v1 转换后同样拦截 80 端口 + TLS 跳转自环规则。
 		if validateErr := validateRuleFeatures(ruleFeatureInput{
 			Protocol: r.Protocol, Strategy: mappedStrategy,
+			ListenPort: r.ListenPort, EnableTLS: r.EnableTLS, TLSHTTPRedirect: r.Redirect,
 			CompressTypes: "gzip",
 		}); validateErr != nil {
 			allWarnings = append(allWarnings, fmt.Sprintf("规则 %s 跳过：%s", r.Name, validateErr.Error()))

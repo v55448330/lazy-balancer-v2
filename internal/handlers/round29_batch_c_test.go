@@ -69,6 +69,83 @@ func TestValidateRuleConflictMatrix_reports_cross_rule_conflicts(t *testing.T) {
 	}
 }
 
+func TestValidateRuleConflictMatrix_cross_port_redirect_shadow(t *testing.T) {
+	tests := []struct {
+		name           string
+		candidates     []ruleConflictCandidate
+		wantCount      int
+		wantDisabled80 bool
+	}{
+		{
+			name: "80 规则与 TLS 跳转规则同域名且均启用 → 双方禁用（80 规则为被遮蔽方）",
+			candidates: []ruleConflictCandidate{
+				{name: "port80", protocol: "http", domain: "shadow.test", listenPort: 80, enabled: true},
+				{name: "tls-redirect", protocol: "http", domain: "shadow.test", listenPort: 443, enabled: true, enableTLS: true, tlsHTTPRedirect: true},
+			},
+			wantCount: 2, wantDisabled80: true,
+		},
+		{
+			name: "跳转规则未启用 → 不判定",
+			candidates: []ruleConflictCandidate{
+				{name: "port80", protocol: "http", domain: "shadow.test", listenPort: 80, enabled: true},
+				{name: "tls-redirect-disabled", protocol: "http", domain: "shadow.test", listenPort: 443, enabled: false, enableTLS: true, tlsHTTPRedirect: true},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "80 规则未启用 → 不判定",
+			candidates: []ruleConflictCandidate{
+				{name: "port80-disabled", protocol: "http", domain: "shadow.test", listenPort: 80, enabled: false},
+				{name: "tls-redirect", protocol: "http", domain: "shadow.test", listenPort: 443, enabled: true, enableTLS: true, tlsHTTPRedirect: true},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "不同域名 → 不判定",
+			candidates: []ruleConflictCandidate{
+				{name: "port80", protocol: "http", domain: "a.test", listenPort: 80, enabled: true},
+				{name: "tls-redirect", protocol: "http", domain: "b.test", listenPort: 443, enabled: true, enableTLS: true, tlsHTTPRedirect: true},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "跳转规则在前、80 规则在后（顺序无关）",
+			candidates: []ruleConflictCandidate{
+				{name: "tls-redirect", protocol: "http", domain: "shadow.test", listenPort: 8443, enabled: true, enableTLS: true, tlsHTTPRedirect: true},
+				{name: "port80", protocol: "http", domain: "shadow.test", listenPort: 80, enabled: true},
+			},
+			wantCount: 2, wantDisabled80: true,
+		},
+		{
+			name: "多域名部分重叠 → 判定",
+			candidates: []ruleConflictCandidate{
+				{name: "port80", protocol: "http", domain: "a.test,shadow.test", listenPort: 80, enabled: true},
+				{name: "tls-redirect", protocol: "http", domain: "shadow.test,b.test", listenPort: 443, enabled: true, enableTLS: true, tlsHTTPRedirect: true},
+			},
+			wantCount: 2, wantDisabled80: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conflicts := validateRuleConflictMatrix(tt.candidates)
+			if len(conflicts) != tt.wantCount {
+				t.Fatalf("conflicts=%#v, want %d entries", conflicts, tt.wantCount)
+			}
+			if tt.wantDisabled80 {
+				disabledNames := make(map[string]bool, len(conflicts))
+				for _, conflict := range conflicts {
+					disabledNames[conflict.Name] = true
+				}
+				for _, candidate := range tt.candidates {
+					if candidate.listenPort == 80 && !disabledNames[candidate.name] {
+						t.Fatalf("被遮蔽的 80 端口规则 %q 未被置为禁用: %#v", candidate.name, conflicts)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestValidateConfigImport_lists_v1_rules_that_will_be_disabled(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)

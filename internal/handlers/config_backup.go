@@ -273,9 +273,17 @@ func validateV2Backup(backup configBackup) error {
 		if err := validateRuleListenPort(protocol, listenPort); err != nil {
 			return fmt.Errorf("规则 #%d：%w", index+1, err)
 		}
-		if err := validateRuleFeatures(ruleFeatureInput{
+		// Round 29 G-1: 补传 ListenPort/EnableTLS/TLSHTTPRedirect 等字段，启用
+		// validateRuleFeatures 的 80 端口 + TLS 跳转自环检查（此前仅端口/策略校验，
+		// 备份中自环规则校验放行并导入成功，生成自环 Location）；行内有
+		// custom_routes_enabled/path_rules 信息时一并传入，保持与保存路径同口径。
+		input := ruleFeatureInput{
 			Protocol:                   protocol,
 			Strategy:                   backupString(rule["strategy"]),
+			ListenPort:                 listenPort,
+			EnableTLS:                  backupBooleanEnabled(rule["enable_tls"]),
+			TLSHTTPRedirect:            backupBooleanEnabled(rule["tls_http_redirect"]),
+			CustomRoutesEnabled:        backupBooleanEnabled(rule["custom_routes_enabled"]),
 			ProxyDialTimeout:           backupInt(rule["proxy_dial_timeout"]),
 			ProxyResponseHeaderTimeout: backupInt(rule["proxy_response_header_timeout"]),
 			ProxyReadTimeout:           backupInt(rule["proxy_read_timeout"]),
@@ -285,7 +293,11 @@ func validateV2Backup(backup configBackup) error {
 			ProxyStreamCloseDelay:      backupInt(rule["proxy_stream_close_delay"]),
 			EnableCompress:             backupBooleanEnabled(rule["enable_compress"]),
 			CompressTypes:              backupString(rule["compress_types"]),
-		}); err != nil {
+		}
+		if pathRules, found := backupPathRulesForRule(backup.Tables["path_rules"], backupString(rule["caddy_id"])); found {
+			input.PathRules = pathRules
+		}
+		if err := validateRuleFeatures(input); err != nil {
 			return fmt.Errorf("规则 #%d：%w", index+1, err)
 		}
 	}
@@ -337,6 +349,33 @@ func backupString(value any) string {
 		return s
 	}
 	return ""
+}
+
+// backupPathRulesForRule 从备份 path_rules 表收集指定规则的自定义路径规则，
+// 供 validateV2Backup 按保存路径同口径校验；无该规则行时返回 found=false。
+func backupPathRulesForRule(rows []map[string]any, ruleID string) ([]models.PathRule, bool) {
+	if ruleID == "" {
+		return nil, false
+	}
+	found := false
+	pathRules := make([]models.PathRule, 0)
+	for _, row := range rows {
+		ownerID, _ := row["rule_id"].(string)
+		if ownerID != ruleID {
+			continue
+		}
+		found = true
+		pathRule := models.PathRule{
+			SortOrder: backupInt(row["sort_order"]),
+			MatchType: backupString(row["match_type"]),
+			Path:      backupString(row["path"]),
+		}
+		if raw, ok := row["upstreams_json"].(string); ok && raw != "" {
+			_ = json.Unmarshal([]byte(raw), &pathRule.Upstreams)
+		}
+		pathRules = append(pathRules, pathRule)
+	}
+	return pathRules, found
 }
 
 // validateCredentialsJSONObject allows empty strings but requires non-empty values to be JSON objects.
@@ -430,6 +469,9 @@ func disableV2RuleConflicts(rows []map[string]any) []disabledRuleConflict {
 		candidates[index].protocol, _ = row["protocol"].(string)
 		candidates[index].domain, _ = row["domain"].(string)
 		candidates[index].listenPort, _ = backupInteger(row["listen_port"])
+		candidates[index].enabled = backupBooleanEnabled(row["enabled"])
+		candidates[index].enableTLS = backupBooleanEnabled(row["enable_tls"])
+		candidates[index].tlsHTTPRedirect = backupBooleanEnabled(row["tls_http_redirect"])
 	}
 	conflicts := validateRuleConflictMatrix(candidates)
 	for _, conflict := range conflicts {

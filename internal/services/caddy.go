@@ -1262,6 +1262,35 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 			}
 			domainHosts := splitAndTrim(r.Domain)
 			if len(domainHosts) > 0 {
+				// Round 29 G-2: 签发完成/重载时刻复核——acme_dns 规则在证书签发前不生成
+				// 跳转（上方 continue），签发后跳转才出现；若此刻存在同域名直接监听 80 的
+				// 启用规则，terminal 301 会将其静默遮蔽为死规则。保存/启用路径已由
+				// queryRedirectShadowConflict 拦截，此处纯内存复核兜住存量/导入/签发迟滞
+				// 窗口，命中即跳过该域名跳转生成。
+				wantedDomains := make(map[string]struct{}, len(domainHosts))
+				for _, host := range domainHosts {
+					wantedDomains[host] = struct{}{}
+				}
+				shadowedBy := ""
+				for _, other := range allRules {
+					otherRule := other.rule
+					if otherRule.CaddyID == r.CaddyID || otherRule.Protocol != "http" || otherRule.ListenPort != 80 {
+						continue
+					}
+					for _, existingDomain := range splitAndTrim(otherRule.Domain) {
+						if _, hit := wantedDomains[existingDomain]; hit {
+							shadowedBy = existingDomain
+							break
+						}
+					}
+					if shadowedBy != "" {
+						break
+					}
+				}
+				if shadowedBy != "" {
+					Logf("warn", "跳转规则 %s（%s）的域名 %s 已有启用规则直接监听 80 端口，跳过该域名的 HTTPS 跳转生成（避免遮蔽 80 端口规则）", r.Name, r.CaddyID, shadowedBy)
+					continue
+				}
 				redirectRoutes = append(redirectRoutes, map[string]interface{}{
 					"@id":      r.CaddyID + "_redirect",
 					"terminal": true,
