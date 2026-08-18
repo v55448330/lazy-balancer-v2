@@ -402,7 +402,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { formatDate } from '@/utils/date'
+import { formatDate, formatChartTimeInConfigTz } from '@/utils/date'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart } from 'echarts/charts'
@@ -431,17 +431,7 @@ const formatUptime = (seconds?: number): string => {
   return `${Math.floor(seconds)} 秒`
 }
 
-const formatChartTime = (ms: number): string => {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: authStore.timezone || 'Asia/Shanghai',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).formatToParts(new Date(ms))
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
-  return `${get('hour')}:${get('minute')}:${get('second')}`
-}
+const formatChartTime = (ms: number): string => formatChartTimeInConfigTz(ms)
 
 const systemInfo = ref<SystemInfo | null>(null)
 const systemMetrics = ref<SystemMetrics | null>(null)

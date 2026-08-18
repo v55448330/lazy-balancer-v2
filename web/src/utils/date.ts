@@ -30,19 +30,23 @@ const tzFormat = (timeZone: string, withTime: boolean): Intl.DateTimeFormat =>
     ...(withTime ? { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false } : {}),
   })
 
-const formatInConfigTz = (d: Date, withTime: boolean): string => {
+// 共享的受保护格式化器（D-1）：非法配置时区使 Intl 构造抛 RangeError 时回退 DEFAULT_TZ，
+// warnedInvalidTz 防止 warn 刷屏。所有 tz 格式化调用点必须经此入口，不得直接 new Intl.DateTimeFormat。
+const tzFormatter = (withTime: boolean): Intl.DateTimeFormat => {
   const tz = configTz()
-  let formatter: Intl.DateTimeFormat
   try {
-    formatter = tzFormat(tz, withTime)
+    return tzFormat(tz, withTime)
   } catch {
     if (!warnedInvalidTz) {
       warnedInvalidTz = true
       console.warn(`[date] 无效的配置时区「${tz}」，已回退为「${DEFAULT_TZ}」`)
     }
-    formatter = tzFormat(DEFAULT_TZ, withTime)
+    return tzFormat(DEFAULT_TZ, withTime)
   }
-  const parts = formatter.formatToParts(d)
+}
+
+const formatInConfigTz = (d: Date, withTime: boolean): string => {
+  const parts = tzFormatter(withTime).formatToParts(d)
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
   const date = `${get('year')}-${get('month')}-${get('day')}`
   if (!withTime) return date
@@ -79,4 +83,12 @@ export const formatDateShort = (date: unknown): string => {
   if (typeof date === 'string' && date) return date
   if (isRecord(date) && typeof date.String === 'string' && date.String) return date.String
   return ''
+}
+
+// Dashboard 图表轴标签（HH:mm:ss），经 tzFormatter 受保护入口（BUG-01）：
+// 非法配置时区回退 DEFAULT_TZ，不再在 ECharts computed 中抛 RangeError。
+export const formatChartTimeInConfigTz = (ms: number): string => {
+  const parts = tzFormatter(true).formatToParts(new Date(ms))
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+  return `${get('hour')}:${get('minute')}:${get('second')}`
 }

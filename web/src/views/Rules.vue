@@ -1768,16 +1768,20 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
       if (u.protocol === 'https') u.protocol = 'tls'
     })
   } else if (newVal === 'http' && oldVal === 'tcp') {
-    const portChanged = !userExplicitPort.value && wizardForm.listen_port === 8080
+    // 回转判断基于快照而非 userExplicitPort：编辑态（userExplicitPort=true）进 TCP 同样被
+    // 无条件迁移 80/443→8080，回转不还原会保存即静默改写 DB 端口（BUG-03）
+    const portChanged =
+      wizardForm.listen_port === 8080 &&
+      (preTcpSnapshot?.listenPort === 80 || preTcpSnapshot?.listenPort === 443)
     const tlsWasOn = preTcpSnapshot?.enableTls === true
-    if (portChanged) wizardForm.listen_port = 80
+    if (portChanged && preTcpSnapshot) wizardForm.listen_port = preTcpSnapshot.listenPort
     wizardForm.upstreams.forEach(u => {
       if (u.protocol === 'tcp') u.protocol = 'http'
       if (u.protocol === 'tls') u.protocol = 'https'
     })
     // 回转提示：仅在实际改端口 / 曾强制关 TLS 时给出，走 showTlsHint 去重通道
     const notes: string[] = []
-    if (portChanged) notes.push('监听端口已调整为 80')
+    if (portChanged && preTcpSnapshot) notes.push(`监听端口已调整为 ${preTcpSnapshot.listenPort}`)
     if (tlsWasOn) notes.push('TLS 已在 TCP 模式下关闭，如需 HTTPS 请重新开启')
     if (notes.length > 0) showTlsHint(`已切换为 HTTP，${notes.join('；')}`)
   }
@@ -2016,6 +2020,7 @@ const pasteFromFile = async (type: 'cert' | 'key') => {
 const openWizard = async (rule?: Rule) => {
   if (isReadOnly.value || saving.value) return
   hydratingWizard = true
+  preTcpSnapshot = null
   userExplicitPort.value = false
   certValidationSessionSeq++
   certValidationSeq++
@@ -2151,6 +2156,7 @@ const openWizard = async (rule?: Rule) => {
 }
 
 const resetWizard = () => {
+  preTcpSnapshot = null
   certValidationSessionSeq++
   certValidationSeq++
   resetCertInfo()
@@ -2520,6 +2526,7 @@ const duplicateRule = async (rule: Rule) => {
 const openCopyWizard = async (rule: Rule) => {
   if (saving.value) return
   hydratingWizard = true
+  preTcpSnapshot = null
   userExplicitPort.value = false
   certValidationSessionSeq++
   certValidationSeq++
