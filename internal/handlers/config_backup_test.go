@@ -935,6 +935,12 @@ func TestValidateV2Backup_rejects_self_loop_80_tls_redirect_rule(t *testing.T) {
 			wantErrText: "80 端口开启 TLS 跳转无意义",
 		},
 		{
+			// Round 30 F-1: 禁用规则不参与渲染（caddy.go WHERE enabled=1），
+			// 自环组合无运行时影响；导出→导入往返不应因存量禁用行失败。
+			name: "禁用状态的 80 端口 + TLS 跳转自环规则可导入",
+			rule: map[string]any{"caddy_id": "lb_backup_loop_disabled", "name": "备份禁用自环", "protocol": "http", "domain": "loop.test", "listen_port": 80, "enable_tls": 1, "tls_http_redirect": 1, "enabled": 0},
+		},
+		{
 			name: "443 端口 + TLS 跳转规则正常",
 			rule: map[string]any{"caddy_id": "lb_backup_ok", "name": "备份正常", "protocol": "http", "domain": "ok.test", "listen_port": 443, "enable_tls": 1, "tls_http_redirect": 1},
 		},

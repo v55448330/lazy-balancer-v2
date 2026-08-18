@@ -1267,29 +1267,41 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 				// 启用规则，terminal 301 会将其静默遮蔽为死规则。保存/启用路径已由
 				// queryRedirectShadowConflict 拦截，此处纯内存复核兜住存量/导入/签发迟滞
 				// 窗口，命中即跳过该域名跳转生成。
-				wantedDomains := make(map[string]struct{}, len(domainHosts))
-				for _, host := range domainHosts {
-					wantedDomains[host] = struct{}{}
-				}
+				// Round 30 F-2: 比较双方均过规范化（db.CanonicalDomains 同源口径），
+				// 导入态非规范化域名（"Example.COM"）不再失配。
+				// Round 30 F-3: 按域名粒度过滤——仅跳过与 80 端口规则冲突的域名，
+				// 其余兄弟域名仍生成跳转（保存侧 queryRedirectShadowConflict 保持整规则
+				// 400 语义，报错含冲突域名，用户可拆规则）。
+				wantedDomains := normalizedDomainSet(r.Domain)
+				blockedDomains := make(map[string]struct{})
 				shadowedBy := ""
 				for _, other := range allRules {
 					otherRule := other.rule
 					if otherRule.CaddyID == r.CaddyID || otherRule.Protocol != "http" || otherRule.ListenPort != 80 {
 						continue
 					}
-					for _, existingDomain := range splitAndTrim(otherRule.Domain) {
+					for existingDomain := range normalizedDomainSet(otherRule.Domain) {
 						if _, hit := wantedDomains[existingDomain]; hit {
-							shadowedBy = existingDomain
-							break
+							blockedDomains[existingDomain] = struct{}{}
+							if shadowedBy == "" {
+								shadowedBy = existingDomain
+							}
 						}
 					}
-					if shadowedBy != "" {
-						break
-					}
 				}
-				if shadowedBy != "" {
-					Logf("warn", "跳转规则 %s（%s）的域名 %s 已有启用规则直接监听 80 端口，跳过该域名的 HTTPS 跳转生成（避免遮蔽 80 端口规则）", r.Name, r.CaddyID, shadowedBy)
-					continue
+				if len(blockedDomains) > 0 {
+					filtered := make([]string, 0, len(domainHosts))
+					for _, host := range domainHosts {
+						if _, isBlocked := blockedDomains[normalizeHostForMatcher(host)]; !isBlocked {
+							filtered = append(filtered, normalizeHostForMatcher(host))
+						}
+					}
+					if len(filtered) == 0 {
+						Logf("warn", "跳转规则 %s（%s）的域名 %s 已有启用规则直接监听 80 端口，跳过该域名的 HTTPS 跳转生成（避免遮蔽 80 端口规则）", r.Name, r.CaddyID, shadowedBy)
+						continue
+					}
+					Logf("warn", "跳转规则 %s（%s）的域名 %s 已有启用规则直接监听 80 端口，已从跳转中移除（其余域名仍生成跳转）", r.Name, r.CaddyID, shadowedBy)
+					domainHosts = filtered
 				}
 				redirectRoutes = append(redirectRoutes, map[string]interface{}{
 					"@id":      r.CaddyID + "_redirect",
@@ -1670,6 +1682,35 @@ func splitAndTrim(s string) []string {
 		}
 	}
 	return result
+}
+
+// normalizedDomainSet 返回逗号分隔域名的规范化集合（小写+punycode），与保存侧
+// db.CanonicalDomains（normalizedRuleDomains）同源。Round 30 F-2：渲染层遮蔽比较
+// 必须与保存侧口径一致，否则导入态非规范化域名（"Example.COM" vs "example.com"）
+// 比较失配——Caddy host matcher 大小写不敏感，遮蔽漏洞会经导入路径复发。
+// 整串无法规范化（手造脏数据）时回退小写拆分结果，渲染不因脏数据中断。
+func normalizedDomainSet(value string) map[string]struct{} {
+	if canonical, err := db.CanonicalDomains(value); err == nil {
+		result := make(map[string]struct{})
+		for _, domain := range strings.Split(canonical, ",") {
+			result[domain] = struct{}{}
+		}
+		return result
+	}
+	result := make(map[string]struct{})
+	for _, domain := range splitAndTrim(value) {
+		result[strings.ToLower(domain)] = struct{}{}
+	}
+	return result
+}
+
+// normalizeHostForMatcher 将单个域名规范化后用于 host matcher；无法规范化时
+// 回退小写原值，保证 matcher 仍按 Caddy 大小写不敏感语义工作。
+func normalizeHostForMatcher(host string) string {
+	if canonical, err := db.CanonicalDomains(host); err == nil {
+		return canonical
+	}
+	return strings.ToLower(host)
 }
 
 // httpsRedirectLocation 构造 HTTP→HTTPS 跳转的 Location 头。

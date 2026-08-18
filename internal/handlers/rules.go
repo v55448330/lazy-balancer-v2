@@ -1232,7 +1232,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// Round 29 G-5: 仅当域名/监听端口/EnableTLS/TLSHTTPRedirect 任一相对存量变化时
 		// 执行遮蔽检查（fallback 已把 req 字段填成现值，直接与 existingRule 比较）——
 		// 存量冲突组合（导入态 80 规则 + 跳转规则并存）下仅改名称/健康检查不应被 400 阻塞。
-		shadowRelevantChanged := req.Domain != existingRule.Domain ||
+		// Round 30 F-5: existingRule.Domain 可能为导入态非规范化值（"Example.COM"），
+		// 与规范化后的 req.Domain 比较会误触发遮蔽检查，比较前先做同样规范化。
+		existingDomain := existingRule.Domain
+		if existingDomain != "" {
+			if canonical, err := db.CanonicalDomains(existingDomain); err == nil {
+				existingDomain = canonical
+			}
+		}
+		shadowRelevantChanged := req.Domain != existingDomain ||
 			req.ListenPort != existingRule.ListenPort ||
 			*req.EnableTLS != existingRule.EnableTLS ||
 			*req.TLSHTTPRedirect != existingRule.TLSHTTPRedirect

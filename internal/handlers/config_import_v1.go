@@ -96,6 +96,16 @@ type ruleConflictCandidate struct {
 	tlsHTTPRedirect                 bool
 }
 
+// Round 30 F-9: v1（disableConvertedRuleConflicts）与 v2（disableV2RuleConflicts）
+// 各自组装 ruleConflictCandidate 的字段清单此前重复两份，新增字段需同步两处；
+// 收敛为单一构造函数，双路径共用。
+func newRuleConflictCandidate(name, caddyID, protocol, domain string, listenPort int, enabled, enableTLS, tlsHTTPRedirect bool) ruleConflictCandidate {
+	return ruleConflictCandidate{
+		name: name, caddyID: caddyID, protocol: protocol, domain: domain,
+		listenPort: listenPort, enabled: enabled, enableTLS: enableTLS, tlsHTTPRedirect: tlsHTTPRedirect,
+	}
+}
+
 type disabledRuleConflict struct {
 	index         int
 	Name          string                 `json:"name,omitempty"`
@@ -170,10 +180,7 @@ func validateRuleConflictMatrix(candidates []ruleConflictCandidate) []disabledRu
 func disableConvertedRuleConflicts(rules []convertedRule) []disabledRuleConflict {
 	candidates := make([]ruleConflictCandidate, 0, len(rules))
 	for _, rule := range rules {
-		candidates = append(candidates, ruleConflictCandidate{
-			name: rule.Name, protocol: rule.Protocol, domain: rule.Domain, listenPort: rule.ListenPort,
-			enabled: rule.Enabled, enableTLS: rule.EnableTLS, tlsHTTPRedirect: rule.Redirect,
-		})
+		candidates = append(candidates, newRuleConflictCandidate(rule.Name, "", rule.Protocol, rule.Domain, rule.ListenPort, rule.Enabled, rule.EnableTLS, rule.Redirect))
 	}
 	conflicts := validateRuleConflictMatrix(candidates)
 	for _, conflict := range conflicts {

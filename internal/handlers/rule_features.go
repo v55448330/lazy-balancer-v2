@@ -650,22 +650,27 @@ func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 	return validateRuleConfigGeneration(rule)
 }
 
+// Round 30 F-4: 收集全部坏规则错误聚合返回（每条含规则名+caddy_id），
+// 避免首错即 return 导致多条坏规则需重启多次逐一暴露；errors.Join 保持
+// 与 configValidationError 的 errors.As 兼容（UpdateConfig/EnableRule 类型断言路径）。
 func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 	rules, err := loadRulesForConfigValidation(ctx, " WHERE enabled = 1")
 	if err != nil {
 		return err
 	}
+	problems := make([]error, 0)
 	for _, rule := range rules {
 		// 存量规则可能建于校验上线前：80 端口 + TLS 跳转生成自环 Location，
 		// 启动再生配置前按保存路径同口径拦截并指出具体规则。
 		if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS && rule.TLSHTTPRedirect {
-			return &configValidationError{message: fmt.Sprintf("规则 %s（%s）80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转", rule.Name, rule.CaddyID)}
+			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转", rule.Name, rule.CaddyID)})
+			continue
 		}
 		if err := validateRuleConfigGeneration(rule); err != nil {
-			return fmt.Errorf("规则 %s（%s）配置无效：%w", rule.Name, rule.CaddyID, err)
+			problems = append(problems, fmt.Errorf("规则 %s（%s）配置无效：%w", rule.Name, rule.CaddyID, err))
 		}
 	}
-	return nil
+	return errors.Join(problems...)
 }
 
 func loadRulesForConfigValidation(ctx context.Context, suffix string, args ...any) ([]models.LbRule, error) {

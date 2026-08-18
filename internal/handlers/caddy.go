@@ -307,7 +307,8 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	if err := validateEnabledStoredRuleConfigs(c.Request.Context()); err != nil {
 		var validationErr *configValidationError
 		if errors.As(err, &validationErr) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: validationErr.Error()})
+			// Round 30 F-4: 聚合错误含多条规则问题，返回 err.Error() 一次展示全部。
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "预校验规则配置失败: " + err.Error()})

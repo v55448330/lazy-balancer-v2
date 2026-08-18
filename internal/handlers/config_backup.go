@@ -277,12 +277,17 @@ func validateV2Backup(backup configBackup) error {
 		// validateRuleFeatures 的 80 端口 + TLS 跳转自环检查（此前仅端口/策略校验，
 		// 备份中自环规则校验放行并导入成功，生成自环 Location）；行内有
 		// custom_routes_enabled/path_rules 信息时一并传入，保持与保存路径同口径。
+		// Round 30 F-1: 禁用规则不参与渲染（caddy.go WHERE enabled=1），其
+		// 80+TLS+跳转组合无运行时影响；若仍按启用态校验会整包拒绝，导出→导入
+		// 往返断裂（与 v1 路径自环规则软跳过口径一致），故禁用行将
+		// EnableTLS/TLSHTTPRedirect 置 false，其余字段校验保留。
+		enabled := backupRuleEnabled(rule)
 		input := ruleFeatureInput{
 			Protocol:                   protocol,
 			Strategy:                   backupString(rule["strategy"]),
 			ListenPort:                 listenPort,
-			EnableTLS:                  backupBooleanEnabled(rule["enable_tls"]),
-			TLSHTTPRedirect:            backupBooleanEnabled(rule["tls_http_redirect"]),
+			EnableTLS:                  backupBooleanEnabled(rule["enable_tls"]) && enabled,
+			TLSHTTPRedirect:            backupBooleanEnabled(rule["tls_http_redirect"]) && enabled,
 			CustomRoutesEnabled:        backupBooleanEnabled(rule["custom_routes_enabled"]),
 			ProxyDialTimeout:           backupInt(rule["proxy_dial_timeout"]),
 			ProxyResponseHeaderTimeout: backupInt(rule["proxy_response_header_timeout"]),
@@ -295,7 +300,10 @@ func validateV2Backup(backup configBackup) error {
 			CompressTypes:              backupString(rule["compress_types"]),
 		}
 		if pathRules, found := backupPathRulesForRule(backup.Tables["path_rules"], backupString(rule["caddy_id"])); found {
-			input.PathRules = pathRules
+			// Round 30 F-6: 保存路径先 normalizePathRules（TrimSpace）再校验
+			// （createRuleFeatures/updateRuleFeatures），备份路径此前直传导致手造备份
+			// 含前导空格路径时 validateRuleFeatures 的 HasPrefix("/") 误拒绝。
+			input.PathRules = normalizePathRules(pathRules)
 		}
 		if err := validateRuleFeatures(input); err != nil {
 			return fmt.Errorf("规则 #%d：%w", index+1, err)
@@ -342,6 +350,15 @@ func backupBooleanEnabled(value any) bool {
 	default:
 		return false
 	}
+}
+
+// backupRuleEnabled 读取备份行 enabled 字段：与表结构 COALESCE(enabled,1) 一致，
+// 缺省视为启用（手造备份省略该列时按启用态校验，不放松自环检查）。
+func backupRuleEnabled(row map[string]any) bool {
+	if raw, exists := row["enabled"]; exists {
+		return backupBooleanEnabled(raw)
+	}
+	return true
 }
 
 func backupString(value any) string {
@@ -464,14 +481,11 @@ func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) []string {
 func disableV2RuleConflicts(rows []map[string]any) []disabledRuleConflict {
 	candidates := make([]ruleConflictCandidate, len(rows))
 	for index, row := range rows {
-		candidates[index].name, _ = row["name"].(string)
-		candidates[index].caddyID, _ = row["caddy_id"].(string)
-		candidates[index].protocol, _ = row["protocol"].(string)
-		candidates[index].domain, _ = row["domain"].(string)
-		candidates[index].listenPort, _ = backupInteger(row["listen_port"])
-		candidates[index].enabled = backupBooleanEnabled(row["enabled"])
-		candidates[index].enableTLS = backupBooleanEnabled(row["enable_tls"])
-		candidates[index].tlsHTTPRedirect = backupBooleanEnabled(row["tls_http_redirect"])
+		candidates[index] = newRuleConflictCandidate(
+			backupString(row["name"]), backupString(row["caddy_id"]), backupString(row["protocol"]), backupString(row["domain"]),
+			backupInt(row["listen_port"]),
+			backupBooleanEnabled(row["enabled"]), backupBooleanEnabled(row["enable_tls"]), backupBooleanEnabled(row["tls_http_redirect"]),
+		)
 	}
 	conflicts := validateRuleConflictMatrix(candidates)
 	for _, conflict := range conflicts {
