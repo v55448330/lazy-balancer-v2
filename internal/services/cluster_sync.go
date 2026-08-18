@@ -604,11 +604,9 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	verifiedSnapshot, err := verifiedSnapshotIntegrity(envelope.Data, token, appliedVersion)
 	if err != nil {
 		RecordAuditLog("system", "同步失败", "集群同步", FormatAuditDetail(fmt.Sprintf("版本：%d", envelope.Data.Version), err.Error()), "")
-		// 验签/版本校验失败除审计外落 last_sync_error：主节点节点列表经 Report
-		// 通道可见真实失败原因（否则仅本地日志，节点页显示健康但同步停滞）。
-		if s.db != nil {
-			s.recordSyncError(ctx, err, nil)
-		}
+		// last_sync_error 落库由下方 Pull defer 统一覆盖（err != nil 时执行，
+		// 主节点节点列表经 Report 通道可见真实失败原因）：此处不再显式写，
+		// 避免同一错误单周期重复 UPDATE（R32-2 收敛单写）。
 		return SyncResult{}, err
 	}
 	envelope.Data = verifiedSnapshot
@@ -786,6 +784,20 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 		if s.syncReloadFailureMarkerPresent(ctx) {
 			return
 		}
+		s.persistSyncError(ctx, "", "")
+		return
+	}
+	s.combineOrReplaceSyncError(ctx, msg, code)
+}
+
+// combineOrReplaceSyncError 是 last_sync_error 落库的共享核心：可恢复类错误
+// （传输故障/主节点指纹不匹配）组合保留 apply_ok_reload_failed 标记，终止类
+// 错误直接覆盖；空消息直接跳过（成功路径的清空由调用方另行处理）。
+// recordSyncError、run 循环 loadState 失败路径与 pollRegistration 共用，确保
+// 所有可恢复类错误走同一标记保护语义（R32-1/R32-3 收敛直写调用点）。
+func (s *SyncService) combineOrReplaceSyncError(ctx context.Context, message string, code models.SyncErrorCode) {
+	if message == "" {
+		return
 	}
 	if syncErrorPreservesReloadMarker(code) {
 		var stored string
@@ -794,11 +806,11 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 			// 标记是全量重拉补偿的唯一触发器，覆盖后下一周期 304 将跳过补偿，
 			// 陈旧运行配置保持到下次真实变更。组合只保留首个失败原因 + 计数。
 			if storedMsg, _ := decodeSyncError(stored); strings.HasPrefix(storedMsg, syncReloadFailureMarkerPrefix) {
-				msg = combineSyncErrorWithMarker(storedMsg, msg)
+				message = combineSyncErrorWithMarker(storedMsg, message)
 			}
 		}
 	}
-	s.persistSyncError(ctx, msg, code)
+	s.persistSyncError(ctx, message, code)
 }
 
 // syncErrorPreservesReloadMarker 判定错误是否属于「可恢复类」：传输故障与主节点
@@ -994,7 +1006,10 @@ func (s *SyncService) run(ctx context.Context) {
 			message := "读取同步状态失败: " + err.Error()
 			s.state.Store(uint32(syncStateDegraded))
 			Logf("error", "cluster sync state read failed; retrying: %v", err)
-			s.persistSyncError(ctx, message, models.SyncErrorCodeTransportError)
+			// 瞬时 DB 读错（SQLITE_BUSY 等）属可恢复类：直接覆盖会抹掉
+			// apply_ok_reload_failed 标记（304 全量重拉补偿的唯一触发器），
+			// 改走共享组合保留逻辑（R32-1）。
+			s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeTransportError)
 			if !waitDelay(ctx, retryDelay) {
 				return
 			}
@@ -1030,8 +1045,13 @@ func (s *SyncService) run(ctx context.Context) {
 			// 本周期 apply 成功但 Caddy 重载失败时 Pull 已落库 apply_ok_reload_failed
 			// 标记（Pull defer 为此保留它）；周期末的空错误清空会让 304 分支的
 			// 标记检测同周期失效，自愈补偿永远不触发。与 Pull defer 同口径跳过。
-			if !(pullErr == nil && reportErr == nil && s.syncReloadFailureMarkerPresent(ctx)) {
-				s.recordSyncError(ctx, pullErr, reportErr)
+			// pullErr 非空时 Pull 内部 defer 已按错误分类落库（含快照完整性失败，
+			// R32-2 收敛单写），周期末不再重复写；reportErr 仅在 pullErr 为空时
+			// 参与落库，此处跳过无信息损失。
+			if pullErr == nil {
+				if reportErr != nil || !s.syncReloadFailureMarkerPresent(ctx) {
+					s.recordSyncError(ctx, nil, reportErr)
+				}
 			}
 			if terminal {
 				return
@@ -1077,21 +1097,21 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 		// 主节点 5xx/网络故障在注册轮询期同样要可见（否则节点页显示正常但一直
 		// 注册中）；随 401/404/410 走同一 persistSyncError 通道。
 		message := "查询注册状态失败: " + err.Error()
-		s.persistSyncError(ctx, message, models.SyncErrorCodeTransportError)
+		s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeTransportError)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusBadRequest {
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 			message := "注册已被主节点拒绝或移除，请重新注册或提升为主节点"
-			s.persistSyncError(ctx, message, models.SyncErrorCodeValidationFailed)
+			s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeValidationFailed)
 			RecordAuditLog("system", "注册失败", "集群节点", message, "")
 			return
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
 		body = truncateValidUTF8Tail(body)
 		message := fmt.Sprintf("查询注册状态失败（主节点返回 %d）：%s", resp.StatusCode, strings.TrimSpace(string(body)))
-		s.persistSyncError(ctx, message, models.SyncErrorCodeTransportError)
+		s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeTransportError)
 		return
 	}
 	var envelope struct {
