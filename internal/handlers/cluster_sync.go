@@ -70,7 +70,7 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 func (h *Handlers) GetClusterWafFiles(c *gin.Context) {
 	bundle := services.BuildWafFileBundle()
 	if bundle == nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "主节点无 WAF 规则文件"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "主节点无安全数据"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: bundle})

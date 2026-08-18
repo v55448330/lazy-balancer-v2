@@ -606,6 +606,48 @@ func TestCertificateService_CheckExpiration_compares_offset_and_fractional_times
 	}
 }
 
+func TestCertificateService_CheckExpiration_respects_ca_cooldown_for_waiting_ca(t *testing.T) {
+	// Given：三个临期 waiting_ca 任务——冷却中（未来 ca_available_after）、
+	// 冷却已过（过去 ca_available_after）、无冷却（NULL）。
+	_, database := newClusterTestService(t)
+	for _, ruleID := range []string{"lb_cooling", "lb_cooling_done", "lb_no_cooldown"} {
+		domain := ruleID + ".example.com"
+		if _, err := database.Exec(`INSERT INTO lb_rules
+			(caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source)
+			VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, ruleID, ruleID, domain); err != nil {
+			t.Fatalf("seed rule %s: %v", ruleID, err)
+		}
+	}
+	for _, job := range []struct{ ruleID, status, caAvailableAfter string }{
+		{ruleID: "lb_cooling", status: "waiting_ca", caAvailableAfter: "datetime('now','+1 hour')"},
+		{ruleID: "lb_cooling_done", status: "waiting_ca", caAvailableAfter: "datetime('now','-1 hour')"},
+		{ruleID: "lb_no_cooldown", status: "waiting_ca", caAvailableAfter: "NULL"},
+	} {
+		domain := job.ruleID + ".example.com"
+		if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,ca_available_after)
+			VALUES (?,?,'waiting_ca',datetime('now','+1 day'),`+job.caAvailableAfter+`)`, job.ruleID, domain); err != nil {
+			t.Fatalf("seed job %s: %v", job.ruleID, err)
+		}
+	}
+
+	// When
+	jobs := NewCertificateService().CheckExpiration()
+
+	// Then：冷却中的任务不得被续期扫描捕获（R35-5），冷却已过与无冷却的正常捕获
+	found := make(map[string]bool, len(jobs))
+	for _, job := range jobs {
+		found[job.RuleID] = true
+	}
+	if found["lb_cooling"] {
+		t.Fatalf("cooling waiting_ca job must not be re-enqueued by renewal scan: %v", jobs)
+	}
+	for _, ruleID := range []string{"lb_cooling_done", "lb_no_cooldown"} {
+		if !found[ruleID] {
+			t.Fatalf("job %s should be included in renewal scan", ruleID)
+		}
+	}
+}
+
 func TestCertJobsSnapshot_restore_replaces_upserted_and_new_rows(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)

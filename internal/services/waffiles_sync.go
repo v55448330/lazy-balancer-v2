@@ -319,21 +319,55 @@ func (s *SyncService) fetchWafFiles(ctx context.Context, ref *models.ClusterWafF
 	req.Header.Set("X-Cluster-Token", token)
 	resp, err := s.do(req)
 	if err != nil {
-		return nil, fmt.Errorf("拉取 WAF 规则文件: %w", err)
+		return nil, fmt.Errorf("拉取安全数据: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("拉取 WAF 规则文件失败(%d): %s", resp.StatusCode, string(body))
+		// body 截断至 200B 并回退到合法 UTF-8 边界：错误消息经审计详情落库
+		// （无界写入），超长/非法字节 body 会膨胀审计库并产生乱码（R35-1）。
+		// 复用 cluster_sync.go 的既有截断模式（:586-587）。
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		body = truncateValidUTF8Tail(body)
+		return nil, fmt.Errorf("拉取安全数据失败(%d): %s", resp.StatusCode, string(body))
 	}
 	var envelope struct {
 		Data WafFileBundle `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&envelope); err != nil {
-		return nil, fmt.Errorf("解析 WAF 规则文件包: %w", err)
+		return nil, fmt.Errorf("解析安全数据包: %w", err)
 	}
 	if !wafFilesRefMatchesBundle(ref, &envelope.Data) {
-		return nil, errors.New("WAF 规则文件包哈希与快照引用不一致（主节点文件可能在同步期间变更），将在下个周期重试")
+		return nil, errors.New("安全数据包哈希与快照引用不一致（主节点文件可能在同步期间变更），将在下个周期重试")
 	}
-	return &envelope.Data, nil
+	bundle := envelope.Data
+	// 版本串不在 HMAC/哈希覆盖内，流氓主节点可注入超长/控制字符内容，
+	// 直写审计详情与 VERSION/.version 落盘文件（R35-2）：形状校验后置空。
+	bundle.CRSVersion = sanitizeBundleVersion(bundle.CRSVersion)
+	bundle.IP2RegionTag = sanitizeBundleVersion(bundle.IP2RegionTag)
+	return &bundle, nil
+}
+
+// maxBundleVersionLen 限制安全数据版本串长度：正常形如 v4.28.0 / v3.17.0，
+// 64 字节足够容纳任何真实版本号。
+const maxBundleVersionLen = 64
+
+// sanitizeBundleVersion 校验安全数据版本串形状：非空时必须是 ≤64 字符的
+// 可打印 ASCII（字母数字 . _ - +），不符合则置空并记 warn——版本串不在快照
+// HMAC/哈希覆盖内，直写审计详情与落盘文件，必须防流氓主节点注入。
+func sanitizeBundleVersion(v string) string {
+	if v == "" {
+		return ""
+	}
+	if len(v) > maxBundleVersionLen {
+		Logf("warn", "忽略非法安全数据版本串（长度 %d 超过上限 %d），已置空", len(v), maxBundleVersionLen)
+		return ""
+	}
+	for _, r := range v {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' || r == '+' {
+			continue
+		}
+		Logf("warn", "忽略非法安全数据版本串 %q（含非法字符 %q），已置空", v, r)
+		return ""
+	}
+	return v
 }

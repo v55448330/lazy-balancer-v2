@@ -3,8 +3,33 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestSanitizeBundleVersion(t *testing.T) {
+	tests := []struct {
+		name, input, want string
+	}{
+		{name: "empty", input: "", want: ""},
+		{name: "valid semver", input: "v4.28.0", want: "v4.28.0"},
+		{name: "valid with separators", input: "v4.28.0-beta.1+x86_64", want: "v4.28.0-beta.1+x86_64"},
+		{name: "valid max length", input: strings.Repeat("v", 64), want: strings.Repeat("v", 64)},
+		{name: "too long", input: strings.Repeat("v", 65), want: ""},
+		{name: "newline injection", input: "v4.28.0\nINJECTED", want: ""},
+		{name: "control char", input: "v4.28.0\x01", want: ""},
+		{name: "trailing space", input: "v4.28.0 ", want: ""},
+		{name: "slash", input: "v4/28", want: ""},
+		{name: "chinese", input: "v4.版本", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sanitizeBundleVersion(tt.input); got != tt.want {
+				t.Fatalf("sanitizeBundleVersion(%q)=%q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestWafFileBundleRoundTrip(t *testing.T) {
 	src := t.TempDir()

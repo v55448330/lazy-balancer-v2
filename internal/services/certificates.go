@@ -1017,6 +1017,7 @@ func (s *CertificateService) CheckExpiration() []models.CertJob {
 		WHERE j.expires_at IS NOT NULL
 		  AND datetime(j.expires_at) <= datetime('now', '+' || ? || ' days')
 		  AND j.status IN ('issued', 'failed', 'waiting_ca')
+		  AND (j.status != 'waiting_ca' OR j.ca_available_after IS NULL OR datetime(j.ca_available_after) <= datetime('now'))
 		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns'
 		ORDER BY j.expires_at ASC
 	`, days)
