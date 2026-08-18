@@ -910,12 +910,6 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		}
 	}
 
-	for _, ru := range allRules {
-		if len(ru.upstreams) == 0 {
-			log.Printf("规则 %s (%s) 没有可用上游，已跳过该规则的配置生成", ru.rule.Name, ru.rule.CaddyID)
-		}
-	}
-
 	acmeCerts := make(map[string][]CertificateCandidate)
 	if hasACMETLS {
 		certRows, certErr := store.Query(`
@@ -1239,12 +1233,16 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 			server["tls_connection_policies"] = tlsPolicies
 		}
 
-		// Add HTTPS server automatic HTTPS disable marker when using non-standard ports to avoid Caddy auto redirect conflicts
+		// 证书签发/续期由 cert_jobs（DNS-01）全权管理：禁止 Caddy 自动 HTTPS 为路由
+		// 域名自建 ACME automation（v2.11.4 autohttps.go：TLS 服务器 host matcher 中的
+		// 域名若无已加载证书即纳入默认自动化策略，acme_dns 签发期会绕开 cert_jobs 自行签发）。
+		// disable_certificates 仅关自动化证书管理，自动跳转与既有 TLS 策略行为不变；
+		// 非 443/80 端口维持整体 disable 以避免自动跳转冲突。
+		autoHTTPS := map[string]interface{}{"disable_certificates": true}
 		if port != 443 && port != 80 {
-			server["automatic_https"] = map[string]interface{}{
-				"disable": true,
-			}
+			autoHTTPS["disable"] = true
 		}
+		server["automatic_https"] = autoHTTPS
 
 		servers[fmt.Sprintf("http_%d", port)] = server
 	}
