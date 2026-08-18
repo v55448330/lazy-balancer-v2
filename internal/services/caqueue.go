@@ -878,6 +878,7 @@ func failJob(jobID int, message string) {
 	if attempts := currentRenewalAttempts(jobID); attempts+1 >= GetCertRenewalAttempts() {
 		message = maxRenewalAttemptsMessage(message, GetCertRenewalAttempts())
 	}
+	message = truncateJobMessage(message)
 	err := transitionJob(db.DB, jobID, nonTerminalJobStatuses, "failed", map[string]any{
 		"message":          message,
 		"renewal_attempts": jobSQLExpression("COALESCE(renewal_attempts,0)+1"),
@@ -889,6 +890,7 @@ func failJobFromStatus(jobID int, expectedStatus, message string) {
 	if attempts := currentRenewalAttempts(jobID); attempts+1 >= GetCertRenewalAttempts() {
 		message = maxRenewalAttemptsMessage(message, GetCertRenewalAttempts())
 	}
+	message = truncateJobMessage(message)
 	err := transitionJob(db.DB, jobID, []string{expectedStatus}, "failed", map[string]any{
 		"message":          message,
 		"renewal_attempts": jobSQLExpression("COALESCE(renewal_attempts,0)+1"),

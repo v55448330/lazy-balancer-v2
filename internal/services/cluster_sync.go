@@ -1138,7 +1138,10 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 		// Round 36 I-6: 任何 4xx/5xx 不再静默重试。累计失败达到上限后停止注册循环，
 		// 持久化错误并提示用户人工处理（在 UI 重新注册或提升为主节点）。
 		if confirmed.StatusCode >= http.StatusBadRequest {
-			body, _ := io.ReadAll(io.LimitReader(confirmed.Body, 512))
+			// Round 34 F-R34-2: 与 F-2 模式一致——200B 截断 + UTF-8 边界回退，
+			// 确保 confirm 失败原因落入 last_sync_error 后不超过 512B 有界设计。
+			body, _ := io.ReadAll(io.LimitReader(confirmed.Body, 200))
+			body = truncateValidUTF8Tail(body)
 			s.bumpRegistrationConfirmFailure(ctx, envelope.Data.ClusterToken,
 				fmt.Sprintf("confirm 端点返回 %d（%s）。主节点可能版本过旧或 confirm 端点异常，请在集群管理页面重新注册或提升为主节点",
 					confirmed.StatusCode, strings.TrimSpace(string(body))))

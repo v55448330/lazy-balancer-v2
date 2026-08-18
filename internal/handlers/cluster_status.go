@@ -11,6 +11,10 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
+// clusterReportMaxBytes 限制节点上报请求体大小（Round 34 F-R34-4）。异常从节点可能
+// 携带 MB 级 last_sync_error/health_json，防止其写入主节点 nodes 表。
+const clusterReportMaxBytes = 64 << 10
+
 func (h *Handlers) GetClusterStatus(c *gin.Context) {
 	status, err := h.clusterService.Status(c.Request.Context())
 	if err != nil {
@@ -34,6 +38,7 @@ func (h *Handlers) ListClusterNodes(c *gin.Context) {
 
 func (h *Handlers) ReportClusterNode(c *gin.Context) {
 	var req models.ClusterReport
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterReportMaxBytes)
 	if err := c.ShouldBindJSON(&req); err != nil {
 		clusterError(c, http.StatusBadRequest, "节点上报格式错误", err)
 		return

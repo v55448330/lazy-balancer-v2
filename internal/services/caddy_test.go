@@ -1517,18 +1517,26 @@ func TestBuildWafHandler_nilMatrix(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// When
-			handler := buildWafHandler(tc.caddyID)
+			// When（Round 34 F-6: buildWafHandler 已删，协议门控在生产调用点，
+			// 测试复刻调用点语义：仅 http 规则经 WithPolicy 变体构建）
+			var protocol string
+			if err := database.QueryRow(`SELECT protocol FROM lb_rules WHERE caddy_id=?`, tc.caddyID).Scan(&protocol); err != nil || protocol != "http" {
+				protocol = "tcp"
+			}
+			handler := buildWafHandlerWithPolicy(tc.caddyID, GetSecurityPolicyForRule(tc.caddyID))
+			if protocol != "http" {
+				handler = nil
+			}
 
 			// Then
 			if !tc.wantWaf {
 				if handler != nil {
-					t.Fatalf("buildWafHandler(%q)=%#v, want nil", tc.caddyID, handler)
+					t.Fatalf("buildWafHandlerWithPolicy(%q, policy)=%#v, want nil", tc.caddyID, handler)
 				}
 				return
 			}
 			if handler == nil {
-				t.Fatalf("buildWafHandler(%q)=nil, want waf handler", tc.caddyID)
+				t.Fatalf("buildWafHandlerWithPolicy(%q, policy)=nil, want waf handler", tc.caddyID)
 			}
 			if handler["handler"] != "waf" {
 				t.Fatalf("handler name=%#v, want waf", handler["handler"])

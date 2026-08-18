@@ -113,13 +113,24 @@ func (s *CaddyService) applyConfigLocked(config map[string]interface{}) (err err
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("config apply failed: %s", string(body))
+		return fmt.Errorf("config apply failed: %s", string(readCaddyErrorBody(resp.Body)))
 	}
 
 	log.Println("Caddy config applied successfully")
 	return nil
 }
+
+// readCaddyErrorBody 读取 Caddy 管理接口错误响应体并截断到 1KB 内。Caddy 错误体被
+// 完整嵌入 error 后，会经 apply_ok_reload_failed 标记、集群 last_sync_error、证书
+// 任务 message 等有界通道传播（Round 34 F-R34-1）；按字节截断后回退到合法 UTF-8
+// 边界，避免多字节字符残片乱码（复用 cluster_sync.go 的 truncateValidUTF8Tail 模式）。
+func readCaddyErrorBody(body io.Reader) []byte {
+	limited, _ := io.ReadAll(io.LimitReader(body, caddyErrorBodyMaxBytes))
+	return truncateValidUTF8Tail(limited)
+}
+
+// caddyErrorBodyMaxBytes 限制嵌入 error 的 Caddy 管理接口错误响应体大小。
+const caddyErrorBodyMaxBytes = 1024
 
 // ValidateConfig validates Caddy configuration using the /load API with validate=true
 func (s *CaddyService) ValidateConfig(config map[string]interface{}) (err error) {
@@ -145,8 +156,7 @@ func (s *CaddyService) ValidateConfig(config map[string]interface{}) (err error)
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("validation failed: %s", string(body))
+		return fmt.Errorf("validation failed: %s", string(readCaddyErrorBody(resp.Body)))
 	}
 
 	return nil
@@ -243,8 +253,7 @@ func (s *CaddyService) validateConfigInternal(config map[string]interface{}) err
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("validation failed: %s", string(body))
+		return fmt.Errorf("validation failed: %s", string(readCaddyErrorBody(resp.Body)))
 	}
 
 	return nil
@@ -263,8 +272,7 @@ func (s *CaddyService) GetConfigByID(id string) (map[string]interface{}, error) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("get config failed: %s", string(body))
+		return nil, fmt.Errorf("get config failed: %s", string(readCaddyErrorBody(resp.Body)))
 	}
 
 	var result map[string]interface{}
@@ -366,8 +374,7 @@ func (s *CaddyService) applyConfigRaw(config map[string]interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("config apply failed: %s", string(body))
+		return fmt.Errorf("config apply failed: %s", string(readCaddyErrorBody(resp.Body)))
 	}
 
 	return nil
@@ -721,56 +728,97 @@ type securityPolicyContext struct {
 }
 
 // loadSecurityPolicyContext 一次性查询 security_policy_bindings +
-// security_policies（JOIN，仅启用策略）+ security_block_pages，构建
+// security_policies（仅启用策略）+ security_block_pages，构建
 // ruleCaddyID → policy 映射与 block_page_id → content 映射。查询次数与规则数
-// 无关（常数级：最多 2 次 Query）。
+// 无关（常数级：最多 3 次 Query）。
+// Round 34 F-5: 与 GetSecurityPolicyForRule 严格同构——先取每规则最高
+// policy_id 绑定（不预过滤 enabled），再按 id 查策略并过滤 enabled；
+// 此前 JOIN 预过滤后再取最高，最高绑定指向禁用策略时与单查结果分歧。
 func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, error) {
 	ctx := &securityPolicyContext{
 		policyByRule:  make(map[string]*models.SecurityPolicy),
 		blockPageByID: make(map[int]string),
 	}
-	rows, err := store.Query(`
-		SELECT b.rule_caddy_id, p.id, p.name, p.description, p.mode, p.anomaly_threshold,
-		       p.ip_acl_mode, p.ip_acl_list, p.ip_acl_enabled, p.ip_whitelist, p.ip_blacklist,
-		       p.rate_limit_enabled, p.rate_limit_rps, p.rate_limit_burst,
-		       p.crs_rule_groups, p.crs_excluded_rules, p.custom_rules,
-		       p.block_page_id, p.block_status_code, p.enabled, p.created_at, p.updated_at,
-		       p.geoip_countries, p.geoip_mode, p.waf_check_response
-		FROM security_policy_bindings b
-		JOIN security_policies p ON p.id = b.policy_id AND p.enabled = 1
-		ORDER BY b.policy_id DESC`)
+	bindingRows, err := store.Query(`SELECT rule_caddy_id, MAX(policy_id) FROM security_policy_bindings GROUP BY rule_caddy_id`)
 	if err != nil {
 		return nil, err
 	}
-	for rows.Next() {
+	ruleMaxPolicy := make(map[string]int)
+	for bindingRows.Next() {
 		var ruleCaddyID string
-		var p models.SecurityPolicy
-		var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
-		if err := rows.Scan(&ruleCaddyID, &p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold,
-			&p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
-			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst,
-			&crsRuleGroups, &crsExcludedRules, &customRules,
-			&p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt,
-			&geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse); err != nil {
+		var policyID int
+		if err := bindingRows.Scan(&ruleCaddyID, &policyID); err != nil {
+			_ = bindingRows.Close()
+			return nil, err
+		}
+		ruleMaxPolicy[ruleCaddyID] = policyID
+	}
+	if err := bindingRows.Err(); err != nil {
+		_ = bindingRows.Close()
+		return nil, err
+	}
+	if err := bindingRows.Close(); err != nil {
+		return nil, err
+	}
+	distinctPolicyIDs := make([]int, 0, len(ruleMaxPolicy))
+	seen := make(map[int]struct{}, len(ruleMaxPolicy))
+	for _, policyID := range ruleMaxPolicy {
+		if _, ok := seen[policyID]; ok {
+			continue
+		}
+		seen[policyID] = struct{}{}
+		distinctPolicyIDs = append(distinctPolicyIDs, policyID)
+	}
+	policiesByID := make(map[int]*models.SecurityPolicy, len(distinctPolicyIDs))
+	if len(distinctPolicyIDs) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(distinctPolicyIDs)), ",")
+		args := make([]interface{}, len(distinctPolicyIDs))
+		for i, policyID := range distinctPolicyIDs {
+			args[i] = policyID
+		}
+		rows, err := store.Query(`
+			SELECT id, name, description, mode, anomaly_threshold,
+			       ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
+			       rate_limit_enabled, rate_limit_rps, rate_limit_burst,
+			       crs_rule_groups, crs_excluded_rules, custom_rules,
+			       block_page_id, block_status_code, enabled, created_at, updated_at,
+			       geoip_countries, geoip_mode, waf_check_response
+			FROM security_policies WHERE id IN (`+placeholders+`) AND enabled = 1`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var p models.SecurityPolicy
+			var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
+			if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold,
+				&p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
+				&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst,
+				&crsRuleGroups, &crsExcludedRules, &customRules,
+				&p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt,
+				&geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			p.IPWhitelist = json.RawMessage(ipWhitelist)
+			p.IPBlacklist = json.RawMessage(ipBlacklist)
+			p.CRSRuleGroups = json.RawMessage(crsRuleGroups)
+			p.CRSExcludedRules = json.RawMessage(crsExcludedRules)
+			p.CustomRules = json.RawMessage(customRules)
+			p.GeoIPCountries = json.RawMessage(geoipCountries)
+			policiesByID[p.ID] = &p
+		}
+		if err := rows.Err(); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
-		p.IPWhitelist = json.RawMessage(ipWhitelist)
-		p.IPBlacklist = json.RawMessage(ipBlacklist)
-		p.CRSRuleGroups = json.RawMessage(crsRuleGroups)
-		p.CRSExcludedRules = json.RawMessage(crsExcludedRules)
-		p.CustomRules = json.RawMessage(customRules)
-		p.GeoIPCountries = json.RawMessage(geoipCountries)
-		if _, exists := ctx.policyByRule[ruleCaddyID]; !exists {
-			ctx.policyByRule[ruleCaddyID] = &p
+		if err := rows.Close(); err != nil {
+			return nil, err
 		}
 	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
+	for ruleCaddyID, policyID := range ruleMaxPolicy {
+		if policy := policiesByID[policyID]; policy != nil {
+			ctx.policyByRule[ruleCaddyID] = policy
+		}
 	}
 	var referencedPage bool
 	for _, policy := range ctx.policyByRule {
@@ -2008,19 +2056,32 @@ func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain 
 	hasCert := false
 	if protocol == "http" {
 		var tlsSource, cert, key string
-		_ = db.DB.QueryRow(`SELECT COALESCE(tls_source,'manual'), COALESCE(tls_cert,''), COALESCE(tls_key,'') FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&tlsSource, &cert, &key)
-		if tlsSource == "manual" && cert != "" && key != "" {
-			hasCert = true
-		} else if tlsSource == "acme_dns" {
-			hasCert = isACMECertIssuedFromStore(db.DB, caddyID, domain)
+		var enableTLS bool
+		// Round 34 F-3: 查询失败必须留痕，对话框不得静默显示"无证书"。
+		if err := db.DB.QueryRow(`SELECT COALESCE(tls_source,'manual'), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&tlsSource, &cert, &key, &enableTLS); err != nil {
+			log.Printf("GenerateRuleServerContext: 读取规则 %s TLS 字段失败: %v", caddyID, err)
+		} else if enableTLS {
+			// Round 34 F-2: 与全量渲染 availableCerts 同口径（caddy.go 全量路径
+			// 要求 EnableTLS），未开 TLS 的规则不加载证书。
+			if tlsSource == "manual" && cert != "" && key != "" {
+				hasCert = true
+			} else if tlsSource == "acme_dns" {
+				hasCert = isACMECertIssuedFromStore(db.DB, caddyID, domain)
+			}
 		}
 		var policies []interface{}
+		// Round 34 F-2: 与全量渲染 httpServersByPort 同口径——仅 enable_tls=1 且
+		// 存在启用上游的规则进入 TLS 策略（无上游/关 TLS 规则在真实配置中不存在）。
 		rows, err := db.DB.Query(`SELECT COALESCE(caddy_id,''), COALESCE(domain,''), COALESCE(tls_source,'manual'), COALESCE(tls_cert,''), COALESCE(tls_key,'')
-			FROM lb_rules WHERE enabled = 1 AND protocol = 'http' AND listen_port = ?`, listenPort)
-		if err == nil {
+			FROM lb_rules WHERE enabled = 1 AND protocol = 'http' AND listen_port = ? AND enable_tls = 1
+			AND EXISTS (SELECT 1 FROM upstreams u WHERE u.rule_id = lb_rules.caddy_id AND IIF(u.enabled IN ('1',1),1,0) = 1)`, listenPort)
+		if err != nil {
+			log.Printf("GenerateRuleServerContext: 读取端口 %d TLS 策略失败: %v", listenPort, err)
+		} else {
 			for rows.Next() {
 				var ruleID, ruleDomain, tlsSource, cert, key string
 				if rows.Scan(&ruleID, &ruleDomain, &tlsSource, &cert, &key) != nil {
+					log.Printf("GenerateRuleServerContext: 扫描端口 %d 规则 TLS 字段失败", listenPort)
 					continue
 				}
 				available := (tlsSource == "manual" && cert != "" && key != "") || (tlsSource == "acme_dns" && isACMECertIssuedFromStore(db.DB, ruleID, ruleDomain))

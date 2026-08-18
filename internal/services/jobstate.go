@@ -104,6 +104,20 @@ func JobIsTerminal(status string) bool {
 	}
 }
 
+// maxJobMessageBytes 限制写入 cert_jobs.message 的任务消息大小。CA 错误详情等外部
+// 文本可能无界嵌入错误链，而 message 列会同步到从节点并展示在 UI（Round 34
+// F-R34-3），各写入点（failJob/jobLogger.Log/deploymentFailed）统一截断。
+const maxJobMessageBytes = 1024
+
+// truncateJobMessage 将任务消息截断到 maxJobMessageBytes 字节内，并回退到合法
+// UTF-8 边界，避免 LimitReader 式按字节截断留下多字节字符残片。
+func truncateJobMessage(message string) string {
+	if len(message) <= maxJobMessageBytes {
+		return message
+	}
+	return string(truncateValidUTF8Tail([]byte(message[:maxJobMessageBytes])))
+}
+
 func transitionJob(tx jobTransitionExecutor, id int, from []string, to string, fields map[string]any) error {
 	if len(from) == 0 {
 		return fmt.Errorf("transition certificate job %d to %s: %w", id, to, ErrJobTransitionConflict)

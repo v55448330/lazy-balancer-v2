@@ -201,6 +201,7 @@ func (s *CertIssuer) deploymentFailed(jobID int, material issuedCertificate, mes
 		status = "failed"
 	}
 	storedMessage := fmt.Sprintf("部署失败 [attempt=%d/%d]: %s", attempt, maxCertificateDeploymentAttempts, message)
+	storedMessage = truncateJobMessage(storedMessage)
 	delay := certificateDeploymentBackoff(attempt)
 	var availableAfter any
 	if status == "downloaded" {
@@ -241,6 +242,7 @@ type jobLogger struct {
 
 func (l *jobLogger) Log(stage, message string) {
 	l.file.Log(stage, message)
+	message = truncateJobMessage(message)
 	if err := transitionJob(db.DB, l.jobID, jobStatusesExceptDisabled, stage, map[string]any{"message": message}); err != nil {
 		log.Printf("cert job %d status update failed: %v", l.jobID, err)
 	}
