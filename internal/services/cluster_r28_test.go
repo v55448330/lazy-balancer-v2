@@ -1,0 +1,197 @@
+package services
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"lazy-balancer-v2/internal/config"
+	"lazy-balancer-v2/internal/models"
+)
+
+// R28 A-M2：快照提交成功但 Caddy 重载失败时，必须留下可识别、可重试的
+// 状态（apply_ok_reload_failed 标记写入 last_sync_error），否则主节点
+// 版本未变 → 后续同步一律 304 → 陈旧运行配置被永久掩盖且状态页仍显示 ok。
+func TestSyncService_applySnapshot_reloadFailure_marks_apply_ok_reload_failed(t *testing.T) {
+	// Given：快照可正常提交，但 Caddy admin 对 /load 一律返回 500
+	cluster, database := newClusterTestService(t)
+	snapshot, _, err := cluster.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusInternalServerError)
+		_, _ = response.Write([]byte("caddy boom"))
+	}))
+	defer caddyServer.Close()
+	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	// When
+	applyErr := syncService.applySnapshot(context.Background(), snapshot)
+
+	// Then：applySnapshot 按设计返回 nil（重载失败不回滚已提交快照），
+	// last_sync_error 已落库携带标记（UI 与主节点 Report 通道可见）；
+	// 快照事务本身已提交（applied_version 已推进）。
+	if applyErr != nil {
+		t.Fatalf("apply error=%v, want nil（重载失败不回滚已提交快照）", applyErr)
+	}
+	var appliedVersion int
+	var lastSyncError string
+	if err := database.QueryRow("SELECT COALESCE(applied_version,0), COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&appliedVersion, &lastSyncError); err != nil {
+		t.Fatal(err)
+	}
+	if appliedVersion != snapshot.Version {
+		t.Fatalf("applied_version=%d, want %d（快照必须已提交）", appliedVersion, snapshot.Version)
+	}
+	if !strings.Contains(lastSyncError, "apply_ok_reload_failed") {
+		t.Fatalf("last_sync_error=%q, want apply_ok_reload_failed marker", lastSyncError)
+	}
+}
+
+func TestSyncService_applySnapshot_success_clears_reload_failure_marker(t *testing.T) {
+	// Given：上一轮重载失败留下了标记；本轮 Caddy 恢复正常（200）
+	cluster, database := newClusterTestService(t)
+	snapshot, _, err := cluster.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET last_sync_error=?", encodeSyncError("apply_ok_reload_failed: previous failure", models.SyncErrorCodeApplyFailed)); err != nil {
+		t.Fatal(err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	// When
+	err = syncService.applySnapshot(context.Background(), snapshot)
+
+	// Then：应用成功返回 nil，标记随成功路径清空
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	var lastSyncError string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastSyncError); err != nil {
+		t.Fatal(err)
+	}
+	if lastSyncError != "" {
+		t.Fatalf("last_sync_error=%q, want cleared after successful reload", lastSyncError)
+	}
+}
+
+func TestSyncService_Pull_repulls_full_snapshot_after_reload_failure_marker(t *testing.T) {
+	// Given：主节点对增量请求回 304；从节点 last_sync_error 携带重载失败
+	// 标记且本地数据无漂移——304 分支必须识别标记并以 since_version=0
+	// 全量重拉，让 apply 重试重载，而不是被「配置无变化」永久掩盖。
+	_, database := newClusterTestService(t)
+	snapshot := signedTestSnapshot(9, "token")
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	snapshot = signTestSnapshot(snapshot, "token")
+
+	requestedVersions := make(chan string, 2)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestedVersions <- request.URL.Query().Get("since_version")
+		if request.URL.Query().Get("since_version") == "0" {
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(models.APIResponse{Code: 0, Data: snapshot})
+			return
+		}
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9, last_sync_error=? WHERE id=1",
+		master.URL, encodeSyncError("apply_ok_reload_failed: caddy down", models.SyncErrorCodeApplyFailed)); err != nil {
+		t.Fatal(err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	// When
+	result, pullErr := service.Pull(context.Background())
+
+	// Then：先按增量请求（9），再因标记全量重拉（0）；重载成功后标记清空
+	if pullErr != nil {
+		t.Fatalf("pull: %v", pullErr)
+	}
+	if !result.Changed || result.AppliedVersion != 9 {
+		t.Fatalf("result=%#v, want changed full-snapshot apply", result)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "9" {
+		t.Fatalf("first request since_version=%q, want 9", v)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "0" {
+		t.Fatalf("second request since_version=%q, want 0 (reload-failure re-pull)", v)
+	}
+	var lastSyncError string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastSyncError); err != nil {
+		t.Fatal(err)
+	}
+	if lastSyncError != "" {
+		t.Fatalf("last_sync_error=%q, want cleared after successful retry", lastSyncError)
+	}
+}
+
+// R28 A-LOW-2：上报被拒时 200 字节截断可能落在多字节 UTF-8 字符中间，
+// 错误信息尾部不得残留半个字符的乱码字节。
+func TestSyncService_Report_rejection_body_trims_partial_utf8_tail(t *testing.T) {
+	// Given：主节点 403 正文为 300 字节的纯中文
+	_, database := newClusterTestService(t)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusForbidden)
+		_, _ = response.Write([]byte(strings.Repeat("中", 100)))
+	}))
+	defer master.Close()
+	caddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
+	defer caddy.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='cluster-token' WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(caddy.URL))
+
+	// When
+	err := service.Report(context.Background())
+
+	// Then：正文摘要回退到合法 UTF-8 边界（66 个完整字符 = 198 字节）
+	if err == nil {
+		t.Fatal("report unexpectedly succeeded")
+	}
+	want := "body=" + strings.Repeat("中", 66)
+	if !strings.HasSuffix(err.Error(), want) {
+		t.Fatalf("report error=%q, want suffix %q", err.Error(), want)
+	}
+	if strings.Contains(err.Error(), "\uFFFD") {
+		t.Fatalf("report error=%q contains replacement rune", err.Error())
+	}
+}
+
+func TestTruncateValidUTF8Tail(t *testing.T) {
+	// Given：67 个三字节字符共 201 字节，截到 200 字节必落在字符中间
+	multibyte := []byte(strings.Repeat("中", 67))
+	tests := []struct {
+		name  string
+		input []byte
+		want  string
+	}{
+		{name: "empty", input: nil, want: ""},
+		{name: "ascii unchanged", input: []byte("plain ascii"), want: "plain ascii"},
+		{name: "valid multibyte unchanged", input: []byte("中文ok"), want: "中文ok"},
+		{name: "mid-character cut trims to boundary", input: multibyte[:200], want: strings.Repeat("中", 66)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// When
+			got := string(truncateValidUTF8Tail(test.input))
+			// Then
+			if got != test.want {
+				t.Fatalf("truncateValidUTF8Tail()=%q, want %q", got, test.want)
+			}
+		})
+	}
+}

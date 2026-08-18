@@ -136,6 +136,12 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if err := s.caddy.ApplyConfig(GenerateCaddyConfig()); err != nil {
 		Logf("error", "集群同步后重载 Caddy 失败（快照已提交）: %v", err)
 		RecordAuditLog("system", "重载失败", "Caddy配置", fmt.Sprintf("同步应用后自动重载失败: %v", err), "")
+		// 写入标记：运行配置与数据库不一致。304 分支识别该标记并全量重拉补偿重试，
+		// 避免陈旧运行配置存活到下次真实变更或重启。
+		marker := fmt.Sprintf("apply_ok_reload_failed: %v", err)
+		if _, werr := s.db.ExecContext(context.Background(), "UPDATE global_config SET last_sync_error=? WHERE id=1", encodeSyncError(marker, models.SyncErrorCodeApplyFailed)); werr != nil {
+			Logf("warn", "集群同步重载失败标记写入失败: %v", werr)
+		}
 	} else {
 		RecordAuditLog("system", "重载", "Caddy配置", "同步应用后自动重载", "")
 	}

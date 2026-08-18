@@ -541,6 +541,18 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			return SyncResult{}, newSyncFailure(code, fmt.Errorf("拉取主节点快照: %w", err))
 		}
 		if resp.StatusCode == http.StatusNotModified && attempt == 0 {
+			// 上一轮应用已提交但 Caddy 重载失败：运行配置与库数据不一致，
+			// 需要全量重拉以补偿重试（不能靠 304 跳过期瞒）。
+			var lastSyncErr string
+			if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastSyncErr); err == nil {
+				if msg, _ := decodeSyncError(lastSyncErr); strings.HasPrefix(msg, "apply_ok_reload_failed") {
+					Logf("warn", "检测到上次同步应用后 Caddy 重载失败（%s），全量重拉补偿重试", lastSyncErr)
+					RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("上次应用后重载失败", "配置无变化但运行配置不一致，已改为全量拉取"), "")
+					resp.Body.Close()
+					sinceVersion, sinceFingerprint = 0, ""
+					continue
+				}
+			}
 			if drifted := s.driftedSections(ctx); drifted != "" {
 				Logf("warn", "本地数据与同步记录不一致（%s），以全量快照重新同步", drifted)
 				RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail(fmt.Sprintf("本地数据与记录不一致：%s", drifted), "配置无变化但本地数据缺失，已改为全量拉取"), "")
