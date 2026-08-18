@@ -589,6 +589,12 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
+		// 显式空串按 Create 口径归一为 "[]"，保持列形状一致，避免库内出现 ""
+		// 与 "[]" 并存（Create 在 :438-440 归一）。
+		if strings.TrimSpace(*req.CustomRules) == "" {
+			empty := "[]"
+			req.CustomRules = &empty
+		}
 	}
 	// 引用存在性校验：显式提供的 block_page_id / custom_rules（ID 数组）必须指向
 	// 存在的拦截页/规则；未提供的字段不参与校验（保持存量列不变）。

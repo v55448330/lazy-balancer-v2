@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -35,6 +36,20 @@ var auditLogCopyFile = copyAuditLogTo
 // 重置偏移，导致首次轮转后所有安全事件永久丢失。copytruncate 保留原 inode，
 // Coraza 无感知，tailer 只看到截断（size < offset 即重置偏移），从而持续摄取。
 func rotateAuditLogIfNeeded() {
+	// 先重试上次失败的归档补采：成功才删除标记继续轮转；失败则保留 .1 不被 shift
+	// 覆盖（事件尚存），待下次轮转重试，避免补采失败导致窗口事件永久丢失。
+	if pending := securityEventsReadPendingDelta(); pending != nil {
+		if _, err := os.Stat(pending.Path); os.IsNotExist(err) {
+			log.Printf("audit log rotation: pending delta archive %s missing, dropping marker", pending.Path)
+			_ = os.Remove(securityEventsPendingDeltaPath())
+		} else if err := securityEventsIngestDeltaFrom(pending.Path, pending.Offset); err != nil {
+			log.Printf("audit log rotation: pending delta ingest retry failed (rotation deferred): %v", err)
+			return
+		} else {
+			log.Printf("audit log rotation: pending delta ingest recovered from %s", pending.Path)
+			_ = os.Remove(securityEventsPendingDeltaPath())
+		}
+	}
 	info, err := os.Stat(auditLogPath)
 	if err != nil || info.Size() == 0 {
 		return
@@ -65,6 +80,22 @@ func rotateAuditLogIfNeeded() {
 		log.Printf("audit log rotation: copy to .1 failed (not truncating): %v", err)
 		return
 	}
+	archInfo, err := os.Stat(current)
+	if err != nil {
+		log.Printf("audit log rotation: stat %s failed (not truncating): %v", current, err)
+		return
+	}
+	archSize := archInfo.Size()
+	// 补采活文件尾部 [archSize, 补采时 size)：copy 最后一次读取后、truncate 前
+	// Coraza 新写入的事件两边都不在（.1 没有、活文件将被截断），须先于 truncate
+	// 从活文件直接补采。补采失败绝不截断——尾部事件仍完整留在活文件中，下次 tick
+	// 自然续读，不会丢失。
+	if tailInfo, terr := os.Stat(auditLogPath); terr == nil && tailInfo.Size() > archSize {
+		if ierr := securityEventsIngestDeltaFrom(auditLogPath, archSize); ierr != nil {
+			log.Printf("audit log rotation: ingest live tail [%d, %d) failed (not truncating): %v", archSize, tailInfo.Size(), ierr)
+			return
+		}
+	}
 	// 截断失败不影响数据安全（下次轮转会重试），仅记录日志。
 	if err := os.Truncate(auditLogPath, 0); err != nil {
 		log.Printf("audit log rotation: truncate failed (will retry next cycle): %v", err)
@@ -75,6 +106,9 @@ func rotateAuditLogIfNeeded() {
 	// 因此以 .1 实际大小作为窗口终点，覆盖复制竞态。
 	if err := securityEventsIngestRotatedDelta(persistedOffset); err != nil {
 		log.Printf("audit log rotation: ingest rotated delta failed (events in %s.1 may be lost): %v", base, err)
+		// 补采失败即落 pending 标记：事件只在 .1，下次轮转 shift 前先重试，
+		// 防止 .1→.2 后事件永久丢失。
+		securityEventsWritePendingDelta(securityEventsPendingDelta{Path: current, Offset: persistedOffset, Size: archSize})
 	}
 }
 
@@ -114,6 +148,44 @@ func copyAuditLogTo(src, dst string) error {
 
 func auditLogBaseName() string {
 	return filepath.Base(auditLogPath)
+}
+
+// securityEventsPendingDelta 记录一次失败的归档补采：内容为待补采的归档路径 +
+// 起始偏移 + 归档大小，持久化为 <auditlog>.delta-pending 标记文件。下次轮转
+// shift 前先重试补采（成功才删除标记），防止 .1 被 shift 覆盖后事件永久丢失。
+type securityEventsPendingDelta struct {
+	Path   string `json:"path"`
+	Offset int64  `json:"offset"`
+	Size   int64  `json:"size"`
+}
+
+func securityEventsPendingDeltaPath() string {
+	return auditLogPath + ".delta-pending"
+}
+
+// securityEventsWritePendingDelta 持久化待补采标记；写失败仅记录日志，不阻断
+// 轮转（标记是尽力恢复，不是数据通路本身）。
+func securityEventsWritePendingDelta(p securityEventsPendingDelta) {
+	data, err := json.Marshal(p)
+	if err != nil {
+		return
+	}
+	if werr := os.WriteFile(securityEventsPendingDeltaPath(), data, 0o644); werr != nil {
+		log.Printf("audit log rotation: write pending delta marker failed: %v", werr)
+	}
+}
+
+// securityEventsReadPendingDelta 读取待补采标记；不存在或损坏返回 nil。
+func securityEventsReadPendingDelta() *securityEventsPendingDelta {
+	data, err := os.ReadFile(securityEventsPendingDeltaPath())
+	if err != nil {
+		return nil
+	}
+	var p securityEventsPendingDelta
+	if err := json.Unmarshal(data, &p); err != nil || p.Path == "" {
+		return nil
+	}
+	return &p
 }
 
 func getAuditLogSizeBytes() int64 {

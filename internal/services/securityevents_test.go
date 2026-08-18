@@ -6,6 +6,7 @@ package services
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -643,5 +644,196 @@ func TestSecurityEventsTickSkipsMalformedAndContinues(t *testing.T) {
 	}
 	if len(uris) != 2 || uris[0] != "/admin/login?x=1" || uris[1] != "/upload" {
 		t.Errorf("uris=%v, want [/admin/login?x=1 /upload]", uris)
+	}
+}
+
+func TestSecurityEventsParseTransaction_rejectsEmptyID(t *testing.T) {
+	// Given：同一事务但 transaction_id 为空（去重唯一索引 WHERE transaction_id!=''
+	// 覆盖不到，重试路径会重复插入）
+	noID := strings.Replace(securityEventsFixtureBlocked, `"id": "tx-blocked-1",`, `"id": "",`, 1)
+	// When：解析
+	_, err := securityEventsParseTransaction(json.RawMessage(noID))
+	// Then：视为解析失败拒绝
+	if err == nil {
+		t.Fatalf("empty transaction_id must be rejected as parse failure")
+	}
+	if !errors.Is(err, errSecurityEventsEmptyID) {
+		t.Fatalf("err=%v, want errSecurityEventsEmptyID", err)
+	}
+}
+
+func TestSecurityEventsTickSkipsTransactionWithoutIDAndContinues(t *testing.T) {
+	// Given：日志含一个空 transaction_id 的事务 + 一个正常事务
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	noID := strings.Replace(securityEventsFixtureBlocked, `"id": "tx-blocked-1",`, `"id": "",`, 1)
+	content := noID + "\n" + securityEventsFixtureClean + "\n"
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+
+	// When：运行一次摄取
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	// Then：空 id 事务不产生事件记录，后续正常事务仍被摄取
+	rows, err := db.MetricsDB.Query(`SELECT transaction_id, uri FROM security_events`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []struct{ tx, uri string }
+	for rows.Next() {
+		var tx, uri string
+		if err := rows.Scan(&tx, &uri); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, struct{ tx, uri string }{tx, uri})
+	}
+	if len(got) != 1 || got[0].tx != "tx-clean-1" || got[0].uri != "/upload" {
+		t.Fatalf("rows=%+v, want single tx-clean-1 /upload（空 id 事务必须跳过）", got)
+	}
+}
+
+func TestRotateAuditLog_ingestsLiveTailWrittenBetweenCopyAndTruncate(t *testing.T) {
+	// Given：日志含事务 A（tick 已摄取并持久化偏移）
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile
+	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
+	auditLogSizeBytes = func() int64 { return 1 }
+	t.Cleanup(func() {
+		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes, auditLogCopyFile = oldLogPath, oldOffsetPath, oldSizeBytes, oldCopyFile
+	})
+	if err := os.WriteFile(logPath, []byte(securityEventsFixtureBlocked+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rows after tick=%d, want 1", count)
+	}
+
+	// When：copy 完成后、truncate 前 Coraza 把事务 C 写入活文件（残余窗口事件，
+	// 只在活文件、不在 .1）
+	auditLogCopyFile = func(src, dst string) error {
+		if err := copyAuditLogTo(src, dst); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(src, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = f.WriteString(securityEventsFixtureClean + "\n")
+		return err
+	}
+	rotateAuditLogIfNeeded()
+
+	// Then：活文件尾部事件在 truncate 前被补采入库
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("rows after rotation=%d, want 2 (A + live-tail C)", count)
+	}
+	var uri string
+	if err := db.MetricsDB.QueryRow(`SELECT uri FROM security_events WHERE transaction_id='tx-clean-1'`).Scan(&uri); err != nil {
+		t.Fatal(err)
+	}
+	if uri != "/upload" {
+		t.Fatalf("live-tail event uri=%q, want /upload", uri)
+	}
+}
+
+func TestRotateAuditLog_retriesPendingDeltaBeforeShifting(t *testing.T) {
+	// Given：日志含 A（tick 已摄取）+ B（tick 后追加，只存在于归档窗口）
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	oldLogPath, oldOffsetPath, oldSizeBytes := auditLogPath, securityEventsOffsetPath, auditLogSizeBytes
+	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
+	auditLogSizeBytes = func() int64 { return 1 }
+	t.Cleanup(func() {
+		auditLogPath, securityEventsOffsetPath, auditLogSizeBytes = oldLogPath, oldOffsetPath, oldSizeBytes
+	})
+	if err := os.WriteFile(logPath, []byte(securityEventsFixtureBlocked+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(securityEventsFixtureUnknownHost + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// When：指标库故障导致轮转后补采失败 → pending 标记落盘
+	_ = db.MetricsDB.Close()
+	rotateAuditLogIfNeeded()
+	marker := securityEventsPendingDeltaPath()
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("pending marker must exist after failed delta ingest: %v", err)
+	}
+
+	// When：指标库恢复后再次轮转 → shift 前先重试补采成功、标记清除、B 入库
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	rotateAuditLogIfNeeded()
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("pending marker must be removed after successful retry, stat err=%v", err)
+	}
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("rows after retry=%d, want 2 (A + recovered B)", count)
+	}
+	var uri string
+	if err := db.MetricsDB.QueryRow(`SELECT uri FROM security_events WHERE transaction_id='tx-unknown-1'`).Scan(&uri); err != nil {
+		t.Fatal(err)
+	}
+	if uri != "/BlockedPath" {
+		t.Fatalf("recovered event uri=%q, want /BlockedPath", uri)
 	}
 }

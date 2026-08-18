@@ -265,6 +265,10 @@ func customRulePhase(cr models.CustomRule) int {
 }
 
 func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
+	// 旧版内嵌规则可能没有 id（0）：全部发射 id:10000 会在同一份 coraza 配置中
+	// 产生重复 SecRule id，按序分配唯一合成 id（1000000+序号，避开 CRS 的
+	// 100000-999999 保留段）。synthetic 只在无 id 规则上递增，保证彼此唯一。
+	synthetic := 0
 	for _, cr := range customRules {
 		if !cr.Enabled {
 			continue
@@ -275,6 +279,11 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 		if issue := customRuleEmissionIssue(cr); issue != "" {
 			log.Printf("自定义规则 %d(%s) %s，已跳过发射，请修正或禁用", cr.ID, cr.Name, issue)
 			continue
+		}
+		emitID := cr.ID + 10000
+		if cr.ID == 0 {
+			synthetic++
+			emitID = 1000000 + synthetic
 		}
 		safeName := strings.ReplaceAll(cr.Name, "'", "")
 		// CRS v4 blocking evaluation reads tx.inbound_anomaly_score_pl1..4 —
@@ -304,7 +313,7 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 				// 链上所有条目共用同一相位（coraza 以起始条相位执行整条链）
 				var actions string
 				if idx == 0 {
-					actions = fmt.Sprintf("id:%d,phase:%d,%s", cr.ID+10000, phase, action)
+					actions = fmt.Sprintf("id:%d,phase:%d,%s", emitID, phase, action)
 				} else {
 					actions = fmt.Sprintf("phase:%d", phase)
 				}
@@ -316,7 +325,7 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 		} else {
 			target := customRuleTargets[cr.Target]
 			op := customRuleOperators[cr.Operator]
-			sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,phase:%d,%s\"\n", target, op, escapeCorazaPattern(cr.Pattern), cr.ID+10000, phase, action))
+			sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,phase:%d,%s\"\n", target, op, escapeCorazaPattern(cr.Pattern), emitID, phase, action))
 		}
 	}
 
@@ -446,7 +455,13 @@ func ValidateGeoIPCountries(raw string) error {
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 		return fmt.Errorf("geoip_countries 必须是 JSON 数组")
 	}
-	provinces := GetCachedProvinces()
+	// 校验源必须与发射源（caddy.go 的 live searcher geoip 标记）对齐：searcher
+	// 存在时优先用实时省份列表，避免陈旧缓存拒绝新省份或与 live 分叉；缓存仅在
+	// searcher 缺失（live 仅返回 ["海外"]）时兜底。
+	provinces := GetIP2RegionProvinces()
+	if len(provinces) <= 1 {
+		provinces = GetCachedProvinces()
+	}
 	known := make(map[string]bool, len(provinces)+1)
 	for _, p := range provinces {
 		known[p] = true

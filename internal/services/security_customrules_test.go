@@ -177,3 +177,30 @@ func TestEmitCustomRules_invalidRuleLogsSkipAndSparesCleanRules(t *testing.T) {
 		t.Fatalf("clean rule must not be logged as skipped:\n%s", logged)
 	}
 }
+
+func TestEmitCustomRules_assignsUniqueSyntheticIDsToLegacyIDLessRules(t *testing.T) {
+	// Given：同一策略内两条无 id 的旧版内嵌规则（legacy 0/""-tolerance 数据）
+	var sb strings.Builder
+	rules := []models.CustomRule{
+		{ID: 0, Name: "旧版规则甲", Enabled: true, Action: "block", Score: 5, Target: "uri", Operator: "contains", Pattern: "/a"},
+		{ID: 0, Name: "旧版规则乙", Enabled: true, Action: "log", Score: 0, Target: "uri", Operator: "contains", Pattern: "/b"},
+	}
+
+	// When：发射
+	emitCustomRules(&sb, rules)
+	got := sb.String()
+
+	// Then：按序获得不同合成 id（1000000+n），不再共用 id:10000 造成重复 SecRule id
+	for _, want := range []string{"id:1000001,phase:1,", "id:1000002,phase:1,"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("legacy rule must emit %s:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "id:10000,") {
+		t.Fatalf("legacy rules must not emit duplicate id:10000:\n%s", got)
+	}
+	// And：两条规则均正常发射（动作串完整）
+	if !strings.Contains(got, "自定义规则 旧版规则甲 命中") || !strings.Contains(got, "自定义规则 旧版规则乙 命中") {
+		t.Fatalf("both legacy rules must be emitted:\n%s", got)
+	}
+}

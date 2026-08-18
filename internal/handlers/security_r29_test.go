@@ -180,3 +180,25 @@ func TestCreateSecurityPolicy_geoipUnknownProvinceAllowedWhileCacheEmpty(t *test
 		t.Fatalf("create status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestUpdateSecurityPolicy_normalizesEmptyCustomRulesToArray(t *testing.T) {
+	// Given：一个已存在的策略
+	setupSecurityPolicyTestDB(t)
+	router := securityR29Router(t)
+	id := createTestPolicy(t, router, map[string]any{"name": "归一策略"})
+
+	// When：显式传 custom_rules="" 更新
+	recorder := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"custom_rules": ""})
+
+	// Then：200 且库内存储 "[]"（与 Create 口径一致，不落字面空串）
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	var stored string
+	if err := db.DB.QueryRow(`SELECT custom_rules FROM security_policies WHERE id=?`, id).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "[]" {
+		t.Fatalf("stored custom_rules=%q, want \"[]\"", stored)
+	}
+}

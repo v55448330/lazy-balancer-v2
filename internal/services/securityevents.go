@@ -69,6 +69,11 @@ type securityEventsAuditTransaction struct {
 	} `json:"messages"`
 }
 
+// errSecurityEventsEmptyID 标记无 transaction_id 的事务：去重唯一索引是部分索引
+// （WHERE transaction_id != ”），空 id 没有幂等键，重试路径（tick 失败重放、
+// 轮转补采与 tick 重叠）会重复插入，因此视为解析失败跳过。
+var errSecurityEventsEmptyID = errors.New("transaction has no id")
+
 // securityEventsParseTransaction maps one Coraza audit transaction into a
 // record. Rule fields come from the first message; the anomaly score sums all
 // message scores. host = server_id, falling back to the request host header
@@ -81,6 +86,9 @@ func securityEventsParseTransaction(raw json.RawMessage) (*securityEventRecord, 
 	tx := doc.Transaction
 	if tx.UnixTimestamp == 0 {
 		return nil, errors.New("transaction has no unix_timestamp")
+	}
+	if tx.ID == "" {
+		return nil, errSecurityEventsEmptyID
 	}
 	rec := &securityEventRecord{
 		TransactionID: tx.ID,
@@ -400,7 +408,13 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 		docEnd := decoderStart + decoder.InputOffset()
 		rec, perr := securityEventsParseTransaction(raw)
 		if perr != nil {
-			Logf("error", "security events ingestion: skipping malformed transaction id=%s: %v", securityEventsTransactionID(raw), perr)
+			// 空 transaction_id 是数据质量问题而非摄取故障，debug 级记录即可；
+			// 其余畸形事务仍按 error 级提示。
+			level := "error"
+			if errors.Is(perr, errSecurityEventsEmptyID) {
+				level = "debug"
+			}
+			Logf(level, "security events ingestion: skipping malformed transaction id=%s: %v", securityEventsTransactionID(raw), perr)
 		} else {
 			rule, policy := securityEventsMapHost(rec.Host, rules, bindings)
 			if _, ierr := stmt.Exec(rec.EventTime, rule.caddyID, policy.id, rec.ClientIP, rec.Method, rec.URI,
@@ -466,9 +480,20 @@ func securityEventsIngestRotatedDelta(persistedOffset int64) error {
 	if info.Size() <= persistedOffset {
 		return nil // 归档未包含超出已摄取偏移的内容
 	}
-	f, err := os.Open(archive)
+	return securityEventsIngestDeltaFrom(archive, persistedOffset)
+}
+
+// securityEventsIngestDeltaFrom 从 path 的 from 偏移补采到 EOF 的安全事件：
+// 解析与 INSERT OR IGNORE 插入复用 securityEventsProcessPass，transaction_id
+// 唯一索引保证幂等。轮转后的 .1 归档（securityEventsIngestRotatedDelta）与
+// copy 完成后 truncate 前的活文件尾部（rotateAuditLogIfNeeded）共用此路径。
+func securityEventsIngestDeltaFrom(path string, from int64) error {
+	if db.DB == nil || db.MetricsDB == nil {
+		return nil
+	}
+	f, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("security events: open rotated archive: %w", err)
+		return fmt.Errorf("security events: open delta source: %w", err)
 	}
 	defer f.Close()
 	rules, bindings, err := securityEventsLoadMappings()
@@ -476,7 +501,7 @@ func securityEventsIngestRotatedDelta(persistedOffset int64) error {
 		return err
 	}
 	t := securityEventsNewTailer(auditLogPath, securityEventsOffsetPath)
-	_, passErr := t.securityEventsProcessPass(f, persistedOffset, rules, bindings)
+	_, passErr := t.securityEventsProcessPass(f, from, rules, bindings)
 	return passErr
 }
 
