@@ -550,7 +550,9 @@ func loadUpstreamsBatch(ctx context.Context, ruleIDs []string) (map[string][]mod
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	rows, err := db.DB.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), COALESCE(enabled,1), COALESCE(protocol,'http'), COALESCE(max_connections,0)
+	// Round 35: 与渲染侧同口径（IIF(enabled IN ('1',1),1,0)，NULL 视禁用）——
+	// 此前 COALESCE(enabled,1) 将遗留 NULL 行视为启用，UI 显示与生成配置分裂。
+	rows, err := db.DB.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0)
 		FROM upstreams WHERE rule_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("批量读取上游: %w", err)

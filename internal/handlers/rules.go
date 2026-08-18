@@ -111,7 +111,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	}
 
 	var upstreamCount int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM upstreams WHERE rule_id = ? AND enabled = 1`, caddyID).Scan(&upstreamCount); err != nil {
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM upstreams WHERE rule_id = ? AND IIF(enabled IN ('1',1),1,0) = 1`, caddyID).Scan(&upstreamCount); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取上游服务器失败"})
 		return
 	}

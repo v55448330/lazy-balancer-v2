@@ -2101,6 +2101,11 @@ func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain 
 					},
 				})
 			}
+			// Round 35 F-4: 遍历中途 DB 错误会截断 TLS 策略且此前静默（仅关行），
+			// 与规则主循环（:990-993）同口径显式留痕。
+			if err := rows.Err(); err != nil {
+				log.Printf("GenerateRuleServerContext: 遍历端口 %d TLS 策略失败: %v", listenPort, err)
+			}
 			_ = rows.Close()
 		}
 		server["tls_connection_policies"] = policies

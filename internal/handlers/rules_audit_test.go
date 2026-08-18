@@ -26,6 +26,8 @@ func TestListRules_uses_schema_defaults_when_nullable_columns_are_NULL(t *testin
 		VALUES ('lb_nulls','nullable','http',8080,NULL,NULL,NULL,NULL,NULL,NULL)`); err != nil {
 		t.Fatalf("seed nullable rule: %v", err)
 	}
+	// Round 35 F-1: upstreams.enabled 已 NOT NULL，回退迁移前结构以写入 NULL 行
+	simulateLegacyNullableUpstreams(t, db.DB)
 	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_nulls','127.0.0.1',9000,1,NULL,'http')`); err != nil {
 		t.Fatalf("seed nullable upstream: %v", err)
 	}

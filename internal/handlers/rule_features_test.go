@@ -637,12 +637,15 @@ func TestReplacePathRulesTx_replaces_all_rows_and_preserves_nullable_upstreams(t
 	}
 }
 
-func TestLoadUpstreamsBatch_defaults_NULL_enabled_to_true(t *testing.T) {
+// Round 35 F-1: loader 与渲染侧同口径（NULL 视禁用）——此前 COALESCE(enabled,1)
+// 把遗留 NULL 行视为启用，UI 显示与生成配置分裂。
+func TestLoadUpstreamsBatch_defaults_NULL_enabled_to_false(t *testing.T) {
 	// Given
 	database := initializeRuleFeatureTestDB(t)
 	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port) VALUES ('lb_null_upstream','nullable upstream','http',8080)`); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
+	simulateLegacyNullableUpstreams(t, database)
 	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,enabled) VALUES ('lb_null_upstream','127.0.0.1',9000,NULL)`); err != nil {
 		t.Fatalf("seed nullable upstream: %v", err)
 	}
@@ -650,12 +653,78 @@ func TestLoadUpstreamsBatch_defaults_NULL_enabled_to_true(t *testing.T) {
 	// When
 	upstreams, err := loadUpstreamsBatch(context.Background(), []string{"lb_null_upstream"})
 
-	// Then
+	// Then NULL 视禁用（与渲染 IIF(enabled IN ('1',1),1,0) 一致）
 	if err != nil {
 		t.Fatalf("load upstreams: %v", err)
 	}
-	if len(upstreams["lb_null_upstream"]) != 1 || !upstreams["lb_null_upstream"][0].Enabled {
-		t.Fatalf("loaded upstreams = %#v, want one enabled upstream", upstreams["lb_null_upstream"])
+	if len(upstreams["lb_null_upstream"]) != 1 || upstreams["lb_null_upstream"][0].Enabled {
+		t.Fatalf("loaded upstreams = %#v, want one disabled upstream", upstreams["lb_null_upstream"])
+	}
+}
+
+// Round 35 F-1: 存量库的 NULL enabled 上游在初始化迁移后归一化为 0（NULL 视禁用），
+// 不再存在 NULL 行；迁移幂等，重跑无副作用。
+func TestMigration_upstreamsEnabledNullNormalizedToDisabled(t *testing.T) {
+	// Given 模拟迁移前的存量库：先初始化建表，再回退为可空 enabled 并写入 NULL 行
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldDB)
+	})
+	if err := db.Initialize(dir); err != nil {
+		t.Fatalf("first initialize: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port) VALUES ('lb_null_mig','nullable','http',8081)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	simulateLegacyNullableUpstreams(t, db.DB)
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,enabled) VALUES ('lb_null_mig','127.0.0.1',9000,NULL), ('lb_null_mig','127.0.0.1',9001,1)`); err != nil {
+		t.Fatalf("seed nullable upstreams: %v", err)
+	}
+
+	// When 再次初始化触发迁移（UPDATE upstreams SET enabled=0 WHERE enabled IS NULL）
+	if err := db.Initialize(dir); err != nil {
+		t.Fatalf("second initialize (migration): %v", err)
+	}
+
+	// Then NULL 行消失，原 NULL 行走 0，正常行保持 1
+	var nullCount, enabledSum int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM upstreams WHERE rule_id='lb_null_mig' AND enabled IS NULL`).Scan(&nullCount); err != nil {
+		t.Fatalf("count null upstreams: %v", err)
+	}
+	if nullCount != 0 {
+		t.Fatalf("null enabled rows=%d, want 0 after migration", nullCount)
+	}
+	if err := db.DB.QueryRow(`SELECT SUM(enabled) FROM upstreams WHERE rule_id='lb_null_mig'`).Scan(&enabledSum); err != nil {
+		t.Fatalf("sum enabled upstreams: %v", err)
+	}
+	if enabledSum != 1 {
+		t.Fatalf("enabled sum=%d, want 1 (NULL→0, 1 保持)", enabledSum)
+	}
+}
+
+// simulateLegacyNullableUpstreams 把 upstreams 回退为迁移前的可空 enabled 结构
+// （schema 已 NOT NULL，NULL 仅存在于迁移前存量库），供测试构造遗留 NULL 行。
+func simulateLegacyNullableUpstreams(t *testing.T, database *sql.DB) {
+	t.Helper()
+	if _, err := database.Exec(`DROP TABLE upstreams`); err != nil {
+		t.Fatalf("drop upstreams: %v", err)
+	}
+	if _, err := database.Exec(`CREATE TABLE upstreams (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		rule_id VARCHAR(20) NOT NULL,
+		host VARCHAR(255) NOT NULL,
+		port INTEGER NOT NULL,
+		weight INTEGER DEFAULT 1,
+		dynamic_dns BOOLEAN DEFAULT FALSE,
+		enabled BOOLEAN DEFAULT TRUE,
+		protocol VARCHAR(10) DEFAULT 'http',
+		max_connections INTEGER DEFAULT 0,
+		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
+	)`); err != nil {
+		t.Fatalf("recreate legacy upstreams: %v", err)
 	}
 }
 

@@ -62,10 +62,28 @@ func TestGenerateCaddyConfigFromStore_readsUncommittedPolicyThroughTx(t *testing
 
 // Round 33 N-2: 存量 upstreams.enabled 为 NULL（schema 无 NOT NULL）时生成
 // 不得 scan 报错整配置失败——IIF 归一化后按禁用处理，不炸也不误启用。
+// Round 35 F-1: schema 已 NOT NULL，先回退为迁移前可空结构再写入 NULL 行。
 func TestGenerateCaddyConfig_toleratesNullEnabledUpstream(t *testing.T) {
 	// Given
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`DROP TABLE upstreams`); err != nil {
+		t.Fatalf("drop upstreams: %v", err)
+	}
+	if _, err := database.Exec(`CREATE TABLE upstreams (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		rule_id VARCHAR(20) NOT NULL,
+		host VARCHAR(255) NOT NULL,
+		port INTEGER NOT NULL,
+		weight INTEGER DEFAULT 1,
+		dynamic_dns BOOLEAN DEFAULT FALSE,
+		enabled BOOLEAN DEFAULT TRUE,
+		protocol VARCHAR(10) DEFAULT 'http',
+		max_connections INTEGER DEFAULT 0,
+		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
+	)`); err != nil {
+		t.Fatalf("recreate legacy upstreams: %v", err)
+	}
 	seedGenerationRule(t, database, "lb_null_upstream", false)
 	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,enabled,protocol) VALUES ('lb_null_upstream','10.0.0.9',9009,NULL,'http')`); err != nil {
 		t.Fatalf("seed null-enabled upstream: %v", err)

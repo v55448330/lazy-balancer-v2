@@ -641,7 +641,7 @@ func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore)
 }
 
 func (s *ClusterService) snapshotAllUpstreams(ctx context.Context, store snapshotStore) (map[string][]models.Upstream, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), COALESCE(enabled,1), COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams ORDER BY rule_id, id`)
+	rows, err := store.QueryContext(ctx, `SELECT id, rule_id, host, port, COALESCE(weight,1), COALESCE(dynamic_dns,0), IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0) FROM upstreams ORDER BY rule_id, id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照上游: %w", err)
 	}

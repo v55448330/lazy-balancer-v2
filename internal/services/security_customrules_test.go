@@ -63,6 +63,43 @@ func TestResolvePolicyCustomRules_chunkedIDsAcrossBatches(t *testing.T) {
 	}
 }
 
+// Round 35 F-5: 分块查询失败时其 id 不得计入悬空引用日志——此前
+// dropped=len(ids)-len(rules) 把「查询失败」误报为「规则已删除」；
+// 失败块单独留痕，悬空口径只统计查询成功分块。
+func TestResolvePolicyCustomRules_chunkFailureDoesNotInflateDanglingLog(t *testing.T) {
+	// Given
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	oldChunk := policyCustomRuleChunkSize
+	policyCustomRuleChunkSize = 2
+	t.Cleanup(func() { policyCustomRuleChunkSize = oldChunk })
+	// 删表使所有分块查询必然失败（引用 3 条跨 2 批）
+	if _, err := db.DB.Exec("DROP TABLE security_custom_rules"); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	// When
+	rules := resolvePolicyCustomRules(json.RawMessage(`[1,2,3]`))
+
+	// Then 无规则解析，分块错误单独留痕
+	if len(rules) != 0 {
+		t.Fatalf("len=%d, want 0", len(rules))
+	}
+	if !strings.Contains(logs.String(), "分块查询失败") {
+		t.Fatalf("chunk failure log missing:\n%s", logs.String())
+	}
+	// And 悬空日志不得把失败块的 id 计入（0 条悬空，不误导诊断）
+	if strings.Contains(logs.String(), "不存在，已跳过") {
+		t.Fatalf("dangling log must not fire for failed chunks:\n%s", logs.String())
+	}
+}
+
 func TestBuildCorazaDirectives_customRuleDenyOmitsStatusCode(t *testing.T) {
 	// Given a blocking policy with a custom block rule carrying a custom status code
 	policy := &models.SecurityPolicy{

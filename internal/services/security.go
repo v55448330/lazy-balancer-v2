@@ -404,6 +404,7 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 			return nil
 		}
 		var rules []models.CustomRule
+		queried := 0
 		for start := 0; start < len(ids); start += policyCustomRuleChunkSize {
 			end := start + policyCustomRuleChunkSize
 			if end > len(ids) {
@@ -422,6 +423,7 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 				log.Printf("解析策略自定义规则分块查询失败（id 段 %d-%d）: %v", chunk[0], chunk[len(chunk)-1], err)
 				continue
 			}
+			queried += len(chunk)
 			for rows.Next() {
 				var cr models.CustomRule
 				var conditionsJSON string
@@ -433,8 +435,10 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 			}
 			rows.Close()
 		}
-		// 悬空引用（规则已被删除）不改变解析行为，仅记录日志便于排查
-		if dropped := len(ids) - len(rules); dropped > 0 {
+		// 悬空引用（规则已被删除）不改变解析行为，仅记录日志便于排查；
+		// 只统计查询成功分块内未找到的 id——查询失败的分块已单独留痕，
+		// 其 id 从未读回，计入悬空会把「查询失败」误报为「规则已删除」。
+		if dropped := queried - len(rules); dropped > 0 {
 			log.Printf("策略引用的自定义规则有 %d 个不存在，已跳过", dropped)
 		}
 		return rules
