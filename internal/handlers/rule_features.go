@@ -717,7 +717,9 @@ func validateRuleConfigGeneration(rule models.LbRule) error {
 	if errors.Is(genErr, services.ErrNoEnabledUpstreams) {
 		return nil
 	}
-	if strings.Contains(genErr.Error(), "dynamic DNS requires exactly one enabled upstream") {
+	// Round 33 N-3: 动态 DNS 多上游同样哨兵化（ErrDynamicDNSUpstreamCount），
+	// 不再依赖文案 Contains——文案调整即静默漏报。
+	if errors.Is(genErr, services.ErrDynamicDNSUpstreamCount) {
 		return &configValidationError{message: "动态 DNS 模式仅支持一个启用的上游"}
 	}
 	return fmt.Errorf("生成规则配置失败: %s", genErr.Error())

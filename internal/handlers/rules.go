@@ -89,14 +89,15 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		ListenPort int
 		Enabled    bool
 		Domain     string
+		Protocol   string
 	}
 
 	services.Logf("debug", "GetRuleCaddyConfig: querying rule caddy_id=%s", caddyID)
 
 	err := db.DB.QueryRow(`
-		SELECT COALESCE(caddy_id,''), listen_port, COALESCE(enabled,0), COALESCE(domain,'')
+		SELECT COALESCE(caddy_id,''), listen_port, COALESCE(enabled,0), COALESCE(domain,''), COALESCE(protocol,'http')
 		FROM lb_rules WHERE caddy_id = ?
-	`, caddyID).Scan(&r.CaddyID, &r.ListenPort, &r.Enabled, &r.Domain)
+	`, caddyID).Scan(&r.CaddyID, &r.ListenPort, &r.Enabled, &r.Domain, &r.Protocol)
 
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
@@ -140,8 +141,10 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 		return
 	}
 
-	// Build the surrounding server/TLS context so the dialog shows certificates and policies
-	fullConfig := services.GenerateCaddyConfig()
+	// Build the surrounding server/TLS context so the dialog shows certificates
+	// and policies. Round 33 N-4: 定向构建仅含本规则端口 server 的上下文，
+	// 不再为单条规则触发整库查询+证书快照读取的全量重渲染。
+	fullConfig := services.GenerateRuleServerContext(r.CaddyID, r.ListenPort, r.Protocol, r.Domain)
 	ruleContext := buildRuleCaddyContext(fullConfig, r.CaddyID, r.ListenPort, r.Domain)
 
 	responseData["config"] = map[string]interface{}{

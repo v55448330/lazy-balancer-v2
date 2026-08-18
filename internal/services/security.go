@@ -379,7 +379,13 @@ func buildWafHandler(ruleCaddyID string) map[string]interface{} {
 	if err := db.DB.QueryRow("SELECT protocol FROM lb_rules WHERE caddy_id=?", ruleCaddyID).Scan(&protocol); err != nil || protocol != "http" {
 		return nil
 	}
-	policy := GetSecurityPolicyForRule(ruleCaddyID)
+	return buildWafHandlerWithPolicy(ruleCaddyID, GetSecurityPolicyForRule(ruleCaddyID))
+}
+
+// buildWafHandlerWithPolicy returns the coraza WAF handler for the given policy,
+// or nil when the policy is nil or emits no directives. Callers pass a policy
+// from the batch-preloaded context so generation stays on the store/tx channel.
+func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy) map[string]interface{} {
 	if policy == nil {
 		return nil
 	}

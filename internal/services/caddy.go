@@ -35,6 +35,11 @@ const (
 // 语义，未来追加规则上下文包装后特判不会静默失效。
 var ErrNoEnabledUpstreams = errors.New("no enabled upstreams")
 
+// ErrDynamicDNSUpstreamCount 动态 DNS 模式配置了多个启用上游时的哨兵错误
+// （动态解析仅支持单一上游）。产出点与 ErrNoEnabledUpstreams 相同两处，消费点
+// （rule_features.go 预校验）以 errors.Is 命中，避免脆弱的字符串匹配。
+var ErrDynamicDNSUpstreamCount = errors.New("dynamic DNS requires exactly one enabled upstream")
+
 // CaddyService handles Caddy configuration management
 type CaddyService struct {
 	adminURL string
@@ -706,6 +711,109 @@ type caddyConfigStore interface {
 	Exec(string, ...any) (sql.Result, error)
 }
 
+// securityPolicyContext 是生成期批量预载的安全策略状态：每个规则的生效策略
+// （多 binding 取 policy_id 最大者，与 GetSecurityPolicyForRule 同口径）以及
+// 策略引用的品牌拦截页内容。经与规则/上游同一 store（事务时即 tx）预载，
+// 事务内生成可读到未提交的策略变更，替代此前逐规则走全局 db.DB 的 N+1 查询。
+type securityPolicyContext struct {
+	policyByRule  map[string]*models.SecurityPolicy
+	blockPageByID map[int]string
+}
+
+// loadSecurityPolicyContext 一次性查询 security_policy_bindings +
+// security_policies（JOIN，仅启用策略）+ security_block_pages，构建
+// ruleCaddyID → policy 映射与 block_page_id → content 映射。查询次数与规则数
+// 无关（常数级：最多 2 次 Query）。
+func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, error) {
+	ctx := &securityPolicyContext{
+		policyByRule:  make(map[string]*models.SecurityPolicy),
+		blockPageByID: make(map[int]string),
+	}
+	rows, err := store.Query(`
+		SELECT b.rule_caddy_id, p.id, p.name, p.description, p.mode, p.anomaly_threshold,
+		       p.ip_acl_mode, p.ip_acl_list, p.ip_acl_enabled, p.ip_whitelist, p.ip_blacklist,
+		       p.rate_limit_enabled, p.rate_limit_rps, p.rate_limit_burst,
+		       p.crs_rule_groups, p.crs_excluded_rules, p.custom_rules,
+		       p.block_page_id, p.block_status_code, p.enabled, p.created_at, p.updated_at,
+		       p.geoip_countries, p.geoip_mode, p.waf_check_response
+		FROM security_policy_bindings b
+		JOIN security_policies p ON p.id = b.policy_id AND p.enabled = 1
+		ORDER BY b.policy_id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var ruleCaddyID string
+		var p models.SecurityPolicy
+		var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
+		if err := rows.Scan(&ruleCaddyID, &p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold,
+			&p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
+			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst,
+			&crsRuleGroups, &crsExcludedRules, &customRules,
+			&p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt,
+			&geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		p.IPWhitelist = json.RawMessage(ipWhitelist)
+		p.IPBlacklist = json.RawMessage(ipBlacklist)
+		p.CRSRuleGroups = json.RawMessage(crsRuleGroups)
+		p.CRSExcludedRules = json.RawMessage(crsExcludedRules)
+		p.CustomRules = json.RawMessage(customRules)
+		p.GeoIPCountries = json.RawMessage(geoipCountries)
+		if _, exists := ctx.policyByRule[ruleCaddyID]; !exists {
+			ctx.policyByRule[ruleCaddyID] = &p
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	var referencedPage bool
+	for _, policy := range ctx.policyByRule {
+		if policy.BlockPageID > 0 {
+			referencedPage = true
+			break
+		}
+	}
+	if !referencedPage {
+		return ctx, nil
+	}
+	pageRows, err := store.Query(`SELECT id, content FROM security_block_pages`)
+	if err != nil {
+		return nil, err
+	}
+	for pageRows.Next() {
+		var id int
+		var content string
+		if err := pageRows.Scan(&id, &content); err != nil {
+			_ = pageRows.Close()
+			return nil, err
+		}
+		ctx.blockPageByID[id] = content
+	}
+	if err := pageRows.Err(); err != nil {
+		_ = pageRows.Close()
+		return nil, err
+	}
+	if err := pageRows.Close(); err != nil {
+		return nil, err
+	}
+	return ctx, nil
+}
+
+// policyForRule 返回规则生效的安全策略：批量预载上下文存在时查映射，否则回退
+// 单规则查询（GenerateSingleRuleCaddyConfig/GenerateRouteObject 等非批量路径）。
+func policyForRule(ctx *securityPolicyContext, ruleCaddyID string) *models.SecurityPolicy {
+	if ctx != nil {
+		return ctx.policyByRule[ruleCaddyID]
+	}
+	return GetSecurityPolicyForRule(ruleCaddyID)
+}
+
 func GenerateCaddyConfig(overrides ...*models.UpdateConfigRequest) map[string]interface{} {
 	return generateCaddyConfigFromStore(db.DB, overrides...)
 }
@@ -849,9 +957,9 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 	}
 
 	upstreamRows, err := store.Query(`
-		SELECT u.rule_id, u.host, u.port, COALESCE(u.weight,1), COALESCE(u.dynamic_dns,0), u.enabled, COALESCE(u.protocol,'http'), COALESCE(u.max_connections,0)
+		SELECT u.rule_id, u.host, u.port, COALESCE(u.weight,1), COALESCE(u.dynamic_dns,0), IIF(u.enabled IN ('1',1),1,0), COALESCE(u.protocol,'http'), COALESCE(u.max_connections,0)
 		FROM upstreams u JOIN lb_rules r ON r.caddy_id = u.rule_id
-		WHERE u.enabled = 1 AND r.enabled = 1 ORDER BY u.rule_id, u.id
+		WHERE IIF(u.enabled IN ('1',1),1,0) = 1 AND r.enabled = 1 ORDER BY u.rule_id, u.id
 	`)
 	if err != nil {
 		return generationFailure("query enabled upstreams: %v", err)
@@ -1009,6 +1117,13 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout,
 		&global.proxyStreamTimeout, &global.proxyFlushInterval, &global.proxyStreamCloseDelay); err != nil {
 		return generationFailure("load global config: %v", err)
+	}
+
+	// Round 33 N-1: 安全策略经同一 store 批量预载（常数级查询），替代逐规则走
+	// 全局 db.DB 的 N+1——事务内生成（ApplyConfigFromTx）由此读到未提交的策略。
+	securityCtx, err := loadSecurityPolicyContext(store)
+	if err != nil {
+		return generationFailure("preload security policy context: %v", err)
 	}
 
 	if len(overrides) > 0 && overrides[0] != nil {
@@ -1194,7 +1309,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 				}
 			}
 
-			ruleRoutes, _, err := generateHTTPRouteObjects(ruleConfig)
+			ruleRoutes, _, err := generateHTTPRouteObjects(ruleConfig, securityCtx)
 			if err != nil {
 				return generationFailure("generate HTTP routes for rule %s: %v", r.CaddyID, err)
 			}
@@ -1208,10 +1323,10 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		var errorRoutes []interface{}
 		for _, ru := range rules {
 			r := ru.rule
-			if errorRoute := buildBlockPageErrorRoute(r.CaddyID, splitAndTrim(r.Domain)); errorRoute != nil {
+			if errorRoute := buildBlockPageErrorRoute(r.CaddyID, splitAndTrim(r.Domain), securityCtx); errorRoute != nil {
 				errorRoutes = append(errorRoutes, errorRoute)
 			}
-			if errorRoute := buildRateLimitErrorRoute(r.CaddyID, splitAndTrim(r.Domain)); errorRoute != nil {
+			if errorRoute := buildRateLimitErrorRoute(r.CaddyID, splitAndTrim(r.Domain), securityCtx); errorRoute != nil {
 				errorRoutes = append(errorRoutes, errorRoute)
 			}
 		}
@@ -1873,6 +1988,82 @@ func formatFlushInterval(v int) string {
 	return fmt.Sprintf("%ds", v)
 }
 
+// GenerateRuleServerContext builds a Caddy-config-shaped map containing only
+// the server context hosting a single rule: the deterministic server identity
+// for its listen port, the same-port TLS connection policies (mirroring
+// generateCaddyConfigFromStore's available-cert semantics), and the rule's own
+// certificate files. GetRuleCaddyConfig uses this instead of a full
+// GenerateCaddyConfig, which re-queried the whole database and re-read
+// certificate files on every request.
+func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain string) map[string]interface{} {
+	serverName := fmt.Sprintf("http_%d", listenPort)
+	if protocol != "http" {
+		serverName = fmt.Sprintf("tcp_%d", listenPort)
+	}
+	server := map[string]interface{}{
+		"listen": []string{fmt.Sprintf(":%d", listenPort)},
+		"routes": []interface{}{map[string]interface{}{"@id": caddyID}},
+	}
+	apps := map[string]interface{}{}
+	hasCert := false
+	if protocol == "http" {
+		var tlsSource, cert, key string
+		_ = db.DB.QueryRow(`SELECT COALESCE(tls_source,'manual'), COALESCE(tls_cert,''), COALESCE(tls_key,'') FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&tlsSource, &cert, &key)
+		if tlsSource == "manual" && cert != "" && key != "" {
+			hasCert = true
+		} else if tlsSource == "acme_dns" {
+			hasCert = isACMECertIssuedFromStore(db.DB, caddyID, domain)
+		}
+		var policies []interface{}
+		rows, err := db.DB.Query(`SELECT COALESCE(caddy_id,''), COALESCE(domain,''), COALESCE(tls_source,'manual'), COALESCE(tls_cert,''), COALESCE(tls_key,'')
+			FROM lb_rules WHERE enabled = 1 AND protocol = 'http' AND listen_port = ?`, listenPort)
+		if err == nil {
+			for rows.Next() {
+				var ruleID, ruleDomain, tlsSource, cert, key string
+				if rows.Scan(&ruleID, &ruleDomain, &tlsSource, &cert, &key) != nil {
+					continue
+				}
+				available := (tlsSource == "manual" && cert != "" && key != "") || (tlsSource == "acme_dns" && isACMECertIssuedFromStore(db.DB, ruleID, ruleDomain))
+				if !available {
+					continue
+				}
+				domainHosts := splitAndTrim(ruleDomain)
+				if len(domainHosts) == 0 {
+					continue
+				}
+				policies = append(policies, map[string]interface{}{
+					"match": map[string]interface{}{
+						"sni": domainHosts,
+					},
+					"certificate_selection": map[string]interface{}{
+						"any_tag": []string{ruleID},
+					},
+				})
+			}
+			_ = rows.Close()
+		}
+		server["tls_connection_policies"] = policies
+		apps["http"] = map[string]interface{}{"servers": map[string]interface{}{serverName: server}}
+	} else {
+		apps["layer4"] = map[string]interface{}{"servers": map[string]interface{}{serverName: server}}
+	}
+	if hasCert {
+		certPath, keyPath := CertFilePaths(caddyID)
+		apps["tls"] = map[string]interface{}{
+			"certificates": map[string]interface{}{
+				"load_files": []interface{}{
+					map[string]interface{}{
+						"certificate": certPath,
+						"key":         keyPath,
+						"tags":        []string{caddyID},
+					},
+				},
+			},
+		}
+	}
+	return map[string]interface{}{"apps": apps}
+}
+
 func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{} {
 	if rule.Strategy == "" {
 		rule.Strategy = "weighted_round_robin"
@@ -1892,7 +2083,7 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 	}
 	if rule.DynamicDNS && len(enabledUpstreams) > 1 {
 		return map[string]interface{}{
-			"error": fmt.Errorf("dynamic DNS requires exactly one enabled upstream, got %d", len(enabledUpstreams)),
+			"error": fmt.Errorf("%w, got %d", ErrDynamicDNSUpstreamCount, len(enabledUpstreams)),
 		}
 	}
 
@@ -2074,12 +2265,16 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 	return wrapper, nil
 }
 
-func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, map[string]interface{}, error) {
+func generateHTTPRouteObjects(rule SingleRuleConfig, securityCtx ...*securityPolicyContext) ([]map[string]interface{}, map[string]interface{}, error) {
 	if rule.Strategy == "" {
 		rule.Strategy = "weighted_round_robin"
 	}
+	var ctx *securityPolicyContext
+	if len(securityCtx) > 0 {
+		ctx = securityCtx[0]
+	}
 	domainHosts := splitAndTrim(rule.Domain)
-	mainHandle, err := buildHTTPHandleChain(rule, rule.Upstreams)
+	mainHandle, err := buildHTTPHandleChain(rule, rule.Upstreams, ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2097,7 +2292,7 @@ func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, 
 	routes := make([]map[string]interface{}, 0, len(rule.PathRules)+4)
 	// GeoIP routes run before path rules and the main route: the pass route
 	// populates the region placeholders, then the block route rejects matches.
-	if policy := GetSecurityPolicyForRule(rule.CaddyID); PolicyHasGeoIP(policy) {
+	if policy := policyForRule(ctx, rule.CaddyID); PolicyHasGeoIP(policy) {
 		routes = append(routes, buildGeoipPassRoute(domainHosts, policy))
 		statusCode := policy.BlockStatusCode
 		if statusCode == 0 {
@@ -2120,7 +2315,7 @@ func generateHTTPRouteObjects(rule SingleRuleConfig) ([]map[string]interface{}, 
 			if len(upstreams) == 0 {
 				upstreams = rule.Upstreams
 			}
-			handle, handleErr := buildHTTPHandleChain(rule, upstreams)
+			handle, handleErr := buildHTTPHandleChain(rule, upstreams, ctx)
 			if handleErr != nil {
 				return nil, nil, handleErr
 			}
@@ -2187,21 +2382,21 @@ func decodePathUpstreams(raw string) ([]UpstreamConfig, error) {
 
 // buildBlockPageErrorRoute returns a server-level error route rendering the
 // branded block page of the rule's bound active policy, or nil when the rule
-// has no policy, no block page, or the stored page has no content.
-func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string) map[string]interface{} {
-	if db.DB == nil {
+// has no policy, no block page, or the stored page has no content. The policy
+// and block-page content come from the batch-preloaded securityCtx, so
+// transactional generation observes uncommitted policy changes.
+func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, securityCtx *securityPolicyContext) map[string]interface{} {
+	policy := policyForRule(securityCtx, ruleCaddyID)
+	if policy == nil || policy.BlockPageID <= 0 {
 		return nil
 	}
-	var content string
-	var statusCode int
-	err := db.DB.QueryRow(`SELECT bp.content, COALESCE(NULLIF(p.block_status_code, 0), 403)
-		FROM security_policy_bindings b
-		JOIN security_policies p ON p.id = b.policy_id AND p.enabled = 1
-		JOIN security_block_pages bp ON bp.id = p.block_page_id
-		WHERE b.rule_caddy_id = ? AND p.block_page_id > 0
-		ORDER BY b.policy_id DESC LIMIT 1`, ruleCaddyID).Scan(&content, &statusCode)
-	if err != nil || content == "" {
+	content := securityCtx.blockPageByID[policy.BlockPageID]
+	if content == "" {
 		return nil
+	}
+	statusCode := policy.BlockStatusCode
+	if statusCode == 0 {
+		statusCode = 403
 	}
 	// coraza 命中恒以 403 + "interruption triggered" 中断；GeoIP 拦截链经 error
 	// handler 以 block_status_code + "GeoIP blocked" 中断。两者共用同一品牌拦截页，
@@ -2232,20 +2427,18 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string) map[stri
 // bound policy's block page for rate-limited (429) requests, or nil when the
 // rule's bound active policy has no block page.
 // caddy-ratelimit rejects via caddyhttp.Error(429), so handle_errors fires.
-func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string) map[string]interface{} {
-	if db.DB == nil {
+func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string, securityCtx *securityPolicyContext) map[string]interface{} {
+	policy := policyForRule(securityCtx, ruleCaddyID)
+	if policy == nil || !policy.RateLimitEnabled || policy.BlockPageID <= 0 {
 		return nil
 	}
-	var content string
-	var statusCode int
-	err := db.DB.QueryRow(`SELECT bp.content, COALESCE(NULLIF(p.block_status_code, 0), 429)
-		FROM security_policy_bindings b
-		JOIN security_policies p ON p.id = b.policy_id AND p.enabled = 1
-		JOIN security_block_pages bp ON bp.id = p.block_page_id
-		WHERE b.rule_caddy_id = ? AND p.block_page_id > 0 AND p.rate_limit_enabled = 1
-		ORDER BY b.policy_id DESC LIMIT 1`, ruleCaddyID).Scan(&content, &statusCode)
-	if err != nil || content == "" {
+	content := securityCtx.blockPageByID[policy.BlockPageID]
+	if content == "" {
 		return nil
+	}
+	statusCode := policy.BlockStatusCode
+	if statusCode == 0 {
+		statusCode = 429
 	}
 	return map[string]interface{}{
 		"match": []interface{}{
@@ -2273,11 +2466,7 @@ func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string) map[stri
 // with burst > 0 a per-second zone caps instantaneous rate at rps+burst while a
 // per-minute zone caps sustained rate at rps; without burst a single per-second
 // zone caps at rps.
-func buildRateLimitHandler(ruleCaddyID string) map[string]interface{} {
-	if db.DB == nil {
-		return nil
-	}
-	policy := GetSecurityPolicyForRule(ruleCaddyID)
+func buildRateLimitHandler(ruleCaddyID string, policy *models.SecurityPolicy) map[string]interface{} {
 	if policy == nil || !policy.RateLimitEnabled || policy.RateLimitRPS <= 0 {
 		return nil
 	}
@@ -2409,7 +2598,11 @@ func buildGeoipMatchExpression(policy *models.SecurityPolicy) string {
 	return expr
 }
 
-func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]interface{}, error) {
+func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, securityCtx ...*securityPolicyContext) ([]interface{}, error) {
+	var ctx *securityPolicyContext
+	if len(securityCtx) > 0 {
+		ctx = securityCtx[0]
+	}
 	enabledUpstreams := make([]UpstreamConfig, 0, len(upstreams))
 	for _, upstream := range upstreams {
 		if upstream.Enabled {
@@ -2420,17 +2613,20 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig) ([]
 		return nil, fmt.Errorf("%w", ErrNoEnabledUpstreams)
 	}
 	if rule.DynamicDNS && len(enabledUpstreams) > 1 {
-		return nil, fmt.Errorf("dynamic DNS requires exactly one enabled upstream, got %d", len(enabledUpstreams))
+		return nil, fmt.Errorf("%w, got %d", ErrDynamicDNSUpstreamCount, len(enabledUpstreams))
 	}
 
+	policy := policyForRule(ctx, rule.CaddyID)
 	var handleChain []interface{}
 	// Rate limiting runs before WAF inspection, body parsing, and proxying.
-	if rateLimitHandler := buildRateLimitHandler(rule.CaddyID); rateLimitHandler != nil {
+	if rateLimitHandler := buildRateLimitHandler(rule.CaddyID, policy); rateLimitHandler != nil {
 		handleChain = append(handleChain, rateLimitHandler)
 	}
 	// WAF inspection must run before body parsing and proxying.
-	if wafHandler := buildWafHandler(rule.CaddyID); wafHandler != nil {
-		handleChain = append(handleChain, wafHandler)
+	if rule.Protocol == "http" {
+		if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy); wafHandler != nil {
+			handleChain = append(handleChain, wafHandler)
+		}
 	}
 	effectiveRequestBodyMaxSizeMB, effectiveUpstreamKeepaliveTimeout, effectiveServerTokensHidden := resolveRuleOverrides(rule)
 	if effectiveRequestBodyMaxSizeMB > 0 {

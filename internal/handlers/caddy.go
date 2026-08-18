@@ -275,6 +275,12 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "运行日志大小必须大于 0"})
 		return
 	}
+	// Round 33 N-5: 审计日志轮转大小上限 512MB（主节点侧校验；从节点经集群
+	// 同步照单全收，配置源始终为主节点）。
+	if req.AuditLogSizeMB != nil && *req.AuditLogSizeMB > 512 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "审计日志轮转大小上限 512MB"})
+		return
+	}
 	if req.JWTExpireMinutes != nil && (*req.JWTExpireMinutes <= 0 || *req.JWTExpireMinutes > 1440) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "jwt_expire_minutes must be between 1 and 1440"})
 		return
