@@ -201,6 +201,27 @@ func materializeImportCertificates(certificates []importCertificate) error {
 	return nil
 }
 
+// validateBackupRuleReferences 写入前校验 upstreams/path_rules 的 rule_id 均存在于备份自带的
+// lb_rules：悬挂引用靠 FK 在删表后以 500 回滚兜底，与 cert_jobs 的显式清理语义不一致；
+// 提前转为 400 校验错误，保证校验不过零写入。
+func validateBackupRuleReferences(tables map[string][]map[string]any) error {
+	ruleIDs := make(map[string]struct{}, len(tables["lb_rules"]))
+	for _, row := range tables["lb_rules"] {
+		if id, ok := row["caddy_id"].(string); ok {
+			ruleIDs[id] = struct{}{}
+		}
+	}
+	for _, table := range []string{"upstreams", "path_rules"} {
+		for i, row := range tables[table] {
+			ruleID, _ := row["rule_id"].(string)
+			if _, exists := ruleIDs[ruleID]; !exists {
+				return fmt.Errorf("备份校验失败：%s 第 %d 行引用了不存在的规则 %q", table, i+1, ruleID)
+			}
+		}
+	}
+	return nil
+}
+
 func validateV2Backup(backup configBackup) error {
 	if backup.Meta.App != "lazy-balancer-v2" || backup.Tables == nil {
 		return errors.New("不是有效的 Lazy Balancer 备份文件")
@@ -512,6 +533,10 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		return
 	}
 	if err := validateV2Backup(backup); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	if err := validateBackupRuleReferences(backup.Tables); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
