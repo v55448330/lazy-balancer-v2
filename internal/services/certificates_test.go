@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,7 +190,10 @@ func TestRequeueNonTerminalCertJobs_schedules_downloaded_deployment(t *testing.T
 	service.pauseDeploymentRetries()
 }
 
-func TestRequeueNonTerminalCertJobs_requeues_downloaded_job_missing_cert_material(t *testing.T) {
+func TestRequeueNonTerminalCertJobs_skips_downloaded_job_missing_cert_material_when_paused(t *testing.T) {
+	// R46 A-F1 起恢复排队走 EnqueueIfActive：暂停的队列管理器在 transition 之前
+	// 即拒绝（与 R45 PauseAndDrain 门控同语义），任务保持原状态等待下次恢复，
+	// 不写库、不入队、不报错。
 	// Given
 	jobID, _ := seedCertificateJob(t, "cleanup_dns")
 	ResetCAQueueManagerForTest()
@@ -203,9 +207,9 @@ func TestRequeueNonTerminalCertJobs_requeues_downloaded_job_missing_cert_materia
 		retried <- gotJobID
 	})
 
-	// Then: 暂停的队列管理器只会在状态迁移之后拒绝入队
-	if err == nil {
-		t.Fatal("expected enqueue rejection from the paused queue manager")
+	// Then：无证书材料的 downloaded 任务不得走部署重试；暂停期不入队也不写库
+	if err != nil {
+		t.Fatalf("paused recovery must skip without error, got %v", err)
 	}
 	select {
 	case gotJobID := <-retried:
@@ -216,8 +220,86 @@ func TestRequeueNonTerminalCertJobs_requeues_downloaded_job_missing_cert_materia
 	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
 		t.Fatalf("read recovered job: %v", err)
 	}
-	if status != "queued" {
-		t.Fatalf("job status=%q, want queued", status)
+	if status != "cleanup_dns" {
+		t.Fatalf("job status=%q, want cleanup_dns（暂停期不得迁移状态）", status)
+	}
+}
+
+// R46 A-F1：requeueNonTerminalCertJobs 必须经 EnqueueIfActive 在途守卫——退役队列
+// 中的滞行执行（zombie）仍持有 jobID 时，恢复流程不得 transition+Enqueue，否则
+// 同 jobID 双执行（zombie 晚退 requeueCanceledJob 打回新执行状态，R44-2 同型）。
+func TestRequeueNonTerminalCertJobs_skips_job_still_active_in_retired_queue(t *testing.T) {
+	// Given：适用规则 + 提供商；job 42 'creating_order' 仍被退役队列持有（zombie），
+	// job 43 同形态但无任何在途执行（对照组，应正常恢复排队）
+	_, database := newClusterTestService(t)
+	for _, rule := range []struct{ id, domain string }{
+		{id: "lb_recover_zombie", domain: "zombie.example.com"},
+		{id: "lb_recover_normal", domain: "normal.example.com"},
+	} {
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, rule.id, rule.id, rule.domain); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'recovery CA','letsencrypt','https://invalid.example/directory',1)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range []struct {
+		id             int64
+		ruleID, domain string
+	}{
+		{id: 42, ruleID: "lb_recover_zombie", domain: "zombie.example.com"},
+		{id: 43, ruleID: "lb_recover_normal", domain: "normal.example.com"},
+	} {
+		if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_provider_id) VALUES (?,?,?,'creating_order',7)`, job.id, job.ruleID, job.domain); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ResetCAQueueManagerForTest()
+	InitCAQueueManager(func() error { return nil })
+	t.Cleanup(ResetCAQueueManagerForTest)
+	manager := GetCAQueueManager()
+	retired := newCAQueue(models.CAProvider{ID: 7, MaxConcurrent: 1}, nil)
+	retired.mu.Lock()
+	retired.active[42] = struct{}{}
+	retired.mu.Unlock()
+	manager.mu.Lock()
+	manager.retiredQueues = []retiredCAQueue{{queue: retired, retiredAt: time.Now()}}
+	manager.mu.Unlock()
+
+	// When
+	err := requeueNonTerminalCertJobs(context.Background(), func(gotJobID int, _ issuedCertificate, _ time.Duration) {
+		t.Errorf("deployment retry scheduled for non-downloaded job %d", gotJobID)
+	})
+
+	// Then：无错误；zombie job 42 状态不变、未二次入队、不记审计；对照 job 43
+	// 正常恢复排队（审计为证——active map 会被瞬时执行退出擦除，不宜断言）。
+	if err != nil {
+		t.Fatalf("recover non-terminal jobs: %v", err)
+	}
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=42").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "creating_order" {
+		t.Fatalf("zombie job status=%q, want creating_order（在途任务不得被恢复流程迁移）", status)
+	}
+	manager.mu.Lock()
+	for _, q := range manager.queues {
+		q.mu.Lock()
+		_, zombieEnqueued := q.active[42]
+		q.mu.Unlock()
+		if zombieEnqueued {
+			t.Fatal("zombie job 42 was enqueued by recovery（双执行缺口）")
+		}
+	}
+	manager.mu.Unlock()
+	var detail string
+	err = db.AuditDB.QueryRow("SELECT COALESCE(detail,'') FROM audit_log WHERE action='恢复排队'").Scan(&detail)
+	if err != nil {
+		t.Fatalf("control job 43 recovery audit entry missing: %v", err)
+	}
+	if !strings.Contains(detail, "任务 43") || strings.Contains(detail, "任务 42") {
+		t.Fatalf("recovery audit detail=%q, want 仅任务 43（在途任务跳过不得记审计）", detail)
 	}
 }
 

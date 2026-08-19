@@ -314,6 +314,12 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务状态已变更，请刷新后重试"})
 			return
 		}
+		// R46 A-F3：EnqueueIfActive 的在途命中（R45 发现2）同样走 !changed 且重读
+		// 状态未变，需优先归因"任务正在队列中"，避免误导为规则禁用/配置变更。
+		if qm.IsJobActive(id) {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务正在签发队列中，请勿重复操作"})
+			return
+		}
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务关联规则已禁用、证书配置已变更或队列已暂停"})
 		return
 	}

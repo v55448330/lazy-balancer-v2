@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -310,5 +311,78 @@ func TestRetryCertJob_blocked_by_rule_deletion_returns_409(t *testing.T) {
 	}
 	if status != "failed" {
 		t.Fatalf("status=%q, want failed（屏障期不应改变任务状态）", status)
+	}
+}
+
+func TestRetryCertJob_active_job_returns_queue_busy_message(t *testing.T) {
+	// R46 A-F3：EnqueueIfActive 在途命中（R45 发现2）走 !changed 且重读状态未变时，
+	// 409 文案必须归因"任务正在队列中"，不得误导为规则禁用/配置变更。
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_blocker','blocker','http','blocker.example.test',8080,1,1,'acme_dns'),
+		       ('lb_active','active','http','active.example.test',8080,1,1,'acme_dns');
+		INSERT INTO cert_jobs (id,rule_id,domain,status,updated_at)
+		VALUES (20,'lb_blocker','blocker.example.test','queued',datetime('now','-20 minutes')),
+		       (21,'lb_active','active.example.test','failed',datetime('now','-10 minutes'))`); err != nil {
+		t.Fatalf("seed jobs: %v", err)
+	}
+	// 占位执行堵住并发槽（MaxConcurrent=1），让 job 21 入队后停在 pending 保持
+	// 在途但永不执行——确定性复现"在途命中"。
+	block := make(chan struct{})
+	entered := make(chan struct{})
+	var enteredOnce sync.Once
+	acmeMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		enteredOnce.Do(func() { close(entered) })
+		<-block
+	}))
+	qm := services.GetCAQueueManager()
+	t.Cleanup(func() {
+		close(block)
+		qm.PauseAndDrain()
+		acmeMock.Close()
+		services.ResetCAQueueManagerForTest()
+	})
+	if _, err := db.DB.Exec("UPDATE ca_providers SET provider='letsencrypt', directory_url=? WHERE enabled=1", acmeMock.URL); err != nil {
+		t.Fatalf("redirect ACME directory: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE global_config SET acme_email='acme@example.test' WHERE id=1"); err != nil {
+		t.Fatalf("set ACME email: %v", err)
+	}
+	if err := qm.Enqueue(0, 20, "lb_blocker", "blocker.example.test"); err != nil {
+		t.Fatalf("enqueue blocker job: %v", err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocker execution did not reach the ACME mock")
+	}
+	if err := qm.Enqueue(0, 21, "lb_active", "active.example.test"); err != nil {
+		t.Fatalf("enqueue active job: %v", err)
+	}
+
+	// When
+	router := gin.New()
+	router.POST("/jobs/:id/retry", h.RetryCertJob)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/jobs/21/retry", nil))
+
+	// Then
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "任务正在签发队列中，请勿重复操作") {
+		t.Fatalf("body=%s, want 在途归因文案", response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "规则已禁用") {
+		t.Fatalf("body=%s, 不应误指规则已禁用", response.Body.String())
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=21").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" {
+		t.Fatalf("status=%q, want failed（在途命中不得改变任务状态）", status)
 	}
 }

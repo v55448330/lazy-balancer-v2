@@ -697,17 +697,30 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 			continue
 		}
 
-		if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "queued", map[string]any{"message": "等待排队签发"}); err != nil {
-			return fmt.Errorf("queue recovered certificate job %d: %w", job.id, err)
-		}
-		RecordAuditLog("system", "恢复排队", "证书签发任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("startup_recovery")), "")
 		qm := GetCAQueueManager()
 		if qm == nil {
 			return fmt.Errorf("CA queue manager not initialized")
 		}
-		if err := qm.Enqueue(job.providerID, job.id, job.ruleID, job.domain); err != nil {
+		// R46 A-F1：复用 R45 EnqueueIfActive 在途守卫（与 Resume/周期巡检/waiting_ca
+		// 路径同型）——备份导入 finish 链等场景下滞行执行（retiredQueues zombie）
+		// 仍持有同 jobID 时，直接 transition+Enqueue 会造成双执行，且 zombie 晚退的
+		// requeueCanceledJob 会把新执行状态打回 'queued'。命中在途任务时跳过
+		// 转换/入队/审计，任务由在途执行自身收尾。
+		_, changed, err := qm.EnqueueIfActive(job.providerID, job.id, job.ruleID, job.domain, func() (int, bool, error) {
+			err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "queued", map[string]any{"message": "等待排队签发"})
+			if errors.Is(err, ErrJobTransitionConflict) {
+				return job.id, false, nil
+			}
+			return job.id, err == nil, err
+		})
+		if err != nil {
 			return fmt.Errorf("enqueue recovered certificate job %d: %w", job.id, err)
 		}
+		if !changed {
+			log.Printf("cert recovery: job %d still active in CA queue, skip requeue", job.id)
+			continue
+		}
+		RecordAuditLog("system", "恢复排队", "证书签发任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("startup_recovery")), "")
 	}
 	return nil
 }
