@@ -254,7 +254,7 @@ func TestGetSecurityPolicy_returnsRawJSONFieldsAsStrings(t *testing.T) {
 	router := newSecurityRouter(t)
 	id := createTestPolicy(t, router, map[string]any{
 		"name":               "详情策略",
-		"crs_rule_groups":    `["REQUEST-942"]`,
+		"crs_rule_groups":    `["42"]`,
 		"crs_excluded_rules": `["942100","942110"]`,
 		"custom_rules":       `[{"id":1,"name":"r1","enabled":true,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`,
 		"ip_whitelist":       `["192.0.2.0/24"]`,
@@ -281,7 +281,7 @@ func TestGetSecurityPolicy_returnsRawJSONFieldsAsStrings(t *testing.T) {
 	want := map[string]string{
 		"ip_whitelist":       `["192.0.2.0/24"]`,
 		"ip_blacklist":       `["198.51.100.7"]`,
-		"crs_rule_groups":    `["REQUEST-942"]`,
+		"crs_rule_groups":    `["42"]`,
 		"crs_excluded_rules": `["942100","942110"]`,
 		"custom_rules":       `[{"id":1,"name":"r1","enabled":true,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]`,
 	}
@@ -706,7 +706,7 @@ func TestUpdateSecurityPolicy_crsFieldsNormalizeAndValidate(t *testing.T) {
 	router := newSecurityRouter(t)
 	id := createTestPolicy(t, router, map[string]any{
 		"name":               "CRS字段策略",
-		"crs_rule_groups":    `["REQUEST-942"]`,
+		"crs_rule_groups":    `["42"]`,
 		"crs_excluded_rules": `["942100"]`,
 	})
 
@@ -742,14 +742,14 @@ func TestUpdateSecurityPolicy_crsFieldsNormalizeAndValidate(t *testing.T) {
 	}
 
 	// And a valid array persists as-is
-	recorder = putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"crs_rule_groups": `["REQUEST-941","REQUEST-933"]`})
+	recorder = putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"crs_rule_groups": `["41","33"]`})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("valid update status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	if err := db.DB.QueryRow("SELECT crs_rule_groups FROM security_policies WHERE id=?", id).Scan(&groups); err != nil {
 		t.Fatalf("read back groups: %v", err)
 	}
-	if groups != `["REQUEST-941","REQUEST-933"]` {
+	if groups != `["41","33"]` {
 		t.Fatalf("crs_rule_groups = %q, want stored as-is", groups)
 	}
 }

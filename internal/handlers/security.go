@@ -623,8 +623,9 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 
 // validateAndNormalizeCRSField 统一 Create/Update 两条路径的 crs_* 形状校验：
 // 空串按归一为 "[]"，非空必须是字符串数组 JSON（防发射端解析失败静默置空）。
-// 条目内容同样受限：组名进入 Include glob（REQUEST-9<code>-*.conf，兼容历史文件名前缀），
-// 排除项进入 SecRuleRemoveById 参数，空白/引号/控制字符都会生成非法配置行。
+// 条目内容同样受限：crs_rule_groups 组号恒为两位数字（进入 Include glob
+// REQUEST-9<code>-*.conf），排除项进入 SecRuleRemoveById 参数，空白/引号/控制
+// 字符都会生成非法配置行。
 func validateAndNormalizeCRSField(name string, val *string) error {
 	if val == nil {
 		return nil
@@ -647,6 +648,12 @@ func validateAndNormalizeCRSField(name string, val *string) error {
 				continue
 			}
 			return fmt.Errorf("%s 条目含非法字符（仅允许字母、数字、.、_、-）: %q", name, entry)
+		}
+		// R46 B-F2：组号恒为两位数字（发射端拼接 REQUEST-9<code>-*.conf）。
+		// "941"、"REQUEST-942" 这类写法会 glob 零匹配——coraza 对空 Include
+		// 静默接受，blocking 模式将无任何 CRS 规则生效且无任何报错。
+		if name == "crs_rule_groups" && (len(trimmed) != 2 || trimmed[0] < '0' || trimmed[0] > '9' || trimmed[1] < '0' || trimmed[1] > '9') {
+			return fmt.Errorf("%s 条目必须是两位数字组号（如 942 组填 \"42\"）: %q", name, entry)
 		}
 	}
 	return nil
@@ -1374,6 +1381,15 @@ func (h *Handlers) UpdateCRSAutoUpdate(c *gin.Context) {
 }
 
 func (h *Handlers) StartCRSUpdate(c *gin.Context) {
+	// R46 B-F3：手动更新仅限主节点（镜像 R41 A 域手动同步门控的直查口径，
+	// 门控查询失败按非主节点拒绝）。从节点本地更新会造成磁盘/DB 分叉：主节点
+	// 下次集群同步把 version 行覆盖回主节点口径，而从节点的启动对账是
+	// master-only，分叉长期残留。
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		clusterError(c, http.StatusForbidden, "该操作仅允许在主节点执行", err)
+		return
+	}
 	mgr := services.GetCRSUpdateManager()
 	if mgr == nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CRS 更新服务未初始化"})
@@ -1468,6 +1484,12 @@ func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {
 }
 
 func (h *Handlers) StartIP2RegionUpdate(c *gin.Context) {
+	// R46 B-F3：同 StartCRSUpdate——手动更新仅限主节点，从节点直接 403。
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		clusterError(c, http.StatusForbidden, "该操作仅允许在主节点执行", err)
+		return
+	}
 	mgr := services.GetIP2RegionUpdateManager()
 	if mgr == nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "IP2Region 更新服务未初始化"})
