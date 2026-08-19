@@ -693,6 +693,14 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "降级多余的默认拦截页失败，已回滚: " + err.Error()})
 		return
 	}
+	// R42 B42-2: pre-R40 备份中保留行（MIN id）常是未定制过的种子行，而用户真实
+	// 定制内容在被降级行上。保留行内容为种子库存（空或默认渲染）且存在内容不同的
+	// 被降级行时，把内容非空且非库存、id 最大的被降级行 content 提升到保留行；
+	// 失败仅记警告（内容层面问题，branding 重渲染会覆盖，不影响拦截功能）。
+	stockBlockPage := renderDefaultBlockPage(loadBrandingConfig(h.cfg.DataDir))
+	if _, err := tx.ExecContext(ctx, `UPDATE security_block_pages SET content=(SELECT content FROM security_block_pages WHERE is_default=0 AND content NOT IN ('', ?) ORDER BY id DESC LIMIT 1) WHERE is_default=1 AND content IN ('', ?) AND EXISTS (SELECT 1 FROM security_block_pages WHERE is_default=0 AND content NOT IN ('', ?))`, stockBlockPage, stockBlockPage, stockBlockPage); err != nil {
+		recordAudit(c, "导入警告", "配置备份", "默认拦截页面内容提升失败: "+err.Error())
+	}
 	// R41 B3: 默认页重播种移入导入事务，与导入同生共死；失败仅记警告不阻断
 	// 导入（拦截响应短暂退化，由后续 SeedDefaultBlockPage/branding 触发自愈）。
 	reseedBlockPageNeeded := false
@@ -700,8 +708,14 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM security_block_pages WHERE is_default=1").Scan(&hasDefaultBlockPage); err != nil {
 		recordAudit(c, "导入警告", "配置备份", "默认拦截页面计数失败: "+err.Error())
 	} else if hasDefaultBlockPage == 0 {
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, created_at, updated_at) VALUES (1, '默认拦截页面', '系统默认 403 拦截页面', '', TRUE, datetime('now'), datetime('now'))`); err != nil {
+		result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, created_at, updated_at) VALUES (1, '默认拦截页面', '系统默认 403 拦截页面', '', TRUE, datetime('now'), datetime('now'))`)
+		if err != nil {
 			recordAudit(c, "导入警告", "配置备份", "默认拦截页面重播种失败: "+err.Error())
+		} else if affected, _ := result.RowsAffected(); affected == 0 {
+			// R42 B42-1: 备份携带 id=1 的非默认行时 OR IGNORE 因 PK 冲突静默
+			// no-op，导入后仍旧零默认页且无任何 error——B3 的告警机制不会
+			// 触发，此处显式补记警告以便追溯。
+			recordAudit(c, "导入警告", "配置备份", "默认拦截页面重播种未生效（id=1 已存在）")
 		} else {
 			reseedBlockPageNeeded = true
 		}
@@ -808,7 +822,16 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	if reseedBlockPageNeeded {
 		// 提交成功后才渲染 branding 内容：INSERT 只放空 content 占位，真实内容
 		// 由 SeedDefaultBlockPage 依据 branding.json 写入；失败不影响导入结果。
-		SeedDefaultBlockPage(h.cfg.DataDir)
+		// R42 B42-1: 返回值不再丢弃——渲染出错，或未生效且表内仍无默认页时记警告。
+		seeded, seedErr := SeedDefaultBlockPage(h.cfg.DataDir)
+		if seedErr != nil {
+			recordAudit(c, "导入警告", "配置备份", "默认拦截页面内容渲染失败: "+seedErr.Error())
+		} else if !seeded {
+			var defaultCount int
+			if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_block_pages WHERE is_default=1").Scan(&defaultCount); err == nil && defaultCount == 0 {
+				recordAudit(c, "导入警告", "配置备份", "默认拦截页面重播种后仍无默认页")
+			}
+		}
 		note := h.caddyApplyNoteLocked()
 		if note != "" {
 			recordAudit(c, "导入警告", "配置备份", "默认拦截页面重新播种后"+note)
