@@ -67,17 +67,25 @@ func InitIP2Region() {
 }
 
 // Reload hot-swaps the singleton searcher from the live xdb path. The
-// previous searcher stays in service if the new file cannot be loaded.
-func Reload() {
+// previous searcher stays in service if the new file cannot be loaded; the
+// open failure is returned so update/rollback callers can treat a failed
+// hot-swap as a failed install/restore level instead of silently diverging
+// memory from disk (R46 B-F1).
+func Reload() error {
 	searcher, err := openIP2RegionSearcher(ip2regionLivePath)
 	if err != nil {
 		log.Printf("ip2region: reload failed: %v (keeping current searcher)", err)
-		return
+		return err
 	}
 	ip2regionMu.Lock()
 	swapIP2RegionSearcher(searcher)
 	ip2regionMu.Unlock()
+	return nil
 }
+
+// reloadIP2RegionSearcher 是测试 seam（镜像 crsinstall.go 的 osRename）：
+// 更新/回滚管线经它调用 Reload，测试可注入内存热换失败。
+var reloadIP2RegionSearcher = Reload
 
 // swapIP2RegionSearcher installs the new searcher and closes the old one.
 // Callers must hold ip2regionMu. Closing happens under ip2regionSearchMu so a

@@ -202,11 +202,13 @@ func TestIP2RegionUpdateRun_invalidDownloadFails(t *testing.T) {
 func TestIP2RegionUpdateRun_reloadFailureRollsBackXDB(t *testing.T) {
 	// Given 一个已安装的旧 xdb 与一个必然失败一次的 reloader（镜像 CRS fail() 的
 	// restoreBackup+重试路径，R39 1.2）：reloader 失败时磁盘不得停留在新库、DB
-	// 记录旧版本+failed 的不一致状态
+	// 记录旧版本+failed 的不一致状态。旧 live 必须是合法 xdb——R46 B-F1 起
+	// 还原后的内存热换失败视为该级还原失败，非法内容会触发升级链而非还原成功。
 	m := newTestIP2RegionManager(t)
 	seedIP2RegionVersionRow(t, "v3.0.0", true)
-	oldLive := "old-live-content"
-	if err := os.WriteFile(ip2regionLivePath, []byte(oldLive), 0644); err != nil {
+	writeTestXDB(t, ip2regionLivePath, testSegments)
+	oldBytes, err := os.ReadFile(ip2regionLivePath)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -226,8 +228,8 @@ func TestIP2RegionUpdateRun_reloadFailureRollsBackXDB(t *testing.T) {
 
 	// Then 旧 xdb 已还原、.bak 被回滚消费、reloader 重试一次、状态 failed
 	data, err := os.ReadFile(ip2regionLivePath)
-	if err != nil || string(data) != oldLive {
-		t.Fatalf("live xdb not rolled back: %q, %v", data, err)
+	if err != nil || string(data) != string(oldBytes) {
+		t.Fatalf("live xdb not rolled back: %v", err)
 	}
 	if _, err := os.Stat(ip2regionLivePath + ".bak"); !os.IsNotExist(err) {
 		t.Fatal("xdb .bak should be consumed by rollback")
@@ -379,6 +381,193 @@ func TestIP2RegionUpdateRun_reloadFailureFailOpenWhenNoBaseline(t *testing.T) {
 	}
 }
 
+func TestIP2RegionUpdateRun_installReloadFailureGoesToRollback(t *testing.T) {
+	// Given R46 B-F1：安装 rename 成功但内存热换失败（seam 注入首次调用失败）——
+	// 磁盘已是新库而内存 searcher 仍是旧库，必须视同 reloader 失败进入同一回滚
+	// 路径：rollbackXDB 还原磁盘+内存，DB 记 failed+旧版本，三方一致；旧实现吞掉
+	// Reload 返回值，直接按 failed 落库会留下「磁盘新、内存旧、DB failed+旧」。
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	writeTestXDB(t, ip2regionLivePath, testSegments)
+	oldBytes, err := os.ReadFile(ip2regionLivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldReload := reloadIP2RegionSearcher
+	reloadCalls := 0
+	reloadIP2RegionSearcher = func() error {
+		reloadCalls++
+		if reloadCalls == 1 {
+			return errors.New("forced: install hot-swap failure")
+		}
+		return Reload()
+	}
+	t.Cleanup(func() { reloadIP2RegionSearcher = oldReload })
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	reloads := 0
+	m.reloader = func() error { reloads++; return nil }
+
+	// When 安装后内存热换失败
+	m.run("manual")
+
+	// Then 走回滚路径：live 还原为旧库、.bak 被消费、DB 记 failed+旧版本且
+	// message 注明热换失败；reloader 在热换失败时不做无谓的首次调用，仅在
+	// 回滚还原后对称重试一次
+	data, err := os.ReadFile(ip2regionLivePath)
+	if err != nil || string(data) != string(oldBytes) {
+		t.Fatalf("live xdb not rolled back after hot-swap failure: %v", err)
+	}
+	if _, err := os.Stat(ip2regionLivePath + ".bak"); !os.IsNotExist(err) {
+		t.Fatal(".bak should be consumed by rollback")
+	}
+	if reloadCalls != 2 {
+		t.Fatalf("reload calls=%d, want 2 (install hot-swap fails, rollback restore succeeds)", reloadCalls)
+	}
+	if reloads != 1 {
+		t.Fatalf("reloads=%d, want 1 (reloader skipped on hot-swap failure, retried once after rollback)", reloads)
+	}
+	version, status, message, _, _, _, _ := ip2RegionVersionRow(t)
+	if status != "failed" {
+		t.Fatalf("update_status=%q, want failed", status)
+	}
+	if version != "v3.0.0" {
+		t.Fatalf("version=%q, want v3.0.0 (保持旧版本)", version)
+	}
+	if !strings.Contains(message, "重载 ip2region 内存索引失败") {
+		t.Fatalf("message=%q, want 注明内存热换失败", message)
+	}
+}
+
+func TestIP2RegionUpdateRun_rollbackReloadFailureEscalatesToDist(t *testing.T) {
+	// Given R46 B-F1：回滚级别的内存热换失败视为该级还原失败——osRename 注入
+	// .bak rename 失败使 copy 级生效，copy 还原后热换失败（seam 第 2 次调用），
+	// 必须继续升级到 dist 回退而非按 restored 返回（否则磁盘=旧库、内存=新库、
+	// DB=failed+旧版本，三方分叉复现）。
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	writeTestXDB(t, ip2regionLivePath, testSegments)
+	dir := filepath.Dir(ip2regionLivePath)
+	dist := filepath.Join(dir, "waf.dist", "ip2region.xdb")
+	if err := os.MkdirAll(filepath.Dir(dist), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestXDB(t, dist, append([]xdbSegment{}, testSegments[1:]...))
+	distBytes, err := os.ReadFile(dist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withIP2RegionPaths(t, ip2regionLivePath, dist)
+
+	oldRename := osRename
+	osRename = func(src, dst string) error {
+		if strings.HasSuffix(src, ".bak") {
+			return errors.New("forced: bak rename failure")
+		}
+		return oldRename(src, dst)
+	}
+	t.Cleanup(func() { osRename = oldRename })
+	oldReload := reloadIP2RegionSearcher
+	reloadCalls := 0
+	reloadIP2RegionSearcher = func() error {
+		reloadCalls++
+		if reloadCalls == 2 {
+			return errors.New("forced: post-copy hot-swap failure")
+		}
+		return Reload()
+	}
+	t.Cleanup(func() { reloadIP2RegionSearcher = oldReload })
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	reloads := 0
+	m.reloader = func() error {
+		reloads++
+		if reloads == 1 {
+			return errors.New("reload boom")
+		}
+		return nil
+	}
+
+	// When 安装后 reloader 首次失败、copy 还原后的热换被注入失败
+	m.run("manual")
+
+	// Then 升级到 dist 回退成功：live=dist 基线、DB 记 failed+旧版本、
+	// reloader 重试一次（三方一致，均为「更新前基线」口径）
+	data, err := os.ReadFile(ip2regionLivePath)
+	if err != nil || string(data) != string(distBytes) {
+		t.Fatalf("live xdb not restored via dist fallback: %v", err)
+	}
+	if reloadCalls != 3 {
+		t.Fatalf("reload calls=%d, want 3 (install ok, post-copy fails, post-dist succeeds)", reloadCalls)
+	}
+	if reloads != 2 {
+		t.Fatalf("reloads=%d, want 2 (install reload fails, rollback reload succeeds)", reloads)
+	}
+	version, status, _, _, _, _, _ := ip2RegionVersionRow(t)
+	if status != "failed" {
+		t.Fatalf("update_status=%q, want failed", status)
+	}
+	if version != "v3.0.0" {
+		t.Fatalf("version=%q, want v3.0.0 (保持旧版本)", version)
+	}
+}
+
+func TestIP2RegionUpdateRun_rollbackAllReloadsFailFailOpenMemoryNote(t *testing.T) {
+	// Given R46 B-F1 最坏路径：安装热换失败（seam 恒失败），回滚升级链的磁盘
+	// 操作部分成功（rename 还原、dist 回退均落盘）但每一级的内存热换都失败——
+	// rollbackXDB 必须返回 error，调用方走 fail-open（DB 跟随实际状态），且
+	// message 必须注明「内存 searcher 未切换，重启后生效」：DB 记 success 而
+	// 内存仍是旧库，重启前这是唯一可见痕迹。
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	writeTestXDB(t, ip2regionLivePath, testSegments)
+	dir := filepath.Dir(ip2regionLivePath)
+	dist := filepath.Join(dir, "waf.dist", "ip2region.xdb")
+	if err := os.MkdirAll(filepath.Dir(dist), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestXDB(t, dist, append([]xdbSegment{}, testSegments[1:]...))
+	withIP2RegionPaths(t, ip2regionLivePath, dist)
+
+	oldReload := reloadIP2RegionSearcher
+	reloadCalls := 0
+	reloadIP2RegionSearcher = func() error {
+		reloadCalls++
+		return errors.New("forced: hot-swap always fails")
+	}
+	t.Cleanup(func() { reloadIP2RegionSearcher = oldReload })
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	reloads := 0
+	m.reloader = func() error { reloads++; return errors.New("reload boom") }
+
+	// When 安装热换失败且回滚各级热换全部失败
+	m.run("manual")
+
+	// Then fail-open：DB 记 success+新 tag，message 同时保留重载失败警告与
+	// 「内存 searcher 未切换，重启后生效」注记；reloader 仅在 fail-open 落库前
+	// 按 F1-C 补一次重试
+	version, status, message, _, _, _, _ := ip2RegionVersionRow(t)
+	if status != "success" {
+		t.Fatalf("update_status=%q, want success (fail-open)", status)
+	}
+	if version != "v3.1.0" {
+		t.Fatalf("version=%q, want v3.1.0 (fail-open 记录新 tag)", version)
+	}
+	if !strings.Contains(message, "内存 searcher 未切换，重启后生效") {
+		t.Fatalf("message=%q, want 注明内存 searcher 未切换、重启后生效", message)
+	}
+	if !strings.Contains(message, "重载 Caddy 配置失败") {
+		t.Fatalf("message=%q, want 保留重载失败警告", message)
+	}
+	if reloads != 1 {
+		t.Fatalf("reloads=%d, want 1 (热换失败跳过首次 reloader，fail-open 落库前补一次重试)", reloads)
+	}
+}
+
 func TestIP2RegionUpdateRun_rollbackRenameFailureFallsBackToCopy(t *testing.T) {
 	// Given R45 F1-A 升级链第一环：.bak→live 的 rename 失败（权限/IO），但 .bak
 	// 本身完好——rollbackXDB 不得直接返回 error（旧实现会重演「磁盘/内存新库、
@@ -386,8 +575,11 @@ func TestIP2RegionUpdateRun_rollbackRenameFailureFallsBackToCopy(t *testing.T) {
 	// 只对 .bak 源注入失败，copyFile 内部的原子 rename 不受影响。
 	m := newTestIP2RegionManager(t)
 	seedIP2RegionVersionRow(t, "v3.0.0", true)
-	oldLive := "old-live-content"
-	if err := os.WriteFile(ip2regionLivePath, []byte(oldLive), 0644); err != nil {
+	// 旧 live 用合法 xdb：R46 B-F1 起 copy 还原后的内存热换计入该级成败，
+	// 非法内容会让热换失败、继续升级而非还原成功。
+	writeTestXDB(t, ip2regionLivePath, testSegments)
+	oldBytes, err := os.ReadFile(ip2regionLivePath)
+	if err != nil {
 		t.Fatal(err)
 	}
 	old := osRename
@@ -416,8 +608,8 @@ func TestIP2RegionUpdateRun_rollbackRenameFailureFallsBackToCopy(t *testing.T) {
 	// Then copyFile 升级还原成功：live 回到旧库内容、.bak 被清理（与 rename 消
 	// 费语义对齐）、reloader 重试一次、DB 记 failed+旧版本（三方一致）
 	data, err := os.ReadFile(ip2regionLivePath)
-	if err != nil || string(data) != oldLive {
-		t.Fatalf("live xdb not restored via copy fallback: %q, %v", data, err)
+	if err != nil || string(data) != string(oldBytes) {
+		t.Fatalf("live xdb not restored via copy fallback: %v", err)
 	}
 	if _, err := os.Stat(ip2regionLivePath + ".bak"); !os.IsNotExist(err) {
 		t.Fatal(".bak should be removed after successful copy restore")

@@ -15,6 +15,11 @@ import (
 
 var ErrIP2RegionUpdateRunning = errors.New("IP2Region 更新任务正在进行中")
 
+// errIP2RegionReload 标记「安装后内存热换失败」（R46 B-F1）：此时磁盘已是新库
+// 而内存 searcher 仍是旧库，run() 须走与 reloader 失败相同的回滚路径，不得按
+// 普通安装失败直接落库（磁盘/内存/DB 会三方分叉）。
+var errIP2RegionReload = errors.New("重载 ip2region 内存索引失败")
+
 type IP2RegionUpdateStatus string
 
 const (
@@ -210,37 +215,51 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	m.state.version = tag
 	m.mu.Unlock()
 
-	if err := m.downloadAndInstall(tag); err != nil {
-		m.fail(fmt.Errorf("安装 ip2region xdb 失败: %w", err))
+	installErr := m.downloadAndInstall(tag)
+	if installErr != nil && !errors.Is(installErr, errIP2RegionReload) {
+		m.fail(fmt.Errorf("安装 ip2region xdb 失败: %w", installErr))
 		return
 	}
 
 	m.setStage(IP2RegionStatusReloading, "重载 Caddy 配置")
-	if err := m.reloader(); err != nil {
+	// R46 B-F1：安装后内存热换失败视同 reloader 失败进入同一回滚路径（磁盘已是
+	// 新库、内存仍是旧库，直接按 failed 落库会重演三方分叉）；此时不再调用
+	// reloader，直接回滚。memSwitched 记录内存 searcher 是否已切到新库，供
+	// fail-open 的 message 注明「内存未切换、重启后生效」。
+	reloadErr := installErr
+	memSwitched := installErr == nil
+	if reloadErr == nil {
+		reloadErr = m.reloader()
+	}
+	if reloadErr != nil {
 		// 回滚旧 xdb 并再次重载（镜像 CRS fail() 路径，R39 1.2）：reloader 失败
 		// 时磁盘与内存 searcher 都还原到更新前状态，避免「磁盘已是新库、DB 记录
 		// 旧版本+failed」的长期不一致。回滚或重试失败仅记录，不改变失败落库。
 		restored, rbErr := m.rollbackXDB()
 		switch {
 		case rbErr != nil:
-			// R45 F1-A：回滚升级链（rename→copy→dist）全部失败——磁盘/内存已是
-			// 新库，若按 failed+旧版本落库会重演三方分叉；改走 fail-open 让 DB
+			// R45 F1-A：回滚升级链（rename→copy→dist）全部失败——磁盘已是新库，
+			// 若按 failed+旧版本落库会重演三方分叉；改走 fail-open 让 DB
 			// 跟随实际状态，rbErr 记录到组件日志供排查。
 			log.Printf("ip2region update: rollback xdb failed, fail-open with new xdb recorded: %v", rbErr)
-			m.successAfterReloadFailOpen(tag, err)
+			m.successAfterReloadFailOpen(tag, reloadErr, memSwitched)
 			return
 		case restored:
 			if rErr := m.reloader(); rErr != nil {
 				log.Printf("ip2region update: reload after rollback failed: %v", rErr)
 			}
-			m.fail(fmt.Errorf("重载 Caddy 配置失败: %w", err))
+			if errors.Is(reloadErr, errIP2RegionReload) {
+				m.fail(reloadErr)
+			} else {
+				m.fail(fmt.Errorf("重载 Caddy 配置失败: %w", reloadErr))
+			}
 			return
 		default:
 			// R44 F1 fail-open：bakCreated==false（全新部署首次更新，无旧 live
-			// 可备份）且 dist 也缺失，无任何「更新前基线」可回退。此时磁盘与内存
-			// searcher 已是新库，若仍按 failed 落库会重演「磁盘/内存新库、DB 记
+			// 可备份）且 dist 也缺失，无任何「更新前基线」可回退。此时磁盘已是
+			// 新库，若仍按 failed 落库会重演「磁盘/内存新库、DB 记
 			// failed+旧版本」的三方不一致；按成功落库让 DB 追上实际状态。
-			m.successAfterReloadFailOpen(tag, err)
+			m.successAfterReloadFailOpen(tag, reloadErr, memSwitched)
 			return
 		}
 	}
@@ -336,7 +355,12 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 		os.Remove(liveBak)
 		return fmt.Errorf("安装 ip2region xdb: %w", err)
 	}
-	Reload()
+	// R46 B-F1：rename 后内存热换失败不得静默吞掉——磁盘已是新库而内存仍是旧
+	// 库，必须按安装失败处理（sentinel 标记），由 run() 走与 reloader 失败相同
+	// 的回滚路径。Reload 失败时旧 searcher 保持服役（ip2region.go Reload 语义）。
+	if err := reloadIP2RegionSearcher(); err != nil {
+		return fmt.Errorf("%w: %v", errIP2RegionReload, err)
+	}
 	return nil
 }
 
@@ -350,28 +374,39 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 // ——全新部署首次更新无旧 live 可备份，dist 即「更新前状态」的权威副本。dist
 // 也缺失时不做任何改动，返回 restored=false。
 //
-// .bak 还原升级链（R45 F1-A）：rename 失败（权限/IO）不等于基线丢失——.bak 仍
-// 在磁盘，升级为 copyFile 还原；copy 再失败才落到 dist 回退；全部失败才返回
-// error，由调用方走 fail-open（磁盘/内存已是新库，DB 必须跟随，不得记
-// failed+旧版本重演三方分叉）。
+// .bak 还原升级链（R45 F1-A，R46 B-F4 口径修正）：rename 失败（非权限类的瞬
+// 时故障，如偶发 IO 错误）不等于基线丢失——.bak 仍在磁盘，升级为 copyFile 还
+// 原；权限类失败（目录不可写）下 copyFile 需要同一目录的写权限、必然同败，
+// 会直接落到 dist 回退；全部失败才返回 error，由调用方走 fail-open（DB 必须
+// 跟随实际状态，不得记 failed+旧版本重演三方分叉）。
+//
+// 每级的内存热换同样计入该级成败（R46 B-F1）：还原磁盘后 Reload 失败视为该级
+// 还原失败，继续升级；全部级别热换失败最终落入 error→fail-open，调用方在
+// message 中注明内存 searcher 未切换、重启后生效。
 func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 	if m.bakCreated {
 		bak := ip2regionLivePath + ".bak"
 		if _, err := os.Stat(bak); err == nil {
 			if err := osRename(bak, ip2regionLivePath); err == nil {
-				Reload()
-				return true, nil
+				if err := reloadIP2RegionSearcher(); err == nil {
+					return true, nil
+				} else {
+					log.Printf("ip2region update: reload after rename restore failed (%v), escalating to next restore level", err)
+				}
 			} else {
-				log.Printf("ip2region update: rename bak to live failed (%v), falling back to copy restore", err)
+				log.Printf("ip2region update: rename bak to live failed (%v), trying copy restore (permission-class failures will fall through to dist)", err)
 			}
 			if err := copyFile(bak, ip2regionLivePath); err == nil {
-				Reload()
-				// copy 还原不消费 .bak：成功后清理，与 rename 消费语义对齐，
-				// 避免残留陈旧副本干扰后续运行判断。
-				if rErr := os.Remove(bak); rErr != nil {
-					log.Printf("ip2region update: failed to remove bak after copy restore: %v", rErr)
+				if err := reloadIP2RegionSearcher(); err == nil {
+					// copy 还原不消费 .bak：成功后清理，与 rename 消费语义对齐，
+					// 避免残留陈旧副本干扰后续运行判断。
+					if rErr := os.Remove(bak); rErr != nil {
+						log.Printf("ip2region update: failed to remove bak after copy restore: %v", rErr)
+					}
+					return true, nil
+				} else {
+					log.Printf("ip2region update: reload after copy restore failed (%v), escalating to dist fallback", err)
 				}
-				return true, nil
 			} else {
 				log.Printf("ip2region update: copy restore from bak failed: %v", err)
 			}
@@ -383,23 +418,33 @@ func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 	if err := copyFile(ip2regionDistPath, ip2regionLivePath); err != nil {
 		return false, fmt.Errorf("回退到发行版 ip2region xdb: %w", err)
 	}
-	Reload()
+	if err := reloadIP2RegionSearcher(); err != nil {
+		return false, fmt.Errorf("发行版回退后重载 ip2region 内存索引: %w", err)
+	}
 	return true, nil
 }
 
 // successAfterReloadFailOpen 在「reloader 失败但无任何回退基线」时按成功落库
-// （R44 F1 fail-open）：磁盘与内存已是新库，DB 记录 success+新 tag 让三方一致；
+// （R44 F1 fail-open）：磁盘已是新库，DB 记录 success+新 tag 让三方一致；
 // message 保留 reloader 错误以便排查 Caddy 侧问题，审计同样记成功但附带上该
 // 警告。落库前与 restored 分支对称补一次 reloader 重试（R45 F1-C）：重试成功
 // 则 Caddy 即刻追上新库、按无警告成功落库；仍失败则在 message 中注明 Caddy
-// 侧 GeoIP 停留在旧库、待下次任意成功重载后生效。
-func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadErr error) {
+// 侧 GeoIP 停留在旧库、待下次任意成功重载后生效。memSwitched=false（安装热换
+// 失败，R46 B-F1）时 message 还须注明内存 searcher 未切换、重启后生效——否则
+// DB 记 success 而内存仍是旧库，重启前无任何可见痕迹。
+func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadErr error, memSwitched bool) {
 	warn := ""
 	if rErr := m.reloader(); rErr != nil {
 		log.Printf("ip2region update: fail-open reload retry failed: %v", rErr)
 		warn = fmt.Sprintf("已生效，但重载 Caddy 配置失败: %v（Caddy 侧待下次重载生效）", reloadErr)
 	} else {
 		log.Printf("ip2region update: fail-open reload retry succeeded, caddy caught up to %s", tag)
+	}
+	if !memSwitched {
+		if warn != "" {
+			warn += "；"
+		}
+		warn += "内存 searcher 未切换，重启后生效"
 	}
 	if _, err := db.DB.Exec(
 		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message=?, finished_at=datetime('now'), consecutive_failures=0 WHERE id=1",
