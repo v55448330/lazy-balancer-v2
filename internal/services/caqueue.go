@@ -17,7 +17,7 @@ import (
 type CAQueueManager struct {
 	mu                  sync.Mutex
 	queues              map[int]*caQueue
-	retiredQueues       []*caQueue
+	retiredQueues       []retiredCAQueue
 	reloader            func() error
 	active              bool
 	blockedRules        map[string]map[RuleBlockToken]struct{}
@@ -36,6 +36,14 @@ type CAQueueManager struct {
 }
 
 type RuleBlockToken uint64
+
+// retiredCAQueue 登记 PauseAndDrain 超时退役的队列。retiredAt 供惰性摘除兜底
+// （R45 发现3）：滞行执行越过 caExecutionTimeout+10min 宽松余量仍未退出只可能是
+// 僵尸（执行上限 ctx 早已触发），超时摘除并记日志，不扩大双执行面。
+type retiredCAQueue struct {
+	queue     *caQueue
+	retiredAt time.Time
+}
 
 type RuleDeletionCompensation struct {
 	RuleID   string
@@ -351,7 +359,10 @@ func (m *CAQueueManager) PauseAndDrain() {
 	}
 	if len(retired) > 0 {
 		m.mu.Lock()
-		m.retiredQueues = append(m.retiredQueues, retired...)
+		now := time.Now()
+		for _, q := range retired {
+			m.retiredQueues = append(m.retiredQueues, retiredCAQueue{queue: q, retiredAt: now})
+		}
 		m.mu.Unlock()
 	}
 }
@@ -384,6 +395,24 @@ func (m *CAQueueManager) Resume() {
 // 在途签发置回 'queued'（requeueCanceledJob），恢复后这些行不会自行回到调度器，
 // 只能靠重启或快照替换；Resume 时补一次显式重入队（EnqueueIfActive 幂等）。
 func (m *CAQueueManager) requeueLifecycleStrandedJobs() {
+	m.requeueStrandedJobs(`j.status='queued' OR j.status LIKE 'creating\_%' ESCAPE '\'`,
+		"节点生命周期切换后恢复排队", "CA queue resume")
+}
+
+// requeueStrandedQueuedJobs 是周期巡检入口（R45 发现1）：滞行执行退出后任务停在
+// 'queued' 而队列中无此任务，Resume 之外的周期巡检原先均不覆盖纯 'queued'，任务
+// 会滞停至下次角色翻转/重启。CertificateService 的 30s waitingCA ticker 顺带调用
+// 本函数，把滞停窗口收敛到 30s。只扫 'queued'：'waiting_ca' 有独立冷却语义，由
+// requeueWaitingCAJobs 负责，此处不碰。
+func (m *CAQueueManager) requeueStrandedQueuedJobs() {
+	m.requeueStrandedJobs(`j.status='queued'`, "周期巡检发现队列外滞留，重新排队", "CA queue periodic scan")
+}
+
+// requeueStrandedJobs 是 Resume 与周期巡检共用的滞留任务重入队实现：按 whereClause
+// 扫描任务，逐个经 IsJobActive（在途/滞行任务防双执行，R44-2）与
+// certJobRuleApplicable（孤儿交周期 sweep 禁用）守卫后，以归一化转换 +
+// EnqueueIfActive 重排队。
+func (m *CAQueueManager) requeueStrandedJobs(whereClause, message, logPrefix string) {
 	if db.DB == nil {
 		return
 	}
@@ -393,10 +422,9 @@ func (m *CAQueueManager) requeueLifecycleStrandedJobs() {
 		       CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' THEN 1 ELSE 0 END
 		FROM cert_jobs j
 		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
-		WHERE j.status='queued' OR j.status LIKE 'creating\_%' ESCAPE '\'
-	`)
+		WHERE ` + whereClause)
 	if err != nil {
-		log.Printf("CA queue resume: stranded job scan failed: %v", err)
+		log.Printf("%s: stranded job scan failed: %v", logPrefix, err)
 		return
 	}
 	type strandedJob struct {
@@ -416,7 +444,7 @@ func (m *CAQueueManager) requeueLifecycleStrandedJobs() {
 	}
 	// 先关闭读迭代器再写库：SQLite 连接池上行迭代未结束时写入会触发 SQLITE_BUSY。
 	if err := rows.Close(); err != nil {
-		log.Printf("CA queue resume: close rows failed: %v", err)
+		log.Printf("%s: close rows failed: %v", logPrefix, err)
 		return
 	}
 	for _, job := range jobs {
@@ -435,14 +463,14 @@ func (m *CAQueueManager) requeueLifecycleStrandedJobs() {
 		// 让 EnqueueIfActive 以 changed=true 真正入队；并发改过状态的行由
 		// transitionJob 的 WHERE status IN (...) 守卫跳过。
 		_, _, err := m.EnqueueIfActive(job.providerID, job.id, job.ruleID, job.domain, func() (int, bool, error) {
-			err := transitionJob(db.DB, job.id, []string{job.status}, "queued", map[string]any{"message": "节点生命周期切换后恢复排队"})
+			err := transitionJob(db.DB, job.id, []string{job.status}, "queued", map[string]any{"message": message})
 			if errors.Is(err, ErrJobTransitionConflict) {
 				return job.id, false, nil
 			}
 			return job.id, err == nil, err
 		})
 		if err != nil {
-			log.Printf("CA queue resume: requeue stranded job %d failed: %v", job.id, err)
+			log.Printf("%s: requeue stranded job %d failed: %v", logPrefix, job.id, err)
 		}
 	}
 }
@@ -464,17 +492,25 @@ func (m *CAQueueManager) IsJobActive(jobID int) bool {
 	// 退役队列在此惰性摘除。
 	active := false
 	kept := m.retiredQueues[:0]
-	for _, queue := range m.retiredQueues {
+	for _, entry := range m.retiredQueues {
+		queue := entry.queue
 		queue.mu.Lock()
 		_, jobActive := queue.active[jobID]
-		drained := len(queue.active) == 0
+		remaining := len(queue.active)
 		queue.mu.Unlock()
 		if jobActive {
 			active = true
 		}
-		if !drained {
-			kept = append(kept, queue)
+		if remaining == 0 {
+			continue
 		}
+		// 越过执行上限+10min 余量仍未退出的滞行执行只可能是僵尸（R45 发现3），
+		// 摘除并记日志，避免硬挂+高频角色翻转下 retiredQueues 理论无界增长。
+		if time.Since(entry.retiredAt) > caExecutionTimeout+10*time.Minute {
+			Logf("warn", "CA 队列退役条目超过 %s 仍有 %d 个在途任务未退出，按僵尸摘除", caExecutionTimeout+10*time.Minute, remaining)
+			continue
+		}
+		kept = append(kept, entry)
 	}
 	m.retiredQueues = kept
 	return active
@@ -496,6 +532,15 @@ func (m *CAQueueManager) Enqueue(providerID int, jobID int, ruleID, domains stri
 func (m *CAQueueManager) EnqueueIfActive(providerID int, jobID int, ruleID, domains string, transition func() (int, bool, error)) (int, bool, error) {
 	if m.beforeActiveEnqueue != nil {
 		m.beforeActiveEnqueue()
+	}
+	// 在途检查必须先于 transition/入队（R45 发现2）：滞行执行悬挂（PauseAndDrain
+	// 超时后登记在 retiredQueues）期间，手动重试/规则重建若放行会同 jobID 双执行，
+	// 且滞行退出时 requeueCanceledJob 会把已签发状态打回 'queued'。命中按阻塞同语义
+	// 返回 changed=false，调用方走 !changed 分支（409）而非 500。
+	// 既有调用方无回归：waiting_ca/滞留扫描的任务执行已退出不在 active；
+	// requeueLifecycleStrandedJobs 已前置检查，此处为幂等二道闸。
+	if m.IsJobActive(jobID) {
+		return jobID, false, nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()

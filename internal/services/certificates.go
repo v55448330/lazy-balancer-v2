@@ -445,6 +445,12 @@ func (s *CertificateService) Start() {
 			s.checkManualCertExpiration()
 		case <-waitingCATicker.C:
 			s.requeueWaitingCAJobs()
+			// R45 发现1：滞行执行退出后任务停在 'queued' 且不在任何队列中，Resume
+			// 之外的巡检均不覆盖纯 'queued'；借 30s 节拍补扫重入队，滞停窗口收敛到
+			// 30s。只动 'queued'，不碰 waiting_ca 冷却语义。
+			if qm := GetCAQueueManager(); qm != nil {
+				qm.requeueStrandedQueuedJobs()
+			}
 		case <-reconcileTicker.C:
 			reconcileMissingCertFiles(db.DB)
 			sweepOrphanedCertJobs(s.ctx)

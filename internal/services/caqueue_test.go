@@ -863,3 +863,110 @@ func TestCAQueueManager_Resume_requeuesLifecycleStrandedJobs(t *testing.T) {
 	}
 	manager.Stop()
 }
+
+// R45 发现1：滞行执行退出后任务停在 'queued' 且无队列持有，Resume 之外的周期
+// 巡检原先不覆盖纯 'queued'；requeueStrandedQueuedJobs 必须把适用滞留任务重新
+// 入队（滞停窗口收敛到 30s），且只动 'queued'——'waiting_ca' 冷却任务与孤儿
+// 任务均不得触碰。
+func TestCAQueueManager_requeueStrandedQueuedJobs_reenqueues_queued_only(t *testing.T) {
+	// Given：适用规则 + 提供商；一个 'queued' 滞留任务、一个同规则 'waiting_ca'
+	// 任务、一个规则已删除的孤儿 'queued' 任务
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_periodic','lb_periodic','example.com','http',8080,1,1,'acme_dns')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'periodic CA','letsencrypt','https://invalid.example/directory',1)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range []struct {
+		id             int64
+		status, ruleID string
+		domain         string
+	}{
+		{id: 61, status: "queued", ruleID: "lb_periodic", domain: "example.com"},
+		{id: 62, status: "waiting_ca", ruleID: "lb_periodic", domain: "www.example.com"},
+		{id: 63, status: "queued", ruleID: "lb_gone_rule", domain: "example.com"},
+	} {
+		if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_provider_id) VALUES (?,?,?,?,7)`, job.id, job.ruleID, job.domain, job.status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: true}
+
+	// When
+	manager.requeueStrandedQueuedJobs()
+
+	// Then：'queued' 适用任务被重入队
+	manager.mu.Lock()
+	enqueued := false
+	for _, q := range manager.queues {
+		q.mu.Lock()
+		_, enqueued = q.active[61]
+		q.mu.Unlock()
+	}
+	manager.mu.Unlock()
+	if !enqueued {
+		t.Fatal("stranded 'queued' job 61 was not re-enqueued by the periodic scan")
+	}
+	// 'waiting_ca' 与孤儿任务保持原状态且未入队
+	for id, want := range map[int64]string{62: "waiting_ca", 63: "queued"} {
+		var status string
+		if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", id).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status != want {
+			t.Fatalf("job %d status=%q, want %q（周期扫描不得触碰）", id, status, want)
+		}
+	}
+	manager.mu.Lock()
+	for _, q := range manager.queues {
+		q.mu.Lock()
+		_, waiting := q.active[62]
+		_, orphan := q.active[63]
+		q.mu.Unlock()
+		if waiting || orphan {
+			t.Fatal("waiting_ca/orphan job must not be enqueued by the periodic scan")
+		}
+	}
+	manager.mu.Unlock()
+	manager.Stop()
+}
+
+// R45 发现2：EnqueueIfActive 必须先查 IsJobActive——滞行悬挂（retiredQueues 中
+// 的在途执行）期间手动重试/规则重建不得再次入队造成同 jobID 双执行；命中时返回
+// changed=false（与 blocked 同语义走 !changed 分支），transition 不得执行。
+func TestCAQueueManager_EnqueueIfActive_skips_when_job_still_active(t *testing.T) {
+	// Given：一个带在途执行的退役队列（模拟 PauseAndDrain 超时后的滞行悬挂）
+	queue := newCAQueue(models.CAProvider{ID: 7, MaxConcurrent: 1}, nil)
+	queue.mu.Lock()
+	queue.active[42] = struct{}{}
+	queue.mu.Unlock()
+	manager := &CAQueueManager{
+		queues:        make(map[int]*caQueue),
+		retiredQueues: []retiredCAQueue{{queue: queue, retiredAt: time.Now()}},
+		active:        true,
+	}
+
+	// When：对在途 job 调用 EnqueueIfActive
+	transitionRan := false
+	_, changed, err := manager.EnqueueIfActive(7, 42, "lb_straggler", "example.com", func() (int, bool, error) {
+		transitionRan = true
+		return 42, true, nil
+	})
+
+	// Then：不入队、不执行 transition、无错误
+	if err != nil {
+		t.Fatalf("EnqueueIfActive err=%v, want nil", err)
+	}
+	if changed {
+		t.Fatal("EnqueueIfActive changed=true, want false（在途任务不得重入队）")
+	}
+	if transitionRan {
+		t.Fatal("transition must not run while the job is still active")
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if len(manager.queues) != 0 {
+		t.Fatal("a new queue was created for an active job（双执行缺口）")
+	}
+}

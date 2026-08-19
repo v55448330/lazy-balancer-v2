@@ -228,6 +228,8 @@ func (c *Client) removeStaleAccountKeys() error {
 	// 可能正在使用。密钥元数据在每次加载/创建时都会重写，其 mtime 即最近使用时间；
 	// 在途签发全程有 30min 执行上限，mtime 必然新于 1h 阈值——仅清理闲置超 1h 的
 	// 密钥，避免误删并发任务密钥导致重试/重启后密钥反复再生（R44-3）。
+	// 备查（R45 发现5）：系统时钟回拨 >1h 时在途密钥 mtime 会早于 cutoff 而被误删，
+	// 后果仅是账户密钥换新并重新注册（账户 churn），无证书/数据损失，无安全影响。
 	cutoff := time.Now().Add(-staleAccountKeyIdleThreshold)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".key.json") {
@@ -248,7 +250,10 @@ func (c *Client) removeStaleAccountKeys() error {
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return fmt.Errorf("读取 ACME 账户密钥元数据状态 %s: %w", entry.Name(), err)
+			// 单条目 stat 失败（权限/外部并发删除）不应中止整轮清理（R45 发现4）：
+			// 跳过该条目并记日志，下一轮注册时自愈。
+			log.Printf("清理 ACME 账户密钥：读取元数据状态失败，跳过 %s: %v", entry.Name(), err)
+			continue
 		}
 		if info.ModTime().After(cutoff) {
 			continue
