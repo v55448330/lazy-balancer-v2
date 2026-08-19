@@ -382,7 +382,7 @@ import type { UserListItem } from '@/types'
 
 interface APIResponse<T> { code: number; message: string; data: T }
 interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string }
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_by: number; updated_at: string; geoip_enabled?: boolean; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number }
 interface SecurityBinding { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean }
 interface CRSRuleOption { filename: string; category: string }
@@ -725,7 +725,7 @@ async function openDialog(row?: PolicySummary) {
     ipWhitelist.value = parseJsonList(d.ip_whitelist)
     ipWhitelistEnabled.value = ipWhitelist.value.length > 0
     geoipCountries.value = parseJsonList(d.geoip_countries)
-    form.value.geoip_enabled = d.geoip_enabled ?? (geoipCountries.value.length > 0)
+    form.value.geoip_enabled = geoipCountries.value.length > 0
       crsRuleGroups.value = normalizeCrsGroups(parseJsonList(d.crs_rule_groups))
       crsExcludedRules.value = parseJsonList(d.crs_excluded_rules)
       selectedCustomRules.value = parseCustomRuleIds(d.custom_rules)
