@@ -14,8 +14,8 @@ func TestGetConfigSourceSection(t *testing.T) {
 	}{
 		{source: "basic", want: "基础设置"},
 		{source: "cluster", want: "集群管理"},
-		{source: "acme", want: "ACME全局设置"},
-		{source: "caddy", want: "Caddy全局配置"},
+		{source: "acme", want: "ACME配置"},
+		{source: "caddy", want: "Caddy配置"},
 		{source: "", want: "全局配置"},
 		{source: "unknown", want: "全局配置"},
 	}
@@ -70,7 +70,7 @@ func TestFormatAuditActionRuleEnable(t *testing.T) {
 
 func TestFormatAuditActionDirectConfigReload(t *testing.T) {
 	action, resource, detail := FormatAuditAction("POST", "/api/v1/config/reload")
-	if action != "重载" || resource != "Caddy配置" || detail != "/api/v1/config/reload" {
+	if action != "重载" || resource != "Caddy服务" || detail != "/api/v1/config/reload" {
 		t.Fatalf("FormatAuditAction() = (%q, %q, %q)", action, resource, detail)
 	}
 }

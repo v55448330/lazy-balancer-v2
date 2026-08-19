@@ -19,31 +19,31 @@ var (
 )
 
 var configFieldSections = map[string]string{
-	"acme_email":             "ACME全局设置",
-	"cert_expiry_days":       "ACME全局设置",
-	"cert_renewal_days":      "ACME全局设置",
-	"cert_renewal_attempts":  "ACME全局设置",
-	"default_ca_provider_id": "ACME全局设置",
-	"dns_provider":           "ACME全局设置",
-	"dns_credentials":        "ACME全局设置",
+	"acme_email":             "ACME配置",
+	"cert_expiry_days":       "ACME配置",
+	"cert_renewal_days":      "ACME配置",
+	"cert_renewal_attempts":  "ACME配置",
+	"default_ca_provider_id": "ACME配置",
+	"dns_provider":           "ACME配置",
+	"dns_credentials":        "ACME配置",
 
-	"caddy_log_level":               "Caddy全局配置",
-	"caddy_log_size_mb":             "Caddy全局配置",
-	"request_body_max_size_mb":      "Caddy全局配置",
-	"http_read_timeout":             "Caddy全局配置",
-	"http_write_timeout":            "Caddy全局配置",
-	"http_idle_timeout":             "Caddy全局配置",
-	"upstream_keepalive_timeout":    "Caddy全局配置",
-	"proxy_dial_timeout":            "Caddy全局配置",
-	"proxy_response_header_timeout": "Caddy全局配置",
-	"proxy_read_timeout":            "Caddy全局配置",
-	"proxy_write_timeout":           "Caddy全局配置",
-	"proxy_stream_timeout":          "Caddy全局配置",
-	"proxy_flush_interval":          "Caddy全局配置",
-	"proxy_stream_close_delay":      "Caddy全局配置",
-	"server_tokens_hidden":          "Caddy全局配置",
-	"access_log_json":               "Caddy全局配置",
-	"access_log_format":             "Caddy全局配置",
+	"caddy_log_level":               "Caddy配置",
+	"caddy_log_size_mb":             "Caddy配置",
+	"request_body_max_size_mb":      "Caddy配置",
+	"http_read_timeout":             "Caddy配置",
+	"http_write_timeout":            "Caddy配置",
+	"http_idle_timeout":             "Caddy配置",
+	"upstream_keepalive_timeout":    "Caddy配置",
+	"proxy_dial_timeout":            "Caddy配置",
+	"proxy_response_header_timeout": "Caddy配置",
+	"proxy_read_timeout":            "Caddy配置",
+	"proxy_write_timeout":           "Caddy配置",
+	"proxy_stream_timeout":          "Caddy配置",
+	"proxy_flush_interval":          "Caddy配置",
+	"proxy_stream_close_delay":      "Caddy配置",
+	"server_tokens_hidden":          "Caddy配置",
+	"access_log_json":               "Caddy配置",
+	"access_log_format":             "Caddy配置",
 
 	"log_level":              "基础设置",
 	"cert_job_log_size_mb":   "基础设置",
@@ -68,9 +68,9 @@ func GetConfigSourceSection(source string) string {
 	case "cluster":
 		return "集群管理"
 	case "acme":
-		return "ACME全局设置"
+		return "ACME配置"
 	case "caddy":
-		return "Caddy全局配置"
+		return "Caddy配置"
 	default:
 		return "全局配置"
 	}
@@ -211,7 +211,7 @@ func FormatAuditAction(method, path string) (action, resource, detail string) {
 	case strings.Contains(p, "/users/") && strings.Contains(p, "/status"):
 		return "修改状态", "用户", p
 	case strings.Contains(p, "/users/me"):
-		return "更新资料", "用户", p
+		return "更新信息", "用户", p
 	case strings.HasPrefix(p, "/api/v1/users") && method == "POST":
 		return "创建", "用户", p
 	case strings.HasPrefix(p, "/api/v1/users/") && method == "PUT":
@@ -231,7 +231,7 @@ func FormatAuditAction(method, path string) (action, resource, detail string) {
 	case p == "/api/v1/config":
 		return "", "", ""
 	case strings.Contains(p, "/config/reload"):
-		return "重载", "Caddy配置", p
+		return "重载", "Caddy服务", p
 
 	case strings.Contains(p, "/certificate-configs") && method == "POST":
 		return "创建", "DNS配置", p

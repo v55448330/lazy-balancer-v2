@@ -82,6 +82,11 @@ var auditVocabularyRenames = []struct {
 	{"CA限流", "签发限流", "", ""},
 	{"导入部分失败", "部分失败", "", ""},
 	{"更新访问地址", "更新地址", "", ""},
+	{"更新资料", "更新信息", "", ""},
+	{"错误", "应用失败", "", ""},
+	// 动作不变、对象改名的联动条目
+	{"重载", "", "Caddy配置", "Caddy服务"},
+	{"重载失败", "", "Caddy配置", "Caddy服务"},
 	// 对象改名
 	{"", "", "证书签发任务", "证书任务"},
 	{"", "", "完整性记录文件损坏", "完整性记录"},
@@ -91,10 +96,14 @@ var auditVocabularyRenames = []struct {
 	{"", "", "DNS提供商配置", "DNS配置"},
 	{"", "", "集群注册令牌", "注册令牌"},
 	{"", "", "Caddy 配置", "Caddy配置"},
-	{"", "", "IP2Region 数据库", "IP2Region数据库"},
-	{"", "", "ip2region 数据库", "IP2Region数据库"},
+	{"", "", "IP2Region 数据库", "IP数据库"},
+	{"", "", "ip2region 数据库", "IP数据库"},
+	{"", "", "IP2Region数据库", "IP数据库"},
 	{"", "", "CRS 规则库", "CRS规则库"},
 	{"", "", "配置同步", "集群同步"},
+	{"", "", "Caddy全局配置", "Caddy配置"},
+	{"", "", "ACME全局设置", "ACME配置"},
+	{"", "", "HTTPS 访问", "基础设置"},
 }
 
 func migrateAuditVocabulary() {
@@ -104,12 +113,16 @@ func migrateAuditVocabulary() {
 		if r.newAction != "" {
 			sets = append(sets, "action=?")
 			setArgs = append(setArgs, r.newAction)
+		}
+		if r.oldAction != "" {
 			wheres = append(wheres, "action=?")
 			whereArgs = append(whereArgs, r.oldAction)
 		}
 		if r.newResource != "" {
 			sets = append(sets, "resource=?")
 			setArgs = append(setArgs, r.newResource)
+		}
+		if r.oldResource != "" {
 			wheres = append(wheres, "resource=?")
 			whereArgs = append(whereArgs, r.oldResource)
 		}

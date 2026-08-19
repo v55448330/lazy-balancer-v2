@@ -21,7 +21,7 @@ import (
 // 的路径 + 参数下标）：
 //   - handlers/audit.go 与 middleware 是 recordAudit/RecordAuditLog 的透传封装；
 //   - handlers/caddy.go 的对象变量取自 GetConfigSection/GetConfigSourceSection
-//     （ACME全局设置/Caddy全局配置/基础设置/全局配置/集群管理，均 ≤5 词）；
+//     （ACME配置/Caddy配置/基础设置/全局配置/集群管理，均 ≤5 词）；
 //   - handlers/cluster_registration.go 的动作形参实参仅有 审批/拒绝/删除/更新地址；
 //   - handlers/config_backup.go 与 config_import_v1.go 的动作变量取值仅有
 //     导入失败/部分失败；

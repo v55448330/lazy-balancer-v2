@@ -122,7 +122,7 @@ func (h *Handlers) recordCaddyApplyResult(err error) {
 	}
 	wrapped := fmt.Sprintf("Caddy 配置应用失败（旧配置已保留）：%v", err)
 	services.Logf("error", "%s", wrapped)
-	services.RecordAuditLog("system", "错误", "Caddy配置", wrapped, "")
+	services.RecordAuditLog("system", "应用失败", "Caddy配置", wrapped, "")
 	if db.DB != nil {
 		db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, wrapped)
 	}

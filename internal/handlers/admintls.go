@@ -211,7 +211,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		return
 	}
 
-	recordAudit(c, "更新", "HTTPS 访问", services.FormatAuditDetail(
+	recordAudit(c, "更新", "基础设置", services.FormatAuditDetail(
 		map[bool]string{true: "启用", false: "禁用"}[enabled],
 		"证书来源："+mode,
 		services.AuditResultPart("success"),
