@@ -959,13 +959,13 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			if restoreErr := restoreCreatedRule(); restoreErr != nil {
 				services.Logf("error", "CRITICAL: CreateRule ACME compensation failed for caddy_id=%s: %v", caddyID, restoreErr)
 			}
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书签发任务失败: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书任务失败: " + err.Error()})
 			return
 		}
 	}
 
 	log.Printf("Rule created with caddy_id=%s", caddyID)
-	recordAudit(c, "创建", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), fmt.Sprintf("端口：%d", req.ListenPort), req.Domain))
+	recordAudit(c, "创建", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), fmt.Sprintf("端口：%d", req.ListenPort), req.Domain))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_create"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "规则已创建", Data: gin.H{"caddy_id": caddyID}})
 }
@@ -1837,10 +1837,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				restoreErr := restoreACMEState()
 				if restoreErr != nil {
 					services.Logf("error", "CRITICAL: UpdateRule ACME enqueue failed and restore failed for caddy_id=%s: enqueue=%v restore=%v", caddyID, err, restoreErr)
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("创建证书签发任务失败且恢复失败: %v; %v", err, restoreErr)})
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("创建证书任务失败且恢复失败: %v; %v", err, restoreErr)})
 					return
 				}
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书签发任务失败: " + err.Error()})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建证书任务失败: " + err.Error()})
 				return
 			}
 		}
@@ -1852,7 +1852,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		tlsPart = fmt.Sprintf("TLS：%s", boolText(*req.EnableTLS))
 	}
 	auditParts := []string{services.AuditRulePart(caddyID), req.Name, fmt.Sprintf("协议：%s", req.Protocol), domain, tlsPart}
-	recordAudit(c, "更新", "负载均衡规则", services.FormatAuditDetail(auditParts...))
+	recordAudit(c, "更新", "负载规则", services.FormatAuditDetail(auditParts...))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_update"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新"})
 }
@@ -1973,7 +1973,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		// 让运维收到通知后人工恢复证书文件（从备份或其他节点同步）。
 		services.Logf("error", "CRITICAL: DeleteRule 证书文件清理失败，可能存在 DB-文件状态不一致。caddy_id=%s cert_path=%s key_path=%s cleanup_error=%v restore_error=%v。请人工检查证书文件并在必要时从备份恢复",
 			caddyID, certPath, keyPath, err, restoreErr)
-		recordAudit(c, "清理失败", "规则证书文件", services.FormatAuditDetail(
+		recordAudit(c, "清理失败", "证书文件", services.FormatAuditDetail(
 			services.AuditRulePart(caddyID),
 			fmt.Sprintf("残留路径：%s, %s。错误：%v。请人工检查证书文件，必要时从备份恢复", certPath, keyPath, err),
 		))
@@ -2007,10 +2007,10 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	services.RemoveRuleLogFiles(caddyID)
 	if err := services.RemoveCertJobLogFiles(caddyID); err != nil {
 		log.Printf("DeleteRule cert-job log cleanup failed for caddy_id=%s: %v", caddyID, err)
-		recordAudit(c, "清理失败", "证书任务日志", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("路径：%s", services.CertJobLogPath(caddyID)), err.Error()))
+		recordAudit(c, "清理失败", "证书日志", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("路径：%s", services.CertJobLogPath(caddyID)), err.Error()))
 	}
 
-	recordAudit(c, "删除", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("协议：%s", protocol), fmt.Sprintf("端口：%d", listenPort), domain))
+	recordAudit(c, "删除", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("协议：%s", protocol), fmt.Sprintf("端口：%d", listenPort), domain))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_delete"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已删除"})
 }
@@ -2183,7 +2183,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	}
 	committed = true
 
-	recordAudit(c, "复制", "负载均衡规则", services.FormatAuditDetail(fmt.Sprintf("源规则：%s", caddyID), fmt.Sprintf("新规则：%s", newCaddyID), rule.Name))
+	recordAudit(c, "复制", "负载规则", services.FormatAuditDetail(fmt.Sprintf("源规则：%s", caddyID), fmt.Sprintf("新规则：%s", newCaddyID), rule.Name))
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "副本已创建（已禁用）：域名与源规则相同，启用前请修改域名或端口", Data: gin.H{"caddy_id": newCaddyID}})
 }
 
@@ -2356,7 +2356,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		if err == nil {
 			hasJob = true
 		} else if err != sql.ErrNoRows {
-			failEnable("读取证书签发任务失败")
+			failEnable("读取证书任务失败")
 			return
 		}
 		var renewalDays int
@@ -2384,23 +2384,23 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		switch action {
 		case EnableCertJobCreate:
 			if queueManager == nil {
-				failEnable("CA 队列未初始化，无法创建证书签发任务")
+				failEnable("CA 队列未初始化，无法创建证书任务")
 				return
 			}
 			enqueuedJobID, err = services.CreateOrRequeueCertJob(caddyID, domain, caProviderID, queueManager)
 			if err != nil {
-				failEnable("创建证书签发任务失败: " + err.Error())
+				failEnable("创建证书任务失败: " + err.Error())
 				return
 			}
-			recordAudit(c, "创建", "证书签发任务", fmt.Sprintf("启用规则 %s，创建证书签发任务 (%s)", caddyID, domain))
+			recordAudit(c, "创建", "证书任务", fmt.Sprintf("启用规则 %s，创建证书任务 (%s)", caddyID, domain))
 		case EnableCertJobKeep:
-			recordAudit(c, "启用", "证书签发任务", fmt.Sprintf("启用规则 %s，证书有效（过期前%d天续签），保持现有证书", caddyID, renewalDays))
+			recordAudit(c, "启用", "证书任务", fmt.Sprintf("启用规则 %s，证书有效（过期前%d天续签），保持现有证书", caddyID, renewalDays))
 		case EnableCertJobResume:
 			if _, err := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书有效，已恢复使用', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?", jobID); err != nil {
-				failEnable("恢复证书签发任务失败: " + err.Error())
+				failEnable("恢复证书任务失败: " + err.Error())
 				return
 			}
-			recordAudit(c, "启用", "证书签发任务", fmt.Sprintf("启用规则 %s，证书仍有效，恢复使用现有证书", caddyID))
+			recordAudit(c, "启用", "证书任务", fmt.Sprintf("启用规则 %s，证书仍有效，恢复使用现有证书", caddyID))
 		case EnableCertJobRenew:
 			if queueManager == nil {
 				failEnable("CA 队列未初始化，无法续签证书")
@@ -2411,7 +2411,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 				failEnable("续签排队失败: " + err.Error())
 				return
 			}
-			recordAudit(c, "续签", "证书签发任务", fmt.Sprintf("启用规则 %s，证书即将过期，重新排队续签", caddyID))
+			recordAudit(c, "续签", "证书任务", fmt.Sprintf("启用规则 %s，证书即将过期，重新排队续签", caddyID))
 		case EnableCertJobRetry:
 			if queueManager == nil {
 				failEnable("CA 队列未初始化，无法重试证书任务")
@@ -2422,13 +2422,13 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 				failEnable("重试排队失败: " + err.Error())
 				return
 			}
-			recordAudit(c, "重试", "证书签发任务", fmt.Sprintf("启用规则 %s，任务之前已暂停/失败，重新排队", caddyID))
+			recordAudit(c, "重试", "证书任务", fmt.Sprintf("启用规则 %s，任务之前已暂停/失败，重新排队", caddyID))
 		default:
-			recordAudit(c, "启用", "证书签发任务", fmt.Sprintf("启用规则 %s，签发任务已在进行中 (状态: %s)", caddyID, jobStatus))
+			recordAudit(c, "启用", "证书任务", fmt.Sprintf("启用规则 %s，签发任务已在进行中 (状态: %s)", caddyID, jobStatus))
 		}
 	}
 
-	recordAudit(c, "启用", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已启用"))
+	recordAudit(c, "启用", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已启用"))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_enable"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已启用"})
 }
@@ -2503,8 +2503,8 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	}
 	committed = true
 	if disabledJobs > 0 {
-		services.WriteCertJobLogByRule(caddyID, "WARN", "cancelled", "规则已禁用，证书签发任务已暂停")
-		recordAudit(c, "禁用", "证书签发任务", fmt.Sprintf("规则 %s 已禁用，%d 个证书任务状态设为已禁用", caddyID, disabledJobs))
+		services.WriteCertJobLogByRule(caddyID, "WARN", "cancelled", "规则已禁用，证书任务已暂停")
+		recordAudit(c, "禁用", "证书任务", fmt.Sprintf("规则 %s 已禁用，%d 个证书任务状态设为已禁用", caddyID, disabledJobs))
 	}
 
 	// 取消仍在排队或执行中的签发协程，避免已禁用规则继续占用 CA 配额
@@ -2516,7 +2516,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 		cancel()
 	}
 
-	recordAudit(c, "禁用", "负载均衡规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已禁用"))
+	recordAudit(c, "禁用", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已禁用"))
 	recordAudit(c, "重载", "Caddy配置", services.FormatAuditDetail(services.AuditSourcePart("rule_disable"), services.AuditRulePart(caddyID), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已禁用"})
 }
