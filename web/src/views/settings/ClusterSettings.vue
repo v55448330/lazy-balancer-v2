@@ -99,7 +99,7 @@ import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import type {
-  ApiResponse,
+  APIResponse,
   ClusterModeResult,
   ClusterNode,
   ClusterRegisterToken,
@@ -154,12 +154,14 @@ const isNonAdminReadOnly = computed(() => authStore.readOnlyReason === 'non-admi
 const clusterModeChanging = computed(() => syncing.value || promoting.value || modeLoading.value)
 const fetchStatus = async (): Promise<ClusterStatus> => {
   const requestSeq = ++requestSequence
-  const response = await request.get<ApiResponse<ClusterStatus>>('/cluster/status', { signal: clusterPolling.signal, silent: true })
+  const response = await request.get<APIResponse<ClusterStatus>>('/cluster/status', { signal: clusterPolling.signal, silent: true })
+  const data = response.data
+  if (!data) throw new Error('集群状态响应缺少数据')
   if (!disposed && requestSeq === requestSequence) {
-    status.value = response.data
-    authStore.setNodeMode(response.data.node_mode)
+    status.value = data
+    authStore.setNodeMode(data.node_mode)
   }
-  return response.data
+  return data
 }
 
 const fetchNodes = async (): Promise<void> => {
@@ -167,8 +169,8 @@ const fetchNodes = async (): Promise<void> => {
   const requestSeq = ++requestSequence
   nodesLoading.value = true
   try {
-		const response = await request.get<ApiResponse<readonly ClusterNodeWithSyncError[]>>('/cluster/nodes', { signal: clusterPolling.signal, silent: true })
-    if (!disposed && requestSeq === requestSequence) nodes.value = response.data
+		const response = await request.get<APIResponse<readonly ClusterNodeWithSyncError[]>>('/cluster/nodes', { signal: clusterPolling.signal, silent: true })
+    if (!disposed && requestSeq === requestSequence) nodes.value = response.data ?? []
   } finally {
     if (!disposed && requestSeq === requestSequence) nodesLoading.value = false
   }
@@ -205,7 +207,7 @@ const registerAsSlave = async (input: ClusterRegistrationInput): Promise<void> =
   try {
     const confirmed = await confirmAction('切换后本地数据将被主节点全覆盖，是否继续？', '确认切换为从节点')
     if (!confirmed) return
-    await request.post<ApiResponse<ClusterModeResult>>('/cluster/mode', { mode: 'slave', ...input })
+    await request.post<APIResponse<ClusterModeResult>>('/cluster/mode', { mode: 'slave', ...input })
     ElMessage.success('注册请求已提交，等待主节点审批')
     await clusterPolling.run()
   } finally {
@@ -233,8 +235,9 @@ const syncNow = async (): Promise<void> => {
   if (!ok) return
   syncing.value = true
   try {
-    const response = await request.post<ApiResponse<ClusterSyncResult>>('/cluster/sync/pull')
-    ElMessage.success(response.data.changed ? `同步完成，已应用版本 ${response.data.applied_version}` : '当前已是最新配置')
+    const response = await request.post<APIResponse<ClusterSyncResult>>('/cluster/sync/pull')
+    const result = response.data
+    if (result) ElMessage.success(result.changed ? `同步完成，已应用版本 ${result.applied_version}` : '当前已是最新配置')
     await fetchStatus()
   } finally {
     syncing.value = false
@@ -245,9 +248,11 @@ const generateRegisterToken = async (): Promise<void> => {
   if (isNonAdminReadOnly.value) return
   tokenLoading.value = true
   try {
-    const response = await request.post<ApiResponse<ClusterRegisterToken>>('/cluster/register-tokens')
-    registerToken.value = response.data
-    tokenDialogVisible.value = true
+    const response = await request.post<APIResponse<ClusterRegisterToken>>('/cluster/register-tokens')
+    if (response.data) {
+      registerToken.value = response.data
+      tokenDialogVisible.value = true
+    }
   } finally {
     tokenLoading.value = false
   }

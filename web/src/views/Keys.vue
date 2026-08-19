@@ -375,11 +375,7 @@ import { isValidCidr } from '@/utils/ruleValidation'
 import { copyText } from '@/utils/copy'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { Connection, CopyDocument, Delete, Document, Key, Plus, Setting, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
-import type { APIKey, ApiResponse, CreateAPIKeyInput, MCPToolSpec, UpdateAPIKeyInput } from '@/types'
-
-interface APIKeyListResponse {
-  readonly data?: readonly APIKey[]
-}
+import type { APIKey, APIResponse, CreateAPIKeyInput, MCPToolSpec, UpdateAPIKeyInput } from '@/types'
 
 interface CreateAPIKeyResponse {
   readonly data?: {
@@ -457,7 +453,7 @@ const fetchKeys = async () => {
   const requestSeq = ++keysRequestSeq
   loading.value = true
   try {
-    const res = await request.get<APIKeyListResponse>('/users/me/api-keys')
+    const res = await request.get<APIResponse<readonly APIKey[]>>('/users/me/api-keys')
     if (requestSeq === keysRequestSeq) keys.value = res.data || []
   } finally {
     if (requestSeq === keysRequestSeq) loading.value = false
@@ -655,8 +651,8 @@ const fetchMCPTools = async (): Promise<void> => {
   mcpToolsLoading.value = true
   mcpToolsError.value = ''
   try {
-    const response = await request.get<ApiResponse<readonly MCPToolSpec[]>>('/mcp/tools')
-    mcpTools.value = [...response.data].sort((left, right) => {
+    const response = await request.get<APIResponse<readonly MCPToolSpec[]>>('/mcp/tools')
+    mcpTools.value = [...(response.data ?? [])].sort((left, right) => {
       const categoryOrder = Number(right.read_only) - Number(left.read_only)
       return categoryOrder || left.name.localeCompare(right.name)
     })

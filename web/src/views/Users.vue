@@ -139,7 +139,7 @@ import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { UserFilled, User, Plus } from '@element-plus/icons-vue'
-import type { ApiResponse, UserListItem } from '@/types'
+import type { APIResponse, UserListItem } from '@/types'
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
@@ -177,7 +177,7 @@ const getDisplayName = (row: UserListItem): string => {
 
 const fetchUsers = async () => {
   const requestSeq = ++usersRequestSeq
-  const res = await request.get<ApiResponse<UserListItem[]>>('/users')
+  const res = await request.get<APIResponse<UserListItem[]>>('/users')
   if (requestSeq === usersRequestSeq) {
     users.value = res.data || []
     const maxPage = Math.max(1, Math.ceil(users.value.length / pageSize.value))
