@@ -51,7 +51,11 @@ const tzFormatter = (withTime: boolean): Intl.DateTimeFormat => {
       warnedInvalidTz = true
       console.warn(`[date] 无效的配置时区「${tz}」，已回退为「${DEFAULT_TZ}」`)
     }
-    return tzFormat(DEFAULT_TZ, withTime)
+    // 回退后同样走缓存：避免每次调用都重建 DEFAULT_TZ 实例（S-01）
+    const fallbackKey = `${DEFAULT_TZ}|${withTime}`
+    const fallback = tzFormatterCache.get(fallbackKey) ?? tzFormat(DEFAULT_TZ, withTime)
+    tzFormatterCache.set(fallbackKey, fallback)
+    return fallback
   }
 }
 

@@ -227,6 +227,7 @@ import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
+import { reloadAfterRestart } from '@/utils/restart'
 import { Setting, InfoFilled, Check, View, Upload } from '@element-plus/icons-vue'
 import type { SystemInfo } from '@/types'
 
@@ -650,7 +651,7 @@ const restarting = ref(false)
 const handleRestart = async () => {
   if (isReadOnly.value || restarting.value) return
   try {
-    await ElMessageBox.confirm('重启期间服务短暂不可用（约 10 秒），容器将自动拉起。确认重启？', '重启服务', {
+    await ElMessageBox.confirm('重启期间服务短暂不可用，容器将自动拉起，就绪后自动刷新页面。确认重启？', '重启服务', {
       confirmButtonText: '重启',
       cancelButtonText: '取消',
       type: 'warning',
@@ -661,11 +662,15 @@ const handleRestart = async () => {
   restarting.value = true
   try {
     await request.post('/system/restart')
-    ElMessage.success('服务正在重启，稍后自动刷新页面')
-    setTimeout(() => window.location.reload(), 10000)
-  } finally {
+  } catch {
+    // 重启请求失败（全局拦截器已提示），复位按钮允许重试
     restarting.value = false
+    return
   }
+  ElMessage.success('服务正在重启，就绪后自动刷新页面')
+  // 保持 restarting=true 直到 reload（防就绪等待窗口内二次点击）；超时或失败才复位
+  const reloaded = await reloadAfterRestart(() => disposed)
+  if (!reloaded) restarting.value = false
 }
 
 const handleSave = async () => {

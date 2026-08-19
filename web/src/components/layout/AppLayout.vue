@@ -135,14 +135,14 @@
       </el-header>
 
       <el-alert
-        v-if="configDrift"
+        v-if="configDrift && authStore.nodeMode === 'master'"
         type="error"
         :closable="false"
         class="config-drift-banner"
       >
         <template #title>
           <span class="drift-text">运行配置与规则数据不一致：{{ configDrift }}</span>
-          <el-button size="small" type="danger" plain :loading="restarting" @click="handleRestartForDrift">重启服务恢复</el-button>
+          <el-button v-if="authStore.readOnlyReason === null" size="small" type="danger" plain :loading="restarting" @click="handleRestartForDrift">重启服务恢复</el-button>
         </template>
       </el-alert>
 
@@ -185,6 +185,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document, Warning, Notebook } from '@element-plus/icons-vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, footerHtml } from '@/utils/branding'
+import { reloadAfterRestart } from '@/utils/restart'
 
 const authStore = useAuthStore()
 const collapsed = ref(false)
@@ -301,7 +302,7 @@ let driftTimer: number | undefined
 
 const fetchDriftStatus = async () => {
   try {
-    const res = await request.get('/caddy/status', { silent: true } as never)
+    const res = await request.get('/caddy/status', { silent: true })
     configDrift.value = res.data?.config_consistent === 'false' ? (res.data?.config_drift || '规则路由与运行配置不一致') : ''
   } catch {
     // 状态查询失败静默——网络层错误已有全局处理
@@ -321,11 +322,15 @@ const handleRestartForDrift = async () => {
   restarting.value = true
   try {
     await request.post('/system/restart')
-    ElMessage.success('服务正在重启，稍后自动刷新页面')
-    setTimeout(() => window.location.reload(), 10000)
-  } finally {
+  } catch {
+    // 重启请求失败（全局拦截器已提示），复位按钮允许重试
     restarting.value = false
+    return
   }
+  ElMessage.success('服务正在重启，就绪后自动刷新页面')
+  // 保持 restarting=true 直到 reload（防就绪等待窗口内二次点击）；超时或失败才复位
+  const reloaded = await reloadAfterRestart()
+  if (!reloaded) restarting.value = false
 }
 
 onMounted(() => {
