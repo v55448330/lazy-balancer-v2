@@ -74,7 +74,7 @@
             :disabled="isReadOnly"
             placeholder="每行一个字段映射，格式: caddy字段路径 -> 自定义名称，或 caddy字段路径 -> delete"
           />
-          <el-button text type="primary" size="small" :disabled="isReadOnly" @click="settings.access_log_format = defaultLogFormat">还原默认格式</el-button>
+          <el-button text type="primary" size="small" :disabled="isReadOnly" @click="settings.access_log_format = DEFAULT_ACCESS_LOG_FORMAT">还原默认格式</el-button>
           <el-text type="info" size="small" class="format-tip">
             每行一条规则：字段重命名 <code>request&gt;remote_ip -&gt; src</code> 或删除字段 <code>request&gt;headers -&gt; delete</code>。
             可用字段：<code>request&gt;remote_ip</code> <code>request&gt;client_ip</code> <code>request&gt;method</code> <code>request&gt;host</code> <code>request&gt;uri</code> <code>request&gt;proto</code> <code>request&gt;headers&gt;User-Agent</code> <code>status</code> <code>size</code> <code>duration</code> <code>bytes_read</code> <code>user_id</code> <code>ts</code> <code>resp_headers</code> <code>request&gt;tls</code>。
@@ -122,6 +122,7 @@ import { RefreshRight, Setting, View } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { ansiToHtml } from '@/utils/ansi'
 import { request } from '@/utils/api'
+import { DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
 import type { ProxyTimeoutConfig } from '@/types'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
 
@@ -171,8 +172,6 @@ const CADDY_CONFIG_KEYS = [
 type CaddyLogsResponse = {
   readonly data?: { readonly content?: string }
 }
-
-const defaultLogFormat = 'resp_headers -> delete\nrequest>tls -> delete\nrequest>remote_port -> delete\nlevel -> delete\nlogger -> delete\nmsg -> delete\nrequest>remote_ip -> src\nrequest>client_ip -> src_ip\nrequest>method -> http_method\nrequest>host -> server\nrequest>uri -> uri_path\nrequest>proto -> protocol\nuser_id -> user\nts -> time_local\nsize -> bytes_out\nbytes_read -> bytes_in\nduration -> request_time'
 
 const settings = defineModel<CaddySettingsConfig>('settings', { required: true })
 const emit = defineEmits<{ (event: 'save'): void }>()

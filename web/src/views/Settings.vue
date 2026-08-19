@@ -38,6 +38,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import { request } from '@/utils/api'
+import { DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
 import { useAuthStore } from '@/stores/auth'
 import { Setting } from '@element-plus/icons-vue'
 import BasicSettings from './settings/BasicSettings.vue'
@@ -107,7 +108,7 @@ const settings = ref<SettingsConfig>({
   audit_log_size_mb: 10,
   runtime_log_size_mb: 100,
   access_log_json: true,
-  access_log_format: 'resp_headers -> delete\nrequest>tls -> delete\nrequest>remote_port -> delete\nlevel -> delete\nlogger -> delete\nmsg -> delete\nrequest>remote_ip -> src\nrequest>client_ip -> src_ip\nrequest>method -> http_method\nrequest>host -> server\nrequest>uri -> uri_path\nrequest>proto -> protocol\nuser_id -> user\nts -> time_local\nsize -> bytes_out\nbytes_read -> bytes_in\nduration -> request_time',
+  access_log_format: DEFAULT_ACCESS_LOG_FORMAT,
   audit_retention_months: 3,
   jwt_expire_minutes: 20,
   timezone: 'Asia/Shanghai',
