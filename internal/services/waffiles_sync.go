@@ -129,9 +129,10 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 			if err := untarGzTo(bundle.CRSTarGzB64, crsLiveDir, bundle.CRSSha256); err != nil {
 				return crsChanged, xdbChanged, fmt.Errorf("写入同步 CRS 规则文件: %w", err)
 			}
-			if bundle.CRSVersion != "" {
-				_ = os.WriteFile(filepath.Join(crsLiveDir, "VERSION"), []byte(bundle.CRSVersion), 0644)
-			}
+			// VERSION 随 tar 包以原始字节落盘（R46-E1）：不得以 TrimSpace 后的
+			// bundle.CRSVersion 覆写——上游发布包的 VERSION 自带尾换行，主端
+			// CRSSha256 基于原始字节计算，覆写会让本地 tar 哈希与已应用节哈希
+			// 永久分叉，wafFilesDrifted 每轮误判漂移、全量重拉永不收敛。
 			crsChanged = true
 		}
 	}

@@ -262,3 +262,41 @@ func TestApplyWafFileBundle_rejectsXdbWithoutDeclaredHash(t *testing.T) {
 		t.Fatalf("xdb must not be written without declared hash")
 	}
 }
+
+func TestApplyWafFileBundle_preservesVersionFileRawBytes(t *testing.T) {
+	// R46-E1：上游 CRS 发布包的 VERSION 自带尾换行（如 "v4.29.0\n"），主端
+	// CRSSha256 基于含原始字节的 tar 计算。Apply 不得以 TrimSpace 后的
+	// bundle.CRSVersion 覆写 VERSION——否则本地 tar 哈希与已应用节哈希永久
+	// 分叉，wafFilesDrifted 每轮误判漂移、全量重拉永不收敛（从端持续
+	// 「安全数据持续同步失败」）。
+	src := t.TempDir()
+	srcRules := filepath.Join(src, "master-crs", "rules")
+	os.MkdirAll(srcRules, 0755)
+	os.WriteFile(filepath.Join(srcRules, "a.conf"), []byte("SecRule X 1"), 0644)
+	os.WriteFile(filepath.Join(src, "master-crs", "VERSION"), []byte("v4.99.0\n"), 0644)
+
+	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
+	crsLiveDir = filepath.Join(src, "master-crs")
+	ip2regionLivePath = filepath.Join(src, "ip2region.xdb")
+	bundle := BuildWafFileBundle()
+	if bundle == nil || bundle.CRSVersion != "v4.99.0" {
+		t.Fatalf("bundle CRSVersion=%q, want trimmed v4.99.0", bundle.CRSVersion)
+	}
+	crsLiveDir, ip2regionLivePath = oldLive, oldXdb
+
+	dst := t.TempDir()
+	crsLiveDir, ip2regionLivePath = filepath.Join(dst, "crs"), filepath.Join(dst, "ip2region.xdb")
+	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	os.MkdirAll(crsLiveDir, 0755)
+
+	crsChanged, _, err := ApplyWafFileBundle(bundle)
+	if err != nil || !crsChanged {
+		t.Fatalf("apply crsChanged=%v err=%v", crsChanged, err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(crsLiveDir, "VERSION")); string(got) != "v4.99.0\n" {
+		t.Fatalf("VERSION raw bytes must survive apply, got %q", got)
+	}
+	if liveSum, err := tarGzDirSum(crsLiveDir); err != nil || liveSum != bundle.CRSSha256 {
+		t.Fatalf("live tree hash %q (err=%v) must equal declared %q — slave must converge", liveSum, err, bundle.CRSSha256)
+	}
+}
