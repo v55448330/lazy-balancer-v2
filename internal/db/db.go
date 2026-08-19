@@ -1083,20 +1083,38 @@ func runMigrations() error {
 	return nil
 }
 
+// legacyHTTPSHasCertPredicate 是 migrateLegacyHTTPSProtocol 的「有证」判定
+// （SELECT 预判与 UPDATE 归一必须同谓词，否则审计详情与实际分支发散）。
+const legacyHTTPSHasCertPredicate = `(
+	(COALESCE(tls_cert,'') != '' AND COALESCE(tls_key,'') != '')
+	OR (tls_source = 'acme_dns' AND EXISTS (
+		SELECT 1 FROM cert_jobs
+		WHERE cert_jobs.rule_id = lb_rules.caddy_id
+		  AND COALESCE(cert_jobs.cert_pem,'') != ''
+		  AND COALESCE(cert_jobs.key_pem,'') != ''
+		  AND cert_jobs.status != 'disabled'
+	))
+)`
+
 // migrateLegacyHTTPSProtocol 一次性迁移：a1ecbe3a 期写入路径曾接受 protocol='https'
 // （语义即 http+TLS），b6e2b624 起写侧白名单收敛为 http/tcp，存量 https 行编辑/复制
 // 全部 400、启用后按「非 http 即 TCP」渲染（域名匹配静默丢失）。归一规则（R45 F-1）：
-//   - 内联证书齐备（tls_cert/tls_key 均非空）→ protocol='http' + enable_tls=1，保持
-//     原意图（含 enable_tls 已为 0 的行——https 协议本身隐含 TLS）；
-//   - 无内联证书（历史 tls_auto_cert/tls_email ACME 列已删，证书无从物化）→
-//     protocol='http' + enable_tls=0 且清 tls_http_redirect：渲染为普通 HTTP，保持
-//     可编辑，避免 TLS 端口明文与指向非 TLS 端口的幻影跳转（F-C 形态的迁移再制造）。
+//   - 有证行 → protocol='http' + enable_tls=1，保持原意图（含 enable_tls 已为 0 的
+//     行——https 协议本身隐含 TLS）；
+//   - 无证行 → protocol='http' + enable_tls=0 且清 tls_http_redirect：渲染为普通
+//     HTTP，保持可编辑，避免 TLS 端口明文与指向非 TLS 端口的幻影跳转（F-C 形态的
+//     迁移再制造）。
+//
+// 「有证」判定（R46 C-1）：内联 tls_cert/tls_key 均非空，或 tls_source='acme_dns'
+// 且 cert_jobs 中存有该规则已签发的证书（cert_pem/key_pem 非空、任务未禁用）——
+// 签发门控（caqueue）不筛 protocol，历史 https 行可能经 ACME 签出证书，仅查内联
+// 列会把此类行当无证处理，导致已签发证书静默不再加载且永不续期。
 //
 // 幂等，重跑零命中。受影响规则记入操作日志（R45 F-2：迁移跑在审计库初始化之前，
 // 先缓冲、InitializeAuditDB 就绪后落库）。
 func migrateLegacyHTTPSProtocol() error {
 	rows, err := DB.Query(`SELECT caddy_id, name,
-		CASE WHEN COALESCE(tls_cert,'') != '' AND COALESCE(tls_key,'') != '' THEN 1 ELSE 0 END
+		CASE WHEN ` + legacyHTTPSHasCertPredicate + ` THEN 1 ELSE 0 END
 		FROM lb_rules WHERE protocol='https'`)
 	if err != nil {
 		return fmt.Errorf("failed to query legacy https lb_rules: %w", err)
@@ -1126,7 +1144,7 @@ func migrateLegacyHTTPSProtocol() error {
 		return nil
 	}
 	if _, err := DB.Exec(`UPDATE lb_rules SET protocol='http', enable_tls=1
-		WHERE protocol='https' AND COALESCE(tls_cert,'') != '' AND COALESCE(tls_key,'') != ''`); err != nil {
+		WHERE protocol='https' AND ` + legacyHTTPSHasCertPredicate); err != nil {
 		return fmt.Errorf("failed to normalize cert-bearing legacy https lb_rules: %w", err)
 	}
 	if _, err := DB.Exec(`UPDATE lb_rules SET protocol='http', enable_tls=0, tls_http_redirect=0
@@ -1138,7 +1156,7 @@ func migrateLegacyHTTPSProtocol() error {
 		if rule.hasCert {
 			detail = fmt.Sprintf("存量 https 协议规则已迁移为 http+TLS：caddy_id=%s name=%s", rule.caddyID, rule.name)
 		} else {
-			detail = fmt.Sprintf("存量 https 协议规则已迁移为普通 HTTP（无内联证书，未启用 TLS）：caddy_id=%s name=%s", rule.caddyID, rule.name)
+			detail = fmt.Sprintf("存量 https 协议规则已迁移为普通 HTTP（无可用证书，未启用 TLS）：caddy_id=%s name=%s", rule.caddyID, rule.name)
 		}
 		log.Print(detail)
 		recordSystemAudit("启动迁移", "系统配置", detail)

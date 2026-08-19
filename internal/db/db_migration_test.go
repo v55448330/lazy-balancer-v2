@@ -212,6 +212,71 @@ func TestRunMigrations_migratesLegacyHTTPSRulesToHTTPWithTLS(t *testing.T) {
 	}
 }
 
+// R46 C-1: 存量 https 行的「有证」判定须覆盖 cert_jobs 承载的 ACME 证书——签发
+// 门控不筛 protocol，历史 https 行可能已签出证书，仅查内联列会误归无证分支，
+// 导致已签发证书静默不再加载且永不续期。
+func TestRunMigrations_migratesLegacyHTTPSRulesWithACMECertJobToHTTPWithTLS(t *testing.T) {
+	// Given 存量 https 行：一行无内联证书但 cert_jobs 存有已签发 ACME 证书，
+	// 一行的证书任务已禁用（证书不可用），一行完全无证
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO global_config (id,caddy_config) VALUES (1,'{}');
+		ALTER TABLE lb_rules ADD COLUMN tls_source VARCHAR(20) DEFAULT 'manual';
+		INSERT INTO lb_rules (name,protocol,domain,listen_port,enable_tls,tls_source,tls_cert,tls_key,tls_http_redirect,caddy_id) VALUES
+			('legacy-https-acme','https','acme.example.test',8443,1,'acme_dns','','',1,'lb_https_acme'),
+			('legacy-https-acme-disabled','https','disabled.example.test',8444,1,'acme_dns','','',1,'lb_https_acme_disabled'),
+			('legacy-https-certless','https','plain.example.test',8445,0,'','','',1,'lb_https_certless');
+		INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem) VALUES
+			('lb_https_acme','acme.example.test','issued','PEM-CERT','PEM-KEY'),
+			('lb_https_acme_disabled','disabled.example.test','disabled','PEM-CERT','PEM-KEY');`); err != nil {
+		t.Fatalf("seed legacy https rules with certificate jobs: %v", err)
+	}
+	drainSystemAuditBuffer()
+
+	// When migrations run (twice, to prove idempotence)
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	if err := runMigrations(); err != nil {
+		t.Fatalf("repeat migrations: %v", err)
+	}
+
+	// Then cert_jobs 存有已签发证书的 https 行归入有证分支：http+enable_tls=1，
+	// 且保留 tls_http_redirect（TLS 意图完整保留，证书继续加载/续期）
+	var protocol string
+	var enableTLS, redirect int
+	if err := database.QueryRow("SELECT protocol, enable_tls, tls_http_redirect FROM lb_rules WHERE caddy_id='lb_https_acme'").Scan(&protocol, &enableTLS, &redirect); err != nil {
+		t.Fatalf("read migrated ACME-cert rule: %v", err)
+	}
+	if protocol != "http" || enableTLS != 1 || redirect != 1 {
+		t.Fatalf("ACME-cert rule protocol=%q enable_tls=%d tls_http_redirect=%d, want http/1/1", protocol, enableTLS, redirect)
+	}
+
+	// And 证书任务已禁用（证书不可用）的行仍按无证归一
+	if err := database.QueryRow("SELECT protocol, enable_tls, tls_http_redirect FROM lb_rules WHERE caddy_id='lb_https_acme_disabled'").Scan(&protocol, &enableTLS, &redirect); err != nil {
+		t.Fatalf("read migrated disabled-cert-job rule: %v", err)
+	}
+	if protocol != "http" || enableTLS != 0 || redirect != 0 {
+		t.Fatalf("disabled-cert-job rule protocol=%q enable_tls=%d tls_http_redirect=%d, want http/0/0", protocol, enableTLS, redirect)
+	}
+
+	// And 完全无证行保持既有无证分支（R45 F-1 行为不回退）
+	if err := database.QueryRow("SELECT protocol, enable_tls FROM lb_rules WHERE caddy_id='lb_https_certless'").Scan(&protocol, &enableTLS); err != nil {
+		t.Fatalf("read migrated certless rule: %v", err)
+	}
+	if protocol != "http" || enableTLS != 0 {
+		t.Fatalf("certless rule protocol=%q enable_tls=%d, want http/0", protocol, enableTLS)
+	}
+
+	// And 三条受影响规则各入一条迁移审计（重跑零命中）
+	entries := drainSystemAuditBuffer()
+	if len(entries) != 3 {
+		t.Fatalf("system audit entries=%d, want 3（重跑幂等）", len(entries))
+	}
+}
+
 func drainSystemAuditBuffer() []systemAuditEntry {
 	systemAuditBuffer.mu.Lock()
 	defer systemAuditBuffer.mu.Unlock()
@@ -263,6 +328,116 @@ func TestFlushSystemAuditLogs_writesBufferedEntriesToAuditDB(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("audit rows after second flush=%d, want 1（缓冲已清空不得重放）", count)
+	}
+}
+
+// R46 C-2: flush 写失败时条目按原序留回缓冲等待下轮重试，不再先清缓冲导致
+// 事件永久丢失；审计库未就绪（InitializeAuditDB 中途失败）同样保留。
+func TestFlushSystemAuditLogs_retainsEntriesOnInsertFailure(t *testing.T) {
+	// Given 一个 audit_log 表被改名（INSERT 必失败）的审计库 + 两条缓冲事件
+	auditDB, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatalf("open audit database: %v", err)
+	}
+	t.Cleanup(func() { _ = auditDB.Close() })
+	if _, err := auditDB.Exec(`CREATE TABLE audit_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		username VARCHAR(100),
+		action VARCHAR(50) NOT NULL,
+		resource VARCHAR(100),
+		detail TEXT,
+		ip_address VARCHAR(45),
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	ALTER TABLE audit_log RENAME TO audit_log_bak`); err != nil {
+		t.Fatalf("create then rename audit_log table: %v", err)
+	}
+	oldAuditDB := AuditDB
+	AuditDB = auditDB
+	t.Cleanup(func() { AuditDB = oldAuditDB })
+	drainSystemAuditBuffer()
+	recordSystemAudit("启动迁移", "系统配置", "事件一")
+	recordSystemAudit("启动迁移", "系统配置", "事件二")
+
+	// When flush 全部写失败
+	flushSystemAuditLogs()
+
+	// Then 两条事件原序留回缓冲
+	if got := systemAuditBufferLen(); got != 2 {
+		t.Fatalf("buffered entries after failed flush=%d, want 2", got)
+	}
+
+	// And When 表名恢复后再次 flush
+	if _, err := auditDB.Exec("ALTER TABLE audit_log_bak RENAME TO audit_log"); err != nil {
+		t.Fatalf("restore audit_log table: %v", err)
+	}
+	flushSystemAuditLogs()
+
+	// Then 事件按原顺序落库且缓冲清空
+	if got := systemAuditBufferLen(); got != 0 {
+		t.Fatalf("buffered entries after successful flush=%d, want 0", got)
+	}
+	rows, err := auditDB.Query("SELECT detail FROM audit_log ORDER BY id")
+	if err != nil {
+		t.Fatalf("query flushed audit rows: %v", err)
+	}
+	defer rows.Close()
+	var details []string
+	for rows.Next() {
+		var detail string
+		if err := rows.Scan(&detail); err != nil {
+			t.Fatalf("scan flushed audit row: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate flushed audit rows: %v", err)
+	}
+	if len(details) != 2 || details[0] != "事件一" || details[1] != "事件二" {
+		t.Fatalf("flushed audit details=%v, want [事件一 事件二]（原序保留）", details)
+	}
+}
+
+func TestFlushSystemAuditLogs_retainsEntriesWhenAuditDBNotReady(t *testing.T) {
+	// Given 审计库未就绪（InitializeAuditDB 中途失败、AuditDB 仍为 nil）+ 一条缓冲事件
+	oldAuditDB := AuditDB
+	AuditDB = nil
+	t.Cleanup(func() { AuditDB = oldAuditDB })
+	drainSystemAuditBuffer()
+	recordSystemAudit("启动迁移", "系统配置", "事件待重放")
+
+	// When
+	flushSystemAuditLogs()
+
+	// Then 事件保留在缓冲中等待审计库就绪，而非随缓冲清空永久丢失
+	if got := systemAuditBufferLen(); got != 1 {
+		t.Fatalf("buffered entries with nil AuditDB=%d, want 1", got)
+	}
+	drainSystemAuditBuffer()
+}
+
+// R46 C-2: 缓冲设上限，审计库长期不可用时丢弃最旧条目，内存不无界增长。
+func TestRecordSystemAudit_capsBufferDroppingOldest(t *testing.T) {
+	// Given 缓冲已被灌入超过上限的事件
+	drainSystemAuditBuffer()
+	t.Cleanup(func() { drainSystemAuditBuffer() })
+	total := systemAuditBufferCap + 3
+	for index := 0; index < total; index++ {
+		recordSystemAudit("启动迁移", "系统配置", fmt.Sprintf("entry-%d", index))
+	}
+
+	// When 读取缓冲
+	entries := drainSystemAuditBuffer()
+
+	// Then 缓冲恒等于上限，最旧的 3 条被丢弃、最新的一条保留
+	if len(entries) != systemAuditBufferCap {
+		t.Fatalf("buffered entries=%d, want cap %d", len(entries), systemAuditBufferCap)
+	}
+	if entries[0].detail != "entry-3" {
+		t.Fatalf("oldest retained entry=%q, want entry-3（最旧三条已丢弃）", entries[0].detail)
+	}
+	if entries[len(entries)-1].detail != fmt.Sprintf("entry-%d", total-1) {
+		t.Fatalf("newest retained entry=%q, want entry-%d", entries[len(entries)-1].detail, total-1)
 	}
 }
 

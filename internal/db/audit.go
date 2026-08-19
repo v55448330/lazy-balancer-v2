@@ -51,6 +51,9 @@ func InitializeAuditDB(dataDir string) error {
 	}
 	AuditDB = auditDB
 	if err := migrateLegacyAuditLogs(DB, path); err != nil {
+		// R46 C-2: 初始化中途失败时缓冲的系统事件原样保留（下次启动重放），
+		// 此处仅留痕条数，不静默丢弃。
+		log.Printf("audit log migration failed (%v); %d buffered system audit entries retained for next startup", err, systemAuditBufferLen())
 		return err
 	}
 	flushSystemAuditLogs()
@@ -71,27 +74,63 @@ var systemAuditBuffer struct {
 	entries []systemAuditEntry
 }
 
+// R46 C-2: 缓冲设上限，审计库长期不可用（或 flush 反复失败）时丢弃最旧条目并
+// 告警，避免内存无界增长。
+const systemAuditBufferCap = 10000
+
 func recordSystemAudit(action, resource, detail string) {
 	systemAuditBuffer.mu.Lock()
 	defer systemAuditBuffer.mu.Unlock()
 	systemAuditBuffer.entries = append(systemAuditBuffer.entries, systemAuditEntry{action, resource, detail})
+	trimSystemAuditBufferLocked()
 }
 
-// flushSystemAuditLogs 将缓冲的系统事件写入审计库并清空缓冲；写失败仅留痕不阻断
-// 启动，与 services.RecordAuditLog 的 best-effort 语义一致。
+func systemAuditBufferLen() int {
+	systemAuditBuffer.mu.Lock()
+	defer systemAuditBuffer.mu.Unlock()
+	return len(systemAuditBuffer.entries)
+}
+
+func trimSystemAuditBufferLocked() {
+	if overflow := len(systemAuditBuffer.entries) - systemAuditBufferCap; overflow > 0 {
+		kept := make([]systemAuditEntry, systemAuditBufferCap)
+		copy(kept, systemAuditBuffer.entries[overflow:])
+		systemAuditBuffer.entries = kept
+		log.Printf("system audit buffer overflow: dropped %d oldest entries", overflow)
+	}
+}
+
+// flushSystemAuditLogs 将缓冲的系统事件写入审计库并清空缓冲；审计库未就绪或单条
+// 写失败时条目按原顺序留回缓冲（R46 C-2：等待下次 flush 重试，不再静默丢事件），
+// 与 services.RecordAuditLog 的 best-effort 语义一致。
 func flushSystemAuditLogs() {
 	systemAuditBuffer.mu.Lock()
 	entries := systemAuditBuffer.entries
 	systemAuditBuffer.entries = nil
 	systemAuditBuffer.mu.Unlock()
-	if len(entries) == 0 || AuditDB == nil {
+	if len(entries) == 0 {
 		return
 	}
+	if AuditDB == nil {
+		systemAuditBuffer.mu.Lock()
+		systemAuditBuffer.entries = append(entries, systemAuditBuffer.entries...)
+		trimSystemAuditBufferLocked()
+		systemAuditBuffer.mu.Unlock()
+		return
+	}
+	var failed []systemAuditEntry
 	for _, entry := range entries {
 		if _, err := AuditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address) VALUES ('system', ?, ?, ?, '')",
 			entry.action, entry.resource, entry.detail); err != nil {
 			log.Printf("system audit log write failed: %v", err)
+			failed = append(failed, entry)
 		}
+	}
+	if len(failed) > 0 {
+		systemAuditBuffer.mu.Lock()
+		systemAuditBuffer.entries = append(failed, systemAuditBuffer.entries...)
+		trimSystemAuditBufferLocked()
+		systemAuditBuffer.mu.Unlock()
 	}
 }
 
