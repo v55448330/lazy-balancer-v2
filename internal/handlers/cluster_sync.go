@@ -55,7 +55,7 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 	// 节点页面持续显示假错误（R41 S-1）。前端按钮只对从节点渲染，此为后端防御。
 	var isMaster bool
 	// 门控查询失败时按主节点语义拒绝（R42 发现2）：放行会让主节点走 Pull
-	// 命中 errSyncMasterNoPull 返回 500 + 误导审计「手动同步失败」，实际
+	// 命中 errSyncMasterNoPull 返回 500 + 误导审计「同步失败」，实际
 	// 只是瞬时 DB 读错。400 文案与真主节点一致，前端无歧义。
 	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || isMaster {
 		clusterError(c, http.StatusBadRequest, "主节点无需手动同步", err)
@@ -63,8 +63,8 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 	}
 	result, err := h.syncService.Pull(c.Request.Context())
 	if err != nil {
-		recordAudit(c, "手动同步失败", "集群同步", err.Error())
-		clusterError(c, http.StatusInternalServerError, "手动同步失败: "+err.Error(), err)
+		recordAudit(c, "同步失败", "集群同步", err.Error())
+		clusterError(c, http.StatusInternalServerError, "同步失败: "+err.Error(), err)
 		return
 	}
 	if result.Changed {

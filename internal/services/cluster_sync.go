@@ -588,7 +588,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastSyncErr); err == nil {
 				if msg, _ := decodeSyncError(lastSyncErr); strings.HasPrefix(msg, syncReloadFailureMarkerPrefix) {
 					Logf("warn", "检测到上次同步应用后 Caddy 重载失败（%s），全量重拉补偿重试", lastSyncErr)
-					RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("上次应用后重载失败", "配置无变化但运行配置不一致，已改为全量拉取"), "")
+					RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("上次应用后重载失败", "配置无变化但运行配置漂移，已改为全量拉取"), "")
 					resp.Body.Close()
 					sinceVersion, sinceFingerprint = 0, ""
 					continue

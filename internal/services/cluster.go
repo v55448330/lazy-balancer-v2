@@ -291,13 +291,13 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 		parsedMasterURL, err := url.Parse(masterURL)
 		if err != nil {
 			log.Printf("parse old cluster master URL after promotion: %v", err)
-			RecordAuditLog("system", "清理证书指纹失败", "集群节点", FormatAuditDetail("旧主节点地址无效", err.Error()), "")
+			RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail("旧主节点地址无效", err.Error()), "")
 			return nil
 		}
 		pinPath, err := clusterPinPathForDatabase(s.db, parsedMasterURL.Host)
 		if err != nil {
 			log.Printf("locate old cluster master pin after promotion: %v", err)
-			RecordAuditLog("system", "清理证书指纹失败", "集群节点", FormatAuditDetail("旧主节点："+parsedMasterURL.Scheme+"://"+parsedMasterURL.Host, err.Error()), "")
+			RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail("旧主节点："+parsedMasterURL.Scheme+"://"+parsedMasterURL.Host, err.Error()), "")
 			return nil
 		}
 		// 先读取已知指纹，再清理并通知：脱离通知的 transport 按连接读取 pin 文件
@@ -325,12 +325,12 @@ func (s *ClusterService) cleanupClusterPin(pinPath, auditURL string) {
 		s.pendingPinPath = pinPath
 		s.pendingPinAuditURL = auditURL
 		log.Printf("cluster pin cleanup deferred: %v", err)
-		RecordAuditLog("system", "清理证书指纹失败", "集群节点", FormatAuditDetail("旧主节点："+auditURL, err.Error()), "")
+		RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail("旧主节点："+auditURL, err.Error()), "")
 		return
 	}
 	s.pendingPinPath = ""
 	s.pendingPinAuditURL = ""
-	RecordAuditLog("system", "清理证书指纹", "集群节点", FormatAuditDetail("旧主节点："+auditURL, AuditResultPart("success")), "")
+	RecordAuditLog("system", "清理", "证书指纹", FormatAuditDetail("旧主节点："+auditURL, AuditResultPart("success")), "")
 }
 
 func (s *ClusterService) retryPendingPinCleanup() {

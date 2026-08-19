@@ -577,7 +577,7 @@ func TestClusterService_Promote_removes_old_master_pin_and_audits(t *testing.T) 
 	if err := db.AuditDB.QueryRow("SELECT action,detail FROM audit_log ORDER BY id DESC LIMIT 1").Scan(&action, &detail); err != nil {
 		t.Fatal(err)
 	}
-	if action != "清理证书指纹" || !strings.Contains(detail, masterURL) {
+	if action != "清理" || !strings.Contains(detail, masterURL) {
 		t.Fatalf("audit action=%q detail=%q", action, detail)
 	}
 }

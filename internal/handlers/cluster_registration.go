@@ -47,7 +47,7 @@ func (h *Handlers) GenerateClusterRegisterToken(c *gin.Context) {
 		clusterError(c, http.StatusInternalServerError, "生成注册令牌失败", err)
 		return
 	}
-	recordAudit(c, "生成", "集群注册令牌", services.FormatAuditDetail(fmt.Sprintf("有效期至：%s", expiresAt.UTC().Format("2006-01-02 15:04:05 UTC")), services.AuditResultPart("success")))
+	recordAudit(c, "生成", "注册令牌", services.FormatAuditDetail(fmt.Sprintf("有效期至：%s", expiresAt.UTC().Format("2006-01-02 15:04:05 UTC")), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "注册令牌已生成，仅显示一次", Data: gin.H{"token": token, "expires_at": expiresAt.UTC().Format(time.RFC3339)}})
 }
 
@@ -120,7 +120,7 @@ func (h *Handlers) UpdateClusterNodeAccessURL(c *gin.Context) {
 		clusterError(c, http.StatusBadRequest, "访问地址格式错误", err)
 		return
 	}
-	h.clusterNodeAction(c, "更新访问地址", func(id int) error {
+	h.clusterNodeAction(c, "更新地址", func(id int) error {
 		return h.clusterService.UpdateNodeAccessURL(c.Request.Context(), id, req.AccessURL)
 	})
 }

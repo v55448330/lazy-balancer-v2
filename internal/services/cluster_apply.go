@@ -177,11 +177,11 @@ func wafBundleSyncDetail(bundle *WafFileBundle, crsChanged, xdbChanged bool) str
 			crsPart = "CRS 规则已更新至 " + bundle.CRSVersion
 		}
 	}
-	xdbPart := "IP2Region 数据库已是最新"
+	xdbPart := "IP2Region数据库已是最新"
 	if xdbChanged {
-		xdbPart = "IP2Region 数据库已更新"
+		xdbPart = "IP2Region数据库已更新"
 		if bundle.IP2RegionTag != "" {
-			xdbPart = "IP2Region 数据库已更新至 " + bundle.IP2RegionTag
+			xdbPart = "IP2Region数据库已更新至 " + bundle.IP2RegionTag
 		}
 	}
 	return crsPart + "；" + xdbPart

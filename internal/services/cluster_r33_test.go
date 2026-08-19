@@ -120,10 +120,10 @@ func TestWafBundleSyncDetail_reportsPerComponentOutcome(t *testing.T) {
 		crsChanged, xdbChanged bool
 		want                   string
 	}{
-		{"both updated", true, true, "CRS 规则已更新至 v4.28.0；IP2Region 数据库已更新至 v3.17.0"},
-		{"only crs updated", true, false, "CRS 规则已更新至 v4.28.0；IP2Region 数据库已是最新"},
-		{"only xdb updated", false, true, "CRS 规则已是最新；IP2Region 数据库已更新至 v3.17.0"},
-		{"version missing falls back to bare update", true, false, "CRS 规则已更新；IP2Region 数据库已是最新"},
+		{"both updated", true, true, "CRS 规则已更新至 v4.28.0；IP2Region数据库已更新至 v3.17.0"},
+		{"only crs updated", true, false, "CRS 规则已更新至 v4.28.0；IP2Region数据库已是最新"},
+		{"only xdb updated", false, true, "CRS 规则已是最新；IP2Region数据库已更新至 v3.17.0"},
+		{"version missing falls back to bare update", true, false, "CRS 规则已更新；IP2Region数据库已是最新"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

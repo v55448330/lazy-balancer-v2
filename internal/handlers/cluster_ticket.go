@@ -33,7 +33,7 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 		clusterError(c, status, "生成登录票据失败", err)
 		return
 	}
-	recordAudit(c, "生成", "从节点登录票据", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), services.AuditResultPart("success")))
+	recordAudit(c, "生成", "登录票据", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, response)
 }
 
@@ -70,5 +70,5 @@ func (h *Handlers) TicketLogin(c *gin.Context) {
 }
 
 func recordTicketLoginFailure(c *gin.Context, username, reason string) {
-	services.RecordAuditLog(username, "登录失败", "集群登录票据", services.AuditResultPart(reason), c.ClientIP())
+	services.RecordAuditLog(username, "登录失败", "登录票据", services.AuditResultPart(reason), c.ClientIP())
 }

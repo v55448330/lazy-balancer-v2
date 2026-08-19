@@ -26,7 +26,7 @@ func TestRecordTicketLoginFailureAuditsSanitizedReasons(t *testing.T) {
 	for _, reason := range []string{"invalid_request", "invalid_signature", "expired", "replay", "user_unavailable", "database_error"} {
 		recordTicketLoginFailure(context, "alice", reason)
 	}
-	rows, err := db.AuditDB.Query("SELECT detail FROM audit_log WHERE resource='集群登录票据' ORDER BY id")
+	rows, err := db.AuditDB.Query("SELECT detail FROM audit_log WHERE resource='登录票据' ORDER BY id")
 	if err != nil {
 		t.Fatal(err)
 	}

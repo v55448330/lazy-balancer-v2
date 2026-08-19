@@ -23,8 +23,8 @@ type syncSection struct {
 var syncSections = []syncSection{
 	{Key: "global_config", NewLabel: "全局配置"},
 	{Key: "users", NewLabel: "系统数据"},
-	{Key: "rules", NewLabel: "负载均衡规则"},
-	{Key: "waf_files", NewLabel: "CRS/IP2Region 数据库"},
+	{Key: "rules", NewLabel: "负载规则"},
+	{Key: "waf_files", NewLabel: "CRS/IP2Region数据库"},
 	{Key: "security", NewLabel: "安全策略及自定义规则"},
 }
 

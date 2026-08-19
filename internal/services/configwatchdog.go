@@ -243,7 +243,7 @@ func updateConfigDrift(missing, extra []string) {
 	if configDriftStatus.Consistent {
 		detail := formatDriftDetail(missing, extra)
 		Logf("error", "配置一致性看门狗：%s", detail)
-		RecordAuditLog("system", "配置不一致", "Caddy配置", detail, "")
+		RecordAuditLog("system", "配置漂移", "Caddy配置", detail, "")
 		configDriftStatus = ConfigDriftStatus{Consistent: false, Since: now}
 	}
 	configDriftStatus.Missing = missing

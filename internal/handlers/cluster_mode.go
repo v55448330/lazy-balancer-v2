@@ -126,7 +126,7 @@ func localOutboundIP() string {
 
 func clusterSettingsChangeDetail(req models.ClusterSettingsRequest) string {
 	labels := map[string]string{
-		"sync_global_config": "全局配置", "sync_users": "系统数据", "sync_rules": "负载均衡规则",
+		"sync_global_config": "全局配置", "sync_users": "系统数据", "sync_rules": "负载规则",
 		"sync_waf_files": "规则库数据库", "sync_security": "安全策略规则",
 	}
 	var parts []string
