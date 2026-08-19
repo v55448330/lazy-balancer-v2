@@ -379,3 +379,46 @@ func TestUpdateRule_disable_direction_skips_conflict_checks(t *testing.T) {
 		}
 	})
 }
+
+// R41 C-2: 遮蔽门控增加启用状态前置——仅当「新状态启用 或 原状态启用」时才可能产生
+// 运行时影响。禁用中规则（新旧均 disabled）不渲染，改 TLS/跳转/端口/域名应放行；
+// 启用方向仍二次把关（上方"启用方向仍触发遮蔽检查"用例覆盖）。
+func TestUpdateRule_disabled_rule_skips_shadow_gate(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	oldCertDir := testServicesCertDir
+	testServicesCertDir = t.TempDir()
+	t.Cleanup(func() { testServicesCertDir = oldCertDir })
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+
+	certPEM, keyPEM, err := generateTestCert("shadow-c2.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("generate certificate: %v", err)
+	}
+	// 80 直听启用规则（占用 80 端口）
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,enable_compress,enable_tls,tls_source,tls_http_redirect)
+		VALUES ('lb_c2_80','lb_c2_80','','http','shadow-c2.test',80,'weighted_round_robin',1,1,0,'manual',0)`); err != nil {
+		t.Fatalf("seed 80 rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_c2_80','127.0.0.1',9000,1,1,'http')`); err != nil {
+		t.Fatalf("seed 80 upstream: %v", err)
+	}
+	// 443 TLS 禁用规则（初始不带跳转，保持禁用）
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,enable_compress,enable_tls,tls_source,tls_cert,tls_key,tls_http_redirect)
+		VALUES ('lb_c2_tls','lb_c2_tls','','http','shadow-c2.test',443,'weighted_round_robin',0,1,1,'manual',?,?,0)`, certPEM, keyPEM); err != nil {
+		t.Fatalf("seed tls rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_c2_tls','127.0.0.1',9000,1,1,'http')`); err != nil {
+		t.Fatalf("seed tls upstream: %v", err)
+	}
+
+	// 禁用中规则开启 HTTP→HTTPS 跳转（会形成遮蔽组合）——应放行
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_c2_tls", strings.NewReader(`{"tls_http_redirect":true}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 for disabled rule editing TLS redirect", response.Code, response.Body.String())
+	}
+}

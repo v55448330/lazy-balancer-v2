@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -214,5 +216,54 @@ func TestPutCaddyConfig_oversized_unknown_length_body_returns_413(t *testing.T) 
 
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status=%d body=%s, want 413", response.Code, response.Body.String())
+	}
+}
+
+// R41 D-F2: 键集合一致性——planConfigChanges 中归属「Caddy全局配置」分组的 add() 键
+// 必须与 UpdateConfig PUT SQL 实际更新的同分组列集合相等（防止变更提示与实际写入漂移）。
+func TestCaddySectionKeys_matchUpdateSQL(t *testing.T) {
+	changesSrc, err := os.ReadFile("config_changes.go")
+	if err != nil {
+		t.Fatalf("read config_changes.go: %v", err)
+	}
+	caddySrc, err := os.ReadFile("caddy.go")
+	if err != nil {
+		t.Fatalf("read caddy.go: %v", err)
+	}
+
+	addKeyRe := regexp.MustCompile(`\badd\("([a-z0-9_]+)"`)
+	changesKeys := map[string]bool{}
+	for _, m := range addKeyRe.FindAllStringSubmatch(string(changesSrc), -1) {
+		if services.GetConfigSection(m[1]) == "Caddy全局配置" {
+			changesKeys[m[1]] = true
+		}
+	}
+
+	updateStart := strings.Index(string(caddySrc), "UPDATE global_config SET")
+	updateEnd := strings.Index(string(caddySrc[updateStart:]), "WHERE id = 1")
+	if updateStart < 0 || updateEnd < 0 {
+		t.Fatalf("cannot locate UPDATE global_config block in caddy.go")
+	}
+	updateBlock := string(caddySrc[updateStart : updateStart+updateEnd])
+	colRe := regexp.MustCompile(`(?m)^\s*([a-z0-9_]+)\s*=\s*(?:COALESCE|CASE WHEN)`)
+	sqlKeys := map[string]bool{}
+	for _, m := range colRe.FindAllStringSubmatch(updateBlock, -1) {
+		if services.GetConfigSection(m[1]) == "Caddy全局配置" {
+			sqlKeys[m[1]] = true
+		}
+	}
+
+	if len(changesKeys) == 0 || len(sqlKeys) == 0 {
+		t.Fatalf("extracted empty key set: changes=%v sql=%v", changesKeys, sqlKeys)
+	}
+	for k := range changesKeys {
+		if !sqlKeys[k] {
+			t.Fatalf("key %q in planConfigChanges but not in UpdateConfig SQL", k)
+		}
+	}
+	for k := range sqlKeys {
+		if !changesKeys[k] {
+			t.Fatalf("key %q in UpdateConfig SQL but not in planConfigChanges", k)
+		}
 	}
 }

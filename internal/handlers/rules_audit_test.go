@@ -44,7 +44,7 @@ func TestListRules_uses_schema_defaults_when_nullable_columns_are_NULL(t *testin
 	if response.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
 	}
-	for _, expected := range []string{`"health_check_path":""`, `"health_check_interval":10`, `"health_check_timeout":2`, `"health_check_unhealthy_threshold":3`, `"health_check_healthy_threshold":2`, `"enabled":false`, `"host":"127.0.0.1"`} {
+	for _, expected := range []string{`"health_check_path":""`, `"health_check_interval":10`, `"health_check_timeout":5`, `"health_check_unhealthy_threshold":3`, `"health_check_healthy_threshold":2`, `"enabled":false`, `"host":"127.0.0.1"`} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("list body missing %s: %s", expected, response.Body.String())
 		}

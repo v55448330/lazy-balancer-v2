@@ -1009,7 +1009,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			COALESCE(ca_provider_id,0),
 			COALESCE(enable_tls,0), COALESCE(tls_http_redirect,0),
 			COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
-			COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,2),
+			COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,5),
 			COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
 			COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
 		COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0),
@@ -1270,12 +1270,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// 时仅提交 {"enabled":true} 会绕过遮蔽检查）。
 		// R40 F-1: 启用态门控收敛为仅启用方向——禁用方不渲染，遮蔽检查无意义；
 		// 存量冲突组合（80 直听启用 + 443 TLS+跳转启用同域名）的禁用操作不应被 400 误拦。
+		// R41 C-2: 门控再加启用状态前置——仅当「新状态启用 或 原状态启用」时才可能产生
+		// 运行时影响。禁用中规则（双方均 disabled）不会被渲染，此时改 TLS/跳转/端口/域名
+		// 仍被 400 拦截会阻塞「先改好禁用方配置再启用」的正常流程（启用方向仍会二次把关）。
 		shadowRelevantChanged := req.Domain != existingDomain ||
 			req.ListenPort != existingRule.ListenPort ||
 			*req.EnableTLS != existingRule.EnableTLS ||
 			*req.TLSHTTPRedirect != existingRule.TLSHTTPRedirect ||
 			(*req.Enabled && !existingRule.Enabled)
-		if shadowRelevantChanged {
+		if shadowRelevantChanged && (*req.Enabled || existingRule.Enabled) {
 			shadowRule, shadowDomain, err := queryRedirectShadowConflict(req.Domain, req.ListenPort, *req.EnableTLS, *req.TLSHTTPRedirect, caddyID)
 			if err != nil {
 				log.Printf("UpdateRule redirect shadow query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)

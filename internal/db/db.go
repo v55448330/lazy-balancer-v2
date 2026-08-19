@@ -222,6 +222,8 @@ func createTables() error {
 		dns_family VARCHAR(20) DEFAULT 'ipv4',
 		health_check_path VARCHAR(255),
 		health_check_interval INTEGER DEFAULT 10,
+		-- R41 C-3: schema 默认仅新库/重建生效（SQLite 不支持 ALTER COLUMN DEFAULT）；
+		-- 存量行 health_check_timeout 值不变；全部生产 INSERT 显式带值，DEFAULT 惰性。
 		health_check_timeout INTEGER DEFAULT 5,
 		health_check_unhealthy_threshold INTEGER DEFAULT 3,
 		health_check_healthy_threshold INTEGER DEFAULT 2,

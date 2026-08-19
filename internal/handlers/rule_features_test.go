@@ -803,7 +803,7 @@ func simulateLegacyNullableLbRules(t *testing.T, database *sql.DB) {
 		dns_family VARCHAR(20) DEFAULT 'ipv4',
 		health_check_path VARCHAR(255),
 		health_check_interval INTEGER DEFAULT 10,
-		health_check_timeout INTEGER DEFAULT 2,
+		health_check_timeout INTEGER DEFAULT 5,
 		health_check_unhealthy_threshold INTEGER DEFAULT 3,
 		health_check_healthy_threshold INTEGER DEFAULT 2,
 		enable_active_health_check BOOLEAN DEFAULT FALSE,
