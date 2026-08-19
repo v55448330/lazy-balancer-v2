@@ -84,6 +84,11 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	rulesPath := filepath.Join(m.crsDir, "rules")
 	rulesBak := filepath.Join(m.crsDir, "rules.bak")
 	os.RemoveAll(rulesBak)
+	// 陈旧 overrides 备份不跨运行存活（R38 三-2）：上次运行在 reload 成功与清理
+	// 之间崩溃会留下 N-1 版 zz-user-overrides.conf.bak；若本次 diff 为空（迁移
+	// 与备份块整体跳过），restoreBackup 会把 overrides 还原到两版本之前的内容。
+	// 与 rules.bak 的 RemoveAll 同处无条件清理，口径一致。
+	os.Remove(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"))
 	if _, err := os.Stat(rulesPath); err == nil {
 		// Copy-based backup: the live rules dir may be baked into an image
 		// lower layer, where rename is impossible (EXDEV on overlayfs).
@@ -235,12 +240,17 @@ func (m *CRSUpdateManager) restoreBackup() {
 	if _, err := os.Stat(overridesBak); err != nil {
 		return
 	}
+	// 仅还原成功才消费 .bak（R38 三-1）：内容还原或空标记移除失败时保留备份，
+	// 否则「旧 setup + 新 overrides」双重应用状态失去唯一恢复副本、不可自愈
+	// （对照上方 setup 段：copyFile 失败即 return，setup.bak 保留）。
 	if data, err := os.ReadFile(overridesBak); err == nil && len(data) == 0 {
 		if err := os.Remove(overridesPath); err != nil && !os.IsNotExist(err) {
 			log.Printf("crs update: failed to remove migrated zz-user-overrides.conf: %v", err)
+			return
 		}
 	} else if err := copyFile(overridesBak, overridesPath); err != nil {
 		log.Printf("crs update: failed to restore zz-user-overrides.conf backup: %v", err)
+		return
 	}
 	os.Remove(overridesBak)
 }

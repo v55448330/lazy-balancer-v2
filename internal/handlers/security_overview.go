@@ -12,13 +12,14 @@ import (
 
 // GetSecurityRateLimitBlocks 返回各站点被限流（HTTP 429, handler=rate_limit）拦截的
 // 累计次数，数据来自 Caddy admin /metrics。注意口径：计数自 Caddy 进程启动以来
-// 累计，重启即归零（前端按"累计拦截"标注）。采集失败时降级为空列表返回 200，
-// 不影响安全总览页其余区块。
+// 累计，重启即归零（前端按"累计拦截"标注）。抓取失败返回 500：降级为空列表会让
+// 「Caddy 指标不可达」与「暂无限流拦截」不可区分，面板错误态需可达（R38 三-4）。
 func (h *Handlers) GetSecurityRateLimitBlocks(c *gin.Context) {
 	blocks, err := services.ScrapeRateLimitBlocks(h.cfg.CaddyMetricsURL)
 	if err != nil {
 		log.Printf("Scrape rate-limit blocks failed: %v", err)
-		blocks = []services.RateLimitHostBlocks{}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "限流拦截数据不可用"})
+		return
 	}
 	var total float64
 	for _, block := range blocks {

@@ -419,15 +419,21 @@ func (h *Handlers) GetSecurityPolicy(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"policy": newSecurityPolicyDetail(&p), "bindings": bindings}})
 }
 
+// policyQueryRower 抽象 *sql.DB 与 *sql.Tx 的单行查询，供引用校验在写事务内执行
+// （R38 三-3：校验+写入同事务，镜像 R37 I1 的删除侧事务）。
+type policyQueryRower interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 // validateSecurityPolicyReferences 校验策略引用的拦截页面与自定义规则存在性：
 // block_page_id 非 0 时必须在 security_block_pages 中存在，否则拦截响应静默退化
 // 回 Caddy 默认页面；custom_rules 为 ID 数组时每个 ID 必须存在，悬空引用在发射
-// 阶段被静默跳过。内嵌对象形状随策略存储，不在此校验。返回非空 msg 表示校验
-// 失败（400），返回 err 表示数据库错误（500）。
-func validateSecurityPolicyReferences(blockPageID int, customRulesJSON string) (string, error) {
+// 阶段被静默跳过。内嵌对象形状随策略存储，不在此校验。查询在调用方提供的
+// 事务/连接上执行。返回非空 msg 表示校验失败（400），返回 err 表示数据库错误（500）。
+func validateSecurityPolicyReferences(q policyQueryRower, blockPageID int, customRulesJSON string) (string, error) {
 	if blockPageID != 0 {
 		var exists int
-		if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_block_pages WHERE id=?", blockPageID).Scan(&exists); err != nil {
+		if err := q.QueryRow("SELECT COUNT(*) FROM security_block_pages WHERE id=?", blockPageID).Scan(&exists); err != nil {
 			return "", err
 		}
 		if exists == 0 {
@@ -438,7 +444,7 @@ func validateSecurityPolicyReferences(blockPageID int, customRulesJSON string) (
 	if customRulesJSON != "" && json.Unmarshal([]byte(customRulesJSON), &ids) == nil {
 		for _, id := range ids {
 			var exists int
-			if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_custom_rules WHERE id=?", id).Scan(&exists); err != nil {
+			if err := q.QueryRow("SELECT COUNT(*) FROM security_custom_rules WHERE id=?", id).Scan(&exists); err != nil {
 				return "", err
 			}
 			if exists == 0 {
@@ -520,7 +526,19 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	if msg, err := validateSecurityPolicyReferences(req.BlockPageID, req.CustomRules); err != nil {
+	// 引用校验与写入必须同事务（R38 三-3，R37 I1 的镜像方向）：校验通过后、
+	// INSERT 之前并发的 DeleteSecurityCustomRule/DeleteSecurityBlockPage 提交（此时
+	// 尚无启用策略引用，删除合法）会让写入的启用策略携带悬空引用，发射端仅日志
+	// 跳过、WAF 规则静默丢失。写锁来自 DSN 的 _txlock=immediate（glebarez 驱动
+	// 忽略 TxOptions.Isolation，非只读 BeginTx 一律 BEGIN IMMEDIATE）：校验 SELECT
+	// 即持写锁，并发的删除无法在校验与 INSERT 之间提交。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		return
+	}
+	defer tx.Rollback()
+	if msg, err := validateSecurityPolicyReferences(tx, req.BlockPageID, req.CustomRules); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	} else if msg != "" {
@@ -531,7 +549,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	result, err := db.DB.Exec(`INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
+	result, err := tx.ExecContext(c.Request.Context(), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
 		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, waf_check_response, updated_by)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, req.IPBlacklist,
@@ -541,6 +559,10 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		return
 	}
 	id, _ := result.LastInsertId()
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
 	services.RecordAuditLog(getContextUserID(c), "创建", "安全策略", fmt.Sprintf("名称：%s（#%d）", req.Name, id), "")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略创建成功" + h.caddyApplyNote(), Data: gin.H{"id": id}})
 }
@@ -658,9 +680,20 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			req.CustomRules = &empty
 		}
 	}
+	// 引用校验与写入必须同事务（R38 三-3，R37 I1 的镜像方向）：校验通过后、
+	// UPDATE 之前并发的规则/拦截页删除提交会让写入的启用策略携带悬空引用，
+	// 发射端仅日志跳过、WAF 规则静默丢失。写锁来自 DSN 的 _txlock=immediate
+	// （非只读 BeginTx 一律 BEGIN IMMEDIATE）：校验 SELECT 即持写锁，并发的删除
+	// 无法在校验与 UPDATE 之间提交（同 CreateSecurityPolicy）。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		return
+	}
+	defer tx.Rollback()
 	// 引用存在性校验：显式提供的 block_page_id / custom_rules（ID 数组）必须指向
 	// 存在的拦截页/规则；未提供的字段不参与校验（保持存量列不变）。
-	if msg, err := validateSecurityPolicyReferences(derefInt(req.BlockPageID), derefStr(req.CustomRules)); err != nil {
+	if msg, err := validateSecurityPolicyReferences(tx, derefInt(req.BlockPageID), derefStr(req.CustomRules)); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	} else if msg != "" {
@@ -732,13 +765,17 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addBool("enabled", req.Enabled)
 	query += ", updated_by=? WHERE id=?"
 	args = append(args, getContextUserIDInt(c), id)
-	result, err := db.DB.Exec(query, args...)
+	result, err := tx.ExecContext(c.Request.Context(), query, args...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	if rows, _ := result.RowsAffected(); rows == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "更新", "安全策略", fmt.Sprintf("策略 #%s", id), "")

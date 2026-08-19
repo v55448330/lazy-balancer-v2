@@ -72,28 +72,17 @@ func TestGetSecurityRateLimitBlocks_returnsTotalsAndHosts(t *testing.T) {
 	}
 }
 
-func TestGetSecurityRateLimitBlocks_scrapeFailureDegradesToEmpty(t *testing.T) {
+func TestGetSecurityRateLimitBlocks_scrapeFailureReturns500(t *testing.T) {
 	// Given an unreachable Caddy metrics endpoint
 	router := newRateLimitBlocksRouter("http://127.0.0.1:1/metrics")
 
 	// When the endpoint is requested
 	recorder := getRequest(t, router, "/security/rate-limit-blocks")
 
-	// Then it still answers 200 with an empty breakdown
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%q, want 200", recorder.Code, recorder.Body.String())
-	}
-	var payload rateLimitBlocksPayload
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if payload.Code != 0 {
-		t.Errorf("code=%d, want 0", payload.Code)
-	}
-	if payload.Data.Total != 0 {
-		t.Errorf("total=%v, want 0", payload.Data.Total)
-	}
-	if payload.Data.Hosts == nil || len(payload.Data.Hosts) != 0 {
-		t.Errorf("hosts=%+v, want empty (non-nil) list", payload.Data.Hosts)
+	// Then the scrape failure surfaces as 500 so the frontend error state is
+	// reachable（R38 三-4：200+空列表会让「Caddy 指标不可达」与「暂无限流拦截」
+	// 不可区分，前端 catch 路径已就绪）
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%q, want 500", recorder.Code, recorder.Body.String())
 	}
 }

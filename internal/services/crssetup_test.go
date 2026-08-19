@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -182,6 +183,103 @@ func TestCRSUpdateRun_rollbackRestoresPreviousLiveSetup(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
 		t.Fatal("zz-user-overrides.conf.bak should be consumed")
+	}
+}
+
+// TestRestoreBackup_restoreFailureKeepsOverridesBak 验证 overrides 内容还原失败时
+// 保留 .bak——唯一恢复副本不得在失败路径被销毁，否则「旧 setup + 新 overrides」
+// 双重应用状态失去恢复副本、不可自愈（R38 三-1，对照 setup 段失败即保留的行为）。
+func TestRestoreBackup_restoreFailureKeepsOverridesBak(t *testing.T) {
+	// Given backups in place and a restore target occupied by a directory
+	// (copyFile's WriteFile fails with EISDIR)
+	m := newTestCRSManager(t)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
+	if err := os.Mkdir(filepath.Join(m.crsDir, "zz-user-overrides.conf"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "# 更新前 overrides\nSecRuleARCustom 1")
+
+	// When the backup is restored
+	m.restoreBackup()
+
+	// Then the failed overrides restore keeps the only recovery copy
+	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); err != nil {
+		t.Fatal("zz-user-overrides.conf.bak 不得在还原失败时被删除（R38 三-1）")
+	}
+	// And the independent setup/rules restore still completes
+	setup, _ := os.ReadFile(filepath.Join(m.crsDir, "crs-setup.conf"))
+	if string(setup) != "# previous" {
+		t.Fatalf("crs-setup.conf=%q, want restored backup", setup)
+	}
+	if _, err := os.Stat(filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf")); err != nil {
+		t.Fatal("rules backup should have been restored")
+	}
+}
+
+// TestRestoreBackup_emptyMarkerRemoveFailureKeepsMarker 验证空 .bak 标记分支的
+// os.Remove(overrides) 失败时同样保留标记，下次还原可重试（R38 三-1）。
+func TestRestoreBackup_emptyMarkerRemoveFailureKeepsMarker(t *testing.T) {
+	// Given backups in place and a freshly created overrides path that cannot
+	// be removed (non-empty directory → ENOTEMPTY)
+	m := newTestCRSManager(t)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
+	if err := os.MkdirAll(filepath.Join(m.crsDir, "zz-user-overrides.conf", "sub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "")
+
+	// When the backup is restored
+	m.restoreBackup()
+
+	// Then the empty marker survives so a later restore can retry
+	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); err != nil {
+		t.Fatal("空标记不得在移除失败时被消费（R38 三-1）")
+	}
+}
+
+// TestCRSUpdateRun_staleOverridesBakNotSurvivesFailedRun 验证陈旧 overrides.bak
+// 不跨运行存活（R38 三-2）：上次运行在 reload 成功与清理之间崩溃留下的 N-1 版
+// .bak 在本运行开始时即被清理；本次 diff 为空（无迁移、无新备份）且安装失败时，
+// overrides 保持更新前内容、不被两版本前的陈旧备份还原。
+func TestCRSUpdateRun_staleOverridesBakNotSurvivesFailedRun(t *testing.T) {
+	// Given a live setup identical to the stock baseline (empty diff) plus a
+	// stale overrides backup left by a crashed previous run
+	m := newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.14.0", true)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "stock-a\nstock-b\n")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.stock.conf"), "stock-a\nstock-b\n")
+	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf"), "# 当前 overrides\nSecRuleARCustom 2")
+	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "# 两版本前的 overrides\nSecRuleARCustom 1")
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
+	m.downloadTarball = fakeCRSDownload(t, map[string]string{
+		"coreruleset-4.15.0/crs-setup.conf.example": "stock-a\nstock-b\n",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf": "SecRule a\n",
+	})
+	m.reloader = func() error { return errors.New("注入的重载失败") }
+
+	// When the update fails after installing the new rules (restoreBackup runs)
+	m.run("manual")
+
+	// Then the run failed
+	_, status, _, _, _, _, _ := crsVersionRow(t)
+	if status != "failed" {
+		t.Fatalf("update_status=%q, want failed", status)
+	}
+	// And the overrides were not polluted by the two-versions-stale backup:
+	// the stale .bak was removed at run start and the empty diff created no
+	// fresh one, so restoreBackup leaves overrides untouched
+	data, err := os.ReadFile(filepath.Join(m.crsDir, "zz-user-overrides.conf"))
+	if err != nil || string(data) != "# 当前 overrides\nSecRuleARCustom 2" {
+		t.Fatalf("zz-user-overrides.conf=%q,%v, want untouched current content（陈旧 bak 不得还原两版本前内容）", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
+		t.Fatal("陈旧 zz-user-overrides.conf.bak 应在本运行开始时被清理（R38 三-2）")
 	}
 }
 
