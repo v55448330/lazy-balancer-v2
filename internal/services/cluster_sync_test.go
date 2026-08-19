@@ -928,6 +928,25 @@ func TestSyncService_Stop_returns_when_run_is_waiting_before_pull_admission(t *t
 	waitSyncTest(t, stopped)
 }
 
+func TestSyncService_StartStop_resetsWafRepullFailures(t *testing.T) {
+	// R40 N-1 回归：角色切换/Stop-Start 复用同一 SyncService 实例时，
+	// wafRepullFailures 必须清零，否则陈旧计数会让新会话首次漂移重拉被降频延迟。
+	service := &SyncService{}
+	service.runFn = func(ctx context.Context) { <-ctx.Done() }
+
+	service.wafRepullFailures = 7
+	service.Start()
+	if got := service.wafRepullFailures; got != 0 {
+		t.Fatalf("wafRepullFailures=%d after Start, want 0", got)
+	}
+
+	service.wafRepullFailures = 9
+	service.Stop()
+	if got := service.wafRepullFailures; got != 0 {
+		t.Fatalf("wafRepullFailures=%d after Stop, want 0", got)
+	}
+}
+
 func signedTestSnapshot(version int, token string) models.ClusterSnapshot {
 	snapshot := models.ClusterSnapshot{
 		Version: version, SchemaVersion: CurrentSnapshotSchema, MinReaderVersion: CurrentSnapshotSchema,
@@ -1103,7 +1122,7 @@ func TestSyncService_Pull_refetchesFullSnapshotOnWafFileDrift(t *testing.T) {
 func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testing.T) {
 	// F-1 端到端：apply 期安全数据拉取持续失败时，304 分支的 WAF 兜底重拉
 	// 每 60s 一轮无限循环打主从负载。连续 ≥wafRepullMaxFailures 轮未收敛后
-	// 必须：1) last_sync_error 上表面「安全数据持续同步失败（已重试 N 次）」
+	// 必须：1) last_sync_error 上表面「安全数据持续同步失败（已连续 N 轮未收敛）」
 	// （节点页面可见）；2) 兜底重拉降频为每 wafRepullEvery 轮一次；3) 恢复
 	// 收敛后计数清零、last_sync_error 清空、重拉恢复正常。
 	_, database := newClusterTestService(t)
@@ -1216,8 +1235,8 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 	if service.wafRepullFailures != wafRepullMaxFailures {
 		t.Fatalf("wafRepullFailures=%d, want %d", service.wafRepullFailures, wafRepullMaxFailures)
 	}
-	if msg := lastSyncError(); !strings.Contains(msg, "安全数据持续同步失败") || !strings.Contains(msg, "已重试 5 次") {
-		t.Fatalf("last_sync_error=%q, want 持续失败文案（已重试 5 次）", msg)
+	if msg := lastSyncError(); !strings.Contains(msg, "安全数据持续同步失败") || !strings.Contains(msg, "已连续 5 轮未收敛") {
+		t.Fatalf("last_sync_error=%q, want 持续失败文案（已连续 5 轮未收敛）", msg)
 	}
 
 	// 降频期（第 6..9 轮）：兜底重拉被跳过，每轮只有一次 304 请求，
@@ -1231,8 +1250,8 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 
 	// 第 10 轮：计数器 % 10 == 0，重拉一次并刷新计数文案。
 	pullRound(wafRepullEvery, true)
-	if msg := lastSyncError(); !strings.Contains(msg, "已重试 10 次") {
-		t.Fatalf("last_sync_error=%q, want 已重试 10 次", msg)
+	if msg := lastSyncError(); !strings.Contains(msg, "已连续 10 轮未收敛") {
+		t.Fatalf("last_sync_error=%q, want 已连续 10 轮未收敛", msg)
 	}
 
 	// 主节点恢复：从第 11 轮起仍是降频期（第 20 轮才重拉），重拉后收敛。

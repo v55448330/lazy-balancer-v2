@@ -1247,7 +1247,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// 变化时才执行（ruleDomainConflict 只统计 enabled=1 的规则）。导入遗留的
 		// 「一启用一禁用同域名」组合中，禁用方仅改名等无关更新不再被 400 卡死；
 		// 启用态变化仍走检查（启用时二次把关，与 enabledRuleDomainConflict 口径一致）。
-		if req.Domain != existingDomain || req.ListenPort != existingRule.ListenPort || *req.Enabled != existingRule.Enabled {
+		// R40 F-1: 启用态门控收敛为仅启用方向（*req.Enabled && !existingRule.Enabled）——
+		// 禁用方向不渲染、无冲突可言，存量冲突组合（同域名同端口双启用）的禁用操作
+		// 不应被 400 误拦（DisableRule 端点本就不查，口径对齐）。
+		if req.Domain != existingDomain || req.ListenPort != existingRule.ListenPort || (*req.Enabled && !existingRule.Enabled) {
 			existing, err := ruleDomainConflict(req.Domain, req.ListenPort, caddyID)
 			if err != nil {
 				log.Printf("UpdateRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)
@@ -1265,11 +1268,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// R39 C-2: Enabled 变化也触发——与 EnableRule 端点同口径，禁用规则经 UpdateRule
 		// 启用时同样拦截会遮蔽 80 直听规则的跳转组合（shadowRelevantChanged 不含 enabled
 		// 时仅提交 {"enabled":true} 会绕过遮蔽检查）。
+		// R40 F-1: 启用态门控收敛为仅启用方向——禁用方不渲染，遮蔽检查无意义；
+		// 存量冲突组合（80 直听启用 + 443 TLS+跳转启用同域名）的禁用操作不应被 400 误拦。
 		shadowRelevantChanged := req.Domain != existingDomain ||
 			req.ListenPort != existingRule.ListenPort ||
 			*req.EnableTLS != existingRule.EnableTLS ||
 			*req.TLSHTTPRedirect != existingRule.TLSHTTPRedirect ||
-			*req.Enabled != existingRule.Enabled
+			(*req.Enabled && !existingRule.Enabled)
 		if shadowRelevantChanged {
 			shadowRule, shadowDomain, err := queryRedirectShadowConflict(req.Domain, req.ListenPort, *req.EnableTLS, *req.TLSHTTPRedirect, caddyID)
 			if err != nil {

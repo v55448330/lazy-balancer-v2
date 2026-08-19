@@ -658,6 +658,11 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		Content string `json:"content"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		// R40 F-2: MaxBytesReader 超限（chunked/未知 ContentLength）映射 413，与导入路径口径一致
+		if isRequestBodyTooLarge(err) {
+			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
 		return
 	}

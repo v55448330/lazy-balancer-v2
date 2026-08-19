@@ -111,7 +111,8 @@ type SyncService struct {
 	beforeApplySnapshot    func()
 	beforeRecordSyncStatus func()
 	// wafRepullFailures 记录 WAF 文件兜底重拉的连续未收敛轮数（内存态；仅在
-	// Pull 的 pullMu 临界区内读写，无并发访问）。连续未收敛达到
+	// Pull 的 pullMu 临界区内读写，生命周期函数 startLocked/Stop 在 worker
+	// 未运行/已停止时清零复位，无并发访问）。连续未收敛达到
 	// wafRepullMaxFailures 轮后：把「安全数据持续同步失败」上表面到
 	// last_sync_error（节点页面可见），并把兜底重拉降频为每 wafRepullEvery
 	// 轮一次；收敛后清零恢复正常。
@@ -417,6 +418,9 @@ func (s *SyncService) startLocked(resume bool) {
 	s.cancel = cancel
 	done := make(chan struct{})
 	s.done = done
+	// 角色切换/重启复用同一实例：清零 WAF 兜底重拉连续未收敛计数，
+	// 避免陈旧计数让新会话首次漂移重拉被降频延迟（R40 N-1）。
+	s.wafRepullFailures = 0
 	s.state.Store(uint32(syncStateRunning))
 	go func() {
 		if s.runFn != nil {
@@ -461,6 +465,8 @@ func (s *SyncService) Stop() {
 		<-done
 	}
 	s.pullWG.Wait()
+	// 防御性清零：与 startLocked 配对，确保 Stop 后实例处于干净状态（R40 N-1）。
+	s.wafRepullFailures = 0
 	if syncLifecycleState(s.state.Load()) != syncStateHalted {
 		s.state.Store(uint32(syncStateStopped))
 	}
@@ -741,12 +747,13 @@ func (s *SyncService) trackWafRepullConvergence() {
 	}
 }
 
-// persistWafRepullFailure 把「安全数据持续同步失败（已重试 N 次）」上表面到
-// last_sync_error（节点页面可见）。经 combineOrReplaceSyncError 复用
+// persistWafRepullFailure 把「安全数据持续同步失败（已连续 N 轮未收敛）」上表面到
+// last_sync_error（节点页面可见）。计数器兼作退避时钟，N 的语义是「自首次检测到
+// 漂移起的同步轮数」而非真实重拉次数（R40 N-2）。经 combineOrReplaceSyncError 复用
 // apply_ok_reload_failed 标记保护语义：TransportError 属可恢复类，标记存在
 // 时组合保留，不破坏 304 补偿通道。
 func (s *SyncService) persistWafRepullFailure(ctx context.Context) {
-	message := fmt.Sprintf("安全数据持续同步失败（已重试 %d 次）", s.wafRepullFailures)
+	message := fmt.Sprintf("安全数据持续同步失败（已连续 %d 轮未收敛）", s.wafRepullFailures)
 	s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeTransportError)
 }
 

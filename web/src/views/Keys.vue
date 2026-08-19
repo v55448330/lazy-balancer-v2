@@ -470,20 +470,12 @@ const normalizeCidr = (rawValue: string): string => {
   return value.includes(':') ? `${value}/128` : `${value}/32`
 }
 
-const parseWhitelist = (value: string[] | string): string => {
-  if (Array.isArray(value)) return value.join('\n')
-  if (!value) return ''
-  try {
-    const parsed: unknown = JSON.parse(value)
-    return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed.join('\n') : ''
-  } catch {
-    return ''
-  }
-}
+// 后端契约恒为 string[]（internal/models/models.go APIKey/APIKeyResponse），无需 string 兼容分支
+const parseWhitelist = (value: readonly string[]): string => value.join('\n')
 
-const whitelistEntries = (value: string[] | string): string[] => parseWhitelist(value).split('\n').filter(Boolean)
+const whitelistEntries = (value: readonly string[]): string[] => parseWhitelist(value).split('\n').filter(Boolean)
 
-const whitelistSummary = (value: string[] | string): string => {
+const whitelistSummary = (value: readonly string[]): string => {
   const entries = whitelistEntries(value)
   const preview = entries.slice(0, 3).join('、')
   return `${entries.length} 条：${preview}${entries.length > 3 ? ' 等' : ''}`

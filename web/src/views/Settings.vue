@@ -172,7 +172,8 @@ const applyCaddyKeys = (data: ConfigPayload) => {
   settings.value.proxy_stream_close_delay = data.proxy_stream_close_delay ?? 0
   settings.value.server_tokens_hidden = data.server_tokens_hidden ?? false
   settings.value.access_log_json = data.access_log_json ?? true
-  settings.value.access_log_format = data.access_log_format || settings.value.access_log_format
+  // 空格式需双向一致：DB 为空时 UI 同步清空，避免旧模板被下次保存写回 DB（S-2）
+  settings.value.access_log_format = data.access_log_format ?? ''
 }
 
 const applyCertKeys = (data: ConfigPayload) => {
