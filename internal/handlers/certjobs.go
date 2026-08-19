@@ -302,7 +302,15 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		// SELECT(:254) 与 UPDATE 之间状态可能被 worker 流转（如 failed→creating_account），
 		// 导致 0 行影响；此时归因是并发竞争而非规则禁用，重读当前状态区分文案（R42 发现4）。
 		var currentStatus string
-		if scanErr := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", id).Scan(&currentStatus); scanErr == nil && currentStatus != status {
+		scanErr := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", id).Scan(&currentStatus)
+		if scanErr != nil {
+			// 重读失败属瞬时 DB 错误（SQLITE_BUSY 等），归因为规则禁用会误导用户，
+			// 显式区分 500（R43 A-3）。
+			log.Printf("RetryCertJob reread job %d status failed: %v", id, scanErr)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取任务状态失败"})
+			return
+		}
+		if currentStatus != status {
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务状态已变更，请刷新后重试"})
 			return
 		}

@@ -52,6 +52,10 @@ var (
 // （注册 30s + DNS 传播 5m + 验证 10m + 订单就绪 3m + 订单有效 5m ≈ 23.5m）
 const caExecutionTimeout = 30 * time.Minute
 
+// caQueueDrainTimeout 上限 PauseAndDrain 等待队列执行退出；issuer 异常不响应
+// ctx 取消时等待永不返回，进程 Stop 会被永久挂起（R43 A-2，与 CancelJob 30s 同口径）。
+const caQueueDrainTimeout = 30 * time.Second
+
 // InitCAQueueManager initializes the singleton queue manager with the given
 // Caddy reloader. It must be called once during application startup before
 // GetCAQueueManager is used.
@@ -165,11 +169,16 @@ func (m *CAQueueManager) CancelJobsForRule(ctx context.Context, ruleID string) e
 		cancel()
 	}
 	done = append(done, deploymentDone...)
+	// 在途执行退出等待除 ctx 外还需 30s 上限：客户端不断连时 ctx.Done 不触发，
+	// issuer 异常不响应取消会把 DeleteRule 等 HTTP 调用方永久挂起（R43 A-2，
+	// 与 CancelJob 的 30s 模式同款）。
 	for _, executionDone := range done {
 		select {
 		case <-executionDone:
 		case <-ctx.Done():
 			return fmt.Errorf("等待规则 %s 的证书任务退出: %w", ruleID, ctx.Err())
+		case <-time.After(30 * time.Second):
+			Logf("warn", "取消规则 %s 证书任务：等待在途执行退出超时（30s），继续后续流程", ruleID)
 		}
 	}
 	return nil
@@ -455,7 +464,9 @@ func (m *CAQueueManager) EnqueueIfActive(providerID int, jobID int, ruleID, doma
 		return jobID, false, nil
 	}
 	if len(m.blockedRules[ruleID]) != 0 {
-		return jobID, false, fmt.Errorf("certificate queue admission blocked for rule %s", ruleID)
+		// 规则删除屏障期按冲突语义处理：返回 changed=false 让 handler 走 !changed
+		// 分支回 409，而不是把暂时性屏障当成 500 服务器错误（R43 A-4）。
+		return jobID, false, nil
 	}
 	jobID, changed, err := transition()
 	if err != nil || !changed {
@@ -752,7 +763,18 @@ func (q *caQueue) stop() {
 
 func (q *caQueue) wait() {
 	<-q.loopDone
-	q.executions.Wait()
+	// executions.Wait 必须套 30s 上限：issuer 异常不响应 ctx 取消时 Wait 永不返回，
+	// PauseAndDrain/进程 Stop 会被永久挂起（R43 A-2，与 CancelJob 同口径）。
+	done := make(chan struct{})
+	go func() {
+		q.executions.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(caQueueDrainTimeout):
+		Logf("warn", "CA 队列暂停：等待在途执行退出超时（%s），继续关闭流程", caQueueDrainTimeout)
+	}
 }
 
 func requeueCanceledJob(jobID int) {

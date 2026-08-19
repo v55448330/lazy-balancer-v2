@@ -1222,9 +1222,11 @@ func (s *SyncService) run(ctx context.Context) {
 				retryDelay = time.Second
 			}
 		}
-		// 存量脏数据兜底：R42 前 sync_interval 无下限校验，库里可能残留 0/负数，
-		// time.NewTimer(<=0) 会立即触发导致零间隔 Pull 风暴；clamp 到 60s。
-		if interval < 1 {
+		// 存量脏数据兜底：R42 前 sync_interval 无下限校验，库里可能残留 0/负数
+		// 或校验下限（10s）以下的值（含被主节点经快照原样下发的存量 1-9s），
+		// time.NewTimer(<=0) 会立即触发导致零间隔 Pull 风暴，1-9s 同样是 R42
+		// 要消除的高频 Pull；clamp 到 60s，下限与 UpdateSettings 校验一致（R43 A-1）。
+		if interval < 10 {
 			interval = 60
 		}
 		delay := time.Duration(interval) * time.Second

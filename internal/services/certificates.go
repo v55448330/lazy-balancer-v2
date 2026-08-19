@@ -344,8 +344,19 @@ func (s *CertificateService) pauseDeploymentRetries() {
 		}
 	}
 	s.timerMu.Unlock()
+	// 在途回调退出等待必须有界（与 cancelDeploymentRetry 同模式，R43 A-2）：
+	// 回调链条调到非 context-aware 的 caddyReloader，Caddy admin 请求异常挂起时
+	// 配置导入/进程 Stop 会被永久挂起。
+	waitTimeout := s.cancelWaitTimeout
+	if waitTimeout <= 0 {
+		waitTimeout = 30 * time.Second
+	}
 	for _, done := range waitFor {
-		<-done
+		select {
+		case <-done:
+		case <-time.After(waitTimeout):
+			Logf("warn", "暂停证书部署重试：等待在途回调退出超时（%s），继续后续流程", waitTimeout)
+		}
 	}
 }
 
