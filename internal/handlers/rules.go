@@ -1235,27 +1235,33 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				return
 			}
 		}
-		existing, err := ruleDomainConflict(req.Domain, req.ListenPort, caddyID)
-		if err != nil {
-			log.Printf("UpdateRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
-			return
-		}
-		if existing {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名已被其他 HTTP/HTTPS 规则使用"})
-			return
-		}
-		// Round 29 G-5: 仅当域名/监听端口/EnableTLS/TLSHTTPRedirect 任一相对存量变化时
-		// 执行遮蔽检查（fallback 已把 req 字段填成现值，直接与 existingRule 比较）——
-		// 存量冲突组合（导入态 80 规则 + 跳转规则并存）下仅改名称/健康检查不应被 400 阻塞。
-		// Round 30 F-5: existingRule.Domain 可能为导入态非规范化值（"Example.COM"），
-		// 与规范化后的 req.Domain 比较会误触发遮蔽检查，比较前先做同样规范化。
+		// Round 30 F-5 / R38 C-2: existingRule.Domain 可能为导入态非规范化值
+		//（"Example.COM"），与规范化后的 req.Domain 比较会误判变更，比较前先做同样规范化。
 		existingDomain := existingRule.Domain
 		if existingDomain != "" {
 			if canonical, err := db.CanonicalDomains(existingDomain); err == nil {
 				existingDomain = canonical
 			}
 		}
+		// R38 C-2: 域名冲突检查同样加变更门控——仅当域名/监听端口/启用态相对存量
+		// 变化时才执行（ruleDomainConflict 只统计 enabled=1 的规则）。导入遗留的
+		// 「一启用一禁用同域名」组合中，禁用方仅改名等无关更新不再被 400 卡死；
+		// 启用态变化仍走检查（启用时二次把关，与 enabledRuleDomainConflict 口径一致）。
+		if req.Domain != existingDomain || req.ListenPort != existingRule.ListenPort || *req.Enabled != existingRule.Enabled {
+			existing, err := ruleDomainConflict(req.Domain, req.ListenPort, caddyID)
+			if err != nil {
+				log.Printf("UpdateRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
+				return
+			}
+			if existing {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名已被其他 HTTP/HTTPS 规则使用"})
+				return
+			}
+		}
+		// Round 29 G-5: 仅当域名/监听端口/EnableTLS/TLSHTTPRedirect 任一相对存量变化时
+		// 执行遮蔽检查（fallback 已把 req 字段填成现值，直接与 existingRule 比较）——
+		// 存量冲突组合（导入态 80 规则 + 跳转规则并存）下仅改名称/健康检查不应被 400 阻塞。
 		shadowRelevantChanged := req.Domain != existingDomain ||
 			req.ListenPort != existingRule.ListenPort ||
 			*req.EnableTLS != existingRule.EnableTLS ||

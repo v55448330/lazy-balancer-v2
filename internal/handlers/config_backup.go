@@ -264,7 +264,39 @@ func validateV2Backup(backup configBackup) error {
 			backup.Tables[table] = []map[string]any{}
 		}
 	}
-	for index, rule := range backup.Tables["lb_rules"] {
+	for _, job := range backup.Tables["cert_jobs"] {
+		status, ok := job["status"].(string)
+		if !ok {
+			return errors.New("证书任务状态不能为空")
+		}
+		if _, allowed := configBackupCertJobStatuses[status]; !allowed {
+			return fmt.Errorf("无效的证书任务状态: %s", status)
+		}
+	}
+	const invalidCredentialsMsg = "备份包含无效的凭证格式（ca_providers.credentials / certificate_configs.dns_credentials 需为 JSON 对象）"
+	for _, provider := range backup.Tables["ca_providers"] {
+		if err := validateCredentialsJSONObject(backupString(provider["credentials"])); err != nil {
+			return errors.New(invalidCredentialsMsg)
+		}
+	}
+	for _, certCfg := range backup.Tables["certificate_configs"] {
+		if err := validateCredentialsJSONObject(backupString(certCfg["dns_credentials"])); err != nil {
+			return errors.New(invalidCredentialsMsg)
+		}
+	}
+	for _, user := range backup.Tables["users"] {
+		if role, _ := user["role"].(string); role == "admin" && backupBooleanEnabled(user["is_enabled"]) {
+			return nil
+		}
+	}
+	return errors.New("备份必须至少包含一个已启用的管理员账号")
+}
+
+// validateV2BackupRules 逐行校验备份 lb_rules 的端口与特性（校验侧保守口径）。
+// 必须在 skipEmptyDomainHTTPRules 之后执行（R38 C-3）：空域名行无论端口/特性
+// 是否非法都一律软跳过，不被逐行校验先行整包 400。
+func validateV2BackupRules(rows, pathRows []map[string]any) error {
+	for index, rule := range rows {
 		protocol, _ := rule["protocol"].(string)
 		listenPort, validPort := backupInteger(rule["listen_port"])
 		if !validPort {
@@ -299,7 +331,7 @@ func validateV2Backup(backup configBackup) error {
 			EnableCompress:             backupBooleanEnabled(rule["enable_compress"]),
 			CompressTypes:              backupString(rule["compress_types"]),
 		}
-		if pathRules, found := backupPathRulesForRule(backup.Tables["path_rules"], backupString(rule["caddy_id"])); found {
+		if pathRules, found := backupPathRulesForRule(pathRows, backupString(rule["caddy_id"])); found {
 			// Round 30 F-6: 保存路径先 normalizePathRules（TrimSpace）再校验
 			// （createRuleFeatures/updateRuleFeatures），备份路径此前直传导致手造备份
 			// 含前导空格路径时 validateRuleFeatures 的 HasPrefix("/") 误拒绝。
@@ -309,32 +341,7 @@ func validateV2Backup(backup configBackup) error {
 			return fmt.Errorf("规则 #%d：%w", index+1, err)
 		}
 	}
-	for _, job := range backup.Tables["cert_jobs"] {
-		status, ok := job["status"].(string)
-		if !ok {
-			return errors.New("证书任务状态不能为空")
-		}
-		if _, allowed := configBackupCertJobStatuses[status]; !allowed {
-			return fmt.Errorf("无效的证书任务状态: %s", status)
-		}
-	}
-	const invalidCredentialsMsg = "备份包含无效的凭证格式（ca_providers.credentials / certificate_configs.dns_credentials 需为 JSON 对象）"
-	for _, provider := range backup.Tables["ca_providers"] {
-		if err := validateCredentialsJSONObject(backupString(provider["credentials"])); err != nil {
-			return errors.New(invalidCredentialsMsg)
-		}
-	}
-	for _, certCfg := range backup.Tables["certificate_configs"] {
-		if err := validateCredentialsJSONObject(backupString(certCfg["dns_credentials"])); err != nil {
-			return errors.New(invalidCredentialsMsg)
-		}
-	}
-	for _, user := range backup.Tables["users"] {
-		if role, _ := user["role"].(string); role == "admin" && backupBooleanEnabled(user["is_enabled"]) {
-			return nil
-		}
-	}
-	return errors.New("备份必须至少包含一个已启用的管理员账号")
+	return nil
 }
 
 func backupBooleanEnabled(value any) bool {
@@ -596,11 +603,18 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	// R38 C-3: 空域名行软跳过须先于逐行校验（validateV2BackupRules）——否则
+	// 空域名+非法端口行会先行整包 400，与「空域名规则一律软跳过」语义不符；
+	// 校验和/结构校验已在 validateV2Backup 内完成，不受跳过影响。
+	skipWarnings := skipEmptyDomainHTTPRules(backup.Tables)
 	if err := validateBackupRuleReferences(backup.Tables); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	skipWarnings := skipEmptyDomainHTTPRules(backup.Tables)
+	if err := validateV2BackupRules(backup.Tables["lb_rules"], backup.Tables["path_rules"]); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
 	disabledConflicts := disableV2RuleConflicts(backup.Tables["lb_rules"])
 	jwtExpireClamped := false
 	if value, exists := backup.Config["jwt_expire_minutes"]; exists {
@@ -640,6 +654,17 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			for _, row := range rows {
 				if enabled, exists := row["enabled"]; exists && enabled == nil {
 					row["enabled"] = 0
+				}
+			}
+		}
+		// R38 C-1: pre-R24 库的 users.is_enabled 为可空列（R24 起 NOT NULL），
+		// 旧实例导出的 "is_enabled":null 行原值插入会触发约束失败整包回滚。
+		// 归一为 1——对齐 migrateUsersIsEnabledNotNull 的 NULL→1 口径
+		//（注意与 lb_rules/upstreams 的 NULL→0 不同：用户缺省启用）。
+		if table == "users" {
+			for _, row := range rows {
+				if enabled, exists := row["is_enabled"]; exists && enabled == nil {
+					row["is_enabled"] = 1
 				}
 			}
 		}

@@ -467,6 +467,10 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			return
 		}
 		skipWarnings := skipEmptyDomainHTTPRules(backup.Tables)
+		if err := validateV2BackupRules(backup.Tables["lb_rules"], backup.Tables["path_rules"]); err != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
+			return
+		}
 		disabledConflicts := disableV2RuleConflicts(backup.Tables["lb_rules"])
 		summary := map[string]int{}
 		for table, rows := range backup.Tables {

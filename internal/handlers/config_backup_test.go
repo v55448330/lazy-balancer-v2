@@ -956,7 +956,12 @@ func TestValidateV2Backup_rejects_self_loop_80_tls_redirect_rule(t *testing.T) {
 			if err := json.Unmarshal([]byte(backup), &b); err != nil {
 				t.Fatalf("unmarshal backup: %v", err)
 			}
+			// R38 C-3 拆分后：逐行校验在 validateV2BackupRules（handler 在
+			// skipEmptyDomainHTTPRules 之后调用）；直测时组合两者保持原语义。
 			err := validateV2Backup(b)
+			if err == nil {
+				err = validateV2BackupRules(b.Tables["lb_rules"], b.Tables["path_rules"])
+			}
 			if tt.wantErrText != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
 					t.Fatalf("validateV2Backup err=%v, want contains %q", err, tt.wantErrText)
@@ -1251,4 +1256,94 @@ func TestImportConfigBackup_normalizesNullEnabled(t *testing.T) {
 	if ruleEnabled != 0 || upstreamEnabled != 0 {
 		t.Fatalf("rule.enabled=%d upstream.enabled=%d, want both 0 (null normalized)", ruleEnabled, upstreamEnabled)
 	}
+}
+
+// R38 C-1: pre-R24 库的 users.is_enabled 为可空列（R24 起 NOT NULL），旧实例导出的
+// "is_enabled":null 行导入 R24+ 库会触发约束失败整包回滚；归一为 1（与
+// lb_rules/upstreams 的 NULL→0 不同，对齐 migrateUsersIsEnabledNotNull 口径）。
+func TestImportConfigBackup_normalizesNullUserIsEnabled(t *testing.T) {
+	// Given：备份含一个 is_enabled:null 用户行（pre-R24 遗留）+ 一个启用 admin
+	h := newBackupTestHandlers(t)
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(completeBackupJSON(t, map[string][]map[string]any{
+		"users": {
+			{"id": 2, "username": "legacy-null", "password_hash": "hash", "role": "user", "is_enabled": nil},
+			{"id": 3, "username": "enabled-admin", "password_hash": "hash", "role": "admin", "is_enabled": 1},
+		},
+	})))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then：导入成功且 NULL 行落 1
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var isEnabled int
+	if err := db.DB.QueryRow("SELECT is_enabled FROM users WHERE username='legacy-null'").Scan(&isEnabled); err != nil {
+		t.Fatalf("read legacy user: %v", err)
+	}
+	if isEnabled != 1 {
+		t.Fatalf("legacy user is_enabled=%d, want 1 (null normalized)", isEnabled)
+	}
+}
+
+// R38 C-3: skipEmptyDomainHTTPRules 必须先于逐行校验——空域名行无论端口是否非法
+// 都一律软跳过并告警；非空域名+非法端口行仍整包 400。
+func TestImportConfigBackup_skips_empty_domain_rule_before_row_validation(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	importBackup := func(backup string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	t.Run("空域名+非法端口行软跳过并告警", func(t *testing.T) {
+		backup := completeBackupJSON(t, map[string][]map[string]any{
+			"lb_rules": {
+				{"caddy_id": "lb_empty_badport", "name": "empty-bad-port", "protocol": "http", "domain": "", "listen_port": 0, "enabled": 1},
+				{"caddy_id": "lb_valid", "name": "valid", "protocol": "http", "domain": "valid.example.test", "listen_port": 8442, "enabled": 1},
+			},
+			"upstreams": {
+				{"rule_id": "lb_empty_badport", "host": "127.0.0.1", "port": 9001, "weight": 1, "enabled": 1},
+				{"rule_id": "lb_valid", "host": "127.0.0.1", "port": 9002, "weight": 1, "enabled": 1},
+			},
+		})
+		response := importBackup(backup)
+		if response.Code != http.StatusOK {
+			t.Fatalf("import status=%d body=%s, want 200", response.Code, response.Body.String())
+		}
+		if !strings.Contains(response.Body.String(), "域名为空") {
+			t.Fatalf("import response missing skip warning: %s", response.Body.String())
+		}
+		var skipped, imported int
+		if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_empty_badport'").Scan(&skipped); err != nil {
+			t.Fatalf("count skipped rules: %v", err)
+		}
+		if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_valid'").Scan(&imported); err != nil {
+			t.Fatalf("count imported rules: %v", err)
+		}
+		if skipped != 0 || imported != 1 {
+			t.Fatalf("rules after import: skipped=%d imported=%d, want skipped=0 imported=1", skipped, imported)
+		}
+	})
+
+	t.Run("非空域名+非法端口行仍整包 400", func(t *testing.T) {
+		backup := completeBackupJSON(t, map[string][]map[string]any{
+			"lb_rules": {{"caddy_id": "lb_badport", "name": "bad-port", "protocol": "http", "domain": "badport.example.test", "listen_port": 0, "enabled": 1}},
+		})
+		response := importBackup(backup)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "1-65535") {
+			t.Fatalf("status=%d body=%s, want 400 invalid port", response.Code, response.Body.String())
+		}
+	})
 }

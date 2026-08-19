@@ -172,3 +172,63 @@ func TestUpdateRule_name_only_change_passes_with_legacy_shadow_combo(t *testing.
 		}
 	})
 }
+
+// R38 C-2: 域名冲突检查须与遮蔽检查同样加变更门控——导入遗留的「一启用一禁用
+// 同域名」组合中，禁用方仅改名等无关更新不应被 400 卡死（ruleDomainConflict 只
+// 统计 enabled=1 的规则）；域名/启用态真正变化时检查仍须生效。
+func TestUpdateRule_domain_conflict_check_gated_on_change(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	oldCertDir := testServicesCertDir
+	testServicesCertDir = t.TempDir()
+	t.Cleanup(func() { testServicesCertDir = oldCertDir })
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+
+	seed := func(caddyID, domain string, enabled int) {
+		t.Helper()
+		if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,enable_compress)
+			VALUES (?,?,?,'http',?,8080,'weighted_round_robin',?,1)`, caddyID, caddyID, "", domain, enabled); err != nil {
+			t.Fatalf("seed rule %s: %v", caddyID, err)
+		}
+		if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES (?,'127.0.0.1',9000,1,1,'http')`, caddyID); err != nil {
+			t.Fatalf("seed upstream %s: %v", caddyID, err)
+		}
+	}
+	update := func(caddyID, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPut, "/rules/"+caddyID, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	t.Run("存量冲突组合下仅改名称的禁用方更新不再被 400", func(t *testing.T) {
+		seed("lb_dc_on", "conflict.test", 1)
+		seed("lb_dc_off", "conflict.test", 0)
+		response := update("lb_dc_off", `{"name":"改名后的禁用方"}`)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s, want 200 for name-only update", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("禁用方改域名到启用规则占用值时仍 400", func(t *testing.T) {
+		seed("lb_dc_on2", "conflict2.test", 1)
+		seed("lb_dc_off2", "conflict2.test", 0)
+		seed("lb_dc_taken", "taken.test", 1)
+		response := update("lb_dc_off2", `{"domain":"taken.test"}`)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "域名已被其他 HTTP/HTTPS 规则使用") {
+			t.Fatalf("status=%d body=%s, want 400 domain conflict on domain change", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("禁用方 PUT 启用时被存量启用方阻塞", func(t *testing.T) {
+		seed("lb_dc_on3", "conflict3.test", 1)
+		seed("lb_dc_off3", "conflict3.test", 0)
+		response := update("lb_dc_off3", `{"enabled":true}`)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "域名已被其他 HTTP/HTTPS 规则使用") {
+			t.Fatalf("status=%d body=%s, want 400 domain conflict on enable change", response.Code, response.Body.String())
+		}
+	})
+}
