@@ -1,6 +1,7 @@
 package services
 
 import (
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -134,5 +135,36 @@ func TestConfigWatchdog_orphanRouteStillFlagged(t *testing.T) {
 	drift := CurrentConfigDrift()
 	if drift.Consistent || len(drift.Extra) != 1 || drift.Extra[0] != "lb_deleted_rule" {
 		t.Fatalf("drift=%+v, want extra lb_deleted_rule", drift)
+	}
+}
+
+func TestConfigWatchdog_tcpDynamicDNSAndSamePortNotFlagged(t *testing.T) {
+	// Given：TCP+动态 DNS 规则与同端口多 TCP 规则——渲染侧有意跳过，看门狗不应误报
+	_, database := newClusterTestService(t)
+	seedTCPWatchdogRule(t, database, "lb_tcp_dyndns", 9501, true)
+	seedTCPWatchdogRule(t, database, "lb_tcp_multi_a", 9502, false)
+	seedTCPWatchdogRule(t, database, "lb_tcp_multi_b", 9502, false)
+	seedGenerationRule(t, database, "lb_http_normal", false)
+	resetConfigWatchdogForTest(t)
+	server := fakeCaddyWithRoutes(t, `{"apps":{"http":{"servers":{"http_8080":{"listen":[":8080"],"routes":[{"@id":"lb_http_normal","handle":[]}]}}}}}`)
+
+	// When
+	checkConfigConsistency(server.URL)
+	checkConfigConsistency(server.URL)
+
+	// Then：只有正常渲染的 HTTP 规则在期望集合内，跳过类规则不误报缺失
+	if drift := CurrentConfigDrift(); !drift.Consistent {
+		t.Fatalf("render-skipped TCP rules must not be flagged, got %+v", drift)
+	}
+}
+
+func seedTCPWatchdogRule(t *testing.T, database *sql.DB, ruleID string, listenPort int, dynamicDNS bool) {
+	t.Helper()
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enabled,dynamic_dns)
+		VALUES (?,?,'tcp','',?,'weighted_round_robin',1,?)`, ruleID, ruleID, listenPort, dynamicDNS); err != nil {
+		t.Fatalf("seed tcp rule %s: %v", ruleID, err)
+	}
+	if _, err := database.Exec("INSERT INTO upstreams (rule_id,host,port,enabled,protocol) VALUES (?,'127.0.0.1',9000,1,'tcp')", ruleID); err != nil {
+		t.Fatalf("seed tcp upstream %s: %v", ruleID, err)
 	}
 }

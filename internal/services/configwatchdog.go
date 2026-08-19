@@ -81,7 +81,12 @@ func checkConfigConsistency(adminURL string) {
 	}
 	expected, err := expectedRenderedRules()
 	if err != nil {
-		Logf("warn", "配置一致性看门狗：读取规则失败: %v", err)
+		configDriftMu.Lock()
+		if !configDriftReadWarned {
+			configDriftReadWarned = true
+			Logf("warn", "配置一致性看门狗：读取规则失败（本轮起跳过检查）: %v", err)
+		}
+		configDriftMu.Unlock()
 		return
 	}
 	running, err := runningRuleRouteIDs(adminURL)
@@ -102,25 +107,50 @@ func checkConfigConsistency(adminURL string) {
 	updateConfigDrift(diffExpectedMissing(expected, running), diffRunningExtra(expected, running))
 }
 
-// expectedRenderedRules 计算应出现在运行配置中的规则：启用中且至少有一个启用上游
-// （零上游规则渲染跳过是正常语义，不计入——与 caddy.go 的渲染口径一致）。
+// expectedRenderedRules 计算应出现在运行配置中的规则：启用中且至少有一个启用上游，
+// 并排除渲染侧有意跳过的两类（与 caddy.go:1517-1542 同口径——TCP+动态 DNS 逐规则
+// 跳过、同端口多 TCP 整组拒绝），否则这两类规则会被误报为「缺失」（R37 F-1）。
 // 返回 caddy_id → 规则名称。
 func expectedRenderedRules() (map[string]string, error) {
-	rows, err := db.DB.Query(`SELECT caddy_id, name FROM lb_rules WHERE enabled=1
+	rows, err := db.DB.Query(`SELECT caddy_id, name, protocol, COALESCE(dynamic_dns,0), listen_port FROM lb_rules WHERE enabled=1
 		AND EXISTS (SELECT 1 FROM upstreams u WHERE u.rule_id=lb_rules.caddy_id AND IIF(u.enabled IN ('1',1),1,0)=1)`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	expected := make(map[string]string)
+	type ruleRow struct {
+		caddyID    string
+		name       string
+		protocol   string
+		dynamicDNS bool
+		listenPort int
+	}
+	var all []ruleRow
 	for rows.Next() {
-		var caddyID, name string
-		if err := rows.Scan(&caddyID, &name); err != nil {
+		var r ruleRow
+		if err := rows.Scan(&r.caddyID, &r.name, &r.protocol, &r.dynamicDNS, &r.listenPort); err != nil {
 			return nil, err
 		}
-		expected[caddyID] = name
+		all = append(all, r)
 	}
-	return expected, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// 渲染侧的同端口多 TCP 判定作用于动态 DNS 过滤之后的集合——统计口径保持一致。
+	tcpPorts := make(map[int]int)
+	for _, r := range all {
+		if r.protocol == "tcp" && !r.dynamicDNS {
+			tcpPorts[r.listenPort]++
+		}
+	}
+	expected := make(map[string]string)
+	for _, r := range all {
+		if r.protocol == "tcp" && (r.dynamicDNS || tcpPorts[r.listenPort] > 1) {
+			continue
+		}
+		expected[r.caddyID] = r.name
+	}
+	return expected, nil
 }
 
 // runningRuleRouteIDs 从 Caddy 运行配置收集规则路由 @id（lb_ 前缀），
