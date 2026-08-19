@@ -264,12 +264,28 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	var isDefault bool
-	db.DB.QueryRow("SELECT is_default FROM security_block_pages WHERE id=?", id).Scan(&isDefault)
+	// R41 B2: is_default 检查与 UPDATE 必须同事务（镜像 DeleteSecurityBlockPage
+	// R37 I1）。非事务读 + 错误丢弃的旧实现存在并发窗口：导入路径可在 SELECT 与
+	// UPDATE 之间把该页重建为默认页，使 UPDATE 绕过 403 契约改到默认页内容。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		return
+	}
+	defer tx.Rollback()
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT is_default FROM security_block_pages WHERE id=?", id).Scan(&isDefault); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
+		} else {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		}
+		return
+	}
 	if isDefault {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "默认拦截页面不可编辑"})
 		return
 	}
-	result, err := db.DB.Exec(`UPDATE security_block_pages SET name=?, description=?, content=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
+	result, err := tx.ExecContext(c.Request.Context(), `UPDATE security_block_pages SET name=?, description=?, content=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
 		req.Name, req.Description, req.Content, getContextUserIDInt(c), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -277,6 +293,10 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 	}
 	if rows, _ := result.RowsAffected(); rows == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "更新", "拦截页面", fmt.Sprintf("名称：%s（#%s）", req.Name, id), "")

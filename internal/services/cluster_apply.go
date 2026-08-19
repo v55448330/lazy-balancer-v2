@@ -478,6 +478,12 @@ func applySecurityBlockPages(ctx context.Context, tx *sql.Tx, pages []models.Sec
 			return fmt.Errorf("写入快照拦截页面 %d: %w", page.ID, err)
 		}
 	}
+	// R41 B1: 快照（或经 pre-R40 主节点扩散的快照）可能携带 ≥2 个 is_default=1
+	// 的拦截页，全部落库后均不可编辑/删除且会被 branding 覆盖。从节点侧防御：
+	// 降级多余默认页，仅保留 MIN(id) 一行，与主节点导入路径行为一致。
+	if _, err := tx.ExecContext(ctx, `UPDATE security_block_pages SET is_default=0 WHERE is_default=1 AND id != (SELECT MIN(id) FROM security_block_pages WHERE is_default=1)`); err != nil {
+		return fmt.Errorf("降级多余的默认拦截页: %w", err)
+	}
 	return nil
 }
 

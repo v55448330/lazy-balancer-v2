@@ -684,6 +684,28 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			return
 		}
 	}
+	// R41 B1: pre-R40 备份可能携带 ≥2 个 is_default=1 的拦截页。restoreTable
+	// 原值插入后这些行全部成为不可编辑/删除的死行，且 branding 重渲染会覆盖
+	// 全部默认页内容。提交前降级多余默认页，仅保留 MIN(id) 一行。
+	if _, err := tx.ExecContext(ctx, `UPDATE security_block_pages SET is_default=0 WHERE is_default=1 AND id != (SELECT MIN(id) FROM security_block_pages WHERE is_default=1)`); err != nil {
+		err = session.abort(err)
+		recordAudit(c, "导入失败", "配置备份", "降级多余的默认拦截页失败: "+err.Error())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "降级多余的默认拦截页失败，已回滚: " + err.Error()})
+		return
+	}
+	// R41 B3: 默认页重播种移入导入事务，与导入同生共死；失败仅记警告不阻断
+	// 导入（拦截响应短暂退化，由后续 SeedDefaultBlockPage/branding 触发自愈）。
+	reseedBlockPageNeeded := false
+	var hasDefaultBlockPage int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM security_block_pages WHERE is_default=1").Scan(&hasDefaultBlockPage); err != nil {
+		recordAudit(c, "导入警告", "配置备份", "默认拦截页面计数失败: "+err.Error())
+	} else if hasDefaultBlockPage == 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, created_at, updated_at) VALUES (1, '默认拦截页面', '系统默认 403 拦截页面', '', TRUE, datetime('now'), datetime('now'))`); err != nil {
+			recordAudit(c, "导入警告", "配置备份", "默认拦截页面重播种失败: "+err.Error())
+		} else {
+			reseedBlockPageNeeded = true
+		}
+	}
 	if _, err := tx.ExecContext(ctx, "UPDATE users SET password_version=COALESCE(password_version,0)+1"); err != nil {
 		err = session.abort(err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "吊销现有登录会话失败，已回滚: " + err.Error()})
@@ -783,10 +805,9 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		return
 	}
 
-	var hasDefaultBlockPage int
-	db.DB.QueryRow("SELECT COUNT(*) FROM security_block_pages WHERE is_default=1").Scan(&hasDefaultBlockPage)
-	if hasDefaultBlockPage == 0 {
-		db.DB.Exec(`INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, created_at, updated_at) VALUES (1, '默认拦截页面', '系统默认 403 拦截页面', '', TRUE, datetime('now'), datetime('now'))`)
+	if reseedBlockPageNeeded {
+		// 提交成功后才渲染 branding 内容：INSERT 只放空 content 占位，真实内容
+		// 由 SeedDefaultBlockPage 依据 branding.json 写入；失败不影响导入结果。
 		SeedDefaultBlockPage(h.cfg.DataDir)
 		note := h.caddyApplyNoteLocked()
 		if note != "" {
