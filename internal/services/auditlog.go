@@ -76,10 +76,43 @@ func GetConfigSourceSection(source string) string {
 	}
 }
 
+// 操作日志词汇标准（系统标准，新老事件均须遵循）：操作标签 ≤4 词、事件对象
+// ≤5 词。词制计数：中文字符各算 1 词，连续英文/数字串（API、Caddy、
+// IP2Region 等缩写）整体算 1 词，空白不计。硬卡控在
+// audit_vocabulary_test.go（新增超标字面量测试直接红），此处入口仅告警
+// 不阻断，保持 best-effort 写入语义。
+const (
+	auditActionMaxWords   = 4
+	auditResourceMaxWords = 5
+)
+
+func auditVocabWords(s string) int {
+	words := 0
+	inASCII := false
+	for _, r := range s {
+		switch {
+		case r == ' ' || r == '\t':
+			inASCII = false
+		case r < 128 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'):
+			if !inASCII {
+				words++
+				inASCII = true
+			}
+		default:
+			words++
+			inASCII = false
+		}
+	}
+	return words
+}
+
 func RecordAuditLog(username, action, resource, detail, ipAddress string) {
 	if db.AuditDB == nil {
 		log.Printf("audit log write skipped: audit database is not initialized")
 		return
+	}
+	if aw, rw := auditVocabWords(action), auditVocabWords(resource); aw > auditActionMaxWords || rw > auditResourceMaxWords {
+		log.Printf("audit vocabulary over limit (action<=%d, resource<=%d): action=%q(%d) resource=%q(%d)", auditActionMaxWords, auditResourceMaxWords, action, aw, resource, rw)
 	}
 	if _, err := db.AuditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address) VALUES (?, ?, ?, ?, ?)",
 		username, action, resource, detail, ipAddress); err != nil {
@@ -161,17 +194,17 @@ func FormatAuditAction(method, path string) (action, resource, detail string) {
 	case p == "/api/v1/auth/logout":
 		return "登出", "用户认证", p
 	case strings.Contains(p, "/rules/") && strings.Contains(p, "/enable"):
-		return "启用", "负载均衡规则", p
+		return "启用", "负载规则", p
 	case strings.Contains(p, "/rules/") && strings.Contains(p, "/disable"):
-		return "禁用", "负载均衡规则", p
+		return "禁用", "负载规则", p
 	case strings.Contains(p, "/rules/") && strings.Contains(p, "/duplicate"):
-		return "复制", "负载均衡规则", p
+		return "复制", "负载规则", p
 	case strings.HasPrefix(p, "/api/v1/rules") && method == "POST":
-		return "创建", "负载均衡规则", p
+		return "创建", "负载规则", p
 	case strings.HasPrefix(p, "/api/v1/rules/") && method == "PUT":
-		return "更新", "负载均衡规则", p
+		return "更新", "负载规则", p
 	case strings.HasPrefix(p, "/api/v1/rules/") && method == "DELETE":
-		return "删除", "负载均衡规则", p
+		return "删除", "负载规则", p
 
 	case strings.Contains(p, "/users/") && strings.Contains(p, "/reset-password"):
 		return "重置密码", "用户", p
@@ -201,11 +234,11 @@ func FormatAuditAction(method, path string) (action, resource, detail string) {
 		return "重载", "Caddy配置", p
 
 	case strings.Contains(p, "/certificate-configs") && method == "POST":
-		return "创建", "DNS提供商配置", p
+		return "创建", "DNS配置", p
 	case strings.Contains(p, "/certificate-configs") && method == "PUT":
-		return "更新", "DNS提供商配置", p
+		return "更新", "DNS配置", p
 	case strings.Contains(p, "/certificate-configs") && method == "DELETE":
-		return "删除", "DNS提供商配置", p
+		return "删除", "DNS配置", p
 
 	case strings.Contains(p, "/ca-providers") && strings.Contains(p, "/test"):
 		return "", "", ""
@@ -213,9 +246,9 @@ func FormatAuditAction(method, path string) (action, resource, detail string) {
 		return "", "", ""
 
 	case strings.Contains(p, "/certificates/jobs") && strings.Contains(p, "/retry"):
-		return "重试", "证书签发任务", p
+		return "重试", "证书任务", p
 	case strings.Contains(p, "/certificates/jobs") && method == "DELETE":
-		return "删除", "证书签发任务", p
+		return "删除", "证书任务", p
 	case strings.Contains(p, "/certificates/issue"):
 		return "触发签发", "证书", p
 
@@ -240,7 +273,7 @@ func FormatAuditAction(method, path string) (action, resource, detail string) {
 		return "更新", "Caddy配置", p
 
 	case strings.Contains(p, "/sync/pull"):
-		return "同步", "配置同步", p
+		return "同步", "集群同步", p
 	}
 
 	return "", "", ""

@@ -63,7 +63,7 @@ func TestStartAuditCleanup_starts_once_and_stops(t *testing.T) {
 
 func TestFormatAuditActionRuleEnable(t *testing.T) {
 	action, resource, detail := FormatAuditAction("POST", "/api/v1/rules/lb_example/enable")
-	if action != "启用" || resource != "负载均衡规则" || detail != "/api/v1/rules/lb_example/enable" {
+	if action != "启用" || resource != "负载规则" || detail != "/api/v1/rules/lb_example/enable" {
 		t.Fatalf("FormatAuditAction() = (%q, %q, %q)", action, resource, detail)
 	}
 }
