@@ -29,6 +29,7 @@ func (s *ClusterService) BecomeSlave(ctx context.Context, masterURL string, regi
 		s.lifecycle.StopACME()
 		s.lifecycle.StartSync()
 	}
+	ResetConfigDrift()
 	return nil
 }
 

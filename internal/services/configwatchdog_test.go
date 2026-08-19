@@ -101,3 +101,38 @@ func TestConfigWatchdog_skipsOnSlave(t *testing.T) {
 	}
 	_ = db.DB
 }
+
+func TestConfigWatchdog_subRoutesBelongToParentRule(t *testing.T) {
+	// Given：运行配置含子路由 @id（lb_x_redirect / lb_x_path_0）——R36 WD-1 误报场景
+	_, database := newClusterTestService(t)
+	seedGenerationRule(t, database, "lb_watchdog_sub", false)
+	resetConfigWatchdogForTest(t)
+	server := fakeCaddyWithRoutes(t, `{"apps":{"http":{"servers":{"http_443":{"listen":[":443"],"routes":[{"@id":"lb_watchdog_sub","handle":[{"handler":"reverse_proxy"}]},{"@id":"lb_watchdog_sub_redirect","handle":[{"handler":"static_response"}]},{"@id":"lb_watchdog_sub_path_0","handle":[{"handler":"reverse_proxy"}]}]}}}}}`)
+
+	// When：两轮检查
+	checkConfigConsistency(server.URL)
+	checkConfigConsistency(server.URL)
+
+	// Then：子路由归属主规则，不误报
+	if drift := CurrentConfigDrift(); !drift.Consistent {
+		t.Fatalf("sub-routes must not be flagged as extra, got %+v", drift)
+	}
+}
+
+func TestConfigWatchdog_orphanRouteStillFlagged(t *testing.T) {
+	// Given：运行配置含 DB 中不存在的规则路由（真正的多余）
+	_, database := newClusterTestService(t)
+	seedGenerationRule(t, database, "lb_watchdog_real", false)
+	resetConfigWatchdogForTest(t)
+	server := fakeCaddyWithRoutes(t, `{"apps":{"http":{"servers":{"http_8080":{"listen":[":8080"],"routes":[{"@id":"lb_watchdog_real","handle":[]},{"@id":"lb_deleted_rule","handle":[]}]}}}}}`)
+
+	// When
+	checkConfigConsistency(server.URL)
+	checkConfigConsistency(server.URL)
+
+	// Then：孤儿路由被点名
+	drift := CurrentConfigDrift()
+	if drift.Consistent || len(drift.Extra) != 1 || drift.Extra[0] != "lb_deleted_rule" {
+		t.Fatalf("drift=%+v, want extra lb_deleted_rule", drift)
+	}
+}

@@ -271,6 +271,7 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 		return fmt.Errorf("提交提升事务: %w", err)
 	}
 	promoted = true
+	ResetConfigDrift()
 
 	if registrationID > 0 {
 		RecordAuditLog("system", "提升", "集群节点", FormatAuditDetail(fmt.Sprintf("注册编号：%d", registrationID), "本节点已脱离集群并提升为主节点", AuditResultPart("success")), "")

@@ -121,8 +121,14 @@ func (m *CAQueueManager) CancelJob(jobID int) {
 	for _, cancel := range cancels {
 		cancel()
 	}
+	// 在途执行退出等待必须有界：issuer 执行若不响应 ctx 取消（如 DNS 传播轮询
+	// 异常路径），HTTP 调用方（DeleteCertJob 等）会被永久挂起（R36 C-1）。
 	for _, executionDone := range done {
-		<-executionDone
+		select {
+		case <-executionDone:
+		case <-time.After(30 * time.Second):
+			Logf("warn", "取消证书任务 %d：等待在途执行退出超时（30s），继续后续流程", jobID)
+		}
 	}
 }
 

@@ -23,10 +23,21 @@ type ConfigDriftStatus struct {
 }
 
 var (
-	configDriftMu     sync.RWMutex
-	configDriftStatus = ConfigDriftStatus{Consistent: true}
-	configDriftStreak int
+	configDriftMu         sync.RWMutex
+	configDriftStatus     = ConfigDriftStatus{Consistent: true}
+	configDriftStreak     int
+	configDriftReadWarned bool
 )
+
+// ResetConfigDrift 角色切换时重置看门狗状态——曾漂移的主节点降级为从节点后，
+// 内存中的陈旧漂移态必须清除（从节点不再运行检查，状态不会自行过期）。
+func ResetConfigDrift() {
+	configDriftMu.Lock()
+	defer configDriftMu.Unlock()
+	configDriftStatus = ConfigDriftStatus{Consistent: true}
+	configDriftStreak = 0
+	configDriftReadWarned = false
+}
 
 // CurrentConfigDrift 返回看门狗当前状态（GetCaddyStatus 等展示路径消费）。
 func CurrentConfigDrift() ConfigDriftStatus {
@@ -47,7 +58,15 @@ func StartConfigWatchdog(adminURL string) {
 	go func() {
 		defer ticker.Stop()
 		for range ticker.C {
-			checkConfigConsistency(adminURL)
+			// 看门狗是唯一消费者，panic 必须留痕而不是让 goroutine 静默死亡。
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						Logf("error", "配置一致性看门狗：检查 panic: %v", r)
+					}
+				}()
+				checkConfigConsistency(adminURL)
+			}()
 		}
 	}()
 }
@@ -67,8 +86,19 @@ func checkConfigConsistency(adminURL string) {
 	}
 	running, err := runningRuleRouteIDs(adminURL)
 	if err != nil {
-		return // Caddy 不可达由 GetCaddyStatus 的 status 通道报告，看门狗不重复告警
+		// Caddy 不可达由 GetCaddyStatus 的 status 通道报告；但「配置超解析上限/
+		// 解析失败」会让看门狗永久静默——须留痕（首次失败告警，恢复后复位）。
+		configDriftMu.Lock()
+		if !configDriftReadWarned {
+			configDriftReadWarned = true
+			Logf("warn", "配置一致性看门狗：读取运行配置失败（本轮起跳过检查）: %v", err)
+		}
+		configDriftMu.Unlock()
+		return
 	}
+	configDriftMu.Lock()
+	configDriftReadWarned = false
+	configDriftMu.Unlock()
 	updateConfigDrift(diffExpectedMissing(expected, running), diffRunningExtra(expected, running))
 }
 
@@ -138,12 +168,24 @@ func diffExpectedMissing(expected map[string]string, running map[string]bool) []
 
 func diffRunningExtra(expected map[string]string, running map[string]bool) []string {
 	var extra []string
-	for caddyID := range running {
-		if _, ok := expected[caddyID]; !ok {
-			extra = append(extra, caddyID)
+	for routeID := range running {
+		// 子路由（lb_x_redirect / lb_x_path_0 等，caddy.go tagRuleRoute 系）属于其
+		// 主规则——仅当没有任何期望规则认领该 @id 时才计为多余（R36 WD-1：
+		// 精确匹配会把每条 HTTPS 跳转/路径规则的子路由误报为多余）。
+		if !routeClaimedByAny(routeID, expected) {
+			extra = append(extra, routeID)
 		}
 	}
 	return extra
+}
+
+func routeClaimedByAny(routeID string, expected map[string]string) bool {
+	for caddyID := range expected {
+		if routeID == caddyID || strings.HasPrefix(routeID, caddyID+"_") {
+			return true
+		}
+	}
+	return false
 }
 
 func updateConfigDrift(missing, extra []string) {
@@ -162,6 +204,7 @@ func updateConfigDrift(missing, extra []string) {
 	}
 	configDriftStreak++
 	if configDriftStatus.Consistent && configDriftStreak < 2 {
+		configDriftStatus.CheckedAt = now
 		return
 	}
 	if configDriftStatus.Consistent {
