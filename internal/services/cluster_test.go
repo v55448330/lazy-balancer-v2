@@ -1326,3 +1326,45 @@ func TestClusterService_UpdateSettings_sync_interval_range_validation(t *testing
 		}
 	}
 }
+
+func TestClusterService_Nodes_matchesOverviewOnlineCount_withDirtySyncInterval(t *testing.T) {
+	// R44-1：存量脏值 sync_interval=5（R42 前残留，低于校验下限 10）时，从节点
+	// run loop 实际以 60s 上报；节点列表（ComputeNodeStatus）与总览在线数
+	// （updateOverview）必须同口径按 60s 计（阈值 120s），否则同一节点在两页面
+	// 判定打架，且上报窗口内的从节点被误判离线。
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec(`UPDATE global_config SET sync_interval=5 WHERE id=1`); err != nil {
+		t.Fatalf("seed dirty sync_interval: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO nodes (id,name,mode,ip_address,is_approved,status,last_seen) VALUES
+		(1,'recent','slave','10.0.0.1',1,'online',datetime('now','-30 seconds')),
+		(2,'stale','slave','10.0.0.2',1,'online',datetime('now','-150 seconds'))`); err != nil {
+		t.Fatalf("seed nodes: %v", err)
+	}
+	metrics := &MetricsService{}
+
+	// When
+	nodes, err := service.Nodes(context.Background(), time.Now())
+	if err != nil {
+		t.Fatalf("list nodes: %v", err)
+	}
+	metrics.updateOverview(parsedMetrics{})
+
+	// Then：两条路径对每个节点的在线判定一致（30s<120s 在线，150s>120s 离线）
+	statusByID := make(map[int]string, len(nodes))
+	for _, node := range nodes {
+		statusByID[node.ID] = node.Status
+	}
+	if statusByID[1] != "online" || statusByID[2] != "offline" {
+		t.Fatalf("node statuses=%v, want 1=online 2=offline（sync_interval=5 应按 60s 计，阈值 120s）", statusByID)
+	}
+	wantOnline := 0
+	for _, status := range statusByID {
+		if status == "online" {
+			wantOnline++
+		}
+	}
+	if got := metrics.GetOverview().OnlineNodes; got != wantOnline {
+		t.Fatalf("overview online=%d, want %d（与节点列表判定一致）", got, wantOnline)
+	}
+}

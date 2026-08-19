@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/acme"
 )
@@ -89,6 +90,14 @@ func TestClient_RegisterAccount_removes_stale_key_after_EAB_HMAC_rotation(t *tes
 	if _, err := newClient(directoryURL, "admin@example.com", dataDir, &acme.ExternalAccountBinding{KID: "same-kid", Key: []byte("old-secret")}); err != nil {
 		t.Fatalf("create old EAB client: %v", err)
 	}
+	// 轮换前代密钥须闲置超 1h 才会被清理（R44-3 并发保护）：把旧密钥 mtime
+	// 回拨 2h，模拟真正下线已久的轮换遗留密钥。
+	idle := time.Now().Add(-2 * time.Hour)
+	for _, path := range []string{oldKeyPath, oldKeyPath + ".json"} {
+		if err := os.Chtimes(path, idle, idle); err != nil {
+			t.Fatalf("backdate stale key %s: %v", path, err)
+		}
+	}
 	client, err := newClient(directoryURL, "admin@example.com", dataDir, &acme.ExternalAccountBinding{KID: "same-kid", Key: []byte("new-secret")})
 	if err != nil {
 		t.Fatalf("create rotated EAB client: %v", err)
@@ -106,6 +115,53 @@ func TestClient_RegisterAccount_removes_stale_key_after_EAB_HMAC_rotation(t *tes
 	}
 	if _, err := os.Stat(acmeAccountKeyPath(dataDir, directoryURL, "admin@example.com", "same-kid", []byte("new-secret"))); err != nil {
 		t.Fatalf("current account key missing: %v", err)
+	}
+}
+
+// R44-3：EAB HMAC 轮换后，旧 HMAC 代密钥可能仍被在途签发任务使用（其内存 key
+// 不受影响，但磁盘文件被删会导致重试/重启后重新生成、对同一账户反复换 key）。
+// 元数据 mtime=最近使用时间，1h 内被使用的前代密钥不得清理。
+func TestClient_RegisterAccount_keeps_recently_used_predecessor_key(t *testing.T) {
+	// Given
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Replay-Nonce", "test-nonce")
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/directory":
+			_, _ = writer.Write([]byte(`{"newNonce":"` + server.URL + `/nonce","newAccount":"` + server.URL + `/account","newOrder":"` + server.URL + `/order","revokeCert":"` + server.URL + `/revoke","keyChange":"` + server.URL + `/key-change"}`))
+		case "/nonce":
+			writer.WriteHeader(http.StatusOK)
+		case "/account":
+			writer.Header().Set("Location", server.URL+"/account/1")
+			writer.WriteHeader(http.StatusCreated)
+			_, _ = writer.Write([]byte(`{"status":"valid"}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	dataDir := t.TempDir()
+	directoryURL := server.URL + "/directory"
+	oldKeyPath := acmeAccountKeyPath(dataDir, directoryURL, "admin@example.com", "same-kid", []byte("old-secret"))
+	if _, err := newClient(directoryURL, "admin@example.com", dataDir, &acme.ExternalAccountBinding{KID: "same-kid", Key: []byte("old-secret")}); err != nil {
+		t.Fatalf("create old EAB client: %v", err)
+	}
+	client, err := newClient(directoryURL, "admin@example.com", dataDir, &acme.ExternalAccountBinding{KID: "same-kid", Key: []byte("new-secret")})
+	if err != nil {
+		t.Fatalf("create rotated EAB client: %v", err)
+	}
+
+	// When：旧密钥刚被写入（mtime 新鲜，视同并发任务在途使用）
+	if err := client.RegisterAccount(t.Context()); err != nil {
+		t.Fatalf("register rotated EAB account: %v", err)
+	}
+
+	// Then：前代密钥及其元数据均保留
+	for _, path := range []string{oldKeyPath, oldKeyPath + ".json"} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("recently used predecessor key %s was removed: %v", path, err)
+		}
 	}
 }
 

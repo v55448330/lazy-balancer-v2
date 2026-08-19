@@ -474,14 +474,15 @@ func (m *MetricsService) updateOverview(metrics parsedMetrics) {
 	// 已批准且 last_seen 未超过 2×sync_interval 秒（倍率常量 nodeOfflineMultiplier 共用）。
 	// 边界语义与 ComputeNodeStatus 对齐：ComputeNodeStatus 仅在 now.Sub(lastSeen) > N 时判离线，
 	// 即恰好 N 秒整的节点仍算在线，故这里用 >= 把「等于 N 秒」归入在线，避免口径漂移。
-	// sync_interval 用 MAX(...,10) 钳位：存量库可能残留 0/负值（R42 前无下限校验），
-	// 直接拼进 datetime 修饰符会得到未来阈值，把已离线节点误判为在线（R43 A-1）。
+	// sync_interval 脏值（存量库可能残留 0/负数或 1-9s，R42 前无下限校验）与
+	// ComputeNodeStatus/从节点 run loop 同口径按 60s 计：从节点实际以 60s 上报，
+	// 10s/20s 阈值会把两次上报之间的正常节点误判离线（R43 A-1、R44-1）。
 	onlineNodes := m.overview.OnlineNodes
 	if err := db.DB.QueryRow(`
 		SELECT COUNT(*) FROM nodes
 		WHERE is_approved = 1
 		  AND last_seen IS NOT NULL
-		  AND datetime(last_seen) >= datetime('now', printf('-%d seconds', ? * MAX(COALESCE((SELECT sync_interval FROM global_config WHERE id=1), 60), 10)))
+		  AND datetime(last_seen) >= datetime('now', printf('-%d seconds', ? * COALESCE((SELECT CASE WHEN sync_interval < 10 THEN 60 ELSE sync_interval END FROM global_config WHERE id=1), 60)))
 	`, nodeOfflineMultiplier).Scan(&onlineNodes); err != nil {
 		log.Printf("updateOverview: query online nodes failed: %v (keeping previous value=%d)", err, m.overview.OnlineNodes)
 		onlineNodes = m.overview.OnlineNodes

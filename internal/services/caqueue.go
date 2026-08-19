@@ -17,6 +17,7 @@ import (
 type CAQueueManager struct {
 	mu                  sync.Mutex
 	queues              map[int]*caQueue
+	retiredQueues       []*caQueue
 	reloader            func() error
 	active              bool
 	blockedRules        map[string]map[RuleBlockToken]struct{}
@@ -54,7 +55,8 @@ const caExecutionTimeout = 30 * time.Minute
 
 // caQueueDrainTimeout 上限 PauseAndDrain 等待队列执行退出；issuer 异常不响应
 // ctx 取消时等待永不返回，进程 Stop 会被永久挂起（R43 A-2，与 CancelJob 30s 同口径）。
-const caQueueDrainTimeout = 30 * time.Second
+// var 而非 const：测试需要缩短超时以覆盖超时路径，生产代码不得改写。
+var caQueueDrainTimeout = 30 * time.Second
 
 // InitCAQueueManager initializes the singleton queue manager with the given
 // Caddy reloader. It must be called once during application startup before
@@ -333,6 +335,25 @@ func (m *CAQueueManager) PauseAndDrain() {
 	for _, q := range queues {
 		q.wait()
 	}
+	// q.wait 超时返回时滞行执行（issuer 不响应 ctx 取消）可能仍未退出：旧队列已被
+	// stopQueuesLocked 整体摘出 m.queues，Resume 的 stranded 扫描经 IsJobActive 只查
+	// 新 map 会漏判在途 job，导致同 jobID 双执行（R44-2）。把仍带在途执行的旧队列
+	// 登记到 retiredQueues 供 IsJobActive 合并检查；执行退出后其 active 清空，
+	// 由 IsJobActive 惰性摘除，无需回调（避免与 m.mu→q.mu 锁序冲突）。
+	var retired []*caQueue
+	for _, q := range queues {
+		q.mu.Lock()
+		stillRunning := len(q.active) > 0
+		q.mu.Unlock()
+		if stillRunning {
+			retired = append(retired, q)
+		}
+	}
+	if len(retired) > 0 {
+		m.mu.Lock()
+		m.retiredQueues = append(m.retiredQueues, retired...)
+		m.mu.Unlock()
+	}
 }
 
 func (m *CAQueueManager) stopQueuesLocked() []*caQueue {
@@ -438,7 +459,25 @@ func (m *CAQueueManager) IsJobActive(jobID int) bool {
 			return true
 		}
 	}
-	return false
+	// 合并检查 PauseAndDrain 超时后退役的队列（R44-2）：滞行执行退出前
+	// jobID 仍视为在途，阻止 Resume stranded 扫描重复入队；已全部退出的
+	// 退役队列在此惰性摘除。
+	active := false
+	kept := m.retiredQueues[:0]
+	for _, queue := range m.retiredQueues {
+		queue.mu.Lock()
+		_, jobActive := queue.active[jobID]
+		drained := len(queue.active) == 0
+		queue.mu.Unlock()
+		if jobActive {
+			active = true
+		}
+		if !drained {
+			kept = append(kept, queue)
+		}
+	}
+	m.retiredQueues = kept
+	return active
 }
 
 // Enqueue adds or re-enqueues a cert job.

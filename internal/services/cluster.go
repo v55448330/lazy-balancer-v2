@@ -352,6 +352,12 @@ func ComputeNodeStatus(approved bool, lastSeen time.Time, syncInterval int, now 
 	if !approved {
 		return "pending"
 	}
+	// 存量脏值（R42 前残留的 0/负数或 1-9s）统一按 60s 计，与从节点 run loop
+	// （cluster_sync.go）的 clamp 值一致：从节点实际以 60s 周期上报，若此处按
+	// 原始脏值（或 10s）计算阈值，会把两次上报之间的正常从节点误判为离线（R44-1）。
+	if syncInterval < 10 {
+		syncInterval = 60
+	}
 	if lastSeen.IsZero() || now.Sub(lastSeen) > nodeOfflineMultiplier*time.Duration(syncInterval)*time.Second {
 		return "offline"
 	}

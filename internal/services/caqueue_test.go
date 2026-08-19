@@ -6,6 +6,8 @@ import (
 	"lazy-balancer-v2/internal/db"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -720,6 +722,97 @@ func TestCAQueue_execute_requeues_job_when_lifecycle_is_canceled(t *testing.T) {
 
 // R30 F5：PauseAndDrain 会把在途签发置回 'queued'（requeueCanceledJob），
 // Resume 必须把这些滞留任务显式重入队，否则只能等到进程重启或快照替换。
+// R44-2：issuer 不响应 ctx 取消超过 caQueueDrainTimeout 时，PauseAndDrain 有界等待
+// 返回后滞行执行仍在旧队列中运行；Resume 的 stranded 扫描必须经 retiredQueues 识别
+// 该在途 job，不得重复入队造成同 jobID 双执行；滞行执行退出后任务可正常重入队。
+func TestCAQueueManager_PauseAndDrain_timeout_straggler_not_double_executed(t *testing.T) {
+	// Given：适用规则 + 提供商 + 'creating_order' 在途任务，执行体不响应取消（滞行）
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_straggler','lb_straggler','example.com','http',8080,1,1,'acme_dns')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'straggler CA','letsencrypt','https://invalid.example/directory',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_provider_id) VALUES (42,'lb_straggler','example.com','creating_order',7)`); err != nil {
+		t.Fatal(err)
+	}
+	oldTimeout := caQueueDrainTimeout
+	caQueueDrainTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { caQueueDrainTimeout = oldTimeout })
+
+	started := make(chan struct{})
+	var startedOnce sync.Once
+	release := make(chan struct{})
+	var executionCount atomic.Int32
+	queue := newCAQueue(models.CAProvider{ID: 7, MaxConcurrent: 1}, nil)
+	go queue.loop()
+	queue.executeFn = func(ctx context.Context, _ queueItem, _ models.CAProvider) error {
+		executionCount.Add(1)
+		startedOnce.Do(func() { close(started) })
+		<-release // 不响应 ctx 取消，模拟滞行执行
+		return ctx.Err()
+	}
+	queue.enqueue(queueItem{jobID: 42, ruleID: "lb_straggler", domains: "example.com"})
+	queue.mu.Lock()
+	execution, ok := queue.prepareExecutionLocked(queue.ctx)
+	queue.mu.Unlock()
+	if !ok {
+		t.Fatal("pending execution was not prepared")
+	}
+	go queue.execute(execution)
+	<-started
+	manager := &CAQueueManager{queues: map[int]*caQueue{7: queue}, active: true}
+
+	// When：PauseAndDrain 超时返回（滞行执行未退出），随后 Resume
+	manager.PauseAndDrain()
+
+	// Then：滞行执行经 retiredQueues 仍视为在途，Resume 不得重入队
+	if !manager.IsJobActive(42) {
+		t.Fatal("straggler job invisible after drain timeout（retiredQueues 未登记）")
+	}
+	manager.Resume()
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=42").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "creating_order" {
+		t.Fatalf("job status=%q after Resume, want creating_order（stranded 扫描应跳过在途任务）", status)
+	}
+	time.Sleep(300 * time.Millisecond) // 留给错误实现启动第二执行的调度窗口
+	if got := executionCount.Load(); got != 1 {
+		t.Fatalf("executions=%d, want 1（滞行期间不得双执行）", got)
+	}
+
+	// When：滞行执行最终退出（返回 ctx 错误 → requeueCanceledJob 落 'queued'）
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=42").Scan(&status); err == nil && status == "queued" && !manager.IsJobActive(42) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("straggler exit not settled: status=%q active=%v", status, manager.IsJobActive(42))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Then：退役队列已排空被惰性摘除，任务可再次正常入队（不会永久滞留）
+	manager.Resume()
+	manager.mu.Lock()
+	reenqueued := false
+	for _, q := range manager.queues {
+		q.mu.Lock()
+		_, reenqueued = q.active[42]
+		q.mu.Unlock()
+	}
+	manager.mu.Unlock()
+	if !reenqueued {
+		t.Fatal("job 42 was not re-enqueued after the straggler exited")
+	}
+	manager.Stop()
+}
+
 func TestCAQueueManager_Resume_requeuesLifecycleStrandedJobs(t *testing.T) {
 	// Given：队列暂停后滞留的 'queued' 与 'creating_order' 任务（规则仍存在且
 	// 适用）；'queued' 的孤儿任务（规则已删除）不重入队

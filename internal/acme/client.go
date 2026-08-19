@@ -212,6 +212,10 @@ func (c *Client) RegisterAccount(ctx context.Context) error {
 	return c.removeStaleAccountKeys()
 }
 
+// staleAccountKeyIdleThreshold 是 removeStaleAccountKeys 清理密钥前的最小闲置时长，
+// 必须显著大于单次签发执行上限（caExecutionTimeout 30min），取 1h。
+const staleAccountKeyIdleThreshold = time.Hour
+
 func (c *Client) removeStaleAccountKeys() error {
 	acmeAccountKeyMu.Lock()
 	defer acmeAccountKeyMu.Unlock()
@@ -220,6 +224,11 @@ func (c *Client) removeStaleAccountKeys() error {
 		return fmt.Errorf("读取 ACME 账户目录: %w", err)
 	}
 	want := accountKeyMetadata{DirectoryURL: c.DirectoryURL, Email: c.Email, EABKID: c.eabKID}
+	// 多 CA 提供商各有独立队列、可并发签发：其他任务（元数据≠本任务）的账户密钥
+	// 可能正在使用。密钥元数据在每次加载/创建时都会重写，其 mtime 即最近使用时间；
+	// 在途签发全程有 30min 执行上限，mtime 必然新于 1h 阈值——仅清理闲置超 1h 的
+	// 密钥，避免误删并发任务密钥导致重试/重启后密钥反复再生（R44-3）。
+	cutoff := time.Now().Add(-staleAccountKeyIdleThreshold)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".key.json") {
 			continue
@@ -235,6 +244,13 @@ func (c *Client) removeStaleAccountKeys() error {
 		}
 		keyPath := strings.TrimSuffix(metadataPath, ".json")
 		if metadata != want || keyPath == c.accountKeyPath {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("读取 ACME 账户密钥元数据状态 %s: %w", entry.Name(), err)
+		}
+		if info.ModTime().After(cutoff) {
 			continue
 		}
 		if err := os.Remove(keyPath); err != nil && !errors.Is(err, os.ErrNotExist) {
