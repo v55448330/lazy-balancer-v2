@@ -269,12 +269,18 @@ func validateV2Backup(backup configBackup) (bool, error) {
 			// （无 exported_at 的史前导出）；新格式文件（带 exported_at）校验和
 			// 不匹配直接拒绝——否则仅篡改 Config 区（dns_credentials/acme_email/
 			// 管理面板 TLS 材料）而保留 tables 的文件可借回退通过完整性校验。
+			tablesJSON, _ := json.Marshal(backup.Tables)
+			oldSum := sha256.Sum256(tablesJSON)
+			tablesOnlyMatch := hex.EncodeToString(oldSum[:]) == backup.Meta.Checksum
 			if backup.Meta.ExportedAt == "" {
-				tablesJSON, _ := json.Marshal(backup.Tables)
-				oldSum := sha256.Sum256(tablesJSON)
-				if hex.EncodeToString(oldSum[:]) == backup.Meta.Checksum {
+				if tablesOnlyMatch {
 					return true, nil
 				}
+			} else if tablesOnlyMatch {
+				// R44 C1: v2.1.1（及更早）导出即「tables-only 校验和 + exported_at
+				// 非空」形态——tables 区完整性成立，是合法旧版文件而非篡改证据；
+				// 但 Config 区不受旧校验和保护，仍须拒绝导入，仅改报兼容性提示。
+				return false, errors.New("备份由 v2.1.1 或更早版本导出，校验和格式不兼容，请使用 v2.1.2 及以上版本重新导出后再导入")
 			}
 			return false, errors.New("备份校验和不匹配，文件可能已被篡改或损坏")
 		}

@@ -199,9 +199,9 @@ func toPathRuleConfigs(pathRules []models.PathRule) []services.PathRuleConfig {
 func validateRuleFeatures(input ruleFeatureInput) error {
 	// R43 F-B: 协议白名单。此前 Create/Update 仅拒绝空协议（rules.go:564），
 	// "https" 等未知值可经 API/MCP 落库，全量渲染按「非 http 即 TCP」处理
-	// （caddy.go:1276）——域名匹配静默丢失、TLS 字段被忽略；而保存校验
-	// （GenerateRouteObject caddy.go:2299）又把 https 当 HTTP 通过，校验与生成
-	// 发散。统一在特性校验入口拒绝未知协议，Create/Update/复制/导入全链路复用。
+	// （caddy.go:1276）——域名匹配静默丢失、TLS 字段被忽略。统一在特性校验入口
+	// 拒绝未知协议，Create/Update/复制/导入全链路复用；保存校验 GenerateRouteObject
+	// 亦仅放行 http/tcp（R44 B1 对齐），存量 https 行由 db 迁移归一为 http+TLS。
 	if input.Protocol != "http" && input.Protocol != "tcp" {
 		return fmt.Errorf("协议仅支持 http 或 tcp")
 	}

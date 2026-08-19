@@ -196,14 +196,17 @@ func legacyChecksummedBackup(t *testing.T, exportedAt string, legacySum bool) st
 }
 
 func TestValidateV2Backup_legacyChecksumFallback_gatedOnLegacyMarker(t *testing.T) {
-	t.Run("新格式文件仅 Config 区被篡改（tables 校验和残留）直接拒绝", func(t *testing.T) {
+	t.Run("v2.1.1 形态（带 exported_at + tables 校验和）报兼容性提示而非篡改", func(t *testing.T) {
 		var b configBackup
 		if err := json.Unmarshal([]byte(legacyChecksummedBackup(t, "2026-08-19T00:00:00Z", true)), &b); err != nil {
 			t.Fatalf("unmarshal backup: %v", err)
 		}
 		usedLegacy, err := validateV2Backup(b)
-		if err == nil || !strings.Contains(err.Error(), "备份校验和不匹配") {
-			t.Fatalf("validateV2Backup err=%v, want 校验和不匹配", err)
+		if err == nil || !strings.Contains(err.Error(), "v2.1.1 或更早版本导出") {
+			t.Fatalf("validateV2Backup err=%v, want v2.1.1 兼容性提示", err)
+		}
+		if strings.Contains(err.Error(), "篡改") {
+			t.Fatalf("v2.1.1 合法备份不得误报篡改: %v", err)
 		}
 		if usedLegacy {
 			t.Fatal("新格式文件不得标记为旧格式校验和路径")

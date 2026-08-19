@@ -2306,7 +2306,10 @@ func GenerateRouteObject(rule SingleRuleConfig) (map[string]interface{}, error) 
 	if rule.Protocol == "tcp" {
 		return buildTCPProxyRoute(rule), nil
 	}
-	if rule.Protocol != "http" && rule.Protocol != "https" {
+	// R44 B1: 与全量渲染「非 http 即 TCP」（caddy.go:1276）及写侧白名单
+	// （rule_features.go validateRuleFeatures）对齐——https 不再被当作 HTTP 通过，
+	// 遗留 https 行由 db 迁移归一为 http+enable_tls=1。
+	if rule.Protocol != "http" {
 		return nil, fmt.Errorf("unsupported protocol: %s", rule.Protocol)
 	}
 

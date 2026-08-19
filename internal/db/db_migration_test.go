@@ -143,6 +143,54 @@ func TestRunMigrations_dropsDeadSecurityAndAdminTLSColumns(t *testing.T) {
 	}
 }
 
+func TestRunMigrations_migratesLegacyHTTPSRulesToHTTPWithTLS(t *testing.T) {
+	// Given 存量 a1ecbe3a 期写入的 https 规则行（enable_tls 0/1 各一），及正常 http/tcp 行
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO global_config (id,caddy_config) VALUES (1,'{}');
+		INSERT INTO lb_rules (name,protocol,domain,listen_port,enable_tls,caddy_id) VALUES
+			('legacy-https-tls','https','a.example.test',8443,1,'lb_https_tls'),
+			('legacy-https-notls','https','b.example.test',8444,0,'lb_https_notls'),
+			('plain-http','http','c.example.test',8080,0,'lb_http'),
+			('plain-tcp','tcp','',9090,0,'lb_tcp');`); err != nil {
+		t.Fatalf("seed legacy https rules: %v", err)
+	}
+
+	// When migrations run (twice, to prove idempotence)
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	if err := runMigrations(); err != nil {
+		t.Fatalf("repeat migrations: %v", err)
+	}
+
+	// Then https 行归一为 http+enable_tls=1（含原 enable_tls=0 行，https 语义隐含 TLS）
+	for _, caddyID := range []string{"lb_https_tls", "lb_https_notls"} {
+		var protocol string
+		var enableTLS int
+		if err := database.QueryRow("SELECT protocol, enable_tls FROM lb_rules WHERE caddy_id=?", caddyID).Scan(&protocol, &enableTLS); err != nil {
+			t.Fatalf("read migrated rule %s: %v", caddyID, err)
+		}
+		if protocol != "http" || enableTLS != 1 {
+			t.Fatalf("rule %s protocol=%q enable_tls=%d, want http/1", caddyID, protocol, enableTLS)
+		}
+	}
+
+	// And 非 https 行不受影响
+	for caddyID, want := range map[string]string{"lb_http": "http", "lb_tcp": "tcp"} {
+		var protocol string
+		var enableTLS int
+		if err := database.QueryRow("SELECT protocol, enable_tls FROM lb_rules WHERE caddy_id=?", caddyID).Scan(&protocol, &enableTLS); err != nil {
+			t.Fatalf("read untouched rule %s: %v", caddyID, err)
+		}
+		if protocol != want || enableTLS != 0 {
+			t.Fatalf("rule %s protocol=%q enable_tls=%d, want %s/0", caddyID, protocol, enableTLS, want)
+		}
+	}
+}
+
 func TestRunMigrations_dropsDeadLbRulesIPACLColumns(t *testing.T) {
 	// Given a schema still carrying the dead rule-level IP ACL columns
 	database := openMigrationTestDB(t)

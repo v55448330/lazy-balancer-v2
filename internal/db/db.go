@@ -931,6 +931,11 @@ func runMigrations() error {
 		return fmt.Errorf("failed to migrate lb_rules primary key: %w", err)
 	}
 
+	// R44 B1: 须在 lb_rules 重建之后——重建前的遗留表可能没有 enable_tls 列。
+	if err := migrateLegacyHTTPSProtocol(); err != nil {
+		return fmt.Errorf("failed to migrate legacy https protocol: %w", err)
+	}
+
 	// Drop legacy columns from upstreams if they still exist (no longer used).
 	legacyUpstreamHostHeaderColumns := []string{"host_header"}
 	for _, col := range legacyUpstreamHostHeaderColumns {
@@ -1075,6 +1080,48 @@ func runMigrations() error {
 		return fmt.Errorf("failed to backfill CA provider timestamps: %w", err)
 	}
 
+	return nil
+}
+
+// migrateLegacyHTTPSProtocol 一次性迁移：a1ecbe3a 期写入路径曾接受 protocol='https'
+// （语义即 http+TLS），b6e2b624 起写侧白名单收敛为 http/tcp，存量 https 行编辑/复制
+// 全部 400、启用后按「非 http 即 TCP」渲染（域名匹配静默丢失）。归一为
+// protocol='http' + enable_tls=1 保持原意图（含 enable_tls 已为 0 的 https 行——
+// https 协议本身隐含 TLS）；幂等，重跑零命中。受影响规则逐个记日志以便追溯（R44 B1）。
+func migrateLegacyHTTPSProtocol() error {
+	rows, err := DB.Query("SELECT caddy_id, name FROM lb_rules WHERE protocol='https'")
+	if err != nil {
+		return fmt.Errorf("failed to query legacy https lb_rules: %w", err)
+	}
+	type legacyHTTPSRule struct {
+		caddyID string
+		name    string
+	}
+	var legacy []legacyHTTPSRule
+	for rows.Next() {
+		var rule legacyHTTPSRule
+		if err := rows.Scan(&rule.caddyID, &rule.name); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan legacy https lb_rules: %w", err)
+		}
+		legacy = append(legacy, rule)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("failed to iterate legacy https lb_rules: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("failed to close legacy https lb_rules rows: %w", err)
+	}
+	if len(legacy) == 0 {
+		return nil
+	}
+	if _, err := DB.Exec("UPDATE lb_rules SET protocol='http', enable_tls=1 WHERE protocol='https'"); err != nil {
+		return fmt.Errorf("failed to normalize legacy https lb_rules: %w", err)
+	}
+	for _, rule := range legacy {
+		log.Printf("存量 https 协议规则已迁移为 http+TLS：caddy_id=%s name=%s", rule.caddyID, rule.name)
+	}
 	return nil
 }
 

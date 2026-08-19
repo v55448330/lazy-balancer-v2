@@ -365,6 +365,31 @@ func TestGenerateRouteObject_rejectsMultiplePathUpstreams_whenDynamicDNS(t *test
 	}
 }
 
+// R44 B1: 校验侧与全量渲染「非 http 即 TCP」对齐——遗留 https 不再被当作 HTTP
+// 通过（渲染会静默丢弃域名匹配）；http/tcp 仍正常生成。
+func TestGenerateRouteObject_rejectsLegacyHTTPSProtocol(t *testing.T) {
+	// Given
+	httpsRule := baseHTTPRule()
+	httpsRule.Protocol = "https"
+
+	// When
+	_, err := GenerateRouteObject(httpsRule)
+
+	// Then
+	if err == nil || !strings.Contains(err.Error(), "unsupported protocol") {
+		t.Fatalf("error=%v, want unsupported protocol rejection", err)
+	}
+
+	// And http/tcp 口径不变
+	if _, err := GenerateRouteObject(baseHTTPRule()); err != nil {
+		t.Fatalf("http rule rejected: %v", err)
+	}
+	tcpRule := SingleRuleConfig{CaddyID: "rule-tcp", Protocol: "tcp", Upstreams: []UpstreamConfig{{Host: "127.0.0.1", Port: 3306, Weight: 1, Enabled: true}}}
+	if _, err := GenerateRouteObject(tcpRule); err != nil {
+		t.Fatalf("tcp rule rejected: %v", err)
+	}
+}
+
 func TestGenerateRouteObject_joinsIPv6UpstreamAddresses(t *testing.T) {
 	// Given
 	httpRule := baseHTTPRule()
