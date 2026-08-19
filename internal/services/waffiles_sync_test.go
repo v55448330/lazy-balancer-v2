@@ -85,3 +85,68 @@ func TestWafFileBundleRoundTrip(t *testing.T) {
 		t.Fatalf("idempotent apply crsChanged=%v xdbChanged=%v err=%v", crsChanged, xdbChanged, err)
 	}
 }
+
+func TestApplyWafFileBundleRejectsTamperedBytes(t *testing.T) {
+	src := t.TempDir()
+	srcRules := filepath.Join(src, "crs", "rules")
+	os.MkdirAll(srcRules, 0755)
+	os.WriteFile(filepath.Join(srcRules, "a.conf"), []byte("SecRule X 1"), 0644)
+	os.WriteFile(filepath.Join(src, "crs", "VERSION"), []byte("v4.14.0"), 0644)
+
+	oldLive := crsLiveDir
+	oldXdb := ip2regionLivePath
+	crsLiveDir = filepath.Join(src, "crs")
+	ip2regionLivePath = filepath.Join(src, "ip2region.xdb")
+	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	os.WriteFile(ip2regionLivePath, []byte("fake-xdb-bytes"), 0644)
+
+	bundle := BuildWafFileBundle()
+	if bundle == nil || len(bundle.CRSTarGzB64) == 0 || len(bundle.XdbB64) == 0 {
+		t.Fatalf("bundle incomplete: %+v", bundle)
+	}
+
+	// Target live tree: empty, ready to receive the sync.
+	dst := t.TempDir()
+	dstRules := filepath.Join(dst, "crs", "rules")
+	crsLiveDir = filepath.Join(dst, "crs")
+	ip2regionLivePath = filepath.Join(dst, "ip2region.xdb")
+	os.MkdirAll(crsLiveDir, 0755)
+
+	// Tampered CRS tar.gz: declared hash unchanged, bytes differ.
+	tampered := *bundle
+	tamperDir := t.TempDir()
+	if err := untarGzTo(bundle.CRSTarGzB64, tamperDir, ""); err != nil {
+		t.Fatalf("untar bundle: %v", err)
+	}
+	os.WriteFile(filepath.Join(tamperDir, "rules", "a.conf"), []byte("SecRule X EVIL"), 0644)
+	data, _, err := tarGzDir(tamperDir)
+	if err != nil {
+		t.Fatalf("re-archive tampered: %v", err)
+	}
+	tampered.CRSTarGzB64 = data
+	tampered.XdbB64 = nil
+	if _, _, err := ApplyWafFileBundle(&tampered); err == nil {
+		t.Fatalf("tampered CRS must be rejected")
+	}
+	if _, err := os.Stat(filepath.Join(dstRules, "a.conf")); !os.IsNotExist(err) {
+		t.Fatalf("tampered CRS must not be written to live tree")
+	}
+
+	// Tampered xdb: declared hash unchanged, bytes differ.
+	tamperedXdb := *bundle
+	tamperedXdb.CRSTarGzB64 = nil
+	tamperedXdb.XdbB64 = append([]byte(nil), bundle.XdbB64...)
+	tamperedXdb.XdbB64[0] ^= 0xFF
+	if _, _, err := ApplyWafFileBundle(&tamperedXdb); err == nil {
+		t.Fatalf("tampered xdb must be rejected")
+	}
+	if _, err := os.Stat(ip2regionLivePath); !os.IsNotExist(err) {
+		t.Fatalf("tampered xdb must not be written to live path")
+	}
+
+	// Untampered bundle still applies cleanly.
+	crsChanged, xdbChanged, err := ApplyWafFileBundle(bundle)
+	if err != nil || !crsChanged || !xdbChanged {
+		t.Fatalf("valid bundle apply crsChanged=%v xdbChanged=%v err=%v", crsChanged, xdbChanged, err)
+	}
+}

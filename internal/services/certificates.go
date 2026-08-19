@@ -132,7 +132,7 @@ func requeueCertJobsSnapshot(ctx context.Context, snapshot CertJobsSnapshot, man
 	var ruleDomain string
 	var enabled, enableTLS bool
 	var tlsSource string
-	if err := db.DB.QueryRowContext(ctx, `SELECT domain,enabled,enable_tls,COALESCE(tls_source,'manual') FROM lb_rules WHERE caddy_id=?`, snapshot.ruleID).
+	if err := db.DB.QueryRowContext(ctx, `SELECT domain,IIF(enabled IN ('1',1),1,0),enable_tls,COALESCE(tls_source,'manual') FROM lb_rules WHERE caddy_id=?`, snapshot.ruleID).
 		Scan(&ruleDomain, &enabled, &enableTLS, &tlsSource); err != nil {
 		return fmt.Errorf("load rule for certificate job requeue: %w", err)
 	}

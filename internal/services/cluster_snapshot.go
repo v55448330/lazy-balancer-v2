@@ -594,7 +594,7 @@ func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore)
 		COALESCE(custom_routes_enabled,0),
 		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 		COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
-		COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), COALESCE(enabled,1), COALESCE(log_enabled,0), COALESCE(created_by,0), COALESCE(updated_by,0), created_at, updated_at
+		COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), IIF(enabled IN ('1',1),1,0), COALESCE(log_enabled,0), COALESCE(created_by,0), COALESCE(updated_by,0), created_at, updated_at
 		FROM lb_rules ORDER BY caddy_id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照规则: %w", err)

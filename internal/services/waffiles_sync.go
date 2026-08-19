@@ -126,7 +126,7 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 	if len(bundle.CRSTarGzB64) > 0 {
 		liveSum, liveErr := tarGzDirSum(crsLiveDir)
 		if liveErr != nil || liveSum != bundle.CRSSha256 {
-			if err := untarGzTo(bundle.CRSTarGzB64, crsLiveDir); err != nil {
+			if err := untarGzTo(bundle.CRSTarGzB64, crsLiveDir, bundle.CRSSha256); err != nil {
 				return crsChanged, xdbChanged, fmt.Errorf("写入同步 CRS 规则文件: %w", err)
 			}
 			if bundle.CRSVersion != "" {
@@ -138,6 +138,12 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 	if len(bundle.XdbB64) > 0 {
 		liveSum := fileSha256(ip2regionLivePath)
 		if liveSum != bundle.IP2RegionSha {
+			if bundle.IP2RegionSha != "" {
+				sum := sha256.Sum256(bundle.XdbB64)
+				if got := hex.EncodeToString(sum[:]); got != bundle.IP2RegionSha {
+					return crsChanged, xdbChanged, fmt.Errorf("同步 IP2Region 数据库哈希不匹配（声明 %s，实际 %s），已拒绝落盘", bundle.IP2RegionSha, got)
+				}
+			}
 			tmp := ip2regionLivePath + ".sync"
 			if err := os.WriteFile(tmp, bundle.XdbB64, 0644); err != nil {
 				return crsChanged, xdbChanged, fmt.Errorf("写入同步 IP2Region 数据库: %w", err)
@@ -212,7 +218,10 @@ func tarGzDirSum(dir string) (string, error) {
 	return sum, err
 }
 
-func untarGzTo(data []byte, destDir string) error {
+// untarGzTo extracts data into destDir atomically. When expectSum is
+// non-empty, the re-archived staging tree must hash to it, or the sync is
+// rejected before anything touches the live tree.
+func untarGzTo(data []byte, destDir string, expectSum string) error {
 	gz, err := gzip.NewReader(strings.NewReader(string(data)))
 	if err != nil {
 		return err
@@ -264,6 +273,18 @@ func untarGzTo(data []byte, destDir string) error {
 				return err
 			}
 			f.Close()
+		}
+	}
+	// Verify the extracted staging tree before touching the live tree.
+	if expectSum != "" {
+		sum, sumErr := tarGzDirSum(staging)
+		if sumErr != nil {
+			os.RemoveAll(staging)
+			return fmt.Errorf("校验同步规则集: %w", sumErr)
+		}
+		if sum != expectSum {
+			os.RemoveAll(staging)
+			return fmt.Errorf("同步规则集哈希不匹配（声明 %s，实际 %s），已拒绝落盘", expectSum, sum)
 		}
 	}
 	// Replace live tree: backup then swap (copy-based, overlayfs-safe like
