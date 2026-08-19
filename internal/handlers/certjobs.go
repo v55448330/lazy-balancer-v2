@@ -26,6 +26,10 @@ import (
 
 var certJobOperationLocks [64]sync.Mutex
 
+// retryCertJobPreEnqueueHook 是测试专用钩子：在 SELECT 状态之后、EnqueueIfActive
+// 内 UPDATE 之前触发，用于模拟 worker 侧并发状态流转（R42 发现4 回归测试）。
+var retryCertJobPreEnqueueHook func(jobID int)
+
 var certJobIndexState struct {
 	sync.Mutex
 	databases map[*sql.DB]struct{}
@@ -273,6 +277,9 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 	if parts := strings.Split(domain, ","); len(parts) == 2 {
 		reversedDomain = parts[1] + "," + parts[0]
 	}
+	if retryCertJobPreEnqueueHook != nil {
+		retryCertJobPreEnqueueHook(id)
+	}
 	_, changed, err := qm.EnqueueIfActive(caProviderID, id, ruleID, domain, func() (int, bool, error) {
 		result, err := db.DB.Exec(`UPDATE cert_jobs
 			SET status='queued', message='重新排队签发', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now')
@@ -292,6 +299,13 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		return
 	}
 	if !changed {
+		// SELECT(:254) 与 UPDATE 之间状态可能被 worker 流转（如 failed→creating_account），
+		// 导致 0 行影响；此时归因是并发竞争而非规则禁用，重读当前状态区分文案（R42 发现4）。
+		var currentStatus string
+		if scanErr := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", id).Scan(&currentStatus); scanErr == nil && currentStatus != status {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务状态已变更，请刷新后重试"})
+			return
+		}
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务关联规则已禁用、证书配置已变更或队列已暂停"})
 		return
 	}

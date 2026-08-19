@@ -30,6 +30,8 @@ type CertificateService struct {
 	timersPaused        bool
 	stopping            bool
 	retryDeployment     func(context.Context, int) error
+	// cancelWaitTimeout 上限取消部署重试时的在途等待；0 走默认 30s。测试可覆盖。
+	cancelWaitTimeout time.Duration
 }
 
 type deploymentTimer struct {
@@ -264,11 +266,26 @@ func (s *CertificateService) cancelDeploymentRetry(jobID int) {
 		runningDone = append(runningDone, callback.done)
 	}
 	s.timerMu.Unlock()
+	// 在途部署回调退出等待必须有界：回调链条最终调到 caddyReloader（非
+	// context-aware），Caddy admin 请求异常挂起时 HTTP 调用方会被永久挂起；
+	// 与 CAQueueManager.CancelJob 的 30s 上限同模式（R36 C-1 / R42 发现3）。
+	waitTimeout := s.cancelWaitTimeout
+	if waitTimeout <= 0 {
+		waitTimeout = 30 * time.Second
+	}
 	if pendingDone != nil {
-		<-pendingDone
+		select {
+		case <-pendingDone:
+		case <-time.After(waitTimeout):
+			Logf("warn", "取消证书任务 %d：等待待定部署定时器退出超时（%s），继续后续流程", jobID, waitTimeout)
+		}
 	}
 	for _, done := range runningDone {
-		<-done
+		select {
+		case <-done:
+		case <-time.After(waitTimeout):
+			Logf("warn", "取消证书任务 %d：等待在途部署回调退出超时（%s），继续后续流程", jobID, waitTimeout)
+		}
 	}
 }
 

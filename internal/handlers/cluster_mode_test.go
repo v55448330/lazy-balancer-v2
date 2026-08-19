@@ -118,3 +118,39 @@ func TestSetClusterMode_rejectsCredentialedMasterURLWithoutAuditingCredentials(t
 		t.Fatalf("audit detail=%q, want canonical master host", auditDetail)
 	}
 }
+
+func TestUpdateClusterSettings_sync_interval_range_validation(t *testing.T) {
+	// R42 发现1：handler 必须把 ErrInvalidSyncInterval 映射为 400（原实现统一 403），
+	// 合法区间仍返回 200。
+	h := newBackupTestHandlers(t)
+	router := gin.New()
+	router.PUT("/cluster/settings", h.UpdateClusterSettings)
+
+	cases := []struct {
+		name       string
+		payload    string
+		wantStatus int
+		wantBody   string
+	}{
+		{"zero", `{"sync_interval":0}`, http.StatusBadRequest, "同步间隔需在 10-86400 秒之间"},
+		{"negative", `{"sync_interval":-5}`, http.StatusBadRequest, "同步间隔需在 10-86400 秒之间"},
+		{"below_min", `{"sync_interval":9}`, http.StatusBadRequest, "同步间隔需在 10-86400 秒之间"},
+		{"above_max", `{"sync_interval":86401}`, http.StatusBadRequest, "同步间隔需在 10-86400 秒之间"},
+		{"min_ok", `{"sync_interval":10}`, http.StatusOK, ""},
+		{"max_ok", `{"sync_interval":86400}`, http.StatusOK, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPut, "/cluster/settings", strings.NewReader(tc.payload))
+			request.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(response, request)
+			if response.Code != tc.wantStatus {
+				t.Fatalf("status=%d body=%s, want %d", response.Code, response.Body.String(), tc.wantStatus)
+			}
+			if tc.wantBody != "" && !strings.Contains(response.Body.String(), tc.wantBody) {
+				t.Fatalf("body=%s, want to contain %q", response.Body.String(), tc.wantBody)
+			}
+		})
+	}
+}

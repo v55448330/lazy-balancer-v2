@@ -484,6 +484,10 @@ func applySecurityBlockPages(ctx context.Context, tx *sql.Tx, pages []models.Sec
 	if _, err := tx.ExecContext(ctx, `UPDATE security_block_pages SET is_default=0 WHERE is_default=1 AND id != (SELECT MIN(id) FROM security_block_pages WHERE is_default=1)`); err != nil {
 		return fmt.Errorf("降级多余的默认拦截页: %w", err)
 	}
+	// R42 B42-2: 保留行内容可能为种子库存而用户定制内容在被降级行上。内容提升
+	// 只在主节点导入路径做（config_backup.go 可渲染 branding 判定「库存」内容）；
+	// 从节点无 branding 渲染可用，且须与主节点内容忠实一致，此处不做提升——
+	// 主节点修复后随后续同步自愈。
 	return nil
 }
 

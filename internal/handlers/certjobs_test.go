@@ -78,6 +78,46 @@ func TestRetryCertJob_rejects_inactive_rule_atomically(t *testing.T) {
 	}
 }
 
+func TestRetryCertJob_concurrent_status_change_returns_refresh_message(t *testing.T) {
+	// R42 发现4：worker 在 SELECT 与 UPDATE 之间流转状态时，409 文案应区分归因。
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_race','race','http','race.example.test',8080,1,1,'acme_dns');
+		INSERT INTO cert_jobs (id,rule_id,domain,status,updated_at) VALUES (7,'lb_race','race.example.test','failed',datetime('now','-10 minutes'))`); err != nil {
+		t.Fatalf("seed race job: %v", err)
+	}
+	oldHook := retryCertJobPreEnqueueHook
+	retryCertJobPreEnqueueHook = func(jobID int) {
+		if _, err := db.DB.Exec("UPDATE cert_jobs SET status='creating_account', updated_at=datetime('now') WHERE id=?", jobID); err != nil {
+			t.Errorf("simulate worker transition: %v", err)
+		}
+	}
+	t.Cleanup(func() { retryCertJobPreEnqueueHook = oldHook })
+	router := gin.New()
+	router.POST("/jobs/:id/retry", h.RetryCertJob)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/jobs/7/retry", nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "任务状态已变更，请刷新后重试") {
+		t.Fatalf("body=%s, want 并发状态变更文案", response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "规则已禁用") {
+		t.Fatalf("body=%s, 不应误指规则已禁用", response.Body.String())
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=7").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "creating_account" {
+		t.Fatalf("status=%q, want creating_account（worker 流转结果不应被 retry 覆盖）", status)
+	}
+}
+
 func TestRetryCertJob_accepts_www_first_rule_domain(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()

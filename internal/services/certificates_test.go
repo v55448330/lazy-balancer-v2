@@ -279,6 +279,36 @@ func TestCertificateService_cancelDeploymentRetry_waits_for_running_callback(t *
 	<-cancelDone
 }
 
+func TestCertificateService_cancelDeploymentRetry_boundedWaitOnStuckCallback(t *testing.T) {
+	// R42 发现3：回调链条调到非 context-aware 的 caddyReloader，Caddy admin 异常
+	// 挂起时 HTTP 调用方必须能在 cancelWaitTimeout 内返回，不能永久阻塞。
+	service := NewCertificateService()
+	service.cancelWaitTimeout = 50 * time.Millisecond
+	entered := make(chan struct{})
+	service.retryDeployment = func(_ context.Context, _ int) error {
+		close(entered)
+		select {} // 永久阻塞，模拟 Caddy admin 请求挂起
+	}
+	service.scheduleDeploymentRetry(42, "lb_stuck", 0)
+	<-entered
+
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		service.cancelDeploymentRetry(42)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelDeploymentRetry 未在 5s 内返回（stuck 回调应触发有界超时）")
+	}
+	if elapsed := time.Since(start); elapsed < 50*time.Millisecond {
+		t.Fatalf("cancelDeploymentRetry 过早返回（%s），应至少等待 cancelWaitTimeout", elapsed)
+	}
+}
+
 func TestCertificateService_Stop_waits_for_deployment_retry_callback(t *testing.T) {
 	// Given
 	_, _ = newClusterTestService(t)

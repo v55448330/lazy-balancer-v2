@@ -1295,3 +1295,34 @@ func TestClusterService_UpdateSettings_ignoresLegacySyncCaddyConfig(t *testing.T
 		t.Fatalf("sync_caddy_config column still exists")
 	}
 }
+
+func TestClusterService_UpdateSettings_sync_interval_range_validation(t *testing.T) {
+	// R42 发现1：sync_interval 落库前必须做范围校验，否则从节点 run 循环
+	// waitDelay(0) 进入零间隔 Pull 风暴。
+	service, database := newClusterTestService(t)
+	ctx := context.Background()
+
+	rejected := []int{0, -1, 9, 86401, 1000000}
+	for _, value := range rejected {
+		interval := value
+		err := service.UpdateSettings(ctx, models.ClusterSettingsRequest{SyncInterval: &interval})
+		if !errors.Is(err, ErrInvalidSyncInterval) {
+			t.Fatalf("interval=%d: err=%v, want ErrInvalidSyncInterval", value, err)
+		}
+	}
+
+	accepted := []int{10, 60, 86400}
+	for _, value := range accepted {
+		interval := value
+		if err := service.UpdateSettings(ctx, models.ClusterSettingsRequest{SyncInterval: &interval}); err != nil {
+			t.Fatalf("interval=%d: unexpected err %v", value, err)
+		}
+		var got int
+		if err := database.QueryRow("SELECT sync_interval FROM global_config WHERE id=1").Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != value {
+			t.Fatalf("interval=%d: persisted=%d", value, got)
+		}
+	}
+}

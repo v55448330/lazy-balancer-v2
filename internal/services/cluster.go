@@ -25,6 +25,7 @@ var (
 	ErrNodeNotFound         = errors.New("节点不存在")
 	ErrInvalidClusterAuth   = errors.New("集群凭证无效")
 	ErrAlreadyMaster        = errors.New("当前节点已是主节点")
+	ErrInvalidSyncInterval  = errors.New("同步间隔需在 10-86400 秒之间")
 )
 
 type ClusterLifecycle interface {

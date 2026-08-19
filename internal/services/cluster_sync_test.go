@@ -1410,3 +1410,42 @@ func TestSyncService_driftedSections_skipsDisabledSwitch(t *testing.T) {
 		t.Fatalf("drifted=%q, want users（开关打开且数据缺失应检测）", drifted)
 	}
 }
+
+func TestSyncService_run_clampsInvalidSyncInterval(t *testing.T) {
+	// R42 发现1 防御：存量库可能残留 sync_interval<=0，run 循环必须 clamp 到 60s，
+	// 否则 time.NewTimer(<=0) 立即触发 → 零间隔 Pull 风暴。
+	_, database := newClusterTestService(t)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/cluster/sync/snapshot":
+			response.WriteHeader(http.StatusNotModified)
+		case "/api/v1/cluster/nodes/report":
+			_ = json.NewEncoder(response).Encode(map[string]any{"data": map[string]any{}})
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer master.Close()
+	caddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
+	defer caddy.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='cluster-token', sync_interval=0 WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(caddy.URL))
+	delays := make(chan time.Duration, 4)
+	service.waitRunDelay = func(_ context.Context, d time.Duration) bool {
+		delays <- d
+		return false
+	}
+
+	service.run(context.Background())
+
+	select {
+	case got := <-delays:
+		if got != 60*time.Second {
+			t.Fatalf("delay=%s, want 60s（sync_interval=0 应被 clamp）", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run 循环未在 5s 内进入首个 waitDelay")
+	}
+}

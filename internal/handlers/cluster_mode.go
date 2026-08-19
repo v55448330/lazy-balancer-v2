@@ -100,7 +100,11 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 		return
 	}
 	if err := h.clusterService.UpdateSettings(c.Request.Context(), req); err != nil {
-		clusterError(c, http.StatusForbidden, err.Error(), err)
+		status := http.StatusForbidden
+		if errors.Is(err, services.ErrInvalidSyncInterval) {
+			status = http.StatusBadRequest
+		}
+		clusterError(c, status, err.Error(), err)
 		return
 	}
 	recordAudit(c, "更新", "集群设置", services.FormatAuditDetail(clusterSettingsChangeDetail(req), services.AuditResultPart("success")))

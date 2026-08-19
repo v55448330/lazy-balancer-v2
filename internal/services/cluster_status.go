@@ -41,6 +41,11 @@ func (s *ClusterService) UpdateSettings(ctx context.Context, req models.ClusterS
 	if req.SyncInterval != nil && !isMaster {
 		return errors.New("从节点不能修改同步间隔，由主节点统一下发")
 	}
+	// sync_interval 无下限校验会让从节点 run 循环 waitDelay(0) 进入零间隔
+	// Pull 风暴（主节点被持续高压请求打满）；上限 86400 防误填（R42 发现1）。
+	if req.SyncInterval != nil && (*req.SyncInterval < 10 || *req.SyncInterval > 86400) {
+		return ErrInvalidSyncInterval
+	}
 	if s.beforeUpdateSettings != nil {
 		s.beforeUpdateSettings()
 	}

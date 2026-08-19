@@ -58,7 +58,9 @@ type ClusterModeRequest struct {
 }
 
 type ClusterSettingsRequest struct {
-	SyncInterval     *int  `json:"sync_interval" binding:"omitempty,min=5"`
+	// SyncInterval 范围校验（10-86400）在 ClusterService.UpdateSettings 完成，
+	// 以便返回「同步间隔需在 10-86400 秒之间」的具体文案；binding 层不再拦截（R42 发现1）。
+	SyncInterval     *int  `json:"sync_interval"`
 	SyncGlobalConfig *bool `json:"sync_global_config"`
 	SyncUsers        *bool `json:"sync_users"`
 	SyncRules        *bool `json:"sync_rules"`

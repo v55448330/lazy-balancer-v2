@@ -1222,6 +1222,11 @@ func (s *SyncService) run(ctx context.Context) {
 				retryDelay = time.Second
 			}
 		}
+		// 存量脏数据兜底：R42 前 sync_interval 无下限校验，库里可能残留 0/负数，
+		// time.NewTimer(<=0) 会立即触发导致零间隔 Pull 风暴；clamp 到 60s。
+		if interval < 1 {
+			interval = 60
+		}
 		delay := time.Duration(interval) * time.Second
 		if token == "" {
 			delay = 10 * time.Second
