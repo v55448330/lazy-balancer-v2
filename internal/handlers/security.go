@@ -121,12 +121,23 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 
 func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 	id := c.Param("id")
+	// 引用检查与删除必须同事务：检查通过后、DELETE 之前并发的策略更新（启用引用
+	// 策略）或新建引用策略会造成悬空引用，发射端仅日志跳过，WAF 规则静默丢失。
+	// 写锁来自 DSN 的 _txlock=immediate（glebarez 驱动忽略 TxOptions.Isolation，
+	// 非只读 BeginTx 一律 BEGIN IMMEDIATE）：引用检查的 SELECT 即持写锁，并发的
+	// UpdateSecurityPolicy/CreateSecurityPolicy 无法在检查与 DELETE 之间提交（R37 I1）。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		return
+	}
+	defer tx.Rollback()
 	// 被启用策略引用的自定义规则不可删除：静默删除会产生悬空引用，发射阶段规则
 	// 被跳过且无提示，必须先解除绑定。仅 ID 数组形态计入引用（内嵌对象随策略
 	// 存储，删除单条规则不构成悬空）。
 	if idInt, err := strconv.Atoi(id); err == nil && idInt > 0 {
 		var referenced int
-		rows, err := db.DB.Query(`SELECT custom_rules FROM security_policies WHERE enabled=1`)
+		rows, err := tx.QueryContext(c.Request.Context(), `SELECT custom_rules FROM security_policies WHERE enabled=1`)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
@@ -159,13 +170,17 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 			return
 		}
 	}
-	result, err := db.DB.Exec("DELETE FROM security_custom_rules WHERE id=?", id)
+	result, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_custom_rules WHERE id=?", id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	if rows, _ := result.RowsAffected(); rows == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "删除", "自定义规则", fmt.Sprintf("规则 #%s", id), "")
@@ -245,8 +260,26 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 
 func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 	id := c.Param("id")
+	// 默认页检查 + 引用检查与删除必须同事务：检查通过后、DELETE 之前并发的策略
+	// 更新可把引用该页面的策略置 enabled=1，悬空引用会让拦截响应静默退化回
+	// Caddy 默认页面。写锁来自 DSN 的 _txlock=immediate（非只读 BeginTx 一律
+	// BEGIN IMMEDIATE）：首个 SELECT 即持写锁，并发的策略更新无法在检查与
+	// DELETE 之间提交（R37 I1，同 DeleteSecurityCustomRule）。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		return
+	}
+	defer tx.Rollback()
 	var isDefault bool
-	db.DB.QueryRow("SELECT is_default FROM security_block_pages WHERE id=?", id).Scan(&isDefault)
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT is_default FROM security_block_pages WHERE id=?", id).Scan(&isDefault); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
+		} else {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		}
+		return
+	}
 	if isDefault {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "默认拦截页面不可删除"})
 		return
@@ -254,7 +287,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 	// 被启用策略引用的拦截页面不可删除：静默删除会让这些策略的拦截
 	// 响应退化回 Caddy 默认页面，必须先解除绑定。
 	var referenced int
-	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_policies WHERE block_page_id=? AND enabled=1", id).Scan(&referenced); err != nil {
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policies WHERE block_page_id=? AND enabled=1", id).Scan(&referenced); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
@@ -262,13 +295,17 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该拦截页面正被 %d 个启用的安全策略使用，请先解除绑定", referenced)})
 		return
 	}
-	result, err := db.DB.Exec("DELETE FROM security_block_pages WHERE id=?", id)
+	result, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_block_pages WHERE id=?", id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	if rows, _ := result.RowsAffected(); rows == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "删除", "拦截页面", fmt.Sprintf("页面 #%s", id), "")
@@ -294,10 +331,18 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	}
 	for bindingRows.Next() {
 		var pid, cnt int
-		bindingRows.Scan(&pid, &cnt)
+		if err := bindingRows.Scan(&pid, &cnt); err != nil {
+			bindingRows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
 		bindingCounts[pid] = cnt
 	}
 	bindingRows.Close()
+	if err := bindingRows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
 	for rows.Next() {
 		var p models.SecurityPolicy
 		if err := scanSecurityPolicy(rows, &p); err != nil {
@@ -331,6 +376,12 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	}
 	if policies == nil {
 		policies = []models.SecurityPolicySummary{}
+	}
+	// 策略行迭代失败显式报错（R37 S1）：与 GetSecurityOverview 建立的「迭代失败
+	// 显式 500」标准一致，部分列表不得以 200 返回。
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: policies})
 }
@@ -1370,8 +1421,16 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 	for rows.Next() {
 		var ruleCaddyID string
 		var b BindingInfo
-		rows.Scan(&ruleCaddyID, &b.PolicyID, &b.Name, &b.Mode, &b.Enabled, &b.RateLimit)
+		if err := rows.Scan(&ruleCaddyID, &b.PolicyID, &b.Name, &b.Mode, &b.Enabled, &b.RateLimit); err != nil {
+			// 单行扫描失败跳过：不写入零值绑定（policy_id=0/mode="" 会把该规则
+			// 错误呈现为「已绑定到空策略」）；迭代错误由下方 rows.Err() 兜底（R37 S2）。
+			continue
+		}
 		result[ruleCaddyID] = b
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: result})
 }

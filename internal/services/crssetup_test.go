@@ -174,9 +174,14 @@ func TestCRSUpdateRun_rollbackRestoresPreviousLiveSetup(t *testing.T) {
 		t.Fatalf("reloads=%d, want 1 (reload after restore)", reloads)
 	}
 
-	// And the overrides written during the attempt is left in place
-	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf")); err != nil {
-		t.Fatal("zz-user-overrides.conf should survive rollback")
+	// And the overrides freshly written during the failed attempt is removed:
+	// restoring it would re-apply the same custom lines alongside the restored
+	// setup（R37 S3）
+	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf")); !os.IsNotExist(err) {
+		t.Fatal("zz-user-overrides.conf written during the failed attempt should be removed on rollback")
+	}
+	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
+		t.Fatal("zz-user-overrides.conf.bak should be consumed")
 	}
 }
 
@@ -211,7 +216,10 @@ func TestCRSUpdateRun_installsStockSetupWhenNoneExists(t *testing.T) {
 	}
 }
 
-func TestRestoreBackup_restoresSetupAndLeavesMigrationArtifacts(t *testing.T) {
+// TestRestoreBackup_restoresSetupAndLeavesArtifactsWithoutBak 验证无 overrides
+// 备份标记（本次运行未写 overrides）时，restoreBackup 不动 overrides 与 stock
+// 基线（R37 S3：恢复只撤销本次迁移的写入）。
+func TestRestoreBackup_restoresSetupAndLeavesArtifactsWithoutBak(t *testing.T) {
 	// Given backups in place, clobbered live files, and migration artifacts
 	m := newTestCRSManager(t)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
@@ -242,7 +250,7 @@ func TestRestoreBackup_restoresSetupAndLeavesMigrationArtifacts(t *testing.T) {
 		t.Fatal("crs-setup.conf.bak should be consumed")
 	}
 
-	// And the migration artifacts are untouched
+	// And the migration artifacts without a backup marker are untouched
 	for name, want := range map[string]string{
 		"zz-user-overrides.conf": "# migrated",
 		"crs-setup.stock.conf":   "# stock",
@@ -251,5 +259,52 @@ func TestRestoreBackup_restoresSetupAndLeavesMigrationArtifacts(t *testing.T) {
 		if err != nil || string(data) != want {
 			t.Fatalf("%s=%q,%v, want untouched %q", name, data, err, want)
 		}
+	}
+}
+
+// TestRestoreBackup_restoresPreexistingOverridesFromBak 验证 overrides 在更新前
+// 已存在（.bak 有内容）时，restoreBackup 恢复更新前内容并消费 .bak（R37 S3）。
+func TestRestoreBackup_restoresPreexistingOverridesFromBak(t *testing.T) {
+	// Given backups in place, clobbered live files, and a content .bak
+	m := newTestCRSManager(t)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
+	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf"), "# 本次迁移覆写")
+	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "# 更新前 overrides\nSecRuleARCustom 1")
+
+	// When the backup is restored
+	m.restoreBackup()
+
+	// Then the overrides file is back to its pre-update content and the .bak consumed
+	data, err := os.ReadFile(filepath.Join(m.crsDir, "zz-user-overrides.conf"))
+	if err != nil || string(data) != "# 更新前 overrides\nSecRuleARCustom 1" {
+		t.Fatalf("zz-user-overrides.conf=%q,%v, want restored pre-update content", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
+		t.Fatal("zz-user-overrides.conf.bak should be consumed")
+	}
+}
+
+// TestRestoreBackup_removesFreshlyCreatedOverrides 验证 overrides 由本次迁移新建
+// （空 .bak 标记）时，restoreBackup 删除该文件——恢复后的配置与更新前一致（R37 S3）。
+func TestRestoreBackup_removesFreshlyCreatedOverrides(t *testing.T) {
+	// Given backups in place, clobbered live files, and an empty .bak marker
+	m := newTestCRSManager(t)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
+	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf"), "# 本次迁移新建")
+	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "")
+
+	// When the backup is restored
+	m.restoreBackup()
+
+	// Then the freshly created overrides file is removed
+	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf")); !os.IsNotExist(err) {
+		t.Fatal("freshly created zz-user-overrides.conf should be removed")
+	}
+	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
+		t.Fatal("zz-user-overrides.conf.bak should be consumed")
 	}
 }

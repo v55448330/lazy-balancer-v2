@@ -112,7 +112,22 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 		header := fmt.Sprintf("# 由 CRS 更新自动迁移的用户自定义配置\n# 生成时间: %s\n",
 			time.Now().In(CurrentLocation()).Format(crsTimeLayout))
 		content := header + strings.Join(diff, "\n") + "\n"
-		if err := os.WriteFile(filepath.Join(m.crsDir, "zz-user-overrides.conf"), []byte(content), 0644); err != nil {
+		overridesPath := filepath.Join(m.crsDir, "zz-user-overrides.conf")
+		overridesBak := overridesPath + ".bak"
+		// 迁移写入前先留底：已有 overrides 则备份内容，没有则用空 .bak 标记
+		// 「更新前不存在」。restoreBackup 据此把 overrides 还原到更新前状态——
+		// 否则恢复后的旧 setup（含自定义行）与 overrides（同一批行）重复应用，
+		// coraza 拒绝重复 SecRule id 致 reload 失败、更新永久卡死（R37 S3）。
+		if _, err := os.Stat(overridesPath); err == nil {
+			if err := copyFile(overridesPath, overridesBak); err != nil {
+				m.restoreBackup()
+				return fmt.Errorf("备份 zz-user-overrides.conf: %w", err)
+			}
+		} else if err := os.WriteFile(overridesBak, nil, 0644); err != nil {
+			m.restoreBackup()
+			return fmt.Errorf("标记 zz-user-overrides.conf 更新前状态: %w", err)
+		}
+		if err := os.WriteFile(overridesPath, []byte(content), 0644); err != nil {
 			m.restoreBackup()
 			return fmt.Errorf("写入 zz-user-overrides.conf: %w", err)
 		}
@@ -155,6 +170,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 
 	os.RemoveAll(rulesBak)
 	os.Remove(setupBak)
+	os.Remove(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"))
 	// 标记磁盘实际版本 + 持久化到数据卷快照：未挂载 /app/waf 的部署在容器
 	// 重建后依赖该快照恢复用户更新的版本（见 ReconcileCRSState）。
 	writeCRSVersionMarker(m.crsDir, tag)
@@ -187,9 +203,12 @@ func persistCRSSnapshotFrom(liveDir, snapshotDir, version string) error {
 	return nil
 }
 
-// restoreBackup puts rules.bak and crs-setup.conf.bak back in place. The
-// overrides file and the stock baseline are left untouched: they were
-// written before the failure and stay valid for the restored setup.
+// restoreBackup puts rules.bak and crs-setup.conf.bak back in place and undoes
+// the current run's zz-user-overrides.conf write: with content it restores the
+// pre-update file, with the empty marker it removes the freshly created file,
+// so the restored config equals the pre-update state (R37 S3). Without the
+// .bak the overrides were not touched by this run and stay as-is. The stock
+// baseline stays valid for the restored setup.
 func (m *CRSUpdateManager) restoreBackup() {
 	rulesPath := filepath.Join(m.crsDir, "rules")
 	rulesBak := filepath.Join(m.crsDir, "rules.bak")
@@ -211,6 +230,19 @@ func (m *CRSUpdateManager) restoreBackup() {
 		return
 	}
 	os.Remove(setupBak)
+	overridesPath := filepath.Join(m.crsDir, "zz-user-overrides.conf")
+	overridesBak := overridesPath + ".bak"
+	if _, err := os.Stat(overridesBak); err != nil {
+		return
+	}
+	if data, err := os.ReadFile(overridesBak); err == nil && len(data) == 0 {
+		if err := os.Remove(overridesPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("crs update: failed to remove migrated zz-user-overrides.conf: %v", err)
+		}
+	} else if err := copyFile(overridesBak, overridesPath); err != nil {
+		log.Printf("crs update: failed to restore zz-user-overrides.conf backup: %v", err)
+	}
+	os.Remove(overridesBak)
 }
 
 // osRename is a seam for tests: Docker overlayfs cannot rename a directory

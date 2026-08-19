@@ -74,7 +74,8 @@
                 <div class="stat-box__body">
                   <div class="stat-box__value">{{ ip2regionVersion }}</div>
                   <div class="stat-box__label">IP 地理库</div>
-                  <el-tag v-if="ip2regionStatus" :type="statusTagType(ip2regionStatus)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(ip2regionStatus) }}</el-tag>
+                  <el-tag v-if="ip2regionError" type="danger" size="small" effect="plain" style="margin-top: 4px">加载失败</el-tag>
+                  <el-tag v-else-if="ip2regionStatus" :type="statusTagType(ip2regionStatus)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(ip2regionStatus) }}</el-tag>
                 </div>
               </div>
             </el-col>
@@ -130,7 +131,8 @@
               <el-link type="primary" @click="goToEvents">查看全部</el-link>
             </div>
           </template>
-          <el-table :data="blockedEvents" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+          <el-alert v-if="blockedEventsError" title="最近拦截事件加载失败" type="error" show-icon :closable="false" />
+          <el-table v-else :data="blockedEvents" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
             <template #empty><el-empty description="暂无拦截事件" :image-size="60" /></template>
             <el-table-column prop="event_time" label="时间" width="170" :formatter="(row: SecurityEvent) => formatDate(row.event_time)" />
             <el-table-column prop="client_ip" label="来源 IP" min-width="130" />
@@ -154,17 +156,20 @@
               <el-tag type="info" size="small" effect="plain">累计（进程启动至今）</el-tag>
             </div>
           </template>
-          <div class="rate-limit-total">
-            <div class="stat-label">累计拦截次数</div>
-            <div class="stat-value" style="color: #f56c6c">{{ rateLimitBlocks.total }}</div>
-          </div>
-          <el-table v-if="rateLimitBlocks.hosts.length > 0" :data="rateLimitBlocks.hosts" stripe size="small" :header-cell-style="{ background: '#f9fafb' }" empty-text="">
-            <el-table-column prop="host" label="域名" min-width="120" show-overflow-tooltip />
-            <el-table-column prop="count" label="拦截次数" width="90" align="center">
-              <template #default="{ row }"><el-tag type="danger" size="small" effect="plain">{{ row.count }}</el-tag></template>
-            </el-table-column>
-          </el-table>
-          <el-empty v-else description="暂无限流拦截" :image-size="60" />
+          <el-alert v-if="rateLimitError" title="限流拦截数据加载失败" type="error" show-icon :closable="false" />
+          <template v-else>
+            <div class="rate-limit-total">
+              <div class="stat-label">累计拦截次数</div>
+              <div class="stat-value" style="color: #f56c6c">{{ rateLimitBlocks.total }}</div>
+            </div>
+            <el-table v-if="rateLimitBlocks.hosts.length > 0" :data="rateLimitBlocks.hosts" stripe size="small" :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+              <el-table-column prop="host" label="域名" min-width="120" show-overflow-tooltip />
+              <el-table-column prop="count" label="拦截次数" width="90" align="center">
+                <template #default="{ row }"><el-tag type="danger" size="small" effect="plain">{{ row.count }}</el-tag></template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="暂无限流拦截" :image-size="60" />
+          </template>
         </el-card>
       </el-col>
     </el-row>
@@ -303,25 +308,37 @@ const fetchData = async () => {
 }
 
 const blockedEvents = ref<SecurityEvent[]>([])
+// 面板级错误态：请求失败时面板内显示「加载失败」，不再静默降级为「暂无」，
+// 与 overviewError 的 R36 F1 口径一致（R37 S4）。
+const blockedEventsError = ref(false)
 
 const fetchBlockedEvents = async () => {
   try {
     const res = await request.get<APIResponse<{ events: SecurityEvent[]; total: number }>>('/security/events?action=blocked&page_size=5')
     blockedEvents.value = res.data?.events || []
-  } catch { blockedEvents.value = [] }
+    blockedEventsError.value = false
+  } catch {
+    blockedEvents.value = []
+    blockedEventsError.value = true
+  }
 }
 
 const goToEvents = () => { window.open('/?page=security-events', '_blank') }
 
 const rateLimitBlocks = ref<RateLimitBlocks>({ total: 0, hosts: [] })
+const rateLimitError = ref(false)
 const ip2regionVersion = ref('—')
 const ip2regionStatus = ref('')
+const ip2regionError = ref(false)
 
 const fetchRateLimitBlocks = async () => {
   try {
     const res = await request.get<APIResponse<RateLimitBlocks>>('/security/rate-limit-blocks')
     if (res.data) rateLimitBlocks.value = res.data
-  } catch { /* silent */ }
+    rateLimitError.value = false
+  } catch {
+    rateLimitError.value = true
+  }
 }
 
 const fetchIP2RegionInfo = async () => {
@@ -329,7 +346,12 @@ const fetchIP2RegionInfo = async () => {
     const res = await request.get<APIResponse<{ version: string; update_status: string }>>('/security/ip2region')
     ip2regionVersion.value = res.data?.version || '—'
     ip2regionStatus.value = res.data?.update_status || ''
-  } catch { ip2regionVersion.value = '—'; ip2regionStatus.value = '' }
+    ip2regionError.value = false
+  } catch {
+    ip2regionVersion.value = '—'
+    ip2regionStatus.value = ''
+    ip2regionError.value = true
+  }
 }
 
 onMounted(() => { fetchData(); fetchBlockedEvents(); fetchRateLimitBlocks(); fetchIP2RegionInfo() })
