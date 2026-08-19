@@ -274,6 +274,9 @@
           <el-descriptions title="配置预览" :column="1" border>
             <el-descriptions-item label="名称">{{ form.name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="描述">{{ form.description || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="启用状态">
+              <el-tag :type="form.enabled ? 'success' : 'info'" size="small" effect="light">{{ form.enabled ? '启用' : '禁用' }}</el-tag>
+            </el-descriptions-item>
             <el-descriptions-item v-if="form.mode === 'off'" label="WAF">已关闭</el-descriptions-item>
             <el-descriptions-item v-if="form.mode !== 'off'" label="WAF 模式">
               <el-tag v-if="form.mode === 'blocking'" type="danger" size="small" effect="light">拦截</el-tag>
@@ -378,7 +381,7 @@ import { useAuthStore } from '@/stores/auth'
 import type { UserListItem } from '@/types'
 
 interface APIResponse<T> { code: number; message: string; data: T }
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled?: boolean; updated_by: number; updated_at: string }
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string }
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_by: number; updated_at: string; geoip_enabled?: boolean; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number }
 interface SecurityBinding { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean }
@@ -547,7 +550,7 @@ const blockPageName = computed(() => blockPages.value.find((p) => p.id === form.
 // 与后端口径一致：ACL 启用且列表非空，或白名单/黑名单非空
 const hasIpControl = (row: PolicySummary): boolean => {
   const aclCount = parseJsonList(row.ip_acl_list).length
-  const aclEnabled = row.ip_acl_enabled ?? (aclCount > 0)
+  const aclEnabled = row.ip_acl_enabled
   return (aclEnabled && aclCount > 0) || parseJsonList(row.ip_whitelist).length > 0 || parseJsonList(row.ip_blacklist).length > 0
 }
 
