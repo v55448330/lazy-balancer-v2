@@ -522,10 +522,10 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 
 	if s.caddyReloader != nil {
 		if err := s.caddyReloader(); err != nil {
-			RecordAuditLog("system", "重载失败", "Caddy配置", FormatAuditDetail(AuditSourcePart("certificate_issued"), AuditJobPart(jobID), AuditRulePart(material.ruleID)), "")
+			RecordAuditLog("system", "重载失败", "Caddy服务", FormatAuditDetail(AuditSourcePart("certificate_issued"), AuditJobPart(jobID), AuditRulePart(material.ruleID)), "")
 			return s.deploymentFailed(jobID, material, "Caddy 重载失败: "+err.Error(), fmt.Errorf("reload Caddy after certificate issuance: %w", err))
 		}
-		RecordAuditLog("system", "重载", "Caddy配置", FormatAuditDetail(AuditSourcePart("certificate_issued"), AuditJobPart(jobID), AuditRulePart(material.ruleID), AuditResultPart("success")), "")
+		RecordAuditLog("system", "重载", "Caddy服务", FormatAuditDetail(AuditSourcePart("certificate_issued"), AuditJobPart(jobID), AuditRulePart(material.ruleID), AuditResultPart("success")), "")
 	}
 
 	tx, err := db.DB.BeginTx(ctx, nil)

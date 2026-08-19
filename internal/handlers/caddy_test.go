@@ -219,7 +219,7 @@ func TestPutCaddyConfig_oversized_unknown_length_body_returns_413(t *testing.T) 
 	}
 }
 
-// R41 D-F2: 键集合一致性——planConfigChanges 中归属「Caddy全局配置」分组的 add() 键
+// R41 D-F2: 键集合一致性——planConfigChanges 中归属「Caddy配置」分组的 add() 键
 // 必须与 UpdateConfig PUT SQL 实际更新的同分组列集合相等（防止变更提示与实际写入漂移）。
 func TestCaddySectionKeys_matchUpdateSQL(t *testing.T) {
 	changesSrc, err := os.ReadFile("config_changes.go")
@@ -234,7 +234,7 @@ func TestCaddySectionKeys_matchUpdateSQL(t *testing.T) {
 	addKeyRe := regexp.MustCompile(`\badd\("([a-z0-9_]+)"`)
 	changesKeys := map[string]bool{}
 	for _, m := range addKeyRe.FindAllStringSubmatch(string(changesSrc), -1) {
-		if services.GetConfigSection(m[1]) == "Caddy全局配置" {
+		if services.GetConfigSection(m[1]) == "Caddy配置" {
 			changesKeys[m[1]] = true
 		}
 	}
@@ -248,7 +248,7 @@ func TestCaddySectionKeys_matchUpdateSQL(t *testing.T) {
 	colRe := regexp.MustCompile(`(?m)^\s*([a-z0-9_]+)\s*=\s*(?:COALESCE|CASE WHEN)`)
 	sqlKeys := map[string]bool{}
 	for _, m := range colRe.FindAllStringSubmatch(updateBlock, -1) {
-		if services.GetConfigSection(m[1]) == "Caddy全局配置" {
+		if services.GetConfigSection(m[1]) == "Caddy配置" {
 			sqlKeys[m[1]] = true
 		}
 	}

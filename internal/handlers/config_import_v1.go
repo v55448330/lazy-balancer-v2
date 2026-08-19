@@ -706,7 +706,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	}
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
-	recordAudit(c, "重载", "Caddy配置", "导入配置后自动重载")
+	recordAudit(c, "重载", "Caddy服务", "导入配置后自动重载")
 	tlsSuffix := ""
 	if tlsCount > 0 {
 		tlsSuffix = fmt.Sprintf("、TLS 规则 %d 条", tlsCount)

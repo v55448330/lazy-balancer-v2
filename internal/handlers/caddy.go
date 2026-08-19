@@ -447,7 +447,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 
-	recordAudit(c, "重载", "Caddy配置", "保存配置后自动重载")
+	recordAudit(c, "重载", "Caddy服务", "保存配置后自动重载")
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config updated and applied", Data: plan})
 }
@@ -471,7 +471,7 @@ func (h *Handlers) ReloadCaddy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置重载失败: " + err.Error()})
 		return
 	}
-	recordAudit(c, "重载", "Caddy配置", "手动重载 Caddy 配置")
+	recordAudit(c, "重载", "Caddy服务", "手动重载 Caddy 配置")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy 配置已重载"})
 }
 
@@ -724,7 +724,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	committed = true
 
 	recordAudit(c, "更新", "Caddy配置", "保存 Caddy 全局配置")
-	recordAudit(c, "重载", "Caddy配置", "保存配置后自动重载")
+	recordAudit(c, "重载", "Caddy服务", "保存配置后自动重载")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config saved"})
 }
 

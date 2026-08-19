@@ -137,7 +137,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// 不回滚已提交的快照。
 	if err := s.caddy.ApplyConfig(GenerateCaddyConfig()); err != nil {
 		Logf("error", "集群同步后重载 Caddy 失败（快照已提交）: %v", err)
-		RecordAuditLog("system", "重载失败", "Caddy配置", fmt.Sprintf("同步应用后自动重载失败: %v", err), "")
+		RecordAuditLog("system", "重载失败", "Caddy服务", fmt.Sprintf("同步应用后自动重载失败: %v", err), "")
 		// 写入标记：运行配置与数据库不一致。304 分支识别该标记并全量重拉补偿重试，
 		// 避免陈旧运行配置存活到下次真实变更或重启。标记必须跨调用方 ctx 取消存活，
 		// 套用 persistSyncError 的 WithoutCancel+2s 超时模式（R33 F-3）。
@@ -151,7 +151,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			Logf("error", "集群同步重载失败标记写入异常（影响 %d 行，错误 %v）：自愈通道失效，请检查数据库", rows, raerr)
 		}
 	} else {
-		RecordAuditLog("system", "重载", "Caddy配置", "同步应用后自动重载", "")
+		RecordAuditLog("system", "重载", "Caddy服务", "同步应用后自动重载", "")
 	}
 	clusterSnapshotCaches.Delete(s.db)
 	caddySync := "未开启"

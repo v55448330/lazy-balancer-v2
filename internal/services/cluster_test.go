@@ -902,7 +902,7 @@ func TestSyncService_applySnapshot_keeps_committed_snapshot_when_caddy_rejects_c
 		t.Fatalf("committed incoming users=%d, want 1", incomingCount)
 	}
 	var reloadFailures int
-	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='重载失败' AND resource='Caddy配置'").Scan(&reloadFailures); err != nil {
+	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='重载失败' AND resource='Caddy服务'").Scan(&reloadFailures); err != nil {
 		t.Fatalf("read audit log: %v", err)
 	}
 	if reloadFailures != 1 {
