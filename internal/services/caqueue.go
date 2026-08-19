@@ -1004,7 +1004,7 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 		}
 		if err == nil {
 			WriteCertJobLog(jobID, "ERROR", "failed", message)
-			RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("max_attempts")), "")
+			RecordAuditLog("system", "签发失败", "证书任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("max_attempts")), "")
 		}
 		return
 	}
@@ -1021,7 +1021,7 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 	}
 	if err == nil {
 		WriteCertJobLog(jobID, "WARN", "waiting_ca", fmt.Sprintf("CA 频率限制，第 %d 次，将在 %s 后重试", attempts, display.Format("2006-01-02 15:04:05 -07:00")))
-		RecordAuditLog("system", "CA限流", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), fmt.Sprintf("第 %d 次限流", attempts), fmt.Sprintf("恢复时间：%s", display.Format("2006-01-02 15:04:05"))), "")
+		RecordAuditLog("system", "签发限流", "证书任务", FormatAuditDetail(AuditJobPart(jobID), fmt.Sprintf("第 %d 次限流", attempts), fmt.Sprintf("恢复时间：%s", display.Format("2006-01-02 15:04:05"))), "")
 	}
 }
 
@@ -1079,5 +1079,5 @@ func recordFailedJobTransition(jobID int, message string, err error) {
 		return
 	}
 	WriteCertJobLog(jobID, "ERROR", "failed", message)
-	RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("failed")), "")
+	RecordAuditLog("system", "签发失败", "证书任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("failed")), "")
 }

@@ -517,7 +517,7 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 				}
 				continue
 			}
-			RecordAuditLog("system", "禁用", "证书签发任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("ca_cooldown")), "")
+			RecordAuditLog("system", "禁用", "证书任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("ca_cooldown")), "")
 			continue
 		}
 		_, changed, err := qm.EnqueueIfActive(job.caProviderID, job.id, job.ruleID, job.domain, func() (int, bool, error) {
@@ -534,7 +534,7 @@ func (s *CertificateService) requeueWaitingCAJobs() {
 		if !changed {
 			continue
 		}
-		RecordAuditLog("system", "重新排队", "证书签发任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("ca_cooldown")), "")
+		RecordAuditLog("system", "重新排队", "证书任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("ca_cooldown")), "")
 	}
 }
 
@@ -720,7 +720,7 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 			log.Printf("cert recovery: job %d still active in CA queue, skip requeue", job.id)
 			continue
 		}
-		RecordAuditLog("system", "恢复排队", "证书签发任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("startup_recovery")), "")
+		RecordAuditLog("system", "恢复排队", "证书任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("startup_recovery")), "")
 	}
 	return nil
 }
@@ -791,7 +791,7 @@ func sweepOrphanedCertJobs(ctx context.Context) {
 			log.Printf("cert sweep: disable orphaned certificate job %d failed: %v", job.id, err)
 			continue
 		}
-		RecordAuditLog("system", "禁用", "证书签发任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("runtime_sweep")), "")
+		RecordAuditLog("system", "禁用", "证书任务", FormatAuditDetail(AuditJobPart(job.id), AuditRulePart(job.ruleID), AuditSourcePart("runtime_sweep")), "")
 	}
 }
 
@@ -930,7 +930,7 @@ func (s *CertificateService) renewExpiringCertificates() {
 				if err := transitionJob(db.DB, j.ID, []string{"waiting_ca"}, "failed", map[string]any{"message": "已达到最大重试次数，请检查 CA 配置后手动重签"}); err != nil {
 					log.Printf("Renewal: failed to convert waiting_ca job %d to failed: %v", j.ID, err)
 				} else {
-					RecordAuditLog("system", "签发失败", "证书签发任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditResultPart("max_attempts")), "")
+					RecordAuditLog("system", "签发失败", "证书任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditResultPart("max_attempts")), "")
 				}
 			}
 			continue
@@ -962,7 +962,7 @@ func (s *CertificateService) renewExpiringCertificates() {
 		if !changed {
 			continue
 		}
-		RecordAuditLog("system", action, "证书签发任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditSourcePart(source)), "")
+		RecordAuditLog("system", action, "证书任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditSourcePart(source)), "")
 	}
 }
 

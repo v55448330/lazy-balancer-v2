@@ -217,7 +217,7 @@ func (s *CertIssuer) deploymentFailed(jobID int, material issuedCertificate, mes
 		s.deploymentRetry(jobID, material, delay)
 	}
 	if updateErr == nil && status == "failed" {
-		RecordAuditLog("system", "部署失败", "证书签发任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("max_attempts")), "")
+		RecordAuditLog("system", "部署失败", "证书任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("max_attempts")), "")
 	}
 	return &certificateDeploymentError{err: errors.Join(err, updateErr)}
 }
@@ -315,7 +315,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 						}); err != nil {
 							return fmt.Errorf("finalize already deployed certificate: %w", err)
 						}
-						RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书已部署，无需重新部署", ruleID), "")
+						RecordAuditLog("system", "签发成功", "证书任务", fmt.Sprintf("规则 %s 证书已部署，无需重新部署", ruleID), "")
 						return nil
 					}
 					logger.Log("downloaded", "检测到已签发的有效证书，直接重新部署文件")
@@ -348,7 +348,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 					if err != nil {
 						return errors.Join(fmt.Errorf("finalize certificate redeploy: %w", err), restoreCertificateDeployment(snapshot, s.caddyReloader))
 					}
-					RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书重新部署成功", ruleID), "")
+					RecordAuditLog("system", "签发成功", "证书任务", fmt.Sprintf("规则 %s 证书重新部署成功", ruleID), "")
 					return nil
 				}
 			}
@@ -478,7 +478,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		return err
 	}
 
-	RecordAuditLog("system", "签发成功", "证书签发任务", fmt.Sprintf("规则 %s 证书签发成功，过期时间 %s", ruleID, notAfter.Format("2006-01-02")), "")
+	RecordAuditLog("system", "签发成功", "证书任务", fmt.Sprintf("规则 %s 证书签发成功，过期时间 %s", ruleID, notAfter.Format("2006-01-02")), "")
 	return nil
 }
 

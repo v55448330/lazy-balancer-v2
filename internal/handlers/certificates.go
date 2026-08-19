@@ -78,7 +78,7 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 	}
 
 	id, _ := result.LastInsertId()
-	recordAudit(c, "创建", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), req.Name, req.DNSProvider, fmt.Sprintf("启用：%t", req.Enabled)))
+	recordAudit(c, "创建", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), req.Name, req.DNSProvider, fmt.Sprintf("启用：%t", req.Enabled)))
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "Config created", Data: gin.H{"id": id}})
 }
 
@@ -152,7 +152,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	}
 
 	if len(changed) == 0 {
-		recordAudit(c, "更新", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), "无修改"))
+		recordAudit(c, "更新", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), "无修改"))
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config unchanged"})
 		return
 	}
@@ -164,7 +164,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update config"})
 		return
 	}
-	recordAudit(c, "更新", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
+	recordAudit(c, "更新", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config updated"})
 }
 
@@ -183,7 +183,7 @@ func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete config"})
 		return
 	}
-	recordAudit(c, "删除", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), name, provider))
+	recordAudit(c, "删除", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), name, provider))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config deleted"})
 }
 
@@ -236,7 +236,7 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 	if idParam != "" {
 		err := db.DB.QueryRow("SELECT name, dns_provider, COALESCE(dns_credentials,'') FROM certificate_configs WHERE id=?", id).Scan(&configName, &provider, &credentials)
 		if errors.Is(err, sql.ErrNoRows) {
-			recordAudit(c, "测试失败", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), services.AuditResultPart("not_found")))
+			recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), services.AuditResultPart("not_found")))
 		}
 		if dbQueryNotFound(c, err, "Config not found", "TestCertificateConfig query config") {
 			return
@@ -248,23 +248,23 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 	}
 
 	if req.Domain == "" {
-		recordAudit(c, "测试失败", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, services.AuditResultPart("missing_domain")))
+		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, services.AuditResultPart("missing_domain")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请输入用于测试的域名"})
 		return
 	}
 
 	p, ok := dnsproviders.Get(provider)
 	if !ok {
-		recordAudit(c, "测试失败", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, services.AuditResultPart("unknown_provider")))
+		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, services.AuditResultPart("unknown_provider")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Unknown provider"})
 		return
 	}
 	if err := p.Validate(creds, req.Domain); err != nil {
-		recordAudit(c, "测试失败", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, req.Domain, services.AuditResultPart("credentials_invalid")))
+		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, req.Domain, services.AuditResultPart("credentials_invalid")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	recordAudit(c, "测试成功", "DNS提供商配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, req.Domain, services.AuditResultPart("success")))
+	recordAudit(c, "测试成功", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, req.Domain, services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "凭证有效"})
 }
 
