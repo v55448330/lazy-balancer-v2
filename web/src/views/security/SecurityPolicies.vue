@@ -766,7 +766,29 @@ const handleSave = async () => {
     // 回传当前名单内容，避免"关掉开关再打开"丢数据；ip_blacklist 本页不下发，后端
     // 指针语义自动保留原值。注意：后端按"名单非空即生效"发射，信任名单/区域控制
     // 的真正关闭方式是清空名单条目，开关仅控制编辑器显隐并在重开时按名单派生。
-    const payload = { ...form.value, ip_acl_list: JSON.stringify(ipACLList.value), ip_whitelist: JSON.stringify(ipWhitelist.value), crs_rule_groups: JSON.stringify(crsRuleGroups.value), crs_excluded_rules: JSON.stringify(crsExcludedRules.value), custom_rules: JSON.stringify(selectedCustomRules.value), geoip_countries: JSON.stringify(geoipCountries.value) }
+    // 显式白名单：仅提交 UpdateSecurityPolicyRequest 实际字段（geoip_enabled 为
+    // 编辑器派生开关，后端无此字段，不下发；ip_blacklist/enabled 由其他入口管理）。
+    const payload = {
+      name: form.value.name,
+      description: form.value.description,
+      mode: form.value.mode,
+      anomaly_threshold: form.value.anomaly_threshold,
+      ip_acl_enabled: form.value.ip_acl_enabled,
+      ip_acl_mode: form.value.ip_acl_mode,
+      ip_acl_list: JSON.stringify(ipACLList.value),
+      ip_whitelist: JSON.stringify(ipWhitelist.value),
+      rate_limit_enabled: form.value.rate_limit_enabled,
+      rate_limit_rps: form.value.rate_limit_rps,
+      rate_limit_burst: form.value.rate_limit_burst,
+      crs_rule_groups: JSON.stringify(crsRuleGroups.value),
+      crs_excluded_rules: JSON.stringify(crsExcludedRules.value),
+      custom_rules: JSON.stringify(selectedCustomRules.value),
+      block_page_id: form.value.block_page_id,
+      block_status_code: form.value.block_status_code,
+      geoip_countries: JSON.stringify(geoipCountries.value),
+      geoip_mode: form.value.geoip_mode,
+      waf_check_response: form.value.waf_check_response,
+    }
     let saveRes: APIResponse<{ id: number }> | undefined
     if (editingId.value) {
       saveRes = await request.put(`/security/policies/${editingId.value}`, payload)

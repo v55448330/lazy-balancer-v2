@@ -66,6 +66,7 @@ export interface SystemInfo {
 }
 
 export interface MetricsOverview {
+  total_requests?: number
   requests_per_sec: number
   bytes_in: number
   bytes_out: number
@@ -166,6 +167,7 @@ export interface ClusterNode {
   readonly name: string
   readonly ip_address: string
   readonly port: number
+  readonly protocol?: string
   readonly access_url: string
   readonly status: ClusterNodeStatus
   readonly is_approved: boolean
