@@ -255,6 +255,16 @@ func validateV2Backup(backup configBackup) (bool, error) {
 	if backup.Config == nil {
 		return false, errors.New("备份缺少全局配置")
 	}
+	// R45 F-3: v2 备份必带导出时间戳与校验和（v2.1.1 起导出即两者齐备）。剥掉
+	// exported_at 或 checksum 的 v2 文件一律按不兼容拒绝——旧格式校验和回退仅限
+	// Version==1 的史前导出，防止 Config 区（dns_credentials/acme_email/管理面板
+	// TLS 材料）借字段剥离绕过完整性校验。
+	if backup.Meta.Version == 2 && backup.Meta.ExportedAt == "" {
+		return false, errors.New("备份由 v2.1.1 或更早版本导出，校验和格式不兼容，请使用 v2.1.2 及以上版本重新导出后再导入")
+	}
+	if backup.Meta.Version == 2 && backup.Meta.Checksum == "" {
+		return false, errors.New("备份缺少完整性校验和，请使用 v2.1.2 及以上版本重新导出后再导入")
+	}
 	if backup.Meta.Checksum != "" {
 		checksumPayload, err := json.Marshal(struct {
 			Tables map[string][]map[string]any `json:"tables"`
@@ -266,13 +276,14 @@ func validateV2Backup(backup configBackup) (bool, error) {
 		sum := sha256.Sum256(checksumPayload)
 		if hex.EncodeToString(sum[:]) != backup.Meta.Checksum {
 			// R43 F-D: 旧格式（仅 tables）校验和回退仅限明确的旧格式标记
-			// （无 exported_at 的史前导出）；新格式文件（带 exported_at）校验和
-			// 不匹配直接拒绝——否则仅篡改 Config 区（dns_credentials/acme_email/
-			// 管理面板 TLS 材料）而保留 tables 的文件可借回退通过完整性校验。
+			// （Version==1 且无 exported_at 的史前导出，R45 F-3 收紧）；新格式文件
+			// （带 exported_at）校验和不匹配直接拒绝——否则仅篡改 Config 区
+			// （dns_credentials/acme_email/管理面板 TLS 材料）而保留 tables 的文件
+			// 可借回退通过完整性校验。
 			tablesJSON, _ := json.Marshal(backup.Tables)
 			oldSum := sha256.Sum256(tablesJSON)
 			tablesOnlyMatch := hex.EncodeToString(oldSum[:]) == backup.Meta.Checksum
-			if backup.Meta.ExportedAt == "" {
+			if backup.Meta.ExportedAt == "" && backup.Meta.Version == 1 {
 				if tablesOnlyMatch {
 					return true, nil
 				}

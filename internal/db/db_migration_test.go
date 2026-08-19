@@ -144,19 +144,21 @@ func TestRunMigrations_dropsDeadSecurityAndAdminTLSColumns(t *testing.T) {
 }
 
 func TestRunMigrations_migratesLegacyHTTPSRulesToHTTPWithTLS(t *testing.T) {
-	// Given 存量 a1ecbe3a 期写入的 https 规则行（enable_tls 0/1 各一），及正常 http/tcp 行
+	// Given 存量 a1ecbe3a 期写入的 https 规则行：一行内联证书齐备（tls_cert/tls_key
+	// 非空）、一行无证书且带 tls_http_redirect=1，及正常 http/tcp 行
 	database := openMigrationTestDB(t)
 	if err := createTables(); err != nil {
 		t.Fatalf("create tables: %v", err)
 	}
 	if _, err := database.Exec(`INSERT INTO global_config (id,caddy_config) VALUES (1,'{}');
-		INSERT INTO lb_rules (name,protocol,domain,listen_port,enable_tls,caddy_id) VALUES
-			('legacy-https-tls','https','a.example.test',8443,1,'lb_https_tls'),
-			('legacy-https-notls','https','b.example.test',8444,0,'lb_https_notls'),
-			('plain-http','http','c.example.test',8080,0,'lb_http'),
-			('plain-tcp','tcp','',9090,0,'lb_tcp');`); err != nil {
+		INSERT INTO lb_rules (name,protocol,domain,listen_port,enable_tls,tls_cert,tls_key,tls_http_redirect,caddy_id) VALUES
+			('legacy-https-tls','https','a.example.test',8443,0,'PEM-CERT','PEM-KEY',1,'lb_https_tls'),
+			('legacy-https-notls','https','b.example.test',8444,0,'','',1,'lb_https_notls'),
+			('plain-http','http','c.example.test',8080,0,'','',0,'lb_http'),
+			('plain-tcp','tcp','',9090,0,'','',0,'lb_tcp');`); err != nil {
 		t.Fatalf("seed legacy https rules: %v", err)
 	}
+	drainSystemAuditBuffer()
 
 	// When migrations run (twice, to prove idempotence)
 	if err := runMigrations(); err != nil {
@@ -166,15 +168,34 @@ func TestRunMigrations_migratesLegacyHTTPSRulesToHTTPWithTLS(t *testing.T) {
 		t.Fatalf("repeat migrations: %v", err)
 	}
 
-	// Then https 行归一为 http+enable_tls=1（含原 enable_tls=0 行，https 语义隐含 TLS）
-	for _, caddyID := range []string{"lb_https_tls", "lb_https_notls"} {
-		var protocol string
-		var enableTLS int
-		if err := database.QueryRow("SELECT protocol, enable_tls FROM lb_rules WHERE caddy_id=?", caddyID).Scan(&protocol, &enableTLS); err != nil {
-			t.Fatalf("read migrated rule %s: %v", caddyID, err)
-		}
-		if protocol != "http" || enableTLS != 1 {
-			t.Fatalf("rule %s protocol=%q enable_tls=%d, want http/1", caddyID, protocol, enableTLS)
+	// Then 证书齐备的 https 行归一为 http+enable_tls=1（https 语义隐含 TLS）
+	var protocol string
+	var enableTLS int
+	if err := database.QueryRow("SELECT protocol, enable_tls FROM lb_rules WHERE caddy_id='lb_https_tls'").Scan(&protocol, &enableTLS); err != nil {
+		t.Fatalf("read migrated cert-bearing rule: %v", err)
+	}
+	if protocol != "http" || enableTLS != 1 {
+		t.Fatalf("cert-bearing rule protocol=%q enable_tls=%d, want http/1", protocol, enableTLS)
+	}
+
+	// And 无证书的 https 行归一为普通 HTTP（enable_tls=0 且清 tls_http_redirect，
+	// 不制造 TLS 端口明文/幻影跳转的 F-C 形态）
+	var redirect int
+	if err := database.QueryRow("SELECT protocol, enable_tls, tls_http_redirect FROM lb_rules WHERE caddy_id='lb_https_notls'").Scan(&protocol, &enableTLS, &redirect); err != nil {
+		t.Fatalf("read migrated certless rule: %v", err)
+	}
+	if protocol != "http" || enableTLS != 0 || redirect != 0 {
+		t.Fatalf("certless rule protocol=%q enable_tls=%d tls_http_redirect=%d, want http/0/0", protocol, enableTLS, redirect)
+	}
+
+	// And 受影响规则逐条进入操作日志缓冲（待审计库就绪落库），重跑零命中
+	entries := drainSystemAuditBuffer()
+	if len(entries) != 2 {
+		t.Fatalf("system audit entries=%d, want 2（重跑幂等）", len(entries))
+	}
+	for _, entry := range entries {
+		if entry.action != "启动迁移" || entry.resource != "系统配置" {
+			t.Fatalf("audit entry action=%q resource=%q, want 启动迁移/系统配置", entry.action, entry.resource)
 		}
 	}
 
@@ -188,6 +209,60 @@ func TestRunMigrations_migratesLegacyHTTPSRulesToHTTPWithTLS(t *testing.T) {
 		if protocol != want || enableTLS != 0 {
 			t.Fatalf("rule %s protocol=%q enable_tls=%d, want %s/0", caddyID, protocol, enableTLS, want)
 		}
+	}
+}
+
+func drainSystemAuditBuffer() []systemAuditEntry {
+	systemAuditBuffer.mu.Lock()
+	defer systemAuditBuffer.mu.Unlock()
+	entries := systemAuditBuffer.entries
+	systemAuditBuffer.entries = nil
+	return entries
+}
+
+// R45 F-2: 迁移缓冲的系统事件在审计库就绪后落 audit_log 表（UI 操作日志可见），
+// 并清空缓冲不重复写。
+func TestFlushSystemAuditLogs_writesBufferedEntriesToAuditDB(t *testing.T) {
+	// Given 一条迁移期缓冲的系统事件 + 就位的审计库
+	auditDB, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatalf("open audit database: %v", err)
+	}
+	t.Cleanup(func() { _ = auditDB.Close() })
+	if _, err := auditDB.Exec(`CREATE TABLE audit_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		username VARCHAR(100),
+		action VARCHAR(50) NOT NULL,
+		resource VARCHAR(100),
+		detail TEXT,
+		ip_address VARCHAR(45),
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		t.Fatalf("create audit_log table: %v", err)
+	}
+	oldAuditDB := AuditDB
+	AuditDB = auditDB
+	t.Cleanup(func() { AuditDB = oldAuditDB })
+	drainSystemAuditBuffer()
+	recordSystemAudit("启动迁移", "系统配置", "存量 https 协议规则已迁移为 http+TLS：caddy_id=lb_x name=demo")
+
+	// When
+	flushSystemAuditLogs()
+
+	// Then 事件落库且缓冲清空
+	var count int
+	if err := auditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE username='system' AND action='启动迁移' AND resource='系统配置' AND detail LIKE '%lb_x%'").Scan(&count); err != nil {
+		t.Fatalf("count flushed audit rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("flushed audit rows=%d, want 1", count)
+	}
+	flushSystemAuditLogs()
+	if err := auditDB.QueryRow("SELECT COUNT(*) FROM audit_log").Scan(&count); err != nil {
+		t.Fatalf("recount audit rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("audit rows after second flush=%d, want 1（缓冲已清空不得重放）", count)
 	}
 }
 

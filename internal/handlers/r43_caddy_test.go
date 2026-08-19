@@ -170,7 +170,7 @@ func checksumTablesOnly(t *testing.T, tables map[string][]map[string]any) string
 	return hex.EncodeToString(sum[:])
 }
 
-func legacyChecksummedBackup(t *testing.T, exportedAt string, legacySum bool) string {
+func legacyChecksummedBackup(t *testing.T, version int, exportedAt string, legacySum bool) string {
 	t.Helper()
 	tables := map[string][]map[string]any{}
 	for _, table := range configBackupTables {
@@ -179,7 +179,7 @@ func legacyChecksummedBackup(t *testing.T, exportedAt string, legacySum bool) st
 	tables["users"] = []map[string]any{{"id": 1, "username": "backup-admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
 	cfg := map[string]any{"acme_email": "admin@example.test"}
 	backup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: exportedAt},
+		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: version, ExportedAt: exportedAt},
 		Config: cfg,
 		Tables: tables,
 	}
@@ -198,7 +198,7 @@ func legacyChecksummedBackup(t *testing.T, exportedAt string, legacySum bool) st
 func TestValidateV2Backup_legacyChecksumFallback_gatedOnLegacyMarker(t *testing.T) {
 	t.Run("v2.1.1 形态（带 exported_at + tables 校验和）报兼容性提示而非篡改", func(t *testing.T) {
 		var b configBackup
-		if err := json.Unmarshal([]byte(legacyChecksummedBackup(t, "2026-08-19T00:00:00Z", true)), &b); err != nil {
+		if err := json.Unmarshal([]byte(legacyChecksummedBackup(t, 2, "2026-08-19T00:00:00Z", true)), &b); err != nil {
 			t.Fatalf("unmarshal backup: %v", err)
 		}
 		usedLegacy, err := validateV2Backup(b)
@@ -213,9 +213,9 @@ func TestValidateV2Backup_legacyChecksumFallback_gatedOnLegacyMarker(t *testing.
 		}
 	})
 
-	t.Run("旧格式标记（无 exported_at）+ tables 校验和放行并标记", func(t *testing.T) {
+	t.Run("旧格式标记（Version==1 且无 exported_at）+ tables 校验和放行并标记", func(t *testing.T) {
 		var b configBackup
-		if err := json.Unmarshal([]byte(legacyChecksummedBackup(t, "", true)), &b); err != nil {
+		if err := json.Unmarshal([]byte(legacyChecksummedBackup(t, 1, "", true)), &b); err != nil {
 			t.Fatalf("unmarshal backup: %v", err)
 		}
 		usedLegacy, err := validateV2Backup(b)
@@ -229,7 +229,7 @@ func TestValidateV2Backup_legacyChecksumFallback_gatedOnLegacyMarker(t *testing.
 
 	t.Run("新格式完整校验和匹配通过且不标记", func(t *testing.T) {
 		var b configBackup
-		if err := json.Unmarshal([]byte(legacyChecksummedBackup(t, "2026-08-19T00:00:00Z", false)), &b); err != nil {
+		if err := json.Unmarshal([]byte(legacyChecksummedBackup(t, 2, "2026-08-19T00:00:00Z", false)), &b); err != nil {
 			t.Fatalf("unmarshal backup: %v", err)
 		}
 		usedLegacy, err := validateV2Backup(b)
@@ -248,7 +248,7 @@ func TestImportConfigBackup_legacyChecksum_recordsAuditWarning(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/config/import", h.ImportConfigBackup)
-	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(legacyChecksummedBackup(t, "", true)))
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(legacyChecksummedBackup(t, 1, "", true)))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 

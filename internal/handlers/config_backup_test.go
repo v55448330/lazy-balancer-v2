@@ -176,11 +176,15 @@ func completeBackupJSON(t *testing.T, tables map[string][]map[string]any) string
 	for table, rows := range tables {
 		completeTables[table] = rows
 	}
-	data, err := json.Marshal(configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2},
-		Config: map[string]any{},
+	cfg := map[string]any{}
+	backup := configBackup{
+		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-19T00:00:00Z"},
+		Config: cfg,
 		Tables: completeTables,
-	})
+	}
+	// R45 F-3 起 v2 备份必带校验和，夹具按真实导出形态计算。
+	backup.Meta.Checksum = checksumBackupPayload(t, completeTables, cfg)
+	data, err := json.Marshal(backup)
 	if err != nil {
 		t.Fatalf("marshal complete backup: %v", err)
 	}
@@ -616,11 +620,14 @@ func TestImportConfigBackup_clamps_excessive_jwt_expiration(t *testing.T) {
 		completeTables[table] = []map[string]any{}
 	}
 	completeTables["users"] = []map[string]any{{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
-	body, err := json.Marshal(configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2},
-		Config: map[string]any{"jwt_expire_minutes": 999999},
+	importCfg := map[string]any{"jwt_expire_minutes": 999999}
+	importBackup := configBackup{
+		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-19T00:00:00Z"},
+		Config: importCfg,
 		Tables: completeTables,
-	})
+	}
+	importBackup.Meta.Checksum = checksumBackupPayload(t, completeTables, importCfg)
+	body, err := json.Marshal(importBackup)
 	if err != nil {
 		t.Fatal(err)
 	}

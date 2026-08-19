@@ -15,7 +15,7 @@ import (
 // 不受旧校验和保护）；而真正篡改的新格式文件（两种校验和均不匹配）仍按篡改拒绝。
 func TestValidateV2Backup_v211Shape_reportsCompatibilityNotTamper(t *testing.T) {
 	var b configBackup
-	if err := json.Unmarshal([]byte(legacyChecksummedBackup(t, "2026-08-15T00:00:00Z", true)), &b); err != nil {
+	if err := json.Unmarshal([]byte(legacyChecksummedBackup(t, 2, "2026-08-15T00:00:00Z", true)), &b); err != nil {
 		t.Fatalf("unmarshal backup: %v", err)
 	}
 
@@ -38,7 +38,7 @@ func TestValidateV2Backup_v211Shape_reportsCompatibilityNotTamper(t *testing.T) 
 func TestValidateV2Backup_tamperedNewFormat_stillRejectedAsTampered(t *testing.T) {
 	// Given 一个新格式备份，校验和按 tables+config 计算后 Config 区被篡改
 	var b configBackup
-	if err := json.Unmarshal([]byte(legacyChecksummedBackup(t, "2026-08-19T00:00:00Z", false)), &b); err != nil {
+	if err := json.Unmarshal([]byte(legacyChecksummedBackup(t, 2, "2026-08-19T00:00:00Z", false)), &b); err != nil {
 		t.Fatalf("unmarshal backup: %v", err)
 	}
 	b.Config["dns_credentials"] = "attacker-controlled"
@@ -60,7 +60,7 @@ func TestImportConfigBackup_v211Shape_returnsCompatibilityMessage(t *testing.T) 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/config/import", h.ImportConfigBackup)
-	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(legacyChecksummedBackup(t, "2026-08-15T00:00:00Z", true)))
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(legacyChecksummedBackup(t, 2, "2026-08-15T00:00:00Z", true)))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 

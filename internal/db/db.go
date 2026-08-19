@@ -1085,22 +1085,31 @@ func runMigrations() error {
 
 // migrateLegacyHTTPSProtocol 一次性迁移：a1ecbe3a 期写入路径曾接受 protocol='https'
 // （语义即 http+TLS），b6e2b624 起写侧白名单收敛为 http/tcp，存量 https 行编辑/复制
-// 全部 400、启用后按「非 http 即 TCP」渲染（域名匹配静默丢失）。归一为
-// protocol='http' + enable_tls=1 保持原意图（含 enable_tls 已为 0 的 https 行——
-// https 协议本身隐含 TLS）；幂等，重跑零命中。受影响规则逐个记日志以便追溯（R44 B1）。
+// 全部 400、启用后按「非 http 即 TCP」渲染（域名匹配静默丢失）。归一规则（R45 F-1）：
+//   - 内联证书齐备（tls_cert/tls_key 均非空）→ protocol='http' + enable_tls=1，保持
+//     原意图（含 enable_tls 已为 0 的行——https 协议本身隐含 TLS）；
+//   - 无内联证书（历史 tls_auto_cert/tls_email ACME 列已删，证书无从物化）→
+//     protocol='http' + enable_tls=0 且清 tls_http_redirect：渲染为普通 HTTP，保持
+//     可编辑，避免 TLS 端口明文与指向非 TLS 端口的幻影跳转（F-C 形态的迁移再制造）。
+//
+// 幂等，重跑零命中。受影响规则记入操作日志（R45 F-2：迁移跑在审计库初始化之前，
+// 先缓冲、InitializeAuditDB 就绪后落库）。
 func migrateLegacyHTTPSProtocol() error {
-	rows, err := DB.Query("SELECT caddy_id, name FROM lb_rules WHERE protocol='https'")
+	rows, err := DB.Query(`SELECT caddy_id, name,
+		CASE WHEN COALESCE(tls_cert,'') != '' AND COALESCE(tls_key,'') != '' THEN 1 ELSE 0 END
+		FROM lb_rules WHERE protocol='https'`)
 	if err != nil {
 		return fmt.Errorf("failed to query legacy https lb_rules: %w", err)
 	}
 	type legacyHTTPSRule struct {
 		caddyID string
 		name    string
+		hasCert bool
 	}
 	var legacy []legacyHTTPSRule
 	for rows.Next() {
 		var rule legacyHTTPSRule
-		if err := rows.Scan(&rule.caddyID, &rule.name); err != nil {
+		if err := rows.Scan(&rule.caddyID, &rule.name, &rule.hasCert); err != nil {
 			rows.Close()
 			return fmt.Errorf("failed to scan legacy https lb_rules: %w", err)
 		}
@@ -1116,11 +1125,23 @@ func migrateLegacyHTTPSProtocol() error {
 	if len(legacy) == 0 {
 		return nil
 	}
-	if _, err := DB.Exec("UPDATE lb_rules SET protocol='http', enable_tls=1 WHERE protocol='https'"); err != nil {
-		return fmt.Errorf("failed to normalize legacy https lb_rules: %w", err)
+	if _, err := DB.Exec(`UPDATE lb_rules SET protocol='http', enable_tls=1
+		WHERE protocol='https' AND COALESCE(tls_cert,'') != '' AND COALESCE(tls_key,'') != ''`); err != nil {
+		return fmt.Errorf("failed to normalize cert-bearing legacy https lb_rules: %w", err)
+	}
+	if _, err := DB.Exec(`UPDATE lb_rules SET protocol='http', enable_tls=0, tls_http_redirect=0
+		WHERE protocol='https'`); err != nil {
+		return fmt.Errorf("failed to normalize certless legacy https lb_rules: %w", err)
 	}
 	for _, rule := range legacy {
-		log.Printf("存量 https 协议规则已迁移为 http+TLS：caddy_id=%s name=%s", rule.caddyID, rule.name)
+		var detail string
+		if rule.hasCert {
+			detail = fmt.Sprintf("存量 https 协议规则已迁移为 http+TLS：caddy_id=%s name=%s", rule.caddyID, rule.name)
+		} else {
+			detail = fmt.Sprintf("存量 https 协议规则已迁移为普通 HTTP（无内联证书，未启用 TLS）：caddy_id=%s name=%s", rule.caddyID, rule.name)
+		}
+		log.Print(detail)
+		recordSystemAudit("启动迁移", "系统配置", detail)
 	}
 	return nil
 }

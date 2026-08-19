@@ -332,7 +332,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		return fmt.Errorf("无效的负载策略：TCP 规则仅支持 weighted_round_robin / ip_hash / least_conn / random / first")
 	}
 
-	if data.Domain != "" && (data.Protocol == "http" || data.Protocol == "https") {
+	if data.Domain != "" && data.Protocol == "http" {
 		domains := strings.Split(data.Domain, ",")
 		for _, d := range domains {
 			d = strings.TrimSpace(d)

@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"path/filepath"
+	"sync"
 )
 
 const auditDBFilename = "lazy-balancer-audit.db"
@@ -48,7 +50,49 @@ func InitializeAuditDB(dataDir string) error {
 		return fmt.Errorf("failed to secure audit database artifacts: %w", err)
 	}
 	AuditDB = auditDB
-	return migrateLegacyAuditLogs(DB, path)
+	if err := migrateLegacyAuditLogs(DB, path); err != nil {
+		return err
+	}
+	flushSystemAuditLogs()
+	return nil
+}
+
+// R45 F-2: 启动迁移跑在 InitializeAuditDB 之前，且 db 不能反向依赖
+// services.RecordAuditLog（import 环）——迁移期的系统事件先入内存缓冲，审计库
+// 就绪后统一落 audit_log 表，与 UI 操作日志同源。
+type systemAuditEntry struct {
+	action   string
+	resource string
+	detail   string
+}
+
+var systemAuditBuffer struct {
+	mu      sync.Mutex
+	entries []systemAuditEntry
+}
+
+func recordSystemAudit(action, resource, detail string) {
+	systemAuditBuffer.mu.Lock()
+	defer systemAuditBuffer.mu.Unlock()
+	systemAuditBuffer.entries = append(systemAuditBuffer.entries, systemAuditEntry{action, resource, detail})
+}
+
+// flushSystemAuditLogs 将缓冲的系统事件写入审计库并清空缓冲；写失败仅留痕不阻断
+// 启动，与 services.RecordAuditLog 的 best-effort 语义一致。
+func flushSystemAuditLogs() {
+	systemAuditBuffer.mu.Lock()
+	entries := systemAuditBuffer.entries
+	systemAuditBuffer.entries = nil
+	systemAuditBuffer.mu.Unlock()
+	if len(entries) == 0 || AuditDB == nil {
+		return
+	}
+	for _, entry := range entries {
+		if _, err := AuditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address) VALUES ('system', ?, ?, ?, '')",
+			entry.action, entry.resource, entry.detail); err != nil {
+			log.Printf("system audit log write failed: %v", err)
+		}
+	}
 }
 
 func migrateLegacyAuditLogs(mainDB *sql.DB, auditPath string) error {

@@ -2141,6 +2141,13 @@ func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain 
 }
 
 func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{} {
+	// R45 F-5: 与 GenerateRouteObject 的硬错误（caddy.go:2312）对齐——https 等
+	// 非法协议不再静默按 TCP 渲染（遗留 https 行由 db 迁移归一为 http）。
+	if rule.Protocol != "http" && rule.Protocol != "tcp" {
+		return map[string]interface{}{
+			"error": fmt.Errorf("unsupported protocol: %s", rule.Protocol),
+		}
+	}
 	if rule.Strategy == "" {
 		rule.Strategy = "weighted_round_robin"
 	}
