@@ -970,3 +970,60 @@ func TestCAQueueManager_EnqueueIfActive_skips_when_job_still_active(t *testing.T
 		t.Fatal("a new queue was created for an active job（双执行缺口）")
 	}
 }
+
+// R46 A-F2（R45 发现3 回归）：退役条目 age-out 摘除不得遗忘在途 jobID——摘除后
+// IsJobActive 必须继续返回 true（zombieJobs 迁移），直到滞行执行经 executionDone
+// 信号退出；无 executionDone 的 jobID 永久保留保护（罕见，宁可永久保护不放双执行）。
+func TestCAQueueManager_IsJobActive_agedOutRetiredEntry_migratesZombieProtection(t *testing.T) {
+	// Given：超龄退役队列，job 42 带 executionDone 信号，job 43 无信号
+	queue := newCAQueue(models.CAProvider{ID: 7, MaxConcurrent: 1}, nil)
+	done := make(chan struct{})
+	queue.mu.Lock()
+	queue.active[42] = struct{}{}
+	queue.executionDone[42] = done
+	queue.active[43] = struct{}{}
+	queue.mu.Unlock()
+	manager := &CAQueueManager{
+		queues: make(map[int]*caQueue),
+		retiredQueues: []retiredCAQueue{{
+			queue:     queue,
+			retiredAt: time.Now().Add(-(caExecutionTimeout + 11*time.Minute)),
+		}},
+		active: true,
+	}
+
+	// When：超龄条目在 IsJobActive 惰性检查中被摘除
+	if !manager.IsJobActive(42) {
+		t.Fatal("aged-out retired job lost protection（zombie 迁移未生效）")
+	}
+
+	// Then：条目已摘除，但在途保护经 zombieJobs 延续
+	manager.mu.Lock()
+	retired := len(manager.retiredQueues)
+	zombies := len(manager.zombieJobs)
+	manager.mu.Unlock()
+	if retired != 0 {
+		t.Fatalf("retiredQueues=%d, want 0（超龄条目应摘除）", retired)
+	}
+	if zombies != 2 {
+		t.Fatalf("zombieJobs=%d, want 2（在途 jobID 应全部迁移）", zombies)
+	}
+	if !manager.IsJobActive(42) || !manager.IsJobActive(43) {
+		t.Fatal("zombie protection must persist after age-out removal")
+	}
+
+	// When：滞行执行最终退出（executionDone 关闭）
+	close(done)
+
+	// Then：job 42 的保护被解除；job 43（无信号）永久保留
+	deadline := time.Now().Add(5 * time.Second)
+	for manager.IsJobActive(42) {
+		if time.Now().After(deadline) {
+			t.Fatal("zombie protection for job 42 not released after execution done")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !manager.IsJobActive(43) {
+		t.Fatal("job without executionDone must keep permanent zombie protection")
+	}
+}

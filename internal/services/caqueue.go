@@ -18,6 +18,7 @@ type CAQueueManager struct {
 	mu                  sync.Mutex
 	queues              map[int]*caQueue
 	retiredQueues       []retiredCAQueue
+	zombieJobs          map[int]struct{}
 	reloader            func() error
 	active              bool
 	blockedRules        map[string]map[RuleBlockToken]struct{}
@@ -39,7 +40,8 @@ type RuleBlockToken uint64
 
 // retiredCAQueue 登记 PauseAndDrain 超时退役的队列。retiredAt 供惰性摘除兜底
 // （R45 发现3）：滞行执行越过 caExecutionTimeout+10min 宽松余量仍未退出只可能是
-// 僵尸（执行上限 ctx 早已触发），超时摘除并记日志，不扩大双执行面。
+// 僵尸（执行上限 ctx 早已触发），超时摘除并记日志；摘除时在途 jobID 迁入
+// zombieJobs 维持在途保护直到执行退出（R46 A-F2），R44-2 双执行防护不回退。
 type retiredCAQueue struct {
 	queue     *caQueue
 	retiredAt time.Time
@@ -479,6 +481,11 @@ func (m *CAQueueManager) requeueStrandedJobs(whereClause, message, logPrefix str
 func (m *CAQueueManager) IsJobActive(jobID int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// age-out 摘除后迁入 zombieJobs 的 jobID 仍视为在途（R46 A-F2）：保护持续到
+	// 滞行执行退出（releaseZombieJob），无 executionDone 信号的永久保留。
+	if _, zombie := m.zombieJobs[jobID]; zombie {
+		return true
+	}
 	for _, queue := range m.queues {
 		queue.mu.Lock()
 		_, active := queue.active[jobID]
@@ -497,6 +504,14 @@ func (m *CAQueueManager) IsJobActive(jobID int) bool {
 		queue.mu.Lock()
 		_, jobActive := queue.active[jobID]
 		remaining := len(queue.active)
+		agedOut := remaining > 0 && time.Since(entry.retiredAt) > caExecutionTimeout+10*time.Minute
+		var stranded map[int]chan struct{}
+		if agedOut {
+			stranded = make(map[int]chan struct{}, remaining)
+			for strandedJobID := range queue.active {
+				stranded[strandedJobID] = queue.executionDone[strandedJobID]
+			}
+		}
 		queue.mu.Unlock()
 		if jobActive {
 			active = true
@@ -504,16 +519,51 @@ func (m *CAQueueManager) IsJobActive(jobID int) bool {
 		if remaining == 0 {
 			continue
 		}
-		// 越过执行上限+10min 余量仍未退出的滞行执行只可能是僵尸（R45 发现3），
-		// 摘除并记日志，避免硬挂+高频角色翻转下 retiredQueues 理论无界增长。
-		if time.Since(entry.retiredAt) > caExecutionTimeout+10*time.Minute {
-			Logf("warn", "CA 队列退役条目超过 %s 仍有 %d 个在途任务未退出，按僵尸摘除", caExecutionTimeout+10*time.Minute, remaining)
+		if agedOut {
+			// 越过执行上限+10min 余量仍未退出的滞行执行只可能是僵尸（R45 发现3），
+			// 摘除条目避免硬挂+高频角色翻转下 retiredQueues 理论无界增长；但在途
+			// jobID 不得随条目遗忘——迁入 zombieJobs 维持双执行防护（R46 A-F2）。
+			m.migrateZombieJobsLocked(stranded)
+			Logf("warn", "CA 队列退役条目超过 %s 仍有 %d 个在途任务未退出，摘除并迁入僵尸保护", caExecutionTimeout+10*time.Minute, remaining)
 			continue
 		}
 		kept = append(kept, entry)
 	}
 	m.retiredQueues = kept
 	return active
+}
+
+// migrateZombieJobsLocked 把 age-out 摘除的退役队列在途 jobID 迁入 zombieJobs
+// （R46 A-F2，R45 发现3 回归修复）：R44-2 的语义是 jobID 在滞行执行退出前永久
+// 视为在途；直接摘除会让 IsJobActive 返回 false，重开同 jobID 双执行窗口
+// （RetryCertJob/CreateOrRequeueCertJob/Resume 扫描均依赖此守卫）。带
+// executionDone 信号的 jobID 挂 goroutine 等待执行退出后解除保护；无信号的
+// （理论不可达：退役队列 active 均为在途执行）永久保留并记日志——僵尸事件本身
+// 罕见，宁可永久保护也不放双执行。
+func (m *CAQueueManager) migrateZombieJobsLocked(stranded map[int]chan struct{}) {
+	if m.zombieJobs == nil {
+		m.zombieJobs = make(map[int]struct{}, len(stranded))
+	}
+	for jobID, done := range stranded {
+		if _, exists := m.zombieJobs[jobID]; exists {
+			continue
+		}
+		m.zombieJobs[jobID] = struct{}{}
+		if done == nil {
+			Logf("warn", "CA 队列僵尸任务 %d 无 executionDone 信号，永久保留在途保护", jobID)
+			continue
+		}
+		go m.releaseZombieJob(jobID, done)
+	}
+}
+
+// releaseZombieJob 在滞行执行退出（executionDone 关闭，caQueue.execute 退出时
+// 统一 close）后解除 jobID 的僵尸保护。
+func (m *CAQueueManager) releaseZombieJob(jobID int, done <-chan struct{}) {
+	<-done
+	m.mu.Lock()
+	delete(m.zombieJobs, jobID)
+	m.mu.Unlock()
 }
 
 // Enqueue adds or re-enqueues a cert job.
