@@ -67,6 +67,12 @@ type CRSUpdateManager struct {
 	ruleCount    int
 	hasRuleCount bool
 
+	// overridesBakCreated 标记本次运行已在迁移分支创建 zz-user-overrides.conf.bak
+	// （R39 1.1）：restoreBackup 只消费本运行创建的 bak——三-1 跨运行保全的恢复
+	// 副本在下次成功更新前始终可用，三-2 也不会把 overrides 还原到两版本之前。
+	// 每次 downloadAndInstall 开始时重置，迁移分支创建成功后置位。
+	overridesBakCreated bool
+
 	reloader        func() error
 	fetchLatestTag  func(ctx context.Context) (string, error)
 	downloadTarball func(ctx context.Context, tag, destPath string) error

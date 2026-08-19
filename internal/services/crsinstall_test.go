@@ -180,3 +180,42 @@ func TestCRSUpdateRun_installFailureRestoresPreexistingOverrides(t *testing.T) {
 		t.Fatalf("update_status=%q, want failed", status)
 	}
 }
+
+// TestCRSUpdateRun_preservedOverridesBakSurvivesNextRunFailure 验证 R39 1.1：
+// 运行 N 因还原失败保全的 zz-user-overrides.conf.bak（三-1 唯一恢复副本），在
+// 运行 N+1 创建新备份前失败时不得被先行清除——旧实现 L91 无条件 os.Remove 会在
+// 新备份尚未创建时毁掉该副本，恢复路径全失。
+func TestCRSUpdateRun_preservedOverridesBakSurvivesNextRunFailure(t *testing.T) {
+	// Given 运行 N 保全的 overrides 备份 + N+1 备份 crs-setup.conf 时失败
+	//（目标位置被目录占用，copyFile 必然失败）
+	m := newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.14.0", true)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# tweaked")
+	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "# 保全内容\nSecRulePreserved 1")
+	if err := os.MkdirAll(filepath.Join(m.crsDir, "crs-setup.conf.bak"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
+	m.downloadTarball = fakeCRSDownload(t, map[string]string{
+		"coreruleset-4.15.0/crs-setup.conf.example": "# new setup",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf": "SecRule a\n",
+	})
+
+	// When N+1 在创建新 bak 前失败
+	m.run("manual")
+
+	// Then 保全副本原样保留，overrides 未被本次迁移触碰
+	data, err := os.ReadFile(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"))
+	if err != nil || string(data) != "# 保全内容\nSecRulePreserved 1" {
+		t.Fatalf("preserved overrides .bak lost after failed run: %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf")); !os.IsNotExist(err) {
+		t.Fatal("zz-user-overrides.conf should not exist before migration")
+	}
+	_, status, _, _, _, _, _ := crsVersionRow(t)
+	if status != "failed" {
+		t.Fatalf("update_status=%q, want failed", status)
+	}
+}

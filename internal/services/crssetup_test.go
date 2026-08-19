@@ -202,6 +202,7 @@ func TestRestoreBackup_restoreFailureKeepsOverridesBak(t *testing.T) {
 	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "# 更新前 overrides\nSecRuleARCustom 1")
 
 	// When the backup is restored
+	m.overridesBakCreated = true // 本运行已创建 bak（R39 1.1）：还原失败时保留 .bak
 	m.restoreBackup()
 
 	// Then the failed overrides restore keeps the only recovery copy
@@ -233,6 +234,7 @@ func TestRestoreBackup_emptyMarkerRemoveFailureKeepsMarker(t *testing.T) {
 	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "")
 
 	// When the backup is restored
+	m.overridesBakCreated = true // 本运行已创建 bak（R39 1.1）：消费空标记时移除失败则保留
 	m.restoreBackup()
 
 	// Then the empty marker survives so a later restore can retry
@@ -241,11 +243,13 @@ func TestRestoreBackup_emptyMarkerRemoveFailureKeepsMarker(t *testing.T) {
 	}
 }
 
-// TestCRSUpdateRun_staleOverridesBakNotSurvivesFailedRun 验证陈旧 overrides.bak
-// 不跨运行存活（R38 三-2）：上次运行在 reload 成功与清理之间崩溃留下的 N-1 版
-// .bak 在本运行开始时即被清理；本次 diff 为空（无迁移、无新备份）且安装失败时，
-// overrides 保持更新前内容、不被两版本前的陈旧备份还原。
-func TestCRSUpdateRun_staleOverridesBakNotSurvivesFailedRun(t *testing.T) {
+// TestCRSUpdateRun_staleOverridesBakNotConsumedOnEmptyDiffFailure 验证陈旧
+// overrides.bak 不被空 diff 运行消费（R38 三-2 由 R39 1.1 闭合）：上次运行在
+// reload 成功与清理之间崩溃留下的 N-1 版 .bak，在本运行 diff 为空（无迁移、无
+// 新备份）且安装失败时，restoreBackup 不消费它——overrides 保持更新前内容、
+// 不被两版本前的陈旧备份还原；.bak 原样保留（陈旧 bak 永不消费，保全副本语义
+// 优先，R39 1.1 取代 R38 的运行开始即清理）。
+func TestCRSUpdateRun_staleOverridesBakNotConsumedOnEmptyDiffFailure(t *testing.T) {
 	// Given a live setup identical to the stock baseline (empty diff) plus a
 	// stale overrides backup left by a crashed previous run
 	m := newTestCRSManager(t)
@@ -272,14 +276,16 @@ func TestCRSUpdateRun_staleOverridesBakNotSurvivesFailedRun(t *testing.T) {
 		t.Fatalf("update_status=%q, want failed", status)
 	}
 	// And the overrides were not polluted by the two-versions-stale backup:
-	// the stale .bak was removed at run start and the empty diff created no
-	// fresh one, so restoreBackup leaves overrides untouched
+	// restoreBackup leaves overrides untouched（陈旧 bak 未被消费，R39 1.1）
 	data, err := os.ReadFile(filepath.Join(m.crsDir, "zz-user-overrides.conf"))
 	if err != nil || string(data) != "# 当前 overrides\nSecRuleARCustom 2" {
 		t.Fatalf("zz-user-overrides.conf=%q,%v, want untouched current content（陈旧 bak 不得还原两版本前内容）", data, err)
 	}
-	if _, err := os.Stat(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak")); !os.IsNotExist(err) {
-		t.Fatal("陈旧 zz-user-overrides.conf.bak 应在本运行开始时被清理（R38 三-2）")
+	// 陈旧 .bak 原样保留：R39 1.1 改为永不消费跨运行 bak（保全语义优先），
+	// 替代 R38 的「运行开始即清理」——该清理会毁掉三-1 保全的唯一恢复副本。
+	bakData, err := os.ReadFile(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"))
+	if err != nil || string(bakData) != "# 两版本前的 overrides\nSecRuleARCustom 1" {
+		t.Fatalf("stale zz-user-overrides.conf.bak=%q,%v, want preserved（R39 1.1）", bakData, err)
 	}
 }
 
@@ -372,6 +378,7 @@ func TestRestoreBackup_restoresPreexistingOverridesFromBak(t *testing.T) {
 	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "# 更新前 overrides\nSecRuleARCustom 1")
 
 	// When the backup is restored
+	m.overridesBakCreated = true // 本运行已创建 bak（R39 1.1）：内容 .bak 可被消费
 	m.restoreBackup()
 
 	// Then the overrides file is back to its pre-update content and the .bak consumed
@@ -396,6 +403,7 @@ func TestRestoreBackup_removesFreshlyCreatedOverrides(t *testing.T) {
 	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "")
 
 	// When the backup is restored
+	m.overridesBakCreated = true // 本运行已创建 bak（R39 1.1）：空标记可被消费
 	m.restoreBackup()
 
 	// Then the freshly created overrides file is removed

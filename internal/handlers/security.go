@@ -410,8 +410,17 @@ func (h *Handlers) GetSecurityPolicy(c *gin.Context) {
 	defer rows.Close()
 	for rows.Next() {
 		var b string
-		rows.Scan(&b)
+		if err := rows.Scan(&b); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
 		bindings = append(bindings, b)
+	}
+	// 绑定迭代失败显式报错（R39 1.3）：对齐 ListSecurityPolicies/GetAllSecurityBindings
+	// 的既有模式，残缺绑定列表不得以 200 返回。
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
 	}
 	if bindings == nil {
 		bindings = []string{}

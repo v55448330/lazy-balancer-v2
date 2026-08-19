@@ -207,9 +207,18 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 
 	m.setStage(IP2RegionStatusReloading, "重载 Caddy 配置")
 	if err := m.reloader(); err != nil {
+		// 回滚旧 xdb 并再次重载（镜像 CRS fail() 路径，R39 1.2）：reloader 失败
+		// 时磁盘与内存 searcher 都还原到更新前状态，避免「磁盘已是新库、DB 记录
+		// 旧版本+failed」的长期不一致。回滚或重试失败仅记录，不改变失败落库。
+		if rbErr := m.rollbackXDB(); rbErr != nil {
+			log.Printf("ip2region update: rollback xdb failed: %v", rbErr)
+		} else if rErr := m.reloader(); rErr != nil {
+			log.Printf("ip2region update: reload after rollback failed: %v", rErr)
+		}
 		m.fail(fmt.Errorf("重载 Caddy 配置失败: %w", err))
 		return
 	}
+	os.Remove(ip2regionLivePath + ".bak")
 
 	if _, err := db.DB.Exec(
 		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0 WHERE id=1",
@@ -287,8 +296,33 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 	if ierr := recordDownloadIntegrity(ip2RegionXDBSourceURL(tag), staged, "ip2region 数据库"); ierr != nil {
 		log.Printf("ip2region update: failed to record download integrity: %v", ierr)
 	}
+	// R39 1.2：rename 前备份旧 xdb，reloader 失败时可回滚（镜像 CRS 的
+	// restoreBackup 路径），与 CRS 更新侧保持对称。
+	liveBak := ip2regionLivePath + ".bak"
+	if _, err := os.Stat(ip2regionLivePath); err == nil {
+		if err := copyFile(ip2regionLivePath, liveBak); err != nil {
+			return fmt.Errorf("备份旧 ip2region xdb: %w", err)
+		}
+	}
 	if err := os.Rename(staged, ip2regionLivePath); err != nil {
+		// 安装未发生：清理备份，避免陈旧 .bak 干扰后续运行的回滚判断。
+		os.Remove(liveBak)
 		return fmt.Errorf("安装 ip2region xdb: %w", err)
+	}
+	Reload()
+	return nil
+}
+
+// rollbackXDB 将本次更新前备份的旧 xdb 还原到 live 路径并热换内存 searcher
+// （R39 1.2，镜像 CRS 的 restoreBackup）。本运行未创建备份（安装未发生）时
+// 视为无需回滚。
+func (m *IP2RegionUpdateManager) rollbackXDB() error {
+	bak := ip2regionLivePath + ".bak"
+	if _, err := os.Stat(bak); err != nil {
+		return nil
+	}
+	if err := os.Rename(bak, ip2regionLivePath); err != nil {
+		return fmt.Errorf("还原旧 ip2region xdb: %w", err)
 	}
 	Reload()
 	return nil

@@ -98,6 +98,10 @@ func TestIP2RegionUpdateRun_success(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(filepath.Dir(ip2regionLivePath), ".staging")); !os.IsNotExist(err) {
 		t.Fatal(".staging should be cleaned up")
 	}
+	// R39 1.2：成功后 .bak 须清理，不残留陈旧备份
+	if _, err := os.Stat(ip2regionLivePath + ".bak"); !os.IsNotExist(err) {
+		t.Fatal("live xdb .bak should be cleaned after success")
+	}
 }
 
 func TestIP2RegionUpdateRun_skipWhenSameVersion(t *testing.T) {
@@ -191,6 +195,48 @@ func TestIP2RegionUpdateRun_invalidDownloadFails(t *testing.T) {
 	}
 	if reloads != 0 {
 		t.Fatalf("reloads=%d, want 0", reloads)
+	}
+}
+
+func TestIP2RegionUpdateRun_reloadFailureRollsBackXDB(t *testing.T) {
+	// Given 一个已安装的旧 xdb 与一个必然失败一次的 reloader（镜像 CRS fail() 的
+	// restoreBackup+重试路径，R39 1.2）：reloader 失败时磁盘不得停留在新库、DB
+	// 记录旧版本+failed 的不一致状态
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	oldLive := "old-live-content"
+	if err := os.WriteFile(ip2regionLivePath, []byte(oldLive), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	reloads := 0
+	m.reloader = func() error {
+		reloads++
+		if reloads == 1 {
+			return errors.New("reload boom")
+		}
+		return nil
+	}
+
+	// When 安装后首次 reload 失败
+	m.run("manual")
+
+	// Then 旧 xdb 已还原、.bak 被回滚消费、reloader 重试一次、状态 failed
+	data, err := os.ReadFile(ip2regionLivePath)
+	if err != nil || string(data) != oldLive {
+		t.Fatalf("live xdb not rolled back: %q, %v", data, err)
+	}
+	if _, err := os.Stat(ip2regionLivePath + ".bak"); !os.IsNotExist(err) {
+		t.Fatal("xdb .bak should be consumed by rollback")
+	}
+	if reloads != 2 {
+		t.Fatalf("reloads=%d, want 2 (install reload fails, rollback reload succeeds)", reloads)
+	}
+	_, status, _, _, _, _, _ := ip2RegionVersionRow(t)
+	if status != "failed" {
+		t.Fatalf("update_status=%q, want failed", status)
 	}
 }
 

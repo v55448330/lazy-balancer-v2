@@ -47,6 +47,8 @@ func readConfLines(path string) []string {
 // snapshot is taken. On failure the live tree is restored from backup by
 // restoreBackup.
 func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
+	// 每次运行重置：restoreBackup 仅消费本运行创建的 overrides 备份（R39 1.1）。
+	m.overridesBakCreated = false
 	m.setStage(CRSStatusDownloading, fmt.Sprintf("下载 %s", tag))
 	staging := filepath.Join(m.crsDir, ".staging")
 	if err := os.RemoveAll(staging); err != nil {
@@ -84,11 +86,12 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	rulesPath := filepath.Join(m.crsDir, "rules")
 	rulesBak := filepath.Join(m.crsDir, "rules.bak")
 	os.RemoveAll(rulesBak)
-	// 陈旧 overrides 备份不跨运行存活（R38 三-2）：上次运行在 reload 成功与清理
-	// 之间崩溃会留下 N-1 版 zz-user-overrides.conf.bak；若本次 diff 为空（迁移
-	// 与备份块整体跳过），restoreBackup 会把 overrides 还原到两版本之前的内容。
-	// 与 rules.bak 的 RemoveAll 同处无条件清理，口径一致。
-	os.Remove(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"))
+	// 注意：zz-user-overrides.conf.bak 不再在此无条件清除（R39 1.1）。上一次运行
+	// 可能因还原失败保全了 .bak（三-1：唯一恢复副本）；若本运行在创建新备份前
+	// 失败，该副本是仅有的自愈素材，先删后建会使其永久丢失。restoreBackup 只
+	// 消费本运行创建的 .bak（overridesBakCreated 标记），陈旧 .bak 永不消费，
+	// R38 三-2 的「还原到两版本之前」随之闭合；迁移分支创建新备份时写入覆盖
+	// 自然顶掉陈旧内容。
 	if _, err := os.Stat(rulesPath); err == nil {
 		// Copy-based backup: the live rules dir may be baked into an image
 		// lower layer, where rename is impossible (EXDEV on overlayfs).
@@ -132,6 +135,8 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 			m.restoreBackup()
 			return fmt.Errorf("标记 zz-user-overrides.conf 更新前状态: %w", err)
 		}
+		// 本运行已创建 bak：restoreBackup 自此可消费（R39 1.1）。
+		m.overridesBakCreated = true
 		if err := os.WriteFile(overridesPath, []byte(content), 0644); err != nil {
 			m.restoreBackup()
 			return fmt.Errorf("写入 zz-user-overrides.conf: %w", err)
@@ -237,6 +242,11 @@ func (m *CRSUpdateManager) restoreBackup() {
 	os.Remove(setupBak)
 	overridesPath := filepath.Join(m.crsDir, "zz-user-overrides.conf")
 	overridesBak := overridesPath + ".bak"
+	if !m.overridesBakCreated {
+		// 非本运行创建的 .bak 不得消费（R39 1.1）：跨运行保全副本在下次成功更新
+		// 前始终可用，且不会把 overrides 还原到两版本之前（R38 三-2）。
+		return
+	}
 	if _, err := os.Stat(overridesBak); err != nil {
 		return
 	}
