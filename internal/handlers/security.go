@@ -711,6 +711,14 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	if req.GeoIPMode != nil {
 		geoIPMode = *req.GeoIPMode
 	}
+	// anomaly_threshold 显式 0 按创建侧口径归一为 5（R44 F3）：0 非合法枚举值，
+	// 直接落库会让发射端 services/security.go:157 的 `AnomalyThreshold > 0` 判断
+	// 跳过 SecAction id:900，CRS 回落到默认阈值 5，UI 显示 0 与实际行为不符。
+	// 与 CreateSecurityPolicy 的 max1(req.AnomalyThreshold, 5) 同口径；nil 保持
+	// 未提供语义，不参与写入。
+	if req.AnomalyThreshold != nil && *req.AnomalyThreshold == 0 {
+		*req.AnomalyThreshold = 5
+	}
 	blockStatusCode, anomalyThreshold := derefInt(req.BlockStatusCode), derefInt(req.AnomalyThreshold)
 	if err := validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode, blockStatusCode, anomalyThreshold); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -893,7 +901,14 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	}
 	defer tx.Rollback()
 	var policyExists int
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policies WHERE id=?", policyID).Scan(&policyExists); err != nil || policyExists == 0 {
+	// 先判 err 再判 COUNT（R44 F2）：DB 瞬时故障（锁/IO）时 policyExists 未赋值，
+	// 合并判断会把故障误报为「策略不存在」，前端无法区分重试与真 404——与
+	// DeleteSecurityBlockPage 的 ErrNoRows 先判口径一致。
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policies WHERE id=?", policyID).Scan(&policyExists); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if policyExists == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
 		return
 	}

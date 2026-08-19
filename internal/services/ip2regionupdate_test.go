@@ -244,6 +244,8 @@ func TestIP2RegionUpdateRun_staleBakNotConsumedByRollback(t *testing.T) {
 	// Given 跨运行崩溃窗口残留的陈旧 .bak（R40 F1）：上一运行在 rename 成功后、
 	// reloader 前崩溃，.bak 是旧 xdb 唯一副本。本运行 live 原本缺失（不创建新
 	// 备份，bakCreated=false），reloader 失败时 rollbackXDB 不得消费该陈旧副本。
+	// R44 F1 起 bakCreated==false 且 dist 缺失时走 fail-open：磁盘/内存已是新库，
+	// DB 按成功落库保持三方一致；陈旧 .bak 仍原样保留。
 	m := newTestIP2RegionManager(t)
 	seedIP2RegionVersionRow(t, "v3.0.0", true)
 	staleBak := "stale-bak-from-crashed-run"
@@ -259,7 +261,8 @@ func TestIP2RegionUpdateRun_staleBakNotConsumedByRollback(t *testing.T) {
 	// When 安装成功但 reloader 持续失败
 	m.run("manual")
 
-	// Then 陈旧 .bak 原样保留（未被回滚消费），live 不被还原到陈旧副本
+	// Then 陈旧 .bak 原样保留（未被回滚消费），live 不被还原到陈旧副本；
+	// 无基线可用时按 fail-open 记 success+新 tag（R44 F1）
 	data, err := os.ReadFile(ip2regionLivePath + ".bak")
 	if err != nil || string(data) != staleBak {
 		t.Fatalf("stale .bak should be preserved untouched: %q, %v", data, err)
@@ -271,12 +274,107 @@ func TestIP2RegionUpdateRun_staleBakNotConsumedByRollback(t *testing.T) {
 	if string(live) == staleBak {
 		t.Fatal("live xdb must not be rolled back to stale .bak content")
 	}
-	_, status, _, _, _, _, _ := ip2RegionVersionRow(t)
+	version, status, _, _, _, _, _ := ip2RegionVersionRow(t)
+	if status != "success" {
+		t.Fatalf("update_status=%q, want success (R44 F1 fail-open)", status)
+	}
+	if version != "v3.1.0" {
+		t.Fatalf("version=%q, want v3.1.0 (fail-open 记录新 tag)", version)
+	}
+	if reloads != 1 {
+		t.Fatalf("reloads=%d, want 1 (无基线可用时不再重试 reloader)", reloads)
+	}
+}
+
+func TestIP2RegionUpdateRun_reloadFailureFallsBackToDistOnFreshInstall(t *testing.T) {
+	// Given 全新部署：live xdb 不存在（无旧库可备份，bakCreated=false），dist
+	// 基线存在。reloader 必然失败一次——R44 F1 修复前 rollbackXDB 静默跳过，
+	// 磁盘/内存是新库、DB 记 failed+旧版本（unknown），三方长期不一致。
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "unknown", true)
+	// 用合法 xdb 作为 dist 基线（「更新前状态」的权威副本）
+	dir := t.TempDir()
+	dist := filepath.Join(dir, "waf.dist", "ip2region.xdb")
+	if err := os.MkdirAll(filepath.Dir(dist), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestXDB(t, dist, testSegments)
+	live := filepath.Join(dir, "data", "ip2region.xdb")
+	if err := os.MkdirAll(filepath.Dir(live), 0755); err != nil {
+		t.Fatal(err)
+	}
+	withIP2RegionPaths(t, live, dist)
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	reloads := 0
+	m.reloader = func() error {
+		reloads++
+		if reloads == 1 {
+			return errors.New("reload boom")
+		}
+		return nil
+	}
+
+	// When 安装成功但 reloader 首次失败
+	m.run("manual")
+
+	// Then dist 基线已复制回 live、reloader 重试一次、DB 记 failed+旧版本
+	// （unknown），磁盘/内存/DB 三方一致（均为「更新前状态」）
+	gotLive, err := os.ReadFile(ip2regionLivePath)
+	if err != nil {
+		t.Fatalf("live xdb missing after dist fallback: %v", err)
+	}
+	wantLive, err := os.ReadFile(dist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotLive) != string(wantLive) {
+		t.Fatal("live xdb content mismatch with dist baseline after fallback")
+	}
+	if reloads != 2 {
+		t.Fatalf("reloads=%d, want 2 (install reload fails, fallback reload succeeds)", reloads)
+	}
+	version, status, _, _, _, _, _ := ip2RegionVersionRow(t)
 	if status != "failed" {
 		t.Fatalf("update_status=%q, want failed", status)
 	}
-	if reloads != 2 {
-		t.Fatalf("reloads=%d, want 2 (initial + retry after no-op rollback)", reloads)
+	if version != "unknown" {
+		t.Fatalf("version=%q, want unknown (保持旧版本)", version)
+	}
+}
+
+func TestIP2RegionUpdateRun_reloadFailureFailOpenWhenNoBaseline(t *testing.T) {
+	// Given 全新部署且 dist 也缺失（newTestIP2RegionManager 默认 dist 指向不
+	// 存在路径）：无任何「更新前基线」可回退，R44 F1 fail-open——磁盘/内存已
+	// 是新库，DB 按成功落库保持三方一致。
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "unknown", true)
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	reloads := 0
+	m.reloader = func() error { reloads++; return errors.New("reload boom") }
+
+	// When 安装成功、reloader 持续失败、且无任何基线可回退
+	m.run("manual")
+
+	// Then DB 按成功落库（fail-open），live 保留新库，版本列追上新 tag
+	version, status, message, _, _, _, _ := ip2RegionVersionRow(t)
+	if status != "success" {
+		t.Fatalf("update_status=%q, want success (fail-open)", status)
+	}
+	if version != "v3.1.0" {
+		t.Fatalf("version=%q, want v3.1.0 (fail-open 记录新 tag)", version)
+	}
+	if message == "" {
+		t.Fatal("message 应保留 reloader 错误以便排查")
+	}
+	if _, err := os.Stat(ip2regionLivePath); err != nil {
+		t.Fatalf("live xdb missing: %v", err)
+	}
+	if reloads != 1 {
+		t.Fatalf("reloads=%d, want 1 (无基线可用时不再重试 reloader)", reloads)
 	}
 }
 

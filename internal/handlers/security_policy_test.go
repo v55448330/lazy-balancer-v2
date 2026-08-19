@@ -904,3 +904,30 @@ func TestListSecurityPolicies_customRulesCountExcludesDisabled(t *testing.T) {
 		t.Fatalf("custom_rules_count = %d, want 1 (disabled rule excluded): %s", got, recorder.Body.String())
 	}
 }
+
+func TestUpdateSecurityPolicy_anomalyThresholdZeroNormalizesToFive(t *testing.T) {
+	// Given 创建侧以默认阈值 5 落库的策略（创建请求不带 anomaly_threshold 时
+	// CreateSecurityPolicy 的 max1(..., 5) 归一为 5）
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	id := createTestPolicy(t, router, map[string]any{"name": "阈值归一策略", "mode": "blocking"})
+
+	// When 更新请求显式传 anomaly_threshold=0（R44 F3：0 非合法枚举值，直接
+	// 落库会让发射端 services/security.go:157 的 `AnomalyThreshold > 0` 判断
+	// 跳过 SecAction id:900，CRS 回落默认阈值 5，UI 显示 0 与实际行为不符）
+	recorder := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{
+		"anomaly_threshold": 0,
+	})
+
+	// Then 按创建侧 max1(..., 5) 同口径归一为 5 落库，请求成功
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var threshold int
+	if err := db.DB.QueryRow("SELECT anomaly_threshold FROM security_policies WHERE id=?", id).Scan(&threshold); err != nil {
+		t.Fatalf("read back anomaly_threshold: %v", err)
+	}
+	if threshold != 5 {
+		t.Fatalf("anomaly_threshold=%d, want 5 (0 归一为创建侧默认)", threshold)
+	}
+}
