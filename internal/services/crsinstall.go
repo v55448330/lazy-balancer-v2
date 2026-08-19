@@ -281,6 +281,11 @@ func moveTree(src, dst string) error {
 	return os.RemoveAll(src)
 }
 
+// copyFile 复制单个文件：先写 dst+".tmp" 再原子重命名（镜像 copyAuditLogTo，
+// R45 F1-B），崩溃中拷贝只会留下临时文件，读者/Reload 永远看到完整旧文件或
+// 完整新文件，不会读到截断半成品（xdb live 路径被截断会让下次 Reload 失败）。
+// 重命名失败时清理临时文件。注意内部使用 os.Rename 而非 osRename seam：
+// moveTree 的 copyDir 回退依赖 copyFile 在「目录不可 rename」环境下仍可用。
 func copyFile(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
@@ -289,7 +294,15 @@ func copyFile(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0644)
+	tmp := dst + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func copyDir(src, dst string) error {

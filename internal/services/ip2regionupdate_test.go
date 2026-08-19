@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -281,8 +282,8 @@ func TestIP2RegionUpdateRun_staleBakNotConsumedByRollback(t *testing.T) {
 	if version != "v3.1.0" {
 		t.Fatalf("version=%q, want v3.1.0 (fail-open 记录新 tag)", version)
 	}
-	if reloads != 1 {
-		t.Fatalf("reloads=%d, want 1 (无基线可用时不再重试 reloader)", reloads)
+	if reloads != 2 {
+		t.Fatalf("reloads=%d, want 2 (R45 F1-C：fail-open 落库前补一次 reloader 重试)", reloads)
 	}
 }
 
@@ -373,8 +374,131 @@ func TestIP2RegionUpdateRun_reloadFailureFailOpenWhenNoBaseline(t *testing.T) {
 	if _, err := os.Stat(ip2regionLivePath); err != nil {
 		t.Fatalf("live xdb missing: %v", err)
 	}
-	if reloads != 1 {
-		t.Fatalf("reloads=%d, want 1 (无基线可用时不再重试 reloader)", reloads)
+	if reloads != 2 {
+		t.Fatalf("reloads=%d, want 2 (R45 F1-C：fail-open 落库前补一次 reloader 重试)", reloads)
+	}
+}
+
+func TestIP2RegionUpdateRun_rollbackRenameFailureFallsBackToCopy(t *testing.T) {
+	// Given R45 F1-A 升级链第一环：.bak→live 的 rename 失败（权限/IO），但 .bak
+	// 本身完好——rollbackXDB 不得直接返回 error（旧实现会重演「磁盘/内存新库、
+	// DB 记 failed+旧版本」三方分叉），应升级为 copyFile 还原。用 osRename seam
+	// 只对 .bak 源注入失败，copyFile 内部的原子 rename 不受影响。
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	oldLive := "old-live-content"
+	if err := os.WriteFile(ip2regionLivePath, []byte(oldLive), 0644); err != nil {
+		t.Fatal(err)
+	}
+	old := osRename
+	osRename = func(src, dst string) error {
+		if strings.HasSuffix(src, ".bak") {
+			return errors.New("forced: bak rename failure")
+		}
+		return old(src, dst)
+	}
+	t.Cleanup(func() { osRename = old })
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	reloads := 0
+	m.reloader = func() error {
+		reloads++
+		if reloads == 1 {
+			return errors.New("reload boom")
+		}
+		return nil
+	}
+
+	// When 安装后首次 reload 失败、.bak rename 被注入失败
+	m.run("manual")
+
+	// Then copyFile 升级还原成功：live 回到旧库内容、.bak 被清理（与 rename 消
+	// 费语义对齐）、reloader 重试一次、DB 记 failed+旧版本（三方一致）
+	data, err := os.ReadFile(ip2regionLivePath)
+	if err != nil || string(data) != oldLive {
+		t.Fatalf("live xdb not restored via copy fallback: %q, %v", data, err)
+	}
+	if _, err := os.Stat(ip2regionLivePath + ".bak"); !os.IsNotExist(err) {
+		t.Fatal(".bak should be removed after successful copy restore")
+	}
+	if reloads != 2 {
+		t.Fatalf("reloads=%d, want 2 (install reload fails, rollback reload succeeds)", reloads)
+	}
+	version, status, _, _, _, _, _ := ip2RegionVersionRow(t)
+	if status != "failed" {
+		t.Fatalf("update_status=%q, want failed", status)
+	}
+	if version != "v3.0.0" {
+		t.Fatalf("version=%q, want v3.0.0 (保持旧版本)", version)
+	}
+}
+
+func TestIP2RegionUpdateRun_rollbackAllBaselinesFailFailOpen(t *testing.T) {
+	// Given R45 F1-A 升级链全部失败：reloader 首次失败时将 live 替换为目录，
+	// 此后 rename（file→dir，EISDIR）与 copyFile（tmp→dir 同样 EISDIR）均失
+	// 败，dist 回退的 copyFile 亦失败——rollbackXDB 返回 error，调用方必须改走
+	// fail-open（磁盘/内存已是新库，DB 记 success+新 tag 跟随实际状态），不得
+	// 记 failed+旧版本。
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	oldLive := "old-live-content"
+	if err := os.WriteFile(ip2regionLivePath, []byte(oldLive), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// dist 基线存在（copy 目标 live 是目录，dist 回退同样失败）
+	dir := filepath.Dir(ip2regionLivePath)
+	dist := filepath.Join(dir, "waf.dist", "ip2region.xdb")
+	if err := os.MkdirAll(filepath.Dir(dist), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestXDB(t, dist, testSegments)
+	withIP2RegionPaths(t, ip2regionLivePath, dist)
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	reloads := 0
+	m.reloader = func() error {
+		reloads++
+		if reloads == 1 {
+			// 安装已完成：把 live 换成目录，使后续所有还原手段的 rename 全部失败
+			if err := os.Remove(ip2regionLivePath); err != nil {
+				t.Errorf("remove live for dir swap: %v", err)
+			}
+			if err := os.Mkdir(ip2regionLivePath, 0755); err != nil {
+				t.Errorf("replace live with dir: %v", err)
+			}
+		}
+		return errors.New("reload boom")
+	}
+
+	// When 安装成功但 reloader 持续失败、且全部回滚基线均失败
+	m.run("manual")
+
+	// Then 调用方走 fail-open：DB 记 success+新 tag，message 保留重载失败警告
+	// 并注明 Caddy 侧待下次重载生效；.bak 未被消费（保全副本）；fail-open 路径
+	// 按 F1-C 补一次 reloader 重试
+	version, status, message, _, _, _, _ := ip2RegionVersionRow(t)
+	if status != "success" {
+		t.Fatalf("update_status=%q, want success (R45 F1-A fail-open)", status)
+	}
+	if version != "v3.1.0" {
+		t.Fatalf("version=%q, want v3.1.0 (fail-open 记录新 tag)", version)
+	}
+	if !strings.Contains(message, "重载 Caddy 配置失败") || !strings.Contains(message, "待下次重载生效") {
+		t.Fatalf("message=%q, want 重载失败警告并注明 Caddy 侧待下次重载生效", message)
+	}
+	if info, err := os.Stat(ip2regionLivePath); err != nil || !info.IsDir() {
+		t.Fatalf("live path should remain the swapped-in directory (no restore succeeded): %v", err)
+	}
+	if data, err := os.ReadFile(ip2regionLivePath + ".bak"); err != nil || string(data) != oldLive {
+		t.Fatalf(".bak should be preserved untouched when all restore attempts fail: %q, %v", data, err)
+	}
+	if _, err := os.Stat(ip2regionLivePath + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("copyFile tmp residue should be cleaned up after failed restore")
+	}
+	if reloads != 2 {
+		t.Fatalf("reloads=%d, want 2 (install reload fails, fail-open retry fails)", reloads)
 	}
 }
 

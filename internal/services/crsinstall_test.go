@@ -18,6 +18,50 @@ func forceRenameFailure(t *testing.T) {
 	t.Cleanup(func() { osRename = old })
 }
 
+func TestCopyFile_atomicWriteNoTmpResidue(t *testing.T) {
+	// Given R45 F1-B：copyFile 先写 dst+".tmp" 再原子重命名
+	root := t.TempDir()
+	src := filepath.Join(root, "src.xdb")
+	dst := filepath.Join(root, "sub", "live.xdb")
+	writeTestFile(t, src, "full-new-content")
+
+	// When 拷贝成功
+	if err := copyFile(src, dst); err != nil {
+		t.Fatal(err)
+	}
+
+	// Then 目标内容完整且无临时文件残留
+	data, err := os.ReadFile(dst)
+	if err != nil || string(data) != "full-new-content" {
+		t.Fatalf("dst content=%q,%v", data, err)
+	}
+	if _, err := os.Stat(dst + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("tmp file should be renamed away after successful copy")
+	}
+}
+
+func TestCopyFile_sourceErrorLeavesDstUntouched(t *testing.T) {
+	// Given 一个已有内容的目标文件与一个不存在的源
+	root := t.TempDir()
+	src := filepath.Join(root, "missing.xdb")
+	dst := filepath.Join(root, "live.xdb")
+	writeTestFile(t, dst, "old-content")
+
+	// When 拷贝失败
+	if err := copyFile(src, dst); err == nil {
+		t.Fatal("copyFile should fail for missing source")
+	}
+
+	// Then 目标文件原样保留（原子拷贝绝不截断旧文件）且无临时文件残留
+	data, err := os.ReadFile(dst)
+	if err != nil || string(data) != "old-content" {
+		t.Fatalf("dst should be untouched on source error: %q,%v", data, err)
+	}
+	if _, err := os.Stat(dst + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("tmp file should not exist after failed copy")
+	}
+}
+
 func TestMoveTree_renameSucceeds(t *testing.T) {
 	// Given a source tree with a nested file
 	root := t.TempDir()

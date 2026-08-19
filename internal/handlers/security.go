@@ -913,9 +913,15 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		return
 	}
 	// 绑定前校验规则真实存在：悬挂绑定虽在 JOIN 中不可见，但会经集群同步传播
-	// 并污染 GetAllSecurityBindings 消费方（R33 F10）。
+	// 并污染 GetAllSecurityBindings 消费方（R33 F10）。与策略校验同口径先判
+	// err 再判 COUNT（R45 F2-B）：DB 瞬时故障（锁/IO）时 ruleExists 未赋值，
+	// 合并判断会把故障误报为「规则不存在」400，客户端无法区分重试与真 400。
 	var ruleExists int
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM lb_rules WHERE caddy_id=?", req.RuleCaddyID).Scan(&ruleExists); err != nil || ruleExists == 0 {
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM lb_rules WHERE caddy_id=?", req.RuleCaddyID).Scan(&ruleExists); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if ruleExists == 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则不存在"})
 		return
 	}
