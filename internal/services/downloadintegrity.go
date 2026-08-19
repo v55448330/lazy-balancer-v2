@@ -1,6 +1,6 @@
 package services
 
-// 下载完整性（TOFU）：ghfast.top 代理下载无上游官方校验和可钉，首次成功下载
+// 下载校验（TOFU）：ghfast.top 代理下载无上游官方校验和可钉，首次成功下载
 // 后把 size+SHA256 记录到数据卷（.download-integrity.json）；后续同一来源
 // （URL 含版本 tag）下载若 size 或摘要变化，说明代理返回内容与上次不一致，
 // 以 error 日志 + 审计记录告警（不阻断安装，格式校验仍由调用方执行）。
@@ -57,7 +57,7 @@ func recordDownloadIntegrity(source, destPath, resource string) error {
 	}
 	if existed && (prev.Size != info.Size() || prev.SHA256 != digest) {
 		Logf("error", "download integrity mismatch for %s: size %d→%d, sha256 %s→%s（代理返回内容与上次不一致，已按当前内容安装）", source, prev.Size, info.Size(), prev.SHA256, digest)
-		RecordAuditLog("system", "下载完整性告警", resource,
+		RecordAuditLog("system", "校验告警", resource,
 			FormatAuditDetail(fmt.Sprintf("来源 %s 的下载内容与上次记录不一致（size %d→%d，sha256 %s→%s）", source, prev.Size, info.Size(), prev.SHA256, digest)), "")
 	}
 	return nil
@@ -94,12 +94,12 @@ func loadDownloadIntegrityRecords() (map[string]downloadIntegrityRecord, error) 
 			// 隔离失败时如实记录：文件仍在原位，后续 persist（tmp+rename）会覆盖
 			// 重建，但取证副本缺失（R34 F）。
 			Logf("error", "download integrity: records file %s is corrupt, quarantine rename to %s failed: %v（原文件保留，直接重建基线）", downloadIntegrityPath, quarantined, err)
-			RecordAuditLog("system", "下载完整性", "完整性记录文件损坏",
+			RecordAuditLog("system", "下载校验", "完整性记录",
 				FormatAuditDetail(fmt.Sprintf("记录文件 %s 解析失败，隔离为 %s 失败：%v", downloadIntegrityPath, quarantined, err)), "")
 			return map[string]downloadIntegrityRecord{}, nil
 		}
 		Logf("error", "download integrity: records file %s is corrupt, quarantined to %s and baselines rebuilt", downloadIntegrityPath, quarantined)
-		RecordAuditLog("system", "下载完整性", "完整性记录文件损坏",
+		RecordAuditLog("system", "下载校验", "完整性记录",
 			FormatAuditDetail(fmt.Sprintf("记录文件 %s 解析失败，已隔离为 %s 并重建基线", downloadIntegrityPath, quarantined)), "")
 		return map[string]downloadIntegrityRecord{}, nil
 	}

@@ -234,7 +234,7 @@ func reconcileCRSStateFrom(liveDir, snapshotDir, dbV string) {
 			m.rescanRuleCount()
 		}
 		log.Printf("crs reconcile: 磁盘 CRS 已回退（容器重建），从数据卷快照恢复为 %s", plan.markerVersion)
-		RecordAuditLog("system", "恢复", "CRS 规则库", FormatAuditDetail("容器重建后从持久快照恢复 "+plan.markerVersion, AuditResultPart("success")), "")
+		RecordAuditLog("system", "恢复", "CRS规则库", FormatAuditDetail("容器重建后从持久快照恢复 "+plan.markerVersion, AuditResultPart("success")), "")
 	case crsReconcileCorrectDB:
 		if _, err := db.DB.Exec("UPDATE security_crs_version SET version=?, updated_at=datetime('now') WHERE id=1", plan.dbVersion); err != nil {
 			log.Printf("crs reconcile: 校正版本记录为磁盘实际版本 %s 失败: %v", plan.dbVersion, err)

@@ -207,7 +207,7 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 		m.state.message = "已是最新版本"
 		m.state.finishedAt = time.Now().UTC()
 		m.mu.Unlock()
-		RecordAuditLog("system", "更新", "IP2Region 数据库", FormatAuditDetail("已是最新版本 "+tag, AuditResultPart("success")), "")
+		RecordAuditLog("system", "更新", "IP2Region数据库", FormatAuditDetail("已是最新版本 "+tag, AuditResultPart("success")), "")
 		return
 	}
 
@@ -279,7 +279,7 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
 	writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), fmt.Sprintf("ip2region 已更新到 %s", tag))
-	RecordAuditLog("system", "更新", "IP2Region 数据库", FormatAuditDetail("版本："+tag, AuditResultPart("success")), "")
+	RecordAuditLog("system", "更新", "IP2Region数据库", FormatAuditDetail("版本："+tag, AuditResultPart("success")), "")
 }
 
 func (m *IP2RegionUpdateManager) fail(cause error) {
@@ -305,7 +305,7 @@ func (m *IP2RegionUpdateManager) fail(cause error) {
 	m.mu.Unlock()
 	writeIP2RegionUpdateLog("ERROR", string(IP2RegionStatusFailed), cause.Error())
 	if failures+1 <= 1 {
-		RecordAuditLog("system", "更新", "IP2Region 数据库", FormatAuditDetail(cause.Error(), AuditResultPart("failed")), "")
+		RecordAuditLog("system", "更新", "IP2Region数据库", FormatAuditDetail(cause.Error(), AuditResultPart("failed")), "")
 	}
 }
 
@@ -338,7 +338,7 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 	}
 	// TOFU 完整性基线在格式验证成功之后记录（R33 F6）：验证前的坏工件留下基线
 	// 会让下次同 tag 好下载误报。记录失败不阻断安装。
-	if ierr := recordDownloadIntegrity(ip2RegionXDBSourceURL(tag), staged, "ip2region 数据库"); ierr != nil {
+	if ierr := recordDownloadIntegrity(ip2RegionXDBSourceURL(tag), staged, "IP2Region数据库"); ierr != nil {
 		log.Printf("ip2region update: failed to record download integrity: %v", ierr)
 	}
 	// R39 1.2：rename 前备份旧 xdb，reloader 失败时可回滚（镜像 CRS 的
@@ -460,7 +460,7 @@ func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadEr
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
 	writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), fmt.Sprintf("ip2region 已更新到 %s（%s）", tag, warn))
-	RecordAuditLog("system", "更新", "IP2Region 数据库", FormatAuditDetail("版本："+tag+"（"+warn+"）", AuditResultPart("success")), "")
+	RecordAuditLog("system", "更新", "IP2Region数据库", FormatAuditDetail("版本："+tag+"（"+warn+"）", AuditResultPart("success")), "")
 }
 
 // validateIP2RegionXDB opens the staged xdb and performs a probe search.

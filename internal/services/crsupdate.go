@@ -238,7 +238,7 @@ func (m *CRSUpdateManager) run(trigger string) {
 		m.state.message = "已是最新版本"
 		m.state.finishedAt = time.Now().UTC()
 		m.mu.Unlock()
-		RecordAuditLog("system", "更新", "CRS 规则库", FormatAuditDetail("已是最新版本 "+tag, AuditResultPart("success")), "")
+		RecordAuditLog("system", "更新", "CRS规则库", FormatAuditDetail("已是最新版本 "+tag, AuditResultPart("success")), "")
 		return
 	}
 
@@ -264,7 +264,7 @@ func (m *CRSUpdateManager) run(trigger string) {
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
 	writeCRSUpdateLog("INFO", string(CRSStatusSuccess), fmt.Sprintf("CRS 已更新到 %s", tag))
-	RecordAuditLog("system", "更新", "CRS 规则库", FormatAuditDetail("版本："+tag, AuditResultPart("success")), "")
+	RecordAuditLog("system", "更新", "CRS规则库", FormatAuditDetail("版本："+tag, AuditResultPart("success")), "")
 }
 
 func (m *CRSUpdateManager) fail(cause error, restore bool) {
@@ -296,7 +296,7 @@ func (m *CRSUpdateManager) fail(cause error, restore bool) {
 	m.mu.Unlock()
 	writeCRSUpdateLog("ERROR", string(CRSStatusFailed), cause.Error())
 	if failures+1 <= 1 {
-		RecordAuditLog("system", "更新", "CRS 规则库", FormatAuditDetail(cause.Error(), AuditResultPart("failed")), "")
+		RecordAuditLog("system", "更新", "CRS规则库", FormatAuditDetail(cause.Error(), AuditResultPart("failed")), "")
 	}
 }
 

@@ -441,7 +441,7 @@ func TestCRSSchedulerTick_slaveSkips(t *testing.T) {
 func countCRSUpdateFailedAudits(t *testing.T) int {
 	t.Helper()
 	var n int
-	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE resource='CRS 规则库' AND action='更新' AND detail LIKE '%结果：失败%'").Scan(&n); err != nil {
+	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE resource='CRS规则库' AND action='更新' AND detail LIKE '%结果：失败%'").Scan(&n); err != nil {
 		t.Fatalf("count failed audit entries: %v", err)
 	}
 	return n

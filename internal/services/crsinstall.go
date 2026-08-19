@@ -79,7 +79,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	}
 	// TOFU 完整性基线在格式验证成功之后记录（R33 F6）：验证前的坏工件（如代理
 	// 返回的 200 垃圾）留下基线会让下次同 tag 好下载误报。记录失败不阻断安装。
-	if ierr := recordDownloadIntegrity(crsTarballSourceURL(tag), tarball, "CRS 规则库"); ierr != nil {
+	if ierr := recordDownloadIntegrity(crsTarballSourceURL(tag), tarball, "CRS规则库"); ierr != nil {
 		log.Printf("crs update: failed to record download integrity: %v", ierr)
 	}
 

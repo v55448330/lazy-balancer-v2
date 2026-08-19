@@ -1376,7 +1376,7 @@ func (h *Handlers) UpdateCRSAutoUpdate(c *gin.Context) {
 	if req.AutoUpdate {
 		autoUpdateText = "开启"
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "CRS 规则库", fmt.Sprintf("自动更新已%s", autoUpdateText), "")
+	services.RecordAuditLog(getContextUserID(c), "更新", "CRS规则库", fmt.Sprintf("自动更新已%s", autoUpdateText), "")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
 }
 
@@ -1403,7 +1403,7 @@ func (h *Handlers) StartCRSUpdate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "CRS 规则库", "手动更新 CRS 规则库", "")
+	services.RecordAuditLog(getContextUserID(c), "更新", "CRS规则库", "手动更新 CRS规则库", "")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 }
 
@@ -1479,7 +1479,7 @@ func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {
 	if req.AutoUpdate {
 		autoUpdateText = "开启"
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "IP2Region 数据库", fmt.Sprintf("自动更新已%s", autoUpdateText), "")
+	services.RecordAuditLog(getContextUserID(c), "更新", "IP2Region数据库", fmt.Sprintf("自动更新已%s", autoUpdateText), "")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
 }
 
@@ -1503,7 +1503,7 @@ func (h *Handlers) StartIP2RegionUpdate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "IP2Region 数据库", "手动更新 IP2Region 数据库", "")
+	services.RecordAuditLog(getContextUserID(c), "更新", "IP2Region数据库", "手动更新 IP2Region数据库", "")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 }
 

@@ -141,20 +141,20 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 		// 仅恶意/损坏主节点可构造——与 CRS 侧 F-3 同纵深防御，拒绝整包而非
 		// 裸写原始字节。
 		if bundle.IP2RegionSha == "" {
-			return crsChanged, xdbChanged, errors.New("同步 IP2Region 数据库缺少声明哈希，已拒绝落盘")
+			return crsChanged, xdbChanged, errors.New("同步 IP2Region数据库缺少声明哈希，已拒绝落盘")
 		}
 		liveSum := fileSha256(ip2regionLivePath)
 		if liveSum != bundle.IP2RegionSha {
 			sum := sha256.Sum256(bundle.XdbB64)
 			if got := hex.EncodeToString(sum[:]); got != bundle.IP2RegionSha {
-				return crsChanged, xdbChanged, fmt.Errorf("同步 IP2Region 数据库哈希不匹配（声明 %s，实际 %s），已拒绝落盘", bundle.IP2RegionSha, got)
+				return crsChanged, xdbChanged, fmt.Errorf("同步 IP2Region数据库哈希不匹配（声明 %s，实际 %s），已拒绝落盘", bundle.IP2RegionSha, got)
 			}
 			tmp := ip2regionLivePath + ".sync"
 			if err := os.WriteFile(tmp, bundle.XdbB64, 0644); err != nil {
-				return crsChanged, xdbChanged, fmt.Errorf("写入同步 IP2Region 数据库: %w", err)
+				return crsChanged, xdbChanged, fmt.Errorf("写入同步 IP2Region数据库: %w", err)
 			}
 			if err := os.Rename(tmp, ip2regionLivePath); err != nil {
-				return crsChanged, xdbChanged, fmt.Errorf("落盘同步 IP2Region 数据库: %w", err)
+				return crsChanged, xdbChanged, fmt.Errorf("落盘同步 IP2Region数据库: %w", err)
 			}
 			if bundle.IP2RegionTag != "" {
 				_ = os.WriteFile(ip2regionLivePath+".version", []byte(bundle.IP2RegionTag), 0644)
