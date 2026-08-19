@@ -277,3 +277,105 @@ func TestUpdateRule_enable_trigger_redirect_shadow_check(t *testing.T) {
 		t.Fatalf("status=%d body=%s, want 400 redirect shadow on enable via UpdateRule", response.Code, response.Body.String())
 	}
 }
+
+// R40 F-1: 遮蔽/域名冲突门控的启用态条件收敛为仅启用方向——存量冲突组合
+// （80 直听启用 + 443 TLS+跳转启用同域名；或同域名同端口双启用）下禁用任一方
+// 不应被 400 误拦（禁用方不渲染，检查无意义，与 DisableRule 端点口径一致）；
+// 启用方向仍须触发检查。
+func TestUpdateRule_disable_direction_skips_conflict_checks(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	oldCertDir := testServicesCertDir
+	testServicesCertDir = t.TempDir()
+	t.Cleanup(func() { testServicesCertDir = oldCertDir })
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+
+	certPEM, keyPEM, err := generateTestCert("shadow-v.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("generate certificate: %v", err)
+	}
+	seedShadowCombo := func(caddyID, domain string, listenPort int, tlsRedirect bool) {
+		t.Helper()
+		enableTLS, redirect := 0, 0
+		tlsCert, tlsKey := "", ""
+		if tlsRedirect {
+			enableTLS, redirect = 1, 1
+			tlsCert, tlsKey = certPEM, keyPEM
+		}
+		if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,enable_compress,enable_tls,tls_source,tls_cert,tls_key,tls_http_redirect)
+			VALUES (?,?,?,'http',?,?,'weighted_round_robin',1,1,?,'manual',?,?,?)`,
+			caddyID, caddyID, "", domain, listenPort, enableTLS, tlsCert, tlsKey, redirect); err != nil {
+			t.Fatalf("seed rule %s: %v", caddyID, err)
+		}
+		if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES (?,'127.0.0.1',9000,1,1,'http')`, caddyID); err != nil {
+			t.Fatalf("seed upstream %s: %v", caddyID, err)
+		}
+	}
+	seedPlain := func(caddyID, domain string, listenPort, enabled int) {
+		t.Helper()
+		if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,enable_compress)
+			VALUES (?,?,?,'http',?,?,'weighted_round_robin',?,1)`, caddyID, caddyID, "", domain, listenPort, enabled); err != nil {
+			t.Fatalf("seed rule %s: %v", caddyID, err)
+		}
+		if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES (?,'127.0.0.1',9000,1,1,'http')`, caddyID); err != nil {
+			t.Fatalf("seed upstream %s: %v", caddyID, err)
+		}
+	}
+	update := func(caddyID, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPut, "/rules/"+caddyID, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	t.Run("存量遮蔽组合下禁用 80 直听方放行", func(t *testing.T) {
+		seedShadowCombo("lb_f1_80a", "shadow-v.test", 80, false)
+		seedShadowCombo("lb_f1_tlsa", "shadow-v.test", 443, true)
+		response := update("lb_f1_80a", `{"enabled":false}`)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s, want 200 for disable on shadow combo", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("存量遮蔽组合下禁用 TLS 跳转方放行", func(t *testing.T) {
+		seedShadowCombo("lb_f1_80b", "shadow-w.test", 80, false)
+		seedShadowCombo("lb_f1_tlsb", "shadow-w.test", 443, true)
+		response := update("lb_f1_tlsb", `{"enabled":false}`)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s, want 200 for disable on shadow combo", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("同域名同端口双启用存量组合下禁用一方放行", func(t *testing.T) {
+		seedPlain("lb_f1_dup1", "dup.test", 8080, 1)
+		seedPlain("lb_f1_dup2", "dup.test", 8080, 1)
+		response := update("lb_f1_dup2", `{"enabled":false}`)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s, want 200 for disable on duplicate combo", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("启用方向仍触发遮蔽检查", func(t *testing.T) {
+		seedShadowCombo("lb_f1_80c", "shadow-x.test", 80, false)
+		seedShadowCombo("lb_f1_tlsc", "shadow-x.test", 443, true)
+		if _, err := db.DB.Exec(`UPDATE lb_rules SET enabled=0 WHERE caddy_id='lb_f1_tlsc'`); err != nil {
+			t.Fatalf("disable redirect rule: %v", err)
+		}
+		response := update("lb_f1_tlsc", `{"enabled":true}`)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "直接监听 80 端口") {
+			t.Fatalf("status=%d body=%s, want 400 redirect shadow on enable direction", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("启用方向仍触发域名冲突检查", func(t *testing.T) {
+		seedPlain("lb_f1_dup3", "dup2.test", 8081, 1)
+		seedPlain("lb_f1_dup4", "dup2.test", 8081, 0)
+		response := update("lb_f1_dup4", `{"enabled":true}`)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "域名已被其他 HTTP/HTTPS 规则使用") {
+			t.Fatalf("status=%d body=%s, want 400 domain conflict on enable direction", response.Code, response.Body.String())
+		}
+	})
+}

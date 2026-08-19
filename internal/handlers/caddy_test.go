@@ -196,3 +196,23 @@ func TestGetUpstreamHealth_returnsBadGatewayWithoutLeakingCollectorError(t *test
 		t.Fatalf("response leaked collector details: %s", response.Body.String())
 	}
 }
+
+// R40 F-2: PutCaddyConfig 对 chunked/未知 ContentLength 的超大请求体（绕过预检、
+// 经 MaxBytesReader 拦截）须映射 413，与导入路径口径一致，而非统一 400。
+func TestPutCaddyConfig_oversized_unknown_length_body_returns_413(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := newBackupTestHandlers(t)
+	router := gin.New()
+	router.PUT("/caddy", h.PutCaddyConfig)
+
+	body := `{"content":"` + strings.Repeat("x", 1<<20) + `"}`
+	request := httptest.NewRequest(http.MethodPut, "/caddy", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.ContentLength = -1 // 模拟 chunked/未知长度，绕过预检走 MaxBytesReader
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d body=%s, want 413", response.Code, response.Body.String())
+	}
+}
