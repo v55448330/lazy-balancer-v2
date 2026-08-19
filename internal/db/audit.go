@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -56,8 +57,72 @@ func InitializeAuditDB(dataDir string) error {
 		log.Printf("audit log migration failed (%v); %d buffered system audit entries retained for next startup", err, systemAuditBufferLen())
 		return err
 	}
+	migrateAuditVocabulary()
 	flushSystemAuditLogs()
 	return nil
+}
+
+// 操作日志词汇标准（R47 起为系统标准）：操作标签 ≤4 词、事件对象 ≤5 词
+// （词制：中文按字计、连续英文/数字串算 1 词、空白不计）。存量旧词条在此
+// 一次性归一——筛选下拉取自 audit_log 去重值，不迁移则旧词条永久残留。
+// 幂等：旧值不存在时零命中。新事件由 services.RecordAuditLog 入口告警 +
+// audit_vocabulary_test.go 硬卡控。
+var auditVocabularyRenames = []struct {
+	oldAction, newAction     string
+	oldResource, newResource string
+}{
+	// 动作+对象联动改名
+	{"清理证书指纹失败", "清理失败", "集群节点", "证书指纹"},
+	{"清理证书指纹", "清理", "集群节点", "证书指纹"},
+	// 动作改名
+	{"下载完整性告警", "校验告警", "", ""},
+	{"手动同步失败", "同步失败", "", ""},
+	{"下载完整性", "下载校验", "", ""},
+	{"配置不一致", "配置漂移", "", ""},
+	{"CA限流", "签发限流", "", ""},
+	{"导入部分失败", "部分失败", "", ""},
+	{"更新访问地址", "更新地址", "", ""},
+	// 对象改名
+	{"", "", "证书签发任务", "证书任务"},
+	{"", "", "完整性记录文件损坏", "完整性记录"},
+	{"", "", "从节点登录票据", "登录票据"},
+	{"", "", "集群登录票据", "登录票据"},
+	{"", "", "负载均衡规则", "负载规则"},
+	{"", "", "DNS提供商配置", "DNS配置"},
+	{"", "", "集群注册令牌", "注册令牌"},
+	{"", "", "Caddy 配置", "Caddy配置"},
+	{"", "", "IP2Region 数据库", "IP2Region数据库"},
+	{"", "", "ip2region 数据库", "IP2Region数据库"},
+	{"", "", "CRS 规则库", "CRS规则库"},
+	{"", "", "配置同步", "集群同步"},
+}
+
+func migrateAuditVocabulary() {
+	for _, r := range auditVocabularyRenames {
+		var sets, wheres []string
+		var setArgs, whereArgs []any
+		if r.newAction != "" {
+			sets = append(sets, "action=?")
+			setArgs = append(setArgs, r.newAction)
+			wheres = append(wheres, "action=?")
+			whereArgs = append(whereArgs, r.oldAction)
+		}
+		if r.newResource != "" {
+			sets = append(sets, "resource=?")
+			setArgs = append(setArgs, r.newResource)
+			wheres = append(wheres, "resource=?")
+			whereArgs = append(whereArgs, r.oldResource)
+		}
+		query := "UPDATE audit_log SET " + strings.Join(sets, ", ") + " WHERE " + strings.Join(wheres, " AND ")
+		res, err := AuditDB.Exec(query, append(setArgs, whereArgs...)...)
+		if err != nil {
+			log.Printf("audit vocabulary migration failed (%s): %v", query, err)
+			continue
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			log.Printf("audit vocabulary migration: %d rows normalized (%s)", n, query)
+		}
+	}
 }
 
 // R45 F-2: 启动迁移跑在 InitializeAuditDB 之前，且 db 不能反向依赖
