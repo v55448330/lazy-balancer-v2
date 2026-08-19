@@ -145,10 +145,6 @@ export interface CertJobsPage<TJob> {
   readonly page_size: number
 }
 
-export interface ApiResponse<T = never> extends Omit<APIResponse<T>, 'data'> {
-  data: T
-}
-
 export type ClusterNodeMode = 'master' | 'slave'
 
 export type ClusterNodeStatus = 'pending' | 'online' | 'offline'

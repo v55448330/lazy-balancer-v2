@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { ApiResponse, ClusterNodeMode, CurrentUser } from '@/types'
+import type { APIResponse, ClusterNodeMode, CurrentUser } from '@/types'
 import { isTokenExpired, request } from '@/utils/api'
 import { ElMessage } from 'element-plus'
 
@@ -61,7 +61,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchUser() {
     if (!token.value) return
     try {
-      const res = await request.get<ApiResponse<CurrentUser>>('/users/me')
+      const res = await request.get<APIResponse<CurrentUser>>('/users/me')
       if (res.data) {
         user.value = {
           id: res.data.id,
@@ -79,7 +79,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchConfig(silent = false) {
     if (!token.value) return
     try {
-      const res = await request.get<ApiResponse<{ readonly is_master: boolean; readonly timezone?: string }>>('/config', { silent })
+      const res = await request.get<APIResponse<{ readonly is_master: boolean; readonly timezone?: string }>>('/config', { silent })
       if (res.data) {
         nodeMode.value = res.data.is_master ? 'master' : 'slave'
         if (res.data.timezone) timezone.value = res.data.timezone

@@ -2,7 +2,7 @@ import axios from 'axios'
 import type { AxiosInstance, AxiosRequestConfig } from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type {
-  ApiResponse,
+  APIResponse,
   CaddyMetrics,
   ConnectionStats,
   HostMetrics,
@@ -54,22 +54,22 @@ interface GlobalConfigData {
 }
 
 interface RequestClient {
-  get(url: '/system/info', config?: AxiosRequestConfig): Promise<ApiResponse<SystemInfo>>
-  get(url: '/system/metrics', config?: AxiosRequestConfig): Promise<ApiResponse<SystemMetrics>>
-  get(url: '/metrics/realtime', config?: AxiosRequestConfig): Promise<ApiResponse<RealtimeTraffic>>
-  get(url: '/caddy/metrics', config?: AxiosRequestConfig): Promise<ApiResponse<CaddyMetrics>>
-  get(url: '/caddy/host-metrics', config?: AxiosRequestConfig): Promise<ApiResponse<HostMetrics[]>>
-  get(url: '/rules', config?: AxiosRequestConfig): Promise<ApiResponse<Rule[]>>
-  get(url: '/metrics/overview', config?: AxiosRequestConfig): Promise<ApiResponse<MetricsOverview>>
-  get(url: '/metrics/connections', config?: AxiosRequestConfig): Promise<ApiResponse<ConnectionStats>>
-  get(url: '/caddy/status', config?: AxiosRequestConfig): Promise<ApiResponse<{ status: string; apply_error?: string; config_consistent?: string; config_drift?: string }>>
-  get(url: '/config', config?: AxiosRequestConfig): Promise<ApiResponse<GlobalConfigData>>
-  get(url: '/admin-tls', config?: AxiosRequestConfig): Promise<ApiResponse<{ enabled: boolean; mode: string; cert_info?: { domain: string; issuer: string; not_after: string; days_left: number } | null }>>
-  get<T = ApiResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T>
-  post<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
-  put<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
-  patch<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
-  delete<T = ApiResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T>
+  get(url: '/system/info', config?: AxiosRequestConfig): Promise<APIResponse<SystemInfo>>
+  get(url: '/system/metrics', config?: AxiosRequestConfig): Promise<APIResponse<SystemMetrics>>
+  get(url: '/metrics/realtime', config?: AxiosRequestConfig): Promise<APIResponse<RealtimeTraffic>>
+  get(url: '/caddy/metrics', config?: AxiosRequestConfig): Promise<APIResponse<CaddyMetrics>>
+  get(url: '/caddy/host-metrics', config?: AxiosRequestConfig): Promise<APIResponse<HostMetrics[]>>
+  get(url: '/rules', config?: AxiosRequestConfig): Promise<APIResponse<Rule[]>>
+  get(url: '/metrics/overview', config?: AxiosRequestConfig): Promise<APIResponse<MetricsOverview>>
+  get(url: '/metrics/connections', config?: AxiosRequestConfig): Promise<APIResponse<ConnectionStats>>
+  get(url: '/caddy/status', config?: AxiosRequestConfig): Promise<APIResponse<{ status: string; apply_error?: string; config_consistent?: string; config_drift?: string }>>
+  get(url: '/config', config?: AxiosRequestConfig): Promise<APIResponse<GlobalConfigData>>
+  get(url: '/admin-tls', config?: AxiosRequestConfig): Promise<APIResponse<{ enabled: boolean; mode: string; cert_info?: { domain: string; issuer: string; not_after: string; days_left: number } | null }>>
+  get<T = APIResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T>
+  post<T = APIResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  put<T = APIResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  patch<T = APIResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  delete<T = APIResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T>
 }
 
 let sessionExpiredDialogOpen = false
@@ -181,19 +181,19 @@ service.interceptors.response.use(
 // 响应拦截器已将 AxiosResponse 解包为 response.data，因此这里的运行时
 // 返回值即 T；axios 1.19 的泛型收紧后需在封装边界做一次窄断言对齐契约。
 export const request: RequestClient = {
-  get<T = ApiResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T> {
+  get<T = APIResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T> {
     return service.get(url, config) as Promise<T>
   },
-  post<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
+  post<T = APIResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
     return service.post(url, data, config) as Promise<T>
   },
-  put<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
+  put<T = APIResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
     return service.put(url, data, config) as Promise<T>
   },
-  patch<T = ApiResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
+  patch<T = APIResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
     return service.patch(url, data, config) as Promise<T>
   },
-  delete<T = ApiResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T> {
+  delete<T = APIResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T> {
     return service.delete(url, config) as Promise<T>
   },
 }
