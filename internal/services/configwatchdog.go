@@ -16,9 +16,9 @@ import (
 // 规则与 Caddy 实际运行配置的比对结果。
 type ConfigDriftStatus struct {
 	Consistent bool     `json:"consistent"`
-	Missing    []string `json:"missing"`   // 应渲染但运行配置缺失的规则（名称（caddy_id））
-	Extra      []string `json:"extra"`     // 运行配置中存在但 DB 已不存在的规则路由
-	Since      string   `json:"since"`     // 首次确认不一致的时间（UTC）
+	Missing    []string `json:"missing"` // 应渲染但运行配置缺失的规则（名称（caddy_id））
+	Extra      []string `json:"extra"`   // 运行配置中存在但 DB 已不存在的规则路由
+	Since      string   `json:"since"`   // 首次确认不一致的时间（UTC）
 	CheckedAt  string   `json:"checked_at"`
 }
 
