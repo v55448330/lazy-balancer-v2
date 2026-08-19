@@ -305,9 +305,7 @@ watch(appLogAutoRefresh, (enabled) => {
 onUnmounted(() => {
   disposed = true
   stopAppLogTimer()
-  if (tlsProtocolRedirectTimer) clearTimeout(tlsProtocolRedirectTimer)
   if (tlsProtocolFallbackTimer) clearTimeout(tlsProtocolFallbackTimer)
-  tlsProtocolRedirectTimer = null
   tlsProtocolFallbackTimer = null
 })
 
@@ -580,7 +578,6 @@ const formDataOf = (fields: Record<string, string>): FormData => {
 }
 
 let tlsInspectSeq = 0
-let tlsProtocolRedirectTimer: ReturnType<typeof setTimeout> | null = null
 let tlsProtocolFallbackTimer: ReturnType<typeof setTimeout> | null = null
 let disposed = false
 
@@ -617,8 +614,7 @@ const onTlsFile = async (e: Event, kind: 'cert' | 'key') => {
 const notifyTlsRestarting = (toHttps: boolean) => {
   const target = `${toHttps ? 'https' : 'http'}://${location.host}/`
   // 不盲跳：新进程 HTTPS listener 在完整启动序列后才 bind，固定延时跳转必中连接拒绝窗口
-  // （D-1）。停留当前页，弹窗给出可点击的目标链接，由用户就绪后自行访问。
-  let userDismissed = false
+  // （R38 D-1）。停留当前页，弹窗给出可点击的目标链接，由用户就绪后自行访问。
   ElMessageBox.alert(
     `已保存，服务正在自动重启（从节点同步后将自动重启生效），就绪后请访问：<a href="${target}" target="_blank" rel="noopener noreferrer" style="word-break: break-all;">${target}</a>`,
     '正在重启',
@@ -631,18 +627,11 @@ const notifyTlsRestarting = (toHttps: boolean) => {
       dangerouslyUseHTMLString: true,
     },
   )
-    .then(() => { userDismissed = true })
     .catch((err) => { console.error('TLS restart notification failed:', err) })
-  if (tlsProtocolRedirectTimer) clearTimeout(tlsProtocolRedirectTimer)
   if (tlsProtocolFallbackTimer) clearTimeout(tlsProtocolFallbackTimer)
-  // 保留一次延迟跳转尝试：8s 后仅在用户未关闭提示（未交互）时执行；
-  // 自签名证书无法 fetch 探测就绪（握手对不受信证书直接失败），故不做轮询
-  tlsProtocolRedirectTimer = setTimeout(() => {
-    if (!disposed && !userDismissed) window.location.replace(target)
-  }, 8000)
-  // 兜底提醒（页面不再导航，此提示可达）：用户已关闭弹窗时提示手动访问新地址
+  // 兜底提醒（不导航）：无论是否已关闭弹窗，15s 后提示一次手动访问新地址
   tlsProtocolFallbackTimer = setTimeout(() => {
-    if (!disposed && userDismissed) ElMessage.warning(`服务重启中，就绪后请手动访问新地址：${target}`)
+    if (!disposed) ElMessage.warning(`若未自动跳转请手动访问新地址：${target}`)
   }, 15000)
 }
 
