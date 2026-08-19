@@ -176,7 +176,28 @@ const handleSave = async (): Promise<void> => {
   if (isReadOnly.value || saving.value) return
   saving.value = true
   try {
-    const payload = { ...settings.value, source: 'caddy' }
+    // 显式白名单：settings 是与 BasicSettings 共享的同一对象，全量展开会把
+    // 兄弟卡片未保存的编辑（basic 键）连带提交；只发 caddy 键（R39 I-1）
+    const payload = {
+      caddy_log_level: settings.value.caddy_log_level,
+      caddy_log_size_mb: settings.value.caddy_log_size_mb,
+      request_body_max_size_mb: settings.value.request_body_max_size_mb,
+      http_read_timeout: settings.value.http_read_timeout,
+      http_write_timeout: settings.value.http_write_timeout,
+      http_idle_timeout: settings.value.http_idle_timeout,
+      upstream_keepalive_timeout: settings.value.upstream_keepalive_timeout,
+      server_tokens_hidden: settings.value.server_tokens_hidden,
+      access_log_json: settings.value.access_log_json,
+      access_log_format: settings.value.access_log_format,
+      proxy_dial_timeout: settings.value.proxy_dial_timeout,
+      proxy_response_header_timeout: settings.value.proxy_response_header_timeout,
+      proxy_read_timeout: settings.value.proxy_read_timeout,
+      proxy_write_timeout: settings.value.proxy_write_timeout,
+      proxy_stream_timeout: settings.value.proxy_stream_timeout,
+      proxy_flush_interval: settings.value.proxy_flush_interval,
+      proxy_stream_close_delay: settings.value.proxy_stream_close_delay,
+      source: 'caddy',
+    }
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
     if (preview.data?.changed) {
       const changes = preview.data.changes.length > 0 ? preview.data.changes.join('；') : '检测到配置变更'

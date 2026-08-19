@@ -73,13 +73,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 
 const parseDateValue = (date: unknown): Date | null => {
   if (!date) return null
-  if (isRecord(date) && date.Valid === false) return null
-  let raw: unknown = date
-  if (isRecord(date) && typeof date.String === 'string' && date.String) raw = date.String
-  if (isRecord(date) && typeof date.Time === 'string' && date.Time) raw = date.Time
-  if (typeof raw !== 'string') return null
+  // 后端契约统一为 *string / JSONNullTime（RFC3339 字符串或 null），无 sql.Null* 包装对象；
+  // 对未知对象形状保持宽容防御，一律按空处理（R39 S-1）
+  if (isRecord(date) || typeof date !== 'string') return null
   // DB datetimes ("2026-08-11 08:23:21") are stored in UTC; normalize to explicit UTC ISO
-  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(raw) ? raw.replace(' ', 'T') + 'Z' : raw
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(date) ? date.replace(' ', 'T') + 'Z' : date
   if (!isIsoLike(normalized)) return null
   const d = new Date(normalized)
   return isNaN(d.getTime()) ? null : d
@@ -89,7 +87,6 @@ export const formatDate = (date: unknown): string => {
   const d = parseDateValue(date)
   if (d) return formatInConfigTz(d, true)
   if (typeof date === 'string' && date) return date
-  if (isRecord(date) && typeof date.String === 'string' && date.String) return date.String
   return ''
 }
 
@@ -97,7 +94,6 @@ export const formatDateShort = (date: unknown): string => {
   const d = parseDateValue(date)
   if (d) return formatInConfigTz(d, false)
   if (typeof date === 'string' && date) return date
-  if (isRecord(date) && typeof date.String === 'string' && date.String) return date.String
   return ''
 }
 
