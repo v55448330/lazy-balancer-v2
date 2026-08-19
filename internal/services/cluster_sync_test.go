@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1096,6 +1097,170 @@ func TestSyncService_Pull_refetchesFullSnapshotOnWafFileDrift(t *testing.T) {
 	}
 	if got, err := os.ReadFile(ip2regionLivePath); err != nil || string(got) != "master-xdb-bytes" {
 		t.Fatalf("xdb not converged: content=%q err=%v", got, err)
+	}
+}
+
+func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testing.T) {
+	// F-1 端到端：apply 期安全数据拉取持续失败时，304 分支的 WAF 兜底重拉
+	// 每 60s 一轮无限循环打主从负载。连续 ≥wafRepullMaxFailures 轮未收敛后
+	// 必须：1) last_sync_error 上表面「安全数据持续同步失败（已重试 N 次）」
+	// （节点页面可见）；2) 兜底重拉降频为每 wafRepullEvery 轮一次；3) 恢复
+	// 收敛后计数清零、last_sync_error 清空、重拉恢复正常。
+	_, database := newClusterTestService(t)
+
+	// 主节点文件树：快照引用与文件包的真实来源（与既有 WAF 漂移测试同口径）。
+	masterTree := t.TempDir()
+	os.MkdirAll(filepath.Join(masterTree, "crs", "rules"), 0755)
+	os.WriteFile(filepath.Join(masterTree, "crs", "rules", "a.conf"), []byte("SecRule X 1"), 0644)
+	os.WriteFile(filepath.Join(masterTree, "crs", "VERSION"), []byte("v4.28.0"), 0644)
+	masterXdb := filepath.Join(masterTree, "ip2region.xdb")
+	os.WriteFile(masterXdb, []byte("master-xdb-bytes"), 0644)
+
+	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
+	crsLiveDir, ip2regionLivePath = filepath.Join(masterTree, "crs"), masterXdb
+	ref := BuildWafFileRef()
+	bundle := BuildWafFileBundle()
+	// 从节点本地文件树为空（从未收敛），持续拉取失败期间保持分叉。
+	slaveTree := t.TempDir()
+	crsLiveDir, ip2regionLivePath = filepath.Join(slaveTree, "crs"), filepath.Join(slaveTree, "ip2region.xdb")
+	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	os.MkdirAll(crsLiveDir, 0755)
+	if ref == nil || bundle == nil {
+		t.Fatal("master ref/bundle must build")
+	}
+
+	snapshot := signedTestSnapshot(9, "token")
+	snapshot.WafFiles = ref
+	// 空节必须用空切片/空数组而非 nil：生产主节点 buildFullSnapshot 经
+	// make([]T,0)/dumpTableAsJSON 生成空态 JSON([])，从节点漂移守卫重建
+	// 哈希同为 []；测试若用 nil(null) 会走 driftedSections 重拉路径，
+	// 测不到 WAF 兜底分支。
+	snapshot.Rules = []models.LbRule{}
+	snapshot.Users = []models.ClusterUser{}
+	snapshot.APIKeys = []models.ClusterAPIKey{}
+	snapshot.SecurityPolicies = json.RawMessage(`[]`)
+	snapshot.SecurityBindings = json.RawMessage(`[]`)
+	snapshot.SecurityCustomRules = []models.SecurityCustomRule{}
+	snapshot.SecurityBlockPages = []models.SecurityBlockPage{}
+	snapshot.SecurityCRSVersion = []models.ClusterSecurityCRSVersion{}
+	snapshot.SecurityIP2RegionVersion = []models.ClusterSecurityIP2RegionVersion{}
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	snapshot = signTestSnapshot(snapshot, "token")
+
+	var mu sync.Mutex
+	fetchHealthy := false
+	requestedVersions := make(chan string, 64)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/cluster/sync/waf-files" {
+			mu.Lock()
+			healthy := fetchHealthy
+			mu.Unlock()
+			if !healthy {
+				response.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(map[string]any{"data": bundle})
+			return
+		}
+		requestedVersions <- request.URL.Query().Get("since_version")
+		if request.URL.Query().Get("since_version") == "0" {
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(models.APIResponse{Code: 0, Data: snapshot})
+			return
+		}
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9 WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	seedAppliedSection(t, database, "waf_files", snapshot.SectionHashes["waf_files"])
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
+	defer caddyServer.Close()
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	lastSyncError := func() string {
+		var stored string
+		if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		msg, _ := decodeSyncError(stored)
+		return msg
+	}
+	pullRound := func(round int, wantRepull bool) {
+		t.Helper()
+		if _, err := service.Pull(context.Background()); err != nil {
+			t.Fatalf("round %d pull: %v", round, err)
+		}
+		if v := waitSyncTest(t, requestedVersions); v != "9" {
+			t.Fatalf("round %d first request since_version=%q, want 9", round, v)
+		}
+		if wantRepull {
+			if v := waitSyncTest(t, requestedVersions); v != "0" {
+				t.Fatalf("round %d second request since_version=%q, want 0 (WAF drift re-pull)", round, v)
+			}
+			return
+		}
+		select {
+		case v := <-requestedVersions:
+			t.Fatalf("round %d unexpected second request since_version=%q, want none（降频期不重拉）", round, v)
+		default:
+		}
+	}
+
+	// 前 5 轮：每轮都全量重拉（计数 < 阈值），第 5 轮后达到阈值并表面持续失败。
+	for round := 1; round <= wafRepullMaxFailures; round++ {
+		pullRound(round, true)
+	}
+	if service.wafRepullFailures != wafRepullMaxFailures {
+		t.Fatalf("wafRepullFailures=%d, want %d", service.wafRepullFailures, wafRepullMaxFailures)
+	}
+	if msg := lastSyncError(); !strings.Contains(msg, "安全数据持续同步失败") || !strings.Contains(msg, "已重试 5 次") {
+		t.Fatalf("last_sync_error=%q, want 持续失败文案（已重试 5 次）", msg)
+	}
+
+	// 降频期（第 6..9 轮）：兜底重拉被跳过，每轮只有一次 304 请求，
+	// 持续失败消息保持可见。
+	for round := wafRepullMaxFailures + 1; round < wafRepullEvery; round++ {
+		pullRound(round, false)
+		if msg := lastSyncError(); !strings.Contains(msg, "安全数据持续同步失败") {
+			t.Fatalf("round %d last_sync_error=%q, want 持续失败文案保持可见", round, msg)
+		}
+	}
+
+	// 第 10 轮：计数器 % 10 == 0，重拉一次并刷新计数文案。
+	pullRound(wafRepullEvery, true)
+	if msg := lastSyncError(); !strings.Contains(msg, "已重试 10 次") {
+		t.Fatalf("last_sync_error=%q, want 已重试 10 次", msg)
+	}
+
+	// 主节点恢复：从第 11 轮起仍是降频期（第 20 轮才重拉），重拉后收敛。
+	mu.Lock()
+	fetchHealthy = true
+	mu.Unlock()
+	for round := wafRepullEvery + 1; round < 2*wafRepullEvery; round++ {
+		pullRound(round, false)
+	}
+	// 第 20 轮：重拉成功 → 收敛 → 计数清零。
+	pullRound(2*wafRepullEvery, true)
+	if service.wafRepullFailures != 0 {
+		t.Fatalf("wafRepullFailures=%d after convergence, want 0", service.wafRepullFailures)
+	}
+	if msg := lastSyncError(); msg != "" {
+		t.Fatalf("last_sync_error=%q after convergence, want cleared", msg)
+	}
+	if got, err := os.ReadFile(filepath.Join(crsLiveDir, "rules", "a.conf")); err != nil || string(got) != "SecRule X 1" {
+		t.Fatalf("CRS not converged: content=%q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(ip2regionLivePath); err != nil || string(got) != "master-xdb-bytes" {
+		t.Fatalf("xdb not converged: content=%q err=%v", got, err)
+	}
+
+	// 收敛后的稳态轮：单次 304 请求，无重拉，计数保持 0。
+	pullRound(2*wafRepullEvery+1, false)
+	if service.wafRepullFailures != 0 {
+		t.Fatalf("wafRepullFailures=%d in steady state, want 0", service.wafRepullFailures)
 	}
 }
 

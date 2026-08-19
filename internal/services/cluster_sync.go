@@ -110,6 +110,12 @@ type SyncService struct {
 	afterStopAdmission     func()
 	beforeApplySnapshot    func()
 	beforeRecordSyncStatus func()
+	// wafRepullFailures 记录 WAF 文件兜底重拉的连续未收敛轮数（内存态；仅在
+	// Pull 的 pullMu 临界区内读写，无并发访问）。连续未收敛达到
+	// wafRepullMaxFailures 轮后：把「安全数据持续同步失败」上表面到
+	// last_sync_error（节点页面可见），并把兜底重拉降频为每 wafRepullEvery
+	// 轮一次；收敛后清零恢复正常。
+	wafRepullFailures int
 }
 
 func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *SyncService {
@@ -505,6 +511,10 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 
 	s.pullMu.Lock()
 	defer s.pullMu.Unlock()
+	// wafRepullAttempted 标记本周期是否执行了 WAF 文件兜底全量重拉：重拉轮
+	// 的 applySnapshot 会清空 last_sync_error（记录同步状态），安全数据若
+	// 仍未收敛需在周期末重新上表面持续失败消息。
+	wafRepullAttempted := false
 	defer func() {
 		if s.db != nil {
 			if s.beforeRecordSyncStatus != nil {
@@ -514,6 +524,14 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			// apply_ok_reload_failed 标记；成功路径直接清空会让 304 分支的
 			// 标记检测同周期失效。真实拉取错误仍覆盖写入。
 			if err == nil && s.syncReloadFailureMarkerPresent(ctx) {
+				return
+			}
+			// WAF 兜底重拉轮：applySnapshot 已清空 last_sync_error，但安全
+			// 数据仍未收敛（计数 ≥ 阈值）——重新上表面「安全数据持续同步
+			// 失败」消息，保证节点页面可见；降频期轮次由 recordSyncError
+			// 的空消息守卫保持不清空。
+			if err == nil && wafRepullAttempted && s.wafRepullPersistentlyFailed() {
+				s.persistWafRepullFailure(ctx)
 				return
 			}
 			s.recordSyncError(ctx, err, nil)
@@ -574,13 +592,24 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			// WAF 文件兜底（N-01）：apply 期 fetchWafFiles/ApplyWafFileBundle
 			// 失败仅记日志不向上传播（cluster_apply.go），记录哈希已提交而本地
 			// 文件未收敛；三节 drift 检测不含 waf_files（文件态节），必须在此
-			// 显式比对，否则从节点安全数据随主节点配置静默永久分叉。
+			// 显式比对，否则从节点安全数据随主节点配置静默永久分叉。兜底重拉
+			// 带连续失败计数（F-1）：持续失败时上表面到 last_sync_error 并把
+			// 重拉降频，避免每 60s 无限循环打主从负载。
 			if s.wafFilesDrifted() {
-				Logf("warn", "本地 CRS/IP2Region 文件与同步记录不一致（上次同步安全数据失败），以全量快照重新拉取")
-				RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("本地安全数据文件与记录不一致", "配置无变化但安全数据文件未收敛，已改为全量拉取"), "")
-				resp.Body.Close()
-				sinceVersion, sinceFingerprint = 0, ""
-				continue
+				s.wafRepullFailures++
+				if s.wafRepullFailures == wafRepullMaxFailures {
+					Logf("error", "安全数据持续同步失败（已连续 %d 轮未收敛），兜底全量重拉降频为每 %d 轮一次", wafRepullMaxFailures, wafRepullEvery)
+				}
+				if s.wafRepullDue() {
+					wafRepullAttempted = true
+					Logf("warn", "本地 CRS/IP2Region 文件与同步记录不一致（上次同步安全数据失败），以全量快照重新拉取")
+					RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("本地安全数据文件与记录不一致", "配置无变化但安全数据文件未收敛，已改为全量拉取"), "")
+					resp.Body.Close()
+					sinceVersion, sinceFingerprint = 0, ""
+					continue
+				}
+				// 持续失败降频期：本轮跳过兜底重拉（last_sync_error 已保持
+				// 「安全数据持续同步失败」可见，每 wafRepullEvery 轮再尝试）。
 			}
 		}
 		break
@@ -643,6 +672,9 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeApplyFailed, err)
 	}
 	s.pullApplyMu.Unlock()
+	// 每次成功应用后核对 WAF 文件态：已收敛则清零连续失败计数，恢复正常的
+	// 兜底重拉频率与 last_sync_error 语义。
+	s.trackWafRepullConvergence()
 	return SyncResult{AppliedVersion: envelope.Data.Version, Changed: true}, nil
 }
 
@@ -679,6 +711,43 @@ func (s *SyncService) driftedSections(ctx context.Context) string {
 		}
 	}
 	return strings.Join(drifted, "、")
+}
+
+// wafRepullMaxFailures 定义 WAF 文件兜底重拉「连续未收敛」的阈值：达到后
+// 上表面「安全数据持续同步失败」到 last_sync_error（节点页面可见），并把
+// 兜底重拉降频为每 wafRepullEvery 轮一次，避免持续打主从负载。
+const wafRepullMaxFailures = 5
+
+// wafRepullEvery 是持续失败期兜底重拉的降频周期（以同步轮为单位）。
+const wafRepullEvery = 10
+
+// wafRepullDue 判定本轮 304 是否执行 WAF 文件兜底全量重拉：连续未收敛
+// 达到 wafRepullMaxFailures 后降频为每 wafRepullEvery 轮一次。
+func (s *SyncService) wafRepullDue() bool {
+	return s.wafRepullFailures <= wafRepullMaxFailures || s.wafRepullFailures%wafRepullEvery == 0
+}
+
+// wafRepullPersistentlyFailed 报告 WAF 兜底重拉是否已连续失败达到阈值。
+func (s *SyncService) wafRepullPersistentlyFailed() bool {
+	return s.wafRepullFailures >= wafRepullMaxFailures
+}
+
+// trackWafRepullConvergence 在快照成功应用后核对 WAF 文件态：已收敛则清零
+// 连续失败计数，恢复正常兜底重拉频率与 last_sync_error 语义。仅 Pull 的
+// pullMu 临界区内调用。
+func (s *SyncService) trackWafRepullConvergence() {
+	if !s.wafFilesDrifted() {
+		s.wafRepullFailures = 0
+	}
+}
+
+// persistWafRepullFailure 把「安全数据持续同步失败（已重试 N 次）」上表面到
+// last_sync_error（节点页面可见）。经 combineOrReplaceSyncError 复用
+// apply_ok_reload_failed 标记保护语义：TransportError 属可恢复类，标记存在
+// 时组合保留，不破坏 304 补偿通道。
+func (s *SyncService) persistWafRepullFailure(ctx context.Context) {
+	message := fmt.Sprintf("安全数据持续同步失败（已重试 %d 次）", s.wafRepullFailures)
+	s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeTransportError)
 }
 
 // wafFilesNullRefHash 是 waf_files 节哈希的「空引用」基准：主节点侧无任何
@@ -847,6 +916,12 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 		// 成功路径不得清掉 apply_ok_reload_failed 标记：它必须在下一周期
 		// 304 分支触发全量重拉补偿（run 循环已在调用点跳过，此处兜底）。
 		if s.syncReloadFailureMarkerPresent(ctx) {
+			return
+		}
+		// 安全数据持续同步失败期间（连续 ≥wafRepullMaxFailures 轮未收敛）：
+		// 不清空 last_sync_error，保持「安全数据持续同步失败」消息在节点
+		// 页面可见（重拉轮由 Pull defer 刷新文案，此处兜底降频期轮次）。
+		if s.wafRepullPersistentlyFailed() {
 			return
 		}
 		s.persistSyncError(ctx, "", "")
