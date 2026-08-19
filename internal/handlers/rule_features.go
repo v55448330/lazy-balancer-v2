@@ -466,7 +466,7 @@ const lbRuleListColumns = `COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE
 	COALESCE(custom_routes_enabled,0),
 	COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 	COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), '', '',
-	COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), COALESCE(enabled,1), COALESCE(log_enabled,0),
+	COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), IIF(enabled IN ('1',1),1,0), COALESCE(log_enabled,0),
 	created_by, created_at, updated_at, updated_by, COALESCE(host_header,'')`
 
 const lbRuleColumns = `COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE(description,''), protocol, COALESCE(domain,''), listen_port, COALESCE(strategy,''),
@@ -477,7 +477,7 @@ const lbRuleColumns = `COALESCE(id,0), COALESCE(caddy_id,''), name, COALESCE(des
 	COALESCE(custom_routes_enabled,0),
 	COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 	COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
-	COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), COALESCE(enabled,1), COALESCE(log_enabled,0),
+	COALESCE(tls_http_redirect,0), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'), IIF(enabled IN ('1',1),1,0), COALESCE(log_enabled,0),
 	created_by, created_at, updated_at, updated_by, COALESCE(host_header,'')`
 
 // 规范化规则行扫描：ListRules/GetRule/DuplicateRule 共用，避免列清单多处漂移

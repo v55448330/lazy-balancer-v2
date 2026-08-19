@@ -95,7 +95,7 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	services.Logf("debug", "GetRuleCaddyConfig: querying rule caddy_id=%s", caddyID)
 
 	err := db.DB.QueryRow(`
-		SELECT COALESCE(caddy_id,''), listen_port, COALESCE(enabled,0), COALESCE(domain,''), COALESCE(protocol,'http')
+		SELECT COALESCE(caddy_id,''), listen_port, IIF(enabled IN ('1',1),1,0), COALESCE(domain,''), COALESCE(protocol,'http')
 		FROM lb_rules WHERE caddy_id = ?
 	`, caddyID).Scan(&r.CaddyID, &r.ListenPort, &r.Enabled, &r.Domain, &r.Protocol)
 
@@ -1016,7 +1016,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		COALESCE(custom_routes_enabled,0),
 		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 		COALESCE(host_header,''), COALESCE(enable_compress,1), COALESCE(compress_types,'gzip'),
-		COALESCE(enabled,1), COALESCE(log_enabled,0), name, description
+		IIF(enabled IN ('1',1),1,0), COALESCE(log_enabled,0), name, description
 	FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(
 		&existingRule.Protocol, &existingRule.Domain, &existingRule.ListenPort, &existingRule.Strategy,
 		&existingRule.TLSCert, &existingRule.TLSKey, &existingRule.TLSSource, &existingRule.ACMEConfigID,
@@ -2175,7 +2175,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	var originalEnabled, enableTLS, tlsHTTPRedirect bool
 	var ruleProtocol, ruleDomain, tlsSource string
 	var rulePort, caProviderID int
-	err := db.DB.QueryRow(`SELECT COALESCE(enabled,1), COALESCE(protocol,''), COALESCE(domain,''), listen_port,
+	err := db.DB.QueryRow(`SELECT IIF(enabled IN ('1',1),1,0), COALESCE(protocol,''), COALESCE(domain,''), listen_port,
 		COALESCE(tls_source,''), COALESCE(enable_tls,0), COALESCE(tls_http_redirect,0), COALESCE(ca_provider_id,0)
 		FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&originalEnabled, &ruleProtocol, &ruleDomain, &rulePort, &tlsSource, &enableTLS, &tlsHTTPRedirect, &caProviderID)
 	if err == sql.ErrNoRows {
@@ -2420,7 +2420,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 
 	var originalEnabled, enableTLS bool
 	var domain, tlsSource string
-	err := db.DB.QueryRow("SELECT COALESCE(enabled,1), COALESCE(domain,''), COALESCE(tls_source,''), COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&originalEnabled, &domain, &tlsSource, &enableTLS)
+	err := db.DB.QueryRow("SELECT IIF(enabled IN ('1',1),1,0), COALESCE(domain,''), COALESCE(tls_source,''), COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&originalEnabled, &domain, &tlsSource, &enableTLS)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return

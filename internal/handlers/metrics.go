@@ -62,7 +62,7 @@ func (h *Handlers) GetMetricsDashboard(c *gin.Context) {
 		enableTLS, enabled   bool
 	}
 	ruleRows, err := db.DB.QueryContext(c.Request.Context(), `
-		SELECT caddy_id, COALESCE(domain,''), listen_port, COALESCE(protocol,''), COALESCE(enable_tls,0), COALESCE(enabled,1)
+		SELECT caddy_id, COALESCE(domain,''), listen_port, COALESCE(protocol,''), COALESCE(enable_tls,0), IIF(enabled IN ('1',1),1,0)
 		FROM lb_rules ORDER BY caddy_id`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则指标配置失败"})

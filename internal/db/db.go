@@ -247,7 +247,7 @@ func createTables() error {
 		tls_http_redirect BOOLEAN DEFAULT FALSE,
 		enable_compress BOOLEAN DEFAULT FALSE,
 		compress_types VARCHAR(100) DEFAULT 'gzip',
-		enabled BOOLEAN DEFAULT TRUE,
+		enabled BOOLEAN NOT NULL DEFAULT 1,
 		log_enabled BOOLEAN DEFAULT 0,
 		created_by INTEGER,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -966,6 +966,13 @@ func runMigrations() error {
 		return fmt.Errorf("failed to normalize NULL upstreams.enabled: %w", err)
 	}
 
+	// Round 36: 一次性迁移——存量 lb_rules.enabled 为 NULL 的遗留行归一化为 0
+	// （NULL 视禁用，与渲染侧 WHERE enabled=1 口径一致；幂等，重跑无副作用）。
+	// migrateLbRulesPrimaryKey 的重建拷贝已用 COALESCE(enabled,0) 兜底，顺序无关。
+	if _, err := DB.Exec("UPDATE lb_rules SET enabled=0 WHERE enabled IS NULL"); err != nil {
+		return fmt.Errorf("failed to normalize NULL lb_rules.enabled: %w", err)
+	}
+
 	// Drop legacy global_config.sync_caddy_config if it still exists. 旧开关仅覆盖
 	// Caddy 全局配置，已被 sync_global_config 取代，且不再被快照构建或同步开关读取，
 	// 切换它只会触发无意义的全量重拉。
@@ -1522,7 +1529,7 @@ func migrateLbRulesPrimaryKey() error {
 			ca_provider_id INTEGER DEFAULT 0,
 			enable_compress BOOLEAN DEFAULT FALSE,
 			compress_types VARCHAR(100) DEFAULT 'gzip',
-			enabled BOOLEAN DEFAULT TRUE,
+			enabled BOOLEAN NOT NULL DEFAULT 1,
 			log_enabled BOOLEAN DEFAULT 0,
 			created_by INTEGER,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -1564,7 +1571,7 @@ func migrateLbRulesPrimaryKey() error {
 			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 			host_header, enable_tls, tls_cert,
 			tls_key, tls_http_redirect, tls_source, acme_config_id,
-			ca_provider_id, enable_compress, compress_types, enabled, COALESCE(log_enabled,0),
+			ca_provider_id, enable_compress, compress_types, COALESCE(enabled,0), COALESCE(log_enabled,0),
 			created_by, created_at, updated_at, updated_by, caddy_id
 		FROM lb_rules
 	`)

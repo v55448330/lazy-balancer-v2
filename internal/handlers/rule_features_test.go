@@ -705,6 +705,145 @@ func TestMigration_upstreamsEnabledNullNormalizedToDisabled(t *testing.T) {
 	}
 }
 
+// Round 36 F-A: 存量库的 NULL enabled 规则在初始化迁移后归一化为 0（NULL 视禁用，
+// 与渲染侧 WHERE enabled=1 口径一致），不再存在 NULL 行；迁移幂等，重跑无副作用。
+func TestMigration_lbRulesEnabledNullNormalizedToDisabled(t *testing.T) {
+	// Given 模拟迁移前的存量库：先初始化建表，再回退为可空 enabled 并写入 NULL 行
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldDB)
+	})
+	if err := db.Initialize(dir); err != nil {
+		t.Fatalf("first initialize: %v", err)
+	}
+	simulateLegacyNullableLbRules(t, db.DB)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES
+		('lb_null_mig2','nullable','http',8082,NULL), ('lb_null_mig2b','normal','http',8083,1)`); err != nil {
+		t.Fatalf("seed nullable rules: %v", err)
+	}
+
+	// When 再次初始化触发迁移（UPDATE lb_rules SET enabled=0 WHERE enabled IS NULL）
+	if err := db.Initialize(dir); err != nil {
+		t.Fatalf("second initialize (migration): %v", err)
+	}
+
+	// Then NULL 行消失，原 NULL 行走 0，正常行保持 1
+	var nullCount, enabledSum int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM lb_rules WHERE caddy_id IN ('lb_null_mig2','lb_null_mig2b') AND enabled IS NULL`).Scan(&nullCount); err != nil {
+		t.Fatalf("count null rules: %v", err)
+	}
+	if nullCount != 0 {
+		t.Fatalf("null enabled rows=%d, want 0 after migration", nullCount)
+	}
+	if err := db.DB.QueryRow(`SELECT SUM(enabled) FROM lb_rules WHERE caddy_id IN ('lb_null_mig2','lb_null_mig2b')`).Scan(&enabledSum); err != nil {
+		t.Fatalf("sum enabled rules: %v", err)
+	}
+	if enabledSum != 1 {
+		t.Fatalf("enabled sum=%d, want 1 (NULL→0, 1 保持)", enabledSum)
+	}
+}
+
+// Round 36 F-A: 列表/详情读取点（lbRuleListColumns + scanLbRules，即 ListRules/GetRule
+// 路径）与渲染侧同口径（NULL 视禁用）——此前 COALESCE(enabled,1) 把遗留 NULL 行视为
+// 启用，UI 显示与生成配置分裂。
+func TestListRules_defaults_NULL_enabled_to_false(t *testing.T) {
+	// Given 回退为迁移前的可空 enabled 结构并写入 NULL 行
+	database := initializeRuleFeatureTestDB(t)
+	simulateLegacyNullableLbRules(t, database)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES
+		('lb_null_rule','nullable','http',8084,NULL), ('lb_on_rule','normal','http',8085,1)`); err != nil {
+		t.Fatalf("seed rules: %v", err)
+	}
+
+	// When 走 ListRules 的读取路径
+	rows, err := database.Query(`SELECT ` + lbRuleListColumns + ` FROM lb_rules WHERE caddy_id IN ('lb_null_rule','lb_on_rule') ORDER BY caddy_id`)
+	if err != nil {
+		t.Fatalf("query rules: %v", err)
+	}
+	defer rows.Close()
+	rules, err := scanLbRules(rows)
+
+	// Then NULL 视禁用（与渲染 IIF(enabled IN ('1',1),1,0) 一致），enabled=1 正常显示启用
+	if err != nil {
+		t.Fatalf("scan rules: %v", err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("rule count=%d, want 2", len(rules))
+	}
+	if rules[0].Enabled {
+		t.Fatalf("NULL-enabled rule shows enabled, want disabled (rules[0]=%#v)", rules[0])
+	}
+	if !rules[1].Enabled {
+		t.Fatalf("enabled=1 rule shows disabled, want enabled (rules[1]=%#v)", rules[1])
+	}
+}
+
+// simulateLegacyNullableLbRules 把 lb_rules 回退为迁移前的可空 enabled 结构
+// （schema 已 NOT NULL，NULL 仅存在于迁移前存量库），供测试构造遗留 NULL 行。
+// 列结构与 migrateLbRulesPrimaryKey 重建 DDL 一致（caddy_id 主键，enabled 可空）。
+func simulateLegacyNullableLbRules(t *testing.T, database *sql.DB) {
+	t.Helper()
+	if _, err := database.Exec(`DROP TABLE lb_rules`); err != nil {
+		t.Fatalf("drop lb_rules: %v", err)
+	}
+	if _, err := database.Exec(`CREATE TABLE lb_rules (
+		id INTEGER,
+		name VARCHAR(100) NOT NULL,
+		description VARCHAR(300),
+		protocol VARCHAR(10) NOT NULL,
+		domain VARCHAR(255),
+		listen_port INTEGER NOT NULL,
+		strategy VARCHAR(20) DEFAULT 'weighted_round_robin',
+		dynamic_dns BOOLEAN DEFAULT FALSE,
+		enable_dns_server BOOLEAN DEFAULT FALSE,
+		dns_server VARCHAR(255) DEFAULT '',
+		dns_family VARCHAR(20) DEFAULT 'ipv4',
+		health_check_path VARCHAR(255),
+		health_check_interval INTEGER DEFAULT 10,
+		health_check_timeout INTEGER DEFAULT 2,
+		health_check_unhealthy_threshold INTEGER DEFAULT 3,
+		health_check_healthy_threshold INTEGER DEFAULT 2,
+		enable_active_health_check BOOLEAN DEFAULT FALSE,
+		tcp_health_check_port INTEGER DEFAULT 0,
+		tcp_proxy_protocol BOOLEAN DEFAULT 0,
+		tcp_try_duration INTEGER DEFAULT 0,
+		tcp_try_interval INTEGER DEFAULT 250,
+		request_body_max_size_mb INTEGER DEFAULT 0,
+		upstream_keepalive_timeout INTEGER DEFAULT 0,
+		server_tokens_hidden INTEGER DEFAULT 0,
+		custom_routes_enabled BOOLEAN NOT NULL DEFAULT 0,
+		proxy_dial_timeout INTEGER NOT NULL DEFAULT 0,
+		proxy_response_header_timeout INTEGER NOT NULL DEFAULT 0,
+		proxy_read_timeout INTEGER NOT NULL DEFAULT 0,
+		proxy_write_timeout INTEGER NOT NULL DEFAULT 0,
+		proxy_stream_timeout INTEGER NOT NULL DEFAULT 0,
+		proxy_flush_interval INTEGER NOT NULL DEFAULT 0,
+		proxy_stream_close_delay INTEGER NOT NULL DEFAULT 0,
+		host_header VARCHAR(255),
+		enable_tls BOOLEAN DEFAULT FALSE,
+		tls_cert TEXT,
+		tls_key TEXT,
+		tls_http_redirect BOOLEAN DEFAULT FALSE,
+		tls_source VARCHAR(20) DEFAULT 'manual',
+		acme_config_id INTEGER DEFAULT 0,
+		ca_provider_id INTEGER DEFAULT 0,
+		enable_compress BOOLEAN DEFAULT FALSE,
+		compress_types VARCHAR(100) DEFAULT 'gzip',
+		enabled BOOLEAN DEFAULT TRUE,
+		log_enabled BOOLEAN DEFAULT 0,
+		created_by INTEGER,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME,
+		updated_by INTEGER,
+		caddy_id VARCHAR(20) PRIMARY KEY
+	)`); err != nil {
+		t.Fatalf("recreate legacy lb_rules: %v", err)
+	}
+}
+
 // simulateLegacyNullableUpstreams 把 upstreams 回退为迁移前的可空 enabled 结构
 // （schema 已 NOT NULL，NULL 仅存在于迁移前存量库），供测试构造遗留 NULL 行。
 func simulateLegacyNullableUpstreams(t *testing.T, database *sql.DB) {

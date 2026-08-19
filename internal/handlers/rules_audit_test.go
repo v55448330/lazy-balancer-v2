@@ -22,6 +22,8 @@ import (
 func TestListRules_uses_schema_defaults_when_nullable_columns_are_NULL(t *testing.T) {
 	// Given
 	handler := newRuleFeatureTestHandlers(t)
+	// Round 36 F-A: lb_rules.enabled 已 NOT NULL，回退迁移前结构以写入 NULL 行
+	simulateLegacyNullableLbRules(t, db.DB)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,health_check_path,health_check_interval,health_check_timeout,health_check_unhealthy_threshold,health_check_healthy_threshold,enabled)
 		VALUES ('lb_nulls','nullable','http',8080,NULL,NULL,NULL,NULL,NULL,NULL)`); err != nil {
 		t.Fatalf("seed nullable rule: %v", err)
@@ -42,7 +44,7 @@ func TestListRules_uses_schema_defaults_when_nullable_columns_are_NULL(t *testin
 	if response.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
 	}
-	for _, expected := range []string{`"health_check_path":""`, `"health_check_interval":10`, `"health_check_timeout":2`, `"health_check_unhealthy_threshold":3`, `"health_check_healthy_threshold":2`, `"enabled":true`, `"host":"127.0.0.1"`} {
+	for _, expected := range []string{`"health_check_path":""`, `"health_check_interval":10`, `"health_check_timeout":2`, `"health_check_unhealthy_threshold":3`, `"health_check_healthy_threshold":2`, `"enabled":false`, `"host":"127.0.0.1"`} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("list body missing %s: %s", expected, response.Body.String())
 		}
