@@ -299,6 +299,7 @@ const saveProfile = async () => {
 const configDrift = ref('')
 const restarting = ref(false)
 let driftTimer: number | undefined
+let disposed = false
 
 const fetchDriftStatus = async () => {
   try {
@@ -329,7 +330,7 @@ const handleRestartForDrift = async () => {
   }
   ElMessage.success('服务正在重启，就绪后自动刷新页面')
   // 保持 restarting=true 直到 reload（防就绪等待窗口内二次点击）；超时或失败才复位
-  const reloaded = await reloadAfterRestart()
+  const reloaded = await reloadAfterRestart(() => disposed)
   if (!reloaded) restarting.value = false
 }
 
@@ -340,6 +341,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  disposed = true
   if (driftTimer) clearInterval(driftTimer)
 })
 </script>

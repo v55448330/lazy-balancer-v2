@@ -1210,3 +1210,45 @@ func selfSignedTestPair(t *testing.T) (certPEM, keyPEM string) {
 	}
 	return certBuf.String(), keyBuf.String()
 }
+
+func TestImportConfigBackup_normalizesNullEnabled(t *testing.T) {
+	// Given：pre-R36 库导出的备份含 "enabled":null 的行（R36 起两表 NOT NULL，
+	// 原值插入会触发约束失败整包回滚）
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'current-admin','hash','admin',1)"); err != nil {
+		t.Fatalf("seed current admin: %v", err)
+	}
+	ruleRow := map[string]any{
+		"caddy_id": "lb_null_enabled", "name": "null-enabled", "protocol": "http",
+		"domain": "null.example.test", "listen_port": 8080, "strategy": "weighted_round_robin", "enabled": nil,
+	}
+	upstreamRow := map[string]any{
+		"rule_id": "lb_null_enabled", "host": "127.0.0.1", "port": 9000, "weight": 1, "enabled": nil, "protocol": "http",
+	}
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(completeBackupJSON(t, map[string][]map[string]any{
+		"lb_rules":  {ruleRow},
+		"upstreams": {upstreamRow},
+	})))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then：导入成功且 NULL 归一为 0
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var ruleEnabled, upstreamEnabled int
+	if err := db.DB.QueryRow("SELECT enabled FROM lb_rules WHERE caddy_id='lb_null_enabled'").Scan(&ruleEnabled); err != nil {
+		t.Fatalf("read rule: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT enabled FROM upstreams WHERE rule_id='lb_null_enabled'").Scan(&upstreamEnabled); err != nil {
+		t.Fatalf("read upstream: %v", err)
+	}
+	if ruleEnabled != 0 || upstreamEnabled != 0 {
+		t.Fatalf("rule.enabled=%d upstream.enabled=%d, want both 0 (null normalized)", ruleEnabled, upstreamEnabled)
+	}
+}

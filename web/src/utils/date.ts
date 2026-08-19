@@ -55,6 +55,8 @@ const tzFormatter = (withTime: boolean): Intl.DateTimeFormat => {
     const fallbackKey = `${DEFAULT_TZ}|${withTime}`
     const fallback = tzFormatterCache.get(fallbackKey) ?? tzFormat(DEFAULT_TZ, withTime)
     tzFormatterCache.set(fallbackKey, fallback)
+    // 非法键同样缓存回退实例（D-3）：后续调用命中缓存，不再重复构造/抛 RangeError
+    tzFormatterCache.set(cacheKey, fallback)
     return fallback
   }
 }

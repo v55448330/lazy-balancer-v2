@@ -352,8 +352,8 @@ func backupBooleanEnabled(value any) bool {
 	}
 }
 
-// backupRuleEnabled 读取备份行 enabled 字段：与表结构 COALESCE(enabled,1) 一致，
-// 缺省视为启用（手造备份省略该列时按启用态校验，不放松自环检查）。
+// backupRuleEnabled 读取备份行 enabled 字段：校验侧保守口径——缺省视为启用以覆盖
+// 自环/遮蔽检查（不放松校验）；存储口径 NULL 视同禁用（R36 迁移 + IIF）。
 func backupRuleEnabled(row map[string]any) bool {
 	if raw, exists := row["enabled"]; exists {
 		return backupBooleanEnabled(raw)
@@ -632,6 +632,16 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		rows, exists := backup.Tables[table]
 		if !exists {
 			continue
+		}
+		// R37 F37-2：pre-R36 库导出的行可能含 "enabled":null（R36 起两表为 NOT NULL），
+		// 原值插入会触发约束失败整包回滚。归一为 0——与 R36 迁移口径一致
+		//（NULL 视同禁用，渲染侧本就这么判定）。
+		if table == "lb_rules" || table == "upstreams" {
+			for _, row := range rows {
+				if enabled, exists := row["enabled"]; exists && enabled == nil {
+					row["enabled"] = 0
+				}
+			}
 		}
 		if err := restoreTable(ctx, tx, db.DB, table, rows); err != nil {
 			err = session.abort(err)
