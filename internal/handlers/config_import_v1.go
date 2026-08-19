@@ -528,7 +528,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			upstreamCount += len(r.Upstreams)
 		}
 		warnings := []string{
-			"仅导入负载均衡规则（用户、全局配置不导入，证书任务保持不变）",
+			"仅导入负载规则（用户、全局配置不导入，证书任务保持不变）",
 			"v1 不支持 ACME，HTTPS 规则的证书与私钥将以手动方式随规则导入",
 			"nginx 特有配置（custom_config、日志路径等）已忽略",
 		}
@@ -687,7 +687,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		}
 		auditAction := "导入失败"
 		if importFailurePhase(err) == importPhaseQueue {
-			auditAction = "导入部分失败"
+			auditAction = "部分失败"
 		}
 		auditDetail := err.Error()
 		if importFailurePhase(err) == importPhaseQueue && len(disabledConflicts) > 0 {

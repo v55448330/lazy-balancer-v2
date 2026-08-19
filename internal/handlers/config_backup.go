@@ -852,7 +852,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		}
 		auditAction := "导入失败"
 		if importFailurePhase(err) == importPhaseQueue {
-			auditAction = "导入部分失败"
+			auditAction = "部分失败"
 		}
 		auditDetail := err.Error()
 		if importFailurePhase(err) == importPhaseQueue && len(disabledConflicts) > 0 {

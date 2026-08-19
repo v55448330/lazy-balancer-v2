@@ -17,7 +17,7 @@ import (
 
 // Round 24 C-N3：validateCaddyConfigBeforeSave 构造的临时校验配置必须携带上游
 // MaxConnections（渲染为 reverse_proxy upstream 的 max_requests），否则“校验通过的
-// 配置”与实际落库后生成的配置不一致（校验≠将生成）。
+// 配置”与实际落库后生成的配置漂移（校验≠将生成）。
 func TestValidateCaddyConfigBeforeSave_forwardsUpstreamMaxConnections(t *testing.T) {
 	tests := []struct {
 		name        string
