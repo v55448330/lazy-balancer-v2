@@ -103,6 +103,10 @@
             <el-form-item label="描述">
               <el-input v-model="form.description" placeholder="策略描述" />
             </el-form-item>
+            <el-form-item label="启用状态">
+              <el-switch v-model="form.enabled" />
+              <span class="form-tip-inline">禁用后该策略对所有关联规则停止生效</span>
+            </el-form-item>
           </el-form>
         </div>
 
@@ -446,7 +450,7 @@ const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 const PICKER_PAGE_SIZE = 20
 
-const defaultForm = () => ({ name: '', description: '', mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny', waf_check_response: false })
+const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny', waf_check_response: false })
 const form = ref(defaultForm())
 const selectedCustomRules = ref<number[]>([])
 const allCustomRules = ref<Array<{ id: number; name: string }>>([])
@@ -700,6 +704,7 @@ async function openDialog(row?: PolicySummary) {
       form.value = {
         name: d.name,
         description: d.description,
+        enabled: d.enabled,
         mode: d.mode,
         anomaly_threshold: d.anomaly_threshold,
         ip_acl_enabled: d.ip_acl_enabled,
@@ -767,10 +772,11 @@ const handleSave = async () => {
     // 指针语义自动保留原值。注意：后端按"名单非空即生效"发射，信任名单/区域控制
     // 的真正关闭方式是清空名单条目，开关仅控制编辑器显隐并在重开时按名单派生。
     // 显式白名单：仅提交 UpdateSecurityPolicyRequest 实际字段（geoip_enabled 为
-    // 编辑器派生开关，后端无此字段，不下发；ip_blacklist/enabled 由其他入口管理）。
+    // 编辑器派生开关，后端无此字段，不下发；ip_blacklist 由其他入口管理）。
     const payload = {
       name: form.value.name,
       description: form.value.description,
+      enabled: form.value.enabled,
       mode: form.value.mode,
       anomaly_threshold: form.value.anomaly_threshold,
       ip_acl_enabled: form.value.ip_acl_enabled,
