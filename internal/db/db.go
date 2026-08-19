@@ -725,6 +725,16 @@ func runMigrations() error {
 		"security_policies.waf_check_response":            "INTEGER NOT NULL DEFAULT 0",
 		"security_policies.block_status_code":             "INTEGER NOT NULL DEFAULT 0",
 	}
+	// R42 F1: 四个全局超时列的 0→推荐默认回填只在「新增列」时执行一次——
+	// 历史存量行在新列 ADD 后恰好为 0，才是真正需要回填的场景；渲染层把 0 当作
+	// 「省略=用 Caddy 默认」的有效值（仅 >0 才输出超时指令），若每次启动都无条件
+	// 回填，会把用户显式设置的 0 静默改写，导致运行行为与界面展示不一致。
+	newColumnBackfills := map[string]string{
+		"global_config.http_read_timeout":          "UPDATE global_config SET http_read_timeout=60 WHERE http_read_timeout=0",
+		"global_config.http_write_timeout":         "UPDATE global_config SET http_write_timeout=60 WHERE http_write_timeout=0",
+		"global_config.http_idle_timeout":          "UPDATE global_config SET http_idle_timeout=120 WHERE http_idle_timeout=0",
+		"global_config.upstream_keepalive_timeout": "UPDATE global_config SET upstream_keepalive_timeout=60 WHERE upstream_keepalive_timeout=0",
+	}
 	for col, dtype := range newColumns {
 		parts := strings.Split(col, ".")
 		if len(parts) != 2 {
@@ -737,6 +747,11 @@ func runMigrations() error {
 		if colCount == 0 {
 			if _, err := DB.Exec("ALTER TABLE " + table + " ADD COLUMN " + name + " " + dtype); err != nil {
 				return fmt.Errorf("failed to add column %s.%s: %w", table, name, err)
+			}
+			if backfill, ok := newColumnBackfills[col]; ok {
+				if _, err := DB.Exec(backfill); err != nil {
+					return fmt.Errorf("failed to backfill column %s.%s: %w", table, name, err)
+				}
 			}
 		}
 	}
@@ -767,13 +782,9 @@ func runMigrations() error {
 		return fmt.Errorf("failed to drop cert_job_logs: %w", err)
 	}
 
-	// Set recommended defaults for timeout fields that are still 0
+	// Normalize legacy/global default values that are invalid regardless of version
 	defaultUpdates := []string{
 		"UPDATE global_config SET jwt_expire_minutes=20 WHERE jwt_expire_minutes IS NULL OR jwt_expire_minutes<=0 OR jwt_expire_minutes>1440",
-		"UPDATE global_config SET http_read_timeout=60 WHERE http_read_timeout=0",
-		"UPDATE global_config SET http_write_timeout=60 WHERE http_write_timeout=0",
-		"UPDATE global_config SET http_idle_timeout=120 WHERE http_idle_timeout=0",
-		"UPDATE global_config SET upstream_keepalive_timeout=60 WHERE upstream_keepalive_timeout=0",
 		"UPDATE global_config SET access_log_format='' WHERE access_log_format LIKE '{%'",
 		"UPDATE global_config SET access_log_format = access_log_format || char(10) || 'request>headers>User-Agent -> user_agent' WHERE access_log_format != '' AND access_log_format NOT LIKE '%user_agent%'",
 	}

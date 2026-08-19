@@ -1273,6 +1273,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// R41 C-2: 门控再加启用状态前置——仅当「新状态启用 或 原状态启用」时才可能产生
 		// 运行时影响。禁用中规则（双方均 disabled）不会被渲染，此时改 TLS/跳转/端口/域名
 		// 仍被 400 拦截会阻塞「先改好禁用方配置再启用」的正常流程（启用方向仍会二次把关）。
+		// R42 F5: 注意放宽的仅是下方遮蔽检查；上方同域名+同端口冲突门控对禁用规则
+		// 仍然 400——该组合永远无法启用（EnableRule 端点同样拦截），编辑期拦截只是
+		// 提前报错，属有意保守，勿误读为「禁用规则可随意改域名」。
 		shadowRelevantChanged := req.Domain != existingDomain ||
 			req.ListenPort != existingRule.ListenPort ||
 			*req.EnableTLS != existingRule.EnableTLS ||

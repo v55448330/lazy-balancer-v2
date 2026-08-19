@@ -822,6 +822,62 @@ func TestSanitizeLegacyCustomRulePatterns_disablesDirtyRulesIdempotently(t *test
 	}
 }
 
+func TestInitialize_backfillsLegacyTimeoutColumnsOnceAndPreservesExplicitZero(t *testing.T) {
+	// Given a legacy database whose global_config predates the four timeout columns
+	dir := t.TempDir()
+	legacy, err := sql.Open("sqlite", filepath.Join(dir, "lazy-balancer.db"))
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	if _, err := legacy.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY, caddy_config TEXT);
+		INSERT INTO global_config (id,caddy_config) VALUES (1,'{}');`); err != nil {
+		t.Fatalf("seed legacy global config: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	readTimeouts := func() (int, int, int, int) {
+		t.Helper()
+		var readTimeout, writeTimeout, idleTimeout, keepaliveTimeout int
+		if err := DB.QueryRow(`SELECT http_read_timeout, http_write_timeout, http_idle_timeout, upstream_keepalive_timeout
+			FROM global_config WHERE id=1`).Scan(&readTimeout, &writeTimeout, &idleTimeout, &keepaliveTimeout); err != nil {
+			t.Fatalf("read timeout columns: %v", err)
+		}
+		return readTimeout, writeTimeout, idleTimeout, keepaliveTimeout
+	}
+
+	// When the legacy database is upgraded (columns newly added → one-time backfill)
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize legacy database: %v", err)
+	}
+
+	// Then the newly added timeout columns are backfilled to the recommended defaults
+	if r, w, i, k := readTimeouts(); r != 60 || w != 60 || i != 120 || k != 60 {
+		t.Fatalf("backfilled timeouts=(%d,%d,%d,%d), want (60,60,120,60)", r, w, i, k)
+	}
+
+	// And when the user explicitly sets 0 (= 省略超时指令、用 Caddy 默认) and the service restarts
+	if _, err := DB.Exec(`UPDATE global_config SET http_read_timeout=0, http_write_timeout=0, http_idle_timeout=0, upstream_keepalive_timeout=0 WHERE id=1`); err != nil {
+		t.Fatalf("set explicit zero timeouts: %v", err)
+	}
+	if err := Close(); err != nil {
+		t.Fatalf("close database before restart: %v", err)
+	}
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("reinitialize database: %v", err)
+	}
+
+	// Then the explicit zeros survive the restart migration unchanged
+	if r, w, i, k := readTimeouts(); r != 0 || w != 0 || i != 0 || k != 0 {
+		t.Fatalf("explicit zero timeouts rewritten to (%d,%d,%d,%d), want (0,0,0,0)", r, w, i, k)
+	}
+}
+
 func openMigrationTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migration.db")+"?_foreign_keys=on")
