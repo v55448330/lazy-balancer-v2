@@ -1420,7 +1420,17 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 	var redirectRoutes []interface{}
 	for _, ru := range allRules {
 		r := ru.rule
-		if len(ru.upstreams) == 0 {
+		// R43 F-A: 与规则渲染跳过同口径（上方按启用上游数 continue）——全部上游
+		// 被禁用的启用规则不生成任何端口路由，同样不得生成 301 跳转，否则域名
+		// 被跳到无服务的 TLS 端口（此前按上游裸计数，禁用上游也被计入）。
+		hasEnabledUpstream := false
+		for _, u := range ru.upstreams {
+			if u.Enabled {
+				hasEnabledUpstream = true
+				break
+			}
+		}
+		if !hasEnabledUpstream {
 			continue
 		}
 		if r.Protocol == "http" && r.EnableTLS && r.TLSHTTPRedirect {

@@ -403,6 +403,14 @@ func validateConvertedV1Rules(rules []convertedRule) ([]convertedRule, []string)
 			skips = append(skips, fmt.Sprintf("规则 #%d（%s）：至少需要一个已启用的上游服务器", index+1, rule.Name))
 			continue
 		}
+		// R43 F-C: v1 SSL 规则导入后 tls_source 恒为 manual（tlsSource()）；启用但
+		// 证书/私钥为空的规则会在 TLS 端口明文服务（镜像 rule_features.go:648-651
+		// 保存/启用侧口径），按 v1 风格软跳过并警告而非整包拒绝。
+		if rule.Enabled && rule.Protocol == "http" && rule.EnableTLS &&
+			(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
+			skips = append(skips, fmt.Sprintf("规则 #%d（%s）：启用 TLS 但证书或私钥为空，已跳过导入", index+1, rule.Name))
+			continue
+		}
 		valid = append(valid, rule)
 	}
 	return valid, skips
@@ -462,7 +470,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: "备份文件格式不正确: " + err.Error()}})
 			return
 		}
-		if err := validateV2Backup(backup); err != nil {
+		if _, err := validateV2Backup(backup); err != nil {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
 			return
 		}

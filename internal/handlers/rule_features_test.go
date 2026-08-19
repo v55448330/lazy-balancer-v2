@@ -28,7 +28,7 @@ func TestRuleFeatures_rejects_invalid_path_rule_inputs(t *testing.T) {
 	}{
 		{
 			name: "path rules while disabled",
-			input: ruleFeatureInput{PathRules: []models.PathRule{{
+			input: ruleFeatureInput{Protocol: "http", PathRules: []models.PathRule{{
 				MatchType: "prefix",
 				Path:      "/metrics/",
 			}}},
@@ -36,7 +36,7 @@ func TestRuleFeatures_rejects_invalid_path_rule_inputs(t *testing.T) {
 		},
 		{
 			name: "path without slash",
-			input: ruleFeatureInput{CustomRoutesEnabled: true, PathRules: []models.PathRule{{
+			input: ruleFeatureInput{Protocol: "http", CustomRoutesEnabled: true, PathRules: []models.PathRule{{
 				MatchType: "prefix",
 				Path:      "metrics/",
 			}}},
@@ -44,7 +44,7 @@ func TestRuleFeatures_rejects_invalid_path_rule_inputs(t *testing.T) {
 		},
 		{
 			name: "invalid match type",
-			input: ruleFeatureInput{CustomRoutesEnabled: true, PathRules: []models.PathRule{{
+			input: ruleFeatureInput{Protocol: "http", CustomRoutesEnabled: true, PathRules: []models.PathRule{{
 				MatchType: "regex",
 				Path:      "/metrics/",
 			}}},
@@ -52,7 +52,7 @@ func TestRuleFeatures_rejects_invalid_path_rule_inputs(t *testing.T) {
 		},
 		{
 			name: "blank custom upstream address",
-			input: ruleFeatureInput{CustomRoutesEnabled: true, PathRules: []models.PathRule{{
+			input: ruleFeatureInput{Protocol: "http", CustomRoutesEnabled: true, PathRules: []models.PathRule{{
 				MatchType: "prefix",
 				Path:      "/metrics/",
 				Upstreams: []models.PathRuleUpstream{{Address: " ", Port: 9090, Weight: 1}},
@@ -61,7 +61,7 @@ func TestRuleFeatures_rejects_invalid_path_rule_inputs(t *testing.T) {
 		},
 		{
 			name: "custom upstream port out of range",
-			input: ruleFeatureInput{CustomRoutesEnabled: true, PathRules: []models.PathRule{{
+			input: ruleFeatureInput{Protocol: "http", CustomRoutesEnabled: true, PathRules: []models.PathRule{{
 				MatchType: "prefix",
 				Path:      "/metrics/",
 				Upstreams: []models.PathRuleUpstream{{Address: "127.0.0.1", Port: 65536, Weight: 1}},
@@ -70,7 +70,7 @@ func TestRuleFeatures_rejects_invalid_path_rule_inputs(t *testing.T) {
 		},
 		{
 			name: "negative custom upstream weight",
-			input: ruleFeatureInput{CustomRoutesEnabled: true, PathRules: []models.PathRule{{
+			input: ruleFeatureInput{Protocol: "http", CustomRoutesEnabled: true, PathRules: []models.PathRule{{
 				MatchType: "exact",
 				Path:      "/health",
 				Upstreams: []models.PathRuleUpstream{{Address: "127.0.0.1", Port: 9090, Weight: -1}},

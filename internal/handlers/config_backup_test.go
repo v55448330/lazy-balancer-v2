@@ -987,7 +987,7 @@ func TestValidateV2Backup_credentials_must_be_json_object(t *testing.T) {
 				t.Fatalf("unmarshal backup: %v", err)
 			}
 
-			err := validateV2Backup(b)
+			_, err := validateV2Backup(b)
 			if tt.wantErrText != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
 					t.Fatalf("validateV2Backup err=%v, want contains %q", err, tt.wantErrText)
@@ -1036,7 +1036,7 @@ func TestValidateV2Backup_rejects_self_loop_80_tls_redirect_rule(t *testing.T) {
 			}
 			// R38 C-3 拆分后：逐行校验在 validateV2BackupRules（handler 在
 			// skipEmptyDomainHTTPRules 之后调用）；直测时组合两者保持原语义。
-			err := validateV2Backup(b)
+			_, err := validateV2Backup(b)
 			if err == nil {
 				err = validateV2BackupRules(b.Tables["lb_rules"], b.Tables["path_rules"])
 			}

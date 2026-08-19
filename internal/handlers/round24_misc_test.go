@@ -95,6 +95,7 @@ func TestValidateRuleFeatures_rejects_invalid_path_upstream_host(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			// Given
 			input := ruleFeatureInput{
+				Protocol:            "http",
 				CustomRoutesEnabled: true,
 				PathRules: []models.PathRule{{
 					MatchType: "prefix", Path: "/api/",

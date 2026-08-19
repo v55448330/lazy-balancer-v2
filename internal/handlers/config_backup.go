@@ -243,15 +243,17 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 	return nil
 }
 
-func validateV2Backup(backup configBackup) error {
+// validateV2Backup 校验 v2 备份结构与完整性。返回 usedLegacyChecksum=true 表示
+// 走了旧格式（仅 tables）校验和回退——调用方应记审计警告（R43 F-D）。
+func validateV2Backup(backup configBackup) (bool, error) {
 	if backup.Meta.App != "lazy-balancer-v2" || backup.Tables == nil {
-		return errors.New("不是有效的 Lazy Balancer 备份文件")
+		return false, errors.New("不是有效的 Lazy Balancer 备份文件")
 	}
 	if backup.Meta.Version != 1 && backup.Meta.Version != 2 {
-		return fmt.Errorf("不支持的备份版本: %d", backup.Meta.Version)
+		return false, fmt.Errorf("不支持的备份版本: %d", backup.Meta.Version)
 	}
 	if backup.Config == nil {
-		return errors.New("备份缺少全局配置")
+		return false, errors.New("备份缺少全局配置")
 	}
 	if backup.Meta.Checksum != "" {
 		checksumPayload, err := json.Marshal(struct {
@@ -259,16 +261,22 @@ func validateV2Backup(backup configBackup) error {
 			Config map[string]any              `json:"config"`
 		}{backup.Tables, backup.Config})
 		if err != nil {
-			return fmt.Errorf("计算备份校验和失败: %w", err)
+			return false, fmt.Errorf("计算备份校验和失败: %w", err)
 		}
 		sum := sha256.Sum256(checksumPayload)
 		if hex.EncodeToString(sum[:]) != backup.Meta.Checksum {
-			tablesJSON, _ := json.Marshal(backup.Tables)
-			oldSum := sha256.Sum256(tablesJSON)
-			if hex.EncodeToString(oldSum[:]) == backup.Meta.Checksum {
-				return nil
+			// R43 F-D: 旧格式（仅 tables）校验和回退仅限明确的旧格式标记
+			// （无 exported_at 的史前导出）；新格式文件（带 exported_at）校验和
+			// 不匹配直接拒绝——否则仅篡改 Config 区（dns_credentials/acme_email/
+			// 管理面板 TLS 材料）而保留 tables 的文件可借回退通过完整性校验。
+			if backup.Meta.ExportedAt == "" {
+				tablesJSON, _ := json.Marshal(backup.Tables)
+				oldSum := sha256.Sum256(tablesJSON)
+				if hex.EncodeToString(oldSum[:]) == backup.Meta.Checksum {
+					return true, nil
+				}
 			}
-			return errors.New("备份校验和不匹配，文件可能已被篡改或损坏")
+			return false, errors.New("备份校验和不匹配，文件可能已被篡改或损坏")
 		}
 	}
 	// R39 C-1: 归一须在 checksum 校验之后（避免自带校验和的备份被误判篡改）、
@@ -280,7 +288,7 @@ func validateV2Backup(backup configBackup) error {
 	}
 	for _, required := range requiredTables {
 		if _, exists := backup.Tables[required]; !exists {
-			return errors.New("备份缺少必需的数据表: " + required)
+			return false, errors.New("备份缺少必需的数据表: " + required)
 		}
 	}
 	for _, table := range configBackupTables {
@@ -291,29 +299,29 @@ func validateV2Backup(backup configBackup) error {
 	for _, job := range backup.Tables["cert_jobs"] {
 		status, ok := job["status"].(string)
 		if !ok {
-			return errors.New("证书任务状态不能为空")
+			return false, errors.New("证书任务状态不能为空")
 		}
 		if _, allowed := configBackupCertJobStatuses[status]; !allowed {
-			return fmt.Errorf("无效的证书任务状态: %s", status)
+			return false, fmt.Errorf("无效的证书任务状态: %s", status)
 		}
 	}
 	const invalidCredentialsMsg = "备份包含无效的凭证格式（ca_providers.credentials / certificate_configs.dns_credentials 需为 JSON 对象）"
 	for _, provider := range backup.Tables["ca_providers"] {
 		if err := validateCredentialsJSONObject(backupString(provider["credentials"])); err != nil {
-			return errors.New(invalidCredentialsMsg)
+			return false, errors.New(invalidCredentialsMsg)
 		}
 	}
 	for _, certCfg := range backup.Tables["certificate_configs"] {
 		if err := validateCredentialsJSONObject(backupString(certCfg["dns_credentials"])); err != nil {
-			return errors.New(invalidCredentialsMsg)
+			return false, errors.New(invalidCredentialsMsg)
 		}
 	}
 	for _, user := range backup.Tables["users"] {
 		if role, _ := user["role"].(string); role == "admin" && backupBooleanEnabled(user["is_enabled"]) {
-			return nil
+			return false, nil
 		}
 	}
-	return errors.New("备份必须至少包含一个已启用的管理员账号")
+	return false, errors.New("备份必须至少包含一个已启用的管理员账号")
 }
 
 // validateV2BackupRules 逐行校验备份 lb_rules 的端口与特性（校验侧保守口径）。
@@ -338,6 +346,15 @@ func validateV2BackupRules(rows, pathRows []map[string]any) error {
 		// 往返断裂（与 v1 路径自环规则软跳过口径一致），故禁用行将
 		// EnableTLS/TLSHTTPRedirect 置 false，其余字段校验保留。
 		enabled := backupRuleEnabled(rule)
+		// R43 F-C: 启用的手动 TLS 规则必须携带证书与私钥（镜像保存/启用侧
+		// rule_features.go:648-651 口径）。导入此前是唯一能绕过该校验的门：
+		// 无证书规则不在 availableCerts 内 → 无 TLS policy → TLS 端口明文服务，
+		// 且 autohttps.disable_certificates 阻止 Caddy 自动签发自愈。
+		if enabled && protocol == "http" && backupBooleanEnabled(rule["enable_tls"]) &&
+			backupString(rule["tls_source"]) == "manual" &&
+			(strings.TrimSpace(backupString(rule["tls_cert"])) == "" || strings.TrimSpace(backupString(rule["tls_key"])) == "") {
+			return fmt.Errorf("规则 #%d：手动证书模式下必须提供 TLS 证书和私钥", index+1)
+		}
 		input := ruleFeatureInput{
 			Protocol:                   protocol,
 			Strategy:                   backupString(rule["strategy"]),
@@ -623,9 +640,15 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份文件格式不正确"})
 		return
 	}
-	if err := validateV2Backup(backup); err != nil {
+	usedLegacyChecksum, err := validateV2Backup(backup)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
+	}
+	if usedLegacyChecksum {
+		// R43 F-D: 旧格式校验和仅覆盖数据表、不含全局配置区，完整性保障较弱，
+		// 显式记审计警告以便追溯（预览端点只读不落审计，避免 UI 选择文件即刷屏）。
+		recordAudit(c, "导入警告", "配置备份", "使用旧格式校验和（仅覆盖数据表，不含全局配置）验证备份完整性，建议升级后重新导出备份")
 	}
 	// R38 C-3: 空域名行软跳过须先于逐行校验（validateV2BackupRules）——否则
 	// 空域名+非法端口行会先行整包 400，与「空域名规则一律软跳过」语义不符；
@@ -687,19 +710,22 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	// R41 B1: pre-R40 备份可能携带 ≥2 个 is_default=1 的拦截页。restoreTable
 	// 原值插入后这些行全部成为不可编辑/删除的死行，且 branding 重渲染会覆盖
 	// 全部默认页内容。提交前降级多余默认页，仅保留 MIN(id) 一行。
+	// R42 B42-2: pre-R40 备份中保留行（MIN id）常是未定制过的种子行，而用户真实
+	// 定制内容在被降级行上。保留行内容为种子库存（空或默认渲染）且存在内容不同的
+	// 被降级行时，把内容非空且非库存、id 最大的被降级行 content 提升到保留行；
+	// 失败仅记警告（内容层面问题，branding 重渲染会覆盖，不影响拦截功能）。
+	// R43 B43-1: 提升先于降级执行——降级后「被降级行」与从未是默认页的自定义行
+	// 无法区分；CTE 在降级前圈定待降级行集合，提升源限定该集合且以 EXISTS 门控
+	// （未发生降级即跳过提升），单默认页+自定义页的备份不再静默改写默认页内容。
+	stockBlockPage := renderDefaultBlockPage(loadBrandingConfig(h.cfg.DataDir))
+	if _, err := tx.ExecContext(ctx, `WITH demoted AS (SELECT id, content FROM security_block_pages WHERE is_default=1 AND id != (SELECT MIN(id) FROM security_block_pages WHERE is_default=1)) UPDATE security_block_pages SET content=(SELECT content FROM demoted WHERE content NOT IN ('', ?) ORDER BY id DESC LIMIT 1) WHERE id=(SELECT MIN(id) FROM security_block_pages WHERE is_default=1) AND content IN ('', ?) AND EXISTS (SELECT 1 FROM demoted WHERE content NOT IN ('', ?))`, stockBlockPage, stockBlockPage, stockBlockPage); err != nil {
+		recordAudit(c, "导入警告", "配置备份", "默认拦截页面内容提升失败: "+err.Error())
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE security_block_pages SET is_default=0 WHERE is_default=1 AND id != (SELECT MIN(id) FROM security_block_pages WHERE is_default=1)`); err != nil {
 		err = session.abort(err)
 		recordAudit(c, "导入失败", "配置备份", "降级多余的默认拦截页失败: "+err.Error())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "降级多余的默认拦截页失败，已回滚: " + err.Error()})
 		return
-	}
-	// R42 B42-2: pre-R40 备份中保留行（MIN id）常是未定制过的种子行，而用户真实
-	// 定制内容在被降级行上。保留行内容为种子库存（空或默认渲染）且存在内容不同的
-	// 被降级行时，把内容非空且非库存、id 最大的被降级行 content 提升到保留行；
-	// 失败仅记警告（内容层面问题，branding 重渲染会覆盖，不影响拦截功能）。
-	stockBlockPage := renderDefaultBlockPage(loadBrandingConfig(h.cfg.DataDir))
-	if _, err := tx.ExecContext(ctx, `UPDATE security_block_pages SET content=(SELECT content FROM security_block_pages WHERE is_default=0 AND content NOT IN ('', ?) ORDER BY id DESC LIMIT 1) WHERE is_default=1 AND content IN ('', ?) AND EXISTS (SELECT 1 FROM security_block_pages WHERE is_default=0 AND content NOT IN ('', ?))`, stockBlockPage, stockBlockPage, stockBlockPage); err != nil {
-		recordAudit(c, "导入警告", "配置备份", "默认拦截页面内容提升失败: "+err.Error())
 	}
 	// R41 B3: 默认页重播种移入导入事务，与导入同生共死；失败仅记警告不阻断
 	// 导入（拦截响应短暂退化，由后续 SeedDefaultBlockPage/branding 触发自愈）。
