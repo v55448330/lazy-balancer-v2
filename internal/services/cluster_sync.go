@@ -76,6 +76,11 @@ var errSyncPullStopped = errors.New("集群同步已停止")
 // 无限失败，属于需要人工介入（重新注册或提升为主节点）的终止类错误。
 var errSyncTokenRevoked = errors.New("集群令牌已被主节点撤销，请重新注册或提升为主节点")
 
+// errSyncMasterNoPull 表示主节点被调用 Pull：主节点没有同步对象，该错误
+// 只返回调用方（手动同步 API），不得经 recordSyncError 落库污染
+// last_sync_error（节点页面会持续显示且无自动清除路径，R41 S-1）。
+var errSyncMasterNoPull = errors.New("主节点不能从其他节点同步")
+
 func (err *SnapshotSchemaTooNewError) Error() string {
 	return fmt.Sprintf("主节点快照版本 v%d 超出本节点支持范围 v%d，请升级从节点", err.Actual, err.Supported)
 }
@@ -110,13 +115,14 @@ type SyncService struct {
 	afterStopAdmission     func()
 	beforeApplySnapshot    func()
 	beforeRecordSyncStatus func()
-	// wafRepullFailures 记录 WAF 文件兜底重拉的连续未收敛轮数（内存态；仅在
-	// Pull 的 pullMu 临界区内读写，生命周期函数 startLocked/Stop 在 worker
-	// 未运行/已停止时清零复位，无并发访问）。连续未收敛达到
+	// wafRepullFailures 记录 WAF 文件兜底重拉的连续未收敛轮数（内存态，
+	// atomic.Int32：常规读写发生在 Pull 的 pullMu 临界区内；startLocked/Stop
+	// 的清零复位不持 pullMu，与 Halted 态手动 Pull 的临界区无共同互斥锁，
+	// 故全部访问经原子操作避免数据竞争（R41 F-1））。连续未收敛达到
 	// wafRepullMaxFailures 轮后：把「安全数据持续同步失败」上表面到
 	// last_sync_error（节点页面可见），并把兜底重拉降频为每 wafRepullEvery
 	// 轮一次；收敛后清零恢复正常。
-	wafRepullFailures int
+	wafRepullFailures atomic.Int32
 }
 
 func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *SyncService {
@@ -420,7 +426,7 @@ func (s *SyncService) startLocked(resume bool) {
 	s.done = done
 	// 角色切换/重启复用同一实例：清零 WAF 兜底重拉连续未收敛计数，
 	// 避免陈旧计数让新会话首次漂移重拉被降频延迟（R40 N-1）。
-	s.wafRepullFailures = 0
+	s.wafRepullFailures.Store(0)
 	s.state.Store(uint32(syncStateRunning))
 	go func() {
 		if s.runFn != nil {
@@ -466,7 +472,7 @@ func (s *SyncService) Stop() {
 	}
 	s.pullWG.Wait()
 	// 防御性清零：与 startLocked 配对，确保 Stop 后实例处于干净状态（R40 N-1）。
-	s.wafRepullFailures = 0
+	s.wafRepullFailures.Store(0)
 	if syncLifecycleState(s.state.Load()) != syncStateHalted {
 		s.state.Store(uint32(syncStateStopped))
 	}
@@ -551,7 +557,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError, fmt.Errorf("读取同步状态: %w", err))
 	}
 	if isMaster {
-		return SyncResult{}, errors.New("主节点不能从其他节点同步")
+		return SyncResult{}, errSyncMasterNoPull
 	}
 	if masterURL == "" || token == "" {
 		return SyncResult{}, errors.New("从节点尚未完成集群审批")
@@ -602,8 +608,8 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			// 带连续失败计数（F-1）：持续失败时上表面到 last_sync_error 并把
 			// 重拉降频，避免每 60s 无限循环打主从负载。
 			if s.wafFilesDrifted() {
-				s.wafRepullFailures++
-				if s.wafRepullFailures == wafRepullMaxFailures {
+				failures := s.wafRepullFailures.Add(1)
+				if failures == wafRepullMaxFailures {
 					Logf("error", "安全数据持续同步失败（已连续 %d 轮未收敛），兜底全量重拉降频为每 %d 轮一次", wafRepullMaxFailures, wafRepullEvery)
 				}
 				if s.wafRepullDue() {
@@ -730,12 +736,13 @@ const wafRepullEvery = 10
 // wafRepullDue 判定本轮 304 是否执行 WAF 文件兜底全量重拉：连续未收敛
 // 达到 wafRepullMaxFailures 后降频为每 wafRepullEvery 轮一次。
 func (s *SyncService) wafRepullDue() bool {
-	return s.wafRepullFailures <= wafRepullMaxFailures || s.wafRepullFailures%wafRepullEvery == 0
+	failures := s.wafRepullFailures.Load()
+	return failures <= wafRepullMaxFailures || failures%wafRepullEvery == 0
 }
 
 // wafRepullPersistentlyFailed 报告 WAF 兜底重拉是否已连续失败达到阈值。
 func (s *SyncService) wafRepullPersistentlyFailed() bool {
-	return s.wafRepullFailures >= wafRepullMaxFailures
+	return s.wafRepullFailures.Load() >= wafRepullMaxFailures
 }
 
 // trackWafRepullConvergence 在快照成功应用后核对 WAF 文件态：已收敛则清零
@@ -743,7 +750,7 @@ func (s *SyncService) wafRepullPersistentlyFailed() bool {
 // pullMu 临界区内调用。
 func (s *SyncService) trackWafRepullConvergence() {
 	if !s.wafFilesDrifted() {
-		s.wafRepullFailures = 0
+		s.wafRepullFailures.Store(0)
 	}
 }
 
@@ -753,7 +760,7 @@ func (s *SyncService) trackWafRepullConvergence() {
 // apply_ok_reload_failed 标记保护语义：TransportError 属可恢复类，标记存在
 // 时组合保留，不破坏 304 补偿通道。
 func (s *SyncService) persistWafRepullFailure(ctx context.Context) {
-	message := fmt.Sprintf("安全数据持续同步失败（已连续 %d 轮未收敛）", s.wafRepullFailures)
+	message := fmt.Sprintf("安全数据持续同步失败（已连续 %d 轮未收敛）", s.wafRepullFailures.Load())
 	s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeTransportError)
 }
 
@@ -911,6 +918,11 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 		// ValidationFailed 会覆盖重载失败标记——标记必须跨重启存活以触发首轮
 		// 304 全量重拉补偿；错误本身已返回给调用方（含手动 Pull 的 API 响应）。
 		if errors.Is(pullErr, errSyncPullStopped) {
+			return
+		}
+		// 主节点手动调用 Pull 不落库：主节点无同步对象，错误只返回 API
+		// 调用方；落库会让节点页面持续显示一个无自愈路径的假错误（R41 S-1）。
+		if errors.Is(pullErr, errSyncMasterNoPull) {
 			return
 		}
 		msg = "同步拉取失败: " + pullErr.Error()

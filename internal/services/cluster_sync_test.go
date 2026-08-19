@@ -934,16 +934,82 @@ func TestSyncService_StartStop_resetsWafRepullFailures(t *testing.T) {
 	service := &SyncService{}
 	service.runFn = func(ctx context.Context) { <-ctx.Done() }
 
-	service.wafRepullFailures = 7
+	service.wafRepullFailures.Store(7)
 	service.Start()
-	if got := service.wafRepullFailures; got != 0 {
+	if got := service.wafRepullFailures.Load(); got != 0 {
 		t.Fatalf("wafRepullFailures=%d after Start, want 0", got)
 	}
 
-	service.wafRepullFailures = 9
+	service.wafRepullFailures.Store(9)
 	service.Stop()
-	if got := service.wafRepullFailures; got != 0 {
+	if got := service.wafRepullFailures.Load(); got != 0 {
 		t.Fatalf("wafRepullFailures=%d after Stop, want 0", got)
+	}
+}
+
+func TestSyncService_Halted_concurrentPullAndResume_noCounterRace(t *testing.T) {
+	// R41 F-1 回归：Halted 态下手动 Pull 与 Resume 并发时，wafRepullFailures
+	// 的复位（startLocked，持 s.mu）与读取（Pull defer → recordSyncError，
+	// 持 pullMu）无共同互斥锁——计数器必须原子访问；旧实现（裸 int）在本
+	// 测试下 go test -race 必然报数据竞争。
+	_, database := newClusterTestService(t)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9 WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
+	defer caddyServer.Close()
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+	service.runFn = func(ctx context.Context) { <-ctx.Done() }
+	// 模拟 Halted 终态：worker 已退出（cancel/done 为 nil），等待人工介入。
+	service.state.Store(uint32(syncStateHalted))
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := service.Pull(context.Background()); err != nil {
+				t.Errorf("concurrent pull: %v", err)
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		service.Resume()
+	}()
+	wg.Wait()
+	t.Cleanup(service.Stop)
+
+	// 本场景无 WAF 漂移（未 seed waf_files 已应用哈希），Pull 不增计数，
+	// Resume 复位后计数器必须一致为 0。
+	if got := service.wafRepullFailures.Load(); got != 0 {
+		t.Fatalf("wafRepullFailures=%d after concurrent pull/resume, want 0", got)
+	}
+}
+
+func TestSyncService_Pull_onMaster_skipsSyncErrorPersistence(t *testing.T) {
+	// R41 S-1 回归：主节点经 API/MCP 调到 Pull 时错误只返回调用方，不得经
+	// recordSyncError 写入 last_sync_error（该错误无自动清除路径）。
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec("UPDATE global_config SET is_master=1, last_sync_error='' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
+
+	if _, err := service.Pull(context.Background()); err == nil {
+		t.Fatal("pull on master must fail")
+	}
+	var stored string
+	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "" {
+		t.Fatalf("last_sync_error=%q, want empty（主节点 Pull 不得落库）", stored)
 	}
 }
 
@@ -1232,8 +1298,8 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 	for round := 1; round <= wafRepullMaxFailures; round++ {
 		pullRound(round, true)
 	}
-	if service.wafRepullFailures != wafRepullMaxFailures {
-		t.Fatalf("wafRepullFailures=%d, want %d", service.wafRepullFailures, wafRepullMaxFailures)
+	if service.wafRepullFailures.Load() != wafRepullMaxFailures {
+		t.Fatalf("wafRepullFailures=%d, want %d", service.wafRepullFailures.Load(), wafRepullMaxFailures)
 	}
 	if msg := lastSyncError(); !strings.Contains(msg, "安全数据持续同步失败") || !strings.Contains(msg, "已连续 5 轮未收敛") {
 		t.Fatalf("last_sync_error=%q, want 持续失败文案（已连续 5 轮未收敛）", msg)
@@ -1263,8 +1329,8 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 	}
 	// 第 20 轮：重拉成功 → 收敛 → 计数清零。
 	pullRound(2*wafRepullEvery, true)
-	if service.wafRepullFailures != 0 {
-		t.Fatalf("wafRepullFailures=%d after convergence, want 0", service.wafRepullFailures)
+	if service.wafRepullFailures.Load() != 0 {
+		t.Fatalf("wafRepullFailures=%d after convergence, want 0", service.wafRepullFailures.Load())
 	}
 	if msg := lastSyncError(); msg != "" {
 		t.Fatalf("last_sync_error=%q after convergence, want cleared", msg)
@@ -1278,8 +1344,8 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 
 	// 收敛后的稳态轮：单次 304 请求，无重拉，计数保持 0。
 	pullRound(2*wafRepullEvery+1, false)
-	if service.wafRepullFailures != 0 {
-		t.Fatalf("wafRepullFailures=%d in steady state, want 0", service.wafRepullFailures)
+	if service.wafRepullFailures.Load() != 0 {
+		t.Fatalf("wafRepullFailures=%d in steady state, want 0", service.wafRepullFailures.Load())
 	}
 }
 

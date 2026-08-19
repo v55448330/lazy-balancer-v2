@@ -50,6 +50,14 @@ func authenticatedClusterToken(c *gin.Context) string {
 }
 
 func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
+	// 主节点无同步对象：入口直接拒绝，不调 Pull——否则「主节点不能从其他
+	// 节点同步」会经 recordSyncError 写入 last_sync_error 且无自动清除路径，
+	// 节点页面持续显示假错误（R41 S-1）。前端按钮只对从节点渲染，此为后端防御。
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err == nil && isMaster {
+		clusterError(c, http.StatusBadRequest, "主节点无需手动同步", nil)
+		return
+	}
 	result, err := h.syncService.Pull(c.Request.Context())
 	if err != nil {
 		recordAudit(c, "手动同步失败", "集群同步", err.Error())
