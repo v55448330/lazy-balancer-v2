@@ -92,8 +92,8 @@ import { ElMessage } from 'element-plus'
 import { request } from '@/utils/api'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import { formatDate } from '@/utils/date'
+import type { APIResponse } from '@/types'
 
-interface APIResponse<T> { code: number; message: string; data: T }
 interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string; rule_name: string; policy_id: number; policy_name: string; client_ip: string; method: string; uri: string; event_type: string; rule_triggered: string; rule_msg: string; action: string; anomaly_score: number }
 
 // 触发规则 family 映射：'2'/'3'/'4'/'5' 为 IP 访问控制拦截，949 为异常评分评估拦截，920/921 为协议异常/攻击，其余为 CRS 规则 ID

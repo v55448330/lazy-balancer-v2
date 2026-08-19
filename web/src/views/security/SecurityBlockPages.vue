@@ -81,9 +81,7 @@ import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
-import type { UserListItem } from '@/types'
-
-interface APIResponse<T> { code: number; message: string; data: T }
+import type { APIResponse, UserListItem } from '@/types'
 interface BlockPage { id: number; name: string; description: string; content: string; is_default: boolean; updated_at: string; updated_by: number }
 
 const authStore = useAuthStore()

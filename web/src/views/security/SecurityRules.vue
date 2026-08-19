@@ -293,9 +293,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, ApiRequestError } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { useAuthStore } from '@/stores/auth'
-import type { UserListItem } from '@/types'
-
-interface APIResponse<T> { code: number; message: string; data: T }
+import type { APIResponse, UserListItem } from '@/types'
 interface CRSRuleFile { filename: string; category: string; size: number; updated_at: string }
 interface CustomRuleCondition { target: string; operator: string; pattern: string }
 interface CustomRule { id: number; name: string; description: string; conditions: CustomRuleCondition[]; action: string; score: number; enabled: boolean; updated_at: string; updated_by: number }

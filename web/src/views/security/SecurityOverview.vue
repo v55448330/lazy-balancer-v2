@@ -209,10 +209,10 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { BarChart, PieChart as PieSeries } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
+import type { APIResponse } from '@/types'
 
 use([CanvasRenderer, BarChart, PieSeries, GridComponent, TooltipComponent, LegendComponent])
 
-interface APIResponse<T> { code: number; message: string; data: T }
 interface TrendPoint { date: string; blocked: number; detected: number }
 interface TopIP { ip: string; blocked: number; detected: number; last_time: string; attack_type: string }
 interface AttackType { name: string; value: number }
