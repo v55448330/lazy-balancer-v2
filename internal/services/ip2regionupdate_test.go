@@ -240,6 +240,46 @@ func TestIP2RegionUpdateRun_reloadFailureRollsBackXDB(t *testing.T) {
 	}
 }
 
+func TestIP2RegionUpdateRun_staleBakNotConsumedByRollback(t *testing.T) {
+	// Given 跨运行崩溃窗口残留的陈旧 .bak（R40 F1）：上一运行在 rename 成功后、
+	// reloader 前崩溃，.bak 是旧 xdb 唯一副本。本运行 live 原本缺失（不创建新
+	// 备份，bakCreated=false），reloader 失败时 rollbackXDB 不得消费该陈旧副本。
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	staleBak := "stale-bak-from-crashed-run"
+	if err := os.WriteFile(ip2regionLivePath+".bak", []byte(staleBak), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+	reloads := 0
+	m.reloader = func() error { reloads++; return errors.New("reload boom") }
+
+	// When 安装成功但 reloader 持续失败
+	m.run("manual")
+
+	// Then 陈旧 .bak 原样保留（未被回滚消费），live 不被还原到陈旧副本
+	data, err := os.ReadFile(ip2regionLivePath + ".bak")
+	if err != nil || string(data) != staleBak {
+		t.Fatalf("stale .bak should be preserved untouched: %q, %v", data, err)
+	}
+	live, err := os.ReadFile(ip2regionLivePath)
+	if err != nil {
+		t.Fatalf("live xdb missing: %v", err)
+	}
+	if string(live) == staleBak {
+		t.Fatal("live xdb must not be rolled back to stale .bak content")
+	}
+	_, status, _, _, _, _, _ := ip2RegionVersionRow(t)
+	if status != "failed" {
+		t.Fatalf("update_status=%q, want failed", status)
+	}
+	if reloads != 2 {
+		t.Fatalf("reloads=%d, want 2 (initial + retry after no-op rollback)", reloads)
+	}
+}
+
 func TestStartIP2RegionUpdate_conflictWhenRunning(t *testing.T) {
 	m := newTestIP2RegionManager(t)
 	seedIP2RegionVersionRow(t, "v3.0.0", true)

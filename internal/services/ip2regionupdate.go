@@ -35,6 +35,13 @@ type IP2RegionUpdateManager struct {
 	state   ip2RegionTaskState
 	runDone chan struct{}
 
+	// bakCreated 标记本次运行已创建 ip2region.xdb.bak（R40 F1，镜像 CRS 的
+	// overridesBakCreated，crsinstall.go:51/:139/:245）：rollbackXDB 只消费本
+	// 运行创建的 bak——跨运行崩溃窗口（rename 成功后、reloader 前崩溃）残留的
+	// 陈旧 .bak 是旧 xdb 唯一副本，非本运行创建时视为无需回滚，不得消费。
+	// 每次 run() 开始时重置，downloadAndInstall 备份成功后置位。
+	bakCreated bool
+
 	reloader       func() error
 	fetchLatestTag func(ctx context.Context) (tag string, err error)
 	downloadXDB    func(ctx context.Context, tag, destPath string) error
@@ -160,6 +167,9 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 		m.running = false
 		m.mu.Unlock()
 	}()
+
+	// 每次运行重置：rollbackXDB 仅消费本运行创建的 .bak（R40 F1）。
+	m.bakCreated = false
 
 	ensureIP2RegionVersionRow()
 	if _, err := db.DB.Exec(
@@ -303,6 +313,7 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 		if err := copyFile(ip2regionLivePath, liveBak); err != nil {
 			return fmt.Errorf("备份旧 ip2region xdb: %w", err)
 		}
+		m.bakCreated = true
 	}
 	if err := os.Rename(staged, ip2regionLivePath); err != nil {
 		// 安装未发生：清理备份，避免陈旧 .bak 干扰后续运行的回滚判断。
@@ -314,9 +325,13 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 }
 
 // rollbackXDB 将本次更新前备份的旧 xdb 还原到 live 路径并热换内存 searcher
-// （R39 1.2，镜像 CRS 的 restoreBackup）。本运行未创建备份（安装未发生）时
-// 视为无需回滚。
+// （R39 1.2，镜像 CRS 的 restoreBackup）。本运行未创建备份（安装未发生或
+// live 原本缺失）时视为无需回滚；磁盘上残留的陈旧 .bak（跨运行崩溃窗口的
+// 保全副本）不得消费（R40 F1）。
 func (m *IP2RegionUpdateManager) rollbackXDB() error {
+	if !m.bakCreated {
+		return nil
+	}
 	bak := ip2regionLivePath + ".bak"
 	if _, err := os.Stat(bak); err != nil {
 		return nil

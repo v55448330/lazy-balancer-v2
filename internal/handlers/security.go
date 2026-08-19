@@ -37,9 +37,18 @@ func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 	for rows.Next() {
 		var r models.SecurityCustomRule
 		var conditionsJSON string
-		rows.Scan(&r.ID, &r.Name, &r.Description, &conditionsJSON, &r.Action, &r.Score, &r.Enabled, &r.CreatedAt, &r.UpdatedAt, &r.UpdatedBy)
+		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &conditionsJSON, &r.Action, &r.Score, &r.Enabled, &r.CreatedAt, &r.UpdatedAt, &r.UpdatedBy); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
 		json.Unmarshal([]byte(conditionsJSON), &r.Conditions)
 		rules = append(rules, r)
+	}
+	// 迭代失败显式报错（R40 F2）：对齐 ListSecurityPolicies/GetSecurityPolicy
+	// 的既有标准，残缺列表不得以 200 返回。
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
 	}
 	if rules == nil {
 		rules = []models.SecurityCustomRule{}
@@ -197,8 +206,17 @@ func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
 	var pages []models.SecurityBlockPage
 	for rows.Next() {
 		var p models.SecurityBlockPage
-		rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.IsDefault, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt)
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.IsDefault, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
 		pages = append(pages, p)
+	}
+	// 迭代失败显式报错（R40 F2）：对齐 ListSecurityPolicies/GetSecurityPolicy
+	// 的既有标准，残缺列表不得以 200 返回。
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
 	}
 	if pages == nil {
 		pages = []models.SecurityBlockPage{}
@@ -216,8 +234,15 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页面内容不能为空"})
 		return
 	}
+	// API 不允许创建默认拦截页（R40 F3）：默认页仅 db 种子行，第二个
+	// is_default=1 页面不可编辑（:243）不可删除（:283），且 branding 重渲染
+	// 会覆盖全部默认页内容——产生不可管理的死行。
+	if req.IsDefault {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "默认拦截页由系统管理，不允许创建"})
+		return
+	}
 	result, err := db.DB.Exec(`INSERT INTO security_block_pages (name, description, content, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?)`,
-		req.Name, req.Description, req.Content, req.IsDefault, getContextUserIDInt(c), getContextUserIDInt(c))
+		req.Name, req.Description, req.Content, false, getContextUserIDInt(c), getContextUserIDInt(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return

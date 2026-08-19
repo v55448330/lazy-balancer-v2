@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -66,6 +67,41 @@ func TestSecurityCustomRuleCRUD_withoutStatusColumn(t *testing.T) {
 	}
 	if _, present := resp.Data[0]["status_code"]; present {
 		t.Fatalf("custom rule still exposes status_code field: %s", list.Body.String())
+	}
+}
+
+func TestCreateSecurityBlockPage_rejectsDefaultPage(t *testing.T) {
+	// Given 系统已播种唯一的默认拦截页（is_default=1）
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityEntityRouter(t)
+
+	// When API 请求创建第二个默认拦截页
+	recorder := postJSON(t, router, "/security/block-pages", map[string]any{
+		"name":       "第二个默认页",
+		"content":    "<h1>Access Denied</h1>",
+		"is_default": true,
+	})
+
+	// Then 请求被 400 拒绝（R40 F3：第二个默认页不可编辑/不可删除，会产生死行），
+	// 且默认页仍只有种子行
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("create default block page status=%d, want 400: %s", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if resp.Message != "默认拦截页由系统管理，不允许创建" {
+		t.Fatalf("message=%q, want 默认拦截页由系统管理，不允许创建", resp.Message)
+	}
+	var defaults int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_block_pages WHERE is_default=1").Scan(&defaults); err != nil {
+		t.Fatal(err)
+	}
+	if defaults != 1 {
+		t.Fatalf("default block pages=%d, want 1 (seed only)", defaults)
 	}
 }
 
