@@ -136,13 +136,17 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 		}
 	}
 	if len(bundle.XdbB64) > 0 {
+		// 声明哈希为空但携带内容：合法主节点 BuildWafFileBundle 恒成对设置，
+		// 仅恶意/损坏主节点可构造——与 CRS 侧 F-3 同纵深防御，拒绝整包而非
+		// 裸写原始字节。
+		if bundle.IP2RegionSha == "" {
+			return crsChanged, xdbChanged, errors.New("同步 IP2Region 数据库缺少声明哈希，已拒绝落盘")
+		}
 		liveSum := fileSha256(ip2regionLivePath)
 		if liveSum != bundle.IP2RegionSha {
-			if bundle.IP2RegionSha != "" {
-				sum := sha256.Sum256(bundle.XdbB64)
-				if got := hex.EncodeToString(sum[:]); got != bundle.IP2RegionSha {
-					return crsChanged, xdbChanged, fmt.Errorf("同步 IP2Region 数据库哈希不匹配（声明 %s，实际 %s），已拒绝落盘", bundle.IP2RegionSha, got)
-				}
+			sum := sha256.Sum256(bundle.XdbB64)
+			if got := hex.EncodeToString(sum[:]); got != bundle.IP2RegionSha {
+				return crsChanged, xdbChanged, fmt.Errorf("同步 IP2Region 数据库哈希不匹配（声明 %s，实际 %s），已拒绝落盘", bundle.IP2RegionSha, got)
 			}
 			tmp := ip2regionLivePath + ".sync"
 			if err := os.WriteFile(tmp, bundle.XdbB64, 0644); err != nil {
@@ -218,6 +222,13 @@ func tarGzDirSum(dir string) (string, error) {
 	return sum, err
 }
 
+// 解包上限：gzip 炸弹（压缩侧最多 64MB，可膨胀数 GB）必须在写放大发生前
+// 拦截；正常 CRS 树远低于该值，超限必为损坏/篡改包（N-02）。
+const (
+	maxWafSyncExtractBytes = 256 << 20 // 256MB 解包字节上限
+	maxWafSyncExtractFiles = 2000      // 2000 文件数上限
+)
+
 // untarGzTo extracts data into destDir atomically. When expectSum is
 // non-empty, the re-archived staging tree must hash to it, or the sync is
 // rejected before anything touches the live tree.
@@ -233,6 +244,11 @@ func untarGzTo(data []byte, destDir string, expectSum string) error {
 	if err := os.MkdirAll(staging, 0755); err != nil {
 		return err
 	}
+	// 兜底清理：任何错误路径（解包失败/哈希校验失败/备份失败）都不得遗留
+	// staging 目录到下一周期；成功路径 rename 后 staging 已不存在，RemoveAll 是空操作。
+	defer os.RemoveAll(staging)
+	var writtenBytes int64
+	writtenFiles := 0
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -258,6 +274,13 @@ func untarGzTo(data []byte, destDir string, expectSum string) error {
 				return err
 			}
 		case tar.TypeReg:
+			writtenFiles++
+			if writtenFiles > maxWafSyncExtractFiles {
+				return fmt.Errorf("同步规则集文件数超过上限（%d 个），已拒绝落盘", maxWafSyncExtractFiles)
+			}
+			if hdr.Size < 0 || writtenBytes+hdr.Size > maxWafSyncExtractBytes {
+				return fmt.Errorf("同步规则集解包体积超过上限（%d 字节），已拒绝落盘", maxWafSyncExtractBytes)
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
@@ -268,11 +291,15 @@ func untarGzTo(data []byte, destDir string, expectSum string) error {
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
+			written, err := io.Copy(f, tr)
+			closeErr := f.Close()
+			if err != nil {
 				return err
 			}
-			f.Close()
+			if closeErr != nil {
+				return closeErr
+			}
+			writtenBytes += written
 		}
 	}
 	// Verify the extracted staging tree before touching the live tree.

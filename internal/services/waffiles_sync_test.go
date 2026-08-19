@@ -1,6 +1,10 @@
 package services
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -148,5 +152,113 @@ func TestApplyWafFileBundleRejectsTamperedBytes(t *testing.T) {
 	crsChanged, xdbChanged, err := ApplyWafFileBundle(bundle)
 	if err != nil || !crsChanged || !xdbChanged {
 		t.Fatalf("valid bundle apply crsChanged=%v xdbChanged=%v err=%v", crsChanged, xdbChanged, err)
+	}
+}
+
+// tarEntry 描述 rawTarGz 的一个条目；declaredSize 非零时以声明体积写头
+// （正文可小于声明，用于构造超大声明条目）。
+type tarEntry struct {
+	name         string
+	declaredSize int64
+	body         []byte
+}
+
+// rawTarGz 按给定条目直接构造 tar.gz（不做路径归一/排序，用于构造恶意包）。
+func rawTarGz(t *testing.T, entries []tarEntry) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, entry := range entries {
+		size := int64(len(entry.body))
+		if entry.declaredSize > 0 {
+			size = entry.declaredSize
+			// tar writer 要求正文与声明体积一致：以零填充补齐（gzip 压缩
+			// 膨胀极小），让超限条目以真实体积通过解包流。
+			body := entry.body
+			if int64(len(body)) < size {
+				body = make([]byte, size)
+				copy(body, entry.body)
+			}
+			entry.body = body
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: entry.name, Mode: 0644, Size: size}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(entry.body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func assertNoStagingRemains(t *testing.T, destDir string) {
+	t.Helper()
+	if _, err := os.Stat(destDir + ".sync-in"); !os.IsNotExist(err) {
+		t.Fatalf("staging %q still present after failure (err=%v)", destDir+".sync-in", err)
+	}
+}
+
+func TestUntarGzTo_rejectsOversizedBundleAndCleansStaging(t *testing.T) {
+	// N-02：解包必须在写放大发生前拦截——文件数与字节数双限，且失败不得
+	// 遗留 staging 目录到下一周期。
+	t.Run("file count over limit", func(t *testing.T) {
+		entries := make([]tarEntry, 0, maxWafSyncExtractFiles+1)
+		for i := 0; i <= maxWafSyncExtractFiles; i++ {
+			entries = append(entries, tarEntry{
+				name: filepath.Join("rules", fmt.Sprintf("f%05d.conf", i)),
+				body: []byte("SecRule"),
+			})
+		}
+		destDir := t.TempDir()
+		err := untarGzTo(rawTarGz(t, entries), destDir, "")
+		if err == nil || !strings.Contains(err.Error(), "文件数超过上限") {
+			t.Fatalf("error=%v, want file-count limit rejection", err)
+		}
+		assertNoStagingRemains(t, destDir)
+	})
+	t.Run("bytes over limit", func(t *testing.T) {
+		destDir := t.TempDir()
+		// 声明体积超限但实际内容极小：tar reader 按声明读取，校验必须在
+		// 写放大发生前以声明体积拦截。
+		data := rawTarGz(t, []tarEntry{{name: "huge.bin", declaredSize: maxWafSyncExtractBytes + 1}})
+		err := untarGzTo(data, destDir, "")
+		if err == nil || !strings.Contains(err.Error(), "解包体积超过上限") {
+			t.Fatalf("error=%v, want byte-size limit rejection", err)
+		}
+		assertNoStagingRemains(t, destDir)
+	})
+}
+
+func TestUntarGzTo_rejectsIllegalPathAndCleansStaging(t *testing.T) {
+	// N-02：非法路径拒绝时同样不得遗留 staging 目录。
+	destDir := t.TempDir()
+	data := rawTarGz(t, []tarEntry{{name: "../evil.conf", body: []byte("SecRule X EVIL")}})
+	err := untarGzTo(data, destDir, "")
+	if err == nil || !strings.Contains(err.Error(), "非法路径") {
+		t.Fatalf("error=%v, want illegal path rejection", err)
+	}
+	assertNoStagingRemains(t, destDir)
+}
+
+func TestApplyWafFileBundle_rejectsXdbWithoutDeclaredHash(t *testing.T) {
+	// N-04：声明哈希为空但携带 xdb 内容——非法主节点构造（合法
+	// BuildWafFileBundle 恒成对设置），必须拒绝整包而非裸写原始字节。
+	dst := t.TempDir()
+	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
+	crsLiveDir, ip2regionLivePath = filepath.Join(dst, "crs"), filepath.Join(dst, "ip2region.xdb")
+	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	bundle := &WafFileBundle{XdbB64: []byte("raw-bytes"), IP2RegionSha: ""}
+	if _, _, err := ApplyWafFileBundle(bundle); err == nil || !strings.Contains(err.Error(), "缺少声明哈希") {
+		t.Fatalf("error=%v, want missing declared hash rejection", err)
+	}
+	if _, err := os.Stat(ip2regionLivePath); !os.IsNotExist(err) {
+		t.Fatalf("xdb must not be written without declared hash")
 	}
 }

@@ -23,10 +23,11 @@ type ConfigDriftStatus struct {
 }
 
 var (
-	configDriftMu         sync.RWMutex
-	configDriftStatus     = ConfigDriftStatus{Consistent: true}
-	configDriftStreak     int
-	configDriftReadWarned bool
+	configDriftMu          sync.RWMutex
+	configDriftStatus      = ConfigDriftStatus{Consistent: true}
+	configDriftStreak      int
+	configDriftQueryWarned bool // 规则数据读取失败首报留痕
+	configDriftReadWarned  bool // 运行配置读取失败首报留痕
 )
 
 // ResetConfigDrift 角色切换时重置看门狗状态——曾漂移的主节点降级为从节点后，
@@ -36,6 +37,7 @@ func ResetConfigDrift() {
 	defer configDriftMu.Unlock()
 	configDriftStatus = ConfigDriftStatus{Consistent: true}
 	configDriftStreak = 0
+	configDriftQueryWarned = false
 	configDriftReadWarned = false
 }
 
@@ -82,8 +84,8 @@ func checkConfigConsistency(adminURL string) {
 	expected, err := expectedRenderedRules()
 	if err != nil {
 		configDriftMu.Lock()
-		if !configDriftReadWarned {
-			configDriftReadWarned = true
+		if !configDriftQueryWarned {
+			configDriftQueryWarned = true
 			Logf("warn", "配置一致性看门狗：读取规则失败（本轮起跳过检查）: %v", err)
 		}
 		configDriftMu.Unlock()
@@ -102,6 +104,7 @@ func checkConfigConsistency(adminURL string) {
 		return
 	}
 	configDriftMu.Lock()
+	configDriftQueryWarned = false
 	configDriftReadWarned = false
 	configDriftMu.Unlock()
 	updateConfigDrift(diffExpectedMissing(expected, running), diffRunningExtra(expected, running))

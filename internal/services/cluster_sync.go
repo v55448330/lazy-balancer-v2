@@ -571,6 +571,17 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 				sinceVersion, sinceFingerprint = 0, ""
 				continue
 			}
+			// WAF 文件兜底（N-01）：apply 期 fetchWafFiles/ApplyWafFileBundle
+			// 失败仅记日志不向上传播（cluster_apply.go），记录哈希已提交而本地
+			// 文件未收敛；三节 drift 检测不含 waf_files（文件态节），必须在此
+			// 显式比对，否则从节点安全数据随主节点配置静默永久分叉。
+			if s.wafFilesDrifted() {
+				Logf("warn", "本地 CRS/IP2Region 文件与同步记录不一致（上次同步安全数据失败），以全量快照重新拉取")
+				RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("本地安全数据文件与记录不一致", "配置无变化但安全数据文件未收敛，已改为全量拉取"), "")
+				resp.Body.Close()
+				sinceVersion, sinceFingerprint = 0, ""
+				continue
+			}
 		}
 		break
 	}
@@ -668,6 +679,55 @@ func (s *SyncService) driftedSections(ctx context.Context) string {
 		}
 	}
 	return strings.Join(drifted, "、")
+}
+
+// wafFilesNullRefHash 是 waf_files 节哈希的「空引用」基准：主节点侧无任何
+// WAF 文件时快照 ref 为 nil，节哈希即 sha256(json(nil))==sha256("null")。
+// 该值无文件态可比对，且全量重拉也无法收敛本地残留文件，必须跳过兜底检测
+// 以免永久重拉循环。
+var wafFilesNullRefHash = func() string {
+	sum := sha256.Sum256([]byte("null"))
+	return hex.EncodeToString(sum[:])
+}()
+
+// wafFilesSectionHash 以 ComputeSnapshotSectionHashes 的同一口径（sha256 of
+// sectionPayloadFor("waf_files") JSON）计算本地 ref 的节哈希。本地文件与
+// 已应用 ref 一致时两哈希必然相等，文件分叉时必然不等——比对口径与主节点
+// 记录完全对齐。
+func wafFilesSectionHash(ref *models.ClusterWafFilesRef) (string, error) {
+	data, err := json.Marshal(sectionPayloadFor("waf_files", &models.ClusterSnapshot{WafFiles: ref}))
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// wafFilesDrifted 报告本地 CRS/IP2Region 文件态是否与已应用的 waf_files 节
+// 哈希分叉。开关关闭的节跳过比对（镜像 driftedSections 语义，防「曾同步→
+// 开关关闭→本地改动」死循环）。
+func (s *SyncService) wafFilesDrifted() bool {
+	if s.db == nil {
+		return false
+	}
+	switches, err := readSyncSwitches(s.db)
+	if err != nil || !switches.WafFiles {
+		return false
+	}
+	appliedHash := readAppliedSectionHashes(s.db)["waf_files"]
+	if appliedHash == "" || appliedHash == wafFilesNullRefHash {
+		return false
+	}
+	localRef := BuildWafFileRef()
+	if localRef == nil {
+		// 主节点有文件而本地一个都没有：必然分叉，全量重拉触发重新拉取。
+		return true
+	}
+	localHash, err := wafFilesSectionHash(localRef)
+	if err != nil {
+		return false
+	}
+	return localHash != appliedHash
 }
 
 func (s *SyncService) beginPull() error {

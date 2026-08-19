@@ -1017,6 +1017,88 @@ func TestSyncService_Pull_refetchesFullSnapshotOnLocalDrift(t *testing.T) {
 	}
 }
 
+func TestSyncService_Pull_refetchesFullSnapshotOnWafFileDrift(t *testing.T) {
+	// N-01 端到端：apply 期安全数据拉取/落盘失败仅记日志不返回错误
+	// （cluster_apply.go），记录哈希已提交但本地文件未收敛；主节点无新变更
+	// → 下轮 304。304 分支的 WAF 兜底必须比对 cluster_applied_sections 的
+	// waf_files 节哈希与本地文件态，不一致则 since_version=0 全量重拉并
+	// 重新拉取安全数据，直至收敛。
+	_, database := newClusterTestService(t)
+
+	// 主节点文件树：快照引用与文件包的真实来源。
+	masterTree := t.TempDir()
+	os.MkdirAll(filepath.Join(masterTree, "crs", "rules"), 0755)
+	os.WriteFile(filepath.Join(masterTree, "crs", "rules", "a.conf"), []byte("SecRule X 1"), 0644)
+	os.WriteFile(filepath.Join(masterTree, "crs", "VERSION"), []byte("v4.28.0"), 0644)
+	masterXdb := filepath.Join(masterTree, "ip2region.xdb")
+	os.WriteFile(masterXdb, []byte("master-xdb-bytes"), 0644)
+
+	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
+	crsLiveDir, ip2regionLivePath = filepath.Join(masterTree, "crs"), masterXdb
+	ref := BuildWafFileRef()
+	bundle := BuildWafFileBundle()
+	// 模拟 apply 期失败后的从节点：本地文件树为空（从未收敛）。
+	slaveTree := t.TempDir()
+	crsLiveDir, ip2regionLivePath = filepath.Join(slaveTree, "crs"), filepath.Join(slaveTree, "ip2region.xdb")
+	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	os.MkdirAll(crsLiveDir, 0755)
+	if ref == nil || bundle == nil {
+		t.Fatal("master ref/bundle must build")
+	}
+
+	snapshot := signedTestSnapshot(9, "token")
+	snapshot.WafFiles = ref
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	snapshot = signTestSnapshot(snapshot, "token")
+
+	requestedVersions := make(chan string, 2)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/cluster/sync/waf-files" {
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(map[string]any{"data": bundle})
+			return
+		}
+		requestedVersions <- request.URL.Query().Get("since_version")
+		if request.URL.Query().Get("since_version") == "0" {
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(models.APIResponse{Code: 0, Data: snapshot})
+			return
+		}
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9 WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	seedAppliedSection(t, database, "waf_files", snapshot.SectionHashes["waf_files"])
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
+	defer caddyServer.Close()
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	// When
+	result, pullErr := service.Pull(context.Background())
+
+	// Then
+	if pullErr != nil {
+		t.Fatalf("pull: %v", pullErr)
+	}
+	if !result.Changed || result.AppliedVersion != 9 {
+		t.Fatalf("result=%#v, want changed full-snapshot apply", result)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "9" {
+		t.Fatalf("first request since_version=%q, want 9", v)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "0" {
+		t.Fatalf("second request since_version=%q, want 0 (WAF drift re-pull)", v)
+	}
+	if got, err := os.ReadFile(filepath.Join(crsLiveDir, "rules", "a.conf")); err != nil || string(got) != "SecRule X 1" {
+		t.Fatalf("CRS not converged: content=%q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(ip2regionLivePath); err != nil || string(got) != "master-xdb-bytes" {
+		t.Fatalf("xdb not converged: content=%q err=%v", got, err)
+	}
+}
+
 func TestSyncService_driftedSections_bypassesStaleSnapshotCache(t *testing.T) {
 	// I-1 回归：本地规则在同步之外被删改但不递增 cluster_version，快照缓存
 	// 键（version/所有权/开关）不变 → 命中缓存会返回陈旧快照掩盖漂移。
