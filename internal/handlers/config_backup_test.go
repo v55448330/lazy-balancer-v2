@@ -195,7 +195,9 @@ func TestImportConfigBackup_rejects_backup_without_enabled_admin_and_preserves_c
 		{name: "empty users", users: []map[string]any{}},
 		{name: "users only", users: []map[string]any{{"id": 2, "username": "reader", "password_hash": "hash", "role": "user", "is_enabled": 1}}},
 		{name: "all admins disabled", users: []map[string]any{{"id": 2, "username": "disabled-admin", "password_hash": "hash", "role": "admin", "is_enabled": false}}},
-		{name: "null enabled admin", users: []map[string]any{{"id": 2, "username": "null-admin", "password_hash": "hash", "role": "admin", "is_enabled": nil}}},
+		// R39 C-1: is_enabled 为 null 的管理员在归一（NULL→1，对齐 migrateUsersIsEnabledNotNull）
+		// 后视为启用，不再属于「无启用管理员」拒绝场景——见
+		// TestImportConfigBackup_normalizes_null_boolean_rows。
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -250,6 +252,82 @@ func TestImportConfigBackup_accepts_enabled_admin_and_increments_password_versio
 	}
 	if passwordVersion != 13 {
 		t.Fatalf("password_version=%d, want 13", passwordVersion)
+	}
+}
+
+func TestImportConfigBackup_normalizes_null_boolean_rows(t *testing.T) {
+	// R39 C-1: pre-R24/R36 库导出的全 null 管理员备份此前被
+	// backupBooleanEnabled(nil)=false 先行 400 拦截，归一不可达；归一须在
+	// checksum 之后、管理员校验之前执行：用户 is_enabled null→1、规则/上游
+	// enabled null→0，导入成功且落库值正确。
+	// Given
+	h := newBackupTestHandlers(t)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"users":     {{"id": 2, "username": "null-admin", "password_hash": "hash", "role": "admin", "is_enabled": nil}},
+		"lb_rules":  {{"caddy_id": "lb_nullnorm", "name": "null-rule", "protocol": "http", "domain": "nullnorm.example.test", "listen_port": 8080, "enabled": nil}},
+		"upstreams": {{"rule_id": "lb_nullnorm", "host": "127.0.0.1", "port": 9000, "weight": 1, "enabled": nil}},
+	})
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then：导入成功且三表布尔列全部归一（用户→1、规则/上游→0）
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var userEnabled, ruleEnabled, upstreamEnabled int
+	if err := db.DB.QueryRow("SELECT is_enabled FROM users WHERE username='null-admin'").Scan(&userEnabled); err != nil {
+		t.Fatalf("read normalized user: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT enabled FROM lb_rules WHERE caddy_id='lb_nullnorm'").Scan(&ruleEnabled); err != nil {
+		t.Fatalf("read normalized rule: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT enabled FROM upstreams WHERE rule_id='lb_nullnorm'").Scan(&upstreamEnabled); err != nil {
+		t.Fatalf("read normalized upstream: %v", err)
+	}
+	if userEnabled != 1 || ruleEnabled != 0 || upstreamEnabled != 0 {
+		t.Fatalf("normalized booleans: user=%d rule=%d upstream=%d, want 1/0/0", userEnabled, ruleEnabled, upstreamEnabled)
+	}
+}
+
+func TestValidateConfigImport_rejects_dangling_rule_references(t *testing.T) {
+	// R39 C-3: 预览接口须与实际导入同序校验 upstreams/path_rules 引用存在性，
+	// 否则悬挂引用备份在预览显示可导入、实际导入才 400。
+	// Given
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"upstreams": {{"rule_id": "lb_ghost_ref", "host": "127.0.0.1", "port": 9000, "weight": 1, "enabled": 1}},
+	})
+	router := gin.New()
+	router.POST("/config/validate", h.ValidateConfigImport)
+	request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	// Then：预览返回 Valid=false 且错误与导入路径一致
+	var envelope struct {
+		Data importValidateResponse `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode validation response: %v", err)
+	}
+	if envelope.Data.Valid {
+		t.Fatalf("validation accepted dangling reference: %s", response.Body.String())
+	}
+	if envelope.Data.Type != "v2" {
+		t.Fatalf("validation type=%q, want v2", envelope.Data.Type)
+	}
+	if !strings.Contains(envelope.Data.Error, "引用了不存在的规则") {
+		t.Fatalf("validation error=%q, want contains 引用了不存在的规则", envelope.Data.Error)
 	}
 }
 

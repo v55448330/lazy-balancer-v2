@@ -2808,10 +2808,16 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			if hcPasses <= 0 {
 				hcPasses = 2
 			}
+			// R39 C-4: interval/timeout 与 passive/TCP 路径同口径默认化——导入路径
+			// 可达 0 值（validateV2BackupRules 不校验该组合），裸值会生成 "0s"。
+			hcTimeout := rule.HealthCheckTimeout
+			if hcTimeout <= 0 {
+				hcTimeout = 5
+			}
 			active := map[string]interface{}{
 				"uri":      hcPath,
-				"timeout":  fmt.Sprintf("%ds", rule.HealthCheckTimeout),
-				"interval": fmt.Sprintf("%ds", rule.HealthCheckInterval),
+				"timeout":  fmt.Sprintf("%ds", hcTimeout),
+				"interval": fmt.Sprintf("%ds", hcInterval),
 				"passes":   hcPasses,
 				"fails":    hcThreshold,
 			}

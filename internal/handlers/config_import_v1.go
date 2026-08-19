@@ -467,6 +467,13 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			return
 		}
 		skipWarnings := skipEmptyDomainHTTPRules(backup.Tables)
+		// R39 C-3: 与 ImportConfigBackup 同序——skip 之后、逐行校验之前校验
+		// upstreams/path_rules 引用存在性，预览结果与实际导入一致（否则悬挂引用
+		// 备份在预览显示可导入、实际导入才 400）。
+		if err := validateBackupRuleReferences(backup.Tables); err != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
+			return
+		}
 		if err := validateV2BackupRules(backup.Tables["lb_rules"], backup.Tables["path_rules"]); err != nil {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
 			return

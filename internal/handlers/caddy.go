@@ -642,6 +642,15 @@ func convertLogTimezone(content string) string {
 }
 
 func (h *Handlers) PutCaddyConfig(c *gin.Context) {
+	// R39 C-5: 限制请求体大小防止超大 JSON 全量缓冲（与 CreateRule
+	// maxCreateRuleBodyBytes 同口径）。
+	const maxPutCaddyConfigBytes int64 = 1 << 20 // 1MB
+	if c.Request.ContentLength > maxPutCaddyConfigBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxPutCaddyConfigBytes)
+
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 

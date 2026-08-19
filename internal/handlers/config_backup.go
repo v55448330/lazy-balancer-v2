@@ -201,6 +201,27 @@ func materializeImportCertificates(certificates []importCertificate) error {
 	return nil
 }
 
+// normalizeBackupBooleanNulls 把 pre-R24/pre-R36 库导出的 NULL 布尔行归一为当前表结构
+// 要求的非空值（lb_rules/upstreams.enabled NULL→0、users.is_enabled NULL→1），与
+// R36/R24 迁移口径一致（用户缺省启用，规则/上游缺省禁用）。
+// 必须在 checksum 校验之后执行（checksum 覆盖原始内容，先归一会让自带校验和的备份
+// 全部误报篡改），并在管理员校验之前执行（backupBooleanEnabled(nil)=false 会把
+// 全 null 管理员备份先行 400 拦截，归一不可达——R39-C-1）。
+func normalizeBackupBooleanNulls(tables map[string][]map[string]any) {
+	for _, table := range []string{"lb_rules", "upstreams"} {
+		for _, row := range tables[table] {
+			if enabled, exists := row["enabled"]; exists && enabled == nil {
+				row["enabled"] = 0
+			}
+		}
+	}
+	for _, row := range tables["users"] {
+		if enabled, exists := row["is_enabled"]; exists && enabled == nil {
+			row["is_enabled"] = 1
+		}
+	}
+}
+
 // validateBackupRuleReferences 写入前校验 upstreams/path_rules 的 rule_id 均存在于备份自带的
 // lb_rules：悬挂引用靠 FK 在删表后以 500 回滚兜底，与 cert_jobs 的显式清理语义不一致；
 // 提前转为 400 校验错误，保证校验不过零写入。
@@ -250,6 +271,9 @@ func validateV2Backup(backup configBackup) error {
 			return errors.New("备份校验和不匹配，文件可能已被篡改或损坏")
 		}
 	}
+	// R39 C-1: 归一须在 checksum 校验之后（避免自带校验和的备份被误判篡改）、
+	// 管理员校验之前（backupBooleanEnabled(nil)=false 会先行 400 拦截全 null 管理员备份）。
+	normalizeBackupBooleanNulls(backup.Tables)
 	requiredTables := configBackupTables
 	if backup.Meta.Version == 1 {
 		requiredTables = configBackupV1Tables
@@ -647,26 +671,11 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		if !exists {
 			continue
 		}
-		// R37 F37-2：pre-R36 库导出的行可能含 "enabled":null（R36 起两表为 NOT NULL），
-		// 原值插入会触发约束失败整包回滚。归一为 0——与 R36 迁移口径一致
-		//（NULL 视同禁用，渲染侧本就这么判定）。
-		if table == "lb_rules" || table == "upstreams" {
-			for _, row := range rows {
-				if enabled, exists := row["enabled"]; exists && enabled == nil {
-					row["enabled"] = 0
-				}
-			}
-		}
-		// R38 C-1: pre-R24 库的 users.is_enabled 为可空列（R24 起 NOT NULL），
-		// 旧实例导出的 "is_enabled":null 行原值插入会触发约束失败整包回滚。
-		// 归一为 1——对齐 migrateUsersIsEnabledNotNull 的 NULL→1 口径
-		//（注意与 lb_rules/upstreams 的 NULL→0 不同：用户缺省启用）。
-		if table == "users" {
-			for _, row := range rows {
-				if enabled, exists := row["is_enabled"]; exists && enabled == nil {
-					row["is_enabled"] = 1
-				}
-			}
+		// 归一兜底：validateV2Backup 内的 normalizeBackupBooleanNulls 已被
+		// legacy（仅 tables）校验和早退路径跳过，此处幂等重复执行覆盖该场景
+		//（R37 F37-2 / R38 C-1 / R39 C-1）。
+		if table == "lb_rules" || table == "upstreams" || table == "users" {
+			normalizeBackupBooleanNulls(map[string][]map[string]any{table: rows})
 		}
 		if err := restoreTable(ctx, tx, db.DB, table, rows); err != nil {
 			err = session.abort(err)

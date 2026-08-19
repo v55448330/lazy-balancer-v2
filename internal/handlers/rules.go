@@ -1259,13 +1259,17 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				return
 			}
 		}
-		// Round 29 G-5: 仅当域名/监听端口/EnableTLS/TLSHTTPRedirect 任一相对存量变化时
+		// Round 29 G-5: 仅当域名/监听端口/EnableTLS/TLSHTTPRedirect/Enabled 任一相对存量变化时
 		// 执行遮蔽检查（fallback 已把 req 字段填成现值，直接与 existingRule 比较）——
 		// 存量冲突组合（导入态 80 规则 + 跳转规则并存）下仅改名称/健康检查不应被 400 阻塞。
+		// R39 C-2: Enabled 变化也触发——与 EnableRule 端点同口径，禁用规则经 UpdateRule
+		// 启用时同样拦截会遮蔽 80 直听规则的跳转组合（shadowRelevantChanged 不含 enabled
+		// 时仅提交 {"enabled":true} 会绕过遮蔽检查）。
 		shadowRelevantChanged := req.Domain != existingDomain ||
 			req.ListenPort != existingRule.ListenPort ||
 			*req.EnableTLS != existingRule.EnableTLS ||
-			*req.TLSHTTPRedirect != existingRule.TLSHTTPRedirect
+			*req.TLSHTTPRedirect != existingRule.TLSHTTPRedirect ||
+			*req.Enabled != existingRule.Enabled
 		if shadowRelevantChanged {
 			shadowRule, shadowDomain, err := queryRedirectShadowConflict(req.Domain, req.ListenPort, *req.EnableTLS, *req.TLSHTTPRedirect, caddyID)
 			if err != nil {

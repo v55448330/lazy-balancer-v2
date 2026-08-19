@@ -232,3 +232,48 @@ func TestUpdateRule_domain_conflict_check_gated_on_change(t *testing.T) {
 		}
 	})
 }
+
+// R39 C-2: shadowRelevantChanged 门控须含 enabled 变化——仅提交 {"enabled":true}
+// 启用一条「443 跳转规则」时，若同域名存在启用中的 80 直听规则，遮蔽检查必须
+// 触发（与 EnableRule 端点口径一致），否则跳转路由会把 80 规则遮蔽成死规则。
+func TestUpdateRule_enable_trigger_redirect_shadow_check(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	oldCertDir := testServicesCertDir
+	testServicesCertDir = t.TempDir()
+	t.Cleanup(func() { testServicesCertDir = oldCertDir })
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+
+	certPEM, keyPEM, err := generateTestCert("shadow-u.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("generate certificate: %v", err)
+	}
+	seed := func(caddyID string, listenPort int, tlsRedirect bool, enabled int) {
+		t.Helper()
+		enableTLS, redirect := 0, 0
+		tlsCert, tlsKey := "", ""
+		if tlsRedirect {
+			enableTLS, redirect = 1, 1
+			tlsCert, tlsKey = certPEM, keyPEM
+		}
+		if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,enable_compress,enable_tls,tls_source,tls_cert,tls_key,tls_http_redirect)
+			VALUES (?,?,?,'http',?,?,'weighted_round_robin',?,1,?,'manual',?,?,?)`,
+			caddyID, caddyID, "", "shadow-u.test", listenPort, enabled, enableTLS, tlsCert, tlsKey, redirect); err != nil {
+			t.Fatalf("seed rule %s: %v", caddyID, err)
+		}
+		if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES (?,'127.0.0.1',9000,1,1,'http')`, caddyID); err != nil {
+			t.Fatalf("seed upstream %s: %v", caddyID, err)
+		}
+	}
+	seed("lb_shd_80u", 80, false, 1)
+	seed("lb_shd_tlsu", 443, true, 0)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_shd_tlsu", strings.NewReader(`{"enabled":true}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "直接监听 80 端口") {
+		t.Fatalf("status=%d body=%s, want 400 redirect shadow on enable via UpdateRule", response.Code, response.Body.String())
+	}
+}
