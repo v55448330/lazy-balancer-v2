@@ -363,14 +363,15 @@ func validateV2BackupRules(rows, pathRows []map[string]any) error {
 		// 往返断裂（与 v1 路径自环规则软跳过口径一致），故禁用行将
 		// EnableTLS/TLSHTTPRedirect 置 false，其余字段校验保留。
 		enabled := backupRuleEnabled(rule)
-		// R43 F-C: 启用的手动 TLS 规则必须携带证书与私钥（镜像保存/启用侧
-		// rule_features.go:648-651 口径）。导入此前是唯一能绕过该校验的门：
-		// 无证书规则不在 availableCerts 内 → 无 TLS policy → TLS 端口明文服务，
-		// 且 autohttps.disable_certificates 阻止 Caddy 自动签发自愈。
+		// R43 F-C / R46 C-B-1: 启用的手动 TLS 规则必须携带证书与私钥（镜像保存/启用侧
+		// rule_features.go validateStoredRuleConfig 口径），拒绝时点名规则。
+		// 导入此前是唯一能绕过该校验的门：无证书规则不在 availableCerts 内 → 无
+		// TLS policy → TLS 端口明文服务，且 autohttps.disable_certificates 阻止
+		// Caddy 自动签发自愈。
 		if enabled && protocol == "http" && backupBooleanEnabled(rule["enable_tls"]) &&
 			backupString(rule["tls_source"]) == "manual" &&
 			(strings.TrimSpace(backupString(rule["tls_cert"])) == "" || strings.TrimSpace(backupString(rule["tls_key"])) == "") {
-			return fmt.Errorf("规则 #%d：手动证书模式下必须提供 TLS 证书和私钥", index+1)
+			return fmt.Errorf("规则 #%d（%s）：手动证书模式下必须提供 TLS 证书和私钥", index+1, backupString(rule["name"]))
 		}
 		input := ruleFeatureInput{
 			Protocol:                   protocol,

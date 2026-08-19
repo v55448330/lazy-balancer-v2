@@ -353,9 +353,10 @@ func mapV1BalancerStrategy(value string) (string, bool) {
 	}
 }
 
-func validateConvertedV1Rules(rules []convertedRule) ([]convertedRule, []string) {
+func validateConvertedV1Rules(rules []convertedRule) ([]convertedRule, []string, []string) {
 	var valid []convertedRule
 	var skips []string
+	var normalizations []string
 	for index, rule := range rules {
 		if err := validateRuleListenPort(rule.Protocol, rule.ListenPort); err != nil {
 			skips = append(skips, fmt.Sprintf("规则 #%d（%s）：%v", index+1, rule.Name, err))
@@ -404,16 +405,24 @@ func validateConvertedV1Rules(rules []convertedRule) ([]convertedRule, []string)
 			continue
 		}
 		// R43 F-C: v1 SSL 规则导入后 tls_source 恒为 manual（tlsSource()）；启用但
-		// 证书/私钥为空的规则会在 TLS 端口明文服务（镜像 rule_features.go:648-651
-		// 保存/启用侧口径），按 v1 风格软跳过并警告而非整包拒绝。
+		// 证书/私钥为空的规则会在 TLS 端口明文服务（镜像 rule_features.go 保存/启用侧
+		// 口径），按 v1 风格软跳过并警告而非整包拒绝。
 		if rule.Enabled && rule.Protocol == "http" && rule.EnableTLS &&
 			(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
 			skips = append(skips, fmt.Sprintf("规则 #%d（%s）：启用 TLS 但证书或私钥为空，已跳过导入", index+1, rule.Name))
 			continue
 		}
+		// R46 C-B-1: 禁用的空证书 SSL 行此前原样落库（enable_tls=1 + tls_source=
+		// 'manual' + 空证书），并随 v2 导出回流；导入时归一为 enable_tls=0（证书
+		// 可后续补齐再启用），逐条告警但不计入跳过数。
+		if !rule.Enabled && rule.Protocol == "http" && rule.EnableTLS &&
+			(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
+			rule.EnableTLS = false
+			normalizations = append(normalizations, fmt.Sprintf("规则 #%d（%s）：启用 TLS 但证书或私钥为空，已按关闭 TLS 导入（规则为禁用状态）", index+1, rule.Name))
+		}
 		valid = append(valid, rule)
 	}
-	return valid, skips
+	return valid, skips, normalizations
 }
 
 type importValidateResponse struct {
@@ -502,8 +511,9 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			return
 		}
 		rules, conversionWarnings := convertV1Rules(proxies, upstreams)
-		validRules, validationSkips := validateConvertedV1Rules(rules)
+		validRules, validationSkips, normalizations := validateConvertedV1Rules(rules)
 		allWarnings := append(conversionWarnings, validationSkips...)
+		allWarnings = append(allWarnings, normalizations...)
 		if len(validRules) == 0 {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v1", Error: "所有规则均校验失败", Warnings: allWarnings}})
 			return
@@ -568,10 +578,11 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		return
 	}
 	rules, conversionWarnings := convertV1Rules(proxies, upstreams)
-	validRules, validationSkips := validateConvertedV1Rules(rules)
+	validRules, validationSkips, normalizations := validateConvertedV1Rules(rules)
 	var allWarnings []string
 	allWarnings = append(allWarnings, conversionWarnings...)
 	allWarnings = append(allWarnings, validationSkips...)
+	allWarnings = append(allWarnings, normalizations...)
 	if len(validRules) == 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份中没有可导入的有效规则"})
 		return
