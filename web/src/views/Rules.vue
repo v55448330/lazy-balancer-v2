@@ -1188,7 +1188,7 @@ class CertInfoRefreshError extends Error {
 }
 
 const rules = ref<Rule[]>([])
-const securityBindings = ref<Record<string, { policy_id: number; name: string; mode: string; enabled: boolean; ip_whitelist: string; ip_blacklist: string; rate_limit_enabled: boolean }>>({})
+const securityBindings = ref<Record<string, { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean }>>({})
 
 interface SecurityPolicySummary {
   id: number
