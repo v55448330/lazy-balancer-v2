@@ -10,6 +10,15 @@
       </div>
     </div>
 
+    <el-alert
+      v-if="overviewError"
+      title="安全总览数据加载失败，请稍后刷新"
+      type="error"
+      show-icon
+      :closable="false"
+      class="mb-5"
+    />
+
     <el-row :gutter="20" class="mb-5">
       <el-col :span="24">
         <el-card shadow="always">
@@ -247,6 +256,9 @@ function statusTagType(status: string): TagType {
 }
 
 const overview = ref<Overview>({ today_blocked: 0, today_detected: 0, active_policies: 0, crs_version: '', trend: [], top_ips: [], attack_types: [] })
+// 总览加载失败（如 metrics 库故障导致后端 500）时置位：避免把全零面板
+// 误当「无攻击」，用户目标与 R35 D2 的后端显式报错对齐（R36 F1）。
+const overviewError = ref(false)
 
 const trendChartOption = computed(() => {
   const dates = overview.value.trend.map(t => t.date)
@@ -279,8 +291,15 @@ const attackChartOption = computed(() => ({
 const fetchData = async () => {
   try {
     const res = await request.get<APIResponse<Overview>>('/security/overview')
-    if (res.data) overview.value = res.data
-  } catch { /* silent */ }
+    if (res.data) {
+      overview.value = res.data
+      overviewError.value = false
+    }
+  } catch {
+    // 后端 500（如 metrics 库故障）不再静默吞掉：置错误状态展示提示条，
+    // 全零面板不再冒充「无攻击」（R36 F1）。
+    overviewError.value = true
+  }
 }
 
 const blockedEvents = ref<SecurityEvent[]>([])

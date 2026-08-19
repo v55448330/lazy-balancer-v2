@@ -1,7 +1,6 @@
 package services
 
 import (
-	"errors"
 	"log"
 	"time"
 
@@ -89,17 +88,9 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time) {
 	if nextStr == "" {
 		return // first tick only schedules the first run
 	}
-	err := m.StartUpdate("auto")
-	if err != nil && !errors.Is(err, ErrIP2RegionUpdateRunning) {
-		log.Printf("ip2region update: failed to start scheduled update: %v", err)
-		// 启动即失败：按连续失败次数指数退避重试（R34 I 起 1 小时，R35 I1 退避 1h→24h）
-		retry := now.Add(updateRetryBackoff(readConsecutiveFailures("security_ip2region_version"))).Format(crsTimeLayout)
-		if _, dbErr := db.DB.Exec("UPDATE security_ip2region_version SET next_update=? WHERE id=1", retry); dbErr != nil {
-			log.Printf("ip2region update: failed to record retry next_update: %v", dbErr)
-		}
-		return
-	}
-	if err == nil {
+	// StartUpdate 唯一错误是 ErrIP2RegionUpdateRunning（已被 IsRunning 前置守卫
+	// 排除），启动失败退避分支不可达（R36 F4 删除）。
+	if err := m.StartUpdate("auto"); err == nil {
 		m.rearmAfterIP2RegionUpdate(now)
 	}
 }

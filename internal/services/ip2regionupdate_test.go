@@ -359,6 +359,55 @@ func TestSetIP2RegionAutoUpdate_preservesVersion(t *testing.T) {
 	}
 }
 
+func countIP2RegionFailedAudits(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := db.AuditDB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE resource='IP2Region 数据库' AND action='更新' AND detail LIKE '%结果：失败%'").Scan(&n); err != nil {
+		t.Fatalf("count failed audit entries: %v", err)
+	}
+	return n
+}
+
+func TestIP2RegionUpdateFail_auditsOnlyFirstFailure(t *testing.T) {
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+
+	// Given a first consecutive failure: audited once (counter 0 → 1)
+	m.fail(errors.New("第一次失败"))
+	if got := countIP2RegionFailedAudits(t); got != 1 {
+		t.Fatalf("failed audits after 1st failure = %d, want 1", got)
+	}
+
+	// When the second consecutive failure occurs (counter 1 → 2)
+	// Then no duplicate audit is written (R36 F3)
+	m.fail(errors.New("第二次失败"))
+	if got := countIP2RegionFailedAudits(t); got != 1 {
+		t.Fatalf("failed audits after 2nd failure = %d, want 1 (no duplicate)", got)
+	}
+}
+
+func TestIP2RegionUpdateFail_counterUpdateFailureDoesNotReaudit(t *testing.T) {
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	// 模拟第 1 次失败已落库（计数=1、已审计）；随后计数 UPDATE 持续失败（RAISE
+	// ABORT 触发器）：审计判定必须用「预读计数+1」=2，不得回退到旧计数 1 导致
+	// 第 2 次失败重复写审计（R36 F3）。
+	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET consecutive_failures=1 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`CREATE TRIGGER ip2r_fail_counter_update BEFORE UPDATE ON security_ip2region_version
+		BEGIN SELECT RAISE(ABORT, 'injected counter update failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec("DROP TRIGGER IF EXISTS ip2r_fail_counter_update") })
+
+	m.fail(errors.New("第二次失败"))
+
+	if got := countIP2RegionFailedAudits(t); got != 0 {
+		t.Fatalf("failed audits = %d, want 0（UPDATE 失败时旧代码会重复审计）", got)
+	}
+}
+
 func TestWriteIP2RegionUpdateLog_rotatesAtSize(t *testing.T) {
 	dir := t.TempDir()
 	oldDir := ip2RegionUpdateLogDir

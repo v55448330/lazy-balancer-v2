@@ -698,9 +698,10 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 	id := c.Param("id")
 	// 绑定清理与策略删除必须同事务：绑定删除失败时回滚，避免留下
 	// 指向已删策略的悬挂绑定（旧行为会静默忽略清理错误）。
-	// 可序列化隔离（glebarez 驱动 + _txlock=immediate → BEGIN IMMEDIATE）使
-	// 事务开启即持写锁，COUNT/DELETE/清理之间不存在并发绑定插队的写窗口（R35 D1）。
-	tx, err := db.DB.BeginTx(c.Request.Context(), &sql.TxOptions{Isolation: sql.LevelSerializable})
+	// 写锁来自 DSN 的 _txlock=immediate（glebarez 驱动对非只读 BeginTx 一律
+	// BEGIN IMMEDIATE，忽略 TxOptions.Isolation）：COUNT/DELETE/清理之间不存在
+	// 并发绑定插队的写窗口（R35 D1，R36 D1 澄清注释）。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
 		return
@@ -739,9 +740,11 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// 绑定/解绑必须同事务：存在性校验与写入同事务执行，避免检查与 INSERT 之间
 	// 规则/策略被并发删除产生悬挂绑定（无 FK，经集群同步扩散，R34 D）；INSERT
 	// 失败时旧绑定已被 DELETE 删除，需回滚恢复。
-	// 可序列化隔离使事务开启即持写锁：COUNT 校验与 DELETE/INSERT 之间，并发的
-	// 策略删除无法提交，闭合 R34 D 遗留的窄写窗口（R35 D1）。
-	tx, err := db.DB.BeginTx(c.Request.Context(), &sql.TxOptions{Isolation: sql.LevelSerializable})
+	// 写锁来自 DSN 的 _txlock=immediate（glebarez 驱动忽略 TxOptions.Isolation，
+	// 非只读 BeginTx 一律 BEGIN IMMEDIATE）：COUNT 校验即持写锁，并发的策略删除
+	// 无法在 COUNT 与 DELETE/INSERT 之间提交，闭合 R34 D 遗留的窄写窗口（R35 D1，
+	// R36 D1 澄清注释）。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -1030,6 +1033,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		trendByDate[t.Date] = t
 	}
 	if trendRows != nil {
+		trackErr(trendRows.Err()) // 迭代中途失败同样显式报错，与 D3 标准一致（R36 F2）
 		trendRows.Close()
 	}
 	overview.Trend = make([]models.SecurityTrendPoint, 0, 7)
@@ -1056,6 +1060,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		topRows = append(topRows, row)
 	}
 	if ipRows != nil {
+		trackErr(ipRows.Err()) // 迭代中途失败同样显式报错，与 D3 标准一致（R36 F2）
 		ipRows.Close()
 	}
 	familyCountsByIP := map[string]map[string]int{}
@@ -1073,6 +1078,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		counts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
 	}
 	if famRows != nil {
+		trackErr(famRows.Err()) // 迭代中途失败同样显式报错，与 D3 标准一致（R36 F2）
 		famRows.Close()
 	}
 	overview.TopIPs = make([]models.SecurityTopIP, 0, len(topRows))
@@ -1097,6 +1103,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		familyCounts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
 	}
 	if typeRows != nil {
+		trackErr(typeRows.Err()) // 迭代中途失败同样显式报错，与 D3 标准一致（R36 F2）
 		typeRows.Close()
 	}
 	attackTypes := make([]models.SecurityAttackType, 0, len(familyCounts))
