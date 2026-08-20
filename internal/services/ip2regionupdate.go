@@ -233,8 +233,10 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	}
 	if reloadErr != nil {
 		// 回滚旧 xdb 并再次重载（镜像 CRS fail() 路径，R39 1.2）：reloader 失败
-		// 时磁盘与内存 searcher 都还原到更新前状态，避免「磁盘已是新库、DB 记录
-		// 旧版本+failed」的长期不一致。回滚或重试失败仅记录，不改变失败落库。
+		// 时磁盘还原到更新前状态，避免「磁盘已是新库、DB 记录旧版本+failed」的
+		// 长期不一致；还原后内存热换失败时 searcher 瞬态滞后、下次 reload/重启
+		// 自愈（R48 B-1），不影响磁盘/DB 一致性。回滚或重试失败仅记录，不改变
+		// 失败落库。
 		restored, rbErr := m.rollbackXDB()
 		switch {
 		case rbErr != nil:
@@ -364,50 +366,57 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 }
 
 // rollbackXDB 将本次更新前备份的旧 xdb 还原到 live 路径并热换内存 searcher
-// （R39 1.2，镜像 CRS 的 restoreBackup）。返回 restored=true 表示磁盘/内存已
-// 回到「更新前基线」，调用方按 failed 落库即三方一致；restored=false 且 err=nil
-// 表示无任何基线可用，由调用方按 fail-open 处理（R44 F1）。
+// （R39 1.2，镜像 CRS 的 restoreBackup）。返回 restored=true 表示磁盘已
+// 回到「更新前基线」，调用方按 failed+旧版本落库即磁盘/DB 一致；restored=false
+// 且 err=nil 表示无任何基线可用，由调用方按 fail-open 处理（R44 F1）。
 //
 // 基线优先级：本运行创建的 .bak > dist 发行版副本。陈旧 .bak（跨运行崩溃窗口
 // 的保全副本）永不消费（R40 F1）；bakCreated==false 时回退到 ip2regionDistPath
 // ——全新部署首次更新无旧 live 可备份，dist 即「更新前状态」的权威副本。dist
 // 也缺失时不做任何改动，返回 restored=false。
 //
-// .bak 还原升级链（R45 F1-A，R46 B-F4 口径修正）：rename 失败（非权限类的瞬
-// 时故障，如偶发 IO 错误）不等于基线丢失——.bak 仍在磁盘，升级为 copyFile 还
-// 原；权限类失败（目录不可写）下 copyFile 需要同一目录的写权限、必然同败，
-// 会直接落到 dist 回退；全部失败才返回 error，由调用方走 fail-open（DB 必须
-// 跟随实际状态，不得记 failed+旧版本重演三方分叉）。
+// .bak 还原升级链（R45 F1-A）：rename 失败（非权限类的瞬时故障，如偶发 IO
+// 错误）不等于基线丢失——.bak 仍在磁盘，升级为 copyFile 还原；权限类失败
+// （目录不可写）下 copyFile 需要同一目录的写权限、必然同败，会直接落到 dist
+// 回退；全部失败才返回 error，由调用方走 fail-open（DB 必须跟随实际状态，
+// 不得记 failed+旧版本重演三方分叉）。
 //
-// 每级的内存热换同样计入该级成败（R46 B-F1）：还原磁盘后 Reload 失败视为该级
-// 还原失败，继续升级；全部级别热换失败最终落入 error→fail-open，调用方在
-// message 中注明内存 searcher 未切换、重启后生效。
+// 任一级的磁盘还原一旦成功即「该级成功」，内存热换失败不再升级（R48 B-1）：
+// rename 会消费 .bak，升级后 copy 级必然失败、dist 必然执行，而 dist 是镜像
+// 捆绑的旧版本，会覆盖已正确还原的更新前基线——磁盘(dist 旧版)≠DB(failed+
+// 旧版本)分叉且基线不可恢复。热换失败只记 warn 并返回 restored=true：Reload
+// 失败时旧 searcher 保持服役（内存滞后为瞬态），下次任意成功 reload/重启即
+// 追上。仅 dist 级（最后手段）的热换失败仍返回 error，由调用方 fail-open。
 func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 	if m.bakCreated {
 		bak := ip2regionLivePath + ".bak"
 		if _, err := os.Stat(bak); err == nil {
-			if err := osRename(bak, ip2regionLivePath); err == nil {
-				if err := reloadIP2RegionSearcher(); err == nil {
-					return true, nil
-				} else {
-					log.Printf("ip2region update: reload after rename restore failed (%v), escalating to next restore level", err)
+			if renameErr := osRename(bak, ip2regionLivePath); renameErr == nil {
+				if rErr := reloadIP2RegionSearcher(); rErr != nil {
+					// R48 B-1：磁盘已还原为更新前基线，热换失败不得升级——
+					// .bak 已被 rename 消费，升级后 copy 必然失败、dist 必然
+					// 执行，镜像捆绑的旧版会覆盖正确基线（磁盘≠DB 分叉+基线
+					// 丢失）。内存 searcher 滞后为瞬态，下次 reload/重启自愈。
+					log.Printf("ip2region update: reload after rename restore failed (%v); disk baseline restored, memory searcher will catch up on next reload", rErr)
 				}
+				return true, nil
 			} else {
-				log.Printf("ip2region update: rename bak to live failed (%v), trying copy restore (permission-class failures will fall through to dist)", err)
+				log.Printf("ip2region update: rename bak to live failed (%v), trying copy restore (permission-class failures will fall through to dist)", renameErr)
 			}
-			if err := copyFile(bak, ip2regionLivePath); err == nil {
-				if err := reloadIP2RegionSearcher(); err == nil {
-					// copy 还原不消费 .bak：成功后清理，与 rename 消费语义对齐，
-					// 避免残留陈旧副本干扰后续运行判断。
-					if rErr := os.Remove(bak); rErr != nil {
-						log.Printf("ip2region update: failed to remove bak after copy restore: %v", rErr)
-					}
-					return true, nil
-				} else {
-					log.Printf("ip2region update: reload after copy restore failed (%v), escalating to dist fallback", err)
+			if copyErr := copyFile(bak, ip2regionLivePath); copyErr == nil {
+				// copy 还原不消费 .bak：磁盘还原成功后清理，与 rename 消费语
+				// 义对齐，避免残留陈旧副本干扰后续运行判断。
+				if rErr := os.Remove(bak); rErr != nil {
+					log.Printf("ip2region update: failed to remove bak after copy restore: %v", rErr)
 				}
+				if rErr := reloadIP2RegionSearcher(); rErr != nil {
+					// R48 B-1：同 rename 级——磁盘已是正确基线，热换失败仅
+					// 记 warn，不得升级到 dist 覆盖基线。
+					log.Printf("ip2region update: reload after copy restore failed (%v); disk baseline restored, memory searcher will catch up on next reload", rErr)
+				}
+				return true, nil
 			} else {
-				log.Printf("ip2region update: copy restore from bak failed: %v", err)
+				log.Printf("ip2region update: copy restore from bak failed: %v", copyErr)
 			}
 		}
 	}
