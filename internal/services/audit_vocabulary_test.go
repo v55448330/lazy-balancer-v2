@@ -46,10 +46,14 @@ var auditVocabDynamicAllowlist = map[string]map[int][]string{
 }
 
 // auditVocabCallSpecs 给出各审计写入口的 动作/对象 参数下标。
+// recordAuthenticationSecurityAudit 是 middleware.go:38 对 services.RecordAuditLog
+// 的函数变量别名（R50 D-01：不登记则该调用点整点不被扫描，「认证拒绝」不进
+// 后端动作集，danger 契约条目虚设）。
 var auditVocabCallSpecs = map[string][2]int{
-	"RecordAuditLog":    {1, 2},
-	"recordAudit":       {1, 2},
-	"recordSystemAudit": {0, 1},
+	"RecordAuditLog":                    {1, 2},
+	"recordAudit":                       {1, 2},
+	"recordSystemAudit":                 {0, 1},
+	"recordAuthenticationSecurityAudit": {1, 2},
 }
 
 func auditVocabStringLit(e ast.Expr) (string, bool) {

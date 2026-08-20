@@ -260,6 +260,19 @@ func TestAuditActionMapping_backendActionsAllMapped(t *testing.T) {
 		slices.Sort(missing)
 		t.Fatalf("后端动作未在 AuditLog.vue actionTagType 映射（落库后渲染为兜底 info 灰标）：\n%s", strings.Join(missing, "\n"))
 	}
+	// R50 D-04：info 是「无 action ===」的兜底行，任何后端动作被显式写进 info 行
+	// （如 `if (action === 'X') return 'info'`）都能通过上面的映射检查而隐藏
+	// 分类错误。此处强制 info 行词条数为零——当前 info 行本就无词条，零成本绊线。
+	var infoMapped []string
+	for action, evidence := range backend {
+		if frontend[action] == "info" {
+			infoMapped = append(infoMapped, action+"（首见 "+evidence+"）")
+		}
+	}
+	if len(infoMapped) > 0 {
+		slices.Sort(infoMapped)
+		t.Fatalf("后端动作不得显式映射到 info 兜底色（info 行应保持零词条）：\n%s", strings.Join(infoMapped, "\n"))
+	}
 }
 
 func TestAuditActionMapping_dangerClassificationContract(t *testing.T) {
