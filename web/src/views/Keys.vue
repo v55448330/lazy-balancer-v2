@@ -549,6 +549,9 @@ async function createKey() {
       createdKeyVisible.value = true
     }
     await fetchKeys()
+  } catch (error: unknown) {
+    // Error toast is already shown by the global axios interceptor.
+    console.error('Failed to create API key:', error)
   } finally {
     creating.value = false
   }
@@ -591,6 +594,9 @@ const saveFeatures = async (): Promise<void> => {
     ElMessage.success('功能配置已更新')
     featureDialogVisible.value = false
     await fetchKeys()
+  } catch (error: unknown) {
+    // Error toast is already shown by the global axios interceptor.
+    console.error('Failed to save API key features:', error)
   } finally {
     featureSaving.value = false
   }
