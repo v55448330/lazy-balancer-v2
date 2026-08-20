@@ -112,15 +112,16 @@ func TestNormalizeLegacySecurityPolicyEnums_noBump_whenNoLegacyRows(t *testing.T
 	}
 }
 
-// TestNormalizeLegacySecurityPolicyEnums_slaveSkipsNormalize 验证 R53-A-3：
-// 从节点不做本地归一——其职责是镜像主节点快照；若主节点为无归一修复的旧版本，
-// 本地归一会与旧主快照互相覆盖（归一翻转 ACL 发射 → 首次 Pull 全量重拉 →
-// 快照恢复遗留空串行），每重启一次行为翻转。保留遗留空串行是旧主集群的一致
-// 状态，升级主节点后快照自然携带归一后行。
+// TestNormalizeLegacySecurityPolicyEnums_slaveSkipsNormalize 验证 R53-A-3 在
+// sync_security=1（默认）格：从节点不做本地归一——其职责是镜像主节点快照；若
+// 主节点为无归一修复的旧版本，本地归一会与旧主快照互相覆盖（归一翻转 ACL 发射
+// → 首次 Pull 全量重拉 → 快照恢复遗留空串行），每重启一次行为翻转。保留遗留
+// 空串行是旧主集群的一致状态，升级主节点后快照自然携带归一后行。
+// sync_security=0 格（无快照流、本地归一是唯一修复路径）见 R54-N1 测试。
 func TestNormalizeLegacySecurityPolicyEnums_slaveSkipsNormalize(t *testing.T) {
-	// Given 从节点 + 一条遗留空串行
+	// Given 从节点 + sync_security=1（快照权威下发）+ 一条遗留空串行
 	setupSecurityEnumTestDB(t)
-	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
+	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0, sync_security=1 WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
 	insertLegacyPolicyRow(t, "legacy-all", "", "", "")
