@@ -148,6 +148,89 @@ func TestRetryCertJob_accepts_www_first_rule_domain(t *testing.T) {
 	}
 }
 
+func TestDeleteCertJob_blocks_issued_job_when_rule_still_auto_renewing(t *testing.T) {
+	// R52 N4：删除 issued 任务行后纯周期路径永不重建（CreateOrRequeueCertJob
+	// 仅由规则写路径调用），规则自动续签永久断链且 UI 无信号——规则仍在
+	// enabled+acme_dns+域名一致时必须 409 显式拒绝，先禁用规则方可删除。
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_live','live','http','live.example.test',8080,1,1,'acme_dns');
+		INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_live','live.example.test','issued')`); err != nil {
+		t.Fatalf("seed live rule and issued job: %v", err)
+	}
+	router := gin.New()
+	router.DELETE("/jobs/:id", h.DeleteCertJob)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/jobs/1", nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "续签") {
+		t.Fatalf("body=%s, want 续签中断提示", response.Body.String())
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=1").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "issued" {
+		t.Fatalf("status=%q, want issued（409 不得改变任务状态）", status)
+	}
+}
+
+func TestDeleteCertJob_blocks_downloaded_job_with_reversed_rule_domain(t *testing.T) {
+	// R52 N4：downloaded 任务持有已下载证书，删除同样断续签链；规则域名
+	// 顺序与任务规范形式相反时仍须命中拦截（与续签扫描的域名判读一致）。
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_live_dl','live-dl','http','www.live-dl.example.test,live-dl.example.test',8080,1,1,'acme_dns');
+		INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_live_dl','live-dl.example.test,www.live-dl.example.test','downloaded')`); err != nil {
+		t.Fatalf("seed live rule and downloaded job: %v", err)
+	}
+	router := gin.New()
+	router.DELETE("/jobs/:id", h.DeleteCertJob)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/jobs/1", nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409", response.Code, response.Body.String())
+	}
+	var count int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE id=1").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("job count=%d, want 1（409 不得删除任务）", count)
+	}
+}
+
+func TestDeleteCertJob_allows_issued_job_when_rule_not_auto_renewing(t *testing.T) {
+	// R52 N4 放行形态：规则已禁用或已切回 manual 证书时，删除 issued 任务
+	// 不影响任何续签链（续签扫描本就跳过这些规则），按原语义放行。
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_off','off','http','off.example.test',8080,0,1,'acme_dns'),
+		       ('lb_manual','manual','http','manual.example.test',8080,1,1,'manual');
+		INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_off','off.example.test','issued'),
+		                                                     ('lb_manual','manual.example.test','issued')`); err != nil {
+		t.Fatalf("seed rules and jobs: %v", err)
+	}
+	router := gin.New()
+	router.DELETE("/jobs/:id", h.DeleteCertJob)
+	for _, id := range []string{"1", "2"} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/jobs/"+id, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("DELETE /jobs/%s status=%d body=%s, want 200", id, response.Code, response.Body.String())
+		}
+	}
+	var count int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("job count=%d, want 0（两条任务均应被删除）", count)
+	}
+}
+
 func TestDeleteCertJob_keeps_row_when_delete_fails(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_keep','keep.example.test','issued');

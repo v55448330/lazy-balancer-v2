@@ -348,6 +348,16 @@ func certJobRetryBlocked(status string, updatedAt sql.NullTime, now time.Time) (
 	return now.Sub(updatedAt.Time) < guard, "任务正在执行中，请稍后重试"
 }
 
+// reversedCertJobDomain 交换双域名任务的域名顺序：cert_jobs.domain 存排序
+// 规范形式，lb_rules.domain 保留用户输入顺序，匹配需同时覆盖两种排列。
+func reversedCertJobDomain(domain string) string {
+	parts := strings.Split(domain, ",")
+	if len(parts) == 2 {
+		return parts[1] + "," + parts[0]
+	}
+	return domain
+}
+
 func (h *Handlers) DeleteCertJob(c *gin.Context) {
 
 	id, err := strconv.Atoi(c.Param("id"))
@@ -362,6 +372,24 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	var caProviderID int
 	if err := db.DB.QueryRow("SELECT rule_id, domain, status, COALESCE(ca_provider_id,0) FROM cert_jobs WHERE id = ?", id).Scan(&ruleID, &domain, &status, &caProviderID); dbQueryNotFound(c, err, "Job not found", "DeleteCertJob query job") {
 		return
+	}
+	// R52 N4：删除持有证书的 issued/downloaded 任务且规则仍在自动签发状态
+	// 时，纯周期路径永不重建任务行（CreateOrRequeueCertJob 仅由规则写路径
+	// 调用），自动续签永久断链且 UI 无信号——409 显式拒绝；运维可先禁用
+	// 规则或切换证书来源后再删除，与既有 disabled-flow 语义一致。
+	if status == "issued" || status == "downloaded" {
+		var active int
+		if err := db.DB.QueryRow(`SELECT COUNT(1) FROM lb_rules
+			WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns'
+			  AND lower(replace(domain,' ','')) IN (?,?)`,
+			ruleID, domain, reversedCertJobDomain(domain)).Scan(&active); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule state"})
+			return
+		}
+		if active > 0 {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "该任务持有有效证书且关联规则仍在自动签发状态，删除后自动续签将中断且无法自动恢复；请先禁用规则或切换证书来源后再删除"})
+			return
+		}
 	}
 	result, err := db.DB.Exec("UPDATE cert_jobs SET status='disabled', updated_at=datetime('now') WHERE id=? AND status=?", id, status)
 	if err != nil {
@@ -388,15 +416,11 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 			if qm == nil {
 				restoreErr = errors.New("CA queue manager not initialized")
 			} else {
-				reversedDomain := domain
-				if parts := strings.Split(domain, ","); len(parts) == 2 {
-					reversedDomain = parts[1] + "," + parts[0]
-				}
 				_, changed, restoreErr = qm.EnqueueIfActive(caProviderID, id, ruleID, domain, func() (int, bool, error) {
 					updateResult, updateErr := db.DB.Exec(`UPDATE cert_jobs SET status='queued', message='删除失败，重新排队签发', updated_at=datetime('now')
 						WHERE id=? AND status='disabled' AND EXISTS (
 							SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND lower(replace(domain,' ','')) IN (?,?)
-						)`, id, ruleID, domain, reversedDomain)
+						)`, id, ruleID, domain, reversedCertJobDomain(domain))
 					if updateErr != nil {
 						return id, false, updateErr
 					}
