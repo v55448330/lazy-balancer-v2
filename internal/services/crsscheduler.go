@@ -17,6 +17,9 @@ func (m *CRSUpdateManager) LatestVersionCached() (string, bool) {
 
 // RefreshLatestAsync refreshes the cached upstream tag in the background when
 // the cache is older than 10 minutes; it never blocks the caller.
+// latestFetchedAt 记录最近一次尝试（含失败）：失败路径同样受 10 分钟守卫约束，
+// 否则前端轮询期间每次 GetCRSInfo 都会重发一个 30s 超时的上游请求，持续失败
+// 时加速触发 GitHub 403 限流（R53 新-1）。
 func (m *CRSUpdateManager) RefreshLatestAsync() {
 	m.latestMu.Lock()
 	if m.latestRefreshing || time.Since(m.latestFetchedAt) < 10*time.Minute {
@@ -32,10 +35,10 @@ func (m *CRSUpdateManager) RefreshLatestAsync() {
 		tag, err := m.fetchLatestTag(ctx)
 		m.latestMu.Lock()
 		m.latestRefreshing = false
+		m.latestFetchedAt = time.Now()
 		if err == nil {
 			m.latestTag = tag
 			m.latestKnown = true
-			m.latestFetchedAt = time.Now()
 		}
 		m.latestMu.Unlock()
 		if err != nil {
