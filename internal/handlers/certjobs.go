@@ -358,6 +358,19 @@ func reversedCertJobDomain(domain string) string {
 	return domain
 }
 
+// certJobDeleteGuard 返回该状态任务在关联规则仍处自动签发状态时是否受 409
+// 守卫及对应文案（守卫的状态类枚举与取舍理由见 DeleteCertJob 守卫注释）。
+func certJobDeleteGuard(status string) (bool, string) {
+	switch status {
+	case "issued", "downloaded":
+		return true, "该任务持有有效证书且关联规则仍在自动签发状态，删除后自动续签将中断且无法自动恢复；请先禁用规则或切换证书来源后再删除"
+	case "failed", "waiting_ca", "queued":
+		return true, "该任务仍在自动签发链中（等待签发或等待重试），且关联规则仍在自动签发状态，删除后自动签发将中断且无法自动恢复；请先禁用规则或切换证书来源后再删除"
+	default:
+		return false, ""
+	}
+}
+
 func (h *Handlers) DeleteCertJob(c *gin.Context) {
 
 	id, err := strconv.Atoi(c.Param("id"))
@@ -370,9 +383,15 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	// 覆盖 查询→守卫→disabled 翻转→取消→删除 全程，与 EnableRule 互斥：
 	// 删除先完成则 EnableRule 查不到任务行，走 EnableCertJobCreate 重建
 	// （续签链不断）；EnableRule 先完成则守卫读到 enabled=1 返回 409。
-	// worker 无法在翻转后复活任务：transitionJob 的 from 列表均不含
-	// 'disabled'（唯一按现状重读的 caqueue.EnqueueIfActive 的调用方均持
-	// caddyOpMu 或 certJobOperationLock 之一），'disabled' 对 worker 是终态。
+	// 不变量（R54 S-1 修正）：'disabled' 对 worker 是终态——所有 worker 侧
+	// transitionJob 的 from 列表均排除 'disabled'，翻转后不会被周期路径复活。
+	// caqueue.EnqueueIfActive 的调用方并非全部持锁：RetryCertJob 持
+	// certJobOperationLock、本函数失败恢复与规则写路径持 caddyOpMu；而
+	// IssueCertificate 与四个周期路径（requeueStrandedJobs/
+	// requeueWaitingCAJobs/requeueNonTerminalCertJobs/renewExpiringCertificates）
+	// 无锁调用——其 UPDATE 均按旧状态 CAS 或 from 列表排除 'disabled'，与翻转
+	// 交错时命中 0 行（先于翻转→翻转 CAS 失败；翻转后→0 行；删除后→行不存在），
+	// 语义自洽。
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 	operationLock := certJobOperationLock(id)
@@ -383,11 +402,22 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	if err := db.DB.QueryRow("SELECT rule_id, domain, status, COALESCE(ca_provider_id,0) FROM cert_jobs WHERE id = ?", id).Scan(&ruleID, &domain, &status, &caProviderID); dbQueryNotFound(c, err, "Job not found", "DeleteCertJob query job") {
 		return
 	}
-	// R52 N4：删除持有证书的 issued/downloaded 任务且规则仍在自动签发状态
-	// 时，纯周期路径永不重建任务行（CreateOrRequeueCertJob 仅由规则写路径
-	// 调用），自动续签永久断链且 UI 无信号——409 显式拒绝；运维可先禁用
-	// 规则或切换证书来源后再删除，与既有 disabled-flow 语义一致。
-	if status == "issued" || status == "downloaded" {
+	// R52 N4 + R54 S-2：删除持有证书的 issued/downloaded 任务、或删除仍在
+	// 自动签发链中等待的 failed/waiting_ca/queued 任务，且规则仍在自动签发
+	// 状态时，纯周期路径永不重建任务行（CreateOrRequeueCertJob 仅由规则写
+	// 路径调用），自动签发/续签永久断链且 UI 无信号——409 显式拒绝；运维可
+	// 先禁用规则或切换证书来源后再删除，与既有 disabled-flow 语义一致。
+	// 在途执行态（pending/processing/creating_*/order_*/presenting_dns/
+	// waiting_propagation/dns_propagated/accepting_challenge/validating/
+	// validated/finalizing/finalized/downloading/waiting_order_* 及
+	// cleanup_dns/cleanup_warning）不在守卫内：删除是中断在途尝试的显式
+	// 运维手段（cancelCertJob 即时取消执行，删除失败恢复路径会重新排队），
+	// 封锁它会移除卡死签发的唯一中止通道。disabled 为退役终态，删除即清理。
+	// 已知竞态（R54 S-5）：DeleteRule drain 超时后的后台补偿（不持
+	// caddyOpMu）在退避窗口内按规则快照 DELETE+INSERT 恢复 cert_jobs，
+	// 可能复活窗口内被本函数删除的行——恢复是保守选择（复活行来自规则自身
+	// 快照时代，续签链保持完整；退避有界，窗口过后可再次删除）。
+	if guarded, message := certJobDeleteGuard(status); guarded {
 		var active int
 		if err := db.DB.QueryRow(`SELECT COUNT(1) FROM lb_rules
 			WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns'
@@ -397,7 +427,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 			return
 		}
 		if active > 0 {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "该任务持有有效证书且关联规则仍在自动签发状态，删除后自动续签将中断且无法自动恢复；请先禁用规则或切换证书来源后再删除"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: message})
 			return
 		}
 	}

@@ -28,6 +28,11 @@ var (
 	cancelRuleJobsTimeout = 2 * time.Minute
 )
 
+// enableCertJobResumePreUpdateHook 是测试专用钩子：在 EnableRule 的
+// EnableCertJobResume 分支 UPDATE 之前触发，用于模拟 SELECT 与 UPDATE 之间
+// 任务行被并发删除（R54 S-3 RowsAffected 校验的回归测试）。
+var enableCertJobResumePreUpdateHook func(jobID int)
+
 func (h *Handlers) ListRules(c *gin.Context) {
 	rows, err := db.DB.Query(`SELECT ` + lbRuleListColumns + ` FROM lb_rules ORDER BY id`)
 	if err != nil {
@@ -2496,8 +2501,20 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		case EnableCertJobKeep:
 			recordAudit(c, "启用", "证书任务", fmt.Sprintf("启用规则 %s，证书有效（过期前%d天续签），保持现有证书", caddyID, renewalDays))
 		case EnableCertJobResume:
-			if _, err := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书有效，已恢复使用', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?", jobID); err != nil {
+			if enableCertJobResumePreUpdateHook != nil {
+				enableCertJobResumePreUpdateHook(jobID)
+			}
+			// R54 S-3：UPDATE 无状态 CAS，任何未来在上方 SELECT 与此处之间
+			// 删除行的路径都会 0 行命中，「启用成功但任务行不存在、续签链断」
+			// 被审计文案掩盖——核对 RowsAffected==1，否则按失败补偿。
+			resumeResult, err := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书有效，已恢复使用', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?", jobID)
+			if err != nil {
 				failEnable("恢复证书任务失败: " + err.Error())
+				return
+			}
+			resumed, err := resumeResult.RowsAffected()
+			if err != nil || resumed != 1 {
+				failEnable("恢复证书任务失败：任务行不存在或已被并发变更")
 				return
 			}
 			recordAudit(c, "启用", "证书任务", fmt.Sprintf("启用规则 %s，证书仍有效，恢复使用现有证书", caddyID))

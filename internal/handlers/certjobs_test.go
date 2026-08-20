@@ -148,6 +148,69 @@ func TestRetryCertJob_accepts_www_first_rule_domain(t *testing.T) {
 	}
 }
 
+func TestDeleteCertJob_blocks_pending_chain_job_when_rule_still_auto_issuing(t *testing.T) {
+	// S-2：failed/waiting_ca/queued 是「等待签发或等待重试」的被动状态——规则
+	// 保持 active acme_dns 时删除会让该域名自动签发链永久断链且 UI 零信号
+	// （周期路径只重排已存在行，CreateOrRequeueCertJob 仅规则写路径调用），
+	// 与 issued/downloaded 守卫同型，必须 409 显式拒绝。
+	for _, status := range []string{"failed", "waiting_ca", "queued"} {
+		t.Run(status, func(t *testing.T) {
+			h := newBackupTestHandlers(t)
+			if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+				VALUES ('lb_pending','pending','http','pending.example.test',8080,1,1,'acme_dns');
+				INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_pending','pending.example.test',?)`, status); err != nil {
+				t.Fatalf("seed active rule and %s job: %v", status, err)
+			}
+			router := gin.New()
+			router.DELETE("/jobs/:id", h.DeleteCertJob)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/jobs/1", nil))
+			if response.Code != http.StatusConflict {
+				t.Fatalf("status=%d body=%s, want 409", response.Code, response.Body.String())
+			}
+			if !strings.Contains(response.Body.String(), "自动签发") {
+				t.Fatalf("body=%s, want 自动签发中断提示", response.Body.String())
+			}
+			var got string
+			if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=1").Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != status {
+				t.Fatalf("status=%q, want %s（409 不得改变任务状态）", got, status)
+			}
+		})
+	}
+}
+
+func TestDeleteCertJob_allows_pending_chain_job_when_rule_disabled(t *testing.T) {
+	// S-2 放行形态（与既有 disabled-flow 语义一致）：规则已禁用时签发链本就
+	// 停摆，删除 failed/waiting_ca/queued 任务不影响任何链，照常放行。
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_retiring','retiring','http','retiring.example.test',8080,0,1,'acme_dns');
+		INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_retiring','retiring.example.test','failed'),
+		                                                     ('lb_retiring','retiring2.example.test','waiting_ca'),
+		                                                     ('lb_retiring','retiring3.example.test','queued')`); err != nil {
+		t.Fatalf("seed disabled rule and pending jobs: %v", err)
+	}
+	router := gin.New()
+	router.DELETE("/jobs/:id", h.DeleteCertJob)
+	for _, id := range []string{"1", "2", "3"} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/jobs/"+id, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("DELETE /jobs/%s status=%d body=%s, want 200", id, response.Code, response.Body.String())
+		}
+	}
+	var count int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("job count=%d, want 0（三条任务均应被删除）", count)
+	}
+}
+
 func TestDeleteCertJob_blocks_issued_job_when_rule_still_auto_renewing(t *testing.T) {
 	// R52 N4：删除 issued 任务行后纯周期路径永不重建（CreateOrRequeueCertJob
 	// 仅由规则写路径调用），规则自动续签永久断链且 UI 无信号——规则仍在
@@ -377,6 +440,44 @@ func TestCertJobOperationLock_serializes_retry_and_delete(t *testing.T) {
 	case <-secondEntered:
 	case <-time.After(time.Second):
 		t.Fatal("second operation did not enter after first operation released the job lock")
+	}
+}
+
+func TestRetryCertJob_does_not_acquire_caddyOpMu(t *testing.T) {
+	// S-6 锁序回归网：DeleteCertJob 以 caddyOpMu→certJobOperationLock 顺序持锁，
+	// RetryCertJob 只持 certJobOperationLock。若未来 RetryCertJob 在 operationLock
+	// 临界区内再获取 caddyOpMu，即与 DeleteCertJob 构成 AB-BA 死锁——现有测试
+	// 对此全部绿灯，此处用临界区内 TryLock 探针断言该不变量。
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil })
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_lockprobe','lockprobe','http','lockprobe.example.test',8080,0,1,'acme_dns');
+		INSERT INTO cert_jobs (rule_id,domain,status,updated_at) VALUES ('lb_lockprobe','lockprobe.example.test','failed',datetime('now','-10 minutes'))`); err != nil {
+		t.Fatalf("seed lock probe job: %v", err)
+	}
+	probed := false
+	oldHook := retryCertJobPreEnqueueHook
+	retryCertJobPreEnqueueHook = func(int) {
+		probed = true
+		// 钩子运行于 operationLock 临界区内：caddyOpMu 此刻必须可获取。
+		if !h.caddyOpMu.TryLock() {
+			t.Error("RetryCertJob 在 operationLock 临界区内持有 caddyOpMu（与 DeleteCertJob 构成 AB-BA 死锁）")
+			return
+		}
+		h.caddyOpMu.Unlock()
+	}
+	t.Cleanup(func() { retryCertJobPreEnqueueHook = oldHook })
+	router := gin.New()
+	router.POST("/jobs/:id/retry", h.RetryCertJob)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/jobs/1/retry", nil))
+	if !probed {
+		t.Fatal("pre-enqueue hook 未触发，TryLock 探针无效")
+	}
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409（规则禁用）", response.Code, response.Body.String())
 	}
 }
 
