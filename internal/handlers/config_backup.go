@@ -222,9 +222,11 @@ func normalizeBackupBooleanNulls(tables map[string][]map[string]any) {
 	}
 }
 
-// validateBackupRuleReferences 写入前校验 upstreams/path_rules 的 rule_id 均存在于备份自带的
-// lb_rules：悬挂引用靠 FK 在删表后以 500 回滚兜底，与 cert_jobs 的显式清理语义不一致；
-// 提前转为 400 校验错误，保证校验不过零写入。
+// validateBackupRuleReferences 写入前校验跨表引用均存在于备份自带的数据：
+// upstreams/path_rules 的 rule_id ∈ lb_rules（悬挂引用靠 FK 在删表后以 500 回滚兜底，
+// 与 cert_jobs 的显式清理语义不一致；提前转为 400 校验错误，保证校验不过零写入），
+// 以及 security_policy_bindings 的 rule_caddy_id ∈ lb_rules、policy_id ∈ security_policies
+// （该表无外键，无 FK 兜底，见 R49 C-#2）。
 func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 	ruleIDs := make(map[string]struct{}, len(tables["lb_rules"]))
 	for _, row := range tables["lb_rules"] {
@@ -238,6 +240,29 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 			if _, exists := ruleIDs[ruleID]; !exists {
 				return fmt.Errorf("备份校验失败：%s 第 %d 行引用了不存在的规则 %q", table, i+1, ruleID)
 			}
+		}
+	}
+	// R49 C-#2：security_policy_bindings 无外键约束，悬挂引用可原样落库——绑定指向
+	// 不存在的策略时，loadSecurityPolicyContext 查不到策略即按无策略渲染，该规则
+	// WAF/限流/GeoIP 全部静默失效（与 R47 B-5 同类的静默 weakening）。保存侧绑定
+	// 要求策略与规则均存在，导入校验须同严。
+	policyIDs := make(map[int]struct{}, len(tables["security_policies"]))
+	for _, row := range tables["security_policies"] {
+		if id, ok := backupInteger(row["id"]); ok {
+			policyIDs[id] = struct{}{}
+		}
+	}
+	for i, row := range tables["security_policy_bindings"] {
+		ruleID, _ := row["rule_caddy_id"].(string)
+		if _, exists := ruleIDs[ruleID]; !exists {
+			return fmt.Errorf("备份校验失败：security_policy_bindings 第 %d 行引用了不存在的规则 %q", i+1, ruleID)
+		}
+		policyID, ok := backupInteger(row["policy_id"])
+		if !ok {
+			return fmt.Errorf("备份校验失败：security_policy_bindings 第 %d 行 policy_id 必须为整数", i+1)
+		}
+		if _, exists := policyIDs[policyID]; !exists {
+			return fmt.Errorf("备份校验失败：security_policy_bindings 第 %d 行引用了不存在的安全策略 %d", i+1, policyID)
 		}
 	}
 	return nil

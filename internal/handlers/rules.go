@@ -1749,8 +1749,16 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				// R48-2：迁移事务开启失败不能静默吞掉——任务仍持旧域，后续会为
 				// 新域另建任务，破坏「一规则一任务」。规则主更新已提交且用户请求
 				// 本身有效，此时回滚规则是错误语义；记录错误并继续：新任务按
-				// 既有 needJob 路径创建，旧域残留任务留待孤儿清扫收敛。
+				// 既有 needJob 路径创建。
+				// R49 C-#1：旧域残留任务不会被孤儿清扫收敛（sweepOrphanedCertJobs
+				// 跳过终态，'issued'+PEM 行将永驻），须在此显式退役旧域任务，
+				// 与迁移成功路径的退役语义对齐（保留 PEM 作历史，仅转终态）。
 				services.Logf("error", "UpdateRule: cert job domain migration begin failed for caddy_id=%s: %v", caddyID, txErr)
+				if _, retireErr := db.DB.Exec(
+					`UPDATE cert_jobs SET status='disabled', message='域名迁移事务开启失败，旧域任务退役', updated_at=datetime('now') WHERE rule_id=? AND domain=?`,
+					caddyID, canonicalACMEDomainForJobLookup(existingRule.Domain)); retireErr != nil {
+					services.Logf("error", "CRITICAL: UpdateRule: failed to retire old-domain cert job after migration begin failure for caddy_id=%s: %v", caddyID, retireErr)
+				}
 			} else {
 				var existingJobID int
 				queryErr := certTx.QueryRow(
@@ -1905,6 +1913,11 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 				Drain: func(ctx context.Context) error { return drainRuleJobs(ctx, queueManager, caddyID) },
 			}); err != nil {
 				services.Logf("error", "CRITICAL: DeleteRule failed to start certificate compensation for caddy_id=%s: %v", caddyID, err)
+				// R49 A-N1：补偿启动失败即无人持有该 token（典型为降级竞态：Stop 清空
+				// blockedRules 后 block 才创建），必须当场释放租约，否则节点重新提升后
+				// 该规则证书任务被屏障永久拦截、静默停发直到下一次 Stop。对运行中的
+				// manager 同样幂等安全。
+				queueManager.UnblockJobsForRule(caddyID, blockToken)
 			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "取消证书任务超时，规则与证书保持不变: " + cancelErr.Error()})
 			return
@@ -1919,6 +1932,8 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 			RuleID: caddyID, Token: blockToken, Snapshot: certJobsSnapshot,
 		}); err != nil {
 			services.Logf("error", "CRITICAL: DeleteRule failed to start certificate rollback compensation for caddy_id=%s: %v", caddyID, err)
+			// R49 A-N1：同上——补偿未能接管租约时立即释放，不留孤儿屏障。
+			queueManager.UnblockJobsForRule(caddyID, blockToken)
 		}
 	}()
 
