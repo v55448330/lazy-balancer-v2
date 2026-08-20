@@ -358,6 +358,67 @@ func TestUntarGzTo_midCopyFailure_restoresPureOldTree(t *testing.T) {
 	}
 }
 
+func TestUntarGzTo_removeAllFailure_attemptsBackupRestore(t *testing.T) {
+	// R49 A-N2：rename 失败后 os.RemoveAll(destDir) 失败时 backup 已就绪，
+	// 必须与 copyDir 失败分支对称地尝试从 backup 恢复（先清空再复制），恢复
+	// 错误 errors.Join 并入返回；而非直接 return 留下部分删除的旧树。
+	// Given：非空旧树（locked/ 0555 使 RemoveAll 失败但 backup 复制可读）+ 合法同步包
+	destDir := filepath.Join(t.TempDir(), "crs")
+	locked := filepath.Join(destDir, "locked")
+	if err := os.MkdirAll(locked, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destDir, "old.conf"), []byte("SecRule OLD"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "inner.conf"), []byte("SecRule LOCKED"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0555); err != nil {
+		t.Fatal(err)
+	}
+	backup := destDir + ".sync-bak"
+	t.Cleanup(func() {
+		_ = os.Chmod(locked, 0755)
+		_ = os.Chmod(filepath.Join(backup, "locked"), 0755)
+		_ = os.RemoveAll(destDir)
+		_ = os.RemoveAll(backup)
+	})
+	newTree := t.TempDir()
+	if err := os.WriteFile(filepath.Join(newTree, "a-new.conf"), []byte("SecRule NEW"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	data, _, err := tarGzDir(newTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	err = untarGzTo(data, destDir, "")
+
+	// Then：返回错误同时包含清空失败与恢复尝试（恢复不得被跳过）
+	if err == nil {
+		t.Fatal("err=nil, want 清空目标规则树 failure（locked/ 应使 RemoveAll 失败）")
+	}
+	if !strings.Contains(err.Error(), "清空目标规则树") {
+		t.Fatalf("err=%v, want 清空目标规则树 failure context", err)
+	}
+	if !strings.Contains(err.Error(), "恢复旧树") {
+		t.Fatalf("err=%v, want backup restore attempt joined into the returned error（RemoveAll 失败分支跳过恢复，恢复面不对称）", err)
+	}
+	// 旧树未损的部分仍在，新树文件不得残留
+	if got, readErr := os.ReadFile(filepath.Join(locked, "inner.conf")); readErr != nil || string(got) != "SecRule LOCKED" {
+		t.Fatalf("locked/inner.conf=(%q,%v), want intact（RemoveAll 失败的旧树残留不得被新树污染）", got, readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(destDir, "a-new.conf")); !os.IsNotExist(statErr) {
+		t.Fatal("a-new.conf residue（新树文件不得出现在失败的清空路径）")
+	}
+	// backup 保留完整旧树，供下一轮同步兜底
+	if got, readErr := os.ReadFile(filepath.Join(backup, "old.conf")); readErr != nil || string(got) != "SecRule OLD" {
+		t.Fatalf("backup old.conf=(%q,%v), want intact backup tree", got, readErr)
+	}
+}
+
 func TestUntarGzTo_restoreFailure_joinedIntoReturnedError(t *testing.T) {
 	// R48 A-F3：恢复（清空+从 backup 复制）自身的错误不得被 `_ =` 吞掉，必须
 	// 并入返回错误。destDir 写入 32MB 新文件的窗口内注入只读子目录，使恢复路径

@@ -332,24 +332,33 @@ func untarGzTo(data []byte, destDir string, expectSum string) error {
 		// CRS 更新删除/改名规则文件后从端树为旧+新合并、tarGzDirSum 永不等于
 		// 声明哈希，漂移检测永不收敛（R47 A-#2）。
 		if err := os.RemoveAll(destDir); err != nil {
-			return fmt.Errorf("清空目标规则树: %w", err)
+			// R49 A-N2：backup 已就绪，清空失败同样尽力恢复，与下方 copyDir
+			// 失败分支恢复面对称；恢复错误并入返回，不吞掉。
+			return fmt.Errorf("清空目标规则树: %w", errors.Join(err, restoreWafTreeFromBackup(backup, destDir)))
 		}
 		if err := copyDir(staging, destDir); err != nil {
-			// 复制中途失败时 destDir 已被清空但可能残留部分新树文件——恢复必须先
-			// 整树清空再从 backup 复制，保证恢复结果为纯旧树而非旧+新混合树
-			// （R48 A-F3，对齐 :334 的清空语义）；恢复自身的错误并入返回错误，不吞掉。
-			if _, statErr := os.Stat(backup); statErr == nil {
-				if removeErr := os.RemoveAll(destDir); removeErr != nil {
-					return fmt.Errorf("安装同步规则集: %w", errors.Join(err, fmt.Errorf("清空目标规则树以恢复旧树: %w", removeErr)))
-				}
-				if restoreErr := copyDir(backup, destDir); restoreErr != nil {
-					return fmt.Errorf("安装同步规则集: %w", errors.Join(err, fmt.Errorf("从备份恢复旧树: %w", restoreErr)))
-				}
-			}
-			return fmt.Errorf("安装同步规则集: %w", err)
+			// 复制中途失败时 destDir 已被清空但可能残留部分新树文件——恢复自身的
+			// 错误并入返回错误，不吞掉（R48 A-F3）。
+			return fmt.Errorf("安装同步规则集: %w", errors.Join(err, restoreWafTreeFromBackup(backup, destDir)))
 		}
 	}
 	os.RemoveAll(backup)
+	return nil
+}
+
+// restoreWafTreeFromBackup 尽力从 backup 恢复 destDir：先整树清空再从备份复制，
+// 保证恢复结果为纯旧树而非旧+新混合树（R48 A-F3，对齐 untarGzTo 的清空语义）。
+// backup 不存在（备份时刻 destDir 不存在）时无可恢复对象，按空操作收尾。
+func restoreWafTreeFromBackup(backup, destDir string) error {
+	if _, statErr := os.Stat(backup); statErr != nil {
+		return nil
+	}
+	if removeErr := os.RemoveAll(destDir); removeErr != nil {
+		return fmt.Errorf("清空目标规则树以恢复旧树: %w", removeErr)
+	}
+	if restoreErr := copyDir(backup, destDir); restoreErr != nil {
+		return fmt.Errorf("从备份恢复旧树: %w", restoreErr)
+	}
 	return nil
 }
 
@@ -369,8 +378,6 @@ func sortStrings(s []string) {
 		}
 	}
 }
-
-var _ = context.Background
 
 // fetchWafFiles pulls the full file bundle from the master's on-demand
 // endpoint and verifies it against the snapshot reference before use.
