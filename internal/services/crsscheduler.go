@@ -71,7 +71,7 @@ func (m *CRSUpdateManager) StartScheduler() {
 	m.schedulerDone = done
 	go func() {
 		defer close(done)
-		m.schedulerTick(time.Now().UTC())
+		m.schedulerTick(time.Now().UTC(), stop)
 		ticker := time.NewTicker(m.schedulerInterval)
 		defer ticker.Stop()
 		for {
@@ -79,7 +79,7 @@ func (m *CRSUpdateManager) StartScheduler() {
 			case <-stop:
 				return
 			case now := <-ticker.C:
-				m.schedulerTick(now.UTC())
+				m.schedulerTick(now.UTC(), stop)
 			}
 		}
 	}()
@@ -101,7 +101,10 @@ func (m *CRSUpdateManager) StopScheduler() {
 }
 
 // SetMasterRole 按集群角色启停 CRS 自动更新调度器：主节点启动，从节点停止。
-// 角色切换（提升为主/降级为从）时调用；重复调用安全。
+// 角色切换（提升为主/降级为从）时调用；重复调用安全。停止立即生效（含等待
+// 在途更新的 rearm，R55-A-#1）；已启动的更新仍在后台有界跑完（fetch 30s +
+// 下载 5min + reload 30s），其在从节点上的写入由下次快照全量重放覆盖
+// （security 节在 driftGuardSections 内，drift 自愈）。
 func (m *CRSUpdateManager) SetMasterRole(isMaster bool) {
 	if isMaster {
 		m.StartScheduler()
@@ -110,7 +113,7 @@ func (m *CRSUpdateManager) SetMasterRole(isMaster bool) {
 	m.StopScheduler()
 }
 
-func (m *CRSUpdateManager) schedulerTick(now time.Time) {
+func (m *CRSUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
 		return
@@ -142,19 +145,26 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time) {
 	// StartUpdate 唯一错误是 ErrCRSUpdateRunning（已被 IsRunning 前置守卫排除），
 	// 启动失败退避分支不可达（R36 F4 删除）。
 	if err := m.StartUpdate("auto"); err == nil {
-		m.rearmAfterCRSUpdate(now)
+		m.rearmAfterCRSUpdate(now, stop)
 	}
 }
 
 // rearmAfterCRSUpdate 等待异步更新结束后复查结果：失败（网络瞬断等）时把
 // next_update 改为 1 小时后重试，成功维持运行前写入的 +24h 排程（R34 I：
-// 原先运行前写死 +24h，失败整天不重试）。
-func (m *CRSUpdateManager) rearmAfterCRSUpdate(now time.Time) {
+// 原先运行前写死 +24h，失败整天不重试）。等待可被 stop 打断（R55-A-#1）：
+// 降级时 StopScheduler 关闭 stop，调度立即退出而不被在途更新时长（有界
+// 6-7min）拖住；被打断时跳过失败退避重写——调度器已停，rearm 无意义，
+// 在途更新本身仍在后台完成。
+func (m *CRSUpdateManager) rearmAfterCRSUpdate(now time.Time, stop <-chan struct{}) {
 	m.mu.Lock()
 	runDone := m.runDone
 	m.mu.Unlock()
 	if runDone != nil {
-		<-runDone
+		select {
+		case <-runDone:
+		case <-stop:
+			return
+		}
 	}
 	m.mu.Lock()
 	failed := m.state.status == CRSStatusFailed

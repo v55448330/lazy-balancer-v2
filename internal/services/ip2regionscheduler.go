@@ -21,7 +21,7 @@ func (m *IP2RegionUpdateManager) StartScheduler() {
 	m.schedulerDone = done
 	go func() {
 		defer close(done)
-		m.schedulerTick(time.Now().UTC())
+		m.schedulerTick(time.Now().UTC(), stop)
 		ticker := time.NewTicker(m.schedulerInterval)
 		defer ticker.Stop()
 		for {
@@ -29,7 +29,7 @@ func (m *IP2RegionUpdateManager) StartScheduler() {
 			case <-stop:
 				return
 			case now := <-ticker.C:
-				m.schedulerTick(now.UTC())
+				m.schedulerTick(now.UTC(), stop)
 			}
 		}
 	}()
@@ -50,7 +50,9 @@ func (m *IP2RegionUpdateManager) StopScheduler() {
 	}
 }
 
-// SetMasterRole 按集群角色启停 ip2region 自动更新调度器：主节点启动，从节点停止。
+// SetMasterRole 按集群角色启停 ip2region 自动更新调度器：主节点启动，从节点
+// 停止。停止立即生效（含等待在途更新的 rearm，R55-A-#1）；已启动的更新仍在
+// 后台有界跑完，其在从节点上的写入由下次快照全量重放覆盖（drift 自愈）。
 func (m *IP2RegionUpdateManager) SetMasterRole(isMaster bool) {
 	if isMaster {
 		m.StartScheduler()
@@ -59,7 +61,7 @@ func (m *IP2RegionUpdateManager) SetMasterRole(isMaster bool) {
 	m.StopScheduler()
 }
 
-func (m *IP2RegionUpdateManager) schedulerTick(now time.Time) {
+func (m *IP2RegionUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 	var isMaster bool
 	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
 		return
@@ -91,18 +93,25 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time) {
 	// StartUpdate 唯一错误是 ErrIP2RegionUpdateRunning（已被 IsRunning 前置守卫
 	// 排除），启动失败退避分支不可达（R36 F4 删除）。
 	if err := m.StartUpdate("auto"); err == nil {
-		m.rearmAfterIP2RegionUpdate(now)
+		m.rearmAfterIP2RegionUpdate(now, stop)
 	}
 }
 
 // rearmAfterIP2RegionUpdate 等待异步更新结束后复查结果：失败（网络瞬断等）时把
 // next_update 改为 1 小时后重试，成功维持运行前写入的 +24h 排程（R34 I）。
-func (m *IP2RegionUpdateManager) rearmAfterIP2RegionUpdate(now time.Time) {
+// 等待可被 stop 打断（R55-A-#1）：降级时 StopScheduler 关闭 stop，调度立即
+// 退出而不被在途更新时长拖住；被打断时跳过失败退避重写，在途更新本身仍在
+// 后台完成。
+func (m *IP2RegionUpdateManager) rearmAfterIP2RegionUpdate(now time.Time, stop <-chan struct{}) {
 	m.mu.Lock()
 	runDone := m.runDone
 	m.mu.Unlock()
 	if runDone != nil {
-		<-runDone
+		select {
+		case <-runDone:
+		case <-stop:
+			return
+		}
 	}
 	m.mu.Lock()
 	failed := m.state.status == IP2RegionStatusFailed
