@@ -35,8 +35,19 @@ func SeedCRSRules() {
 }
 
 func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
-	if _, err := os.Stat(filepath.Join(liveDir, "rules")); err == nil {
-		return
+	rulesPath := filepath.Join(liveDir, "rules")
+	if _, err := os.Stat(rulesPath); err == nil {
+		if crsRulesTreeIntact(rulesPath) {
+			return
+		}
+		// R50 B-#5：崩溃窗口（moveTree copyDir 回退直写 live 中途崩溃）留下的
+		// 部分残树——目录存在但探针缺失，按缺失处理：清除后重新播种。ReconcileCRSState
+		// 只按版本标记对账，发现不了这种退化。
+		log.Printf("crs seed: live rules tree %s is incomplete (missing %s), reseeding", rulesPath, crsRulesProbeFile)
+		if err := os.RemoveAll(rulesPath); err != nil {
+			log.Printf("crs seed: failed to clear incomplete rules tree %s: %v", rulesPath, err)
+			return
+		}
 	}
 	// The bind mount also hides the aux dirs referenced by the generated WAF
 	// config (SecAuditLog lives under waf/audit), so recreate the skeleton.

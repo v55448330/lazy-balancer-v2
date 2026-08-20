@@ -37,6 +37,7 @@ func TestSeedCRSRules_liveRulesPresentIsNoOp(t *testing.T) {
 	snapshotDir := filepath.Join(root, "data", "crs")
 	distDir := filepath.Join(root, "waf.dist", "crs")
 	writeTestFile(t, filepath.Join(liveDir, "rules", "REQUEST-900.conf"), "SecRule live")
+	writeTestFile(t, filepath.Join(liveDir, "rules", crsRulesProbeFile), "SecRule init")
 
 	// When seeding
 	seedCRSRulesFrom(liveDir, snapshotDir, distDir)
