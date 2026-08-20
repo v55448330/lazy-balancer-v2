@@ -1492,3 +1492,38 @@ func TestSyncService_run_clampsSubMinimumSyncInterval(t *testing.T) {
 		t.Fatal("run 循环未在 5s 内进入首个 waitDelay")
 	}
 }
+
+func TestDecodeSnapshotEnvelope_rejectsBodyOverSizeLimit(t *testing.T) {
+	// R51 发现4：Pull 快照响应体必须有大小上限——恶意/膨胀主节点下发的超大
+	// body 不得全量解码入内存，超限按解析失败（ValidationFailed）处理。
+	// Given：上限被调低，合法 envelope 超过该上限
+	old := maxSnapshotResponseBytes
+	maxSnapshotResponseBytes = 64
+	t.Cleanup(func() { maxSnapshotResponseBytes = old })
+	oversized := `{"data":{"version":1,"fingerprint":"` + strings.Repeat("a", 128) + `"}}`
+
+	// When
+	_, err := decodeSnapshotEnvelope(strings.NewReader(oversized))
+
+	// Then
+	if err == nil {
+		t.Fatal("oversized snapshot body decoded without error")
+	}
+}
+
+func TestDecodeSnapshotEnvelope_decodesBodyWithinLimit(t *testing.T) {
+	// Given
+	const token = "cluster-token"
+	payload, err := json.Marshal(map[string]any{"data": signedTestSnapshot(1, token)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	snapshot, err := decodeSnapshotEnvelope(strings.NewReader(string(payload)))
+
+	// Then
+	if err != nil || snapshot.Version != 1 {
+		t.Fatalf("snapshot=(version=%d) err=%v, want version=1 decoded", snapshot.Version, err)
+	}
+}

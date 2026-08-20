@@ -511,6 +511,23 @@ func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, 
 	return envelope.Data, nil
 }
 
+// maxSnapshotResponseBytes caps the Pull snapshot response body: 合法快照内嵌
+// 证书 PEM 与 WAF 引用，256MB 留足余量，同时约束恶意/异常膨胀主节点的内存
+// 占用（同链路 waf-files 端点为 64MB，仅承载规则包）。超限即解析失败。
+var maxSnapshotResponseBytes int64 = 256 << 20
+
+// decodeSnapshotEnvelope 解码 Pull 快照响应，响应体经 maxSnapshotResponseBytes
+// 限流——超限时 JSON 截断报错，调用方按 ValidationFailed 处理。
+func decodeSnapshotEnvelope(body io.Reader) (models.ClusterSnapshot, error) {
+	var envelope struct {
+		Data models.ClusterSnapshot `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(body, maxSnapshotResponseBytes)).Decode(&envelope); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
+	return envelope.Data, nil
+}
+
 func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	if err := s.beginPull(); err != nil {
 		err = newSyncFailure(models.SyncErrorCodeValidationFailed, err)
@@ -648,9 +665,11 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	var envelope struct {
 		Data models.ClusterSnapshot `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+	snapshotData, err := decodeSnapshotEnvelope(resp.Body)
+	if err != nil {
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, fmt.Errorf("解析集群快照: %w", err))
 	}
+	envelope.Data = snapshotData
 	var currentMasterURL, currentToken string
 	if err := s.db.QueryRowContext(ctx, `SELECT is_master, COALESCE(master_url,''), COALESCE(cluster_token,''), COALESCE(applied_version,0) FROM global_config WHERE id=1`).Scan(&isMaster, &currentMasterURL, &currentToken, &appliedVersion); err != nil {
 		return SyncResult{}, newSyncFailure(models.SyncErrorCodeTransportError, fmt.Errorf("重读同步状态: %w", err))
