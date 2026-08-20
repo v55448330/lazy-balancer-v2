@@ -578,7 +578,8 @@ const deleteConfig = async (config: CertConfig) => {
     await ElMessageBox.confirm(`确定要删除配置 "${config.name}" 吗？`, '删除确认', { type: 'warning' })
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
-    throw error
+    console.error('Failed to confirm cert config deletion:', error)
+    return
   }
   if (deletingId.value !== null) return
   deletingId.value = configId
