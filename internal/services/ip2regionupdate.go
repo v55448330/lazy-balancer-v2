@@ -173,6 +173,14 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 		m.mu.Unlock()
 	}()
 
+	// 起点角色复查（R54-N5）：与 CRS 更新同一 demote 竞态窗口——tick 越过
+	// is_master 守卫后节点被降级时，从节点上的 in-flight 更新必须立即终止。
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,0) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		m.setStage(IP2RegionStatusFailed, "当前节点为从节点，终止 IP2Region 更新")
+		return
+	}
+
 	// 每次运行重置：rollbackXDB 仅消费本运行创建的 .bak（R40 F1）。
 	m.bakCreated = false
 

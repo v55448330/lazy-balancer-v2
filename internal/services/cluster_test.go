@@ -30,6 +30,20 @@ func (f *clusterLifecycleFake) StopACME()  {}
 func (f *clusterLifecycleFake) StartSync() { f.syncStarted = true }
 func (f *clusterLifecycleFake) StopSync()  { f.syncStopped = true }
 
+// v3SnapshotWithACMESection 将直调 applySnapshot 的夹具补齐为生产可达形态：
+// 生产快照经 verifiedSnapshotIntegrity 闸门后必为当前 schema 且携带 ACME
+// 区段；validateSnapshotACMEState 对缺区段统一硬拒（R54 S-4 移除 v2 放行
+// 死分支后，未设 SchemaVersion/ACME 的旧夹具会被拒）。
+func v3SnapshotWithACMESection(snapshot models.ClusterSnapshot) models.ClusterSnapshot {
+	snapshot.SchemaVersion = CurrentSnapshotSchema
+	snapshot.ACME = &models.ClusterACMEState{
+		CAProviders:        []models.CAProvider{},
+		CertificateConfigs: []models.CertificateConfig{},
+		DNSOwnership:       json.RawMessage(`{"version":1,"records":[]}`),
+	}
+	return snapshot
+}
+
 func newClusterTestService(t *testing.T) (*ClusterService, *sql.DB) {
 	t.Helper()
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
@@ -849,7 +863,7 @@ func TestSyncService_applySnapshot_inherits_version_for_promotion(t *testing.T) 
 	}))
 	defer caddyServer.Close()
 	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
-	if err := syncService.applySnapshot(context.Background(), models.ClusterSnapshot{Version: 100}); err != nil {
+	if err := syncService.applySnapshot(context.Background(), v3SnapshotWithACMESection(models.ClusterSnapshot{Version: 100})); err != nil {
 		t.Fatalf("apply version 100: %v", err)
 	}
 
@@ -881,11 +895,11 @@ func TestSyncService_applySnapshot_keeps_committed_snapshot_when_caddy_rejects_c
 	defer caddyServer.Close()
 	cfg := &config.Config{CaddyAdminURL: caddyServer.URL}
 	syncService := NewSyncService(database, cfg, NewCaddyService(caddyServer.URL))
-	snapshot := models.ClusterSnapshot{
+	snapshot := v3SnapshotWithACMESection(models.ClusterSnapshot{
 		Version:       2,
 		Users:         []models.ClusterUser{{ID: 99, Username: "incoming", PasswordHash: "hash", Role: "admin", IsEnabled: true}},
 		BasicSettings: models.ClusterBasicSettings{LogLevel: "info", AccessLogJSON: true, Timezone: "Asia/Shanghai"},
-	}
+	})
 
 	// When
 	err := syncService.applySnapshot(context.Background(), snapshot)
@@ -925,7 +939,7 @@ func TestSyncService_applySnapshot_invalidates_cache_only_after_commit(t *testin
 	}))
 	defer caddyServer.Close()
 	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
-	snapshotA := models.ClusterSnapshot{Version: 1, Users: []models.ClusterUser{{ID: 1, Username: "user-a", PasswordHash: "hash", Role: "admin", IsEnabled: true}}, BasicSettings: models.ClusterBasicSettings{LogLevel: "info", Timezone: "Asia/Shanghai"}}
+	snapshotA := v3SnapshotWithACMESection(models.ClusterSnapshot{Version: 1, Users: []models.ClusterUser{{ID: 1, Username: "user-a", PasswordHash: "hash", Role: "admin", IsEnabled: true}}, BasicSettings: models.ClusterBasicSettings{LogLevel: "info", Timezone: "Asia/Shanghai"}})
 	if err := syncService.applySnapshot(context.Background(), snapshotA); err != nil {
 		t.Fatalf("apply snapshot A: %v", err)
 	}
@@ -934,7 +948,7 @@ func TestSyncService_applySnapshot_invalidates_cache_only_after_commit(t *testin
 		t.Fatalf("cache snapshot A=%#v err=%v", cachedA.Users, err)
 	}
 
-	snapshotB := models.ClusterSnapshot{Version: 2, Users: []models.ClusterUser{{ID: 2, Username: "user-b", PasswordHash: "hash", Role: "admin", IsEnabled: true}}, BasicSettings: snapshotA.BasicSettings}
+	snapshotB := v3SnapshotWithACMESection(models.ClusterSnapshot{Version: 2, Users: []models.ClusterUser{{ID: 2, Username: "user-b", PasswordHash: "hash", Role: "admin", IsEnabled: true}}, BasicSettings: snapshotA.BasicSettings})
 	if err := syncService.applySnapshot(context.Background(), snapshotB); err != nil {
 		t.Fatalf("apply snapshot B: %v", err)
 	}
@@ -944,7 +958,7 @@ func TestSyncService_applySnapshot_invalidates_cache_only_after_commit(t *testin
 	}
 
 	reject = true
-	snapshotC := models.ClusterSnapshot{Version: 3, Users: []models.ClusterUser{{ID: 3, Username: "user-c", PasswordHash: "hash", Role: "admin", IsEnabled: true}}, BasicSettings: snapshotA.BasicSettings}
+	snapshotC := v3SnapshotWithACMESection(models.ClusterSnapshot{Version: 3, Users: []models.ClusterUser{{ID: 3, Username: "user-c", PasswordHash: "hash", Role: "admin", IsEnabled: true}}, BasicSettings: snapshotA.BasicSettings})
 	// Caddy 拒绝不再回滚快照：提交照常发生，缓存随之失效并重建为 user-c。
 	if err := syncService.applySnapshot(context.Background(), snapshotC); err != nil {
 		t.Fatalf("snapshot C apply: %v", err)
@@ -970,9 +984,9 @@ func TestSyncService_restart_callback_runs_when_synced_admin_TLS_changes(t *test
 	}))
 	defer caddyServer.Close()
 	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
-	snapshot := models.ClusterSnapshot{Version: 2, BasicSettings: models.ClusterBasicSettings{
+	snapshot := v3SnapshotWithACMESection(models.ClusterSnapshot{Version: 2, BasicSettings: models.ClusterBasicSettings{
 		LogLevel: "info", AccessLogJSON: true, Timezone: "Asia/Shanghai", AdminTLSEnabled: true, AdminTLSMode: "selfsigned",
-	}}
+	}})
 
 	// When
 	if err := syncService.applySnapshot(context.Background(), snapshot); err != nil {

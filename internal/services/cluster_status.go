@@ -29,6 +29,16 @@ func (s *ClusterService) BecomeSlave(ctx context.Context, masterURL string, regi
 		s.lifecycle.StopACME()
 		s.lifecycle.StartSync()
 	}
+	// 与 Promote 的 SetMasterRole(true) 对称（R54-N5）：降级时停掉 CRS/IP2Region
+	// 自动更新调度器。tick 首行的 is_master 守卫只能拦住未发起的 tick；已越过
+	// 守卫的 in-flight 更新会在从节点上继续写版本行、替换规则树并 reload，
+	// 瞬时打破从节点只读不变量。
+	if crsManager := GetCRSUpdateManager(); crsManager != nil {
+		crsManager.SetMasterRole(false)
+	}
+	if ip2regionMgr := GetIP2RegionUpdateManager(); ip2regionMgr != nil {
+		ip2regionMgr.SetMasterRole(false)
+	}
 	ResetConfigDrift()
 	return nil
 }
