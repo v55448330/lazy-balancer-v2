@@ -239,7 +239,8 @@ func r53BackupACMERule(acmeConfigID int) map[string]any {
 // 规则行时校验必须整包拒绝——导入为全量替换，坏行会绕过 R52 F-2 门直接
 // 投入运行（TLS 端口明文服务，无自愈）。引用优先在备份自带表解析
 // （deleteOrder 会清光 live 表），与 validateBackupRuleReferences 同哲学。
-func TestValidateV2BackupRules_rejects_bad_acme_rows(t *testing.T) {
+// R55 C-1：TLS 形态校验迁至 validateV2BackupTLSShape（冲突置禁用之后执行）。
+func TestValidateV2BackupTLSShape_rejects_bad_acme_rows(t *testing.T) {
 	tests := []struct {
 		name        string
 		tables      map[string][]map[string]any
@@ -288,10 +289,10 @@ func TestValidateV2BackupRules_rejects_bad_acme_rows(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			newBackupTestHandlers(t)
-			err := validateV2BackupRules(tt.tables)
+			err := validateV2BackupTLSShape(tt.tables)
 			if tt.wantErrText != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
-					t.Fatalf("validateV2BackupRules err=%v, want contains %q", err, tt.wantErrText)
+					t.Fatalf("validateV2BackupTLSShape err=%v, want contains %q", err, tt.wantErrText)
 				}
 				if !strings.Contains(err.Error(), "bak-acme") {
 					t.Fatalf("拒绝必须点名规则，实际: %v", err)
@@ -299,7 +300,7 @@ func TestValidateV2BackupRules_rejects_bad_acme_rows(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("validateV2BackupRules unexpected error: %v", err)
+				t.Fatalf("validateV2BackupTLSShape unexpected error: %v", err)
 			}
 		})
 	}

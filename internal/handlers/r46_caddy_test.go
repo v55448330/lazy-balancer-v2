@@ -53,9 +53,10 @@ func TestImportV1Config_normalizes_disabled_ssl_rule_without_cert(t *testing.T) 
 	}
 }
 
-// R46 C-B-1（v2 备份）: validateV2BackupRules 拒绝启用手动 TLS 空证书行时须点名
-// 违规规则，便于在整包备份中定位（镜像保存/启用侧 validateStoredRuleConfig 口径）。
-func TestValidateV2BackupRules_names_offending_rule(t *testing.T) {
+// R46 C-B-1（v2 备份）: 启用手动 TLS 空证书行被拒绝时须点名违规规则，便于在
+// 整包备份中定位（镜像保存/启用侧 validateStoredRuleConfig 口径）。
+// R55 C-1：TLS 形态校验迁至 validateV2BackupTLSShape（冲突置禁用之后执行）。
+func TestValidateV2BackupTLSShape_names_offending_rule(t *testing.T) {
 	// Given 一条启用、手动 TLS、无证书的备份规则行
 	rule := map[string]any{
 		"caddy_id": "lb_named_nocert", "name": "named-nocert", "protocol": "http",
@@ -64,11 +65,11 @@ func TestValidateV2BackupRules_names_offending_rule(t *testing.T) {
 	}
 
 	// When
-	err := validateV2BackupRules(map[string][]map[string]any{"lb_rules": {rule}})
+	err := validateV2BackupTLSShape(map[string][]map[string]any{"lb_rules": {rule}})
 
 	// Then 拒绝且错误信息点名规则名
 	if err == nil || !strings.Contains(err.Error(), "named-nocert") ||
 		!strings.Contains(err.Error(), "手动证书模式下必须提供 TLS 证书和私钥") {
-		t.Fatalf("validateV2BackupRules err=%v, want naming the offending rule", err)
+		t.Fatalf("validateV2BackupTLSShape err=%v, want naming the offending rule", err)
 	}
 }

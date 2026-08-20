@@ -27,7 +27,8 @@ func r54BackupTLSRule(tlsSource any) map[string]any {
 // （manual/acme_dns）——空串/垃圾值（如 'https'）此前两个分支都不命中、整包放行，
 // 导入后渲染侧 availableCerts 仅认 manual/acme_dns，该规则无证书 → TLS 端口明文服务。
 // 保存侧（rules.go）与启用侧（rule_features.go:697-699）均 400 此形态，导入不得更宽。
-func TestValidateV2BackupRules_rejects_unknown_tls_source(t *testing.T) {
+// R55 C-1：TLS 形态校验迁至 validateV2BackupTLSShape（冲突置禁用之后执行）。
+func TestValidateV2BackupTLSShape_rejects_unknown_tls_source(t *testing.T) {
 	tests := []struct {
 		name        string
 		tlsSource   any
@@ -48,10 +49,10 @@ func TestValidateV2BackupRules_rejects_unknown_tls_source(t *testing.T) {
 			if !tt.injectKey {
 				delete(rule, "tls_source")
 			}
-			err := validateV2BackupRules(map[string][]map[string]any{"lb_rules": {rule}})
+			err := validateV2BackupTLSShape(map[string][]map[string]any{"lb_rules": {rule}})
 			if tt.wantErrText != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
-					t.Fatalf("validateV2BackupRules err=%v, want contains %q", err, tt.wantErrText)
+					t.Fatalf("validateV2BackupTLSShape err=%v, want contains %q", err, tt.wantErrText)
 				}
 				if !strings.Contains(err.Error(), "bak-tls") {
 					t.Fatalf("拒绝必须点名规则，实际: %v", err)
@@ -59,7 +60,7 @@ func TestValidateV2BackupRules_rejects_unknown_tls_source(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("validateV2BackupRules unexpected error: %v", err)
+				t.Fatalf("validateV2BackupTLSShape unexpected error: %v", err)
 			}
 		})
 	}
@@ -67,25 +68,27 @@ func TestValidateV2BackupRules_rejects_unknown_tls_source(t *testing.T) {
 
 // R54 新发现1 对照组：禁用行 tls_source 为垃圾值不阻断导入（不参与渲染），
 // 与 R53 矩阵「禁用的 acme_dns 坏行不阻断导入」同口径。
-func TestValidateV2BackupRules_allows_disabled_rule_with_unknown_tls_source(t *testing.T) {
+// R55 C-1：TLS 形态校验迁至 validateV2BackupTLSShape（冲突置禁用之后执行）。
+func TestValidateV2BackupTLSShape_allows_disabled_rule_with_unknown_tls_source(t *testing.T) {
 	newBackupTestHandlers(t)
 	rule := r54BackupTLSRule("")
 	rule["enabled"] = 0
-	if err := validateV2BackupRules(map[string][]map[string]any{"lb_rules": {rule}}); err != nil {
-		t.Fatalf("validateV2BackupRules unexpected error: %v", err)
+	if err := validateV2BackupTLSShape(map[string][]map[string]any{"lb_rules": {rule}}); err != nil {
+		t.Fatalf("validateV2BackupTLSShape unexpected error: %v", err)
 	}
 }
 
 // R54 新发现1（acme_dns 合法值仍走原有校验）：合法 acme_dns 行不因白名单误伤。
-func TestValidateV2BackupRules_allows_valid_acme_dns_row(t *testing.T) {
+// R55 C-1：TLS 形态校验迁至 validateV2BackupTLSShape（冲突置禁用之后执行）。
+func TestValidateV2BackupTLSShape_allows_valid_acme_dns_row(t *testing.T) {
 	newBackupTestHandlers(t)
 	tables := map[string][]map[string]any{
 		"lb_rules":            {r53BackupACMERule(7)},
 		"certificate_configs": {{"id": 7, "name": "dns", "enabled": 1}},
 		"cert_jobs":           {{"rule_id": "lb_bak_acme", "domain": "bak-acme.example.test", "status": "queued"}},
 	}
-	if err := validateV2BackupRules(tables); err != nil {
-		t.Fatalf("validateV2BackupRules unexpected error: %v", err)
+	if err := validateV2BackupTLSShape(tables); err != nil {
+		t.Fatalf("validateV2BackupTLSShape unexpected error: %v", err)
 	}
 	if err := validateV2BackupCertJobs(tables); err != nil {
 		t.Fatalf("validateV2BackupCertJobs unexpected error: %v", err)

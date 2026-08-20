@@ -59,7 +59,8 @@ func TestUpdateRule_rejects_unknown_protocol(t *testing.T) {
 
 // R43 F-C（v2 备份）: 启用的手动 TLS 规则证书/私钥为空时导入必须整包拒绝
 // （镜像 rule_features.go:648-651 保存/启用侧口径）；禁用行或 acme_dns 行放行。
-func TestValidateV2BackupRules_rejects_enabled_manual_tls_without_cert(t *testing.T) {
+// R55 C-1：TLS 形态校验迁至 validateV2BackupTLSShape（冲突置禁用之后执行）。
+func TestValidateV2BackupTLSShape_rejects_enabled_manual_tls_without_cert(t *testing.T) {
 	tests := []struct {
 		name        string
 		rule        map[string]any
@@ -101,15 +102,15 @@ func TestValidateV2BackupRules_rejects_enabled_manual_tls_without_cert(t *testin
 			for table, rows := range tt.extraTables {
 				tables[table] = rows
 			}
-			err := validateV2BackupRules(tables)
+			err := validateV2BackupTLSShape(tables)
 			if tt.wantErrText != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
-					t.Fatalf("validateV2BackupRules err=%v, want contains %q", err, tt.wantErrText)
+					t.Fatalf("validateV2BackupTLSShape err=%v, want contains %q", err, tt.wantErrText)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("validateV2BackupRules unexpected error: %v", err)
+				t.Fatalf("validateV2BackupTLSShape unexpected error: %v", err)
 			}
 		})
 	}
