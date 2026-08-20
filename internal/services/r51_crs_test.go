@@ -3,7 +3,10 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 // TestSeedCRSRules_degenerateSnapshotFallsBackToDist 验证 R51 F2(a)：快照源
@@ -38,9 +41,48 @@ func TestSeedCRSRules_degenerateSnapshotFallsBackToDist(t *testing.T) {
 	if got := readCRSVersionMarker(liveDir); got != CRSBundledVersion {
 		t.Fatalf("live marker=%q, want bundled %q", got, CRSBundledVersion)
 	}
-	// 快照留现场供诊断（与 restoreRulesBackup 的「拒绝+留现场」语义一致）
+	// R52 发现2：回退播种成功后快照被重建为健康树（不再永久留退化现场）——
+	// 快照 rules 携带探针、版本标记落 bundled（用户更新内容确已丢失，版本
+	// 记录由对账 CorrectDB 分支校正并留审计）。
+	if got := readCRSVersionMarker(snapshotDir); got != CRSBundledVersion {
+		t.Fatalf("snapshot marker=%q, want healed to bundled %q", got, CRSBundledVersion)
+	}
+	data, err = os.ReadFile(filepath.Join(snapshotDir, "rules", crsRulesProbeFile))
+	if err != nil || string(data) != "SecRule dist" {
+		t.Fatalf("snapshot must be rebuilt from the reseeded live tree: %q,%v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(snapshotDir, "rules", "REQUEST-900.conf")); !os.IsNotExist(err) {
+		t.Fatal("degenerate snapshot residue must be replaced by the healed tree")
+	}
+}
+
+// TestSeedCRSRules_degenerateSnapshotLeftInPlace_whenLiveTreeAlsoUnhealthy
+// 验证 R52 发现2 的边界：dist 源自身退化（缺探针）时播种出的 live 树也不
+// 健康，此时不得用不健康树回写快照——保留退化快照现场供诊断。
+func TestSeedCRSRules_degenerateSnapshotLeftInPlace_whenLiveTreeAlsoUnhealthy(t *testing.T) {
+	// Given 退化快照 + 退化的 dist（有 .conf 但缺探针）
+	root := t.TempDir()
+	liveDir := filepath.Join(root, "waf", "crs")
+	snapshotDir := filepath.Join(root, "data", "crs")
+	distDir := filepath.Join(root, "waf.dist", "crs")
+	if err := os.MkdirAll(liveDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(snapshotDir, "rules", "REQUEST-900.conf"), "SecRule partial-snapshot")
+	writeTestFile(t, filepath.Join(snapshotDir, "VERSION"), "v4.15.0\n")
+	writeTestFile(t, filepath.Join(distDir, "rules", "REQUEST-900.conf"), "SecRule broken-dist")
+	writeTestFile(t, filepath.Join(distDir, "crs-setup.conf"), "# dist setup")
+
+	// When 播种
+	seedCRSRulesFrom(liveDir, snapshotDir, distDir)
+
+	// Then 快照留现场（版本标记与残留内容均不被回写）
 	if got := readCRSVersionMarker(snapshotDir); got != "v4.15.0" {
-		t.Fatalf("snapshot marker=%q, want preserved v4.15.0", got)
+		t.Fatalf("snapshot marker=%q, want preserved v4.15.0 when live tree is also unhealthy", got)
+	}
+	data, err := os.ReadFile(filepath.Join(snapshotDir, "rules", "REQUEST-900.conf"))
+	if err != nil || string(data) != "SecRule partial-snapshot" {
+		t.Fatalf("degenerate snapshot content must be left in place: %q,%v", data, err)
 	}
 }
 
@@ -130,6 +172,83 @@ func TestReconcileCRSState_degenerateSnapshotNotAuthoritative(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(liveDir, "rules", "REQUEST-900.conf")); !os.IsNotExist(err) {
 		t.Fatal("partial snapshot content must not land in live rules")
+	}
+}
+
+// TestReconcileCRSState_degenerateSnapshotHealedFromHealthyLive 验证 R52
+// 发现2(a)：live 树完好且版本标记可确定时，对账用 live 树重建退化快照——
+// 用户更新版本得以保留，而不是等下次成功更新才自愈。
+func TestReconcileCRSState_degenerateSnapshotHealedFromHealthyLive(t *testing.T) {
+	// Given 完好的 live 树（标记 v4.15.0）+ 退化快照，DB 记录与 live 一致
+	root := t.TempDir()
+	liveDir := filepath.Join(root, "waf", "crs")
+	snapshotDir := filepath.Join(root, "data", "crs")
+	writeTestFile(t, filepath.Join(liveDir, "rules", crsRulesProbeFile), "SecRule live")
+	writeTestFile(t, filepath.Join(liveDir, crsVersionFile), "v4.15.0\n")
+	writeTestFile(t, filepath.Join(snapshotDir, "rules", "REQUEST-900.conf"), "SecRule partial")
+	writeTestFile(t, filepath.Join(snapshotDir, "VERSION"), "v4.15.0\n")
+
+	// When 启动对账
+	reconcileCRSStateFrom(liveDir, snapshotDir, "v4.15.0")
+
+	// Then 快照被重建为 live 的健康树（探针就位、版本仍为 v4.15.0）
+	data, err := os.ReadFile(filepath.Join(snapshotDir, "rules", crsRulesProbeFile))
+	if err != nil || string(data) != "SecRule live" {
+		t.Fatalf("snapshot must be rebuilt from the healthy live tree: %q,%v", data, err)
+	}
+	if got := readCRSVersionMarker(snapshotDir); got != "v4.15.0" {
+		t.Fatalf("snapshot marker=%q, want healed to live version v4.15.0", got)
+	}
+	if _, err := os.Stat(filepath.Join(snapshotDir, "rules", "REQUEST-900.conf")); !os.IsNotExist(err) {
+		t.Fatal("degenerate snapshot residue must be replaced by the healed tree")
+	}
+	// live 不受影响
+	data, err = os.ReadFile(filepath.Join(liveDir, "rules", crsRulesProbeFile))
+	if err != nil || string(data) != "SecRule live" {
+		t.Fatalf("live rules must be untouched: %q,%v", data, err)
+	}
+}
+
+// TestReconcileCRSState_correctDBLeavesAuditTrail 验证 R52 发现2(b)：
+// CorrectDB 分支把版本记录改写为磁盘实际版本时，用户更新成果被废弃必须留
+// 审计痕迹（action=恢复，resource=CRS规则库，detail 含新旧版本）。
+func TestReconcileCRSState_correctDBLeavesAuditTrail(t *testing.T) {
+	// Given 测试库（版本记录 v4.99.0）+ 完好的 live 树（标记 v4.27.0）、无快照
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("initialize test database: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if _, err := db.DB.Exec("INSERT OR REPLACE INTO security_crs_version (id, version) VALUES (1, 'v4.99.0')"); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	liveDir := filepath.Join(root, "waf", "crs")
+	snapshotDir := filepath.Join(root, "data", "crs")
+	writeTestFile(t, filepath.Join(liveDir, "rules", crsRulesProbeFile), "SecRule live")
+	writeTestFile(t, filepath.Join(liveDir, crsVersionFile), "v4.27.0\n")
+
+	// When 启动对账（disk≠DB 且无快照 → CorrectDB）
+	reconcileCRSStateFrom(liveDir, snapshotDir, "v4.99.0")
+
+	// Then 版本记录被校正，且审计留痕含新旧版本、不静默
+	var version string
+	if err := db.DB.QueryRow("SELECT version FROM security_crs_version WHERE id=1").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != "v4.27.0" {
+		t.Fatalf("crs version=%q, want corrected to v4.27.0", version)
+	}
+	var detail string
+	err := db.AuditDB.QueryRow("SELECT detail FROM audit_log WHERE action='恢复' AND resource='CRS规则库' ORDER BY id DESC LIMIT 1").Scan(&detail)
+	if err != nil {
+		t.Fatalf("CorrectDB must leave an audit trail: %v", err)
+	}
+	if !strings.Contains(detail, "v4.99.0") || !strings.Contains(detail, "v4.27.0") {
+		t.Fatalf("audit detail must name both old and corrected versions, got %q", detail)
 	}
 }
 

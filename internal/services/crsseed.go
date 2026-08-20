@@ -63,6 +63,7 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 	if data, err := os.ReadFile(filepath.Join(snapshotDir, "VERSION")); err == nil {
 		snapshotVersion = strings.TrimSpace(string(data))
 	}
+	snapshotDegenerate := false
 	snapshotRules := filepath.Join(snapshotDir, "rules")
 	if _, err := os.Stat(snapshotRules); err != nil {
 		snapshotVersion = "" // a snapshot without a rules tree is unusable
@@ -72,6 +73,7 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 		// 再清再播同源，跨重启循环。回退 dist，快照留现场供诊断。
 		log.Printf("crs seed: snapshot rules tree %s is incomplete (missing %s), falling back to dist", snapshotRules, crsRulesProbeFile)
 		snapshotVersion = ""
+		snapshotDegenerate = true
 	}
 	src := distDir
 	srcVersion := CRSBundledVersion
@@ -97,6 +99,25 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 	// 播种后落版本标记：对账逻辑据此区分「磁盘实际版本」与「数据库记录版本」。
 	writeCRSVersionMarker(liveDir, srcVersion)
 	log.Printf("crs seed: seeded %s from %s", liveDir, src)
+	// R52 发现2：退化快照回退播种成功后，用新播种的 live 树重建快照，让快照
+	// 自愈而不是永远停留在退化状态直到下次成功更新。
+	if snapshotDegenerate {
+		healDegenerateCRSSnapshot(liveDir, snapshotDir, srcVersion)
+	}
+}
+
+// healDegenerateCRSSnapshot 用健康 live 树重建退化快照（R52 发现2）。live 树
+// 自身也不健康（如 dist 源退化）或版本不可知时保留留现场语义，不做回写。
+func healDegenerateCRSSnapshot(liveDir, snapshotDir, version string) {
+	if version == "" || !crsRulesTreeIntact(filepath.Join(liveDir, "rules")) {
+		log.Printf("crs: live tree unhealthy or version unknown, leaving degenerate snapshot %s in place for diagnosis", snapshotDir)
+		return
+	}
+	if err := persistCRSSnapshotFrom(liveDir, snapshotDir, version); err != nil {
+		log.Printf("crs: failed to rebuild snapshot %s from live tree: %v", snapshotDir, err)
+		return
+	}
+	log.Printf("crs: rebuilt degenerate snapshot %s from live tree (%s)", snapshotDir, version)
 }
 
 // writeCRSVersionMarker records the on-disk CRS version under the live dir so
@@ -235,6 +256,7 @@ func ReconcileCRSState() {
 func reconcileCRSStateFrom(liveDir, snapshotDir, dbV string) {
 	snapV := readCRSVersionMarker(snapshotDir)
 	snapshotRulesExist := false
+	snapshotDegenerate := false
 	snapshotRules := filepath.Join(snapshotDir, "rules")
 	if _, err := os.Stat(snapshotRules); err == nil {
 		if crsRulesTreeIntact(snapshotRules) {
@@ -244,11 +266,17 @@ func reconcileCRSStateFrom(liveDir, snapshotDir, dbV string) {
 			// 退化快照会把 live 换成弱化树。按无快照处理并记录，快照留现场。
 			log.Printf("crs reconcile: snapshot rules tree %s is incomplete (missing %s), not treating it as authoritative", snapshotRules, crsRulesProbeFile)
 			snapV = ""
+			snapshotDegenerate = true
 		}
 	} else {
 		snapV = ""
 	}
 	liveV := readCRSVersionMarker(liveDir)
+	// R52 发现2：live 树完好且版本标记可确定时，用 live 树重建退化快照——
+	// 用户更新版本在容器重建前即被保留，不必等下次成功更新才自愈。
+	if snapshotDegenerate {
+		healDegenerateCRSSnapshot(liveDir, snapshotDir, liveV)
+	}
 	plan := planCRSReconcile(liveV, snapV, dbV, CRSBundledVersion, snapshotRulesExist, crsTreeProbeMatches(liveDir, snapshotDir))
 	switch plan.action {
 	case crsReconcileNone:
@@ -273,5 +301,7 @@ func reconcileCRSStateFrom(liveDir, snapshotDir, dbV string) {
 			return
 		}
 		log.Printf("crs reconcile: 版本记录已校正为磁盘实际版本 %s（原记录 %s）", plan.dbVersion, dbV)
+		// R52 发现2：原记录对应的更新成果随规则树丢失被静默废弃，必须留审计痕迹。
+		RecordAuditLog("system", "恢复", "CRS规则库", FormatAuditDetail(fmt.Sprintf("磁盘规则树与版本记录不一致，版本记录已从 %s 校正为磁盘实际版本 %s（原记录对应的更新成果已废弃）", dbV, plan.dbVersion), AuditResultPart("success")), "")
 	}
 }
