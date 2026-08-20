@@ -470,6 +470,9 @@ const confirmImport = async (): Promise<void> => {
       },
     )
     window.location.reload()
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to import config:', error)
   } finally {
     importing.value = false
   }

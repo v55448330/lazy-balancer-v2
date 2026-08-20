@@ -250,6 +250,9 @@ const syncNow = async (): Promise<void> => {
     if (result) ElMessage.success(result.changed ? `同步完成，已应用版本 ${result.applied_version}` : '当前已是最新配置')
     // fetchStatus 为 silent 请求，失败仅记录日志，避免逃逸为未处理的 rejection
     await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to sync now:', error)
   } finally {
     syncing.value = false
   }
@@ -264,6 +267,9 @@ const generateRegisterToken = async (): Promise<void> => {
       registerToken.value = response.data
       tokenDialogVisible.value = true
     }
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to generate register token:', error)
   } finally {
     tokenLoading.value = false
   }
@@ -326,6 +332,9 @@ const updateSyncInterval = async (value: number): Promise<void> => {
     await request.put<ActionResponse>('/cluster/settings', { sync_interval: value })
     ElMessage.success('同步间隔已更新')
     await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to update sync interval:', error)
   } finally {
     intervalSaving.value = false
   }
@@ -362,13 +371,23 @@ const requestRegistration = (): void => {
 }
 
 const rejectNode = async (node: ClusterNode): Promise<void> => {
-  const confirmed = await confirmAction(`确定拒绝节点“${node.name}”吗？`, '拒绝确认')
-  if (confirmed) await runNodeAction(node, 'reject')
+  try {
+    const confirmed = await confirmAction(`确定拒绝节点“${node.name}”吗？`, '拒绝确认')
+    if (confirmed) await runNodeAction(node, 'reject')
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to reject node:', error)
+  }
 }
 
 const removeNode = async (node: ClusterNode): Promise<void> => {
-  const confirmed = await confirmAction(`确定删除节点“${node.name}”吗？删除后该节点将无法继续同步。`, '删除确认')
-  if (confirmed) await runNodeAction(node, 'remove')
+  try {
+    const confirmed = await confirmAction(`确定删除节点“${node.name}”吗？删除后该节点将无法继续同步。`, '删除确认')
+    if (confirmed) await runNodeAction(node, 'remove')
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to remove node:', error)
+  }
 }
 
 const loginNode = async (node: ClusterNode): Promise<void> => {
@@ -416,6 +435,9 @@ const updateAccessUrl = async (accessUrl: string): Promise<void> => {
     accessUrlDialogVisible.value = false
     editingAccessUrlNode.value = null
     await fetchNodes()
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to update access url:', error)
   } finally {
     accessUrlSaving.value = false
   }
