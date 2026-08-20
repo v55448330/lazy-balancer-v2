@@ -179,6 +179,45 @@ func TestGetSecurityPolicyForRule_roundTripsIPWhitelistAndBlacklist(t *testing.T
 	}
 }
 
+// TestBuildCorazaDirectives_trimsLegacyCRSGroupWhitespace 验证 R47 B-#1 发射侧：
+// 历史遗留行（旧校验放行过首尾空白条目）即使库中组号为 " 42 "，发射端也必须
+// trim 后拼接，产出合法 glob REQUEST-942-*.conf 而非零匹配的 REQUEST-9 42-*.conf
+// ——coraza 对零匹配 Include 静默接受，blocking 模式该组规则将静默缺失。
+// RESPONSE-9 同行走同一变量，一并断言。
+func TestBuildCorazaDirectives_trimsLegacyCRSGroupWhitespace(t *testing.T) {
+	// Given 一条历史遗留策略行：组号含首尾空白（模拟绕过校验直接落库的旧数据）
+	useCRSDirectivesDir(t, t.TempDir())
+	_, database := newClusterTestService(t)
+	result, err := database.Exec(`INSERT INTO security_policies (name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,
+		rate_limit_enabled,rate_limit_rps,rate_limit_burst,block_status_code,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,enabled,waf_check_response)
+		VALUES ('legacy','desc','blocking',5,'deny','[]',0,'[]','[]',0,0,0,'403','[" 42 "]','[]','[]',0,1,1)`)
+	if err != nil {
+		t.Fatalf("seed legacy policy: %v", err)
+	}
+	policyID, _ := result.LastInsertId()
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_legacy_group',?)`, policyID); err != nil {
+		t.Fatalf("bind policy: %v", err)
+	}
+
+	// When
+	policy := GetSecurityPolicyForRule("lb_legacy_group")
+	if policy == nil {
+		t.Fatal("expected bound policy to load")
+	}
+	directives := BuildCorazaDirectives(policy)
+
+	// Then REQUEST/RESPONSE 两行均为 trim 后的合法 glob，且不存在畸形 glob
+	if !strings.Contains(directives, "Include /app/waf/crs/rules/REQUEST-942-*.conf\n") {
+		t.Fatalf("directives must emit trimmed REQUEST glob:\n%s", directives)
+	}
+	if !strings.Contains(directives, "Include /app/waf/crs/rules/RESPONSE-942-*.conf\n") {
+		t.Fatalf("directives must emit trimmed RESPONSE glob:\n%s", directives)
+	}
+	if strings.Contains(directives, "REQUEST-9 42") || strings.Contains(directives, "RESPONSE-9 42") {
+		t.Fatalf("directives must not contain malformed glob with whitespace:\n%s", directives)
+	}
+}
+
 func TestBuildCorazaDirectives_includesUserOverridesWhenFileExists(t *testing.T) {
 	// Given a live CRS dir containing the user overrides file
 	dir := t.TempDir()

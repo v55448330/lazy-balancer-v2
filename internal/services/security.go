@@ -165,6 +165,9 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 			}
 		} else {
 			for _, g := range groups {
+				// R47 B-#1：历史遗留行可能含首尾空白（旧校验曾放行），trim 后拼接，
+				// 保证 glob 恒为 REQUEST-9<code>-*.conf 的合法形态（镜像下方排除项的 trim）。
+				g = strings.TrimSpace(g)
 				sb.WriteString(fmt.Sprintf("Include /app/waf/crs/rules/REQUEST-9%[1]s-*.conf\n", g))
 				if p.WAFCheckResponse {
 					sb.WriteString(fmt.Sprintf("Include /app/waf/crs/rules/RESPONSE-9%[1]s-*.conf\n", g))
