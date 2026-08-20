@@ -515,10 +515,10 @@ func applySecurityIP2RegionVersion(ctx context.Context, tx *sql.Tx, versions []m
 
 func validateSnapshotACMEState(snapshot models.ClusterSnapshot) error {
 	if snapshot.ACME == nil {
-		if snapshot.SchemaVersion >= 3 {
-			return errors.New("schema v3 快照缺少必需的 ACME 区段")
-		}
-		return nil
+		// R54 S-4：生产仅 v3 快照可达此处（verifiedSnapshotIntegrity 已按
+		// SchemaVersion==CurrentSnapshotSchema 拒掉过旧/过新），旧 v2 放行
+		// 分支不可达，缺 ACME 区段统一硬拒。
+		return errors.New("schema v3 快照缺少必需的 ACME 区段")
 	}
 	if snapshot.ACME.CAProviders == nil || snapshot.ACME.CertificateConfigs == nil || len(snapshot.ACME.DNSOwnership) == 0 {
 		return errors.New("快照 ACME 区段缺少 ca_providers、certificate_configs 或 dns_ownership")

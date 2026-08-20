@@ -205,9 +205,9 @@ func TestSyncService_applySnapshot_restarts_for_uploaded_admin_certificate_rotat
 	}))
 	defer caddyServer.Close()
 	service := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
-	snapshot := models.ClusterSnapshot{Version: 2, BasicSettings: models.ClusterBasicSettings{
+	snapshot := v3SnapshotWithACMESection(models.ClusterSnapshot{Version: 2, BasicSettings: models.ClusterBasicSettings{
 		LogLevel: "info", Timezone: "Asia/Shanghai", AdminTLSEnabled: true, AdminTLSMode: "upload", AdminTLSCert: "new-cert", AdminTLSKey: "new-key",
-	}}
+	}})
 
 	if err := service.applySnapshot(context.Background(), snapshot); err != nil {
 		t.Fatalf("apply snapshot: %v", err)
@@ -236,7 +236,7 @@ func TestSyncService_applySnapshot_replays_cert_jobs_when_rules_section_skipped(
 		t.Fatal(err)
 	}
 	newCertPEM, newKeyPEM := matchingCertificatePair(t, "example.com")
-	snapshot := models.ClusterSnapshot{
+	snapshot := v3SnapshotWithACMESection(models.ClusterSnapshot{
 		Version: 3,
 		Rules: []models.LbRule{{
 			CaddyID: "lb_b1", Name: "b1", Protocol: "http", Domain: "example.com",
@@ -247,7 +247,7 @@ func TestSyncService_applySnapshot_replays_cert_jobs_when_rules_section_skipped(
 			RuleID: "lb_b1", Domain: "example.com",
 			CertPEM: newCertPEM, KeyPEM: newKeyPEM, CAProviderID: 7,
 		}},
-	}
+	})
 	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
 	if _, err := database.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version) VALUES ('rules', ?, ?)`,
 		snapshot.SectionHashes["rules"], snapshot.Version); err != nil {
@@ -337,13 +337,13 @@ func TestSyncService_applySnapshot_heals_local_rules_drift(t *testing.T) {
 	originalCertDir := certDir
 	certDir = t.TempDir()
 	t.Cleanup(func() { certDir = originalCertDir })
-	snapshot := models.ClusterSnapshot{
+	snapshot := v3SnapshotWithACMESection(models.ClusterSnapshot{
 		Version: 7,
 		Rules: []models.LbRule{{
 			CaddyID: "lb_d1", Name: "d1", Protocol: "http", Domain: "drift.example.com",
 			ListenPort: 80, Enabled: true,
 		}},
-	}
+	})
 	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
 	if _, err := database.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version) VALUES ('rules', ?, ?)`,
 		snapshot.SectionHashes["rules"], snapshot.Version); err != nil {

@@ -119,8 +119,9 @@ func TestValidateDNSOwnership_rejectsRecordsMissingZoneOrValue(t *testing.T) {
 	}
 }
 
-func TestValidateSnapshotACMEState_schemaV3RequiresACMESection(t *testing.T) {
-	// Given
+func TestValidateSnapshotACMEState_missingACMESectionRejected(t *testing.T) {
+	// Given：缺 ACME 区段的快照。生产仅 v3 可达（verifiedSnapshotIntegrity
+	// 先按 schema 拒掉过旧/过新），R54 S-4 移除 v2 放行死分支后统一硬拒。
 	v3 := models.ClusterSnapshot{SchemaVersion: 3}
 	v2 := models.ClusterSnapshot{SchemaVersion: 2}
 
@@ -129,8 +130,11 @@ func TestValidateSnapshotACMEState_schemaV3RequiresACMESection(t *testing.T) {
 	v2Err := validateSnapshotACMEState(v2)
 
 	// Then
-	if v3Err == nil || v2Err != nil {
-		t.Fatalf("v3 error=%v v2 error=%v", v3Err, v2Err)
+	if v3Err == nil {
+		t.Fatal("schema v3 快照缺少 ACME 区段被放行")
+	}
+	if v2Err == nil {
+		t.Fatal("缺少 ACME 区段的快照被放行（v2 放行分支是不可达死代码，已移除）")
 	}
 }
 
