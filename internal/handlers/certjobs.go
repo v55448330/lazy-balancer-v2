@@ -30,6 +30,11 @@ var certJobOperationLocks [64]sync.Mutex
 // 内 UPDATE 之前触发，用于模拟 worker 侧并发状态流转（R42 发现4 回归测试）。
 var retryCertJobPreEnqueueHook func(jobID int)
 
+// deleteCertJobPreDisableHook 是测试专用钩子：在 DeleteCertJob 的状态 SELECT/守卫
+// 之后、disabled 翻转 UPDATE 之前触发，用于模拟 worker 侧并发状态流转（R55 A-#3
+// 回归测试）。
+var deleteCertJobPreDisableHook func(jobID int)
+
 var certJobIndexState struct {
 	sync.Mutex
 	databases map[*sql.DB]struct{}
@@ -431,14 +436,36 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 			return
 		}
 	}
+	if deleteCertJobPreDisableHook != nil {
+		deleteCertJobPreDisableHook(id)
+	}
 	result, err := db.DB.Exec("UPDATE cert_jobs SET status='disabled', updated_at=datetime('now') WHERE id=? AND status=?", id, status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to disable job"})
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
-	if err != nil || rowsAffected != 1 {
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to verify disabled job"})
+		return
+	}
+	if rowsAffected != 1 {
+		// R55 A-#3：SELECT/守卫与 disabled 翻转之间 worker 可能推进状态（S-2 放行
+		// 的在途态），CAS 命中 0 行属并发竞争而非服务器故障——重读区分归因（对齐
+		// RetryCertJob 的 409+重读模式）：行仍在 → 409 刷新重试；行已消失 → 404
+		// （与本函数 DELETE 后 0 行的缺失语义一致）；重读失败（瞬时 DB 错误）→ 500。
+		var currentStatus string
+		scanErr := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", id).Scan(&currentStatus)
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
+			return
+		}
+		if scanErr != nil {
+			log.Printf("DeleteCertJob reread job %d status failed: %v", id, scanErr)
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取任务状态失败"})
+			return
+		}
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务状态已变更，请刷新后重试"})
 		return
 	}
 	cancelCertJob(id)
