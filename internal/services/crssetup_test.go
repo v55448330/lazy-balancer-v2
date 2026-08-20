@@ -289,6 +289,71 @@ func TestCRSUpdateRun_staleOverridesBakNotConsumedOnEmptyDiffFailure(t *testing.
 	}
 }
 
+// TestRestoreBackup_degenerateRulesBakSkipped 验证 R49 B-N2(b)：rules.bak 不
+// 含任何 .conf 文件（空/退化树——如旧版本备份拷贝中途失败留下的部分树）时
+// restoreBackup 拒绝消费：live 规则树原样保留，WAF 不会被静默削弱；退化
+// .bak 留在原地供排查，setup 还原不受影响。
+func TestRestoreBackup_degenerateRulesBakSkipped(t *testing.T) {
+	// Given 退化的 rules.bak（无 .conf 文件）与完好的 live 规则树
+	m := newTestCRSManager(t)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "partial.tmp"), "incomplete")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
+	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
+
+	// When 尝试还原备份
+	m.restoreBackup()
+
+	// Then live 规则树未被退化 bak 替换，退化 bak 留在原地（未消费）
+	if _, err := os.Stat(filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf")); err != nil {
+		t.Fatal("live rules must be untouched when rules.bak is degenerate (R49 B-N2)")
+	}
+	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.bak")); err != nil {
+		t.Fatal("degenerate rules.bak should be left in place (not consumed)")
+	}
+	// And 独立的 setup 还原照常完成
+	setup, _ := os.ReadFile(filepath.Join(m.crsDir, "crs-setup.conf"))
+	if string(setup) != "# previous" {
+		t.Fatalf("crs-setup.conf=%q, want restored backup", setup)
+	}
+}
+
+// TestRestoreBackup_moveTreeFailureKeepsLiveIntact 验证 R49 B-N2(c)：
+// moveTree(rules.bak→rules) 失败时 live 规则树不得为空——旧实现先
+// RemoveAll(rulesPath) 再搬移，搬移失败即 live 全空、WAF 静默全关。修复后
+// 先把 live 挪到 rules.old，搬移失败时清理残影并挪回，live 永不落空。
+func TestRestoreBackup_moveTreeFailureKeepsLiveIntact(t *testing.T) {
+	// Given rename 全部失败（overlayfs），rules.bak 内含悬空符号链接使其
+	// copy 回退也必然失败，live 规则树完好
+	forceRenameFailure(t)
+	m := newTestCRSManager(t)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-900.conf"), "SecRule a")
+	if err := os.Symlink("missing-target", filepath.Join(m.crsDir, "rules.bak", "REQUEST-901.conf")); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+
+	// When 尝试还原备份且搬移失败
+	m.restoreBackup()
+
+	// Then live 规则树从 rules.old 完整挪回（无 bak 残影混入），rules.old 被
+	// 消费，rules.bak 保留供排查
+	data, err := os.ReadFile(filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"))
+	if err != nil || string(data) != "SecRule old" {
+		t.Fatalf("live rules tree must be restored from rules.old after a failed restore move: %q,%v", data, err)
+	}
+	entries, err := os.ReadDir(filepath.Join(m.crsDir, "rules"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("live rules must contain only the original tree, no partial bak residue: %v,%v", entries, err)
+	}
+	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.old")); !os.IsNotExist(err) {
+		t.Fatal("rules.old should be consumed by the move-back")
+	}
+	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.bak")); err != nil {
+		t.Fatal("rules.bak should remain when the restore move fails")
+	}
+}
+
 func TestCRSUpdateRun_installsStockSetupWhenNoneExists(t *testing.T) {
 	// Given a live rules tree without any crs-setup.conf
 	m := newTestCRSManager(t)

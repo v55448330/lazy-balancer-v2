@@ -95,7 +95,9 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	if _, err := os.Stat(rulesPath); err == nil {
 		// Copy-based backup: the live rules dir may be baked into an image
 		// lower layer, where rename is impossible (EXDEV on overlayfs).
-		if err := copyDir(rulesPath, rulesBak); err != nil {
+		// 事务化拷贝（R49 B-N2）：中途失败（ENOSPC/EIO）只留下 rules.bak.tmp
+		// 并被清理，restoreBackup 永远不会消费到部分残树。
+		if err := copyDirTransactional(rulesPath, rulesBak); err != nil {
 			return fmt.Errorf("备份现有 rules: %w", err)
 		}
 	}
@@ -223,12 +225,7 @@ func (m *CRSUpdateManager) restoreBackup() {
 	rulesPath := filepath.Join(m.crsDir, "rules")
 	rulesBak := filepath.Join(m.crsDir, "rules.bak")
 	if _, err := os.Stat(rulesBak); err == nil {
-		os.RemoveAll(rulesPath)
-		if err := moveTree(rulesBak, rulesPath); err != nil {
-			log.Printf("crs update: failed to restore rules backup: %v", err)
-		} else {
-			writeCRSUpdateLog("INFO", string(CRSStatusInstalling), "已从备份恢复规则")
-		}
+		restoreRulesBackup(rulesPath, rulesBak)
 	}
 	setupPath := filepath.Join(m.crsDir, "crs-setup.conf")
 	setupBak := setupPath + ".bak"
@@ -263,6 +260,89 @@ func (m *CRSUpdateManager) restoreBackup() {
 		return
 	}
 	os.Remove(overridesBak)
+}
+
+// restoreRulesBackup moves rules.bak back into place without ever installing a
+// tree weaker than what it replaces and without leaving the live path empty
+// (R49 B-N2): a degenerate backup (no .conf file anywhere — e.g. a partial
+// tree left by an interrupted copy on an older version) is rejected with a
+// log and left in place for diagnosis; the live tree is first moved aside to
+// rules.old and moved back if the restore move itself fails.
+func restoreRulesBackup(rulesPath, rulesBak string) {
+	if !treeContainsConfFile(rulesBak) {
+		log.Printf("crs update: rules backup %s contains no .conf files, skipping restore (live rules left untouched)", rulesBak)
+		return
+	}
+	rulesOld := rulesPath + ".old"
+	if err := os.RemoveAll(rulesOld); err != nil {
+		log.Printf("crs update: failed to clear %s, restore aborted (live rules untouched): %v", rulesOld, err)
+		return
+	}
+	liveMoved := false
+	if _, err := os.Stat(rulesPath); err == nil {
+		if err := moveTree(rulesPath, rulesOld); err != nil {
+			log.Printf("crs update: failed to move live rules aside, restore aborted (live rules untouched): %v", err)
+			return
+		}
+		liveMoved = true
+	}
+	if err := moveTree(rulesBak, rulesPath); err != nil {
+		log.Printf("crs update: failed to restore rules backup: %v", err)
+		if liveMoved {
+			// 搬回前清掉失败搬移在 live 路径留下的残影：rules.old 持有完整
+			// 原树，清空目标后整体搬回，live 不会混入残树文件也不为空。
+			if rmErr := os.RemoveAll(rulesPath); rmErr != nil {
+				log.Printf("crs update: failed to clear partial restore at %s: %v", rulesPath, rmErr)
+			}
+			if rbErr := moveTree(rulesOld, rulesPath); rbErr != nil {
+				log.Printf("crs update: failed to move live rules back from %s: %v", rulesOld, rbErr)
+			}
+		}
+		return
+	}
+	if liveMoved {
+		if err := os.RemoveAll(rulesOld); err != nil {
+			log.Printf("crs update: failed to remove old rules tree %s: %v", rulesOld, err)
+		}
+	}
+	writeCRSUpdateLog("INFO", string(CRSStatusInstalling), "已从备份恢复规则")
+}
+
+// treeContainsConfFile reports whether dir holds at least one regular .conf
+// file anywhere below it; a missing/unreadable dir reports false.
+func treeContainsConfFile(dir string) bool {
+	found := false
+	_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(d.Name(), ".conf") {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
+}
+
+// copyDirTransactional copies src to dst via a sibling temp dir (R49 B-N2):
+// a partial copy stays at dst+".tmp" and is removed on failure, so consumers
+// of dst either see the previous complete tree or no tree at all — never a
+// half-copied one. The final rename uses os.Rename directly (same rationale
+// as copyFile): tmp is created in the same parent as dst, so it always lives
+// on the same filesystem even on overlayfs.
+func copyDirTransactional(src, dst string) error {
+	tmp := dst + ".tmp"
+	if err := os.RemoveAll(tmp); err != nil {
+		return err
+	}
+	if err := copyDir(src, tmp); err != nil {
+		if rErr := os.RemoveAll(tmp); rErr != nil {
+			log.Printf("crs update: failed to clean partial backup staging %s: %v", tmp, rErr)
+		}
+		return err
+	}
+	return os.Rename(tmp, dst)
 }
 
 // osRename is a seam for tests: Docker overlayfs cannot rename a directory

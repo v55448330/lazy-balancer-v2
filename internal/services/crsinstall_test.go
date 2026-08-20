@@ -139,6 +139,54 @@ func TestCRSUpdateRun_successWhenRenameUnavailable(t *testing.T) {
 	}
 }
 
+// TestCRSUpdateRun_backupCopyFailureLeavesNoPartialRulesBak 验证 R49 B-N2(a)：
+// rules→rules.bak 的备份拷贝中途失败（ENOSPC/EIO 类故障）时不得残留部分
+// rules.bak——旧实现直接 copyDir 到 rules.bak，失败留下残树，restoreBackup
+// 无完整性校验即消费它，会把残树搬入 live、WAF 静默削弱。事务化备份
+// （tmp 兄弟目录 + 成功后 rename）使残树永远停留在 rules.bak.tmp 并被清理。
+func TestCRSUpdateRun_backupCopyFailureLeavesNoPartialRulesBak(t *testing.T) {
+	// Given 备份拷贝中途必然失败的 live 规则树：第一个文件可复制，第二个是
+	// 悬空符号链接（ReadFile 必败，root 下同样确定性失败）
+	m := newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.14.0", true)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-900.conf"), "SecRule a")
+	if err := os.Symlink("missing-target", filepath.Join(m.crsDir, "rules", "REQUEST-901.conf")); err != nil {
+		t.Fatal(err)
+	}
+
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
+	m.downloadTarball = fakeCRSDownload(t, map[string]string{
+		"coreruleset-4.15.0/crs-setup.conf.example": "# new setup",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf": "SecRule a\n",
+	})
+	m.reloader = func() error { return nil }
+
+	// When 更新在 rules 备份步骤失败
+	m.run("manual")
+
+	// Then 不残留部分 rules.bak（或 tmp 暂存）供 restoreBackup 消费，live
+	// 规则树完整原样保留（两个文件都在——残树搬入 live 会丢掉 901）
+	_, status, message, _, _, _, _ := crsVersionRow(t)
+	if status != "failed" {
+		t.Fatalf("update_status=%q, want failed", status)
+	}
+	if !strings.Contains(message, "备份现有 rules") {
+		t.Fatalf("message=%q, want the backup failure cause", message)
+	}
+	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.bak")); !os.IsNotExist(err) {
+		t.Fatal("partial rules.bak must not exist after a failed backup copy (R49 B-N2)")
+	}
+	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.bak.tmp")); !os.IsNotExist(err) {
+		t.Fatal("rules.bak.tmp staging must be cleaned up after a failed backup copy")
+	}
+	if _, err := os.Stat(filepath.Join(m.crsDir, "rules", "REQUEST-900.conf")); err != nil {
+		t.Fatal("live rules tree must be untouched")
+	}
+	if _, err := os.Lstat(filepath.Join(m.crsDir, "rules", "REQUEST-901.conf")); err != nil {
+		t.Fatal("live rules tree must stay complete: a partial bak must not replace it (R49 B-N2)")
+	}
+}
+
 // TestCRSUpdateRun_installFailureRemovesFreshlyCreatedOverrides 验证审计场景：
 // 手动改过 crs-setup.conf（迁移 diff 非空）且 overrides 由本次迁移新建，重载
 // 失败后 overrides 被删除、旧 setup 恢复——恢复后的重载不再重复应用同一批
