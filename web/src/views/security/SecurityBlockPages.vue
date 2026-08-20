@@ -114,7 +114,10 @@ const fetchData = async () => {
     ])
     pages.value = pagesRes.data || []
     users.value = usersRes.data || []
-  } catch { ElMessage.error('加载数据失败') } finally { loading.value = false }
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to load block pages data:', error)
+  } finally { loading.value = false }
 }
 
 const getUpdaterName = (userId?: number) => {

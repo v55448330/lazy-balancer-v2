@@ -441,8 +441,9 @@ const downloadMCPPlaybook = async (): Promise<void> => {
     link.click()
     // Safari 下立即回收 objectURL 会截断下载文件，延迟 1s 再释放（与 BasicSettings 导出一致）
     setTimeout(() => URL.revokeObjectURL(url), 1000)
-  } catch {
-    ElMessage.error('下载失败，请重试')
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast（blob 错误体会被解析出后端 message），这里仅记录
+    console.error('Failed to download MCP playbook:', error)
   } finally {
     mcpPlaybookDownloading.value = false
   }

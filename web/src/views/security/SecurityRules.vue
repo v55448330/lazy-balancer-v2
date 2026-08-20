@@ -756,8 +756,9 @@ const saveCustomRule = async () => {
       ? await request.put(`/security/custom-rules/${editingRuleId.value}`, ruleForm.value)
       : await request.post('/security/custom-rules', ruleForm.value)
     showSaveResult(res, '保存成功'); ruleDialogVisible.value = false; fetchCustomRules()
-  } catch (error) {
-    ElMessage.error(error instanceof Error && error.message ? error.message : '保存失败')
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to save custom rule:', error)
   } finally { savingRule.value = false }
 }
 

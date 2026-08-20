@@ -317,8 +317,9 @@ const updateSyncField = async (field: string, value: boolean): Promise<void> => 
     await request.put<ActionResponse>('/cluster/settings', { [field]: value })
     ElMessage.success('同步设置已更新')
     await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '更新失败')
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to update sync field:', error)
     await fetchStatus().catch((refreshError: unknown) => console.error('Failed to refresh cluster status:', refreshError))
   } finally {
     settingsLoading.value = false

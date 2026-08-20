@@ -51,11 +51,7 @@ const fetchCaddyConfig = async (): Promise<void> => {
     caddyConfigData.value = response.data ?? null
   } catch (error: unknown) {
     caddyConfigData.value = null
-    if (error instanceof Error) {
-      console.error('Failed to fetch Caddy config:', error)
-      return
-    }
-    throw error
+    console.error('Failed to fetch Caddy config:', error)
   } finally {
     loading.value = false
   }

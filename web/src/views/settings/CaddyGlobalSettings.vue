@@ -238,11 +238,7 @@ const handleReloadCaddy = async (): Promise<void> => {
     await request.post('/config/reload')
     ElMessage.success('Caddy 配置已重载')
   } catch (error: unknown) {
-    if (error instanceof Error) {
-      console.error('Failed to reload Caddy:', error)
-      return
-    }
-    throw error
+    console.error('Failed to reload Caddy:', error)
   } finally {
     reloading.value = false
   }
@@ -266,11 +262,7 @@ const refreshLogs = async (): Promise<void> => {
     const container = logContainerRef.value
     if (container) container.scrollTop = container.scrollHeight
   } catch (error: unknown) {
-    if (error instanceof Error) {
-      console.error('Failed to fetch caddy logs:', error)
-      return
-    }
-    throw error
+    console.error('Failed to fetch caddy logs:', error)
   } finally {
     if (requestSeq === logRequestSeq) logLoading.value = false
   }

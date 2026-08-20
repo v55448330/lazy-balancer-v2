@@ -476,7 +476,10 @@ const fetchData = async () => {
     allCustomRules.value = crRes.data || []
     securityBindings.value = bindRes.data || {}
     users.value = userRes.data || []
-  } catch { ElMessage.error('加载数据失败') } finally { loading.value = false }
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to load policies data:', error)
+  } finally { loading.value = false }
 }
 
 const parseJsonList = (raw: string | undefined): string[] => {
@@ -736,7 +739,10 @@ async function openDialog(row?: PolicySummary) {
         form.value.block_page_id = blockPages.value.find((p) => p.id === 1)?.id ?? blockPages.value[0].id
         ElMessage.warning('原拦截页面已删除，已回退默认页面')
       }
-    } catch { ElMessage.error('加载策略详情失败') }
+    } catch (error: unknown) {
+      // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+      console.error('Failed to load policy detail:', error)
+    }
   } else { resetForm() }
   originalBoundRules.value = [...boundRules.value]
   currentStep.value = WIZARD_STEP.BASIC
@@ -814,8 +820,9 @@ const handleSave = async () => {
         ...added.map((caddyId) => request.post(`/security/policies/${editingId.value}/bind`, { rule_caddy_id: caddyId })),
         ...removed.map((caddyId) => request.delete(`/security/policies/${editingId.value}/bind/${caddyId}`)),
       ])
-    } catch {
-      ElMessage.error('关联规则同步失败，请重试')
+    } catch (error: unknown) {
+      // 失败的 bind 请求已由全局拦截器逐个 toast，这里仅记录并中止收尾
+      console.error('Failed to sync policy bindings:', error)
       return
     }
     showSaveResult(saveRes, '保存成功'); dialogVisible.value = false; fetchData()
