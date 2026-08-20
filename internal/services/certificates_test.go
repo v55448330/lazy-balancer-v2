@@ -901,9 +901,10 @@ func TestRestoreCertJobs_skips_when_rule_recreated_with_different_domain(t *test
 	}
 }
 
-// R48 A-F1 放弃语义的直接覆盖（R49 A-N3）：requeueCertJobsSnapshot 的三个跳过
-// 分支——规则行 ErrNoRows、规则 disabled/非 acme_dns、快照任务域名与规则当前
-// 域名时代不符——均必须按成功收尾（返回 nil）且零入队。任一退化为返回错误都会
+// R48 A-F1 放弃语义的直接覆盖（R49 A-N3 + R50 S-4）：requeueCertJobsSnapshot 的
+// 四个跳过分支——规则行 ErrNoRows、规则 disabled/非 acme_dns、快照任务域名与规则
+// 当前域名时代不符、规则域名不可规范化（导入产生的非法 ACME 域）——均必须按成功
+// 收尾（返回 nil）且零入队。任一退化为返回错误都会
 // 把补偿拖入永久退避循环且 blockedRules 租约永不释放（证书静默停发），而既有
 // 测试全部绿灯。manager 预置合法租约与 provider：一旦某分支错误放行入队，
 // beforeEnqueue 探针与 queues 创建立即可观测。
@@ -992,6 +993,23 @@ func TestRequeueCertJobsSnapshot_giveUpSemantics(t *testing.T) {
 		if _, err := database.Exec(`UPDATE lb_rules SET domain='new.example.com' WHERE caddy_id=?`, ruleID); err != nil {
 			t.Fatalf("recreate rule with new domain: %v", err)
 		}
+		manager, enqueues := newProbeManager(ruleID)
+
+		// When
+		err := requeueCertJobsSnapshot(context.Background(), snapshot, manager)
+
+		// Then
+		assertNilAndNoEnqueue(t, err, manager, enqueues)
+	})
+
+	t.Run("rule domain not canonicalizable", func(t *testing.T) {
+		// Given：导入产生的非法 ACME 域规则（3 域——导入校验不验 ACME 域合法性，
+		// 仅保存侧校验）。该规则本就无法重排队（createOrRequeue 同样拒绝非法域），
+		// canonicalize 失败必须与 ErrNoRows/禁用分支同为放弃语义——返回错误会把
+		// 补偿拖入永久退避循环且租约永不释放（R50 S-4）。
+		_, database := newClusterTestService(t)
+		const ruleID = "lb_requeue_badacme"
+		snapshot := seedRuleAndJob(t, database, ruleID, "a.example.com,b.example.com,c.example.com", 1)
 		manager, enqueues := newProbeManager(ruleID)
 
 		// When

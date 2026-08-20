@@ -197,7 +197,11 @@ func requeueCertJobsSnapshot(ctx context.Context, snapshot CertJobsSnapshot, man
 	}
 	canonicalRule, err := CanonicalACMEDomains(ruleDomain)
 	if err != nil {
-		return fmt.Errorf("canonicalize rule certificate domains: %w", err)
+		// R50 S-4：非法 ACME 域（导入可产生——导入校验不验 ACME 域合法性）的
+		// 规则本就无法重排队（createOrRequeue 同样拒绝非法域），返回错误会把
+		// 补偿拖入永久退避循环且租约永不释放——与 ErrNoRows/禁用分支同为放弃语义。
+		Logf("warn", "证书任务补偿重排队放弃：规则 %s 域名不可规范化: %v", snapshot.ruleID, err)
+		return nil
 	}
 	for _, job := range snapshot.jobs {
 		if err := ctx.Err(); err != nil {
