@@ -63,6 +63,7 @@ func TestValidateV2BackupRules_rejects_enabled_manual_tls_without_cert(t *testin
 	tests := []struct {
 		name        string
 		rule        map[string]any
+		extraTables map[string][]map[string]any
 		wantErrText string
 	}{
 		{
@@ -80,8 +81,14 @@ func TestValidateV2BackupRules_rejects_enabled_manual_tls_without_cert(t *testin
 			rule: map[string]any{"caddy_id": "lb_disabled_nocert", "name": "disabled", "protocol": "http", "domain": "disabled.example.test", "listen_port": 8445, "enabled": 0, "enable_tls": 1, "tls_source": "manual"},
 		},
 		{
+			// R53 发现2/A-2 起启用 acme_dns 行须引用备份内有效配置且携带证书
+			// 任务行；本用例的原始意图（无需内联 tls_cert/tls_key）保持不变。
 			name: "启用 acme_dns 无内联证书可导入（证书由 cert_jobs 管理）",
-			rule: map[string]any{"caddy_id": "lb_acme", "name": "acme", "protocol": "http", "domain": "acme.example.test", "listen_port": 8446, "enabled": 1, "enable_tls": 1, "tls_source": "acme_dns"},
+			rule: map[string]any{"caddy_id": "lb_acme", "name": "acme", "protocol": "http", "domain": "acme.example.test", "listen_port": 8446, "enabled": 1, "enable_tls": 1, "tls_source": "acme_dns", "acme_config_id": 7},
+			extraTables: map[string][]map[string]any{
+				"certificate_configs": {{"id": 7, "name": "dns", "enabled": 1}},
+				"cert_jobs":           {{"rule_id": "lb_acme", "domain": "acme.example.test", "status": "issued"}},
+			},
 		},
 		{
 			name: "启用手动 TLS 证书齐全正常",
@@ -90,7 +97,11 @@ func TestValidateV2BackupRules_rejects_enabled_manual_tls_without_cert(t *testin
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateV2BackupRules([]map[string]any{tt.rule}, nil)
+			tables := map[string][]map[string]any{"lb_rules": {tt.rule}}
+			for table, rows := range tt.extraTables {
+				tables[table] = rows
+			}
+			err := validateV2BackupRules(tables)
 			if tt.wantErrText != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
 					t.Fatalf("validateV2BackupRules err=%v, want contains %q", err, tt.wantErrText)

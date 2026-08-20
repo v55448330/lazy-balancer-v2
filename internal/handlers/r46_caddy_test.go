@@ -64,7 +64,7 @@ func TestValidateV2BackupRules_names_offending_rule(t *testing.T) {
 	}
 
 	// When
-	err := validateV2BackupRules([]map[string]any{rule}, nil)
+	err := validateV2BackupRules(map[string][]map[string]any{"lb_rules": {rule}})
 
 	// Then 拒绝且错误信息点名规则名
 	if err == nil || !strings.Contains(err.Error(), "named-nocert") ||
