@@ -866,6 +866,23 @@ func GenerateCaddyConfig(overrides ...*models.UpdateConfigRequest) map[string]in
 	return generateCaddyConfigFromStore(db.DB, overrides...)
 }
 
+// acmeCertCandidatesQuery 只取「启用 + TLS + acme_dns」规则名下未禁用任务的
+// 证书候选（与 db 迁移的 legacyHTTPSHasCertPredicate 及 SelectCertificate 的
+// 跳过口径同源）。R47 前为全库全量拉取：已删除规则的残留行、disabled 任务与
+// 非 acme 规则的历史 PEM 都会在每次全量生成时载入内存，而后置消费方
+// （resolveACMECert 仅按 allRules 中 acme_dns 规则查表、SelectCertificate
+// 跳过 disabled）根本不会使用这些行——过滤前移只减 IO/内存，不改变候选集语义。
+const acmeCertCandidatesQuery = `
+	SELECT rule_id, id, domain, status, cert_pem, key_pem,
+	       COALESCE(julianday(COALESCE(updated_at, created_at)), 0)
+	FROM cert_jobs
+	WHERE cert_pem IS NOT NULL AND cert_pem <> ''
+	  AND key_pem IS NOT NULL AND key_pem <> ''
+	  AND status != 'disabled'
+	  AND rule_id IN (SELECT caddy_id FROM lb_rules WHERE enabled = 1 AND enable_tls = 1 AND tls_source = 'acme_dns')
+	ORDER BY updated_at DESC, id DESC
+`
+
 func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.UpdateConfigRequest) map[string]interface{} {
 	var filesSnapshot CertFilesSnapshot
 	generationFailure := func(format string, args ...any) map[string]interface{} {
@@ -1074,14 +1091,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 
 	acmeCerts := make(map[string][]CertificateCandidate)
 	if hasACMETLS {
-		certRows, certErr := store.Query(`
-			SELECT rule_id, id, domain, status, cert_pem, key_pem,
-			       COALESCE(julianday(COALESCE(updated_at, created_at)), 0)
-			FROM cert_jobs
-			WHERE cert_pem IS NOT NULL AND cert_pem <> ''
-			  AND key_pem IS NOT NULL AND key_pem <> ''
-			ORDER BY updated_at DESC, id DESC
-		`)
+		certRows, certErr := store.Query(acmeCertCandidatesQuery)
 		if certErr != nil {
 			return generationFailure("读取 ACME 证书阶段查询失败: %v", certErr)
 		}
@@ -2192,6 +2202,13 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		// 生产环境的 HTTP→HTTPS 跳转由 generateCaddyConfigFromStore 的 redirectRoutes
 		// 统一生成（端口 443 时 Location 不带自引用端口，见 httpsRedirectLocation）。
 		// 若未来需要在单规则配置里启用此分支，请先确认与全量生成逻辑保持一致。
+		//
+		// 已知口径差异（R47 C-发现4 记录，当前因分支不可达而无影响）：全量分支的
+		// automatic_https 对 80/443 端口写 {disable_certificates: true}（保留自动
+		// 跳转、仅禁 Caddy 自建证书自动化，防绕开 cert_jobs 的 DNS-01 签发），非
+		// 80/443 端口写 {disable: true}；本分支仅对非 80/443 端口写 {disable: true}，
+		// 80/443 端口不写 automatic_https。若未来启用此分支，必须补齐 80/443 的
+		// disable_certificates 例外，否则 Caddy 会为路由域名自建 ACME automation。
 		if rule.EnableTLS && rule.TLSHTTPRedirect && len(domainHosts) > 0 {
 			geoipCount := 0
 			if policy := GetSecurityPolicyForRule(rule.CaddyID); PolicyHasGeoIP(policy) {
