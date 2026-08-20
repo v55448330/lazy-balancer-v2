@@ -378,9 +378,8 @@ import { showSaveResult } from '@/utils/saveResult'
 import { isValidCidr } from '@/utils/ruleValidation'
 import { formatDate } from '@/utils/date'
 import { useAuthStore } from '@/stores/auth'
-import type { UserListItem } from '@/types'
+import type { APIResponse, UserListItem } from '@/types'
 
-interface APIResponse<T> { code: number; message: string; data: T }
 interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string }
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number }
@@ -703,7 +702,8 @@ async function openDialog(row?: PolicySummary) {
   if (row) {
     try {
       const res = await request.get<APIResponse<{ policy: PolicyDetail; bindings: string[] }>>(`/security/policies/${row.id}`)
-      const d = res.data.policy
+      const d = res.data?.policy
+      if (!d) throw new Error('策略详情响应缺少数据')
       form.value = {
         name: d.name,
         description: d.description,
@@ -729,7 +729,7 @@ async function openDialog(row?: PolicySummary) {
       crsRuleGroups.value = normalizeCrsGroups(parseJsonList(d.crs_rule_groups))
       crsExcludedRules.value = parseJsonList(d.crs_excluded_rules)
       selectedCustomRules.value = parseCustomRuleIds(d.custom_rules)
-      boundRules.value = res.data.bindings || []
+      boundRules.value = res.data?.bindings || []
       // 拦截页面失效兜底：策略引用的拦截页面可能已被删除，select 匹配不到时回退
       // 默认页（优先 #1，其次第一个可用页），避免保存写回无效 id
       if (blockPages.value.length > 0 && !blockPages.value.some((p) => p.id === form.value.block_page_id)) {
@@ -803,7 +803,9 @@ const handleSave = async () => {
       saveRes = await request.put(`/security/policies/${editingId.value}`, payload)
     } else {
       saveRes = await request.post<APIResponse<{ id: number }>>('/security/policies', payload)
-      editingId.value = saveRes.data.id
+      const createdId = saveRes.data?.id
+      if (!createdId) throw new Error('创建策略响应缺少 id')
+      editingId.value = createdId
     }
     const added = boundRules.value.filter((id) => !originalBoundRules.value.includes(id))
     const removed = originalBoundRules.value.filter((id) => !boundRules.value.includes(id))
