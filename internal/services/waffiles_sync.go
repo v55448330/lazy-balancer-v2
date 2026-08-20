@@ -285,7 +285,10 @@ func untarGzTo(data []byte, destDir string, expectSum string) error {
 			if writtenFiles > maxWafSyncExtractFiles {
 				return fmt.Errorf("同步规则集文件数超过上限（%d 个），已拒绝落盘", maxWafSyncExtractFiles)
 			}
-			if hdr.Size < 0 || writtenBytes+hdr.Size > maxWafSyncExtractBytes {
+			// 先减后比：writtenBytes 恒 ≤ maxWafSyncExtractBytes（每个被接受条目维持
+			// 该不变量），减法不下溢；加法在 hdr.Size 接近 2^63-1（GNU base-256）
+			// 时溢出为负会绕过上限（R55 A-#2）。
+			if hdr.Size < 0 || hdr.Size > maxWafSyncExtractBytes-writtenBytes {
 				return fmt.Errorf("同步规则集解包体积超过上限（%d 字节），已拒绝落盘", maxWafSyncExtractBytes)
 			}
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
