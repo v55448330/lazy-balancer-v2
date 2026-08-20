@@ -158,7 +158,11 @@ func TestValidateSnapshotACMEState_acceptsDefaultCAAndDisabledTLSRule(t *testing
 	}
 }
 
-func TestValidateSnapshotACMEState_distinguishesUnsetConfigFromMissingReference(t *testing.T) {
+func TestValidateSnapshotACMEState_toleratesUnsetOrDanglingConfigWithWarning(t *testing.T) {
+	// R51 发现3(b)：acme_config_id=0 / 悬挂配置引用的规则在主节点是「单规则
+	// 损坏」状态（issuer 按单任务失败），整包拒绝会让一条可经 API/导入产生的
+	// 坏规则瘫痪全部从节点同步——对齐 verifySnapshotConsistency 的 fail-open
+	// 哲学，逐条跳过+warn，主节点修复后随后续同步自愈。
 	// Given
 	base := models.ClusterSnapshot{SchemaVersion: 3, ACME: &models.ClusterACMEState{
 		CAProviders: []models.CAProvider{}, CertificateConfigs: []models.CertificateConfig{}, DNSOwnership: json.RawMessage(`{"version":1,"records":[]}`),
@@ -173,8 +177,8 @@ func TestValidateSnapshotACMEState_distinguishesUnsetConfigFromMissingReference(
 	missingErr := validateSnapshotACMEState(missing)
 
 	// Then
-	if unsetErr == nil || !strings.Contains(unsetErr.Error(), "未设置") || missingErr == nil || !strings.Contains(missingErr.Error(), "不存在") {
-		t.Fatalf("unset error=%v missing error=%v", unsetErr, missingErr)
+	if unsetErr != nil || missingErr != nil {
+		t.Fatalf("bad-rule snapshots must not be rejected wholesale: unset error=%v missing error=%v", unsetErr, missingErr)
 	}
 }
 
