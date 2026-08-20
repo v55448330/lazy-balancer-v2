@@ -729,6 +729,14 @@ func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转", rule.Name, rule.CaddyID)})
 			continue
 		}
+		// R55 C-3：与 validateStoredRuleConfig 同口径的 tls_source 白名单——
+		// 存量（白名单上线前落库）/直改 DB 的垃圾 tls_source 启用行必须在启动与
+		// UpdateConfig 聚合校验点名（渲染侧 availableCerts 仅认 manual/acme_dns →
+		// 无 tls_connection_policies → TLS 端口明文服务，disable_certificates 阻自愈）。
+		if rule.Protocol == "http" && rule.EnableTLS && rule.TLSSource != "manual" && rule.TLSSource != "acme_dns" {
+			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）启用 TLS 时必须选择证书来源（manual 或 acme_dns）", rule.Name, rule.CaddyID)})
+			continue
+		}
 		// R53 发现1：启动/UpdateConfig 聚合校验与 EnableRule 同门——ACME 引用
 		// 不可解析（0 值/悬挂/已禁用）的启用规则必须点名，不得静默通过。
 		if err := validateRuleACMEReferences(acmeReferenceInput{
