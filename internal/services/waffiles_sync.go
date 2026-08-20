@@ -335,10 +335,16 @@ func untarGzTo(data []byte, destDir string, expectSum string) error {
 			return fmt.Errorf("清空目标规则树: %w", err)
 		}
 		if err := copyDir(staging, destDir); err != nil {
-			// 复制中途失败时 destDir 已被清空——先从 backup 恢复旧树再返回错误，
-			// 避免从端规则树处于残缺状态。
+			// 复制中途失败时 destDir 已被清空但可能残留部分新树文件——恢复必须先
+			// 整树清空再从 backup 复制，保证恢复结果为纯旧树而非旧+新混合树
+			// （R48 A-F3，对齐 :334 的清空语义）；恢复自身的错误并入返回错误，不吞掉。
 			if _, statErr := os.Stat(backup); statErr == nil {
-				_ = copyDir(backup, destDir)
+				if removeErr := os.RemoveAll(destDir); removeErr != nil {
+					return fmt.Errorf("安装同步规则集: %w", errors.Join(err, fmt.Errorf("清空目标规则树以恢复旧树: %w", removeErr)))
+				}
+				if restoreErr := copyDir(backup, destDir); restoreErr != nil {
+					return fmt.Errorf("安装同步规则集: %w", errors.Join(err, fmt.Errorf("从备份恢复旧树: %w", restoreErr)))
+				}
 			}
 			return fmt.Errorf("安装同步规则集: %w", err)
 		}

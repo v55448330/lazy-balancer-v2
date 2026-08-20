@@ -301,6 +301,138 @@ func TestApplyWafFileBundle_preservesVersionFileRawBytes(t *testing.T) {
 	}
 }
 
+func TestUntarGzTo_midCopyFailure_restoresPureOldTree(t *testing.T) {
+	// R48 A-F3：staging→destDir 复制中途失败时，恢复必须产出纯旧树。旧实现只
+	// 用 backup 覆盖同名文件，已复制成功的新树文件残留为混合树。staging 预置
+	// 的只读子目录（含文件使函数起始的 RemoveAll(staging) 静默失败而存活）
+	// 让 copyDir 在复制完 a-new.conf 后失败。
+	// Given：非空旧树 + 含一个新文件的同步包 + staging 内预置只读子目录
+	destDir := filepath.Join(t.TempDir(), "crs")
+	os.MkdirAll(destDir, 0755)
+	os.WriteFile(filepath.Join(destDir, "old.conf"), []byte("SecRule OLD"), 0644)
+	newTree := t.TempDir()
+	os.WriteFile(filepath.Join(newTree, "a-new.conf"), []byte("SecRule NEW"), 0644)
+	data, _, err := tarGzDir(newTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staging := destDir + ".sync-in"
+	planted := filepath.Join(staging, "z-planted")
+	if err := os.MkdirAll(planted, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(planted, "inner"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(planted, 0000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(planted, 0755)
+		_ = os.RemoveAll(staging)
+	})
+
+	// When：expectSum 传空以跳过哈希校验（校验会读取只读目录，与本用例无关）
+	err = untarGzTo(data, destDir, "")
+
+	// Then：返回安装错误，且 destDir 恰好是纯旧树（无新树残留）
+	if err == nil || !strings.Contains(err.Error(), "安装同步规则集") {
+		t.Fatalf("err=%v, want 安装同步规则集 copy failure", err)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(destDir, "old.conf")); readErr != nil || string(got) != "SecRule OLD" {
+		t.Fatalf("old.conf=(%q,%v), want intact old tree file", got, readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(destDir, "a-new.conf")); !os.IsNotExist(statErr) {
+		t.Fatal("a-new.conf residue（混合树：恢复前未清空已复制的新文件）")
+	}
+	entries, readErr := os.ReadDir(destDir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 1 || entries[0].Name() != "old.conf" {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("destDir entries=%v, want exactly [old.conf]（纯旧树）", names)
+	}
+}
+
+func TestUntarGzTo_restoreFailure_joinedIntoReturnedError(t *testing.T) {
+	// R48 A-F3：恢复（清空+从 backup 复制）自身的错误不得被 `_ =` 吞掉，必须
+	// 并入返回错误。destDir 写入 32MB 新文件的窗口内注入只读子目录，使恢复路径
+	// 的 RemoveAll(destDir) 失败。
+	// Given：非空旧树 + 含大文件的同步包 + staging 内预置只读子目录
+	destDir := filepath.Join(t.TempDir(), "crs")
+	os.MkdirAll(destDir, 0755)
+	os.WriteFile(filepath.Join(destDir, "old.conf"), []byte("SecRule OLD"), 0644)
+	newTree := t.TempDir()
+	os.WriteFile(filepath.Join(newTree, "a-new.conf"), make([]byte, 32<<20), 0644)
+	data, _, err := tarGzDir(newTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staging := destDir + ".sync-in"
+	planted := filepath.Join(staging, "z-planted")
+	if err := os.MkdirAll(planted, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(planted, "inner"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(planted, 0000); err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(destDir, "blocker")
+	t.Cleanup(func() {
+		_ = os.Chmod(planted, 0755)
+		_ = os.Chmod(blocker, 0755)
+		_ = os.RemoveAll(staging)
+		_ = os.RemoveAll(destDir)
+	})
+	tmpMarker := filepath.Join(destDir, "a-new.conf.tmp")
+	stopWatch := make(chan struct{})
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		for {
+			select {
+			case <-stopWatch:
+				return
+			default:
+			}
+			if _, statErr := os.Stat(tmpMarker); statErr == nil {
+				if mkErr := os.MkdirAll(blocker, 0755); mkErr != nil {
+					return
+				}
+				if writeErr := os.WriteFile(filepath.Join(blocker, "inner"), []byte("x"), 0644); writeErr != nil {
+					return
+				}
+				_ = os.Chmod(blocker, 0000)
+				return
+			}
+		}
+	}()
+	defer func() {
+		close(stopWatch)
+		<-watchDone
+	}()
+
+	// When
+	err = untarGzTo(data, destDir, "")
+
+	// Then：返回错误同时包含复制失败与恢复失败（errors.Join）
+	if err == nil {
+		t.Fatal("err=nil, want joined copy+restore failure")
+	}
+	if !strings.Contains(err.Error(), "安装同步规则集") {
+		t.Fatalf("err=%v, want 安装同步规则集 copy failure context", err)
+	}
+	if !strings.Contains(err.Error(), "恢复旧树") {
+		t.Fatalf("err=%v, want restore failure joined into the returned error（恢复错误被吞）", err)
+	}
+}
+
 func TestUntarGzTo_nonEmptyDest_removesStaleFiles(t *testing.T) {
 	// R47 A-#2：rename 到非空目录恒失败，兜底分支即主路径；合并复制不删除旧树中
 	// 新包缺失的文件，CRS 更新删除/改名规则文件后从端树为旧+新合并、永不收敛。
