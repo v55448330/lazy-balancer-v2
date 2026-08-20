@@ -971,6 +971,51 @@ func TestCAQueueManager_EnqueueIfActive_skips_when_job_still_active(t *testing.T
 	}
 }
 
+// R47 A-#1：enqueueCompensation 必须先查 IsJobActive——补偿退避循环在角色翻转
+// 退役旧队列后重跑时，drain 只扫 m.queues 看不到退役队列中的滞行执行，不经守卫
+// 会二次入队同 jobID → 双执行。命中时跳过（返回 nil，不视为补偿失败）、不新建
+// 队列、不写 DB。
+func TestCAQueueManager_enqueueCompensation_skips_when_job_still_active(t *testing.T) {
+	// Given：一个带在途执行的退役队列（模拟角色翻转退役后滞行悬挂），补偿租约
+	// 仍在（blockedRules 非空），DB 中有对应 cert_jobs 行
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'comp CA','letsencrypt','https://invalid.example/directory',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_provider_id) VALUES (42,'lb_straggler','example.com','queued',7)`); err != nil {
+		t.Fatal(err)
+	}
+	queue := newCAQueue(models.CAProvider{ID: 7, MaxConcurrent: 1}, nil)
+	queue.mu.Lock()
+	queue.active[42] = struct{}{}
+	queue.mu.Unlock()
+	manager := &CAQueueManager{
+		queues:        make(map[int]*caQueue),
+		retiredQueues: []retiredCAQueue{{queue: queue, retiredAt: time.Now()}},
+		active:        true,
+		blockedRules:  map[string]map[RuleBlockToken]struct{}{"lb_straggler": {1: {}}},
+	}
+
+	// When：补偿路径对仍在途的 job 重入队
+	if err := manager.enqueueCompensation(7, 42, "lb_straggler", "example.com"); err != nil {
+		t.Fatalf("enqueueCompensation err=%v, want nil（在途任务应跳过而非报错）", err)
+	}
+
+	// Then：不新建队列（无二次入队），DB 状态不变
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if len(manager.queues) != 0 {
+		t.Fatal("a new queue was created for an active job（同 jobID 双执行缺口）")
+	}
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=42").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "queued" {
+		t.Fatalf("job 42 status=%q, want queued（补偿跳过不得触碰 DB 状态）", status)
+	}
+}
+
 // R46 A-F2（R45 发现3 回归）：退役条目 age-out 摘除不得遗忘在途 jobID——摘除后
 // IsJobActive 必须继续返回 true（zombieJobs 迁移），直到滞行执行经 executionDone
 // 信号退出；无 executionDone 的 jobID 永久保留保护（罕见，宁可永久保护不放双执行）。

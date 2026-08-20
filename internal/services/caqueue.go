@@ -648,6 +648,15 @@ func (m *CAQueueManager) enqueueLocked(providerID int, jobID int, ruleID, domain
 }
 
 func (m *CAQueueManager) enqueueCompensation(providerID int, jobID int, ruleID, domains string) error {
+	// 在途检查必须先于入队（R47 A-#1）：补偿退避循环在角色翻转退役旧队列后
+	// 重跑时，drain（CancelJobsForRule）只扫 m.queues，看不到 retiredQueues/
+	// zombieJobs 中的滞行执行，会误判"已全部退出"并放行补偿重入队——不经
+	// IsJobActive 守卫即二次入队同 jobID → 双执行。命中时跳过（非错误），
+	// 与 requeueStrandedJobs（:453）/ EnqueueIfActive（:592）同语义。
+	if m.IsJobActive(jobID) {
+		log.Printf("CA queue compensation enqueue skipped: job %d still active", jobID)
+		return nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.active {
