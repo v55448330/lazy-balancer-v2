@@ -115,12 +115,9 @@ const validateMasterUrl = (_rule: unknown, value: string, callback: (error?: Err
       return
     }
     callback()
-  } catch (error: unknown) {
-    if (error instanceof TypeError) {
-      callback(new Error('主节点地址格式不正确'))
-      return
-    }
-    throw error
+  } catch {
+    // new URL() 仅抛 TypeError；其余异常同样视为地址非法，走统一提示，不向外抛。
+    callback(new Error('主节点地址格式不正确'))
   }
 }
 

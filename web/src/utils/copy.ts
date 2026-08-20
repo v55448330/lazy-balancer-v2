@@ -11,9 +11,9 @@ const copyWithTextarea = (text: string): boolean => {
 
   try {
     return document.execCommand('copy')
-  } catch (error: unknown) {
-    if (error instanceof Error) return false
-    throw error
+  } catch {
+    // execCommand 仅抛 DOMException（Error 子类）；其余值同样按复制失败处理，不向外抛。
+    return false
   } finally {
     textarea.remove()
   }

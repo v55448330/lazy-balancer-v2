@@ -740,8 +740,12 @@ async function openDialog(row?: PolicySummary) {
         ElMessage.warning('原拦截页面已删除，已回退默认页面')
       }
     } catch (error: unknown) {
-      // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+      // HTTP 错误已由全局拦截器 toast；本地契约异常（200+code0 但响应缺数据）无用户
+      // 提示。两类失败都保持弹窗关闭：editingId 已在 try 前赋值，若照常打开弹窗，
+      // 共享 form ref 残留上一行数据，会以旧值静默覆盖新行（PUT 覆盖写链）。
       console.error('Failed to load policy detail:', error)
+      editingId.value = null
+      return
     }
   } else { resetForm() }
   originalBoundRules.value = [...boundRules.value]

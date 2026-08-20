@@ -200,8 +200,12 @@ const confirmAction = async (message: string, title: string): Promise<boolean> =
     })
     return true
   } catch (error: unknown) {
+    // MessageBox 仅以 'cancel'/'close' 字符串 reject（取消语义）；其余值同样按未确认
+    // 处理并记录——confirmAction 保证自身不抛出，使 syncNow 等在 try 外调用它的
+    // 调用方不会收到 unhandled rejection。
     if (error === 'cancel' || error === 'close') return false
-    throw error
+    console.error('Unexpected MessageBox rejection:', error)
+    return false
   }
 }
 
@@ -282,11 +286,9 @@ const copyRegisterToken = async (): Promise<void> => {
     await navigator.clipboard.writeText(token)
     ElMessage.success('注册令牌已复制')
   } catch (error: unknown) {
-    if (error instanceof Error) {
-      ElMessage.error('复制失败，请手动复制注册令牌')
-      return
-    }
-    throw error
+    // clipboard 仅 reject Error 子类；其余值同样按复制失败提示，不再向上抛。
+    console.error('Failed to copy register token:', error)
+    ElMessage.error('复制失败，请手动复制注册令牌')
   }
 }
 

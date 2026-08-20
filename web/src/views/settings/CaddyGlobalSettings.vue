@@ -229,8 +229,9 @@ const handleReloadCaddy = async (): Promise<void> => {
       confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning',
     })
   } catch (error: unknown) {
+    // MessageBox 仅以 'cancel'/'close' 字符串 reject（取消语义）；其余值仅记录，不再向上抛。
     if (error === 'cancel' || error === 'close') return
-    throw error
+    console.error('Unexpected MessageBox rejection:', error)
   }
   if (reloading.value) return
   reloading.value = true
