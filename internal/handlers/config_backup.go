@@ -369,7 +369,21 @@ func validateV2Backup(backup configBackup) (bool, error) {
 // validateV2BackupRules 逐行校验备份 lb_rules 的端口与特性（校验侧保守口径）。
 // 必须在 skipEmptyDomainHTTPRules 之后执行（R38 C-3）：空域名行无论端口/特性
 // 是否非法都一律软跳过，不被逐行校验先行整包 400。
-func validateV2BackupRules(rows, pathRows []map[string]any) error {
+func validateV2BackupRules(tables map[string][]map[string]any) error {
+	rows := tables["lb_rules"]
+	pathRows := tables["path_rules"]
+	// R53-A-2：导入为全量替换（deleteOrder 清光 cert_jobs 后仅插入备份行），
+	// 启用的 acme_dns 规则在备份内必须携带至少一条非 disabled 的证书任务行——
+	// 缺失即导入后续签永久断链且无信号（周期路径只遍历已存在的任务行，不补建）。
+	activeJobRuleIDs := make(map[string]bool)
+	for _, job := range tables["cert_jobs"] {
+		if backupString(job["status"]) == "disabled" {
+			continue
+		}
+		if ruleID, ok := job["rule_id"].(string); ok && ruleID != "" {
+			activeJobRuleIDs[ruleID] = true
+		}
+	}
 	for index, rule := range rows {
 		protocol, _ := rule["protocol"].(string)
 		listenPort, validPort := backupInteger(rule["listen_port"])
@@ -397,6 +411,20 @@ func validateV2BackupRules(rows, pathRows []map[string]any) error {
 			backupString(rule["tls_source"]) == "manual" &&
 			(strings.TrimSpace(backupString(rule["tls_cert"])) == "" || strings.TrimSpace(backupString(rule["tls_key"])) == "") {
 			return fmt.Errorf("规则 #%d（%s）：手动证书模式下必须提供 TLS 证书和私钥", index+1, backupString(rule["name"]))
+		}
+		// R53 发现2：启用的 acme_dns 行按 validateRuleACMEReferences 同口径校验——
+		// acme_config_id=0/悬挂/已禁用与 ca_provider_id 悬挂/已禁用均整包 400。
+		// 导入把规则已启用地带入运行态，R52 F-2 的 EnableRule 门拦不住这条路径；
+		// 坏行导入后 TLS 端口明文服务且签发必败，与手动证书缺材料的拒绝理由同型。
+		// R53-A-2：引用有效还须携带非 disabled 的 cert_jobs 行（见函数头部注释）。
+		if enabled && protocol == "http" && backupBooleanEnabled(rule["enable_tls"]) &&
+			backupString(rule["tls_source"]) == "acme_dns" {
+			if err := validateBackupACMEReferenceIDs(tables, rule); err != nil {
+				return fmt.Errorf("规则 #%d（%s）：%w", index+1, backupString(rule["name"]), err)
+			}
+			if !activeJobRuleIDs[backupString(rule["caddy_id"])] {
+				return fmt.Errorf("规则 #%d（%s）：启用的 ACME 规则缺少证书签发任务（cert_jobs 无非 disabled 行），导入后将无法自动续签", index+1, backupString(rule["name"]))
+			}
 		}
 		input := ruleFeatureInput{
 			Protocol:                   protocol,
@@ -483,6 +511,58 @@ func validateV2BackupSecurityPolicies(rows []map[string]any) error {
 		policy["mode"] = mode
 		policy["ip_acl_mode"] = ipACLMode
 		policy["geoip_mode"] = geoIPMode
+	}
+	return nil
+}
+
+// validateBackupACMEReferenceIDs 按 validateRuleACMEReferences（rule_features.go）
+// 同口径校验备份行的 ACME 引用，错误文案保持一致。引用优先在备份自带表中解析——
+// 导入为全量替换（deleteOrder 清光 live 的 certificate_configs/ca_providers），
+// 备份行才是导入后的真实数据；备份缺该表时回退 live 表（直测/非常规调用场景），
+// 与 validateBackupRuleReferences 的备份内解析哲学一致。配置/提供商行缺 enabled
+// 键时按表默认值 TRUE 处理（与 backupRuleEnabled 的校验侧口径一致）。
+func validateBackupACMEReferenceIDs(tables map[string][]map[string]any, rule map[string]any) error {
+	acmeConfigID, ok := backupInteger(rule["acme_config_id"])
+	if !ok || acmeConfigID == 0 {
+		return errors.New("使用 ACME 签发时必须选择 DNS 提供商配置")
+	}
+	configOK := false
+	if configRows, exists := tables["certificate_configs"]; exists {
+		for _, configRow := range configRows {
+			id, idOK := backupInteger(configRow["id"])
+			if idOK && id == acmeConfigID {
+				enabledRaw, hasEnabled := configRow["enabled"]
+				configOK = !hasEnabled || backupBooleanEnabled(enabledRaw)
+			}
+		}
+	} else {
+		if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM certificate_configs WHERE id = ? AND enabled = 1)", acmeConfigID).Scan(&configOK); err != nil {
+			return fmt.Errorf("校验 DNS 提供商配置失败: %v", err)
+		}
+	}
+	if !configOK {
+		return errors.New("选择的 DNS 提供商配置不存在或已禁用")
+	}
+	caProviderID, ok := backupInteger(rule["ca_provider_id"])
+	if !ok || caProviderID == 0 {
+		return nil
+	}
+	providerOK := false
+	if providerRows, exists := tables["ca_providers"]; exists {
+		for _, providerRow := range providerRows {
+			id, idOK := backupInteger(providerRow["id"])
+			if idOK && id == caProviderID {
+				enabledRaw, hasEnabled := providerRow["enabled"]
+				providerOK = !hasEnabled || backupBooleanEnabled(enabledRaw)
+			}
+		}
+	} else {
+		if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM ca_providers WHERE id = ? AND enabled = 1)", caProviderID).Scan(&providerOK); err != nil {
+			return fmt.Errorf("校验 CA 提供商失败: %v", err)
+		}
+	}
+	if !providerOK {
+		return errors.New("指定的 CA 提供商不存在或已禁用")
 	}
 	return nil
 }
@@ -780,7 +860,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	if err := validateV2BackupRules(backup.Tables["lb_rules"], backup.Tables["path_rules"]); err != nil {
+	if err := validateV2BackupRules(backup.Tables); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}

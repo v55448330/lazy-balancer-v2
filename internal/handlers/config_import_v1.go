@@ -491,7 +491,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
 			return
 		}
-		if err := validateV2BackupRules(backup.Tables["lb_rules"], backup.Tables["path_rules"]); err != nil {
+		if err := validateV2BackupRules(backup.Tables); err != nil {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
 			return
 		}

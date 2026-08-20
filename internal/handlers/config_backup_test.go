@@ -750,6 +750,19 @@ func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *t
 		INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES ('lb_requeue_v2','requeue.example.test','creating_order',999999)`); err != nil {
 		t.Fatalf("seed non-terminal job: %v", err)
 	}
+	// R53 发现2/A-2 起启用 acme_dns 规则须引用有效证书配置（备份内可解析），
+	// 夹具补种子行并绑定，保持本用例的 requeue 语义不变。
+	dnsResult, err := db.DB.Exec(`INSERT INTO certificate_configs (name,dns_provider,dns_credentials,enabled) VALUES ('requeue-dns','dnspod','{"token":"x"}',1)`)
+	if err != nil {
+		t.Fatalf("seed certificate config: %v", err)
+	}
+	dnsConfigID, err := dnsResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("read certificate config ID: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=? WHERE caddy_id='lb_requeue_v2'", dnsConfigID); err != nil {
+		t.Fatalf("bind certificate config: %v", err)
+	}
 	block := make(chan struct{})
 	acmeMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-block }))
 	t.Cleanup(func() { close(block); services.GetCAQueueManager().PauseAndDrain(); acmeMock.Close() })
@@ -1045,7 +1058,7 @@ func TestValidateV2Backup_rejects_self_loop_80_tls_redirect_rule(t *testing.T) {
 			// skipEmptyDomainHTTPRules 之后调用）；直测时组合两者保持原语义。
 			_, err := validateV2Backup(b)
 			if err == nil {
-				err = validateV2BackupRules(b.Tables["lb_rules"], b.Tables["path_rules"])
+				err = validateV2BackupRules(b.Tables)
 			}
 			if tt.wantErrText != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
