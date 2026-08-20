@@ -603,14 +603,15 @@ func TestIP2RegionUpdateRun_rollbackCopySuccessReloadFailKeepsBaseline(t *testin
 	}
 }
 
-func TestIP2RegionUpdateRun_rollbackAllReloadsFailFailOpenMemoryNote(t *testing.T) {
-	// Given R46 B-F1 最坏路径（R48 B-1 口径调整）：安装热换失败（seam 恒失
-	// 败），且 .bak 在回滚前丢失（seam 首次调用时删除，模拟极端故障窗口）——
-	// R48 B-1 起 .bak 级磁盘还原成功后热换失败不再升级，故只有 .bak 缺失才
-	// 能到达 dist 级；dist 回退落盘但热换失败（最后手段）仍返回 error，调用
-	// 方走 fail-open（DB 跟随实际状态），且 message 必须注明「内存 searcher
-	// 未切换，重启后生效」：DB 记 success 而内存仍是旧库，重启前这是唯一可
-	// 见痕迹。
+func TestIP2RegionUpdateRun_rollbackDistCopySuccessReloadFailKeepsBaseline(t *testing.T) {
+	// Given R49 B-N1（与 R48 B-1 同口径的 dist 级情形）：安装热换失败（seam
+	// 恒失败），且 .bak 在回滚前丢失（seam 首次调用时删除，模拟极端故障窗
+	// 口）——R48 B-1 起 .bak 级磁盘还原成功后热换失败不再升级，故只有 .bak
+	// 缺失才能到达 dist 级。dist copy 成功后磁盘已是 dist 基线（发行版捆绑
+	// 旧版），热换失败不得再走 error→fail-open：R44 fail-open 前提「磁盘已
+	// 是新库」在 dist copy 成功后不成立，旧实现会记 success+新 tag，造成
+	// 磁盘(dist 旧版)≠DB(新 tag) 的永久分叉。修复后与 rename/copy 级同口
+	// 径：warn + restored=true，由 run() 记 failed+旧版本。
 	m := newTestIP2RegionManager(t)
 	seedIP2RegionVersionRow(t, "v3.0.0", true)
 	writeTestXDB(t, ip2regionLivePath, testSegments)
@@ -620,6 +621,10 @@ func TestIP2RegionUpdateRun_rollbackAllReloadsFailFailOpenMemoryNote(t *testing.
 		t.Fatal(err)
 	}
 	writeTestXDB(t, dist, append([]xdbSegment{}, testSegments[1:]...))
+	distBytes, err := os.ReadFile(dist)
+	if err != nil {
+		t.Fatal(err)
+	}
 	withIP2RegionPaths(t, ip2regionLivePath, dist)
 
 	oldReload := reloadIP2RegionSearcher
@@ -642,27 +647,30 @@ func TestIP2RegionUpdateRun_rollbackAllReloadsFailFailOpenMemoryNote(t *testing.
 	reloads := 0
 	m.reloader = func() error { reloads++; return errors.New("reload boom") }
 
-	// When 安装热换失败且回滚各级热换全部失败
+	// When 安装热换失败、dist copy 落盘成功但 dist 级热换失败
 	m.run("manual")
 
-	// Then fail-open：DB 记 success+新 tag，message 同时保留重载失败警告与
-	// 「内存 searcher 未切换，重启后生效」注记；reloader 仅在 fail-open 落库前
-	// 按 F1-C 补一次重试
+	// Then 不 fail-open：live=dist 基线、DB 记 failed+旧版本（磁盘/DB 一
+	// 致），message 保留热换失败注记；reloader 在回滚后补一次重试
+	data, err := os.ReadFile(ip2regionLivePath)
+	if err != nil || string(data) != string(distBytes) {
+		t.Fatalf("live xdb should be the dist baseline after dist restore: %v", err)
+	}
 	version, status, message, _, _, _, _ := ip2RegionVersionRow(t)
-	if status != "success" {
-		t.Fatalf("update_status=%q, want success (fail-open)", status)
+	if status != "failed" {
+		t.Fatalf("update_status=%q, want failed (dist copy 成功后 fail-open 前提不成立)", status)
 	}
-	if version != "v3.1.0" {
-		t.Fatalf("version=%q, want v3.1.0 (fail-open 记录新 tag)", version)
+	if version != "v3.0.0" {
+		t.Fatalf("version=%q, want v3.0.0 (保持旧版本)", version)
 	}
-	if !strings.Contains(message, "内存 searcher 未切换，重启后生效") {
-		t.Fatalf("message=%q, want 注明内存 searcher 未切换、重启后生效", message)
+	if !strings.Contains(message, "重载 ip2region 内存索引失败") {
+		t.Fatalf("message=%q, want 保留热换失败注记", message)
 	}
-	if !strings.Contains(message, "重载 Caddy 配置失败") {
-		t.Fatalf("message=%q, want 保留重载失败警告", message)
+	if reloadCalls != 2 {
+		t.Fatalf("reload calls=%d, want 2 (install hot-swap fails, dist-level reload fails)", reloadCalls)
 	}
 	if reloads != 1 {
-		t.Fatalf("reloads=%d, want 1 (热换失败跳过首次 reloader，fail-open 落库前补一次重试)", reloads)
+		t.Fatalf("reloads=%d, want 1 (热换失败跳过首次 reloader，回滚后补一次重试)", reloads)
 	}
 }
 

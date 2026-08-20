@@ -234,9 +234,11 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	if reloadErr != nil {
 		// 回滚旧 xdb 并再次重载（镜像 CRS fail() 路径，R39 1.2）：reloader 失败
 		// 时磁盘还原到更新前状态，避免「磁盘已是新库、DB 记录旧版本+failed」的
-		// 长期不一致；还原后内存热换失败时 searcher 瞬态滞后、下次 reload/重启
-		// 自愈（R48 B-1），不影响磁盘/DB 一致性。回滚或重试失败仅记录，不改变
-		// 失败落库。
+		// 长期不一致；还原后内存热换失败时旧 searcher 保持服役、磁盘已是基线
+		//（R48 B-1）——若安装阶段热换曾成功，内存 searcher 以新数据滞后，在下
+		// 次更新安装或重启后收敛（无周期性 reload；Caddy 侧 geoip 强制随
+		// reloader 重试收敛），不影响磁盘/DB 一致性。回滚或重试失败仅记录，
+		// 不改变失败落库。
 		restored, rbErr := m.rollbackXDB()
 		switch {
 		case rbErr != nil:
@@ -385,8 +387,12 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 // rename 会消费 .bak，升级后 copy 级必然失败、dist 必然执行，而 dist 是镜像
 // 捆绑的旧版本，会覆盖已正确还原的更新前基线——磁盘(dist 旧版)≠DB(failed+
 // 旧版本)分叉且基线不可恢复。热换失败只记 warn 并返回 restored=true：Reload
-// 失败时旧 searcher 保持服役（内存滞后为瞬态），下次任意成功 reload/重启即
-// 追上。仅 dist 级（最后手段）的热换失败仍返回 error，由调用方 fail-open。
+// 失败时旧 searcher 保持服役、磁盘已还原为基线；若安装阶段热换曾成功，内存
+// searcher 以新数据滞后，在下次更新安装或重启后收敛（无周期性 reload；
+// Caddy 侧 geoip 强制随 reloader 重试收敛）。dist 级同口径（R49 B-N1）：
+// dist copy 成功后磁盘=dist 基线，fail-open 前提「磁盘已是新库」不成立，
+// 热换失败同样 warn + restored=true；仅 dist copy 本身失败（磁盘未动、仍
+// 是新库）才返回 error，由调用方走 fail-open。
 func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 	if m.bakCreated {
 		bak := ip2regionLivePath + ".bak"
@@ -396,8 +402,9 @@ func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 					// R48 B-1：磁盘已还原为更新前基线，热换失败不得升级——
 					// .bak 已被 rename 消费，升级后 copy 必然失败、dist 必然
 					// 执行，镜像捆绑的旧版会覆盖正确基线（磁盘≠DB 分叉+基线
-					// 丢失）。内存 searcher 滞后为瞬态，下次 reload/重启自愈。
-					log.Printf("ip2region update: reload after rename restore failed (%v); disk baseline restored, memory searcher will catch up on next reload", rErr)
+					// 丢失）。磁盘已是基线；若安装阶段热换曾成功，内存
+					// searcher 滞后至下次更新安装或重启收敛（R49 B-N3）。
+					log.Printf("ip2region update: reload after rename restore failed (%v); disk baseline restored; if the install-time hot-swap succeeded, the in-memory searcher lags until the next update install or restart (Caddy-side geoip converges with the reloader)", rErr)
 				}
 				return true, nil
 			} else {
@@ -411,8 +418,8 @@ func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 				}
 				if rErr := reloadIP2RegionSearcher(); rErr != nil {
 					// R48 B-1：同 rename 级——磁盘已是正确基线，热换失败仅
-					// 记 warn，不得升级到 dist 覆盖基线。
-					log.Printf("ip2region update: reload after copy restore failed (%v); disk baseline restored, memory searcher will catch up on next reload", rErr)
+					// 记 warn，不得升级到 dist 覆盖基线（滞后收敛口径同上）。
+					log.Printf("ip2region update: reload after copy restore failed (%v); disk baseline restored; if the install-time hot-swap succeeded, the in-memory searcher lags until the next update install or restart (Caddy-side geoip converges with the reloader)", rErr)
 				}
 				return true, nil
 			} else {
@@ -427,7 +434,11 @@ func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 		return false, fmt.Errorf("回退到发行版 ip2region xdb: %w", err)
 	}
 	if err := reloadIP2RegionSearcher(); err != nil {
-		return false, fmt.Errorf("发行版回退后重载 ip2region 内存索引: %w", err)
+		// R49 B-N1：dist copy 已成功、磁盘=dist 基线，fail-open 前提「磁盘已
+		// 是新库」不成立——与 rename/copy 级同口径（R48 B-1）记 warn 并返回
+		// restored=true，由 run() 记 failed+旧版本（磁盘/DB 一致）；仅 dist
+		// copy 本身失败（上方，磁盘未动、仍是新库）才返回 error 走 fail-open。
+		log.Printf("ip2region update: reload after dist restore failed (%v); disk restored to dist baseline; if the install-time hot-swap succeeded, the in-memory searcher lags until the next update install or restart (Caddy-side geoip converges with the reloader)", err)
 	}
 	return true, nil
 }
