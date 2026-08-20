@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,26 +18,31 @@ import (
 // 字面量逐一校验——新增超标词条此测试直接红。变量词条仅放行已核清的动态
 // 调用点，其余动态传参视为违规（强制新调用点用字面量，保持可扫描）。
 
-// auditVocabDynamicAllowlist 是已人工核清的动态词条调用点（键为相对 internal/
-// 的路径 + 参数下标）：
-//   - handlers/audit.go 与 middleware 是 recordAudit/RecordAuditLog 的透传封装；
-//   - handlers/caddy.go 的对象变量取自 GetConfigSection/GetConfigSourceSection
-//     （ACME配置/Caddy配置/基础设置/全局配置/集群管理，均 ≤5 词）；
-//   - handlers/cluster_registration.go 的动作形参实参仅有 审批/拒绝/删除/更新地址；
-//   - handlers/config_backup.go 与 config_import_v1.go 的动作变量取值仅有
-//     导入失败/部分失败；
-//   - services/certificates.go 的动作变量取值仅有 续签排队/重试排队；
-//   - services/downloadintegrity.go 的对象变量由调用方传入字面量（CRS规则库/
-//     IP2Region数据库，已纳入扫描）。
-var auditVocabDynamicAllowlist = map[string]map[int]bool{
-	"handlers/audit.go":                {1: true, 2: true},
-	"middleware/middleware.go":         {1: true, 2: true},
-	"handlers/caddy.go":                {2: true},
-	"handlers/cluster_registration.go": {1: true},
-	"handlers/config_backup.go":        {1: true},
-	"handlers/config_import_v1.go":     {1: true},
-	"services/certificates.go":         {1: true},
-	"services/downloadintegrity.go":    {2: true},
+// auditVocabDynamicAllowlist 是已人工核清的动态词条调用点，粒度为
+// 「相对 internal/ 的路径 + 参数下标 + 外层函数名」（R47 C-发现2：文件级
+// 白名单会放行同文件内新增函数的动态传参，收紧到函数级后新增函数即违规）：
+//   - handlers/audit.go recordAudit 与 middleware auditMiddleware 是
+//     recordAudit/RecordAuditLog 的透传封装；
+//   - handlers/caddy.go UpdateConfig 的对象变量取自
+//     GetConfigSection/GetConfigSourceSection（ACME配置/Caddy配置/基础设置/
+//     全局配置/集群管理，均 ≤5 词）；
+//   - handlers/cluster_registration.go clusterNodeAction 的动作形参实参仅有
+//     审批/拒绝/删除/更新地址；
+//   - handlers/config_backup.go ImportConfigBackup 与 config_import_v1.go
+//     ImportV1Config 的动作变量取值仅有 导入失败/部分失败；
+//   - services/certificates.go renewExpiringCertificates 的动作变量取值仅有
+//     续签排队/重试排队；
+//   - services/downloadintegrity.go recordDownloadIntegrity 的对象变量由调用方
+//     传入字面量（CRS规则库/IP数据库，已纳入扫描）。
+var auditVocabDynamicAllowlist = map[string]map[int][]string{
+	"handlers/audit.go":                {1: {"recordAudit"}, 2: {"recordAudit"}},
+	"middleware/middleware.go":         {1: {"auditMiddleware"}, 2: {"auditMiddleware"}},
+	"handlers/caddy.go":                {2: {"UpdateConfig"}},
+	"handlers/cluster_registration.go": {1: {"clusterNodeAction"}},
+	"handlers/config_backup.go":        {1: {"ImportConfigBackup"}},
+	"handlers/config_import_v1.go":     {1: {"ImportV1Config"}},
+	"services/certificates.go":         {1: {"renewExpiringCertificates"}},
+	"services/downloadintegrity.go":    {2: {"recordDownloadIntegrity"}},
 }
 
 // auditVocabCallSpecs 给出各审计写入口的 动作/对象 参数下标。
@@ -51,6 +57,10 @@ func auditVocabStringLit(e ast.Expr) (string, bool) {
 	if !ok || b.Kind != token.STRING {
 		return "", false
 	}
+	// 优先按 Go 语法反转义（转义形态按实际词数计数）；异常字面量回退原样剥引号。
+	if unquoted, err := strconv.Unquote(b.Value); err == nil {
+		return unquoted, true
+	}
 	return strings.Trim(b.Value, "\""), true
 }
 
@@ -60,6 +70,10 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 		t.Fatalf("resolve internal dir: %v", err)
 	}
 	var violations []string
+	// usedAllowlist 记录命中白名单的「文件|参数下标|函数」组合，测试末尾断言
+	// 每个白名单条目都有真实动态调用点——条目失效（函数改名/调用点消失）即报错，
+	// 防止白名单只增不减地淤积放行面。
+	usedAllowlist := map[string]bool{}
 	check := func(file string, line int, kind, value string, limit int) {
 		if n := auditVocabWords(value); n > limit {
 			violations = append(violations, file+":"+strconv.Itoa(line)+" "+kind+" "+strconv.Quote(value)+" 超上限（"+strconv.Itoa(n)+" 词 > "+strconv.Itoa(limit)+"）")
@@ -76,11 +90,16 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)
-		ast.Inspect(f, func(n ast.Node) bool {
-			switch node := n.(type) {
-			case *ast.CallExpr:
+		// checkCalls 扫描一棵子树内的审计写入口调用，违规动态传参按外层函数名
+		// 归因（enclosing 为空表示包级初始化表达式，不在白名单即违规）。
+		checkCalls := func(node ast.Node, enclosing string) {
+			ast.Inspect(node, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
 				var name string
-				switch fn := node.Fun.(type) {
+				switch fn := call.Fun.(type) {
 				case *ast.SelectorExpr:
 					name = fn.Sel.Name
 				case *ast.Ident:
@@ -95,46 +114,63 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 					kind  string
 					limit int
 				}{{spec[0], "操作标签", auditActionMaxWords}, {spec[1], "事件对象", auditResourceMaxWords}} {
-					if arg.idx >= len(node.Args) {
+					if arg.idx >= len(call.Args) {
 						continue
 					}
-					line := fset.Position(node.Pos()).Line
-					if value, ok := auditVocabStringLit(node.Args[arg.idx]); ok {
+					line := fset.Position(call.Pos()).Line
+					if value, ok := auditVocabStringLit(call.Args[arg.idx]); ok {
 						if value != "" {
 							check(path, line, arg.kind, value, arg.limit)
 						}
 						continue
 					}
-					if !auditVocabDynamicAllowlist[rel][arg.idx] {
-						violations = append(violations, path+":"+strconv.Itoa(line)+" "+arg.kind+" 为动态表达式且不在已核清白名单，请改用字面量词条")
+					if !slices.Contains(auditVocabDynamicAllowlist[rel][arg.idx], enclosing) {
+						violations = append(violations, path+":"+strconv.Itoa(line)+" "+arg.kind+" 为动态表达式且不在已核清白名单（函数 "+enclosing+"），请改用字面量词条")
+					} else {
+						usedAllowlist[rel+"|"+strconv.Itoa(arg.idx)+"|"+enclosing] = true
 					}
 				}
+				return true
+			})
+		}
+		for _, decl := range f.Decls {
+			switch d := decl.(type) {
 			case *ast.FuncDecl:
-				if node.Name.Name != "FormatAuditAction" || node.Body == nil {
-					return true
-				}
-				ast.Inspect(node.Body, func(inner ast.Node) bool {
-					ret, ok := inner.(*ast.ReturnStmt)
-					if !ok || len(ret.Results) < 2 {
+				if d.Name.Name == "FormatAuditAction" && d.Body != nil {
+					ast.Inspect(d.Body, func(inner ast.Node) bool {
+						ret, ok := inner.(*ast.ReturnStmt)
+						if !ok || len(ret.Results) < 2 {
+							return true
+						}
+						line := fset.Position(ret.Pos()).Line
+						if value, ok := auditVocabStringLit(ret.Results[0]); ok && value != "" {
+							check(path, line, "操作标签", value, auditActionMaxWords)
+						}
+						if value, ok := auditVocabStringLit(ret.Results[1]); ok && value != "" {
+							check(path, line, "事件对象", value, auditResourceMaxWords)
+						}
 						return true
-					}
-					line := fset.Position(ret.Pos()).Line
-					if value, ok := auditVocabStringLit(ret.Results[0]); ok && value != "" {
-						check(path, line, "操作标签", value, auditActionMaxWords)
-					}
-					if value, ok := auditVocabStringLit(ret.Results[1]); ok && value != "" {
-						check(path, line, "事件对象", value, auditResourceMaxWords)
-					}
-					return true
-				})
-				return false
+					})
+					continue
+				}
+				checkCalls(d.Body, d.Name.Name)
+			case *ast.GenDecl:
+				checkCalls(d, "")
 			}
-			return true
-		})
+		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("walk internal: %v", err)
+	}
+	for rel, byIndex := range auditVocabDynamicAllowlist {
+		for idx, funcs := range byIndex {
+			for _, fn := range funcs {
+				if !usedAllowlist[rel+"|"+strconv.Itoa(idx)+"|"+fn] {
+					t.Errorf("白名单条目 %s 参数 %d 函数 %s 未命中任何动态调用点——调用点已消失或改名，请同步收紧白名单", rel, idx, fn)
+				}
+			}
+		}
 	}
 	if len(violations) > 0 {
 		t.Fatalf("操作日志词汇超标（标准：操作标签 ≤%d 词、事件对象 ≤%d 词）：\n%s", auditActionMaxWords, auditResourceMaxWords, strings.Join(violations, "\n"))
