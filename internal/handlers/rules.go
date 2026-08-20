@@ -424,6 +424,27 @@ func canonicalACMEDomainForJobLookup(domain string) string {
 	return canonical
 }
 
+// reversedACMEDomainForm 返回双域名集合的逆序形式；cert_jobs.domain 按排序规范
+// 形式存储，而导入备份可携带用户输入顺序的非规范行——与 certjobs.go 规则侧
+// joined+reversed 双形式匹配同型。
+func reversedACMEDomainForm(domain string) string {
+	if parts := strings.Split(domain, ","); len(parts) == 2 {
+		return parts[1] + "," + parts[0]
+	}
+	return domain
+}
+
+// retireCertJobsForDomain 将规则下旧域证书任务退役为 disabled 终态（保留 PEM 作
+// 历史）。导入备份可携带非规范 domain 行（大小写/空白/顺序变体），按去空白小写
+// 归一（lower+replace）与 canonical/reversed 双形式匹配，避免变体行逃逸退役
+// （R50 S-2）；零行命中为无害无操作。
+func retireCertJobsForDomain(database *sql.DB, ruleID, canonicalDomain, reversedDomain string) error {
+	_, err := database.Exec(
+		`UPDATE cert_jobs SET status='disabled', message='域名迁移事务开启失败，旧域任务退役', updated_at=datetime('now') WHERE rule_id=? AND lower(replace(domain,' ','')) IN (?,?)`,
+		ruleID, canonicalDomain, reversedDomain)
+	return err
+}
+
 func validateRuleListenPort(protocol string, port int) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("端口必须在 1-65535 之间")
@@ -1744,6 +1765,16 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// and maintains the "one rule = one cert job" invariant.
 		if domainChanged {
 			newCanonical := canonicalACMEDomainForJobLookup(domain)
+			// R50 S-5：迁移前取消在途旧域签发。否则 worker 可能在迁移把行改写为新域
+			// 之后仍完成签发，confirmCertificateDeployment 见到 job.domain==rule.domain
+			// （同为新域）便放行，把旧域证书部署到新域（瞬时 TLS 名称不匹配，重签后
+			// 自愈）。CancelJob 等待在途执行退出（30s 上限）；被取消的 worker 走
+			// handleExecutionCancellation 的静默分支（q.ctx 未取消、非执行超时），
+			// 不写任务状态，requeueCanceledJob 不会复活迁移后置为 'failed' 的行。
+			var inFlightJobID int
+			if scanErr := db.DB.QueryRow(`SELECT id FROM cert_jobs WHERE rule_id=? ORDER BY id DESC LIMIT 1`, caddyID).Scan(&inFlightJobID); scanErr == nil && inFlightJobID > 0 {
+				cancelCertJob(inFlightJobID)
+			}
 			certTx, txErr := db.DB.Begin()
 			if txErr != nil {
 				// R48-2：迁移事务开启失败不能静默吞掉——任务仍持旧域，后续会为
@@ -1751,13 +1782,21 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				// 本身有效，此时回滚规则是错误语义；记录错误并继续：新任务按
 				// 既有 needJob 路径创建。
 				// R49 C-#1：旧域残留任务不会被孤儿清扫收敛（sweepOrphanedCertJobs
-				// 跳过终态，'issued'+PEM 行将永驻），须在此显式退役旧域任务，
-				// 与迁移成功路径的退役语义对齐（保留 PEM 作历史，仅转终态）。
+				// 跳过终态，'issued'+PEM 行将永驻），须在此显式退役旧域任务。
+				// 退役与迁移成功路径同为终态（disabled/failed 均使 sweep 不再触碰），
+				// 但语义不同：成功路径把行改写为新域、抹除 PEM、置 'failed' 等待重签；
+				// 此处域名未实际迁移，故保留 PEM 作历史、置 'disabled'——旧证留在
+				// 旧域行上无副作用（部署/续期均按新域匹配，不读此行）。
 				services.Logf("error", "UpdateRule: cert job domain migration begin failed for caddy_id=%s: %v", caddyID, txErr)
-				if _, retireErr := db.DB.Exec(
-					`UPDATE cert_jobs SET status='disabled', message='域名迁移事务开启失败，旧域任务退役', updated_at=datetime('now') WHERE rule_id=? AND domain=?`,
-					caddyID, canonicalACMEDomainForJobLookup(existingRule.Domain)); retireErr != nil {
+				oldCanonical := canonicalACMEDomainForJobLookup(existingRule.Domain)
+				if retireErr := retireCertJobsForDomain(db.DB, caddyID, oldCanonical, reversedACMEDomainForm(oldCanonical)); retireErr != nil {
 					services.Logf("error", "CRITICAL: UpdateRule: failed to retire old-domain cert job after migration begin failure for caddy_id=%s: %v", caddyID, retireErr)
+					// R50-N3：退役失败即旧域任务保持原状（'issued'+PEM 行永驻，与
+					// pre-R49 行为等效，fail-safe 但静默），补审计让运维可见。
+					recordAudit(c, "写入失败", "证书任务", services.FormatAuditDetail(
+						services.AuditRulePart(caddyID),
+						fmt.Sprintf("域名迁移事务开启失败后旧域任务退役失败：%v。旧域任务保持原状，请人工检查", retireErr),
+					))
 				}
 			} else {
 				var existingJobID int
@@ -1925,7 +1964,17 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 		jobsCanceled = true
 	}
 	defer func() {
-		if !jobsCanceled || deleteCompleted {
+		if !jobsCanceled {
+			// R50 S-1：drain 之前/之中 panic（gin Recovery 只恢复 HTTP 栈、不清理
+			// blockedRules）或未来窗口内新增代码的防御——此时租约无人接管，屏障会
+			// 滞留到下一次 Stop。UnblockJobsForRule 幂等：token 未注册（含从未
+			// Block 的零值）均为无操作；queueManager 为 nil 时根本没有租约可放。
+			if queueManager != nil {
+				queueManager.UnblockJobsForRule(caddyID, blockToken)
+			}
+			return
+		}
+		if deleteCompleted {
 			return
 		}
 		if err := queueManager.StartRuleDeletionCompensation(services.RuleDeletionCompensation{
