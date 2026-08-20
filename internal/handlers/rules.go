@@ -1938,10 +1938,34 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	queueManager := services.GetCAQueueManager()
 	jobsCanceled := false
 	deleteCompleted := false
+	compensationStarted := false
 	var blockToken services.RuleBlockToken
 	if queueManager != nil {
 		// No DB transaction is held while waiting, so worker rollback/reload paths can exit.
 		blockToken = queueManager.BlockJobsForRule(caddyID)
+		// R51 发现1：租约释放收口到登记于 drain 之前的唯一 defer——drain 前/中
+		// panic（gin Recovery 只恢复 HTTP 栈、不清理 blockedRules）也能走到这里。
+		// 补偿一旦启动成功即接管租约（完成时自行释放），abort 路径不得提前释放，
+		// 否则补偿的 enqueueCompensation 见租约缺失而永久退避（R50 注释描述的
+		// panic 窗口由此真正闭合）。UnblockJobsForRule 幂等：token 未注册均为无操作。
+		defer func() {
+			if compensationStarted || deleteCompleted {
+				return
+			}
+			if !jobsCanceled {
+				queueManager.UnblockJobsForRule(caddyID, blockToken)
+				return
+			}
+			if err := queueManager.StartRuleDeletionCompensation(services.RuleDeletionCompensation{
+				RuleID: caddyID, Token: blockToken, Snapshot: certJobsSnapshot,
+			}); err != nil {
+				services.Logf("error", "CRITICAL: DeleteRule failed to start certificate rollback compensation for caddy_id=%s: %v", caddyID, err)
+				// R49 A-N1：同上——补偿未能接管租约时立即释放，不留孤儿屏障。
+				queueManager.UnblockJobsForRule(caddyID, blockToken)
+				return
+			}
+			compensationStarted = true
+		}()
 		drainRuleJobs := cancelRuleJobs
 		cancelCtx, cancel := context.WithTimeout(c.Request.Context(), cancelRuleJobsTimeout)
 		cancelErr := drainRuleJobs(cancelCtx, queueManager, caddyID)
@@ -1957,34 +1981,14 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 				// 该规则证书任务被屏障永久拦截、静默停发直到下一次 Stop。对运行中的
 				// manager 同样幂等安全。
 				queueManager.UnblockJobsForRule(caddyID, blockToken)
+			} else {
+				compensationStarted = true
 			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "取消证书任务超时，规则与证书保持不变: " + cancelErr.Error()})
 			return
 		}
 		jobsCanceled = true
 	}
-	defer func() {
-		if !jobsCanceled {
-			// R50 S-1：drain 之前/之中 panic（gin Recovery 只恢复 HTTP 栈、不清理
-			// blockedRules）或未来窗口内新增代码的防御——此时租约无人接管，屏障会
-			// 滞留到下一次 Stop。UnblockJobsForRule 幂等：token 未注册（含从未
-			// Block 的零值）均为无操作；queueManager 为 nil 时根本没有租约可放。
-			if queueManager != nil {
-				queueManager.UnblockJobsForRule(caddyID, blockToken)
-			}
-			return
-		}
-		if deleteCompleted {
-			return
-		}
-		if err := queueManager.StartRuleDeletionCompensation(services.RuleDeletionCompensation{
-			RuleID: caddyID, Token: blockToken, Snapshot: certJobsSnapshot,
-		}); err != nil {
-			services.Logf("error", "CRITICAL: DeleteRule failed to start certificate rollback compensation for caddy_id=%s: %v", caddyID, err)
-			// R49 A-N1：同上——补偿未能接管租约时立即释放，不留孤儿屏障。
-			queueManager.UnblockJobsForRule(caddyID, blockToken)
-		}
-	}()
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
