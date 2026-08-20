@@ -23,7 +23,7 @@ func validateCRSStaging(dir string) error {
 		return fmt.Errorf("staging 缺少 crs-setup.conf.example")
 	}
 	if !crsRulesTreeIntact(filepath.Join(dir, "rules")) {
-		return fmt.Errorf("staging rules 树不完整（无 .conf 规则文件或缺失 %s）", crsRulesProbeFile)
+		return fmt.Errorf("staging rules 树不完整（无 .conf 规则文件或缺失 %s）；该探针文件是安装契约——若上游 CRS 发布结构已变更，请等待适配版本或手动回退，切勿绕过校验强行安装", crsRulesProbeFile)
 	}
 	return nil
 }
