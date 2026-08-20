@@ -66,6 +66,13 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 	snapshotDegenerate := false
 	snapshotRules := filepath.Join(snapshotDir, "rules")
 	if _, err := os.Stat(snapshotRules); err != nil {
+		// R53 新-4：VERSION 标记尚在而 rules 树缺失（persistCRSSnapshotFrom 的
+		// RemoveAll 之后崩溃残留）同属退化快照——置退化标记走 heal 重建，不留
+		// 永不自愈的 VERSION-only 残骸。
+		if snapshotVersion != "" {
+			log.Printf("crs seed: snapshot %s carries a version marker but no rules tree, treating as degenerate", snapshotDir)
+			snapshotDegenerate = true
+		}
 		snapshotVersion = "" // a snapshot without a rules tree is unusable
 	} else if !crsRulesTreeIntact(snapshotRules) {
 		// R51 F2：persistCRSSnapshotFrom 崩溃窗口（RemoveAll 中途，VERSION 尚存 +
@@ -269,6 +276,12 @@ func reconcileCRSStateFrom(liveDir, snapshotDir, dbV string) {
 			snapshotDegenerate = true
 		}
 	} else {
+		// R53 新-4：VERSION 标记尚在而 rules 树缺失同属退化快照，live 健康时
+		// 走 heal 重建（与 seed 侧同一判定口径）。
+		if snapV != "" {
+			log.Printf("crs reconcile: snapshot %s carries a version marker but no rules tree, treating as degenerate", snapshotDir)
+			snapshotDegenerate = true
+		}
 		snapV = ""
 	}
 	liveV := readCRSVersionMarker(liveDir)

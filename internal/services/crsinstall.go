@@ -114,6 +114,11 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	// setup replaces it: diff against the last-installed stock baseline (the
 	// image copy on first migration) and carry the remainder into the
 	// overrides file included after the stock setup.
+	// 迁移分两段（R53 新-2）：此处只算 diff 并留底 .bak，实际写入推迟到 rules
+	// 与新 setup 落盘成功之后——若在 rules 替换前写入，写入点与 RemoveAll(rules)
+	// 之间的进程崩溃会留下「新 overrides + 旧 setup」双重应用同一批自定义行，
+	// 重复 SecRule id 使 coraza 拒绝配置再生成。
+	var pendingOverrides []byte
 	baseline := readConfLines(filepath.Join(m.crsDir, "crs-setup.stock.conf"))
 	if baseline == nil {
 		baseline = readConfLines(filepath.Join(crsDistDir, "crs-setup.conf"))
@@ -121,7 +126,6 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	if diff := extractSetupDiff(baseline, readConfLines(setupPath)); len(diff) > 0 {
 		header := fmt.Sprintf("# 由 CRS 更新自动迁移的用户自定义配置\n# 生成时间: %s\n",
 			time.Now().In(CurrentLocation()).Format(crsTimeLayout))
-		content := header + strings.Join(diff, "\n") + "\n"
 		overridesPath := filepath.Join(m.crsDir, "zz-user-overrides.conf")
 		overridesBak := overridesPath + ".bak"
 		// 迁移写入前先留底：已有 overrides 则备份内容，没有则用空 .bak 标记
@@ -139,10 +143,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 		}
 		// 本运行已创建 bak：restoreBackup 自此可消费（R39 1.1）。
 		m.overridesBakCreated = true
-		if err := os.WriteFile(overridesPath, []byte(content), 0644); err != nil {
-			m.restoreBackup()
-			return fmt.Errorf("写入 zz-user-overrides.conf: %w", err)
-		}
+		pendingOverrides = []byte(header + strings.Join(diff, "\n") + "\n")
 		writeCRSUpdateLog("INFO", string(CRSStatusInstalling),
 			fmt.Sprintf("已迁移 %d 行用户自定义配置到 zz-user-overrides.conf", len(diff)))
 	}
@@ -168,6 +169,16 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	if err := copyFile(newSetup, filepath.Join(m.crsDir, "crs-setup.stock.conf")); err != nil {
 		m.restoreBackup()
 		return fmt.Errorf("写入 crs-setup.stock.conf 基线: %w", err)
+	}
+	// R53 新-2：overrides 迁移写入推迟到此处（rules 与新 setup 均已落盘）——
+	// 此点之后的崩溃留下「新 stock setup（不含自定义行）+ 旧 overrides」，
+	// coraza 可正常加载，仅丢失自上次更新以来新增的自定义行，下次成功更新自愈；
+	// 不再有「新 overrides + 旧 setup」重复 SecRule id 的窗口。
+	if pendingOverrides != nil {
+		if err := os.WriteFile(filepath.Join(m.crsDir, "zz-user-overrides.conf"), pendingOverrides, 0644); err != nil {
+			m.restoreBackup()
+			return fmt.Errorf("写入 zz-user-overrides.conf: %w", err)
+		}
 	}
 
 	// Reload BEFORE deleting backups: if reload fails, restoreBackup can still roll back.
