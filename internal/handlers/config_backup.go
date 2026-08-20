@@ -548,8 +548,11 @@ func backupInteger(value any) (int, bool) {
 	return 0, false
 }
 
-// skipEmptyDomainHTTPRules 移除域名为空的 HTTP 规则及其关联行（上游/路径规则/证书任务），
-// 返回跳过警告；TCP 规则无需域名，不受影响。
+// skipEmptyDomainHTTPRules 移除域名为空的 HTTP 规则及其关联行（上游/路径规则/证书任务/
+// 安全策略绑定），返回跳过警告；TCP 规则无需域名，不受影响。
+// R50-N1：关联表须含 security_policy_bindings 且其规则列名为 rule_caddy_id（其余为
+// rule_id）——漏掉该表会让跳过在 validateBackupRuleReferences 之前把规则移出
+// lb_rules，其绑定命中「引用了不存在的规则」整包 400，与软跳过语义冲突。
 func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) []string {
 	rows, exists := tables["lb_rules"]
 	if !exists {
@@ -578,20 +581,37 @@ func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) []string {
 		return nil
 	}
 	tables["lb_rules"] = kept
-	for _, table := range []string{"upstreams", "path_rules", "cert_jobs"} {
-		related, exists := tables[table]
+	// 表 → 引用规则的列名；security_policy_bindings 的规则列为 rule_caddy_id（R50-N1）
+	ruleRefTables := []struct {
+		table  string
+		column string
+	}{
+		{"upstreams", "rule_id"},
+		{"path_rules", "rule_id"},
+		{"cert_jobs", "rule_id"},
+		{"security_policy_bindings", "rule_caddy_id"},
+	}
+	droppedBindings := 0
+	for _, ref := range ruleRefTables {
+		related, exists := tables[ref.table]
 		if !exists {
 			continue
 		}
 		filtered := make([]map[string]any, 0, len(related))
 		for _, row := range related {
-			ruleID, _ := row["rule_id"].(string)
+			ruleID, _ := row[ref.column].(string)
 			if skippedIDs[ruleID] {
+				if ref.table == "security_policy_bindings" {
+					droppedBindings++
+				}
 				continue
 			}
 			filtered = append(filtered, row)
 		}
-		tables[table] = filtered
+		tables[ref.table] = filtered
+	}
+	if droppedBindings > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d 条安全策略绑定随空域名规则一并跳过", droppedBindings))
 	}
 	return warnings
 }

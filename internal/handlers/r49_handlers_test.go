@@ -109,7 +109,8 @@ func TestImportConfigBackup_rejects_security_policy_binding_with_dangling_policy
 	// When
 	router.ServeHTTP(response, request)
 
-	// Then：400 点名表、行号与悬挂策略 id，且零写入
+	// Then：400 点名表、行号与悬挂策略 id，且零写入（校验先于任何事务，
+	// 拒绝时 lb_rules/security_policies/security_policy_bindings 均不得落库）
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
 	}
@@ -118,12 +119,15 @@ func TestImportConfigBackup_rejects_security_policy_binding_with_dangling_policy
 			t.Fatalf("rejection must name %q: %s", want, response.Body.String())
 		}
 	}
-	var count int
-	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_policy_bindings").Scan(&count); err != nil {
-		t.Fatalf("read bindings: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("rejected backup must not persist bindings, got %d rows", count)
+	// R50-N4：零写入断言扩充到校验涉及的全部表，固化「校验不过零写入」不变量
+	for _, table := range []string{"lb_rules", "security_policies", "security_policy_bindings"} {
+		var count int
+		if err := db.DB.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+			t.Fatalf("read %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("rejected backup must not persist %s, got %d rows", table, count)
+		}
 	}
 }
 
@@ -192,5 +196,54 @@ func TestImportConfigBackup_accepts_valid_security_policy_bindings(t *testing.T)
 	}
 	if policyID != 7 {
 		t.Fatalf("imported binding policy_id=%d, want 7", policyID)
+	}
+}
+
+// R50-N1：空域名 HTTP 规则被软跳过时，其 security_policy_bindings 行（规则列名
+// rule_caddy_id，与 upstreams/path_rules/cert_jobs 的 rule_id 不同）必须一并
+// 跳过——skip 先于 validateBackupRuleReferences 执行，绑定若不随规则移除会命中
+// 「引用了不存在的规则」整包 400，与 R38 C-3「软跳过+警告」语义冲突。
+func TestImportConfigBackup_skips_bindings_of_empty_domain_rules(t *testing.T) {
+	// Given：一条空域名 HTTP 规则带绑定，一条正常规则带绑定
+	h := newBackupTestHandlers(t)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"lb_rules": {
+			{"caddy_id": "lb_empty_bound", "name": "empty-bound", "protocol": "http", "domain": "", "listen_port": 8451, "enabled": 1},
+			{"caddy_id": "lb_valid_bound", "name": "valid-bound", "protocol": "http", "domain": "valid-bound.example.test", "listen_port": 8452, "enabled": 1},
+		},
+		"security_policies": {{"id": 7, "name": "policy-7", "mode": "detection"}},
+		"security_policy_bindings": {
+			{"rule_caddy_id": "lb_empty_bound", "policy_id": 7},
+			{"rule_caddy_id": "lb_valid_bound", "policy_id": 7},
+		},
+	})
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then：软跳过成功（200），空域名规则与其绑定一并丢弃并告警，正常规则与绑定落库
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 (soft-skip, not rejection)", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "域名为空") {
+		t.Fatalf("import response missing skip warning: %s", response.Body.String())
+	}
+	var skippedRule, droppedBinding, keptBinding int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_empty_bound'").Scan(&skippedRule); err != nil {
+		t.Fatalf("count skipped rules: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_empty_bound'").Scan(&droppedBinding); err != nil {
+		t.Fatalf("count dropped bindings: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_valid_bound'").Scan(&keptBinding); err != nil {
+		t.Fatalf("count kept bindings: %v", err)
+	}
+	if skippedRule != 0 || droppedBinding != 0 || keptBinding != 1 {
+		t.Fatalf("after import: skipped-rule=%d dropped-binding=%d kept-binding=%d, want 0/0/1", skippedRule, droppedBinding, keptBinding)
 	}
 }
