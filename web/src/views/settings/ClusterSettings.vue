@@ -171,6 +171,10 @@ const fetchNodes = async (): Promise<void> => {
   try {
 		const response = await request.get<APIResponse<readonly ClusterNodeWithSyncError[]>>('/cluster/nodes', { signal: clusterPolling.signal, silent: true })
     if (!disposed && requestSeq === requestSequence) nodes.value = response.data ?? []
+  } catch (error: unknown) {
+    // Silent request: no toast from the interceptor, keep the only diagnostics in console
+    // and prevent unhandled rejections on fire-and-forget refresh paths.
+    console.error('Failed to fetch cluster nodes:', error)
   } finally {
     if (!disposed && requestSeq === requestSequence) nodesLoading.value = false
   }
@@ -300,7 +304,7 @@ const updateSyncField = async (field: string, value: boolean): Promise<void> => 
   try {
     await request.put<ActionResponse>('/cluster/settings', { [field]: value })
     ElMessage.success('同步设置已更新')
-    await fetchStatus()
+    await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '更新失败')
     await fetchStatus().catch((refreshError: unknown) => console.error('Failed to refresh cluster status:', refreshError))

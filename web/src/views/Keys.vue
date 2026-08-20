@@ -455,6 +455,10 @@ const fetchKeys = async () => {
   try {
     const res = await request.get<APIResponse<readonly APIKey[]>>('/users/me/api-keys')
     if (requestSeq === keysRequestSeq) keys.value = res.data || []
+  } catch (error: unknown) {
+    // Error toast is already shown by the global axios interceptor; swallow here
+    // so fire-and-forget refresh calls don't surface as unhandled rejections.
+    console.error('Failed to fetch keys:', error)
   } finally {
     if (requestSeq === keysRequestSeq) loading.value = false
   }
