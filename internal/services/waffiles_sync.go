@@ -325,11 +325,23 @@ func untarGzTo(data []byte, destDir string, expectSum string) error {
 		}
 	}
 	if err := os.Rename(staging, destDir); err != nil {
-		// rename may fail across mount points; fall back to merge-copy
-		if err := copyDir(staging, destDir); err != nil {
-			return err
+		// rename 到非空目录恒失败（EEXIST/ENOTEMPTY）——destDir 非空（生产常态：
+		// 镜像自带规则树或已同步过的树）时本兜底分支即主路径，而非罕见的跨挂载点
+		// 情形。copyDir 只覆盖同名文件、不删除旧树中新包缺失的文件，必须先清空
+		// destDir 再复制（对齐 crsinstall.go 安装前的显式 RemoveAll 语义），否则
+		// CRS 更新删除/改名规则文件后从端树为旧+新合并、tarGzDirSum 永不等于
+		// 声明哈希，漂移检测永不收敛（R47 A-#2）。
+		if err := os.RemoveAll(destDir); err != nil {
+			return fmt.Errorf("清空目标规则树: %w", err)
 		}
-		os.RemoveAll(staging)
+		if err := copyDir(staging, destDir); err != nil {
+			// 复制中途失败时 destDir 已被清空——先从 backup 恢复旧树再返回错误，
+			// 避免从端规则树处于残缺状态。
+			if _, statErr := os.Stat(backup); statErr == nil {
+				_ = copyDir(backup, destDir)
+			}
+			return fmt.Errorf("安装同步规则集: %w", err)
+		}
 	}
 	os.RemoveAll(backup)
 	return nil

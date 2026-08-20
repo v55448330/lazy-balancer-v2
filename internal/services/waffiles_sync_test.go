@@ -300,3 +300,52 @@ func TestApplyWafFileBundle_preservesVersionFileRawBytes(t *testing.T) {
 		t.Fatalf("live tree hash %q (err=%v) must equal declared %q — slave must converge", liveSum, err, bundle.CRSSha256)
 	}
 }
+
+func TestUntarGzTo_nonEmptyDest_removesStaleFiles(t *testing.T) {
+	// R47 A-#2：rename 到非空目录恒失败，兜底分支即主路径；合并复制不删除旧树中
+	// 新包缺失的文件，CRS 更新删除/改名规则文件后从端树为旧+新合并、永不收敛。
+	// 兜底分支必须先清空 destDir 再复制。
+	// Given：非空目标树，含新包中不存在的陈旧文件与子目录
+	destDir := t.TempDir()
+	os.MkdirAll(filepath.Join(destDir, "rules"), 0755)
+	os.WriteFile(filepath.Join(destDir, "rules", "stale.conf"), []byte("SecRule STALE"), 0644)
+	os.WriteFile(filepath.Join(destDir, "rules", "kept.conf"), []byte("SecRule OLD"), 0644)
+	os.MkdirAll(filepath.Join(destDir, "stale-dir"), 0755)
+	os.WriteFile(filepath.Join(destDir, "stale-dir", "gone.conf"), []byte("SecRule GONE"), 0644)
+
+	// 新包：kept.conf 内容更新 + 新增文件，不含 stale.conf / stale-dir/
+	newTree := t.TempDir()
+	os.MkdirAll(filepath.Join(newTree, "rules"), 0755)
+	os.WriteFile(filepath.Join(newTree, "rules", "kept.conf"), []byte("SecRule NEW"), 0644)
+	os.WriteFile(filepath.Join(newTree, "rules", "added.conf"), []byte("SecRule ADDED"), 0644)
+	data, declaredSum, err := tarGzDir(newTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	if err := untarGzTo(data, destDir, declaredSum); err != nil {
+		t.Fatalf("untarGzTo: %v", err)
+	}
+
+	// Then：陈旧文件/目录被清除，live 树哈希等于声明哈希（从端收敛）
+	if _, err := os.Stat(filepath.Join(destDir, "rules", "stale.conf")); !os.IsNotExist(err) {
+		t.Fatal("stale.conf must be removed（合并复制残留 → 永不收敛）")
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "stale-dir")); !os.IsNotExist(err) {
+		t.Fatal("stale-dir must be removed（合并复制残留 → 永不收敛）")
+	}
+	if got, _ := os.ReadFile(filepath.Join(destDir, "rules", "kept.conf")); string(got) != "SecRule NEW" {
+		t.Fatalf("kept.conf not updated: %q", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(destDir, "rules", "added.conf")); string(got) != "SecRule ADDED" {
+		t.Fatalf("added.conf missing: %q", got)
+	}
+	liveSum, err := tarGzDirSum(destDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveSum != declaredSum {
+		t.Fatalf("live tree hash %q must equal declared %q — slave must converge", liveSum, declaredSum)
+	}
+}
