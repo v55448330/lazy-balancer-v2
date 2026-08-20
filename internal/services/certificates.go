@@ -112,6 +112,23 @@ func restoreCertJobsForRule(ctx context.Context, snapshot CertJobsSnapshot) erro
 		return fmt.Errorf("begin certificate job restore: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// 时代校验（R48 A-F1/F2 不变量）：快照后规则可能被并发删除（重试 DeleteRule、
+	// 配置导入整树替换）或以同 caddy_id 重建为新域名。规则不存在时 DELETE+INSERT
+	// 只会写入幽灵行（cert_jobs 对 lb_rules 无外键）；域名与快照最新任务不一致时
+	// DELETE+INSERT 会摧毁新化身的任务状态。两种情形都没有可恢复对象，按补偿完成
+	// 收尾（返回 nil，调用方释放租约）。判定必须是保守的：只有规则明确仍属于
+	// 快照时代（最新快照任务与当前规则域名规范化一致）才允许恢复。
+	var ruleDomain string
+	err = tx.QueryRowContext(ctx, "SELECT COALESCE(domain,'') FROM lb_rules WHERE caddy_id=?", snapshot.ruleID).Scan(&ruleDomain)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load rule for certificate job restore: %w", err)
+	}
+	if !certJobsSnapshotEraMatchesRule(snapshot, ruleDomain) {
+		return nil
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id=?", snapshot.ruleID); err != nil {
 		return fmt.Errorf("clear certificate jobs for restore: %w", err)
 	}
@@ -130,12 +147,49 @@ func restoreCertJobsForRule(ctx context.Context, snapshot CertJobsSnapshot) erro
 	return nil
 }
 
+// certJobsSnapshotEraMatchesRule 判定规则当前状态是否仍属于快照时代：快照按 id
+// 升序排列，最新（最后一条）任务的域名即快照时刻规则的 ACME 身份；与规则当前
+// 域名规范化比较，不一致（含无快照任务、域名不可规范化）一律视为时代不明，
+// 保守跳过恢复。
+func certJobsSnapshotEraMatchesRule(snapshot CertJobsSnapshot, ruleDomain string) bool {
+	if len(snapshot.jobs) == 0 {
+		return false
+	}
+	canonicalRule, err := CanonicalACMEDomains(ruleDomain)
+	if err != nil {
+		return false
+	}
+	canonicalJob, err := CanonicalACMEDomains(snapshot.jobs[len(snapshot.jobs)-1].domain)
+	if err != nil {
+		return false
+	}
+	return canonicalJob == canonicalRule
+}
+
+// ruleExistsForCertCompensation 报告补偿目标规则是否仍然存在。
+func ruleExistsForCertCompensation(ctx context.Context, ruleID string) (bool, error) {
+	var one int
+	err := db.DB.QueryRowContext(ctx, "SELECT 1 FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check rule existence for certificate compensation: %w", err)
+	}
+	return true, nil
+}
+
 func requeueCertJobsSnapshot(ctx context.Context, snapshot CertJobsSnapshot, manager *CAQueueManager) error {
 	var ruleDomain string
 	var enabled, enableTLS bool
 	var tlsSource string
 	if err := db.DB.QueryRowContext(ctx, `SELECT domain,IIF(enabled IN ('1',1),1,0),enable_tls,COALESCE(tls_source,'manual') FROM lb_rules WHERE caddy_id=?`, snapshot.ruleID).
 		Scan(&ruleDomain, &enabled, &enableTLS, &tlsSource); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// 规则已被并发删除（R48 A-F1）：没有可补偿对象，按成功收尾——
+			// 返回错误会把补偿拖入永久退避循环且租约永不释放。
+			return nil
+		}
 		return fmt.Errorf("load rule for certificate job requeue: %w", err)
 	}
 	if !enabled || !enableTLS || tlsSource != "acme_dns" {

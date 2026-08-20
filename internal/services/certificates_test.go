@@ -764,6 +764,9 @@ func TestCertJobsSnapshot_restore_replaces_upserted_and_new_rows(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
 	const ruleID = "lb_snapshot"
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?, 'snapshot', 'old.example.com', 'http', 8080, 1, 1, 'acme_dns')`, ruleID); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
 	result, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,message,ca_provider_id,renewal_attempts) VALUES (?, 'old.example.com', 'failed', 'old message', 7, 3)`, ruleID)
 	if err != nil {
 		t.Fatalf("seed old job: %v", err)
@@ -800,6 +803,99 @@ func TestCertJobsSnapshot_restore_replaces_upserted_and_new_rows(t *testing.T) {
 	}
 	if count != 1 || int64(gotID) != oldID || status != "failed" || message != "old message" || providerID != 7 || attempts != 3 {
 		t.Fatalf("restored count=%d id=%d status=%q message=%q provider=%d attempts=%d", count, gotID, status, message, providerID, attempts)
+	}
+}
+
+func TestRestoreCertJobs_skips_when_rule_deleted(t *testing.T) {
+	// R48 A-F1：规则在补偿退避窗口内被并发删除时，restore 必须按补偿完成收尾
+	// （返回 nil），且不得写入幽灵 cert_jobs 行（cert_jobs 对 lb_rules 无外键，
+	// 无条件 DELETE+INSERT 会把旧快照行插给已删除的规则）。
+	// Given：快照后规则与其任务被另一路径整体删除
+	_, database := newClusterTestService(t)
+	const ruleID = "lb_restore_deleted"
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?, 'deleted', 'gone.example.com', 'http', 8080, 1, 1, 'acme_dns')`, ruleID); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES (?, 'gone.example.com', 'creating_order', 7)`, ruleID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	snapshot, err := SnapshotCertJobsForRule(ruleID)
+	if err != nil {
+		t.Fatalf("snapshot jobs: %v", err)
+	}
+	if _, err := database.Exec(`DELETE FROM cert_jobs WHERE rule_id=?`, ruleID); err != nil {
+		t.Fatalf("delete jobs: %v", err)
+	}
+	if _, err := database.Exec(`DELETE FROM lb_rules WHERE caddy_id=?`, ruleID); err != nil {
+		t.Fatalf("delete rule: %v", err)
+	}
+
+	// When
+	err = RestoreCertJobsForRule(snapshot)
+
+	// Then
+	if err != nil {
+		t.Fatalf("restore err=%v, want nil（规则已删除即无可补偿对象，按成功收尾）", err)
+	}
+	var ghostJobs int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM cert_jobs WHERE rule_id=?`, ruleID).Scan(&ghostJobs); err != nil {
+		t.Fatal(err)
+	}
+	if ghostJobs != 0 {
+		t.Fatalf("ghost cert_jobs=%d, want 0（不得给已删除规则写入幽灵行）", ghostJobs)
+	}
+}
+
+func TestRestoreCertJobs_skips_when_rule_recreated_with_different_domain(t *testing.T) {
+	// R48 A-F2：补偿退避窗口内同一 caddy_id 被重建为新域名（新化身）时，
+	// restore 不得摧毁新化身的 cert_jobs——其域名与快照时代不一致，必须跳过
+	// DELETE+INSERT 并按补偿完成收尾（返回 nil，调用方释放租约）。
+	// Given：快照时代规则域名为 old.example.com；删除后以同 caddy_id 重建为
+	// new.example.com 并获得自己的新任务
+	_, database := newClusterTestService(t)
+	const ruleID = "lb_restore_era"
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?, 'era', 'old.example.com', 'http', 8080, 1, 1, 'acme_dns')`, ruleID); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES (?, 'old.example.com', 'issued', 7)`, ruleID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	snapshot, err := SnapshotCertJobsForRule(ruleID)
+	if err != nil {
+		t.Fatalf("snapshot jobs: %v", err)
+	}
+	for _, stmt := range []string{
+		`DELETE FROM cert_jobs WHERE rule_id='` + ruleID + `'`,
+		`DELETE FROM lb_rules WHERE caddy_id='` + ruleID + `'`,
+	} {
+		if _, err := database.Exec(stmt); err != nil {
+			t.Fatalf("simulate delete: %v", err)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?, 'era', 'new.example.com', 'http', 8080, 1, 1, 'acme_dns')`, ruleID); err != nil {
+		t.Fatalf("recreate rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES (?, 'new.example.com', 'queued', 7)`, ruleID); err != nil {
+		t.Fatalf("seed new incarnation job: %v", err)
+	}
+
+	// When
+	err = RestoreCertJobsForRule(snapshot)
+
+	// Then
+	if err != nil {
+		t.Fatalf("restore err=%v, want nil（时代不匹配按补偿完成收尾）", err)
+	}
+	var count int
+	var domain, status string
+	if err := database.QueryRow(`SELECT COUNT(*) FROM cert_jobs WHERE rule_id=?`, ruleID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT domain,status FROM cert_jobs WHERE rule_id=?`, ruleID).Scan(&domain, &status); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || domain != "new.example.com" || status != "queued" {
+		t.Fatalf("cert_jobs count=%d row=(%q,%q), want 新化身任务 (new.example.com,queued) 原样存活、旧时代任务不得复活", count, domain, status)
 	}
 }
 
