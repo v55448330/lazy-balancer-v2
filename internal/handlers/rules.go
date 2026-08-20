@@ -1726,12 +1726,32 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 		caProviderID = resolvedCAProviderID
 		domainChanged := canonicalACMEDomainForJobLookup(domain) != canonicalACMEDomainForJobLookup(existingRule.Domain)
+		// R48-1 不变量：补偿快照必须先于任何它可能需要撤销的变更。
+		// 下面的域名迁移会就地抹除已签发任务的 PEM；快照若在其后执行，
+		// restoreACMEState 恢复出的任务将永久丢失 PEM（TLS 静默中断且
+		// 无自动恢复路径）。快照失败时迁移尚未执行，只需回滚规则与运行时。
+		certJobsSnapshot, err := services.SnapshotCertJobsForRule(caddyID)
+		if err != nil {
+			restoreErr := errors.Join(h.restoreImportRuntime(runtimeSnapshot), restoreRuleDBSnapshot())
+			if restoreErr != nil {
+				services.Logf("error", "CRITICAL: UpdateRule cert job snapshot failed and restore failed for caddy_id=%s: snapshot=%v restore=%v", caddyID, err, restoreErr)
+			}
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份证书任务失败: " + errors.Join(err, restoreErr).Error()})
+			return
+		}
 		// When domain changes, update the existing cert job's domain instead of
 		// creating a new job and disabling the old one. This preserves the job ID
 		// and maintains the "one rule = one cert job" invariant.
 		if domainChanged {
 			newCanonical := canonicalACMEDomainForJobLookup(domain)
-			if certTx, txErr := db.DB.Begin(); txErr == nil {
+			certTx, txErr := db.DB.Begin()
+			if txErr != nil {
+				// R48-2：迁移事务开启失败不能静默吞掉——任务仍持旧域，后续会为
+				// 新域另建任务，破坏「一规则一任务」。规则主更新已提交且用户请求
+				// 本身有效，此时回滚规则是错误语义；记录错误并继续：新任务按
+				// 既有 needJob 路径创建，旧域残留任务留待孤儿清扫收敛。
+				services.Logf("error", "UpdateRule: cert job domain migration begin failed for caddy_id=%s: %v", caddyID, txErr)
+			} else {
 				var existingJobID int
 				queryErr := certTx.QueryRow(
 					`SELECT id FROM cert_jobs WHERE rule_id=? ORDER BY id DESC LIMIT 1`,
@@ -1758,15 +1778,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		caProviderChanged := resolvedCAProviderID != resolvedExistingCAProviderID
 		wasReEnabled := !existingRule.Enabled && *req.Enabled
 		tlsSourceChangedToACME := existingRule.TLSSource != "acme_dns"
-		certJobsSnapshot, err := services.SnapshotCertJobsForRule(caddyID)
-		if err != nil {
-			restoreErr := errors.Join(h.restoreImportRuntime(runtimeSnapshot), restoreRuleDBSnapshot())
-			if restoreErr != nil {
-				services.Logf("error", "CRITICAL: UpdateRule cert job snapshot failed and restore failed for caddy_id=%s: snapshot=%v restore=%v", caddyID, err, restoreErr)
-			}
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份证书任务失败: " + errors.Join(err, restoreErr).Error()})
-			return
-		}
 		var enqueuedJobID int
 		var queueManager *services.CAQueueManager
 		restoreACMEState := func() error {
