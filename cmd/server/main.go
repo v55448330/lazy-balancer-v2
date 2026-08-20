@@ -119,6 +119,9 @@ func run() error {
 	// then materialize cert files from DB, then apply Caddy config on startup
 	services.SeedCRSRules()
 	services.ReconcileCRSState()
+	// 归一 R50 前落库的安全策略枚举空串行（发射端零产出 + Update 拒修的
+	// 遗留状态），有实际变更时主节点递增集群版本让从节点收敛。
+	services.NormalizeLegacySecurityPolicyEnums(context.Background())
 	services.MaterializeAllCertsFromDB()
 	if err := h.ApplyConfigOnStartup(); err != nil {
 		services.Logf("error", "failed to apply Caddy config on startup: %v", err)
