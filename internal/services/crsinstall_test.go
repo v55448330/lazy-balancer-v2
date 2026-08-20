@@ -115,6 +115,7 @@ func TestCRSUpdateRun_successWhenRenameUnavailable(t *testing.T) {
 	m := newTestCRSManager(t)
 	seedCRSVersionRow(t, "v4.14.0", true)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# tweaked")
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
@@ -196,6 +197,7 @@ func TestCRSUpdateRun_installFailureRemovesFreshlyCreatedOverrides(t *testing.T)
 	m := newTestCRSManager(t)
 	seedCRSVersionRow(t, "v4.14.0", true)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# tweaked\nSecRuleARCustom 1")
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
@@ -245,6 +247,7 @@ func TestCRSUpdateRun_installFailureRestoresPreexistingOverrides(t *testing.T) {
 	m := newTestCRSManager(t)
 	seedCRSVersionRow(t, "v4.14.0", true)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# tweaked")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.stock.conf"), "# stock baseline")
 	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf"), "# 前次迁移产物\nSecRuleARPrev 1")
@@ -283,6 +286,7 @@ func TestCRSUpdateRun_preservedOverridesBakSurvivesNextRunFailure(t *testing.T) 
 	m := newTestCRSManager(t)
 	seedCRSVersionRow(t, "v4.14.0", true)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# tweaked")
 	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"), "# 保全内容\nSecRulePreserved 1")
 	if err := os.MkdirAll(filepath.Join(m.crsDir, "crs-setup.conf.bak"), 0755); err != nil {

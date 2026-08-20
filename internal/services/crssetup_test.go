@@ -45,6 +45,7 @@ func TestCRSUpdateRun_migratesSetupCustomizationsAndInstallsNewStock(t *testing.
 	m := newTestCRSManager(t)
 	seedCRSVersionRow(t, "v4.14.0", true)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.stock.conf"), "stock-a\nstock-b\nstock-c\n")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "stock-a\nstock-b-modified\nstock-c\nuser-custom\n")
 
@@ -104,6 +105,7 @@ func TestCRSUpdateRun_firstMigrationDiffsAgainstDistBaseline(t *testing.T) {
 	t.Cleanup(func() { crsDistDir = oldDistDir })
 	writeTestFile(t, filepath.Join(distDir, "crs-setup.conf"), "SecRuleEngine On\nSecRequestBodyAccess On\n")
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"),
 		"SecRuleEngine On\nSecRequestBodyAccess On\nSecRule ARGS \"@rx attack\" \"id:1001,deny\"\n")
 
@@ -140,6 +142,7 @@ func TestCRSUpdateRun_rollbackRestoresPreviousLiveSetup(t *testing.T) {
 	m := newTestCRSManager(t)
 	seedCRSVersionRow(t, "v4.14.0", true)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# tweaked")
 	if err := os.MkdirAll(filepath.Join(m.crsDir, "crs-setup.stock.conf"), 0755); err != nil {
 		t.Fatal(err)
@@ -194,6 +197,7 @@ func TestRestoreBackup_restoreFailureKeepsOverridesBak(t *testing.T) {
 	// (copyFile's WriteFile fails with EISDIR)
 	m := newTestCRSManager(t)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
 	if err := os.Mkdir(filepath.Join(m.crsDir, "zz-user-overrides.conf"), 0755); err != nil {
@@ -226,6 +230,7 @@ func TestRestoreBackup_emptyMarkerRemoveFailureKeepsMarker(t *testing.T) {
 	// be removed (non-empty directory → ENOTEMPTY)
 	m := newTestCRSManager(t)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
 	if err := os.MkdirAll(filepath.Join(m.crsDir, "zz-user-overrides.conf", "sub"), 0755); err != nil {
@@ -255,6 +260,7 @@ func TestCRSUpdateRun_staleOverridesBakNotConsumedOnEmptyDiffFailure(t *testing.
 	m := newTestCRSManager(t)
 	seedCRSVersionRow(t, "v4.14.0", true)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "stock-a\nstock-b\n")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.stock.conf"), "stock-a\nstock-b\n")
 	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf"), "# 当前 overrides\nSecRuleARCustom 2")
@@ -298,6 +304,7 @@ func TestRestoreBackup_degenerateRulesBakSkipped(t *testing.T) {
 	m := newTestCRSManager(t)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "partial.tmp"), "incomplete")
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
 
@@ -328,10 +335,12 @@ func TestRestoreBackup_moveTreeFailureKeepsLiveIntact(t *testing.T) {
 	forceRenameFailure(t)
 	m := newTestCRSManager(t)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-900.conf"), "SecRule a")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", crsRulesProbeFile), "SecRule init")
 	if err := os.Symlink("missing-target", filepath.Join(m.crsDir, "rules.bak", "REQUEST-901.conf")); err != nil {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
 
 	// When 尝试还原备份且搬移失败
 	m.restoreBackup()
@@ -343,7 +352,7 @@ func TestRestoreBackup_moveTreeFailureKeepsLiveIntact(t *testing.T) {
 		t.Fatalf("live rules tree must be restored from rules.old after a failed restore move: %q,%v", data, err)
 	}
 	entries, err := os.ReadDir(filepath.Join(m.crsDir, "rules"))
-	if err != nil || len(entries) != 1 {
+	if err != nil || len(entries) != 2 {
 		t.Fatalf("live rules must contain only the original tree, no partial bak residue: %v,%v", entries, err)
 	}
 	if _, err := os.Stat(filepath.Join(m.crsDir, "rules.old")); !os.IsNotExist(err) {
@@ -359,6 +368,7 @@ func TestCRSUpdateRun_installsStockSetupWhenNoneExists(t *testing.T) {
 	m := newTestCRSManager(t)
 	seedCRSVersionRow(t, "v4.14.0", true)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule init")
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
@@ -392,6 +402,7 @@ func TestRestoreBackup_restoresSetupAndLeavesArtifactsWithoutBak(t *testing.T) {
 	// Given backups in place, clobbered live files, and migration artifacts
 	m := newTestCRSManager(t)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
 	writeTestFile(t, filepath.Join(m.crsDir, "rules", "REQUEST-NEW.conf"), "SecRule new")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
@@ -437,6 +448,7 @@ func TestRestoreBackup_restoresPreexistingOverridesFromBak(t *testing.T) {
 	// Given backups in place, clobbered live files, and a content .bak
 	m := newTestCRSManager(t)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
 	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf"), "# 本次迁移覆写")
@@ -462,6 +474,7 @@ func TestRestoreBackup_removesFreshlyCreatedOverrides(t *testing.T) {
 	// Given backups in place, clobbered live files, and an empty .bak marker
 	m := newTestCRSManager(t)
 	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", "REQUEST-OLD.conf"), "SecRule old")
+	writeTestFile(t, filepath.Join(m.crsDir, "rules.bak", crsRulesProbeFile), "SecRule init")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf.bak"), "# previous")
 	writeTestFile(t, filepath.Join(m.crsDir, "crs-setup.conf"), "# clobbered")
 	writeTestFile(t, filepath.Join(m.crsDir, "zz-user-overrides.conf"), "# 本次迁移新建")

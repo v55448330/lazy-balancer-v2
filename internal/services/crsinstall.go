@@ -181,6 +181,11 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	}
 
 	os.RemoveAll(rulesBak)
+	// R50 B-#4：rules.old 只可能来自上一次失败更新的崩溃窗口（restoreRulesBackup
+	// 内 moveTree 序列中断），成功路径顺带清理——否则它只能等下一次失败的更新
+	// 才被回收，长期占用一整棵规则树的磁盘。restoreRulesBackup 开头本就会先清
+	// rules.old，此处删除不影响任何恢复路径。
+	os.RemoveAll(rulesPath + ".old")
 	os.Remove(setupBak)
 	os.Remove(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"))
 	// 标记磁盘实际版本 + 持久化到数据卷快照：未挂载 /app/waf 的部署在容器
@@ -264,13 +269,13 @@ func (m *CRSUpdateManager) restoreBackup() {
 
 // restoreRulesBackup moves rules.bak back into place without ever installing a
 // tree weaker than what it replaces and without leaving the live path empty
-// (R49 B-N2): a degenerate backup (no .conf file anywhere — e.g. a partial
-// tree left by an interrupted copy on an older version) is rejected with a
-// log and left in place for diagnosis; the live tree is first moved aside to
-// rules.old and moved back if the restore move itself fails.
+// (R49 B-N2): a degenerate backup — no .conf at all, or missing the probe file
+// like a partial tree left by an interrupted pre-R49 copy (R50 B-#3) — is
+// rejected with a log and left in place for diagnosis; the live tree is first
+// moved aside to rules.old and moved back if the restore move itself fails.
 func restoreRulesBackup(rulesPath, rulesBak string) {
-	if !treeContainsConfFile(rulesBak) {
-		log.Printf("crs update: rules backup %s contains no .conf files, skipping restore (live rules left untouched)", rulesBak)
+	if !crsRulesTreeIntact(rulesBak) {
+		log.Printf("crs update: rules backup %s is degenerate (no .conf files or missing %s), skipping restore (live rules left untouched)", rulesBak, crsRulesProbeFile)
 		return
 	}
 	rulesOld := rulesPath + ".old"
@@ -308,6 +313,22 @@ func restoreRulesBackup(rulesPath, rulesBak string) {
 	writeCRSUpdateLog("INFO", string(CRSStatusInstalling), "已从备份恢复规则")
 }
 
+// crsRulesProbeFile 是完整 CRS rules 树必然携带的探针文件（crsProbeFile 去掉
+// rules/ 前缀，相对 rules 树根）。「≥1 个 .conf」只排除全空树，不排除拷贝
+// 中途崩溃留下的部分残树（pre-R49 裸 copyDir 备份、moveTree 直写回退）——
+// 探针缺失即视为退化（R50 B-#3/#5）。
+const crsRulesProbeFile = "REQUEST-901-INITIALIZATION.conf"
+
+// crsRulesTreeIntact reports whether rulesDir looks like a complete CRS rules
+// tree: at least one .conf file AND the release-invariant probe file present.
+func crsRulesTreeIntact(rulesDir string) bool {
+	if !treeContainsConfFile(rulesDir) {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(rulesDir, crsRulesProbeFile))
+	return err == nil && !info.IsDir()
+}
+
 // treeContainsConfFile reports whether dir holds at least one regular .conf
 // file anywhere below it; a missing/unreadable dir reports false.
 func treeContainsConfFile(dir string) bool {
@@ -342,7 +363,15 @@ func copyDirTransactional(src, dst string) error {
 		}
 		return err
 	}
-	return os.Rename(tmp, dst)
+	// rename 失败同样清理暂存树（与 copyFile 对称，R50 B-#2）：否则完整拷贝
+	// 残留在 rules.bak.tmp，任何按 *.tmp 扫描的路径都会误消费。
+	if err := os.Rename(tmp, dst); err != nil {
+		if rErr := os.RemoveAll(tmp); rErr != nil {
+			log.Printf("crs update: failed to clean backup staging %s after rename failure: %v", tmp, rErr)
+		}
+		return err
+	}
+	return nil
 }
 
 // osRename is a seam for tests: Docker overlayfs cannot rename a directory
