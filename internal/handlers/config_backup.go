@@ -451,6 +451,38 @@ func validateV2BackupSecurityPolicies(rows []map[string]any) error {
 			}
 			policy[field] = value
 		}
+		// R51 B-F1：三个枚举字段按 Create 侧口径（security.go CreateSecurityPolicy）
+		// 归一/校验。R50 前的旧备份合法携带空串（旧 Create 不归一、列默认 ''），
+		// restoreTable 原样落库后发射端仅 allow/deny/bypass 等具名分支产出规则，
+		// "" 零产出——启用态 ACL 零强制而 UI 宣称控制已启用（mode/geoip_mode 同型
+		// 漂移）。空串/null/缺省归一为默认值；非空值复用保存侧枚举校验拒绝；
+		// 非字符串值与 R48-3 同口径拒绝（保存侧 JSON 绑定对同值 400）。
+		for _, field := range []string{"mode", "ip_acl_mode", "geoip_mode"} {
+			raw, exists := policy[field]
+			if exists && raw != nil {
+				if _, ok := raw.(string); !ok {
+					return fmt.Errorf("安全策略 #%d（%s）：%s 需为字符串，实际类型 %T", index+1, name, field, raw)
+				}
+			}
+		}
+		mode := backupString(policy["mode"])
+		if mode == "" {
+			mode = "off"
+		}
+		ipACLMode := backupString(policy["ip_acl_mode"])
+		if ipACLMode == "" {
+			ipACLMode = "deny"
+		}
+		geoIPMode := backupString(policy["geoip_mode"])
+		if geoIPMode == "" {
+			geoIPMode = "deny"
+		}
+		if err := validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode, 0, 0); err != nil {
+			return fmt.Errorf("安全策略 #%d（%s）：%w", index+1, name, err)
+		}
+		policy["mode"] = mode
+		policy["ip_acl_mode"] = ipACLMode
+		policy["geoip_mode"] = geoIPMode
 	}
 	return nil
 }
