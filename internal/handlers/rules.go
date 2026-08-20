@@ -1118,6 +1118,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.ACMEConfigID == 0 {
 		req.ACMEConfigID = existingRule.ACMEConfigID
 	}
+	// R52 F-1（写侧）：nil=保留现值先合并，validateCaddyConfigBeforeSave
+	// 才能对合并后的生效值做存在性校验（与上方 acme_config_id 同口径）。
+	if req.CAProviderID == nil {
+		req.CAProviderID = &existingRule.CAProviderID
+	}
 	if req.HealthCheckPath == "" {
 		req.HealthCheckPath = existingRule.HealthCheckPath
 	}

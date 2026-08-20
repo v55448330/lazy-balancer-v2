@@ -114,7 +114,15 @@ func TestUpdateRule_cancels_in_flight_job_before_domain_migration(t *testing.T) 
 	if err := db.DB.QueryRow("SELECT id FROM ca_providers WHERE enabled=1 ORDER BY id LIMIT 1").Scan(&providerID); err != nil {
 		t.Fatalf("read CA provider: %v", err)
 	}
-	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=1,ca_provider_id=? WHERE caddy_id='lb_migrate_cancel'", providerID); err != nil {
+	dnsResult, err := db.DB.Exec(`INSERT INTO certificate_configs (name,dns_provider,dns_credentials,enabled) VALUES ('dns','dnspod','{"token":"x"}',1)`)
+	if err != nil {
+		t.Fatalf("seed certificate config: %v", err)
+	}
+	dnsConfigID, err := dnsResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("read certificate config ID: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=?,ca_provider_id=? WHERE caddy_id='lb_migrate_cancel'", dnsConfigID, providerID); err != nil {
 		t.Fatalf("set rule CA provider: %v", err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES

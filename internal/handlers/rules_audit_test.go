@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -250,9 +251,17 @@ func TestDeleteRule_removes_security_policy_bindings(t *testing.T) {
 func TestCreateRule_removes_rule_and_restores_Caddy_when_ACME_queue_is_unavailable(t *testing.T) {
 	// Given
 	handler, loadCalls, _ := newAuditRuleHandlers(t, 0)
+	dnsResult, err := db.DB.Exec(`INSERT INTO certificate_configs (name,dns_provider,dns_credentials,enabled) VALUES ('dns','dnspod','{"token":"x"}',1)`)
+	if err != nil {
+		t.Fatalf("seed certificate config: %v", err)
+	}
+	dnsConfigID, err := dnsResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("read certificate config ID: %v", err)
+	}
 	router := gin.New()
 	router.POST("/rules", handler.CreateRule)
-	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{"name":"acme-create","protocol":"http","domain":"create.example.test","listen_port":8080,"enable_tls":true,"tls_source":"acme_dns","acme_config_id":1,"ca_provider_id":1,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`))
+	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(fmt.Sprintf(`{"name":"acme-create","protocol":"http","domain":"create.example.test","listen_port":8080,"enable_tls":true,"tls_source":"acme_dns","acme_config_id":%d,"ca_provider_id":1,"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]}`, dnsConfigID)))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
@@ -276,6 +285,9 @@ func TestEnableRule_restores_disabled_state_when_ACME_queue_is_unavailable(t *te
 	// Given
 	handler, loadCalls, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_enable_acme", "enable", "enable.example.test", 8080, false, "acme_dns", true)
+	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=? WHERE caddy_id='lb_enable_acme'", seedR52CertificateConfig(t)); err != nil {
+		t.Fatalf("bind certificate config: %v", err)
+	}
 	router := gin.New()
 	router.POST("/rules/:caddy_id/enable", handler.EnableRule)
 	response := httptest.NewRecorder()
@@ -299,6 +311,9 @@ func TestEnableRule_restores_disabled_state_when_ACME_queue_is_unavailable(t *te
 func TestEnableRule_restores_cert_job_fields_when_requeue_fails(t *testing.T) {
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_enable_restore", "enable", "restore.example.test", 8080, false, "acme_dns", true)
+	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=? WHERE caddy_id='lb_enable_restore'", seedR52CertificateConfig(t)); err != nil {
+		t.Fatalf("bind certificate config: %v", err)
+	}
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs
 		(rule_id,domain,status,message,renewal_attempts,ca_available_after,last_error_code)
 		VALUES ('lb_enable_restore','restore.example.test','disabled','paused message',7,datetime('now','-1 hour'),'paused_code')`); err != nil {
@@ -333,7 +348,7 @@ func TestEnableRule_restores_cert_job_fields_when_requeue_fails(t *testing.T) {
 func TestUpdateRule_allows_edit_with_disabled_ACME_job(t *testing.T) {
 	harness := newUpdateAuditRuleHandlers(t, "lb_edit_disabled", 0, false)
 	seedAuditRule(t, "lb_edit_disabled", "before", "edit.example.test", 8080, false, "acme_dns", true)
-	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=1,ca_provider_id=1 WHERE caddy_id='lb_edit_disabled'"); err != nil {
+	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=?,ca_provider_id=1 WHERE caddy_id='lb_edit_disabled'", seedR52CertificateConfig(t)); err != nil {
 		t.Fatalf("seed ACME config: %v", err)
 	}
 	seedAuditUpstream(t, "lb_edit_disabled")
@@ -488,6 +503,9 @@ func TestEnableRule_uses_latest_job_for_current_domain(t *testing.T) {
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_domain_job", "domain job", "current.example.test", 8080, false, "acme_dns", true)
 	seedAuditUpstream(t, "lb_domain_job")
+	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=? WHERE caddy_id='lb_domain_job'", seedR52CertificateConfig(t)); err != nil {
+		t.Fatalf("bind certificate config: %v", err)
+	}
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at) VALUES
 		('lb_domain_job','current.example.test','disabled',datetime('now','+90 days')),
 		('lb_domain_job','old.example.test','queued',NULL)`); err != nil {
@@ -514,6 +532,9 @@ func TestEnableRule_resumes_issued_job_for_www_first_domain(t *testing.T) {
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_www_enable", "www-enable", "www.example.test,example.test", 8080, false, "acme_dns", true)
 	seedAuditUpstream(t, "lb_www_enable")
+	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=? WHERE caddy_id='lb_www_enable'", seedR52CertificateConfig(t)); err != nil {
+		t.Fatalf("bind certificate config: %v", err)
+	}
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at) VALUES ('lb_www_enable','example.test,www.example.test','disabled',datetime('now','+90 days'))`); err != nil {
 		t.Fatalf("seed www-first job: %v", err)
 	}
@@ -959,9 +980,10 @@ func TestUpdateRule_restores_database_and_Caddy_when_TLS_reload_fails(t *testing
 	handler, loadCalls, currentConfig := harness.handler, harness.loadCalls, harness.currentConfig
 	seedAuditRule(t, "lb_tls_rollback", "before", "tls-old.example.test", 8080, true, "manual", false)
 	seedAuditUpstream(t, "lb_tls_rollback")
+	dnsConfigID := seedR52CertificateConfig(t)
 	router := gin.New()
 	router.PUT("/rules/:caddy_id", handler.UpdateRule)
-	request := httptest.NewRequest(http.MethodPut, "/rules/lb_tls_rollback", strings.NewReader(`{"name":"after","enable_tls":true,"tls_source":"acme_dns","acme_config_id":1,"domain":"tls-new.example.test"}`))
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_tls_rollback", strings.NewReader(fmt.Sprintf(`{"name":"after","enable_tls":true,"tls_source":"acme_dns","acme_config_id":%d,"domain":"tls-new.example.test"}`, dnsConfigID)))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
@@ -990,7 +1012,7 @@ func TestUpdateRule_restores_database_and_Caddy_when_ACME_enqueue_fails(t *testi
 	harness := newUpdateAuditRuleHandlers(t, "lb_acme_rollback", 0, false)
 	handler, loadCalls, currentConfig := harness.handler, harness.loadCalls, harness.currentConfig
 	seedAuditRule(t, "lb_acme_rollback", "before", "acme-old.example.test", 8080, true, "acme_dns", true)
-	if _, err := db.DB.Exec(`UPDATE lb_rules SET acme_config_id=1,ca_provider_id=1 WHERE caddy_id='lb_acme_rollback'`); err != nil {
+	if _, err := db.DB.Exec(`UPDATE lb_rules SET acme_config_id=?,ca_provider_id=1 WHERE caddy_id='lb_acme_rollback'`, seedR52CertificateConfig(t)); err != nil {
 		t.Fatalf("seed ACME config: %v", err)
 	}
 	seedAuditUpstream(t, "lb_acme_rollback")
@@ -1029,7 +1051,7 @@ func TestUpdateRule_cancels_job_before_restore_when_create_returns_jobID_and_err
 	if err := db.DB.QueryRow("SELECT id FROM ca_providers WHERE enabled=1 ORDER BY id LIMIT 1").Scan(&providerID); err != nil {
 		t.Fatalf("read CA provider: %v", err)
 	}
-	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=1,ca_provider_id=? WHERE caddy_id='lb_acme_cancel'", providerID); err != nil {
+	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=?,ca_provider_id=? WHERE caddy_id='lb_acme_cancel'", seedR52CertificateConfig(t), providerID); err != nil {
 		t.Fatalf("set rule CA provider: %v", err)
 	}
 	services.ResetCAQueueManagerForTest()
@@ -1078,7 +1100,7 @@ func TestUpdateRule_migrates_cert_job_domain_inplace(t *testing.T) {
 	if err := db.DB.QueryRow("SELECT id FROM ca_providers WHERE enabled=1 ORDER BY id LIMIT 1").Scan(&providerID); err != nil {
 		t.Fatalf("read CA provider: %v", err)
 	}
-	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=1,ca_provider_id=? WHERE caddy_id='lb_acme_retire'", providerID); err != nil {
+	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=?,ca_provider_id=? WHERE caddy_id='lb_acme_retire'", seedR52CertificateConfig(t), providerID); err != nil {
 		t.Fatalf("set rule CA provider: %v", err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES

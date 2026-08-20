@@ -183,7 +183,17 @@ func TestUpdateRule_allows_acme_dns_edit_when_config_preserved(t *testing.T) {
 	harness := newUpdateAuditRuleHandlers(t, "lb_preserved_config", 0, false)
 	seedAuditRule(t, "lb_preserved_config", "before", "preserved.example.test", 8080, false, "acme_dns", true)
 	seedAuditUpstream(t, "lb_preserved_config")
-	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=1 WHERE caddy_id='lb_preserved_config'"); err != nil {
+	// R52 F-4：acme_config_id 必须引用真实存在的 certificate_configs 行，
+	// 否则 R52 F-3 的悬挂存在性校验会把本测试变成 400（而非保留语义验证）。
+	dnsResult, err := db.DB.Exec(`INSERT INTO certificate_configs (name,dns_provider,dns_credentials,enabled) VALUES ('dns','dnspod','{"token":"x"}',1)`)
+	if err != nil {
+		t.Fatalf("seed certificate config: %v", err)
+	}
+	dnsConfigID, err := dnsResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("read certificate config ID: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE lb_rules SET acme_config_id=? WHERE caddy_id='lb_preserved_config'", dnsConfigID); err != nil {
 		t.Fatalf("seed ACME config: %v", err)
 	}
 	router := gin.New()

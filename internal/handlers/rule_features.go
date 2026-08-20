@@ -653,6 +653,11 @@ func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 	if rule.Protocol == "http" && rule.EnableTLS && rule.TLSSource != "manual" && rule.TLSSource != "acme_dns" {
 		return &configValidationError{message: "启用 TLS 时必须选择证书来源（manual 或 acme_dns）"}
 	}
+	// R52 F-2：与 R51 Create/Update 写侧 400 口径对齐——导入残留的
+	// acme_dns+0 坏规则不得经 EnableRule 投入运行（签发必败且明文服务）。
+	if rule.Protocol == "http" && rule.EnableTLS && rule.TLSSource == "acme_dns" && rule.ACMEConfigID == 0 {
+		return &configValidationError{message: "使用 ACME 签发时必须选择 DNS 提供商配置"}
+	}
 	if rule.Protocol == "http" && rule.EnableTLS && rule.TLSSource == "manual" &&
 		(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
 		return &configValidationError{message: "手动证书模式下必须提供 TLS 证书和私钥"}
