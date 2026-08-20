@@ -2,8 +2,10 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -897,6 +899,107 @@ func TestRestoreCertJobs_skips_when_rule_recreated_with_different_domain(t *test
 	if count != 1 || domain != "new.example.com" || status != "queued" {
 		t.Fatalf("cert_jobs count=%d row=(%q,%q), want 新化身任务 (new.example.com,queued) 原样存活、旧时代任务不得复活", count, domain, status)
 	}
+}
+
+// R48 A-F1 放弃语义的直接覆盖（R49 A-N3）：requeueCertJobsSnapshot 的三个跳过
+// 分支——规则行 ErrNoRows、规则 disabled/非 acme_dns、快照任务域名与规则当前
+// 域名时代不符——均必须按成功收尾（返回 nil）且零入队。任一退化为返回错误都会
+// 把补偿拖入永久退避循环且 blockedRules 租约永不释放（证书静默停发），而既有
+// 测试全部绿灯。manager 预置合法租约与 provider：一旦某分支错误放行入队，
+// beforeEnqueue 探针与 queues 创建立即可观测。
+func TestRequeueCertJobsSnapshot_giveUpSemantics(t *testing.T) {
+	seedRuleAndJob := func(t *testing.T, database *sql.DB, ruleID, domain string, enabled int) CertJobsSnapshot {
+		t.Helper()
+		if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'requeue CA','letsencrypt','https://invalid.example/directory',1)`); err != nil {
+			t.Fatalf("seed CA provider: %v", err)
+		}
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?, 'requeue', ?, 'http', 8080, ?, 1, 'acme_dns')`, ruleID, domain, enabled); err != nil {
+			t.Fatalf("seed rule: %v", err)
+		}
+		if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES (?, ?, 'creating_order', 7)`, ruleID, domain); err != nil {
+			t.Fatalf("seed job: %v", err)
+		}
+		snapshot, err := SnapshotCertJobsForRule(ruleID)
+		if err != nil {
+			t.Fatalf("snapshot jobs: %v", err)
+		}
+		return snapshot
+	}
+	newProbeManager := func(ruleID string) (*CAQueueManager, *atomic.Int32) {
+		var enqueues atomic.Int32
+		manager := &CAQueueManager{
+			queues:       make(map[int]*caQueue),
+			active:       true,
+			blockedRules: map[string]map[RuleBlockToken]struct{}{ruleID: {1: {}}},
+		}
+		manager.beforeEnqueue = func() { enqueues.Add(1) }
+		return manager, &enqueues
+	}
+	assertNilAndNoEnqueue := func(t *testing.T, err error, manager *CAQueueManager, enqueues *atomic.Int32) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("requeue err=%v, want nil（无可补偿对象按成功收尾，返回错误会拖入永久退避）", err)
+		}
+		if got := enqueues.Load(); got != 0 {
+			t.Fatalf("enqueue attempts=%d, want 0（跳过分支不得放行入队）", got)
+		}
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		if len(manager.queues) != 0 {
+			t.Fatal("a queue was created（跳过分支不得触达 enqueueLocked）")
+		}
+	}
+
+	t.Run("rule deleted", func(t *testing.T) {
+		// Given：快照后规则与其任务被并发删除（ErrNoRows 分支）
+		_, database := newClusterTestService(t)
+		const ruleID = "lb_requeue_gone"
+		snapshot := seedRuleAndJob(t, database, ruleID, "gone.example.com", 1)
+		if _, err := database.Exec(`DELETE FROM cert_jobs WHERE rule_id=?`, ruleID); err != nil {
+			t.Fatalf("delete jobs: %v", err)
+		}
+		if _, err := database.Exec(`DELETE FROM lb_rules WHERE caddy_id=?`, ruleID); err != nil {
+			t.Fatalf("delete rule: %v", err)
+		}
+		manager, enqueues := newProbeManager(ruleID)
+
+		// When
+		err := requeueCertJobsSnapshot(context.Background(), snapshot, manager)
+
+		// Then
+		assertNilAndNoEnqueue(t, err, manager, enqueues)
+	})
+
+	t.Run("rule disabled", func(t *testing.T) {
+		// Given：规则存在但已禁用（enabled 门分支）
+		_, database := newClusterTestService(t)
+		const ruleID = "lb_requeue_disabled"
+		snapshot := seedRuleAndJob(t, database, ruleID, "disabled.example.com", 0)
+		manager, enqueues := newProbeManager(ruleID)
+
+		// When
+		err := requeueCertJobsSnapshot(context.Background(), snapshot, manager)
+
+		// Then
+		assertNilAndNoEnqueue(t, err, manager, enqueues)
+	})
+
+	t.Run("snapshot era mismatches recreated rule domain", func(t *testing.T) {
+		// Given：规则以同 caddy_id 重建为新域名（canonicalJob≠canonicalRule 分支）
+		_, database := newClusterTestService(t)
+		const ruleID = "lb_requeue_era"
+		snapshot := seedRuleAndJob(t, database, ruleID, "old.example.com", 1)
+		if _, err := database.Exec(`UPDATE lb_rules SET domain='new.example.com' WHERE caddy_id=?`, ruleID); err != nil {
+			t.Fatalf("recreate rule with new domain: %v", err)
+		}
+		manager, enqueues := newProbeManager(ruleID)
+
+		// When
+		err := requeueCertJobsSnapshot(context.Background(), snapshot, manager)
+
+		// Then
+		assertNilAndNoEnqueue(t, err, manager, enqueues)
+	})
 }
 
 func TestRequeueNonTerminalCertJobs_does_not_resurrect_failed_job(t *testing.T) {
