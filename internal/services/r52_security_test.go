@@ -112,9 +112,12 @@ func TestNormalizeLegacySecurityPolicyEnums_noBump_whenNoLegacyRows(t *testing.T
 	}
 }
 
-// TestNormalizeLegacySecurityPolicyEnums_noBump_onSlave 验证从节点本地归一
-// 但不 bump——集群版本只能由主节点推进，从节点收敛靠下次快照。
-func TestNormalizeLegacySecurityPolicyEnums_noBump_onSlave(t *testing.T) {
+// TestNormalizeLegacySecurityPolicyEnums_slaveSkipsNormalize 验证 R53-A-3：
+// 从节点不做本地归一——其职责是镜像主节点快照；若主节点为无归一修复的旧版本，
+// 本地归一会与旧主快照互相覆盖（归一翻转 ACL 发射 → 首次 Pull 全量重拉 →
+// 快照恢复遗留空串行），每重启一次行为翻转。保留遗留空串行是旧主集群的一致
+// 状态，升级主节点后快照自然携带归一后行。
+func TestNormalizeLegacySecurityPolicyEnums_slaveSkipsNormalize(t *testing.T) {
 	// Given 从节点 + 一条遗留空串行
 	setupSecurityEnumTestDB(t)
 	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
@@ -126,14 +129,14 @@ func TestNormalizeLegacySecurityPolicyEnums_noBump_onSlave(t *testing.T) {
 	// When 启动归一
 	NormalizeLegacySecurityPolicyEnums(context.Background())
 
-	// Then 行被归一，但版本不 bump
+	// Then 行保持原样（等主节点快照权威下发），版本不 bump
 	var mode, ipACLMode, geoipMode string
 	if err := db.DB.QueryRow("SELECT mode, ip_acl_mode, geoip_mode FROM security_policies WHERE name='legacy-all'").
 		Scan(&mode, &ipACLMode, &geoipMode); err != nil {
 		t.Fatal(err)
 	}
-	if mode != "off" || ipACLMode != "deny" || geoipMode != "deny" {
-		t.Fatalf("legacy row not normalized on slave: (%q,%q,%q)", mode, ipACLMode, geoipMode)
+	if mode != "" || ipACLMode != "" || geoipMode != "" {
+		t.Fatalf("slave must not normalize locally, rows must stay as mirrored: (%q,%q,%q)", mode, ipACLMode, geoipMode)
 	}
 	if v := clusterVersion(t); v != before {
 		t.Fatalf("slave must not bump cluster_version: %d, want %d", v, before)

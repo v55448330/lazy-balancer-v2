@@ -11,19 +11,24 @@ import (
 // 默认值（R52 发现1）：空串行在发射端零产出规则而 UI 宣称控制已启用，且
 // Update 对空串 400 拒绝导致无法手动修复，集群快照又原样镜像到从节点。
 var legacySecurityEnumBackfills = []string{
-	"UPDATE security_policies SET ip_acl_mode='deny' WHERE ip_acl_mode=''",
-	"UPDATE security_policies SET mode='off' WHERE mode=''",
-	"UPDATE security_policies SET geoip_mode='deny' WHERE geoip_mode=''",
+	"UPDATE security_policies SET ip_acl_mode='deny' WHERE COALESCE(TRIM(ip_acl_mode),'')=''",
+	"UPDATE security_policies SET mode='off' WHERE COALESCE(TRIM(mode),'')=''",
+	"UPDATE security_policies SET geoip_mode='deny' WHERE COALESCE(TRIM(geoip_mode),'')=''",
 }
 
 // NormalizeLegacySecurityPolicyEnums 启动时一次性归一 security_policies 的
-// 遗留枚举空串行。实际变更 >0 且本节点为主节点时，在同一事务内递增集群版本，
-// 让从节点随下次同步收敛；从节点只做本地归一（幂等），版本由主节点快照权威
-// 下发，不自行推进。
+// 遗留枚举空串行。仅主节点执行：实际变更 >0 时在同一事务内递增集群版本，
+// 从节点随下次同步收敛。从节点完全跳过（R53-A-3）——其职责是镜像主节点快照；
+// 若主节点为无归一修复的旧版本，从节点本地归一会与旧主快照互相覆盖（归一
+// 翻转 ACL 发射行为 → 首次 Pull 漂移全量重拉 → 快照恢复遗留空串行），每重启
+// 一次行为翻转一次；保留遗留空串行是旧主集群下的一致状态。
 func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 	var isMaster bool
 	if err := db.DB.QueryRowContext(ctx, "SELECT COALESCE(is_master,0) FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
 		log.Printf("security enum normalize: failed to read cluster role, skipping: %v", err)
+		return
+	}
+	if !isMaster {
 		return
 	}
 	tx, err := db.DB.BeginTx(ctx, nil)
@@ -49,15 +54,13 @@ func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 	if changed == 0 {
 		return
 	}
-	if isMaster {
-		if err := BumpClusterVersion(ctx, tx); err != nil {
-			log.Printf("security enum normalize: failed to bump cluster version: %v", err)
-			return
-		}
+	if err := BumpClusterVersion(ctx, tx); err != nil {
+		log.Printf("security enum normalize: failed to bump cluster version: %v", err)
+		return
 	}
 	if err := tx.Commit(); err != nil {
 		log.Printf("security enum normalize: failed to commit: %v", err)
 		return
 	}
-	log.Printf("security enum normalize: normalized %d legacy empty-enum rows (master=%v, cluster version bumped=%v)", changed, isMaster, isMaster)
+	log.Printf("security enum normalize: normalized %d legacy empty-enum rows, cluster version bumped", changed)
 }
