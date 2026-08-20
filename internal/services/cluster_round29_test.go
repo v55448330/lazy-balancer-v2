@@ -205,6 +205,27 @@ func TestValidateSnapshotACMEState_toleratesDanglingCAProviderWithWarning(t *tes
 	}
 }
 
+func TestValidateSnapshotACMEState_toleratesBrokenProviderAndConfigRowsWithWarning(t *testing.T) {
+	// R53-A-1：provider/config 行级坏数据（空 Name/Provider/DirectoryURL，
+	// 仅 v1 导入残留/直改库可达）整包硬拒会让 rules/users 等无关节同步一并
+	// 瘫痪——与 R51 发现3/R52 N3 同型 fail-open：逐行 warn+continue，坏行
+	// 照常镜像落库，主节点修复后随后续同步自愈。
+	// Given：一条空字段 provider 行 + 一条空字段 config 行
+	snapshot := models.ClusterSnapshot{SchemaVersion: 3, ACME: &models.ClusterACMEState{
+		CAProviders:        []models.CAProvider{{ID: 7, Name: "", Provider: "", DirectoryURL: ""}},
+		CertificateConfigs: []models.CertificateConfig{{ID: 8, Name: "", DNSProvider: ""}},
+		DNSOwnership:       json.RawMessage(`{"version":1,"records":[]}`),
+	}}
+
+	// When
+	err := validateSnapshotACMEState(snapshot)
+
+	// Then
+	if err != nil {
+		t.Fatalf("broken provider/config rows must not reject the whole snapshot: %v", err)
+	}
+}
+
 func TestClusterService_Snapshot_prefersLaterExpiryBeforeExactDomainMatch(t *testing.T) {
 	// Given：exact 证书（24h 后到期）updated_at 更晚；覆盖证书（90 天后到期）
 	// updated_at 更早——updated_at 顺序与 NotAfter 顺序相反，必须真正按

@@ -529,14 +529,20 @@ func validateSnapshotACMEState(snapshot models.ClusterSnapshot) error {
 	providers := make(map[int]struct{}, len(snapshot.ACME.CAProviders))
 	for _, provider := range snapshot.ACME.CAProviders {
 		if provider.ID <= 0 || provider.Name == "" || provider.Provider == "" || provider.DirectoryURL == "" {
-			return fmt.Errorf("快照 CA 提供商 %d 字段不完整", provider.ID)
+			// R53-A-1：行级坏数据（仅 v1 导入残留/直改库可达）整包拒绝会让
+			// rules/users 等无关节同步一并瘫痪——与 R51 发现3/R52 N3 同型
+			// fail-open：逐行 warn+continue，坏行照常镜像落库（空串不违反
+			// NOT NULL），该行名下签发由主节点按单任务失败承担，修复后自愈。
+			Logf("warn", "快照 CA 提供商 %d 字段不完整（单行损坏，跳过该校验，该行名下签发将按单任务失败），需人工修复", provider.ID)
+			continue
 		}
 		providers[provider.ID] = struct{}{}
 	}
 	configs := make(map[int]struct{}, len(snapshot.ACME.CertificateConfigs))
 	for _, config := range snapshot.ACME.CertificateConfigs {
 		if config.ID <= 0 || config.Name == "" || config.DNSProvider == "" {
-			return fmt.Errorf("快照证书配置 %d 字段不完整", config.ID)
+			Logf("warn", "快照证书配置 %d 字段不完整（单行损坏，跳过该校验，该行名下签发将按单任务失败），需人工修复", config.ID)
+			continue
 		}
 		configs[config.ID] = struct{}{}
 	}
