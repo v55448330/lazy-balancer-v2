@@ -246,7 +246,7 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 			// 若按 failed+旧版本落库会重演三方分叉；改走 fail-open 让 DB
 			// 跟随实际状态，rbErr 记录到组件日志供排查。
 			log.Printf("ip2region update: rollback xdb failed, fail-open with new xdb recorded: %v", rbErr)
-			m.successAfterReloadFailOpen(tag, reloadErr, memSwitched)
+			m.successAfterReloadFailOpen(tag, reloadErr, rbErr, memSwitched)
 			return
 		case restored:
 			if rErr := m.reloader(); rErr != nil {
@@ -263,7 +263,7 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 			// 可备份）且 dist 也缺失，无任何「更新前基线」可回退。此时磁盘已是
 			// 新库，若仍按 failed 落库会重演「磁盘/内存新库、DB 记
 			// failed+旧版本」的三方不一致；按成功落库让 DB 追上实际状态。
-			m.successAfterReloadFailOpen(tag, reloadErr, memSwitched)
+			m.successAfterReloadFailOpen(tag, reloadErr, nil, memSwitched)
 			return
 		}
 	}
@@ -448,16 +448,24 @@ func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, err error) {
 // message 保留 reloader 错误以便排查 Caddy 侧问题，审计同样记成功但附带上该
 // 警告。落库前与 restored 分支对称补一次 reloader 重试（R45 F1-C）：重试成功
 // 则 Caddy 即刻追上新库、按无警告成功落库；仍失败则在 message 中注明 Caddy
-// 侧 GeoIP 停留在旧库、待下次任意成功重载后生效。memSwitched=false（安装热换
-// 失败，R46 B-F1）时 message 还须注明内存 searcher 未切换、重启后生效——否则
-// DB 记 success 而内存仍是旧库，重启前无任何可见痕迹。
-func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadErr error, memSwitched bool) {
+// 侧 GeoIP 停留在旧库、待下次任意成功重载后生效。rbErr 非 nil（回滚升级链全
+// 部失败）时 message 还须携带回滚失败根因（R50 B-#6）——仅进组件日志会让运维
+// 误判为纯重载问题。memSwitched=false（安装热换失败，R46 B-F1）时 message 还
+// 须注明内存 searcher 未切换、重启后生效——否则 DB 记 success 而内存仍是旧库，
+// 重启前无任何可见痕迹。
+func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadErr, rbErr error, memSwitched bool) {
 	warn := ""
 	if rErr := m.reloader(); rErr != nil {
 		log.Printf("ip2region update: fail-open reload retry failed: %v", rErr)
 		warn = fmt.Sprintf("已生效，但重载 Caddy 配置失败: %v（Caddy 侧待下次重载生效）", reloadErr)
 	} else {
 		log.Printf("ip2region update: fail-open reload retry succeeded, caddy caught up to %s", tag)
+	}
+	if rbErr != nil {
+		if warn != "" {
+			warn += "；"
+		}
+		warn += fmt.Sprintf("回滚旧库失败: %v", rbErr)
 	}
 	if !memSwitched {
 		if warn != "" {
