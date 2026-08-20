@@ -109,6 +109,17 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 			return fmt.Errorf("备份 crs-setup.conf: %w", err)
 		}
 	}
+	// stock 基线同点备份（R54-N3）：回滚只恢复 rules/setup/overrides 会让
+	// stock 基线停留在新版本，下次迁移的 diff 基线错位——两版之间上游改动过
+	// 的默认行被误判为用户自定义迁入 overrides，上游默认值变更被静默回退。
+	stockPath := filepath.Join(m.crsDir, "crs-setup.stock.conf")
+	stockBak := stockPath + ".bak"
+	if _, err := os.Stat(stockPath); err == nil {
+		if err := copyFile(stockPath, stockBak); err != nil {
+			m.restoreBackup()
+			return fmt.Errorf("备份 crs-setup.stock.conf: %w", err)
+		}
+	}
 
 	// Migrate user customizations out of the live setup before the new stock
 	// setup replaces it: diff against the last-installed stock baseline (the
@@ -172,8 +183,12 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	}
 	// R53 新-2：overrides 迁移写入推迟到此处（rules 与新 setup 均已落盘）——
 	// 此点之后的崩溃留下「新 stock setup（不含自定义行）+ 旧 overrides」，
-	// coraza 可正常加载，仅丢失自上次更新以来新增的自定义行，下次成功更新自愈；
-	// 不再有「新 overrides + 旧 setup」重复 SecRule id 的窗口。
+	// 不再有「新 overrides + 旧 setup」重复 SecRule id 的窗口。残余风险
+	//（R54-N2，已接受）：仅当用户曾修改过 stock 规则（修改行 id 跨 CRS v4
+	// 版本稳定）且新版本仍含同 id 时，旧 overrides 与新 stock 组合才会出现
+	// 重复 SecRule id 致配置再生成失败——条件触发而非确定；用户未改过 stock
+	// 规则时 coraza 正常加载，仅丢失自上次更新以来新增的自定义行，下次成功
+	// 更新自愈。
 	if pendingOverrides != nil {
 		if err := os.WriteFile(filepath.Join(m.crsDir, "zz-user-overrides.conf"), pendingOverrides, 0644); err != nil {
 			m.restoreBackup()
@@ -198,6 +213,10 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	// rules.old，此处删除不影响任何恢复路径。
 	os.RemoveAll(rulesPath + ".old")
 	os.Remove(setupBak)
+	// 崩溃窗口说明：stock 写入（上方）与本清理之间的进程崩溃会残留陈旧
+	// stock.bak；它与 setup.bak 语义一致——下次运行在备份点用新拷贝覆盖，
+	// 只可能在「备份点之前失败」的极端路径被 restoreBackup 消费（R54-N3）。
+	os.Remove(stockBak)
 	os.Remove(filepath.Join(m.crsDir, "zz-user-overrides.conf.bak"))
 	// 标记磁盘实际版本 + 持久化到数据卷快照：未挂载 /app/waf 的部署在容器
 	// 重建后依赖该快照恢复用户更新的版本（见 ReconcileCRSState）。
@@ -236,7 +255,9 @@ func persistCRSSnapshotFrom(liveDir, snapshotDir, version string) error {
 // pre-update file, with the empty marker it removes the freshly created file,
 // so the restored config equals the pre-update state (R37 S3). Without the
 // .bak the overrides were not touched by this run and stay as-is. The stock
-// baseline stays valid for the restored setup.
+// baseline is restored alongside (R54-N3): leaving it at the new version after
+// a rollback would misalign the next migration's diff baseline and silently
+// revert upstream default changes as "customizations".
 func (m *CRSUpdateManager) restoreBackup() {
 	rulesPath := filepath.Join(m.crsDir, "rules")
 	rulesBak := filepath.Join(m.crsDir, "rules.bak")
@@ -253,6 +274,15 @@ func (m *CRSUpdateManager) restoreBackup() {
 		return
 	}
 	os.Remove(setupBak)
+	stockPath := filepath.Join(m.crsDir, "crs-setup.stock.conf")
+	stockBak := stockPath + ".bak"
+	if _, err := os.Stat(stockBak); err == nil {
+		if err := copyFile(stockBak, stockPath); err != nil {
+			log.Printf("crs update: failed to restore crs-setup.stock.conf backup: %v", err)
+			return
+		}
+		os.Remove(stockBak)
+	}
 	overridesPath := filepath.Join(m.crsDir, "zz-user-overrides.conf")
 	overridesBak := overridesPath + ".bak"
 	if !m.overridesBakCreated {
