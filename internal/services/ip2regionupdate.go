@@ -298,7 +298,6 @@ func (m *IP2RegionUpdateManager) fail(cause error) {
 		log.Printf("ip2region update: failed to record failure: %v", err)
 	}
 	m.mu.Lock()
-	_ = m.state.trigger
 	m.state.status = IP2RegionStatusFailed
 	m.state.message = cause.Error()
 	m.state.finishedAt = time.Now().UTC()

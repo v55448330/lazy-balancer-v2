@@ -289,7 +289,6 @@ func (m *CRSUpdateManager) fail(cause error, restore bool) {
 		log.Printf("crs update: failed to record failure: %v", err)
 	}
 	m.mu.Lock()
-	_ = m.state.trigger
 	m.state.status = CRSStatusFailed
 	m.state.message = cause.Error()
 	m.state.finishedAt = time.Now().UTC()
