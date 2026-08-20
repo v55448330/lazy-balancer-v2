@@ -365,6 +365,16 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
 		return
 	}
+	// R53 C-发现3 TOCTOU：N4 守卫读规则 enabled 状态后、删除前，EnableRule
+	// （持 caddyOpMu）可完成启用并恢复任务，守卫放行被竞态绕过。caddyOpMu
+	// 覆盖 查询→守卫→disabled 翻转→取消→删除 全程，与 EnableRule 互斥：
+	// 删除先完成则 EnableRule 查不到任务行，走 EnableCertJobCreate 重建
+	// （续签链不断）；EnableRule 先完成则守卫读到 enabled=1 返回 409。
+	// worker 无法在翻转后复活任务：transitionJob 的 from 列表均不含
+	// 'disabled'（唯一按现状重读的 caqueue.EnqueueIfActive 的调用方均持
+	// caddyOpMu 或 certJobOperationLock 之一），'disabled' 对 worker 是终态。
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
 	operationLock := certJobOperationLock(id)
 	operationLock.Lock()
 	defer operationLock.Unlock()

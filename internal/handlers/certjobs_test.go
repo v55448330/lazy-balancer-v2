@@ -231,6 +231,58 @@ func TestDeleteCertJob_allows_issued_job_when_rule_not_auto_renewing(t *testing.
 	}
 }
 
+func TestDeleteCertJob_aborts_when_rule_reenabled_during_delete(t *testing.T) {
+	// R53 C-发现3 TOCTOU：N4 守卫读到 enabled=0 放行后 EnableRule（持
+	// caddyOpMu）完成启用，删除照常执行 → 规则无任务行、续签永久断链。
+	// 修复：守卫检查与状态翻转/删除全程持 caddyOpMu 与 EnableRule 互斥——
+	// EnableRule 先完成时守卫必须复核到 enabled=1 并 409。
+	// Given：规则当前禁用（守卫按现状应放行），任务 issued
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_race','race','http','race.example.test',8080,0,1,'acme_dns');
+		INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_race','race.example.test','issued')`); err != nil {
+		t.Fatalf("seed disabled rule and issued job: %v", err)
+	}
+	router := gin.New()
+	router.DELETE("/jobs/:id", h.DeleteCertJob)
+	// 模拟 EnableRule 临界区进行中：持 caddyOpMu，删除请求必须排队等待
+	h.caddyOpMu.Lock()
+	responses := make(chan int, 1)
+	go func() {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/jobs/1", nil))
+		responses <- response.Code
+	}()
+	select {
+	case code := <-responses:
+		h.caddyOpMu.Unlock()
+		t.Fatalf("删除未与 EnableRule 临界区互斥，提前完成 status=%d", code)
+	case <-time.After(300 * time.Millisecond):
+	}
+	// EnableRule 完成：规则转为启用后释放临界区
+	if _, err := db.DB.Exec("UPDATE lb_rules SET enabled=1 WHERE caddy_id='lb_race'"); err != nil {
+		h.caddyOpMu.Unlock()
+		t.Fatal(err)
+	}
+	h.caddyOpMu.Unlock()
+	// Then：守卫复核到 enabled=1 必须 409，任务行保留
+	select {
+	case code := <-responses:
+		if code != http.StatusConflict {
+			t.Fatalf("status=%d, want 409（规则已在删除期间重新启用）", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("DeleteCertJob 未在有界时间内返回")
+	}
+	var count int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE id=1").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("job count=%d, want 1（409 不得删除任务）", count)
+	}
+}
+
 func TestDeleteCertJob_keeps_row_when_delete_fails(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_keep','keep.example.test','issued');
