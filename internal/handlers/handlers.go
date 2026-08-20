@@ -410,28 +410,14 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 	}
 
 	if data.EnableTLS && data.TLSSource == "acme_dns" {
-		if data.ACMEConfigID == 0 {
-			return fmt.Errorf("使用 ACME 签发时必须选择 DNS 提供商配置")
-		}
-		// R52 F-3：R51 门只挡 0 值；引用的配置行必须真实存在，
-		// 否则悬挂 id（配置被删除/导入残留）会静默落库并在签发期单任务失败。
-		var configExists bool
-		if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM certificate_configs WHERE id = ?)", data.ACMEConfigID).Scan(&configExists); err != nil {
-			return fmt.Errorf("校验 DNS 提供商配置失败: %v", err)
-		}
-		if !configExists {
-			return fmt.Errorf("选择的 DNS 提供商配置不存在，请重新选择")
-		}
-		// R52 F-1（写侧）：非 0 ca_provider_id 必须引用存在且启用的提供商——
-		// 否则主节点签发静默回退到错误 CA，从节点快照校验整包拒绝。
-		if data.CAProviderID != 0 {
-			var providerOK bool
-			if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM ca_providers WHERE id = ? AND enabled = 1)", data.CAProviderID).Scan(&providerOK); err != nil {
-				return fmt.Errorf("校验 CA 提供商失败: %v", err)
-			}
-			if !providerOK {
-				return fmt.Errorf("指定的 CA 提供商不存在或已禁用")
-			}
+		// R52 F-1/F-3（写侧）→ R53 发现4 共享门：0 值、悬挂 id 与引用已禁用
+		// （enabled=0）配置/提供商一律 400——与签发侧 certissuer.go 的
+		// AND enabled=1 口径对齐，悬挂/禁用引用会静默落库并在签发期单任务失败。
+		if err := validateRuleACMEReferences(acmeReferenceInput{
+			EnableTLS: data.EnableTLS, TLSSource: data.TLSSource,
+			ACMEConfigID: data.ACMEConfigID, CAProviderID: data.CAProviderID,
+		}); err != nil {
+			return err
 		}
 		if data.Domain == "" {
 			return fmt.Errorf("ACME DNS 证书需要填写域名")

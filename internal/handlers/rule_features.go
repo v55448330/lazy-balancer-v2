@@ -637,6 +637,50 @@ func (e *configValidationError) Error() string {
 	return e.message
 }
 
+// acmeReferenceInput 汇总共享 ACME 引用校验（validateRuleACMEReferences）所需字段。
+type acmeReferenceInput struct {
+	EnableTLS    bool
+	TLSSource    string
+	ACMEConfigID int
+	CAProviderID int
+}
+
+// validateRuleACMEReferences 校验 enable_tls+acme_dns 规则的 ACME 引用可解析：
+// acme_config_id 非 0 且引用存在且启用（enabled=1）的 certificate_configs 行
+// （R53 发现4：与 ca_provider 检查及签发侧 certissuer.go 的 AND enabled=1 口径对齐，
+// 引用禁用配置会在签发期查空单任务失败 + TLS 端口明文服务）；ca_provider_id 为
+// 0（系统默认）或引用存在且启用的 ca_providers 行。校验失败返回
+// *configValidationError（调用侧映射 400），查询失败返回普通错误（500）。
+// 全部「把规则投入运行/复制引用」入口（Create/Update 写侧、EnableRule、启动与
+// UpdateConfig 聚合校验、DuplicateRule、v2 备份导入）共用本门或其备份行同口径
+// 变体（config_backup.go validateBackupACMEReferenceIDs），保证悬挂/禁用引用
+// 无从进入运行态（R53 发现1/发现5）。
+func validateRuleACMEReferences(input acmeReferenceInput) error {
+	if !input.EnableTLS || input.TLSSource != "acme_dns" {
+		return nil
+	}
+	if input.ACMEConfigID == 0 {
+		return &configValidationError{message: "使用 ACME 签发时必须选择 DNS 提供商配置"}
+	}
+	var configOK bool
+	if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM certificate_configs WHERE id = ? AND enabled = 1)", input.ACMEConfigID).Scan(&configOK); err != nil {
+		return fmt.Errorf("校验 DNS 提供商配置失败: %v", err)
+	}
+	if !configOK {
+		return &configValidationError{message: "选择的 DNS 提供商配置不存在或已禁用"}
+	}
+	if input.CAProviderID != 0 {
+		var providerOK bool
+		if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM ca_providers WHERE id = ? AND enabled = 1)", input.CAProviderID).Scan(&providerOK); err != nil {
+			return fmt.Errorf("校验 CA 提供商失败: %v", err)
+		}
+		if !providerOK {
+			return &configValidationError{message: "指定的 CA 提供商不存在或已禁用"}
+		}
+	}
+	return nil
+}
+
 func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 	rules, err := loadRulesForConfigValidation(ctx, " WHERE caddy_id = ?", caddyID)
 	if err != nil {
@@ -653,10 +697,14 @@ func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 	if rule.Protocol == "http" && rule.EnableTLS && rule.TLSSource != "manual" && rule.TLSSource != "acme_dns" {
 		return &configValidationError{message: "启用 TLS 时必须选择证书来源（manual 或 acme_dns）"}
 	}
-	// R52 F-2：与 R51 Create/Update 写侧 400 口径对齐——导入残留的
-	// acme_dns+0 坏规则不得经 EnableRule 投入运行（签发必败且明文服务）。
-	if rule.Protocol == "http" && rule.EnableTLS && rule.TLSSource == "acme_dns" && rule.ACMEConfigID == 0 {
-		return &configValidationError{message: "使用 ACME 签发时必须选择 DNS 提供商配置"}
+	// R52 F-2 / R53 发现1：共享 ACME 引用校验（0 值门 + 存在性/enabled=1），与
+	// Create/Update 写侧 400 口径对齐——导入残留的 acme_dns+0 坏规则与悬挂/禁用
+	// 引用均不得经 EnableRule 投入运行（签发必败且明文服务）。
+	if err := validateRuleACMEReferences(acmeReferenceInput{
+		EnableTLS: rule.EnableTLS, TLSSource: rule.TLSSource,
+		ACMEConfigID: rule.ACMEConfigID, CAProviderID: rule.CAProviderID,
+	}); err != nil {
+		return err
 	}
 	if rule.Protocol == "http" && rule.EnableTLS && rule.TLSSource == "manual" &&
 		(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
@@ -680,6 +728,19 @@ func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 		if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS && rule.TLSHTTPRedirect {
 			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转", rule.Name, rule.CaddyID)})
 			continue
+		}
+		// R53 发现1：启动/UpdateConfig 聚合校验与 EnableRule 同门——ACME 引用
+		// 不可解析（0 值/悬挂/已禁用）的启用规则必须点名，不得静默通过。
+		if err := validateRuleACMEReferences(acmeReferenceInput{
+			EnableTLS: rule.EnableTLS, TLSSource: rule.TLSSource,
+			ACMEConfigID: rule.ACMEConfigID, CAProviderID: rule.CAProviderID,
+		}); err != nil {
+			var validationErr *configValidationError
+			if errors.As(err, &validationErr) {
+				problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）%s", rule.Name, rule.CaddyID, validationErr.Error())})
+			} else {
+				problems = append(problems, fmt.Errorf("规则 %s（%s）ACME 引用校验失败：%w", rule.Name, rule.CaddyID, err))
+			}
 		}
 		if err := validateRuleConfigGeneration(rule); err != nil {
 			problems = append(problems, fmt.Errorf("规则 %s（%s）配置无效：%w", rule.Name, rule.CaddyID, err))

@@ -2178,6 +2178,22 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		return
 	}
 
+	// R53 发现5：副本原样继承 acme_config_id/ca_provider_id——源规则携带悬挂/
+	// 已禁用引用时必须先 400 点名源规则，否则副本可经 EnableRule 投入运行
+	// （R53 发现1 修复前）或持续携带坏引用（修复后 EnableRule 才会拦）。
+	if err := validateRuleACMEReferences(acmeReferenceInput{
+		EnableTLS: rule.EnableTLS, TLSSource: rule.TLSSource,
+		ACMEConfigID: rule.ACMEConfigID, CAProviderID: rule.CAProviderID,
+	}); err != nil {
+		var validationErr *configValidationError
+		if errors.As(err, &validationErr) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("源规则 %s（%s）：%s", rule.Name, caddyID, validationErr.Error())})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "校验源规则 ACME 引用失败: " + err.Error()})
+		return
+	}
+
 	if _, err := tx.Exec(`
 		INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server, dns_family,
 			health_check_path, health_check_interval, health_check_timeout,
