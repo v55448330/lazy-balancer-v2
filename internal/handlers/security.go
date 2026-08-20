@@ -558,6 +558,11 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if req.GeoIPMode == "" {
 		req.GeoIPMode = "deny"
 	}
+	// ip_acl_mode 与 geoip_mode 同口径归一（R50 B-#1）：启用态 ACL 携带空模式
+	// 落库后，发射端仅 allow/deny 分支产出规则——零 ACL 生效而 UI 宣称已启用。
+	if req.IPACLMode == "" {
+		req.IPACLMode = "deny"
+	}
 	if err := services.ValidateGeoIPCountries(req.GeoIPCountries); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -702,12 +707,16 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// 显式空串会把枚举列清空：mode 为 "" 时汇总口径（mode!="off" 即计入 WAF）
 	// 与发射口径（仅 blocking/detection 生效）随即漂移；geoip_mode 在创建时已
 	// 归一为 allow/deny，空串属于域外值。不修改请直接省略字段，而不是传空串。
+	// ip_acl_mode 同口径（R50 B-#1）：空串落库后发射端仅 allow/deny 分支产出
+	// 规则、零 ACL 生效，而 SecurityPolicyHasIPControl 仍按 enabled+list 非空
+	// 宣称 IP 访问控制已启用。
 	for _, f := range []struct {
 		name string
 		val  *string
 	}{
 		{"mode", req.Mode},
 		{"geoip_mode", req.GeoIPMode},
+		{"ip_acl_mode", req.IPACLMode},
 	} {
 		if f.val != nil && strings.TrimSpace(*f.val) == "" {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("不修改请省略该字段，%s 不能为空串", f.name)})

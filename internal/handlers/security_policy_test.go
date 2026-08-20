@@ -931,3 +931,58 @@ func TestUpdateSecurityPolicy_anomalyThresholdZeroNormalizesToFive(t *testing.T)
 		t.Fatalf("anomaly_threshold=%d, want 5 (0 归一为创建侧默认)", threshold)
 	}
 }
+
+func TestUpdateSecurityPolicy_rejectsBlankIPACLMode(t *testing.T) {
+	// Given a policy with IP ACL enabled in deny mode
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	id := createTestPolicy(t, router, map[string]any{
+		"name":           "ACL空串策略",
+		"ip_acl_enabled": true,
+		"ip_acl_mode":    "deny",
+		"ip_acl_list":    `["203.0.113.0/24"]`,
+	})
+
+	// When 更新请求显式传空串 ip_acl_mode（R50 B-#1：空串落库后发射端
+	// services/security.go 仅 allow/deny 分支产出规则，零 ACL 规则生效；而
+	// SecurityPolicyHasIPControl 只看 enabled && list 非空，UI 仍宣称已启用）
+	recorder := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"ip_acl_mode": ""})
+
+	// Then 与 mode/geoip_mode 同口径拒绝 400，且存量列不被触碰
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("blank ip_acl_mode must be rejected with 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "ip_acl_mode 不能为空串") {
+		t.Fatalf("blank ip_acl_mode rejection must name the field, got %s", body)
+	}
+	var mode string
+	if err := db.DB.QueryRow("SELECT ip_acl_mode FROM security_policies WHERE id=?", id).Scan(&mode); err != nil {
+		t.Fatalf("read back ip_acl_mode: %v", err)
+	}
+	if mode != "deny" {
+		t.Fatalf("rejected update must not touch ip_acl_mode, got %q", mode)
+	}
+}
+
+func TestCreateSecurityPolicy_defaultsIPACLMode(t *testing.T) {
+	// Given 创建请求启用 IP ACL 但省略 ip_acl_mode
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+
+	// When the policy is created
+	id := createTestPolicy(t, router, map[string]any{
+		"name":           "ACL默认策略",
+		"ip_acl_enabled": true,
+		"ip_acl_list":    `["203.0.113.0/24"]`,
+	})
+
+	// Then ip_acl_mode 按 geoip_mode 同口径归一为 "deny"：启用态 ACL 绝不携带
+	// 空模式落库（空模式在发射端产出零规则，R50 B-#1）
+	var mode string
+	if err := db.DB.QueryRow("SELECT ip_acl_mode FROM security_policies WHERE id=?", id).Scan(&mode); err != nil {
+		t.Fatalf("read back ip_acl_mode: %v", err)
+	}
+	if mode != "deny" {
+		t.Fatalf("ip_acl_mode=%q, want default deny", mode)
+	}
+}
