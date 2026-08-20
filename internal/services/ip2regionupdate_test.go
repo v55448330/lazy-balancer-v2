@@ -846,7 +846,7 @@ func TestIP2RegionSchedulerTick_autoOffDoesNothing(t *testing.T) {
 	}
 
 	// When the scheduler ticks with auto_update off
-	m.schedulerTick(time.Now())
+	m.schedulerTick(time.Now(), nil)
 
 	// Then nothing happens and next_update stays empty
 	if fetchCalled {
@@ -870,7 +870,7 @@ func TestIP2RegionSchedulerTick_initializesNextUpdate(t *testing.T) {
 	}
 
 	// When the scheduler ticks with auto on and no next_update recorded
-	m.schedulerTick(now)
+	m.schedulerTick(now, nil)
 
 	// Then next_update is scheduled 24h out without running immediately
 	if fetchCalled {
@@ -904,7 +904,7 @@ func TestIP2RegionSchedulerTick_runsWhenDue(t *testing.T) {
 	}
 
 	// When the scheduler ticks past next_update
-	m.schedulerTick(now)
+	m.schedulerTick(now, nil)
 
 	// Then an auto update starts and next_update is pushed 24h out
 	select {
@@ -933,7 +933,7 @@ func TestIP2RegionSchedulerTick_slaveSkips(t *testing.T) {
 	}
 
 	// When the scheduler ticks on a slave node
-	m.schedulerTick(time.Now())
+	m.schedulerTick(time.Now(), nil)
 
 	// Then it does nothing
 	if fetchCalled {
