@@ -233,6 +233,10 @@ func TestImportConfigBackup_skips_bindings_of_empty_domain_rules(t *testing.T) {
 	if !strings.Contains(response.Body.String(), "域名为空") {
 		t.Fatalf("import response missing skip warning: %s", response.Body.String())
 	}
+	// R51-C-2：绑定跳过警告文案必须同步断言——文案被误删/拼错时测试不得仍绿。
+	if !strings.Contains(response.Body.String(), "安全策略绑定") {
+		t.Fatalf("import response missing binding-skip warning: %s", response.Body.String())
+	}
 	var skippedRule, droppedBinding, keptBinding int
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_empty_bound'").Scan(&skippedRule); err != nil {
 		t.Fatalf("count skipped rules: %v", err)
