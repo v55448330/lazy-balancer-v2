@@ -88,6 +88,93 @@ func TestSyncService_RegisterWithMaster_acceptsHTTP(t *testing.T) {
 	}
 }
 
+func TestSyncService_RegisterWithMaster_rejectsOversizedResponseBody(t *testing.T) {
+	// R52 N2：注册响应与快照拉取同威胁模型（主节点是该链路唯一对端），
+	// 超大响应体不得全量解码入内存，超限按既有解析失败路径处理。
+	// Given：上限被调低，响应为超限但整体合法的 JSON
+	old := maxRegistrationResponseBytes
+	maxRegistrationResponseBytes = 64
+	t.Cleanup(func() { maxRegistrationResponseBytes = old })
+	master := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":"` + strings.Repeat("a", 4096) + `","data":{"registration_id":1}}`))
+	}))
+	defer master.Close()
+	service := NewSyncService(nil, &config.Config{DataDir: t.TempDir()}, nil)
+
+	// When
+	_, err := service.RegisterWithMaster(context.Background(), master.URL, models.ClusterRegisterRequest{})
+
+	// Then
+	if err == nil || !strings.Contains(err.Error(), "解析主节点注册响应") {
+		t.Fatalf("error=%v, want 解析失败（超限截断）", err)
+	}
+}
+
+func TestSyncService_RegisterWithMaster_decodesResponseWithinLimit(t *testing.T) {
+	// Given
+	old := maxRegistrationResponseBytes
+	maxRegistrationResponseBytes = 1 << 20
+	t.Cleanup(func() { maxRegistrationResponseBytes = old })
+	master := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":"ok","data":{"registration_id":7,"registration_secret":"s3"}}`))
+	}))
+	defer master.Close()
+	service := NewSyncService(nil, &config.Config{DataDir: t.TempDir()}, nil)
+
+	// When
+	registration, err := service.RegisterWithMaster(context.Background(), master.URL, models.ClusterRegisterRequest{})
+
+	// Then
+	if err != nil || registration.RegistrationID != 7 {
+		t.Fatalf("registration=%+v err=%v, want registration_id=7 decoded", registration, err)
+	}
+}
+
+func TestSyncService_pollRegistration_ignoresOversizedStatusResponse(t *testing.T) {
+	// R52 N2：注册状态轮询响应同样必须有上限——无 LimitReader 时超限但合法
+	// 的 approved 响应会解码成功并推进 confirm 流程。
+	// Given
+	old := maxRegistrationResponseBytes
+	maxRegistrationResponseBytes = 64
+	t.Cleanup(func() { maxRegistrationResponseBytes = old })
+	_, database := newClusterTestService(t)
+	confirmCalled := make(chan struct{}, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/cluster/register/7/status", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"status":"approved","cluster_token":"stolen-token","padding":"` + strings.Repeat("a", 4096) + `"}}`))
+	})
+	mux.HandleFunc("/api/v1/cluster/registration/confirm", func(w http.ResponseWriter, _ *http.Request) {
+		confirmCalled <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	})
+	master := httptest.NewServer(mux)
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET master_url=?, registration_id=7, registration_secret='secret' WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
+
+	// When
+	service.pollRegistration(context.Background())
+
+	// Then：超限响应按解析失败处理，不得进入 confirm 流程
+	select {
+	case <-confirmCalled:
+		t.Fatal("oversized status response triggered registration confirm")
+	case <-time.After(100 * time.Millisecond):
+	}
+	var token string
+	if err := database.QueryRow("SELECT COALESCE(cluster_token,'') FROM global_config WHERE id=1").Scan(&token); err != nil {
+		t.Fatal(err)
+	}
+	if token == "stolen-token" {
+		t.Fatal("oversized status response was applied")
+	}
+}
+
 func TestSyncService_do_rejectsCertificateFingerprintMismatchBeforeSendingToken(t *testing.T) {
 	dataDir := t.TempDir()
 	receivedTokens := make(chan string, 2)
@@ -1508,6 +1595,43 @@ func TestDecodeSnapshotEnvelope_rejectsBodyOverSizeLimit(t *testing.T) {
 	// Then
 	if err == nil {
 		t.Fatal("oversized snapshot body decoded without error")
+	}
+}
+
+func TestDecodeSnapshotEnvelope_overflowNamesByteLimit(t *testing.T) {
+	// R52 N1：超限必须与网络截断/损坏区分——LimitReader 静默截断会让两者
+	// 共用「unexpected EOF」，节点页面无法分辨主节点异常膨胀与链路故障。
+	// Given
+	old := maxSnapshotResponseBytes
+	maxSnapshotResponseBytes = 64
+	t.Cleanup(func() { maxSnapshotResponseBytes = old })
+	oversized := `{"data":{"version":1,"fingerprint":"` + strings.Repeat("a", 128) + `"}}`
+
+	// When
+	_, err := decodeSnapshotEnvelope(strings.NewReader(oversized))
+
+	// Then
+	if err == nil || !strings.Contains(err.Error(), "超过") || !strings.Contains(err.Error(), "64") {
+		t.Fatalf("error=%v, want 明确命名字节上限的超限文案", err)
+	}
+}
+
+func TestDecodeSnapshotEnvelope_truncatedBodyDistinctFromOverflow(t *testing.T) {
+	// Given：上限充足但 body 被网络截断
+	old := maxSnapshotResponseBytes
+	maxSnapshotResponseBytes = 1 << 20
+	t.Cleanup(func() { maxSnapshotResponseBytes = old })
+	truncated := `{"data":{"version":1,"fingerprint":"abc`
+
+	// When
+	_, err := decodeSnapshotEnvelope(strings.NewReader(truncated))
+
+	// Then：解析失败但不得误报为超限
+	if err == nil {
+		t.Fatal("truncated snapshot body decoded without error")
+	}
+	if strings.Contains(err.Error(), "超过") {
+		t.Fatalf("error=%v, 网络截断不得与超限共用文案", err)
 	}
 }
 

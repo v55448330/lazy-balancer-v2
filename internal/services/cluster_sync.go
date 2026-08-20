@@ -502,7 +502,7 @@ func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, 
 		Message string                     `json:"message"`
 		Data    models.ClusterRegistration `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxRegistrationResponseBytes)).Decode(&envelope); err != nil {
 		return models.ClusterRegistration{}, fmt.Errorf("解析主节点注册响应: %w", err)
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
@@ -516,13 +516,25 @@ func (s *SyncService) RegisterWithMaster(ctx context.Context, masterURL string, 
 // 占用（同链路 waf-files 端点为 64MB，仅承载规则包）。超限即解析失败。
 var maxSnapshotResponseBytes int64 = 256 << 20
 
+// maxRegistrationResponseBytes 注册/注册状态轮询响应体上限（R52 N2）：与快照
+// 拉取同威胁模型（主节点是该链路唯一对端），这两类响应实际仅数百字节。
+var maxRegistrationResponseBytes int64 = 1 << 20
+
 // decodeSnapshotEnvelope 解码 Pull 快照响应，响应体经 maxSnapshotResponseBytes
-// 限流——超限时 JSON 截断报错，调用方按 ValidationFailed 处理。
+// 限流。多读 1 字节显式探测超限（R52 N1）：LimitReader 静默截断会让超限与
+// 网络截断共用「unexpected EOF」，运维无法区分主节点异常膨胀与链路故障。
 func decodeSnapshotEnvelope(body io.Reader) (models.ClusterSnapshot, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, maxSnapshotResponseBytes+1))
+	if err != nil {
+		return models.ClusterSnapshot{}, fmt.Errorf("读取快照响应体: %w", err)
+	}
+	if int64(len(raw)) > maxSnapshotResponseBytes {
+		return models.ClusterSnapshot{}, fmt.Errorf("快照响应体超过 %d 字节上限", maxSnapshotResponseBytes)
+	}
 	var envelope struct {
 		Data models.ClusterSnapshot `json:"data"`
 	}
-	if err := json.NewDecoder(io.LimitReader(body, maxSnapshotResponseBytes)).Decode(&envelope); err != nil {
+	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
 	return envelope.Data, nil
@@ -1302,7 +1314,7 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 	var envelope struct {
 		Data models.ClusterRegistrationStatus `json:"data"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&envelope) == nil && envelope.Data.Status == "approved" && envelope.Data.ClusterToken != "" {
+	if json.NewDecoder(io.LimitReader(resp.Body, maxRegistrationResponseBytes)).Decode(&envelope) == nil && envelope.Data.Status == "approved" && envelope.Data.ClusterToken != "" {
 		confirm, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(masterURL, "/")+"/api/v1/cluster/registration/confirm", nil)
 		if err != nil {
 			return
