@@ -655,6 +655,12 @@ func validateAndNormalizeCRSField(name string, val *string) error {
 		if name == "crs_rule_groups" && (len(trimmed) != 2 || trimmed[0] < '0' || trimmed[0] > '9' || trimmed[1] < '0' || trimmed[1] > '9') {
 			return fmt.Errorf("%s 条目必须是两位数字组号（如 942 组填 \"42\"）: %q", name, entry)
 		}
+		// R47 B-#1：首尾空白条目（" 42"/"\t42"）trim 后能通过以上检查，但发射端
+		// 拼接 glob 用原始值会产生零匹配——校验与发射必须对同一形态达成一致。
+		// 放在两位数字检查之后："942 " 这类条目仍报组号形态错误（R46 口径）。
+		if trimmed != entry {
+			return fmt.Errorf("%s 条目不能包含首尾空白: %q", name, entry)
+		}
 	}
 	return nil
 }
@@ -1503,7 +1509,7 @@ func (h *Handlers) StartIP2RegionUpdate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "IP数据库", "手动更新 IP2Region数据库", "")
+	services.RecordAuditLog(getContextUserID(c), "更新", "IP数据库", "手动更新 IP数据库", "")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 }
 
