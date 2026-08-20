@@ -561,7 +561,11 @@ func validateSnapshotACMEState(snapshot models.ClusterSnapshot) error {
 			if _, exists := providers[rule.CAProviderID]; exists {
 				continue
 			}
-			return fmt.Errorf("快照规则 %s 引用了不存在的 CA 提供商 %d", rule.CaddyID, rule.CAProviderID)
+			// R52 N3/F-1：悬挂 CA 提供商引用与 acme_config_id 轴同型 fail-open
+			// （R51 发现3）——整包拒绝会让一条坏规则瘫痪全部从节点同步；签发
+			// 仅主节点，按单任务失败/回退，主节点修复后随后续同步自愈。
+			Logf("warn", "快照规则 %s 引用了不存在的 CA 提供商 %d（单规则损坏，跳过该校验，签发将按单任务失败），需人工修复", rule.CaddyID, rule.CAProviderID)
+			continue
 		}
 	}
 	for _, cert := range snapshot.Certs {
@@ -569,7 +573,11 @@ func validateSnapshotACMEState(snapshot models.ClusterSnapshot) error {
 			continue
 		}
 		if _, exists := providers[cert.CAProviderID]; !exists {
-			return fmt.Errorf("快照证书 %s 引用了不存在的 CA 提供商 %d", cert.RuleID, cert.CAProviderID)
+			// R52 N3：证书行的悬挂 CA 引用同样 fail-open——证书文件由
+			// materializeSnapshotCerts 同步、签发仅主节点，整包拒绝会让
+			// 全部从节点永久 degraded（ValidationFailed 每周期重试但永不收敛）。
+			Logf("warn", "快照证书 %s 引用了不存在的 CA 提供商 %d（单证书损坏，跳过该校验），需人工修复", cert.RuleID, cert.CAProviderID)
+			continue
 		}
 	}
 	return nil

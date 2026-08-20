@@ -164,10 +164,10 @@ func (s *ClusterService) buildFullSnapshot(ctx context.Context, store snapshotSt
 	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
 	snapshot.SchemaVersion = CurrentSnapshotSchema
 	snapshot.MinReaderVersion = CurrentSnapshotSchema
-	// 主节点与从节点共用同一 ACME 状态校验：结构性不一致（缺区段/字段不全/
-	// 悬挂 CA 引用）会被从节点拒绝，此处提前校验并记录错误以提升主节点可见性，
-	// 但仍照常发布。单规则损坏（acme_config_id=0/悬挂配置）两侧均为 warn 跳过
-	// （R51 发现3），不阻断同步。
+	// 主节点与从节点共用同一 ACME 状态校验：结构性不一致（缺区段/字段不全）
+	// 会被从节点拒绝，此处提前校验并记录错误以提升主节点可见性，但仍照常
+	// 发布。单规则/单证书损坏（acme_config_id=0、悬挂配置、悬挂 CA 提供商
+	// 引用）两侧均为 warn 跳过（R51 发现3、R52 N3），不阻断同步。
 	if err := validateSnapshotACMEState(snapshot); err != nil {
 		Logf("error", "cluster snapshot self-validation failed (still publishing): %v", err)
 	}

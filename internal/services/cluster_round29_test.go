@@ -182,6 +182,29 @@ func TestValidateSnapshotACMEState_toleratesUnsetOrDanglingConfigWithWarning(t *
 	}
 }
 
+func TestValidateSnapshotACMEState_toleratesDanglingCAProviderWithWarning(t *testing.T) {
+	// R52 N3 + F-1（从节点侧）：rules 循环的 ca_provider 分支与 certs 循环
+	// 仍对悬挂 ca_provider_id 整包硬拒——重新引入 R51 发现3 已消灭的
+	// 「一条坏规则/坏证书瘫痪全部从节点同步」失败模式。对齐 fail-open：
+	// 逐条 skip+warn，主节点修复后随后续同步自愈。
+	// Given：规则与证书各携带一个悬挂 ca_provider_id（providers 集合为空）
+	snapshot := models.ClusterSnapshot{SchemaVersion: 3, ACME: &models.ClusterACMEState{
+		CAProviders:        []models.CAProvider{},
+		CertificateConfigs: []models.CertificateConfig{{ID: 11, Name: "dns", DNSProvider: "dnspod"}},
+		DNSOwnership:       json.RawMessage(`{"version":1,"records":[]}`),
+	}}
+	snapshot.Rules = []models.LbRule{{CaddyID: "lb_dangling_ca", EnableTLS: true, TLSSource: "acme_dns", ACMEConfigID: 11, CAProviderID: 99}}
+	snapshot.Certs = []models.ClusterCertificate{{RuleID: "lb_dangling_ca", CAProviderID: 98}}
+
+	// When
+	err := validateSnapshotACMEState(snapshot)
+
+	// Then
+	if err != nil {
+		t.Fatalf("dangling ca_provider_id must not reject the whole snapshot: %v", err)
+	}
+}
+
 func TestClusterService_Snapshot_prefersLaterExpiryBeforeExactDomainMatch(t *testing.T) {
 	// Given：exact 证书（24h 后到期）updated_at 更晚；覆盖证书（90 天后到期）
 	// updated_at 更早——updated_at 顺序与 NotAfter 顺序相反，必须真正按
