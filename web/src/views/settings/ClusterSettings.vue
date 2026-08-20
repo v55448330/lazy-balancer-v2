@@ -214,6 +214,9 @@ const registerAsSlave = async (input: ClusterRegistrationInput): Promise<void> =
     await request.post<APIResponse<ClusterModeResult>>('/cluster/mode', { mode: 'slave', ...input })
     ElMessage.success('注册请求已提交，等待主节点审批')
     await clusterPolling.run()
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to register as slave:', error)
   } finally {
     modeLoading.value = false
   }
@@ -228,6 +231,9 @@ const promoteToMaster = async (): Promise<void> => {
     await request.post<ActionResponse>('/cluster/promote')
     ElMessage.success('已提升为主节点')
     await clusterPolling.run()
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to promote to master:', error)
   } finally {
     promoting.value = false
   }
