@@ -124,6 +124,12 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 		return false, false, nil
 	}
 	if len(bundle.CRSTarGzB64) > 0 {
+		// 声明哈希为空但携带内容：合法主节点 BuildWafFileBundle 恒成对设置，
+		// 仅恶意/损坏主节点可构造——与 xdb 侧同纵深防御；untarGzTo 在
+		// expectSum=="" 时跳过整树哈希校验，必须拒绝而非裸写未验证字节。
+		if bundle.CRSSha256 == "" {
+			return crsChanged, xdbChanged, errors.New("同步 CRS规则库缺少声明哈希，已拒绝落盘")
+		}
 		liveSum, liveErr := tarGzDirSum(crsLiveDir)
 		if liveErr != nil || liveSum != bundle.CRSSha256 {
 			if err := untarGzTo(bundle.CRSTarGzB64, crsLiveDir, bundle.CRSSha256); err != nil {

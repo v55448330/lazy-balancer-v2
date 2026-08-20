@@ -247,6 +247,24 @@ func TestUntarGzTo_rejectsIllegalPathAndCleansStaging(t *testing.T) {
 	assertNoStagingRemains(t, destDir)
 }
 
+func TestApplyWafFileBundle_rejectsCRSWithoutDeclaredHash(t *testing.T) {
+	// R51 发现2：声明哈希为空但携带 CRS 内容——非法主节点构造（合法
+	// BuildWafFileBundle 恒成对设置），untarGzTo 在 expectSum=="" 时跳过
+	// 整树哈希校验，未验证字节会直接安装进 live CRS 树。必须与 xdb 分支
+	// 对称拒绝，不得落盘。
+	dst := t.TempDir()
+	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
+	crsLiveDir, ip2regionLivePath = filepath.Join(dst, "crs"), filepath.Join(dst, "ip2region.xdb")
+	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	bundle := &WafFileBundle{CRSTarGzB64: rawTarGz(t, []tarEntry{{name: "rules/evil.conf", body: []byte("SecRule X EVIL")}}), CRSSha256: ""}
+	if _, _, err := ApplyWafFileBundle(bundle); err == nil || !strings.Contains(err.Error(), "缺少声明哈希") {
+		t.Fatalf("error=%v, want missing declared hash rejection", err)
+	}
+	if _, err := os.Stat(filepath.Join(crsLiveDir, "rules", "evil.conf")); !os.IsNotExist(err) {
+		t.Fatalf("CRS tree must not be written without declared hash")
+	}
+}
+
 func TestApplyWafFileBundle_rejectsXdbWithoutDeclaredHash(t *testing.T) {
 	// N-04：声明哈希为空但携带 xdb 内容——非法主节点构造（合法
 	// BuildWafFileBundle 恒成对设置），必须拒绝整包而非裸写原始字节。
