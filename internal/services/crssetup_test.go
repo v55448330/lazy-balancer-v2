@@ -51,8 +51,9 @@ func TestCRSUpdateRun_migratesSetupCustomizationsAndInstallsNewStock(t *testing.
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
-		"coreruleset-4.15.0/crs-setup.conf.example": "new-stock-1\nnew-stock-2\n",
-		"coreruleset-4.15.0/rules/REQUEST-901.conf": "SecRule a\n",
+		"coreruleset-4.15.0/crs-setup.conf.example":     "new-stock-1\nnew-stock-2\n",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf":     "SecRule a\n",
 	})
 
 	// When the update runs to completion
@@ -111,8 +112,9 @@ func TestCRSUpdateRun_firstMigrationDiffsAgainstDistBaseline(t *testing.T) {
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
-		"coreruleset-4.15.0/crs-setup.conf.example": "SecRuleEngine On\n",
-		"coreruleset-4.15.0/rules/REQUEST-901.conf": "SecRule a\n",
+		"coreruleset-4.15.0/crs-setup.conf.example":     "SecRuleEngine On\n",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf":     "SecRule a\n",
 	})
 
 	// When the update runs
@@ -150,8 +152,9 @@ func TestCRSUpdateRun_rollbackRestoresPreviousLiveSetup(t *testing.T) {
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
-		"coreruleset-4.15.0/crs-setup.conf.example": "# new setup",
-		"coreruleset-4.15.0/rules/REQUEST-901.conf": "SecRule a\n",
+		"coreruleset-4.15.0/crs-setup.conf.example":     "# new setup",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf":     "SecRule a\n",
 	})
 	reloads := 0
 	m.reloader = func() error { reloads++; return nil }
@@ -268,8 +271,9 @@ func TestCRSUpdateRun_staleOverridesBakNotConsumedOnEmptyDiffFailure(t *testing.
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
-		"coreruleset-4.15.0/crs-setup.conf.example": "stock-a\nstock-b\n",
-		"coreruleset-4.15.0/rules/REQUEST-901.conf": "SecRule a\n",
+		"coreruleset-4.15.0/crs-setup.conf.example":     "stock-a\nstock-b\n",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf":     "SecRule a\n",
 	})
 	m.reloader = func() error { return errors.New("注入的重载失败") }
 
@@ -372,8 +376,9 @@ func TestCRSUpdateRun_installsStockSetupWhenNoneExists(t *testing.T) {
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
-		"coreruleset-4.15.0/crs-setup.conf.example": "stock-setup\n",
-		"coreruleset-4.15.0/rules/REQUEST-901.conf": "SecRule a\n",
+		"coreruleset-4.15.0/crs-setup.conf.example":     "stock-setup\n",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf":     "SecRule a\n",
 	})
 
 	// When the update runs

@@ -62,6 +62,7 @@ func TestSeedCRSRules_seedsFromSnapshotWhenVersionDiffers(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(snapshotDir, "rules", "REQUEST-901.conf"), "SecRule snapshot")
+	writeTestFile(t, filepath.Join(snapshotDir, "rules", crsRulesProbeFile), "SecRule snapshot init")
 	writeTestFile(t, filepath.Join(snapshotDir, "crs-setup.conf"), "# snapshot setup")
 	writeTestFile(t, filepath.Join(snapshotDir, "VERSION"), "v4.15.0\n")
 	writeTestFile(t, filepath.Join(distDir, "rules", "REQUEST-900.conf"), "SecRule dist")
@@ -169,6 +170,7 @@ func TestSeedCRSRules_writesVersionMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(snapshotDir, "rules", "REQUEST-901.conf"), "SecRule snapshot")
+	writeTestFile(t, filepath.Join(snapshotDir, "rules", crsRulesProbeFile), "SecRule snapshot init")
 	writeTestFile(t, filepath.Join(snapshotDir, "crs-setup.conf"), "# snapshot setup")
 	writeTestFile(t, filepath.Join(snapshotDir, "VERSION"), "v4.15.0\n")
 	writeTestFile(t, filepath.Join(distDir, "rules", "REQUEST-900.conf"), "SecRule dist")
@@ -218,6 +220,7 @@ func TestRestoreCRSFromSnapshot_recoversUserUpdatedTree(t *testing.T) {
 	snapshotDir := filepath.Join(root, "data", "crs")
 	writeTestFile(t, filepath.Join(liveDir, "rules", crsProbeFile), "SecRule bundled")
 	writeTestFile(t, filepath.Join(snapshotDir, "rules", crsProbeFile), "SecRule updated")
+	writeTestFile(t, filepath.Join(snapshotDir, "rules", crsRulesProbeFile), "SecRule updated init")
 	writeTestFile(t, filepath.Join(snapshotDir, "crs-setup.conf"), "# updated setup")
 	writeTestFile(t, filepath.Join(snapshotDir, "zz-user-overrides.conf"), "# user lines")
 	writeTestFile(t, filepath.Join(snapshotDir, crsVersionFile), "v4.15.0\n")

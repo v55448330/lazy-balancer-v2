@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -62,8 +63,15 @@ func seedCRSRulesFrom(liveDir, snapshotDir, distDir string) {
 	if data, err := os.ReadFile(filepath.Join(snapshotDir, "VERSION")); err == nil {
 		snapshotVersion = strings.TrimSpace(string(data))
 	}
-	if _, err := os.Stat(filepath.Join(snapshotDir, "rules")); err != nil {
+	snapshotRules := filepath.Join(snapshotDir, "rules")
+	if _, err := os.Stat(snapshotRules); err != nil {
 		snapshotVersion = "" // a snapshot without a rules tree is unusable
+	} else if !crsRulesTreeIntact(snapshotRules) {
+		// R51 F2：persistCRSSnapshotFrom 崩溃窗口（RemoveAll 中途，VERSION 尚存 +
+		// rules 部分残留）留下的退化快照不能作种——播成退化 live 后下次启动探针
+		// 再清再播同源，跨重启循环。回退 dist，快照留现场供诊断。
+		log.Printf("crs seed: snapshot rules tree %s is incomplete (missing %s), falling back to dist", snapshotRules, crsRulesProbeFile)
+		snapshotVersion = ""
 	}
 	src := distDir
 	srcVersion := CRSBundledVersion
@@ -186,7 +194,12 @@ func planCRSReconcile(liveV, snapV, dbV, bundledV string, snapshotRulesExist, pr
 
 // restoreCRSFromSnapshot copies the persisted snapshot tree back over the
 // live dir (rules + setup + user override files) and refreshes the marker.
+// R51 F2：装入前先对快照执行与 seed/备份恢复同一棵探针门——退化快照（部分
+// rules + 完整 VERSION）拒绝恢复，调用方记录错误并保留 live 现场。
 func restoreCRSFromSnapshot(liveDir, snapshotDir, version string) error {
+	if !crsRulesTreeIntact(filepath.Join(snapshotDir, "rules")) {
+		return fmt.Errorf("快照 rules 树不完整（缺失 %s），拒绝恢复", crsRulesProbeFile)
+	}
 	if err := os.RemoveAll(filepath.Join(liveDir, "rules")); err != nil {
 		return err
 	}
@@ -222,8 +235,16 @@ func ReconcileCRSState() {
 func reconcileCRSStateFrom(liveDir, snapshotDir, dbV string) {
 	snapV := readCRSVersionMarker(snapshotDir)
 	snapshotRulesExist := false
-	if _, err := os.Stat(filepath.Join(snapshotDir, "rules")); err == nil {
-		snapshotRulesExist = true
+	snapshotRules := filepath.Join(snapshotDir, "rules")
+	if _, err := os.Stat(snapshotRules); err == nil {
+		if crsRulesTreeIntact(snapshotRules) {
+			snapshotRulesExist = true
+		} else {
+			// R51 F2：退化快照不作权威源——probe 不匹配分支会拿快照覆盖 live，
+			// 退化快照会把 live 换成弱化树。按无快照处理并记录，快照留现场。
+			log.Printf("crs reconcile: snapshot rules tree %s is incomplete (missing %s), not treating it as authoritative", snapshotRules, crsRulesProbeFile)
+			snapV = ""
+		}
 	} else {
 		snapV = ""
 	}
