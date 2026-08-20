@@ -177,11 +177,17 @@ const getDisplayName = (row: UserListItem): string => {
 
 const fetchUsers = async () => {
   const requestSeq = ++usersRequestSeq
-  const res = await request.get<APIResponse<UserListItem[]>>('/users')
-  if (requestSeq === usersRequestSeq) {
-    users.value = res.data || []
-    const maxPage = Math.max(1, Math.ceil(users.value.length / pageSize.value))
-    if (currentPage.value > maxPage) currentPage.value = maxPage
+  try {
+    const res = await request.get<APIResponse<UserListItem[]>>('/users')
+    if (requestSeq === usersRequestSeq) {
+      users.value = res.data || []
+      const maxPage = Math.max(1, Math.ceil(users.value.length / pageSize.value))
+      if (currentPage.value > maxPage) currentPage.value = maxPage
+    }
+  } catch (error: unknown) {
+    // Error toast is already shown by the global axios interceptor; swallow here
+    // so fire-and-forget refresh calls don't surface as unhandled rejections.
+    console.error('Failed to fetch users:', error)
   }
 }
 

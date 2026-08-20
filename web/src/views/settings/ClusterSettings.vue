@@ -238,7 +238,8 @@ const syncNow = async (): Promise<void> => {
     const response = await request.post<APIResponse<ClusterSyncResult>>('/cluster/sync/pull')
     const result = response.data
     if (result) ElMessage.success(result.changed ? `同步完成，已应用版本 ${result.applied_version}` : '当前已是最新配置')
-    await fetchStatus()
+    // fetchStatus 为 silent 请求，失败仅记录日志，避免逃逸为未处理的 rejection
+    await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
   } finally {
     syncing.value = false
   }
@@ -292,7 +293,7 @@ const updateSyncField = async (field: string, value: boolean): Promise<void> => 
       { confirmButtonText: action, cancelButtonText: '取消', type: 'warning' },
     )
   } catch {
-    await fetchStatus()
+    await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
     return
   }
   settingsLoading.value = true
@@ -302,7 +303,7 @@ const updateSyncField = async (field: string, value: boolean): Promise<void> => 
     await fetchStatus()
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '更新失败')
-    await fetchStatus()
+    await fetchStatus().catch((refreshError: unknown) => console.error('Failed to refresh cluster status:', refreshError))
   } finally {
     settingsLoading.value = false
   }
@@ -314,7 +315,7 @@ const updateSyncInterval = async (value: number): Promise<void> => {
   try {
     await request.put<ActionResponse>('/cluster/settings', { sync_interval: value })
     ElMessage.success('同步间隔已更新')
-    await fetchStatus()
+    await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
   } finally {
     intervalSaving.value = false
   }

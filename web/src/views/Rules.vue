@@ -1323,7 +1323,9 @@ const fetchRules = async () => {
     void certJobsPolling.run()
   } catch (error: unknown) {
     if (axios.isCancel(error)) return
-    throw error
+    // Error toast is already shown by the global axios interceptor; swallow here
+    // so fire-and-forget refresh calls don't surface as unhandled rejections.
+    console.error('Failed to fetch rules:', error)
   } finally {
     if (!disposed && requestSeq === rulesRequestSeq) loading.value = false
   }
@@ -2487,12 +2489,8 @@ const toggleRule = async (rule: Rule) => {
       await request.post<APIResponse>(`/rules/${rule.caddy_id}/disable`)
     }
     ElMessage.success(`${action}成功`)
-    try {
-      await fetchRules()
-    } catch (error: unknown) {
-      // 启停已在服务端生效，刷新失败不回退开关，等待下次轮询同步
-      console.error('Failed to refresh rules after toggle:', error)
-    }
+    // 启停已在服务端生效，刷新失败不回退开关（fetchRules 内部已吞错），等待下次轮询同步
+    await fetchRules()
   } catch (e) {
     rule.enabled = !nextEnabled
   } finally {
