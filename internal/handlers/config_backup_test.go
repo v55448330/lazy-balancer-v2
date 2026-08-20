@@ -1029,7 +1029,7 @@ func TestValidateV2Backup_rejects_self_loop_80_tls_redirect_rule(t *testing.T) {
 	}{
 		{
 			name:        "80 端口 + TLS 跳转自环规则被拒",
-			rule:        map[string]any{"caddy_id": "lb_backup_loop", "name": "备份自环", "protocol": "http", "domain": "loop.test", "listen_port": 80, "enable_tls": 1, "tls_http_redirect": 1},
+			rule:        map[string]any{"caddy_id": "lb_backup_loop", "name": "备份自环", "protocol": "http", "domain": "loop.test", "listen_port": 80, "enable_tls": 1, "tls_http_redirect": 1, "tls_source": "manual", "tls_cert": "pem", "tls_key": "key"},
 			wantErrText: "80 端口开启 TLS 跳转无意义",
 		},
 		{
@@ -1040,7 +1040,7 @@ func TestValidateV2Backup_rejects_self_loop_80_tls_redirect_rule(t *testing.T) {
 		},
 		{
 			name: "443 端口 + TLS 跳转规则正常",
-			rule: map[string]any{"caddy_id": "lb_backup_ok", "name": "备份正常", "protocol": "http", "domain": "ok.test", "listen_port": 443, "enable_tls": 1, "tls_http_redirect": 1},
+			rule: map[string]any{"caddy_id": "lb_backup_ok", "name": "备份正常", "protocol": "http", "domain": "ok.test", "listen_port": 443, "enable_tls": 1, "tls_http_redirect": 1, "tls_source": "manual", "tls_cert": "pem", "tls_key": "key"},
 		},
 		{
 			name: "80 端口普通规则正常",

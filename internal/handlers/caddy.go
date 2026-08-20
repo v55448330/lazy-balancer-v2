@@ -180,6 +180,42 @@ func (h *Handlers) PreviewConfigUpdate(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: plan})
 }
 
+// isPureConfigValidationError 展开 errors.Join 树，判定全部叶子均为
+// *configValidationError（含 fmt.Errorf %w 包装的配置错误）。
+func isPureConfigValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			if !isPureConfigValidationError(child) {
+				return false
+			}
+		}
+		return true
+	}
+	var validationErr *configValidationError
+	return errors.As(err, &validationErr)
+}
+
+// writeConfigValidationFailure 映射聚合预校验错误。R54 新发现4：纯配置错误
+// 保持 400 且展示全部规则问题（Round 30 F-4）；一旦混入非配置类错误（DB 故障
+// 等），改映射 500 通用文案并记日志——否则 400 消息携带底层 DB 错误文本，
+// 客户端会把服务端故障误判为配置问题。
+func writeConfigValidationFailure(c *gin.Context, err error) {
+	var validationErr *configValidationError
+	if !errors.As(err, &validationErr) {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "预校验规则配置失败: " + err.Error()})
+		return
+	}
+	if !isPureConfigValidationError(err) {
+		services.Logf("error", "更新全局配置的规则预校验混入非配置类错误：%v", err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "预校验规则配置失败"})
+		return
+	}
+	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+}
+
 func (h *Handlers) UpdateConfig(c *gin.Context) {
 
 	var req models.UpdateConfigRequest
@@ -316,13 +352,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 	if err := validateEnabledStoredRuleConfigs(c.Request.Context()); err != nil {
-		var validationErr *configValidationError
-		if errors.As(err, &validationErr) {
-			// Round 30 F-4: 聚合错误含多条规则问题，返回 err.Error() 一次展示全部。
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "预校验规则配置失败: " + err.Error()})
+		writeConfigValidationFailure(c, err)
 		return
 	}
 

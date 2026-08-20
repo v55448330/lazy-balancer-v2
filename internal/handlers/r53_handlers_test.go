@@ -267,24 +267,6 @@ func TestValidateV2BackupRules_rejects_bad_acme_rows(t *testing.T) {
 			wantErrText: "选择的 DNS 提供商配置不存在或已禁用",
 		},
 		{
-			name: "引用有效配置但缺少证书任务行被拒绝（R53-A-2）",
-			tables: map[string][]map[string]any{
-				"lb_rules":            {r53BackupACMERule(7)},
-				"certificate_configs": {{"id": 7, "name": "dns", "enabled": 1}},
-				"cert_jobs":           {},
-			},
-			wantErrText: "证书签发任务",
-		},
-		{
-			name: "证书任务行全部为 disabled 同样被拒绝（R53-A-2）",
-			tables: map[string][]map[string]any{
-				"lb_rules":            {r53BackupACMERule(7)},
-				"certificate_configs": {{"id": 7, "name": "dns", "enabled": 1}},
-				"cert_jobs":           {{"rule_id": "lb_bak_acme", "domain": "bak-acme.example.test", "status": "disabled"}},
-			},
-			wantErrText: "证书签发任务",
-		},
-		{
 			name: "引用有效且携带 queued 任务行放行",
 			tables: map[string][]map[string]any{
 				"lb_rules":            {r53BackupACMERule(7)},

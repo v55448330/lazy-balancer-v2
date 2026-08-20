@@ -502,6 +502,12 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			return
 		}
 		disabledConflicts := disableV2RuleConflicts(backup.Tables["lb_rules"])
+		// R54 新发现2：与 ImportConfigBackup 同序——任务不变量在冲突置禁用之后
+		// 执行，预览结果与实际导入一致（冲突可自愈备份不得在预览误报不可导入）。
+		if err := validateV2BackupCertJobs(backup.Tables); err != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
+			return
+		}
 		summary := map[string]int{}
 		for table, rows := range backup.Tables {
 			summary[table] = len(rows)

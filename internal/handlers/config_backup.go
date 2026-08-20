@@ -372,18 +372,6 @@ func validateV2Backup(backup configBackup) (bool, error) {
 func validateV2BackupRules(tables map[string][]map[string]any) error {
 	rows := tables["lb_rules"]
 	pathRows := tables["path_rules"]
-	// R53-A-2：导入为全量替换（deleteOrder 清光 cert_jobs 后仅插入备份行），
-	// 启用的 acme_dns 规则在备份内必须携带至少一条非 disabled 的证书任务行——
-	// 缺失即导入后续签永久断链且无信号（周期路径只遍历已存在的任务行，不补建）。
-	activeJobRuleIDs := make(map[string]bool)
-	for _, job := range tables["cert_jobs"] {
-		if backupString(job["status"]) == "disabled" {
-			continue
-		}
-		if ruleID, ok := job["rule_id"].(string); ok && ruleID != "" {
-			activeJobRuleIDs[ruleID] = true
-		}
-	}
 	for index, rule := range rows {
 		protocol, _ := rule["protocol"].(string)
 		listenPort, validPort := backupInteger(rule["listen_port"])
@@ -402,28 +390,35 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 		// 往返断裂（与 v1 路径自环规则软跳过口径一致），故禁用行将
 		// EnableTLS/TLSHTTPRedirect 置 false，其余字段校验保留。
 		enabled := backupRuleEnabled(rule)
+		// R54 新发现1：启用 TLS 的行先做 tls_source 白名单——保存侧（rules.go）
+		// 与启用侧（rule_features.go validateStoredRuleConfig）均对非 manual/acme_dns
+		// 400，导入此前是唯一能放行该形态的门：''/垃圾值行两个分支都不命中、整包
+		// 放行，渲染侧 availableCerts 仅认 manual/acme_dns → 无证书、无
+		// tls_connection_policies → TLS 端口明文服务（与 R53 发现2 同类缺口）。
 		// R43 F-C / R46 C-B-1: 启用的手动 TLS 规则必须携带证书与私钥（镜像保存/启用侧
 		// rule_features.go validateStoredRuleConfig 口径），拒绝时点名规则。
 		// 导入此前是唯一能绕过该校验的门：无证书规则不在 availableCerts 内 → 无
 		// TLS policy → TLS 端口明文服务，且 autohttps.disable_certificates 阻止
 		// Caddy 自动签发自愈。
-		if enabled && protocol == "http" && backupBooleanEnabled(rule["enable_tls"]) &&
-			backupString(rule["tls_source"]) == "manual" &&
-			(strings.TrimSpace(backupString(rule["tls_cert"])) == "" || strings.TrimSpace(backupString(rule["tls_key"])) == "") {
-			return fmt.Errorf("规则 #%d（%s）：手动证书模式下必须提供 TLS 证书和私钥", index+1, backupString(rule["name"]))
-		}
-		// R53 发现2：启用的 acme_dns 行按 validateRuleACMEReferences 同口径校验——
-		// acme_config_id=0/悬挂/已禁用与 ca_provider_id 悬挂/已禁用均整包 400。
-		// 导入把规则已启用地带入运行态，R52 F-2 的 EnableRule 门拦不住这条路径；
-		// 坏行导入后 TLS 端口明文服务且签发必败，与手动证书缺材料的拒绝理由同型。
-		// R53-A-2：引用有效还须携带非 disabled 的 cert_jobs 行（见函数头部注释）。
-		if enabled && protocol == "http" && backupBooleanEnabled(rule["enable_tls"]) &&
-			backupString(rule["tls_source"]) == "acme_dns" {
-			if err := validateBackupACMEReferenceIDs(tables, rule); err != nil {
-				return fmt.Errorf("规则 #%d（%s）：%w", index+1, backupString(rule["name"]), err)
+		if enabled && protocol == "http" && backupBooleanEnabled(rule["enable_tls"]) {
+			tlsSource := backupString(rule["tls_source"])
+			if tlsSource != "manual" && tlsSource != "acme_dns" {
+				return fmt.Errorf("规则 #%d（%s）：启用 TLS 时必须选择证书来源（manual 或 acme_dns）", index+1, backupString(rule["name"]))
 			}
-			if !activeJobRuleIDs[backupString(rule["caddy_id"])] {
-				return fmt.Errorf("规则 #%d（%s）：启用的 ACME 规则缺少证书签发任务（cert_jobs 无非 disabled 行），导入后将无法自动续签", index+1, backupString(rule["name"]))
+			if tlsSource == "manual" &&
+				(strings.TrimSpace(backupString(rule["tls_cert"])) == "" || strings.TrimSpace(backupString(rule["tls_key"])) == "") {
+				return fmt.Errorf("规则 #%d（%s）：手动证书模式下必须提供 TLS 证书和私钥", index+1, backupString(rule["name"]))
+			}
+			// R53 发现2：启用的 acme_dns 行按 validateRuleACMEReferences 同口径校验——
+			// acme_config_id=0/悬挂/已禁用与 ca_provider_id 悬挂/已禁用均整包 400。
+			// 导入把规则已启用地带入运行态，R52 F-2 的 EnableRule 门拦不住这条路径；
+			// 坏行导入后 TLS 端口明文服务且签发必败，与手动证书缺材料的拒绝理由同型。
+			// R53-A-2/R54 新发现2：cert_jobs 任务不变量移至 validateV2BackupCertJobs，
+			// 在 disableV2RuleConflicts 之后执行（将自动禁用的冲突行不参与运行态不变量）。
+			if tlsSource == "acme_dns" {
+				if err := validateBackupACMEReferenceIDs(tables, rule); err != nil {
+					return fmt.Errorf("规则 #%d（%s）：%w", index+1, backupString(rule["name"]), err)
+				}
 			}
 		}
 		input := ruleFeatureInput{
@@ -454,6 +449,57 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// validateV2BackupCertJobs 校验最终处于启用态的 acme_dns 规则携带域名匹配的
+// 证书任务行。R53-A-2：导入为全量替换（deleteOrder 清光 cert_jobs 后仅插入
+// 备份行），缺失即导入后续签永久断链且无信号（周期路径只遍历已存在的任务行，
+// 不补建）。R54 新发现2：必须在 disableV2RuleConflicts 之后执行——将被冲突
+// 自动置禁用的规则不投入运行，不参与运行态不变量；此前不变量先执行会把可自愈
+// 的冲突备份整包 400。R54 新发现3：不变量还须校验 job.domain 与规则域名一致
+// （canonical/reversed 双形式，与 certjobs.go 续签扫描 lower+replace 口径同型）——
+// 错域残留行只凭存在性放行后，续签扫描按 rule_id+domain 匹配永不命中，断链同果。
+func validateV2BackupCertJobs(tables map[string][]map[string]any) error {
+	jobsByRule := make(map[string][]string)
+	for _, job := range tables["cert_jobs"] {
+		if backupString(job["status"]) == "disabled" {
+			continue
+		}
+		if ruleID, ok := job["rule_id"].(string); ok && ruleID != "" {
+			jobsByRule[ruleID] = append(jobsByRule[ruleID], normalizeBackupJobDomain(backupString(job["domain"])))
+		}
+	}
+	for index, rule := range tables["lb_rules"] {
+		protocol, _ := rule["protocol"].(string)
+		if !backupRuleEnabled(rule) || protocol != "http" ||
+			!backupBooleanEnabled(rule["enable_tls"]) || backupString(rule["tls_source"]) != "acme_dns" {
+			continue
+		}
+		jobDomains := jobsByRule[backupString(rule["caddy_id"])]
+		if len(jobDomains) == 0 {
+			return fmt.Errorf("规则 #%d（%s）：启用的 ACME 规则缺少证书签发任务（cert_jobs 无非 disabled 行），导入后将无法自动续签", index+1, backupString(rule["name"]))
+		}
+		canonical := canonicalACMEDomainForJobLookup(backupString(rule["domain"]))
+		canonicalNorm := normalizeBackupJobDomain(canonical)
+		reversedNorm := normalizeBackupJobDomain(reversedACMEDomainForm(canonical))
+		matched := false
+		for _, jobDomain := range jobDomains {
+			if jobDomain == canonicalNorm || jobDomain == reversedNorm {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("规则 #%d（%s）：证书任务域名与规则域名不一致，导入后将无法自动续签", index+1, backupString(rule["name"]))
+		}
+	}
+	return nil
+}
+
+// normalizeBackupJobDomain 与续签扫描 lower(replace(domain,' ',”)) 同口径归一
+// 域名比较（大小写/空白变体不逃逸）。
+func normalizeBackupJobDomain(domain string) string {
+	return strings.ToLower(strings.ReplaceAll(domain, " ", ""))
 }
 
 // validateV2BackupSecurityPolicies 按保存侧同口径（validateAndNormalizeCRSField，
@@ -869,6 +915,12 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		return
 	}
 	disabledConflicts := disableV2RuleConflicts(backup.Tables["lb_rules"])
+	// R54 新发现2：任务不变量在冲突置禁用之后执行——将自动禁用的规则不投入
+	// 运行，不参与运行态不变量（导入/预览双路径同序，见 ValidateConfigImport）。
+	if err := validateV2BackupCertJobs(backup.Tables); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
 	jwtExpireClamped := false
 	if value, exists := backup.Config["jwt_expire_minutes"]; exists {
 		backup.Config["jwt_expire_minutes"], jwtExpireClamped = clampBackupJWTExpireMinutes(value)
