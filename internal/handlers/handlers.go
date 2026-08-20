@@ -537,7 +537,37 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 	return nil
 }
 
+// clampAuditRetentionMonthsOnStartup 将存量越界 audit_retention_months 钳位到
+// [1,12] 最近边界并记日志（R55 F3）：写侧已加范围校验，历史越界值（超大值使
+// 年龄裁剪 datetime 越界静默失效，仅剩条数兜底）在启动时收敛。
+// 注：不得移入 caddy.go——TestCaddySectionKeys_matchUpdateSQL 按文本定位
+// caddy.go 内首个 "UPDATE global_config SET" 提取 UpdateConfig 的列集合。
+func clampAuditRetentionMonthsOnStartup() {
+	var months int
+	if err := db.DB.QueryRow(`SELECT COALESCE(audit_retention_months,3) FROM global_config WHERE id=1`).Scan(&months); err != nil {
+		log.Printf("读取日志保留月数失败，跳过启动钳位: %v", err)
+		return
+	}
+	clamped := months
+	if clamped < 1 {
+		clamped = 1
+	}
+	if clamped > 12 {
+		clamped = 12
+	}
+	if clamped == months {
+		return
+	}
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=? WHERE id=1`, clamped); err != nil {
+		log.Printf("钳位日志保留月数失败: %v", err)
+		return
+	}
+	log.Printf("日志保留月数 %d 超出 1-12 范围，已钳位为 %d", months, clamped)
+}
+
 func (h *Handlers) ApplyConfigOnStartup() error {
+	// R55 F3：存量越界 audit_retention_months 启动钳位（写侧已加 1-12 校验）。
+	clampAuditRetentionMonthsOnStartup()
 	// Round 29 G-3: 启动路径补存量规则校验（保存/导入/启用路径已有自环与遮蔽拦截），
 	// 命中即响亮报错并记审计，但不阻断启动：单条坏规则不应拖垮整个服务，与
 	// 「启动应用失败仅记日志保旧配置」的既有取舍一致（main.go 调用侧同样不退出）。

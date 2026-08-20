@@ -326,6 +326,13 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "jwt_expire_minutes must be between 1 and 1440"})
 		return
 	}
+	// R55 F3：audit_retention_months 服务端范围校验（UI 口径 1-12）——超大值使
+	// 年龄裁剪的 datetime('now', '-N days') 越出 SQLite 年份范围返回 NULL，
+	// 年龄 DELETE 恒假静默失效（仅剩条数兜底）。
+	if req.AuditRetentionMonths != nil && (*req.AuditRetentionMonths < 1 || *req.AuditRetentionMonths > 12) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "日志保留月数必须在 1-12 之间"})
+		return
+	}
 	if req.Timezone != nil {
 		if _, err := time.LoadLocation(*req.Timezone); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的时区: " + err.Error()})
