@@ -302,19 +302,29 @@ func (m *CAQueueManager) compensateRuleDeletion(ctx context.Context, compensatio
 	if drainErr != nil {
 		return drainErr
 	}
-	restore := m.compensationRestore
-	if restore == nil {
-		restore = restoreCertJobsForRule
-	}
-	if err := restore(ctx, compensation.Snapshot); err != nil {
+	// 规则存在性前置检查（R48 A-F1）：补偿退避窗口内规则可能已被另一路径删除
+	// （管理员重试 DeleteRule、配置导入整树替换）。规则不存在时没有可恢复对象，
+	// 直接按成功收尾释放租约——restore/requeue 内部的存在性检查为第二道防线，
+	// 此处短路可避免无谓的 DELETE+INSERT 事务。
+	ruleExists, err := ruleExistsForCertCompensation(ctx, compensation.RuleID)
+	if err != nil {
 		return err
 	}
-	requeue := m.compensationRequeue
-	if requeue == nil {
-		requeue = requeueCertJobsSnapshot
-	}
-	if err := requeue(ctx, compensation.Snapshot, m); err != nil {
-		return err
+	if ruleExists {
+		restore := m.compensationRestore
+		if restore == nil {
+			restore = restoreCertJobsForRule
+		}
+		if err := restore(ctx, compensation.Snapshot); err != nil {
+			return err
+		}
+		requeue := m.compensationRequeue
+		if requeue == nil {
+			requeue = requeueCertJobsSnapshot
+		}
+		if err := requeue(ctx, compensation.Snapshot, m); err != nil {
+			return err
+		}
 	}
 	m.UnblockJobsForRule(compensation.RuleID, compensation.Token)
 	return nil
@@ -685,7 +695,25 @@ func (m *CAQueueManager) Stop() {
 	}
 	m.mu.Unlock()
 	m.compensationWG.Wait()
+	// 补偿 goroutine 已全部退出（WG.Wait 之后），其持有的 blockedRules 租约再无
+	// 释放者，必须统一回收（R48 A-F1）：否则角色翻转/重启恢复后，复用同 caddy_id
+	// 的规则会被残留屏障永久拦截（EnqueueIfActive 命中 blocked → 证书静默停发）。
+	// PauseAndDrain 不得清理租约：它不弃置补偿（配置导入路径持 caddyOpMu 调用时
+	// 补偿可能仍在退避中），清租约会让在途补偿的 enqueueCompensation 永久失败。
+	m.releaseAllRuleBlocks()
 	m.PauseAndDrain()
+}
+
+// releaseAllRuleBlocks 回收全部规则删除屏障租约。锁序与 UnblockJobsForRule 一致：
+// m.mu 临界区内重置 map，解锁后再补扫部署重试（回调经 isRuleBlocked 重入本锁）。
+func (m *CAQueueManager) releaseAllRuleBlocks() {
+	m.mu.Lock()
+	hadBlocks := len(m.blockedRules) > 0
+	m.blockedRules = make(map[string]map[RuleBlockToken]struct{})
+	m.mu.Unlock()
+	if hadBlocks {
+		rescanDroppedCertificateDeploymentRetries()
+	}
 }
 
 type queueItem struct {

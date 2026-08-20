@@ -1016,6 +1016,108 @@ func TestCAQueueManager_enqueueCompensation_skips_when_job_still_active(t *testi
 	}
 }
 
+// R48 A-F1：补偿循环必须在规则被并发删除后终止并释放租约。drain 成功后规则已
+// 不存在（管理员重试 DeleteRule 或配置导入整树替换）时，没有可恢复对象——
+// restore 不得写入幽灵 cert_jobs 行（无外键），requeue 的规则 SELECT 命中
+// ErrNoRows 必须按成功语义收尾，否则补偿进入永久退避循环且 blockedRules 租约
+// 永不释放（caddy_id 复用后新规则证书静默停发）。
+func TestCAQueueManager_StartRuleDeletionCompensation_exits_when_rule_deleted_midflight(t *testing.T) {
+	// Given：规则 + 证书任务快照，补偿 drain 首次执行时规则被另一路径并发删除
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'comp CA','letsencrypt','https://invalid.example/directory',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_vanish','vanish','example.com','http',8080,1,1,'acme_dns')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_provider_id) VALUES (42,'lb_vanish','example.com','creating_order',7)`); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := SnapshotCertJobsForRule("lb_vanish")
+	if err != nil {
+		t.Fatalf("snapshot cert jobs: %v", err)
+	}
+	compensationCtx, compensationCancel := context.WithCancel(context.Background())
+	manager := &CAQueueManager{
+		queues:             make(map[int]*caQueue),
+		active:             true,
+		compensationCtx:    compensationCtx,
+		compensationCancel: compensationCancel,
+		compensationBackoff: func(int) time.Duration {
+			return time.Millisecond
+		},
+	}
+	t.Cleanup(func() {
+		compensationCancel()
+		manager.compensationWG.Wait()
+	})
+	token := manager.BlockJobsForRule("lb_vanish")
+	var drainCalls atomic.Int32
+
+	// When：启动补偿，drain 成功但规则已不在（模拟并发删除）
+	if err := manager.StartRuleDeletionCompensation(RuleDeletionCompensation{
+		RuleID: "lb_vanish", Token: token, Snapshot: snapshot,
+		Drain: func(context.Context) error {
+			drainCalls.Add(1)
+			if _, err := database.Exec(`DELETE FROM cert_jobs WHERE rule_id='lb_vanish'`); err != nil {
+				return err
+			}
+			if _, err := database.Exec(`DELETE FROM lb_rules WHERE caddy_id='lb_vanish'`); err != nil {
+				return err
+			}
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("start compensation: %v", err)
+	}
+
+	// Then：补偿一次尝试内按成功收尾——租约释放、循环退出、无幽灵 cert_jobs 行
+	deadline := time.Now().Add(2 * time.Second)
+	for manager.IsRuleBlocked("lb_vanish") && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if manager.IsRuleBlocked("lb_vanish") {
+		t.Fatal("compensation lease never released（补偿未终止，永久退避循环）")
+	}
+	compensationCancel()
+	manager.compensationWG.Wait()
+	if calls := drainCalls.Load(); calls != 1 {
+		t.Fatalf("drain calls=%d, want 1（补偿应在规则不存在时一次尝试内收尾）", calls)
+	}
+	var ghostJobs int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_vanish'`).Scan(&ghostJobs); err != nil {
+		t.Fatal(err)
+	}
+	if ghostJobs != 0 {
+		t.Fatalf("ghost cert_jobs=%d, want 0（规则已删除，restore 不得写入幽灵行）", ghostJobs)
+	}
+}
+
+// R48 A-F1：Stop 弃置补偿（角色翻转/进程停止）后必须回收全部 blockedRules
+// 租约——补偿 goroutine 已退出，其租约再无释放者；残留租约会让复用同
+// caddy_id 的新规则被 EnqueueIfActive 永久拦截（证书静默停发）。
+func TestCAQueueManager_Stop_releases_abandoned_rule_block_leases(t *testing.T) {
+	// Given：持有一条规则删除屏障租约的队列管理器（模拟补偿被 Stop 取消后弃置）
+	manager := &CAQueueManager{
+		queues:       make(map[int]*caQueue),
+		active:       true,
+		blockedRules: make(map[string]map[RuleBlockToken]struct{}),
+	}
+	token := manager.BlockJobsForRule("lb_abandoned")
+	if !manager.IsRuleBlocked("lb_abandoned") {
+		t.Fatal("lease not registered")
+	}
+	_ = token
+
+	// When
+	manager.Stop()
+
+	// Then：租约被回收
+	if manager.IsRuleBlocked("lb_abandoned") {
+		t.Fatal("Stop must release abandoned blockedRules leases（角色翻转后 caddy_id 复用会被永久拦截）")
+	}
+}
+
 // R46 A-F2（R45 发现3 回归）：退役条目 age-out 摘除不得遗忘在途 jobID——摘除后
 // IsJobActive 必须继续返回 true（zombieJobs 迁移），直到滞行执行经 executionDone
 // 信号退出；无 executionDone 的 jobID 永久保留保护（罕见，宁可永久保护不放双执行）。
