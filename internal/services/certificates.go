@@ -129,6 +129,15 @@ func restoreCertJobsForRule(ctx context.Context, snapshot CertJobsSnapshot) erro
 	if !certJobsSnapshotEraMatchesRule(snapshot, ruleDomain) {
 		return nil
 	}
+	// 已知竞态（R54 S-5）：DeleteRule drain 超时启动的后台补偿不持
+	// caddyOpMu，其分钟级退避窗口内用户可能对同一规则 DeleteCertJob
+	// 成功——下方 DELETE+INSERT 无法区分「用户显式删除」与「DeleteRule
+	// 事务删除」，会把刚删的快照行复活。评估过按「快照后显式删除」收窄
+	// 恢复（跳过缺失 id 的 re-INSERT）：缺失 id 同时可能来自从节点 apply
+	// 整树替换等路径，且本函数与 UpdateRule/EnableRule 补偿共享（后者
+	// 依赖 DELETE-all 清掉失败入队新建的行），收窄会引入分叉语义，收益
+	// 不抵复杂度。恢复是保守选择：复活行来自规则自身快照时代、非损坏
+	// 数据，续签链因此保持完整；补偿退避有界，窗口过后用户可再次删除。
 	if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id=?", snapshot.ruleID); err != nil {
 		return fmt.Errorf("clear certificate jobs for restore: %w", err)
 	}
