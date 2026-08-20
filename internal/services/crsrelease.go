@@ -14,21 +14,18 @@ import (
 )
 
 // validateCRSStaging ensures an extracted CRS release tree is complete enough
-// to swap into place: the setup template and at least one rules/*.conf file.
+// to swap into place: the setup template plus an intact rules tree. R51 F3：
+// 探针文件（crsRulesProbeFile）是 backup restore / seed / snapshot 消费门共用
+// 的完整性契约，安装期必须同步把关——否则未来 CRS 重组 rules/ 的发布会装出
+// 退化树，之后每次启动都触发清空重播循环。
 func validateCRSStaging(dir string) error {
 	if info, err := os.Stat(filepath.Join(dir, "crs-setup.conf.example")); err != nil || info.IsDir() {
 		return fmt.Errorf("staging 缺少 crs-setup.conf.example")
 	}
-	entries, err := os.ReadDir(filepath.Join(dir, "rules"))
-	if err != nil {
-		return fmt.Errorf("staging 缺少 rules 目录: %w", err)
+	if !crsRulesTreeIntact(filepath.Join(dir, "rules")) {
+		return fmt.Errorf("staging rules 树不完整（无 .conf 规则文件或缺失 %s）", crsRulesProbeFile)
 	}
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".conf") {
-			return nil
-		}
-	}
-	return errors.New("staging rules 目录中没有 .conf 规则文件")
+	return nil
 }
 
 // countSecRules counts SecRule directives across all *.conf files in dir.

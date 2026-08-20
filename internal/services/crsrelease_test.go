@@ -46,10 +46,11 @@ func writeTestFile(t *testing.T, path, content string) {
 }
 
 func TestValidateCRSStaging_valid(t *testing.T) {
-	// Given a staging dir with crs-setup.conf.example and rules/*.conf
+	// Given a staging dir with crs-setup.conf.example and an intact rules tree
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "crs-setup.conf.example"), "# setup")
 	writeTestFile(t, filepath.Join(dir, "rules", "REQUEST-900.conf"), "SecRule 1")
+	writeTestFile(t, filepath.Join(dir, "rules", crsRulesProbeFile), "SecRule init")
 
 	// When validating
 	// Then no error

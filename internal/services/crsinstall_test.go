@@ -120,8 +120,9 @@ func TestCRSUpdateRun_successWhenRenameUnavailable(t *testing.T) {
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
-		"coreruleset-4.15.0/crs-setup.conf.example": "# new setup",
-		"coreruleset-4.15.0/rules/REQUEST-901.conf": "SecRule a\n",
+		"coreruleset-4.15.0/crs-setup.conf.example":     "# new setup",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf":     "SecRule a\n",
 	})
 
 	// When a manual update runs to completion
@@ -157,8 +158,9 @@ func TestCRSUpdateRun_backupCopyFailureLeavesNoPartialRulesBak(t *testing.T) {
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
-		"coreruleset-4.15.0/crs-setup.conf.example": "# new setup",
-		"coreruleset-4.15.0/rules/REQUEST-901.conf": "SecRule a\n",
+		"coreruleset-4.15.0/crs-setup.conf.example":     "# new setup",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf":     "SecRule a\n",
 	})
 	m.reloader = func() error { return nil }
 
@@ -202,8 +204,9 @@ func TestCRSUpdateRun_installFailureRemovesFreshlyCreatedOverrides(t *testing.T)
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
-		"coreruleset-4.15.0/crs-setup.conf.example": "# new setup",
-		"coreruleset-4.15.0/rules/REQUEST-901.conf": "SecRule a\n",
+		"coreruleset-4.15.0/crs-setup.conf.example":     "# new setup",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf":     "SecRule a\n",
 	})
 	reloads := 0
 	// 首次重载（安装后）失败触发恢复；恢复后的重载成功（旧 setup + 无 overrides
@@ -254,8 +257,9 @@ func TestCRSUpdateRun_installFailureRestoresPreexistingOverrides(t *testing.T) {
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
-		"coreruleset-4.15.0/crs-setup.conf.example": "# new setup",
-		"coreruleset-4.15.0/rules/REQUEST-901.conf": "SecRule a\n",
+		"coreruleset-4.15.0/crs-setup.conf.example":     "# new setup",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf":     "SecRule a\n",
 	})
 	m.reloader = func() error { return errors.New("reload boom") }
 
@@ -295,8 +299,9 @@ func TestCRSUpdateRun_preservedOverridesBakSurvivesNextRunFailure(t *testing.T) 
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
-		"coreruleset-4.15.0/crs-setup.conf.example": "# new setup",
-		"coreruleset-4.15.0/rules/REQUEST-901.conf": "SecRule a\n",
+		"coreruleset-4.15.0/crs-setup.conf.example":     "# new setup",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf":     "SecRule a\n",
 	})
 
 	// When N+1 在创建新 bak 前失败

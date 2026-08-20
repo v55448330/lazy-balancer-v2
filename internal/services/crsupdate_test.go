@@ -101,11 +101,12 @@ func TestCRSUpdateRun_success(t *testing.T) {
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
 	m.downloadTarball = fakeCRSDownload(t, map[string]string{
-		"coreruleset-4.15.0/crs-setup.conf.example":    "# new setup",
-		"coreruleset-4.15.0/rules/REQUEST-901.conf":    "SecRule a\nSecRule b\n",
-		"coreruleset-4.15.0/rules/REQUEST-941.conf":    "SecRule c\n",
-		"coreruleset-4.15.0/rules/REQUEST-942.conf":    "# comment only\n",
-		"coreruleset-4.15.0/plugins/empty-config.conf": "# plugin\n",
+		"coreruleset-4.15.0/crs-setup.conf.example":     "# new setup",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+		"coreruleset-4.15.0/rules/REQUEST-901.conf":     "SecRule a\nSecRule b\n",
+		"coreruleset-4.15.0/rules/REQUEST-941.conf":     "SecRule c\n",
+		"coreruleset-4.15.0/rules/REQUEST-942.conf":     "# comment only\n",
+		"coreruleset-4.15.0/plugins/empty-config.conf":  "# plugin\n",
 	})
 	reloads := 0
 	m.reloader = func() error { reloads++; return nil }
