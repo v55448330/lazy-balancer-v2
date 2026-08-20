@@ -79,6 +79,28 @@ func validateAdminTLSCertPeriod(certPEM string, now time.Time) error {
 
 var errInvalidCert = fmtErrorf("无效的证书 PEM")
 
+// validateAdminTLSConfigValues 校验启用态管理面板 HTTPS 配置形态：mode 白名单
+// （selfsigned/upload）+ upload 模式证书私钥配对与有效期（与 UpdateAdminTLS
+// 同口径）。R55 C-4：v2 备份导入写 admin_tls_* 复用本门——坏配置落库会使下次
+// 启动 ResolveCertificate 失败即进程退出（崩溃循环）。
+func validateAdminTLSConfigValues(cfg services.AdminTLSConfig) error {
+	if !cfg.Enabled {
+		return nil
+	}
+	if cfg.Mode != "selfsigned" && cfg.Mode != "upload" {
+		return fmtErrorf("无效的证书来源：当前仅支持自签名或上传证书")
+	}
+	if cfg.Mode == "upload" {
+		if _, err := tls.X509KeyPair([]byte(cfg.Cert), []byte(cfg.Key)); err != nil {
+			return fmtErrorf("证书与私钥不匹配: " + err.Error())
+		}
+		if err := validateAdminTLSCertPeriod(cfg.Cert, time.Now()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func fmtErrorf(msg string) error { return &adminTLSError{msg} }
 
 type adminTLSError struct{ msg string }
