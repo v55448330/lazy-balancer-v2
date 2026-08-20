@@ -406,13 +406,21 @@ func validateV2BackupRules(rows, pathRows []map[string]any) error {
 // validateV2BackupSecurityPolicies 按保存侧同口径（validateAndNormalizeCRSField，
 // security.go）校验备份 security_policies 的 crs_rule_groups/crs_excluded_rules，
 // 拒绝时点名策略；合法行同步写回归一值（空串→"[]"），保持列形状一致。
+// R48-3：原始值存在且非字符串（数字/布尔/数组，null/缺省除外）直接拒绝——
+// 保存侧 JSON 绑定对同值 400，导入侧不得经 backupString 静默归一放行。
 // R47 B-5：旧版备份可能携带 "941" 式组号或含空白的条目——导入原样落库后
 // REQUEST-9<code>-*.conf glob 零匹配，blocking 模式静默无任何 CRS 规则生效。
 func validateV2BackupSecurityPolicies(rows []map[string]any) error {
 	for index, policy := range rows {
 		name := backupString(policy["name"])
 		for _, field := range []string{"crs_rule_groups", "crs_excluded_rules"} {
-			value := backupString(policy[field])
+			raw, exists := policy[field]
+			if exists && raw != nil {
+				if _, ok := raw.(string); !ok {
+					return fmt.Errorf("安全策略 #%d（%s）：%s 需为字符串（JSON 数组文本），实际类型 %T", index+1, name, field, raw)
+				}
+			}
+			value := backupString(raw)
 			if err := validateAndNormalizeCRSField(field, &value); err != nil {
 				return fmt.Errorf("安全策略 #%d（%s）：%w", index+1, name, err)
 			}
