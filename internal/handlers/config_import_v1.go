@@ -502,9 +502,21 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			return
 		}
 		disabledConflicts := disableV2RuleConflicts(backup.Tables["lb_rules"])
+		// R55 C-1：与 ImportConfigBackup 同序——TLS 形态校验在冲突置禁用之后
+		// 执行，预览结果与实际导入一致（冲突可自愈备份不得在预览误报不可导入）。
+		if err := validateV2BackupTLSShape(backup.Tables); err != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
+			return
+		}
 		// R54 新发现2：与 ImportConfigBackup 同序——任务不变量在冲突置禁用之后
 		// 执行，预览结果与实际导入一致（冲突可自愈备份不得在预览误报不可导入）。
 		if err := validateV2BackupCertJobs(backup.Tables); err != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
+			return
+		}
+		// R55 C-4：与 ImportConfigBackup 同序——坏 admin_tls_* 形态预览即报
+		// 不可导入，不得预览通过、导入才 400。
+		if err := validateV2BackupAdminTLS(backup.Config); err != nil {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
 			return
 		}

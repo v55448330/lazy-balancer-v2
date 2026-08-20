@@ -390,37 +390,6 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 		// 往返断裂（与 v1 路径自环规则软跳过口径一致），故禁用行将
 		// EnableTLS/TLSHTTPRedirect 置 false，其余字段校验保留。
 		enabled := backupRuleEnabled(rule)
-		// R54 新发现1：启用 TLS 的行先做 tls_source 白名单——保存侧（rules.go）
-		// 与启用侧（rule_features.go validateStoredRuleConfig）均对非 manual/acme_dns
-		// 400，导入此前是唯一能放行该形态的门：''/垃圾值行两个分支都不命中、整包
-		// 放行，渲染侧 availableCerts 仅认 manual/acme_dns → 无证书、无
-		// tls_connection_policies → TLS 端口明文服务（与 R53 发现2 同类缺口）。
-		// R43 F-C / R46 C-B-1: 启用的手动 TLS 规则必须携带证书与私钥（镜像保存/启用侧
-		// rule_features.go validateStoredRuleConfig 口径），拒绝时点名规则。
-		// 导入此前是唯一能绕过该校验的门：无证书规则不在 availableCerts 内 → 无
-		// TLS policy → TLS 端口明文服务，且 autohttps.disable_certificates 阻止
-		// Caddy 自动签发自愈。
-		if enabled && protocol == "http" && backupBooleanEnabled(rule["enable_tls"]) {
-			tlsSource := backupString(rule["tls_source"])
-			if tlsSource != "manual" && tlsSource != "acme_dns" {
-				return fmt.Errorf("规则 #%d（%s）：启用 TLS 时必须选择证书来源（manual 或 acme_dns）", index+1, backupString(rule["name"]))
-			}
-			if tlsSource == "manual" &&
-				(strings.TrimSpace(backupString(rule["tls_cert"])) == "" || strings.TrimSpace(backupString(rule["tls_key"])) == "") {
-				return fmt.Errorf("规则 #%d（%s）：手动证书模式下必须提供 TLS 证书和私钥", index+1, backupString(rule["name"]))
-			}
-			// R53 发现2：启用的 acme_dns 行按 validateRuleACMEReferences 同口径校验——
-			// acme_config_id=0/悬挂/已禁用与 ca_provider_id 悬挂/已禁用均整包 400。
-			// 导入把规则已启用地带入运行态，R52 F-2 的 EnableRule 门拦不住这条路径；
-			// 坏行导入后 TLS 端口明文服务且签发必败，与手动证书缺材料的拒绝理由同型。
-			// R53-A-2/R54 新发现2：cert_jobs 任务不变量移至 validateV2BackupCertJobs，
-			// 在 disableV2RuleConflicts 之后执行（将自动禁用的冲突行不参与运行态不变量）。
-			if tlsSource == "acme_dns" {
-				if err := validateBackupACMEReferenceIDs(tables, rule); err != nil {
-					return fmt.Errorf("规则 #%d（%s）：%w", index+1, backupString(rule["name"]), err)
-				}
-			}
-		}
 		input := ruleFeatureInput{
 			Protocol:                   protocol,
 			Strategy:                   backupString(rule["strategy"]),
@@ -451,6 +420,57 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 	return nil
 }
 
+// validateV2BackupTLSShape 校验最终处于启用态的 HTTP+TLS 规则的证书形态：
+// tls_source 白名单、manual 证书材料、acme_dns 域名合法性与 ACME 引用。
+// R55 C-1：与 cert_jobs 不变量同序——必须在 disableV2RuleConflicts 之后执行，
+// 将被冲突自动置禁用的规则不投入运行，不参与运行态形态校验（此前垃圾
+// tls_source 的冲突行会把可自愈备份整包 400，与 cert_jobs 豁免哲学不一致）。
+// 导入/预览双路径同序调用（ImportConfigBackup / ValidateConfigImport）。
+// R54 新发现1：启用 TLS 的行先做 tls_source 白名单——保存侧（rules.go）
+// 与启用侧（rule_features.go validateStoredRuleConfig）均对非 manual/acme_dns
+// 400，导入此前是唯一能放行该形态的门：”/垃圾值行两个分支都不命中、整包
+// 放行，渲染侧 availableCerts 仅认 manual/acme_dns → 无证书、无
+// tls_connection_policies → TLS 端口明文服务（与 R53 发现2 同类缺口）。
+// R43 F-C / R46 C-B-1: 启用的手动 TLS 规则必须携带证书与私钥（镜像保存/启用侧
+// rule_features.go validateStoredRuleConfig 口径），拒绝时点名规则。
+// 导入此前是唯一能绕过该校验的门：无证书规则不在 availableCerts 内 → 无
+// TLS policy → TLS 端口明文服务，且 autohttps.disable_certificates 阻止
+// Caddy 自动签发自愈。
+func validateV2BackupTLSShape(tables map[string][]map[string]any) error {
+	for index, rule := range tables["lb_rules"] {
+		protocol, _ := rule["protocol"].(string)
+		if !backupRuleEnabled(rule) || protocol != "http" || !backupBooleanEnabled(rule["enable_tls"]) {
+			continue
+		}
+		tlsSource := backupString(rule["tls_source"])
+		if tlsSource != "manual" && tlsSource != "acme_dns" {
+			return fmt.Errorf("规则 #%d（%s）：启用 TLS 时必须选择证书来源（manual 或 acme_dns）", index+1, backupString(rule["name"]))
+		}
+		if tlsSource == "manual" &&
+			(strings.TrimSpace(backupString(rule["tls_cert"])) == "" || strings.TrimSpace(backupString(rule["tls_key"])) == "") {
+			return fmt.Errorf("规则 #%d（%s）：手动证书模式下必须提供 TLS 证书和私钥", index+1, backupString(rule["name"]))
+		}
+		// R53 发现2：启用的 acme_dns 行按 validateRuleACMEReferences 同口径校验——
+		// acme_config_id=0/悬挂/已禁用与 ca_provider_id 悬挂/已禁用均整包 400。
+		// 导入把规则已启用地带入运行态，R52 F-2 的 EnableRule 门拦不住这条路径；
+		// 坏行导入后 TLS 端口明文服务且签发必败，与手动证书缺材料的拒绝理由同型。
+		if tlsSource == "acme_dns" {
+			// R55 C-2：导入侧补 ACME 域名合法性门（与保存侧 rules.go / 启用侧
+			// createOrRequeueCertJob 同口径，单域名或根域+www）——此前导入链无任何
+			// ValidateACMEDomains 等价校验，手造备份可带入 "a.com,b.org" 形态，
+			// 运行期 certJobRuleApplicable 严格规范化失败 → 续签永久断链且
+			// TLS 端口明文服务。
+			if err := services.ValidateACMEDomains(backupString(rule["domain"])); err != nil {
+				return fmt.Errorf("规则 #%d（%s）：%w", index+1, backupString(rule["name"]), err)
+			}
+			if err := validateBackupACMEReferenceIDs(tables, rule); err != nil {
+				return fmt.Errorf("规则 #%d（%s）：%w", index+1, backupString(rule["name"]), err)
+			}
+		}
+	}
+	return nil
+}
+
 // validateV2BackupCertJobs 校验最终处于启用态的 acme_dns 规则携带域名匹配的
 // 证书任务行。R53-A-2：导入为全量替换（deleteOrder 清光 cert_jobs 后仅插入
 // 备份行），缺失即导入后续签永久断链且无信号（周期路径只遍历已存在的任务行，
@@ -459,6 +479,11 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 // 的冲突备份整包 400。R54 新发现3：不变量还须校验 job.domain 与规则域名一致
 // （canonical/reversed 双形式，与 certjobs.go 续签扫描 lower+replace 口径同型）——
 // 错域残留行只凭存在性放行后，续签扫描按 rule_id+domain 匹配永不命中，断链同果。
+// R55 C-2：域比较两侧（规则域名与任务域名）均须可规范化——
+// canonicalACMEDomainForJobLookup 的原串回退是查询侧良性 miss 语义（视为无任务），
+// 用于校验侧会把 "a.com,b.org" 等不可规范化形态假放行；与运行期
+// certJobRuleApplicable 的严格 CanonicalACMEDomains 全等语义对齐，不可规范化即
+// 响亮拒绝。两侧规范化后大小写/空白/顺序变体天然归一（排序规范形式）。
 func validateV2BackupCertJobs(tables map[string][]map[string]any) error {
 	jobsByRule := make(map[string][]string)
 	for _, job := range tables["cert_jobs"] {
@@ -466,7 +491,7 @@ func validateV2BackupCertJobs(tables map[string][]map[string]any) error {
 			continue
 		}
 		if ruleID, ok := job["rule_id"].(string); ok && ruleID != "" {
-			jobsByRule[ruleID] = append(jobsByRule[ruleID], normalizeBackupJobDomain(backupString(job["domain"])))
+			jobsByRule[ruleID] = append(jobsByRule[ruleID], backupString(job["domain"]))
 		}
 	}
 	for index, rule := range tables["lb_rules"] {
@@ -479,12 +504,17 @@ func validateV2BackupCertJobs(tables map[string][]map[string]any) error {
 		if len(jobDomains) == 0 {
 			return fmt.Errorf("规则 #%d（%s）：启用的 ACME 规则缺少证书签发任务（cert_jobs 无非 disabled 行），导入后将无法自动续签", index+1, backupString(rule["name"]))
 		}
-		canonical := canonicalACMEDomainForJobLookup(backupString(rule["domain"]))
-		canonicalNorm := normalizeBackupJobDomain(canonical)
-		reversedNorm := normalizeBackupJobDomain(reversedACMEDomainForm(canonical))
+		canonical, err := services.CanonicalACMEDomains(backupString(rule["domain"]))
+		if err != nil {
+			return fmt.Errorf("规则 #%d（%s）：ACME 域名不合法（仅支持单域名或根域+www 二级域名），导入后将无法自动续签", index+1, backupString(rule["name"]))
+		}
 		matched := false
 		for _, jobDomain := range jobDomains {
-			if jobDomain == canonicalNorm || jobDomain == reversedNorm {
+			jobCanonical, err := services.CanonicalACMEDomains(jobDomain)
+			if err != nil {
+				return fmt.Errorf("规则 #%d（%s）：证书任务域名 %q 不合法（仅支持单域名或根域+www 二级域名），导入后将无法自动续签", index+1, backupString(rule["name"]), jobDomain)
+			}
+			if jobCanonical == canonical {
 				matched = true
 				break
 			}
@@ -494,12 +524,6 @@ func validateV2BackupCertJobs(tables map[string][]map[string]any) error {
 		}
 	}
 	return nil
-}
-
-// normalizeBackupJobDomain 与续签扫描 lower(replace(domain,' ',”)) 同口径归一
-// 域名比较（大小写/空白变体不逃逸）。
-func normalizeBackupJobDomain(domain string) string {
-	return strings.ToLower(strings.ReplaceAll(domain, " ", ""))
 }
 
 // validateV2BackupSecurityPolicies 按保存侧同口径（validateAndNormalizeCRSField，
@@ -609,6 +633,35 @@ func validateBackupACMEReferenceIDs(tables map[string][]map[string]any, rule map
 	}
 	if !providerOK {
 		return errors.New("指定的 CA 提供商不存在或已禁用")
+	}
+	return nil
+}
+
+// validateV2BackupAdminTLS 按 UpdateAdminTLS 同口径校验备份全局配置区的
+// admin_tls_*：缺省键合并当前库内值（与 UpdateAdminTLS 的合并语义一致），
+// 启用态 mode 白名单 + upload 模式证书配对/有效期。R55 C-4：导入此前无等价
+// 校验直接落库，坏配置（enabled+upload+空证书或过期证书）使下次启动
+// ResolveCertificate 失败即进程退出（main.go），形成崩溃循环——导入必须
+// 整包 400（零写入语义，导入/预览双路径同序调用）。
+func validateV2BackupAdminTLS(config map[string]any) error {
+	if config == nil {
+		return nil
+	}
+	merged := services.LoadAdminTLSConfig()
+	if value, exists := config["admin_tls_enabled"]; exists {
+		merged.Enabled = backupBooleanEnabled(value)
+	}
+	if value, exists := config["admin_tls_mode"]; exists {
+		merged.Mode = backupString(value)
+	}
+	if value, exists := config["admin_tls_cert"]; exists {
+		merged.Cert = backupString(value)
+	}
+	if value, exists := config["admin_tls_key"]; exists {
+		merged.Key = backupString(value)
+	}
+	if err := validateAdminTLSConfigValues(merged); err != nil {
+		return fmt.Errorf("备份的全局配置包含不可用的管理面板 HTTPS 配置：%w", err)
 	}
 	return nil
 }
@@ -915,9 +968,22 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		return
 	}
 	disabledConflicts := disableV2RuleConflicts(backup.Tables["lb_rules"])
+	// R55 C-1：TLS 形态校验与任务不变量同在冲突置禁用之后执行——将自动禁用
+	// 的规则不投入运行，不参与运行态形态/不变量校验（导入/预览双路径同序，
+	// 见 ValidateConfigImport）。
+	if err := validateV2BackupTLSShape(backup.Tables); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
 	// R54 新发现2：任务不变量在冲突置禁用之后执行——将自动禁用的规则不投入
 	// 运行，不参与运行态不变量（导入/预览双路径同序，见 ValidateConfigImport）。
 	if err := validateV2BackupCertJobs(backup.Tables); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	// R55 C-4：写全局配置前按 UpdateAdminTLS 同口径校验 admin_tls_*——坏配置
+	// 会使下次启动进程退出（崩溃循环），整包 400 保持零写入语义。
+	if err := validateV2BackupAdminTLS(backup.Config); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}

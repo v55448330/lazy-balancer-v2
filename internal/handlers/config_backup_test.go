@@ -1056,9 +1056,13 @@ func TestValidateV2Backup_rejects_self_loop_80_tls_redirect_rule(t *testing.T) {
 			}
 			// R38 C-3 拆分后：逐行校验在 validateV2BackupRules（handler 在
 			// skipEmptyDomainHTTPRules 之后调用）；直测时组合两者保持原语义。
+			// R55 C-1：TLS 形态校验在 validateV2BackupTLSShape，一并串联。
 			_, err := validateV2Backup(b)
 			if err == nil {
 				err = validateV2BackupRules(b.Tables)
+			}
+			if err == nil {
+				err = validateV2BackupTLSShape(b.Tables)
 			}
 			if tt.wantErrText != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
