@@ -340,6 +340,9 @@ const runNodeAction = async (node: ClusterNode, action: 'approve' | 'reject' | '
       ElMessage.success('节点已删除')
     }
     await clusterPolling.run()
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to run node action:', error)
   } finally {
     pendingNodeId.value = null
   }
@@ -378,7 +381,8 @@ const loginNode = async (node: ClusterNode): Promise<void> => {
     loginWindow.location.replace(target.toString())
   } catch (error: unknown) {
     loginWindow.close()
-    throw error
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to login node:', error)
   } finally {
     loginNodeId.value = null
   }
