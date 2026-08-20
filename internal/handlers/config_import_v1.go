@@ -495,6 +495,12 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
 			return
 		}
+		// 与 ImportConfigBackup 同序：安全策略 CRS 字段校验也须进预览，否则坏
+		// 组号备份在预览显示可导入、实际导入才 400（R47 B-5）。
+		if err := validateV2BackupSecurityPolicies(backup.Tables["security_policies"]); err != nil {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
+			return
+		}
 		disabledConflicts := disableV2RuleConflicts(backup.Tables["lb_rules"])
 		summary := map[string]int{}
 		for table, rows := range backup.Tables {

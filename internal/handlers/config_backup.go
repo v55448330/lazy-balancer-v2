@@ -403,6 +403,25 @@ func validateV2BackupRules(rows, pathRows []map[string]any) error {
 	return nil
 }
 
+// validateV2BackupSecurityPolicies 按保存侧同口径（validateAndNormalizeCRSField，
+// security.go）校验备份 security_policies 的 crs_rule_groups/crs_excluded_rules，
+// 拒绝时点名策略；合法行同步写回归一值（空串→"[]"），保持列形状一致。
+// R47 B-5：旧版备份可能携带 "941" 式组号或含空白的条目——导入原样落库后
+// REQUEST-9<code>-*.conf glob 零匹配，blocking 模式静默无任何 CRS 规则生效。
+func validateV2BackupSecurityPolicies(rows []map[string]any) error {
+	for index, policy := range rows {
+		name := backupString(policy["name"])
+		for _, field := range []string{"crs_rule_groups", "crs_excluded_rules"} {
+			value := backupString(policy[field])
+			if err := validateAndNormalizeCRSField(field, &value); err != nil {
+				return fmt.Errorf("安全策略 #%d（%s）：%w", index+1, name, err)
+			}
+			policy[field] = value
+		}
+	}
+	return nil
+}
+
 func backupBooleanEnabled(value any) bool {
 	switch value := value.(type) {
 	case bool:
@@ -677,6 +696,10 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		return
 	}
 	if err := validateV2BackupRules(backup.Tables["lb_rules"], backup.Tables["path_rules"]); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	if err := validateV2BackupSecurityPolicies(backup.Tables["security_policies"]); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
