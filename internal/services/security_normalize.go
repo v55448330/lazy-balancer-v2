@@ -41,6 +41,13 @@ func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 		return
 	}
 	defer tx.Rollback()
+	var versionBefore int64
+	if isMaster {
+		if err := tx.QueryRowContext(ctx, "SELECT COALESCE(cluster_version,0) FROM global_config WHERE id=1").Scan(&versionBefore); err != nil {
+			log.Printf("security enum normalize: failed to read cluster version: %v", err)
+			return
+		}
+	}
 	var changed int64
 	for _, stmt := range legacySecurityEnumBackfills {
 		res, err := tx.ExecContext(ctx, stmt)
@@ -59,7 +66,12 @@ func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 		return
 	}
 	if isMaster {
-		if err := BumpClusterVersion(ctx, tx); err != nil {
+		// 二次启动起行级版本触发器已持久化于库，上方每条 UPDATE 已按命中行数
+		// bump 过；显式递增会叠加成多次（R55-B-F1）。落「启动前值+1」的确定性
+		// 值：无论触发器是否已安装/触发，一次启动归一只净增 1，测试（无触发
+		// 器）与生产口径一致。版本语义只需单调递增，多次 bump 折叠为一次不
+		// 影响从节点收敛。
+		if _, err := tx.ExecContext(ctx, "UPDATE global_config SET cluster_version=? WHERE id=1", versionBefore+1); err != nil {
 			log.Printf("security enum normalize: failed to bump cluster version: %v", err)
 			return
 		}
