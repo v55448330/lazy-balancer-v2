@@ -646,34 +646,51 @@ func TestCertIssuer_deploymentFailed_backs_off_and_stops_after_max_attempts(t *t
 	// Given
 	jobID, ruleID := seedCertificateJob(t, "downloaded")
 	issuer := NewCertIssuer(nil)
-	var delays []time.Duration
-	var retryMaterial issuedCertificate
+	// R59 A-1：deploymentFailed 的再调度是异步 go deploymentRetry（R57 A-#1），
+	// 回调内裸写切片与 R58 已修的两处同型竞态——channel 收集 + 有界等待。
+	type retryCall struct {
+		material issuedCertificate
+		delay    time.Duration
+	}
+	retries := make(chan retryCall, maxCertificateDeploymentAttempts)
 	issuer.deploymentRetry = func(_ int, material issuedCertificate, delay time.Duration) {
-		delays = append(delays, delay)
-		retryMaterial = material
-	}
-	material := issuedCertificate{ruleID: ruleID, providerID: 1}
-
-	// When
-	for attempt := range maxCertificateDeploymentAttempts {
-		_ = issuer.deploymentFailed(jobID, material, "reload failed", errors.New("reload failed"))
-		if attempt+1 < maxCertificateDeploymentAttempts {
-			material = retryMaterial
-		}
+		retries <- retryCall{material: material, delay: delay}
 	}
 
-	// Then
+	// When：连续打满退避上限，attempt 从 DB 重算（deploymentFailed 同步维护）。
+	for range maxCertificateDeploymentAttempts {
+		_ = issuer.deploymentFailed(jobID, issuedCertificate{ruleID: ruleID, providerID: 1}, "reload failed", errors.New("reload failed"))
+	}
+
+	// Then：收满 9 次再调度（5s 上限，顺序即投递顺序=退避顺序）。
 	wantDelays := []time.Duration{
 		time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second,
 		32 * time.Second, 64 * time.Second, 128 * time.Second, 256 * time.Second,
 	}
-	if len(delays) != len(wantDelays) {
-		t.Fatalf("scheduled retries=%d, want %d", len(delays), len(wantDelays))
+	var delays []time.Duration
+	var lastMaterial issuedCertificate
+	for range wantDelays {
+		select {
+		case call := <-retries:
+			delays = append(delays, call.delay)
+			lastMaterial = call.material
+		case <-time.After(5 * time.Second):
+			t.Fatalf("scheduled retries=%d, want %d (async goroutine stalled)", len(delays), len(wantDelays))
+		}
 	}
 	for i := range wantDelays {
 		if delays[i] != wantDelays[i] {
 			t.Fatalf("retry %d delay=%v, want %v", i+1, delays[i], wantDelays[i])
 		}
+	}
+	if lastMaterial.ruleID != ruleID {
+		t.Fatalf("retry material ruleID=%q, want %q", lastMaterial.ruleID, ruleID)
+	}
+	// channel 应已收空（无多余再调度）。
+	select {
+	case extra := <-retries:
+		t.Fatalf("unexpected extra retry: %+v", extra)
+	default:
 	}
 	var status string
 	var attempts int
