@@ -39,6 +39,144 @@ var configBackupProtectedConfigKeys = map[string]bool{
 
 var requeueNonTerminalCertJobs = services.RequeueNonTerminalCertJobs
 
+// R56 新发现#1：备份 schema 布尔列全量枚举（校验门与恢复归一双侧共用）。
+// 类型绕过的影响面是整个枚举而非单个字段——校验侧 backupBooleanEnabled 此前
+// 无 string 分支，"1"/"true" 文本在校验期被读为 false，而 SQLite 列亲和性在
+// 恢复期把同一文本转存为 INTEGER 1，同一值在校验期与存储期含义相反（不变量：
+// 含义必须两期一致），R55 全部校验门（admin_tls 崩溃循环门、TLSShape 白名单、
+// 冲突矩阵）均可被字符串形态击穿。
+// 枚举含 INTEGER 声明的 0/1 语义列（api_keys.mcp_enabled/read_only、
+// security_policies.waf_check_response）；lb_rules.server_tokens_hidden 是
+// 有意的 0/1/2 三态列（rules.go 保存侧允许 2），不在其列。
+var backupBooleanTableColumns = map[string][]string{
+	"lb_rules":                   {"dynamic_dns", "enable_dns_server", "enable_active_health_check", "tcp_proxy_protocol", "custom_routes_enabled", "enable_tls", "tls_http_redirect", "enable_compress", "enabled", "log_enabled"},
+	"upstreams":                  {"dynamic_dns", "enabled"},
+	"users":                      {"is_enabled"},
+	"api_keys":                   {"is_enabled", "mcp_enabled", "read_only"},
+	"ca_providers":               {"enabled"},
+	"certificate_configs":        {"enabled"},
+	"security_policies":          {"ip_acl_enabled", "rate_limit_enabled", "enabled", "waf_check_response"},
+	"security_custom_rules":      {"enabled"},
+	"security_block_pages":       {"is_default"},
+	"security_crs_version":       {"auto_update"},
+	"security_ip2region_version": {"auto_update"},
+}
+
+// 全局配置区布尔键（global_config）。protected 键（is_master 等）恢复时不写入，
+// 不参与校验；sync_switches_migrated 为内部迁移标记但随导出携带、恢复时写入，
+// 同属布尔语义。
+var backupBooleanConfigKeys = []string{
+	"server_tokens_hidden", "access_log_json", "metrics_public", "admin_tls_enabled",
+	"sync_global_config", "sync_users", "sync_rules", "sync_waf_files", "sync_security",
+	"sync_switches_migrated",
+}
+
+func isBackupBooleanColumn(table, column string) bool {
+	for _, booleanColumn := range backupBooleanTableColumns[table] {
+		if booleanColumn == column {
+			return true
+		}
+	}
+	return false
+}
+
+func isBackupBooleanConfigKey(key string) bool {
+	for _, booleanKey := range backupBooleanConfigKeys {
+		if booleanKey == key {
+			return true
+		}
+	}
+	return false
+}
+
+// isBackupBooleanValue 判定备份中的布尔列值是否为规范形态：JSON 布尔或 0/1 数值
+// （含 JSON 反序列化的 float64 形态）。nil 由 normalizeBackupBooleanNulls 归一，
+// 不在此判定（调用方先行跳过）。
+func isBackupBooleanValue(value any) bool {
+	switch v := value.(type) {
+	case bool:
+		return true
+	case float64:
+		return v == 0 || v == 1
+	case int:
+		return v == 0 || v == 1
+	case int64:
+		return v == 0 || v == 1
+	}
+	return false
+}
+
+// validateV2BackupBooleanTypes 布尔列类型门（R56 新发现#1）：备份中布尔列的
+// JSON 值只能是布尔或 0/1 数值，其余形态（字符串 "1"/"true"、数值 2、数组等）
+// 整包拒绝并点名 表/行/字段——与 R48-3 CRS 字段非字符串拒绝同口径。字符串
+// 形态在校验期被读为 false、恢复期被 SQLite 亲和性转存为 INTEGER 1，同一值
+// 两期含义相反，会击穿全部依赖布尔读取的校验门（admin_tls/TLSShape/冲突矩阵）。
+// 注意：legacy（仅 tables）校验和路径在 validateV2Backup 内早退，不经过本门，
+// 由 restoreTable 的写入归一兜底（"1"/"true"→1、"0"/"false"→0）。
+func validateV2BackupBooleanTypes(backup configBackup) error {
+	for _, table := range configBackupTables {
+		columns := backupBooleanTableColumns[table]
+		if len(columns) == 0 {
+			continue
+		}
+		for index, row := range backup.Tables[table] {
+			for _, column := range columns {
+				raw, exists := row[column]
+				if !exists || raw == nil {
+					continue
+				}
+				if !isBackupBooleanValue(raw) {
+					return fmt.Errorf("备份校验失败：%s 第 %d 行 %s 需为布尔值（true/false 或 0/1），实际类型 %T", table, index+1, column, raw)
+				}
+			}
+		}
+	}
+	for _, key := range backupBooleanConfigKeys {
+		raw, exists := backup.Config[key]
+		if !exists || raw == nil {
+			continue
+		}
+		if !isBackupBooleanValue(raw) {
+			return fmt.Errorf("备份校验失败：全局配置 %s 需为布尔值（true/false 或 0/1），实际类型 %T", key, raw)
+		}
+	}
+	return nil
+}
+
+// normalizeBackupBooleanValue 把布尔列值归一为规范 INTEGER 0/1（恢复写入侧兜底）。
+// 布尔与 0/1 数值原样规范化；幸存字符串（legacy 校验和路径跳过类型门）按
+// "1"/"true"→1、"0"/"false"→0 归一；其余形态（数值 2、无法识别文本）原样透传
+// ——规范路径已被 validateV2BackupBooleanTypes 先行拒绝，此处不重复拒绝。
+func normalizeBackupBooleanValue(value any) any {
+	switch v := value.(type) {
+	case bool:
+		if v {
+			return int64(1)
+		}
+		return int64(0)
+	case float64:
+		if v == 0 || v == 1 {
+			return int64(v)
+		}
+	case int:
+		if v == 0 || v == 1 {
+			return int64(v)
+		}
+	case int64:
+		if v == 0 || v == 1 {
+			return v
+		}
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true":
+			return int64(1)
+		case "0", "false":
+			return int64(0)
+		}
+	}
+	return value
+}
+
 type importQueueRecovery struct {
 	manager *services.CAQueueManager
 	done    bool
@@ -116,6 +254,12 @@ func restoreTable(ctx context.Context, tx *sql.Tx, database *sql.DB, table strin
 		for column, value := range row {
 			if !valid[column] {
 				continue
+			}
+			// R56 新发现#1：布尔列写入前归一为规范 INTEGER 0/1——legacy 校验和
+			// 路径跳过类型门，字符串形态可幸存至此；归一保证存储期值与校验期
+			// 读取含义一致（belt-and-braces，规范路径已被类型门先行拒绝）。
+			if isBackupBooleanColumn(table, column) {
+				value = normalizeBackupBooleanValue(value)
 			}
 			columns = append(columns, `"`+column+`"`)
 			placeholders = append(placeholders, "?")
@@ -337,6 +481,12 @@ func validateV2Backup(backup configBackup) (bool, error) {
 		if _, exists := backup.Tables[table]; !exists {
 			backup.Tables[table] = []map[string]any{}
 		}
+	}
+	// R56 新发现#1：布尔列类型门须在 normalizeBackupBooleanNulls 之后（NULL 已归一
+	// 为 0/1 数值，不会被误判）、逐行校验之前（字符串布尔先行 400，不再进入下游
+	// backupBooleanEnabled 读取链）。
+	if err := validateV2BackupBooleanTypes(backup); err != nil {
+		return false, err
 	}
 	for _, job := range backup.Tables["cert_jobs"] {
 		status, ok := job["status"].(string)
@@ -647,6 +797,19 @@ func validateV2BackupAdminTLS(config map[string]any) error {
 	if config == nil {
 		return nil
 	}
+	// R56 新发现#2：仅当备份实际携带 admin_tls_* 键时才合并校验——该键组不受
+	// 导入影响时（备份未携带），live 值（如运行期自然过期的 upload 证书）不得
+	// 阻断无关导入。
+	carriesAdminTLSKeys := false
+	for _, key := range []string{"admin_tls_enabled", "admin_tls_mode", "admin_tls_cert", "admin_tls_key"} {
+		if _, exists := config[key]; exists {
+			carriesAdminTLSKeys = true
+			break
+		}
+	}
+	if !carriesAdminTLSKeys {
+		return nil
+	}
 	merged := services.LoadAdminTLSConfig()
 	if value, exists := config["admin_tls_enabled"]; exists {
 		merged.Enabled = backupBooleanEnabled(value)
@@ -676,6 +839,13 @@ func backupBooleanEnabled(value any) bool {
 		return value == 1
 	case int64:
 		return value == 1
+	case string:
+		// R56 新发现#1：legacy（仅 tables）校验和路径跳过布尔类型门，字符串形态
+		// 仍可到达读取链——按存储期 SQLite 亲和性同口径解读（"1"/"true" 落库为
+		// INTEGER 1），保证校验期与存储期含义一致；其余文本与落库值（非 1）一致
+		// 视为 false。
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		return normalized == "1" || normalized == "true"
 	default:
 		return false
 	}
@@ -865,6 +1035,26 @@ func clampBackupJWTExpireMinutes(value any) (any, bool) {
 	return 20, true
 }
 
+// clampBackupAuditRetentionMonths 导入侧 audit_retention_months 钳制
+// （R56 新发现#3）：与启动钳位（clampAuditRetentionMonthsOnStartup）同边界
+// ——越界钳到 [1,12] 最近边界；非整数形态按缺省 3 归一（与消费端
+// COALESCE(...,3) 回退口径一致）。此前导入原样落库越界值，基础设置保存被
+// 写侧 1-12 校验锁死（400），直至下次重启钳位才解套；与 jwt_expire_minutes
+// 的导入钳制对称。
+func clampBackupAuditRetentionMonths(value any) (any, bool) {
+	months, ok := backupInteger(value)
+	if !ok {
+		return 3, true
+	}
+	if months < 1 {
+		return 1, true
+	}
+	if months > 12 {
+		return 12, true
+	}
+	return value, false
+}
+
 func (h *Handlers) ExportConfigBackup(c *gin.Context) {
 	if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err != nil || !isMaster {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅主节点支持导出配置"})
@@ -990,6 +1180,12 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	jwtExpireClamped := false
 	if value, exists := backup.Config["jwt_expire_minutes"]; exists {
 		backup.Config["jwt_expire_minutes"], jwtExpireClamped = clampBackupJWTExpireMinutes(value)
+	}
+	// R56 新发现#3：audit_retention_months 导入钳制（与启动钳位同边界），
+	// 避免越界值落库后锁死基础设置保存。
+	auditRetentionClamped := false
+	if value, exists := backup.Config["audit_retention_months"]; exists {
+		backup.Config["audit_retention_months"], auditRetentionClamped = clampBackupAuditRetentionMonths(value)
 	}
 	ctx := c.Request.Context()
 	importUsername := c.GetString("username")
@@ -1121,6 +1317,11 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			if configBackupProtectedConfigKeys[column] || !valid[column] {
 				continue
 			}
+			// R56 新发现#1：布尔配置键写入前归一（与 restoreTable 同兜底）——
+			// legacy 校验和仅覆盖 tables，Config 区字符串布尔可幸存至此。
+			if isBackupBooleanConfigKey(column) {
+				value = normalizeBackupBooleanValue(value)
+			}
 			sets = append(sets, `"`+column+`"=?`)
 			values = append(values, value)
 		}
@@ -1191,6 +1392,9 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	auditParts := []string{"来源：v2 备份（覆盖导入）", counts}
 	if jwtExpireClamped {
 		auditParts = append(auditParts, "jwt_expire_minutes 越界，已重置为 20")
+	}
+	if auditRetentionClamped {
+		auditParts = append(auditParts, fmt.Sprintf("audit_retention_months 越界，已钳位为 %v", backup.Config["audit_retention_months"]))
 	}
 	if len(skipWarnings) > 0 {
 		auditParts = append(auditParts, "空域名规则跳过："+strings.Join(skipWarnings, "；"))
