@@ -401,7 +401,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		ruleCount := bindingCounts[p.ID]
 		policies = append(policies, models.SecurityPolicySummary{
 			ID: p.ID, Name: p.Name, Mode: p.Mode, Enabled: p.Enabled, RuleCount: ruleCount,
-			HasWAF: p.Mode != "off", HasIPControl: services.SecurityPolicyHasIPControl(&p), HasRateLimit: p.RateLimitEnabled,
+			HasWAF: p.Mode != "off", HasIPControl: services.SecurityPolicyHasIPControl(&p), HasRateLimit: p.RateLimitEnabled && p.RateLimitRPS > 0,
 			AnomalyThreshold: p.AnomalyThreshold,
 			IPACLMode:        p.IPACLMode,
 			IPACLEnabled:     p.IPACLEnabled,
@@ -581,6 +581,10 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	if err := validateRateLimitShape(req.Name, req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
 	if err := services.ValidateCustomRulesJSON(req.CustomRules); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -743,6 +747,10 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	}
 	blockStatusCode, anomalyThreshold := derefInt(req.BlockStatusCode), derefInt(req.AnomalyThreshold)
 	if err := validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode, blockStatusCode, anomalyThreshold); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	if err := validateRateLimitShape(fmt.Sprintf("id=%s", id), derefBool(req.RateLimitEnabled), derefInt(req.RateLimitRPS), derefInt(req.RateLimitBurst)); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -939,12 +947,19 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// err 再判 COUNT（R45 F2-B）：DB 瞬时故障（锁/IO）时 ruleExists 未赋值，
 	// 合并判断会把故障误报为「规则不存在」400，客户端无法区分重试与真 400。
 	var ruleExists int
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM lb_rules WHERE caddy_id=?", req.RuleCaddyID).Scan(&ruleExists); err != nil {
+	var ruleProtocol string
+	// R57 B-#3：取 protocol 同行校验——TCP 规则走 caddy-l4 构建链（buildTCPServer），
+	// 该链从不消费安全策略，绑定成立即「UI 宣称受保护、实际零强制」的稳态漂移。
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*), COALESCE(MAX(protocol),'') FROM lb_rules WHERE caddy_id=?", req.RuleCaddyID).Scan(&ruleExists, &ruleProtocol); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
 	if ruleExists == 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则不存在"})
+		return
+	}
+	if ruleProtocol != "http" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）"})
 		return
 	}
 	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", req.RuleCaddyID); err != nil {
@@ -1383,6 +1398,13 @@ func (h *Handlers) UpdateCRSAutoUpdate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
 	}
+	// R57 B-#4：与 StartCRSUpdate 同口径主节点门（R46 B-F3）——从节点版本行
+	// 在同步段内，本地写会被下次快照覆盖。
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		clusterError(c, http.StatusForbidden, "该操作仅允许在主节点执行", err)
+		return
+	}
 	if err := services.SetCRSAutoUpdate(req.AutoUpdate); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -1484,6 +1506,12 @@ func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	// R57 B-#4：与 StartIP2RegionUpdate 同口径主节点门。
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		clusterError(c, http.StatusForbidden, "该操作仅允许在主节点执行", err)
 		return
 	}
 	if err := services.SetIP2RegionAutoUpdate(req.AutoUpdate); err != nil {
@@ -1682,6 +1710,23 @@ func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 		GeoIPMode:        p.GeoIPMode,
 		WAFCheckResponse: p.WAFCheckResponse,
 	}
+}
+
+// validateRateLimitShape 限流字段与发射端同口径（R57 B-#2）：enabled=true 而
+// rps<=0 时 caddy.go 发射分支直接跳过限流 handler，但汇总/绑定仍宣称已启用
+// ——与 R50 ip_acl_mode / R52 三枚举的「UI 宣称启用、实际零强制」同型漂移，
+// 在写入侧拒绝。
+func validateRateLimitShape(name string, enabled bool, rps, burst int) error {
+	if !enabled {
+		return nil
+	}
+	if rps < 1 {
+		return fmt.Errorf("策略 %q：启用限流时 rate_limit_rps 必须 ≥1（当前 %d）", name, rps)
+	}
+	if burst < 0 {
+		return fmt.Errorf("策略 %q：启用限流时 rate_limit_burst 不能为负（当前 %d）", name, burst)
+	}
+	return nil
 }
 
 func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string, blockStatusCode, anomalyThreshold int) error {
