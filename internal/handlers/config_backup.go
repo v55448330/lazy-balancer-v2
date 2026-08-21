@@ -568,6 +568,19 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 			// 含前导空格路径时 validateRuleFeatures 的 HasPrefix("/") 误拒绝。
 			input.PathRules = normalizePathRules(pathRules)
 		}
+		// R59 C-F1：规则级 request_body_max_size_mb 导入钳制 [0,4096]（写回行
+		// 数据，restoreTable 直写不再携带越界值）——R58 C-N2 只钳了全局
+		// backup.Config，行级向量经 restoreTable 原样落库，渲染侧 MB→字节
+		// int64 乘法回绕会让该规则的 body 限制静默取消。
+		if rawBody, exists := rule["request_body_max_size_mb"]; exists {
+			if n, ok := backupInteger(rawBody); ok && (n < 0 || n > 4096) {
+				clamped := 0
+				if n > 4096 {
+					clamped = 4096
+				}
+				rule["request_body_max_size_mb"] = clamped
+			}
+		}
 		// R57 C-5（R58 C-N1 修正）：dynamic_dns+dns_family 走与保存侧同口径的
 		// 枚举校验——此前 input 不带 DnsFamily，垃圾值原样落库后渲染端 versions
 		// 双 false 解析退化为双栈（fail-open 方向）。合法值含 "both"：UI 双选

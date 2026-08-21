@@ -591,6 +591,14 @@ func validateSnapshotACMEState(snapshot models.ClusterSnapshot) error {
 
 func insertSnapshotRules(ctx context.Context, tx *sql.Tx, rules []models.LbRule) error {
 	for _, rule := range rules {
+		// R59 C-F1：集群快照可能携带旧库/导入产生的越界 body 上限（写侧校验
+		// 之前落库的行），从节点应用时归一到 [0,4096]——与写侧/导入侧同边界，
+		// 防止渲染侧 int64 乘法回绕静默取消限制。负值→0（不限制）。
+		if rule.RequestBodyMaxSizeMB < 0 {
+			rule.RequestBodyMaxSizeMB = 0
+		} else if rule.RequestBodyMaxSizeMB > 4096 {
+			rule.RequestBodyMaxSizeMB = 4096
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO lb_rules (id,caddy_id,name,description,protocol,domain,listen_port,strategy,dynamic_dns,enable_dns_server,dns_server,dns_family,health_check_path,health_check_interval,health_check_timeout,health_check_unhealthy_threshold,health_check_healthy_threshold,enable_active_health_check,tcp_health_check_port,tcp_proxy_protocol,tcp_try_duration,tcp_try_interval,request_body_max_size_mb,upstream_keepalive_timeout,server_tokens_hidden,custom_routes_enabled,proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,proxy_stream_timeout,proxy_flush_interval,proxy_stream_close_delay,host_header,enable_tls,tls_source,acme_config_id,ca_provider_id,tls_cert,tls_key,tls_http_redirect,enable_compress,compress_types,enabled,log_enabled,created_by,updated_by,created_at,updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			rule.ID, rule.CaddyID, rule.Name, rule.Description, rule.Protocol, rule.Domain, rule.ListenPort, rule.Strategy, rule.DynamicDNS, rule.EnableDnsServer, rule.DnsServer, rule.DnsFamily, rule.HealthCheckPath, rule.HealthCheckInterval, rule.HealthCheckTimeout, rule.HealthCheckUnhealthyThreshold, rule.HealthCheckHealthyThreshold, rule.EnableActiveHealthCheck, rule.TCPHealthCheckPort, rule.TCPProxyProtocol, rule.TCPTryDuration, rule.TCPTryInterval, rule.RequestBodyMaxSizeMB, rule.UpstreamKeepaliveTimeout, rule.ServerTokensHidden, rule.CustomRoutesEnabled, rule.ProxyDialTimeout, rule.ProxyResponseHeaderTimeout, rule.ProxyReadTimeout, rule.ProxyWriteTimeout, rule.ProxyStreamTimeout, rule.ProxyFlushInterval, rule.ProxyStreamCloseDelay, rule.HostHeader, rule.EnableTLS, rule.TLSSource, rule.ACMEConfigID, rule.CAProviderID, rule.TLSCert, rule.TLSKey, rule.TLSHTTPRedirect, rule.EnableCompress, rule.CompressTypes, rule.Enabled, rule.LogEnabled, rule.CreatedBy, rule.UpdatedBy, rule.CreatedAt, nullableTime(rule.UpdatedAt.NullTime)); err != nil {
 			return fmt.Errorf("写入快照规则 %s: %w", rule.CaddyID, err)
