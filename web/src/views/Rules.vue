@@ -1709,6 +1709,8 @@ watch(() => wizardForm.path_rules, (pathRules) => {
 }, { deep: true })
 
 let hydratingWizard = false
+// R59 D-F1：向导打开序列号——丢弃编辑/复制在途 GET 的过期返回，防止覆盖新建表单。
+let wizardOpenSeq = 0
 // TLS/端口提示去重：3 秒内最多一条，连续拨动不堆叠 toast。
 let lastTlsHintAt = 0
 const showTlsHint = (message: string) => {
@@ -2021,6 +2023,10 @@ const pasteFromFile = async (type: 'cert' | 'key') => {
 
 const openWizard = async (rule?: Rule) => {
   if (isReadOnly.value || saving.value) return
+  // R59 D-F1：向导打开序列号（同 viewConfig 的 configRequestSeq 模式）——
+  // 编辑/复制手动 TLS 规则时在途 GET 期间用户再点「新建」，首个返回会覆盖
+  // 新建表单并把保存语义从 create 翻成 PUT。过期返回直接丢弃。
+  const openSeq = ++wizardOpenSeq
   hydratingWizard = true
   preTcpSnapshot = null
   userExplicitPort.value = false
@@ -2036,6 +2042,7 @@ const openWizard = async (rule?: Rule) => {
     if (rule.enable_tls && rule.tls_source === 'manual') {
       try {
         const resp = await request.get<APIResponse<Rule>>(`/rules/${rule.caddy_id}`)
+        if (openSeq !== wizardOpenSeq) return
         if (resp.code === 0 && resp.data) {
           fullRule = resp.data
         }
@@ -2524,6 +2531,8 @@ const duplicateRule = async (rule: Rule) => {
 
 const openCopyWizard = async (rule: Rule) => {
   if (saving.value) return
+  // R59 D-F1：同 openWizard 的序列号守卫——复制在途 GET 过期返回丢弃。
+  const openSeq = ++wizardOpenSeq
   hydratingWizard = true
   preTcpSnapshot = null
   userExplicitPort.value = false
@@ -2537,6 +2546,7 @@ const openCopyWizard = async (rule: Rule) => {
   if (rule.enable_tls && rule.tls_source === 'manual') {
     try {
       const resp = await request.get<APIResponse<Rule>>(`/rules/${rule.caddy_id}`)
+      if (openSeq !== wizardOpenSeq) return
       if (resp.code === 0 && resp.data) fullRule = resp.data
     } catch { /* fallback to list data */ }
   }

@@ -260,6 +260,14 @@ const deleteUser = async (id: number) => {
 
 const handleToggleStatus = async (id: number, isEnabled: boolean) => {
   if (isReadOnly.value || switchingIds.value.has(id) || submittingUserId.value === id || operatingUserIds.value.has(id)) return
+  if (!isEnabled) {
+    // 禁用与删除同为破坏性操作，与 deleteUser/toggleRule 保持同款二次确认。
+    try {
+      await ElMessageBox.confirm('确定要禁用这个用户吗？禁用后该用户将无法登录。', '警告', { type: 'warning' })
+    } catch {
+      return
+    }
+  }
   switchingIds.value.add(id)
   try {
     await request.put(`/users/${id}/status`, { is_enabled: isEnabled })
