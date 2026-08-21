@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"database/sql"
@@ -546,11 +547,36 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 	}
 	if err != nil {
 		rollbackErr := tx.Rollback()
-		cleanupErr := restoreCertificateDeployment(snapshot, s.caddyReloader)
+		// R56 N-1(b)：并发部署回调（在途回调 × 补扫重试）部署同 jobID 同一份
+		// 证书时，CAS 败者的部署前快照可能早于胜者写入——无条件恢复会把磁盘
+		// 回退到旧证书，与 DB('issued'+新 PEM)/Caddy 三方静默分叉，且
+		// reconcileMissingCertFiles 不比对内容，分叉持续到下次续签。任务已被
+		// 胜者提交且磁盘已是本次部署的目标内容时跳过快照恢复，仅保留 failJob
+		// 归因（issued 为终态，failJob no-op）；内容不匹配（并发新化身等）
+		// 保持既有恢复语义。
+		var cleanupErr error
+		if deploymentCommittedByConcurrentWinner(jobID, material) {
+			log.Printf("certificate job %d: finalization lost CAS race to a concurrent deployment of identical material; keeping winner's files, skipping snapshot restore", jobID)
+		} else {
+			cleanupErr = restoreCertificateDeployment(snapshot, s.caddyReloader)
+		}
 		failJob(jobID, "证书部署确认失败: "+err.Error())
 		return errors.Join(fmt.Errorf("finalize issued certificate: %w", err), rollbackErr, cleanupErr)
 	}
 	return nil
+}
+
+// deploymentCommittedByConcurrentWinner 报告终态 CAS 冲突是否源于并发部署回调
+// 已提交同一份证书：任务状态已推进到终态 issued 且磁盘证书内容与本次部署材料
+// 一致。仅用于冲突分支的恢复快照跳过判定（R56 N-1(b) 纵深防御）。
+func deploymentCommittedByConcurrentWinner(jobID int, material issuedCertificate) bool {
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil || status != "issued" {
+		return false
+	}
+	certPath, _ := CertFilePaths(material.ruleID)
+	deployed, err := os.ReadFile(certPath)
+	return err == nil && bytes.Equal(deployed, []byte(material.certPEM))
 }
 
 func confirmCertificateDeployment(ctx context.Context, jobID int, material issuedCertificate, allowIssued bool) error {

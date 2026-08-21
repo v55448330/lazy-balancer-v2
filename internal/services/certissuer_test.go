@@ -201,6 +201,104 @@ func TestCertIssuer_deployIssuedCertificate_restores_files_when_job_disabled_bef
 	}
 }
 
+func TestCertIssuer_deployIssuedCertificate_skips_rollback_when_cas_loser_files_match_winner(t *testing.T) {
+	// R56 N-1(b)：并发部署回调（在途回调 × Resume/Unblock 补扫重试）部署同
+	// jobID 同一份证书时，双方 WriteCertFiles 内容相同，终态 CAS 先到者提交
+	// issued、后到者进冲突分支——其部署前快照可能早于胜者写入（旧证书），无
+	// 条件恢复会把磁盘回退到旧证书，而 DB='issued'+新 PEM、Caddy 服务新证书，
+	// 三方静默分叉（reconcileMissingCertFiles 只在文件缺失时重建，不比对内容，
+	// 分叉持续到下次续签）。磁盘已是目标证书时必须跳过快照恢复，仅保留
+	// failJob 归因（issued 为终态，failJob no-op）。
+	// Given
+	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	useTemporaryCertDir(t)
+	if err := WriteCertFiles(ruleID, "old-cert", "old-key"); err != nil {
+		t.Fatalf("write old certificate pair: %v", err)
+	}
+	reloads := 0
+	issuer := NewCertIssuer(func() error {
+		reloads++
+		if reloads == 1 {
+			// 模拟并发胜者：本回调（败者）重载期间已提交终态 issued
+			_, err := db.DB.Exec("UPDATE cert_jobs SET status='issued' WHERE id=?", jobID)
+			return err
+		}
+		return nil
+	})
+	material := issuedCertificate{
+		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
+	}
+
+	// When
+	err := issuer.deployIssuedCertificate(context.Background(), jobID, material)
+
+	// Then：CAS 败者报错，但磁盘保持胜者成果（新证书）、无回滚重载、行保持 issued
+	if err == nil {
+		t.Fatal("CAS-losing deployment unexpectedly succeeded")
+	}
+	certPath, keyPath := CertFilePaths(ruleID)
+	gotCert, certErr := os.ReadFile(certPath)
+	gotKey, keyErr := os.ReadFile(keyPath)
+	if certErr != nil || keyErr != nil {
+		t.Fatalf("read deployed files: cert=%v key=%v", certErr, keyErr)
+	}
+	var status string
+	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+		t.Fatalf("read job status: %v", err)
+	}
+	if string(gotCert) != "new-cert" || string(gotKey) != "new-key" || status != "issued" || reloads != 1 {
+		t.Fatalf("files=(%q,%q) status=%q reloads=%d, want 胜者成果保留 (new-cert,new-key) issued 1（不得回滚胜者写入）",
+			gotCert, gotKey, status, reloads)
+	}
+}
+
+func TestCertIssuer_deployIssuedCertificate_restores_when_disk_differs_from_own_material(t *testing.T) {
+	// R56 N-1(b) 对照：终态 CAS 冲突但磁盘内容与本回调部署的证书不同（并发
+	// 新化身写入了另一份证书）时，快照恢复语义必须保持不变——回滚到本回调
+	// 部署前快照并重新重载。
+	// Given
+	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	useTemporaryCertDir(t)
+	if err := WriteCertFiles(ruleID, "old-cert", "old-key"); err != nil {
+		t.Fatalf("write old certificate pair: %v", err)
+	}
+	reloads := 0
+	issuer := NewCertIssuer(func() error {
+		reloads++
+		if reloads == 1 {
+			if _, err := db.DB.Exec("UPDATE cert_jobs SET status='issued' WHERE id=?", jobID); err != nil {
+				return err
+			}
+			// 并发新化身写入不同的证书内容
+			return WriteCertFiles(ruleID, "winner-cert", "winner-key")
+		}
+		return nil
+	})
+	material := issuedCertificate{
+		ruleID: ruleID, certPEM: "loser-cert", keyPEM: "loser-key",
+		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
+	}
+
+	// When
+	err := issuer.deployIssuedCertificate(context.Background(), jobID, material)
+
+	// Then：内容不匹配 → 恢复部署前快照（旧证书）+ 回滚重载
+	if err == nil {
+		t.Fatal("CAS-losing deployment unexpectedly succeeded")
+	}
+	certPath, keyPath := CertFilePaths(ruleID)
+	gotCert, certErr := os.ReadFile(certPath)
+	gotKey, keyErr := os.ReadFile(keyPath)
+	if certErr != nil || keyErr != nil {
+		t.Fatalf("read restored files: cert=%v key=%v", certErr, keyErr)
+	}
+	if string(gotCert) != "old-cert" || string(gotKey) != "old-key" || reloads != 2 {
+		t.Fatalf("files=(%q,%q) reloads=%d, want 快照恢复 (old-cert,old-key) 且部署+回滚各重载一次",
+			gotCert, gotKey, reloads)
+	}
+}
+
 func TestCertIssuer_Issue_preflight_rate_limit_enters_waiting_ca(t *testing.T) {
 	// Given：CA 预检连通性测试被 429 限流
 	jobID, ruleID := seedCertificateJob(t, "queued")
