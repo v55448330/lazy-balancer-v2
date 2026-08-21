@@ -694,8 +694,8 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		req.CompressTypes = "gzip"
 	}
 
-	if req.RequestBodyMaxSizeMB < 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求体大小限制不能为负数"})
+	if req.RequestBodyMaxSizeMB < 0 || req.RequestBodyMaxSizeMB > 4096 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求体大小限制必须在 0-4096 MB 之间"})
 		return
 	}
 	if req.UpstreamKeepaliveTimeout < 0 {
@@ -1355,8 +1355,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 	}
 
-	if req.RequestBodyMaxSizeMB != nil && *req.RequestBodyMaxSizeMB < 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求体大小限制不能为负数"})
+	if req.RequestBodyMaxSizeMB != nil && (*req.RequestBodyMaxSizeMB < 0 || *req.RequestBodyMaxSizeMB > 4096) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求体大小限制必须在 0-4096 MB 之间"})
 		return
 	}
 	if req.UpstreamKeepaliveTimeout != nil && *req.UpstreamKeepaliveTimeout < 0 {
@@ -2136,6 +2136,14 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			return
 		}
 	}
+	// R57 C-8：复制前补挂载关联数据——scanLbRules 不带 Upstreams/PathRules，
+	// EnabledUpstreamCount 恒 0 会让 validateRuleFeatures 的动态 DNS 多上游
+	// 预检（DynamicDNS && count>1）在复制路径永不触发。
+	if err := hydrateRuleRelations(c.Request.Context(), rules); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则关联数据失败"})
+		return
+	}
+	rule = rules[0]
 
 	userIDInt := contextUserID(c)
 
