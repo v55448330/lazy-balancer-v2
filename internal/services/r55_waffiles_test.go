@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -44,4 +46,49 @@ func TestUntarGzTo_rejectsEntryWhenDeclaredSizeOverflowsInt64(t *testing.T) {
 		t.Fatalf("error=%v, want 解包体积超过上限 rejection（溢出不得绕过写放大防护）", err)
 	}
 	assertNoStagingRemains(t, destDir)
+}
+
+func TestUntarGzTo_budgetExactlyExhaustedBoundary(t *testing.T) {
+	// R56 N-4：预算恰好用尽边界——writtenBytes == max 后 remaining=0，任何
+	// hdr.Size>0 的后续条目都必须按「先减后比」拒绝（边界 false-pass 会把
+	// 总量推超预算）；而恰好顶满预算本身不得被误拒（边界 false-reject）。
+	old := maxWafSyncExtractBytes
+	maxWafSyncExtractBytes = 8
+	t.Cleanup(func() { maxWafSyncExtractBytes = old })
+
+	t.Run("one more byte rejected after exact exhaustion", func(t *testing.T) {
+		// Given：8 字节条目恰好用尽预算 + 1 字节后续条目
+		destDir := t.TempDir()
+		data := rawTarGz(t, []tarEntry{
+			{name: "a.conf", body: []byte("12345678")},
+			{name: "b.conf", body: []byte("x")},
+		})
+
+		// When
+		err := untarGzTo(data, destDir, "")
+
+		// Then
+		if err == nil || !strings.Contains(err.Error(), "解包体积超过上限") {
+			t.Fatalf("error=%v, want 解包体积超过上限 rejection（预算用尽后 1 字节也不得放行）", err)
+		}
+		assertNoStagingRemains(t, destDir)
+	})
+
+	t.Run("exactly exhausted budget accepted", func(t *testing.T) {
+		// Given：单条目恰好顶满预算
+		destDir := filepath.Join(t.TempDir(), "live")
+		data := rawTarGz(t, []tarEntry{{name: "a.conf", body: []byte("12345678")}})
+
+		// When
+		err := untarGzTo(data, destDir, "")
+
+		// Then
+		if err != nil {
+			t.Fatalf("untar exactly-at-budget bundle: %v（顶满预算不得被误拒）", err)
+		}
+		content, readErr := os.ReadFile(filepath.Join(destDir, "a.conf"))
+		if readErr != nil || string(content) != "12345678" {
+			t.Fatalf("extracted content=(%q,%v), want a.conf installed", content, readErr)
+		}
+	})
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
@@ -80,5 +81,14 @@ func TestCRSUpdateRun_snapshotPersistFailureIsAudited(t *testing.T) {
 	// And 快照持久化失败留有操作日志，重建前运维可见
 	if got := countCRSAudits(t, "写入失败"); got != 1 {
 		t.Fatalf("persist-failure audits=%d, want 1 (degraded snapshot state must be operator-visible)", got)
+	}
+	// And 组件日志行级别/阶段一致（R56 发现2）：ERROR 行必须标 failed 阶段——
+	// 与同 run 末尾的 INFO/success 行并列时，success 阶段的 ERROR 行会误导阶段列。
+	logBytes, err := os.ReadFile(CRSUpdateLogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logBytes), "[ERROR] failed - 规则快照持久化失败") {
+		t.Fatalf("update log missing ERROR/failed persist-failure line:\n%s", logBytes)
 	}
 }

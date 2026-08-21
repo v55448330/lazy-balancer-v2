@@ -231,10 +231,11 @@ func tarGzDirSum(dir string) (string, error) {
 
 // 解包上限：gzip 炸弹（压缩侧最多 64MB，可膨胀数 GB）必须在写放大发生前
 // 拦截；正常 CRS 树远低于该值，超限必为损坏/篡改包（N-02）。
-const (
-	maxWafSyncExtractBytes = 256 << 20 // 256MB 解包字节上限
-	maxWafSyncExtractFiles = 2000      // 2000 文件数上限
-)
+const maxWafSyncExtractFiles = 2000 // 2000 文件数上限
+
+// maxWafSyncExtractBytes 256MB 解包字节上限。var 以便测试缩小预算构造
+// 恰好用尽的边界包（R56 N-4），生产路径不修改。
+var maxWafSyncExtractBytes int64 = 256 << 20
 
 // untarGzTo extracts data into destDir atomically. When expectSum is
 // non-empty, the re-archived staging tree must hash to it, or the sync is
