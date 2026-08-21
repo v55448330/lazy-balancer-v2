@@ -279,8 +279,10 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 
-	if req.RequestBodyMaxSizeMB != nil && *req.RequestBodyMaxSizeMB < 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "request_body_max_size_mb must be >= 0"})
+	// R57 C-7：上限 4096MB——无上限时天文数字在渲染侧 int64 乘法（MB→字节）
+	// 回绕可正可负：负/零让 Caddy requestbody 处理器不生效（限制静默取消）。
+	if req.RequestBodyMaxSizeMB != nil && (*req.RequestBodyMaxSizeMB < 0 || *req.RequestBodyMaxSizeMB > 4096) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "request_body_max_size_mb must be in [0, 4096] MB"})
 		return
 	}
 	if (req.HTTPReadTimeout != nil && *req.HTTPReadTimeout < 0) || (req.HTTPWriteTimeout != nil && *req.HTTPWriteTimeout < 0) || (req.HTTPIdleTimeout != nil && *req.HTTPIdleTimeout < 0) || (req.UpstreamKeepaliveTimeout != nil && *req.UpstreamKeepaliveTimeout < 0) {
@@ -837,7 +839,14 @@ func validateAccessLogFormat(format string) error {
 	fieldKept := func(paths ...string) bool {
 		for _, p := range paths {
 			for _, r := range rules {
-				if r.path == p && r.action == "delete" {
+				if r.action != "delete" {
+					continue
+				}
+				// R57 C-3：祖先路径同样致命——删除 request 整树会连带抹掉
+				// remote_ip/uri/headers 全部统计字段；精确相等或 r.path 是
+				// 受保护路径的祖先前缀（request 是 request>remote_ip 的前缀）
+				// 均视为删除。
+				if r.path == p || strings.HasPrefix(p, r.path+">") {
 					return false
 				}
 			}
@@ -859,17 +868,23 @@ func validateAccessLogFormat(format string) error {
 	renameAlias := func(paths []string, allowed []string) error {
 		for _, p := range paths {
 			for _, r := range rules {
-				if r.path == p && r.action != "delete" && r.action != "" {
-					ok := false
-					for _, a := range allowed {
-						if r.action == a {
-							ok = true
-							break
-						}
+				if r.action == "delete" || r.action == "" {
+					continue
+				}
+				// R57 C-3：父级改名同样移走子树（request>headers 改名会把
+				// User-Agent 一并带走）——祖先前缀视为命中。
+				if r.path != p && !strings.HasPrefix(p, r.path+">") {
+					continue
+				}
+				ok := false
+				for _, a := range allowed {
+					if r.action == a {
+						ok = true
+						break
 					}
-					if !ok {
-						return fmt.Errorf("字段 %s 重命名为 %s 后统计将无法识别，仅支持：%s", p, r.action, strings.Join(allowed, " / "))
-					}
+				}
+				if !ok {
+					return fmt.Errorf("字段 %s 重命名为 %s 后统计将无法识别，仅支持：%s", p, r.action, strings.Join(allowed, " / "))
 				}
 			}
 		}

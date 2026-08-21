@@ -1643,26 +1643,40 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		servers["http_80"] = server
 	}
 
-	loggerNames := map[string]interface{}{}
+	// R57 C-4：logger_names 按 server（端口）拆分——同域名跨端口双规则时全局
+	// 共享映射会让后写覆盖先写（先建规则的日志文件永无条目），且任一端口上的
+	// 同域名请求（含 80 默认站跳转）都被误记入映射命中规则的日志。
+	loggerNamesByPort := map[int]map[string]interface{}{}
 	for _, ru := range allRules {
 		r := ru.rule
 		if !r.LogEnabled || r.Protocol != "http" || r.Domain == "" {
 			continue
 		}
+		perPort := loggerNamesByPort[r.ListenPort]
+		if perPort == nil {
+			perPort = map[string]interface{}{}
+			loggerNamesByPort[r.ListenPort] = perPort
+		}
 		for _, d := range strings.Split(r.Domain, ",") {
 			d = strings.TrimSpace(d)
 			if d != "" {
-				loggerNames[d] = "rule_" + r.CaddyID
+				perPort[d] = "rule_" + r.CaddyID
 			}
 		}
 	}
-	if len(loggerNames) > 0 {
-		for _, serverVal := range servers {
+	if len(loggerNamesByPort) > 0 {
+		for serverName, serverVal := range servers {
 			srv, _ := serverVal.(map[string]interface{})
-			if srv == nil {
+			if srv == nil || !strings.HasPrefix(serverName, "http_") {
 				continue
 			}
-			srv["logs"] = map[string]interface{}{"logger_names": loggerNames}
+			port, err := strconv.Atoi(strings.TrimPrefix(serverName, "http_"))
+			if err != nil {
+				continue
+			}
+			if perPort, ok := loggerNamesByPort[port]; ok && len(perPort) > 0 {
+				srv["logs"] = map[string]interface{}{"logger_names": perPort}
+			}
 		}
 	}
 
