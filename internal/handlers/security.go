@@ -670,6 +670,14 @@ func validateAndNormalizeCRSField(name string, val *string) error {
 		if trimmed != entry {
 			return fmt.Errorf("%s 条目不能包含首尾空白: %q", name, entry)
 		}
+		// R59 B-N2：排除项是 coraza SecRuleRemoveById 的规则 ID（形如
+		// "942100" 六位数字或含字母后缀的 "942100LEN"）。纯两位/三位短数字
+		// （"94"/"933"）不是任何 CRS 规则 ID 形态——coraza v3.7.0 的
+		// DeleteByID 对不存在的 ID 静默零删除，排除沦为无声 no-op。最小形态
+		// 约束：crs_excluded_rules 条目至少 6 个字符。
+		if name == "crs_excluded_rules" && len(trimmed) < 6 {
+			return fmt.Errorf("%s 条目必须是 CRS 规则 ID（至少 6 位，如 \"942100\"）: %q", name, entry)
+		}
 	}
 	return nil
 }
