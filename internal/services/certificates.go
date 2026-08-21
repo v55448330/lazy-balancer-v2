@@ -275,6 +275,26 @@ func (s *CertificateService) scheduleDeploymentRetry(jobID int, ruleID string, d
 			}
 			continue
 		}
+		// R56 N-1(a)：pending timer 之外还必须对在途回调去重——回调启动即自摘
+		// （下方 AfterFunc 内 delete），只查 deploymentTimers 必然放行第二个并发
+		// 回调：Caddy reload 挂起超暂停等待上限（30s）后 Resume/Unblock 补扫会对
+		// 同 jobID 再建 timer，与仍在跑的旧回调并发部署同一证书，终态 CAS 败者
+		// 的旧快照回滚可能摧毁胜者刚写入的证书文件。不变量：同 jobID 永不并发
+		// 部署——取消在途回调并镜像上方 pending 处理（释锁后等待 done）再建新
+		// timer，将并发部署降为串行重试。
+		if callbacks := s.deploymentCallbacks[jobID]; len(callbacks) > 0 {
+			running := make([]*deploymentTimer, 0, len(callbacks))
+			for callback := range callbacks {
+				callback.canceled = true
+				callback.cancel()
+				running = append(running, callback)
+			}
+			s.timerMu.Unlock()
+			for _, callback := range running {
+				<-callback.done
+			}
+			continue
+		}
 		entry := &deploymentTimer{done: make(chan struct{}), ruleID: ruleID}
 		entry.ctx, entry.cancel = context.WithCancel(s.ctx)
 		entry.timer = time.AfterFunc(delay, func() {

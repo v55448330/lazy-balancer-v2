@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -326,6 +327,64 @@ func TestCertificateService_deployment_retry_deduplicates_job_id(t *testing.T) {
 	select {
 	case jobID := <-calls:
 		t.Fatalf("duplicate retry ran for job %d", jobID)
+	default:
+	}
+}
+
+func TestCertificateService_scheduleDeploymentRetry_waits_for_inflight_callback_before_rescheduling(t *testing.T) {
+	// R56 N-1(a)：重试回调 C1 在途（Caddy reload 挂起超 30s 暂停等待上限）时，
+	// Resume/Unblock 补扫会对同 jobID 重新 schedule——去重只查 pending timer
+	// （回调启动即自摘），不查在途回调，必然放行第二个并发回调部署同一证书。
+	// 不变量：同 jobID 永不并发部署——补扫必须取消并等待 C1 退出后才创建新
+	// timer（串行重试，而非并发重试）。
+	// Given
+	service := NewCertificateService()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	calls := make(chan int, 2)
+	var firstOnce sync.Once
+	service.retryDeployment = func(_ context.Context, jobID int) error {
+		calls <- jobID
+		firstOnce.Do(func() {
+			close(entered)
+			<-release
+		})
+		return nil
+	}
+	service.scheduleDeploymentRetry(42, "lb_retry", 0)
+	<-entered
+	if jobID := <-calls; jobID != 42 {
+		t.Fatalf("first retry job ID=%d, want 42", jobID)
+	}
+	rescheduled := make(chan struct{})
+	go func() {
+		service.scheduleDeploymentRetry(42, "lb_retry", 0)
+		close(rescheduled)
+	}()
+
+	// When：C1 在途期间补扫重排
+	// Then：不得返回、不得放行第二个并发回调
+	select {
+	case <-rescheduled:
+		t.Fatal("scheduleDeploymentRetry returned while the first callback was still in-flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	select {
+	case jobID := <-calls:
+		t.Fatalf("second callback ran concurrently with the in-flight one (job %d)", jobID)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+
+	// C1 退出后重排完成，新 timer 触发第二个回调（与 C1 串行）
+	<-rescheduled
+	if jobID := <-calls; jobID != 42 {
+		t.Fatalf("rescheduled retry job ID=%d, want 42", jobID)
+	}
+	service.pauseDeploymentRetries()
+	select {
+	case jobID := <-calls:
+		t.Fatalf("unexpected extra retry for job %d", jobID)
 	default:
 	}
 }
