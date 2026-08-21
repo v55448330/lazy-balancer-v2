@@ -949,6 +949,20 @@ func (q *caQueue) wait() {
 }
 
 func requeueCanceledJob(jobID int) {
+	// R57 A-#5：'downloaded' 且证书材料已落库的任务停在部署窗口——转 'queued'
+	// 会丢弃已签发证书并触发整轮重签（Issue 快速路径只认 issued/downloaded）。
+	// 保持 'downloaded' 并把重试窗口推到 now，Resume 的
+	// rescanDroppedDeploymentRetries 会统一重新调度部署（含窗口为 NULL 的
+	// 首次部署中断形态——rescan 要求窗口非空且到期）。
+	var status, certPEM, keyPEM string
+	if err := db.DB.QueryRow("SELECT status, COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id=?", jobID).Scan(&status, &certPEM, &keyPEM); err == nil {
+		if status == "downloaded" && certPEM != "" && keyPEM != "" {
+			if _, err := db.DB.Exec("UPDATE cert_jobs SET deployment_available_after=datetime('now'), message='节点生命周期切换，等待恢复部署' WHERE id=? AND status='downloaded'", jobID); err != nil {
+				log.Printf("CA queue: failed to defer deployment retry for canceled job %d: %v", jobID, err)
+			}
+			return
+		}
+	}
 	if err := transitionJob(db.DB, jobID, jobStatusesExceptDisabled, "queued", map[string]any{"message": "节点生命周期切换，等待恢复签发"}); err != nil && !errors.Is(err, ErrJobTransitionConflict) {
 		log.Printf("CA queue: failed to requeue canceled job %d: %v", jobID, err)
 	}
