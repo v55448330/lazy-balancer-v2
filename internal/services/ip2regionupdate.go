@@ -49,7 +49,7 @@ type IP2RegionUpdateManager struct {
 
 	reloader       func() error
 	fetchLatestTag func(ctx context.Context) (tag string, err error)
-	downloadXDB    func(ctx context.Context, tag, destPath string) error
+	downloadXDB    func(ctx context.Context, tag, destPath string, progress downloadProgressFunc) error
 
 	schedulerMu       sync.Mutex
 	schedulerStop     chan struct{}
@@ -339,7 +339,7 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	staged := filepath.Join(stagingDir, "ip2region_v4.xdb")
-	if err := m.downloadXDB(ctx, tag, staged); err != nil {
+	if err := m.downloadXDBLogged(ctx, tag, staged); err != nil {
 		return fmt.Errorf("下载 ip2region xdb: %w", err)
 	}
 
@@ -372,6 +372,21 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 	if err := reloadIP2RegionSearcher(); err != nil {
 		return fmt.Errorf("%w: %v", errIP2RegionReload, err)
 	}
+	return nil
+}
+
+// downloadXDBLogged 包装下载 seam 写更新日志（R57，口径同 CRS 的
+// downloadTarballLogged）：开始行携带完整来源 URL（含 ghfast 代理前缀），
+// Content-Length 已知时附预计大小；进度行按 10%/5MB 节流步进；完成行记录落盘
+// 字节与耗时。stage 沿用下载阶段的 downloading。
+func (m *IP2RegionUpdateManager) downloadXDBLogged(ctx context.Context, tag, destPath string) error {
+	logLine := func(message string) { writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusDownloading), message) }
+	startedAt := time.Now()
+	progress := newDownloadProgressLogger(ip2RegionXDBSourceURL(tag), logLine)
+	if err := m.downloadXDB(ctx, tag, destPath, progress); err != nil {
+		return err
+	}
+	logDownloadCompletion(logLine, destPath, startedAt)
 	return nil
 }
 

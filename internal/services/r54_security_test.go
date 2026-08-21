@@ -307,7 +307,7 @@ func TestCRSUpdateRun_slaveAbortsBeforeFetch(t *testing.T) {
 		fetchCalled = true
 		return "v4.15.0", nil
 	}
-	m.downloadTarball = func(context.Context, string, string) error {
+	m.downloadTarball = func(context.Context, string, string, downloadProgressFunc) error {
 		return errors.New("must not reach download on a slave")
 	}
 

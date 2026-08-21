@@ -49,9 +49,9 @@ func crsVersionRow(t *testing.T) (version, status, message, finishedAt, lastChec
 	return
 }
 
-func fakeCRSDownload(t *testing.T, files map[string]string) func(context.Context, string, string) error {
+func fakeCRSDownload(t *testing.T, files map[string]string) func(context.Context, string, string, downloadProgressFunc) error {
 	t.Helper()
-	return func(_ context.Context, _ string, dest string) error {
+	return func(_ context.Context, _ string, dest string, _ downloadProgressFunc) error {
 		return os.WriteFile(dest, buildCRSTarball(t, files), 0644)
 	}
 }
@@ -67,7 +67,7 @@ func TestStartCRSUpdate_conflictWhenRunning(t *testing.T) {
 		<-block
 		return "v9.9.9", nil
 	}
-	m.downloadTarball = func(context.Context, string, string) error {
+	m.downloadTarball = func(context.Context, string, string, downloadProgressFunc) error {
 		return errors.New("no network in test")
 	}
 
@@ -249,7 +249,7 @@ func TestCRSUpdateRun_autoSkipsWhenTagEqualsCurrent(t *testing.T) {
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.14.0", nil }
 	downloadCalled := false
-	m.downloadTarball = func(context.Context, string, string) error {
+	m.downloadTarball = func(context.Context, string, string, downloadProgressFunc) error {
 		downloadCalled = true
 		return nil
 	}
@@ -283,7 +283,7 @@ func TestCRSUpdate_manualTriggerAtLatestSkipsDownload(t *testing.T) {
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.14.0", nil }
 	downloadCalled := false
-	m.downloadTarball = func(context.Context, string, string) error {
+	m.downloadTarball = func(context.Context, string, string, downloadProgressFunc) error {
 		downloadCalled = true
 		return nil
 	}

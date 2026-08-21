@@ -51,9 +51,9 @@ func ip2RegionVersionRow(t *testing.T) (version, status, message, finishedAt, la
 	return
 }
 
-func fakeIP2RegionDownload(t *testing.T, valid bool) func(context.Context, string, string) error {
+func fakeIP2RegionDownload(t *testing.T, valid bool) func(context.Context, string, string, downloadProgressFunc) error {
 	t.Helper()
-	return func(_ context.Context, _ string, dest string) error {
+	return func(_ context.Context, _ string, dest string, _ downloadProgressFunc) error {
 		if !valid {
 			return os.WriteFile(dest, []byte("not an xdb"), 0644)
 		}
@@ -111,7 +111,7 @@ func TestIP2RegionUpdateRun_skipWhenSameVersion(t *testing.T) {
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.0.0", nil }
 	downloadCalled := false
-	m.downloadXDB = func(context.Context, string, string) error { downloadCalled = true; return nil }
+	m.downloadXDB = func(context.Context, string, string, downloadProgressFunc) error { downloadCalled = true; return nil }
 	reloads := 0
 	m.reloader = func() error { reloads++; return nil }
 
@@ -140,7 +140,7 @@ func TestIP2RegionUpdateRun_fetchFailure(t *testing.T) {
 
 	m.fetchLatestTag = func(context.Context) (string, error) { return "", errors.New("network error") }
 	downloadCalled := false
-	m.downloadXDB = func(context.Context, string, string) error { downloadCalled = true; return nil }
+	m.downloadXDB = func(context.Context, string, string, downloadProgressFunc) error { downloadCalled = true; return nil }
 	reloads := 0
 	m.reloader = func() error { reloads++; return nil }
 
@@ -811,7 +811,7 @@ func TestStartIP2RegionUpdate_conflictWhenRunning(t *testing.T) {
 		<-block
 		return "v3.0.0", nil
 	}
-	m.downloadXDB = func(context.Context, string, string) error { return nil }
+	m.downloadXDB = func(context.Context, string, string, downloadProgressFunc) error { return nil }
 
 	// Given a running update
 	if err := m.StartUpdate("manual"); err != nil {

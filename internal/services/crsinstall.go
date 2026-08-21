@@ -66,7 +66,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	tarball := filepath.Join(staging, "crs.tar.gz")
-	if err := m.downloadTarball(ctx, tag, tarball); err != nil {
+	if err := m.downloadTarballLogged(ctx, tag, tarball); err != nil {
 		return fmt.Errorf("下载 CRS 发布包: %w", err)
 	}
 	if err := extractCRSTarball(tarball, staging); err != nil {

@@ -38,7 +38,7 @@ func TestWriteRuleSetDownload_limitsDownloadSize(t *testing.T) {
 				ContentLength: tc.contentLength,
 				Body:          io.NopCloser(bytes.NewReader(tc.body)),
 			}
-			err = writeRuleSetDownload(out, resp, cap)
+			err = writeRuleSetDownload(out, resp, cap, nil)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("oversized download must be rejected, got nil error")
