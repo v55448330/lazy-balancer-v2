@@ -820,6 +820,12 @@ func wafFilesSectionHash(ref *models.ClusterWafFilesRef) (string, error) {
 // wafFilesDrifted 报告本地 CRS/IP2Region 文件态是否与已应用的 waf_files 节
 // 哈希分叉。开关关闭的节跳过比对（镜像 driftedSections 语义，防「曾同步→
 // 开关关闭→本地改动」死循环）。
+// R56 N-3（已接受残留）：sync_waf_files 关闭时，「降级前已启动、降级后仍在
+// 后台」的 CRS/IP2Region 在途更新写入的本地文件不会被本函数兜底重拉收敛
+// （开关短路），而 security 节版本行（独立开关）会被快照重放回主节点值——
+// 从节点「DB 版本行=主节点版本、磁盘文件=本地更新版本」的差异将持续到开关
+// 打开或主节点版本变化；期间 UI 版本显示可能与磁盘文件不一致，功能上无害
+// （开关关闭语义即本地文件不受同步管辖，且文件本身更新可用）。
 func (s *SyncService) wafFilesDrifted() bool {
 	if s.db == nil {
 		return false
