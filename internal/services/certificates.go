@@ -475,8 +475,11 @@ func (s *CertificateService) resumeDeploymentRetries() {
 }
 
 // rescanDroppedDeploymentRetries 重新调度暂停期间被丢弃的部署重试：暂停时
-// scheduleDeploymentRetry 直接返回，'downloaded' 且窗口已过的任务只能靠启动
-// 恢复重排；恢复暂停后补一次扫描，避免部署重试静默丢失直到进程重启。
+// scheduleDeploymentRetry 直接返回，'downloaded' 任务只能靠本补扫重排；恢复
+// 暂停后补一次扫描，避免部署重试静默丢失直到进程重启。R59 A-2 起窗口未过
+// 的任务也一并重排（delay=剩余等待），与启动恢复 requeueNonTerminalCertJobs
+// 同口径——此前只拾「窗口已过」，窗口在补扫之后到期则 timer 已被暂停取消、
+// 周期 ticker 均不覆盖 downloaded，重试静默丢失直至重启。
 func (s *CertificateService) rescanDroppedDeploymentRetries() {
 	if db.DB == nil {
 		return
@@ -485,12 +488,12 @@ func (s *CertificateService) rescanDroppedDeploymentRetries() {
 		SELECT j.id, COALESCE(j.rule_id,''), COALESCE(j.domain,''), COALESCE(j.ca_provider_id,0), COALESCE(j.deployment_attempts,0),
 		       COALESCE(r.domain,''),
 		       CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' THEN 1 ELSE 0 END,
-		       CASE WHEN COALESCE(j.cert_pem,'') <> '' AND COALESCE(j.key_pem,'') <> '' THEN 1 ELSE 0 END
+		       CASE WHEN COALESCE(j.cert_pem,'') <> '' AND COALESCE(j.key_pem,'') <> '' THEN 1 ELSE 0 END,
+		       COALESCE(j.deployment_available_after,'')
 		FROM cert_jobs j
 		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
 		WHERE j.status='downloaded'
 		  AND j.deployment_available_after IS NOT NULL
-		  AND datetime(j.deployment_available_after) <= datetime('now')
 	`)
 	if err != nil {
 		log.Printf("resume deployment retries: scan failed: %v", err)
@@ -500,11 +503,12 @@ func (s *CertificateService) rescanDroppedDeploymentRetries() {
 		id, providerID, deploymentAttempts int
 		ruleID, jobDomain, ruleDomain      string
 		applicable, hasCertMaterial        bool
+		availableAfter                     string
 	}
 	var jobs []droppedRetry
 	for rows.Next() {
 		var job droppedRetry
-		if err := rows.Scan(&job.id, &job.ruleID, &job.jobDomain, &job.providerID, &job.deploymentAttempts, &job.ruleDomain, &job.applicable, &job.hasCertMaterial); err != nil {
+		if err := rows.Scan(&job.id, &job.ruleID, &job.jobDomain, &job.providerID, &job.deploymentAttempts, &job.ruleDomain, &job.applicable, &job.hasCertMaterial, &job.availableAfter); err != nil {
 			continue
 		}
 		jobs = append(jobs, job)
@@ -518,7 +522,13 @@ func (s *CertificateService) rescanDroppedDeploymentRetries() {
 		if !job.hasCertMaterial || !certJobRuleApplicable(job.applicable, job.ruleDomain, job.jobDomain) {
 			continue
 		}
-		s.deploymentRetry(job.id, issuedCertificate{ruleID: job.ruleID, providerID: job.providerID, deploymentAttempt: job.deploymentAttempts}, 0)
+		delay := time.Duration(0)
+		if t, err := time.Parse("2006-01-02 15:04:05", job.availableAfter); err == nil {
+			if remaining := time.Until(t); remaining > 0 {
+				delay = remaining
+			}
+		}
+		s.deploymentRetry(job.id, issuedCertificate{ruleID: job.ruleID, providerID: job.providerID, deploymentAttempt: job.deploymentAttempts}, delay)
 	}
 }
 

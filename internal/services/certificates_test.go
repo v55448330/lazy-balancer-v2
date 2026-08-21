@@ -1162,16 +1162,29 @@ func TestCertificateService_resumeDeploymentRetries_reschedulesDroppedRetries(t 
 	}
 	service := NewCertificateService()
 	var scheduled []int
-	service.deploymentRetry = func(jobID int, _ issuedCertificate, _ time.Duration) {
+	var delays []time.Duration
+	service.deploymentRetry = func(jobID int, _ issuedCertificate, delay time.Duration) {
 		scheduled = append(scheduled, jobID)
+		delays = append(delays, delay)
 	}
 	service.pauseDeploymentRetries()
 
 	// When
 	service.resumeDeploymentRetries()
 
-	// Then：只有窗口已过且材料齐全的任务被重排
-	if len(scheduled) != 1 || scheduled[0] != 1 {
-		t.Fatalf("scheduled=%v, want only job 1", scheduled)
+	// Then：材料齐全且规则适用的任务被重排——窗口已过的 A 以 delay=0 立即，
+	// 窗口在未来的 B 以剩余等待 delay 重排（R59 A-2，与启动恢复同口径，
+	// 不再静默丢弃至重启）；缺材料的 C 与规则已删除的 D 仍不重排。
+	if len(scheduled) != 2 || scheduled[0] != 1 || scheduled[1] != 2 {
+		t.Fatalf("scheduled=%v, want jobs 1 and 2", scheduled)
+	}
+	if len(delays) != 2 || delays[0] != 0 {
+		t.Fatalf("job 1 delay=%v, want 0 (window passed)", delays[0])
+	}
+	if delays[1] <= 0 {
+		t.Fatalf("job 2 delay=%v, want remaining backoff window (future)", delays[1])
+	}
+	if delays[1] > time.Hour {
+		t.Fatalf("job 2 delay=%v, want <= remaining 1h window", delays[1])
 	}
 }
