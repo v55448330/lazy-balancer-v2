@@ -227,7 +227,7 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 		// 未挂载 /app/waf 的部署在容器重建后会回退到镜像/旧快照版本——仅进
 		// 组件日志会让运维在重建前毫无察觉，写一条操作日志使降级状态可见
 		//（重建后 ReconcileCRSState 的版本校正另有审计）。
-		writeCRSUpdateLog("ERROR", string(CRSStatusSuccess), fmt.Sprintf("规则快照持久化失败: %v（容器重建后将回退，请检查数据卷磁盘空间）", err))
+		writeCRSUpdateLog("ERROR", string(CRSStatusFailed), fmt.Sprintf("规则快照持久化失败: %v（容器重建后将回退，请检查数据卷磁盘空间）", err))
 		RecordAuditLog("system", "写入失败", "CRS规则库", FormatAuditDetail(fmt.Sprintf("版本：%s 规则快照持久化失败: %v（容器重建后将回退到镜像捆绑版本）", tag, err), AuditResultPart("failed")), "")
 	}
 	return nil
