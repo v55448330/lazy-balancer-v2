@@ -64,12 +64,14 @@ func TestCertIssuer_deployIssuedCertificate_keeps_nonterminal_state_when_reload_
 	jobID, ruleID := seedCertificateJob(t, "downloaded")
 	useTemporaryCertDir(t)
 	issuer := NewCertIssuer(func() error { return errors.New("reload failed") })
-	retries := 0
+	// R57 A-#1 起再调度为异步（go deploymentRetry）——断言必须经 channel 等待
+	// 回调到达，裸读计数器既是顺序竞态也是数据竞态（全量并发下偶发 flake）。
+	retried := make(chan struct{}, 1)
 	issuer.deploymentRetry = func(gotJobID int, got issuedCertificate, _ time.Duration) {
 		if gotJobID != jobID || got.ruleID != ruleID {
 			t.Fatalf("retry job=(%d,%q), want (%d,%q)", gotJobID, got.ruleID, jobID, ruleID)
 		}
-		retries++
+		retried <- struct{}{}
 	}
 	material := issuedCertificate{
 		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
@@ -83,6 +85,11 @@ func TestCertIssuer_deployIssuedCertificate_keeps_nonterminal_state_when_reload_
 	if err == nil {
 		t.Fatal("deployment succeeded despite reload failure")
 	}
+	select {
+	case <-retried:
+	case <-time.After(5 * time.Second):
+		t.Fatal("deployment retry was never rescheduled (async goroutine missing)")
+	}
 	var status, certPEM, keyPEM, deploymentAvailableAfter string
 	var deploymentAttempts int
 	var version int
@@ -92,8 +99,8 @@ func TestCertIssuer_deployIssuedCertificate_keeps_nonterminal_state_when_reload_
 	if err := db.DB.QueryRow("SELECT cluster_version FROM global_config WHERE id=1").Scan(&version); err != nil {
 		t.Fatalf("read cluster version: %v", err)
 	}
-	if status != "downloaded" || certPEM != "new-cert" || keyPEM != "new-key" || deploymentAttempts != 1 || deploymentAvailableAfter == "" || version != 0 || retries != 1 {
-		t.Fatalf("job=(%q,%q,%q) deployment_attempts=%d available_after=%q version=%d retries=%d", status, certPEM, keyPEM, deploymentAttempts, deploymentAvailableAfter, version, retries)
+	if status != "downloaded" || certPEM != "new-cert" || keyPEM != "new-key" || deploymentAttempts != 1 || deploymentAvailableAfter == "" || version != 0 {
+		t.Fatalf("job=(%q,%q,%q) deployment_attempts=%d available_after=%q version=%d", status, certPEM, keyPEM, deploymentAttempts, deploymentAvailableAfter, version)
 	}
 }
 
@@ -361,8 +368,9 @@ func TestCertIssuer_Issue_fast_path_returns_reload_error_and_keeps_downloaded(t 
 		t.Fatalf("seed rule CA provider: %v", err)
 	}
 	issuer := NewCertIssuer(func() error { return errors.New("reload failed") })
-	retries := 0
-	issuer.deploymentRetry = func(int, issuedCertificate, time.Duration) { retries++ }
+	// R57 A-#1 起再调度异步——channel 等待替代裸计数器（消顺序/数据竞态）。
+	retried := make(chan struct{}, 1)
+	issuer.deploymentRetry = func(int, issuedCertificate, time.Duration) { retried <- struct{}{} }
 
 	// When
 	err := issuer.Issue(context.Background(), jobID, ruleID, "example.com", models.CAProvider{ID: 1})
@@ -371,12 +379,17 @@ func TestCertIssuer_Issue_fast_path_returns_reload_error_and_keeps_downloaded(t 
 	if err == nil {
 		t.Fatal("fast path reported success despite reload failure")
 	}
+	select {
+	case <-retried:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fast-path retry was never rescheduled (async goroutine missing)")
+	}
 	var status string
 	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
 		t.Fatalf("read fast-path job: %v", err)
 	}
-	if status != "downloaded" || retries != 1 {
-		t.Fatalf("fast-path job status=%q retries=%d, want downloaded and one retry", status, retries)
+	if status != "downloaded" {
+		t.Fatalf("fast-path job status=%q, want downloaded", status)
 	}
 }
 
