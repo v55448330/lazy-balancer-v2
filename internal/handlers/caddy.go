@@ -272,6 +272,13 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	// R58 C-N5：cert_expiry_days 与另两个续签数值同边界（导入侧已按
+	// [1,365] 钳制）——写侧缺校验会让 0/负值落库，续期窗口计算漂移。
+	if req.CertExpiryDays != nil && (*req.CertExpiryDays < 1 || *req.CertExpiryDays > 365) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_expiry_days must be between 1 and 365"})
+		return
+	}
+
 	if req.DefaultCAProviderID != nil {
 		if err := services.ValidateDefaultCAProvider(*req.DefaultCAProviderID); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})

@@ -1869,6 +1869,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书续签配置失败: " + errors.Join(err, restoreErr).Error()})
 				return
 			}
+			if renewalDays <= 0 {
+				renewalDays = 30
+			}
 			var expiryPtr *time.Time
 			if jobExpiresAt.Valid {
 				expiry := jobExpiresAt.Time
@@ -2476,6 +2479,12 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		if err := db.DB.QueryRow("SELECT COALESCE(cert_renewal_days,30) FROM global_config WHERE id=1").Scan(&renewalDays); err != nil {
 			failEnable("读取证书续签配置失败")
 			return
+		}
+		// R58 C-N6：与周期续签路径同口径兜底——导入物可落 0/负值（导入侧只
+		// 钳上限），ResolveEnableCertJobAction 对 renewalDays<=0 的 Keep 窗口
+		// 判定会把刚签发的证书立即判为待续签。
+		if renewalDays <= 0 {
+			renewalDays = 30
 		}
 		var expiryPtr *time.Time
 		if jobExpiresAt.Valid {
