@@ -1,6 +1,10 @@
 package handlers
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +14,83 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 )
+
+// certJobRereadFailingConnector 返回一个按语句路由的假 db.DB：任务行 SELECT 正常
+// 返回在途态行，CAS UPDATE 命中 0 行（模拟 worker 并发推进状态），重读 SELECT
+// 注入瞬时 DB 故障（同 R36/R37 的假连接器模式）。
+type certJobRereadFailingConnector struct{}
+
+func (certJobRereadFailingConnector) Connect(context.Context) (driver.Conn, error) {
+	return certJobRereadFailingConn{}, nil
+}
+
+func (certJobRereadFailingConnector) Driver() driver.Driver { return certJobRereadFailingDriver{} }
+
+type certJobRereadFailingDriver struct{}
+
+func (certJobRereadFailingDriver) Open(string) (driver.Conn, error) {
+	return certJobRereadFailingConn{}, nil
+}
+
+type certJobRereadFailingConn struct{}
+
+func (certJobRereadFailingConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("unexpected prepare")
+}
+
+func (certJobRereadFailingConn) Close() error { return nil }
+
+func (certJobRereadFailingConn) Begin() (driver.Tx, error) { return nil, errors.New("no tx") }
+
+func (certJobRereadFailingConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	switch {
+	case strings.Contains(query, "rule_id, domain, status"):
+		return &fakeQueryRows{values: [][]driver.Value{{"lb_reread_500", "reread.example.test", "validating", int64(1)}}}, nil
+	case strings.Contains(query, "SELECT status FROM cert_jobs"):
+		return nil, errors.New("注入的重读故障")
+	default:
+		return &fakeQueryRows{}, nil
+	}
+}
+
+func (certJobRereadFailingConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+	if strings.Contains(query, "UPDATE cert_jobs SET status='disabled'") {
+		return certJobZeroRowsResult{}, nil
+	}
+	return nil, errors.New("unexpected exec: " + query)
+}
+
+type certJobZeroRowsResult struct{}
+
+func (certJobZeroRowsResult) LastInsertId() (int64, error) { return 0, nil }
+
+func (certJobZeroRowsResult) RowsAffected() (int64, error) { return 0, nil }
+
+func TestDeleteCertJob_reread_failure_returns_500(t *testing.T) {
+	// R56 N-4：CAS 命中 0 行后的归因重读本身失败（瞬时 DB 故障）是 R55 A-#3
+	// 新增的第三分支——必须显式 500（读取任务状态失败），不得误报 409/404。
+	// Given
+	h := newBackupTestHandlers(t)
+	fake := sql.OpenDB(certJobRereadFailingConnector{})
+	t.Cleanup(func() { _ = fake.Close() })
+	orig := db.DB
+	db.DB = fake
+	t.Cleanup(func() { db.DB = orig })
+	router := gin.New()
+	router.DELETE("/jobs/:id", h.DeleteCertJob)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/jobs/7", nil))
+
+	// Then
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500（重读失败不得误报 409/404）", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "读取任务状态失败") {
+		t.Fatalf("body=%s, want 读取任务状态失败", response.Body.String())
+	}
+}
 
 func TestDeleteCertJob_concurrent_status_change_returns_409(t *testing.T) {
 	// R55 A-#3：在途态任务（S-2 放行的 escape-hatch 对象）删除时，worker 在
