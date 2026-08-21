@@ -35,6 +35,9 @@ var configBackupProtectedConfigKeys = map[string]bool{
 	"id": true, "is_master": true, "master_url": true, "cluster_token": true,
 	"registration_id": true, "registration_secret": true, "applied_version": true,
 	"sync_fingerprint": true, "last_sync": true, "last_sync_error": true, "cluster_version": true,
+	// R57 C-6：本地节点运行态标记，非配置——导入旧备份会复活陈旧的
+	// 「应用失败」横幅（导入提交路径不经过 recordCaddyApplyResult 清空）。
+	"caddy_apply_error": true,
 }
 
 var requeueNonTerminalCertJobs = services.RequeueNonTerminalCertJobs
@@ -557,11 +560,23 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 			EnableCompress:             backupBooleanEnabled(rule["enable_compress"]),
 			CompressTypes:              backupString(rule["compress_types"]),
 		}
-		if pathRules, found := backupPathRulesForRule(pathRows, backupString(rule["caddy_id"])); found {
+		if pathRules, found, err := backupPathRulesForRule(pathRows, backupString(rule["caddy_id"])); err != nil {
+			return fmt.Errorf("规则 #%d：%w", index+1, err)
+		} else if found {
 			// Round 30 F-6: 保存路径先 normalizePathRules（TrimSpace）再校验
 			// （createRuleFeatures/updateRuleFeatures），备份路径此前直传导致手造备份
 			// 含前导空格路径时 validateRuleFeatures 的 HasPrefix("/") 误拒绝。
 			input.PathRules = normalizePathRules(pathRules)
+		}
+		// R57 C-5：dynamic_dns+dns_family 走与保存侧同口径的枚举校验——
+		// 此前 input 不带 DnsFamily，垃圾值原样落库后渲染端 versions 双 false
+		// 解析退化为双栈（fail-open 方向）。
+		dynamicDNS := backupBooleanEnabled(rule["dynamic_dns"])
+		if dynamicDNS {
+			dnsFamily := backupString(rule["dns_family"])
+			if dnsFamily != "" && dnsFamily != "ipv4" && dnsFamily != "ipv6" {
+				return fmt.Errorf("规则 #%d：dns_family 必须为 ipv4 或 ipv6（当前 %q）", index+1, dnsFamily)
+			}
 		}
 		if err := validateRuleFeatures(input); err != nil {
 			return fmt.Errorf("规则 #%d：%w", index+1, err)
@@ -869,13 +884,16 @@ func backupString(value any) string {
 
 // backupPathRulesForRule 从备份 path_rules 表收集指定规则的自定义路径规则，
 // 供 validateV2Backup 按保存路径同口径校验；无该规则行时返回 found=false。
-func backupPathRulesForRule(rows []map[string]any, ruleID string) ([]models.PathRule, bool) {
+// upstreams_json 形态错误必须上抛（R57 C-1）：吞错后 Upstreams=nil 被
+// validateRuleFeatures 按「回退主上游」放行，落库后 loadPathRulesBatch 对
+// 同一 JSON 硬失败——ListRules/GetRule/UpdateRule/EnableRule 全 500。
+func backupPathRulesForRule(rows []map[string]any, ruleID string) ([]models.PathRule, bool, error) {
 	if ruleID == "" {
-		return nil, false
+		return nil, false, nil
 	}
 	found := false
 	pathRules := make([]models.PathRule, 0)
-	for _, row := range rows {
+	for i, row := range rows {
 		ownerID, _ := row["rule_id"].(string)
 		if ownerID != ruleID {
 			continue
@@ -887,11 +905,13 @@ func backupPathRulesForRule(rows []map[string]any, ruleID string) ([]models.Path
 			Path:      backupString(row["path"]),
 		}
 		if raw, ok := row["upstreams_json"].(string); ok && raw != "" {
-			_ = json.Unmarshal([]byte(raw), &pathRule.Upstreams)
+			if err := json.Unmarshal([]byte(raw), &pathRule.Upstreams); err != nil {
+				return nil, false, fmt.Errorf("规则 %s 的路径规则行 #%d upstreams_json 无法解析: %w", ruleID, i+1, err)
+			}
 		}
 		pathRules = append(pathRules, pathRule)
 	}
-	return pathRules, found
+	return pathRules, found, nil
 }
 
 // validateCredentialsJSONObject allows empty strings but requires non-empty values to be JSON objects.
@@ -1187,6 +1207,38 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	if value, exists := backup.Config["audit_retention_months"]; exists {
 		backup.Config["audit_retention_months"], auditRetentionClamped = clampBackupAuditRetentionMonths(value)
 	}
+	// R57 C-2：续签/有效期数值导入钳制（与写侧 caddy.go 校验同边界）——
+	// cert_renewal_days 超大值会让续签扫描窗口覆盖一切证书（续签成功后仍在
+	// 窗口内 → 永久续签风暴耗尽 CA 配额）；负值漂移 Keep/Resume 决策。
+	certNumericClamped := make([]string, 0, 3)
+	for _, kc := range []struct {
+		key         string
+		lo, hi      int
+		fallbackDef int
+	}{
+		{"cert_renewal_days", 0, 90, 30},
+		{"cert_renewal_attempts", 1, 10, 3},
+		{"cert_expiry_days", 1, 365, 90},
+	} {
+		if value, exists := backup.Config[kc.key]; exists {
+			if n, ok := backupInteger(value); ok {
+				if n < kc.lo || n > kc.hi {
+					clamped := n
+					if n < kc.lo {
+						clamped = kc.lo
+					}
+					if n > kc.hi {
+						clamped = kc.hi
+					}
+					backup.Config[kc.key] = clamped
+					certNumericClamped = append(certNumericClamped, fmt.Sprintf("%s 越界（%d），已钳位为 %d", kc.key, n, clamped))
+				}
+			} else if value != nil {
+				backup.Config[kc.key] = kc.fallbackDef
+				certNumericClamped = append(certNumericClamped, fmt.Sprintf("%s 非法形态，已重置为 %d", kc.key, kc.fallbackDef))
+			}
+		}
+	}
 	ctx := c.Request.Context()
 	importUsername := c.GetString("username")
 	session, err := h.beginConfigImport(ctx)
@@ -1396,6 +1448,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	if auditRetentionClamped {
 		auditParts = append(auditParts, fmt.Sprintf("audit_retention_months 越界，已钳位为 %v", backup.Config["audit_retention_months"]))
 	}
+	auditParts = append(auditParts, certNumericClamped...)
 	if len(skipWarnings) > 0 {
 		auditParts = append(auditParts, "空域名规则跳过："+strings.Join(skipWarnings, "；"))
 	}
