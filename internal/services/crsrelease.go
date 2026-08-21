@@ -153,10 +153,13 @@ func extractCRSTarball(tarballPath, destDir string) error {
 		if err != nil {
 			return fmt.Errorf("读取 tar: %w", err)
 		}
-		totalBytes += hdr.Size
-		if totalBytes > crsExtractMaxBytes {
+		// 先减后比：totalBytes 恒 ≤ crsExtractMaxBytes（每个被接受条目维持该
+		// 不变量），减法不下溢；加法在 hdr.Size 接近 2^63-1（GNU base-256）时
+		// int64 溢出为负，会绕过上限（R56 发现1，镜像 waffiles_sync.go 口径）。
+		if hdr.Size < 0 || hdr.Size > crsExtractMaxBytes-totalBytes {
 			return fmt.Errorf("tarball 解压超过大小上限（%d MB）", crsExtractMaxBytes>>20)
 		}
+		totalBytes += hdr.Size
 		rel, err := stripTarRoot(hdr.Name)
 		if err != nil {
 			return err
