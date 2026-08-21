@@ -382,7 +382,7 @@ import type { APIResponse, UserListItem } from '@/types'
 
 interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string }
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
-interface Rule { caddy_id: string; name: string; domain: string; listen_port: number }
+interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 interface SecurityBinding { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean }
 interface CRSRuleOption { filename: string; category: string }
 interface BlockPage { id: number; name: string }
@@ -642,9 +642,11 @@ const prevStep = (): void => {
 }
 
 const pickerFilteredRules = computed(() => {
+  // 安全策略仅对 HTTP 规则生效（TCP 走 L4 链不经过 WAF/ACL/限流），选择器只列 HTTP
+  const httpRules = allRules.value.filter((rule) => rule.protocol === 'http')
   const query = pickerSearch.value.trim().toLowerCase()
-  if (!query) return allRules.value
-  return allRules.value.filter((rule) =>
+  if (!query) return httpRules
+  return httpRules.filter((rule) =>
     rule.name.toLowerCase().includes(query)
     || (rule.domain || '').toLowerCase().includes(query)
     || rule.caddy_id.toLowerCase().includes(query))

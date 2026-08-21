@@ -20,11 +20,11 @@
 
       <el-form-item label="同步间隔">
         <div class="interval-row">
-          <el-input-number v-model="syncInterval" :min="10" :max="3600" :disabled="intervalDisabled" />
+          <el-input-number v-model="syncInterval" :min="10" :max="86400" :disabled="intervalDisabled" />
           <span class="interval-unit">秒</span>
           <el-button v-if="!isSlave" :loading="intervalSaving" :disabled="intervalDisabled || syncInterval === status?.sync_interval" @click="saveSyncInterval">保存</el-button>
         </div>
-        <div class="form-tip-line">{{ isSlave ? '由主节点同步下发，从节点不可修改' : '从节点拉取同步与上报状态的周期（10–3600 秒）' }}</div>
+        <div class="form-tip-line">{{ isSlave ? '由主节点同步下发，从节点不可修改' : '从节点拉取同步与上报状态的周期（10–86400 秒）' }}</div>
       </el-form-item>
 
     </el-form>
