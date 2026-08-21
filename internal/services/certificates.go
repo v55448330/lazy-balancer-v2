@@ -255,6 +255,19 @@ func NewCertificateService() *CertificateService {
 	return service
 }
 
+// waitDoneOrTimeout 有界等待部署定时器/回调退出（R57 A-#2）：回调链条最终
+// 调到非 context-aware 的 caddyReloader，挂起时裸等会拖死调用方。超时后放
+// 弃本轮调度——deployment_available_after 已落库，后续补扫/重启可再拾起；
+// DeployLock 按规则串行 + 终态 CAS 保证滞留回调即便最终退出也不会并发部署。
+func waitDoneOrTimeout(done <-chan struct{}, jobID int, what string) {
+	timeout := 30 * time.Second
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		Logf("warn", "证书任务 %d：等待%s退出超时（%s），放弃本轮重试调度", jobID, what, timeout)
+	}
+}
+
 func (s *CertificateService) scheduleDeploymentRetry(jobID int, ruleID string, delay time.Duration) {
 	for {
 		s.timerMu.Lock()
@@ -271,7 +284,10 @@ func (s *CertificateService) scheduleDeploymentRetry(jobID int, ruleID string, d
 			if stopped {
 				close(previous.done)
 			} else {
-				<-previous.done
+				// R57 A-#2：与 cancelDeploymentRetries 同口径的有界等待——
+				// 回调链条最终调到非 context-aware 的 caddyReloader，挂起
+				// 时裸等会拖死调用方（签发 goroutine/Resume/启动恢复）。
+				waitDoneOrTimeout(previous.done, jobID, "pending timer")
 			}
 			continue
 		}
@@ -291,7 +307,7 @@ func (s *CertificateService) scheduleDeploymentRetry(jobID int, ruleID string, d
 			}
 			s.timerMu.Unlock()
 			for _, callback := range running {
-				<-callback.done
+				waitDoneOrTimeout(callback.done, jobID, "在途部署回调")
 			}
 			continue
 		}

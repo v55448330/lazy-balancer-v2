@@ -215,7 +215,13 @@ func (s *CertIssuer) deploymentFailed(jobID int, material issuedCertificate, mes
 	})
 	if updateErr == nil && status == "downloaded" && s.deploymentRetry != nil {
 		material.deploymentAttempt = attempt
-		s.deploymentRetry(jobID, material, delay)
+		// R57 A-#1：异步再调度。此处常在部署回调 goroutine 内被同步调用——
+		// 若同步进入 scheduleDeploymentRetry，会命中 R56 N-1(a) 的在途回调
+		// 等待分支，等待对象恰是自己（done 只在本回调的 defer 关闭）→ 同
+		// goroutine 自锁，重试链永久断裂并毒化 Resume/导入/启动恢复。起独立
+		// goroutine 后等待变为跨 goroutine（回调返回即 done 关闭），「同
+		// jobID 永不并发部署」不变量由该等待继续保证。
+		go s.deploymentRetry(jobID, material, delay)
 	}
 	if updateErr == nil && status == "failed" {
 		RecordAuditLog("system", "部署失败", "证书任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("max_attempts")), "")
