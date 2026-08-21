@@ -943,7 +943,7 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
     }, 1000)
   } catch (error: unknown) {
     if (disposed) return
-    if (error === 'cancel') return
+    if (error === 'cancel' || error === 'close') return
     // Error toast is already shown by the global axios interceptor.
     console.error('Failed to control Caddy:', error)
   } finally {

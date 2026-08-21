@@ -735,6 +735,9 @@ const handleSave = async () => {
     }
     emit('save')
   } catch (error) {
+    // MessageBox 仅以 'cancel'/'close' 字符串 reject（用户取消），静默短路；
+    // 其余错误（HTTP 等）已由全局拦截器 toast，此处仅记录。
+    if (error === 'cancel' || error === 'close') return
     console.error('Failed to save basic settings:', error)
   } finally {
     saving.value = false
