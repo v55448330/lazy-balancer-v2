@@ -88,10 +88,18 @@ func writeTestXDB(t *testing.T, path string, segments []xdbSegment) {
 }
 
 // withIP2RegionPaths points the singleton at the given files and resets the
-// loaded searcher afterwards so tests stay isolated under -shuffle.
+// loaded searcher afterwards so tests stay isolated under -shuffle. R57 B-#1
+// 起 ValidateGeoIPCountries 以 live searcher 为判据——进入时也必须清空遗留
+// searcher，否则前序测试加载的真实 xdb 会让本测试的 live 判定意外为 loaded。
 func withIP2RegionPaths(t *testing.T, live, dist string) {
 	t.Helper()
 	oldLive, oldDist := ip2regionLivePath, ip2regionDistPath
+	ip2regionMu.Lock()
+	if ip2regionSearcher != nil {
+		ip2regionSearcher.Close()
+		ip2regionSearcher = nil
+	}
+	ip2regionMu.Unlock()
 	ip2regionLivePath, ip2regionDistPath = live, dist
 	t.Cleanup(func() {
 		ip2regionMu.Lock()

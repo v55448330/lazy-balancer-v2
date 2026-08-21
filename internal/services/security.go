@@ -482,19 +482,32 @@ func ValidateGeoIPCountries(raw string) error {
 		known[p] = true
 	}
 	known["海外"] = true
-	// provinces 仅含 ["海外"]（live 与缓存均无数据）时无法判定省份归属：
-	// fail-closed 拒绝未知省份，避免 deny 模式拦截静默失效。
-	provincesLoaded := len(provinces) > 1
+	// R57 B-#1：loaded 判据必须取 live searcher 而非缓存兜底列表——xdb 损坏/
+	// 带外替换后 live 已死但省份缓存仍在，用缓存判 loaded 会放行 deny+省份
+	// 策略，而发射端占位变量从未设置（CEL 恒假）→ 地域拦截静默零强制。缓存
+	// 兜底仅服务于 UI 列表（GetIP2RegionRegions），校验侧以 live 为准。
+	liveProvinces := GetIP2RegionProvinces()
+	provincesLoaded := len(liveProvinces) > 1
+	if provincesLoaded {
+		for _, p := range liveProvinces {
+			known[p] = true
+		}
+	}
 	for _, entry := range entries {
 		trimmed := strings.TrimSpace(entry)
 		if trimmed == "" {
 			return fmt.Errorf("geoip_countries 不能包含空条目")
 		}
-		if !known[trimmed] {
-			if provincesLoaded {
-				return fmt.Errorf("geoip_countries 包含未知省份：%q", trimmed)
-			}
+		if trimmed == "海外" {
+			continue
+		}
+		if !provincesLoaded {
+			// live searcher 未加载：即便缓存里有该省份也拒绝——发射端
+			// 占位变量从未设置，放行即为静默零强制（fail-closed）。
 			return fmt.Errorf("ip2region 未加载，暂无法使用非海外省份（geoip_countries 包含 %q）", trimmed)
+		}
+		if !known[trimmed] {
+			return fmt.Errorf("geoip_countries 包含未知省份：%q", trimmed)
 		}
 	}
 	return nil

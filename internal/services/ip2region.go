@@ -257,10 +257,10 @@ func GetIP2RegionProvinces() []string {
 	return result
 }
 
-// GetIP2RegionProvinceList 返回省份列表，live searcher 优先、缓存兜底：校验端
-// （ValidateGeoIPCountries）与 UI 列表端（GetIP2RegionRegions）共用同一口径，
-// 避免带外替换 xdb 后缓存陈旧导致两端分叉。ip2region 未加载且无缓存时仅返回
-// ["海外"]（len<=1 即表示不可用）。
+// GetIP2RegionProvinceList 返回省份列表，live searcher 优先、缓存兜底：仅供
+// UI 列表端（GetIP2RegionRegions）——校验端（ValidateGeoIPCountries）R57 B-#1
+// 起改用 live-only 的 GetIP2RegionProvinces 判 loaded，避免 xdb 失效后缓存
+// 放行而发射端静默零强制。ip2region 未加载且无缓存时仅返回 ["海外"]。
 func GetIP2RegionProvinceList() []string {
 	provinces := GetIP2RegionProvinces()
 	if len(provinces) <= 1 {
