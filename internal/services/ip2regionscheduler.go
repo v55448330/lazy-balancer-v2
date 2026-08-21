@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"log"
 	"time"
 
@@ -91,9 +92,13 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time, stop <-chan struct
 	if nextStr == "" {
 		return // first tick only schedules the first run
 	}
-	// StartUpdate 唯一错误是 ErrIP2RegionUpdateRunning（已被 IsRunning 前置守卫
-	// 排除），启动失败退避分支不可达（R36 F4 删除）。
+	// StartUpdate 唯一可预期错误是 ErrIP2RegionUpdateRunning——IsRunning 前置
+	// 守卫与取锁之间存在微秒窗口（R57 B-#5，与 CRS 侧同形）：手动更新恰在窗口
+	// 内启动时返回该错误，此时同样走 rearm 复查，避免 +24h 排程落库而退避
+	// 重写被跳过。其他启动失败形态退避分支不可达（R36 F4 删除）。
 	if err := m.StartUpdate("auto"); err == nil {
+		m.rearmAfterIP2RegionUpdate(now, stop)
+	} else if errors.Is(err, ErrIP2RegionUpdateRunning) {
 		m.rearmAfterIP2RegionUpdate(now, stop)
 	}
 }

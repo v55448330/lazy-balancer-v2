@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
@@ -143,9 +144,14 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 	if nextStr == "" {
 		return // first tick only schedules the first run
 	}
-	// StartUpdate 唯一错误是 ErrCRSUpdateRunning（已被 IsRunning 前置守卫排除），
-	// 启动失败退避分支不可达（R36 F4 删除）。
+	// StartUpdate 唯一可预期错误是 ErrCRSUpdateRunning——IsRunning 前置守卫
+	// 与取锁之间存在微秒窗口：手动更新恰在此窗口启动时返回该错误（R57 B-#5）。
+	// 此时必须同样走 rearm 复查——否则 +24h 排程已落库而失败退避重写被跳过，
+	// 下次自动重试被推迟 24h（手动更新失败时）。启动失败的其他形态退避分支
+	// 不可达（R36 F4 删除）。
 	if err := m.StartUpdate("auto"); err == nil {
+		m.rearmAfterCRSUpdate(now, stop)
+	} else if errors.Is(err, ErrCRSUpdateRunning) {
 		m.rearmAfterCRSUpdate(now, stop)
 	}
 }
