@@ -568,14 +568,17 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 			// 含前导空格路径时 validateRuleFeatures 的 HasPrefix("/") 误拒绝。
 			input.PathRules = normalizePathRules(pathRules)
 		}
-		// R57 C-5：dynamic_dns+dns_family 走与保存侧同口径的枚举校验——
-		// 此前 input 不带 DnsFamily，垃圾值原样落库后渲染端 versions 双 false
-		// 解析退化为双栈（fail-open 方向）。
+		// R57 C-5（R58 C-N1 修正）：dynamic_dns+dns_family 走与保存侧同口径的
+		// 枚举校验——此前 input 不带 DnsFamily，垃圾值原样落库后渲染端 versions
+		// 双 false 解析退化为双栈（fail-open 方向）。合法值含 "both"：UI 双选
+		// IPv4+IPv6 时前端写 'both'（Rules.vue:2415）、渲染端 case "both" 双栈
+		// （caddy.go）——R57 初版漏列 both 会把启用双栈的规则导出物整包误拒，
+		// 导出→导入往返断裂。
 		dynamicDNS := backupBooleanEnabled(rule["dynamic_dns"])
 		if dynamicDNS {
 			dnsFamily := backupString(rule["dns_family"])
-			if dnsFamily != "" && dnsFamily != "ipv4" && dnsFamily != "ipv6" {
-				return fmt.Errorf("规则 #%d：dns_family 必须为 ipv4 或 ipv6（当前 %q）", index+1, dnsFamily)
+			if dnsFamily != "" && dnsFamily != "ipv4" && dnsFamily != "ipv6" && dnsFamily != "both" {
+				return fmt.Errorf("规则 #%d：dns_family 必须为 ipv4、ipv6 或 both（当前 %q）", index+1, dnsFamily)
 			}
 		}
 		if err := validateRuleFeatures(input); err != nil {
@@ -746,6 +749,33 @@ func validateV2BackupSecurityPolicies(rows []map[string]any) error {
 		policy["mode"] = mode
 		policy["ip_acl_mode"] = ipACLMode
 		policy["geoip_mode"] = geoIPMode
+		// R58 C-N4（R57 B-#2 遗留）：导入侧限流形状与保存侧 validateRateLimitShape
+		// 同口径——enabled=true 而 rps<=0 时发射分支直接跳过限流 handler，而
+		// 汇总/绑定宣称已启用；旧备份（保存侧校验前导出）可携带该形状经导入
+		// 复活。与三枚举同哲学：只做拒绝（数值语义无安全默认值可归一）。
+		if backupBooleanEnabled(policy["rate_limit_enabled"]) {
+			rps, rpsOK := backupInteger(policy["rate_limit_rps"])
+			burst, burstOK := backupInteger(policy["rate_limit_burst"])
+			if (rpsOK && rps < 1) || (burstOK && burst < 0) || !rpsOK {
+				return fmt.Errorf("安全策略 #%d（%s）：启用限流时 rate_limit_rps 必须 ≥1、rate_limit_burst 不能为负", index+1, name)
+			}
+		}
+		// R58 B-N3：geoip_countries 形状按保存侧 ValidateGeoIPCountries 同口径
+		// （空串/缺省放行——与三枚举的「无值归一」一致；有值则必须是合法 JSON
+		// 数组文本且省份可判）。引用块（block_page_id）在备份缺 security_block_pages
+		// 表时校验会误拒全量替换导入（表本身可选），保留为运行时 JOIN 语义
+		// （悬挂绑定在 JOIN 中不可见、不产出规则——与 R33 F10 记录的口径一致）。
+		if rawGeo, exists := policy["geoip_countries"]; exists && rawGeo != nil {
+			s, ok := rawGeo.(string)
+			if !ok {
+				return fmt.Errorf("安全策略 #%d（%s）：geoip_countries 需为字符串（JSON 数组文本），实际类型 %T", index+1, name, rawGeo)
+			}
+			if strings.TrimSpace(s) != "" {
+				if err := services.ValidateGeoIPCountries(s); err != nil {
+					return fmt.Errorf("安全策略 #%d（%s）：%w", index+1, name, err)
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -1237,6 +1267,19 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 				backup.Config[kc.key] = kc.fallbackDef
 				certNumericClamped = append(certNumericClamped, fmt.Sprintf("%s 非法形态，已重置为 %d", kc.key, kc.fallbackDef))
 			}
+		}
+	}
+	// R58 C-N2：request_body_max_size_mb 导入钳制 ≤4096（与 R57 C-7 写侧三处
+	// 同边界）——溢出向量此前只堵了保存/更新，备份导入可携带天文数字绕过，
+	// 渲染侧 MB→字节 int64 乘法回绕会让 body 限制静默取消。
+	if value, exists := backup.Config["request_body_max_size_mb"]; exists {
+		if n, ok := backupInteger(value); ok && (n < 0 || n > 4096) {
+			clamped := 0
+			if n > 4096 {
+				clamped = 4096
+			}
+			backup.Config["request_body_max_size_mb"] = clamped
+			certNumericClamped = append(certNumericClamped, fmt.Sprintf("request_body_max_size_mb 越界（%d），已钳位为 %d", n, clamped))
 		}
 	}
 	ctx := c.Request.Context()
