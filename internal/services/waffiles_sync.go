@@ -85,6 +85,23 @@ func BuildWafFileBundle() *WafFileBundle {
 
 // wafFilesRefDiffers reports whether the slave's live files fail to match
 // any artifact referenced by the snapshot.
+// rewriteVersionIfMissingOrStale 保证 .version 与主节点声明的 tag 一致（R57 A-#4）：
+// tag 非空且磁盘缺失或内容不符时原子补写（tmp+rename）；写失败必须上抛——
+// 该文件参与 wafFilesSectionHash，静默丢失会让从端漂移判定永不收敛。
+func rewriteVersionIfMissingOrStale(path, tag string) error {
+	if tag == "" {
+		return nil
+	}
+	if current, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(current)) == strings.TrimSpace(tag) {
+		return nil
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(tag), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 func wafFilesRefDiffers(r *models.ClusterWafFilesRef) bool {
 	if r == nil {
 		return false
@@ -150,6 +167,12 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 			return crsChanged, xdbChanged, errors.New("同步 IP2Region数据库缺少声明哈希，已拒绝落盘")
 		}
 		liveSum := fileSha256(ip2regionLivePath)
+		// R57 A-#4：xdb 未变化也要校验/补写 .version——.version 丢失或写失败
+		// 会让本地 ref 的 tag 为空，wafFilesDrifted 每轮误判漂移且全量重拉
+		// 走不到本分支的自愈（重拉时 sha 相同），从节点永久假警报。
+		if tagErr := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", bundle.IP2RegionTag); tagErr != nil {
+			return crsChanged, xdbChanged, fmt.Errorf("写入同步 IP2Region数据库版本标记: %w", tagErr)
+		}
 		if liveSum != bundle.IP2RegionSha {
 			sum := sha256.Sum256(bundle.XdbB64)
 			if got := hex.EncodeToString(sum[:]); got != bundle.IP2RegionSha {
@@ -162,8 +185,8 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 			if err := os.Rename(tmp, ip2regionLivePath); err != nil {
 				return crsChanged, xdbChanged, fmt.Errorf("落盘同步 IP2Region数据库: %w", err)
 			}
-			if bundle.IP2RegionTag != "" {
-				_ = os.WriteFile(ip2regionLivePath+".version", []byte(bundle.IP2RegionTag), 0644)
+			if tagErr := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", bundle.IP2RegionTag); tagErr != nil {
+				return crsChanged, xdbChanged, fmt.Errorf("写入同步 IP2Region数据库版本标记: %w", tagErr)
 			}
 			xdbChanged = true
 		}

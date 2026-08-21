@@ -298,7 +298,11 @@ func recordAppliedSectionHashes(dbh *sql.DB, snapshot models.ClusterSnapshot, sk
 // reference CRS files the node didn't sync, and waf-files updates skipped by
 // an off switch.
 func logSyncSwitchGuards(snapshot models.ClusterSnapshot, sk *sectionSkips, switches SyncSwitches) {
-	if !switches.WafFiles || snapshot.WafFiles == nil || !wafFilesRefDiffers(snapshot.WafFiles) {
+	// R57 A-#3：告警对象是「开关关闭导致 WAF 文件滞后」的从节点——开关开启时
+	// applySnapshot 随即拉取文件，无滞后可告。原条件 !switches.WafFiles 恰好
+	// 把唯一应告警的形态挡在门外；且 recordAppliedSectionHashes 对 disabled 节
+	// 跳过 applied_version 写入，本版本去重仍正确。
+	if !sk.disabled["waf_files"] || snapshot.WafFiles == nil || !wafFilesRefDiffers(snapshot.WafFiles) {
 		return
 	}
 	var lastWarnVersion int
