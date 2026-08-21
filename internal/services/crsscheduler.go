@@ -65,6 +65,7 @@ func (m *CRSUpdateManager) StartScheduler() {
 	if m.schedulerStop != nil {
 		return
 	}
+	restoreFailedUpdateBackoff("security_crs_version", time.Now().UTC())
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	m.schedulerStop = stop
@@ -154,7 +155,8 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 // 原先运行前写死 +24h，失败整天不重试）。等待可被 stop 打断（R55-A-#1）：
 // 降级时 StopScheduler 关闭 stop，调度立即退出而不被在途更新时长（有界
 // 6-7min）拖住；被打断时跳过失败退避重写——调度器已停，rearm 无意义，
-// 在途更新本身仍在后台完成。
+// 在途更新本身仍在后台完成。跳过留下的远期 next_update 由下次启动调度器
+// （提升为主/进程重启）时的 restoreFailedUpdateBackoff 拉回退避排程（R56 N-2）。
 func (m *CRSUpdateManager) rearmAfterCRSUpdate(now time.Time, stop <-chan struct{}) {
 	m.mu.Lock()
 	runDone := m.runDone
@@ -191,6 +193,37 @@ func updateRetryBackoff(failures int) time.Duration {
 		backoff = 24 * time.Hour
 	}
 	return backoff
+}
+
+// restoreFailedUpdateBackoff 修正「停-wins 放弃退避重写」（R55-A-#1）留下的
+// 过期排程（R56 N-2）：tick 启动更新时写 next_update=+24h，降级打断 rearm 后
+// 在途更新失败，再提升的节点仍按残留的 +24h 排程，失败重试被无谓推迟。调度器
+// 启动（提升为主/进程重启）时，若状态为 failed 且 next_update 晚于按当前连续
+// 失败次数应有的退避点，将其拉回退避排程；成功状态的正常 +24h 排程、以及本就
+// 早于退避点的 next_update 均不动。仅主节点写库（从节点版本行由快照管辖）。
+func restoreFailedUpdateBackoff(table string, now time.Time) {
+	var isMaster bool
+	if err := db.DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil || !isMaster {
+		return
+	}
+	var status, nextStr string
+	if err := db.DB.QueryRow("SELECT COALESCE(update_status,''), COALESCE(next_update,'') FROM "+table+" WHERE id=1").Scan(&status, &nextStr); err != nil {
+		return
+	}
+	if status != string(CRSStatusFailed) || nextStr == "" {
+		return
+	}
+	due, err := time.Parse(crsTimeLayout, nextStr)
+	if err != nil {
+		return
+	}
+	retry := now.Add(updateRetryBackoff(readConsecutiveFailures(table)))
+	if !due.After(retry) {
+		return
+	}
+	if _, err := db.DB.Exec("UPDATE "+table+" SET next_update=? WHERE id=1", retry.Format(crsTimeLayout)); err != nil {
+		log.Printf("update scheduler: failed to restore backoff next_update: %v", err)
+	}
 }
 
 // readConsecutiveFailures 读取组件状态表的连续失败计数（R35 I1 持久化列）；

@@ -15,6 +15,7 @@ func (m *IP2RegionUpdateManager) StartScheduler() {
 	if m.schedulerStop != nil {
 		return
 	}
+	restoreFailedUpdateBackoff("security_ip2region_version", time.Now().UTC())
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	m.schedulerStop = stop
@@ -101,7 +102,8 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time, stop <-chan struct
 // next_update 改为 1 小时后重试，成功维持运行前写入的 +24h 排程（R34 I）。
 // 等待可被 stop 打断（R55-A-#1）：降级时 StopScheduler 关闭 stop，调度立即
 // 退出而不被在途更新时长拖住；被打断时跳过失败退避重写，在途更新本身仍在
-// 后台完成。
+// 后台完成。跳过留下的远期 next_update 由下次启动调度器时的
+// restoreFailedUpdateBackoff 拉回退避排程（R56 N-2）。
 func (m *IP2RegionUpdateManager) rearmAfterIP2RegionUpdate(now time.Time, stop <-chan struct{}) {
 	m.mu.Lock()
 	runDone := m.runDone
