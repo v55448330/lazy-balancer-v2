@@ -445,6 +445,17 @@ const handleImportFile = async (event: Event): Promise<void> => {
 const confirmImport = async (): Promise<void> => {
   const validation = importValidation.value
   if (!validation?.valid || importing.value) return
+  // R62 D-3：全量导入是全仓破坏性最强的操作（覆盖规则、用户、密钥、证书任务与全部凭证），
+  // 此前是唯一缺二次确认弹框的破坏性操作——「确认导入」按钮与警示文案不足以兜底误点。
+  try {
+    await ElMessageBox.confirm(
+      '导入将覆盖当前全部配置（规则、用户、API 密钥、证书任务及全部凭证），此操作不可撤销。确认导入？',
+      '最终确认',
+      { type: 'warning', confirmButtonText: '确认导入', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
   importing.value = true
   try {
     const endpoint = validation.type === 'v1' ? '/config/import/v1' : '/config/import'

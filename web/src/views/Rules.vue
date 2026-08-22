@@ -2046,7 +2046,12 @@ const openWizard = async (rule?: Rule) => {
         if (resp.code === 0 && resp.data) {
           fullRule = resp.data
         }
-    } catch { console.warn('[openWizard] Failed to fetch cert data for', rule.caddy_id) }
+    } catch {
+      // R62 D-1：与 try 路径同款 seq 守卫——过期请求的失败分支同样不得触碰
+      // 在途表单（否则「新建」被过期 fullRule 覆盖，保存语义翻转为 PUT 更新既有规则）。
+      if (openSeq !== wizardOpenSeq) return
+      console.warn('[openWizard] Failed to fetch cert data for', rule.caddy_id)
+    }
     }
     editingRule.value = fullRule
     const compressTypes = fullRule.compress_types ? selectedCompressTypes(fullRule.compress_types) : ['gzip']
@@ -2548,7 +2553,11 @@ const openCopyWizard = async (rule: Rule) => {
       const resp = await request.get<APIResponse<Rule>>(`/rules/${rule.caddy_id}`)
       if (openSeq !== wizardOpenSeq) return
       if (resp.code === 0 && resp.data) fullRule = resp.data
-    } catch { /* fallback to list data */ }
+    } catch {
+      // R62 D-1：与 try 路径同款 seq 守卫（详见 openWizard catch 处注释）。
+      if (openSeq !== wizardOpenSeq) return
+      /* fallback to list data */
+    }
   }
   const compressTypes = fullRule.compress_types ? selectedCompressTypes(fullRule.compress_types) : ['gzip']
   Object.assign(wizardForm, {

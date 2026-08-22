@@ -265,6 +265,10 @@ const handleToggleStatus = async (id: number, isEnabled: boolean) => {
     try {
       await ElMessageBox.confirm('确定要禁用这个用户吗？禁用后该用户将无法登录。', '警告', { type: 'warning' })
     } catch {
+      // R62 D-2：取消确认时回滚乐观开关——el-switch 已先行翻转 row.is_enabled，
+      // 不回滚则 UI 显示「已禁用」而服务端仍启用，直到下次 fetchUsers 才自愈。
+      const row = users.value.find(u => u.id === id)
+      if (row) row.is_enabled = !isEnabled
       return
     }
   }
