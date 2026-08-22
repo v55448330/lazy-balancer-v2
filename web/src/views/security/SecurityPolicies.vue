@@ -426,6 +426,8 @@ const crsRuleGroups = ref<string[]>([])
 const crsExcludedRules = ref<string[]>([])
 const boundRules = ref<string[]>([])
 const originalBoundRules = ref<string[]>([])
+// R60 D60-F1：策略对话框打开序列号——丢弃在途详情 GET 的过期返回。
+let policyDialogOpenSeq = 0
 
 const WIZARD_STEP = {
   BASIC: 0,
@@ -703,10 +705,15 @@ const removeBoundRule = (caddyId: string): void => {
 }
 
 async function openDialog(row?: PolicySummary) {
+  // R60 D60-F1：对话框打开序列号（同 Rules.vue wizardOpenSeq 模式）——
+  // 详情 GET 在途期间用户再点"新建策略"或另一行"编辑"，首个返回会覆盖
+  // editingId/表单，把保存语义错位成 PUT 到错误策略。
+  const openSeq = ++policyDialogOpenSeq
   editingId.value = row?.id ?? null
   if (row) {
     try {
       const res = await request.get<APIResponse<{ policy: PolicyDetail; bindings: string[] }>>(`/security/policies/${row.id}`)
+      if (openSeq !== policyDialogOpenSeq) return
       const d = res.data?.policy
       if (!d) throw new Error('策略详情响应缺少数据')
       form.value = {
