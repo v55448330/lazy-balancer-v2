@@ -308,6 +308,12 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 		// 导致 0 行影响；此时归因是并发竞争而非规则禁用，重读当前状态区分文案（R42 发现4）。
 		var currentStatus string
 		scanErr := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", id).Scan(&currentStatus)
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			// R63 A-N3：行被并发删除（DeleteRule/DeleteCertJob）时归因 404 而非 500
+			// （对齐 DeleteCertJob R55 A-#3 的三分归因）。
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
+			return
+		}
 		if scanErr != nil {
 			// 重读失败属瞬时 DB 错误（SQLITE_BUSY 等），归因为规则禁用会误导用户，
 			// 显式区分 500（R43 A-3）。

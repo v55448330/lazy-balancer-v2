@@ -481,9 +481,11 @@ func TestRetryCertJob_does_not_acquire_caddyOpMu(t *testing.T) {
 	}
 }
 
-func TestRetryCertJob_reread_failure_returns_500(t *testing.T) {
-	// R43 A-3：UPDATE 0 行后重读若返回 scanErr（含 ErrNoRows / SQLITE_BUSY 等瞬时
-	// 错误），不能落入通用 409 把 DB 错误归因为规则禁用——必须显式 500。
+func TestRetryCertJob_reread_row_deleted_returns_404(t *testing.T) {
+	// R43 A-3：UPDATE 0 行后重读若返回 scanErr（SQLITE_BUSY 等瞬时错误），
+	// 不能落入通用 409 把 DB 错误归因为规则禁用——必须显式 500。
+	// R63 A-N3：行被并发删除（ErrNoRows）从 500 细分为 404（对齐 DeleteCertJob
+	// R55 A-#3 的三分归因）；本测试以删行模拟，断言新 404 契约。
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil })
@@ -505,11 +507,11 @@ func TestRetryCertJob_reread_failure_returns_500(t *testing.T) {
 	router.POST("/jobs/:id/retry", h.RetryCertJob)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/jobs/9/retry", nil))
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404（并发删除归因为 Job not found）", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), "读取任务状态失败") {
-		t.Fatalf("body=%s, want 读取任务状态失败", response.Body.String())
+	if !strings.Contains(response.Body.String(), "Job not found") {
+		t.Fatalf("body=%s, want Job not found", response.Body.String())
 	}
 	if strings.Contains(response.Body.String(), "规则已禁用") || strings.Contains(response.Body.String(), "队列已暂停") {
 		t.Fatalf("body=%s, 不应误指规则禁用或队列暂停", response.Body.String())
