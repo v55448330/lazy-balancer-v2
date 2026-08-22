@@ -366,7 +366,17 @@ const runNodeAction = async (node: ClusterNode, action: 'approve' | 'reject' | '
   }
 }
 
-const approveNode = (node: ClusterNode): Promise<void> => runNodeAction(node, 'approve')
+// R63 D-N1：审批是三个节点操作中安全面最大的「信任授予」动作（确认后外部节点
+// 入集群并开始同步），与拒绝/删除对称补二次确认，防 pending 列表误点。
+const approveNode = async (node: ClusterNode): Promise<void> => {
+  try {
+    const confirmed = await confirmAction(`确定确认节点“${node.name}”加入集群吗？确认后该节点将开始同步。`, '审批确认')
+    if (confirmed) await runNodeAction(node, 'approve')
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to approve node:', error)
+  }
+}
 
 const requestRegistration = (): void => {
   if (isNonAdminReadOnly.value) return
