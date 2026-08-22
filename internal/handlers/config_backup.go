@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -987,6 +988,14 @@ func backupInteger(value any) (int, bool) {
 	case int64:
 		if value >= math.MinInt && value <= math.MaxInt {
 			return int(value), true
+		}
+	case string:
+		// R60 C-F1：字符串形态数值（如 "99999999999"）——此前返回 !ok 使
+		// 钳制点静默跳过，SQLite INTEGER 亲和性照样落库大整数，绕过钳制的
+		// 唯一残留向量。解析后钳制点即可正常钳位；解析失败维持 !ok（由
+		// 各调用方按非法形态处理）。
+		if n, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			return n, true
 		}
 	}
 	return 0, false
