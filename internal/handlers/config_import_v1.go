@@ -404,6 +404,24 @@ func validateConvertedV1Rules(rules []convertedRule) ([]convertedRule, []string,
 			skips = append(skips, fmt.Sprintf("规则 #%d（%s）：至少需要一个已启用的上游服务器", index+1, rule.Name))
 			continue
 		}
+		// R62 C3-F3: 导入 INSERT 的探测超时硬编码 5s，Round 37 I-6 的
+		// timeout<interval 不变量（保存侧门控）在导入链未生效——fail_timeout ≤ 5 的
+		// v1 规则会让活动检查单次耗时与间隔重叠。钳位 interval ≥ 6（语义近似保留，
+		// 仅活动检查启用时生效；被动检查的 fail_duration=interval*3 不受超时约束）。
+		if rule.ActiveHC && rule.HealthInt <= 5 {
+			rule.HealthInt = 6
+			normalizations = append(normalizations, fmt.Sprintf("规则 #%d（%s）：v1 健康检查间隔过短，已提为 6 秒（探测超时 5 秒须小于间隔）", index+1, rule.Name))
+		}
+		// R62 C2-N1: TCP 规则在 v2 渲染侧不终结入站 TLS（buildTCPServer 不触碰 TLS
+		// 字段），v1 的 SSL 开关对 TCP 无意义；保留 enable_tls=1 + 空 manual 证书会因
+		// UpdateRule 非协议门控的手动证书检查使该规则任何编辑恒 400，且 UI 向导对
+		// TCP 隐藏 TLS 开关、无域名 TCP 规则无界面自救路径——导入即归一（与
+		// UpdateRule 切换到 TCP 的归一分支同语义，证书材料一并清空）。
+		if rule.Protocol == "tcp" && rule.EnableTLS {
+			rule.EnableTLS = false
+			rule.TLSCert, rule.TLSKey = "", ""
+			normalizations = append(normalizations, fmt.Sprintf("规则 #%d（%s）：TCP 规则不支持入站 TLS，已按关闭 TLS 导入", index+1, rule.Name))
+		}
 		// R43 F-C: v1 SSL 规则导入后 tls_source 恒为 manual（tlsSource()）；启用但
 		// 证书/私钥为空的规则会在 TLS 端口明文服务（镜像 rule_features.go 保存/启用侧
 		// 口径），按 v1 风格软跳过并警告而非整包拒绝。
