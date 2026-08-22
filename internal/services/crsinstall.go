@@ -14,6 +14,41 @@ import (
 // user customizations carried forward across an update. Comparison trims
 // whitespace, blank lines are skipped, and comments count because they
 // toggle rules.
+// mergeOverridesLines 生成合并后的 overrides 内容：既有 overrides 的有效行
+// 在前（保留历史自定义），本次迁移 diff 追加在后，按行文本去重（同一行只写
+// 一次，消除 R53 新-2 的重复 SecRule id 顾虑），header 仅保留新的一份。
+// 既有文件不可读时视作空（首次迁移场景）。
+func mergeOverridesLines(existingPath, header string, diff []string) []byte {
+	var merged []string
+	seen := make(map[string]bool)
+	if raw, err := os.ReadFile(existingPath); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			if !seen[trimmed] {
+				seen[trimmed] = true
+				merged = append(merged, line)
+			}
+		}
+	}
+	for _, line := range diff {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if !seen[trimmed] {
+			seen[trimmed] = true
+			merged = append(merged, line)
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return []byte(header + strings.Join(merged, "\n") + "\n")
+}
+
 func extractSetupDiff(stock, live []string) []string {
 	stockSet := make(map[string]struct{}, len(stock))
 	for _, line := range stock {
@@ -154,7 +189,14 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 		}
 		// 本运行已创建 bak：restoreBackup 自此可消费（R39 1.1）。
 		m.overridesBakCreated = true
-		pendingOverrides = []byte(header + strings.Join(diff, "\n") + "\n")
+		// R60 B-新2：按行去重合并既有 overrides——此前整体覆写会在「两次手改
+		// setup 跨两次成功更新」时丢弃前次迁移的自定义行（且成功路径随后
+		// 删除 .bak，不可恢复）；失败路径却还原前次内容（保全语义不对称，
+		// crsinstall_test.go:248 的测试证明设计意图是保全）。合并规则：
+		// 既有有效行 ∪ 本次 diff，行内容（含注释）做键，保持出现顺序，
+		// header 仅一份。重复 SecRule id 风险（R53 新-2 关注点）由行级去重
+		// 消除——同一行不会写入两次。
+		pendingOverrides = mergeOverridesLines(filepath.Join(m.crsDir, "zz-user-overrides.conf"), header, diff)
 		writeCRSUpdateLog("INFO", string(CRSStatusInstalling),
 			fmt.Sprintf("已迁移 %d 行用户自定义配置到 zz-user-overrides.conf", len(diff)))
 	}
