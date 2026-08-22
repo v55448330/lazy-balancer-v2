@@ -44,6 +44,13 @@ func ip2RegionXDBSourceURL(tag string) string {
 	return ghProxied("https://raw.githubusercontent.com/lionsoul2014/ip2region/" + tag + "/data/ip2region_v4.xdb")
 }
 
+// ip2RegionXDBDownloadSizeCap 是 xdb 下载的单设上限（100MB，>9× 合法 v4.xdb
+// 约 11MB）：此前与 CRS tarball 共用 2GB 上限，而安装校验经 NewV4Config 的
+// BufferCache 在构造期全量读入内存（binding 库 config.go LoadContent）——
+// ~2GB 的恶意/损坏响应体会在校验阶段分配等量堆，小内存容器被 OOM kill 整个
+// admin 进程（R64 B-F1）。100MB 内的损坏文件仅使探针搜索失败、拒绝安装。
+const ip2RegionXDBDownloadSizeCap = int64(100 << 20)
+
 // defaultDownloadIP2RegionXDB downloads the ip2region v4 xdb to destPath.
 func defaultDownloadIP2RegionXDB(ctx context.Context, tag, destPath string, progress downloadProgressFunc) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
@@ -63,7 +70,7 @@ func defaultDownloadIP2RegionXDB(ctx context.Context, tag, destPath string, prog
 	if err != nil {
 		return err
 	}
-	copyErr := writeRuleSetDownload(out, resp, ruleSetDownloadSizeCap, progress)
+	copyErr := writeRuleSetDownload(out, resp, ip2RegionXDBDownloadSizeCap, progress)
 	closeErr := out.Close()
 	if copyErr != nil {
 		return copyErr
