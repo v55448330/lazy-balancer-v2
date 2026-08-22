@@ -535,6 +535,23 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 		if err := validateRuleListenPort(protocol, listenPort); err != nil {
 			return fmt.Errorf("规则 #%d：%w", index+1, err)
 		}
+		// R62 B-NEW-1（用户裁决：系统不支持通配符域名）：创建/更新（rules.go CanonicalDomains）、
+		// 启用/复制（:2136/:2327 同门）、v1 导入（isValidDomain 拒绝 '*'）均拒绝通配与非法
+		// 形态，v2 导入是最后一个能把它带入运行库的门（此前仅 acme_dns 行有
+		// ValidateACMEDomains 门，manual/无 TLS 行的域名原样落库）。与保存侧 :609/:613
+		// 同口径——http 规则域名必须非空且可规范化（idna 拒绝 '*'、IP 形态、超长段），
+		// 否则整包 400：通配域名进入 lb_rules 后安全事件归属映射对该规则整体跳过
+		// （db.CanonicalDomains 报错即 continue），Enable/Update 又被同门卡死成
+		// 「永不启用」的死行。空 protocol 与 skipEmptyDomainHTTPRules 的 Round 35 I-10
+		// 同口径按 HTTP 处理（空域名行已在先前环节软跳过，此处非空域名必须可规范化）。
+		// 合法值同时钳回规范形式（小写/punycode/去重），与行级钳制哲学一致。
+		if protocol == "http" || protocol == "" {
+			canonicalDomain, err := db.CanonicalDomains(backupString(rule["domain"]))
+			if err != nil {
+				return fmt.Errorf("规则 #%d（%s）：域名格式无效（系统不支持通配符域名）: %w", index+1, backupString(rule["name"]), err)
+			}
+			rule["domain"] = canonicalDomain
+		}
 		// Round 29 G-1: 补传 ListenPort/EnableTLS/TLSHTTPRedirect 等字段，启用
 		// validateRuleFeatures 的 80 端口 + TLS 跳转自环检查（此前仅端口/策略校验，
 		// 备份中自环规则校验放行并导入成功，生成自环 Location）；行内有

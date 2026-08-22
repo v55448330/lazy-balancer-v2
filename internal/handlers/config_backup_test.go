@@ -1077,6 +1077,74 @@ func TestValidateV2Backup_rejects_self_loop_80_tls_redirect_rule(t *testing.T) {
 	}
 }
 
+// R62 B-NEW-1：v2 导入域名规范化门——通配/非法域名整包 400（用户裁决：系统
+// 不支持通配符域名），合法域名钳回规范形式。
+func TestValidateV2Backup_rejects_wildcard_domain(t *testing.T) {
+	tests := []struct {
+		name          string
+		rule          map[string]any
+		wantErrText   string
+		wantCanonical string
+	}{
+		{
+			name:        "通配域名被拒",
+			rule:        map[string]any{"caddy_id": "lb_backup_wild", "name": "通配规则", "protocol": "http", "domain": "*.example.com", "listen_port": 80},
+			wantErrText: "系统不支持通配符域名",
+		},
+		{
+			name:        "多域名规则中单个通配条目使整行被拒",
+			rule:        map[string]any{"caddy_id": "lb_backup_mix", "name": "混合规则", "protocol": "http", "domain": "a.test,*.b.test", "listen_port": 80},
+			wantErrText: "系统不支持通配符域名",
+		},
+		{
+			name:        "空 protocol 的通配域名同被拒（Round 35 I-10 同口径）",
+			rule:        map[string]any{"caddy_id": "lb_backup_noproto", "name": "空协议", "protocol": "", "domain": "*.c.test", "listen_port": 80},
+			wantErrText: "系统不支持通配符域名",
+		},
+		{
+			name:        "IP 形态域名被拒（CanonicalDomains 同门）",
+			rule:        map[string]any{"caddy_id": "lb_backup_ip", "name": "IP域名", "protocol": "http", "domain": "127.0.0.1", "listen_port": 80},
+			wantErrText: "系统不支持通配符域名",
+		},
+		{
+			name:          "合法大写域名钳回规范形式",
+			rule:          map[string]any{"caddy_id": "lb_backup_norm", "name": "规范化", "protocol": "http", "domain": " UPPER.test , upper.test ", "listen_port": 80},
+			wantCanonical: "upper.test",
+		},
+		{
+			name: "TCP 规则不受域名门影响",
+			rule: map[string]any{"caddy_id": "lb_backup_tcp", "name": "TCP规则", "protocol": "tcp", "domain": "*.ignored.test", "listen_port": 3306},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backup := completeBackupJSON(t, map[string][]map[string]any{"lb_rules": {tt.rule}})
+			var b configBackup
+			if err := json.Unmarshal([]byte(backup), &b); err != nil {
+				t.Fatalf("unmarshal backup: %v", err)
+			}
+			// R38 C-3 同款链序：空域名 http 行先软跳过（返回跳过警告，非 error）。
+			_ = skipEmptyDomainHTTPRules(b.Tables)
+			err := validateV2BackupRules(b.Tables)
+			if tt.wantErrText != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
+					t.Fatalf("validateV2BackupRules err=%v, want contains %q", err, tt.wantErrText)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateV2BackupRules unexpected error: %v", err)
+			}
+			if tt.wantCanonical != "" {
+				got, _ := b.Tables["lb_rules"][0]["domain"].(string)
+				if got != tt.wantCanonical {
+					t.Fatalf("domain=%q, want canonical %q", got, tt.wantCanonical)
+				}
+			}
+		})
+	}
+}
+
 func TestImportConfigBackup_rejects_invalid_credentials_json(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	gin.SetMode(gin.TestMode)
