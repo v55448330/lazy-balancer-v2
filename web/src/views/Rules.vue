@@ -2296,9 +2296,11 @@ const nextStep = (): void => {
   }
   if (currentStep.value === WIZARD_STEP.UPSTREAMS) {
     upstreamTouched.value = wizardForm.upstreams.map(() => true)
-    const hasEmptyHost = wizardForm.upstreams.some(u => !u.host)
+    // R65 D-N2：host 门与提交口径对齐（validUpstreams 只统计启用行）——已禁用
+    // 行留空 host 时不再阻断进入下一步（禁用行仍是已配置服务器，提交侧本就忽略）。
+    const hasEmptyHost = wizardForm.upstreams.some(u => !u.host && u.enabled !== false)
     if (hasEmptyHost) {
-      ElMessage.warning('请填写所有上游服务器的主机地址')
+      ElMessage.warning('请填写所有已启用上游服务器的主机地址')
       return
     }
     const validUpstreams = wizardForm.upstreams.filter(u => u.host && u.port)
