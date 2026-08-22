@@ -749,6 +749,10 @@ async function openDialog(row?: PolicySummary) {
         ElMessage.warning('原拦截页面已删除，已回退默认页面')
       }
     } catch (error: unknown) {
+      // R61 D-N1：catch 路径也要先比对序列号——GET 失败的过期请求会清空
+      // 在途新编辑的 editingId（try 前同步赋值的旧值），保存误走 POST 创建
+      // 重复策略。
+      if (openSeq !== policyDialogOpenSeq) return
       // HTTP 错误已由全局拦截器 toast；本地契约异常（200+code0 但响应缺数据）无用户
       // 提示。两类失败都保持弹窗关闭：editingId 已在 try 前赋值，若照常打开弹窗，
       // 共享 form ref 残留上一行数据，会以旧值静默覆盖新行（PUT 覆盖写链）。
