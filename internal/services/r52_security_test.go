@@ -143,3 +143,31 @@ func TestNormalizeLegacySecurityPolicyEnums_slaveSkipsNormalize(t *testing.T) {
 		t.Fatalf("slave must not bump cluster_version: %d, want %d", v, before)
 	}
 }
+
+// TestNormalizeLegacySecurityPolicyEnums_backfillsZeroAnomalyThreshold 验证
+// R63 B-N5：R44 F3 之前落库的 anomaly_threshold=0 行随启动归一为 5（UI 显示 0
+// 而发射端 >0 判断跳过阈值 SecAction、CRS 回落默认 5 的展示/行为漂移闭合）。
+func TestNormalizeLegacySecurityPolicyEnums_backfillsZeroAnomalyThreshold(t *testing.T) {
+	setupSecurityEnumTestDB(t)
+	if _, err := db.DB.Exec(
+		"INSERT INTO security_policies (name, mode, anomaly_threshold) VALUES ('zero-threshold', 'blocking', 0), ('valid-threshold', 'blocking', 10)"); err != nil {
+		t.Fatalf("insert policies: %v", err)
+	}
+	before := clusterVersion(t)
+
+	NormalizeLegacySecurityPolicyEnums(context.Background())
+
+	var zero, valid int
+	if err := db.DB.QueryRow("SELECT anomaly_threshold FROM security_policies WHERE name='zero-threshold'").Scan(&zero); err != nil {
+		t.Fatalf("read zero-threshold: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT anomaly_threshold FROM security_policies WHERE name='valid-threshold'").Scan(&valid); err != nil {
+		t.Fatalf("read valid-threshold: %v", err)
+	}
+	if zero != 5 || valid != 10 {
+		t.Fatalf("anomaly_threshold zero-row=%d valid-row=%d, want 5/10（合法值不受影响）", zero, valid)
+	}
+	if v := clusterVersion(t); v != before+1 {
+		t.Fatalf("cluster_version=%d, want %d（一次启动归一净增 1）", v, before+1)
+	}
+}

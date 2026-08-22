@@ -14,6 +14,10 @@ var legacySecurityEnumBackfills = []string{
 	"UPDATE security_policies SET ip_acl_mode='deny' WHERE COALESCE(TRIM(ip_acl_mode),'')=''",
 	"UPDATE security_policies SET mode='off' WHERE COALESCE(TRIM(mode),'')=''",
 	"UPDATE security_policies SET geoip_mode='deny' WHERE COALESCE(TRIM(geoip_mode),'')=''",
+	// R63 B-N5：R44 F3 之前落库的 threshold=0 行——UI 显示 0、发射端 >0 判断
+	// 跳过阈值 SecAction 而 CRS 回落默认 5（「UI 宣称 0、实际 5」的展示/行为
+	// 漂移，与空串枚举行同型）。归一到 Create 侧 max1(x,5) 的默认值 5。
+	"UPDATE security_policies SET anomaly_threshold=5 WHERE COALESCE(anomaly_threshold,0)=0",
 }
 
 // NormalizeLegacySecurityPolicyEnums 启动时一次性归一 security_policies 的
