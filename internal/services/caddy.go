@@ -2587,33 +2587,35 @@ func buildRateLimitHandler(ruleCaddyID string, policy *models.SecurityPolicy) ma
 	if policy == nil || !policy.RateLimitEnabled || policy.RateLimitRPS <= 0 {
 		return nil
 	}
+	// R61 C-N1：sweep_interval 是 caddy-ratelimit Handler 层字段（默认 1m），
+	// 不是 zone 字段——Caddy v2.11.4 对模块载荷 StrictUnmarshalJSON+
+	// DisallowUnknownFields，zone 级未知字段会使整个配置加载 400（开启限流
+	// 即配置停摆）。移到 handler 层（合法字段，10m 扫描周期语义保留）。
 	rateLimits := map[string]interface{}{
 		ruleCaddyID: map[string]interface{}{
-			"key":            "{http.request.remote.host}",
-			"window":         "1s",
-			"max_events":     policy.RateLimitRPS,
-			"sweep_interval": "10m",
+			"key":        "{http.request.remote.host}",
+			"window":     "1s",
+			"max_events": policy.RateLimitRPS,
 		},
 	}
 	if policy.RateLimitBurst > 0 {
 		rateLimits = map[string]interface{}{
 			ruleCaddyID + "-sec": map[string]interface{}{
-				"key":            "{http.request.remote.host}",
-				"window":         "1s",
-				"max_events":     policy.RateLimitRPS + policy.RateLimitBurst,
-				"sweep_interval": "10m",
+				"key":        "{http.request.remote.host}",
+				"window":     "1s",
+				"max_events": policy.RateLimitRPS + policy.RateLimitBurst,
 			},
 			ruleCaddyID + "-min": map[string]interface{}{
-				"key":            "{http.request.remote.host}",
-				"window":         "60s",
-				"max_events":     policy.RateLimitRPS * 60,
-				"sweep_interval": "10m",
+				"key":        "{http.request.remote.host}",
+				"window":     "60s",
+				"max_events": policy.RateLimitRPS * 60,
 			},
 		}
 	}
 	return map[string]interface{}{
-		"handler":     "rate_limit",
-		"rate_limits": rateLimits,
+		"handler":        "rate_limit",
+		"rate_limits":    rateLimits,
+		"sweep_interval": "10m",
 	}
 }
 
