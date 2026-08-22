@@ -96,10 +96,10 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time, stop <-chan struct
 	// 守卫与取锁之间存在微秒窗口（R57 B-#5，与 CRS 侧同形）：手动更新恰在窗口
 	// 内启动时返回该错误，此时同样走 rearm 复查，避免 +24h 排程落库而退避
 	// 重写被跳过。其他启动失败形态退避分支不可达（R36 F4 删除）。
-	if err := m.StartUpdate("auto"); err == nil {
-		m.rearmAfterIP2RegionUpdate(now, stop)
+	if runDone, err := m.StartUpdate("auto"); err == nil {
+		m.rearmAfterIP2RegionUpdate(now, stop, runDone)
 	} else if errors.Is(err, ErrIP2RegionUpdateRunning) {
-		m.rearmAfterIP2RegionUpdate(now, stop)
+		m.rearmAfterIP2RegionUpdate(now, stop, nil)
 	}
 }
 
@@ -109,21 +109,28 @@ func (m *IP2RegionUpdateManager) schedulerTick(now time.Time, stop <-chan struct
 // 退出而不被在途更新时长拖住；被打断时跳过失败退避重写，在途更新本身仍在
 // 后台完成。跳过留下的远期 next_update 由下次启动调度器时的
 // restoreFailedUpdateBackoff 拉回退避排程（R56 N-2）。
-func (m *IP2RegionUpdateManager) rearmAfterIP2RegionUpdate(now time.Time, stop <-chan struct{}) {
-	m.mu.Lock()
-	runDone := m.runDone
-	m.mu.Unlock()
-	if runDone != nil {
+// R64 B-F2：runDone 为本次 tick 启动的 run 的完成通道（插队分支传 nil 回退
+// 等待现行 m.runDone）；终态读取附带归属校验——被更新的 run 接管时跳过退避
+// 重写，不按他人终态误判（与 CRS 侧同形）。
+func (m *IP2RegionUpdateManager) rearmAfterIP2RegionUpdate(now time.Time, stop <-chan struct{}, runDone chan struct{}) {
+	wait := runDone
+	if wait == nil {
+		m.mu.Lock()
+		wait = m.runDone
+		m.mu.Unlock()
+	}
+	if wait != nil {
 		select {
-		case <-runDone:
+		case <-wait:
 		case <-stop:
 			return
 		}
 	}
 	m.mu.Lock()
 	failed := m.state.status == IP2RegionStatusFailed
+	overtaken := runDone != nil && m.runDone != runDone
 	m.mu.Unlock()
-	if !failed {
+	if !failed || overtaken {
 		return
 	}
 	// 失败按连续失败次数指数退避（1h→2h→4h→8h→24h 封顶，成功复位，R35 I1）；

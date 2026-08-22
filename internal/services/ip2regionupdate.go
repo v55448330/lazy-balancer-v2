@@ -127,12 +127,14 @@ func currentIP2RegionVersion() string {
 	return version
 }
 
-// StartUpdate begins an async update; only one may run at a time.
-func (m *IP2RegionUpdateManager) StartUpdate(trigger string) error {
+// StartUpdate begins an async update; only one may run at a time. 返回本次 run
+// 的完成通道（R64 B-F2，与 CRS 侧同形）：调度器 rearm 须等待该捕获通道而非
+// 回读现行 m.runDone，防手动更新插队覆盖后的错等与误判。手动调用方可忽略。
+func (m *IP2RegionUpdateManager) StartUpdate(trigger string) (chan struct{}, error) {
 	m.mu.Lock()
 	if m.running {
 		m.mu.Unlock()
-		return ErrIP2RegionUpdateRunning
+		return nil, ErrIP2RegionUpdateRunning
 	}
 	m.running = true
 	m.runDone = make(chan struct{})
@@ -144,7 +146,7 @@ func (m *IP2RegionUpdateManager) StartUpdate(trigger string) error {
 		defer close(done)
 		m.run(trigger)
 	}()
-	return nil
+	return done, nil
 }
 
 func (m *IP2RegionUpdateManager) IsRunning() bool {

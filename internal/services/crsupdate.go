@@ -161,12 +161,16 @@ func currentCRSVersion() string {
 	return version
 }
 
-// StartUpdate begins an async update; only one may run at a time.
-func (m *CRSUpdateManager) StartUpdate(trigger string) error {
+// StartUpdate begins an async update; only one may run at a time. 返回本次 run
+// 的完成通道（R64 B-F2）：调度器 rearm 须等待该捕获通道而非回读现行 m.runDone
+// ——StartUpdate 返回与 rearm 取锁之间存在微秒级窗口，快失败的 auto run 被手动
+// 更新插队覆盖 m.runDone 时，rearm 会错等手动 run 的完成并按其终态跳过 auto 的
+// 失败退避重写。手动调用方可忽略返回通道。
+func (m *CRSUpdateManager) StartUpdate(trigger string) (chan struct{}, error) {
 	m.mu.Lock()
 	if m.running {
 		m.mu.Unlock()
-		return ErrCRSUpdateRunning
+		return nil, ErrCRSUpdateRunning
 	}
 	m.running = true
 	m.runDone = make(chan struct{})
@@ -178,7 +182,7 @@ func (m *CRSUpdateManager) StartUpdate(trigger string) error {
 		defer close(done)
 		m.run(trigger)
 	}()
-	return nil
+	return done, nil
 }
 
 func (m *CRSUpdateManager) IsRunning() bool {

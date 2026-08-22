@@ -72,14 +72,14 @@ func TestStartCRSUpdate_conflictWhenRunning(t *testing.T) {
 	}
 
 	// Given a running update
-	if err := m.StartUpdate("manual"); err != nil {
+	if _, err := m.StartUpdate("manual"); err != nil {
 		t.Fatal(err)
 	}
 	<-entered
 
 	// When a second update is requested
 	// Then it is rejected with ErrCRSUpdateRunning
-	if err := m.StartUpdate("manual"); !errors.Is(err, ErrCRSUpdateRunning) {
+	if _, err := m.StartUpdate("manual"); !errors.Is(err, ErrCRSUpdateRunning) {
 		t.Fatalf("StartUpdate()=%v, want ErrCRSUpdateRunning", err)
 	}
 	if !m.IsRunning() {

@@ -149,10 +149,10 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 	// 此时必须同样走 rearm 复查——否则 +24h 排程已落库而失败退避重写被跳过，
 	// 下次自动重试被推迟 24h（手动更新失败时）。启动失败的其他形态退避分支
 	// 不可达（R36 F4 删除）。
-	if err := m.StartUpdate("auto"); err == nil {
-		m.rearmAfterCRSUpdate(now, stop)
+	if runDone, err := m.StartUpdate("auto"); err == nil {
+		m.rearmAfterCRSUpdate(now, stop, runDone)
 	} else if errors.Is(err, ErrCRSUpdateRunning) {
-		m.rearmAfterCRSUpdate(now, stop)
+		m.rearmAfterCRSUpdate(now, stop, nil)
 	}
 }
 
@@ -163,21 +163,30 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 // 6-7min）拖住；被打断时跳过失败退避重写——调度器已停，rearm 无意义，
 // 在途更新本身仍在后台完成。跳过留下的远期 next_update 由下次启动调度器
 // （提升为主/进程重启）时的 restoreFailedUpdateBackoff 拉回退避排程（R56 N-2）。
-func (m *CRSUpdateManager) rearmAfterCRSUpdate(now time.Time, stop <-chan struct{}) {
-	m.mu.Lock()
-	runDone := m.runDone
-	m.mu.Unlock()
-	if runDone != nil {
+// R64 B-F2：runDone 为本次 tick 启动的 run 的完成通道（ErrCRSUpdateRunning
+// 插队分支传 nil，回退等待现行 m.runDone——那是手动 run，其终态由操作者直接
+// 观察管理）。终态读取附带归属校验：等待结束时若 m.runDone 已被更新的 run
+// 接管（手动更新在微秒窗口插队），本 tick 的 run 已非最新——跳过退避重写，
+// 由接管 run 的操作者/后续 tick 决定排程，不再按他人终态误判。
+func (m *CRSUpdateManager) rearmAfterCRSUpdate(now time.Time, stop <-chan struct{}, runDone chan struct{}) {
+	wait := runDone
+	if wait == nil {
+		m.mu.Lock()
+		wait = m.runDone
+		m.mu.Unlock()
+	}
+	if wait != nil {
 		select {
-		case <-runDone:
+		case <-wait:
 		case <-stop:
 			return
 		}
 	}
 	m.mu.Lock()
 	failed := m.state.status == CRSStatusFailed
+	overtaken := runDone != nil && m.runDone != runDone
 	m.mu.Unlock()
-	if !failed {
+	if !failed || overtaken {
 		return
 	}
 	// 失败按连续失败次数指数退避（1h→2h→4h→8h→24h 封顶，成功复位，R35 I1）；

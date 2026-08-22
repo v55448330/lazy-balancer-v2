@@ -816,6 +816,12 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		var storedBlockPageID int
 		var storedCustomRules string
 		if err := tx.QueryRow("SELECT COALESCE(block_page_id,0), COALESCE(custom_rules,'[]') FROM security_policies WHERE id=?", id).Scan(&storedBlockPageID, &storedCustomRules); err != nil {
+			// R64 B-S1：策略不存在时归因 404（与下方 RowsAffected 分支同语义），
+			// 其余读取错误保持 500——否则调用方无法区分「应停止重试」与「应重试」。
+			if errors.Is(err, sql.ErrNoRows) {
+				c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略当前引用失败: " + err.Error()})
 			return
 		}
@@ -1489,7 +1495,7 @@ func (h *Handlers) StartCRSUpdate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CRS 更新服务未初始化"})
 		return
 	}
-	if err := mgr.StartUpdate("manual"); err != nil {
+	if _, err := mgr.StartUpdate("manual"); err != nil {
 		if errors.Is(err, services.ErrCRSUpdateRunning) {
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: err.Error()})
 			return
@@ -1595,7 +1601,7 @@ func (h *Handlers) StartIP2RegionUpdate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "IP2Region 更新服务未初始化"})
 		return
 	}
-	if err := mgr.StartUpdate("manual"); err != nil {
+	if _, err := mgr.StartUpdate("manual"); err != nil {
 		if errors.Is(err, services.ErrIP2RegionUpdateRunning) {
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: err.Error()})
 			return

@@ -814,14 +814,14 @@ func TestStartIP2RegionUpdate_conflictWhenRunning(t *testing.T) {
 	m.downloadXDB = func(context.Context, string, string, downloadProgressFunc) error { return nil }
 
 	// Given a running update
-	if err := m.StartUpdate("manual"); err != nil {
+	if _, err := m.StartUpdate("manual"); err != nil {
 		t.Fatal(err)
 	}
 	<-entered
 
 	// When a second update is requested
 	// Then it is rejected with ErrIP2RegionUpdateRunning
-	if err := m.StartUpdate("manual"); !errors.Is(err, ErrIP2RegionUpdateRunning) {
+	if _, err := m.StartUpdate("manual"); !errors.Is(err, ErrIP2RegionUpdateRunning) {
 		t.Fatalf("StartUpdate()=%v, want ErrIP2RegionUpdateRunning", err)
 	}
 	if !m.IsRunning() {
