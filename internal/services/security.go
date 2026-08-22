@@ -194,7 +194,9 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 			// 会静默删除 IP ACL(2-5)/自定义(10000+)/全部 CRS 规则——上限
 			// 999999 一并钳制。
 			if !validSecRuleRemoveTarget(mapped) {
-				log.Printf("[security] 跳过非法 SecRuleRemoveById 条目 %q（策略 %q）：非数字/区间形态或区间越界，coraza 会拒绝编译", ruleID, p.Name)
+				// R61 B-R61-02：用分级日志（Logf warn）而非裸 log.Printf——后者无
+				// WARN 前缀，应用日志级别调至 warn/error 时会被过滤出文件日志。
+				Logf("warn", "跳过非法 SecRuleRemoveById 条目 %q（策略 %q）：非数字/区间形态或区间越界，coraza 会拒绝编译", ruleID, p.Name)
 				continue
 			}
 			sb.WriteString(fmt.Sprintf("SecRuleRemoveById %s\n", mapped))
