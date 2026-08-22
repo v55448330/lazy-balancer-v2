@@ -2826,7 +2826,16 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		if rule.Strategy == "cookie" {
 			selectionPolicy["name"] = "lb_sticky"
 		}
-		if rule.Strategy == "weighted_round_robin" {
+		// R63 C-N2：DynamicDNS 规则恰有 1 个启用上游（保存/启用/导入三链强制），
+		// weighted_round_robin 会发射 weights=[1]——Caddy 的 WeightedRoundRobinSelection
+		// 对 len(Weights)<2 直接早退返回 pool[0]（不做可用性检查，reverseproxy.go:637
+		// 传入的动态解析池亦不过滤不可用主机，重试无失败记忆）→ 流量恒打解析列表
+		// 首个 IP，其余 A 记录零流量、首 IP 宕机时 try_duration 内重试全撞同一 IP
+		// 后 502。动态解析池与静态权重表天然错配——改用内建 random（按 Available()
+		// 过滤后蓄水池随机），多 A 记录均衡与跨记录故障切换真正生效。
+		if rule.DynamicDNS && rule.Strategy == "weighted_round_robin" {
+			selectionPolicy = map[string]interface{}{"policy": "random"}
+		} else if rule.Strategy == "weighted_round_robin" {
 			selectionPolicy["weights"] = normalizeWeights(upstreamWeights)
 		}
 		proxyConfig["load_balancing"] = map[string]interface{}{

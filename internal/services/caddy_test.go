@@ -2137,3 +2137,38 @@ func TestGenerateCaddyConfig_skips_redirect_route_when_same_domain_port80_rule_e
 		}
 	})
 }
+
+// R63 C-N2：DynamicDNS + weighted_round_robin 不再发射 weights=[1]——Caddy 的
+// WeightedRoundRobinSelection 对 len(Weights)<2 早退恒选 pool[0]（不做可用性
+// 检查），流量被钉死在解析列表首个 IP、其余 A 记录零流量，首 IP 宕机时
+// try_duration 内重试全撞同一 IP 后 502。改发内建 random（按 Available() 过滤
+// 后蓄水池随机）；静态规则仍发射权重表。
+func TestGenerateSingleRuleCaddyConfig_dynamicDNS_selectionPolicy(t *testing.T) {
+	// Given 动态 DNS 规则（单启用上游，策略为默认 weighted_round_robin）
+	rule := baseHTTPRule()
+	rule.DynamicDNS = true
+	rule.Upstreams = rule.Upstreams[:1]
+
+	// When
+	routes := renderedHTTPRoutes(t, GenerateSingleRuleCaddyConfig(rule))
+	proxy := reverseProxyHandler(t, routes[0])
+	lb := mustMap(t, proxy["load_balancing"], "load_balancing")
+	selection := mustMap(t, lb["selection_policy"], "selection_policy")
+
+	// Then 策略改发 random 且不携带 weights
+	assertEqual(t, selection["policy"], "random")
+	if _, has := selection["weights"]; has {
+		t.Fatalf("dynamic-dns selection policy unexpectedly carries weights: %#v", selection)
+	}
+	if _, has := proxy["dynamic_upstreams"]; !has {
+		t.Fatal("dynamic-dns proxy missing dynamic_upstreams")
+	}
+
+	// And 静态规则保持 weighted_round_robin + 权重表（回归保护）
+	staticRoutes := renderedHTTPRoutes(t, GenerateSingleRuleCaddyConfig(baseHTTPRule()))
+	staticProxy := reverseProxyHandler(t, staticRoutes[0])
+	staticLB := mustMap(t, staticProxy["load_balancing"], "load_balancing")
+	staticSelection := mustMap(t, staticLB["selection_policy"], "selection_policy")
+	assertEqual(t, staticSelection["policy"], "weighted_round_robin")
+	assertEqual(t, staticSelection["weights"], []int{1, 2})
+}
