@@ -646,6 +646,14 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 	query := `UPDATE global_config SET log_level=?,cert_job_log_size_mb=?,audit_log_size_mb=?,runtime_log_size_mb=?,audit_retention_months=?,jwt_expire_minutes=?,timezone=?,acme_email=?,cert_expiry_days=?,cert_renewal_days=?,cert_renewal_attempts=?,default_ca_provider_id=?,dns_provider=?,dns_credentials=?,sync_interval=?,admin_tls_enabled=?,admin_tls_mode=?,admin_tls_cert=?,admin_tls_key=?`
 	args := []any{settings.LogLevel, settings.CertJobLogSizeMB, settings.AuditLogSizeMB, settings.RuntimeLogSizeMB, settings.AuditRetentionMonths, settings.JWTExpireMinutes, settings.Timezone, settings.ACMEEmail, settings.CertExpiryDays, settings.CertRenewalDays, settings.CertRenewalAttempts, settings.DefaultCAProviderID, settings.DNSProvider, settings.DNSCredentials, settings.SyncInterval, settings.AdminTLSEnabled, settings.AdminTLSMode, settings.AdminTLSCert, settings.AdminTLSKey}
 	if snapshot.CaddyConfig != nil {
+		// R60 A-N1：全局 body 上限钳制 [0,4096]（与 insertSnapshotRules 的行级
+		// 归一、写侧校验、导入钳制同边界）——这是全局轴最后一个未闭合的持久化
+		// 边界；渲染侧 int64(MB)*1024*1024 回绕会让限制静默取消。
+		if settings.RequestBodyMaxSizeMB < 0 {
+			settings.RequestBodyMaxSizeMB = 0
+		} else if settings.RequestBodyMaxSizeMB > 4096 {
+			settings.RequestBodyMaxSizeMB = 4096
+		}
 		query += ",caddy_config=?,access_log_json=?,access_log_format=?,caddy_log_level=?,caddy_log_size_mb=?,request_body_max_size_mb=?,http_read_timeout=?,http_write_timeout=?,http_idle_timeout=?,upstream_keepalive_timeout=?,proxy_dial_timeout=?,proxy_response_header_timeout=?,proxy_read_timeout=?,proxy_write_timeout=?,proxy_stream_timeout=?,proxy_flush_interval=?,proxy_stream_close_delay=?,server_tokens_hidden=?"
 		args = append(args, *snapshot.CaddyConfig, settings.AccessLogJSON, settings.AccessLogFormat, settings.CaddyLogLevel, settings.CaddyLogSizeMB,
 			settings.RequestBodyMaxSizeMB, settings.HTTPReadTimeout, settings.HTTPWriteTimeout, settings.HTTPIdleTimeout,
