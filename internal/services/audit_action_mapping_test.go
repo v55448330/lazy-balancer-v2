@@ -12,6 +12,7 @@ package services
 //     必须落在 danger 行。新增未映射/误分类动作此测试直接红。
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -290,5 +291,68 @@ func TestAuditActionMapping_dangerClassificationContract(t *testing.T) {
 	if len(violations) > 0 {
 		slices.Sort(violations)
 		t.Fatalf("危险语义动作必须映射到 danger 行（失败后缀或 {配置漂移, 应用失败, 部署失败, 认证拒绝, 提升失败} 契约）：\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+// TestAuditInsertEntryPointsExhaustive 审计写入入口穷尽性绊线（R62 D-5）：
+// 词汇/映射两个契约测试只扫描调用名命中 auditVocabCallSpecs 的调用点——若未来
+// 新增绕过这 4 个入口、直接向 audit_log 表 INSERT 的低层写入函数，其动作词条对
+// 两个契约测试均不可见（漏映射检查失效、超长词条不红，前端渲染兜底 info 灰标）。
+// 本测试扫描 internal/ 全部生产代码中的 "INTO audit_log" 直接写入，断言其外围
+// 函数 ∈ 允许集；新增写入函数时必须先走 RecordAuditLog/recordSystemAudit 等入口，
+// 或同时更新两个契约测试的 auditVocabCallSpecs 并把函数名加入本允许集。
+func TestAuditInsertEntryPointsExhaustive(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", "internal"))
+	if err != nil {
+		t.Fatalf("resolve internal dir: %v", err)
+	}
+	allow := map[string]bool{
+		"RecordAuditLog":       true, // services/auditlog.go —— auditVocabCallSpecs 已覆盖其调用点
+		"flushSystemAuditLogs": true, // db/audit.go —— recordSystemAudit 缓冲的唯一落库点，无字面量动作
+	}
+	pattern := regexp.MustCompile(`INTO\s+audit_log\b`)
+	found := false
+	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !pattern.Match(src) {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, src, 0)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+		rel, _ := filepath.Rel(root, path)
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			start, end := fset.Position(fn.Pos()).Offset, fset.Position(fn.End()).Offset
+			if pattern.Match(src[start:end]) {
+				found = true
+				if !allow[fn.Name.Name] {
+					t.Errorf("%s: 函数 %s 直接 INSERT INTO audit_log——绕过了 auditVocabCallSpecs 所列入口，"+
+						"其动作词条对词汇/映射契约测试不可见；请改走 RecordAuditLog/recordSystemAudit，"+
+						"或同步更新两个契约测试并把函数名加入本允许集", rel, fn.Name.Name)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal: %v", err)
+	}
+	if !found {
+		t.Fatal("未发现任何 INTO audit_log 生产写入点——允许集可能已失效（写入改为其他表名/形态），请人工复核 auditVocabCallSpecs 与本测试的允许集")
 	}
 }

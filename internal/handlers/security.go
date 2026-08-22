@@ -1906,9 +1906,22 @@ func (h *Handlers) GetCRSRuleContent(c *gin.Context) {
 }
 
 func (h *Handlers) GetCRSSetupConfig(c *gin.Context) {
-	content, err := os.ReadFile("/app/waf/crs/crs-setup.conf")
+	// R62 B-NEW-3：对齐同域读端点的尺寸口径（GetCRSRuleContent 1MB、更新日志 128KB）。
+	// crs-setup.conf 是运维可手改文件，超限时显式 413 拒绝而非静默截断——
+	// 避免调用方把截断内容当作完整配置使用。
+	f, err := os.Open("/app/waf/crs/crs-setup.conf")
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CRS 配置文件不存在"})
+		return
+	}
+	defer f.Close()
+	content, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if len(content) > 1<<20 {
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "CRS 配置文件超过 1MB 读取上限"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"content": string(content)}})

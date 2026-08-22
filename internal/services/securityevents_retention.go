@@ -149,8 +149,11 @@ func securityEventsRetentionStop() {
 	}
 }
 
-// SetSecurityEventsRetentionMasterRole 按集群角色启停安全事件保留清理：主节点运行，从节点停止。
-// 角色切换（提升为主/降级为从）时调用；重复调用安全。
+// SetSecurityEventsRetentionMasterRole 安全事件保留清理的幂等启动钩子。
+// R62 B-NEW-2（注释修正）：保留清理针对本节点本地 security_events 表，与集群角色
+// 无关——main.go 启动即无条件运行（从节点也摄入事件），降级为从节点【不应】停止：
+// 若按旧注释在 BecomeSlave 补 stop，从节点事件表将越过 10 万行上限无界增长。
+// 当前唯一生产调用点是提升为主路径（cluster.go）的幂等启动；重复调用安全。
 func SetSecurityEventsRetentionMasterRole(isMaster bool) {
 	if isMaster {
 		StartSecurityEventsRetention(context.Background())

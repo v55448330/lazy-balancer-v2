@@ -3,7 +3,6 @@ package services
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -298,7 +297,9 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 		// 配置生成失败——一条坏规则不得拖垮所有站点；存量脏规则与集群同步绕过的规则
 		// 均在此兜底。
 		if issue := customRuleEmissionIssue(cr); issue != "" {
-			log.Printf("自定义规则 %d(%s) %s，已跳过发射，请修正或禁用", cr.ID, cr.Name, issue)
+			// R62 B-NEW-4：分级日志——裸 log.Printf 无级别前缀，日志级别调至 warn/error
+			// 时会被过滤出文件日志（与 R61 B-R61-02 修复口径一致）。
+			Logf("warn", "自定义规则 %d(%s) %s，已跳过发射，请修正或禁用", cr.ID, cr.Name, issue)
 			continue
 		}
 		emitID := cr.ID + 10000
@@ -441,7 +442,7 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 			if err != nil {
 				// Round 34 G: 单块失败只丢该块并留痕，其余块照常解析；
 				// 此前整查询失败静默返回 nil，WAF 规则全部丢失且无日志。
-				log.Printf("解析策略自定义规则分块查询失败（id 段 %d-%d）: %v", chunk[0], chunk[len(chunk)-1], err)
+				Logf("warn", "解析策略自定义规则分块查询失败（id 段 %d-%d）: %v", chunk[0], chunk[len(chunk)-1], err)
 				continue
 			}
 			queried += len(chunk)
@@ -460,7 +461,7 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 		// 只统计查询成功分块内未找到的 id——查询失败的分块已单独留痕，
 		// 其 id 从未读回，计入悬空会把「查询失败」误报为「规则已删除」。
 		if dropped := queried - len(rules); dropped > 0 {
-			log.Printf("策略引用的自定义规则有 %d 个不存在，已跳过", dropped)
+			Logf("warn", "策略引用的自定义规则有 %d 个不存在，已跳过", dropped)
 		}
 		return rules
 	}
