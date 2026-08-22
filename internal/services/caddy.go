@@ -1091,7 +1091,15 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 
 	acmeCerts := make(map[string][]CertificateCandidate)
 	if hasACMETLS {
-		certRows, certErr := store.Query(acmeCertCandidatesQuery)
+		// R64 C-2.1：证书候选固定走已提交连接（db.DB）而非传入 store——UpdateConfig 的
+		// ApplyConfigFromTx 会把 global_config 事务传入此处，该事务不写 cert_jobs，
+		// tx 视角对证书零信息增益、纯陈旧性：在途 ACME 部署（certissuer 不持 caddyOpMu，
+		// transitionJob 独立连接提交新证书）若在 tx 快照固定后落库，本查询经 tx 会读到
+		// 旧 PEM，MaterializeCertPairs 内容比对 miss 即用旧证书覆写磁盘新证书——
+		// DB=issued 新证、磁盘/Caddy=旧证的静默分叉（reconcile 只查存在不查内容），
+		// 持续到下次 apply/重启。规则/安全段仍走 store（规则 CRUD 全程持 caddyOpMu，
+		// 与 UpdateConfig 互斥，无并发写入可见性；安全段有意读 tx 内未提交状态）。
+		certRows, certErr := db.DB.Query(acmeCertCandidatesQuery)
 		if certErr != nil {
 			return generationFailure("读取 ACME 证书阶段查询失败: %v", certErr)
 		}
