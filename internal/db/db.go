@@ -783,10 +783,11 @@ func runMigrations() error {
 	}
 
 	// Normalize legacy/global default values that are invalid regardless of version
+	// R62 C3-F4: 移除原第 3 条「追加 UA rename 行」的 UPDATE——该行每次启动都被下方
+	// 清理循环无条件剔除（死代码），且引发每启动一次无谓写放大。
 	defaultUpdates := []string{
 		"UPDATE global_config SET jwt_expire_minutes=20 WHERE jwt_expire_minutes IS NULL OR jwt_expire_minutes<=0 OR jwt_expire_minutes>1440",
 		"UPDATE global_config SET access_log_format='' WHERE access_log_format LIKE '{%'",
-		"UPDATE global_config SET access_log_format = access_log_format || char(10) || 'request>headers>User-Agent -> user_agent' WHERE access_log_format != '' AND access_log_format NOT LIKE '%user_agent%'",
 	}
 	for _, statement := range defaultUpdates {
 		if _, err := DB.Exec(statement); err != nil {
@@ -809,8 +810,11 @@ func runMigrations() error {
 			}
 			out = append(out, l)
 		}
-		if _, err := DB.Exec("UPDATE global_config SET access_log_format=? WHERE id=1", strings.Join(out, "\n")); err != nil {
-			return fmt.Errorf("failed to clean global config access log format: %w", err)
+		// R62 C3-F4: 内容未变化时跳过写回（避免每启动一次无谓 UPDATE）。
+		if cleaned := strings.Join(out, "\n"); cleaned != lf {
+			if _, err := DB.Exec("UPDATE global_config SET access_log_format=? WHERE id=1", cleaned); err != nil {
+				return fmt.Errorf("failed to clean global config access log format: %w", err)
+			}
 		}
 	}
 
@@ -934,6 +938,12 @@ func runMigrations() error {
 	// R44 B1: 须在 lb_rules 重建之后——重建前的遗留表可能没有 enable_tls 列。
 	if err := migrateLegacyHTTPSProtocol(); err != nil {
 		return fmt.Errorf("failed to migrate legacy https protocol: %w", err)
+	}
+
+	// R62 C2-N1: 须在 migrateLegacyHTTPSProtocol 之后（其归一可能产生新的 http 行，
+	// 与本迁移的 tcp 谓词无交集，顺序仅求确定性）。
+	if err := migrateTCPRuleStaleTLS(); err != nil {
+		return fmt.Errorf("failed to migrate tcp rule stale tls: %w", err)
 	}
 
 	// Drop legacy columns from upstreams if they still exist (no longer used).
@@ -1158,6 +1168,54 @@ func migrateLegacyHTTPSProtocol() error {
 		} else {
 			detail = fmt.Sprintf("存量 https 协议规则已迁移为普通 HTTP（无可用证书，未启用 TLS）：caddy_id=%s name=%s", rule.caddyID, rule.name)
 		}
+		log.Print(detail)
+		recordSystemAudit("启动迁移", "系统配置", detail)
+	}
+	return nil
+}
+
+// migrateTCPRuleStaleTLS 一次性迁移（R62 C2-N1）：旧版 v1 导入曾落库
+// protocol='tcp' + enable_tls=1 + tls_source='manual' + 空证书的行——TCP 规则在
+// 渲染侧不终结入站 TLS（该形态无流量影响），但 UpdateRule 的手动证书检查不按
+// 协议门控，导致此类规则的任何编辑恒 400 且 UI 无自救路径。归一为关闭 TLS 并
+// 清空证书材料（与 UpdateRule 切换到 TCP 的归一分支同语义）。幂等，重跑零命中。
+func migrateTCPRuleStaleTLS() error {
+	rows, err := DB.Query(`SELECT caddy_id, name FROM lb_rules
+		WHERE protocol='tcp' AND IIF(enable_tls IN ('1',1),1,0)=1
+		  AND TRIM(COALESCE(tls_cert,''))='' AND TRIM(COALESCE(tls_key,''))=''`)
+	if err != nil {
+		return fmt.Errorf("failed to query tcp rules with stale tls: %w", err)
+	}
+	type staleTLSRule struct {
+		caddyID string
+		name    string
+	}
+	var stale []staleTLSRule
+	for rows.Next() {
+		var rule staleTLSRule
+		if err := rows.Scan(&rule.caddyID, &rule.name); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan tcp rules with stale tls: %w", err)
+		}
+		stale = append(stale, rule)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("failed to iterate tcp rules with stale tls: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("failed to close tcp rules with stale tls: %w", err)
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+	if _, err := DB.Exec(`UPDATE lb_rules SET enable_tls=0, tls_cert='', tls_key=''
+		WHERE protocol='tcp' AND IIF(enable_tls IN ('1',1),1,0)=1
+		  AND TRIM(COALESCE(tls_cert,''))='' AND TRIM(COALESCE(tls_key,''))=''`); err != nil {
+		return fmt.Errorf("failed to normalize tcp rules with stale tls: %w", err)
+	}
+	for _, rule := range stale {
+		detail := fmt.Sprintf("存量 TCP 规则携带无效 TLS 状态（空证书），已归一为关闭 TLS：caddy_id=%s name=%s", rule.caddyID, rule.name)
 		log.Print(detail)
 		recordSystemAudit("启动迁移", "系统配置", detail)
 	}
