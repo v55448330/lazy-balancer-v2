@@ -100,6 +100,19 @@ func SnapshotCertJobsForRule(ruleID string) (CertJobsSnapshot, error) {
 	return snapshot, nil
 }
 
+// canonicalDatetime 把快照中的 DATETIME 列值绑定为与规范写路径一致的墙钟
+// 字符串（R61-A2）：直接绑 sql.NullTime 会让 modernc 驱动按默认布局落库为
+// `2006-01-02 15:04:05+00:00`，而 rescan（rescanDroppedDeploymentRetries）
+// 的 time.Parse("2006-01-02 15:04:05") 是该格式唯一解析点——失败即丢一个
+// 部署退避窗口（自愈：下次失败会以规范格式重写，但 attempts 可能额外 +1）。
+// 写侧归一让 restore round-trip 格式稳定，消除该窗口。
+func canonicalDatetime(v sql.NullTime) any {
+	if !v.Valid {
+		return nil
+	}
+	return v.Time.UTC().Format("2006-01-02 15:04:05")
+}
+
 // RestoreCertJobsForRule restores UPSERT-overwritten rows and removes jobs
 // created after SnapshotCertJobsForRule captured the rule state.
 func RestoreCertJobsForRule(snapshot CertJobsSnapshot) error {
@@ -145,8 +158,8 @@ func restoreCertJobsForRule(ctx context.Context, snapshot CertJobsSnapshot) erro
 		if _, err := tx.ExecContext(ctx, `INSERT INTO cert_jobs (id,rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,
 			renewal_attempts,ca_available_after,last_error_code,deployment_attempts,deployment_available_after,created_at,updated_at)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, job.id, job.ruleID, job.domain, job.status, job.message,
-			job.expiresAt, job.certPEM, job.keyPEM, job.caProviderID, job.renewalAttempts, job.caAvailableAfter,
-			job.lastErrorCode, job.deploymentAttempts, job.deploymentAvailableAfter, job.createdAt, job.updatedAt); err != nil {
+			canonicalDatetime(job.expiresAt), job.certPEM, job.keyPEM, job.caProviderID, job.renewalAttempts, canonicalDatetime(job.caAvailableAfter),
+			job.lastErrorCode, job.deploymentAttempts, canonicalDatetime(job.deploymentAvailableAfter), canonicalDatetime(job.createdAt), canonicalDatetime(job.updatedAt)); err != nil {
 			return fmt.Errorf("restore certificate job %d: %w", job.id, err)
 		}
 	}

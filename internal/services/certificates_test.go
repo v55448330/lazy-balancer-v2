@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1186,5 +1187,41 @@ func TestCertificateService_resumeDeploymentRetries_reschedulesDroppedRetries(t 
 	}
 	if delays[1] > time.Hour {
 		t.Fatalf("job 2 delay=%v, want <= remaining 1h window", delays[1])
+	}
+}
+
+func TestRestoreCertJobs_roundtripsCanonicalDatetimeFormat(t *testing.T) {
+	// R61-A2：restore 不得让 DATETIME 列漂移为驱动 `+00:00` 布局——
+	// rescan 的 time.Parse("2006-01-02 15:04:05") 是唯一解析点，漂移即
+	// 丢一个部署退避窗口。
+	_, database := newClusterTestService(t)
+	const ruleID = "lb_dt_roundtrip"
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?, 'dt', 'dt.example.com', 'http', 8080, 1, 1, 'acme_dns')`, ruleID); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id,deployment_available_after,expires_at,ca_available_after) VALUES (?, 'dt.example.com', 'downloaded', 7, datetime('now','+5 minutes'), datetime('now','+90 days'), datetime('now','-1 minutes'))`, ruleID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	snapshot, err := SnapshotCertJobsForRule(ruleID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if _, err := database.Exec(`DELETE FROM cert_jobs WHERE rule_id=?`, ruleID); err != nil {
+		t.Fatalf("clear jobs: %v", err)
+	}
+	if err := RestoreCertJobsForRule(snapshot); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	for _, col := range []string{"deployment_available_after", "expires_at", "ca_available_after", "created_at", "updated_at"} {
+		var raw sql.NullString
+		if err := db.DB.QueryRow(fmt.Sprintf("SELECT CAST(%s AS TEXT) FROM cert_jobs WHERE rule_id=?", col), ruleID).Scan(&raw); err != nil {
+			t.Fatalf("read %s raw text: %v", col, err)
+		}
+		if !raw.Valid || raw.String == "" {
+			continue // 该列在快照行中本就为 NULL——合法
+		}
+		if _, err := time.Parse("2006-01-02 15:04:05", raw.String); err != nil {
+			t.Fatalf("%s drifted to non-canonical format %q: %v (R61-A2 regression)", col, raw.String, err)
+		}
 	}
 }
