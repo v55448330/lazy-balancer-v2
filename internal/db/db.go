@@ -1421,9 +1421,15 @@ func migrateCanonicalDomains() error {
 			return fmt.Errorf("update %s.%s row %v: %w", row.table, row.column, row.key, err)
 		}
 	}
+	// R65 C-4：去重保留判据改为「优先有证书材料的行，同列再比 id」——原 MAX(id)
+	// 在规范域碰撞时（legacy 大小写/IDN 变体行）可能删掉带已签发证书的旧行、
+	// 保留其后创建的无证书行，规则丢失现网证书需重签。一次性迁移窗口内生效。
 	if _, err := tx.Exec(`DELETE FROM cert_jobs WHERE id NOT IN (
-		SELECT MAX(id) FROM cert_jobs GROUP BY rule_id, domain
-	)`); err != nil {
+		SELECT a.id FROM cert_jobs a WHERE a.id = (
+			SELECT b.id FROM cert_jobs b
+			WHERE b.rule_id = a.rule_id AND b.domain = a.domain
+			ORDER BY (CASE WHEN COALESCE(b.cert_pem,'')='' OR COALESCE(b.key_pem,'')='' THEN 0 ELSE 1 END) DESC, b.id DESC
+			LIMIT 1))`); err != nil {
 		return fmt.Errorf("deduplicate cert_jobs: %w", err)
 	}
 	if _, err := tx.Exec("CREATE UNIQUE INDEX idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)"); err != nil {

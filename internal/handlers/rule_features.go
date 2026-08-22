@@ -750,6 +750,14 @@ func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 				problems = append(problems, fmt.Errorf("规则 %s（%s）ACME 引用校验失败：%w", rule.Name, rule.CaddyID, err))
 			}
 		}
+		// R65 C-3：与 validateStoredRuleConfig 单规则门对称的 manual 材料检查——
+		// enable_tls=1 + manual + 空证书的启用行会让 TLS 端口明文服务
+		//（availableCerts 要求 cert/key 非空）。保存/导入链均拦截该形态，此门
+		// 兜住存量/直改 DB（与 R55 C-3 同定位）。
+		if rule.Protocol == "http" && rule.EnableTLS && rule.TLSSource == "manual" &&
+			(strings.TrimSpace(rule.TLSCert) == "" || strings.TrimSpace(rule.TLSKey) == "") {
+			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）手动证书模式缺少证书或私钥，请补齐材料或切换证书来源", rule.Name, rule.CaddyID)})
+		}
 		if err := validateRuleConfigGeneration(rule); err != nil {
 			problems = append(problems, fmt.Errorf("规则 %s（%s）配置无效：%w", rule.Name, rule.CaddyID, err))
 		}
