@@ -115,7 +115,10 @@ func (session *configImportSession) commit(affectedRuleIDs []string, certificate
 	if err := materializeImportCertificates(certificates); err != nil {
 		return &importCoordinatorError{phase: importPhaseCertificate, err: session.abort(err)}
 	}
-	if err := session.h.caddyService.ApplyConfigFromTx(session.tx); err != nil {
+	// R65 A-N1：v2 导入事务全量重插 cert_jobs（restoreTable 保留原 id），证书
+	// 候选必须读事务自身——经已提交视图会拿到将被替换的旧行，旧 PEM 覆写导入
+	// 刚落盘的新证书文件。导入期 CA 队列已 PauseAndDrain，无并发证书提交。
+	if err := session.h.caddyService.ApplyConfigFromTxCertAware(session.tx); err != nil {
 		return &importCoordinatorError{phase: importPhaseCaddy, err: session.abort(err)}
 	}
 	if err := services.BumpClusterVersion(session.ctx, session.tx); err != nil {

@@ -694,7 +694,9 @@ func (s *CaddyService) getUpstreamHealthFromMetrics() map[string]bool {
 		}
 	}
 
-	log.Printf("Health metrics parsed: %v", result)
+	// R65 C-2：健康表全量打印降为 debug——该函数被规则指标/总览轮询周期调用，
+	// 上游多时单行数 KB，INFO 级放大日志滚动。
+	Logf("debug", "Health metrics parsed: %v", result)
 	return result
 }
 
@@ -883,7 +885,22 @@ const acmeCertCandidatesQuery = `
 	ORDER BY updated_at DESC, id DESC
 `
 
+// generateCaddyConfigFromStore 以已提交连接（db.DB）为证书候选源渲染配置（C-2.1
+// 默认语义）；规则/安全段读传入 store。
 func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.UpdateConfigRequest) map[string]interface{} {
+	return generateCaddyConfigWithCertSource(store, db.DB, overrides...)
+}
+
+// generateCaddyConfigWithCertSource 渲染配置，证书候选源可指定（R65 A-N1）：
+//   - certSource=db.DB（默认）：C-2.1 防护——UpdateConfig 类纯 global_config 事务
+//     的 tx 视角对 cert_jobs 纯陈旧性，已提交连接恒见最新证书。
+//   - certSource=tx（ApplyConfigFromTxCertAware，v2 导入专用）：导入事务全量
+//     deleteOrder+重插 cert_jobs（restoreTable 保留原 id，PEM 可更新），已提交
+//     视图会返回将被替换的旧行——MaterializeCertPairs 用旧 PEM 覆写
+//     materializeImportCertificates 刚写入的新文件，DB=新证/磁盘=旧证静默分叉。
+//
+// 导入期 CA 队列已 PauseAndDrain，无并发证书提交，tx 视图即最新真相。
+func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overrides ...*models.UpdateConfigRequest) map[string]interface{} {
 	var filesSnapshot CertFilesSnapshot
 	generationFailure := func(format string, args ...any) map[string]interface{} {
 		err := fmt.Errorf(format, args...)
@@ -971,6 +988,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		       IIF(log_enabled IN ('1',1),1,0), IIF(custom_routes_enabled IN ('1',1),1,0),
 		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0)
 		FROM lb_rules WHERE enabled = 1
+		ORDER BY id
 	`)
 	if err != nil {
 		return generationFailure("query enabled rules: %v", err)
@@ -1099,7 +1117,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		// DB=issued 新证、磁盘/Caddy=旧证的静默分叉（reconcile 只查存在不查内容），
 		// 持续到下次 apply/重启。规则/安全段仍走 store（规则 CRUD 全程持 caddyOpMu，
 		// 与 UpdateConfig 互斥，无并发写入可见性；安全段有意读 tx 内未提交状态）。
-		certRows, certErr := db.DB.Query(acmeCertCandidatesQuery)
+		certRows, certErr := certSource.Query(acmeCertCandidatesQuery)
 		if certErr != nil {
 			return generationFailure("读取 ACME 证书阶段查询失败: %v", certErr)
 		}
@@ -1118,6 +1136,23 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 		}
 		if closeErr := certRows.Close(); closeErr != nil {
 			return generationFailure("读取 ACME 证书阶段关闭结果集失败: %v", closeErr)
+		}
+		// R65 A-N1（谓词 miss 补查）：主候选查询的 lb_rules 子查询在 certSource 的
+		// 视图上执行——tx 渲染路径中，事务对 lb_rules 的写入（UpdateRule 切换
+		// tls_source manual→acme_dns、EnableRule 置 enabled=1、导入插入新规则）使
+		// allRules（tx 视图）含 acme 规则而已提交视图的子查询将其排除，候选为空，
+		// 该规则按无证书渲染（TLS 静默丢失）。此时经 store（tx）做无子查询的
+		// per-rule 补查——cert_jobs 行本身两视图一致（这些事务不写证书行），补查
+		// 仅恢复被谓词挡掉的可见性；SelectCertificate 仍按 status 过滤 disabled。
+		// UpdateConfig（tx 只写 global_config）不产生谓词 miss，C-2.1 防护不受影响。
+		if _, certSourceIsDB := certSource.(*sql.DB); !certSourceIsDB || certSource != store {
+			for _, ru := range allRules {
+				r := ru.rule
+				if !r.EnableTLS || r.TLSSource != "acme_dns" || len(acmeCerts[r.CaddyID]) > 0 {
+					continue
+				}
+				acmeCerts[r.CaddyID] = acmeCertCandidatesForRule(store, r.CaddyID)
+			}
 		}
 	}
 	selectionNow := time.Now()
@@ -1838,6 +1873,41 @@ func buildCaddyLogging(level string, sizeMB int) map[string]interface{} {
 
 // loadACMECertificate reads the issued ACME certificate and key from cert_jobs
 // for the given rule and domain. Returns (certPEM, keyPEM, true) if issued.
+// acmeCertCandidatesForRule 无 lb_rules 子查询的 per-rule 证书候选查询（R65 A-N1
+// 谓词 miss 补查专用）：查询形态与 acmeCertCandidatesQuery 的行过滤一致（PEM
+// 非空），但绕过 enabled/enable_tls/tls_source 谓词——调用方已确保规则在 allRules
+// （tx 视图）中为启用 acme 规则。status 过滤交由 SelectCertificate 后置执行。
+// 查询/解析失败仅记日志返回 nil（与调用点的空候选语义一致：按无证书渲染）。
+func acmeCertCandidatesForRule(store caddyConfigStore, ruleID string) []CertificateCandidate {
+	rows, err := store.Query(`
+		SELECT id, domain, status, cert_pem, key_pem,
+		       COALESCE(julianday(COALESCE(updated_at, created_at)), 0)
+		FROM cert_jobs
+		WHERE rule_id=?
+		  AND cert_pem IS NOT NULL AND cert_pem <> ''
+		  AND key_pem IS NOT NULL AND key_pem <> ''
+		ORDER BY updated_at DESC, id DESC`, ruleID)
+	if err != nil {
+		Logf("warn", "ACME 证书候选补查失败（规则 %s，按无证书渲染）: %v", ruleID, err)
+		return nil
+	}
+	defer rows.Close()
+	candidates := make([]CertificateCandidate, 0)
+	for rows.Next() {
+		var candidate CertificateCandidate
+		if err := rows.Scan(&candidate.ID, &candidate.Domain, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); err != nil {
+			Logf("warn", "ACME 证书候选补查解析失败（规则 %s）: %v", ruleID, err)
+			return nil
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		Logf("warn", "ACME 证书候选补查遍历失败（规则 %s）: %v", ruleID, err)
+		return nil
+	}
+	return candidates
+}
+
 func loadACMECertificateFromStore(store caddyConfigStore, caddyID, domain string) (string, string, bool) {
 	rows, err := store.Query(`
 		SELECT id, domain, status, cert_pem, key_pem,
@@ -2967,6 +3037,17 @@ func (s *CaddyService) ApplyConfigFromTx(tx *sql.Tx) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.applyConfigLocked(generateCaddyConfigFromStore(tx))
+}
+
+// ApplyConfigFromTxCertAware 与 ApplyConfigFromTx 同语义，但证书候选改读事务
+// 自身（R65 A-N1）：供全量替换 cert_jobs 的事务（v2 导入）使用——restoreTable
+// 保留原 id 重插证书行，已提交视图返回将被替换的旧行，会经 MaterializeCertPairs
+// 用旧 PEM 覆写导入刚落盘的新证书文件。规则 CRUD 事务（不写证书行）仍走
+// ApplyConfigFromTx + 谓词 miss 补查；UpdateConfig 保持 C-2.1 已提交视图。
+func (s *CaddyService) ApplyConfigFromTxCertAware(tx *sql.Tx) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.applyConfigLocked(generateCaddyConfigWithCertSource(tx, tx))
 }
 
 func normalizeWeights(weights []int) []int {
