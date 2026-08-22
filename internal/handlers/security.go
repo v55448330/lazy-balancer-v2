@@ -41,7 +41,13 @@ func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		}
-		json.Unmarshal([]byte(conditionsJSON), &r.Conditions)
+		// R63 B-N2：解析失败与下方 rows.Err 同口径显式 500（R40 F2「残缺列表不得
+		// 以 200 返回」）——零值形态混入 200 会让该行在 UI 呈现「无条件规则」且
+		// 不可编辑保存，发射端又整条跳过，等于一条规则被静默停用。
+		if err := json.Unmarshal([]byte(conditionsJSON), &r.Conditions); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("自定义规则 %d 的条件解析失败: %v", r.ID, err)})
+			return
+		}
 		rules = append(rules, r)
 	}
 	// 迭代失败显式报错（R40 F2）：对齐 ListSecurityPolicies/GetSecurityPolicy
@@ -800,6 +806,35 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
 		return
 	}
+	// R63 B-N1：重启用悬空引用门——仅含 {enabled:true} 的部分更新（REST 文档明示
+	// 「只提交需要修改的字段」）不携带 block_page_id/custom_rules，derefInt/derefStr
+	// 零值使上面的校验整体短路；禁用期间被删除的规则/拦截页（删除门只拦 enabled=1
+	// 的策略）会随重启用静默激活：发射端仅 warn 跳过、WAF 规则静默丢失、拦截页
+	// 退回 Caddy 默认错误页。指向启用的更新按「显式值 ?? 存量值」的有效形态过
+	// 同一校验器；写锁已持（BEGIN IMMEDIATE），无 TOCTOU。
+	if req.Enabled != nil && *req.Enabled {
+		var storedBlockPageID int
+		var storedCustomRules string
+		if err := tx.QueryRow("SELECT COALESCE(block_page_id,0), COALESCE(custom_rules,'[]') FROM security_policies WHERE id=?", id).Scan(&storedBlockPageID, &storedCustomRules); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略当前引用失败: " + err.Error()})
+			return
+		}
+		effectiveBlockPageID := derefInt(req.BlockPageID)
+		if req.BlockPageID == nil {
+			effectiveBlockPageID = storedBlockPageID
+		}
+		effectiveCustomRules := derefStr(req.CustomRules)
+		if req.CustomRules == nil {
+			effectiveCustomRules = storedCustomRules
+		}
+		if msg, err := validateSecurityPolicyReferences(tx, effectiveBlockPageID, effectiveCustomRules); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		} else if msg != "" {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
+			return
+		}
+	}
 	// crs_rule_groups / crs_excluded_rules：显式空串按 Create 口径归一为 "[]"，
 	// 非空值必须是字符串数组的 JSON，防止任意串直写列后在发射端解析失败。
 	for _, f := range []struct {
@@ -1245,7 +1280,9 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		trendRows.Close()
 	}
 	overview.Trend = make([]models.SecurityTrendPoint, 0, 7)
-	today := time.Now().In(loc)
+	// R63 B-N3：全函数单点取时——此前趋势桶用第二次 time.Now()，跨午夜请求的
+	// 「今日」计数与趋势末桶会锚定不同日期（毫秒级窗口、下次轮询自愈）。
+	today := now
 	for i := 6; i >= 0; i-- {
 		day := today.AddDate(0, 0, -i).Format("2006-01-02")
 		point := trendByDate[day]
@@ -1272,22 +1309,34 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		ipRows.Close()
 	}
 	familyCountsByIP := map[string]map[string]int{}
-	famRows, err := db.MetricsDB.Query(`SELECT client_ip, COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= datetime(?, '-6 days') GROUP BY client_ip, rule_triggered, rule_msg ORDER BY cnt DESC LIMIT 5000`, todayStartUTC)
-	trackErr(err)
-	for famRows != nil && famRows.Next() {
-		var ip, ruleTriggered, ruleMsg string
-		var cnt int
-		trackErr(famRows.Scan(&ip, &ruleTriggered, &ruleMsg, &cnt))
-		counts := familyCountsByIP[ip]
-		if counts == nil {
-			counts = map[string]int{}
-			familyCountsByIP[ip] = counts
+	// R63 B-N4：攻击族查询按 Top-10 结果收窄（替换原全量 GROUP BY + LIMIT 5000）——
+	// 高基数攻击洪峰下组合数超限会使部分 Top-IP 的攻击类型标签静默缺失
+	// （「数对、标签少」）；收窄后组合数有界（10 × 该 IP 的规则/消息数），无需截断。
+	if len(topRows) > 0 {
+		placeholders := make([]string, len(topRows))
+		famArgs := make([]interface{}, 0, len(topRows)+1)
+		famArgs = append(famArgs, todayStartUTC)
+		for i, row := range topRows {
+			placeholders[i] = "?"
+			famArgs = append(famArgs, row.ip)
 		}
-		counts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
-	}
-	if famRows != nil {
-		trackErr(famRows.Err()) // 迭代中途失败同样显式报错，与 D3 标准一致（R36 F2）
-		famRows.Close()
+		famRows, err := db.MetricsDB.Query(fmt.Sprintf(`SELECT client_ip, COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= datetime(?, '-6 days') AND client_ip IN (%s) GROUP BY client_ip, rule_triggered, rule_msg`, strings.Join(placeholders, ",")), famArgs...)
+		trackErr(err)
+		for famRows != nil && famRows.Next() {
+			var ip, ruleTriggered, ruleMsg string
+			var cnt int
+			trackErr(famRows.Scan(&ip, &ruleTriggered, &ruleMsg, &cnt))
+			counts := familyCountsByIP[ip]
+			if counts == nil {
+				counts = map[string]int{}
+				familyCountsByIP[ip] = counts
+			}
+			counts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
+		}
+		if famRows != nil {
+			trackErr(famRows.Err()) // 迭代中途失败同样显式报错，与 D3 标准一致（R36 F2）
+			famRows.Close()
+		}
 	}
 	overview.TopIPs = make([]models.SecurityTopIP, 0, len(topRows))
 	for _, row := range topRows {
