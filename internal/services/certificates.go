@@ -527,6 +527,10 @@ func (s *CertificateService) rescanDroppedDeploymentRetries() {
 			if remaining := time.Until(t); remaining > 0 {
 				delay = remaining
 			}
+		} else {
+			// R60 A-N2：格式漂移（直改库/未来写入变更）时 fallback 为立即重试
+			// （自愈：失败会重建窗口），但不可无痕——留 warn 供排障。
+			log.Printf("证书任务 %d：deployment_available_after=%q 无法解析，按立即重试处理", job.id, job.availableAfter)
 		}
 		s.deploymentRetry(job.id, issuedCertificate{ruleID: job.ruleID, providerID: job.providerID, deploymentAttempt: job.deploymentAttempts}, delay)
 	}
