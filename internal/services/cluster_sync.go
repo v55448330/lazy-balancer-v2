@@ -1307,8 +1307,14 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 	if resp.StatusCode >= http.StatusBadRequest {
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 			message := "注册已被主节点拒绝或移除，请重新注册或提升为主节点"
+			// R64 A-N6：状态轮询的 401/404/410 复用 confirm 路径的 5 连败终止设计
+			// （bumpRegistrationConfirmFailure）——此前该分支每 10s 无限重试：每周期
+			// 一条「注册失败」审计日志（~8640 条/天噪音）且永不退出注册循环；
+			// 达到上限后落终止文案并清 registration_*（退出循环），运维提示与
+			// confirm 路径一致。1-4 次期间 last_sync_error 持续显示可行动文案
+			// （combineOrReplaceSyncError 幂等覆盖），审计留痕收敛到终止时一条。
+			s.bumpRegistrationConfirmFailure(ctx, "", fmt.Sprintf("注册状态轮询被主节点拒绝（HTTP %d）", resp.StatusCode))
 			s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeValidationFailed)
-			RecordAuditLog("system", "注册失败", "集群节点", message, "")
 			return
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
