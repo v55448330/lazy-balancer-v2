@@ -1000,6 +1000,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	caddyID := c.Param("caddy_id")
 
+	// R62 C3-F1: 与 CreateRule（Round 36 BLOCKING-1）同口径的请求体上限——UpdateRule
+	// 同样携带 tls_cert/tls_key 与 upstreams 数组，缺此门时认证客户端可用超大 body
+	// OOM 单进程服务（gin + Caddy 编排 + 证书队列同进程）。
+	const maxUpdateRuleBodyBytes int64 = 1 << 20 // 1MB
+	if c.Request.ContentLength > maxUpdateRuleBodyBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUpdateRuleBodyBytes)
 	var req models.UpdateRuleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Printf("UpdateRule bind error for caddy_id=%s: %v", caddyID, err)
@@ -1247,6 +1256,16 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			req.TCPTryDuration = 0
 			req.TCPTryInterval = 0
 		}
+	}
+	// R62 C2-N1: 最终协议为 tcp 时一律归一 TLS 字段（与上方切换到 TCP 的分支同
+	// 语义）——存量 v1 导入可能携带 enable_tls=1 + 空 manual 证书的死形态（渲染
+	// 忽略，但下方非协议门控的手动证书检查会让该规则任何编辑恒 400，UI 又对 TCP
+	// 隐藏 TLS 开关而无自救路径）；协议未变的 tcp 编辑在此顺带自愈。
+	if req.Protocol == "tcp" {
+		tcpDisabled := false
+		req.EnableTLS = &tcpDisabled
+		req.TLSSource = "manual"
+		req.TLSCert, req.TLSKey = "", ""
 	}
 
 	if req.Protocol == "http" && strings.TrimSpace(req.Domain) == "" {
