@@ -179,9 +179,25 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 		json.Unmarshal(p.CRSExcludedRules, &excludedRules)
 		for _, ruleID := range excludedRules {
 			ruleID = strings.TrimSpace(ruleID)
-			if ruleID != "" {
-				sb.WriteString(fmt.Sprintf("SecRuleRemoveById %s\n", crsFilenameToRuleIDRange(ruleID)))
+			if ruleID == "" {
+				continue
 			}
+			mapped := crsFilenameToRuleIDRange(ruleID)
+			// R60 B-新1：SecRuleRemoveById 发射前形态门。历史行/API/备份可携带
+			// 过校验门但 coraza 语义非法的条目（"ABCDEF"、"942100-abc"、
+			// "REQUEST-942.conf"）——coraza directiveSecRuleRemoveByID 对
+			// 非「纯数字或数字-数字」形态 Atoi 失败即 return err → 整个
+			// directives 串编译失败 → Caddy /load 400，含启动初始加载在内
+			// 的全部配置加载失败（配置自锁）。合法形态之外跳过该条目并留痕
+			// （custom rules customRuleEmissionIssue 同哲学：发射侧防御，
+			// 校验漏洞不升级为全局限摆）。越过界的合法 range（"1-999999"）
+			// 会静默删除 IP ACL(2-5)/自定义(10000+)/全部 CRS 规则——上限
+			// 999999 一并钳制。
+			if !validSecRuleRemoveTarget(mapped) {
+				log.Printf("[security] 跳过非法 SecRuleRemoveById 条目 %q（策略 %q）：非数字/区间形态或区间越界，coraza 会拒绝编译", ruleID, p.Name)
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("SecRuleRemoveById %s\n", mapped))
 		}
 	}
 
@@ -451,6 +467,24 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 		return embedded
 	}
 	return nil
+}
+
+// validSecRuleRemoveTarget 判定 SecRuleRemoveById 目标是否为 coraza 可编译
+// 且不越界的形态：纯数字，或 a-b 区间。边界依据：本地规则 ID 空间为 IP ACL
+// 2-5 与自定义规则 10000+，CRS 规则 ID 恒为 9xxxxx（六位、首位 9）——
+// 下界 <900000 或上界 >999999 的区间会静默删除本地/自定义规则或全部 CRS
+// 规则，与"合法但删除一切"的越界形态同等拒绝。
+func validSecRuleRemoveTarget(s string) bool {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n >= 900000 && n <= 999999
+	}
+	lo, hi, ok := strings.Cut(s, "-")
+	if !ok {
+		return false
+	}
+	loN, loErr := strconv.Atoi(lo)
+	hiN, hiErr := strconv.Atoi(hi)
+	return loErr == nil && hiErr == nil && loN >= 900000 && hiN >= loN && hiN <= 999999
 }
 
 func crsFilenameToRuleIDRange(s string) string {

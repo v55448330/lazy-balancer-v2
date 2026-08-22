@@ -255,3 +255,47 @@ func TestBuildCorazaDirectives_omitsUserOverridesWhenFileMissing(t *testing.T) {
 		t.Fatalf("directives must not include a missing overrides file:\n%s", directives)
 	}
 }
+
+func TestBuildCorazaDirectives_skipsIllegalSecRuleRemoveTargets(t *testing.T) {
+	// R60 B-新1：SecRuleRemoveById 形态门——非法形态（coraza Atoi 失败→
+	// 全部配置编译失败/LB 停摆）与越界 range（1-999999 静默删光全部规则）
+	// 必须跳过；合法单 ID 与合法区间照常发射。
+	policy := &models.SecurityPolicy{
+		Mode:             "blocking",
+		CRSRuleGroups:    json.RawMessage(`["942"]`),
+		CRSExcludedRules: json.RawMessage(`["942100","ABCDEF","942100-abc","REQUEST-942.conf","1-999999","932100-932200"]`),
+	}
+	directives := BuildCorazaDirectives(policy)
+	if !strings.Contains(directives, "SecRuleRemoveById 942100") {
+		t.Fatal("legal single ID must be emitted")
+	}
+	if !strings.Contains(directives, "SecRuleRemoveById 932100-932200") {
+		t.Fatal("legal in-range pair must be emitted")
+	}
+	for _, illegal := range []string{"ABCDEF", "942100-abc", "REQUEST-942.conf", "1-999999"} {
+		if strings.Contains(directives, illegal) {
+			t.Fatalf("illegal entry %q must be skipped", illegal)
+		}
+	}
+}
+
+func TestMergeOverridesLines_preservesExistingAndDedups(t *testing.T) {
+	// R60 B-新2：两次手改 setup 跨两次成功更新，前次迁移行必须保留；
+	// 重复行去重；空 diff 且既有为空 → nil（不写空文件）。
+	dir := t.TempDir()
+	path := filepath.Join(dir, "zz-user-overrides.conf")
+	os.WriteFile(path, []byte("# header\nSecAction pass,nolog,setvar:tx.old=1\n"), 0644)
+	merged := mergeOverridesLines(path, "# new header\n", []string{"setvar tx.new=1", "SecAction pass,nolog,setvar:tx.old=1"})
+	out := string(merged)
+	for _, want := range []string{"setvar:tx.old=1", "setvar tx.new=1", "# new header"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("merged overrides missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Count(out, "setvar:tx.old=1") != 1 {
+		t.Fatalf("duplicate line must be deduped:\n%s", out)
+	}
+	if mergeOverridesLines(filepath.Join(dir, "none.conf"), "# h\n", nil) != nil {
+		t.Fatal("no existing + empty diff must return nil")
+	}
+}
