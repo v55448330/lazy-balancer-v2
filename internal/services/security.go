@@ -98,6 +98,9 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 		// 阻断；随后通过 phase:1 的 SecAction 仅将 CRS 规则集切换为
 		// DetectionOnly（该切换在 CRS Include 之前生效），自定义拦截规则与 IP
 		// ACL 不受影响，仍在检测模式下强制阻断。
+		// 例外（R65 B-S5）：body 目标的自定义拦截规则发射为 phase:2（REQUEST_BODY
+		// 仅 phase:2 可读），而 DetectionOnly ctl 是事务级指令持续到 phase:2——
+		// 该类规则在检测模式下仅记录不阻断（见 emitCustomRules 相位说明）。
 		sb.WriteString("SecRuleEngine On\n")
 	case emitIPControl || hasCustomRules:
 		// WAF (CRS) off, but IP control / custom rules still need the engine.
@@ -266,7 +269,9 @@ func customRuleEmissionIssue(cr models.CustomRule) string {
 
 // emitCustomRules writes user rules ahead of any DetectionOnly switch so a
 // rule-level "拦截" action always blocks regardless of the policy WAF mode,
-// mirroring how IP control behaves. 动作语义与前端编辑器一致：拦截=命中即阻断；
+// mirroring how IP control behaves（例外：body 目标规则发射为 phase:2，检测模式
+// 的 DetectionOnly 事务级切换对其生效，仅记录不阻断——R65 B-S5）。
+// 动作语义与前端编辑器一致：拦截=命中即阻断；
 // 仅记录=只记录事件、不向异常分累加；放行计分=记录并向异常分累加，由 949
 // 评估（受 WAF 模式约束）统一裁决。
 // customRulePhase 按规则目标选择 coraza 相位：条件或旧版单目标形状命中 body
@@ -426,7 +431,7 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 			return nil
 		}
 		var rules []models.CustomRule
-		queried := 0
+		queriedIDs := make(map[int]struct{}, len(ids))
 		for start := 0; start < len(ids); start += policyCustomRuleChunkSize {
 			end := start + policyCustomRuleChunkSize
 			if end > len(ids) {
@@ -445,7 +450,9 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 				Logf("warn", "解析策略自定义规则分块查询失败（id 段 %d-%d）: %v", chunk[0], chunk[len(chunk)-1], err)
 				continue
 			}
-			queried += len(chunk)
+			for _, id := range chunk {
+				queriedIDs[id] = struct{}{}
+			}
 			for rows.Next() {
 				var cr models.CustomRule
 				var conditionsJSON string
@@ -460,7 +467,9 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 		// 悬空引用（规则已被删除）不改变解析行为，仅记录日志便于排查；
 		// 只统计查询成功分块内未找到的 id——查询失败的分块已单独留痕，
 		// 其 id 从未读回，计入悬空会把「查询失败」误报为「规则已删除」。
-		if dropped := queried - len(rules); dropped > 0 {
+		// R65 B-S6：queried 按去重后的 id 计数——custom_rules 数组含重复 id 时
+		// IN 只返回一行，不去重会把「重复引用」误报为「N-1 个不存在」。
+		if dropped := len(queriedIDs) - len(rules); dropped > 0 {
 			Logf("warn", "策略引用的自定义规则有 %d 个不存在，已跳过", dropped)
 		}
 		return rules

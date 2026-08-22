@@ -168,6 +168,10 @@ func (m *CRSUpdateManager) schedulerTick(now time.Time, stop <-chan struct{}) {
 // 观察管理）。终态读取附带归属校验：等待结束时若 m.runDone 已被更新的 run
 // 接管（手动更新在微秒窗口插队），本 tick 的 run 已非最新——跳过退避重写，
 // 由接管 run 的操作者/后续 tick 决定排程，不再按他人终态误判。
+// 已知取舍（R65 B-S1）：「auto 失败 + 手动插队 + 手动也失败」时 auto 的失败
+// 退避被跳过，next_update 停留 tick 预写的 +24h（本应 2h 档）——影响有界
+// （≤24h）且经 restoreFailedUpdateBackoff 在下次 StartScheduler 时拉回；反向
+// 按接管者终态重写则会在「手动成功复位计数」场景错写 +1h。取保守跳过。
 func (m *CRSUpdateManager) rearmAfterCRSUpdate(now time.Time, stop <-chan struct{}, runDone chan struct{}) {
 	wait := runDone
 	if wait == nil {

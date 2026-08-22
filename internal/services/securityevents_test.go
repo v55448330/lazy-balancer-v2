@@ -1037,11 +1037,12 @@ func TestSecurityEventsTick_warnRateLimitedPerOffset(t *testing.T) {
 	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	oldAuditLog, oldAuditLogPath, oldOffsetPath, oldInterval := auditLogPath, securityEventsAuditLogPath, securityEventsOffsetPath, securityEventsPollInterval
-	auditLogPath, securityEventsAuditLogPath, securityEventsOffsetPath = logPath, logPath, offsetPath
+	// R65 B-S4：审计日志路径收敛为单一 auditLogPath（原 securityEventsAuditLogPath 双 var 已删）。
+	oldAuditLog, oldOffsetPath, oldInterval := auditLogPath, securityEventsOffsetPath, securityEventsPollInterval
+	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
 	securityEventsPollInterval = 100 * time.Millisecond
 	t.Cleanup(func() {
-		auditLogPath, securityEventsAuditLogPath, securityEventsOffsetPath, securityEventsPollInterval = oldAuditLog, oldAuditLogPath, oldOffsetPath, oldInterval
+		auditLogPath, securityEventsOffsetPath, securityEventsPollInterval = oldAuditLog, oldOffsetPath, oldInterval
 	})
 	var buf bytes.Buffer
 	oldWriter := log.Writer()

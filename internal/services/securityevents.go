@@ -25,7 +25,6 @@ import (
 // avoid package-level symbol clashes inside services.
 
 var (
-	securityEventsAuditLogPath = "/app/waf/audit/audit.log"
 	securityEventsOffsetPath   = "/app/data/security_events.offset"
 	securityEventsPollInterval = 2 * time.Second
 )
@@ -633,8 +632,8 @@ func (t *securityEventsTailer) securityEventsRateLimitedWarn(err error) {
 // transactions into security_events until ctx is cancelled. Blocking; call
 // from a goroutine.
 func StartSecurityEventsIngestion(ctx context.Context) {
-	tailer := securityEventsNewTailer(securityEventsAuditLogPath, securityEventsOffsetPath)
-	Logf("info", "security events ingestion started: audit_log=%s offset_file=%s", securityEventsAuditLogPath, securityEventsOffsetPath)
+	tailer := securityEventsNewTailer(auditLogPath, securityEventsOffsetPath)
+	Logf("info", "security events ingestion started: audit_log=%s offset_file=%s", auditLogPath, securityEventsOffsetPath)
 	ticker := time.NewTicker(securityEventsPollInterval)
 	defer ticker.Stop()
 	for {
