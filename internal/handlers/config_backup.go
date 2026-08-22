@@ -390,6 +390,34 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 			}
 		}
 	}
+	// R62 C3-F2：upstreams.protocol 按所属规则协议过白名单——与保存侧
+	// validateUpstreams（handlers.go）同口径。此前 v2 导入链不触碰 upstreams 行，
+	// 手造备份可带入 http 规则 + 上游 protocol="tls"（保存侧明确拒绝的形态）：
+	// 配置对 Caddy 合法（无 per-upstream 协议字段），导入/启用链零报错，但渲染侧
+	// 仅 "https" 触发 TLS transport → 明文 HTTP 打 TLS 端口，该规则全部请求静默 502。
+	// 空 protocol 视为 http（与 skipEmptyDomainHTTPRules 的 Round 35 I-10 口径一致）。
+	ruleProtocols := make(map[string]string, len(tables["lb_rules"]))
+	for _, row := range tables["lb_rules"] {
+		if id, ok := row["caddy_id"].(string); ok {
+			ruleProtocols[id], _ = row["protocol"].(string)
+		}
+	}
+	for i, row := range tables["upstreams"] {
+		protocol, _ := row["protocol"].(string)
+		if protocol == "" {
+			continue
+		}
+		ruleID, _ := row["rule_id"].(string)
+		// 与保存侧 validateUpstreams 完全同口径：仅 "http" 走 http/https 白名单，
+		// 其余（含空 protocol）按 TCP 侧 tcp/tls 白名单。
+		if ruleProtocols[ruleID] == "http" {
+			if protocol != "http" && protocol != "https" {
+				return fmt.Errorf("备份校验失败：upstreams 第 %d 行（规则 %q）协议 %q 无效（HTTP 规则仅支持 http/https）", i+1, ruleID, protocol)
+			}
+		} else if protocol != "tcp" && protocol != "tls" {
+			return fmt.Errorf("备份校验失败：upstreams 第 %d 行（规则 %q）协议 %q 无效（TCP 规则仅支持 tcp/tls）", i+1, ruleID, protocol)
+		}
+	}
 	// R49 C-#2：security_policy_bindings 无外键约束，悬挂引用可原样落库——绑定指向
 	// 不存在的策略时，loadSecurityPolicyContext 查不到策略即按无策略渲染，该规则
 	// WAF/限流/GeoIP 全部静默失效（与 R47 B-5 同类的静默 weakening）。保存侧绑定
@@ -638,6 +666,14 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 func validateV2BackupTLSShape(tables map[string][]map[string]any) error {
 	for index, rule := range tables["lb_rules"] {
 		protocol, _ := rule["protocol"].(string)
+		// R62 C2-N1（传播通道钳制）：TCP 规则不终结入站 TLS，携带 enable_tls=1 +
+		// 空 manual 证书的行（源自旧版 v1 导入的导出物）会让该规则任何编辑恒 400
+		// 且 UI 无自救路径——静默钳制为关闭 TLS 并清空证书材料（与 dns_family
+		// 等行级钳制同哲学，不因存量形态拒绝整包导入）。
+		if protocol == "tcp" && backupBooleanEnabled(rule["enable_tls"]) {
+			rule["enable_tls"] = 0
+			rule["tls_cert"], rule["tls_key"] = "", ""
+		}
 		if !backupRuleEnabled(rule) || protocol != "http" || !backupBooleanEnabled(rule["enable_tls"]) {
 			continue
 		}

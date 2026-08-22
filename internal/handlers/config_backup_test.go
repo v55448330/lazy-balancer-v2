@@ -1145,6 +1145,67 @@ func TestValidateV2Backup_rejects_wildcard_domain(t *testing.T) {
 	}
 }
 
+// R62 C3-F2：v2 导入 upstreams.protocol 白名单——与保存侧 validateUpstreams 同口径，
+// 防手造备份带入 http 规则 + 上游 "tls"（渲染侧明文 HTTP 打 TLS 端口，静默 502）。
+func TestValidateBackupRuleReferences_rejects_bad_upstream_protocol(t *testing.T) {
+	base := func(ruleProtocol string) map[string][]map[string]any {
+		return map[string][]map[string]any{
+			"lb_rules": {{"caddy_id": "lb_f2proto", "protocol": ruleProtocol}},
+		}
+	}
+	tests := []struct {
+		name        string
+		ruleProto   string
+		upstreamAny map[string]any
+		wantErr     string
+	}{
+		{name: "http 规则上游 tls 被拒", ruleProto: "http", upstreamAny: map[string]any{"rule_id": "lb_f2proto", "protocol": "tls"}, wantErr: "HTTP 规则仅支持 http/https"},
+		{name: "http 规则上游 tcp 被拒", ruleProto: "http", upstreamAny: map[string]any{"rule_id": "lb_f2proto", "protocol": "tcp"}, wantErr: "HTTP 规则仅支持 http/https"},
+		{name: "http 规则上游 https 放行", ruleProto: "http", upstreamAny: map[string]any{"rule_id": "lb_f2proto", "protocol": "https"}},
+		{name: "http 规则上游空协议放行", ruleProto: "http", upstreamAny: map[string]any{"rule_id": "lb_f2proto"}},
+		{name: "tcp 规则上游 https 被拒", ruleProto: "tcp", upstreamAny: map[string]any{"rule_id": "lb_f2proto", "protocol": "https"}, wantErr: "TCP 规则仅支持 tcp/tls"},
+		{name: "tcp 规则上游 http 被拒", ruleProto: "tcp", upstreamAny: map[string]any{"rule_id": "lb_f2proto", "protocol": "http"}, wantErr: "TCP 规则仅支持 tcp/tls"},
+		{name: "tcp 规则上游 tls 放行", ruleProto: "tcp", upstreamAny: map[string]any{"rule_id": "lb_f2proto", "protocol": "tls"}},
+		{name: "空 protocol 规则按保存侧口径走 tcp 白名单", ruleProto: "", upstreamAny: map[string]any{"rule_id": "lb_f2proto", "protocol": "http"}, wantErr: "TCP 规则仅支持 tcp/tls"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tables := base(tt.ruleProto)
+			tables["upstreams"] = []map[string]any{tt.upstreamAny}
+			err := validateBackupRuleReferences(tables)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("validateBackupRuleReferences err=%v, want contains %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateBackupRuleReferences unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// R62 C2-N1（传播通道钳制）: v2 备份中 TCP + enable_tls=1 + 空证书的行被静默钳制
+// 为关闭 TLS（不因存量形态拒绝整包导入）。
+func TestValidateV2BackupTLSShape_clamps_tcp_stale_tls(t *testing.T) {
+	rule := map[string]any{
+		"caddy_id": "lb_tcp_stale", "name": "tcp-stale", "protocol": "tcp",
+		"listen_port": 8465, "enabled": 1, "enable_tls": 1, "tls_source": "manual",
+	}
+	tables := map[string][]map[string]any{"lb_rules": {rule}}
+
+	if err := validateV2BackupTLSShape(tables); err != nil {
+		t.Fatalf("validateV2BackupTLSShape unexpected error: %v", err)
+	}
+	if v, _ := rule["enable_tls"].(int); v != 0 {
+		t.Fatalf("enable_tls=%v, want clamped 0", rule["enable_tls"])
+	}
+	if rule["tls_cert"] != "" || rule["tls_key"] != "" {
+		t.Fatalf("tls_cert=%v tls_key=%v, want cleared", rule["tls_cert"], rule["tls_key"])
+	}
+}
+
 func TestImportConfigBackup_rejects_invalid_credentials_json(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	gin.SetMode(gin.TestMode)
