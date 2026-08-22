@@ -91,11 +91,15 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if err := replaceSnapshotTx(ctx, tx, snapshot, skip); err != nil {
 		return err
 	}
-	if err := removeMissingSnapshotCerts(previous.Certs, snapshot.Certs); err != nil {
-		return errors.Join(fmt.Errorf("删除本地旧证书: %w", err), s.restoreSnapshotArtifacts(previous, snapshot))
-	}
-	if err := materializeSnapshotCerts(snapshot.Certs); err != nil {
-		return errors.Join(fmt.Errorf("写入同步证书: %w", err), s.restoreSnapshotArtifacts(previous, snapshot))
+	// R64 A-N5：证书文件轴（删旧+写新）与 cert_jobs 替换同门于 rules 开关——
+	// 开关关闭时从节点本地 acme_dns 规则保留，其证书行/文件不得按主节点快照删改。
+	if !skip.disabled["rules"] {
+		if err := removeMissingSnapshotCerts(previous.Certs, snapshot.Certs); err != nil {
+			return errors.Join(fmt.Errorf("删除本地旧证书: %w", err), s.restoreSnapshotArtifacts(previous, snapshot))
+		}
+		if err := materializeSnapshotCerts(snapshot.Certs); err != nil {
+			return errors.Join(fmt.Errorf("写入同步证书: %w", err), s.restoreSnapshotArtifacts(previous, snapshot))
+		}
 	}
 	if err := s.materializeSnapshotDNSOwnership(snapshot.ACME); err != nil {
 		return errors.Join(fmt.Errorf("写入同步 DNS 所有权状态: %w", err), s.restoreSnapshotArtifacts(previous, snapshot))
@@ -269,8 +273,16 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 	// cert_jobs 存主节点下发的证书（从节点自身不签发），与 ca_providers/certificate_configs
 	// 同为全量替换，不纳入 rules 节哈希跳过：rules 节命中哈希跳过后证书 INSERT 仍会重放，
 	// 残留旧行会撞 (rule_id,domain) 唯一索引，导致同步永久失败。
-	if err := clearSyncTables(ctx, tx, "cert_jobs"); err != nil {
-		return err
+	// R64 A-N5：仅哈希跳过（unchanged）保持上述全量回放；rules 开关关闭（disabled）时
+	// 证书轴必须联动跳过——证书行/文件是规则轴的派生数据：开关关闭时从节点保留本地
+	// 规则（含 enabled=1 的 acme_dns 规则），若仍清空 cert_jobs 并按主节点快照删本地
+	// 证书文件，从节点该规则的 TLS 会静默永久丢失（渲染侧无证书即不入 TLS 连接策略，
+	// Caddy 正常加载零报错，从节点不签发也无自愈路径）。注意 skip() 是
+	// disabled||unchanged 的合并视图，此处须精确判 disabled。
+	if !skip.disabled["rules"] {
+		if err := clearSyncTables(ctx, tx, "cert_jobs"); err != nil {
+			return err
+		}
 	}
 	if !skip.skip("users") {
 		if err := clearSyncTables(ctx, tx, "api_keys", "users"); err != nil {
@@ -308,13 +320,16 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 			return err
 		}
 	}
-	for _, cert := range snapshot.Certs {
-		message := "从主节点同步"
-		if cert.SourceStatus != "" {
-			message += "，源任务状态：" + cert.SourceStatus
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO cert_jobs (rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,renewal_attempts,ca_available_after,last_error_code) SELECT ?,COALESCE(NULLIF(?,''),domain),'issued',?,?,?,?,?,?,?,? FROM lb_rules WHERE caddy_id=? AND tls_source='acme_dns'`, cert.RuleID, cert.Domain, message, nullableString(cert.ExpiresAt), cert.CertPEM, cert.KeyPEM, cert.CAProviderID, cert.RenewalAttempts, nullableTime(cert.CAAvailableAfter.NullTime), nullableString(cert.LastErrorCode), cert.RuleID); err != nil {
-			return fmt.Errorf("写入快照证书 %s: %w", cert.RuleID, err)
+	// R64 A-N5：证书回插与清空同门（见上方 cert_jobs 清空处注释）。
+	if !skip.disabled["rules"] {
+		for _, cert := range snapshot.Certs {
+			message := "从主节点同步"
+			if cert.SourceStatus != "" {
+				message += "，源任务状态：" + cert.SourceStatus
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO cert_jobs (rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,renewal_attempts,ca_available_after,last_error_code) SELECT ?,COALESCE(NULLIF(?,''),domain),'issued',?,?,?,?,?,?,?,? FROM lb_rules WHERE caddy_id=? AND tls_source='acme_dns'`, cert.RuleID, cert.Domain, message, nullableString(cert.ExpiresAt), cert.CertPEM, cert.KeyPEM, cert.CAProviderID, cert.RenewalAttempts, nullableTime(cert.CAAvailableAfter.NullTime), nullableString(cert.LastErrorCode), cert.RuleID); err != nil {
+				return fmt.Errorf("写入快照证书 %s: %w", cert.RuleID, err)
+			}
 		}
 	}
 	if !skip.skip("global_config") {
