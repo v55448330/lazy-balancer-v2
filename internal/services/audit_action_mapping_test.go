@@ -16,6 +16,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -292,6 +293,90 @@ func TestAuditActionMapping_dangerClassificationContract(t *testing.T) {
 		slices.Sort(violations)
 		t.Fatalf("危险语义动作必须映射到 danger 行（失败后缀或 {配置漂移, 应用失败, 部署失败, 认证拒绝, 提升失败} 契约）：\n%s", strings.Join(violations, "\n"))
 	}
+}
+
+// TestAuditGenericRoutesExactlyOnce Generic 路由 exactly-once 绊线（R65 D-N1）：
+// Generic 分类的路由要么由中间件记录（FormatAuditAction 有映射、handler 不得
+// 再记），要么由 handler 记录（映射为空、中间件跳过）——两侧同时激活即单次
+// 动作双条 audit_log（/config/reload 曾如此）。新增 Generic 路由或调整记录侧
+// 时，把 (路由, handler 函数, 期望记录侧) 登记进下表。
+func TestAuditGenericRoutesExactlyOnce(t *testing.T) {
+	if action, _, _ := FormatAuditAction(http.MethodPost, "/api/v1/config/reload"); action != "" {
+		t.Fatalf("FormatAuditAction(/config/reload)=%q, want 空（handler ReloadCaddy 已显式记录，映射非空会双条）", action)
+	}
+	routes := []struct {
+		path              string
+		handlerFunc       string
+		handlerMustRecord bool // true: handler 记录（映射必须为空）；false: 中间件记录（映射必须非空且 handler 不得记录）
+	}{
+		{"/api/v1/config/reload", "ReloadCaddy", true},
+		{"/api/v1/system/restart", "RestartService", true},
+		{"/api/v1/caddy/start", "StartCaddy", false},
+		{"/api/v1/caddy/stop", "StopCaddy", false},
+		{"/api/v1/caddy/restart", "RestartCaddy", false},
+	}
+	handlersRoot, err := filepath.Abs(filepath.Join("..", "handlers"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range routes {
+		t.Run(route.path, func(t *testing.T) {
+			action, _, _ := FormatAuditAction(http.MethodPost, route.path)
+			if route.handlerMustRecord && action != "" {
+				t.Fatalf("FormatAuditAction 映射非空 %q——handler %s 已显式记录，会双条", action, route.handlerFunc)
+			}
+			if !route.handlerMustRecord && action == "" {
+				t.Fatalf("FormatAuditAction 映射为空——handler %s 不记录，该路由将零审计", route.handlerFunc)
+			}
+			found, records := scanHandlerForAuditCall(t, handlersRoot, route.handlerFunc)
+			if !found {
+				t.Fatalf("未找到 handler 函数 %s——路由→handler 映射表可能过期", route.handlerFunc)
+			}
+			if route.handlerMustRecord && !records {
+				t.Fatalf("handler %s 必须显式记录审计（映射为空、中间件跳过，否则零审计）", route.handlerFunc)
+			}
+			if !route.handlerMustRecord && records {
+				t.Fatalf("handler %s 含审计记录调用——中间件已映射记录，会双条", route.handlerFunc)
+			}
+		})
+	}
+}
+
+// scanHandlerForAuditCall 在 handlers 包源码中定位指定方法名的外围函数，
+// 返回（是否找到, 函数体是否包含 recordAudit(/RecordAuditLog( 调用）。
+func scanHandlerForAuditCall(t *testing.T, root, funcName string) (bool, bool) {
+	t.Helper()
+	pattern := regexp.MustCompile(`(recordAudit\(|RecordAuditLog\()`)
+	found, records := false, false
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return err
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, src, 0)
+		if err != nil {
+			return err
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || fn.Name.Name != funcName || fn.Body == nil {
+				continue
+			}
+			found = true
+			start, end := fset.Position(fn.Pos()).Offset, fset.Position(fn.End()).Offset
+			records = pattern.Match(src[start:end])
+			return nil
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk handlers: %v", err)
+	}
+	return found, records
 }
 
 // TestAuditInsertEntryPointsExhaustive 审计写入入口穷尽性绊线（R62 D-5）：

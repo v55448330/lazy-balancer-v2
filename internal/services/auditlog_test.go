@@ -69,9 +69,11 @@ func TestFormatAuditActionRuleEnable(t *testing.T) {
 }
 
 func TestFormatAuditActionDirectConfigReload(t *testing.T) {
-	action, resource, detail := FormatAuditAction("POST", "/api/v1/config/reload")
-	if action != "重载" || resource != "Caddy服务" || detail != "/api/v1/config/reload" {
-		t.Fatalf("FormatAuditAction() = (%q, %q, %q)", action, resource, detail)
+	// R65 D-N1：/config/reload 改由 handler（ReloadCaddy）单独记录，映射为空
+	//（中间件跳过）——此前映射+handler 双记录，单次动作两条 audit_log。
+	action, resource, _ := FormatAuditAction("POST", "/api/v1/config/reload")
+	if action != "" || resource != "" {
+		t.Fatalf("FormatAuditAction() = (%q, %q), want 空（handler 已显式记录）", action, resource)
 	}
 }
 

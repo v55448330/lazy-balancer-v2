@@ -230,8 +230,13 @@ func FormatAuditAction(method, path string) (action, resource, detail string) {
 
 	case p == "/api/v1/config":
 		return "", "", ""
+	// R65 D-N1：/config/reload 不在中间件侧映射——该路由的 handler（ReloadCaddy）
+	// 已显式 recordAudit（caddy.go），此前中间件经本函数再落一条通用记录，单次
+	// 动作产生两条 audit_log。移除后对齐 system/restart 模式（handler 单独记录，
+	// FormatAuditAction 返回空、中间件跳过）。caddy/start|stop|restart 仍走中间件
+	// 映射（其 handler 不记录），分工不变。
 	case strings.Contains(p, "/config/reload"):
-		return "重载", "Caddy服务", p
+		return "", "", ""
 
 	case strings.Contains(p, "/certificate-configs") && method == "POST":
 		return "创建", "DNS配置", p
