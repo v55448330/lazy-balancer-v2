@@ -310,7 +310,9 @@ func TestAuditInsertEntryPointsExhaustive(t *testing.T) {
 		"RecordAuditLog":       true, // services/auditlog.go —— auditVocabCallSpecs 已覆盖其调用点
 		"flushSystemAuditLogs": true, // db/audit.go —— recordSystemAudit 缓冲的唯一落库点，无字面量动作
 	}
-	pattern := regexp.MustCompile(`INTO\s+audit_log\b`)
+	// R63 D-N3：SQL 关键字与表名大小写不敏感，正则加 (?i) 防 "insert into
+	// audit_log" 等变体从文件级预筛静默漏过。
+	pattern := regexp.MustCompile(`(?i)INTO\s+audit_log\b`)
 	found := false
 	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -333,17 +335,29 @@ func TestAuditInsertEntryPointsExhaustive(t *testing.T) {
 		}
 		rel, _ := filepath.Rel(root, path)
 		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
-			}
-			start, end := fset.Position(fn.Pos()).Offset, fset.Position(fn.End()).Offset
-			if pattern.Match(src[start:end]) {
-				found = true
-				if !allow[fn.Name.Name] {
-					t.Errorf("%s: 函数 %s 直接 INSERT INTO audit_log——绕过了 auditVocabCallSpecs 所列入口，"+
-						"其动作词条对词汇/映射契约测试不可见；请改走 RecordAuditLog/recordSystemAudit，"+
-						"或同步更新两个契约测试并把函数名加入本允许集", rel, fn.Name.Name)
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Body == nil {
+					continue
+				}
+				start, end := fset.Position(d.Pos()).Offset, fset.Position(d.End()).Offset
+				if pattern.Match(src[start:end]) {
+					found = true
+					if !allow[d.Name.Name] {
+						t.Errorf("%s: 函数 %s 直接 INSERT INTO audit_log——绕过了 auditVocabCallSpecs 所列入口，"+
+							"其动作词条对词汇/映射契约测试不可见；请改走 RecordAuditLog/recordSystemAudit，"+
+							"或同步更新两个契约测试并把函数名加入本允许集", rel, d.Name.Name)
+					}
+				}
+			case *ast.GenDecl:
+				// R63 D-N2：包级函数字面量（var x = func(){...INSERT...}）无外围
+				// FuncDecl，允许集检查对其永不触发——按整段文本命中即红（包级
+				// 裸写入点无法按函数名归因，契约上不应存在；确有需要先重构为
+				// 命名函数并加入允许集）。
+				start, end := fset.Position(d.Pos()).Offset, fset.Position(d.End()).Offset
+				if pattern.Match(src[start:end]) {
+					found = true
+					t.Errorf("%s: 包级声明直接包含 INSERT INTO audit_log——绕过按函数名的允许集检查；请改走 RecordAuditLog/recordSystemAudit 并重构为命名函数", rel)
 				}
 			}
 		}
@@ -354,5 +368,91 @@ func TestAuditInsertEntryPointsExhaustive(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("未发现任何 INTO audit_log 生产写入点——允许集可能已失效（写入改为其他表名/形态），请人工复核 auditVocabCallSpecs 与本测试的允许集")
+	}
+}
+
+// TestAuditEntryAliasExhaustive 审计入口别名穷尽性绊线（R63 D-N4）：两个契约
+// 测试按「调用名 ∈ auditVocabCallSpecs」提取调用点——入口被函数变量别名后以
+// 别名调用，别名未登记时该调用点对两测试整点不可见（动作词条不进后端动作集、
+// 漏映射检查失明、danger 契约条目虚设；R50 D-01 的「认证拒绝」缺失即此类，
+// 当时仅靠人工审计发现）。本测试扫描 internal/ 生产代码中 RHS 为入口名的
+// var 值规格与赋值语句，断言 LHS 标识符 ∈ auditVocabCallSpecs；新别名未登记
+// 即红。
+func TestAuditEntryAliasExhaustive(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", "internal"))
+	if err != nil {
+		t.Fatalf("resolve internal dir: %v", err)
+	}
+	entryNames := map[string]bool{
+		"RecordAuditLog":    true,
+		"recordAudit":       true,
+		"recordSystemAudit": true,
+	}
+	rhsIsEntry := func(e ast.Expr) bool {
+		switch v := e.(type) {
+		case *ast.Ident:
+			return entryNames[v.Name]
+		case *ast.SelectorExpr:
+			return entryNames[v.Sel.Name]
+		}
+		return false
+	}
+	found := false
+	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, src, 0)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+		rel, _ := filepath.Rel(root, path)
+		line := func(n ast.Node) int { return fset.Position(n.Pos()).Line }
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch d := n.(type) {
+			case *ast.GenDecl:
+				if d.Tok != token.VAR {
+					return true
+				}
+				for _, spec := range d.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 || !rhsIsEntry(vs.Values[0]) {
+						continue
+					}
+					found = true
+					if _, registered := auditVocabCallSpecs[vs.Names[0].Name]; !registered {
+						t.Errorf("%s:%d: 入口别名 %s 未登记进 auditVocabCallSpecs——以别名调用时其动作词条对词汇/映射契约测试不可见；请同步登记或去掉别名", rel, line(vs), vs.Names[0].Name)
+					}
+				}
+			case *ast.AssignStmt:
+				if (d.Tok != token.ASSIGN && d.Tok != token.DEFINE) || len(d.Lhs) != 1 || len(d.Rhs) != 1 {
+					return true
+				}
+				id, ok := d.Lhs[0].(*ast.Ident)
+				if !ok || !rhsIsEntry(d.Rhs[0]) {
+					return true
+				}
+				found = true
+				if _, registered := auditVocabCallSpecs[id.Name]; !registered {
+					t.Errorf("%s:%d: 入口别名 %s 未登记进 auditVocabCallSpecs——以别名调用时其动作词条对词汇/映射契约测试不可见；请同步登记或去掉别名", rel, line(d), id.Name)
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal: %v", err)
+	}
+	if !found {
+		t.Fatal("未发现任何审计入口别名——入口可能已被重命名/删除，请人工复核 auditVocabCallSpecs 与本测试")
 	}
 }
