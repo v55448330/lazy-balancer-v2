@@ -64,6 +64,13 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		})
 		return
 	}
+	// R64 A-N4：令牌撤销/schema 不匹配会把同步循环置为 Halted 终态，而 BecomeSlave
+	// 只调 StartSync()→Start()——Start 对 Halted 态是 no-op（cluster_sync.go startLocked
+	// 门控），重新注册后循环永不重启、注册轮询不可达，从节点静默永久脱同步（唯一
+	// 出口 Resume 此前只有手动同步一处调用，且重新注册后 token='' 使 Pull 在 Resume
+	// 之前就失败早退）。Resume 对非 Halted 态是 no-op，幂等安全；此时 run 循环已
+	// 终止（done 已关），Resume 立即拉起新循环进入注册轮询。
+	h.syncService.Resume()
 	recordAudit(c, "切换", "集群模式", services.FormatAuditDetail("主节点 → 从节点", masterAuditURL, "等待审批"))
 	message := "已切换为从节点，等待主节点审批"
 	if strings.HasPrefix(strings.ToLower(req.MasterURL), "http://") {
