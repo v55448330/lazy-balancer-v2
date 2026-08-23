@@ -1326,7 +1326,31 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 	var envelope struct {
 		Data models.ClusterRegistrationStatus `json:"data"`
 	}
-	if json.NewDecoder(io.LimitReader(resp.Body, maxRegistrationResponseBytes)).Decode(&envelope) == nil && envelope.Data.Status == "approved" && envelope.Data.ClusterToken != "" {
+	if json.NewDecoder(io.LimitReader(resp.Body, maxRegistrationResponseBytes)).Decode(&envelope) != nil {
+		return
+	}
+	if envelope.Data.Status == "rejected" {
+		// R67 A-N1：200 "rejected" 出现于「registrationAuth 通过后、RegistrationStatus
+		// 事务 SELECT 前节点行被删」的交错窗口（单发瞬态，下一轮即 401 走 R64 A-N6
+		// 终止轨道）。显式处理消除该轮的无痕迹轮询并给出准确文案（否则 401 轨道
+		// 的文案会误报为「HTTP 401 被拒绝」）。
+		s.bumpRegistrationConfirmFailure(ctx, "", "主节点已拒绝该注册（节点记录不存在）")
+		s.combineOrReplaceSyncError(ctx, "注册已被主节点拒绝，请重新注册或提升为主节点", models.SyncErrorCodeValidationFailed)
+		return
+	}
+	if envelope.Data.Status == "approved" && envelope.Data.ClusterToken != "" {
+		// R67 A-N3：令牌落库先于 confirm——主节点 confirm 成功即消费
+		// registration_secret（cluster_snapshot.go ConfirmRegistration 置 NULL），
+		// 若本地令牌 UPDATE 在 confirm 之后瞬时失败（SQLITE_BUSY/进程退出），
+		// 下周期以已消费的 secret 轮询 → 401 五连败 → 以「被拒绝/移除」的
+		// 误导文案清空注册态，需人工重新注册。前置落库后失败面收敛为「多一次
+		// confirm 请求」或「confirm 失败走 bump 轨道」，轨道自愈。令牌在主节点
+		// 审批时刻即有效（Pull 鉴权只查 cluster_token_hash），confirm 仅是冗余
+		// 交付确认（首个签名快照亦会清 secret），前置无安全影响。
+		if _, err := s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token=?, registration_secret='' WHERE id=1", envelope.Data.ClusterToken); err != nil {
+			log.Printf("保存集群令牌失败（下周期重试状态轮询）: %v", err)
+			return
+		}
 		confirm, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(masterURL, "/")+"/api/v1/cluster/registration/confirm", nil)
 		if err != nil {
 			return
@@ -1352,11 +1376,19 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 			return
 		}
 		s.resetRegistrationConfirmFailure(ctx)
-		// 落库失败时下周期会重复 confirm（主节点 confirm 幂等），仅多一次请求。
-		if _, err := s.db.ExecContext(ctx, "UPDATE global_config SET cluster_token=?, registration_secret='' WHERE id=1", envelope.Data.ClusterToken); err != nil {
-			log.Printf("保存集群令牌失败（下周期重复 confirm，主节点幂等）: %v", err)
-		}
 	}
+}
+
+// ForgetClusterPins 清空内存 TOFU pin 缓存（R67 A-N2）。提升为主节点时
+// cleanupClusterPin 已删除 pin 文件，但本 map 不清则残留旧主节点指纹：本节点
+// 重新成为从节点且新主节点恰在同一 host:port 换发证书时，do() 会以内存指纹
+// 重新落盘 pin 文件（cluster_sync.go verifyOrStoreClusterPin 回写路径）并使
+// 每次握手指纹比对恒失败——运维删 pin 文件也被写回，仅进程重启可解。提升后
+// 调用使 TOFU 生命周期与 pin 文件侧对齐（新拓扑重新 TOFU）。
+func (s *SyncService) ForgetClusterPins() {
+	s.pinMu.Lock()
+	s.verifiedPins = make(map[string]string)
+	s.pinMu.Unlock()
 }
 
 // registrationConfirmMaxFailures 定义 confirm 端点连续失败上限。达到后停止注册循环。
