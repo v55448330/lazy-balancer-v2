@@ -156,7 +156,10 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 		if j.ExpiresAt.Valid {
 			remaining := j.ExpiresAt.Time.Sub(now)
 			if !now.Before(j.ExpiresAt.Time) {
-				j.DaysRemaining = int(math.Floor(remaining.Hours() / 24))
+				// R66 D-N4：过期天数向零取整（-int(Ceil(-x))），与 certinfo.go 的
+				// int() 截断口径对齐——此前 floor 对负值向远离零取整（过期 1 天
+				// 3 小时报 -2），同一证书在两端口径不一致。
+				j.DaysRemaining = -int(math.Ceil(-remaining.Hours() / 24))
 				j.CertificateStatus = "expired"
 			} else {
 				j.DaysRemaining = int(math.Ceil(remaining.Hours() / 24))
