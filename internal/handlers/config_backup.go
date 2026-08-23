@@ -589,9 +589,26 @@ func validateV2BackupRules(tables map[string][]map[string]any) error {
 		// 往返断裂（与 v1 路径自环规则软跳过口径一致），故禁用行将
 		// EnableTLS/TLSHTTPRedirect 置 false，其余字段校验保留。
 		enabled := backupRuleEnabled(rule)
+		// R67 C-N2：注入 DynamicDNS + 启用上游计数——此前两者恒零值，保存侧
+		// validateRuleFeatures 的「动态上游单启用」门（Round 37 I-8）在导入链
+		// 恒不触发：启用行延迟到 Caddy 阶段以整包 400 形态失败（fail-closed 但
+		// 与同文件逐规则点名口径不一致），禁用行入库后成「永不启用」死行。
+		// 与保存/Duplicate 链同门（DuplicateRule 为此专门 hydrate 上游计数，
+		// rule_features.go R57 C-8 注释）。
+		ruleID := backupString(rule["caddy_id"])
+		enabledHosts := make([]string, 0, 2)
+		for _, row := range tables["upstreams"] {
+			if backupString(row["rule_id"]) == ruleID && backupBooleanEnabled(row["enabled"]) {
+				enabledHosts = append(enabledHosts, backupString(row["host"]))
+			}
+		}
 		input := ruleFeatureInput{
 			Protocol:                   protocol,
 			Strategy:                   backupString(rule["strategy"]),
+			DynamicDNS:                 backupBooleanEnabled(rule["dynamic_dns"]),
+			EnabledUpstreamCount:       len(enabledHosts),
+			EnabledUpstreamHosts:       enabledHosts,
+			DnsFamily:                  backupString(rule["dns_family"]),
 			ListenPort:                 listenPort,
 			EnableTLS:                  backupBooleanEnabled(rule["enable_tls"]) && enabled,
 			TLSHTTPRedirect:            backupBooleanEnabled(rule["tls_http_redirect"]) && enabled,

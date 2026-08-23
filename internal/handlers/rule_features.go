@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"strings"
 
 	"lazy-balancer-v2/internal/db"
@@ -24,6 +25,8 @@ type ruleFeatureInput struct {
 	TLSHTTPRedirect            bool
 	DynamicDNS                 bool
 	EnabledUpstreamCount       int
+	EnabledUpstreamHosts       []string
+	DnsFamily                  string
 	HealthCheckInterval        int
 	HealthCheckTimeout         int
 	EnableCompress             bool
@@ -45,9 +48,11 @@ type pathRuleQueryer interface {
 
 func createRuleFeatures(req models.CreateRuleRequest) ruleFeatureInput {
 	enabledUpstreams := 0
+	enabledHosts := make([]string, 0, len(req.Upstreams))
 	for _, u := range req.Upstreams {
 		if u.Enabled {
 			enabledUpstreams++
+			enabledHosts = append(enabledHosts, u.Host)
 		}
 	}
 	return ruleFeatureInput{
@@ -58,6 +63,8 @@ func createRuleFeatures(req models.CreateRuleRequest) ruleFeatureInput {
 		TLSHTTPRedirect:            req.TLSHTTPRedirect,
 		DynamicDNS:                 req.DynamicDNS,
 		EnabledUpstreamCount:       enabledUpstreams,
+		EnabledUpstreamHosts:       enabledHosts,
+		DnsFamily:                  req.DnsFamily,
 		HealthCheckInterval:        req.HealthCheckInterval,
 		HealthCheckTimeout:         req.HealthCheckTimeout,
 		EnableCompress:             req.EnableCompress,
@@ -76,17 +83,15 @@ func createRuleFeatures(req models.CreateRuleRequest) ruleFeatureInput {
 
 func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ruleFeatureInput {
 	enabledUpstreams := 0
+	var enabledHosts []string
+	upstreams := existing.Upstreams
 	if req.Upstreams != nil {
-		for _, u := range req.Upstreams {
-			if u.Enabled {
-				enabledUpstreams++
-			}
-		}
-	} else {
-		for _, u := range existing.Upstreams {
-			if u.Enabled {
-				enabledUpstreams++
-			}
+		upstreams = req.Upstreams
+	}
+	for _, u := range upstreams {
+		if u.Enabled {
+			enabledUpstreams++
+			enabledHosts = append(enabledHosts, u.Host)
 		}
 	}
 	// Round 38 B2: 对非指针字段（handler 已在调用前完成 merge），直接使用 req 值。
@@ -99,6 +104,8 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 		TLSHTTPRedirect:            existing.TLSHTTPRedirect,
 		DynamicDNS:                 existing.DynamicDNS,
 		EnabledUpstreamCount:       enabledUpstreams,
+		EnabledUpstreamHosts:       enabledHosts,
+		DnsFamily:                  existing.DnsFamily,
 		HealthCheckInterval:        req.HealthCheckInterval,
 		HealthCheckTimeout:         req.HealthCheckTimeout,
 		EnableCompress:             existing.EnableCompress,
@@ -115,6 +122,10 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 	}
 	if req.DynamicDNS != nil {
 		input.DynamicDNS = *req.DynamicDNS
+	}
+	// DnsFamily 为非指针（handler 预合并），空串=未变更沿用 existing。
+	if req.DnsFamily != "" {
+		input.DnsFamily = req.DnsFamily
 	}
 	if req.EnableTLS != nil {
 		input.EnableTLS = *req.EnableTLS
@@ -248,6 +259,24 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 	// Round 37 I-8: dynamic_dns + 多 upstream 前置校验（原仅在 Caddy 渲染阶段检查，规则已入库）。
 	if input.DynamicDNS && input.EnabledUpstreamCount > 1 {
 		return fmt.Errorf("动态上游模式仅允许一个启用的上游服务器，当前有 %d 个", input.EnabledUpstreamCount)
+	}
+	// R67 C-N3：DynamicDNS + IP 字面量上游的地址族一致性门——Go resolver 对
+	// IP 字面量走快速路径（不查 DNS），Caddy 动态上游的 LookupIP 族过滤会把
+	// 与 dns_family 矛盾的字面量剔除为空集 → 每请求立即 502（加载校验不解析，
+	// 全链路静默）。域名形态上游不检查（其解析结果由 DNS 决定，本门无从判定）；
+	// dns_family=both 免疫。
+	if input.DynamicDNS && input.DnsFamily != "" && input.DnsFamily != "both" {
+		for _, host := range input.EnabledUpstreamHosts {
+			ip := net.ParseIP(strings.TrimSpace(host))
+			if ip == nil {
+				continue
+			}
+			mismatch := (input.DnsFamily == "ipv6" && ip.To4() != nil) ||
+				(input.DnsFamily == "ipv4" && ip.To4() == nil)
+			if mismatch {
+				return fmt.Errorf("动态上游模式的上游地址 %s 是 IP 字面量且地址族与 dns_family=%s 不一致（该组合运行时恒 502），请改为域名或调整地址族", host, input.DnsFamily)
+			}
+		}
 	}
 	// C-F2: 80 端口 + TLS 跳转自环：跳转目标 https://host:80 与来源同为 80 端口，
 	// 请求会被跳回自身监听器形成循环，必须在保存前拒绝。
