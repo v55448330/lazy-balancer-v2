@@ -886,7 +886,9 @@ const fetchRuleHealth = async (currentRules: Rule[], version: number) => {
       ruleHealthUnavailable.value = false
     }
   } catch (e) {
-    if (!disposed) {
+    // R66 D-N6：与成功分支同款版本守卫——跨版本在途失败不污染新版本规则集的
+    // 健康列（短暂全「-」误判）。
+    if (!disposed && version === rulesVersion) {
       ruleHealthUnavailable.value = true
       console.error('Failed to fetch rule health:', e)
     }

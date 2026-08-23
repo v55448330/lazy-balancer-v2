@@ -125,8 +125,11 @@
                 </div>
                 <div class="cert-row">
                   <span class="cert-label">剩余天数</span>
+                  <!-- R66 D-N4：过期证书不渲染裸负数（「-1 天」易误读为已过期一整天） -->
                   <span :class="['cert-days', certInfoMap[row.caddy_id]?.status]">
-                    {{ certInfoMap[row.caddy_id]?.days_remaining }} 天
+                    {{ certInfoMap[row.caddy_id]?.status === 'expired'
+                      ? `已过期 ${Math.abs(certInfoMap[row.caddy_id]?.days_remaining ?? 0)} 天`
+                      : `${certInfoMap[row.caddy_id]?.days_remaining} 天` }}
                   </span>
                 </div>
                 <div class="cert-row" v-if="certInfoMap[row.caddy_id]?.error">
@@ -438,7 +441,7 @@
                     placeholder="IP 或域名" 
                     size="small" 
                     class="upstream-input"
-                    :class="{ 'is-error': !row.host && upstreamTouched[$index] }"
+                    :class="{ 'is-error': !row.host && row.enabled !== false && upstreamTouched[$index] }"
                     @blur="upstreamTouched[$index] = true"
                   />
                 </template>

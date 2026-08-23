@@ -155,6 +155,7 @@ export interface ClusterHealth {
   readonly certs_expiring_30d: number
   readonly last_sync_at: string
   readonly last_sync_error: string
+  readonly sync_error_code?: string
   readonly uptime_sec: number
 }
 

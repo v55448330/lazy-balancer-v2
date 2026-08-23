@@ -60,7 +60,10 @@
     </el-table-column>
     <el-table-column label="剩余天数" width="90">
       <template #default="{ row }">
-        <span v-if="row.status === 'issued' && row.expires_at" :class="['cert-days', certificateStatus(row)]">{{ row.days_remaining }} 天</span>
+        <!-- R66 D-N4：过期证书不渲染裸负数——色弱/黑白场景下「-1 天」无文字语义 -->
+        <span v-if="row.status === 'issued' && row.expires_at" :class="['cert-days', certificateStatus(row)]">
+          {{ certificateStatus(row) === 'expired' ? `已过期 ${Math.abs(row.days_remaining)} 天` : `${row.days_remaining} 天` }}
+        </span>
         <span v-else class="cell-empty">-</span>
       </template>
     </el-table-column>
@@ -162,6 +165,7 @@ const logLoading = ref(false)
 const logContent = ref('')
 const currentJob = ref<CertJob | null>(null)
 let logRequestSeq = 0
+let lastLogErrorToastAt = 0
 const logContainerRef = ref<HTMLDivElement | null>(null)
 let logPollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -398,7 +402,13 @@ const refreshLogs = async () => {
   } catch (error) {
     if (!disposed && logDialogVisible.value && currentJob.value?.id === jobId && requestSeq === logRequestSeq) {
       console.error('Failed to fetch cert job logs:', error)
-      ElMessage.error('获取日志失败')
+      // R66 D-N5：toast 节流（对齐 usePollingErrorState 的 30s 语义）——弹窗内
+      // 3s 轮询持续失败时不再每 tick 叠加一条「获取日志失败」刷屏。
+      const now = Date.now()
+      if (now - lastLogErrorToastAt > 30_000) {
+        lastLogErrorToastAt = now
+        ElMessage.error('获取日志失败')
+      }
     }
   } finally {
     if (!disposed && requestSeq === logRequestSeq) logLoading.value = false
