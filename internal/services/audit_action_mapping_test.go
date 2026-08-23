@@ -603,7 +603,9 @@ func scanHandlerForAuditCall(t *testing.T, root, funcName string) (bool, bool) {
 }
 
 // indexHandlerPackageFuncs 索引 handlers 包全部函数/方法的函数体字节
-// （同名冲突取首个——绊线用途下足够）。
+// （同名冲突取首个——绊线用途下足够）。R67 D-3：切出前按 AST 注释区间把
+// 注释字节置零——字面量正则会命中「提及 recordAudit( 的注释」，删记录留
+// 注释即假绿（零审计逃逸通道）；置零保持偏移对齐。
 func indexHandlerPackageFuncs(t *testing.T, root string) map[string][]byte {
 	t.Helper()
 	bodies := make(map[string][]byte)
@@ -620,6 +622,16 @@ func indexHandlerPackageFuncs(t *testing.T, root string) map[string][]byte {
 		if err != nil {
 			return err
 		}
+		stripped := make([]byte, len(src))
+		copy(stripped, src)
+		for _, group := range file.Comments {
+			for _, comment := range group.List {
+				start, end := fset.Position(comment.Pos()).Offset, fset.Position(comment.End()).Offset
+				for i := start; i < end && i < len(stripped); i++ {
+					stripped[i] = 0
+				}
+			}
+		}
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
@@ -629,7 +641,7 @@ func indexHandlerPackageFuncs(t *testing.T, root string) map[string][]byte {
 				continue
 			}
 			start, end := fset.Position(fn.Pos()).Offset, fset.Position(fn.End()).Offset
-			bodies[fn.Name.Name] = src[start:end]
+			bodies[fn.Name.Name] = stripped[start:end]
 		}
 		return nil
 	})

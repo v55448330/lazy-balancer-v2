@@ -198,12 +198,9 @@ func FormatAuditAction(method, path string) (action, resource, detail string) {
 	detail = p
 
 	switch {
-	case p == "/api/v1/config":
-		return "", "", ""
-	// R65 D-N1：/config/reload 由 handler（ReloadCaddy）单独记录，映射为空
-	//（中间件跳过）。
-	case strings.Contains(p, "/config/reload"):
-		return "", "", ""
+	// R65 D-N1/R66 D-N3：/api/v1/config 与 /config/reload 均为 Explicit（handler
+	// 显式记录，HasExplicitAuditEvent 前置短路）——不再保留空标记 case（与
+	// 兜底 return 等价的死代码，R67 D-4 清除）。
 
 	case strings.Contains(p, "/caddy/start"):
 		return "启动", "Caddy服务", p

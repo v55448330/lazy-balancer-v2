@@ -61,24 +61,9 @@ func TestStartAuditCleanup_starts_once_and_stops(t *testing.T) {
 	}
 }
 
-// R66 D-N3：Explicit 路由的映射已全部删除（handler 显式记录 + HasExplicitAuditEvent
-// 前置短路使中间件映射不可达）——这些端点经 FormatAuditAction 必须返回空。
-func TestFormatAuditActionExplicitRoutesReturnEmpty(t *testing.T) {
-	paths := []struct{ method, path string }{
-		{"POST", "/api/v1/rules/lb_example/enable"},
-		{"POST", "/api/v1/certificates/issue"},
-		{"POST", "/api/v1/auth/login"},
-		{"POST", "/api/v1/cluster/register"},
-		{"PUT", "/api/v1/ca-providers/1"},
-	}
-	for _, tt := range paths {
-		action, resource, _ := FormatAuditAction(tt.method, tt.path)
-		if action != "" || resource != "" {
-			t.Fatalf("FormatAuditAction(%s %s) = (%q, %q), want 空（Explicit 路由由 handler 记录，映射非空即双条风险）", tt.method, tt.path, action, resource)
-		}
-	}
-}
-
+// R66 D-N3 删除全部 Explicit 死映射；R67 D-4：5 条样例断言并入
+// TestAuditExplicitRoutesMappingEmpty（63 条穷尽）后移除本测试，仅保留
+// R65 决策文档化的 reload 断言。
 func TestFormatAuditActionDirectConfigReload(t *testing.T) {
 	// R65 D-N1：/config/reload 改由 handler（ReloadCaddy）单独记录，映射为空
 	//（中间件跳过）——此前映射+handler 双记录，单次动作两条 audit_log。
