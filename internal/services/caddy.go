@@ -1145,7 +1145,10 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		// per-rule 补查——cert_jobs 行本身两视图一致（这些事务不写证书行），补查
 		// 仅恢复被谓词挡掉的可见性；SelectCertificate 仍按 status 过滤 disabled。
 		// UpdateConfig（tx 只写 global_config）不产生谓词 miss，C-2.1 防护不受影响。
-		if _, certSourceIsDB := certSource.(*sql.DB); !certSourceIsDB || certSource != store {
+		// R66（C 域改进项）：门控收紧为 certSource != store——补查仅在「子查询
+		// 视图 ≠ allRules 视图」时需要；CertAware 路径两者同为 tx（主查询已完备），
+		// 不再为每个无候选 acme 规则空跑一次 per-rule 查询。
+		if certSource != store {
 			for _, ru := range allRules {
 				r := ru.rule
 				if !r.EnableTLS || r.TLSSource != "acme_dns" || len(acmeCerts[r.CaddyID]) > 0 {
@@ -2186,7 +2189,8 @@ func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain 
 		// 存在启用上游的规则进入 TLS 策略（无上游/关 TLS 规则在真实配置中不存在）。
 		rows, err := db.DB.Query(`SELECT COALESCE(caddy_id,''), COALESCE(domain,''), COALESCE(tls_source,'manual'), COALESCE(tls_cert,''), COALESCE(tls_key,'')
 			FROM lb_rules WHERE enabled = 1 AND protocol = 'http' AND listen_port = ? AND enable_tls = 1
-			AND EXISTS (SELECT 1 FROM upstreams u WHERE u.rule_id = lb_rules.caddy_id AND IIF(u.enabled IN ('1',1),1,0) = 1)`, listenPort)
+			AND EXISTS (SELECT 1 FROM upstreams u WHERE u.rule_id = lb_rules.caddy_id AND IIF(u.enabled IN ('1',1),1,0) = 1)
+			ORDER BY id`, listenPort)
 		if err != nil {
 			log.Printf("GenerateRuleServerContext: 读取端口 %d TLS 策略失败: %v", listenPort, err)
 		} else {
