@@ -1503,7 +1503,9 @@ const ruleLogHtml = computed(() => ansiToHtml(ruleLogContent.value || '暂无日
 const ruleConfig = ref<RuleConfigView | null>(null)
 
 const upstreamHostWarning = computed(() => {
-  const hasEmptyHost = wizardForm.upstreams.some((u, i) => !u.host && upstreamTouched.value[i])
+  // R67 D-1：与门/红框同口径排除禁用行——禁用行空 host 不再常驻琥珀警告
+  //（红框与门均放行，仅消息腿残留会诱导为禁用行填无意义 host）。
+  const hasEmptyHost = wizardForm.upstreams.some((u, i) => !u.host && u.enabled !== false && upstreamTouched.value[i])
   if (hasEmptyHost) {
     return '主机地址为必填项，请填写完整'
   }
@@ -2299,8 +2301,9 @@ const nextStep = (): void => {
   }
   if (currentStep.value === WIZARD_STEP.UPSTREAMS) {
     upstreamTouched.value = wizardForm.upstreams.map(() => true)
-    // R65 D-N2：host 门与提交口径对齐（validUpstreams 只统计启用行）——已禁用
-    // 行留空 host 时不再阻断进入下一步（禁用行仍是已配置服务器，提交侧本就忽略）。
+    // R65 D-N2：host 门与提交口径对齐（只检查启用行）——已禁用行留空 host
+    // 时不再阻断进入下一步（禁用行仍是已配置服务器；提交侧 validUpstreams
+    // 按 host+port 过滤空行，启用性由下方「至少一个启用上游」检查兜底）。
     const hasEmptyHost = wizardForm.upstreams.some(u => !u.host && u.enabled !== false)
     if (hasEmptyHost) {
       ElMessage.warning('请填写所有已启用上游服务器的主机地址')
