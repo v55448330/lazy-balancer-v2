@@ -1321,9 +1321,13 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		lo, hi      int
 		fallbackDef int
 	}{
+		// R66 C-F3：非法形态回退值对齐 schema 默认（db.go cert_renewal_days=30/
+		// cert_renewal_attempts=5/cert_expiry_days=30）与显示侧 COALESCE——
+		// 此前 3/90 与写侧校验边界一致但与默认值漂移，修复后的续签窗口/到期
+		// 提醒参数会静默偏离系统默认直至管理员重存。
 		{"cert_renewal_days", 0, 90, 30},
-		{"cert_renewal_attempts", 1, 10, 3},
-		{"cert_expiry_days", 1, 365, 90},
+		{"cert_renewal_attempts", 1, 10, 5},
+		{"cert_expiry_days", 1, 365, 30},
 	} {
 		if value, exists := backup.Config[kc.key]; exists {
 			if n, ok := backupInteger(value); ok {

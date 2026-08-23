@@ -129,6 +129,15 @@ func (session *configImportSession) commit(affectedRuleIDs []string, certificate
 	}
 	session.committed = true
 	session.runtime = nil
+	// R66 C-F1/C-F2：全量替换导入对消失规则的产物清理。v2/v1 导入均清光
+	// lb_rules 后重插（v1 还换新 caddy_id），但产物轴此前只写不删：消失规则的
+	// 证书文件（含 ACME 私钥）在 /app/certs 无限残留——与 DeleteRule「规则消失
+	// → 密钥删除」的约定矛盾，卷读权限者可恢复管理员以为已删除的密钥；v1 路径
+	// 还遗留指向已删 caddy_id 的孤儿 cert_jobs 行（终态行永不清理，任务列表
+	// 噪音）。提交成功后按 begin 期收集的 existingRuleIDs 求差清理（v2 的
+	// 事务内孤儿 SQL 幂等重复无害）。清理失败不否决导入（数据已提交），
+	// 留痕审计 + 日志。
+	session.cleanupDisappearedRuleArtifacts()
 	if err := session.recovery.finish(); err != nil {
 		session.finished = true
 		return &importCoordinatorError{phase: importPhaseQueue, err: err}
@@ -143,4 +152,42 @@ func importFailurePhase(err error) importPhase {
 		return coordinatorErr.phase
 	}
 	return ""
+}
+
+// cleanupDisappearedRuleArtifacts 清理本次导入中消失规则的产物（R66 C-F1/F2）：
+// 证书文件 + 孤儿 cert_jobs 行。提交成功后调用；失败仅审计留痕，不否决导入。
+func (session *configImportSession) cleanupDisappearedRuleArtifacts() {
+	currentIDs, err := currentRuleIDs(session.ctx)
+	if err != nil {
+		services.Logf("error", "导入清理：读取当前规则失败（跳过孤儿清理）: %v", err)
+		services.RecordAuditLog("system", "清理失败", "证书产物", fmt.Sprintf("导入后清理消失规则产物失败（读取规则集）：%v", err), "")
+		return
+	}
+	current := make(map[string]struct{}, len(currentIDs))
+	for _, id := range currentIDs {
+		current[id] = struct{}{}
+	}
+	var disappeared []string
+	for _, id := range session.existingRuleIDs {
+		if _, alive := current[id]; !alive {
+			disappeared = append(disappeared, id)
+		}
+	}
+	if len(disappeared) == 0 {
+		return
+	}
+	for _, id := range disappeared {
+		if err := services.RemoveCertFiles(id); err != nil {
+			services.Logf("warn", "导入清理：删除消失规则 %s 的证书文件失败: %v", id, err)
+		}
+	}
+	// 与 v2 导入事务内的孤儿清理同语句（幂等重复无害）；覆盖 v1 路径与
+	// 理论上的绕过路径。
+	if _, err := db.DB.ExecContext(session.ctx,
+		`DELETE FROM cert_jobs WHERE rule_id NOT IN (SELECT caddy_id FROM lb_rules)`); err != nil {
+		services.Logf("error", "导入清理：删除孤儿证书任务失败: %v", err)
+		services.RecordAuditLog("system", "清理失败", "证书任务", fmt.Sprintf("导入后清理孤儿证书任务失败：%v", err), "")
+		return
+	}
+	services.RecordAuditLog("system", "清理", "证书产物", fmt.Sprintf("导入移除 %d 条规则，已清理其证书文件与任务行", len(disappeared)), "")
 }
