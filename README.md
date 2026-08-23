@@ -115,7 +115,7 @@ Inbound → GeoIP tagging → Rate limiting (per-IP rate + burst) → WAF (Coraz
 
 Configuration changes on the primary auto-increment the cluster version; replicas sync incrementally by section hash. Security policies, CRS/IP2Region versions, and settings are all within the sync scope.
 
-**Security model**: cluster tokens and CA/DNS credentials are stored in plaintext in `data/lazy-balancer.db` (tokens are needed for HMAC signature verification and cannot be hashed; startup forces database `0600` and data directory `0700`), so do not mount that directory shared. Cluster communication enforces HTTPS + TOFU fingerprint pinning against MITM. Tokens have no built-in automatic rotation, but regenerating the registration token invalidates all unused tokens (old tokens expire immediately); if you suspect a leak, delete the node record and re-register.
+**Security model**: cluster tokens and CA/DNS credentials are stored in plaintext in `data/lazy-balancer.db` (tokens are needed for HMAC signature verification and cannot be hashed; startup forces database `0600` and data directory `0700`), so do not mount that directory shared. Cluster communication defaults to HTTPS with TOFU fingerprint pinning against MITM; plain-HTTP master addresses are allowed for trusted networks (with an audit warning — TOFU pinning does not apply to plain HTTP, so registration tokens and synced certificate keys travel unencrypted). Tokens have no built-in automatic rotation, but regenerating the registration token invalidates all unused tokens (old tokens expire immediately); if you suspect a leak, delete the node record and re-register.
 
 ## Configuration Backup & Migration
 
