@@ -295,31 +295,35 @@ func TestAuditActionMapping_dangerClassificationContract(t *testing.T) {
 	}
 }
 
+// genericRouteRegistry Generic 路由的 exactly-once 登记表（R65 D-N1 引入，R66
+// D-N3 提升为包级供穷尽性绊线共用）：handlerMustRecord=true 表示 handler 显式
+// 记录（FormatAuditAction 映射必须为空）；false 表示中间件经映射记录（映射
+// 必须非空且 handler 不得记录）。
+var genericRouteRegistry = []struct {
+	path              string
+	handlerFunc       string
+	handlerMustRecord bool
+}{
+	{"/api/v1/config/reload", "ReloadCaddy", true},
+	{"/api/v1/system/restart", "RestartService", true},
+	{"/api/v1/caddy/start", "StartCaddy", false},
+	{"/api/v1/caddy/stop", "StopCaddy", false},
+	{"/api/v1/caddy/restart", "RestartCaddy", false},
+}
+
 // TestAuditGenericRoutesExactlyOnce Generic 路由 exactly-once 绊线（R65 D-N1）：
 // Generic 分类的路由要么由中间件记录（FormatAuditAction 有映射、handler 不得
 // 再记），要么由 handler 记录（映射为空、中间件跳过）——两侧同时激活即单次
-// 动作双条 audit_log（/config/reload 曾如此）。新增 Generic 路由或调整记录侧
-// 时，把 (路由, handler 函数, 期望记录侧) 登记进下表。
+// 动作双条 audit_log（/config/reload 曾如此）。
 func TestAuditGenericRoutesExactlyOnce(t *testing.T) {
 	if action, _, _ := FormatAuditAction(http.MethodPost, "/api/v1/config/reload"); action != "" {
 		t.Fatalf("FormatAuditAction(/config/reload)=%q, want 空（handler ReloadCaddy 已显式记录，映射非空会双条）", action)
-	}
-	routes := []struct {
-		path              string
-		handlerFunc       string
-		handlerMustRecord bool // true: handler 记录（映射必须为空）；false: 中间件记录（映射必须非空且 handler 不得记录）
-	}{
-		{"/api/v1/config/reload", "ReloadCaddy", true},
-		{"/api/v1/system/restart", "RestartService", true},
-		{"/api/v1/caddy/start", "StartCaddy", false},
-		{"/api/v1/caddy/stop", "StopCaddy", false},
-		{"/api/v1/caddy/restart", "RestartCaddy", false},
 	}
 	handlersRoot, err := filepath.Abs(filepath.Join("..", "handlers"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, route := range routes {
+	for _, route := range genericRouteRegistry {
 		t.Run(route.path, func(t *testing.T) {
 			action, _, _ := FormatAuditAction(http.MethodPost, route.path)
 			if route.handlerMustRecord && action != "" {
@@ -328,7 +332,7 @@ func TestAuditGenericRoutesExactlyOnce(t *testing.T) {
 			if !route.handlerMustRecord && action == "" {
 				t.Fatalf("FormatAuditAction 映射为空——handler %s 不记录，该路由将零审计", route.handlerFunc)
 			}
-			found, records := scanHandlerForAuditCall(t, handlersRoot, route.handlerFunc)
+			found, records := scanHandlerForAuditCallDirect(t, handlersRoot, route.handlerFunc)
 			if !found {
 				t.Fatalf("未找到 handler 函数 %s——路由→handler 映射表可能过期", route.handlerFunc)
 			}
@@ -336,18 +340,273 @@ func TestAuditGenericRoutesExactlyOnce(t *testing.T) {
 				t.Fatalf("handler %s 必须显式记录审计（映射为空、中间件跳过，否则零审计）", route.handlerFunc)
 			}
 			if !route.handlerMustRecord && records {
-				t.Fatalf("handler %s 含审计记录调用——中间件已映射记录，会双条", route.handlerFunc)
+				t.Fatalf("handler %s 直接记录了审计——中间件已映射记录该用户动作，会双条", route.handlerFunc)
 			}
 		})
 	}
 }
 
-// scanHandlerForAuditCall 在 handlers 包源码中定位指定方法名的外围函数，
-// 返回（是否找到, 函数体是否包含 recordAudit(/RecordAuditLog( 调用）。
+// TestAuditExplicitRoutesMappingEmpty Explicit 路由映射漂移哨兵（R66 D-N3）：
+// Explicit 路由由 handler 显式记录且被 HasExplicitAuditEvent 前置短路——
+// FormatAuditAction 对它们必须返回空；映射非空意味着清单漂移漏掉该路由时
+// 中间件会恢复映射记录，与 handler 记录叠加成双条（R65 D-N1 缺陷形态）。
+func TestAuditExplicitRoutesMappingEmpty(t *testing.T) {
+	for route, policy := range auditRoutePolicies {
+		if policy != AuditPolicyExplicit {
+			continue
+		}
+		method, path, ok := strings.Cut(route, " ")
+		if !ok {
+			t.Fatalf("策略键格式异常: %q", route)
+		}
+		if action, _, _ := FormatAuditAction(method, path); action != "" {
+			t.Errorf("Explicit 路由 %s 的 FormatAuditAction 映射非空（%q）——handler 已显式记录，双条风险", route, action)
+		}
+	}
+}
+
+// TestAuditGenericRoutesExhaustive Generic 路由穷尽性绊线（R66，C 域改进项）：
+// auditRoutePolicies 中每条 Generic 路由必须登记进 genericRouteRegistry——
+// 新增 Generic 路由未登记时其 exactly-once 契约对测试套件不可见。
+func TestAuditGenericRoutesExhaustive(t *testing.T) {
+	registered := make(map[string]bool, len(genericRouteRegistry))
+	for _, route := range genericRouteRegistry {
+		registered[route.path] = true
+		if policy, ok := auditRoutePolicies["POST "+route.path]; !ok || policy != AuditPolicyGeneric {
+			t.Errorf("登记表含非 Generic 路由 %s（策略=%v）——登记表与策略清单漂移", route.path, policy)
+		}
+	}
+	for route, policy := range auditRoutePolicies {
+		_, path, ok := strings.Cut(route, " ")
+		if !ok {
+			t.Fatalf("策略键格式异常: %q", route)
+		}
+		if policy == AuditPolicyGeneric && !registered[path] {
+			t.Errorf("Generic 路由 %s 未登记进 genericRouteRegistry——exactly-once 契约对该路由不可见", route)
+		}
+	}
+}
+
+// TestAuditPolicyListsEqual 双 Explicit 清单集合相等绊线（R66 D-N3）：
+// auditRoutePolicies（Explicit 子集）与 HasExplicitAuditEvent 的 switch 清单是
+// 两份手工维护的重复清单——任一侧漂移（漏删/漏加）即：前者漏→中间件按 Skip
+// 不记录且 handler 以为被短路（零审计）；后者漏→中间件不短路，若 FormatAuditAction
+// 有映射即双条。AST 提取 switch 的 case 字面量做双向集合相等断言。
+func TestAuditPolicyListsEqual(t *testing.T) {
+	switchSet := extractHasExplicitAuditEventCases(t)
+	explicitSet := make(map[string]bool)
+	for route, policy := range auditRoutePolicies {
+		if policy == AuditPolicyExplicit {
+			explicitSet[route] = true
+		}
+	}
+	for route := range explicitSet {
+		if !switchSet[route] {
+			t.Errorf("策略清单含 %s 但 HasExplicitAuditEvent switch 不含——中间件不短路，映射复活即双条", route)
+		}
+	}
+	for route := range switchSet {
+		if !explicitSet[route] {
+			t.Errorf("HasExplicitAuditEvent switch 含 %s 但策略清单不含——该路由零审计（中间件 Skip 且无 handler 记录约定）", route)
+		}
+	}
+}
+
+// TestAuditExplicitHandlersRecord Explicit 路由 handler-必须记录绊线（R66 D-N2）：
+// Explicit 路由的审计完全依赖 handler 显式记录——从中间件路由注册（AST 提取
+// METHOD("/path", h.Handler)）解析路由→handler 映射，断言每个 Explicit 路由的
+// handler 函数体（含一层 h.X 委托，如 clusterNodeAction）包含审计记录调用；
+// handler 删除记录或经未登记 helper 绕过时该路由静默零审计，本测试直接红。
+func TestAuditExplicitHandlersRecord(t *testing.T) {
+	registry := extractRouteHandlerRegistry(t)
+	handlersRoot, err := filepath.Abs(filepath.Join("..", "handlers"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing := 0
+	for route, policy := range auditRoutePolicies {
+		if policy != AuditPolicyExplicit {
+			continue
+		}
+		handler, ok := registry[route]
+		if !ok {
+			t.Errorf("路由 %s 未在中间件注册表中解析到 handler——注册形态变更请同步更新提取器", route)
+			missing++
+			continue
+		}
+		found, records := scanHandlerForAuditCall(t, handlersRoot, handler)
+		if !found {
+			t.Errorf("未找到 handler 函数 %s（路由 %s）——路由→handler 映射过期", handler, route)
+			continue
+		}
+		if !records {
+			t.Errorf("Explicit 路由 %s 的 handler %s 不含审计记录调用——中间件已短路，该路由零审计", route, handler)
+		}
+	}
+	if missing > 0 {
+		t.Fatalf("%d 条 Explicit 路由无法解析 handler", missing)
+	}
+}
+
+// extractHasExplicitAuditEventCases AST 解析 auditpolicy.go 的
+// HasExplicitAuditEvent switch，提取全部 "METHOD /path" case 字面量。
+func extractHasExplicitAuditEventCases(t *testing.T) map[string]bool {
+	t.Helper()
+	path := filepath.Join(".", "auditpolicy.go")
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read auditpolicy.go: %v", err)
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, src, 0)
+	if err != nil {
+		t.Fatalf("parse auditpolicy.go: %v", err)
+	}
+	cases := make(map[string]bool)
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "HasExplicitAuditEvent" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			stmt, ok := n.(*ast.SwitchStmt)
+			if !ok {
+				return true
+			}
+			for _, clause := range stmt.Body.List {
+				cc, ok := clause.(*ast.CaseClause)
+				if !ok {
+					continue
+				}
+				for _, expr := range cc.List {
+					if lit, ok := expr.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+						cases[strings.Trim(lit.Value, "`\"")] = true
+					}
+				}
+			}
+			return false
+		})
+	}
+	if len(cases) == 0 {
+		t.Fatal("未能从 HasExplicitAuditEvent 提取任何 case——函数重命名或重构请同步更新提取器")
+	}
+	return cases
+}
+
+// extractRouteHandlerRegistry AST 解析 middleware.go 的路由注册
+// （METHOD("/path", h.Handler) 形态，v1 组前缀 /api/v1），构建
+// "METHOD /api/v1/path" → handler 函数名 映射。
+func extractRouteHandlerRegistry(t *testing.T) map[string]string {
+	t.Helper()
+	path := filepath.Join("..", "middleware", "middleware.go")
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read middleware.go: %v", err)
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, src, 0)
+	if err != nil {
+		t.Fatalf("parse middleware.go: %v", err)
+	}
+	methods := map[string]bool{http.MethodPost: true, http.MethodPut: true, http.MethodDelete: true, http.MethodPatch: true}
+	registry := make(map[string]string)
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) < 2 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || !methods[sel.Sel.Name] {
+			return true
+		}
+		// 注册形态：METHOD("/path"[, middleware...], h.Handler)——路径取首个
+		//字符串字面量，handler 取末参选择子（R66：auth 组带 loginRateLimit
+		// 中间件为 3 参形态）。
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		handlerSel, ok := call.Args[len(call.Args)-1].(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		routePath := strings.Trim(lit.Value, "`\"")
+		registry[sel.Sel.Name+" /api/v1"+routePath] = handlerSel.Sel.Name
+		return true
+	})
+	if len(registry) == 0 {
+		t.Fatal("未能从 middleware.go 提取任何路由注册——注册形态变更请同步更新提取器")
+	}
+	return registry
+}
+
+// auditCallPattern / packageCallPattern：直接审计调用与包内函数调用的字面量匹配。
+var (
+	auditCallPattern   = regexp.MustCompile(`(recordAudit\(|RecordAuditLog\()`)
+	packageCallPattern = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+)
+
+// scanHandlerForAuditCallDirect 只查函数体自身是否含审计记录字面量——用于
+// 「handler 不得记录」方向：调用图深处的系统级诊断审计（如 applyCaddyConfigE
+// 失败留痕）与本路由的用户动作记录是不同动作，不构成双条，不得计入。
+func scanHandlerForAuditCallDirect(t *testing.T, root, funcName string) (bool, bool) {
+	t.Helper()
+	bodies := indexHandlerPackageFuncs(t, root)
+	body, found := bodies[funcName]
+	if !found {
+		return false, false
+	}
+	return true, auditCallPattern.Match(body)
+}
+
+// scanHandlerForAuditCall 在 handlers 包源码中定位指定方法名的函数，返回
+// （是否找到, 是否可达一次审计记录调用）。可达性沿函数体内调用的包内函数
+// （含 h.X 方法委托如 clusterNodeAction、包级 helper 如 createAPIKeyInternal）
+// BFS 追踪至多 3 层——handler 把记录委托给 helper 时字面量在 helper 体内。
 func scanHandlerForAuditCall(t *testing.T, root, funcName string) (bool, bool) {
 	t.Helper()
-	pattern := regexp.MustCompile(`(recordAudit\(|RecordAuditLog\()`)
-	found, records := false, false
+	bodies := indexHandlerPackageFuncs(t, root)
+	body, found := bodies[funcName]
+	if !found {
+		return false, false
+	}
+	if auditCallPattern.Match(body) {
+		return true, true
+	}
+	visited := map[string]bool{funcName: true}
+	queue := []string{}
+	for _, m := range packageCallPattern.FindAllStringSubmatch(string(body), -1) {
+		if callee, ok := bodies[m[1]]; ok && !visited[m[1]] {
+			visited[m[1]] = true
+			queue = append(queue, m[1])
+			if auditCallPattern.Match(callee) {
+				return true, true
+			}
+		}
+	}
+	for depth := 0; depth < 2 && len(queue) > 0; depth++ {
+		next := queue
+		queue = nil
+		for _, name := range next {
+			for _, m := range packageCallPattern.FindAllStringSubmatch(string(bodies[name]), -1) {
+				if callee, ok := bodies[m[1]]; ok && !visited[m[1]] {
+					visited[m[1]] = true
+					queue = append(queue, m[1])
+					if auditCallPattern.Match(callee) {
+						return true, true
+					}
+				}
+			}
+		}
+	}
+	return true, false
+}
+
+// indexHandlerPackageFuncs 索引 handlers 包全部函数/方法的函数体字节
+// （同名冲突取首个——绊线用途下足够）。
+func indexHandlerPackageFuncs(t *testing.T, root string) map[string][]byte {
+	t.Helper()
+	bodies := make(map[string][]byte)
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return err
@@ -363,20 +622,21 @@ func scanHandlerForAuditCall(t *testing.T, root, funcName string) (bool, bool) {
 		}
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Recv == nil || fn.Name.Name != funcName || fn.Body == nil {
+			if !ok || fn.Body == nil {
 				continue
 			}
-			found = true
+			if _, exists := bodies[fn.Name.Name]; exists {
+				continue
+			}
 			start, end := fset.Position(fn.Pos()).Offset, fset.Position(fn.End()).Offset
-			records = pattern.Match(src[start:end])
-			return nil
+			bodies[fn.Name.Name] = src[start:end]
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("walk handlers: %v", err)
 	}
-	return found, records
+	return bodies
 }
 
 // TestAuditInsertEntryPointsExhaustive 审计写入入口穷尽性绊线（R62 D-5）：

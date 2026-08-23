@@ -61,10 +61,21 @@ func TestStartAuditCleanup_starts_once_and_stops(t *testing.T) {
 	}
 }
 
-func TestFormatAuditActionRuleEnable(t *testing.T) {
-	action, resource, detail := FormatAuditAction("POST", "/api/v1/rules/lb_example/enable")
-	if action != "启用" || resource != "负载规则" || detail != "/api/v1/rules/lb_example/enable" {
-		t.Fatalf("FormatAuditAction() = (%q, %q, %q)", action, resource, detail)
+// R66 D-N3：Explicit 路由的映射已全部删除（handler 显式记录 + HasExplicitAuditEvent
+// 前置短路使中间件映射不可达）——这些端点经 FormatAuditAction 必须返回空。
+func TestFormatAuditActionExplicitRoutesReturnEmpty(t *testing.T) {
+	paths := []struct{ method, path string }{
+		{"POST", "/api/v1/rules/lb_example/enable"},
+		{"POST", "/api/v1/certificates/issue"},
+		{"POST", "/api/v1/auth/login"},
+		{"POST", "/api/v1/cluster/register"},
+		{"PUT", "/api/v1/ca-providers/1"},
+	}
+	for _, tt := range paths {
+		action, resource, _ := FormatAuditAction(tt.method, tt.path)
+		if action != "" || resource != "" {
+			t.Fatalf("FormatAuditAction(%s %s) = (%q, %q), want 空（Explicit 路由由 handler 记录，映射非空即双条风险）", tt.method, tt.path, action, resource)
+		}
 	}
 }
 
@@ -112,20 +123,16 @@ func TestRecordAuditLogWritesToIndependentDatabase(t *testing.T) {
 	}
 }
 
-func TestFormatAuditActionTriggerCertificateIssue(t *testing.T) {
-	action, resource, _ := FormatAuditAction("POST", "/api/v1/certificates/issue")
-	if action != "触发签发" || resource != "证书" {
-		t.Fatalf("FormatAuditAction() = (%q, %q)", action, resource)
-	}
-}
-
 func TestFormatAuditActionAuthAndNodeRegistration(t *testing.T) {
+	// R66 D-N3：原断言 /nodes/register 映射——该路由实际注册为 /cluster/register，
+	// 映射从未可达（死映射）；/auth/login 为 Explicit（handler 记录 登录成功/失败）。
+	// 两者现均须为空。
 	action, resource, _ := FormatAuditAction("POST", "/api/v1/auth/login")
-	if action != "登录" || resource != "用户认证" {
-		t.Fatalf("login mapping = (%q, %q)", action, resource)
+	if action != "" || resource != "" {
+		t.Fatalf("login mapping = (%q, %q), want 空", action, resource)
 	}
 	action, resource, _ = FormatAuditAction("POST", "/api/v1/nodes/register")
-	if action != "注册" || resource != "集群节点" {
-		t.Fatalf("node registration mapping = (%q, %q)", action, resource)
+	if action != "" || resource != "" {
+		t.Fatalf("node registration mapping = (%q, %q), want 空（原为指向不存在路由的死映射）", action, resource)
 	}
 }

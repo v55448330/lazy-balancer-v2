@@ -184,89 +184,26 @@ func StopAuditCleanup() {
 	}
 }
 
+// FormatAuditAction 中间件侧通用审计的动作映射。R66 D-N3：仅保留 5 条 Generic
+// 路由（auditpolicy.go 分类）中由中间件记录的 3 条 caddy/start|stop|restart——
+// 其余全部 Explicit 路由的 handler 自行显式记录且被 HasExplicitAuditEvent 前置
+// 短路，本函数对它们的映射运行时不可达（死代码，含映射不存在路由 /nodes/register
+// 的历史遗留）；死映射的最大风险是「Explicit 清单漂移漏掉某路由时中间件恢复
+// 映射记录 → 与 handler 显式记录叠加成双条」（R65 D-N1 缺陷形态），故全部删除。
+// 新增路由的审计分工：handler 显式记录 → 入 auditRoutePolicies 为 Explicit；
+// 由中间件记录 → 入 Generic 并在本函数补映射 + TestAuditGenericRoutesExactlyOnce
+// 登记表同步。契约绊线见 TestAuditExplicitRoutesMappingEmpty / TestAuditPolicyListsEqual。
 func FormatAuditAction(method, path string) (action, resource, detail string) {
 	p := path
 	detail = p
 
 	switch {
-	case p == "/api/v1/auth/login":
-		return "登录", "用户认证", p
-	case p == "/api/v1/auth/logout":
-		return "登出", "用户认证", p
-	case strings.Contains(p, "/rules/") && strings.Contains(p, "/enable"):
-		return "启用", "负载规则", p
-	case strings.Contains(p, "/rules/") && strings.Contains(p, "/disable"):
-		return "禁用", "负载规则", p
-	case strings.Contains(p, "/rules/") && strings.Contains(p, "/duplicate"):
-		return "复制", "负载规则", p
-	case strings.HasPrefix(p, "/api/v1/rules") && method == "POST":
-		return "创建", "负载规则", p
-	case strings.HasPrefix(p, "/api/v1/rules/") && method == "PUT":
-		return "更新", "负载规则", p
-	case strings.HasPrefix(p, "/api/v1/rules/") && method == "DELETE":
-		return "删除", "负载规则", p
-
-	case strings.Contains(p, "/users/") && strings.Contains(p, "/reset-password"):
-		return "重置密码", "用户", p
-	case strings.Contains(p, "/users/") && strings.Contains(p, "/status"):
-		return "修改状态", "用户", p
-	case strings.Contains(p, "/users/me"):
-		return "更新信息", "用户", p
-	case strings.HasPrefix(p, "/api/v1/users") && method == "POST":
-		return "创建", "用户", p
-	case strings.HasPrefix(p, "/api/v1/users/") && method == "PUT":
-		return "更新", "用户", p
-	case strings.HasPrefix(p, "/api/v1/users/") && method == "DELETE":
-		return "删除", "用户", p
-
-	case strings.Contains(p, "/keys") && method == "POST":
-		return "创建", "API密钥", p
-	case strings.Contains(p, "/api-keys/") && strings.Contains(p, "/status"):
-		return "修改状态", "API密钥", p
-	case strings.Contains(p, "/users/me/api-keys/") && method == "PATCH":
-		return "修改状态", "API密钥", p
-	case strings.Contains(p, "/keys") && method == "DELETE":
-		return "删除", "API密钥", p
-
 	case p == "/api/v1/config":
 		return "", "", ""
-	// R65 D-N1：/config/reload 不在中间件侧映射——该路由的 handler（ReloadCaddy）
-	// 已显式 recordAudit（caddy.go），此前中间件经本函数再落一条通用记录，单次
-	// 动作产生两条 audit_log。移除后对齐 system/restart 模式（handler 单独记录，
-	// FormatAuditAction 返回空、中间件跳过）。caddy/start|stop|restart 仍走中间件
-	// 映射（其 handler 不记录），分工不变。
+	// R65 D-N1：/config/reload 由 handler（ReloadCaddy）单独记录，映射为空
+	//（中间件跳过）。
 	case strings.Contains(p, "/config/reload"):
 		return "", "", ""
-
-	case strings.Contains(p, "/certificate-configs") && method == "POST":
-		return "创建", "DNS配置", p
-	case strings.Contains(p, "/certificate-configs") && method == "PUT":
-		return "更新", "DNS配置", p
-	case strings.Contains(p, "/certificate-configs") && method == "DELETE":
-		return "删除", "DNS配置", p
-
-	case strings.Contains(p, "/ca-providers") && strings.Contains(p, "/test"):
-		return "", "", ""
-	case strings.Contains(p, "/ca-providers") && method == "PUT":
-		return "", "", ""
-
-	case strings.Contains(p, "/certificates/jobs") && strings.Contains(p, "/retry"):
-		return "重试", "证书任务", p
-	case strings.Contains(p, "/certificates/jobs") && method == "DELETE":
-		return "删除", "证书任务", p
-	case strings.Contains(p, "/certificates/issue"):
-		return "触发签发", "证书", p
-
-	case strings.Contains(p, "/nodes/register"):
-		return "注册", "集群节点", p
-	case strings.Contains(p, "/nodes/") && strings.Contains(p, "/approve"):
-		return "审批", "集群节点", p
-	case strings.Contains(p, "/nodes/") && strings.Contains(p, "/reject"):
-		return "拒绝", "集群节点", p
-	case strings.Contains(p, "/nodes/") && method == "DELETE":
-		return "删除", "集群节点", p
-	case strings.Contains(p, "/nodes/") && method == "PUT":
-		return "更新", "集群节点", p
 
 	case strings.Contains(p, "/caddy/start"):
 		return "启动", "Caddy服务", p
@@ -274,11 +211,6 @@ func FormatAuditAction(method, path string) (action, resource, detail string) {
 		return "停止", "Caddy服务", p
 	case strings.Contains(p, "/caddy/restart"):
 		return "重启", "Caddy服务", p
-	case strings.Contains(p, "/caddy/config") && method == "PUT":
-		return "更新", "Caddy配置", p
-
-	case strings.Contains(p, "/sync/pull"):
-		return "同步", "集群同步", p
 	}
 
 	return "", "", ""
