@@ -208,6 +208,19 @@ type SecurityCustomRule struct {
 	UpdatedAt   string                `json:"updated_at"`
 }
 
+// UpdateCustomRuleRequest 自定义规则更新请求（R66 B-N1）：全字段指针——省略即
+// 保持现值。此前直接绑定 SecurityCustomRule（bool/值类型），省略 enabled 的
+// 部分更新（MCP 无约束 body 的现实路径）会把零值 false 直写落库，静默禁用
+// 规则且审计无痕迹；与 UpdateSecurityPolicyRequest 同口径。
+type UpdateCustomRuleRequest struct {
+	Name        *string                `json:"name"`
+	Description *string                `json:"description"`
+	Conditions  *[]CustomRuleCondition `json:"conditions"`
+	Action      *string                `json:"action"`
+	Score       *int                   `json:"score"`
+	Enabled     *bool                  `json:"enabled"`
+}
+
 type SecurityBlockPage struct {
 	ID          int    `json:"id"`
 	Name        string `json:"name"`

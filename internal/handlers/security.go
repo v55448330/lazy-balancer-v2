@@ -110,18 +110,61 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 
 func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	id := c.Param("id")
-	var req models.SecurityCustomRule
+	var req models.UpdateCustomRuleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
 	}
-	if err := validateSecurityCustomRule(&req); err != nil {
+	// R66 B-N1：省略即保持现值（与 UpdateSecurityPolicy 同口径）——enabled 是本
+	// 端点唯一「零值语义恰为禁用」的字段，MCP 无约束 body 的部分更新此前会把
+	// 零值 false 直写落库，WAF 静默少一条拦截规则且审计无痕迹。先读现值合并为
+	// 有效形态再过统一校验（校验规则不变，只是输入从「绑定零值」改为「现值」）。
+	var existing models.SecurityCustomRule
+	var existingConditionsJSON string
+	if err := db.DB.QueryRow(
+		`SELECT name, COALESCE(description,''), conditions, action, score, enabled FROM security_custom_rules WHERE id=?`, id,
+	).Scan(&existing.Name, &existing.Description, &existingConditionsJSON, &existing.Action, &existing.Score, &existing.Enabled); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败: " + err.Error()})
+		return
+	}
+	_ = json.Unmarshal([]byte(existingConditionsJSON), &existing.Conditions)
+	merged := models.SecurityCustomRule{
+		Name:        existing.Name,
+		Description: existing.Description,
+		Conditions:  existing.Conditions,
+		Action:      existing.Action,
+		Score:       existing.Score,
+		Enabled:     existing.Enabled,
+	}
+	if req.Name != nil {
+		merged.Name = *req.Name
+	}
+	if req.Description != nil {
+		merged.Description = *req.Description
+	}
+	if req.Conditions != nil {
+		merged.Conditions = *req.Conditions
+	}
+	if req.Action != nil {
+		merged.Action = *req.Action
+	}
+	if req.Score != nil {
+		merged.Score = *req.Score
+	}
+	if req.Enabled != nil {
+		merged.Enabled = *req.Enabled
+	}
+	if err := validateSecurityCustomRule(&merged); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	conditionsJSON, _ := json.Marshal(req.Conditions)
+	conditionsJSON, _ := json.Marshal(merged.Conditions)
 	result, err := db.DB.Exec(`UPDATE security_custom_rules SET name=?, description=?, conditions=?, action=?, score=?, enabled=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
-		req.Name, req.Description, string(conditionsJSON), req.Action, req.Score, req.Enabled, getContextUserIDInt(c), id)
+		merged.Name, merged.Description, string(conditionsJSON), merged.Action, merged.Score, merged.Enabled, getContextUserIDInt(c), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -130,7 +173,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "自定义规则", fmt.Sprintf("名称：%s（#%s）", req.Name, id), "")
+	services.RecordAuditLog(getContextUserID(c), "更新", "自定义规则", fmt.Sprintf("名称：%s（#%s）", merged.Name, id), "")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新" + h.caddyApplyNote()})
 }
 
@@ -1952,9 +1995,15 @@ func (h *Handlers) GetCRSRuleContent(c *gin.Context) {
 		return
 	}
 	defer f.Close()
-	content, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	// R66 B-N3：对齐 GetCRSSetupConfig 的 413 口径（R62 B-NEW-3）——超限显式
+	// 拒绝而非静默截断，防消费方（UI 预览/MCP 抓取）把残缺内容当完整规则使用。
+	content, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if len(content) > 1<<20 {
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "规则文件超过 1MB 读取上限"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"filename": filename, "content": string(content), "size": len(content)}})

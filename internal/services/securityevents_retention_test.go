@@ -127,8 +127,9 @@ func TestSecurityEventsRetentionCleanup_usesDefaultDaysWhenConfigZero(t *testing
 	}
 }
 
-func TestSetSecurityEventsRetentionMasterRole_startsAndStopsWorker(t *testing.T) {
-	// Given
+func TestSetSecurityEventsRetentionMasterRole_startsAndKeepsWorker(t *testing.T) {
+	// R66 B-N2：false 分支改 no-op——保留清理是全节点职责（从节点也摄入事件，
+	// 停止会致事件表越过 10 万行上限无界增长，R62 B-NEW-2）；降级不得停止。
 	setupSecurityEventsRetentionTestDB(t)
 	t.Cleanup(securityEventsRetentionStop)
 	workerDone := func() chan struct{} {
@@ -137,13 +138,7 @@ func TestSetSecurityEventsRetentionMasterRole_startsAndStopsWorker(t *testing.T)
 		return securityEventsRetentionDone
 	}
 
-	// When / Then: slave role keeps the worker stopped
-	SetSecurityEventsRetentionMasterRole(false)
-	if done := workerDone(); done != nil {
-		t.Fatal("slave role must not run the retention worker")
-	}
-
-	// When / Then: master role starts it, and repeated promotion is idempotent
+	// When / Then: master role starts it, repeated promotion is idempotent
 	SetSecurityEventsRetentionMasterRole(true)
 	first := workerDone()
 	if first == nil {
@@ -154,19 +149,15 @@ func TestSetSecurityEventsRetentionMasterRole_startsAndStopsWorker(t *testing.T)
 		t.Fatal("repeated master role must not restart the retention worker")
 	}
 
-	// When / Then: demotion stops the worker, promotion restarts a fresh one
+	// When / Then: demotion (false) is a no-op — the worker keeps running
 	SetSecurityEventsRetentionMasterRole(false)
 	select {
 	case <-first:
-	case <-time.After(2 * time.Second):
-		t.Fatal("demotion to slave must stop the retention worker")
+		t.Fatal("demotion must NOT stop the retention worker（全节点职责，停止致从节点事件表无界增长）")
+	default:
 	}
-	if done := workerDone(); done != nil {
-		t.Fatal("demotion must clear the worker state")
-	}
-	SetSecurityEventsRetentionMasterRole(true)
-	if done := workerDone(); done == nil || done == first {
-		t.Fatal("promotion after demotion must start a new retention worker")
+	if done := workerDone(); done != first {
+		t.Fatal("demotion must keep the worker state intact")
 	}
 }
 
