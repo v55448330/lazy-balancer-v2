@@ -58,9 +58,11 @@ RUN apk add --no-cache curl && \
     apk del curl
 # Pristine copy used to seed an empty bind-mounted /app/waf on first boot
 RUN cp -r /app/waf /app/waf.dist
-# Initial GeoIP database seed
+# Initial GeoIP database seed (R66: ghfast.top 代理瞬时不可达时回退直连——
+# 构建网络对 raw.githubusercontent 的可达性与代理互为补充，双源重试)
 RUN apk add --no-cache curl && \
-    curl -sL -o /app/waf.dist/ip2region.xdb "https://ghfast.top/https://raw.githubusercontent.com/lionsoul2014/ip2region/v3.17.0/data/ip2region_v4.xdb" && \
+    (curl -sfL -o /app/waf.dist/ip2region.xdb "https://ghfast.top/https://raw.githubusercontent.com/lionsoul2014/ip2region/v3.17.0/data/ip2region_v4.xdb" || \
+     curl -sfL -o /app/waf.dist/ip2region.xdb "https://raw.githubusercontent.com/lionsoul2014/ip2region/v3.17.0/data/ip2region_v4.xdb") && \
     apk del curl
 RUN adduser -u 1000 -s /bin/sh -D -h /app caddy
 
