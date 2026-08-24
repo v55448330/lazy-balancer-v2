@@ -342,6 +342,7 @@ const ip2regionStageLabels: Record<string, string> = {
   checking: '检查更新',
   downloading: '下载IP库',
   installing: '安装',
+  reloading: '重载配置',
   success: '更新成功',
   failed: '更新失败',
   idle: '空闲',
@@ -349,7 +350,7 @@ const ip2regionStageLabels: Record<string, string> = {
 const ip2regionStatusLabel = (s: string): string => ip2regionStageLabels[s] || s || '—'
 const ip2regionStatusTagType = (s: string): 'success' | 'warning' | 'danger' | 'info' => {
   if (!s || s === 'idle') return 'info'
-  if (s === 'checking' || s === 'downloading' || s === 'installing') return 'warning'
+  if (s === 'checking' || s === 'downloading' || s === 'installing' || s === 'reloading') return 'warning'
   if (s === 'success') return 'success'
   if (s === 'failed') return 'danger'
   return 'info'
@@ -635,7 +636,7 @@ let ip2regionPollTimer: ReturnType<typeof setInterval> | null = null
 const startingIP2RegionUpdate = ref(false)
 const ip2regionUpdateRunning = computed(() => {
   const s = ip2regionUpdateInfo.value?.status || ''
-  return s === 'checking' || s === 'downloading' || s === 'installing'
+  return s === 'checking' || s === 'downloading' || s === 'installing' || s === 'reloading'
 })
 
 const manualIP2RegionUpdate = () => {
