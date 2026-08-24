@@ -131,11 +131,14 @@ func TestStopCaddy_returns_500_when_stop_command_fails(t *testing.T) {
 }
 
 func TestValidateConfig_validates_submitted_config(t *testing.T) {
-	// Given
+	// R69 C-N3-c：validate 成功后 handler 回弹 DB 生成的权威配置（/load 无
+	// validate-only 语义，成功即已加载）——契约更新为 valid 用例两次 /load
+	// POST（校验 + 回弹）。
+	newBackupTestHandlers(t)
 	requests := 0
 	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		requests++
-		if request.URL.Path != "/load" || request.URL.Query().Get("validate") != "true" {
+		if request.URL.Path != "/load" {
 			t.Fatalf("validation request path=%q query=%q", request.URL.Path, request.URL.RawQuery)
 		}
 		var config map[string]any
@@ -180,8 +183,9 @@ func TestValidateConfig_validates_submitted_config(t *testing.T) {
 			}
 		})
 	}
-	if requests != 2 {
-		t.Fatalf("Caddy validation requests=%d, want 2 (malformed JSON must stop at the handler)", requests)
+	// valid（校验+回弹）+ invalid（仅校验）= 3；malformed 停在 handler。
+	if requests != 3 {
+		t.Fatalf("Caddy validation requests=%d, want 3 (malformed JSON must stop at the handler)", requests)
 	}
 }
 
