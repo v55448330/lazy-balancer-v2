@@ -55,7 +55,7 @@ var requeueNonTerminalCertJobs = services.RequeueNonTerminalCertJobs
 var backupBooleanTableColumns = map[string][]string{
 	"lb_rules":                   {"dynamic_dns", "enable_dns_server", "enable_active_health_check", "tcp_proxy_protocol", "custom_routes_enabled", "enable_tls", "tls_http_redirect", "enable_compress", "enabled", "log_enabled"},
 	"upstreams":                  {"dynamic_dns", "enabled"},
-	"users":                      {"is_enabled"},
+	"users":                      {"is_enabled", "mfa_enabled"},
 	"api_keys":                   {"is_enabled", "mcp_enabled", "read_only"},
 	"ca_providers":               {"enabled"},
 	"certificate_configs":        {"enabled"},
@@ -73,6 +73,7 @@ var backupBooleanConfigKeys = []string{
 	"server_tokens_hidden", "access_log_json", "metrics_public", "admin_tls_enabled",
 	"sync_global_config", "sync_users", "sync_rules", "sync_waf_files", "sync_security",
 	"sync_switches_migrated",
+	"mfa_write_guard", "mfa_lockout_enabled",
 }
 
 func isBackupBooleanColumn(table, column string) bool {

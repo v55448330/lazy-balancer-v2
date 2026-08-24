@@ -140,6 +140,11 @@ func TestClusterLoginTicketSignsAndLogsIntoSlave(t *testing.T) {
 	key := "lb_sk_ticket-admin-secret"
 	clusterToken := "lb_cluster_ticket-secret"
 	addClusterRouteTestAPIKey(t, 103, "ticket-admin", "admin", key)
+	// v2.1.8 决策4：签发从节点登录票据要求 admin 已启用 MFA——为该测试账号置位
+	//（写验证开关默认关，无需 mfa_ts 窗口）。
+	if _, err := db.DB.Exec("UPDATE users SET mfa_enabled=1 WHERE username='ticket-admin'"); err != nil {
+		t.Fatal(err)
+	}
 	hash := sha256.Sum256([]byte(clusterToken))
 	if _, err := db.DB.Exec(`INSERT INTO nodes (id,name,ip_address,port,protocol,status,is_approved,cluster_token_hash) VALUES (9,'slave', '10.0.0.9',8443,'https','online',1,?)`, hex.EncodeToString(hash[:])); err != nil {
 		t.Fatal(err)

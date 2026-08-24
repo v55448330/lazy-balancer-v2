@@ -9,8 +9,21 @@ const (
 )
 
 var auditRoutePolicies = map[string]AuditPolicy{
-	"POST /api/v1/auth/login":                     AuditPolicyExplicit,
-	"POST /api/v1/auth/ticket-login":              AuditPolicyExplicit,
+	"POST /api/v1/auth/login":        AuditPolicyExplicit,
+	"POST /api/v1/auth/ticket-login": AuditPolicyExplicit,
+	// v2.1.8 MFA：公开 verify 与登录同语义（挑战令牌即凭据，handler 已细分记录
+	// 认证拒绝/登录成功）；自助端点 handler 显式记录启用/禁用（用户认证对象）；
+	// setup/status/verify-step/recovery-codes 为读或内部动作不产生审计（Generic
+	// 中间件映射为空 → 不记录——R66 D-N3 后的收敛形态）；admin reset handler 记录
+	// 「重置/用户认证」。
+	"POST /api/v1/auth/mfa/verify":                AuditPolicyExplicit,
+	"POST /api/v1/auth/mfa/setup":                 AuditPolicySkip,
+	"GET /api/v1/auth/mfa/status":                 AuditPolicySkip,
+	"POST /api/v1/auth/mfa/activate":              AuditPolicyExplicit,
+	"POST /api/v1/auth/mfa/disable":               AuditPolicyExplicit,
+	"POST /api/v1/auth/mfa/recovery-codes":        AuditPolicySkip,
+	"POST /api/v1/auth/mfa/verify-step":           AuditPolicySkip,
+	"POST /api/v1/users/:id/mfa/reset":            AuditPolicyExplicit,
 	"POST /api/v1/auth/logout":                    AuditPolicyExplicit,
 	"POST /api/v1/auth/setup":                     AuditPolicyExplicit,
 	"POST /api/v1/mcp":                            AuditPolicySkip,
@@ -128,6 +141,10 @@ func HasExplicitAuditEvent(method, path string) bool {
 	switch method + " " + path {
 	case "POST /api/v1/auth/login",
 		"POST /api/v1/auth/ticket-login",
+		"POST /api/v1/auth/mfa/verify",
+		"POST /api/v1/auth/mfa/activate",
+		"POST /api/v1/auth/mfa/disable",
+		"POST /api/v1/users/:id/mfa/reset",
 		"POST /api/v1/auth/logout",
 		"POST /api/v1/auth/setup",
 		"POST /api/v1/users",

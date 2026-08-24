@@ -83,10 +83,29 @@ func (h *Handlers) Login(c *gin.Context) {
 		return
 	}
 
+	// v2.1.8 MFA 两步登录：密码通过且用户已启用 MFA → 签发 5 分钟单次挑战，
+	// 不发 JWT；前端携 mfa_token 调 /auth/mfa/verify。
+	var mfaEnabled bool
+	if err := db.DB.QueryRow("SELECT COALESCE(mfa_enabled,0) FROM users WHERE id=?", user.ID).Scan(&mfaEnabled); err == nil && mfaEnabled {
+		mfaToken, ierr := services.MFAIssueChallenge(user.ID)
+		if ierr != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "签发 MFA 挑战失败"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"mfa_required": true, "mfa_token": mfaToken})
+		return
+	}
+
 	h.respondLogin(c, user, passwordVersion)
 }
 
 func (h *Handlers) respondLogin(c *gin.Context, user models.User, passwordVersion int64) {
+	h.respondLoginWithMFA(c, user, passwordVersion, 0)
+}
+
+// respondLoginWithMFA 携带 mfa_ts 声明签发（0=未验证/不写入——非 MFA 用户与
+// MFA 登录首签均如此；verify/verify-step 成功时传入 now.Unix()）。
+func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwordVersion int64, mfaTs int64) {
 	lastLogin := time.Now().UTC()
 	if _, err := db.DB.Exec("UPDATE users SET last_login = ? WHERE id = ?", lastLogin, user.ID); err != nil {
 		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
@@ -124,6 +143,10 @@ func (h *Handlers) respondLogin(c *gin.Context, user models.User, passwordVersio
 		"iat":       now.Unix(),
 		"exp":       now.Add(expireDuration).Unix(),
 	})
+	if mfaTs > 0 {
+		claims := token.Claims.(jwt.MapClaims)
+		claims["mfa_ts"] = mfaTs
+	}
 
 	tokenString, err := token.SignedString([]byte(h.cfg.JWTSecret))
 	if err != nil {

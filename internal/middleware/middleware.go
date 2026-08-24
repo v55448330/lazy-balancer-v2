@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -208,6 +209,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.GET("/docs", h.GetAPIDocs)
 		v1.POST("/auth/login", loginRateLimit(), h.Login)
 		v1.POST("/auth/ticket-login", loginRateLimit(), h.TicketLogin)
+		v1.POST("/auth/mfa/verify", loginRateLimit(), h.MFAVerifyLogin)
 		v1.GET("/auth/setup", loginRateLimit(), h.GetSetupStatus)
 		v1.POST("/auth/setup", loginRateLimit(), h.SetupAdmin)
 		v1.GET("/branding", h.GetBranding)
@@ -221,6 +223,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.Use(apiKeyAuth(cfg))
 		v1.Use(jwtAuth(cfg))
 		v1.Use(apiKeyReadOnlyGuard())
+		v1.Use(mfaStepUpGuard())
 		{
 			v1.GET("/caddy/metrics", h.GetCaddyMetrics)
 			v1.POST("/auth/logout", h.Logout)
@@ -233,6 +236,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.PUT("/users/:id/status", h.ToggleUserStatus)
 				admin.POST("/users/:id/reset-password", h.ResetUserPassword)
 				admin.DELETE("/users/:id", h.DeleteUser)
+				admin.POST("/users/:id/mfa/reset", h.MFAResetByAdmin)
 
 				// API Keys
 				admin.POST("/api-keys", h.CreateAPIKey)
@@ -290,6 +294,13 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				// Current user (self)
 				business.GET("/users/me", h.GetCurrentUser)
 				business.PATCH("/users/me", h.UpdateCurrentUser)
+				// v2.1.8 MFA 自助端点（JWT 用户）
+				business.GET("/auth/mfa/status", h.MFAStatus)
+				business.POST("/auth/mfa/setup", h.MFASetup)
+				business.POST("/auth/mfa/activate", h.MFAActivate)
+				business.POST("/auth/mfa/disable", h.MFADisable)
+				business.POST("/auth/mfa/recovery-codes", h.MFARecoveryCodes)
+				business.POST("/auth/mfa/verify-step", h.MFAVerifyStep)
 				business.GET("/users/me/api-keys", h.ListCurrentUserAPIKeys)
 				business.POST("/users/me/api-keys", h.CreateCurrentUserAPIKey)
 				business.PATCH("/users/me/api-keys/:id", h.UpdateCurrentUserAPIKeyStatus)
@@ -577,6 +588,10 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		c.Set("user_id", claims["user_id"])
 		c.Set("username", claims["username"])
 		c.Set("role", dbRole.String)
+		// v2.1.8 MFA step-up：mfa_ts 声明透传（无声明=0，guard 视为过期）
+		if ts, ok := claims["mfa_ts"].(float64); ok {
+			c.Set("mfa_ts", ts)
+		}
 
 		c.Next()
 	}
@@ -698,6 +713,45 @@ func apiKeyReadOnlyGuard() gin.HandlerFunc {
 		}
 		recordAuthenticationRejection(c, "api_key_read_only")
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "只读 API 密钥禁止写操作"})
+	}
+}
+
+// mfaStepUpGuard v2.1.8：MFA 写操作验证（全局开关，默认关）。开启时，启用 MFA
+// 的 JWT 用户执行写操作（readOnlyWriteRoutes 判定源——与只读密钥同一事实源，契约
+// 绊线自动覆盖两侧）且 mfa_ts 距今超过 10 分钟 → 428，前端全局弹码验证后携新
+// JWT 重试。API Key/MCP 认证豁免（机器身份无 MFA 概念）。
+func mfaStepUpGuard() gin.HandlerFunc {
+	writeMethods := map[string]bool{"POST": true, "PUT": true, "PATCH": true, "DELETE": true}
+	return func(c *gin.Context) {
+		if !writeMethods[c.Request.Method] || c.GetString("auth_type") != "jwt" {
+			c.Next()
+			return
+		}
+		if !services.MFAWriteGuardEnabled() {
+			c.Next()
+			return
+		}
+		userIDStr := c.GetString("user_id")
+		if userIDStr == "" {
+			c.Next()
+			return
+		}
+		userID, err := strconv.Atoi(userIDStr)
+		if err != nil {
+			c.Next()
+			return
+		}
+		mfaEnabled, err := services.MFAUserEnabled(userID)
+		if err != nil || !mfaEnabled {
+			c.Next()
+			return
+		}
+		mfaTs := c.GetFloat64("mfa_ts")
+		if mfaTs > 0 && time.Since(time.Unix(int64(mfaTs), 0)) < 10*time.Minute {
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusPreconditionRequired, gin.H{"code": 428, "message": "MFA_STEP_UP_REQUIRED", "detail": "此操作需要 MFA 验证"})
 	}
 }
 
