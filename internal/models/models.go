@@ -24,6 +24,7 @@ type UserResponse struct {
 	Role        string     `json:"role"`
 	DisplayName *string    `json:"display_name"`
 	IsEnabled   bool       `json:"is_enabled"`
+	MFAEnabled  bool       `json:"mfa_enabled"`
 	CreatedAt   time.Time  `json:"created_at"`
 	LastLogin   *time.Time `json:"last_login"`
 }
@@ -194,50 +195,53 @@ type UpdateCAProviderRequest struct {
 
 // GlobalConfig represents global configuration
 type GlobalConfig struct {
-	ID                         int          `json:"id"`
-	CaddyConfig                string       `json:"caddy_config"`
-	DNSProvider                string       `json:"dns_provider"`
-	DNSCredentials             string       `json:"dns_credentials"`
-	ACMEEmail                  string       `json:"acme_email"`
-	CertExpiryDays             int          `json:"cert_expiry_days"`
-	CertRenewalDays            int          `json:"cert_renewal_days"`
-	CertRenewalAttempts        int          `json:"cert_renewal_attempts"`
-	LogLevel                   string       `json:"log_level"`
-	CaddyLogLevel              string       `json:"caddy_log_level"`
-	CaddyLogSizeMB             int          `json:"caddy_log_size_mb"`
-	RequestBodyMaxSizeMB       int          `json:"request_body_max_size_mb"`
-	HTTPReadTimeout            int          `json:"http_read_timeout"`
-	HTTPWriteTimeout           int          `json:"http_write_timeout"`
-	HTTPIdleTimeout            int          `json:"http_idle_timeout"`
-	UpstreamKeepaliveTimeout   int          `json:"upstream_keepalive_timeout"`
-	ProxyDialTimeout           int          `json:"proxy_dial_timeout"`
-	ProxyResponseHeaderTimeout int          `json:"proxy_response_header_timeout"`
-	ProxyReadTimeout           int          `json:"proxy_read_timeout"`
-	ProxyWriteTimeout          int          `json:"proxy_write_timeout"`
-	ProxyStreamTimeout         int          `json:"proxy_stream_timeout"`
-	ProxyFlushInterval         int          `json:"proxy_flush_interval"`
-	ProxyStreamCloseDelay      int          `json:"proxy_stream_close_delay"`
-	ServerTokensHidden         bool         `json:"server_tokens_hidden"`
-	CertJobLogSizeMB           int          `json:"cert_job_log_size_mb"`
-	AuditLogSizeMB             int          `json:"audit_log_size_mb"`
-	RuntimeLogSizeMB           int          `json:"runtime_log_size_mb"`
-	AccessLogJSON              bool         `json:"access_log_json"`
-	AccessLogFormat            string       `json:"access_log_format"`
-	AuditRetentionMonths       int          `json:"audit_retention_months"`
-	JWTExpireMinutes           int          `json:"jwt_expire_minutes"`
-	Timezone                   string       `json:"timezone"`
-	IsMaster                   bool         `json:"is_master"`
-	MasterURL                  string       `json:"master_url"`
-	SyncInterval               int          `json:"sync_interval"`
-	DefaultCAProviderID        int          `json:"default_ca_provider_id"`
-	ClusterVersion             int          `json:"cluster_version"`
-	ClusterToken               string       `json:"-"`
-	RegistrationID             int          `json:"-"`
-	RegistrationSecret         string       `json:"-"`
-	AppliedVersion             int          `json:"applied_version"`
-	LastSyncError              string       `json:"last_sync_error"`
-	LastSync                   JSONNullTime `json:"last_sync"`
-	UpdatedAt                  JSONNullTime `json:"updated_at"`
+	ID                         int    `json:"id"`
+	CaddyConfig                string `json:"caddy_config"`
+	DNSProvider                string `json:"dns_provider"`
+	DNSCredentials             string `json:"dns_credentials"`
+	ACMEEmail                  string `json:"acme_email"`
+	CertExpiryDays             int    `json:"cert_expiry_days"`
+	CertRenewalDays            int    `json:"cert_renewal_days"`
+	CertRenewalAttempts        int    `json:"cert_renewal_attempts"`
+	LogLevel                   string `json:"log_level"`
+	CaddyLogLevel              string `json:"caddy_log_level"`
+	CaddyLogSizeMB             int    `json:"caddy_log_size_mb"`
+	RequestBodyMaxSizeMB       int    `json:"request_body_max_size_mb"`
+	HTTPReadTimeout            int    `json:"http_read_timeout"`
+	HTTPWriteTimeout           int    `json:"http_write_timeout"`
+	HTTPIdleTimeout            int    `json:"http_idle_timeout"`
+	UpstreamKeepaliveTimeout   int    `json:"upstream_keepalive_timeout"`
+	ProxyDialTimeout           int    `json:"proxy_dial_timeout"`
+	ProxyResponseHeaderTimeout int    `json:"proxy_response_header_timeout"`
+	ProxyReadTimeout           int    `json:"proxy_read_timeout"`
+	ProxyWriteTimeout          int    `json:"proxy_write_timeout"`
+	ProxyStreamTimeout         int    `json:"proxy_stream_timeout"`
+	ProxyFlushInterval         int    `json:"proxy_flush_interval"`
+	ProxyStreamCloseDelay      int    `json:"proxy_stream_close_delay"`
+	ServerTokensHidden         bool   `json:"server_tokens_hidden"`
+	CertJobLogSizeMB           int    `json:"cert_job_log_size_mb"`
+	AuditLogSizeMB             int    `json:"audit_log_size_mb"`
+	RuntimeLogSizeMB           int    `json:"runtime_log_size_mb"`
+	AccessLogJSON              bool   `json:"access_log_json"`
+	AccessLogFormat            string `json:"access_log_format"`
+	AuditRetentionMonths       int    `json:"audit_retention_months"`
+	JWTExpireMinutes           int    `json:"jwt_expire_minutes"`
+	Timezone                   string `json:"timezone"`
+	IsMaster                   bool   `json:"is_master"`
+	MasterURL                  string `json:"master_url"`
+	SyncInterval               int    `json:"sync_interval"`
+	DefaultCAProviderID        int    `json:"default_ca_provider_id"`
+	// v2.1.8 MFA 全局开关（响应面）
+	MFAWriteGuard      bool         `json:"mfa_write_guard"`
+	MFALockoutEnabled  bool         `json:"mfa_lockout_enabled"`
+	ClusterVersion     int          `json:"cluster_version"`
+	ClusterToken       string       `json:"-"`
+	RegistrationID     int          `json:"-"`
+	RegistrationSecret string       `json:"-"`
+	AppliedVersion     int          `json:"applied_version"`
+	LastSyncError      string       `json:"last_sync_error"`
+	LastSync           JSONNullTime `json:"last_sync"`
+	UpdatedAt          JSONNullTime `json:"updated_at"`
 }
 
 // Upstream represents an upstream server
@@ -510,6 +514,9 @@ type UpdateConfigRequest struct {
 	JWTExpireMinutes           *int    `json:"jwt_expire_minutes"`
 	Timezone                   *string `json:"timezone"`
 	DefaultCAProviderID        *int    `json:"default_ca_provider_id"`
+	// v2.1.8 MFA 全局开关（基础设置卡片，决策6）：默认均关。
+	MFAWriteGuard     *bool `json:"mfa_write_guard"`
+	MFALockoutEnabled *bool `json:"mfa_lockout_enabled"`
 }
 
 type CreateCertificateConfigRequest struct {
