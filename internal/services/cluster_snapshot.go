@@ -327,13 +327,15 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 		COALESCE(cert_job_log_size_mb,10), COALESCE(audit_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3), COALESCE(jwt_expire_minutes,20), COALESCE(timezone,'Asia/Shanghai'),
 		COALESCE(acme_email,''), COALESCE(cert_expiry_days,30), COALESCE(cert_renewal_days,30), COALESCE(cert_renewal_attempts,5),
 		COALESCE(default_ca_provider_id,0), COALESCE(dns_provider,''), COALESCE(dns_credentials,''), COALESCE(sync_interval,60),
-		COALESCE(admin_tls_enabled,0), COALESCE(admin_tls_mode,'selfsigned'), COALESCE(admin_tls_cert,''), COALESCE(admin_tls_key,'')
+		COALESCE(admin_tls_enabled,0), COALESCE(admin_tls_mode,'selfsigned'), COALESCE(admin_tls_cert,''), COALESCE(admin_tls_key,''),
+		COALESCE(mfa_write_guard,0), COALESCE(mfa_lockout_enabled,0)
 		FROM global_config WHERE id=1`).Scan(&snapshot.Version, &syncCaddy, &caddyConfig,
 		&snapshot.BasicSettings.LogLevel,
 		&snapshot.BasicSettings.CertJobLogSizeMB, &snapshot.BasicSettings.AuditLogSizeMB, &snapshot.BasicSettings.RuntimeLogSizeMB, &snapshot.BasicSettings.AuditRetentionMonths, &snapshot.BasicSettings.JWTExpireMinutes, &snapshot.BasicSettings.Timezone,
 		&snapshot.BasicSettings.ACMEEmail, &snapshot.BasicSettings.CertExpiryDays, &snapshot.BasicSettings.CertRenewalDays, &snapshot.BasicSettings.CertRenewalAttempts,
 		&snapshot.BasicSettings.DefaultCAProviderID, &snapshot.BasicSettings.DNSProvider, &snapshot.BasicSettings.DNSCredentials, &snapshot.BasicSettings.SyncInterval,
-		&snapshot.BasicSettings.AdminTLSEnabled, &snapshot.BasicSettings.AdminTLSMode, &snapshot.BasicSettings.AdminTLSCert, &snapshot.BasicSettings.AdminTLSKey)
+		&snapshot.BasicSettings.AdminTLSEnabled, &snapshot.BasicSettings.AdminTLSMode, &snapshot.BasicSettings.AdminTLSCert, &snapshot.BasicSettings.AdminTLSKey,
+		&snapshot.BasicSettings.MFAWriteGuard, &snapshot.BasicSettings.MFALockoutEnabled)
 	if err != nil {
 		return models.ClusterSnapshot{}, fmt.Errorf("读取集群基础设置: %w", err)
 	}
@@ -684,7 +686,9 @@ func (s *ClusterService) snapshotAllPathRules(ctx context.Context, store snapsho
 
 func (s *ClusterService) snapshotUsers(ctx context.Context, store snapshotStore) ([]models.ClusterUser, error) {
 	rows, err := store.QueryContext(ctx, `SELECT id, username, password_hash, role, COALESCE(display_name,''), COALESCE(is_enabled,1),
-		COALESCE(password_version,0), strftime('%Y-%m-%dT%H:%M:%fZ', password_changed_at), created_at, last_login FROM users ORDER BY username`)
+		COALESCE(password_version,0), strftime('%Y-%m-%dT%H:%M:%fZ', password_changed_at), created_at, last_login,
+		COALESCE(mfa_enabled,0), COALESCE(mfa_secret,''), COALESCE(mfa_recovery_codes,'[]'),
+		COALESCE(mfa_last_timestep,0), COALESCE(mfa_failed_attempts,0), COALESCE(mfa_locked_until,'') FROM users ORDER BY username`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照用户: %w", err)
 	}
@@ -693,7 +697,8 @@ func (s *ClusterService) snapshotUsers(ctx context.Context, store snapshotStore)
 	for rows.Next() {
 		var user models.ClusterUser
 		var passwordChangedAt sql.NullString
-		if err := rows.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.PasswordVersion, &passwordChangedAt, &user.CreatedAt, &user.LastLogin); err != nil {
+		if err := rows.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.PasswordVersion, &passwordChangedAt, &user.CreatedAt, &user.LastLogin,
+			&user.MFAEnabled, &user.MFASecret, &user.MFARecoveryCodes, &user.MFALastTimestep, &user.MFAFailedAttempts, &user.MFALockedUntil); err != nil {
 			return nil, fmt.Errorf("扫描快照用户: %w", err)
 		}
 		if passwordChangedAt.Valid {

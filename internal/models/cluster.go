@@ -148,6 +148,9 @@ type ClusterBasicSettings struct {
 	AdminTLSMode               string `json:"admin_tls_mode,omitempty"`
 	AdminTLSCert               string `json:"admin_tls_cert,omitempty"`
 	AdminTLSKey                string `json:"admin_tls_key,omitempty"`
+	// v2.1.8 MFA 全局开关（决策3：从节点行为与主节点一致）。
+	MFAWriteGuard     bool `json:"mfa_write_guard"`
+	MFALockoutEnabled bool `json:"mfa_lockout_enabled"`
 }
 
 type ClusterUser struct {
@@ -161,6 +164,14 @@ type ClusterUser struct {
 	PasswordChangedAt *string      `json:"password_changed_at"`
 	CreatedAt         time.Time    `json:"created_at"`
 	LastLogin         JSONNullTime `json:"last_login"`
+	// v2.1.8 MFA（决策3）：随快照同步——从节点本地验证 TOTP，无需回主节点。
+	MFAEnabled        bool   `json:"mfa_enabled"`
+	MFASecret         string `json:"mfa_secret"`
+	MFARecoveryCodes  string `json:"mfa_recovery_codes"`
+	MFALastTimestep   int64  `json:"mfa_last_timestep"`
+	MFAFailedAttempts int    `json:"mfa_failed_attempts"`
+	MFALockedUntil    string `json:"mfa_locked_until"`
+	// pending 密钥不跨节点（绑定向导是节点本地交互；半途切换面板属可重做流程）。
 }
 
 type ClusterAPIKey struct {

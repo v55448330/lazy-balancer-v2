@@ -425,6 +425,18 @@ func createTables() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_used_login_tickets_expires_at ON used_login_tickets(expires_at);
 
+	-- MFA 登录二步挑战（v2.1.8）：节点本地临时态，不参与集群同步/配置备份
+	--（同 used_login_tickets 先例）；过期行由验证与偶发清理（loginRateLimit 桶扫描）
+	-- 惰性删除。
+	CREATE TABLE IF NOT EXISTS mfa_challenges (
+		token TEXT PRIMARY KEY,
+		user_id INTEGER NOT NULL,
+		expires_at DATETIME NOT NULL,
+		consumed BOOLEAN DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_mfa_challenges_expires_at ON mfa_challenges(expires_at);
+
 	CREATE TABLE IF NOT EXISTS revoked_jti (
 		jti_hash TEXT PRIMARY KEY,
 		expires_at DATETIME NOT NULL
@@ -642,6 +654,15 @@ func runMigrations() error {
 		"cert_jobs.last_error_code":                       "VARCHAR(20)",
 		"cert_jobs.deployment_attempts":                   "INTEGER DEFAULT 0",
 		"cert_jobs.deployment_available_after":            "DATETIME",
+		"users.mfa_enabled":                               "BOOLEAN DEFAULT 0",
+		"users.mfa_secret":                                "TEXT DEFAULT ''",
+		"users.mfa_pending_secret":                        "TEXT DEFAULT ''",
+		"users.mfa_recovery_codes":                        "TEXT DEFAULT '[]'",
+		"users.mfa_last_timestep":                         "INTEGER DEFAULT 0",
+		"users.mfa_failed_attempts":                       "INTEGER DEFAULT 0",
+		"users.mfa_locked_until":                          "DATETIME",
+		"global_config.mfa_write_guard":                   "BOOLEAN DEFAULT 0",
+		"global_config.mfa_lockout_enabled":               "BOOLEAN DEFAULT 0",
 		"global_config.default_ca_provider_id":            "INTEGER DEFAULT 0",
 		"global_config.cert_renewal_days":                 "INTEGER DEFAULT 30",
 		"global_config.cert_renewal_attempts":             "INTEGER DEFAULT 5",

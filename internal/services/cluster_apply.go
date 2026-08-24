@@ -362,7 +362,9 @@ func clearSyncTables(ctx context.Context, tx *sql.Tx, tables ...string) error {
 
 func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
 	for _, user := range snapshot.Users {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at,created_at,last_login) VALUES (?,?,?,?,?,?,?,?,?,?)`, user.ID, user.Username, user.PasswordHash, user.Role, user.DisplayName, user.IsEnabled, user.PasswordVersion, user.PasswordChangedAt, user.CreatedAt, nullableTime(user.LastLogin.NullTime)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at,created_at,last_login,mfa_enabled,mfa_secret,mfa_recovery_codes,mfa_last_timestep,mfa_failed_attempts,mfa_locked_until) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			user.ID, user.Username, user.PasswordHash, user.Role, user.DisplayName, user.IsEnabled, user.PasswordVersion, user.PasswordChangedAt, user.CreatedAt, nullableTime(user.LastLogin.NullTime),
+			user.MFAEnabled, user.MFASecret, user.MFARecoveryCodes, user.MFALastTimestep, user.MFAFailedAttempts, user.MFALockedUntil); err != nil {
 			return fmt.Errorf("写入快照用户 %s: %w", user.Username, err)
 		}
 	}
@@ -666,8 +668,8 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 	if settings.JWTExpireMinutes <= 0 || settings.JWTExpireMinutes > 1440 {
 		settings.JWTExpireMinutes = 20
 	}
-	query := `UPDATE global_config SET log_level=?,cert_job_log_size_mb=?,audit_log_size_mb=?,runtime_log_size_mb=?,audit_retention_months=?,jwt_expire_minutes=?,timezone=?,acme_email=?,cert_expiry_days=?,cert_renewal_days=?,cert_renewal_attempts=?,default_ca_provider_id=?,dns_provider=?,dns_credentials=?,sync_interval=?,admin_tls_enabled=?,admin_tls_mode=?,admin_tls_cert=?,admin_tls_key=?`
-	args := []any{settings.LogLevel, settings.CertJobLogSizeMB, settings.AuditLogSizeMB, settings.RuntimeLogSizeMB, settings.AuditRetentionMonths, settings.JWTExpireMinutes, settings.Timezone, settings.ACMEEmail, settings.CertExpiryDays, settings.CertRenewalDays, settings.CertRenewalAttempts, settings.DefaultCAProviderID, settings.DNSProvider, settings.DNSCredentials, settings.SyncInterval, settings.AdminTLSEnabled, settings.AdminTLSMode, settings.AdminTLSCert, settings.AdminTLSKey}
+	query := `UPDATE global_config SET log_level=?,cert_job_log_size_mb=?,audit_log_size_mb=?,runtime_log_size_mb=?,audit_retention_months=?,jwt_expire_minutes=?,timezone=?,acme_email=?,cert_expiry_days=?,cert_renewal_days=?,cert_renewal_attempts=?,default_ca_provider_id=?,dns_provider=?,dns_credentials=?,sync_interval=?,admin_tls_enabled=?,admin_tls_mode=?,admin_tls_cert=?,admin_tls_key=?,mfa_write_guard=?,mfa_lockout_enabled=?`
+	args := []any{settings.LogLevel, settings.CertJobLogSizeMB, settings.AuditLogSizeMB, settings.RuntimeLogSizeMB, settings.AuditRetentionMonths, settings.JWTExpireMinutes, settings.Timezone, settings.ACMEEmail, settings.CertExpiryDays, settings.CertRenewalDays, settings.CertRenewalAttempts, settings.DefaultCAProviderID, settings.DNSProvider, settings.DNSCredentials, settings.SyncInterval, settings.AdminTLSEnabled, settings.AdminTLSMode, settings.AdminTLSCert, settings.AdminTLSKey, settings.MFAWriteGuard, settings.MFALockoutEnabled}
 	if snapshot.CaddyConfig != nil {
 		// R60 A-N1：全局 body 上限钳制 [0,4096]（与 insertSnapshotRules 的行级
 		// 归一、写侧校验、导入钳制同边界）——这是全局轴最后一个未闭合的持久化
