@@ -125,6 +125,10 @@ type accountKeyMetadata struct {
 	DirectoryURL string `json:"directory_url"`
 	Email        string `json:"email"`
 	EABKID       string `json:"eab_kid"`
+	// R71 F-A2：密钥路径由 (directory|email|KID|hmac摘要) 决定但元数据此前缺 hmac
+	// 摘要——同三元组双 HMAC 配置（EAB 轮换）会被闲置清理互删密钥，后续注册以新
+	// 密钥撞旧账户，签发持续失败直至人工恢复。
+	EABKeyDigest string `json:"eab_key_digest,omitempty"`
 }
 
 func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string, eabKey []byte) (*ecdsa.PrivateKey, error) {
@@ -141,7 +145,7 @@ func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string, eabKey 
 					created = fmt.Sprintf("，首次注册时间: %s", fi.ModTime().Format("2006-01-02 15:04:05"))
 				}
 				log.Printf("ACME 账户密钥 %s 已加载%s", filepath.Base(keyPath), created)
-				if err := writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID); err != nil {
+				if err := writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID, eabKeyDigestOf(eabKey)); err != nil {
 					return nil, err
 				}
 				return key, nil
@@ -168,14 +172,33 @@ func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string, eabKey 
 		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("部署 ACME 账户密钥: %w", err)
 	}
-	if err := writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID); err != nil {
+	if err := writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID, eabKeyDigestOf(eabKey)); err != nil {
 		return nil, err
 	}
 	return key, nil
 }
 
-func writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID string) error {
-	data, err := json.Marshal(accountKeyMetadata{DirectoryURL: directoryURL, Email: email, EABKID: eabKID})
+// eabKeyDigestOf 计算原始 EAB key 的 sha256 摘要（与 acmeAccountKeyPath 的路径
+// 公式同源）；空 key 产空串（无 EAB 场景的元数据统一形态）。
+func eabKeyDigestOf(eabKey []byte) string {
+	if len(eabKey) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(eabKey)
+	return hex.EncodeToString(sum[:])
+}
+
+// accountEABKeyDigest 计算 EAB HMAC 密钥摘要（无 EAB 时为空——路径公式对空 key
+// 亦产生确定摘要，但元数据统一记空串以与「无 EAB」want 匹配；空/非空恒一致）。
+func (c *Client) accountEABKeyDigest() string {
+	if c.eab == nil {
+		return ""
+	}
+	return eabKeyDigestOf(c.eab.Key)
+}
+
+func writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID, eabKeyDigest string) error {
+	data, err := json.Marshal(accountKeyMetadata{DirectoryURL: directoryURL, Email: email, EABKID: eabKID, EABKeyDigest: eabKeyDigest})
 	if err != nil {
 		return fmt.Errorf("编码 ACME 账户密钥元数据: %w", err)
 	}
@@ -223,7 +246,7 @@ func (c *Client) removeStaleAccountKeys() error {
 	if err != nil {
 		return fmt.Errorf("读取 ACME 账户目录: %w", err)
 	}
-	want := accountKeyMetadata{DirectoryURL: c.DirectoryURL, Email: c.Email, EABKID: c.eabKID}
+	want := accountKeyMetadata{DirectoryURL: c.DirectoryURL, Email: c.Email, EABKID: c.eabKID, EABKeyDigest: c.accountEABKeyDigest()}
 	// 多 CA 提供商各有独立队列、可并发签发：其他任务（元数据≠本任务）的账户密钥
 	// 可能正在使用。密钥元数据在每次加载/创建时都会重写，其 mtime 即最近使用时间；
 	// 在途签发全程有 30min 执行上限，mtime 必然新于 1h 阈值——仅清理闲置超 1h 的
@@ -238,11 +261,15 @@ func (c *Client) removeStaleAccountKeys() error {
 		metadataPath := filepath.Join(filepath.Dir(c.accountKeyPath), entry.Name())
 		data, err := os.ReadFile(metadataPath)
 		if err != nil {
-			return fmt.Errorf("读取 ACME 账户密钥元数据 %s: %w", entry.Name(), err)
+			// R71 F-A3：单条目读/解析失败不再中止整轮清理——与下方 stat 失败的
+			// 「跳过+日志」同口径（原口径会使任一损坏元数据永久阻塞该提供商注册）。
+			log.Printf("acme: 读取账户密钥元数据 %s 失败，跳过: %v", entry.Name(), err)
+			continue
 		}
 		var metadata accountKeyMetadata
 		if err := json.Unmarshal(data, &metadata); err != nil {
-			return fmt.Errorf("解析 ACME 账户密钥元数据 %s: %w", entry.Name(), err)
+			log.Printf("acme: 解析账户密钥元数据 %s 失败，跳过: %v", entry.Name(), err)
+			continue
 		}
 		keyPath := strings.TrimSuffix(metadataPath, ".json")
 		if metadata != want || keyPath == c.accountKeyPath {

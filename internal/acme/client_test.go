@@ -110,12 +110,32 @@ func TestClient_RegisterAccount_removes_stale_key_after_EAB_HMAC_rotation(t *tes
 	if err != nil {
 		t.Fatalf("register rotated EAB account: %v", err)
 	}
-	if _, err := os.Stat(oldKeyPath); !os.IsNotExist(err) {
-		t.Fatalf("stale account key stat error=%v, want not exists", err)
+	// R71 F-A2 契约更新：同 (directory,email,KID) 不同 HMAC 的密钥是不同账户身份，
+	// 不再被互删——旧断言（删除轮换前代密钥）正是 F-A2 定性的有害行为：被删方
+	// 下次以再生密钥撞既有账户，签发持续失败直至人工恢复。轮换遗留密钥保留仅是
+	// 字节级残留，无功能影响。
+	if _, err := os.Stat(oldKeyPath); err != nil {
+		t.Fatalf("rotated-HMAC account key must be preserved (different account identity), stat err=%v", err)
 	}
 	if _, err := os.Stat(acmeAccountKeyPath(dataDir, directoryURL, "admin@example.com", "same-kid", []byte("new-secret"))); err != nil {
 		t.Fatalf("current account key missing: %v", err)
 	}
+
+	// 同身份（同 digest）的闲置陈旧密钥仍被清理——R44-3 语义保留：模拟旧目录下
+	// 同 HMAC 的另一路径密钥（不同 KID 即不同文件），闲置超阈值应被清除。
+	staleSameDigest := acmeAccountKeyPath(dataDir, directoryURL, "other@example.com", "other-kid", []byte("irrelevant"))
+	if err := os.MkdirAll(filepath.Dir(staleSameDigest), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staleSameDigest, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 元数据与其他账户不同 → 保留；此处验证的是自身身份匹配路径：构造与 want 完全
+	// 一致但 mtime 闲置的元数据文件（同 directory/email/KID/digest、路径不同）。
+	// 路径由四元组决定——同四元组必同路径，故「同身份不同路径」仅理论存在；实际
+	// 清理面 = 元数据==want 且非自身且闲置，无键。简化断言：oldKeyPath 保留 +
+	// 当前密钥存在即覆盖主契约，清理路径由 R44 既有测试（同身份场景）钉住。
+	_ = staleSameDigest
 }
 
 // R44-3：EAB HMAC 轮换后，旧 HMAC 代密钥可能仍被在途签发任务使用（其内存 key
