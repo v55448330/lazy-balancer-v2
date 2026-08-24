@@ -59,6 +59,10 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 		return
 	}
 
+	// R71 N-2：与 CreateRule/R36 BLOCKING-1 同款 1MB 请求体上限——credentials 为
+	// 自由 JSON 字符串，无上限时超大合法 JSON 经 ShouldBindJSON 等量内存驻留并
+	// 原样落库（域内其余写端点均已设限，本端点为漏网）。
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 	var req models.UpdateCAProviderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request: " + err.Error()})
@@ -115,10 +119,8 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "名称不能为空"})
 		case errors.Is(err, services.ErrCAProviderNameTooLong):
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "名称不能超过 100 个字符"})
-		case errors.Is(err, services.ErrCAProviderInvalidDirectoryURL):
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "目录地址必须是有效的 HTTPS URL"})
-		case errors.Is(err, services.ErrCAProviderDirectoryURLTooLong):
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "目录地址不能超过 255 个字符"})
+		// R71 N-3：directory_url 两个 400 分支已删——服务层按 provider 无条件覆写
+		// 常量（services/caproviders.go:195-199），用户输入实际无效，两错误永不触发。
 		case errors.Is(err, services.ErrCAProviderInvalidCredentials):
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "凭证必须是有效的 JSON"})
 		case errors.Is(err, services.ErrCAProviderLetsEncryptCredentialsNotEmpty):

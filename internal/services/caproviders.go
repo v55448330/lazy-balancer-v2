@@ -132,12 +132,6 @@ var ErrCAProviderInvalidName = errors.New("name is required")
 // ErrCAProviderNameTooLong is returned when the provider name exceeds 100 characters.
 var ErrCAProviderNameTooLong = errors.New("name must be <= 100 characters")
 
-// ErrCAProviderInvalidDirectoryURL is returned when the directory URL is not a valid HTTPS URL.
-var ErrCAProviderInvalidDirectoryURL = errors.New("directory_url must be a valid HTTPS URL")
-
-// ErrCAProviderDirectoryURLTooLong is returned when the directory URL exceeds 255 characters.
-var ErrCAProviderDirectoryURLTooLong = errors.New("directory_url must be <= 255 characters")
-
 // ErrCAProviderInvalidCredentials is returned when credentials are not valid JSON.
 var ErrCAProviderInvalidCredentials = errors.New("credentials must be valid JSON")
 
