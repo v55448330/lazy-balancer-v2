@@ -18,9 +18,9 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 		"POST /api/v1/cluster/registration/confirm": {},
 		"POST /api/v1/config/import/validate":       {},
 		"POST /api/v1/config/preview":               {},
-		"POST /api/v1/config/validate":              {},
-		"POST /api/v1/mcp":                          {},
-		"POST /api/v1/rules/cert-info":              {},
+		// R69 C-N3-c：/config/validate 已升为 Explicit（handler 记录校验三态）。
+		"POST /api/v1/mcp":             {},
+		"POST /api/v1/rules/cert-info": {},
 	}
 	writeMethods := map[string]struct{}{
 		http.MethodPost: {}, http.MethodPut: {}, http.MethodPatch: {}, http.MethodDelete: {},

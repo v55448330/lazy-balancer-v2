@@ -238,6 +238,41 @@ func (s *CaddyService) ValidateRouteMergedConfig(serverName string, routeConfig 
 	return s.validateConfigInternal(fullConfig)
 }
 
+// ValidateTCPServerMergedConfig 以「候选 server 并入运行配置副本」的口径校验
+// TCP 规则（R69 C-N3）：Caddy admin /load 无 validate-only 语义（v2.11.4
+// handleLoad 无视 validate 参数、无条件 caddy.Load），此前对
+// GenerateSingleRuleCaddyConfig（仅含单个 layer4 server 的独立配置）直接
+// ValidateConfig 等于把运行中配置整体替换为单规则配置——全部 HTTP 及其他 TCP
+// 规则在 validate 窗口内下线；后续真 apply 失败时补偿快照又摄于该副作用之后，
+// 恢复的是单规则配置，全停持续。与 HTTP 侧 ValidateRouteMergedConfig 同口径：
+// 候选 server 替换/插入运行配置副本的同名条目后校验，运行面零中断。
+func (s *CaddyService) ValidateTCPServerMergedConfig(serverName string, serverConfig map[string]interface{}) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	fullConfig, err := s.GetConfig()
+	if err != nil {
+		return fmt.Errorf("无法连接 Caddy 管理接口，未能校验配置: %w", err)
+	}
+	apps, ok := fullConfig["apps"].(map[string]interface{})
+	if !ok {
+		apps = map[string]interface{}{}
+		fullConfig["apps"] = apps
+	}
+	layer4, ok := apps["layer4"].(map[string]interface{})
+	if !ok {
+		layer4 = map[string]interface{}{}
+		apps["layer4"] = layer4
+	}
+	servers, ok := layer4["servers"].(map[string]interface{})
+	if !ok {
+		servers = map[string]interface{}{}
+		layer4["servers"] = servers
+	}
+	servers[serverName] = serverConfig
+	return s.validateConfigInternal(fullConfig)
+}
+
 // validateConfigInternal validates config using Caddy /load API with validate=true
 func (s *CaddyService) validateConfigInternal(config map[string]interface{}) error {
 	data, err := json.Marshal(config)

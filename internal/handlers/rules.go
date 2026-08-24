@@ -706,6 +706,15 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden 必须为 0、1 或 2"})
 		return
 	}
+	// R69 C-N1：CreateRule 补 tcp-TLS 归一（R62 C2-N1 五层入口漏掉的第 5 个）——
+	// TCP 规则不终结入站 TLS，保留 enable_tls=1 落库成死形态行（tcp+acme 组合
+	// 还会产生永不消费证书的僵尸续签任务）。与 UpdateRule 归一分支同语义。
+	if req.Protocol == "tcp" {
+		req.EnableTLS = false
+		req.TLSSource = "manual"
+		req.TLSCert, req.TLSKey = "", ""
+		req.ACMEConfigID = 0
+	}
 	features := createRuleFeatures(req)
 	if err := validateRuleFeatures(features); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -828,6 +837,15 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		})
 	}
 
+	// R69 C-N3-b：运行时快照先于 validateCaddyConfigBeforeSave——validate 经 Caddy
+	// /load 具有真实 apply 副作用（临时路由上线/删除、候选配置加载），此前快照摄于
+	// 副作用之后，真 apply 失败时补偿会把「validate 污染后的状态」恢复回去。
+	preValidateRuntimeSnapshot, snapErr := h.snapshotImportRuntime([]string{caddyID})
+	if snapErr != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
+		return
+	}
+
 	// Validate Caddy config BEFORE writing to database
 	if err := h.validateCaddyConfigBeforeSave(req, features, "new_"+generateRandomString(8), serverName); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -919,11 +937,8 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		return
 	}
 
-	runtimeSnapshot, err := h.snapshotImportRuntime([]string{caddyID})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
-		return
-	}
+	// R69 C-N3-b：使用 validate 前摄取的快照（此处再摄会包含 validate 副作用）。
+	runtimeSnapshot := preValidateRuntimeSnapshot
 	if err := h.caddyService.ApplyConfigFromTx(tx); err != nil {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置应用失败，规则未创建: " + errors.Join(err, restoreErr).Error()})
@@ -1421,6 +1436,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 	}
 
+	// R69 C-N3-b：运行时快照先于 validate（同 CreateRule——validate 的 /load 副作用
+	// 会污染后摄的快照）。
+	preValidateRuntimeSnapshot, snapErr := h.snapshotImportRuntime([]string{caddyID})
+	if snapErr != nil {
+		log.Printf("UpdateRule runtime snapshot failed for caddy_id=%s: %v", caddyID, snapErr)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
+		return
+	}
+
 	// Validate Caddy config BEFORE writing to database
 	if err := h.validateCaddyConfigBeforeSave(req, features, fmt.Sprintf("update_%s_%s", caddyID, generateRandomString(8)), validationServerName); err != nil {
 		log.Printf("UpdateRule validation failed for caddy_id=%s, server_name=%s: %v", caddyID, validationServerName, err)
@@ -1629,12 +1653,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		})
 	}
 
-	runtimeSnapshot, err := h.snapshotImportRuntime([]string{caddyID})
-	if err != nil {
-		log.Printf("UpdateRule runtime snapshot failed for caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前运行配置失败"})
-		return
-	}
+	// R69 C-N3-b：使用 validate 前摄取的快照（同 CreateRule）。
+	runtimeSnapshot := preValidateRuntimeSnapshot
 
 	// Caddy 应用失败时需要用这些快照把已提交的 DB 更新恢复回去
 	oldRuleRow, oldRuleRowErr := dumpRowByKey(c.Request.Context(), "lb_rules", "caddy_id", caddyID)
@@ -2417,7 +2437,9 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			return
 		}
 	}
-	isACME := enableTLS && tlsSource == "acme_dns" && ruleDomain != ""
+	// R69 C-N1：协议门控——tcp 规则不终结 TLS，证书任务对 tcp 规则只会产生
+	// 永不消费的僵尸签发/续签（certJobRuleApplicable 仅查域名）。
+	isACME := ruleProtocol == "http" && enableTLS && tlsSource == "acme_dns" && ruleDomain != ""
 	var certJobsSnapshot services.CertJobsSnapshot
 	if isACME {
 		certJobsSnapshot, err = services.SnapshotCertJobsForRule(caddyID)

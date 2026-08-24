@@ -519,7 +519,20 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 	}
 
 	if data.Protocol == "tcp" {
-		return h.caddyService.ValidateConfig(services.GenerateSingleRuleCaddyConfig(ruleConfig))
+		// R69 C-N3：TCP 校验改合并口径——此前 ValidateConfig(GenerateSingleRuleCaddyConfig)
+		// 因 Caddy /load 无 validate-only 语义而整体替换运行配置（validate 窗口内全部
+		// 其他规则下线；真 apply 失败时补偿快照已污染）。改为把候选 server 并入
+		// 运行配置副本校验（与 HTTP 侧 ValidateRouteMergedConfig 同口径）。
+		single := services.GenerateSingleRuleCaddyConfig(ruleConfig)
+		apps, _ := single["apps"].(map[string]interface{})
+		layer4, _ := apps["layer4"].(map[string]interface{})
+		servers, _ := layer4["servers"].(map[string]interface{})
+		for serverName, serverConfig := range servers {
+			if serverMap, valid := serverConfig.(map[string]interface{}); valid {
+				return h.caddyService.ValidateTCPServerMergedConfig(serverName, serverMap)
+			}
+		}
+		return nil
 	}
 
 	routeConfig, routeErr := services.GenerateRouteObject(ruleConfig)

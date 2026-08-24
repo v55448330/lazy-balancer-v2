@@ -374,13 +374,16 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 
 	// Generate config with requested overrides — DB is NOT touched yet
 	testConfig := services.GenerateCaddyConfig(&req)
-	if err := h.caddyService.ValidateConfig(testConfig); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "配置验证失败: " + err.Error()})
-		return
-	}
+	// R69 C-N3-c：旧运行配置先于 validate 摄取——ValidateConfig 经 /load 真实
+	// apply 候选配置，后摄的 oldRuntimeConfig 是候选而非变更前状态，保存失败
+	// 时会把未提交配置恢复回去（DB/Caddy 反向分叉）。
 	oldRuntimeConfig, err := h.caddyService.GetConfig()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前 Caddy 配置失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取当前 Caddy 配置失败"})
+		return
+	}
+	if err := h.caddyService.ValidateConfig(testConfig); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "配置验证失败: " + err.Error()})
 		return
 	}
 
@@ -504,11 +507,23 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid config JSON"})
 		return
 	}
+	// R69 C-N3-c：Caddy /load 无 validate-only 语义——校验成功即用户配置已被
+	// 加载为运行配置。此处立即回弹 DB 生成的权威全量配置，把「校验」窗口收敛
+	// 到单个 admin 往返；回弹失败属严重分叉（运行配置停留为用户 JSON），审计
+	// 留痕供人工恢复（下次任意 apply 也会重新收敛）。校验失败时 /load 原子
+	// 拒绝、运行配置不变。
 	if err := h.caddyService.ValidateConfig(configData); err != nil {
+		recordAudit(c, "校验失败", "Caddy配置", services.FormatAuditDetail("配置校验", services.AuditResultPart("failure")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Config validation failed", Data: err.Error()})
 		return
 	}
+	if restoreErr := h.caddyService.ApplyConfig(services.GenerateCaddyConfig()); restoreErr != nil {
+		recordAudit(c, "校验成功", "Caddy配置", services.FormatAuditDetail("配置校验通过，但回弹权威配置失败，运行配置可能停留为校验载荷", services.AuditResultPart("partial")))
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置校验通过，但恢复运行配置失败: " + restoreErr.Error()})
+		return
+	}
 
+	recordAudit(c, "校验成功", "Caddy配置", services.FormatAuditDetail("配置校验", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config is valid"})
 }
 
