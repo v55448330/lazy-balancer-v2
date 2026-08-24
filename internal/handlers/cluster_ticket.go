@@ -39,6 +39,9 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 
 func (h *Handlers) TicketLogin(c *gin.Context) {
 	var req models.ClusterLoginTicketRequest
+	if !guardAuthJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		recordTicketLoginFailure(c, "", "invalid_request")
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})

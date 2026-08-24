@@ -22,8 +22,32 @@ import (
 
 const revokedTokenTimeFormat = "2006-01-02T15:04:05Z"
 
+// maxAuthJSONBodyBytes 公开 auth 端点（login/setup/ticket-login）的 JSON 请求体
+// 上限（R68 F-B1）。这三条路由无认证，前置 loginRateLimit 只限次数不限体积；
+// encoding/json 在 binding max= 约束生效前就把整个字符串物化进堆——单个超大
+// password 字段即 O(n) 分配，ReadTimeout=30s 下单请求载荷可达带宽×30s，足以
+// OOM 单进程应用并连带容器内 Caddy 子进程（与 R36 BLOCKING-1/R62 C3-F1 认证
+// 后同款模式的公开端点补齐）。合法登录/setup/ticket body 恒 <2KB，64KB 为
+// 不变量边界而非可调参数，故不做配置项。
+const maxAuthJSONBodyBytes int64 = 64 << 10
+
+// guardAuthJSONBody 预检 ContentLength 并包装 MaxBytesReader；超限写 413 并
+// 返回 false（调用方立即 return）。读中途超限时 MaxBytesReader 使后续
+// ShouldBindJSON 报错走既有 400 分支。
+func guardAuthJSONBody(c *gin.Context) bool {
+	if c.Request.ContentLength > maxAuthJSONBodyBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+		return false
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthJSONBodyBytes)
+	return true
+}
+
 func (h *Handlers) Login(c *gin.Context) {
 	var req models.LoginRequest
+	if !guardAuthJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		services.RecordAuditLog("", "登录失败", "用户认证", services.AuditResultPart("invalid_request"), c.ClientIP())
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
@@ -300,6 +324,9 @@ func (h *Handlers) SetupAdmin(c *gin.Context) {
 		Username    string `json:"username" binding:"required,min=3,max=50"`
 		Password    string `json:"password" binding:"required,min=6,max=72"`
 		DisplayName string `json:"display_name" binding:"max=50"`
+	}
+	if !guardAuthJSONBody(c) {
+		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "用户名至少 3 位，密码至少 6 位"})
