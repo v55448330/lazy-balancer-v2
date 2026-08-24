@@ -393,13 +393,23 @@ func validateConvertedV1Rules(rules []convertedRule) ([]convertedRule, []string,
 				upstreamBad = true
 				break
 			}
-			// R70 C-2：上游协议白名单——与保存侧/v2 导入同口径。v1 文件无校验和
-			//（不可信输入），异常协议会以保存侧拒绝或渲染侧静默 502 的形态入库。
-			// 缺省 ""→http 已在 convertV1Rules 归一；TCP 规则下 http 为 v1 原生
-			//（nginx stream 明文转发）语义故放行，仅拒真正越界值；https 在 TCP 侧
-			// 渲染按 TLS 处理（=tls 语义，真实 v1 文件常见形态），一并放行。
+			// R70 C-2/R71 S-1：上游协议白名单 + http 规则归一化——值域与保存侧/渲染侧
+			// 一致；口径经 R71 S-1 统一：HTTP 规则下 tcp/tls 上游归一（tcp 渲染等同
+			// http 明文转发；tls 归一 https 即 TLS transport，封堵「明文 HTTP 打 TLS
+			// 端口静默 502」形态——v2 导入/保存侧均拒绝、v1 此前是唯一入口）。TCP
+			// 规则下 http 为 v1 原生（nginx stream 明文）语义、https 渲染按 TLS 处理
+			//（=tls），均保留。归一记入 normalizations 供导入报告呈现。
 			switch upstream.Protocol {
 			case "http", "https", "tcp", "tls":
+				if rule.Protocol == "http" && (upstream.Protocol == "tcp" || upstream.Protocol == "tls") {
+					normalized := "http"
+					if upstream.Protocol == "tls" {
+						normalized = "https"
+					}
+					normalizations = append(normalizations, fmt.Sprintf("规则 #%d（%s）上游 #%d：HTTP 规则上游协议 %s 已按 %s 导入", index+1, rule.Name, upstreamIndex+1, upstream.Protocol, normalized))
+					upstream.Protocol = normalized
+					rule.Upstreams[upstreamIndex].Protocol = normalized
+				}
 			default:
 				skips = append(skips, fmt.Sprintf("规则 #%d（%s）上游 #%d：上游协议 %q 无效（支持 http/https/tcp/tls）", index+1, rule.Name, upstreamIndex+1, upstream.Protocol))
 				upstreamBad = true
