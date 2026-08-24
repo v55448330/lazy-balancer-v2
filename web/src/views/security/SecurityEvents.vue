@@ -168,7 +168,9 @@ const fetchEvents = async () => {
     events.value = res.data?.events || []
     total.value = res.data?.total || 0
   } catch {
-    if (requestSeq === fetchEventsSeq) events.value = []
+    // R68 D-N5：瞬态失败保留末次成功数据（对齐 AuditLog 口径）——此前清空列表
+    // 却保留陈旧 total，空态文案「暂无安全事件」在排障窗口内误导为「无攻击」。
+    // 全局拦截器已弹失败 toast。
   } finally {
     if (requestSeq === fetchEventsSeq) loading.value = false
   }

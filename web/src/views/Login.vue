@@ -186,14 +186,26 @@ const handleSetup = async () => {
     error.value = ''
     loading.value = true
     try {
+      // R68 D-N4：silent 抑制全局拦截器 toast——403「已完成初始化」竞态时
+      // 全局 toast 与 inline alert 双通道呈现同一文案；改为单通道 inline。
       await request.post('/auth/setup', {
         username: setupForm.username,
         password: setupForm.password,
         display_name: setupForm.display_name,
-      })
+      }, { silent: true })
       await authStore.login(setupForm.username, setupForm.password)
     } catch (caught: unknown) {
-      error.value = errorMessage(caught, '创建管理员失败，请稍后重试')
+      // R68 D-N4：403 = 提交期间系统已被另一路径初始化——复探状态并切换
+      // 登录表单（后端文案即指引），而非停在 setup 表单要求手动刷新。
+      if (caught instanceof ApiRequestError && caught.status === 403) {
+        try {
+          const res = await request.get<SetupStatusResponse>('/auth/setup', { silent: true })
+          if (!res.data.needs_setup) setupMode.value = false
+        } catch { /* 复探失败保持现状，inline 错误仍呈现 */ }
+        error.value = ''
+      } else {
+        error.value = errorMessage(caught, '创建管理员失败，请稍后重试')
+      }
     } finally {
       loading.value = false
     }
