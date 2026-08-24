@@ -864,6 +864,11 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
+		if req.Protocol == "tcp" {
+			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+				log.Printf("rule save: DB 失败后恢复运行配置失败: %v", restoreErr)
+			}
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败: " + err.Error()})
 		return
 	}
@@ -1454,6 +1459,19 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 	}
 
+	// R71 N-1：端口类 400 前移至快照/validate 之前（与 CreateRule :632/:636 顺序对齐）
+	// ——TCP 候选 server 名含端口，validate 经 /load 真实加载会把同端口启用中规则 B
+	// 的 server 替换为候选（跨规则流量顶替），此前端口冲突在 validate 之后才拒绝且
+	// 无运行配置恢复。前移后该场景在副作用发生前拦截。
+	if err := validateRuleListenPort(req.Protocol, req.ListenPort); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	if err := h.validatePortFromDB(req.Protocol, req.ListenPort, caddyID); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+
 	// R69 C-N3-b：运行时快照先于 validate（同 CreateRule——validate 的 /load 副作用
 	// 会污染后摄的快照）。
 	preValidateRuntimeSnapshot, snapErr := h.snapshotImportRuntime([]string{caddyID})
@@ -1484,14 +1502,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	args = append(args, req.Domain)
 	query += "listen_port = ?, "
 	args = append(args, req.ListenPort)
-	if err := validateRuleListenPort(req.Protocol, req.ListenPort); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-		return
-	}
-	if err := h.validatePortFromDB(req.Protocol, req.ListenPort, caddyID); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-		return
-	}
 	query += "strategy = ?, "
 	args = append(args, req.Strategy)
 	query += "dynamic_dns = ?, "
@@ -1598,6 +1608,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout, &global.proxyStreamTimeout, &global.proxyFlushInterval, &global.proxyStreamCloseDelay,
 		&global.serverTokensHidden); err != nil {
 		log.Printf("UpdateRule failed to load global config for caddy_id=%s: %v", caddyID, err)
+		if req.Protocol == "tcp" {
+			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
+			}
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取全局配置失败"})
 		return
 	}
@@ -1678,12 +1693,22 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	oldRuleRow, oldRuleRowErr := dumpRowByKey(c.Request.Context(), "lb_rules", "caddy_id", caddyID)
 	if oldRuleRowErr != nil {
 		log.Printf("UpdateRule failed to snapshot lb_rules row for caddy_id=%s: %v", caddyID, oldRuleRowErr)
+		if req.Protocol == "tcp" {
+			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
+			}
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份规则数据失败"})
 		return
 	}
 	oldUpstreamRowsMap, oldUpstreamRowsErr := dumpRowsByKey(c.Request.Context(), "upstreams", "rule_id", caddyID)
 	if oldUpstreamRowsErr != nil {
 		log.Printf("UpdateRule failed to snapshot upstreams for caddy_id=%s: %v", caddyID, oldUpstreamRowsErr)
+		if req.Protocol == "tcp" {
+			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
+			}
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份上游数据失败"})
 		return
 	}
@@ -1699,6 +1724,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
+		if req.Protocol == "tcp" {
+			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+				log.Printf("rule save: DB 失败后恢复运行配置失败: %v", restoreErr)
+			}
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败: " + err.Error()})
 		return
 	}
@@ -1742,12 +1772,23 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	services.Logf("debug", "UpdateRule executed for caddy_id=%s: rows_affected=%d ca_provider_id_included=%v", caddyID, rowsAffected, req.CAProviderID != nil)
 	if rowsAffected == 0 {
 		tx.Rollback()
+		// R71 N-1：409 早退同源——validate 已把候选 TCP server 真实加载（HTTP→TCP
+		// 切换场景留下 DB 无对应行的孤儿 server）；协议未变的 409（原规则即 TCP）候选
+		// 替换了自身旧 server，恢复快照即还原。统一恢复。
+		if req.Protocol == "tcp" {
+			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+				log.Printf("UpdateRule 409 后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
+			}
+		}
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书申请中，请等待完成或失败后再修改规则"})
 		return
 	}
 	if protocolChanged && req.Protocol == "tcp" {
 		if _, err := tx.Exec("DELETE FROM cert_jobs WHERE rule_id = ?", caddyID); err != nil {
 			log.Printf("UpdateRule certificate cleanup error for caddy_id=%s: %v", caddyID, err)
+			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
+			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理旧证书任务失败"})
 			return
 		}
@@ -1984,6 +2025,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				if _, err := db.DB.Exec("UPDATE cert_jobs SET status='issued',message='证书有效，已恢复使用',renewal_attempts=0,ca_available_after=NULL,last_error_code=NULL,updated_at=datetime('now') WHERE id=?", jobID); err != nil {
 					restoreErr := restoreACMEState()
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "恢复证书任务失败: " + errors.Join(err, restoreErr).Error()})
+					return
+				}
+				// R71 F-A1（第二出口）：Resume 后已应用配置同样缺 TLS——补一次重渲染
+				// 重应用；失败走既有 restoreACMEState 补偿。
+				if reapplyErr := h.caddyService.GenerateAndApplyConfig(); reapplyErr != nil {
+					restoreErr := restoreACMEState()
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "恢复证书任务后重载 Caddy 配置失败: " + errors.Join(reapplyErr, restoreErr).Error()})
 					return
 				}
 				resumedValidJob = true
@@ -2637,6 +2685,16 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			resumed, err := resumeResult.RowsAffected()
 			if err != nil || resumed != 1 {
 				failEnable("恢复证书任务失败：任务行不存在或已被并发变更")
+				return
+			}
+			// R71 F-A1：Resume 把 'disabled'→'issued' 发生在 ApplyConfigFromTx 之后——
+			// 渲染时双层过滤（caddy.go SQL status!='disabled' + certselector 跳过 disabled）
+			// 使已应用配置缺 TLS/301/证书文件，且 needJob 被 Resume 抑制不再触发任何
+			// re-apply，看门狗只查路由存在性——静默失配无上界。此处已提交视图=规则启用
+			// +job issued，立即重渲染重应用使 TLS 恢复；失败走既有 failEnable 补偿
+			//（enabled=0 + certJobsSnapshot 恢复 + 运行时快照恢复）。
+			if reapplyErr := h.caddyService.GenerateAndApplyConfig(); reapplyErr != nil {
+				failEnable("恢复证书任务后重载 Caddy 配置失败: " + reapplyErr.Error())
 				return
 			}
 			recordAudit(c, "启用", "证书任务", fmt.Sprintf("启用规则 %s，证书仍有效，恢复使用现有证书", caddyID))

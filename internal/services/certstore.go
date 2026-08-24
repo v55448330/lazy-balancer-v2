@@ -16,6 +16,13 @@ import (
 
 var certDir = "/app/certs"
 
+// SetCertDirForTest 重定向证书物化目录，仅供测试隔离使用（返回还原函数）。
+func SetCertDirForTest(dir string) func() {
+	old := certDir
+	certDir = dir
+	return func() { certDir = old }
+}
+
 // 序列化证书对文件操作，避免并发写入、恢复或删除产生撕裂的 cert/key 组合。
 var certWriteMu sync.Mutex
 
