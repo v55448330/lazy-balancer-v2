@@ -72,6 +72,24 @@ interface RequestClient {
   delete<T = APIResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T>
 }
 
+// v2.1.8 MFA step-up 弹码：返回验证码或 null（取消）。
+let mfaPromptOpen = false
+const promptMfaCode = (): Promise<string | null> =>
+  new Promise((resolve) => {
+    if (mfaPromptOpen) { resolve(null); return }
+    mfaPromptOpen = true
+    ElMessageBox.prompt('请输入 6 位验证码（或恢复代码）', 'MFA 验证', {
+      confirmButtonText: '验证',
+      cancelButtonText: '取消',
+      inputPattern: /^.{6,16}$/,
+      inputErrorMessage: '请输入验证码或恢复代码',
+      type: 'warning',
+    })
+      .then(({ value }) => resolve(value.trim()))
+      .catch(() => resolve(null))
+      .finally(() => { mfaPromptOpen = false })
+  })
+
 let sessionExpiredDialogOpen = false
 
 // Blob 下载（配置导出、MCP 手册）失败时，错误响应体是 Blob 而非 JSON，
@@ -166,6 +184,21 @@ service.interceptors.response.use(
             window.location.reload()
           })
         }
+      }
+    } else if (status === 428 && error.response?.data?.code === 428 && error.config && !error.config._mfaRetried) {
+      // v2.1.8 MFA step-up：写操作（或票据签发）需 10 分钟内的 MFA 验证——
+      // 全局弹码验证 → 新 JWT → 原请求自动重试一次。全站生效，页面零改动。
+      try {
+        const { useAuthStore } = await import('@/stores/auth')
+        const authStore = useAuthStore()
+        const code = await promptMfaCode()
+        if (code) {
+          await authStore.refreshMfaStep(code)
+          error.config._mfaRetried = true
+          return service.request(error.config)
+        }
+      } catch {
+        /* 用户取消或验证失败：落入通用错误处理 */
       }
     } else if (!isLoginRequest) {
       if (!error.config?.silent) {

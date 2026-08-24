@@ -89,11 +89,36 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function login(username: string, password: string) {
+  async function login(username: string, password: string): Promise<{ mfaRequired: boolean; mfaToken?: string }> {
+    if (loading.value) return { mfaRequired: false }
+    loading.value = true
+    try {
+      const res = await request.post<AuthResponse>('/auth/login', { username, password }, { silent: true })
+      // v2.1.8 MFA 两步登录：后端返回 mfa_required 时无 token——调用方（Login.vue）
+      // 切换到验证码步骤；silent 抑制拦截器把 200 的 mfa_required 形态当错误 toast。
+      if ((res as unknown as { mfa_required?: boolean }).mfa_required) {
+        return { mfaRequired: true, mfaToken: (res as unknown as { mfa_token: string }).mfa_token }
+      }
+      applyAuthResponse(res)
+      await fetchConfig()
+      return { mfaRequired: false }
+    } finally {
+      loading.value = false
+    }
+  }
+
+  // v2.1.8 MFA step-up：验证码刷新 mfa_ts（新 JWT 替换当前 token，身份不变）。
+  async function refreshMfaStep(code: string) {
+    const res = await request.post<AuthResponse>('/auth/mfa/verify-step', { code }, { silent: true })
+    applyAuthResponse(res)
+  }
+
+  // v2.1.8 MFA 第二步：验证码换 JWT。
+  async function verifyMfaLogin(mfaToken: string, code: string) {
     if (loading.value) return
     loading.value = true
     try {
-      const res = await request.post<AuthResponse>('/auth/login', { username, password })
+      const res = await request.post<AuthResponse>('/auth/mfa/verify', { mfa_token: mfaToken, code }, { silent: true })
       applyAuthResponse(res)
       await fetchConfig()
     } finally {
@@ -182,6 +207,8 @@ export const useAuthStore = defineStore('auth', () => {
     readOnlyReason,
     readOnlyMessage,
     login,
+    verifyMfaLogin,
+    refreshMfaStep,
     loginWithTicket,
     logout,
     fetchUser,

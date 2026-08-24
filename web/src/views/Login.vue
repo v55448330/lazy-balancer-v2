@@ -34,6 +34,33 @@
           </el-form-item>
         </el-form>
 
+        <el-form v-else-if="mfaStage" @submit.prevent="handleMfaVerify" class="login-form">
+          <div class="mfa-step-title">两步验证</div>
+          <el-form-item>
+            <el-input
+              v-model="mfaCode"
+              :placeholder="mfaUseRecovery ? '请输入恢复代码' : '请输入 6 位验证码'"
+              size="large"
+              :prefix-icon="Key"
+              :maxlength="mfaUseRecovery ? 16 : 6"
+              autofocus
+              @input="mfaCode = mfaCode.replace(/\s/g, '')"
+            />
+          </el-form-item>
+          <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="login-error" />
+          <el-form-item>
+            <el-button type="primary" native-type="submit" :loading="loading" size="large" class="login-btn">
+              {{ loading ? '验证中...' : '验 证' }}
+            </el-button>
+          </el-form-item>
+          <div class="mfa-switch">
+            <el-link type="primary" :underline="false" @click="mfaUseRecovery = !mfaUseRecovery; mfaCode = ''">
+              {{ mfaUseRecovery ? '使用验证码' : '使用恢复代码' }}
+            </el-link>
+            <el-link type="info" :underline="false" @click="resetToPasswordStep">返回重新登录</el-link>
+          </div>
+        </el-form>
+
         <el-form v-else ref="formRef" :model="form" :rules="rules" @submit.prevent="handleLogin" class="login-form">
           <el-form-item prop="username">
             <el-input
@@ -85,7 +112,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { ApiRequestError, request } from '@/utils/api'
-import { User, Lock, Postcard } from '@element-plus/icons-vue'
+import { User, Lock, Postcard, Key } from '@element-plus/icons-vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, appVersion } from '@/utils/branding'
 import type { FormInstance, FormRules } from 'element-plus'
@@ -154,6 +181,32 @@ const setupRules: FormRules = {
 
 const error = ref('')
 const loading = ref(false)
+// v2.1.8 MFA 两步登录状态
+const mfaStage = ref(false)
+const mfaToken = ref('')
+const mfaCode = ref('')
+const mfaUseRecovery = ref(false)
+
+const resetToPasswordStep = () => {
+  mfaStage.value = false
+  mfaToken.value = ''
+  mfaCode.value = ''
+  mfaUseRecovery.value = false
+  error.value = ''
+}
+
+const handleMfaVerify = async () => {
+  if (loading.value || !mfaCode.value) return
+  error.value = ''
+  loading.value = true
+  try {
+    await authStore.verifyMfaLogin(mfaToken.value, mfaCode.value)
+  } catch (caught: unknown) {
+    error.value = errorMessage(caught, '验证失败，请重试')
+  } finally {
+    loading.value = false
+  }
+}
 
 const errorMessage = (caught: unknown, fallback: string): string => caught instanceof Error ? caught.message : fallback
 
@@ -167,7 +220,13 @@ const handleLogin = async () => {
     error.value = ''
     loading.value = true
     try {
-      await authStore.login(form.username, form.password)
+      const result = await authStore.login(form.username, form.password)
+      if (result.mfaRequired && result.mfaToken) {
+        mfaToken.value = result.mfaToken
+        mfaStage.value = true
+        mfaCode.value = ''
+        return
+      }
     } catch (caught: unknown) {
       error.value = errorMessage(caught, '登录失败，请稍后重试')
     } finally {
@@ -318,5 +377,18 @@ onMounted(async () => {
 .version {
   font-size: 12px;
   color: #9ca3af;
+}
+
+.mfa-step-title {
+  text-align: center;
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 20px;
+  color: var(--el-text-color-primary);
+}
+.mfa-switch {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 2px;
 }
 </style>
