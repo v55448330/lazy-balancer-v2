@@ -900,6 +900,14 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	if err != nil {
 		tx.Rollback()
 		log.Printf("CreateRule database error: %v", err)
+		// R70-C-1：validate 经 /load 已把候选 TCP server 真实加载，DB 写失败时
+		// 用 validate 前快照恢复运行配置（HTTP 侧临时路由已被 DeleteRouteByID
+		// 清理，恢复对两协议统一无副作用）。
+		if req.Protocol == "tcp" {
+			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+				log.Printf("CreateRule DB 失败后恢复运行配置失败: %v", restoreErr)
+			}
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（创建规则）: " + err.Error()})
 		return
 	}
@@ -926,6 +934,11 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		if err != nil {
 			tx.Rollback()
 			log.Printf("CreateRule upstream insert error: %v", err)
+			if req.Protocol == "tcp" {
+				if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+					log.Printf("CreateRule DB 失败后恢复运行配置失败: %v", restoreErr)
+				}
+			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（创建上游服务器）: " + err.Error()})
 			return
 		}
@@ -933,6 +946,11 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	if err := replacePathRulesTx(c.Request.Context(), tx, caddyID, features.PathRules); err != nil {
 		tx.Rollback()
 		log.Printf("CreateRule path_rules replace error: %v", err)
+		if req.Protocol == "tcp" {
+			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+				log.Printf("CreateRule DB 失败后恢复运行配置失败: %v", restoreErr)
+			}
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（创建自定义路径规则）: " + err.Error()})
 		return
 	}
@@ -1701,6 +1719,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if err != nil {
 		tx.Rollback()
 		log.Printf("UpdateRule database error for caddy_id=%s: %v", caddyID, err)
+		if req.Protocol == "tcp" {
+			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
+			}
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（更新规则）: " + err.Error()})
 		return
 	}
@@ -1708,6 +1731,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if err != nil {
 		tx.Rollback()
 		log.Printf("UpdateRule RowsAffected error for caddy_id=%s: %v", caddyID, err)
+		if req.Protocol == "tcp" {
+			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
+			}
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（确认规则更新结果）: " + err.Error()})
 		return
 	}
@@ -1728,6 +1756,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if _, err := tx.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID); err != nil {
 		tx.Rollback()
 		log.Printf("UpdateRule upstream delete error for caddy_id=%s: %v", caddyID, err)
+		if req.Protocol == "tcp" {
+			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
+			}
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（更新上游服务器）: " + err.Error()})
 		return
 	}
@@ -1751,6 +1784,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			caddyID, u.Host, u.Port, u.Weight, u.DynamicDNS, u.Enabled, u.Protocol, u.MaxConnections); err != nil {
 			tx.Rollback()
 			log.Printf("UpdateRule upstream insert error for caddy_id=%s: %v", caddyID, err)
+			if req.Protocol == "tcp" {
+				if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+					log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
+				}
+			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（更新上游服务器）: " + err.Error()})
 			return
 		}
@@ -1758,6 +1796,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if err := replacePathRulesTx(c.Request.Context(), tx, caddyID, features.PathRules); err != nil {
 		tx.Rollback()
 		log.Printf("UpdateRule path_rules replace error for caddy_id=%s: %v", caddyID, err)
+		if req.Protocol == "tcp" {
+			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
+				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
+			}
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "写入数据库失败（更新自定义路径规则）: " + err.Error()})
 		return
 	}
