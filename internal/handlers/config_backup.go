@@ -843,6 +843,10 @@ func validateV2BackupSecurityPolicies(rows []map[string]any) error {
 			if (rpsOK && rps < 1) || (burstOK && burst < 0) || !rpsOK {
 				return fmt.Errorf("安全策略 #%d（%s）：启用限流时 rate_limit_rps 必须 ≥1、rate_limit_burst 不能为负", index+1, name)
 			}
+			// R69 C-N2：上界与保存侧同口径——渲染侧 rps*60/rps+burst 的 int64 溢出防线。
+			if rps > 1_000_000_000 || burst > 1_000_000_000 {
+				return fmt.Errorf("安全策略 #%d（%s）：rate_limit_rps/burst 过大（上限 1000000000）", index+1, name)
+			}
 		}
 		// R58 B-N3：geoip_countries 形状按保存侧 ValidateGeoIPCountries 同口径
 		// （空串/缺省放行——与三枚举的「无值归一」一致；有值则必须是合法 JSON

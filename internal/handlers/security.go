@@ -119,9 +119,18 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	// 端点唯一「零值语义恰为禁用」的字段，MCP 无约束 body 的部分更新此前会把
 	// 零值 false 直写落库，WAF 静默少一条拦截规则且审计无痕迹。先读现值合并为
 	// 有效形态再过统一校验（校验规则不变，只是输入从「绑定零值」改为「现值」）。
+	// R69 B69-N2：读-合并-写包进事务（DSN _txlock=immediate 使首个读即持写锁，
+	// 与 UpdateSecurityPolicy 同机制）——此前裸连接读后合并再全列写，两个并发
+	// 部分更新会互相静默覆盖（丢 enabled 翻转 = WAF 规则静默启/禁用）。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启事务失败"})
+		return
+	}
+	defer tx.Rollback()
 	var existing models.SecurityCustomRule
 	var existingConditionsJSON string
-	if err := db.DB.QueryRow(
+	if err := tx.QueryRowContext(c.Request.Context(),
 		`SELECT name, COALESCE(description,''), conditions, action, score, enabled FROM security_custom_rules WHERE id=?`, id,
 	).Scan(&existing.Name, &existing.Description, &existingConditionsJSON, &existing.Action, &existing.Score, &existing.Enabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -131,7 +140,16 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败: " + err.Error()})
 		return
 	}
-	_ = json.Unmarshal([]byte(existingConditionsJSON), &existing.Conditions)
+	// R69 B69-N1：存量条件「非空但解析失败」与「用户漏传条件」是不同故障——
+	// 吞错会使损坏行走到「至少需要一个匹配条件」400，被误归因为用户输入
+	//（与 R68 B-F5 / R63 B-N2 的 storage_corrupted 口径对齐）。
+	if existingConditionsJSON != "" {
+		if uerr := json.Unmarshal([]byte(existingConditionsJSON), &existing.Conditions); uerr != nil {
+			recordAudit(c, "更新失败", "自定义规则", services.FormatAuditDetail(fmt.Sprintf("规则 #%s", id), services.AuditResultPart("storage_corrupted")))
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "存储的自定义规则条件已损坏，请删除后重建"})
+			return
+		}
+	}
 	merged := models.SecurityCustomRule{
 		Name:        existing.Name,
 		Description: existing.Description,
@@ -163,7 +181,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		return
 	}
 	conditionsJSON, _ := json.Marshal(merged.Conditions)
-	result, err := db.DB.Exec(`UPDATE security_custom_rules SET name=?, description=?, conditions=?, action=?, score=?, enabled=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
+	result, err := tx.ExecContext(c.Request.Context(), `UPDATE security_custom_rules SET name=?, description=?, conditions=?, action=?, score=?, enabled=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
 		merged.Name, merged.Description, string(conditionsJSON), merged.Action, merged.Score, merged.Enabled, getContextUserIDInt(c), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -171,6 +189,10 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	}
 	if rows, _ := result.RowsAffected(); rows == 0 {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
 		return
 	}
 	services.RecordAuditLog(getContextUserID(c), "更新", "自定义规则", fmt.Sprintf("名称：%s（#%s）", merged.Name, id), "")
@@ -1831,6 +1853,15 @@ func validateRateLimitShape(name string, enabled bool, rps, burst int) error {
 	}
 	if burst < 0 {
 		return fmt.Errorf("策略 %q：启用限流时 rate_limit_burst 不能为负（当前 %d）", name, burst)
+	}
+	// R69 C-N2：渲染侧 buildRateLimitHandler 的 min-zone 用 rps*60、sec-zone 用
+	// rps+burst（int64 运算）——与 request_body_max_size_mb 钳制（R57 C-7）同型的
+	// 溢出防线：上界 1e9 使任何算术组合远离 int64 回绕。
+	if rps > 1_000_000_000 {
+		return fmt.Errorf("策略 %q：rate_limit_rps 过大（当前 %d，上限 1000000000）", name, rps)
+	}
+	if burst > 1_000_000_000 {
+		return fmt.Errorf("策略 %q：rate_limit_burst 过大（当前 %d，上限 1000000000）", name, burst)
 	}
 	return nil
 }
