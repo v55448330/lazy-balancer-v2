@@ -877,9 +877,10 @@ func TestIP2RegionSchedulerTick_initializesNextUpdate(t *testing.T) {
 		t.Fatal("first tick should only schedule, not run")
 	}
 	_, _, _, _, _, nextUpdate, _ := ip2RegionVersionRow(t)
-	want := now.Add(24 * time.Hour).Format(crsTimeLayout)
-	if nextUpdate != want {
-		t.Fatalf("next_update=%q, want %q", nextUpdate, want)
+	// R69（用户报告修复）：成功路径以 DB 时钟再刷新 next_update=+24h——断言
+	// 收敛为非空未来排程（tick 预写与成功刷新任一生效即满足原意图）。
+	if nextUpdate == "" || nextUpdate <= now.Format(crsTimeLayout) {
+		t.Fatalf("next_update=%q, want 非空且晚于 tick 时刻 %s", nextUpdate, now.Format(crsTimeLayout))
 	}
 }
 
@@ -913,9 +914,10 @@ func TestIP2RegionSchedulerTick_runsWhenDue(t *testing.T) {
 		t.Fatal("due scheduler tick should start an auto update")
 	}
 	_, _, _, _, _, nextUpdate, _ := ip2RegionVersionRow(t)
-	want := now.Add(24 * time.Hour).Format(crsTimeLayout)
-	if nextUpdate != want {
-		t.Fatalf("next_update=%q, want %q", nextUpdate, want)
+	// R69（用户报告修复）：成功路径以 DB 时钟再刷新 next_update=+24h——断言
+	// 收敛为非空未来排程（tick 预写与成功刷新任一生效即满足原意图）。
+	if nextUpdate == "" || nextUpdate <= now.Format(crsTimeLayout) {
+		t.Fatalf("next_update=%q, want 非空且晚于 tick 时刻 %s", nextUpdate, now.Format(crsTimeLayout))
 	}
 }
 

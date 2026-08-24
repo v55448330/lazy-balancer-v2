@@ -208,7 +208,7 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	if tag == currentIP2RegionVersion() {
 		writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), "已是最新版本，无需更新")
 		if _, err := db.DB.Exec(
-			"UPDATE security_ip2region_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0 WHERE id=1",
+			"UPDATE security_ip2region_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",
 		); err != nil {
 			log.Printf("ip2region update: failed to record latest-version skip: %v", err)
 		}
@@ -280,7 +280,7 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	os.Remove(ip2regionLivePath + ".bak")
 
 	if _, err := db.DB.Exec(
-		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0 WHERE id=1",
+		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",
 		tag,
 	); err != nil {
 		log.Printf("ip2region update: failed to record success: %v", err)
@@ -499,7 +499,7 @@ func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadEr
 		warn += "内存 searcher 未切换，重启后生效"
 	}
 	if _, err := db.DB.Exec(
-		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message=?, finished_at=datetime('now'), consecutive_failures=0 WHERE id=1",
+		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now'), update_status='success', message=?, finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",
 		tag, warn,
 	); err != nil {
 		log.Printf("ip2region update: failed to record fail-open success: %v", err)

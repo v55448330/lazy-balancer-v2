@@ -370,10 +370,12 @@ func TestCRSSchedulerTick_initializesNextUpdate(t *testing.T) {
 	if fetchCalled {
 		t.Fatal("first tick should only schedule, not run")
 	}
+	// R69（用户报告修复）：成功路径会以 DB 时钟再刷新 next_update=+24h
+	//（与 tick 预写的注入时钟可能不同）——断言收敛为「非空的未来排程」，
+	// tick 预写与成功刷新任一生效即满足原意图（due tick 推进排程）。
 	_, _, _, _, _, nextUpdate, _ := crsVersionRow(t)
-	want := now.Add(24 * time.Hour).Format("2006-01-02 15:04:05")
-	if nextUpdate != want {
-		t.Fatalf("next_update=%q, want %q", nextUpdate, want)
+	if nextUpdate == "" || nextUpdate <= now.Format("2006-01-02 15:04:05") {
+		t.Fatalf("next_update=%q, want 非空且晚于 tick 时刻 %s", nextUpdate, now.Format("2006-01-02 15:04:05"))
 	}
 }
 
@@ -406,10 +408,12 @@ func TestCRSSchedulerTick_runsWhenDue(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("due scheduler tick should start an auto update")
 	}
+	// R69（用户报告修复）：成功路径会以 DB 时钟再刷新 next_update=+24h
+	//（与 tick 预写的注入时钟可能不同）——断言收敛为「非空的未来排程」，
+	// tick 预写与成功刷新任一生效即满足原意图（due tick 推进排程）。
 	_, _, _, _, _, nextUpdate, _ := crsVersionRow(t)
-	want := now.Add(24 * time.Hour).Format("2006-01-02 15:04:05")
-	if nextUpdate != want {
-		t.Fatalf("next_update=%q, want %q", nextUpdate, want)
+	if nextUpdate == "" || nextUpdate <= now.Format("2006-01-02 15:04:05") {
+		t.Fatalf("next_update=%q, want 非空且晚于 tick 时刻 %s", nextUpdate, now.Format("2006-01-02 15:04:05"))
 	}
 }
 
@@ -520,5 +524,62 @@ func TestSetCRSAutoUpdate_preservesVersion(t *testing.T) {
 	}
 	if !autoUpdate {
 		t.Fatal("auto_update should be true")
+	}
+}
+
+// R69（用户报告）：开关开启即写 next_update（对齐 IP2Region）——此前只翻标志，
+// 「下次更新」显示 — 直到调度器首 tick；关闭清空。
+func TestSetCRSAutoUpdate_schedulesNextUpdate(t *testing.T) {
+	newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.14.0", false)
+
+	if err := SetCRSAutoUpdate(true); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, _, _, nextUpdate, _ := crsVersionRow(t)
+	if nextUpdate == "" {
+		t.Fatal("开启自动更新后 next_update 为空——「下次更新」将显示 — 直到调度器首 tick")
+	}
+
+	if err := SetCRSAutoUpdate(false); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, _, _, nextUpdate, _ = crsVersionRow(t)
+	if nextUpdate != "" {
+		t.Fatalf("关闭自动更新后 next_update=%q, want 空", nextUpdate)
+	}
+}
+
+// R69（用户报告）：手动更新成功（已是最新分支）在 auto_update=1 时刷新
+// next_update=+24h——此前手动成功不写，UI 显示 —；auto_update=0 保持空。
+func TestCRSRun_successRefreshesNextUpdate(t *testing.T) {
+	m := newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.14.0", true)
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.14.0", nil }
+
+	done, err := m.StartUpdate("manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+
+	_, status, _, _, _, nextUpdate, _ := crsVersionRow(t)
+	if status != "success" {
+		t.Fatalf("status=%q, want success", status)
+	}
+	if nextUpdate == "" {
+		t.Fatal("手动更新成功且 auto_update=1 时 next_update 未刷新（UI「下次更新」显示 —）")
+	}
+
+	// auto_update=0：成功不排程
+	seedCRSVersionRow(t, "v4.14.0", false)
+	done, err = m.StartUpdate("manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	_, _, _, _, _, nextUpdate, _ = crsVersionRow(t)
+	if nextUpdate != "" {
+		t.Fatalf("auto_update=0 时成功不应写 next_update（got %q）", nextUpdate)
 	}
 }

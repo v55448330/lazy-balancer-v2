@@ -131,6 +131,10 @@ func ResetCRSUpdateManagerForTest() {
 
 // SetCRSAutoUpdate toggles the auto-update flag without touching the stored
 // version; a missing row is seeded with the image-bundled version.
+// R69（用户报告）：开启时与 IP2Region 的 SetIP2RegionAutoUpdate 同步写
+// next_update=now+24h（关闭清空）——开关动作即重排程。此前只翻标志，
+// 开启自动更新后「下次更新」一直显示 —，直到调度器下一次小时级 tick 预写
+// 才有值（手动更新成功也不写，见 run() 成功分支的补齐）。
 func SetCRSAutoUpdate(enabled bool) error {
 	if _, err := db.DB.Exec(
 		"INSERT OR IGNORE INTO security_crs_version (id, version, auto_update) VALUES (1, ?, ?)",
@@ -138,7 +142,11 @@ func SetCRSAutoUpdate(enabled bool) error {
 	); err != nil {
 		return fmt.Errorf("初始化 CRS 版本记录: %w", err)
 	}
-	if _, err := db.DB.Exec("UPDATE security_crs_version SET auto_update=? WHERE id=1", enabled); err != nil {
+	nextUpdate := ""
+	if enabled {
+		nextUpdate = time.Now().UTC().Add(24 * time.Hour).Format("2006-01-02 15:04:05")
+	}
+	if _, err := db.DB.Exec("UPDATE security_crs_version SET auto_update=?, next_update=? WHERE id=1", enabled, nextUpdate); err != nil {
 		return fmt.Errorf("更新 CRS 自动更新开关: %w", err)
 	}
 	return nil
@@ -242,7 +250,7 @@ func (m *CRSUpdateManager) run(trigger string) {
 	if tag == currentCRSVersion() {
 		writeCRSUpdateLog("INFO", string(CRSStatusSuccess), "已是最新版本，无需更新")
 		if _, err := db.DB.Exec(
-			"UPDATE security_crs_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0 WHERE id=1",
+			"UPDATE security_crs_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",
 		); err != nil {
 			log.Printf("crs update: failed to record latest-version skip: %v", err)
 		}
@@ -265,7 +273,7 @@ func (m *CRSUpdateManager) run(trigger string) {
 	}
 
 	if _, err := db.DB.Exec(
-		"UPDATE security_crs_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0 WHERE id=1",
+		"UPDATE security_crs_version SET version=?, updated_at=datetime('now'), update_status='success', message='', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",
 		tag,
 	); err != nil {
 		log.Printf("crs update: failed to record success: %v", err)
