@@ -40,7 +40,7 @@ var tools = []toolSpec{
 	{"enable_rule", "启用指定负载均衡规则", http.MethodPost, "/rules/{caddy_id}/enable", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"disable_rule", "禁用指定负载均衡规则", http.MethodPost, "/rules/{caddy_id}/disable", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"duplicate_rule", "复制指定负载均衡规则", http.MethodPost, "/rules/{caddy_id}/duplicate", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
-	{"list_cert_jobs", "列出证书签发任务", http.MethodGet, "/certificates/jobs", nil, []string{"rule_id"}, querySchema("rule_id", "按规则 ID 过滤", "string")},
+	{"list_cert_jobs", "列出证书签发任务", http.MethodGet, "/certificates/jobs", nil, []string{"rule_id", "page", "page_size"}, listCertJobsSchema},
 	{"retry_cert_job", "重试指定证书签发任务", http.MethodPost, "/certificates/jobs/{id}/retry", []string{"id"}, nil, idSchema("id", "证书任务 ID", "integer")},
 	{"delete_cert_job", "删除指定证书签发任务", http.MethodDelete, "/certificates/jobs/{id}", []string{"id"}, nil, idSchema("id", "证书任务 ID", "integer")},
 	{"issue_certificate", "触发 ACME 证书签发", http.MethodPost, "/certificates/issue", nil, nil, issueCertificateSchema},
@@ -69,7 +69,7 @@ var tools = []toolSpec{
 	{"get_crs_info", "获取 CRS 规则库信息（版本/状态/自动更新）", http.MethodGet, "/security/crs", nil, nil, emptySchema},
 	{"get_crs_update_status", "获取 CRS 更新进度状态", http.MethodGet, "/security/crs/update/status", nil, nil, emptySchema},
 	{"get_crs_update_logs", "获取 CRS 更新日志", http.MethodGet, "/security/crs/update/logs", nil, nil, emptySchema},
-	{"list_crs_rules", "分页浏览 CRS 规则文件", http.MethodGet, "/security/crs/rules", nil, []string{"search", "page", "page_size"}, querySchema("search", "搜索关键词", "string")},
+	{"list_crs_rules", "分页浏览 CRS 规则文件", http.MethodGet, "/security/crs/rules", nil, []string{"search", "page", "page_size"}, listCRSRulesSchema},
 	{"get_crs_rule", "查看指定 CRS 规则文件内容", http.MethodGet, "/security/crs/rules/{filename}", []string{"filename"}, nil, idSchema("filename", "规则文件名", "string")},
 	{"get_ip2region_info", "获取 IP2Region 信息（版本/状态/自动更新）", http.MethodGet, "/security/ip2region", nil, nil, emptySchema},
 	{"get_ip2region_regions", "获取可选区域列表", http.MethodGet, "/security/ip2region/regions", nil, nil, emptySchema},
@@ -198,6 +198,13 @@ const updateRuleSchema = `{"type":"object","required":["caddy_id"],"properties":
 
 const issueCertificateSchema = `{"type":"object","properties":{"caddy_id":{"type":"string"},"domain":{"type":"string"}},"oneOf":[{"maxProperties":0},{"required":["caddy_id"]}],"additionalProperties":false}`
 const auditLogsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20}},"additionalProperties":false}`
+
+// R68 B-F2：schema 必须覆盖 queryArgs 声明的全部参数——mcp-go 在工具处理器前
+// 按 input_schema 强校验（additionalProperties:false），querySchema("search")
+// 会把 Agent 按工具描述传的 page/page_size 以 -32602 拒绝，分页永远不可达。
+// 边界与 REST clamp 对齐（ListCRSRules page_size≤100 默认 50；cert jobs ≤200）。
+const listCRSRulesSchema = `{"type":"object","properties":{"search":{"type":"string","description":"搜索关键词"},"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":50}},"additionalProperties":false}`
+const listCertJobsSchema = `{"type":"object","properties":{"rule_id":{"type":"string","description":"按规则 ID 过滤"},"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":200,"default":20}},"additionalProperties":false}`
 const securityEventsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20},"action":{"type":"string"},"ip":{"type":"string"},"rule_caddy_id":{"type":"string"},"start_time":{"type":"string","description":"开始时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"},"end_time":{"type":"string","description":"结束时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"}},"additionalProperties":false}`
 const caddyLogsSchema = `{"type":"object","properties":{"type":{"type":"string","enum":["runtime","server","proxy","tls","access"]}},"additionalProperties":false}`
 const updateConfigSchema = `{"type":"object","properties":{"source":{"type":"string"},"dns_provider":{"type":"string"},"dns_credentials":{"type":"string"},"acme_email":{"type":"string"},"cert_expiry_days":{"type":"integer"},"cert_renewal_days":{"type":"integer"},"cert_renewal_attempts":{"type":"integer"},"log_level":{"type":"string"},"caddy_log_level":{"type":"string"},"caddy_log_size_mb":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"http_read_timeout":{"type":"integer"},"http_write_timeout":{"type":"integer"},"http_idle_timeout":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"proxy_dial_timeout":{"type":"integer","minimum":0},"proxy_response_header_timeout":{"type":"integer","minimum":0},"proxy_read_timeout":{"type":"integer","minimum":0},"proxy_write_timeout":{"type":"integer","minimum":0},"proxy_stream_timeout":{"type":"integer","minimum":0},"proxy_flush_interval":{"type":"integer","minimum":-1},"proxy_stream_close_delay":{"type":"integer","minimum":0},"server_tokens_hidden":{"type":"boolean"},"cert_job_log_size_mb":{"type":"integer"},"runtime_log_size_mb":{"type":"integer"},"access_log_json":{"type":"boolean"},"access_log_format":{"type":"string"},"audit_retention_months":{"type":"integer"},"jwt_expire_minutes":{"type":"integer"},"timezone":{"type":"string"},"default_ca_provider_id":{"type":"integer"}},"additionalProperties":false}`
