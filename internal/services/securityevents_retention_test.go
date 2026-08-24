@@ -127,9 +127,10 @@ func TestSecurityEventsRetentionCleanup_usesDefaultDaysWhenConfigZero(t *testing
 	}
 }
 
-func TestSetSecurityEventsRetentionMasterRole_startsAndKeepsWorker(t *testing.T) {
-	// R66 B-N2：false 分支改 no-op——保留清理是全节点职责（从节点也摄入事件，
-	// 停止会致事件表越过 10 万行上限无界增长，R62 B-NEW-2）；降级不得停止。
+func TestStartSecurityEventsRetention_idempotentAndAlwaysRunning(t *testing.T) {
+	// R69 REMOVE 后的契约锁定：worker 生命周期由 main.go 单点拥有——重复启动
+	// 幂等（不重启 worker）；不存在任何「停止」生产路径（从节点也摄入事件，
+	// 停止会致事件表越过 10 万行上限无界增长，R62 B-NEW-2 确立的设计语义）。
 	setupSecurityEventsRetentionTestDB(t)
 	t.Cleanup(securityEventsRetentionStop)
 	workerDone := func() chan struct{} {
@@ -138,26 +139,19 @@ func TestSetSecurityEventsRetentionMasterRole_startsAndKeepsWorker(t *testing.T)
 		return securityEventsRetentionDone
 	}
 
-	// When / Then: master role starts it, repeated promotion is idempotent
-	SetSecurityEventsRetentionMasterRole(true)
+	StartSecurityEventsRetention(context.Background())
 	first := workerDone()
 	if first == nil {
-		t.Fatal("master role must start the retention worker")
+		t.Fatal("StartSecurityEventsRetention must start the retention worker")
 	}
-	SetSecurityEventsRetentionMasterRole(true)
+	StartSecurityEventsRetention(context.Background())
 	if second := workerDone(); second != first {
-		t.Fatal("repeated master role must not restart the retention worker")
+		t.Fatal("repeated start must not restart the retention worker")
 	}
-
-	// When / Then: demotion (false) is a no-op — the worker keeps running
-	SetSecurityEventsRetentionMasterRole(false)
 	select {
 	case <-first:
-		t.Fatal("demotion must NOT stop the retention worker（全节点职责，停止致从节点事件表无界增长）")
+		t.Fatal("worker must keep running（无停止路径是设计语义）")
 	default:
-	}
-	if done := workerDone(); done != first {
-		t.Fatal("demotion must keep the worker state intact")
 	}
 }
 

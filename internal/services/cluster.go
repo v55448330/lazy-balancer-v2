@@ -286,7 +286,6 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if ip2regionMgr := GetIP2RegionUpdateManager(); ip2regionMgr != nil {
 		ip2regionMgr.SetMasterRole(true)
 	}
-	SetSecurityEventsRetentionMasterRole(true)
 	if masterURL != "" {
 		parsedMasterURL, err := url.Parse(masterURL)
 		if err != nil {

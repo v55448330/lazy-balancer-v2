@@ -1287,7 +1287,14 @@ func (s *SyncService) run(ctx context.Context) {
 func (s *SyncService) pollRegistration(ctx context.Context) {
 	var masterURL, secret string
 	var registrationID int
-	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(master_url,''), COALESCE(registration_id,0), COALESCE(registration_secret,'') FROM global_config WHERE id=1").Scan(&masterURL, &registrationID, &secret); err != nil || masterURL == "" || registrationID == 0 || secret == "" {
+	// R69 A-N1：DB 读取失败与「未处于注册态」（字段为空）拆分——前者静默返回
+	// 会在持续性本地 DB 故障期间零留痕（状态面与日志均无信号）；行为不变
+	//（下周期照常重试），仅补日志。
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(master_url,''), COALESCE(registration_id,0), COALESCE(registration_secret,'') FROM global_config WHERE id=1").Scan(&masterURL, &registrationID, &secret); err != nil {
+		log.Printf("注册状态轮询：读取 global_config 失败，本周期跳过: %v", err)
+		return
+	}
+	if masterURL == "" || registrationID == 0 || secret == "" {
 		return
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/api/v1/cluster/register/%d/status", strings.TrimRight(masterURL, "/"), registrationID), nil)

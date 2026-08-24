@@ -149,16 +149,7 @@ func securityEventsRetentionStop() {
 	}
 }
 
-// SetSecurityEventsRetentionMasterRole 安全事件保留清理的幂等启动钩子。
-// R62 B-NEW-2（注释修正）：保留清理针对本节点本地 security_events 表，与集群角色
-// 无关——main.go 启动即无条件运行（从节点也摄入事件），降级为从节点【不应】停止：
-// 若按旧注释在 BecomeSlave 补 stop，从节点事件表将越过 10 万行上限无界增长。
-// R66 B-N2：false 分支从 stop 改为 no-op——函数与 CRS/IP2Region 的 SetMasterRole
-// （按角色启停）同形，极易诱使未来在降级路径补 false 调用（恰是 R62 纠正过的
-// 错误）；保留签名以兼容既有调用点（cluster.go 提升路径传 true），false 不再
-// 有可观察效果。生产停止路径仅 main.go 优雅退出。
-func SetSecurityEventsRetentionMasterRole(isMaster bool) {
-	if isMaster {
-		StartSecurityEventsRetention(context.Background())
-	}
-}
+// （R69 过度修复审查 REMOVE：SetSecurityEventsRetentionMasterRole wrapper 已删除。
+// worker 生命周期由 main.go 单点拥有——启动即无条件 StartSecurityEventsRetention
+//（从节点也摄入事件，与集群角色无关，R62 B-NEW-2 确立）；Promote 路径的传 true
+// 调用是幂等 no-op、false 分支生产不可达；停止路径仅 main.go 优雅退出。）

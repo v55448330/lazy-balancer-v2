@@ -321,11 +321,9 @@ var genericRouteRegistry = []struct {
 // TestAuditGenericRoutesExactlyOnce Generic 路由 exactly-once 绊线（R65 D-N1）：
 // Generic 分类的路由要么由中间件记录（FormatAuditAction 有映射、handler 不得
 // 再记），要么由 handler 记录（映射为空、中间件跳过）——两侧同时激活即单次
-// 动作双条 audit_log（/config/reload 曾如此）。
+// 动作双条 audit_log（/config/reload 曾如此；R69 删除循环前的同断言重复——
+// 子测试已覆盖）。
 func TestAuditGenericRoutesExactlyOnce(t *testing.T) {
-	if action, _, _ := FormatAuditAction(http.MethodPost, "/api/v1/config/reload"); action != "" {
-		t.Fatalf("FormatAuditAction(/config/reload)=%q, want 空（handler ReloadCaddy 已显式记录，映射非空会双条）", action)
-	}
 	handlersRoot, err := filepath.Abs(filepath.Join("..", "handlers"))
 	if err != nil {
 		t.Fatal(err)

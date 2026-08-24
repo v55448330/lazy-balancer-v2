@@ -61,17 +61,10 @@ func TestStartAuditCleanup_starts_once_and_stops(t *testing.T) {
 	}
 }
 
-// R66 D-N3 删除全部 Explicit 死映射；R67 D-4：5 条样例断言并入
-// TestAuditExplicitRoutesMappingEmpty（63 条穷尽）后移除本测试，仅保留
-// R65 决策文档化的 reload 断言。
-func TestFormatAuditActionDirectConfigReload(t *testing.T) {
-	// R65 D-N1：/config/reload 改由 handler（ReloadCaddy）单独记录，映射为空
-	//（中间件跳过）——此前映射+handler 双记录，单次动作两条 audit_log。
-	action, resource, _ := FormatAuditAction("POST", "/api/v1/config/reload")
-	if action != "" || resource != "" {
-		t.Fatalf("FormatAuditAction() = (%q, %q), want 空（handler 已显式记录）", action, resource)
-	}
-}
+// （R69 过度修复审查 REMOVE：TestFormatAuditActionDirectConfigReload 已删除——
+// 其断言被 TestAuditGenericRoutesExactlyOnce 的 /config/reload 子测试完全吸收
+//（B/D 双域独立确认零覆盖）；R65 决策文档化于 auditlog.go FormatAuditAction
+// 注释与 genericRouteRegistry。）
 
 func TestRecordAuditLogWritesToIndependentDatabase(t *testing.T) {
 	oldDB, oldAuditDB := db.DB, db.AuditDB
