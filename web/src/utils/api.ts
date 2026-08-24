@@ -51,6 +51,8 @@ interface GlobalConfigData {
   cert_renewal_attempts: number
   default_ca_provider_id: number
   dns_provider: string
+  mfa_write_guard: boolean
+  mfa_lockout_enabled: boolean
 }
 
 interface RequestClient {

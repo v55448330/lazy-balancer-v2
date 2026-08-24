@@ -104,13 +104,23 @@
             <span class="text-secondary">{{ formatDate(row.last_login) || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right" align="center">
+        <el-table-column label="MFA" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.mfa_enabled ? 'success' : 'info'" size="small" effect="plain">
+              {{ row.mfa_enabled ? '已启用' : '未启用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="240" fixed="right" align="center">
           <template #default="{ row }">
             <el-button v-if="row.id !== authStore.user?.id" type="primary" link size="small" :disabled="isReadOnly || submitting" @click="editUser(row)">
               编辑
             </el-button>
             <el-button v-if="row.id !== authStore.user?.id" type="warning" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row.id)">
               重置密码
+            </el-button>
+            <el-button v-if="row.mfa_enabled" type="warning" link size="small" :disabled="isReadOnly || submitting" @click="resetMfa(row)">
+              重置 MFA
             </el-button>
             <el-button v-if="row.id !== authStore.user?.id" type="danger" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="deleteUser(row.id)">
               删除
@@ -312,6 +322,23 @@ const resetPassword = async (id: number) => {
     // User cancelled, do nothing
   } finally {
     operatingUserIds.value.delete(id)
+  }
+}
+
+// v2.1.8 MFA：管理员重置指定用户（含自己）——审计留痕，用户需重新绑定。
+const resetMfa = async (row: UserListItem): Promise<void> => {
+  try {
+    await ElMessageBox.confirm(
+      `确定重置用户「${row.username}」的 MFA 吗？重置后该用户登录不再需要验证码，需自行重新绑定。`,
+      '重置 MFA',
+      { type: 'warning', confirmButtonText: '确认重置' },
+    )
+    await request.post(`/users/${row.id}/mfa/reset`)
+    ElMessage.success('已重置 MFA')
+    await fetchUsers()
+  } catch (error: unknown) {
+    if (error === 'cancel' || error === 'close') return
+    console.error('Failed to reset MFA:', error)
   }
 }
 

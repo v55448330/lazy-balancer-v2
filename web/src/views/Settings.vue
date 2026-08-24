@@ -23,6 +23,7 @@
         v-model:settings="settings"
         @save="handleSaveCaddy"
       />
+      <MfaSettingsCard />
     </div>
     <ClusterSettings
       v-else-if="activeTab === 'cluster'"
@@ -42,6 +43,7 @@ import { DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
 import { useAuthStore } from '@/stores/auth'
 import { Setting } from '@element-plus/icons-vue'
 import BasicSettings from './settings/BasicSettings.vue'
+import MfaSettingsCard from '@/components/settings/MfaSettingsCard.vue'
 import CaddyGlobalSettings from './settings/CaddyGlobalSettings.vue'
 import ClusterSettings from './settings/ClusterSettings.vue'
 import FreeCertificates from './settings/FreeCertificates.vue'
@@ -76,6 +78,8 @@ interface SettingsConfig {
   audit_retention_months: number
   jwt_expire_minutes: number
   timezone: string
+  mfa_write_guard: boolean
+  mfa_lockout_enabled: boolean
 }
 
 interface CertificateConfig {
@@ -112,6 +116,8 @@ const settings = ref<SettingsConfig>({
   audit_retention_months: 3,
   jwt_expire_minutes: 20,
   timezone: 'Asia/Shanghai',
+  mfa_write_guard: false,
+  mfa_lockout_enabled: false,
 })
 
 const global = ref<CertificateConfig>({
@@ -154,6 +160,8 @@ const applyBasicKeys = (data: ConfigPayload) => {
   settings.value.audit_retention_months = data.audit_retention_months ?? 3
   settings.value.jwt_expire_minutes = data.jwt_expire_minutes ?? 20
   settings.value.timezone = data.timezone || 'Asia/Shanghai'
+  settings.value.mfa_write_guard = data.mfa_write_guard ?? false
+  settings.value.mfa_lockout_enabled = data.mfa_lockout_enabled ?? false
 }
 
 const applyCaddyKeys = (data: ConfigPayload) => {

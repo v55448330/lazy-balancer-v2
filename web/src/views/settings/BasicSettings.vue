@@ -63,6 +63,14 @@
             </el-select>
             <el-text type="info" size="small" class="tip-block">影响日志时间戳与证书时间；仅 Caddy 日志需重启服务生效</el-text>
           </el-form-item>
+          <el-form-item label="MFA 写操作验证">
+            <el-switch v-model="settings.mfa_write_guard" />
+            <el-text type="info" size="small" class="tip-block">开启后，已启用 MFA 的用户执行写操作时需 10 分钟内验证过验证码（默认关：MFA 仅登录验证）</el-text>
+          </el-form-item>
+          <el-form-item label="MFA 验证失败锁定">
+            <el-switch v-model="settings.mfa_lockout_enabled" />
+            <el-text type="info" size="small" class="tip-block">开启后验证失败 5 次锁定 10 分钟（默认关：仅 IP 级登录限流兜底，防护较弱）</el-text>
+          </el-form-item>
           <el-form-item label="强制 HTTPS">
             <el-switch v-model="adminTls.enabled" @change="onAdminTlsToggle" />
             <el-button v-if="adminTls.enabled" size="small" style="margin-left: 8px;" @click="openAdminTlsDialog">配置证书</el-button>
@@ -496,6 +504,8 @@ interface BasicSettingsConfig {
   audit_retention_months: number
   jwt_expire_minutes: number
   timezone: string
+  mfa_write_guard: boolean
+  mfa_lockout_enabled: boolean
 }
 
 interface ConfigPreviewResponse {
@@ -706,6 +716,8 @@ const handleSave = async () => {
       audit_retention_months: settings.value.audit_retention_months,
       jwt_expire_minutes: settings.value.jwt_expire_minutes,
       timezone: settings.value.timezone,
+      mfa_write_guard: settings.value.mfa_write_guard,
+      mfa_lockout_enabled: settings.value.mfa_lockout_enabled,
       source: 'basic',
     }
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)

@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
+    "@types/qrcode": "^1.5.5",
     "@vueuse/core": "^10.9.0",
     "asn1js": "^3.0.10",
     "axios": "^1.19.0",
@@ -17,6 +18,7 @@
     "pinia": "^4.0.3",
     "pkijs": "^3.4.0",
     "prismjs": "^1.30.0",
+    "qrcode": "^1.5.4",
     "vue": "^3.5.41",
     "vue-echarts": "^8.1.0",
     "vue-json-pretty": "^2.6.0"
