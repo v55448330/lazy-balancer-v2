@@ -2856,7 +2856,7 @@ const fetchLogStream = async () => {
   if (!targetMaps) return
   logStatsInFlight.value = true
   try {
-    const res = await request.get<APIResponse<RuleLogStreamData>>(`/rules/${targetId}/log-stream`, { params: { offset: targetOffset }, signal: healthPolling.signal })
+    const res = await request.get<APIResponse<RuleLogStreamData>>(`/rules/${targetId}/log-stream`, { params: { offset: targetOffset }, signal: healthPolling.signal, silent: true })
     if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== targetMaps) return
     const lines: string[] = res.data?.lines || []
     if (lines.length) {
@@ -2891,7 +2891,7 @@ const startLogStats = async () => {
   ruleLogStatsError.value = ''
   logStatsOffset.value = 0
   try {
-    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`, { signal: healthPolling.signal })
+    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`, { signal: healthPolling.signal, silent: true })
     if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== maps) return
     const content: string = res.data?.content || ''
     const completed = await consumeLogLinesChunked(content.split('\n'), maps, () => (
@@ -2974,7 +2974,7 @@ const refreshRuleLogs = async () => {
   const requestSeq = ++ruleLogRequestSeq
   ruleLogLoading.value = true
   try {
-    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`, { signal: healthPolling.signal })
+    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`, { signal: healthPolling.signal, silent: true })
     if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'log' || ruleLogCaddyId.value !== targetId) return
     ruleLogContent.value = res.data?.content || ''
     nextTick(() => {

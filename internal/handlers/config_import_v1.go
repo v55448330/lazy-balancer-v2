@@ -393,6 +393,20 @@ func validateConvertedV1Rules(rules []convertedRule) ([]convertedRule, []string,
 				upstreamBad = true
 				break
 			}
+			// R70 C-2：上游协议白名单——与保存侧/v2 导入同口径。v1 文件无校验和
+			//（不可信输入），异常协议会以保存侧拒绝或渲染侧静默 502 的形态入库。
+			// 缺省 ""→http 已在 convertV1Rules 归一；TCP 规则下 http 为 v1 原生
+			//（nginx stream 明文转发）语义故放行，仅拒真正越界值；https 在 TCP 侧
+			// 渲染按 TLS 处理（=tls 语义，真实 v1 文件常见形态），一并放行。
+			switch upstream.Protocol {
+			case "http", "https", "tcp", "tls":
+			default:
+				skips = append(skips, fmt.Sprintf("规则 #%d（%s）上游 #%d：上游协议 %q 无效（支持 http/https/tcp/tls）", index+1, rule.Name, upstreamIndex+1, upstream.Protocol))
+				upstreamBad = true
+			}
+			if upstreamBad {
+				break
+			}
 			if upstream.Enabled {
 				enabledUpstreams++
 			}
