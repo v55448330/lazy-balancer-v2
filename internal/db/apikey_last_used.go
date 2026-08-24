@@ -83,7 +83,10 @@ func startAPIKeyLastUsedFlusher() {
 				}
 			case <-cleanupTicker.C:
 				if database := GetDB(); database != nil {
-					if _, err := database.Exec("DELETE FROM revoked_jti WHERE expires_at<=datetime('now')"); err != nil {
+					// R68 B-F4：写入侧为 RFC3339 T 分隔（auth.go revokedTokenTimeFormat），
+					// datetime('now') 产出空格分隔——TEXT 逐字符比较下当日过期行永不满足
+					// <=（'T' > ' '），延迟约 24h 才清理。strftime 对齐写入格式。
+					if _, err := database.Exec("DELETE FROM revoked_jti WHERE expires_at<=strftime('%Y-%m-%dT%H:%M:%SZ','now')"); err != nil {
 						logDBError("cleanup revoked JWT IDs", err)
 					}
 					if err := cleanupExpiredRegistrationSecrets(ctx, database); err != nil {

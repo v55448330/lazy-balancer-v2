@@ -241,7 +241,17 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 		if dbQueryNotFound(c, err, "Config not found", "TestCertificateConfig query config") {
 			return
 		}
-		json.Unmarshal([]byte(credentials), &creds)
+		// R68 B-F5：存储凭证「非空但解析失败」与「凭证填错」是不同故障——
+		// unmarshal 错误此前被吞，creds=nil 走到 Validate 报「缺少凭证」，被误
+		// 归因为 credentials_invalid（400），运营方会反复重改凭证。损坏归 500 +
+		// 独立审计类别；空凭证（未填写/NULL）仍走 Validate 的缺凭证 400 原语义。
+		if credentials != "" {
+			if uerr := json.Unmarshal([]byte(credentials), &creds); uerr != nil {
+				recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, services.AuditResultPart("storage_corrupted")))
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "存储的 DNS 凭证已损坏，请重新保存配置"})
+				return
+			}
+		}
 	} else {
 		provider = req.DNSProvider
 		creds = req.DNSCredentials

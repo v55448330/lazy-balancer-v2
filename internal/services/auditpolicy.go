@@ -99,8 +99,10 @@ var readOnlyWriteRoutes = map[string]struct{}{
 	"POST /api/v1/config/import/validate":       {},
 	"POST /api/v1/config/preview":               {},
 	"POST /api/v1/config/validate":              {},
-	"POST /api/v1/mcp":                          {},
-	"POST /api/v1/rules/cert-info":              {},
+	// R68 B-F3：移除 "POST /api/v1/mcp"——/mcp 挂载早于本组 Use(apiKeyReadOnlyGuard)
+	// 等中间件（Gin 对 group 中间件链做注册期快照），该条目无任何运行时消费者；
+	// MCP 写控制实际由内部转发重入跳完整重跑只读/从节点/管理员守卫承担。
+	"POST /api/v1/rules/cert-info": {},
 }
 
 func ClassifyAuditRoute(method, path string) AuditPolicy {

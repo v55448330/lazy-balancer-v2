@@ -198,9 +198,11 @@ func FormatAuditAction(method, path string) (action, resource, detail string) {
 	detail = p
 
 	switch {
-	// R65 D-N1/R66 D-N3：/api/v1/config 与 /config/reload 均为 Explicit（handler
-	// 显式记录，HasExplicitAuditEvent 前置短路）——不再保留空标记 case（与
-	// 兜底 return 等价的死代码，R67 D-4 清除）。
+	// R65 D-N1/R68 D-N1：/api/v1/config 为 Explicit（handler 记录，HasExplicitAuditEvent
+	// 前置短路）；/config/reload 为 Generic 且由 handler（ReloadCaddy）显式记录，
+	// 中间件经本函数的空映射跳过（不记录）——两者均无需映射 case，走兜底空返回。
+	// 注意勿为 reload 补映射：Generic + handler 记录 + 非空映射 = 单次动作双条
+	//（R65 D-N1 缺陷形态，TestAuditGenericRoutesExactlyOnce 钉住）。
 
 	case strings.Contains(p, "/caddy/start"):
 		return "启动", "Caddy服务", p

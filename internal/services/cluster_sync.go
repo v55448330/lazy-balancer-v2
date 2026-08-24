@@ -1326,7 +1326,11 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 	var envelope struct {
 		Data models.ClusterRegistrationStatus `json:"data"`
 	}
-	if json.NewDecoder(io.LimitReader(resp.Body, maxRegistrationResponseBytes)).Decode(&envelope) != nil {
+	// R68 A-N1：decode 失败（主节点 200 但 body 非 envelope——反代错误页/网关维护
+	// 页等）此前静默 return，节点零留痕轮询、表面状态不变；仅记日志不改状态机
+	// 行为（下周期照常重试，≥400 与 rejected 分支已有各自可观测动作）。
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxRegistrationResponseBytes)).Decode(&envelope); err != nil {
+		log.Printf("注册状态轮询响应解析失败（HTTP %d，主节点可能被前置代理替换响应）: %v", resp.StatusCode, err)
 		return
 	}
 	if envelope.Data.Status == "rejected" {
