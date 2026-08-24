@@ -156,14 +156,12 @@ service.interceptors.response.use(
         }
         if (!sessionExpiredDialogOpen) {
           sessionExpiredDialogOpen = true
-          ElMessageBox.confirm(backendMsg || '登录已过期，请重新登录', '会话失效', {
-            confirmButtonText: '确定',
-            cancelButtonText: '取消',
+          // R71 D-新1：confirm 的取消分支与确定行为完全相同，「取消」形同虚设且误导
+          // ——改单按钮 alert（会话已死，任何请求都会 401，刷新是唯一合理结局）。
+          ElMessageBox.alert(backendMsg || '登录已过期，请重新登录', '会话失效', {
+            confirmButtonText: '重新登录',
             type: 'warning',
-          }).then(() => {
-            localStorage.removeItem('token')
-            window.location.reload()
-          }).catch(() => {
+          }).finally(() => {
             localStorage.removeItem('token')
             window.location.reload()
           })
