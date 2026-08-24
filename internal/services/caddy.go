@@ -1177,10 +1177,11 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		// tls_source manual→acme_dns、EnableRule 置 enabled=1、导入插入新规则）使
 		// allRules（tx 视图）含 acme 规则而已提交视图的子查询将其排除，候选为空，
 		// 该规则按无证书渲染（TLS 静默丢失）。此时经 store（tx）做无子查询的
-		// per-rule 补查——补查读的是事务视图（R67 修正：rules.go 的 tx 调用点
-		// 也会写 cert_jobs，如 UpdateRule 域名迁移清空旧 PEM、DisableRule 置
-		// disabled，事务视图恰是渲染目标状态，行为正确）；SelectCertificate
-		// 仍按 status 过滤 disabled。
+		// per-rule 补查——补查读的是事务视图（R67 修正、R71 F-A5 校正举例：tx 内
+		// 写 cert_jobs 的调用点是 DisableRule 置 disabled、DeleteRule 删行、
+		// UpdateRule tcp 切换删除；UpdateRule 域名迁移的证书 UPDATE 在 commit 后
+		// 独立 certTx。对 tx 内写者，事务视图恰是渲染目标状态，行为正确）；
+		// SelectCertificate 仍按 status 过滤 disabled。
 		// UpdateConfig（tx 只写 global_config）不产生谓词 miss，C-2.1 防护不受影响。
 		// R66（C 域改进项）：门控收紧为 certSource != store——补查仅在「子查询
 		// 视图 ≠ allRules 视图」时需要；CertAware 路径两者同为 tx（主查询已完备），

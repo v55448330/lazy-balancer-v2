@@ -24,9 +24,12 @@ func mergeOverridesLines(existingPath, header string, diff []string) []byte {
 	if raw, err := os.ReadFile(existingPath); err == nil {
 		for _, line := range strings.Split(string(raw), "\n") {
 			trimmed := strings.TrimSpace(line)
-			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			if trimmed == "" {
 				continue
 			}
+			// R71 B-N1：注释行与迁移 diff 同等保留——extractSetupDiff 把注释计为
+			// 有效行（被注释禁用的自定义规则行也承载用户意图），此前仅跳空行导致
+			// 第二次迁移合并时既有注释行被静默丢弃。
 			if !seen[trimmed] {
 				seen[trimmed] = true
 				merged = append(merged, line)

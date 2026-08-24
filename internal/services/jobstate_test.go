@@ -71,16 +71,12 @@ func TestJobLifecycle_classifiesUnknownStatusAsFailed(t *testing.T) {
 }
 
 func TestJobLifecycle_helpersUseLogicalLifecycle(t *testing.T) {
+	// R71 F-A4：JobIsActive 已删（生产死代码）——本测试收敛为仅锁定 JobIsTerminal。
 	// Given
 	tests := []struct {
 		status   string
-		active   bool
 		terminal bool
 	}{
-		{status: "queued", active: true},
-		{status: "creating_order", active: true},
-		{status: "cleanup_warning", active: true},
-		{status: "waiting_ca", active: false},
 		{status: "issued", terminal: true},
 		{status: "failed", terminal: true},
 		{status: "disabled", terminal: true},
@@ -89,9 +85,6 @@ func TestJobLifecycle_helpersUseLogicalLifecycle(t *testing.T) {
 
 	// When / Then
 	for _, test := range tests {
-		if got := JobIsActive(test.status); got != test.active {
-			t.Errorf("JobIsActive(%q)=%t, want %t", test.status, got, test.active)
-		}
 		if got := JobIsTerminal(test.status); got != test.terminal {
 			t.Errorf("JobIsTerminal(%q)=%t, want %t", test.status, got, test.terminal)
 		}

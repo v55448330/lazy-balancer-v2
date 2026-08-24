@@ -115,6 +115,13 @@ func rotateAuditLogIfNeeded() {
 		}
 		archSize = tailInfo.Size()
 	}
+	// R71 B-新1：末轮补采后文件若仍在增长（EOF 读取期间有新写入，尾部可能在途
+	// 事务），跳过本轮 truncate——下周期先经正常路径摄取尾部、再轮转；否则半条
+	// 事务被截断抹除且后续归档 pass 同样静默跳过，事件永久丢失（实际丢失窗口
+	// 大于原「stat→truncate 系统调用间隙毫秒级」注释所述）。
+	if finalInfo, ferr := os.Stat(auditLogPath); ferr == nil && finalInfo.Size() > archSize {
+		return
+	}
 	// F5: truncate 前先落 pending 标记。标记写失败绝不在无标记状态下截断——
 	// 活文件仍完好、内容无损失，本轮中止下周期重试。truncate 成功与补采完成之间
 	// 的任何崩溃点，标记都已在盘上（补采成功即删除、失败保留），下次轮转 shift 前

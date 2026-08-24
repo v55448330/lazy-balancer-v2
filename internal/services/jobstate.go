@@ -86,15 +86,6 @@ func JobLifecycle(status string) string {
 	return JobLifecycleFailed
 }
 
-func JobIsActive(status string) bool {
-	switch JobLifecycle(status) {
-	case JobLifecycleQueued, JobLifecycleActive, JobLifecycleDownloaded:
-		return true
-	default:
-		return false
-	}
-}
-
 func JobIsTerminal(status string) bool {
 	switch JobLifecycle(status) {
 	case JobLifecycleIssued, JobLifecycleFailed, JobLifecycleDisabled:
