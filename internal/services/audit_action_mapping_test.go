@@ -223,7 +223,14 @@ func frontendAuditTagMapping(t *testing.T) map[string]string {
 	}
 	mapping := map[string]string{}
 	colors := map[string]bool{}
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, rawLine := range strings.Split(string(data), "\n") {
+		// R68 D-N3：行内 `//` 之后的部分不参与匹配——文档化白名单历史的注释行
+		// 会注册幽灵映射（真条目被删时漏映射检查假绿/幽灵颜色误触 danger 契约）。
+		// actionTagType 白名单行为简单比较、不含 URL 类字符串，朴素截断无假阴性。
+		line := rawLine
+		if idx := strings.Index(line, "//"); idx >= 0 {
+			line = line[:idx]
+		}
 		colorMatch := auditTagColorLineRe.FindStringSubmatch(line)
 		if colorMatch == nil || !strings.Contains(line, "action ===") {
 			continue
@@ -622,16 +629,7 @@ func indexHandlerPackageFuncs(t *testing.T, root string) map[string][]byte {
 		if err != nil {
 			return err
 		}
-		stripped := make([]byte, len(src))
-		copy(stripped, src)
-		for _, group := range file.Comments {
-			for _, comment := range group.List {
-				start, end := fset.Position(comment.Pos()).Offset, fset.Position(comment.End()).Offset
-				for i := start; i < end && i < len(stripped); i++ {
-					stripped[i] = 0
-				}
-			}
-		}
+		stripped := stripCommentBytes(fset, file, src)
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
@@ -649,6 +647,24 @@ func indexHandlerPackageFuncs(t *testing.T, root string) map[string][]byte {
 		t.Fatalf("walk handlers: %v", err)
 	}
 	return bodies
+}
+
+// stripCommentBytes 返回把注释区间字节置零的源码副本（长度与偏移不变）——
+// 字面量正则对含注释的字节段会命中「提及目标 token 的注释」（假信号），置零
+// 后只可能命中代码。R67 D-3 引入于 indexHandlerPackageFuncs，R68 D-N2 提取
+// 为共享 helper 供 INSERT 入口绊线同用。
+func stripCommentBytes(fset *token.FileSet, file *ast.File, src []byte) []byte {
+	stripped := make([]byte, len(src))
+	copy(stripped, src)
+	for _, group := range file.Comments {
+		for _, comment := range group.List {
+			start, end := fset.Position(comment.Pos()).Offset, fset.Position(comment.End()).Offset
+			for i := start; i < end && i < len(stripped); i++ {
+				stripped[i] = 0
+			}
+		}
+	}
+	return stripped
 }
 
 // TestAuditInsertEntryPointsExhaustive 审计写入入口穷尽性绊线（R62 D-5）：
@@ -690,6 +706,11 @@ func TestAuditInsertEntryPointsExhaustive(t *testing.T) {
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", path, err)
 		}
+		// R68 D-N2：正文匹配改在注释置零副本上做——与 D-3 的 handlers 侧免疫
+		// 同源：允许集函数体内「提及该 SQL 的注释」会假满足活性锚点（写入机制
+		// 整体迁移后测试恒绿），非允许集函数的注释则误红。预筛仍用原始 src
+		//（超集过滤，仅省解析），置零后无命中则 found 不置位。
+		stripped := stripCommentBytes(fset, file, src)
 		rel, _ := filepath.Rel(root, path)
 		for _, decl := range file.Decls {
 			switch d := decl.(type) {
@@ -698,7 +719,7 @@ func TestAuditInsertEntryPointsExhaustive(t *testing.T) {
 					continue
 				}
 				start, end := fset.Position(d.Pos()).Offset, fset.Position(d.End()).Offset
-				if pattern.Match(src[start:end]) {
+				if pattern.Match(stripped[start:end]) {
 					found = true
 					if !allow[d.Name.Name] {
 						t.Errorf("%s: 函数 %s 直接 INSERT INTO audit_log——绕过了 auditVocabCallSpecs 所列入口，"+
@@ -712,7 +733,7 @@ func TestAuditInsertEntryPointsExhaustive(t *testing.T) {
 				// 裸写入点无法按函数名归因，契约上不应存在；确有需要先重构为
 				// 命名函数并加入允许集）。
 				start, end := fset.Position(d.Pos()).Offset, fset.Position(d.End()).Offset
-				if pattern.Match(src[start:end]) {
+				if pattern.Match(stripped[start:end]) {
 					found = true
 					t.Errorf("%s: 包级声明直接包含 INSERT INTO audit_log——绕过按函数名的允许集检查；请改走 RecordAuditLog/recordSystemAudit 并重构为命名函数", rel)
 				}
