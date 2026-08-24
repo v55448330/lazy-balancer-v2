@@ -198,11 +198,15 @@ const handleSetup = async () => {
       // R68 D-N4：403 = 提交期间系统已被另一路径初始化——复探状态并切换
       // 登录表单（后端文案即指引），而非停在 setup 表单要求手动刷新。
       if (caught instanceof ApiRequestError && caught.status === 403) {
+        // R69 D-S-1：复探失败时回显可行动提示（原代码清空错误但注释称「仍呈现」，
+        // 复探失败态下用户停留 setup 表单且无任何提示）；复探成功才切换登录表单。
         try {
           const res = await request.get<SetupStatusResponse>('/auth/setup', { silent: true })
           if (!res.data.needs_setup) setupMode.value = false
-        } catch { /* 复探失败保持现状，inline 错误仍呈现 */ }
-        error.value = ''
+          error.value = ''
+        } catch {
+          error.value = '初始化状态确认失败，请重试或刷新页面'
+        }
       } else {
         error.value = errorMessage(caught, '创建管理员失败，请稍后重试')
       }

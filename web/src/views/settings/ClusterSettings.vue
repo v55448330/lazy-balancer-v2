@@ -169,7 +169,7 @@ const fetchNodes = async (): Promise<void> => {
   const requestSeq = ++requestSequence
   nodesLoading.value = true
   try {
-		const response = await request.get<APIResponse<readonly ClusterNodeWithSyncError[]>>('/cluster/nodes', { signal: clusterPolling.signal, silent: true })
+  const response = await request.get<APIResponse<readonly ClusterNodeWithSyncError[]>>('/cluster/nodes', { signal: clusterPolling.signal, silent: true })
     if (!disposed && requestSeq === requestSequence) nodes.value = response.data ?? []
   } catch (error: unknown) {
     // Silent request: no toast from the interceptor, keep the only diagnostics in console

@@ -441,7 +441,7 @@
                     placeholder="IP 或域名" 
                     size="small" 
                     class="upstream-input"
-                    :class="{ 'is-error': !row.host && row.enabled !== false && upstreamTouched[$index] }"
+                    :class="{ 'is-error': upstreamRowNeedsHost(row, $index) }"
                     @blur="upstreamTouched[$index] = true"
                   />
                 </template>
@@ -1502,15 +1502,14 @@ let ruleLogRequestSeq = 0
 const ruleLogHtml = computed(() => ansiToHtml(ruleLogContent.value || '暂无日志'))
 const ruleConfig = ref<RuleConfigView | null>(null)
 
-const upstreamHostWarning = computed(() => {
-  // R67 D-1：与门/红框同口径排除禁用行——禁用行空 host 不再常驻琥珀警告
-  //（红框与门均放行，仅消息腿残留会诱导为禁用行填无意义 host）。
-  const hasEmptyHost = wizardForm.upstreams.some((u, i) => !u.host && u.enabled !== false && upstreamTouched.value[i])
-  if (hasEmptyHost) {
-    return '主机地址为必填项，请填写完整'
-  }
-  return ''
-})
+// R69 结构性简化（D 域 2(e)）：四方 host 门的核心谓词单源化——红框/常驻警告/
+// 步进门三条腿此前手工维护同一条件（R67 D-1 的消息腿落后一轮正是该维护风险
+// 的实证），现共用一个谓词；提交过滤（host+port 载荷身份）概念不同、不参与。
+const upstreamRowNeedsHost = (u: UpstreamInput, i: number): boolean =>
+  !u.host && u.enabled !== false && upstreamTouched.value[i]
+
+const upstreamHostWarning = computed(() =>
+  wizardForm.upstreams.some((u, i) => upstreamRowNeedsHost(u, i)) ? '主机地址为必填项，请填写完整' : '')
 
 interface HealthSummary { healthy: number; unhealthy: number; degraded: number; unknown: number; total: number }
 
@@ -2301,11 +2300,10 @@ const nextStep = (): void => {
   }
   if (currentStep.value === WIZARD_STEP.UPSTREAMS) {
     upstreamTouched.value = wizardForm.upstreams.map(() => true)
-    // R65 D-N2：host 门与提交口径对齐（只检查启用行）——已禁用行留空 host
-    // 时不再阻断进入下一步（禁用行仍是已配置服务器；提交侧 validUpstreams
-    // 按 host+port 过滤空行，启用性由下方「至少一个启用上游」检查兜底）。
-    const hasEmptyHost = wizardForm.upstreams.some(u => !u.host && u.enabled !== false)
-    if (hasEmptyHost) {
+    // R65 D-N2：host 门与提交口径对齐（只检查启用行；此处 touched 已全置 true，
+    // 故与红框/警告共用同一谓词）。提交侧 validUpstreams 按 host+port 过滤空行，
+    // 启用性由下方「至少一个启用上游」检查兜底。
+    if (wizardForm.upstreams.some((u, i) => upstreamRowNeedsHost(u, i))) {
       ElMessage.warning('请填写所有已启用上游服务器的主机地址')
       return
     }

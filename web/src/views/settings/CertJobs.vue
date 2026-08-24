@@ -150,7 +150,8 @@ type CertificateStatus = 'expired' | 'expiring' | 'unknown' | 'valid'
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 let disposed = false
-let jobsRequestSeq = 0
+// （R69 过度修复审查 REMOVE：jobsRequestSeq 已删——入口 loading 门 + disposed
+// 析取使其作为裁决条件永不为真，且全部调用经 jobsPolling drain 串行。）
 
 const jobs = ref<CertJob[]>([])
 const loading = ref(false)
@@ -301,7 +302,6 @@ const formatCoolingTime = (iso: string): string => {
 
 const fetchJobs = async () => {
   if (disposed || loading.value) return
-  const requestSeq = ++jobsRequestSeq
   loading.value = true
   try {
     const jobsRes = await request.get<APIResponse<CertJobsPage<CertJob>>>('/certificates/jobs', {
@@ -309,7 +309,7 @@ const fetchJobs = async () => {
       signal: jobsPolling.signal,
       silent: true,
     })
-    if (disposed || requestSeq !== jobsRequestSeq) return
+    if (disposed) return
     if (!jobsRes.data) throw new TypeError('证书任务分页响应缺少 data')
     jobs.value = [...jobsRes.data.list]
     total.value = jobsRes.data.total
@@ -319,7 +319,7 @@ const fetchJobs = async () => {
       queueMicrotask(() => void jobsPolling.run())
     }
   } finally {
-    if (!disposed && requestSeq === jobsRequestSeq) loading.value = false
+    if (!disposed) loading.value = false
   }
 }
 
@@ -454,7 +454,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   disposed = true
-  jobsRequestSeq++
   logRequestSeq++
   stopLogPolling()
 })

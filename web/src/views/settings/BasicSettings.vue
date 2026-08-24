@@ -253,22 +253,22 @@ const appLogLoading = ref(false)
 const appLogAutoRefresh = ref(true)
 const appLogContainer = ref<HTMLElement | null>(null)
 let appLogTimer: ReturnType<typeof setInterval> | null = null
-let appLogRequestSeq = 0
 
+// （R69 过度修复审查 REMOVE：appLogRequestSeq 已删——入口 loading 门 +
+// appLogVisible 析取使其作为裁决条件永不为真。）
 const fetchAppLogs = async (): Promise<void> => {
   if (appLogLoading.value) return
-  const requestSeq = ++appLogRequestSeq
   appLogLoading.value = true
   try {
     const res = await request.get<{ data?: { content?: string } }>('/system/logs', { silent: true })
-    if (requestSeq !== appLogRequestSeq || !appLogVisible.value) return
+    if (!appLogVisible.value) return
     appLogContent.value = res.data?.content || ''
     await nextTick()
     if (appLogContainer.value) appLogContainer.value.scrollTop = appLogContainer.value.scrollHeight
   } catch (error) {
     console.error('Failed to fetch app logs:', error)
   } finally {
-    if (requestSeq === appLogRequestSeq) appLogLoading.value = false
+    appLogLoading.value = false
   }
 }
 
@@ -291,7 +291,6 @@ const onAppLogOpened = (): void => {
 
 const onAppLogClosed = (): void => {
   stopAppLogTimer()
-  appLogRequestSeq++
   appLogLoading.value = false
   appLogContent.value = ''
 }
