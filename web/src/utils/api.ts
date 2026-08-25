@@ -78,6 +78,11 @@ interface RequestClient {
 let mfaPromptOpen = false
 // R72 八次：MFA 宽限窗提示节流（60 秒一次）
 let lastMfaGraceNoticeAt = 0
+
+// R72 十三次：最近一次宽限窗放行时间戳——showSaveResult 读取（导出 getter），
+// 距今 <3s 视为「本次保存刚经过宽限窗」，业务 toast 追加（MFA 已验证）。
+let mfaGraceLastAt = 0
+export const wasRecentMfaGrace = (): boolean => Date.now() - mfaGraceLastAt < 3_000
 const promptMfaCode = (): Promise<string | null> =>
   new Promise((resolve) => {
     if (mfaPromptOpen) { resolve(null); return }
@@ -139,16 +144,18 @@ service.interceptors.request.use(
 service.interceptors.response.use(
   (response) => {
     const res = response.data
-    // R72 八次→十二次（用户裁决）：宽限窗提示改为「仅 silent 请求弹」——非 silent
-    // 的写操作页面自己会弹「保存成功」等结果 toast，独立 info 要么抢位要么被节流
-    // 吞掉（用户实测「经常不弹出」且「0 秒」观感差）；silent 请求（无页面级反馈）
-    // 保留 info 兜底，60 秒节流。
+    // R72 八次→十三次（用户裁决）：宽限窗放行时记录时间戳（mfaGraceLastAt）——
+    // showSaveResult 等页面级反馈读取它，在「保存成功」等 toast 文案后追加
+    // 「（MFA 已验证）」；silent 请求（无页面级反馈）弹独立 info 兜底（60s 节流）。
     const mfaVerifiedAgo = response.headers?.['x-mfa-verified-seconds-ago']
-    if (mfaVerifiedAgo !== undefined && response.config?.silent) {
-      const now = Date.now()
-      if (now - lastMfaGraceNoticeAt > 60_000) {
-        lastMfaGraceNoticeAt = now
-        ElMessage.info('MFA 已验证，本次操作免验证')
+    if (mfaVerifiedAgo !== undefined) {
+      mfaGraceLastAt = Date.now()
+      if (response.config?.silent) {
+        const now = Date.now()
+        if (now - lastMfaGraceNoticeAt > 60_000) {
+          lastMfaGraceNoticeAt = now
+          ElMessage.info('MFA 已验证，本次操作免验证')
+        }
       }
     }
     if (res.code !== undefined && res.code !== 0 && res.code !== 200) {

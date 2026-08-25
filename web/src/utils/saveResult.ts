@@ -1,4 +1,5 @@
 import { ElMessage } from 'element-plus'
+import { wasRecentMfaGrace } from '@/utils/api'
 
 interface SaveResultLike {
   message?: string
@@ -12,5 +13,7 @@ export function showSaveResult(res: SaveResultLike | undefined | void, fallback:
     ElMessage({ type: 'warning', message, duration: 0, showClose: true })
     return
   }
-  ElMessage.success(message)
+  // R72 十三次（用户裁决）：本次保存在 MFA 宽限窗内放行时，成功 toast 追加
+  // 「（MFA 已验证）」——反馈并入业务结果，不再独立弹提示。
+  ElMessage.success(wasRecentMfaGrace() ? `${message}（MFA 已验证）` : message)
 }
