@@ -1170,6 +1170,16 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		where += " AND policy_name LIKE ?"
 		args = append(args, "%"+policyName+"%")
 	}
+	// isAllDigits：CRS 规则 ID 判定（触发规则列对 CRS 显示纯数字 ID）。
+	isAllDigits := func(v string) bool {
+		for _, r := range v {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return len(v) > 0
+	}
+
 	// R72 二十次：rule_triggered 筛选对齐表格显示语义——列显示的是 family 标签
 	//（IP 访问控制/请求阻断评估/协议异常/协议攻击/自定义规则）或原始 ID；用户按
 	// 显示文本筛选时纯 ID LIKE 必然搜不到。输入按 family 标签映射为 ID 前缀集合
@@ -1211,10 +1221,20 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 				where += " AND 1=0"
 			}
 		default:
-			where += " AND (rule_triggered LIKE ? OR rule_msg LIKE ?)"
-			args = append(args, "%"+ruleTriggered+"%", "%"+ruleTriggered+"%")
+			// R72 二十一次（性能优化）：纯数字输入（CRS 规则 ID，如 942100——即表格
+			// 触发规则列对 CRS 显示的原文）改为「精确 OR 前缀」匹配，避免前后双 %
+			// 全字段扫描；消息关键词输入保留双 LIKE（rule_msg 无结构可言）。
+			// 10 万行实测：前缀匹配走 SCAN 但过滤更快，双列双 % 最重——能省则省。
+			if isAllDigits(ruleTriggered) {
+				where += " AND (rule_triggered = ? OR rule_triggered LIKE ? OR rule_msg LIKE ?)"
+				args = append(args, ruleTriggered, ruleTriggered+"%", "%"+ruleTriggered+"%")
+			} else {
+				where += " AND (rule_triggered LIKE ? OR rule_msg LIKE ?)"
+				args = append(args, "%"+ruleTriggered+"%", "%"+ruleTriggered+"%")
+			}
 		}
 	}
+
 	// R72 二十次（用户需求）：URI 筛选（子串）。
 	if uri := strings.TrimSpace(c.Query("uri")); uri != "" {
 		where += " AND uri LIKE ?"
