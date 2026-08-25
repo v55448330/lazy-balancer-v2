@@ -81,8 +81,12 @@ let lastMfaGraceNoticeAt = 0
 
 // R72 十三次：最近一次宽限窗放行时间戳——showSaveResult 读取（导出 getter），
 // 距今 <3s 视为「本次保存刚经过宽限窗」，业务 toast 追加（MFA 已验证）。
+// R72 十五次：区分两种来源——grace（用户不知情，业务提示需说明）与 justNow
+//（弹码后重试，用户刚验证过，业务提示不加缀）。
 let mfaGraceLastAt = 0
-export const wasRecentMfaGrace = (): boolean => Date.now() - mfaGraceLastAt < 3_000
+let mfaVerifiedJustNowAt = 0
+export const wasRecentMfaGrace = (): boolean =>
+  Date.now() - mfaGraceLastAt < 3_000 && Date.now() - mfaVerifiedJustNowAt > 3_000
 const promptMfaCode = (): Promise<string | null> =>
   new Promise((resolve) => {
     if (mfaPromptOpen) { resolve(null); return }
@@ -222,9 +226,16 @@ service.interceptors.response.use(
         const code = await promptMfaCode()
         if (code) {
           await authStore.refreshMfaStep(code)
-          ElMessage.success('MFA 验证成功，继续执行操作')
+          // R72 十五次（用户裁决）：验证成功不再独立 toast——用户刚输完码知道
+          // 验证成功，反馈并入重试后的业务提示（宽限头会照常发出，但
+          // wasRecentMfaGrace 因 justNow 标记而不加缀）。
+          mfaVerifiedJustNowAt = Date.now()
           error.config._mfaRetried = true
           return service.request(error.config)
+        }
+        // 取消弹码：温和提示，不暴露 428 英文常量。
+        if (!error.config?.silent) {
+          ElMessage.warning('已取消 MFA 验证，操作未执行')
         }
       } catch (stepError: unknown) {
         // R72 D-新2/D-新4：verify-step 失败（如输错码，401 文案已由 /auth/mfa/

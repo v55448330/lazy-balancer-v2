@@ -66,7 +66,7 @@
           <el-form-item label="写操作验证">
             <el-switch v-model="settings.mfa_write_guard" />
             <el-text type="info" size="small" class="tip-inline">写操作需 1 分钟内的 MFA 验证</el-text>
-            <el-link type="primary" :underline="false" size="small" style="margin-left: 6px" @click="mfaScopeVisible = true">支持的操作</el-link>
+            <el-link type="info" :underline="false" size="small" class="tip-link" style="margin-left: 6px" @click="mfaScopeVisible = true">支持的操作</el-link>
           </el-form-item>
           <el-form-item label="登录失败锁定">
             <el-switch v-model="settings.mfa_lockout_enabled" />
@@ -833,4 +833,13 @@ const handleSave = async () => {
 .import-warnings { margin: 0; padding-left: 18px; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.8; }
 .import-conflicts { color: var(--el-color-warning-dark-2); }
 .import-alert { margin-top: 4px; }
+
+/* R72 十五次：「支持的操作」链接与描述文字同色（info），保留可点击/hover 链接语义 */
+:deep(.tip-link.el-link) {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+:deep(.tip-link.el-link:hover) {
+  color: var(--el-color-info);
+}
 </style>
