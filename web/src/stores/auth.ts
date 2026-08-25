@@ -69,6 +69,7 @@ export const useAuthStore = defineStore('auth', () => {
           role: res.data.role,
           is_enabled: res.data.is_enabled,
           display_name: res.data.display_name,
+          mfa_enabled: res.data.mfa_enabled ?? false,
         }
       }
     } catch (e) {
@@ -138,6 +139,7 @@ export const useAuthStore = defineStore('auth', () => {
         role: res.user.role,
         is_enabled: res.user.is_enabled,
         display_name: res.user.display_name,
+        mfa_enabled: res.user.mfa_enabled ?? false,
       }
     }
   }

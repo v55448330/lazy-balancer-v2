@@ -26,12 +26,12 @@
       <el-form :model="form" label-width="90px" :disabled="isReadOnly || submitting">
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="用户名">
+            <el-form-item v-if="!selfEdit" label="用户名">
               <el-input v-model="form.username" :placeholder="editingUser ? '用户名不可修改' : '请输入用户名'" :disabled="!!editingUser" maxlength="50" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="密码">
+            <el-form-item :label="selfEdit ? '新密码' : '密码'">
               <el-input v-model="form.password" type="password" show-password minlength="6" maxlength="72" :placeholder="editingUser ? '留空则不修改密码（至少6位）' : '请输入至少6位密码'" />
             </el-form-item>
           </el-col>
@@ -43,7 +43,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="角色">
+            <el-form-item v-if="!selfEdit" label="角色">
               <el-select v-model="form.role" style="width: 100%">
                 <el-option label="管理员" value="admin">
                   <el-tag type="danger" size="small">管理员</el-tag>
@@ -113,10 +113,10 @@
         </el-table-column>
         <el-table-column label="操作" width="240" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button v-if="row.id !== authStore.user?.id" type="primary" link size="small" :disabled="isReadOnly || submitting" @click="editUser(row)">
+            <el-button type="primary" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly) || submitting" @click="editUser(row)">
               编辑
             </el-button>
-            <el-button v-if="row.id !== authStore.user?.id" type="warning" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row.id)">
+            <el-button type="warning" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id))" @click="resetPassword(row.id)">
               重置密码
             </el-button>
             <el-button v-if="!row.mfa_enabled && row.id === authStore.user?.id" type="success" link size="small" :disabled="isReadOnly || submitting" @click="openMfaBinding(row)">
@@ -202,6 +202,7 @@ const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 const users = ref<UserListItem[]>([])
 const showForm = ref(false)
+const selfEdit = ref(false)
 const submitting = ref(false)
 const submittingUserId = ref<number | null>(null)
 const operatingUserIds = ref(new Set<number>())
@@ -215,6 +216,7 @@ const paginatedUsers = computed(() => {
 const openCreateForm = () => {
   if (submitting.value) return
   editingUser.value = null
+  selfEdit.value = false
   form.value = { username: '', password: '', display_name: '', role: 'user' }
   showForm.value = true
 }
@@ -249,7 +251,7 @@ const fetchUsers = async () => {
 }
 
 const handleSubmit = async () => {
-  if (isReadOnly.value || submitting.value) return
+  if ((selfEdit.value ? nodeModeSlave.value : isReadOnly.value) || submitting.value) return
   if ((!editingUser.value && !form.value.password) || (form.value.password && form.value.password.length < 6)) {
     ElMessage.warning('密码长度至少6位')
     return
@@ -258,6 +260,18 @@ const handleSubmit = async () => {
   submitting.value = true
   try {
     if (editingUser.value) {
+      if (selfEdit.value) {
+        // 自助编辑：仅显示名 + 可选新密码（username/role 由 admin 管理）
+        await request.patch('/users/me', {
+          display_name: form.value.display_name || undefined,
+          password: form.value.password || undefined,
+        }, { silent: true })
+        ElMessage.success('已保存')
+        showForm.value = false
+        editingUser.value = null
+        await fetchUsers()
+        return
+      }
       await request.put(`/users/${editingUser.value.id}`, {
         username: form.value.username,
         role: form.value.role,
@@ -281,7 +295,26 @@ const handleSubmit = async () => {
   fetchUsers()
 }
 
+const nodeModeSlave = computed(() => authStore.readOnlyReason === 'slave')
+
 const editUser = (user: UserListItem) => {
+  // R72 六次（用户裁决）：本人行的编辑/改密是自助操作——非 admin 也可用（从
+  // 节点除外：本地 users 被同步覆盖，改了也会被冲掉）。本人行走 PATCH
+  // /users/me 自助端点（后端在 self-service 白名单）；admin 编辑任意行（含
+  //  自己的完整资料/角色）仍走 admin PUT 端点。
+  if (user.id === authStore.user?.id) {
+    if (nodeModeSlave.value || submitting.value) return
+    editingUser.value = user
+    form.value = {
+      username: user.username,
+      password: '',
+      display_name: getDisplayName(user),
+      role: user.role,
+    }
+    selfEdit.value = authStore.user?.role !== 'admin'
+    showForm.value = true
+    return
+  }
   if (isReadOnly.value || submitting.value) return
   editingUser.value = user
   form.value = {
@@ -290,12 +323,14 @@ const editUser = (user: UserListItem) => {
     display_name: getDisplayName(user),
     role: user.role,
   }
+  selfEdit.value = false
   showForm.value = true
 }
 
 const closeForm = () => {
   if (submitting.value) return
   showForm.value = false
+  selfEdit.value = false
   editingUser.value = null
   form.value = { username: '', password: '', display_name: '', role: 'user' }
 }
@@ -362,7 +397,12 @@ const resetPassword = async (id: number) => {
       }
     })
     if (value) {
-      await request.post(`/users/${id}/reset-password`, { new_password: value })
+      if (id === authStore.user?.id) {
+        // R72 六次：本人改密走自助端点
+        await request.patch('/users/me', { password: value }, { silent: true })
+      } else {
+        await request.post(`/users/${id}/reset-password`, { new_password: value })
+      }
       ElMessage.success('密码重置成功')
     }
   } catch (e) {

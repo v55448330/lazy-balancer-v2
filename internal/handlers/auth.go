@@ -215,17 +215,20 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 	}
 
 	var user models.User
+	var mfaEnabled int
 	err := db.DB.QueryRow(`
-		SELECT id, username, role, display_name, is_enabled, created_at, last_login 
+		SELECT id, username, role, display_name, is_enabled, created_at, last_login, COALESCE(mfa_enabled,0)
 		FROM users WHERE id = ?
-	`, userIDInt).Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin)
+	`, userIDInt).Scan(&user.ID, &user.Username, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &mfaEnabled)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "用户不存在或已被删除"})
 		return
 	}
 
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: models.NewUserResponse(user)})
+	response := models.NewUserResponse(user)
+	response.MFAEnabled = mfaEnabled == 1
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: response})
 }
 
 type UpdateCurrentUserRequest struct {

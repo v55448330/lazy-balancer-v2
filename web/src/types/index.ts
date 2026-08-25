@@ -4,6 +4,7 @@ export interface CurrentUser {
   role: 'admin' | 'user'
   is_enabled: boolean
   display_name: string | null
+  mfa_enabled?: boolean
 }
 
 export interface UserListItem extends Omit<CurrentUser, 'is_enabled'> {

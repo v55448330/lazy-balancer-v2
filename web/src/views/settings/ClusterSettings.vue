@@ -405,6 +405,12 @@ const removeNode = async (node: ClusterNode): Promise<void> => {
 
 const loginNode = async (node: ClusterNode): Promise<void> => {
   if (isNonAdminReadOnly.value || node.status !== 'online' || loginNodeId.value !== null) return
+  // R72 六次：403（未启用 MFA）预检在开窗之前——此前先 window.open 再 POST，
+  // 403 时新页面已打开又被瞬间关闭（闪窗）。文案同步指向正确入口（用户管理）。
+  if (!authStore.user?.mfa_enabled) {
+    ElMessage.warning('登录从节点需先启用 MFA（在「系统设置 → 用户管理」中对自己的账号绑定）')
+    return
+  }
   const loginWindow = window.open('', '_blank')
   if (!loginWindow) {
     ElMessage.warning('浏览器阻止了新窗口，请允许弹出窗口后重试')
@@ -413,14 +419,17 @@ const loginNode = async (node: ClusterNode): Promise<void> => {
   loginWindow.opener = null
   loginNodeId.value = node.id
   try {
-    const response = await request.post<LoginTicketResponse>(`/cluster/nodes/${node.id}/login-ticket`)
+    const response = await request.post<LoginTicketResponse>(`/cluster/nodes/${node.id}/login-ticket`, undefined, { silent: true })
     const target = new URL(response.url)
     target.hash = `login_ticket=${encodeURIComponent(response.ticket)}`
     loginWindow.location.replace(target.toString())
   } catch (error: unknown) {
     loginWindow.close()
-    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
-    console.error('Failed to login node:', error)
+    if (error instanceof Error && error.message.includes('MFA')) {
+      ElMessage.warning(error.message)
+    } else {
+      ElMessage.error(error instanceof Error ? error.message : '登录从节点失败')
+    }
   } finally {
     loginNodeId.value = null
   }

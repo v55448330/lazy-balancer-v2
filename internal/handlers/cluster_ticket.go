@@ -28,7 +28,7 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 		return
 	}
 	if !mfaEnabled {
-		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "登录从节点需先启用 MFA（在安全设置中绑定）"})
+		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "登录从节点需先启用 MFA（在「系统设置 → 用户管理」中对自己的账号绑定）"})
 		return
 	}
 	// R72 三次（用户裁决）：登录从节点每次点击都要求 MFA 验证——不再复用登录后
