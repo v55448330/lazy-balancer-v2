@@ -23,7 +23,7 @@ type apiDocRoute struct {
 }
 
 var apiDocRoutes = []apiDocRoute{
-	{"POST", "/auth/login", "认证", "用户登录", `{"username":"admin","password":"..."}`, `{"token":"jwt","user":{},"node_mode":"master"}`, []string{"400 invalid_request", "401 invalid_credentials"}, "密码仅用于验证，不返回。"},
+	{"POST", "/auth/login", "认证", "用户登录", `{"username":"admin","password":"..."}`, `{"token":"jwt","user":{},"node_mode":"master"}`, []string{"400 invalid_request", "401 invalid_credentials"}, "密码仅用于验证，不返回。启用 MFA 的用户返回 mfa_required 形态，凭 mfa_token 调 /auth/mfa/verify 换 JWT。"},
 	{"POST", "/auth/ticket-login", "认证", "从节点票据登录", `{"ticket":"base64url(payload).base64url(signature)"}`, `{"token":"jwt","user":{},"node_mode":"slave"}`, []string{"400 invalid_request", "401 invalid_or_expired_ticket"}, "公开接口；仅从节点接受所属节点的一次性 60 秒登录票据。客户端从 URL fragment 读取并 percent-decode login_ticket，提交后无论成功或失败都通过 history.replaceState 清除 fragment。"},
 	{"POST", "/auth/mfa/verify", "认证", "MFA 登录第二步验证", `{"mfa_token":"<登录返回的挑战令牌>","code":"123456 或恢复代码"}`, `{"token":"jwt","user":{},"node_mode":"master"}`, []string{"400 invalid_request", "401 invalid_challenge_or_code"}, "公开接口（同 loginRateLimit）；启用 MFA 的用户密码验证通过后先收到 mfa_required+mfa_token，再凭本端点换取 JWT。挑战令牌 5 分钟单次。"},
 	{"GET", "/auth/mfa/status", "认证", "当前用户 MFA 状态", "", `{"enabled":true,"recovery_codes_remaining":7}`, []string{"401 unauthenticated"}, ""},
@@ -31,7 +31,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"POST", "/auth/mfa/activate", "认证", "激活 MFA", `{"code":"123456"}`, `{"code":0,"message":"MFA 已启用","data":{"recovery_codes":["...×10"]}}`, []string{"400 invalid_request_or_wrong_code"}, "恢复代码仅此一次返回明文。"},
 	{"POST", "/auth/mfa/disable", "认证", "禁用 MFA（双重确认）", `{"password":"...","code":"123456 或恢复代码"}`, `{"code":0,"message":"MFA 已禁用"}`, []string{"400 invalid_request", "401 wrong_password_or_code"}, "需当前密码 + 有效验证码，防会话劫持后一键关闭。"},
 	{"POST", "/auth/mfa/recovery-codes", "认证", "重新生成恢复代码", `{"password":"..."}`, `{"code":0,"data":{"recovery_codes":["...×10"]}}`, []string{"400 invalid_request", "401 wrong_password"}, "旧恢复码全部作废。"},
-	{"POST", "/auth/mfa/verify-step", "认证", "MFA step-up 验证", `{"code":"123456"}`, `{"token":"新jwt(mfa_ts刷新)"}`, []string{"400 invalid_request", "401 wrong_code"}, "全局写操作验证开启时，写操作返回 428 后凭本端点刷新 JWT 重试。"},
+	{"POST", "/auth/mfa/verify-step", "认证", "MFA step-up 验证", `{"code":"123456"}`, `{"token":"jwt(mfa_ts刷新)","user":{},"node_mode":"master"}`, []string{"400 invalid_request", "401 wrong_code"}, "全局写操作验证开启时，写操作返回 428 后凭本端点刷新 JWT 重试。"},
 	{"POST", "/users/:id/mfa/reset", "认证", "重置用户 MFA（管理员）", "", `{"code":0,"message":"已重置用户 MFA（用户需重新绑定）"}`, []string{"403 admin_required", "404 not_found"}, "仅 admin；清除该用户全部 MFA 状态并审计留痕。"},
 	{"GET", "/auth/setup", "认证", "检查是否需要初始化", "", `{"needs_setup":true}`, []string{}, "用户表为空时返回 needs_setup=true，前端应引导创建首个管理员。"},
 	{"POST", "/auth/setup", "认证", "创建首个管理员", `{"username":"admin","password":"...","display_name":""}`, `{"message":"管理员账号创建成功，请登录"}`, []string{"400 invalid_request", "403 already_initialized"}, "仅当用户表为空时可用。"},

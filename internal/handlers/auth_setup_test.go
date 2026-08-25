@@ -41,7 +41,8 @@ func setupAuthTestDB(t *testing.T) *sql.DB {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		last_login DATETIME,
 		password_changed_at DATETIME,
-		password_version INTEGER NOT NULL DEFAULT 0
+		password_version INTEGER NOT NULL DEFAULT 0,
+		mfa_enabled BOOLEAN DEFAULT 0
 	)`)
 	if err != nil {
 		t.Fatal(err)

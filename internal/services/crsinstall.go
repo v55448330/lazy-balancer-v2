@@ -27,6 +27,11 @@ func mergeOverridesLines(existingPath, header string, diff []string) []byte {
 			if trimmed == "" {
 				continue
 			}
+			// R72 S-4：跳过旧迁移 header 注释行——B-N1 让注释参与合并后，此前
+			// 每次成功迁移会累积 2 行旧 header（"由 CRS 更新自动迁移"/"生成时间"）。
+			if strings.HasPrefix(trimmed, "# 由 CRS 更新自动迁移") || strings.HasPrefix(trimmed, "# 生成时间") {
+				continue
+			}
 			// R71 B-N1：注释行与迁移 diff 同等保留——extractSetupDiff 把注释计为
 			// 有效行（被注释禁用的自定义规则行也承载用户意图），此前仅跳空行导致
 			// 第二次迁移合并时既有注释行被静默丢弃。
