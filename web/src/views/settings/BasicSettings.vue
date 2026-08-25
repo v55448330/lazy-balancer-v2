@@ -66,6 +66,7 @@
           <el-form-item label="写操作验证">
             <el-switch v-model="settings.mfa_write_guard" />
             <el-text type="info" size="small" class="tip-inline">写操作需 1 分钟内的 MFA 验证</el-text>
+            <el-link type="primary" :underline="false" size="small" style="margin-left: 6px" @click="mfaScopeVisible = true">支持的操作</el-link>
           </el-form-item>
           <el-form-item label="登录失败锁定">
             <el-switch v-model="settings.mfa_lockout_enabled" />
@@ -228,6 +229,20 @@
       </template>
     </el-dialog>
   </div>
+
+  <!-- R72 十四次（用户裁决）：写操作验证「支持的操作」清单——与后端 mfaStepUpGuard
+       实际覆盖面一致（全部 RESTful 写端点：POST/PUT/PATCH/DELETE，排除测试/预览/
+       解析类只读 POST 与 MFA 自身端点）。 -->
+  <el-dialog v-model="mfaScopeVisible" title="写操作验证支持的操作" width="640px">
+    <el-text type="info" size="small" style="display: block; margin-bottom: 12px">
+      开启后，以下操作需要 1 分钟内验证过 MFA（TOTP 同片不可重用，验证后 60 秒内的连续操作免重复弹码）。测试连接、预览、解析类操作不受影响。
+    </el-text>
+    <el-descriptions :column="1" border size="small">
+      <el-descriptions-item v-for="group in mfaScopeGroups" :key="group.title" :label="group.title">
+        {{ group.items.join('、') }}
+      </el-descriptions-item>
+    </el-descriptions>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
@@ -530,6 +545,16 @@ interface AdminTlsForm {
   certInfo: AdminTlsCertInfo | null
   inspecting: boolean
 }
+
+const mfaScopeVisible = ref(false)
+const mfaScopeGroups = [
+  { title: '负载规则', items: ['创建', '编辑', '删除', '启用', '禁用', '复制'] },
+  { title: '证书与 DNS', items: ['DNS 配置增删改', 'CA 提供商修改', '触发证书签发', '证书任务重试/删除'] },
+  { title: '安全防护', items: ['安全策略增删改/绑定', '自定义规则增删改', '拦截页面增删改', 'CRS/IP 库更新与自动更新开关'] },
+  { title: '用户与密钥', items: ['用户增删改/启停/重置密码（管理员）', '个人资料修改', 'API 密钥创建/启停/删除（含自己的）', '重置 MFA（含管理员代重置）'] },
+  { title: '系统配置', items: ['基础设置/Caddy 全局配置保存', '配置重载', '配置导入（v1/v2）', '管理 TLS 设置修改'] },
+  { title: '集群管理', items: ['节点审批/拒绝/删除', '访问地址修改', '注册令牌生成', '主从模式切换/提升', '手动同步', '集群同步设置'] },
+]
 
 const settings = defineModel<BasicSettingsConfig>('settings', { required: true })
 const emit = defineEmits<{
