@@ -65,7 +65,7 @@
           </el-form-item>
           <el-form-item label="写操作验证">
             <el-switch v-model="settings.mfa_write_guard" />
-            <el-text type="info" size="small" class="tip-inline">写操作需 10 分钟内的 MFA 验证</el-text>
+            <el-text type="info" size="small" class="tip-inline">写操作需 1 分钟内的 MFA 验证</el-text>
           </el-form-item>
           <el-form-item label="登录失败锁定">
             <el-switch v-model="settings.mfa_lockout_enabled" />

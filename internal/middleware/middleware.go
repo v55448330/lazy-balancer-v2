@@ -719,7 +719,7 @@ func apiKeyReadOnlyGuard() gin.HandlerFunc {
 	}
 }
 
-// mfaStepUpGuard v2.1.8：MFA 写操作验证（全局开关，默认关）。开启时，启用 MFA
+// mfaStepUpGuard v2.1.8：MFA 写操作验证（全局开关，默认关；R72 五次：60 秒窗）。开启时，启用 MFA
 // 的 JWT 用户执行写操作（readOnlyWriteRoutes 判定源——与只读密钥同一事实源，契约
 // 绊线自动覆盖两侧）且 mfa_ts 距今超过 10 分钟 → 428，前端全局弹码验证后携新
 // JWT 重试。API Key/MCP 认证豁免（机器身份无 MFA 概念）。
@@ -772,8 +772,14 @@ func mfaStepUpGuard() gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		// R72 五次（用户裁决：开关开启后立即生效）：宽限窗 10 分钟 → 60 秒。
+		// 不能是 0——TOTP 码以 30 秒时间片为单位且重放防护拒绝同片重用：零窗
+		// 口意味着每个写操作都必须是不同的时间片（两次写操作间隔 <30s 时第二
+		// 次无码可用，必须干等下一片），向导多步连存等流程不可用。60 秒窗的
+		// 语义：距上次 MFA 验证超过 1 分钟的写操作都要求验码（「立即生效」的
+		// 观感），紧邻的连续操作（428→弹码→重试→顺手再存一步）不重复骚扰。
 		mfaTs := c.GetFloat64("mfa_ts")
-		if mfaTs > 0 && time.Since(time.Unix(int64(mfaTs), 0)) < 10*time.Minute {
+		if mfaTs > 0 && time.Since(time.Unix(int64(mfaTs), 0)) < 60*time.Second {
 			c.Next()
 			return
 		}
