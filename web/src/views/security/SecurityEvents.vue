@@ -28,8 +28,12 @@
           <el-option label="拦截" value="blocked" />
           <el-option label="检测" value="logged" />
         </el-select>
+        <!-- R72 十九次（用户需求）：规则 ID 筛选替换为三列（负载规则/触发规则/策略）
+             服务端筛选（rule_name/rule_triggered/policy_name LIKE）。 -->
+        <el-input v-model="filters.rule_name" placeholder="负载规则" clearable style="width: 140px" @keyup.enter="applyFilters" />
+        <el-input v-model="filters.rule_triggered" placeholder="触发规则" clearable style="width: 140px" @keyup.enter="applyFilters" />
+        <el-input v-model="filters.policy_name" placeholder="策略" clearable style="width: 120px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 150px" @keyup.enter="applyFilters" />
-        <el-input v-model="filters.rule_caddy_id" placeholder="规则 ID" clearable style="width: 150px" @keyup.enter="applyFilters" />
         <div class="filter-actions">
           <el-button type="primary" @click="applyFilters">筛选</el-button>
           <el-button @click="resetFilters">重置</el-button>
@@ -117,7 +121,7 @@ const events = ref<SecurityEvent[]>([])
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const filters = ref({ action: '', ip: '', rule_caddy_id: '', timeRange: null as [string, string] | null })
+const filters = ref({ action: '', ip: '', rule_name: '', rule_triggered: '', policy_name: '', rule_caddy_id: '', timeRange: null as [string, string] | null })
 
 const applyFilters = () => {
   // 时间区间校验：开始晚于结束时提示并清除该筛选（后端同样兜底 400）。
@@ -132,7 +136,7 @@ const applyFilters = () => {
 }
 
 const resetFilters = () => {
-  filters.value = { action: '', ip: '', rule_caddy_id: '', timeRange: null }
+  filters.value = { action: '', ip: '', rule_name: '', rule_triggered: '', policy_name: '', rule_caddy_id: '', timeRange: null }
   page.value = 1
   fetchEvents()
 }
@@ -161,6 +165,9 @@ const fetchEvents = async () => {
     if (filters.value.action) p.set('action', filters.value.action)
     if (filters.value.ip) p.set('ip', filters.value.ip)
     if (filters.value.rule_caddy_id) p.set('rule_caddy_id', filters.value.rule_caddy_id)
+    if (filters.value.rule_name) p.set('rule_name', filters.value.rule_name)
+    if (filters.value.rule_triggered) p.set('rule_triggered', filters.value.rule_triggered)
+    if (filters.value.policy_name) p.set('policy_name', filters.value.policy_name)
     if (filters.value.timeRange?.[0]) p.set('start_time', filters.value.timeRange[0])
     if (filters.value.timeRange?.[1]) p.set('end_time', filters.value.timeRange[1])
     const res = await request.get<APIResponse<{ events: SecurityEvent[]; total: number }>>(`/security/events?${p}`)

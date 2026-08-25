@@ -1158,6 +1158,22 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		where += " AND rule_caddy_id=?"
 		args = append(args, ruleID)
 	}
+	// R72 十九次（用户需求）：事件日志三列（负载规则/触发规则/策略）服务端筛选
+	// ——r1 匹配事件时规则名快照（rule_name，跨删改名存活），r2 匹配 CRS/自定义
+	// 触发规则（rule_triggered），policy 匹配策略名快照（policy_name）。快照列为
+	// 摄取时落库的冗余文本，LIKE 子串即可（无索引，页级分页下可接受）。
+	if ruleName := strings.TrimSpace(c.Query("rule_name")); ruleName != "" {
+		where += " AND rule_name LIKE ?"
+		args = append(args, "%"+ruleName+"%")
+	}
+	if ruleTriggered := strings.TrimSpace(c.Query("rule_triggered")); ruleTriggered != "" {
+		where += " AND rule_triggered LIKE ?"
+		args = append(args, "%"+ruleTriggered+"%")
+	}
+	if policyName := strings.TrimSpace(c.Query("policy_name")); policyName != "" {
+		where += " AND policy_name LIKE ?"
+		args = append(args, "%"+policyName+"%")
+	}
 	// 时间范围按配置时区解析（event_time 为 UTC），换算后比对；日期-only 补全天边界
 	loc := services.CurrentLocation()
 	parseBoundary := func(raw, endOfDay string) (string, bool, error) {
