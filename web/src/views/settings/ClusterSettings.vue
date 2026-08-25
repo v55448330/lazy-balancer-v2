@@ -428,9 +428,9 @@ const loginNode = async (node: ClusterNode): Promise<void> => {
     }
     loginWindow.opener = null
   } catch (error: unknown) {
-    if (error instanceof Error && error.message.includes('MFA')) {
-      ElMessage.warning(error.message)
-    } else {
+    // 取消弹码的场景已由全局拦截器统一提示「已取消 MFA 验证，操作未执行」，
+    // 这里只处理其余错误（网络/节点不可达等）。
+    if (!(error instanceof Error && (error.message.includes('MFA') || error.message.includes('取消')))) {
       ElMessage.error(error instanceof Error ? error.message : '登录从节点失败')
     }
   } finally {

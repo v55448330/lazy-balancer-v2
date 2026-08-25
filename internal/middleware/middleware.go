@@ -745,6 +745,14 @@ func mfaStepUpGuard() gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		// R72 十六次（用户反馈）：豁免只读语义 POST（readOnlyWriteRoutes——批量
+		// 证书状态查询 cert-info/jobs/current、测试连接、预览/解析等）——它们
+		// 用 POST 承载查询/预览载荷，语义是读，不该触发 step-up（用户打开规则
+		// 列表页就被弹码）。与只读 API Key 的写操作判定同一事实源。
+		if services.IsReadOnlyWriteRoute(c.Request.Method, path) {
+			c.Next()
+			return
+		}
 		// R72 B-1（缺陷二）：jwtAuth 将 user_id 以 float64 存入（JWT JSON 数字），
 		// gin GetString 对非 string 断言失败恒返回 ""——改类型化取值（与
 		// getContextUserIDInt 同口径）。

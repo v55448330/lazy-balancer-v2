@@ -59,10 +59,18 @@ func TestMFAStepUpGuard_endToEnd(t *testing.T) {
 		router.ServeHTTP(rec, req)
 		return rec.Code
 	}
+	// R72 十六次：/config/preview 已是只读语义 POST（被豁免），写探针改用 PUT /config。
+	put := func(path, token string) int {
+		req := httptest.NewRequest(http.MethodPut, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec.Code
+	}
 
-	// Case 1：MFA 用户 + 无 mfa_ts + 写路由（/api/v1/users 在 admin 组且走完整链）→ 428
+	// Case 1：MFA 用户 + 无 mfa_ts + 真实写路由（PUT /config）→ 428
 	tokenOld := seedUser(true, 0)
-	if code := post("/api/v1/config/preview", tokenOld); code != http.StatusPreconditionRequired {
+	if code := put("/api/v1/config", tokenOld); code != http.StatusPreconditionRequired {
 		t.Fatalf("MFA user without mfa_ts: got %d, want 428（守卫生效证明）", code)
 	}
 
@@ -73,13 +81,19 @@ func TestMFAStepUpGuard_endToEnd(t *testing.T) {
 
 	// Case 3：非 MFA 用户 → 直通到后续中间件（非 428）
 	tokenPlain := seedUser(false, 0)
-	if code := post("/api/v1/config/preview", tokenPlain); code == http.StatusPreconditionRequired {
+	if code := put("/api/v1/config", tokenPlain); code == http.StatusPreconditionRequired {
 		t.Fatal("non-MFA user must not be challenged")
 	}
 
 	// Case 4：MFA 用户 + 新鲜 mfa_ts → 非 428
 	tokenFresh := seedUser(true, time.Now().Unix())
-	if code := post("/api/v1/config/preview", tokenFresh); code == http.StatusPreconditionRequired {
+	if code := put("/api/v1/config", tokenFresh); code == http.StatusPreconditionRequired {
 		t.Fatal("fresh mfa_ts must pass")
+	}
+
+	// Case 5（R72 十六次）：只读语义 POST（readOnlyWriteRoutes：批量证书状态
+	// 查询/测试/预览）即使 mfa_ts 过期也不弹码——用户打开规则列表页不该被要求验证。
+	if code := post("/api/v1/rules/cert-info", tokenOld); code == http.StatusPreconditionRequired {
+		t.Fatal("read-semantics POST (cert-info) must be exempt from step-up（打开列表页不弹码）")
 	}
 }

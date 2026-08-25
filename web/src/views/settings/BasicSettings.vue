@@ -237,7 +237,7 @@
     <el-text type="info" size="small" style="display: block; margin-bottom: 12px">
       开启后，以下操作需要 1 分钟内验证过 MFA（TOTP 同片不可重用，验证后 60 秒内的连续操作免重复弹码）。测试连接、预览、解析类操作不受影响。
     </el-text>
-    <el-descriptions :column="1" border size="small">
+    <el-descriptions :column="1" border size="small" class="mfa-scope-desc">
       <el-descriptions-item v-for="group in mfaScopeGroups" :key="group.title" :label="group.title">
         {{ group.items.join('、') }}
       </el-descriptions-item>
@@ -833,6 +833,14 @@ const handleSave = async () => {
 .import-warnings { margin: 0; padding-left: 18px; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.8; }
 .import-conflicts { color: var(--el-color-warning-dark-2); }
 .import-alert { margin-top: 4px; }
+
+/* R72 十六次：弹框标题列（label）定宽且不换行 */
+:deep(.mfa-scope-desc .el-descriptions__label) {
+  width: 110px;
+  min-width: 110px;
+  white-space: nowrap;
+  font-weight: 600;
+}
 
 /* R72 十五次：「支持的操作」链接与描述文字同色（info），保留可点击/hover 链接语义 */
 :deep(.tip-link.el-link) {
