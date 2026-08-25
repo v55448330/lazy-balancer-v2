@@ -426,13 +426,14 @@ func createTables() error {
 	CREATE INDEX IF NOT EXISTS idx_used_login_tickets_expires_at ON used_login_tickets(expires_at);
 
 	-- MFA 登录二步挑战（v2.1.8）：节点本地临时态，不参与集群同步/配置备份
-	--（同 used_login_tickets 先例）；过期行由验证与偶发清理（loginRateLimit 桶扫描）
-	-- 惰性删除。
+	--（同 used_login_tickets 先例）；过期行（含未消费）由每次签发挑战时的
+	-- 惰性 DELETE 清除（R72 修正：原注释所述 loginRateLimit 桶扫描不存在）。
 	CREATE TABLE IF NOT EXISTS mfa_challenges (
 		token TEXT PRIMARY KEY,
 		user_id INTEGER NOT NULL,
 		expires_at DATETIME NOT NULL,
 		consumed BOOLEAN DEFAULT 0,
+		attempts INTEGER DEFAULT 0,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	CREATE INDEX IF NOT EXISTS idx_mfa_challenges_expires_at ON mfa_challenges(expires_at);
@@ -661,6 +662,8 @@ func runMigrations() error {
 		"users.mfa_last_timestep":                         "INTEGER DEFAULT 0",
 		"users.mfa_failed_attempts":                       "INTEGER DEFAULT 0",
 		"users.mfa_locked_until":                          "DATETIME",
+		"users.mfa_pending_fails":                         "INTEGER DEFAULT 0",
+		"mfa_challenges.attempts":                         "INTEGER DEFAULT 0",
 		"global_config.mfa_write_guard":                   "BOOLEAN DEFAULT 0",
 		"global_config.mfa_lockout_enabled":               "BOOLEAN DEFAULT 0",
 		"global_config.default_ca_provider_id":            "INTEGER DEFAULT 0",
@@ -1506,10 +1509,18 @@ func migrateUsersIsEnabledNotNull() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			last_login DATETIME,
 			password_changed_at DATETIME,
-			password_version INTEGER NOT NULL DEFAULT 0
+			password_version INTEGER NOT NULL DEFAULT 0,
+			mfa_enabled BOOLEAN DEFAULT 0,
+			mfa_secret TEXT DEFAULT '',
+			mfa_pending_secret TEXT DEFAULT '',
+			mfa_recovery_codes TEXT DEFAULT '[]',
+			mfa_last_timestep INTEGER DEFAULT 0,
+			mfa_failed_attempts INTEGER DEFAULT 0,
+			mfa_locked_until DATETIME,
+			mfa_pending_fails INTEGER DEFAULT 0
 		);
-		INSERT INTO users_not_null (id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version)
-		SELECT id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version FROM users;
+		INSERT INTO users_not_null (id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_failed_attempts,mfa_locked_until,mfa_pending_fails)
+		SELECT id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_failed_attempts,mfa_locked_until,mfa_pending_fails FROM users;
 		DROP TABLE users;
 		ALTER TABLE users_not_null RENAME TO users;`); err != nil {
 		return fmt.Errorf("rebuild users table: %w", err)

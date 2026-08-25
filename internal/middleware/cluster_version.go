@@ -33,7 +33,13 @@ func installClusterVersionTriggers(database *sql.DB) error {
 		{name: "lb_rules", snapshotColumns: "caddy_id,name,description,protocol,domain,listen_port,strategy,dynamic_dns,enable_dns_server,dns_server,dns_family,health_check_path,health_check_interval,health_check_timeout,health_check_unhealthy_threshold,health_check_healthy_threshold,enable_active_health_check,tcp_health_check_port,tcp_proxy_protocol,tcp_try_duration,tcp_try_interval,request_body_max_size_mb,upstream_keepalive_timeout,server_tokens_hidden,host_header,custom_routes_enabled,proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,proxy_stream_timeout,proxy_flush_interval,proxy_stream_close_delay,enable_tls,tls_source,acme_config_id,ca_provider_id,tls_cert,tls_key,tls_http_redirect,enable_compress,compress_types,enabled,log_enabled,created_by,updated_by,created_at,updated_at"},
 		{name: "upstreams", snapshotColumns: "id,rule_id,host,port,weight,dynamic_dns,enabled,protocol,max_connections"},
 		{name: "path_rules", snapshotColumns: "id,rule_id,sort_order,match_type,path,upstreams_json"},
-		{name: "users", snapshotColumns: "id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at"},
+		// R72 F-4：users 触发器 OF 列表补 v2.1.8 的 MFA 权威列——此前不在列表内，
+		// MFA 状态写（含管理员重置）不 bump cluster_version → 快照缓存持续命中
+		// 旧指纹 → 从节点 304 循环，主节点 MFA 变更稳态永不传播（泄露 secret 经
+		// 重置后在从节点仍可用）。记账三列（last_timestep/failed_attempts/
+		// locked_until）不补——它们经 R72 F-3 的哈希清零已不参与漂移判定，补了
+		// 反而让从节点本地登录 bump 版本引发无谓重放。pending 不跨节点不补。
+		{name: "users", snapshotColumns: "id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at,mfa_enabled,mfa_secret,mfa_recovery_codes"},
 		{name: "api_keys", snapshotColumns: "id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist"},
 		{name: "ca_providers", snapshotColumns: "id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled,created_at,updated_at"},
 		{name: "certificate_configs", snapshotColumns: "id,name,dns_provider,dns_credentials,enabled,created_at,updated_at"},

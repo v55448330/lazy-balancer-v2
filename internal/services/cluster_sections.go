@@ -82,12 +82,17 @@ func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 	return nil
 }
 
-// sanitizeUsersForHash 返回用于 users 节哈希计算的用户副本：清零 last_login。
-// last_login 是节点本地记账（登录时间），从节点登录一次就会改变本地 users 哈希，
-// 与主节点下发的已应用记录不符，进而触发永久全量重拉；故哈希必须对其不敏感。
-// 只清零副本、不改动 s.Users 原值，快照线上格式（含 last_login）保持不变。
-// 残留影响：由 users 节其他字段变化触发的重放仍会覆盖从节点 last_login——
-// 属低频、外观性损失，可接受。
+// sanitizeUsersForHash 返回用于 users 节哈希计算的用户副本：清零节点本地记账
+// 字段。last_login（登录时间）与 v2.1.8 的三个 MFA 记账字段
+// （mfa_last_timestep——从节点本地登录推进；mfa_failed_attempts /
+// mfa_locked_until——从节点本地失败计数与锁定）都是「从节点登录端点会写、
+// 主节点值无权威意义」的本地态：不清零则从节点每次 MFA 登录/失败都触发
+// 漂移全量重拉，且从节点锁定在一个同步周期（≤60s）内被主节点值抹除
+// （R72 F-3）。只清零副本、不改动 s.Users 原值，快照线上格式保持不变。
+// 残留影响：由 users 节其他字段变化触发的重放仍会覆盖这些记账字段——
+// 属低频、外观性损失，可接受。注意：mfa_enabled/mfa_secret/
+// mfa_recovery_codes 是主节点权威字段，不清零（其漂移检测配合 R72 F-4 的
+// 触发器补列，保证管理员重置等安全操作正常传播）。
 func sanitizeUsersForHash(users []models.ClusterUser) []models.ClusterUser {
 	if len(users) == 0 {
 		return users
@@ -96,6 +101,9 @@ func sanitizeUsersForHash(users []models.ClusterUser) []models.ClusterUser {
 	for i, u := range users {
 		out[i] = u
 		out[i].LastLogin = models.JSONNullTime{}
+		out[i].MFALastTimestep = 0
+		out[i].MFAFailedAttempts = 0
+		out[i].MFALockedUntil = ""
 	}
 	return out
 }

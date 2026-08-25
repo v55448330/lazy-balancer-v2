@@ -484,6 +484,9 @@ func TestRunMigrations_dropsDeadLbRulesIPACLColumns(t *testing.T) {
 func TestRunMigrations_makes_users_isEnabled_notNull_and_backfills_null(t *testing.T) {
 	// Given
 	database := openMigrationTestDB(t)
+	// R72 C-I-5：生产迁移顺序是 newColumns 先补齐 mfa 列再执行本重建——种子
+	// 表按同一形状建（重建白名单含 mfa 列，缺列即报错，这本身就是 C-I-5 修复
+	// 的回归锚点）。
 	if _, err := database.Exec(`CREATE TABLE users (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username TEXT UNIQUE NOT NULL,
@@ -494,7 +497,15 @@ func TestRunMigrations_makes_users_isEnabled_notNull_and_backfills_null(t *testi
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		last_login DATETIME,
 		password_changed_at DATETIME,
-		password_version INTEGER NOT NULL DEFAULT 0
+		password_version INTEGER NOT NULL DEFAULT 0,
+		mfa_enabled BOOLEAN DEFAULT 0,
+		mfa_secret TEXT DEFAULT '',
+		mfa_pending_secret TEXT DEFAULT '',
+		mfa_recovery_codes TEXT DEFAULT '[]',
+		mfa_last_timestep INTEGER DEFAULT 0,
+		mfa_failed_attempts INTEGER DEFAULT 0,
+		mfa_locked_until DATETIME,
+		mfa_pending_fails INTEGER DEFAULT 0
 	);
 	INSERT INTO users (username,password_hash,role,is_enabled) VALUES ('legacy','hash','admin',NULL);`); err != nil {
 		t.Fatalf("seed legacy users: %v", err)
