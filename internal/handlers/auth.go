@@ -170,9 +170,18 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 		services.RecordAuditLog(user.Username, "登录成功", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %d", user.ID), services.AuditResultPart("success")), c.ClientIP())
 	}
 
+	response := models.NewUserResponse(user)
+	// R72 十次：登录/step-up 响应携带 mfa_enabled——NewUserResponse 不含该字段
+	//（User 模型无此列），此前所有登录路径的 user.mfa_enabled 恒 false，导致
+	// 前端「登录从节点需先启用 MFA」预检对自己已启用的用户误报。一次查询填齐。
+	var mfaEnabled int
+	if err := db.DB.QueryRow("SELECT COALESCE(mfa_enabled,0) FROM users WHERE id=?", user.ID).Scan(&mfaEnabled); err == nil {
+		response.MFAEnabled = mfaEnabled == 1
+	}
+
 	c.JSON(http.StatusOK, models.LoginResponse{
 		Token:    tokenString,
-		User:     models.NewUserResponse(user),
+		User:     response,
 		NodeMode: nodeMode,
 	})
 }
