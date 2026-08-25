@@ -48,7 +48,7 @@
       </el-form-item>
       <el-form-item label="上游 Keepalive">
         <el-input-number v-model="settings.upstream_keepalive_timeout" :disabled="isReadOnly" :min="0" :max="86400" controls-position="right" class="number-input" />
-        <el-text type="info" size="small" class="tip-inline">秒，Caddy 到后端服务器的长连接空闲多久后关闭；0 = Caddy 默认。常规建议 60</el-text>
+        <el-text type="info" size="small" class="tip-inline">秒，空闲上游连接保持时长；0 = 默认（2 分钟）。SSE/WebSocket 建议保持 0</el-text>
       </el-form-item>
 
       <el-divider content-position="left">代理超时</el-divider>

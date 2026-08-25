@@ -116,7 +116,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       COALESCE(http_read_timeout,60) as http_read_timeout,
 		       COALESCE(http_write_timeout,60) as http_write_timeout,
 		       COALESCE(http_idle_timeout,120) as http_idle_timeout,
-		       COALESCE(upstream_keepalive_timeout,60) as upstream_keepalive_timeout,
+		       COALESCE(upstream_keepalive_timeout,0) as upstream_keepalive_timeout,
 		       COALESCE(proxy_dial_timeout,0) as proxy_dial_timeout,
 		       COALESCE(proxy_response_header_timeout,0) as proxy_response_header_timeout,
 		       COALESCE(proxy_read_timeout,0) as proxy_read_timeout,

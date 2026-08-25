@@ -321,6 +321,13 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(c.GetString("username"), "重置", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %s", target), services.AuditResultPart("success")), c.ClientIP())
+	// R72：detail 同时写目标用户与操作者（username 列即操作者；本人重置时两者相同，
+	// 跨用户重置时 detail 可区分——此前仅「用户 X」在列表中无法判断是自重置还是
+	// 管理员代重置）。
+	detail := fmt.Sprintf("目标用户 %s", target)
+	if operatorName := c.GetString("username"); operatorName != target {
+		detail = fmt.Sprintf("目标用户 %s（由 %s 操作）", target, operatorName)
+	}
+	services.RecordAuditLog(c.GetString("username"), "重置", "用户认证", services.FormatAuditDetail(detail, services.AuditResultPart("success")), c.ClientIP())
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已重置用户 MFA（用户需重新绑定）"})
 }

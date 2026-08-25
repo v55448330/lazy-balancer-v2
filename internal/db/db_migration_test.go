@@ -1166,8 +1166,10 @@ func TestInitialize_backfillsLegacyTimeoutColumnsOnceAndPreservesExplicitZero(t 
 	}
 
 	// Then the newly added timeout columns are backfilled to the recommended defaults
-	if r, w, i, k := readTimeouts(); r != 60 || w != 60 || i != 120 || k != 60 {
-		t.Fatalf("backfilled timeouts=(%d,%d,%d,%d), want (60,60,120,60)", r, w, i, k)
+	//（R72 三次：keepalive 默认 0——60s 空闲关闭会中断 SSE/WebSocket 上游长连接，
+	// 0 继承 Caddy/Go Transport 默认 2 分钟）
+	if r, w, i, k := readTimeouts(); r != 60 || w != 60 || i != 120 || k != 0 {
+		t.Fatalf("backfilled timeouts=(%d,%d,%d,%d), want (60,60,120,0)", r, w, i, k)
 	}
 
 	// And when the user explicitly sets 0 (= 省略超时指令、用 Caddy 默认) and the service restarts

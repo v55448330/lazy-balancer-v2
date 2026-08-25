@@ -31,9 +31,15 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "登录从节点需先启用 MFA（在安全设置中绑定）"})
 		return
 	}
-	if services.MFAWriteGuardEnabled() {
+	// R72 三次（用户裁决）：登录从节点每次点击都要求 MFA 验证——不再复用登录后
+	// 的 10 分钟写操作宽限窗（用户实测窗口内直接跳转登录成功，与「点击登录时
+	// 需要验证」的决策语义不符）。保留 60 秒宽限仅供 428 → 前端弹码 →
+	// verify-step → 自动重试这一次链路闭环（重试发生在验证后的数秒内）。
+	// API Key（机器身份/MCP 工具）无 mfa_ts 概念，豁免该窗口检查——MFA 是
+	// 人类交互式登录的第二因子，API Key 已有自身的密钥管理边界。
+	if c.GetString("auth_type") == "jwt" {
 		mfaTs, _ := c.Get("mfa_ts")
-		if ts, ok := mfaTs.(float64); !ok || time.Since(time.Unix(int64(ts), 0)) >= 10*time.Minute {
+		if ts, ok := mfaTs.(float64); !ok || time.Since(time.Unix(int64(ts), 0)) >= 60*time.Second {
 			c.AbortWithStatusJSON(http.StatusPreconditionRequired, gin.H{"code": 428, "message": "MFA_STEP_UP_REQUIRED", "detail": "登录从节点需要 MFA 验证"})
 			return
 		}

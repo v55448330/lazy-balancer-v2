@@ -119,7 +119,7 @@
             <el-button v-if="row.id !== authStore.user?.id" type="warning" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row.id)">
               重置密码
             </el-button>
-            <el-button v-if="!row.mfa_enabled && (row.id === authStore.user?.id || authStore.user?.role === 'admin')" type="success" link size="small" :disabled="isReadOnly || submitting" @click="openMfaBinding(row)">
+            <el-button v-if="!row.mfa_enabled && row.id === authStore.user?.id" type="success" link size="small" :disabled="isReadOnly || submitting" @click="openMfaBinding(row)">
               启用 MFA
             </el-button>
             <el-button v-if="row.mfa_enabled && (row.id === authStore.user?.id || authStore.user?.role === 'admin')" type="warning" link size="small" :disabled="isReadOnly || submitting" @click="resetMfa(row)">

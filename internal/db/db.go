@@ -812,6 +812,10 @@ func runMigrations() error {
 	defaultUpdates := []string{
 		"UPDATE global_config SET jwt_expire_minutes=20 WHERE jwt_expire_minutes IS NULL OR jwt_expire_minutes<=0 OR jwt_expire_minutes>1440",
 		"UPDATE global_config SET access_log_format='' WHERE access_log_format LIKE '{%'",
+		// R72 三次（用户反馈）：上游长连接空闲超时旧默认 60s 主动关闭空闲连接
+		//（SSE/WebSocket/LLM 流场景 churn）——精确命中旧默认的行归 0（继承
+		// Caddy/Go Transport 默认 2 分钟），用户自定义值不动。
+		"UPDATE global_config SET upstream_keepalive_timeout=0 WHERE COALESCE(upstream_keepalive_timeout,60)=60",
 	}
 	for _, statement := range defaultUpdates {
 		if _, err := DB.Exec(statement); err != nil {
