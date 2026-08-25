@@ -14,6 +14,9 @@
       </div>
     </div>
 
+    <!-- R72 二次调整：MFA 卡片置于基础设置最顶部（用户反馈仍找不到入口——
+         上一轮放在 grid 之后=页面底部，需滚动才能看到）。 -->
+    <MfaSettingsCard v-if="activeTab === 'basic'" />
     <div v-if="activeTab === 'basic'" class="basic-settings-grid">
       <BasicSettings
         v-model:settings="settings"
@@ -24,9 +27,6 @@
         @save="handleSaveCaddy"
       />
     </div>
-    <!-- R72：MFA 卡片移出两列 grid、全宽置于设置区首屏可见位置（用户反馈
-         「找不到启用入口」——此前排在 grid 第二行易被忽略）。 -->
-    <MfaSettingsCard v-if="activeTab === 'basic'" />
     <ClusterSettings
       v-else-if="activeTab === 'cluster'"
     />
