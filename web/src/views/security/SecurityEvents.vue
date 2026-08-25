@@ -80,6 +80,16 @@
         <el-table-column prop="client_ip" label="客户端 IP" width="140" />
         <el-table-column prop="method" label="方法" width="70" align="center" />
         <el-table-column prop="uri" label="URI" min-width="220" show-overflow-tooltip />
+        <!-- R72 二十二次（用户需求）：异常评分列——CRS 评分制下每事件携带的累计
+             anomaly_score（后端已返回，此前未展示）；按分数着色便于快速识别高威胁。 -->
+        <el-table-column label="评分" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.anomaly_score >= 15" type="danger" size="small" effect="plain">{{ row.anomaly_score }}</el-tag>
+            <el-tag v-else-if="row.anomaly_score >= 5" type="warning" size="small" effect="plain">{{ row.anomaly_score }}</el-tag>
+            <span v-else-if="row.anomaly_score > 0" class="text-secondary">{{ row.anomaly_score }}</span>
+            <span v-else>—</span>
+          </template>
+        </el-table-column>
       </el-table>
 
       <div style="margin-top: 16px; display: flex; align-items: center;">
