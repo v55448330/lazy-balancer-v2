@@ -405,26 +405,29 @@ const removeNode = async (node: ClusterNode): Promise<void> => {
 
 const loginNode = async (node: ClusterNode): Promise<void> => {
   if (isNonAdminReadOnly.value || node.status !== 'online' || loginNodeId.value !== null) return
-  // R72 六次：403（未启用 MFA）预检在开窗之前——此前先 window.open 再 POST，
-  // 403 时新页面已打开又被瞬间关闭（闪窗）。文案同步指向正确入口（用户管理）。
+  // R72 六次：403（未启用 MFA）预检——文案指向正确入口（用户管理）。
   if (!authStore.user?.mfa_enabled) {
     ElMessage.warning('登录从节点需先启用 MFA（在「系统设置 → 用户管理」中对自己的账号绑定）')
     return
   }
-  const loginWindow = window.open('', '_blank')
-  if (!loginWindow) {
-    ElMessage.warning('浏览器阻止了新窗口，请允许弹出窗口后重试')
-    return
-  }
-  loginWindow.opener = null
   loginNodeId.value = node.id
   try {
+    // R72 九次（用户反馈：先弹验证码再开页面）：票据请求先行、开窗后置——
+    // 此前先 window.open 再 POST，428（每次都要求 MFA）时验证码弹框期间
+    // 空白页已挂在旁边且取消后不一定关闭。现在 428 由全局拦截器弹码（无窗
+    // 口），验证成功 → 拦截器自动重试 → 成功后才开窗导航；失败/取消则根本
+    // 不开窗。MFA 弹框「验证」点击本身是用户手势，紧随其后的 window.open
+    // 通常被浏览器放行；被拦时给出可重试提示兜底。
     const response = await request.post<LoginTicketResponse>(`/cluster/nodes/${node.id}/login-ticket`, undefined, { silent: true })
     const target = new URL(response.url)
     target.hash = `login_ticket=${encodeURIComponent(response.ticket)}`
-    loginWindow.location.replace(target.toString())
+    const loginWindow = window.open(target.toString(), '_blank')
+    if (!loginWindow) {
+      ElMessage.warning('浏览器阻止了新窗口，请允许弹出窗口后重试')
+      return
+    }
+    loginWindow.opener = null
   } catch (error: unknown) {
-    loginWindow.close()
     if (error instanceof Error && error.message.includes('MFA')) {
       ElMessage.warning(error.message)
     } else {
