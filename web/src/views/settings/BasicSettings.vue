@@ -250,7 +250,7 @@
 import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { request } from '@/utils/api'
+import { request, mfaAwareSuccess } from '@/utils/api'
 import { reloadAfterRestart } from '@/utils/restart'
 import { Setting, InfoFilled, Check, View, Upload } from '@element-plus/icons-vue'
 import type { SystemInfo } from '@/types'
@@ -345,7 +345,7 @@ const exportBackup = async (): Promise<void> => {
     link.click()
     // Safari 下立即回收 objectURL 会截断下载文件，延迟 1s 再释放
     setTimeout(() => URL.revokeObjectURL(url), 1000)
-    ElMessage.success('配置备份已导出')
+    mfaAwareSuccess('配置备份已导出')
   } catch {
     // 错误提示已由全局拦截器（含 Blob 错误体解析）展示
   } finally {
@@ -718,7 +718,7 @@ const handleRestart = async () => {
     restarting.value = false
     return
   }
-  ElMessage.success('服务正在重启，就绪后自动刷新页面')
+  mfaAwareSuccess('服务正在重启，就绪后自动刷新页面')
   // 保持 restarting=true 直到 reload（防就绪等待窗口内二次点击）；超时或失败才复位
   const reloaded = await reloadAfterRestart(() => disposed)
   if (!reloaded) restarting.value = false
@@ -779,7 +779,7 @@ const handleSave = async () => {
       stagedAdminTlsCert.value = null
       notifyTlsRestarting(adminTls.value.enabled)
     } else {
-      ElMessage.success('保存成功')
+      mfaAwareSuccess('保存成功')
     }
     emit('save')
   } catch (error) {

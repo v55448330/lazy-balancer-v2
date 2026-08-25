@@ -1,5 +1,5 @@
 import { ElMessage } from 'element-plus'
-import { wasRecentMfaGrace } from '@/utils/api'
+import { mfaAwareSuccess } from '@/utils/api'
 
 interface SaveResultLike {
   message?: string
@@ -13,7 +13,6 @@ export function showSaveResult(res: SaveResultLike | undefined | void, fallback:
     ElMessage({ type: 'warning', message, duration: 0, showClose: true })
     return
   }
-  // R72 十三次→十七次（用户裁决）：宽限窗内放行（用户不知情）时前缀明确说明
-  // 原因——「MFA 在验证窗口期」；弹码后重试（用户刚验证）不加缀——单一 toast。
-  ElMessage.success(wasRecentMfaGrace() ? `MFA 在验证窗口期，本次操作免验证，${message}` : message)
+  // R72 十三次→十八次：统一走 mfaAwareSuccess（全站写事件同口径）。
+  mfaAwareSuccess(message)
 }

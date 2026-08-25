@@ -96,7 +96,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { CopyDocument } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import { request } from '@/utils/api'
+import { request, mfaAwareSuccess } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import type {
   APIResponse,
@@ -216,7 +216,7 @@ const registerAsSlave = async (input: ClusterRegistrationInput): Promise<void> =
     const confirmed = await confirmAction('切换后本地数据将被主节点全覆盖，是否继续？', '确认切换为从节点')
     if (!confirmed) return
     await request.post<APIResponse<ClusterModeResult>>('/cluster/mode', { mode: 'slave', ...input })
-    ElMessage.success('注册请求已提交，等待主节点审批')
+    mfaAwareSuccess('注册请求已提交，等待主节点审批')
     await clusterPolling.run()
   } catch (error: unknown) {
     // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
@@ -233,7 +233,7 @@ const promoteToMaster = async (): Promise<void> => {
     const confirmed = await confirmAction('将脱离集群，当前数据成为权威数据', '确认提升为主节点')
     if (!confirmed) return
     await request.post<ActionResponse>('/cluster/promote')
-    ElMessage.success('已提升为主节点')
+    mfaAwareSuccess('已提升为主节点')
     await clusterPolling.run()
   } catch (error: unknown) {
     // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
@@ -251,7 +251,7 @@ const syncNow = async (): Promise<void> => {
   try {
     const response = await request.post<APIResponse<ClusterSyncResult>>('/cluster/sync/pull')
     const result = response.data
-    if (result) ElMessage.success(result.changed ? `同步完成，已应用版本 ${result.applied_version}` : '当前已是最新配置')
+    if (result) mfaAwareSuccess(result.changed ? `同步完成，已应用版本 ${result.applied_version}` : '当前已是最新配置')
     // fetchStatus 为 silent 请求，失败仅记录日志，避免逃逸为未处理的 rejection
     await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
   } catch (error: unknown) {
@@ -284,7 +284,7 @@ const copyRegisterToken = async (): Promise<void> => {
   if (!token) return
   try {
     await navigator.clipboard.writeText(token)
-    ElMessage.success('注册令牌已复制')
+    mfaAwareSuccess('注册令牌已复制')
   } catch (error: unknown) {
     // clipboard 仅 reject Error 子类；其余值同样按复制失败提示，不再向上抛。
     console.error('Failed to copy register token:', error)
@@ -317,7 +317,7 @@ const updateSyncField = async (field: string, value: boolean): Promise<void> => 
   settingsLoading.value = true
   try {
     await request.put<ActionResponse>('/cluster/settings', { [field]: value })
-    ElMessage.success('同步设置已更新')
+    mfaAwareSuccess('同步设置已更新')
     await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
   } catch (error: unknown) {
     // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
@@ -333,7 +333,7 @@ const updateSyncInterval = async (value: number): Promise<void> => {
   intervalSaving.value = true
   try {
     await request.put<ActionResponse>('/cluster/settings', { sync_interval: value })
-    ElMessage.success('同步间隔已更新')
+    mfaAwareSuccess('同步间隔已更新')
     await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
   } catch (error: unknown) {
     // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
@@ -349,13 +349,13 @@ const runNodeAction = async (node: ClusterNode, action: 'approve' | 'reject' | '
   try {
     if (action === 'approve') {
       await request.post<ActionResponse>(`/cluster/nodes/${node.id}/approve`)
-      ElMessage.success('节点已确认')
+      mfaAwareSuccess('节点已确认')
     } else if (action === 'reject') {
       await request.post<ActionResponse>(`/cluster/nodes/${node.id}/reject`)
-      ElMessage.success('节点已拒绝')
+      mfaAwareSuccess('节点已拒绝')
     } else {
       await request.delete<ActionResponse>(`/cluster/nodes/${node.id}`)
-      ElMessage.success('节点已删除')
+      mfaAwareSuccess('节点已删除')
     }
     await clusterPolling.run()
   } catch (error: unknown) {
@@ -456,7 +456,7 @@ const updateAccessUrl = async (accessUrl: string): Promise<void> => {
   accessUrlSaving.value = true
   try {
     await request.put<ActionResponse>(`/cluster/nodes/${node.id}/access-url`, { access_url: accessUrl })
-    ElMessage.success('访问地址已更新')
+    mfaAwareSuccess('访问地址已更新')
     accessUrlDialogVisible.value = false
     editingAccessUrlNode.value = null
     await fetchNodes()

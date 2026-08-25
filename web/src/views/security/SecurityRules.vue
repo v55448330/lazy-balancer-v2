@@ -290,7 +290,7 @@ import { Search, Notebook, Plus, WarningFilled } from '@element-plus/icons-vue'
 import { formatDate } from '@/utils/date'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { request, ApiRequestError } from '@/utils/api'
+import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse, UserListItem } from '@/types'
@@ -521,9 +521,9 @@ const openRuleContent = async (row: CRSRuleFile) => {
     if (requestSeq === ruleContentSeq) loadingContent.value = false
   }
 }
-const toggleAutoUpdate = async (val: boolean) => { try { await request.put('/security/crs/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { crsInfo.value.auto_update = !val } }
+const toggleAutoUpdate = async (val: boolean) => { try { await request.put('/security/crs/auto-update', { auto_update: val }); mfaAwareSuccess('已更新') } catch { crsInfo.value.auto_update = !val } }
 const fetchIP2RegionInfo = async () => { try { const res = await request.get<APIResponse<typeof ip2regionInfo.value>>('/security/ip2region'); if (res.data) ip2regionInfo.value = res.data } catch {} }
-const toggleIP2RegionAutoUpdate = async (val: boolean) => { try { await request.put('/security/ip2region/auto-update', { auto_update: val }); ElMessage.success('已更新') } catch { ip2regionInfo.value.auto_update = !val } }
+const toggleIP2RegionAutoUpdate = async (val: boolean) => { try { await request.put('/security/ip2region/auto-update', { auto_update: val }); mfaAwareSuccess('已更新') } catch { ip2regionInfo.value.auto_update = !val } }
 
 const updateDialogVisible = ref(false)
 const updateInfo = ref<CRSUpdateInfo | null>(null)

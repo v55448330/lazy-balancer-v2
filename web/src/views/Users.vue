@@ -191,7 +191,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { request } from '@/utils/api'
+import { request, mfaAwareSuccess } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { UserFilled, User, Plus } from '@element-plus/icons-vue'
@@ -266,7 +266,7 @@ const handleSubmit = async () => {
           display_name: form.value.display_name || undefined,
           password: form.value.password || undefined,
         }, { silent: true })
-        ElMessage.success('已保存')
+        mfaAwareSuccess('已保存')
         showForm.value = false
         editingUser.value = null
         await fetchUsers()
@@ -278,10 +278,10 @@ const handleSubmit = async () => {
         display_name: form.value.display_name,
         password: form.value.password || undefined,
       })
-      ElMessage.success('更新成功')
+      mfaAwareSuccess('更新成功')
     } else {
       await request.post('/users', form.value)
-      ElMessage.success('创建成功')
+      mfaAwareSuccess('创建成功')
     }
   } catch (error: unknown) {
     // Error toast is already shown by the global axios interceptor.
@@ -341,7 +341,7 @@ const deleteUser = async (id: number) => {
   try {
     await ElMessageBox.confirm('确定要删除这个用户吗？', '警告', { type: 'warning' })
     await request.delete(`/users/${id}`)
-    ElMessage.success('删除成功')
+    mfaAwareSuccess('删除成功')
     fetchUsers()
   } catch (e) {
     // User cancelled, do nothing
@@ -367,7 +367,7 @@ const handleToggleStatus = async (id: number, isEnabled: boolean) => {
   switchingIds.value.add(id)
   try {
     await request.put(`/users/${id}/status`, { is_enabled: isEnabled })
-    ElMessage.success(isEnabled ? '已启用用户' : '已禁用用户')
+    mfaAwareSuccess(isEnabled ? '已启用用户' : '已禁用用户')
     fetchUsers()
   } catch (e) {
     fetchUsers() // revert on failure
@@ -403,7 +403,7 @@ const resetPassword = async (id: number) => {
       } else {
         await request.post(`/users/${id}/reset-password`, { new_password: value })
       }
-      ElMessage.success('密码重置成功')
+      mfaAwareSuccess('密码重置成功')
     }
   } catch (e) {
     // User cancelled, do nothing
@@ -434,7 +434,7 @@ const resetMfa = async (row: UserListItem): Promise<void> => {
       )
     }
     await request.post(`/users/${row.id}/mfa/reset`, { code }, { silent: true })
-    ElMessage.success('已重置 MFA')
+    mfaAwareSuccess('已重置 MFA')
     await fetchUsers()
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
@@ -490,7 +490,7 @@ const activateMfa = async (): Promise<void> => {
     mfaBinding.value.recoveryCodes = res.data.recovery_codes
     mfaBinding.value.step = 2
     await fetchUsers()
-    ElMessage.success('MFA 已启用')
+    mfaAwareSuccess('MFA 已启用')
   } catch (error: unknown) {
     ElMessage.error(error instanceof Error ? error.message : '验证失败')
   } finally {
@@ -501,7 +501,7 @@ const activateMfa = async (): Promise<void> => {
 const copyMfaRecovery = async (): Promise<void> => {
   try {
     await navigator.clipboard.writeText(mfaBinding.value.recoveryCodes.join('\n'))
-    ElMessage.success('恢复代码已复制')
+    mfaAwareSuccess('恢复代码已复制')
   } catch {
     ElMessage.warning('复制失败，请手动选择复制')
   }

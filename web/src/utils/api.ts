@@ -87,6 +87,17 @@ let mfaGraceLastAt = 0
 let mfaVerifiedJustNowAt = 0
 export const wasRecentMfaGrace = (): boolean =>
   Date.now() - mfaGraceLastAt < 3_000 && Date.now() - mfaVerifiedJustNowAt > 3_000
+
+// R72 十八次（用户裁决）：写操作成功提示的统一 MFA 装饰——宽限窗内（用户不知情）
+// 前缀「MFA 在验证窗口期，本次操作免验证，」；弹码后重试（用户刚验证）不加缀。
+// 所有写事件的成功提示都应经此助手发出。
+export const mfaAwareSuccess = (message: string): void => {
+  if (wasRecentMfaGrace()) {
+    ElMessage.success(`MFA 在验证窗口期，本次操作免验证，${message}`)
+    return
+  }
+  ElMessage.success(message)
+}
 const promptMfaCode = (): Promise<string | null> =>
   new Promise((resolve) => {
     if (mfaPromptOpen) { resolve(null); return }

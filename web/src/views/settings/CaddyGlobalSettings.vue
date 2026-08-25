@@ -117,11 +117,11 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessageBox } from 'element-plus'
 import { RefreshRight, Setting, View } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { ansiToHtml } from '@/utils/ansi'
-import { request } from '@/utils/api'
+import { request, mfaAwareSuccess } from '@/utils/api'
 import { DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
 import type { ProxyTimeoutConfig } from '@/types'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
@@ -211,7 +211,7 @@ const handleSave = async (): Promise<void> => {
       })
     }
     await request.put('/config', payload)
-    ElMessage.success('保存成功')
+    mfaAwareSuccess('保存成功')
     emit('save')
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
@@ -237,7 +237,7 @@ const handleReloadCaddy = async (): Promise<void> => {
   reloading.value = true
   try {
     await request.post('/config/reload')
-    ElMessage.success('Caddy 配置已重载')
+    mfaAwareSuccess('Caddy 配置已重载')
   } catch (error: unknown) {
     console.error('Failed to reload Caddy:', error)
   } finally {

@@ -981,7 +981,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { request } from '@/utils/api'
+import { request, mfaAwareSuccess } from '@/utils/api'
 import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, QuestionFilled, Setting, RefreshRight, Search, WarningFilled, Location, Monitor, Link} from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import axios from 'axios'
@@ -2014,7 +2014,7 @@ const pasteFromFile = async (type: 'cert' | 'key') => {
         } else {
           wizardForm.tls_key = content
         }
-        ElMessage.success('已从文件读取内容')
+        mfaAwareSuccess('已从文件读取内容')
       }
       reader.readAsText(file)
     }
@@ -2482,7 +2482,7 @@ const submitWizard = async () => {
       await request.post<APIResponse>('/rules', data)
     }
 
-    ElMessage.success(editingRule.value ? '更新成功' : '创建成功')
+    mfaAwareSuccess(editingRule.value ? '更新成功' : '创建成功')
     wizardVisible.value = false
     fetchRules()
   } catch (error: unknown) {
@@ -2506,7 +2506,7 @@ const toggleRule = async (rule: Rule) => {
     } else {
       await request.post<APIResponse>(`/rules/${rule.caddy_id}/disable`)
     }
-    ElMessage.success(`${action}成功`)
+    mfaAwareSuccess(`${action}成功`)
     // 启停已在服务端生效，刷新失败不回退开关（fetchRules 内部已吞错），等待下次轮询同步
     await fetchRules()
   } catch (e) {
@@ -2521,7 +2521,7 @@ const deleteRule = async (rule: Rule) => {
   try {
     await ElMessageBox.confirm(`确定要删除规则 "${rule.name}" 吗？`, '删除确认', { type: 'warning' })
     await request.delete<APIResponse>(`/rules/${rule.caddy_id}`)
-    ElMessage.success('删除成功')
+    mfaAwareSuccess('删除成功')
     fetchRules()
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return

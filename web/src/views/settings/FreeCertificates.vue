@@ -217,7 +217,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed, reactive } from 'vue'
-import { request } from '@/utils/api'
+import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Check, Connection, Document, OfficeBuilding, Plus, Setting } from '@element-plus/icons-vue'
@@ -446,7 +446,7 @@ const saveCAProvider = async () => {
     const provider = editingCAProvider.value
     if (!provider) return
     await request.put(`/ca-providers/${provider.id}`, payload)
-    ElMessage.success('CA 提供商配置已更新')
+    mfaAwareSuccess('CA 提供商配置已更新')
     caDialogVisible.value = false
     fetchCAProviders()
   } catch (caught: unknown) {
@@ -462,7 +462,7 @@ const testCAProvider = async (p: CAProvider) => {
   testingCAId.value = p.id
   try {
     const res = await request.post<APIResponse>(`/ca-providers/${p.id}/test`)
-    ElMessage.success(res.message || 'CA 提供商测试通过')
+    mfaAwareSuccess(res.message || 'CA 提供商测试通过')
   } catch (error: unknown) {
     // Error toast is already shown by the global axios interceptor.
     console.error('Failed to test CA provider:', error)
@@ -555,10 +555,10 @@ const saveConfig = async () => {
   try {
     if (targetId) {
       await request.put(`/certificate-configs/${targetId}`, payload)
-      ElMessage.success('配置已更新')
+      mfaAwareSuccess('配置已更新')
     } else {
       await request.post('/certificate-configs', payload)
-      ElMessage.success('配置已创建')
+      mfaAwareSuccess('配置已创建')
     }
     dialogVisible.value = false
     fetchConfigs()
@@ -585,7 +585,7 @@ const deleteConfig = async (config: CertConfig) => {
   deletingId.value = configId
   try {
     await request.delete(`/certificate-configs/${configId}`)
-    ElMessage.success('配置已删除')
+    mfaAwareSuccess('配置已删除')
     fetchConfigs()
   } catch (error: unknown) {
     console.error('Failed to delete cert config:', error)
@@ -625,7 +625,7 @@ const testConfig = async (config: CertConfig) => {
     const domain = await promptTestDomain(false)
     if (!domain) return
     const res = await request.post(`/certificate-configs/${config.id}/test`, { domain })
-    ElMessage.success(res.message || '凭证有效')
+    mfaAwareSuccess(res.message || '凭证有效')
   } catch (caught: unknown) {
     // Error toast is already shown by the global axios interceptor.
     console.error('Failed to test cert config:', caught)
@@ -670,7 +670,7 @@ const handleSave = async () => {
       })
     }
     await request.put('/config', payload)
-    ElMessage.success('保存成功')
+    mfaAwareSuccess('保存成功')
     emit('save')
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') {
