@@ -237,11 +237,12 @@
     <el-text type="info" size="small" style="display: block; margin-bottom: 12px">
       开启后，以下操作需要 1 分钟内验证过 MFA（TOTP 同片不可重用，验证后 60 秒内的连续操作免重复弹码）。测试连接、预览、解析类操作不受影响。
     </el-text>
-    <el-descriptions :column="1" border size="small" class="mfa-scope-desc">
-      <el-descriptions-item v-for="group in mfaScopeGroups" :key="group.title" :label="group.title">
-        {{ group.items.join('、') }}
-      </el-descriptions-item>
-    </el-descriptions>
+    <div class="mfa-scope-list">
+      <div v-for="group in mfaScopeGroups" :key="group.title" class="mfa-scope-row">
+        <div class="mfa-scope-title">{{ group.title }}</div>
+        <div class="mfa-scope-items">{{ group.items.join('、') }}</div>
+      </div>
+    </div>
   </el-dialog>
 </template>
 
@@ -834,12 +835,32 @@ const handleSave = async () => {
 .import-conflicts { color: var(--el-color-warning-dark-2); }
 .import-alert { margin-top: 4px; }
 
-/* R72 十六次：弹框标题列（label）定宽且不换行 */
-:deep(.mfa-scope-desc .el-descriptions__label) {
-  width: 110px;
-  min-width: 110px;
-  white-space: nowrap;
+/* R72 十六次→十七次：el-descriptions 的表格布局压不动 label 宽（仍折行）——
+   改自绘行布局：标题列 flex 定宽 + nowrap，内容列自动换行。 */
+.mfa-scope-list {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.mfa-scope-row {
+  display: flex;
+  align-items: stretch;
+}
+.mfa-scope-row + .mfa-scope-row {
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+.mfa-scope-title {
+  flex: 0 0 130px;
+  padding: 8px 12px;
   font-weight: 600;
+  white-space: nowrap;
+  background: var(--el-fill-color-light);
+  border-right: 1px solid var(--el-border-color-lighter);
+}
+.mfa-scope-items {
+  flex: 1;
+  padding: 8px 12px;
+  line-height: 1.8;
 }
 
 /* R72 十五次：「支持的操作」链接与描述文字同色（info），保留可点击/hover 链接语义 */

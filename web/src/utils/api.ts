@@ -158,7 +158,7 @@ service.interceptors.response.use(
         const now = Date.now()
         if (now - lastMfaGraceNoticeAt > 60_000) {
           lastMfaGraceNoticeAt = now
-          ElMessage.info('MFA 已验证，本次操作免验证')
+          ElMessage.info('MFA 在验证窗口期，本次操作免验证')
         }
       }
     }
