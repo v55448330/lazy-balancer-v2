@@ -214,6 +214,7 @@ service.interceptors.response.use(
         const code = await promptMfaCode()
         if (code) {
           await authStore.refreshMfaStep(code)
+          ElMessage.success('MFA 验证成功，继续执行操作')
           error.config._mfaRetried = true
           return service.request(error.config)
         }
