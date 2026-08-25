@@ -38,6 +38,10 @@ type configSnapshot struct {
 	RuntimeLogSizeMB           int
 	AuditRetentionMonths       int
 	JWTExpireMinutes           int
+	// R72 D-新3：v2.1.8 两个 MFA 全局开关——预览变更清单与字段级审计需要
+	//（此前缺位：安全开关可无确认直存且变更零审计留痕）。
+	MFAWriteGuard     bool
+	MFALockoutEnabled bool
 }
 
 type configChangePlan struct {
@@ -60,7 +64,9 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		COALESCE(server_tokens_hidden,FALSE),
 		COALESCE(access_log_json,TRUE), COALESCE(access_log_format,''),
 		COALESCE(cert_job_log_size_mb,10), COALESCE(audit_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3),
-		COALESCE(jwt_expire_minutes,20)
+		COALESCE(jwt_expire_minutes,20),
+		COALESCE(mfa_write_guard,0),
+		COALESCE(mfa_lockout_enabled,0)
 		FROM global_config WHERE id=1`).Scan(
 		&old.ACMEEmail, &old.DNSProvider, &old.DNSCredentials,
 		&old.CertExpiryDays, &old.CertRenewalDays, &old.CertRenewalAttempts,
@@ -71,7 +77,8 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		&old.UpstreamKeepaliveTimeout, &old.ProxyDialTimeout, &old.ProxyResponseHeaderTimeout, &old.ProxyReadTimeout, &old.ProxyWriteTimeout, &old.ProxyStreamTimeout, &old.ProxyFlushInterval, &old.ProxyStreamCloseDelay,
 		&old.ServerTokensHidden,
 		&old.AccessLogJSON, &old.AccessLogFormat,
-		&old.CertJobLogSizeMB, &old.AuditLogSizeMB, &old.RuntimeLogSizeMB, &old.AuditRetentionMonths, &old.JWTExpireMinutes)
+		&old.CertJobLogSizeMB, &old.AuditLogSizeMB, &old.RuntimeLogSizeMB, &old.AuditRetentionMonths, &old.JWTExpireMinutes,
+		&old.MFAWriteGuard, &old.MFALockoutEnabled)
 	return old, err
 }
 
@@ -102,6 +109,8 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 	add("timezone", "时区", req.Timezone != nil && *req.Timezone != old.Timezone)
 	add("audit_retention_months", "日志保留", req.AuditRetentionMonths != nil && *req.AuditRetentionMonths != old.AuditRetentionMonths)
 	add("jwt_expire_minutes", "登录过期时间", req.JWTExpireMinutes != nil && *req.JWTExpireMinutes != old.JWTExpireMinutes)
+	add("mfa_write_guard", "MFA 写操作验证", req.MFAWriteGuard != nil && *req.MFAWriteGuard != old.MFAWriteGuard)
+	add("mfa_lockout_enabled", "MFA 验证失败锁定", req.MFALockoutEnabled != nil && *req.MFALockoutEnabled != old.MFALockoutEnabled)
 	add("cert_job_log_size_mb", "证书日志大小", req.CertJobLogSizeMB != nil && *req.CertJobLogSizeMB != old.CertJobLogSizeMB)
 	add("audit_log_size_mb", "审计日志大小", req.AuditLogSizeMB != nil && *req.AuditLogSizeMB != old.AuditLogSizeMB)
 	add("runtime_log_size_mb", "运行日志大小", req.RuntimeLogSizeMB != nil && *req.RuntimeLogSizeMB != old.RuntimeLogSizeMB)

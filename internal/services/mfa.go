@@ -85,6 +85,8 @@ func mfaGenerateRecoveryCodes(n int) ([]string, string, error) {
 }
 
 // mfaConsumeRecoveryCode 单次消费：命中即从 JSON 数组删除并写回，返回是否命中。
+// R72 S-3：消费语句改条件 UPDATE（... AND mfa_recovery_codes=? 旧值 CAS）——
+// read-then-write 在毫秒级并发下可双消费同码；CAS 保证只有一个写入者生效。
 func mfaConsumeRecoveryCode(userID int, code string) bool {
 	var raw string
 	if err := db.DB.QueryRow("SELECT COALESCE(mfa_recovery_codes,'[]') FROM users WHERE id=?", userID).Scan(&raw); err != nil {
@@ -100,8 +102,12 @@ func mfaConsumeRecoveryCode(userID int, code string) bool {
 		if h == want {
 			hashes = append(hashes[:i], hashes[i+1:]...)
 			j, _ := json.Marshal(hashes)
-			_, err := db.DB.Exec("UPDATE users SET mfa_recovery_codes=? WHERE id=?", string(j), userID)
-			return err == nil
+			res, err := db.DB.Exec("UPDATE users SET mfa_recovery_codes=? WHERE id=? AND mfa_recovery_codes=?", string(j), userID, raw)
+			if err != nil {
+				return false
+			}
+			n, _ := res.RowsAffected()
+			return n == 1
 		}
 	}
 	return false
@@ -173,9 +179,35 @@ func MFAIssueChallenge(userID int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// 惰性清理过期行（同一表上顺手，低成本）
-	_, _ = db.DB.Exec("DELETE FROM mfa_challenges WHERE expires_at < datetime('now') AND consumed=1")
+	// 惰性清理过期行（R72：去掉 consumed=1——未消费的过期挑战同样永久不可用，
+	// 保留只会无界累积；同 used_login_tickets 先例的「清全部过期」口径）
+	_, _ = db.DB.Exec("DELETE FROM mfa_challenges WHERE expires_at < datetime('now')")
 	return token, nil
+}
+
+// MFARecordChallengeFailure 挑战级失败计数（R72 B-I-4 硬闸）：单挑战失败 10 次
+// 即作废（consumed=1）——与全局锁定开关无关的爆破收敛（分布式 IP 池对单个
+// 5 分钟挑战的尝试上限从「10/min/IP × N」收敛为固定 10 次）。
+const mfaChallengeFailThreshold = 10
+
+// MFARecordChallengeFailure 记一次失败；达阈值作废并返回 true。
+func MFARecordChallengeFailure(token string) bool {
+	res, err := db.DB.Exec("UPDATE mfa_challenges SET attempts=COALESCE(attempts,0)+1 WHERE token=? AND consumed=0 AND expires_at > datetime('now')", token)
+	if err != nil {
+		return false
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return false
+	}
+	var attempts int
+	if err := db.DB.QueryRow("SELECT COALESCE(attempts,0) FROM mfa_challenges WHERE token=?", token).Scan(&attempts); err != nil {
+		return false
+	}
+	if attempts >= mfaChallengeFailThreshold {
+		_, _ = db.DB.Exec("UPDATE mfa_challenges SET consumed=1 WHERE token=?", token)
+		return true
+	}
+	return false
 }
 
 // MFAConsumeChallenge 单次消费挑战：存在、未消费、未过期且属主匹配。
@@ -280,6 +312,10 @@ func MFAActivate(userID int) ([]string, error) {
 
 // MFARegenerateRecoveryCodes 原地重生成恢复码（旧码全部作废），返回明文。
 func MFARegenerateRecoveryCodes(userID int) ([]string, error) {
+	// R72 F-5：与 MFAVerifyCode 同持 mfaMu——无锁时与恢复码消费的
+	// read-then-write 交错会把刚生成的 10 个新码静默作废。
+	mfaMu.Lock()
+	defer mfaMu.Unlock()
 	codes, hashesJSON, err := mfaGenerateRecoveryCodes(mfaRecoveryCodeCount)
 	if err != nil {
 		return nil, err
@@ -290,8 +326,36 @@ func MFARegenerateRecoveryCodes(userID int) ([]string, error) {
 	return codes, nil
 }
 
+// mfaPendingFailThreshold pending 验证失败作废阈值（R72 A-F-2：与全局锁定
+// 开关无关的硬闸——10^6 码空间在无限流端点上的暴力面由此收敛为 5 次机会）。
+const mfaPendingFailThreshold = 5
+
+// MFARecordPendingFailure 记一次 pending 验证失败；达阈值作废 pending 并返回 true。
+func MFARecordPendingFailure(userID int) bool {
+	var fails int
+	if err := db.DB.QueryRow("SELECT COALESCE(mfa_pending_fails,0) FROM users WHERE id=?", userID).Scan(&fails); err != nil {
+		return false
+	}
+	fails++
+	if fails >= mfaPendingFailThreshold {
+		_, _ = db.DB.Exec("UPDATE users SET mfa_pending_secret='', mfa_pending_fails=0 WHERE id=?", userID)
+		return true
+	}
+	_, _ = db.DB.Exec("UPDATE users SET mfa_pending_fails=? WHERE id=?", fails, userID)
+	return false
+}
+
+// MFAClearPendingFailures 成功验证后清零。
+func MFAClearPendingFailures(userID int) {
+	_, _ = db.DB.Exec("UPDATE users SET mfa_pending_fails=0 WHERE id=?", userID)
+}
+
 // MFAResetForUser 管理员重置：清全部 MFA 状态（含锁定/计数/pending）。
 func MFAResetForUser(userID int) error {
+	// R72 F-5：同上——重置与消费交错时 '[]' 写回可复活已消费项（虽被 secret
+	// 为空挡住，仍按串行化口径统一）。
+	mfaMu.Lock()
+	defer mfaMu.Unlock()
 	_, err := db.DB.Exec(
 		"UPDATE users SET mfa_enabled=0, mfa_secret='', mfa_pending_secret='', mfa_recovery_codes='[]', mfa_last_timestep=0, mfa_failed_attempts=0, mfa_locked_until=NULL WHERE id=?",
 		userID)

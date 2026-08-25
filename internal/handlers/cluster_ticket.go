@@ -20,7 +20,14 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 	// v2.1.8 决策4：集群「登录从节点」需当前 admin 已启用 MFA——未启用直接引导
 	// 先去安全设置绑定；写验证开关开启时还要求 10 分钟内验证过（428 → 前端
 	// 全局 step-up 弹窗验码后自动重试），票据本身即含 MFA 事实。
-	if mfaEnabled, err := services.MFAUserEnabled(currentUserID(c)); err == nil && !mfaEnabled {
+	// R72 C-I-4：DB 读错误必须 fail-closed（无法证明已启用=拒绝），此前
+	// err != nil 时条件不成立直接放行发票。
+	mfaEnabled, err := services.MFAUserEnabled(currentUserID(c))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取 MFA 状态失败"})
+		return
+	}
+	if !mfaEnabled {
 		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "登录从节点需先启用 MFA（在安全设置中绑定）"})
 		return
 	}

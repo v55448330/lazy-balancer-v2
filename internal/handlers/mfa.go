@@ -48,6 +48,9 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 
 	if ok, verr := services.MFAVerifyCode(userID, req.Code, time.Now()); !ok {
 		services.RecordAuditLog(user.Username, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "验证码错误"), c.ClientIP())
+		// R72 B-I-4：挑战级失败计数——分布式 IP 限流绕过下对单挑战的爆破收敛
+		//（10 次作废，需重新走密码步取新挑战）。
+		_ = services.MFARecordChallengeFailure(req.MFAToken)
 		msg := "验证码错误"
 		if verr != nil {
 			msg = verr.Error()
@@ -59,7 +62,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "MFA 挑战已被使用，请重新登录"})
 		return
 	}
-	h.respondLoginWithMFA(c, user, passwordVersion, time.Now().Unix())
+	h.respondLoginWithMFA(c, user, passwordVersion, time.Now().Unix(), true)
 }
 
 // —— 自助端点（JWT）——
@@ -76,17 +79,53 @@ func (h *Handlers) MFAStatus(c *gin.Context) {
 }
 
 // MFASetup POST /auth/mfa/setup — 生成 pending secret + otpauth URI（未启用）。
+// R72 F-1：已启用 MFA 的用户重新 setup 需密码+当前有效验证码双重确认——
+// 此前无任何门：持被劫持会话即可静默轮换第二因子（setup 响应明文返回新 secret
+// + URI，攻击者配好自己的 authenticator 后 activate 即夺取 MFA；受害者未启用
+// 场景则被强开攻击者控制的 MFA = 永久登录 DoS）。未启用用户保持无门（首次
+// 绑定的可用性优先，会话本身已过密码认证）。
 func (h *Handlers) MFASetup(c *gin.Context) {
+	if !guardAuthJSONBody(c) {
+		return
+	}
 	userID := getContextUserIDInt(c)
+	var mfaEnabled bool
+	if err := db.DB.QueryRow("SELECT COALESCE(mfa_enabled,0) FROM users WHERE id=?", userID).Scan(&mfaEnabled); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 MFA 状态失败"})
+		return
+	}
+	if mfaEnabled {
+		var req struct {
+			Password string `json:"password"`
+			Code     string `json:"code"`
+		}
+		_ = c.ShouldBindJSON(&req)
+		var hash string
+		if err := db.DB.QueryRow("SELECT password_hash FROM users WHERE id=?", userID).Scan(&hash); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
+			return
+		}
+		if bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)) != nil {
+			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "密码错误"})
+			return
+		}
+		if ok, verr := services.MFAVerifyCode(userID, req.Code, time.Now()); !ok {
+			msg := "验证码错误"
+			if verr != nil {
+				msg = verr.Error()
+			}
+			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: msg})
+			return
+		}
+	}
 	username := getContextUserID(c)
 	secret, uri, err := services.MFAGenerateSecret(username)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成 MFA 密钥失败"})
 		return
 	}
-	if _, err := db.DB.Exec("UPDATE users SET mfa_pending_secret=? WHERE id=?", secret, userID); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 MFA 密钥失败"})
-		return
+	if _, err := db.DB.Exec("UPDATE users SET mfa_pending_secret='', mfa_pending_fails=0 WHERE id=?", userID); err == nil {
+		_, _ = db.DB.Exec("UPDATE users SET mfa_pending_secret=? WHERE id=?", secret, userID)
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"secret": secret, "uri": uri}})
 }
@@ -105,15 +144,23 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 		return
 	}
 	if ok, _ := services.MFAVerifyPending(userID, req.Code, time.Now()); !ok {
+		// R72 A-F-2：pending 码失败计数——VerifyPending 无锁定无限流（loginRateLimit
+		// 只挂公开路由），持会话者可对 10^6 码空间暴力；5 次失败作废 pending（重新
+		// setup 才能再试），与挑战级计数同为与全局开关无关的硬闸。
+		if invalidated := services.MFARecordPendingFailure(userID); invalidated {
+			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "验证码错误次数过多，绑定已作废，请重新开始绑定"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "验证码错误，请确认 Authenticator 时间同步后重试"})
 		return
 	}
+	services.MFAClearPendingFailures(userID)
 	codes, err := services.MFAActivate(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "启用", "用户认证", services.FormatAuditDetail("MFA", services.AuditResultPart("success")), c.ClientIP())
+	services.RecordAuditLog(c.GetString("username"), "启用", "用户认证", services.FormatAuditDetail("MFA", services.AuditResultPart("success")), c.ClientIP())
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "MFA 已启用", Data: gin.H{"recovery_codes": codes}})
 }
 
@@ -152,7 +199,7 @@ func (h *Handlers) MFADisable(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "禁用", "用户认证", services.FormatAuditDetail("MFA", services.AuditResultPart("success")), c.ClientIP())
+	services.RecordAuditLog(c.GetString("username"), "禁用", "用户认证", services.FormatAuditDetail("MFA", services.AuditResultPart("success")), c.ClientIP())
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "MFA 已禁用"})
 }
 
@@ -206,7 +253,7 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 		return
 	}
 	if ok, verr := services.MFAVerifyCode(userID, req.Code, time.Now()); !ok {
-		services.RecordAuditLog(getContextUserID(c), "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "step-up 验证失败"), c.ClientIP())
+		services.RecordAuditLog(c.GetString("username"), "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "step-up 验证失败"), c.ClientIP())
 		msg := "验证码错误"
 		if verr != nil {
 			msg = verr.Error()
@@ -222,7 +269,7 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "用户不可用"})
 		return
 	}
-	h.respondLoginWithMFA(c, user, passwordVersion, time.Now().Unix())
+	h.respondLoginWithMFA(c, user, passwordVersion, time.Now().Unix(), false)
 }
 
 // —— Admin 端点 ——
@@ -247,6 +294,6 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "重置", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %s", target), services.AuditResultPart("success")), c.ClientIP())
+	services.RecordAuditLog(c.GetString("username"), "重置", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %s", target), services.AuditResultPart("success")), c.ClientIP())
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已重置用户 MFA（用户需重新绑定）"})
 }

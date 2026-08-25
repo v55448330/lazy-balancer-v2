@@ -85,8 +85,15 @@ func (h *Handlers) Login(c *gin.Context) {
 
 	// v2.1.8 MFA 两步登录：密码通过且用户已启用 MFA → 签发 5 分钟单次挑战，
 	// 不发 JWT；前端携 mfa_token 调 /auth/mfa/verify。
+	// R72 C-I-3：MFA 是主认证控制（非纵深层），判定 DB 错误必须 fail-closed——
+	// 此前 err != nil 落穿 respondLogin 直接发 JWT，构成二因子静默绕过。
 	var mfaEnabled bool
-	if err := db.DB.QueryRow("SELECT COALESCE(mfa_enabled,0) FROM users WHERE id=?", user.ID).Scan(&mfaEnabled); err == nil && mfaEnabled {
+	if err := db.DB.QueryRow("SELECT COALESCE(mfa_enabled,0) FROM users WHERE id=?", user.ID).Scan(&mfaEnabled); err != nil {
+		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
+		return
+	}
+	if mfaEnabled {
 		mfaToken, ierr := services.MFAIssueChallenge(user.ID)
 		if ierr != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "签发 MFA 挑战失败"})
@@ -100,19 +107,24 @@ func (h *Handlers) Login(c *gin.Context) {
 }
 
 func (h *Handlers) respondLogin(c *gin.Context, user models.User, passwordVersion int64) {
-	h.respondLoginWithMFA(c, user, passwordVersion, 0)
+	// R72 D-新6：last_login 更新与「登录成功」审计仅登录路径——step-up
+	// （verify-step）复用本函数时不再记假登录/刷新 last_login。
+	h.respondLoginWithMFA(c, user, passwordVersion, 0, true)
 }
 
-// respondLoginWithMFA 携带 mfa_ts 声明签发（0=未验证/不写入——非 MFA 用户与
-// MFA 登录首签均如此；verify/verify-step 成功时传入 now.Unix()）。
-func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwordVersion int64, mfaTs int64) {
-	lastLogin := time.Now().UTC()
-	if _, err := db.DB.Exec("UPDATE users SET last_login = ? WHERE id = ?", lastLogin, user.ID); err != nil {
-		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新登录时间失败"})
-		return
+// respondLoginWithMFA 携带 mfa_ts 声明签发（0=未验证/不写入——非 MFA 用户登录、
+// MFA 首次签发在 verify 成功时传 now；票据登录暂传 0）。isLogin=false 时跳过
+// 登录审计与 last_login 更新（verify-step 的 step-up 场景，R72 D-新6）。
+func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwordVersion int64, mfaTs int64, isLogin bool) {
+	if isLogin {
+		lastLogin := time.Now().UTC()
+		if _, err := db.DB.Exec("UPDATE users SET last_login = ? WHERE id = ?", lastLogin, user.ID); err != nil {
+			services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新登录时间失败"})
+			return
+		}
+		user.LastLogin = sql.NullTime{Time: lastLogin, Valid: true}
 	}
-	user.LastLogin = sql.NullTime{Time: lastLogin, Valid: true}
 
 	nodeMode := "master"
 	var isMaster bool
@@ -154,7 +166,9 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "签发登录令牌失败"})
 		return
 	}
-	services.RecordAuditLog(user.Username, "登录成功", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %d", user.ID), services.AuditResultPart("success")), c.ClientIP())
+	if isLogin {
+		services.RecordAuditLog(user.Username, "登录成功", "用户认证", services.FormatAuditDetail(fmt.Sprintf("用户 %d", user.ID), services.AuditResultPart("success")), c.ClientIP())
+	}
 
 	c.JSON(http.StatusOK, models.LoginResponse{
 		Token:    tokenString,
