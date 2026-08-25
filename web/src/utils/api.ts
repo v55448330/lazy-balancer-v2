@@ -76,6 +76,8 @@ interface RequestClient {
 
 // v2.1.8 MFA step-up 弹码：返回验证码或 null（取消）。
 let mfaPromptOpen = false
+// R72 八次：MFA 宽限窗提示节流（60 秒一次）
+let lastMfaGraceNoticeAt = 0
 const promptMfaCode = (): Promise<string | null> =>
   new Promise((resolve) => {
     if (mfaPromptOpen) { resolve(null); return }
@@ -137,6 +139,17 @@ service.interceptors.request.use(
 service.interceptors.response.use(
   (response) => {
     const res = response.data
+    // R72 八次（用户裁决）：MFA 宽限窗内放行的写操作——告知用户已验证过
+    //（TOTP 同片不可重用，窗口内没有可用码也照常执行）。每 60 秒最多提示一次，
+    // 避免连续写操作刷屏。
+    const mfaVerifiedAgo = response.headers?.['x-mfa-verified-seconds-ago']
+    if (mfaVerifiedAgo !== undefined) {
+      const now = Date.now()
+      if (now - lastMfaGraceNoticeAt > 60_000) {
+        lastMfaGraceNoticeAt = now
+        ElMessage.info(`MFA 已于 ${mfaVerifiedAgo} 秒内验证过，当前操作无需验证`)
+      }
+    }
     if (res.code !== undefined && res.code !== 0 && res.code !== 200) {
       if (!response.config.silent) {
         ElMessage.error(res.message || '请求失败')

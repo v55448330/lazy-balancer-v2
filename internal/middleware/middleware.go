@@ -779,7 +779,11 @@ func mfaStepUpGuard() gin.HandlerFunc {
 		// 语义：距上次 MFA 验证超过 1 分钟的写操作都要求验码（「立即生效」的
 		// 观感），紧邻的连续操作（428→弹码→重试→顺手再存一步）不重复骚扰。
 		mfaTs := c.GetFloat64("mfa_ts")
-		if mfaTs > 0 && time.Since(time.Unix(int64(mfaTs), 0)) < 60*time.Second {
+		if elapsed := time.Since(time.Unix(int64(mfaTs), 0)); mfaTs > 0 && elapsed < 60*time.Second {
+			// R72 八次（用户裁决）：宽限窗内静默放行时告知用户——响应头携带距上次
+			// 验证的秒数（TOTP 同片不可重用，窗口内的操作没有可用码也照常执行），
+			// 前端据此提示「xx 秒内已验证，本次无需验证」。
+			c.Header("X-Mfa-Verified-Seconds-Ago", strconv.FormatInt(int64(elapsed.Seconds()), 10))
 			c.Next()
 			return
 		}
