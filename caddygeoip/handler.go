@@ -139,6 +139,7 @@ var provinceAliases = map[string]string{
 var taiwanCities = map[string]bool{
 	"台北市": true, "新北市": true, "台中市": true, "台南市": true, "高雄市": true,
 	"基隆市": true, "新竹市": true, "嘉义市": true, "新竹县": true, "彰化县": true,
+	"桃园市": true, "云林县": true, "苗栗县": true,
 }
 
 // normalizeProvince 规范 xdb 省列原始值；不可识别（乱码）原样返回（不出现在

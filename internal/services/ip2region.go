@@ -297,6 +297,7 @@ var ip2ProvinceAliases = map[string]string{
 var ip2TaiwanCities = map[string]bool{
 	"台北市": true, "新北市": true, "台中市": true, "台南市": true, "高雄市": true,
 	"基隆市": true, "新竹市": true, "嘉义市": true, "新竹县": true, "彰化县": true,
+	"桃园市": true, "云林县": true, "苗栗县": true,
 }
 
 // normalizeIP2Province 把 xdb 省列原始值规范化为规范省名：别名表归一（上海→
@@ -313,6 +314,50 @@ func normalizeIP2Province(raw string) string {
 	}
 	if ip2TaiwanCities[trimmed] {
 		return ""
+	}
+	// ASCII 省名是乱码/拼音残片（如 UEruemqi），xdb 中文省列恒为多字节——
+	// 过滤（城市级拼音由 normalizeIP2City 映射表处理，省级无可靠映射）。
+	if trimmed[0] < 0x80 {
+		return ""
+	}
+	return trimmed
+}
+
+// ip2PinyinCityFixes xdb 部分段的城市列为拼音/英文形态（v3.17.0 实测 46 条，
+// 如 Guangzhou Shi/Shanghai/Taipei City）——映射为规范中文名；不在此表的
+// ASCII 城市直接过滤（宁缺勿乱，无法可靠音译）。修改需与 caddygeoip 侧
+// cityVar 的原始值行为对齐：CEL 匹配用中文名，xdb 原始拼音段的匹配放弃
+// （这些段同时有相邻中文段覆盖同一城市的主要地址块）。
+var ip2PinyinCityFixes = map[string]string{
+	"Wulumuqi": "乌鲁木齐市", "Shanghai": "上海市", "Beijing": "北京市",
+	"Fengyuan": "丰原市", "Taipei City": "台北市", "Zhongli District": "中坜区",
+	"Changchun Shi": "长春市", "Chengdu Shi": "成都市", "Tianjin": "天津市",
+	"Fuyang Shi": "阜阳市", "Hefei Shi": "合肥市", "Heze Shi": "菏泽市",
+	"Jining Shi": "济宁市", "Linyi Xian": "临沂县", "Weifang Shi": "潍坊市",
+	"Dongguan Shi": "东莞市", "Foshan Shi": "佛山市", "Guangzhou Shi": "广州市",
+	"Maoming Shi": "茂名市", "Shenzhen": "深圳市", "Zhuhai Shi": "珠海市",
+	"Nanning Shi": "南宁市", "Nanjing Shi": "南京市", "Nantong Shi": "南通市",
+	"Tongshan": "铜山区", "Yancheng Shi": "盐城市", "Ganzhou Shi": "赣州市",
+	"Baoding Shi": "保定市", "Hanshan Qu": "含山区", "Langfang Shi": "廊坊市",
+	"Shijiazhuang Shi": "石家庄市", "Nanyang Shi": "南阳市", "Zhengzhou Shi": "郑州市",
+	"Zhoukou Shi": "周口市", "Zhumadian Shi": "驻马店市", "Ningbo Shi": "宁波市",
+	"Wuhan Shi": "武汉市", "Xiangyang": "襄阳市", "Changsha Shi": "长沙市",
+	"Hengyang Xian": "衡阳县", "Shenyang Shi": "沈阳市", "Chongqing": "重庆市",
+	"Guozhen": "郭镇", "Xi'an Shi": "西安市", "Kowloon": "九龙",
+}
+
+// normalizeIP2City 规范城市列：拼音映射为中文；无法映射的 ASCII 城市返回空
+// （过滤）。中文城市原样通过。
+func normalizeIP2City(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "0" {
+		return ""
+	}
+	if fixed, ok := ip2PinyinCityFixes[trimmed]; ok {
+		return fixed
+	}
+	if trimmed[0] < 0x80 {
+		return "" // 未映射的拼音/英文段
 	}
 	return trimmed
 }
@@ -374,21 +419,21 @@ func regionTreeFromXDB(path string) *IP2RegionRegionTree {
 		prov := normalizeIP2Province(fields[1])
 		if prov == "" {
 			// 台湾城市误入省列：归入台湾省城市集（其省列值即城市名）。
-			if ip2TaiwanCities[strings.TrimSpace(fields[1])] {
+			rawProv := strings.TrimSpace(fields[1])
+			if ip2TaiwanCities[rawProv] {
 				provinces["台湾省"] = true
-				city := strings.TrimSpace(fields[1])
 				set := cities["台湾省"]
 				if set == nil {
 					set = map[string]bool{}
 					cities["台湾省"] = set
 				}
-				set[city] = true
+				set[rawProv] = true
 			}
 			continue
 		}
 		provinces[prov] = true
-		city := strings.TrimSpace(fields[2])
-		if city == "" || city == "0" {
+		city := normalizeIP2City(fields[2])
+		if city == "" {
 			continue
 		}
 		set := cities[prov]
@@ -402,13 +447,17 @@ func regionTreeFromXDB(path string) *IP2RegionRegionTree {
 		return nil
 	}
 	tree := &IP2RegionRegionTree{
-		Provinces: make([]string, 0, len(provinces)),
+		Provinces: make([]string, 0, len(provinces)+1),
 		Cities:    make(map[string][]string, len(cities)),
 	}
 	for prov := range provinces {
 		tree.Provinces = append(tree.Provinces, prov)
 	}
 	sort.Strings(tree.Provinces)
+	// 海外统一为一级条目（用户裁决：不区分国家/省市），固定末位——「海外」
+	// 的 UTF-8 字节序落在中文省名中间，参与排序会插在省份列表中间；校验端
+	// known 集合不依赖顺序，选项树展示与采样列表口径一致（海外恒在最后）。
+	tree.Provinces = append(tree.Provinces, "海外")
 	for prov, set := range cities {
 		list := make([]string, 0, len(set))
 		for city := range set {
@@ -443,7 +492,9 @@ func getCachedRegionTree() *IP2RegionRegionTree {
 
 func ip2RegionLivePathForTreeCache() string { return ip2regionLivePath + ".regions.json" }
 
-// writeRegionTreeCache 原子写树缓存（在库装载/更新成功时调用）。
+// writeRegionTreeCache 原子写树缓存（在库装载/更新成功时调用）。留 INFO 更新
+// 日志（R72 二十四次）：缓存是派生数据不进审计，但静默重建会让「选项树何时
+// 变化」在排障时不可见。
 func writeRegionTreeCache(tree *IP2RegionRegionTree) {
 	if tree == nil {
 		return
@@ -453,4 +504,9 @@ func writeRegionTreeCache(tree *IP2RegionRegionTree) {
 		return
 	}
 	writeProvincesCache(ip2RegionLivePathForTreeCache(), data)
+	cityTotal := 0
+	for _, cities := range tree.Cities {
+		cityTotal += len(cities)
+	}
+	writeIP2RegionUpdateLog("INFO", "idle", fmt.Sprintf("地域树缓存已重建：%d 省级 / %d 城市", len(tree.Provinces), cityTotal))
 }

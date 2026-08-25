@@ -42,11 +42,14 @@ func TestIP2RegionRegionTree_scan(t *testing.T) {
 	if !foundCity {
 		t.Fatal("no cities found in tree（xdb 段含城市列，扫描应产出至少一省的城市集）")
 	}
-	// 排序不变量。
-	for i := 1; i < len(tree.Provinces); i++ {
+	// 排序不变量：前 n-1（省份）严格递增，海外固定末位。
+	for i := 1; i < len(tree.Provinces)-1; i++ {
 		if tree.Provinces[i-1] >= tree.Provinces[i] {
 			t.Fatalf("provinces not sorted: %q >= %q", tree.Provinces[i-1], tree.Provinces[i])
 		}
+	}
+	if tree.Provinces[len(tree.Provinces)-1] != "海外" {
+		t.Fatalf("海外 must be last, got %q", tree.Provinces[len(tree.Provinces)-1])
 	}
 }
 

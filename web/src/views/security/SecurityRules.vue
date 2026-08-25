@@ -41,7 +41,7 @@
         <el-descriptions-item label="下次更新">{{ formatDate(crsInfo.next_update) || '—' }}</el-descriptions-item>
       </el-descriptions>
       <el-descriptions :column="3" border class="ip2region-desc">
-        <el-descriptions-item label="IP 库版本"><span class="version-cell">{{ (ip2regionInfo.version && ip2regionInfo.version !== 'unknown') ? ip2regionInfo.version : '未安装' }}</span></el-descriptions-item>
+        <el-descriptions-item label="IP 库版本"><span class="version-cell">{{ ip2regionVersionLabel }}</span></el-descriptions-item>
         <el-descriptions-item label="IP 规则数">{{ ip2regionInfo.db_size ? ip2regionInfo.db_size.toLocaleString() : '—' }}</el-descriptions-item>
         <el-descriptions-item label="更新时间">{{ formatDate(ip2regionInfo.updated_at) || '—' }}</el-descriptions-item>
         <el-descriptions-item label="自动更新">
@@ -52,8 +52,10 @@
         <el-descriptions-item label="更新状态">
           <div class="crs-cell-flex">
             <el-tooltip :disabled="!ip2regionFailureMessage" :content="ip2regionFailureMessage">
-              <el-tag v-if="!ip2regionInfo.version || ip2regionInfo.version === 'unknown'" type="info" size="small" effect="light">未安装</el-tag>
-              <el-tag v-else :type="ip2regionStatusTagType(ip2regionInfo.update_status)" size="small" effect="light">{{ ip2regionStatusLabel(ip2regionInfo.update_status) }}</el-tag>
+              <!-- R72 二十四次：单 tag 形态（v-if/v-else 双分支在数据加载时切换
+                   DOM 结构引发 descriptions 列宽重排——「表格中间闪一下」）；unknown
+                   由计算属性并入口径，结构恒定。 -->
+              <el-tag :type="ip2regionStatusTagType(ip2regionStatusForTag)" size="small" effect="light">{{ ip2regionStatusLabel(ip2regionStatusForTag) }}</el-tag>
             </el-tooltip>
           </div>
         </el-descriptions-item>
@@ -348,15 +350,25 @@ const ip2regionStageLabels: Record<string, string> = {
   failed: '更新失败',
   idle: '空闲',
 }
-const ip2regionStatusLabel = (s: string): string => ip2regionStageLabels[s] || s || '—'
+const ip2regionStageLabelsWithNotInstalled: Record<string, string> = { ...ip2regionStageLabels, 'not-installed': '未安装' }
+const ip2regionStatusLabel = (s: string): string => ip2regionStageLabelsWithNotInstalled[s] || s || '—'
 const ip2regionStatusTagType = (s: string): 'success' | 'warning' | 'danger' | 'info' => {
-  if (!s || s === 'idle') return 'info'
+  if (s === 'not-installed' || !s || s === 'idle') return 'info'
   if (s === 'checking' || s === 'downloading' || s === 'installing' || s === 'reloading') return 'warning'
   if (s === 'success') return 'success'
   if (s === 'failed') return 'danger'
   return 'info'
 }
 const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', next_update: '', update_status: '', message: '' })
+const ip2regionVersionLabel = computed(() =>
+  (ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown') ? ip2regionInfo.value.version : '未安装',
+)
+// unknown/空版本统一显示「未安装」（灰），结构上与正常态同一 tag 元素。
+const ip2regionStatusForTag = computed(() => {
+  const v = ip2regionInfo.value.version
+  if (!v || v === 'unknown') return 'not-installed'
+  return ip2regionInfo.value.update_status
+})
 const ip2regionFailureMessage = computed(() => {
   const s = ip2regionInfo.value.update_status
   return (s === 'failed' || s === '更新失败') ? ip2regionInfo.value.message : ''
