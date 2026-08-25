@@ -31,9 +31,18 @@
         <!-- R72 十九次（用户需求）：规则 ID 筛选替换为三列（负载规则/触发规则/策略）
              服务端筛选（rule_name/rule_triggered/policy_name LIKE）。 -->
         <el-input v-model="filters.rule_name" placeholder="负载规则" clearable style="width: 140px" @keyup.enter="applyFilters" />
-        <el-input v-model="filters.rule_triggered" placeholder="触发规则" clearable style="width: 140px" @keyup.enter="applyFilters" />
+        <!-- R72 二十次：触发规则改下拉+可输入——选项即表格显示的 family 标签（后端
+             映射为 ID 前缀匹配）；也可直接输入 CRS 规则 ID（如 942100）或消息关键词。 -->
+        <el-select v-model="filters.rule_triggered" placeholder="触发规则" clearable filterable allow-create style="width: 140px">
+          <el-option label="IP 访问控制" value="IP 访问控制" />
+          <el-option label="请求阻断评估" value="请求阻断评估" />
+          <el-option label="协议异常" value="协议异常" />
+          <el-option label="协议攻击" value="协议攻击" />
+          <el-option label="自定义规则" value="自定义规则" />
+        </el-select>
         <el-input v-model="filters.policy_name" placeholder="策略" clearable style="width: 120px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 150px" @keyup.enter="applyFilters" />
+        <el-input v-model="filters.uri" placeholder="URI" clearable style="width: 160px" @keyup.enter="applyFilters" />
         <div class="filter-actions">
           <el-button type="primary" @click="applyFilters">筛选</el-button>
           <el-button @click="resetFilters">重置</el-button>
@@ -121,7 +130,7 @@ const events = ref<SecurityEvent[]>([])
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const filters = ref({ action: '', ip: '', rule_name: '', rule_triggered: '', policy_name: '', rule_caddy_id: '', timeRange: null as [string, string] | null })
+const filters = ref({ action: '', ip: '', uri: '', rule_name: '', rule_triggered: '', policy_name: '', rule_caddy_id: '', timeRange: null as [string, string] | null })
 
 const applyFilters = () => {
   // 时间区间校验：开始晚于结束时提示并清除该筛选（后端同样兜底 400）。
@@ -136,7 +145,7 @@ const applyFilters = () => {
 }
 
 const resetFilters = () => {
-  filters.value = { action: '', ip: '', rule_name: '', rule_triggered: '', policy_name: '', rule_caddy_id: '', timeRange: null }
+  filters.value = { action: '', ip: '', uri: '', rule_name: '', rule_triggered: '', policy_name: '', rule_caddy_id: '', timeRange: null }
   page.value = 1
   fetchEvents()
 }
@@ -168,6 +177,7 @@ const fetchEvents = async () => {
     if (filters.value.rule_name) p.set('rule_name', filters.value.rule_name)
     if (filters.value.rule_triggered) p.set('rule_triggered', filters.value.rule_triggered)
     if (filters.value.policy_name) p.set('policy_name', filters.value.policy_name)
+    if (filters.value.uri) p.set('uri', filters.value.uri)
     if (filters.value.timeRange?.[0]) p.set('start_time', filters.value.timeRange[0])
     if (filters.value.timeRange?.[1]) p.set('end_time', filters.value.timeRange[1])
     const res = await request.get<APIResponse<{ events: SecurityEvent[]; total: number }>>(`/security/events?${p}`)

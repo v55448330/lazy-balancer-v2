@@ -1159,20 +1159,66 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		args = append(args, ruleID)
 	}
 	// R72 十九次（用户需求）：事件日志三列（负载规则/触发规则/策略）服务端筛选
-	// ——r1 匹配事件时规则名快照（rule_name，跨删改名存活），r2 匹配 CRS/自定义
-	// 触发规则（rule_triggered），policy 匹配策略名快照（policy_name）。快照列为
-	// 摄取时落库的冗余文本，LIKE 子串即可（无索引，页级分页下可接受）。
+	// ——r1 匹配事件时规则名快照（rule_name，跨删改名存活），policy 匹配策略名
+	// 快照（policy_name）。快照列为摄取时落库的冗余文本，LIKE 子串即可（无索引，
+	// 页级分页下可接受）。
 	if ruleName := strings.TrimSpace(c.Query("rule_name")); ruleName != "" {
 		where += " AND rule_name LIKE ?"
 		args = append(args, "%"+ruleName+"%")
 	}
-	if ruleTriggered := strings.TrimSpace(c.Query("rule_triggered")); ruleTriggered != "" {
-		where += " AND rule_triggered LIKE ?"
-		args = append(args, "%"+ruleTriggered+"%")
-	}
 	if policyName := strings.TrimSpace(c.Query("policy_name")); policyName != "" {
 		where += " AND policy_name LIKE ?"
 		args = append(args, "%"+policyName+"%")
+	}
+	// R72 二十次：rule_triggered 筛选对齐表格显示语义——列显示的是 family 标签
+	//（IP 访问控制/请求阻断评估/协议异常/协议攻击/自定义规则）或原始 ID；用户按
+	// 显示文本筛选时纯 ID LIKE 必然搜不到。输入按 family 标签映射为 ID 前缀集合
+	// OR 匹配，否则退回 ID/消息子串（触发规则原文在 rule_msg，一并命中便于用
+	// 'sqlmap' 这类消息关键词定位）。
+	if ruleTriggered := strings.TrimSpace(c.Query("rule_triggered")); ruleTriggered != "" {
+		familyPrefixes := map[string][]string{
+			"IP 访问控制": {"2", "3", "4", "5"},
+			"请求阻断评估":  {"949"},
+			"协议异常":    {"920"},
+			"协议攻击":    {"921"},
+			"自定义规则":   {"10", "11", "12", "13", "14", "15", "16", "17", "18", "19"},
+		}
+		prefixes, isFamily := familyPrefixes[ruleTriggered]
+		switch {
+		case isFamily:
+			ors := make([]string, 0, len(prefixes))
+			for _, p := range prefixes {
+				ors = append(ors, "rule_triggered LIKE ?")
+				args = append(args, p+"%")
+			}
+			where += " AND (" + strings.Join(ors, " OR ") + ")"
+		case strings.HasPrefix(ruleTriggered, "IP"), strings.HasPrefix(ruleTriggered, "请求阻断"), strings.HasPrefix(ruleTriggered, "协议"):
+			// family 标签的部分输入：宽匹配（前缀命中任一 family 即可）。
+			matched := false
+			ors := make([]string, 0, 4)
+			for label, ps := range familyPrefixes {
+				if strings.HasPrefix(label, ruleTriggered) {
+					matched = true
+					for _, p := range ps {
+						ors = append(ors, "rule_triggered LIKE ?")
+						args = append(args, p+"%")
+					}
+				}
+			}
+			if matched {
+				where += " AND (" + strings.Join(ors, " OR ") + ")"
+			} else {
+				where += " AND 1=0"
+			}
+		default:
+			where += " AND (rule_triggered LIKE ? OR rule_msg LIKE ?)"
+			args = append(args, "%"+ruleTriggered+"%", "%"+ruleTriggered+"%")
+		}
+	}
+	// R72 二十次（用户需求）：URI 筛选（子串）。
+	if uri := strings.TrimSpace(c.Query("uri")); uri != "" {
+		where += " AND uri LIKE ?"
+		args = append(args, "%"+uri+"%")
 	}
 	// 时间范围按配置时区解析（event_time 为 UTC），换算后比对；日期-only 补全天边界
 	loc := services.CurrentLocation()
