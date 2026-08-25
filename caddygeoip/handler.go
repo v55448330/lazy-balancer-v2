@@ -105,12 +105,19 @@ func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
 	}
 	// R72 二十三次：市级粒度——region 第 3 列为城市；无效值（空/0）置空串，
 	// 使 CEL {http.vars.geoip.city} == X 对无城市段恒不命中。
+	// R72 二十五次：城市列经 normalizeCity 规范化——xdb 部分段城市列为拼音/
+	// 英文（Guangzhou Shi/Taipei City），策略树侧已映射为中文，发射侧不映射
+	// 会导致「广东省/广州市」类城市级规则对这些段恒不命中。
+	// 台湾城市误入省列的段：城市名在省列（城市列是该段的乱码罗马化值）——
+	// 城市变量改发省列值，与树侧归并语义一致，使「台湾省/台中市」可命中。
 	if len(fields) >= 3 {
-		if city := fields[2]; city != "" && city != "0" {
-			caddyhttp.SetVar(ctx, "geoip.city", city)
-		} else {
-			caddyhttp.SetVar(ctx, "geoip.city", "")
+		city := ""
+		if rawProv := strings.TrimSpace(fields[1]); taiwanCities[rawProv] {
+			city = rawProv
+		} else if c := strings.TrimSpace(fields[2]); c != "" && c != "0" {
+			city = normalizeCity(c)
 		}
+		caddyhttp.SetVar(ctx, "geoip.city", city)
 	}
 }
 
@@ -131,7 +138,9 @@ func realClientIP(r *http.Request) string {
 // provinceAliases 与 internal/services/ip2region.go 的 ip2ProvinceAliases 同款
 // （叶子 Caddy 模块不可 import internal 包，小表复制，修改需两侧同步）。
 var provinceAliases = map[string]string{
-	"北京": "北京市", "上海": "上海市", "天津": "天津市", "重庆": "重庆市",
+	// (UEruemqi, Wulumuqi) 段的省列乱码转写——按新疆发射（与树侧同步）。
+	"UEruemqi": "新疆维吾尔自治区",
+	"北京":       "北京市", "上海": "上海市", "天津": "天津市", "重庆": "重庆市",
 	"广西": "广西壮族自治区", "内蒙古": "内蒙古自治区", "西藏": "西藏自治区",
 	"宁夏": "宁夏回族自治区", "新疆": "新疆维吾尔自治区", "台湾": "台湾省",
 }
@@ -144,7 +153,42 @@ var taiwanCities = map[string]bool{
 
 // normalizeProvince 规范 xdb 省列原始值；不可识别（乱码）原样返回（不出现在
 // 选项树中，策略不会配置）；台湾城市误入省列时省变量按台湾省发射、城市变量
-// 照常发原值，使「台湾省/台中市」条目可命中。
+// 改发省列值（见 setGeoIPPlaceholders——该类段的城市列是乱码值）。
+// cityPinyinFixes 与 internal/services/ip2region.go 的 ip2PinyinCityFixes 同款
+// （叶子 Caddy 模块不可 import internal 包，表复制，修改需两侧同步）。xdb 部分
+// 段的城市列为拼音/英文形态，发射前映射为规范中文名，使城市级 CEL 规则可命中。
+var cityPinyinFixes = map[string]string{
+	"Wulumuqi": "乌鲁木齐市", "Shanghai": "上海市", "Beijing": "北京市",
+	"Fengyuan": "丰原市", "Taipei City": "台北市", "Zhongli District": "中坜区",
+	"Changchun Shi": "长春市", "Chengdu Shi": "成都市", "Tianjin": "天津市",
+	"Fuyang Shi": "阜阳市", "Hefei Shi": "合肥市", "Heze Shi": "菏泽市",
+	"Jining Shi": "济宁市", "Linyi Xian": "临沂县", "Weifang Shi": "潍坊市",
+	"Dongguan Shi": "东莞市", "Foshan Shi": "佛山市", "Guangzhou Shi": "广州市",
+	"Maoming Shi": "茂名市", "Shenzhen": "深圳市", "Zhuhai Shi": "珠海市",
+	"Nanning Shi": "南宁市", "Nanjing Shi": "南京市", "Nantong Shi": "南通市",
+	"Tongshan": "铜山区", "Yancheng Shi": "盐城市", "Ganzhou Shi": "赣州市",
+	"Baoding Shi": "保定市", "Hanshan Qu": "含山区", "Langfang Shi": "廊坊市",
+	"Shijiazhuang Shi": "石家庄市", "Nanyang Shi": "南阳市", "Zhengzhou Shi": "郑州市",
+	"Zhoukou Shi": "周口市", "Zhumadian Shi": "驻马店市", "Ningbo Shi": "宁波市",
+	"Wuhan Shi": "武汉市", "Xiangyang": "襄阳市", "Changsha Shi": "长沙市",
+	"Hengyang Xian": "衡阳县", "Shenyang Shi": "沈阳市", "Chongqing": "重庆市",
+	"Guozhen": "郭镇", "Xi'an Shi": "西安市", "Kowloon": "九龙",
+}
+
+// normalizeCity 规范 xdb 城市列原始值：拼音映射表命中返回规范中文；未映射的
+// ASCII 城市原样返回（选项树侧会过滤、策略不会配置，发射原值恒不命中——与
+// normalizeProvince 的不可识别语义一致）；中文城市原样通过。
+func normalizeCity(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "0" {
+		return ""
+	}
+	if fixed, ok := cityPinyinFixes[trimmed]; ok {
+		return fixed
+	}
+	return trimmed
+}
+
 func normalizeProvince(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if canonical, ok := provinceAliases[trimmed]; ok {

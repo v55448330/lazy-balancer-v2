@@ -2172,3 +2172,42 @@ func TestGenerateSingleRuleCaddyConfig_dynamicDNS_selectionPolicy(t *testing.T) 
 	assertEqual(t, staticSelection["policy"], "weighted_round_robin")
 	assertEqual(t, staticSelection["weights"], []int{1, 2})
 }
+
+func TestApplyConfig_forceReloadHeader(t *testing.T) {
+	// R72 二十五次：数据类更新（xdb/CRS/证书文件）不改变配置 JSON，Caddy 对字节
+	// 相同的 /load 短路跳过 provision（errSameConfig）——force 变体必须带
+	// Cache-Control: must-revalidate 绕过短路；常规 apply 不得带（避免无谓的
+	// 全量重载开销）。
+	var loads int
+	var lastCacheControl string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/load" {
+			loads++
+			lastCacheControl = r.Header.Get("Cache-Control")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	svc := NewCaddyService(server.URL)
+	config := map[string]interface{}{"apps": map[string]interface{}{}}
+
+	if err := svc.ApplyConfig(config); err != nil {
+		t.Fatalf("regular apply: %v", err)
+	}
+	if loads != 1 {
+		t.Fatalf("loads=%d, want 1", loads)
+	}
+	if lastCacheControl != "" {
+		t.Fatalf("regular apply must not force reload, got Cache-Control=%q", lastCacheControl)
+	}
+
+	if err := svc.ApplyConfigForce(config); err != nil {
+		t.Fatalf("force apply: %v", err)
+	}
+	if loads != 2 {
+		t.Fatalf("loads=%d, want 2", loads)
+	}
+	if lastCacheControl != "must-revalidate" {
+		t.Fatalf("force apply must send Cache-Control: must-revalidate, got %q", lastCacheControl)
+	}
+}

@@ -283,8 +283,17 @@ func GetIP2RegionProvinceList() []string {
 // （上海/上海市、广西/广西壮族自治区）、台湾城市误入省列（台中市等）与个别
 // 乱码（UEruemqi）。选项树与 CEL 发射变量（caddygeoip 同款表，见
 // caddygeoip/handler.go 的 sync 注释）统一用规范名，两边一致才能命中。
+// treeCacheRevision 地域树缓存修订号——规范化规则（映射/别名/结构）变更时
+// 递增，旧缓存据此判定过期重建。ASCII 残留探测只能发现「缓存里有脏数据」，
+// 发现不了「该有而没有」的条目（如 r25 前整段被丢的 新疆/乌鲁木齐市）。
+const treeCacheRevision = "r25"
+
 var ip2ProvinceAliases = map[string]string{
-	"北京": "北京市", "上海市": "上海市", "上海": "上海市", "天津市": "天津市", "天津": "天津市",
+	// v3.17.0 段 (UEruemqi, Wulumuqi)：省列是城市名 Ürümqi 的乱码转写、城市列
+	// 拼音已可映射——别名把该段回收为 新疆维吾尔自治区/乌鲁木齐市（此前整段
+	// 被丢弃，树缺这对省市）。发射侧 provinceAliases 同步。
+	"UEruemqi": "新疆维吾尔自治区",
+	"北京":       "北京市", "上海市": "上海市", "上海": "上海市", "天津市": "天津市", "天津": "天津市",
 	"重庆市": "重庆市", "重庆": "重庆市",
 	"广西壮族自治区": "广西壮族自治区", "广西": "广西壮族自治区",
 	"内蒙古自治区": "内蒙古自治区", "内蒙古": "内蒙古自治区",
@@ -327,9 +336,9 @@ func normalizeIP2Province(raw string) string {
 
 // ip2PinyinCityFixes xdb 部分段的城市列为拼音/英文形态（v3.17.0 实测 46 条，
 // 如 Guangzhou Shi/Shanghai/Taipei City）——映射为规范中文名；不在此表的
-// ASCII 城市直接过滤（宁缺勿乱，无法可靠音译）。修改需与 caddygeoip 侧
-// cityVar 的原始值行为对齐：CEL 匹配用中文名，xdb 原始拼音段的匹配放弃
-// （这些段同时有相邻中文段覆盖同一城市的主要地址块）。
+// ASCII 城市直接过滤（宁缺勿乱，无法可靠音译）。R72 二十五次起发射侧
+// （caddygeoip normalizeCity）用同款表同步映射——城市级 CEL 规则对拼音段
+// 可命中，两侧表修改需同步。
 var ip2PinyinCityFixes = map[string]string{
 	"Wulumuqi": "乌鲁木齐市", "Shanghai": "上海市", "Beijing": "北京市",
 	"Fengyuan": "丰原市", "Taipei City": "台北市", "Zhongli District": "中坜区",
@@ -370,8 +379,14 @@ func normalizeIP2City(raw string) string {
 // region 数据按 dataPtr 去重读取（大量段共享同一 region 指针，实际读取量为
 // 唯一 region 数，远小于 77.5 万段）。
 type IP2RegionRegionTree struct {
+	Revision  string              `json:"revision,omitempty"`
 	Provinces []string            `json:"provinces"`
 	Cities    map[string][]string `json:"cities"`
+	// DroppedASCIIProvinces / DroppedASCIICities：扫描中因不在映射表而被过滤的
+	// ASCII 省/城市段数（宁缺勿乱）。当前 v3.17.0 实测均为 0；未来 xdb 版本
+	// 新增拼音/乱码段时计数 >0 并进重建日志——丢失可见而非静默。
+	DroppedASCIIProvinces int `json:"dropped_ascii_provinces"`
+	DroppedASCIICities    int `json:"dropped_ascii_cities"`
 }
 
 func regionTreeFromXDB(path string) *IP2RegionRegionTree {
@@ -396,6 +411,7 @@ func regionTreeFromXDB(path string) *IP2RegionRegionTree {
 	seg := make([]byte, 14)
 	provinces := map[string]bool{}
 	cities := map[string]map[string]bool{}
+	var droppedASCIIProvinces, droppedASCIICities int
 	seen := map[uint32]bool{}
 	for ptr := minPtr; ptr <= maxPtr; ptr += 14 {
 		if _, err := f.ReadAt(seg, int64(ptr)); err != nil {
@@ -431,11 +447,19 @@ func regionTreeFromXDB(path string) *IP2RegionRegionTree {
 				}
 				set[rawProv] = true
 			}
+			// ASCII 省名（乱码/拼音残片，如旧版 UEruemqi）过滤计数。
+			if rawProv != "" && rawProv != "0" && rawProv[0] < 0x80 {
+				droppedASCIIProvinces++
+			}
 			continue
 		}
 		provinces[prov] = true
 		city := normalizeIP2City(fields[2])
 		if city == "" {
+			// 未映射 ASCII 城市（宁缺勿乱）计数——提醒未来版本补映射表。
+			if rawCity := strings.TrimSpace(fields[2]); rawCity != "" && rawCity != "0" && rawCity[0] < 0x80 {
+				droppedASCIICities++
+			}
 			continue
 		}
 		set := cities[prov]
@@ -449,8 +473,11 @@ func regionTreeFromXDB(path string) *IP2RegionRegionTree {
 		return nil
 	}
 	tree := &IP2RegionRegionTree{
-		Provinces: make([]string, 0, len(provinces)+1),
-		Cities:    make(map[string][]string, len(cities)),
+		Revision:              treeCacheRevision,
+		Provinces:             make([]string, 0, len(provinces)+1),
+		Cities:                make(map[string][]string, len(cities)),
+		DroppedASCIIProvinces: droppedASCIIProvinces,
+		DroppedASCIICities:    droppedASCIICities,
 	}
 	for prov := range provinces {
 		tree.Provinces = append(tree.Provinces, prov)
@@ -501,6 +528,9 @@ func staleRegionTreeCache(path string) bool {
 	if tree == nil {
 		return true
 	}
+	if tree.Revision != treeCacheRevision {
+		return true
+	}
 	for _, prov := range tree.Provinces {
 		if prov != "海外" && prov[0] < 0x80 {
 			return true
@@ -532,5 +562,5 @@ func writeRegionTreeCache(tree *IP2RegionRegionTree) {
 	for _, cities := range tree.Cities {
 		cityTotal += len(cities)
 	}
-	writeIP2RegionUpdateLog("INFO", "idle", fmt.Sprintf("地域树缓存已重建：%d 省级 / %d 城市", len(tree.Provinces), cityTotal))
+	writeIP2RegionUpdateLog("INFO", "idle", fmt.Sprintf("地域树缓存已重建：%d 省级 / %d 城市（未映射 ASCII 段已过滤：省 %d / 城市 %d）", len(tree.Provinces), cityTotal, tree.DroppedASCIIProvinces, tree.DroppedASCIICities))
 }

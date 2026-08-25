@@ -51,6 +51,27 @@ func TestIP2RegionRegionTree_scan(t *testing.T) {
 	if tree.Provinces[len(tree.Provinces)-1] != "海外" {
 		t.Fatalf("海外 must be last, got %q", tree.Provinces[len(tree.Provinces)-1])
 	}
+	// R72 二十五次：未映射 ASCII 段清零断言——当前 v3.17.0 全部拼音/英文段已
+	// 映射；未来 xdb 版本新增未映射段时计数 >0，此断言失败提醒补映射表
+	//（丢失可见而非静默过滤）。
+	if tree.DroppedASCIIProvinces != 0 || tree.DroppedASCIICities != 0 {
+		t.Fatalf("unmapped ASCII segments dropped: prov=%d city=%d — 映射表需为新版 xdb 补条目", tree.DroppedASCIIProvinces, tree.DroppedASCIICities)
+	}
+	// r25：UEruemqi 段回收——新疆/乌鲁木齐市 必须在位（此前整段被丢）；
+	// revision 机制保证旧缓存自动重建。
+	if tree.Revision != treeCacheRevision {
+		t.Fatalf("tree revision=%q, want %q", tree.Revision, treeCacheRevision)
+	}
+	foundUrumqi := false
+	for _, c := range tree.Cities["新疆维吾尔自治区"] {
+		if c == "乌鲁木齐市" {
+			foundUrumqi = true
+			break
+		}
+	}
+	if !foundUrumqi {
+		t.Fatal("新疆维吾尔自治区 缺 乌鲁木齐市（UEruemqi 段未回收）")
+	}
 }
 
 // CEL 双形态：纯省 = 整省匹配；省/市 = 联合匹配。

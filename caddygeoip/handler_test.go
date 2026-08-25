@@ -167,3 +167,35 @@ func TestRealClientIP_honorsHeadersAndStripsPort(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeCity_pinyinMappedAndPassthrough(t *testing.T) {
+	// R72 二十五次：发射侧城市列规范化——拼音段映射为规范中文（策略树侧同款
+	// 表，城市级 CEL 规则对拼音段可命中）；中文原样通过；无效值置空。
+	cases := map[string]string{
+		"Guangzhou Shi": "广州市",
+		"Taipei City":   "台北市",
+		"Shenzhen":      "深圳市",
+		"深圳市":           "深圳市",
+		"":              "",
+		"0":             "",
+	}
+	for in, want := range cases {
+		if got := normalizeCity(in); got != want {
+			t.Fatalf("normalizeCity(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestNormalizeProvince_taiwanCityPromotion(t *testing.T) {
+	// 台湾城市误入省列时按台湾省发射（城市变量照常发原值）。
+	if got := normalizeProvince("桃园市"); got != "台湾省" {
+		t.Fatalf("normalizeProvince(桃园市) = %q, want 台湾省", got)
+	}
+	if got := normalizeProvince("上海"); got != "上海市" {
+		t.Fatalf("normalizeProvince(上海) = %q, want 上海市", got)
+	}
+	// UEruemqi 乱码省列按新疆发射（与树侧同步，段回收）。
+	if got := normalizeProvince("UEruemqi"); got != "新疆维吾尔自治区" {
+		t.Fatalf("normalizeProvince(UEruemqi) = %q, want 新疆维吾尔自治区", got)
+	}
+}

@@ -94,8 +94,11 @@ func run() error {
 
 	// Initialize services
 	caddyService := services.NewCaddyService(cfg.CaddyAdminURL)
+	// R72 二十五次：数据类更新（xdb/CRS/CA 证书文件）后的重载必须强制——配置
+	// JSON 不变时 Caddy 会跳过 provision（errSameConfig 短路），插件内存停留
+	// 旧库而更新流程报成功。三个消费方（IP 库/CRS/CA 队列）全是数据更新入口。
 	caddyReloader := func() error {
-		return caddyService.GenerateAndApplyConfig()
+		return caddyService.GenerateAndApplyConfigForce()
 	}
 	services.InitCAQueueManager(caddyReloader, cfg.DataDir)
 	services.InitCRSUpdateManager(caddyReloader)

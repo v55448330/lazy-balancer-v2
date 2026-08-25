@@ -88,7 +88,35 @@ func (s *CaddyService) GenerateAndApplyConfig() error {
 	return s.applyConfigLocked(generateCaddyConfigFromStore(db.DB))
 }
 
+// GenerateAndApplyConfigForce 强制重载变体：POST /load 带 Cache-Control:
+// must-revalidate，绕过 Caddy 对字节相同配置的跳过（caddy v2.11.4 changeConfig
+// 对相同 JSON 短路返回 errSameConfig、不执行 provision）。xdb/CRS/证书文件是
+// 配置 JSON 之外的磁盘数据（geoip handler 恒为 {"handler":"geoip2region"}，
+// CRS include 只嵌路径），替换后 JSON 不变——不强制重载时 Caddy 插件
+// （geoip searcher / coraza WAF / TLS 证书）内存仍停留旧库，更新流程却已报
+// 成功。所有「磁盘数据变化」的重载入口（IP 库/CRS/CA 证书队列）必须走本变体。
+func (s *CaddyService) GenerateAndApplyConfigForce() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.applyConfigLockedOpt(generateCaddyConfigFromStore(db.DB), true)
+}
+
 func (s *CaddyService) applyConfigLocked(config map[string]interface{}) (err error) {
+	return s.applyConfigLockedOpt(config, false)
+}
+
+// ApplyConfigForce 与 ApplyConfig 同语义，但强制 Caddy 重载（Cache-Control:
+// must-revalidate）——供数据类更新路径与测试使用。
+func (s *CaddyService) ApplyConfigForce(config map[string]interface{}) (err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if store, ok := config[caddyConfigStoreKey].(caddyConfigStore); ok {
+		config = generateCaddyConfigFromStore(store)
+	}
+	return s.applyConfigLockedOpt(config, true)
+}
+
+func (s *CaddyService) applyConfigLockedOpt(config map[string]interface{}, force bool) (err error) {
 	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {
 		return errors.New(message)
 	}
@@ -106,7 +134,18 @@ func (s *CaddyService) applyConfigLocked(config map[string]interface{}) (err err
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	resp, err := s.client.Post(s.adminURL+"/load", "application/json", bytes.NewReader(data))
+	req, err := http.NewRequest(http.MethodPost, s.adminURL+"/load", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("failed to build config apply request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if force {
+		// Caddy admin 官方逃生口（admin.go: forceReload := Header "Cache-Control"
+		// == "must-revalidate"）：相同 JSON 也执行完整 provision，磁盘数据
+		//（xdb/CRS/证书）的变化得以进入插件内存。
+		req.Header.Set("Cache-Control", "must-revalidate")
+	}
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to apply config: %w", err)
 	}
