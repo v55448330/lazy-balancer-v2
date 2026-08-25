@@ -205,10 +205,19 @@
                 </el-radio-group>
               </el-form-item>
               <el-form-item label="区域选择">
-                <el-select v-model="geoipCountries" multiple filterable allow-create default-first-option placeholder="选择或输入区域名称" style="width: 100%">
-                  <el-option v-for="r in availableRegions" :key="r" :label="r" :value="r" />
-                </el-select>
-                <div class="form-tip-line">基于 IP2Region 离线库判断访客所在区域，与 CIDR 规则同时生效</div>
+                <!-- R72 二十三次（用户裁决）：区域精确到市——省级联选择；只选省 =
+                     整省生效（存量语义），展开选市 = 省+市联合匹配（省/市 形态）。
+                     海外为一级条目（不细分国家）。 -->
+                <el-cascader
+                  v-model="geoipCountries"
+                  :options="regionCascaderOptions"
+                  :props="{ multiple: true, checkStrictly: true, emitPath: false }"
+                  filterable
+                  clearable
+                  placeholder="选择区域（可选省或精确到市）"
+                  style="width: 100%"
+                />
+                <div class="form-tip-line">基于 IP2Region 离线库判断访客所在区域，与 CIDR 规则同时生效；只选省份 = 整省生效</div>
               </el-form-item>
             </template>
           </el-form>
@@ -392,7 +401,23 @@ const blockPages = ref<BlockPage[]>([])
 
 
 
-const availableRegions = ref<string[]>([])
+interface RegionTree { provinces: string[]; cities: Record<string, string[]> }
+const regionTree = ref<RegionTree>({ provinces: [], cities: {} })
+// 级联选项：各省为父节点（选父 = 整省），省内城市为子节点（省/市 联合匹配）；
+// 海外为一级条目（无子节点）。
+const regionCascaderOptions = computed(() =>
+  regionTree.value.provinces.map((prov) => {
+    const cities = regionTree.value.cities[prov] || []
+    if (cities.length === 0) {
+      return { value: prov, label: prov }
+    }
+    return {
+      value: prov,
+      label: prov,
+      children: cities.map((city) => ({ value: `${prov}/${city}`, label: city })),
+    }
+  }),
+)
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
@@ -862,7 +887,14 @@ const openRuleInNewTab = (caddyId: string): void => {
   window.open('/?page=rules', '_blank')
 }
 
-const fetchRegions = async () => { try { const res = await request.get<APIResponse<string[]>>('/security/ip2region/regions'); availableRegions.value = res.data || [] } catch { availableRegions.value = [] } }
+const fetchRegions = async () => {
+  try {
+    const res = await request.get<APIResponse<RegionTree>>('/security/ip2region/regions')
+    regionTree.value = { provinces: res.data?.provinces || [], cities: res.data?.cities || {} }
+  } catch {
+    regionTree.value = { provinces: [], cities: {} }
+  }
+}
 
 onMounted(async () => {
   const search = localStorage.getItem('security-policies-search')

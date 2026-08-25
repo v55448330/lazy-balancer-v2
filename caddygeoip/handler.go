@@ -93,7 +93,24 @@ func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
 	caddyhttp.SetVar(ctx, "geoip.country_name", fields[0])
 	caddyhttp.SetVar(ctx, "geoip.region", region)
 	if len(fields) >= 3 {
-		caddyhttp.SetVar(ctx, "geoip.province", fields[1])
+		if province := fields[1]; province != "" && province != "0" {
+			// R72 二十三次：省列规范化——xdb 存在双形态（上海/上海市）与
+			// 台湾城市误入省列；策略选项树（internal/services/ip2region.go
+			// normalizeIP2Province，两侧同款表需同步维护）用规范名，发射
+			// 变量同规范化后 CEL 等值匹配才成立。
+			caddyhttp.SetVar(ctx, "geoip.province", normalizeProvince(province))
+		} else {
+			caddyhttp.SetVar(ctx, "geoip.province", "")
+		}
+	}
+	// R72 二十三次：市级粒度——region 第 3 列为城市；无效值（空/0）置空串，
+	// 使 CEL {http.vars.geoip.city} == X 对无城市段恒不命中。
+	if len(fields) >= 3 {
+		if city := fields[2]; city != "" && city != "0" {
+			caddyhttp.SetVar(ctx, "geoip.city", city)
+		} else {
+			caddyhttp.SetVar(ctx, "geoip.city", "")
+		}
 	}
 }
 
@@ -109,4 +126,31 @@ func realClientIP(r *http.Request) string {
 		return ""
 	}
 	return host
+}
+
+// provinceAliases 与 internal/services/ip2region.go 的 ip2ProvinceAliases 同款
+// （叶子 Caddy 模块不可 import internal 包，小表复制，修改需两侧同步）。
+var provinceAliases = map[string]string{
+	"北京": "北京市", "上海": "上海市", "天津": "天津市", "重庆": "重庆市",
+	"广西": "广西壮族自治区", "内蒙古": "内蒙古自治区", "西藏": "西藏自治区",
+	"宁夏": "宁夏回族自治区", "新疆": "新疆维吾尔自治区", "台湾": "台湾省",
+}
+
+var taiwanCities = map[string]bool{
+	"台北市": true, "新北市": true, "台中市": true, "台南市": true, "高雄市": true,
+	"基隆市": true, "新竹市": true, "嘉义市": true, "新竹县": true, "彰化县": true,
+}
+
+// normalizeProvince 规范 xdb 省列原始值；不可识别（乱码）原样返回（不出现在
+// 选项树中，策略不会配置）；台湾城市误入省列时省变量按台湾省发射、城市变量
+// 照常发原值，使「台湾省/台中市」条目可命中。
+func normalizeProvince(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if canonical, ok := provinceAliases[trimmed]; ok {
+		return canonical
+	}
+	if taiwanCities[trimmed] {
+		return "台湾省"
+	}
+	return trimmed
 }

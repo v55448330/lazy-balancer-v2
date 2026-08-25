@@ -2828,6 +2828,13 @@ func buildGeoipMatchExpression(policy *models.SecurityPolicy) string {
 			parts = append(parts, `{http.vars.geoip.country_name} != "中国"`)
 			continue
 		}
+		// R72 二十三次（用户裁决：区域精确到市）：「省/市」条目 = 省省+市联合
+		// 匹配（防跨省重名城市误伤，如多地「朝阳区」）；纯省名 = 整省（存量
+		// 策略零迁移）。
+		if province, city, found := strings.Cut(country, "/"); found {
+			parts = append(parts, fmt.Sprintf(`({http.vars.geoip.province} == %q && {http.vars.geoip.city} == %q)`, province, city))
+			continue
+		}
 		parts = append(parts, fmt.Sprintf(`{http.vars.geoip.province} == %q`, country))
 	}
 	expr := strings.Join(parts, " || ")

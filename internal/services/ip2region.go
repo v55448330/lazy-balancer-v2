@@ -63,6 +63,10 @@ func InitIP2Region() {
 			writeProvincesCache(cachePath, data)
 		}
 	}
+	// R72 二十三次：省→市树缓存（首次装载或缺失时全量扫描重建）。
+	if _, err := os.Stat(ip2RegionLivePathForTreeCache()); err != nil {
+		writeRegionTreeCache(regionTreeFromXDB(ip2regionLivePath))
+	}
 	log.Printf("ip2region: loaded %s", ip2regionLivePath)
 }
 
@@ -151,6 +155,8 @@ func SetIP2RegionVersion(version string) {
 	if data, err := json.Marshal(provinces); err == nil {
 		writeProvincesCache(ip2regionLivePath+".provinces.json", data)
 	}
+	// R72 二十三次：版本更新即新库——树缓存同步重建。
+	writeRegionTreeCache(regionTreeFromXDB(ip2regionLivePath))
 }
 
 // writeProvincesCache atomically writes the province JSON cache by writing to a
@@ -241,8 +247,10 @@ func GetIP2RegionProvinces() []string {
 			}
 			fields := strings.Split(region, "|")
 			if len(fields) >= 2 && fields[0] == "中国" {
-				prov := strings.TrimSpace(fields[1])
-				if prov != "" && prov != "0" {
+				// R72 二十三次：采样列表与地域树同款规范化（normalizeIP2Province），
+				// 消除双形态省名（上海/上海市）在同一列表中重复出现。
+				prov := normalizeIP2Province(fields[1])
+				if prov != "" {
 					seen[prov] = true
 				}
 			}
@@ -267,4 +275,182 @@ func GetIP2RegionProvinceList() []string {
 		provinces = GetCachedProvinces()
 	}
 	return provinces
+}
+
+// ip2ProvinceAliases 省列别名规范化（R72 二十三次）：xdb 原始省列存在双形态
+// （上海/上海市、广西/广西壮族自治区）、台湾城市误入省列（台中市等）与个别
+// 乱码（UEruemqi）。选项树与 CEL 发射变量（caddygeoip 同款表，见
+// caddygeoip/handler.go 的 sync 注释）统一用规范名，两边一致才能命中。
+var ip2ProvinceAliases = map[string]string{
+	"北京": "北京市", "上海市": "上海市", "上海": "上海市", "天津市": "天津市", "天津": "天津市",
+	"重庆市": "重庆市", "重庆": "重庆市",
+	"广西壮族自治区": "广西壮族自治区", "广西": "广西壮族自治区",
+	"内蒙古自治区": "内蒙古自治区", "内蒙古": "内蒙古自治区",
+	"西藏自治区": "西藏自治区", "西藏": "西藏自治区",
+	"宁夏回族自治区": "宁夏回族自治区", "宁夏": "宁夏回族自治区",
+	"新疆维吾尔自治区": "新疆维吾尔自治区", "新疆": "新疆维吾尔自治区",
+	"台湾省": "台湾省", "台湾": "台湾省",
+	"香港特别行政区": "香港特别行政区", "澳门特别行政区": "澳门特别行政区",
+}
+
+// ip2TaiwanCities 台湾地区在 xdb 中误置于省列的城市——归入台湾省城市集。
+var ip2TaiwanCities = map[string]bool{
+	"台北市": true, "新北市": true, "台中市": true, "台南市": true, "高雄市": true,
+	"基隆市": true, "新竹市": true, "嘉义市": true, "新竹县": true, "彰化县": true,
+}
+
+// normalizeIP2Province 把 xdb 省列原始值规范化为规范省名：别名表归一（上海→
+// 上海市）、带「省」后缀原样通过；其余候选（精简 fixture 的「广东」、潜在非
+// 标准库形态）保守通过——只有明确误置形态（台湾城市）返回空（由调用方归入
+// 台湾省城市集），乱码由选项树按去重自然呈现但不会与规范名冲突。
+func normalizeIP2Province(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "0" {
+		return ""
+	}
+	if canonical, ok := ip2ProvinceAliases[trimmed]; ok {
+		return canonical
+	}
+	if ip2TaiwanCities[trimmed] {
+		return ""
+	}
+	return trimmed
+}
+
+// IP2RegionRegionTree 地域树（R72 二十三次，用户裁决：区域精确到市）：省级
+// 列表 + 省→城市集映射，海外统一定为一级条目（不细分国家）。数据源为 xdb
+// 段索引全量扫描（每段 14B：startIP 4 + endIP 4 + dataLen 2 + dataPtr 4），
+// region 数据按 dataPtr 去重读取（大量段共享同一 region 指针，实际读取量为
+// 唯一 region 数，远小于 77.5 万段）。
+type IP2RegionRegionTree struct {
+	Provinces []string            `json:"provinces"`
+	Cities    map[string][]string `json:"cities"`
+}
+
+func regionTreeFromXDB(path string) *IP2RegionRegionTree {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	// 1) 段区范围从 header 读取（offset 8 StartIndexPtr / offset 12 EndIndexPtr，
+	// v3 双栈布局：向量索引推导的范围起点会早于真实段区——把 header/向量区
+	// 当段解析出乱码 region，实测 262148 < 真实 3365968）。
+	var minPtr, maxPtr uint32
+	header := make([]byte, 16)
+	if _, err := f.ReadAt(header, 0); err == nil {
+		minPtr = binary.LittleEndian.Uint32(header[8:12])
+		maxPtr = binary.LittleEndian.Uint32(header[12:16])
+	}
+	if maxPtr <= minPtr {
+		return nil
+	}
+	// 2) 遍历段索引，按 dataPtr 去重读 region。
+	seg := make([]byte, 14)
+	provinces := map[string]bool{}
+	cities := map[string]map[string]bool{}
+	seen := map[uint32]bool{}
+	for ptr := minPtr; ptr <= maxPtr; ptr += 14 {
+		if _, err := f.ReadAt(seg, int64(ptr)); err != nil {
+			break
+		}
+		dataLen := int(binary.LittleEndian.Uint16(seg[8:10]))
+		dataPtr := binary.LittleEndian.Uint32(seg[10:14])
+		if dataLen == 0 || seen[dataPtr] {
+			continue
+		}
+		seen[dataPtr] = true
+		region := make([]byte, dataLen)
+		if _, err := f.ReadAt(region, int64(dataPtr)); err != nil {
+			continue
+		}
+		fields := strings.Split(string(region), "|")
+		if len(fields) < 3 {
+			continue
+		}
+		if strings.TrimSpace(fields[0]) != "中国" {
+			continue // 海外统一一级条目，不细分
+		}
+		prov := normalizeIP2Province(fields[1])
+		if prov == "" {
+			// 台湾城市误入省列：归入台湾省城市集（其省列值即城市名）。
+			if ip2TaiwanCities[strings.TrimSpace(fields[1])] {
+				provinces["台湾省"] = true
+				city := strings.TrimSpace(fields[1])
+				set := cities["台湾省"]
+				if set == nil {
+					set = map[string]bool{}
+					cities["台湾省"] = set
+				}
+				set[city] = true
+			}
+			continue
+		}
+		provinces[prov] = true
+		city := strings.TrimSpace(fields[2])
+		if city == "" || city == "0" {
+			continue
+		}
+		set := cities[prov]
+		if set == nil {
+			set = map[string]bool{}
+			cities[prov] = set
+		}
+		set[city] = true
+	}
+	if len(provinces) == 0 {
+		return nil
+	}
+	tree := &IP2RegionRegionTree{
+		Provinces: make([]string, 0, len(provinces)),
+		Cities:    make(map[string][]string, len(cities)),
+	}
+	for prov := range provinces {
+		tree.Provinces = append(tree.Provinces, prov)
+	}
+	sort.Strings(tree.Provinces)
+	for prov, set := range cities {
+		list := make([]string, 0, len(set))
+		for city := range set {
+			list = append(list, city)
+		}
+		sort.Strings(list)
+		tree.Cities[prov] = list
+	}
+	return tree
+}
+
+// GetIP2RegionRegionTree 返回地域树：live 扫描优先，文件缓存兜底（与省份
+// 列表同口径——searcher 加载失败时 UI 仍能展示上次成功的树）。
+func GetIP2RegionRegionTree() *IP2RegionRegionTree {
+	if tree := regionTreeFromXDB(ip2regionLivePath); tree != nil {
+		return tree
+	}
+	return getCachedRegionTree()
+}
+
+func getCachedRegionTree() *IP2RegionRegionTree {
+	data, err := os.ReadFile(ip2RegionLivePathForTreeCache())
+	if err != nil {
+		return nil
+	}
+	var tree IP2RegionRegionTree
+	if err := json.Unmarshal(data, &tree); err != nil {
+		return nil
+	}
+	return &tree
+}
+
+func ip2RegionLivePathForTreeCache() string { return ip2regionLivePath + ".regions.json" }
+
+// writeRegionTreeCache 原子写树缓存（在库装载/更新成功时调用）。
+func writeRegionTreeCache(tree *IP2RegionRegionTree) {
+	if tree == nil {
+		return
+	}
+	data, err := json.Marshal(tree)
+	if err != nil {
+		return
+	}
+	writeProvincesCache(ip2RegionLivePathForTreeCache(), data)
 }

@@ -1706,8 +1706,16 @@ func (h *Handlers) GetIP2RegionInfo(c *gin.Context) {
 func (h *Handlers) GetIP2RegionRegions(c *gin.Context) {
 	// 与校验端（ValidateGeoIPCountries）同源：live searcher 优先、缓存兜底，
 	// 避免带外替换 xdb 后两端分叉。
-	regions := services.GetIP2RegionProvinceList()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: regions})
+	// R72 二十三次：返回级联结构——provinces 保持旧形态（数组，存量消费方
+	// 兼容），cities 为省→城市集映射（区域精确到市；海外为一级条目无城市）。
+	tree := services.GetIP2RegionRegionTree()
+	if tree == nil {
+		tree = &services.IP2RegionRegionTree{
+			Provinces: services.GetIP2RegionProvinceList(),
+			Cities:    map[string][]string{},
+		}
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: tree})
 }
 
 func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {

@@ -539,6 +539,19 @@ func ValidateGeoIPCountries(raw string) error {
 			known[p] = true
 		}
 	}
+	// R72 二十三次：城市树供「省/市」条目校验（市必须在省的城市集内——防
+	// 拼写错误生成 CEL 恒假死条目）。
+	tree := GetIP2RegionRegionTree()
+	knownCities := map[string]map[string]bool{}
+	if tree != nil {
+		for prov, cities := range tree.Cities {
+			set := make(map[string]bool, len(cities))
+			for _, city := range cities {
+				set[city] = true
+			}
+			knownCities[prov] = set
+		}
+	}
 	for _, entry := range entries {
 		trimmed := strings.TrimSpace(entry)
 		if trimmed == "" {
@@ -551,6 +564,16 @@ func ValidateGeoIPCountries(raw string) error {
 			// live searcher 未加载：即便缓存里有该省份也拒绝——发射端
 			// 占位变量从未设置，放行即为静默零强制（fail-closed）。
 			return fmt.Errorf("ip2region 未加载，暂无法使用非海外省份（geoip_countries 包含 %q）", trimmed)
+		}
+		// 「省/市」双形态：省须已知且市须在省的城市集内。
+		if province, city, found := strings.Cut(trimmed, "/"); found {
+			if !known[province] {
+				return fmt.Errorf("geoip_countries 包含未知省份：%q", province)
+			}
+			if knownCities[province] == nil || !knownCities[province][city] {
+				return fmt.Errorf("geoip_countries 条目 %q 的城市不在该省城市列表中", trimmed)
+			}
+			continue
 		}
 		if !known[trimmed] {
 			return fmt.Errorf("geoip_countries 包含未知省份：%q", trimmed)

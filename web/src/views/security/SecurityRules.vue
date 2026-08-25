@@ -41,7 +41,7 @@
         <el-descriptions-item label="下次更新">{{ formatDate(crsInfo.next_update) || '—' }}</el-descriptions-item>
       </el-descriptions>
       <el-descriptions :column="3" border class="ip2region-desc">
-        <el-descriptions-item label="IP 库版本"><span class="version-cell">{{ ip2regionInfo.version || '—' }}</span></el-descriptions-item>
+        <el-descriptions-item label="IP 库版本"><span class="version-cell">{{ (ip2regionInfo.version && ip2regionInfo.version !== 'unknown') ? ip2regionInfo.version : '未安装' }}</span></el-descriptions-item>
         <el-descriptions-item label="IP 规则数">{{ ip2regionInfo.db_size ? ip2regionInfo.db_size.toLocaleString() : '—' }}</el-descriptions-item>
         <el-descriptions-item label="更新时间">{{ formatDate(ip2regionInfo.updated_at) || '—' }}</el-descriptions-item>
         <el-descriptions-item label="自动更新">
@@ -52,7 +52,8 @@
         <el-descriptions-item label="更新状态">
           <div class="crs-cell-flex">
             <el-tooltip :disabled="!ip2regionFailureMessage" :content="ip2regionFailureMessage">
-              <el-tag :type="ip2regionStatusTagType(ip2regionInfo.update_status)" size="small" effect="light">{{ ip2regionStatusLabel(ip2regionInfo.update_status) }}</el-tag>
+              <el-tag v-if="!ip2regionInfo.version || ip2regionInfo.version === 'unknown'" type="info" size="small" effect="light">未安装</el-tag>
+              <el-tag v-else :type="ip2regionStatusTagType(ip2regionInfo.update_status)" size="small" effect="light">{{ ip2regionStatusLabel(ip2regionInfo.update_status) }}</el-tag>
             </el-tooltip>
           </div>
         </el-descriptions-item>
