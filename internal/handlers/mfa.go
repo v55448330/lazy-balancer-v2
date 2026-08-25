@@ -275,11 +275,38 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 // —— Admin 端点 ——
 
 // MFAResetByAdmin POST /users/:id/mfa/reset — 重置指定用户（含自己）。
+// R72 二次（用户裁决）：重置需确认 + 校验——操作者自己启用了 MFA 时须提供有效
+// 验证码（防会话劫持后一键拆第二因子）；操作者是管理员（admin 组路由门）或
+// 目标即本人（self-service）。请求体可选 {code}。
 func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
+	if !guardAuthJSONBody(c) {
+		return
+	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的用户 ID"})
 		return
+	}
+	operatorID := getContextUserIDInt(c)
+	var req struct {
+		Code string `json:"code"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	// 操作者自己启用 MFA → 必须验码（本人重置自己的 MFA 也一样——与
+	// MFADisable 的双重确认同语义；无密码项：admin 路由已过 JWT + 用户管理
+	// 确认弹框承担意图确认）。
+	if operatorMfa, err := services.MFAUserEnabled(operatorID); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取操作者 MFA 状态失败"})
+		return
+	} else if operatorMfa {
+		if ok, verr := services.MFAVerifyCode(operatorID, req.Code, time.Now()); !ok {
+			msg := "验证码错误"
+			if verr != nil {
+				msg = verr.Error()
+			}
+			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: msg})
+			return
+		}
 	}
 	var target string
 	if err := db.DB.QueryRow("SELECT username FROM users WHERE id=?", id).Scan(&target); err != nil {

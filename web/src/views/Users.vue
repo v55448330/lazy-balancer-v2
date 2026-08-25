@@ -119,7 +119,10 @@
             <el-button v-if="row.id !== authStore.user?.id" type="warning" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetPassword(row.id)">
               重置密码
             </el-button>
-            <el-button v-if="row.mfa_enabled" type="warning" link size="small" :disabled="isReadOnly || submitting" @click="resetMfa(row)">
+            <el-button v-if="!row.mfa_enabled && (row.id === authStore.user?.id || authStore.user?.role === 'admin')" type="success" link size="small" :disabled="isReadOnly || submitting" @click="openMfaBinding(row)">
+              启用 MFA
+            </el-button>
+            <el-button v-if="row.mfa_enabled && (row.id === authStore.user?.id || authStore.user?.role === 'admin')" type="warning" link size="small" :disabled="isReadOnly || submitting" @click="resetMfa(row)">
               重置 MFA
             </el-button>
             <el-button v-if="row.id !== authStore.user?.id" type="danger" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="deleteUser(row.id)">
@@ -139,16 +142,60 @@
         />
       </div>
     </el-card>
+    <!-- R72 三次调整（用户裁决）：MFA 绑定向导从基础设置卡片迁到用户管理——
+         点「启用 MFA」发起绑定：扫码 → 输码 → 恢复码。 -->
+    <el-dialog v-model="mfaBinding.visible" title="启用 MFA（两步验证）" width="520px" :close-on-click-modal="false" @closed="mfaBindingClosed">
+      <el-steps :active="mfaBinding.step" simple style="margin-bottom: 18px">
+        <el-step title="扫码" />
+        <el-step title="验证" />
+        <el-step title="恢复码" />
+      </el-steps>
+      <div v-if="mfaBinding.step === 0" style="display: flex; flex-direction: column; align-items: center; gap: 10px">
+        <div style="background: #fff; padding: 8px; border: 1px solid var(--el-border-color-lighter); border-radius: 4px">
+          <canvas ref="mfaQrCanvas" width="220" height="220" />
+        </div>
+        <el-text type="info" size="small">无法扫码时手动输入密钥：</el-text>
+        <el-text size="small" selectable style="font-family: monospace; background: var(--el-fill-color-light); padding: 4px 10px; border-radius: 3px; letter-spacing: 1px">{{ mfaBinding.secret }}</el-text>
+        <el-text type="info" size="small">使用 Google/Microsoft Authenticator 等扫码</el-text>
+      </div>
+      <div v-else-if="mfaBinding.step === 1" style="display: flex; flex-direction: column; align-items: center; gap: 14px">
+        <el-input
+          v-model="mfaBinding.code"
+          placeholder="请输入 6 位验证码"
+          size="large"
+          maxlength="6"
+          style="width: 240px; text-align: center; font-size: 18px; letter-spacing: 6px"
+          @input="mfaBinding.code = mfaBinding.code.replace(/\D/g, '')"
+        />
+        <el-text type="info" size="small">为「{{ mfaBinding.username }}」绑定</el-text>
+      </div>
+      <div v-else style="display: flex; flex-direction: column; gap: 10px">
+        <el-alert type="warning" :closable="false" show-icon title="恢复代码仅此一次显示"
+          description="每个恢复代码只能使用一次，请妥善保存。丢失验证器时用于登录。" />
+        <div style="display: grid; grid-template-columns: repeat(2, 200px); gap: 8px 24px; margin-top: 6px">
+          <div v-for="code in mfaBinding.recoveryCodes" :key="code" style="font-family: monospace; font-size: 14px; background: var(--el-fill-color-light); padding: 6px 10px; border-radius: 3px; text-align: center; user-select: all">{{ code }}</div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button v-if="mfaBinding.step === 0" @click="mfaBinding.visible = false">取消</el-button>
+        <el-button v-if="mfaBinding.step === 0" type="primary" @click="mfaBinding.step = 1">下一步</el-button>
+        <el-button v-if="mfaBinding.step === 1" @click="mfaBinding.step = 0">上一步</el-button>
+        <el-button v-if="mfaBinding.step === 1" type="primary" :loading="mfaBinding.loading" @click="activateMfa">验证并启用</el-button>
+        <el-button v-if="mfaBinding.step === 2" @click="copyMfaRecovery">复制全部</el-button>
+        <el-button v-if="mfaBinding.step === 2" type="primary" @click="mfaBinding.visible = false">我已保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, nextTick, ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { UserFilled, User, Plus } from '@element-plus/icons-vue'
+import QRCode from 'qrcode'
 import type { APIResponse, UserListItem } from '@/types'
 
 const authStore = useAuthStore()
@@ -325,20 +372,98 @@ const resetPassword = async (id: number) => {
   }
 }
 
-// v2.1.8 MFA：管理员重置指定用户（含自己）——审计留痕，用户需重新绑定。
+// R72 三次调整（用户裁决）：重置需确认 + 操作者 MFA 校验（自己启用过 MFA 则
+// 弹码验证——后端同门校验）；admin 或本人可重置。
 const resetMfa = async (row: UserListItem): Promise<void> => {
   try {
-    await ElMessageBox.confirm(
-      `确定重置用户「${row.username}」的 MFA 吗？重置后该用户登录不再需要验证码，需自行重新绑定。`,
-      '重置 MFA',
-      { type: 'warning', confirmButtonText: '确认重置' },
-    )
-    await request.post(`/users/${row.id}/mfa/reset`)
+    const selfRow = users.value.find(u => u.id === authStore.user?.id)
+    const operatorMfa = row.id === authStore.user?.id ? true : (selfRow?.mfa_enabled ?? false)
+    let code = ''
+    if (operatorMfa) {
+      const { value } = await ElMessageBox.prompt(
+        `重置「${row.username}」的 MFA 后该用户登录不再需要验证码，需重新绑定。\n请输入你当前 MFA 的验证码以确认：`,
+        '重置 MFA',
+        { type: 'warning', confirmButtonText: '确认重置', inputPattern: /^.{6,16}$/, inputErrorMessage: '请输入验证码或恢复代码' },
+      )
+      code = value.trim()
+    } else {
+      await ElMessageBox.confirm(
+        `确定重置用户「${row.username}」的 MFA 吗？重置后该用户登录不再需要验证码，需自行重新绑定。`,
+        '重置 MFA',
+        { type: 'warning', confirmButtonText: '确认重置' },
+      )
+    }
+    await request.post(`/users/${row.id}/mfa/reset`, { code }, { silent: true })
     ElMessage.success('已重置 MFA')
     await fetchUsers()
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
-    console.error('Failed to reset MFA:', error)
+    ElMessage.error(error instanceof Error ? error.message : '重置失败')
+  }
+}
+
+// ============ MFA 绑定向导（用户管理操作列发起） ============
+const mfaQrCanvas = ref<HTMLCanvasElement | null>(null)
+const mfaBinding = ref({
+  visible: false,
+  step: 0,
+  userId: 0,
+  username: '',
+  secret: '',
+  code: '',
+  recoveryCodes: [] as string[],
+  loading: false,
+})
+
+const mfaBindingClosed = () => {
+  mfaBinding.value.step = 0
+  mfaBinding.value.code = ''
+  mfaBinding.value.recoveryCodes = []
+}
+
+const openMfaBinding = async (row: UserListItem): Promise<void> => {
+  try {
+    const res = await request.post<APIResponse<{ secret: string; uri: string }>>('/auth/mfa/setup', {}, { silent: true })
+    if (!res.data) return
+    mfaBinding.value.userId = row.id
+    mfaBinding.value.username = row.username
+    mfaBinding.value.secret = res.data.secret
+    mfaBinding.value.code = ''
+    mfaBinding.value.recoveryCodes = []
+    mfaBinding.value.step = 0
+    mfaBinding.value.visible = true
+    await nextTick()
+    if (mfaQrCanvas.value) {
+      await QRCode.toCanvas(mfaQrCanvas.value, res.data.uri, { width: 220, margin: 1 })
+    }
+  } catch (error: unknown) {
+    ElMessage.error(error instanceof Error ? error.message : '生成 MFA 密钥失败')
+  }
+}
+
+const activateMfa = async (): Promise<void> => {
+  if (mfaBinding.value.code.length !== 6 || mfaBinding.value.loading) return
+  mfaBinding.value.loading = true
+  try {
+    const res = await request.post<APIResponse<{ recovery_codes: string[] }>>('/auth/mfa/activate', { code: mfaBinding.value.code }, { silent: true })
+    if (!res.data) return
+    mfaBinding.value.recoveryCodes = res.data.recovery_codes
+    mfaBinding.value.step = 2
+    await fetchUsers()
+    ElMessage.success('MFA 已启用')
+  } catch (error: unknown) {
+    ElMessage.error(error instanceof Error ? error.message : '验证失败')
+  } finally {
+    mfaBinding.value.loading = false
+  }
+}
+
+const copyMfaRecovery = async (): Promise<void> => {
+  try {
+    await navigator.clipboard.writeText(mfaBinding.value.recoveryCodes.join('\n'))
+    ElMessage.success('恢复代码已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动选择复制')
   }
 }
 

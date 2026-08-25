@@ -14,9 +14,6 @@
       </div>
     </div>
 
-    <!-- R72 二次调整：MFA 卡片置于基础设置最顶部（用户反馈仍找不到入口——
-         上一轮放在 grid 之后=页面底部，需滚动才能看到）。 -->
-    <MfaSettingsCard v-if="activeTab === 'basic'" />
     <div v-if="activeTab === 'basic'" class="basic-settings-grid">
       <BasicSettings
         v-model:settings="settings"
@@ -45,7 +42,6 @@ import { DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
 import { useAuthStore } from '@/stores/auth'
 import { Setting } from '@element-plus/icons-vue'
 import BasicSettings from './settings/BasicSettings.vue'
-import MfaSettingsCard from '@/components/settings/MfaSettingsCard.vue'
 import CaddyGlobalSettings from './settings/CaddyGlobalSettings.vue'
 import ClusterSettings from './settings/ClusterSettings.vue'
 import FreeCertificates from './settings/FreeCertificates.vue'
