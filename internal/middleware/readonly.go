@@ -68,5 +68,9 @@ func isReadOnlyGuardWhitelisted(path string) bool {
 func isSelfServicePath(path string) bool {
 	return path == "/api/v1/users/me" ||
 		path == "/api/v1/users/me/api-keys" ||
-		strings.HasPrefix(path, "/api/v1/users/me/api-keys/")
+		strings.HasPrefix(path, "/api/v1/users/me/api-keys/") ||
+		// R72 B-I-1：MFA 自助端点（setup/activate/disable/recovery-codes/
+		// verify-step）——仅操作调用者本人第二因子，与 /users/me 同属自助维护，
+		// 此前漏白名单致非 admin 用户 403（UI 却对全体展示卡片）。
+		strings.HasPrefix(path, "/api/v1/auth/mfa/")
 }

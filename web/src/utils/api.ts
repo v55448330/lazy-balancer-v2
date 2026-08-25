@@ -168,6 +168,11 @@ service.interceptors.response.use(
     const message = backendMsg || fallback || '网络错误'
     const isLoginRequest = error.config?.url?.includes('/auth/login') || error.config?.url?.includes('/auth/ticket-login')
     if (status === 401) {
+      // R72 D-新2：MFA 自助端点的 401 是「凭证错误」（持有效 JWT 输错密码/验证码），
+      // 不是会话失效——直接传播后端文案，不得弹「会话失效」并强制登出。
+      if (error.config?.url?.includes('/auth/mfa/')) {
+        return Promise.reject(new ApiRequestError(message, status))
+      }
       if (!isLoginRequest) {
         const { useAuthStore } = await import('@/stores/auth')
         const authStore = useAuthStore()
@@ -199,8 +204,11 @@ service.interceptors.response.use(
           error.config._mfaRetried = true
           return service.request(error.config)
         }
-      } catch {
-        /* 用户取消或验证失败：落入通用错误处理 */
+      } catch (stepError: unknown) {
+        // R72 D-新2/D-新4：verify-step 失败（如输错码，401 文案已由 /auth/mfa/
+        // 豁免分支携带）——给出可见反馈，不再静默吞掉。
+        ElMessage.error(stepError instanceof Error ? stepError.message : 'MFA 验证未完成')
+        return Promise.reject(stepError)
       }
     } else if (!isLoginRequest) {
       if (!error.config?.silent) {

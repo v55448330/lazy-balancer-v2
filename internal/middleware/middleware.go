@@ -588,6 +588,9 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		c.Set("user_id", claims["user_id"])
 		c.Set("username", claims["username"])
 		c.Set("role", dbRole.String)
+		// R72 B-1：JWT 成功路径补 auth_type——全仓此前只有 apiKeyAuth 设置该值，
+		// mfaStepUpGuard 的 != "jwt" 对 JWT 用户恒真（守卫整体死代码）。
+		c.Set("auth_type", "jwt")
 		// v2.1.8 MFA step-up：mfa_ts 声明透传（无声明=0，guard 视为过期）
 		if ts, ok := claims["mfa_ts"].(float64); ok {
 			c.Set("mfa_ts", ts)
@@ -731,13 +734,36 @@ func mfaStepUpGuard() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		userIDStr := c.GetString("user_id")
-		if userIDStr == "" {
+		// R72 C-I-1：step-up 机制本体必须永可达——豁免 verify-step 自身（POST，
+		// 位于本守卫之下），否则守卫生效后「弹码→verify-step→再 428」无限循环，
+		// 全员写操作死锁；/auth/logout 同理（登出不该要求验证码）。
+		path := c.FullPath()
+		if path == "" {
+			path = c.Request.URL.Path
+		}
+		if path == "/api/v1/auth/mfa/verify-step" || path == "/api/v1/auth/logout" {
 			c.Next()
 			return
 		}
-		userID, err := strconv.Atoi(userIDStr)
-		if err != nil {
+		// R72 B-1（缺陷二）：jwtAuth 将 user_id 以 float64 存入（JWT JSON 数字），
+		// gin GetString 对非 string 断言失败恒返回 ""——改类型化取值（与
+		// getContextUserIDInt 同口径）。
+		var userID int
+		switch v := c.MustGet("user_id").(type) {
+		case float64:
+			userID = int(v)
+		case int:
+			userID = v
+		case int64:
+			userID = int(v)
+		case string:
+			parsed, err := strconv.Atoi(v)
+			if err != nil {
+				c.Next()
+				return
+			}
+			userID = parsed
+		default:
 			c.Next()
 			return
 		}
