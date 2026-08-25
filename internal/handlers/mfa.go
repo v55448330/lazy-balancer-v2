@@ -300,6 +300,9 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 		return
 	} else if operatorMfa {
 		if ok, verr := services.MFAVerifyCode(operatorID, req.Code, time.Now()); !ok {
+			// R72 七次：重置前置验码失败留痕——高敏动作的失败尝试与成功同等
+			// 可审计（含 brute 尝试面）。
+			services.RecordAuditLog(c.GetString("username"), "认证拒绝", "用户认证", services.FormatAuditDetail("重置 MFA 前验证失败", services.AuditResultPart("failure")), c.ClientIP())
 			msg := "验证码错误"
 			if verr != nil {
 				msg = verr.Error()
