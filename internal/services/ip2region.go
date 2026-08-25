@@ -64,7 +64,9 @@ func InitIP2Region() {
 		}
 	}
 	// R72 二十三次：省→市树缓存（首次装载或缺失时全量扫描重建）。
-	if _, err := os.Stat(ip2RegionLivePathForTreeCache()); err != nil {
+	// R72 二十四次：缓存含 ASCII 城市/省名（拼音规范化前的旧产物）也视为过期
+	// 重建——升级部署后旧缓存不会自动消失。
+	if staleRegionTreeCache(ip2RegionLivePathForTreeCache()) {
 		writeRegionTreeCache(regionTreeFromXDB(ip2regionLivePath))
 	}
 	log.Printf("ip2region: loaded %s", ip2regionLivePath)
@@ -491,6 +493,28 @@ func getCachedRegionTree() *IP2RegionRegionTree {
 }
 
 func ip2RegionLivePathForTreeCache() string { return ip2regionLivePath + ".regions.json" }
+
+// staleRegionTreeCache 缓存过期判定：缺失、解析失败，或仍含 ASCII 城市/
+// 省名（拼音规范化落地前的旧产物；「海外」除外）。
+func staleRegionTreeCache(path string) bool {
+	tree := getCachedRegionTree()
+	if tree == nil {
+		return true
+	}
+	for _, prov := range tree.Provinces {
+		if prov != "海外" && prov[0] < 0x80 {
+			return true
+		}
+	}
+	for _, cities := range tree.Cities {
+		for _, city := range cities {
+			if city[0] < 0x80 {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // writeRegionTreeCache 原子写树缓存（在库装载/更新成功时调用）。留 INFO 更新
 // 日志（R72 二十四次）：缓存是派生数据不进审计，但静默重建会让「选项树何时
