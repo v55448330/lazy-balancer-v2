@@ -1064,14 +1064,18 @@ func verifiedSnapshotIntegrity(snapshot models.ClusterSnapshot, clusterToken str
 	if snapshot.Signature == "" {
 		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeSignatureInvalid, errors.New("快照缺少签名：主节点版本过旧，请先升级主节点"))
 	}
+	// R72 二十六次 W1-4：v2 形态旧主节点快照（有签名、无 canonical_payload）此前
+	// 落入 verifySnapshotSignature 的空载荷拒绝，误报「签名校验失败」且提示语不
+	// 指明升级动作。刻意保持非终止（可重试）而非恢复 Round 30 F6 的 halted 终止：
+	// ① 该形态无法在本节点验签（v2 扁平签名路径已于 R35 S-11 移除），终止化会让
+	// 任何能注入同步流量的攻击者用伪造 schema<3 载荷把从节点永久停摆；② 非终止
+	// 重试在主节点升级到 v3 后自动恢复，运维代价更低。原 R30 F6 分支因验签前置
+	// 不可达（S-11 收紧误伤），已移除。
+	if snapshot.SchemaVersion < CurrentSnapshotSchema && len(snapshot.CanonicalPayload) == 0 {
+		return models.ClusterSnapshot{}, newSyncFailure(models.SyncErrorCodeSignatureInvalid, errors.New("主节点为旧版本（schema v2 快照形态，缺少 canonical_payload）：请先升级主节点，从节点将在主节点升级后自动恢复同步"))
+	}
 	if err := verifySnapshotSignature(snapshot, clusterToken); err != nil {
 		return models.ClusterSnapshot{}, err
-	}
-	// Round 30 F6: 缺少 canonical_payload 的旧主节点快照与 schema 过旧同根因，
-	// 走同一终止路径（halted 等人工升级）。该分支位于验签之后：攻击者可伪造
-	// SchemaVersion 但无法伪造 HMAC，伪造快照无法越过签名闸门触发 halted。
-	if snapshot.SchemaVersion < CurrentSnapshotSchema && len(snapshot.CanonicalPayload) == 0 {
-		return models.ClusterSnapshot{}, &SnapshotSchemaTooOldError{Actual: snapshot.SchemaVersion, Supported: CurrentSnapshotSchema}
 	}
 	// 只有验签通过后才允许进入 schema_too_new 终止路径：伪造数据永不触发
 	// halted，只能降级。验签通过后若读取端版本不足，无法安全解析

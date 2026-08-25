@@ -121,6 +121,13 @@ func (s *CaddyService) applyConfigLockedOpt(config map[string]interface{}, force
 		return errors.New(message)
 	}
 	snapshot, hasSnapshot := config[caddyCertFilesSnapshotKey].(CertFilesSnapshot)
+	// R72 二十六次 W1-1：本次生成实际写盘了证书文件（MaterializeCertPairs 检出
+	// 内容/权限差异，快照非空）而证书路径确定性意味着 JSON 可能字节相同——
+	// 不强制重载时 errSameConfig 短路会让 Caddy 内存里继续用旧证书（重传证书
+	// 静默不生效，DB/UI 全报成功）。快照非空即自动升级为强制。
+	if hasSnapshot && len(snapshot) > 0 {
+		force = true
+	}
 	if hasSnapshot {
 		defer func() {
 			if err != nil {
@@ -3136,6 +3143,17 @@ func (s *CaddyService) ApplyConfigFromTxCertAware(tx *sql.Tx) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.applyConfigLocked(generateCaddyConfigWithCertSource(tx, tx))
+}
+
+// ApplyConfigFromTxCertAwareForce 与 ApplyConfigFromTxCertAware 同语义但强制
+// 重载（R72 二十六次 W1-1）：v2 导入在 apply 之前已把新 PEM 落盘
+// （materializeImportCertificates），生成期 MaterializeCertPairs 内容比对相等
+// → 快照为空 → 不触发自动强制——导入必须显式强制，否则同 JSON 导入新证书
+// 会被 errSameConfig 短路（旧证书继续服务）。
+func (s *CaddyService) ApplyConfigFromTxCertAwareForce(tx *sql.Tx) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.applyConfigLockedOpt(generateCaddyConfigWithCertSource(tx, tx), true)
 }
 
 func normalizeWeights(weights []int) []int {

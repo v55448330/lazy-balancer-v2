@@ -113,7 +113,10 @@ func SetIP2RegionAutoUpdate(enabled bool) error {
 
 func ensureIP2RegionVersionRow() {
 	if _, err := db.DB.Exec(
-		"INSERT OR IGNORE INTO security_ip2region_version (id, version, auto_update) VALUES (1, 'unknown', FALSE)",
+		// R72 二十六次 D2（裁决）：IP 库自动更新默认 ON——与 CRS 种子及 schema
+		// DEFAULT TRUE 对齐（此前种子 FALSE 与 schema 默认矛盾；过期 xdb 同样
+		// 引发地域策略误拦/漏拦）。
+		"INSERT OR IGNORE INTO security_ip2region_version (id, version, auto_update) VALUES (1, 'unknown', TRUE)",
 	); err != nil {
 		log.Printf("ip2region update: failed to ensure version row: %v", err)
 	}
@@ -286,6 +289,14 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 		log.Printf("ip2region update: failed to record success: %v", err)
 	}
 	SetIP2RegionVersion(tag)
+	// R72 二十六次 W1-7：主节点补写 .version sidecar——waffiles_sync 的
+	// BuildWafFileRef（ref.IP2RegionTag）与从节点 rewriteVersionIfMissingOrStale
+	// 都假设它存在，而主更新路径此前从不写它（R57 A-#4 在主路径是死路）：审计行
+	// 无版本号、提升的 slave 同样空 tag。写失败只记日志（版本行已提交，sidecar
+	// 下次更新自愈）。
+	if err := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", tag); err != nil {
+		log.Printf("ip2region update: failed to write .version sidecar: %v", err)
+	}
 	m.mu.Lock()
 	m.state.status = IP2RegionStatusSuccess
 	m.state.message = ""
@@ -505,6 +516,10 @@ func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadEr
 		log.Printf("ip2region update: failed to record fail-open success: %v", err)
 	}
 	SetIP2RegionVersion(tag)
+	// R72 二十六次 W1-7：fail-open 成功同样补写 sidecar（与 success() 同因）。
+	if err := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", tag); err != nil {
+		log.Printf("ip2region update: failed to write .version sidecar: %v", err)
+	}
 	m.mu.Lock()
 	m.state.status = IP2RegionStatusSuccess
 	m.state.message = warn

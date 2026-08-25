@@ -438,3 +438,29 @@ func TestScanAPIKeys_returns_rows_iteration_error(t *testing.T) {
 		t.Fatal("scanAPIKeys error=nil, want scan error")
 	}
 }
+
+func TestValidateCRSField_excludedRuleIDForm(t *testing.T) {
+	// R72 二十六次 W3-6：排除 ID 与发射门 validSecRuleRemoveTarget 同口径
+	//（纯数字或 数字-数字）；字母后缀形态保存即拒绝（此前保存 200、发射静默跳过）。
+	ok := `["942100","942100-942199","REQUEST-942-APPLICATION-ATTACK-SQLI.conf"]`
+	v := ok
+	if err := validateAndNormalizeCRSField("crs_excluded_rules", &v); err != nil {
+		t.Fatalf("valid form rejected: %v", err)
+	}
+	bad := `["942100L","ABCDEF"]`
+	v2 := bad
+	if err := validateAndNormalizeCRSField("crs_excluded_rules", &v2); err == nil {
+		t.Fatal("letter-suffixed ID must be rejected at save time")
+	}
+	short := `["942"]`
+	v3 := short
+	if err := validateAndNormalizeCRSField("crs_excluded_rules", &v3); err == nil {
+		t.Fatal("short ID must be rejected")
+	}
+	// 组号字段不受新口径影响（仍走两位数字检查）。
+	grp := `["42"]`
+	v4 := grp
+	if err := validateAndNormalizeCRSField("crs_rule_groups", &v4); err != nil {
+		t.Fatalf("group form must pass: %v", err)
+	}
+}

@@ -138,8 +138,12 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	}
 	// Caddy 重载必须在事务提交之后：buildWafHandler 等安全配置读取走 db.DB，
 	// 提交前的事务内生成看不到本次写入的 security_* 表。重载失败仅记录，
-	// 不回滚已提交的快照。
-	if err := s.caddy.ApplyConfig(GenerateCaddyConfig()); err != nil {
+	// 不回滚已提交的快照。R72 二十六次 W1-1：本路径必须强制——证书文件
+	// （materializeSnapshotCerts）与 WAF 数据（ApplyWafFileBundle）在生成前已
+	// 落盘，生成期内容比对相等 → 快照为空 → 自动强制不触发；而「仅数据文件
+	// 变化、JSON 字节相同」正是 errSameConfig 短路让从节点插件内存停留旧库的
+	// 场景。applySnapshot 仅在新快照版本时运行，强制无冗余开销。
+	if err := s.caddy.ApplyConfigForce(GenerateCaddyConfig()); err != nil {
 		Logf("error", "集群同步后重载 Caddy 失败（快照已提交）: %v", err)
 		RecordAuditLog("system", "重载失败", "Caddy服务", fmt.Sprintf("同步应用后自动重载失败: %v", err), "")
 		// 写入标记：运行配置与数据库不一致。304 分支识别该标记并全量重拉补偿重试，

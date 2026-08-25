@@ -489,7 +489,10 @@ const allCustomRules = ref<Array<{ id: number; name: string }>>([])
 const fetchData = async (): Promise<boolean> => {
   loading.value = true
   try {
-    const [polRes, ruleRes, crsRes, bpRes, crRes, bindRes, userRes] = await Promise.all([
+    // R72 二十六次 W3-1：allSettled 替代 all——策略主数据失败才整体报错，
+    // 辅助数据（规则/CRS 选项/拦截页/绑定/用户）部分失败保留已有数据，
+    // 避免「保存策略后任一辅助端点失败 → 整个列表不刷新」的 stale 状态。
+    const [polRes, ruleRes, crsRes, bpRes, crRes, bindRes, userRes] = await Promise.allSettled([
       request.get<APIResponse<PolicySummary[]>>('/security/policies'),
       request.get<APIResponse<Rule[]>>('/rules'),
       request.get<APIResponse<{ rules: CRSRuleOption[] }>>('/security/crs/rules?page_size=100'),
@@ -498,16 +501,21 @@ const fetchData = async (): Promise<boolean> => {
       request.get<APIResponse<Record<string, SecurityBinding>>>('/security/bindings'),
       request.get<APIResponse<UserListItem[]>>('/users'),
     ])
-    policies.value = polRes.data || []
-    allRules.value = ruleRes.data || []
-    crsRuleOptions.value = crsRes.data?.rules || []
-    blockPages.value = bpRes.data || []
-    allCustomRules.value = crRes.data || []
-    securityBindings.value = bindRes.data || {}
-    users.value = userRes.data || []
+    if (polRes.status === 'rejected') {
+      console.error('Failed to load policies data:', polRes.reason)
+      return false
+    }
+    policies.value = polRes.value.data || []
+    if (ruleRes.status === 'fulfilled') allRules.value = ruleRes.value.data || []
+    if (crsRes.status === 'fulfilled') crsRuleOptions.value = crsRes.value.data?.rules || []
+    if (bpRes.status === 'fulfilled') blockPages.value = bpRes.value.data || []
+    if (crRes.status === 'fulfilled') allCustomRules.value = crRes.value.data || []
+    if (bindRes.status === 'fulfilled') securityBindings.value = bindRes.value.data || {}
+    if (userRes.status === 'fulfilled') users.value = userRes.value.data || []
+    const partial = [ruleRes, crsRes, bpRes, crRes, bindRes, userRes].some(r => r.status === 'rejected')
+    if (partial) console.warn('部分辅助数据加载失败，保留已有数据')
     return true
   } catch (error: unknown) {
-    // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
     console.error('Failed to load policies data:', error)
     return false
   } finally { loading.value = false }

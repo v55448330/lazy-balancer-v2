@@ -2211,3 +2211,38 @@ func TestApplyConfig_forceReloadHeader(t *testing.T) {
 		t.Fatalf("force apply must send Cache-Control: must-revalidate, got %q", lastCacheControl)
 	}
 }
+
+func TestApplyConfig_autoForceOnCertSnapshot(t *testing.T) {
+	// R72 二十六次 W1-1：生成期 MaterializeCertPairs 写盘了证书文件（快照非空）
+	// 时即使调用方走常规 ApplyConfig 也必须自动带 Cache-Control: must-revalidate
+	// ——证书路径确定性意味着重传证书不改变 JSON，不强制会被 errSameConfig
+	// 短路（旧证书继续服务）。快照为空时不得强制（避免冗余全量重载）。
+	var lastCacheControl string
+	forced := []bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/load" {
+			lastCacheControl = r.Header.Get("Cache-Control")
+			forced = append(forced, lastCacheControl == "must-revalidate")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	svc := NewCaddyService(server.URL)
+
+	base := map[string]interface{}{"apps": map[string]interface{}{}}
+	withSnapshot := map[string]interface{}{"apps": map[string]interface{}{}}
+	withSnapshot[caddyCertFilesSnapshotKey] = CertFilesSnapshot{"rule-1": {}}
+
+	if err := svc.ApplyConfig(base); err != nil {
+		t.Fatalf("plain apply: %v", err)
+	}
+	if len(forced) != 1 || forced[0] {
+		t.Fatalf("plain config must not force reload, forced=%v", forced)
+	}
+	if err := svc.ApplyConfig(withSnapshot); err != nil {
+		t.Fatalf("snapshot apply: %v", err)
+	}
+	if len(forced) != 2 || !forced[1] {
+		t.Fatalf("non-empty cert snapshot must auto-force reload, forced=%v", forced)
+	}
+}

@@ -19,6 +19,56 @@ import (
 	"lazy-balancer-v2/internal/services/dnsproviders"
 )
 
+// maskedDNSCredentialsSentinel（R72 二十六次 D4）：非 admin 响应中 DNS 凭证值的
+// 掩码占位。更新路径识别到全掩码形态按「未提交」处理（保持原值）——前端
+// FreeCertificates 的编辑表单会原样回传 GET 到的值。
+const maskedDNSCredentialsSentinel = "***"
+
+// maskDNSCredentialsJSON 把凭证 JSON 串的每个值替换为掩码（保留键形态，
+// 前端表单按 provider 字段渲染）。解析失败时整体掩码（防御性）。
+func maskDNSCredentialsJSON(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return maskedDNSCredentialsSentinel
+	}
+	masked := make(map[string]string, len(m))
+	for k, v := range m {
+		if v == "" {
+			masked[k] = ""
+			continue
+		}
+		masked[k] = maskedDNSCredentialsSentinel
+	}
+	out, err := json.Marshal(masked)
+	if err != nil {
+		return maskedDNSCredentialsSentinel
+	}
+	return string(out)
+}
+
+// isMaskedDNSCredentials 判断提交的凭证是否为全掩码回传（GET 掩码 → 未改动
+// → 保持原值）。空串值不算掩码（允许部分字段清空的语义保留给显式提交）。
+func isMaskedDNSCredentials(m map[string]string) bool {
+	if len(m) == 0 {
+		return false
+	}
+	for _, v := range m {
+		if v != "" && v != maskedDNSCredentialsSentinel {
+			return false
+		}
+	}
+	// 至少一个非空值（全空串 = 显式清空语义，交给原逻辑）。
+	for _, v := range m {
+		if v == maskedDNSCredentialsSentinel {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 	rows, err := db.DB.Query("SELECT id, name, dns_provider, COALESCE(dns_credentials,''), enabled, created_at, updated_at FROM certificate_configs ORDER BY id")
 	if err != nil {
@@ -27,12 +77,20 @@ func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 	}
 	defer rows.Close()
 
+	isAdmin := false
+	if role, ok := c.Get("role"); ok && role == "admin" {
+		isAdmin = true
+	}
 	var configs []models.CertificateConfig
 	for rows.Next() {
 		var cfg models.CertificateConfig
 		if err := rows.Scan(&cfg.ID, &cfg.Name, &cfg.DNSProvider, &cfg.DNSCredentials, &cfg.Enabled, &cfg.CreatedAt, &cfg.UpdatedAt); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取证书配置失败: " + err.Error()})
 			return
+		}
+		// R72 二十六次 D4：凭证最小可见性——非 admin 只见掩码形态。
+		if !isAdmin {
+			cfg.DNSCredentials = maskDNSCredentialsJSON(cfg.DNSCredentials)
 		}
 		configs = append(configs, cfg)
 	}
@@ -138,11 +196,17 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 		changed = append(changed, "DNS提供商")
 	}
 	if req.DNSCredentials != nil {
-		credsJSON, _ := json.Marshal(req.DNSCredentials)
-		if string(credsJSON) != oldCredentials {
-			query += "dns_credentials = ?, "
-			args = append(args, string(credsJSON))
-			changed = append(changed, "凭证")
+		// R72 二十六次 D4：全掩码回传（非 admin GET 后未改动即保存）按未提交
+		// 处理——否则掩码串会覆盖真实凭证。
+		if isMaskedDNSCredentials(req.DNSCredentials) {
+			req.DNSCredentials = nil
+		} else {
+			credsJSON, _ := json.Marshal(req.DNSCredentials)
+			if string(credsJSON) != oldCredentials {
+				query += "dns_credentials = ?, "
+				args = append(args, string(credsJSON))
+				changed = append(changed, "凭证")
+			}
 		}
 	}
 	if req.Enabled != nil && *req.Enabled != oldEnabled {

@@ -238,6 +238,18 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.DELETE("/users/:id", h.DeleteUser)
 				admin.POST("/users/:id/mfa/reset", h.MFAResetByAdmin)
 
+				// R72 二十六次 W1-3：管理语义端点收紧至 admin 组——服务重启/管理面板
+				// TLS/原始 Caddy 配置覆写/Caddy 进程启停均为管理员级操作；此前挂在
+				// business 组（仅 readOnlyGuard），apidocs 承诺的 403 admin_required
+				// 实际不存在（PutCaddyConfig/StartCaddy/RestartService/UpdateAdminTLS
+				// handler 内部均无角色检查）。读取类端点（GET/inspect）保留 business。
+				admin.PUT("/admin-tls", h.UpdateAdminTLS)
+				admin.POST("/system/restart", h.RestartService)
+				admin.PUT("/caddy/config", h.PutCaddyConfig)
+				admin.POST("/caddy/start", h.StartCaddy)
+				admin.POST("/caddy/stop", h.StopCaddy)
+				admin.POST("/caddy/restart", h.RestartCaddy)
+
 				// API Keys
 				admin.POST("/api-keys", h.CreateAPIKey)
 				admin.PATCH("/api-keys/:id/status", h.UpdateAPIKeyStatus)
@@ -378,21 +390,15 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				// System
 				business.GET("/system/info", h.GetSystemInfo)
 				business.GET("/admin-tls", h.GetAdminTLS)
-				business.PUT("/admin-tls", h.UpdateAdminTLS)
 				business.POST("/admin-tls/inspect", h.InspectAdminTLSCert)
 				business.GET("/system/metrics", h.GetSystemMetrics)
 				business.GET("/system/logs", h.GetAppLogs)
-				business.POST("/system/restart", h.RestartService)
 
 				// Caddy
 				business.GET("/caddy/status", h.GetCaddyStatus)
 				business.GET("/caddy/config", h.GetCaddyConfig)
 				business.GET("/caddy/logs", h.GetCaddyLogs)
-				business.PUT("/caddy/config", h.PutCaddyConfig)
 				business.GET("/caddy/host-metrics", h.GetHostMetrics)
-				business.POST("/caddy/start", h.StartCaddy)
-				business.POST("/caddy/stop", h.StopCaddy)
-				business.POST("/caddy/restart", h.RestartCaddy)
 
 				// Certificates
 				business.GET("/certificates", h.ListCertificates)

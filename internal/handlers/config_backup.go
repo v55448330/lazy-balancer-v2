@@ -445,6 +445,51 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 	return nil
 }
 
+// validateImportedSecurityCustomRules（R72 二十六次 W1-5）：导入路径复用保存侧
+// validateSecurityCustomRule 的行级约束——此前导入对 security_custom_rules 零验证，
+// 篡改/损坏备份可带入 score=-5（coraza setvar:+-5 运行时减分，异常评分静默失真）
+// 或非法 action/名称。与 R56 布尔门同位：结构性校验阶段拒绝，零写入。
+func validateImportedSecurityCustomRules(rows []map[string]any) error {
+	for i, row := range rows {
+		rule := models.SecurityCustomRule{
+			Name:   fmt.Sprintf("%v", row["name"]),
+			Action: fmt.Sprintf("%v", row["action"]),
+		}
+		// conditions 列在导出 JSON 中为字符串（DB TEXT 列承载 JSON 数组），个别
+		// 历史导出可能内联为数组——两种形态都归一为 []CustomRuleCondition。
+		switch raw := row["conditions"].(type) {
+		case string:
+			if err := json.Unmarshal([]byte(raw), &rule.Conditions); err != nil {
+				return fmt.Errorf("security_custom_rules 第 %d 行 conditions 解析失败: %w", i+1, err)
+			}
+		default:
+			reencoded, err := json.Marshal(raw)
+			if err != nil {
+				return fmt.Errorf("security_custom_rules 第 %d 行 conditions 解析失败: %w", i+1, err)
+			}
+			if err := json.Unmarshal(reencoded, &rule.Conditions); err != nil {
+				return fmt.Errorf("security_custom_rules 第 %d 行 conditions 解析失败: %w", i+1, err)
+			}
+		}
+		switch score := row["score"].(type) {
+		case float64:
+			rule.Score = int(score)
+		case string:
+			parsed, err := strconv.Atoi(strings.TrimSpace(score))
+			if err != nil {
+				return fmt.Errorf("security_custom_rules 第 %d 行 score 非数字: %q", i+1, score)
+			}
+			rule.Score = parsed
+		default:
+			return fmt.Errorf("security_custom_rules 第 %d 行 score 缺失或类型错误", i+1)
+		}
+		if err := validateSecurityCustomRule(&rule); err != nil {
+			return fmt.Errorf("security_custom_rules 第 %d 行: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
 // validateV2Backup 校验 v2 备份结构与完整性。返回 usedLegacyChecksum=true 表示
 // 走了旧格式（仅 tables）校验和回退——调用方应记审计警告（R43 F-D）。
 func validateV2Backup(backup configBackup) (bool, error) {
@@ -466,6 +511,12 @@ func validateV2Backup(backup configBackup) (bool, error) {
 	}
 	if backup.Meta.Version == 2 && backup.Meta.Checksum == "" {
 		return false, errors.New("备份缺少完整性校验和，请使用 v2.1.2 及以上版本重新导出后再导入")
+	}
+	// R72 二十六次 W1-5：自定义规则行级验证（保存侧同款约束）。
+	if rows, ok := backup.Tables["security_custom_rules"]; ok {
+		if err := validateImportedSecurityCustomRules(rows); err != nil {
+			return false, err
+		}
 	}
 	if backup.Meta.Checksum != "" {
 		checksumPayload, err := json.Marshal(struct {

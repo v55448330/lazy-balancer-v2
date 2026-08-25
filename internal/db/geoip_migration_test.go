@@ -82,8 +82,9 @@ func TestCreateTables_creates_ip2region_version_table_and_seed(t *testing.T) {
 	if err := database.QueryRow("SELECT version, auto_update FROM security_ip2region_version WHERE id=1").Scan(&version, &autoUpdate); err != nil {
 		t.Fatalf("read seeded ip2region version row: %v", err)
 	}
-	if version != "unknown" || autoUpdate != 0 {
-		t.Fatalf("seeded ip2region version=(%q,%d), want (unknown,0)", version, autoUpdate)
+	// R72 二十六次 D2（裁决）：IP 库自动更新默认 ON（与 CRS 种子/schema 对齐）。
+	if version != "unknown" || autoUpdate != 1 {
+		t.Fatalf("seeded ip2region version=(%q,%d), want (unknown,1)", version, autoUpdate)
 	}
 	// The seed is idempotent across restarts
 	if err := createTables(); err != nil {

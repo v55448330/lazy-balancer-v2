@@ -741,13 +741,14 @@ func validateAndNormalizeCRSField(name string, val *string) error {
 		if trimmed != entry {
 			return fmt.Errorf("%s 条目不能包含首尾空白: %q", name, entry)
 		}
-		// R59 B-N2：排除项是 coraza SecRuleRemoveById 的规则 ID（形如
-		// "942100" 六位数字或含字母后缀的 "942100LEN"）。纯两位/三位短数字
-		// （"94"/"933"）不是任何 CRS 规则 ID 形态——coraza v3.7.0 的
-		// DeleteByID 对不存在的 ID 静默零删除，排除沦为无声 no-op。最小形态
-		// 约束：crs_excluded_rules 条目至少 6 个字符。
-		if name == "crs_excluded_rules" && len(trimmed) < 6 {
-			return fmt.Errorf("%s 条目必须是 CRS 规则 ID（至少 6 位，如 \"942100\"）: %q", name, entry)
+		// R59 B-N2 → R72 二十六次 W3-6 收紧：排除项必须是发射端实际会发射的
+		// 形态（services.CRSExcludedEntryEffective——CRS 规则 ID「纯数字/
+		// 数字-数字，900000-999999」或 CRS 文件名「REQUEST-9XX-*.conf」，文件
+		// 名经 crsFilenameToRuleIDRange 映射为 ID 区间）。此前保存侧只查字符集
+		// +长度，"942100L" 这类条目保存 200、发射时被形态门静默跳过（仅 warn
+		// 日志）——用户以为排除生效实则没有。保存即拒绝，与发射同款门永不漂移。
+		if name == "crs_excluded_rules" && !services.CRSExcludedEntryEffective(entry) {
+			return fmt.Errorf("%s 条目必须是 CRS 规则 ID（如 \"942100\"）或规则文件名（如 \"REQUEST-942-APPLICATION-ATTACK-SQLI.conf\"）: %q", name, entry)
 		}
 	}
 	return nil
@@ -1682,9 +1683,10 @@ func (h *Handlers) GetCRSUpdateLogs(c *gin.Context) {
 
 func (h *Handlers) GetIP2RegionInfo(c *gin.Context) {
 	info := models.IP2RegionInfo{
-		Version:      services.GetIP2RegionVersion(),
-		DbSize:       services.GetIP2RegionEntryCount(),
-		AutoUpdate:   false,
+		Version: services.GetIP2RegionVersion(),
+		DbSize:  services.GetIP2RegionEntryCount(),
+		// R72 二十六次 D2：行缺失兜底与 schema/种子默认对齐（TRUE）。
+		AutoUpdate:   true,
 		UpdateStatus: "idle",
 	}
 	err := db.DB.QueryRow(`SELECT COALESCE(updated_at,''), COALESCE(update_status,'idle'), COALESCE(message,''), COALESCE(trigger,''), COALESCE(last_checked,''), COALESCE(next_update,''), auto_update

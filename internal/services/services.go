@@ -92,8 +92,15 @@ func (m *MetricsService) collect() {
 		return
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// R72 二十六次 W3-2：读取上限对齐 overviewmetrics 的 16MB 探测模式
+	//（R34 H 同类）——规则数×状态码×host 序列的基数爆炸在 30s 采集周期里
+	// 可分配大块内存，超限按解析失败跳过本样本。
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20+1))
 	if err != nil {
+		return
+	}
+	if len(body) > 16<<20 {
+		log.Printf("Metrics endpoint body exceeded 16MB cap, skipping sample")
 		return
 	}
 

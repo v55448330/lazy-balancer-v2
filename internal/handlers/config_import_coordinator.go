@@ -118,7 +118,9 @@ func (session *configImportSession) commit(affectedRuleIDs []string, certificate
 	// R65 A-N1：v2 导入事务全量重插 cert_jobs（restoreTable 保留原 id），证书
 	// 候选必须读事务自身——经已提交视图会拿到将被替换的旧行，旧 PEM 覆写导入
 	// 刚落盘的新证书文件。导入期 CA 队列已 PauseAndDrain，无并发证书提交。
-	if err := session.h.caddyService.ApplyConfigFromTxCertAware(session.tx); err != nil {
+	// R72 二十六次 W1-1：导入强制重载——证书已在上方落盘，生成期比对相等，
+	// 非强制会被 errSameConfig 短路（旧证书继续服务）。
+	if err := session.h.caddyService.ApplyConfigFromTxCertAwareForce(session.tx); err != nil {
 		return &importCoordinatorError{phase: importPhaseCaddy, err: session.abort(err)}
 	}
 	if err := services.BumpClusterVersion(session.ctx, session.tx); err != nil {

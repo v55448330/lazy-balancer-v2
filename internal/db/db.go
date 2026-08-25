@@ -526,7 +526,7 @@ func createTables() error {
 		started_at DATETIME,
 		finished_at DATETIME
 	);
-	INSERT OR IGNORE INTO security_ip2region_version (id, version, auto_update) VALUES (1, 'unknown', 0);
+	INSERT OR IGNORE INTO security_ip2region_version (id, version, auto_update) VALUES (1, 'unknown', 1);
 	`
 
 	_, err := DB.Exec(schema)

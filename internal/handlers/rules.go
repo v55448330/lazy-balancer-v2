@@ -2028,8 +2028,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 					return
 				}
 				// R71 F-A1（第二出口）：Resume 后已应用配置同样缺 TLS——补一次重渲染
-				// 重应用；失败走既有 restoreACMEState 补偿。
-				if reapplyErr := h.caddyService.GenerateAndApplyConfig(); reapplyErr != nil {
+				// 重应用；失败走既有 restoreACMEState 补偿。R72 二十六次 W1-6：改走
+				// 强制变体（证书文件已在事务外落盘，JSON 相同会被短路）并接线
+				// recordCaddyApplyResult（失败必须进 caddy_apply_error，UI 可见）；
+				// 本函数已持有 caddyOpMu，不可改用 applyCaddyConfigE（重入死锁）。
+				reapplyErr := h.caddyService.GenerateAndApplyConfigForce()
+				h.recordCaddyApplyResult(reapplyErr)
+				if reapplyErr != nil {
 					restoreErr := restoreACMEState()
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "恢复证书任务后重载 Caddy 配置失败: " + errors.Join(reapplyErr, restoreErr).Error()})
 					return
@@ -2692,8 +2697,12 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			// 使已应用配置缺 TLS/301/证书文件，且 needJob 被 Resume 抑制不再触发任何
 			// re-apply，看门狗只查路由存在性——静默失配无上界。此处已提交视图=规则启用
 			// +job issued，立即重渲染重应用使 TLS 恢复；失败走既有 failEnable 补偿
-			//（enabled=0 + certJobsSnapshot 恢复 + 运行时快照恢复）。
-			if reapplyErr := h.caddyService.GenerateAndApplyConfig(); reapplyErr != nil {
+			//（enabled=0 + certJobsSnapshot 恢复 + 运行时快照恢复）。R72 二十六次
+			// W1-6：强制变体 + recordCaddyApplyResult（已持 caddyOpMu，不可用
+			// applyCaddyConfigE——重入死锁）。
+			reapplyErr := h.caddyService.GenerateAndApplyConfigForce()
+			h.recordCaddyApplyResult(reapplyErr)
+			if reapplyErr != nil {
 				failEnable("恢复证书任务后重载 Caddy 配置失败: " + reapplyErr.Error())
 				return
 			}

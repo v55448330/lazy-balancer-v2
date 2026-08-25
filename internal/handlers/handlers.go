@@ -150,10 +150,13 @@ func (h *Handlers) caddyApplyNoteLocked() string {
 
 // applyCaddyConfigE serializes against rule/config writes (caddyOpMu) and
 // persists the apply outcome; all manual re-apply entry points must use it.
+// R72 二十六次 W1-2：改用强制变体——手动重载（HTTP /caddy/reload 与 MCP
+// reload_caddy）的语义就是「强制收敛」，必须能击穿 errSameConfig 短路
+// （磁盘数据变化而 JSON 相同的场景），否则文档承诺的收敛能力不存在。
 func (h *Handlers) applyCaddyConfigE() error {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
-	err := h.caddyService.GenerateAndApplyConfig()
+	err := h.caddyService.GenerateAndApplyConfigForce()
 	h.recordCaddyApplyResult(err)
 	return err
 }

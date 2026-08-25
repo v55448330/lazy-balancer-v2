@@ -76,6 +76,17 @@ func (h *GeoIPHandler) Cleanup() error {
 // setGeoIPPlaceholders resolves the client IP against the database and
 // publishes the country fields on the request replacer.
 func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
+	ctx := r.Context()
+	// R72 二十六次 D1（裁决：fail-closed 哨兵）：不可解析客户端（全部 IPv6 流量、
+	// 查询失败、残缺 region）此前不发任何变量 → geoip CEL 对未设置变量求值出
+	// 错 → match=false → deny 模式地域拦截对 IPv6 静默零强制。现恒发全部变量，
+	// 空串哨兵下：海外项 country_name != "中国" 对空串成立（IPv6 按海外处理，
+	// 与 R57 fail-closed 立场一致）；省/市项对空串恒不匹配（不误伤）。
+	caddyhttp.SetVar(ctx, "geoip.country_code", "")
+	caddyhttp.SetVar(ctx, "geoip.country_name", "")
+	caddyhttp.SetVar(ctx, "geoip.region", "")
+	caddyhttp.SetVar(ctx, "geoip.province", "")
+	caddyhttp.SetVar(ctx, "geoip.city", "")
 	ip := realClientIP(r)
 	if ip == "" {
 		return
@@ -88,7 +99,6 @@ func (h *GeoIPHandler) setGeoIPPlaceholders(r *http.Request) {
 	if len(fields) < 5 {
 		return
 	}
-	ctx := r.Context()
 	caddyhttp.SetVar(ctx, "geoip.country_code", fields[4])
 	caddyhttp.SetVar(ctx, "geoip.country_name", fields[0])
 	caddyhttp.SetVar(ctx, "geoip.region", region)
@@ -138,11 +148,20 @@ func realClientIP(r *http.Request) string {
 // provinceAliases 与 internal/services/ip2region.go 的 ip2ProvinceAliases 同款
 // （叶子 Caddy 模块不可 import internal 包，小表复制，修改需两侧同步）。
 var provinceAliases = map[string]string{
+	// R72 二十六次 W3-4：与 internal/services/ip2region.go 的 ip2ProvinceAliases
+	// 逐条镜像（此前缺 11 条恒等映射与港澳台——无行为分歧但同步不变量破坏；
+	// 修改需两侧同步）。
 	// (UEruemqi, Wulumuqi) 段的省列乱码转写——按新疆发射（与树侧同步）。
 	"UEruemqi": "新疆维吾尔自治区",
-	"北京":       "北京市", "上海": "上海市", "天津": "天津市", "重庆": "重庆市",
-	"广西": "广西壮族自治区", "内蒙古": "内蒙古自治区", "西藏": "西藏自治区",
-	"宁夏": "宁夏回族自治区", "新疆": "新疆维吾尔自治区", "台湾": "台湾省",
+	"北京":       "北京市", "上海市": "上海市", "上海": "上海市", "天津市": "天津市", "天津": "天津市",
+	"重庆市": "重庆市", "重庆": "重庆市",
+	"广西壮族自治区": "广西壮族自治区", "广西": "广西壮族自治区",
+	"内蒙古自治区": "内蒙古自治区", "内蒙古": "内蒙古自治区",
+	"西藏自治区": "西藏自治区", "西藏": "西藏自治区",
+	"宁夏回族自治区": "宁夏回族自治区", "宁夏": "宁夏回族自治区",
+	"新疆维吾尔自治区": "新疆维吾尔自治区", "新疆": "新疆维吾尔自治区",
+	"台湾省": "台湾省", "台湾": "台湾省",
+	"香港特别行政区": "香港特别行政区", "澳门特别行政区": "澳门特别行政区",
 }
 
 var taiwanCities = map[string]bool{

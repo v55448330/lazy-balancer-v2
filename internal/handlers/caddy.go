@@ -152,6 +152,11 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get config: " + err.Error()})
 		return
 	}
+	// R72 二十六次 D4：DNS 凭证最小可见性——非 admin 响应以掩码占位。
+	// UpdateConfig 侧对掩码值按「未提交」处理（保持原值），回传保存不破坏凭证。
+	if role, _ := c.Get("role"); role != "admin" && cfg.DNSCredentials != "" {
+		cfg.DNSCredentials = maskedDNSCredentialsSentinel
+	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: cfg})
 }
@@ -224,6 +229,11 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
 		return
+	}
+	// R72 二十六次 D4：非 admin 的 GET /config 已把凭证替换为掩码——前端原样
+	// 回传时按「未提交」处理，避免掩码串覆盖真实凭证。
+	if req.DNSCredentials != nil && *req.DNSCredentials == maskedDNSCredentialsSentinel {
+		req.DNSCredentials = nil
 	}
 
 	// 与规则写路径同一锁序：先 caddyOpMu，DB 写入与 Caddy 应用全程持锁
@@ -506,6 +516,12 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 }
 
 func (h *Handlers) ValidateConfig(c *gin.Context) {
+	// R72 二十六次 W1-8：本端点执行两次真实 /load（校验载荷 + 权威回弹），
+	// 必须与其他写端点共享 caddyOpMu——与 UpdateConfig 并发时，用户配置可能
+	// 被捕获进其 oldRuntimeConfig 快照，后续失败恢复会把用户配置重新应用
+	// （运行时与 DB 分叉）。rare×rare 且自愈，但违反「写端点持锁」不变量。
+	h.caddyOpMu.Lock()
+	defer h.caddyOpMu.Unlock()
 	var configData map[string]interface{}
 	if err := c.ShouldBindJSON(&configData); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid config JSON"})
@@ -790,7 +806,10 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 
 	recordAudit(c, "更新", "Caddy配置", "保存 Caddy 全局配置")
 	recordAudit(c, "重载", "Caddy服务", "保存配置后自动重载")
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config saved"})
+	// R72 二十六次 D3（裁决：保留逃生口 + 明示后果）：自定义 Caddy 配置是
+	// 一次性逃生口，数据库生成器从不消费 caddy_config 列——任何后续规则/
+	// 配置变更或集群同步都会以权威生成配置覆盖它。保存成功即明示。
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config saved（注意：自定义配置为一次性逃生口，任何后续规则/配置变更或集群同步都会以数据库生成的权威配置覆盖它）"})
 }
 
 func (h *Handlers) StartCaddy(c *gin.Context) {

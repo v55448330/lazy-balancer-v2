@@ -308,3 +308,24 @@ func assertLatestCertificateAudit(t *testing.T, wantScope, wantResult string) {
 		t.Fatalf("audit action=%q detail=%q, want scope %q result %q", action, detail, wantScope, wantResult)
 	}
 }
+
+func TestMaskedDNSCredentialsRoundtrip(t *testing.T) {
+	// R72 二十六次 D4：非 admin GET 到掩码 → 原样回传保存 → 按「未提交」处理；
+	// 真实新值正常提交；显式清空语义保留。
+	if !isMaskedDNSCredentials(map[string]string{"id": "***", "token": "***"}) {
+		t.Fatal("all-sentinel map must be detected as masked")
+	}
+	if isMaskedDNSCredentials(map[string]string{"id": "***", "token": "real-secret"}) {
+		t.Fatal("mixed real value must not be masked roundtrip")
+	}
+	if isMaskedDNSCredentials(map[string]string{}) {
+		t.Fatal("empty map is not a masked roundtrip")
+	}
+	if isMaskedDNSCredentials(map[string]string{"id": "", "token": ""}) {
+		t.Fatal("all-empty is explicit-clear semantics, not masked")
+	}
+	masked := maskDNSCredentialsJSON(`{"id":"abc","token":"xyz"}`)
+	if masked != `{"id":"***","token":"***"}` {
+		t.Fatalf("mask shape = %q", masked)
+	}
+}

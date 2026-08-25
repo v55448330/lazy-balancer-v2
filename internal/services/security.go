@@ -499,6 +499,15 @@ func validSecRuleRemoveTarget(s string) bool {
 	return loErr == nil && hiErr == nil && loN >= 900000 && hiN >= loN && hiN <= 999999
 }
 
+// CRSExcludedEntryEffective 判定排除条目是否会被发射端实际发射（R72 二十六次
+// W3-6）：与发射链同款门——文件名先经 crsFilenameToRuleIDRange 映射为 ID 区间，
+// 再过 validSecRuleRemoveTarget 形态/边界门。保存侧复用本门可在保存时拒绝
+// 「保存 200、发射静默跳过」的条目（如字母后缀 "942100L"），同时不误伤合法的
+// CRS 文件名形态（"REQUEST-942-*.conf" → 942000-942999）。
+func CRSExcludedEntryEffective(entry string) bool {
+	return validSecRuleRemoveTarget(crsFilenameToRuleIDRange(strings.TrimSpace(entry)))
+}
+
 func crsFilenameToRuleIDRange(s string) string {
 	parts := strings.SplitN(s, "-", 3)
 	if len(parts) >= 2 {
