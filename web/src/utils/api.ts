@@ -139,15 +139,16 @@ service.interceptors.request.use(
 service.interceptors.response.use(
   (response) => {
     const res = response.data
-    // R72 八次（用户裁决）：MFA 宽限窗内放行的写操作——告知用户已验证过
-    //（TOTP 同片不可重用，窗口内没有可用码也照常执行）。每 60 秒最多提示一次，
-    // 避免连续写操作刷屏。
+    // R72 八次→十二次（用户裁决）：宽限窗提示改为「仅 silent 请求弹」——非 silent
+    // 的写操作页面自己会弹「保存成功」等结果 toast，独立 info 要么抢位要么被节流
+    // 吞掉（用户实测「经常不弹出」且「0 秒」观感差）；silent 请求（无页面级反馈）
+    // 保留 info 兜底，60 秒节流。
     const mfaVerifiedAgo = response.headers?.['x-mfa-verified-seconds-ago']
-    if (mfaVerifiedAgo !== undefined) {
+    if (mfaVerifiedAgo !== undefined && response.config?.silent) {
       const now = Date.now()
       if (now - lastMfaGraceNoticeAt > 60_000) {
         lastMfaGraceNoticeAt = now
-        ElMessage.info(`MFA 已于 ${mfaVerifiedAgo} 秒内验证过，当前操作无需验证`)
+        ElMessage.info('MFA 已验证，本次操作免验证')
       }
     }
     if (res.code !== undefined && res.code !== 0 && res.code !== 200) {
