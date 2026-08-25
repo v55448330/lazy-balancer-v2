@@ -23,8 +23,10 @@
         v-model:settings="settings"
         @save="handleSaveCaddy"
       />
-      <MfaSettingsCard />
     </div>
+    <!-- R72：MFA 卡片移出两列 grid、全宽置于设置区首屏可见位置（用户反馈
+         「找不到启用入口」——此前排在 grid 第二行易被忽略）。 -->
+    <MfaSettingsCard v-if="activeTab === 'basic'" />
     <ClusterSettings
       v-else-if="activeTab === 'cluster'"
     />
