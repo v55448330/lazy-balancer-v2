@@ -518,6 +518,10 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 }
 
 func (h *Handlers) ParseCertificate(c *gin.Context) {
+	// R72 二十八次审计 F3：证书解析入参 PEM 上限 2MB（对齐 admin-tls inspect 的
+	// maxAdminTLSJSONBytes 量级）——此前无上限，任何持凭证者（含只读 API key，
+	// 本端点在 readOnlyWriteRoutes）可投递任意大 body 造成内存压力。
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
 	var req struct {
 		CertPEM string `json:"cert_pem"`
 		KeyPEM  string `json:"key_pem"`
