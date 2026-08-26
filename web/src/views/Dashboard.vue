@@ -274,7 +274,10 @@
             stripe
             :header-cell-style="{ background: '#f9fafb' }"
           >
-            <el-table-column prop="name" label="规则名称" min-width="130">
+            <!-- R72 二十八次宽度二调（用户实测 458/230 失调）：min-width 弹性列按
+                 值比例分配剩余空间（260:130 把 2/3 剩余给了状态码列）——改固定 width
+                 才能精确控制比例；名称列取 280（内容列），右端空白由表格自然留白。 -->
+            <el-table-column prop="name" label="规则名称" width="280">
               <template #default="{ row }">
                 <!-- R72 二十八次：长规则名省略号 + 悬浮全文（列宽 100→130 用户反馈调整）。 -->
                 <!-- R72 二十八次审计 F1：省略号样式必须放在 slot 内层 span——el-link 根是
@@ -311,7 +314,7 @@
             <!-- R72 二十八次初版 310 过宽（用户反馈）→ 260：常见量级（万级以内）
                  四 badge 单行 ~230px 舒适；极端大数字（百万级）由 flex-wrap 换行
                  兜底（badge 自身 nowrap，不出现数字内折）。 -->
-            <el-table-column label="状态码" min-width="260" align="center">
+            <el-table-column label="状态码" width="270" align="center">
               <template #default="{ row }">
                 <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
                 <div v-else-if="row.protocol === 'tcp'" class="text-secondary">-</div>

@@ -144,7 +144,10 @@
             <el-form-item label="排除规则">
               <el-select v-model="crsExcludedRules" :disabled="form.mode === 'off'" multiple filterable placeholder="搜索并选择要排除的规则" style="width: 100%">
                 <el-option-group label="OWASP CRS 规则">
-                  <el-option v-for="rule in crsRuleOptions" :key="rule.filename" :label="`${rule.filename} (${rule.category})`" :value="rule.filename" />
+                  <!-- R72 二十八次：与 CRS 规则组同款「代码 · 类别」解析形态
+                     （用户反馈：此前显示原始文件名 REQUEST-942-*.conf，与规则组
+                     的「942 · SQL 注入」不一致）；文件名保留在 title 悬浮可见。 -->
+                <el-option v-for="rule in crsRuleOptions" :key="rule.filename" :label="`${crsOptionCode(rule.filename)} · ${rule.category}`" :value="rule.filename" :title="rule.filename" />
                 </el-option-group>
               </el-select>
               <div class="form-tip-line">排除的规则不会被检测或拦截</div>
@@ -563,6 +566,13 @@ const normalizeCrsGroups = (values: string[]): string[] => {
     return match?.[1] ?? ''
   }).filter((code) => code !== '')
   return [...new Set(codes)]
+}
+
+// crsOptionCode 从 CRS 文件名提取两位组代码（REQUEST-942-*.conf → "942"）——
+// 与 normalizeCrsGroups 同源，用于排除规则选项的解析化显示。
+const crsOptionCode = (filename: string): string => {
+  const match = /^(?:REQUEST|RESPONSE)-9(\d{2})-/i.exec(filename)
+  return match ? `9${match[1]}` : filename
 }
 
 const crsGroupOptions = computed(() => {

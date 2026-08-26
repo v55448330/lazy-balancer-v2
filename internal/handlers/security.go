@@ -2161,6 +2161,8 @@ func categorizeCRSFile(filename string) string {
 		return "协议异常"
 	case strings.Contains(name, "921-"):
 		return "协议攻击"
+	case strings.Contains(name, "922-"):
+		return "multipart 攻击"
 	case strings.Contains(name, "930-"):
 		return "路径穿越 (LFI)"
 	case strings.Contains(name, "931-"):
@@ -2185,8 +2187,16 @@ func categorizeCRSFile(filename string) string {
 		return "响应信息泄露"
 	case strings.Contains(name, "951-"):
 		return "响应 SQL 泄露"
+	case strings.Contains(name, "952-"):
+		return "响应 Java 泄露"
 	case strings.Contains(name, "953-"):
 		return "响应 PHP 泄露"
+	case strings.Contains(name, "954-"):
+		return "响应 IIS 泄露"
+	case strings.Contains(name, "955-"):
+		return "Webshell"
+	case strings.Contains(name, "956-"):
+		return "响应 Ruby 泄露"
 	case strings.Contains(name, "959-"):
 		return "响应阻断评估"
 	case strings.Contains(name, "980-"):
@@ -2205,6 +2215,8 @@ func categorizeCRSFile(filename string) string {
 		return "爬虫检测"
 	case strings.Contains(name, "915-"):
 		return "请求体限制"
+	case strings.Contains(name, "999-"):
+		return "通用异常"
 	default:
 		return "其他"
 	}
