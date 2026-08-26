@@ -298,7 +298,7 @@ func GetIP2RegionProvinceList() []string {
 // treeCacheRevision 地域树缓存修订号——规范化规则（映射/别名/结构）变更时
 // 递增，旧缓存据此判定过期重建。ASCII 残留探测只能发现「缓存里有脏数据」，
 // 发现不了「该有而没有」的条目（如 r25 前整段被丢的 新疆/乌鲁木齐市）。
-const treeCacheRevision = "r25"
+const treeCacheRevision = "r26" // r26：自治州简称→全称（大理→大理白族自治州）
 
 var ip2ProvinceAliases = map[string]string{
 	// v3.17.0 段 (UEruemqi, Wulumuqi)：省列是城市名 Ürümqi 的乱码转写、城市列
@@ -378,6 +378,10 @@ func normalizeIP2City(raw string) string {
 	}
 	if fixed, ok := ip2PinyinCityFixes[trimmed]; ok {
 		return fixed
+	}
+	// R72 二十八次：少数民族自治州简称 → 全称（见 ip2AutonomousPrefectures）。
+	if full, ok := ip2AutonomousPrefectures[trimmed]; ok {
+		return full
 	}
 	if trimmed[0] < 0x80 {
 		return "" // 未映射的拼音/英文段
@@ -575,4 +579,33 @@ func writeRegionTreeCache(tree *IP2RegionRegionTree) {
 		cityTotal += len(cities)
 	}
 	writeIP2RegionUpdateLog("INFO", "idle", fmt.Sprintf("地域树缓存已重建：%d 省级 / %d 城市（未映射 ASCII 段已过滤：省 %d / 城市 %d）", len(tree.Provinces), cityTotal, tree.DroppedASCIIProvinces, tree.DroppedASCIICities))
+}
+
+// ip2AutonomousPrefectures（R72 二十八次，用户反馈：「大理/怒江/凉山缺市字」——
+// 实为少数民族自治州的简称）xdb 对自治州存简称、对普通地级市存全称
+// （如「呼和浩特市」），选项树里「大理」与「呼和浩特市」并列显得缺字。
+// 简称 → 全称 映射；与 caddygeoip 侧 normalizeCity 同款表同步维护。
+// 注意不可盲加「市」：「大理市」是另一个县级市，全称是「大理白族自治州」。
+// 港澳的「九龙/将军澳/新界/香港岛/澳门」是地区名非城市，不在此表（保持原值）。
+var ip2AutonomousPrefectures = map[string]string{
+	// 云南（8 个自治州）
+	"大理": "大理白族自治州", "怒江": "怒江傈僳族自治州", "楚雄": "楚雄彝族自治州",
+	"红河": "红河哈尼族彝族自治州", "文山": "文山壮族苗族自治州", "西双版纳": "西双版纳傣族自治州",
+	"德宏": "德宏傣族景颇族自治州", "迪庆": "迪庆藏族自治州",
+	// 四川（3）
+	"凉山": "凉山彝族自治州", "甘孜": "甘孜藏族自治州", "阿坝": "阿坝藏族羌族自治州",
+	// 贵州（3）
+	"黔东南": "黔东南苗族侗族自治州", "黔南": "黔南布依族苗族自治州", "黔西南": "黔西南布依族苗族自治州",
+	// 湖南/湖北/吉林（3）
+	"湘西": "湘西土家族苗族自治州", "恩施": "恩施土家族苗族自治州", "延边": "延边朝鲜族自治州",
+	// 新疆（5）
+	"伊犁": "伊犁哈萨克自治州", "昌吉": "昌吉回族自治州", "巴音郭楞": "巴音郭楞蒙古自治州",
+	"克孜勒苏": "克孜勒苏柯尔克孜自治州", "博尔塔拉": "博尔塔拉蒙古自治州",
+	// 青海（6）
+	"海西": "海西蒙古族藏族自治州", "海北": "海北藏族自治州", "黄南": "黄南藏族自治州",
+	"海南": "海南藏族自治州", "果洛": "果洛藏族自治州", "玉树": "玉树藏族自治州",
+	// 甘肃（2）
+	"临夏": "临夏回族自治州", "甘南": "甘南藏族自治州",
+	// 地区（1：xdb 缺「地区」后缀）
+	"大兴安岭": "大兴安岭地区",
 }

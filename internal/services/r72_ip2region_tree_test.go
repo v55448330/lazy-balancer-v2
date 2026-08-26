@@ -57,6 +57,32 @@ func TestIP2RegionRegionTree_scan(t *testing.T) {
 	if tree.DroppedASCIIProvinces != 0 || tree.DroppedASCIICities != 0 {
 		t.Fatalf("unmapped ASCII segments dropped: prov=%d city=%d — 映射表需为新版 xdb 补条目", tree.DroppedASCIIProvinces, tree.DroppedASCIICities)
 	}
+	// r26（R72 二十八次，用户反馈）：少数民族自治州简称必须映射为全称——
+	// 云南大理/怒江、四川凉山等 30 个自治州；「大理」这类简称不得残留。
+	assertCity := func(prov, want string) {
+		for _, c := range tree.Cities[prov] {
+			if c == want {
+				return
+			}
+		}
+		t.Fatalf("%s 缺 %q", prov, want)
+	}
+	assertCity("云南省", "大理白族自治州")
+	assertCity("云南省", "怒江傈僳族自治州")
+	assertCity("四川省", "凉山彝族自治州")
+	assertCity("新疆维吾尔自治区", "伊犁哈萨克自治州")
+	assertCity("青海省", "海西蒙古族藏族自治州")
+	assertCity("甘肃省", "临夏回族自治州")
+	for _, bad := range []string{"大理", "怒江", "凉山"} {
+		for prov, cities := range tree.Cities {
+			for _, c := range cities {
+				if c == bad {
+					t.Fatalf("%s 残留自治州简称 %q", prov, bad)
+				}
+			}
+		}
+	}
+
 	// r25：UEruemqi 段回收——新疆/乌鲁木齐市 必须在位（此前整段被丢）；
 	// revision 机制保证旧缓存自动重建。
 	if tree.Revision != treeCacheRevision {

@@ -199,3 +199,23 @@ func TestNormalizeProvince_taiwanCityPromotion(t *testing.T) {
 		t.Fatalf("normalizeProvince(UEruemqi) = %q, want 新疆维吾尔自治区", got)
 	}
 }
+
+func TestNormalizeCity_autonomousPrefecture(t *testing.T) {
+	// R72 二十八次（用户反馈）：少数民族自治州简称 → 全称（与树侧同款表
+	// 同步）；「大理市」是另一个县级市，全称必须是「大理白族自治州」。
+	cases := map[string]string{
+		"大理":   "大理白族自治州",
+		"怒江":   "怒江傈僳族自治州",
+		"凉山":   "凉山彝族自治州",
+		"伊犁":   "伊犁哈萨克自治州",
+		"大兴安岭": "大兴安岭地区",
+		// 非自治州不受影响
+		"呼和浩特市": "呼和浩特市",
+		"九龙":    "九龙", // 香港地区名保持原值
+	}
+	for in, want := range cases {
+		if got := normalizeCity(in); got != want {
+			t.Fatalf("normalizeCity(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
