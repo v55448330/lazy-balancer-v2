@@ -578,6 +578,18 @@ const crsOptionCode = (filename: string): string => {
   return match ? `9${match[1]}` : filename
 }
 
+// crsOptionPhase（用户反馈）：CRS 规则文件分请求/响应两个阶段——REQUEST-*
+// 为请求阶段（请求行/头/参数/体），RESPONSE-* 为响应阶段（响应体）。选项
+// 必须区分阶段，否则「942 · SQL 注入」与「955 · Webshell」无法看出分别作用
+// 于请求还是响应。命名取 CRS 官方 phase 术语的最简中文：请求 / 响应
+//（REQUEST 规则查的不只是请求体，叫「请求体」不准确）。
+const crsOptionPhase = (filename: string): string => (/^RESPONSE-/i.test(filename) ? '响应' : '请求')
+
+// 排除规则选项按阶段分组（el-option-group 视觉分组 + label 内 phase 前缀供
+// 已选 tag 区分）。
+const crsRequestRuleOptions = computed(() => crsRuleOptions.value.filter((r) => !/^RESPONSE-/i.test(r.filename)))
+const crsResponseRuleOptions = computed(() => crsRuleOptions.value.filter((r) => /^RESPONSE-/i.test(r.filename)))
+
 const crsGroupOptions = computed(() => {
   const seen = new Map<string, string>()
   for (const rule of crsRuleOptions.value) {
