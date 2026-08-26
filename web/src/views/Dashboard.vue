@@ -274,10 +274,9 @@
             stripe
             :header-cell-style="{ background: '#f9fafb' }"
           >
-            <el-table-column prop="name" label="规则名称" min-width="100">
+            <el-table-column prop="name" label="规则名称" min-width="130">
               <template #default="{ row }">
-                <!-- R72 二十八次：列宽让给状态码列（大请求数四枚 badge 需
-                     ~300px 不折行）；长规则名省略号 + 悬浮全文。 -->
+                <!-- R72 二十八次：长规则名省略号 + 悬浮全文（列宽 100→130 用户反馈调整）。 -->
                 <!-- R72 二十八次审计 F1：省略号样式必须放在 slot 内层 span——el-link 根是
                      inline-flex，text 直接内容在 .el-link__inner flex item 里，根上的
                      text-overflow 不会渲染 …（flex 容器无自有行盒），只硬裁切。 -->
@@ -309,10 +308,10 @@
                 <span class="text-primary">{{ isRuleDisabled(row) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-' }}</span>
               </template>
             </el-table-column>
-            <!-- R72 二十八次：220 固定宽 → 310 弹性保底——四枚大数字 badge
-                 （如 2xx 1,234,567）约 308px，固定 220 必折行；min-width 在
-                 小数字场景由其他列吸收剩余空间，不浪费。 -->
-            <el-table-column label="状态码" min-width="310" align="center">
+            <!-- R72 二十八次初版 310 过宽（用户反馈）→ 260：常见量级（万级以内）
+                 四 badge 单行 ~230px 舒适；极端大数字（百万级）由 flex-wrap 换行
+                 兜底（badge 自身 nowrap，不出现数字内折）。 -->
+            <el-table-column label="状态码" min-width="260" align="center">
               <template #default="{ row }">
                 <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
                 <div v-else-if="row.protocol === 'tcp'" class="text-secondary">-</div>
