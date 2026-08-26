@@ -76,9 +76,10 @@ func GenerateCaddyID() (string, error) {
 func (s *CaddyService) ApplyConfig(config map[string]interface{}) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if store, ok := config[caddyConfigStoreKey].(caddyConfigStore); ok {
-		config = generateCaddyConfigFromStore(store)
-	}
+	// R72 二十七次（补正重写）：caddyConfigStoreKey 再生分支已删——生成器从不在
+	// config map 上设置该 key 给本入口（历史 r65 形态；唯一设置点 generateConfig
+	// 与 CertAwareForce 内部消费），保留消费分支只会掩盖误传内部形态的错误；
+	// caddyPayload 的剥离逻辑保留作防御。
 	return s.applyConfigLocked(config)
 }
 
@@ -110,9 +111,6 @@ func (s *CaddyService) applyConfigLocked(config map[string]interface{}) (err err
 func (s *CaddyService) ApplyConfigForce(config map[string]interface{}) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if store, ok := config[caddyConfigStoreKey].(caddyConfigStore); ok {
-		config = generateCaddyConfigFromStore(store)
-	}
 	return s.applyConfigLockedOpt(config, true)
 }
 
@@ -2087,10 +2085,13 @@ func normalizeHostForMatcher(host string) string {
 // 的 headers 会在运行时经过 replacer 替换（v2.11.4 modules/caddyhttp/staticresp.go），
 // 因此多域名规则（a.com,b.com）访问 b.com 时会跳回 b.com，而不是被劫持到首个域名。
 func httpsRedirectLocation(listenPort int) string {
+	// R72 二十七次 N2（补正重写）：Location 必须追加 {http.request.uri}（path+query）
+	// ——Caddy static_response 不会自动保留原 URI（原生 auto-HTTPS 重定向会保留），
+	// 缺失时 http://a.com/page?x=1 会被跳到根路径。首版实施因脚本断言中止丢失。
 	if listenPort != 443 {
-		return fmt.Sprintf("https://{http.request.host}:%d", listenPort)
+		return fmt.Sprintf("https://{http.request.host}:%d{http.request.uri}", listenPort)
 	}
-	return "https://{http.request.host}"
+	return "https://{http.request.host}{http.request.uri}"
 }
 
 type SingleRuleConfig struct {

@@ -274,9 +274,11 @@
             stripe
             :header-cell-style="{ background: '#f9fafb' }"
           >
-            <el-table-column prop="name" label="规则名称" min-width="150">
+            <el-table-column prop="name" label="规则名称" min-width="100">
               <template #default="{ row }">
-                <el-link type="primary" :underline="false" role="button" tabindex="0" @click.prevent="openRuleHistory(row)" @keydown.enter.prevent="openRuleHistory(row)" @keydown.space.prevent="openRuleHistory(row)">{{ row.name }}</el-link>
+                <!-- R72 二十八次：列宽让给状态码列（大请求数四枚 badge 需
+                     ~300px 不折行）；长规则名省略号 + 悬浮全文。 -->
+                <el-link type="primary" :underline="false" role="button" tabindex="0" :title="row.name" style="max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" @click.prevent="openRuleHistory(row)" @keydown.enter.prevent="openRuleHistory(row)" @keydown.space.prevent="openRuleHistory(row)">{{ row.name }}</el-link>
               </template>
             </el-table-column>
             <el-table-column label="协议" width="90">
@@ -304,7 +306,10 @@
                 <span class="text-primary">{{ isRuleDisabled(row) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="状态码" width="220" align="center">
+            <!-- R72 二十八次：220 固定宽 → 310 弹性保底——四枚大数字 badge
+                 （如 2xx 1,234,567）约 308px，固定 220 必折行；min-width 在
+                 小数字场景由其他列吸收剩余空间，不浪费。 -->
+            <el-table-column label="状态码" min-width="310" align="center">
               <template #default="{ row }">
                 <span v-if="isRuleDisabled(row)" class="text-secondary">已禁用</span>
                 <div v-else-if="row.protocol === 'tcp'" class="text-secondary">-</div>
@@ -1083,6 +1088,7 @@ onUnmounted(() => {
   padding: 1px 4px;
   border-radius: 4px;
   font-weight: 500;
+  white-space: nowrap;
 }
 .status-2xx { background: #ecfdf5; color: #059669; }
 .status-3xx { background: #eff6ff; color: #2563eb; }

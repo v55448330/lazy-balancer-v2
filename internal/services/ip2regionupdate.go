@@ -209,6 +209,12 @@ func (m *IP2RegionUpdateManager) run(trigger string) {
 	writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusChecking), fmt.Sprintf("最新版本 %s，当前版本 %s", tag, currentIP2RegionVersion()))
 
 	if tag == currentIP2RegionVersion() {
+		// R72 二十七次 N6（补正重写——首版实施脚本缺失落盘调用丢失）：已是最新也
+		// 补写 .version sidecar——此前该分支提前 return 不写，崩溃遗留的 stale tag
+		// 将无限期不愈（愈于下次「安装」而非下次「检查」）；幂等，写失败仅记日志。
+		if err := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", tag); err != nil {
+			log.Printf("ip2region update: failed to refresh .version sidecar at latest: %v", err)
+		}
 		writeIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), "已是最新版本，无需更新")
 		if _, err := db.DB.Exec(
 			"UPDATE security_ip2region_version SET update_status='success', message='已是最新版本', finished_at=datetime('now'), consecutive_failures=0, next_update=IIF(auto_update=1, datetime('now','+24 hours'), next_update) WHERE id=1",

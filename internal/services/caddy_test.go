@@ -1095,7 +1095,7 @@ func TestGenerateSingleRuleCaddyConfig_httpsRedirect_includesNonStandardListenPo
 	// Caddy replacer 替换（v2.11.4 modules/caddyhttp/staticresp.go），
 	// 多域名规则（本例 example.com + www.example.com）访问任一域名都跳回该域名，
 	// 而不是被劫持到首个域名；非 443 监听端口追加端口后缀。
-	assertEqual(t, headers["Location"], []string{"https://{http.request.host}:8443"})
+	assertEqual(t, headers["Location"], []string{"https://{http.request.host}:8443{http.request.uri}"})
 
 	// When the rule listens on the default HTTPS port
 	rule.ListenPort = 443
@@ -1104,7 +1104,7 @@ func TestGenerateSingleRuleCaddyConfig_httpsRedirect_includesNonStandardListenPo
 	// Then the port is omitted
 	routes = httpRoutesFromServer(t, config, "http_443")
 	headers = mustMap(t, firstHandler(t, routes[0])["headers"], "redirect headers")
-	assertEqual(t, headers["Location"], []string{"https://{http.request.host}"})
+	assertEqual(t, headers["Location"], []string{"https://{http.request.host}{http.request.uri}"})
 }
 
 func TestGenerateCaddyConfig_httpsRedirect_includesNonStandardListenPort(t *testing.T) {
@@ -1132,7 +1132,7 @@ func TestGenerateCaddyConfig_httpsRedirect_includesNonStandardListenPort(t *test
 		t.Fatalf("unexpected redirect handler: %#v", response)
 	}
 	headers := mustMap(t, response["headers"], "redirect headers")
-	assertEqual(t, headers["Location"], []string{"https://{http.request.host}:8443"})
+	assertEqual(t, headers["Location"], []string{"https://{http.request.host}:8443{http.request.uri}"})
 }
 
 func TestGenerateCaddyConfig_httpsRedirect_multiDomainUsesRequestHostPlaceholder(t *testing.T) {
@@ -1162,7 +1162,7 @@ func TestGenerateCaddyConfig_httpsRedirect_multiDomainUsesRequestHostPlaceholder
 		t.Fatalf("unexpected redirect handler: %#v", response)
 	}
 	headers := mustMap(t, response["headers"], "redirect headers")
-	assertEqual(t, headers["Location"], []string{"https://{http.request.host}"})
+	assertEqual(t, headers["Location"], []string{"https://{http.request.host}{http.request.uri}"})
 }
 
 func TestGenerateSingleRuleCaddyConfig_httpsRedirect_multiDomainUsesRequestHostPlaceholder(t *testing.T) {
@@ -1183,7 +1183,7 @@ func TestGenerateSingleRuleCaddyConfig_httpsRedirect_multiDomainUsesRequestHostP
 		t.Fatalf("unexpected redirect handler: %#v", response)
 	}
 	headers := mustMap(t, response["headers"], "redirect headers")
-	assertEqual(t, headers["Location"], []string{"https://{http.request.host}:8443"})
+	assertEqual(t, headers["Location"], []string{"https://{http.request.host}:8443{http.request.uri}"})
 }
 
 func TestGenerateSingleRuleCaddyConfig_serverTokensHiddenDefersServerHeaderDelete(t *testing.T) {
@@ -2244,5 +2244,20 @@ func TestApplyConfig_autoForceOnCertSnapshot(t *testing.T) {
 	}
 	if len(forced) != 2 || !forced[1] {
 		t.Fatalf("non-empty cert snapshot must auto-force reload, forced=%v", forced)
+	}
+}
+
+func TestHttpsRedirectLocationPreservesURI(t *testing.T) {
+	// R72 二十七次补正：301 Location 必须携带 {http.request.uri}（path+query）——
+	// v2.1.11 首发时该修复因实施脚本断言中止丢失且无测试兜底，发布信息与代码
+	// 不一致。本断言锁定占位符在位，防止再次静默丢失。
+	for _, port := range []int{443, 8443} {
+		loc := httpsRedirectLocation(port)
+		if !strings.Contains(loc, "{http.request.uri}") {
+			t.Fatalf("httpsRedirectLocation(%d)=%q missing {http.request.uri}", port, loc)
+		}
+		if !strings.Contains(loc, "{http.request.host}") {
+			t.Fatalf("httpsRedirectLocation(%d)=%q missing {http.request.host}", port, loc)
+		}
 	}
 }
