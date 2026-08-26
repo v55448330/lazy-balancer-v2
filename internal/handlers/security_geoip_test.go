@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"lazy-balancer-v2/internal/services"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +12,10 @@ import (
 // TestCreateSecurityPolicy_geoipColumnsRoundTrip verifies that geoip_countries
 // and geoip_mode are persisted on create and returned by GetSecurityPolicy.
 func TestCreateSecurityPolicy_geoipColumnsRoundTrip(t *testing.T) {
+	// R72 二十七次 N5：地域条目（含海外）现要求 IP 库已装载——注入 live 省份
+	// 模拟 xdb 在位（生产由 InitIP2Region 装载驱动）。
+	services.SetIP2RegionLiveProvincesForTest([]string{"海外", "广东省", "北京市"})
+	t.Cleanup(func() { services.SetIP2RegionLiveProvincesForTest(nil) })
 	// Given a fresh database and a policy payload carrying geoip fields
 	setupSecurityPolicyTestDB(t)
 	router := newSecurityRouter(t)
@@ -100,6 +105,10 @@ func TestUpdateSecurityPolicy_geoipMode_validatesEnum(t *testing.T) {
 // TestListSecurityPolicies_geoipSummary verifies the summary list exposes the
 // geoip fields.
 func TestListSecurityPolicies_geoipSummary(t *testing.T) {
+	// R72 二十七次 N5：地域条目（含海外）现要求 IP 库已装载——注入 live 省份
+	// 模拟 xdb 在位（生产由 InitIP2Region 装载驱动）。
+	services.SetIP2RegionLiveProvincesForTest([]string{"海外", "广东省", "北京市"})
+	t.Cleanup(func() { services.SetIP2RegionLiveProvincesForTest(nil) })
 	// Given a fresh database with a geoip policy
 	setupSecurityPolicyTestDB(t)
 	router := newSecurityRouter(t)

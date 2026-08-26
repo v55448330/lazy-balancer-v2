@@ -229,7 +229,19 @@ func GetIP2RegionEntryCount() int {
 
 // GetIP2RegionProvinces returns the province list from the live searcher, or
 // ["海外"] when no database is loaded.
+// ip2RegionLiveProvincesOverride 仅供测试注入「live 已装载」形态（模拟 xdb
+// 在位），生产代码不设置。nil 时走真实 searcher 路径。
+var ip2RegionLiveProvincesOverride []string
+
+// SetIP2RegionLiveProvincesForTest 注入/清除测试用 live 省份列表。
+func SetIP2RegionLiveProvincesForTest(provinces []string) {
+	ip2RegionLiveProvincesOverride = provinces
+}
+
 func GetIP2RegionProvinces() []string {
+	if ip2RegionLiveProvincesOverride != nil {
+		return ip2RegionLiveProvincesOverride
+	}
 	ip2regionMu.RLock()
 	searcher := ip2regionSearcher
 	ip2regionMu.RUnlock()
@@ -334,7 +346,7 @@ func normalizeIP2Province(raw string) string {
 	return trimmed
 }
 
-// ip2PinyinCityFixes xdb 部分段的城市列为拼音/英文形态（v3.17.0 实测 46 条，
+// ip2PinyinCityFixes xdb 部分段的城市列为拼音/英文形态（v3.17.0 实测 45 条，
 // 如 Guangzhou Shi/Shanghai/Taipei City）——映射为规范中文名；不在此表的
 // ASCII 城市直接过滤（宁缺勿乱，无法可靠音译）。R72 二十五次起发射侧
 // （caddygeoip normalizeCity）用同款表同步映射——城市级 CEL 规则对拼音段

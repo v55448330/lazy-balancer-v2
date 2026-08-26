@@ -325,7 +325,7 @@ func TestSyncService_applySnapshot_warnsOnInvalidCustomRuleTarget(t *testing.T) 
 	if count != 1 {
 		t.Fatalf("custom rule not faithfully replicated: count=%d, want 1", count)
 	}
-	if !strings.Contains(logs.String(), "非法 target 或 operator") {
+	if !strings.Contains(logs.String(), "非法 target/operator 或名字含控制字符") {
 		t.Fatalf("sync warning must cover invalid target/operator, got %q", logs.String())
 	}
 }

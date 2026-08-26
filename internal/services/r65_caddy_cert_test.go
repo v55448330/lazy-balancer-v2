@@ -45,7 +45,7 @@ func TestGenerateCaddyConfig_txFallbackFillsCandidatesForPredicateMiss(t *testin
 	}
 }
 
-// 同 id 全量替换（v2 导入形态）：certSource=tx（ApplyConfigFromTxCertAware）时
+// 同 id 全量替换（v2 导入形态）：certSource=tx（ApplyConfigFromTxCertAwareForce）时
 // 渲染并物化事务内的新 PEM——已提交视图的旧行不得覆写导入的新证书。
 func TestGenerateCaddyConfig_txCertSourceUsesInTxPEM(t *testing.T) {
 	useTemporaryCertDir(t)

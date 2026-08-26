@@ -467,13 +467,23 @@ func applySecurityCustomRules(ctx context.Context, tx *sql.Tx, rules []models.Se
 	// （从节点与主节点保持一致）。
 	invalid := false
 	for _, rule := range rules {
-		if conditionsEmissionIssue(rule.Conditions) != "" {
+		// R72 二十七次 N8：补 customRuleEmissionIssue（含名字控制字符/双引号、
+		// legacy 单 target 形态）——此前只查 conditions，名字含引号的规则被
+		// 忠实复制到从节点但仅在发射时跳过，复制阶段无告警（可观测性缺口）。
+		if conditionsEmissionIssue(rule.Conditions) != "" || customRuleEmissionIssue(models.CustomRule{
+			ID:         rule.ID,
+			Name:       rule.Name,
+			Enabled:    rule.Enabled,
+			Conditions: rule.Conditions,
+			Action:     rule.Action,
+			Score:      rule.Score,
+		}) != "" {
 			invalid = true
 			break
 		}
 	}
 	if invalid {
-		log.Printf("集群同步的自定义规则存在非法项（尾部反斜杠/空条件/非法 target 或 operator），发射时将跳过 — 主节点应尽快修复")
+		log.Printf("集群同步的自定义规则存在非法项（尾部反斜杠/空条件/非法 target/operator 或名字含控制字符），发射时将跳过 — 主节点应尽快修复")
 	}
 	for _, rule := range rules {
 		conditions := rule.Conditions

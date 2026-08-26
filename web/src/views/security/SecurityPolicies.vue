@@ -198,6 +198,15 @@
               <el-switch v-model="form.geoip_enabled" />
             </el-form-item>
             <template v-if="form.geoip_enabled">
+              <!-- R72 二十七次 N3（裁决）：披露 IPv6/不可解析客户端语义——
+                   fail-closed 设计下它们按「海外」处理。 -->
+              <el-alert
+                type="info"
+                :closable="false"
+                show-icon
+                title="地域规则仅对 IPv4 生效：IPv6 与不可解析客户端按「海外」处理（拦截模式勾选海外时将被拦截；仅允许模式只勾选省份时将被拦截）。IP 库未安装时地域规则不可启用。"
+                style="margin-bottom: 12px"
+              />
               <el-form-item label="控制模式">
                 <el-radio-group v-model="form.geoip_mode">
                   <el-radio value="deny">拦截所选区域（其他放行）</el-radio>

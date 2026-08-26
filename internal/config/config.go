@@ -96,7 +96,7 @@ func Load(path string) *Config {
 	// R72 二十六次 W3-3：端口范围校验——port=0 会绑随机端口、>65535 只在
 	// 监听时才报错，均早失败为佳。
 	if cfg.Port < 1 || cfg.Port > 65535 {
-		log.Printf("config: invalid port %d (env CONFIG_PORT or config file); falling back to 8000", cfg.Port)
+		log.Printf("config: invalid port %d (config file port field); falling back to 8000", cfg.Port)
 		cfg.Port = 8000
 	}
 

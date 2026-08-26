@@ -182,10 +182,12 @@ func TestCreateSecurityPolicy_geoipUnknownProvinceRejectedWhileCacheEmpty(t *tes
 	if !strings.Contains(recorder.Body.String(), "未加载") {
 		t.Fatalf("body=%s, want 未加载 message", recorder.Body.String())
 	}
-	// And："海外" 是唯一可判定归属的条目，放行
+	// And（R72 二十七次 N5，用户裁决覆盖 R29 放行语义）："海外" 同样依赖 live
+	// searcher 设置占位变量（缺库时 CEL 求值恒假、海外拦截零强制）——未加载
+	// 时一并拒绝，待 IP 库更新后恢复。
 	recorder = postJSON(t, router, "/security/policies", map[string]any{"name": "海外放行", "geoip_countries": `["海外"]`})
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("create 海外 status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("create 海外 status=%d body=%s, want 400（未加载时海外也拒绝）", recorder.Code, recorder.Body.String())
 	}
 }
 

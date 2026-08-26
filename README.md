@@ -86,7 +86,7 @@ Inbound → GeoIP tagging → Rate limiting (per-IP rate + burst) → WAF (Coraz
 |---|---|
 | WAF engine | Coraza v3 (coraza-caddy v2.5.0) |
 | Rule set | OWASP CRS v4.28.0 (bundled, online updates supported) |
-| GeoIP database | IP2Region v3.17.0 (offline xdb, China province-level) |
+| GeoIP database | IP2Region v3.17.0 (offline xdb, China province-level). 地域规则仅对 IPv4 生效：IPv6/不可解析客户端按「海外」处理（fail-closed）；IP 库未安装时地域规则不可启用 |
 | Rate limiting | caddy-ratelimit v0.1.0 |
 
 **Security policies** are managed as standalone entities bound to HTTP rules (one policy can bind multiple rules; one rule binds only one policy):

@@ -123,6 +123,11 @@ type SyncService struct {
 	// last_sync_error（节点页面可见），并把兜底重拉降频为每 wafRepullEvery
 	// 轮一次；收敛后清零恢复正常。
 	wafRepullFailures atomic.Int32
+	// reloadRepullFailures（R72 二十七次 N4）：重载失败 marker 触发的补偿
+	// 全量重拉的连续失败计数——与 wafRepullFailures 同款节流（5 轮后降频为
+	// 每 10 轮），防止 Caddy /load 持续故障时每同步周期全量重拉+全表重写+
+	// 强制重载+2 条审计记录的次生负载（间隔下限实为 10s，非 60s）。
+	reloadRepullFailures atomic.Int32
 }
 
 func NewSyncService(database *sql.DB, cfg *config.Config, caddy *CaddyService) *SyncService {
@@ -427,6 +432,7 @@ func (s *SyncService) startLocked(resume bool) {
 	// 角色切换/重启复用同一实例：清零 WAF 兜底重拉连续未收敛计数，
 	// 避免陈旧计数让新会话首次漂移重拉被降频延迟（R40 N-1）。
 	s.wafRepullFailures.Store(0)
+	s.reloadRepullFailures.Store(0)
 	s.state.Store(uint32(syncStateRunning))
 	go func() {
 		if s.runFn != nil {
@@ -473,6 +479,7 @@ func (s *SyncService) Stop() {
 	s.pullWG.Wait()
 	// 防御性清零：与 startLocked 配对，确保 Stop 后实例处于干净状态（R40 N-1）。
 	s.wafRepullFailures.Store(0)
+	s.reloadRepullFailures.Store(0)
 	if syncLifecycleState(s.state.Load()) != syncStateHalted {
 		s.state.Store(uint32(syncStateStopped))
 	}
@@ -616,11 +623,23 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			var lastSyncErr string
 			if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastSyncErr); err == nil {
 				if msg, _ := decodeSyncError(lastSyncErr); strings.HasPrefix(msg, syncReloadFailureMarkerPrefix) {
-					Logf("warn", "检测到上次同步应用后 Caddy 重载失败（%s），全量重拉补偿重试", lastSyncErr)
-					RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("上次应用后重载失败", "配置无变化但运行配置漂移，已改为全量拉取"), "")
-					resp.Body.Close()
-					sinceVersion, sinceFingerprint = 0, ""
-					continue
+					// R72 二十七次 N4：补偿重拉节流（与 WAF 兜底重拉同款）——
+					// 持续失败 5 轮后降频为每 10 轮一次，避免 Caddy 持续故障时
+					// 每周期全量重拉打主从负载；last_sync_error 中的 marker 保持
+					// 可见（节点页面），恢复后首轮重拉成功即自愈。
+					failures := s.reloadRepullFailures.Add(1)
+					if failures == wafRepullMaxFailures {
+						Logf("error", "同步应用后 Caddy 重载持续失败（已连续 %d 轮），补偿全量重拉降频为每 %d 轮一次", wafRepullMaxFailures, wafRepullEvery)
+					}
+					if failures > wafRepullMaxFailures && failures%wafRepullEvery != 0 {
+						// 降频期：本轮跳过补偿重拉，走 304 返回（marker 保持可见）。
+					} else {
+						Logf("warn", "检测到上次同步应用后 Caddy 重载失败（%s），全量重拉补偿重试", lastSyncErr)
+						RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail("上次应用后重载失败", "配置无变化但运行配置漂移，已改为全量拉取"), "")
+						resp.Body.Close()
+						sinceVersion, sinceFingerprint = 0, ""
+						continue
+					}
 				}
 			}
 			if drifted := s.driftedSections(ctx); drifted != "" {
@@ -718,6 +737,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	// 每次成功应用后核对 WAF 文件态：已收敛则清零连续失败计数，恢复正常的
 	// 兜底重拉频率与 last_sync_error 语义。
 	s.trackWafRepullConvergence()
+	s.trackReloadRepullConvergence(ctx)
 	return SyncResult{AppliedVersion: envelope.Data.Version, Changed: true}, nil
 }
 
@@ -782,6 +802,18 @@ func (s *SyncService) wafRepullPersistentlyFailed() bool {
 func (s *SyncService) trackWafRepullConvergence() {
 	if !s.wafFilesDrifted() {
 		s.wafRepullFailures.Store(0)
+	}
+}
+
+// trackReloadRepullConvergence（R72 二十七次 N4）：快照成功应用且重载成功
+// （marker 被清除）时清零补偿重拉计数。
+func (s *SyncService) trackReloadRepullConvergence(ctx context.Context) {
+	var lastSyncErr string
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&lastSyncErr); err != nil {
+		return
+	}
+	if msg, _ := decodeSyncError(lastSyncErr); !strings.HasPrefix(msg, syncReloadFailureMarkerPrefix) {
+		s.reloadRepullFailures.Store(0)
 	}
 }
 

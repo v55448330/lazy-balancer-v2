@@ -975,7 +975,7 @@ func generateCaddyConfigFromStore(store caddyConfigStore, overrides ...*models.U
 // generateCaddyConfigWithCertSource 渲染配置，证书候选源可指定（R65 A-N1）：
 //   - certSource=db.DB（默认）：C-2.1 防护——UpdateConfig 类纯 global_config 事务
 //     的 tx 视角对 cert_jobs 纯陈旧性，已提交连接恒见最新证书。
-//   - certSource=tx（ApplyConfigFromTxCertAware，v2 导入专用）：导入事务全量
+//   - certSource=tx（ApplyConfigFromTxCertAwareForce，v2 导入专用）：导入事务全量
 //     deleteOrder+重插 cert_jobs（restoreTable 保留原 id，PEM 可更新），已提交
 //     视图会返回将被替换的旧行——MaterializeCertPairs 用旧 PEM 覆写
 //     materializeImportCertificates 刚写入的新文件，DB=新证/磁盘=旧证静默分叉。
@@ -1958,8 +1958,6 @@ func buildCaddyLogging(level string, sizeMB int) map[string]interface{} {
 	}
 }
 
-// loadACMECertificate reads the issued ACME certificate and key from cert_jobs
-// for the given rule and domain. Returns (certPEM, keyPEM, true) if issued.
 // acmeCertCandidatesForRule 无 lb_rules 子查询的 per-rule 证书候选查询（R65 A-N1
 // 谓词 miss 补查专用）：查询形态与 acmeCertCandidatesQuery 的行过滤一致（PEM
 // 非空），但绕过 enabled/enable_tls/tls_source 谓词——调用方已确保规则在 allRules
@@ -1995,6 +1993,9 @@ func acmeCertCandidatesForRule(store caddyConfigStore, ruleID string) []Certific
 	return candidates
 }
 
+// loadACMECertificateFromStore reads the issued ACME certificate and key from
+// cert_jobs (via store) for the given rule and domain. Returns
+// (certPEM, keyPEM, true) if issued.
 func loadACMECertificateFromStore(store caddyConfigStore, caddyID, domain string) (string, string, bool) {
 	rows, err := store.Query(`
 		SELECT id, domain, status, cert_pem, key_pem,
@@ -3134,22 +3135,14 @@ func (s *CaddyService) ApplyConfigFromTx(tx *sql.Tx) error {
 	return s.applyConfigLocked(generateCaddyConfigFromStore(tx))
 }
 
-// ApplyConfigFromTxCertAware 与 ApplyConfigFromTx 同语义，但证书候选改读事务
-// 自身（R65 A-N1）：供全量替换 cert_jobs 的事务（v2 导入）使用——restoreTable
-// 保留原 id 重插证书行，已提交视图返回将被替换的旧行，会经 MaterializeCertPairs
-// 用旧 PEM 覆写导入刚落盘的新证书文件。规则 CRUD 事务（不写证书行）仍走
-// ApplyConfigFromTx + 谓词 miss 补查；UpdateConfig 保持 C-2.1 已提交视图。
-func (s *CaddyService) ApplyConfigFromTxCertAware(tx *sql.Tx) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.applyConfigLocked(generateCaddyConfigWithCertSource(tx, tx))
-}
-
-// ApplyConfigFromTxCertAwareForce 与 ApplyConfigFromTxCertAware 同语义但强制
-// 重载（R72 二十六次 W1-1）：v2 导入在 apply 之前已把新 PEM 落盘
-// （materializeImportCertificates），生成期 MaterializeCertPairs 内容比对相等
-// → 快照为空 → 不触发自动强制——导入必须显式强制，否则同 JSON 导入新证书
-// 会被 errSameConfig 短路（旧证书继续服务）。
+// ApplyConfigFromTxCertAwareForce：证书候选改读事务自身（R65 A-N1，restoreTable
+// 保留原 id 重插证书行，已提交视图的旧行会经 MaterializeCertPairs 用旧 PEM 覆写
+// 导入刚落盘的新证书文件）+ 强制重载（R72 二十六次 W1-1：v2 导入在 apply 之前
+// 已把新 PEM 落盘，生成期 MaterializeCertPairs 内容比对相等 → 快照为空 → 自动
+// 强制不触发，必须显式强制，否则同 JSON 导入新证书会被 errSameConfig 短路、
+// 旧证书继续服务）。非强制的 ApplyConfigFromTxCertAware 已于 R72 二十七次删除
+// （唯一生产调用方即本函数的调用点，保留旧版只会让未来调用方重新引入静默
+// 旧证书缺陷）。
 func (s *CaddyService) ApplyConfigFromTxCertAwareForce(tx *sql.Tx) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

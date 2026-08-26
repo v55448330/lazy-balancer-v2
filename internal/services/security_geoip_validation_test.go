@@ -29,8 +29,10 @@ func TestValidateGeoIPCountries_rejectsUnknownProvinceWhenCacheLoaded(t *testing
 	if err := ValidateGeoIPCountries(`["广东"]`); err == nil || !strings.Contains(err.Error(), "未加载") {
 		t.Fatalf("cache-known province with dead live searcher must ALSO be rejected (emission cannot match), got %v", err)
 	}
-	if err := ValidateGeoIPCountries(`["海外"]`); err != nil {
-		t.Fatalf("海外 must pass, got %v", err)
+	// R72 二十七次 N5（用户裁决覆盖 R57 海外放行）：海外拦截同样依赖 live
+	// searcher 设置占位变量，缺库时 CEL 恒假零强制——未加载时一并拒绝。
+	if err := ValidateGeoIPCountries(`["海外"]`); err == nil || !strings.Contains(err.Error(), "未加载") {
+		t.Fatalf("海外 with dead live searcher must be rejected with 未加载, got %v", err)
 	}
 	if err := ValidateGeoIPCountries(`["   "]`); err == nil {
 		t.Fatalf("blank entry must be rejected")
@@ -50,8 +52,10 @@ func TestValidateGeoIPCountries_rejectsUnknownProvinceWhenNothingLoaded(t *testi
 		t.Fatalf("unknown province without loaded database must be rejected with 未加载, got %v", err)
 	}
 	// And："海外" 是唯一可判定归属的条目，放行；空条目仍拒绝
-	if err := ValidateGeoIPCountries(`["海外"]`); err != nil {
-		t.Fatalf("海外 must pass without loaded database, got %v", err)
+	// R72 二十七次 N5（用户裁决覆盖 R57 海外放行）：海外拦截同样依赖 live
+	// searcher 设置占位变量，缺库时 CEL 恒假零强制——未加载时一并拒绝。
+	if err := ValidateGeoIPCountries(`["海外"]`); err == nil || !strings.Contains(err.Error(), "未加载") {
+		t.Fatalf("海外 without loaded database must be rejected with 未加载, got %v", err)
 	}
 	if err := ValidateGeoIPCountries(`[""]`); err == nil {
 		t.Fatalf("empty entry must be rejected")

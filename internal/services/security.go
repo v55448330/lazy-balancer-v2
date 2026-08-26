@@ -528,6 +528,13 @@ func ValidateGeoIPCountries(raw string) error {
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 		return fmt.Errorf("geoip_countries 必须是 JSON 数组")
 	}
+	// R72 二十七次 N5（裁决）：IP 库未装载时拒绝启用任何地域条目（含海外——
+	// 海外拦截同样依赖 live searcher 设置占位变量，缺库时 CEL 全部恒假、
+	// 地域拦截静默零强制）。用户语义：缺库 = IP 相关规则不可启用，待自动/
+	// 手动更新 IP 库后恢复；「IP 库」卡片的「未安装」标签提供常态可见性。
+	if len(entries) > 0 && len(GetIP2RegionProvinces()) <= 1 {
+		return fmt.Errorf("IP 库未安装或未加载：地域相关规则不可启用，请先在「安全规则」页更新 IP 库后重试")
+	}
 	// 校验源必须与发射源（caddy.go 的 live searcher geoip 标记）对齐：searcher
 	// 存在时优先用实时省份列表，避免陈旧缓存拒绝新省份或与 live 分叉；缓存仅在
 	// searcher 缺失（live 仅返回 ["海外"]）时兜底。
