@@ -137,6 +137,14 @@
               </el-select>
               <div class="form-tip-line">选择后仅加载所选规则组，留空加载全部 CRS 规则</div>
             </el-form-item>
+            <el-alert
+              v-if="hasResponsePhaseGroupWithoutCheck"
+              type="warning"
+              :closable="false"
+              show-icon
+              title="已选含响应阶段的规则组（955 Webshell 等），但未开启「检查响应体」——这些组不会加载生效，请开启「检查响应体」或移除响应阶段组"
+              style="margin-bottom: 12px"
+            />
             <el-form-item label="检查响应体">
               <el-switch v-model="form.waf_check_response" :disabled="form.mode === 'off'" />
               <div class="form-tip-line">开启后 WAF 读取并检查上游响应内容（响应泄露类规则需要）；关闭可显著降低内存与 CPU 开销，大多数部署只需检查请求</div>
@@ -589,6 +597,15 @@ const crsOptionPhase = (filename: string): string => (/^RESPONSE-/i.test(filenam
 // 已选 tag 区分）。
 const crsRequestRuleOptions = computed(() => crsRuleOptions.value.filter((r) => !/^RESPONSE-/i.test(r.filename)))
 const crsResponseRuleOptions = computed(() => crsRuleOptions.value.filter((r) => /^RESPONSE-/i.test(r.filename)))
+
+// crsResponsePhaseGroupCodes（R72 二十九次 L9）：响应阶段 CRS 类别两位代码
+//（950-956/959/980）——这些组仅在「检查响应体」开启时才被后端 Include
+//（security.go:169-177），否则静默 no-op。用于给选中响应组但开关关闭的用户
+// 一个针对性提示。
+const crsResponsePhaseGroupCodes = ['50', '51', '52', '53', '54', '55', '56', '59', '80']
+const hasResponsePhaseGroupWithoutCheck = computed(
+  () => !form.value.waf_check_response && crsRuleGroups.value.some((g) => crsResponsePhaseGroupCodes.includes(g)),
+)
 
 const crsGroupOptions = computed(() => {
   const seen = new Map<string, string>()

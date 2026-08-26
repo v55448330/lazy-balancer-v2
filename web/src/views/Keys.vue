@@ -386,7 +386,9 @@ interface CreateAPIKeyResponse {
 }
 
 const authStore = useAuthStore()
-const isReadOnly = computed(() => authStore.nodeMode === 'slave')
+// R72 二十九次 M5：与全产品口径一致（slave + 非 admin 均只读）——此前只判
+// slave，主节点非 admin 用户看到可点按钮点击 403（与其余页面禁用态口径不一致）。
+const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const keys = ref<readonly APIKey[]>([])

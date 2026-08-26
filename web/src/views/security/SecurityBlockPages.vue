@@ -34,7 +34,7 @@
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button size="small" link type="primary" @click="previewPage(row)">预览</el-button>
-            <el-button size="small" link :type="row.is_default ? 'info' : 'primary'" @click="openDialog(row)">{{ row.is_default ? '查看' : '编辑' }}</el-button>
+            <el-button size="small" link :type="row.is_default || isReadOnly ? 'info' : 'primary'" @click="openDialog(row)">{{ row.is_default || isReadOnly ? '查看' : '编辑' }}</el-button>
             <el-button size="small" link type="danger" :disabled="row.is_default" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -44,14 +44,14 @@
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="960px" top="3vh">
       <el-form :model="form" label-width="80px" label-position="right" class="block-page-form">
         <el-form-item label="名称" required>
-          <el-input v-model="form.name" placeholder="页面名称" :readonly="currentPage?.is_default" />
+          <el-input v-model="form.name" placeholder="页面名称" :readonly="isReadOnly || currentPage?.is_default" />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="form.description" placeholder="页面描述" :readonly="currentPage?.is_default" />
+          <el-input v-model="form.description" placeholder="页面描述" :readonly="isReadOnly || currentPage?.is_default" />
         </el-form-item>
         <el-form-item label="内容" class="content-form-item">
           <div class="block-content-editor" style="width: 100%">
-            <SyntaxHighlight v-if="currentPage?.is_default" :content="form.content" language="markup" height="520px" />
+            <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default" :content="form.content" language="markup" height="520px" />
             <CodeEditor v-else v-model="form.content" language="markup" height="520px" placeholder="HTML 内容，支持内联 CSS 样式" />
           </div>
           <div class="form-tip-line">
@@ -61,7 +61,7 @@
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button v-if="!currentPage?.is_default" type="primary" :loading="saving" @click="handleSave">保存</el-button>
+        <el-button v-if="!currentPage?.is_default && !isReadOnly" type="primary" :loading="saving" @click="handleSave">保存</el-button>
       </template>
     </el-dialog>
 
@@ -100,7 +100,8 @@ const currentPage = ref<BlockPage | null>(null)
 
 const dialogTitle = computed(() => {
   if (!editingId.value) return '新建拦截页面'
-  return currentPage.value?.is_default ? '查看拦截页面' : '编辑拦截页面'
+  // R72 二十九次 M6：只读用户打开非默认页也应显示「查看」（此前编辑态误导）。
+  return currentPage.value?.is_default || isReadOnly.value ? '查看拦截页面' : '编辑拦截页面'
 })
 
 const form = ref({ name: '', description: '', content: '' })

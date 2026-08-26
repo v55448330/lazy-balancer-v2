@@ -2396,7 +2396,7 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	// Round 34 F-1: 同 UpdateRule——NULL enabled 行须 IIF 归一化（NULL 视同禁用），
 	// 复制出的新行显式落 0，避免裸 scan 500 与复制后意外启用。
 	upstreamRows, err := tx.Query(`
-		SELECT host, port, weight, dynamic_dns, IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0)
+		SELECT host, port, COALESCE(weight,1), dynamic_dns, IIF(enabled IN ('1',1),1,0), COALESCE(protocol,'http'), COALESCE(max_connections,0)
 		FROM upstreams WHERE rule_id = ?
 	`, caddyID)
 	if err != nil {

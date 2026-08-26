@@ -223,7 +223,8 @@ func normalizeProvince(raw string) string {
 	return trimmed
 }
 
-// ip2AutonomousPrefectures（R72 二十八次，用户反馈：「大理/怒江/凉山缺市字」——
+// autonomousPrefectures（与 internal/services/ip2region.go 的 ip2AutonomousPrefectures
+// 同款表同步维护；R72 二十八次，用户反馈：「大理/怒江/凉山缺市字」——
 // 实为少数民族自治州的简称）xdb 对自治州存简称、对普通地级市存全称
 // （如「呼和浩特市」），选项树里「大理」与「呼和浩特市」并列显得缺字。
 // 简称 → 全称 映射；与 internal/services/ip2region.go 的 ip2AutonomousPrefectures 同款表同步维护。

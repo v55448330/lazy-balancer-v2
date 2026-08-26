@@ -706,6 +706,33 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 // 条目内容同样受限：crs_rule_groups 组号恒为两位数字（进入 Include glob
 // REQUEST-9<code>-*.conf），排除项进入 SecRuleRemoveById 参数，空白/引号/控制
 // 字符都会生成非法配置行。
+// geoipEntriesEqual（R72 二十九次 M1）：比较两个 geoip_countries JSON 数组的
+// 集合相等性（顺序无关）——任一侧解析失败返回 false（保守走校验路径）。
+func geoipEntriesEqual(a, b string) bool {
+	parse := func(raw string) ([]string, bool) {
+		var entries []string
+		if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+			return nil, false
+		}
+		sort.Strings(entries)
+		return entries, true
+	}
+	ea, okA := parse(a)
+	eb, okB := parse(b)
+	if !okA || !okB {
+		return false
+	}
+	if len(ea) != len(eb) {
+		return false
+	}
+	for i := range ea {
+		if ea[i] != eb[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func validateAndNormalizeCRSField(name string, val *string) error {
 	if val == nil {
 		return nil
@@ -835,9 +862,19 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		return
 	}
 	if req.GeoIPCountries != nil {
-		if err := services.ValidateGeoIPCountries(*req.GeoIPCountries); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
-			return
+		// R72 二十九次 M1：地域条目与存量完全相同的更新跳过 live 校验——N5 裁决
+		// 语义是「缺库时不得启用」而非「缺库时不得编辑未变更字段」；条目真正变化
+		// 时才落 fail-closed 门（缺库时改描述/开关不再 400）。
+		skipGeoIPValidation := false
+		var storedGeoIP string
+		if err := db.DB.QueryRow("SELECT geoip_countries FROM security_policies WHERE id=?", id).Scan(&storedGeoIP); err == nil {
+			skipGeoIPValidation = geoipEntriesEqual(*req.GeoIPCountries, storedGeoIP)
+		}
+		if !skipGeoIPValidation {
+			if err := services.ValidateGeoIPCountries(*req.GeoIPCountries); err != nil {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+				return
+			}
 		}
 	}
 	if req.CustomRules != nil {
@@ -2172,7 +2209,7 @@ func categorizeCRSFile(filename string) string {
 	case strings.Contains(name, "933-"):
 		return "PHP 攻击"
 	case strings.Contains(name, "934-"):
-		return "Node.js 攻击"
+		return "通用攻击"
 	case strings.Contains(name, "941-"):
 		return "XSS 跨站脚本"
 	case strings.Contains(name, "942-"):
@@ -2209,14 +2246,12 @@ func categorizeCRSFile(filename string) string {
 		return "通用异常"
 	case strings.Contains(name, "911-"):
 		return "方法限制"
-	case strings.Contains(name, "912-"):
-		return "文件上传"
 	case strings.Contains(name, "913-"):
 		return "爬虫检测"
 	case strings.Contains(name, "915-"):
 		return "请求体限制"
 	case strings.Contains(name, "999-"):
-		return "通用异常"
+		return "通用排除（CRS 后）"
 	default:
 		return "其他"
 	}
