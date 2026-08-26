@@ -470,9 +470,14 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		var crsExcluded []json.RawMessage
 		json.Unmarshal(p.CRSExcludedRules, &crsExcluded)
 		ruleCount := bindingCounts[p.ID]
+		// R72 三十次追加 a：GeoIP/自定义规则的 has 计算（供 ruleProtections 显示行）。
+		var geoipEntries []string
+		json.Unmarshal([]byte(p.GeoIPCountries), &geoipEntries)
+		hasGeoIP := len(geoipEntries) > 0
 		policies = append(policies, models.SecurityPolicySummary{
 			ID: p.ID, Name: p.Name, Mode: p.Mode, Enabled: p.Enabled, RuleCount: ruleCount,
 			HasWAF: p.Mode != "off", HasIPControl: services.SecurityPolicyHasIPControl(&p), HasRateLimit: p.RateLimitEnabled && p.RateLimitRPS > 0,
+			HasGeoIP: hasGeoIP, HasCustomRules: services.CountEnabledCustomRules(p.CustomRules) > 0,
 			AnomalyThreshold: p.AnomalyThreshold,
 			IPACLMode:        p.IPACLMode,
 			IPACLEnabled:     p.IPACLEnabled,
@@ -1376,7 +1381,7 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	case strings.HasPrefix(ruleTriggered, "933"):
 		return "PHP注入"
 	case strings.HasPrefix(ruleTriggered, "934"):
-		return "Node.js 攻击"
+		return "通用攻击"
 	case strings.HasPrefix(ruleTriggered, "920"):
 		return "协议异常"
 	case strings.HasPrefix(ruleTriggered, "921"):
@@ -1384,13 +1389,15 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	case strings.HasPrefix(ruleTriggered, "911"):
 		return "方法限制"
 	case strings.HasPrefix(ruleTriggered, "912"):
-		return "文件上传"
+		return "协议攻击（CRS v3 遗留标签）"
 	case strings.HasPrefix(ruleTriggered, "915"):
 		return "请求体限制"
 	case strings.HasPrefix(ruleTriggered, "913"):
 		return "扫描探测"
 	case strings.HasPrefix(ruleTriggered, "943"):
 		return "会话固定"
+	case strings.HasPrefix(ruleTriggered, "999"):
+		return "通用排除（CRS 后）"
 	case strings.HasPrefix(ruleTriggered, "944"):
 		return "Java 攻击"
 	case strings.HasPrefix(ruleTriggered, "950"):
@@ -1836,6 +1843,9 @@ func (h *Handlers) GetIP2RegionUpdateLogs(c *gin.Context) {
 // GetSecurityPolicyForRule and BuildCorazaDirectives are in services/security.go
 // to avoid circular dependency (services can't import handlers).
 
+// GetAllSecurityBindings（R72 三十次追加 c）：行序覆盖改 MAX(policy_id) 对齐
+// Caddy 生成（caddy.go:823 同款 MAX）——窄路径（手动插 DB/导入多行）下显示与
+// 生效不再不一致。
 func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, p.mode, p.enabled, p.rate_limit_enabled
 		FROM security_policy_bindings b JOIN security_policies p ON b.policy_id = p.id`)

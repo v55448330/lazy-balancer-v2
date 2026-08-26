@@ -48,6 +48,10 @@ type SecurityPolicySummary struct {
 	RateLimitRPS     int    `json:"rate_limit_rps"`
 	RateLimitBurst   int    `json:"rate_limit_burst"`
 	CRSExcludedCount int    `json:"crs_excluded_count"`
+	// R72 三十次追加（多策略绑定 Q2 根因 1）：ruleProtections 的 GeoIP/自定义
+	// 规则行此前永远没有数据（接口只给 has_ip_control/has_rate_limit）。
+	HasGeoIP         bool   `json:"has_geoip"`
+	HasCustomRules   bool   `json:"has_custom_rules"`
 	CustomRulesCount int    `json:"custom_rules_count"`
 	UpdatedBy        int    `json:"updated_by"`
 	UpdatedAt        string `json:"updated_at"`

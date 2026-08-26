@@ -265,7 +265,7 @@ func (h *Handlers) RetryCertJob(c *gin.Context) {
 	var ruleID, domain, status string
 	var caProviderID int
 	var updatedAt sql.NullTime
-	err = db.DB.QueryRow("SELECT rule_id, domain, status, updated_at, ca_provider_id FROM cert_jobs WHERE id=?", id).Scan(&ruleID, &domain, &status, &updatedAt, &caProviderID)
+	err = db.DB.QueryRow("SELECT rule_id, domain, status, updated_at, COALESCE(ca_provider_id,0) FROM cert_jobs WHERE id=?", id).Scan(&ruleID, &domain, &status, &updatedAt, &caProviderID)
 	if dbQueryNotFound(c, err, "任务不存在", "RetryCertJob query job") {
 		return
 	}

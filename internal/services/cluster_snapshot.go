@@ -294,7 +294,17 @@ func nearestSnapshotCertificateExpiry(certificates []models.ClusterCertificate, 
 			continue
 		}
 		expiresAt, err := parseSnapshotExpiry(certificate.ExpiresAt)
-		if err == nil && (nearest.IsZero() || expiresAt.Before(nearest)) {
+		// R72 三十次 F11（两路审计独立确认，提交信息曾声称已修但从未落盘——
+		// 第 3 次同类失误）：解析失败视同缺失——唯一 ACME 证书 expires_at 非空
+		// 不可解析时 nearest 保持零 → 缓存快照永不按时间过期 → ACME 续期不传播
+		// 到副本。给最小重建窗口（ACME 域才计，避免非 ACME 误触发）。
+		if err != nil {
+			if certificate.Domain != "" {
+				missingExpiry = true
+			}
+			continue
+		}
+		if nearest.IsZero() || expiresAt.Before(nearest) {
 			nearest = expiresAt
 		}
 	}

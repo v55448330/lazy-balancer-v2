@@ -28,7 +28,7 @@ func GetSecurityPolicyForRule(ruleCaddyID string) *models.SecurityPolicy {
 	var p models.SecurityPolicy
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
 	err = db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, created_at, updated_at, geoip_countries, geoip_mode, waf_check_response
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, created_at, updated_at, COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0)
 		FROM security_policies WHERE id=? AND enabled=1`, policyID).
 		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
 			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse)
@@ -68,8 +68,33 @@ func PolicyHasGeoIP(p *models.SecurityPolicy) bool {
 	return len(geoipCountries(p)) > 0
 }
 
+// crsPoolFingerprint（R72 三十次 F1）：coraza-caddy v2.5.0 的 computePoolKey()
+// = hash(directives + include + crs flag)——directives 只含固定 Include 路径，
+// CRS 文件替换/手动改 zz-user-overrides.conf 后池键不变，新 Caddy 配置 Provision
+// 复用旧 WAF（LoadOrNew refcount++），旧规则静默继续生效直到进程重启。在
+// directives 里嵌内容指纹（CRS 版本 + overrides mtime+size，每次配置生成仅
+// 2 个 stat + 1 个 db 查询，远低于 tarGzDirSum 的整树遍历成本），指纹变 →
+// 池键变 → 新 WAF 真正编译新规则。Coraza 把 '#' 当注释行，不影响语义。
+func crsPoolFingerprint() string {
+	var version string
+	if db.DB == nil {
+		version = "unknown"
+	} else if err := db.DB.QueryRow("SELECT COALESCE(version,'') FROM security_crs_version WHERE id=1").Scan(&version); err != nil {
+		version = "unknown"
+	}
+	var mtime, size int64
+	if st, err := os.Stat(filepath.Join(crsDirectivesDir, "zz-user-overrides.conf")); err == nil {
+		mtime, size = st.ModTime().UnixNano(), st.Size()
+	}
+	return fmt.Sprintf("%s-%d-%d", version, mtime, size)
+}
+
 func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 	var sb strings.Builder
+	// R72 三十次 F1：嵌 coraza 池键指纹（见 crsPoolFingerprint）——CRS 文件
+	// 替换/手动改 overrides 后池键必须变化，否则新 Caddy 配置复用旧 WAF
+	//（旧规则静默继续生效）。
+	sb.WriteString(fmt.Sprintf("# crs-pool=%s\n", crsPoolFingerprint()))
 	var ipWL []string
 	json.Unmarshal(p.IPWhitelist, &ipWL)
 	var ipBL []string
@@ -535,23 +560,24 @@ func ValidateGeoIPCountries(raw string) error {
 	if len(entries) > 0 && len(GetIP2RegionProvinces()) <= 1 {
 		return fmt.Errorf("IP 库未安装或未加载：地域相关规则不可启用，请先在「安全规则」页更新 IP 库后重试")
 	}
-	// 校验源必须与发射源（caddy.go 的 live searcher geoip 标记）对齐：searcher
-	// 存在时优先用实时省份列表，避免陈旧缓存拒绝新省份或与 live 分叉；缓存仅在
-	// searcher 缺失（live 仅返回 ["海外"]）时兜底。
-	provinces := GetIP2RegionProvinceList()
-	known := make(map[string]bool, len(provinces)+1)
-	for _, p := range provinces {
-		known[p] = true
-	}
-	known["海外"] = true
 	// R57 B-#1：loaded 判据必须取 live searcher 而非缓存兜底列表——xdb 损坏/
 	// 带外替换后 live 已死但省份缓存仍在，用缓存判 loaded 会放行 deny+省份
 	// 策略，而发射端占位变量从未设置（CEL 恒假）→ 地域拦截静默零强制。缓存
 	// 兜底仅服务于 UI 列表（GetIP2RegionRegions），校验侧以 live 为准。
 	liveProvinces := GetIP2RegionProvinces()
 	provincesLoaded := len(liveProvinces) > 1
-	if provincesLoaded {
-		for _, p := range liveProvinces {
+	// R72 三十次 F2（第 40 轮审计核心发现，主线亲证 tree=35 sampled=28 missing=
+	// [山西/广西/海南/澳门/西藏/青海]）：known 集必须从全扫描树构建而非 336 点
+	// 采样子集（GetIP2RegionProvinceList）——采样网格（42 个 /8 块 × 第二字节
+	// {0,32,64,96,128,160,192,224}）漏掉了不与网格相交的省，而 UI
+	//（GetIP2RegionRegions 全扫描树）提供全部省份 → 用户能选但保存被「未知
+	// 省份」400 拒绝（约 1/6 省份可用性受损）。校验器 known 集改用全扫描树
+	// 省份（regionTreeFromXDB 的 Provinces，已含「海外」），与 UI 严格一致。
+	known := make(map[string]bool, 36)
+	// 树为 nil（无 xdb 且无缓存兜底）时 known 仅含「海外」——非海外条目由
+	// N5 门（live 未装载）先行拒绝，不会走到这里；空条目则允许通过。
+	if treeForKnown := GetIP2RegionRegionTree(); treeForKnown != nil {
+		for _, p := range treeForKnown.Provinces {
 			known[p] = true
 		}
 	}

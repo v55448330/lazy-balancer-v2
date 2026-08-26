@@ -254,7 +254,7 @@ func TestCategorizeAttack_familyMapping(t *testing.T) {
 		{"file read", "931130", "Path Traversal", "文件读取"},
 		{"command injection", "932160", "Remote Command Execution", "命令注入"},
 		{"php injection", "933150", "PHP Injection", "PHP注入"},
-		{"node.js injection", "934100", "Node.js Injection", "Node.js 攻击"},
+		{"generic attack", "934100", "Generic Attack", "通用攻击"},
 		{"protocol enforcement", "920350", "Protocol Enforcement", "协议异常"},
 		{"protocol attack", "921110", "HTTP Request Smuggling", "协议攻击"},
 		{"scanner", "913100", "Scanner Detected", "扫描探测"},

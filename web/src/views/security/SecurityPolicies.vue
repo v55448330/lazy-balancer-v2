@@ -604,7 +604,7 @@ const crsResponseRuleOptions = computed(() => crsRuleOptions.value.filter((r) =>
 // 一个针对性提示。
 const crsResponsePhaseGroupCodes = ['50', '51', '52', '53', '54', '55', '56', '59', '80']
 const hasResponsePhaseGroupWithoutCheck = computed(
-  () => !form.value.waf_check_response && crsRuleGroups.value.some((g) => crsResponsePhaseGroupCodes.includes(g)),
+  () => form.value.mode !== 'off' && !form.value.waf_check_response && crsRuleGroups.value.some((g) => crsResponsePhaseGroupCodes.includes(g)),
 )
 
 const crsGroupOptions = computed(() => {

@@ -726,7 +726,12 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	s.pullAdmissionMu.Unlock()
 	if pullsStopped {
 		s.pullApplyMu.Unlock()
-		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errors.New("集群同步已停止，拒绝应用快照"))
+		// R72 三十次 F4（第 40 轮审计两路独立确认，提交信息曾声称已修但从未落盘——
+		// 第 3 次同类失误）：复用 errSyncPullStopped 哨兵包装——errors.Is(pullErr,
+		// errSyncPullStopped) 依赖哨兵识别停机而非普通 validation 失败；此前以
+		// ValidationFailed 落库会覆盖 apply_ok_reload_failed 标记（标记必须跨停机
+		// 存活才能触发 304 补偿重拉）。
+		return SyncResult{}, newSyncFailure(models.SyncErrorCodeValidationFailed, errSyncPullStopped)
 	}
 	if err := s.applySnapshot(ctx, envelope.Data); err != nil {
 		s.pullApplyMu.Unlock()
@@ -962,9 +967,14 @@ const (
 )
 
 // syncReloadFailureMarkerPresent 报告 last_sync_error 当前是否携带重载失败标记。
+// R72 三十次 F4（cluster 审计 F-2 同证）：读侧也用 WithoutCancel——Stop 的
+// cancel 在 apply 提交与 defer 检查之间到达时，可取消 ctx 会读失败 → 成功清除
+// defer 误判「标记不存在」→ 跳过清除 → 标记存活（正确语义）；但若标记刚被
+// persistSyncError（WithoutCancel）写入，可取消读也会失败 → 误删刚写的标记。
+// 与写侧（persistSyncError WithoutCancel）对齐。
 func (s *SyncService) syncReloadFailureMarkerPresent(ctx context.Context) bool {
 	var stored string
-	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+	if err := s.db.QueryRowContext(context.WithoutCancel(ctx), "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
 		return false
 	}
 	msg, _ := decodeSyncError(stored)

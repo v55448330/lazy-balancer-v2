@@ -347,7 +347,12 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 					if err := ctx.Err(); err != nil {
 						return errors.Join(err, restoreCertificateDeployment(snapshot, s.caddyReloader))
 					}
-					err := transitionJob(db.DB, jobID, []string{"downloaded"}, "issued", map[string]any{
+					// R72 三十次 F5（cluster 审计 F-N1，窄场景：运维手改证书文件或
+					// R56 N-1(b) 并发新化身分叉残留）：job 状态 "issued" + 磁盘不匹配
+					// 的快速路径走到这里时，finalize 的 from-set 必须含 "issued"——
+					// 否则 transitionJob CAS 失败 → errors.Join 恢复 → 磁盘回滚到
+					// 不匹配状态 → 自愈路径断裂（job 保持 issued、磁盘永远错）。
+					err := transitionJob(db.DB, jobID, []string{"downloaded", "issued"}, "issued", map[string]any{
 						"message":                    "证书文件重新部署成功",
 						"deployment_attempts":        0,
 						"deployment_available_after": nil,

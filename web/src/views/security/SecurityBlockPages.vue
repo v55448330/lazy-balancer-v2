@@ -35,7 +35,7 @@
           <template #default="{ row }">
             <el-button size="small" link type="primary" @click="previewPage(row)">预览</el-button>
             <el-button size="small" link :type="row.is_default || isReadOnly ? 'info' : 'primary'" @click="openDialog(row)">{{ row.is_default || isReadOnly ? '查看' : '编辑' }}</el-button>
-            <el-button size="small" link type="danger" :disabled="row.is_default" @click="handleDelete(row)">删除</el-button>
+            <el-button size="small" link type="danger" :disabled="row.is_default || isReadOnly" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>

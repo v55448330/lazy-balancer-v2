@@ -1199,6 +1199,11 @@ interface SecurityPolicySummary {
   enabled: boolean
   has_ip_control: boolean
   has_rate_limit: boolean
+  // R72 三十次追加 a：GeoIP/自定义规则 flag + 计数（后端 models 同款）。
+  has_geoip: boolean
+  has_custom_rules: boolean
+  geoip_countries: string
+  custom_rules_count: number
   ip_acl_mode: string
   ip_acl_list: string
   ip_whitelist: string
@@ -1250,6 +1255,10 @@ const ruleProtections = (caddyID: string): ProtectionRow[] => {
       rows.push({ label: 'IP 访问控制', detail: parts.join(' · ') })
     }
     if (policy.has_rate_limit) rows.push({ label: '速率限制', detail: `${policy.rate_limit_rps} 次/秒 · 突发 ${policy.rate_limit_burst} 次` })
+    // R72 三十次追加 a：GeoIP/自定义规则行（此前永远没有——接口缺 flag）；
+    // disabled 策略标灰但保留显示（绑定关系可见，不再消失）。
+    if (policy.has_geoip) rows.push({ label: 'GeoIP', detail: `${policy.geoip_countries ? (JSON.parse(policy.geoip_countries) as string[]).length : 0} 个地区` })
+    if (policy.has_custom_rules) rows.push({ label: '自定义规则', detail: `${policy.custom_rules_count} 条` })
   }
   return rows
 }
