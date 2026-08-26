@@ -143,11 +143,14 @@
             </el-form-item>
             <el-form-item label="排除规则">
               <el-select v-model="crsExcludedRules" :disabled="form.mode === 'off'" multiple filterable placeholder="搜索并选择要排除的规则" style="width: 100%">
-                <el-option-group label="OWASP CRS 规则">
-                  <!-- R72 二十八次：与 CRS 规则组同款「代码 · 类别」解析形态
-                     （用户反馈：此前显示原始文件名 REQUEST-942-*.conf，与规则组
-                     的「942 · SQL 注入」不一致）；文件名保留在 title 悬浮可见。 -->
-                <el-option v-for="rule in crsRuleOptions" :key="rule.filename" :label="`${crsOptionCode(rule.filename)} · ${rule.category}`" :value="rule.filename" :title="rule.filename" />
+                <!-- R72 二十八次二调（用户反馈）：按请求/响应阶段分组，label 带
+                     phase 前缀——「请求 · 942 · SQL 注入」/「响应 · 955 · Webshell」，
+                     与规则组同款「代码 · 类别」解析形态；文件名保留在 title 悬浮。 -->
+                <el-option-group label="OWASP CRS · 请求阶段">
+                  <el-option v-for="rule in crsRequestRuleOptions" :key="rule.filename" :label="`请求 · ${crsOptionCode(rule.filename)} · ${rule.category}`" :value="rule.filename" :title="rule.filename" />
+                </el-option-group>
+                <el-option-group label="OWASP CRS · 响应阶段">
+                  <el-option v-for="rule in crsResponseRuleOptions" :key="rule.filename" :label="`响应 · ${crsOptionCode(rule.filename)} · ${rule.category}`" :value="rule.filename" :title="rule.filename" />
                 </el-option-group>
               </el-select>
               <div class="form-tip-line">排除的规则不会被检测或拦截</div>
@@ -581,7 +584,7 @@ const crsGroupOptions = computed(() => {
     const match = /^(?:REQUEST|RESPONSE)-9(\d{2})-/i.exec(rule.filename)
     const code = match?.[1]
     if (!code || seen.has(code)) continue
-    seen.set(code, `9${code} · ${rule.category}`)
+    seen.set(code, `${crsOptionPhase(rule.filename)} · 9${code} · ${rule.category}`)
   }
   return [...seen.entries()].map(([value, label]) => ({ value, label }))
 })
