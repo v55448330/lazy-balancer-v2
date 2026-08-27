@@ -135,8 +135,10 @@
               <el-select v-model="crsRuleGroups" :disabled="form.mode === 'off'" multiple filterable placeholder="留空加载全部 CRS 规则" style="width: 100%">
                 <el-option v-for="opt in crsGroupOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
               </el-select>
+              <div class="form-tip-line">选择后仅加载所选规则组，留空加载全部 CRS 规则</div>
               <!-- 跨策略 CRS 规则组重复实时警告（随当前选择重算）：置于表单项内控件列，
-                   顺序 select → 警告 → 说明，与控件/说明文字同列对齐 -->
+                   顺序 select → 说明 → 警告，与说明文字保持 6px 间距（见样式
+                   .form-tip-line + .wizard-alert） -->
               <el-alert
                 v-if="wafStepCrsAlert"
                 type="warning"
@@ -145,7 +147,6 @@
                 :title="wafStepCrsAlert"
                 class="wizard-alert"
               />
-              <div class="form-tip-line">选择后仅加载所选规则组，留空加载全部 CRS 规则</div>
             </el-form-item>
             <el-alert
               v-if="hasResponsePhaseGroupWithoutCheck"
@@ -204,7 +205,7 @@
               </el-form-item>
               <!-- 访问控制区地址级冲突实时警告（本区条目：ACL 列表 + 黑名单）——
                    无 label 的 el-form-item 仍保留 label 宽度偏移，内容落在控件列 -->
-              <el-form-item v-if="aclSectionAlert">
+              <el-form-item v-if="aclSectionAlert" class="wizard-alert-item">
                 <el-alert type="warning" :closable="false" show-icon :title="aclSectionAlert" class="wizard-alert" />
               </el-form-item>
             </template>
@@ -220,7 +221,7 @@
                 <div class="form-tip-line">名单内 IP 跳过 WAF 与访问控制检测（限流仍然生效）</div>
               </el-form-item>
               <!-- 信任名单区地址级冲突实时警告（本区条目：信任 IP × 他策略黑名单） -->
-              <el-form-item v-if="whitelistSectionAlert">
+              <el-form-item v-if="whitelistSectionAlert" class="wizard-alert-item">
                 <el-alert type="warning" :closable="false" show-icon :title="whitelistSectionAlert" class="wizard-alert" />
               </el-form-item>
             </template>
@@ -1573,6 +1574,15 @@ onMounted(async () => {
 /* 步骤内警告置于表单项控件列（el-form-item__content 为 flex 容器）——
    width:100% 使其独占一行并填满控件列（上限 640px），与 select/说明文字左对齐 */
 .wizard-alert { margin-bottom: 12px; width: 100%; }
+/* CRS 警告跟在说明文字之后（select → 说明 → 警告）：与说明保持 6px 顶距；
+   底部间距归零交还 el-form-item 默认 18px，避免与其他表单项的节奏不一致 */
+.form-tip-line + .wizard-alert { margin-top: 6px; margin-bottom: 0; }
+/* IP 两区的警告表单项紧跟上一行控件：el-form-item 默认 margin-bottom 18px
+   形成行间距，负 12px 顶距把视觉间距收敛到 6px（18-12）；margin-bottom 保持
+   默认 18px + 后续分区标题 4px，与无警告时的分区节奏一致；内部警告不再额外
+   撑底距 */
+.wizard-alert-item { margin-top: -12px; }
+.wizard-alert-item .wizard-alert { margin-bottom: 0; }
 /* 紧凑化 el-alert（Step 4 冲突提示与 WAF/IP 步骤实时警告共用）：默认 14px 标题 +
    8px/16px 内边距在表单内过重，统一收敛到 12px/1.5 的提示文本视觉；max-width 对齐
    表单控件列宽（弹窗 800px − label 100px − 内边距 ≈ 660px，取 640px），避免横贯弹窗。 */
