@@ -302,7 +302,7 @@
                       <el-button v-if="!isReadOnly" size="small" link type="danger" class="bound-rule-remove" @click="removeBoundRule(row.caddyId)">移除</el-button>
                     </div>
                     <!-- v2.2.0 多策略绑定：完整绑定链（policy_id ASC，1-based 序号）+ 本策略落点；
-                         拦截页面仅首绑（启用策略中 policy_id 最小者）生效。每条规则的拦截页面生效状态
+                         拦截页面仅首个「启用且配置了拦截页」的策略生效。每条规则的拦截页面生效状态
                          统一展示在下方「拦截页面」配置项说明区。 -->
                     <div class="bound-rule-chain">
                       <span
@@ -340,7 +340,7 @@
               </el-select>
               <div v-if="blockPages.length === 0" class="form-tip-line">暂无拦截页面，<el-link type="primary" @click="goToBlockPagesPage">去创建</el-link></div>
               <div v-else class="form-tip-line">拦截时返回给客户端的自定义页面，在"拦截页面"页面管理，<el-link type="primary" @click="goToBlockPagesPage">去创建/编辑</el-link></div>
-              <!-- v2.2.0：按规则逐条展示拦截页面是否生效（仅首绑启用策略生效），
+              <!-- v2.2.0：按规则逐条展示拦截页面是否生效（仅首个启用且配置了拦截页的策略生效），
                    保持与已关联列表中每条规则的顺序落点一致。 -->
               <div v-if="boundRuleRows.length > 0" class="block-page-rule-annotations">
                 <div v-for="row in boundRuleRows" :key="row.caddyId" class="block-page-rule-annotation">
@@ -490,16 +490,16 @@ import { formatDate } from '@/utils/date'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse, UserListItem } from '@/types'
 
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string }
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string }
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_blacklist?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
-interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean }
+interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean; block_page_id?: number }
 // GET /security/rules/:caddy_id/policy 直接序列化 models.SecurityPolicy——json.RawMessage
 // 字段以原生 JSON（数组）出现，与策略详情接口的字符串形态不同，按 unknown 接收再解析。
 interface RuleBoundPolicy { id: number; name: string; mode: string; enabled: boolean; ip_acl_enabled: boolean; ip_acl_mode: string; crs_rule_groups: unknown; custom_rules: unknown; block_page_id: number }
 interface CustomRuleRef { id: number; action: string }
-interface ChainEntry { policyId: number | null; name: string; enabled: boolean; isSelf: boolean }
+interface ChainEntry { policyId: number | null; name: string; enabled: boolean; isSelf: boolean; blockPageId?: number }
 interface BoundRuleRow { caddyId: string; name: string; domain: string; listenPort: number; chain: ChainEntry[]; selfPosition: number; selfBlockPageActive: boolean; mergedCount: number; showPerfTip: boolean; hints: string[] }
 interface CRSRuleOption { filename: string; category: string }
 interface BlockPage { id: number; name: string }
@@ -958,12 +958,13 @@ const parseCustomRuleRefs = (raw: unknown): CustomRuleRef[] => {
 }
 
 // 展示链：完整绑定列表（含禁用策略，标灰）+ 本策略，按 policy_id ASC。
-// 本策略条目以表单实时值为准（编辑中的 name/enabled 可能与服务端快照不同）。
+// 本策略条目以表单实时值为准（编辑中的 name/enabled/block_page_id 可能与服务端快照不同）；
+// blockPageId 用于「首个启用且配置了拦截页的策略」判定（与后端 caddy.go 生成口径一致）。
 const buildDisplayChain = (caddyId: string): ChainEntry[] => {
   const existing = (securityBindings.value[caddyId] || [])
     .filter((b) => b.policy_id !== editingId.value)
-    .map((b): ChainEntry => ({ policyId: b.policy_id, name: b.name, enabled: b.enabled, isSelf: false }))
-  const self: ChainEntry = { policyId: editingId.value, name: form.value.name || '本策略', enabled: form.value.enabled, isSelf: true }
+    .map((b): ChainEntry => ({ policyId: b.policy_id, name: b.name, enabled: b.enabled, isSelf: false, blockPageId: b.block_page_id }))
+  const self: ChainEntry = { policyId: editingId.value, name: form.value.name || '本策略', enabled: form.value.enabled, isSelf: true, blockPageId: form.value.block_page_id }
   const all = [...existing, self]
   all.sort((a, b) => (a.policyId ?? Number.MAX_SAFE_INTEGER) - (b.policyId ?? Number.MAX_SAFE_INTEGER))
   return all
@@ -1138,31 +1139,18 @@ const computeBindingConflicts = (chain: ConflictPolicyView[]): string[] => {
 // - 比较集合 = 与本策略当前绑定上下文（boundRules，编辑时含服务端既有绑定）共享
 //   ≥1 条规则的其他启用策略（与 buildDisplayChain/pickerMeta 同数据源 securityBindings）；
 // - 若该集合为空（新建未选规则），退化为全部其他启用策略，文案用「若绑定同一规则」。
-// 数据源：策略列表接口不携带 crs_rule_groups 明细（ruleBoundPolicies 又缺 IP 名单），
-// 因此对话框打开时按需拉取各启用策略的详情（镜像 ensureBindingDetails 的 allSettled
-// 模式，对话框关闭时清空），一处数据同时服务 CRS 与 IP 两类步骤内警告。
+// 数据源：策略列表接口（policies）——列表已携带 crs_rule_groups 与全部 IP 名单字段，
+// 直接由 policies.value 同步派生（computed），随列表刷新自动更新，无逐策略详情 GET。
 
 interface PeerPolicyView { id: number; name: string; mode: string; crsGroups: string[]; allowEntries: string[]; denyEntries: string[] }
-const peerPolicyViews = ref<PeerPolicyView[]>([])
-
-const loadPeerPolicyViews = async (openSeq: number): Promise<void> => {
-  const targets = policies.value.filter((p) => p.enabled && p.id !== editingId.value)
-  if (targets.length === 0) { peerPolicyViews.value = []; return }
-  const results = await Promise.allSettled(
-    targets.map((p) => request.get<APIResponse<{ policy: PolicyDetail; bindings: string[] }>>(`/security/policies/${p.id}`)),
-  )
-  // 过期返回丢弃（同 openDialog 详情 GET 的序列号守卫）
-  if (openSeq !== policyDialogOpenSeq) return
-  const views: PeerPolicyView[] = []
-  results.forEach((res) => {
-    if (res.status !== 'fulfilled') return
-    const d = res.value.data?.policy
-    if (!d) return
-    const sides = ipAclSideEntries(d.ip_acl_mode, d.ip_acl_enabled, parseJsonList(d.ip_acl_list), parseJsonList(d.ip_whitelist), parseJsonList(d.ip_blacklist))
-    views.push({ id: d.id, name: d.name, mode: d.mode, crsGroups: normalizeCrsGroups(parseJsonList(d.crs_rule_groups)), allowEntries: sides.allow, denyEntries: sides.deny })
-  })
-  peerPolicyViews.value = views
-}
+const peerPolicyViews = computed<PeerPolicyView[]>(() =>
+  policies.value
+    .filter((p) => p.enabled && p.id !== editingId.value)
+    .map((p) => {
+      const sides = ipAclSideEntries(p.ip_acl_mode, p.ip_acl_enabled, parseJsonList(p.ip_acl_list), parseJsonList(p.ip_whitelist), parseJsonList(p.ip_blacklist))
+      return { id: p.id, name: p.name, mode: p.mode, crsGroups: normalizeCrsGroups(parseJsonList(p.crs_rule_groups)), allowEntries: sides.allow, denyEntries: sides.deny }
+    }),
+)
 
 // 与本策略共享 ≥1 条绑定规则的其他策略 ID（含禁用；禁用策略在比较时被过滤，
 // 与 computeBindingConflicts 的 active 口径一致）
@@ -1265,7 +1253,9 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
   const rule = allRules.value.find((r) => r.caddy_id === caddyId)
   const chain = buildDisplayChain(caddyId)
   const selfIndex = chain.findIndex((e) => e.isSelf)
-  const firstEnabled = chain.find((e) => e.enabled)
+  // 拦截页生效口径与后端一致：绑定链中首个「启用且配置了拦截页（block_page_id>0）」
+  // 的策略；无符合条目时无任何策略的拦截页生效。
+  const firstEnabledWithPage = chain.find((e) => e.enabled && (e.blockPageId ?? 0) > 0)
   return {
     caddyId,
     name: rule?.name || caddyId,
@@ -1273,7 +1263,7 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
     listenPort: rule?.listen_port ?? 0,
     chain,
     selfPosition: selfIndex + 1,
-    selfBlockPageActive: form.value.enabled && firstEnabled?.isSelf === true,
+    selfBlockPageActive: form.value.enabled && firstEnabledWithPage?.isSelf === true,
     mergedCount: chain.length,
     showPerfTip: chain.length > PERF_POLICY_THRESHOLD,
     hints: computeBindingConflicts(buildConflictChain(caddyId)),
@@ -1359,9 +1349,6 @@ async function openDialog(row?: PolicySummary) {
   originalBoundRules.value = [...boundRules.value]
   currentStep.value = WIZARD_STEP.BASIC
   dialogVisible.value = true
-  // 拉取其他启用策略的明细用于 WAF/IP 步骤的跨策略重复警告（列表接口不含
-  // crs_rule_groups 明细；镜像 ensureBindingDetails 的懒加载模式，关闭时清空）
-  void loadPeerPolicyViews(openSeq)
 }
 
 const resetForm = () => {
@@ -1374,7 +1361,6 @@ const resetWizard = () => {
   editingId.value = null
   rulePickerVisible.value = false
   ruleBoundPolicies.value = {}
-  peerPolicyViews.value = []
 }
 
 const beforeWizardClose = (done: () => void): void => {

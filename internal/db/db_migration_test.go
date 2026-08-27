@@ -1191,7 +1191,7 @@ func TestInitialize_backfillsLegacyTimeoutColumnsOnceAndPreservesExplicitZero(t 
 
 func openMigrationTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migration.db")+"?_foreign_keys=on")
+	database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migration.db")+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		t.Fatalf("open migration database: %v", err)
 	}

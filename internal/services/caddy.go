@@ -806,6 +806,10 @@ type caddyConfigStore interface {
 type securityPolicyContext struct {
 	policyByRule  map[string][]*models.SecurityPolicy
 	blockPageByID map[int]string
+	// store 是预载所用 caddyConfigStore（事务内生成即 tx）：A-I1——
+	// BuildCorazaDirectives → resolvePolicyCustomRules 必须沿同一 store 读取
+	// security_custom_rules，否则 v2 导入事务内重插的规则在渲染期静默丢失。
+	store caddyConfigStore
 }
 
 // loadSecurityPolicyContext 一次性查询 security_policy_bindings +
@@ -819,6 +823,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 	ctx := &securityPolicyContext{
 		policyByRule:  make(map[string][]*models.SecurityPolicy),
 		blockPageByID: make(map[int]string),
+		store:         store,
 	}
 	bindingRows, err := store.Query(`SELECT rule_caddy_id, policy_id FROM security_policy_bindings ORDER BY rule_caddy_id, policy_id ASC`)
 	if err != nil {
@@ -859,9 +864,9 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 			       ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
 			       rate_limit_enabled, rate_limit_rps, rate_limit_burst,
 			       crs_rule_groups, crs_excluded_rules, custom_rules,
-			       block_page_id, block_status_code, enabled, created_at, updated_at,
-			       geoip_countries, geoip_mode, waf_check_response
-			FROM security_policies WHERE id IN (`+placeholders+`) AND enabled = 1`, args...)
+			block_page_id, block_status_code, enabled, created_at, updated_at,
+			       COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0)
+		FROM security_policies WHERE id IN (`+placeholders+`) AND enabled = 1`, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -2972,6 +2977,12 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	}
 
 	policies := policiesForRule(ctx, rule.CaddyID)
+	// A-I1：WAF 发射读取 security_custom_rules 必须与策略预载同 store——
+	// 无 ctx（非批量路径）时传 nil，由 resolvePolicyCustomRules 回退 db.DB。
+	var policyStore caddyConfigStore
+	if ctx != nil {
+		policyStore = ctx.store
+	}
 	var handleChain []interface{}
 	// v2.2.0 多策略：按绑定启用策略 policy_id ASC 依次编入各策略的
 	// [rate_limit?, waf?] 处理器组；限流先于 WAF 检查、body 解析与代理。
@@ -2980,7 +2991,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			handleChain = append(handleChain, rateLimitHandler)
 		}
 		if rule.Protocol == "http" {
-			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy); wafHandler != nil {
+			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore); wafHandler != nil {
 				handleChain = append(handleChain, wafHandler)
 			}
 		}

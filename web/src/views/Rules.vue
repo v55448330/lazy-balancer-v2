@@ -1211,6 +1211,7 @@ interface SecurityBindingInfo {
   mode: string
   enabled: boolean
   rate_limit_enabled: boolean
+  block_page_id?: number
 }
 
 const securityBindings = ref<Record<string, SecurityBindingInfo[]>>({})
@@ -1274,9 +1275,10 @@ const ruleProtections = (caddyID: string): PolicyProtectionGroup[] => {
   const bindings = securityBindings.value[caddyID]
   if (!bindings || bindings.length === 0) return []
   // v2.2.0：逐绑定策略分组（后端已按 policy_id ASC 排序）。序号 = 绑定顺序（1-based）；
-  // 拦截优先级 = 绑定顺序，首个启用策略的拦截页生效（Caddy 只为启用策略生成配置，绑定列表可能含禁用策略）；
-  // 禁用策略标灰但保留显示（绑定关系可见，不再消失）。全部禁用时无策略生效，不标注拦截页。
-  const firstEnabledIndex = bindings.findIndex((b) => b.enabled)
+  // 拦截优先级 = 绑定顺序，首个启用且配置了拦截页（block_page_id>0）策略的拦截页生效
+  //（与后端 caddy.go 生成口径一致；Caddy 只为启用策略生成配置，绑定列表可能含禁用策略）；
+  // 禁用策略标灰但保留显示（绑定关系可见，不再消失）。全部禁用/均未配置拦截页时无策略生效，不标注拦截页。
+  const firstEnabledIndex = bindings.findIndex((b) => b.enabled && (b.block_page_id ?? 0) > 0)
   return bindings.map((binding, index) => {
     const policy = securityPolicies.value.find((p) => p.id === binding.policy_id)
     const rows: ProtectionRow[] = []

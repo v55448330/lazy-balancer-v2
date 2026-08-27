@@ -430,7 +430,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	rows, err := db.DB.Query(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode, waf_check_response
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, COALESCE(crs_rule_groups,'[]'), crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode, waf_check_response
 		FROM security_policies ORDER BY id`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -487,6 +487,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			RateLimitRPS:     p.RateLimitRPS,
 			RateLimitBurst:   p.RateLimitBurst,
 			CRSExcludedCount: len(crsExcluded),
+			CRSRuleGroups:    p.CRSRuleGroups,
 			CustomRulesCount: services.CountEnabledCustomRules(p.CustomRules),
 			UpdatedBy:        p.UpdatedBy,
 			UpdatedAt:        p.UpdatedAt,
@@ -1119,6 +1120,26 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）"})
 		return
 	}
+	// 上限守卫（B-I1）：POST additive 与 PUT 同上限——一规则最多绑定 5 条策略。
+	// 重绑已存在的 (rule,policy) 对保持幂等 200（INSERT OR IGNORE 不产生新行），
+	// 仅当该对尚未绑定且兄弟绑定已达 5 条时拒绝；COUNT 与 INSERT 同事务（写锁
+	// 由 _txlock=immediate 在 BEGIN 处获取），并发绑定无法在校验与写入间插队。
+	var alreadyBound int
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?", req.RuleCaddyID, policyID).Scan(&alreadyBound); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if alreadyBound == 0 {
+		var siblingCount int
+		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id=?", req.RuleCaddyID).Scan(&siblingCount); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		if siblingCount >= 5 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "最多绑定 5 条策略"})
+			return
+		}
+	}
 	// v2.2.0 多策略绑定（T2）：POST bind 改为 additive——仅 INSERT OR IGNORE，不再
 	// 清空 rule 的兄弟绑定；全量替换走 PUT /security/rules/:caddy_id/policies。
 	// INSERT OR IGNORE 保留幂等（重复绑定同一 (rule,policy) 不报错、不重复行）。
@@ -1147,7 +1168,19 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
 		return
 	}
-	if len(req.PolicyIDs) > 5 {
+	// 上限判定须先去重（B-I2）：[1,1,2,3,4,5] 为 5 条唯一策略，不得因原始数组
+	// 长度 6 误判超限。去重同时避免同一 id 重复计数导致存在性校验误判
+	// （INSERT OR IGNORE 本来就会去重，但 COUNT 必须与去重后的集合对齐）。
+	seen := map[int]struct{}{}
+	uniqueIDs := make([]int, 0, len(req.PolicyIDs))
+	for _, id := range req.PolicyIDs {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	if len(uniqueIDs) > 5 {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "最多绑定 5 条策略"})
 		return
 	}
@@ -1173,17 +1206,6 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 	if ruleProtocol != "http" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）"})
 		return
-	}
-	// 校验所有 policy_id 存在。去重避免同一 id 重复计数导致误判（INSERT OR IGNORE
-	// 本来就会去重，但 COUNT 必须与去重后的集合对齐）。
-	seen := map[int]struct{}{}
-	uniqueIDs := make([]int, 0, len(req.PolicyIDs))
-	for _, id := range req.PolicyIDs {
-		if _, dup := seen[id]; dup {
-			continue
-		}
-		seen[id] = struct{}{}
-		uniqueIDs = append(uniqueIDs, id)
 	}
 	if len(uniqueIDs) > 0 {
 		placeholders := make([]string, len(uniqueIDs))
@@ -1960,7 +1982,7 @@ func (h *Handlers) GetIP2RegionUpdateLogs(c *gin.Context) {
 // GetAllSecurityBindings（v2.2.0 T2）：一规则可绑多策略——返回 map[string][]BindingInfo，
 // 每规则的绑定按 policy_id ASC 排序；取代旧的 map[string]BindingInfo 单值覆盖形态。
 func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
-	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, p.mode, p.enabled, p.rate_limit_enabled
+	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, p.mode, p.enabled, p.rate_limit_enabled, p.block_page_id
 		FROM security_policy_bindings b JOIN security_policies p ON b.policy_id = p.id
 		ORDER BY b.rule_caddy_id ASC, b.policy_id ASC`)
 	if err != nil {
@@ -1968,18 +1990,21 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 		return
 	}
 	defer rows.Close()
+	// block_page_id（D-I1）：前端据此计算「首个启用且配置了拦截页面的策略」，
+	// 与后端生成口径（首个 enabled 且 block_page_id>0）一致。
 	type BindingInfo struct {
-		PolicyID  int    `json:"policy_id"`
-		Name      string `json:"name"`
-		Mode      string `json:"mode"`
-		Enabled   bool   `json:"enabled"`
-		RateLimit bool   `json:"rate_limit_enabled"`
+		PolicyID    int    `json:"policy_id"`
+		Name        string `json:"name"`
+		Mode        string `json:"mode"`
+		Enabled     bool   `json:"enabled"`
+		RateLimit   bool   `json:"rate_limit_enabled"`
+		BlockPageID int    `json:"block_page_id"`
 	}
 	result := map[string][]BindingInfo{}
 	for rows.Next() {
 		var ruleCaddyID string
 		var b BindingInfo
-		if err := rows.Scan(&ruleCaddyID, &b.PolicyID, &b.Name, &b.Mode, &b.Enabled, &b.RateLimit); err != nil {
+		if err := rows.Scan(&ruleCaddyID, &b.PolicyID, &b.Name, &b.Mode, &b.Enabled, &b.RateLimit, &b.BlockPageID); err != nil {
 			// 单行扫描失败跳过：不写入零值绑定（policy_id=0/mode="" 会把该规则
 			// 错误呈现为「已绑定到空策略」）；迭代错误由下方 rows.Err() 兜底（R37 S2）。
 			continue

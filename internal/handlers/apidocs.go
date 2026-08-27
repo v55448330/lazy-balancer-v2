@@ -152,7 +152,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"DELETE", "/security/policies/:id/bind/:caddy_id", "安全", "取消规则关联", "", `{"code":0}`, []string{"403 slave_or_admin_required"}, ""},
 	{"PUT", "/security/rules/:caddy_id/policies", "安全", "原子替换规则的安全策略绑定（多策略）", `{"policy_ids":[1,3,2]}`, `{"code":0}`, []string{"400 validation_failed/max_5/tcp_rule/missing_policy", "403 slave_or_admin_required"}, "v2.2.0：单事务 DELETE+按序 INSERT；服务器强制最多 5 条；策略按 policy_id ASC 读取；空数组 [] = 解除该规则全部绑定。"},
 	{"GET", "/security/rules/:caddy_id/policy", "安全", "查看规则关联的策略（数组 ASC）", "", `[{"id":1,"name":"默认策略","mode":"blocking"}]`, []string{"401 unauthenticated"}, "v2.2.0：返回 []policy 按 id ASC，无绑定时为 []；仅含 enabled=1 的策略。"},
-	{"GET", "/security/bindings", "安全", "所有规则的安全策略绑定（map→数组 ASC）", "", `{"lb_xxx":[{"policy_id":1,"name":"默认策略","mode":"blocking","enabled":true}]}`, []string{"401 unauthenticated"}, "v2.2.0：值从单 BindingInfo 改为 []BindingInfo，按 policy_id ASC。"},
+	{"GET", "/security/bindings", "安全", "所有规则的安全策略绑定（map→数组 ASC）", "", `{"lb_xxx":[{"policy_id":1,"name":"默认策略","mode":"blocking","enabled":true,"block_page_id":1}]}`, []string{"401 unauthenticated"}, "v2.2.0：值从单 BindingInfo 改为 []BindingInfo，按 policy_id ASC。"},
 	{"GET", "/security/crs/rules", "安全", "CRS 规则文件列表", "", `{"rules":[{"filename":"REQUEST-942-APPLICATION-ATTACK-SQLI.conf","category":"SQL 注入","size":45000}],"total":30,"page":1}`, []string{"401 unauthenticated"}, "query: search, page, page_size。"},
 	{"GET", "/security/crs/rules/:filename", "安全", "CRS 规则文件内容", "", `{"filename":"REQUEST-942-APPLICATION-ATTACK-SQLI.conf","content":"SecRule ...","size":45000}`, []string{"404 not_found"}, ""},
 	{"GET", "/security/crs/setup", "安全", "CRS 配置文件内容", "", `{"content":"# CRS setup..."}`, []string{"404 not_found"}, ""},

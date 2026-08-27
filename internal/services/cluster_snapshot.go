@@ -414,7 +414,7 @@ func (s *ClusterService) snapshotSecurityPolicies(ctx context.Context, store sna
 }
 
 func (s *ClusterService) snapshotSecurityBindings(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
-	return s.dumpTableAsJSON(ctx, store, "security_policy_bindings", "rule_caddy_id,policy_id", "rule_caddy_id")
+	return s.dumpTableAsJSON(ctx, store, "security_policy_bindings", "rule_caddy_id,policy_id", "rule_caddy_id, policy_id")
 }
 
 func (s *ClusterService) snapshotSecurityCustomRules(ctx context.Context, store snapshotStore) ([]models.SecurityCustomRule, error) {

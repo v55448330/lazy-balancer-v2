@@ -184,6 +184,28 @@ func TestSetRuleSecurityPolicies_rejectsMoreThanFive(t *testing.T) {
 	}
 }
 
+// SC-BIND-01 边界（B-I2）：上限判定须先去重——[1,1,2,3,4,5] 为 5 条唯一策略，
+// 不得因原始数组长度 6 误判超限；写入结果按 policy_id ASC 去重后为 5 行。
+func TestSetRuleSecurityPolicies_dedupsBeforeMaxFiveCheck(t *testing.T) {
+	// Given 5 条策略与一条 HTTP 规则
+	setupSecurityPolicyTestDB(t)
+	router := newMultiPolicyRouter(t)
+	seedHTTPRule(t, "lb_mp_dedup")
+	ids := []int{}
+	for i := 1; i <= 5; i++ {
+		ids = append(ids, createMultiPolicy(t, router, fmt.Sprintf("策略%d", i)))
+	}
+
+	// When PUT 携带重复 id 的 6 元素数组（5 条唯一）
+	recorder := putMultiJSON(t, router, "/security/rules/lb_mp_dedup/policies", map[string]any{"policy_ids": []int{ids[0], ids[0], ids[1], ids[2], ids[3], ids[4]}})
+
+	// Then 接受 200，绑定为去重后的 5 条
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_dedup"), ids)
+}
+
 // SC-BIND-01：单元素 policy_ids 向后兼容（PUT [1] 与 POST bind 等价行为）。
 func TestSetRuleSecurityPolicies_singleIDBackwardsCompatible(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
@@ -617,11 +639,10 @@ func TestDeleteRule_preservesOtherRulesBindingsOnSamePolicy(t *testing.T) {
 	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_del_b"), []int{int(policyID)})
 }
 
-// Max-5 边界（已知缺口存档）：PUT 服务端强制 ≤5，但 POST additive 路径无上限校验
-// ——规则已有 5 条绑定时 POST 第 6 条仍成功（200 + 6 行）。服务端 guard 缺失；
-// 上限目前仅由前端向导（wizard）客户端侧强制。此测试锁定现状行为，若将来服务端
-// 补齐 POST 上限（期望 400），本测试应变红并随之更新。
-func TestBindRuleToPolicy_postAdditiveAllowsSixthBinding_knownGap(t *testing.T) {
+// Max-5 服务端守卫（B-I1）：POST additive 与 PUT 同上限——规则已绑满 5 条时
+// POST 第 6 条（新策略对）→ 400「最多绑定 5 条策略」；重绑已存在的 (rule,policy)
+// 对保持幂等 200（INSERT OR IGNORE 不产生新行）。
+func TestBindRuleToPolicy_postAdditiveRejectsSixthBinding(t *testing.T) {
 	// Given 规则已通过 PUT 绑满 5 条策略
 	setupSecurityPolicyTestDB(t)
 	router := newMultiPolicyRouter(t)
@@ -635,13 +656,110 @@ func TestBindRuleToPolicy_postAdditiveAllowsSixthBinding_knownGap(t *testing.T) 
 	}
 	p6 := createMultiPolicy(t, router, "第六策略")
 
-	// When POST additive 绑定第 6 条
+	// When POST additive 绑定第 6 条（新策略对）
 	recorder := postJSON(t, router, "/security/policies/"+strconv.Itoa(p6)+"/bind", map[string]any{"rule_caddy_id": "lb_mp_six"})
 
-	// Then 现状：服务端允许（200），绑定数变为 6 —— 已知缺口，见函数注释
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("POST 6th bind status=%d body=%s, want 200 (current behavior: no server-side cap on POST)", recorder.Code, recorder.Body.String())
+	// Then 服务端拒绝 400，绑定仍为 5 条
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("POST 6th bind status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
 	}
-	want := append(append([]int{}, ids...), p6)
-	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_six"), want)
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("最多绑定 5 条策略")) {
+		t.Fatalf("POST 6th bind body=%s, want message containing 最多绑定 5 条策略", recorder.Body.String())
+	}
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_six"), ids)
+
+	// When 重绑已存在的 (rule,policy) 对
+	recorder = postJSON(t, router, "/security/policies/"+strconv.Itoa(ids[0])+"/bind", map[string]any{"rule_caddy_id": "lb_mp_six"})
+
+	// Then 幂等 200，绑定集合不变
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("re-bind existing pair status=%d body=%s, want 200 (idempotent)", recorder.Code, recorder.Body.String())
+	}
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_six"), ids)
+}
+
+// SC-GET-02 扩展（D-I1）：GET /security/bindings 每绑定携带 block_page_id——前端
+// 据此计算「首个启用且配置了拦截页面的策略」，与后端生成口径（首个 enabled 且
+// block_page_id>0）一致，前导策略 block_page_id=0 时不得误判。
+func TestGetAllSecurityBindings_includesBlockPageID(t *testing.T) {
+	// Given 一条规则按序绑定两条策略：首策略无拦截页面，次策略 block_page_id=7
+	setupSecurityPolicyTestDB(t)
+	router := newMultiPolicyRouter(t)
+	seedHTTPRule(t, "lb_mp_bpid")
+	p1 := createMultiPolicy(t, router, "无页策略")
+	p2 := createMultiPolicy(t, router, "有页策略")
+	if _, err := db.DB.Exec("UPDATE security_policies SET block_page_id=7 WHERE id=?", p2); err != nil {
+		t.Fatalf("set block_page_id: %v", err)
+	}
+	if r := putMultiJSON(t, router, "/security/rules/lb_mp_bpid/policies", map[string]any{"policy_ids": []int{p1, p2}}); r.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", r.Code, r.Body.String())
+	}
+
+	// When GET /security/bindings
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/security/bindings", nil)
+	router.ServeHTTP(recorder, req)
+
+	// Then 每条绑定携带 block_page_id：首条 0，次条 7
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data map[string][]struct {
+			PolicyID    int `json:"policy_id"`
+			BlockPageID int `json:"block_page_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse bindings response %s: %v", recorder.Body.String(), err)
+	}
+	entries := resp.Data["lb_mp_bpid"]
+	if len(entries) != 2 {
+		t.Fatalf("bindings=%+v, want 2 entries", entries)
+	}
+	if entries[0].PolicyID != p1 || entries[0].BlockPageID != 0 {
+		t.Fatalf("entries[0]=%+v, want policy_id=%d block_page_id=0", entries[0], p1)
+	}
+	if entries[1].PolicyID != p2 || entries[1].BlockPageID != 7 {
+		t.Fatalf("entries[1]=%+v, want policy_id=%d block_page_id=7", entries[1], p2)
+	}
+}
+
+// D-K1：策略列表摘要携带 crs_rule_groups——前端向导的跨策略重复告警直接消费摘要，
+// 不再对每条启用策略 N+1 拉取详情。
+func TestListSecurityPolicies_summaryIncludesCRSRuleGroups(t *testing.T) {
+	// Given 一条配置 CRS 规则组 ["42","43"] 的策略
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	if r := postJSON(t, router, "/security/policies", map[string]any{
+		"name": "带组策略", "mode": "blocking", "enabled": true,
+		"crs_rule_groups": `["42","43"]`,
+	}); r.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", r.Code, r.Body.String())
+	}
+
+	// When GET /security/policies
+	recorder := getRequest(t, router, "/security/policies")
+
+	// Then 摘要项携带 crs_rule_groups 原始 JSON 数组
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data []struct {
+			Name          string          `json:"name"`
+			CRSRuleGroups json.RawMessage `json:"crs_rule_groups"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse list response %s: %v", recorder.Body.String(), err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("summaries=%+v, want 1 policy", resp.Data)
+	}
+	if string(resp.Data[0].CRSRuleGroups) != `["42","43"]` {
+		t.Fatalf("crs_rule_groups=%s, want %s", resp.Data[0].CRSRuleGroups, `["42","43"]`)
+	}
 }

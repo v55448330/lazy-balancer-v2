@@ -78,6 +78,9 @@ interface RequestClient {
 let mfaPromptOpen = false
 // R72 八次：MFA 宽限窗提示节流（60 秒一次）
 let lastMfaGraceNoticeAt = 0
+// R73：兜底 toast 的句柄——页面级反馈（mfaAwareSuccess）渲染同文案时关闭它，
+// 否则用户会同时看到「免验证」兜底条与「免验证+保存成功」业务条两条重复提示。
+let lastMfaGraceNotice: { close: () => void } | null = null
 
 // R72 十三次：最近一次宽限窗放行时间戳——showSaveResult 读取（导出 getter），
 // 距今 <3s 视为「本次保存刚经过宽限窗」，业务 toast 追加（MFA 已验证）。
@@ -93,6 +96,10 @@ export const wasRecentMfaGrace = (): boolean =>
 // 所有写事件的成功提示都应经此助手发出。
 export const mfaAwareSuccess = (message: string): void => {
   if (wasRecentMfaGrace()) {
+    // 同文案的兜底条已存在时关闭——最终只留这一条（兜底条的职责是覆盖无页面
+    // 反馈的静默请求；有页面反馈时它即冗余）。
+    lastMfaGraceNotice?.close()
+    lastMfaGraceNotice = null
     ElMessage.success(`MFA 在验证窗口期，本次操作免验证，${message}`)
     return
   }
@@ -165,11 +172,14 @@ service.interceptors.response.use(
     const mfaVerifiedAgo = response.headers?.['x-mfa-verified-seconds-ago']
     if (mfaVerifiedAgo !== undefined) {
       mfaGraceLastAt = Date.now()
-      if (response.config?.silent) {
+      // R73：弹码验证后的自动重试不再发「免验证」兜底——用户刚输完码（与 R72 十五次
+      // 页面级反馈同口径）；且新 toast 发出前关闭上一条，避免连发重复。
+      if (response.config?.silent && Date.now() - mfaVerifiedJustNowAt > 3_000) {
         const now = Date.now()
         if (now - lastMfaGraceNoticeAt > 60_000) {
           lastMfaGraceNoticeAt = now
-          ElMessage.info('MFA 在验证窗口期，本次操作免验证')
+          lastMfaGraceNotice?.close()
+          lastMfaGraceNotice = ElMessage.info('MFA 在验证窗口期，本次操作免验证')
         }
       }
     }

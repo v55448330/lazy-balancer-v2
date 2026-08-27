@@ -48,6 +48,9 @@ type SecurityPolicySummary struct {
 	RateLimitRPS     int    `json:"rate_limit_rps"`
 	RateLimitBurst   int    `json:"rate_limit_burst"`
 	CRSExcludedCount int    `json:"crs_excluded_count"`
+	// D-K1：摘要携带 CRS 规则组原始 JSON——前端向导跨策略重复告警直接消费摘要，
+	// 不再对每条启用策略 N+1 拉取详情。
+	CRSRuleGroups json.RawMessage `json:"crs_rule_groups"`
 	// R72 三十次追加（多策略绑定 Q2 根因 1）：ruleProtections 的 GeoIP/自定义
 	// 规则行此前永远没有数据（接口只给 has_ip_control/has_rate_limit）。
 	HasGeoIP         bool   `json:"has_geoip"`

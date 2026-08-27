@@ -129,7 +129,7 @@ func crsPoolFingerprint() string {
 	return fmt.Sprintf("%s-%d-%d", version, mtime, size)
 }
 
-func BuildCorazaDirectives(p *models.SecurityPolicy) string {
+func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) string {
 	var sb strings.Builder
 	// R72 三十次 F1：嵌 coraza 池键指纹（见 crsPoolFingerprint）——CRS 文件
 	// 替换/手动改 overrides 后池键必须变化，否则新 Caddy 配置复用旧 WAF
@@ -145,7 +145,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy) string {
 	// IP-level control (ACL / trust list / legacy bypass & blacklist) runs
 	// independently of the WAF mode so that "关闭 WAF" never disables IP control.
 	emitIPControl := len(ipWL) > 0 || len(ipBL) > 0 || (p.IPACLEnabled && len(ipACLList) > 0)
-	customRules := resolvePolicyCustomRules(p.CustomRules)
+	customRules := resolvePolicyCustomRules(p.CustomRules, store)
 	hasCustomRules := false
 	for _, cr := range customRules {
 		if cr.Enabled {
@@ -454,7 +454,7 @@ func SecurityPolicyHasIPControl(p *models.SecurityPolicy) bool {
 // policy list would advertise rules the WAF never emits.
 func CountEnabledCustomRules(raw json.RawMessage) int {
 	count := 0
-	for _, cr := range resolvePolicyCustomRules(raw) {
+	for _, cr := range resolvePolicyCustomRules(raw, nil) {
 		if cr.Enabled {
 			count++
 		}
@@ -465,11 +465,14 @@ func CountEnabledCustomRules(raw json.RawMessage) int {
 // buildWafHandlerWithPolicy returns the coraza WAF handler for the given policy,
 // or nil when the policy is nil or emits no directives. Callers pass a policy
 // from the batch-preloaded context so generation stays on the store/tx channel.
-func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy) map[string]interface{} {
+// store 与策略预载同源（A-I1）：自定义规则读取必须沿同一 store——tx 内生成
+// 时 db.DB 看不到未提交的 security_custom_rules 行，会静默丢失 WAF 规则。
+// store=nil 时由 resolvePolicyCustomRules 回退 db.DB（非批量路径保持现状）。
+func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy, store caddyConfigStore) map[string]interface{} {
 	if policy == nil {
 		return nil
 	}
-	directives := BuildCorazaDirectives(policy)
+	directives := BuildCorazaDirectives(policy, store)
 	if directives == "" {
 		return nil
 	}
@@ -481,18 +484,30 @@ func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy
 
 // resolvePolicyCustomRules 解析策略的自定义规则引用：当前端存储为规则 ID 数组时
 // 从 security_custom_rules 表解析为完整规则；兼容早期的对象内嵌形状。
+// store 必须与策略预载同源（A-I1）：v2 导入事务内重插的 security_custom_rules
+// 在已提交 db.DB 视角中不存在，走 db.DB 会让新规则在渲染期静默丢失（WAF 削弱）。
+// store=nil 回退 db.DB，保留 handlers/summary 等非事务调用点现状。
 // policyCustomRuleChunkSize bounds each IN (...) placeholder batch:
 // SQLite caps bound variables at 32766, and an oversized IN previously
 // failed the whole query so custom rules were silently lost (WAF weakened).
 var policyCustomRuleChunkSize = 500
 
-func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
+func resolvePolicyCustomRules(raw json.RawMessage, store caddyConfigStore) []models.CustomRule {
 	if len(raw) == 0 {
 		return nil
 	}
 	var ids []int
 	if err := json.Unmarshal(raw, &ids); err == nil {
-		if len(ids) == 0 || db.DB == nil {
+		if len(ids) == 0 {
+			return nil
+		}
+		// A-I1：store=nil 时回退全局 db.DB——非事务调用点（summary、handlers）
+		// 语义与修复前一致；tx 调用点必须显式传 tx，否则会读到已提交旧快照。
+		effective := store
+		if effective == nil {
+			effective = db.DB
+		}
+		if effective == nil {
 			return nil
 		}
 		var rules []models.CustomRule
@@ -508,7 +523,7 @@ func resolvePolicyCustomRules(raw json.RawMessage) []models.CustomRule {
 			for i, id := range chunk {
 				args[i] = id
 			}
-			rows, err := db.DB.Query("SELECT id, name, conditions, action, score, enabled FROM security_custom_rules WHERE id IN ("+placeholders+")", args...)
+			rows, err := effective.Query("SELECT id, name, conditions, action, score, enabled FROM security_custom_rules WHERE id IN ("+placeholders+")", args...)
 			if err != nil {
 				// Round 34 G: 单块失败只丢该块并留痕，其余块照常解析；
 				// 此前整查询失败静默返回 nil，WAF 规则全部丢失且无日志。

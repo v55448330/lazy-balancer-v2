@@ -84,7 +84,7 @@ var toolUsage = map[string]string{
 	"create_security_policy":       "创建安全策略：配置 WAF 模式/异常阈值/CRS 规则组/IP ACL/GeoIP 区域控制/限流/拦截页面；custom_rules 为 JSON 数组字符串",
 	"update_security_policy":       "更新策略任意字段（如调整 WAF 模式、增减区域、修改阈值）",
 	"delete_security_policy":       "删除策略（绑定关系自动解除）",
-	"bind_security_policy":         "将策略绑定到规则（rule_caddy_id）；规则可绑定多条安全策略（按 policy_id ASC 顺序评估）",
+	"bind_security_policy":         "将策略绑定到规则（rule_caddy_id）；规则可绑定多条安全策略（按 policy_id ASC 顺序评估，最多 5 条；超限时请使用 set_rule_security_policies 整体替换）",
 	"unbind_security_policy":       "解除策略与规则的绑定（仅解除该策略，同规则的其他策略绑定保留）",
 	"set_rule_security_policies":   "原子设置规则的安全策略集合（最多 5 条，按 policy_id ASC 顺序评估，整体替换现有绑定）",
 	"create_custom_rule":           "创建自定义安全规则（URI/参数/请求头/User-Agent 多条件匹配）",

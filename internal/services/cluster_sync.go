@@ -1273,8 +1273,12 @@ func (s *SyncService) run(ctx context.Context) {
 			// 有意义的状态跃迁（漂移自愈、失败）仍在各自路径留痕。
 			_, pullErr := s.Pull(ctx)
 			var schemaTooNew *SnapshotSchemaTooNewError
-			var schemaTooOld *SnapshotSchemaTooOldError
-			terminal := errors.As(pullErr, &schemaTooNew) || errors.As(pullErr, &schemaTooOld)
+			// E-F1：SnapshotSchemaTooOldError（v3 从节点拉到签名合法的旧 schema
+			// 主节点快照）保持非终止——与 :1116-1118 同类（v2 无 canonical 形态）
+			// 一致走降级重试，主节点升级后自动恢复；终止化会让先升级从节点的
+			// 滚动升级永久停摆（只能人工 Resume/改模式/重启）。终止类仅剩
+			// schemaTooNew（本节点无法安全解析）与令牌撤销。
+			terminal := errors.As(pullErr, &schemaTooNew)
 			if terminal || errors.Is(pullErr, errSyncTokenRevoked) {
 				s.state.Store(uint32(syncStateHalted))
 			}

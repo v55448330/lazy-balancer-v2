@@ -37,7 +37,7 @@ func TestGetSecurityPolicyForRule_LoadsWafCheckResponse(t *testing.T) {
 	if !p.WAFCheckResponse {
 		t.Fatalf("WAFCheckResponse=false, want true (DB path must load the column)")
 	}
-	directives := BuildCorazaDirectives(p)
+	directives := BuildCorazaDirectives(p, nil)
 	if !strings.Contains(directives, "SecResponseBodyAccess On") {
 		t.Fatalf("directives missing SecResponseBodyAccess On:\n%s", directives)
 	}
@@ -54,7 +54,7 @@ func TestGetSecurityPolicyForRule_LoadsWafCheckResponse(t *testing.T) {
 	if p2 == nil || p2.WAFCheckResponse {
 		t.Fatalf("p2=%v want WAFCheckResponse=false", p2)
 	}
-	if d2 := BuildCorazaDirectives(p2); !strings.Contains(d2, "SecResponseBodyAccess Off") {
+	if d2 := BuildCorazaDirectives(p2, nil); !strings.Contains(d2, "SecResponseBodyAccess Off") {
 		t.Fatalf("directives missing Off:\n%s", d2)
 	}
 	_ = crs

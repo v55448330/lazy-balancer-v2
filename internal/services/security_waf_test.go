@@ -20,7 +20,7 @@ func useCRSDirectivesDir(t *testing.T, dir string) {
 func TestBuildCorazaDirectives_WAFAuditLogPartsIncludeK(t *testing.T) {
 	// Given a blocking policy
 	// When
-	directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"})
+	directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"}, nil)
 
 	// Then the audit log keeps part K so matched rule ids/messages populate the
 	// audit messages array (without K, event rule attribution is lost)
@@ -43,7 +43,7 @@ func TestBuildCorazaDirectives_BypassAndTrustListUseDistinctIDs(t *testing.T) {
 	}
 
 	// When
-	directives := BuildCorazaDirectives(policy)
+	directives := BuildCorazaDirectives(policy, nil)
 
 	// Then the bypass rule keeps id:3 with the ACL list and the trust list moves to
 	// id:5, so both ctl:ruleEngine=Off rules coexist without a duplicate SecRule id
@@ -77,7 +77,7 @@ func TestBuildCorazaDirectives_TrustListPrecedesACLRules(t *testing.T) {
 	}
 
 	// When
-	directives := BuildCorazaDirectives(policy)
+	directives := BuildCorazaDirectives(policy, nil)
 
 	// Then the trust-list rule takes id:3 (no bypass rule present) and the
 	// ctl:ruleEngine=Off short-circuit is emitted before the ACL deny rule
@@ -102,8 +102,8 @@ func TestBuildCorazaDirectives_allowAndDenyModesUnchangedByBypass(t *testing.T) 
 	deny := &models.SecurityPolicy{Mode: "blocking", IPACLMode: "deny", IPACLList: `["203.0.113.0/24"]`, IPACLEnabled: true}
 
 	// When
-	allowDirectives := BuildCorazaDirectives(allow)
-	denyDirectives := BuildCorazaDirectives(deny)
+	allowDirectives := BuildCorazaDirectives(allow, nil)
+	denyDirectives := BuildCorazaDirectives(deny, nil)
 
 	// Then allow still denies non-listed IPs and deny still blocks listed IPs, neither emits a bypass id:3
 	if !strings.Contains(allowDirectives, `SecRule REMOTE_ADDR "!@ipMatch 198.51.100.7" "id:2,phase:1,deny,status:403`) {
@@ -204,7 +204,7 @@ func TestBuildCorazaDirectives_trimsLegacyCRSGroupWhitespace(t *testing.T) {
 	if policy == nil {
 		t.Fatal("expected bound policy to load")
 	}
-	directives := BuildCorazaDirectives(policy)
+	directives := BuildCorazaDirectives(policy, nil)
 
 	// Then REQUEST/RESPONSE 两行均为 trim 后的合法 glob，且不存在畸形 glob
 	if !strings.Contains(directives, "Include /app/waf/crs/rules/REQUEST-942-*.conf\n") {
@@ -227,7 +227,7 @@ func TestBuildCorazaDirectives_includesUserOverridesWhenFileExists(t *testing.T)
 	useCRSDirectivesDir(t, dir)
 
 	// When
-	directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"})
+	directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"}, nil)
 
 	// Then the overrides include follows the crs-setup include
 	setupIdx := strings.Index(directives, "Include /app/waf/crs/crs-setup.conf")
@@ -248,7 +248,7 @@ func TestBuildCorazaDirectives_omitsUserOverridesWhenFileMissing(t *testing.T) {
 	useCRSDirectivesDir(t, t.TempDir())
 
 	// When
-	directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"})
+	directives := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "blocking"}, nil)
 
 	// Then
 	if strings.Contains(directives, "zz-user-overrides") {
@@ -265,7 +265,7 @@ func TestBuildCorazaDirectives_skipsIllegalSecRuleRemoveTargets(t *testing.T) {
 		CRSRuleGroups:    json.RawMessage(`["942"]`),
 		CRSExcludedRules: json.RawMessage(`["942100","ABCDEF","942100-abc","REQUEST-942.conf","1-999999","932100-932200"]`),
 	}
-	directives := BuildCorazaDirectives(policy)
+	directives := BuildCorazaDirectives(policy, nil)
 	if !strings.Contains(directives, "SecRuleRemoveById 942100") {
 		t.Fatal("legal single ID must be emitted")
 	}

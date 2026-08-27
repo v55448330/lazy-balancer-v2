@@ -1651,3 +1651,126 @@ func TestDecodeSnapshotEnvelope_decodesBodyWithinLimit(t *testing.T) {
 		t.Fatalf("snapshot=(version=%d) err=%v, want version=1 decoded", snapshot.Version, err)
 	}
 }
+
+// startRunLoopTestMaster 启动一个假主节点：/snapshot 始终下发给定快照，
+// /report 一律 200。返回的 pullRequests 每收到一次快照请求发送一个信号。
+func startRunLoopTestMaster(t *testing.T, snapshot any) (master *httptest.Server, pullRequests chan struct{}) {
+	t.Helper()
+	pullRequests = make(chan struct{}, 8)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/cluster/sync/snapshot", func(response http.ResponseWriter, _ *http.Request) {
+		pullRequests <- struct{}{}
+		_ = json.NewEncoder(response).Encode(models.APIResponse{Code: 0, Data: snapshot})
+	})
+	mux.HandleFunc("/api/v1/cluster/nodes/report", func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	})
+	master = httptest.NewTLSServer(mux)
+	t.Cleanup(master.Close)
+	return master, pullRequests
+}
+
+func TestSyncService_Run_schemaTooOldDoesNotHalt_retriesNextCycle(t *testing.T) {
+	// E-F1 回归：v3 从节点拉到签名合法的 v2 主节点快照（SchemaTooOld）是可自愈
+	// 的降级错误——主节点升级后自动恢复（与同类的 v2 无 canonical 形态一致，
+	// cluster_sync.go:1116-1118 刻意非终止）。滚动升级先升从节点时若进 Halted
+	// 终态，主节点升级后从节点不会自动恢复，只能人工 Resume/改模式/重启。
+	// Given：从节点 + 主节点始终下发签名合法的 schema v2 快照
+	const token = "cluster-token"
+	_, database := newClusterTestService(t)
+	master, pullRequests := startRunLoopTestMaster(t, signedSnapshotV2Fixture(1, token))
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token=? WHERE id=1", master.URL, token); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(caddyServer.URL))
+	t.Cleanup(service.Stop)
+	delayCalls := make(chan struct{}, 8)
+	var delayCount atomic.Int32
+	service.waitRunDelay = func(_ context.Context, _ time.Duration) bool {
+		delayCalls <- struct{}{}
+		// 第二轮拉取证明「未终止」后即退出循环，避免测试依赖真实退避时长。
+		return delayCount.Add(1) < 2
+	}
+
+	// When
+	service.Start()
+
+	// Then：首轮拉取失败后循环必须继续（degraded 重试），而非 Halted 终止
+	// （终止路径在 waitDelay 之前 return，永远不会产生 delay 信号）。
+	waitSyncTest(t, pullRequests)
+	waitSyncTest(t, delayCalls)
+	waitSyncTest(t, pullRequests)
+	waitSyncTest(t, delayCalls)
+	// 循环退出后状态不得停留在 Halted（finishRun 对非 Halted 会复位为 Stopped）。
+	deadline := time.Now().Add(time.Second)
+	for {
+		state := syncLifecycleState(service.state.Load())
+		if state == syncStateHalted {
+			t.Fatal("schema too old 被当作终止错误：同步进入 Halted 终态")
+		}
+		if state == syncStateStopped {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run loop state=%v, want Stopped after bounded retries", state)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestSyncService_Run_schemaTooNewStillHalts(t *testing.T) {
+	// E-F1 回归护栏：min_reader_version 超出本节点支持范围的签名合法快照仍是
+	// 终止错误——无法安全解析 canonical_payload，必须 Halted 等待本节点升级，
+	// 不得降级重试（cluster_sync.go:1122-1127 的语义不变）。
+	// Given：从节点 + 主节点下发签名合法、min_reader_version 超前的快照
+	const token = "cluster-token"
+	_, database := newClusterTestService(t)
+	snapshot := signTestSnapshot(models.ClusterSnapshot{
+		Version: 1, SchemaVersion: CurrentSnapshotSchema, MinReaderVersion: CurrentSnapshotSchema + 1,
+	}, token)
+	master, pullRequests := startRunLoopTestMaster(t, snapshot)
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer caddyServer.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token=? WHERE id=1", master.URL, token); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(caddyServer.URL))
+	t.Cleanup(service.Stop)
+	delayCalls := make(chan struct{}, 8)
+	service.waitRunDelay = func(_ context.Context, _ time.Duration) bool {
+		delayCalls <- struct{}{}
+		return true
+	}
+
+	// When
+	service.Start()
+
+	// Then：首轮拉取即终止——进入 Halted 且循环退出，永不进入重试等待。
+	waitSyncTest(t, pullRequests)
+	deadline := time.Now().Add(time.Second)
+	for {
+		service.mu.Lock()
+		exited := service.cancel == nil
+		service.mu.Unlock()
+		if syncLifecycleState(service.state.Load()) == syncStateHalted && exited {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("state=%v exited=%v, want Halted with run loop exited",
+				syncLifecycleState(service.state.Load()), exited)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := len(delayCalls); got != 0 {
+		t.Fatalf("waitDelay calls=%d, want 0（终止路径不得进入重试等待）", got)
+	}
+	if got := len(pullRequests); got != 0 {
+		t.Fatalf("extra pull requests=%d, want 0（终止后不得再次拉取）", got)
+	}
+}

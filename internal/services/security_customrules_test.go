@@ -19,14 +19,14 @@ func TestResolvePolicyCustomRules_idsLoadFromDB(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO security_custom_rules (name, description, conditions, action, score, enabled) VALUES ('链式验证规则','', '[{"target":"uri","operator":"contains","pattern":"/admin"}]', 'block', 5, 1)`); err != nil {
 		t.Fatal(err)
 	}
-	rules := resolvePolicyCustomRules(json.RawMessage(`[1]`))
+	rules := resolvePolicyCustomRules(json.RawMessage(`[1]`), nil)
 	if len(rules) != 1 || rules[0].Name != "链式验证规则" || len(rules[0].Conditions) != 1 {
 		t.Fatalf("bad resolution: %+v", rules)
 	}
 }
 
 func TestResolvePolicyCustomRules_legacyEmbeddedObjects(t *testing.T) {
-	rules := resolvePolicyCustomRules(json.RawMessage(`[{"id":2,"name":"内嵌","enabled":true,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}],"action":"pass","score":1}]`))
+	rules := resolvePolicyCustomRules(json.RawMessage(`[{"id":2,"name":"内嵌","enabled":true,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}],"action":"pass","score":1}]`), nil)
 	if len(rules) != 1 || rules[0].Name != "内嵌" {
 		t.Fatalf("legacy embedded shape not supported: %+v", rules)
 	}
@@ -50,7 +50,7 @@ func TestResolvePolicyCustomRules_chunkedIDsAcrossBatches(t *testing.T) {
 	}
 
 	// When 引用 5 条（跨 3 批查询）
-	rules := resolvePolicyCustomRules(json.RawMessage(`[1,2,3,4,5]`))
+	rules := resolvePolicyCustomRules(json.RawMessage(`[1,2,3,4,5]`), nil)
 
 	// Then 全部解析，无丢失
 	if len(rules) != 5 {
@@ -85,7 +85,7 @@ func TestResolvePolicyCustomRules_chunkFailureDoesNotInflateDanglingLog(t *testi
 	t.Cleanup(func() { log.SetOutput(originalWriter) })
 
 	// When
-	rules := resolvePolicyCustomRules(json.RawMessage(`[1,2,3]`))
+	rules := resolvePolicyCustomRules(json.RawMessage(`[1,2,3]`), nil)
 
 	// Then 无规则解析，分块错误单独留痕
 	if len(rules) != 0 {
@@ -110,7 +110,7 @@ func TestBuildCorazaDirectives_customRuleDenyOmitsStatusCode(t *testing.T) {
 	}
 
 	// When directives are built
-	directives := BuildCorazaDirectives(policy)
+	directives := BuildCorazaDirectives(policy, nil)
 
 	// Then the deny action carries no status override; the block page's status governs
 	if !strings.Contains(directives, `deny,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'自定义规则 拒绝规则 命中'`) {
@@ -127,7 +127,7 @@ func TestBuildCorazaDirectives_userAgentTargetUsesColonNotation(t *testing.T) {
 		CRSRuleGroups: json.RawMessage(`["9"]`),
 		CustomRules:   json.RawMessage(`[{"id":9,"name":"ua","enabled":true,"action":"pass","score":1,"conditions":[{"target":"user_agent","operator":"contains","pattern":"sqlmap"}]}]`),
 	}
-	directives := BuildCorazaDirectives(policy)
+	directives := BuildCorazaDirectives(policy, nil)
 	if !strings.Contains(directives, "REQUEST_HEADERS:User-Agent") {
 		t.Fatalf("user_agent target must use colon notation:\n%s", directives)
 	}

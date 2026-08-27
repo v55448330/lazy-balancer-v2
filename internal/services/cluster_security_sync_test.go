@@ -382,3 +382,39 @@ func TestClusterSnapshot_danglingBindingPreserved(t *testing.T) {
 		t.Fatalf("runtime policies=%v, want only policy 1 (dangling skipped)", policies)
 	}
 }
+
+// queryRecordingSnapshotStore 记录最近一次 QueryContext 的 SQL 后委托真实 DB
+// 执行（同时验证 SQL 可执行），用于钉住 dumpTableAsJSON 的 ORDER BY 契约。
+type queryRecordingSnapshotStore struct {
+	database *sql.DB
+	query    string
+}
+
+func (s *queryRecordingSnapshotStore) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	s.query = query
+	return s.database.QueryContext(ctx, query, args...)
+}
+
+func (s *queryRecordingSnapshotStore) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return s.database.QueryRowContext(ctx, query, args...)
+}
+
+func TestClusterSnapshot_securityBindingsFullyOrdered(t *testing.T) {
+	// E-F2 回归：v2.2.0 多策略后同一 rule_caddy_id 最多 5 行绑定。ORDER BY 只给
+	// rule_caddy_id 时行间顺序在 SQL 层无定义（当前靠复合主键覆盖索引碰巧稳定，
+	// 属查询计划偶然），而快照指纹/缓存键要求字节级确定性——顺序保证必须来自
+	// ORDER BY rule_caddy_id, policy_id 全序，与运行侧 caddy.go:823 同口径。
+	// Given
+	cluster, database := newClusterTestService(t)
+	store := &queryRecordingSnapshotStore{database: database}
+
+	// When
+	if _, err := cluster.snapshotSecurityBindings(context.Background(), store); err != nil {
+		t.Fatalf("snapshot security bindings: %v", err)
+	}
+
+	// Then
+	if !strings.HasSuffix(store.query, "ORDER BY rule_caddy_id, policy_id") {
+		t.Fatalf("bindings query=%q, want deterministic ORDER BY rule_caddy_id, policy_id", store.query)
+	}
+}

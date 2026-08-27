@@ -1548,7 +1548,7 @@ func TestBuildWafHandler_nilMatrix(t *testing.T) {
 			if err := database.QueryRow(`SELECT protocol FROM lb_rules WHERE caddy_id=?`, tc.caddyID).Scan(&protocol); err != nil || protocol != "http" {
 				protocol = "tcp"
 			}
-			handler := buildWafHandlerWithPolicy(tc.caddyID, GetSecurityPolicyForRule(tc.caddyID))
+			handler := buildWafHandlerWithPolicy(tc.caddyID, GetSecurityPolicyForRule(tc.caddyID), nil)
 			if protocol != "http" {
 				handler = nil
 			}
@@ -2013,7 +2013,7 @@ func TestBuildCorazaDirectives_emitsAclExclusionsThresholdAndBlockStatus(t *test
 		t.Fatalf("exclusions/block page not loaded: excluded=%s block_page_id=%d", policy.CRSExcludedRules, policy.BlockPageID)
 	}
 
-	directives := BuildCorazaDirectives(policy)
+	directives := BuildCorazaDirectives(policy, nil)
 	for _, want := range []string{
 		"@ipMatch 203.0.113.0/24",
 		"SecRuleRemoveById 942100",
@@ -2042,7 +2042,7 @@ func TestBuildCorazaDirectives_allowModeDeniesNonListedIPs(t *testing.T) {
 		t.Fatalf("bind allow policy: %v", err)
 	}
 
-	directives := BuildCorazaDirectives(GetSecurityPolicyForRule("lb_allow"))
+	directives := BuildCorazaDirectives(GetSecurityPolicyForRule("lb_allow"), nil)
 	if !strings.Contains(directives, `!@ipMatch 198.51.100.7`) {
 		t.Fatalf("allow mode must deny non-listed IPs via negated match:\n%s", directives)
 	}
@@ -2061,7 +2061,7 @@ func TestBuildCorazaDirectives_chainedCustomRuleCarriesActionsOnlyOnStarter(t *t
 			`{"target":"user_agent","operator":"contains","pattern":"sqlmap"}]` +
 			`}]`),
 	}
-	directives := BuildCorazaDirectives(policy)
+	directives := BuildCorazaDirectives(policy, nil)
 	lines := strings.Split(directives, "\n")
 	var chainLines []string
 	for _, line := range lines {

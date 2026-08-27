@@ -15,7 +15,7 @@ func TestBuildCorazaDirectives_logActionOmitsScoreSetvar(t *testing.T) {
 		CustomRules: json.RawMessage(`[{"id":1,"name":"仅记录规则","enabled":true,"action":"log","score":5,"conditions":[` +
 			`{"target":"uri","operator":"contains","pattern":"/log"}]}]`),
 	}
-	directives := BuildCorazaDirectives(policy)
+	directives := BuildCorazaDirectives(policy, nil)
 
 	// Then it emits pass,log with a message but NO anomaly-score setvar
 	if !strings.Contains(directives, `pass,log,msg:'自定义规则 仅记录规则 命中'`) {
@@ -33,7 +33,7 @@ func TestBuildCorazaDirectives_passActionKeepsScoreSetvar(t *testing.T) {
 		CustomRules: json.RawMessage(`[{"id":2,"name":"放行计分规则","enabled":true,"action":"pass","score":5,"conditions":[` +
 			`{"target":"uri","operator":"contains","pattern":"/pass"}]}]`),
 	}
-	directives := BuildCorazaDirectives(policy)
+	directives := BuildCorazaDirectives(policy, nil)
 
 	// Then it records the event AND accumulates the anomaly score
 	if !strings.Contains(directives, `pass,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'自定义规则 放行计分规则 命中'`) {
