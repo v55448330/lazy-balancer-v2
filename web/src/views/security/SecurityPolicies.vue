@@ -135,17 +135,18 @@
               <el-select v-model="crsRuleGroups" :disabled="form.mode === 'off'" multiple filterable placeholder="留空加载全部 CRS 规则" style="width: 100%">
                 <el-option v-for="opt in crsGroupOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
               </el-select>
+              <!-- 跨策略 CRS 规则组重复实时警告（随当前选择重算）：置于表单项内控件列，
+                   顺序 select → 警告 → 说明，与控件/说明文字同列对齐 -->
+              <el-alert
+                v-if="wafStepCrsAlert"
+                type="warning"
+                :closable="false"
+                show-icon
+                :title="wafStepCrsAlert"
+                class="wizard-alert"
+              />
               <div class="form-tip-line">选择后仅加载所选规则组，留空加载全部 CRS 规则</div>
             </el-form-item>
-            <!-- 跨策略 CRS 规则组重复实时警告（随当前选择重算） -->
-            <el-alert
-              v-if="wafStepCrsAlert"
-              type="warning"
-              :closable="false"
-              show-icon
-              :title="wafStepCrsAlert"
-              class="wizard-alert"
-            />
             <el-alert
               v-if="hasResponsePhaseGroupWithoutCheck"
               type="warning"
@@ -201,6 +202,11 @@
                 <el-select v-model="ipACLList" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" style="width: 100%" />
                 <div class="form-tip-line">{{ aclListTip }}</div>
               </el-form-item>
+              <!-- 访问控制区地址级冲突实时警告（本区条目：ACL 列表 + 黑名单）——
+                   无 label 的 el-form-item 仍保留 label 宽度偏移，内容落在控件列 -->
+              <el-form-item v-if="aclSectionAlert">
+                <el-alert type="warning" :closable="false" show-icon :title="aclSectionAlert" class="wizard-alert" />
+              </el-form-item>
             </template>
           </el-form>
           <el-divider content-position="left" class="acl-divider">信任名单</el-divider>
@@ -213,17 +219,12 @@
                 <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" style="width: 100%" />
                 <div class="form-tip-line">名单内 IP 跳过 WAF 与访问控制检测（限流仍然生效）</div>
               </el-form-item>
+              <!-- 信任名单区地址级冲突实时警告（本区条目：信任 IP × 他策略黑名单） -->
+              <el-form-item v-if="whitelistSectionAlert">
+                <el-alert type="warning" :closable="false" show-icon :title="whitelistSectionAlert" class="wizard-alert" />
+              </el-form-item>
             </template>
           </el-form>
-          <!-- 跨策略允许/信任 × 黑名单地址级冲突实时警告（覆盖上方访问控制与信任名单） -->
-          <el-alert
-            v-if="ipStepAclAlert"
-            type="warning"
-            :closable="false"
-            show-icon
-            :title="ipStepAclAlert"
-            class="wizard-alert"
-          />
           <el-divider content-position="left" class="acl-divider">区域控制</el-divider>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="启用">
@@ -1210,17 +1211,48 @@ const wafStepCrsAlert = computed<string>(() => {
 })
 
 // IP 步骤：允许/信任名单 × 黑名单的地址级冲突实时警告——允许/信任不跨策略生效。
-const ipStepAclAlert = computed<string>(() => {
+// 按「本策略条目来源」拆到所属分区展示，避免无论冲突条目在哪都堆到信任名单下：
+// - aclSectionAlert（访问控制区）：ACL 列表（允许侧=allow/bypass、拒绝侧=deny）
+//   + ip_blacklist（服务端加载、本向导不编辑，语义属拒绝侧 → 归访问控制区）；
+// - whitelistSectionAlert（信任名单区）：ip_whitelist（允许侧）。
+// 名单生效口径与保存语义对齐：ip_whitelist 总是随保存下发、后端按「非空即生效」
+// 应用（开关仅控制编辑器显隐），故 computed 以 ipWhitelist 实际内容为准、仅模板
+// 显示层受 ipWhitelistEnabled 门控；ip_acl_list 仅 ip_acl_enabled 时生效（同
+// ipAclSideEntries）；ip_blacklist 非空即生效（无开关，但其警告随访问控制区
+// 显示，显示门控 form.ip_acl_enabled）。v1 仅精确字符串匹配，不展开 CIDR 包含。
+const aclSectionAlert = computed<string>(() => {
   const { peers } = comparisonContext.value
-  const { allow: selfAllow, deny: selfDeny } = selfIpAclSides.value
-  if (selfAllow.length === 0 && selfDeny.length === 0) return ''
+  const aclEnabled = form.value.ip_acl_enabled
+  const aclAllow = aclEnabled && (form.value.ip_acl_mode === 'allow' || form.value.ip_acl_mode === 'bypass') ? normalizeIpList(ipACLList.value) : []
+  const aclDeny = aclEnabled && form.value.ip_acl_mode === 'deny' ? normalizeIpList(ipACLList.value) : []
+  // 同一条目同时出现在 ACL 拒绝列表与黑名单时只按 ACL 列表口径报一次（黑名单
+  // 在本向导不可见，避免同地址两条仅名单名不同的重复提示）
+  const blacklist = normalizeIpList(ipBlacklistSelf.value).filter((e) => !aclDeny.includes(e))
+  if (aclAllow.length === 0 && aclDeny.length === 0 && blacklist.length === 0) return ''
   const items: string[] = []
   for (const peer of peers) {
-    for (const entry of selfAllow.filter((e) => peer.denyEntries.includes(e))) {
-      items.push(`地址 ${entry} 在「本策略」的允许/信任名单中、同时在「${peer.name}」的黑名单中——允许/信任不跨策略生效，该地址仍会被「${peer.name}」拦截`)
+    for (const entry of aclAllow.filter((e) => peer.denyEntries.includes(e))) {
+      items.push(`地址 ${entry} 在「本策略」的访问控制名单中、同时在「${peer.name}」的黑名单中——允许不跨策略生效，该地址仍会被「${peer.name}」拦截`)
     }
-    for (const entry of selfDeny.filter((e) => peer.allowEntries.includes(e))) {
+    for (const entry of aclDeny.filter((e) => peer.allowEntries.includes(e))) {
+      items.push(`地址 ${entry} 在「本策略」的访问控制名单中、同时在「${peer.name}」的允许/信任名单中——允许/信任不跨策略生效，该地址仍会被「本策略」拦截`)
+    }
+    for (const entry of blacklist.filter((e) => peer.allowEntries.includes(e))) {
       items.push(`地址 ${entry} 在「本策略」的黑名单中、同时在「${peer.name}」的允许/信任名单中——允许/信任不跨策略生效，该地址仍会被「本策略」拦截`)
+    }
+  }
+  if (items.length === 0) return ''
+  return items.slice(0, 2).join('；') + (items.length > 2 ? `；共 ${items.length} 条类似冲突` : '')
+})
+
+const whitelistSectionAlert = computed<string>(() => {
+  const { peers } = comparisonContext.value
+  const trust = normalizeIpList(ipWhitelist.value)
+  if (trust.length === 0) return ''
+  const items: string[] = []
+  for (const peer of peers) {
+    for (const entry of trust.filter((e) => peer.denyEntries.includes(e))) {
+      items.push(`地址 ${entry} 在「本策略」的信任名单中、同时在「${peer.name}」的黑名单中——信任不跨策略生效，该地址仍会被「${peer.name}」拦截`)
     }
   }
   if (items.length === 0) return ''
@@ -1538,7 +1570,9 @@ onMounted(async () => {
 .bound-rule-remove { margin-left: auto; }
 .bound-rule-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .bound-rule-alert { margin-top: 8px; }
-.wizard-alert { margin-bottom: 12px; }
+/* 步骤内警告置于表单项控件列（el-form-item__content 为 flex 容器）——
+   width:100% 使其独占一行并填满控件列（上限 640px），与 select/说明文字左对齐 */
+.wizard-alert { margin-bottom: 12px; width: 100%; }
 /* 紧凑化 el-alert（Step 4 冲突提示与 WAF/IP 步骤实时警告共用）：默认 14px 标题 +
    8px/16px 内边距在表单内过重，统一收敛到 12px/1.5 的提示文本视觉；max-width 对齐
    表单控件列宽（弹窗 800px − label 100px − 内边距 ≈ 660px，取 640px），避免横贯弹窗。 */
