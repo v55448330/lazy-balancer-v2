@@ -201,6 +201,7 @@ import type { APIResponse, UserListItem } from '@/types'
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
 const users = ref<UserListItem[]>([])
+const mfaWriteGuard = ref(false)
 const showForm = ref(false)
 const selfEdit = ref(false)
 const submitting = ref(false)
@@ -420,12 +421,23 @@ const resetMfa = async (row: UserListItem): Promise<void> => {
     const operatorMfa = row.id === authStore.user?.id ? true : (selfRow?.mfa_enabled ?? false)
     let code = ''
     if (operatorMfa) {
-      const { value } = await ElMessageBox.prompt(
-        `重置「${row.username}」的 MFA 后该用户登录不再需要验证码，需重新绑定。\n请输入你当前 MFA 的验证码以确认：`,
-        '重置 MFA',
-        { type: 'warning', confirmButtonText: '确认重置', inputPattern: /^.{6,16}$/, inputErrorMessage: '请输入验证码或恢复代码' },
-      )
-      code = value.trim()
+      if (mfaWriteGuard.value) {
+        // R73：守卫开启时后端第一层已豁免（守卫完成验码），对话框退化为纯确认——
+        // 保留后果说明与确认/取消，不再索取当前时间片验证码（索取也无码可用：
+        // 同片刚被守卫/登录消费，重放保护必拒）。
+        await ElMessageBox.confirm(
+          `重置「${row.username}」的 MFA 后该用户登录不再需要验证码，需重新绑定。`,
+          '重置 MFA',
+          { type: 'warning', confirmButtonText: '确认重置' },
+        )
+      } else {
+        const { value } = await ElMessageBox.prompt(
+          `重置「${row.username}」的 MFA 后该用户登录不再需要验证码，需重新绑定。\n请输入你当前 MFA 的验证码以确认：`,
+          '重置 MFA',
+          { type: 'warning', confirmButtonText: '确认重置', inputPattern: /^.{6,16}$/, inputErrorMessage: '请输入验证码或恢复代码' },
+        )
+        code = value.trim()
+      }
     } else {
       await ElMessageBox.confirm(
         `确定重置用户「${row.username}」的 MFA 吗？重置后该用户登录不再需要验证码，需自行重新绑定。`,
@@ -509,6 +521,14 @@ const copyMfaRecovery = async (): Promise<void> => {
 
 onMounted(() => {
   fetchUsers()
+  void (async () => {
+    try {
+      const res = await request.get('/config')
+      mfaWriteGuard.value = !!res.data?.mfa_write_guard
+    } catch {
+      // 读取失败按守卫关闭处理——重置对话框维持原有验码形态（保守）
+    }
+  })()
 })
 </script>
 
