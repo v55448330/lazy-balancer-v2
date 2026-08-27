@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 const auditDBFilename = "lazy-balancer-audit.db"
@@ -20,15 +21,20 @@ func InitializeAuditDB(dataDir string) error {
 	if err := prepareSQLiteDatabase(path); err != nil {
 		return fmt.Errorf("failed to secure audit database: %w", err)
 	}
-	auditDB, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=30000&_synchronous=NORMAL")
+	auditDB, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(30000)&_pragma=synchronous(NORMAL)")
 	if err != nil {
 		return fmt.Errorf("failed to open audit database: %w", err)
 	}
 	auditDB.SetMaxOpenConns(5)
 	auditDB.SetMaxIdleConns(2)
+	auditDB.SetConnMaxLifetime(30 * time.Minute)
 	if err := auditDB.Ping(); err != nil {
 		auditDB.Close()
 		return fmt.Errorf("failed to ping audit database: %w", err)
+	}
+	if err := applySQLiteRuntimePragmas(auditDB); err != nil {
+		auditDB.Close()
+		return fmt.Errorf("failed to apply audit database pragmas: %w", err)
 	}
 	if _, err := auditDB.Exec(`
 		CREATE TABLE IF NOT EXISTS audit_log (

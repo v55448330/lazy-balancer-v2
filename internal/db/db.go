@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"lazy-balancer-v2/internal/models"
 
@@ -94,7 +95,10 @@ func Initialize(dataDir string) (err error) {
 		return fmt.Errorf("failed to secure database file: %w", err)
 	}
 
-	database, err := openDatabase("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=30000&_synchronous=NORMAL&_txlock=immediate")
+	// glebarez 仅识别 _pragma/_txlock/_time_format 三类 DSN 参数；_pragma 会在
+	// 每条新建连接上执行（applyQueryParams），正适合 busy_timeout 这类连接级参数。
+	// journal_mode 是文件级（一次迁移持久生效），放这里仅为幂等兜底。
+	database, err := openDatabase("sqlite", dbPath+"?_txlock=immediate&_pragma=journal_mode(WAL)&_pragma=busy_timeout(30000)&_pragma=synchronous(NORMAL)")
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
@@ -116,10 +120,16 @@ func Initialize(dataDir string) (err error) {
 
 	database.SetMaxOpenConns(10)
 	database.SetMaxIdleConns(5)
-	database.SetConnMaxLifetime(0)
+	// 连接最长存活 30 分钟：Begin/Commit 歧义（客户端超时取消）可能在池中留下
+	// SQLite 层事务未关闭的「中毒连接」（表现为 cannot start a transaction within
+	// a transaction / 持锁不放）；定期换血把最坏影响面限制在半个生命周期内。
+	database.SetConnMaxLifetime(30 * time.Minute)
 
 	if err := database.Ping(); err != nil {
 		return fmt.Errorf("failed to ping database: %w", err)
+	}
+	if err := applySQLiteRuntimePragmas(database); err != nil {
+		return fmt.Errorf("failed to apply database pragmas: %w", err)
 	}
 
 	DB = database

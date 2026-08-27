@@ -17,7 +17,7 @@ func InitializeMetricsDB(dataDir string) (err error) {
 		return fmt.Errorf("failed to secure metrics database: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=30000&_synchronous=NORMAL")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(30000)&_pragma=synchronous(NORMAL)")
 	if err != nil {
 		return fmt.Errorf("failed to open metrics database: %w", err)
 	}
@@ -29,10 +29,13 @@ func InitializeMetricsDB(dataDir string) (err error) {
 
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(2)
-	db.SetConnMaxLifetime(0)
+	db.SetConnMaxLifetime(30 * time.Minute)
 
 	if err := db.Ping(); err != nil {
 		return fmt.Errorf("failed to ping metrics database: %w", err)
+	}
+	if err := applySQLiteRuntimePragmas(db); err != nil {
+		return fmt.Errorf("failed to apply metrics database pragmas: %w", err)
 	}
 
 	schema := `
