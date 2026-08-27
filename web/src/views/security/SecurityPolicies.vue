@@ -282,7 +282,8 @@
                       <el-button v-if="!isReadOnly" size="small" link type="danger" class="bound-rule-remove" @click="removeBoundRule(row.caddyId)">移除</el-button>
                     </div>
                     <!-- v2.2.0 多策略绑定：完整绑定链（policy_id ASC，1-based 序号）+ 本策略落点；
-                         拦截页面仅首绑（启用策略中 policy_id 最小者）生效。 -->
+                         拦截页面仅首绑（启用策略中 policy_id 最小者）生效。每条规则的拦截页面生效状态
+                         统一展示在下方「拦截页面」配置项说明区。 -->
                     <div class="bound-rule-chain">
                       <span
                         v-for="(entry, idx) in row.chain"
@@ -290,9 +291,6 @@
                         class="binding-order-chip"
                         :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled }"
                       >{{ idx + 1 }}.{{ entry.isSelf ? '本策略' : entry.name }}</span>
-                      <el-tag v-if="row.selfBlockPageActive" type="success" size="small" effect="plain">✓ 拦截页面当前生效</el-tag>
-                      <el-tag v-else-if="!form.enabled" type="info" size="small" effect="plain">策略禁用中，拦截页面不生效</el-tag>
-                      <el-tag v-else type="warning" size="small" effect="plain">拦截页面移至第一位后生效（当前第 {{ row.selfPosition }} 位）</el-tag>
                     </div>
                     <el-alert
                       v-if="row.showPerfTip"
@@ -322,6 +320,16 @@
               </el-select>
               <div v-if="blockPages.length === 0" class="form-tip-line">暂无拦截页面，<el-link type="primary" @click="goToBlockPagesPage">去创建</el-link></div>
               <div v-else class="form-tip-line">拦截时返回给客户端的自定义页面，在"拦截页面"页面管理，<el-link type="primary" @click="goToBlockPagesPage">去创建/编辑</el-link></div>
+              <!-- v2.2.0：按规则逐条展示拦截页面是否生效（仅首绑启用策略生效），
+                   保持与已关联列表中每条规则的顺序落点一致。 -->
+              <div v-if="boundRuleRows.length > 0" class="block-page-rule-annotations">
+                <div v-for="row in boundRuleRows" :key="row.caddyId" class="block-page-rule-annotation">
+                  <span class="block-page-rule-annotation-name">{{ row.name }}</span>
+                  <span v-if="row.selfBlockPageActive" class="block-page-rule-annotation-status is-active">✓ 拦截页面当前生效</span>
+                  <span v-else-if="!form.enabled" class="block-page-rule-annotation-status is-disabled">策略禁用中，拦截页面不生效</span>
+                  <span v-else class="block-page-rule-annotation-status is-warning">拦截页面移至第一位后生效（当前第 {{ row.selfPosition }} 位）</span>
+                </div>
+              </div>
             </el-form-item>
             <el-form-item label="返回状态码">
               <el-select v-model="form.block_status_code" style="width: 200px">
@@ -1356,10 +1364,20 @@ onMounted(async () => {
 .bound-rule-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .bound-rule-alert { margin-top: 8px; }
 
-/* v2.2.0 绑定顺序 chip：本策略高亮（蓝），禁用策略灰显删除线 */
-.binding-order-chip { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb; }
+/* v2.2.0 绑定顺序 chip：本策略高亮（蓝），禁用策略灰显删除线；
+   显式 line-height + inline-flex 保证 chip 视觉高度 ≈ 18-20px（避免继承表单上下文行高撑高）。 */
+.binding-order-chip { font-size: 12px; padding: 0 6px; border-radius: 10px; background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb; display: inline-flex; align-items: center; line-height: 18px; vertical-align: middle; }
 .binding-order-chip.is-self { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; font-weight: 500; }
 .binding-order-chip.is-disabled { opacity: 0.55; text-decoration: line-through; }
+
+/* v2.2.0 拦截页面按规则生效状态注释块：跟随 .form-tip-line 的 12px/灰调，
+   仅状态词使用克制的成功/警告/灰着色，避免使用 el-tag 造成视觉噪声。 */
+.block-page-rule-annotations { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: 12px; line-height: 1.5; color: #9ca3af; width: 100%; }
+.block-page-rule-annotation { display: flex; align-items: center; gap: 6px; }
+.block-page-rule-annotation-name { color: #6b7280; }
+.block-page-rule-annotation-status.is-active { color: #10b981; }
+.block-page-rule-annotation-status.is-warning { color: #d97706; }
+.block-page-rule-annotation-status.is-disabled { color: #9ca3af; }
 
 .rule-binding-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 4px 24px; }
 .rule-binding-landing { font-size: 12px; color: #6b7280; }
