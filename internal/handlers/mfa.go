@@ -295,10 +295,15 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 	// 操作者自己启用 MFA → 必须验码（本人重置自己的 MFA 也一样——与
 	// MFADisable 的双重确认同语义；无密码项：admin 路由已过 JWT + 用户管理
 	// 确认弹框承担意图确认）。
+	// R73（用户裁决）：写操作守卫（mfaStepUpGuard）开启时第一层豁免——守卫已对
+	// 本写操作完成验码（60 秒窗内静默放行或 428→verify-step 刷新 mfa_ts），再验
+	// 一次会在 TOTP 重放保护下同片互斥：verify-step 消费时间片后第一层无码可用，
+	// 必 401（验证码错误→踢出登录→连续失败触发 10 分钟锁定）。守卫关闭时才走
+	// 本层验码——此时守卫不参与、无双重消费，重放保护照旧。
 	if operatorMfa, err := services.MFAUserEnabled(operatorID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取操作者 MFA 状态失败"})
 		return
-	} else if operatorMfa {
+	} else if operatorMfa && !services.MFAWriteGuardEnabled() {
 		if ok, verr := services.MFAVerifyCode(operatorID, req.Code, time.Now()); !ok {
 			// R72 七次：重置前置验码失败留痕——高敏动作的失败尝试与成功同等
 			// 可审计（含 brute 尝试面）。
