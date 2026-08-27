@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -145,5 +146,100 @@ func TestLoadSecurityPolicyContext_toleratesNullGeoIPColumns(t *testing.T) {
 	}
 	if p.WAFCheckResponse {
 		t.Fatalf("WAFCheckResponse = true, want COALESCE 归一化后的 false")
+	}
+}
+
+// TestLoadSecurityPolicyContext_toleratesNullCoreColumns 锁定 A-I2 硬化扩展：
+// 除 geoip 三列外，fresh-install schema 下其余扫描列同样可空（仅 name/PK
+// NOT NULL）——带外编辑、restoreTable 透传 JSON null、集群快照继承均可产生
+// NULL。批量预载必须对全部可空列 COALESCE 归一化（与单查路径表达式级同构），
+// 否则一行 NULL 即让整配置生成 scan 失败（旧配置已保留），形成自锁。
+func TestLoadSecurityPolicyContext_toleratesNullCoreColumns(t *testing.T) {
+	// Given：显式 NULL 的核心列（mode/custom_rules/ip_whitelist/block_page_id）
+	_, database := newClusterTestService(t)
+	result, err := database.Exec(`INSERT INTO security_policies
+		(name, enabled, mode, custom_rules, ip_whitelist, block_page_id)
+		VALUES ('null-core', 1, NULL, NULL, NULL, NULL)`)
+	if err != nil {
+		t.Fatalf("seed null-core policy: %v", err)
+	}
+	policyID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read policy id: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id)
+		VALUES ('lb_null_core', ?)`, policyID); err != nil {
+		t.Fatalf("bind null-core policy: %v", err)
+	}
+
+	// When：批量预载（与 generateCaddyConfigFromStore 同通道）
+	ctx, err := loadSecurityPolicyContext(database)
+
+	// Then：不得 scan 失败；字段归一化到 COALESCE 默认值
+	if err != nil {
+		t.Fatalf("loadSecurityPolicyContext 不得因 NULL 核心列报错（A-I2 硬化）: %v", err)
+	}
+	policies := ctx.policyByRule["lb_null_core"]
+	if len(policies) != 1 {
+		t.Fatalf("want 1 policy for lb_null_core, got %d", len(policies))
+	}
+	p := policies[0]
+	if p.Mode != "off" {
+		t.Fatalf("Mode = %q, want COALESCE 归一化后的 %q（schema 默认）", p.Mode, "off")
+	}
+	if string(p.CustomRules) != "[]" {
+		t.Fatalf("CustomRules = %q, want COALESCE 归一化后的 %q", string(p.CustomRules), "[]")
+	}
+	if string(p.IPWhitelist) != "[]" {
+		t.Fatalf("IPWhitelist = %q, want COALESCE 归一化后的 %q", string(p.IPWhitelist), "[]")
+	}
+	if p.BlockPageID != 0 {
+		t.Fatalf("BlockPageID = %d, want COALESCE 归一化后的 0", p.BlockPageID)
+	}
+}
+
+// TestSnapshotSecurityPolicies_coalescesNullJSONColumns 锁定 A-I2 集群传播
+// 硬化：主节点 dump（snapshotSecurityPolicies）必须对可空列 COALESCE——否则
+// 主节点一行 NULL 经快照原样透传（dumpTableAsJSON 把 NULL  marshals 成
+// JSON null），从节点 apply 时 snapshotJSONText(nil) 重新落 NULL，脏数据
+// 跨集群复制。键名必须保持裸列名（COALESCE 需 AS 别名），否则从节点
+// apply 按 p["custom_rules"] 取值会读到 nil。
+func TestSnapshotSecurityPolicies_coalescesNullJSONColumns(t *testing.T) {
+	// Given：一条 custom_rules/crs_rule_groups 为 NULL 的策略
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO security_policies
+		(name, enabled, custom_rules, crs_rule_groups)
+		VALUES ('null-dump', 1, NULL, NULL)`); err != nil {
+		t.Fatalf("seed null-dump policy: %v", err)
+	}
+
+	// When：主节点快照 dump
+	payload, err := service.snapshotSecurityPolicies(context.Background(), database)
+
+	// Then：payload 中两列必须是 "[]" 而非 null，且键名为裸列名
+	if err != nil {
+		t.Fatalf("snapshotSecurityPolicies: %v", err)
+	}
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(payload, &rows); err != nil {
+		t.Fatalf("parse dump payload %s: %v", string(payload), err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("dump rows=%d, want 1: %s", len(rows), string(payload))
+	}
+	row := rows[0]
+	customRules, ok := row["custom_rules"]
+	if !ok {
+		t.Fatalf("dump 缺少 custom_rules 键（COALESCE 必须 AS 裸列名）: %s", string(payload))
+	}
+	if customRules != "[]" {
+		t.Fatalf("custom_rules = %#v, want %q（不得为 nil/null）", customRules, "[]")
+	}
+	crsGroups, ok := row["crs_rule_groups"]
+	if !ok {
+		t.Fatalf("dump 缺少 crs_rule_groups 键（COALESCE 必须 AS 裸列名）: %s", string(payload))
+	}
+	if crsGroups != "[]" {
+		t.Fatalf("crs_rule_groups = %#v, want %q（不得为 nil/null）", crsGroups, "[]")
 	}
 }

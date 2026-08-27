@@ -336,9 +336,11 @@
             </el-form-item>
             <el-form-item label="拦截页面">
               <el-select v-model="form.block_page_id" placeholder="选择拦截页面" style="width: 100%">
+                <el-option :value="0" label="无拦截页面" />
                 <el-option v-for="p in blockPages" :key="p.id" :label="p.name" :value="p.id" />
               </el-select>
-              <div v-if="blockPages.length === 0" class="form-tip-line">暂无拦截页面，<el-link type="primary" @click="goToBlockPagesPage">去创建</el-link></div>
+              <div v-if="form.block_page_id === 0" class="form-tip-line">不生成拦截页面错误路由，拦截返回 Caddy 默认 403</div>
+              <div v-else-if="blockPages.length === 0" class="form-tip-line">暂无拦截页面，<el-link type="primary" @click="goToBlockPagesPage">去创建</el-link></div>
               <div v-else class="form-tip-line">拦截时返回给客户端的自定义页面，在"拦截页面"页面管理，<el-link type="primary" @click="goToBlockPagesPage">去创建/编辑</el-link></div>
               <!-- v2.2.0：按规则逐条展示拦截页面是否生效（仅首个启用且配置了拦截页的策略生效），
                    保持与已关联列表中每条规则的顺序落点一致。 -->
@@ -347,7 +349,7 @@
                   <span class="block-page-rule-annotation-name">{{ row.name }}</span>
                   <span v-if="row.selfBlockPageActive" class="block-page-rule-annotation-status is-active">✓ 拦截页面当前生效</span>
                   <span v-else-if="!form.enabled" class="block-page-rule-annotation-status is-disabled">策略禁用中，拦截页面不生效</span>
-                  <span v-else class="block-page-rule-annotation-status is-warning">拦截页面移至第一位后生效（当前第 {{ row.selfPosition }} 位）</span>
+                  <span v-else class="block-page-rule-annotation-status is-warning">拦截页面以首位启用且配置了拦截页面的策略为准（本策略当前第 {{ row.selfPosition }} 位）</span>
                 </div>
               </div>
             </el-form-item>
@@ -490,7 +492,7 @@ import { formatDate } from '@/utils/date'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse, UserListItem } from '@/types'
 
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string }
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[] }
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_blacklist?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
@@ -1148,7 +1150,7 @@ const peerPolicyViews = computed<PeerPolicyView[]>(() =>
     .filter((p) => p.enabled && p.id !== editingId.value)
     .map((p) => {
       const sides = ipAclSideEntries(p.ip_acl_mode, p.ip_acl_enabled, parseJsonList(p.ip_acl_list), parseJsonList(p.ip_whitelist), parseJsonList(p.ip_blacklist))
-      return { id: p.id, name: p.name, mode: p.mode, crsGroups: normalizeCrsGroups(parseJsonList(p.crs_rule_groups)), allowEntries: sides.allow, denyEntries: sides.deny }
+      return { id: p.id, name: p.name, mode: p.mode, crsGroups: normalizeCrsGroups(parseUnknownStringList(p.crs_rule_groups)), allowEntries: sides.allow, denyEntries: sides.deny }
     }),
 )
 
@@ -1311,7 +1313,7 @@ async function openDialog(row?: PolicySummary) {
         rate_limit_enabled: d.rate_limit_enabled,
         rate_limit_rps: d.rate_limit_rps,
         rate_limit_burst: d.rate_limit_burst,
-        block_page_id: d.block_page_id || 1,
+        block_page_id: d.block_page_id,
         block_status_code: d.block_status_code || 403,
         geoip_enabled: false,
         geoip_mode: d.geoip_mode || 'deny',
@@ -1327,9 +1329,10 @@ async function openDialog(row?: PolicySummary) {
       crsExcludedRules.value = parseJsonList(d.crs_excluded_rules)
       selectedCustomRules.value = parseCustomRuleIds(d.custom_rules)
       boundRules.value = res.data?.bindings || []
-      // 拦截页面失效兜底：策略引用的拦截页面可能已被删除，select 匹配不到时回退
+      // 拦截页面失效兜底：block_page_id=0 是「无拦截页面」的合法状态（schema 默认 0），
+      // 原样保留不得回退；仅当引用的页面 id>0 且已被删除（select 匹配不到）时回退
       // 默认页（优先 #1，其次第一个可用页），避免保存写回无效 id
-      if (blockPages.value.length > 0 && !blockPages.value.some((p) => p.id === form.value.block_page_id)) {
+      if (form.value.block_page_id > 0 && blockPages.value.length > 0 && !blockPages.value.some((p) => p.id === form.value.block_page_id)) {
         form.value.block_page_id = blockPages.value.find((p) => p.id === 1)?.id ?? blockPages.value[0].id
         ElMessage.warning('原拦截页面已删除，已回退默认页面')
       }

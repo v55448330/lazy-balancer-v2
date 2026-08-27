@@ -216,7 +216,10 @@ service.interceptors.response.use(
     if (status === 401) {
       // R72 D-新2：MFA 自助端点的 401 是「凭证错误」（持有效 JWT 输错密码/验证码），
       // 不是会话失效——直接传播后端文案，不得弹「会话失效」并强制登出。
-      if (error.config?.url?.includes('/auth/mfa/')) {
+      // C-1 补正：管理员重置端点 /users/:id/mfa/reset 同样以 401 返回「验证码错误」，
+      // 需同口径放行（Users.vue 的 catch 展示后端文案供重试），否则误杀会话并在
+      // 锁定开关默认关闭时计入失败锁定计数。仅匹配 /mfa/reset 路径段，不泛化放行。
+      if (error.config?.url?.includes('/auth/mfa/') || error.config?.url?.includes('/mfa/reset')) {
         return Promise.reject(new ApiRequestError(message, status))
       }
       if (!isLoginRequest) {

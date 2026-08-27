@@ -368,7 +368,7 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
-import { request } from '@/utils/api'
+import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateShort } from '@/utils/date'
 import { isValidCidr } from '@/utils/ruleValidation'
@@ -545,7 +545,7 @@ async function createKey() {
       expires_at: createForm.value.expiresAt ? createForm.value.expiresAt.toISOString() : undefined,
     }
     const res = await request.post<CreateAPIKeyResponse>('/users/me/api-keys', payload)
-    ElMessage.success('密钥创建成功')
+    mfaAwareSuccess('密钥创建成功')
     createDialogVisible.value = false
     if (res.data?.key) {
       createdKey.value = res.data.key
@@ -594,7 +594,7 @@ const saveFeatures = async (): Promise<void> => {
       mcp_ip_whitelist: whitelist.value,
     }
     await request.patch(`/users/me/api-keys/${featureTarget.value.id}`, payload)
-    ElMessage.success('功能配置已更新')
+    mfaAwareSuccess('功能配置已更新')
     featureDialogVisible.value = false
     await fetchKeys()
   } catch (error: unknown) {
@@ -611,7 +611,7 @@ const deleteKey = async (id: number) => {
   try {
     await ElMessageBox.confirm('确定要删除这个 API 密钥吗？删除后无法恢复。', '警告', { type: 'warning' })
     await request.delete(`/users/me/api-keys/${id}`)
-    ElMessage.success('删除成功')
+    mfaAwareSuccess('删除成功')
     await fetchKeys()
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
@@ -641,7 +641,7 @@ const toggleKey = async (key: APIKey) => {
   try {
     const payload: UpdateAPIKeyInput = { is_enabled: isEnabled }
     await request.patch(`/users/me/api-keys/${key.id}`, payload)
-    ElMessage.success(isEnabled ? '密钥已启用' : '密钥已禁用')
+    mfaAwareSuccess(isEnabled ? '密钥已启用' : '密钥已禁用')
     await fetchKeys()
   } catch (error: unknown) {
     // Error toast is already shown by the global axios interceptor.

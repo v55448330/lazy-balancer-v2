@@ -1028,9 +1028,10 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 	s.combineOrReplaceSyncError(ctx, msg, code)
 }
 
-// combineOrReplaceSyncError 是 last_sync_error 落库的共享核心：可恢复类错误
-// （传输故障/主节点指纹不匹配）组合保留 apply_ok_reload_failed 标记，终止类
-// 错误直接覆盖；空消息直接跳过（成功路径的清空由调用方另行处理）。
+// combineOrReplaceSyncError 是 last_sync_error 落库的共享核心：自愈类错误
+// （传输/指纹/主节点侧暂时性版本或形态问题，见 syncErrorPreservesReloadMarker）
+// 组合保留 apply_ok_reload_failed 标记，终止类错误直接覆盖；空消息直接跳过
+// （成功路径的清空由调用方另行处理）。
 // recordSyncError、run 循环 loadState 失败路径与 pollRegistration 共用，确保
 // 所有可恢复类错误走同一标记保护语义（R32-1/R32-3 收敛直写调用点）。
 func (s *SyncService) combineOrReplaceSyncError(ctx context.Context, message string, code models.SyncErrorCode) {
@@ -1040,9 +1041,9 @@ func (s *SyncService) combineOrReplaceSyncError(ctx context.Context, message str
 	if syncErrorPreservesReloadMarker(code) {
 		var stored string
 		if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err == nil {
-			// 可恢复类错误（传输故障/主节点指纹不匹配）不得覆盖重载失败标记：
-			// 标记是全量重拉补偿的唯一触发器，覆盖后下一周期 304 将跳过补偿，
-			// 陈旧运行配置保持到下次真实变更。组合只保留首个失败原因 + 计数。
+			// 自愈类错误不得覆盖重载失败标记：标记是全量重拉补偿的唯一触发器，
+			// 覆盖后下一周期 304 将跳过补偿，陈旧运行配置保持到下次真实变更。
+			// 组合只保留首个失败原因 + 计数。
 			if storedMsg, _ := decodeSyncError(stored); strings.HasPrefix(storedMsg, syncReloadFailureMarkerPrefix) {
 				message = combineSyncErrorWithMarker(storedMsg, message)
 			}
@@ -1051,12 +1052,16 @@ func (s *SyncService) combineOrReplaceSyncError(ctx context.Context, message str
 	s.persistSyncError(ctx, message, code)
 }
 
-// syncErrorPreservesReloadMarker 判定错误是否属于「可恢复类」：传输故障与主节点
-// 指纹不匹配都是网络/主节点侧的临时问题，下一周期可能恢复并返回 304；此时重载
-// 失败标记必须保留。终止类错误（schema 版本不匹配、签名无效、令牌撤销、校验/
-// 应用失败）允许覆盖：它们要么让 run 循环 halt 等待人工介入，要么已失去补偿意义。
+// syncErrorPreservesReloadMarker 判定错误是否属于「自愈类」：下周期可能自愈的
+// 错误（传输故障/主节点指纹不匹配/主节点侧暂时性版本或形态问题——主节点旧
+// schema、快照签名无效，均在主节点升级后自动恢复 304）必须保留重载失败标记；
+// 需人工介入或语义已定的错误（schema 过新需本节点升级、令牌撤销、校验/应用
+// 失败）允许覆盖。审计 S-1：旧注释「终止类让 run 循环 halt 等待人工介入」的
+// 依据在 E-F1 后不再成立——SchemaTooOld/SignatureInvalid 降级重试不 halt，
+// 覆盖标记将丢失 304 全量重拉补偿。
 func syncErrorPreservesReloadMarker(code models.SyncErrorCode) bool {
-	return code == models.SyncErrorCodeTransportError || code == models.SyncErrorCodePinMismatch
+	return code == models.SyncErrorCodeTransportError || code == models.SyncErrorCodePinMismatch ||
+		code == models.SyncErrorCodeSchemaTooOld || code == models.SyncErrorCodeSignatureInvalid
 }
 
 // combineSyncErrorWithMarker 在重载失败标记上追加新的可恢复类错误：标记段只保留

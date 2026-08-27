@@ -53,11 +53,14 @@ func seedMfaResetUsers(t *testing.T, operatorMfa bool) (operatorSecret string) {
 	return operatorSecret
 }
 
-func mfaResetRouter(h *Handlers) *gin.Engine {
+// authType 模拟中间件设置的认证类型（R73 补正：第一层豁免只对被 mfaStepUpGuard
+// 真正验过码的 jwt 路径生效；api_key/MCP 机器身份由场景 5 覆盖）。
+func mfaResetRouter(h *Handlers, authType string) *gin.Engine {
 	router := gin.New()
 	router.POST("/users/:id/mfa/reset", func(c *gin.Context) {
 		c.Set("user_id", 1)
 		c.Set("username", "operator")
+		c.Set("auth_type", authType)
 		h.MFAResetByAdmin(c)
 	})
 	return router
@@ -90,7 +93,7 @@ func TestMFAResetByAdmin_guardOn_skipsOperatorCodeCheck(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	seedMfaResetUsers(t, true)
 	setMfaWriteGuard(t, true)
-	router := mfaResetRouter(h)
+	router := mfaResetRouter(h, "jwt")
 
 	// When
 	rec := postMfaReset(router, `{}`)
@@ -114,7 +117,7 @@ func TestMFAResetByAdmin_guardOff_requiresOperatorCode(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	secret := seedMfaResetUsers(t, true)
 	setMfaWriteGuard(t, false)
-	router := mfaResetRouter(h)
+	router := mfaResetRouter(h, "jwt")
 
 	// When 无码
 	rec := postMfaReset(router, `{}`)
@@ -137,7 +140,7 @@ func TestMFAResetByAdmin_guardOff_replayStillRejected(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	secret := seedMfaResetUsers(t, true)
 	setMfaWriteGuard(t, false)
-	router := mfaResetRouter(h)
+	router := mfaResetRouter(h, "jwt")
 	code := mfaResetCurrentCode(t, secret, time.Now())
 
 	// When 第一次用码（成功）后立刻重用同片码
@@ -158,7 +161,7 @@ func TestMFAResetByAdmin_operatorWithoutMfa_noCodeRequired(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	seedMfaResetUsers(t, false)
 	setMfaWriteGuard(t, true)
-	router := mfaResetRouter(h)
+	router := mfaResetRouter(h, "jwt")
 
 	// When
 	rec := postMfaReset(router, `{}`)
@@ -166,5 +169,26 @@ func TestMFAResetByAdmin_operatorWithoutMfa_noCodeRequired(t *testing.T) {
 	// Then
 	if rec.Code != http.StatusOK {
 		t.Fatalf("operator without mfa: status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// 场景 5（审计 IMPORTANT-3，用户裁决）：mfaStepUpGuard 按设计豁免
+// auth_type != "jwt" 的机器身份（API Key/MCP）——守卫对这类请求从不验码，
+// 故「守卫已验码」的豁免理由不成立，第一层必须照常要求操作者 TOTP 码；
+// R72 二次防劫持语义对机器身份同样保持。豁免仅适用于守卫真正验过码的
+// JWT 路径（场景 1/4）。
+func TestMFAResetByAdmin_guardOn_apiKeyStillRequiresCode(t *testing.T) {
+	// Given 守卫开 + 操作者启用 MFA + 请求为 api_key 机器身份
+	h := newBackupTestHandlers(t)
+	seedMfaResetUsers(t, true)
+	setMfaWriteGuard(t, true)
+	router := mfaResetRouter(h, "api_key")
+
+	// When 无码
+	rec := postMfaReset(router, `{}`)
+
+	// Then 第一层不豁免 → 401（修复前：守卫开的豁免误及机器身份 → 200 免码重置）
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("guard on + api_key without code: status=%d body=%s, want 401（守卫不验机器身份的码，第一层不得豁免）", rec.Code, rec.Body.String())
 	}
 }

@@ -116,7 +116,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
-import { request } from '@/utils/api'
+import { request, mfaAwareSuccess } from '@/utils/api'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import { formatDate } from '@/utils/date'
 import { escapeHtml } from '@/utils/ansi'
@@ -344,7 +344,7 @@ const retryJob = async (row: CertJob) => {
   try {
     await request.post(`/certificates/jobs/${row.id}/retry`, undefined, { signal: jobsPolling.signal })
     if (disposed) return
-    ElMessage.success('重新签发已触发')
+    mfaAwareSuccess('重新签发已触发')
     await jobsPolling.run()
   } catch (error: unknown) {
     // Error toast is already shown by the global axios interceptor.

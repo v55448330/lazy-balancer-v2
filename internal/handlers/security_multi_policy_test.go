@@ -726,6 +726,56 @@ func TestGetAllSecurityBindings_includesBlockPageID(t *testing.T) {
 	}
 }
 
+// A-I2 硬化（GetAllSecurityBindings）：绑定 JOIN 的 p.block_page_id 可空——
+// 带外编辑/备份恢复/集群继承产生 NULL 时，修复前行 Scan 报错被 continue 静默
+// 跳过，绑定从 UI 地图中消失；修复后 COALESCE 归一化为 0，绑定照常返回。
+func TestGetAllSecurityBindings_toleratesNullBlockPageID(t *testing.T) {
+	// Given 一条绑定到 block_page_id 为 NULL 策略的规则
+	setupSecurityPolicyTestDB(t)
+	router := newMultiPolicyRouter(t)
+	seedHTTPRule(t, "lb_null_bpid")
+	result, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, enabled, block_page_id)
+		VALUES ('null-page', 'blocking', 1, NULL)`)
+	if err != nil {
+		t.Fatalf("seed null-block-page policy: %v", err)
+	}
+	policyID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read policy id: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id)
+		VALUES ('lb_null_bpid', ?)`, policyID); err != nil {
+		t.Fatalf("bind null-block-page policy: %v", err)
+	}
+
+	// When GET /security/bindings
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/security/bindings", nil)
+	router.ServeHTTP(recorder, req)
+
+	// Then 绑定照常返回，block_page_id 归一化为 0
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data map[string][]struct {
+			PolicyID    int `json:"policy_id"`
+			BlockPageID int `json:"block_page_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse bindings response %s: %v", recorder.Body.String(), err)
+	}
+	entries := resp.Data["lb_null_bpid"]
+	if len(entries) != 1 {
+		t.Fatalf("NULL block_page_id 不得静默丢绑定（A-I2）: bindings=%+v, want 1 entry", resp.Data)
+	}
+	if entries[0].PolicyID != int(policyID) || entries[0].BlockPageID != 0 {
+		t.Fatalf("entries[0]=%+v, want policy_id=%d block_page_id=0", entries[0], policyID)
+	}
+}
+
 // D-K1：策略列表摘要携带 crs_rule_groups——前端向导的跨策略重复告警直接消费摘要，
 // 不再对每条启用策略 N+1 拉取详情。
 func TestListSecurityPolicies_summaryIncludesCRSRuleGroups(t *testing.T) {

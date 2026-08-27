@@ -180,8 +180,8 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useAuthStore } from '@/stores/auth'
 import type { PageId } from '@/stores/auth'
-import { request } from '@/utils/api'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { request, mfaAwareSuccess } from '@/utils/api'
+import { ElMessageBox } from 'element-plus'
 import { DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document, Warning, Notebook } from '@element-plus/icons-vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, footerHtml } from '@/utils/branding'
@@ -328,7 +328,7 @@ const handleRestartForDrift = async () => {
     restarting.value = false
     return
   }
-  ElMessage.success('服务正在重启，就绪后自动刷新页面')
+  mfaAwareSuccess('服务正在重启，就绪后自动刷新页面')
   // 保持 restarting=true 直到 reload（防就绪等待窗口内二次点击）；超时或失败才复位
   const reloaded = await reloadAfterRestart(() => disposed)
   if (!reloaded) restarting.value = false

@@ -86,7 +86,7 @@ var toolUsage = map[string]string{
 	"delete_security_policy":       "删除策略（绑定关系自动解除）",
 	"bind_security_policy":         "将策略绑定到规则（rule_caddy_id）；规则可绑定多条安全策略（按 policy_id ASC 顺序评估，最多 5 条；超限时请使用 set_rule_security_policies 整体替换）",
 	"unbind_security_policy":       "解除策略与规则的绑定（仅解除该策略，同规则的其他策略绑定保留）",
-	"set_rule_security_policies":   "原子设置规则的安全策略集合（最多 5 条，按 policy_id ASC 顺序评估，整体替换现有绑定）",
+	"set_rule_security_policies":   "原子设置规则的安全策略集合（最多 5 条，按 policy_id ASC 顺序评估，整体替换现有绑定；policy_ids 为空数组 [] = 解除该规则全部绑定）",
 	"create_custom_rule":           "创建自定义安全规则（URI/参数/请求头/User-Agent 多条件匹配）",
 	"update_custom_rule":           "更新自定义规则的条件或动作",
 	"delete_custom_rule":           "删除自定义规则",

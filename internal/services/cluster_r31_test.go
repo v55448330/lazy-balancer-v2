@@ -49,8 +49,8 @@ func TestSyncService_recordSyncError_repeatedTransportFailures_boundedMessageWit
 	}
 }
 
-// R31 M2：PinMismatch 与传输错误同属可恢复类，不得覆盖重载失败标记；
-// 终止类错误（schema 过旧）允许覆盖。
+// R31 M2：PinMismatch 与传输错误同属自愈类，不得覆盖重载失败标记；
+// 终止类错误（schema 过新，本节点无法安全解析）允许覆盖。
 func TestSyncService_recordSyncError_pinMismatchPreservesMarker_terminalOverwrites(t *testing.T) {
 	// Given：重载失败标记已存在
 	_, database := newClusterTestService(t)
@@ -75,16 +75,64 @@ func TestSyncService_recordSyncError_pinMismatchPreservesMarker_terminalOverwrit
 		t.Fatalf("code=%q, want pin_mismatch", code)
 	}
 
-	// When：终止类错误（schema 过旧）
-	service.recordSyncError(context.Background(), &SnapshotSchemaTooOldError{Actual: 2, Supported: 3}, nil)
+	// When：终止类错误（schema 过新）
+	service.recordSyncError(context.Background(), &SnapshotSchemaTooNewError{Actual: 4, Supported: 3}, nil)
 
 	// Then：标记被覆盖
 	if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
 	msg, _ = decodeSyncError(stored)
-	if strings.HasPrefix(msg, syncReloadFailureMarkerPrefix) || !strings.Contains(msg, "快照 schema v2 过旧") {
-		t.Fatalf("after terminal error last_sync_error=%q, want overwritten with schema error", msg)
+	if strings.HasPrefix(msg, syncReloadFailureMarkerPrefix) || !strings.Contains(msg, "主节点快照版本 v4 超出本节点支持范围 v3") {
+		t.Fatalf("after terminal error last_sync_error=%q, want overwritten with schema too new error", msg)
+	}
+}
+
+// 审计 S-1：SchemaTooOld（v3 从节点拉到签名合法的旧 schema 主节点快照）与
+// SignatureInvalid（含 v2 形态「主节点为旧版本」分支）同属非终止自愈类错误——
+// E-F1 后 run 循环降级重试、主节点升级后自动恢复——不得覆盖重载失败标记；否则
+// 主节点临时回退旧版本期间标记丢失，304 全量重拉补偿永不触发，陈旧运行配置
+// 保持到下次真实版本变更或重启。
+func TestSyncService_recordSyncError_schemaTooOldAndSignatureInvalidPreserveMarker(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		pullErr  error
+		code     models.SyncErrorCode
+		fragment string
+	}{
+		{"schema too old", &SnapshotSchemaTooOldError{Actual: 2, Supported: 3}, models.SyncErrorCodeSchemaTooOld, "快照 schema v2 过旧"},
+		{"signature invalid", newSyncFailure(models.SyncErrorCodeSignatureInvalid, errors.New("快照签名校验失败：来源无法验证，可能存在中间人攻击")), models.SyncErrorCodeSignatureInvalid, "快照签名校验失败"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			// Given：重载失败标记已存在
+			_, database := newClusterTestService(t)
+			if _, err := database.Exec("UPDATE global_config SET last_sync_error=?", encodeSyncError("apply_ok_reload_failed: caddy down", models.SyncErrorCodeApplyFailed)); err != nil {
+				t.Fatal(err)
+			}
+			service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService("http://127.0.0.1:1"))
+
+			// When：记录自愈类拉取错误
+			service.recordSyncError(context.Background(), testCase.pullErr, nil)
+
+			// Then：标记保留，错误组合进消息并带失败计数，代码为传入错误码
+			var stored string
+			if err := database.QueryRow("SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
+				t.Fatal(err)
+			}
+			msg, code := decodeSyncError(stored)
+			if !strings.HasPrefix(msg, syncReloadFailureMarkerPrefix) {
+				t.Fatalf("last_sync_error=%q, want reload failure marker preserved", msg)
+			}
+			if !strings.Contains(msg, testCase.fragment) {
+				t.Fatalf("last_sync_error=%q, want combined message containing %q", msg, testCase.fragment)
+			}
+			if !strings.Contains(msg, syncFailureCountPrefix+"1"+syncFailureCountSuffix) {
+				t.Fatalf("last_sync_error=%q, want failure count 1", msg)
+			}
+			if code != testCase.code {
+				t.Fatalf("code=%q, want %q", code, testCase.code)
+			}
+		})
 	}
 }
 

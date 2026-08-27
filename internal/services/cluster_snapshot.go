@@ -410,7 +410,12 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 }
 
 func (s *ClusterService) snapshotSecurityPolicies(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
-	return s.dumpTableAsJSON(ctx, store, "security_policies", "id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response", "id")
+	// 全部可空列 COALESCE（别名保持裸列名——dumpTableAsJSON 以列名为键，从节点
+	// apply 按裸名取值）：主节点一行 NULL 不得经快照透传在从节点重新落 NULL；
+	// 默认值与读路径归一化（scanSecurityPolicyByID/loadSecurityPolicyContext）
+	// 逐项对齐，保证主节点生效行为与从节点落库行为一致（geoip_mode 归一化为
+	// 'off' 而非 schema 默认 'deny' 即为此——主节点读路径把 NULL 当 'off'）。
+	return s.dumpTableAsJSON(ctx, store, "security_policies", "id,name,COALESCE(description,'') AS description,COALESCE(mode,'off') AS mode,COALESCE(anomaly_threshold,5) AS anomaly_threshold,COALESCE(ip_acl_mode,'') AS ip_acl_mode,COALESCE(ip_acl_list,'[]') AS ip_acl_list,COALESCE(ip_acl_enabled,0) AS ip_acl_enabled,COALESCE(ip_whitelist,'[]') AS ip_whitelist,COALESCE(ip_blacklist,'[]') AS ip_blacklist,COALESCE(rate_limit_enabled,0) AS rate_limit_enabled,COALESCE(rate_limit_rps,0) AS rate_limit_rps,COALESCE(rate_limit_burst,0) AS rate_limit_burst,COALESCE(crs_rule_groups,'[]') AS crs_rule_groups,COALESCE(crs_excluded_rules,'[]') AS crs_excluded_rules,COALESCE(custom_rules,'[]') AS custom_rules,COALESCE(block_page_id,0) AS block_page_id,COALESCE(block_status_code,0) AS block_status_code,COALESCE(enabled,1) AS enabled,COALESCE(updated_by,0) AS updated_by,COALESCE(created_at,'') AS created_at,COALESCE(updated_at,'') AS updated_at,COALESCE(geoip_countries,'[]') AS geoip_countries,COALESCE(geoip_mode,'off') AS geoip_mode,COALESCE(waf_check_response,0) AS waf_check_response", "id")
 }
 
 func (s *ClusterService) snapshotSecurityBindings(ctx context.Context, store snapshotStore) (json.RawMessage, error) {

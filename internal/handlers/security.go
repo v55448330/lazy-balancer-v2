@@ -1982,7 +1982,7 @@ func (h *Handlers) GetIP2RegionUpdateLogs(c *gin.Context) {
 // GetAllSecurityBindings（v2.2.0 T2）：一规则可绑多策略——返回 map[string][]BindingInfo，
 // 每规则的绑定按 policy_id ASC 排序；取代旧的 map[string]BindingInfo 单值覆盖形态。
 func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
-	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, p.mode, p.enabled, p.rate_limit_enabled, p.block_page_id
+	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, p.mode, p.enabled, p.rate_limit_enabled, COALESCE(p.block_page_id, 0)
 		FROM security_policy_bindings b JOIN security_policies p ON b.policy_id = p.id
 		ORDER BY b.rule_caddy_id ASC, b.policy_id ASC`)
 	if err != nil {
@@ -2007,6 +2007,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 		if err := rows.Scan(&ruleCaddyID, &b.PolicyID, &b.Name, &b.Mode, &b.Enabled, &b.RateLimit, &b.BlockPageID); err != nil {
 			// 单行扫描失败跳过：不写入零值绑定（policy_id=0/mode="" 会把该规则
 			// 错误呈现为「已绑定到空策略」）；迭代错误由下方 rows.Err() 兜底（R37 S2）。
+			log.Printf("security bindings: 跳过扫描失败行（规则绑定可能缺失）: %v", err)
 			continue
 		}
 		result[ruleCaddyID] = append(result[ruleCaddyID], b)

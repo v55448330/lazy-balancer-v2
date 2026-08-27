@@ -113,7 +113,8 @@ func TestSyncService_run_loadStateTransientFailure_preservesReloadMarker_then304
 // R32-2：快照完整性失败（签名无效）同一错误单周期只落库一次——Pull defer 覆盖
 // err != nil 路径，显式调用已删除，run 循环在 pullErr 非空时不再重复写。
 func TestSyncService_run_integrityFailure_writesLastSyncErrorOnce(t *testing.T) {
-	// Given：重载失败标记已存在（终止类错误应覆盖它）；主节点返回伪造签名的快照
+	// Given：重载失败标记已存在（签名无效属自愈类，审计 S-1 起标记必须保留）；
+	// 主节点返回伪造签名的快照
 	_, database := newClusterTestService(t)
 	if _, err := database.Exec("UPDATE global_config SET last_sync_error=? WHERE id=1",
 		encodeSyncError("apply_ok_reload_failed: caddy down", models.SyncErrorCodeApplyFailed)); err != nil {
@@ -150,7 +151,7 @@ func TestSyncService_run_integrityFailure_writesLastSyncErrorOnce(t *testing.T) 
 	// When：单个周期内 Pull 遭遇完整性失败
 	service.run(context.Background())
 
-	// Then：last_sync_error 内容正确且只写一次（终止类覆盖标记）
+	// Then：last_sync_error 内容正确且只写一次（自愈类保留标记并组合签名错误）
 	var writeCount int
 	if err := database.QueryRow("SELECT COUNT(*) FROM sync_error_write_tally").Scan(&writeCount); err != nil {
 		t.Fatal(err)
@@ -163,8 +164,8 @@ func TestSyncService_run_integrityFailure_writesLastSyncErrorOnce(t *testing.T) 
 		t.Fatal(err)
 	}
 	msg, code := decodeSyncError(stored)
-	if strings.HasPrefix(msg, syncReloadFailureMarkerPrefix) || !strings.Contains(msg, "签名校验失败") {
-		t.Fatalf("stored message=%q, want terminal signature error overwriting marker", msg)
+	if !strings.HasPrefix(msg, syncReloadFailureMarkerPrefix) || !strings.Contains(msg, "签名校验失败") {
+		t.Fatalf("stored message=%q, want reload failure marker preserved with signature error combined", msg)
 	}
 	if code != models.SyncErrorCodeSignatureInvalid {
 		t.Fatalf("stored code=%q, want signature_invalid", code)
