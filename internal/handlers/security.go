@@ -1119,10 +1119,9 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）"})
 		return
 	}
-	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", req.RuleCaddyID); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
-		return
-	}
+	// v2.2.0 多策略绑定（T2）：POST bind 改为 additive——仅 INSERT OR IGNORE，不再
+	// 清空 rule 的兄弟绑定；全量替换走 PUT /security/rules/:caddy_id/policies。
+	// INSERT OR IGNORE 保留幂等（重复绑定同一 (rule,policy) 不报错、不重复行）。
 	if _, err := tx.ExecContext(c.Request.Context(), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", req.RuleCaddyID, policyID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -1133,6 +1132,100 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	}
 	services.RecordAuditLog(getContextUserID(c), "更新", "安全策略", fmt.Sprintf("绑定规则 %s 到策略 #%s", req.RuleCaddyID, policyID), "")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已关联" + h.caddyApplyNote()})
+}
+
+// SetRuleSecurityPolicies（v2.2.0 T2）：PUT /security/rules/:caddy_id/policies
+// 原子替换一规则的全部策略绑定（单事务 DELETE + 按 policy_ids 顺序 INSERT）。
+// 服务器强制上限 5 条；规则必须存在且为 HTTP；所有 policy_id 必须存在。
+// 空数组（或缺省 policy_ids 字段）= 解除该规则全部绑定，与 apidocs/MCP 契约一致。
+func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
+	ruleCaddyID := c.Param("caddy_id")
+	var req struct {
+		PolicyIDs []int `json:"policy_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	if len(req.PolicyIDs) > 5 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "最多绑定 5 条策略"})
+		return
+	}
+	// 与 BindRuleToPolicy 同事务口径：存在性校验 + DELETE + 有序 INSERT 同事务，
+	// 写锁由 _txlock=immediate 在 BEGIN 处获取，避免校验与写入之间规则/策略被
+	// 并发删除产生悬挂绑定。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	defer tx.Rollback()
+	var ruleExists int
+	var ruleProtocol string
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*), COALESCE(MAX(protocol),'') FROM lb_rules WHERE caddy_id=?", ruleCaddyID).Scan(&ruleExists, &ruleProtocol); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	if ruleExists == 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则不存在"})
+		return
+	}
+	if ruleProtocol != "http" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）"})
+		return
+	}
+	// 校验所有 policy_id 存在。去重避免同一 id 重复计数导致误判（INSERT OR IGNORE
+	// 本来就会去重，但 COUNT 必须与去重后的集合对齐）。
+	seen := map[int]struct{}{}
+	uniqueIDs := make([]int, 0, len(req.PolicyIDs))
+	for _, id := range req.PolicyIDs {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	if len(uniqueIDs) > 0 {
+		placeholders := make([]string, len(uniqueIDs))
+		args := make([]interface{}, len(uniqueIDs))
+		for i, id := range uniqueIDs {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		var found int
+		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM security_policies WHERE id IN ("+strings.Join(placeholders, ",")+")", args...).Scan(&found); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		if found != len(uniqueIDs) {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "部分策略不存在"})
+			return
+		}
+	}
+	if _, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", ruleCaddyID); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	for _, id := range uniqueIDs {
+		if _, err := tx.ExecContext(c.Request.Context(), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", ruleCaddyID, id); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	}
+	idStrs := make([]string, len(uniqueIDs))
+	for i, id := range uniqueIDs {
+		idStrs[i] = strconv.Itoa(id)
+	}
+	summary := strings.Join(idStrs, ",")
+	if summary == "" {
+		summary = "全部解除"
+	}
+	services.RecordAuditLog(getContextUserID(c), "更新", "安全策略", fmt.Sprintf("设置规则 %s 的安全策略为 [%s]", ruleCaddyID, summary), "")
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则安全策略已更新" + h.caddyApplyNote()})
 }
 
 func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
@@ -1149,24 +1242,45 @@ func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
 
 func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 	ruleCaddyID := c.Param("caddy_id")
-	var policyID int
-	err := db.DB.QueryRow("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=?", ruleCaddyID).Scan(&policyID)
-	if err == sql.ErrNoRows {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: nil})
-		return
-	}
+	// v2.2.0 T2：返回 []policy ASC（一规则可绑多策略）；无绑定时返回空数组而非 null，
+	// 前端 `.length`/`.map` 不需要空值分支。
+	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id ASC", ruleCaddyID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	var p models.SecurityPolicy
-	if err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode, waf_check_response
-		FROM security_policies WHERE id=?`, policyID), &p); err != nil {
+	policyIDs := []int{}
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		policyIDs = append(policyIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: p})
+	rows.Close()
+	policies := make([]models.SecurityPolicy, 0, len(policyIDs))
+	for _, policyID := range policyIDs {
+		var p models.SecurityPolicy
+		if err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
+			rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode, waf_check_response
+			FROM security_policies WHERE id=? AND enabled=1`, policyID), &p); err != nil {
+			if err == sql.ErrNoRows {
+				// 策略被并发删除或被禁用：跳过该项，保持数组与绑定表一致
+				continue
+			}
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		}
+		policies = append(policies, p)
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: policies})
 }
 
 func (h *Handlers) ListSecurityEvents(c *gin.Context) {
@@ -1843,12 +1957,12 @@ func (h *Handlers) GetIP2RegionUpdateLogs(c *gin.Context) {
 // GetSecurityPolicyForRule and BuildCorazaDirectives are in services/security.go
 // to avoid circular dependency (services can't import handlers).
 
-// GetAllSecurityBindings（R72 三十次追加 c）：行序覆盖改 MAX(policy_id) 对齐
-// Caddy 生成（caddy.go:823 同款 MAX）——窄路径（手动插 DB/导入多行）下显示与
-// 生效不再不一致。
+// GetAllSecurityBindings（v2.2.0 T2）：一规则可绑多策略——返回 map[string][]BindingInfo，
+// 每规则的绑定按 policy_id ASC 排序；取代旧的 map[string]BindingInfo 单值覆盖形态。
 func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, p.mode, p.enabled, p.rate_limit_enabled
-		FROM security_policy_bindings b JOIN security_policies p ON b.policy_id = p.id`)
+		FROM security_policy_bindings b JOIN security_policies p ON b.policy_id = p.id
+		ORDER BY b.rule_caddy_id ASC, b.policy_id ASC`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -1861,7 +1975,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 		Enabled   bool   `json:"enabled"`
 		RateLimit bool   `json:"rate_limit_enabled"`
 	}
-	result := map[string]BindingInfo{}
+	result := map[string][]BindingInfo{}
 	for rows.Next() {
 		var ruleCaddyID string
 		var b BindingInfo
@@ -1870,7 +1984,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 			// 错误呈现为「已绑定到空策略」）；迭代错误由下方 rows.Err() 兜底（R37 S2）。
 			continue
 		}
-		result[ruleCaddyID] = b
+		result[ruleCaddyID] = append(result[ruleCaddyID], b)
 	}
 	if err := rows.Err(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})

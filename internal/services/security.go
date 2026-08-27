@@ -16,18 +16,13 @@ import (
 // emitted Include directives always use the container path.
 var crsDirectivesDir = "/app/waf/crs"
 
-func GetSecurityPolicyForRule(ruleCaddyID string) *models.SecurityPolicy {
-	if db.DB == nil {
-		return nil
-	}
-	var policyID int
-	err := db.DB.QueryRow("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id DESC LIMIT 1", ruleCaddyID).Scan(&policyID)
-	if err != nil {
-		return nil
-	}
+// scanSecurityPolicyByID 按主键加载一条 enabled 策略行，并把 JSON 文本列转为
+// json.RawMessage；行缺失或 disabled 时返回 nil。GetSecurityPolicyForRule 与
+// GetSecurityPoliciesForRule 共用本扫描，保证两条读路径字段级一致。
+func scanSecurityPolicyByID(policyID int) *models.SecurityPolicy {
 	var p models.SecurityPolicy
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
-	err = db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
+	err := db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
 		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, created_at, updated_at, COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0)
 		FROM security_policies WHERE id=? AND enabled=1`, policyID).
 		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
@@ -42,6 +37,51 @@ func GetSecurityPolicyForRule(ruleCaddyID string) *models.SecurityPolicy {
 	p.CustomRules = json.RawMessage(customRules)
 	p.GeoIPCountries = json.RawMessage(geoipCountries)
 	return &p
+}
+
+// GetSecurityPolicyForRule 返回 v2.2.0 单策略语义下的规则生效策略：最高
+// policy_id 绑定生效，最高绑定指向禁用策略时返回 nil（不回退次高）。必须与
+// loadSecurityPolicyContext（caddy.go 批量预载，Round 34 F-5）保持同构。
+// 多策略消费方应改用 GetSecurityPoliciesForRule；待生成路径遍历完整策略列表
+// 后，本函数再退化为该列表的薄包装（取首元素）。
+func GetSecurityPolicyForRule(ruleCaddyID string) *models.SecurityPolicy {
+	if db.DB == nil {
+		return nil
+	}
+	var policyID int
+	err := db.DB.QueryRow("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id DESC LIMIT 1", ruleCaddyID).Scan(&policyID)
+	if err != nil {
+		return nil
+	}
+	return scanSecurityPolicyByID(policyID)
+}
+
+// GetSecurityPoliciesForRule returns all enabled policies bound to a rule,
+// ordered by policy_id ASC (R72 v2.2.0 multi-policy binding).
+func GetSecurityPoliciesForRule(ruleCaddyID string) []*models.SecurityPolicy {
+	if db.DB == nil {
+		return nil
+	}
+	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id ASC", ruleCaddyID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var policies []*models.SecurityPolicy
+	for rows.Next() {
+		var policyID int
+		if err := rows.Scan(&policyID); err != nil {
+			return nil
+		}
+		// 禁用策略在策略查询处过滤（与单查的 WHERE enabled=1 同口径）。
+		if p := scanSecurityPolicyByID(policyID); p != nil {
+			policies = append(policies, p)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil
+	}
+	return policies
 }
 
 // geoipCountries parses the policy's geoip_countries JSON array, skipping

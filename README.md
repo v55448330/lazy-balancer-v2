@@ -89,7 +89,7 @@ Inbound → GeoIP tagging → Rate limiting (per-IP rate + burst) → WAF (Coraz
 | GeoIP database | IP2Region v3.17.0 (offline xdb, China province-level). 地域规则仅对 IPv4 生效：IPv6/不可解析客户端按「海外」处理（fail-closed）；IP 库未安装时地域规则不可启用 |
 | Rate limiting | caddy-ratelimit v0.1.0 |
 
-**Security policies** are managed as standalone entities bound to HTTP rules (one policy can bind multiple rules; one rule binds only one policy):
+**Security policies** are managed as standalone entities bound to HTTP rules (one policy can bind multiple rules; one rule can bind up to 5 policies, evaluated in policy_id order with the first-bound policy's block page taking effect):
 
 | Setting | Options |
 |---|---|

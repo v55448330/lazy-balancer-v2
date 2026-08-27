@@ -40,9 +40,22 @@
                 <template #content>
                   <div class="cert-tooltip security-tooltip">
                     <div class="tooltip-title">安全防护已启用</div>
-                    <div v-for="protection in ruleProtections(row.caddy_id)" :key="protection.label" class="cert-row">
-                      <span class="cert-label">{{ protection.label }}</span>
-                      <span class="cert-value" :title="protection.detail">{{ protection.detail }}</span>
+                    <div
+                      v-for="group in ruleProtections(row.caddy_id)"
+                      :key="group.key"
+                      class="policy-group"
+                      :class="{ 'is-disabled': !group.enabled }"
+                    >
+                      <div class="policy-group-header">
+                        <span class="policy-order">#{{ group.order }}</span>
+                        <span class="policy-name" :title="group.name">{{ group.name }}</span>
+                        <el-tag v-if="group.blockPageActive" type="warning" size="small" effect="plain">拦截页生效中</el-tag>
+                        <el-tag v-if="!group.enabled" type="info" size="small" effect="plain">已禁用</el-tag>
+                      </div>
+                      <div v-for="protection in group.rows" :key="protection.label" class="cert-row">
+                        <span class="cert-label">{{ protection.label }}</span>
+                        <span class="cert-value" :title="protection.detail">{{ protection.detail }}</span>
+                      </div>
                     </div>
                   </div>
                 </template>
@@ -1191,7 +1204,16 @@ class CertInfoRefreshError extends Error {
 }
 
 const rules = ref<Rule[]>([])
-const securityBindings = ref<Record<string, { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean }>>({})
+// v2.2.0：一规则可绑多策略——/security/bindings 返回 rule_caddy_id → 绑定数组（policy_id ASC）。
+interface SecurityBindingInfo {
+  policy_id: number
+  name: string
+  mode: string
+  enabled: boolean
+  rate_limit_enabled: boolean
+}
+
+const securityBindings = ref<Record<string, SecurityBindingInfo[]>>({})
 
 interface SecurityPolicySummary {
   id: number
@@ -1229,6 +1251,15 @@ interface ProtectionRow {
   detail: string
 }
 
+interface PolicyProtectionGroup {
+  key: number
+  order: number
+  name: string
+  enabled: boolean
+  blockPageActive: boolean
+  rows: ProtectionRow[]
+}
+
 const parseIPListCount = (raw: string): number => {
   if (!raw) return 0
   try {
@@ -1239,28 +1270,38 @@ const parseIPListCount = (raw: string): number => {
   }
 }
 
-const ruleProtections = (caddyID: string): ProtectionRow[] => {
-  const binding = securityBindings.value[caddyID]
-  if (!binding) return []
-  const rows: ProtectionRow[] = []
-  for (const policy of securityPolicies.value) {
-    if (policy.id !== binding.policy_id || !policy.enabled) continue
-    if (policy.mode === 'blocking') rows.push({ label: 'WAF（拦截）', detail: '命中即阻断' })
-    else if (policy.mode === 'detection') rows.push({ label: 'WAF（检测）', detail: '仅记录不阻断' })
-    if (policy.has_ip_control) {
+const ruleProtections = (caddyID: string): PolicyProtectionGroup[] => {
+  const bindings = securityBindings.value[caddyID]
+  if (!bindings || bindings.length === 0) return []
+  // v2.2.0：逐绑定策略分组（后端已按 policy_id ASC 排序）。序号 = 绑定顺序（1-based）；
+  // 拦截优先级 = 绑定顺序，首个启用策略的拦截页生效（Caddy 只为启用策略生成配置，绑定列表可能含禁用策略）；
+  // 禁用策略标灰但保留显示（绑定关系可见，不再消失）。全部禁用时无策略生效，不标注拦截页。
+  const firstEnabledIndex = bindings.findIndex((b) => b.enabled)
+  return bindings.map((binding, index) => {
+    const policy = securityPolicies.value.find((p) => p.id === binding.policy_id)
+    const rows: ProtectionRow[] = []
+    const mode = policy ? policy.mode : binding.mode
+    if (mode === 'blocking') rows.push({ label: 'WAF（拦截）', detail: '命中即阻断' })
+    else if (mode === 'detection') rows.push({ label: 'WAF（检测）', detail: '仅记录不阻断' })
+    if (policy?.has_ip_control) {
       const modeLabel = policy.ip_acl_mode === 'allow' ? '白名单模式' : (policy.ip_acl_mode === 'bypass' ? '免检测' : '黑名单模式')
       const parts = [`${modeLabel} · ${parseIPListCount(policy.ip_acl_list)} 条`]
       const trustCount = parseIPListCount(policy.ip_whitelist)
       if (trustCount > 0 && policy.ip_acl_mode !== 'bypass') parts.push(`免检测 ${trustCount} 条`)
       rows.push({ label: 'IP 访问控制', detail: parts.join(' · ') })
     }
-    if (policy.has_rate_limit) rows.push({ label: '速率限制', detail: `${policy.rate_limit_rps} 次/秒 · 突发 ${policy.rate_limit_burst} 次` })
-    // R72 三十次追加 a：GeoIP/自定义规则行（此前永远没有——接口缺 flag）；
-    // disabled 策略标灰但保留显示（绑定关系可见，不再消失）。
-    if (policy.has_geoip) rows.push({ label: 'GeoIP', detail: `${policy.geoip_countries ? (JSON.parse(policy.geoip_countries) as string[]).length : 0} 个地区` })
-    if (policy.has_custom_rules) rows.push({ label: '自定义规则', detail: `${policy.custom_rules_count} 条` })
-  }
-  return rows
+    if (policy?.has_rate_limit) rows.push({ label: '速率限制', detail: `${policy.rate_limit_rps} 次/秒 · 突发 ${policy.rate_limit_burst} 次` })
+    if (policy?.has_geoip) rows.push({ label: 'GeoIP', detail: `${policy.geoip_countries ? (JSON.parse(policy.geoip_countries) as string[]).length : 0} 个地区` })
+    if (policy?.has_custom_rules) rows.push({ label: '自定义规则', detail: `${policy.custom_rules_count} 条` })
+    return {
+      key: binding.policy_id,
+      order: index + 1,
+      name: binding.name,
+      enabled: binding.enabled,
+      blockPageActive: index === firstEnabledIndex,
+      rows,
+    }
+  })
 }
 const searchQuery = ref('')
 const currentPage = ref(1)
@@ -3102,6 +3143,11 @@ onUnmounted(() => {
 .acl-lock-icon.is-deny { color: var(--el-color-danger); }
 .security-tooltip { min-width: 200px; font-size: 13px; }
 .security-tooltip .cert-value { max-width: 240px; }
+.security-tooltip .policy-group + .policy-group { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e5e7eb; }
+.security-tooltip .policy-group.is-disabled { opacity: 0.45; }
+.security-tooltip .policy-group-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-weight: 600; }
+.security-tooltip .policy-order { color: #6b7280; font-variant-numeric: tabular-nums; }
+.security-tooltip .policy-name { color: #1f2937; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rule-name-link { 
   font-weight: 500; 
   color: #111827; 

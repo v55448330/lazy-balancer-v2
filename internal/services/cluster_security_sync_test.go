@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -249,5 +250,135 @@ func TestSyncService_applySnapshot_securityVisibleToCommittedCaddyConfig(t *test
 	mu.Unlock()
 	if !strings.Contains(config, `"handler":"waf"`) {
 		t.Fatalf("applied Caddy config missing waf handler (config generated before commit?): %s", config)
+	}
+}
+
+// queryBindingRows reads security_policy_bindings for a rule ordered by
+// policy_id ASC — the same SELECT the runtime uses (GetSecurityPoliciesForRule).
+func queryBindingRows(t *testing.T, database *sql.DB, ruleCaddyID string) []int {
+	t.Helper()
+	rows, err := database.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id ASC", ruleCaddyID)
+	if err != nil {
+		t.Fatalf("query bindings for %s: %v", ruleCaddyID, err)
+	}
+	defer rows.Close()
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan binding: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate bindings: %v", err)
+	}
+	return ids
+}
+
+// SC-CLU-01: A primary node with MULTIPLE binding rows for one rule
+// (e.g. rule R bound to policies 1, 3, 5) snapshots to a slave; after apply,
+// the slave's security_policy_bindings contains exactly those rows (no dedup
+// to one row, no loss, order-preserving by policy_id).
+func TestClusterSnapshot_multiRowBindingsPreserved(t *testing.T) {
+	// Given: a primary with policies 1-5, three rules, and multi-row bindings:
+	//   lb_multi → policies {1, 3, 5} (multi-row)
+	//   lb_single → policy {1} (single row)
+	//   lb_none → no bindings (zero rows)
+	// Policies 2 and 4 exist but are unbound.
+	cluster, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES
+		('lb_multi','multi','http','multi.example.com',80,1),
+		('lb_single','single','http','single.example.com',81,1),
+		('lb_none','none','http','none.example.com',82,1)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int{1, 2, 3, 4, 5} {
+		if _, err := database.Exec(`INSERT INTO security_policies (id,name,mode,enabled) VALUES (?,?,'blocking',1)`, id, fmt.Sprintf("policy-%d", id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, pid := range []int{1, 3, 5} {
+		if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_multi',?)`, pid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_single',1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When: snapshot → wipe slave → apply
+	snapshot, _, err := cluster.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("DELETE FROM security_policy_bindings; DELETE FROM security_policies"); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceSnapshotDB(context.Background(), database, snapshot); err != nil {
+		t.Fatalf("apply snapshot: %v", err)
+	}
+
+	// Then: exact row set per rule, ordered by policy_id ASC
+	multiBindings := queryBindingRows(t, database, "lb_multi")
+	if !reflect.DeepEqual(multiBindings, []int{1, 3, 5}) {
+		t.Fatalf("lb_multi bindings=%v, want [1 3 5]", multiBindings)
+	}
+	singleBindings := queryBindingRows(t, database, "lb_single")
+	if !reflect.DeepEqual(singleBindings, []int{1}) {
+		t.Fatalf("lb_single bindings=%v, want [1]", singleBindings)
+	}
+	noneBindings := queryBindingRows(t, database, "lb_none")
+	if len(noneBindings) != 0 {
+		t.Fatalf("lb_none bindings=%v, want empty", noneBindings)
+	}
+	// Unbound policies 2 and 4 must not leak into any rule's bindings.
+	var totalBindings int
+	if err := database.QueryRow("SELECT COUNT(*) FROM security_policy_bindings").Scan(&totalBindings); err != nil {
+		t.Fatal(err)
+	}
+	if totalBindings != 4 {
+		t.Fatalf("total bindings=%d, want 4 (3 multi + 1 single)", totalBindings)
+	}
+}
+
+// SC-CLU-01 (dangling): A binding whose policy was deleted on primary is
+// carried verbatim through snapshot→apply. The runtime (GetSecurityPoliciesForRule)
+// silently skips it via scanSecurityPolicyByID. Pin this pre-v2.2.0 behavior.
+func TestClusterSnapshot_danglingBindingPreserved(t *testing.T) {
+	// Given: rule lb_dangle has a valid binding to policy 1 and a dangling
+	// binding to policy 99 (no such row in security_policies).
+	cluster, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_dangle','dangle','http','dangle.example.com',80,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_policies (id,name,mode,enabled) VALUES (1,'real','blocking',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_dangle',1),('lb_dangle',99)`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When: snapshot → wipe → apply
+	snapshot, _, err := cluster.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("DELETE FROM security_policy_bindings; DELETE FROM security_policies"); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceSnapshotDB(context.Background(), database, snapshot); err != nil {
+		t.Fatalf("apply snapshot: %v", err)
+	}
+
+	// Then: both rows survive verbatim (snapshot/apply does not validate references)
+	bindings := queryBindingRows(t, database, "lb_dangle")
+	if !reflect.DeepEqual(bindings, []int{1, 99}) {
+		t.Fatalf("lb_dangle bindings=%v, want [1 99] (dangling row preserved)", bindings)
+	}
+	// Runtime skips the dangling binding: only policy 1 is returned.
+	policies := GetSecurityPoliciesForRule("lb_dangle")
+	if len(policies) != 1 || policies[0].ID != 1 {
+		t.Fatalf("runtime policies=%v, want only policy 1 (dangling skipped)", policies)
 	}
 }

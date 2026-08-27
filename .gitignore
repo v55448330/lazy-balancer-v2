@@ -7,6 +7,8 @@ lazy-balancer
 # Data (runtime)
 data/
 data-slave/
+data-qa-master/
+data-qa-slave/
 test-data/
 certs/
 certs-slave/

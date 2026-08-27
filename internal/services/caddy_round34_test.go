@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"lazy-balancer-v2/internal/models"
 )
 
 // TestCaddyErrorBodyTruncation 验证 F-R34-1：Caddy 管理接口错误响应体嵌入 error
@@ -55,49 +57,56 @@ func assertBoundedErrorBody(t *testing.T, call, message string) {
 	}
 }
 
-// Round 34 F-5: 多绑定下批量预载必须与 GetSecurityPolicyForRule 严格同构——
-// 最高 policy_id 绑定指向禁用策略时两者一致返回无策略（旧 JOIN 预载会取
-// 次高启用策略，生成路径与校验路径结果分歧）。
-func TestLoadSecurityPolicyContext_multiBindingMatchesSingleQuery(t *testing.T) {
-	// Given
+// Round 34 F-5（v2.2.0 多策略改写）：批量预载必须与 GetSecurityPoliciesForRule
+// 严格同构——每规则返回全部启用策略（policy_id ASC）。最高 policy_id 绑定指向
+// 禁用策略时，预载切片恰好只含次低的启用策略（旧单策略 MAX 语义下两者都为 nil，
+// 新语义下禁用绑定仅占位、不产生元素）。
+func TestLoadSecurityPolicyContext_multiBindingMatchesMultiPolicyQuery(t *testing.T) {
+	// Given 两条绑定：低 policy_id 启用 + 高 policy_id 禁用
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
 	seedGenerationRule(t, database, "lb_multi_binding", false)
 	seedBoundSecurityPolicy(t, database, "lb_multi_binding", "blocking", true)
 	seedBoundSecurityPolicy(t, database, "lb_multi_binding", "blocking", false)
 
-	// When/Then 最高绑定为禁用策略：单查与预载都无策略
-	if single := GetSecurityPolicyForRule("lb_multi_binding"); single != nil {
-		t.Fatalf("GetSecurityPolicyForRule 返回 %d，最高绑定指向禁用策略时应为 nil", single.ID)
+	// When 最高绑定为禁用策略：多策略查询仅返回次低的启用策略
+	expected := GetSecurityPoliciesForRule("lb_multi_binding")
+	if len(expected) != 1 {
+		t.Fatalf("GetSecurityPoliciesForRule 应仅返回 1 条启用策略（禁用绑定被过滤），实际 %d 条", len(expected))
 	}
 	ctx, err := loadSecurityPolicyContext(database)
 	if err != nil {
 		t.Fatalf("loadSecurityPolicyContext: %v", err)
 	}
-	if policy, exists := ctx.policyByRule["lb_multi_binding"]; exists {
-		t.Fatalf("预载返回 %d，最高绑定指向禁用策略时不应有策略", policy.ID)
-	}
 
-	// When 删除禁用绑定（最高绑定回到启用策略）
+	// Then 预载切片与多策略单查逐元素同构（id+mode 逐位置一致）
+	assertPoliciesIsomorphic(t, expected, ctx.policyByRule["lb_multi_binding"])
+
+	// When 删除禁用绑定（预载结果不应变化——禁用绑定本就零贡献）
 	if _, err := database.Exec(`DELETE FROM security_policy_bindings WHERE policy_id = (SELECT MAX(policy_id) FROM security_policy_bindings WHERE rule_caddy_id='lb_multi_binding')`); err != nil {
 		t.Fatalf("delete disabled binding: %v", err)
 	}
 
-	// Then 单查与预载都解析到同一启用策略
-	single := GetSecurityPolicyForRule("lb_multi_binding")
-	if single == nil {
-		t.Fatal("GetSecurityPolicyForRule 应为启用策略")
-	}
+	// Then 同构关系保持
+	expectedAfter := GetSecurityPoliciesForRule("lb_multi_binding")
 	ctx2, err := loadSecurityPolicyContext(database)
 	if err != nil {
 		t.Fatalf("loadSecurityPolicyContext(2): %v", err)
 	}
-	preloaded := ctx2.policyByRule["lb_multi_binding"]
-	if preloaded == nil {
-		t.Fatal("预载应为启用策略")
+	assertPoliciesIsomorphic(t, expectedAfter, ctx2.policyByRule["lb_multi_binding"])
+}
+
+// assertPoliciesIsomorphic 断言预载切片与 GetSecurityPoliciesForRule 逐元素一致
+// （长度相等，每个位置的 id 与 mode 相同）。
+func assertPoliciesIsomorphic(t *testing.T, want, got []*models.SecurityPolicy) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("预载策略数=%d，与 GetSecurityPoliciesForRule 的 %d 条不一致", len(got), len(want))
 	}
-	if preloaded.ID != single.ID || preloaded.Mode != single.Mode {
-		t.Fatalf("预载 policy(id=%d mode=%s) 与单查 policy(id=%d mode=%s) 不一致", preloaded.ID, preloaded.Mode, single.ID, single.Mode)
+	for i := range want {
+		if got[i].ID != want[i].ID || got[i].Mode != want[i].Mode {
+			t.Fatalf("位置 %d 预载 policy(id=%d mode=%s) 与单查 policy(id=%d mode=%s) 不一致", i, got[i].ID, got[i].Mode, want[i].ID, want[i].Mode)
+		}
 	}
 }
 

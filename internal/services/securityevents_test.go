@@ -179,24 +179,29 @@ func TestSecurityEventsMapHost_MatchesCanonicalAndReportsUnknown(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',7)`); err != nil {
 		t.Fatal(err)
 	}
-	rules, bindings, err := securityEventsLoadMappings()
+	rules, bindings, policyByID, err := securityEventsLoadMappings()
 	if err != nil {
 		t.Fatalf("load mappings: %v", err)
 	}
 	// When/Then: canonical comparison is case-insensitive and carries the resolved names
-	rule, policy := securityEventsMapHost("GO029.COM", rules, bindings)
-	if rule.caddyID != "lb_rule1" || policy.id != 7 {
-		t.Errorf("mapHost(GO029.COM)=(%q,%d), want (lb_rule1,7)", rule.caddyID, policy.id)
+	rule := securityEventsMapHost("GO029.COM", rules)
+	if rule.caddyID != "lb_rule1" || rule.name != "test rule" {
+		t.Errorf("mapHost(GO029.COM)=(%q,%q), want (lb_rule1,test rule)", rule.caddyID, rule.name)
 	}
-	if rule.name != "test rule" || policy.name != "policy-seven" {
-		t.Errorf("mapHost(GO029.COM) names=(%q,%q), want (test rule,policy-seven)", rule.name, policy.name)
+	// And: attribution resolves policy 7 (crs_rule_groups 空数组 = 包含全部 CRS 规则)
+	pid, pname := securityEventsAttributePolicy(rule.caddyID, "942100", policyByID, bindings)
+	if pid != 7 || pname != "policy-seven" {
+		t.Errorf("attributePolicy=(%d,%q), want (7,policy-seven)", pid, pname)
 	}
-	// When/Then: unknown hosts map to zero-value refs
-	if rule, policy := securityEventsMapHost("unknown.example.com", rules, bindings); rule.caddyID != "" || policy.id != 0 {
-		t.Errorf("mapHost(unknown)=(%q,%d), want (\"\",0)", rule.caddyID, policy.id)
+	// When/Then: unknown hosts map to zero-value rule, attribution returns zero
+	if rule := securityEventsMapHost("unknown.example.com", rules); rule.caddyID != "" {
+		t.Errorf("mapHost(unknown)=%q, want \"\"", rule.caddyID)
+	}
+	if pid, pname := securityEventsAttributePolicy("", "942100", policyByID, bindings); pid != 0 || pname != "" {
+		t.Errorf("attributePolicy(empty)=(%d,%q), want (0,\"\")", pid, pname)
 	}
 	// When/Then: bare IPs never match a domain rule
-	if rule, _ := securityEventsMapHost("203.0.113.9", rules, bindings); rule.caddyID != "" {
+	if rule := securityEventsMapHost("203.0.113.9", rules); rule.caddyID != "" {
 		t.Errorf("mapHost(ip)=%q, want empty", rule.caddyID)
 	}
 }
@@ -374,6 +379,11 @@ func TestSecurityEventsTickIngestsFixtureLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_rule1','test rule','http','go029.com',443,1)`); err != nil {
+		t.Fatal(err)
+	}
+	// 启用策略 7（crs_rule_groups 空数组 = 包含全部 CRS 规则）：绑定必须指向
+	// 真实存在的启用策略，归因才会在 contains 路径命中而非悬空回退零值。
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups) VALUES (7,'policy-seven',1,'[]','[]')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',7)`); err != nil {
@@ -1438,5 +1448,189 @@ func TestSecurityEventsBackscanDocumentStart_crossChunkBoundary(t *testing.T) {
 	// And：from=0 直接返回 0（空读安全路径）
 	if got, err := securityEventsBackscanDocumentStart(path, 0); err != nil || got != 0 {
 		t.Fatalf("backscan(0)=(%d,%v), want (0,nil)", got, err)
+	}
+}
+
+// SC-EVT-01 fixture：可变规则 ID 的 Coraza 事务模板。
+func securityEventsFixtureForRule(ruleID string) string {
+	return `{
+  "transaction": {
+    "timestamp": "2026/08/12 10:00:00",
+    "unix_timestamp": 1786447017841320426,
+    "id": "tx-attr-` + ruleID + `",
+    "client_ip": "198.51.100.9",
+    "server_id": "go029.com",
+    "request": { "method": "GET", "uri": "/attr", "headers": { "host": ["go029.com"] } },
+    "is_interrupted": true
+  },
+  "messages": [
+    { "message": "hit ` + ruleID + `", "data": { "id": ` + ruleID + `, "score": 5 } }
+  ]
+}`
+}
+
+// securityEventsSeedAttrPolicy 种子数据 + 一次摄取，返回落库 (policy_id, policy_name)。
+// customJSON/crsJSON 存储口径与生产一致：custom_rules JSON 持有 security_custom_rules
+// 的 DB 主键 id（emit id = DB id + 10000，见 emitCustomRules）。enabled=0 可模拟
+// 禁用策略（归因只加载启用策略）。
+func securityEventsSeedAttrPolicy(t *testing.T, ruleTriggered string, policies []struct {
+	id         int
+	name       string
+	enabled    int
+	customJSON string
+	crsJSON    string
+}) (int, string) {
+	t.Helper()
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_rule1','r','http','go029.com',443,1)`); err != nil {
+		t.Fatal(err)
+	}
+	// 自定义规则 DB id 3（生产口径：coraza emit id = DB id + 10000）。
+	if _, err := db.DB.Exec(`INSERT INTO security_custom_rules (id,name,conditions,action,score,enabled) VALUES (3,'cr','[]','block',5,1) ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range policies {
+		if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups) VALUES (?,?,?,?,?)`,
+			p.id, p.name, p.enabled, p.customJSON, p.crsJSON); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',?)`, p.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	if err := os.WriteFile(logPath, []byte(securityEventsFixtureForRule(ruleTriggered)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := securityEventsNewTailer(logPath, offsetPath).securityEventsTick(); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	var pid int
+	var pname string
+	if err := db.MetricsDB.QueryRow(`SELECT policy_id, policy_name FROM security_events`).Scan(&pid, &pname); err != nil {
+		t.Fatal(err)
+	}
+	return pid, pname
+}
+
+// SC-EVT-01 重叠自定义规则 → 归因到最低 policy_id。
+// Given：自定义规则 DB id 3（coraza emit id = DB id + 10000 = 10003，见
+// emitCustomRules），两个启用策略的 custom_rules JSON 均含 DB id 3。
+// When：摄取 audit rule_triggered="10003"（emit 空间）。
+// Then：重叠 → 归因到最低 policy_id。
+func TestSecurityEventsAttribution_OverlappingCustomRulePicksLowestPolicyID(t *testing.T) {
+	pid, pname := securityEventsSeedAttrPolicy(t, "10003", []struct {
+		id         int
+		name       string
+		enabled    int
+		customJSON string
+		crsJSON    string
+	}{
+		{id: 1, name: "policy-A", enabled: 1, customJSON: `[3]`, crsJSON: `[]`},
+		{id: 3, name: "policy-B", enabled: 1, customJSON: `[3]`, crsJSON: `[]`},
+	})
+	if pid != 1 || pname != "policy-A" {
+		t.Fatalf("attribution=(%d,%q), want (1,policy-A) — 重叠自定义规则必须归因到最低 policy_id", pid, pname)
+	}
+}
+
+// SC-EVT-01 单属自定义规则 → 归因到拥有该规则的策略（而非首绑定回退值）。
+// Given：自定义规则 DB id 3 仅被 policy-B（customJSON [3]，emit id 10003）包含；
+// policy-A 是绑定顺序第一条但不含该规则。
+// When：摄取 audit rule_triggered="10003"。
+// Then：归因到 policy-B —— 若 contains 判定用 DB id 与 emit id 直接比较（ID 空间
+// 错位），contains 对两个策略均失败，会错误回退到首绑定 policy-A。
+func TestSecurityEventsAttribution_SingleOwnerCustomRulePicksOwnerPolicy(t *testing.T) {
+	pid, pname := securityEventsSeedAttrPolicy(t, "10003", []struct {
+		id         int
+		name       string
+		enabled    int
+		customJSON string
+		crsJSON    string
+	}{
+		{id: 1, name: "policy-A", enabled: 1, customJSON: `[]`, crsJSON: `[]`},
+		{id: 3, name: "policy-B", enabled: 1, customJSON: `[3]`, crsJSON: `[]`},
+	})
+	if pid != 3 || pname != "policy-B" {
+		t.Fatalf("attribution=(%d,%q), want (3,policy-B) — 单属自定义规则必须归因到拥有该规则的策略（DB id 3 emit 10003）", pid, pname)
+	}
+}
+
+// SC-EVT-01 归因回退：首绑定为禁用策略 → 跳过到第一个启用绑定。
+// Given：policy-off（id 1）禁用且绑定顺序第一，policy-B（id 3）启用；
+// rule_triggered="2"（IP ACL 拒绝 id，不属于自定义/CRS 任一 ID 带）不被任何策略
+// 显式包含 → 触发回退路径。
+// When：摄取 audit rule_triggered="2"。
+// Then：回退到第一个 ENABLED 绑定 policy-B；禁止返回 (1,"")（禁用首绑定 + 空名）。
+func TestSecurityEventsAttribution_FallbackSkipsDisabledFirstBinding(t *testing.T) {
+	pid, pname := securityEventsSeedAttrPolicy(t, "2", []struct {
+		id         int
+		name       string
+		enabled    int
+		customJSON string
+		crsJSON    string
+	}{
+		{id: 1, name: "policy-off", enabled: 0, customJSON: `[]`, crsJSON: `[]`},
+		{id: 3, name: "policy-B", enabled: 1, customJSON: `[]`, crsJSON: `[]`},
+	})
+	if pid != 3 || pname != "policy-B" {
+		t.Fatalf("attribution=(%d,%q), want (3,policy-B) — 回退必须跳过禁用首绑定，取第一个启用绑定", pid, pname)
+	}
+}
+
+// SC-EVT-01 重叠 CRS 组 → 归因到最低 policy_id。
+func TestSecurityEventsAttribution_OverlappingCRSGroupPicksLowestPolicyID(t *testing.T) {
+	pid, pname := securityEventsSeedAttrPolicy(t, "942001", []struct {
+		id         int
+		name       string
+		enabled    int
+		customJSON string
+		crsJSON    string
+	}{
+		{id: 2, name: "policy-A", enabled: 1, customJSON: `[]`, crsJSON: `["42"]`},
+		{id: 5, name: "policy-B", enabled: 1, customJSON: `[]`, crsJSON: `["42"]`},
+	})
+	if pid != 2 || pname != "policy-A" {
+		t.Fatalf("attribution=(%d,%q), want (2,policy-A) — 重叠 CRS 组必须归因到最低 policy_id", pid, pname)
+	}
+}
+
+// SC-EVT-01 未绑定（无 security_policy_bindings 行）→ 归因零值。
+func TestSecurityEventsAttribution_UnboundReturnsZeroValue(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_rule1','r','http','go029.com',443,1)`); err != nil {
+		t.Fatal(err)
+	}
+	// 故意不插入 security_policy_bindings / security_policies —— 完全未绑定场景。
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	if err := os.WriteFile(logPath, []byte(securityEventsFixtureForRule("999999")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := securityEventsNewTailer(logPath, offsetPath).securityEventsTick(); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	var pid int
+	var pname string
+	if err := db.MetricsDB.QueryRow(`SELECT policy_id, policy_name FROM security_events`).Scan(&pid, &pname); err != nil {
+		t.Fatal(err)
+	}
+	if pid != 0 || pname != "" {
+		t.Fatalf("attribution=(%d,%q), want (0,\"\") — 未绑定策略的规则必须归因零值", pid, pname)
 	}
 }

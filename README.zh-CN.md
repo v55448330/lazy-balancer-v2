@@ -89,7 +89,7 @@ docker run -d --name lazy-balancer --network host \
 | GeoIP 库 | IP2Region v3.17.0（离线 xdb，中国省份级） |
 | 限流 | caddy-ratelimit v0.1.0 |
 
-**安全策略**以独立实体管理并绑定到 HTTP 规则（一策略可绑多规则，一规则只绑一策略）：
+**安全策略**以独立实体管理并绑定到 HTTP 规则（一策略可绑多规则，一规则最多绑 5 条策略，按 policy_id 顺序评估，首绑策略的拦截页面生效）：
 
 | 配置 | 选项 |
 |---|---|

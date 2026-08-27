@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/models"
 )
 
 // Security event ingestion: tails the Coraza WAF audit log (consecutive
@@ -158,31 +159,25 @@ type securityEventsRuleRef struct {
 	name    string
 }
 
-// securityEventsPolicyRef is a bound security_policies identity resolved for
-// one event: the policy id plus its name snapshotted at ingest time.
-type securityEventsPolicyRef struct {
-	id   int
-	name string
-}
-
-// securityEventsLoadMappings batch-loads host→rule and rule→policy indexes
-// once per ingest tick so the tailer never queries per row. Both indexes carry
-// the display names so each inserted event snapshots them. Domain
-// canonicalization matches handlers' normalizedRuleDomains (db.CanonicalDomains).
-func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]securityEventsPolicyRef, error) {
+// securityEventsLoadMappings batch-loads per-tick indexes: host→rule, plus the
+// v2.2.0 multi-policy attribution inputs — rule→bound policy ids (policy_id ASC
+// so "first bound" is well-defined) and policy id→policy for custom_rules /
+// crs_rule_groups membership checks. Domain canonicalization matches handlers'
+// normalizedRuleDomains (db.CanonicalDomains).
+func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string][]int, map[int]*models.SecurityPolicy, error) {
 	if db.DB == nil {
-		return nil, nil, errors.New("security events: database not initialized")
+		return nil, nil, nil, errors.New("security events: database not initialized")
 	}
 	rules := make(map[string]securityEventsRuleRef)
 	rows, err := db.DB.Query(`SELECT caddy_id, COALESCE(domain,''), COALESCE(name,'') FROM lb_rules WHERE protocol='http' AND COALESCE(domain,'') != ''`)
 	if err != nil {
-		return nil, nil, fmt.Errorf("security events: load rules: %w", err)
+		return nil, nil, nil, fmt.Errorf("security events: load rules: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var caddyID, domain, name string
 		if err := rows.Scan(&caddyID, &domain, &name); err != nil {
-			return nil, nil, fmt.Errorf("security events: scan rule: %w", err)
+			return nil, nil, nil, fmt.Errorf("security events: scan rule: %w", err)
 		}
 		canonical, err := db.CanonicalDomains(domain)
 		if err != nil {
@@ -193,45 +188,154 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("security events: iterate rules: %w", err)
+		return nil, nil, nil, fmt.Errorf("security events: iterate rules: %w", err)
 	}
 
-	bindings := make(map[string]securityEventsPolicyRef)
-	bindRows, err := db.DB.Query(`SELECT b.rule_caddy_id, b.policy_id, COALESCE(p.name,'')
-		FROM security_policy_bindings b LEFT JOIN security_policies p ON p.id = b.policy_id ORDER BY b.policy_id DESC`)
+	// v2.2.0 多策略归因：一个 lb_rule 可绑多个策略，按 policy_id ASC 排序，
+	// 重叠时归因到「绑定顺序第一条」= 最小 policy_id。
+	bindings := make(map[string][]int)
+	bindRows, err := db.DB.Query(`SELECT rule_caddy_id, policy_id FROM security_policy_bindings ORDER BY policy_id ASC`)
 	if err != nil {
-		return nil, nil, fmt.Errorf("security events: load policy bindings: %w", err)
+		return nil, nil, nil, fmt.Errorf("security events: load policy bindings: %w", err)
 	}
 	defer bindRows.Close()
 	for bindRows.Next() {
-		var caddyID, policyName string
+		var caddyID string
 		var policyID int
-		if err := bindRows.Scan(&caddyID, &policyID, &policyName); err != nil {
-			return nil, nil, fmt.Errorf("security events: scan binding: %w", err)
+		if err := bindRows.Scan(&caddyID, &policyID); err != nil {
+			return nil, nil, nil, fmt.Errorf("security events: scan binding: %w", err)
 		}
-		if _, exists := bindings[caddyID]; !exists {
-			bindings[caddyID] = securityEventsPolicyRef{id: policyID, name: policyName} // first binding wins, mirroring QueryRow lookups
-		}
+		bindings[caddyID] = append(bindings[caddyID], policyID)
 	}
 	if err := bindRows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("security events: iterate bindings: %w", err)
+		return nil, nil, nil, fmt.Errorf("security events: iterate bindings: %w", err)
 	}
-	return rules, bindings, nil
+
+	// 策略的 custom_rules / crs_rule_groups 用于「rule_triggered 属于哪个策略」
+	// 判定；仅加载启用策略（disabled 策略不应再接收事件归因）。
+	policyByID := make(map[int]*models.SecurityPolicy)
+	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]') FROM security_policies WHERE enabled=1`)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("security events: load policies: %w", err)
+	}
+	defer polRows.Close()
+	for polRows.Next() {
+		p := &models.SecurityPolicy{}
+		var customJSON, crsJSON string
+		if err := polRows.Scan(&p.ID, &p.Name, &customJSON, &crsJSON); err != nil {
+			return nil, nil, nil, fmt.Errorf("security events: scan policy: %w", err)
+		}
+		p.CustomRules = json.RawMessage(customJSON)
+		p.CRSRuleGroups = json.RawMessage(crsJSON)
+		policyByID[p.ID] = p
+	}
+	if err := polRows.Err(); err != nil {
+		return nil, nil, nil, fmt.Errorf("security events: iterate policies: %w", err)
+	}
+	return rules, bindings, policyByID, nil
 }
 
-// securityEventsMapHost resolves a request host to its rule and bound policy;
-// zero-value refs when nothing matches.
-func securityEventsMapHost(host string, rules map[string]securityEventsRuleRef, bindings map[string]securityEventsPolicyRef) (securityEventsRuleRef, securityEventsPolicyRef) {
+// securityEventsPolicyContainsRule reports whether the given rule id belongs to
+// the policy's active rule set. 自定义规则（10000+，且 <900000）：查 custom_rules
+// JSON（兼容 ID 数组与内嵌对象数组两种形状）。注意 ID 空间：custom_rules JSON
+// 存的是 security_custom_rules 的 DB 主键 id，而 audit 的 rule_triggered 是
+// emit id（DB id + 10000，见 emitCustomRules），因此归属判定在 emit 空间比较
+// （DB id + 10000 == n）。CRS 规则（9xxxxx）：crs_rule_groups 条目为两位数字
+// 代码（如 "42" 对应 942xxx，与 BuildCorazaDirectives 的 `REQUEST-9<code>-*.conf`
+// Include 同款口径）；空数组按发射端语义视为「包含全部 REQUEST-*」，即所有 CRS
+// 规则均属于该策略。
+func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTriggered string) bool {
+	if policy == nil || ruleTriggered == "" {
+		return false
+	}
+	n, err := strconv.Atoi(ruleTriggered)
+	if err != nil {
+		return false
+	}
+	switch {
+	case n >= 10000 && n < 900000:
+		var ids []int
+		if err := json.Unmarshal(policy.CustomRules, &ids); err == nil {
+			for _, id := range ids {
+				if id+10000 == n {
+					return true
+				}
+			}
+			return false
+		}
+		var embedded []struct {
+			ID int `json:"id"`
+		}
+		if err := json.Unmarshal(policy.CustomRules, &embedded); err == nil {
+			for _, e := range embedded {
+				if e.ID+10000 == n {
+					return true
+				}
+			}
+		}
+		return false
+	case n >= 900000 && n <= 999999:
+		var groups []string
+		if err := json.Unmarshal(policy.CRSRuleGroups, &groups); err != nil {
+			return false
+		}
+		if len(groups) == 0 {
+			return true
+		}
+		code := ruleTriggered[1:3]
+		for _, g := range groups {
+			if strings.TrimSpace(g) == code {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// securityEventsAttributePolicy v2.2.0 多策略事件归因：rule_triggered → 查该规则
+// ID 属于哪个策略（custom_rules / CRS 组匹配），重叠时取绑定顺序第一条（policy_id
+// ASC 的第一个）。策略均未显式包含时回退到绑定顺序中第一个 ENABLED 策略
+// （policyByID 仅含启用策略：禁用/悬空的首绑定被跳过，事件仍归到该 lb_rule 的
+// 可用主策略）；无任何启用绑定策略、或 lb_rule 完全未绑定（无
+// security_policy_bindings 行）返回零值 (0, "")。
+func securityEventsAttributePolicy(ruleCaddyID, ruleTriggered string, policyByID map[int]*models.SecurityPolicy, bindings map[string][]int) (int, string) {
+	policyIDs := bindings[ruleCaddyID]
+	if len(policyIDs) == 0 {
+		return 0, ""
+	}
+	for _, pid := range policyIDs {
+		p := policyByID[pid]
+		if p == nil {
+			continue
+		}
+		if securityEventsPolicyContainsRule(p, ruleTriggered) {
+			return pid, p.Name
+		}
+	}
+	for _, pid := range policyIDs {
+		if p := policyByID[pid]; p != nil {
+			return pid, p.Name
+		}
+	}
+	return 0, ""
+}
+
+// securityEventsMapHost resolves a request host to its lb_rule; zero-value ref
+// when nothing matches. Policy attribution is handled separately by
+// securityEventsAttributePolicy, which needs the triggered rule id from the
+// parsed record.
+func securityEventsMapHost(host string, rules map[string]securityEventsRuleRef) securityEventsRuleRef {
 	canonical, err := db.CanonicalDomains(host)
 	if err != nil {
-		return securityEventsRuleRef{}, securityEventsPolicyRef{} // IPs and invalid domains never match a domain rule
+		return securityEventsRuleRef{} // IPs and invalid domains never match a domain rule
 	}
 	for _, candidate := range strings.Split(canonical, ",") {
 		if rule, ok := rules[candidate]; ok {
-			return rule, bindings[rule.caddyID]
+			return rule
 		}
 	}
-	return securityEventsRuleRef{}, securityEventsPolicyRef{}
+	return securityEventsRuleRef{}
 }
 
 // securityEventsReadOffset loads the persisted byte offset; a missing or
@@ -383,7 +487,7 @@ func (t *securityEventsTailer) securityEventsTick() error {
 			return fmt.Errorf("security events: persist reset offset: %w", err)
 		}
 	}
-	rules, bindings, err := securityEventsLoadMappings()
+	rules, bindings, policyByID, err := securityEventsLoadMappings()
 	if err != nil {
 		return err
 	}
@@ -392,7 +496,7 @@ func (t *securityEventsTailer) securityEventsTick() error {
 		return fmt.Errorf("security events: open audit log: %w", err)
 	}
 	defer f.Close()
-	newOffset, passErr := t.securityEventsProcessPass(f, offset, rules, bindings)
+	newOffset, passErr := t.securityEventsProcessPass(f, offset, rules, bindings, policyByID)
 	if newOffset != offset {
 		if werr := securityEventsWriteOffset(t.offsetPath, newOffset); werr != nil {
 			passErr = errors.Join(passErr, fmt.Errorf("security events: persist offset: %w", werr))
@@ -406,7 +510,7 @@ func (t *securityEventsTailer) securityEventsTick() error {
 // from offset to EOF, returning the furthest offset safe to persist. A
 // database error stops the pass so the next tick retries the same offset; a
 // malformed transaction is logged and skipped without aborting the pass.
-func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int64, rules map[string]securityEventsRuleRef, bindings map[string]securityEventsPolicyRef) (int64, error) {
+func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int64, rules map[string]securityEventsRuleRef, bindings map[string][]int, policyByID map[int]*models.SecurityPolicy) (int64, error) {
 	// 每个 pass 开始时重置停摆偏移：只有本 pass 实际 F1 停摆才会重新赋值，
 	// 避免同偏移的新停摆被上一轮 warn 的限流状态吞掉（R33 F2）。
 	t.failOffset = -1
@@ -520,10 +624,11 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 			}
 			Logf(level, "security events ingestion: skipping malformed transaction id=%s: %v", securityEventsTransactionID(raw), perr)
 		} else {
-			rule, policy := securityEventsMapHost(rec.Host, rules, bindings)
-			if _, ierr := stmt.Exec(rec.EventTime, rule.caddyID, policy.id, rec.ClientIP, rec.Method, rec.URI,
+			rule := securityEventsMapHost(rec.Host, rules)
+			policyID, policyName := securityEventsAttributePolicy(rule.caddyID, rec.RuleTriggered, policyByID, bindings)
+			if _, ierr := stmt.Exec(rec.EventTime, rule.caddyID, policyID, rec.ClientIP, rec.Method, rec.URI,
 				rec.EventType, rec.RuleTriggered, rec.RuleMsg, rec.Action, rec.AnomalyScore,
-				rule.name, policy.name, rec.TransactionID); ierr != nil {
+				rule.name, policyName, rec.TransactionID); ierr != nil {
 				_ = stmt.Close()
 				_ = tx.Rollback()
 				return committedOffset, fmt.Errorf("security events: insert event: %w", ierr)
@@ -602,13 +707,13 @@ func securityEventsIngestDeltaFrom(path string, from int64, archive bool) error 
 		return fmt.Errorf("security events: open delta source: %w", err)
 	}
 	defer f.Close()
-	rules, bindings, err := securityEventsLoadMappings()
+	rules, bindings, policyByID, err := securityEventsLoadMappings()
 	if err != nil {
 		return err
 	}
 	t := securityEventsNewTailer(auditLogPath, securityEventsOffsetPath)
 	t.archivePass = archive
-	_, passErr := t.securityEventsProcessPass(f, from, rules, bindings)
+	_, passErr := t.securityEventsProcessPass(f, from, rules, bindings, policyByID)
 	return passErr
 }
 

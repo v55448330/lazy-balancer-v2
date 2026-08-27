@@ -799,32 +799,34 @@ type caddyConfigStore interface {
 	Exec(string, ...any) (sql.Result, error)
 }
 
-// securityPolicyContext 是生成期批量预载的安全策略状态：每个规则的生效策略
-// （多 binding 取 policy_id 最大者，与 GetSecurityPolicyForRule 同口径）以及
-// 策略引用的品牌拦截页内容。经与规则/上游同一 store（事务时即 tx）预载，
-// 事务内生成可读到未提交的策略变更，替代此前逐规则走全局 db.DB 的 N+1 查询。
+// securityPolicyContext 是生成期批量预载的安全策略状态：每个规则绑定的全部
+// 启用策略（policy_id ASC，v2.2.0 多策略绑定，与 GetSecurityPoliciesForRule
+// 同口径）以及策略引用的品牌拦截页内容。经与规则/上游同一 store（事务时即 tx）
+// 预载，事务内生成可读到未提交的策略变更，替代此前逐规则走全局 db.DB 的 N+1 查询。
 type securityPolicyContext struct {
-	policyByRule  map[string]*models.SecurityPolicy
+	policyByRule  map[string][]*models.SecurityPolicy
 	blockPageByID map[int]string
 }
 
 // loadSecurityPolicyContext 一次性查询 security_policy_bindings +
 // security_policies（仅启用策略）+ security_block_pages，构建
-// ruleCaddyID → policy 映射与 block_page_id → content 映射。查询次数与规则数
-// 无关（常数级：最多 3 次 Query）。
-// Round 34 F-5: 与 GetSecurityPolicyForRule 严格同构——先取每规则最高
-// policy_id 绑定（不预过滤 enabled），再按 id 查策略并过滤 enabled；
-// 此前 JOIN 预过滤后再取最高，最高绑定指向禁用策略时与单查结果分歧。
+// ruleCaddyID → 启用策略切片（policy_id ASC）映射与 block_page_id → content
+// 映射。查询次数与规则数无关（常数级：最多 3 次 Query）。
+// v2.2.0 多策略绑定：与 GetSecurityPoliciesForRule 严格同构——绑定按
+// policy_id ASC 全量取出，策略按 id 批量查询并过滤 enabled，逐规则按 ASC
+// 顺序收集启用策略（禁用绑定仅占位，不产生元素）。
 func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, error) {
 	ctx := &securityPolicyContext{
-		policyByRule:  make(map[string]*models.SecurityPolicy),
+		policyByRule:  make(map[string][]*models.SecurityPolicy),
 		blockPageByID: make(map[int]string),
 	}
-	bindingRows, err := store.Query(`SELECT rule_caddy_id, MAX(policy_id) FROM security_policy_bindings GROUP BY rule_caddy_id`)
+	bindingRows, err := store.Query(`SELECT rule_caddy_id, policy_id FROM security_policy_bindings ORDER BY rule_caddy_id, policy_id ASC`)
 	if err != nil {
 		return nil, err
 	}
-	ruleMaxPolicy := make(map[string]int)
+	rulePolicyIDs := make(map[string][]int)
+	distinctPolicyIDs := make([]int, 0)
+	seenPolicyIDs := make(map[int]struct{})
 	for bindingRows.Next() {
 		var ruleCaddyID string
 		var policyID int
@@ -832,7 +834,11 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 			_ = bindingRows.Close()
 			return nil, err
 		}
-		ruleMaxPolicy[ruleCaddyID] = policyID
+		rulePolicyIDs[ruleCaddyID] = append(rulePolicyIDs[ruleCaddyID], policyID)
+		if _, seen := seenPolicyIDs[policyID]; !seen {
+			seenPolicyIDs[policyID] = struct{}{}
+			distinctPolicyIDs = append(distinctPolicyIDs, policyID)
+		}
 	}
 	if err := bindingRows.Err(); err != nil {
 		_ = bindingRows.Close()
@@ -840,15 +846,6 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 	}
 	if err := bindingRows.Close(); err != nil {
 		return nil, err
-	}
-	distinctPolicyIDs := make([]int, 0, len(ruleMaxPolicy))
-	seen := make(map[int]struct{}, len(ruleMaxPolicy))
-	for _, policyID := range ruleMaxPolicy {
-		if _, ok := seen[policyID]; ok {
-			continue
-		}
-		seen[policyID] = struct{}{}
-		distinctPolicyIDs = append(distinctPolicyIDs, policyID)
 	}
 	policiesByID := make(map[int]*models.SecurityPolicy, len(distinctPolicyIDs))
 	if len(distinctPolicyIDs) > 0 {
@@ -896,15 +893,22 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 			return nil, err
 		}
 	}
-	for ruleCaddyID, policyID := range ruleMaxPolicy {
-		if policy := policiesByID[policyID]; policy != nil {
-			ctx.policyByRule[ruleCaddyID] = policy
+	for ruleCaddyID, policyIDs := range rulePolicyIDs {
+		for _, policyID := range policyIDs {
+			if policy := policiesByID[policyID]; policy != nil {
+				ctx.policyByRule[ruleCaddyID] = append(ctx.policyByRule[ruleCaddyID], policy)
+			}
 		}
 	}
 	var referencedPage bool
-	for _, policy := range ctx.policyByRule {
-		if policy.BlockPageID > 0 {
-			referencedPage = true
+	for _, policies := range ctx.policyByRule {
+		for _, policy := range policies {
+			if policy.BlockPageID > 0 {
+				referencedPage = true
+				break
+			}
+		}
+		if referencedPage {
 			break
 		}
 	}
@@ -934,13 +938,14 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 	return ctx, nil
 }
 
-// policyForRule 返回规则生效的安全策略：批量预载上下文存在时查映射，否则回退
-// 单规则查询（GenerateSingleRuleCaddyConfig/GenerateRouteObject 等非批量路径）。
-func policyForRule(ctx *securityPolicyContext, ruleCaddyID string) *models.SecurityPolicy {
+// policiesForRule 返回规则绑定的全部启用安全策略（policy_id ASC）：批量预载
+// 上下文存在时查映射，否则回退单规则查询（GenerateSingleRuleCaddyConfig/
+// GenerateRouteObject 等非批量路径）。无绑定或全部禁用时返回 nil。
+func policiesForRule(ctx *securityPolicyContext, ruleCaddyID string) []*models.SecurityPolicy {
 	if ctx != nil {
 		return ctx.policyByRule[ruleCaddyID]
 	}
-	return GetSecurityPolicyForRule(ruleCaddyID)
+	return GetSecurityPoliciesForRule(ruleCaddyID)
 }
 
 func GenerateCaddyConfig(overrides ...*models.UpdateConfigRequest) map[string]interface{} {
@@ -2392,9 +2397,16 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		// 80/443 端口不写 automatic_https。若未来启用此分支，必须补齐 80/443 的
 		// disable_certificates 例外，否则 Caddy 会为路由域名自建 ACME automation。
 		if rule.EnableTLS && rule.TLSHTTPRedirect && len(domainHosts) > 0 {
+			// 与 generateHTTPRouteObjects 同口径：pass 路由（任一启用策略带
+			// geoip 时一条）+ 每 geoip 启用策略一条 block 路由。
 			geoipCount := 0
-			if policy := GetSecurityPolicyForRule(rule.CaddyID); PolicyHasGeoIP(policy) {
-				geoipCount = 2 // pass route + block route
+			for _, policy := range GetSecurityPoliciesForRule(rule.CaddyID) {
+				if PolicyHasGeoIP(policy) {
+					geoipCount++
+				}
+			}
+			if geoipCount > 0 {
+				geoipCount++ // pass route
 			}
 			redirectRoute := map[string]interface{}{
 				"match": []interface{}{
@@ -2576,15 +2588,26 @@ func generateHTTPRouteObjects(rule SingleRuleConfig, securityCtx ...*securityPol
 
 	routes := make([]map[string]interface{}, 0, len(rule.PathRules)+4)
 	// GeoIP routes run before path rules and the main route: the pass route
-	// populates the region placeholders, then the block route rejects matches.
-	if policy := policyForRule(ctx, rule.CaddyID); PolicyHasGeoIP(policy) {
-		routes = append(routes, buildGeoipPassRoute(domainHosts, policy))
-		statusCode := policy.BlockStatusCode
-		if statusCode == 0 {
-			statusCode = 403
+	// populates the region placeholders, then the block routes reject matches.
+	// v2.2.0 多策略：pass 路由至多一条（任一绑定启用策略带 geoip 即存在），
+	// block 路由每带 geoip 的绑定启用策略一条（policy_id ASC）。
+	policies := policiesForRule(ctx, rule.CaddyID)
+	geoipPolicies := make([]*models.SecurityPolicy, 0, len(policies))
+	for _, policy := range policies {
+		if PolicyHasGeoIP(policy) {
+			geoipPolicies = append(geoipPolicies, policy)
 		}
-		if blockRoute := buildGeoipBlockRoute(rule, policy, statusCode); blockRoute != nil {
-			routes = append(routes, blockRoute)
+	}
+	if len(geoipPolicies) > 0 {
+		routes = append(routes, buildGeoipPassRoute(domainHosts, geoipPolicies[0]))
+		for _, policy := range geoipPolicies {
+			statusCode := policy.BlockStatusCode
+			if statusCode == 0 {
+				statusCode = 403
+			}
+			if blockRoute := buildGeoipBlockRoute(rule, policy, statusCode); blockRoute != nil {
+				routes = append(routes, blockRoute)
+			}
 		}
 	}
 	if rule.CustomRoutesEnabled {
@@ -2666,27 +2689,51 @@ func decodePathUpstreams(raw string) ([]UpstreamConfig, error) {
 }
 
 // buildBlockPageErrorRoute returns a server-level error route rendering the
-// branded block page of the rule's bound active policy, or nil when the rule
-// has no policy, no block page, or the stored page has no content. The policy
-// and block-page content come from the batch-preloaded securityCtx, so
-// transactional generation observes uncommitted policy changes.
+// branded block page of the rule's first-bound (lowest policy_id) enabled
+// policy that configures one, or nil when no bound enabled policy has a block
+// page or the stored page has no content. The policies and block-page content
+// come from the batch-preloaded securityCtx, so transactional generation
+// observes uncommitted policy changes.
 func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, securityCtx *securityPolicyContext) map[string]interface{} {
-	policy := policyForRule(securityCtx, ruleCaddyID)
-	if policy == nil || policy.BlockPageID <= 0 {
+	policies := policiesForRule(securityCtx, ruleCaddyID)
+	var pagePolicy *models.SecurityPolicy
+	for _, policy := range policies {
+		if policy.BlockPageID > 0 {
+			pagePolicy = policy
+			break
+		}
+	}
+	if pagePolicy == nil {
 		return nil
 	}
-	content := securityCtx.blockPageByID[policy.BlockPageID]
+	content := securityCtx.blockPageByID[pagePolicy.BlockPageID]
 	if content == "" {
 		return nil
 	}
-	statusCode := policy.BlockStatusCode
+	statusCode := pagePolicy.BlockStatusCode
 	if statusCode == 0 {
 		statusCode = 403
 	}
 	// coraza 命中恒以 403 + "interruption triggered" 中断；GeoIP 拦截链经 error
-	// handler 以 block_status_code + "GeoIP blocked" 中断。两者共用同一品牌拦截页，
-	// 故匹配表达式需同时覆盖两种状态码与消息。
-	expression := fmt.Sprintf("({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered') || ({http.error.status_code} == %d && {http.error.message} == 'GeoIP blocked')", statusCode)
+	// handler 以各策略 block_status_code + "GeoIP blocked" 中断。两者共用同一品牌
+	// 拦截页，故匹配表达式需覆盖 403 中断与全部绑定启用策略的 geoip 状态码并集。
+	clauses := []string{"({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')"}
+	seenGeoipStatus := make(map[int]struct{}, len(policies))
+	for _, policy := range policies {
+		if !PolicyHasGeoIP(policy) {
+			continue
+		}
+		geoipStatus := policy.BlockStatusCode
+		if geoipStatus == 0 {
+			geoipStatus = 403
+		}
+		if _, seen := seenGeoipStatus[geoipStatus]; seen {
+			continue
+		}
+		seenGeoipStatus[geoipStatus] = struct{}{}
+		clauses = append(clauses, fmt.Sprintf("({http.error.status_code} == %d && {http.error.message} == 'GeoIP blocked')", geoipStatus))
+	}
+	expression := strings.Join(clauses, " || ")
 	return map[string]interface{}{
 		"match": []interface{}{
 			map[string]interface{}{
@@ -2709,19 +2756,30 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, security
 }
 
 // buildRateLimitErrorRoute returns a server-level error route rendering the
-// bound policy's block page for rate-limited (429) requests, or nil when the
-// rule's bound active policy has no block page.
+// block page of the rule's first-bound enabled policy that configures one for
+// rate-limited (429) requests, or nil when no bound enabled policy enables
+// rate limiting or none has a block page.
 // caddy-ratelimit rejects via caddyhttp.Error(429), so handle_errors fires.
 func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string, securityCtx *securityPolicyContext) map[string]interface{} {
-	policy := policyForRule(securityCtx, ruleCaddyID)
-	if policy == nil || !policy.RateLimitEnabled || policy.BlockPageID <= 0 {
+	policies := policiesForRule(securityCtx, ruleCaddyID)
+	rateLimited := false
+	var pagePolicy *models.SecurityPolicy
+	for _, policy := range policies {
+		if policy.RateLimitEnabled {
+			rateLimited = true
+		}
+		if pagePolicy == nil && policy.BlockPageID > 0 {
+			pagePolicy = policy
+		}
+	}
+	if !rateLimited || pagePolicy == nil {
 		return nil
 	}
-	content := securityCtx.blockPageByID[policy.BlockPageID]
+	content := securityCtx.blockPageByID[pagePolicy.BlockPageID]
 	if content == "" {
 		return nil
 	}
-	statusCode := policy.BlockStatusCode
+	statusCode := pagePolicy.BlockStatusCode
 	if statusCode == 0 {
 		statusCode = 429
 	}
@@ -2746,11 +2804,13 @@ func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string, security
 	}
 }
 
-// buildRateLimitHandler returns the rate_limit handler for a rule whose bound
-// active policy enables rate limiting, or nil otherwise. Zones are logical AND:
-// with burst > 0 a per-second zone caps instantaneous rate at rps+burst while a
-// per-minute zone caps sustained rate at rps; without burst a single per-second
-// zone caps at rps.
+// buildRateLimitHandler returns the rate_limit handler for one bound policy of
+// a rule, or nil when that policy does not enable rate limiting. Zones are
+// logical AND: with burst > 0 a per-second zone caps instantaneous rate at
+// rps+burst while a per-minute zone caps sustained rate at rps; without burst a
+// single per-second zone caps at rps.
+// zone 键必须嵌入 policy_id：caddy-ratelimit 的 UsagePool 按 zone 名进程级共享
+// 计数器，同规则多策略（v2.2.0）若共用 {ruleID} 前缀会静默合并计数。
 func buildRateLimitHandler(ruleCaddyID string, policy *models.SecurityPolicy) map[string]interface{} {
 	if policy == nil || !policy.RateLimitEnabled || policy.RateLimitRPS <= 0 {
 		return nil
@@ -2759,8 +2819,9 @@ func buildRateLimitHandler(ruleCaddyID string, policy *models.SecurityPolicy) ma
 	// 不是 zone 字段——Caddy v2.11.4 对模块载荷 StrictUnmarshalJSON+
 	// DisallowUnknownFields，zone 级未知字段会使整个配置加载 400（开启限流
 	// 即配置停摆）。移到 handler 层（合法字段，10m 扫描周期语义保留）。
+	zonePrefix := fmt.Sprintf("%s-p%d", ruleCaddyID, policy.ID)
 	rateLimits := map[string]interface{}{
-		ruleCaddyID: map[string]interface{}{
+		zonePrefix: map[string]interface{}{
 			"key":        "{http.request.remote.host}",
 			"window":     "1s",
 			"max_events": policy.RateLimitRPS,
@@ -2768,12 +2829,12 @@ func buildRateLimitHandler(ruleCaddyID string, policy *models.SecurityPolicy) ma
 	}
 	if policy.RateLimitBurst > 0 {
 		rateLimits = map[string]interface{}{
-			ruleCaddyID + "-sec": map[string]interface{}{
+			zonePrefix + "-sec": map[string]interface{}{
 				"key":        "{http.request.remote.host}",
 				"window":     "1s",
 				"max_events": policy.RateLimitRPS + policy.RateLimitBurst,
 			},
-			ruleCaddyID + "-min": map[string]interface{}{
+			zonePrefix + "-min": map[string]interface{}{
 				"key":        "{http.request.remote.host}",
 				"window":     "60s",
 				"max_events": policy.RateLimitRPS * 60,
@@ -2910,16 +2971,18 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		return nil, fmt.Errorf("%w, got %d", ErrDynamicDNSUpstreamCount, len(enabledUpstreams))
 	}
 
-	policy := policyForRule(ctx, rule.CaddyID)
+	policies := policiesForRule(ctx, rule.CaddyID)
 	var handleChain []interface{}
-	// Rate limiting runs before WAF inspection, body parsing, and proxying.
-	if rateLimitHandler := buildRateLimitHandler(rule.CaddyID, policy); rateLimitHandler != nil {
-		handleChain = append(handleChain, rateLimitHandler)
-	}
-	// WAF inspection must run before body parsing and proxying.
-	if rule.Protocol == "http" {
-		if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy); wafHandler != nil {
-			handleChain = append(handleChain, wafHandler)
+	// v2.2.0 多策略：按绑定启用策略 policy_id ASC 依次编入各策略的
+	// [rate_limit?, waf?] 处理器组；限流先于 WAF 检查、body 解析与代理。
+	for _, policy := range policies {
+		if rateLimitHandler := buildRateLimitHandler(rule.CaddyID, policy); rateLimitHandler != nil {
+			handleChain = append(handleChain, rateLimitHandler)
+		}
+		if rule.Protocol == "http" {
+			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy); wafHandler != nil {
+				handleChain = append(handleChain, wafHandler)
+			}
 		}
 	}
 	effectiveRequestBodyMaxSizeMB, effectiveUpstreamKeepaliveTimeout, effectiveServerTokensHidden := resolveRuleOverrides(rule)

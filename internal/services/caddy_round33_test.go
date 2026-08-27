@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -42,7 +43,9 @@ func TestGenerateCaddyConfigFromStore_readsUncommittedPolicyThroughTx(t *testing
 		t.Fatalf("事务内生成必须读到未提交的限流策略: %#v", route)
 	}
 	zones := mustMap(t, rateLimit["rate_limits"], "rate_limits")
-	zone := mustMap(t, zones["lb_tx_policy"], "rate limit zone")
+	// v2.2.0：zone 键嵌入 policy_id（UsagePool 按 zone 名进程级共享计数器，
+	// 同规则多策略共用 {ruleID} 前缀会静默合并计数）；burst=0 → 单秒级 zone。
+	zone := mustMap(t, zones[fmt.Sprintf("lb_tx_policy-p%d", policyID)], "rate limit zone")
 	assertEqual(t, zone["max_events"], 5)
 
 	// 负向对照：回滚后经全局 db.DB 生成看不到该变更

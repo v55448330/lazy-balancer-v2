@@ -81,6 +81,9 @@ var tools = []toolSpec{
 	{"delete_security_policy", "删除指定安全策略", http.MethodDelete, "/security/policies/{id}", []string{"id"}, nil, idSchema("id", "策略 ID", "integer")},
 	{"bind_security_policy", "将安全策略绑定到指定规则", http.MethodPost, "/security/policies/{id}/bind", []string{"id"}, nil, bodySchema},
 	{"unbind_security_policy", "解除安全策略与规则的绑定", http.MethodDelete, "/security/policies/{id}/bind/{caddy_id}", []string{"id", "caddy_id"}, nil, bodySchema},
+	// v2.2.0 多策略绑定：原子替换规则绑定的策略集合（整体替换而非追加），
+	// policy_ids maxItems=5 与后端「最多绑定 5 条策略」校验对齐。
+	{"set_rule_security_policies", "原子设置规则的安全策略集合（按 policy_id ASC 顺序评估）", http.MethodPut, "/security/rules/{caddy_id}/policies", []string{"caddy_id"}, nil, setRuleSecurityPoliciesSchema},
 	{"create_custom_rule", "创建自定义安全规则", http.MethodPost, "/security/custom-rules", nil, nil, bodySchema},
 	{"update_custom_rule", "更新指定自定义安全规则", http.MethodPut, "/security/custom-rules/{id}", []string{"id"}, nil, bodySchema},
 	{"delete_custom_rule", "删除指定自定义安全规则", http.MethodDelete, "/security/custom-rules/{id}", []string{"id"}, nil, idSchema("id", "规则 ID", "integer")},
@@ -210,6 +213,10 @@ const listCRSRulesSchema = `{"type":"object","properties":{"search":{"type":"str
 const listCertJobsSchema = `{"type":"object","properties":{"rule_id":{"type":"string","description":"按规则 ID 过滤"},"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":200,"default":20}},"additionalProperties":false}`
 const securityEventsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20},"action":{"type":"string"},"ip":{"type":"string"},"rule_caddy_id":{"type":"string"},"start_time":{"type":"string","description":"开始时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"},"end_time":{"type":"string","description":"结束时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"}},"additionalProperties":false}`
 const caddyLogsSchema = `{"type":"object","properties":{"type":{"type":"string","enum":["runtime","server","proxy","tls","access"]}},"additionalProperties":false}`
+
+// setRuleSecurityPoliciesSchema（v2.2.0 多策略绑定）：maxItems=5 与后端
+// SetRuleSecurityPolicies 的「最多绑定 5 条策略」校验对齐，避免 MCP 放行后端拒绝的载荷。
+const setRuleSecurityPoliciesSchema = `{"type":"object","required":["caddy_id","policy_ids"],"properties":{"caddy_id":{"type":"string","description":"规则 Caddy ID"},"policy_ids":{"type":"array","items":{"type":"integer"},"maxItems":5,"description":"策略 ID 列表（整体替换现有绑定，按 policy_id ASC 顺序评估）"}},"additionalProperties":false}`
 const updateConfigSchema = `{"type":"object","properties":{"source":{"type":"string"},"dns_provider":{"type":"string"},"dns_credentials":{"type":"string"},"acme_email":{"type":"string"},"cert_expiry_days":{"type":"integer"},"cert_renewal_days":{"type":"integer"},"cert_renewal_attempts":{"type":"integer"},"log_level":{"type":"string"},"caddy_log_level":{"type":"string"},"caddy_log_size_mb":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"http_read_timeout":{"type":"integer"},"http_write_timeout":{"type":"integer"},"http_idle_timeout":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"proxy_dial_timeout":{"type":"integer","minimum":0},"proxy_response_header_timeout":{"type":"integer","minimum":0},"proxy_read_timeout":{"type":"integer","minimum":0},"proxy_write_timeout":{"type":"integer","minimum":0},"proxy_stream_timeout":{"type":"integer","minimum":0},"proxy_flush_interval":{"type":"integer","minimum":-1},"proxy_stream_close_delay":{"type":"integer","minimum":0},"server_tokens_hidden":{"type":"boolean"},"cert_job_log_size_mb":{"type":"integer"},"runtime_log_size_mb":{"type":"integer"},"access_log_json":{"type":"boolean"},"access_log_format":{"type":"string"},"audit_retention_months":{"type":"integer"},"jwt_expire_minutes":{"type":"integer"},"timezone":{"type":"string"},"default_ca_provider_id":{"type":"integer"},"audit_log_size_mb":{"type":"integer"},"mfa_write_guard":{"type":"boolean"},"mfa_lockout_enabled":{"type":"boolean"}},"additionalProperties":false}`
 
 func New(baseURL string, client *http.Client) http.Handler {

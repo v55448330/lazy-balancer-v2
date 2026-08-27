@@ -274,10 +274,46 @@
                   <span :class="{ 'rule-picker-placeholder': boundRules.length === 0 }">{{ boundRules.length > 0 ? `已选 ${boundRules.length} 条` : '选择要关联的负载均衡规则' }}</span>
                   <el-icon class="rule-picker-arrow"><ArrowDown /></el-icon>
                 </div>
-                <div v-if="boundRuleList.length > 0" class="bound-rule-tags">
-                  <el-tag v-for="rule in boundRuleList" :key="rule.caddy_id" :closable="!isReadOnly" size="small" effect="plain" @close="removeBoundRule(rule.caddy_id)">{{ rule.name }}</el-tag>
+                <div v-if="boundRuleRows.length > 0" class="bound-rule-list">
+                  <div v-for="row in boundRuleRows" :key="row.caddyId" class="bound-rule-row">
+                    <div class="bound-rule-head">
+                      <span class="bound-rule-name">{{ row.name }}</span>
+                      <span class="bound-rule-meta">{{ row.domain || '-' }}:{{ row.listenPort }}</span>
+                      <el-button v-if="!isReadOnly" size="small" link type="danger" class="bound-rule-remove" @click="removeBoundRule(row.caddyId)">移除</el-button>
+                    </div>
+                    <!-- v2.2.0 多策略绑定：完整绑定链（policy_id ASC，1-based 序号）+ 本策略落点；
+                         拦截页面仅首绑（启用策略中 policy_id 最小者）生效。 -->
+                    <div class="bound-rule-chain">
+                      <span
+                        v-for="(entry, idx) in row.chain"
+                        :key="entry.policyId ?? 'self'"
+                        class="binding-order-chip"
+                        :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled }"
+                      >{{ idx + 1 }}.{{ entry.isSelf ? '本策略' : entry.name }}</span>
+                      <el-tag v-if="row.selfBlockPageActive" type="success" size="small" effect="plain">✓ 拦截页面当前生效</el-tag>
+                      <el-tag v-else-if="!form.enabled" type="info" size="small" effect="plain">策略禁用中，拦截页面不生效</el-tag>
+                      <el-tag v-else type="warning" size="small" effect="plain">拦截页面移至第一位后生效（当前第 {{ row.selfPosition }} 位）</el-tag>
+                    </div>
+                    <el-alert
+                      v-if="row.showPerfTip"
+                      type="warning"
+                      :closable="false"
+                      show-icon
+                      :title="`该规则将绑定 ${row.mergedCount} 条策略：每条策略都会叠加一层处理链（WAF/ACL/限流），超过 3 条可能影响转发性能`"
+                      class="bound-rule-alert"
+                    />
+                    <el-alert
+                      v-for="hint in row.hints"
+                      :key="hint"
+                      type="warning"
+                      :closable="false"
+                      show-icon
+                      :title="hint"
+                      class="bound-rule-alert"
+                    />
+                  </div>
                 </div>
-                <div class="form-tip-line">策略将应用到所选负载均衡规则的入站流量</div>
+                <div class="form-tip-line">策略将应用到所选负载均衡规则的入站流量；同一规则绑定多条策略时按策略 ID 升序依次评估</div>
               </div>
             </el-form-item>
             <el-form-item label="拦截页面">
@@ -364,7 +400,7 @@
         <el-checkbox
           :model-value="pickerSelectAllChecked"
           :indeterminate="pickerSelectAllIndeterminate"
-          :disabled="pickerFilteredRules.length === 0"
+          :disabled="pickerSelectableRules.length === 0"
           @change="handlePickerSelectAll"
         >全选</el-checkbox>
         <span class="rule-picker-header-meta">筛选 {{ pickerFilteredRules.length }} 条</span>
@@ -372,10 +408,24 @@
       <div class="rule-picker-list">
         <el-checkbox-group v-model="pickerSelected">
           <div v-for="rule in pickerPagedRules" :key="rule.caddy_id" class="rule-picker-item">
-            <el-checkbox :value="rule.caddy_id">
+            <el-checkbox :value="rule.caddy_id" :disabled="pickerMeta(rule.caddy_id).wouldExceed">
               <span class="rule-picker-name">{{ rule.name }}</span>
               <span class="rule-picker-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
             </el-checkbox>
+            <!-- v2.2.0：每条候选规则展示当前绑定链（policy_id ASC，1-based）与本策略落点；
+                 已达 5 条上限的规则禁用并说明原因。 -->
+            <div class="rule-binding-preview">
+              <span v-if="pickerMeta(rule.caddy_id).wouldExceed" class="rule-binding-limit">已达 5 条绑定上限，无法继续绑定</span>
+              <template v-else>
+                <span
+                  v-for="(entry, idx) in pickerMeta(rule.caddy_id).chain"
+                  :key="entry.policyId ?? 'self'"
+                  class="binding-order-chip"
+                  :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled }"
+                >{{ idx + 1 }}.{{ entry.isSelf ? '本策略' : entry.name }}</span>
+                <span class="rule-binding-landing">本策略排第 {{ pickerMeta(rule.caddy_id).selfPos }} 位</span>
+              </template>
+            </div>
           </div>
         </el-checkbox-group>
         <el-empty v-if="pickerPagedRules.length === 0" description="没有匹配的规则" :image-size="60" />
@@ -415,7 +465,14 @@ import type { APIResponse, UserListItem } from '@/types'
 interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string }
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
-interface SecurityBinding { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean }
+// v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
+interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean }
+// GET /security/rules/:caddy_id/policy 直接序列化 models.SecurityPolicy——json.RawMessage
+// 字段以原生 JSON（数组）出现，与策略详情接口的字符串形态不同，按 unknown 接收再解析。
+interface RuleBoundPolicy { id: number; name: string; mode: string; enabled: boolean; ip_acl_enabled: boolean; ip_acl_mode: string; crs_rule_groups: unknown; custom_rules: unknown; block_page_id: number }
+interface CustomRuleRef { id: number; action: string }
+interface ChainEntry { policyId: number | null; name: string; enabled: boolean; isSelf: boolean }
+interface BoundRuleRow { caddyId: string; name: string; domain: string; listenPort: number; chain: ChainEntry[]; selfPosition: number; selfBlockPageActive: boolean; mergedCount: number; showPerfTip: boolean; hints: string[] }
 interface CRSRuleOption { filename: string; category: string }
 interface BlockPage { id: number; name: string }
 
@@ -463,7 +520,7 @@ const filteredPolicies = computed(() => {
   return policies.value.filter((p) => (p.name || '').toLowerCase().includes(query))
 })
 const allRules = ref<Rule[]>([])
-const securityBindings = ref<Record<string, SecurityBinding>>({})
+const securityBindings = ref<Record<string, BindingInfo[]>>({})
 const dialogVisible = ref(false)
 const editingId = ref<number | null>(null)
 const ipACLList = ref<string[]>([])
@@ -505,7 +562,8 @@ const PICKER_PAGE_SIZE = 20
 const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny', waf_check_response: false })
 const form = ref(defaultForm())
 const selectedCustomRules = ref<number[]>([])
-const allCustomRules = ref<Array<{ id: number; name: string }>>([])
+// action 用于多策略冲突检测（放行型 pass / 拦截型 block）；enabled 预留
+const allCustomRules = ref<Array<{ id: number; name: string; action?: string; enabled?: boolean }>>([])
 
 // 返回是否加载成功——R62 D-4：聚焦流程（security-policies-focus-id）需区分
 // 「列表加载失败」与「策略确已删除」，否则瞬时失败会被误报为「已被删除」。
@@ -520,8 +578,8 @@ const fetchData = async (): Promise<boolean> => {
       request.get<APIResponse<Rule[]>>('/rules'),
       request.get<APIResponse<{ rules: CRSRuleOption[] }>>('/security/crs/rules?page_size=100'),
       request.get<APIResponse<BlockPage[]>>('/security/block-pages'),
-      request.get<APIResponse<Array<{ id: number; name: string }>>>('/security/custom-rules'),
-      request.get<APIResponse<Record<string, SecurityBinding>>>('/security/bindings'),
+      request.get<APIResponse<Array<{ id: number; name: string; action?: string; enabled?: boolean }>>>('/security/custom-rules'),
+      request.get<APIResponse<Record<string, BindingInfo[]>>>('/security/bindings'),
       request.get<APIResponse<UserListItem[]>>('/users'),
     ])
     if (polRes.status === 'rejected') {
@@ -656,15 +714,18 @@ const ipControlTip = (row: PolicySummary): string => {
   return `访问控制：${row.ip_acl_mode === 'allow' ? '白名单模式' : '黑名单模式'} · 列表 ${aclCount} 条 · 白名单 ${wlCount} 条 · 黑名单 ${blCount} 条`
 }
 
-// /security/bindings 以 rule_caddy_id 为键，反转为 policy_id → 规则列表供列表 tooltip 使用
+// /security/bindings 以 rule_caddy_id 为键（v2.2.0 起值为绑定数组，policy_id ASC），
+// 反转为 policy_id → 规则列表供列表 tooltip 使用
 const policyRulesMap = computed(() => {
   const map = new Map<number, Rule[]>()
   for (const rule of allRules.value) {
-    const binding = securityBindings.value[rule.caddy_id]
-    if (!binding) continue
-    const list = map.get(binding.policy_id) ?? []
-    list.push(rule)
-    map.set(binding.policy_id, list)
+    const bindings = securityBindings.value[rule.caddy_id]
+    if (!bindings) continue
+    for (const binding of bindings) {
+      const list = map.get(binding.policy_id) ?? []
+      list.push(rule)
+      map.set(binding.policy_id, list)
+    }
   }
   return map
 })
@@ -751,29 +812,261 @@ watch(pickerSearch, () => {
   pickerPage.value = 1
 })
 
-// 全选作用于当前搜索筛选出的全部规则（跨分页），selection 存于 pickerSelected 与分页无关
+// 全选作用于当前搜索筛选出且可选择的全部规则（跨分页；已达 5 条绑定上限的规则
+// 不可选，不参与全选），selection 存于 pickerSelected 与分页无关
+const pickerSelectableRules = computed(() => pickerFilteredRules.value.filter((rule) => !pickerMeta(rule.caddy_id).wouldExceed))
 const pickerFilteredSelectedCount = computed(() => {
   const selected = new Set(pickerSelected.value)
-  return pickerFilteredRules.value.reduce((count, rule) => count + (selected.has(rule.caddy_id) ? 1 : 0), 0)
+  return pickerSelectableRules.value.reduce((count, rule) => count + (selected.has(rule.caddy_id) ? 1 : 0), 0)
 })
 const pickerSelectAllChecked = computed(() =>
-  pickerFilteredRules.value.length > 0 && pickerFilteredSelectedCount.value === pickerFilteredRules.value.length)
+  pickerSelectableRules.value.length > 0 && pickerFilteredSelectedCount.value === pickerSelectableRules.value.length)
 const pickerSelectAllIndeterminate = computed(() =>
-  pickerFilteredSelectedCount.value > 0 && pickerFilteredSelectedCount.value < pickerFilteredRules.value.length)
+  pickerFilteredSelectedCount.value > 0 && pickerFilteredSelectedCount.value < pickerSelectableRules.value.length)
 
 const handlePickerSelectAll = (checked: string | number | boolean): void => {
-  const filteredIds = pickerFilteredRules.value.map((rule) => rule.caddy_id)
+  const selectableIds = pickerSelectableRules.value.map((rule) => rule.caddy_id)
   if (checked === true) {
-    pickerSelected.value = [...new Set([...pickerSelected.value, ...filteredIds])]
+    pickerSelected.value = [...new Set([...pickerSelected.value, ...selectableIds])]
     return
   }
-  const filteredIdSet = new Set(filteredIds)
-  pickerSelected.value = pickerSelected.value.filter((id) => !filteredIdSet.has(id))
+  const selectableIdSet = new Set(selectableIds)
+  pickerSelected.value = pickerSelected.value.filter((id) => !selectableIdSet.has(id))
 }
 
 const boundRuleList = computed(() => boundRules.value.map((caddyId) => {
   const rule = allRules.value.find((r) => r.caddy_id === caddyId)
   return { caddy_id: caddyId, name: rule?.name || caddyId }
+}))
+
+// ================= v2.2.0 多策略绑定（SC-BIND-02 配套） =================
+// 语义：评估顺序 = policy_id ASC（后端排序，绑定顺序即策略 ID 顺序）；
+// 拦截页面 = 首绑策略的页面（启用策略中 policy_id 最小者）；单规则最多 5 条；
+// security_policies.id 为 AUTOINCREMENT——新建策略的 ID 必然大于全部现存策略，
+// 因此新建策略在任何规则的绑定链上都落在末位。
+const MAX_POLICIES_PER_RULE = 5
+const PERF_POLICY_THRESHOLD = 3
+
+// 选中规则的完整绑定策略明细（冲突检测需要 crs_rule_groups/custom_rules 内容，
+// /security/bindings 的 BindingInfo 不含这些字段）——按规则懒加载，对话框关闭时
+// 清空防止跨编辑会话的 stale 数据。
+const ruleBoundPolicies = ref<Record<string, RuleBoundPolicy[]>>({})
+const ensureBindingDetails = async (caddyIds: string[]): Promise<void> => {
+  const missing = caddyIds.filter((id) => !(id in ruleBoundPolicies.value))
+  if (missing.length === 0) return
+  const results = await Promise.allSettled(
+    missing.map((id) => request.get<APIResponse<RuleBoundPolicy[]>>(`/security/rules/${encodeURIComponent(id)}/policy`)),
+  )
+  const next = { ...ruleBoundPolicies.value }
+  results.forEach((res, i) => {
+    // 失败的不写入：保持缺省以便下次进入步骤时重试（全局拦截器已 toast）
+    if (res.status !== 'fulfilled') return
+    const caddyId = missing[i]
+    if (caddyId === undefined) return
+    next[caddyId] = res.value.data || []
+  })
+  ruleBoundPolicies.value = next
+}
+
+watch(currentStep, (step) => {
+  if (step === WIZARD_STEP.BINDINGS && dialogVisible.value) void ensureBindingDetails(boundRules.value)
+})
+
+const parseUnknownStringList = (raw: unknown): string[] => {
+  if (Array.isArray(raw)) return raw.filter((item): item is string => typeof item === 'string')
+  if (typeof raw === 'string') return parseJsonList(raw)
+  return []
+}
+
+const customRuleActionOf = (id: number): string => allCustomRules.value.find((r) => r.id === id)?.action ?? ''
+
+// 自定义规则引用解析：兼容纯 ID 数组与内嵌对象（{id, action}）两种存储形状；
+// 内嵌对象缺 action 或纯 ID 时回查自定义规则表
+const parseCustomRuleRefs = (raw: unknown): CustomRuleRef[] => {
+  let items: unknown[] = []
+  if (Array.isArray(raw)) items = raw
+  else if (typeof raw === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (Array.isArray(parsed)) items = parsed
+    } catch { items = [] }
+  }
+  const refs: CustomRuleRef[] = []
+  for (const item of items) {
+    if (typeof item === 'number' && item > 0) {
+      refs.push({ id: item, action: customRuleActionOf(item) })
+    } else if (typeof item === 'object' && item !== null && 'id' in item) {
+      const id = (item as { id?: unknown }).id
+      if (typeof id === 'number' && id > 0) {
+        const embeddedAction = (item as { action?: unknown }).action
+        refs.push({ id, action: typeof embeddedAction === 'string' && embeddedAction !== '' ? embeddedAction : customRuleActionOf(id) })
+      }
+    }
+  }
+  return refs
+}
+
+// 展示链：完整绑定列表（含禁用策略，标灰）+ 本策略，按 policy_id ASC。
+// 本策略条目以表单实时值为准（编辑中的 name/enabled 可能与服务端快照不同）。
+const buildDisplayChain = (caddyId: string): ChainEntry[] => {
+  const existing = (securityBindings.value[caddyId] || [])
+    .filter((b) => b.policy_id !== editingId.value)
+    .map((b): ChainEntry => ({ policyId: b.policy_id, name: b.name, enabled: b.enabled, isSelf: false }))
+  const self: ChainEntry = { policyId: editingId.value, name: form.value.name || '本策略', enabled: form.value.enabled, isSelf: true }
+  const all = [...existing, self]
+  all.sort((a, b) => (a.policyId ?? Number.MAX_SAFE_INTEGER) - (b.policyId ?? Number.MAX_SAFE_INTEGER))
+  return all
+}
+
+// 选择器单条规则元信息：绑定链、本策略落点（1-based）、是否因达 5 条上限而不可选。
+// 本策略已在绑定中的规则重选不新增绑定，永不受上限限制。
+const pickerMeta = (caddyId: string): { chain: ChainEntry[]; selfPos: number; wouldExceed: boolean } => {
+  const existing = securityBindings.value[caddyId] || []
+  const selfBound = editingId.value !== null && existing.some((b) => b.policy_id === editingId.value)
+  const chain = buildDisplayChain(caddyId)
+  return {
+    chain,
+    selfPos: chain.findIndex((e) => e.isSelf) + 1,
+    wouldExceed: !selfBound && existing.length >= MAX_POLICIES_PER_RULE,
+  }
+}
+
+// 冲突检测视图：仅启用策略参与（禁用策略不生成配置）；
+// 服务端快照中本策略的条目被移除，以表单实时值替代
+interface ConflictPolicyView {
+  id: number | null
+  name: string
+  enabled: boolean
+  mode: string
+  ipAclEnabled: boolean
+  ipAclMode: string
+  crsGroups: string[]
+  customRefs: CustomRuleRef[]
+}
+
+const buildConflictChain = (caddyId: string): ConflictPolicyView[] => {
+  const serverPolicies = (ruleBoundPolicies.value[caddyId] || [])
+    .filter((p) => p.id !== editingId.value)
+    .map((p): ConflictPolicyView => ({
+      id: p.id,
+      name: p.name,
+      enabled: p.enabled,
+      mode: p.mode,
+      ipAclEnabled: p.ip_acl_enabled,
+      ipAclMode: p.ip_acl_mode,
+      crsGroups: normalizeCrsGroups(parseUnknownStringList(p.crs_rule_groups)),
+      customRefs: parseCustomRuleRefs(p.custom_rules),
+    }))
+  const self: ConflictPolicyView = {
+    id: editingId.value,
+    name: form.value.name || '本策略',
+    enabled: form.value.enabled,
+    mode: form.value.mode,
+    ipAclEnabled: form.value.ip_acl_enabled,
+    ipAclMode: form.value.ip_acl_mode,
+    crsGroups: crsRuleGroups.value,
+    customRefs: selectedCustomRules.value.map((id) => ({ id, action: customRuleActionOf(id) })),
+  }
+  const all = [...serverPolicies, self]
+  all.sort((a, b) => (a.id ?? Number.MAX_SAFE_INTEGER) - (b.id ?? Number.MAX_SAFE_INTEGER))
+  return all
+}
+
+// 四类绑定冲突提示（client-side 计算，规则完整绑定链 = 现有 + 本策略）：
+// (1) 绑定策略间 CRS 规则组重叠；(2) 免检测/白名单型策略夹在拦截策略中间；
+// (3) 前位策略含放行型自定义规则 vs 后位策略含拦截型；(4) 自定义规则 ID 跨策略重复
+const computeBindingConflicts = (chain: ConflictPolicyView[]): string[] => {
+  const hints: string[] = []
+  const active = chain.filter((p) => p.enabled)
+  if (active.length < 2) return hints
+
+  // (1) CRS 规则组重叠：空数组 = 加载全部规则 → 与任何选择重叠；mode=off 的策略不加载 CRS
+  const wafActive = active.filter((p) => p.mode !== 'off')
+  for (let i = 0; i < wafActive.length; i++) {
+    for (let j = i + 1; j < wafActive.length; j++) {
+      const a = wafActive[i]
+      const b = wafActive[j]
+      if (!a || !b) continue
+      let overlap: string[]
+      if (a.crsGroups.length === 0 && b.crsGroups.length === 0) overlap = ['全部规则组']
+      else if (a.crsGroups.length === 0) overlap = b.crsGroups
+      else if (b.crsGroups.length === 0) overlap = a.crsGroups
+      else overlap = a.crsGroups.filter((g) => b.crsGroups.includes(g))
+      if (overlap.length > 0) {
+        const shown = overlap.slice(0, 3).join('、')
+        hints.push(`「${a.name}」与「${b.name}」加载了相同的 CRS 规则组（${shown}${overlap.length > 3 ? ' 等' : ''}），同一请求将被重复检测，建议只保留一个`)
+      }
+    }
+  }
+
+  // (2) 免检测/白名单型策略夹在拦截型策略中间：免检测/白名单仅作用于自身引擎，
+  // 不会为前后策略放行流量（各策略引擎独立判定、互不影响），位置安排不影响拦截效果
+  const isBlocking = (p: ConflictPolicyView): boolean => p.mode === 'blocking'
+  const isBypassLike = (p: ConflictPolicyView): boolean => p.ipAclEnabled && (p.ipAclMode === 'bypass' || p.ipAclMode === 'allow')
+  active.forEach((p, i) => {
+    if (!isBypassLike(p)) return
+    const hasBlockingBefore = active.slice(0, i).some(isBlocking)
+    const hasBlockingAfter = active.slice(i + 1).some(isBlocking)
+    if (hasBlockingBefore && hasBlockingAfter) {
+      hints.push(`「${p.name}」为${p.ipAclMode === 'bypass' ? '免检测' : '白名单'}模式且夹在拦截策略中间：免检测/白名单仅作用于自身引擎，不会为前后策略放行流量，各策略引擎独立判定、位置不影响拦截效果；如需对特定来源整体放行，请使用免检测名单`)
+    }
+  })
+
+  // (3) 前位策略含放行型（pass）自定义规则，后位策略含拦截型（block）：pass 不阻断请求、
+  // 仅跳过本策略引擎内的匹配，后位拦截不受影响；顺序上真正需注意的是前位拦截策略
+  // 一旦命中即中断整条链，后位策略只处理前位放行的流量
+  const hasAllowRule = (p: ConflictPolicyView): boolean => p.customRefs.some((r) => r.action === 'pass')
+  const hasDenyRule = (p: ConflictPolicyView): boolean => p.customRefs.some((r) => r.action === 'block')
+  for (let i = 0; i < active.length; i++) {
+    const earlier = active[i]
+    if (!earlier || !hasAllowRule(earlier)) continue
+    for (let j = i + 1; j < active.length; j++) {
+      const later = active[j]
+      if (!later || !hasDenyRule(later)) continue
+      hints.push(`「${earlier.name}」的放行型自定义规则仅在本策略引擎内跳过匹配、不阻断请求，「${later.name}」的拦截型规则仍会独立执行；需注意前位拦截策略一旦命中将中断整条链，后位策略只处理前位放行的流量`)
+      break
+    }
+  }
+
+  // (4) 自定义规则 ID 跨策略重复引用 → 同一请求重复计分/处理
+  const idOwners = new Map<number, string[]>()
+  active.forEach((p) => {
+    const seen = new Set<number>()
+    p.customRefs.forEach((r) => {
+      if (seen.has(r.id)) return
+      seen.add(r.id)
+      const owners = idOwners.get(r.id) ?? []
+      owners.push(p.name)
+      idOwners.set(r.id, owners)
+    })
+  })
+  idOwners.forEach((owners, ruleId) => {
+    if (owners.length <= 1) return
+    const ruleName = allCustomRules.value.find((r) => r.id === ruleId)?.name || `#${ruleId}`
+    hints.push(`自定义规则「${ruleName}」被 ${owners.map((n) => `「${n}」`).join('、')} 重复引用，同一请求会被重复计分/处理，建议只保留一个`)
+  })
+
+  return hints
+}
+
+// Step 4 已关联规则的逐条视图：绑定链 + 本策略落点 + 拦截页面生效标注 + 冲突提示
+const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddyId) => {
+  const rule = allRules.value.find((r) => r.caddy_id === caddyId)
+  const chain = buildDisplayChain(caddyId)
+  const selfIndex = chain.findIndex((e) => e.isSelf)
+  const firstEnabled = chain.find((e) => e.enabled)
+  return {
+    caddyId,
+    name: rule?.name || caddyId,
+    domain: rule?.domain || '',
+    listenPort: rule?.listen_port ?? 0,
+    chain,
+    selfPosition: selfIndex + 1,
+    selfBlockPageActive: form.value.enabled && firstEnabled?.isSelf === true,
+    mergedCount: chain.length,
+    showPerfTip: chain.length > PERF_POLICY_THRESHOLD,
+    hints: computeBindingConflicts(buildConflictChain(caddyId)),
+  }
 }))
 
 const openRulePicker = (): void => {
@@ -786,6 +1079,8 @@ const openRulePicker = (): void => {
 const confirmRulePicker = (): void => {
   boundRules.value = [...pickerSelected.value]
   rulePickerVisible.value = false
+  // 新选中的规则需要绑定明细来计算冲突提示（步骤内已选中规则由 watch 覆盖）
+  void ensureBindingDetails(boundRules.value)
 }
 
 const removeBoundRule = (caddyId: string): void => {
@@ -863,6 +1158,7 @@ const resetWizard = () => {
   currentStep.value = WIZARD_STEP.BASIC
   editingId.value = null
   rulePickerVisible.value = false
+  ruleBoundPolicies.value = {}
 }
 
 const beforeWizardClose = (done: () => void): void => {
@@ -881,6 +1177,25 @@ const handleSave = async () => {
   }
   saving.value = true
   try {
+    // v2.2.0 上限守卫（SC-BIND-02 配套）：POST bind 为 additive 且服务端不强制上限
+    //（上限由 PUT /security/rules/:caddy_id/policies 强制），本流程的 5 条闸门在客户端。
+    // 保存前刷新绑定快照，避免并发会话下用过期数据放行超限绑定。
+    try {
+      const bindRes = await request.get<APIResponse<Record<string, BindingInfo[]>>>('/security/bindings')
+      securityBindings.value = bindRes.data || {}
+    } catch { /* 快照刷新失败时用已有数据兜底守卫 */ }
+    const added = boundRules.value.filter((id) => !originalBoundRules.value.includes(id))
+    const removed = originalBoundRules.value.filter((id) => !boundRules.value.includes(id))
+    const overLimit = added.filter((caddyId) => {
+      const siblings = (securityBindings.value[caddyId] || []).filter((b) => b.policy_id !== editingId.value)
+      return siblings.length >= MAX_POLICIES_PER_RULE
+    })
+    if (overLimit.length > 0) {
+      const names = overLimit.map((id) => allRules.value.find((r) => r.caddy_id === id)?.name || id).join('、')
+      ElMessage.error(`以下规则已达 5 条绑定上限，无法继续关联：${names}`)
+      currentStep.value = WIZARD_STEP.BINDINGS
+      return
+    }
     // 名单保留语义（与 ip_acl_list 对齐）：关闭开关不再清空已配置的名单，保存时始终
     // 回传当前名单内容，避免"关掉开关再打开"丢数据；ip_blacklist 本页不下发，后端
     // 指针语义自动保留原值。注意：后端按"名单非空即生效"发射，信任名单/区域控制
@@ -918,8 +1233,10 @@ const handleSave = async () => {
       if (!createdId) throw new Error('创建策略响应缺少 id')
       editingId.value = createdId
     }
-    const added = boundRules.value.filter((id) => !originalBoundRules.value.includes(id))
-    const removed = originalBoundRules.value.filter((id) => !boundRules.value.includes(id))
+    // v2.2.0 多策略绑定保存组合（SC-BIND-02）：新增规则走 additive POST bind（仅
+    // INSERT OR IGNORE 本策略一行，绝不动该规则的兄弟绑定）；取消选择的规则只
+    // DELETE 解绑本策略一行。规则的完整绑定列表不经本对话框改写——PUT 全量替换
+    // 需要持有兄弟绑定快照，在本入口属于危险且无必要的写法。
     try {
       await Promise.all([
         ...added.map((caddyId) => request.post(`/security/policies/${editingId.value}/bind`, { rule_caddy_id: caddyId })),
@@ -1030,7 +1347,23 @@ onMounted(async () => {
 .rule-picker-placeholder { color: #a8abb2; }
 .rule-picker-arrow { color: #a8abb2; font-size: 12px; }
 
-.bound-rule-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.bound-rule-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.bound-rule-row { border: 1px solid #ebeef5; border-radius: 4px; padding: 8px 10px; }
+.bound-rule-head { display: flex; align-items: center; gap: 8px; }
+.bound-rule-name { font-weight: 500; color: #1f2937; font-size: 13px; }
+.bound-rule-meta { font-size: 12px; color: #9ca3af; font-family: monospace; }
+.bound-rule-remove { margin-left: auto; }
+.bound-rule-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.bound-rule-alert { margin-top: 8px; }
+
+/* v2.2.0 绑定顺序 chip：本策略高亮（蓝），禁用策略灰显删除线 */
+.binding-order-chip { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb; }
+.binding-order-chip.is-self { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; font-weight: 500; }
+.binding-order-chip.is-disabled { opacity: 0.55; text-decoration: line-through; }
+
+.rule-binding-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 4px 24px; }
+.rule-binding-landing { font-size: 12px; color: #6b7280; }
+.rule-binding-limit { font-size: 12px; color: #e6a23c; }
 
 .rule-picker-search { margin-bottom: 12px; }
 
@@ -1053,7 +1386,8 @@ onMounted(async () => {
 
 .rule-picker-item {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   padding: 4px 12px;
   border-bottom: 1px solid #f3f4f6;
 }

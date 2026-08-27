@@ -343,7 +343,7 @@ func TestGetAllSecurityBindings_scanFailureSkipsZeroValueBinding(t *testing.T) {
 	}
 	var resp struct {
 		Code int `json:"code"`
-		Data map[string]struct {
+		Data map[string][]struct {
 			PolicyID int `json:"policy_id"`
 		} `json:"data"`
 	}
@@ -356,8 +356,9 @@ func TestGetAllSecurityBindings_scanFailureSkipsZeroValueBinding(t *testing.T) {
 	if len(resp.Data) != 1 {
 		t.Fatalf("bindings=%+v, want only the healthy row（坏行不得写入零值绑定）", resp.Data)
 	}
-	if entry, ok := resp.Data["lb_ok"]; !ok || entry.PolicyID != 7 {
-		t.Fatalf("lb_ok=%+v, want policy_id=7", entry)
+	entries, ok := resp.Data["lb_ok"]
+	if !ok || len(entries) != 1 || entries[0].PolicyID != 7 {
+		t.Fatalf("lb_ok=%+v, want single entry policy_id=7", entries)
 	}
 }
 

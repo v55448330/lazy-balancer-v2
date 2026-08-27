@@ -11,10 +11,12 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1577,4 +1579,154 @@ func TestImportConfigBackup_skips_empty_domain_rule_before_row_validation(t *tes
 			t.Fatalf("status=%d body=%s, want 400 invalid port", response.Code, response.Body.String())
 		}
 	})
+}
+
+// SC-BAK-01: Config backup export → import round-trip preserves multi-row
+// security_policy_bindings (one rule → multiple policies). Post-import
+// validation passes and policy_id ordering is queryable via the same SELECT
+// the runtime uses (ORDER BY policy_id ASC).
+func TestConfigBackup_multiRowBindingsRoundTrip(t *testing.T) {
+	// Given: a primary with policies 1-5, three rules, and multi-row bindings:
+	//   lb_multi → policies {1, 3, 5}
+	//   lb_single → policy {1}
+	//   lb_none → no bindings
+	// Policies 2 and 4 exist but are unbound.
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec(`INSERT INTO users (username, password_hash, role) VALUES ('keep', 'hash', 'admin')`); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES
+		('lb_multi','multi','http','multi.example.com',80,1),
+		('lb_single','single','http','single.example.com',81,1),
+		('lb_none','none','http','none.example.com',82,1)`); err != nil {
+		t.Fatalf("seed rules: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,enabled) VALUES
+		('lb_multi','127.0.0.1',9000,1),
+		('lb_single','127.0.0.1',9001,1),
+		('lb_none','127.0.0.1',9002,1)`); err != nil {
+		t.Fatalf("seed upstreams: %v", err)
+	}
+	for _, id := range []int{1, 2, 3, 4, 5} {
+		if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,enabled) VALUES (?,?,'blocking',1)`, id, fmt.Sprintf("policy-%d", id)); err != nil {
+			t.Fatalf("seed policy %d: %v", id, err)
+		}
+	}
+	for _, pid := range []int{1, 3, 5} {
+		if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_multi',?)`, pid); err != nil {
+			t.Fatalf("seed multi binding %d: %v", pid, err)
+		}
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_single',1)`); err != nil {
+		t.Fatalf("seed single binding: %v", err)
+	}
+	router := gin.New()
+	router.GET("/config/export", h.ExportConfigBackup)
+	router.POST("/config/import", h.ImportConfigBackup)
+
+	// When: export
+	exportResponse := httptest.NewRecorder()
+	router.ServeHTTP(exportResponse, httptest.NewRequest(http.MethodGet, "/config/export", nil))
+	if exportResponse.Code != http.StatusOK {
+		t.Fatalf("export status=%d body=%.200s", exportResponse.Code, exportResponse.Body.String())
+	}
+	backup := exportResponse.Body.String()
+
+	// Given: destructive change — wipe all security tables
+	if _, err := db.DB.Exec("DELETE FROM security_policy_bindings; DELETE FROM security_policies"); err != nil {
+		t.Fatalf("destructive change: %v", err)
+	}
+
+	// When: import
+	importResponse := httptest.NewRecorder()
+	importRequest := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	importRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(importResponse, importRequest)
+
+	// Then: import succeeded
+	if importResponse.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%.300s", importResponse.Code, importResponse.Body.String())
+	}
+	// Exact row set per rule, ordered by policy_id ASC (same SELECT as runtime)
+	multiBindings := queryBackupBindingRows(t, "lb_multi")
+	if !reflect.DeepEqual(multiBindings, []int{1, 3, 5}) {
+		t.Fatalf("lb_multi bindings=%v, want [1 3 5]", multiBindings)
+	}
+	singleBindings := queryBackupBindingRows(t, "lb_single")
+	if !reflect.DeepEqual(singleBindings, []int{1}) {
+		t.Fatalf("lb_single bindings=%v, want [1]", singleBindings)
+	}
+	noneBindings := queryBackupBindingRows(t, "lb_none")
+	if len(noneBindings) != 0 {
+		t.Fatalf("lb_none bindings=%v, want empty", noneBindings)
+	}
+	var totalBindings int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_policy_bindings").Scan(&totalBindings); err != nil {
+		t.Fatal(err)
+	}
+	if totalBindings != 4 {
+		t.Fatalf("total bindings=%d, want 4 (3 multi + 1 single)", totalBindings)
+	}
+}
+
+// SC-BAK-01 (dangling): Backup import validates binding references and rejects
+// rows pointing to non-existent policies (R49 C-#2). Pin this behavior.
+func TestConfigBackup_danglingBindingRejected(t *testing.T) {
+	// Given: a backup where lb_dangle binds to policy 1 (valid) and policy 99
+	// (no such row in security_policies).
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"lb_rules": {
+			{"caddy_id": "lb_dangle", "name": "dangle", "protocol": "http", "domain": "dangle.example.com", "listen_port": 80, "enabled": 1},
+		},
+		"upstreams": {
+			{"rule_id": "lb_dangle", "host": "127.0.0.1", "port": 9000, "weight": 1, "enabled": 1},
+		},
+		"security_policies": {
+			{"id": 1, "name": "real", "mode": "blocking", "enabled": 1},
+		},
+		"security_policy_bindings": {
+			{"rule_caddy_id": "lb_dangle", "policy_id": 1},
+			{"rule_caddy_id": "lb_dangle", "policy_id": 99},
+		},
+	})
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+
+	// When
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+
+	// Then: import rejected with 400 due to dangling policy reference
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("import status=%d body=%s, want 400 (dangling binding rejected)", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "不存在的安全策略") {
+		t.Fatalf("import error=%s, want contains 不存在的安全策略", response.Body.String())
+	}
+}
+
+func queryBackupBindingRows(t *testing.T, ruleCaddyID string) []int {
+	t.Helper()
+	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id ASC", ruleCaddyID)
+	if err != nil {
+		t.Fatalf("query bindings for %s: %v", ruleCaddyID, err)
+	}
+	defer rows.Close()
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan binding: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate bindings: %v", err)
+	}
+	return ids
 }
