@@ -137,6 +137,15 @@
               </el-select>
               <div class="form-tip-line">选择后仅加载所选规则组，留空加载全部 CRS 规则</div>
             </el-form-item>
+            <!-- 跨策略 CRS 规则组重复实时警告（随当前选择重算） -->
+            <el-alert
+              v-if="wafStepCrsAlert"
+              type="warning"
+              :closable="false"
+              show-icon
+              :title="wafStepCrsAlert"
+              class="wizard-alert"
+            />
             <el-alert
               v-if="hasResponsePhaseGroupWithoutCheck"
               type="warning"
@@ -206,6 +215,15 @@
               </el-form-item>
             </template>
           </el-form>
+          <!-- 跨策略允许/信任 × 黑名单地址级冲突实时警告（覆盖上方访问控制与信任名单） -->
+          <el-alert
+            v-if="ipStepAclAlert"
+            type="warning"
+            :closable="false"
+            show-icon
+            :title="ipStepAclAlert"
+            class="wizard-alert"
+          />
           <el-divider content-position="left" class="acl-divider">区域控制</el-divider>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="启用">
@@ -471,7 +489,7 @@ import { useAuthStore } from '@/stores/auth'
 import type { APIResponse, UserListItem } from '@/types'
 
 interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string }
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_blacklist?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
 interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean }
@@ -534,6 +552,9 @@ const editingId = ref<number | null>(null)
 const ipACLList = ref<string[]>([])
 const ipWhitelist = ref<string[]>([])
 const ipWhitelistEnabled = ref(false)
+// 本策略既有 ip_blacklist（仅用于跨策略冲突比较；本对话框不编辑该字段，
+// 保存时由后端指针语义自动保留原值）
+const ipBlacklistSelf = ref<string[]>([])
 const geoipCountries = ref<string[]>([])
 const crsRuleGroups = ref<string[]>([])
 const crsExcludedRules = ref<string[]>([])
@@ -886,6 +907,26 @@ const parseUnknownStringList = (raw: unknown): string[] => {
   return []
 }
 
+// IP 名单归一化：去空白、去重。v1 仅做精确字符串匹配——10.0.0.0/8 与 10.0.0.1
+// 之类的 CIDR 包含关系不在本期范围（跨策略冲突检测用）。
+const normalizeIpList = (values: string[]): string[] => [...new Set(values.map((v) => v.trim()).filter((v) => v !== ''))]
+
+// 策略 IP 名单按语义分两侧：允许侧 = 白名单/免检测模式下的 ACL 列表 + 信任名单；
+// 拒绝侧 = 黑名单模式下的 ACL 列表 + 独立 ip_blacklist 字段（由策略页外入口维护）。
+// 供 Step 4 冲突检测与 WAF/IP 步骤实时警告共用，保证两处口径一致。
+const ipAclSideEntries = (mode: string, aclEnabled: boolean, aclList: string[], whitelist: string[], blacklist: string[]): { allow: string[]; deny: string[] } => {
+  const allow: string[] = []
+  if (aclEnabled && (mode === 'allow' || mode === 'bypass')) allow.push(...aclList)
+  allow.push(...whitelist)
+  const deny: string[] = []
+  if (aclEnabled && mode === 'deny') deny.push(...aclList)
+  deny.push(...blacklist)
+  return { allow: normalizeIpList(allow), deny: normalizeIpList(deny) }
+}
+
+// 本策略（表单实时值）的允许/拒绝两侧名单
+const selfIpAclSides = computed(() => ipAclSideEntries(form.value.ip_acl_mode, form.value.ip_acl_enabled, ipACLList.value, ipWhitelist.value, ipBlacklistSelf.value))
+
 const customRuleActionOf = (id: number): string => allCustomRules.value.find((r) => r.id === id)?.action ?? ''
 
 // 自定义规则引用解析：兼容纯 ID 数组与内嵌对象（{id, action}）两种存储形状；
@@ -950,21 +991,34 @@ interface ConflictPolicyView {
   ipAclMode: string
   crsGroups: string[]
   customRefs: CustomRuleRef[]
+  ipAllowEntries: string[]
+  ipDenyEntries: string[]
 }
 
 const buildConflictChain = (caddyId: string): ConflictPolicyView[] => {
   const serverPolicies = (ruleBoundPolicies.value[caddyId] || [])
     .filter((p) => p.id !== editingId.value)
-    .map((p): ConflictPolicyView => ({
-      id: p.id,
-      name: p.name,
-      enabled: p.enabled,
-      mode: p.mode,
-      ipAclEnabled: p.ip_acl_enabled,
-      ipAclMode: p.ip_acl_mode,
-      crsGroups: normalizeCrsGroups(parseUnknownStringList(p.crs_rule_groups)),
-      customRefs: parseCustomRuleRefs(p.custom_rules),
-    }))
+    .map((p): ConflictPolicyView => {
+      // /security/rules/:id/policy 不携带 IP 名单——按 id 回联策略列表快照
+      //（PolicySummary 含 ip_acl_list/ip_whitelist/ip_blacklist）
+      const summary = policies.value.find((sp) => sp.id === p.id)
+      const sides = summary
+        ? ipAclSideEntries(summary.ip_acl_mode, summary.ip_acl_enabled, parseJsonList(summary.ip_acl_list), parseJsonList(summary.ip_whitelist), parseJsonList(summary.ip_blacklist))
+        : { allow: [] as string[], deny: [] as string[] }
+      return {
+        id: p.id,
+        name: p.name,
+        enabled: p.enabled,
+        mode: p.mode,
+        ipAclEnabled: p.ip_acl_enabled,
+        ipAclMode: p.ip_acl_mode,
+        crsGroups: normalizeCrsGroups(parseUnknownStringList(p.crs_rule_groups)),
+        customRefs: parseCustomRuleRefs(p.custom_rules),
+        ipAllowEntries: sides.allow,
+        ipDenyEntries: sides.deny,
+      }
+    })
+  const selfSides = selfIpAclSides.value
   const self: ConflictPolicyView = {
     id: editingId.value,
     name: form.value.name || '本策略',
@@ -974,15 +1028,18 @@ const buildConflictChain = (caddyId: string): ConflictPolicyView[] => {
     ipAclMode: form.value.ip_acl_mode,
     crsGroups: crsRuleGroups.value,
     customRefs: selectedCustomRules.value.map((id) => ({ id, action: customRuleActionOf(id) })),
+    ipAllowEntries: selfSides.allow,
+    ipDenyEntries: selfSides.deny,
   }
   const all = [...serverPolicies, self]
   all.sort((a, b) => (a.id ?? Number.MAX_SAFE_INTEGER) - (b.id ?? Number.MAX_SAFE_INTEGER))
   return all
 }
 
-// 四类绑定冲突提示（client-side 计算，规则完整绑定链 = 现有 + 本策略）：
+// 五类绑定冲突提示（client-side 计算，规则完整绑定链 = 现有 + 本策略）：
 // (1) 绑定策略间 CRS 规则组重叠；(2) 免检测/白名单型策略夹在拦截策略中间；
-// (3) 前位策略含放行型自定义规则 vs 后位策略含拦截型；(4) 自定义规则 ID 跨策略重复
+// (3) 前位策略含放行型自定义规则 vs 后位策略含拦截型；(4) 自定义规则 ID 跨策略重复；
+// (5) 地址级允许×拒绝冲突（一侧允许/信任名单条目出现在另一侧黑名单中）
 const computeBindingConflicts = (chain: ConflictPolicyView[]): string[] => {
   const hints: string[] = []
   const active = chain.filter((p) => p.enabled)
@@ -1054,8 +1111,121 @@ const computeBindingConflicts = (chain: ConflictPolicyView[]): string[] => {
     hints.push(`自定义规则「${ruleName}」被 ${owners.map((n) => `「${n}」`).join('、')} 重复引用，同一请求会被重复计分/处理，建议只保留一个`)
   })
 
+  // (5) 地址级允许×拒绝冲突：一侧策略的允许/信任名单条目出现在另一侧策略的黑名单中——
+  // 允许/信任不跨策略生效，该地址仍会被黑名单侧策略拦截。与 WAF/IP 步骤实时警告同源
+  //（ipAclSideEntries），仅精确字符串匹配，不展开 CIDR 包含关系。
+  for (let i = 0; i < active.length; i++) {
+    for (let j = 0; j < active.length; j++) {
+      if (i === j) continue
+      const allowSide = active[i]
+      const denySide = active[j]
+      if (!allowSide || !denySide) continue
+      const overlap = allowSide.ipAllowEntries.filter((e) => denySide.ipDenyEntries.includes(e))
+      if (overlap.length > 0) {
+        const shown = overlap.slice(0, 2).join('、')
+        hints.push(`地址 ${shown}${overlap.length > 2 ? ' 等' : ''} 在「${allowSide.name}」的允许/信任名单中、同时在「${denySide.name}」的黑名单中——允许/信任不跨策略生效，该地址仍会被「${denySide.name}」拦截`)
+      }
+    }
+  }
+
   return hints
 }
+
+// ================= 跨策略重复/冲突的实时步骤内警告（WAF/IP 步骤） =================
+// 与 Step 4 computeBindingConflicts 同源语义，但比较范围不同：
+// - 比较集合 = 与本策略当前绑定上下文（boundRules，编辑时含服务端既有绑定）共享
+//   ≥1 条规则的其他启用策略（与 buildDisplayChain/pickerMeta 同数据源 securityBindings）；
+// - 若该集合为空（新建未选规则），退化为全部其他启用策略，文案用「若绑定同一规则」。
+// 数据源：策略列表接口不携带 crs_rule_groups 明细（ruleBoundPolicies 又缺 IP 名单），
+// 因此对话框打开时按需拉取各启用策略的详情（镜像 ensureBindingDetails 的 allSettled
+// 模式，对话框关闭时清空），一处数据同时服务 CRS 与 IP 两类步骤内警告。
+
+interface PeerPolicyView { id: number; name: string; mode: string; crsGroups: string[]; allowEntries: string[]; denyEntries: string[] }
+const peerPolicyViews = ref<PeerPolicyView[]>([])
+
+const loadPeerPolicyViews = async (openSeq: number): Promise<void> => {
+  const targets = policies.value.filter((p) => p.enabled && p.id !== editingId.value)
+  if (targets.length === 0) { peerPolicyViews.value = []; return }
+  const results = await Promise.allSettled(
+    targets.map((p) => request.get<APIResponse<{ policy: PolicyDetail; bindings: string[] }>>(`/security/policies/${p.id}`)),
+  )
+  // 过期返回丢弃（同 openDialog 详情 GET 的序列号守卫）
+  if (openSeq !== policyDialogOpenSeq) return
+  const views: PeerPolicyView[] = []
+  results.forEach((res) => {
+    if (res.status !== 'fulfilled') return
+    const d = res.value.data?.policy
+    if (!d) return
+    const sides = ipAclSideEntries(d.ip_acl_mode, d.ip_acl_enabled, parseJsonList(d.ip_acl_list), parseJsonList(d.ip_whitelist), parseJsonList(d.ip_blacklist))
+    views.push({ id: d.id, name: d.name, mode: d.mode, crsGroups: normalizeCrsGroups(parseJsonList(d.crs_rule_groups)), allowEntries: sides.allow, denyEntries: sides.deny })
+  })
+  peerPolicyViews.value = views
+}
+
+// 与本策略共享 ≥1 条绑定规则的其他策略 ID（含禁用；禁用策略在比较时被过滤，
+// 与 computeBindingConflicts 的 active 口径一致）
+const coBoundPeerIds = computed<Set<number>>(() => {
+  const ids = new Set<number>()
+  for (const caddyId of boundRules.value) {
+    for (const b of securityBindings.value[caddyId] || []) {
+      if (b.policy_id !== editingId.value) ids.add(b.policy_id)
+    }
+  }
+  return ids
+})
+
+const comparisonContext = computed<{ peers: PeerPolicyView[]; coBound: boolean }>(() => {
+  const coIds = coBoundPeerIds.value
+  const coPeers = peerPolicyViews.value.filter((p) => coIds.has(p.id))
+  if (coPeers.length > 0) return { peers: coPeers, coBound: true }
+  // 有共绑策略但均已禁用 → 不产生警告（同 active 口径）
+  if (coIds.size > 0) return { peers: [], coBound: true }
+  return { peers: peerPolicyViews.value, coBound: false }
+})
+
+// WAF 步骤：CRS 规则组与其他策略重复的实时警告。空数组 = 加载全部规则组
+//（与 computeBindingConflicts 同语义），随当前选择实时重算——修复「有时候不显示」。
+const wafStepCrsAlert = computed<string>(() => {
+  if (form.value.mode === 'off') return ''
+  const { peers, coBound } = comparisonContext.value
+  const selfGroups = crsRuleGroups.value
+  const dups: Array<{ name: string; overlap: string[] }> = []
+  for (const peer of peers) {
+    if (peer.mode === 'off') continue
+    let overlap: string[]
+    if (selfGroups.length === 0 && peer.crsGroups.length === 0) overlap = ['全部规则组']
+    else if (selfGroups.length === 0) overlap = peer.crsGroups
+    else if (peer.crsGroups.length === 0) overlap = selfGroups
+    else overlap = selfGroups.filter((g) => peer.crsGroups.includes(g))
+    if (overlap.length > 0) dups.push({ name: peer.name, overlap })
+  }
+  if (dups.length === 0) return ''
+  const names = dups.slice(0, 2).map((d) => `「${d.name}」`).join('、') + (dups.length > 2 ? ` 等 ${dups.length} 条` : '')
+  let overlapUnion = [...new Set(dups.flatMap((d) => d.overlap))]
+  if (overlapUnion.includes('全部规则组')) overlapUnion = ['全部规则组']
+  const overlapShown = overlapUnion.slice(0, 3).join('、') + (overlapUnion.length > 3 ? ' 等' : '')
+  return coBound
+    ? `${names}已选择相同的 CRS 规则组（${overlapShown}），绑定到同一规则时将被重复检测，建议只保留一个`
+    : `${names}也选择了相同的 CRS 规则组（${overlapShown}），若二者绑定同一规则将重复检测`
+})
+
+// IP 步骤：允许/信任名单 × 黑名单的地址级冲突实时警告——允许/信任不跨策略生效。
+const ipStepAclAlert = computed<string>(() => {
+  const { peers } = comparisonContext.value
+  const { allow: selfAllow, deny: selfDeny } = selfIpAclSides.value
+  if (selfAllow.length === 0 && selfDeny.length === 0) return ''
+  const items: string[] = []
+  for (const peer of peers) {
+    for (const entry of selfAllow.filter((e) => peer.denyEntries.includes(e))) {
+      items.push(`地址 ${entry} 在「本策略」的允许/信任名单中、同时在「${peer.name}」的黑名单中——允许/信任不跨策略生效，该地址仍会被「${peer.name}」拦截`)
+    }
+    for (const entry of selfDeny.filter((e) => peer.allowEntries.includes(e))) {
+      items.push(`地址 ${entry} 在「本策略」的黑名单中、同时在「${peer.name}」的允许/信任名单中——允许/信任不跨策略生效，该地址仍会被「本策略」拦截`)
+    }
+  }
+  if (items.length === 0) return ''
+  return items.slice(0, 2).join('；') + (items.length > 2 ? `；共 ${items.length} 条类似冲突` : '')
+})
 
 // Step 4 已关联规则的逐条视图：绑定链 + 本策略落点 + 拦截页面生效标注 + 冲突提示
 const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddyId) => {
@@ -1127,6 +1297,7 @@ async function openDialog(row?: PolicySummary) {
     ipACLList.value = parseJsonList(d.ip_acl_list)
     ipWhitelist.value = parseJsonList(d.ip_whitelist)
     ipWhitelistEnabled.value = ipWhitelist.value.length > 0
+    ipBlacklistSelf.value = parseJsonList(d.ip_blacklist)
     geoipCountries.value = parseJsonList(d.geoip_countries)
     form.value.geoip_enabled = geoipCountries.value.length > 0
       crsRuleGroups.value = normalizeCrsGroups(parseJsonList(d.crs_rule_groups))
@@ -1155,11 +1326,14 @@ async function openDialog(row?: PolicySummary) {
   originalBoundRules.value = [...boundRules.value]
   currentStep.value = WIZARD_STEP.BASIC
   dialogVisible.value = true
+  // 拉取其他启用策略的明细用于 WAF/IP 步骤的跨策略重复警告（列表接口不含
+  // crs_rule_groups 明细；镜像 ensureBindingDetails 的懒加载模式，关闭时清空）
+  void loadPeerPolicyViews(openSeq)
 }
 
 const resetForm = () => {
   form.value = defaultForm()
-  ipACLList.value = []; ipWhitelist.value = []; ipWhitelistEnabled.value = false; geoipCountries.value = []; crsRuleGroups.value = []; crsExcludedRules.value = []; selectedCustomRules.value = []; boundRules.value = []; editingId.value = null
+  ipACLList.value = []; ipWhitelist.value = []; ipWhitelistEnabled.value = false; ipBlacklistSelf.value = []; geoipCountries.value = []; crsRuleGroups.value = []; crsExcludedRules.value = []; selectedCustomRules.value = []; boundRules.value = []; editingId.value = null
 }
 
 const resetWizard = () => {
@@ -1167,6 +1341,7 @@ const resetWizard = () => {
   editingId.value = null
   rulePickerVisible.value = false
   ruleBoundPolicies.value = {}
+  peerPolicyViews.value = []
 }
 
 const beforeWizardClose = (done: () => void): void => {
@@ -1363,13 +1538,16 @@ onMounted(async () => {
 .bound-rule-remove { margin-left: auto; }
 .bound-rule-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .bound-rule-alert { margin-top: 8px; }
-/* 紧凑化 el-alert：默认 14px 标题 + 8px/16px 内边距在表单内过重，
-   统一收敛到 12px/1.5 的提示文本视觉，与本文件的 form-tip-line 一致。 */
-.bound-rule-alert :deep(.el-alert__content) { padding: 0; }
-.bound-rule-alert :deep(.el-alert__title) { font-size: 12px; line-height: 1.5; }
-.bound-rule-alert :deep(.el-alert__icon) { font-size: 14px; width: 14px; }
-.bound-rule-alert :deep(.el-alert__close-btn) { font-size: 12px; }
-.bound-rule-alert.el-alert { padding: 4px 10px; }
+.wizard-alert { margin-bottom: 12px; }
+/* 紧凑化 el-alert（Step 4 冲突提示与 WAF/IP 步骤实时警告共用）：默认 14px 标题 +
+   8px/16px 内边距在表单内过重，统一收敛到 12px/1.5 的提示文本视觉；max-width 对齐
+   表单控件列宽（弹窗 800px − label 100px − 内边距 ≈ 660px，取 640px），避免横贯弹窗。 */
+.bound-rule-alert, .wizard-alert { max-width: 640px; }
+.bound-rule-alert :deep(.el-alert__content), .wizard-alert :deep(.el-alert__content) { padding: 0; }
+.bound-rule-alert :deep(.el-alert__title), .wizard-alert :deep(.el-alert__title) { font-size: 12px; line-height: 1.5; }
+.bound-rule-alert :deep(.el-alert__icon), .wizard-alert :deep(.el-alert__icon) { font-size: 14px; width: 14px; }
+.bound-rule-alert :deep(.el-alert__close-btn), .wizard-alert :deep(.el-alert__close-btn) { font-size: 12px; }
+.bound-rule-alert.el-alert, .wizard-alert.el-alert { padding: 4px 10px; }
 
 /* v2.2.0 绑定顺序 chip：本策略高亮（蓝），禁用策略灰显删除线；
    显式 line-height + inline-flex 保证 chip 视觉高度 ≈ 18-20px（避免继承表单上下文行高撑高）。 */
