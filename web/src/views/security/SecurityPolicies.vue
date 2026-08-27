@@ -1363,6 +1363,13 @@ onMounted(async () => {
 .bound-rule-remove { margin-left: auto; }
 .bound-rule-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .bound-rule-alert { margin-top: 8px; }
+/* 紧凑化 el-alert：默认 14px 标题 + 8px/16px 内边距在表单内过重，
+   统一收敛到 12px/1.5 的提示文本视觉，与本文件的 form-tip-line 一致。 */
+.bound-rule-alert :deep(.el-alert__content) { padding: 0; }
+.bound-rule-alert :deep(.el-alert__title) { font-size: 12px; line-height: 1.5; }
+.bound-rule-alert :deep(.el-alert__icon) { font-size: 14px; width: 14px; }
+.bound-rule-alert :deep(.el-alert__close-btn) { font-size: 12px; }
+.bound-rule-alert.el-alert { padding: 4px 10px; }
 
 /* v2.2.0 绑定顺序 chip：本策略高亮（蓝），禁用策略灰显删除线；
    显式 line-height + inline-flex 保证 chip 视觉高度 ≈ 18-20px（避免继承表单上下文行高撑高）。 */
