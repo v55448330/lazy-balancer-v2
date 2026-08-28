@@ -51,6 +51,10 @@ func run() error {
 			logWriter = io.MultiWriter(os.Stdout, w)
 			defer w.Close()
 			runtimeLogFile = cfg.LogFile
+		} else {
+			// S-3：显式配置了 LOG_FILE 但打开失败必须可见——静默回落仅 stdout 会让
+			// 「配置了日志文件却是空的」无从排查。
+			log.Printf("log file %s could not be opened, falling back to stdout only: %v", cfg.LogFile, err)
 		}
 	}
 	log.SetOutput(services.NewApplicationLogWriter(&tzLogWriter{w: logWriter}))
@@ -236,7 +240,7 @@ func newRestartSignal() (<-chan struct{}, func()) {
 }
 
 type serverStopSignals struct {
-	quit         <-chan os.Signal
+	quit         chan os.Signal
 	restart      <-chan struct{}
 	serverErrors <-chan error
 }
@@ -244,6 +248,11 @@ type serverStopSignals struct {
 func waitForServerStop(server *http.Server, signals serverStopSignals) error {
 	select {
 	case <-signals.quit:
+		// S-4：消费到首个关停信号后立即停信号通道（先于 server.Shutdown）。
+		// 此前 signal.Stop 延迟到 run() 返回后的 defer 才执行，关停窗口内
+		// （Shutdown 最多 10s + 服务停止）到达的第二个信号会被通道缓冲吞掉、
+		// 随后被 Stop 丢弃，无法触发默认终止。
+		signal.Stop(signals.quit)
 	case <-signals.restart:
 	case err := <-signals.serverErrors:
 		return err

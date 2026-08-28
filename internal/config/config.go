@@ -57,7 +57,11 @@ func Load(path string) *Config {
 	// Load from config file if provided
 	if path != "" {
 		data, err := os.ReadFile(path)
-		if err == nil {
+		if err != nil {
+			// S-3：配置文件读取失败必须可见（与下方解析失败分支对称）——静默回落
+			// 默认值会让「指定了 -config 却没生效」排查无门。
+			log.Printf("config: failed to read config file %s (%v); using defaults", path, err)
+		} else {
 			// Try to parse as JSON (simple approach)
 			var fileCfg map[string]interface{}
 			if jerr := json.Unmarshal(data, &fileCfg); jerr != nil {

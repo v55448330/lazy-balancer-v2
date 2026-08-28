@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -745,6 +746,11 @@ func securityEventsIngestDeltaFrom(path string, from int64, archive bool) error 
 // lastWarnTime），偏移前进即重置立即告警；其他错误照常输出。
 func (t *securityEventsTailer) securityEventsRateLimitedWarn(err error) {
 	if t.failOffset < 0 || !strings.Contains(err.Error(), "scan window at offset") {
+		// S-2：非 F1 错误同样按同消息 60s 限流（与 S-1 同窗口）——审计目录缺失等
+		// 持久性失败不再每 2s tick 刷一条 warn，首条 warn 已暴露问题。
+		if !auditFailureShouldLog(err.Error()) {
+			return
+		}
 		Logf("warn", "security events ingestion: tick failed: %v", err)
 		return
 	}
@@ -759,8 +765,18 @@ func (t *securityEventsTailer) securityEventsRateLimitedWarn(err error) {
 // StartSecurityEventsIngestion tails the Coraza WAF audit log and ingests new
 // transactions into security_events until ctx is cancelled. Blocking; call
 // from a goroutine.
+// ensureAuditLogDir 创建审计日志所在目录（os.MkdirAll，幂等）。S-2：启动时调用
+// 一次——此前目录缺失时 tick 每 2s 建 audit.log 失败、永久刷屏且从不建目录。
+func ensureAuditLogDir() error {
+	return os.MkdirAll(filepath.Dir(auditLogPath), 0o755)
+}
+
 func StartSecurityEventsIngestion(ctx context.Context) {
 	tailer := securityEventsNewTailer(auditLogPath, securityEventsOffsetPath)
+	if err := ensureAuditLogDir(); err != nil {
+		// 仅创建失败时告警一次（后续 tick 的同消息失败已由 S-1 限流窗口覆盖）。
+		Logf("warn", "security events ingestion: create audit log dir %s failed: %v", filepath.Dir(auditLogPath), err)
+	}
 	Logf("info", "security events ingestion started: audit_log=%s offset_file=%s", auditLogPath, securityEventsOffsetPath)
 	ticker := time.NewTicker(securityEventsPollInterval)
 	defer ticker.Stop()

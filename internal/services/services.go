@@ -468,12 +468,16 @@ func (m *MetricsService) updateOverview(metrics parsedMetrics) {
 
 	// Get active rules count (fast read-only query)
 	// Round 35 B3: 错误必须显式处理，否则 DB 故障时 overview 三项指标静默归零。
-	var activeRules, totalRules int
+	// 查询失败时保留既有 overview 行中的前值（与 onlineNodes 分支同口径）：
+	// 此前变量零值初始化，日志声称 "keeping previous value" 实际写入 0。
+	activeRules, totalRules := m.overview.ActiveRules, m.overview.TotalRules
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE enabled = 1").Scan(&activeRules); err != nil {
-		log.Printf("updateOverview: query active rules failed: %v (keeping previous value=%d)", err, activeRules)
+		log.Printf("updateOverview: query active rules failed: %v (keeping previous value=%d)", err, m.overview.ActiveRules)
+		activeRules = m.overview.ActiveRules
 	}
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules").Scan(&totalRules); err != nil {
-		log.Printf("updateOverview: query total rules failed: %v (keeping previous value=%d)", err, totalRules)
+		log.Printf("updateOverview: query total rules failed: %v (keeping previous value=%d)", err, m.overview.TotalRules)
+		totalRules = m.overview.TotalRules
 	}
 
 	// 在线节点数口径与 ComputeNodeStatus 统一：nodes.status 只在注册/上报时写入、

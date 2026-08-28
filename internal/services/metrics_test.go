@@ -237,6 +237,41 @@ func TestMetricsService_storePerHostMetrics_returns_rule_query_error(t *testing.
 	}
 }
 
+func TestMetricsService_updateOverview_keepsPreviousCountsOnQueryFailure(t *testing.T) {
+	// Given：先用健康 DB 建立前值 overview（3 条规则、2 条启用）
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (name, protocol, listen_port, enabled) VALUES
+		('r1','http',8080,1), ('r2','http',8081,1), ('r3','tcp',9000,0)`); err != nil {
+		t.Fatalf("seed rules: %v", err)
+	}
+	service := &MetricsService{}
+	service.updateOverview(parsedMetrics{})
+	if got := service.GetOverview(); got.ActiveRules != 2 || got.TotalRules != 3 {
+		t.Fatalf("baseline overview=%+v, want ActiveRules=2 TotalRules=3", got)
+	}
+
+	// Stub COUNT 失败：关闭规则库（与 storePerHostMetrics 错误测试同模式）
+	if err := db.DB.Close(); err != nil {
+		t.Fatalf("close rule database: %v", err)
+	}
+
+	// When：COUNT 查询失败的 tick
+	service.updateOverview(parsedMetrics{})
+
+	// Then：overview 必须保留前值计数而非静默归零（日志声称 keeping previous value
+	// 时行为必须与日志一致）
+	got := service.GetOverview()
+	if got.ActiveRules != 2 {
+		t.Fatalf("active rules=%d, want 2 (previous value kept on COUNT failure)", got.ActiveRules)
+	}
+	if got.TotalRules != 3 {
+		t.Fatalf("total rules=%d, want 3 (previous value kept on COUNT failure)", got.TotalRules)
+	}
+}
+
 func TestMetricsService_updateOverview_counts_online_nodes_dynamically(t *testing.T) {
 	// Given：4 个节点——新鲜在线、陈旧在线(status 仍为 online)、待审批、last_seen 为空
 	if err := db.Initialize(t.TempDir()); err != nil {

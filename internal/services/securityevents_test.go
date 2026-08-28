@@ -1774,3 +1774,59 @@ func TestSecurityEventsAttribution_IPACLAllowModeDoesNotOwnDenyEvent(t *testing.
 		t.Fatalf("attribution=(%d,%q), want (1,policy-A) — allow 模式 ACL 不拥有 id:2 归属，必须回退首绑定", pid, pname)
 	}
 }
+
+// S-2：启动时审计目录缺失必须创建（此前只靠 tick 反复报错刷屏、从不建目录）。
+func TestEnsureAuditLogDir_createsMissingDirectory(t *testing.T) {
+	// Given：auditLogPath 指向尚不存在的子目录
+	dir := t.TempDir()
+	oldLogPath := auditLogPath
+	auditLogPath = filepath.Join(dir, "audit", "audit.log")
+	t.Cleanup(func() { auditLogPath = oldLogPath })
+
+	// When
+	if err := ensureAuditLogDir(); err != nil {
+		t.Fatalf("ensure audit dir: %v", err)
+	}
+
+	// Then：目录已创建；重复调用幂等
+	if info, err := os.Stat(filepath.Join(dir, "audit")); err != nil || !info.IsDir() {
+		t.Fatalf("audit dir must exist after ensure, stat err=%v", err)
+	}
+	if err := ensureAuditLogDir(); err != nil {
+		t.Fatalf("ensure on existing dir must be a no-op success: %v", err)
+	}
+}
+
+// S-1：轮转/摄取的重复同类失败日志必须限流（2s tick 下同一失败每 tick 刷屏）。
+// 直测限流判定（时钟可注入）：同消息 60s 内仅首条放行，异消息不受影响，
+// 60s 后同消息恢复放行。
+func TestAuditFailureShouldLog_throttlesIdenticalMessages(t *testing.T) {
+	// Given：重置限流状态并注入固定时钟
+	auditFailureLogMu.Lock()
+	auditFailureLogTimes = map[string]time.Time{}
+	auditFailureLogMu.Unlock()
+	now := time.Now()
+	oldClock := auditFailureLogClock
+	auditFailureLogClock = func() time.Time { return now }
+	t.Cleanup(func() {
+		auditFailureLogClock = oldClock
+		auditFailureLogMu.Lock()
+		auditFailureLogTimes = map[string]time.Time{}
+		auditFailureLogMu.Unlock()
+	})
+
+	// When：同消息连续判定，随后异消息，再 61s 后同消息
+	if !auditFailureShouldLog("copy to .1 failed") {
+		t.Fatal("first emission of a message must be allowed")
+	}
+	if auditFailureShouldLog("copy to .1 failed") {
+		t.Fatal("identical message within 60s must be suppressed")
+	}
+	if !auditFailureShouldLog("truncate failed") {
+		t.Fatal("a different message must not be suppressed by another message's window")
+	}
+	now = now.Add(61 * time.Second)
+	if !auditFailureShouldLog("copy to .1 failed") {
+		t.Fatal("identical message after 60s must be emitted again")
+	}
+}
