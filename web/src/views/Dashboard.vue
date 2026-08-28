@@ -424,7 +424,7 @@ import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/compon
 import type { EChartsOption, LineSeriesOption, TooltipComponentFormatterCallbackParams } from 'echarts'
 import VChart from 'vue-echarts'
 import { useAuthStore } from '@/stores/auth'
-import { request, formatBytes } from '@/utils/api'
+import { request, formatBytes, mfaAwareSuccess } from '@/utils/api'
 import { ElMessageBox } from 'element-plus'
 import { Monitor, Cpu, Document, Loading, CircleCheck, Odometer, TrendCharts, DataLine, List } from '@element-plus/icons-vue'
 import type { APIResponse, SystemInfo, SystemMetrics, CaddyMetrics, Rule, RuleMetrics, HostMetrics, MetricsOverview } from '@/types'
@@ -952,7 +952,7 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
       caddyStatus.value = 'running'
     }
     
-    authStore.showToast('success', `Caddy ${actionText}成功`)
+    mfaAwareSuccess(`Caddy ${actionText}成功`)
     
     // Also fetch actual status to confirm
     if (statusRefreshTimer) clearTimeout(statusRefreshTimer)

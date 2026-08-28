@@ -54,6 +54,25 @@ func TestRenderDefaultBlockPage_substitutes_app_name_and_footer_text(t *testing.
 	}
 }
 
+// D5 KNOWN-GAP-1（用户预期 2026-08-10）：默认拦截页卡片应占满页面宽度，
+// 旧模板 max-width:640px 的居中卡片只占约 60% 宽。锁定新模板的全宽卡片
+// CSS（浏览器布局引擎消费的结构化 token），防止回退到居中卡片布局。
+func TestRenderDefaultBlockPage_card_spans_full_width(t *testing.T) {
+	// Given
+	cfg := brandingConfig{AppName: "Acme"}
+
+	// When
+	html := renderDefaultBlockPage(cfg)
+
+	// Then
+	if !strings.Contains(html, "max-width: none; width: auto; margin: 0 4%") {
+		t.Errorf("rendered default block page card must span full width:\n%s", html)
+	}
+	if strings.Contains(html, "max-width: 640px") {
+		t.Errorf("rendered default block page card still uses centered 640px layout:\n%s", html)
+	}
+}
+
 func TestRenderDefaultBlockPage_omits_footer_text_line_when_empty(t *testing.T) {
 	// Given
 	cfg := brandingConfig{AppName: "Acme"}

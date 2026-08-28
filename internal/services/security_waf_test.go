@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -300,6 +301,45 @@ func TestMergeOverridesLines_preservesExistingAndDedups(t *testing.T) {
 	}
 }
 
+func TestBuildCorazaDirectives_emitsCustomRuleWithNullColumns(t *testing.T) {
+	// Given：两条自定义规则——一条 conditions=NULL，一条 action=NULL
+	// （带外编辑或 restoreTable 透传 JSON null 可产生 NULL 行）
+	_, database := newClusterTestService(t)
+	r1, err := database.Exec(`INSERT INTO security_custom_rules (name, conditions, action, score, enabled)
+		VALUES ('null-conditions', NULL, 'block', 5, 1)`)
+	if err != nil {
+		t.Fatalf("seed null-conditions rule: %v", err)
+	}
+	r1ID, _ := r1.LastInsertId()
+	r2, err := database.Exec(`INSERT INTO security_custom_rules (name, conditions, action, score, enabled)
+		VALUES ('null-action', '[{"target":"uri","operator":"contains","pattern":"/admin"}]', NULL, 3, 1)`)
+	if err != nil {
+		t.Fatalf("seed null-action rule: %v", err)
+	}
+	r2ID, _ := r2.LastInsertId()
+	policy := &models.SecurityPolicy{
+		Mode:        "blocking",
+		CustomRules: json.RawMessage(fmt.Sprintf("[%d,%d]", r1ID, r2ID)),
+	}
+
+	// When
+	directives := BuildCorazaDirectives(policy, database)
+
+	// Then：r2（action=NULL → COALESCE 'block'）必须发射为 deny 规则
+	wantID2 := fmt.Sprintf("id:%d", r2ID+10000)
+	if !strings.Contains(directives, wantID2) {
+		t.Fatalf("null-action rule must be emitted with id %s:\n%s", wantID2, directives)
+	}
+	if !strings.Contains(directives, "null-action") {
+		t.Fatalf("null-action rule name must appear in msg:\n%s", directives)
+	}
+	if !strings.Contains(directives, "deny") {
+		t.Fatalf("null-action rule must default to deny (COALESCE 'block'):\n%s", directives)
+	}
+	// r1（conditions=NULL → '[]'）从 DB 加载成功但被发射侧正确跳过（空条件）——
+	// 关键是不得再被误报为「不存在」（C5 IMP-2 修复前 scan 失败 → continue → 静默丢弃）
+}
+
 func TestBuildRateLimitHandler_sweepIntervalAtHandlerLevel(t *testing.T) {
 	// R61 C-N1：sweep_interval 必须在 handler 层而非 zone 级——Caddy v2.11.4
 	// 对模块载荷 DisallowUnknownFields，zone 级未知字段使整个配置加载 400
@@ -331,4 +371,61 @@ func TestBuildRateLimitHandler_sweepIntervalAtHandlerLevel(t *testing.T) {
 	if len(zones) != 2 {
 		t.Fatalf("burst form should emit sec+min zones, got %d", len(zones))
 	}
+}
+
+func TestBuildCorazaDirectives_crsPoolFingerprint(t *testing.T) {
+	// Given：CRS 目录指向临时目录（无 zz-user-overrides.conf）
+	dir := t.TempDir()
+	useCRSDirectivesDir(t, dir)
+	_, database := newClusterTestService(t)
+	policy := &models.SecurityPolicy{Mode: "blocking"}
+
+	// When：第一次渲染
+	d1 := BuildCorazaDirectives(policy, database)
+
+	// Then：输出必须包含 crs-pool 指纹行
+	if !strings.Contains(d1, "# crs-pool=") {
+		t.Fatalf("directives must contain crs-pool fingerprint line:\n%s", d1)
+	}
+
+	// Given：写入 overrides 文件（改变 mtime+size）
+	overridesPath := filepath.Join(dir, "zz-user-overrides.conf")
+	if err := os.WriteFile(overridesPath, []byte("# v1\nSecAction pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// When：第二次渲染
+	d2 := BuildCorazaDirectives(policy, database)
+
+	// Then：指纹必须不同（overrides 文件出现 → mtime/size 非零）
+	fp1 := extractCRSPoolFingerprint(t, d1)
+	fp2 := extractCRSPoolFingerprint(t, d2)
+	if fp1 == fp2 {
+		t.Fatalf("fingerprint must change after overrides file appears: %q == %q", fp1, fp2)
+	}
+
+	// Given：修改 overrides 内容（改变 size）
+	if err := os.WriteFile(overridesPath, []byte("# v2 longer content here to change size\nSecAction pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// When：第三次渲染
+	d3 := BuildCorazaDirectives(policy, database)
+
+	// Then：指纹再次不同（size 变化）
+	fp3 := extractCRSPoolFingerprint(t, d3)
+	if fp2 == fp3 {
+		t.Fatalf("fingerprint must change after overrides content changes: %q == %q", fp2, fp3)
+	}
+}
+
+func extractCRSPoolFingerprint(t *testing.T, directives string) string {
+	t.Helper()
+	for _, line := range strings.Split(directives, "\n") {
+		if strings.HasPrefix(line, "# crs-pool=") {
+			return strings.TrimPrefix(line, "# crs-pool=")
+		}
+	}
+	t.Fatalf("no crs-pool fingerprint line in directives:\n%s", directives)
+	return ""
 }

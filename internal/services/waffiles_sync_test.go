@@ -265,6 +265,60 @@ func TestApplyWafFileBundle_rejectsCRSWithoutDeclaredHash(t *testing.T) {
 	}
 }
 
+func TestBuildWafFileRef_sanitizesMalformedIP2RegionTag(t *testing.T) {
+	// E5 IMP-1：主端 BuildWafFileRef 把 .version 原文写进 ref.IP2RegionTag（参与
+	// waf_files 节哈希），而从端落盘前经 sanitizeBundleVersion 置空——同一畸形
+	// 版本串两端推导结果不同，节哈希永不对齐，从端永久节流重拉。主端必须用同一
+	// 规则推导 tag。
+	// Given：live 树存在，.version 附带畸形版本串（含换行注入）
+	src := t.TempDir()
+	rules := filepath.Join(src, "crs", "rules")
+	os.MkdirAll(rules, 0755)
+	os.WriteFile(filepath.Join(rules, "a.conf"), []byte("SecRule X 1"), 0644)
+	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
+	crsLiveDir = filepath.Join(src, "crs")
+	ip2regionLivePath = filepath.Join(src, "ip2region.xdb")
+	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	os.WriteFile(ip2regionLivePath, []byte("fake-xdb-bytes"), 0644)
+	os.WriteFile(ip2regionLivePath+".version", []byte("v3.17.0\nINJECTED"), 0644)
+
+	// When：构建引用
+	ref := BuildWafFileRef()
+
+	// Then：tag 与从端同规则被置空（而非原文透传）
+	if ref == nil {
+		t.Fatalf("ref must be built when xdb exists")
+	}
+	if ref.IP2RegionTag != "" {
+		t.Fatalf("malformed .version must sanitize to \"\", got %q", ref.IP2RegionTag)
+	}
+}
+
+func TestBuildWafFileRef_keepsWellFormedIP2RegionTag(t *testing.T) {
+	// Given：live 树存在，.version 为合法 [0-9.]+ 形版本串
+	src := t.TempDir()
+	rules := filepath.Join(src, "crs", "rules")
+	os.MkdirAll(rules, 0755)
+	os.WriteFile(filepath.Join(rules, "a.conf"), []byte("SecRule X 1"), 0644)
+	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
+	crsLiveDir = filepath.Join(src, "crs")
+	ip2regionLivePath = filepath.Join(src, "ip2region.xdb")
+	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	os.WriteFile(ip2regionLivePath, []byte("fake-xdb-bytes"), 0644)
+	os.WriteFile(ip2regionLivePath+".version", []byte("3.17.0\n"), 0644)
+
+	// When：构建引用
+	ref := BuildWafFileRef()
+
+	// Then：合法版本串原样保留（TrimSpace 后）
+	if ref == nil {
+		t.Fatalf("ref must be built when xdb exists")
+	}
+	if ref.IP2RegionTag != "3.17.0" {
+		t.Fatalf("well-formed version must pass through unchanged, got %q", ref.IP2RegionTag)
+	}
+}
+
 func TestApplyWafFileBundle_rejectsXdbWithoutDeclaredHash(t *testing.T) {
 	// N-04：声明哈希为空但携带 xdb 内容——非法主节点构造（合法
 	// BuildWafFileBundle 恒成对设置），必须拒绝整包而非裸写原始字节。

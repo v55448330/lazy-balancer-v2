@@ -246,10 +246,10 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 // 代码（如 "42" 对应 942xxx，与 BuildCorazaDirectives 的 `REQUEST-9<code>-*.conf`
 // Include 同款口径）；空数组按发射端语义视为「包含全部 REQUEST-*」，即所有 CRS
 // 规则均属于该策略。IP ACL 拒绝带（A3 I-6）：id 4 = 遗留 ip_blacklist 拒绝，
-// BuildCorazaDirectives 仅对黑名单非空的策略发射；id 2 = IP ACL 黑名单模式
-// 拒绝，仅对 ip_acl_enabled + mode='deny' + 名单非空的策略发射——归属口径与
-// 发射条件一一对应（名单解析失败/为空均视为不拥有，与发射端 json.Unmarshal
-// 失败得到空切片同义）。
+// BuildCorazaDirectives 仅对黑名单非空的策略发射；id 2 = IP ACL 列表外拒绝——
+// 发射端对 allow 与 deny 两种模式都发 id 2（security.go「IP 白名单拒绝」/
+// 「IP 黑名单拒绝」）；归属端有意只认 deny 模式策略（allow 模式事件经回退归到
+// 首个启用策略，仅展示层影响——IPACLAllowModeDoesNotOwnDenyEvent 钉住该口径）。
 func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTriggered string) bool {
 	if policy == nil || ruleTriggered == "" {
 		return false

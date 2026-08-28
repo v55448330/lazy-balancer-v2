@@ -450,6 +450,12 @@ const resetMfa = async (row: UserListItem): Promise<void> => {
     await fetchUsers()
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
+    // D5 IMP-1：api.ts 全局 428 重试流已 toast 并打标——此处跳过二次弹窗；
+    // 未打标的（如锁定开关关闭时端点自身的 401「验证码错误」）仍在此展示。
+    if ((error as { mfaSurfaced?: boolean }).mfaSurfaced) {
+      console.error('MFA reset failed:', error)
+      return
+    }
     ElMessage.error(error instanceof Error ? error.message : '重置失败')
   }
 }

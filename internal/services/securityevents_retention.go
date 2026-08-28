@@ -133,8 +133,9 @@ func StartSecurityEventsRetention(ctx context.Context) {
 	}()
 }
 
-// securityEventsRetentionStop terminates the worker and waits for it to exit.
-func securityEventsRetentionStop() {
+// StopSecurityEventsRetention terminates the worker and waits for it to exit.
+// 停止路径仅 main.go 优雅退出（F5-2：原私有 stopper 无生产调用方，导出供关停接线）。
+func StopSecurityEventsRetention() {
 	securityEventsRetentionMu.Lock()
 	cancel := securityEventsRetentionCancel
 	done := securityEventsRetentionDone

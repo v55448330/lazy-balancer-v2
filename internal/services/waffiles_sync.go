@@ -49,7 +49,9 @@ func BuildWafFileRef() *models.ClusterWafFilesRef {
 		seen = true
 	}
 	if v, err := os.ReadFile(ip2regionLivePath + ".version"); err == nil {
-		ref.IP2RegionTag = strings.TrimSpace(string(v))
+		// 与从端同一规则推导 tag（R35-2 形状校验）：主端原文、从端置空会让
+		// waf_files 节哈希两端永不对齐，从端永久节流重拉（E5 IMP-1）。
+		ref.IP2RegionTag = sanitizeBundleVersion(strings.TrimSpace(string(v)))
 	}
 	if !seen {
 		return nil

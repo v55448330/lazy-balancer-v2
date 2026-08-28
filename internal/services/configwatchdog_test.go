@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -155,6 +156,41 @@ func TestConfigWatchdog_tcpDynamicDNSAndSamePortNotFlagged(t *testing.T) {
 	// Then：只有正常渲染的 HTTP 规则在期望集合内，跳过类规则不误报缺失
 	if drift := CurrentConfigDrift(); !drift.Consistent {
 		t.Fatalf("render-skipped TCP rules must not be flagged, got %+v", drift)
+	}
+}
+
+func TestConfigWatchdog_stopTerminatesGoroutine(t *testing.T) {
+	// F5-1：看门狗 goroutine 原无任何停止机制——main.go 启动后没有任何路径能
+	// 让它退出，进程关停时它挂着 60s ticker 泄漏。
+	// Given：看门狗已启动
+	StartConfigWatchdog("http://127.0.0.1:1")
+	t.Cleanup(StopConfigWatchdog)
+
+	// When：停止（Stop 须等待 goroutine 退出后才返回）
+	stopped := make(chan struct{})
+	go func() {
+		StopConfigWatchdog()
+		close(stopped)
+	}()
+
+	// Then：2s 内完成停止，内部状态复位且可再启动
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopConfigWatchdog must return after the watchdog goroutine exits")
+	}
+	configWatchdogMu.Lock()
+	running := configWatchdogDone != nil
+	configWatchdogMu.Unlock()
+	if running {
+		t.Fatal("watchdog state must be cleared after stop")
+	}
+	StartConfigWatchdog("http://127.0.0.1:1")
+	configWatchdogMu.Lock()
+	restarted := configWatchdogDone != nil
+	configWatchdogMu.Unlock()
+	if !restarted {
+		t.Fatal("watchdog must be restartable after stop")
 	}
 }
 

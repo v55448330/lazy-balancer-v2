@@ -53,7 +53,7 @@ var tools = []toolSpec{
 	{"get_metrics_overview", "获取指标总览", http.MethodGet, "/metrics/overview", nil, nil, emptySchema},
 	{"get_realtime_traffic", "获取实时流量", http.MethodGet, "/metrics/realtime", nil, nil, emptySchema},
 	{"get_upstream_health", "获取上游健康状态", http.MethodGet, "/config/health", nil, nil, emptySchema},
-	{"list_audit_logs", "分页列出操作审计日志", http.MethodGet, "/audit-logs", nil, []string{"page", "page_size"}, auditLogsSchema},
+	{"list_audit_logs", "分页列出操作审计日志", http.MethodGet, "/audit-logs", nil, []string{"page", "page_size", "username", "action", "resource", "ip", "keyword", "start_time", "end_time"}, auditLogsSchema},
 	{"get_system_info", "获取系统信息", http.MethodGet, "/system/info", nil, nil, emptySchema},
 	{"list_users", "列出用户", http.MethodGet, "/users", nil, nil, emptySchema},
 	{"list_api_keys", "列出 API 密钥（不返回密钥明文）", http.MethodGet, "/api-keys", nil, nil, emptySchema},
@@ -152,7 +152,7 @@ var tools = []toolSpec{
 	{"get_system_logs", "获取应用日志", http.MethodGet, "/system/logs", nil, nil, emptySchema},
 	{"restart_system", "重启应用服务", http.MethodPost, "/system/restart", nil, nil, emptySchema},
 	{"get_rule_metrics", "获取指定规则的实时指标", http.MethodGet, "/metrics/rule/{caddy_id}", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
-	{"get_metrics_history", "获取历史指标趋势", http.MethodGet, "/metrics/history", nil, []string{"interval"}, querySchema("interval", "时间间隔", "string")},
+	{"get_metrics_history", "获取历史指标趋势", http.MethodGet, "/metrics/history", nil, []string{"rule_id", "interval"}, metricsHistorySchema},
 	{"get_connections", "获取当前连接统计", http.MethodGet, "/metrics/connections", nil, nil, emptySchema},
 }
 
@@ -203,16 +203,18 @@ const createRuleSchema = `{"type":"object","required":["name","protocol","listen
 const updateRuleSchema = `{"type":"object","required":["caddy_id"],"properties":{"caddy_id":{"type":"string"},"name":{"type":"string"},"description":{"type":"string"},"protocol":{"type":"string"},"domain":{"type":"string"},"listen_port":{"type":"integer"},"strategy":{"type":"string"},"dynamic_dns":{"type":"boolean"},"enable_dns_server":{"type":"boolean"},"dns_server":{"type":"string"},"dns_family":{"type":"string"},"health_check_path":{"type":"string"},"health_check_interval":{"type":"integer"},"health_check_timeout":{"type":"integer"},"health_check_unhealthy_threshold":{"type":"integer"},"health_check_healthy_threshold":{"type":"integer"},"enable_active_health_check":{"type":"boolean"},"tcp_health_check_port":{"type":"integer"},"tcp_proxy_protocol":{"type":"boolean"},"tcp_try_duration":{"type":"integer"},"tcp_try_interval":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"server_tokens_hidden":{"type":"integer"},"custom_routes_enabled":{"type":"boolean"},"proxy_dial_timeout":{"type":"integer","minimum":0},"proxy_response_header_timeout":{"type":"integer","minimum":0},"proxy_read_timeout":{"type":"integer","minimum":0},"proxy_write_timeout":{"type":"integer","minimum":0},"proxy_stream_timeout":{"type":"integer","minimum":0},"proxy_flush_interval":{"type":"integer","minimum":-1},"proxy_stream_close_delay":{"type":"integer","minimum":0},"path_rules":{"type":"array","items":{"type":"object"}},"host_header":{"type":"string"},"upstreams":{"type":"array","items":{"type":"object"}},"enable_tls":{"type":"boolean"},"tls_source":{"type":"string"},"acme_config_id":{"type":"integer"},"ca_provider_id":{"type":"integer"},"tls_cert":{"type":"string"},"tls_key":{"type":"string"},"tls_http_redirect":{"type":"boolean"},"enable_compress":{"type":"boolean"},"compress_types":{"type":"string"},"enabled":{"type":"boolean"},"log_enabled":{"type":"boolean"}},"additionalProperties":false}`
 
 const issueCertificateSchema = `{"type":"object","properties":{"caddy_id":{"type":"string"},"domain":{"type":"string"}},"oneOf":[{"maxProperties":0},{"required":["caddy_id"]}],"additionalProperties":false}`
-const auditLogsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20}},"additionalProperties":false}`
+const auditLogsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20},"username":{"type":"string","description":"操作人模糊筛选"},"action":{"type":"string","description":"操作模糊筛选"},"resource":{"type":"string","description":"对象模糊筛选"},"ip":{"type":"string","description":"IP 模糊筛选"},"keyword":{"type":"string","description":"详情关键词"},"start_time":{"type":"string","description":"开始时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"},"end_time":{"type":"string","description":"结束时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"}},"additionalProperties":false}`
 
 // R68 B-F2：schema 必须覆盖 queryArgs 声明的全部参数——mcp-go 在工具处理器前
 // 按 input_schema 强校验（additionalProperties:false），querySchema("search")
 // 会把 Agent 按工具描述传的 page/page_size 以 -32602 拒绝，分页永远不可达。
-// 边界与 REST clamp 对齐（ListCRSRules page_size≤100 默认 50；cert jobs ≤200）。
+// 边界与 REST clamp 对齐（ListCRSRules page_size≤100 默认 50；cert jobs
+// page≤1000000、page_size≤200 默认 50——见 ListCertJobs maxCertJobPage）。
 const listCRSRulesSchema = `{"type":"object","properties":{"search":{"type":"string","description":"搜索关键词"},"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":50}},"additionalProperties":false}`
-const listCertJobsSchema = `{"type":"object","properties":{"rule_id":{"type":"string","description":"按规则 ID 过滤"},"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":200,"default":20}},"additionalProperties":false}`
+const listCertJobsSchema = `{"type":"object","properties":{"rule_id":{"type":"string","description":"按规则 ID 过滤"},"page":{"type":"integer","minimum":1,"maximum":1000000,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":200,"default":50}},"additionalProperties":false}`
 const securityEventsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20},"action":{"type":"string"},"ip":{"type":"string"},"rule_caddy_id":{"type":"string"},"rule_name":{"type":"string","description":"按负载规则名称过滤（子串）"},"policy_name":{"type":"string","description":"按安全策略名称过滤（子串）"},"rule_triggered":{"type":"string","description":"按触发规则过滤（CRS 规则 ID，或 IP 访问控制/请求阻断评估/协议异常/协议攻击/自定义规则 家族标签）"},"uri":{"type":"string","description":"按请求 URI 过滤（子串）"},"start_time":{"type":"string","description":"开始时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"},"end_time":{"type":"string","description":"结束时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"}},"additionalProperties":false}`
-const caddyLogsSchema = `{"type":"object","properties":{"type":{"type":"string","enum":["runtime","server","proxy","tls","access"]}},"additionalProperties":false}`
+const caddyLogsSchema = `{"type":"object","properties":{"type":{"type":"string","enum":["runtime","server","proxy","tls"]}},"additionalProperties":false}`
+const metricsHistorySchema = `{"type":"object","properties":{"rule_id":{"type":"string","description":"可选规则 ID（Caddy ID），省略时返回全局聚合趋势"},"interval":{"type":"string","description":"时间范围（如 1h、24h、7d），默认 1h"}},"additionalProperties":false}`
 
 // setRuleSecurityPoliciesSchema（v2.2.0 多策略绑定）：maxItems=5 与后端
 // SetRuleSecurityPolicies 的「最多绑定 5 条策略」校验对齐，避免 MCP 放行后端拒绝的载荷。

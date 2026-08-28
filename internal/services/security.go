@@ -523,7 +523,7 @@ func resolvePolicyCustomRules(raw json.RawMessage, store caddyConfigStore) []mod
 			for i, id := range chunk {
 				args[i] = id
 			}
-			rows, err := effective.Query("SELECT id, name, conditions, action, score, enabled FROM security_custom_rules WHERE id IN ("+placeholders+")", args...)
+			rows, err := effective.Query("SELECT id, name, COALESCE(conditions,'[]'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1) FROM security_custom_rules WHERE id IN ("+placeholders+")", args...)
 			if err != nil {
 				// Round 34 G: 单块失败只丢该块并留痕，其余块照常解析；
 				// 此前整查询失败静默返回 nil，WAF 规则全部丢失且无日志。

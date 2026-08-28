@@ -132,7 +132,7 @@ func TestStartSecurityEventsRetention_idempotentAndAlwaysRunning(t *testing.T) {
 	// 幂等（不重启 worker）；不存在任何「停止」生产路径（从节点也摄入事件，
 	// 停止会致事件表越过 10 万行上限无界增长，R62 B-NEW-2 确立的设计语义）。
 	setupSecurityEventsRetentionTestDB(t)
-	t.Cleanup(securityEventsRetentionStop)
+	t.Cleanup(StopSecurityEventsRetention)
 	workerDone := func() chan struct{} {
 		securityEventsRetentionMu.Lock()
 		defer securityEventsRetentionMu.Unlock()
@@ -158,7 +158,7 @@ func TestStartSecurityEventsRetention_idempotentAndAlwaysRunning(t *testing.T) {
 func TestStartSecurityEventsRetention_stopsWhenParentContextCanceled(t *testing.T) {
 	// Given: a worker bound to a cancelable parent context
 	setupSecurityEventsRetentionTestDB(t)
-	t.Cleanup(securityEventsRetentionStop)
+	t.Cleanup(StopSecurityEventsRetention)
 	ctx, cancel := context.WithCancel(context.Background())
 	StartSecurityEventsRetention(ctx)
 	securityEventsRetentionMu.Lock()

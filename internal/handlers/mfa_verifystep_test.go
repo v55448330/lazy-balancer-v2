@@ -21,7 +21,8 @@ import (
 // 路由也不在 loginRateLimit 内，被劫持会话可在线爆破 TOTP（10^6 空间 ±1 窗，
 // 高速率下小时级可行），成功即得带 mfa_ts 的新 JWT（守卫写放行 60 秒）。
 // 硬门与登录 challenge 10 次（B-I-4）/激活 pending 5 次（A-F-2）同族：
-// 连续失败 ≥10 → 10 分钟冷却，一律 429「连续失败过多，请重新登录后再试」。
+// 连续失败 ≥10 → 10 分钟冷却，一律 429「连续失败过多，请 10 分钟后重试」
+//（冷却窗内登录 MFA 同样冻结，旧文案「请重新登录后再试」有误导）。
 
 // seedMfaVerifyStepUser 种 id=1 且已启用 MFA 的操作者，返回其 TOTP secret。
 func seedMfaVerifyStepUser(t *testing.T) string {
@@ -100,12 +101,12 @@ func TestMFAVerifyStep_hardCap_429AfterTenFailures(t *testing.T) {
 	// When 第 11 次——计数已达 10，硬门应触发
 	rec := postMfaVerifyStep(router, fmt.Sprintf(`{"code":"%s"}`, wrong))
 
-	// Then 429 + 请重新登录（冷却生效，不再验码）
+	// Then 429 + 请 10 分钟后重试（冷却生效，不再验码）
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("attempt 11: status=%d body=%s, want 429（端点级硬失败上限应触发）", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "连续失败过多，请重新登录后再试") {
-		t.Fatalf("attempt 11: body=%s, want 包含「连续失败过多，请重新登录后再试」", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "连续失败过多，请 10 分钟后重试") {
+		t.Fatalf("attempt 11: body=%s, want 包含「连续失败过多，请 10 分钟后重试」", rec.Body.String())
 	}
 
 	// Then 冷却期内第 12 次仍 429（不回落到验码路径）

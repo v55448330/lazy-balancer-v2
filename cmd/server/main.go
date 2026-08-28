@@ -172,6 +172,8 @@ func run() error {
 		if ip2RegionManager := services.GetIP2RegionUpdateManager(); ip2RegionManager != nil {
 			ip2RegionManager.StopScheduler()
 		}
+		services.StopConfigWatchdog()
+		services.StopSecurityEventsRetention()
 		services.StopAuditCleanup()
 		services.StopTimezoneRefresh()
 		services.StopLogRotate()

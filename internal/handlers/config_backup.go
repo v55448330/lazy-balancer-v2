@@ -66,6 +66,36 @@ var backupBooleanTableColumns = map[string][]string{
 	"security_ip2region_version": {"auto_update"},
 }
 
+// C5 KNOWN-GAP-1：三张安全表可空列的 NULL→默认值映射（restoreTable 写入侧归一）。
+// 默认值与集群快照 dump 侧逐列对齐（cluster_snapshot.go:420/428/449 的 COALESCE
+// 表达式）——「全量替换」两条通道（备份导入/集群快照）对同一 NULL 行必须产出同一
+// 落库值。dump 未覆盖的列仅 id/name（NOT NULL 无默认）：不入映射，NULL 由列约束
+// 响亮失败（500 回滚），不属于静默毒化。两处 dump 与 schema 默认有意背离均镜像
+// dump：security_policies.enabled dump 取 0（pre-feature 行 fail-closed 置禁用；
+// schema 默认 TRUE 仅服务缺列 INSERT），geoip_mode dump 取 'off'（schema 默认
+// 'deny'；v2 导入路径上 validateV2BackupSecurityPolicies 已在 checksum 后把 NULL
+// 枚举列回写为保存侧默认值，本映射是其下层的 dump 对齐兜底）。
+var backupSecurityTableNullDefaults = map[string]map[string]any{
+	"security_policies": {
+		"description": "", "mode": "off", "anomaly_threshold": int64(5),
+		"ip_acl_mode": "", "ip_acl_list": "[]", "ip_acl_enabled": int64(0),
+		"ip_whitelist": "[]", "ip_blacklist": "[]",
+		"rate_limit_enabled": int64(0), "rate_limit_rps": int64(0), "rate_limit_burst": int64(0),
+		"crs_rule_groups": "[]", "crs_excluded_rules": "[]", "custom_rules": "[]",
+		"block_page_id": int64(0), "block_status_code": int64(0), "enabled": int64(0),
+		"updated_by": int64(0), "created_at": "", "updated_at": "",
+		"geoip_countries": "[]", "geoip_mode": "off", "waf_check_response": int64(0),
+	},
+	"security_custom_rules": {
+		"description": "", "conditions": "[]", "action": "block", "score": int64(5),
+		"enabled": int64(1), "updated_by": int64(0), "created_at": "", "updated_at": "",
+	},
+	"security_block_pages": {
+		"description": "", "content": "", "is_default": int64(0),
+		"created_by": int64(0), "created_at": "", "updated_by": int64(0), "updated_at": "",
+	},
+}
+
 // 全局配置区布尔键（global_config）。protected 键（is_master 等）恢复时不写入，
 // 不参与校验；sync_switches_migrated 为内部迁移标记但随导出携带、恢复时写入，
 // 同属布尔语义。
@@ -266,6 +296,15 @@ func restoreTable(ctx context.Context, tx *sql.Tx, database *sql.DB, table strin
 			if isBackupBooleanColumn(table, column) {
 				value = normalizeBackupBooleanValue(value)
 			}
+			// C5 KNOWN-GAP-1：三张安全表可空列的 NULL 毒化归一（写入侧兜底）——
+			// 布尔归一对 nil 透传，故在布尔归一之后把仍为 nil 的列替换为 dump 侧
+			// 对齐默认值（backupSecurityTableNullDefaults）：NULL 布尔列落到
+			// schema/dump 默认（如 enabled→0）而非布尔强转；映射外的表行为逐字节不变。
+			if value == nil {
+				if columnDefault, ok := backupSecurityTableNullDefaults[table][column]; ok {
+					value = columnDefault
+				}
+			}
 			columns = append(columns, `"`+column+`"`)
 			placeholders = append(placeholders, "?")
 			values = append(values, value)
@@ -451,9 +490,17 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 // 或非法 action/名称。与 R56 布尔门同位：结构性校验阶段拒绝，零写入。
 func validateImportedSecurityCustomRules(rows []map[string]any) error {
 	for i, row := range rows {
+		// C5 KNOWN-GAP-1：action/score 为 NULL 的可空形态按 schema/dump 默认
+		// （'block'/5，cluster_snapshot.go:428）看待通过校验；写入侧由 restoreTable
+		// 归一为同一默认值。本校验在 checksum 之前执行，不得回写行数据（回写会让
+		// 自带校验和的备份误报篡改），故只做读取侧替换。
 		rule := models.SecurityCustomRule{
 			Name:   fmt.Sprintf("%v", row["name"]),
-			Action: fmt.Sprintf("%v", row["action"]),
+			Action: "block",
+			Score:  5,
+		}
+		if rawAction := row["action"]; rawAction != nil {
+			rule.Action = fmt.Sprintf("%v", rawAction)
 		}
 		// conditions 列在导出 JSON 中为字符串（DB TEXT 列承载 JSON 数组），个别
 		// 历史导出可能内联为数组——两种形态都归一为 []CustomRuleCondition。
@@ -472,6 +519,8 @@ func validateImportedSecurityCustomRules(rows []map[string]any) error {
 			}
 		}
 		switch score := row["score"].(type) {
+		case nil:
+			// C5：NULL 按 schema/dump 默认 5 看待（见上），写入侧归一为同值。
 		case float64:
 			rule.Score = int(score)
 		case string:

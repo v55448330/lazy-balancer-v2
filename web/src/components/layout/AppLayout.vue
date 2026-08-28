@@ -284,7 +284,7 @@ const saveProfile = async () => {
       authStore.showToast('success', '密码已修改，请重新登录')
       await logout()
     } else {
-      authStore.showToast('success', '保存成功')
+      mfaAwareSuccess('保存成功')
       await authStore.fetchUser()
     }
   } catch (error: unknown) {

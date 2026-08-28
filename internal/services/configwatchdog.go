@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +29,9 @@ var (
 	configDriftStreak      int
 	configDriftQueryWarned bool // 规则数据读取失败首报留痕
 	configDriftReadWarned  bool // 运行配置读取失败首报留痕
+	configWatchdogMu       sync.Mutex
+	configWatchdogCancel   context.CancelFunc
+	configWatchdogDone     chan struct{}
 )
 
 // ResetConfigDrift 角色切换时重置看门狗状态——曾漂移的主节点降级为从节点后，
@@ -55,22 +59,64 @@ func CurrentConfigDrift() ConfigDriftStatus {
 // 经系统日志 + 操作日志 + GetCaddyStatus（前端全局横幅）三通道告知，连续两轮不一致
 // 才置状态（防配置应用窗口的瞬时误报）。从节点不运行——同步链路已有 drift 检测与
 // 重载失败标记自愈覆盖。恢复由用户手动重启完成（横幅入口），不做自动重应用。
+// 重复调用幂等（已运行时不重启）；停止路径为 StopConfigWatchdog（main.go 优雅退出）。
 func StartConfigWatchdog(adminURL string) {
+	configWatchdogMu.Lock()
+	if configWatchdogDone != nil {
+		configWatchdogMu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	configWatchdogCancel = cancel
+	configWatchdogDone = done
+	configWatchdogMu.Unlock()
+
 	ticker := time.NewTicker(60 * time.Second)
 	go func() {
-		defer ticker.Stop()
-		for range ticker.C {
-			// 看门狗是唯一消费者，panic 必须留痕而不是让 goroutine 静默死亡。
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						Logf("error", "配置一致性看门狗：检查 panic: %v", r)
-					}
+		defer func() {
+			ticker.Stop()
+			close(done)
+			configWatchdogMu.Lock()
+			if configWatchdogDone == done {
+				configWatchdogCancel = nil
+				configWatchdogDone = nil
+			}
+			configWatchdogMu.Unlock()
+		}()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// 看门狗是唯一消费者，panic 必须留痕而不是让 goroutine 静默死亡。
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							Logf("error", "配置一致性看门狗：检查 panic: %v", r)
+						}
+					}()
+					checkConfigConsistency(adminURL)
 				}()
-				checkConfigConsistency(adminURL)
-			}()
+			}
 		}
 	}()
+}
+
+// StopConfigWatchdog 终止看门狗 goroutine 并等待其退出；未运行时调用为 no-op。
+func StopConfigWatchdog() {
+	configWatchdogMu.Lock()
+	cancel := configWatchdogCancel
+	done := configWatchdogDone
+	configWatchdogCancel = nil
+	configWatchdogDone = nil
+	configWatchdogMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
 }
 
 func checkConfigConsistency(adminURL string) {

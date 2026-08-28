@@ -99,7 +99,10 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 			Password string `json:"password"`
 			Code     string `json:"code"`
 		}
-		_ = c.ShouldBindJSON(&req)
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
+			return
+		}
 		var hash string
 		if err := db.DB.QueryRow("SELECT password_hash FROM users WHERE id=?", userID).Scan(&hash); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户失败"})
@@ -107,6 +110,10 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 		}
 		if bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)) != nil {
 			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "密码错误"})
+			return
+		}
+		// B5 I-A：重新绑定确认段与 disable/verify-step 同门——连续失败 10 次冷却 10 分钟。
+		if mfaEndpointHardGate(c, userID) {
 			return
 		}
 		if ok, verr := services.MFAVerifyCode(userID, req.Code, time.Now()); !ok {
@@ -187,7 +194,13 @@ func (h *Handlers) MFADisable(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "密码错误"})
 		return
 	}
+	// B5 I-A：disable 与 verify-step 同门——连续失败 10 次冷却 10 分钟。
+	if mfaEndpointHardGate(c, userID) {
+		return
+	}
 	if ok, verr := services.MFAVerifyCode(userID, req.Code, time.Now()); !ok {
+		// B5 I-A：高敏动作的失败尝试与成功同等可审计（对齐 MFAResetByAdmin 前置验码失败留痕）。
+		services.RecordAuditLog(c.GetString("username"), "认证拒绝", "用户认证", services.FormatAuditDetail("禁用 MFA 前验证失败", services.AuditResultPart("failure")), c.ClientIP())
 		msg := "验证码错误"
 		if verr != nil {
 			msg = verr.Error()
@@ -245,6 +258,35 @@ const (
 	mfaVerifyStepCooldown    = 10 * time.Minute
 )
 
+// mfaEndpointHardGate R74 端点级硬门（verify-step / disable / setup 重新绑定共用）——
+// 与登录 challenge 10 次/激活 pending 5 次同族的端点级失败上限（独立于
+// mfa_lockout_enabled 全局锁定开关）：连续失败 ≥10 触发 10 分钟冷却（429）；
+// 劫持会话的在线爆破成本从小时级拉到不可用。机制：复用
+// users.mfa_failed_attempts（MFAVerifyCode 每次失败已 +1，开关关闭时亦然）与
+// mfa_locked_until——达阈值时写入冷却并清零计数（与 mfaRecordFailure 锁定时清零
+// 同口径），冷却过期后正常用户凭有效码即可恢复；冷却期内一律 429 不再验码。门在
+// 端点内、不读 auth_type，对 JWT 与机器身份同效；读库失败时不阻断既有验码路径
+// （MFAVerifyCode 自会报错）。返回 true = 已拦截（429 响应已写入）。
+func mfaEndpointHardGate(c *gin.Context, userID int) bool {
+	var attempts int
+	var lockedUntil *time.Time
+	if err := db.DB.QueryRow("SELECT COALESCE(mfa_failed_attempts,0), mfa_locked_until FROM users WHERE id=?", userID).
+		Scan(&attempts, &lockedUntil); err == nil {
+		now := time.Now()
+		capped := lockedUntil != nil && now.Before(*lockedUntil)
+		if !capped && attempts >= mfaVerifyStepMaxAttempts {
+			_, _ = db.DB.Exec("UPDATE users SET mfa_failed_attempts=0, mfa_locked_until=? WHERE id=?",
+				now.Add(mfaVerifyStepCooldown).UTC().Format("2006-01-02 15:04:05"), userID)
+			capped = true
+		}
+		if capped {
+			c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "连续失败过多，请 10 分钟后重试"})
+			return true
+		}
+	}
+	return false
+}
+
 // MFAVerifyStep POST /auth/mfa/verify-step — step-up：验证码 → 新 JWT（mfa_ts 刷新）。
 func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 	if !guardAuthJSONBody(c) {
@@ -258,29 +300,9 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
 	}
-	// R74 verify-step 硬门——与登录 challenge 10 次/激活 pending 5 次同族的端点级
-	// 失败上限（独立于 mfa_lockout_enabled 全局锁定开关）：连续失败 ≥10 触发
-	// 10 分钟冷却（429 请重新登录）；劫持会话的在线爆破成本从小时级拉到不可用。
-	// 机制：复用 users.mfa_failed_attempts（MFAVerifyCode 每次失败已 +1，开关
-	// 关闭时亦然）与 mfa_locked_until——达阈值时写入冷却并清零计数（与
-	// mfaRecordFailure 锁定时清零同口径），冷却过期后正常用户凭有效码即可恢复；
-	// 冷却期内一律 429 不再验码。门在端点内、不读 auth_type，对 JWT 与机器
-	// 身份同效；读库失败时不阻断既有验码路径（MFAVerifyCode 自会报错）。
-	var stepAttempts int
-	var stepLockedUntil *time.Time
-	if err := db.DB.QueryRow("SELECT COALESCE(mfa_failed_attempts,0), mfa_locked_until FROM users WHERE id=?", userID).
-		Scan(&stepAttempts, &stepLockedUntil); err == nil {
-		now := time.Now()
-		capped := stepLockedUntil != nil && now.Before(*stepLockedUntil)
-		if !capped && stepAttempts >= mfaVerifyStepMaxAttempts {
-			_, _ = db.DB.Exec("UPDATE users SET mfa_failed_attempts=0, mfa_locked_until=? WHERE id=?",
-				now.Add(mfaVerifyStepCooldown).UTC().Format("2006-01-02 15:04:05"), userID)
-			capped = true
-		}
-		if capped {
-			c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "连续失败过多，请重新登录后再试"})
-			return
-		}
+	// R74 verify-step 硬门（B5 I-A 起与 disable/setup 重新绑定共用 mfaEndpointHardGate）。
+	if mfaEndpointHardGate(c, userID) {
+		return
 	}
 	if ok, verr := services.MFAVerifyCode(userID, req.Code, time.Now()); !ok {
 		services.RecordAuditLog(c.GetString("username"), "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "step-up 验证失败"), c.ClientIP())
@@ -321,7 +343,10 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 	var req struct {
 		Code string `json:"code"`
 	}
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
+		return
+	}
 	// 操作者自己启用 MFA → 必须验码（本人重置自己的 MFA 也一样——与
 	// MFADisable 的双重确认同语义；无密码项：admin 路由已过 JWT + 用户管理
 	// 确认弹框承担意图确认）。

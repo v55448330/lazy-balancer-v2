@@ -13,11 +13,30 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
 )
+
+// syncBuffer is a bytes.Buffer guarded by a mutex for concurrent write/poll.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
 
 // Real Coraza audit transaction (pretty-printed JSON, multi-line).
 const securityEventsFixtureBlocked = `{
@@ -907,7 +926,7 @@ func TestSecurityEventsTick_reportsErrorBeyondScanWindow(t *testing.T) {
 	oldAuditLog, oldAuditOffset := auditLogPath, securityEventsOffsetPath
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
 	t.Cleanup(func() { auditLogPath, securityEventsOffsetPath = oldAuditLog, oldAuditOffset })
-	var buf bytes.Buffer
+	var buf syncBuffer
 	oldWriter := log.Writer()
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(oldWriter) })

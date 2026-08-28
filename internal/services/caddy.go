@@ -26,7 +26,6 @@ import (
 const (
 	caddyConfigGenerationErrorKey = "__lazy_balancer_generation_error"
 	caddyCertFilesSnapshotKey     = "__lazy_balancer_cert_files_snapshot"
-	caddyConfigStoreKey           = "__lazy_balancer_config_store"
 )
 
 // ErrNoEnabledUpstreams 规则（或路径规则）没有启用上游时生成的哨兵错误。
@@ -76,10 +75,6 @@ func GenerateCaddyID() (string, error) {
 func (s *CaddyService) ApplyConfig(config map[string]interface{}) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// R72 二十七次（补正重写）：caddyConfigStoreKey 再生分支已删——生成器从不在
-	// config map 上设置该 key 给本入口（历史 r65 形态；唯一设置点 generateConfig
-	// 与 CertAwareForce 内部消费），保留消费分支只会掩盖误传内部形态的错误；
-	// caddyPayload 的剥离逻辑保留作防御。
 	return s.applyConfigLocked(config)
 }
 
@@ -209,7 +204,7 @@ func (s *CaddyService) ValidateConfig(config map[string]interface{}) (err error)
 func caddyPayload(config map[string]interface{}) map[string]interface{} {
 	payload := make(map[string]interface{}, len(config))
 	for key, value := range config {
-		if key != caddyCertFilesSnapshotKey && key != caddyConfigStoreKey {
+		if key != caddyCertFilesSnapshotKey {
 			payload[key] = value
 		}
 	}
@@ -920,7 +915,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 	if !referencedPage {
 		return ctx, nil
 	}
-	pageRows, err := store.Query(`SELECT id, content FROM security_block_pages`)
+	pageRows, err := store.Query(`SELECT id, COALESCE(content,'') FROM security_block_pages`)
 	if err != nil {
 		return nil, err
 	}
@@ -1886,9 +1881,6 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 	}
 	if filesSnapshot != nil {
 		conf[caddyCertFilesSnapshotKey] = filesSnapshot
-	}
-	if _, transactional := store.(*sql.Tx); transactional {
-		conf[caddyConfigStoreKey] = store
 	}
 
 	return conf

@@ -1227,6 +1227,101 @@ func TestInitialize_backfillsLegacyTimeoutColumnsOnceAndPreservesExplicitZero(t 
 	}
 }
 
+func TestMigrateCanonicalDomains_skipsIndexRebuildWhenNothingToDo(t *testing.T) {
+	// C5 SUG-2：无事可做时迁移不得白跑 DROP/CREATE 唯一索引（每次启动一次立即
+	// 写事务 + 三次全表扫描）。观察缝：预先把唯一索引移除——若迁移仍执行
+	// DROP/CREATE，索引会被重建回来；整段跳过时索引保持缺失。
+	// Given：存量域/host 全部已是规范形，cert_jobs 无重复组；唯一索引不存在
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (name, protocol, domain, listen_port, caddy_id) VALUES ('r1','http','example.com',8080,'lb_test0001');
+		INSERT INTO upstreams (rule_id, host, port) VALUES ('lb_test0001','backend.example.com',9000);
+		INSERT INTO cert_jobs (rule_id, domain, status) VALUES ('lb_test0001','example.com','issued')`); err != nil {
+		t.Fatalf("seed clean data: %v", err)
+	}
+
+	// When
+	if err := migrateCanonicalDomains(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Then：索引未被重建（sqlite_master 中仍缺失，证明 DROP/CREATE 未执行）
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_cert_jobs_rule_domain_unique'").Scan(&count); err != nil {
+		t.Fatalf("query index: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("index rebuilt despite nothing to normalize (count=%d), want untouched", count)
+	}
+}
+
+func TestMigrateCanonicalDomains_normalizesAndRebuildsIndexWhenWorkNeeded(t *testing.T) {
+	// Given：非规范域（大写）存量行——迁移必须照常工作（行为不得因跳过门改变）
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (name, protocol, domain, listen_port, caddy_id) VALUES ('r1','http','Example.COM',8080,'lb_test0001')`); err != nil {
+		t.Fatalf("seed non-canonical data: %v", err)
+	}
+
+	// When
+	if err := migrateCanonicalDomains(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Then：域被归一，唯一索引被重建
+	var domain string
+	if err := database.QueryRow("SELECT domain FROM lb_rules WHERE caddy_id='lb_test0001'").Scan(&domain); err != nil {
+		t.Fatalf("read domain: %v", err)
+	}
+	if domain != "example.com" {
+		t.Fatalf("domain=%q, want normalized example.com", domain)
+	}
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_cert_jobs_rule_domain_unique'").Scan(&count); err != nil {
+		t.Fatalf("query index: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("index count=%d, want rebuilt when normalization ran", count)
+	}
+}
+
+func TestMigrateCanonicalDomains_deduplicatesAndRebuildsIndexWhenDuplicatesExist(t *testing.T) {
+	// Given：域均已规范但 cert_jobs 存在 (rule_id, domain) 重复组
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status) VALUES ('lb_test0001','dup.example.com','issued');
+		INSERT INTO cert_jobs (rule_id, domain, status) VALUES ('lb_test0001','dup.example.com','failed')`); err != nil {
+		t.Fatalf("seed duplicate data: %v", err)
+	}
+
+	// When
+	if err := migrateCanonicalDomains(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Then：重复组被去重，唯一索引被重建
+	var rows int
+	if err := database.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_test0001' AND domain='dup.example.com'").Scan(&rows); err != nil {
+		t.Fatalf("read cert_jobs: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("duplicate group rows=%d, want deduplicated to 1", rows)
+	}
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_cert_jobs_rule_domain_unique'").Scan(&count); err != nil {
+		t.Fatalf("query index: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("index count=%d, want rebuilt when dedup ran", count)
+	}
+}
+
 func openMigrationTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migration.db")+"?_pragma=foreign_keys(1)")

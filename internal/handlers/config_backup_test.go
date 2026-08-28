@@ -301,6 +301,61 @@ func TestImportConfigBackup_normalizes_null_boolean_rows(t *testing.T) {
 	}
 }
 
+// C5 KNOWN-GAP-1：v2 备份导入通道对三张安全表的可空列零归一——带校验和的备份
+// 携带 content/action/score/description/custom_rules 等 NULL 时，restoreTable 原样
+// 落库（下游 raw 消费方：caddy.go 拦截页 content 扫描、自定义规则生成扫描），而
+// 集群快照 dump 侧（cluster_snapshot.go:420/428/449）已全量 COALESCE 硬化——两条
+// 「全量替换」通道容忍度背离。导入必须成功（无 400/500），且落库值为 dump 侧对齐
+// 默认值而非 NULL；NULL 布尔列（enabled/is_default）落 schema/dump 默认而非布尔强转。
+func TestImportConfigBackup_normalizes_null_security_rows(t *testing.T) {
+	// Given：三张安全表各携带一行 NULL 毒化可空列
+	h := newBackupTestHandlers(t)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"security_block_pages": {{"id": 2, "name": "null-poison-page", "description": nil, "content": nil, "is_default": nil}},
+		"security_custom_rules": {{"id": 1, "name": "null-poison-rule",
+			"conditions":  `[{"target":"uri","operator":"contains","pattern":"/nullpoison"}]`,
+			"description": nil, "action": nil, "score": nil, "enabled": nil}},
+		"security_policies": {{"id": 1, "name": "null-poison-policy", "description": nil, "custom_rules": nil}},
+	})
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then：导入成功，三表落库值均为 dump 侧对齐默认值（'' content、'block' action、
+	// 5 score、1 enabled、'' description、'[]' custom_rules、0 is_default），而非 NULL
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var pageContent, pageDesc string
+	var pageDefault int
+	if err := db.DB.QueryRow("SELECT content, description, is_default FROM security_block_pages WHERE id=2").Scan(&pageContent, &pageDesc, &pageDefault); err != nil {
+		t.Fatalf("read restored block page: %v", err)
+	}
+	if pageContent != "" || pageDesc != "" || pageDefault != 0 {
+		t.Fatalf("block page=(content:%q desc:%q is_default:%d), want ('' '' 0)", pageContent, pageDesc, pageDefault)
+	}
+	var ruleAction, ruleDesc string
+	var ruleScore, ruleEnabled int
+	if err := db.DB.QueryRow("SELECT action, score, enabled, description FROM security_custom_rules WHERE id=1").Scan(&ruleAction, &ruleScore, &ruleEnabled, &ruleDesc); err != nil {
+		t.Fatalf("read restored custom rule: %v", err)
+	}
+	if ruleAction != "block" || ruleScore != 5 || ruleEnabled != 1 || ruleDesc != "" {
+		t.Fatalf("custom rule=(action:%q score:%d enabled:%d desc:%q), want ('block' 5 1 '')", ruleAction, ruleScore, ruleEnabled, ruleDesc)
+	}
+	var policyDesc, policyCustomRules string
+	if err := db.DB.QueryRow("SELECT description, custom_rules FROM security_policies WHERE id=1").Scan(&policyDesc, &policyCustomRules); err != nil {
+		t.Fatalf("read restored policy: %v", err)
+	}
+	if policyDesc != "" || policyCustomRules != "[]" {
+		t.Fatalf("policy=(description:%q custom_rules:%q), want ('' '[]')", policyDesc, policyCustomRules)
+	}
+}
+
 func TestValidateConfigImport_rejects_dangling_rule_references(t *testing.T) {
 	// R39 C-3: 预览接口须与实际导入同序校验 upstreams/path_rules 引用存在性，
 	// 否则悬挂引用备份在预览显示可导入、实际导入才 400。

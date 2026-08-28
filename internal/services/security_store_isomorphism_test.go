@@ -316,3 +316,43 @@ func TestSnapshotSecurityPolicies_coalescesNullJSONColumns(t *testing.T) {
 		t.Fatalf("crs_rule_groups = %#v, want %q（不得为 nil/null）", crsGroups, "[]")
 	}
 }
+
+// TestLoadSecurityPolicyContext_toleratesNullBlockPageContent 锁定 C5 IMP-1：
+// security_block_pages.content 列 schema 无 NOT NULL，带外编辑或 restoreTable
+// 透传 JSON null 可产生 NULL 行。批量预载 SELECT 若不做 COALESCE(content,”)，
+// 一行 NULL content 即 scan 失败 → 整配置生成报错（旧配置保留，形成自锁）。
+// 修复后 COALESCE 归一化为 ”，与 schema DEFAULT ” 语义一致。
+func TestLoadSecurityPolicyContext_toleratesNullBlockPageContent(t *testing.T) {
+	// Given：一条 content=NULL 的拦截页 + 引用它的策略 + 绑定规则
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO security_block_pages (id, name, content) VALUES (90, 'null-page', NULL)`); err != nil {
+		t.Fatalf("seed null-content block page: %v", err)
+	}
+	result, err := database.Exec(`INSERT INTO security_policies (name, mode, enabled, block_page_id)
+		VALUES ('null-bp-policy', 'blocking', 1, 90)`)
+	if err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	policyID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read policy id: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id)
+		VALUES ('lb_null_bp', ?)`, policyID); err != nil {
+		t.Fatalf("bind policy: %v", err)
+	}
+
+	// When：批量预载（与 generateCaddyConfigFromStore 同通道）
+	ctx, err := loadSecurityPolicyContext(database)
+
+	// Then：不得 scan 失败（C5 IMP-1：COALESCE 缺失即在此暴露）；
+	// 拦截页内容归一化为 ''
+	if err != nil {
+		t.Fatalf("loadSecurityPolicyContext 不得因 NULL content 报错（C5 IMP-1）: %v", err)
+	}
+	if content, ok := ctx.blockPageByID[90]; !ok {
+		t.Fatalf("block page 90 missing from context")
+	} else if content != "" {
+		t.Fatalf("block page 90 content = %q, want COALESCE 归一化后的 %q", content, "")
+	}
+}

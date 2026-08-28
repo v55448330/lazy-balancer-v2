@@ -1391,7 +1391,72 @@ func sanitizeLegacyCustomRulePatterns() error {
 	return nil
 }
 
+// canonicalDomainMigrationSources 归一扫描的数据源，判定门与迁移本体共用同一份
+// 定义，防止两处口径漂移。
+var canonicalDomainMigrationSources = []struct {
+	table  string
+	column string
+	query  string
+}{
+	{table: "lb_rules", column: "domain", query: "SELECT caddy_id, domain FROM lb_rules WHERE domain IS NOT NULL AND trim(domain) != ''"},
+	{table: "cert_jobs", column: "domain", query: "SELECT id, domain FROM cert_jobs WHERE trim(domain) != ''"},
+	{table: "upstreams", column: "host", query: "SELECT id, host FROM upstreams WHERE trim(host) != ''"},
+}
+
+// canonicalDomainMigrationNeeded 以与迁移本体相同的口径判定是否有事可做：任一存量
+// 值与规范形不同，或 cert_jobs 仍存在 (rule_id, domain) 重复组。无事可做时调用方
+// 整段跳过——否则每次启动都白跑一次 DROP/CREATE 唯一索引（立即写事务）加三次全表
+// 扫描（C5 SUG-2）。迁移在服务器接受流量前单线程执行，判定与迁移间无并发写入。
+func canonicalDomainMigrationNeeded() (bool, error) {
+	for _, source := range canonicalDomainMigrationSources {
+		rows, err := DB.Query(source.query)
+		if err != nil {
+			return false, fmt.Errorf("query %s.%s: %w", source.table, source.column, err)
+		}
+		needed := false
+		for rows.Next() {
+			var key any
+			var value string
+			if err := rows.Scan(&key, &value); err != nil {
+				rows.Close()
+				return false, fmt.Errorf("scan %s.%s: %w", source.table, source.column, err)
+			}
+			if source.table == "upstreams" && net.ParseIP(strings.TrimSpace(value)) != nil {
+				continue
+			}
+			canonical, err := CanonicalDomains(value)
+			if err != nil || canonical == value {
+				continue
+			}
+			needed = true
+			break
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return false, fmt.Errorf("iterate %s.%s: %w", source.table, source.column, err)
+		}
+		if err := rows.Close(); err != nil {
+			return false, fmt.Errorf("close %s.%s rows: %w", source.table, source.column, err)
+		}
+		if needed {
+			return true, nil
+		}
+	}
+	var hasDupes bool
+	if err := DB.QueryRow("SELECT EXISTS(SELECT 1 FROM cert_jobs GROUP BY rule_id, domain HAVING COUNT(*) > 1)").Scan(&hasDupes); err != nil {
+		return false, fmt.Errorf("check cert_jobs duplicate groups: %w", err)
+	}
+	return hasDupes, nil
+}
+
 func migrateCanonicalDomains() error {
+	needed, err := canonicalDomainMigrationNeeded()
+	if err != nil {
+		return err
+	}
+	if !needed {
+		return nil
+	}
 	tx, err := DB.Begin()
 	if err != nil {
 		return fmt.Errorf("begin domain normalization: %w", err)
@@ -1406,17 +1471,8 @@ func migrateCanonicalDomains() error {
 		return fmt.Errorf("drop cert_jobs domain index: %w", err)
 	}
 
-	queries := []struct {
-		table  string
-		column string
-		query  string
-	}{
-		{table: "lb_rules", column: "domain", query: "SELECT caddy_id, domain FROM lb_rules WHERE domain IS NOT NULL AND trim(domain) != ''"},
-		{table: "cert_jobs", column: "domain", query: "SELECT id, domain FROM cert_jobs WHERE trim(domain) != ''"},
-		{table: "upstreams", column: "host", query: "SELECT id, host FROM upstreams WHERE trim(host) != ''"},
-	}
 	rowsToNormalize := make([]canonicalDomainMigrationRow, 0)
-	for _, source := range queries {
+	for _, source := range canonicalDomainMigrationSources {
 		rows, err := tx.Query(source.query)
 		if err != nil {
 			return fmt.Errorf("query %s.%s: %w", source.table, source.column, err)

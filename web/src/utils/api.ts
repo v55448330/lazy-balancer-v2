@@ -261,10 +261,16 @@ service.interceptors.response.use(
         if (!error.config?.silent) {
           ElMessage.warning('已取消 MFA 验证，操作未执行')
         }
+        // D5 IMP-2：静默取消同样以中文文案 reject，避免下方透出 428 英文常量。
+        return Promise.reject(new ApiRequestError('已取消 MFA 验证，操作未执行', status))
       } catch (stepError: unknown) {
         // R72 D-新2/D-新4：verify-step 失败（如输错码，401 文案已由 /auth/mfa/
         // 豁免分支携带）——给出可见反馈，不再静默吞掉。
         ElMessage.error(stepError instanceof Error ? stepError.message : 'MFA 验证未完成')
+        // D5 IMP-1：已 toast 的错误打标，下游 catch（Users.vue resetMfa）跳过二次弹窗。
+        if (stepError instanceof Error) {
+          ;(stepError as Error & { mfaSurfaced?: boolean }).mfaSurfaced = true
+        }
         return Promise.reject(stepError)
       }
     } else if (!isLoginRequest) {

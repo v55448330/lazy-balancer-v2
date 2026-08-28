@@ -27,7 +27,7 @@ import (
 var crsRulesDir = "/app/waf/crs/rules"
 
 func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, name, description, conditions, action, score, enabled, created_at, updated_at, updated_by FROM security_custom_rules ORDER BY id")
+	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(conditions,'[]'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(updated_by,0) FROM security_custom_rules ORDER BY id")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -131,7 +131,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	var existing models.SecurityCustomRule
 	var existingConditionsJSON string
 	if err := tx.QueryRowContext(c.Request.Context(),
-		`SELECT name, COALESCE(description,''), conditions, action, score, enabled FROM security_custom_rules WHERE id=?`, id,
+		`SELECT name, COALESCE(description,''), COALESCE(conditions,'[]'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1) FROM security_custom_rules WHERE id=?`, id,
 	).Scan(&existing.Name, &existing.Description, &existingConditionsJSON, &existing.Action, &existing.Score, &existing.Enabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
@@ -217,7 +217,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 	// 存储，删除单条规则不构成悬空）。
 	if idInt, err := strconv.Atoi(id); err == nil && idInt > 0 {
 		var referenced int
-		rows, err := tx.QueryContext(c.Request.Context(), `SELECT custom_rules FROM security_policies WHERE enabled=1`)
+		rows, err := tx.QueryContext(c.Request.Context(), `SELECT COALESCE(custom_rules,'[]') FROM security_policies WHERE enabled=1`)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
@@ -268,7 +268,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 }
 
 func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
-	rows, err := db.DB.Query("SELECT id, name, description, content, is_default, created_by, created_at, updated_by, updated_at FROM security_block_pages ORDER BY is_default DESC, id")
+	rows, err := db.DB.Query("SELECT id, name, COALESCE(description,''), COALESCE(content,''), COALESCE(is_default,0), COALESCE(created_by,0), COALESCE(created_at,''), COALESCE(updated_by,0), COALESCE(updated_at,'') FROM security_block_pages ORDER BY is_default DESC, id")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -344,7 +344,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback()
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT is_default FROM security_block_pages WHERE id=?", id).Scan(&isDefault); err != nil {
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(is_default,0) FROM security_block_pages WHERE id=?", id).Scan(&isDefault); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
 		} else {
@@ -388,7 +388,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 	}
 	defer tx.Rollback()
 	var isDefault bool
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT is_default FROM security_block_pages WHERE id=?", id).Scan(&isDefault); err != nil {
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(is_default,0) FROM security_block_pages WHERE id=?", id).Scan(&isDefault); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
 		} else {
@@ -1300,8 +1300,10 @@ func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 	policies := make([]models.SecurityPolicy, 0, len(policyIDs))
 	for _, policyID := range policyIDs {
 		var p models.SecurityPolicy
-		if err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-			rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode, waf_check_response
+		// C5 SUG-1：与 securityPolicySelectColumns 同 25 列同序投影（COALESCE 默认值），
+		// 任一可空列 NULL 不再使整接口 500；WHERE enabled=1 语义不变（NULL-enabled
+		// 仍被 SQL 过滤）。
+		if err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT `+securityPolicySelectColumns+`
 			FROM security_policies WHERE id=? AND enabled=1`, policyID), &p); err != nil {
 			if err == sql.ErrNoRows {
 				// 策略被并发删除或被禁用：跳过该项，保持数组与绑定表一致
