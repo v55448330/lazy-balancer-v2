@@ -48,9 +48,15 @@ var caddyProcRoot = "/proc"
 // 不支持 -p 选项（alpine 容器内 GNU 语法的 ps -o stat= -p 直接报
 // "unrecognized option"），/proc 是唯一可靠来源。
 func caddyProcessRunning() bool {
+	return caddyLivePID() > 0
+}
+
+// caddyLivePID 返回首个存活（非 Z 状态）caddy 进程的 pid，无存活进程时返回 0。
+// 与 caddyProcessRunning 共用同一 /proc 遍历（仪表盘「运行中（pid）」展示）。
+func caddyLivePID() int {
 	entries, err := os.ReadDir(caddyProcRoot)
 	if err != nil {
-		return false
+		return 0
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -72,10 +78,12 @@ func caddyProcessRunning() bool {
 			continue
 		}
 		if line[close+2] != 'Z' {
-			return true
+			if pid, err := strconv.Atoi(entry.Name()); err == nil {
+				return pid
+			}
 		}
 	}
-	return false
+	return 0
 }
 
 func caddyAdminReady(adminURL string) bool {
@@ -598,16 +606,18 @@ func (h *Handlers) GetCaddyStatus(c *gin.Context) {
 		db.DB.QueryRow(`SELECT COALESCE(caddy_apply_error,'') FROM global_config WHERE id=1`).Scan(&applyError)
 	}
 	drift := services.CurrentConfigDrift()
+	pid := caddyLivePID()
 	statusData := func(state string) map[string]string {
 		return map[string]string{
 			"status":            state,
+			"pid":               strconv.Itoa(pid),
 			"apply_error":       applyError,
 			"config_consistent": strconv.FormatBool(drift.Consistent),
 			"config_drift":      driftBannerText(drift),
 		}
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://localhost:2019/config/")
+	resp, err := client.Get(strings.TrimRight(h.cfg.CaddyAdminURL, "/") + "/config/")
 	if err == nil {
 		resp.Body.Close()
 		if resp.StatusCode < 500 {
@@ -615,9 +625,9 @@ func (h *Handlers) GetCaddyStatus(c *gin.Context) {
 			return
 		}
 	}
-	cmd := exec.Command("sh", "-c", "pgrep -x caddy 2>/dev/null | head -1 | xargs -I{} ps -o state= -p {} 2>/dev/null | grep -E '^[RSD]' && echo running || echo stopped")
-	output, _ := cmd.Output()
-	if strings.Contains(string(output), "running") {
+	// /config/ 不可达时按 /proc 判定进程存活（替换 GNU ps 管线：busybox ps 不支持 -p，
+	// 原实现 'ps -o state= -p' 在容器内恒判 stopped）。
+	if caddyProcessRunning() {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: statusData("running")})
 		return
 	}

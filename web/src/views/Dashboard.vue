@@ -59,6 +59,11 @@
                 >
                   {{ caddyStatus === 'running' ? '运行中' : caddyStatus === 'stopped' ? '已停止' : '未知' }}
                 </el-tag>
+                <span v-if="caddyStatus === 'running' && caddyPid !== '0' && caddyPid !== ''" class="caddy-pid">PID {{ caddyPid }}</span>
+                <el-tag v-if="configConsistent === 'true'" type="success" size="small" effect="plain">配置正常</el-tag>
+                <el-tooltip v-else-if="configConsistent === 'false'" placement="bottom" :content="configDrift" :popper-style="{ maxWidth: '360px' }">
+                  <el-tag type="danger" size="small" effect="plain">配置异常</el-tag>
+                </el-tooltip>
                 <div v-if="authStore.readOnlyReason === null" class="caddy-actions">
                   <el-button v-if="caddyStatus === 'running'" type="warning" size="small" @click="controlCaddy('restart')" :loading="caddyLoading">
                     重启
@@ -448,6 +453,9 @@ const systemMetrics = ref<SystemMetrics | null>(null)
 const caddyMetrics = ref<CaddyMetrics | null>(null)
 const caddyStatus = ref('unknown')
 const caddyApplyError = ref('')
+const caddyPid = ref('0')
+const configConsistent = ref('')
+const configDrift = ref('')
 const caddyLoading = ref(false)
 const rules = ref<Rule[]>([])
 interface DashboardRuleMetrics extends RuleMetrics {
@@ -838,6 +846,9 @@ const fetchAllData = (): Promise<void> => {
       if (res.data) {
         caddyStatus.value = res.data.status || 'unknown'
         caddyApplyError.value = res.data.apply_error || ''
+        caddyPid.value = res.data.pid || '0'
+        configConsistent.value = res.data.config_consistent || ''
+        configDrift.value = res.data.config_drift || ''
       }
     }),
   ]).then(() => undefined).finally(() => {
@@ -1026,6 +1037,13 @@ onUnmounted(() => {
 .status-tag.running { background: #ecfdf5; border-color: #a7f3d0; }
 .status-tag.stopped { background: #fef2f2; border-color: #fecaca; }
 .status-tag.info { background: #f3f4f6; border-color: #e5e7eb; }
+
+.caddy-pid {
+  font-size: 12px;
+  color: #6b7280;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
 
 .caddy-actions { display: flex; gap: 2px; }
 

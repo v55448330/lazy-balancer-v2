@@ -122,6 +122,88 @@ func TestCaddyProcessRunning_ignoresNonCaddyAndEmpty(t *testing.T) {
 	}
 }
 
+func TestGetCaddyStatus_reportsPidAndState(t *testing.T) {
+	// Given /config/ 可达（admin 200）且 /proc 中存在存活 caddy（pid 686）+ 僵尸（pid 10）
+	root := t.TempDir()
+	seedProcStat(t, root, "10", "caddy", 'Z')
+	seedProcStat(t, root, "686", "caddy", 'S')
+	original := caddyProcRoot
+	caddyProcRoot = root
+	t.Cleanup(func() { caddyProcRoot = original })
+	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(fakeCaddy.Close)
+	h := &Handlers{cfg: &config.Config{CaddyAdminURL: fakeCaddy.URL}}
+	router := gin.New()
+	router.GET("/status", h.GetCaddyStatus)
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/status", nil))
+
+	// Then status=running 且 pid=首个存活进程（僵尸 10 被排除）
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Data["status"] != "running" {
+		t.Fatalf("status=%q, want running", body.Data["status"])
+	}
+	if body.Data["pid"] != "686" {
+		t.Fatalf("pid=%q, want 686（首个非 Z 进程）", body.Data["pid"])
+	}
+}
+
+func TestGetCaddyStatus_fallsBackToProcWhenAdminUnreachable(t *testing.T) {
+	// Given /config/ 不可达且 /proc 中存活 caddy（pid 686）与仅僵尸（pid 10）两种视图
+	h := &Handlers{cfg: &config.Config{CaddyAdminURL: "http://127.0.0.1:1"}}
+	router := gin.New()
+	router.GET("/status", h.GetCaddyStatus)
+	original := caddyProcRoot
+	t.Cleanup(func() { caddyProcRoot = original })
+
+	// When 存活视图
+	root := t.TempDir()
+	seedProcStat(t, root, "686", "caddy", 'S')
+	caddyProcRoot = root
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/status", nil))
+	// Then /proc 回报 running（替换 busybox 不兼容的 GNU ps 管线）且带 pid
+	var body struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Data["status"] != "running" || body.Data["pid"] != "686" {
+		t.Fatalf("live view: status=%q pid=%q, want running/686", body.Data["status"], body.Data["pid"])
+	}
+
+	// When 仅僵尸视图
+	zroot := t.TempDir()
+	seedProcStat(t, zroot, "10", "caddy", 'Z')
+	caddyProcRoot = zroot
+	response2 := httptest.NewRecorder()
+	router.ServeHTTP(response2, httptest.NewRequest(http.MethodGet, "/status", nil))
+	// Then 僵尸不计运行 → stopped
+	var body2 struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(response2.Body.Bytes(), &body2); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body2.Data["status"] != "stopped" {
+		t.Fatalf("zombie view: status=%q, want stopped（僵尸≠运行）", body2.Data["status"])
+	}
+}
+
 func TestStartCaddy_does_not_overlap_UpdateRule(t *testing.T) {
 	harness := newUpdateAuditRuleHandlers(t, "lb_lifecycle", 0, true)
 	seedAuditRule(t, "lb_lifecycle", "original", "lifecycle.example.test", 8080, true, "manual", false)
