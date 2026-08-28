@@ -198,6 +198,79 @@ func TestLoadSecurityPolicyContext_toleratesNullCoreColumns(t *testing.T) {
 	}
 }
 
+// TestLoadSecurityPolicyContext_toleratesAllNullColumns 锁定 F3 G-1 缺口：
+// toleratesNullGeoIPColumns / toleratesNullCoreColumns 只覆盖 7 列——对批量
+// SELECT 中其余任一可空列的定向 PARTIAL 回退（如 created_at / description /
+// rate_limit_rps）当前全部测试不感知。本测试把 security_policies 的全部
+// 22 个可空列一次性置 NULL（description, mode, anomaly_threshold,
+// ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
+// rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups,
+// crs_excluded_rules, custom_rules, block_page_id, block_status_code,
+// updated_by, created_at, updated_at, geoip_countries, geoip_mode,
+// waf_check_response），任一列的 COALESCE 缺失 → NULL 直接 scan 进非指针
+// 目标 → loadSecurityPolicyContext 报错 → 本测试失败。
+// 例外说明：id 为 AUTOINCREMENT 主键（省略）；name NOT NULL（给值）；
+// enabled 虽在 schema 可空，但两条读路径（批量 WHERE enabled=1 与单查
+// WHERE enabled=1）均刻意不对其 COALESCE——NULL/0 策略行对两条路径同时
+// 不可见，本身同构，且置 NULL 会使行被过滤、scan 永不执行，故播种为 1。
+func TestLoadSecurityPolicyContext_toleratesAllNullColumns(t *testing.T) {
+	// Given：全部 22 个可空列显式 NULL（模拟最极端的脏数据行）
+	_, database := newClusterTestService(t)
+	result, err := database.Exec(`INSERT INTO security_policies
+		(name, enabled, description, mode, anomaly_threshold,
+		 ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
+		 rate_limit_enabled, rate_limit_rps, rate_limit_burst,
+		 crs_rule_groups, crs_excluded_rules, custom_rules,
+		 block_page_id, block_status_code, updated_by, created_at, updated_at,
+		 geoip_countries, geoip_mode, waf_check_response)
+		VALUES ('all-null', 1, NULL, NULL, NULL,
+		 NULL, NULL, NULL, NULL, NULL,
+		 NULL, NULL, NULL,
+		 NULL, NULL, NULL,
+		 NULL, NULL, NULL, NULL, NULL,
+		 NULL, NULL, NULL)`)
+	if err != nil {
+		t.Fatalf("seed all-null policy: %v", err)
+	}
+	policyID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read policy id: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id)
+		VALUES ('lb_all_null', ?)`, policyID); err != nil {
+		t.Fatalf("bind all-null policy: %v", err)
+	}
+
+	// When：批量预载（与 generateCaddyConfigFromStore 同通道）
+	ctx, err := loadSecurityPolicyContext(database)
+
+	// Then：不得 scan 失败（F3 G-1：任一 COALESCE 缺失即在此暴露）；
+	// 字段归一化到 schema 默认值
+	if err != nil {
+		t.Fatalf("loadSecurityPolicyContext 不得因全 NULL 列报错（F3 G-1）: %v", err)
+	}
+	policies := ctx.policyByRule["lb_all_null"]
+	if len(policies) != 1 {
+		t.Fatalf("want 1 policy for lb_all_null, got %d", len(policies))
+	}
+	p := policies[0]
+	if p.ID != int(policyID) {
+		t.Fatalf("policy id = %d, want %d", p.ID, policyID)
+	}
+	if p.Mode != "off" {
+		t.Fatalf("Mode = %q, want COALESCE 归一化后的 %q", p.Mode, "off")
+	}
+	if string(p.CustomRules) != "[]" {
+		t.Fatalf("CustomRules = %q, want COALESCE 归一化后的 %q", string(p.CustomRules), "[]")
+	}
+	if p.AnomalyThreshold != 5 {
+		t.Fatalf("AnomalyThreshold = %d, want COALESCE 归一化后的 5", p.AnomalyThreshold)
+	}
+	if p.BlockPageID != 0 {
+		t.Fatalf("BlockPageID = %d, want COALESCE 归一化后的 0", p.BlockPageID)
+	}
+}
+
 // TestSnapshotSecurityPolicies_coalescesNullJSONColumns 锁定 A-I2 集群传播
 // 硬化：主节点 dump（snapshotSecurityPolicies）必须对可空列 COALESCE——否则
 // 主节点一行 NULL 经快照原样透传（dumpTableAsJSON 把 NULL  marshals 成
