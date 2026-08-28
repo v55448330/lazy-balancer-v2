@@ -187,6 +187,14 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 }
 
 func (h *Handlers) Logout(c *gin.Context) {
+	// 第 15 轮审计 S-4：API Key 认证无会话令牌概念（jwtAuth 只为 JWT 写
+	// token_revocation_hash/token_expires_at）——旧代码 API Key 登出恒落 500
+	// 分支。对齐仓内 DELETE 幂等契约（重复调用 404——见 apidocs
+	// operationDescription 的删除类约定），按「无会话令牌可吊销」返回 404。
+	if c.GetString("auth_type") == "api_key" {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API 密钥认证无会话令牌可吊销"})
+		return
+	}
 	username, _ := c.Get("username")
 	usernameStr, _ := username.(string)
 	revocationHash := c.GetString("token_revocation_hash")

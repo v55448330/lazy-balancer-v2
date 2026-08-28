@@ -164,7 +164,7 @@ var apiDocRoutes = []apiDocRoute{
 	{"POST", "/security/block-pages", "安全", "创建拦截页面", `{"name":"自定义拦截页","description":"自定义 403 页面","content":"<h1>Access Denied</h1>"}`, `{"id":1}`, []string{"400 validation_failed", "403 slave_or_admin_required"}, ""},
 	{"PUT", "/security/block-pages/:id", "安全", "更新拦截页面", `{"name":"自定义拦截页","content":"<h1>Access Denied</h1>"}`, `{"code":0}`, []string{"400 validation_failed", "403 slave_or_admin_required", "404 not_found"}, "默认页面不可编辑（返回 403）。"},
 	{"DELETE", "/security/block-pages/:id", "安全", "删除拦截页面", "", `{"code":0}`, []string{"403 slave_or_admin_required", "404 not_found"}, "默认页面不可删除（返回 403）。"},
-	{"GET", "/security/events", "安全", "安全事件日志", "", `{"events":[],"total":0,"page":1,"page_size":20}`, []string{"401 unauthenticated"}, "query: page, page_size, action, ip, rule_caddy_id, start_time, end_time（配置时区，YYYY-MM-DD[ HH:MM:SS]）。"},
+	{"GET", "/security/events", "安全", "安全事件日志", "", `{"events":[],"total":0,"page":1,"page_size":20}`, []string{"401 unauthenticated"}, "query: page, page_size, action, ip, rule_caddy_id, rule_name, policy_name, rule_triggered, uri, start_time, end_time（配置时区，YYYY-MM-DD[ HH:MM:SS]）。"},
 	{"GET", "/security/crs", "安全", "CRS 规则集信息", "", `{"version":"v4.28.0","auto_update":true,"rule_count":832}`, []string{"401 unauthenticated"}, ""},
 	{"PUT", "/security/crs/auto-update", "安全", "开关 CRS 自动更新", `{"auto_update":true}`, `{"code":0}`, []string{"403 slave_or_admin_required"}, ""},
 	{"POST", "/security/crs/update", "安全", "手动触发 CRS 更新", "", `{"status":"running","trigger":"manual"}`, []string{"403 slave_or_admin_required", "409 update_running"}, ""},

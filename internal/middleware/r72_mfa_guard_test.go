@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,5 +97,53 @@ func TestMFAStepUpGuard_endToEnd(t *testing.T) {
 	// 查询/测试/预览）即使 mfa_ts 过期也不弹码——用户打开规则列表页不该被要求验证。
 	if code := post("/api/v1/rules/cert-info", tokenOld); code == http.StatusPreconditionRequired {
 		t.Fatal("read-semantics POST (cert-info) must be exempt from step-up（打开列表页不弹码）")
+	}
+}
+
+// 第 15 轮审计 I-J（R72 C-I-3 fail-closed）：MFAUserEnabled 的 DB 错误分支不得与
+// 「MFA 未启用」合并放行——旧代码 err != nil || !mfaEnabled 同一 c.Next()，瞬时
+// DB 失败会让已启用 MFA 的用户整体绕过 step-up（fail-open）。DB 错误必须 500
+// 中止（与 readOnlyGuard 的基建错误 500 中止同口径）。
+func TestMFAStepUpGuard_failClosedOnDBError(t *testing.T) {
+	router := newMiddlewareTestRouter(t)
+	const jwtSecret = "test-secret"
+
+	username := fmt.Sprintf("g%d", time.Now().UnixNano())
+	res, err := db.DB.Exec("INSERT INTO users (username,password_hash,role,is_enabled,password_version) VALUES (?,?,'admin',1,0)", username, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	if _, err := db.DB.Exec("UPDATE users SET mfa_enabled=1 WHERE id=?", id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec("UPDATE global_config SET mfa_write_guard=1 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec("UPDATE global_config SET mfa_write_guard=0 WHERE id=1") })
+	claims := jwt.MapClaims{
+		"user_id": float64(id), "username": username, "pwd_ver": float64(0),
+		"jti": fmt.Sprintf("j%d", time.Now().UnixNano()), "exp": time.Now().Add(time.Hour).Unix(),
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(jwtSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 模拟瞬时 DB 失败（仅 MFA 启用态查询报错，认证链其余查询正常）
+	oldCheck := mfaUserEnabledCheck
+	mfaUserEnabledCheck = func(int) (bool, error) { return false, errors.New("simulated transient db failure") }
+	t.Cleanup(func() { mfaUserEnabledCheck = oldCheck })
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/config", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("MFAUserEnabled DB error must fail-closed 500, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "MFA") {
+		t.Fatalf("fail-closed response must identify the MFA lookup failure, body=%s", rec.Body.String())
 	}
 }

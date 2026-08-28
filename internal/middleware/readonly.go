@@ -29,7 +29,9 @@ func readOnlyGuard(database *sql.DB) gin.HandlerFunc {
 			return
 		}
 		var isMaster bool
-		if err := database.QueryRowContext(c.Request.Context(), "SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
+		// COALESCE 兜底 schema 默认 TRUE：历史库 is_master 若为 NULL，裸 SELECT 会
+		// Scan 失败导致每个写请求 500（登录路径 auth.go 已同法处理）。
+		if err := database.QueryRowContext(c.Request.Context(), "SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "节点角色查询失败"})
 			return
 		}

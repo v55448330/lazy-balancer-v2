@@ -754,10 +754,12 @@ func runMigrations() error {
 		"security_block_pages.created_by":                 "INTEGER DEFAULT 0",
 		"security_block_pages.updated_by":                 "INTEGER DEFAULT 0",
 		"security_policies.updated_by":                    "INTEGER DEFAULT 0",
-		"security_policies.geoip_countries":               "TEXT NOT NULL DEFAULT '[]'",
-		"security_policies.geoip_mode":                    "TEXT NOT NULL DEFAULT 'deny'",
-		"security_policies.waf_check_response":            "INTEGER NOT NULL DEFAULT 0",
-		"security_policies.block_status_code":             "INTEGER NOT NULL DEFAULT 0",
+		// 四列刻意可空（不加 NOT NULL）：restoreTable/快照/带外脏数据可携带 NULL，
+		// 读路径 loadSecurityPolicyContext 以 COALESCE 归一化；加 NOT NULL 会拒绝 null 恢复（A-I2/F3 回归测试）。
+		"security_policies.geoip_countries":    "TEXT DEFAULT '[]'",
+		"security_policies.geoip_mode":         "TEXT DEFAULT 'deny'",
+		"security_policies.waf_check_response": "INTEGER DEFAULT 0",
+		"security_policies.block_status_code":  "INTEGER DEFAULT 0",
 	}
 	// R42 F1: 四个全局超时列的 0→推荐默认回填只在「新增列」时执行一次——
 	// 历史存量行在新列 ADD 后恰好为 0，才是真正需要回填的场景；渲染层把 0 当作
@@ -945,7 +947,9 @@ func runMigrations() error {
 	// "2026-07-02 11:56:03.432055881+00:00" which don't compare correctly
 	// against datetime('now'). datetime() of an already-canonical string
 	// returns the same value, so this is safe to run repeatedly.
-	if _, err := DB.Exec("UPDATE cert_jobs SET ca_available_after = datetime(ca_available_after) WHERE ca_available_after IS NOT NULL"); err != nil {
+	// datetime() 对无法解析的值返回 NULL：若无条件覆盖，存量垃圾值会被静默清成
+	// NULL，丢失「该行数据异常」的信号。仅规范化可解析的值。
+	if _, err := DB.Exec("UPDATE cert_jobs SET ca_available_after = datetime(ca_available_after) WHERE ca_available_after IS NOT NULL AND datetime(ca_available_after) IS NOT NULL"); err != nil {
 		return fmt.Errorf("failed to normalize cert_jobs.ca_available_after: %w", err)
 	}
 

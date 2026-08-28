@@ -161,6 +161,26 @@ const bodySchema = `{"type":"object","additionalProperties":true}`
 const maxResponseSize = 4 << 20
 const InternalAuthHeader = "X-Lazy-Balancer-Internal-MCP-Auth"
 
+// 第 15 轮审计 K-1：MCP 工具调用经本机回环转发到内部 REST（源地址恒为
+// 127.0.0.1），审计/安全记录会把全部 MCP 操作记成回环 IP。网关层把真实客户端
+// IP 注入请求 context（WithClientIP），forward 再转写为内部头；接收端仅在内部
+// 认证密钥匹配时采信该头（外部请求无法伪造审计源 IP）。
+const InternalClientIPHeader = "X-Lazy-Balancer-Internal-MCP-Client-IP"
+
+type clientIPContextKey struct{}
+
+// WithClientIP 将 MCP 请求的真实客户端 IP 附加到 context（网关在进入 MCP
+// 协议处理器前调用）。
+func WithClientIP(ctx context.Context, clientIP string) context.Context {
+	return context.WithValue(ctx, clientIPContextKey{}, clientIP)
+}
+
+// ClientIPFromContext 读取网关注入的真实客户端 IP（无注入时返回空串）。
+func ClientIPFromContext(ctx context.Context) string {
+	clientIP, _ := ctx.Value(clientIPContextKey{}).(string)
+	return clientIP
+}
+
 // serverInstructions 随 initialize 响应下发给客户端，说明认证方式、权限范围与常用流程，
 // 让 Agent 在首次选工具前就能选对路径、减少试错往返
 const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证：X-API-Key 头或 Authorization: Bearer lb_sk_...，Key 需开启 MCP 功能。
@@ -206,8 +226,8 @@ const issueCertificateSchema = `{"type":"object","properties":{"caddy_id":{"type
 const auditLogsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20},"username":{"type":"string","description":"操作人模糊筛选"},"action":{"type":"string","description":"操作模糊筛选"},"resource":{"type":"string","description":"对象模糊筛选"},"ip":{"type":"string","description":"IP 模糊筛选"},"keyword":{"type":"string","description":"详情关键词"},"start_time":{"type":"string","description":"开始时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"},"end_time":{"type":"string","description":"结束时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"}},"additionalProperties":false}`
 
 // R68 B-F2：schema 必须覆盖 queryArgs 声明的全部参数——mcp-go 在工具处理器前
-// 按 input_schema 强校验（additionalProperties:false），querySchema("search")
-// 会把 Agent 按工具描述传的 page/page_size 以 -32602 拒绝，分页永远不可达。
+// 按 input_schema 强校验（additionalProperties:false），漏声明的参数（如 page/page_size）
+// 会把 Agent 按工具描述传的分页值以 -32602 拒绝，分页永远不可达。
 // 边界与 REST clamp 对齐（ListCRSRules page_size≤100 默认 50；cert jobs
 // page≤1000000、page_size≤200 默认 50——见 ListCertJobs maxCertJobPage）。
 const listCRSRulesSchema = `{"type":"object","properties":{"search":{"type":"string","description":"搜索关键词"},"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":50}},"additionalProperties":false}`
@@ -328,6 +348,9 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 	if internalAuthSecret != "" {
 		request.Header.Set(InternalAuthHeader, internalAuthSecret)
 	}
+	if clientIP := ClientIPFromContext(ctx); clientIP != "" {
+		request.Header.Set(InternalClientIPHeader, clientIP)
+	}
 	redirectlessClient := *client
 	redirectlessClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -365,6 +388,9 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 		request.Header.Set("X-API-Key", extractAPIKey(call.Header))
 		if internalAuthSecret != "" {
 			request.Header.Set(InternalAuthHeader, internalAuthSecret)
+		}
+		if clientIP := ClientIPFromContext(ctx); clientIP != "" {
+			request.Header.Set(InternalClientIPHeader, clientIP)
 		}
 		response, err = redirectlessClient.Do(request)
 		if err != nil {
@@ -443,8 +469,4 @@ func scalarString(value any) string {
 
 func idSchema(name, description, valueType string) string {
 	return fmt.Sprintf(`{"type":"object","required":[%q],"properties":{%q:{"type":%q,"description":%q}},"additionalProperties":false}`, name, name, valueType, description)
-}
-
-func querySchema(name, description, valueType string) string {
-	return fmt.Sprintf(`{"type":"object","properties":{%q:{"type":%q,"description":%q}},"additionalProperties":false}`, name, valueType, description)
 }

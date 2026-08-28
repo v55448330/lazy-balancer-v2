@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -206,6 +208,69 @@ func TestJWTLogout_revocation_usesUTCTextAcrossNegativeTimezoneQueryAndCleanup(t
 	}
 	if !strings.HasSuffix(stored, "Z") || active != 1 || cleanupErr != nil || remaining != 0 {
 		t.Fatalf("stored=%q active=%d cleanup=%v remaining=%d", stored, active, cleanupErr, remaining)
+	}
+}
+
+// 第 15 轮审计 S-2：401 消息按失败类别分语义——过期（自然态，重登可解）与
+// 签名无效/格式损坏（凭证问题）不得同发「登录状态已过期」；状态码均保持 401。
+// 第 15 轮审计 S-4：API Key 认证无会话令牌概念——登出应返回 404（无会话令牌
+// 可吊销，对齐 DELETE 重复调用 404 的幂等契约），而非旧代码的恒 500（context
+// 缺少 JWT 吊销哈希落穿错误分支）。
+func TestAPIKeyLogout_returnsNotFoundInsteadOf500(t *testing.T) {
+	router := newMiddlewareTestRouter(t)
+	key := "lb_sk_api-logout-test"
+	hash := sha256.Sum256([]byte(key))
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (40,'api-logout','x','admin',1)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec("INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled) VALUES ('api-logout',?,?,40,1)", hex.EncodeToString(hash[:]), key[:12]); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.Header.Set("X-API-Key", key)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("API-key logout status=%d body=%s, want 404", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "无会话令牌") {
+		t.Fatalf("API-key logout body must explain no session token, body=%s", rec.Body.String())
+	}
+}
+
+func TestJWTAuth_splitsExpiredVsInvalidMessages(t *testing.T) {
+	cfg := &config.Config{JWTSecret: "split-message-secret"}
+	oldDB := db.DB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("init database: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB = oldDB
+		db.SetDB(oldDB)
+	})
+	router := gin.New()
+	router.Use(jwtAuth(cfg))
+	router.GET("/protected", noContent)
+	hit := func(token string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/protected", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		router.ServeHTTP(response, request)
+		return response
+	}
+	expired := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id": 1, "username": "u", "exp": time.Now().Add(-time.Hour).Unix(), "iat": time.Now().Add(-2 * time.Hour).Unix(),
+	})
+	expiredToken, err := expired.SignedString([]byte(cfg.JWTSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := hit(expiredToken); response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), "登录状态已过期") {
+		t.Fatalf("expired token status=%d body=%s, want 401 登录状态已过期", response.Code, response.Body.String())
+	}
+	if response := hit("aaa.bbb.ccc"); response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), "登录凭证无效") {
+		t.Fatalf("malformed token status=%d body=%s, want 401 登录凭证无效", response.Code, response.Body.String())
 	}
 }
 
@@ -471,6 +536,36 @@ func TestReadOnlyGuard_blocks_non_admin_business_write(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "非管理员用户只读") {
 		t.Fatalf("body = %q, want non-admin read-only message", response.Body.String())
+	}
+}
+
+func TestReadOnlyGuard_nullIsMasterDoesNot500(t *testing.T) {
+	// Given
+	database, err := sql.Open("sqlite", t.TempDir()+"/null-master.db")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if _, err := database.Exec("CREATE TABLE global_config (id INTEGER PRIMARY KEY, is_master BOOLEAN); INSERT INTO global_config VALUES (1, NULL)"); err != nil {
+		t.Fatalf("seed database: %v", err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("role", "admin")
+		c.Next()
+	})
+	router.Use(readOnlyGuard(database))
+	router.POST("/api/v1/rules", noContent)
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/rules", nil))
+
+	// Then
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d body = %s, want 204 (NULL is_master 须按 schema 默认 TRUE 处理)", response.Code, response.Body.String())
 	}
 }
 

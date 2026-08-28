@@ -34,6 +34,11 @@ var jwtAuthenticationQuery = func(query string, args ...any) *sql.Row {
 	return db.DB.QueryRow(query, args...)
 }
 
+// mfaUserEnabledCheck：MFA 启用态查询的测试注入点（与 jwtAuthenticationQuery 同模式）——
+// 第 15 轮审计 I-J 的 fail-closed 回归测试需要模拟「瞬时 DB 失败」，真实关闭 DB 会
+// 连带让 jwtAuth 的会话校验先失败（401），无法单独触发守卫分支。
+var mfaUserEnabledCheck = services.MFAUserEnabled
+
 const revokedTokenTimeFormat = "2006-01-02T15:04:05Z"
 
 var recordAuthenticationSecurityAudit = services.RecordAuditLog
@@ -67,12 +72,26 @@ func (limiter *authenticationAuditLimiter) reset() {
 	limiter.mu.Unlock()
 }
 
+// auditClientIP 审计源 IP（第 15 轮审计 K-1）：内部 MCP 转发请求（本机回环
+// 自调用）携带网关注入的真实客户端 IP 头；仅当内部认证密钥匹配（与
+// apiKeyAuth 的 trustedInternalMCP 判定同口径）时采信，外部请求伪造该头不
+// 产生任何效果，其余请求沿用 gin ClientIP。
+func auditClientIP(c *gin.Context) string {
+	if secret := c.GetHeader(mcpserver.InternalAuthHeader); secret != "" &&
+		subtle.ConstantTimeCompare([]byte(secret), []byte(internalMCPAuthSecret)) == 1 {
+		if clientIP := c.GetHeader(mcpserver.InternalClientIPHeader); clientIP != "" {
+			return clientIP
+		}
+	}
+	return c.ClientIP()
+}
+
 func recordAuthenticationRejection(c *gin.Context, reason string) {
 	path := c.FullPath()
 	if path == "" {
 		path = c.Request.URL.Path
 	}
-	ipAddress := c.ClientIP()
+	ipAddress := auditClientIP(c)
 	if !securityAuditLimiter.allow(reason+"\x00"+path+"\x00"+ipAddress, authenticationSecurityAuditNow()) {
 		return
 	}
@@ -203,6 +222,10 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				return
 			}
 			c.Request.Body = io.NopCloser(bytes.NewReader(body))
+			// 第 15 轮审计 K-1：把真实客户端 IP 注入 MCP 转发 context——内部
+			// 转发是本机回环自调用，不注入则 MCP 操作的审计源 IP 恒为
+			// 127.0.0.1（接收端 auditClientIP 凭内部认证密钥采信）。
+			c.Request = c.Request.WithContext(mcpserver.WithClientIP(c.Request.Context(), c.ClientIP()))
 			gin.WrapH(mcpHandler)(c)
 		})
 		v1.GET("/openapi.yaml", h.GetOpenAPIYAML)
@@ -465,7 +488,7 @@ func auditMiddleware() gin.HandlerFunc {
 			detail = services.AppendAPIKeyAuditDetail(detail, c.GetInt("api_key_id"), c.GetString("api_key_name"))
 		}
 
-		services.RecordAuditLog(usernameStr, action, resource, detail, c.ClientIP())
+		services.RecordAuditLog(usernameStr, action, resource, detail, auditClientIP(c))
 	}
 }
 
@@ -514,8 +537,16 @@ func jwtAuth(cfg *config.Config) gin.HandlerFunc {
 		}, jwt.WithExpirationRequired(), jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 
 		if err != nil || !token.Valid {
-			recordAuthenticationRejection(c, "jwt_expired_or_invalid")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录状态已过期，请重新登录"})
+			// 第 15 轮审计 S-2：过期与无效分判——过期是自然态（重登即可），签名
+			// 无效/格式损坏是凭证问题；旧代码两类同发「登录状态已过期」，把无效
+			// 凭证误导成「重新登录就能好」。401 状态码不变，仅消息分语义。
+			if errors.Is(err, jwt.ErrTokenExpired) {
+				recordAuthenticationRejection(c, "jwt_expired")
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录状态已过期，请重新登录"})
+			} else {
+				recordAuthenticationRejection(c, "jwt_invalid")
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录凭证无效"})
+			}
 			c.Abort()
 			return
 		}
@@ -632,7 +663,11 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 				return
 			}
 			recordAuthenticationRejection(c, "api_key_invalid")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid API key"})
+			// 第 15 轮审计 K-2：MCP/Key 认证链的通用 401 消息此前为英文
+			// "Invalid API key"，与本认证链其余消息（缺少认证信息/认证格式无效/
+			// 登录状态已过期等）及 serverInstructions 的中文错误约定不一致——
+			// Agent 与前端按中文解析。
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "API 密钥无效"})
 			c.Abort()
 			return
 		}
@@ -660,7 +695,7 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 				return
 			}
 			recordAuthenticationRejection(c, "api_key_invalid")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "Invalid API key"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "API 密钥无效"})
 			c.Abort()
 			return
 		}
@@ -782,8 +817,17 @@ func mfaStepUpGuard() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		mfaEnabled, err := services.MFAUserEnabled(userID)
-		if err != nil || !mfaEnabled {
+		// 第 15 轮审计 I-J（R72 C-I-3）：DB 错误与「MFA 未启用」必须分判——未启用
+		// 是合理直通（该用户未启用 MFA，守卫不适用）；DB 错误必须 fail-closed
+		// （与本文件同类守卫的基建错误 500 中止同口径，如 apiKeyAuth 的白名单
+		// 解析失败）：瞬时 DB 失败落穿此处会让已启用 MFA 的用户整体绕过
+		// step-up（fail-open），等同二因子静默旁路。
+		mfaEnabled, err := mfaUserEnabledCheck(userID)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "MFA 状态查询失败"})
+			return
+		}
+		if !mfaEnabled {
 			c.Next()
 			return
 		}

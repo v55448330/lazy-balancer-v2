@@ -1027,6 +1027,94 @@ func TestInitialize_adds_certificate_deployment_retry_columns(t *testing.T) {
 	}
 }
 
+func TestInitialize_freshSecurityPoliciesColumnsStayNullableLikeMigration(t *testing.T) {
+	// Given
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+
+	// When
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+
+	// Then
+	for _, name := range []string{"block_status_code", "geoip_countries", "geoip_mode", "waf_check_response"} {
+		var notNull int
+		if err := DB.QueryRow(`SELECT "notnull" FROM pragma_table_info('security_policies') WHERE name=?`, name).Scan(&notNull); err != nil {
+			t.Fatalf("read security_policies.%s schema: %v", name, err)
+		}
+		if notNull != 0 {
+			t.Fatalf("security_policies.%s notnull=%d, want 0 (nullable)", name, notNull)
+		}
+	}
+	if _, err := DB.Exec(`INSERT INTO security_policies (name) VALUES ('schema-tripwire')`); err != nil {
+		t.Fatalf("insert security policy with column defaults: %v", err)
+	}
+	var countries, mode string
+	var wafCheckResponse, statusCode int
+	if err := DB.QueryRow(`SELECT geoip_countries, geoip_mode, waf_check_response, block_status_code FROM security_policies WHERE name='schema-tripwire'`).Scan(&countries, &mode, &wafCheckResponse, &statusCode); err != nil {
+		t.Fatalf("read security policy defaults: %v", err)
+	}
+	if countries != "[]" || mode != "deny" || wafCheckResponse != 0 || statusCode != 0 {
+		t.Fatalf("column defaults=(%q,%q,%d,%d), want ([] deny 0 0)", countries, mode, wafCheckResponse, statusCode)
+	}
+}
+
+func TestInitialize_certJobNormalizationPreservesUnparseableValues(t *testing.T) {
+	// Given
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	if _, err := DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, ca_available_after) VALUES
+		('r1','garbage.example.com','not-a-date'),
+		('r2','legacy.example.com','2026-07-02'),
+		('r3','null.example.com',NULL)`); err != nil {
+		t.Fatalf("seed cert jobs: %v", err)
+	}
+
+	// When
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("re-run migrations: %v", err)
+	}
+
+	// Then（SQL 侧比较存储原文，避免驱动把 DATETIME 重排成 RFC3339 干扰断言）
+	var garbageKept int
+	if err := DB.QueryRow(`SELECT ca_available_after = 'not-a-date' FROM cert_jobs WHERE domain='garbage.example.com'`).Scan(&garbageKept); err != nil {
+		t.Fatalf("read garbage row: %v", err)
+	}
+	if garbageKept != 1 {
+		var actual string
+		_ = DB.QueryRow(`SELECT ca_available_after FROM cert_jobs WHERE domain='garbage.example.com'`).Scan(&actual)
+		t.Fatalf("garbage value=%q, want 'not-a-date' preserved", actual)
+	}
+	var normalized int
+	if err := DB.QueryRow(`SELECT ca_available_after = '2026-07-02 00:00:00' FROM cert_jobs WHERE domain='legacy.example.com'`).Scan(&normalized); err != nil {
+		t.Fatalf("read legacy row: %v", err)
+	}
+	if normalized != 1 {
+		var actual string
+		_ = DB.QueryRow(`SELECT ca_available_after FROM cert_jobs WHERE domain='legacy.example.com'`).Scan(&actual)
+		t.Fatalf("normalized value=%q, want '2026-07-02 00:00:00'", actual)
+	}
+	var nullKept int
+	if err := DB.QueryRow(`SELECT ca_available_after IS NULL FROM cert_jobs WHERE domain='null.example.com'`).Scan(&nullKept); err != nil {
+		t.Fatalf("read null row: %v", err)
+	}
+	if nullKept != 1 {
+		t.Fatalf("null row not preserved as NULL")
+	}
+}
+
 func TestMigrateLegacyDNSCredentials_rollsBackAllRowsOnFailure(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE certificate_configs (

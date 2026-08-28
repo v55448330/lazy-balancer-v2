@@ -239,6 +239,55 @@ func TestResolveAPIKeyReadOnly_rejectsExpiredKey(t *testing.T) {
 	}
 }
 
+// 第 15 轮审计 K-1：forward 必须把网关注入 context 的真实客户端 IP 转写为内部
+// 头（回环自调用下接收端 RemoteAddr 恒为 127.0.0.1，审计源 IP 依赖此头）。
+func TestForwardPropagatesClientIPFromContext(t *testing.T) {
+	var receivedIP string
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedIP = r.Header.Get(InternalClientIPHeader)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer rest.Close()
+
+	handler := New(rest.URL+"/api/v1", rest.Client())
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_rules","arguments":{}}}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/mcp", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("X-API-Key", "lb_sk_ip-propagation-test")
+	request = request.WithContext(WithClientIP(request.Context(), "192.0.2.7"))
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+	if receivedIP != "192.0.2.7" {
+		t.Fatalf("internal API did not receive the real client IP header, got %q", receivedIP)
+	}
+}
+
+// 无网关注入（直连/旧网关）时不得设置内部头——接收端按 ClientIP 兜底。
+func TestForwardOmitsClientIPHeaderWithoutContextInjection(t *testing.T) {
+	var receivedIP string
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedIP = r.Header.Get(InternalClientIPHeader)
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer rest.Close()
+
+	result := callTool(t, New(rest.URL+"/api/v1", rest.Client()), "list_rules", `{}`)
+	// MCP 信封内层 JSON 文本被转义（\"code\":0），按转义形态匹配
+	if !strings.Contains(result, `\"code\":0`) {
+		t.Fatalf("result=%q", result)
+	}
+	if receivedIP != "" {
+		t.Fatalf("internal client IP header must be absent without gateway injection, got %q", receivedIP)
+	}
+}
+
 func TestIsLoopbackHTTPURLAllowsIPv6Loopback(t *testing.T) {
 	target, err := url.Parse("http://[::1]:8000/api/v1")
 	if err != nil {
