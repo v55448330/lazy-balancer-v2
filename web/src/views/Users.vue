@@ -122,7 +122,7 @@
             <el-button v-if="!row.mfa_enabled && row.id === authStore.user?.id" type="success" link size="small" :disabled="isReadOnly || submitting" @click="openMfaBinding(row)">
               启用 MFA
             </el-button>
-            <el-button v-if="row.mfa_enabled && authStore.user?.role === 'admin'" type="warning" link size="small" :disabled="isReadOnly || submitting" @click="resetMfa(row)">
+            <el-button v-if="row.mfa_enabled && authStore.user?.role === 'admin'" type="warning" link size="small" :disabled="isReadOnly || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetMfa(row)">
               重置 MFA
             </el-button>
             <el-button v-if="row.id !== authStore.user?.id" type="danger" link size="small" :disabled="isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="deleteUser(row.id)">
@@ -416,6 +416,8 @@ const resetPassword = async (id: number) => {
 // R72 三次调整（用户裁决）：重置需确认 + 操作者 MFA 校验（自己启用过 MFA 则
 // 弹码验证——后端同门校验）；admin 或本人可重置。
 const resetMfa = async (row: UserListItem): Promise<void> => {
+  if (isReadOnly.value || submitting.value || submittingUserId.value === row.id || operatingUserIds.value.has(row.id) || switchingIds.value.has(row.id)) return
+  operatingUserIds.value.add(row.id)
   try {
     const selfRow = users.value.find(u => u.id === authStore.user?.id)
     const operatorMfa = row.id === authStore.user?.id ? true : (selfRow?.mfa_enabled ?? false)
@@ -457,6 +459,8 @@ const resetMfa = async (row: UserListItem): Promise<void> => {
       return
     }
     ElMessage.error(error instanceof Error ? error.message : '重置失败')
+  } finally {
+    operatingUserIds.value.delete(row.id)
   }
 }
 

@@ -1,5 +1,14 @@
 <template>
   <div class="cluster-settings">
+    <el-alert v-if="clusterPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert">
+      <template #title>
+        <div class="polling-error-title">
+          <span>集群状态加载失败：{{ clusterPollingError.errorMessage.value }}</span>
+          <el-button link type="danger" :loading="clusterRetrying" @click="retryClusterPolling">立即重试</el-button>
+        </div>
+      </template>
+      <div class="polling-error-meta">{{ clusterPollingErrorDescription }}</div>
+    </el-alert>
     <ClusterStatusCard :status="status" :loading="initialLoading" />
     <el-row :gutter="16" class="equal-height-row">
       <el-col :xs="24" :sm="24" :md="12">
@@ -113,6 +122,7 @@ import ClusterModeCard from './cluster/ClusterModeCard.vue'
 import ClusterSlavePanel from './cluster/ClusterSlavePanel.vue'
 import ClusterStatusCard from './cluster/ClusterStatusCard.vue'
 import { usePollingTask } from '@/composables/usePollingTask'
+import { usePollingErrorState } from '@/composables/usePollingErrorState'
 
 type SyncErrorCode = 'schema_too_new' | 'schema_too_old' | 'signature_invalid' | 'pin_mismatch' | 'validation_failed' | 'apply_failed' | 'transport_error'
 type ClusterNodeWithSyncError = Omit<ClusterNode, 'health'> & {
@@ -169,12 +179,8 @@ const fetchNodes = async (): Promise<void> => {
   const requestSeq = ++requestSequence
   nodesLoading.value = true
   try {
-  const response = await request.get<APIResponse<readonly ClusterNodeWithSyncError[]>>('/cluster/nodes', { signal: clusterPolling.signal, silent: true })
+    const response = await request.get<APIResponse<readonly ClusterNodeWithSyncError[]>>('/cluster/nodes', { signal: clusterPolling.signal, silent: true })
     if (!disposed && requestSeq === requestSequence) nodes.value = response.data ?? []
-  } catch (error: unknown) {
-    // Silent request: no toast from the interceptor, keep the only diagnostics in console
-    // and prevent unhandled rejections on fire-and-forget refresh paths.
-    console.error('Failed to fetch cluster nodes:', error)
   } finally {
     if (!disposed && requestSeq === requestSequence) nodesLoading.value = false
   }
@@ -468,10 +474,37 @@ const updateAccessUrl = async (accessUrl: string): Promise<void> => {
   }
 }
 
-const clusterPolling = usePollingTask(async () => refreshCluster(), {
-  interval: 15000,
-  onError: (error) => console.error('Failed to poll cluster status:', error),
+const clusterPollingError = usePollingErrorState()
+const clusterPollingErrorDescription = computed(() => {
+  const lastError = formatDate(clusterPollingError.lastErrorAt.value)
+  const retryAt = formatDate(clusterPollingError.retryAt.value)
+  return retryAt
+    ? `最后错误：${lastError}；契约响应异常，自动重试已退避至 ${retryAt}`
+    : `最后错误：${lastError}`
 })
+const clusterRetrying = ref(false)
+const clusterPolling = usePollingTask(async () => {
+  if (!clusterPollingError.canRun()) return
+  await refreshCluster()
+  clusterPollingError.clear()
+}, {
+  interval: 15000,
+  onError: (error) => {
+    console.error('Failed to poll cluster status:', error)
+    clusterPollingError.recordError(error)
+  },
+})
+
+const retryClusterPolling = async (): Promise<void> => {
+  if (clusterRetrying.value) return
+  clusterRetrying.value = true
+  clusterPollingError.resetBackoff()
+  try {
+    await clusterPolling.run()
+  } finally {
+    clusterRetrying.value = false
+  }
+}
 
 onMounted(async () => {
   try {
@@ -491,6 +524,9 @@ onUnmounted(() => {
 
 <style scoped>
 .cluster-settings { display: flex; flex-direction: column; gap: 20px; }
+.polling-error-alert { align-self: stretch; }
+.polling-error-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+.polling-error-meta { font-size: 12px; }
 .token-box { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding: 12px; border-radius: var(--radius-md); background: var(--bg-secondary); }
 .token-box code { flex: 1; min-width: 0; color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; word-break: break-all; }
 

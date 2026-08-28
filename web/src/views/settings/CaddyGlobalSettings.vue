@@ -252,6 +252,8 @@ const stopLogPolling = (): void => {
 }
 
 const refreshLogs = async (): Promise<void> => {
+  // 后台标签页暂停轮询：定时器空转跳过，回到可见后的下一个 tick 立即补拉
+  if (document.hidden) return
   const targetTab = activeLogTab.value
   const requestSeq = ++logRequestSeq
   logLoading.value = true

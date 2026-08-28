@@ -10,6 +10,16 @@
       </div>
     </div>
 
+    <el-alert
+      v-if="fetchError"
+      type="error"
+      :closable="false"
+      show-icon
+      class="config-error-alert"
+      title="配置加载失败"
+      :description="fetchError"
+    />
+
     <el-card class="config-card">
       <template #header>
         <div class="card-header">
@@ -42,6 +52,7 @@ type CaddyConfigResponse = { readonly data?: JsonValue }
 
 const caddyConfigData = shallowRef<JsonValue | null>(null)
 const loading = ref(false)
+const fetchError = ref<string | null>(null)
 const jsonText = computed(() => JSON.stringify(caddyConfigData.value, null, 2))
 
 const fetchCaddyConfig = async (): Promise<void> => {
@@ -49,8 +60,10 @@ const fetchCaddyConfig = async (): Promise<void> => {
   try {
     const response = await request.get<CaddyConfigResponse>('/caddy/config')
     caddyConfigData.value = response.data ?? null
+    fetchError.value = null
   } catch (error: unknown) {
-    caddyConfigData.value = null
+    // R68：拉取失败保留最后一份已渲染配置（全局拦截器已 toast），仅置页面级错误状态
+    fetchError.value = error instanceof Error ? error.message : '配置加载失败'
     console.error('Failed to fetch Caddy config:', error)
   } finally {
     loading.value = false
@@ -61,6 +74,7 @@ onMounted(() => void fetchCaddyConfig())
 </script>
 
 <style scoped>
+.config-error-alert { margin-bottom: 16px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .config-preview { min-height: 160px; max-height: 720px; overflow: auto; padding: 14px; border-radius: var(--radius-md); background: #1e293b; }

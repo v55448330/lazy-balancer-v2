@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { APIResponse, ClusterNodeMode, CurrentUser } from '@/types'
-import { isTokenExpired, request } from '@/utils/api'
+import { isTokenExpired, request, ApiRequestError } from '@/utils/api'
 import { ElMessage } from 'element-plus'
 
 const pages = [
@@ -47,16 +47,36 @@ export const useAuthStore = defineStore('auth', () => {
   const currentPage = ref<PageId>(initialCurrentPage)
 
   const isLoggedIn = computed(() => !!token.value && !isTokenExpired(token.value))
-  const readOnlyReason = computed<'slave' | 'non-admin' | null>(() => {
+  const readOnlyReason = computed<'slave' | 'non-admin' | 'unknown' | null>(() => {
     if (nodeMode.value === 'slave') return 'slave'
-    if (user.value && user.value.role !== 'admin') return 'non-admin'
-    return null
+    if (user.value) return user.value.role !== 'admin' ? 'non-admin' : null
+    // token 有效但用户信息尚未成功拉取（如 /users/me 瞬时失败）：权限未知按只读
+    // 呈现（fail-closed），避免该窗口期按 admin 视图放行（fail-open）
+    return isLoggedIn.value ? 'unknown' : null
   })
   const readOnlyMessage = computed(() => {
     if (readOnlyReason.value === 'slave') return '从节点只读，请在主节点操作'
     if (readOnlyReason.value === 'non-admin') return '非管理员用户只读'
+    if (readOnlyReason.value === 'unknown') return '用户信息加载中，暂以只读模式呈现'
     return ''
   })
+
+  let userRetryTimer: ReturnType<typeof setTimeout> | null = null
+
+  const clearUserRetryTimer = (): void => {
+    if (userRetryTimer !== null) {
+      clearTimeout(userRetryTimer)
+      userRetryTimer = null
+    }
+  }
+
+  const scheduleUserRetry = (): void => {
+    if (userRetryTimer !== null || !token.value) return
+    userRetryTimer = setTimeout(() => {
+      userRetryTimer = null
+      void fetchUser()
+    }, 15_000)
+  }
 
   async function fetchUser() {
     if (!token.value) return
@@ -72,8 +92,12 @@ export const useAuthStore = defineStore('auth', () => {
           mfa_enabled: res.data.mfa_enabled ?? false,
         }
       }
-    } catch (e) {
-      console.error(e)
+    } catch (error: unknown) {
+      // 瞬时失败（非 401）保留最近一次已知的用户与权限，不清空；显式 401 由全局
+      // 拦截器「会话失效」流统一处理（清 token 重载），logout 才主动清除。
+      // 用户信息尚无已知值时定时重试拉取，使 fail-closed 的只读窗口自动恢复。
+      if (!(error instanceof ApiRequestError && error.status === 401)) scheduleUserRetry()
+      console.error(error)
     }
   }
 
@@ -129,6 +153,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   function applyAuthResponse(res: AuthResponse) {
     intentionalLogout.value = false
+    clearUserRetryTimer()
     token.value = res.token
     nodeMode.value = res.node_mode
     localStorage.setItem('token', res.token)
@@ -163,6 +188,7 @@ export const useAuthStore = defineStore('auth', () => {
     } catch (caught: unknown) {
       console.warn('服务端注销失败，已执行本地退出', caught)
     } finally {
+      clearUserRetryTimer()
       user.value = null
       token.value = null
       nodeMode.value = 'master'

@@ -30,6 +30,7 @@ export const usePollingTask = (
   let inFlight: Promise<void> | null = null
   let pending = false
   let timer: ReturnType<typeof setInterval> | null = null
+  let visibilityHandler: (() => void) | null = null
 
   const drain = async (): Promise<void> => {
     while (!disposed && pending) {
@@ -56,9 +57,38 @@ export const usePollingTask = (
     return inFlight
   }
 
-  const start = (): void => {
-    if (disposed || timer || options.interval === undefined) return
+  // 后台标签页暂停定时轮询（手动 run() 不受影响）；回到可见时恢复定时器并立即刷新补齐数据。
+  const beginInterval = (): void => {
+    if (disposed || timer !== null || options.interval === undefined) return
+    if (typeof document !== 'undefined' && document.hidden) return
     timer = setInterval(() => void run(), options.interval)
+  }
+
+  const pauseInterval = (): void => {
+    if (timer !== null) {
+      clearInterval(timer)
+      timer = null
+    }
+  }
+
+  const ensureVisibilityPause = (): void => {
+    if (visibilityHandler !== null || typeof document === 'undefined') return
+    visibilityHandler = (): void => {
+      if (disposed) return
+      if (document.hidden) {
+        pauseInterval()
+      } else {
+        beginInterval()
+        void run()
+      }
+    }
+    document.addEventListener('visibilitychange', visibilityHandler)
+  }
+
+  const start = (): void => {
+    if (disposed || options.interval === undefined) return
+    ensureVisibilityPause()
+    beginInterval()
   }
 
   const invalidate = (): void => {
@@ -71,8 +101,11 @@ export const usePollingTask = (
     disposed = true
     invalidate()
     controller.abort()
-    if (timer) clearInterval(timer)
-    timer = null
+    pauseInterval()
+    if (visibilityHandler !== null && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', visibilityHandler)
+      visibilityHandler = null
+    }
   }
 
   onUnmounted(stop)

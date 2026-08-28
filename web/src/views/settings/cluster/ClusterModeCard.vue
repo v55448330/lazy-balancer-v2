@@ -159,6 +159,11 @@ watch(
   },
 )
 
+// 注册令牌为一次性凭据：注册流程结束（提交/取消/成功关闭）后不回填，避免下次打开残留旧令牌
+watch(registrationOpen, (open) => {
+  if (!open) form.register_token = ''
+})
+
 const handleModeChange = (value: string | number | boolean): void => {
   if (props.readOnly || props.loading) return
   if (value === 'slave') {
@@ -192,6 +197,7 @@ const submitRegistration = async (): Promise<void> => {
     register_token: form.register_token.trim(),
     ...(nodeName ? { node_name: nodeName } : {}),
   })
+  form.register_token = ''
 }
 </script>
 

@@ -390,7 +390,8 @@ const stopLogPolling = () => {
 }
 
 const refreshLogs = async () => {
-  if (disposed || !currentJob.value || logLoading.value) return
+  // 后台标签页暂停轮询：定时器空转跳过，回到可见后的下一个 tick 立即补拉
+  if (disposed || document.hidden || !currentJob.value || logLoading.value) return
   const jobId = currentJob.value.id
   const requestSeq = ++logRequestSeq
   logLoading.value = true

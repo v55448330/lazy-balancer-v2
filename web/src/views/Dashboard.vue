@@ -16,15 +16,15 @@
           </template>
           <el-descriptions :column="6" border>
             <el-descriptions-item label="主机名">
-              <span class="text-primary">{{ systemInfo?.hostname || '-' }}</span>
+              <span class="text-primary">{{ systemInfoUnavailable ? '采集失败' : systemInfo?.hostname || '-' }}</span>
             </el-descriptions-item>
-            <el-descriptions-item label="操作系统">{{ systemInfo?.os_info || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="内核">{{ systemInfo?.kernel || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="架构">{{ systemInfo?.architecture || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="操作系统">{{ systemInfoUnavailable ? '采集失败' : systemInfo?.os_info || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="内核">{{ systemInfoUnavailable ? '采集失败' : systemInfo?.kernel || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="架构">{{ systemInfoUnavailable ? '采集失败' : systemInfo?.architecture || '-' }}</el-descriptions-item>
             <el-descriptions-item label="Caddy版本">
-              <el-tag type="info" size="small">{{ systemInfo?.caddy_version || '-' }}</el-tag>
+              <el-tag type="info" size="small">{{ systemInfoUnavailable ? '采集失败' : systemInfo?.caddy_version || '-' }}</el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="运行时间">{{ formatUptime(systemInfo?.uptime) }}</el-descriptions-item>
+            <el-descriptions-item label="运行时间">{{ systemInfoUnavailable ? '采集失败' : formatUptime(systemInfo?.uptime) }}</el-descriptions-item>
           </el-descriptions>
           <div v-if="ipList.length > 0" class="network-section">
             <div class="section-label">网络接口</div>
@@ -448,6 +448,7 @@ const formatUptime = (seconds?: number): string => {
 const formatChartTime = (ms: number): string => formatChartTimeInConfigTz(ms)
 
 const systemInfo = ref<SystemInfo | null>(null)
+const systemInfoUnavailable = ref(false)
 const systemMetrics = ref<SystemMetrics | null>(null)
 const caddyMetrics = ref<CaddyMetrics | null>(null)
 const caddyStatus = ref('unknown')
@@ -765,8 +766,13 @@ const fetchAllData = (): Promise<void> => {
   fetchAllDataPromise = Promise.allSettled([
     request.get('/system/info', config).then((res) => {
       if (disposed) return
-      if (res.data) systemInfo.value = res.data
-    }),
+      if (!res.data) {
+        systemInfoUnavailable.value = true
+        return
+      }
+      systemInfo.value = res.data
+      systemInfoUnavailable.value = false
+    }).catch(() => { if (!disposed) systemInfoUnavailable.value = true }),
     request.get('/system/metrics', config).then((res) => {
       if (disposed) return
       if (!res.data) {

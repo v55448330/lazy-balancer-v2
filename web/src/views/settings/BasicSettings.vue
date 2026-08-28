@@ -49,19 +49,19 @@
               <el-option label="Asia/Bangkok (UTC+7)" value="Asia/Bangkok" />
               <el-option label="Asia/Kolkata (UTC+5:30)" value="Asia/Kolkata" />
               <el-option label="Asia/Dubai (UTC+4)" value="Asia/Dubai" />
-              <el-option label="Europe/London (UTC+0)" value="Europe/London" />
-              <el-option label="Europe/Paris (UTC+1)" value="Europe/Paris" />
-              <el-option label="Europe/Berlin (UTC+1)" value="Europe/Berlin" />
+              <el-option label="Europe/London (UTC+0，夏令时 UTC+1)" value="Europe/London" />
+              <el-option label="Europe/Paris (UTC+1，夏令时 UTC+2)" value="Europe/Paris" />
+              <el-option label="Europe/Berlin (UTC+1，夏令时 UTC+2)" value="Europe/Berlin" />
               <el-option label="Europe/Moscow (UTC+3)" value="Europe/Moscow" />
-              <el-option label="America/New_York (UTC-5)" value="America/New_York" />
-              <el-option label="America/Chicago (UTC-6)" value="America/Chicago" />
-              <el-option label="America/Denver (UTC-7)" value="America/Denver" />
-              <el-option label="America/Los_Angeles (UTC-8)" value="America/Los_Angeles" />
+              <el-option label="America/New_York (UTC-5，夏令时 UTC-4)" value="America/New_York" />
+              <el-option label="America/Chicago (UTC-6，夏令时 UTC-5)" value="America/Chicago" />
+              <el-option label="America/Denver (UTC-7，夏令时 UTC-6)" value="America/Denver" />
+              <el-option label="America/Los_Angeles (UTC-8，夏令时 UTC-7)" value="America/Los_Angeles" />
               <el-option label="America/Sao_Paulo (UTC-3)" value="America/Sao_Paulo" />
-              <el-option label="Australia/Sydney (UTC+10)" value="Australia/Sydney" />
+              <el-option label="Australia/Sydney (UTC+10，夏令时 UTC+11)" value="Australia/Sydney" />
               <el-option label="UTC" value="UTC" />
             </el-select>
-            <el-text type="info" size="small" class="tip-block">影响日志时间戳与证书时间；仅 Caddy 日志需重启服务生效</el-text>
+            <el-text type="info" size="small" class="tip-block">影响日志时间戳与证书时间；标注夏令时的时区会随夏令时自动偏移；仅 Caddy 日志需重启服务生效</el-text>
           </el-form-item>
           <el-form-item label="写操作验证">
             <el-switch v-model="settings.mfa_write_guard" />
@@ -281,7 +281,8 @@ let appLogTimer: ReturnType<typeof setInterval> | null = null
 // （R69 过度修复审查 REMOVE：appLogRequestSeq 已删——入口 loading 门 +
 // appLogVisible 析取使其作为裁决条件永不为真。）
 const fetchAppLogs = async (): Promise<void> => {
-  if (appLogLoading.value) return
+  // 后台标签页暂停轮询：定时器空转跳过，回到可见后的下一个 tick 立即补拉
+  if (appLogLoading.value || document.hidden) return
   appLogLoading.value = true
   try {
     const res = await request.get<{ data?: { content?: string } }>('/system/logs', { silent: true })
