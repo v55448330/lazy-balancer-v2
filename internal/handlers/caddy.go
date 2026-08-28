@@ -407,6 +407,9 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 
 	old, err := loadConfigSnapshot()
 	if err != nil {
+		// I-K（第 14 轮审计）：保存端点服务端失败分支留痕（操作者归因 + 错误详情），
+		// 此前仅成功路径写审计；动作复用既有 danger 词条「更新失败」。
+		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("读取当前配置失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read current config"})
 		return
 	}
@@ -435,10 +438,12 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	// 时会把未提交配置恢复回去（DB/Caddy 反向分叉）。
 	oldRuntimeConfig, err := h.caddyService.GetConfig()
 	if err != nil {
+		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("获取当前 Caddy 配置失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取当前 Caddy 配置失败"})
 		return
 	}
 	if err := h.caddyService.ValidateConfig(testConfig); err != nil {
+		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("Caddy 配置验证失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "配置验证失败: " + err.Error()})
 		return
 	}
@@ -448,6 +453,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	// failed apply leaves DB and env unchanged.
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
+		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("开启配置事务失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启配置事务失败"})
 		return
 	}
@@ -505,15 +511,18 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		req.UpstreamKeepaliveTimeout, req.ProxyDialTimeout, req.ProxyResponseHeaderTimeout, req.ProxyReadTimeout, req.ProxyWriteTimeout, req.ProxyStreamTimeout, req.ProxyFlushInterval, req.ProxyStreamCloseDelay,
 		req.ServerTokensHidden, req.CertJobLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone, req.MFAWriteGuard, req.MFALockoutEnabled)
 	if err != nil {
+		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("配置写入数据库失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败: " + err.Error()})
 		return
 	}
 	rows, err := res.RowsAffected()
 	if err != nil {
+		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("配置写入数据库失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败: " + err.Error()})
 		return
 	}
 	if rows != 1 {
+		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("配置写入数据库失败", fmt.Sprintf("影响记录数为 %d", rows), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("配置写入数据库失败: 影响记录数为 %d", rows)})
 		return
 	}
@@ -523,9 +532,11 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		err = errors.Join(err, restoreErr)
 		var validationErr *configValidationError
 		if errors.As(err, &validationErr) {
+			recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("Caddy 配置应用失败", err.Error(), services.AuditResultPart("failure")))
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置验证失败: " + validationErr.Error()})
 			return
 		}
+		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("Caddy 配置应用失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，配置未保存: " + err.Error()})
 		return
 	}
@@ -536,6 +547,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 		restoreErr := h.caddyService.ApplyConfig(oldRuntimeConfig)
 		err = errors.Join(err, rollbackErr, restoreErr)
+		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("提交配置失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交配置失败: " + err.Error()})
 		return
 	}
@@ -543,6 +555,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	services.ApplyLogLevel()
 	if req.Timezone != nil {
 		if _, err := services.ConfigureLocation(*req.Timezone); err != nil {
+			recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("应用时区失败", err.Error(), services.AuditResultPart("failure")))
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "应用时区失败: " + err.Error()})
 			return
 		}
@@ -593,6 +606,10 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 
 func (h *Handlers) ReloadCaddy(c *gin.Context) {
 	if err := h.applyCaddyConfigE(); err != nil {
+		// I-K（第 14 轮审计）：手动重载恰是最需要留痕的操作——失败分支记录
+		// 操作者归因 + 错误详情（recordCaddyApplyResult 的系统级「应用失败」
+		// 不带用户身份，不能替代本条）。
+		recordAudit(c, "重载失败", "Caddy服务", services.FormatAuditDetail("手动重载 Caddy 配置", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置重载失败: " + err.Error()})
 		return
 	}
@@ -802,11 +819,13 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 
 	runtimeSnapshot, err := h.snapshotImportRuntime(nil)
 	if err != nil {
+		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("备份当前 Caddy 配置失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前 Caddy 配置失败: " + err.Error()})
 		return
 	}
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
+		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("开启 Caddy 配置事务失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启 Caddy 配置事务失败: " + err.Error()})
 		return
 	}
@@ -820,11 +839,13 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	}()
 	result, err := tx.ExecContext(c.Request.Context(), "UPDATE global_config SET caddy_config=?, updated_at=datetime('now') WHERE id=1", req.Content)
 	if err != nil {
+		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("保存 Caddy 配置失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 Caddy 配置失败: " + err.Error()})
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil || rowsAffected == 0 {
+		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("保存 Caddy 配置失败", fmt.Sprintf("影响记录数为 %d", rowsAffected), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 Caddy 配置失败"})
 		return
 	}
@@ -835,6 +856,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		}
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		err = errors.Join(err, rollbackErr, restoreErr)
+		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("Caddy 配置应用失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy rejected config: " + err.Error()})
 		return
 	}
@@ -845,6 +867,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		}
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		err = errors.Join(err, rollbackErr, restoreErr)
+		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("提交 Caddy 配置失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交 Caddy 配置失败: " + err.Error()})
 		return
 	}

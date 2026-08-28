@@ -1082,7 +1082,9 @@ func TestRequeueCertJobsSnapshot_giveUpSemantics(t *testing.T) {
 
 func TestRequeueNonTerminalCertJobs_does_not_resurrect_failed_job(t *testing.T) {
 	// Given：failed 任务虽持有之前签发的有效证书，也不得在启动恢复时被复活；
-	// queued 任务持有有效证书则仍走"检测到已有有效证书"的恢复优化
+	// queued 任务是用户显式触发的重签请求（RetryCertJob 全量重签语义、不清
+	// cert_pem/key_pem），旧有效证书不得吞掉请求——保持 queued 重新排队，
+	// 不得迁移 issued（I-D）。
 	_, database := newClusterTestService(t)
 	failedCert, failedKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "failed.example.com")
 	queuedCert, queuedKey := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "queued.example.com")
@@ -1094,12 +1096,27 @@ func TestRequeueNonTerminalCertJobs_does_not_resurrect_failed_job(t *testing.T) 
 			t.Fatalf("seed recovery rule %s: %v", rule.id, err)
 		}
 	}
-	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,cert_pem,key_pem,ca_provider_id) VALUES ('lb_recover_failed','failed.example.com','failed',datetime('now','+90 days'),?,?,1)`, failedCert, failedKey); err != nil {
+	if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'recovery CA','letsencrypt','https://invalid.example/directory',1)`); err != nil {
+		t.Fatalf("seed CA provider: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,expires_at,cert_pem,key_pem,ca_provider_id) VALUES (42,'lb_recover_failed','failed.example.com','failed',datetime('now','+90 days'),?,?,7)`, failedCert, failedKey); err != nil {
 		t.Fatalf("seed failed job: %v", err)
 	}
-	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,cert_pem,key_pem,ca_provider_id) VALUES ('lb_recover_queued','queued.example.com','queued',datetime('now','+90 days'),?,?,1)`, queuedCert, queuedKey); err != nil {
+	if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,expires_at,cert_pem,key_pem,ca_provider_id) VALUES (43,'lb_recover_queued','queued.example.com','queued',datetime('now','+90 days'),?,?,7)`, queuedCert, queuedKey); err != nil {
 		t.Fatalf("seed queued job: %v", err)
 	}
+	ResetCAQueueManagerForTest()
+	InitCAQueueManager(func() error { return nil })
+	t.Cleanup(ResetCAQueueManagerForTest)
+	manager := GetCAQueueManager()
+	var enqueues atomic.Int32
+	manager.beforeEnqueue = func() { enqueues.Add(1) }
+	queue := newCAQueue(models.CAProvider{ID: 7, MaxConcurrent: 1}, nil)
+	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error { return nil }
+	go queue.loop()
+	manager.mu.Lock()
+	manager.queues[7] = queue
+	manager.mu.Unlock()
 
 	// When
 	err := requeueNonTerminalCertJobs(context.Background(), func(int, issuedCertificate, time.Duration) {})
@@ -1127,8 +1144,69 @@ func TestRequeueNonTerminalCertJobs_does_not_resurrect_failed_job(t *testing.T) 
 	if statuses["lb_recover_failed"] != "failed" {
 		t.Fatalf("failed job was resurrected to %q, want failed", statuses["lb_recover_failed"])
 	}
-	if statuses["lb_recover_queued"] != "issued" {
-		t.Fatalf("queued job status=%q, want issued", statuses["lb_recover_queued"])
+	if statuses["lb_recover_queued"] != "queued" {
+		t.Fatalf("queued job status=%q, want queued（显式重签请求不得被吞成 issued）", statuses["lb_recover_queued"])
+	}
+	if got := enqueues.Load(); got != 1 {
+		t.Fatalf("enqueue attempts=%d, want 1（queued 任务必须重新排队）", got)
+	}
+	var detail string
+	if err := db.AuditDB.QueryRow("SELECT COALESCE(detail,'') FROM audit_log WHERE action='恢复排队'").Scan(&detail); err != nil {
+		t.Fatalf("queued job recovery audit entry missing: %v", err)
+	}
+	if !strings.Contains(detail, "任务 43") || strings.Contains(detail, "任务 42") {
+		t.Fatalf("recovery audit detail=%q, want 仅任务 43（failed 任务不得恢复排队）", detail)
+	}
+}
+
+// I-D（第 14 轮审计发现）：'queued' 是用户显式触发的重签请求（RetryCertJob
+// 全量重签语义，旧 cert_pem/key_pem 保留在行上），启动恢复不得以"检测到已有
+// 有效证书"将其静默转为 issued——请求必须经重新排队存活到重启之后。
+func TestRequeueNonTerminalCertJobs_requeues_queued_job_despite_valid_stored_cert(t *testing.T) {
+	// Given
+	_, database := newClusterTestService(t)
+	now := time.Now().UTC()
+	certPEM, keyPEM := certificatePairForDomains(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "reissue.example.com")
+	if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'reissue CA','letsencrypt','https://invalid.example/directory',1)`); err != nil {
+		t.Fatalf("seed CA provider: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, "lb_reissue", "lb_reissue", "reissue.example.com"); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,cert_pem,key_pem,ca_provider_id) VALUES ('lb_reissue','reissue.example.com','queued',datetime('now','+90 days'),?,?,7)`, certPEM, keyPEM); err != nil {
+		t.Fatalf("seed queued job holding valid stored certificate: %v", err)
+	}
+	ResetCAQueueManagerForTest()
+	InitCAQueueManager(func() error { return nil })
+	t.Cleanup(ResetCAQueueManagerForTest)
+	manager := GetCAQueueManager()
+	var enqueues atomic.Int32
+	manager.beforeEnqueue = func() { enqueues.Add(1) }
+	queue := newCAQueue(models.CAProvider{ID: 7, MaxConcurrent: 1}, nil)
+	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error { return nil }
+	go queue.loop()
+	manager.mu.Lock()
+	manager.queues[7] = queue
+	manager.mu.Unlock()
+
+	// When
+	err := requeueNonTerminalCertJobs(context.Background(), func(int, issuedCertificate, time.Duration) {
+		t.Error("deployment retry scheduled for non-downloaded job")
+	})
+
+	// Then
+	if err != nil {
+		t.Fatalf("recover non-terminal jobs: %v", err)
+	}
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_reissue'").Scan(&status); err != nil {
+		t.Fatalf("read recovered job: %v", err)
+	}
+	if status != "queued" {
+		t.Fatalf("queued job status=%q, want queued（显式重签请求不得被有效证书吞成 issued）", status)
+	}
+	if got := enqueues.Load(); got != 1 {
+		t.Fatalf("enqueue attempts=%d, want 1（重签请求必须重新排队）", got)
 	}
 }
 

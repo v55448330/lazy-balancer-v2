@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/config"
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -416,5 +417,43 @@ func TestCaddySectionKeys_matchUpdateSQL(t *testing.T) {
 		if !changesKeys[k] {
 			t.Fatalf("key %q in UpdateConfig SQL but not in planConfigChanges", k)
 		}
+	}
+}
+
+// I-K（第 14 轮审计发现）：手动重载失败必须留痕（操作者归因 + 错误详情）——
+// 此前仅成功路径写「重载」审计，失败只有 recordCaddyApplyResult 的系统级
+// 「应用失败」，无法追溯"谁触发的手动重载、为何失败"。
+func TestReloadCaddy_records_failure_audit_with_error_detail(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	failingCaddy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/load" {
+			http.Error(w, "admin api exploded", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(failingCaddy.Close)
+	h.cfg = &config.Config{CaddyAdminURL: failingCaddy.URL}
+	h.caddyService = services.NewCaddyService(failingCaddy.URL)
+	router := gin.New()
+	router.POST("/config/reload", h.ReloadCaddy)
+	request := httptest.NewRequest(http.MethodPost, "/config/reload", nil)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	}
+	var detail string
+	if err := db.AuditDB.QueryRow("SELECT COALESCE(detail,'') FROM audit_log WHERE action='重载失败' AND detail LIKE '%结果：failure%'").Scan(&detail); err != nil {
+		t.Fatalf("reload failure audit row missing: %v", err)
+	}
+	if !strings.Contains(detail, "admin api exploded") {
+		t.Fatalf("audit detail=%q, want Caddy error detail", detail)
 	}
 }

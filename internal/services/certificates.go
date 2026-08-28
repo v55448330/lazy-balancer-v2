@@ -793,7 +793,12 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 			}
 			continue
 		}
-		if JobLifecycle(job.status) != JobLifecycleDownloaded {
+		lifecycle := JobLifecycle(job.status)
+		// I-D（第 14 轮审计）：'queued' 是用户显式触发的重签请求（RetryCertJob
+		// 全量重签语义，旧 cert_pem/key_pem 保留在行上）——"检测到已有有效证书"
+		// 恢复优化只适用于在途任务（active/waiting_ca），不得把显式重签请求
+		// 静默转为 issued，否则请求跨重启消失。queued 任务落到下方重新排队。
+		if lifecycle != JobLifecycleDownloaded && lifecycle != JobLifecycleQueued {
 			selection, loaded := selectedByRule[job.ruleID]
 			if !selectionLoaded[job.ruleID] {
 				selection, loaded, err = selectStoredRuleCertificate(ctx, job.ruleID, job.ruleDomain, now)
@@ -816,7 +821,7 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 				}
 			}
 		}
-		if JobLifecycle(job.status) == JobLifecycleDownloaded && job.hasCertMaterial {
+		if lifecycle == JobLifecycleDownloaded && job.hasCertMaterial {
 			delay := time.Duration(0)
 			if job.deploymentAvailableAfter.Valid {
 				delay = time.Until(job.deploymentAvailableAfter.Time)

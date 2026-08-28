@@ -150,7 +150,9 @@ func TestCertificateService_CheckExpiration_skipsRenewal_whenSelectedCertificate
 }
 
 func TestRequeueNonTerminalCertJobs_skipsIssuance_whenSelectedCertificateIsOutsideWindow(t *testing.T) {
-	// Given
+	// Given：在途（creating_order）任务持有剩余有效期远超续签窗口（90 天 > 30 天）
+	// 的证书——"检测到已有有效证书"恢复优化适用。I-D 起仅豁免 queued（用户显式
+	// 重签请求必须重新排队），在途任务仍走该优化。
 	_, database := newClusterTestService(t)
 	now := time.Now().UTC()
 	certPEM, keyPEM := certificatePairForDomains(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "recovery.example.com")
@@ -159,7 +161,7 @@ func TestRequeueNonTerminalCertJobs_skipsIssuance_whenSelectedCertificateIsOutsi
 		t.Fatalf("seed recovery rule: %v", err)
 	}
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,cert_pem,key_pem,updated_at)
-		VALUES ('lb_selector_recovery','recovery.example.com','queued',datetime('now','+90 days'),?,?,datetime('now'))`, certPEM, keyPEM); err != nil {
+		VALUES ('lb_selector_recovery','recovery.example.com','creating_order',datetime('now','+90 days'),?,?,datetime('now'))`, certPEM, keyPEM); err != nil {
 		t.Fatalf("seed recovery certificate: %v", err)
 	}
 	queued := 0
