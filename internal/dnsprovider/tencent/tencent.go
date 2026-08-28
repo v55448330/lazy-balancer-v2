@@ -9,10 +9,19 @@ import (
 	"sync"
 
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
+	tcerr "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/errors"
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
 	dnspod "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/dnspod/v20210323"
+	"lazy-balancer-v2/internal/dnsprovider/internal/retry"
 	"lazy-balancer-v2/internal/dnsprovider/ownership"
 )
+
+// ownedRecord 记录本实例创建的记录 ID 及其挑战值，CleanUpValue 据此只删
+// 属于本次签发的记录。
+type ownedRecord struct {
+	recordID uint64
+	value    string
+}
 
 // Provider implements dnsprovider.Provider for Tencent Cloud DNSPod.
 type Provider struct {
@@ -20,7 +29,7 @@ type Provider struct {
 	SecretKey string
 	client    *dnspod.Client
 	mu        sync.Mutex
-	owned     map[string][]uint64
+	owned     map[string][]ownedRecord
 	ownership *ownership.Store
 }
 
@@ -46,11 +55,13 @@ func New(secretID, secretKey string) (*Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create tencent dnspod client: %w", err)
 	}
+	// 429/5xx 重试在传输层统一处理，瞬时 API 故障不再直接打挂挑战
+	client.WithHttpTransport(&retry.Transport{})
 	return &Provider{
 		SecretID:  secretID,
 		SecretKey: secretKey,
 		client:    client,
-		owned:     make(map[string][]uint64),
+		owned:     make(map[string][]ownedRecord),
 	}, nil
 }
 
@@ -71,7 +82,7 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 		}
 	} else {
 		p.mu.Lock()
-		p.owned[zone+"|"+subDomain] = append(p.owned[zone+"|"+subDomain], recordID)
+		p.owned[zone+"|"+subDomain] = append(p.owned[zone+"|"+subDomain], ownedRecord{recordID: recordID, value: value})
 		p.mu.Unlock()
 	}
 	return nil
@@ -79,45 +90,76 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 
 // CleanUp removes the _acme-challenge TXT record.
 func (p *Provider) CleanUp(ctx context.Context, zone, tokenFQDN string) error {
+	return p.cleanUp(ctx, zone, tokenFQDN, "", false)
+}
+
+// CleanUpValue removes only the record this issuance created (same challenge
+// value), plus legacy/stale leftovers under the same name; a concurrent
+// issuance's recent record of another value is spared.
+func (p *Provider) CleanUpValue(ctx context.Context, zone, tokenFQDN, value string) error {
+	return p.cleanUp(ctx, zone, tokenFQDN, value, true)
+}
+
+func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, byValue bool) error {
 	zone = strings.TrimSuffix(zone, ".")
 	subDomain := strings.TrimSuffix(tokenFQDN, ".")
 	subDomain = strings.TrimSuffix(subDomain, "."+zone)
 
 	key := zone + "|" + subDomain
 	var records []ownership.Record
-	var recordIDs []uint64
+	var memorySelected []ownedRecord
 	if p.ownership != nil {
 		var err error
-		records, err = p.ownership.Matching("tencent", zone, tokenFQDN)
+		if byValue {
+			records, err = p.ownership.MatchingValue("tencent", zone, tokenFQDN, value)
+		} else {
+			records, err = p.ownership.Matching("tencent", zone, tokenFQDN)
+		}
 		if err != nil {
 			return err
 		}
-		for _, record := range records {
-			recordID, err := strconv.ParseUint(record.RecordID, 10, 64)
-			if err != nil {
-				return fmt.Errorf("parse persisted Tencent record ID %q: %w", record.RecordID, err)
-			}
-			recordIDs = append(recordIDs, recordID)
-		}
 	} else {
 		p.mu.Lock()
-		recordIDs = append([]uint64(nil), p.owned[key]...)
-		delete(p.owned, key)
+		entries := p.owned[key]
+		kept := make([]ownedRecord, 0, len(entries))
+		for _, entry := range entries {
+			if byValue && entry.value != value {
+				kept = append(kept, entry)
+				continue
+			}
+			memorySelected = append(memorySelected, entry)
+		}
+		p.owned[key] = kept
 		p.mu.Unlock()
 	}
+
 	var cleanupErr error
-	var failed []uint64
-	for index, recordID := range recordIDs {
+	var failed []ownedRecord
+	deleteOne := func(recordID uint64) {
 		if err := p.deleteRecord(ctx, zone, recordID); err != nil {
 			if ctx.Err() != nil {
 				err = ctx.Err()
 			}
-			failed = append(failed, recordID)
+			failed = append(failed, ownedRecord{recordID: recordID})
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("DeleteRecord failed: %w", err))
-			continue
 		}
-		if p.ownership != nil {
-			cleanupErr = errors.Join(cleanupErr, p.ownership.Remove(records[index]))
+	}
+	if p.ownership != nil {
+		for _, record := range records {
+			recordID, parseErr := strconv.ParseUint(record.RecordID, 10, 64)
+			if parseErr != nil {
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("parse persisted Tencent record ID %q: %w", record.RecordID, parseErr))
+				continue
+			}
+			deleteOne(recordID)
+			if cleanupErr != nil {
+				continue
+			}
+			cleanupErr = errors.Join(cleanupErr, p.ownership.Remove(record))
+		}
+	} else {
+		for _, entry := range memorySelected {
+			deleteOne(entry.recordID)
 		}
 	}
 	if p.ownership == nil && len(failed) > 0 {
@@ -133,7 +175,28 @@ func (p *Provider) deleteRecord(ctx context.Context, zone string, recordID uint6
 	req.Domain = common.StringPtr(zone)
 	req.RecordId = common.Uint64Ptr(recordID)
 	_, err := p.client.DeleteRecordWithContext(ctx, req)
+	if err != nil && isRecordNotFound(err) {
+		// 记录已不存在：按删除成功处理，保证清理幂等（不残留所有权条目）
+		return nil
+	}
 	return err
+}
+
+// isRecordNotFound 识别 TencentCloud DeleteRecord 的记录不存在信号：
+// ResourceNotFound.NoDataOfRecord，或记录 ID 失效类错误码。
+func isRecordNotFound(err error) bool {
+	var sdkErr *tcerr.TencentCloudSDKError
+	if !errors.As(err, &sdkErr) {
+		return false
+	}
+	if strings.HasPrefix(sdkErr.Code, "ResourceNotFound") {
+		return true
+	}
+	switch sdkErr.Code {
+	case "InvalidParameter.RecordIdInvalid", "InvalidRecord.Id":
+		return true
+	}
+	return false
 }
 
 func (p *Provider) createRecord(ctx context.Context, zone, subDomain, value string, ttl int) (uint64, error) {

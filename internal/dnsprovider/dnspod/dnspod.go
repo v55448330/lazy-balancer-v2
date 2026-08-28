@@ -12,17 +12,32 @@ import (
 	"sync"
 	"time"
 
+	"lazy-balancer-v2/internal/dnsprovider/internal/retry"
 	"lazy-balancer-v2/internal/dnsprovider/ownership"
 )
 
 const apiBase = "https://dnsapi.cn/"
+
+// Domain.List 分页参数：length 上限 3000（超出强制分页），maxPages 仅防御
+// 忽略 offset 的异常服务端，避免死循环。
+const (
+	domainListPageSize = 3000
+	domainListMaxPages = 100
+)
+
+// ownedRecord 记录本实例创建的记录 ID 及其挑战值，CleanUpValue 据此只删
+// 属于本次签发的记录。
+type ownedRecord struct {
+	recordID string
+	value    string
+}
 
 // Provider implements dnsprovider.Provider for DNSPod (dnsapi.cn).
 type Provider struct {
 	LoginToken string
 	client     *http.Client
 	mu         sync.Mutex
-	owned      map[string][]string
+	owned      map[string][]ownedRecord
 	ownership  *ownership.Store
 }
 
@@ -40,8 +55,12 @@ func NewPersistent(loginToken, dataDir string) (*Provider, error) {
 func New(loginToken string) *Provider {
 	return &Provider{
 		LoginToken: loginToken,
-		client:     &http.Client{Timeout: 30 * time.Second},
-		owned:      make(map[string][]string),
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+			// 429/5xx 重试在传输层统一处理，瞬时 API 故障不再直接打挂挑战
+			Transport: &retry.Transport{},
+		},
+		owned: make(map[string][]ownedRecord),
 	}
 }
 
@@ -67,7 +86,7 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 		}
 	} else {
 		p.mu.Lock()
-		p.owned[domainID+"|"+subDomain] = append(p.owned[domainID+"|"+subDomain], recordID)
+		p.owned[domainID+"|"+subDomain] = append(p.owned[domainID+"|"+subDomain], ownedRecord{recordID: recordID, value: value})
 		p.mu.Unlock()
 	}
 	return nil
@@ -75,6 +94,17 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 
 // CleanUp removes the _acme-challenge TXT record.
 func (p *Provider) CleanUp(ctx context.Context, zone, tokenFQDN string) error {
+	return p.cleanUp(ctx, zone, tokenFQDN, "", false)
+}
+
+// CleanUpValue removes only the record this issuance created (same challenge
+// value), plus legacy/stale leftovers under the same name; a concurrent
+// issuance's recent record of another value is spared.
+func (p *Provider) CleanUpValue(ctx context.Context, zone, tokenFQDN, value string) error {
+	return p.cleanUp(ctx, zone, tokenFQDN, value, true)
+}
+
+func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, byValue bool) error {
 	zone = strings.TrimSuffix(zone, ".")
 	subDomain := strings.TrimSuffix(tokenFQDN, ".")
 	subDomain = strings.TrimSuffix(subDomain, "."+zone)
@@ -86,31 +116,50 @@ func (p *Provider) CleanUp(ctx context.Context, zone, tokenFQDN string) error {
 
 	key := domainID + "|" + subDomain
 	var records []ownership.Record
-	var recordIDs []string
+	var memorySelected []ownedRecord
 	if p.ownership != nil {
-		records, err = p.ownership.Matching("dnspod", zone, tokenFQDN)
+		if byValue {
+			records, err = p.ownership.MatchingValue("dnspod", zone, tokenFQDN, value)
+		} else {
+			records, err = p.ownership.Matching("dnspod", zone, tokenFQDN)
+		}
 		if err != nil {
 			return err
 		}
-		for _, record := range records {
-			recordIDs = append(recordIDs, record.RecordID)
-		}
 	} else {
 		p.mu.Lock()
-		recordIDs = append([]string(nil), p.owned[key]...)
-		delete(p.owned, key)
+		entries := p.owned[key]
+		kept := make([]ownedRecord, 0, len(entries))
+		for _, entry := range entries {
+			if byValue && entry.value != value {
+				kept = append(kept, entry)
+				continue
+			}
+			memorySelected = append(memorySelected, entry)
+		}
+		p.owned[key] = kept
 		p.mu.Unlock()
 	}
+
 	var cleanupErr error
-	var failed []string
-	for index, recordID := range recordIDs {
+	var failed []ownedRecord
+	deleteOne := func(recordID string) {
 		if err := p.deleteRecord(ctx, domainID, recordID); err != nil {
-			failed = append(failed, recordID)
+			failed = append(failed, ownedRecord{recordID: recordID})
 			cleanupErr = errors.Join(cleanupErr, err)
-			continue
 		}
-		if p.ownership != nil {
-			cleanupErr = errors.Join(cleanupErr, p.ownership.Remove(records[index]))
+	}
+	if p.ownership != nil {
+		for _, record := range records {
+			deleteOne(record.RecordID)
+			if cleanupErr != nil {
+				continue
+			}
+			cleanupErr = errors.Join(cleanupErr, p.ownership.Remove(record))
+		}
+	} else {
+		for _, entry := range memorySelected {
+			deleteOne(entry.recordID)
 		}
 	}
 	if p.ownership == nil && len(failed) > 0 {
@@ -155,24 +204,56 @@ func (p *Provider) apiCall(ctx context.Context, method string, params url.Values
 	return nil
 }
 
+// flexNumber 接受 DNSPod 数字字段的历史两种形态（JSON 数字与带引号字符串）。
+type flexNumber string
+
+func (n *flexNumber) UnmarshalJSON(data []byte) error {
+	*n = flexNumber(strings.Trim(string(data), `"`))
+	return nil
+}
+
+// Int64 尽力解析；缺失/不可解析时返回 0，调用方按"未知总量"处理。
+func (n flexNumber) Int64() int64 {
+	value, err := strconv.ParseInt(string(n), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
 func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error) {
-	params := url.Values{}
-	var result struct {
-		Status  apiStatus `json:"status"`
-		Domains []struct {
-			ID   json.Number `json:"id"`
-			Name string      `json:"name"`
-		} `json:"domains"`
-	}
-	if err := p.apiCall(ctx, "Domain.List", params, &result); err != nil {
-		return "", err
-	}
-	if result.Status.Code.String() != "1" {
-		return "", fmt.Errorf("Domain.List failed: %s", result.Status.Message)
-	}
-	for _, d := range result.Domains {
-		if d.Name == zone {
-			return d.ID.String(), nil
+	offset := 0
+	for page := 0; page < domainListMaxPages; page++ {
+		params := url.Values{}
+		params.Set("offset", strconv.Itoa(offset))
+		params.Set("length", strconv.Itoa(domainListPageSize))
+		var result struct {
+			Status  apiStatus `json:"status"`
+			Domains []struct {
+				ID   json.Number `json:"id"`
+				Name string      `json:"name"`
+			} `json:"domains"`
+			Info struct {
+				DomainTotal flexNumber `json:"domain_total"`
+			} `json:"info"`
+		}
+		if err := p.apiCall(ctx, "Domain.List", params, &result); err != nil {
+			return "", err
+		}
+		if result.Status.Code.String() != "1" {
+			return "", fmt.Errorf("Domain.List failed: %s", result.Status.Message)
+		}
+		for _, d := range result.Domains {
+			if d.Name == zone {
+				return d.ID.String(), nil
+			}
+		}
+		// 服务端可能按更小的页容量返回：按实际返回条数推进 offset，
+		// 用 info.domain_total 判定是否已扫完。
+		offset += len(result.Domains)
+		total := result.Info.DomainTotal.Int64()
+		if len(result.Domains) == 0 || (total > 0 && int64(offset) >= total) {
+			break
 		}
 	}
 	return "", fmt.Errorf("domain %s not found", zone)
@@ -216,8 +297,12 @@ func (p *Provider) deleteRecord(ctx context.Context, domainID, recordID string) 
 	if err := p.apiCall(ctx, "Record.Remove", params, &result); err != nil {
 		return err
 	}
-	if result.Status.Code.String() != "1" {
-		return fmt.Errorf("Record.Remove failed: %s", result.Status.Message)
+	switch result.Status.Code.String() {
+	case "1":
+		return nil
+	case "8":
+		// 记录ID错误（记录已不存在）：按删除成功处理，保证清理幂等
+		return nil
 	}
-	return nil
+	return fmt.Errorf("Record.Remove failed: %s", result.Status.Message)
 }

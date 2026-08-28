@@ -59,6 +59,20 @@ func newProviderFromCredentials(rawJSON, dataDir string) (Provider, error) {
 		}
 	}
 
+	// 迁移早于 mode 字段落库的存量行只带凭证字段本身：按字段形态推断
+	// provider（APIToken→DNSPod token；SecretID+SecretKey→腾讯云 secret），
+	// 仅在两类凭证并存（歧义）或全部缺失时才拒绝。
+	if creds.Mode == "" {
+		hasToken := creds.APIToken != ""
+		hasSecret := creds.SecretID != "" && creds.SecretKey != ""
+		switch {
+		case hasToken && !hasSecret:
+			creds.Mode = "dnspod"
+		case hasSecret && !hasToken:
+			creds.Mode = "tencent"
+		}
+	}
+
 	switch strings.ToLower(creds.Mode) {
 	case "dnspod":
 		if creds.APIToken == "" {

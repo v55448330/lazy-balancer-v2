@@ -94,7 +94,9 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 
 		zone := zoneFromDomain(domain)
 		log("cleanup_dns", fmt.Sprintf("清理可能残留的 TXT 记录 %s", tokenFQDN))
-		if err := i.Provider.CleanUp(ctx, zone, tokenFQDN); err != nil {
+		// 按本次挑战值定向清理：同名记录中属于并发签发（不同值）的记录
+		// 必须保留，只清掉本值残留与陈旧遗留
+		if err := dnsprovider.CleanUpChallenge(ctx, i.Provider, zone, tokenFQDN, keyAuth); err != nil {
 			log("cleanup_warning", fmt.Sprintf("清理旧 TXT 记录失败 %s: %v", tokenFQDN, err))
 		}
 
@@ -112,6 +114,7 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 		challenge := ChallengeInfo{
 			Domain:    domain,
 			TokenFQDN: tokenFQDN,
+			Value:     keyAuth,
 		}
 		challenges = append(challenges, challenge)
 		presentedChallenges = append(presentedChallenges, challenge)
@@ -219,7 +222,7 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 // Cleanup removes DNS TXT records for all previously presented challenges.
 func (i *Issuer) Cleanup(ctx context.Context, challenges []ChallengeInfo) {
 	for _, ci := range challenges {
-		if err := i.Provider.CleanUp(ctx, zoneFromDomain(ci.Domain), ci.TokenFQDN); err != nil {
+		if err := dnsprovider.CleanUpChallenge(ctx, i.Provider, zoneFromDomain(ci.Domain), ci.TokenFQDN, ci.Value); err != nil {
 			if i.Logger != nil {
 				i.Logger.Log("cleanup_warning", fmt.Sprintf("清理 DNS 记录失败 %s: %v", ci.TokenFQDN, err))
 			}
@@ -231,6 +234,10 @@ func (i *Issuer) Cleanup(ctx context.Context, challenges []ChallengeInfo) {
 type ChallengeInfo struct {
 	Domain    string
 	TokenFQDN string
+	// Value is the DNS-01 TXT value (key authorization digest) this record
+	// was presented with; cleanup removes only records of that value so
+	// concurrent issuances for the same domain cannot delete each other.
+	Value string
 }
 
 // zoneFromDomain extracts the DNS zone (registered domain) from a domain name.

@@ -7,18 +7,30 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 const ownershipFileName = "acme_dns_ownership.json"
 
+// staleOwnershipAge is the age beyond which an ownership entry can no longer
+// belong to a live issuance: the CA queue caps execution at 60 minutes and the
+// deferred cleanup window adds 2 more, so anything older is provably abandoned
+// and may be removed by any later cleanup without endangering a concurrent
+// challenge.
+const staleOwnershipAge = 75 * time.Minute
+
 var fileMu sync.Mutex
 
+// Record is one owned DNS TXT record. Value and CreatedAt were added later;
+// files written by older binaries decode with zero values and are handled as
+// legacy entries (see MatchingValue).
 type Record struct {
-	Provider string `json:"provider"`
-	Zone     string `json:"zone"`
-	FQDN     string `json:"fqdn"`
-	Value    string `json:"value"`
-	RecordID string `json:"record_id"`
+	Provider  string    `json:"provider"`
+	Zone      string    `json:"zone"`
+	FQDN      string    `json:"fqdn"`
+	Value     string    `json:"value"`
+	RecordID  string    `json:"record_id"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
 }
 
 type Store struct {
@@ -47,6 +59,9 @@ func (s *Store) Add(record Record) error {
 	if err != nil {
 		return err
 	}
+	if record.CreatedAt.IsZero() {
+		record.CreatedAt = time.Now()
+	}
 	current.Records = append(current.Records, record)
 	return s.save(current)
 }
@@ -61,6 +76,37 @@ func (s *Store) Matching(provider, zone, fqdn string) ([]Record, error) {
 	matching := make([]Record, 0)
 	for _, record := range current.Records {
 		if record.Provider == provider && record.Zone == zone && record.FQDN == fqdn {
+			matching = append(matching, record)
+		}
+	}
+	return matching, nil
+}
+
+// MatchingValue returns the name-matching records that a cleanup for one
+// challenge value may remove: the record created with that value, legacy
+// entries persisted before value tracking (empty Value, best-effort), and
+// provably stale entries. A recent record of another value may belong to a
+// live concurrent issuance and is spared. An empty value disables the value
+// filter (legacy name-based matching).
+func (s *Store) MatchingValue(provider, zone, fqdn, value string) ([]Record, error) {
+	if value == "" {
+		return s.Matching(provider, zone, fqdn)
+	}
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	current, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	matching := make([]Record, 0)
+	for _, record := range current.Records {
+		if record.Provider != provider || record.Zone != zone || record.FQDN != fqdn {
+			continue
+		}
+		legacy := record.Value == ""
+		stale := !record.CreatedAt.IsZero() && now.Sub(record.CreatedAt) > staleOwnershipAge
+		if record.Value == value || legacy || stale {
 			matching = append(matching, record)
 		}
 	}

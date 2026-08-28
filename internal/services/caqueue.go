@@ -39,7 +39,7 @@ type CAQueueManager struct {
 type RuleBlockToken uint64
 
 // retiredCAQueue 登记 PauseAndDrain 超时退役的队列。retiredAt 供惰性摘除兜底
-// （R45 发现3）：滞行执行越过 caExecutionTimeout+10min 宽松余量仍未退出只可能是
+// （R45 发现3）：滞行执行越过 caExecutionTimeoutMax+10min 宽松余量仍未退出只可能是
 // 僵尸（执行上限 ctx 早已触发），超时摘除并记日志；摘除时在途 jobID 迁入
 // zombieJobs 维持在途保护直到执行退出（R46 A-F2），R44-2 双执行防护不回退。
 type retiredCAQueue struct {
@@ -59,9 +59,33 @@ var (
 	caQueueManagerOnce sync.Once
 )
 
-// caExecutionTimeout 必须覆盖签发器内部最坏耗时预算
+// caExecutionTimeout 必须覆盖单域名签发器内部最坏耗时预算
 // （注册 30s + DNS 传播 5m + 验证 10m + 订单就绪 3m + 订单有效 5m ≈ 23.5m）
 const caExecutionTimeout = 30 * time.Minute
+
+// caExecutionTimeoutMax 是按域名数缩放后的执行预算封顶：多域名签发的
+// authz + DNS 传播按域名数串行叠加（双域名 ≈ 39.5min），固定 30min 会把
+// 合法慢签发误判为执行超时并白烧重试次数。
+const caExecutionTimeoutMax = 60 * time.Minute
+
+// caExecutionTimeoutFor 按授权域名数缩放执行预算：单域名 30min，每增加
+// 一个域名追加 10min，封顶 60min。
+func caExecutionTimeoutFor(domains string) time.Duration {
+	count := 0
+	for _, domain := range strings.Split(domains, ",") {
+		if strings.TrimSpace(domain) != "" {
+			count++
+		}
+	}
+	if count < 1 {
+		count = 1
+	}
+	timeout := caExecutionTimeout + time.Duration(count-1)*10*time.Minute
+	if timeout > caExecutionTimeoutMax {
+		return caExecutionTimeoutMax
+	}
+	return timeout
+}
 
 // caQueueDrainTimeout 上限 PauseAndDrain 等待队列执行退出；issuer 异常不响应
 // ctx 取消时等待永不返回，进程 Stop 会被永久挂起（R43 A-2，与 CancelJob 30s 同口径）。
@@ -514,7 +538,7 @@ func (m *CAQueueManager) IsJobActive(jobID int) bool {
 		queue.mu.Lock()
 		_, jobActive := queue.active[jobID]
 		remaining := len(queue.active)
-		agedOut := remaining > 0 && time.Since(entry.retiredAt) > caExecutionTimeout+10*time.Minute
+		agedOut := remaining > 0 && time.Since(entry.retiredAt) > caExecutionTimeoutMax+10*time.Minute
 		var stranded map[int]chan struct{}
 		if agedOut {
 			stranded = make(map[int]chan struct{}, remaining)
@@ -534,7 +558,7 @@ func (m *CAQueueManager) IsJobActive(jobID int) bool {
 			// 摘除条目避免硬挂+高频角色翻转下 retiredQueues 理论无界增长；但在途
 			// jobID 不得随条目遗忘——迁入 zombieJobs 维持双执行防护（R46 A-F2）。
 			m.migrateZombieJobsLocked(stranded)
-			Logf("warn", "CA 队列退役条目超过 %s 仍有 %d 个在途任务未退出，摘除并迁入僵尸保护", caExecutionTimeout+10*time.Minute, remaining)
+			Logf("warn", "CA 队列退役条目超过 %s 仍有 %d 个在途任务未退出，摘除并迁入僵尸保护", caExecutionTimeoutMax+10*time.Minute, remaining)
 			continue
 		}
 		kept = append(kept, entry)
@@ -863,7 +887,7 @@ func (q *caQueue) prepareExecutionLocked(parent context.Context) (queueExecution
 	q.pending = q.pending[1:]
 	q.running++
 	q.executions.Add(1)
-	ctx, cancel := context.WithTimeout(parent, caExecutionTimeout)
+	ctx, cancel := context.WithTimeout(parent, caExecutionTimeoutFor(item.domains))
 	q.cancels[item.jobID] = cancel
 	done := make(chan struct{})
 	q.executionDone[item.jobID] = done

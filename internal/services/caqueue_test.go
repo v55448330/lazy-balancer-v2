@@ -1134,7 +1134,7 @@ func TestCAQueueManager_IsJobActive_agedOutRetiredEntry_migratesZombieProtection
 		queues: make(map[int]*caQueue),
 		retiredQueues: []retiredCAQueue{{
 			queue:     queue,
-			retiredAt: time.Now().Add(-(caExecutionTimeout + 11*time.Minute)),
+			retiredAt: time.Now().Add(-(caExecutionTimeoutMax + 11*time.Minute)),
 		}},
 		active: true,
 	}
@@ -1172,5 +1172,73 @@ func TestCAQueueManager_IsJobActive_agedOutRetiredEntry_migratesZombieProtection
 	}
 	if !manager.IsJobActive(43) {
 		t.Fatal("job without executionDone must keep permanent zombie protection")
+	}
+}
+
+func TestCAQueue_prepareExecution_scales_budget_with_domain_count(t *testing.T) {
+	// Given：双域名签发（authz + DNS 传播双倍串行叠加）
+	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
+	queue.enqueue(queueItem{jobID: 42, ruleID: "lb_dual", domains: "example.com,www.example.com"})
+
+	// When
+	queue.mu.Lock()
+	execution, ok := queue.prepareExecutionLocked(context.Background())
+	queue.mu.Unlock()
+
+	// Then：预算按 30min 基础 + 每增加一个域名 10min 缩放
+	if !ok {
+		t.Fatal("pending job was not prepared")
+	}
+	defer execution.cancel()
+	deadline, hasDeadline := execution.ctx.Deadline()
+	if !hasDeadline {
+		t.Fatal("execution context has no deadline")
+	}
+	want := caExecutionTimeout + 10*time.Minute
+	if remaining := time.Until(deadline); remaining < want-time.Minute || remaining > want {
+		t.Fatalf("execution timeout=%v, want ~%v", remaining, want)
+	}
+}
+
+func TestCAQueue_prepareExecution_budget_capped_at_max(t *testing.T) {
+	// Given：五域名任务，缩放后预算必须封顶
+	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
+	queue.enqueue(queueItem{jobID: 42, ruleID: "lb_many", domains: "a.example.com,b.example.com,c.example.com,d.example.com,e.example.com"})
+
+	// When
+	queue.mu.Lock()
+	execution, ok := queue.prepareExecutionLocked(context.Background())
+	queue.mu.Unlock()
+
+	// Then
+	if !ok {
+		t.Fatal("pending job was not prepared")
+	}
+	defer execution.cancel()
+	deadline, hasDeadline := execution.ctx.Deadline()
+	if !hasDeadline {
+		t.Fatal("execution context has no deadline")
+	}
+	if remaining := time.Until(deadline); remaining < caExecutionTimeoutMax-time.Minute || remaining > caExecutionTimeoutMax {
+		t.Fatalf("execution timeout=%v, want ~%v (cap)", remaining, caExecutionTimeoutMax)
+	}
+}
+
+func TestCaExecutionTimeoutFor_counts_domains(t *testing.T) {
+	// Given/When/Then
+	testCases := []struct {
+		domains string
+		want    time.Duration
+	}{
+		{domains: "example.com", want: caExecutionTimeout},
+		{domains: "example.com,www.example.com", want: caExecutionTimeout + 10*time.Minute},
+		{domains: " example.com , www.example.com ", want: caExecutionTimeout + 10*time.Minute},
+		{domains: "", want: caExecutionTimeout},
+		{domains: "a.com,b.com,c.com,d.com", want: caExecutionTimeoutMax},
+	}
+	for _, testCase := range testCases {
+		if got := caExecutionTimeoutFor(testCase.domains); got != testCase.want {
+			t.Fatalf("caExecutionTimeoutFor(%q)=%v, want %v", testCase.domains, got, testCase.want)
+		}
 	}
 }
