@@ -57,9 +57,8 @@
                   effect="plain"
                   :class="['status-tag', caddyStatus]"
                 >
-                  {{ caddyStatus === 'running' ? '运行中' : caddyStatus === 'stopped' ? '已停止' : '未知' }}
+                  {{ caddyStatus === 'running' ? (caddyPid !== '0' && caddyPid !== '' ? `运行中 ${caddyPid}` : '运行中') : caddyStatus === 'stopped' ? '已停止' : '未知' }}
                 </el-tag>
-                <span v-if="caddyStatus === 'running' && caddyPid !== '0' && caddyPid !== ''" class="caddy-pid">PID {{ caddyPid }}</span>
                 <el-tag v-if="configConsistent === 'true'" type="success" size="small" effect="plain">配置正常</el-tag>
                 <el-tooltip v-else-if="configConsistent === 'false'" placement="bottom" :content="configDrift" :popper-style="{ maxWidth: '360px' }">
                   <el-tag type="danger" size="small" effect="plain">配置异常</el-tag>
@@ -1037,13 +1036,6 @@ onUnmounted(() => {
 .status-tag.running { background: #ecfdf5; border-color: #a7f3d0; }
 .status-tag.stopped { background: #fef2f2; border-color: #fecaca; }
 .status-tag.info { background: #f3f4f6; border-color: #e5e7eb; }
-
-.caddy-pid {
-  font-size: 12px;
-  color: #6b7280;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  white-space: nowrap;
-}
 
 .caddy-actions { display: flex; gap: 2px; }
 
