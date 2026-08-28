@@ -513,7 +513,7 @@ const activateMfa = async (): Promise<void> => {
 const copyMfaRecovery = async (): Promise<void> => {
   try {
     await navigator.clipboard.writeText(mfaBinding.value.recoveryCodes.join('\n'))
-    mfaAwareSuccess('恢复代码已复制')
+    ElMessage.success('恢复代码已复制')
   } catch {
     ElMessage.warning('复制失败，请手动选择复制')
   }

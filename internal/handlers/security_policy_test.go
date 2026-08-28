@@ -986,3 +986,87 @@ func TestCreateSecurityPolicy_defaultsIPACLMode(t *testing.T) {
 		t.Fatalf("ip_acl_mode=%q, want default deny", mode)
 	}
 }
+
+// seedNullColumnPolicy 写入一条多个可空列显式为 NULL 的策略（模拟带外编辑/
+// 备份恢复/集群继承产生的 NULL 行），返回策略 ID。I-2/I-3 测试共用。
+func seedNullColumnPolicy(t *testing.T, name string) int64 {
+	t.Helper()
+	result, err := db.DB.Exec(`INSERT INTO security_policies
+		(name, mode, description, ip_whitelist, anomaly_threshold, block_page_id, created_at, updated_by, enabled)
+		VALUES (?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`, name)
+	if err != nil {
+		t.Fatalf("seed null-column policy: %v", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read null-column policy id: %v", err)
+	}
+	return id
+}
+
+// I-2 硬化（ListSecurityPolicies）：策略行可空列修复前原样扫入非指针字段——
+// 单行 NULL 即 Scan 报错，整个策略列表对 REST/MCP 消费方 500，而生成路径
+// （services/security.go scanSecurityPolicyByID）对同样 NULL 已按 COALESCE 口径
+// 容忍。修复后列表 SELECT 与生成投影逐列同默认值，NULL 行照常返回。
+func TestListSecurityPolicies_toleratesNullNullableColumns(t *testing.T) {
+	// Given 一条 mode/description/ip_whitelist/anomaly_threshold/block_page_id/
+	// created_at/updated_by/enabled 均为 NULL 的策略
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	seedNullColumnPolicy(t, "null-list-policy")
+
+	// When GET /security/policies
+	recorder := getRequest(t, router, "/security/policies")
+
+	// Then 200，NULL 列按生成口径归一化（mode 'off'/阈值 5/白名单 '[]'/
+	// updated_by 0）；enabled 按 schema 默认 1 呈现启用态（List 无 enabled 过滤）
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s, want 200（单行 NULL 不得拖垮整个列表）", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int                            `json:"code"`
+		Data []models.SecurityPolicySummary `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse list response %s: %v", recorder.Body.String(), err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("policies=%+v, want 1 entry", resp.Data)
+	}
+	p := resp.Data[0]
+	if p.Mode != "off" || p.AnomalyThreshold != 5 || p.IPWhitelist != "[]" || p.UpdatedBy != 0 || !p.Enabled {
+		t.Fatalf("summary=%+v, want mode=off anomaly_threshold=5 ip_whitelist=[] updated_by=0 enabled=true", p)
+	}
+}
+
+// I-2 硬化（GetSecurityPolicy）：详情读路径与列表同口径——单行 NULL 不得把
+// 详情接口打成 500，归一化默认值与生成投影一致。
+func TestGetSecurityPolicy_toleratesNullNullableColumns(t *testing.T) {
+	// Given 一条多个可空列为 NULL 的策略
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	id := seedNullColumnPolicy(t, "null-detail-policy")
+
+	// When GET /security/policies/:id
+	recorder := getRequest(t, router, fmt.Sprintf("/security/policies/%d", id))
+
+	// Then 200，NULL 列归一化：mode 'off'/description ''/阈值 5/白名单 '[]'/
+	// block_page_id 0/created_at ''；enabled 按 schema 默认 1 呈现
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("get status=%d body=%s, want 200（NULL 行不得 500）", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Policy securityPolicyDetail `json:"policy"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse detail response %s: %v", recorder.Body.String(), err)
+	}
+	p := resp.Data.Policy
+	if p.Mode != "off" || p.Description != "" || p.AnomalyThreshold != 5 ||
+		p.IPWhitelist != "[]" || p.BlockPageID != 0 || p.CreatedAt != "" || !p.Enabled {
+		t.Fatalf("detail=%+v, want mode=off description='' anomaly_threshold=5 ip_whitelist=[] block_page_id=0 created_at='' enabled=true", p)
+	}
+}

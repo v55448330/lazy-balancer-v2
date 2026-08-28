@@ -2066,7 +2066,7 @@ const pasteFromFile = async (type: 'cert' | 'key') => {
         } else {
           wizardForm.tls_key = content
         }
-        mfaAwareSuccess('已从文件读取内容')
+        ElMessage.success('已从文件读取内容')
       }
       reader.readAsText(file)
     }

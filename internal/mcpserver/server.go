@@ -61,9 +61,9 @@ var tools = []toolSpec{
 	{"get_security_overview", "获取安全总览（今日拦截/检测、攻击类型 TOP、源 IP TOP）", http.MethodGet, "/security/overview", nil, nil, emptySchema},
 	{"list_security_policies", "列出全部安全策略", http.MethodGet, "/security/policies", nil, nil, emptySchema},
 	{"get_security_policy", "获取指定安全策略详情", http.MethodGet, "/security/policies/{id}", []string{"id"}, nil, idSchema("id", "策略 ID", "integer")},
-	{"list_security_events", "分页列出安全事件（WAF 拦截/IP ACL 拒绝）", http.MethodGet, "/security/events", nil, []string{"page", "page_size", "action", "ip", "rule_caddy_id", "start_time", "end_time"}, securityEventsSchema},
+	{"list_security_events", "分页列出安全事件（WAF 拦截/IP ACL 拒绝），可按负载规则/策略/触发规则/URI 过滤", http.MethodGet, "/security/events", nil, []string{"page", "page_size", "action", "ip", "rule_caddy_id", "rule_name", "policy_name", "rule_triggered", "uri", "start_time", "end_time"}, securityEventsSchema},
 	{"list_security_bindings", "列出安全策略与规则的绑定关系", http.MethodGet, "/security/bindings", nil, nil, emptySchema},
-	{"get_rule_security_policy", "获取指定规则绑定的安全策略", http.MethodGet, "/security/rules/{caddy_id}/policy", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
+	{"get_rule_security_policy", "获取指定规则绑定的安全策略（仅返回 enabled=1 的策略）", http.MethodGet, "/security/rules/{caddy_id}/policy", []string{"caddy_id"}, nil, idSchema("caddy_id", "规则 Caddy ID", "string")},
 	{"list_custom_rules", "列出全部自定义安全规则", http.MethodGet, "/security/custom-rules", nil, nil, emptySchema},
 	{"list_block_pages", "列出全部拦截页面", http.MethodGet, "/security/block-pages", nil, nil, emptySchema},
 	{"get_crs_info", "获取 CRS 规则库信息（版本/状态/自动更新）", http.MethodGet, "/security/crs", nil, nil, emptySchema},
@@ -98,7 +98,7 @@ var tools = []toolSpec{
 	{"create_register_token", "生成集群注册令牌", http.MethodPost, "/cluster/register-tokens", nil, nil, bodySchema},
 	{"approve_cluster_node", "审批通过从节点注册", http.MethodPost, "/cluster/nodes/{id}/approve", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
 	{"reject_cluster_node", "拒绝从节点注册", http.MethodPost, "/cluster/nodes/{id}/reject", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
-	{"create_login_ticket", "为从节点生成登录票据", http.MethodPost, "/cluster/nodes/{id}/login-ticket", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
+	{"create_login_ticket", "为从节点生成登录票据（操作者账户必须已启用 MFA，否则 403；人类 JWT 路径还需 60 秒内通过 MFA 验证（428 step-up），API Key/MCP 路径仅豁免该验证窗口）", http.MethodPost, "/cluster/nodes/{id}/login-ticket", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
 	{"update_node_access_url", "更新从节点访问地址", http.MethodPut, "/cluster/nodes/{id}/access-url", []string{"id"}, nil, bodySchema},
 	{"delete_cluster_node", "删除指定集群节点", http.MethodDelete, "/cluster/nodes/{id}", []string{"id"}, nil, idSchema("id", "节点 ID", "integer")},
 	{"set_cluster_mode", "注册并切换为从节点（standalone/master → slave，需主节点审批）", http.MethodPost, "/cluster/mode", nil, nil, bodySchema},
@@ -211,7 +211,7 @@ const auditLogsSchema = `{"type":"object","properties":{"page":{"type":"integer"
 // 边界与 REST clamp 对齐（ListCRSRules page_size≤100 默认 50；cert jobs ≤200）。
 const listCRSRulesSchema = `{"type":"object","properties":{"search":{"type":"string","description":"搜索关键词"},"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":50}},"additionalProperties":false}`
 const listCertJobsSchema = `{"type":"object","properties":{"rule_id":{"type":"string","description":"按规则 ID 过滤"},"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":200,"default":20}},"additionalProperties":false}`
-const securityEventsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20},"action":{"type":"string"},"ip":{"type":"string"},"rule_caddy_id":{"type":"string"},"start_time":{"type":"string","description":"开始时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"},"end_time":{"type":"string","description":"结束时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"}},"additionalProperties":false}`
+const securityEventsSchema = `{"type":"object","properties":{"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":100,"default":20},"action":{"type":"string"},"ip":{"type":"string"},"rule_caddy_id":{"type":"string"},"rule_name":{"type":"string","description":"按负载规则名称过滤（子串）"},"policy_name":{"type":"string","description":"按安全策略名称过滤（子串）"},"rule_triggered":{"type":"string","description":"按触发规则过滤（CRS 规则 ID，或 IP 访问控制/请求阻断评估/协议异常/协议攻击/自定义规则 家族标签）"},"uri":{"type":"string","description":"按请求 URI 过滤（子串）"},"start_time":{"type":"string","description":"开始时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"},"end_time":{"type":"string","description":"结束时间（配置时区，YYYY-MM-DD[ HH:MM:SS]）"}},"additionalProperties":false}`
 const caddyLogsSchema = `{"type":"object","properties":{"type":{"type":"string","enum":["runtime","server","proxy","tls","access"]}},"additionalProperties":false}`
 
 // setRuleSecurityPoliciesSchema（v2.2.0 多策略绑定）：maxItems=5 与后端

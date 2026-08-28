@@ -121,7 +121,10 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		Logf("warn", "检测到本地数据与同步记录不一致（%s），已强制重新应用", strings.Join(skip.drifted, "、"))
 		RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail(fmt.Sprintf("本地数据与记录不一致：%s", strings.Join(skip.drifted, "、")), fmt.Sprintf("已强制重新应用版本：%d", snapshot.Version)), "")
 	}
-	recordAppliedSectionHashes(s.db, snapshot, skip, switches)
+	// 漂移强制重放后本地数据已镜像主节点——drifted 节必须存本地重建口径哈希作为
+	// 稳定参照，否则跨构建口径分歧时（如 I-2 COALESCE 加固前后）漂移判定永远不一致、
+	// 每周期全量重拉+Caddy 重载（E3 N-01）。
+	recordAppliedSectionHashes(s.db, snapshot, skip, switches, previous.SectionHashes)
 	logSyncSwitchGuards(snapshot, skip, switches)
 
 	if switches.WafFiles && wafFilesRefDiffers(snapshot.WafFiles) {

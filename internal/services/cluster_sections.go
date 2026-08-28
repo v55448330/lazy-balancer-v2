@@ -210,6 +210,15 @@ func (sk *sectionSkips) skip(key string) bool {
 	return sk != nil && (sk.disabled[key] || sk.unchanged[key])
 }
 
+func (sk *sectionSkips) wasDrifted(key string) bool {
+	for _, d := range sk.drifted {
+		if d == key {
+			return true
+		}
+	}
+	return false
+}
+
 func readAppliedSectionHashes(dbh *sql.DB) map[string]string {
 	if dbh == nil {
 		return nil
@@ -278,7 +287,7 @@ func logSectionSyncOutcome(sk *sectionSkips, version int) {
 	}
 }
 
-func recordAppliedSectionHashes(dbh *sql.DB, snapshot models.ClusterSnapshot, sk *sectionSkips, switches SyncSwitches) {
+func recordAppliedSectionHashes(dbh *sql.DB, snapshot models.ClusterSnapshot, sk *sectionSkips, switches SyncSwitches, localHashes map[string]string) {
 	if dbh == nil {
 		return
 	}
@@ -293,6 +302,13 @@ func recordAppliedSectionHashes(dbh *sql.DB, snapshot models.ClusterSnapshot, sk
 		if sk.unchanged[sec.Key] {
 			if _, err := dbh.Exec(`UPDATE cluster_applied_sections SET applied_version=?, applied_at=datetime('now') WHERE section=?`, snapshot.Version, sec.Key); err == nil {
 				continue
+			}
+		}
+		// 漂移节已被强制重放、本地数据镜像主节点：落本地重建口径哈希作为
+		// 稳定参照（见 applySnapshot 调用点注释）；本地哈希缺失回退快照侧。
+		if sk.wasDrifted(sec.Key) {
+			if lh, lok := localHashes[sec.Key]; lok && lh != "" {
+				h = lh
 			}
 		}
 		if _, err := dbh.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version, applied_at) VALUES (?,?,?,datetime('now'))

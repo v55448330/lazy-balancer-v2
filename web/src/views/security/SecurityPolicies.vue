@@ -728,7 +728,7 @@ const ACL_MODE_TIPS: Record<string, string> = {
 }
 const aclListTip = computed(() => ACL_MODE_TIPS[form.value.ip_acl_mode] ?? '')
 
-const blockPageName = computed(() => blockPages.value.find((p) => p.id === form.value.block_page_id)?.name || '-')
+const blockPageName = computed(() => (form.value.block_page_id === 0 ? '无拦截页面' : blockPages.value.find((p) => p.id === form.value.block_page_id)?.name || '-'))
 
 // 与后端口径一致：ACL 启用且列表非空，或白名单/黑名单非空
 const hasIpControl = (row: PolicySummary): boolean => {

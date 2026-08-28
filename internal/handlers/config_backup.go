@@ -1052,6 +1052,18 @@ func backupString(value any) string {
 	return ""
 }
 
+// backupContainsUsername 报告备份 users 表是否包含指定账户。审计 B3 自锁门使用：
+// 导入全量替换 users/api_keys 且递增 password_version 吊销现有 JWT，备份缺少
+// 操作者自身账户时导入后其永久无法登录——该场景须在事务前 400 拒绝。
+func backupContainsUsername(users []map[string]any, username string) bool {
+	for _, row := range users {
+		if backupString(row["username"]) == username {
+			return true
+		}
+	}
+	return false
+}
+
 // backupPathRulesForRule 从备份 path_rules 表收集指定规则的自定义路径规则，
 // 供 validateV2Backup 按保存路径同口径校验；无该规则行时返回 found=false。
 // upstreams_json 形态错误必须上抛（R57 C-1）：吞错后 Upstreams=nil 被
@@ -1436,6 +1448,14 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 	importUsername := c.GetString("username")
+	// 审计 B3：导入不含自身账户的备份=永久自锁——全量替换 users/api_keys 后操作者
+	// 账户消失，且上方 password_version 递增会吊销其 JWT，现有「至少一个启用管理员」
+	// 门拦不住操作者本人缺席。校验期前置拒绝（零写入语义，也不启动 CA 队列
+	// PauseAndDrain）；API Key 调用方以属主账户用户名作为操作者，同门适用。
+	if importUsername != "" && !backupContainsUsername(backup.Tables["users"], importUsername) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "导入的备份不包含当前操作账户，导入后您将无法登录"})
+		return
+	}
 	session, err := h.beginConfigImport(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -1539,11 +1559,16 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			return
 		}
 	}
-	if _, err := tx.ExecContext(ctx, "UPDATE lb_rules SET updated_by=?", importUserID); err != nil {
-		err = session.abort(err)
-		recordAudit(c, "导入失败", "配置备份", "更新规则操作者失败: "+err.Error())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新规则操作者失败，已回滚: " + err.Error()})
-		return
+	// 审计 B3：归属重映射仅在操作者存在时执行——操作者行缺失时写 NULL 会抹掉
+	// 全部规则归属（操作者非空但缺席备份的场景已被上方自锁前置门 400 拦截；
+	// 此分支兜底无操作者上下文的路径）。
+	if importUserID.Valid {
+		if _, err := tx.ExecContext(ctx, "UPDATE lb_rules SET updated_by=?", importUserID); err != nil {
+			err = session.abort(err)
+			recordAudit(c, "导入失败", "配置备份", "更新规则操作者失败: "+err.Error())
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新规则操作者失败，已回滚: " + err.Error()})
+			return
+		}
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id NOT IN (SELECT caddy_id FROM lb_rules)"); err != nil {
 		err = session.abort(err)

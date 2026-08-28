@@ -685,15 +685,25 @@ func TestImportConfigBackup_remaps_rule_updated_by_to_restored_user(t *testing.T
 	}
 }
 
-func TestImportConfigBackup_nulls_rule_updated_by_when_operator_missing(t *testing.T) {
+func TestImportConfigBackup_rejects_backup_missing_operator_account(t *testing.T) {
+	// 审计 B3：备份不含操作者自身账户=永久自锁——导入全量替换 users/api_keys，
+	// 操作者账户被清且 password_version 递增使其 JWT 同时失效，导入后无法登录；
+	// 既有「至少一个启用管理员」门（备份内 otheradmin）拦不住操作者本人缺席。
+	// 校验期前置 400 拒绝，零写入（users/lb_rules 均不被替换）。
 	// Given
 	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'operator-admin','hash','admin',1);
+		INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,updated_by) VALUES ('lb_pre','pre','http','pre.example.test',8080,1,1);
+		INSERT INTO upstreams (rule_id,host,port,weight,enabled) VALUES ('lb_pre','127.0.0.1',9000,1,1)`); err != nil {
+		t.Fatalf("seed operator and rule: %v", err)
+	}
 	backup := completeBackupJSON(t, map[string][]map[string]any{
-		"lb_rules":  {{"caddy_id": "lb_ghost", "name": "ghost", "protocol": "http", "domain": "ghost.example.test", "listen_port": 8081, "enabled": true}},
-		"upstreams": {{"rule_id": "lb_ghost", "host": "127.0.0.1", "port": 9000, "weight": 1, "enabled": true}},
+		"users":     {{"id": 50, "username": "otheradmin", "password_hash": "hash", "role": "admin", "is_enabled": true}},
+		"lb_rules":  {{"caddy_id": "lb_selflock", "name": "selflock", "protocol": "http", "domain": "selflock.example.test", "listen_port": 8082, "enabled": true, "updated_by": 50}},
+		"upstreams": {{"rule_id": "lb_selflock", "host": "127.0.0.1", "port": 9001, "weight": 1, "enabled": true}},
 	})
 	router := gin.New()
-	router.Use(func(c *gin.Context) { c.Set("username", "ghost"); c.Next() })
+	router.Use(func(c *gin.Context) { c.Set("username", "operator-admin"); c.Next() })
 	router.POST("/config/import", h.ImportConfigBackup)
 	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
 	request.Header.Set("Content-Type", "application/json")
@@ -702,16 +712,65 @@ func TestImportConfigBackup_nulls_rule_updated_by_when_operator_missing(t *testi
 	// When
 	router.ServeHTTP(response, request)
 
-	// Then
+	// Then：400 自锁消息，且表未被替换（操作者仍在、备份数据未入库、原规则归属保留）
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "导入的备份不包含当前操作账户") {
+		t.Fatalf("body=%s, want self-lockout message", response.Body.String())
+	}
+	var operatorCount, otherAdminCount int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username='operator-admin'").Scan(&operatorCount); err != nil {
+		t.Fatalf("read operator: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username='otheradmin'").Scan(&otherAdminCount); err != nil {
+		t.Fatalf("read backup admin: %v", err)
+	}
+	if operatorCount != 1 || otherAdminCount != 0 {
+		t.Fatalf("users after rejected import: operator=%d otheradmin=%d, want 1/0（表未替换）", operatorCount, otherAdminCount)
+	}
+	var preUpdatedBy sql.NullInt64
+	var selflockCount int
+	if err := db.DB.QueryRow("SELECT updated_by FROM lb_rules WHERE caddy_id='lb_pre'").Scan(&preUpdatedBy); err != nil {
+		t.Fatalf("read pre-import rule: %v", err)
+	}
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_selflock'").Scan(&selflockCount); err != nil {
+		t.Fatalf("read imported rule: %v", err)
+	}
+	if selflockCount != 0 || !preUpdatedBy.Valid || preUpdatedBy.Int64 != 1 {
+		t.Fatalf("lb_rules after rejected import: selflock=%d pre updated_by=%+v, want 0/1（归属保留）", selflockCount, preUpdatedBy)
+	}
+}
+
+func TestImportConfigBackup_preserves_backup_rule_attribution_without_operator_context(t *testing.T) {
+	// 审计 B3：归属重映射仅在操作者存在时执行——无操作者上下文时，备份行自带的
+	// updated_by 必须原样保留，不得写 NULL 抹掉全部规则归属（操作者非空但缺席
+	// 备份的场景已被自锁前置门 400 拦截，见上一用例）。
+	// Given
+	h := newBackupTestHandlers(t)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"lb_rules":  {{"caddy_id": "lb_attr", "name": "attr", "protocol": "http", "domain": "attr.example.test", "listen_port": 8083, "enabled": true, "updated_by": 7}},
+		"upstreams": {{"rule_id": "lb_attr", "host": "127.0.0.1", "port": 9000, "weight": 1, "enabled": true}},
+	})
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then：导入成功且备份归属保留（非 NULL）
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
 	var updatedBy sql.NullInt64
-	if err := db.DB.QueryRow("SELECT updated_by FROM lb_rules WHERE caddy_id='lb_ghost'").Scan(&updatedBy); err != nil {
+	if err := db.DB.QueryRow("SELECT updated_by FROM lb_rules WHERE caddy_id='lb_attr'").Scan(&updatedBy); err != nil {
 		t.Fatalf("read updated_by: %v", err)
 	}
-	if updatedBy.Valid {
-		t.Fatalf("updated_by=%+v, want NULL when operator is not in backup", updatedBy)
+	if !updatedBy.Valid || updatedBy.Int64 != 7 {
+		t.Fatalf("updated_by=%+v, want 7（备份归属保留，无 NULL 重映射）", updatedBy)
 	}
 }
 

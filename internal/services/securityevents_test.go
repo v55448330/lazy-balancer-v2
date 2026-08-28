@@ -1634,3 +1634,124 @@ func TestSecurityEventsAttribution_UnboundReturnsZeroValue(t *testing.T) {
 		t.Fatalf("attribution=(%d,%q), want (0,\"\") — 未绑定策略的规则必须归因零值", pid, pname)
 	}
 }
+
+// A3 I-6 遗留 ip_blacklist 拒绝（rule_triggered="4"）必须归因到拥有黑名单的策略。
+// Given：lb_rule1 绑定 [policy-A(id1, 无任何 IP 控制), policy-B(id3, ip_blacklist
+// '["10.0.0.1"]')]，绑定顺序 policy_id ASC。
+// When：归因 audit rule_triggered="4"（BuildCorazaDirectives 对非空 ip_blacklist
+// 发射 id:4 的遗留黑名单拒绝）。
+// Then：归因到 policy-B(id3) —— 而非首绑定回退值 policy-A。
+func TestSecurityEventsAttribution_LegacyBlacklistDenyPicksOwnerPolicy(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups) VALUES (1,'policy-A',1,'[]','[]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups,ip_blacklist) VALUES (3,'policy-B',1,'[]','[]','["10.0.0.1"]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',1),('lb_rule1',3)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	pid, pname := securityEventsAttributePolicy("lb_rule1", "4", policyByID, bindings)
+	if pid != 3 || pname != "policy-B" {
+		t.Fatalf("attribution=(%d,%q), want (3,policy-B) — 遗留黑名单拒绝必须归因到拥有 ip_blacklist 的策略", pid, pname)
+	}
+}
+
+// A3 I-6 IP ACL 黑名单模式拒绝（rule_triggered="2"）必须归因到拥有该 ACL 的策略。
+// Given：lb_rule1 绑定 [policy-A(id1, 无任何 IP 控制), policy-C(id4,
+// ip_acl_enabled=1, ip_acl_mode='deny', ip_acl_list '["1.2.3.4"]')]。
+// When：归因 audit rule_triggered="2"（enabled+deny+名单非空时发射 id:2）。
+// Then：归因到 policy-C(id4) —— 而非首绑定回退值 policy-A。
+func TestSecurityEventsAttribution_IPACLDenyPicksOwnerPolicy(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups) VALUES (1,'policy-A',1,'[]','[]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups,ip_acl_enabled,ip_acl_mode,ip_acl_list) VALUES (4,'policy-C',1,'[]','[]',1,'deny','["1.2.3.4"]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',1),('lb_rule1',4)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	pid, pname := securityEventsAttributePolicy("lb_rule1", "2", policyByID, bindings)
+	if pid != 4 || pname != "policy-C" {
+		t.Fatalf("attribution=(%d,%q), want (4,policy-C) — IP ACL 黑名单模式拒绝必须归因到拥有该 ACL 的策略", pid, pname)
+	}
+}
+
+// A3 I-6 回退守恒：rule_triggered="4" 但没有任何绑定策略配置黑名单时，
+// 仍回退到第一个 ENABLED 绑定策略（发射现实：必有策略发出了该 id，只是当前
+// 配置已变更），禁止回归为零值或报错。
+func TestSecurityEventsAttribution_BlacklistDenyFallsBackToFirstEnabledWhenNoOwner(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups) VALUES (1,'policy-A',1,'[]','[]'),(3,'policy-B',1,'[]','[]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',1),('lb_rule1',3)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	pid, pname := securityEventsAttributePolicy("lb_rule1", "4", policyByID, bindings)
+	if pid != 1 || pname != "policy-A" {
+		t.Fatalf("attribution=(%d,%q), want (1,policy-A) — 无属主时必须回退到第一个启用绑定策略", pid, pname)
+	}
+}
+
+// A3 I-6 边界：allow（白名单）模式的 IP ACL 不拥有 rule_triggered="2" 的归属
+// （归属口径仅认 deny 黑名单模式，与审计规格一致）；事件回退到第一个启用绑定。
+func TestSecurityEventsAttribution_IPACLAllowModeDoesNotOwnDenyEvent(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups) VALUES (1,'policy-A',1,'[]','[]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,custom_rules,crs_rule_groups,ip_acl_enabled,ip_acl_mode,ip_acl_list) VALUES (4,'policy-C',1,'[]','[]',1,'allow','["1.2.3.4"]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',1),('lb_rule1',4)`); err != nil {
+		t.Fatal(err)
+	}
+	_, bindings, policyByID, err := securityEventsLoadMappings()
+	if err != nil {
+		t.Fatalf("load mappings: %v", err)
+	}
+	pid, pname := securityEventsAttributePolicy("lb_rule1", "2", policyByID, bindings)
+	if pid != 1 || pname != "policy-A" {
+		t.Fatalf("attribution=(%d,%q), want (1,policy-A) — allow 模式 ACL 不拥有 id:2 归属，必须回退首绑定", pid, pname)
+	}
+}

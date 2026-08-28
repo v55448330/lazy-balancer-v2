@@ -1291,7 +1291,7 @@ func sanitizeLegacyCustomRulePatterns() error {
 	disabled := 0
 
 	// 1. 独立自定义规则表
-	rows, err := DB.Query("SELECT id, conditions FROM security_custom_rules")
+	rows, err := DB.Query("SELECT id, COALESCE(conditions,'') FROM security_custom_rules")
 	if err != nil {
 		return fmt.Errorf("failed to query security_custom_rules: %w", err)
 	}
@@ -1330,7 +1330,7 @@ func sanitizeLegacyCustomRulePatterns() error {
 	}
 
 	// 2. 策略内嵌自定义规则
-	policyRows, err := DB.Query("SELECT id, custom_rules FROM security_policies")
+	policyRows, err := DB.Query("SELECT id, COALESCE(custom_rules,'') FROM security_policies")
 	if err != nil {
 		return fmt.Errorf("failed to query security_policies: %w", err)
 	}

@@ -239,6 +239,12 @@ func (h *Handlers) MFARecoveryCodes(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "恢复码已重新生成（旧码全部作废）", Data: gin.H{"recovery_codes": codes}})
 }
 
+// R74 verify-step 硬门阈值/冷却（审计 B3 I-5）。
+const (
+	mfaVerifyStepMaxAttempts = 10
+	mfaVerifyStepCooldown    = 10 * time.Minute
+)
+
 // MFAVerifyStep POST /auth/mfa/verify-step — step-up：验证码 → 新 JWT（mfa_ts 刷新）。
 func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 	if !guardAuthJSONBody(c) {
@@ -251,6 +257,30 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
+	}
+	// R74 verify-step 硬门——与登录 challenge 10 次/激活 pending 5 次同族的端点级
+	// 失败上限（独立于 mfa_lockout_enabled 全局锁定开关）：连续失败 ≥10 触发
+	// 10 分钟冷却（429 请重新登录）；劫持会话的在线爆破成本从小时级拉到不可用。
+	// 机制：复用 users.mfa_failed_attempts（MFAVerifyCode 每次失败已 +1，开关
+	// 关闭时亦然）与 mfa_locked_until——达阈值时写入冷却并清零计数（与
+	// mfaRecordFailure 锁定时清零同口径），冷却过期后正常用户凭有效码即可恢复；
+	// 冷却期内一律 429 不再验码。门在端点内、不读 auth_type，对 JWT 与机器
+	// 身份同效；读库失败时不阻断既有验码路径（MFAVerifyCode 自会报错）。
+	var stepAttempts int
+	var stepLockedUntil *time.Time
+	if err := db.DB.QueryRow("SELECT COALESCE(mfa_failed_attempts,0), mfa_locked_until FROM users WHERE id=?", userID).
+		Scan(&stepAttempts, &stepLockedUntil); err == nil {
+		now := time.Now()
+		capped := stepLockedUntil != nil && now.Before(*stepLockedUntil)
+		if !capped && stepAttempts >= mfaVerifyStepMaxAttempts {
+			_, _ = db.DB.Exec("UPDATE users SET mfa_failed_attempts=0, mfa_locked_until=? WHERE id=?",
+				now.Add(mfaVerifyStepCooldown).UTC().Format("2006-01-02 15:04:05"), userID)
+			capped = true
+		}
+		if capped {
+			c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: "连续失败过多，请重新登录后再试"})
+			return
+		}
 	}
 	if ok, verr := services.MFAVerifyCode(userID, req.Code, time.Now()); !ok {
 		services.RecordAuditLog(c.GetString("username"), "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "step-up 验证失败"), c.ClientIP())

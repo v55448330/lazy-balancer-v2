@@ -510,9 +510,9 @@ const fetchCRS = async () => { try { const res = await request.get<APIResponse<t
 const searchRules = () => { page.value = 1; fetchRules() }
 const fetchRules = async () => {
   loadingRules.value = true
-  try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (searchQuery.value) p.set('search', searchQuery.value); const res = await request.get<APIResponse<{ rules: CRSRuleFile[]; total: number }>>(`/security/crs/rules?${p}`); rules.value = res.data?.rules || []; total.value = res.data?.total || 0 } catch { rules.value = [] } finally { loadingRules.value = false }
+  try { const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) }); if (searchQuery.value) p.set('search', searchQuery.value); const res = await request.get<APIResponse<{ rules: CRSRuleFile[]; total: number }>>(`/security/crs/rules?${p}`); rules.value = res.data?.rules || []; total.value = res.data?.total || 0 } catch {} finally { loadingRules.value = false }
 }
-const fetchCustomRules = async () => { loadingCustom.value = true; try { const res = await request.get<APIResponse<CustomRule[]>>('/security/custom-rules'); customRules.value = res.data || [] } catch { customRules.value = [] } finally { loadingCustom.value = false } }
+const fetchCustomRules = async () => { loadingCustom.value = true; try { const res = await request.get<APIResponse<CustomRule[]>>('/security/custom-rules'); customRules.value = res.data || [] } catch {} finally { loadingCustom.value = false } }
 const fetchUsers = async () => { try { const res = await request.get<APIResponse<UserListItem[]>>('/users'); users.value = res.data || [] } catch {} }
 
 let ruleContentSeq = 0

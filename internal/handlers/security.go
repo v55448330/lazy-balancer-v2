@@ -428,10 +428,22 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面已删除" + h.caddyApplyNote()})
 }
 
+// securityPolicySelectColumns 是 ListSecurityPolicies/GetSecurityPolicy 共用的
+// 25 表达式投影：与生成路径的 24 表达式 COALESCE 投影逐列同默认值、同相对顺序
+// （canonical 副本：internal/services/security.go scanSecurityPolicyByID、
+// internal/services/caddy.go loadSecurityPolicyContext 批量预载）。services/ 归
+// 并行任务持有且两侧列集本就不同，此处按既定回退方案保持 handlers 本地副本——
+// 改任一侧默认值时必须同步另一侧，勿单方面漂移。两点刻意差异：
+//  1. 多 COALESCE(updated_by,0)（第 20 位）：PolicySummary/详情响应需要该列，
+//     生成投影不含；
+//  2. enabled 用 COALESCE(enabled,1)（schema 默认 TRUE）：List/Get 无 enabled
+//     WHERE 过滤，NULL-enabled 行须按 schema 默认呈现启用态；生成路径以
+//     WHERE enabled=1 守卫，NULL 行本就被过滤，故裸列即可。
+const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
+	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0)`
+
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
-	rows, err := db.DB.Query(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, COALESCE(crs_rule_groups,'[]'), crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode, waf_check_response
-		FROM security_policies ORDER BY id`)
+	rows, err := db.DB.Query(`SELECT ` + securityPolicySelectColumns + ` FROM security_policies ORDER BY id`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -511,9 +523,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 func (h *Handlers) GetSecurityPolicy(c *gin.Context) {
 	id := c.Param("id")
 	var p models.SecurityPolicy
-	err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT id, name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, updated_by, created_at, updated_at, geoip_countries, geoip_mode, waf_check_response
-		FROM security_policies WHERE id=?`, id), &p)
+	err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &p)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
 		return
@@ -1982,7 +1992,11 @@ func (h *Handlers) GetIP2RegionUpdateLogs(c *gin.Context) {
 // GetAllSecurityBindings（v2.2.0 T2）：一规则可绑多策略——返回 map[string][]BindingInfo，
 // 每规则的绑定按 policy_id ASC 排序；取代旧的 map[string]BindingInfo 单值覆盖形态。
 func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
-	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, p.mode, p.enabled, p.rate_limit_enabled, COALESCE(p.block_page_id, 0)
+	// mode/enabled/rate_limit_enabled 与生成投影同默认值 COALESCE（I-3）：NULL 列
+	// 修复前触发 Scan 报错静默丢绑定，而生成路径照常应用该策略。enabled 归一为 0
+	// 而非 schema 默认 1——生成路径以 WHERE enabled=1 把 NULL 当禁用，UI 标签须
+	// 与后端行为一致（区别于 List 详情的 COALESCE(enabled,1)：那里无 WHERE 过滤）。
+	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, COALESCE(p.mode,'off'), COALESCE(p.enabled,0), COALESCE(p.rate_limit_enabled,0), COALESCE(p.block_page_id, 0)
 		FROM security_policy_bindings b JOIN security_policies p ON b.policy_id = p.id
 		ORDER BY b.rule_caddy_id ASC, b.policy_id ASC`)
 	if err != nil {
@@ -2007,7 +2021,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 		if err := rows.Scan(&ruleCaddyID, &b.PolicyID, &b.Name, &b.Mode, &b.Enabled, &b.RateLimit, &b.BlockPageID); err != nil {
 			// 单行扫描失败跳过：不写入零值绑定（policy_id=0/mode="" 会把该规则
 			// 错误呈现为「已绑定到空策略」）；迭代错误由下方 rows.Err() 兜底（R37 S2）。
-			log.Printf("security bindings: 跳过扫描失败行（规则绑定可能缺失）: %v", err)
+			services.Logf("warn", "security bindings: 跳过扫描失败行（规则绑定可能缺失）: %v", err)
 			continue
 		}
 		result[ruleCaddyID] = append(result[ruleCaddyID], b)

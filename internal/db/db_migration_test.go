@@ -1131,6 +1131,44 @@ func TestSanitizeLegacyCustomRulePatterns_disablesDirtyRulesIdempotently(t *test
 	}
 }
 
+func TestSanitizeLegacyCustomRulePatterns_survivesNullColumns(t *testing.T) {
+	// Given a database whose legacy rows carry NULL conditions / custom_rules
+	// (reachable via verbatim snapshot apply and backup restoreTable round-trips)
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_custom_rules (id,name,conditions,action,score,enabled) VALUES
+		(1,'空值规则',NULL,'block',5,1);
+		INSERT INTO security_policies (id,name,custom_rules,enabled) VALUES
+		(1,'空值策略',NULL,1);`); err != nil {
+		t.Fatalf("seed NULL rows: %v", err)
+	}
+
+	// When the startup migration runs
+	if err := sanitizeLegacyCustomRulePatterns(); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+
+	// Then the NULL-conditions row flows into the unparseable-JSON branch and is disabled
+	var enabled int
+	if err := database.QueryRow("SELECT enabled FROM security_custom_rules WHERE id=1").Scan(&enabled); err != nil {
+		t.Fatalf("read custom rule: %v", err)
+	}
+	if enabled != 0 {
+		t.Fatalf("custom rule enabled=%d, want 0 (unparseable-JSON branch disables)", enabled)
+	}
+
+	// And the NULL-custom_rules policy flows into the unparseable-JSON branch and is left untouched
+	var nullPolicies int
+	if err := database.QueryRow("SELECT COUNT(*) FROM security_policies WHERE id=1 AND custom_rules IS NULL").Scan(&nullPolicies); err != nil {
+		t.Fatalf("read policy: %v", err)
+	}
+	if nullPolicies != 1 {
+		t.Fatalf("policy with NULL custom_rules rows=%d, want 1 (unparseable-JSON branch keeps as-is)", nullPolicies)
+	}
+}
+
 func TestInitialize_backfillsLegacyTimeoutColumnsOnceAndPreservesExplicitZero(t *testing.T) {
 	// Given a legacy database whose global_config predates the four timeout columns
 	dir := t.TempDir()

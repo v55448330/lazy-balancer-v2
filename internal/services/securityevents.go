@@ -211,22 +211,24 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 		return nil, nil, nil, fmt.Errorf("security events: iterate bindings: %w", err)
 	}
 
-	// 策略的 custom_rules / crs_rule_groups 用于「rule_triggered 属于哪个策略」
-	// 判定；仅加载启用策略（disabled 策略不应再接收事件归因）。
+	// 策略的 custom_rules / crs_rule_groups / ip_blacklist / ip_acl_* 用于
+	// 「rule_triggered 属于哪个策略」判定；仅加载启用策略（disabled 策略不应再
+	// 接收事件归因）。
 	policyByID := make(map[int]*models.SecurityPolicy)
-	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]') FROM security_policies WHERE enabled=1`)
+	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]') FROM security_policies WHERE enabled=1`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load policies: %w", err)
 	}
 	defer polRows.Close()
 	for polRows.Next() {
 		p := &models.SecurityPolicy{}
-		var customJSON, crsJSON string
-		if err := polRows.Scan(&p.ID, &p.Name, &customJSON, &crsJSON); err != nil {
+		var customJSON, crsJSON, blacklistJSON string
+		if err := polRows.Scan(&p.ID, &p.Name, &customJSON, &crsJSON, &blacklistJSON, &p.IPACLEnabled, &p.IPACLMode, &p.IPACLList); err != nil {
 			return nil, nil, nil, fmt.Errorf("security events: scan policy: %w", err)
 		}
 		p.CustomRules = json.RawMessage(customJSON)
 		p.CRSRuleGroups = json.RawMessage(crsJSON)
+		p.IPBlacklist = json.RawMessage(blacklistJSON)
 		policyByID[p.ID] = p
 	}
 	if err := polRows.Err(); err != nil {
@@ -243,7 +245,11 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 // （DB id + 10000 == n）。CRS 规则（9xxxxx）：crs_rule_groups 条目为两位数字
 // 代码（如 "42" 对应 942xxx，与 BuildCorazaDirectives 的 `REQUEST-9<code>-*.conf`
 // Include 同款口径）；空数组按发射端语义视为「包含全部 REQUEST-*」，即所有 CRS
-// 规则均属于该策略。
+// 规则均属于该策略。IP ACL 拒绝带（A3 I-6）：id 4 = 遗留 ip_blacklist 拒绝，
+// BuildCorazaDirectives 仅对黑名单非空的策略发射；id 2 = IP ACL 黑名单模式
+// 拒绝，仅对 ip_acl_enabled + mode='deny' + 名单非空的策略发射——归属口径与
+// 发射条件一一对应（名单解析失败/为空均视为不拥有，与发射端 json.Unmarshal
+// 失败得到空切片同义）。
 func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTriggered string) bool {
 	if policy == nil || ruleTriggered == "" {
 		return false
@@ -253,6 +259,21 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 		return false
 	}
 	switch {
+	case n == 4:
+		var blacklist []string
+		if err := json.Unmarshal(policy.IPBlacklist, &blacklist); err != nil {
+			return false
+		}
+		return len(blacklist) > 0
+	case n == 2:
+		if !policy.IPACLEnabled || policy.IPACLMode != "deny" {
+			return false
+		}
+		var aclList []string
+		if err := json.Unmarshal([]byte(policy.IPACLList), &aclList); err != nil {
+			return false
+		}
+		return len(aclList) > 0
 	case n >= 10000 && n < 900000:
 		var ids []int
 		if err := json.Unmarshal(policy.CustomRules, &ids); err == nil {
@@ -294,11 +315,13 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 }
 
 // securityEventsAttributePolicy v2.2.0 多策略事件归因：rule_triggered → 查该规则
-// ID 属于哪个策略（custom_rules / CRS 组匹配），重叠时取绑定顺序第一条（policy_id
-// ASC 的第一个）。策略均未显式包含时回退到绑定顺序中第一个 ENABLED 策略
-// （policyByID 仅含启用策略：禁用/悬空的首绑定被跳过，事件仍归到该 lb_rule 的
-// 可用主策略）；无任何启用绑定策略、或 lb_rule 完全未绑定（无
-// security_policy_bindings 行）返回零值 (0, "")。
+// ID 属于哪个策略（custom_rules / CRS 组 / IP ACL 拒绝带匹配），重叠时取绑定顺序
+// 第一条（policy_id ASC 的第一个）。策略均未显式包含时回退到绑定顺序中第一个
+// ENABLED 策略（policyByID 仅含启用策略：禁用/悬空的首绑定被跳过，事件仍归到该
+// lb_rule 的可用主策略）。无任何启用绑定策略、或 lb_rule 完全未绑定（无
+// security_policy_bindings 行）返回零值 (0, "")。ACL 拒绝带（id 4/2）无属主时
+// 同样走该回退而非归零：事件既已被摄取，必是某绑定策略在发射时的配置发出了它
+// （当前配置可能已变更），归到首启用绑定是最接近发射现实的归属。
 func securityEventsAttributePolicy(ruleCaddyID, ruleTriggered string, policyByID map[int]*models.SecurityPolicy, bindings map[string][]int) (int, string) {
 	policyIDs := bindings[ruleCaddyID]
 	if len(policyIDs) == 0 {

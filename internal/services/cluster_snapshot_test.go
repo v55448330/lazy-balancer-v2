@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -91,6 +92,107 @@ func TestDriftGuardSectionHashes_detectsMutation(t *testing.T) {
 	}
 	if after["security"] == baseline["security"] {
 		t.Fatal("security hash must change after policy mode change")
+	}
+}
+
+// TestSnapshotSecurityPolicies_nullEnabledDumpsAsDisabled 锁定 R-I1：主节点读路径
+// 一律把 NULL enabled 当禁用（WHERE ... AND enabled=1），dump 却 COALESCE(enabled,1)
+// 落成启用——主节点不执行的策略经快照在从节点变成启用，且提升后永久分叉。
+// dump 必须与读路径同构：NULL → 禁用（0）。
+func TestSnapshotSecurityPolicies_nullEnabledDumpsAsDisabled(t *testing.T) {
+	// Given：一条 enabled 为 NULL 的策略（带外编辑/restoreTable 透传可产生）
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO security_policies (name, enabled) VALUES ('null-enabled', NULL)`); err != nil {
+		t.Fatalf("seed null-enabled policy: %v", err)
+	}
+
+	// When：主节点快照 dump
+	payload, err := service.snapshotSecurityPolicies(context.Background(), database)
+
+	// Then：enabled 键存在且为禁用表示（dump 整数列经 JSON 序列化为数字 0，
+	// 解码为 float64(0)——与 rate_limit_enabled 等 COALESCE(...,0) 列同形）
+	if err != nil {
+		t.Fatalf("snapshotSecurityPolicies: %v", err)
+	}
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(payload, &rows); err != nil {
+		t.Fatalf("parse dump payload %s: %v", string(payload), err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("dump rows=%d, want 1: %s", len(rows), string(payload))
+	}
+	enabled, ok := rows[0]["enabled"]
+	if !ok {
+		t.Fatalf("dump 缺少 enabled 键: %s", string(payload))
+	}
+	if enabled != float64(0) {
+		t.Fatalf("enabled = %#v, want 0（NULL enabled 必须与读路径 WHERE enabled=1 同构落禁用）: %s", enabled, string(payload))
+	}
+}
+
+// TestSnapshotSecurityCustomRules_toleratesNullTimestamps 锁定 R-I7：
+// security_custom_rules.created_at/updated_at 可空（DEFAULT datetime('now')，
+// 无 NOT NULL），一行 NULL 即让快照 scan 失败——主节点快照端点与每个从节点
+// 拉取全挂，漂移守卫哈希每 304 周期丢失漂移检测。必须 COALESCE 归一化为空串。
+func TestSnapshotSecurityCustomRules_toleratesNullTimestamps(t *testing.T) {
+	// Given：一条 created_at/updated_at 为 NULL 的自定义规则
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO security_custom_rules (name, created_at, updated_at) VALUES ('cr-null-ts', NULL, NULL)`); err != nil {
+		t.Fatalf("seed null-ts custom rule: %v", err)
+	}
+
+	// When：快照读取
+	rules, err := service.snapshotSecurityCustomRules(context.Background(), database)
+
+	// Then：不得 scan 失败；两时间列归一化为 ''
+	if err != nil {
+		t.Fatalf("snapshotSecurityCustomRules 不得因 NULL 时间列报错: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("rules=%d, want 1", len(rules))
+	}
+	if rules[0].CreatedAt != "" {
+		t.Fatalf("CreatedAt = %q, want COALESCE 归一化后的 %q", rules[0].CreatedAt, "")
+	}
+	if rules[0].UpdatedAt != "" {
+		t.Fatalf("UpdatedAt = %q, want COALESCE 归一化后的 %q", rules[0].UpdatedAt, "")
+	}
+}
+
+// TestSnapshotSecurityBlockPages_toleratesNullTimestamps 锁定 R-I7：
+// security_block_pages.created_at/updated_at 同样可空，与 custom_rules 同缺陷。
+func TestSnapshotSecurityBlockPages_toleratesNullTimestamps(t *testing.T) {
+	// Given：一条 created_at/updated_at 为 NULL 的拦截页面
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO security_block_pages (name, created_at, updated_at) VALUES ('bp-null-ts', NULL, NULL)`); err != nil {
+		t.Fatalf("seed null-ts block page: %v", err)
+	}
+
+	// When：快照读取
+	pages, err := service.snapshotSecurityBlockPages(context.Background(), database)
+
+	// Then：不得 scan 失败；两时间列归一化为 ''
+	if err != nil {
+		t.Fatalf("snapshotSecurityBlockPages 不得因 NULL 时间列报错: %v", err)
+	}
+	if len(pages) == 0 {
+		t.Fatal("pages 为空，种子行未读出")
+	}
+	var seeded *models.SecurityBlockPage
+	for i := range pages {
+		if pages[i].Name == "bp-null-ts" {
+			seeded = &pages[i]
+			break
+		}
+	}
+	if seeded == nil {
+		t.Fatal("找不到种子行 bp-null-ts")
+	}
+	if seeded.CreatedAt != "" {
+		t.Fatalf("CreatedAt = %q, want COALESCE 归一化后的 %q", seeded.CreatedAt, "")
+	}
+	if seeded.UpdatedAt != "" {
+		t.Fatalf("UpdatedAt = %q, want COALESCE 归一化后的 %q", seeded.UpdatedAt, "")
 	}
 }
 
