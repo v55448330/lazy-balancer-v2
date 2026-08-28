@@ -1824,6 +1824,412 @@ func TestConfigBackup_danglingBindingRejected(t *testing.T) {
 	}
 }
 
+// audit I-A：restoreTable 的 NULL→默认值归一此前三张安全表专属（C5 KNOWN-GAP-1），
+// 其余 11 张备份表的可空列携带 JSON null 时原样落库，直接命中各 raw-scan 消费点：
+// users.created_at NULL → auth.go Login 的 time.Time 扫描 500 → 永久锁死；
+// api_keys.created_at/布尔列 NULL → scanAPIKeys 500；ca_providers 数值列 NULL →
+// caproviders.go 查询 500 → ACME 签发链断裂；cert_jobs.ca_provider_id 等 NULL →
+// certificates.go 补偿扫描硬失败/续签扫描静默跳行；path_rules.created_at NULL →
+// 集群快照 dump 扫描失败 → 整集群同步中断；版本表 NULL → 自动更新静默失效。
+// 导入必须成功且落库值为 dump 侧对齐默认值；生命周期合法可空列（cert_jobs
+// key_pem/message/ca_available_after、users.last_login、api_keys.expires_at、
+// path_rules.upstreams_json）必须保持 NULL，不得过度归一。
+func TestImportConfigBackup_normalizes_null_rows_for_all_backup_tables(t *testing.T) {
+	// Given：11 张非安全表各携带一行 NULL 毒化可空列
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"users": {{"id": 2, "username": "null-user", "password_hash": "hash", "role": "admin", "is_enabled": nil,
+			"display_name": nil, "created_at": nil, "last_login": nil,
+			"mfa_enabled": nil, "mfa_secret": nil, "mfa_recovery_codes": nil, "mfa_locked_until": nil}},
+		"lb_rules": {{"caddy_id": "lb_nulldump", "name": "null-cols", "protocol": "http", "domain": "nulldump.example.test",
+			"listen_port": 8461, "enabled": nil, "description": nil, "strategy": nil, "dns_server": nil, "dns_family": nil,
+			"health_check_path": nil, "host_header": nil, "tls_source": nil, "compress_types": nil, "enable_compress": nil,
+			"server_tokens_hidden": nil, "tcp_try_interval": nil, "health_check_interval": nil,
+			"created_by": nil, "updated_by": nil, "enable_tls": 0, "custom_routes_enabled": 1}},
+		"upstreams": {{"rule_id": "lb_nulldump", "host": "127.0.0.1", "port": 9461, "weight": nil, "enabled": nil,
+			"protocol": nil, "max_connections": nil, "dynamic_dns": nil}},
+		"path_rules": {{"id": 1, "rule_id": "lb_nulldump", "sort_order": 1, "match_type": "prefix", "path": "/null",
+			"upstreams_json": nil, "created_at": nil, "updated_at": nil}},
+		"api_keys": {{"id": 1, "name": "null-key", "key_hash": "kh", "key_prefix": "lb_sk_null", "created_by": 2,
+			"is_enabled": nil, "mcp_enabled": nil, "read_only": nil, "mcp_ip_whitelist": nil,
+			"expires_at": nil, "created_at": nil, "last_used": nil}},
+		"ca_providers": {{"id": 90, "name": "null-ca", "provider": "zerossl", "directory_url": "https://ca.null/dir",
+			"credentials": nil, "max_concurrent": nil, "min_interval_ms": nil, "enabled": nil}},
+		"certificate_configs": {{"id": 91, "name": "null-dns", "dns_provider": nil, "dns_credentials": nil, "enabled": nil}},
+		"cert_jobs": {{"id": 1, "rule_id": "lb_nulldump", "domain": "nulldump.example.test", "status": "issued",
+			"ca_provider_id": nil, "renewal_attempts": nil, "deployment_attempts": nil, "created_at": nil,
+			"message": nil, "expires_at": nil, "key_pem": nil, "ca_available_after": nil,
+			"last_error_code": nil, "deployment_available_after": nil, "updated_at": nil}},
+		"security_policies":          {{"id": 1, "name": "null-bind-policy"}},
+		"security_policy_bindings":   {{"rule_caddy_id": "lb_nulldump", "policy_id": 1}},
+		"security_crs_version":       {{"id": 1, "version": "v4.99.0", "updated_at": nil, "auto_update": nil, "update_status": nil, "message": nil, "last_checked": nil, "next_update": nil, "trigger": nil, "started_at": nil, "finished_at": nil}},
+		"security_ip2region_version": {{"id": 1, "version": "v3.99.0", "updated_at": nil, "auto_update": nil, "update_status": nil, "message": nil, "last_checked": nil, "next_update": nil, "trigger": nil, "started_at": nil, "finished_at": nil}},
+	})
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then：导入成功（NULL 不再原样毒化落库）
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+
+	// 消费点 1（auth.go Login 同形查询）：users.created_at NULL 会使 time.Time
+	// 扫描失败 → 500 → 永久锁死；归一为可解析 epoch 后扫描必须成功。
+	var loginID int
+	var loginUsername, loginHash, loginRole string
+	var loginDisplayName sql.NullString
+	var loginEnabled bool
+	var loginCreatedAt time.Time
+	var loginLastLogin sql.NullTime
+	var loginPasswordVersion int64
+	if err := db.DB.QueryRow("SELECT id, username, password_hash, role, display_name, is_enabled, created_at, last_login, password_version FROM users WHERE username = ?", "null-user").
+		Scan(&loginID, &loginUsername, &loginHash, &loginRole, &loginDisplayName, &loginEnabled, &loginCreatedAt, &loginLastLogin, &loginPasswordVersion); err != nil {
+		t.Fatalf("login-shaped users scan must survive normalized restore: %v", err)
+	}
+	if want := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC); !loginCreatedAt.Equal(want) {
+		t.Fatalf("users.created_at=%v, want epoch %v", loginCreatedAt, want)
+	}
+	if !loginEnabled || loginPasswordVersion != 1 || (loginDisplayName.Valid && loginDisplayName.String != "") {
+		t.Fatalf("users normalized: is_enabled=%v password_version=%d display_name=%+v, want true/1(0 归一后导入强制的 +1 吊销)/''", loginEnabled, loginPasswordVersion, loginDisplayName)
+	}
+	if loginLastLogin.Valid {
+		t.Fatalf("users.last_login must stay NULL (lifecycle), got %v", loginLastLogin.Time)
+	}
+	var mfaSecret, mfaRecovery, mfaLocked sql.NullString
+	if err := db.DB.QueryRow("SELECT mfa_secret, mfa_recovery_codes, mfa_locked_until FROM users WHERE username='null-user'").Scan(&mfaSecret, &mfaRecovery, &mfaLocked); err != nil {
+		t.Fatalf("read normalized mfa columns: %v", err)
+	}
+	if !mfaSecret.Valid || mfaSecret.String != "" || !mfaRecovery.Valid || mfaRecovery.String != "[]" || !mfaLocked.Valid || mfaLocked.String != "" {
+		t.Fatalf("users mfa normalized: secret=%+v recovery=%+v locked=%+v, want ''/'[]'/''", mfaSecret, mfaRecovery, mfaLocked)
+	}
+
+	// 消费点 2（apikeys.go scanAPIKeys 同形查询）：created_at/布尔列 raw 扫描。
+	var keyUsername, whitelistJSON string
+	var scanKey struct {
+		id         int
+		name       string
+		prefix     string
+		createdBy  int
+		lastUsed   sql.NullTime
+		expiresAt  sql.NullTime
+		isEnabled  bool
+		mcpEnabled bool
+		readOnly   bool
+		createdAt  time.Time
+	}
+	if err := db.DB.QueryRow(`SELECT k.id, k.name, k.key_prefix, k.created_by, k.last_used, k.expires_at, k.is_enabled,
+		k.mcp_enabled, k.read_only, COALESCE(k.mcp_ip_whitelist,''), k.created_at, u.username
+		FROM api_keys k JOIN users u ON k.created_by = u.id WHERE k.created_by = ? ORDER BY k.id`, 2).
+		Scan(&scanKey.id, &scanKey.name, &scanKey.prefix, &scanKey.createdBy, &scanKey.lastUsed, &scanKey.expiresAt,
+			&scanKey.isEnabled, &scanKey.mcpEnabled, &scanKey.readOnly, &whitelistJSON, &scanKey.createdAt, &keyUsername); err != nil {
+		t.Fatalf("api_keys list-shaped scan must survive normalized restore: %v", err)
+	}
+	if !scanKey.isEnabled || scanKey.mcpEnabled || scanKey.readOnly || whitelistJSON != "" {
+		t.Fatalf("api_keys normalized: is_enabled=%v mcp=%v read_only=%v whitelist=%q, want true/false/false/''", scanKey.isEnabled, scanKey.mcpEnabled, scanKey.readOnly, whitelistJSON)
+	}
+	if want := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC); !scanKey.createdAt.Equal(want) {
+		t.Fatalf("api_keys.created_at=%v, want epoch %v", scanKey.createdAt, want)
+	}
+	if scanKey.expiresAt.Valid {
+		t.Fatalf("api_keys.expires_at must stay NULL (lifecycle), got %v", scanKey.expiresAt.Time)
+	}
+
+	// 消费点 3（caproviders.go 同形查询）：数值/布尔列 raw 扫描（NULL→500→ACME 链断裂）。
+	var caName, caProvider, caDir, caCred string
+	var caMaxConcurrent, caMinInterval int
+	var caEnabled bool
+	if err := db.DB.QueryRow("SELECT name, provider, directory_url, COALESCE(credentials,''), max_concurrent, min_interval_ms, enabled FROM ca_providers WHERE id=90").
+		Scan(&caName, &caProvider, &caDir, &caCred, &caMaxConcurrent, &caMinInterval, &caEnabled); err != nil {
+		t.Fatalf("ca_providers scan must survive normalized restore: %v", err)
+	}
+	if caCred != "" || caMaxConcurrent != 1 || caMinInterval != 2000 || !caEnabled {
+		t.Fatalf("ca_providers normalized: cred=%q max=%d min=%d enabled=%v, want ''/1/2000/true", caCred, caMaxConcurrent, caMinInterval, caEnabled)
+	}
+
+	// 消费点 4（certificates.go SnapshotCertJobsForRule 同形扫描）：ca_provider_id/
+	// renewal_attempts/deployment_attempts 为 raw int 扫描（NULL→UpdateRule 补偿硬失败）。
+	certRows, err := db.DB.Query(`SELECT id,rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,
+		renewal_attempts,ca_available_after,last_error_code,deployment_attempts,deployment_available_after,created_at,updated_at
+		FROM cert_jobs WHERE rule_id=? ORDER BY id`, "lb_nulldump")
+	if err != nil {
+		t.Fatalf("query cert jobs: %v", err)
+	}
+	type certScan struct {
+		id, caProviderID, renewalAttempts, deploymentAttempts int
+		ruleID, domain, status                                string
+		message, certPEM, keyPEM, lastErrorCode               sql.NullString
+		expiresAt, caAvailableAfter, deploymentAfter          sql.NullTime
+		createdAt, updatedAt                                  sql.NullTime
+	}
+	scanned := 0
+	for certRows.Next() {
+		var job certScan
+		if err := certRows.Scan(&job.id, &job.ruleID, &job.domain, &job.status, &job.message, &job.expiresAt, &job.certPEM, &job.keyPEM,
+			&job.caProviderID, &job.renewalAttempts, &job.caAvailableAfter, &job.lastErrorCode, &job.deploymentAttempts,
+			&job.deploymentAfter, &job.createdAt, &job.updatedAt); err != nil {
+			certRows.Close()
+			t.Fatalf("cert_jobs snapshot-shaped scan must survive normalized restore: %v", err)
+		}
+		if job.caProviderID != 0 || job.renewalAttempts != 0 || job.deploymentAttempts != 0 {
+			t.Fatalf("cert_jobs normalized: ca_provider_id=%d renewal=%d deployment=%d, want 0/0/0", job.caProviderID, job.renewalAttempts, job.deploymentAttempts)
+		}
+		if job.keyPEM.Valid || job.message.Valid || job.caAvailableAfter.Valid || job.lastErrorCode.Valid || job.deploymentAfter.Valid {
+			t.Fatalf("cert_jobs lifecycle NULLs must stay NULL: key_pem=%+v message=%+v ca_after=%+v last_err=%+v deploy_after=%+v", job.keyPEM, job.message, job.caAvailableAfter, job.lastErrorCode, job.deploymentAfter)
+		}
+		scanned++
+	}
+	certRows.Close()
+	if scanned != 1 {
+		t.Fatalf("cert_jobs scanned=%d, want 1", scanned)
+	}
+	// 消费点 4b（certjobs.go 列表同形）：j.created_at 为 raw time.Time 扫描。
+	var jobCreatedAt time.Time
+	if err := db.DB.QueryRow("SELECT j.created_at FROM cert_jobs j WHERE j.rule_id=?", "lb_nulldump").Scan(&jobCreatedAt); err != nil {
+		t.Fatalf("cert_jobs list-shaped created_at scan must survive normalized restore: %v", err)
+	}
+
+	// 消费点 5（cluster_snapshot.go snapshotAllPathRules 同形扫描）：created_at 为
+	// raw time.Time 扫描（NULL→主节点快照 dump 失败→整集群同步中断）。
+	var prSort int
+	var prRuleID, prMatchType, prPath string
+	var prUpstreams sql.NullString
+	var prCreatedAt time.Time
+	var prUpdatedAt sql.NullTime
+	if err := db.DB.QueryRow("SELECT id, rule_id, sort_order, match_type, path, upstreams_json, created_at, updated_at FROM path_rules WHERE rule_id=? ORDER BY rule_id, sort_order, id", "lb_nulldump").
+		Scan(new(int), &prRuleID, &prSort, &prMatchType, &prPath, &prUpstreams, &prCreatedAt, &prUpdatedAt); err != nil {
+		t.Fatalf("path_rules snapshot-shaped scan must survive normalized restore: %v", err)
+	}
+	if want := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC); !prCreatedAt.Equal(want) {
+		t.Fatalf("path_rules.created_at=%v, want epoch %v", prCreatedAt, want)
+	}
+	if prUpstreams.Valid {
+		t.Fatalf("path_rules.upstreams_json must stay NULL (lifecycle), got %q", prUpstreams.String)
+	}
+
+	// 落库值断言：lb_rules/upstreams/certificate_configs/版本表归一为 dump 侧对齐默认值。
+	var ruleDesc, ruleStrategy, ruleDNSFamily, ruleHostHeader, ruleTLSSource, ruleCompressTypes sql.NullString
+	var ruleEnableCompress, ruleServerTokensHidden, ruleTCPTryInterval, ruleHealthCheckInterval sql.NullInt64
+	var ruleCreatedBy, ruleUpdatedBy sql.NullInt64
+	if err := db.DB.QueryRow(`SELECT description, strategy, dns_family, host_header, tls_source, compress_types,
+		enable_compress, server_tokens_hidden, tcp_try_interval, health_check_interval, created_by, updated_by
+		FROM lb_rules WHERE caddy_id='lb_nulldump'`).
+		Scan(&ruleDesc, &ruleStrategy, &ruleDNSFamily, &ruleHostHeader, &ruleTLSSource, &ruleCompressTypes,
+			&ruleEnableCompress, &ruleServerTokensHidden, &ruleTCPTryInterval, &ruleHealthCheckInterval, &ruleCreatedBy, &ruleUpdatedBy); err != nil {
+		t.Fatalf("read normalized lb_rules: %v", err)
+	}
+	if !ruleDesc.Valid || ruleDesc.String != "" || !ruleStrategy.Valid || ruleStrategy.String != "weighted_round_robin" ||
+		!ruleDNSFamily.Valid || ruleDNSFamily.String != "ipv4" || !ruleHostHeader.Valid || ruleHostHeader.String != "" ||
+		!ruleTLSSource.Valid || ruleTLSSource.String != "manual" || !ruleCompressTypes.Valid || ruleCompressTypes.String != "gzip" {
+		t.Fatalf("lb_rules text defaults: desc=%+v strategy=%+v dns_family=%+v host=%+v tls_source=%+v compress=%+v", ruleDesc, ruleStrategy, ruleDNSFamily, ruleHostHeader, ruleTLSSource, ruleCompressTypes)
+	}
+	if !ruleEnableCompress.Valid || ruleEnableCompress.Int64 != 1 || !ruleServerTokensHidden.Valid || ruleServerTokensHidden.Int64 != 0 ||
+		!ruleTCPTryInterval.Valid || ruleTCPTryInterval.Int64 != 250 || !ruleHealthCheckInterval.Valid || ruleHealthCheckInterval.Int64 != 10 ||
+		!ruleCreatedBy.Valid || ruleCreatedBy.Int64 != 0 || !ruleUpdatedBy.Valid || ruleUpdatedBy.Int64 != 0 {
+		t.Fatalf("lb_rules numeric defaults: enable_compress=%+v server_tokens=%+v tcp_try_interval=%+v hc_interval=%+v created_by=%+v updated_by=%+v", ruleEnableCompress, ruleServerTokensHidden, ruleTCPTryInterval, ruleHealthCheckInterval, ruleCreatedBy, ruleUpdatedBy)
+	}
+	var upWeight, upMaxConns sql.NullInt64
+	var upProtocol sql.NullString
+	if err := db.DB.QueryRow("SELECT weight, protocol, max_connections FROM upstreams WHERE rule_id='lb_nulldump'").Scan(&upWeight, &upProtocol, &upMaxConns); err != nil {
+		t.Fatalf("read normalized upstreams: %v", err)
+	}
+	if !upWeight.Valid || upWeight.Int64 != 1 || !upProtocol.Valid || upProtocol.String != "http" || !upMaxConns.Valid || upMaxConns.Int64 != 0 {
+		t.Fatalf("upstreams defaults: weight=%+v protocol=%+v max_connections=%+v, want 1/'http'/0", upWeight, upProtocol, upMaxConns)
+	}
+	var dnsProvider sql.NullString
+	var dnsCred sql.NullString
+	var dnsEnabled sql.NullInt64
+	if err := db.DB.QueryRow("SELECT dns_provider, dns_credentials, enabled FROM certificate_configs WHERE id=91").Scan(&dnsProvider, &dnsCred, &dnsEnabled); err != nil {
+		t.Fatalf("read normalized certificate_configs: %v", err)
+	}
+	if !dnsProvider.Valid || dnsProvider.String != "dnspod" || !dnsCred.Valid || dnsCred.String != "" || !dnsEnabled.Valid || dnsEnabled.Int64 != 1 {
+		t.Fatalf("certificate_configs defaults: provider=%+v cred=%+v enabled=%+v, want 'dnspod'/''/1", dnsProvider, dnsCred, dnsEnabled)
+	}
+	for _, versionTable := range []string{"security_crs_version", "security_ip2region_version"} {
+		var autoUpdate sql.NullInt64
+		var updateStatus, versionMessage, nextUpdate sql.NullString
+		if err := db.DB.QueryRow("SELECT auto_update, update_status, message, next_update FROM "+versionTable+" WHERE id=1").Scan(&autoUpdate, &updateStatus, &versionMessage, &nextUpdate); err != nil {
+			t.Fatalf("read normalized %s: %v", versionTable, err)
+		}
+		if !autoUpdate.Valid || autoUpdate.Int64 != 1 || !updateStatus.Valid || updateStatus.String != "idle" ||
+			!versionMessage.Valid || versionMessage.String != "" || !nextUpdate.Valid || nextUpdate.String != "" {
+			t.Fatalf("%s defaults: auto_update=%+v update_status=%+v message=%+v next_update=%+v, want 1/'idle'/''/''", versionTable, autoUpdate, updateStatus, versionMessage, nextUpdate)
+		}
+	}
+}
+
+// audit I-A 同构回归：dump→restore→dump 往返必须逐字节稳定（fresh backup 的
+// 表区语义相等）——归一只替换显式 NULL，不得改变任何非 NULL 值。种子库先经
+// 一次导入「愈合并」（对齐集群通道/恢复后库的规范形态），随后 A=export →
+// import(A) → B=export 必须语义相等（唯一豁免：导入固定递增 users.password_version
+// 吊销旧 JWT，A 侧 +1 后比较）。
+func TestConfigBackup_restore_dump_isomorphism_roundtrip(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_version,
+		mfa_enabled,mfa_secret,mfa_recovery_codes,mfa_last_timestep,mfa_failed_attempts,mfa_locked_until)
+		VALUES (1,'iso-admin','hash','admin','Iso Admin',1,'2026-01-02 03:04:05',NULL,5,0,'','[]',0,0,'')`); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,dynamic_dns,enable_dns_server,
+		dns_server,dns_family,health_check_path,health_check_interval,health_check_timeout,health_check_unhealthy_threshold,health_check_healthy_threshold,
+		enable_active_health_check,tcp_health_check_port,tcp_try_duration,tcp_try_interval,request_body_max_size_mb,upstream_keepalive_timeout,
+		server_tokens_hidden,custom_routes_enabled,proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,
+		proxy_stream_timeout,proxy_flush_interval,proxy_stream_close_delay,host_header,enable_tls,tls_source,acme_config_id,ca_provider_id,
+		tls_http_redirect,enable_compress,compress_types,enabled,log_enabled,created_by,created_at,updated_at,updated_by)
+		VALUES ('lb_iso','iso','iso-desc','http','iso.example.test',8462,'least_conn',0,0,'','both','/health',15,4,3,2,
+		0,0,0,300,0,0,1,1,0,0,0,0,0,0,0,'hh.example.test',0,'manual',0,0,
+		0,1,'zstd',1,0,1,'2026-01-02 03:04:05','2026-01-02 03:04:06',1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (id,rule_id,host,port,weight,dynamic_dns,enabled,protocol,max_connections)
+		VALUES (1,'lb_iso','10.0.0.1',9462,3,1,1,'https',7)`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO path_rules (id,rule_id,sort_order,match_type,path,upstreams_json,created_at,updated_at)
+		VALUES (1,'lb_iso',2,'prefix','/iso','[{"address":"10.0.0.9","port":9463,"weight":2,"protocol":"http"}]','2026-01-02 03:04:05',NULL)`); err != nil {
+		t.Fatalf("seed path rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,last_used,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist,created_at)
+		VALUES (1,'iso-key','kh','lb_sk_iso',1,NULL,NULL,1,1,1,'["1.2.3.4"]','2026-01-02 03:04:05')`); err != nil {
+		t.Fatalf("seed api key: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled,created_at,updated_at)
+		VALUES (95,'iso-ca','letsencrypt','https://ca.iso/dir','{"eab_kid":"k"}',4,1500,1,'2026-01-02 03:04:05','2026-01-02 03:04:05')`); err != nil {
+		t.Fatalf("seed ca provider: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO certificate_configs (id,name,dns_provider,dns_credentials,enabled,created_at,updated_at)
+		VALUES (96,'iso-dns','dnspod','{"secret_id":"s"}',1,'2026-01-02 03:04:05',NULL)`); err != nil {
+		t.Fatalf("seed certificate config: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,message,expires_at,cert_pem,key_pem,ca_provider_id,renewal_attempts,
+		ca_available_after,last_error_code,deployment_attempts,deployment_available_after,created_at,updated_at)
+		VALUES (1,'lb_iso','iso.example.test','issued','ok','2027-01-01 00:00:00','','',95,2,NULL,NULL,1,NULL,'2026-01-02 03:04:05',NULL)`); err != nil {
+		t.Fatalf("seed cert job: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
+		ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,
+		block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response)
+		VALUES (1,'iso-policy','d','blocking',5,'deny','[]',0,'[]','[]',0,0,0,'[]','[]','[]',0,0,1,0,'2026-01-02 03:04:05','2026-01-02 03:04:05','[]','deny',0)`); err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_iso',1)`); err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT OR REPLACE INTO security_crs_version (id,version,updated_at,auto_update,update_status,message,last_checked,next_update,trigger,started_at,finished_at)
+		VALUES (1,'v4.28.0','2026-01-02 03:04:05',1,'idle','m','2026-01-02 03:04:05','2026-01-03 03:04:05','manual','','')`); err != nil {
+		t.Fatalf("seed crs version: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT OR REPLACE INTO security_ip2region_version (id,version,updated_at,auto_update,update_status,message,last_checked,next_update,trigger,started_at,finished_at)
+		VALUES (1,'v3.17.0','2026-01-02 03:04:05',0,'idle','','2026-01-02 03:04:05','','','','')`); err != nil {
+		t.Fatalf("seed ip2region version: %v", err)
+	}
+	if _, err := db.DB.Exec("UPDATE global_config SET log_level='debug', sync_interval=45 WHERE id=1"); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+	router := gin.New()
+	router.GET("/config/export", h.ExportConfigBackup)
+	router.POST("/config/import", h.ImportConfigBackup)
+	doExport := func() map[string]any {
+		t.Helper()
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/config/export", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("export status=%d body=%.300s", response.Code, response.Body.String())
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode export: %v", err)
+		}
+		return payload
+	}
+	doImport := func(body string) {
+		t.Helper()
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("import status=%d body=%.400s", response.Code, response.Body.String())
+		}
+	}
+	rawExport := func() string {
+		t.Helper()
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/config/export", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("export status=%d body=%.300s", response.Code, response.Body.String())
+		}
+		return response.Body.String()
+	}
+
+	// 愈合并：初始库可含 Initialize 播种行的 NULL（如版本表 last_checked），
+	// 先走一轮 export→import 把库对齐到归一后形态，后续往返即不动点。
+	doImport(rawExport())
+
+	// When：A = dump → restore(A) → B = dump
+	rawA := rawExport()
+	doImport(rawA)
+	backupB := doExport()
+
+	// Then：A 与 B 表区语义相等（仅 password_version 每次导入 +1 属既定吊销语义）
+	var backupA map[string]any
+	if err := json.Unmarshal([]byte(rawA), &backupA); err != nil {
+		t.Fatalf("decode export A: %v", err)
+	}
+	bumpPasswordVersions(backupA)
+	if !reflect.DeepEqual(backupA["tables"], backupB["tables"]) {
+		aJSON, _ := json.Marshal(backupA["tables"])
+		bJSON, _ := json.Marshal(backupB["tables"])
+		t.Fatalf("dump→restore→dump isomorphism broken:\nA(after +1): %s\nB:          %s", truncateForDiff(aJSON), truncateForDiff(bJSON))
+	}
+	if !reflect.DeepEqual(backupA["config"], backupB["config"]) {
+		aJSON, _ := json.Marshal(backupA["config"])
+		bJSON, _ := json.Marshal(backupB["config"])
+		t.Fatalf("config section isomorphism broken:\nA: %s\nB: %s", aJSON, bJSON)
+	}
+}
+
+// bumpPasswordVersions 把导出载荷 users 表每行 password_version +1，
+// 对齐 ImportConfigBackup 提交前的全量 JWT 吊销递增（config_backup.go
+// UPDATE users SET password_version=COALESCE(password_version,0)+1）。
+func bumpPasswordVersions(payload map[string]any) {
+	tables, ok := payload["tables"].(map[string]any)
+	if !ok {
+		return
+	}
+	users, ok := tables["users"].([]any)
+	if !ok {
+		return
+	}
+	for _, rowAny := range users {
+		row, ok := rowAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch version := row["password_version"].(type) {
+		case float64:
+			row["password_version"] = version + 1
+		case nil:
+			row["password_version"] = float64(1)
+		}
+	}
+}
+
+func truncateForDiff(data []byte) string {
+	const limit = 3000
+	if len(data) <= limit {
+		return string(data)
+	}
+	return string(data[:limit]) + "...(truncated)"
+}
+
 func queryBackupBindingRows(t *testing.T, ruleCaddyID string) []int {
 	t.Helper()
 	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id ASC", ruleCaddyID)

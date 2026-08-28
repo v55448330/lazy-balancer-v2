@@ -66,16 +66,89 @@ var backupBooleanTableColumns = map[string][]string{
 	"security_ip2region_version": {"auto_update"},
 }
 
-// C5 KNOWN-GAP-1：三张安全表可空列的 NULL→默认值映射（restoreTable 写入侧归一）。
-// 默认值与集群快照 dump 侧逐列对齐（cluster_snapshot.go:420/428/449 的 COALESCE
-// 表达式）——「全量替换」两条通道（备份导入/集群快照）对同一 NULL 行必须产出同一
-// 落库值。dump 未覆盖的列仅 id/name（NOT NULL 无默认）：不入映射，NULL 由列约束
-// 响亮失败（500 回滚），不属于静默毒化。两处 dump 与 schema 默认有意背离均镜像
-// dump：security_policies.enabled dump 取 0（pre-feature 行 fail-closed 置禁用；
-// schema 默认 TRUE 仅服务缺列 INSERT），geoip_mode dump 取 'off'（schema 默认
-// 'deny'；v2 导入路径上 validateV2BackupSecurityPolicies 已在 checksum 后把 NULL
-// 枚举列回写为保存侧默认值，本映射是其下层的 dump 对齐兜底）。
-var backupSecurityTableNullDefaults = map[string]map[string]any{
+// audit I-A：备份表 NULL→默认值归一映射（restoreTable 写入侧，覆盖
+// configBackupTables 全部 14 表）。默认值与集群快照 dump 侧逐列对齐
+// （cluster_snapshot.go 各 snapshot* 的 COALESCE 表达式）——「全量替换」
+// 两条通道（备份导入/集群快照）对同一 NULL 行必须产出同一落库值。
+// 仅收录「集群 dump 侧已 COALESCE 硬化」或「NULL 命中 raw-scan 消费点」的
+// 可空列；生命周期合法可空列（cert_jobs key_pem/message/ca_available_after/
+// deployment_available_after/updated_at、users.last_login/password_changed_at、
+// api_keys.expires_at/last_used、path_rules.upstreams_json、lb_rules 及
+// ca_providers/certificate_configs 的 created_at/updated_at——读侧均为
+// NullTime/NullString 扫描）保持可空，不入映射。NOT NULL 无默认列（各表
+// id/name/username/rule_id 等，及 security_policy_bindings 两列）不入映射：
+// NULL 由列约束响亮失败（500 回滚），不属于静默毒化。各表归一列与消费点：
+//
+//	users                created_at 为 epoch 文本——auth.go Login 的 time.Time
+//	                     raw 扫描对 NULL/'' 均报错（'' 驱动回退字符串不可扫），
+//	                     NULL→500→永久锁死；其余列对齐 dump :705（is_enabled 1、
+//	                     mfa_recovery_codes '[]' 等）
+//	api_keys             created_at epoch（apikeys.go scanAPIKeys time.Time raw
+//	                     扫描）；布尔列 NULL 同路径 500；其余对齐 dump :730
+//	lb_rules             对齐 dump :610（strategy/tls_source/dns_family 等文本、
+//	                     tcp_try_interval 250/enable_compress 1 等）；读侧
+//	                     lbRuleColumns 已 COALESCE，此处保证两通道落库一致
+//	upstreams            对齐 dump :665（weight 1/protocol 'http'/enabled 0）
+//	ca_providers         对齐 dump :537；max_concurrent/min_interval_ms/enabled
+//	                     NULL→caproviders.go:74 raw 扫描 500→ACME 签发链断裂
+//	certificate_configs  对齐 dump :553（dns_provider 'dnspod'）
+//	cert_jobs            备份通道专属（集群 dump 仅覆盖 TLS 材料子集）：
+//	                     ca_provider_id/renewal_attempts/deployment_attempts NULL→
+//	                     certificates.go:91 补偿扫描硬失败/:632 续签扫描静默
+//	                     跳行；created_at epoch（certjobs.go:112 raw 扫描）
+//	path_rules           备份通道专属：created_at epoch——cluster_snapshot.go:682
+//	                     快照 dump 的 time.Time raw 扫描对 NULL 失败→整集群
+//	                     同步中断
+//	security_crs_version / security_ip2region_version  对齐 dump :466/:483；
+//	                     auto_update NULL→自动更新静默失效
+//	security_policies / security_custom_rules / security_block_pages
+//	                     原三安全表条目原样并入（C5 KNOWN-GAP-1，dump
+//	                     :420/:428/:449 对齐）
+var backupTableNullDefaults = map[string]map[string]any{
+	"lb_rules": {
+		"description": "", "domain": "", "strategy": "weighted_round_robin",
+		"dynamic_dns": int64(0), "enable_dns_server": int64(0), "dns_server": "", "dns_family": "ipv4",
+		"health_check_path": "", "health_check_interval": int64(10), "health_check_timeout": int64(5),
+		"health_check_unhealthy_threshold": int64(3), "health_check_healthy_threshold": int64(2),
+		"enable_active_health_check": int64(0), "tcp_health_check_port": int64(0), "tcp_proxy_protocol": int64(0),
+		"tcp_try_duration": int64(0), "tcp_try_interval": int64(250),
+		"request_body_max_size_mb": int64(0), "upstream_keepalive_timeout": int64(0),
+		"server_tokens_hidden": int64(0), "custom_routes_enabled": int64(0),
+		"proxy_dial_timeout": int64(0), "proxy_response_header_timeout": int64(0), "proxy_read_timeout": int64(0),
+		"proxy_write_timeout": int64(0), "proxy_stream_timeout": int64(0), "proxy_flush_interval": int64(0),
+		"proxy_stream_close_delay": int64(0), "host_header": "",
+		"enable_tls": int64(0), "tls_source": "manual", "acme_config_id": int64(0), "ca_provider_id": int64(0),
+		"tls_cert": "", "tls_key": "", "tls_http_redirect": int64(0),
+		"enable_compress": int64(1), "compress_types": "gzip",
+		"enabled": int64(0), "log_enabled": int64(0), "created_by": int64(0), "updated_by": int64(0),
+	},
+	"upstreams": {
+		"weight": int64(1), "dynamic_dns": int64(0), "enabled": int64(0),
+		"protocol": "http", "max_connections": int64(0),
+	},
+	"users": {
+		"display_name": "", "is_enabled": int64(1), "password_version": int64(0),
+		"created_at":  "1970-01-01 00:00:00",
+		"mfa_enabled": int64(0), "mfa_secret": "", "mfa_recovery_codes": "[]",
+		"mfa_last_timestep": int64(0), "mfa_failed_attempts": int64(0), "mfa_locked_until": "",
+	},
+	"api_keys": {
+		"is_enabled": int64(1), "mcp_enabled": int64(0), "read_only": int64(0),
+		"mcp_ip_whitelist": "", "created_at": "1970-01-01 00:00:00",
+	},
+	"ca_providers": {
+		"credentials": "", "max_concurrent": int64(1), "min_interval_ms": int64(2000), "enabled": int64(1),
+	},
+	"certificate_configs": {
+		"dns_provider": "dnspod", "dns_credentials": "", "enabled": int64(1),
+	},
+	"cert_jobs": {
+		"ca_provider_id": int64(0), "renewal_attempts": int64(0), "deployment_attempts": int64(0),
+		"created_at": "1970-01-01 00:00:00",
+	},
+	"path_rules": {
+		"created_at": "1970-01-01 00:00:00",
+	},
 	"security_policies": {
 		"description": "", "mode": "off", "anomaly_threshold": int64(5),
 		"ip_acl_mode": "", "ip_acl_list": "[]", "ip_acl_enabled": int64(0),
@@ -93,6 +166,14 @@ var backupSecurityTableNullDefaults = map[string]map[string]any{
 	"security_block_pages": {
 		"description": "", "content": "", "is_default": int64(0),
 		"created_by": int64(0), "created_at": "", "updated_by": int64(0), "updated_at": "",
+	},
+	"security_crs_version": {
+		"updated_at": "", "auto_update": int64(1), "update_status": "idle", "message": "",
+		"last_checked": "", "next_update": "", "trigger": "", "started_at": "", "finished_at": "",
+	},
+	"security_ip2region_version": {
+		"updated_at": "", "auto_update": int64(1), "update_status": "idle", "message": "",
+		"last_checked": "", "next_update": "", "trigger": "", "started_at": "", "finished_at": "",
 	},
 }
 
@@ -296,12 +377,13 @@ func restoreTable(ctx context.Context, tx *sql.Tx, database *sql.DB, table strin
 			if isBackupBooleanColumn(table, column) {
 				value = normalizeBackupBooleanValue(value)
 			}
-			// C5 KNOWN-GAP-1：三张安全表可空列的 NULL 毒化归一（写入侧兜底）——
-			// 布尔归一对 nil 透传，故在布尔归一之后把仍为 nil 的列替换为 dump 侧
-			// 对齐默认值（backupSecurityTableNullDefaults）：NULL 布尔列落到
-			// schema/dump 默认（如 enabled→0）而非布尔强转；映射外的表行为逐字节不变。
+			// audit I-A：全备份表可空列的 NULL 毒化归一（写入侧兜底）——布尔归一
+			// 对 nil 透传，故在布尔归一之后把仍为 nil 的列替换为 dump 侧对齐默认值
+			// （backupTableNullDefaults）：NULL 布尔列落到 schema/dump 默认（如
+			// enabled→0）而非布尔强转；created_at 等被 raw time.Time 扫描消费的
+			// 时间列归一为可解析 epoch，NULL/'' 均会使登录/列表扫描 500。
 			if value == nil {
-				if columnDefault, ok := backupSecurityTableNullDefaults[table][column]; ok {
+				if columnDefault, ok := backupTableNullDefaults[table][column]; ok {
 					value = columnDefault
 				}
 			}
