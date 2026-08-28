@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -54,6 +56,69 @@ func TestCaddyLifecycleHandlers_wait_for_rule_operation_lock(t *testing.T) {
 				t.Fatal("lifecycle handler did not resume after rule operation lock release")
 			}
 		})
+	}
+}
+
+// seedProcStat 在伪 /proc 根下写一个进程的 stat 文件（格式：pid (comm) state ...）。
+func seedProcStat(t *testing.T, root, pid, comm string, state byte) {
+	t.Helper()
+	dir := filepath.Join(root, pid)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir fake proc: %v", err)
+	}
+	stat := fmt.Sprintf("%s (%s) %c S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0", pid, comm, state)
+	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(stat), 0o644); err != nil {
+		t.Fatalf("write fake stat: %v", err)
+	}
+}
+
+func TestCaddyProcessRunning_excludesZombieProcesses(t *testing.T) {
+	// Given 伪 /proc 中只有僵尸 caddy（entrypoint 孵化、父进程未回收的子进程——
+	// comm 仍为 caddy 且进程存在，但已 dead 不能再服务）
+	root := t.TempDir()
+	seedProcStat(t, root, "10", "caddy", 'Z')
+	original := caddyProcRoot
+	caddyProcRoot = root
+	t.Cleanup(func() { caddyProcRoot = original })
+
+	// When/Then 僵尸不得计为运行中（否则 stop/restart 的完成判定永远失败）
+	if caddyProcessRunning() {
+		t.Fatal("zombie-only view must not count as running（僵尸进程≠运行中）")
+	}
+}
+
+func TestCaddyProcessRunning_detectsLiveProcess(t *testing.T) {
+	// Given 伪 /proc 中一个僵尸 + 一个存活 caddy
+	root := t.TempDir()
+	seedProcStat(t, root, "10", "caddy", 'Z')
+	seedProcStat(t, root, "686", "caddy", 'S')
+	original := caddyProcRoot
+	caddyProcRoot = root
+	t.Cleanup(func() { caddyProcRoot = original })
+
+	// When/Then 任一非 Z 状态即视为运行中
+	if !caddyProcessRunning() {
+		t.Fatal("live process view must count as running")
+	}
+}
+
+func TestCaddyProcessRunning_ignoresNonCaddyAndEmpty(t *testing.T) {
+	// Given 伪 /proc 只有其他进程与无 caddy 的空目录两种情况
+	root := t.TempDir()
+	seedProcStat(t, root, "1", "lazy-balancer", 'S')
+	original := caddyProcRoot
+	caddyProcRoot = root
+	t.Cleanup(func() { caddyProcRoot = original })
+
+	// When/Then 非 caddy 进程不计入
+	if caddyProcessRunning() {
+		t.Fatal("non-caddy process must not count as running")
+	}
+	// When/Then 空 /proc（无进程）同样未运行
+	empty := t.TempDir()
+	caddyProcRoot = empty
+	if caddyProcessRunning() {
+		t.Fatal("empty proc view must not count as running")
 	}
 }
 

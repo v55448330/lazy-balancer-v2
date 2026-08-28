@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -36,10 +37,45 @@ var caddyStopCommand = func(adminURL string) *exec.Cmd {
 	return exec.Command("caddy", "stop", "--address", address)
 }
 
-var caddyProcessCommand = func() *exec.Cmd { return exec.Command("pgrep", "-x", "caddy") }
+// caddyProcRoot 是进程状态读取的根目录（生产=/proc；测试指向临时伪 /proc 目录）。
+var caddyProcRoot = "/proc"
 
+// caddyProcessRunning 纯 /proc 实现：遍历 /proc/*/stat，存在任一 comm=caddy 且
+// 状态非 Z（僵尸）的进程即为运行中。Z=僵尸——entrypoint 孵化、父进程未回收的
+// caddy 子进程死后会永久滞留（Go 不回收非 exec 子进程），其 comm 仍为 caddy、
+// 进程仍在，但已 dead 不能服务，必须排除在「运行中」之外（否则 stop/restart 的
+// 完成判定在该僵尸存在期间永远失败——2026-08-28 生产复现）。不用 ps：busybox ps
+// 不支持 -p 选项（alpine 容器内 GNU 语法的 ps -o stat= -p 直接报
+// "unrecognized option"），/proc 是唯一可靠来源。
 func caddyProcessRunning() bool {
-	return caddyProcessCommand().Run() == nil
+	entries, err := os.ReadDir(caddyProcRoot)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(caddyProcRoot, entry.Name(), "stat"))
+		if err != nil {
+			continue // 进程可能刚退出，stat 已消失——视为非运行候选，跳过
+		}
+		line := string(content)
+		// stat 格式：pid (comm) state ...；comm 可含空格与右括号，取最后一个 ')'
+		// 之后的单字符状态（R/S/D/T/Z…）。
+		open := strings.Index(line, "(")
+		close := strings.LastIndex(line, ")")
+		if open < 0 || close <= open || close+2 >= len(line) {
+			continue
+		}
+		if line[open+1:close] != "caddy" {
+			continue
+		}
+		if line[close+2] != 'Z' {
+			return true
+		}
+	}
+	return false
 }
 
 func caddyAdminReady(adminURL string) bool {
