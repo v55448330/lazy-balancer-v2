@@ -144,7 +144,7 @@
     </el-card>
     <!-- R72 三次调整（用户裁决）：MFA 绑定向导从基础设置卡片迁到用户管理——
          点「启用 MFA」发起绑定：扫码 → 输码 → 恢复码。 -->
-    <el-dialog v-model="mfaBinding.visible" title="启用 MFA（两步验证）" width="520px" :close-on-click-modal="false" @closed="mfaBindingClosed">
+    <el-dialog v-model="mfaBinding.visible" title="启用 MFA（两步验证）" width="min(520px, 92vw)" :close-on-click-modal="false" @closed="mfaBindingClosed">
       <el-steps :active="mfaBinding.step" simple style="margin-bottom: 18px">
         <el-step title="扫码" />
         <el-step title="验证" />
@@ -263,10 +263,11 @@ const handleSubmit = async () => {
     if (editingUser.value) {
       if (selfEdit.value) {
         // 自助编辑：仅显示名 + 可选新密码（username/role 由 admin 管理）
+        // 不带 silent：失败走全局拦截器标准 toast（与 AppLayout 个人资料保存一致）
         await request.patch('/users/me', {
           display_name: form.value.display_name || undefined,
           password: form.value.password || undefined,
-        }, { silent: true })
+        })
         mfaAwareSuccess('已保存')
         showForm.value = false
         editingUser.value = null
@@ -399,15 +400,22 @@ const resetPassword = async (id: number) => {
     })
     if (value) {
       if (id === authStore.user?.id) {
-        // R72 六次：本人改密走自助端点
-        await request.patch('/users/me', { password: value }, { silent: true })
+        // R72 六次：本人改密走自助端点（不带 silent，失败由全局拦截器提示）
+        await request.patch('/users/me', { password: value })
       } else {
         await request.post(`/users/${id}/reset-password`, { new_password: value })
       }
       mfaAwareSuccess('密码重置成功')
     }
   } catch (e) {
-    // User cancelled, do nothing
+    // ElMessageBox 取消/关闭以字符串形式 reject，静默放行；请求本身不带 silent，
+    // 失败已由全局拦截器 toast（此处仅记录防吞线索）；仅对无法归因到拦截器的
+    // 意外拒绝（非 Error 值）兜底提示，避免二次弹窗。
+    if (e === 'cancel' || e === 'close') return
+    console.error('Failed to reset password:', e)
+    if (!(e instanceof Error)) {
+      ElMessage.error('密码重置失败，请重试')
+    }
   } finally {
     operatingUserIds.value.delete(id)
   }

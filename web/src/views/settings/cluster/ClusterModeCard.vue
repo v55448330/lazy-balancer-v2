@@ -32,7 +32,7 @@
     <el-dialog
       v-model="registrationOpen"
       title="注册为从节点"
-      width="520px"
+      width="min(520px, 92vw)"
       :close-on-click-modal="false"
       append-to-body
     >

@@ -41,7 +41,7 @@
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="960px" top="3vh">
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="min(960px, 94vw)" top="3vh">
       <el-form :model="form" label-width="80px" label-position="right" class="block-page-form">
         <el-form-item label="名称" required>
           <el-input v-model="form.name" placeholder="页面名称" :readonly="isReadOnly || currentPage?.is_default" />

@@ -100,17 +100,17 @@
        <template #footer><el-button type="primary" @click="tokenDialogVisible = false">我已保存</el-button></template>
      </el-dialog>
 
-    <el-dialog v-model="serviceControlDialogVisible" width="min(520px, 92vw)" :close-on-click-modal="false" class="service-control-dialog">
+    <el-dialog v-model="serviceControlDialogVisible" width="min(520px, 92vw)" :close-on-click-modal="false" :close-on-press-escape="!serviceControlLoading" :show-close="!serviceControlLoading" class="service-control-dialog">
       <template #header>
         <div class="service-control-header">
           <div class="service-control-title">
             <el-icon :size="18"><Monitor /></el-icon>
             <span>服务控制</span>
           </div>
-          <div v-if="serviceControlNode" class="service-control-node">
-            <el-tag :type="serviceControlNode.status === 'online' ? 'success' : 'info'" size="small">{{ serviceControlNode.status === 'online' ? '在线' : '离线' }}</el-tag>
-            <span class="service-control-node-name">{{ serviceControlNode.name }}</span>
-            <span class="service-control-node-url">{{ serviceControlNode.access_url || `${serviceControlNode.ip_address}:${serviceControlNode.port}` }}</span>
+          <div v-if="serviceControlNodeLive" class="service-control-node">
+            <el-tag :type="serviceControlNodeLive.status === 'online' ? 'success' : 'info'" size="small">{{ serviceControlNodeLive.status === 'online' ? '在线' : '离线' }}</el-tag>
+            <span class="service-control-node-name">{{ serviceControlNodeLive.name }}</span>
+            <span class="service-control-node-url">{{ serviceControlNodeLive.access_url || `${serviceControlNodeLive.ip_address}:${serviceControlNodeLive.port}` }}</span>
           </div>
         </div>
       </template>
@@ -121,7 +121,11 @@
           :key="item.value"
           class="service-control-card"
           :class="{ 'is-active': serviceControlAction === item.value, [`is-${item.tone}`]: true }"
+          role="button"
+          tabindex="0"
           @click="serviceControlAction = item.value"
+          @keydown.enter.prevent="serviceControlAction = item.value"
+          @keydown.space.prevent="serviceControlAction = item.value"
         >
           <div class="service-control-card-icon">
             <el-icon :size="22"><component :is="item.icon" /></el-icon>
@@ -148,7 +152,7 @@
       </transition>
 
       <template #footer>
-        <el-button @click="serviceControlDialogVisible = false">取消</el-button>
+        <el-button :disabled="serviceControlLoading" @click="serviceControlDialogVisible = false">取消</el-button>
         <el-button
           :type="serviceControlAction === 'stop_caddy' || serviceControlAction === 'restart_app' ? 'danger' : 'primary'"
           :loading="serviceControlLoading"
@@ -227,6 +231,15 @@ const serviceControlNode = ref<ClusterNode | null>(null)
 const serviceControlAction = ref('')
 const serviceControlLoading = ref(false)
 
+// serviceControlNode 是打开弹框时的快照；15s 轮询会整体替换 nodes 数组，
+// 快照里的 status/name 会逐渐失真（典型：节点已恢复在线仍显示「离线」）。
+// computed 按 id 回查最新行，查不到（节点刚被删除等）再退回快照兜底。
+const serviceControlNodeLive = computed<ClusterNode | null>(() => {
+  if (!serviceControlNode.value) return null
+  const live = nodes.value.find(n => n.id === serviceControlNode.value?.id)
+  return live ?? serviceControlNode.value
+})
+
 const serviceControlOptions = [
   { value: 'start_caddy', label: '启动 Caddy', description: '启动负载均衡引擎并应用当前配置', icon: VideoPlay, tone: 'success' },
   { value: 'stop_caddy', label: '停止 Caddy', description: '停止负载均衡引擎，流量将中断', icon: VideoPause, tone: 'danger' },
@@ -251,6 +264,7 @@ const executeServiceControl = async (): Promise<void> => {
   try {
     await request.post(`/cluster/nodes/${serviceControlNode.value.id}/service`, { action: serviceControlAction.value })
     serviceControlDialogVisible.value = false
+    mfaAwareSuccess('服务控制指令已下发')
   } catch (error: unknown) {
     // 全局拦截器已弹 toast；428 MFA 重试也由全局处理
     console.error('service control failed', error)
@@ -649,6 +663,7 @@ onUnmounted(() => {
   cursor: pointer; transition: all 0.2s ease; position: relative; background: var(--bg-primary, #fff);
 }
 .service-control-card:hover { border-color: var(--el-color-primary-light-5, #a0cfff); box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.service-control-card:focus-visible { border-color: var(--el-color-primary, #409eff); outline: none; }
 .service-control-card.is-active { border-color: var(--el-color-primary, #409eff); background: var(--el-color-primary-light-9, #ecf5ff); }
 .service-control-card.is-active.is-success { border-color: var(--el-color-success, #67c23a); background: var(--el-color-success-light-9, #f0f9eb); }
 .service-control-card.is-active.is-danger { border-color: var(--el-color-danger, #f56c6c); background: var(--el-color-danger-light-9, #fef0f0); }

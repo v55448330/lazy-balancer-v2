@@ -138,11 +138,11 @@
       </el-tabs>
     </el-card>
 
-    <el-dialog v-model="contentDialogVisible" :title="currentFilename" width="900px" top="5vh">
+    <el-dialog v-model="contentDialogVisible" :title="currentFilename" width="min(900px, 94vw)" top="5vh">
       <div v-loading="loadingContent"><SyntaxHighlight :content="currentContent" language="apacheconf" /></div>
     </el-dialog>
 
-    <el-dialog v-model="ruleDialogVisible" :title="editingRuleId ? (isReadOnly ? '查看自定义规则' : '编辑自定义规则') : '新建自定义规则'" width="760px">
+    <el-dialog v-model="ruleDialogVisible" :title="editingRuleId ? (isReadOnly ? '查看自定义规则' : '编辑自定义规则') : '新建自定义规则'" width="min(760px, 94vw)">
       <el-form :model="ruleForm" label-width="80px" label-position="right" :disabled="isReadOnly">
         <el-form-item label="名称" required>
           <el-input v-model="ruleForm.name" placeholder="规则名称" />
