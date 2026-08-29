@@ -80,16 +80,75 @@ func (m *MetricsService) Stop() {
 	m.stopOnce.Do(func() { close(m.stopCh) })
 }
 
+// N+9 C3-S2：metrics 采集失败族状态转换日志。30s 采集周期下，持久性失败
+// （端点不可达、非 200、body 超限、解析/入库失败）逐 tick 裸记日志约
+// 2880 行/天同一消息。改为状态转换口径：ok→fail 记一次（warn）、fail→ok
+// 恢复记一次（info）、持续同一状态静默。状态按失败类别（key）独立跟踪：
+// 前置类别失败（如 Get 失败）不评估后续类别，其恢复标记只在后续 tick 实际
+// 通过该检查时才落，避免「仍失败却记恢复」。map 有界：生产类别集固定 6 个，
+// 清扫上限（N-1 同模式）仅为防御动态键场景——超上限整体重置，各类别至多
+// 重复放行一条，无数据影响。
+var (
+	metricsStateMu     sync.Mutex
+	metricsStateFailed = map[string]bool{}
+)
+
+// metricsStateEvictCap 是状态 map 的防御性键数上限（见 logMetricsStateTransition）。
+const metricsStateEvictCap = 64
+
+// logMetricsStateTransition 报告 key 类别的失败状态转换：
+// ok→fail 返回 "warn"；fail→ok 返回 "info"；状态不变返回 ""。
+// 初始状态视为 ok：首次失败记一次 warn，首次成功静默（无恢复可记）。
+func logMetricsStateTransition(key string, failed bool) string {
+	metricsStateMu.Lock()
+	defer metricsStateMu.Unlock()
+	prev, seen := metricsStateFailed[key]
+	if seen && prev == failed {
+		return ""
+	}
+	if !seen && !failed {
+		return ""
+	}
+	metricsStateFailed[key] = failed
+	if len(metricsStateFailed) > metricsStateEvictCap {
+		metricsStateFailed = map[string]bool{key: failed}
+	}
+	if failed {
+		return "warn"
+	}
+	return "info"
+}
+
+// metrics 采集失败类别（状态转换日志的 key，固定集合）。
+const (
+	metricsFailureCollect      = "collect"
+	metricsFailureEndpoint     = "endpoint"
+	metricsFailureBodyCap      = "body-cap"
+	metricsFailureParse        = "parse"
+	metricsFailureStore        = "store"
+	metricsFailureStorePerHost = "store-per-host"
+)
+
 func (m *MetricsService) collect() {
 	resp, err := m.client.Get(m.metricsURL)
 	if err != nil {
-		log.Printf("Failed to collect metrics: %v", err)
+		if logMetricsStateTransition(metricsFailureCollect, true) != "" {
+			Logf("warn", "Failed to collect metrics: %v", err)
+		}
 		return
+	}
+	if lvl := logMetricsStateTransition(metricsFailureCollect, false); lvl != "" {
+		Logf("info", "metrics collection recovered")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("Metrics endpoint returned status %d, skipping sample", resp.StatusCode)
+		if logMetricsStateTransition(metricsFailureEndpoint, true) != "" {
+			Logf("warn", "Metrics endpoint returned status %d, skipping sample", resp.StatusCode)
+		}
 		return
+	}
+	if lvl := logMetricsStateTransition(metricsFailureEndpoint, false); lvl != "" {
+		Logf("info", "metrics endpoint recovered")
 	}
 
 	// R72 二十六次 W3-2：读取上限对齐 overviewmetrics 的 16MB 探测模式
@@ -100,18 +159,41 @@ func (m *MetricsService) collect() {
 		return
 	}
 	if len(body) > 16<<20 {
-		log.Printf("Metrics endpoint body exceeded 16MB cap, skipping sample")
+		if logMetricsStateTransition(metricsFailureBodyCap, true) != "" {
+			Logf("warn", "Metrics endpoint body exceeded 16MB cap, skipping sample")
+		}
 		return
+	}
+	if lvl := logMetricsStateTransition(metricsFailureBodyCap, false); lvl != "" {
+		Logf("info", "metrics endpoint body back under 16MB cap")
 	}
 
 	metrics, err := m.parsePrometheusMetrics(string(body))
 	if err != nil {
-		log.Printf("Failed to parse metrics: %v", err)
+		if logMetricsStateTransition(metricsFailureParse, true) != "" {
+			Logf("warn", "Failed to parse metrics: %v", err)
+		}
 		return
 	}
-	m.storeMetrics(metrics)
+	if lvl := logMetricsStateTransition(metricsFailureParse, false); lvl != "" {
+		Logf("info", "metrics parse recovered")
+	}
+	if err := m.storeMetrics(metrics); err != nil {
+		if logMetricsStateTransition(metricsFailureStore, true) != "" {
+			Logf("warn", "Failed to store metrics: %v, values: %d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+				err, metrics.requestsTotal, metrics.requests2xx, metrics.requests3xx,
+				metrics.requests4xx, metrics.requests5xx, metrics.bytesIn, metrics.bytesOut,
+				metrics.latencyP50, metrics.latencyP95, metrics.latencyP99)
+		}
+	} else if lvl := logMetricsStateTransition(metricsFailureStore, false); lvl != "" {
+		Logf("info", "metrics store recovered")
+	}
 	if err := m.storePerHostMetrics(string(body)); err != nil {
-		log.Printf("Failed to store per-host metrics: %v", err)
+		if logMetricsStateTransition(metricsFailureStorePerHost, true) != "" {
+			Logf("warn", "Failed to store per-host metrics: %v", err)
+		}
+	} else if lvl := logMetricsStateTransition(metricsFailureStorePerHost, false); lvl != "" {
+		Logf("info", "metrics per-host store recovered")
 	}
 	m.updateOverview(metrics)
 }
@@ -444,7 +526,9 @@ func (m *MetricsService) cleanupHistory() {
 	}
 }
 
-func (m *MetricsService) storeMetrics(metrics parsedMetrics) {
+// storeMetrics 将全局指标写入独立 metrics 库；错误返回给调用方
+// （collect）按状态转换口径记日志，避免本方法与 collect 双通道重复记录。
+func (m *MetricsService) storeMetrics(metrics parsedMetrics) error {
 	// Store global metrics in independent metrics database
 	_, err := db.MetricsDB.Exec(`
 		INSERT INTO metrics_history 
@@ -455,13 +539,7 @@ func (m *MetricsService) storeMetrics(metrics parsedMetrics) {
 	`, metrics.requestsTotal, metrics.requests2xx, metrics.requests3xx,
 		metrics.requests4xx, metrics.requests5xx, metrics.bytesIn, metrics.bytesOut,
 		metrics.latencyP50, metrics.latencyP95, metrics.latencyP99)
-
-	if err != nil {
-		log.Printf("Failed to store metrics: %v, values: %d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
-			err, metrics.requestsTotal, metrics.requests2xx, metrics.requests3xx,
-			metrics.requests4xx, metrics.requests5xx, metrics.bytesIn, metrics.bytesOut,
-			metrics.latencyP50, metrics.latencyP95, metrics.latencyP99)
-	}
+	return err
 }
 
 func (m *MetricsService) updateOverview(metrics parsedMetrics) {

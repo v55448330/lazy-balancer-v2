@@ -1957,3 +1957,116 @@ func TestAuditFailureThrottleKey_replacesDigitRuns(t *testing.T) {
 		t.Fatalf("throttle key = %q, want %q", got, want)
 	}
 }
+
+// N+9 C3-S3：pending 归档缺失分支的 warn 必须走 60s 限流——标记删除失败
+// （只读目录等）时标记留在盘上，2s tick 反复进入该分支，裸 warn 每 tick
+// 一条（~43k 行/天）。只读目录模拟在 root 下退化为「删除成功」，但断言的
+// 窗口内至多一条上限两种情况都成立。
+func TestRotateAuditLogIfNeeded_pendingArchiveMissing_unremovableMarkerWarnsAtMostOncePerWindow(t *testing.T) {
+	// Given：重置限流状态；临时目录活文件 + 指向缺失归档的 pending 标记
+	auditFailureLogMu.Lock()
+	auditFailureLogTimes = map[string]time.Time{}
+	auditFailureLogMu.Unlock()
+	oldClock := auditFailureLogClock
+	auditFailureLogClock = time.Now
+	t.Cleanup(func() {
+		auditFailureLogClock = oldClock
+		auditFailureLogMu.Lock()
+		auditFailureLogTimes = map[string]time.Time{}
+		auditFailureLogMu.Unlock()
+	})
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	if err := os.WriteFile(logPath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write live audit log: %v", err)
+	}
+	oldAuditLogPath := auditLogPath
+	auditLogPath = logPath
+	t.Cleanup(func() { auditLogPath = oldAuditLogPath })
+	oldSizeFn := auditLogSizeBytes
+	auditLogSizeBytes = func() int64 { return 1 << 40 }
+	t.Cleanup(func() { auditLogSizeBytes = oldSizeFn })
+	markerPath := securityEventsPendingDeltaPath()
+	marker := fmt.Sprintf(`{"path":%q,"offset":0,"size":1}`, filepath.Join(dir, "audit.log.1"))
+	if err := os.WriteFile(markerPath, []byte(marker), 0o644); err != nil {
+		t.Fatalf("write pending marker: %v", err)
+	}
+
+	// 只读目录：os.Remove(标记) 失败 → 标记留存、分支每 tick 重入
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("chmod dir read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	var logs bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	// When：连续 3 个 tick
+	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded()
+	rotateAuditLogIfNeeded()
+
+	// Then：warn 仅放行首条（60s 窗口）
+	if count := strings.Count(logs.String(), "pending delta archive"); count != 1 {
+		t.Fatalf("pending-missing warn count=%d, want 1 (60s throttle window): %s", count, logs.String())
+	}
+}
+
+// N+9 C3-S3（正向）：标记可删除时 warn 仍保持一次性——删除成功后标记消失，
+// 后续 tick 不再进入该分支。
+func TestRotateAuditLogIfNeeded_pendingArchiveMissing_removableMarkerWarnsOnceAndDrops(t *testing.T) {
+	// Given：重置限流状态；可写目录 + 指向缺失归档的 pending 标记
+	auditFailureLogMu.Lock()
+	auditFailureLogTimes = map[string]time.Time{}
+	auditFailureLogMu.Unlock()
+	oldClock := auditFailureLogClock
+	auditFailureLogClock = time.Now
+	t.Cleanup(func() {
+		auditFailureLogClock = oldClock
+		auditFailureLogMu.Lock()
+		auditFailureLogTimes = map[string]time.Time{}
+		auditFailureLogMu.Unlock()
+	})
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	if err := os.WriteFile(logPath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write live audit log: %v", err)
+	}
+	oldAuditLogPath := auditLogPath
+	auditLogPath = logPath
+	t.Cleanup(func() { auditLogPath = oldAuditLogPath })
+	oldSizeFn := auditLogSizeBytes
+	auditLogSizeBytes = func() int64 { return 1 << 40 }
+	t.Cleanup(func() { auditLogSizeBytes = oldSizeFn })
+	markerPath := securityEventsPendingDeltaPath()
+	marker := fmt.Sprintf(`{"path":%q,"offset":0,"size":1}`, filepath.Join(dir, "audit.log.1"))
+	if err := os.WriteFile(markerPath, []byte(marker), 0o644); err != nil {
+		t.Fatalf("write pending marker: %v", err)
+	}
+
+	var logs bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	// When：首个 tick（归档缺失、标记删除成功）
+	rotateAuditLogIfNeeded()
+
+	// Then：warn 恰一条且标记已删除
+	if count := strings.Count(logs.String(), "pending delta archive"); count != 1 {
+		t.Fatalf("pending-missing warn count=%d, want 1: %s", count, logs.String())
+	}
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("marker should be removed after successful drop: %v", err)
+	}
+
+	// When：第二个 tick（无标记，分支不重入）
+	rotateAuditLogIfNeeded()
+
+	// Then：仍仅一条 warn
+	if count := strings.Count(logs.String(), "pending delta archive"); count != 1 {
+		t.Fatalf("pending-missing warn count after 2nd tick=%d, want 1 (no marker, branch not re-entered): %s", count, logs.String())
+	}
+}

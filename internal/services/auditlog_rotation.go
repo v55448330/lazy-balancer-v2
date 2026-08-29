@@ -109,7 +109,11 @@ func rotateAuditLogIfNeeded() {
 	// 覆盖（事件尚存），待下次轮转重试，避免补采失败导致窗口事件永久丢失。
 	if pending := securityEventsReadPendingDelta(); pending != nil {
 		if _, err := os.Stat(pending.Path); os.IsNotExist(err) {
-			Logf("warn", "audit log rotation: pending delta archive %s missing, dropping marker", pending.Path)
+			// N+9 C3-S3：warn 走 60s 限流（throttledAuditFailureLogf）——标记删除
+			// 失败（只读目录等）时标记留在盘上，2s tick 反复进入本分支，裸 warn
+			// 每 tick 一条（~43k 行/天）；同归一化消息共享窗口，路径中数字已由
+			// digit key 归一为 #。消息内容保持原样。
+			throttledAuditFailureLogf("audit log rotation: pending delta archive %s missing, dropping marker", pending.Path)
 			_ = os.Remove(securityEventsPendingDeltaPath())
 		} else if err := securityEventsIngestDeltaFrom(pending.Path, pending.Offset, true); err != nil {
 			throttledAuditFailureLogf("audit log rotation: pending delta ingest retry failed (rotation deferred): %v", err)

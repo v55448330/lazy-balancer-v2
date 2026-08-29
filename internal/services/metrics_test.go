@@ -3,11 +3,111 @@ package services
 import (
 	"bytes"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
 )
+
+// isolateMetricsState 隔离包级状态转换 map（N+9 C3-S2），测试间互不串扰。
+func isolateMetricsState(t *testing.T) {
+	t.Helper()
+	metricsStateMu.Lock()
+	saved := metricsStateFailed
+	metricsStateFailed = map[string]bool{}
+	metricsStateMu.Unlock()
+	t.Cleanup(func() {
+		metricsStateMu.Lock()
+		metricsStateFailed = saved
+		metricsStateMu.Unlock()
+	})
+}
+
+func TestLogMetricsStateTransition_fail_ok_fail_emits_warn_info_warn(t *testing.T) {
+	// Given
+	isolateMetricsState(t)
+
+	// When/Then：fail→ok→fail 恰好 warn、info、warn 各一次；
+	// 持续同一状态（仍失败/仍正常）静默；初始状态视为 ok（首次成功静默）。
+	if lvl := logMetricsStateTransition("collect", true); lvl != "warn" {
+		t.Fatalf("first failure level=%q, want warn", lvl)
+	}
+	if lvl := logMetricsStateTransition("collect", true); lvl != "" {
+		t.Fatalf("persistent failure level=%q, want silent", lvl)
+	}
+	if lvl := logMetricsStateTransition("collect", false); lvl != "info" {
+		t.Fatalf("recovery level=%q, want info", lvl)
+	}
+	if lvl := logMetricsStateTransition("collect", false); lvl != "" {
+		t.Fatalf("persistent ok level=%q, want silent", lvl)
+	}
+	if lvl := logMetricsStateTransition("collect", true); lvl != "warn" {
+		t.Fatalf("second failure level=%q, want warn", lvl)
+	}
+	if lvl := logMetricsStateTransition("endpoint", false); lvl != "" {
+		t.Fatalf("first success of unseen key level=%q, want silent", lvl)
+	}
+	// 类别间状态独立
+	if lvl := logMetricsStateTransition("parse", true); lvl != "warn" {
+		t.Fatalf("independent key failure level=%q, want warn", lvl)
+	}
+	if lvl := logMetricsStateTransition("collect", false); lvl != "info" {
+		t.Fatalf("collect recovery after independent key failure level=%q, want info", lvl)
+	}
+}
+
+func TestMetricsService_collect_logs_failures_once_per_state_transition(t *testing.T) {
+	// N+9 C3-S2：30s 周期持久失败不得逐 tick 刷日志——fail→ok→fail 应恰好
+	// 2 条 warn + 1 条 info（状态转换口径）。
+	// Given
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatalf("initialize metrics database: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	isolateMetricsState(t)
+
+	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`caddy_http_requests_total{handler="reverse_proxy",host="example.com"} 5`))
+	}))
+	t.Cleanup(live.Close)
+
+	var logs bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	service := NewMetricsService(deadURL, 30)
+
+	// When：失败 ×2（仅首次 warn）、成功（恢复 info）、失败 ×2（仅首次 warn）
+	service.collect()
+	service.collect()
+	service.metricsURL = live.URL
+	service.collect()
+	service.metricsURL = deadURL
+	service.collect()
+	service.collect()
+
+	// Then
+	if count := strings.Count(logs.String(), "Failed to collect metrics:"); count != 2 {
+		t.Fatalf("failure warn count=%d, want 2 (state-transition dedup): %s", count, logs.String())
+	}
+	if count := strings.Count(logs.String(), "metrics collection recovered"); count != 1 {
+		t.Fatalf("recovery info count=%d, want 1: %s", count, logs.String())
+	}
+}
 
 func TestClassifyStatusCodes_uses_complete_numeric_ranges(t *testing.T) {
 	// Given

@@ -113,7 +113,7 @@ func startCaddy(adminURL string) error {
 		select {
 		case err := <-exited:
 			if err == nil {
-				err = errors.New("Caddy exited before Admin API became ready")
+				err = errors.New("Caddy 在 Admin API 就绪前退出")
 			}
 			return err
 		case <-ticker.C:
@@ -125,7 +125,7 @@ func startCaddy(adminURL string) error {
 				_ = cmd.Process.Kill()
 				<-exited
 			}
-			return errors.New("Caddy Admin API did not become ready")
+			return errors.New("Caddy Admin API 未就绪")
 		}
 	}
 }
@@ -141,7 +141,7 @@ func stopCaddy(adminURL string) error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return errors.New("Caddy Admin API is still reachable after stop")
+	return errors.New("停止后 Caddy Admin API 仍可达")
 }
 
 func (h *Handlers) GetConfig(c *gin.Context) {
@@ -193,7 +193,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to get config: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "获取全局配置失败: " + err.Error()})
 		return
 	}
 	// R72 二十六次 D4：DNS 凭证最小可见性——非 admin 响应以掩码占位。
@@ -209,7 +209,7 @@ func (h *Handlers) GetUpstreamHealth(c *gin.Context) {
 	healthStatus, err := h.caddyService.GetUpstreamHealthDetailed()
 	if err != nil {
 		log.Printf("collect upstream health: %v", err)
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: http.StatusBadGateway, Message: "Failed to collect upstream health"})
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: http.StatusBadGateway, Message: "收集上游健康状态失败"})
 		return
 	}
 
@@ -219,12 +219,12 @@ func (h *Handlers) GetUpstreamHealth(c *gin.Context) {
 func (h *Handlers) PreviewConfigUpdate(c *gin.Context) {
 	var req models.UpdateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求无效"})
 		return
 	}
 	old, err := loadConfigSnapshot()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read current config"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取当前配置失败"})
 		return
 	}
 	plan := planConfigChanges(req, old)
@@ -271,7 +271,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 
 	var req models.UpdateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求无效"})
 		return
 	}
 	// R72 二十六次 D4：非 admin 的 GET /config 已把凭证替换为掩码——前端原样
@@ -290,7 +290,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		case "debug", "info", "warn", "error":
 			*req.LogLevel = level
 		default:
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid application log level"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的应用日志级别"})
 			return
 		}
 	}
@@ -299,7 +299,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		switch strings.ToLower(*req.CaddyLogLevel) {
 		case "debug", "info", "warn", "error":
 		default:
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid Caddy log level"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的 Caddy 日志级别"})
 			return
 		}
 	}
@@ -313,25 +313,25 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		switch *req.DNSProvider {
 		case "dnspod":
 		default:
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid DNS provider"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的 DNS 提供商"})
 			return
 		}
 	}
 
 	if req.CertRenewalDays != nil && (*req.CertRenewalDays < 0 || *req.CertRenewalDays > 90) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_renewal_days must be between 0 and 90"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_renewal_days 必须在 0-90 之间"})
 		return
 	}
 
 	if req.CertRenewalAttempts != nil && (*req.CertRenewalAttempts < 1 || *req.CertRenewalAttempts > 10) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_renewal_attempts must be between 1 and 10"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_renewal_attempts 必须在 1-10 之间"})
 		return
 	}
 
 	// R58 C-N5：cert_expiry_days 与另两个续签数值同边界（导入侧已按
 	// [1,365] 钳制）——写侧缺校验会让 0/负值落库，续期窗口计算漂移。
 	if req.CertExpiryDays != nil && (*req.CertExpiryDays < 1 || *req.CertExpiryDays > 365) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_expiry_days must be between 1 and 365"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "cert_expiry_days 必须在 1-365 之间"})
 		return
 	}
 
@@ -345,11 +345,11 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	// R57 C-7：上限 4096MB——无上限时天文数字在渲染侧 int64 乘法（MB→字节）
 	// 回绕可正可负：负/零让 Caddy requestbody 处理器不生效（限制静默取消）。
 	if req.RequestBodyMaxSizeMB != nil && (*req.RequestBodyMaxSizeMB < 0 || *req.RequestBodyMaxSizeMB > 4096) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "request_body_max_size_mb must be in [0, 4096] MB"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "request_body_max_size_mb 必须在 0-4096 MB 之间"})
 		return
 	}
 	if (req.HTTPReadTimeout != nil && *req.HTTPReadTimeout < 0) || (req.HTTPWriteTimeout != nil && *req.HTTPWriteTimeout < 0) || (req.HTTPIdleTimeout != nil && *req.HTTPIdleTimeout < 0) || (req.UpstreamKeepaliveTimeout != nil && *req.UpstreamKeepaliveTimeout < 0) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "timeouts must be >= 0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "超时时间不能为负数"})
 		return
 	}
 	if (req.ProxyDialTimeout != nil && *req.ProxyDialTimeout < 0) ||
@@ -388,7 +388,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 	if req.JWTExpireMinutes != nil && (*req.JWTExpireMinutes <= 0 || *req.JWTExpireMinutes > 1440) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "jwt_expire_minutes must be between 1 and 1440"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "jwt_expire_minutes 必须在 1-1440 之间"})
 		return
 	}
 	// R55 F3：audit_retention_months 服务端范围校验（UI 口径 1-12）——超大值使
@@ -410,13 +410,13 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		// I-K（第 14 轮审计）：保存端点服务端失败分支留痕（操作者归因 + 错误详情），
 		// 此前仅成功路径写审计；动作复用既有 danger 词条「更新失败」。
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("读取当前配置失败", err.Error(), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read current config"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取当前配置失败"})
 		return
 	}
 	plan := planConfigChanges(req, old)
 	if !plan.Changed {
 		recordAudit(c, "更新", plan.Section, "无修改")
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config unchanged", Data: plan})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置无变化", Data: plan})
 		return
 	}
 
@@ -569,7 +569,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 
 	recordAudit(c, "重载", "Caddy服务", "保存配置后自动重载")
 
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config updated and applied", Data: plan})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置已更新并应用", Data: plan})
 }
 
 func (h *Handlers) ValidateConfig(c *gin.Context) {
@@ -581,7 +581,7 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 	defer h.caddyOpMu.Unlock()
 	var configData map[string]interface{}
 	if err := c.ShouldBindJSON(&configData); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid config JSON"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的配置 JSON"})
 		return
 	}
 	// R69 C-N3-c：Caddy /load 无 validate-only 语义——校验成功即用户配置已被
@@ -591,7 +591,7 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 	// 拒绝、运行配置不变。
 	if err := h.caddyService.ValidateConfig(configData); err != nil {
 		recordAudit(c, "校验失败", "Caddy配置", services.FormatAuditDetail("配置校验", services.AuditResultPart("failure")))
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Config validation failed", Data: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "配置验证失败", Data: err.Error()})
 		return
 	}
 	if restoreErr := h.caddyService.ApplyConfig(services.GenerateCaddyConfig()); restoreErr != nil {
@@ -601,7 +601,7 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 	}
 
 	recordAudit(c, "校验成功", "Caddy配置", services.FormatAuditDetail("配置校验", services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config is valid"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置有效"})
 }
 
 func (h *Handlers) ReloadCaddy(c *gin.Context) {
@@ -674,22 +674,22 @@ func (h *Handlers) GetCaddyConfig(c *gin.Context) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get("http://localhost:2019/config/")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to connect to Caddy: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "连接 Caddy 失败: " + err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 500 {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy returned error status"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 返回错误状态"})
 		return
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read Caddy config: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 Caddy 配置失败: " + err.Error()})
 		return
 	}
 	var configData interface{}
 	if err := json.Unmarshal(body, &configData); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to parse Caddy config: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析 Caddy 配置失败: " + err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: configData})
@@ -717,7 +717,7 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": ""}})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Log file not accessible: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "日志文件不可访问: " + err.Error()})
 		return
 	}
 
@@ -728,19 +728,19 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 
 	f, err := os.Open(logPath)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to open log file: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "打开日志文件失败: " + err.Error()})
 		return
 	}
 	defer f.Close()
 
 	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read log file: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取日志文件失败: " + err.Error()})
 		return
 	}
 
 	data, err := io.ReadAll(f)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to read log file: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取日志文件失败: " + err.Error()})
 		return
 	}
 
@@ -807,13 +807,13 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
 			return
 		}
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求无效"})
 		return
 	}
 
 	var configData map[string]interface{}
 	if err := json.Unmarshal([]byte(req.Content), &configData); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid JSON config"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的 JSON 配置"})
 		return
 	}
 
@@ -857,7 +857,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
 		err = errors.Join(err, rollbackErr, restoreErr)
 		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("Caddy 配置应用失败", err.Error(), services.AuditResultPart("failure")))
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy rejected config: " + err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 拒绝配置: " + err.Error()})
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -878,7 +878,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	// R72 二十六次 D3（裁决：保留逃生口 + 明示后果）：自定义 Caddy 配置是
 	// 一次性逃生口，数据库生成器从不消费 caddy_config 列——任何后续规则/
 	// 配置变更或集群同步都会以权威生成配置覆盖它。保存成功即明示。
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Config saved（注意：自定义配置为一次性逃生口，任何后续规则/配置变更或集群同步都会以数据库生成的权威配置覆盖它）"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置已保存（注意：自定义配置为一次性逃生口，任何后续规则/配置变更或集群同步都会以数据库生成的权威配置覆盖它）"})
 }
 
 func (h *Handlers) StartCaddy(c *gin.Context) {
@@ -894,10 +894,10 @@ func (h *Handlers) StartCaddy(c *gin.Context) {
 	// caddyApplyNoteLocked: caller already holds caddyOpMu (applyCaddyConfigE
 	// would re-lock the non-reentrant mutex and deadlock).
 	if note := h.caddyApplyNoteLocked(); note != "" {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy started but config apply failed: " + note})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 已启动但配置应用失败: " + note})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy started"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy 已启动"})
 }
 
 func (h *Handlers) StopCaddy(c *gin.Context) {
@@ -908,7 +908,7 @@ func (h *Handlers) StopCaddy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy stopped"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy 已停止"})
 }
 
 func (h *Handlers) RestartCaddy(c *gin.Context) {
@@ -925,10 +925,10 @@ func (h *Handlers) RestartCaddy(c *gin.Context) {
 	}
 	// Same as StartCaddy: caller holds caddyOpMu, use the locked variant.
 	if note := h.caddyApplyNoteLocked(); note != "" {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy restarted but config apply failed: " + note})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 已重启但配置应用失败: " + note})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy restarted"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy 已重启"})
 }
 
 // validateAccessLogFormat enforces the fields the log stats feature relies

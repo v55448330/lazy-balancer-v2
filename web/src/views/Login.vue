@@ -44,7 +44,7 @@
               :prefix-icon="Key"
               :maxlength="mfaUseRecovery ? 200 : 6"
               autofocus
-              @input="mfaCode = mfaUseRecovery ? normalizeMfaCodeInput(mfaCode) : mfaCode.replace(/\s/g, '')"
+              @input="mfaCode = mfaUseRecovery ? normalizeMfaCodeInput(mfaCode) : mfaCode.replace(/\s/g, '').slice(0, 6)"
             />
           </el-form-item>
           <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="login-error" />
