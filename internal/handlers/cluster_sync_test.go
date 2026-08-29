@@ -115,3 +115,34 @@ func TestAuthenticatedClusterToken_prefers_middleware_context(t *testing.T) {
 		t.Fatalf("authenticated token=%q", token)
 	}
 }
+
+// D2-S3：降级主节点不得再拉取 WAF 数据包——快照端点有 requireMaster 设防，
+// WAF 数据包端点必须对称，否则残留已审批的从节点令牌可继续拉取安全数据包。
+func TestGetClusterWafFiles_demotedMasterForbidden(t *testing.T) {
+	// Given
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		db.SetDB(oldDB)
+	})
+	if _, err := db.DB.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	h := &Handlers{clusterService: services.NewClusterService(db.DB, nil)}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest("GET", "/api/v1/cluster/waf/files", nil).WithContext(context.Background())
+	ginContext, _ := gin.CreateTestContext(response)
+	ginContext.Request = request
+
+	// When
+	h.GetClusterWafFiles(ginContext)
+
+	// Then
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%q, want 403（与快照端点对称的 requireMaster 门）", response.Code, response.Body.String())
+	}
+}

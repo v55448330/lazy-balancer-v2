@@ -79,6 +79,9 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 // GetClusterWafFiles serves the full CRS/IP2Region file bundle on demand to
 // slaves whose snapshot-carried hash reference differs from their local files.
 func (h *Handlers) GetClusterWafFiles(c *gin.Context) {
+	if !h.requireMaster(c) {
+		return
+	}
 	bundle := services.BuildWafFileBundle()
 	if bundle == nil {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "主节点无安全数据"})

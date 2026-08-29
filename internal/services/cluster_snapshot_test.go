@@ -3,7 +3,11 @@ package services
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
+	"errors"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -210,5 +214,218 @@ func TestNearestSnapshotCertificateExpiry_missingExpiryDoesNotMaskNearerRealExpi
 	// Then：缺失证书的重建窗口（30s）不得覆盖更近的 5s 真实到期时间
 	if want := now.Add(5 * time.Second); !got.Equal(want) {
 		t.Fatalf("expiry=%v, want %v (missing-expiry window must not mask nearer expiry)", got, want)
+	}
+}
+
+// D2-F1：expires_at 列落在过去的 ACME 证书（status<>'disabled' 且 pem 非空、
+// 叶证书仍有效，但列值是续期回写失败/带外导入的过期残留）不得把缓存失效点
+// 钉在过去——否则 now.Before(expiresAt) 恒 false，每次快照都全量重建。
+func TestNearestSnapshotCertificateExpiry_pastExpiryClampedToRebuildWindow(t *testing.T) {
+	// Given
+	now := time.Now().UTC().Truncate(time.Second)
+	past := now.Add(-time.Hour).Format(time.RFC3339)
+
+	// When
+	got := nearestSnapshotCertificateExpiry([]models.ClusterCertificate{
+		{RuleID: "lb_stale", Domain: "stale.example.com", CertPEM: "pem", ExpiresAt: past},
+	}, now)
+
+	// Then：钳制到缺失窗口，失效点必须落在未来
+	if want := now.Add(snapshotCertMissingExpiryWindow); !got.Equal(want) {
+		t.Fatalf("expiry=%v, want clamped %v（过去到期不得把缓存钉死在过去）", got, want)
+	}
+}
+
+// D2-F1 集成：叶证书有效但 expires_at 列过期的种子 → 首次快照后缓存失效点
+// 必须在未来（缺失窗口），保证下一次同版本同指纹 Pull 命中缓存而非全量重建。
+func TestClusterService_Snapshot_stalePastExpiryColumnKeepsCacheHitWindow(t *testing.T) {
+	// Given
+	service, database := newClusterTestService(t)
+	base := time.Now().UTC()
+	service.snapshotNow = func() time.Time { return base }
+	certPEM, keyPEM := certificatePairForDomains(t, base.Add(-time.Hour), base.Add(2*time.Hour), "stale.example.com")
+	seedSnapshotCertificate(t, database, "lb_stale_expiry", "stale.example.com", "stale.example.com", certPEM, keyPEM, base.Add(-time.Hour), 1)
+	initial, _, err := service.Snapshot(context.Background(), 0, "", "")
+	if err != nil || len(initial.Certs) != 1 {
+		t.Fatalf("initial certs=%d error=%v", len(initial.Certs), err)
+	}
+
+	// When：检视缓存条目的失效点
+	value, loaded := clusterSnapshotCaches.Load(database)
+	if !loaded {
+		t.Fatal("snapshot cache entry missing")
+	}
+	cache := value.(*clusterSnapshotCache)
+
+	// Then：10s 后的缓存命中条件（now.Before(expiresAt)）必须仍成立
+	if next := base.Add(10 * time.Second); !next.Before(cache.expiresAt) {
+		t.Fatalf("cache expiresAt=%v 落在过去（stale expires_at 未钳制），base=%v", cache.expiresAt, base)
+	}
+}
+
+// D2-F2：结果集迭代错误（driver Rows.Next 返回非 io.EOF 错误）只能经
+// rows.Err() 观测——Close() 只回报关闭错误。以下假驱动注入首迭代即失败
+// 的结果集，SQL 按 needle 路由，其余查询返回正常空集。
+type fakeIterErrRows struct {
+	columns []string
+	err     error
+}
+
+func (r *fakeIterErrRows) Columns() []string { return r.columns }
+func (r *fakeIterErrRows) Close() error      { return nil }
+func (r *fakeIterErrRows) Next([]driver.Value) error {
+	return r.err
+}
+
+type fakeEmptyRows struct{ columns []string }
+
+func (r *fakeEmptyRows) Columns() []string { return r.columns }
+func (r *fakeEmptyRows) Close() error      { return nil }
+func (r *fakeEmptyRows) Next([]driver.Value) error {
+	return io.EOF
+}
+
+type fakeIterErrConn struct{ failNeedle string }
+
+func (c *fakeIterErrConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("未实现 Prepare")
+}
+func (c *fakeIterErrConn) Close() error              { return nil }
+func (c *fakeIterErrConn) Begin() (driver.Tx, error) { return nil, errors.New("未实现 Begin") }
+func (c *fakeIterErrConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	columns := []string{"a"}
+	if strings.Contains(query, c.failNeedle) {
+		return &fakeIterErrRows{columns: columns, err: errors.New("注入的迭代失败")}, nil
+	}
+	return &fakeEmptyRows{columns: columns}, nil
+}
+
+type fakeIterErrDriver struct{}
+
+func (fakeIterErrDriver) Open(string) (driver.Conn, error) {
+	return nil, errors.New("未实现直连")
+}
+
+type fakeIterErrConnector struct{ failNeedle string }
+
+func (c *fakeIterErrConnector) Connect(context.Context) (driver.Conn, error) {
+	return &fakeIterErrConn{failNeedle: c.failNeedle}, nil
+}
+func (c *fakeIterErrConnector) Driver() driver.Driver { return fakeIterErrDriver{} }
+
+func TestDumpTableAsJSON_propagatesRowsIterationError(t *testing.T) {
+	// Given：security_policies 迭代中途驱动失败
+	service, _ := newClusterTestService(t)
+	fake := sql.OpenDB(&fakeIterErrConnector{failNeedle: "FROM security_policies"})
+
+	// When
+	_, err := service.dumpTableAsJSON(context.Background(), fake, "security_policies", "id", "id")
+
+	// Then：必须报错——静默截断的节会被签名+发布，从节点 DELETE+INSERT
+	// 把部分节放大为集群级静默删行
+	if err == nil || !strings.Contains(err.Error(), "security_policies") {
+		t.Fatalf("dumpTableAsJSON err=%v, want 迭代错误按表名传播", err)
+	}
+}
+
+func TestSnapshotACME_propagatesCAProviderRowsIterationError(t *testing.T) {
+	// Given：ca_providers 迭代中途驱动失败（该循环是手工 Close 形态，历史上
+	// 只检查了 Close 错误）
+	service, _ := newClusterTestService(t)
+	fake := sql.OpenDB(&fakeIterErrConnector{failNeedle: "FROM ca_providers"})
+
+	// When
+	_, err := service.snapshotACME(context.Background(), fake)
+
+	// Then：错误必须来自 CA 提供商循环本身，而非后续所有权读取的错位错误
+	if err == nil || !strings.Contains(err.Error(), "CA 提供商") {
+		t.Fatalf("snapshotACME err=%v, want CA 提供商迭代错误传播", err)
+	}
+}
+
+func TestSnapshotCertificates_propagatesManualCertRowsIterationError(t *testing.T) {
+	// Given：手工证书（tls_source='manual'）迭代中途驱动失败
+	service, _ := newClusterTestService(t)
+	fake := sql.OpenDB(&fakeIterErrConnector{failNeedle: "tls_source='manual'"})
+
+	// When
+	_, err := service.snapshotCertificates(context.Background(), fake)
+
+	// Then：手工证书循环缺 rows.Err() 时会静默吞掉迭代错误并返回空证书集
+	if err == nil || !strings.Contains(err.Error(), "手工证书") {
+		t.Fatalf("snapshotCertificates err=%v, want 手工证书迭代错误传播", err)
+	}
+}
+
+// D2-S1：304 路径不得执行交付前置——canonical 拷贝、HMAC 签名与「确认旧协议
+// 集群令牌交付」的 nodes UPDATE 只属于真正下发的快照（304 响应体为空，全部
+// 是纯浪费；清 registration_secret 语义见 cluster_sync.go 注册轮询侧注释）。
+func TestClusterService_Snapshot_304PathSkipsSigningPrework(t *testing.T) {
+	// Given：从节点已交付过一次（缓存与指纹就绪），节点表挂一条未消费的
+	// registration_secret（模拟新注册待确认）
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO nodes (name,mode,ip_address,cluster_token_hash,registration_secret,registration_secret_expires_at,is_approved,status)
+		VALUES ('s1','slave','10.0.0.2',?, 'pending-secret', datetime('now','+30 minutes'),1,'online')`, tokenHash("slave-token")); err != nil {
+		t.Fatal(err)
+	}
+	initial, _, err := service.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When：指纹与版本都未变 → 304 路径（携带令牌）
+	_, changed, err := service.Snapshot(context.Background(), initial.Version, initial.Fingerprint, "slave-token")
+
+	// Then：304 且未执行签名前置
+	if err != nil {
+		t.Fatalf("304 snapshot: %v", err)
+	}
+	if changed {
+		t.Fatal("unchanged fingerprint must 304")
+	}
+	var secret sql.NullString
+	if err := database.QueryRow(`SELECT registration_secret FROM nodes WHERE cluster_token_hash=?`, tokenHash("slave-token")).Scan(&secret); err != nil {
+		t.Fatal(err)
+	}
+	if !secret.Valid || secret.String != "pending-secret" {
+		t.Fatalf("registration_secret=%v, want 保留（304 路径不得执行交付前置 UPDATE）", secret)
+	}
+
+	// 交付语义保持：指纹失配 → changed → 签名并清除旧协议令牌
+	if _, changed, err = service.Snapshot(context.Background(), initial.Version, "", "slave-token"); err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("fingerprint mismatch must deliver full snapshot")
+	}
+	if err := database.QueryRow(`SELECT registration_secret FROM nodes WHERE cluster_token_hash=?`, tokenHash("slave-token")).Scan(&secret); err != nil {
+		t.Fatal(err)
+	}
+	if secret.Valid {
+		t.Fatalf("registration_secret=%v, want 交付签名快照后清除", secret)
+	}
+}
+
+// D2-S2：同步开关读取失败必须让快照构建报错——吞错会发布 nil 开关快照，
+// 从节点 computeSectionSkips 回退全开默认值，主节点 sync_users=0 等关闭
+// 保护在该份快照内被绕过且无自愈。 BOOLEAN 列驻留不可扫描文本（SQLite
+// 动态类型）即可只打断 readSyncSwitches 而不打断其余快照读取。
+func TestClusterService_Snapshot_syncSwitchesReadFailureErrors(t *testing.T) {
+	// Given
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec(`UPDATE global_config SET sync_waf_files='banana' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When：缓存路径（Snapshot）与绕过路径（apply 的 previous 备份）各自构建
+	_, _, snapshotErr := service.Snapshot(context.Background(), 0, "", "")
+	_, bypassErr := service.clusterSnapshotBypassingCache(context.Background())
+
+	// Then：两条路径都必须报错，不得发布快照
+	if snapshotErr == nil {
+		t.Fatal("Snapshot must error when sync switches cannot be read (not publish a snapshot with nil switches)")
+	}
+	if bypassErr == nil {
+		t.Fatal("clusterSnapshotBypassingCache must error when sync switches cannot be read")
 	}
 }

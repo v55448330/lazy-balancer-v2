@@ -55,6 +55,12 @@ func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientF
 		return models.ClusterSnapshot{}, false, err
 	}
 	snapshot.Fingerprint = fingerprint
+	if sinceVersion >= snapshot.Version && clientFingerprint != "" && clientFingerprint == snapshot.Fingerprint {
+		// D2-S1：304 响应体为空，canonical 拷贝、HMAC 签名与「确认旧协议集群
+		// 令牌交付」的 nodes UPDATE 都只属于真正下发的快照（与 cluster_sync.go
+		// 注册轮询侧的 confirm 交付语义同源），在 304 门之前执行纯属浪费。
+		return snapshot, false, nil
+	}
 	snapshot.CanonicalPayload = append(json.RawMessage(nil), canonical...)
 	if tokenKey != "" {
 		// The signature additionally binds the version, so a captured older
@@ -65,9 +71,6 @@ func (s *ClusterService) Snapshot(ctx context.Context, sinceVersion int, clientF
 		if _, err := s.db.ExecContext(ctx, "UPDATE nodes SET registration_secret=NULL, registration_secret_expires_at=NULL WHERE cluster_token_hash=? AND registration_secret IS NOT NULL", tokenHash(tokenKey)); err != nil {
 			return models.ClusterSnapshot{}, false, fmt.Errorf("确认旧协议集群令牌交付: %w", err)
 		}
-	}
-	if sinceVersion >= snapshot.Version && clientFingerprint != "" && clientFingerprint == snapshot.Fingerprint {
-		return snapshot, false, nil
 	}
 	return snapshot, true, nil
 }
@@ -108,10 +111,14 @@ func (s *ClusterService) cachedSnapshot(ctx context.Context) (models.ClusterSnap
 		return models.ClusterSnapshot{}, nil, "", err
 	}
 	now := s.snapshotNow()
-	switchesKey := ""
-	if sw, err := readSyncSwitches(s.db); err == nil {
-		switchesKey = fmt.Sprintf("%t%t%t%t%t", sw.GlobalConfig, sw.Users, sw.Rules, sw.WafFiles, sw.Security)
+	// D2-S2：开关读取失败必须报错——空缓存键 + nil 开关会把主节点 sync_users=0
+	// 等关闭保护在该份快照内绕过（从节点 computeSectionSkips 回退全开默认值），
+	// 且无自愈路径。无法确认权威开关状态时不得发布快照。
+	switches, err := readSyncSwitches(s.db)
+	if err != nil {
+		return models.ClusterSnapshot{}, nil, "", fmt.Errorf("读取同步开关: %w", err)
 	}
+	switchesKey := fmt.Sprintf("%t%t%t%t%t", switches.GlobalConfig, switches.Users, switches.Rules, switches.WafFiles, switches.Security)
 	if cache.initialized && cache.version == version && cache.ownership == ownershipHash && cache.switches == switchesKey && (cache.expiresAt.IsZero() || now.Before(cache.expiresAt)) {
 		return cache.snapshot, cache.canonical, cache.fingerprint, nil
 	}
@@ -156,11 +163,14 @@ func (s *ClusterService) buildFullSnapshot(ctx context.Context, store snapshotSt
 		return models.ClusterSnapshot{}, err
 	}
 	snapshot.WafFiles = BuildWafFileRef()
-	if switches, swErr := readSyncSwitches(s.db); swErr == nil {
-		snapshot.MasterSyncSwitches = &models.ClusterSyncSwitchesPayload{
-			GlobalConfig: switches.GlobalConfig, Users: switches.Users,
-			Rules: switches.Rules, WafFiles: switches.WafFiles, Security: switches.Security,
-		}
+	// D2-S2：与缓存键侧同口径——读不到权威开关时不得发布 nil 开关快照。
+	switches, err := readSyncSwitches(s.db)
+	if err != nil {
+		return models.ClusterSnapshot{}, fmt.Errorf("读取主节点同步开关: %w", err)
+	}
+	snapshot.MasterSyncSwitches = &models.ClusterSyncSwitchesPayload{
+		GlobalConfig: switches.GlobalConfig, Users: switches.Users,
+		Rules: switches.Rules, WafFiles: switches.WafFiles, Security: switches.Security,
 	}
 	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
 	snapshot.SchemaVersion = CurrentSnapshotSchema
@@ -342,6 +352,19 @@ func nearestSnapshotCertificateExpiry(certificates []models.ClusterCertificate, 
 		if nearest.IsZero() || rebuild.Before(nearest) {
 			return rebuild
 		}
+	}
+	// D2-F1：expires_at 列落在过去的证书（status<>'disabled' 且 pem 非空、叶
+	// 证书仍有效，但列值是续期回写失败/带外导入的过期残留）会把缓存失效点钉
+	// 在过去：now.Before(expiresAt) 恒 false → 每次快照都全量重建（X.509 解析
+	// +marshal+sha256 全程持缓存锁）。触发器救不了——cert_jobs 触发器成员条件
+	// 是 datetime(expires_at)>datetime('now')，过期的列值永不满足任一分支。
+	// 钳制到缺失窗口：重建节奏收敛到 30s 一档；真正的续期传播由 UPDATE 触发
+	// 器的 (old)OR(new) 分支覆盖——新证书写入未来 expires_at 必然递增
+	// cluster_version，版本缓存键先行失效。零值（纯手工证书清单，无任何
+	// 有效期凭证）不参与钳制：手工证书不按时间过期，变更由 lb_rules 触发器
+	// 的版本键覆盖，保持缓存不过期语义。
+	if !nearest.IsZero() && nearest.Before(now) {
+		return now.Add(snapshotCertMissingExpiryWindow)
 	}
 	return nearest
 }
@@ -549,6 +572,11 @@ func (s *ClusterService) dumpTableAsJSON(ctx context.Context, store snapshotStor
 		}
 		result = append(result, row)
 	}
+	// Close() 只回报关闭错误，迭代错误必须经 rows.Err() 观测——静默截断的节
+	// 会被签名+发布，从节点 DELETE+INSERT 放大为集群级静默删行。
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历 %s: %w", table, err)
+	}
 	data, err := json.Marshal(result)
 	if err != nil {
 		return nil, err
@@ -572,6 +600,10 @@ func (s *ClusterService) snapshotACME(ctx context.Context, store snapshotStore) 
 			return nil, fmt.Errorf("扫描快照 CA 提供商: %w", err)
 		}
 		state.CAProviders = append(state.CAProviders, provider)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("遍历快照 CA 提供商: %w", err)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, fmt.Errorf("关闭 CA 提供商结果: %w", err)
@@ -780,6 +812,10 @@ func (s *ClusterService) snapshotCertificates(ctx context.Context, store snapsho
 			return nil, fmt.Errorf("扫描快照证书: %w", err)
 		}
 		certs = append(certs, cert)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("遍历手工证书: %w", err)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, fmt.Errorf("关闭手工证书结果: %w", err)
