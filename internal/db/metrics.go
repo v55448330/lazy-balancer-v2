@@ -1,12 +1,52 @@
 package db
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
+
+var sqliteHeaderMagic = []byte("SQLite format 3\x00")
+
+// quarantineCorruptSQLiteFile 检查 path 指向的库文件：存在、非空、且前
+// 16 字节不是 SQLite 魔数（头部页被清零/覆写的损坏形态）时，连同可能
+// 残留的 -wal/-shm 伴生文件一并改名为 <path>.corrupt.<unix秒> 隔离，
+// 返回隔离后的主文件路径；空文件（待建库）与头部有效的库原样保留。
+func quarantineCorruptSQLiteFile(path string) (string, error) {
+	header := make([]byte, len(sqliteHeaderMagic))
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	n, readErr := io.ReadFull(f, header)
+	closeErr := f.Close()
+	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		return "", errors.Join(readErr, closeErr)
+	}
+	if n == 0 || (n == len(sqliteHeaderMagic) && bytes.Equal(header, sqliteHeaderMagic)) {
+		return "", nil
+	}
+	quarantined := fmt.Sprintf("%s.corrupt.%d", path, time.Now().Unix())
+	if err := os.Rename(path, quarantined); err != nil {
+		return "", fmt.Errorf("quarantine corrupted database file: %w", err)
+	}
+	for _, companion := range []string{path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(companion); err == nil {
+			_ = os.Rename(companion, companion+".corrupt."+fmt.Sprintf("%d", time.Now().Unix()))
+		}
+	}
+	return quarantined, nil
+}
 
 func InitializeMetricsDB(dataDir string) (err error) {
 	dbPath := filepath.Join(dataDir, "lazy-balancer-metrics.db")
@@ -16,10 +56,32 @@ func InitializeMetricsDB(dataDir string) (err error) {
 	if err := prepareSQLiteDatabase(dbPath); err != nil {
 		return fmt.Errorf("failed to secure metrics database: %w", err)
 	}
+	// 损坏自愈（生产事故：宿主丢写致页 1 清零 → Ping NOTADB → 启动崩循环
+	// 27 分钟无自愈）。metrics 库是可丢弃遥测：两段防线——①头部魔数检查
+	// （零页 1 形态）；②Ping 报损坏类错误（not a database / malformed，
+	// 覆盖魔数完好但页 1 内容损坏的形态）时隔离重试一次。瞬态错误（锁/
+	// IO）与重试后再失败均响亮失败。主库/审计库承载不可再生数据，不走
+	// 此路径。
+	if quarantined, qerr := quarantineCorruptSQLiteFile(dbPath); qerr != nil {
+		return fmt.Errorf("failed to inspect metrics database file: %w", qerr)
+	} else if quarantined != "" {
+		log.Printf("CRITICAL: metrics database file corrupted (bad SQLite header); quarantined as %s and recreated — metrics history reset", filepath.Base(quarantined))
+	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(30000)&_pragma=synchronous(NORMAL)")
+	db, err := openAndPingMetricsDB(dbPath)
 	if err != nil {
-		return fmt.Errorf("failed to open metrics database: %w", err)
+		if !isCorruptionError(err) {
+			return err
+		}
+		quarantined, qerr := quarantineMetricsFileUnconditionally(dbPath)
+		if qerr != nil {
+			return errors.Join(err, qerr)
+		}
+		log.Printf("CRITICAL: metrics database failed integrity check on open (%v); quarantined as %s and recreated — metrics history reset", err, filepath.Base(quarantined))
+		db, err = openAndPingMetricsDB(dbPath)
+		if err != nil {
+			return err
+		}
 	}
 	defer func() {
 		if err != nil {
@@ -27,16 +89,71 @@ func InitializeMetricsDB(dataDir string) (err error) {
 		}
 	}()
 
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(2)
-	db.SetConnMaxLifetime(30 * time.Minute)
+	if err := initMetricsSchema(db); err != nil {
+		return err
+	}
+	if err := secureSQLiteArtifacts(dbPath); err != nil {
+		return fmt.Errorf("failed to secure metrics database artifacts: %w", err)
+	}
 
+	MetricsDB = db
+	return nil
+}
+
+// isCorruptionError 区分损坏类错误（值得隔离重建）与瞬态错误（锁/IO，
+// 隔离只会白白丢弃好数据）。glebarez/modernc 驱动把 SQLite 扩展错误码
+// 拼进错误串（如 "file is not a database (26)"）。
+func isCorruptionError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "not a database") || strings.Contains(msg, "malformed")
+}
+
+// quarantineMetricsFileUnconditionally 无条件隔离现存非空库文件及其
+// -wal/-shm 伴生文件（Ping 已判损坏，无需再做头部检查）。
+func quarantineMetricsFileUnconditionally(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.Size() == 0 {
+		return "", nil
+	}
+	quarantined := fmt.Sprintf("%s.corrupt.%d", path, time.Now().Unix())
+	if err := os.Rename(path, quarantined); err != nil {
+		return "", fmt.Errorf("quarantine corrupted database file: %w", err)
+	}
+	for _, companion := range []string{path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(companion); err == nil {
+			_ = os.Rename(companion, fmt.Sprintf("%s.corrupt.%d", companion, time.Now().Unix()))
+		}
+	}
+	return quarantined, nil
+}
+
+func openAndPingMetricsDB(dbPath string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(30000)&_pragma=synchronous(NORMAL)")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open metrics database: %w", err)
+	}
+	// MaxIdle == MaxOpen：空闲连接永不驱逐，避免安静期（30s 指标 tick 间）
+	// 池收缩到 0 触发「最后一个连接关闭 → checkpoint + 删除 -wal」突发，
+	// 下一个 tick 再重建 WAL——该 checkpoint 风暴是页回写暴露于宿主丢写
+	// 窗口的放大器。生命周期过期逐连接轮换，5 条常驻下永不触达 last-close。
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(30 * time.Minute)
 	if err := db.Ping(); err != nil {
-		return fmt.Errorf("failed to ping metrics database: %w", err)
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to ping metrics database: %w", err)
 	}
 	if err := applySQLiteRuntimePragmas(db); err != nil {
-		return fmt.Errorf("failed to apply metrics database pragmas: %w", err)
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to apply metrics database pragmas: %w", err)
 	}
+	return db, nil
+}
+
+func initMetricsSchema(db *sql.DB) error {
 
 	schema := `
 	CREATE TABLE IF NOT EXISTS metrics_history (
@@ -95,11 +212,6 @@ func InitializeMetricsDB(dataDir string) (err error) {
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_security_events_transaction ON security_events(transaction_id) WHERE transaction_id != ''`); err != nil {
 		return fmt.Errorf("failed to create security_events transaction index: %w", err)
 	}
-	if err := secureSQLiteArtifacts(dbPath); err != nil {
-		return fmt.Errorf("failed to secure metrics database artifacts: %w", err)
-	}
-
-	MetricsDB = db
 	return nil
 }
 

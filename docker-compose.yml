@@ -3,6 +3,11 @@ services:
   # 本地开发迭代时执行：docker compose build lazy-balancer && docker compose up -d
   lazy-balancer:
     image: v55448330/lazy-balancer-v2:v2.2.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     build:
       context: .
       args:
@@ -25,6 +30,11 @@ services:
   # 主节点地址注册时填写: http://host.docker.internal:8000
   lazy-balancer-slave:
     image: v55448330/lazy-balancer-v2:v2.2.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     container_name: lazy-balancer-slave
     ports:
       - "8001:8000"
