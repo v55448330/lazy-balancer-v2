@@ -109,7 +109,7 @@ func rotateAuditLogIfNeeded() {
 	// 覆盖（事件尚存），待下次轮转重试，避免补采失败导致窗口事件永久丢失。
 	if pending := securityEventsReadPendingDelta(); pending != nil {
 		if _, err := os.Stat(pending.Path); os.IsNotExist(err) {
-			log.Printf("audit log rotation: pending delta archive %s missing, dropping marker", pending.Path)
+			Logf("warn", "audit log rotation: pending delta archive %s missing, dropping marker", pending.Path)
 			_ = os.Remove(securityEventsPendingDeltaPath())
 		} else if err := securityEventsIngestDeltaFrom(pending.Path, pending.Offset, true); err != nil {
 			throttledAuditFailureLogf("audit log rotation: pending delta ingest retry failed (rotation deferred): %v", err)
