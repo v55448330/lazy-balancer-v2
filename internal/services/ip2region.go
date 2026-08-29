@@ -531,12 +531,43 @@ func regionTreeFromXDB(path string) *IP2RegionRegionTree {
 
 // GetIP2RegionRegionTree 返回地域树：live 扫描优先，文件缓存兜底（与省份
 // 列表同口径——searcher 加载失败时 UI 仍能展示上次成功的树）。
+// N+13 H2-F2：live 扫描按 xdb 的 (path,size,mtime) 记忆化——安全策略页
+// 每次打开都调本函数，原实现每次全量扫描 ~220ms（553K+58K preads）。stat
+// 键未变即返回上次扫描结果；带外替换 xdb 改变 stat 键、触发重扫，保留
+// 替换可见性（regions.json 缓存无法做到这一点，故不直接改用它）。扫描
+// 失败（文件损坏/替换中）不记忆化，回退文件缓存，与原语义一致。
 func GetIP2RegionRegionTree() *IP2RegionRegionTree {
-	if tree := regionTreeFromXDB(ip2regionLivePath); tree != nil {
+	fi, err := os.Stat(ip2regionLivePath)
+	if err != nil {
+		return getCachedRegionTree()
+	}
+	key := ip2regionLivePath + "|" + fmt.Sprintf("%d:%d", fi.Size(), fi.ModTime().UnixNano())
+	regionTreeMemoMu.Lock()
+	if regionTreeMemo != nil && regionTreeMemoKey == key {
+		tree := regionTreeMemo
+		regionTreeMemoMu.Unlock()
 		return tree
 	}
-	return getCachedRegionTree()
+	regionTreeMemoMu.Unlock()
+	tree := regionTreeFromXDB(ip2regionLivePath)
+	if tree == nil {
+		return getCachedRegionTree()
+	}
+	regionTreeMemoMu.Lock()
+	regionTreeMemo, regionTreeMemoKey = tree, key
+	regionTreeMemoMu.Unlock()
+	return tree
 }
+
+// regionTreeMemo* 是 GetIP2RegionRegionTree 的记忆化状态：树指针 + 生成
+// 它的 xdb stat 键。并发冷调用可能各扫一次（良性的一次性重复劳动），
+// 记忆化值对确定性的文件状态是确定的，正确性不受影响。键含 path 以防
+// 测试/多实例切换 ip2regionLivePath 后命中同 size+mtime 的陈旧树。
+var (
+	regionTreeMemoMu  sync.Mutex
+	regionTreeMemo    *IP2RegionRegionTree
+	regionTreeMemoKey string
+)
 
 func getCachedRegionTree() *IP2RegionRegionTree {
 	data, err := os.ReadFile(ip2RegionLivePathForTreeCache())

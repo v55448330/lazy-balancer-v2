@@ -307,11 +307,14 @@ func TestImportConfigBackup_normalizes_null_boolean_rows(t *testing.T) {
 // 集群快照 dump 侧（cluster_snapshot.go:420/428/449）已全量 COALESCE 硬化——两条
 // 「全量替换」通道容忍度背离。导入必须成功（无 400/500），且落库值为 dump 侧对齐
 // 默认值而非 NULL；NULL 布尔列（enabled/is_default）落 schema/dump 默认而非布尔强转。
+// N+13 H2-F3 起 content NULL/空行被 skipEmptyBlockPages 软跳过（不再落库），
+// content 归一断言相应改为非空内容原样落库。
 func TestImportConfigBackup_normalizes_null_security_rows(t *testing.T) {
-	// Given：三张安全表各携带一行 NULL 毒化可空列
+	// Given：三张安全表各携带一行 NULL 毒化可空列（content 给非空值以越过
+	// 空内容软跳过门，保留 description/is_default NULL 归一覆盖）
 	h := newBackupTestHandlers(t)
 	backup := completeBackupJSON(t, map[string][]map[string]any{
-		"security_block_pages": {{"id": 2, "name": "null-poison-page", "description": nil, "content": nil, "is_default": nil}},
+		"security_block_pages": {{"id": 2, "name": "null-poison-page", "description": nil, "content": "<html>poison</html>", "is_default": nil}},
 		"security_custom_rules": {{"id": 1, "name": "null-poison-rule",
 			"conditions":  `[{"target":"uri","operator":"contains","pattern":"/nullpoison"}]`,
 			"description": nil, "action": nil, "score": nil, "enabled": nil}},
@@ -326,8 +329,9 @@ func TestImportConfigBackup_normalizes_null_security_rows(t *testing.T) {
 	// When
 	router.ServeHTTP(response, request)
 
-	// Then：导入成功，三表落库值均为 dump 侧对齐默认值（'' content、'block' action、
-	// 5 score、1 enabled、'' description、'[]' custom_rules、0 is_default），而非 NULL
+	// Then：导入成功，三表落库值均为 dump 侧对齐默认值（非空 content 原样、
+	// 'block' action、5 score、1 enabled、'' description、'[]' custom_rules、
+	// 0 is_default），而非 NULL
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
@@ -336,7 +340,7 @@ func TestImportConfigBackup_normalizes_null_security_rows(t *testing.T) {
 	if err := db.DB.QueryRow("SELECT content, description, is_default FROM security_block_pages WHERE id=2").Scan(&pageContent, &pageDesc, &pageDefault); err != nil {
 		t.Fatalf("read restored block page: %v", err)
 	}
-	if pageContent != "" || pageDesc != "" || pageDefault != 0 {
+	if pageContent != "<html>poison</html>" || pageDesc != "" || pageDefault != 0 {
 		t.Fatalf("block page=(content:%q desc:%q is_default:%d), want ('' '' 0)", pageContent, pageDesc, pageDefault)
 	}
 	var ruleAction, ruleDesc string
@@ -353,6 +357,109 @@ func TestImportConfigBackup_normalizes_null_security_rows(t *testing.T) {
 	}
 	if policyDesc != "" || policyCustomRules != "[]" {
 		t.Fatalf("policy=(description:%q custom_rules:%q), want ('' '[]')", policyDesc, policyCustomRules)
+	}
+}
+
+// N+13 H2-F3：空内容拦截页行软跳过——手造备份 content:""/纯空白 落库后，
+// 引用该页的 WAF/GeoIP/限流拦截渲染空响应体，静默退化为 Caddy 原生 403。
+// 校验期按 skipEmptyDomainHTTPRules 同款口径跳过该行并告警，其余行正常导入。
+func TestImportConfigBackup_skips_empty_content_block_pages(t *testing.T) {
+	// Given：两行空内容拦截页 + 一行正常页 + 一行无关表数据
+	h := newBackupTestHandlers(t)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"security_block_pages": {
+			{"id": 2, "name": "empty-page", "content": "", "is_default": 0},
+			{"id": 3, "name": "blank-page", "content": "   ", "is_default": 0},
+			{"id": 4, "name": "good-page", "content": "<html>blocked</html>", "is_default": 0},
+		},
+		"security_custom_rules": {
+			{"id": 9, "name": "other-row", "conditions": `[{"target":"uri","operator":"contains","pattern":"/x"}]`, "enabled": 1},
+		},
+	})
+	router := gin.New()
+	router.POST("/config/import", h.ImportConfigBackup)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	// Then：导入成功，空内容页跳过、正常页与无关行落库，警告点名跳过行
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var keptContent string
+	if err := db.DB.QueryRow("SELECT content FROM security_block_pages WHERE id=4").Scan(&keptContent); err != nil {
+		t.Fatalf("read kept block page: %v", err)
+	}
+	if keptContent != "<html>blocked</html>" {
+		t.Fatalf("kept page content=%q, want fixture content", keptContent)
+	}
+	var skippedCount int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_block_pages WHERE id IN (2,3)").Scan(&skippedCount); err != nil {
+		t.Fatalf("count skipped pages: %v", err)
+	}
+	if skippedCount != 0 {
+		t.Fatalf("empty-content pages imported: %d rows, want 0", skippedCount)
+	}
+	var otherRows int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_custom_rules WHERE id=9").Scan(&otherRows); err != nil {
+		t.Fatalf("count unrelated rows: %v", err)
+	}
+	if otherRows != 1 {
+		t.Fatal("unrelated rows must still be imported")
+	}
+	var envelope struct {
+		Data struct {
+			Warnings []string `json:"warnings"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	joined := strings.Join(envelope.Data.Warnings, "；")
+	if !strings.Contains(joined, "empty-page") || !strings.Contains(joined, "blank-page") {
+		t.Fatalf("warnings=%v, want skips for empty-page and blank-page", envelope.Data.Warnings)
+	}
+}
+
+// N+13 H2-F3：预览端与导入端同序软跳过——空内容拦截页在预览即告警，
+// summary 计数反映跳后行集，不得预览静默、导入才跳。
+func TestValidateConfigImport_reports_empty_content_block_page_skips(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	backup := completeBackupJSON(t, map[string][]map[string]any{
+		"security_block_pages": {
+			{"id": 2, "name": "empty-page", "content": "", "is_default": 0},
+			{"id": 4, "name": "good-page", "content": "<html>blocked</html>", "is_default": 0},
+		},
+	})
+	router := gin.New()
+	router.POST("/config/validate", h.ValidateConfigImport)
+	request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	// Then
+	var envelope struct {
+		Data importValidateResponse `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !envelope.Data.Valid {
+		t.Fatalf("valid=%v error=%q, want valid backup", envelope.Data.Valid, envelope.Data.Error)
+	}
+	if len(envelope.Data.Warnings) == 0 || !strings.Contains(strings.Join(envelope.Data.Warnings, "；"), "empty-page") {
+		t.Fatalf("warnings=%v, want empty-page skip warning", envelope.Data.Warnings)
+	}
+	if got := envelope.Data.Summary["security_block_pages"]; got != 1 {
+		t.Fatalf("summary[security_block_pages]=%d, want 1（跳后行集）", got)
 	}
 }
 

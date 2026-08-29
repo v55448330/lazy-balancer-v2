@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -242,4 +243,63 @@ func Test_GetSetIP2RegionVersion_roundtrip(t *testing.T) {
 	if got := GetIP2RegionVersion(); got != "2026-08-12" {
 		t.Fatalf("stored version=%q, want 2026-08-12", got)
 	}
+}
+
+// N+13 H2-F2：GetIP2RegionRegionTree 按 xdb stat 键记忆化——稳态调用返回
+// 同一树（免 ~220ms 全量扫描），stat 键变化（带外替换/触摸）触发重扫。
+func Test_GetIP2RegionRegionTree_memoizes_until_xdb_stat_changes(t *testing.T) {
+	// Given：双段 fixture xdb（单段会使 header Start/End 指针相等、树扫描
+	// 判空返回 nil），记忆化状态清零（隔离前序测试）
+	dir := t.TempDir()
+	live := filepath.Join(dir, "ip2region.xdb")
+	writeTestXDB(t, live, []xdbSegment{
+		{startIP: 0x01020300, endIP: 0x010203FF, region: "中国|广东省|深圳市|0|CN"},
+		{startIP: 0x01020400, endIP: 0x010204FF, region: "中国|福建省|厦门市|0|CN"},
+	})
+	withIP2RegionPaths(t, live, filepath.Join(dir, "missing-dist.xdb"))
+	resetRegionTreeMemoForTest(t)
+
+	first := GetIP2RegionRegionTree()
+	if first == nil {
+		t.Fatal("scan returned nil for valid fixture xdb")
+	}
+
+	// When / Then：稳态第二次调用命中记忆化（同一树指针，零重扫）
+	if second := GetIP2RegionRegionTree(); second != first {
+		t.Fatal("steady-state call must return memoized tree (same pointer)")
+	}
+
+	// When：带外替换可见性——stat 键变化（mtime 前拨 2s）后再次调用
+	fi, err := os.Stat(live)
+	if err != nil {
+		t.Fatalf("stat fixture xdb: %v", err)
+	}
+	touched := fi.ModTime().Add(2 * time.Second)
+	if err := os.Chtimes(live, touched, touched); err != nil {
+		t.Fatalf("touch fixture xdb: %v", err)
+	}
+	third := GetIP2RegionRegionTree()
+
+	// Then：重扫产出新树，且重扫后稳态再次命中记忆化
+	if third == first {
+		t.Fatal("xdb stat change (mtime) must trigger rescan, got stale memoized tree")
+	}
+	if third == nil || len(third.Provinces) == 0 {
+		t.Fatal("rescan after stat change returned no tree")
+	}
+	if fourth := GetIP2RegionRegionTree(); fourth != third {
+		t.Fatal("post-rescan steady state must hit memo again")
+	}
+}
+
+func resetRegionTreeMemoForTest(t *testing.T) {
+	t.Helper()
+	regionTreeMemoMu.Lock()
+	regionTreeMemo, regionTreeMemoKey = nil, ""
+	regionTreeMemoMu.Unlock()
+	t.Cleanup(func() {
+		regionTreeMemoMu.Lock()
+		regionTreeMemo, regionTreeMemoKey = nil, ""
+		regionTreeMemoMu.Unlock()
+	})
 }

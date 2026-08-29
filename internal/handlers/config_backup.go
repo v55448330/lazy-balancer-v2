@@ -1362,6 +1362,39 @@ func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) []string {
 	return warnings
 }
 
+// skipEmptyBlockPages 移除 content 为空/纯空白（含缺省与 NULL）的
+// security_block_pages 行，返回跳过警告（N+13 H2-F3，与
+// skipEmptyDomainHTTPRules 同款软跳过口径）：手造备份 content:"" 原样
+// 落库后，引用该页的 WAF/GeoIP/限流拦截渲染空响应体，静默退化为 Caddy
+// 原生 403。被跳过页面的悬挂 block_page_id 引用沿用 R58 B-N3 口径
+// （运行时 JOIN 语义，悬挂不产出规则）；全表跳空时默认页由导入事务内
+// 重播种 + SeedDefaultBlockPage 渲染兜底（R41 B3）。
+func skipEmptyBlockPages(tables map[string][]map[string]any) []string {
+	rows, exists := tables["security_block_pages"]
+	if !exists {
+		return nil
+	}
+	warnings := []string{}
+	kept := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		content, _ := row["content"].(string)
+		if strings.TrimSpace(content) != "" {
+			kept = append(kept, row)
+			continue
+		}
+		name, _ := row["name"].(string)
+		if name == "" {
+			name = fmt.Sprintf("#%v", row["id"])
+		}
+		warnings = append(warnings, fmt.Sprintf("拦截页面 %s 的内容为空，已跳过导入", name))
+	}
+	if len(warnings) == 0 {
+		return nil
+	}
+	tables["security_block_pages"] = kept
+	return warnings
+}
+
 func disableV2RuleConflicts(rows []map[string]any) []disabledRuleConflict {
 	candidates := make([]ruleConflictCandidate, len(rows))
 	for index, row := range rows {
@@ -1510,6 +1543,9 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	// 空域名+非法端口行会先行整包 400，与「空域名规则一律软跳过」语义不符；
 	// 校验和/结构校验已在 validateV2Backup 内完成，不受跳过影响。
 	skipWarnings := skipEmptyDomainHTTPRules(backup.Tables)
+	// N+13 H2-F3：空内容拦截页同款软跳过（校验和已在 validateV2Backup 内
+	// 验证完毕，跳过不影响完整性；预览端 ValidateConfigImport 同序）。
+	skipWarnings = append(skipWarnings, skipEmptyBlockPages(backup.Tables)...)
 	if err := validateBackupRuleReferences(backup.Tables); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
@@ -1829,7 +1865,8 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	}
 	auditParts = append(auditParts, certNumericClamped...)
 	if len(skipWarnings) > 0 {
-		auditParts = append(auditParts, "空域名规则跳过："+strings.Join(skipWarnings, "；"))
+		// N+13 H2-F3：列表现含空域名规则与空内容拦截页两类跳过，标签泛化。
+		auditParts = append(auditParts, "跳过警告："+strings.Join(skipWarnings, "；"))
 	}
 	if len(disabledConflicts) > 0 {
 		auditParts = append(auditParts, "冲突置为禁用："+formatDisabledRuleConflicts(disabledConflicts))

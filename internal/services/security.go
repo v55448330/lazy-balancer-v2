@@ -629,18 +629,19 @@ func ValidateGeoIPCountries(raw string) error {
 	// 省份」400 拒绝（约 1/6 省份可用性受损）。校验器 known 集改用全扫描树
 	// 省份（regionTreeFromXDB 的 Provinces，已含「海外」），与 UI 严格一致。
 	known := make(map[string]bool, 36)
+	knownCities := map[string]map[string]bool{}
 	// 树为 nil（无 xdb 且无缓存兜底）时 known 仅含「海外」——非海外条目由
 	// N5 门（live 未装载）先行拒绝，不会走到这里；空条目则允许通过。
-	if treeForKnown := GetIP2RegionRegionTree(); treeForKnown != nil {
-		for _, p := range treeForKnown.Provinces {
+	// N+13 H2-F1：单次取树复用 known 集与城市集两处——原实现两次背靠背
+	// GetIP2RegionRegionTree 各做一次 xdb 全量扫描（~220ms×2）；两次调用间
+	// 无任何状态变更（仅纯 map 构建），单次快照语义等价。
+	tree := GetIP2RegionRegionTree()
+	if tree != nil {
+		for _, p := range tree.Provinces {
 			known[p] = true
 		}
-	}
-	// R72 二十三次：城市树供「省/市」条目校验（市必须在省的城市集内——防
-	// 拼写错误生成 CEL 恒假死条目）。
-	tree := GetIP2RegionRegionTree()
-	knownCities := map[string]map[string]bool{}
-	if tree != nil {
+		// R72 二十三次：城市树供「省/市」条目校验（市必须在省的城市集内——防
+		// 拼写错误生成 CEL 恒假死条目）。
 		for prov, cities := range tree.Cities {
 			set := make(map[string]bool, len(cities))
 			for _, city := range cities {

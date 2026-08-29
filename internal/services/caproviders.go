@@ -30,6 +30,10 @@ const (
 // zerosslEABURL 是包级变量以便测试注入伪 ZeroSSL 端点。
 var zerosslEABURL = "https://api.zerossl.com/acme/eab-credentials-email"
 
+// zerosslEABProvisionTimeout 是 CA 测试路径 EAB 自动获取的超时上界（N+13
+// H3-S），包级变量以便测试注入缩短时限。
+var zerosslEABProvisionTimeout = 10 * time.Second
+
 type caProviderScanner interface {
 	Scan(...any) error
 }
@@ -396,8 +400,14 @@ func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id in
 
 	if p.Provider == ProviderZeroSSL {
 		log.Printf("TestCAProvider: ensuring ZeroSSL EAB for provider %d", id)
-		if err := AutoProvisionZeroSSLEAB(ctx, &p); err != nil {
-			return &CAProviderTestError{Phase: "config", Err: fmt.Errorf("ZeroSSL EAB 自动获取失败: %w", err)}
+		// N+13 H3-S：EAB 自动获取与 RegisterAccount 同界 10s——原实现先无界
+		// 调用 AutoProvisionZeroSSLEAB、超时只裹其后的注册，ZeroSSL EAB API
+		// 挂起时 CA 测试页无限阻塞。
+		eabCtx, eabCancel := context.WithTimeout(ctx, zerosslEABProvisionTimeout)
+		eabErr := AutoProvisionZeroSSLEAB(eabCtx, &p)
+		eabCancel()
+		if eabErr != nil {
+			return &CAProviderTestError{Phase: "config", Err: fmt.Errorf("ZeroSSL EAB 自动获取失败: %w", eabErr)}
 		}
 	}
 
