@@ -56,18 +56,20 @@ func InitIP2Region() {
 	swapIP2RegionSearcher(searcher)
 	ip2regionMu.Unlock()
 
-	// 版本同步：xdb 文件存在但 DB 版本仍为种子值 'unknown' 时（首次部署/
-	// 重建数据库后 xdb 文件保留），从 .version 伴生文件读取实际版本并写回
-	// DB。否则总览/规则集页显示 version=unknown + status=已最新 的矛盾态。
+	// 版本同步：xdb 文件存在但 DB 版本仍为种子值 'unknown' 时，从 .version
+	// 伴生文件读取实际版本写回 DB；伴生文件缺失（清理/手工删除后仅 xdb 残留）
+	// 则写 'bundled' 标记为镜像内置版本——消除 unknown+已最新 矛盾态。
 	// db.DB nil 守卫：单元测试可能不初始化数据库直接调 InitIP2Region。
 	if db.DB != nil {
 		if current := GetIP2RegionVersion(); current == "" || current == "unknown" {
-			if tag, err := os.ReadFile(ip2regionLivePath + ".version"); err == nil {
-				if v := sanitizeBundleVersion(strings.TrimSpace(string(tag))); v != "" {
-					SetIP2RegionVersion(v)
-					log.Printf("ip2region: DB 版本种子值已从 .version 伴生文件同步为 %s", v)
+			tag := "bundled"
+			if raw, err := os.ReadFile(ip2regionLivePath + ".version"); err == nil {
+				if v := sanitizeBundleVersion(strings.TrimSpace(string(raw))); v != "" {
+					tag = v
 				}
 			}
+			SetIP2RegionVersion(tag)
+			log.Printf("ip2region: DB 版本种子值已同步为 %s", tag)
 		}
 	}
 

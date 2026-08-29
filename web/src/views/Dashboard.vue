@@ -281,7 +281,7 @@
             <!-- R72 二十八次宽度二调（用户实测 458/230 失调）：min-width 弹性列按
                  值比例分配剩余空间（260:130 把 2/3 剩余给了状态码列）——改固定 width
                  才能精确控制比例；名称列取 280（内容列），右端空白由表格自然留白。 -->
-            <el-table-column prop="name" label="规则名称" width="280">
+            <el-table-column prop="name" label="规则名称" min-width="280">
               <template #default="{ row }">
                 <!-- R72 二十八次：长规则名省略号 + 悬浮全文（列宽 100→130 用户反馈调整）。 -->
                 <!-- R72 二十八次审计 F1：省略号样式必须放在 slot 内层 span——el-link 根是
