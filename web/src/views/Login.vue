@@ -42,9 +42,9 @@
               :placeholder="mfaUseRecovery ? '请输入恢复代码' : '请输入 6 位验证码'"
               size="large"
               :prefix-icon="Key"
-              :maxlength="mfaUseRecovery ? 16 : 6"
+              :maxlength="mfaUseRecovery ? 200 : 6"
               autofocus
-              @input="mfaCode = mfaCode.replace(/\s/g, '')"
+              @input="mfaCode = mfaUseRecovery ? normalizeMfaCodeInput(mfaCode) : mfaCode.replace(/\s/g, '')"
             />
           </el-form-item>
           <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="login-error" />
@@ -111,7 +111,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import { ApiRequestError, request } from '@/utils/api'
+import { ApiRequestError, normalizeMfaCodeInput, request } from '@/utils/api'
 import { User, Lock, Postcard, Key } from '@element-plus/icons-vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, appVersion } from '@/utils/branding'
@@ -200,7 +200,9 @@ const handleMfaVerify = async () => {
   error.value = ''
   loading.value = true
   try {
-    await authStore.verifyMfaLogin(mfaToken.value, mfaCode.value)
+    // B6-S1：与 step-up/管理员重置同口径——归一化后仅提交首个 token，
+    // 兼容整段粘贴恢复代码块（@input 已在恢复模式归一化，此处兜底）。
+    await authStore.verifyMfaLogin(mfaToken.value, normalizeMfaCodeInput(mfaCode.value))
   } catch (caught: unknown) {
     error.value = errorMessage(caught, '验证失败，请重试')
   } finally {

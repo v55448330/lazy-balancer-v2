@@ -108,7 +108,7 @@ export const mfaAwareSuccess = (message: string): void => {
 // 用户上报缺陷（step-up 粘贴恢复代码被拒）：恢复代码「复制」按钮把全部 10 条码
 // 以换行拼接写入剪贴板（Users.vue copyMfaRecovery），整段粘贴（或码被空白填充）
 // 时 inputPattern /^.{6,16}$/ 对原始串必败。后端 MFAVerifyCode 本就支持恢复代码
-// （登录路径 Login.vue 的 el-input 以 maxlength 16 + trim 对齐），step-up 弹码与
+// （登录路径 Login.vue 亦以 normalizeMfaCodeInput 归一化提交），step-up 弹码与
 // 管理员重置弹码同口径：先归一化（trim → 按任意空白切分 → 取首个 token），再按
 // 6-16 位既有长度契约校验（不收紧字符集），resolve 归一化后的首 token。
 export const normalizeMfaCodeInput = (raw: string): string => raw.trim().split(/\s+/)[0] ?? ''
