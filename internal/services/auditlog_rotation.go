@@ -358,13 +358,34 @@ func securityEventsReadPendingDelta() *securityEventsPendingDelta {
 	return &p
 }
 
+// auditLogSizeCacheTTL 是轮转阈值的缓存窗口（N+11 D3-F5b）：2s 轮转 tick 在
+// 日志非空时此前每轮都查主库取阈值，稳态每 2s 一条主库查询。阈值是管理端偶尔
+// 修改的常量，60s 生效延迟对按大小轮转无实际影响；缓存后稳态每 tick 仅一次
+// stat、零 DB 查询。主库读失败不缓存：回退 10MB 当轮生效、下一 tick 重试，
+// 不把瞬时故障的回退值钉死整个窗口。
+const auditLogSizeCacheTTL = 60 * time.Second
+
+var (
+	auditLogSizeCacheMu sync.Mutex
+	auditLogSizeCache   int64
+	auditLogSizeCacheAt time.Time
+)
+
 func getAuditLogSizeBytes() int64 {
+	auditLogSizeCacheMu.Lock()
+	defer auditLogSizeCacheMu.Unlock()
+	if auditLogSizeCache > 0 && time.Since(auditLogSizeCacheAt) < auditLogSizeCacheTTL {
+		return auditLogSizeCache
+	}
 	var sizeMB int
 	if err := db.DB.QueryRow("SELECT COALESCE(audit_log_size_mb, 10) FROM global_config WHERE id = 1").Scan(&sizeMB); err != nil {
 		sizeMB = 10
+		return int64(sizeMB) * 1024 * 1024
 	}
 	if sizeMB <= 0 {
 		sizeMB = 10
 	}
-	return int64(sizeMB) * 1024 * 1024
+	auditLogSizeCache = int64(sizeMB) * 1024 * 1024
+	auditLogSizeCacheAt = time.Now()
+	return auditLogSizeCache
 }

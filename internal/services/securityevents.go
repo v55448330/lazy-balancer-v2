@@ -405,9 +405,25 @@ const securityEventsScanWindowLimit = 4 << 20
 // securityEventsFindNextDocument scans forward from `from` for the next `{`
 // at column 0, which in the pretty-printed multi-line format marks the start
 // of the next top-level transaction. found=false when none exists yet.
+// N+11 D3-F2: the scan buffer is sized min(scanLimit, size-from) via f.Stat
+// — a small residual tail (post hard-kill) previously allocated the full 4MB
+// window on every 2s tick decode error (~2MB/s sustained churn). The caller's
+// malformed-region decision uses the scanLimit constant, not the buffer size,
+// so decisions are unchanged.
 func securityEventsFindNextDocument(f *os.File, from int64) (int64, bool, error) {
 	const scanLimit = securityEventsScanWindowLimit
-	buf := make([]byte, scanLimit)
+	info, err := f.Stat()
+	if err != nil {
+		return 0, false, err
+	}
+	remaining := info.Size() - from
+	if remaining <= 0 {
+		return 0, false, nil
+	}
+	if remaining > scanLimit {
+		remaining = scanLimit
+	}
+	buf := make([]byte, remaining)
 	n, err := f.ReadAt(buf, from)
 	if n > 0 {
 		if idx := bytes.Index(buf[:n], []byte("\n{")); idx >= 0 {
@@ -468,6 +484,10 @@ type securityEventsTailer struct {
 	logPath    string
 	offsetPath string
 	lastInfo   os.FileInfo
+	// lastPassClean 标记上一次 pass 是否无错误结束（N+11 D3-F5a 空闲 tick 判定
+	// 用）：失败 pass（F1 停摆、DB 错误）的下一 tick 必须重跑——停摆限流告警与
+	// DB 重试都依赖 2s 周期持续转动，不得被空闲跳过吞掉。
+	lastPassClean bool
 	// archivePass 标记归档补采（.1 补采 / pending 重试）：归档大小有界且不再增长，
 	// 遇到 ≥4MB 畸形区时改为有界 scan-to-EOF 恢复，而不是 F1 报错（见
 	// securityEventsProcessPass）。
@@ -510,6 +530,16 @@ func (t *securityEventsTailer) securityEventsTick() error {
 		if err := securityEventsWriteOffset(t.offsetPath, 0); err != nil {
 			return fmt.Errorf("security events: persist reset offset: %w", err)
 		}
+	} else if t.lastPassClean && t.lastInfo != nil && info.Size() == t.lastInfo.Size() {
+		// N+11 D3-F5a：空闲 tick 提前返回——与上一 tick 相比无新增字节且上次
+		// pass 干净结束。按上一 tick 的 size 而非 offset 判定：Coraza pretty
+		// 格式文件尾恒有 "\n"，稳态 offset = size-1，与 offset 比较永不成立。
+		// 跳过省去每 2s 一次的映射加载（3 条主库查询 + 逐行 IDNA）与文件
+		// open/seek/残空白解码。lastInfo 照常更新，下一 tick 的截断/轮转判定
+		// （size<offset / os.SameFile）不受影响；失败 pass（lastPassClean=false）
+		// 不满足条件，重试与限流告警照常。
+		t.lastInfo = info
+		return nil
 	}
 	rules, bindings, policyByID, err := securityEventsLoadMappings()
 	if err != nil {
@@ -526,6 +556,7 @@ func (t *securityEventsTailer) securityEventsTick() error {
 			passErr = errors.Join(passErr, fmt.Errorf("security events: persist offset: %w", werr))
 		}
 	}
+	t.lastPassClean = passErr == nil
 	t.lastInfo = info
 	return passErr
 }

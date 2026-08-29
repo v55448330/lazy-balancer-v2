@@ -81,13 +81,14 @@ func (m *MetricsService) Stop() {
 }
 
 // N+9 C3-S2：metrics 采集失败族状态转换日志。30s 采集周期下，持久性失败
-// （端点不可达、非 200、body 超限、解析/入库失败）逐 tick 裸记日志约
-// 2880 行/天同一消息。改为状态转换口径：ok→fail 记一次（warn）、fail→ok
-// 恢复记一次（info）、持续同一状态静默。状态按失败类别（key）独立跟踪：
-// 前置类别失败（如 Get 失败）不评估后续类别，其恢复标记只在后续 tick 实际
-// 通过该检查时才落，避免「仍失败却记恢复」。map 有界：生产类别集固定 6 个，
-// 清扫上限（N-1 同模式）仅为防御动态键场景——超上限整体重置，各类别至多
-// 重复放行一条，无数据影响。
+// （端点不可达、非 200、body 中段读取失败、body 超限、解析/入库失败）逐
+// tick 裸记日志约 2880 行/天同一消息。改为状态转换口径：ok→fail 记一次
+// （warn）、fail→ok 恢复记一次（info）、持续同一状态静默。状态按失败类别
+// （key）独立跟踪：前置类别失败（如 Get 失败）不评估后续类别，其恢复标记
+// 只在后续 tick 实际通过该检查时才落，避免「仍失败却记恢复」。map 有界：
+// 生产类别集固定 7 个（N+11 D3-F4 增补 body 中段读取失败类别——原枚举漏掉的
+// 唯一零信号成员），清扫上限（N-1 同模式）仅为防御动态键场景——超上限整体
+// 重置，各类别至多重复放行一条，无数据影响。
 var (
 	metricsStateMu     sync.Mutex
 	metricsStateFailed = map[string]bool{}
@@ -123,6 +124,7 @@ func logMetricsStateTransition(key string, failed bool) string {
 const (
 	metricsFailureCollect      = "collect"
 	metricsFailureEndpoint     = "endpoint"
+	metricsFailureRead         = "read"
 	metricsFailureBodyCap      = "body-cap"
 	metricsFailureParse        = "parse"
 	metricsFailureStore        = "store"
@@ -156,7 +158,15 @@ func (m *MetricsService) collect() {
 	// 可分配大块内存，超限按解析失败跳过本样本。
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20+1))
 	if err != nil {
+		// N+11 D3-F4：body 中段读取错误此前裸 return——失败族中唯一零信号成员
+		// （52fdb0f7 枚举未覆盖）。现与其他类别同口径走状态转换日志。
+		if logMetricsStateTransition(metricsFailureRead, true) != "" {
+			Logf("warn", "Failed to read metrics body: %v", err)
+		}
 		return
+	}
+	if lvl := logMetricsStateTransition(metricsFailureRead, false); lvl != "" {
+		Logf("info", "metrics body read recovered")
 	}
 	if len(body) > 16<<20 {
 		if logMetricsStateTransition(metricsFailureBodyCap, true) != "" {
@@ -168,7 +178,10 @@ func (m *MetricsService) collect() {
 		Logf("info", "metrics endpoint body back under 16MB cap")
 	}
 
-	metrics, err := m.parsePrometheusMetrics(string(body))
+	// N+11 D3-F3：string 拷贝只做一次——parse 与 per-host store 共用同一
+	// text，此前两次 string(body) 最坏双拷贝 32MB（16MB body ×2）。
+	text := string(body)
+	metrics, err := m.parsePrometheusMetrics(text)
 	if err != nil {
 		if logMetricsStateTransition(metricsFailureParse, true) != "" {
 			Logf("warn", "Failed to parse metrics: %v", err)
@@ -188,7 +201,7 @@ func (m *MetricsService) collect() {
 	} else if lvl := logMetricsStateTransition(metricsFailureStore, false); lvl != "" {
 		Logf("info", "metrics store recovered")
 	}
-	if err := m.storePerHostMetrics(string(body)); err != nil {
+	if err := m.storePerHostMetrics(text); err != nil {
 		if logMetricsStateTransition(metricsFailureStorePerHost, true) != "" {
 			Logf("warn", "Failed to store per-host metrics: %v", err)
 		}

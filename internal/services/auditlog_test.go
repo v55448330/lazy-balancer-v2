@@ -3,6 +3,7 @@ package services
 import (
 	"database/sql"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -111,6 +112,51 @@ func TestFormatAuditActionAuthAndNodeRegistration(t *testing.T) {
 	}
 	action, resource, _ = FormatAuditAction("POST", "/api/v1/nodes/register")
 	if action != "" || resource != "" {
-		t.Fatalf("node registration mapping = (%q, %q), want 空（原为指向不存在路由的死映射）", action, resource)
+		t.Fatalf("node registration mapping = (%q,%q), want 空（原为指向不存在路由的死映射）", action, resource)
+	}
+}
+
+func TestGetAuditLogSizeBytes_cachesThresholdWithinTTL(t *testing.T) {
+	// N+11 D3-F5b：2s 轮转 tick 此前在日志非空时每轮都查主库取阈值。
+	// getAuditLogSizeBytes 现带 60s TTL 缓存：窗口内配置变更不观察（有界
+	// 陈旧），过期后重查；读失败不入缓存（回退值不钉死整个窗口）。
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	// 包级缓存隔离：进入与退出均重置，测试间互不串扰
+	auditLogSizeCacheMu.Lock()
+	auditLogSizeCache, auditLogSizeCacheAt = 0, time.Time{}
+	auditLogSizeCacheMu.Unlock()
+	t.Cleanup(func() {
+		auditLogSizeCacheMu.Lock()
+		auditLogSizeCache, auditLogSizeCacheAt = 0, time.Time{}
+		auditLogSizeCacheMu.Unlock()
+	})
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_log_size_mb=5 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When/Then：首查命中 DB 并缓存
+	if got := getAuditLogSizeBytes(); got != 5<<20 {
+		t.Fatalf("first=%d, want %d", got, 5<<20)
+	}
+	// When/Then：窗口内变更配置不观察（有界陈旧）
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_log_size_mb=7 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if got := getAuditLogSizeBytes(); got != 5<<20 {
+		t.Fatalf("cached=%d, want %d (TTL not yet expired)", got, 5<<20)
+	}
+	// When/Then：过期后重查，观察新阈值
+	auditLogSizeCacheMu.Lock()
+	auditLogSizeCacheAt = time.Now().Add(-auditLogSizeCacheTTL - time.Second)
+	auditLogSizeCacheMu.Unlock()
+	if got := getAuditLogSizeBytes(); got != 7<<20 {
+		t.Fatalf("refreshed=%d, want %d after TTL expiry", got, 7<<20)
 	}
 }

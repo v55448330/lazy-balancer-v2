@@ -2,11 +2,15 @@ package services
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -106,6 +110,80 @@ func TestMetricsService_collect_logs_failures_once_per_state_transition(t *testi
 	}
 	if count := strings.Count(logs.String(), "metrics collection recovered"); count != 1 {
 		t.Fatalf("recovery info count=%d, want 1: %s", count, logs.String())
+	}
+}
+
+// readFailBody 读取时恒定报错，模拟 body 中段断连。
+type readFailBody struct{ err error }
+
+func (b readFailBody) Read([]byte) (int, error) { return 0, b.err }
+func (readFailBody) Close() error               { return nil }
+
+// fixedResponseTransport 每次请求返回预置响应（Get 成功、status 200，
+// body 可切换为中段读取失败的读端），用于驱动 collect 的 body 读取路径。
+type fixedResponseTransport struct {
+	mu   sync.Mutex
+	resp *http.Response
+}
+
+func (f *fixedResponseTransport) set(body io.ReadCloser) {
+	f.mu.Lock()
+	f.resp = &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: body}
+	f.mu.Unlock()
+}
+
+func (f *fixedResponseTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.resp, nil
+}
+
+func TestMetricsService_collect_logs_read_failures_once_per_state_transition(t *testing.T) {
+	// N+11 D3-F4：body 中段读取错误此前裸 return（52fdb0f7 失败族枚举中唯一
+	// 零信号成员）。现经状态转换日志（read 类别）：ok→fail 一次 warn、
+	// fail→ok 一次 info、持续同一状态静默。
+	// Given
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatalf("initialize metrics database: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	isolateMetricsState(t)
+
+	var logs bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	tr := &fixedResponseTransport{}
+	readErr := errors.New("connection reset mid-body")
+	tr.set(readFailBody{err: readErr})
+	service := NewMetricsService("http://metrics.invalid", 30)
+	service.client = &http.Client{Timeout: 10 * time.Second, Transport: tr}
+
+	// When：失败 ×2（仅首次 warn）、成功（恢复 info）、失败 ×2（仅首次 warn）
+	service.collect()
+	service.collect()
+	tr.set(io.NopCloser(strings.NewReader(`caddy_http_requests_total{handler="reverse_proxy",host="example.com"} 1`)))
+	service.collect()
+	tr.set(readFailBody{err: readErr})
+	service.collect()
+	service.collect()
+
+	// Then
+	out := logs.String()
+	if count := strings.Count(out, "Failed to read metrics body:"); count != 2 {
+		t.Fatalf("read failure warn count=%d, want 2 (state-transition dedup): %s", count, out)
+	}
+	if count := strings.Count(out, "metrics body read recovered"); count != 1 {
+		t.Fatalf("read recovery info count=%d, want 1: %s", count, out)
 	}
 }
 

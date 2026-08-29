@@ -389,6 +389,51 @@ func TestSecurityEventsShouldReset_ShrinkAndInodeChange(t *testing.T) {
 	}
 }
 
+func TestSecurityEventsFindNextDocument_boundedBufferOnSmallTail(t *testing.T) {
+	// N+11 D3-F2：扫描缓冲按 min(4MB, size-from) 定界（f.Stat）——硬杀残片
+	// 留下 <4KB 小文件时，每次 2s tick 的解码失败不再分配整块 4MB 窗口。
+	// 定位行为保持不变；from 到/超 EOF 时零读取直接未找到。
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+	full := `{"transaction":{"id":"tx-a","unix_timestamp":1,"request":{"method":"GET","uri":"/"}}}`
+	tail := `{"transaction":{"id":"tx-b","unix_timestamp":2,` // 截断残尾，内部无文档头
+	content := full + "\n" + tail
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	// When/Then：从 0 起找到第二文档头（第一文档尾换行后的 `{`）
+	pos, found, err := securityEventsFindNextDocument(f, 0)
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if !found {
+		t.Fatal("second document head must be found in a small tail")
+	}
+	if want := int64(len(full) + 1); pos != want {
+		t.Fatalf("pos=%d, want %d (byte after the first document's newline)", pos, want)
+	}
+	// When/Then：截断残尾内部起点——无文档头，未找到且无错误
+	if _, found, err := securityEventsFindNextDocument(f, pos+1); err != nil || found {
+		t.Fatalf("find in tail: found=%v err=%v, want (false,nil)", found, err)
+	}
+	// When/Then：from 在/超 EOF——定界为零字节，未找到且无错误
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, from := range []int64{info.Size(), info.Size() + 1} {
+		if _, found, err := securityEventsFindNextDocument(f, from); err != nil || found {
+			t.Fatalf("from=%d: found=%v err=%v, want (false,nil)", from, found, err)
+		}
+	}
+}
+
 func TestSecurityEventsTickIngestsFixtureLog(t *testing.T) {
 	// Given: a DB with rule go029.com -> lb_rule1 -> policy 7 and an audit log with 2 transactions
 	dataDir := t.TempDir()
@@ -505,6 +550,73 @@ func TestSecurityEventsTickIngestsFixtureLog(t *testing.T) {
 	}
 	if uri != "/again" || action != "logged" {
 		t.Errorf("appended row uri=%q action=%q, want /again logged", uri, action)
+	}
+}
+
+func TestSecurityEventsTick_idleTickSkipsMappingLoad(t *testing.T) {
+	// N+11 D3-F5a：空闲 tick（上次干净 pass 后无新增字节）不得重载映射
+	// （3 条主库查询 + 逐行 IDNA）。seam：首次干净 tick 后把主库置 nil——
+	// 若空闲 tick 仍调 loadMappings 会返回 "database not initialized"；
+	// 追加新事务后应照常恢复摄取。
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	oldDB := db.DB
+	t.Cleanup(func() { db.DB = oldDB })
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	if err := os.WriteFile(logPath, []byte(securityEventsFixtureBlocked+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+
+	// When：首个 tick 正常摄取
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	var count int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rows after first tick=%d, want 1", count)
+	}
+
+	// When：主库失效（nil）且文件不变时连续两个空闲 tick
+	db.DB = nil
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("idle tick with nil main DB: %v, want nil (mapping load must be skipped)", err)
+	}
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("second idle tick: %v, want nil", err)
+	}
+	db.DB = oldDB
+
+	// When：追加新事务后 tick
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(securityEventsFixtureClean + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("tick after append: %v", err)
+	}
+	// Then：新事务入库、无重复（空闲跳过不得卡死恢复）
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("rows after append=%d, want 2 (skip must not stall resumption)", count)
 	}
 }
 
