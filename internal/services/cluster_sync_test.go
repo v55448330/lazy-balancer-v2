@@ -1272,6 +1272,130 @@ func TestSyncService_Pull_refetchesFullSnapshotOnWafFileDrift(t *testing.T) {
 	}
 }
 
+func TestSyncService_Pull_convergesVersionTagOnlyWafDrift(t *testing.T) {
+	// N+9 根因回归：内容哈希一致、仅 .version 标签分叉时（生产实例：
+	// 主 v3.17.0audit / 从 v3.16.0audit，xdb 字节相同），漂移判定
+	// wafFilesDrifted（节哈希含标签）为 true，而应用侧门控
+	// wafFilesRefDiffers（仅内容 sha）为 false —— fetchWafFiles 分支
+	// 被短路，R57 A-#4 的 rewriteVersionIfMissingOrStale 永不执行，
+	// 304 分支兜底重拉 → 应用跳过 → 死循环（每周期全量重拉 + 主节点
+	// 「同步下发」审计刷屏）。修复后应用侧门控以漂移态开路，标签收敛。
+	_, database := newClusterTestService(t)
+
+	masterTree := t.TempDir()
+	os.MkdirAll(filepath.Join(masterTree, "crs", "rules"), 0755)
+	os.WriteFile(filepath.Join(masterTree, "crs", "rules", "a.conf"), []byte("SecRule X 1"), 0644)
+	os.WriteFile(filepath.Join(masterTree, "crs", "VERSION"), []byte("v4.28.0"), 0644)
+	masterXdb := filepath.Join(masterTree, "ip2region.xdb")
+	os.WriteFile(masterXdb, []byte("same-xdb-bytes"), 0644)
+	os.WriteFile(masterXdb+".version", []byte("v3.17.0audit"), 0644)
+
+	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
+	crsLiveDir, ip2regionLivePath = filepath.Join(masterTree, "crs"), masterXdb
+	ref := BuildWafFileRef()
+	bundle := BuildWafFileBundle()
+
+	// 从节点：内容与主节点完全一致（tar/xdb sha 相同），仅 .version 标签陈旧。
+	slaveTree := t.TempDir()
+	crsLiveDir, ip2regionLivePath = filepath.Join(slaveTree, "crs"), filepath.Join(slaveTree, "ip2region.xdb")
+	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	os.MkdirAll(filepath.Join(crsLiveDir, "rules"), 0755)
+	os.WriteFile(filepath.Join(crsLiveDir, "rules", "a.conf"), []byte("SecRule X 1"), 0644)
+	os.WriteFile(filepath.Join(crsLiveDir, "VERSION"), []byte("v4.28.0"), 0644)
+	os.WriteFile(ip2regionLivePath, []byte("same-xdb-bytes"), 0644)
+	os.WriteFile(ip2regionLivePath+".version", []byte("v3.16.0audit"), 0644)
+	if ref == nil || bundle == nil || ref.IP2RegionTag != "v3.17.0audit" {
+		t.Fatalf("master ref=%+v bundle=%v, want tag v3.17.0audit", ref, bundle)
+	}
+
+	snapshot := signedTestSnapshot(9, "token")
+	snapshot.WafFiles = ref
+	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)
+	snapshot = signTestSnapshot(snapshot, "token")
+
+	requestedVersions := make(chan string, 4)
+	wafFetches := make(chan struct{}, 4)
+	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/cluster/sync/waf-files" {
+			wafFetches <- struct{}{}
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(map[string]any{"data": bundle})
+			return
+		}
+		requestedVersions <- request.URL.Query().Get("since_version")
+		if request.URL.Query().Get("since_version") == "0" {
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(models.APIResponse{Code: 0, Data: snapshot})
+			return
+		}
+		response.WriteHeader(http.StatusNotModified)
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token='token', applied_version=9 WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	// 记录哈希 == 快照节哈希：应用侧按节比较全部跳过（哈希一致），
+	// 与生产死循环形态一致。
+	seedAppliedSection(t, database, "waf_files", snapshot.SectionHashes["waf_files"])
+	caddyServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusOK) }))
+	defer caddyServer.Close()
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir(), CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
+
+	// When：首轮 304 → 漂移 → 全量重拉 → 应用（修复后门控开路 → 拉包 → 标签收敛）。
+	result, pullErr := service.Pull(context.Background())
+
+	// Then
+	if pullErr != nil {
+		t.Fatalf("pull: %v", pullErr)
+	}
+	if !result.Changed || result.AppliedVersion != 9 {
+		t.Fatalf("result=%#v, want changed full-snapshot apply", result)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "9" {
+		t.Fatalf("first request since_version=%q, want 9", v)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "0" {
+		t.Fatalf("second request since_version=%q, want 0 (tag drift re-pull)", v)
+	}
+	if len(wafFetches) == 0 {
+		t.Fatal("waf bundle not fetched: version-tag drift never converges without the drift-opened gate")
+	}
+	if got, err := os.ReadFile(ip2regionLivePath + ".version"); err != nil || strings.TrimSpace(string(got)) != "v3.17.0audit" {
+		t.Fatalf("version tag not converged: content=%q err=%v", got, err)
+	}
+	if service.wafFilesDrifted() {
+		t.Fatal("wafFilesDrifted still true after convergence")
+	}
+
+	// 收敛后：不得再次拉取安全数据包（标签已收敛，门控关闭）。
+	// 第二轮可能因夹具合成节哈希与本地重建口径的固有分叉做一次性 E3
+	// 漂移重放（生产真实快照节收敛后无此轮）；关键是重放也不再拉包、
+	// 标签保持收敛，且随后一轮必须是净 304——循环终止。
+	fetchesAfterConvergence := len(wafFetches)
+	if _, pullErr := service.Pull(context.Background()); pullErr != nil {
+		t.Fatalf("second pull: %v", pullErr)
+	}
+	if got := len(wafFetches); got != fetchesAfterConvergence {
+		t.Fatalf("waf bundle fetched %d times after tag convergence, want %d", got, fetchesAfterConvergence)
+	}
+	third, pullErr := service.Pull(context.Background())
+	if pullErr != nil || third.Changed {
+		t.Fatalf("third pull=%#v err=%v, want unchanged 304 (loop terminated)", third, pullErr)
+	}
+	if v := waitSyncTest(t, requestedVersions); v != "9" {
+		t.Fatalf("post-convergence request since_version=%q, want 9 (no re-pull)", v)
+	}
+	if got := len(wafFetches); got != fetchesAfterConvergence {
+		t.Fatalf("waf bundle fetched %d times total, want %d", got, fetchesAfterConvergence)
+	}
+	if got, err := os.ReadFile(ip2regionLivePath + ".version"); err != nil || strings.TrimSpace(string(got)) != "v3.17.0audit" {
+		t.Fatalf("version tag regressed: content=%q err=%v", got, err)
+	}
+	if service.wafFilesDrifted() {
+		t.Fatal("wafFilesDrifted true after loop termination")
+	}
+}
+
 func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testing.T) {
 	// F-1 端到端：apply 期安全数据拉取持续失败时，304 分支的 WAF 兜底重拉
 	// 每 60s 一轮无限循环打主从负载。连续 ≥wafRepullMaxFailures 轮未收敛后

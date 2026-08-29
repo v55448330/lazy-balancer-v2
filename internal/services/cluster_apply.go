@@ -127,7 +127,12 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	recordAppliedSectionHashes(s.db, snapshot, skip, switches, previous.SectionHashes)
 	logSyncSwitchGuards(snapshot, skip, switches)
 
-	if switches.WafFiles && wafFilesRefDiffers(snapshot.WafFiles) {
+	// 门控必须与漂移判定同口径开路：wafFilesDrifted 比较含版本标签的节
+	// 哈希，wafFilesRefDiffers 只比较内容 sha。内容一致而标签分叉时（如
+	// .version 陈旧），仅 sha 比较会把本分支短路，R57 A-#4 的
+	// rewriteVersionIfMissingOrStale 永不执行——304 分支兜底重拉 → 应用
+	// 跳过 → 每周期全量重拉死循环（主节点「同步下发」审计随之刷屏）。
+	if switches.WafFiles && (wafFilesRefDiffers(snapshot.WafFiles) || s.wafFilesDrifted()) {
 		bundle, ferr := s.fetchWafFiles(ctx, snapshot.WafFiles)
 		if ferr != nil {
 			Logf("error", "同步安全数据失败（数据库版本行已同步）: %v", ferr)
