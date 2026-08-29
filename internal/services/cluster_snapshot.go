@@ -285,7 +285,10 @@ func readSnapshotDNSOwnership(ctx context.Context, store snapshotStore) ([]byte,
 		return nil, fmt.Errorf("读取 DNS 所有权状态: %w", readErr)
 	}
 	if err := validateDNSOwnership(content); err != nil {
-		Logf("warn", "DNS 所有权文件 %s 损坏（%v），集群快照按空状态回退继续——对齐 ownership store 隔离语义，store 下次触碰该文件时完成隔离", path, err)
+		// C2-S1：本读取点随每次全量快照构建（主节点 ticker + 每个从节点
+		// Pull）执行，坏文件在 store 侧实际隔离前持续存在——告警必须走
+		// 60s 限流（数字归一键），否则每周期刷一条。
+		throttledAuditFailureLogf("DNS 所有权文件 %s 损坏（%v），集群快照按空状态回退继续——对齐 ownership store 隔离语义，store 下次触碰该文件时完成隔离", path, err)
 		return bytes.Clone(emptyDNSOwnershipCanonical), nil
 	}
 	return content, nil

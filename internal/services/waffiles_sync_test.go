@@ -4,11 +4,18 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"lazy-balancer-v2/internal/models"
 )
 
 func TestSanitizeBundleVersion(t *testing.T) {
@@ -612,5 +619,113 @@ func TestUntarGzTo_nonEmptyDest_removesStaleFiles(t *testing.T) {
 	}
 	if liveSum != declaredSum {
 		t.Fatalf("live tree hash %q must equal declared %q — slave must converge", liveSum, declaredSum)
+	}
+}
+
+// C2-S3 单元：主节点 bundle tag 为空是合法收敛信号（主端 .version 缺失、损坏
+// 或形状校验置空），本地陈旧 tag 必须同步清空——否则 waf_files 节哈希（含
+// 标签）两端永不对齐，从端永久假漂移全量重拉（R57 A-#4 不变量的空值半边）。
+func TestRewriteVersionIfMissingOrStale_emptyTagClearsStaleSidecar(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ip2region.xdb.version")
+	if err := os.WriteFile(path, []byte("v3.16.0"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := rewriteVersionIfMissingOrStale(path, ""); err != nil {
+		t.Fatalf("empty tag must clear the stale sidecar: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale sidecar must be removed after empty-tag sync, stat err=%v", err)
+	}
+	// 幂等：目标本就不存在时同样成功（无文件可清）。
+	if err := rewriteVersionIfMissingOrStale(path, ""); err != nil {
+		t.Fatalf("empty tag on missing sidecar must be a noop success: %v", err)
+	}
+}
+
+// C2-S3 端到端：主端 .version 缺失（tag 空）+ 从端内容一致但残留陈旧标签。
+// 应用空 tag bundle 后从端标签必须清空，两端本地 ref 的 waf_files 节哈希
+// （漂移判定口径）必须一致——否则永久假漂移。
+func TestApplyWafFileBundle_emptyMasterTagConvergesSectionHash(t *testing.T) {
+	// 主端：crs + xdb 齐备但无 .version（BuildWafFileRef 的 tag 保持为空）。
+	master := t.TempDir()
+	os.MkdirAll(filepath.Join(master, "crs", "rules"), 0755)
+	os.WriteFile(filepath.Join(master, "crs", "rules", "a.conf"), []byte("SecRule X 1"), 0644)
+	os.WriteFile(filepath.Join(master, "crs", "VERSION"), []byte("v4.28.0"), 0644)
+	masterXdb := filepath.Join(master, "ip2region.xdb")
+	os.WriteFile(masterXdb, []byte("same-xdb-bytes"), 0644)
+
+	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
+	crsLiveDir, ip2regionLivePath = filepath.Join(master, "crs"), masterXdb
+	masterRef := BuildWafFileRef()
+	bundle := BuildWafFileBundle()
+	if masterRef == nil || bundle == nil || masterRef.IP2RegionTag != "" {
+		t.Fatalf("master ref=%+v bundle=%v, want non-nil with empty tag", masterRef, bundle)
+	}
+
+	// 从端：内容与主端完全一致，仅残留陈旧 .version 标签。
+	slave := t.TempDir()
+	crsLiveDir, ip2regionLivePath = filepath.Join(slave, "crs"), filepath.Join(slave, "ip2region.xdb")
+	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	os.MkdirAll(filepath.Join(crsLiveDir, "rules"), 0755)
+	os.WriteFile(filepath.Join(crsLiveDir, "rules", "a.conf"), []byte("SecRule X 1"), 0644)
+	os.WriteFile(filepath.Join(crsLiveDir, "VERSION"), []byte("v4.28.0"), 0644)
+	os.WriteFile(ip2regionLivePath, []byte("same-xdb-bytes"), 0644)
+	os.WriteFile(ip2regionLivePath+".version", []byte("v3.16.0"), 0644)
+
+	if _, _, err := ApplyWafFileBundle(bundle); err != nil {
+		t.Fatalf("apply bundle with empty master tag: %v", err)
+	}
+	if _, err := os.Stat(ip2regionLivePath + ".version"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale slave tag must be cleared on empty-tag sync, stat err=%v", err)
+	}
+	slaveRef := BuildWafFileRef()
+	if slaveRef == nil || slaveRef.IP2RegionTag != "" {
+		t.Fatalf("slave ref tag=%q, want empty after convergence", slaveRef.IP2RegionTag)
+	}
+	masterHash, err := wafFilesSectionHash(masterRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slaveHash, err := wafFilesSectionHash(slaveRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if masterHash != slaveHash {
+		t.Fatalf("waf_files section hash not converged: master=%s slave=%s", masterHash, slaveHash)
+	}
+}
+
+// zeroReader 提供无限零字节流：构造超限响应体而不实际分配 64MB+ 内存。
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
+}
+
+// C2-S2 回归：响应体超过 64MB 上限时必须显式拒绝并点名上限（疑似主节点
+// 数据异常），不得静默截断成损坏 JSON、以误导性的解析错误或哈希不匹配收场。
+func TestFetchWafFiles_rejectsOversizeBundleBody(t *testing.T) {
+	const bodyLimit = 64 << 20 // 与 fetchWafFiles 的响应体上限同口径
+	_, database := newClusterTestService(t)
+	master := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.CopyN(w, zeroReader{}, bodyLimit+1)
+	}))
+	defer master.Close()
+	if _, err := database.Exec("UPDATE global_config SET master_url=?, cluster_token='token' WHERE id=1", master.URL); err != nil {
+		t.Fatal(err)
+	}
+	service := &SyncService{db: database, client: &http.Client{}}
+
+	_, err := service.fetchWafFiles(context.Background(), &models.ClusterWafFilesRef{CRSSha256: "aa", IP2RegionSha: "bb"})
+	if err == nil {
+		t.Fatal("oversize bundle body must be rejected")
+	}
+	if !strings.Contains(err.Error(), "安全数据包超过 64MB 上限") {
+		t.Fatalf("error must name the 64MB cap explicitly, got: %v", err)
 	}
 }

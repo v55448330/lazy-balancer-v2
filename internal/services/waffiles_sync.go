@@ -88,10 +88,15 @@ func BuildWafFileBundle() *WafFileBundle {
 // wafFilesRefDiffers reports whether the slave's live files fail to match
 // any artifact referenced by the snapshot.
 // rewriteVersionIfMissingOrStale 保证 .version 与主节点声明的 tag 一致（R57 A-#4）：
-// tag 非空且磁盘缺失或内容不符时原子补写（tmp+rename）；写失败必须上抛——
-// 该文件参与 wafFilesSectionHash，静默丢失会让从端漂移判定永不收敛。
+// tag 非空且磁盘缺失或内容不符时原子补写（tmp+rename）；tag 为空是合法收敛信号
+// （主端 .version 缺失/损坏/形状校验置空），本地陈旧 tag 必须一并清除，否则
+// waf_files 节哈希（含标签）两端永不对齐，从端永久假漂移全量重拉；写失败必须
+// 上抛——该文件参与 wafFilesSectionHash，静默丢失会让从端漂移判定永不收敛。
 func rewriteVersionIfMissingOrStale(path, tag string) error {
 	if tag == "" {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 		return nil
 	}
 	if current, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(current)) == strings.TrimSpace(tag) {
@@ -439,10 +444,20 @@ func (s *SyncService) fetchWafFiles(ctx context.Context, ref *models.ClusterWafF
 		body = truncateValidUTF8Tail(body)
 		return nil, fmt.Errorf("拉取安全数据失败(%d): %s", resp.StatusCode, string(body))
 	}
+	// C2-S2：读 limit+1 字节探测超限——裸 LimitReader 截断后 JSON 解码只会
+	// 报 unexpected EOF/invalid character，把「主节点数据异常」误诊为解析
+	// 问题；超限必须显式拒绝并点名上限。
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxWafBundleBodyBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("读取安全数据包: %w", err)
+	}
+	if int64(len(body)) > maxWafBundleBodyBytes {
+		return nil, fmt.Errorf("安全数据包超过 %dMB 上限，已拒绝（疑似主节点数据异常）", maxWafBundleBodyBytes>>20)
+	}
 	var envelope struct {
 		Data WafFileBundle `json:"data"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&envelope); err != nil {
+	if err := json.Unmarshal(body, &envelope); err != nil {
 		return nil, fmt.Errorf("解析安全数据包: %w", err)
 	}
 	if !wafFilesRefMatchesBundle(ref, &envelope.Data) {
@@ -455,6 +470,11 @@ func (s *SyncService) fetchWafFiles(ctx context.Context, ref *models.ClusterWafF
 	bundle.IP2RegionTag = sanitizeBundleVersion(bundle.IP2RegionTag)
 	return &bundle, nil
 }
+
+// maxWafBundleBodyBytes 是安全数据包（WafFileBundle JSON）响应体的硬上限：
+// 正常 CRS tar.gz+xdb 远低于该值，超限必为主节点数据异常/滥用，整体拒绝
+// 而非静默截断（C2-S2）。
+const maxWafBundleBodyBytes int64 = 64 << 20
 
 // maxBundleVersionLen 限制安全数据版本串长度：正常形如 v4.28.0 / v3.17.0，
 // 64 字节足够容纳任何真实版本号。

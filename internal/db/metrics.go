@@ -9,11 +9,31 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	sqlite "github.com/glebarez/go-sqlite"
 )
 
 var sqliteHeaderMagic = []byte("SQLite format 3\x00")
+
+// nextQuarantinePath 返回不与现存文件冲突的隔离目标路径：<path>.corrupt.<unix秒>；
+// 同秒已有同名隔离文件时追加 -1/-2/… 序号（C4-F3：同秒两次隔离不再静默覆盖
+// 此前的取证文件——Unix rename 对已存在目标是直接替换）。stat-then-rename 的
+// 窗口仅存在于启动单线程路径，极端竞态下回退为旧的覆盖行为，不劣于修复前。
+func nextQuarantinePath(path string) string {
+	base := fmt.Sprintf("%s.corrupt.%d", path, time.Now().Unix())
+	for i := 1; ; i++ {
+		candidate := base
+		if i > 1 {
+			candidate = fmt.Sprintf("%s-%d", base, i)
+		}
+		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
+			return candidate
+		}
+	}
+}
 
 // quarantineCorruptSQLiteFile 检查 path 指向的库文件：存在、非空、且前
 // 16 字节不是 SQLite 魔数（头部页被清零/覆写的损坏形态）时，连同可能
@@ -36,13 +56,13 @@ func quarantineCorruptSQLiteFile(path string) (string, error) {
 	if n == 0 || (n == len(sqliteHeaderMagic) && bytes.Equal(header, sqliteHeaderMagic)) {
 		return "", nil
 	}
-	quarantined := fmt.Sprintf("%s.corrupt.%d", path, time.Now().Unix())
+	quarantined := nextQuarantinePath(path)
 	if err := os.Rename(path, quarantined); err != nil {
 		return "", fmt.Errorf("quarantine corrupted database file: %w", err)
 	}
 	for _, companion := range []string{path + "-wal", path + "-shm"} {
 		if _, err := os.Stat(companion); err == nil {
-			_ = os.Rename(companion, companion+".corrupt."+fmt.Sprintf("%d", time.Now().Unix()))
+			_ = os.Rename(companion, nextQuarantinePath(companion))
 		}
 	}
 	return quarantined, nil
@@ -53,6 +73,9 @@ func InitializeMetricsDB(dataDir string) (err error) {
 	if err := secureDataDirectory(dataDir); err != nil {
 		return fmt.Errorf("failed to secure metrics data directory: %w", err)
 	}
+	// 先清扫历史隔离文件（含崩循环残留，C4-F3）：每基础名留最新 3 份，防止
+	// 取证文件无界累积；本轮新隔离叠加其上，下次启动再收敛。
+	gcQuarantinedMetricsFiles(dbPath)
 	if err := prepareSQLiteDatabase(dbPath); err != nil {
 		return fmt.Errorf("failed to secure metrics database: %w", err)
 	}
@@ -100,10 +123,24 @@ func InitializeMetricsDB(dataDir string) (err error) {
 	return nil
 }
 
+// sqlite 扩展错误码的低 8 位为主码（>0xff 为扩展位）；仅用主码判定损坏类。
+const (
+	sqliteCodeCorrupt = 11 // SQLITE_CORRUPT
+	sqliteCodeNotADB  = 26 // SQLITE_NOTADB
+)
+
 // isCorruptionError 区分损坏类错误（值得隔离重建）与瞬态错误（锁/IO，
-// 隔离只会白白丢弃好数据）。glebarez/modernc 驱动把 SQLite 扩展错误码
-// 拼进错误串（如 "file is not a database (26)"）。
+// 隔离只会白白丢弃好数据）。优先按驱动类型化错误码判定（glebarez/go-sqlite
+// 的 *sqlite.Error 经 errors.As 可穿透 database/sql 与 fmt.Errorf 包装链），
+// 字符串 Contains 仅作兜底（C4-F2：驱动消息措辞变化不得让损坏库错过隔离）。
 func isCorruptionError(err error) bool {
+	var sqliteErr *sqlite.Error
+	if errors.As(err, &sqliteErr) {
+		switch sqliteErr.Code() & 0xff {
+		case sqliteCodeCorrupt, sqliteCodeNotADB:
+			return true
+		}
+	}
 	msg := err.Error()
 	return strings.Contains(msg, "not a database") || strings.Contains(msg, "malformed")
 }
@@ -118,16 +155,57 @@ func quarantineMetricsFileUnconditionally(path string) (string, error) {
 	if info.Size() == 0 {
 		return "", nil
 	}
-	quarantined := fmt.Sprintf("%s.corrupt.%d", path, time.Now().Unix())
+	quarantined := nextQuarantinePath(path)
 	if err := os.Rename(path, quarantined); err != nil {
 		return "", fmt.Errorf("quarantine corrupted database file: %w", err)
 	}
 	for _, companion := range []string{path + "-wal", path + "-shm"} {
 		if _, err := os.Stat(companion); err == nil {
-			_ = os.Rename(companion, fmt.Sprintf("%s.corrupt.%d", companion, time.Now().Unix()))
+			_ = os.Rename(companion, nextQuarantinePath(companion))
 		}
 	}
 	return quarantined, nil
+}
+
+// quarantineKeepPerBase 是启动 GC 对每个基础名（主库/-wal/-shm）保留的隔离
+// 文件份数：留新删旧，兼顾取证与磁盘无界累积（C4-F3）。
+const quarantineKeepPerBase = 3
+
+// gcQuarantinedMetricsFiles 清理历史 metrics 隔离文件：每个基础名仅保留最新
+// quarantineKeepPerBase 份 .corrupt.*，更老的删除。启动时调用；尽力而为，
+// 删除失败记日志不上抛（GC 失败不得阻断启动/自愈路径），不触碰其他基础名。
+func gcQuarantinedMetricsFiles(dbPath string) {
+	for _, base := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		matches, err := filepath.Glob(base + ".corrupt.*")
+		if err != nil {
+			log.Printf("gc quarantined metrics files: glob %s: %v", base+".corrupt.*", err)
+			continue
+		}
+		if len(matches) <= quarantineKeepPerBase {
+			continue
+		}
+		infos := make([]struct {
+			path    string
+			modTime time.Time
+		}, 0, len(matches))
+		for _, path := range matches {
+			info, err := os.Stat(path)
+			if err != nil {
+				log.Printf("gc quarantined metrics files: stat %s: %v", path, err)
+				continue
+			}
+			infos = append(infos, struct {
+				path    string
+				modTime time.Time
+			}{path, info.ModTime()})
+		}
+		sort.Slice(infos, func(i, j int) bool { return infos[i].modTime.After(infos[j].modTime) })
+		for _, stale := range infos[quarantineKeepPerBase:] {
+			if err := os.Remove(stale.path); err != nil {
+				log.Printf("gc quarantined metrics files: remove %s: %v", stale.path, err)
+			}
+		}
+	}
 }
 
 func openAndPingMetricsDB(dbPath string) (*sql.DB, error) {

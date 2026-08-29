@@ -568,3 +568,33 @@ func TestSnapshotOwnershipHash_realReadErrorStillFails(t *testing.T) {
 		t.Fatal("real I/O read error must not be masked by the empty-state fallback")
 	}
 }
+
+// C2-S1 回归：损坏文件的快照侧回退告警必须经 60s 限流（throttledAuditFailureLogf）。
+// 该读取点在每次全量快照构建（主节点 ticker + 每个从节点 Pull）都会执行，坏文件
+// 在 store 侧被实际隔离前会持续存在——无限流时每个周期都刷一条 warn。
+func TestSnapshotOwnershipHash_corruptFileWarnThrottled(t *testing.T) {
+	_, database := newClusterTestService(t)
+	writeDNSOwnershipFile(t, database, []byte(`{"version":1,"records":[`))
+	logs := captureApplicationLogs(t)
+
+	// 隔离共享限流表：同文件中先前的损坏告警已占用同一归一化键（路径数字
+	// 归一为 #），不重置会压制本测试的首条放行断言；defer 还原现场。
+	auditFailureLogMu.Lock()
+	saved := auditFailureLogTimes
+	auditFailureLogTimes = map[string]time.Time{}
+	auditFailureLogMu.Unlock()
+	defer func() {
+		auditFailureLogMu.Lock()
+		auditFailureLogTimes = saved
+		auditFailureLogMu.Unlock()
+	}()
+
+	for i := 0; i < 3; i++ {
+		if _, err := snapshotOwnershipHash(context.Background(), database); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := strings.Count(logs.String(), "WARNING"); n != 1 {
+		t.Fatalf("同一损坏文件 3 次读取应仅放行 1 条 warn（60s 窗口），got %d: %q", n, logs.String())
+	}
+}
