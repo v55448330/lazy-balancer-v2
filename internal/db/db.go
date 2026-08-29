@@ -940,7 +940,7 @@ func runMigrations() error {
 	// returns the same value, so this is safe to run repeatedly.
 	// datetime() 对无法解析的值返回 NULL：若无条件覆盖，存量垃圾值会被静默清成
 	// NULL，丢失「该行数据异常」的信号。仅规范化可解析的值。
-	if _, err := DB.Exec("UPDATE cert_jobs SET ca_available_after = datetime(ca_available_after) WHERE ca_available_after IS NOT NULL AND datetime(ca_available_after) IS NOT NULL"); err != nil {
+	if _, err := normalizeCertJobsCAAvailableAfter(); err != nil {
 		return fmt.Errorf("failed to normalize cert_jobs.ca_available_after: %w", err)
 	}
 
@@ -1204,6 +1204,18 @@ func runMigrations() error {
 	}
 
 	return nil
+}
+
+// normalizeCertJobsCAAvailableAfter 将 cert_jobs.ca_available_after 规范化为
+// SQLite 规范 UTC 格式（详见 runMigrations 调用点注释）。返回执行结果供
+// 调用方/测试断言受影响行数。WHERE 追加 ca_available_after != datetime(...)
+// 排除已规范化的行：SQLite 对值未变的 UPDATE 也写页（页脏 + WAL 增长），
+// 该守卫让迁移成为真正的一次性回填（D4-S1）。
+func normalizeCertJobsCAAvailableAfter() (sql.Result, error) {
+	return DB.Exec(`UPDATE cert_jobs SET ca_available_after = datetime(ca_available_after)
+		WHERE ca_available_after IS NOT NULL
+		AND datetime(ca_available_after) IS NOT NULL
+		AND ca_available_after != datetime(ca_available_after)`)
 }
 
 // legacyHTTPSHasCertPredicate 是 migrateLegacyHTTPSProtocol 的「有证」判定

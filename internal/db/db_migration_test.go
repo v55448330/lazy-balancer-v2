@@ -1115,6 +1115,68 @@ func TestInitialize_certJobNormalizationPreservesUnparseableValues(t *testing.T)
 	}
 }
 
+// D4-S1 回归：ca_available_after 规范化必须是一次性回填——WHERE 排除已
+// 规范化的行（值未变不重写），否则每次启动全量重写匹配行（页脏 + WAL
+// 增长）。不可解析值仍由 datetime(...) IS NOT NULL 守卫保留。
+func TestInitialize_certJobCAAvailableAfterNormalizationRewritesOnlyStaleRows(t *testing.T) {
+	// Given
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	if _, err := DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, ca_available_after) VALUES
+		('r1','canonical.example.com','2026-07-02 00:00:00'),
+		('r2','legacy.example.com','2026-07-02'),
+		('r3','garbage.example.com','not-a-date')`); err != nil {
+		t.Fatalf("seed cert jobs: %v", err)
+	}
+
+	// When：模拟下一次启动重跑生产同款规范化语句
+	res, err := normalizeCertJobsCAAvailableAfter()
+	if err != nil {
+		t.Fatalf("normalize ca_available_after: %v", err)
+	}
+	stale, err := res.RowsAffected()
+	if err != nil {
+		t.Fatalf("rows affected: %v", err)
+	}
+	resAgain, err := normalizeCertJobsCAAvailableAfter()
+	if err != nil {
+		t.Fatalf("normalize ca_available_after again: %v", err)
+	}
+	again, err := resAgain.RowsAffected()
+	if err != nil {
+		t.Fatalf("rows affected again: %v", err)
+	}
+
+	// Then：首遍仅 legacy 1 行待回填（canonical 不再匹配）；第二遍零行
+	if stale != 1 {
+		t.Fatalf("rows rewritten=%d, want 1 (legacy only; canonical row must not match)", stale)
+	}
+	if again != 0 {
+		t.Fatalf("second pass rewrote %d rows, want 0 — backfill must be one-shot", again)
+	}
+	// SQL 侧比较存储原文，避免驱动把 DATETIME 重排成 RFC3339 干扰断言
+	var normalized, garbageKept int
+	if err := DB.QueryRow(`SELECT ca_available_after = '2026-07-02 00:00:00' FROM cert_jobs WHERE domain='legacy.example.com'`).Scan(&normalized); err != nil {
+		t.Fatalf("read legacy row: %v", err)
+	}
+	if normalized != 1 {
+		t.Fatalf("legacy row not normalized to canonical format")
+	}
+	if err := DB.QueryRow(`SELECT ca_available_after = 'not-a-date' FROM cert_jobs WHERE domain='garbage.example.com'`).Scan(&garbageKept); err != nil {
+		t.Fatalf("read garbage row: %v", err)
+	}
+	if garbageKept != 1 {
+		t.Fatalf("garbage value not preserved")
+	}
+}
+
 // A4-S2: 历史 NOT-NULL 窗口期建库的 security_policies 四列停留 NOT NULL，
 // fresh CREATE 与 newColumns 迁移对「列已存在」的库均不生效；启动迁移必须
 // 收敛为可空并保数据。

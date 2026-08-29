@@ -306,10 +306,34 @@ func migrateSecurityEventsTransactionID(db *sql.DB) error {
 	return nil
 }
 
+// cleanupMetricsHistoryBatch 是历史清理的单批删除行数：镜像姊妹实现
+// securityEventsRetentionDeleteBatch（internal/services/securityevents_retention.go）
+// 的 R33 F9 教训——大批量单语句 DELETE 长时间持指标库写锁，阻塞摄取 tick。
+// 同库同故障形态，同口径分批（D3-F1）。做成 var 以便测试收缩批次观察多批行为。
+var cleanupMetricsHistoryBatch = 5000
+
+// CleanupMetricsHistory 按 retentionDays 分批删除过期的 metrics_history 行。
+// 本函数无 ctx（沿用既有调用方签名）：循环以 RowsAffected==0 自然终止——
+// 摄取侧只写入 datetime('now') 新鲜行，过期行总量单调递减，批批有推进。
 func CleanupMetricsHistory(retentionDays int) error {
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format("2006-01-02 15:04:05")
-	if _, err := MetricsDB.Exec("DELETE FROM metrics_history WHERE timestamp < ?", cutoff); err != nil {
-		return fmt.Errorf("delete expired metrics history: %w", err)
+	for {
+		res, err := MetricsDB.Exec(
+			"DELETE FROM metrics_history WHERE id IN (SELECT id FROM metrics_history WHERE timestamp < ? LIMIT ?)",
+			cutoff, cleanupMetricsHistoryBatch,
+		)
+		if err != nil {
+			return fmt.Errorf("delete expired metrics history: %w", err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("count deleted metrics history rows: %w", err)
+		}
+		if affected == 0 {
+			return nil
+		}
+		// 批间短暂让出写锁，避免长时间阻塞摄取 INSERT（R33 F9，与
+		// securityEventsRetentionCleanup 同口径）。
+		time.Sleep(10 * time.Millisecond)
 	}
-	return nil
 }
