@@ -86,7 +86,7 @@
             <span>{{ getStrategyLabel(row.strategy) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="listen_port" label="端口" width="60" align="center">
+        <el-table-column prop="listen_port" label="端口" min-width="80" align="center">
           <template #default="{ row }">
             <span class="port">{{ row.listen_port }}</span>
           </template>

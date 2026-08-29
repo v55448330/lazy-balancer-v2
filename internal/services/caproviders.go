@@ -406,7 +406,7 @@ func (s *CAProviderService) TestCAProviderWithContext(ctx context.Context, id in
 		return &CAProviderTestError{Phase: "config", Err: err}
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := client.RegisterAccount(ctx); err != nil {
 		return &CAProviderTestError{Phase: "register", Err: err}
