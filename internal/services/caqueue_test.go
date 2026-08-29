@@ -1242,3 +1242,118 @@ func TestCaExecutionTimeoutFor_counts_domains(t *testing.T) {
 		}
 	}
 }
+
+func TestCAQueue_providerUnavailable_fail_skips_reenqueued_job(t *testing.T) {
+	// Given：provider 失效，tick 已排空 pending（active 摘除）；窗口内并发
+	// 手动重试按 RetryCertJob 的 CAS 语义把任务重置为新的一次尝试并重新入队。
+	_, database := newClusterTestService(t)
+	result, err := database.Exec(`INSERT INTO ca_providers (name, provider, directory_url, enabled) VALUES ('temporary', 'letsencrypt', 'https://invalid.example/directory', 1)`)
+	if err != nil {
+		t.Fatalf("seed CA provider: %v", err)
+	}
+	providerID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read CA provider ID: %v", err)
+	}
+	jobResult, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, ca_provider_id) VALUES ('lb_queue_test', 'example.com', 'queued', ?)`, providerID)
+	if err != nil {
+		t.Fatalf("seed certificate job: %v", err)
+	}
+	jobID, err := jobResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("read certificate job ID: %v", err)
+	}
+	queue := newCAQueue(models.CAProvider{ID: int(providerID), MaxConcurrent: 1}, func() error { return nil })
+	queue.enqueue(queueItem{jobID: int(jobID), ruleID: "lb_queue_test", domains: "example.com"})
+	if _, err := database.Exec("UPDATE ca_providers SET enabled=0 WHERE id=?", providerID); err != nil {
+		t.Fatalf("disable CA provider: %v", err)
+	}
+
+	// 复刻 tick drain 后的状态：pending 已排空、active 已摘除
+	queue.mu.Lock()
+	queue.pending = nil
+	delete(queue.active, int(jobID))
+	queue.mu.Unlock()
+
+	// 并发重入队：CAS 重置 attempts + 重新占位队列
+	if _, err := database.Exec(`UPDATE cert_jobs
+		SET status='queued', message='重新排队签发', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now')
+		WHERE id=? AND status='queued'`, jobID); err != nil {
+		t.Fatalf("reenqueue job: %v", err)
+	}
+	queue.enqueue(queueItem{jobID: int(jobID), ruleID: "lb_queue_test", domains: "example.com"})
+
+	// When：旧的 provider 失效处置路径
+	queue.failPendingProviderUnavailable([]queueItem{{jobID: int(jobID), ruleID: "lb_queue_test", domains: "example.com"}}, "CA Provider 不可用：配置已禁用或删除（ID 1）")
+
+	// Then：新尝试未被误标 failed（attempts 不 +1、状态保持 queued）
+	var status string
+	var attempts int
+	if err := database.QueryRow("SELECT status, COALESCE(renewal_attempts,0) FROM cert_jobs WHERE id=?", jobID).Scan(&status, &attempts); err != nil {
+		t.Fatalf("read certificate job: %v", err)
+	}
+	if status != "queued" || attempts != 0 {
+		t.Fatalf("reenqueued job status=%q attempts=%d, want queued/0", status, attempts)
+	}
+	queue.cancel()
+}
+
+func TestCAQueue_providerUnavailable_fail_skips_deleted_or_disabled_job(t *testing.T) {
+	// Given：drain 后窗口内任务被并发删除 / 禁用
+	_, database := newClusterTestService(t)
+	result, err := database.Exec(`INSERT INTO ca_providers (name, provider, directory_url, enabled) VALUES ('temporary', 'letsencrypt', 'https://invalid.example/directory', 0)`)
+	if err != nil {
+		t.Fatalf("seed CA provider: %v", err)
+	}
+	providerID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read CA provider ID: %v", err)
+	}
+	deletedResult, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, ca_provider_id) VALUES ('lb_deleted', 'example.com', 'queued', ?)`, providerID)
+	if err != nil {
+		t.Fatalf("seed deleted job: %v", err)
+	}
+	deletedJobID, err := deletedResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("read deleted job ID: %v", err)
+	}
+	disabledResult, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, ca_provider_id) VALUES ('lb_disabled', 'example.com', 'queued', ?)`, providerID)
+	if err != nil {
+		t.Fatalf("seed disabled job: %v", err)
+	}
+	disabledJobID, err := disabledResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("read disabled job ID: %v", err)
+	}
+	queue := newCAQueue(models.CAProvider{ID: int(providerID), MaxConcurrent: 1}, func() error { return nil })
+
+	if _, err := database.Exec("DELETE FROM cert_jobs WHERE id=?", deletedJobID); err != nil {
+		t.Fatalf("delete job: %v", err)
+	}
+	if _, err := database.Exec("UPDATE cert_jobs SET status='disabled' WHERE id=?", disabledJobID); err != nil {
+		t.Fatalf("disable job: %v", err)
+	}
+
+	// When
+	queue.failPendingProviderUnavailable([]queueItem{
+		{jobID: int(deletedJobID), ruleID: "lb_deleted", domains: "example.com"},
+		{jobID: int(disabledJobID), ruleID: "lb_disabled", domains: "example.com"},
+	}, "CA Provider 不可用：配置已禁用或删除（ID 1）")
+
+	// Then：已删行不复活、已禁用行不被改写为 failed
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM cert_jobs WHERE id=?", deletedJobID).Scan(&count); err != nil {
+		t.Fatalf("count deleted job: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("deleted job resurrected: count=%d", count)
+	}
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", disabledJobID).Scan(&status); err != nil {
+		t.Fatalf("read disabled job: %v", err)
+	}
+	if status != "disabled" {
+		t.Fatalf("disabled job status=%q, want disabled", status)
+	}
+	queue.cancel()
+}

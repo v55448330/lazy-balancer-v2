@@ -60,7 +60,10 @@ func installClusterVersionTriggers(database *sql.DB) error {
 				return fmt.Errorf("replace cluster version trigger for %s %s: %w", operation, table.name, err)
 			}
 			operationClause := operation
-			whenClause := "(SELECT COALESCE(is_master,0) FROM global_config WHERE id=1)=1"
+			// A5-N2：NULL 兜底与写闸（readonly.go 的 COALESCE(is_master,1)）对齐——
+			// NULL 视为主节点。db.go 一次性回填生效后此处为纵深防御：回填前
+			// 历史库 NULL 行两层判定不再分裂（写闸放行写、触发器却不 bump 版本）。
+			whenClause := "(SELECT COALESCE(is_master,1) FROM global_config WHERE id=1)=1"
 			if operation == "UPDATE" {
 				operationClause += " OF " + table.snapshotColumns
 			}
@@ -91,9 +94,10 @@ func installClusterVersionTriggers(database *sql.DB) error {
 	if _, err := database.Exec("DROP TRIGGER IF EXISTS cluster_version_global_config_update"); err != nil {
 		return fmt.Errorf("replace cluster version trigger for global_config UPDATE: %w", err)
 	}
+	// A5-N2：COALESCE(NEW.is_master,1) 同上——与写闸 NULL 语义一致。
 	if _, err := database.Exec(`CREATE TRIGGER cluster_version_global_config_update
 		AFTER UPDATE OF sync_global_config,sync_users,sync_rules,sync_waf_files,sync_security,caddy_config,log_level,access_log_json,access_log_format,cert_job_log_size_mb,audit_log_size_mb,runtime_log_size_mb,audit_retention_months,jwt_expire_minutes,timezone,acme_email,cert_expiry_days,cert_renewal_days,cert_renewal_attempts,default_ca_provider_id,dns_provider,dns_credentials,sync_interval,admin_tls_enabled,admin_tls_mode,admin_tls_cert,admin_tls_key,caddy_log_level,caddy_log_size_mb,request_body_max_size_mb,http_read_timeout,http_write_timeout,http_idle_timeout,upstream_keepalive_timeout,proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,proxy_write_timeout,proxy_stream_timeout,proxy_flush_interval,proxy_stream_close_delay,server_tokens_hidden,mfa_write_guard,mfa_lockout_enabled ON global_config
-		WHEN OLD.cluster_version IS NEW.cluster_version AND COALESCE(NEW.is_master,0)=1
+		WHEN OLD.cluster_version IS NEW.cluster_version AND COALESCE(NEW.is_master,1)=1
 		BEGIN
 			UPDATE global_config SET cluster_version=COALESCE(cluster_version,0)+1 WHERE id=1;
 		END`); err != nil {

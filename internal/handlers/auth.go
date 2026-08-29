@@ -209,7 +209,7 @@ func (h *Handlers) Logout(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog(usernameStr, "登出", "用户认证", services.AuditResultPart("success"), c.ClientIP())
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Logged out"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已退出登录"})
 }
 
 func (h *Handlers) GetCurrentUser(c *gin.Context) {

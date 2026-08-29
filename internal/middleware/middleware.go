@@ -215,10 +215,10 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			if err != nil {
 				var maxBytesError *http.MaxBytesError
 				if errors.As(err, &maxBytesError) {
-					c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"code": http.StatusRequestEntityTooLarge, "message": "Request body too large"})
+					c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"code": http.StatusRequestEntityTooLarge, "message": "请求体过大"})
 					return
 				}
-				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "Invalid request body"})
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请求体无效"})
 				return
 			}
 			c.Request.Body = io.NopCloser(bytes.NewReader(body))
@@ -860,7 +860,7 @@ func adminOnly() gin.HandlerFunc {
 		role, exists := c.Get("role")
 		if !exists || role != "admin" {
 			recordAuthenticationRejection(c, "admin_required")
-			c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "Admin access required"})
+			c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "需要管理员权限"})
 			c.Abort()
 			return
 		}

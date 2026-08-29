@@ -849,9 +849,7 @@ func (q *caQueue) tick() {
 		}
 		q.mu.Unlock()
 		message := fmt.Sprintf("CA Provider 不可用：配置已禁用或删除（ID %d）", providerID)
-		for _, item := range pending {
-			failJob(item.jobID, message)
-		}
+		q.failPendingProviderUnavailable(pending, message)
 		return
 	}
 	if provider.MaxConcurrent <= 0 {
@@ -877,6 +875,38 @@ func (q *caQueue) tick() {
 	q.mu.Unlock()
 
 	go q.execute(execution)
+}
+
+// failPendingProviderUnavailable 在解锁后逐个处置因 provider 失效而排空的
+// pending 项（A1-S4）：解锁→failJob 的窗口内，并发路径可能已接管该任务——
+// 手动重试/滞留巡检的重入队会把行重置为新的一次尝试（renewal_attempts=0）
+// 并重新占位 q.active/q.pending，此时无条件 failJob 会把新尝试误标 failed
+// （attempts+1 + 错误审计，后续自愈但噪声）。故逐项复核：任务已被重新入队
+// （q.active 再现）或行已消失/不再处于入队时预期的 'queued' 态（被删除/
+// 取消/退役）则跳过，由新属主接管该行。复核含一次只读查询，不持锁写库。
+func (q *caQueue) failPendingProviderUnavailable(items []queueItem, message string) {
+	for _, item := range items {
+		q.mu.Lock()
+		_, superseded := q.active[item.jobID]
+		q.mu.Unlock()
+		if superseded {
+			log.Printf("CA queue: provider-unavailable fail skipped for job %d: re-enqueued by concurrent path", item.jobID)
+			continue
+		}
+		if !queuedJobStillExists(item.jobID) {
+			log.Printf("CA queue: provider-unavailable fail skipped for job %d: job deleted or no longer queued", item.jobID)
+			continue
+		}
+		failJob(item.jobID, message)
+	}
+}
+
+// queuedJobStillExists 报告 pending 队列项对应的任务行仍存在且仍保持入队时
+// 预期的 'queued' 状态（所有入队路径落库态均为 'queued'）。
+func queuedJobStillExists(jobID int) bool {
+	var queued int
+	err := db.DB.QueryRow("SELECT status='queued' FROM cert_jobs WHERE id=?", jobID).Scan(&queued)
+	return err == nil && queued == 1
 }
 
 func (q *caQueue) prepareExecutionLocked(parent context.Context) (queueExecution, bool) {
@@ -1061,9 +1091,11 @@ func markJobWaitingCA(jobID int, retryAfter time.Duration) {
 	attempts++
 
 	cooling := computeBackoff(attempts, retryAfter)
+	// A1-S5：库内写规范 UTC（available），日志/审计展示跟随部署时区
+	//（global_config.timezone，tz.go 周期刷新）——旧硬编码 UTC+8 在配置
+	// 非 Asia/Shanghai 的部署里展示时间漂移。
 	available := time.Now().Add(cooling).UTC()
-	loc := time.FixedZone("CST", 8*3600)
-	display := available.In(loc)
+	display := available.In(CurrentLocation())
 
 	if attempts >= maxAttempts {
 		message := fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts)
