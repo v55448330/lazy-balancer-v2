@@ -16,8 +16,10 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 		"POST /api/v1/certificates/jobs/current":    {},
 		"POST /api/v1/cluster/nodes/report":         {},
 		"POST /api/v1/cluster/registration/confirm": {},
-		"POST /api/v1/config/import/validate":       {},
-		"POST /api/v1/config/preview":               {},
+		// 服务控制机器接口：handler 全路径（含失败）显式记录「服务控制」审计。
+		"POST /api/v1/cluster/service-control": {},
+		"POST /api/v1/config/import/validate":  {},
+		"POST /api/v1/config/preview":          {},
 		// R69 C-N3-c：/config/validate 已升为 Explicit（handler 记录校验三态）。
 		"POST /api/v1/mcp":             {},
 		"POST /api/v1/rules/cert-info": {},

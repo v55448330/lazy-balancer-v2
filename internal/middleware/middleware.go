@@ -242,6 +242,9 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		v1.GET("/cluster/sync/waf-files", clusterTokenAuth(db.DB), h.GetClusterWafFiles)
 		v1.POST("/cluster/registration/confirm", clusterTokenAuth(db.DB), h.ConfirmClusterRegistration)
 		v1.POST("/cluster/nodes/report", clusterTokenAuth(db.DB), h.ReportClusterNode)
+		// 从节点服务控制：票据即凭证（主节点签发的一次性 HMAC，与登录票据同
+		// 机制），不走 clusterTokenAuth——主节点无法取回令牌明文（仅存哈希）。
+		v1.POST("/cluster/service-control", h.ClusterServiceControl)
 
 		v1.Use(apiKeyAuth(cfg))
 		v1.Use(jwtAuth(cfg))
@@ -287,6 +290,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/cluster/nodes/:id/reject", h.RejectClusterNode)
 				admin.POST("/cluster/nodes/:id/login-ticket", h.GenerateClusterLoginTicket)
 				admin.PUT("/cluster/nodes/:id/access-url", h.UpdateClusterNodeAccessURL)
+				admin.POST("/cluster/nodes/:id/service", h.ControlClusterNodeService)
 				admin.DELETE("/cluster/nodes/:id", h.DeleteClusterNode)
 				admin.POST("/cluster/mode", h.SetClusterMode)
 				admin.POST("/cluster/promote", h.PromoteClusterNode)

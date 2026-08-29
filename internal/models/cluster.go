@@ -45,6 +45,50 @@ type ClusterLoginTicketClaims struct {
 	ExpiresAt int64  `json:"expires_at"`
 }
 
+// 集群服务控制动作（主节点 → 从节点）：Caddy 进程启停与应用进程重启。
+const (
+	ClusterServiceActionStartCaddy   = "start_caddy"
+	ClusterServiceActionStopCaddy    = "stop_caddy"
+	ClusterServiceActionRestartCaddy = "restart_caddy"
+	ClusterServiceActionRestartApp   = "restart_app"
+)
+
+// IsValidClusterServiceAction 判定动作是否在受控集合内（主从两侧共用同一口径）。
+func IsValidClusterServiceAction(action string) bool {
+	switch action {
+	case ClusterServiceActionStartCaddy, ClusterServiceActionStopCaddy, ClusterServiceActionRestartCaddy, ClusterServiceActionRestartApp:
+		return true
+	}
+	return false
+}
+
+// ClusterNodeServiceRequest 主节点服务控制端点请求体。
+type ClusterNodeServiceRequest struct {
+	Action string `json:"action" binding:"required"`
+}
+
+// ClusterServiceControlRequest 从节点服务控制端点请求体：票据即凭证
+// （HMAC-SHA256，密钥为集群令牌哈希，90 秒一次性，与动作绑定）。
+type ClusterServiceControlRequest struct {
+	Action string `json:"action" binding:"required"`
+	Ticket string `json:"ticket" binding:"required"`
+}
+
+// ClusterServiceControlClaims 服务控制票据载荷。
+type ClusterServiceControlClaims struct {
+	NodeID    int    `json:"node_id"`
+	Action    string `json:"action"`
+	JTI       string `json:"jti"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
+// ClusterServiceControlIssue 主节点签发结果：票据 + 目标从节点信息（不跨网络传输）。
+type ClusterServiceControlIssue struct {
+	Ticket   string
+	NodeName string
+	URL      string
+}
+
 type ClusterLoginTicketResponse struct {
 	Ticket string `json:"ticket"`
 	URL    string `json:"url"`

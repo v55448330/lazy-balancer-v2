@@ -86,6 +86,7 @@ func TestSetupRouter_registers_cluster_contract_and_removes_legacy_routes(t *tes
 		"POST /api/v1/cluster/nodes/:id/reject",
 		"POST /api/v1/cluster/nodes/:id/login-ticket",
 		"PUT /api/v1/cluster/nodes/:id/access-url",
+		"POST /api/v1/cluster/nodes/:id/service",
 		"DELETE /api/v1/cluster/nodes/:id",
 		"POST /api/v1/cluster/mode",
 		"POST /api/v1/cluster/promote",
@@ -233,5 +234,56 @@ func TestConfirmClusterRegistrationClearsSecretAfterExplicitPost(t *testing.T) {
 	}
 	if cleared != 1 {
 		t.Fatal("registration_secret was not cleared")
+	}
+}
+
+func TestClusterNodeServiceControlRoute_requires_admin_and_relays(t *testing.T) {
+	// Given 完整路由 + 管理员/普通用户 API Key + 桩从节点
+	router := newMiddlewareTestRouter(t)
+	adminKey := "lb_sk_service-admin-relay"
+	addClusterRouteTestAPIKey(t, 105, "service-admin", "admin", adminKey)
+	userKey := "lb_sk_service-user-relay"
+	addClusterRouteTestAPIKey(t, 106, "service-user", "user", userKey)
+	slave := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"Caddy 已停止"}`))
+	}))
+	t.Cleanup(slave.Close)
+	hash := sha256.Sum256([]byte("lb_cluster_service-e2e"))
+	if _, err := db.DB.Exec(`INSERT INTO nodes (id,name,ip_address,port,protocol,access_url,status,is_approved,cluster_token_hash) VALUES (22,'slave-e2e','10.0.0.22',8000,'http',?,'online',1,?)`, slave.URL, hex.EncodeToString(hash[:])); err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"action":"stop_caddy"}`)
+
+	// When 普通用户 API Key 调用主节点端点
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/nodes/22/service", bytes.NewReader(body.Bytes()))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", userKey)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	// Then 非管理员 403
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("user key status=%d body=%s, want 403", response.Code, response.Body.String())
+	}
+
+	// When 管理员 API Key 调用
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/cluster/nodes/22/service", bytes.NewReader(body.Bytes()))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", adminKey)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	// Then 中继从节点结果
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte("Caddy 已停止")) {
+		t.Fatalf("admin key status=%d body=%s, want relayed 200", response.Code, response.Body.String())
+	}
+
+	// When 无认证调用从节点机器接口
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/cluster/service-control", bytes.NewBufferString(`{"action":"stop_caddy","ticket":"forged"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	// Then 伪造票据 401
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("forged ticket status=%d body=%s, want 401", response.Code, response.Body.String())
 	}
 }
