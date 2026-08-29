@@ -100,18 +100,63 @@
        <template #footer><el-button type="primary" @click="tokenDialogVisible = false">我已保存</el-button></template>
      </el-dialog>
 
-    <el-dialog v-model="serviceControlDialogVisible" :title="`服务控制 — ${serviceControlNode?.name ?? ''}`" width="min(480px, 92vw)" :close-on-click-modal="false">
-      <el-radio-group v-model="serviceControlAction" class="service-control-group">
-        <el-radio value="start_caddy">启动 Caddy</el-radio>
-        <el-radio value="stop_caddy">停止 Caddy</el-radio>
-        <el-radio value="restart_caddy">重启 Caddy</el-radio>
-        <el-radio value="restart_app">重启应用</el-radio>
-      </el-radio-group>
-      <el-alert v-if="serviceControlAction === 'restart_app'" title="重启应用将短暂中断该节点的全部服务（约数秒）" type="warning" :closable="false" show-icon class="service-control-warning" />
-      <el-alert v-if="serviceControlAction === 'stop_caddy'" title="停止后该节点的负载均衡服务将不可用，请及时启动" type="warning" :closable="false" show-icon class="service-control-warning" />
+    <el-dialog v-model="serviceControlDialogVisible" width="min(520px, 92vw)" :close-on-click-modal="false" class="service-control-dialog">
+      <template #header>
+        <div class="service-control-header">
+          <div class="service-control-title">
+            <el-icon :size="18"><Monitor /></el-icon>
+            <span>服务控制</span>
+          </div>
+          <div v-if="serviceControlNode" class="service-control-node">
+            <el-tag :type="serviceControlNode.status === 'online' ? 'success' : 'info'" size="small">{{ serviceControlNode.status === 'online' ? '在线' : '离线' }}</el-tag>
+            <span class="service-control-node-name">{{ serviceControlNode.name }}</span>
+            <span class="service-control-node-url">{{ serviceControlNode.access_url || `${serviceControlNode.ip_address}:${serviceControlNode.port}` }}</span>
+          </div>
+        </div>
+      </template>
+
+      <div class="service-control-grid">
+        <div
+          v-for="item in serviceControlOptions"
+          :key="item.value"
+          class="service-control-card"
+          :class="{ 'is-active': serviceControlAction === item.value, [`is-${item.tone}`]: true }"
+          @click="serviceControlAction = item.value"
+        >
+          <div class="service-control-card-icon">
+            <el-icon :size="22"><component :is="item.icon" /></el-icon>
+          </div>
+          <div class="service-control-card-body">
+            <div class="service-control-card-title">{{ item.label }}</div>
+            <div class="service-control-card-desc">{{ item.description }}</div>
+          </div>
+          <div class="service-control-card-check">
+            <el-icon v-if="serviceControlAction === item.value"><Select /></el-icon>
+          </div>
+        </div>
+      </div>
+
+      <transition name="el-fade-in">
+        <el-alert
+          v-if="serviceControlWarnings[serviceControlAction]"
+          :title="serviceControlWarnings[serviceControlAction]"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="service-control-warning"
+        />
+      </transition>
+
       <template #footer>
         <el-button @click="serviceControlDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="serviceControlLoading" :disabled="!serviceControlAction" @click="executeServiceControl">执行</el-button>
+        <el-button
+          :type="serviceControlAction === 'stop_caddy' || serviceControlAction === 'restart_app' ? 'danger' : 'primary'"
+          :loading="serviceControlLoading"
+          :disabled="!serviceControlAction"
+          @click="executeServiceControl"
+        >
+          {{ serviceControlLoading ? '正在执行…' : '执行操作' }}
+        </el-button>
       </template>
     </el-dialog>
    </div>
@@ -119,7 +164,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { CopyDocument } from '@element-plus/icons-vue'
+import { CopyDocument, Monitor, RefreshRight, Select, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess } from '@/utils/api'
@@ -181,6 +226,18 @@ const serviceControlDialogVisible = ref(false)
 const serviceControlNode = ref<ClusterNode | null>(null)
 const serviceControlAction = ref('')
 const serviceControlLoading = ref(false)
+
+const serviceControlOptions = [
+  { value: 'start_caddy', label: '启动 Caddy', description: '启动负载均衡引擎并应用当前配置', icon: VideoPlay, tone: 'success' },
+  { value: 'stop_caddy', label: '停止 Caddy', description: '停止负载均衡引擎，流量将中断', icon: VideoPause, tone: 'danger' },
+  { value: 'restart_caddy', label: '重启 Caddy', description: '重启负载均衡引擎并重放权威配置', icon: RefreshRight, tone: 'warning' },
+  { value: 'restart_app', label: '重启应用', description: '重启 Lazy Balancer 服务进程（约数秒）', icon: Monitor, tone: 'danger' },
+] as const
+
+const serviceControlWarnings: Record<string, string> = {
+  stop_caddy: '停止后该节点的负载均衡服务将不可用，请及时启动',
+  restart_app: '重启应用将短暂中断该节点的全部服务（约数秒）',
+}
 
 const openServiceControlDialog = (node: ClusterNode): void => {
   serviceControlNode.value = node
@@ -577,6 +634,45 @@ onUnmounted(() => {
 .polling-error-meta { font-size: 12px; }
 .token-box { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding: 12px; border-radius: var(--radius-md); background: var(--bg-secondary); }
 .token-box code { flex: 1; min-width: 0; color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; word-break: break-all; }
+
+/* ── 服务控制弹框 ── */
+.service-control-header { display: flex; flex-direction: column; gap: 6px; }
+.service-control-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.service-control-node { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+.service-control-node-name { font-weight: 500; color: var(--text-primary); }
+.service-control-node-url { color: var(--text-tertiary); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+
+.service-control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+.service-control-card {
+  display: flex; align-items: flex-start; gap: 12px; padding: 14px;
+  border: 1px solid var(--border-color, #dcdfe6); border-radius: 8px;
+  cursor: pointer; transition: all 0.2s ease; position: relative; background: var(--bg-primary, #fff);
+}
+.service-control-card:hover { border-color: var(--el-color-primary-light-5, #a0cfff); box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.service-control-card.is-active { border-color: var(--el-color-primary, #409eff); background: var(--el-color-primary-light-9, #ecf5ff); }
+.service-control-card.is-active.is-success { border-color: var(--el-color-success, #67c23a); background: var(--el-color-success-light-9, #f0f9eb); }
+.service-control-card.is-active.is-danger { border-color: var(--el-color-danger, #f56c6c); background: var(--el-color-danger-light-9, #fef0f0); }
+.service-control-card.is-active.is-warning { border-color: var(--el-color-warning, #e6a23c); background: var(--el-color-warning-light-9, #fdf6ec); }
+
+.service-control-card-icon { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 8px; }
+.is-success .service-control-card-icon { color: var(--el-color-success, #67c23a); background: var(--el-color-success-light-9, #f0f9eb); }
+.is-danger .service-control-card-icon { color: var(--el-color-danger, #f56c6c); background: var(--el-color-danger-light-9, #fef0f0); }
+.is-warning .service-control-card-icon { color: var(--el-color-warning, #e6a23c); background: var(--el-color-warning-light-9, #fdf6ec); }
+
+.service-control-card-body { flex: 1; min-width: 0; }
+.service-control-card-title { font-size: 14px; font-weight: 500; color: var(--text-primary); line-height: 1.4; }
+.service-control-card-desc { font-size: 12px; color: var(--text-tertiary, #909399); line-height: 1.4; margin-top: 2px; }
+
+.service-control-card-check { position: absolute; top: 8px; right: 8px; color: var(--el-color-primary, #409eff); font-size: 14px; }
+.is-success .service-control-card-check { color: var(--el-color-success, #67c23a); }
+.is-danger .service-control-card-check { color: var(--el-color-danger, #f56c6c); }
+.is-warning .service-control-card-check { color: var(--el-color-warning, #e6a23c); }
+
+.service-control-warning { margin-top: 14px; }
+
+@media (max-width: 560px) {
+  .service-control-grid { grid-template-columns: 1fr; }
+}
 
 @media (max-width: 768px) {
   .token-box { align-items: stretch; flex-direction: column; }

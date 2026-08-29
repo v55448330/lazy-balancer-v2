@@ -73,16 +73,18 @@
       <el-table-column label="最后上报时间" min-width="170">
         <template #default="{ row }">{{ formatDate(row.last_seen) || '-' }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="130" :fixed="operationColumnFixed" align="center">
+      <el-table-column label="操作" width="200" :fixed="operationColumnFixed" align="center">
         <template #default="{ row }">
           <template v-if="row.status === 'pending' || !row.is_approved">
             <el-button link type="primary" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('approve', row)">确认</el-button>
             <el-button link type="danger" size="small" :disabled="readOnly || pendingNodeId !== null" @click="$emit('reject', row)">拒绝</el-button>
           </template>
           <template v-else>
-            <el-button v-if="!readOnly" link type="primary" size="small" :loading="loginNodeId === row.id" :disabled="row.status !== 'online' || loginNodeId !== null" @click="$emit('login', row)">登录</el-button>
-            <el-button v-if="!readOnly && row.status === 'online'" link type="warning" size="small" @click="$emit('service-control', row)">服务</el-button>
-            <el-button link type="danger" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('remove', row)">删除</el-button>
+            <div class="op-buttons">
+              <el-button v-if="!readOnly" link type="primary" size="small" :loading="loginNodeId === row.id" :disabled="row.status !== 'online' || loginNodeId !== null" @click="$emit('login', row)">登录</el-button>
+              <el-button v-if="!readOnly && row.status === 'online'" link type="warning" size="small" @click="$emit('service-control', row)">服务</el-button>
+              <el-button link type="danger" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('remove', row)">删除</el-button>
+            </div>
           </template>
         </template>
       </el-table-column>
@@ -210,6 +212,9 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 .access-url-link :deep(.el-link__inner) { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .version-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .offline-duration { font-size: 12px; color: #9ca3af; margin-top: 2px; }
+.op-buttons { display: inline-flex; align-items: center; }
+.op-buttons .el-button + .el-button { margin-left: 4px; }
+.op-buttons .el-button { padding-left: 6px; padding-right: 6px; }
 
 @media (max-width: 768px) {
   .card-header { align-items: flex-start; flex-direction: column; }
