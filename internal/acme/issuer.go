@@ -449,10 +449,26 @@ func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout 
 	}
 }
 
+// recursiveDNSResolvers / recursiveDNSPollInterval / recursiveDNSDeadline 是
+// checkRecursiveDNS 的测试接缝（var 而非 const，镜像 finalizeTimeout /
+// caQueueDrainTimeout 先例：测试按比例缩放预算保持墙钟快速，生产代码不得改写）。
+var (
+	recursiveDNSResolvers    = []string{"223.5.5.5:53", "119.29.29.29:53", "8.8.8.8:53", "1.1.1.1:53"}
+	recursiveDNSPollInterval = 3 * time.Second
+
+	// recursiveDNSDeadline 必须覆盖公共递归负缓存（SOA negative TTL 通常
+	// 300~600s）刷新抖动的一个有意义比例：权威快速路径收敛后记录已在权威
+	// 侧生效，但写入前曾应答 NXDOMAIN 的递归解析器会持续返回否定缓存直到
+	// 各自过期。四个受查解析器错峰刷新（缓存到期时间不同），120s 足以等到
+	// 至少一个刷新放行，同时远小于 waitForDNS 的 5min 权威预算，且外层任务
+	// 预算（caExecutionTimeoutFor：单域 30min，每域 +10min，封顶 60min）
+	// 为每域最多 +90s 的最坏增量留足余量（单域最坏 5+2+15min < 30min）。
+	recursiveDNSDeadline = 120 * time.Second
+)
+
 func (i *Issuer) checkRecursiveDNS(ctx context.Context, fqdn, expected string) bool {
-	resolvers := []string{"223.5.5.5:53", "119.29.29.29:53", "8.8.8.8:53", "1.1.1.1:53"}
-	deadline := time.After(30 * time.Second)
-	ticker := time.NewTicker(3 * time.Second)
+	deadline := time.After(recursiveDNSDeadline)
+	ticker := time.NewTicker(recursiveDNSPollInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -461,7 +477,7 @@ func (i *Issuer) checkRecursiveDNS(ctx context.Context, fqdn, expected string) b
 		case <-deadline:
 			return false
 		case <-ticker.C:
-			for _, r := range resolvers {
+			for _, r := range recursiveDNSResolvers {
 				if hit, _, _ := probeTXT(ctx, r, fqdn, expected, true); hit {
 					if i.Logger != nil {
 						i.Logger.Log("waiting_propagation", fmt.Sprintf("递归 DNS 已命中 %s @ %s", fqdn, r))

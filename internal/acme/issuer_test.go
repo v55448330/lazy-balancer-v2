@@ -435,6 +435,78 @@ func TestIssuer_probeAuthServers_keeps_nxdomain_servers_alive(t *testing.T) {
 	}
 }
 
+// F-D2：RequireRecursiveDNS 的递归确认预算必须覆盖公共递归负缓存
+// （SOA negative TTL 通常 300~600s）的刷新抖动——权威快速路径收敛后记录
+// 已在权威侧生效，但曾在写入前查询过的递归解析器会持续返回否定应答直到
+// 各自缓存过期；预算若只给 30s，首轮会系统性失败烧掉一次尝试。解析器错峰
+// 刷新（各自缓存到期时间不同），15 次轮询（45s 等效）内至少一个解析器
+// 刷新即可放行，而 30s/3s=10 次的旧预算必然放弃。预算按 100 倍等比缩放，
+// 保持墙钟快速且对生产值敏感（deadline 回退 30s 时本测试转红）。
+func TestIssuer_checkRecursiveDNS_outlasts_negative_cache_churn(t *testing.T) {
+	const (
+		speedup        = 100
+		flipAfter      = 15 // 负定应答次数：45s 等效，介于旧预算 10 次与新预算 40 次之间
+		expected       = "expected-value"
+		fqdn           = "_acme-challenge.example.com."
+		oldDeadlineSec = 30 // 旧行为的预算，用于机制对照
+	)
+
+	restoreSeams := func(origResolvers []string, origInterval, origDeadline time.Duration) {
+		recursiveDNSResolvers = origResolvers
+		recursiveDNSPollInterval = origInterval
+		recursiveDNSDeadline = origDeadline
+	}
+
+	// negativeThenHit 返回一个先否定（NODATA）后命中的假解析器地址，
+	// 以查询次数（闭包计数）而非墙钟翻转，模拟负缓存过期。
+	newNegativeThenHitResolver := func(t *testing.T) string {
+		t.Helper()
+		var mu sync.Mutex
+		queries := 0
+		return startFakeDNSServer(t, func(query *dns.Msg) *dns.Msg {
+			mu.Lock()
+			defer mu.Unlock()
+			queries++
+			m := new(dns.Msg)
+			m.SetReply(query)
+			if queries <= flipAfter {
+				return m // NODATA：负缓存窗口内的否定应答
+			}
+			rr := &dns.TXT{
+				Hdr: dns.RR_Header{Name: query.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60},
+				Txt: []string{expected},
+			}
+			m.Answer = append(m.Answer, rr)
+			return m
+		})
+	}
+
+	scaleSeams := func(interval, deadline time.Duration) {
+		recursiveDNSResolvers = []string{newNegativeThenHitResolver(t)}
+		recursiveDNSPollInterval = interval / speedup
+		recursiveDNSDeadline = deadline / speedup
+	}
+
+	origResolvers, origInterval, origDeadline := recursiveDNSResolvers, recursiveDNSPollInterval, recursiveDNSDeadline
+	t.Cleanup(func() { restoreSeams(origResolvers, origInterval, origDeadline) })
+	issuer := &Issuer{}
+
+	t.Run("生产预算须覆盖负缓存刷新抖动", func(t *testing.T) {
+		scaleSeams(origInterval, origDeadline)
+		if !issuer.checkRecursiveDNS(context.Background(), fqdn, expected) {
+			t.Fatalf("recursive check gave up during negative-cache churn: deadline=%v allows %d attempts, needs %d",
+				recursiveDNSDeadline*speedup, recursiveDNSDeadline/recursiveDNSPollInterval, flipAfter)
+		}
+	})
+
+	t.Run("欠预算按期放弃", func(t *testing.T) {
+		scaleSeams(origInterval, oldDeadlineSec*time.Second)
+		if issuer.checkRecursiveDNS(context.Background(), fqdn, expected) {
+			t.Fatalf("undersized deadline=%vs must give up after %d attempts", oldDeadlineSec, oldDeadlineSec*time.Second/origInterval)
+		}
+	})
+}
+
 // F-D1：finalize 提交必须有独立于任务总预算的超时——卡死的 CA 应以
 // finalize 阶段错误呈现，而不是吃光整个任务预算后报泛化超时。
 func TestIssuer_finalizeOrder_enforces_independent_deadline(t *testing.T) {
