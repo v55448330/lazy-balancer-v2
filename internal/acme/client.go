@@ -135,23 +135,32 @@ func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string, eabKey 
 	acmeAccountKeyMu.Lock()
 	defer acmeAccountKeyMu.Unlock()
 	keyPath := acmeAccountKeyPath(dataDir, directoryURL, email, eabKID, eabKey)
-	if data, err := os.ReadFile(keyPath); err == nil {
+	data, err := os.ReadFile(keyPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("读取 ACME 账户密钥 %s: %w", keyPath, err)
+	}
+	if err == nil {
+		// 密钥文件存在但无法解析 → fail-closed：静默再生新密钥会覆盖既有文件，
+		// 且再生密钥对 CA 是陌生账户（或撞既有 email/EAB 账户被 400 拒绝），
+		// 造成后续签名请求持续 403 且难以定位。再生仅允许用于文件缺失。
 		block, _ := pem.Decode(data)
-		if block != nil {
-			if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
-				fi, _ := os.Stat(keyPath)
-				created := ""
-				if fi != nil {
-					created = fmt.Sprintf("，首次注册时间: %s", fi.ModTime().Format("2006-01-02 15:04:05"))
-				}
-				log.Printf("ACME 账户密钥 %s 已加载%s", filepath.Base(keyPath), created)
-				if err := writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID, eabKeyDigestOf(eabKey)); err != nil {
-					return nil, err
-				}
-				return key, nil
-			}
+		if block == nil {
+			return nil, fmt.Errorf("ACME 账户密钥 %s 无法解析（非有效 PEM）：为避免覆盖既有账户，请手动修复或删除该文件后重试", keyPath)
 		}
-		log.Printf("ACME 账户密钥 %s 无法解析，将重新生成", keyPath)
+		key, parseErr := x509.ParseECPrivateKey(block.Bytes)
+		if parseErr != nil {
+			return nil, fmt.Errorf("ACME 账户密钥 %s 无法解析（%v）：为避免覆盖既有账户，请手动修复或删除该文件后重试", keyPath, parseErr)
+		}
+		fi, _ := os.Stat(keyPath)
+		created := ""
+		if fi != nil {
+			created = fmt.Sprintf("，首次注册时间: %s", fi.ModTime().Format("2006-01-02 15:04:05"))
+		}
+		log.Printf("ACME 账户密钥 %s 已加载%s", filepath.Base(keyPath), created)
+		if err := writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID, eabKeyDigestOf(eabKey)); err != nil {
+			return nil, err
+		}
+		return key, nil
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -214,7 +223,7 @@ func writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID, eabKeyDigest 
 	return nil
 }
 
-// RegisterAccount registers a new ACME account or returns nil if already registered.
+// RegisterAccount registers a new ACME account or verifies reuse of an existing one.
 func (c *Client) RegisterAccount(ctx context.Context) error {
 	acct := &acme.Account{
 		Contact: []string{"mailto:" + c.Email},
@@ -223,14 +232,29 @@ func (c *Client) RegisterAccount(ctx context.Context) error {
 		acct.ExternalAccountBinding = c.eab
 	}
 	_, err := c.acme.Register(ctx, acct, acme.AcceptTOS)
-	if err != nil {
+	switch {
+	case err == nil:
+		log.Printf("ACME 账户注册成功（directory: %s）", c.DirectoryURL)
+	case errors.Is(err, acme.ErrAccountAlreadyExists):
+		// 200 + JWK 匹配：x/crypto registerRFC 已缓存账户 KID，服务端确认
+		// 本密钥持有该账户，复用成立。
+		log.Printf("ACME 账户已注册，复用现有账户（directory: %s）", c.DirectoryURL)
+	default:
 		lower := strings.ToLower(err.Error())
 		if !strings.Contains(lower, "account already exists") && !strings.Contains(lower, "already registered") {
 			return err
 		}
+		// 400 "already exists/registered" 不必然表示本密钥持有账户：新密钥撞
+		// 既有 email/EAB 账户同样得到该错误，且此时 KID 未被缓存，静默当成功
+		// 会让后续签名请求 403 accountDoesNotExist。用 onlyReturnExisting 探测
+		// 验证本密钥确实持有账户后再复用。
+		if _, regErr := c.acme.GetReg(ctx, ""); regErr != nil {
+			if errors.Is(regErr, acme.ErrNoAccount) {
+				return fmt.Errorf("acme: 账户密钥与已注册账户不匹配（CA 拒绝注册: %v）：请手动删除 %s 或修正邮箱/EAB 配置后重试", err, c.accountKeyPath)
+			}
+			return fmt.Errorf("acme: 验证复用现有账户失败: %w", regErr)
+		}
 		log.Printf("ACME 账户已注册，复用现有账户（directory: %s）", c.DirectoryURL)
-	} else {
-		log.Printf("ACME 账户注册成功（directory: %s）", c.DirectoryURL)
 	}
 	return c.removeStaleAccountKeys()
 }

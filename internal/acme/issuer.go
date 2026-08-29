@@ -177,9 +177,9 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 	if err != nil {
 		return "", "", challenges, fmt.Errorf("create csr: %w", err)
 	}
-	finalizedOrder, err := i.Client.CreateCertRequest(ctx, order.FinalizeURL, csrDER)
+	finalizedOrder, err := i.finalizeOrder(ctx, order.FinalizeURL, csrDER)
 	if err != nil {
-		return "", "", challenges, fmt.Errorf("finalize order: %w", err)
+		return "", "", challenges, err
 	}
 	if finalizedOrder.CertURL == "" {
 		return "", "", challenges, fmt.Errorf("finalize returned empty cert url")
@@ -217,6 +217,23 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 	certPEM = EncodeCertPEM(certDER)
 	keyPEM = EncodeKeyPEM(key)
 	return certPEM, keyPEM, challenges, nil
+}
+
+// finalizeTimeout 为 finalize 提交（POST CSR + 轮询出证）设定的独立预算，
+// 对齐邻近的 ready 3min / valid 5min 分段预算——卡死的 CA 以 finalize 阶段
+// 错误暴露，而不是耗尽整个任务执行预算后报泛化超时。
+var finalizeTimeout = 10 * time.Minute
+
+// finalizeOrder submits the CSR with its own execution budget so a stalled CA
+// is attributable to the finalize stage.
+func (i *Issuer) finalizeOrder(ctx context.Context, finalizeURL string, csr []byte) (*acme.Order, error) {
+	finalizeCtx, finalizeCancel := context.WithTimeout(ctx, finalizeTimeout)
+	defer finalizeCancel()
+	order, err := i.Client.CreateCertRequest(finalizeCtx, finalizeURL, csr)
+	if err != nil {
+		return nil, fmt.Errorf("finalize order: %w", err)
+	}
+	return order, nil
 }
 
 // Cleanup removes DNS TXT records for all previously presented challenges.
@@ -389,30 +406,14 @@ func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout 
 		// the record before we let the CA validate. Servers that fail to
 		// respond are dropped from the list so a network-blocked server does
 		// not consume the propagation budget on every tick.
-		authReady := len(authServers) > 0
-		var alive []string
-		for _, server := range authServers {
-			hit, found, err := probeTXT(ctx, server, fqdn, expected, false)
-			switch {
-			case err != nil:
-				authReady = false
-				log("权威 DNS 查询失败 %s @ %s: %v", fqdn, server, err)
-			case hit:
-				alive = append(alive, server)
-				log("权威 DNS 已命中 %s @ %s, 值: %s", fqdn, server, expected)
-			default:
-				authReady = false
-				alive = append(alive, server)
-				if len(found) > 0 {
-					lastFound = found
-					lastResolver = server + " (auth)"
-					log("权威 DNS 未命中 %s @ %s, 期望: %s, 实际: %s", fqdn, server, expected, strings.Join(found, "; "))
-				} else {
-					log("权威 DNS 无 TXT 记录 %s @ %s", fqdn, server)
-				}
-			}
+		var authLastFound []string
+		var authLastResolver string
+		var authReady bool
+		authServers, authReady, authLastFound, authLastResolver = i.probeAuthServers(ctx, authServers, fqdn, expected)
+		if len(authLastFound) > 0 {
+			lastFound = authLastFound
+			lastResolver = authLastResolver
 		}
-		authServers = alive
 		if authReady {
 			return nil
 		}
@@ -472,6 +473,42 @@ func (i *Issuer) checkRecursiveDNS(ctx context.Context, fqdn, expected string) b
 	}
 }
 
+// probeAuthServers probes every authoritative name server once. Servers whose
+// probe fails (transport error) are dropped from the returned alive list so
+// they stop consuming propagation budget; a miss keeps the server alive for
+// the next round. ready reports whether every server already holds the
+// expected record.
+func (i *Issuer) probeAuthServers(ctx context.Context, servers []string, fqdn, expected string) (alive []string, ready bool, lastFound []string, lastResolver string) {
+	log := func(format string, args ...any) {
+		if i.Logger != nil {
+			i.Logger.Log("waiting_propagation", fmt.Sprintf(format, args...))
+		}
+	}
+	ready = len(servers) > 0
+	for _, server := range servers {
+		hit, found, err := probeTXT(ctx, server, fqdn, expected, false)
+		switch {
+		case err != nil:
+			ready = false
+			log("权威 DNS 查询失败 %s @ %s: %v", fqdn, server, err)
+		case hit:
+			alive = append(alive, server)
+			log("权威 DNS 已命中 %s @ %s, 值: %s", fqdn, server, expected)
+		default:
+			ready = false
+			alive = append(alive, server)
+			if len(found) > 0 {
+				lastFound = found
+				lastResolver = server + " (auth)"
+				log("权威 DNS 未命中 %s @ %s, 期望: %s, 实际: %s", fqdn, server, expected, strings.Join(found, "; "))
+			} else {
+				log("权威 DNS 无 TXT 记录 %s @ %s", fqdn, server)
+			}
+		}
+	}
+	return alive, ready, lastFound, lastResolver
+}
+
 // probeTXT queries a single DNS server for the TXT records of fqdn over UDP,
 // falling back to TCP. It reports whether the expected value is present along
 // with all values found.
@@ -490,6 +527,13 @@ func probeTXT(ctx context.Context, server, fqdn, expected string, recursion bool
 		exCancel()
 		if err != nil || r == nil {
 			lastErr = err
+			continue
+		}
+		// SERVFAIL/REFUSED 等错误应答不是「无记录」：必须按查询失败处理
+		//（权威循环中移出存活列表），否则该服务器永远无法命中，authReady
+		// 卡假直至传播预算耗尽，产生假阴性。
+		if r.Rcode != dns.RcodeSuccess {
+			lastErr = fmt.Errorf("dns %s: server %s", dns.RcodeToString[r.Rcode], server)
 			continue
 		}
 

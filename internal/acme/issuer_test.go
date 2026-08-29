@@ -7,12 +7,15 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/miekg/dns"
 	"golang.org/x/crypto/acme"
 )
 
@@ -227,5 +230,218 @@ func TestIssuer_preCleanup_spares_concurrent_challenge_values(t *testing.T) {
 	}
 	if _, exists := provider.records[keyAuth]; exists {
 		t.Fatal("pre-cleanup did not remove the same-value leftover")
+	}
+}
+
+// startFakeDNSServer 在随机端口同时监听 UDP/TCP（probeTXT 会先 UDP 后 TCP 回退，
+// 仅监听 UDP 时 TCP 回退会以 connection refused 覆盖真实的 RCODE 错误）。
+func startFakeDNSServer(t *testing.T, respond func(query *dns.Msg) *dns.Msg) string {
+	t.Helper()
+	handler := dns.HandlerFunc(func(w dns.ResponseWriter, query *dns.Msg) {
+		_ = w.WriteMsg(respond(query))
+	})
+	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	t.Cleanup(func() { _ = packetConn.Close() })
+	addr := packetConn.LocalAddr().String()
+	udpServer := &dns.Server{PacketConn: packetConn, Handler: handler}
+	t.Cleanup(func() { _ = udpServer.Shutdown() })
+	go func() { _ = udpServer.ActivateAndServe() }()
+
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("listen tcp on %s: %v", addr, err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	tcpServer := &dns.Server{Listener: listener, Handler: handler}
+	t.Cleanup(func() { _ = tcpServer.Shutdown() })
+	go func() { _ = tcpServer.ActivateAndServe() }()
+	return addr
+}
+
+// F-C1：SERVFAIL/REFUSED 等 DNS 错误应答不是「无记录」——必须作为错误上报，
+// 否则权威服务器循环中该服务器永远留在存活列表，authReady 无法为真，
+// 快速路径卡死直至递归回退超时，造成假阴性杀签发。
+func TestProbeTXT_returns_error_on_dns_error_rcode(t *testing.T) {
+	cases := []struct {
+		name  string
+		rcode int
+	}{
+		{"SERVFAIL", dns.RcodeServerFailure},
+		{"REFUSED", dns.RcodeRefused},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			addr := startFakeDNSServer(t, func(query *dns.Msg) *dns.Msg {
+				m := new(dns.Msg)
+				m.SetRcode(query, tc.rcode)
+				return m
+			})
+
+			// When
+			hit, found, err := probeTXT(context.Background(), addr, "_acme-challenge.example.com.", "expected", false)
+
+			// Then
+			if err == nil {
+				t.Fatalf("dns error rcode %s was treated as a successful empty answer", tc.name)
+			}
+			if hit {
+				t.Fatal("probe reported a hit on a failing server")
+			}
+			if found != nil {
+				t.Fatalf("found=%v, want nil on error rcode", found)
+			}
+			if !strings.Contains(err.Error(), tc.name) {
+				t.Fatalf("error=%q, want rcode name %s", err, tc.name)
+			}
+		})
+	}
+}
+
+// F-C1 伴随契约：NOERROR 无应答（NODATA）仍是「未命中」而非错误，权威服务器
+// 保留在存活列表等待下一轮轮询。
+func TestProbeTXT_nodata_is_miss_not_error(t *testing.T) {
+	// Given
+	addr := startFakeDNSServer(t, func(query *dns.Msg) *dns.Msg {
+		m := new(dns.Msg)
+		m.SetReply(query)
+		return m
+	})
+
+	// When
+	hit, found, err := probeTXT(context.Background(), addr, "_acme-challenge.example.com.", "expected", false)
+
+	// Then
+	if err != nil {
+		t.Fatalf("nodata must remain a miss, got error: %v", err)
+	}
+	if hit || found != nil {
+		t.Fatalf("hit=%v found=%v, want empty miss", hit, found)
+	}
+}
+
+// F-C1：waitForDNS 权威循环必须把返回错误 RCODE 的服务器从存活列表移除
+// （与传输失败同口径），仅命中的服务器留在列表；任一服务器失败/未命中则
+// authReady 为假。
+func TestIssuer_probeAuthServers_drops_dns_error_rcode_servers(t *testing.T) {
+	// Given
+	expected := "expected-value"
+	fqdn := "_acme-challenge.example.com."
+	servfailAddr := startFakeDNSServer(t, func(query *dns.Msg) *dns.Msg {
+		m := new(dns.Msg)
+		m.SetRcode(query, dns.RcodeServerFailure)
+		return m
+	})
+	missAddr := startFakeDNSServer(t, func(query *dns.Msg) *dns.Msg {
+		m := new(dns.Msg)
+		m.SetReply(query)
+		return m
+	})
+	hitAddr := startFakeDNSServer(t, func(query *dns.Msg) *dns.Msg {
+		m := new(dns.Msg)
+		m.SetReply(query)
+		rr := &dns.TXT{
+			Hdr: dns.RR_Header{Name: query.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60},
+			Txt: []string{expected},
+		}
+		m.Answer = append(m.Answer, rr)
+		return m
+	})
+	issuer := &Issuer{}
+
+	// When
+	alive, ready, _, _ := issuer.probeAuthServers(context.Background(), []string{servfailAddr, missAddr, hitAddr}, fqdn, expected)
+
+	// Then
+	if len(alive) != 2 {
+		t.Fatalf("alive=%v, want miss and hit servers only", alive)
+	}
+	for _, server := range alive {
+		if server == servfailAddr {
+			t.Fatalf("alive=%v, servfail server must be dropped", alive)
+		}
+	}
+	if ready {
+		t.Fatal("ready must be false while a server fails and another misses")
+	}
+
+	// 全部命中 → ready
+	alive, ready, _, _ = issuer.probeAuthServers(context.Background(), []string{hitAddr}, fqdn, expected)
+	if !ready || len(alive) != 1 {
+		t.Fatalf("alive=%v ready=%v, want sole hit server ready", alive, ready)
+	}
+}
+
+// F-D1：finalize 提交必须有独立于任务总预算的超时——卡死的 CA 应以
+// finalize 阶段错误呈现，而不是吃光整个任务预算后报泛化超时。
+func TestIssuer_finalizeOrder_enforces_independent_deadline(t *testing.T) {
+	// Given
+	var serverURL string
+	finalizeStarted := make(chan struct{}, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Replay-Nonce", "test-nonce")
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/directory":
+			_, _ = fmt.Fprintf(response, `{"newNonce":%q,"newAccount":%q,"newOrder":%q}`, serverURL+"/nonce", serverURL+"/account", serverURL+"/order")
+		case "/nonce":
+			response.WriteHeader(http.StatusOK)
+		case "/finalize/1":
+			finalizeStarted <- struct{}{}
+			time.Sleep(2 * time.Second)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate account key: %v", err)
+	}
+	client := &Client{
+		DirectoryURL: serverURL + "/directory",
+		Email:        "admin@example.com",
+		accountKey:   key,
+		acme: &acme.Client{
+			Key:          key,
+			DirectoryURL: serverURL + "/directory",
+			HTTPClient:   server.Client(),
+		},
+	}
+	issuer := &Issuer{Client: client}
+	csrDER, _, err := CreateCSR([]string{"example.com"})
+	if err != nil {
+		t.Fatalf("create csr: %v", err)
+	}
+	originalTimeout := finalizeTimeout
+	finalizeTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { finalizeTimeout = originalTimeout })
+
+	// When
+	start := time.Now()
+	order, finalizeErr := issuer.finalizeOrder(context.Background(), serverURL+"/finalize/1", csrDER)
+	elapsed := time.Since(start)
+
+	// Then
+	if finalizeErr == nil {
+		t.Fatalf("finalize succeeded despite stalled CA (order=%+v)", order)
+	}
+	if !strings.Contains(finalizeErr.Error(), "finalize") {
+		t.Fatalf("error=%q, want finalize stage named", finalizeErr)
+	}
+	if !errors.Is(finalizeErr, context.DeadlineExceeded) {
+		t.Fatalf("error=%v, want context deadline exceeded in chain", finalizeErr)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("finalize deadline did not bound the stalled CA: %v", elapsed)
+	}
+	select {
+	case <-finalizeStarted:
+	default:
+		t.Fatal("finalize endpoint was never reached")
 	}
 }
