@@ -706,6 +706,62 @@ func TestImportConfigBackup_clamps_excessive_jwt_expiration(t *testing.T) {
 	}
 }
 
+// N+12 G4：metrics_retention_days 属导入钳制家族——cleanupHistory 仅兜底 <1，
+// 越界值（如 100000000 天）会让指标历史清理窗口永远够不到任何行，
+// metrics_history 无界增长（与 jwt/audit_retention/证书数值/请求体上限同族）。
+func TestImportConfigBackup_clamps_metrics_retention_days(t *testing.T) {
+	for _, item := range []struct {
+		name  string
+		value any
+		want  int
+	}{
+		{name: "excessive clamps to 3650", value: 100000000, want: 3650},
+		{name: "below range clamps to 1", value: 0, want: 1},
+		{name: "invalid form resets to 7", value: "bogus", want: 7},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			// Given
+			h := newBackupTestHandlers(t)
+			completeTables := make(map[string][]map[string]any, len(configBackupTables))
+			for _, table := range configBackupTables {
+				completeTables[table] = []map[string]any{}
+			}
+			completeTables["users"] = []map[string]any{{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
+			importCfg := map[string]any{"metrics_retention_days": item.value}
+			importBackup := configBackup{
+				Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-19T00:00:00Z"},
+				Config: importCfg,
+				Tables: completeTables,
+			}
+			importBackup.Meta.Checksum = checksumBackupPayload(t, completeTables, importCfg)
+			body, err := json.Marshal(importBackup)
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := gin.New()
+			router.POST("/config/import", h.ImportConfigBackup)
+
+			// When
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(string(body)))
+			request.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(response, request)
+
+			// Then
+			if response.Code != http.StatusOK {
+				t.Fatalf("import status=%d body=%s", response.Code, response.Body.String())
+			}
+			var retentionDays int
+			if err := db.DB.QueryRow("SELECT metrics_retention_days FROM global_config WHERE id=1").Scan(&retentionDays); err != nil {
+				t.Fatalf("read imported metrics retention: %v", err)
+			}
+			if retentionDays != item.want {
+				t.Fatalf("metrics_retention_days=%d, want %d", retentionDays, item.want)
+			}
+		})
+	}
+}
+
 func TestImportConfigBackup_remaps_rule_updated_by_to_restored_user(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)

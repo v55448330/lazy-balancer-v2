@@ -1555,7 +1555,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	// R57 C-2：续签/有效期数值导入钳制（与写侧 caddy.go 校验同边界）——
 	// cert_renewal_days 超大值会让续签扫描窗口覆盖一切证书（续签成功后仍在
 	// 窗口内 → 永久续签风暴耗尽 CA 配额）；负值漂移 Keep/Resume 决策。
-	certNumericClamped := make([]string, 0, 3)
+	certNumericClamped := make([]string, 0, 4)
 	for _, kc := range []struct {
 		key         string
 		lo, hi      int
@@ -1568,6 +1568,10 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		{"cert_renewal_days", 0, 90, 30},
 		{"cert_renewal_attempts", 1, 10, 5},
 		{"cert_expiry_days", 1, 365, 30},
+		// N+12 G4：metrics_retention_days 导入钳制 1..3650（非法形态回退 schema
+		// 默认 7）——cleanupHistory 只兜底 <1，天文数字会让指标历史清理窗口
+		// 永远够不到任何行，metrics_history 无界增长。
+		{"metrics_retention_days", 1, 3650, 7},
 	} {
 		if value, exists := backup.Config[kc.key]; exists {
 			if n, ok := backupInteger(value); ok {

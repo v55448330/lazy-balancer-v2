@@ -692,6 +692,103 @@ func TestRequeueNonTerminalCertJobs_disables_jobs_outside_acme_rule_gate(t *test
 	}
 }
 
+// N+12 G1：恢复循环内任一任务的 CAS 冲突（快照 SELECT 后并发写入方迁移了
+// 状态）不得中止整个循环——冲突任务由并发写入方收尾，其后任务照常恢复，
+// 与 sweepOrphanedCertJobs/requeueWaitingCAJobs 的冲突语义同型（creating_*/
+// downloading 状态无周期巡检救援，中止即滞留到下次重启）。
+func TestRequeueNonTerminalCertJobs_continues_past_disable_transition_conflict(t *testing.T) {
+	// Given：job 1（downloaded+证书材料）触发部署重试回调，在回调内把 job 2
+	// 的 DB 状态并发改为终态 failed——job 2（孤儿，快照状态 presenting_dns）的
+	// disable 恢复转换随即 CAS 冲突；job 3 为排在冲突任务之后的对照任务。
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES
+		('lb_conflict_hook','hook','hook.example.com','http',8443,1,1,'acme_dns'),
+		('lb_conflict_tail','tail','tail.example.com','http',8445,1,1,'acme_dns')`); err != nil {
+		t.Fatalf("seed hook rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,cert_pem,key_pem) VALUES
+		(1,'lb_conflict_hook','hook.example.com','downloaded','cert','key'),
+		(2,'lb_missing_rule','orphan.example.com','presenting_dns','',''),
+		(3,'lb_conflict_tail','tail.example.com','downloaded','cert','key')`); err != nil {
+		t.Fatalf("seed recovery jobs: %v", err)
+	}
+	var retried []int
+
+	// When
+	err := requeueNonTerminalCertJobs(context.Background(), func(gotJobID int, _ issuedCertificate, _ time.Duration) {
+		retried = append(retried, gotJobID)
+		if gotJobID == 1 {
+			if _, mutateErr := database.Exec("UPDATE cert_jobs SET status='failed' WHERE id=2"); mutateErr != nil {
+				t.Errorf("mutate conflicting job status: %v", mutateErr)
+			}
+		}
+	})
+
+	// Then：冲突不得返回错误，job 3 仍被处理；job 2 保持并发写入方的终态。
+	if err != nil {
+		t.Fatalf("recover non-terminal jobs: %v", err)
+	}
+	if len(retried) != 2 || retried[0] != 1 || retried[1] != 3 {
+		t.Fatalf("retried jobs=%v, want [1 3]（冲突后的任务必须仍被恢复）", retried)
+	}
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=2").Scan(&status); err != nil {
+		t.Fatalf("read conflicting job: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("conflicting job status=%q, want failed（不得覆写并发写入方的终态）", status)
+	}
+}
+
+// N+12 G1：同上——"检测到已有有效证书"转 issued 的恢复转换（第二处 return
+// 站点）同样不得因单任务 CAS 冲突中止循环。
+func TestRequeueNonTerminalCertJobs_continues_past_existing_cert_transition_conflict(t *testing.T) {
+	// Given：job 2 在途（creating_order）且携带 90 天有效证书（valid-cert 恢复
+	// 优化适用）；job 1 的部署重试回调先把它并发置为 failed，job 2 转 issued
+	// 即 CAS 冲突；job 3 为冲突后的对照任务。
+	_, database := newClusterTestService(t)
+	now := time.Now().UTC()
+	certPEM, keyPEM := certificatePairForDomains(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "conflict-issued.example.com")
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES
+		('lb_conflict_hook','hook','hook.example.com','http',8443,1,1,'acme_dns'),
+		('lb_conflict_issued','issued','conflict-issued.example.com','http',8444,1,1,'acme_dns'),
+		('lb_conflict_tail','tail','tail.example.com','http',8445,1,1,'acme_dns')`); err != nil {
+		t.Fatalf("seed rules: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,expires_at,cert_pem,key_pem,updated_at) VALUES
+		(1,'lb_conflict_hook','hook.example.com','downloaded',NULL,'cert','key',datetime('now')),
+		(2,'lb_conflict_issued','conflict-issued.example.com','creating_order',datetime('now','+90 days'),?,?,datetime('now')),
+		(3,'lb_conflict_tail','tail.example.com','downloaded',NULL,'cert','key',datetime('now'))`, certPEM, keyPEM); err != nil {
+		t.Fatalf("seed recovery jobs: %v", err)
+	}
+	var retried []int
+
+	// When
+	err := requeueNonTerminalCertJobs(context.Background(), func(gotJobID int, _ issuedCertificate, _ time.Duration) {
+		retried = append(retried, gotJobID)
+		if gotJobID == 1 {
+			if _, mutateErr := database.Exec("UPDATE cert_jobs SET status='failed' WHERE id=2"); mutateErr != nil {
+				t.Errorf("mutate conflicting job status: %v", mutateErr)
+			}
+		}
+	})
+
+	// Then：冲突不得返回错误，job 3 仍被处理；job 2 保持并发写入方的终态。
+	if err != nil {
+		t.Fatalf("recover non-terminal jobs: %v", err)
+	}
+	if len(retried) != 2 || retried[0] != 1 || retried[1] != 3 {
+		t.Fatalf("retried jobs=%v, want [1 3]（冲突后的任务必须仍被恢复）", retried)
+	}
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=2").Scan(&status); err != nil {
+		t.Fatalf("read conflicting job: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("conflicting job status=%q, want failed（不得覆写并发写入方的终态）", status)
+	}
+}
+
 func TestCertificateService_CheckExpiration_returns_only_current_enabled_acme_domain(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)

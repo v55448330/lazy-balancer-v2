@@ -833,6 +833,14 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 		}
 		if !job.applicable {
 			if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "disabled", map[string]any{"message": "关联规则已不再使用当前 ACME 证书任务"}); err != nil {
+				// N+12 G1：CAS 冲突=快照后并发写入方已接管该任务（如 worker 恰在
+				// 恢复窗口内迁移状态）——跳过该任务继续恢复其余任务，不得中止
+				// 整个循环（creating_*/downloading 无周期巡检救援，中止即滞留到
+				// 下次重启）；与 sweepOrphanedCertJobs/requeueWaitingCAJobs 同型。
+				// 其余错误仍立即返回。
+				if errors.Is(err, ErrJobTransitionConflict) {
+					continue
+				}
 				return fmt.Errorf("disable ineligible recovered certificate job %d: %w", job.id, err)
 			}
 			continue
@@ -859,6 +867,10 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 				canonicalRule, ruleErr := CanonicalACMEDomains(job.ruleDomain)
 				if selectedErr == nil && ruleErr == nil && canonicalSelected == canonicalRule && selection.Certificate.NotAfter.After(now.Add(time.Duration(renewalDays)*24*time.Hour)) {
 					if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "issued", map[string]any{"message": "检测到已有有效证书，跳过恢复签发"}); err != nil {
+						// N+12 G1：CAS 冲突同样跳过继续（同上 disable 站点语义）。
+						if errors.Is(err, ErrJobTransitionConflict) {
+							continue
+						}
 						return fmt.Errorf("complete recovered certificate job %d with existing certificate: %w", job.id, err)
 					}
 					continue
