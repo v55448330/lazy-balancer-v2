@@ -1115,6 +1115,174 @@ func TestInitialize_certJobNormalizationPreservesUnparseableValues(t *testing.T)
 	}
 }
 
+// A4-S2: 历史 NOT-NULL 窗口期建库的 security_policies 四列停留 NOT NULL，
+// fresh CREATE 与 newColumns 迁移对「列已存在」的库均不生效；启动迁移必须
+// 收敛为可空并保数据。
+func TestInitialize_convergesWindowEraSecurityPoliciesNotNullColumns(t *testing.T) {
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	if _, err := DB.Exec(`DROP TABLE security_policies;
+		CREATE TABLE security_policies (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			mode TEXT DEFAULT 'off',
+			anomaly_threshold INTEGER DEFAULT 5,
+			ip_acl_mode TEXT DEFAULT '',
+			ip_acl_list TEXT DEFAULT '[]',
+			ip_acl_enabled BOOLEAN DEFAULT FALSE,
+			ip_whitelist TEXT DEFAULT '[]',
+			ip_blacklist TEXT DEFAULT '[]',
+			rate_limit_enabled BOOLEAN DEFAULT FALSE,
+			rate_limit_rps INTEGER DEFAULT 0,
+			rate_limit_burst INTEGER DEFAULT 0,
+			crs_rule_groups TEXT DEFAULT '[]',
+			crs_excluded_rules TEXT DEFAULT '[]',
+			custom_rules TEXT DEFAULT '[]',
+			block_page_id INTEGER DEFAULT 0,
+			block_status_code INTEGER NOT NULL DEFAULT 0,
+			enabled BOOLEAN DEFAULT TRUE,
+			updated_by INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT (datetime('now')),
+			updated_at DATETIME DEFAULT (datetime('now')),
+			geoip_countries TEXT NOT NULL DEFAULT '[]',
+			geoip_mode TEXT NOT NULL DEFAULT 'deny',
+			waf_check_response INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT INTO security_policies (id,name,geoip_countries,geoip_mode,waf_check_response,block_status_code,enabled)
+		VALUES (1,'window-era','["CN"]','allow',1,429,1);`); err != nil {
+		t.Fatalf("seed window-era security_policies: %v", err)
+	}
+
+	// When
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("re-initialize database: %v", err)
+	}
+
+	// Then: 四列收敛为可空，数据保留
+	for _, name := range []string{"block_status_code", "geoip_countries", "geoip_mode", "waf_check_response"} {
+		var notNull int
+		if err := DB.QueryRow(`SELECT "notnull" FROM pragma_table_info('security_policies') WHERE name=?`, name).Scan(&notNull); err != nil {
+			t.Fatalf("read security_policies.%s schema: %v", name, err)
+		}
+		if notNull != 0 {
+			t.Fatalf("security_policies.%s notnull=%d, want 0 (converged nullable)", name, notNull)
+		}
+	}
+	var countries, mode string
+	var wafCheckResponse, statusCode, enabled int
+	if err := DB.QueryRow(`SELECT geoip_countries, geoip_mode, waf_check_response, block_status_code, enabled
+		FROM security_policies WHERE id=1`).Scan(&countries, &mode, &wafCheckResponse, &statusCode, &enabled); err != nil {
+		t.Fatalf("read migrated policy: %v", err)
+	}
+	if countries != `["CN"]` || mode != "allow" || wafCheckResponse != 1 || statusCode != 429 || enabled != 1 {
+		t.Fatalf("policy data=(%q,%q,%d,%d,%d), want ([\"CN\"],allow,1,429,1)", countries, mode, wafCheckResponse, statusCode, enabled)
+	}
+	// 收敛后 NULL 行恢复（restoreTable/快照通道）不再被约束拒绝
+	if _, err := DB.Exec(`INSERT INTO security_policies (id,name,geoip_countries) VALUES (2,'null-restore',NULL)`); err != nil {
+		t.Fatalf("insert NULL geoip_countries after convergence: %v", err)
+	}
+}
+
+// A4-S3: PK 重建迁移的 upstreams_new.enabled 此前为可空（与 fresh CREATE 的
+// NOT NULL DEFAULT 1 漂移）；对齐后重建结果必须 notnull=1，且遗留 NULL 行
+// 经 COALESCE 拷贝归一为 0。
+func TestMigrateLbRulesPrimaryKey_rebuildsUpstreamEnabledNotNull(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if _, err := database.Exec(`
+		CREATE TABLE lb_rules (
+			id INTEGER PRIMARY KEY, name TEXT, description TEXT, protocol TEXT, domain TEXT, listen_port INTEGER,
+			strategy TEXT, dynamic_dns BOOLEAN, enable_dns_server BOOLEAN, dns_server TEXT, dns_family TEXT,
+			health_check_path TEXT, health_check_interval INTEGER, health_check_timeout INTEGER,
+			health_check_unhealthy_threshold INTEGER, health_check_healthy_threshold INTEGER,
+			enable_active_health_check BOOLEAN, tcp_health_check_port INTEGER, tcp_proxy_protocol BOOLEAN,
+			tcp_try_duration INTEGER, tcp_try_interval INTEGER, request_body_max_size_mb INTEGER,
+			upstream_keepalive_timeout INTEGER, server_tokens_hidden INTEGER,
+			custom_routes_enabled BOOLEAN, proxy_dial_timeout INTEGER, proxy_response_header_timeout INTEGER,
+			proxy_read_timeout INTEGER, proxy_write_timeout INTEGER, proxy_stream_timeout INTEGER,
+			proxy_flush_interval INTEGER, proxy_stream_close_delay INTEGER,
+			host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
+			tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
+			compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
+			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT
+		);
+		CREATE TABLE upstreams (
+			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
+			weight INTEGER, dynamic_dns BOOLEAN, enabled BOOLEAN, protocol TEXT, max_connections INTEGER
+		);
+		INSERT INTO lb_rules (id, name, protocol, listen_port, caddy_id) VALUES (7, 'legacy', 'tcp', 443, 'lb_enabled_nn');
+		INSERT INTO upstreams (id, rule_id, host, port, enabled) VALUES (9, 7, '127.0.0.1', 8443, NULL);
+	`); err != nil {
+		t.Fatalf("seed legacy schema: %v", err)
+	}
+
+	if err := migrateLbRulesPrimaryKey(); err != nil {
+		t.Fatalf("migrate load-balancer primary key: %v", err)
+	}
+
+	var notNull int
+	if err := database.QueryRow(`SELECT "notnull" FROM pragma_table_info('upstreams') WHERE name='enabled'`).Scan(&notNull); err != nil {
+		t.Fatalf("read upstreams.enabled schema: %v", err)
+	}
+	if notNull != 1 {
+		t.Fatalf("upstreams.enabled notnull=%d, want 1 (aligned to fresh CREATE)", notNull)
+	}
+	var enabled int
+	if err := database.QueryRow("SELECT enabled FROM upstreams WHERE id=9").Scan(&enabled); err != nil {
+		t.Fatalf("read migrated upstream: %v", err)
+	}
+	if enabled != 0 {
+		t.Fatalf("upstreams.enabled=%d, want 0 (legacy NULL normalized via COALESCE copy)", enabled)
+	}
+}
+
+// A4-S4/A5-N2: 版本表 consecutive_failures 与 global_config.is_master 的
+// 遗留 NULL 由启动迁移一次性回填（0/0/1），消灭读侧 COALESCE 语义分裂。
+func TestInitialize_backfillsNullConsecutiveFailuresAndIsMaster(t *testing.T) {
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	if _, err := DB.Exec(`INSERT OR REPLACE INTO security_crs_version (id,version,consecutive_failures) VALUES (1,'v4.28.0',NULL);
+		UPDATE security_ip2region_version SET consecutive_failures=NULL WHERE id=1;
+		UPDATE global_config SET is_master=NULL WHERE id=1`); err != nil {
+		t.Fatalf("seed NULL bookkeeping values: %v", err)
+	}
+
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("re-initialize database: %v", err)
+	}
+
+	for _, table := range []string{"security_crs_version", "security_ip2region_version"} {
+		var nullLeft int
+		if err := DB.QueryRow("SELECT consecutive_failures IS NULL FROM " + table + " WHERE id=1").Scan(&nullLeft); err != nil {
+			t.Fatalf("read %s: %v", table, err)
+		}
+		if nullLeft != 0 {
+			t.Fatalf("%s.consecutive_failures still NULL after backfill", table)
+		}
+	}
+	var isMaster int
+	if err := DB.QueryRow("SELECT is_master FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
+		t.Fatalf("read global_config.is_master: %v", err)
+	}
+	if isMaster != 1 {
+		t.Fatalf("global_config.is_master=%d, want 1 (NULL backfilled)", isMaster)
+	}
+}
+
 func TestMigrateLegacyDNSCredentials_rollsBackAllRowsOnFailure(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE certificate_configs (

@@ -73,11 +73,19 @@ var backupBooleanTableColumns = map[string][]string{
 // 仅收录「集群 dump 侧已 COALESCE 硬化」或「NULL 命中 raw-scan 消费点」的
 // 可空列；生命周期合法可空列（cert_jobs key_pem/message/ca_available_after/
 // deployment_available_after/updated_at、users.last_login/password_changed_at、
-// api_keys.expires_at/last_used、path_rules.upstreams_json、lb_rules 及
-// ca_providers/certificate_configs 的 created_at/updated_at——读侧均为
-// NullTime/NullString 扫描）保持可空，不入映射。NOT NULL 无默认列（各表
-// id/name/username/rule_id 等，及 security_policy_bindings 两列）不入映射：
-// NULL 由列约束响亮失败（500 回滚），不属于静默毒化。各表归一列与消费点：
+// api_keys.expires_at/last_used、path_rules.upstreams_json、lb_rules.updated_at、
+// certificate_configs.updated_at）保持可空，不入映射。时间列读侧消费类型
+// 逐列核实（audit 修正：旧注释「lb_rules 及 ca_providers/certificate_configs
+// 的 created_at/updated_at 读侧均为 NullTime/NullString」对集群 dump 通道不
+// 成立）——lb_rules/ca_providers/certificate_configs 的 created_at 及
+// ca_providers.updated_at 在 cluster_snapshot.go snapshotRules/snapshotACME
+// 为裸列直扫 models 的 time.Time 字段（LbRule.CreatedAt、CAProvider 双列、
+// CertificateConfig.CreatedAt），NULL→快照构建失败→整集群同步中断，归一
+// epoch 文本入映射；lb_rules.updated_at 与 certificate_configs.updated_at
+// 扫描目标为 JSONNullTime（内嵌 sql.NullTime，NULL→Valid=false 安全），
+// 保持可空。NOT NULL 无默认列（各表 id/name/username/rule_id 等，及
+// security_policy_bindings 两列）不入映射：NULL 由列约束响亮失败（500
+// 回滚），不属于静默毒化。各表归一列与消费点：
 //
 //	users                created_at 为 epoch 文本——auth.go Login 的 time.Time
 //	                     raw 扫描对 NULL/'' 均报错（'' 驱动回退字符串不可扫），
@@ -87,11 +95,16 @@ var backupBooleanTableColumns = map[string][]string{
 //	                     扫描）；布尔列 NULL 同路径 500；其余对齐 dump :730
 //	lb_rules             对齐 dump :610（strategy/tls_source/dns_family 等文本、
 //	                     tcp_try_interval 250/enable_compress 1 等）；读侧
-//	                     lbRuleColumns 已 COALESCE，此处保证两通道落库一致
+//	                     lbRuleColumns 已 COALESCE，此处保证两通道落库一致；
+//	                     created_at epoch——snapshotRules 裸列直扫 time.Time
 //	upstreams            对齐 dump :665（weight 1/protocol 'http'/enabled 0）
 //	ca_providers         对齐 dump :537；max_concurrent/min_interval_ms/enabled
-//	                     NULL→caproviders.go:74 raw 扫描 500→ACME 签发链断裂
-//	certificate_configs  对齐 dump :553（dns_provider 'dnspod'）
+//	                     NULL→caproviders.go:74 raw 扫描 500→ACME 签发链断裂；
+//	                     created_at/updated_at epoch——snapshotACME 裸列直扫
+//	                     time.Time，NULL→快照构建失败→集群同步中断
+//	certificate_configs  对齐 dump :553（dns_provider 'dnspod'）；created_at
+//	                     epoch——snapshotACME 裸列直扫 time.Time（updated_at 为
+//	                     JSONNullTime 扫描，NULL 安全，不入映射）
 //	cert_jobs            备份通道专属（集群 dump 仅覆盖 TLS 材料子集）：
 //	                     ca_provider_id/renewal_attempts/deployment_attempts NULL→
 //	                     certificates.go:91 补偿扫描硬失败/:632 续签扫描静默
@@ -100,7 +113,10 @@ var backupBooleanTableColumns = map[string][]string{
 //	                     快照 dump 的 time.Time raw 扫描对 NULL 失败→整集群
 //	                     同步中断
 //	security_crs_version / security_ip2region_version  对齐 dump :466/:483；
-//	                     auto_update NULL→自动更新静默失效
+//	                     auto_update NULL→自动更新静默失效；consecutive_failures
+//	                     NULL→crsupdate.go/crsscheduler.go readConsecutiveFailures
+//	                     raw int 扫描（读取失败优雅回退 0，退避退化为固定 1h），
+//	                     收录以维持映射判据一致，NULL→0
 //	security_policies / security_custom_rules / security_block_pages
 //	                     原三安全表条目原样并入（C5 KNOWN-GAP-1，dump
 //	                     :420/:428/:449 对齐）
@@ -121,6 +137,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"tls_cert": "", "tls_key": "", "tls_http_redirect": int64(0),
 		"enable_compress": int64(1), "compress_types": "gzip",
 		"enabled": int64(0), "log_enabled": int64(0), "created_by": int64(0), "updated_by": int64(0),
+		"created_at": "1970-01-01 00:00:00",
 	},
 	"upstreams": {
 		"weight": int64(1), "dynamic_dns": int64(0), "enabled": int64(0),
@@ -138,9 +155,11 @@ var backupTableNullDefaults = map[string]map[string]any{
 	},
 	"ca_providers": {
 		"credentials": "", "max_concurrent": int64(1), "min_interval_ms": int64(2000), "enabled": int64(1),
+		"created_at": "1970-01-01 00:00:00", "updated_at": "1970-01-01 00:00:00",
 	},
 	"certificate_configs": {
 		"dns_provider": "dnspod", "dns_credentials": "", "enabled": int64(1),
+		"created_at": "1970-01-01 00:00:00",
 	},
 	"cert_jobs": {
 		"ca_provider_id": int64(0), "renewal_attempts": int64(0), "deployment_attempts": int64(0),
@@ -170,10 +189,12 @@ var backupTableNullDefaults = map[string]map[string]any{
 	"security_crs_version": {
 		"updated_at": "", "auto_update": int64(1), "update_status": "idle", "message": "",
 		"last_checked": "", "next_update": "", "trigger": "", "started_at": "", "finished_at": "",
+		"consecutive_failures": int64(0),
 	},
 	"security_ip2region_version": {
 		"updated_at": "", "auto_update": int64(1), "update_status": "idle", "message": "",
 		"last_checked": "", "next_update": "", "trigger": "", "started_at": "", "finished_at": "",
+		"consecutive_failures": int64(0),
 	},
 }
 

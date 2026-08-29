@@ -794,6 +794,9 @@ func runMigrations() error {
 	if err := migrateUsersIsEnabledNotNull(); err != nil {
 		return fmt.Errorf("failed to migrate users.is_enabled: %w", err)
 	}
+	if err := migrateSecurityPoliciesNullable(); err != nil {
+		return fmt.Errorf("failed to migrate security_policies nullable columns: %w", err)
+	}
 	if err := migrateNodesDeadColumns(); err != nil {
 		return fmt.Errorf("failed to migrate nodes legacy columns: %w", err)
 	}
@@ -1041,6 +1044,31 @@ func runMigrations() error {
 	// migrateLbRulesPrimaryKey 的重建拷贝已用 COALESCE(enabled,0) 兜底，顺序无关。
 	if _, err := DB.Exec("UPDATE lb_rules SET enabled=0 WHERE enabled IS NULL"); err != nil {
 		return fmt.Errorf("failed to normalize NULL lb_rules.enabled: %w", err)
+	}
+
+	// A4-S4: 版本表 consecutive_failures 一次性 NULL 回填（读取端
+	// crsupdate.go/crsscheduler.go readConsecutiveFailures 对 NULL 优雅回退 0，
+	// 此处消灭理论 NULL 使落库形态与备份归一口径一致；幂等）。
+	if _, err := DB.Exec("UPDATE security_crs_version SET consecutive_failures=0 WHERE consecutive_failures IS NULL"); err != nil {
+		return fmt.Errorf("failed to backfill NULL security_crs_version.consecutive_failures: %w", err)
+	}
+	if _, err := DB.Exec("UPDATE security_ip2region_version SET consecutive_failures=0 WHERE consecutive_failures IS NULL"); err != nil {
+		return fmt.Errorf("failed to backfill NULL security_ip2region_version.consecutive_failures: %w", err)
+	}
+
+	// A5-N2: global_config.is_master NULL 回填——NULL 时 readonly 判定走
+	// COALESCE(is_master,1)（视为主库）而 cluster_version 触发器走
+	// COALESCE(is_master,0)（视为从库），语义分裂；归一为 1（fresh 行的
+	// schema 默认即 TRUE；幂等）。is_master 无 ADD COLUMN 迁移，遗留库可能
+	// 整列缺失，此时跳过（列缺失是既有形态，不属于本次回填范围）。
+	var isMasterColumn int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='is_master'").Scan(&isMasterColumn); err != nil {
+		return fmt.Errorf("failed to check global_config.is_master: %w", err)
+	}
+	if isMasterColumn > 0 {
+		if _, err := DB.Exec("UPDATE global_config SET is_master=1 WHERE id=1 AND is_master IS NULL"); err != nil {
+			return fmt.Errorf("failed to backfill NULL global_config.is_master: %w", err)
+		}
 	}
 
 	// Drop legacy global_config.sync_caddy_config if it still exists. 旧开关仅覆盖
@@ -1606,6 +1634,92 @@ func migrateUsersIsEnabledNotNull() error {
 	return nil
 }
 
+// migrateSecurityPoliciesNullable（A4-S2）：历史 NOT-NULL 窗口期建库的
+// security_policies 四列（geoip_countries/geoip_mode/waf_check_response/
+// block_status_code）永久停留 NOT NULL——fresh CREATE 与 newColumns 迁移
+// 现均为可空，但二者对「列已存在」的窗口期库都不生效，无收敛路径；NOT NULL
+// 形态会拒绝 restoreTable/快照通道携带的 NULL 行（与 :757 刻意可空口径
+// 冲突）。检测任一列 notnull=1 即整表重建为当前 fresh CREATE 形状并保数据，
+// 幂等：已收敛的库四列 notnull=0，直接返回。
+func migrateSecurityPoliciesNullable() error {
+	var notNullCount int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('security_policies')
+		WHERE name IN ('geoip_countries','geoip_mode','waf_check_response','block_status_code') AND "notnull"=1`).Scan(&notNullCount); err != nil {
+		return fmt.Errorf("inspect security_policies nullability: %w", err)
+	}
+	if notNullCount == 0 {
+		return nil
+	}
+	ctx := context.Background()
+	conn, err := DB.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		return fmt.Errorf("disable foreign keys: %w", err)
+	}
+	defer func() {
+		if _, enableErr := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); enableErr != nil {
+			log.Printf("failed to re-enable foreign keys after security_policies migration: %v", enableErr)
+		}
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin security_policies migration: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.Exec(`CREATE TABLE security_policies_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			mode TEXT DEFAULT 'off',
+			anomaly_threshold INTEGER DEFAULT 5,
+			ip_acl_mode TEXT DEFAULT '',
+			ip_acl_list TEXT DEFAULT '[]',
+			ip_acl_enabled BOOLEAN DEFAULT FALSE,
+			ip_whitelist TEXT DEFAULT '[]',
+			ip_blacklist TEXT DEFAULT '[]',
+			rate_limit_enabled BOOLEAN DEFAULT FALSE,
+			rate_limit_rps INTEGER DEFAULT 0,
+			rate_limit_burst INTEGER DEFAULT 0,
+			crs_rule_groups TEXT DEFAULT '[]',
+			crs_excluded_rules TEXT DEFAULT '[]',
+			custom_rules TEXT DEFAULT '[]',
+			block_page_id INTEGER DEFAULT 0,
+			block_status_code INTEGER DEFAULT 0,
+			enabled BOOLEAN DEFAULT TRUE,
+			updated_by INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT (datetime('now')),
+			updated_at DATETIME DEFAULT (datetime('now')),
+			geoip_countries TEXT DEFAULT '[]',
+			geoip_mode TEXT DEFAULT 'deny',
+			waf_check_response INTEGER DEFAULT 0
+		);
+		INSERT INTO security_policies_new (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
+			ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,
+			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response)
+		SELECT id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
+			ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,
+			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response
+		FROM security_policies;
+		DROP TABLE security_policies;
+		ALTER TABLE security_policies_new RENAME TO security_policies;`); err != nil {
+		return fmt.Errorf("rebuild security_policies table: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit security_policies migration: %w", err)
+	}
+	committed = true
+	log.Printf("Rebuilt security_policies with nullable geoip/waf columns (converged %d NOT NULL columns)", notNullCount)
+	return nil
+}
+
 func migrateNodesDeadColumns() error {
 	var legacyColumns int
 	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('nodes') WHERE name IN ('sync_enabled','sync_scope')").Scan(&legacyColumns); err != nil {
@@ -1861,6 +1975,9 @@ func migrateLbRulesPrimaryKey() error {
 	}
 
 	// Create new upstreams table with VARCHAR rule_id
+	// enabled 与 fresh CREATE 对齐为 NOT NULL DEFAULT 1（A4-S3 消除双通道
+	// schema 漂移）；本迁移先于 Round-35 NULL 归一化执行，拷贝侧以
+	// COALESCE(enabled,0) 兜底（与 lb_rules_new 拷贝同口径，NULL 视禁用）。
 	_, err = tx.Exec(`
 		CREATE TABLE upstreams_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1869,7 +1986,7 @@ func migrateLbRulesPrimaryKey() error {
 		port INTEGER NOT NULL,
 		weight INTEGER DEFAULT 1,
 		dynamic_dns BOOLEAN DEFAULT FALSE,
-		enabled BOOLEAN DEFAULT TRUE,
+		enabled BOOLEAN NOT NULL DEFAULT 1,
 		protocol VARCHAR(10) DEFAULT 'http',
 		max_connections INTEGER DEFAULT 0,
 		FOREIGN KEY (rule_id) REFERENCES lb_rules(caddy_id) ON DELETE CASCADE
@@ -1882,7 +1999,7 @@ func migrateLbRulesPrimaryKey() error {
 	// Copy data from old upstreams table to new (convert rule_id from int to string)
 	_, err = tx.Exec(`
 	INSERT INTO upstreams_new (id, rule_id, host, port, weight, dynamic_dns, enabled, protocol, max_connections)
-	SELECT u.id, r.caddy_id, u.host, u.port, u.weight, u.dynamic_dns, u.enabled, u.protocol,
+	SELECT u.id, r.caddy_id, u.host, u.port, u.weight, u.dynamic_dns, COALESCE(u.enabled, 0), u.protocol,
 		       COALESCE(u.max_connections, 0)
 		FROM upstreams u
 		JOIN lb_rules r ON u.rule_id = r.id

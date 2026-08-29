@@ -1846,7 +1846,8 @@ func TestImportConfigBackup_normalizes_null_rows_for_all_backup_tables(t *testin
 			"listen_port": 8461, "enabled": nil, "description": nil, "strategy": nil, "dns_server": nil, "dns_family": nil,
 			"health_check_path": nil, "host_header": nil, "tls_source": nil, "compress_types": nil, "enable_compress": nil,
 			"server_tokens_hidden": nil, "tcp_try_interval": nil, "health_check_interval": nil,
-			"created_by": nil, "updated_by": nil, "enable_tls": 0, "custom_routes_enabled": 1}},
+			"created_by": nil, "updated_by": nil, "enable_tls": 0, "custom_routes_enabled": 1,
+			"created_at": nil, "updated_at": nil}},
 		"upstreams": {{"rule_id": "lb_nulldump", "host": "127.0.0.1", "port": 9461, "weight": nil, "enabled": nil,
 			"protocol": nil, "max_connections": nil, "dynamic_dns": nil}},
 		"path_rules": {{"id": 1, "rule_id": "lb_nulldump", "sort_order": 1, "match_type": "prefix", "path": "/null",
@@ -1855,16 +1856,18 @@ func TestImportConfigBackup_normalizes_null_rows_for_all_backup_tables(t *testin
 			"is_enabled": nil, "mcp_enabled": nil, "read_only": nil, "mcp_ip_whitelist": nil,
 			"expires_at": nil, "created_at": nil, "last_used": nil}},
 		"ca_providers": {{"id": 90, "name": "null-ca", "provider": "zerossl", "directory_url": "https://ca.null/dir",
-			"credentials": nil, "max_concurrent": nil, "min_interval_ms": nil, "enabled": nil}},
-		"certificate_configs": {{"id": 91, "name": "null-dns", "dns_provider": nil, "dns_credentials": nil, "enabled": nil}},
+			"credentials": nil, "max_concurrent": nil, "min_interval_ms": nil, "enabled": nil,
+			"created_at": nil, "updated_at": nil}},
+		"certificate_configs": {{"id": 91, "name": "null-dns", "dns_provider": nil, "dns_credentials": nil, "enabled": nil,
+			"created_at": nil, "updated_at": nil}},
 		"cert_jobs": {{"id": 1, "rule_id": "lb_nulldump", "domain": "nulldump.example.test", "status": "issued",
 			"ca_provider_id": nil, "renewal_attempts": nil, "deployment_attempts": nil, "created_at": nil,
 			"message": nil, "expires_at": nil, "key_pem": nil, "ca_available_after": nil,
 			"last_error_code": nil, "deployment_available_after": nil, "updated_at": nil}},
 		"security_policies":          {{"id": 1, "name": "null-bind-policy"}},
 		"security_policy_bindings":   {{"rule_caddy_id": "lb_nulldump", "policy_id": 1}},
-		"security_crs_version":       {{"id": 1, "version": "v4.99.0", "updated_at": nil, "auto_update": nil, "update_status": nil, "message": nil, "last_checked": nil, "next_update": nil, "trigger": nil, "started_at": nil, "finished_at": nil}},
-		"security_ip2region_version": {{"id": 1, "version": "v3.99.0", "updated_at": nil, "auto_update": nil, "update_status": nil, "message": nil, "last_checked": nil, "next_update": nil, "trigger": nil, "started_at": nil, "finished_at": nil}},
+		"security_crs_version":       {{"id": 1, "version": "v4.99.0", "updated_at": nil, "auto_update": nil, "update_status": nil, "message": nil, "last_checked": nil, "next_update": nil, "trigger": nil, "started_at": nil, "finished_at": nil, "consecutive_failures": nil}},
+		"security_ip2region_version": {{"id": 1, "version": "v3.99.0", "updated_at": nil, "auto_update": nil, "update_status": nil, "message": nil, "last_checked": nil, "next_update": nil, "trigger": nil, "started_at": nil, "finished_at": nil, "consecutive_failures": nil}},
 	})
 	router := gin.New()
 	router.POST("/config/import", h.ImportConfigBackup)
@@ -2052,15 +2055,62 @@ func TestImportConfigBackup_normalizes_null_rows_for_all_backup_tables(t *testin
 		t.Fatalf("certificate_configs defaults: provider=%+v cred=%+v enabled=%+v, want 'dnspod'/''/1", dnsProvider, dnsCred, dnsEnabled)
 	}
 	for _, versionTable := range []string{"security_crs_version", "security_ip2region_version"} {
-		var autoUpdate sql.NullInt64
+		var autoUpdate, consecutiveFailures sql.NullInt64
 		var updateStatus, versionMessage, nextUpdate sql.NullString
-		if err := db.DB.QueryRow("SELECT auto_update, update_status, message, next_update FROM "+versionTable+" WHERE id=1").Scan(&autoUpdate, &updateStatus, &versionMessage, &nextUpdate); err != nil {
+		if err := db.DB.QueryRow("SELECT auto_update, update_status, message, next_update, consecutive_failures FROM "+versionTable+" WHERE id=1").Scan(&autoUpdate, &updateStatus, &versionMessage, &nextUpdate, &consecutiveFailures); err != nil {
 			t.Fatalf("read normalized %s: %v", versionTable, err)
 		}
 		if !autoUpdate.Valid || autoUpdate.Int64 != 1 || !updateStatus.Valid || updateStatus.String != "idle" ||
 			!versionMessage.Valid || versionMessage.String != "" || !nextUpdate.Valid || nextUpdate.String != "" {
 			t.Fatalf("%s defaults: auto_update=%+v update_status=%+v message=%+v next_update=%+v, want 1/'idle'/''/''", versionTable, autoUpdate, updateStatus, versionMessage, nextUpdate)
 		}
+		if !consecutiveFailures.Valid || consecutiveFailures.Int64 != 0 {
+			t.Fatalf("%s consecutive_failures=%+v, want 0 (null normalized)", versionTable, consecutiveFailures)
+		}
+	}
+
+	// 消费点 6（cluster_snapshot.go snapshotRules 尾列同形）：created_at 为
+	// raw time.Time 扫描、updated_at 为 JSONNullTime（NULL 安全，保持 NULL）。
+	// audit 修正：lb_rules.created_at NULL 此前原样落库，dump 扫描失败会中断
+	// 整集群同步，故归一 epoch（与 users/api_keys/cert_jobs/path_rules 同口径）。
+	var ruleCreatedAt time.Time
+	var ruleUpdatedAt sql.NullTime
+	if err := db.DB.QueryRow("SELECT created_at, updated_at FROM lb_rules WHERE caddy_id='lb_nulldump'").
+		Scan(&ruleCreatedAt, &ruleUpdatedAt); err != nil {
+		t.Fatalf("lb_rules snapshot-shaped time scan must survive normalized restore: %v", err)
+	}
+	if want := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC); !ruleCreatedAt.Equal(want) {
+		t.Fatalf("lb_rules.created_at=%v, want epoch %v", ruleCreatedAt, want)
+	}
+	if ruleUpdatedAt.Valid {
+		t.Fatalf("lb_rules.updated_at must stay NULL (JSONNullTime lifecycle), got %v", ruleUpdatedAt.Time)
+	}
+
+	// 消费点 7（cluster_snapshot.go snapshotACME :537 同形）：ca_providers 的
+	// created_at/updated_at 均为 raw time.Time 扫描，双列归一 epoch。
+	var caCreatedAt, caUpdatedAt time.Time
+	if err := db.DB.QueryRow("SELECT created_at, updated_at FROM ca_providers WHERE id=90").
+		Scan(&caCreatedAt, &caUpdatedAt); err != nil {
+		t.Fatalf("ca_providers snapshot-shaped time scan must survive normalized restore: %v", err)
+	}
+	if want := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC); !caCreatedAt.Equal(want) || !caUpdatedAt.Equal(want) {
+		t.Fatalf("ca_providers created_at=%v updated_at=%v, want epoch %v both", caCreatedAt, caUpdatedAt, want)
+	}
+
+	// 消费点 8（cluster_snapshot.go snapshotACME :553 同形）：certificate_configs
+	// 的 created_at 为 raw time.Time 扫描（归一 epoch），updated_at 为
+	// JSONNullTime 扫描（NULL 安全，保持 NULL）。
+	var certCfgCreatedAt time.Time
+	var certCfgUpdatedAt sql.NullTime
+	if err := db.DB.QueryRow("SELECT created_at, updated_at FROM certificate_configs WHERE id=91").
+		Scan(&certCfgCreatedAt, &certCfgUpdatedAt); err != nil {
+		t.Fatalf("certificate_configs snapshot-shaped time scan must survive normalized restore: %v", err)
+	}
+	if want := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC); !certCfgCreatedAt.Equal(want) {
+		t.Fatalf("certificate_configs.created_at=%v, want epoch %v", certCfgCreatedAt, want)
+	}
+	if certCfgUpdatedAt.Valid {
+		t.Fatalf("certificate_configs.updated_at must stay NULL (JSONNullTime lifecycle), got %v", certCfgUpdatedAt.Time)
 	}
 }
 
