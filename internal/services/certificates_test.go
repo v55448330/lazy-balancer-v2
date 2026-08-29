@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1078,6 +1079,134 @@ func TestRequeueCertJobsSnapshot_giveUpSemantics(t *testing.T) {
 		// Then
 		assertNilAndNoEnqueue(t, err, manager, enqueues)
 	})
+}
+
+// N+8 B5-S1：补偿重排队路径必须在入队前把在途快照任务落库为 'queued'。快照保留
+// 快照时刻的在途状态（waiting_ca/creating_order/validating 等），不归一化直接入队
+// 会让 provider 失效 drain 的 queuedJobStillExists 复核因 status≠'queued' 跳过
+// failJob，任务滞留队列外直到重启。
+//
+// 观测设计：beforeEnqueue 探针是唯一确定性的「入队时刻」观测点——真实队列的 loop
+// goroutine 在 enqueue 后即刻被 wakeCh 唤醒，其后的任何断言都可能被在途执行
+// （preflight/状态转换）覆盖。drain 半程按 N+7 测试同款复刻 tick 排空后状态，用
+// 手工队列（无 loop）驱动 failPendingProviderUnavailable，零调度竞态。
+// ACME directory 指向本地挂起端点（TCP 连上但永不响应），保证 PauseAndDrain 的
+// 取消到达时在途执行必然停留在 preflight——取消统一把行收敛回 'queued'
+// （requeueCanceledJob），drain 前置状态确定。
+func TestRequeueCertJobsSnapshot_midflight_jobs_enter_queue_as_queued_and_survive_provider_drain(t *testing.T) {
+	for _, seedStatus := range []string{"waiting_ca", "creating_order", "validating"} {
+		t.Run(seedStatus, func(t *testing.T) {
+			// Given：规则 + 在途任务 + 挂起端点上的 CA provider
+			_, database := newClusterTestService(t)
+			const ruleID = "lb_requeue_midflight"
+			const domain = "midflight.example.com"
+			if _, err := database.Exec(`UPDATE global_config SET acme_email='audit@example.com' WHERE id=1`); err != nil {
+				t.Fatalf("seed acme email: %v", err)
+			}
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen hang endpoint: %v", err)
+			}
+			t.Cleanup(func() { _ = listener.Close() })
+			go func() {
+				for {
+					conn, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					// 永不响应：让 ACME preflight 一直挂在 HTTP 等待上，直到执行 ctx 被取消
+					buf := make([]byte, 1024)
+					_, _ = conn.Read(buf)
+				}
+			}()
+			if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'requeue CA','letsencrypt',?,1)`, "http://"+listener.Addr().String()+"/directory"); err != nil {
+				t.Fatalf("seed CA provider: %v", err)
+			}
+			if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, ruleID, ruleID, domain); err != nil {
+				t.Fatalf("seed rule: %v", err)
+			}
+			jobResult, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES (?,?,?,7)`, ruleID, domain, seedStatus)
+			if err != nil {
+				t.Fatalf("seed job: %v", err)
+			}
+			jobID, err := jobResult.LastInsertId()
+			if err != nil {
+				t.Fatalf("read job ID: %v", err)
+			}
+			snapshot, err := SnapshotCertJobsForRule(ruleID)
+			if err != nil {
+				t.Fatalf("snapshot jobs: %v", err)
+			}
+			manager := &CAQueueManager{
+				queues:       make(map[int]*caQueue),
+				active:       true,
+				blockedRules: map[string]map[RuleBlockToken]struct{}{ruleID: {1: {}}},
+				dataDir:      t.TempDir(),
+			}
+			t.Cleanup(manager.Stop)
+			var statusAtEnqueue atomic.Value
+			manager.beforeEnqueue = func() {
+				var status string
+				if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err == nil {
+					statusAtEnqueue.Store(status)
+				}
+			}
+
+			// When：补偿重排队
+			err = requeueCertJobsSnapshot(context.Background(), snapshot, manager)
+
+			// Then 1：入队时刻 DB 状态必须为 'queued'（所有入队路径落库 queued 不变量）
+			if err != nil {
+				t.Fatalf("requeue err=%v, want nil", err)
+			}
+			if got, _ := statusAtEnqueue.Load().(string); got != "queued" {
+				t.Fatalf("status at enqueue=%q, want queued（在途快照任务入队前必须归一化为 queued，否则 provider 失效 drain 跳过 failJob 滞留至重启）", got)
+			}
+			// Then 2：任务真实占用队列槽位
+			manager.mu.Lock()
+			queue, ok := manager.queues[7]
+			var inQueue bool
+			if ok {
+				queue.mu.Lock()
+				_, inQueue = queue.active[int(jobID)]
+				queue.mu.Unlock()
+			}
+			manager.mu.Unlock()
+			if !ok || !inQueue {
+				t.Fatalf("job %d in queue: ok=%v inQueue=%v, want enqueued", jobID, ok, inQueue)
+			}
+
+			// Then 3：provider 失效 drain——先停真实队列取消在途执行（行收敛回
+			// 'queued'），再复刻 tick 排空后状态跑 provider 失效处置
+			manager.PauseAndDrain()
+			var status string
+			if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+				t.Fatalf("read status after drain: %v", err)
+			}
+			if status != "queued" {
+				t.Fatalf("status after drain=%q, want queued", status)
+			}
+			drainQueue := newCAQueue(models.CAProvider{ID: 7, MaxConcurrent: 1}, func() error { return nil })
+			t.Cleanup(drainQueue.cancel)
+			drainQueue.enqueue(queueItem{jobID: int(jobID), ruleID: ruleID, domains: domain})
+			// 复刻 tick 排空后状态：pending 已排空、active 已摘除
+			drainQueue.mu.Lock()
+			drainQueue.pending = nil
+			delete(drainQueue.active, int(jobID))
+			drainQueue.mu.Unlock()
+			drainQueue.failPendingProviderUnavailable([]queueItem{{jobID: int(jobID), ruleID: ruleID, domains: domain}}, "CA Provider 不可用：配置已禁用或删除（ID 7）")
+
+			// Then 4：任务被标记 failed 而非跳过（不得滞留至重启）
+			var attempts int
+			var message string
+			if err := database.QueryRow("SELECT status, COALESCE(renewal_attempts,0), COALESCE(message,'') FROM cert_jobs WHERE id=?", jobID).Scan(&status, &attempts, &message); err != nil {
+				t.Fatalf("read drained job: %v", err)
+			}
+			if status != "failed" || !strings.Contains(message, "CA Provider 不可用") {
+				t.Fatalf("drain result status=%q attempts=%d message=%q, want failed + CA Provider 不可用", status, attempts, message)
+			}
+		})
+	}
 }
 
 func TestRequeueNonTerminalCertJobs_does_not_resurrect_failed_job(t *testing.T) {

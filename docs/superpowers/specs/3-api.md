@@ -58,7 +58,7 @@
 ```json
 {
   "code": 200,
-  "message": "Logged out"
+  "message": "已退出登录"
 }
 ```
 

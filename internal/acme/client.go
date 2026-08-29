@@ -260,7 +260,8 @@ func (c *Client) RegisterAccount(ctx context.Context) error {
 }
 
 // staleAccountKeyIdleThreshold 是 removeStaleAccountKeys 清理密钥前的最小闲置时长，
-// 必须显著大于单次签发执行上限（caExecutionTimeout 30min），取 1h。
+// 不得小于签发执行预算封顶（caExecutionTimeoutFor 上限 caExecutionTimeoutMax=60min），
+// 否则会误删在途签发的账户密钥，取 1h。
 const staleAccountKeyIdleThreshold = time.Hour
 
 func (c *Client) removeStaleAccountKeys() error {
@@ -273,7 +274,8 @@ func (c *Client) removeStaleAccountKeys() error {
 	want := accountKeyMetadata{DirectoryURL: c.DirectoryURL, Email: c.Email, EABKID: c.eabKID, EABKeyDigest: c.accountEABKeyDigest()}
 	// 多 CA 提供商各有独立队列、可并发签发：其他任务（元数据≠本任务）的账户密钥
 	// 可能正在使用。密钥元数据在每次加载/创建时都会重写，其 mtime 即最近使用时间；
-	// 在途签发全程有 30min 执行上限，mtime 必然新于 1h 阈值——仅清理闲置超 1h 的
+	// 在途签发执行预算至多 60min（caExecutionTimeoutFor 按域名数缩放，封顶
+	// caExecutionTimeoutMax），mtime 必然不旧于 1h 阈值——仅清理闲置超 1h 的
 	// 密钥，避免误删并发任务密钥导致重试/重启后密钥反复再生（R44-3）。
 	// 备查（R45 发现5）：系统时钟回拨 >1h 时在途密钥 mtime 会早于 cutoff 而被误删，
 	// 后果仅是账户密钥换新并重新注册（账户 churn），无证书/数据损失，无安全影响。

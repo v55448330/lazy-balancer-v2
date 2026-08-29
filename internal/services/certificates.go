@@ -236,6 +236,24 @@ func requeueCertJobsSnapshot(ctx context.Context, snapshot CertJobsSnapshot, man
 		if err != nil || canonicalJob != canonicalRule {
 			continue
 		}
+		// 所有入队路径落库态均为 'queued'（queuedJobStillExists 复核依赖此不变量）：
+		// 快照保留快照时刻的在途状态（waiting_ca/creating_*/validating 等），不归一化
+		// 直接入队会在 provider 失效 drain 时被复核跳过（status≠'queued'），任务滞留
+		// 队列外直到重启（N+8 B5-S1）。入队前归一化转换，与 requeueStrandedJobs /
+		// requeueWaitingCAJobs / 启动恢复同型；waiting_ca 冷却扫描等并发路径已接管
+		// 该行时 CAS 冲突，按既有语义跳过入队由接管方负责。
+		// R57 A-#5：'downloaded' 且证书材料已落库的任务走 Issue 快速路径重部署——
+		// 转 'queued' 会丢弃已签发证书并触发整轮重签，与 requeueCanceledJob 同口径
+		// 保持原状态直接入队。
+		downloadedWithMaterial := job.status == "downloaded" && job.certPEM.Valid && job.certPEM.String != "" && job.keyPEM.Valid && job.keyPEM.String != ""
+		if !downloadedWithMaterial {
+			if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "queued", map[string]any{"message": "补偿重排队"}); err != nil {
+				if !errors.Is(err, ErrJobTransitionConflict) {
+					return fmt.Errorf("transition restored certificate job %d for requeue: %w", job.id, err)
+				}
+				continue
+			}
+		}
 		if err := manager.enqueueCompensation(job.caProviderID, job.id, job.ruleID, job.domain); err != nil {
 			return fmt.Errorf("requeue restored certificate job %d: %w", job.id, err)
 		}

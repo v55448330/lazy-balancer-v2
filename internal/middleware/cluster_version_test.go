@@ -167,6 +167,43 @@ func TestClusterVersionMiddleware_rolls_back_business_write_when_version_bump_fa
 	}
 }
 
+// N+8 B5-S3：触发器安装失败时中间件必须按 {code,message} APIResponse 契约返回
+// 500（此前是英文 gin.H{"error":...}，脱离 API 契约且未中文化）。
+func TestClusterVersionMiddleware_rejects_with_api_response_when_trigger_install_fails(t *testing.T) {
+	// Given：触发器安装失败（已关闭的连接让首次 Exec 报错）
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	database := db.DB
+	if err := db.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+	db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(clusterVersionMiddleware(database))
+	router.POST("/api/v1/rules", func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	// When
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/rules", nil))
+
+	// Then：500 + APIResponse 契约体
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("response status=%d body=%q, want 500", recorder.Code, recorder.Body.String())
+	}
+	var resp models.APIResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal body %q: %v", recorder.Body.String(), err)
+	}
+	if resp.Code != 500 || resp.Message != "集群版本触发器不可用" {
+		t.Fatalf("body={code:%d message:%q}, want {code:500 message:集群版本触发器不可用}", resp.Code, resp.Message)
+	}
+}
+
 func TestClusterVersionTriggers_bump_for_snapshot_insert_update_delete(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"lazy-balancer-v2/internal/models"
 )
 
 func clusterVersionMiddleware(database *sql.DB) gin.HandlerFunc {
@@ -18,7 +20,7 @@ func clusterVersionMiddleware(database *sql.DB) gin.HandlerFunc {
 		}
 		if installErr != nil {
 			_ = c.Error(installErr)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "cluster version trigger unavailable"})
+			c.AbortWithStatusJSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "集群版本触发器不可用"})
 			return
 		}
 		c.Next()

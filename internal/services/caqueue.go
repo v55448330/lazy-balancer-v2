@@ -59,13 +59,16 @@ var (
 	caQueueManagerOnce sync.Once
 )
 
-// caExecutionTimeout 必须覆盖单域名签发器内部最坏耗时预算
-// （注册 30s + DNS 传播 5m + 验证 10m + 订单就绪 3m + 订单有效 5m ≈ 23.5m）
+// caExecutionTimeout 是单域名签发的执行预算。单域名签发器内部分段最坏耗时
+// 之和为注册 30s + DNS 传播 5m + 验证 10m + 订单就绪 3m + finalize 10m +
+// 订单有效 5m ≈ 33.5m，略高于本基础值——极端慢签发会被判执行超时后走
+// 重试退避（预算值不调整，维持原 30min 快速失败口径）。
 const caExecutionTimeout = 30 * time.Minute
 
 // caExecutionTimeoutMax 是按域名数缩放后的执行预算封顶：多域名签发的
-// authz + DNS 传播按域名数串行叠加（双域名 ≈ 39.5min），固定 30min 会把
-// 合法慢签发误判为执行超时并白烧重试次数。
+// DNS 传播 + 验证按域名数串行叠加（双域名最坏 ≈ 48.5min，每多一域再增
+// 15min），固定 30min 会把合法慢签发误判为执行超时并白烧重试次数；
+// 每域 +10min 的缩放预算对该和为近似，封顶 60min。
 const caExecutionTimeoutMax = 60 * time.Minute
 
 // caExecutionTimeoutFor 按授权域名数缩放执行预算：单域名 30min，每增加
@@ -902,7 +905,9 @@ func (q *caQueue) failPendingProviderUnavailable(items []queueItem, message stri
 }
 
 // queuedJobStillExists 报告 pending 队列项对应的任务行仍存在且仍保持入队时
-// 预期的 'queued' 状态（所有入队路径落库态均为 'queued'）。
+// 预期的 'queued' 状态（所有重签发入队路径落库态均为 'queued'；唯一例外是
+// 补偿重排队保留的 'downloaded'+证书材料任务——其重部署走 Issue 快速路径、
+// 不依赖 CA，被跳过后由重启恢复接管部署）。
 func queuedJobStillExists(jobID int) bool {
 	var queued int
 	err := db.DB.QueryRow("SELECT status='queued' FROM cert_jobs WHERE id=?", jobID).Scan(&queued)
