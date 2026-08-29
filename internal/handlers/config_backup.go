@@ -83,9 +83,12 @@ var backupBooleanTableColumns = map[string][]string{
 // CertificateConfig.CreatedAt），NULL→快照构建失败→整集群同步中断，归一
 // epoch 文本入映射；lb_rules.updated_at 与 certificate_configs.updated_at
 // 扫描目标为 JSONNullTime（内嵌 sql.NullTime，NULL→Valid=false 安全），
-// 保持可空。NOT NULL 无默认列（各表 id/name/username/rule_id 等，及
+// 保持可空。NOT NULL 无默认列（name/username/rule_id 等，及
 // security_policy_bindings 两列）不入映射：NULL 由列约束响亮失败（500
-// 回滚），不属于静默毒化。各表归一列与消费点：
+// 回滚），不属于静默毒化。例外 lb_rules.id：列为可空普通 INTEGER（db.go
+// schema 非 NOT NULL），生产 INSERT 不写 id（新规则恒为 NULL），NULL 静默
+// 落库且无害——dump 侧 COALESCE(id,0) 兜底，无裸读 id 的消费点，同样
+// 不入映射。各表归一列与消费点：
 //
 //	users                created_at 为 epoch 文本——auth.go Login 的 time.Time
 //	                     raw 扫描对 NULL/'' 均报错（'' 驱动回退字符串不可扫），

@@ -1578,6 +1578,133 @@ func TestMigrateCanonicalDomains_deduplicatesAndRebuildsIndexWhenDuplicatesExist
 	}
 }
 
+// B4-S2（审计 N+8）：migrateLbRulesPrimaryKey 重建 lb_rules/upstreams 时，随表
+// DROP 级联删除既有索引——三张高频索引若只在重建前创建，则整个启动周期内缺失，
+// 要到下次启动才被 IF NOT EXISTS 自愈。同一启动内必须补齐。
+func TestInitialize_recreatesIndexesDroppedByPkRebuildInSameBoot(t *testing.T) {
+	// Given：lb_rules 仍以 id 为主键的遗留库（触发 PK 重建）
+	dir := t.TempDir()
+	legacy, err := sql.Open("sqlite", filepath.Join(dir, "lazy-balancer.db"))
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	if _, err := legacy.Exec(`
+		CREATE TABLE lb_rules (
+			id INTEGER PRIMARY KEY, name TEXT, description TEXT, protocol TEXT, domain TEXT, listen_port INTEGER,
+			strategy TEXT, dynamic_dns BOOLEAN, enable_dns_server BOOLEAN, dns_server TEXT, dns_family TEXT,
+			health_check_path TEXT, health_check_interval INTEGER, health_check_timeout INTEGER,
+			health_check_unhealthy_threshold INTEGER, health_check_healthy_threshold INTEGER,
+			enable_active_health_check BOOLEAN, tcp_health_check_port INTEGER, tcp_proxy_protocol BOOLEAN,
+			tcp_try_duration INTEGER, tcp_try_interval INTEGER, request_body_max_size_mb INTEGER,
+			upstream_keepalive_timeout INTEGER, server_tokens_hidden INTEGER,
+			custom_routes_enabled BOOLEAN, proxy_dial_timeout INTEGER, proxy_response_header_timeout INTEGER,
+			proxy_read_timeout INTEGER, proxy_write_timeout INTEGER, proxy_stream_timeout INTEGER,
+			proxy_flush_interval INTEGER, proxy_stream_close_delay INTEGER,
+			host_header TEXT, enable_tls BOOLEAN, tls_cert TEXT, tls_key TEXT, tls_http_redirect BOOLEAN,
+			tls_source TEXT, acme_config_id INTEGER, ca_provider_id INTEGER, enable_compress BOOLEAN,
+			compress_types TEXT, enabled BOOLEAN, log_enabled BOOLEAN, created_by INTEGER, created_at DATETIME,
+			updated_at DATETIME, updated_by INTEGER, caddy_id TEXT
+		);
+		CREATE TABLE upstreams (
+			id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
+			weight INTEGER, domain TEXT, dynamic_dns BOOLEAN, enabled BOOLEAN, protocol TEXT, host_header TEXT,
+			dns_server TEXT, max_connections INTEGER, proxy_protocol TEXT
+		);
+		INSERT INTO lb_rules (id, name, protocol, listen_port, caddy_id) VALUES (7, 'legacy', 'http', 8080, 'lb_rebuild');
+		INSERT INTO upstreams (id, rule_id, host, port) VALUES (9, 7, '127.0.0.1', 9000);
+	`); err != nil {
+		t.Fatalf("seed legacy load-balancer schema: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+
+	// When：遗留库启动一次（PK 重建 DROP 并重建两张表）
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize legacy database: %v", err)
+	}
+
+	// Then：随表删除的三张索引在同一启动内重新存在
+	for _, index := range []string{"idx_upstreams_rule_enabled_id", "idx_lb_rules_listen_port", "idx_lb_rules_enabled"} {
+		var count int
+		if err := DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?", index).Scan(&count); err != nil {
+			t.Fatalf("query index %s: %v", index, err)
+		}
+		if count != 1 {
+			t.Fatalf("index %s count=%d after PK rebuild boot, want 1", index, count)
+		}
+	}
+}
+
+// B4-S3（审计 N+8）：备份恢复通道的 epoch 归一（backupTableNullDefaults）只守住
+// 「新恢复」的行——修复前已恢复的存量 NULL 时间戳持续毒化集群 dump（裸扫
+// time.Time 对 NULL 失败）。启动幂等回填 epoch，真实时间戳的对照行不得被改写。
+func TestInitialize_backfillsLegacyNullTimestampColumns(t *testing.T) {
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	// 模拟修复前恢复通道落下的行：显式 NULL 覆盖 CURRENT_TIMESTAMP 默认值；
+	// 另带一条真实时间戳对照行，回填不得触碰。
+	if _, err := DB.Exec(`
+		INSERT INTO lb_rules (name, protocol, listen_port, caddy_id, created_at) VALUES
+			('null-ts', 'http', 8081, 'lb_null_ts', NULL),
+			('kept-ts', 'http', 8082, 'lb_kept_ts', '2026-01-02 03:04:05');
+		INSERT INTO ca_providers (name, provider, directory_url, credentials, created_at, updated_at)
+			VALUES ('ca-null', 'letsencrypt', 'https://acme.example/dir', '{}', NULL, NULL);
+		INSERT INTO certificate_configs (name, dns_provider, dns_credentials, created_at)
+			VALUES ('cert-null', 'dnspod', '{}', NULL);
+	`); err != nil {
+		t.Fatalf("seed NULL timestamps: %v", err)
+	}
+
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("re-initialize database: %v", err)
+	}
+
+	const epoch = "1970-01-01 00:00:00"
+	// SQL 内联比较字面量而非 Go 侧扫描值：DATETIME 声明列经驱动读取会被转成
+	// time.Time（'1970-01-01 00:00:00' → '1970-01-01T00:00:00Z'），无法与
+	// 存储字面量直接比对；存储值本身就是 UPDATE 写入的 epoch 文本。
+	assertEpoch := func(query string) {
+		t.Helper()
+		var count int
+		if err := DB.QueryRow(query).Scan(&count); err != nil {
+			t.Fatalf("read backfilled timestamp (%s): %v", query, err)
+		}
+		if count != 1 {
+			t.Fatalf("query %q matched %d rows, want the epoch-backfilled row", query, count)
+		}
+	}
+	assertEpoch("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_null_ts' AND created_at='" + epoch + "'")
+	assertEpoch("SELECT COUNT(*) FROM ca_providers WHERE name='ca-null' AND created_at='" + epoch + "'")
+	assertEpoch("SELECT COUNT(*) FROM ca_providers WHERE name='ca-null' AND updated_at='" + epoch + "'")
+	assertEpoch("SELECT COUNT(*) FROM certificate_configs WHERE name='cert-null' AND created_at='" + epoch + "'")
+
+	// 幂等：第三次启动后回填值不变，对照行真实时间戳原样保留。
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("third initialize: %v", err)
+	}
+	var kept int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_kept_ts' AND created_at='2026-01-02 03:04:05'").Scan(&kept); err != nil {
+		t.Fatalf("read control timestamp: %v", err)
+	}
+	if kept != 1 {
+		t.Fatalf("control row created_at was overwritten, want untouched real timestamp")
+	}
+	assertEpoch("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_null_ts' AND created_at='" + epoch + "'")
+}
+
 func openMigrationTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migration.db")+"?_pragma=foreign_keys(1)")

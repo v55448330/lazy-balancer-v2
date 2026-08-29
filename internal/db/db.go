@@ -806,9 +806,6 @@ func runMigrations() error {
 	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_api_keys_prefix_hash ON api_keys(key_prefix,key_hash)"); err != nil {
 		return fmt.Errorf("failed to index API key authentication: %w", err)
 	}
-	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_upstreams_rule_enabled_id ON upstreams(rule_id,enabled,id)"); err != nil {
-		return fmt.Errorf("failed to index upstream rule loading: %w", err)
-	}
 	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_path_rules_rule_order ON path_rules(rule_id, sort_order, id)"); err != nil {
 		return fmt.Errorf("failed to index path_rules: %w", err)
 	}
@@ -935,15 +932,6 @@ func runMigrations() error {
 	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_updated_id_expires ON cert_jobs(rule_id, updated_at DESC, id DESC, expires_at)"); err != nil {
 		return fmt.Errorf("failed to index cluster certificate selection: %w", err)
 	}
-	// Round 35 I-18/I-19: lb_rules 高频 WHERE 字段补索引。
-	// listen_port 用于创建/更新规则的端口冲突检查（避免全表扫描）。
-	// enabled 用于 Caddy 配置生成与每 5s 指标采集。
-	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_lb_rules_listen_port ON lb_rules(listen_port)"); err != nil {
-		return fmt.Errorf("failed to index lb_rules listen_port: %w", err)
-	}
-	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_lb_rules_enabled ON lb_rules(enabled)"); err != nil {
-		return fmt.Errorf("failed to index lb_rules enabled: %w", err)
-	}
 
 	// Normalize ca_available_after to SQLite canonical UTC datetime format.
 	// Older rows may contain Go time.Time strings like
@@ -978,6 +966,23 @@ func runMigrations() error {
 	// SQLite doesn't support changing primary key directly, so we need to rebuild the table
 	if err := migrateLbRulesPrimaryKey(); err != nil {
 		return fmt.Errorf("failed to migrate lb_rules primary key: %w", err)
+	}
+
+	// B4-S2（审计 N+8）：lb_rules/upstreams 三张高频索引必须在 PK 重建之后创建——
+	// 重建会 DROP 两张旧表，随表级联删除的索引若在重建前创建，则本次启动内一直
+	// 缺失（端口冲突检查/配置生成/指标采集退化为全表扫描），要到下次启动才被
+	// IF NOT EXISTS 自愈。fresh 库路径 PK 已是 caddy_id，此处 IF NOT EXISTS 为幂等
+	// no-op（schema 侧已建的同名索引不冲突）。
+	// Round 35 I-18/I-19：listen_port 用于创建/更新规则的端口冲突检查；
+	// enabled 用于 Caddy 配置生成与每 5s 指标采集。
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_upstreams_rule_enabled_id ON upstreams(rule_id,enabled,id)"); err != nil {
+		return fmt.Errorf("failed to index upstream rule loading: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_lb_rules_listen_port ON lb_rules(listen_port)"); err != nil {
+		return fmt.Errorf("failed to index lb_rules listen_port: %w", err)
+	}
+	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_lb_rules_enabled ON lb_rules(enabled)"); err != nil {
+		return fmt.Errorf("failed to index lb_rules enabled: %w", err)
 	}
 
 	// R44 B1: 须在 lb_rules 重建之后——重建前的遗留表可能没有 enable_tls 列。
@@ -1044,6 +1049,24 @@ func runMigrations() error {
 	// migrateLbRulesPrimaryKey 的重建拷贝已用 COALESCE(enabled,0) 兜底，顺序无关。
 	if _, err := DB.Exec("UPDATE lb_rules SET enabled=0 WHERE enabled IS NULL"); err != nil {
 		return fmt.Errorf("failed to normalize NULL lb_rules.enabled: %w", err)
+	}
+
+	// B4-S3（审计 N+8）：备份恢复通道的 epoch 归一（config_backup.go
+	// backupTableNullDefaults）只守住「新恢复」的行——修复前已恢复的存量行仍带
+	// NULL 时间戳，集群 dump 侧 snapshotRules/snapshotACME 裸列直扫 time.Time
+	// 对 NULL 失败会中断整集群同步。启动幂等回填 epoch（与恢复通道、dump 侧
+	// COALESCE 同值）；须在 PK 重建之后（重建拷贝对 created_at 原样保留 NULL）。
+	if _, err := DB.Exec("UPDATE lb_rules SET created_at='1970-01-01 00:00:00' WHERE created_at IS NULL"); err != nil {
+		return fmt.Errorf("failed to backfill NULL lb_rules.created_at: %w", err)
+	}
+	if _, err := DB.Exec("UPDATE ca_providers SET created_at='1970-01-01 00:00:00' WHERE created_at IS NULL"); err != nil {
+		return fmt.Errorf("failed to backfill NULL ca_providers.created_at: %w", err)
+	}
+	if _, err := DB.Exec("UPDATE ca_providers SET updated_at='1970-01-01 00:00:00' WHERE updated_at IS NULL"); err != nil {
+		return fmt.Errorf("failed to backfill NULL ca_providers.updated_at: %w", err)
+	}
+	if _, err := DB.Exec("UPDATE certificate_configs SET created_at='1970-01-01 00:00:00' WHERE created_at IS NULL"); err != nil {
+		return fmt.Errorf("failed to backfill NULL certificate_configs.created_at: %w", err)
 	}
 
 	// A4-S4: 版本表 consecutive_failures 一次性 NULL 回填（读取端
