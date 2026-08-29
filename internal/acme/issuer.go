@@ -529,7 +529,14 @@ func probeTXT(ctx context.Context, server, fqdn, expected string, recursion bool
 			lastErr = err
 			continue
 		}
-		// SERVFAIL/REFUSED 等错误应答不是「无记录」：必须按查询失败处理
+		// NXDOMAIN 是权威否定应答（「名称不存在」）：首发/彻底清理后 TXT 写入
+		// 前的正常传播状态，与 NODATA 同为未命中，服务器保持存活；否则传播
+		// 窗口内健康权威服务器被移出存活列表，叠加递归负缓存（SOA TTL
+		// 300~600s）可致假阴性杀签发。
+		if r.Rcode == dns.RcodeNameError {
+			return false, nil, nil
+		}
+		// SERVFAIL/REFUSED 等其余错误应答不是「无记录」：必须按查询失败处理
 		//（权威循环中移出存活列表），否则该服务器永远无法命中，authReady
 		// 卡假直至传播预算耗尽，产生假阴性。
 		if r.Rcode != dns.RcodeSuccess {

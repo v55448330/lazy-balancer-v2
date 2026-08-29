@@ -323,6 +323,30 @@ func TestProbeTXT_nodata_is_miss_not_error(t *testing.T) {
 	}
 }
 
+// N+8：NXDOMAIN（Rcode 3）是权威否定应答——「名称不存在」是首发/彻底清理后
+// _acme-challenge.<domain> 写入前的正常传播状态，必须与 NODATA 同为「未命中」
+// 而非错误；否则传播窗口内健康权威服务器被移出存活列表，叠加递归负缓存
+// （SOA TTL 300~600s）可致假阴性杀签发。
+func TestProbeTXT_nxdomain_is_miss_not_error(t *testing.T) {
+	// Given
+	addr := startFakeDNSServer(t, func(query *dns.Msg) *dns.Msg {
+		m := new(dns.Msg)
+		m.SetRcode(query, dns.RcodeNameError)
+		return m
+	})
+
+	// When
+	hit, found, err := probeTXT(context.Background(), addr, "_acme-challenge.example.com.", "expected", false)
+
+	// Then
+	if err != nil {
+		t.Fatalf("nxdomain is an authoritative negative answer and must remain a miss, got error: %v", err)
+	}
+	if hit || found != nil {
+		t.Fatalf("hit=%v found=%v, want empty miss", hit, found)
+	}
+}
+
 // F-C1：waitForDNS 权威循环必须把返回错误 RCODE 的服务器从存活列表移除
 // （与传输失败同口径），仅命中的服务器留在列表；任一服务器失败/未命中则
 // authReady 为假。
@@ -372,6 +396,42 @@ func TestIssuer_probeAuthServers_drops_dns_error_rcode_servers(t *testing.T) {
 	alive, ready, _, _ = issuer.probeAuthServers(context.Background(), []string{hitAddr}, fqdn, expected)
 	if !ready || len(alive) != 1 {
 		t.Fatalf("alive=%v ready=%v, want sole hit server ready", alive, ready)
+	}
+}
+
+// N+8 伴随契约：返回 NXDOMAIN 的权威服务器是健康的（权威否定应答=记录
+// 尚未写入的正常传播状态），必须保留在存活列表等待下一轮轮询；仅
+// SERVFAIL/REFUSED 等真服务器故障才移除（见上）。
+func TestIssuer_probeAuthServers_keeps_nxdomain_servers_alive(t *testing.T) {
+	// Given
+	expected := "expected-value"
+	fqdn := "_acme-challenge.example.com."
+	nxdomainAddr := startFakeDNSServer(t, func(query *dns.Msg) *dns.Msg {
+		m := new(dns.Msg)
+		m.SetRcode(query, dns.RcodeNameError)
+		return m
+	})
+	hitAddr := startFakeDNSServer(t, func(query *dns.Msg) *dns.Msg {
+		m := new(dns.Msg)
+		m.SetReply(query)
+		rr := &dns.TXT{
+			Hdr: dns.RR_Header{Name: query.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60},
+			Txt: []string{expected},
+		}
+		m.Answer = append(m.Answer, rr)
+		return m
+	})
+	issuer := &Issuer{}
+
+	// When
+	alive, ready, _, _ := issuer.probeAuthServers(context.Background(), []string{nxdomainAddr, hitAddr}, fqdn, expected)
+
+	// Then
+	if len(alive) != 2 {
+		t.Fatalf("alive=%v, want both servers kept: nxdomain is a healthy authoritative negative", alive)
+	}
+	if ready {
+		t.Fatal("ready must be false while the nxdomain server has not seen the record yet")
 	}
 }
 
