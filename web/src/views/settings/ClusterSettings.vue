@@ -42,6 +42,7 @@
           @reject="rejectNode"
           @remove="removeNode"
           @login="loginNode"
+          @service-control="openServiceControlDialog"
           @edit-access-url="openAccessUrlDialog"
         />
       </el-col>
@@ -64,6 +65,7 @@
       @reject="rejectNode"
       @remove="removeNode"
       @login="loginNode"
+      @service-control="openServiceControlDialog"
       @edit-access-url="openAccessUrlDialog"
     />
 
@@ -94,11 +96,26 @@
           <el-icon><CopyDocument /></el-icon>复制令牌
         </el-button>
       </div>
-      <div class="form-tip-line">有效期至：{{ formatDate(registerToken?.expires_at ?? '') || '-' }}</div>
-      <template #footer><el-button type="primary" @click="tokenDialogVisible = false">我已保存</el-button></template>
+       <div class="form-tip-line">有效期至：{{ formatDate(registerToken?.expires_at ?? '') || '-' }}</div>
+       <template #footer><el-button type="primary" @click="tokenDialogVisible = false">我已保存</el-button></template>
+     </el-dialog>
+
+    <el-dialog v-model="serviceControlDialogVisible" :title="`服务控制 — ${serviceControlNode?.name ?? ''}`" width="min(480px, 92vw)" :close-on-click-modal="false">
+      <el-radio-group v-model="serviceControlAction" class="service-control-group">
+        <el-radio value="start_caddy">启动 Caddy</el-radio>
+        <el-radio value="stop_caddy">停止 Caddy</el-radio>
+        <el-radio value="restart_caddy">重启 Caddy</el-radio>
+        <el-radio value="restart_app">重启应用</el-radio>
+      </el-radio-group>
+      <el-alert v-if="serviceControlAction === 'restart_app'" title="重启应用将短暂中断该节点的全部服务（约数秒）" type="warning" :closable="false" show-icon class="service-control-warning" />
+      <el-alert v-if="serviceControlAction === 'stop_caddy'" title="停止后该节点的负载均衡服务将不可用，请及时启动" type="warning" :closable="false" show-icon class="service-control-warning" />
+      <template #footer>
+        <el-button @click="serviceControlDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="serviceControlLoading" :disabled="!serviceControlAction" @click="executeServiceControl">执行</el-button>
+      </template>
     </el-dialog>
-  </div>
-</template>
+   </div>
+ </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -159,6 +176,31 @@ const editingAccessUrlNode = ref<ClusterNode | null>(null)
 const accessUrlSaving = ref(false)
 const registrationRequest = ref(0)
 const tokenDialogVisible = ref(false)
+
+const serviceControlDialogVisible = ref(false)
+const serviceControlNode = ref<ClusterNode | null>(null)
+const serviceControlAction = ref('')
+const serviceControlLoading = ref(false)
+
+const openServiceControlDialog = (node: ClusterNode): void => {
+  serviceControlNode.value = node
+  serviceControlAction.value = ''
+  serviceControlDialogVisible.value = true
+}
+
+const executeServiceControl = async (): Promise<void> => {
+  if (!serviceControlNode.value || !serviceControlAction.value) return
+  serviceControlLoading.value = true
+  try {
+    await request.post(`/cluster/nodes/${serviceControlNode.value.id}/service`, { action: serviceControlAction.value })
+    serviceControlDialogVisible.value = false
+  } catch (error: unknown) {
+    // 全局拦截器已弹 toast；428 MFA 重试也由全局处理
+    console.error('service control failed', error)
+  } finally {
+    serviceControlLoading.value = false
+  }
+}
 const registerToken = ref<ClusterRegisterToken | null>(null)
 // A6-S3：readOnlyReason 为 unknown（token 有效但 /users/me 尚未拉取成功）时同样
 // fail-closed——集群操作在该窗口期按只读呈现。slave 除外照旧：从节点管理员仍可

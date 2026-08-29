@@ -81,6 +81,7 @@
           </template>
           <template v-else>
             <el-button v-if="!readOnly" link type="primary" size="small" :loading="loginNodeId === row.id" :disabled="row.status !== 'online' || loginNodeId !== null" @click="$emit('login', row)">登录</el-button>
+            <el-button v-if="!readOnly && row.status === 'online'" link type="warning" size="small" @click="$emit('service-control', row)">服务</el-button>
             <el-button link type="danger" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('remove', row)">删除</el-button>
           </template>
         </template>
@@ -121,6 +122,7 @@ const emit = defineEmits<{
   (event: 'reject', node: ClusterNode): void
   (event: 'remove', node: ClusterNode): void
   (event: 'login', node: ClusterNode): void
+  (event: 'service-control', node: ClusterNode): void
   (event: 'edit-access-url', node: ClusterNode): void
 }>()
 
