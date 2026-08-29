@@ -284,6 +284,12 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		return fmt.Errorf("80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转")
 	}
 	if input.Protocol == "tcp" {
+		// N+12 G8-S1：L4 代理无 HTTP Host 头可驱动动态 DNS 解析（Caddy layer4 直拨
+		// IP:port），TCP+dynamic_dns 规则渲染侧被整体跳过（Round 36 I-2，仅告警）、
+		// 看门狗亦不标记——保存前不拒绝即静默死规则。与 I-5（TCP+cookie）同口径。
+		if input.DynamicDNS {
+			return fmt.Errorf("TCP 规则不支持动态上游（dynamic_dns），请关闭动态 DNS 或改用 HTTP 协议")
+		}
 		if input.CustomRoutesEnabled || len(input.PathRules) > 0 {
 			return fmt.Errorf("TCP 规则不支持自定义路径规则")
 		}

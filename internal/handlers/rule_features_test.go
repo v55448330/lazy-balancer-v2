@@ -136,6 +136,48 @@ func TestValidateRuleFeatures_protocol_aware_strategy_whitelist(t *testing.T) {
 	}
 }
 
+func TestValidateRuleFeatures_rejects_tcp_with_dynamic_dns(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     ruleFeatureInput
+		wantError string
+	}{
+		{
+			name:      "TCP with dynamic DNS rejected",
+			input:     ruleFeatureInput{Protocol: "tcp", DynamicDNS: true},
+			wantError: "TCP 规则不支持动态上游",
+		},
+		{
+			name:      "HTTP with dynamic DNS allowed",
+			input:     ruleFeatureInput{Protocol: "http", DynamicDNS: true, EnabledUpstreamCount: 1},
+			wantError: "",
+		},
+		{
+			name:      "TCP without dynamic DNS allowed",
+			input:     ruleFeatureInput{Protocol: "tcp"},
+			wantError: "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// When
+			err := validateRuleFeatures(test.input)
+
+			// Then
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatalf("validateRuleFeatures() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("validateRuleFeatures() error = %v, want containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
 func TestDuplicateRule_rejects_TCP_with_cookie_strategy(t *testing.T) {
 	// Given：源规则为 TCP + cookie 策略，复制时必须拒绝（cookie 仅 HTTP 支持）
 	handler, _ := newRuleFeatureTestHandlersWithCapture(t)
@@ -454,7 +496,8 @@ func TestCreateRule_persists_requested_DNS_family(t *testing.T) {
 			handler, _ := newRuleFeatureTestHandlersWithCapture(t)
 			router := gin.New()
 			router.POST("/rules", handler.CreateRule)
-			body := strings.NewReader(fmt.Sprintf(`{"name":"dns-%s","protocol":"tcp","listen_port":%d,"dynamic_dns":true,"dns_family":"%s","upstreams":[{"host":"example.test","port":9000,"enabled":true}]}`, test.family, test.port, test.family))
+			// N+12 G8-S1：TCP+dynamic_dns 保存侧已拒绝，dns_family 持久化改用 HTTP 载体。
+			body := strings.NewReader(fmt.Sprintf(`{"name":"dns-%s","protocol":"http","domain":"dns-%s.example.test","listen_port":%d,"dynamic_dns":true,"dns_family":"%s","upstreams":[{"host":"example.test","port":9000,"enabled":true}]}`, test.family, test.family, test.port, test.family))
 			request := httptest.NewRequest(http.MethodPost, "/rules", body)
 			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()

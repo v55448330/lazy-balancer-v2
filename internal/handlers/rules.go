@@ -2296,22 +2296,15 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
 		return
 	}
-	rule := rules[0]
-	if rule.Protocol == "http" && rule.Domain != "" {
-		rule.Domain, err = db.CanonicalDomains(rule.Domain)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名格式无效"})
-			return
-		}
-	}
 	// R57 C-8：复制前补挂载关联数据——scanLbRules 不带 Upstreams/PathRules，
 	// EnabledUpstreamCount 恒 0 会让 validateRuleFeatures 的动态 DNS 多上游
 	// 预检（DynamicDNS && count>1）在复制路径永不触发。
+	// N+12 G8-S2：不再对 rule.Domain 规范化——落库域名已由 Create/Update 与启动迁移规范化。
 	if err := hydrateRuleRelations(c.Request.Context(), rules); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则关联数据失败"})
 		return
 	}
-	rule = rules[0]
+	rule := rules[0]
 
 	userIDInt := contextUserID(c)
 

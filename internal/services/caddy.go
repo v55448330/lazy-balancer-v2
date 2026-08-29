@@ -2258,15 +2258,16 @@ func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain 
 	apps := map[string]interface{}{}
 	hasCert := false
 	if protocol == "http" {
-		var tlsSource, cert, key string
-		var enableTLS bool
+		var tlsSource string
+		var certPresent, keyPresent, enableTLS bool
 		// Round 34 F-3: 查询失败必须留痕，对话框不得静默显示"无证书"。
-		if err := db.DB.QueryRow(`SELECT COALESCE(tls_source,'manual'), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&tlsSource, &cert, &key, &enableTLS); err != nil {
+		// N+12 G8-S3：仅需存在性判断，投影 COALESCE!='' 布尔，不搬运 PEM 正文。
+		if err := db.DB.QueryRow(`SELECT COALESCE(tls_source,'manual'), COALESCE(tls_cert,'') != '', COALESCE(tls_key,'') != '', COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&tlsSource, &certPresent, &keyPresent, &enableTLS); err != nil {
 			log.Printf("GenerateRuleServerContext: 读取规则 %s TLS 字段失败: %v", caddyID, err)
 		} else if enableTLS {
 			// Round 34 F-2: 与全量渲染 availableCerts 同口径（caddy.go 全量路径
 			// 要求 EnableTLS），未开 TLS 的规则不加载证书。
-			if tlsSource == "manual" && cert != "" && key != "" {
+			if tlsSource == "manual" && certPresent && keyPresent {
 				hasCert = true
 			} else if tlsSource == "acme_dns" {
 				hasCert = isACMECertIssuedFromStore(db.DB, caddyID, domain)
@@ -2275,7 +2276,8 @@ func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain 
 		var policies []interface{}
 		// Round 34 F-2: 与全量渲染 httpServersByPort 同口径——仅 enable_tls=1 且
 		// 存在启用上游的规则进入 TLS 策略（无上游/关 TLS 规则在真实配置中不存在）。
-		rows, err := db.DB.Query(`SELECT COALESCE(caddy_id,''), COALESCE(domain,''), COALESCE(tls_source,'manual'), COALESCE(tls_cert,''), COALESCE(tls_key,'')
+		// N+12 G8-S3：证书仅有无的判断在 SQL 侧完成，不再把整列 PEM 拉进进程。
+		rows, err := db.DB.Query(`SELECT COALESCE(caddy_id,''), COALESCE(domain,''), COALESCE(tls_source,'manual'), COALESCE(tls_cert,'') != '' AND COALESCE(tls_key,'') != ''
 			FROM lb_rules WHERE enabled = 1 AND protocol = 'http' AND listen_port = ? AND enable_tls = 1
 			AND EXISTS (SELECT 1 FROM upstreams u WHERE u.rule_id = lb_rules.caddy_id AND IIF(u.enabled IN ('1',1),1,0) = 1)
 			ORDER BY id`, listenPort)
@@ -2283,12 +2285,13 @@ func GenerateRuleServerContext(caddyID string, listenPort int, protocol, domain 
 			log.Printf("GenerateRuleServerContext: 读取端口 %d TLS 策略失败: %v", listenPort, err)
 		} else {
 			for rows.Next() {
-				var ruleID, ruleDomain, tlsSource, cert, key string
-				if rows.Scan(&ruleID, &ruleDomain, &tlsSource, &cert, &key) != nil {
+				var ruleID, ruleDomain, tlsSource string
+				var hasManualCert bool
+				if rows.Scan(&ruleID, &ruleDomain, &tlsSource, &hasManualCert) != nil {
 					log.Printf("GenerateRuleServerContext: 扫描端口 %d 规则 TLS 字段失败", listenPort)
 					continue
 				}
-				available := (tlsSource == "manual" && cert != "" && key != "") || (tlsSource == "acme_dns" && isACMECertIssuedFromStore(db.DB, ruleID, ruleDomain))
+				available := (tlsSource == "manual" && hasManualCert) || (tlsSource == "acme_dns" && isACMECertIssuedFromStore(db.DB, ruleID, ruleDomain))
 				if !available {
 					continue
 				}
