@@ -236,17 +236,33 @@ func requeueCertJobsSnapshot(ctx context.Context, snapshot CertJobsSnapshot, man
 		if err != nil || canonicalJob != canonicalRule {
 			continue
 		}
-		// 所有入队路径落库态均为 'queued'（queuedJobStillExists 复核依赖此不变量）：
-		// 快照保留快照时刻的在途状态（waiting_ca/creating_*/validating 等），不归一化
-		// 直接入队会在 provider 失效 drain 时被复核跳过（status≠'queued'），任务滞留
-		// 队列外直到重启（N+8 B5-S1）。入队前归一化转换，与 requeueStrandedJobs /
-		// requeueWaitingCAJobs / 启动恢复同型；waiting_ca 冷却扫描等并发路径已接管
-		// 该行时 CAS 冲突，按既有语义跳过入队由接管方负责。
-		// R57 A-#5：'downloaded' 且证书材料已落库的任务走 Issue 快速路径重部署——
-		// 转 'queued' 会丢弃已签发证书并触发整轮重签，与 requeueCanceledJob 同口径
-		// 保持原状态直接入队。
-		downloadedWithMaterial := job.status == "downloaded" && job.certPEM.Valid && job.certPEM.String != "" && job.keyPEM.Valid && job.keyPEM.String != ""
-		if !downloadedWithMaterial {
+		// 材料在身且处于部署生命周期（downloaded/cleanup_dns/cleanup_warning，
+		// 即 JobLifecycleDownloaded 全集，与启动恢复 requeueNonTerminalCertJobs 的
+		// lifecycle==Downloaded && hasCertMaterial 同口径）的快照任务走 Issue 快速
+		// 路径重部署——转 'queued' 会丢弃已签发证书并触发整轮重签（R57 A-#5 只认
+		// 'downloaded'；N+9 C1-S2 放宽到部署生命周期全集：cleanup_* 任务材料同样
+		// 已落库、只差部署）。'downloaded' 保持原状态直接入队（与 requeueCanceledJob
+		// 同口径）；cleanup_* 先归一化为 'downloaded'——Issue 快速路径只认
+		// issued/downloaded。'queued'+材料不在例外内（I-D：显式重签请求全量重签
+		// BY-DESIGN，材料是上轮残留）。
+		hasMaterial := job.certPEM.Valid && job.certPEM.String != "" && job.keyPEM.Valid && job.keyPEM.String != ""
+		materialFastPath := hasMaterial && JobLifecycle(job.status) == JobLifecycleDownloaded
+		switch {
+		case materialFastPath && job.status != "downloaded":
+			if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "downloaded", map[string]any{"message": "补偿重排队：证书材料已落库，转快速部署"}); err != nil {
+				if !errors.Is(err, ErrJobTransitionConflict) {
+					return fmt.Errorf("transition restored certificate job %d to downloaded: %w", job.id, err)
+				}
+				continue
+			}
+		case !materialFastPath:
+			// 所有重签发入队路径落库态均为 'queued'（queuedJobStillExists 复核依赖此不变量）：
+			// 快照保留快照时刻的在途状态（waiting_ca/creating_*/validating 等），不归一化
+			// 直接入队会在 provider 失效 drain 时被复核跳过（status≠'queued'），任务滞留
+			// 队列外直到重启（N+8 B5-S1）。入队前归一化转换，与 requeueStrandedJobs /
+			// requeueWaitingCAJobs / 启动恢复同型；waiting_ca 冷却扫描等并发路径已接管
+			// 该行时 CAS 冲突，按既有语义跳过入队由接管方负责。材料例外见上：仅部署
+			// 生命周期（JobLifecycleDownloaded）+ 材料在身的任务转 'downloaded'。
 			if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "queued", map[string]any{"message": "补偿重排队"}); err != nil {
 				if !errors.Is(err, ErrJobTransitionConflict) {
 					return fmt.Errorf("transition restored certificate job %d for requeue: %w", job.id, err)
@@ -255,6 +271,16 @@ func requeueCertJobsSnapshot(ctx context.Context, snapshot CertJobsSnapshot, man
 			}
 		}
 		if err := manager.enqueueCompensation(job.caProviderID, job.id, job.ruleID, job.domain); err != nil {
+			if errors.Is(err, errCAProviderUnavailable) {
+				// N+9 C1-S1：provider 不可用是已定局的业务失败——enqueueLocked 内
+				// failJob 已把任务置 failed 并写 job-status/审计。上抛会让补偿退避
+				// 循环永久重试（每轮 restore 复活 failed 行再重新失败）且规则租约
+				// 永不释放（该规则证书操作持续 409）。按「该任务已定局」跳过并
+				// 继续其余任务，补偿一轮收敛、租约释放；provider 恢复后由手动
+				// 重试/续签链路接管。
+				Logf("warn", "证书任务补偿重排队跳过任务 %d：CA Provider 不可用（已标记 failed，可手动重试）", job.id)
+				continue
+			}
 			return fmt.Errorf("requeue restored certificate job %d: %w", job.id, err)
 		}
 	}

@@ -646,11 +646,19 @@ func (m *CAQueueManager) EnqueueIfActive(providerID int, jobID int, ruleID, doma
 	return jobID, true, m.enqueueLocked(providerID, jobID, ruleID, domains)
 }
 
+// errCAProviderUnavailable 标记入队时 CA provider 解析失败（被禁用/删除且无
+// enabled 回退）。该失败是已定局的业务状态而非瞬时错误：enqueueLocked 已同步
+// failJob（任务置 failed + job 日志 + 审计，即现有 job-status/audit 通道）。
+// 补偿重排队据此把此类错误按「该任务已定局」跳过而不上抛重试（N+9 C1-S1：
+// 上抛会让 StartRuleDeletionCompensation 退避循环永久重试——每轮 restore 复活
+// failed 行再重新失败——且规则租约 blockedRules 永不释放，该规则证书操作持续 409）。
+var errCAProviderUnavailable = errors.New("CA Provider 不可用")
+
 func (m *CAQueueManager) enqueueLocked(providerID int, jobID int, ruleID, domains string) error {
 	provider, err := loadCAProvider(providerID)
 	if err != nil {
 		failJob(jobID, fmt.Sprintf("CA Provider 不可用: %v", err))
-		return err
+		return fmt.Errorf("%w: %w", errCAProviderUnavailable, err)
 	}
 	log.Printf("CA queue Enqueue job=%d providerID=%d resolved=%s (%s)", jobID, providerID, provider.Name, provider.Provider)
 
@@ -905,9 +913,9 @@ func (q *caQueue) failPendingProviderUnavailable(items []queueItem, message stri
 }
 
 // queuedJobStillExists 报告 pending 队列项对应的任务行仍存在且仍保持入队时
-// 预期的 'queued' 状态（所有重签发入队路径落库态均为 'queued'；唯一例外是
-// 补偿重排队保留的 'downloaded'+证书材料任务——其重部署走 Issue 快速路径、
-// 不依赖 CA，被跳过后由重启恢复接管部署）。
+// 预期的 'queued' 状态（所有重签发入队路径落库态均为 'queued'；例外是补偿重排队
+// 保留/归一化为 'downloaded' 的证书材料任务——含 cleanup_* 转入，N+9 C1-S2——
+// 其重部署走 Issue 快速路径、不依赖 CA，被跳过后由部署补扫/重启恢复接管部署）。
 func queuedJobStillExists(jobID int) bool {
 	var queued int
 	err := db.DB.QueryRow("SELECT status='queued' FROM cert_jobs WHERE id=?", jobID).Scan(&queued)

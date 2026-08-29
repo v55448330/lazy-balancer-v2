@@ -1397,6 +1397,212 @@ func TestCertificateService_resumeDeploymentRetries_reschedulesDroppedRetries(t 
 	}
 }
 
+// seedRequeueMaterialFixture 建立补偿重排队测试夹具：规则 + enabled provider(id 7)
+// + 指定状态/材料的任务 + 快照，并返回带租约与 stub 执行队列的探针 manager
+// （入队路径不触网络、执行不写库，状态断言零竞态）。
+func seedRequeueMaterialFixture(t *testing.T, domain, seedStatus, certPEM, keyPEM string) (*sql.DB, CertJobsSnapshot, *CAQueueManager, int64, *atomic.Value) {
+	t.Helper()
+	_, database := newClusterTestService(t)
+	const ruleID = "lb_requeue_material"
+	if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'requeue CA','letsencrypt','https://invalid.example/directory',1)`); err != nil {
+		t.Fatalf("seed CA provider: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, ruleID, ruleID, domain); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	jobResult, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,ca_provider_id) VALUES (?,?,?,?,?,7)`, ruleID, domain, seedStatus, certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	jobID, err := jobResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("read job ID: %v", err)
+	}
+	snapshot, err := SnapshotCertJobsForRule(ruleID)
+	if err != nil {
+		t.Fatalf("snapshot jobs: %v", err)
+	}
+	manager := &CAQueueManager{
+		queues:       make(map[int]*caQueue),
+		active:       true,
+		blockedRules: map[string]map[RuleBlockToken]struct{}{ruleID: {1: {}}},
+	}
+	// 预置 stub 执行队列（loop 在跑、executeFn no-op）：避免真实 Issue 执行触网，
+	// 也保证执行不写库——补偿路径自身的状态转换就是被测对象。
+	queue := newCAQueue(models.CAProvider{ID: 7, MaxConcurrent: 1}, func() error { return nil })
+	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error { return nil }
+	go queue.loop()
+	manager.mu.Lock()
+	manager.queues[7] = queue
+	manager.mu.Unlock()
+	t.Cleanup(manager.Stop)
+	var statusAtEnqueue atomic.Value
+	manager.beforeEnqueue = func() {
+		var status string
+		if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err == nil {
+			statusAtEnqueue.Store(status)
+		}
+	}
+	return database, snapshot, manager, jobID, &statusAtEnqueue
+}
+
+// N+9 C5-S1：N+8（2b68044a）为 requeueCertJobsSnapshot 引入「downloaded+材料保持
+// 原状态直接入队」例外分支时，只补了无材料在途任务的归一化测试，例外分支本身
+// 缺直接测试。锁定：downloaded+材料的快照任务入队时刻与入队后均保持 'downloaded'
+// （Issue 快速路径重部署），不得被归一化为 'queued' 触发整轮重签（丢弃已签发证书）。
+func TestRequeueCertJobsSnapshot_downloaded_with_material_stays_fast_path(t *testing.T) {
+	now := time.Now().UTC()
+	certPEM, keyPEM := certificatePairForDomains(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "material.example.com")
+	database, snapshot, manager, jobID, statusAtEnqueue := seedRequeueMaterialFixture(t, "material.example.com", "downloaded", certPEM, keyPEM)
+
+	// When
+	err := requeueCertJobsSnapshot(context.Background(), snapshot, manager)
+
+	// Then
+	if err != nil {
+		t.Fatalf("requeue err=%v, want nil", err)
+	}
+	if got, _ := statusAtEnqueue.Load().(string); got != "downloaded" {
+		t.Fatalf("status at enqueue=%q, want downloaded（材料例外分支不得归一化为 queued 触发整轮重签）", got)
+	}
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+		t.Fatalf("read job: %v", err)
+	}
+	if status != "downloaded" {
+		t.Fatalf("final status=%q, want downloaded（保持快速路径状态等待重部署）", status)
+	}
+}
+
+// N+9 C1-S2：部署生命周期（cleanup_dns/cleanup_warning）+ 材料在身的快照任务同样
+// 只差部署——材料已落库、证书已签发（retryCertificateDeployment 从这些状态装载
+// 材料即为证）。补偿重排队必须归一化为 'downloaded' 走 Issue 快速路径重部署，
+// 不得转 'queued' 整轮重签（浪费 CA 配额并丢弃有效证书）。
+// 'queued'+材料为负对照：I-D（第 14 轮审计）确立 queued 是显式重签请求
+// （RetryCertJob 全量重签 BY-DESIGN，材料为上轮残留），补偿不得借材料例外吞掉。
+func TestRequeueCertJobsSnapshot_deploy_stage_with_material_redeploys_not_reissues(t *testing.T) {
+	for _, tc := range []struct {
+		name, seedStatus, wantStatus string
+	}{
+		{name: "cleanup_dns with material goes fast path", seedStatus: "cleanup_dns", wantStatus: "downloaded"},
+		{name: "cleanup_warning with material goes fast path", seedStatus: "cleanup_warning", wantStatus: "downloaded"},
+		{name: "queued with material stays full reissue", seedStatus: "queued", wantStatus: "queued"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			certPEM, keyPEM := certificatePairForDomains(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "redeploy.example.com")
+			database, snapshot, manager, jobID, statusAtEnqueue := seedRequeueMaterialFixture(t, "redeploy.example.com", tc.seedStatus, certPEM, keyPEM)
+
+			// When
+			err := requeueCertJobsSnapshot(context.Background(), snapshot, manager)
+
+			// Then
+			if err != nil {
+				t.Fatalf("requeue err=%v, want nil", err)
+			}
+			if got, _ := statusAtEnqueue.Load().(string); got != tc.wantStatus {
+				t.Fatalf("status at enqueue=%q, want %q（部署生命周期+材料走 downloaded 快速路径；queued 是显式重签请求不得被材料例外吞掉）", got, tc.wantStatus)
+			}
+			var status string
+			if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+				t.Fatalf("read job: %v", err)
+			}
+			if status != tc.wantStatus {
+				t.Fatalf("final status=%q, want %q", status, tc.wantStatus)
+			}
+			// 任务必须真实入队（例外分支只换目标状态，不得跳过入队）
+			manager.mu.Lock()
+			queue, hasQueue := manager.queues[7]
+			var inQueue bool
+			if hasQueue {
+				queue.mu.Lock()
+				_, inQueue = queue.active[int(jobID)]
+				queue.mu.Unlock()
+			}
+			manager.mu.Unlock()
+			if !hasQueue || !inQueue {
+				t.Fatalf("job %d in queue: hasQueue=%v inQueue=%v, want enqueued", jobID, hasQueue, inQueue)
+			}
+		})
+	}
+}
+
+// N+9 C1-S1：referenced CA provider 不可用（禁用/删除且无 enabled 回退）时，
+// enqueueCompensation→enqueueLocked 已同步 failJob（任务置 failed + job 日志 +
+// 审计——现有 job-status/audit 通道即最终处置）。补偿不得把该错误上抛：否则
+// StartRuleDeletionCompensation 的退避循环永久重试（每轮 restore 复活 failed 行
+// 再重新失败 + CRITICAL 日志噪声），且规则租约（blockedRules）永不释放——该规则
+// 的所有证书操作（EnqueueIfActive）持续 409。语义：provider 不可用按「该任务
+// 已定局」跳过，补偿一轮收敛、租约释放；provider 恢复后由手动重试/续签接管。
+func TestCompensateRuleDeletion_provider_unavailable_fails_job_and_releases_lease(t *testing.T) {
+	_, database := newClusterTestService(t)
+	const ruleID = "lb_comp_provider_gone"
+	const domain = "providergone.example.com"
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, ruleID, ruleID, domain); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	jobResult, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES (?,?,'creating_order',7)`, ruleID, domain)
+	if err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	jobID, err := jobResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("read job ID: %v", err)
+	}
+	snapshot, err := SnapshotCertJobsForRule(ruleID)
+	if err != nil {
+		t.Fatalf("snapshot jobs: %v", err)
+	}
+	// 库迁移默认 seed 两个 enabled provider（ZeroSSL/Let's Encrypt）——全部禁用，
+	// loadCAProvider(7) 无行且无 enabled 回退，才会走 provider 不可用路径
+	if _, err := database.Exec(`UPDATE ca_providers SET enabled=0`); err != nil {
+		t.Fatalf("disable seeded providers: %v", err)
+	}
+	manager := &CAQueueManager{
+		queues:       make(map[int]*caQueue),
+		active:       true,
+		blockedRules: map[string]map[RuleBlockToken]struct{}{ruleID: {9: {}}},
+	}
+	t.Cleanup(manager.Stop)
+	var enqueues atomic.Int32
+	manager.beforeEnqueue = func() { enqueues.Add(1) }
+
+	// When：整条 compensateRuleDeletion（drain→restore→requeue→Unblock）
+	err = manager.compensateRuleDeletion(context.Background(), RuleDeletionCompensation{
+		RuleID:   ruleID,
+		Token:    9,
+		Snapshot: snapshot,
+	})
+
+	// Then 1：按成功收尾——返回错误会把补偿拖入永久退避循环
+	if err != nil {
+		t.Fatalf("compensation err=%v, want nil（provider 不可用须按任务已定局收敛，上抛会永久退避）", err)
+	}
+	// Then 2：租约已释放（该规则证书操作不再 409）
+	if manager.IsRuleBlocked(ruleID) {
+		t.Fatal("rule lease still held after compensation, want released")
+	}
+	// Then 3：任务经现有 job-status/audit 通道定局为 failed + 明确归因
+	var status, message string
+	var attempts int
+	if err := database.QueryRow("SELECT status, COALESCE(message,''), COALESCE(renewal_attempts,0) FROM cert_jobs WHERE id=?", jobID).Scan(&status, &message, &attempts); err != nil {
+		t.Fatalf("read job: %v", err)
+	}
+	if status != "failed" || !strings.Contains(message, "CA Provider 不可用") {
+		t.Fatalf("job status=%q message=%q, want failed + CA Provider 不可用（现有通道已定局）", status, message)
+	}
+	// Then 4：未建队列、未真正入队（provider 缺失在入队前置检查即定局）
+	if got := enqueues.Load(); got != 0 {
+		t.Fatalf("enqueue attempts=%d, want 0", got)
+	}
+	manager.mu.Lock()
+	queues := len(manager.queues)
+	manager.mu.Unlock()
+	if queues != 0 {
+		t.Fatalf("queues=%d, want 0（provider 不可用不得创建队列）", queues)
+	}
+}
+
 func TestRestoreCertJobs_roundtripsCanonicalDatetimeFormat(t *testing.T) {
 	// R61-A2：restore 不得让 DATETIME 列漂移为驱动 `+00:00` 布局——
 	// rescan 的 time.Parse("2006-01-02 15:04:05") 是唯一解析点，漂移即
