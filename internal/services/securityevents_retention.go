@@ -60,7 +60,7 @@ func securityEventsRetentionCleanup(ctx context.Context) {
 	for {
 		res, err := database.Exec(`DELETE FROM security_events WHERE id IN (SELECT id FROM security_events WHERE event_time < datetime('now', printf('-%d days', ?)) ORDER BY id ASC LIMIT ?)`, days, securityEventsRetentionDeleteBatch)
 		if err != nil {
-			log.Printf("security events retention: age-based cleanup failed: %v", err)
+			Logf("warn", "security events retention: age-based cleanup failed: %v", err)
 			break
 		}
 		affected, _ := res.RowsAffected()
@@ -80,7 +80,7 @@ func securityEventsRetentionCleanup(ctx context.Context) {
 	}
 	var count int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
-		log.Printf("security events retention: row count failed: %v", err)
+		Logf("warn", "security events retention: row count failed: %v", err)
 		return
 	}
 	if overflow := count - max; overflow > 0 {
@@ -92,7 +92,7 @@ func securityEventsRetentionCleanup(ctx context.Context) {
 			}
 			res, err := database.Exec(`DELETE FROM security_events WHERE id IN (SELECT id FROM security_events ORDER BY id ASC LIMIT ?)`, batch)
 			if err != nil {
-				log.Printf("security events retention: count-based cleanup failed: %v", err)
+				Logf("warn", "security events retention: count-based cleanup failed: %v", err)
 				break
 			}
 			affected, _ := res.RowsAffected()

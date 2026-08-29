@@ -1069,6 +1069,26 @@ func runMigrations() error {
 		return fmt.Errorf("failed to backfill NULL certificate_configs.created_at: %w", err)
 	}
 
+	// C4-F1（审计 N+9）：同一恢复通道对 users/api_keys/path_rules/cert_jobs 的
+	// created_at 也做 epoch 归一，B4-S3 回填未跟上——修复前已恢复的存量 NULL
+	// 行持续毒化裸 time.Time 消费端（users→登录 Scan 失败 500 永久锁死/用户
+	// 列表/集群快照、api_keys 列表与快照、path_rules 快照、cert_jobs 列表/
+	// 详情/重试）。同块补齐同值 epoch 回填；users_not_null 重建
+	// （migrateUsersIsEnabledNotNull，上方先行执行）的 INSERT 拷贝对
+	// created_at 原样保留 NULL，此处位于重建之后，顺序安全；幂等。
+	if _, err := DB.Exec("UPDATE users SET created_at='1970-01-01 00:00:00' WHERE created_at IS NULL"); err != nil {
+		return fmt.Errorf("failed to backfill NULL users.created_at: %w", err)
+	}
+	if _, err := DB.Exec("UPDATE api_keys SET created_at='1970-01-01 00:00:00' WHERE created_at IS NULL"); err != nil {
+		return fmt.Errorf("failed to backfill NULL api_keys.created_at: %w", err)
+	}
+	if _, err := DB.Exec("UPDATE path_rules SET created_at='1970-01-01 00:00:00' WHERE created_at IS NULL"); err != nil {
+		return fmt.Errorf("failed to backfill NULL path_rules.created_at: %w", err)
+	}
+	if _, err := DB.Exec("UPDATE cert_jobs SET created_at='1970-01-01 00:00:00' WHERE created_at IS NULL"); err != nil {
+		return fmt.Errorf("failed to backfill NULL cert_jobs.created_at: %w", err)
+	}
+
 	// A4-S4: 版本表 consecutive_failures 一次性 NULL 回填（读取端
 	// crsupdate.go/crsscheduler.go readConsecutiveFailures 对 NULL 优雅回退 0，
 	// 此处消灭理论 NULL 使落库形态与备份归一口径一致；幂等）。

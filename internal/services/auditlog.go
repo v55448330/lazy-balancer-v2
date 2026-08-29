@@ -142,7 +142,7 @@ func CleanupAuditLogs() {
 		return
 	}
 	if _, err := db.AuditDB.Exec("DELETE FROM audit_log WHERE created_at < ?", cutoff); err != nil {
-		log.Printf("audit log cleanup failed: %v", err)
+		Logf("warn", "audit log cleanup failed: %v", err)
 	}
 }
 

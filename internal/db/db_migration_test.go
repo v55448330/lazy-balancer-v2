@@ -1644,6 +1644,9 @@ func TestInitialize_recreatesIndexesDroppedByPkRebuildInSameBoot(t *testing.T) {
 // B4-S3（审计 N+8）：备份恢复通道的 epoch 归一（backupTableNullDefaults）只守住
 // 「新恢复」的行——修复前已恢复的存量 NULL 时间戳持续毒化集群 dump（裸扫
 // time.Time 对 NULL 失败）。启动幂等回填 epoch，真实时间戳的对照行不得被改写。
+// C4-F1（审计 N+9）：同一恢复通道还归一 users/api_keys/path_rules/cert_jobs 的
+// created_at（裸 time.Time 消费端：登录/用户列表/密钥列表/证书任务/集群快照），
+// 回填范围随之补齐这四列。
 func TestInitialize_backfillsLegacyNullTimestampColumns(t *testing.T) {
 	dir := t.TempDir()
 	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
@@ -1664,6 +1667,15 @@ func TestInitialize_backfillsLegacyNullTimestampColumns(t *testing.T) {
 			VALUES ('ca-null', 'letsencrypt', 'https://acme.example/dir', '{}', NULL, NULL);
 		INSERT INTO certificate_configs (name, dns_provider, dns_credentials, created_at)
 			VALUES ('cert-null', 'dnspod', '{}', NULL);
+		INSERT INTO users (id, username, password_hash, role, is_enabled, created_at) VALUES
+			(100, 'null-ts-user', 'x', 'admin', 1, NULL),
+			(101, 'kept-ts-user', 'x', 'admin', 1, '2026-01-02 03:04:05');
+		INSERT INTO api_keys (name, key_hash, key_prefix, created_by, created_at)
+			VALUES ('null-ts-key', 'hash', 'lb_null', 100, NULL);
+		INSERT INTO path_rules (rule_id, sort_order, match_type, path, created_at)
+			VALUES ('lb_null_ts', 0, 'prefix', '/', NULL);
+		INSERT INTO cert_jobs (rule_id, domain, status, created_at)
+			VALUES ('lb_null_ts', 'null-ts.example.com', 'issued', NULL);
 	`); err != nil {
 		t.Fatalf("seed NULL timestamps: %v", err)
 	}
@@ -1690,6 +1702,10 @@ func TestInitialize_backfillsLegacyNullTimestampColumns(t *testing.T) {
 	assertEpoch("SELECT COUNT(*) FROM ca_providers WHERE name='ca-null' AND created_at='" + epoch + "'")
 	assertEpoch("SELECT COUNT(*) FROM ca_providers WHERE name='ca-null' AND updated_at='" + epoch + "'")
 	assertEpoch("SELECT COUNT(*) FROM certificate_configs WHERE name='cert-null' AND created_at='" + epoch + "'")
+	assertEpoch("SELECT COUNT(*) FROM users WHERE id=100 AND created_at='" + epoch + "'")
+	assertEpoch("SELECT COUNT(*) FROM api_keys WHERE name='null-ts-key' AND created_at='" + epoch + "'")
+	assertEpoch("SELECT COUNT(*) FROM path_rules WHERE rule_id='lb_null_ts' AND created_at='" + epoch + "'")
+	assertEpoch("SELECT COUNT(*) FROM cert_jobs WHERE domain='null-ts.example.com' AND created_at='" + epoch + "'")
 
 	// 幂等：第三次启动后回填值不变，对照行真实时间戳原样保留。
 	if err := Initialize(dir); err != nil {
@@ -1702,7 +1718,14 @@ func TestInitialize_backfillsLegacyNullTimestampColumns(t *testing.T) {
 	if kept != 1 {
 		t.Fatalf("control row created_at was overwritten, want untouched real timestamp")
 	}
+	if err := DB.QueryRow("SELECT COUNT(*) FROM users WHERE id=101 AND created_at='2026-01-02 03:04:05'").Scan(&kept); err != nil {
+		t.Fatalf("read users control timestamp: %v", err)
+	}
+	if kept != 1 {
+		t.Fatalf("users control row created_at was overwritten, want untouched real timestamp")
+	}
 	assertEpoch("SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_null_ts' AND created_at='" + epoch + "'")
+	assertEpoch("SELECT COUNT(*) FROM users WHERE id=100 AND created_at='" + epoch + "'")
 }
 
 func openMigrationTestDB(t *testing.T) *sql.DB {
