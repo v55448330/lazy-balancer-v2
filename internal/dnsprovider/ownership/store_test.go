@@ -2,8 +2,11 @@ package ownership
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -237,5 +240,162 @@ func TestStore_ownership_file_name(t *testing.T) {
 	// Then: stable file name so existing deployments keep their ownership data
 	if store.path != filepath.Join(dir, ownershipFileName) {
 		t.Fatalf("path=%s, want %s", store.path, filepath.Join(dir, ownershipFileName))
+	}
+}
+
+func TestStore_quarantines_undecodable_state_file(t *testing.T) {
+	// Given: an undecodable ownership file (e.g. truncated by a crash) that
+	// would otherwise brick every Add/MatchingValue/Remove
+	store := newStore(t)
+	corrupt := `{"version":1,"records":[{`
+	if err := os.WriteFile(store.path, []byte(corrupt), 0600); err != nil {
+		t.Fatalf("seed corrupt store: %v", err)
+	}
+
+	// When: the next operation needs the state
+	fresh := Record{Provider: "dnspod", Zone: "example.com", FQDN: "_acme-challenge.example.com.", Value: "alpha", RecordID: "200"}
+	if err := store.Add(fresh); err != nil {
+		t.Fatalf("add after corruption: %v", err)
+	}
+
+	// Then: the corrupt bytes are preserved under .corrupt-* for inspection
+	// and the state file was rewritten clean with only the new record
+	quarantined, err := filepath.Glob(store.path + ".corrupt-*")
+	if err != nil {
+		t.Fatalf("glob quarantined files: %v", err)
+	}
+	if len(quarantined) != 1 {
+		t.Fatalf("quarantined files=%v, want exactly one", quarantined)
+	}
+	original, err := os.ReadFile(quarantined[0])
+	if err != nil {
+		t.Fatalf("read quarantined file: %v", err)
+	}
+	if string(original) != corrupt {
+		t.Fatalf("quarantined content=%q, want original corrupt bytes %q", original, corrupt)
+	}
+	records := readStoreRecords(t, store)
+	if len(records) != 1 || records[0].RecordID != "200" {
+		t.Fatalf("records=%+v, want fresh record 200 only", records)
+	}
+}
+
+func TestStore_quarantines_unsupported_version_state_file(t *testing.T) {
+	// Given: a state file written by a future binary (unknown version)
+	store := newStore(t)
+	if err := os.WriteFile(store.path, []byte(`{"version":2,"records":[]}`), 0600); err != nil {
+		t.Fatalf("seed future-version store: %v", err)
+	}
+
+	// When: reads keep working and a later write republishes a clean file
+	if _, err := store.MatchingValue("dnspod", "example.com", "_acme-challenge.example.com.", "alpha"); err != nil {
+		t.Fatalf("matching after version mismatch: %v", err)
+	}
+	if err := store.Add(Record{Provider: "dnspod", Zone: "example.com", FQDN: "_acme-challenge.example.com.", Value: "alpha", RecordID: "200"}); err != nil {
+		t.Fatalf("add after version mismatch: %v", err)
+	}
+
+	// Then: the future-version file was quarantined, not silently reset
+	quarantined, err := filepath.Glob(store.path + ".corrupt-*")
+	if err != nil {
+		t.Fatalf("glob quarantined files: %v", err)
+	}
+	if len(quarantined) != 1 {
+		t.Fatalf("quarantined files=%v, want exactly one", quarantined)
+	}
+	if records := readStoreRecords(t, store); len(records) != 1 || records[0].RecordID != "200" {
+		t.Fatalf("records=%+v, want fresh record 200 only", records)
+	}
+}
+
+func TestStore_concurrent_stores_mixed_operations(t *testing.T) {
+	// Given: two Store instances over the same file (writer plus a
+	// restarted reader) and concurrent goroutines mixing Add / Remove /
+	// MatchingValue; the package-level fileMu must serialize every access
+	dir := t.TempDir()
+	storeA, err := New(dir)
+	if err != nil {
+		t.Fatalf("create store A: %v", err)
+	}
+	storeB, err := New(dir)
+	if err != nil {
+		t.Fatalf("create store B: %v", err)
+	}
+
+	const goroutines = 8
+	const iterations = 25
+	fqdn := "_acme-challenge.example.com."
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			store := storeA
+			if g%2 == 1 {
+				store = storeB
+			}
+			for i := 0; i < iterations; i++ {
+				record := Record{
+					Provider:  "dnspod",
+					Zone:      "example.com",
+					FQDN:      fqdn,
+					Value:     fmt.Sprintf("v-%d-%d", g, i),
+					RecordID:  strconv.Itoa(g*1000 + i),
+					CreatedAt: time.Now(),
+				}
+				if err := store.Add(record); err != nil {
+					t.Errorf("goroutine %d add %d: %v", g, i, err)
+					return
+				}
+				if i%2 == 0 {
+					// Remove must receive the disk-round-tripped record (as
+					// the providers do via MatchingValue): the local struct's
+					// CreatedAt keeps nanosecond precision and would not
+					// compare equal after the JSON round trip
+					matching, err := store.MatchingValue("dnspod", "example.com", fqdn, record.Value)
+					if err != nil {
+						t.Errorf("goroutine %d matching %d: %v", g, i, err)
+						return
+					}
+					found := false
+					for _, candidate := range matching {
+						if candidate.RecordID == record.RecordID {
+							found = true
+							if err := store.Remove(candidate); err != nil {
+								t.Errorf("goroutine %d remove %d: %v", g, i, err)
+								return
+							}
+						}
+					}
+					if !found {
+						t.Errorf("goroutine %d: added record %d not visible to matching", g, i)
+						return
+					}
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	// Then: the final file decodes and holds exactly the never-removed
+	// records — odd iterations of every goroutine, each exactly once
+	records := readStoreRecords(t, storeA)
+	got := make(map[string]int, len(records))
+	for _, record := range records {
+		got[record.RecordID]++
+	}
+	if len(records) != goroutines*(iterations/2) {
+		t.Fatalf("records=%d, want %d", len(records), goroutines*(iterations/2))
+	}
+	for g := 0; g < goroutines; g++ {
+		for i := 0; i < iterations; i++ {
+			count := got[strconv.Itoa(g*1000+i)]
+			if i%2 == 0 && count != 0 {
+				t.Fatalf("removed record %d-%d still present %d time(s)", g, i, count)
+			}
+			if i%2 == 1 && count != 1 {
+				t.Fatalf("record %d-%d present %d time(s), want exactly 1", g, i, count)
+			}
+		}
 	}
 }

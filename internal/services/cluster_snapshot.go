@@ -902,8 +902,11 @@ func validateDNSOwnership(data []byte) error {
 		return errors.New("DNS 所有权状态格式无效")
 	}
 	for _, record := range state.Records {
-		if record.Provider == "" || record.Zone == "" || record.FQDN == "" || record.Value == "" || record.RecordID == "" {
-			return errors.New("DNS 所有权记录缺少 provider、zone、fqdn、value 或 record_id")
+		// 空 value 是所有权存储支持的遗留形态（升级前写入的残留，见
+		// ownership.Store.MatchingValue），不能让快照整体失败；其余结构性
+		// 缺字段仍然拒绝。
+		if record.Provider == "" || record.Zone == "" || record.FQDN == "" || record.RecordID == "" {
+			return errors.New("DNS 所有权记录缺少 provider、zone、fqdn 或 record_id")
 		}
 	}
 	return nil

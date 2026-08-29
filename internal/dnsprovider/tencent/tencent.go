@@ -51,6 +51,9 @@ func New(secretID, secretKey string) (*Provider, error) {
 	credential := common.NewCredential(secretID, secretKey)
 	prof := profile.NewClientProfile()
 	prof.HttpProfile.Endpoint = "dnspod.tencentcloudapi.com"
+	// 覆盖整个重试包络（3 次尝试 + 每次至多 30s 退避/Retry-After 等待计入
+	// 同一请求的 http.Client.Timeout，SDK 默认 60s 会在包络内掐断）
+	prof.HttpProfile.ReqTimeout = 90
 	client, err := dnspod.NewClient(credential, "", prof)
 	if err != nil {
 		return nil, fmt.Errorf("create tencent dnspod client: %w", err)
@@ -135,14 +138,16 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 
 	var cleanupErr error
 	var failed []ownedRecord
-	deleteOne := func(recordID uint64) {
+	deleteOne := func(recordID uint64) error {
 		if err := p.deleteRecord(ctx, zone, recordID); err != nil {
 			if ctx.Err() != nil {
 				err = ctx.Err()
 			}
 			failed = append(failed, ownedRecord{recordID: recordID})
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("DeleteRecord failed: %w", err))
+			return err
 		}
+		return nil
 	}
 	if p.ownership != nil {
 		for _, record := range records {
@@ -151,8 +156,11 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("parse persisted Tencent record ID %q: %w", record.RecordID, parseErr))
 				continue
 			}
-			deleteOne(recordID)
-			if cleanupErr != nil {
+			// Per-record independence: a record whose deletion failed keeps
+			// its ownership entry (the DNS record may still exist), but an
+			// earlier miss must not skip Remove for records that WERE
+			// deleted — that orphans them until self-heal.
+			if deleteOne(recordID) != nil {
 				continue
 			}
 			cleanupErr = errors.Join(cleanupErr, p.ownership.Remove(record))

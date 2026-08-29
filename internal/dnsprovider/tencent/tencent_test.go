@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/dnsprovider/internal/retry"
+	"lazy-balancer-v2/internal/dnsprovider/ownership"
 )
 
 type recordTransport struct {
@@ -312,5 +313,142 @@ func TestProvider_CleanUpValue_memory_mode_tracks_values(t *testing.T) {
 	defer transport.mu.Unlock()
 	if len(transport.records) != 1 {
 		t.Fatalf("remaining records=%v, want only alpha's record", transport.records)
+	}
+}
+
+// slowFlakyTransport answers the first failCount CreateRecord calls with a
+// slow 5xx response, then behaves like recordTransport.
+type slowFlakyTransport struct {
+	recordTransport
+	failCount int
+	attempts  int
+	delay     time.Duration
+}
+
+func (transport *slowFlakyTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	transport.mu.Lock()
+	transport.attempts++
+	failing := request.Header.Get("X-TC-Action") == "CreateRecord" && transport.attempts <= transport.failCount
+	transport.mu.Unlock()
+	time.Sleep(transport.delay)
+	if failing {
+		if _, err := io.ReadAll(request.Body); err != nil {
+			return nil, err
+		}
+		if closeErr := request.Body.Close(); closeErr != nil {
+			return nil, closeErr
+		}
+		return &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"Response":{"Error":{"Code":"InternalError","Message":"transient"}}}`)),
+			Request:    request,
+		}, nil
+	}
+	return transport.recordTransport.RoundTrip(request)
+}
+
+func TestProvider_Present_survives_slow_5xx_sequence(t *testing.T) {
+	// Given: a slow 502,502,200 sequence replayed inside the SDK client's
+	// request timeout, which must cover the whole retry envelope rather than
+	// cutting the backoff loop short
+	provider, err := New("secret-id", "secret-key")
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	transport := &slowFlakyTransport{failCount: 2, delay: 100 * time.Millisecond}
+	transport.records = map[uint64]string{100: "another-task"}
+	provider.client.WithHttpTransport(&retry.Transport{Base: transport, InitialBackoff: time.Millisecond})
+
+	// When
+	if err := provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "value", 600); err != nil {
+		t.Fatalf("present: %v", err)
+	}
+
+	// Then: the delayed retry sequence completes within the client timeout
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	if transport.attempts != 3 {
+		t.Fatalf("attempts=%d, want 3", transport.attempts)
+	}
+}
+
+// deleteFailTransport fails DeleteRecord for one specific record ID while
+// every other deletion succeeds.
+type deleteFailTransport struct {
+	recordTransport
+	failRecordID uint64
+}
+
+func (transport *deleteFailTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		return nil, err
+	}
+	if closeErr := request.Body.Close(); closeErr != nil {
+		return nil, closeErr
+	}
+	if request.Header.Get("X-TC-Action") == "DeleteRecord" {
+		var payload struct {
+			RecordID uint64 `json:"RecordId"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return nil, err
+		}
+		if payload.RecordID == transport.failRecordID {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"Response":{"Error":{"Code":"UnauthorizedOperation","Message":"无权限"},"RequestId":"test"}}`)),
+				Request:    request,
+			}, nil
+		}
+	}
+	request.Body = io.NopCloser(strings.NewReader(string(body)))
+	return transport.recordTransport.RoundTrip(request)
+}
+
+func TestProvider_CleanUp_removes_ownership_of_independently_deleted_records(t *testing.T) {
+	// Given: two persisted records under one challenge name; the DNS API
+	// fails deleting record 200 but succeeds deleting record 201
+	dataDir := t.TempDir()
+	transport := &deleteFailTransport{recordTransport: recordTransport{records: map[uint64]string{}}, failRecordID: 200}
+	provider, err := NewPersistent("secret-id", "secret-key", dataDir)
+	if err != nil {
+		t.Fatalf("create persistent provider: %v", err)
+	}
+	provider.client.WithHttpTransport(transport)
+	if err := provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "alpha", 600); err != nil {
+		t.Fatalf("present alpha: %v", err)
+	}
+	if err := provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "beta", 600); err != nil {
+		t.Fatalf("present beta: %v", err)
+	}
+
+	// When
+	err = provider.CleanUp(t.Context(), "example.com", "_acme-challenge.example.com.")
+
+	// Then: the record 200 failure is reported, yet record 201 — which WAS
+	// deleted at the API — loses its ownership entry; an earlier miss must
+	// not orphan later already-deleted records
+	if err == nil {
+		t.Fatal("clean up swallowed the record 200 deletion failure")
+	}
+	transport.mu.Lock()
+	_, record201Alive := transport.records[201]
+	transport.mu.Unlock()
+	if record201Alive {
+		t.Fatal("record 201 was not deleted at the API")
+	}
+	store, err := ownership.New(dataDir)
+	if err != nil {
+		t.Fatalf("open ownership store: %v", err)
+	}
+	left, err := store.Matching("tencent", "example.com", "_acme-challenge.example.com.")
+	if err != nil {
+		t.Fatalf("matching: %v", err)
+	}
+	if len(left) != 1 || left[0].RecordID != "200" {
+		t.Fatalf("ownership left=%+v, want only the failed record 200", left)
 	}
 }

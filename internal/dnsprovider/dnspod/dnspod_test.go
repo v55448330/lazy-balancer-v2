@@ -463,3 +463,93 @@ func TestNew_wires_retrying_transport(t *testing.T) {
 		t.Fatalf("default transport=%T, want *retry.Transport", provider.client.Transport)
 	}
 }
+
+func TestNew_client_timeout_covers_retry_envelope(t *testing.T) {
+	// Given/When
+	provider := New("id,token")
+
+	// Then: http.Client.Timeout spans the whole retry loop (3 attempts plus
+	// backoff/Retry-After waits capped at 30s each), so it must exceed that
+	// envelope instead of cutting it short
+	if provider.client.Timeout < 90*time.Second {
+		t.Fatalf("client timeout=%v, want >= 90s retry-envelope headroom", provider.client.Timeout)
+	}
+}
+
+// removeFailTransport fails Record.Remove for one specific record ID while
+// every other removal succeeds.
+type removeFailTransport struct {
+	dnsPodRecordTransport
+	failRecordID string
+}
+
+func (transport *removeFailTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		return nil, err
+	}
+	if closeErr := request.Body.Close(); closeErr != nil {
+		return nil, closeErr
+	}
+	if strings.HasSuffix(request.URL.Path, "Record.Remove") {
+		params, err := url.ParseQuery(string(body))
+		if err != nil {
+			return nil, err
+		}
+		if params.Get("record_id") == transport.failRecordID {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"status":{"code":"7","message":"没有权限"}}`)),
+				Request:    request,
+			}, nil
+		}
+	}
+	request.Body = io.NopCloser(strings.NewReader(string(body)))
+	return transport.dnsPodRecordTransport.RoundTrip(request)
+}
+
+func TestProvider_CleanUp_removes_ownership_of_independently_deleted_records(t *testing.T) {
+	// Given: two persisted records under one challenge name; the DNS API
+	// fails deleting record 200 but succeeds deleting record 201
+	dataDir := t.TempDir()
+	transport := &removeFailTransport{dnsPodRecordTransport: dnsPodRecordTransport{records: map[string]string{}}, failRecordID: "200"}
+	provider, err := NewPersistent("id,token", dataDir)
+	if err != nil {
+		t.Fatalf("create persistent provider: %v", err)
+	}
+	provider.client.Transport = transport
+	if err := provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "alpha", 600); err != nil {
+		t.Fatalf("present alpha: %v", err)
+	}
+	if err := provider.Present(t.Context(), "example.com", "_acme-challenge.example.com.", "beta", 600); err != nil {
+		t.Fatalf("present beta: %v", err)
+	}
+
+	// When
+	err = provider.CleanUp(t.Context(), "example.com", "_acme-challenge.example.com.")
+
+	// Then: the record 200 failure is reported, yet record 201 — which WAS
+	// deleted at the API — loses its ownership entry; an earlier miss must
+	// not orphan later already-deleted records
+	if err == nil {
+		t.Fatal("clean up swallowed the record 200 deletion failure")
+	}
+	transport.mu.Lock()
+	_, record201Alive := transport.records["201"]
+	transport.mu.Unlock()
+	if record201Alive {
+		t.Fatal("record 201 was not deleted at the API")
+	}
+	store, err := ownership.New(dataDir)
+	if err != nil {
+		t.Fatalf("open ownership store: %v", err)
+	}
+	left, err := store.Matching("dnspod", "example.com", "_acme-challenge.example.com.")
+	if err != nil {
+		t.Fatalf("matching: %v", err)
+	}
+	if len(left) != 1 || left[0].RecordID != "200" {
+		t.Fatalf("ownership left=%+v, want only the failed record 200", left)
+	}
+}

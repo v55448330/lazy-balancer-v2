@@ -56,7 +56,9 @@ func New(loginToken string) *Provider {
 	return &Provider{
 		LoginToken: loginToken,
 		client: &http.Client{
-			Timeout: 30 * time.Second,
+			// 覆盖整个重试包络（3 次尝试 + 每次至多 30s 退避/Retry-After
+			// 等待计入同一 RoundTrip），不能把退火循环中途掐断
+			Timeout: 90 * time.Second,
 			// 429/5xx 重试在传输层统一处理，瞬时 API 故障不再直接打挂挑战
 			Transport: &retry.Transport{},
 		},
@@ -143,16 +145,21 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 
 	var cleanupErr error
 	var failed []ownedRecord
-	deleteOne := func(recordID string) {
+	deleteOne := func(recordID string) error {
 		if err := p.deleteRecord(ctx, domainID, recordID); err != nil {
 			failed = append(failed, ownedRecord{recordID: recordID})
 			cleanupErr = errors.Join(cleanupErr, err)
+			return err
 		}
+		return nil
 	}
 	if p.ownership != nil {
 		for _, record := range records {
-			deleteOne(record.RecordID)
-			if cleanupErr != nil {
+			// Per-record independence: a record whose deletion failed keeps
+			// its ownership entry (the DNS record may still exist), but an
+			// earlier miss must not skip Remove for records that WERE
+			// deleted — that orphans them until self-heal.
+			if deleteOne(record.RecordID) != nil {
 				continue
 			}
 			cleanupErr = errors.Join(cleanupErr, p.ownership.Remove(record))

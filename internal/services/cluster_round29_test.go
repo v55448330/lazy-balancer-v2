@@ -98,15 +98,15 @@ func TestClusterService_Snapshot_rebuildsAfterSelectedCertificateNaturallyExpire
 	}
 }
 
-func TestValidateDNSOwnership_rejectsRecordsMissingZoneOrValue(t *testing.T) {
-	tests := []struct {
+func TestValidateDNSOwnership_rejectsIncompleteRecords_allowsLegacyEmptyValue(t *testing.T) {
+	rejected := []struct {
 		name string
 		data string
 	}{
 		{name: "missing zone", data: `{"version":1,"records":[{"provider":"dnspod","fqdn":"_acme.example.com","value":"token","record_id":"1"}]}`},
-		{name: "missing value", data: `{"version":1,"records":[{"provider":"dnspod","zone":"example.com","fqdn":"_acme.example.com","record_id":"1"}]}`},
+		{name: "missing record_id", data: `{"version":1,"records":[{"provider":"dnspod","zone":"example.com","fqdn":"_acme.example.com","value":"token"}]}`},
 	}
-	for _, test := range tests {
+	for _, test := range rejected {
 		t.Run(test.name, func(t *testing.T) {
 			// When
 			err := validateDNSOwnership([]byte(test.data))
@@ -116,6 +116,39 @@ func TestValidateDNSOwnership_rejectsRecordsMissingZoneOrValue(t *testing.T) {
 				t.Fatal("incomplete ownership record was accepted")
 			}
 		})
+	}
+
+	// When/Then: empty value records are store-supported legacy (see
+	// ownership.Store.MatchingValue) and must not fail cluster snapshots
+	legacy := `{"version":1,"records":[{"provider":"dnspod","zone":"example.com","fqdn":"_acme.example.com","record_id":"1"}]}`
+	if err := validateDNSOwnership([]byte(legacy)); err != nil {
+		t.Fatalf("legacy empty-value record rejected: %v", err)
+	}
+}
+
+func TestClusterService_Snapshot_accepts_legacy_empty_value_ownership(t *testing.T) {
+	// Given: a node whose ownership file still holds a pre-value-tracking
+	// legacy record (empty value), as supported by the ownership store
+	service, database := newClusterTestService(t)
+	dataDir, err := clusterDatabaseDir(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`{"version":1,"records":[{"provider":"dnspod","zone":"example.com","fqdn":"_acme-challenge.example.com","record_id":"100"}]}`)
+	if err := os.WriteFile(filepath.Join(dataDir, "acme_dns_ownership.json"), legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	snapshot, _, err := service.Snapshot(context.Background(), 0, "", "")
+
+	// Then: snapshot building stays available instead of failing every
+	// section (rules/certs/users) on one legacy record
+	if err != nil {
+		t.Fatalf("snapshot with legacy ownership: %v", err)
+	}
+	if snapshot.Fingerprint == "" {
+		t.Fatal("snapshot missing fingerprint")
 	}
 }
 

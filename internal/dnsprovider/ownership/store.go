@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -139,11 +140,22 @@ func (s *Store) load() (state, error) {
 		return state{}, fmt.Errorf("read DNS ownership: %w", err)
 	}
 	var current state
-	if err := json.Unmarshal(data, &current); err != nil {
-		return state{}, fmt.Errorf("decode DNS ownership: %w", err)
+	decodeErr := json.Unmarshal(data, &current)
+	if decodeErr == nil && current.Version != 1 {
+		decodeErr = fmt.Errorf("unsupported DNS ownership version %d", current.Version)
 	}
-	if current.Version != 1 {
-		return state{}, fmt.Errorf("unsupported DNS ownership version %d", current.Version)
+	if decodeErr != nil {
+		// The ownership file is a best-effort cache: quarantine the bad bytes
+		// instead of failing every later Add/Matching/Remove (which would
+		// brick all DNS-01 issuance) until manual deletion. The quarantined
+		// file stays on disk for inspection; only a failed quarantine (bytes
+		// not preserved) keeps returning the error.
+		quarantined := fmt.Sprintf("%s.corrupt-%d", s.path, time.Now().Unix())
+		if err := os.Rename(s.path, quarantined); err != nil {
+			return state{}, fmt.Errorf("quarantine DNS ownership %s: %w", s.path, errors.Join(decodeErr, err))
+		}
+		log.Printf("DNS ownership file %s undecodable (%v), quarantined to %s and continued with empty state", s.path, decodeErr, quarantined)
+		return state{Version: 1}, nil
 	}
 	return current, nil
 }
@@ -154,12 +166,39 @@ func (s *Store) save(current state) error {
 		return fmt.Errorf("encode DNS ownership: %w", err)
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	file, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
 		return fmt.Errorf("write DNS ownership: %w", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		return fmt.Errorf("write DNS ownership: %w", errors.Join(err, file.Close()))
+	}
+	// fsync before the rename so a crash never swaps in an empty or
+	// half-written file (same durability contract as certstore.go /
+	// cluster_apply.go)
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync DNS ownership: %w", errors.Join(err, file.Close()))
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close DNS ownership: %w", err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
 		removeErr := os.Remove(tmp)
 		return fmt.Errorf("replace DNS ownership: %w", errors.Join(err, removeErr))
 	}
+	if err := syncParentDir(s.path); err != nil {
+		return fmt.Errorf("sync DNS ownership directory: %w", err)
+	}
 	return nil
+}
+
+func syncParentDir(path string) error {
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	if err := dir.Sync(); err != nil {
+		return errors.Join(err, dir.Close())
+	}
+	return dir.Close()
 }
