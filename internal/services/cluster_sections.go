@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"lazy-balancer-v2/internal/db"
 
@@ -225,6 +226,9 @@ func readAppliedSectionHashes(dbh *sql.DB) map[string]string {
 	}
 	rows, err := dbh.Query(`SELECT section, hash FROM cluster_applied_sections`)
 	if err != nil {
+		// 吞错会让漂移检测静默回退全量重放（良性但不可见）——warn 一行暴露
+		// 基础设施故障信号，行为不变。
+		Logf("warn", "读取已应用节哈希失败（漂移检测将回退全量重放口径）: %v", err)
 		return nil
 	}
 	defer rows.Close()
@@ -331,7 +335,12 @@ func logSyncSwitchGuards(snapshot models.ClusterSnapshot, sk *sectionSkips, swit
 	}
 	var lastWarnVersion int
 	if db.DB != nil {
-		db.DB.QueryRow("SELECT applied_version FROM cluster_applied_sections WHERE section='waf_files'").Scan(&lastWarnVersion)
+		// ErrNoRows 是合法空态（首次告警前无记录，按版本 0 处理）；其余读取
+		// 失败属稀有基础设施故障——不限频 warn 一行，否则去重依据静默归零、
+		// 每个 apply 周期都刷审计告警且无信号解释。
+		if err := db.DB.QueryRow("SELECT applied_version FROM cluster_applied_sections WHERE section='waf_files'").Scan(&lastWarnVersion); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			Logf("warn", "读取 waf_files 已应用版本失败（同步开关告警去重不可用）: %v", err)
+		}
 	}
 	if lastWarnVersion >= snapshot.Version {
 		return

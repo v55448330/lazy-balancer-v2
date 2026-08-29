@@ -191,6 +191,104 @@ func TestRecordAppliedSectionHashes_sameBuildDriftedChoiceImmaterial(t *testing.
 	}
 }
 
+// N+12 G7-F1/G7-F2 处置证据：从节点 apply 期归一化（R41 B1 双默认页降级）造成
+// 本地重建哈希与主节点快照哈希持久分歧时，同步周期必须收敛到稳态 304——
+// 首轮 changed 路径落快照侧哈希 h → 下一 304 周期漂移判定触发一次补偿全量
+// 重拉 → 漂移重放后 E3 N-01 drifted 分支落本地重建哈希 lh → 此后
+// local==applied 不再触发漂移。锁定「无每周期 ping-pong」不变式；残余成本
+// （每个主节点版本递增一次补偿周期）见上方裁定，接受为已知边界。
+func TestSectionSyncCycle_normalizationDivergenceConvergesAfterOneDriftCycle(t *testing.T) {
+	// Given：pre-R40 形态主节点快照——security 节携带两个 is_default=1 拦截页；
+	// 从节点 apply 后 R41 B1 降级仅保留 MIN(id)，本地重建哈希与快照侧持久分歧。
+	service, database := newClusterTestService(t)
+	ctx := context.Background()
+	for _, page := range []struct {
+		id   int
+		name string
+	}{
+		{41, "default-a"}, {42, "default-b"},
+	} {
+		if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,content,is_default) VALUES (?,?,'page',1)`, page.id, page.name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var master models.ClusterSnapshot
+	var err error
+	if master.SecurityPolicies, err = service.snapshotSecurityPolicies(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	if master.SecurityBindings, err = service.snapshotSecurityBindings(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	if master.SecurityCustomRules, err = service.snapshotSecurityCustomRules(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	if master.SecurityBlockPages, err = service.snapshotSecurityBlockPages(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	if master.SecurityCRSVersion, err = service.snapshotSecurityCRSVersion(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	if master.SecurityIP2RegionVersion, err = service.snapshotSecurityIP2RegionVersion(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	master.Version = 5
+	master.SectionHashes = ComputeSnapshotSectionHashes(&master)
+	snapshotHash := master.SectionHashes["security"]
+	// 从节点落库 + R41 B1 降级（cluster_apply.go applySecurityBlockPages 同语句）：
+	if _, err := database.Exec(`UPDATE security_block_pages SET is_default=0 WHERE is_default=1 AND id != (SELECT MIN(id) FROM security_block_pages WHERE is_default=1)`); err != nil {
+		t.Fatal(err)
+	}
+	local, err := service.driftGuardSectionHashes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localHash := local["security"]
+	if localHash == "" || localHash == snapshotHash {
+		t.Fatalf("夹具必须复现归一化分歧：local=%q snapshot=%q", localHash, snapshotHash)
+	}
+	switches := SyncSwitches{GlobalConfig: true, Users: true, Rules: true, WafFiles: true, Security: true}
+
+	// When：模拟同步周期序列（首轮 changed 应用 → 304 漂移补偿 → 漂移重放 → 稳态）
+	sk1 := computeSectionSkips(database, master, switches, local)
+	recordAppliedSectionHashes(database, master, sk1, switches, local)
+	firstApplied := readAppliedSectionHashes(database)["security"]
+	if firstApplied != snapshotHash {
+		t.Fatalf("首轮 changed 路径应落快照侧哈希：got %q want %q", firstApplied, snapshotHash)
+	}
+	// 304 周期漂移判定（镜像 driftedSections 口径：local vs applied）——必须触发
+	// 一次补偿全量重拉（残余成本），随后漂移重放收敛：
+	drifted := localHash != firstApplied
+	if !drifted {
+		t.Fatal("归一化分歧下首轮后必须触发一次漂移补偿（夹具退化）")
+	}
+	if _, err := database.Exec(`UPDATE security_block_pages SET is_default=0 WHERE is_default=1 AND id != (SELECT MIN(id) FROM security_block_pages WHERE is_default=1)`); err != nil {
+		t.Fatal(err)
+	}
+	localReplay, err := service.driftGuardSectionHashes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk3 := computeSectionSkips(database, master, switches, localReplay)
+	if !sk3.wasDrifted("security") {
+		t.Fatal("漂移重放周期必须把 security 标记为 drifted")
+	}
+	recordAppliedSectionHashes(database, master, sk3, switches, localReplay)
+
+	// Then：收敛——稳态 304 周期 local==applied，不再触发漂移补偿
+	applied := readAppliedSectionHashes(database)
+	if applied["security"] != localHash {
+		t.Fatalf("漂移重放后应落本地重建哈希：got %q want %q", applied["security"], localHash)
+	}
+	steady, err := service.driftGuardSectionHashes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steady["security"] != applied["security"] {
+		t.Fatalf("稳态必须 local==applied（无每周期 ping-pong）：local=%q applied=%q", steady["security"], applied["security"])
+	}
+}
+
 func TestComputeSnapshotSectionHashes_stableAcrossRuns(t *testing.T) {
 	a := models.ClusterSnapshot{Version: 1, Users: []models.ClusterUser{{ID: 1, Username: "u"}}}
 	b := models.ClusterSnapshot{Version: 1, Users: []models.ClusterUser{{ID: 1, Username: "u"}}}

@@ -1,12 +1,14 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -427,5 +429,46 @@ func TestClusterService_Snapshot_syncSwitchesReadFailureErrors(t *testing.T) {
 	}
 	if bypassErr == nil {
 		t.Fatal("clusterSnapshotBypassingCache must error when sync switches cannot be read")
+	}
+}
+
+// N+12 P1：单条 acme_dns 规则的域名串损坏（>2 域名，导入残留/直改库形态）
+// 只能跳过该规则的证书候选并限频告警——整包报错会让主节点对所有从节点
+// Pull 持续 500 且无自愈路径（同循环坏证书候选 :881/:887/:899 的
+// R51/R52/R53 fail-open 裁定家族）。
+func TestClusterService_Snapshot_badRuleDomainSkipsCandidateInsteadOfFailing(t *testing.T) {
+	// Given：域名串 'a.com,b.com,c.com'（3 域名 → CanonicalACMEDomains 报错）
+	// 挂在一条已签发有效证书的 acme_dns 规则上——证书本身有效，唯一坏点
+	// 是规则域名规范化。
+	service, database := newClusterTestService(t)
+	now := time.Now().UTC()
+	service.snapshotNow = func() time.Time { return now }
+	certPEM, keyPEM := certificatePairForDomains(t, now.Add(-time.Hour), now.Add(24*time.Hour), "a.com")
+	seedSnapshotCertificate(t, database, "lb_bad_domain", "a.com,b.com,c.com", "a.com", certPEM, keyPEM, now.Add(24*time.Hour), 993)
+	previousLevel := CurrentLogLevel()
+	if err := ConfigureLogLevel("warn"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ConfigureLogLevel(previousLevel) })
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+
+	// When
+	snapshot, _, err := service.Snapshot(context.Background(), 0, "", "")
+
+	// Then：快照必须成功发布；坏域名规则的证书不在快照中；限频告警恰好一次
+	if err != nil {
+		t.Fatalf("单条坏域名规则不得让整个快照失败: %v", err)
+	}
+	for _, cert := range snapshot.Certs {
+		if cert.RuleID == "lb_bad_domain" {
+			t.Fatal("坏域名规则的证书必须被跳过，不得进入快照")
+		}
+	}
+	message := logs.String()
+	if strings.Count(message, "lb_bad_domain") != 1 || !strings.Contains(message, "993") {
+		t.Fatalf("warning output=%q, want 恰好一次包含规则与 job ID 的限频告警", message)
 	}
 }

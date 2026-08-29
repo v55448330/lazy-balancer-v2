@@ -847,7 +847,11 @@ func (s *ClusterService) snapshotCertificates(ctx context.Context, store snapsho
 		}
 		canonicalRuleDomain, err := CanonicalACMEDomains(ruleDomain)
 		if err != nil {
-			return nil, fmt.Errorf("规范化快照规则 %s 域名: %w", cert.RuleID, err)
+			// R51/R52/R53 fail-open 裁定家族：单条规则的域名串损坏（导入残留/
+			// 直改库）只跳过该规则候选并限频告警——整包报错会让主节点对所有
+			// 从节点 Pull 持续 500 且无自愈路径。
+			warnSnapshotCertificateCandidate(cert.RuleID, int(candidate.ID), fmt.Errorf("规则域名规范化失败: %w", err), now)
+			continue
 		}
 		candidate.Domain = cert.Domain
 		candidate.Status = cert.SourceStatus
