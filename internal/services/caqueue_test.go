@@ -1357,3 +1357,196 @@ func TestCAQueue_providerUnavailable_fail_skips_deleted_or_disabled_job(t *testi
 	}
 	queue.cancel()
 }
+
+// N+11 D1-S2：并发/间隔闸门只需缓存 provider 与内存态即可判定，必须先于
+// loadCAProvider——否则积压窗口内每 100ms tick 都打 1-2 次 provider 查询
+// （~10 次/秒）。可观测判据：provider 已在 DB 禁用（无 enabled 回退），闸门
+// 关闭时 tick 不得触发 provider 加载——一旦加载必然走 drain→failJob 路径。
+func TestCAQueue_tick_memory_gates_skip_provider_load(t *testing.T) {
+	seedGatedQueue := func(t *testing.T) (*caQueue, int64) {
+		t.Helper()
+		_, database := newClusterTestService(t)
+		result, err := database.Exec(`INSERT INTO ca_providers (name, provider, directory_url, enabled, max_concurrent, min_interval_ms) VALUES ('gated', 'letsencrypt', 'https://invalid.example/directory', 1, 1, 60000)`)
+		if err != nil {
+			t.Fatalf("seed CA provider: %v", err)
+		}
+		providerID, err := result.LastInsertId()
+		if err != nil {
+			t.Fatalf("read CA provider ID: %v", err)
+		}
+		jobResult, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, ca_provider_id) VALUES ('lb_gated', 'example.com', 'queued', ?)`, providerID)
+		if err != nil {
+			t.Fatalf("seed certificate job: %v", err)
+		}
+		jobID, err := jobResult.LastInsertId()
+		if err != nil {
+			t.Fatalf("read certificate job ID: %v", err)
+		}
+		queue := newCAQueue(models.CAProvider{ID: int(providerID), MaxConcurrent: 1, MinIntervalMS: 60000}, func() error { return nil })
+		queue.enqueue(queueItem{jobID: int(jobID), ruleID: "lb_gated", domains: "example.com"})
+		if _, err := database.Exec("UPDATE ca_providers SET enabled=0 WHERE id=?", providerID); err != nil {
+			t.Fatalf("disable CA provider: %v", err)
+		}
+		t.Cleanup(queue.cancel)
+		return queue, jobID
+	}
+
+	assertNotDrained := func(t *testing.T, queue *caQueue, jobID int64) {
+		t.Helper()
+		queue.mu.Lock()
+		pending := len(queue.pending)
+		_, active := queue.active[int(jobID)]
+		queue.mu.Unlock()
+		if pending != 1 || !active {
+			t.Fatalf("pending=%d active=%v, want 1/true（闸门关闭时不得加载 provider 并排空队列）", pending, active)
+		}
+		var status string
+		if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+			t.Fatalf("read certificate job: %v", err)
+		}
+		if status != "queued" {
+			t.Fatalf("job status=%q, want queued（未派发不得改写任务状态）", status)
+		}
+	}
+
+	t.Run("min interval not elapsed", func(t *testing.T) {
+		// Given：刚派发过一次（lastOrder=now），60s 间隔闸门关闭
+		queue, jobID := seedGatedQueue(t)
+		queue.mu.Lock()
+		queue.lastOrder = time.Now()
+		queue.mu.Unlock()
+
+		// When
+		queue.tick()
+
+		// Then
+		assertNotDrained(t, queue, jobID)
+	})
+
+	t.Run("max concurrent reached", func(t *testing.T) {
+		// Given：并发已满（running=1 = MaxConcurrent）
+		queue, jobID := seedGatedQueue(t)
+		queue.mu.Lock()
+		queue.running = 1
+		queue.mu.Unlock()
+
+		// When
+		queue.tick()
+
+		// Then
+		assertNotDrained(t, queue, jobID)
+	})
+}
+
+// 闸门按缓存放行后，加载到的新配置若收紧必须复核拦截——派发决策始终按最新
+// provider 配置评估，不弱于原先"每次 tick 都用新加载值评估"的语义。
+func TestCAQueue_tick_rechecks_gates_with_refreshed_provider(t *testing.T) {
+	// Given：缓存 MaxConcurrent=2，DB 已收紧为 1，running=1（缓存闸门放行）
+	_, database := newClusterTestService(t)
+	result, err := database.Exec(`INSERT INTO ca_providers (name, provider, directory_url, enabled, max_concurrent) VALUES ('tightened', 'letsencrypt', 'https://invalid.example/directory', 1, 2)`)
+	if err != nil {
+		t.Fatalf("seed CA provider: %v", err)
+	}
+	providerID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read CA provider ID: %v", err)
+	}
+	jobResult, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, ca_provider_id) VALUES ('lb_tightened', 'example.com', 'queued', ?)`, providerID)
+	if err != nil {
+		t.Fatalf("seed certificate job: %v", err)
+	}
+	jobID, err := jobResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("read certificate job ID: %v", err)
+	}
+	if _, err := database.Exec("UPDATE ca_providers SET max_concurrent=1 WHERE id=?", providerID); err != nil {
+		t.Fatalf("tighten CA provider: %v", err)
+	}
+	queue := newCAQueue(models.CAProvider{ID: int(providerID), MaxConcurrent: 2}, func() error { return nil })
+	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error {
+		return errors.New("unexpected dispatch")
+	}
+	queue.enqueue(queueItem{jobID: int(jobID), ruleID: "lb_tightened", domains: "example.com"})
+	queue.mu.Lock()
+	queue.running = 1
+	queue.mu.Unlock()
+	t.Cleanup(queue.cancel)
+
+	// When
+	queue.tick()
+
+	// Then：新值复核拦截，无派发、pending 保留
+	queue.mu.Lock()
+	pending := len(queue.pending)
+	running := queue.running
+	queue.mu.Unlock()
+	if pending != 1 || running != 1 {
+		t.Fatalf("pending=%d running=%d, want 1/1（收紧后的并发上限必须拦截派发）", pending, running)
+	}
+	var status string
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+		t.Fatalf("read certificate job: %v", err)
+	}
+	if status != "queued" {
+		t.Fatalf("job status=%q, want queued", status)
+	}
+}
+
+// 闸门全开时 provider 刷新仅发生在真正派发时，且派发用的是 DB 新鲜配置。
+func TestCAQueue_tick_dispatches_with_refreshed_provider(t *testing.T) {
+	// Given：缓存 MaxConcurrent=1，DB 为 3；闸门全开
+	_, database := newClusterTestService(t)
+	result, err := database.Exec(`INSERT INTO ca_providers (name, provider, directory_url, enabled, max_concurrent) VALUES ('dispatch', 'letsencrypt', 'https://invalid.example/directory', 1, 3)`)
+	if err != nil {
+		t.Fatalf("seed CA provider: %v", err)
+	}
+	providerID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read CA provider ID: %v", err)
+	}
+	jobResult, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, ca_provider_id) VALUES ('lb_dispatch', 'example.com', 'queued', ?)`, providerID)
+	if err != nil {
+		t.Fatalf("seed certificate job: %v", err)
+	}
+	jobID, err := jobResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("read certificate job ID: %v", err)
+	}
+	queue := newCAQueue(models.CAProvider{ID: int(providerID), MaxConcurrent: 1}, func() error { return nil })
+	gotProvider := make(chan models.CAProvider, 1)
+	queue.executeFn = func(_ context.Context, _ queueItem, provider models.CAProvider) error {
+		gotProvider <- provider
+		return nil
+	}
+	queue.enqueue(queueItem{jobID: int(jobID), ruleID: "lb_dispatch", domains: "example.com"})
+	t.Cleanup(queue.cancel)
+
+	// When
+	queue.tick()
+
+	// Then：派发用的 provider 来自 DB 刷新（MaxConcurrent=3），而非缓存值 1
+	select {
+	case provider := <-gotProvider:
+		if provider.MaxConcurrent != 3 {
+			t.Fatalf("dispatched provider MaxConcurrent=%d, want 3（派发必须用 DB 新鲜配置）", provider.MaxConcurrent)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("dispatch did not start with all gates open")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		queue.mu.Lock()
+		settled := len(queue.pending) == 0 && queue.running == 0
+		queue.mu.Unlock()
+		if settled || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	queue.mu.Lock()
+	settled := len(queue.pending) == 0 && queue.running == 0
+	queue.mu.Unlock()
+	if !settled {
+		t.Fatal("dispatch did not settle after completion")
+	}
+}

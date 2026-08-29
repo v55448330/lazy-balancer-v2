@@ -423,3 +423,38 @@ func TestClient_FetchCert_uses_certificate_downloaded_during_finalize(t *testing
 		t.Fatalf("requests=%d certificate=%v, want cached %v", requests, got, want)
 	}
 }
+
+// N+11 D1-S3：非 429 重试走截断指数退避 1,2,4,8s、封顶 10s（对齐 x/crypto
+// defaultBackoff 曲线）——固定 2s 会在 CA 5xx 过载时维持约 5 倍请求压力。
+// x/crypto v0.55.0 语义：RetryBackoff 返回值即重试延迟本身（不与默认曲线或
+// Retry-After 叠加），≤0 立即放弃重试。429→0 保持不变：库内立即放弃，交由
+// 上层 waiting_ca 记账按 CA 的 Retry-After 统一退避。
+func TestNewClientRetryBackoff_curve(t *testing.T) {
+	// Given
+	client, err := newClient("https://acme.example/directory", "admin@example.com", t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	backoff := client.acme.RetryBackoff
+	if backoff == nil {
+		t.Fatal("RetryBackoff not configured")
+	}
+
+	// When/Then：n=0..6 → 1,2,4,8,10,10,10 秒
+	for n, want := range []time.Duration{
+		1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
+		10 * time.Second, 10 * time.Second, 10 * time.Second,
+	} {
+		if got := backoff(n, nil, nil); got != want {
+			t.Fatalf("backoff(n=%d)=%v, want %v", n, got, want)
+		}
+	}
+	if got := backoff(2, nil, &http.Response{StatusCode: http.StatusInternalServerError}); got != 4*time.Second {
+		t.Fatalf("backoff(n=2, 500)=%v, want 4s（非 429 响应同样走指数曲线）", got)
+	}
+
+	// 429：返回 0 立即放弃库内重试（waiting_ca 记账语义，保持不变）
+	if got := backoff(3, nil, &http.Response{StatusCode: http.StatusTooManyRequests}); got != 0 {
+		t.Fatalf("backoff(n=3, 429)=%v, want 0", got)
+	}
+}

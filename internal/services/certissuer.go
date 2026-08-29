@@ -650,9 +650,13 @@ func detectRateLimit(err error) *CAProviderRateLimitError {
 	}
 
 	// Fallback: string matching for providers/wrappers that don't surface the
-	// structured *acme.Error.
+	// structured *acme.Error. Bare "429" substrings are NOT evidence of rate
+	// limiting: domains are embedded in error text (e.g. acme/issuer.go
+	// "present dns for 429.example.com") and would misroute the job into the
+	// 1-3h waiting_ca cooldown instead of the 30min failure retry. Real CA
+	// 429s carry the structured StatusCode above or rate-limit wording.
 	msg := strings.ToLower(err.Error())
-	if !strings.Contains(msg, "429") && !strings.Contains(msg, "rate limit") && !strings.Contains(msg, "too many") {
+	if !strings.Contains(msg, "rate limit") && !strings.Contains(msg, "too many") {
 		return nil
 	}
 

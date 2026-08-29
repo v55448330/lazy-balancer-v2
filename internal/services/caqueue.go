@@ -850,6 +850,19 @@ func (q *caQueue) tick() {
 		return
 	}
 
+	// 并发/间隔闸门只用缓存 provider（newCAQueue 与每次成功加载后均已归一化）
+	// 与内存态即可判定，必须先于 loadCAProvider：积压窗口内每 100ms tick 都打
+	// 1-2 次 provider 查询（~10 次/秒，N+11 D1-S2）。代价是闸门关闭期间对
+	// provider 失效的发现推迟到下一次真实派发窗口，由 drain 路径统一收口。
+	if q.running >= q.provider.MaxConcurrent {
+		q.mu.Unlock()
+		return
+	}
+	if time.Since(q.lastOrder) < time.Duration(q.provider.MinIntervalMS)*time.Millisecond {
+		q.mu.Unlock()
+		return
+	}
+
 	providerID := q.provider.ID
 	provider, err := loadCAProvider(providerID)
 	if err != nil || provider.ID != providerID {
@@ -867,12 +880,13 @@ func (q *caQueue) tick() {
 		provider.MaxConcurrent = 1
 	}
 	q.provider = provider
+	// 加载到的新配置可能收紧，按新值复核（纯内存比较）：派发决策始终按最新
+	// provider 配置评估，不弱于原先"每次 tick 先加载再评估"的语义。
 	if q.running >= provider.MaxConcurrent {
 		q.mu.Unlock()
 		return
 	}
-	interval := time.Duration(provider.MinIntervalMS) * time.Millisecond
-	if time.Since(q.lastOrder) < interval {
+	if time.Since(q.lastOrder) < time.Duration(provider.MinIntervalMS)*time.Millisecond {
 		q.mu.Unlock()
 		return
 	}

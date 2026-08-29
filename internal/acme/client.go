@@ -99,9 +99,16 @@ func newClient(directoryURL, email, dataDir string, eab *acme.ExternalAccountBin
 			HTTPClient:   &http.Client{Timeout: 30 * time.Second},
 			RetryBackoff: func(n int, r *http.Request, resp *http.Response) time.Duration {
 				if resp != nil && resp.StatusCode == http.StatusTooManyRequests {
+					// 429：库内立即放弃重试（返回 0），让错误上抛给上层
+					// waiting_ca 记账按 CA 的 Retry-After 统一退避——语义保持不变。
 					return 0
 				}
-				return 2 * time.Second
+				// 非 429 重试（5xx 等）：截断指数退避 1,2,4,8s、封顶 10s，对齐
+				// x/crypto defaultBackoff 曲线（1<<(n-1)s+jitter、封顶 10s）。
+				// 此前固定 2s 在 CA 5xx 过载时维持约 5 倍请求压力（N+11 D1-S3）。
+				// 注：自定义 RetryBackoff 的返回值即重试延迟本身（x/crypto 不会
+				// 再叠加默认曲线或解析 Retry-After），故曲线在此显式给出。
+				return min(time.Duration(1<<min(n, 4))*time.Second, 10*time.Second)
 			},
 		},
 		accountKey:     key,

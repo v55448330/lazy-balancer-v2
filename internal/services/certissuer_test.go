@@ -19,6 +19,8 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+
+	xacme "golang.org/x/crypto/acme"
 )
 
 func testCertificatePEM(t *testing.T, notAfter time.Time) string {
@@ -918,5 +920,38 @@ func TestCertIssuer_deployIssuedCertificate_serializes_rollback_by_rule(t *testi
 	}
 	if string(certPEM) != "new-cert" || string(keyPEM) != "new-key" {
 		t.Fatalf("final certificate=(%q,%q), want newer pair", certPEM, keyPEM)
+	}
+}
+
+// N+11 D1-S1：字符串回退不得把裸 "429" 子串当限流证据——acme/issuer.go:105
+// 把域名嵌进错误文本（"present dns for %s: ..."），429.example.com 这类域名
+// 会被误分类为 CA 限流（waiting_ca 冷却 1-3h 而非 failJob 30min 重试）。
+// 真实 CA 429 由结构化 *acme.Error StatusCode==429 分支覆盖。
+func TestDetectRateLimit_string_fallback_ignores_bare_429_substring(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "dns present error embedding 429-like domain", err: fmt.Errorf("present dns for 429.example.com: connection refused"), want: false},
+		{name: "dns propagation error embedding 429-like domain", err: fmt.Errorf("recursive DNS propagation failed for _acme-challenge.429.example.com: record not visible on public resolvers"), want: false},
+		{name: "authz url containing 429 path segment", err: fmt.Errorf("GET https://acme.example/authz/429/abc: server internal error"), want: false},
+		{name: "rate limit wording", err: fmt.Errorf("dns api: rate limit exceeded"), want: true},
+		{name: "too many wording", err: fmt.Errorf("too many requests for this week"), want: true},
+		{name: "wrapped CAProviderRateLimitError text", err: fmt.Errorf("issue: %w", &CAProviderRateLimitError{RetryAfter: time.Minute, Reason: "upstream limited"}), want: true},
+		{name: "structured acme 429", err: &xacme.Error{StatusCode: http.StatusTooManyRequests, ProblemType: "urn:ietf:params:acme:error:rateLimited"}, want: true},
+		{name: "structured acme non-429", err: &xacme.Error{StatusCode: http.StatusBadRequest, ProblemType: "urn:ietf:params:acme:error:malformed"}, want: false},
+		{name: "unrelated error", err: errors.New("connection refused"), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// When
+			got := detectRateLimit(tc.err)
+
+			// Then
+			if (got != nil) != tc.want {
+				t.Fatalf("detectRateLimit(%v) classified rateLimit=%v, want %v", tc.err, got != nil, tc.want)
+			}
+		})
 	}
 }
