@@ -599,7 +599,7 @@ func (h *Handlers) ApplyConfigOnStartup() error {
 	for i := 0; i < maxRetries; i++ {
 		client := &http.Client{Timeout: 2 * time.Second}
 		// Round 35 I-21: 即使 err != nil，resp 也可能非 nil（如重定向），需统一关闭。
-		resp, err := client.Get("http://localhost:2019/config/")
+		resp, err := client.Get(strings.TrimRight(h.cfg.CaddyAdminURL, "/") + "/config/") // D5-S3：就绪探针与 GetCaddyStatus 同源取配置地址，不再硬编码 localhost:2019
 		if resp != nil {
 			resp.Body.Close()
 		}

@@ -125,14 +125,24 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 			return
 		}
 	}
-	username := getContextUserID(c)
+	// D5-S1：otpauth 账号位用用户名（services/mfa.go 约定 accountName 即用户名；
+	// jwtAuth/apiKeyAuth 均注入 c username）——此前用数字 ID，所有用户的
+	// Authenticator 条目都显示「LazyBalancer:1」不可区分。空值回退数字 ID 保可用。
+	username := c.GetString("username")
+	if username == "" {
+		username = getContextUserID(c)
+	}
 	secret, uri, err := services.MFAGenerateSecret(username)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成 MFA 密钥失败"})
 		return
 	}
-	if _, err := db.DB.Exec("UPDATE users SET mfa_pending_secret='', mfa_pending_fails=0 WHERE id=?", userID); err == nil {
-		_, _ = db.DB.Exec("UPDATE users SET mfa_pending_secret=? WHERE id=?", secret, userID)
+	// D5-S4：单条 UPDATE 原子落库（新密钥 + 失败计数清零同生共死）——此前
+	// 两段写（先清后设）在首成次败时已返回 200+secret 而 pending 为空，用户
+	// 扫码后 activate 必报「没有待激活的 MFA 密钥」，且两语句间存在瞬时空窗。
+	if _, err := db.DB.Exec("UPDATE users SET mfa_pending_secret=?, mfa_pending_fails=0 WHERE id=?", secret, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 MFA 密钥失败"})
+		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"secret": secret, "uri": uri}})
 }

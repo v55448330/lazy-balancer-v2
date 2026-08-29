@@ -43,6 +43,15 @@ func guardAuthJSONBody(c *gin.Context) bool {
 	return true
 }
 
+// loginDummyBcryptHash 用户不存在路径的等时占位哈希（D5-S5）：ErrNoRows 直接
+// 401 会以 ~bcrypt 耗时差区分用户名存在性（时序侧信道）。init 生成一次，
+// DefaultCost 与生产真实哈希同档；对不存在的用户也跑一次注定失败的比较。
+var loginDummyBcryptHash []byte
+
+func init() {
+	loginDummyBcryptHash, _ = bcrypt.GenerateFromPassword([]byte("lazy-balancer timing-equalizer dummy"), bcrypt.DefaultCost)
+}
+
 func (h *Handlers) Login(c *gin.Context) {
 	var req models.LoginRequest
 	if !guardAuthJSONBody(c) {
@@ -61,6 +70,9 @@ func (h *Handlers) Login(c *gin.Context) {
 		req.Username).Scan(&user.ID, &user.Username, &passwordHash, &user.Role, &user.DisplayName, &user.IsEnabled, &user.CreatedAt, &user.LastLogin, &passwordVersion)
 
 	if err == sql.ErrNoRows {
+		// D5-S5：对不存在的用户名也执行一次注定失败的 bcrypt 比较（结果刻意
+		// 丢弃，只取等时副作用），消除与「密码错误」路径的时序差后返回同形 401。
+		_ = bcrypt.CompareHashAndPassword(loginDummyBcryptHash, []byte(req.Password))
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("invalid_credentials"), c.ClientIP())
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "用户名或密码错误"})
 		return

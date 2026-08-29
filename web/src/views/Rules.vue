@@ -1271,6 +1271,18 @@ const parseIPListCount = (raw: string): number => {
   }
 }
 
+// D6-S1：geoip_countries 与 ip 列表同为库内 JSON 字符串，坏数据不得炸整页
+// 渲染路径——与 parseIPListCount / SecurityPolicies.vue 同款守卫。
+const parseGeoipCountryCount = (raw: string): number => {
+  if (!raw) return 0
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.length : 0
+  } catch {
+    return 0
+  }
+}
+
 const ruleProtections = (caddyID: string): PolicyProtectionGroup[] => {
   const bindings = securityBindings.value[caddyID]
   if (!bindings || bindings.length === 0) return []
@@ -1293,7 +1305,7 @@ const ruleProtections = (caddyID: string): PolicyProtectionGroup[] => {
       rows.push({ label: 'IP 访问控制', detail: parts.join(' · ') })
     }
     if (policy?.has_rate_limit) rows.push({ label: '速率限制', detail: `${policy.rate_limit_rps} 次/秒 · 突发 ${policy.rate_limit_burst} 次` })
-    if (policy?.has_geoip) rows.push({ label: 'GeoIP', detail: `${policy.geoip_countries ? (JSON.parse(policy.geoip_countries) as string[]).length : 0} 个地区` })
+    if (policy?.has_geoip) rows.push({ label: 'GeoIP', detail: `${parseGeoipCountryCount(policy.geoip_countries)} 个地区` })
     if (policy?.has_custom_rules) rows.push({ label: '自定义规则', detail: `${policy.custom_rules_count} 条` })
     return {
       key: binding.policy_id,

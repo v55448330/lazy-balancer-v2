@@ -672,7 +672,9 @@ func formatDriftBanner(missing, extra []string, since string) string {
 
 func (h *Handlers) GetCaddyConfig(c *gin.Context) {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://localhost:2019/config/")
+	// D5-S3：与 GetCaddyStatus 同源取 cfg.CaddyAdminURL——此前硬编码
+	// localhost:2019，自定义 admin 地址的部署读到的是错误端点。
+	resp, err := client.Get(strings.TrimRight(h.cfg.CaddyAdminURL, "/") + "/config/")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "连接 Caddy 失败: " + err.Error()})
 		return
