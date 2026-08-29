@@ -298,3 +298,48 @@ func TestMetricsService_updateOverview_counts_online_nodes_dynamically(t *testin
 		t.Fatalf("online nodes=%d, want 1 (stale/pending/NULL last_seen excluded)", got)
 	}
 }
+
+func TestMetricsServiceCleanupHistory_fallsBackToDefaultDaysWhenRetentionReadFails(t *testing.T) {
+	// N-5：retention 配置读取失败时清理不得静默跳过——记录日志并按默认
+	// 7 天继续（此前静默 return，指标历史无界增长且零日志信号）。
+	// Given：过期（10 天）与近期（当前）各 1 条历史；DROP global_config
+	// 令配置读取失败
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatalf("initialize metrics database: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if _, err := db.MetricsDB.Exec(`INSERT INTO metrics_history (rule_id, timestamp) VALUES
+		('lb_old', datetime('now','-10 days')),
+		('lb_fresh', datetime('now'))`); err != nil {
+		t.Fatalf("seed metrics history: %v", err)
+	}
+	if _, err := db.DB.Exec(`DROP TABLE global_config`); err != nil {
+		t.Fatalf("break retention read: %v", err)
+	}
+
+	// When
+	NewMetricsService("", 30).cleanupHistory()
+
+	// Then：清理仍以默认 7 天执行——过期行被删、近期行保留
+	var oldRows, freshRows int
+	if err := db.MetricsDB.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN timestamp < datetime('now','-7 days') THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN timestamp >= datetime('now','-7 days') THEN 1 ELSE 0 END), 0)
+		FROM metrics_history`).Scan(&oldRows, &freshRows); err != nil {
+		t.Fatalf("count metrics history: %v", err)
+	}
+	if oldRows != 0 {
+		t.Fatalf("old rows after cleanup = %d, want 0 (cleanup must run with default 7d)", oldRows)
+	}
+	if freshRows != 1 {
+		t.Fatalf("fresh rows after cleanup = %d, want 1", freshRows)
+	}
+}

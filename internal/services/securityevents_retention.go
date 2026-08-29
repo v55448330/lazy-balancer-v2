@@ -46,7 +46,10 @@ func securityEventsRetentionSettings() (days, max int) {
 // retention window, then trims the oldest rows while the table still holds
 // more rows than the configured maximum. The DB handle is captured locally so
 // a concurrent test teardown (db.DB = nil) cannot nil-deref mid-pass.
-func securityEventsRetentionCleanup() {
+// N-4：批间让出写锁的等待同时检查 ctx——Stop（cancel 后等待 worker 退出）
+// 得以在大批量首遍（如数据恢复后的百万行）中及时中止，不再被拖到 docker
+// SIGKILL 跳过 db.Close。
+func securityEventsRetentionCleanup(ctx context.Context) {
 	database := db.MetricsDB
 	if database == nil {
 		return
@@ -64,8 +67,16 @@ func securityEventsRetentionCleanup() {
 		if affected == 0 {
 			break
 		}
-		// 批间短暂让出写锁，避免长时间阻塞摄取 INSERT
-		time.Sleep(10 * time.Millisecond)
+		// 批间短暂让出写锁，避免长时间阻塞摄取 INSERT；同时响应 ctx 取消（N-4）
+		select {
+		case <-ctx.Done():
+			log.Printf("security events retention: age-based cleanup canceled mid-pass")
+			return
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return
 	}
 	var count int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&count); err != nil {
@@ -89,8 +100,13 @@ func securityEventsRetentionCleanup() {
 				break
 			}
 			remaining -= int(affected)
-			// 批间短暂让出写锁，避免长时间阻塞摄取 INSERT
-			time.Sleep(10 * time.Millisecond)
+			// 批间短暂让出写锁，避免长时间阻塞摄取 INSERT；同时响应 ctx 取消（N-4）
+			select {
+			case <-ctx.Done():
+				log.Printf("security events retention: count-based cleanup canceled mid-pass")
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
 		}
 	}
 }
@@ -120,7 +136,7 @@ func StartSecurityEventsRetention(ctx context.Context) {
 			}
 			securityEventsRetentionMu.Unlock()
 		}()
-		securityEventsRetentionCleanup()
+		securityEventsRetentionCleanup(runCtx)
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 		for {
@@ -128,7 +144,7 @@ func StartSecurityEventsRetention(ctx context.Context) {
 			case <-runCtx.Done():
 				return
 			case <-ticker.C:
-				securityEventsRetentionCleanup()
+				securityEventsRetentionCleanup(runCtx)
 			}
 		}
 	}()

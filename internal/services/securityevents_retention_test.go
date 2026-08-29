@@ -48,7 +48,7 @@ func TestSecurityEventsRetentionCleanup_deletesEventsOlderThanConfiguredDays(t *
 	}
 
 	// When
-	securityEventsRetentionCleanup()
+	securityEventsRetentionCleanup(context.Background())
 
 	// Then: the expired event is gone, the recent one survives
 	if got := countSecurityEventsByType(t, "expired"); got != 0 {
@@ -75,7 +75,7 @@ func TestSecurityEventsRetentionCleanup_trimsOldestRowsWhenCountExceedsMax(t *te
 	}
 
 	// When
-	securityEventsRetentionCleanup()
+	securityEventsRetentionCleanup(context.Background())
 
 	// Then: all 5 events survive (safety max not reached)
 	var count int
@@ -116,7 +116,7 @@ func TestSecurityEventsRetentionCleanup_usesDefaultDaysWhenConfigZero(t *testing
 	}
 
 	// When
-	securityEventsRetentionCleanup()
+	securityEventsRetentionCleanup(context.Background())
 
 	// Then: the default 30-day window deleted the 31-day-old event only
 	if got := countSecurityEventsByType(t, "expired"); got != 0 {
@@ -192,6 +192,50 @@ func TestStartSecurityEventsRetention_stopsWhenParentContextCanceled(t *testing.
 	}
 }
 
+func TestSecurityEventsRetentionCleanup_stopsPromptlyWhenContextCanceled(t *testing.T) {
+	// N-4：批间让出同时检查 ctx——已取消的 ctx 保证第一批次删除后立即返回
+	// （确定性：循环首批次恒执行，其后的批间 select 立即命中 ctx.Done），
+	// 大批量首遍不再阻塞 Stop 的等待。
+	// Given: 12000 条过期事件（完整 pass 需 3 批）+ 已取消的 ctx
+	setupSecurityEventsRetentionTestDB(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	var sb strings.Builder
+	for start := 0; start < 12000; start += 1000 {
+		sb.Reset()
+		sb.WriteString("INSERT INTO security_events (event_time, client_ip, event_type) VALUES ")
+		for i := 0; i < 1000; i++ {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			fmt.Fprintf(&sb, "(datetime('now', '-40 days'), '198.51.100.%d', 'expired')", (start+i)%250)
+		}
+		if _, err := db.MetricsDB.Exec(sb.String()); err != nil {
+			t.Fatalf("seed expired batch: %v", err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// When
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		securityEventsRetentionCleanup(ctx)
+	}()
+
+	// Then: 清理迅速返回且仅完成一个批次（未删净），证明中途被取消而非跑完
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleanup did not stop promptly on a canceled context")
+	}
+	if got := countSecurityEventsByType(t, "expired"); got != 12000-securityEventsRetentionDeleteBatch {
+		t.Fatalf("expired events after canceled cleanup = %d, want %d (exactly one batch deleted)", got, 12000-securityEventsRetentionDeleteBatch)
+	}
+}
+
 func TestSecurityEventsRetentionCleanup_batchesAgeDelete(t *testing.T) {
 	// Given: 12000 expired events（超过单批 5000，必须分批循环）+ 1 条近期事件
 	setupSecurityEventsRetentionTestDB(t)
@@ -217,7 +261,7 @@ func TestSecurityEventsRetentionCleanup_batchesAgeDelete(t *testing.T) {
 	}
 
 	// When
-	securityEventsRetentionCleanup()
+	securityEventsRetentionCleanup(context.Background())
 
 	// Then：全部过期事件被分批删除，近期事件保留
 	if got := countSecurityEventsByType(t, "expired"); got != 0 {

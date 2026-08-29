@@ -124,10 +124,12 @@ func loadOrCreateJWTSecret(dataDir string) string {
 		log.Fatalf("生成 JWT 密钥失败: %v", err)
 	}
 	secret := hex.EncodeToString(buf)
-	if err := os.MkdirAll(dataDir, 0755); err == nil {
-		if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
-			log.Printf("JWT 密钥写入 %s 失败（重启后令牌将失效）: %v", secretPath, err)
-		}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		// N-6：目录创建失败必须可见——此前静默跳过写入，JWT 密钥每次启动
+		// 随机重生成（旧令牌全部失效）且零日志信号；与下方写失败分支对称。
+		log.Printf("JWT 密钥目录 %s 创建失败（重启后令牌将失效）: %v", dataDir, err)
+	} else if err := os.WriteFile(secretPath, []byte(secret), 0600); err != nil {
+		log.Printf("JWT 密钥写入 %s 失败（重启后令牌将失效）: %v", secretPath, err)
 	}
 	return secret
 }

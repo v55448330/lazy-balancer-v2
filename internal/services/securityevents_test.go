@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -1828,5 +1829,131 @@ func TestAuditFailureShouldLog_throttlesIdenticalMessages(t *testing.T) {
 	now = now.Add(61 * time.Second)
 	if !auditFailureShouldLog("copy to .1 failed") {
 		t.Fatal("identical message after 60s must be emitted again")
+	}
+}
+
+// N-1：限流 map 不得随变体消息无界增长——放行路径清扫已过期（≥60s）条目。
+func TestAuditFailureShouldLog_evictsStaleEntriesOnAllowedLog(t *testing.T) {
+	// Given：重置限流状态并注入固定时钟
+	auditFailureLogMu.Lock()
+	auditFailureLogTimes = map[string]time.Time{}
+	auditFailureLogMu.Unlock()
+	now := time.Now()
+	oldClock := auditFailureLogClock
+	auditFailureLogClock = func() time.Time { return now }
+	t.Cleanup(func() {
+		auditFailureLogClock = oldClock
+		auditFailureLogMu.Lock()
+		auditFailureLogTimes = map[string]time.Time{}
+		auditFailureLogMu.Unlock()
+	})
+
+	// When：T0 放行消息 A；T0+61s 放行消息 B
+	if !auditFailureShouldLog("rotation copy failed") {
+		t.Fatal("first emission must be allowed")
+	}
+	now = now.Add(61 * time.Second)
+	if !auditFailureShouldLog("rotation truncate failed") {
+		t.Fatal("a different message after the window must be allowed")
+	}
+
+	// Then：消息 A 的条目已过期被清扫，map 仅剩 B
+	auditFailureLogMu.Lock()
+	size := len(auditFailureLogTimes)
+	_, hasA := auditFailureLogTimes["rotation copy failed"]
+	auditFailureLogMu.Unlock()
+	if size != 1 {
+		t.Fatalf("map size after sweep = %d, want 1 (stale entry evicted)", size)
+	}
+	if hasA {
+		t.Fatal("stale entry (age ≥60s) must be evicted on an allowed log")
+	}
+}
+
+// N-1：键数超上限时整体重置——map 回到仅含当前条目，限流语义不中断。
+func TestAuditFailureShouldLog_resetsWhenOverCap(t *testing.T) {
+	// Given：重置限流状态并注入固定时钟
+	auditFailureLogMu.Lock()
+	auditFailureLogTimes = map[string]time.Time{}
+	auditFailureLogMu.Unlock()
+	now := time.Now()
+	oldClock := auditFailureLogClock
+	auditFailureLogClock = func() time.Time { return now }
+	t.Cleanup(func() {
+		auditFailureLogClock = oldClock
+		auditFailureLogMu.Lock()
+		auditFailureLogTimes = map[string]time.Time{}
+		auditFailureLogMu.Unlock()
+	})
+
+	// When：同一时刻放行 66 条互异消息（用字母区分——数字区分会被 N-2 归一
+	// 化折叠为同键，无法构造多键）
+	for i := 0; i < auditFailureLogEvictCap+2; i++ {
+		if !auditFailureShouldLog(fmt.Sprintf("rotation case %c failed", 'a'+i)) {
+			t.Fatalf("new message %d must be allowed", i)
+		}
+	}
+	last := fmt.Sprintf("rotation case %c failed", 'a'+auditFailureLogEvictCap+1)
+
+	// Then：超限已整体重置，map 仅剩最后一条且其限流窗口仍生效
+	auditFailureLogMu.Lock()
+	size := len(auditFailureLogTimes)
+	_, hasLast := auditFailureLogTimes[auditFailureThrottleKey(last)]
+	auditFailureLogMu.Unlock()
+	if size != 1 {
+		t.Fatalf("map size after cap reset = %d, want 1", size)
+	}
+	if !hasLast {
+		t.Fatal("cap reset must retain the current entry")
+	}
+	if auditFailureShouldLog(last) {
+		t.Fatal("last message must remain throttled after reset")
+	}
+}
+
+// N-2：内嵌数字的变体消息共享限流键——同故障不同偏移 60s 内仅首条放行，
+// 窗口后恢复；非数字差异的消息不受影响。
+func TestAuditFailureShouldLog_normalizesNumericVariants(t *testing.T) {
+	// Given：重置限流状态并注入固定时钟
+	auditFailureLogMu.Lock()
+	auditFailureLogTimes = map[string]time.Time{}
+	auditFailureLogMu.Unlock()
+	now := time.Now()
+	oldClock := auditFailureLogClock
+	auditFailureLogClock = func() time.Time { return now }
+	t.Cleanup(func() {
+		auditFailureLogClock = oldClock
+		auditFailureLogMu.Lock()
+		auditFailureLogTimes = map[string]time.Time{}
+		auditFailureLogMu.Unlock()
+	})
+
+	// When：窗口内两条仅偏移不同的同类失败
+	m1 := "audit log rotation: ingest live tail [100, 200) failed (not truncating): boom"
+	m2 := "audit log rotation: ingest live tail [300, 400) failed (not truncating): boom"
+	if !auditFailureShouldLog(m1) {
+		t.Fatal("first variant must be allowed")
+	}
+	if auditFailureShouldLog(m2) {
+		t.Fatal("same failure with different offsets within 60s must be suppressed")
+	}
+	if !auditFailureShouldLog("audit log rotation: shift audit.log.a to audit.log.b failed: boom") {
+		t.Fatal("a genuinely different message must not be suppressed")
+	}
+
+	// When/Then：61s 后同类失败（又一新偏移）恢复放行
+	now = now.Add(61 * time.Second)
+	m3 := "audit log rotation: ingest live tail [500, 600) failed (not truncating): boom"
+	if !auditFailureShouldLog(m3) {
+		t.Fatal("variant after 60s must be allowed again")
+	}
+}
+
+// N-2：限流键归一化——数字串统一替换为 #。
+func TestAuditFailureThrottleKey_replacesDigitRuns(t *testing.T) {
+	got := auditFailureThrottleKey("ingest live tail [12345, 67890) failed: read timeout 5s")
+	want := "ingest live tail [#, #) failed: read timeout #s"
+	if got != want {
+		t.Fatalf("throttle key = %q, want %q", got, want)
 	}
 }

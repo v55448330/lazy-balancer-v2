@@ -432,7 +432,9 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 func (m *MetricsService) cleanupHistory() {
 	retentionDays := 7
 	if err := db.DB.QueryRow("SELECT COALESCE(metrics_retention_days,7) FROM global_config WHERE id=1").Scan(&retentionDays); err != nil {
-		return
+		// N-5：配置读取失败不得静默跳过清理（此前无任何信号，指标历史会
+		// 无界增长）——记录日志并按默认 7 天继续。
+		log.Printf("metrics cleanup: failed to read metrics_retention_days (%v); using default %d days", err, retentionDays)
 	}
 	if retentionDays < 1 {
 		retentionDays = 7

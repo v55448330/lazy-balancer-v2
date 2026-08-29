@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
 
@@ -16,7 +17,10 @@ import (
 
 // S-1：轮转/摄取失败日志限流。轮转路径由 2s tick 驱动，持久性失败（pending
 // delta 补采持续失败、copy 失败、目录缺失等）若无限流会每 tick 刷一条。
-// 同一完整消息 60s 内仅首条放行；不同消息各自计时、立即放行。
+// 同一归一化消息 60s 内仅首条放行；不同消息各自计时、立即放行。
+// N-1：限流 map 有界增长——每次放行时清扫已过期（≥60s）条目，仍超上限则
+// 整体重置（各变体至多重复放行一条，无数据影响）；否则内嵌数字参数的变体
+// 消息（见 N-2）会无界增加键（最坏 ~43k 键/天）。
 var (
 	auditFailureLogMu    sync.Mutex
 	auditFailureLogTimes = map[string]time.Time{}
@@ -24,15 +28,44 @@ var (
 	auditFailureLogClock = time.Now
 )
 
+// auditFailureLogWindow 是同一消息的放行窗口（60s，第 14 轮 I-B 确立口径）。
+const auditFailureLogWindow = 60 * time.Second
+
+// auditFailureLogEvictCap 是限流 map 的键数上限：清扫后仍超此值即整体重置
+// （N-1）。
+const auditFailureLogEvictCap = 64
+
+// auditFailureLogDigitPattern 用于限流键归一化（N-2）。
+var auditFailureLogDigitPattern = regexp.MustCompile(`\d+`)
+
+// auditFailureThrottleKey 归一化限流键：消息中内嵌的数字串（偏移、大小等，
+// 如 "ingest live tail [%d, %d)") 统一替换为 #，使同一故障的每次重试即便数字
+// 参数变化也共享同一 60s 窗口（N-2：变体消息此前各键独立、限流被绕开）。
+func auditFailureThrottleKey(msg string) string {
+	return auditFailureLogDigitPattern.ReplaceAllString(msg, "#")
+}
+
 // auditFailureShouldLog 判定失败消息 msg 现在是否应放行输出，并记录放行时间。
+// 键为归一化消息（auditFailureThrottleKey）。
 func auditFailureShouldLog(msg string) bool {
 	auditFailureLogMu.Lock()
 	defer auditFailureLogMu.Unlock()
+	key := auditFailureThrottleKey(msg)
 	now := auditFailureLogClock()
-	if last, ok := auditFailureLogTimes[msg]; ok && now.Sub(last) < 60*time.Second {
+	if last, ok := auditFailureLogTimes[key]; ok && now.Sub(last) < auditFailureLogWindow {
 		return false
 	}
-	auditFailureLogTimes[msg] = now
+	// 仅在放行路径清扫（N-1）：被抑制的消息不触发清扫，稳态下（同一消息
+	// 持续失败）map 恒为 1 键，无额外开销。
+	for k, last := range auditFailureLogTimes {
+		if now.Sub(last) >= auditFailureLogWindow {
+			delete(auditFailureLogTimes, k)
+		}
+	}
+	if len(auditFailureLogTimes) > auditFailureLogEvictCap {
+		auditFailureLogTimes = make(map[string]time.Time)
+	}
+	auditFailureLogTimes[key] = now
 	return true
 }
 
@@ -42,7 +75,12 @@ func throttledAuditFailureLogf(format string, args ...any) {
 	if !auditFailureShouldLog(msg) {
 		return
 	}
-	log.Printf("%s", msg)
+	// N-7：经 Logf("warn") 输出——applicationLogWriter 按前缀过滤（tz.go），
+	// 裸 log.Printf 的轮转遥测在 log_level 调高后全部消失。顺序安全：Logf 仅读
+	// init() 初始化的原子级别（默认 info），底层仍是标准 log 包，writer 未安装
+	// 前落 stderr、绝不 panic；生产序中 writer（main.go log.SetOutput）也先于
+	// 首个轮转失败（摄取循环启动）就绪。
+	Logf("warn", "%s", msg)
 }
 
 // auditLogPath 是 Coraza 审计日志的路径；定义为变量以便测试注入临时目录

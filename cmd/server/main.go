@@ -248,15 +248,18 @@ type serverStopSignals struct {
 func waitForServerStop(server *http.Server, signals serverStopSignals) error {
 	select {
 	case <-signals.quit:
-		// S-4：消费到首个关停信号后立即停信号通道（先于 server.Shutdown）。
-		// 此前 signal.Stop 延迟到 run() 返回后的 defer 才执行，关停窗口内
-		// （Shutdown 最多 10s + 服务停止）到达的第二个信号会被通道缓冲吞掉、
-		// 随后被 Stop 丢弃，无法触发默认终止。
-		signal.Stop(signals.quit)
 	case <-signals.restart:
 	case err := <-signals.serverErrors:
 		return err
 	}
+	// S-4 + N-3：无论由 quit 还是 restart 触发，都在进入关停流程前统一停
+	// 信号通道（先于 "Shutting down..." 与 ≤10s 的 HTTP Shutdown 窗口）。
+	// 此前仅 quit 分支停通道：restart 分支的关停窗口内第二个信号会被通道
+	// 缓冲，随后被 run() 返回后的 defer signal.Stop 冲刷丢弃，无法触发默认
+	// 终止（用户第二次 Ctrl-C / SIGTERM 应能强制结束卡顿的关停）。
+	// serverErrors 分支直接返回：服务已异常、进程随即退出，由 run() 的
+	// defer signal.Stop 收尾。
+	signal.Stop(signals.quit)
 
 	log.Println("Shutting down...")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
