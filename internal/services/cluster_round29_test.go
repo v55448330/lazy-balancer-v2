@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"database/sql"
@@ -412,5 +413,158 @@ func TestNearestSnapshotCertificateExpiry_returnsNearestFutureExpiry(t *testing.
 	// Then
 	if !got.Equal(now.Add(24 * time.Hour)) {
 		t.Fatalf("expiry=%v, want nearest %v", got, now.Add(24*time.Hour))
+	}
+}
+
+// captureApplicationLogs 把应用日志（Logf → log.Printf）重定向到缓冲区，供
+// 断言 warn 输出；返回恢复函数由 t.Cleanup 挂接。
+func captureApplicationLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	previousLevel := CurrentLogLevel()
+	if err := ConfigureLogLevel("info"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ConfigureLogLevel(previousLevel) })
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	})
+	return &logs
+}
+
+func writeDNSOwnershipFile(t *testing.T, database *sql.DB, content []byte) {
+	t.Helper()
+	dataDir, err := clusterDatabaseDir(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "acme_dns_ownership.json"), content, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSnapshotOwnershipHash_corruptFileFallsBackToEmptyCanonical(t *testing.T) {
+	// Given：空闲主节点上所有权文件损坏（JSON 不可解码）——store 侧隔离要等
+	// 下一次签发触碰才发生，快照读取必须先按空态自愈，不能让整个 Snapshot/
+	// 从节点 Pull 失败
+	_, database := newClusterTestService(t)
+	writeDNSOwnershipFile(t, database, []byte(`{"version":1,"records":[`))
+	logs := captureApplicationLogs(t)
+
+	// When
+	hash, err := snapshotOwnershipHash(context.Background(), database)
+
+	// Then：回退空规范字节（与文件缺失分支同源），不报错，且告警一行
+	if err != nil {
+		t.Fatalf("corrupt ownership must not fail the snapshot hash: %v", err)
+	}
+	if want := sha256.Sum256([]byte(`{"version":1,"records":[]}`)); hash != want {
+		t.Fatalf("hash=%x, want empty-canonical hash %x", hash, want)
+	}
+	if output := logs.String(); !strings.Contains(output, "WARNING") || !strings.Contains(output, "acme_dns_ownership.json") {
+		t.Fatalf("expected one warn line with path+reason, got %q", output)
+	}
+}
+
+func TestSnapshotOwnershipHash_structurallyInvalidFileFallsBackToEmptyCanonical(t *testing.T) {
+	// Given：可解析但结构无效（缺 zone）——非解码类校验失败同属尽力而为缓存
+	// 范畴，按同样口径回退，不阻断同步
+	_, database := newClusterTestService(t)
+	writeDNSOwnershipFile(t, database, []byte(`{"version":1,"records":[{"provider":"dnspod","fqdn":"_acme-challenge.example.com","record_id":"1"}]}`))
+
+	// When
+	hash, err := snapshotOwnershipHash(context.Background(), database)
+
+	// Then
+	if err != nil {
+		t.Fatalf("structurally invalid ownership must not fail the snapshot hash: %v", err)
+	}
+	if want := sha256.Sum256([]byte(`{"version":1,"records":[]}`)); hash != want {
+		t.Fatalf("hash=%x, want empty-canonical hash %x", hash, want)
+	}
+}
+
+func TestClusterService_Snapshot_acmeStateWithCorruptOwnershipFallsBackEmpty(t *testing.T) {
+	// Given：ACME 区段构建（快照侧第二处读取点）面对损坏所有权文件
+	service, database := newClusterTestService(t)
+	writeDNSOwnershipFile(t, database, []byte(`not json at all`))
+
+	// When
+	state, err := service.snapshotACME(context.Background(), database)
+
+	// Then：空 records 分发，不报错
+	if err != nil {
+		t.Fatalf("corrupt ownership must not fail the ACME state build: %v", err)
+	}
+	if string(state.DNSOwnership) != `{"version":1,"records":[]}` {
+		t.Fatalf("dns ownership=%q, want empty canonical", state.DNSOwnership)
+	}
+}
+
+func TestClusterService_Snapshot_succeedsWithCorruptOwnershipFile(t *testing.T) {
+	// Given：端到端——主节点 DB 完好但所有权文件损坏，从节点 Pull 依赖的
+	// Snapshot 必须照常出片（损坏文件只降级 DNS-01 所有权清理，属可自愈缓存）
+	service, database := newClusterTestService(t)
+	writeDNSOwnershipFile(t, database, []byte(`{"version":2,"records":[]}`))
+
+	// When
+	snapshot, _, err := service.Snapshot(context.Background(), 0, "", "cluster-token")
+
+	// Then
+	if err != nil {
+		t.Fatalf("snapshot with corrupt ownership file: %v", err)
+	}
+	if snapshot.Fingerprint == "" {
+		t.Fatal("snapshot missing fingerprint")
+	}
+	if snapshot.ACME == nil || string(snapshot.ACME.DNSOwnership) != `{"version":1,"records":[]}` {
+		t.Fatalf("snapshot acme ownership=%v, want empty canonical", snapshot.ACME)
+	}
+}
+
+func TestSnapshotOwnershipHash_missingFileKeepsEmptyCanonicalSilently(t *testing.T) {
+	// Given：无所有权文件（新装机/store 隔离后）——既有语义必须保持：按空
+	// 规范字节哈希且不告警
+	_, database := newClusterTestService(t)
+	logs := captureApplicationLogs(t)
+
+	// When
+	hash, err := snapshotOwnershipHash(context.Background(), database)
+
+	// Then
+	if err != nil {
+		t.Fatalf("missing ownership file must not fail: %v", err)
+	}
+	if want := sha256.Sum256([]byte(`{"version":1,"records":[]}`)); hash != want {
+		t.Fatalf("hash=%x, want empty-canonical hash %x", hash, want)
+	}
+	if output := logs.String(); strings.Contains(output, "WARNING") {
+		t.Fatalf("missing file must stay silent, got %q", output)
+	}
+}
+
+func TestSnapshotOwnershipHash_realReadErrorStillFails(t *testing.T) {
+	// Given：路径被目录占据（EISDIR，非 ErrNotExist 的真实 I/O 故障）——
+	// 真实读取错误保持报错语义，不被空态回退掩盖
+	_, database := newClusterTestService(t)
+	dataDir, err := clusterDatabaseDir(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dataDir, "acme_dns_ownership.json"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	_, err = snapshotOwnershipHash(context.Background(), database)
+
+	// Then
+	if err == nil {
+		t.Fatal("real I/O read error must not be masked by the empty-state fallback")
 	}
 }

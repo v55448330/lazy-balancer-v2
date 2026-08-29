@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -258,18 +259,41 @@ func (s *ClusterService) driftGuardSectionHashes(ctx context.Context) (map[strin
 	return hashes, nil
 }
 
-func snapshotOwnershipHash(ctx context.Context, store snapshotStore) ([sha256.Size]byte, error) {
+// emptyDNSOwnershipCanonical 是 DNS 所有权文件缺失/损坏时快照侧回退的空规范字节
+// （与 ownership store 隔离后的空态一致）。
+var emptyDNSOwnershipCanonical = []byte(`{"version":1,"records":[]}`)
+
+// readSnapshotDNSOwnership 读取快照侧 DNS 所有权文件，供缓存键哈希（snapshotOwnershipHash）
+// 与 ACME 区段（snapshotACME）共用。文件缺失按空规范字节继续（原语义）。文件损坏
+// （JSON 解码失败或结构校验失败）同样回退空态，对齐 ownership.Store.load 的隔离语义
+// （internal/dnsprovider/ownership/store.go：坏文件重命名 .corrupt-<unixts> 后按空态
+// 继续——所有权文件是尽力而为的缓存，空分发可经幂等 not-found 删除与 75min stale
+// 窗口自愈）。快照侧不执行重命名（避免与 store 的 fileMu 读改写竞态），仅告警一行；
+// store 下一次 Add/Matching/Remove 触碰坏文件时会完成实际隔离，随后本函数自然走
+// ErrNotExist 分支。其余读取错误（真实 I/O 故障）保持报错，不被空态掩盖。
+func readSnapshotDNSOwnership(ctx context.Context, store snapshotStore) ([]byte, error) {
 	dataDir, err := clusterSnapshotDataDir(ctx, store)
 	if err != nil {
-		return [sha256.Size]byte{}, err
+		return nil, err
 	}
-	content, err := os.ReadFile(filepath.Join(dataDir, "acme_dns_ownership.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		content = []byte(`{"version":1,"records":[]}`)
-	} else if err != nil {
-		return [sha256.Size]byte{}, fmt.Errorf("读取 DNS 所有权状态: %w", err)
+	path := filepath.Join(dataDir, "acme_dns_ownership.json")
+	content, readErr := os.ReadFile(path)
+	if errors.Is(readErr, os.ErrNotExist) {
+		return bytes.Clone(emptyDNSOwnershipCanonical), nil
+	}
+	if readErr != nil {
+		return nil, fmt.Errorf("读取 DNS 所有权状态: %w", readErr)
 	}
 	if err := validateDNSOwnership(content); err != nil {
+		Logf("warn", "DNS 所有权文件 %s 损坏（%v），集群快照按空状态回退继续——对齐 ownership store 隔离语义，store 下次触碰该文件时完成隔离", path, err)
+		return bytes.Clone(emptyDNSOwnershipCanonical), nil
+	}
+	return content, nil
+}
+
+func snapshotOwnershipHash(ctx context.Context, store snapshotStore) ([sha256.Size]byte, error) {
+	content, err := readSnapshotDNSOwnership(ctx, store)
+	if err != nil {
 		return [sha256.Size]byte{}, err
 	}
 	return sha256.Sum256(content), nil
@@ -565,17 +589,8 @@ func (s *ClusterService) snapshotACME(ctx context.Context, store snapshotStore) 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("遍历快照证书配置: %w", err)
 	}
-	dataDir, err := clusterSnapshotDataDir(ctx, store)
+	ownership, err := readSnapshotDNSOwnership(ctx, store)
 	if err != nil {
-		return nil, err
-	}
-	ownership, err := os.ReadFile(filepath.Join(dataDir, "acme_dns_ownership.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		ownership = []byte(`{"version":1,"records":[]}`)
-	} else if err != nil {
-		return nil, fmt.Errorf("读取 DNS 所有权状态: %w", err)
-	}
-	if err := validateDNSOwnership(ownership); err != nil {
 		return nil, err
 	}
 	state.DNSOwnership = ownership
