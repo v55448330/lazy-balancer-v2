@@ -42,7 +42,7 @@
       </el-descriptions>
       <el-descriptions :column="3" border class="ip2region-desc">
         <el-descriptions-item label="IP 库版本"><span class="version-cell">{{ ip2regionVersionLabel }}</span></el-descriptions-item>
-        <el-descriptions-item label="IP 规则数">{{ ip2regionInfo.db_size ? ip2regionInfo.db_size.toLocaleString() : '—' }}</el-descriptions-item>
+        <el-descriptions-item label="IP 规则数">{{ ip2regionInfo.db_size && ip2regionVersionLabel !== '未配置' ? ip2regionInfo.db_size.toLocaleString() : '—' }}</el-descriptions-item>
         <el-descriptions-item label="更新时间">{{ formatDate(ip2regionInfo.updated_at) || '—' }}</el-descriptions-item>
         <el-descriptions-item label="自动更新">
           <div class="crs-cell-flex">

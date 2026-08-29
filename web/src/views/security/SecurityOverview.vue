@@ -72,9 +72,10 @@
               <div class="stat-box stat-box--success">
                 <div class="stat-box__icon"><el-icon><Location /></el-icon></div>
                 <div class="stat-box__body">
-                  <div class="stat-box__value">{{ ip2regionVersion }}</div>
+                  <div class="stat-box__value">{{ ip2regionVersion === 'unknown' ? '未配置' : ip2regionVersion }}</div>
                   <div class="stat-box__label">IP 地理库</div>
                   <el-tag v-if="ip2regionError" type="danger" size="small" effect="plain" style="margin-top: 4px">加载失败</el-tag>
+                  <el-tag v-else-if="ip2regionVersion === 'unknown'" type="info" size="small" effect="plain" style="margin-top: 4px">未配置</el-tag>
                   <el-tag v-else-if="ip2regionStatus" :type="statusTagType(ip2regionStatus)" size="small" effect="plain" style="margin-top: 4px">{{ statusLabel(ip2regionStatus) }}</el-tag>
                 </div>
               </div>
