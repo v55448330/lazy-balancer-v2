@@ -116,7 +116,7 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 		if mfaEndpointHardGate(c, userID) {
 			return
 		}
-		if ok, verr := services.MFAVerifyCode(userID, req.Code, time.Now()); !ok {
+		if ok, verr := services.MFAVerifyTOTPCode(userID, req.Code, time.Now()); !ok {
 			msg := "验证码错误"
 			if verr != nil {
 				msg = verr.Error()
@@ -198,7 +198,7 @@ func (h *Handlers) MFADisable(c *gin.Context) {
 	if mfaEndpointHardGate(c, userID) {
 		return
 	}
-	if ok, verr := services.MFAVerifyCode(userID, req.Code, time.Now()); !ok {
+	if ok, verr := services.MFAVerifyTOTPCode(userID, req.Code, time.Now()); !ok {
 		// B5 I-A：高敏动作的失败尝试与成功同等可审计（对齐 MFAResetByAdmin 前置验码失败留痕）。
 		services.RecordAuditLog(c.GetString("username"), "认证拒绝", "用户认证", services.FormatAuditDetail("禁用 MFA 前验证失败", services.AuditResultPart("failure")), c.ClientIP())
 		msg := "验证码错误"
@@ -304,7 +304,7 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 	if mfaEndpointHardGate(c, userID) {
 		return
 	}
-	if ok, verr := services.MFAVerifyCode(userID, req.Code, time.Now()); !ok {
+	if ok, verr := services.MFAVerifyTOTPCode(userID, req.Code, time.Now()); !ok {
 		services.RecordAuditLog(c.GetString("username"), "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "step-up 验证失败"), c.ClientIP())
 		msg := "验证码错误"
 		if verr != nil {

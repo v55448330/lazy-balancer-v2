@@ -156,3 +156,27 @@ func TestMFAVerifyStep_hardCap_recoversAfterCooldownWithValidCode(t *testing.T) 
 		t.Fatalf("mfa_failed_attempts=%d, want 0（成功后计数应清零）", attempts)
 	}
 }
+
+// N+10 用户裁决：除登录与重置 MFA 外，全部 MFA 入口（含 verify-step）仅接受
+// 6 位动态验证码——恢复码属一次性应急登录凭证，不得作为操作授权凭证（导入
+// 配置等写守卫链经此端点）。RED：当前实现接受恢复码，本测试断言拒绝。
+func TestMFAVerifyStep_rejectsRecoveryCode(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	_ = seedMfaVerifyStepUser(t)
+	codes, err := services.MFARegenerateRecoveryCodes(1)
+	if err != nil || len(codes) == 0 {
+		t.Fatalf("seed recovery codes: %v n=%d", err, len(codes))
+	}
+	router := mfaVerifyStepRouter(h, "jwt")
+
+	rec := postMfaVerifyStep(router, fmt.Sprintf(`{"code":%q}`, codes[0]))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("verify-step with recovery code: status=%d body=%s, want 401（仅接受动态验证码）", rec.Code, rec.Body.String())
+	}
+
+	// 拒绝不得消费恢复码：随后经 MFAVerifyCode（登录口径）仍应成功。
+	ok, verr := services.MFAVerifyCode(1, codes[0], time.Now())
+	if !ok {
+		t.Fatalf("recovery code must remain consumable via login path after TOTP-only rejection: ok=%v err=%v", ok, verr)
+	}
+}

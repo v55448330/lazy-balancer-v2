@@ -436,8 +436,8 @@ const resetMfa = async (row: UserListItem): Promise<void> => {
         const { value } = await ElMessageBox.prompt(
           `重置「${row.username}」的 MFA 后该用户登录不再需要验证码，需重新绑定。\n请输入你当前 MFA 的验证码以确认：`,
           '重置 MFA',
-          // 与 step-up 弹码同口径（api.ts normalizeMfaCodeInput）：整段粘贴恢复码/
-          // 空白填充码先归一化再校验，resolve 侧取归一化首 token。
+          // 用户裁决（N+10）：重置 MFA 与登录是仅有的两个允许恢复码的入口
+          //（后端 MFAVerifyCode 消费口径）；step-up 写守卫链已收口为仅 TOTP。
           { type: 'warning', confirmButtonText: '确认重置', inputValidator: validateMfaCodeInput, inputErrorMessage: '请输入验证码或恢复代码' },
         )
         code = normalizeMfaCodeInput(value)

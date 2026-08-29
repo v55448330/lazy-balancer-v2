@@ -105,12 +105,10 @@ export const mfaAwareSuccess = (message: string): void => {
   }
   ElMessage.success(message)
 }
-// 用户上报缺陷（step-up 粘贴恢复代码被拒）：恢复代码「复制」按钮把全部 10 条码
-// 以换行拼接写入剪贴板（Users.vue copyMfaRecovery），整段粘贴（或码被空白填充）
-// 时 inputPattern /^.{6,16}$/ 对原始串必败。后端 MFAVerifyCode 本就支持恢复代码
-// （登录路径 Login.vue 亦以 normalizeMfaCodeInput 归一化提交），step-up 弹码与
-// 管理员重置弹码同口径：先归一化（trim → 按任意空白切分 → 取首个 token），再按
-// 6-16 位既有长度契约校验（不收紧字符集），resolve 归一化后的首 token。
+// 用户裁决（N+10）：除登录（Login.vue）与重置 MFA（Users.vue resetMfa，均走
+// 归一化 + 6-16 位恢复码契约）外，step-up 写守卫链（含配置导入等全部 428 重试
+// 流）仅接受 6 位动态验证码——后端 MFAVerifyTOTPCode 同口径拒绝恢复码，此处
+// 前端同步收口：文案不再提及恢复代码，校验为 6 位数字。
 export const normalizeMfaCodeInput = (raw: string): string => raw.trim().split(/\s+/)[0] ?? ''
 
 export const validateMfaCodeInput = (raw: string): boolean => {
@@ -118,17 +116,17 @@ export const validateMfaCodeInput = (raw: string): boolean => {
   return code.length >= 6 && code.length <= 16
 }
 
+const validateTotpCodeInput = (raw: string): boolean => /^\d{6}$/.test(normalizeMfaCodeInput(raw))
+
 const promptMfaCode = (): Promise<string | null> =>
   new Promise((resolve) => {
     if (mfaPromptOpen) { resolve(null); return }
     mfaPromptOpen = true
-    ElMessageBox.prompt('请输入 6 位验证码（或恢复代码）', 'MFA 验证', {
+    ElMessageBox.prompt('请输入 6 位动态验证码（此操作不支持恢复代码）', 'MFA 验证', {
       confirmButtonText: '验证',
       cancelButtonText: '取消',
-      // inputPattern 校验原始输入，整段粘贴恢复码/空白填充码必败——改用先归一化
-      // 再校验的 inputValidator（见 normalizeMfaCodeInput 注释）。
-      inputValidator: validateMfaCodeInput,
-      inputErrorMessage: '请输入验证码或恢复代码',
+      inputValidator: validateTotpCodeInput,
+      inputErrorMessage: '请输入 6 位数字验证码',
       type: 'warning',
     })
       .then(({ value }) => resolve(normalizeMfaCodeInput(value)))

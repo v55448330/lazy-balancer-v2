@@ -272,6 +272,50 @@ func MFAVerifyCode(userID int, code string, now time.Time) (bool, error) {
 	return false, nil
 }
 
+// MFAVerifyTOTPCode 仅校验 6 位动态验证码（用户裁决 N+10：除登录与重置 MFA
+// 外的全部 MFA 入口——verify-step 写守卫链（含配置导入）、重新绑定确认段、
+// 禁用确认——不接受恢复码。恢复码是一次性应急登录凭证，其「提交即消费」
+// 语义与高敏操作的二次校验/审计链不兼容，且不应作为操作授权凭证）。
+// 非 6 位输入与错误 TOTP 同按失败计（硬门冷却同样生效）；不触碰恢复码存储。
+func MFAVerifyTOTPCode(userID int, code string, now time.Time) (bool, error) {
+	mfaMu.Lock()
+	defer mfaMu.Unlock()
+
+	if al, _ := mfaIsLocked(userID, now); al {
+		return false, fmt.Errorf("MFA 验证已锁定，请 10 分钟后重试")
+	}
+
+	var secret string
+	var lastStep int64
+	if err := db.DB.QueryRow(
+		"SELECT COALESCE(mfa_secret,''), COALESCE(mfa_last_timestep,0) FROM users WHERE id=?",
+		userID).Scan(&secret, &lastStep); err != nil {
+		return false, err
+	}
+	if secret == "" {
+		return false, fmt.Errorf("用户未启用 MFA")
+	}
+
+	code = strings.TrimSpace(code)
+	if len(code) == 6 {
+		step, ok := mfaValidateTOTP(secret, code, now)
+		if ok {
+			if step <= lastStep {
+				mfaRecordFailure(userID, now)
+				return false, nil
+			}
+			_, _ = db.DB.Exec("UPDATE users SET mfa_last_timestep=?, mfa_failed_attempts=0 WHERE id=?", step, userID)
+			return true, nil
+		}
+	}
+
+	_, _, already := mfaRecordFailure(userID, now)
+	if already {
+		return false, fmt.Errorf("MFA 验证已锁定，请 10 分钟后重试")
+	}
+	return false, nil
+}
+
 // MFAVerifyPending 绑定向导 activate 步：验证 pending secret 的当前码（无重放状态）。
 func MFAVerifyPending(userID int, code string, now time.Time) (bool, error) {
 	var pending string
