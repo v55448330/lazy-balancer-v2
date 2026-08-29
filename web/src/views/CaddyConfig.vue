@@ -34,7 +34,9 @@
       </template>
       <div v-loading="loading" class="config-preview">
         <SyntaxHighlight v-if="caddyConfigData" :content="jsonText" language="json" />
-        <el-empty v-else description="暂无配置" :image-size="64" />
+        <!-- A6-S5：首拉失败且无数据时，空态不得误导读作「暂无配置」——错误横幅已
+             在上方展示，此处改「加载失败」（有数据时 R68 保留最后渲染）。 -->
+        <el-empty v-else :description="fetchError ? '加载失败' : '暂无配置'" :image-size="64" />
       </div>
     </el-card>
   </div>

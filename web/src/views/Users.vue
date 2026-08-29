@@ -191,7 +191,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { request, mfaAwareSuccess } from '@/utils/api'
+import { request, mfaAwareSuccess, normalizeMfaCodeInput, validateMfaCodeInput } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { UserFilled, User, Plus } from '@element-plus/icons-vue'
@@ -436,9 +436,11 @@ const resetMfa = async (row: UserListItem): Promise<void> => {
         const { value } = await ElMessageBox.prompt(
           `重置「${row.username}」的 MFA 后该用户登录不再需要验证码，需重新绑定。\n请输入你当前 MFA 的验证码以确认：`,
           '重置 MFA',
-          { type: 'warning', confirmButtonText: '确认重置', inputPattern: /^.{6,16}$/, inputErrorMessage: '请输入验证码或恢复代码' },
+          // 与 step-up 弹码同口径（api.ts normalizeMfaCodeInput）：整段粘贴恢复码/
+          // 空白填充码先归一化再校验，resolve 侧取归一化首 token。
+          { type: 'warning', confirmButtonText: '确认重置', inputValidator: validateMfaCodeInput, inputErrorMessage: '请输入验证码或恢复代码' },
         )
-        code = value.trim()
+        code = normalizeMfaCodeInput(value)
       }
     } else {
       await ElMessageBox.confirm(
@@ -480,6 +482,8 @@ const mfaBinding = ref({
 const mfaBindingClosed = () => {
   mfaBinding.value.step = 0
   mfaBinding.value.code = ''
+  // A6-S4：secret 一并清空——TOTP 种子不再滞留于关闭后的响应式状态。
+  mfaBinding.value.secret = ''
   mfaBinding.value.recoveryCodes = []
 }
 

@@ -196,7 +196,10 @@ const saving = ref(false)
 const loggingOut = ref(false)
 
 const currentPage = computed(() => authStore.currentPage)
-const isReadOnly = computed(() => authStore.readOnlyReason === 'slave')
+// A6-S3：unknown（用户信息尚未拉取成功）窗口期 fail-closed，与 slave 同口径锁定
+// 自助资料编辑；非管理员的自我显示名/改密是自助能力而非管理员操作，不随此收紧
+//（后端恢复后仍按自身身份正确鉴权）。
+const isReadOnly = computed(() => authStore.readOnlyReason === 'slave' || authStore.readOnlyReason === 'unknown')
 const menuDisplayName = computed(() => authStore.user?.display_name || authStore.user?.username || '用户')
 const hasCustomDisplayName = computed(() => {
   const displayName = authStore.user?.display_name || ''

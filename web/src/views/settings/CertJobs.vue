@@ -78,7 +78,9 @@
       </template>
     </el-table-column>
   </el-table>
-  <el-empty v-if="!loading && jobs.length === 0" description="暂无签发任务" :image-size="60" />
+  <!-- A6-S5：首拉失败且无数据时改「加载失败」，与顶部错误横幅口径一致，避免误
+       导作「暂无签发任务」（有数据时 R68 保留最后列表，此空态不渲染）。 -->
+  <el-empty v-if="!loading && jobs.length === 0" :description="jobsPollingError.errorMessage.value ? '加载失败' : '暂无签发任务'" :image-size="60" />
   <div v-if="jobs.length > 0 || currentPage > 1" class="cert-jobs-pagination">
     <el-pagination
       v-model:current-page="currentPage"

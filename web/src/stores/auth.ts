@@ -81,7 +81,9 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchUser() {
     if (!token.value) return
     try {
-      const res = await request.get<APIResponse<CurrentUser>>('/users/me')
+      // A6-S1：静默拉取——失败态已由 15s 重试循环与 readOnlyMessage 横幅（AppLayout
+      // 只读标签）持续反馈，与其余轮询体系的 silent 口径一致，不再叠加 toast 噪音。
+      const res = await request.get<APIResponse<CurrentUser>>('/users/me', { silent: true })
       if (res.data) {
         user.value = {
           id: res.data.id,
@@ -91,6 +93,10 @@ export const useAuthStore = defineStore('auth', () => {
           display_name: res.data.display_name,
           mfa_enabled: res.data.mfa_enabled ?? false,
         }
+      } else {
+        // A6-S2：200 但 data 为空——user 仍为 null（unknown 只读窗口）且原先此处
+        // 不安排重试（静默死亡，永不恢复）。与瞬时失败同口径：定时重试拉取。
+        scheduleUserRetry()
       }
     } catch (error: unknown) {
       // 瞬时失败（非 401）保留最近一次已知的用户与权限，不清空；显式 401 由全局

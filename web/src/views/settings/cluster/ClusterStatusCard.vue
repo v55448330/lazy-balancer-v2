@@ -40,7 +40,8 @@
         </el-descriptions-item>
       </template>
     </el-descriptions>
-    <el-empty v-else description="暂无节点状态" :image-size="60" />
+    <!-- A6-S5：拉取失败且无数据时改「加载失败」，与父级错误横幅口径一致。 -->
+    <el-empty v-else :description="error ? '加载失败' : '暂无节点状态'" :image-size="60" />
   </el-card>
 </template>
 
@@ -52,6 +53,8 @@ import type { ClusterStatus } from '@/types'
 defineProps<{
   readonly status: ClusterStatus | null
   readonly loading: boolean
+  /** A6-S5：父级轮询错误态——无数据时的空态文案据此切「加载失败」。 */
+  readonly error?: boolean
 }>()
 
 </script>

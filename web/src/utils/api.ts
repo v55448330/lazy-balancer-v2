@@ -105,6 +105,19 @@ export const mfaAwareSuccess = (message: string): void => {
   }
   ElMessage.success(message)
 }
+// 用户上报缺陷（step-up 粘贴恢复代码被拒）：恢复代码「复制」按钮把全部 10 条码
+// 以换行拼接写入剪贴板（Users.vue copyMfaRecovery），整段粘贴（或码被空白填充）
+// 时 inputPattern /^.{6,16}$/ 对原始串必败。后端 MFAVerifyCode 本就支持恢复代码
+// （登录路径 Login.vue 的 el-input 以 maxlength 16 + trim 对齐），step-up 弹码与
+// 管理员重置弹码同口径：先归一化（trim → 按任意空白切分 → 取首个 token），再按
+// 6-16 位既有长度契约校验（不收紧字符集），resolve 归一化后的首 token。
+export const normalizeMfaCodeInput = (raw: string): string => raw.trim().split(/\s+/)[0] ?? ''
+
+export const validateMfaCodeInput = (raw: string): boolean => {
+  const code = normalizeMfaCodeInput(raw)
+  return code.length >= 6 && code.length <= 16
+}
+
 const promptMfaCode = (): Promise<string | null> =>
   new Promise((resolve) => {
     if (mfaPromptOpen) { resolve(null); return }
@@ -112,16 +125,23 @@ const promptMfaCode = (): Promise<string | null> =>
     ElMessageBox.prompt('请输入 6 位验证码（或恢复代码）', 'MFA 验证', {
       confirmButtonText: '验证',
       cancelButtonText: '取消',
-      inputPattern: /^.{6,16}$/,
+      // inputPattern 校验原始输入，整段粘贴恢复码/空白填充码必败——改用先归一化
+      // 再校验的 inputValidator（见 normalizeMfaCodeInput 注释）。
+      inputValidator: validateMfaCodeInput,
       inputErrorMessage: '请输入验证码或恢复代码',
       type: 'warning',
     })
-      .then(({ value }) => resolve(value.trim()))
+      .then(({ value }) => resolve(normalizeMfaCodeInput(value)))
       .catch(() => resolve(null))
       .finally(() => { mfaPromptOpen = false })
   })
 
 let sessionExpiredDialogOpen = false
+// 用户指令（会话过期全站止损）：首个 401 的「会话失效」弹窗出现后、用户点击
+// 「重新登录」前，页面轮询器（usePollingTask / 裸 setInterval / blob 下载）仍按
+// 各自周期出站请求，每个再吃一个 401，后端认证拒绝审计被刷屏。置位后下方请求
+// 拦截器直接拒绝、不再出站任何请求；标志随确认后的 location.reload() 一并消亡。
+let sessionExpiredDetected = false
 
 // Blob 下载（配置导出、MCP 手册）失败时，错误响应体是 Blob 而非 JSON，
 // 需读出文本后解析后端 message，否则只能展示 axios 的英文兜底文案。
@@ -145,6 +165,14 @@ export class ApiRequestError extends Error {
   }
 }
 
+// 会话过期止损的请求拦截拒绝（未出站、无响应体）：打标供响应拦截器识别并
+// 原样透传——否则会被下方兜底逻辑映射成「网络连接失败」toast。
+const sessionHaltedRequestError = (): ApiRequestError => {
+  const error = new ApiRequestError('登录已过期', 401)
+  ;(error as ApiRequestError & { sessionExpiredHalted?: boolean }).sessionExpiredHalted = true
+  return error
+}
+
 const service: AxiosInstance = axios.create({
   baseURL: '/api/v1',
   timeout: 30000,
@@ -152,6 +180,9 @@ const service: AxiosInstance = axios.create({
 
 service.interceptors.request.use(
   (config) => {
+    // 会话过期全站止损（用户指令，见 sessionExpiredDetected 注释）：弹窗等待
+    // 确认期间不再出站任何请求。
+    if (sessionExpiredDetected) throw sessionHaltedRequestError()
     const token = localStorage.getItem('token')
     if (token && token !== 'null' && token !== 'undefined') {
       config.headers.Authorization = `Bearer ${token}`
@@ -192,6 +223,11 @@ service.interceptors.response.use(
     return res
   },
   async (error) => {
+    // 止损拦截的拒绝：请求未出站，不 toast、不走 401 会话失效弹窗（弹窗已在
+    // 展示中），原样透传给调用方。
+    if ((error as { sessionExpiredHalted?: boolean }).sessionExpiredHalted) {
+      return Promise.reject(error)
+    }
     if (axios.isCancel(error)) return Promise.reject(error)
     const status = error.response?.status
     const backendMsg = error.response?.data?.message ?? (await blobErrorMessage(error.response?.data))
@@ -230,6 +266,9 @@ service.interceptors.response.use(
         }
         if (!sessionExpiredDialogOpen) {
           sessionExpiredDialogOpen = true
+          // 用户指令（会话过期全站止损）：置位后请求拦截器拒绝后续所有出站请求，
+          // 阻断弹窗等待期间轮询器的 401 刷屏；随确认后的 reload 一并消亡。
+          sessionExpiredDetected = true
           // R71 D-新1：confirm 的取消分支与确定行为完全相同，「取消」形同虚设且误导
           // ——改单按钮 alert（会话已死，任何请求都会 401，刷新是唯一合理结局）。
           ElMessageBox.alert(backendMsg || '登录已过期，请重新登录', '会话失效', {

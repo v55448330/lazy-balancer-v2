@@ -9,14 +9,14 @@
       </template>
       <div class="polling-error-meta">{{ clusterPollingErrorDescription }}</div>
     </el-alert>
-    <ClusterStatusCard :status="status" :loading="initialLoading" />
+    <ClusterStatusCard :status="status" :loading="initialLoading" :error="!!clusterPollingError.errorMessage.value" />
     <el-row :gutter="16" class="equal-height-row">
       <el-col :xs="24" :sm="24" :md="12">
         <ClusterModeCard
           :status="status"
           :loading="clusterModeChanging"
           :registration-request="registrationRequest"
-          :read-only="isNonAdminReadOnly"
+          :read-only="isReadOnlyProp"
           :interval-saving="intervalSaving"
           @register="registerAsSlave"
           @promote="promoteToMaster"
@@ -35,7 +35,7 @@
           :pending-node-id="pendingNodeId"
           :login-node-id="loginNodeId"
           :access-url-saving="accessUrlSaving"
-          :read-only="isNonAdminReadOnly || status?.node_mode === 'slave'"
+          :read-only="isReadOnlyProp || status?.node_mode === 'slave'"
           @generate-token="generateRegisterToken"
           @update-sync-field="updateSyncField"
           @approve="approveNode"
@@ -57,7 +57,7 @@
       :pending-node-id="pendingNodeId"
       :login-node-id="loginNodeId"
       :access-url-saving="accessUrlSaving"
-      :read-only="isNonAdminReadOnly"
+      :read-only="isReadOnlyProp"
       @generate-token="generateRegisterToken"
       @update-sync-field="updateSyncField"
       @approve="approveNode"
@@ -72,7 +72,7 @@
       :status="status"
       :syncing="syncing"
       :promoting="promoting"
-      :read-only="isNonAdminReadOnly"
+      :read-only="isReadOnlyProp"
       @sync="syncNow"
       @promote="promoteToMaster"
       @reregister="requestRegistration"
@@ -160,7 +160,13 @@ const accessUrlSaving = ref(false)
 const registrationRequest = ref(0)
 const tokenDialogVisible = ref(false)
 const registerToken = ref<ClusterRegisterToken | null>(null)
-const isNonAdminReadOnly = computed(() => authStore.readOnlyReason === 'non-admin')
+// A6-S3：readOnlyReason 为 unknown（token 有效但 /users/me 尚未拉取成功）时同样
+// fail-closed——集群操作在该窗口期按只读呈现。slave 除外照旧：从节点管理员仍可
+// 操作集群管理（含「提升为主节点」），不随本项收紧。
+const isReadOnlyProp = computed(() => {
+  const reason = authStore.readOnlyReason
+  return reason === 'non-admin' || reason === 'unknown'
+})
 const clusterModeChanging = computed(() => syncing.value || promoting.value || modeLoading.value)
 const fetchStatus = async (): Promise<ClusterStatus> => {
   const requestSeq = ++requestSequence
@@ -216,7 +222,7 @@ const confirmAction = async (message: string, title: string): Promise<boolean> =
 }
 
 const registerAsSlave = async (input: ClusterRegistrationInput): Promise<void> => {
-  if (isNonAdminReadOnly.value || clusterModeChanging.value) return
+  if (isReadOnlyProp.value || clusterModeChanging.value) return
   modeLoading.value = true
   try {
     const confirmed = await confirmAction('切换后本地数据将被主节点全覆盖，是否继续？', '确认切换为从节点')
@@ -233,7 +239,7 @@ const registerAsSlave = async (input: ClusterRegistrationInput): Promise<void> =
 }
 
 const promoteToMaster = async (): Promise<void> => {
-  if (isNonAdminReadOnly.value || clusterModeChanging.value) return
+  if (isReadOnlyProp.value || clusterModeChanging.value) return
   promoting.value = true
   try {
     const confirmed = await confirmAction('将脱离集群，当前数据成为权威数据', '确认提升为主节点')
@@ -250,7 +256,7 @@ const promoteToMaster = async (): Promise<void> => {
 }
 
 const syncNow = async (): Promise<void> => {
-  if (isNonAdminReadOnly.value || clusterModeChanging.value) return
+  if (isReadOnlyProp.value || clusterModeChanging.value) return
   const ok = await confirmAction('立即从主节点拉取并应用最新配置？', '手动同步')
   if (!ok) return
   syncing.value = true
@@ -269,7 +275,7 @@ const syncNow = async (): Promise<void> => {
 }
 
 const generateRegisterToken = async (): Promise<void> => {
-  if (isNonAdminReadOnly.value) return
+  if (isReadOnlyProp.value) return
   tokenLoading.value = true
   try {
     const response = await request.post<APIResponse<ClusterRegisterToken>>('/cluster/register-tokens')
@@ -307,7 +313,7 @@ const syncSwitchLabels: Record<string, string> = {
 }
 
 const updateSyncField = async (field: string, value: boolean): Promise<void> => {
-  if (isNonAdminReadOnly.value) return
+  if (isReadOnlyProp.value) return
   const label = syncSwitchLabels[field] ?? field
   const action = value ? '开启' : '关闭'
   try {
@@ -335,7 +341,7 @@ const updateSyncField = async (field: string, value: boolean): Promise<void> => 
 }
 
 const updateSyncInterval = async (value: number): Promise<void> => {
-  if (isNonAdminReadOnly.value) return
+  if (isReadOnlyProp.value) return
   intervalSaving.value = true
   try {
     await request.put<ActionResponse>('/cluster/settings', { sync_interval: value })
@@ -350,7 +356,7 @@ const updateSyncInterval = async (value: number): Promise<void> => {
 }
 
 const runNodeAction = async (node: ClusterNode, action: 'approve' | 'reject' | 'remove'): Promise<void> => {
-  if (isNonAdminReadOnly.value || pendingNodeId.value !== null) return
+  if (isReadOnlyProp.value || pendingNodeId.value !== null) return
   pendingNodeId.value = node.id
   try {
     if (action === 'approve') {
@@ -385,7 +391,7 @@ const approveNode = async (node: ClusterNode): Promise<void> => {
 }
 
 const requestRegistration = (): void => {
-  if (isNonAdminReadOnly.value) return
+  if (isReadOnlyProp.value) return
   registrationRequest.value += 1
 }
 
@@ -410,7 +416,7 @@ const removeNode = async (node: ClusterNode): Promise<void> => {
 }
 
 const loginNode = async (node: ClusterNode): Promise<void> => {
-  if (isNonAdminReadOnly.value || node.status !== 'online' || loginNodeId.value !== null) return
+  if (isReadOnlyProp.value || node.status !== 'online' || loginNodeId.value !== null) return
   // R72 六次：403（未启用 MFA）预检——文案指向正确入口（用户管理）。
   if (!authStore.user?.mfa_enabled) {
     ElMessage.warning('登录从节点需先启用 MFA（在「系统设置 → 用户管理」中对自己的账号绑定）')
@@ -445,7 +451,7 @@ const loginNode = async (node: ClusterNode): Promise<void> => {
 }
 
 const openAccessUrlDialog = (node: ClusterNode): void => {
-  if (isNonAdminReadOnly.value || accessUrlSaving.value) return
+  if (isReadOnlyProp.value || accessUrlSaving.value) return
   editingAccessUrlNode.value = node
   accessUrlDialogVisible.value = true
 }
@@ -458,7 +464,7 @@ const closeAccessUrlDialog = (): void => {
 
 const updateAccessUrl = async (accessUrl: string): Promise<void> => {
   const node = editingAccessUrlNode.value
-  if (!node || isNonAdminReadOnly.value || accessUrlSaving.value) return
+  if (!node || isReadOnlyProp.value || accessUrlSaving.value) return
   accessUrlSaving.value = true
   try {
     await request.put<ActionResponse>(`/cluster/nodes/${node.id}/access-url`, { access_url: accessUrl })
