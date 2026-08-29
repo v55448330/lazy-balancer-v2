@@ -480,20 +480,31 @@ func TestDeleteRule_returns_timeout_and_preserves_rule_when_worker_does_not_exit
 	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "取消证书任务超时") {
 		t.Fatalf("delete status=%d body=%s", response.Code, response.Body.String())
 	}
-	var ruleCount int
-	var jobStatus, jobMessage string
-	if err := db.DB.QueryRow(`SELECT COUNT(*),(SELECT status FROM cert_jobs WHERE rule_id='lb_delete_timeout'),(SELECT message FROM cert_jobs WHERE rule_id='lb_delete_timeout') FROM lb_rules WHERE caddy_id='lb_delete_timeout'`).Scan(&ruleCount, &jobStatus, &jobMessage); err != nil {
-		t.Fatalf("read preserved state: %v", err)
-	}
-	if ruleCount != 1 || jobStatus != "creating_order" || jobMessage != "unchanged" {
-		t.Fatalf("preserved state rule=%d job=(%q,%q), want rule preserved and job state untouched", ruleCount, jobStatus, jobMessage)
-	}
+	// 异步取消与补偿收尾完成后断言终态：规则必须保留（超时中止语义），
+	// 证书任务按 2b68044a 补偿设计被转入 queued/补偿重排队（保留规则的
+	// 在途任务应继续执行——本测试的队列管理器已停，入队失败不影响转移
+	// 终态）。-race 减速会暴露「立即断言」与异步补偿的竞态，故轮询。
 	select {
 	case <-drained:
-	case <-time.After(time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("asynchronous cancellation drain did not finish")
 	}
+	var ruleCount int
+	var jobStatus, jobMessage string
 	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if err := db.DB.QueryRow(`SELECT COUNT(*),(SELECT status FROM cert_jobs WHERE rule_id='lb_delete_timeout'),(SELECT message FROM cert_jobs WHERE rule_id='lb_delete_timeout') FROM lb_rules WHERE caddy_id='lb_delete_timeout'`).Scan(&ruleCount, &jobStatus, &jobMessage); err != nil {
+			t.Fatalf("read preserved state: %v", err)
+		}
+		if ruleCount == 1 && jobStatus == "queued" && jobMessage == "补偿重排队" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("preserved state rule=%d job=(%q,%q), want rule preserved and job compensated to queued", ruleCount, jobStatus, jobMessage)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	deadline = time.Now().Add(2 * time.Second)
 	for services.GetCAQueueManager().IsRuleBlocked("lb_delete_timeout") && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -1477,5 +1488,77 @@ func TestRuleWriteEndpoints_share_one_lock_order_under_concurrency(t *testing.T)
 	}
 	if remaining > 2 {
 		t.Fatalf("unexpected rule count %d after concurrent writes", remaining)
+	}
+}
+
+// N+12 用户裁决：删除/禁用在有 worker 正在执行签发时秒回 409 引导稍后重试，
+// 替代悬挂最长 2 分钟的有界取消等待。仅拦「执行中」——queued 取消瞬时、
+// waiting_ca 冷却数小时均不拦（正确性仍由既有超时中止+回滚兜底）。
+func TestDeleteRule_returnsConflictWhenWorkerRunning(t *testing.T) {
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_del_running", "running", "running.example.test", 8081, true, "acme_dns", true)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(nil)
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	services.GetCAQueueManager().MarkJobRunningForTest("lb_del_running", 901)
+	router := gin.New()
+	router.DELETE("/rules/:caddy_id", handler.DeleteRule)
+
+	rec := httptest.NewRecorder()
+	started := time.Now()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/rules/lb_del_running", nil))
+
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "正在进行的证书签发任务") {
+		t.Fatalf("delete status=%d body=%s, want 409 with guidance message", rec.Code, rec.Body.String())
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("conflict path took %v, want immediate rejection", elapsed)
+	}
+	var ruleCount int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM lb_rules WHERE caddy_id='lb_del_running'`).Scan(&ruleCount); err != nil || ruleCount != 1 {
+		t.Fatalf("rule must be preserved on 409: count=%d err=%v", ruleCount, err)
+	}
+}
+
+func TestDisableRule_returnsConflictWhenWorkerRunning(t *testing.T) {
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_dis_running", "disrunning", "disrunning.example.test", 8082, true, "acme_dns", true)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(nil)
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	services.GetCAQueueManager().MarkJobRunningForTest("lb_dis_running", 902)
+	router := gin.New()
+	router.POST("/rules/:caddy_id/disable", handler.DisableRule)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/rules/lb_dis_running/disable", nil))
+
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "正在进行的证书签发任务") {
+		t.Fatalf("disable status=%d body=%s, want 409 with guidance message", rec.Code, rec.Body.String())
+	}
+	var enabled int
+	if err := db.DB.QueryRow(`SELECT IIF(enabled IN ('1',1),1,0) FROM lb_rules WHERE caddy_id='lb_dis_running'`).Scan(&enabled); err != nil || enabled != 1 {
+		t.Fatalf("rule must stay enabled on 409: enabled=%d err=%v", enabled, err)
+	}
+}
+
+// 仅 queued（不在执行）的 DB 任务不得触发 409——删除走正常快速路径。
+func TestDeleteRule_queuedOnlyJobIsNotBlocked(t *testing.T) {
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_del_queued", "queuedonly", "queued.example.test", 8083, true, "acme_dns", true)
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,message) VALUES ('lb_del_queued','queued.example.test','queued','waiting')`); err != nil {
+		t.Fatalf("seed queued job: %v", err)
+	}
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(nil)
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	router := gin.New()
+	router.DELETE("/rules/:caddy_id", handler.DeleteRule)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/rules/lb_del_queued", nil))
+
+	if rec.Code == http.StatusConflict {
+		t.Fatalf("queued-only job must not trigger 409: body=%s", rec.Body.String())
 	}
 }

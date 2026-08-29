@@ -514,6 +514,54 @@ func (m *CAQueueManager) requeueStrandedJobs(whereClause, message, logPrefix str
 	}
 }
 
+// HasRunningJobForRule 报告该规则当前是否有 worker 正在执行证书任务。
+// 只看 runningRules（执行中内存态）而非 DB 状态：queued 取消是瞬时的、
+// waiting_ca 冷却可长达 1-3 小时，均不应拦截删除/禁用；慢路径的根源仅是
+// 「worker 正在跑网络分段」。调用方（DeleteRule/DisableRule 预检）将其作为
+// UX 快路径，检查与操作间的 TOCTOU 窗口（恰好派发）落入既有的有界等待+
+// 中止保护，正确性不变。
+func (m *CAQueueManager) HasRunningJobForRule(ruleID string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, queue := range m.queues {
+		queue.mu.Lock()
+		for _, runningRuleID := range queue.runningRules {
+			if runningRuleID == ruleID {
+				queue.mu.Unlock()
+				return true
+			}
+		}
+		queue.mu.Unlock()
+	}
+	return false
+}
+
+// MarkJobRunningForTest 在队列表记一个「执行中」条目供 handler 层预检测试
+// 使用（生产代码禁止调用）。与 ResetCAQueueManagerForTest 同族的测试缝：
+// 自足登记 active+runningRules，模拟 execute() 的登记形态。
+func (m *CAQueueManager) MarkJobRunningForTest(ruleID string, jobID int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.queues) == 0 {
+		// 队列惰建（Enqueue 时按 provider 创建）；测试缝自建一个零值 provider
+		// 队列以承载标记，Stop（ResetCAQueueManagerForTest）会正常收走其 loop。
+		q := newCAQueue(models.CAProvider{}, m.reloader, m.dataDir)
+		m.queues[q.provider.ID] = q
+		go q.loop()
+	}
+	for _, queue := range m.queues {
+		queue.mu.Lock()
+		queue.active[jobID] = struct{}{}
+		queue.runningRules[jobID] = ruleID
+		queue.running++
+		queue.mu.Unlock()
+		return
+	}
+}
+
 // IsJobActive reports whether the job is currently queued or running.
 func (m *CAQueueManager) IsJobActive(jobID int) bool {
 	m.mu.Lock()

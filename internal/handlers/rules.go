@@ -2099,6 +2099,15 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	if dbQueryNotFound(c, err, "规则不存在", "DeleteRule query rule") {
 		return
 	}
+
+	// UX 快路径预检（用户裁决）：有 worker 正在执行签发时删除会进入有界取消
+	// 等待（最长 2 分钟），秒回 409 让用户稍后重试优于请求悬挂。仅拦「执行中」
+	// ——queued 取消瞬时、waiting_ca 冷却可达数小时均不拦；检查与操作间的
+	// TOCTOU 窗口落入既有超时中止+快照回滚保护，正确性不变。
+	if qm := services.GetCAQueueManager(); qm != nil && qm.HasRunningJobForRule(caddyID) {
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "该规则有正在进行的证书签发任务（约需几分钟），请任务完成后再删除或稍后重试"})
+		return
+	}
 	certJobsSnapshot, err := services.SnapshotCertJobsForRule(caddyID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份证书任务失败: " + err.Error()})
@@ -2758,6 +2767,14 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	}
 	if !originalEnabled {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已禁用"})
+		return
+	}
+
+	// UX 快路径预检（用户裁决）：与 DeleteRule 同款——有 worker 正在执行签发
+	// 时禁用会进入有界取消等待（最长 2 分钟），秒回 409 优于请求悬挂。仅拦
+	// 「执行中」；TOCTOU 窗口落入既有超时中止+回滚保护，正确性不变。
+	if qm := services.GetCAQueueManager(); qm != nil && qm.HasRunningJobForRule(caddyID) {
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "该规则有正在进行的证书签发任务（约需几分钟），请任务完成后再禁用或稍后重试"})
 		return
 	}
 
