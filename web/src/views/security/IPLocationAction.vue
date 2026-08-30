@@ -160,6 +160,12 @@ const addTo = async (policy: PolicySummary, kind: ListKind): Promise<void> => {
         ElMessage.info(`该 IP 已在策略「${policy.name}」的${kindLabels[kind]}中`)
         return
       }
+      // K3-F1：策略当前为黑名单/免检测模式且已有列表项时，切换白名单会把全部
+      // 既有拒绝条目反转为放行条目（语义静默反转）——拦截并引导到策略编辑。
+      if (detail.ip_acl_enabled && detail.ip_acl_mode !== 'allow' && list.length > 0) {
+        ElMessage.warning(`该策略当前为黑名单/免检测模式且已有 ${list.length} 条列表项，切换白名单将反转其语义，请在策略编辑中操作`)
+        return
+      }
       body = { ip_acl_list: JSON.stringify([...list, props.ip]), ip_acl_mode: 'allow', ip_acl_enabled: true }
     }
 
@@ -188,8 +194,8 @@ const addTo = async (policy: PolicySummary, kind: ListKind): Promise<void> => {
 <style>
 .ip-location-popper .ipo-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
 .ip-location-popper .ipo-ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; }
-.ip-location-popper .ipo-loc { font-size: 12px; color: #909399; }
-.ip-location-popper .ipo-tip { font-size: 12px; color: #909399; padding: 4px 0; }
+.ip-location-popper .ipo-loc { font-size: 12px; color: var(--text-secondary, #909399); }
+.ip-location-popper .ipo-tip { font-size: 12px; color: var(--text-secondary, #909399); padding: 4px 0; }
 .ip-location-popper .ipo-row { padding: 6px 0; border-top: 1px solid var(--el-border-color-lighter, #ebeef5); }
 .ip-location-popper .ipo-name { font-size: 13px; font-weight: 500; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ip-location-popper .ipo-actions { display: flex; gap: 0; }

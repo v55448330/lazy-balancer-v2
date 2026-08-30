@@ -112,6 +112,55 @@ func TestGetSecurityOverview_topIPsCarryIPLocationField(t *testing.T) {
 	}
 }
 
+// N15-F2：ListSecurityPolicies 的 rule_caddy_id 过滤按绑定表筛出该规则绑定的
+// 策略（IP 归属地弹窗按当前规则收敛可选策略列表所依赖的口径）。
+func TestListSecurityPolicies_ruleCaddyIDFilter(t *testing.T) {
+	// Given：两条启用策略，仅甲绑定到规则 lb_filter1
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, enabled) VALUES ('过滤甲', 1), ('过滤乙', 1)`); err != nil {
+		t.Fatalf("seed policies: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) SELECT 'lb_filter1', id FROM security_policies WHERE name='过滤甲'`); err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+
+	// When：按 rule_caddy_id 过滤
+	recorder := getRequest(t, router, "/security/policies?rule_caddy_id=lb_filter1")
+
+	// Then：仅返回绑定的策略
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data []struct {
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if len(resp.Data) != 1 || resp.Data[0].Name != "过滤甲" {
+		t.Fatalf("policies = %s, want only 过滤甲", recorder.Body.String())
+	}
+
+	// And：未绑定任何策略的规则返回空列表
+	empty := getRequest(t, router, "/security/policies?rule_caddy_id=lb_nobind")
+	var emptyResp struct {
+		Code int `json:"code"`
+		Data []struct {
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(empty.Body.Bytes(), &emptyResp); err != nil {
+		t.Fatalf("parse empty response: %v", err)
+	}
+	if len(emptyResp.Data) != 0 {
+		t.Fatalf("unbound rule policies = %s, want empty", empty.Body.String())
+	}
+}
+
 func TestListSecurityPolicies_enabledFilter(t *testing.T) {
 	// Given: one enabled and one disabled policy
 	setupSecurityPolicyTestDB(t)
