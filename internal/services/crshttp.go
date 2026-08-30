@@ -339,7 +339,10 @@ func fetchGitHubLatestTagFromAPI(ctx context.Context, client *http.Client, apiUR
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub 返回 %d", resp.StatusCode), resp.StatusCode >= http.StatusInternalServerError
+		// 403 = GitHub API 未认证限流（60 次/小时/IP），可经代理 releases/latest
+		// 页面绕过；5xx = 传输类故障，同样走代理回退。其余 4xx 不重试。
+		return "", fmt.Errorf("GitHub 返回 %d", resp.StatusCode),
+			resp.StatusCode >= http.StatusInternalServerError || resp.StatusCode == http.StatusForbidden
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {

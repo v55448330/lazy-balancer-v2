@@ -71,10 +71,15 @@ func TestFetchCRSLatestTag_directSuccessSkipsProxy(t *testing.T) {
 	}
 }
 
-func TestFetchCRSLatestTag_direct4xxDoesNotFallBack(t *testing.T) {
-	// Given 直连返回 4xx（如限流 403）：代理对 api.github.com 同样 403，重试无意义
+func TestFetchCRSLatestTag_direct403FallsBackToProxy(t *testing.T) {
+	// Given 直连 api.github.com 返回 403（未认证限流 60 次/小时/IP）：
+	// 代理走 releases/latest 页面（非 api.github.com），可绕过限流。
 	proxyHits := 0
-	proxy := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { proxyHits++ }))
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxyHits++
+		w.Header().Set("Location", "https://github.com/coreruleset/coreruleset/releases/tag/v4.14.0")
+		w.WriteHeader(http.StatusFound)
+	}))
 	defer proxy.Close()
 	withGHFastProxy(t, proxy.URL+"/")
 
@@ -85,17 +90,17 @@ func TestFetchCRSLatestTag_direct4xxDoesNotFallBack(t *testing.T) {
 	withCRSLatestAPIURL(t, api.URL)
 
 	// When 查询最新版本
-	_, err := defaultFetchCRSLatestTag(context.Background())
+	tag, err := defaultFetchCRSLatestTag(context.Background())
 
-	// Then 直接失败，不走代理回退
-	if err == nil {
-		t.Fatal("err=nil, want 4xx to fail without proxy fallback")
+	// Then 代理回退成功提取 tag
+	if err != nil {
+		t.Fatalf("err=%v, want proxy fallback to succeed past 403 rate limit", err)
 	}
-	if !strings.Contains(err.Error(), "403") {
-		t.Fatalf("error=%q, want it to carry the 403 status", err)
+	if tag != "v4.14.0" {
+		t.Fatalf("tag=%q, want v4.14.0", tag)
 	}
-	if proxyHits != 0 {
-		t.Fatalf("proxy hits=%d, want 0 (4xx must not fall back to the proxy)", proxyHits)
+	if proxyHits == 0 {
+		t.Fatal("proxy hits=0, want 403 to trigger proxy fallback")
 	}
 }
 
