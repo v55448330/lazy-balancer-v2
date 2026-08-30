@@ -119,7 +119,8 @@ const normalizeRow = (p: PolicyRow): PolicyRow => ({
 })
 
 const loadPolicies = async (): Promise<void> => {
-  if (policiesLoading.value) return
+  // 每次 @show 都强制重新拉取——同一策略绑定多条规则时，从规则 A 弹窗
+  // 加入黑名单后，打开规则 B 弹窗需要看到最新 ACL 状态（无陈旧缓存）。
   policiesLoading.value = true
   try {
     const url = props.ruleCaddyId
@@ -271,9 +272,18 @@ const applyAcl = async (policy: PolicyRow, target: AclTarget): Promise<void> => 
       body = { ip_acl_enabled: true, ip_acl_mode: target, ip_acl_list: JSON.stringify(nextList) }
       successMsg = `已启用策略「${policy.name}」的 IP 访问控制并加入${ACL_LABELS[target]}`
     } else if (detail.ip_acl_mode === target) {
-      // 模式一致 → 直接追加，无需确认
+      // 模式一致 → 确认后追加
       if (list.includes(props.ip)) {
         ElMessage.info(`该 IP 已在策略「${policy.name}」的${ACL_LABELS[target]}中`)
+        return
+      }
+      try {
+        await ElMessageBox.confirm(
+          `将把 ${props.ip} 加入策略「${policy.name}」的${ACL_LABELS[target]}。是否继续？`,
+          `加入${ACL_LABELS[target]}`,
+          { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
+        )
+      } catch {
         return
       }
       body = { ip_acl_list: JSON.stringify([...list, props.ip]) }

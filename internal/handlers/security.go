@@ -1053,7 +1053,43 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "安全策略", fmt.Sprintf("策略 #%s", id), "")
+	// 审计用 username（非数字 ID）+ 字段级变更详情——IP 弹窗一键操作和
+	// 策略编辑页共用此端点，操作人/具体改了什么/IP 是什么必须在日志可追溯。
+	var policyName string
+	_ = db.DB.QueryRow("SELECT name FROM security_policies WHERE id=?", id).Scan(&policyName)
+	auditDetail := fmt.Sprintf("策略「%s」(#%s)", policyName, id)
+	var changedFields []string
+	if req.IPACLList != nil {
+		changedFields = append(changedFields, fmt.Sprintf("IP ACL 列表→%s", *req.IPACLList))
+	}
+	if req.IPACLMode != nil {
+		changedFields = append(changedFields, fmt.Sprintf("ACL 模式→%s", *req.IPACLMode))
+	}
+	if req.IPACLEnabled != nil {
+		changedFields = append(changedFields, fmt.Sprintf("ACL 启用→%v", *req.IPACLEnabled))
+	}
+	if req.IPWhitelist != nil {
+		changedFields = append(changedFields, fmt.Sprintf("信任名单→%s", *req.IPWhitelist))
+	}
+	if req.IPBlacklist != nil {
+		changedFields = append(changedFields, fmt.Sprintf("旧版黑名单→%s", *req.IPBlacklist))
+	}
+	if req.Name != nil {
+		changedFields = append(changedFields, fmt.Sprintf("名称→%s", *req.Name))
+	}
+	if req.Mode != nil {
+		changedFields = append(changedFields, fmt.Sprintf("WAF 模式→%s", *req.Mode))
+	}
+	if req.Enabled != nil {
+		changedFields = append(changedFields, fmt.Sprintf("启用→%v", *req.Enabled))
+	}
+	if req.BlockPageID != nil {
+		changedFields = append(changedFields, fmt.Sprintf("拦截页→#%d", *req.BlockPageID))
+	}
+	if len(changedFields) > 0 {
+		auditDetail += "；" + strings.Join(changedFields, "；")
+	}
+	recordAudit(c, "更新", "安全策略", auditDetail)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略更新成功" + h.caddyApplyNote()})
 }
 
