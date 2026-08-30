@@ -52,6 +52,7 @@ var configFieldSections = map[string]string{
 	"audit_retention_months": "基础设置",
 	"jwt_expire_minutes":     "基础设置",
 	"timezone":               "基础设置",
+	"github_proxy_url":       "基础设置",
 }
 
 func GetConfigSection(field string) string {

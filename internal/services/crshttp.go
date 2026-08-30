@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 var crsHTTPClient = &http.Client{Timeout: 30 * time.Second}
@@ -126,17 +130,66 @@ func formatDownloadBytes(n int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
-// ghFastProxy prefixes GitHub downloads through https://ghfast.top/ — direct
-// GitHub file access is unreliable from the deployment network. The proxy
-// supports raw.githubusercontent.com and github.com archive paths but NOT
-// codeload.github.com or api.github.com (verified 403), so the CRS tarball
-// uses the equivalent archive URL and the latest-tag check falls back to the
-// proxied releases/latest redirect (R57). var（而非 const）以便测试指向
-// httptest 代理。
-var ghFastProxy = "https://ghfast.top/"
+// GitHub 下载加速代理（前缀拼接：proxyURL + 原始 GitHub URL）——直连 GitHub
+// 文件在该部署网络不可靠。代理支持 raw.githubusercontent.com 与 github.com
+// archive 路径，但不支持 codeload.github.com / api.github.com（verified 403），
+// 故 CRS tarball 用等价 archive URL、最新 tag 检查回退经代理的 releases/latest
+// 跳转（R57）。代理地址经 global_config.github_proxy_url 配置（基础设置），
+// 仅允许 gitHubProxyOptions 内置选项；历史硬编码 ghfast.top 已废弃。
+const defaultGitHubProxyURL = "https://v4.gh-proxy.org/"
+
+// gitHubProxyOptions 是允许配置的全部代理前缀：写侧 ValidateGitHubProxyURL
+// 拒绝白名单外取值（防 SSRF），读侧遇白名单外脏数据回退默认（fail-closed）。
+var gitHubProxyOptions = []string{
+	"https://v4.gh-proxy.org/",      // Cloudflare v4（默认）
+	"https://axisnow.gh-proxy.org/", // AxisNow v4
+	"https://cdn.gh-proxy.org/",     // Fastly v4
+}
+
+func isAllowedGitHubProxyURL(proxyURL string) bool {
+	for _, opt := range gitHubProxyOptions {
+		if proxyURL == opt {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateGitHubProxyURL 校验 GitHub 加速代理取值是否为内置选项之一。
+func ValidateGitHubProxyURL(proxyURL string) error {
+	if isAllowedGitHubProxyURL(proxyURL) {
+		return nil
+	}
+	return fmt.Errorf("无效的 GitHub 加速代理地址，仅支持: %s", strings.Join(gitHubProxyOptions, "、"))
+}
+
+// ghFastProxy 是测试注入钩子：非空时 getGitHubProxyURL 直接采用（将代理指向
+// httptest 服务）；生产恒为空串，取值来自 global_config.github_proxy_url。
+var ghFastProxy string
+
+// getGitHubProxyURL 返回 GitHub 下载代理前缀：读 global_config.github_proxy_url，
+// 行缺失/空值/白名单外取值/读库失败一律回退内置默认（读库故障记日志留痕）。
+func getGitHubProxyURL() string {
+	if ghFastProxy != "" {
+		return ghFastProxy
+	}
+	if db.DB != nil {
+		var proxyURL string
+		err := db.DB.QueryRow(
+			"SELECT COALESCE(github_proxy_url, '') FROM global_config WHERE id = 1",
+		).Scan(&proxyURL)
+		switch {
+		case err == nil && isAllowedGitHubProxyURL(proxyURL):
+			return proxyURL
+		case err != nil && !errors.Is(err, sql.ErrNoRows):
+			Logf("error", "读取 GitHub 加速代理配置失败，回退默认 %s: %v", defaultGitHubProxyURL, err)
+		}
+	}
+	return defaultGitHubProxyURL
+}
 
 func ghProxied(rawURL string) string {
-	return ghFastProxy + rawURL
+	return getGitHubProxyURL() + rawURL
 }
 
 // crsTarballSourceURL 是 CRS 发布包的真实来源 URL（含版本 tag，作为完整性基线

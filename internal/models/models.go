@@ -227,6 +227,7 @@ type GlobalConfig struct {
 	AuditRetentionMonths       int    `json:"audit_retention_months"`
 	JWTExpireMinutes           int    `json:"jwt_expire_minutes"`
 	Timezone                   string `json:"timezone"`
+	GitHubProxyURL             string `json:"github_proxy_url"`
 	IsMaster                   bool   `json:"is_master"`
 	MasterURL                  string `json:"master_url"`
 	SyncInterval               int    `json:"sync_interval"`
@@ -513,6 +514,7 @@ type UpdateConfigRequest struct {
 	AuditRetentionMonths       *int    `json:"audit_retention_months"`
 	JWTExpireMinutes           *int    `json:"jwt_expire_minutes"`
 	Timezone                   *string `json:"timezone"`
+	GitHubProxyURL             *string `json:"github_proxy_url"`
 	DefaultCAProviderID        *int    `json:"default_ca_provider_id"`
 	// v2.1.8 MFA 全局开关（基础设置卡片，决策6）：默认均关。
 	MFAWriteGuard     *bool `json:"mfa_write_guard"`

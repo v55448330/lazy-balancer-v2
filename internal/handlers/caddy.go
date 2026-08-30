@@ -175,8 +175,9 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       COALESCE(access_log_json,TRUE) as access_log_json,
 		       COALESCE(access_log_format,'') as access_log_format,
 		       COALESCE(audit_retention_months,3) as audit_retention_months,
-		       COALESCE(jwt_expire_minutes,20) as jwt_expire_minutes,
-		       COALESCE(timezone,'Asia/Shanghai') as timezone,
+	       COALESCE(jwt_expire_minutes,20) as jwt_expire_minutes,
+	       COALESCE(timezone,'Asia/Shanghai') as timezone,
+	       COALESCE(github_proxy_url,'https://v4.gh-proxy.org/') as github_proxy_url,
 		       COALESCE(mfa_write_guard,0) as mfa_write_guard,
 		       COALESCE(mfa_lockout_enabled,0) as mfa_lockout_enabled,
 		       is_master, COALESCE(master_url, '') as master_url, sync_interval,
@@ -189,7 +190,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
 		&cfg.RequestBodyMaxSizeMB, &cfg.HTTPReadTimeout, &cfg.HTTPWriteTimeout, &cfg.HTTPIdleTimeout,
 		&cfg.UpstreamKeepaliveTimeout, &cfg.ProxyDialTimeout, &cfg.ProxyResponseHeaderTimeout, &cfg.ProxyReadTimeout, &cfg.ProxyWriteTimeout, &cfg.ProxyStreamTimeout, &cfg.ProxyFlushInterval, &cfg.ProxyStreamCloseDelay,
-		&cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.AuditLogSizeMB, &cfg.RuntimeLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.JWTExpireMinutes, &cfg.Timezone, &cfg.MFAWriteGuard, &cfg.MFALockoutEnabled,
+		&cfg.ServerTokensHidden, &cfg.CertJobLogSizeMB, &cfg.AuditLogSizeMB, &cfg.RuntimeLogSizeMB, &cfg.AccessLogJSON, &cfg.AccessLogFormat, &cfg.AuditRetentionMonths, &cfg.JWTExpireMinutes, &cfg.Timezone, &cfg.GitHubProxyURL, &cfg.MFAWriteGuard, &cfg.MFALockoutEnabled,
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	if err != nil {
@@ -405,6 +406,14 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 
+	// GitHub 加速代理仅允许内置选项（防 SSRF），CRS/IP2Region 下载共用。
+	if req.GitHubProxyURL != nil {
+		if err := services.ValidateGitHubProxyURL(*req.GitHubProxyURL); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+	}
+
 	old, err := loadConfigSnapshot()
 	if err != nil {
 		// I-K（第 14 轮审计）：保存端点服务端失败分支留痕（操作者归因 + 错误详情），
@@ -501,6 +510,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			audit_retention_months = COALESCE(?, audit_retention_months),
 			jwt_expire_minutes = COALESCE(?, jwt_expire_minutes),
 				timezone = COALESCE(?, timezone),
+				github_proxy_url = COALESCE(?, github_proxy_url),
 				mfa_write_guard = COALESCE(?, mfa_write_guard),
 				mfa_lockout_enabled = COALESCE(?, mfa_lockout_enabled),
 				updated_at = datetime('now')
@@ -509,7 +519,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
 		req.UpstreamKeepaliveTimeout, req.ProxyDialTimeout, req.ProxyResponseHeaderTimeout, req.ProxyReadTimeout, req.ProxyWriteTimeout, req.ProxyStreamTimeout, req.ProxyFlushInterval, req.ProxyStreamCloseDelay,
-		req.ServerTokensHidden, req.CertJobLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone, req.MFAWriteGuard, req.MFALockoutEnabled)
+		req.ServerTokensHidden, req.CertJobLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone, req.GitHubProxyURL, req.MFAWriteGuard, req.MFALockoutEnabled)
 	if err != nil {
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("配置写入数据库失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置写入数据库失败: " + err.Error()})

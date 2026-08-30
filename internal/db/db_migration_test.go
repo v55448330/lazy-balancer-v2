@@ -1829,3 +1829,38 @@ func createLegacyCertJobs(t *testing.T, database *sql.DB, defaultStatus, allowed
 		t.Fatalf("create legacy certificate jobs table: %v", err)
 	}
 }
+
+func TestRunMigrations_addsGitHubProxyURLColumnWithDefault(t *testing.T) {
+	// Given 旧库：global_config 无 github_proxy_url 列且已有存量配置行
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec("ALTER TABLE global_config DROP COLUMN github_proxy_url"); err != nil {
+		t.Fatalf("drop github_proxy_url to simulate legacy database: %v", err)
+	}
+	if _, err := database.Exec("INSERT INTO global_config (id, caddy_config) VALUES (1, '{}')"); err != nil {
+		t.Fatalf("seed global config: %v", err)
+	}
+
+	// When 迁移
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	// Then 列被补回，存量行取列默认值（内置 Cloudflare v4 代理）
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='github_proxy_url'").Scan(&count); err != nil {
+		t.Fatalf("query global_config schema: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("global_config.github_proxy_url count=%d, want 1", count)
+	}
+	var got string
+	if err := database.QueryRow("SELECT github_proxy_url FROM global_config WHERE id = 1").Scan(&got); err != nil {
+		t.Fatalf("read github_proxy_url: %v", err)
+	}
+	if got != "https://v4.gh-proxy.org/" {
+		t.Fatalf("github_proxy_url=%q, want default https://v4.gh-proxy.org/", got)
+	}
+}
