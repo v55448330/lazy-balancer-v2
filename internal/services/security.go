@@ -202,13 +202,13 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) str
 	}
 	if p.IPACLEnabled && len(ipACLList) > 0 {
 		if p.IPACLMode == "allow" {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝'\"\n", strings.Join(ipACLList, ",")))
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',ctl:ruleEngine=Off\"\n", strings.Join(ipACLList, ",")))
 		} else if p.IPACLMode == "deny" {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'\"\n", strings.Join(ipACLList, ",")))
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',ctl:ruleEngine=Off\"\n", strings.Join(ipACLList, ",")))
 		}
 	}
 	if len(ipBL) > 0 {
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单'\"\n", strings.Join(ipBL, ",")))
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',ctl:ruleEngine=Off\"\n", strings.Join(ipBL, ",")))
 	}
 
 	emitCustomRules(&sb, customRules)
