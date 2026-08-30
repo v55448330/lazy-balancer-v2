@@ -577,7 +577,6 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 
-	recordAudit(c, "重载", "Caddy服务", "保存配置后自动重载")
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置已更新并应用", Data: plan})
 }
@@ -623,7 +622,6 @@ func (h *Handlers) ReloadCaddy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置重载失败: " + err.Error()})
 		return
 	}
-	recordAudit(c, "重载", "Caddy服务", "手动重载 Caddy 配置")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy 配置已重载"})
 }
 
@@ -886,7 +884,6 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	committed = true
 
 	recordAudit(c, "更新", "Caddy配置", "保存 Caddy 全局配置")
-	recordAudit(c, "重载", "Caddy服务", "保存配置后自动重载")
 	// R72 二十六次 D3（裁决：保留逃生口 + 明示后果）：自定义 Caddy 配置是
 	// 一次性逃生口，数据库生成器从不消费 caddy_config 列——任何后续规则/
 	// 配置变更或集群同步都会以权威生成配置覆盖它。保存成功即明示。

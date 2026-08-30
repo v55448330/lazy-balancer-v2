@@ -398,7 +398,7 @@ func TestSetRuleSecurityPolicies_writesAuditLog(t *testing.T) {
 		t.Fatalf("PUT status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
 	}
 	var action, resource, detail string
-	if err := db.AuditDB.QueryRow("SELECT action, resource, detail FROM audit_log ORDER BY id DESC LIMIT 1").Scan(&action, &resource, &detail); err != nil {
+	if err := db.AuditDB.QueryRow("SELECT action, resource, detail FROM audit_log WHERE resource='安全策略' ORDER BY id DESC LIMIT 1").Scan(&action, &resource, &detail); err != nil {
 		t.Fatalf("read audit log: %v", err)
 	}
 	if action != "更新" || resource != "安全策略" {
@@ -464,7 +464,7 @@ func TestSetRuleSecurityPolicies_emptyArrayUnbindsAll(t *testing.T) {
 
 	// And 审计日志记录解除全部绑定
 	var action, resource, detail string
-	if err := db.AuditDB.QueryRow("SELECT action, resource, detail FROM audit_log ORDER BY id DESC LIMIT 1").Scan(&action, &resource, &detail); err != nil {
+	if err := db.AuditDB.QueryRow("SELECT action, resource, detail FROM audit_log WHERE resource='安全策略' ORDER BY id DESC LIMIT 1").Scan(&action, &resource, &detail); err != nil {
 		t.Fatalf("read audit log: %v", err)
 	}
 	if action != "更新" || resource != "安全策略" {

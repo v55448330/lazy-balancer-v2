@@ -1873,7 +1873,6 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	}
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
-	recordAudit(c, "重载", "Caddy服务", "导入配置后自动重载")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": skipWarnings}})
 }
 

@@ -10,6 +10,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/gin-gonic/gin"
+
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -132,10 +134,15 @@ func (h *Handlers) recordCaddyApplyResult(err error) {
 // failure; empty string means the config applied cleanly. Callers inside an
 // import session (which already holds caddyOpMu) must use
 // caddyApplyNoteLocked instead — applyCaddyConfigE is not reentrant.
-func (h *Handlers) caddyApplyNote() string {
+// caddyApplyNote 重载 Caddy 配置并统一记录重载审计。所有触发重载的
+// handler 必须使用此方法（或 caddyApplyNoteLocked），重载审计自动留痕
+// ——调用方不可能遗漏。
+func (h *Handlers) caddyApplyNote(c *gin.Context) string {
 	if err := h.applyCaddyConfigE(); err != nil {
+		recordAudit(c, "重载失败", "Caddy服务", err.Error())
 		return "；但 Caddy 配置应用失败：" + err.Error()
 	}
+	recordAudit(c, "重载", "Caddy服务", "配置变更后自动重载")
 	return ""
 }
 
