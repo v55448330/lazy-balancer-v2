@@ -44,7 +44,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		name = h.cfg.NodeName
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.MasterURL)), "http://") {
-		services.RecordAuditLog(getContextUserID(c), "警告", "集群模式", services.FormatAuditDetail("目标：从节点", "使用明文 HTTP 注册，证书私钥将明文传输，建议改用 HTTPS"), c.ClientIP())
+		recordAudit(c, "警告", "集群模式", services.FormatAuditDetail("目标：从节点", "使用明文 HTTP 注册，证书私钥将明文传输，建议改用 HTTPS"))
 	}
 	registration, err := h.syncService.RegisterWithMaster(c.Request.Context(), req.MasterURL, models.ClusterRegisterRequest{
 		Token: req.RegisterToken, Name: name, IPAddress: localOutboundIP(), Port: h.cfg.Port, Protocol: requestProtocol(c),

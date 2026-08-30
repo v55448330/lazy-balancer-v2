@@ -104,7 +104,7 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 		return
 	}
 	id, _ := result.LastInsertId()
-	services.RecordAuditLog(getContextUserID(c), "创建", "自定义规则", fmt.Sprintf("名称：%s（#%d）", req.Name, id), "")
+	recordAudit(c, "创建", "自定义规则", fmt.Sprintf("名称：%s（#%d）", req.Name, id))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则创建成功" + h.caddyApplyNote(), Data: gin.H{"id": id}})
 }
 
@@ -195,7 +195,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "自定义规则", fmt.Sprintf("名称：%s（#%s）", merged.Name, id), "")
+	recordAudit(c, "更新", "自定义规则", fmt.Sprintf("名称：%s（#%s）", merged.Name, id))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新" + h.caddyApplyNote()})
 }
 
@@ -263,7 +263,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "删除", "自定义规则", fmt.Sprintf("规则 #%s", id), "")
+	recordAudit(c, "删除", "自定义规则", fmt.Sprintf("规则 #%s", id))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已删除" + h.caddyApplyNote()})
 }
 
@@ -319,7 +319,7 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	id, _ := result.LastInsertId()
-	services.RecordAuditLog(getContextUserID(c), "创建", "拦截页面", fmt.Sprintf("名称：%s（#%d）", req.Name, id), "")
+	recordAudit(c, "创建", "拦截页面", fmt.Sprintf("名称：%s（#%d）", req.Name, id))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面创建成功" + h.caddyApplyNote(), Data: gin.H{"id": id}})
 }
 
@@ -370,7 +370,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "拦截页面", fmt.Sprintf("名称：%s（#%s）", req.Name, id), "")
+	recordAudit(c, "更新", "拦截页面", fmt.Sprintf("名称：%s（#%s）", req.Name, id))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面已更新" + h.caddyApplyNote()})
 }
 
@@ -424,7 +424,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "删除", "拦截页面", fmt.Sprintf("页面 #%s", id), "")
+	recordAudit(c, "删除", "拦截页面", fmt.Sprintf("页面 #%s", id))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "拦截页面已删除" + h.caddyApplyNote()})
 }
 
@@ -728,7 +728,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "创建", "安全策略", fmt.Sprintf("名称：%s（#%d）", req.Name, id), "")
+	recordAudit(c, "创建", "安全策略", fmt.Sprintf("名称：%s（#%d）", req.Name, id))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略创建成功" + h.caddyApplyNote(), Data: gin.H{"id": id}})
 }
 
@@ -1123,7 +1123,7 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "删除", "安全策略", fmt.Sprintf("策略 #%s", id), "")
+	recordAudit(c, "删除", "安全策略", fmt.Sprintf("策略 #%s", id))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略已删除" + h.caddyApplyNote()})
 }
 
@@ -1212,7 +1212,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "安全策略", fmt.Sprintf("绑定规则 %s 到策略 #%s", req.RuleCaddyID, policyID), "")
+	recordAudit(c, "更新", "安全策略", fmt.Sprintf("绑定规则 %s 到策略 #%s", req.RuleCaddyID, policyID))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已关联" + h.caddyApplyNote()})
 }
 
@@ -1307,7 +1307,7 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 	if summary == "" {
 		summary = "全部解除"
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "安全策略", fmt.Sprintf("设置规则 %s 的安全策略为 [%s]", ruleCaddyID, summary), "")
+	recordAudit(c, "更新", "安全策略", fmt.Sprintf("设置规则 %s 的安全策略为 [%s]", ruleCaddyID, summary))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则安全策略已更新" + h.caddyApplyNote()})
 }
 
@@ -1319,7 +1319,7 @@ func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "安全策略", fmt.Sprintf("解除规则 %s 与策略 #%s 的绑定", ruleCaddyID, policyID), "")
+	recordAudit(c, "更新", "安全策略", fmt.Sprintf("解除规则 %s 与策略 #%s 的绑定", ruleCaddyID, policyID))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已取消关联" + h.caddyApplyNote()})
 }
 
@@ -1913,7 +1913,7 @@ func (h *Handlers) UpdateCRSAutoUpdate(c *gin.Context) {
 	if req.AutoUpdate {
 		autoUpdateText = "开启"
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "CRS规则库", fmt.Sprintf("自动更新已%s", autoUpdateText), "")
+	recordAudit(c, "更新", "CRS规则库", fmt.Sprintf("自动更新已%s", autoUpdateText))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
 }
 
@@ -1940,7 +1940,7 @@ func (h *Handlers) StartCRSUpdate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "CRS规则库", "手动更新 CRS规则库", "")
+	recordAudit(c, "更新", "CRS规则库", "手动更新 CRS规则库")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 }
 
@@ -2031,7 +2031,7 @@ func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {
 	if req.AutoUpdate {
 		autoUpdateText = "开启"
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "IP数据库", fmt.Sprintf("自动更新已%s", autoUpdateText), "")
+	recordAudit(c, "更新", "IP数据库", fmt.Sprintf("自动更新已%s", autoUpdateText))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
 }
 
@@ -2055,7 +2055,7 @@ func (h *Handlers) StartIP2RegionUpdate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(getContextUserID(c), "更新", "IP数据库", "手动更新 IP数据库", "")
+	recordAudit(c, "更新", "IP数据库", "手动更新 IP数据库")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "running", "trigger": "manual"}})
 }
 

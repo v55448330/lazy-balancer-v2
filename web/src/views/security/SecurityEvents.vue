@@ -63,7 +63,7 @@
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="触发规则" min-width="120">
+        <el-table-column label="触发规则" min-width="100">
           <template #default="{ row }">
             <el-tooltip v-if="showTriggeredMsg(row)" :content="row.rule_msg" placement="top" :show-after="200">
               <span class="cell-tip">{{ triggeredLabel(row) }}</span>
@@ -71,19 +71,19 @@
             <span v-else>{{ triggeredLabel(row) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="策略" min-width="140">
+        <el-table-column label="策略" min-width="170">
           <template #default="{ row }">
             <el-link v-if="row.policy_name || row.policy_id > 0" type="primary" @click="goToPolicy(row)">{{ row.policy_name || row.policy_id }}</el-link>
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="客户端 IP" min-width="170">
+        <el-table-column label="客户端 IP" min-width="150">
           <template #default="{ row }">
             <IPLocationAction :ip="row.client_ip" :location="row.ip_location" :rule-caddy-id="row.rule_caddy_id" />
           </template>
         </el-table-column>
         <el-table-column prop="method" label="方法" width="70" align="center" />
-        <el-table-column prop="uri" label="URI" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="uri" label="URI" min-width="180" show-overflow-tooltip />
         <!-- R72 二十二次（用户需求）：异常评分列——CRS 评分制下每事件携带的累计
              anomaly_score（后端已返回，此前未展示）；按分数着色便于快速识别高威胁。 -->
         <el-table-column label="评分" width="80" align="center">

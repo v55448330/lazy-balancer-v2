@@ -177,7 +177,7 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(c.GetString("username"), "启用", "用户认证", services.FormatAuditDetail("MFA", services.AuditResultPart("success")), c.ClientIP())
+	recordAudit(c, "启用", "用户认证", services.FormatAuditDetail("MFA", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "MFA 已启用", Data: gin.H{"recovery_codes": codes}})
 }
 
@@ -210,7 +210,7 @@ func (h *Handlers) MFADisable(c *gin.Context) {
 	}
 	if ok, verr := services.MFAVerifyTOTPCode(userID, req.Code, time.Now()); !ok {
 		// B5 I-A：高敏动作的失败尝试与成功同等可审计（对齐 MFAResetByAdmin 前置验码失败留痕）。
-		services.RecordAuditLog(c.GetString("username"), "认证拒绝", "用户认证", services.FormatAuditDetail("禁用 MFA 前验证失败", services.AuditResultPart("failure")), c.ClientIP())
+		recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("禁用 MFA 前验证失败", services.AuditResultPart("failure")))
 		msg := "验证码错误"
 		if verr != nil {
 			msg = verr.Error()
@@ -222,7 +222,7 @@ func (h *Handlers) MFADisable(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	services.RecordAuditLog(c.GetString("username"), "禁用", "用户认证", services.FormatAuditDetail("MFA", services.AuditResultPart("success")), c.ClientIP())
+	recordAudit(c, "禁用", "用户认证", services.FormatAuditDetail("MFA", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "MFA 已禁用"})
 }
 
@@ -315,7 +315,7 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 		return
 	}
 	if ok, verr := services.MFAVerifyTOTPCode(userID, req.Code, time.Now()); !ok {
-		services.RecordAuditLog(c.GetString("username"), "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "step-up 验证失败"), c.ClientIP())
+		recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "step-up 验证失败"))
 		msg := "验证码错误"
 		if verr != nil {
 			msg = verr.Error()
@@ -376,7 +376,7 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 		if ok, verr := services.MFAVerifyCode(operatorID, req.Code, time.Now()); !ok {
 			// R72 七次：重置前置验码失败留痕——高敏动作的失败尝试与成功同等
 			// 可审计（含 brute 尝试面）。
-			services.RecordAuditLog(c.GetString("username"), "认证拒绝", "用户认证", services.FormatAuditDetail("重置 MFA 前验证失败", services.AuditResultPart("failure")), c.ClientIP())
+			recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("重置 MFA 前验证失败", services.AuditResultPart("failure")))
 			msg := "验证码错误"
 			if verr != nil {
 				msg = verr.Error()
@@ -405,6 +405,6 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 	if operatorName := c.GetString("username"); operatorName != target {
 		detail = fmt.Sprintf("目标用户 %s（由 %s 操作）", target, operatorName)
 	}
-	services.RecordAuditLog(c.GetString("username"), "重置", "用户认证", services.FormatAuditDetail(detail, services.AuditResultPart("success")), c.ClientIP())
+	recordAudit(c, "重置", "用户认证", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已重置用户 MFA（用户需重新绑定）"})
 }
