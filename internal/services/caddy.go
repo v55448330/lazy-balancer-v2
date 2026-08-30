@@ -2979,6 +2979,15 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		policyStore = ctx.store
 	}
 	var handleChain []interface{}
+	// 多策略 IP ACL 优先（IP 预检）：多策略绑定时把全部绑定策略的 deny 侧 IP
+	// 控制合并为极简 coraza 预检查器置于链首（先于全部 rate_limit/waf）——被拒
+	// IP 在任何策略的 CRS/自定义规则评估前即中断，不再产生前置策略的检测事件。
+	// 单策略绑定不发射：自身 coraza 内 IP 控制本就先于其 CRS，发射形状不变。
+	if rule.Protocol == "http" && len(policies) > 1 {
+		if precheckHandler := buildIPPrecheckHandler(policies); precheckHandler != nil {
+			handleChain = append(handleChain, precheckHandler)
+		}
+	}
 	// v2.2.0 多策略：按绑定启用策略 policy_id ASC 依次编入各策略的
 	// [rate_limit?, waf?] 处理器组；限流先于 WAF 检查、body 解析与代理。
 	for _, policy := range policies {

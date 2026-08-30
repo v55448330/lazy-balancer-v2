@@ -118,6 +118,39 @@ func TestBuildCorazaDirectives_allowAndDenyModesUnchangedByBypass(t *testing.T) 
 	}
 }
 
+// N15-F2：IP ACL deny 规则引用的 skipAfter 终点与无条件发射的 SecMarker
+// 必须成对存在——marker 缺失时 coraza 拒绝编译整个 directives（配置自锁）。
+func TestBuildCorazaDirectives_ipACLDenyCarriesSkipAfterAndMarker(t *testing.T) {
+	// Given：deny 模式 ACL + 遗留黑名单各一条
+	policy := &models.SecurityPolicy{
+		Mode:         "blocking",
+		IPACLMode:    "deny",
+		IPACLList:    `["203.0.113.0/24"]`,
+		IPACLEnabled: true,
+		IPBlacklist:  json.RawMessage(`["192.0.2.99"]`),
+	}
+
+	// When
+	directives := BuildCorazaDirectives(policy, nil)
+
+	// Then：deny 规则携带 skipAfter 引用，且终点 SecMarker 存在
+	if !strings.Contains(directives, `deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END`) {
+		t.Fatalf("ACL deny rule must skipAfter the end marker:\n%s", directives)
+	}
+	if !strings.Contains(directives, `deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END`) {
+		t.Fatalf("legacy blacklist rule must skipAfter the end marker:\n%s", directives)
+	}
+	if !strings.Contains(directives, "SecMarker SECURITY_RULES_END\n") {
+		t.Fatalf("directives must emit the SecMarker terminal:\n%s", directives)
+	}
+	// And：marker 位于 deny 规则之后（skipAfter 向前跳转到终点）
+	denyIdx := strings.Index(directives, "skipAfter:SECURITY_RULES_END")
+	markerIdx := strings.Index(directives, "SecMarker SECURITY_RULES_END")
+	if denyIdx < 0 || markerIdx < denyIdx {
+		t.Fatalf("SecMarker (offset %d) must follow the skipAfter references (offset %d):\n%s", markerIdx, denyIdx, directives)
+	}
+}
+
 func TestSecurityPolicyHasIPControl_truthTable(t *testing.T) {
 	// Given/When/Then: has_ip_control follows ACL entries, trust list, and legacy bypass
 	cases := []struct {

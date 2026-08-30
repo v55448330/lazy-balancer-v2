@@ -25,6 +25,10 @@ type mpGenPolicySpec struct {
 	geoMode         string // deny/allow（空 → deny）
 	blockPageID     int
 	blockStatusCode int
+	ipACLEnabled    bool
+	ipACLMode       string // allow/deny/bypass（空 → 不设置）
+	ipACLList       string // ip_acl_list JSON（空 → '[]'）
+	ipBlacklist     string // ip_blacklist JSON（空 → '[]'）
 }
 
 // mpGenBindPolicy 播种一条策略并绑定到规则，返回 policy_id。
@@ -50,10 +54,24 @@ func mpGenBindPolicy(t *testing.T, database *sql.DB, ruleCaddyID, name string, s
 	if geoMode == "" {
 		geoMode = "deny"
 	}
+	ipACLEnabled := 0
+	if spec.ipACLEnabled {
+		ipACLEnabled = 1
+	}
+	ipACLList := spec.ipACLList
+	if ipACLList == "" {
+		ipACLList = "[]"
+	}
+	ipBlacklist := spec.ipBlacklist
+	if ipBlacklist == "" {
+		ipBlacklist = "[]"
+	}
 	result, err := database.Exec(`INSERT INTO security_policies
-		(name, mode, enabled, rate_limit_enabled, rate_limit_rps, rate_limit_burst, geoip_countries, geoip_mode, block_page_id, block_status_code)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		name, mode, enabled, rateLimit, spec.rps, spec.burst, countries, geoMode, spec.blockPageID, spec.blockStatusCode)
+		(name, mode, enabled, rate_limit_enabled, rate_limit_rps, rate_limit_burst, geoip_countries, geoip_mode, block_page_id, block_status_code,
+		 ip_acl_enabled, ip_acl_mode, ip_acl_list, ip_blacklist)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		name, mode, enabled, rateLimit, spec.rps, spec.burst, countries, geoMode, spec.blockPageID, spec.blockStatusCode,
+		ipACLEnabled, spec.ipACLMode, ipACLList, ipBlacklist)
 	if err != nil {
 		t.Fatalf("seed policy %s: %v", name, err)
 	}
@@ -404,5 +422,120 @@ func TestMultiPolicy_DisabledPolicyContributesNothing(t *testing.T) {
 	_, server := serverErrorRoutes(t, generated, "http_8080")
 	if _, exists := server["errors"]; exists {
 		t.Fatalf("server errors config present though only disabled policy has a block page: %#v", server["errors"])
+	}
+}
+
+// SC-GEN-06（多策略 IP ACL 优先 · IP 预检）：多策略绑定时，任一绑定策略的
+// deny 侧 IP 控制（deny 模式 ACL / allow 模式 ACL / 遗留黑名单）合并为一个
+// 极简 coraza 预检 WAF，置于处理器链最前（先于全部 rate_limit/waf）——被拒
+// IP 在任何策略的 CRS/自定义规则评估前即中断，不再产生前置策略的检测事件；
+// 预检仍是 coraza 拒绝（audit log 留痕、403 interruption → 拦截页错误路由）。
+// 单策略绑定不发射预检（自身 coraza 内 IP 控制本就先于其 CRS，发射形状不变）。
+func TestMultiPolicy_IPPrecheckHandlerPrecedesAllSecurityHandlers(t *testing.T) {
+	// Given：p1(detection CRS) < p2(deny ACL 203.0.113.5)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_gen6", "gen6.example.test", 8080)
+	mpGenBindPolicy(t, database, "lb_gen6", "gen6-p1", mpGenPolicySpec{mode: "detection", enabled: true})
+	mpGenBindPolicy(t, database, "lb_gen6", "gen6-p2", mpGenPolicySpec{
+		enabled: true, ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.5"]`,
+	})
+
+	// When
+	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_gen6", "gen6.example.test"))
+
+	// Then：链首是 IP 预检 waf，其次 p1 的 CRS waf、p2 的 ACL waf
+	handlers, _ := mainRoute["handle"].([]interface{})
+	if len(handlers) < 3 {
+		t.Fatalf("main chain too short: %#v", handlers)
+	}
+	names := handlerNames(t, mainRoute)
+	if names[0] != "waf" || names[1] != "waf" || names[2] != "waf" {
+		t.Fatalf("main chain=%v, want [waf(precheck), waf, waf, ...]", names)
+	}
+	precheck := mustMap(t, handlers[0], "precheck handler")["directives"].(string)
+	// 预检含 p2 的拒绝 IP（deny 并集、id:2、audit 留痕）
+	if !strings.Contains(precheck, `@ipMatch 203.0.113.5" "id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END`) {
+		t.Fatalf("precheck must deny p2's ACL union with id:2:\n%s", precheck)
+	}
+	// 预检不得包含任何 CRS Include / DetectionOnly / 自定义规则——仅 IP 控制
+	for _, unwanted := range []string{"Include ", "DetectionOnly", "SecRuleRemoveById"} {
+		if strings.Contains(precheck, unwanted) {
+			t.Fatalf("precheck must stay minimal (no %q):\n%s", unwanted, precheck)
+		}
+	}
+	// 预检的 skipAfter 终点标记成对存在（coraza 编译约束）
+	if !strings.Contains(precheck, "SecMarker SECURITY_RULES_END") {
+		t.Fatalf("precheck must emit the SecMarker terminal:\n%s", precheck)
+	}
+	// 后续策略 waf 保持原样：p1 的 CRS 指令仍在（预检不取代逐策略 WAF）
+	p1Directives := mustMap(t, handlers[1], "p1 waf")["directives"].(string)
+	if !strings.Contains(p1Directives, "Include /app/waf/crs/rules/REQUEST-*.conf") {
+		t.Fatalf("p1 CRS directives must remain after the precheck:\n%s", p1Directives)
+	}
+}
+
+// SC-GEN-07：IP 预检发射门——仅多策略绑定且存在 deny 侧 IP 控制时发射；
+// 单策略或无 deny 侧 IP 控制时主链形状不变（不新增预检 waf）。
+func TestMultiPolicy_IPPrecheckEmissionGate(t *testing.T) {
+	// Given A：单策略 + deny ACL → 无预检（自身 coraza 内 IP 控制已先于 CRS）
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_gen7a", "gen7a.example.test", 8080)
+	mpGenBindPolicy(t, database, "lb_gen7a", "gen7a-solo", mpGenPolicySpec{
+		mode: "detection", enabled: true, ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.5"]`,
+	})
+	_, mainA := mpGenRoutes(t, database, mpGenHTTPRule("lb_gen7a", "gen7a.example.test"))
+	namesA := handlerNames(t, mainA)
+	wafCountA := 0
+	for _, name := range namesA {
+		if name == "waf" {
+			wafCountA++
+		}
+	}
+	if wafCountA != 1 {
+		t.Fatalf("single policy: waf handlers=%d, want 1 (no precheck): %v", wafCountA, namesA)
+	}
+
+	// Given B：多策略但无任何 deny 侧 IP 控制（信任名单不算 deny 侧）→ 无预检
+	seedHTTPRuleForGeneration(t, database, "lb_gen7b", "gen7b.example.test", 8080)
+	mpGenBindPolicy(t, database, "lb_gen7b", "gen7b-p1", mpGenPolicySpec{mode: "detection", enabled: true})
+	mpGenBindPolicy(t, database, "lb_gen7b", "gen7b-p2", mpGenPolicySpec{enabled: true, ipACLMode: "bypass", ipACLList: `["198.51.100.9"]`})
+	_, mainB := mpGenRoutes(t, database, mpGenHTTPRule("lb_gen7b", "gen7b.example.test"))
+	namesB := handlerNames(t, mainB)
+	wafCountB := 0
+	for _, name := range namesB {
+		if name == "waf" {
+			wafCountB++
+		}
+	}
+	if wafCountB != 1 {
+		t.Fatalf("no deny-side control: waf handlers=%d, want 1 (no precheck): %v", wafCountB, namesB)
+	}
+}
+
+// SC-GEN-08：allow 模式白名单并入预检——多条 allow 模式策略取交集，仅交集内
+// IP 通过预检；交集为空（互斥名单）时拒绝一切（与逐策略顺序评估等价）。
+func TestMultiPolicy_IPPrecheckAllowModeIntersection(t *testing.T) {
+	// Given：p1(detection) < p2(allow 203.0.113.0/24,10.0.0.1) < p3(allow 10.0.0.1)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_gen8", "gen8.example.test", 8080)
+	mpGenBindPolicy(t, database, "lb_gen8", "gen8-p1", mpGenPolicySpec{mode: "detection", enabled: true})
+	mpGenBindPolicy(t, database, "lb_gen8", "gen8-p2", mpGenPolicySpec{
+		enabled: true, ipACLEnabled: true, ipACLMode: "allow", ipACLList: `["203.0.113.0/24","10.0.0.1"]`,
+	})
+	mpGenBindPolicy(t, database, "lb_gen8", "gen8-p3", mpGenPolicySpec{
+		enabled: true, ipACLEnabled: true, ipACLMode: "allow", ipACLList: `["10.0.0.1"]`,
+	})
+
+	// When
+	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_gen8", "gen8.example.test"))
+
+	// Then：预检 allow 规则否定匹配交集（10.0.0.1），deny 模式并集规则不出现
+	handlers, _ := mainRoute["handle"].([]interface{})
+	precheck := mustMap(t, handlers[0], "precheck handler")["directives"].(string)
+	if !strings.Contains(precheck, `"!@ipMatch 10.0.0.1" "id:7,phase:1,deny,status:403`) {
+		t.Fatalf("precheck allow rule must negate-match the intersection with id:7:\n%s", precheck)
+	}
+	if strings.Contains(precheck, "203.0.113.0/24") || strings.Contains(precheck, "id:2,") {
+		t.Fatalf("precheck must not carry non-intersection entries or a deny-union rule:\n%s", precheck)
 	}
 }

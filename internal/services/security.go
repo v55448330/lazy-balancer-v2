@@ -509,6 +509,119 @@ func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy
 	}
 }
 
+// ipPrecheckAllowRuleID 是多策略 IP 预检中 allow 模式（白名单交集外拒绝）规则
+// 的 SecRule id。本地 id 空间：2=ACL deny、3=bypass/trust、4=遗留黑名单、5=trust
+// （bypass 占 3 时）、6=DetectionOnly 切换、900=异常分阈值；7 专用于预检 allow
+// 规则（预检内 deny 并集沿用 id:2、黑名单并集沿用 id:4，保持 security events
+// 归因口径；allow 模式事件本就回退归到首启用策略，id:7 不改变归因结果）。
+const ipPrecheckAllowRuleID = 7
+
+// intersectIPLists 返回多个名单的交集（保持首名单出现顺序）；空集返回 nil。
+func intersectIPLists(lists [][]string) []string {
+	if len(lists) == 0 {
+		return nil
+	}
+	var intersection []string
+	for _, entry := range lists[0] {
+		if entry == "" {
+			continue
+		}
+		inAll := true
+		for _, rest := range lists[1:] {
+			found := false
+			for _, other := range rest {
+				if other == entry {
+					found = true
+					break
+				}
+			}
+			if !found {
+				inAll = false
+				break
+			}
+		}
+		if inAll {
+			intersection = append(intersection, entry)
+		}
+	}
+	return intersection
+}
+
+// buildIPPrecheckDirectives 合并全部绑定启用策略的 deny 侧 IP 控制（deny 模式
+// ACL 并集 id:2、allow 模式 ACL 交集外拒绝 id:7、遗留黑名单并集 id:4）为一个
+// 极简 coraza 配置。多策略绑定时该预检查器置于处理器链最前（先于全部
+// rate_limit/waf）：被拒 IP 在任何策略的 CRS/自定义规则评估前即中断——修复
+// `[coraza_P1, coraza_P2]` 链中 P1 的 CRS 先评估产生检测事件、P2 的 IP ACL 才
+// 拦截的双重检测问题（IP ACL 最高优先级）。预检仍是 coraza 拒绝：audit log
+// 留痕供安全事件管线归因（id:2/id:4 归因口径不变），deny 403 → errors 路由 →
+// 拦截页。信任名单/免检测不并入预检（deny 优先于信任，且信任仅豁免所属策略
+// 的检查、限流仍生效的语义保持不变）。无 deny 侧控制时返回空串（不发射）。
+func buildIPPrecheckDirectives(policies []*models.SecurityPolicy) string {
+	var denyUnion, blacklistUnion []string
+	var allowLists [][]string
+	for _, p := range policies {
+		if p == nil {
+			continue
+		}
+		var aclList []string
+		json.Unmarshal([]byte(p.IPACLList), &aclList)
+		if p.IPACLEnabled && len(aclList) > 0 {
+			switch p.IPACLMode {
+			case "deny":
+				denyUnion = append(denyUnion, aclList...)
+			case "allow":
+				allowLists = append(allowLists, aclList)
+			}
+		}
+		var blacklist []string
+		json.Unmarshal(p.IPBlacklist, &blacklist)
+		blacklistUnion = append(blacklistUnion, blacklist...)
+	}
+	if len(denyUnion) == 0 && len(blacklistUnion) == 0 && len(allowLists) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("SecRuleEngine On\n")
+	// 预检仅含 phase:1 的 REMOTE_ADDR 规则，无需请求体/响应体访问。
+	sb.WriteString("SecRequestBodyAccess Off\n")
+	sb.WriteString("SecResponseBodyAccess Off\n")
+	// 与 BuildCorazaDirectives 同款审计配置：IP 拒绝事件经 audit log 进入
+	// 安全事件管线（ RelevantOnly + deny 中断 = relevant）。
+	sb.WriteString("SecAuditEngine RelevantOnly\nSecAuditLog /app/waf/audit/audit.log\nSecAuditLogFormat JSON\nSecAuditLogParts ABIJDEFHKZ\n")
+	if len(allowLists) > 0 {
+		intersection := intersectIPLists(allowLists)
+		// 多条 allow 名单互不相交（交集为空）= 逐策略顺序评估下任意 IP 都会被
+		// 某个名单拒绝：恒拒规则等价表达（REMOTE_ADDR 恒非空）。
+		if len(intersection) == 0 {
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@rx .*\" \"id:%d,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", ipPrecheckAllowRuleID))
+		} else {
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:%d,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(intersection, ","), ipPrecheckAllowRuleID))
+		}
+	}
+	if len(denyUnion) > 0 {
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(denyUnion, ",")))
+	}
+	if len(blacklistUnion) > 0 {
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", strings.Join(blacklistUnion, ",")))
+	}
+	sb.WriteString("SecMarker SECURITY_RULES_END\n")
+	return sb.String()
+}
+
+// buildIPPrecheckHandler returns the consolidated IP precheck coraza handler for
+// a multi-policy bound rule, or nil when no bound policy contributes deny-side
+// IP control.
+func buildIPPrecheckHandler(policies []*models.SecurityPolicy) map[string]interface{} {
+	directives := buildIPPrecheckDirectives(policies)
+	if directives == "" {
+		return nil
+	}
+	return map[string]interface{}{
+		"handler":    "waf",
+		"directives": directives,
+	}
+}
+
 // resolvePolicyCustomRules 解析策略的自定义规则引用：当前端存储为规则 ID 数组时
 // 从 security_custom_rules 表解析为完整规则；兼容早期的对象内嵌形状。
 // store 必须与策略预载同源（A-I1）：v2 导入事务内重插的 security_custom_rules
