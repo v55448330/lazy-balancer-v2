@@ -77,7 +77,11 @@
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="client_ip" label="客户端 IP" width="140" />
+        <el-table-column label="客户端 IP" min-width="200">
+          <template #default="{ row }">
+            <IPLocationAction :ip="row.client_ip" :location="row.ip_location" />
+          </template>
+        </el-table-column>
         <el-table-column prop="method" label="方法" width="70" align="center" />
         <el-table-column prop="uri" label="URI" min-width="220" show-overflow-tooltip />
         <!-- R72 二十二次（用户需求）：异常评分列——CRS 评分制下每事件携带的累计
@@ -114,10 +118,11 @@ import { Refresh, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/utils/api'
 import LogStorageBar from '@/components/LogStorageBar.vue'
+import IPLocationAction from '@/views/security/IPLocationAction.vue'
 import { formatDate } from '@/utils/date'
 import type { APIResponse } from '@/types'
 
-interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string; rule_name: string; policy_id: number; policy_name: string; client_ip: string; method: string; uri: string; event_type: string; rule_triggered: string; rule_msg: string; action: string; anomaly_score: number }
+interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string; rule_name: string; policy_id: number; policy_name: string; client_ip: string; ip_location: string; method: string; uri: string; event_type: string; rule_triggered: string; rule_msg: string; action: string; anomaly_score: number }
 
 // 触发规则 family 映射：'2'/'3'/'4'/'5' 为 IP 访问控制拦截，949 为异常评分评估拦截，920/921 为协议异常/攻击，其余为 CRS 规则 ID
 const triggeredLabel = (row: SecurityEvent): string => {

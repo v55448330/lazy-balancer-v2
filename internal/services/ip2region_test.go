@@ -176,6 +176,39 @@ func Test_InitIP2Region_loads_live_xdb_then_Lookup_and_Reload(t *testing.T) {
 	}
 }
 
+func Test_LookupRegion_returns_raw_region_or_empty(t *testing.T) {
+	// Given an xdb whose segments carry full region strings
+	dir := t.TempDir()
+	live := filepath.Join(dir, "ip2region.xdb")
+	writeTestXDB(t, live, []xdbSegment{
+		{startIP: 0x01020600, endIP: 0x010206FF, region: "中国|广东省|深圳市|电信|CN"},
+		{startIP: 0x01020700, endIP: 0x010207FF, region: "美国|0|0|0|US"},
+	})
+	withIP2RegionPaths(t, live, filepath.Join(dir, "missing-dist.xdb"))
+	InitIP2Region()
+
+	// When / Then: the raw pipe-separated region comes back verbatim
+	if got := LookupRegion("1.2.6.9"); got != "中国|广东省|深圳市|电信|CN" {
+		t.Fatalf("LookupRegion(1.2.6.9)=%q, want raw China region string", got)
+	}
+	if got := LookupRegion("1.2.7.9"); got != "美国|0|0|0|US" {
+		t.Fatalf("LookupRegion(1.2.7.9)=%q, want raw US region string", got)
+	}
+	if got := LookupRegion("8.8.8.8"); got != "" {
+		t.Fatalf("LookupRegion(unknown)=%q, want empty", got)
+	}
+}
+
+func Test_LookupRegion_empty_without_loaded_database(t *testing.T) {
+	// Given the singleton never loaded
+	withIP2RegionPaths(t, filepath.Join(t.TempDir(), "missing.xdb"), filepath.Join(t.TempDir(), "missing-dist.xdb"))
+
+	// When / Then
+	if got := LookupRegion("1.2.3.4"); got != "" {
+		t.Fatalf("LookupRegion without database=%q, want empty", got)
+	}
+}
+
 func Test_InitIP2Region_copies_distribution_xdb_when_live_missing(t *testing.T) {
 	// Given only the distribution copy exists
 	dir := t.TempDir()

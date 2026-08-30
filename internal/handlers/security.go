@@ -443,7 +443,12 @@ const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESC
 	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0)`
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
-	rows, err := db.DB.Query(`SELECT ` + securityPolicySelectColumns + ` FROM security_policies ORDER BY id`)
+	query := `SELECT ` + securityPolicySelectColumns + ` FROM security_policies`
+	if enabled := c.Query("enabled"); enabled == "true" || enabled == "1" {
+		query += " WHERE enabled=1"
+	}
+	query += " ORDER BY id"
+	rows, err := db.DB.Query(query)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -1317,6 +1322,50 @@ func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: policies})
 }
 
+// ip2RegionDisplaySuffixes 省市展示短名的后缀剥离表（长后缀优先匹配）：
+// 广东省→广东、广西壮族自治区→广西、深圳市→深圳。
+var ip2RegionDisplaySuffixes = []string{"壮族自治区", "回族自治区", "维吾尔自治区", "自治区", "特别行政区", "省", "市"}
+
+// ip2RegionShortenName 剥离行政区后缀得到展示短名；无后缀或剥离后为空则原样返回。
+func ip2RegionShortenName(name string) string {
+	for _, suffix := range ip2RegionDisplaySuffixes {
+		if strings.HasSuffix(name, suffix) && len(name) > len(suffix) {
+			return strings.TrimSuffix(name, suffix)
+		}
+	}
+	return name
+}
+
+// formatIP2RegionLocation 把 ip2region 原始 region（"国家|省|市|ISP|国家代码"）
+// 格式化为展示文本：中国 → "中国·广东·深圳"，海外国家 → "海外"，未知/畸形 → ""。
+func formatIP2RegionLocation(region string) string {
+	fields := strings.Split(region, "|")
+	if len(fields) < 5 || fields[0] == "" || fields[0] == "0" {
+		return ""
+	}
+	if fields[0] != "中国" {
+		return "海外"
+	}
+	parts := []string{"中国"}
+	for _, f := range fields[1:3] {
+		f = strings.TrimSpace(f)
+		if f == "" || f == "0" {
+			continue
+		}
+		parts = append(parts, ip2RegionShortenName(f))
+	}
+	return strings.Join(parts, "·")
+}
+
+// enrichIPLocation 返回 IP 的归属地展示文本；xdb 未安装或查询失败返回 ""（前端
+// 隐藏归属地标签），永不报错。
+func enrichIPLocation(ip string) string {
+	if ip == "" {
+		return ""
+	}
+	return formatIP2RegionLocation(services.LookupRegion(ip))
+}
+
 func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	page := 1
 	pageSize := 20
@@ -1501,6 +1550,7 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
 			return
 		}
+		e.IPLocation = enrichIPLocation(e.ClientIP)
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -1688,6 +1738,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	for _, row := range topRows {
 		overview.TopIPs = append(overview.TopIPs, models.SecurityTopIP{
 			IP:         row.ip,
+			IPLocation: enrichIPLocation(row.ip),
 			Blocked:    row.blocked,
 			Detected:   row.detected,
 			LastTime:   row.lastTime,

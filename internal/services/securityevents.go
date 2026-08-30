@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -46,8 +47,20 @@ type securityEventRecord struct {
 	AnomalyScore  int
 }
 
+// securityEventsAuditMessage 是一条审计消息：message 为宏展开后的规则 msg，
+// data.id 是规则 ID（数字），data.raw 是发射的 SecRule 原文。
+type securityEventsAuditMessage struct {
+	Message string `json:"message"`
+	Data    struct {
+		ID  json.Number `json:"id"`
+		Raw string      `json:"raw"`
+	} `json:"data"`
+}
+
 // securityEventsAuditTransaction mirrors the Coraza JSON audit envelope:
 // messages is a TOP-LEVEL sibling of transaction, not nested inside it.
+// coraza v3 审计格式没有 data.score 字段——异常评分藏在两处（见
+// securityEventsExtractAnomalyScore）。
 type securityEventsAuditTransaction struct {
 	Transaction struct {
 		UnixTimestamp int64  `json:"unix_timestamp"`
@@ -61,13 +74,45 @@ type securityEventsAuditTransaction struct {
 		} `json:"request"`
 		IsInterrupted bool `json:"is_interrupted"`
 	} `json:"transaction"`
-	Messages []struct {
-		Message string `json:"message"`
-		Data    struct {
-			ID    json.Number `json:"id"`
-			Score json.Number `json:"score"`
-		} `json:"data"`
-	} `json:"messages"`
+	Messages []securityEventsAuditMessage `json:"messages"`
+}
+
+// securityEventsTotalScoreRe 匹配 CRS 阻断/检测评估规则（949110/949111/959100
+// 等）msg 宏展开后的累计总分："Inbound Anomaly Score Exceeded [in phase 1]
+// (Total Score: 7)" / "Outbound Anomaly Score Exceeded (Total Score: 3)"。
+var securityEventsTotalScoreRe = regexp.MustCompile(`Total Score:\s*(\d+)`)
+
+// securityEventsSetvarScoreRe 匹配自定义规则 raw 动作串里的分值注入：
+// setvar:tx.inbound_anomaly_score_pl1=+5（outbound_… 同型）。CRS 规则的 raw 里
+// 是宏（+%{tx.critical_anomaly_score}），数字字面量只有自定义规则会发。
+var securityEventsSetvarScoreRe = regexp.MustCompile(`setvar:tx\.(?:inbound|outbound)_anomaly_score_pl\d+=\+(\d+)`)
+
+// securityEventsExtractAnomalyScore 从审计消息里提取异常评分。coraza v3 的
+// 审计 JSON 不携带任何 score 字段，可提取的信号有两个：
+//  1. 阻断评估规则的 msg 文本（宏已展开）携带事务累计总分——入站/出站是两个
+//     独立累加器，取最大值即该事务的异常总分；
+//  2. 自定义规则消息的 data.raw（发射的 SecRule 原文）携带 setvar:+N 字面量，
+//     逐条求和——phase 1 直接 deny 的事务（自定义规则拦截）不会执行 949 评估，
+//     这是它唯一的评分信号。
+//
+// 两信号并存时取 max：949 文本报告的本身就是含自定义贡献的累计值，正常两者
+// 相等；不等时（评估规则被排除等边缘）宁大勿小。无可提取信号返回 0（IP ACL
+// 拒绝等非评分事件）。
+func securityEventsExtractAnomalyScore(messages []securityEventsAuditMessage) int {
+	totalFromMsg, setvarSum := 0, 0
+	for _, msg := range messages {
+		for _, m := range securityEventsTotalScoreRe.FindAllStringSubmatch(msg.Message, -1) {
+			if v, err := strconv.Atoi(m[1]); err == nil && v > totalFromMsg {
+				totalFromMsg = v
+			}
+		}
+		for _, m := range securityEventsSetvarScoreRe.FindAllStringSubmatch(msg.Data.Raw, -1) {
+			if v, err := strconv.Atoi(m[1]); err == nil {
+				setvarSum += v
+			}
+		}
+	}
+	return max(totalFromMsg, setvarSum)
 }
 
 // errSecurityEventsEmptyID 标记无 transaction_id 的事务：去重唯一索引是部分索引
@@ -111,11 +156,7 @@ func securityEventsParseTransaction(raw json.RawMessage) (*securityEventRecord, 
 		rec.RuleTriggered = doc.Messages[0].Data.ID.String()
 		rec.RuleMsg = doc.Messages[0].Message
 	}
-	for _, msg := range doc.Messages {
-		if score, err := msg.Data.Score.Float64(); err == nil {
-			rec.AnomalyScore += int(score)
-		}
-	}
+	rec.AnomalyScore = securityEventsExtractAnomalyScore(doc.Messages)
 	return rec, nil
 }
 

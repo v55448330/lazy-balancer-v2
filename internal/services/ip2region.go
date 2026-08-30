@@ -143,6 +143,27 @@ func Lookup(ip string) string {
 	return parseCountryCode(region)
 }
 
+// LookupRegion returns the raw pipe-separated region string for the IP
+// ("国家|省|市|ISP|国家代码"，如 "中国|广东省|深圳市|电信|CN")，or "" when no
+// database is loaded, the IP cannot be resolved, or the search fails. Search
+// runs under the same serialization lock as Lookup; display formatting is the
+// caller's concern.
+func LookupRegion(ip string) string {
+	ip2regionMu.RLock()
+	searcher := ip2regionSearcher
+	ip2regionMu.RUnlock()
+	if searcher == nil {
+		return ""
+	}
+	ip2regionSearchMu.Lock()
+	region, err := searcher.Search(ip)
+	ip2regionSearchMu.Unlock()
+	if err != nil {
+		return ""
+	}
+	return region
+}
+
 // parseCountryCode extracts the alpha-2 country code stored in the fifth
 // pipe-separated field of an ip2region region string.
 func parseCountryCode(region string) string {

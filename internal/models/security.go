@@ -117,6 +117,7 @@ type SecurityEvent struct {
 	RuleCaddyID   string `json:"rule_caddy_id"`
 	PolicyID      int    `json:"policy_id"`
 	ClientIP      string `json:"client_ip"`
+	IPLocation    string `json:"ip_location"`
 	Method        string `json:"method"`
 	URI           string `json:"uri"`
 	EventType     string `json:"event_type"`
@@ -147,6 +148,7 @@ type SecurityTrendPoint struct {
 
 type SecurityTopIP struct {
 	IP         string `json:"ip"`
+	IPLocation string `json:"ip_location"`
 	Blocked    int    `json:"blocked"`
 	Detected   int    `json:"detected"`
 	LastTime   string `json:"last_time"`

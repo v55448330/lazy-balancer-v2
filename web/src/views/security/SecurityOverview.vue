@@ -186,7 +186,11 @@
       </template>
       <el-table :data="overview.top_ips" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <template #empty><el-empty description="暂无数据" :image-size="60" /></template>
-        <el-table-column prop="ip" label="IP 地址" min-width="130" />
+        <el-table-column label="IP 地址" min-width="200">
+          <template #default="{ row }">
+            <IPLocationAction :ip="row.ip" :location="row.ip_location" />
+          </template>
+        </el-table-column>
         <el-table-column prop="blocked" label="拦截" width="80" align="center">
           <template #default="{ row }"><el-tag type="danger" size="small" effect="plain">{{ row.blocked }}</el-tag></template>
         </el-table-column>
@@ -204,6 +208,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, CircleClose, Lock, Files } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
+import IPLocationAction from '@/views/security/IPLocationAction.vue'
 import { formatDate } from '@/utils/date'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -215,7 +220,7 @@ import type { APIResponse } from '@/types'
 use([CanvasRenderer, BarChart, PieSeries, GridComponent, TooltipComponent, LegendComponent])
 
 interface TrendPoint { date: string; blocked: number; detected: number }
-interface TopIP { ip: string; blocked: number; detected: number; last_time: string; attack_type: string }
+interface TopIP { ip: string; ip_location: string; blocked: number; detected: number; last_time: string; attack_type: string }
 interface AttackType { name: string; value: number }
 interface Overview { today_blocked: number; today_detected: number; active_policies: number; crs_version: string; update_status?: string; trend: TrendPoint[]; top_ips: TopIP[]; attack_types: AttackType[] }
 interface SecurityEvent { id: number; event_time: string; client_ip: string; rule_caddy_id: string; rule_name: string; policy_name: string }

@@ -39,7 +39,9 @@ func (s *syncBuffer) String() string {
 	return s.buf.String()
 }
 
-// Real Coraza audit transaction (pretty-printed JSON, multi-line).
+// Real Coraza audit transaction (pretty-printed JSON, multi-line). Message
+// shape mirrors coraza v3's JSON formatter: data.id 是规则 ID，data.raw 是规则
+// 原文，msg 携带宏展开后的文本；阻断评估规则（949110）的 msg 报告累计总分。
 const securityEventsFixtureBlocked = `{
   "transaction": {
     "timestamp": "2026/08/11 19:16:57",
@@ -54,10 +56,13 @@ const securityEventsFixtureBlocked = `{
     "is_interrupted": true
   },
   "messages": [
-    { "message": "SQL Injection Attack Detected via libinjection", "data": { "id": 942100, "score": 5 } }
+    { "message": "SQL Injection Attack Detected via libinjection", "data": { "id": 942100, "raw": "SecRule ARGS \"@detectSQLi\" \"id:942100,phase:2,block,log,msg:'SQL Injection Attack Detected via libinjection'\"" } },
+    { "message": "Inbound Anomaly Score Exceeded (Total Score: 5)", "data": { "id": 949110, "raw": "SecRule TX:ANOMALY_SCORE \"@ge %{TX.INBOUND_ANOMALY_SCORE_THRESHOLD}\" \"id:949110,phase:2,deny,log,msg:'Inbound Anomaly Score Exceeded (Total Score: %{TX.BLOCKING_INBOUND_ANOMALY_SCORE})'\"" } }
   ]
 }`
 
+// 自定义规则拦截事务：phase 1 deny 直接中断，949 评估不会执行——评分信号只剩
+// raw 动作串里的 setvar:+N 字面量（两条命中规则 +5/+3 求和）。
 const securityEventsFixtureBlockedMulti = `{
   "transaction": {
     "timestamp": "2026/08/11 19:16:57",
@@ -69,8 +74,8 @@ const securityEventsFixtureBlockedMulti = `{
     "is_interrupted": true
   },
   "messages": [
-    { "message": "First message", "data": { "id": 942100, "score": 5 } },
-    { "message": "Second message", "data": { "id": 942110, "score": 3 } }
+    { "message": "First message", "data": { "id": 10001, "raw": "SecRule REQUEST_URI \"@contains /search\" \"id:10001,phase:1,deny,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'First message'\"" } },
+    { "message": "Second message", "data": { "id": 10002, "raw": "SecRule ARGS \"@rx bad\" \"id:10002,phase:1,deny,log,setvar:tx.inbound_anomaly_score_pl1=+3,msg:'Second message'\"" } }
   ]
 }`
 
@@ -99,7 +104,7 @@ const securityEventsFixtureUnknownHost = `{
     "is_interrupted": true
   },
   "messages": [
-    { "message": "Blocked attack", "data": { "id": 949110, "score": 5 } }
+    { "message": "Inbound Anomaly Score Exceeded (Total Score: 5)", "data": { "id": 949110, "raw": "id:949110,phase:2,deny,log" } }
   ]
 }`
 
@@ -140,22 +145,71 @@ func TestSecurityEventsParseTransaction_BlockedMapsAllFields(t *testing.T) {
 	}
 }
 
-func TestSecurityEventsParseTransaction_SumsAnomalyScoresAcrossMessages(t *testing.T) {
-	// Given: a blocked transaction with two rule messages (microsecond timestamp)
+func TestSecurityEventsParseTransaction_SumsSetvarScoresAcrossMessages(t *testing.T) {
+	// Given: a phase-1 custom-rule interruption with two matched rules (+5/+3 setvar)
 	// When: parsing
 	rec, err := securityEventsParseTransaction(json.RawMessage(securityEventsFixtureBlockedMulti))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	// Then: scores sum while rule fields come from the first message
+	// Then: setvar contributions sum while rule fields come from the first message
 	if rec.AnomalyScore != 8 {
 		t.Errorf("AnomalyScore=%d, want 8 (5+3)", rec.AnomalyScore)
 	}
-	if rec.RuleTriggered != "942100" || rec.RuleMsg != "First message" {
+	if rec.RuleTriggered != "10001" || rec.RuleMsg != "First message" {
 		t.Errorf("rule fields=%q/%q, want first message", rec.RuleTriggered, rec.RuleMsg)
 	}
 	if rec.EventTime != "2026-08-11 11:16:57" {
 		t.Errorf("EventTime=%q, want UTC of unix_timestamp microseconds", rec.EventTime)
+	}
+}
+
+func TestSecurityEventsParseTransaction_TotalScoreBeatsSetvarSum(t *testing.T) {
+	// Given: a blocked CRS transaction whose 949110 message reports the running
+	// total (7) alongside a custom rule setvar (+5) — the evaluated total is
+	// authoritative because it already includes every contribution
+	raw := `{
+  "transaction": { "unix_timestamp": 1786447017, "id": "tx-max-1", "client_ip": "203.0.113.60",
+    "server_id": "go029.com", "request": { "method": "GET", "uri": "/x", "headers": {} },
+    "is_interrupted": true },
+  "messages": [
+    { "message": "Custom hit", "data": { "id": 10001, "raw": "id:10001,phase:1,deny,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'Custom hit'" } },
+    { "message": "Inbound Anomaly Score Exceeded in phase 1 (Total Score: 7)", "data": { "id": 949111, "raw": "" } },
+    { "message": "Outbound Anomaly Score Exceeded (Total Score: 3)", "data": { "id": 959100, "raw": "" } }
+  ]
+}`
+	rec, err := securityEventsParseTransaction(json.RawMessage(raw))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if rec.AnomalyScore != 7 {
+		t.Errorf("AnomalyScore=%d, want 7 (max of inbound/outbound totals, not 5 setvar / 3 outbound)", rec.AnomalyScore)
+	}
+}
+
+func TestSecurityEventsParseTransaction_RealCustomRuleAuditShape(t *testing.T) {
+	// Given: a transaction captured verbatim from the live audit log (custom rule
+	// deny in phase 1) — no score field exists anywhere in the real format
+	raw := `{
+  "transaction": {
+    "unix_timestamp": 1759277134212248000, "id": "negHfpusbqgfuHpT", "client_ip": "::1",
+    "server_id": "localhost", "request": { "method": "GET", "uri": "/", "headers": { "host": ["localhost"] } },
+    "is_interrupted": true },
+  "messages": [
+    { "message": "自定义规则 测试 UA 拦截 命中", "data": { "file": "_inline_", "line": 8, "id": 10006, "rev": "",
+      "msg": "自定义规则 测试 UA 拦截 命中", "data": "", "severity": -1, "ver": "", "maturity": 0, "accuracy": 0, "tags": [],
+      "raw": "SecRule REQUEST_HEADERS:User-Agent \"@contains curl/\" \"id:10006,phase:1,deny,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'自定义规则 测试 UA 拦截 命中'\"" } }
+  ]
+}`
+	rec, err := securityEventsParseTransaction(json.RawMessage(raw))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if rec.RuleTriggered != "10006" || rec.RuleMsg != "自定义规则 测试 UA 拦截 命中" {
+		t.Errorf("rule fields=%q/%q, want 10006 and the custom-rule message", rec.RuleTriggered, rec.RuleMsg)
+	}
+	if rec.AnomalyScore != 5 {
+		t.Errorf("AnomalyScore=%d, want 5 from the setvar literal (was always 0 before the fix)", rec.AnomalyScore)
 	}
 }
 
@@ -493,7 +547,7 @@ func TestSecurityEventsTickIngestsFixtureLog(t *testing.T) {
 	if got[0] != want0 {
 		t.Errorf("row0=%+v\nwant %+v", got[0], want0)
 	}
-	want1 := row{ruleID: "", policyID: 0, action: "blocked", score: 5, triggered: "949110", msg: "Blocked attack", ip: "198.51.100.7", method: "GET", uri: "/BlockedPath", eventTime: "2026-08-11 11:16:59"}
+	want1 := row{ruleID: "", policyID: 0, action: "blocked", score: 5, triggered: "949110", msg: "Inbound Anomaly Score Exceeded (Total Score: 5)", ip: "198.51.100.7", method: "GET", uri: "/BlockedPath", eventTime: "2026-08-11 11:16:59"}
 	if got[1] != want1 {
 		t.Errorf("row1=%+v\nwant %+v", got[1], want1)
 	}
@@ -1596,7 +1650,7 @@ func securityEventsFixtureForRule(ruleID string) string {
     "is_interrupted": true
   },
   "messages": [
-    { "message": "hit ` + ruleID + `", "data": { "id": ` + ruleID + `, "score": 5 } }
+    { "message": "hit ` + ruleID + `", "data": { "id": ` + ruleID + `, "raw": "id:` + ruleID + `,phase:1,deny,log,setvar:tx.inbound_anomaly_score_pl1=+5,msg:'hit ` + ruleID + `'" } }
   ]
 }`
 }
