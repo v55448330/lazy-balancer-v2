@@ -202,13 +202,13 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) str
 	}
 	if p.IPACLEnabled && len(ipACLList) > 0 {
 		if p.IPACLMode == "allow" {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',ctl:ruleEngine=Off\"\n", strings.Join(ipACLList, ",")))
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipACLList, ",")))
 		} else if p.IPACLMode == "deny" {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',ctl:ruleEngine=Off\"\n", strings.Join(ipACLList, ",")))
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipACLList, ",")))
 		}
 	}
 	if len(ipBL) > 0 {
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',ctl:ruleEngine=Off\"\n", strings.Join(ipBL, ",")))
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipBL, ",")))
 	}
 
 	emitCustomRules(&sb, customRules)
@@ -272,6 +272,12 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) str
 			sb.WriteString(fmt.Sprintf("SecRuleRemoveById %s\n", mapped))
 		}
 	}
+
+	// skipAfter 终点标记——IP ACL deny / 自定义 block 规则的 skipAfter
+	// 引用此标记跳过后续全部规则（DetectionOnly/CRS），deny 在阶段末执行。
+	// 标记必须无条件发射（即使无规则引用），否则 skipAfter 引用不存在标记
+	// 会导致 coraza 编译失败。
+	sb.WriteString("SecMarker SECURITY_RULES_END\n")
 
 	return sb.String()
 }
@@ -387,7 +393,7 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 		action := fmt.Sprintf("pass,log,setvar:tx.inbound_anomaly_score_pl1=+%d,msg:'自定义规则 %s 命中'", cr.Score, safeName)
 		if cr.Action == "block" {
 			// 统一所有拦截走 coraza 默认 403 → 策略 errors.routes → 拦截页面配置的状态码
-			action = fmt.Sprintf("deny,log,setvar:tx.inbound_anomaly_score_pl1=+%d,msg:'自定义规则 %s 命中'", cr.Score, safeName)
+			action = fmt.Sprintf("deny,log,setvar:tx.inbound_anomaly_score_pl1=+%d,msg:'自定义规则 %s 命中',skipAfter:SECURITY_RULES_END", cr.Score, safeName)
 		} else if cr.Action == "log" {
 			// 仅记录：不累加异常分，避免在拦截/检测模式下因该规则误伤。
 			action = fmt.Sprintf("pass,log,msg:'自定义规则 %s 命中'", safeName)
