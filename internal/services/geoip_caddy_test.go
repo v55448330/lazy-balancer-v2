@@ -1,15 +1,15 @@
 package services
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/netip"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/models"
 )
 
 func setupGeoipConfigTestDB(t *testing.T) {
@@ -37,10 +37,10 @@ func seedGeoipPolicy(t *testing.T, ruleCaddyID, countries, mode string) {
 	}
 }
 
-func seedGeoipPolicyWithBlockStatus(t *testing.T, ruleCaddyID, countries, mode string, blockStatusCode int) {
+func seedGeoipPolicyWithBlockPage(t *testing.T, ruleCaddyID, countries, mode string, blockPageID, blockStatusCode int) {
 	t.Helper()
-	result, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, enabled, geoip_countries, geoip_mode, block_status_code)
-		VALUES ('geoip-test', 'off', 1, ?, ?, ?)`, countries, mode, blockStatusCode)
+	result, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, enabled, geoip_countries, geoip_mode, block_page_id, block_status_code)
+		VALUES ('geoip-test', 'off', 1, ?, ?, ?, ?)`, countries, mode, blockPageID, blockStatusCode)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,24 +48,6 @@ func seedGeoipPolicyWithBlockStatus(t *testing.T, ruleCaddyID, countries, mode s
 	if _, err := db.DB.Exec("INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", ruleCaddyID, policyID); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func findRouteByMatcherExpression(t *testing.T, routes []map[string]interface{}, wantExpr string) map[string]interface{} {
-	t.Helper()
-	for _, route := range routes {
-		matchers, ok := route["match"].([]interface{})
-		if !ok {
-			continue
-		}
-		for _, matcherValue := range matchers {
-			matcher := mustMap(t, matcherValue, "matcher")
-			if expr, ok := matcher["expression"].(string); ok && expr == wantExpr {
-				return route
-			}
-		}
-	}
-	t.Fatalf("no route matched expression %q in %#v", wantExpr, routes)
-	return nil
 }
 
 func handlerNames(t *testing.T, routeValue interface{}) []string {
@@ -84,45 +66,98 @@ func handlerNames(t *testing.T, routeValue interface{}) []string {
 	return names
 }
 
-// TestGenerateHTTPRouteObjects_geoipOverseas_emitsHandlerAndBlockRoute verifies
-// that a deny-mode policy listing "海外" yields a geoip pass route, a block route
-// matching country_name != 中国, and a main route whose chain starts with geoip.
-func TestGenerateHTTPRouteObjects_geoipOverseas_emitsHandlerAndBlockRoute(t *testing.T) {
-	// Given a deny-mode geoip policy bound to a rule
+func handlerNamesAsString(t *testing.T, routeValue interface{}) string {
+	t.Helper()
+	return strings.Join(handlerNames(t, routeValue), ",")
+}
+
+// geoipRuleLine 从 BuildCorazaDirectives 产物中取出 GeoIP 链首规则行（id:8）。
+func geoipRuleLine(t *testing.T, directives string) string {
+	t.Helper()
+	for _, line := range strings.Split(directives, "\n") {
+		if strings.Contains(line, "msg:'GeoIP 区域拦截'") {
+			return line
+		}
+	}
+	t.Fatalf("no GeoIP rule line in directives:\n%s", directives)
+	return ""
+}
+
+// TestBuildCorazaDirectives_geoip_emitsSecRuleChain：地域拦截改走 coraza 后，
+// deny 模式海外策略发射链式 SecRule——链首内网放行（!@ipMatch 全量私网段 +
+// id:8 + deny 不带 status + skipAfter 终点），子规则锚定正则匹配 X-GeoIP-Loc。
+func TestBuildCorazaDirectives_geoip_emitsSecRuleChain(t *testing.T) {
+	policy := &models.SecurityPolicy{
+		Mode:           "off",
+		GeoIPMode:      "deny",
+		GeoIPCountries: json.RawMessage(`["海外"]`),
+	}
+	directives := BuildCorazaDirectives(policy, nil)
+	if directives == "" {
+		t.Fatal("geoip-enabled policy must emit directives even with WAF mode off")
+	}
+	starter := geoipRuleLine(t, directives)
+	if !strings.Contains(starter, `"id:8,phase:1,deny,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain"`) {
+		t.Fatalf("starter actions must be unified deny (no status) with chain:\n%s", starter)
+	}
+	if !strings.Contains(starter, `"!@ipMatch `+strings.Join(geoipPrivateRanges, ",")+`"`) {
+		t.Fatalf("starter must exempt all private ranges:\n%s", starter)
+	}
+	// deny 不带 status：coraza 默认 403 → errors.routes 403 子句 → 拦截页按
+	// block_status_code 渲染（与自定义规则拦截统一口径）。
+	if strings.Contains(starter, "status:") {
+		t.Fatalf("geoip deny must not carry a status action (unified block page path):\n%s", starter)
+	}
+	if !strings.Contains(directives, ` SecRule REQUEST_HEADERS:X-GeoIP-Loc "@rx ^(?:海外)$" "t:none"`) {
+		t.Fatalf("child rule missing anchored overseas match:\n%s", directives)
+	}
+}
+
+// TestBuildCorazaDirectives_geoipProvinces_joinedAlternation：纯省条目附加
+// (?:/.*)?——省内城市段（省/市 形态的 X-GeoIP-Loc）同样命中（整省语义）。
+func TestBuildCorazaDirectives_geoipProvinces_joinedAlternation(t *testing.T) {
+	policy := &models.SecurityPolicy{
+		Mode:           "off",
+		GeoIPMode:      "deny",
+		GeoIPCountries: json.RawMessage(`["广东省","北京市"]`),
+	}
+	directives := BuildCorazaDirectives(policy, nil)
+	want := `@rx ^(?:广东省(?:/.*)?|北京市(?:/.*)?)$`
+	if !strings.Contains(directives, want) {
+		t.Fatalf("directives missing province alternation %q:\n%s", want, directives)
+	}
+}
+
+// TestBuildCorazaDirectives_geoipDetectionMode_rulePrecedesDetectionOnly：
+// 检测模式下 GeoIP 规则先于 DetectionOnly 切换发出——地域拦截仍强制阻断
+// （与 IP 控制/自定义拦截规则同阵营）。
+func TestBuildCorazaDirectives_geoipDetectionMode_rulePrecedesDetectionOnly(t *testing.T) {
+	policy := &models.SecurityPolicy{
+		Mode:           "detection",
+		GeoIPMode:      "deny",
+		GeoIPCountries: json.RawMessage(`["海外"]`),
+	}
+	directives := BuildCorazaDirectives(policy, nil)
+	geoIdx := strings.Index(directives, "msg:'GeoIP 区域拦截'")
+	switchIdx := strings.Index(directives, "DetectionOnly")
+	if geoIdx < 0 || switchIdx < 0 || geoIdx > switchIdx {
+		t.Fatalf("geoip rule must precede the DetectionOnly switch:\n%s", directives)
+	}
+}
+
+// TestGenerateHTTPRouteObjects_geoip_passRouteOnlyNoBlockRoutes：路由层只剩
+// pass 路由（设置 X-GeoIP-* headers 供下游 coraza），不再有 Caddy 原生 block
+// 路由；地域拦截在主路由的 coraza 处理器内评估。
+func TestGenerateHTTPRouteObjects_geoip_passRouteOnlyNoBlockRoutes(t *testing.T) {
 	setupGeoipConfigTestDB(t)
 	seedGeoipPolicy(t, "rule-http", `["海外"]`, "deny")
 
-	// When the route objects are generated
 	routes, mainRoute, err := generateHTTPRouteObjects(baseHTTPRule())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Then the block route carries the 海外 expression and triggers a 403 error
-	block := findRouteByMatcherExpression(t, routes, `{http.vars.geoip.country_name} != "中国"`)
-	names := handlerNames(t, block)
-	if len(names) != 1 || names[0] != "error" {
-		t.Fatalf("block route handlers=%v, want [error]", names)
-	}
-	errorHandler := mustMap(t, block["handle"].([]interface{})[0], "error handler")
-	status := errorHandler["status_code"]
-	if status != "403" && status != 403 {
-		t.Fatalf("block status_code=%#v, want \"403\" or 403", status)
-	}
-	if block["terminal"] != true {
-		t.Fatal("block route must be terminal")
-	}
-
-	// And the main route's chain no longer duplicates the geoip handler
-	// (it's already executed in the pass route above)
-	mainNames := handlerNames(t, mainRoute)
-	for _, n := range mainNames {
-		if n == "geoip2region" {
-			t.Fatalf("main route should not contain geoip2region (handled by pass route), handlers=%v", mainNames)
-		}
-	}
-
-	// And a pass route populates the geoip vars before the block matcher runs
+	// pass 路由：首条、仅 geoip2region、非 terminal（后续路由继续评估）
 	first := mustMap(t, routes[0], "first route")
 	if got := handlerNames(t, routes[0]); len(got) != 1 || got[0] != "geoip2region" {
 		t.Fatalf("routes[0] handlers=%v, want pass-through geoip2region", got)
@@ -130,189 +165,198 @@ func TestGenerateHTTPRouteObjects_geoipOverseas_emitsHandlerAndBlockRoute(t *tes
 	if first["terminal"] == true {
 		t.Fatal("geoip pass route must not be terminal")
 	}
-}
-
-// TestGenerateHTTPRouteObjects_geoipProvinces_joinsProvinceMatches verifies
-// province entries produce a disjunctive province match.
-func TestGenerateHTTPRouteObjects_geoipProvinces_joinsProvinceMatches(t *testing.T) {
-	// Given a policy restricting to two provinces
-	setupGeoipConfigTestDB(t)
-	seedGeoipPolicy(t, "rule-http", `["广东省","北京市"]`, "deny")
-
-	// When the route objects are generated
-	routes, _, err := generateHTTPRouteObjects(baseHTTPRule())
-	if err != nil {
-		t.Fatal(err)
+	// 无 Caddy 原生 block 路由（error 处理器只属于 server 级 errors 路由）
+	for _, route := range routes {
+		for _, name := range handlerNames(t, route) {
+			if name == "error" {
+				t.Fatalf("native geoip block route must not be emitted: %#v", route)
+			}
+		}
 	}
-
-	// Then the block route joins the provinces with OR
-	want := `{http.vars.geoip.province} == "广东省" || {http.vars.geoip.province} == "北京市"`
-	block := findRouteByMatcherExpression(t, routes, want)
-	_ = block
-}
-
-// TestGenerateHTTPRouteObjects_geoipAllow_negatesBlockExpression verifies
-// allow mode blocks everything outside the matched regions.
-func TestGenerateHTTPRouteObjects_geoipAllow_negatesBlockExpression(t *testing.T) {
-	// Given an allow-mode policy with one province
-	setupGeoipConfigTestDB(t)
-	seedGeoipPolicy(t, "rule-http", `["广东省"]`, "allow")
-
-	// When the route objects are generated
-	routes, _, err := generateHTTPRouteObjects(baseHTTPRule())
-	if err != nil {
-		t.Fatal(err)
+	// 主路由链内含 waf 处理器（GeoIP SecRule 在其 directives 中），geoip2region
+	// 只出现在 pass 路由
+	mainNames := handlerNames(t, mainRoute)
+	hasWaf := false
+	for _, n := range mainNames {
+		if n == "waf" {
+			hasWaf = true
+		}
+		if n == "geoip2region" {
+			t.Fatalf("main route should not contain geoip2region (handled by pass route), handlers=%v", mainNames)
+		}
 	}
-
-	// Then the block route negates the matched-region union
-	want := `!({http.vars.geoip.province} == "广东省")`
-	block := findRouteByMatcherExpression(t, routes, want)
-	status := mustMap(t, block["handle"].([]interface{})[0], "block handler")["status_code"]
-	if status != 403 {
-		t.Fatalf("block status_code=%#v, want 403", status)
+	if !hasWaf {
+		t.Fatalf("main route must carry the coraza waf handler for geoip evaluation, handlers=%v", mainNames)
+	}
+	handlers, _ := mainRoute["handle"].([]interface{})
+	directives, _ := mustMap(t, handlers[0], "first handler")["directives"].(string)
+	found := false
+	for _, h := range handlers {
+		if d, _ := mustMap(t, h, "handler")["directives"].(string); strings.Contains(d, "msg:'GeoIP 区域拦截'") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no waf handler carries the geoip rule, directives=%.200s", directives)
 	}
 }
 
-// TestGenerateHTTPRouteObjects_geoipBlock_honorsBlockStatusCode verifies the
-// geoip block route emits the policy's block_status_code instead of hardcoding 403.
-func TestGenerateHTTPRouteObjects_geoipBlock_honorsBlockStatusCode(t *testing.T) {
-	// Given a deny-mode geoip policy with block_status_code 451
-	setupGeoipConfigTestDB(t)
-	seedGeoipPolicyWithBlockStatus(t, "rule-http", `["海外"]`, "deny", 451)
-
-	// When the route objects are generated
-	routes, _, err := generateHTTPRouteObjects(baseHTTPRule())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Then the block route's error handler carries the policy status code
-	block := findRouteByMatcherExpression(t, routes, `{http.vars.geoip.country_name} != "中国"`)
-	status := mustMap(t, block["handle"].([]interface{})[0], "block handler")["status_code"]
-	if status != 451 {
-		t.Fatalf("block status_code=%#v, want 451", status)
-	}
-}
-
-// TestGenerateHTTPRouteObjects_geoipDisabled_noBlockRoute verifies a policy
-// without geoip countries produces no geoip routes.
-func TestGenerateHTTPRouteObjects_geoipDisabled_noBlockRoute(t *testing.T) {
-	// Given a policy without geoip countries
+// TestGenerateHTTPRouteObjects_geoipDisabled_noRoutesOrDirectives：无 geoip
+// 条目的策略不产生 pass 路由，mode=off 且无其他控制时也不发射 waf 处理器。
+func TestGenerateHTTPRouteObjects_geoipDisabled_noRoutesOrDirectives(t *testing.T) {
 	setupGeoipConfigTestDB(t)
 	seedGeoipPolicy(t, "rule-http", `[]`, "deny")
 
-	// When the route objects are generated
 	routes, mainRoute, err := generateHTTPRouteObjects(baseHTTPRule())
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Then no geoip routes exist and the main chain has no geoip handler
+	if len(routes) != 1 {
+		t.Fatalf("want 1 route (main only), got %d: %#v", len(routes), routes)
+	}
 	for _, routeValue := range routes {
 		if strings.Contains(handlerNamesAsString(t, routeValue), "geoip2region") {
 			t.Fatalf("unexpected geoip handler in %#v", routeValue)
 		}
 	}
-	if strings.Contains(handlerNamesAsString(t, mainRoute), "geoip2region") {
-		t.Fatal("main chain must not contain geoip handler when geoip disabled")
+	if strings.Contains(handlerNamesAsString(t, mainRoute), "waf") {
+		t.Fatal("mode=off policy without geoip/IP control/custom rules must not emit a waf handler")
 	}
 }
 
-// TestGenerateSingleRuleCaddyConfig_geoip_previewIncludesBlockRoute verifies
-// the preview path also emits the geoip handler and block route.
-func TestGenerateSingleRuleCaddyConfig_geoip_previewIncludesBlockRoute(t *testing.T) {
-	// Given a deny-mode overseas geoip policy
+// TestGenerateSingleRuleCaddyConfig_geoip_previewIncludesPassRoute：预览路径
+// 同样只发射 pass 路由（无 block 路由）。
+func TestGenerateSingleRuleCaddyConfig_geoip_previewIncludesPassRoute(t *testing.T) {
 	setupGeoipConfigTestDB(t)
 	seedGeoipPolicy(t, "rule-http", `["海外"]`, "deny")
 
-	// When the preview config is generated
 	config := GenerateSingleRuleCaddyConfig(baseHTTPRule())
 	routes := renderedHTTPRoutes(t, config)
-
-	// Then the block route is present with the overseas expression
-	routeMap := make([]map[string]interface{}, 0, len(routes))
-	for _, routeValue := range routes {
-		routeMap = append(routeMap, mustMap(t, routeValue, "route"))
+	if len(routes) == 0 {
+		t.Fatal("no routes rendered")
 	}
-	findRouteByMatcherExpression(t, routeMap, `{http.vars.geoip.country_name} != "中国"`)
+	if got := handlerNames(t, routes[0]); len(got) != 1 || got[0] != "geoip2region" {
+		t.Fatalf("routes[0] handlers=%v, want geoip pass route", got)
+	}
+	for _, routeValue := range routes {
+		if strings.Contains(handlerNamesAsString(t, routeValue), "error") {
+			t.Fatalf("native geoip block route must not be emitted in preview: %#v", routeValue)
+		}
+	}
 }
 
-func handlerNamesAsString(t *testing.T, routeValue interface{}) string {
+// TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus：coraza deny
+// 默认 403 → errors 路由 403 interruption 子句 → 拦截页按 block_status_code 渲染
+// （原 Caddy 原生 block 路由的 honorsBlockStatusCode 保证迁移到统一路径）。
+func TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus(t *testing.T) {
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_geoip", "geoip.example.test", 8080)
+	seedSecurityBlockPage(t, database, 7, "<html>geoip-block</html>")
+	seedGeoipPolicyBound(t, database, "lb_geoip", `["海外"]`, "deny", 7, 451)
+
+	generated := generateCaddyConfigFromStore(database)
+	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generation failed: %s", message)
+	}
+	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
+	if len(errorRoutes) != 1 {
+		t.Fatalf("want exactly one error route, got %#v", errorRoutes)
+	}
+	route := mustMap(t, errorRoutes[0], "error route")
+	// 匹配表达式只剩统一 403 interruption 子句（"GeoIP blocked" 形态已消亡）
+	assertEqual(t, routeMatcher(t, route)["expression"],
+		"({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')")
+	handler := firstHandler(t, route)
+	assertEqual(t, handler["status_code"], 451)
+	assertEqual(t, handler["body"], "<html>geoip-block</html>")
+}
+
+// seedGeoipPolicyBound 在 cluster 测试库上播种带 geoip + 拦截页的策略并绑定。
+func seedGeoipPolicyBound(t *testing.T, database *sql.DB, ruleCaddyID, countries, mode string, blockPageID, blockStatusCode int) {
 	t.Helper()
-	return strings.Join(handlerNames(t, routeValue), ",")
+	result, err := database.Exec(`INSERT INTO security_policies (name, mode, enabled, geoip_countries, geoip_mode, block_page_id, block_status_code)
+		VALUES ('geoip-bound', 'off', 1, ?, ?, ?, ?)`, countries, mode, blockPageID, blockStatusCode)
+	if err != nil {
+		t.Fatalf("seed geoip policy: %v", err)
+	}
+	policyID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read seeded policy id: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)`, ruleCaddyID, policyID); err != nil {
+		t.Fatalf("bind geoip policy: %v", err)
+	}
 }
 
-// TestGenerateHTTPRouteObjects_geoipBlock_alwaysAllowsPrivateIPs verifies the
-// block route excludes private/loopback/link-local IPs so LAN clients are never
-// treated as 海外, regardless of deny/allow mode.
-func TestGenerateHTTPRouteObjects_geoipBlock_alwaysAllowsPrivateIPs(t *testing.T) {
-	for _, mode := range []string{"deny", "allow"} {
-		t.Run(mode, func(t *testing.T) {
-			// Given a geoip policy bound to a rule
-			setupGeoipConfigTestDB(t)
-			seedGeoipPolicy(t, "rule-http", `["海外"]`, mode)
+// TestGeoipLocOperator_forms：算子编译的形态覆盖——海外字面、纯省附加
+// (?:/.*)?、省/市精确联值、allow 取反、QuoteMeta 防注入。
+func TestGeoipLocOperator_forms(t *testing.T) {
+	deny := geoipLocOperator([]string{"福建省", "广东省/深圳市", "海外"}, false)
+	if !strings.Contains(deny, `福建省(?:/.*)?`) || !strings.Contains(deny, `广东省/深圳市`) || !strings.Contains(deny, `海外`) {
+		t.Fatalf("operator missing entry forms: %s", deny)
+	}
+	if !strings.HasPrefix(deny, "@rx ^(?:") || !strings.HasSuffix(deny, ")$") {
+		t.Fatalf("operator must be anchored full-value match: %s", deny)
+	}
+	allow := geoipLocOperator([]string{"广东省"}, true)
+	if allow != "!@rx ^(?:广东省(?:/.*)?)$" {
+		t.Fatalf("allow mode must negate the whole match: %s", allow)
+	}
+	// 集群同步/历史行可携带绕过校验的元字符——QuoteMeta 中和（ReDoS/越权匹配）
+	evil := geoipLocOperator([]string{`EVIL(.*)`}, false)
+	if !strings.Contains(evil, `EVIL\(\.\*\)`) {
+		t.Fatalf("metacharacters must be quoted: %s", evil)
+	}
+}
 
-			// When the route objects are generated
-			routes, _, err := generateHTTPRouteObjects(baseHTTPRule())
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			// Then the block route carries a single match set that ANDs
-			// host + expression + remote_ip "not" (private/loopback/link-local
-			// CIDRs, single shared definition).
-			var block map[string]interface{}
-			for _, route := range routes {
-				matchers, ok := route["match"].([]interface{})
-				if !ok {
-					continue
-				}
-				for _, matcherValue := range matchers {
-					matcher := mustMap(t, matcherValue, "matcher")
-					if _, has := matcher["not"]; has {
-						block = route
-						break
-					}
-				}
-				if block != nil {
-					break
-				}
-			}
-			if block == nil {
-				t.Fatalf("block route missing private-IP not matcher: %#v", routes)
-			}
-
-			// 结构断言：match 必须只有一个集合。Caddy match 数组内集合间按 OR 组合，
-			// 集合内各匹配器按 AND 组合。若 not 内网放行被拆成第二个集合，公网请求
-			// 将恒命中该集合而被全量拦截。
-			matchers := block["match"].([]interface{})
-			if len(matchers) != 1 {
-				t.Fatalf("block match must be a single set (host+expression+not AND'ed), got %d sets: %#v", len(matchers), matchers)
-			}
-			matcher := mustMap(t, matchers[0], "block matcher")
-			for _, key := range []string{"host", "expression", "not"} {
-				if _, has := matcher[key]; !has {
-					t.Fatalf("block matcher missing %q key (private-IP allow must AND with host/expression): %#v", key, matcher)
-				}
-			}
-
-			notSets, ok := matcher["not"].([]interface{})
-			if !ok || len(notSets) != 1 {
-				t.Fatalf("not matcher sets=%#v, want single remote_ip set", matcher["not"])
-			}
-			remote := mustMap(t, mustMap(t, notSets[0], "not set")["remote_ip"], "remote_ip matcher")
-			ranges, ok := remote["ranges"].([]string)
-			if !ok {
-				t.Fatalf("remote_ip ranges has type %T", remote["ranges"])
-			}
-			assertEqual(t, ranges, []string{
-				"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-				"127.0.0.0/8", "169.254.0.0/16",
-				"::ffff:10.0.0.0/104", "::ffff:172.16.0.0/108", "::ffff:192.168.0.0/112",
-				"::ffff:127.0.0.0/104", "::ffff:169.254.0.0/112",
-				"::1/128", "fc00::/7", "fe80::/10",
-			})
-		})
+// TestGeoipLocOperator_regexEquivalence：把算子正则按 coraza 语义编译
+// （单行值下 (?sm) 与默认等价），锁定与既有 CEL 语义的逐案等价：
+// 海外哨兵（含不可解析/IPv6）、省整省覆盖省内城市、省/市精确联值、
+// 空串（国内段省份不可解析）deny 不命中 / allow 反向命中（fail-closed）。
+func TestGeoipLocOperator_regexEquivalence(t *testing.T) {
+	compile := func(t *testing.T, countries []string, allowMode bool) *regexp.Regexp {
+		t.Helper()
+		op := geoipLocOperator(countries, allowMode)
+		re, err := regexp.Compile(strings.TrimPrefix(strings.TrimPrefix(op, "!"), "@rx "))
+		if err != nil {
+			t.Fatalf("compile %q: %v", op, err)
+		}
+		return re
+	}
+	denyRe := compile(t, []string{"海外", "广东省", "福建省/厦门市"}, false)
+	cases := []struct {
+		loc  string
+		want bool
+	}{
+		{"海外", true},       // 海外客户端（含 IPv6/不可解析哨兵）
+		{"广东省", true},      // 纯省
+		{"广东省/深圳市", true},  // 省内城市段命中整省条目
+		{"福建省/厦门市", true},  // 省/市精确联值
+		{"福建省/福州市", false}, // 同省异市不命中联值条目
+		{"北京市", false},     // 未列省份
+		{"", false},        // 国内段省份不可解析：deny 不误伤
+		{"海外省", false},     // 前缀串不得命中（锚定全值）
+		{"中国", false},      // 国家名不得命中省份条目
+	}
+	for _, tc := range cases {
+		if got := denyRe.MatchString(tc.loc); got != tc.want {
+			t.Fatalf("deny-mode match(%q) = %v, want %v", tc.loc, got, tc.want)
+		}
+	}
+	// allow 模式（!@rx）：算子取反——原始正则命中 = 条目命中 = 放行。此处编译
+	// 剥离 "!" 后的原始正则：列表外（含空串、外省）不得命中（→ 算子反向命中
+	// → 拦截，fail-closed），列表内（含省内城市段）必须命中（→ 放行）。
+	allowRe := compile(t, []string{"海外", "广东省"}, true)
+	for _, blocked := range []string{"北京市", "", "福建省/厦门市"} {
+		if allowRe.MatchString(blocked) {
+			t.Fatalf("allow-mode raw regex must not match (operator negates → block) %q", blocked)
+		}
+	}
+	for _, allowed := range []string{"海外", "广东省", "广东省/深圳市"} {
+		if !allowRe.MatchString(allowed) {
+			t.Fatalf("allow-mode raw regex must match (operator negates → allow) %q", allowed)
+		}
 	}
 }
 
@@ -321,62 +365,6 @@ func TestGenerateHTTPRouteObjects_geoipBlock_alwaysAllowsPrivateIPs(t *testing.T
 // range, while mapped private (::ffff:192.168.1.1) and plain private
 // (192.168.1.1) addresses must. The prior ::ffff:0:0/96 entry matched the whole
 // mapped space and would have let public mapped clients bypass GeoIP blocking.
-// TestGeoipBlockRoute_caddyValidate_singleSetNotSemantics locks the single-set
-// NOT semantics of the geoip block route against real Caddy JSON parsing: a
-// stock `caddy validate` must accept the block route as a complete config. The
-// block route uses only standard Caddy components (host/expression/not/remote_ip
-// matchers + error handler), so no geoip2region plugin is required to validate.
-// Skips when no caddy binary is in PATH — locally absent, but present in the
-// CI/docker build image where this runs.
-func TestGeoipBlockRoute_caddyValidate_singleSetNotSemantics(t *testing.T) {
-	caddyBin, err := exec.LookPath("caddy")
-	if err != nil {
-		t.Skip("caddy binary not in PATH; skipping Caddy JSON validate smoke test (runs in CI/docker where caddy is present)")
-	}
-
-	// Given a deny-mode overseas geoip policy bound to a rule
-	setupGeoipConfigTestDB(t)
-	seedGeoipPolicy(t, "rule-http", `["海外"]`, "deny")
-
-	policy := GetSecurityPolicyForRule("rule-http")
-	if policy == nil {
-		t.Fatal("expected geoip policy")
-	}
-	blockRoute := buildGeoipBlockRoute(baseHTTPRule(), policy, 403)
-	if blockRoute == nil {
-		t.Fatal("expected geoip block route")
-	}
-
-	// Build a minimal complete Caddy JSON config embedding the block route.
-	config := map[string]interface{}{
-		"apps": map[string]interface{}{
-			"http": map[string]interface{}{
-				"servers": map[string]interface{}{
-					"s0": map[string]interface{}{
-						"listen": []string{":80"},
-						"routes": []interface{}{blockRoute},
-					},
-				},
-			},
-		},
-	}
-
-	payload, err := json.Marshal(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmp := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(tmp, payload, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	// When Caddy validates the generated JSON (adapter "" = native JSON, no adaptation)
-	out, err := exec.Command(caddyBin, "validate", "--adapter", "", "--config", tmp).CombinedOutput()
-	if err != nil {
-		t.Fatalf("caddy validate failed: %v\n%s", err, out)
-	}
-}
-
 func TestGeoipPrivateRanges_excludesPublicMappedIPv4(t *testing.T) {
 	prefixes := make([]netip.Prefix, 0, len(geoipPrivateRanges))
 	for _, cidr := range geoipPrivateRanges {

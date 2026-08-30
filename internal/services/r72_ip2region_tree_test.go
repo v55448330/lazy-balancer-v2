@@ -2,11 +2,6 @@ package services
 
 import (
 	"os"
-
-	"encoding/json"
-
-	"lazy-balancer-v2/internal/models"
-	"strings"
 	"testing"
 )
 
@@ -97,20 +92,5 @@ func TestIP2RegionRegionTree_scan(t *testing.T) {
 	}
 	if !foundUrumqi {
 		t.Fatal("新疆维吾尔自治区 缺 乌鲁木齐市（UEruemqi 段未回收）")
-	}
-}
-
-// CEL 双形态：纯省 = 整省匹配；省/市 = 联合匹配。
-func TestBuildGeoipMatchExpression_cityForm(t *testing.T) {
-	policy := &models.SecurityPolicy{GeoIPCountries: json.RawMessage(`["福建省","广东省/深圳市","海外"]`)}
-	expr := buildGeoipMatchExpression(policy)
-	if !strings.Contains(expr, `{http.vars.geoip.province} == "福建省"`) {
-		t.Fatalf("province form missing: %s", expr)
-	}
-	if !strings.Contains(expr, `({http.vars.geoip.province} == "广东省" && {http.vars.geoip.city} == "深圳市")`) {
-		t.Fatalf("city joint form missing: %s", expr)
-	}
-	if !strings.Contains(expr, `{http.vars.geoip.country_name} != "中国"`) {
-		t.Fatalf("overseas form missing: %s", expr)
 	}
 }

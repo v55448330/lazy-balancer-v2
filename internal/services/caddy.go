@@ -2379,8 +2379,9 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 			return map[string]interface{}{"error": err}
 		}
 
-		// HTTP→HTTPS 跳转路由插在 GeoIP 路由之后、路径/主路由之前：地区拦截
-		// 优先级高于跳转。generateHTTPRouteObjects 已将 GeoIP 路由前置到头部。
+		// HTTP→HTTPS 跳转路由插在 GeoIP 路由之后、路径/主路由之前。generateHTTPRouteObjects
+		// 已将 GeoIP pass 路由前置到头部（v2.2.0 地域拦截改走 coraza 后仅剩 pass 路由，
+		// 至多一条；无 Caddy 原生 block 路由）。
 		//
 		// 可达性说明（防止误用）：此单规则跳转形态当前并无调用方会触发——
 		// handlers.go 的规则验证中 HTTP 协议走 GenerateRouteObject（合并进既有端口验证），
@@ -2397,16 +2398,14 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 		// 80/443 端口不写 automatic_https。若未来启用此分支，必须补齐 80/443 的
 		// disable_certificates 例外，否则 Caddy 会为路由域名自建 ACME automation。
 		if rule.EnableTLS && rule.TLSHTTPRedirect && len(domainHosts) > 0 {
-			// 与 generateHTTPRouteObjects 同口径：pass 路由（任一启用策略带
-			// geoip 时一条）+ 每 geoip 启用策略一条 block 路由。
+			// 与 generateHTTPRouteObjects 同口径：任一启用策略带 geoip 时仅一条
+			// pass 路由（地域拦截已改走 coraza，无逐策略 block 路由）。
 			geoipCount := 0
 			for _, policy := range GetSecurityPoliciesForRule(rule.CaddyID) {
 				if PolicyHasGeoIP(policy) {
-					geoipCount++
+					geoipCount = 1
+					break
 				}
-			}
-			if geoipCount > 0 {
-				geoipCount++ // pass route
 			}
 			redirectRoute := map[string]interface{}{
 				"match": []interface{}{
@@ -2586,29 +2585,24 @@ func generateHTTPRouteObjects(rule SingleRuleConfig, securityCtx ...*securityPol
 		mainRoute["@id"] = rule.CaddyID
 	}
 
-	routes := make([]map[string]interface{}, 0, len(rule.PathRules)+4)
-	// GeoIP routes run before path rules and the main route: the pass route
-	// populates the region placeholders, then the block routes reject matches.
-	// v2.2.0 多策略：pass 路由至多一条（任一绑定启用策略带 geoip 即存在），
-	// block 路由每带 geoip 的绑定启用策略一条（policy_id ASC）。
-	policies := policiesForRule(ctx, rule.CaddyID)
-	geoipPolicies := make([]*models.SecurityPolicy, 0, len(policies))
-	for _, policy := range policies {
+	routes := make([]map[string]interface{}, 0, len(rule.PathRules)+2)
+	// GeoIP pass route runs before path rules and the main route: it resolves the
+	// client region into {http.vars.geoip.*} placeholders AND X-GeoIP-* request
+	// headers. v2.2.0 地域拦截改走 coraza——BuildCorazaDirectives 的 GeoIP
+	// SecRule（id:8）读取 X-GeoIP-Loc，被拦请求产生 audit.log → 安全事件管线
+	// （此前 Caddy 原生 block 路由 CEL+static_response 完全绕过 coraza，事件
+	// 盲区）。pass 路由必须保留且先于主路由的 coraza 处理器执行，否则 headers
+	// 未设置、地域规则恒不命中。至多一条（任一绑定启用策略带 geoip 即存在，
+	// v2.2.0 多策略语义）。
+	var geoipPassPolicy *models.SecurityPolicy
+	for _, policy := range policiesForRule(ctx, rule.CaddyID) {
 		if PolicyHasGeoIP(policy) {
-			geoipPolicies = append(geoipPolicies, policy)
+			geoipPassPolicy = policy
+			break
 		}
 	}
-	if len(geoipPolicies) > 0 {
-		routes = append(routes, buildGeoipPassRoute(domainHosts, geoipPolicies[0]))
-		for _, policy := range geoipPolicies {
-			statusCode := policy.BlockStatusCode
-			if statusCode == 0 {
-				statusCode = 403
-			}
-			if blockRoute := buildGeoipBlockRoute(rule, policy, statusCode); blockRoute != nil {
-				routes = append(routes, blockRoute)
-			}
-		}
+	if geoipPassPolicy != nil {
+		routes = append(routes, buildGeoipPassRoute(domainHosts, geoipPassPolicy))
 	}
 	if rule.CustomRoutesEnabled {
 		pathRules := append([]PathRuleConfig(nil), rule.PathRules...)
@@ -2714,26 +2708,11 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, security
 	if statusCode == 0 {
 		statusCode = 403
 	}
-	// coraza 命中恒以 403 + "interruption triggered" 中断；GeoIP 拦截链经 error
-	// handler 以各策略 block_status_code + "GeoIP blocked" 中断。两者共用同一品牌
-	// 拦截页，故匹配表达式需覆盖 403 中断与全部绑定启用策略的 geoip 状态码并集。
-	clauses := []string{"({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')"}
-	seenGeoipStatus := make(map[int]struct{}, len(policies))
-	for _, policy := range policies {
-		if !PolicyHasGeoIP(policy) {
-			continue
-		}
-		geoipStatus := policy.BlockStatusCode
-		if geoipStatus == 0 {
-			geoipStatus = 403
-		}
-		if _, seen := seenGeoipStatus[geoipStatus]; seen {
-			continue
-		}
-		seenGeoipStatus[geoipStatus] = struct{}{}
-		clauses = append(clauses, fmt.Sprintf("({http.error.status_code} == %d && {http.error.message} == 'GeoIP blocked')", geoipStatus))
-	}
-	expression := strings.Join(clauses, " || ")
+	// 全部 coraza 命中（CRS/自定义/IP ACL/GeoIP 地域拦截）恒以 403 +
+	// "interruption triggered" 中断，共用本子句 → 品牌拦截页按策略配置状态码
+	// 渲染（v2.2.0 GeoIP 改走 coraza 后不再有独立的 "GeoIP blocked" 中断形态，
+	// 逐策略 geoip 状态码并集子句随之移除）。
+	expression := "({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')"
 	return map[string]interface{}{
 		"match": []interface{}{
 			map[string]interface{}{
@@ -2865,7 +2844,9 @@ func buildGeoipPassRoute(domainHosts []string, policy *models.SecurityPolicy) ma
 }
 
 // geoipPrivateRanges 内网/回环/链路本地 CIDR 集合。这些地址无法经 ip2region 解析到国家，
-// fail-closed 会将其误判为“海外”而拦截，故在 GeoIP 拦截链中一律放行（无论 deny/allow 模式）。
+// fail-closed 会将其误判为“海外”而拦截，故在 GeoIP 拦截中一律放行（无论 deny/allow 模式）。
+// v2.2.0 地域拦截改走 coraza 后由 BuildCorazaDirectives 的 GeoIP SecRule 链首
+// REMOTE_ADDR !@ipMatch 引用（语义不变）。
 // ::ffff: 前缀条目仅为 IPv4 映射的私网/回环/链路本地地址（双栈 RemoteAddr 的 16 字节形态），
 // 而非整个 ::ffff:0:0/96 映射空间——否则公网映射地址（如 ::ffff:8.8.8.8）也会被误放行。
 var geoipPrivateRanges = []string{
@@ -2882,75 +2863,6 @@ var geoipPrivateRanges = []string{
 	"::1/128",                // IPv6 回环
 	"fc00::/7",               // IPv6 唯一本地地址 (ULA)
 	"fe80::/10",              // IPv6 链路本地
-}
-
-// buildGeoipBlockRoute returns a terminal error route for matched (deny) or non-matched (allow)
-// regions. statusCode 为策略拦截状态码（block_status_code 非零时取之，否则 403），与
-// buildBlockPageErrorRoute 的匹配表达式保持一致，从而复用品牌拦截页。
-func buildGeoipBlockRoute(rule SingleRuleConfig, policy *models.SecurityPolicy, statusCode int) map[string]interface{} {
-	if !PolicyHasGeoIP(policy) {
-		return nil
-	}
-	expr := buildGeoipMatchExpression(policy)
-	if expr == "" {
-		return nil
-	}
-	// Caddy match 数组语义：数组内各元素是“集合”，集合之间按 OR 组合；同一集合内的
-	// 各匹配器（host/expression/not）按 AND 组合。内网放行（not remote_ip in 内网）
-	// 必须并入 host/expression 所在的同一集合：若拆成第二个集合，集合间 OR 会让
-	// “非内网”对公网请求恒为真，导致 GeoIP 开启即拦截全部公网流量（内网放行意图
-	// 也一并失效）。三者 AND 后，仅当 host 命中且表达式命中且非内网时才会拦截。
-	return map[string]interface{}{
-		"match": []interface{}{
-			map[string]interface{}{
-				"host":       splitAndTrim(rule.Domain),
-				"expression": expr,
-				"not": []interface{}{
-					map[string]interface{}{
-						"remote_ip": map[string]interface{}{
-							"ranges": geoipPrivateRanges,
-						},
-					},
-				},
-			},
-		},
-		"handle": []interface{}{
-			map[string]interface{}{
-				"handler":     "error",
-				"status_code": statusCode,
-				"error":       "GeoIP blocked",
-			},
-		},
-		"terminal": true,
-	}
-}
-
-// buildGeoipMatchExpression compiles geoip countries into a CEL expression over placeholders.
-func buildGeoipMatchExpression(policy *models.SecurityPolicy) string {
-	countries := geoipCountries(policy)
-	if len(countries) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(countries))
-	for _, country := range countries {
-		if country == "海外" {
-			parts = append(parts, `{http.vars.geoip.country_name} != "中国"`)
-			continue
-		}
-		// R72 二十三次（用户裁决：区域精确到市）：「省/市」条目 = 省省+市联合
-		// 匹配（防跨省重名城市误伤，如多地「朝阳区」）；纯省名 = 整省（存量
-		// 策略零迁移）。
-		if province, city, found := strings.Cut(country, "/"); found {
-			parts = append(parts, fmt.Sprintf(`({http.vars.geoip.province} == %q && {http.vars.geoip.city} == %q)`, province, city))
-			continue
-		}
-		parts = append(parts, fmt.Sprintf(`{http.vars.geoip.province} == %q`, country))
-	}
-	expr := strings.Join(parts, " || ")
-	if policy.GeoIPMode == "allow" {
-		expr = "!(" + expr + ")"
-	}
-	return expr
 }
 
 func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, securityCtx ...*securityPolicyContext) ([]interface{}, error) {

@@ -577,7 +577,6 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	}
 
-
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置已更新并应用", Data: plan})
 }
 

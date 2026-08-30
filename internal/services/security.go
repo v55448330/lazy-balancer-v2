@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -144,7 +145,9 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) str
 
 	// IP-level control (ACL / trust list / legacy bypass & blacklist) runs
 	// independently of the WAF mode so that "关闭 WAF" never disables IP control.
+	// GeoIP 地域拦截同阵营（v2.2.0 改走 coraza 后必须有引擎才能评估）。
 	emitIPControl := len(ipWL) > 0 || len(ipBL) > 0 || (p.IPACLEnabled && len(ipACLList) > 0)
+	geoipActive := len(geoipCountries(p)) > 0
 	customRules := resolvePolicyCustomRules(p.CustomRules, store)
 	hasCustomRules := false
 	for _, cr := range customRules {
@@ -167,8 +170,8 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) str
 		// 仅 phase:2 可读），而 DetectionOnly ctl 是事务级指令持续到 phase:2——
 		// 该类规则在检测模式下仅记录不阻断（见 emitCustomRules 相位说明）。
 		sb.WriteString("SecRuleEngine On\n")
-	case emitIPControl || hasCustomRules:
-		// WAF (CRS) off, but IP control / custom rules still need the engine.
+	case emitIPControl || hasCustomRules || geoipActive:
+		// WAF (CRS) off, but IP control / custom rules / GeoIP still need the engine.
 		sb.WriteString("SecRuleEngine On\n")
 	default:
 		return ""
@@ -182,9 +185,11 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) str
 	sb.WriteString("SecAuditEngine RelevantOnly\nSecAuditLog /app/waf/audit/audit.log\nSecAuditLogFormat JSON\nSecAuditLogParts ABIJDEFHKZ\n")
 
 	// SecRule id map: 2 = ACL allow/deny, 3 = bypass-mode (legacy), 4 = legacy
-	// blacklist, 5 = trust list. The trust list keeps the historical id:3 unless
-	// a bypass-mode rule already owns it. ctl:ruleEngine=Off short-circuits are
-	// emitted first so bypassed and trusted clients never reach the ACL denies.
+	// blacklist, 5 = trust list, 8 = GeoIP 地域拦截. The trust list keeps the
+	// historical id:3 unless a bypass-mode rule already owns it. ctl:ruleEngine=Off
+	// short-circuits are emitted first so bypassed and trusted clients never reach
+	// the ACL denies（信任/免检测名单因此也跳过 GeoIP 规则——「跳过检查」语义
+	// 随 v2.2.0 GeoIP 并入 coraza 一并覆盖地域拦截）.
 	bypassEmitted := false
 	if p.IPACLEnabled && p.IPACLMode == "bypass" && len(ipACLList) > 0 {
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off\"\n", strings.Join(ipACLList, ",")))
@@ -209,6 +214,21 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) str
 	}
 	if len(ipBL) > 0 {
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:4,phase:1,deny,status:403,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", strings.Join(ipBL, ",")))
+	}
+
+	// GeoIP 区域拦截（v2.2.0 改走 coraza：被拦请求产生 audit.log → 安全事件
+	// 管线 → 总览/事件日志可统计。此前走 Caddy 原生路由（CEL+static_response）
+	// 完全绕过 coraza，事件盲区）。caddygeoip pass route 先执行并剥离客户端
+	// 伪造头、设置 X-GeoIP-Loc（海外/省/省-市 规范键），coraza 在 phase:1
+	// 读取该头匹配策略 geoip_countries 列表（geoipLocOperator 编译）。
+	// 链首 REMOTE_ADDR !@ipMatch 内网段保留「内网放行」语义（geoipPrivateRanges
+	// 与既有拦截链同款）。deny 不带 status：coraza 默认 403 + "interruption
+	// triggered" → 策略 errors.routes → 拦截页按配置状态码渲染（与自定义规则
+	// 拦截统一口径）；无拦截页时回落 Caddy 默认 403 页。检测/关闭模式下仍强制
+	// 生效（规则先于 DetectionOnly 切换发出，mode=off 由上方 switch 门保引擎）。
+	if geoCountries := geoipCountries(p); len(geoCountries) > 0 {
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:8,phase:1,deny,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain\"\n", strings.Join(geoipPrivateRanges, ",")))
+		sb.WriteString(fmt.Sprintf(" SecRule REQUEST_HEADERS:X-GeoIP-Loc \"%s\" \"t:none\"\n", escapeCorazaPattern(geoipLocOperator(geoCountries, p.GeoIPMode == "allow"))))
 	}
 
 	emitCustomRules(&sb, customRules)
@@ -280,6 +300,35 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) str
 	sb.WriteString("SecMarker SECURITY_RULES_END\n")
 
 	return sb.String()
+}
+
+// geoipLocOverseas 是 X-GeoIP-Loc 的海外哨兵值：caddygeoip 对国家列非「中国」
+// （含空/0/海外国名，fail-closed）的客户端发射此值。
+const geoipLocOverseas = "海外"
+
+// geoipLocOperator 把策略 geoip_countries 条目编译为 REQUEST_HEADERS:X-GeoIP-Loc
+// 的 coraza 匹配算子。锚定正则（^(?:...)$）做全值匹配：X-GeoIP-Loc 的空串形态
+// （国内段省份不可解析）恒不命中（deny 模式不误伤）；allow 模式取反后空串反向
+// 命中 → 拦截（fail-closed，与既有 CEL 语义逐案等价）。条目形态与
+// caddygeoip 发射的 X-GeoIP-Loc 同构：海外 → 字面「海外」；省 → 整省，附加
+// (?:/.*)? 使省内城市段（省/市 形态）同样命中；省/市 → 精确省市联值。
+// 条目经 QuoteMeta 转义——集群同步/历史行可携带绕过校验的特殊字符，未转义会
+// 注入正则元字符（ReDoS/越权匹配）。
+func geoipLocOperator(countries []string, allowMode bool) string {
+	alts := make([]string, 0, len(countries))
+	for _, entry := range countries {
+		quoted := regexp.QuoteMeta(entry)
+		if entry == geoipLocOverseas || strings.Contains(entry, "/") {
+			alts = append(alts, quoted)
+			continue
+		}
+		alts = append(alts, quoted+"(?:/.*)?")
+	}
+	op := "@rx ^(?:" + strings.Join(alts, "|") + ")$"
+	if allowMode {
+		return "!" + op
+	}
+	return op
 }
 
 // customRuleTargets / customRuleOperators 是自定义规则条件允许的目标与运算符
@@ -511,9 +560,10 @@ func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy
 
 // ipPrecheckAllowRuleID 是多策略 IP 预检中 allow 模式（白名单交集外拒绝）规则
 // 的 SecRule id。本地 id 空间：2=ACL deny、3=bypass/trust、4=遗留黑名单、5=trust
-// （bypass 占 3 时）、6=DetectionOnly 切换、900=异常分阈值；7 专用于预检 allow
-// 规则（预检内 deny 并集沿用 id:2、黑名单并集沿用 id:4，保持 security events
-// 归因口径；allow 模式事件本就回退归到首启用策略，id:7 不改变归因结果）。
+// （bypass 占 3 时）、6=DetectionOnly 切换、8=GeoIP 地域拦截（BuildCorazaDirectives
+// 内，不在预检）、900=异常分阈值；7 专用于预检 allow 规则（预检内 deny 并集沿用
+// id:2、黑名单并集沿用 id:4，保持 security events 归因口径；allow 模式事件本就
+// 回退归到首启用策略，id:7 不改变归因结果）。
 const ipPrecheckAllowRuleID = 7
 
 // intersectIPLists 返回多个名单的交集（保持首名单出现顺序）；空集返回 nil。

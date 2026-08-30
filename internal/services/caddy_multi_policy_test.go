@@ -9,10 +9,11 @@ import (
 
 // SC-GEN-01..05（v2.2.0 多策略绑定 · Caddy 生成路径）：一条 LB 规则可绑定至多
 // 5 条安全策略，评估顺序 = policy_id ASC；每策略的 [rate_limit?, waf?] 处理器组
-// 按序编入规则主路由。geoip pass 路由至多一条（任一启用策略带 geoip 即存在），
-// geoip block 路由每带 geoip 的启用策略一条（ASC）；错误路由取首绑定（最低
-// policy_id）启用策略的拦截页，匹配表达式覆盖 403 WAF 中断与全部绑定启用策略的
-// geoip 拦截状态码并集；disabled 策略在生成中零贡献。
+// 按序编入规则主路由。geoip pass 路由至多一条（任一启用策略带 geoip 即存在，
+// 为下游 coraza 的 GeoIP SecRule 设置 X-GeoIP-* headers；地域拦截在各自策略的
+// waf directives 内评估，无 Caddy 原生 block 路由）；错误路由取首绑定（最低
+// policy_id）启用策略的拦截页，匹配表达式只含统一 403 interruption 子句；
+// disabled 策略在生成中零贡献。
 
 // mpGenPolicySpec 描述一条待播种策略的生成相关字段（未列字段走表默认值）。
 type mpGenPolicySpec struct {
@@ -126,21 +127,9 @@ func mpCountGeoipPassRoutes(t *testing.T, routes []map[string]interface{}) int {
 	return count
 }
 
-// mpGeoipBlockRoutes 收集 geoip block 路由（唯一处理器为 error）。
-func mpGeoipBlockRoutes(t *testing.T, routes []map[string]interface{}) []map[string]interface{} {
-	t.Helper()
-	var blocks []map[string]interface{}
-	for _, route := range routes {
-		names := handlerNames(t, route)
-		if len(names) == 1 && names[0] == "error" {
-			blocks = append(blocks, route)
-		}
-	}
-	return blocks
-}
-
-// SC-GEN-01：路由顺序 = geoipPass(≤1) → geoipBlock×k（policy_id ASC）→ pathRoutes
-// → main；主路由处理器链按绑定启用策略 ASC 依次编入各策略的 [rate_limit?, waf?]。
+// SC-GEN-01：路由顺序 = geoipPass(≤1) → pathRoutes → main；主路由处理器链按
+// 绑定启用策略 ASC 依次编入各策略的 [rate_limit?, waf?]（v2.2.0 地域拦截改走
+// coraza：mode=off + geoip 的策略也贡献 waf 处理器，GeoIP SecRule 在其内评估）。
 func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 	// Given 一条规则绑定三条启用策略（绑定顺序故意打乱，验证按 policy_id ASC）：
 	// p1(off+geoip) < p2(blocking+限流) < p3(detection+geoip)
@@ -165,54 +154,57 @@ func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 	// When
 	routes, mainRoute := mpGenRoutes(t, database, rule)
 
-	// Then 顺序：pass → block(p1) → block(p3) → path → main
-	if len(routes) != 5 {
-		t.Fatalf("want 5 routes (pass+2 geoip blocks+path+main), got %d: %#v", len(routes), routes)
+	// Then 顺序：pass → path → main（地域拦截改走 coraza，无逐策略 block 路由）
+	if len(routes) != 3 {
+		t.Fatalf("want 3 routes (pass+path+main), got %d: %#v", len(routes), routes)
 	}
 	if names := handlerNames(t, routes[0]); len(names) != 1 || names[0] != "geoip2region" {
 		t.Fatalf("routes[0] handlers=%v, want geoip pass route", names)
 	}
-	blocks := mpGeoipBlockRoutes(t, routes)
-	if len(blocks) != 2 {
-		t.Fatalf("want 2 geoip block routes (one per geoip policy), got %d", len(blocks))
+	for _, route := range routes {
+		for _, name := range handlerNames(t, route) {
+			if name == "error" {
+				t.Fatalf("native geoip block route must not be emitted: %#v", route)
+			}
+		}
 	}
-	expr1 := routeMatcher(t, blocks[0])["expression"]
-	expr3 := routeMatcher(t, blocks[1])["expression"]
-	if expr1 != `{http.vars.geoip.country_name} != "中国"` {
-		t.Fatalf("first block route expression=%v, want p1 海外（policy_id ASC 在前）", expr1)
+	// routes[1] = path 路由，routes[2] = 主路由
+	if _, hasPath := routeMatcher(t, routes[1])["path"]; !hasPath {
+		t.Fatalf("routes[1] must be the path route: %#v", routes[1])
 	}
-	if expr3 != `{http.vars.geoip.province} == "江苏"` {
-		t.Fatalf("second block route expression=%v, want p3 江苏", expr3)
-	}
-	// block 路由必须紧邻 pass 路由之后（在 path 路由之前）
-	if routes[1]["handle"] == nil || handlerNames(t, routes[1])[0] != "error" || handlerNames(t, routes[2])[0] != "error" {
-		t.Fatalf("routes[1..2] must be the geoip block routes: %#v", routes)
-	}
-	// routes[3] = path 路由，routes[4] = 主路由
-	if _, hasPath := routeMatcher(t, routes[3])["path"]; !hasPath {
-		t.Fatalf("routes[3] must be the path route: %#v", routes[3])
-	}
-	if _, hasPath := routeMatcher(t, routes[4])["path"]; hasPath {
-		t.Fatalf("routes[4] must be the main route (no path matcher): %#v", routes[4])
+	if _, hasPath := routeMatcher(t, routes[2])["path"]; hasPath {
+		t.Fatalf("routes[2] must be the main route (no path matcher): %#v", routes[2])
 	}
 
-	// 主路由处理器链：p1(off) 无贡献；p2 → rate_limit + waf(blocking)；
-	// p3 → waf(detection)；随后 reverse_proxy。
+	// 主路由处理器链：p1(off+geoip) → waf（仅 GeoIP SecRule）；p2 → rate_limit +
+	// waf(blocking)；p3 → waf(detection，含 GeoIP)；随后 reverse_proxy。
 	names := handlerNames(t, mainRoute)
-	if len(names) < 4 || names[0] != "rate_limit" || names[1] != "waf" || names[2] != "waf" {
-		t.Fatalf("main chain=%v, want [rate_limit, waf, waf, ..., reverse_proxy]", names)
+	if len(names) < 5 || names[0] != "waf" || names[1] != "rate_limit" || names[2] != "waf" || names[3] != "waf" {
+		t.Fatalf("main chain=%v, want [waf(p1 geoip), rate_limit(p2), waf(p2), waf(p3), ..., reverse_proxy]", names)
 	}
 	if names[len(names)-1] != "reverse_proxy" {
 		t.Fatalf("main chain last handler=%v, want reverse_proxy", names)
 	}
 	handlers, _ := mainRoute["handle"].([]interface{})
-	firstWaf := mustMap(t, handlers[1], "first waf handler")["directives"].(string)
-	secondWaf := mustMap(t, handlers[2], "second waf handler")["directives"].(string)
-	if !strings.Contains(firstWaf, "SecRuleEngine On") || strings.Contains(firstWaf, "DetectionOnly") {
-		t.Fatalf("first waf must be p2 blocking directives, got: %.200s", firstWaf)
+	p1Waf := mustMap(t, handlers[0], "p1 geoip-only waf")["directives"].(string)
+	p2Waf := mustMap(t, handlers[2], "p2 waf handler")["directives"].(string)
+	p3Waf := mustMap(t, handlers[3], "p3 waf handler")["directives"].(string)
+	// p1：WAF 关闭但地域拦截强制生效——引擎 On + 海外 GeoIP 规则，无 CRS Include
+	if !strings.Contains(p1Waf, "SecRuleEngine On") || strings.Contains(p1Waf, "Include ") {
+		t.Fatalf("p1 waf must be geoip-only directives, got: %.200s", p1Waf)
 	}
-	if !strings.Contains(secondWaf, "DetectionOnly") {
-		t.Fatalf("second waf must be p3 detection directives, got: %.200s", secondWaf)
+	if !strings.Contains(p1Waf, `msg:'GeoIP 区域拦截'`) || !strings.Contains(p1Waf, `@rx ^(?:海外)$`) {
+		t.Fatalf("p1 waf must carry the overseas geoip rule:\n%s", p1Waf)
+	}
+	if !strings.Contains(p2Waf, "SecRuleEngine On") || strings.Contains(p2Waf, "DetectionOnly") {
+		t.Fatalf("p2 waf must be blocking directives, got: %.200s", p2Waf)
+	}
+	// p3：检测模式 + 江苏 GeoIP 规则（先于 DetectionOnly 切换 → 仍阻断）
+	if !strings.Contains(p3Waf, "DetectionOnly") {
+		t.Fatalf("p3 waf must be detection directives, got: %.200s", p3Waf)
+	}
+	if !strings.Contains(p3Waf, `msg:'GeoIP 区域拦截'`) || !strings.Contains(p3Waf, `江苏(?:/.*)?`) {
+		t.Fatalf("p3 waf must carry the Jiangsu geoip rule:\n%s", p3Waf)
 	}
 	// geoip 处理器只能出现在 pass 路由，主链不得重复
 	for _, name := range names {
@@ -283,9 +275,9 @@ func mapKeys(m map[string]interface{}) []string {
 }
 
 // SC-GEN-03：geoip pass 路由存在 ⟺ 至少一条绑定启用策略带 geoip；多条 geoip
-// 策略时 pass 路由仍至多一条。
+// 策略时 pass 路由仍至多一条（地域拦截改走各自策略的 coraza directives）。
 func TestMultiPolicy_GeoipPassRoute_ExistsIffAnyEnabledPolicyHasGeoIP(t *testing.T) {
-	// Given 情形 A：唯一绑定启用策略无 geoip → 无 pass/block 路由
+	// Given 情形 A：唯一绑定启用策略无 geoip → 无 pass 路由
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_gen3a", "gen3a.example.test", 8080)
 	mpGenBindPolicy(t, database, "lb_gen3a", "gen3a-plain", mpGenPolicySpec{mode: "blocking", enabled: true})
@@ -301,7 +293,7 @@ func TestMultiPolicy_GeoipPassRoute_ExistsIffAnyEnabledPolicyHasGeoIP(t *testing
 		t.Fatalf("no-geoip rule: pass routes=%d, want 0", count)
 	}
 
-	// Given 情形 B：两条启用策略都带 geoip → 恰好一条 pass 路由 + 两条 block 路由
+	// Given 情形 B：两条启用策略都带 geoip → 恰好一条 pass 路由（无 block 路由）
 	seedHTTPRuleForGeneration(t, database, "lb_gen3b", "gen3b.example.test", 8080)
 	mpGenBindPolicy(t, database, "lb_gen3b", "gen3b-p1", mpGenPolicySpec{
 		mode: "off", enabled: true, geoCountries: `["海外"]`,
@@ -317,13 +309,18 @@ func TestMultiPolicy_GeoipPassRoute_ExistsIffAnyEnabledPolicyHasGeoIP(t *testing
 	if count := mpCountGeoipPassRoutes(t, routesB); count != 1 {
 		t.Fatalf("two geoip policies: pass routes=%d, want exactly 1", count)
 	}
-	if blocks := mpGeoipBlockRoutes(t, routesB); len(blocks) != 2 {
-		t.Fatalf("two geoip policies: block routes=%d, want 2", len(blocks))
+	for _, route := range routesB {
+		for _, name := range handlerNames(t, route) {
+			if name == "error" {
+				t.Fatalf("native geoip block route must not be emitted: %#v", route)
+			}
+		}
 	}
 }
 
 // SC-GEN-04：错误路由使用首绑定（最低 policy_id）启用策略的拦截页；匹配表达式
-// 覆盖 403 WAF 中断 + 全部绑定启用策略的 geoip 拦截状态码并集。
+// 只含统一 403 interruption 子句（全部 coraza 命中——CRS/自定义/IP ACL/GeoIP——
+// 同一中断形态）。
 func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T) {
 	// Given p1(geoip 451+page7) < p2(geoip 503+page8+限流)
 	useTemporaryCertDir(t)
@@ -369,10 +366,9 @@ func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T
 	handler := firstHandler(t, blockPageRoute)
 	assertEqual(t, handler["body"], "<html>first-block</html>")
 	assertEqual(t, handler["status_code"], 451)
-	// 匹配表达式：403 WAF 中断 + p1(451) 与 p2(503) 的 geoip 状态码并集（ASC 顺序）
-	wantExpr := "({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')" +
-		" || ({http.error.status_code} == 451 && {http.error.message} == 'GeoIP blocked')" +
-		" || ({http.error.status_code} == 503 && {http.error.message} == 'GeoIP blocked')"
+	// 匹配表达式只剩统一 403 interruption 子句——v2.2.0 GeoIP 改走 coraza 后
+	// 地域拦截与 CRS/自定义/IP ACL 同一中断形态（"GeoIP blocked" 子句已消亡）
+	wantExpr := "({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')"
 	assertEqual(t, routeMatcher(t, blockPageRoute)["expression"], wantExpr)
 	// 限流错误路由同样使用首绑定策略的拦截页
 	rlHandler := firstHandler(t, rateLimitRoute)
