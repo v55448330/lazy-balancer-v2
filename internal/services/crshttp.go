@@ -17,6 +17,10 @@ import (
 
 var crsHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+// crsDownloadClient 无 Client.Timeout——大 tarball 下载仅由 ctx 兜底，
+// 避免 30s 短路读 body（50KB/s × 2-3MB ≈ 40-60s 常态超越）。tag 查询用原 client。
+var crsDownloadClient = &http.Client{}
+
 // ruleSetDownloadSizeCap 是 CRS/ip2region 下载的最大字节数（2GB）：代理在超时
 // 窗口内可无限流式灌入，无界 io.Copy 会写爆数据卷 staging 目录（R34 A）。
 const ruleSetDownloadSizeCap = int64(2 << 30)
@@ -206,7 +210,7 @@ const crsRepoSlug = "coreruleset/coreruleset"
 var crsLatestReleaseAPIURL = "https://api.github.com/repos/coreruleset/coreruleset/releases/latest"
 
 // defaultFetchCRSLatestTag 查询 CRS 最新版本：先直连 api.github.com（快路径不
-// 变），仅在传输类失败（Do() 错误、5xx、读体中断）时经 ghfast 代理回退查询
+// 变），仅在传输类失败（Do() 错误、5xx、读体中断）时经 GitHub 代理回退查询
 // （api.github.com 不可代理，verified 403）；4xx 与 tag 解析失败不重试。两路
 // 均失败时错误同时点名两个尝试过的 URL（R57）。
 func defaultFetchCRSLatestTag(ctx context.Context) (string, error) {
@@ -231,7 +235,7 @@ func defaultDownloadCRSTarball(ctx context.Context, tag, destPath string, progre
 	if err != nil {
 		return err
 	}
-	resp, err := crsHTTPClient.Do(req)
+	resp, err := crsDownloadClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -255,7 +259,7 @@ func defaultDownloadCRSTarball(ctx context.Context, tag, destPath string, progre
 }
 
 // gitHubReleasesLatestURL 是仓库 releases/latest 页面地址：GitHub 会 302 跳转
-// 到 /releases/tag/{最新 tag}，经 ghfast 代理即可绕过 api.github.com 不可代理
+// 到 /releases/tag/{最新 tag}，经 GitHub 代理即可绕过 api.github.com 不可代理
 // 的限制查询最新版本（R57）。
 func gitHubReleasesLatestURL(repoSlug string) string {
 	return "https://github.com/" + repoSlug + "/releases/latest"
@@ -266,7 +270,7 @@ const ghLatestTagBodyLimit = int64(1 << 20)
 
 var ghLatestTagInBodyRegexp = regexp.MustCompile(`/releases/tag/([^"'/]+)`)
 
-// fetchGitHubLatestTagViaProxy 经 ghfast 代理查询 repoSlug 的最新 release tag
+// fetchGitHubLatestTagViaProxy 经 GitHub 代理查询 repoSlug 的最新 release tag
 // （R57）：GET 代理后的 releases/latest，用 CheckRedirect 捕获首个 Location
 // （302 → /releases/tag/{tag}）而不跟随；代理直接返回 200 页面（无跳转）时改
 // 从响应体（≤1MB）正则提取首个 /releases/tag/ 出现。
@@ -325,7 +329,7 @@ func parseGitHubTagFromLocation(location string) (string, error) {
 
 // fetchGitHubLatestTagFromAPI 直连 GitHub releases/latest API 解析 tag_name。
 // transport 报告失败是否为网络/传输类（Do() 错误、5xx、响应体读取中断）——
-// 只有这类失败值得经 ghfast 代理重试；4xx（含限流 403）与 tag 解析失败不重
+// 只有这类失败值得经 GitHub 代理重试；4xx（含限流 403）与 tag 解析失败不重
 // 试（R57：代理对 api.github.com 同样 403，重试只会放大延迟）。
 func fetchGitHubLatestTagFromAPI(ctx context.Context, client *http.Client, apiURL string) (string, error, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)

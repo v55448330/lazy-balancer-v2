@@ -10,6 +10,11 @@ import (
 
 var ip2RegionHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
+// ip2RegionDownloadClient 无 Client.Timeout——大文件下载仅由 ctx 15min 兜底，
+// 避免 Client.Timeout 60s 短路读 body（50KB/s × 11MB ≈ 220s 必死）。
+// tag 查询继续用 ip2RegionHTTPClient（轻请求需快速失败）。
+var ip2RegionDownloadClient = &http.Client{}
+
 // ip2RegionRepoSlug 是 ip2region 的 GitHub 仓库标识：直连 API 与代理
 // releases/latest 共用。
 const ip2RegionRepoSlug = "lionsoul2014/ip2region"
@@ -58,7 +63,7 @@ func defaultDownloadIP2RegionXDB(ctx context.Context, tag, destPath string, prog
 	if err != nil {
 		return err
 	}
-	resp, err := ip2RegionHTTPClient.Do(req)
+	resp, err := ip2RegionDownloadClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("下载 ip2region xdb: %w", err)
 	}

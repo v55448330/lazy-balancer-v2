@@ -388,14 +388,14 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 		COALESCE(acme_email,''), COALESCE(cert_expiry_days,30), COALESCE(cert_renewal_days,30), COALESCE(cert_renewal_attempts,5),
 		COALESCE(default_ca_provider_id,0), COALESCE(dns_provider,''), COALESCE(dns_credentials,''), COALESCE(sync_interval,60),
 		COALESCE(admin_tls_enabled,0), COALESCE(admin_tls_mode,'selfsigned'), COALESCE(admin_tls_cert,''), COALESCE(admin_tls_key,''),
-		COALESCE(mfa_write_guard,0), COALESCE(mfa_lockout_enabled,0)
+		COALESCE(mfa_write_guard,0), COALESCE(mfa_lockout_enabled,0), COALESCE(github_proxy_url,'https://v4.gh-proxy.org/')
 		FROM global_config WHERE id=1`).Scan(&snapshot.Version, &syncCaddy, &caddyConfig,
 		&snapshot.BasicSettings.LogLevel,
 		&snapshot.BasicSettings.CertJobLogSizeMB, &snapshot.BasicSettings.AuditLogSizeMB, &snapshot.BasicSettings.RuntimeLogSizeMB, &snapshot.BasicSettings.AuditRetentionMonths, &snapshot.BasicSettings.JWTExpireMinutes, &snapshot.BasicSettings.Timezone,
 		&snapshot.BasicSettings.ACMEEmail, &snapshot.BasicSettings.CertExpiryDays, &snapshot.BasicSettings.CertRenewalDays, &snapshot.BasicSettings.CertRenewalAttempts,
 		&snapshot.BasicSettings.DefaultCAProviderID, &snapshot.BasicSettings.DNSProvider, &snapshot.BasicSettings.DNSCredentials, &snapshot.BasicSettings.SyncInterval,
 		&snapshot.BasicSettings.AdminTLSEnabled, &snapshot.BasicSettings.AdminTLSMode, &snapshot.BasicSettings.AdminTLSCert, &snapshot.BasicSettings.AdminTLSKey,
-		&snapshot.BasicSettings.MFAWriteGuard, &snapshot.BasicSettings.MFALockoutEnabled)
+		&snapshot.BasicSettings.MFAWriteGuard, &snapshot.BasicSettings.MFALockoutEnabled, &snapshot.BasicSettings.GitHubProxyURL)
 	if err != nil {
 		return models.ClusterSnapshot{}, fmt.Errorf("读取集群基础设置: %w", err)
 	}

@@ -187,6 +187,7 @@ type ClusterBasicSettings struct {
 	ProxyStreamTimeout         int    `json:"proxy_stream_timeout,omitempty"`
 	ProxyFlushInterval         int    `json:"proxy_flush_interval,omitempty"`
 	ProxyStreamCloseDelay      int    `json:"proxy_stream_close_delay,omitempty"`
+	GitHubProxyURL             string `json:"github_proxy_url,omitempty"`
 	ServerTokensHidden         bool   `json:"server_tokens_hidden,omitempty"`
 	AdminTLSEnabled            bool   `json:"admin_tls_enabled,omitempty"`
 	AdminTLSMode               string `json:"admin_tls_mode,omitempty"`
