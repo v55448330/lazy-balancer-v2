@@ -63,6 +63,17 @@
             </el-select>
             <el-text type="info" size="small" class="tip-block">影响日志时间戳与证书时间；标注夏令时的时区会随夏令时自动偏移；仅 Caddy 日志需重启服务生效</el-text>
           </el-form-item>
+          <el-form-item label="GitHub 加速">
+            <el-select v-model="githubProxyUrl" style="width: 200px">
+              <el-option
+                v-for="option in githubProxyOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+            <el-text type="info" size="small" class="tip-inline">CRS 规则库与 IP2Region IP 库下载使用的 GitHub 代理加速地址</el-text>
+          </el-form-item>
           <el-form-item label="写操作验证">
             <el-switch v-model="settings.mfa_write_guard" />
             <el-text type="info" size="small" class="tip-inline">写操作需 1 分钟内的 MFA 验证</el-text>
@@ -523,7 +534,23 @@ interface BasicSettingsConfig {
   timezone: string
   mfa_write_guard: boolean
   mfa_lockout_enabled: boolean
+  // 可选：父级 Settings.vue 的 SettingsConfig 尚未声明此键（vue-tsc 模板检查
+  // 要求父类型可赋值给本接口），由下方 computed 兜底默认值
+  github_proxy_url?: string
 }
+
+// GitHub 加速代理固定选项（CRS / IP2Region 下载）
+interface GithubProxyOption {
+  label: string
+  value: string
+}
+
+const DEFAULT_GITHUB_PROXY_URL = 'https://v4.gh-proxy.org/'
+const githubProxyOptions: GithubProxyOption[] = [
+  { label: 'Cloudflare (v4)', value: 'https://v4.gh-proxy.org/' },
+  { label: 'AxisNow (v4)', value: 'https://axisnow.gh-proxy.org/' },
+  { label: 'Fastly (v4)', value: 'https://cdn.gh-proxy.org/' },
+]
 
 interface ConfigPreviewResponse {
   data?: {
@@ -562,6 +589,26 @@ const settings = defineModel<BasicSettingsConfig>('settings', { required: true }
 const emit = defineEmits<{
   (e: 'save'): void
 }>()
+
+// 未加载/后端未返回该键时兜底为默认代理，避免 select 显示空值
+const githubProxyUrl = computed<string>({
+  get: () => settings.value.github_proxy_url || DEFAULT_GITHUB_PROXY_URL,
+  set: (value: string) => {
+    settings.value.github_proxy_url = value
+  },
+})
+
+// 父级 Settings.vue 的 applyBasicKeys 仅合并其已知键，此键由本卡片自行拉取回填
+// （同 loadAdminTls 先例），保证整页刷新后已保存的非默认代理不回落为默认值
+const loadGithubProxyUrl = async (): Promise<void> => {
+  try {
+    const res = await request.get<{ data?: { github_proxy_url?: string } }>('/config')
+    settings.value.github_proxy_url = res.data?.github_proxy_url || DEFAULT_GITHUB_PROXY_URL
+  } catch {
+    // 拉取失败保持默认值，保存时仍会提交当前选择
+  }
+}
+loadGithubProxyUrl()
 
 const saving = ref(false)
 
@@ -745,6 +792,7 @@ const handleSave = async () => {
       timezone: settings.value.timezone,
       mfa_write_guard: settings.value.mfa_write_guard,
       mfa_lockout_enabled: settings.value.mfa_lockout_enabled,
+      github_proxy_url: githubProxyUrl.value,
       source: 'basic',
     }
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
