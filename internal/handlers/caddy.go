@@ -621,6 +621,8 @@ func (h *Handlers) ReloadCaddy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置重载失败: " + err.Error()})
 		return
 	}
+	// I-K（第 14 轮审计）：手动重载成功同样需要留痕（69d809b4 曾误删本行）。
+	recordAudit(c, "重载", "Caddy服务", "手动重载 Caddy 配置")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "Caddy 配置已重载"})
 }
 

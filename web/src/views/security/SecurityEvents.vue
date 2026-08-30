@@ -129,6 +129,7 @@ const triggeredLabel = (row: SecurityEvent): string => {
   const t = row.rule_triggered
   if (!t) return '—'
   if (t === '2' || t === '3' || t === '4' || t === '5') return 'IP 访问控制'
+  if (t === '8') return '地域拦截'
   if (/^949/.test(t)) return '请求阻断评估'
   if (/^920/.test(t)) return '协议异常'
   if (/^921/.test(t)) return '协议攻击'

@@ -301,6 +301,14 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 		return false
 	}
 	switch {
+	case n == 8:
+		// GeoIP 拦截（id:8）：策略须携带 geoip 条目才拥有此事件——
+		// 否则多策略绑定时归因回退到首启用策略（与 id:2 allow 模式同族）。
+		var geoCountries []string
+		if err := json.Unmarshal(policy.GeoIPCountries, &geoCountries); err != nil {
+			return false
+		}
+		return len(geoCountries) > 0
 	case n == 4:
 		var blacklist []string
 		if err := json.Unmarshal(policy.IPBlacklist, &blacklist); err != nil {
