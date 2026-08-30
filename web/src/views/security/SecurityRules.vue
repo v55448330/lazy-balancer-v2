@@ -42,7 +42,7 @@
       </el-descriptions>
       <el-descriptions :column="3" border class="ip2region-desc">
         <el-descriptions-item label="IP 库版本"><span class="version-cell">{{ ip2regionVersionLabel }}</span></el-descriptions-item>
-        <el-descriptions-item label="IP 规则数">{{ ip2regionInfo.db_size && ip2regionInfo.version && ip2regionInfo.version !== 'unknown' ? ip2regionInfo.db_size.toLocaleString() : '—' }}</el-descriptions-item>
+        <el-descriptions-item label="IP 规则数">{{ ip2regionInfo.db_size && ip2regionInfo.version && ip2regionInfo.version !== 'unknown' && ip2regionInfo.version !== 'bundled' ? ip2regionInfo.db_size.toLocaleString() : '—' }}</el-descriptions-item>
         <el-descriptions-item label="更新时间">{{ formatDate(ip2regionInfo.updated_at) || '—' }}</el-descriptions-item>
         <el-descriptions-item label="自动更新">
           <div class="crs-cell-flex">
@@ -360,10 +360,10 @@ const ip2regionStatusTagType = (s: string): 'success' | 'warning' | 'danger' | '
   return 'info'
 }
 const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', next_update: '', update_status: '', message: '' })
-const ip2regionVersionLabel = computed(() =>
-  (ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown') ? ip2regionInfo.value.version : '未安装',
-)
-// unknown/空版本统一显示「未安装」（灰），结构上与正常态同一 tag 元素。
+const ip2regionVersionLabel = computed(() => {
+  if (ip2regionInfo.value.version === 'bundled') return '内置版本（未更新）'
+  return (ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown') ? ip2regionInfo.value.version : '未安装'
+})// unknown/空版本统一显示「未安装」（灰），结构上与正常态同一 tag 元素。
 const ip2regionStatusForTag = computed(() => {
   const v = ip2regionInfo.value.version
   if (!v || v === 'unknown') return 'not-installed'

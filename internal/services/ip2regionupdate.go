@@ -355,7 +355,7 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	staged := filepath.Join(stagingDir, "ip2region_v4.xdb")
 	if err := m.downloadXDBLogged(ctx, tag, staged); err != nil {
