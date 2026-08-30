@@ -48,8 +48,8 @@ func TestBuildCorazaDirectives_BypassAndTrustListUseDistinctIDs(t *testing.T) {
 
 	// Then the bypass rule keeps id:3 with the ACL list and the trust list moves to
 	// id:5, so both ctl:ruleEngine=Off rules coexist without a duplicate SecRule id
-	bypassRule := `SecRule REMOTE_ADDR "@ipMatch 203.0.113.0/24,192.0.2.7" "id:3,phase:1,pass,nolog,ctl:ruleEngine=Off"`
-	trustRule := `SecRule REMOTE_ADDR "@ipMatch 198.51.100.9" "id:5,phase:1,pass,nolog,ctl:ruleEngine=Off"`
+	bypassRule := `SecRule REMOTE_ADDR "@ipMatch 203.0.113.0/24,192.0.2.7" "id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off"`
+	trustRule := `SecRule REMOTE_ADDR "@ipMatch 198.51.100.9" "id:5,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off"`
 	if !strings.Contains(directives, bypassRule) {
 		t.Fatalf("directives missing bypass rule %q:\n%s", bypassRule, directives)
 	}
@@ -82,12 +82,12 @@ func TestBuildCorazaDirectives_TrustListPrecedesACLRules(t *testing.T) {
 
 	// Then the trust-list rule takes id:3 (no bypass rule present) and the
 	// ctl:ruleEngine=Off short-circuit is emitted before the ACL deny rule
-	trustRule := `SecRule REMOTE_ADDR "@ipMatch 198.51.100.9" "id:3,phase:1,pass,nolog,ctl:ruleEngine=Off"`
+	trustRule := `SecRule REMOTE_ADDR "@ipMatch 198.51.100.9" "id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off"`
 	aclRule := `SecRule REMOTE_ADDR "!@ipMatch 203.0.113.0/24" "id:2,phase:1,deny,status:403`
 	if !strings.Contains(directives, trustRule) {
 		t.Fatalf("directives missing trust-list rule %q:\n%s", trustRule, directives)
 	}
-	trustIdx := strings.Index(directives, "ctl:ruleEngine=Off")
+	trustIdx := strings.Index(directives, "ctl:ruleEngine=Off,ctl:auditEngine=Off")
 	aclIdx := strings.Index(directives, aclRule)
 	if trustIdx < 0 || aclIdx < 0 {
 		t.Fatalf("directives must contain both the ctl short-circuit and the ACL rule:\n%s", directives)

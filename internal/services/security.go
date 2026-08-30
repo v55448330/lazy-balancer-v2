@@ -187,7 +187,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) str
 	// emitted first so bypassed and trusted clients never reach the ACL denies.
 	bypassEmitted := false
 	if p.IPACLEnabled && p.IPACLMode == "bypass" && len(ipACLList) > 0 {
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:3,phase:1,pass,nolog,ctl:ruleEngine=Off\"\n", strings.Join(ipACLList, ",")))
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off\"\n", strings.Join(ipACLList, ",")))
 		bypassEmitted = true
 	}
 	if len(ipWL) > 0 {
@@ -195,7 +195,10 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) str
 		if bypassEmitted {
 			trustID = 5
 		}
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:%d,phase:1,pass,nolog,ctl:ruleEngine=Off\"\n", strings.Join(ipWL, ","), trustID))
+		// ctl:auditEngine=Off 同步关闭审计引擎——规则引擎关闭后 SecAuditEngine
+		// 仍会记录该事务到 audit.log（审计引擎独立于规则引擎），摄入管线拾取
+		// 后误产信任 IP 的检测事件。两 ctl 并用才能让信任 IP 完全静默。
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:%d,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off\"\n", strings.Join(ipWL, ","), trustID))
 	}
 	if p.IPACLEnabled && len(ipACLList) > 0 {
 		if p.IPACLMode == "allow" {
