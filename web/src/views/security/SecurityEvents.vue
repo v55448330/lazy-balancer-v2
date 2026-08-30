@@ -77,7 +77,7 @@
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="客户端 IP" min-width="200">
+        <el-table-column label="客户端 IP" min-width="170">
           <template #default="{ row }">
             <IPLocationAction :ip="row.client_ip" :location="row.ip_location" />
           </template>

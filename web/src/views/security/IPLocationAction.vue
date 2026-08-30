@@ -1,9 +1,9 @@
 <template>
   <el-popover v-if="canManage" :width="400" trigger="click" popper-class="ip-location-popper" @show="loadPolicies">
     <template #reference>
-      <span class="ip-cell" title="点击加入策略名单">
+      <span class="ip-cell ip-clickable" :title="location ? `${ip} · ${location}` : ip">
         <span class="ip-text">{{ ip }}</span>
-        <span v-if="location" class="ip-loc">📍 {{ location }}</span>
+        <span v-if="location" class="ip-loc" :title="location">{{ compactLocation }}</span>
       </span>
     </template>
 
@@ -28,9 +28,9 @@
     <div v-else class="ipo-tip">暂无启用的安全策略</div>
   </el-popover>
 
-  <span v-else class="ip-cell">
+  <span v-else class="ip-cell" :title="location ? `${ip} · ${location}` : ip">
     <span class="ip-text">{{ ip }}</span>
-    <span v-if="location" class="ip-loc">📍 {{ location }}</span>
+    <span v-if="location" class="ip-loc" :title="location">{{ compactLocation }}</span>
   </span>
 </template>
 
@@ -65,6 +65,16 @@ const kindLabels: Record<ListKind, string> = {
 }
 
 const props = defineProps<{ ip: string; location: string }>()
+
+// 紧凑归属地：截取前两段（如「广东·深圳」），弹窗/悬浮显示完整
+const compactLocation = computed(() => {
+  if (!props.location) return ''
+  const parts = props.location.split('·').map(s => s.trim()).filter(Boolean)
+  if (parts.length <= 2) return parts.join('·')
+  // 国内取省+市（跳过国家前缀），海外取国家+首城市
+  const start = parts[0] === '中国' || parts[0] === '海外' ? 1 : 0
+  return parts.slice(start, start + 2).join('·')
+})
 
 const authStore = useAuthStore()
 // 仅主节点管理员可操作（从节点/非管理员只展示 IP 与归属地）——与全局只读口径一致
@@ -163,9 +173,13 @@ const addTo = async (policy: PolicySummary, kind: ListKind): Promise<void> => {
 </script>
 
 <style scoped>
-.ip-cell { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+.ip-cell { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; vertical-align: middle; }
+.ip-clickable { cursor: pointer; border-radius: 3px; padding: 1px 3px; margin: -1px -3px; transition: background 0.15s, color 0.15s; }
+.ip-clickable:hover { background: var(--el-color-primary-light-9, #ecf5ff); }
+.ip-clickable:hover .ip-text { color: var(--el-color-primary, #409eff); }
+.ip-clickable:active { background: var(--el-color-primary-light-8, #d9ecff); }
 .ip-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.ip-loc { font-size: 12px; color: var(--text-secondary, #909399); white-space: nowrap; }
+.ip-loc { font-size: 11px; color: var(--text-secondary, #909399); white-space: nowrap; max-width: 72px; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
 </style>
 
 <style>
