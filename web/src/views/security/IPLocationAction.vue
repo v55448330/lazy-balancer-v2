@@ -64,7 +64,7 @@ const kindLabels: Record<ListKind, string> = {
   trust: '信任名单',
 }
 
-const props = defineProps<{ ip: string; location: string }>()
+const props = defineProps<{ ip: string; location: string; ruleCaddyId?: string }>()
 
 // 紧凑归属地：截取前两段（如「广东·深圳」），弹窗/悬浮显示完整
 const compactLocation = computed(() => {
@@ -89,7 +89,10 @@ const loadPolicies = async (): Promise<void> => {
   if (policiesLoading.value) return
   policiesLoading.value = true
   try {
-    const res = await request.get<APIResponse<PolicySummary[]>>('/security/policies?enabled=true')
+    const url = props.ruleCaddyId
+      ? `/security/policies?enabled=true&rule_caddy_id=${encodeURIComponent(props.ruleCaddyId)}`
+      : '/security/policies?enabled=true'
+    const res = await request.get<APIResponse<PolicySummary[]>>(url)
     policies.value = (res.data || []).map((p) => ({ id: p.id, name: p.name }))
     policiesError.value = false
   } catch {

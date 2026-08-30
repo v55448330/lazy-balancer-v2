@@ -79,7 +79,7 @@
         </el-table-column>
         <el-table-column label="客户端 IP" min-width="170">
           <template #default="{ row }">
-            <IPLocationAction :ip="row.client_ip" :location="row.ip_location" />
+            <IPLocationAction :ip="row.client_ip" :location="row.ip_location" :rule-caddy-id="row.rule_caddy_id" />
           </template>
         </el-table-column>
         <el-table-column prop="method" label="方法" width="70" align="center" />

@@ -444,11 +444,21 @@ const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESC
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	query := `SELECT ` + securityPolicySelectColumns + ` FROM security_policies`
+	conditions := []string{}
+	args := []any{}
 	if enabled := c.Query("enabled"); enabled == "true" || enabled == "1" {
-		query += " WHERE enabled=1"
+		conditions = append(conditions, "enabled=1")
+	}
+	// 按关联规则过滤（IP 归属地弹窗使用：只列出绑定到该规则的策略）
+	if ruleCaddyID := c.Query("rule_caddy_id"); ruleCaddyID != "" {
+		conditions = append(conditions, `id IN (SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=?)`)
+		args = append(args, ruleCaddyID)
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 	query += " ORDER BY id"
-	rows, err := db.DB.Query(query)
+	rows, err := db.DB.Query(query, args...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
