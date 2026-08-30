@@ -390,13 +390,28 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 		// CRS v4 blocking evaluation reads tx.inbound_anomaly_score_pl1..4 —
 		// never the legacy tx.anomaly_score.
 		// 默认动作 pass（放行计分）：记录事件并向异常分累加。
-		action := fmt.Sprintf("pass,log,setvar:tx.inbound_anomaly_score_pl1=+%d,msg:'自定义规则 %s 命中'", cr.Score, safeName)
+		scoreVar := fmt.Sprintf("setvar:tx.inbound_anomaly_score_pl1=+%d", cr.Score)
+		action := fmt.Sprintf("pass,log,%s,msg:'自定义规则 %s 命中'", scoreVar, safeName)
 		if cr.Action == "block" {
 			// 统一所有拦截走 coraza 默认 403 → 策略 errors.routes → 拦截页面配置的状态码
-			action = fmt.Sprintf("deny,log,setvar:tx.inbound_anomaly_score_pl1=+%d,msg:'自定义规则 %s 命中',skipAfter:SECURITY_RULES_END", cr.Score, safeName)
+			action = fmt.Sprintf("deny,log,%s,msg:'自定义规则 %s 命中',skipAfter:SECURITY_RULES_END", scoreVar, safeName)
 		} else if cr.Action == "log" {
 			// 仅记录：不累加异常分，避免在拦截/检测模式下因该规则误伤。
 			action = fmt.Sprintf("pass,log,msg:'自定义规则 %s 命中'", safeName)
+		}
+		// N15-F1：多条件链式规则的 setvar 绑定到链条末条。coraza v3 在单条规则
+		// 算子命中时立即执行其非破坏性动作（internal/corazawaf/rule.go matchVariable
+		// 「We run non-disruptive actions even if there is no chain match」）——
+		// 起始条命中而后续条件未命中时链条整体不匹配，但起始条上的 setvar 已把
+		// 异常分累加进事务（幽灵异常分 → 可能触发 949 误拦）。末条命中即整条链
+		// 命中，分数只在链整体匹配时累加；deny/skipAfter 是破坏性/流控动作，
+		// coraza 仅在整条链匹配后才执行，留在起始条无泄漏。单条件规则起始条即
+		// 末条，发射形状不变。
+		starterAction := action
+		tailVar := ""
+		if len(cr.Conditions) > 1 && cr.Action != "log" {
+			starterAction = strings.Replace(action, scoreVar+",", "", 1)
+			tailVar = "," + scoreVar
 		}
 		// 相位选择：任一条件以请求体为目标时整条链发射 phase:2（REQUEST_BODY 仅在
 		// phase:2 可读，phase:1 发射的 body 规则永远不匹配）；其余一律 phase:1，保持
@@ -414,9 +429,12 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 				// 链上所有条目共用同一相位（coraza 以起始条相位执行整条链）
 				var actions string
 				if idx == 0 {
-					actions = fmt.Sprintf("id:%d,phase:%d,%s", emitID, phase, action)
+					actions = fmt.Sprintf("id:%d,phase:%d,%s", emitID, phase, starterAction)
 				} else {
 					actions = fmt.Sprintf("phase:%d", phase)
+				}
+				if idx == len(cr.Conditions)-1 {
+					actions += tailVar
 				}
 				if idx < len(cr.Conditions)-1 {
 					actions += ",chain"

@@ -2065,7 +2065,7 @@ func TestBuildCorazaDirectives_chainedCustomRuleCarriesActionsOnlyOnStarter(t *t
 	lines := strings.Split(directives, "\n")
 	var chainLines []string
 	for _, line := range lines {
-		if strings.Contains(line, "id:10007") || (strings.Contains(line, "SecRule") && strings.Contains(line, "phase:1") && strings.Contains(line, "chain")) || strings.Contains(line, `"phase:1"`) {
+		if strings.Contains(line, "id:10007") || (strings.Contains(line, "SecRule") && strings.Contains(line, "phase:1")) {
 			chainLines = append(chainLines, line)
 		}
 	}
@@ -2074,6 +2074,11 @@ func TestBuildCorazaDirectives_chainedCustomRuleCarriesActionsOnlyOnStarter(t *t
 	}
 	if !strings.Contains(chainLines[0], "id:10007") || !strings.Contains(chainLines[0], "deny") || !strings.Contains(chainLines[0], ",chain") {
 		t.Fatalf("starter must carry id+disruptive+chain: %s", chainLines[0])
+	}
+	// N15-F1：多条件链的 setvar 挪到末条——起始条命中而后续条件未命中时
+	// coraza 已执行起始条非破坏性动作，起始条携带 setvar 会泄漏幽灵异常分。
+	if strings.Contains(chainLines[0], "setvar:") {
+		t.Fatalf("starter must not carry setvar (leaks on failed chain, N15-F1): %s", chainLines[0])
 	}
 	for i, line := range chainLines[1:] {
 		if strings.Contains(line, "deny") || strings.Contains(line, "msg:") || strings.Contains(line, "id:") {
@@ -2085,6 +2090,9 @@ func TestBuildCorazaDirectives_chainedCustomRuleCarriesActionsOnlyOnStarter(t *t
 	}
 	if strings.Contains(chainLines[2], ",chain") {
 		t.Fatalf("final rule must not carry chain: %s", chainLines[2])
+	}
+	if !strings.Contains(chainLines[2], "setvar:tx.inbound_anomaly_score_pl1=+0") {
+		t.Fatalf("final rule must carry the setvar tail (N15-F1): %s", chainLines[2])
 	}
 }
 
