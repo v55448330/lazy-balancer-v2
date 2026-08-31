@@ -107,6 +107,10 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/security/block-pages":                   AuditPolicyExplicit,
 	"PUT /api/v1/security/block-pages/:id":                AuditPolicyExplicit,
 	"DELETE /api/v1/security/block-pages/:id":             AuditPolicyExplicit,
+	"POST /api/v1/security/ip-lists":                      AuditPolicyExplicit,
+	"PUT /api/v1/security/ip-lists/:id":                   AuditPolicyExplicit,
+	"DELETE /api/v1/security/ip-lists/:id":                AuditPolicyExplicit,
+	"POST /api/v1/security/ip-lists/:id/ips":              AuditPolicyExplicit,
 }
 
 var readOnlyWriteRoutes = map[string]struct{}{
@@ -213,7 +217,11 @@ func HasExplicitAuditEvent(method, path string) bool {
 		"DELETE /api/v1/security/custom-rules/:id",
 		"POST /api/v1/security/block-pages",
 		"PUT /api/v1/security/block-pages/:id",
-		"DELETE /api/v1/security/block-pages/:id":
+		"DELETE /api/v1/security/block-pages/:id",
+		"POST /api/v1/security/ip-lists",
+		"PUT /api/v1/security/ip-lists/:id",
+		"DELETE /api/v1/security/ip-lists/:id",
+		"POST /api/v1/security/ip-lists/:id/ips":
 		return true
 	default:
 		return false

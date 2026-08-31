@@ -485,6 +485,22 @@ func createTables() error {
 			'<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access Denied</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f9fafb;display:flex;align-items:center;justify-content:center;min-height:100vh}.card{background:#fff;border-radius:12px;padding:48px 40px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.08);max-width:640px;width:95%}.icon{font-size:48px;margin-bottom:16px}h1{font-size:24px;color:#1f2937;margin-bottom:12px}p{font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:8px}.footer{margin-top:24px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af}.footer .name{font-weight:600;color:#4b5563}</style></head><body><div class="card"><div class="icon">🚫</div><h1>Access Denied</h1><p>Your request has been blocked by the security policy.</p><p>If you believe this is an error, please contact the administrator.</p><div class="footer">Powered by <span class="name">Lazy Balancer</span></div></div></body></html>',
 			TRUE, datetime('now'), datetime('now'));
 
+	-- 可复用 IP 地址列表（v2.3.0）：条目为 {value, remark} 对象数组；策略经
+	-- ip_acl_list_refs / ip_whitelist_refs 以 ID 数组引用，生成期展开为
+	-- inline ∪ 引用条目（去重、inline 优先）。时间戳列与 security_policies
+	-- 同款 TEXT 形态（不用 block_pages 的 DATETIME 默认值，保持 NULL/'' 容忍）。
+	CREATE TABLE IF NOT EXISTS security_ip_lists (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL,
+		description TEXT DEFAULT '',
+		category TEXT DEFAULT '',
+		entries TEXT DEFAULT '[]',
+		created_by INTEGER DEFAULT 0,
+		created_at TEXT DEFAULT '',
+		updated_by INTEGER DEFAULT 0,
+		updated_at TEXT DEFAULT ''
+	);
+
 	CREATE TABLE IF NOT EXISTS security_policies (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL,
@@ -510,7 +526,9 @@ func createTables() error {
 		updated_at DATETIME DEFAULT (datetime('now')),
 		geoip_countries TEXT DEFAULT '[]',
 		geoip_mode TEXT DEFAULT 'deny',
-		waf_check_response INTEGER DEFAULT 0
+		waf_check_response INTEGER DEFAULT 0,
+		ip_acl_list_refs TEXT DEFAULT '[]',
+		ip_whitelist_refs TEXT DEFAULT '[]'
 	);
 	CREATE TABLE IF NOT EXISTS security_policy_bindings (
 		rule_caddy_id TEXT NOT NULL,
@@ -762,6 +780,10 @@ func runMigrations() error {
 		"security_policies.geoip_mode":         "TEXT DEFAULT 'deny'",
 		"security_policies.waf_check_response": "INTEGER DEFAULT 0",
 		"security_policies.block_status_code":  "INTEGER DEFAULT 0",
+		// 可复用 IP 列表引用列（v2.3.0）：JSON 数组文本，存 security_ip_lists 的
+		// id 列表；同样刻意可空——读路径一律 COALESCE(...,'[]') 归一（同上四列口径）。
+		"security_policies.ip_acl_list_refs":   "TEXT DEFAULT '[]'",
+		"security_policies.ip_whitelist_refs":  "TEXT DEFAULT '[]'",
 	}
 	// R42 F1: 四个全局超时列的 0→推荐默认回填只在「新增列」时执行一次——
 	// 历史存量行在新列 ADD 后恰好为 0，才是真正需要回填的场景；渲染层把 0 当作

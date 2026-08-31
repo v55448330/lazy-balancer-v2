@@ -429,7 +429,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 }
 
 // securityPolicySelectColumns 是 ListSecurityPolicies/GetSecurityPolicy 共用的
-// 25 表达式投影：与生成路径的 24 表达式 COALESCE 投影逐列同默认值、同相对顺序
+// 27 表达式投影：与生成路径的 26 表达式 COALESCE 投影逐列同默认值、同相对顺序
 // （canonical 副本：internal/services/security.go scanSecurityPolicyByID、
 // internal/services/caddy.go loadSecurityPolicyContext 批量预载）。services/ 归
 // 并行任务持有且两侧列集本就不同，此处按既定回退方案保持 handlers 本地副本——
@@ -440,7 +440,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 //     WHERE 过滤，NULL-enabled 行须按 schema 默认呈现启用态；生成路径以
 //     WHERE enabled=1 守卫，NULL 行本就被过滤，故裸列即可。
 const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
-	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0)`
+	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]')`
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	query := `SELECT ` + securityPolicySelectColumns + ` FROM security_policies`
@@ -519,6 +519,8 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			GeoIPCountries:   rawJSONString(p.GeoIPCountries),
 			GeoIPMode:        p.GeoIPMode,
 			WAFCheckResponse: p.WAFCheckResponse,
+			IPACLListRefs:    p.IPACLListRefs,
+			IPWhitelistRefs:  p.IPWhitelistRefs,
 		})
 	}
 	if policies == nil {
@@ -573,9 +575,11 @@ func (h *Handlers) GetSecurityPolicy(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"policy": newSecurityPolicyDetail(&p), "bindings": bindings}})
 }
 
-// policyQueryRower 抽象 *sql.DB 与 *sql.Tx 的单行查询，供引用校验在写事务内执行
-// （R38 三-3：校验+写入同事务，镜像 R37 I1 的删除侧事务）。
+// policyQueryRower 抽象 *sql.DB 与 *sql.Tx 的查询能力，供引用校验在写事务内执行
+// （R38 三-3：校验+写入同事务，镜像 R37 I1 的删除侧事务）。Query 供
+// IP 列表引用的批量 IN 存在性检查（单次查询判定整批 id）。
 type policyQueryRower interface {
+	Query(query string, args ...any) (*sql.Rows, error)
 	QueryRow(query string, args ...any) *sql.Row
 }
 
@@ -655,6 +659,12 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if req.GeoIPCountries == "" {
 		req.GeoIPCountries = "[]"
 	}
+	if req.IPACLListRefs == "" {
+		req.IPACLListRefs = "[]"
+	}
+	if req.IPWhitelistRefs == "" {
+		req.IPWhitelistRefs = "[]"
+	}
 	if req.GeoIPMode == "" {
 		req.GeoIPMode = "deny"
 	}
@@ -689,6 +699,16 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	aclRefsIDs, err := parseIPListRefsPayload("ip_acl_list_refs", &req.IPACLListRefs)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	wlRefsIDs, err := parseIPListRefsPayload("ip_whitelist_refs", &req.IPWhitelistRefs)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		return
+	}
 	// 引用校验与写入必须同事务（R38 三-3，R37 I1 的镜像方向）：校验通过后、
 	// INSERT 之前并发的 DeleteSecurityCustomRule/DeleteSecurityBlockPage 提交（此时
 	// 尚无启用策略引用，删除合法）会让写入的启用策略携带悬空引用，发射端仅日志
@@ -708,15 +728,22 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
 		return
 	}
+	if msg, err := validateIPListRefsExistence(tx, aclRefsIDs, wlRefsIDs); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	} else if msg != "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
+		return
+	}
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
 	result, err := tx.ExecContext(c.Request.Context(), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, waf_check_response, updated_by)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, waf_check_response, ip_acl_list_refs, ip_whitelist_refs, updated_by)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, req.IPBlacklist,
-		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, req.WAFCheckResponse, getContextUserIDInt(c))
+		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, req.WAFCheckResponse, req.IPACLListRefs, req.IPWhitelistRefs, getContextUserIDInt(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -838,11 +865,30 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	}
 	// 显式空串按 Create 口径归一为 "[]"，保持列形状一致，避免库内 "" 与 "[]"
 	// 并存（Create 在 :411-419 归一，custom_rules 在下方同口径归一）。
-	for _, val := range []**string{&req.IPACLList, &req.IPWhitelist, &req.IPBlacklist} {
+	for _, val := range []**string{&req.IPACLList, &req.IPWhitelist, &req.IPBlacklist, &req.IPACLListRefs, &req.IPWhitelistRefs} {
 		if *val != nil && strings.TrimSpace(**val) == "" {
 			empty := "[]"
 			*val = &empty
 		}
+	}
+	var aclRefsIDs, wlRefsIDs []int64
+	for _, f := range []struct {
+		name string
+		val  *string
+		ids  *[]int64
+	}{
+		{"ip_acl_list_refs", req.IPACLListRefs, &aclRefsIDs},
+		{"ip_whitelist_refs", req.IPWhitelistRefs, &wlRefsIDs},
+	} {
+		if f.val == nil {
+			continue
+		}
+		ids, err := parseIPListRefsPayload(f.name, f.val)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+		*f.ids = ids
 	}
 	// 显式空串会把枚举列清空：mode 为 "" 时汇总口径（mode!="off" 即计入 WAF）
 	// 与发射口径（仅 blocking/detection 生效）随即漂移；geoip_mode 在创建时已
@@ -944,6 +990,14 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
 		return
 	}
+	// 引用的 IP 地址列表同口径存在性校验（悬空 id → 400，仅校验显式提供的字段）。
+	if msg, err := validateIPListRefsExistence(tx, aclRefsIDs, wlRefsIDs); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	} else if msg != "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
+		return
+	}
 	// R63 B-N1：重启用悬空引用门——仅含 {enabled:true} 的部分更新（REST 文档明示
 	// 「只提交需要修改的字段」）不携带 block_page_id/custom_rules，derefInt/derefStr
 	// 零值使上面的校验整体短路；禁用期间被删除的规则/拦截页（删除门只拦 enabled=1
@@ -952,8 +1006,8 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// 同一校验器；写锁已持（BEGIN IMMEDIATE），无 TOCTOU。
 	if req.Enabled != nil && *req.Enabled {
 		var storedBlockPageID int
-		var storedCustomRules string
-		if err := tx.QueryRow("SELECT COALESCE(block_page_id,0), COALESCE(custom_rules,'[]') FROM security_policies WHERE id=?", id).Scan(&storedBlockPageID, &storedCustomRules); err != nil {
+		var storedCustomRules, storedACLRefs, storedWLRefs string
+		if err := tx.QueryRow("SELECT COALESCE(block_page_id,0), COALESCE(custom_rules,'[]'), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]') FROM security_policies WHERE id=?", id).Scan(&storedBlockPageID, &storedCustomRules, &storedACLRefs, &storedWLRefs); err != nil {
 			// R64 B-S1：策略不存在时归因 404（与下方 RowsAffected 分支同语义），
 			// 其余读取错误保持 500——否则调用方无法区分「应停止重试」与「应重试」。
 			if errors.Is(err, sql.ErrNoRows) {
@@ -972,6 +1026,22 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			effectiveCustomRules = storedCustomRules
 		}
 		if msg, err := validateSecurityPolicyReferences(tx, effectiveBlockPageID, effectiveCustomRules); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		} else if msg != "" {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
+			return
+		}
+		// IP 列表引用同口径：显式值 ?? 存量值的有效形态过同一校验器（禁用期间
+		// 被删除的列表不得随重启用静默悬空）。
+		effectiveACLRefs, effectiveWLRefs := aclRefsIDs, wlRefsIDs
+		if req.IPACLListRefs == nil {
+			effectiveACLRefs = parseIPListRefsIDs(storedACLRefs)
+		}
+		if req.IPWhitelistRefs == nil {
+			effectiveWLRefs = parseIPListRefsIDs(storedWLRefs)
+		}
+		if msg, err := validateIPListRefsExistence(tx, effectiveACLRefs, effectiveWLRefs); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
 		} else if msg != "" {
@@ -1032,6 +1102,8 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addStr("geoip_countries", req.GeoIPCountries)
 	addStr("geoip_mode", req.GeoIPMode)
 	addBool("waf_check_response", req.WAFCheckResponse)
+	addStr("ip_acl_list_refs", req.IPACLListRefs)
+	addStr("ip_whitelist_refs", req.IPWhitelistRefs)
 
 	if req.BlockPageID != nil {
 		query += ", block_page_id=?"
@@ -1077,6 +1149,12 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	}
 	if req.IPBlacklist != nil {
 		changedFields = append(changedFields, fmt.Sprintf("旧版黑名单→%s", *req.IPBlacklist))
+	}
+	if req.IPACLListRefs != nil {
+		changedFields = append(changedFields, fmt.Sprintf("ACL 列表引用→%s", *req.IPACLListRefs))
+	}
+	if req.IPWhitelistRefs != nil {
+		changedFields = append(changedFields, fmt.Sprintf("信任名单列表引用→%s", *req.IPWhitelistRefs))
 	}
 	if req.Name != nil {
 		changedFields = append(changedFields, fmt.Sprintf("名称→%s", *req.Name))
@@ -2139,7 +2217,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 func scanSecurityPolicyRow(row *sql.Row, p *models.SecurityPolicy) error {
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
 	if err := row.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse); err != nil {
+		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
 		return err
 	}
 	p.IPWhitelist = json.RawMessage(ipWhitelist)
@@ -2154,7 +2232,7 @@ func scanSecurityPolicyRow(row *sql.Row, p *models.SecurityPolicy) error {
 func scanSecurityPolicy(rows *sql.Rows, p *models.SecurityPolicy) error {
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
 	if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse); err != nil {
+		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
 		return err
 	}
 	p.IPWhitelist = json.RawMessage(ipWhitelist)
@@ -2205,6 +2283,8 @@ type securityPolicyDetail struct {
 	GeoIPCountries   string `json:"geoip_countries"`
 	GeoIPMode        string `json:"geoip_mode"`
 	WAFCheckResponse bool   `json:"waf_check_response"`
+	IPACLListRefs    string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs  string `json:"ip_whitelist_refs"`
 }
 
 func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
@@ -2233,6 +2313,8 @@ func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 		GeoIPCountries:   rawJSONString(p.GeoIPCountries),
 		GeoIPMode:        p.GeoIPMode,
 		WAFCheckResponse: p.WAFCheckResponse,
+		IPACLListRefs:    p.IPACLListRefs,
+		IPWhitelistRefs:  p.IPWhitelistRefs,
 	}
 }
 
@@ -2301,14 +2383,22 @@ func validateIPCIDRList(field, raw string) error {
 		return fmt.Errorf("%s 必须是 JSON 数组", field)
 	}
 	for _, entry := range entries {
-		if _, err := netip.ParsePrefix(entry); err == nil {
-			continue
-		}
-		if _, err := netip.ParseAddr(entry); err != nil {
+		if !validIPOrCIDR(entry) {
 			return fmt.Errorf("%s 包含无效的 IP/CIDR 条目：%s", field, entry)
 		}
 	}
 	return nil
+}
+
+// validIPOrCIDR 是 IP/CIDR 条目的值级判定：接受 netip.ParsePrefix（CIDR）或
+// netip.ParseAddr（裸 IP）双形态。validateIPCIDRList 与 IP 地址列表条目校验
+// （securityiplists.go）共用，保证两处口径一致。
+func validIPOrCIDR(entry string) bool {
+	if _, err := netip.ParsePrefix(entry); err == nil {
+		return true
+	}
+	_, err := netip.ParseAddr(entry)
+	return err == nil
 }
 
 func getContextUserIDInt(c *gin.Context) int {

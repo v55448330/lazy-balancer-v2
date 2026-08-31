@@ -28,6 +28,15 @@ type SecurityPolicy struct {
 	GeoIPCountries   json.RawMessage `json:"geoip_countries"`
 	GeoIPMode        string          `json:"geoip_mode"`
 	WAFCheckResponse bool            `json:"waf_check_response"`
+	// IPACLListRefs / IPWhitelistRefs：引用的 security_ip_lists id 数组（JSON 文本，
+	// 与 IPACLList 同为原始 string 列、同扫描机制）。生成期与 inline 条目取并集。
+	IPACLListRefs   string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs string `json:"ip_whitelist_refs"`
+	// MergedACLList / MergedWhitelist 是生成期由策略加载路径附加的「inline ∪ 引用
+	// IP 列表条目」合并集（去重、inline 优先）；nil 表示该策略未经引用解析
+	//（无引用或非生成路径加载），发射端回退 inline-only。不参与 JSON 序列化。
+	MergedACLList   []string `json:"-"`
+	MergedWhitelist []string `json:"-"`
 }
 
 type SecurityPolicySummary struct {
@@ -61,6 +70,8 @@ type SecurityPolicySummary struct {
 	GeoIPCountries   string `json:"geoip_countries"`
 	GeoIPMode        string `json:"geoip_mode"`
 	WAFCheckResponse bool   `json:"waf_check_response"`
+	IPACLListRefs    string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs  string `json:"ip_whitelist_refs"`
 }
 
 type CreateSecurityPolicyRequest struct {
@@ -85,6 +96,8 @@ type CreateSecurityPolicyRequest struct {
 	GeoIPCountries   string `json:"geoip_countries"`
 	GeoIPMode        string `json:"geoip_mode"`
 	WAFCheckResponse bool   `json:"waf_check_response"`
+	IPACLListRefs    string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs  string `json:"ip_whitelist_refs"`
 }
 
 type UpdateSecurityPolicyRequest struct {
@@ -109,6 +122,8 @@ type UpdateSecurityPolicyRequest struct {
 	GeoIPCountries   *string `json:"geoip_countries"`
 	GeoIPMode        *string `json:"geoip_mode"`
 	WAFCheckResponse *bool   `json:"waf_check_response"`
+	IPACLListRefs    *string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs  *string `json:"ip_whitelist_refs"`
 }
 
 type SecurityEvent struct {
@@ -240,4 +255,44 @@ type SecurityBlockPage struct {
 	CreatedAt   string `json:"created_at"`
 	UpdatedBy   int    `json:"updated_by"`
 	UpdatedAt   string `json:"updated_at"`
+}
+
+// IPList 是可复用 IP 地址列表（security_ip_lists 行）：entries 为
+// IPListEntry 对象数组的 JSON 文本；策略经 ip_acl_list_refs /
+// ip_whitelist_refs 以 id 引用，生成期展开为 inline ∪ 引用条目。
+type IPList struct {
+	ID          int             `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Category    string          `json:"category"`
+	Entries     json.RawMessage `json:"entries"`
+	CreatedBy   int             `json:"created_by"`
+	CreatedAt   string          `json:"created_at"`
+	UpdatedBy   int             `json:"updated_by"`
+	UpdatedAt   string          `json:"updated_at"`
+}
+
+// IPListEntry 是 IP 地址列表的单个条目：value 必须是合法的 IP 或 CIDR
+// （netip.ParsePrefix / netip.ParseAddr 双形态），remark 为自由备注。
+type IPListEntry struct {
+	Value  string `json:"value"`
+	Remark string `json:"remark"`
+}
+
+type CreateIPListRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Category    string `json:"category"`
+	Entries     string `json:"entries"`
+}
+
+type UpdateIPListRequest struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+	Category    *string `json:"category"`
+	Entries     *string `json:"entries"`
+}
+
+type AddIPToListRequest struct {
+	Value string `json:"value"`
 }

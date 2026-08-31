@@ -24,10 +24,10 @@ func scanSecurityPolicyByID(policyID int) *models.SecurityPolicy {
 	var p models.SecurityPolicy
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
 	err := db.DB.QueryRow(`SELECT id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
-		COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0)
+		COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]')
 		FROM security_policies WHERE id=? AND enabled=1`, policyID).
 		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
-			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse)
+			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.IPACLListRefs, &p.IPWhitelistRefs)
 	if err != nil {
 		return nil
 	}
@@ -54,7 +54,13 @@ func GetSecurityPolicyForRule(ruleCaddyID string) *models.SecurityPolicy {
 	if err != nil {
 		return nil
 	}
-	return scanSecurityPolicyByID(policyID)
+	policy := scanSecurityPolicyByID(policyID)
+	if policy == nil {
+		return nil
+	}
+	// 引用的 IP 列表在此解析（单策略一次批量查询），发射端经 Merged* 消费。
+	resolvePolicyIPListRefs([]*models.SecurityPolicy{policy}, nil)
+	return policy
 }
 
 // GetSecurityPoliciesForRule returns all enabled policies bound to a rule,
@@ -82,6 +88,9 @@ func GetSecurityPoliciesForRule(ruleCaddyID string) []*models.SecurityPolicy {
 	if err := rows.Err(); err != nil {
 		return nil
 	}
+	// 批次引用解析：跨全部已加载策略收集列表 id，一次批量查询（预算：与策略数
+	// 无关的常数一次），合并集附加到各策略的 Merged* 字段供发射端消费。
+	resolvePolicyIPListRefs(policies, nil)
 	return policies
 }
 
@@ -138,12 +147,12 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) str
 	// 替换/手动改 overrides 后池键必须变化，否则新 Caddy 配置复用旧 WAF
 	//（旧规则静默继续生效）。
 	sb.WriteString(fmt.Sprintf("# crs-pool=%s\n", crsPoolFingerprint()))
-	var ipWL []string
-	json.Unmarshal(p.IPWhitelist, &ipWL)
+	// Merged* 为策略加载路径附加的「inline ∪ 引用 IP 列表条目」合并集；未经
+	// 解析的策略（直接构造/非生成路径）由 helper 回退 inline-only。
+	ipWL := mergedWhitelist(p)
 	var ipBL []string
 	json.Unmarshal(p.IPBlacklist, &ipBL)
-	var ipACLList []string
-	json.Unmarshal([]byte(p.IPACLList), &ipACLList)
+	ipACLList := mergedACLList(p)
 
 	// IP-level control (ACL / trust list / legacy bypass & blacklist) runs
 	// independently of the WAF mode so that "关闭 WAF" never disables IP control.
@@ -507,8 +516,9 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule) {
 // control, mirroring the emission condition in BuildCorazaDirectives: a
 // non-empty trust list (ip_whitelist) or legacy blacklist (ip_blacklist)
 // always applies, while the ACL list (allow/deny/bypass) only applies when
-// ip_acl_enabled is on. This keeps the summary from claiming a capability the
-// emission would never produce.
+// ip_acl_enabled is on. Referenced IP lists count the same as inline entries
+// (refs-only policies still advertise IP control)——仅解析 refs JSON 本身，
+// 无需加载数据库（摘要/绑定路径与生成路径同判定）。
 func SecurityPolicyHasIPControl(p *models.SecurityPolicy) bool {
 	if p == nil {
 		return false
@@ -520,12 +530,15 @@ func SecurityPolicyHasIPControl(p *models.SecurityPolicy) bool {
 	if len(ipWL) > 0 {
 		return true
 	}
+	if ipListRefsNonEmpty(p.IPWhitelistRefs) {
+		return true
+	}
 	var ipBL []string
 	json.Unmarshal(p.IPBlacklist, &ipBL)
 	if len(ipBL) > 0 {
 		return true
 	}
-	return p.IPACLEnabled && len(ipACLList) > 0
+	return p.IPACLEnabled && (len(ipACLList) > 0 || ipListRefsNonEmpty(p.IPACLListRefs))
 }
 
 // CountEnabledCustomRules returns how many of the policy's referenced custom
@@ -617,8 +630,7 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy) string {
 		if p == nil {
 			continue
 		}
-		var aclList []string
-		json.Unmarshal([]byte(p.IPACLList), &aclList)
+		aclList := mergedACLList(p)
 		if p.IPACLEnabled && len(aclList) > 0 {
 			switch p.IPACLMode {
 			case "deny":

@@ -859,8 +859,9 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 			       COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
 			       COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0),
 			       COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'),
-			COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''),
-			       COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0)
+		COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''),
+			       COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0),
+			       COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]')
 		FROM security_policies WHERE id IN (`+placeholders+`) AND enabled = 1`, args...)
 		if err != nil {
 			return nil, err
@@ -873,7 +874,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 				&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst,
 				&crsRuleGroups, &crsExcludedRules, &customRules,
 				&p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt,
-				&geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse); err != nil {
+				&geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
@@ -892,6 +893,13 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 		if err := rows.Close(); err != nil {
 			return nil, err
 		}
+		// 引用 IP 列表批量解析（与策略预载同一 store——事务内重插的列表行仅 tx
+		// 可见；跨整个批次一次查询，预算与策略数无关），合并集附加到各策略。
+		batch := make([]*models.SecurityPolicy, 0, len(policiesByID))
+		for _, policy := range policiesByID {
+			batch = append(batch, policy)
+		}
+		resolvePolicyIPListRefs(batch, store)
 	}
 	for ruleCaddyID, policyIDs := range rulePolicyIDs {
 		for _, policyID := range policyIDs {
