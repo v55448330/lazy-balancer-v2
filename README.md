@@ -78,8 +78,8 @@ Cluster roles are configured on the "System Settings → Cluster Management" pag
 Request processing chain (a block at any stage returns the configured status code and block page immediately):
 
 ```
-Inbound → GeoIP tagging → Rate limiting (per-IP rate + burst) → WAF (Coraza + CRS + custom rules)
-       → IP ACL → Request body size limit → Reverse proxy
+Inbound → IP precheck (multi-policy IP ACL merged, highest priority) → GeoIP tagging (Coraza in-chain region blocking) → Rate limiting (per-IP rate + burst) → WAF (Coraza + CRS + custom rules)
+        → Request body size limit → Reverse proxy
 ```
 
 | Component | Version |
@@ -89,7 +89,7 @@ Inbound → GeoIP tagging → Rate limiting (per-IP rate + burst) → WAF (Coraz
 | GeoIP database | IP2Region v3.17.0 (offline xdb, China province-level). 地域规则仅对 IPv4 生效：IPv6/不可解析客户端按「海外」处理（fail-closed）；IP 库未安装时地域规则不可启用 |
 | Rate limiting | caddy-ratelimit v0.1.0 |
 
-**Security policies** are managed as standalone entities bound to HTTP rules (one policy can bind multiple rules; one rule can bind up to 5 policies, evaluated in policy_id order with the first-bound policy's block page taking effect):
+**Security policies** are managed as standalone entities bound to HTTP rules (one policy can bind multiple rules; one rule can bind up to 5 policies, evaluated in policy_id order with the first-bound policy's block page taking effect). With multiple policies bound, deny-side IP controls from all policies are merged into a chain-head precheck — denied IPs are interrupted before any CRS/custom rule evaluation, without generating detection events from preceding policies:
 
 | Setting | Options |
 |---|---|
@@ -98,11 +98,11 @@ Inbound → GeoIP tagging → Rate limiting (per-IP rate + burst) → WAF (Coraz
 | CRS rule groups & exclusions | Load by attack-type group / exclude by file name |
 | Custom rules | Multi-condition chained matching on URI/args/headers/body/User-Agent (contains/regex/exact/prefix), with assignable scores |
 | IP access control | Allowlist (allow only) / blocklist (deny) / trusted list (skip inspection), CIDR |
-| Region control | Block selected regions / allow only selected regions, based on IP2Region |
+| Region control | Block selected regions / allow only selected regions, based on IP2Region (blocked requests generate security events via Coraza) |
 | Rate limiting | Per-IP rate cap plus burst allowance |
-| Block response | Custom HTML block page + status code (400/401/403/404/429/503, unified across WAF/IP ACL/rate limiting) |
+| Block response | Custom HTML block page + status code (400/401/403/404/429/503, unified across WAF/IP ACL/GeoIP/rate limiting) |
 
-**Security events**: WAF blocks (parsed from Coraza audit logs, covering CRS and custom rules) and IP ACL denials are collected automatically, with trend charts and TOP attack types / source IPs / regions; retention is shared with the operation log. Audit logs rotate automatically by size (default 10 MB × 5 files).
+**Security events**: WAF blocks (parsed from Coraza audit logs, covering CRS, custom rules, and GeoIP region blocks), IP ACL denials, and GeoIP region blocks are collected automatically, with trend charts and TOP attack types / source IPs (with geolocation display + one-click add to policy lists) / regions; retention is shared with the operation log. Audit logs rotate automatically by size (default 10 MB × 5 files). Client IPs in event logs and the security overview display IP2Region geolocation; clicking opens a popover to add the IP to any associated policy's blocklist/allowlist/trusted list (unified via IP ACL, with mode-switch guard and confirmation dialogs).
 
 **Rule set updates**: CRS and IP2Region support one-click manual updates and daily automatic updates (progress logged live, automatic rollback on failure, results recorded). Every successful update persists the rule tree (including user customization migration files) as a snapshot on the data volume; if a container rebuild rolls the disk state back, startup reconciliation restores it automatically.
 
