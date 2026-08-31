@@ -25,10 +25,14 @@ const validPages: ReadonlySet<string> = new Set(pages)
 const isPageId = (page: string): page is PageId => validPages.has(page)
 const queryPage = new URLSearchParams(location.search).get('page')
 const queryPageValid: PageId | null = queryPage && isPageId(queryPage) ? queryPage : null
+// URL hash 优先（刷新/多标签页/前进后退可靠）；localStorage 作为后备。
+const hashMatch = window.location.hash.match(/^#\/(.+)$/)
+const hashPage = hashMatch ? hashMatch[1] : null
 const storedCurrentPage = localStorage.getItem('currentPage')
 const initialCurrentPage: PageId =
   queryPageValid ??
-  (storedCurrentPage && isPageId(storedCurrentPage) ? storedCurrentPage : 'dashboard')
+  (hashPage && isPageId(hashPage) ? hashPage :
+   storedCurrentPage && isPageId(storedCurrentPage) ? storedCurrentPage : 'dashboard')
 if (!queryPageValid && storedCurrentPage !== initialCurrentPage) localStorage.setItem('currentPage', initialCurrentPage)
 
 interface AuthResponse {
@@ -214,6 +218,9 @@ export const useAuthStore = defineStore('auth', () => {
     if (!validPages.has(page)) return
     currentPage.value = page
     localStorage.setItem('currentPage', page)
+    if (window.location.hash !== `#/${page}`) {
+      window.history.replaceState(null, '', `#/${page}`)
+    }
   }
 
   function setNodeMode(mode: ClusterNodeMode) {
