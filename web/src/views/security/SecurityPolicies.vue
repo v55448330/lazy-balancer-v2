@@ -1322,6 +1322,17 @@ const wafStepCrsAlert = computed<string>(() => {
 // 显示层受 ipWhitelistEnabled 门控；ip_acl_list 仅 ip_acl_enabled 时生效（同
 // ipAclSideEntries）；ip_blacklist 非空即生效（无开关，但其警告随访问控制区
 // 显示，显示门控 form.ip_acl_enabled）。v1 仅精确字符串匹配，不展开 CIDR 包含。
+// 冲突条目来源标注：内联直接命中不标注；仅经引用列表带入的条目标注列表名，
+// 消除「地址不在访问控制名单（内联）却报冲突」的观感矛盾——引用即生效
+const entrySourceSuffix = (entry: string, inline: string[], refs: number[]): string => {
+  if (inline.includes(entry)) return ''
+  const names = refs
+    .map((id) => ipLists.value.find((l) => l.id === id))
+    .filter((l): l is IPListRefOption => !!l && l.entries.some((e) => e.value.trim() === entry))
+    .map((l) => `「${l.name}」`)
+  return names.length > 0 ? `（来自引用列表${names.join('、')}）` : ''
+}
+
 const aclSectionAlert = computed<string>(() => {
   const { peers } = comparisonContext.value
   const aclEnabled = form.value.ip_acl_enabled
@@ -1339,7 +1350,7 @@ const aclSectionAlert = computed<string>(() => {
       items.push(`地址 ${entry} 在「本策略」的访问控制名单中、同时在「${peer.name}」的黑名单中——允许不跨策略生效，该地址仍会被「${peer.name}」拦截`)
     }
     for (const entry of aclDeny.filter((e) => peer.allowEntries.includes(e))) {
-      items.push(`地址 ${entry} 在「本策略」的访问控制名单中、同时在「${peer.name}」的允许/信任名单中——允许/信任不跨策略生效，该地址仍会被「本策略」拦截`)
+      items.push(`地址 ${entry} 在「本策略」的访问控制名单中${entrySourceSuffix(entry, ipACLList.value, ipACLListRefs.value)}、同时在「${peer.name}」的允许/信任名单中——允许/信任不跨策略生效，该地址仍会被「本策略」拦截`)
     }
     for (const entry of blacklist.filter((e) => peer.allowEntries.includes(e))) {
       items.push(`地址 ${entry} 在「本策略」的黑名单中、同时在「${peer.name}」的允许/信任名单中——允许/信任不跨策略生效，该地址仍会被「本策略」拦截`)
@@ -1357,7 +1368,7 @@ const whitelistSectionAlert = computed<string>(() => {
   const items: string[] = []
   for (const peer of peers) {
     for (const entry of trust.filter((e) => peer.denyEntries.includes(e))) {
-      items.push(`地址 ${entry} 在「本策略」的信任名单中、同时在「${peer.name}」的黑名单中——信任不跨策略生效，该地址仍会被「${peer.name}」拦截`)
+      items.push(`地址 ${entry} 在「本策略」的信任名单中${entrySourceSuffix(entry, ipWhitelist.value, ipWhitelistRefs.value)}、同时在「${peer.name}」的黑名单中——信任不跨策略生效，该地址仍会被「${peer.name}」拦截`)
     }
   }
   if (items.length === 0) return ''

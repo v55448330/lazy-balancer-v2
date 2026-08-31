@@ -413,6 +413,11 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该 IP 列表正被 %d 个安全策略引用，请先解除引用", referenced)})
 		return
 	}
+	// 快照名称与条目数须在 DELETE 前取（同事务内删除后行已不可见）
+	var delName, delEntries string
+	_ = tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(name,''), COALESCE(entries,'[]') FROM security_ip_lists WHERE id=?", id).Scan(&delName, &delEntries)
+	var delParsed []models.IPListEntry
+	_ = json.Unmarshal([]byte(delEntries), &delParsed)
 	result, err := tx.ExecContext(c.Request.Context(), "DELETE FROM security_ip_lists WHERE id=?", id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -426,7 +431,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
 		return
 	}
-	recordAudit(c, "删除", "IP 地址列表", fmt.Sprintf("列表 #%s", id))
+	recordAudit(c, "删除", "IP 地址列表", fmt.Sprintf("名称：%s（#%s，%d 条）", delName, id, len(delParsed)))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "IP 地址列表已删除" + h.caddyApplyNote(c)})
 }
 
@@ -447,8 +452,8 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback()
-	var entriesJSON string
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(entries,'[]') FROM security_ip_lists WHERE id=?", id).Scan(&entriesJSON); err != nil {
+	var entriesJSON, listName string
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT COALESCE(name,''), COALESCE(entries,'[]') FROM security_ip_lists WHERE id=?", id).Scan(&listName, &entriesJSON); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
 			return
@@ -489,6 +494,6 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
 		return
 	}
-	recordAudit(c, "写入", "IP 地址列表", fmt.Sprintf("列表 #%s 追加 %s", id, req.Value))
+	recordAudit(c, "写入", "IP 地址列表", fmt.Sprintf("名称：%s（#%s）追加 IP %s（新增，现共 %d 条）", listName, id, req.Value, len(entries)+1))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已追加" + h.caddyApplyNote(c), Data: gin.H{"added": true}})
 }
