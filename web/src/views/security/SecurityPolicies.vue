@@ -202,7 +202,7 @@
               <el-form-item :label="aclListLabel">
                 <div class="acl-inline-row">
                   <el-select v-model="ipACLList" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" class="acl-inline-select" />
-                  <el-button v-if="!isReadOnly && ipACLList.length > 0" link type="primary" class="acl-extract-btn" @click="openExtractDialog('acl')">提取为列表</el-button>
+                  <el-button v-if="!isReadOnly" link type="primary" class="acl-extract-btn" :disabled="ipACLList.length === 0" @click="openExtractDialog('acl')">提取为列表</el-button>
                 </div>
                 <div class="form-tip-line">{{ aclListTip }}</div>
               </el-form-item>
@@ -229,7 +229,7 @@
               <el-form-item label="信任 IP">
                 <div class="acl-inline-row">
                   <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" class="acl-inline-select" />
-                  <el-button v-if="!isReadOnly && ipWhitelist.length > 0" link type="primary" class="acl-extract-btn" @click="openExtractDialog('trust')">提取为列表</el-button>
+                  <el-button v-if="!isReadOnly" link type="primary" class="acl-extract-btn" :disabled="ipWhitelist.length === 0" @click="openExtractDialog('trust')">提取为列表</el-button>
                 </div>
                 <div class="form-tip-line">名单内 IP 跳过 WAF 与访问控制检测（限流仍然生效）</div>
               </el-form-item>
@@ -607,7 +607,7 @@ const ipWhitelistRefs = ref<number[]>([])
 // 引用列表缓存：对话框打开与页面加载时刷新，供引用选择器 / 合计条数 / 冲突比较共用
 interface IPListRefOption { id: number; name: string; entry_count: number; entries: Array<{ value: string; remark: string }> }
 const ipLists = ref<IPListRefOption[]>([])
-const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服务商', '办公网络', '数据中心', '恶意 IP', '其他']
+const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服务商', '办公网络', '数据中心', '可信地址', '恶意 IP', '其他']
 const fetchIpLists = async (): Promise<void> => {
   try { const res = await request.get<APIResponse<IPListRefOption[]>>('/security/ip-lists'); ipLists.value = res.data || [] } catch { /* 静默失败：引用选择器退化为空列表，冲突比较回退内联口径 */ }
 }
@@ -1417,6 +1417,9 @@ const confirmExtract = async (): Promise<void> => {
   const sourceEntries = extractSourceEntries.value.map((value) => value.trim()).filter((value) => value !== '')
   if (sourceEntries.length === 0) { ElMessage.warning('内联名单为空，无需提取'); return }
   if (sourceEntries.length > 500) { ElMessage.warning('每个列表最多 500 条条目'); return }
+  try {
+    await ElMessageBox.confirm(`确定创建列表「${name}」（${sourceEntries.length} 条）并转为引用？内联条目将清空，拦截语义不变。`, '确认', { type: 'warning' })
+  } catch { return }
   extracting.value = true
   try {
     const res = await request.post<APIResponse<{ id: number }>>('/security/ip-lists', {
@@ -1681,7 +1684,7 @@ onMounted(async () => {
 .acl-divider :deep(.el-divider__text) { font-size: 14px; font-weight: 500; padding: 0 8px; }
 
 /* 内联名单行：select 占满剩余宽度，「提取为列表」链接按钮贴右侧（仅内联非空时出现） */
-.acl-inline-row { display: flex; align-items: flex-start; gap: 8px; width: 100%; }
+.acl-inline-row { display: flex; align-items: center; gap: 8px; width: 100%; }
 .acl-inline-row .acl-inline-select { flex: 1; min-width: 0; }
 .acl-extract-btn { flex-shrink: 0; margin-left: auto; }
 

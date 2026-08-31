@@ -501,7 +501,7 @@ const ruleForm = ref({ name: '', description: '', conditions: [] as CustomRuleCo
 
 // —— 可复用 IP 地址列表（第三个标签页）——
 // 分类预设：与安全策略「提取为列表」共用同一组选项
-const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服务商', '办公网络', '数据中心', '恶意 IP', '其他']
+const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服务商', '办公网络', '数据中心', '可信地址', '恶意 IP', '其他']
 const ipLists = ref<IPListRow[]>([])
 const loadingIpLists = ref(false)
 const ipListSearch = ref('')
@@ -555,6 +555,10 @@ const saveIpList = async () => {
   }
   if (entries.length === 0) { ElMessage.warning('至少添加一条 IP/CIDR 条目'); return }
   if (entries.length > 500) { ElMessage.warning('每个列表最多 500 条条目'); return }
+  const action = editingIpListId.value ? '保存' : '创建'
+  try {
+    await ElMessageBox.confirm(`确定${action} IP 地址列表「${name}」（${entries.length} 条条目）？`, '确认', { type: 'warning' })
+  } catch { return }
   savingIpList.value = true
   try {
     // entries 与其余名单字段同口径：JSON 数组文本（后端 CreateIPListRequest.Entries 为 string）
