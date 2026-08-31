@@ -200,8 +200,18 @@
                 </el-radio-group>
               </el-form-item>
               <el-form-item :label="aclListLabel">
-                <el-select v-model="ipACLList" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" style="width: 100%" />
+                <div class="acl-inline-row">
+                  <el-select v-model="ipACLList" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" class="acl-inline-select" />
+                  <el-button v-if="!isReadOnly && ipACLList.length > 0" link type="primary" class="acl-extract-btn" @click="openExtractDialog('acl')">提取为列表</el-button>
+                </div>
                 <div class="form-tip-line">{{ aclListTip }}</div>
+              </el-form-item>
+              <el-form-item label="引用地址列表">
+                <el-select v-model="ipACLListRefs" multiple filterable placeholder="选择要引用的 IP 地址列表" style="width: 100%">
+                  <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                </el-select>
+                <div v-if="showAclRefHint" class="form-tip-line">{{ aclRefHint }}</div>
+                <div class="form-tip-line">引用「规则集 → IP 地址列表」中的可复用列表，条目与上方内联名单合并生效</div>
               </el-form-item>
               <!-- 访问控制区地址级冲突实时警告（本区条目：ACL 列表 + 黑名单）——
                    无 label 的 el-form-item 仍保留 label 宽度偏移，内容落在控件列 -->
@@ -217,8 +227,18 @@
             </el-form-item>
             <template v-if="ipWhitelistEnabled">
               <el-form-item label="信任 IP">
-                <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" style="width: 100%" />
+                <div class="acl-inline-row">
+                  <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" class="acl-inline-select" />
+                  <el-button v-if="!isReadOnly && ipWhitelist.length > 0" link type="primary" class="acl-extract-btn" @click="openExtractDialog('trust')">提取为列表</el-button>
+                </div>
                 <div class="form-tip-line">名单内 IP 跳过 WAF 与访问控制检测（限流仍然生效）</div>
+              </el-form-item>
+              <el-form-item label="引用地址列表">
+                <el-select v-model="ipWhitelistRefs" multiple filterable placeholder="选择要引用的 IP 地址列表" style="width: 100%">
+                  <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                </el-select>
+                <div v-if="showWhitelistRefHint" class="form-tip-line">{{ whitelistRefHint }}</div>
+                <div class="form-tip-line">引用的列表条目与信任 IP 合并生效</div>
               </el-form-item>
               <!-- 信任名单区地址级冲突实时警告（本区条目：信任 IP × 他策略黑名单） -->
               <el-form-item v-if="whitelistSectionAlert" class="wizard-alert-item">
@@ -389,7 +409,7 @@
             <el-descriptions-item v-if="form.mode !== 'off'" label="自定义规则">{{ selectedCustomRules.length }} 条</el-descriptions-item>
             <el-descriptions-item label="拦截页面">{{ blockPageName }}</el-descriptions-item>
             <el-descriptions-item label="IP 访问控制">
-              <template v-if="form.ip_acl_enabled">{{ aclModeLabel }} · 列表 {{ ipACLList.length }} 条</template>
+              <template v-if="form.ip_acl_enabled">{{ aclModeLabel }} · 列表 {{ aclMergedCount }} 条</template>
               <template v-else>禁用</template>
             </el-descriptions-item>
             <el-descriptions-item label="区域控制">
@@ -480,6 +500,28 @@
         </div>
       </template>
     </el-dialog>
+
+    <!-- 提取为地址列表：把当前内联名单一键转为可复用列表并改为引用（语义不变） -->
+    <el-dialog v-model="extractDialogVisible" title="提取为地址列表" width="min(480px, 92vw)" append-to-body :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" show-icon title="将创建列表并清空内联条目，引用后语义不变" class="extract-alert" />
+      <el-form label-width="80px" @submit.prevent>
+        <el-form-item label="来源">
+          <span class="extract-source">{{ extractSide === 'acl' ? aclListLabel : '信任 IP' }}（内联 {{ extractSourceEntries.length }} 条）</span>
+        </el-form-item>
+        <el-form-item label="列表名称" required>
+          <el-input v-model="extractForm.name" placeholder="列表名称" maxlength="50" show-word-limit />
+        </el-form-item>
+        <el-form-item label="分类">
+          <el-select v-model="extractForm.category" allow-create filterable default-first-option placeholder="选择或输入分类" style="width: 100%">
+            <el-option v-for="c in IP_LIST_CATEGORIES" :key="c" :label="c" :value="c" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="extractDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="extracting" @click="confirmExtract">创建并引用</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -494,8 +536,8 @@ import { formatDate } from '@/utils/date'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse, UserListItem } from '@/types'
 
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[] }
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_blacklist?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[] }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
 interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean; block_page_id?: number }
@@ -558,6 +600,41 @@ const editingId = ref<number | null>(null)
 const ipACLList = ref<string[]>([])
 const ipWhitelist = ref<string[]>([])
 const ipWhitelistEnabled = ref(false)
+// —— 可复用 IP 地址列表引用（refs）：与内联名单位列存储（ID 数组），保存时序列化
+// 为 JSON 数组文本（ip_acl_list_refs / ip_whitelist_refs）；生效口径 = 内联 ∪ 引用条目。
+const ipACLListRefs = ref<number[]>([])
+const ipWhitelistRefs = ref<number[]>([])
+// 引用列表缓存：对话框打开与页面加载时刷新，供引用选择器 / 合计条数 / 冲突比较共用
+interface IPListRefOption { id: number; name: string; entry_count: number; entries: Array<{ value: string; remark: string }> }
+const ipLists = ref<IPListRefOption[]>([])
+const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服务商', '办公网络', '数据中心', '恶意 IP', '其他']
+const fetchIpLists = async (): Promise<void> => {
+  try { const res = await request.get<APIResponse<IPListRefOption[]>>('/security/ip-lists'); ipLists.value = res.data || [] } catch { /* 静默失败：引用选择器退化为空列表，冲突比较回退内联口径 */ }
+}
+// refs 字段为 JSON 数组文本（如 "[1,5]"），经 parseJsonList 得 string[] 后转 number
+const parseRefIds = (raw: string | undefined): number[] => parseJsonList(raw).map(Number).filter((n) => Number.isInteger(n) && n > 0)
+// 合并内联 + 引用列表条目（按精确字符串去重，与 v1 匹配口径一致）；
+// 缓存中缺失的引用列表跳过（防御性回退为仅内联）
+const mergeIpEntries = (inline: string[], refs: number[]): string[] => {
+  const set = new Set(inline.map((v) => v.trim()).filter((v) => v !== ''))
+  for (const id of refs) {
+    const list = ipLists.value.find((l) => l.id === id)
+    if (!list) continue
+    for (const entry of list.entries) {
+      const v = entry.value.trim()
+      if (v !== '') set.add(v)
+    }
+  }
+  return [...set]
+}
+// 引用侧合计条数（各列表条目数之和，不去重——去重后的合计在 hint 的「合计」中给出）
+const selectedRefEntryCount = (refs: number[]): number => refs.reduce((sum, id) => sum + (ipLists.value.find((l) => l.id === id)?.entry_count ?? 0), 0)
+const aclMergedCount = computed(() => mergeIpEntries(ipACLList.value, ipACLListRefs.value).length)
+const aclRefHint = computed(() => `内联 ${ipACLList.value.length} 条 + 引用列表 ${selectedRefEntryCount(ipACLListRefs.value)} 条（合计 ${aclMergedCount.value} 条）`)
+const showAclRefHint = computed(() => ipACLList.value.length > 0 || ipACLListRefs.value.length > 0)
+const whitelistMergedCount = computed(() => mergeIpEntries(ipWhitelist.value, ipWhitelistRefs.value).length)
+const whitelistRefHint = computed(() => `内联 ${ipWhitelist.value.length} 条 + 引用列表 ${selectedRefEntryCount(ipWhitelistRefs.value)} 条（合计 ${whitelistMergedCount.value} 条）`)
+const showWhitelistRefHint = computed(() => ipWhitelist.value.length > 0 || ipWhitelistRefs.value.length > 0)
 // 本策略既有 ip_blacklist（仅用于跨策略冲突比较；本对话框不编辑该字段，
 // 保存时由后端指针语义自动保留原值）
 const ipBlacklistSelf = ref<string[]>([])
@@ -608,7 +685,7 @@ const fetchData = async (): Promise<boolean> => {
     // R72 二十六次 W3-1：allSettled 替代 all——策略主数据失败才整体报错，
     // 辅助数据（规则/CRS 选项/拦截页/绑定/用户）部分失败保留已有数据，
     // 避免「保存策略后任一辅助端点失败 → 整个列表不刷新」的 stale 状态。
-    const [polRes, ruleRes, crsRes, bpRes, crRes, bindRes, userRes] = await Promise.allSettled([
+    const [polRes, ruleRes, crsRes, bpRes, crRes, bindRes, userRes, ipListRes] = await Promise.allSettled([
       request.get<APIResponse<PolicySummary[]>>('/security/policies'),
       request.get<APIResponse<Rule[]>>('/rules'),
       request.get<APIResponse<{ rules: CRSRuleOption[] }>>('/security/crs/rules?page_size=100'),
@@ -616,6 +693,8 @@ const fetchData = async (): Promise<boolean> => {
       request.get<APIResponse<Array<{ id: number; name: string; action?: string; enabled?: boolean }>>>('/security/custom-rules'),
       request.get<APIResponse<Record<string, BindingInfo[]>>>('/security/bindings'),
       request.get<APIResponse<UserListItem[]>>('/users'),
+      // IP 地址列表缓存：列表页「IP 控制」能力判定/提示与冲突比较需要引用条目合并口径
+      request.get<APIResponse<IPListRefOption[]>>('/security/ip-lists'),
     ])
     if (polRes.status === 'rejected') {
       console.error('Failed to load policies data:', polRes.reason)
@@ -628,7 +707,8 @@ const fetchData = async (): Promise<boolean> => {
     if (crRes.status === 'fulfilled') allCustomRules.value = crRes.value.data || []
     if (bindRes.status === 'fulfilled') securityBindings.value = bindRes.value.data || {}
     if (userRes.status === 'fulfilled') users.value = userRes.value.data || []
-    const partial = [ruleRes, crsRes, bpRes, crRes, bindRes, userRes].some(r => r.status === 'rejected')
+    if (ipListRes.status === 'fulfilled') ipLists.value = ipListRes.value.data || []
+    const partial = [ruleRes, crsRes, bpRes, crRes, bindRes, userRes, ipListRes].some(r => r.status === 'rejected')
     if (partial) console.warn('部分辅助数据加载失败，保留已有数据')
     return true
   } catch (error: unknown) {
@@ -737,19 +817,20 @@ const aclListTip = computed(() => ACL_MODE_TIPS[form.value.ip_acl_mode] ?? '')
 
 const blockPageName = computed(() => (form.value.block_page_id === 0 ? '无拦截页面' : blockPages.value.find((p) => p.id === form.value.block_page_id)?.name || '-'))
 
-// 与后端口径一致：ACL 启用且列表非空，或白名单/黑名单非空
+// 与后端口径一致：ACL 启用且列表非空，或白名单/黑名单非空（内联与引用列表合并计数）
 const hasIpControl = (row: PolicySummary): boolean => {
-  const aclCount = parseJsonList(row.ip_acl_list).length
+  const aclCount = mergeIpEntries(parseJsonList(row.ip_acl_list), parseRefIds(row.ip_acl_list_refs)).length
+  const wlCount = mergeIpEntries(parseJsonList(row.ip_whitelist), parseRefIds(row.ip_whitelist_refs)).length
   const aclEnabled = row.ip_acl_enabled
-  return (aclEnabled && aclCount > 0) || parseJsonList(row.ip_whitelist).length > 0 || parseJsonList(row.ip_blacklist).length > 0
+  return (aclEnabled && aclCount > 0) || wlCount > 0 || parseJsonList(row.ip_blacklist).length > 0
 }
 
 const wafTip = (row: PolicySummary): string =>
   `模式：${row.mode === 'blocking' ? '拦截' : '检测'} · 阈值 ${row.anomaly_threshold} · 排除 ${row.crs_excluded_count} 条 · 自定义 ${row.custom_rules_count} 条`
 
 const ipControlTip = (row: PolicySummary): string => {
-  const aclCount = parseJsonList(row.ip_acl_list).length
-  const wlCount = parseJsonList(row.ip_whitelist).length
+  const aclCount = mergeIpEntries(parseJsonList(row.ip_acl_list), parseRefIds(row.ip_acl_list_refs)).length
+  const wlCount = mergeIpEntries(parseJsonList(row.ip_whitelist), parseRefIds(row.ip_whitelist_refs)).length
   const blCount = parseJsonList(row.ip_blacklist).length
   return `访问控制：${row.ip_acl_mode === 'allow' ? '白名单模式' : '黑名单模式'} · 列表 ${aclCount} 条 · 白名单 ${wlCount} 条 · 黑名单 ${blCount} 条`
 }
@@ -788,7 +869,8 @@ const jumpToStep = (step: WizardStep): void => {
 }
 
 const validateIpAclList = (): boolean => {
-  if (form.value.ip_acl_enabled && form.value.ip_acl_mode === 'allow' && ipACLList.value.length === 0) {
+  // 白名单空列表校验采用合并口径：内联为空但已引用列表时，生效名单非空即合法
+  if (form.value.ip_acl_enabled && form.value.ip_acl_mode === 'allow' && aclMergedCount.value === 0) {
     ElMessage.error('白名单模式下 IP 列表不能为空，否则所有请求将被拒绝')
     return false
   }
@@ -935,8 +1017,8 @@ const ipAclSideEntries = (mode: string, aclEnabled: boolean, aclList: string[], 
   return { allow: normalizeIpList(allow), deny: normalizeIpList(deny) }
 }
 
-// 本策略（表单实时值）的允许/拒绝两侧名单
-const selfIpAclSides = computed(() => ipAclSideEntries(form.value.ip_acl_mode, form.value.ip_acl_enabled, ipACLList.value, ipWhitelist.value, ipBlacklistSelf.value))
+// 本策略（表单实时值）的允许/拒绝两侧名单——引用列表条目并入内联后参与比较
+const selfIpAclSides = computed(() => ipAclSideEntries(form.value.ip_acl_mode, form.value.ip_acl_enabled, mergeIpEntries(ipACLList.value, ipACLListRefs.value), mergeIpEntries(ipWhitelist.value, ipWhitelistRefs.value), ipBlacklistSelf.value))
 
 const customRuleActionOf = (id: number): string => allCustomRules.value.find((r) => r.id === id)?.action ?? ''
 
@@ -1015,7 +1097,13 @@ const buildConflictChain = (caddyId: string): ConflictPolicyView[] => {
       //（PolicySummary 含 ip_acl_list/ip_whitelist/ip_blacklist）
       const summary = policies.value.find((sp) => sp.id === p.id)
       const sides = summary
-        ? ipAclSideEntries(summary.ip_acl_mode, summary.ip_acl_enabled, parseJsonList(summary.ip_acl_list), parseJsonList(summary.ip_whitelist), parseJsonList(summary.ip_blacklist))
+        ? ipAclSideEntries(
+          summary.ip_acl_mode,
+          summary.ip_acl_enabled,
+          mergeIpEntries(parseJsonList(summary.ip_acl_list), parseRefIds(summary.ip_acl_list_refs)),
+          mergeIpEntries(parseJsonList(summary.ip_whitelist), parseRefIds(summary.ip_whitelist_refs)),
+          parseJsonList(summary.ip_blacklist),
+        )
         : { allow: [] as string[], deny: [] as string[] }
       return {
         id: p.id,
@@ -1156,7 +1244,15 @@ const peerPolicyViews = computed<PeerPolicyView[]>(() =>
   policies.value
     .filter((p) => p.enabled && p.id !== editingId.value)
     .map((p) => {
-      const sides = ipAclSideEntries(p.ip_acl_mode, p.ip_acl_enabled, parseJsonList(p.ip_acl_list), parseJsonList(p.ip_whitelist), parseJsonList(p.ip_blacklist))
+      // 对端名单同样采用合并口径（内联 ∪ 引用列表条目）；引用列表缓存缺失时
+      // mergeIpEntries 跳过该 id，防御性回退为仅内联
+      const sides = ipAclSideEntries(
+        p.ip_acl_mode,
+        p.ip_acl_enabled,
+        mergeIpEntries(parseJsonList(p.ip_acl_list), parseRefIds(p.ip_acl_list_refs)),
+        mergeIpEntries(parseJsonList(p.ip_whitelist), parseRefIds(p.ip_whitelist_refs)),
+        parseJsonList(p.ip_blacklist),
+      )
       return { id: p.id, name: p.name, mode: p.mode, crsGroups: normalizeCrsGroups(parseUnknownStringList(p.crs_rule_groups)), allowEntries: sides.allow, denyEntries: sides.deny }
     }),
 )
@@ -1221,8 +1317,10 @@ const wafStepCrsAlert = computed<string>(() => {
 const aclSectionAlert = computed<string>(() => {
   const { peers } = comparisonContext.value
   const aclEnabled = form.value.ip_acl_enabled
-  const aclAllow = aclEnabled && (form.value.ip_acl_mode === 'allow' || form.value.ip_acl_mode === 'bypass') ? normalizeIpList(ipACLList.value) : []
-  const aclDeny = aclEnabled && form.value.ip_acl_mode === 'deny' ? normalizeIpList(ipACLList.value) : []
+  // 本策略条目采用合并口径（内联 ∪ 引用列表），对端 peers 已在 peerPolicyViews 合并
+  const mergedAcl = mergeIpEntries(ipACLList.value, ipACLListRefs.value)
+  const aclAllow = aclEnabled && (form.value.ip_acl_mode === 'allow' || form.value.ip_acl_mode === 'bypass') ? mergedAcl : []
+  const aclDeny = aclEnabled && form.value.ip_acl_mode === 'deny' ? mergedAcl : []
   // 同一条目同时出现在 ACL 拒绝列表与黑名单时只按 ACL 列表口径报一次（黑名单
   // 在本向导不可见，避免同地址两条仅名单名不同的重复提示）
   const blacklist = normalizeIpList(ipBlacklistSelf.value).filter((e) => !aclDeny.includes(e))
@@ -1245,7 +1343,8 @@ const aclSectionAlert = computed<string>(() => {
 
 const whitelistSectionAlert = computed<string>(() => {
   const { peers } = comparisonContext.value
-  const trust = normalizeIpList(ipWhitelist.value)
+  // 信任名单同样合并引用列表条目后与对端比较
+  const trust = mergeIpEntries(ipWhitelist.value, ipWhitelistRefs.value)
   if (trust.length === 0) return ''
   const items: string[] = []
   for (const peer of peers) {
@@ -1297,6 +1396,57 @@ const removeBoundRule = (caddyId: string): void => {
   boundRules.value = boundRules.value.filter((id) => id !== caddyId)
 }
 
+// —— 提取为地址列表：内联名单一键转为可复用列表并改为引用 ——
+const extractDialogVisible = ref(false)
+const extractSide = ref<'acl' | 'trust'>('acl')
+const extractForm = ref({ name: '', category: '' })
+const extracting = ref(false)
+const extractSourceEntries = computed<string[]>(() => (extractSide.value === 'acl' ? ipACLList.value : ipWhitelist.value))
+
+const openExtractDialog = (side: 'acl' | 'trust'): void => {
+  extractSide.value = side
+  extractForm.value = { name: '', category: '' }
+  extractDialogVisible.value = true
+}
+
+const confirmExtract = async (): Promise<void> => {
+  const name = extractForm.value.name.trim()
+  if (!name) { ElMessage.warning('请输入列表名称'); return }
+  if (name.length > 50) { ElMessage.warning('列表名称不能超过 50 字符'); return }
+  if (extractForm.value.category.length > 32) { ElMessage.warning('分类不能超过 32 字符'); return }
+  const sourceEntries = extractSourceEntries.value.map((value) => value.trim()).filter((value) => value !== '')
+  if (sourceEntries.length === 0) { ElMessage.warning('内联名单为空，无需提取'); return }
+  if (sourceEntries.length > 500) { ElMessage.warning('每个列表最多 500 条条目'); return }
+  extracting.value = true
+  try {
+    const res = await request.post<APIResponse<{ id: number }>>('/security/ip-lists', {
+      name,
+      description: '',
+      category: extractForm.value.category.trim(),
+      // entries 与其余名单字段同口径：JSON 数组文本（后端 Entries 为 string）
+      entries: JSON.stringify(sourceEntries.map((value) => ({ value, remark: '从策略提取' }))),
+    })
+    const newId = res.data?.id
+    if (!newId) throw new Error('创建列表响应缺少 id')
+    // 交换语义：新建列表 → 追加到该侧 refs → 清空内联（合并生效集不变）；
+    // 策略本身不在此保存——用户在向导中显式点「保存」才落库
+    if (extractSide.value === 'acl') {
+      ipACLListRefs.value = [...new Set([...ipACLListRefs.value, newId])]
+      ipACLList.value = []
+    } else {
+      ipWhitelistRefs.value = [...new Set([...ipWhitelistRefs.value, newId])]
+      ipWhitelist.value = []
+    }
+    extractDialogVisible.value = false
+    // 刷新引用列表缓存：选择器选项与「合计 N 条」提示立即反映新列表
+    await fetchIpLists()
+    ElMessage.success(`已创建列表「${name}」并转为引用，内联条目已清空（引用后语义不变），保存策略后生效`)
+  } catch (error: unknown) {
+    // 409 重名 / 400 条目非法已由全局拦截器 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to extract IP list:', error)
+  } finally { extracting.value = false }
+}
+
 async function openDialog(row?: PolicySummary) {
   // R60 D60-F1：对话框打开序列号（同 Rules.vue wizardOpenSeq 模式）——
   // 详情 GET 在途期间用户再点"新建策略"或另一行"编辑"，首个返回会覆盖
@@ -1328,6 +1478,8 @@ async function openDialog(row?: PolicySummary) {
     }
     ipACLList.value = parseJsonList(d.ip_acl_list)
     ipWhitelist.value = parseJsonList(d.ip_whitelist)
+    ipACLListRefs.value = parseRefIds(d.ip_acl_list_refs)
+    ipWhitelistRefs.value = parseRefIds(d.ip_whitelist_refs)
     ipWhitelistEnabled.value = ipWhitelist.value.length > 0
     ipBlacklistSelf.value = parseJsonList(d.ip_blacklist)
     geoipCountries.value = parseJsonList(d.geoip_countries)
@@ -1356,6 +1508,8 @@ async function openDialog(row?: PolicySummary) {
       return
     }
   } else { resetForm() }
+  // 每次打开对话框刷新引用列表缓存（提取为列表/他处新建后选项保持最新）
+  void fetchIpLists()
   originalBoundRules.value = [...boundRules.value]
   currentStep.value = WIZARD_STEP.BASIC
   dialogVisible.value = true
@@ -1363,7 +1517,7 @@ async function openDialog(row?: PolicySummary) {
 
 const resetForm = () => {
   form.value = defaultForm()
-  ipACLList.value = []; ipWhitelist.value = []; ipWhitelistEnabled.value = false; ipBlacklistSelf.value = []; geoipCountries.value = []; crsRuleGroups.value = []; crsExcludedRules.value = []; selectedCustomRules.value = []; boundRules.value = []; editingId.value = null
+  ipACLList.value = []; ipWhitelist.value = []; ipWhitelistEnabled.value = false; ipBlacklistSelf.value = []; ipACLListRefs.value = []; ipWhitelistRefs.value = []; geoipCountries.value = []; crsRuleGroups.value = []; crsExcludedRules.value = []; selectedCustomRules.value = []; boundRules.value = []; editingId.value = null
 }
 
 const resetWizard = () => {
@@ -1413,6 +1567,9 @@ const handleSave = async () => {
     // 后端指针语义自动保留原值。区域控制开关 = geoip_mode 三态：开启提交
     // deny/allow，关闭提交 'off'（后端零发射、caddygeoip handler 不注入）；
     // geoip_enabled 是编辑器本地派生开关，后端无此字段，不下发。
+    // IP 地址列表引用（refs）：与内联名单位列存储的列表 ID 数组，同样以 JSON
+    // 数组文本下发（ip_acl_list_refs / ip_whitelist_refs）；后端将引用列表条目与
+    // 内联条目合并生效，允许/拒绝侧归属与对应内联字段一致。
     // 显式白名单：仅提交 UpdateSecurityPolicyRequest 实际字段。
     const payload = {
       name: form.value.name,
@@ -1424,6 +1581,8 @@ const handleSave = async () => {
       ip_acl_mode: form.value.ip_acl_mode,
       ip_acl_list: JSON.stringify(ipACLList.value),
       ip_whitelist: JSON.stringify(ipWhitelist.value),
+      ip_acl_list_refs: JSON.stringify(ipACLListRefs.value),
+      ip_whitelist_refs: JSON.stringify(ipWhitelistRefs.value),
       rate_limit_enabled: form.value.rate_limit_enabled,
       rate_limit_rps: form.value.rate_limit_rps,
       rate_limit_burst: form.value.rate_limit_burst,
@@ -1520,6 +1679,14 @@ onMounted(async () => {
 
 .acl-divider { margin: 4px 0 16px; }
 .acl-divider :deep(.el-divider__text) { font-size: 14px; font-weight: 500; padding: 0 8px; }
+
+/* 内联名单行：select 占满剩余宽度，「提取为列表」链接按钮贴右侧（仅内联非空时出现） */
+.acl-inline-row { display: flex; align-items: flex-start; gap: 8px; width: 100%; }
+.acl-inline-row .acl-inline-select { flex: 1; min-width: 0; }
+.acl-extract-btn { flex-shrink: 0; margin-left: auto; }
+
+.extract-alert { margin-bottom: 12px; }
+.extract-source { font-size: 13px; color: #6b7280; }
 
 .wizard-content { min-height: min(350px, 55dvh); max-height: 55dvh; overflow-y: auto; padding-right: 8px; }
 

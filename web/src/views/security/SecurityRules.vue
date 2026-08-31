@@ -6,7 +6,7 @@
           <el-icon class="title-icon"><Notebook /></el-icon>
           规则集
         </h2>
-        <p class="page-desc">管理 WAF 规则来源：OWASP CRS 规则库、IP2Region IP 库与自定义规则</p>
+        <p class="page-desc">管理 WAF 规则来源：OWASP CRS 规则库、IP2Region IP 库、自定义规则与 IP 地址列表</p>
       </div>
     </div>
 
@@ -135,6 +135,55 @@
             <el-pagination v-model:current-page="customPage" v-model:page-size="customPageSize" :total="customRules.length" layout="total, sizes, prev, pager, next" @size-change="customPage = 1" />
           </div>
         </el-tab-pane>
+        <el-tab-pane label="IP 地址列表" name="ip-lists">
+          <div class="table-toolbar ip-list-toolbar">
+            <el-input v-model="ipListSearch" placeholder="搜索名称或分类" clearable :prefix-icon="Search" class="search-input" />
+            <el-button v-if="!isReadOnly" type="primary" :icon="Plus" @click="openIpListDialog()">新建列表</el-button>
+          </div>
+          <el-table :data="ipListsPaged" v-loading="loadingIpLists" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+            <template #empty><el-empty description="暂无 IP 地址列表" :image-size="60" /></template>
+            <el-table-column prop="name" label="名称" min-width="150">
+              <template #default="{ row }">
+                <el-link type="primary" @click="openIpListDialog(row)">{{ row.name }}</el-link>
+              </template>
+            </el-table-column>
+            <el-table-column label="分类" width="120" align="center">
+              <template #default="{ row }">
+                <el-tag v-if="row.category" size="small" effect="plain" type="info">{{ row.category }}</el-tag>
+                <template v-else>—</template>
+              </template>
+            </el-table-column>
+            <el-table-column label="条目数" width="90" align="center">
+              <template #default="{ row }">{{ row.entry_count }}</template>
+            </el-table-column>
+            <el-table-column label="引用" width="90" align="center">
+              <template #default="{ row }">
+                <el-tooltip v-if="row.ref_policies.length > 0" placement="top" popper-class="ip-list-refs-popper">
+                  <template #content>
+                    <div v-for="p in row.ref_policies" :key="p.id">{{ p.name }}</div>
+                  </template>
+                  <span>{{ row.ref_count }}</span>
+                </el-tooltip>
+                <template v-else>{{ row.ref_count }}</template>
+              </template>
+            </el-table-column>
+            <el-table-column label="更新时间" width="170" align="center">
+              <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
+            </el-table-column>
+            <el-table-column label="更新者" width="100" align="center">
+              <template #default="{ row }">{{ getUpdaterName(row.updated_by) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="140" fixed="right">
+              <template #default="{ row }">
+                <el-button size="small" link type="primary" @click="openIpListDialog(row)">{{ isReadOnly ? '查看' : '编辑' }}</el-button>
+                <el-button size="small" link type="danger" :disabled="isReadOnly" @click="deleteIpList(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div class="rules-pagination">
+            <el-pagination v-model:current-page="ipListPage" v-model:page-size="ipListPageSize" :total="ipListsFiltered.length" layout="total, sizes, prev, pager, next" @size-change="ipListPage = 1" />
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </el-card>
 
@@ -235,6 +284,53 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="ipListDialogVisible" :title="editingIpListId ? (isReadOnly ? '查看 IP 地址列表' : '编辑 IP 地址列表') : '新建 IP 地址列表'" width="min(760px, 94vw)">
+      <el-form :model="ipListForm" label-width="80px" label-position="right" :disabled="isReadOnly">
+        <el-form-item label="名称" required>
+          <el-input v-model="ipListForm.name" placeholder="列表名称" maxlength="50" show-word-limit />
+        </el-form-item>
+        <el-form-item label="分类">
+          <el-select v-model="ipListForm.category" allow-create filterable default-first-option placeholder="选择或输入分类" style="width: 100%">
+            <el-option v-for="c in IP_LIST_CATEGORIES" :key="c" :label="c" :value="c" />
+          </el-select>
+          <div class="form-tip-line">预设分类可直接选择，也可自定义（≤32 字符）</div>
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="ipListForm.description" placeholder="列表用途说明" maxlength="200" show-word-limit />
+        </el-form-item>
+        <el-form-item label="条目" required>
+          <div style="width: 100%">
+            <el-table :data="ipListForm.entries" size="small" max-height="360" empty-text="">
+              <template #empty><el-empty description="暂无条目，点击下方按钮添加" :image-size="50" /></template>
+              <el-table-column label="IP / CIDR" min-width="220">
+                <template #default="{ row }">
+                  <el-input v-model="row.value" placeholder="如 192.168.1.0/24" size="small" :class="{ 'ip-entry-invalid': !isValidCidr(row.value) }" />
+                </template>
+              </el-table-column>
+              <el-table-column label="备注" min-width="160">
+                <template #default="{ row }">
+                  <el-input v-model="row.remark" placeholder="可选备注" size="small" maxlength="100" />
+                </template>
+              </el-table-column>
+              <el-table-column label="" width="80" align="center">
+                <template #default="{ $index }">
+                  <el-button link type="danger" size="small" :disabled="isReadOnly" @click="ipListForm.entries.splice($index, 1)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-button v-if="!isReadOnly" size="small" type="primary" plain class="add-entry-btn" @click="ipListForm.entries.push({ value: '', remark: '' })">
+              + 添加条目
+            </el-button>
+            <div class="form-tip-line">每条支持单 IP 或 CIDR（如 10.0.0.1、2001:db8::/32）；每个列表最多 500 条，全站列表总数上限 200 个，格式错误的行以红色标出</div>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="ipListDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="isReadOnly" :loading="savingIpList" @click="saveIpList">保存</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog
       v-model="updateDialogVisible"
             title="更新 CRS 规则库"
@@ -288,18 +384,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { Search, Notebook, Plus, WarningFilled } from '@element-plus/icons-vue'
 import { formatDate } from '@/utils/date'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
+import { isValidCidr } from '@/utils/ruleValidation'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse, UserListItem } from '@/types'
 interface CRSRuleFile { filename: string; category: string; size: number; updated_at: string }
 interface CustomRuleCondition { target: string; operator: string; pattern: string }
 interface CustomRule { id: number; name: string; description: string; conditions: CustomRuleCondition[]; action: string; score: number; enabled: boolean; updated_at: string; updated_by: number }
+interface IPListEntry { value: string; remark: string }
+interface IPListRefPolicy { id: number; name: string }
+interface IPListRow { id: number; name: string; description: string; category: string; entries: IPListEntry[]; entry_count: number; ref_count: number; ref_policies: IPListRefPolicy[]; created_by: number; created_at: string; updated_by: number; updated_at: string }
 interface CRSUpdateInfo { readonly status: string; readonly trigger: string; readonly started_at: string; readonly finished_at: string; readonly message: string; readonly version: string }
 interface IP2RegionUpdateInfo { readonly status: string; readonly trigger: string; readonly started_at: string; readonly finished_at: string; readonly message: string; readonly version: string }
 
@@ -398,6 +498,85 @@ const ruleDialogVisible = ref(false)
 const editingRuleId = ref<number | null>(null)
 const savingRule = ref(false)
 const ruleForm = ref({ name: '', description: '', conditions: [] as CustomRuleCondition[], action: 'block', score: 5, enabled: true })
+
+// —— 可复用 IP 地址列表（第三个标签页）——
+// 分类预设：与安全策略「提取为列表」共用同一组选项
+const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服务商', '办公网络', '数据中心', '恶意 IP', '其他']
+const ipLists = ref<IPListRow[]>([])
+const loadingIpLists = ref(false)
+const ipListSearch = ref('')
+const ipListPage = ref(1)
+const ipListPageSize = ref(10)
+const ipListsFiltered = computed(() => {
+  const query = ipListSearch.value.trim().toLowerCase()
+  if (!query) return ipLists.value
+  return ipLists.value.filter((l) => l.name.toLowerCase().includes(query) || (l.category || '').toLowerCase().includes(query))
+})
+const ipListsPaged = computed(() => {
+  const start = (ipListPage.value - 1) * ipListPageSize.value
+  return ipListsFiltered.value.slice(start, start + ipListPageSize.value)
+})
+// 搜索收窄后高页码会落在空页，回到第 1 页
+watch(ipListSearch, () => { ipListPage.value = 1 })
+const ipListDialogVisible = ref(false)
+const editingIpListId = ref<number | null>(null)
+const savingIpList = ref(false)
+const ipListForm = ref<{ name: string; description: string; category: string; entries: IPListEntry[] }>({ name: '', description: '', category: '', entries: [] })
+
+const fetchIpLists = async () => {
+  loadingIpLists.value = true
+  try { const res = await request.get<APIResponse<IPListRow[]>>('/security/ip-lists'); ipLists.value = res.data || [] } catch {} finally { loadingIpLists.value = false }
+}
+
+const openIpListDialog = (row?: IPListRow) => {
+  editingIpListId.value = row?.id ?? null
+  ipListForm.value = row
+    ? { name: row.name, description: row.description, category: row.category, entries: row.entries.map((e) => ({ value: e.value, remark: e.remark })) }
+    : { name: '', description: '', category: '', entries: [{ value: '', remark: '' }] }
+  ipListDialogVisible.value = true
+}
+
+const saveIpList = async () => {
+  const name = ipListForm.value.name.trim()
+  if (!name) { ElMessage.warning('请输入列表名称'); return }
+  if (name.length > 50) { ElMessage.warning('列表名称不能超过 50 字符'); return }
+  if (ipListForm.value.category.length > 32) { ElMessage.warning('分类不能超过 32 字符'); return }
+  if (ipListForm.value.description.length > 200) { ElMessage.warning('描述不能超过 200 字符'); return }
+  // 值与备注均为空的行视为未填写的占位行，保存时静默丢弃
+  const entries = ipListForm.value.entries
+    .map((e) => ({ value: e.value.trim(), remark: e.remark.trim() }))
+    .filter((e) => e.value !== '' || e.remark !== '')
+  const invalidEntry = entries.find((e) => e.value === '' || !isValidCidr(e.value))
+  if (invalidEntry) {
+    ElMessage.error(invalidEntry.value
+      ? `条目格式不正确：${invalidEntry.value}（仅支持单 IP 或 CIDR）`
+      : '存在未填写条目值的行，请补全或删除空行')
+    return
+  }
+  if (entries.length === 0) { ElMessage.warning('至少添加一条 IP/CIDR 条目'); return }
+  if (entries.length > 500) { ElMessage.warning('每个列表最多 500 条条目'); return }
+  savingIpList.value = true
+  try {
+    // entries 与其余名单字段同口径：JSON 数组文本（后端 CreateIPListRequest.Entries 为 string）
+    const body = { name, description: ipListForm.value.description.trim(), category: ipListForm.value.category.trim(), entries: JSON.stringify(entries) }
+    const res = editingIpListId.value
+      ? await request.put(`/security/ip-lists/${editingIpListId.value}`, body)
+      : await request.post('/security/ip-lists', body)
+    showSaveResult(res, '保存成功'); ipListDialogVisible.value = false; fetchIpLists()
+  } catch (error: unknown) {
+    // 409 重名 / 400 条目非法等已由全局拦截器 toast，这里仅记录避免 unhandled rejection
+    console.error('Failed to save IP list:', error)
+  } finally { savingIpList.value = false }
+}
+
+const deleteIpList = (row: IPListRow) => {
+  ElMessageBox.confirm(`确定删除 IP 地址列表"${row.name}"？`, '确认', { type: 'warning' })
+    .then(async () => {
+      // 被策略引用时后端返回 409（含引用策略名的 message 由全局拦截器 toast）
+      const del = await request.delete(`/security/ip-lists/${row.id}`)
+      showSaveResult(del, '已删除'); fetchIpLists()
+    }).catch(() => {})
+}
 
 const PATTERN_PLACEHOLDERS: Record<string, string> = {
   uri: '如 /admin',
@@ -785,13 +964,13 @@ const formatSize = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024
 
 onMounted(() => {
   const urlTab = new URLSearchParams(location.search).get('tab')
-  if (urlTab && ['rules', 'custom'].includes(urlTab)) {
+  if (urlTab && ['rules', 'custom', 'ip-lists'].includes(urlTab)) {
     activeTab.value = urlTab
   } else {
     const tab = localStorage.getItem('security-rules-tab')
     if (tab) { activeTab.value = tab; localStorage.removeItem('security-rules-tab') }
   }
-  fetchCRS(); fetchIP2RegionInfo(); fetchRules(); fetchCustomRules(); fetchUsers()
+  fetchCRS(); fetchIP2RegionInfo(); fetchRules(); fetchCustomRules(); fetchUsers(); fetchIpLists()
 })
 
 onUnmounted(() => {
@@ -835,8 +1014,16 @@ onUnmounted(() => {
 .add-condition-btn { margin-top: 4px; }
 .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .search-input { width: 280px; }
+.ip-list-toolbar { gap: 12px; }
+.add-entry-btn { margin-top: 8px; }
+.ip-entry-invalid :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--el-color-danger, #ef4444) inset; }
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 .update-status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .update-log-container { max-height: 480px; overflow: auto; background: #1e293b; border-radius: 6px; padding: 16px; }
 .update-log-content { margin: 0; color: #e4e4e7; font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
+</style>
+
+<!-- el-tooltip popper 挂载到 body，scoped 样式无法命中，单独非 scoped 块 -->
+<style>
+.ip-list-refs-popper { line-height: 1.6; max-width: 280px; }
 </style>

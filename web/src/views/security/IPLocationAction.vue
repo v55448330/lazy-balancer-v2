@@ -12,6 +12,22 @@
       <span v-if="location" class="ipo-loc">{{ location }}</span>
     </div>
 
+    <div class="ipo-list-row">
+      <el-checkbox v-model="saveToList" :disabled="ipLists.length === 0" size="small">同时存入地址列表</el-checkbox>
+      <el-select
+        v-if="ipLists.length > 0"
+        v-model="selectedListId"
+        filterable
+        clearable
+        placeholder="选择列表"
+        size="small"
+        class="ipo-list-select"
+      >
+        <el-option v-for="list in ipLists" :key="list.id" :label="`${list.name}（${list.entry_count} 条）`" :value="list.id" />
+      </el-select>
+      <span v-else class="ipo-list-empty">暂无列表，可在 规则集→IP 地址列表 创建</span>
+    </div>
+
     <div v-if="policiesLoading" class="ipo-tip">策略加载中…</div>
     <el-alert v-else-if="policiesError" type="error" :closable="false" title="策略列表加载失败" />
     <template v-else-if="rows.length > 0">
@@ -98,6 +114,39 @@ const policiesLoading = ref(false)
 const policiesError = ref(false)
 const busyKeys = ref<Set<string>>(new Set())
 
+// —— 同时存入地址列表：ACL/信任名单写入成功后，把该 IP 幂等追加到所选列表 ——
+interface IPListOption { id: number; name: string; entry_count: number }
+const ipLists = ref<IPListOption[]>([])
+const saveToList = ref(true)
+const selectedListId = ref<number | undefined>(undefined)
+
+const loadIpLists = async (): Promise<void> => {
+  try {
+    const res = await request.get<APIResponse<IPListOption[]>>('/security/ip-lists')
+    ipLists.value = res.data || []
+  } catch {
+    ipLists.value = []
+  }
+  // 列表已在别处删除时清理悬空选择，避免静默写往不存在的列表
+  if (selectedListId.value !== undefined && !ipLists.value.some((l) => l.id === selectedListId.value)) {
+    selectedListId.value = undefined
+  }
+}
+
+// 策略写入成功后的追加动作：非阻塞——失败只弹警告，不影响已生效的策略修改
+const maybeSaveToList = async (): Promise<void> => {
+  if (!saveToList.value || selectedListId.value === undefined) return
+  const list = ipLists.value.find((l) => l.id === selectedListId.value)
+  if (!list) return
+  try {
+    const res = await request.post<APIResponse<{ added: boolean }>>(`/security/ip-lists/${list.id}/ips`, { value: props.ip }, { silent: true })
+    if (res.data?.added) ElMessage.success(`已存入列表「${list.name}」`)
+  } catch (error) {
+    // silent 请求不走全局 toast；这里以非阻塞警告提示（策略修改已成功）
+    ElMessage.warning(`存入地址列表失败：${error instanceof Error ? error.message : '未知错误'}`)
+  }
+}
+
 const parseList = (raw: string): string[] => {
   try {
     const parsed: unknown = JSON.parse(raw || '[]')
@@ -121,6 +170,8 @@ const normalizeRow = (p: PolicyRow): PolicyRow => ({
 const loadPolicies = async (): Promise<void> => {
   // 每次 @show 都强制重新拉取——同一策略绑定多条规则时，从规则 A 弹窗
   // 加入黑名单后，打开规则 B 弹窗需要看到最新 ACL 状态（无陈旧缓存）。
+  // 地址列表选项同节奏刷新（含 entry_count 展示）。
+  void loadIpLists()
   policiesLoading.value = true
   try {
     const url = props.ruleCaddyId
@@ -314,6 +365,8 @@ const applyAcl = async (policy: PolicyRow, target: AclTarget): Promise<void> => 
     await request.put(`/security/policies/${policy.id}`, body)
     ElMessage.success(successMsg)
     await refreshRow(policy.id)
+    // 名单写入成功后按需把该 IP 追加到所选地址列表（幂等、非阻塞）
+    await maybeSaveToList()
   } catch {
     // 失败提示由全局拦截器弹出，这里只需终止流程
   } finally {
@@ -382,6 +435,8 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
     await request.put(`/security/policies/${policy.id}`, { ip_whitelist: JSON.stringify([...list, props.ip]) })
     ElMessage.success(`已加入策略「${policy.name}」的信任名单`)
     await refreshRow(policy.id)
+    // 与 ACL 同口径：写入成功后按需把该 IP 追加到所选地址列表（幂等、非阻塞）
+    await maybeSaveToList()
   } catch {
     // 失败提示由全局拦截器弹出，这里只需终止流程
   } finally {
@@ -404,6 +459,9 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
 .ip-location-popper .ipo-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
 .ip-location-popper .ipo-ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; }
 .ip-location-popper .ipo-loc { font-size: 12px; color: var(--text-secondary, #909399); }
+.ip-location-popper .ipo-list-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); }
+.ip-location-popper .ipo-list-select { width: 180px; }
+.ip-location-popper .ipo-list-empty { font-size: 12px; color: var(--text-secondary, #909399); }
 .ip-location-popper .ipo-tip { font-size: 12px; color: var(--text-secondary, #909399); padding: 4px 0; }
 .ip-location-popper .ipo-row { padding: 8px 0; border-top: 1px solid var(--el-border-color-lighter, #ebeef5); }
 .ip-location-popper .ipo-row-head { display: flex; align-items: center; gap: 6px; }
