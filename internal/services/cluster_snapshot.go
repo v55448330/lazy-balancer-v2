@@ -478,7 +478,7 @@ func (s *ClusterService) snapshotSecurityPolicies(ctx context.Context, store sna
 
 // snapshotSecurityIPLists（v2.3.0）dump 可复用 IP 地址列表：策略 refs 引用
 // 的目标表，NULL 归一口径与 security_policies 一致（entries '[]'、审计列
-// 0/''），保证主从落库行为一致。
+// 0/”），保证主从落库行为一致。
 func (s *ClusterService) snapshotSecurityIPLists(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
 	return s.dumpTableAsJSON(ctx, store, "security_ip_lists", "id,name,COALESCE(description,'') AS description,COALESCE(category,'') AS category,COALESCE(entries,'[]') AS entries,COALESCE(created_by,0) AS created_by,COALESCE(created_at,'') AS created_at,COALESCE(updated_by,0) AS updated_by,COALESCE(updated_at,'') AS updated_at", "id")
 }

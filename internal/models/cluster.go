@@ -254,23 +254,23 @@ type ClusterACMEState struct {
 }
 
 type ClusterSnapshot struct {
-	Version                  int                               `json:"version"`
-	SchemaVersion            int                               `json:"schema_version,omitempty"`
-	MinReaderVersion         int                               `json:"min_reader_version,omitempty"`
-	Fingerprint              string                            `json:"fingerprint"`
-	Signature                string                            `json:"signature,omitempty"`
-	CanonicalPayload         json.RawMessage                   `json:"canonical_payload,omitempty"`
-	Rules                    []LbRule                          `json:"rules"`
-	Users                    []ClusterUser                     `json:"users"`
-	APIKeys                  []ClusterAPIKey                   `json:"api_keys"`
-	BasicSettings            ClusterBasicSettings              `json:"basic_settings"`
-	CaddyConfig              *string                           `json:"caddy_config,omitempty"`
-	Certs                    []ClusterCertificate              `json:"certs"`
-	ACME                     *ClusterACMEState                 `json:"acme,omitempty"`
-	SecurityPolicies         json.RawMessage                   `json:"security_policies,omitempty"`
-	SecurityBindings         json.RawMessage                   `json:"security_bindings,omitempty"`
-	SecurityCustomRules      []SecurityCustomRule              `json:"security_custom_rules,omitempty"`
-	SecurityBlockPages       []SecurityBlockPage               `json:"security_block_pages,omitempty"`
+	Version             int                  `json:"version"`
+	SchemaVersion       int                  `json:"schema_version,omitempty"`
+	MinReaderVersion    int                  `json:"min_reader_version,omitempty"`
+	Fingerprint         string               `json:"fingerprint"`
+	Signature           string               `json:"signature,omitempty"`
+	CanonicalPayload    json.RawMessage      `json:"canonical_payload,omitempty"`
+	Rules               []LbRule             `json:"rules"`
+	Users               []ClusterUser        `json:"users"`
+	APIKeys             []ClusterAPIKey      `json:"api_keys"`
+	BasicSettings       ClusterBasicSettings `json:"basic_settings"`
+	CaddyConfig         *string              `json:"caddy_config,omitempty"`
+	Certs               []ClusterCertificate `json:"certs"`
+	ACME                *ClusterACMEState    `json:"acme,omitempty"`
+	SecurityPolicies    json.RawMessage      `json:"security_policies,omitempty"`
+	SecurityBindings    json.RawMessage      `json:"security_bindings,omitempty"`
+	SecurityCustomRules []SecurityCustomRule `json:"security_custom_rules,omitempty"`
+	SecurityBlockPages  []SecurityBlockPage  `json:"security_block_pages,omitempty"`
 	// SecurityIPLists（v2.3.0）：可复用 IP 地址列表全量 dump（行结构与
 	// security_policies 同款 map 形态）；策略 ip_acl_list_refs/
 	// ip_whitelist_refs 以 id 引用本表，随 security 节一起全量替换。

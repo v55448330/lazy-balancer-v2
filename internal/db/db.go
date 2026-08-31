@@ -782,8 +782,8 @@ func runMigrations() error {
 		"security_policies.block_status_code":  "INTEGER DEFAULT 0",
 		// 可复用 IP 列表引用列（v2.3.0）：JSON 数组文本，存 security_ip_lists 的
 		// id 列表；同样刻意可空——读路径一律 COALESCE(...,'[]') 归一（同上四列口径）。
-		"security_policies.ip_acl_list_refs":   "TEXT DEFAULT '[]'",
-		"security_policies.ip_whitelist_refs":  "TEXT DEFAULT '[]'",
+		"security_policies.ip_acl_list_refs":  "TEXT DEFAULT '[]'",
+		"security_policies.ip_whitelist_refs": "TEXT DEFAULT '[]'",
 	}
 	// R42 F1: 四个全局超时列的 0→推荐默认回填只在「新增列」时执行一次——
 	// 历史存量行在新列 ADD 后恰好为 0，才是真正需要回填的场景；渲染层把 0 当作
