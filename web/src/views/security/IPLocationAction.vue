@@ -13,19 +13,27 @@
     </div>
 
     <div class="ipo-list-row">
-      <el-checkbox v-model="saveToList" :disabled="ipLists.length === 0" size="small">同时存入地址列表</el-checkbox>
+      <span class="ipo-list-label">存入地址列表</span>
       <el-select
-        v-if="ipLists.length > 0"
         v-model="selectedListId"
         filterable
         clearable
+        :teleported="false"
         placeholder="选择列表"
         size="small"
         class="ipo-list-select"
       >
         <el-option v-for="list in ipLists" :key="list.id" :label="`${list.name}（${list.entry_count} 条）`" :value="list.id" />
       </el-select>
-      <span v-else class="ipo-list-empty">暂无列表，可在 规则集→IP 地址列表 创建</span>
+      <el-button
+        size="small"
+        type="primary"
+        plain
+        :disabled="ipLists.length === 0 || selectedListId === undefined"
+        :loading="savingToList"
+        @click="saveToListAction"
+      >存入</el-button>
+      <span v-if="ipLists.length === 0" class="ipo-list-empty">暂无列表，可在 规则集→IP 地址列表 创建</span>
     </div>
 
     <div v-if="policiesLoading" class="ipo-tip">策略加载中…</div>
@@ -114,11 +122,12 @@ const policiesLoading = ref(false)
 const policiesError = ref(false)
 const busyKeys = ref<Set<string>>(new Set())
 
-// —— 同时存入地址列表：ACL/信任名单写入成功后，把该 IP 幂等追加到所选列表 ——
+// —— 显式存入地址列表：与策略名单动作同口径（确认弹框 + 全局 MFA 428 守卫 +
+// 明确反馈），不再作为名单写入后的隐式自动追加 ——
 interface IPListOption { id: number; name: string; entry_count: number }
 const ipLists = ref<IPListOption[]>([])
-const saveToList = ref(true)
 const selectedListId = ref<number | undefined>(undefined)
+const savingToList = ref(false)
 
 const loadIpLists = async (): Promise<void> => {
   try {
@@ -133,17 +142,28 @@ const loadIpLists = async (): Promise<void> => {
   }
 }
 
-// 策略写入成功后的追加动作：非阻塞——失败只弹警告，不影响已生效的策略修改
-const maybeSaveToList = async (): Promise<void> => {
-  if (!saveToList.value || selectedListId.value === undefined) return
+const saveToListAction = async (): Promise<void> => {
+  if (selectedListId.value === undefined || savingToList.value) return
   const list = ipLists.value.find((l) => l.id === selectedListId.value)
   if (!list) return
   try {
-    const res = await request.post<APIResponse<{ added: boolean }>>(`/security/ip-lists/${list.id}/ips`, { value: props.ip }, { silent: true })
+    await ElMessageBox.confirm(
+      `将把 ${props.ip} 存入地址列表「${list.name}」（幂等，已存在时不会重复添加）。是否继续？`,
+      '存入地址列表',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
+    )
+  } catch { return }
+  savingToList.value = true
+  try {
+    // 非 silent：错误走全局拦截器提示，428 时全局 MFA step-up 弹码链完整生效
+    const res = await request.post<APIResponse<{ added: boolean }>>(`/security/ip-lists/${list.id}/ips`, { value: props.ip })
     if (res.data?.added) ElMessage.success(`已存入列表「${list.name}」`)
-  } catch (error) {
-    // silent 请求不走全局 toast；这里以非阻塞警告提示（策略修改已成功）
-    ElMessage.warning(`存入地址列表失败：${error instanceof Error ? error.message : '未知错误'}`)
+    else ElMessage.info(`该 IP 已在列表「${list.name}」中`)
+    await loadIpLists()
+  } catch {
+    // 失败提示由全局拦截器弹出，这里只需终止流程
+  } finally {
+    savingToList.value = false
   }
 }
 
@@ -315,8 +335,18 @@ const applyAcl = async (policy: PolicyRow, target: AclTarget): Promise<void> => 
     let successMsg: string
 
     if (!detail.ip_acl_enabled) {
-      // 未启用 → 启用 + 设定模式 + 加入（原本就是关闭状态，无需确认）
-      // 模式与目标一致时保留既有条目；不一致则清空重建，避免启用即语义反转
+      // 未启用 → 启用 + 设定模式 + 加入：启用访问控制是行为变更，与其他动作
+      // 同口径先经确认框说明后果；模式与目标一致时保留既有条目，不一致则清空
+      // 重建，避免启用即语义反转
+      try {
+        await ElMessageBox.confirm(
+          `将启用策略「${policy.name}」的 IP 访问控制并设为${modeLabel(target)}（${ACL_LABELS[target]}），同时加入 ${props.ip}。是否继续？`,
+          `启用并加入${ACL_LABELS[target]}`,
+          { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
+        )
+      } catch {
+        return
+      }
       const nextList = detail.ip_acl_mode === target
         ? [...list.filter((entry) => entry !== props.ip), props.ip]
         : [props.ip]
@@ -357,7 +387,16 @@ const applyAcl = async (policy: PolicyRow, target: AclTarget): Promise<void> => 
       body = { ip_acl_mode: target, ip_acl_list: JSON.stringify([props.ip]) }
       successMsg = `已切换为${ACL_LABELS[target]}模式并加入 ${props.ip}`
     } else {
-      // 模式不同但列表为空：无数据可反转，直接切换
+      // 模式不同但列表为空：无数据可反转，但仍属模式切换，与其他动作同口径确认
+      try {
+        await ElMessageBox.confirm(
+          `策略「${policy.name}」的访问控制将从${modeLabel(detail.ip_acl_mode)}切换为${modeLabel(target)}，并加入 ${props.ip}。是否继续？`,
+          '切换访问控制模式',
+          { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
+        )
+      } catch {
+        return
+      }
       body = { ip_acl_mode: target, ip_acl_list: JSON.stringify([props.ip]) }
       successMsg = `已切换为${ACL_LABELS[target]}模式并加入 ${props.ip}`
     }
@@ -365,8 +404,6 @@ const applyAcl = async (policy: PolicyRow, target: AclTarget): Promise<void> => 
     await request.put(`/security/policies/${policy.id}`, body)
     ElMessage.success(successMsg)
     await refreshRow(policy.id)
-    // 名单写入成功后按需把该 IP 追加到所选地址列表（幂等、非阻塞）
-    await maybeSaveToList()
   } catch {
     // 失败提示由全局拦截器弹出，这里只需终止流程
   } finally {
@@ -435,8 +472,6 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
     await request.put(`/security/policies/${policy.id}`, { ip_whitelist: JSON.stringify([...list, props.ip]) })
     ElMessage.success(`已加入策略「${policy.name}」的信任名单`)
     await refreshRow(policy.id)
-    // 与 ACL 同口径：写入成功后按需把该 IP 追加到所选地址列表（幂等、非阻塞）
-    await maybeSaveToList()
   } catch {
     // 失败提示由全局拦截器弹出，这里只需终止流程
   } finally {
@@ -460,7 +495,8 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
 .ip-location-popper .ipo-ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; }
 .ip-location-popper .ipo-loc { font-size: 12px; color: var(--text-secondary, #909399); }
 .ip-location-popper .ipo-list-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); }
-.ip-location-popper .ipo-list-select { width: 180px; }
+.ip-location-popper .ipo-list-label { font-size: 12px; color: var(--text-secondary, #909399); white-space: nowrap; }
+.ip-location-popper .ipo-list-select { width: 168px; }
 .ip-location-popper .ipo-list-empty { font-size: 12px; color: var(--text-secondary, #909399); }
 .ip-location-popper .ipo-tip { font-size: 12px; color: var(--text-secondary, #909399); padding: 4px 0; }
 .ip-location-popper .ipo-row { padding: 8px 0; border-top: 1px solid var(--el-border-color-lighter, #ebeef5); }

@@ -611,8 +611,16 @@ const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服务商', 
 const fetchIpLists = async (): Promise<void> => {
   try { const res = await request.get<APIResponse<IPListRefOption[]>>('/security/ip-lists'); ipLists.value = res.data || [] } catch { /* 静默失败：引用选择器退化为空列表，冲突比较回退内联口径 */ }
 }
-// refs 字段为 JSON 数组文本（如 "[1,5]"），经 parseJsonList 得 string[] 后转 number
-const parseRefIds = (raw: string | undefined): number[] => parseJsonList(raw).map(Number).filter((n) => Number.isInteger(n) && n > 0)
+// refs 字段为 JSON 数字数组文本（如 "[1,5]"）——不能复用 parseJsonList：
+// 其字符串过滤会把数字 id 全部丢弃（保存成功但重开显示为空的根因）
+const parseRefIds = (raw: string | undefined): number[] => {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+  } catch { return [] }
+}
 // 合并内联 + 引用列表条目（按精确字符串去重，与 v1 匹配口径一致）；
 // 缓存中缺失的引用列表跳过（防御性回退为仅内联）
 const mergeIpEntries = (inline: string[], refs: number[]): string[] => {
