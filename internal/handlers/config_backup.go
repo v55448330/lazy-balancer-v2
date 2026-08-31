@@ -21,7 +21,7 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs", "security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_crs_version", "security_ip2region_version"}
+var configBackupTables = []string{"lb_rules", "upstreams", "path_rules", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs", "security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_crs_version", "security_ip2region_version"}
 var configBackupV1Tables = []string{"lb_rules", "upstreams", "users", "api_keys", "ca_providers", "certificate_configs", "cert_jobs"}
 
 var configBackupCertJobStatuses = map[string]struct{}{
@@ -67,7 +67,7 @@ var backupBooleanTableColumns = map[string][]string{
 }
 
 // audit I-A：备份表 NULL→默认值归一映射（restoreTable 写入侧，覆盖
-// configBackupTables 全部 14 表）。默认值与集群快照 dump 侧逐列对齐
+// configBackupTables 全部 15 表）。默认值与集群快照 dump 侧逐列对齐
 // （cluster_snapshot.go 各 snapshot* 的 COALESCE 表达式）——「全量替换」
 // 两条通道（备份导入/集群快照）对同一 NULL 行必须产出同一落库值。
 // 仅收录「集群 dump 侧已 COALESCE 硬化」或「NULL 命中 raw-scan 消费点」的
@@ -120,8 +120,9 @@ var backupBooleanTableColumns = map[string][]string{
 //	                     NULL→crsupdate.go/crsscheduler.go readConsecutiveFailures
 //	                     raw int 扫描（读取失败优雅回退 0，退避退化为固定 1h），
 //	                     收录以维持映射判据一致，NULL→0
-//	security_policies / security_custom_rules / security_block_pages
-//	                     原三安全表条目原样并入（C5 KNOWN-GAP-1，dump
+//	security_policies / security_custom_rules / security_block_pages /
+//	security_ip_lists（v2.3.0，entries '[]' 对齐 dump 侧 COALESCE）
+//	                     原安全表条目原样并入（C5 KNOWN-GAP-1，dump
 //	                     :420/:428/:449 对齐）
 var backupTableNullDefaults = map[string]map[string]any{
 	"lb_rules": {
@@ -180,6 +181,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"block_page_id": int64(0), "block_status_code": int64(0), "enabled": int64(0),
 		"updated_by": int64(0), "created_at": "", "updated_at": "",
 		"geoip_countries": "[]", "geoip_mode": "off", "waf_check_response": int64(0),
+		"ip_acl_list_refs": "[]", "ip_whitelist_refs": "[]",
 	},
 	"security_custom_rules": {
 		"description": "", "conditions": "[]", "action": "block", "score": int64(5),
@@ -187,6 +189,12 @@ var backupTableNullDefaults = map[string]map[string]any{
 	},
 	"security_block_pages": {
 		"description": "", "content": "", "is_default": int64(0),
+		"created_by": int64(0), "created_at": "", "updated_by": int64(0), "updated_at": "",
+	},
+	// v2.3.0 security_ip_lists：默认值与集群 dump 侧 COALESCE 口径逐列对齐
+	// （cluster_snapshot.go snapshotSecurityIPLists——entries '[]'、审计 0/''）。
+	"security_ip_lists": {
+		"description": "", "category": "", "entries": "[]",
 		"created_by": int64(0), "created_at": "", "updated_by": int64(0), "updated_at": "",
 	},
 	"security_crs_version": {
@@ -992,8 +1000,34 @@ func validateV2BackupCertJobs(tables map[string][]map[string]any) error {
 // 保存侧 JSON 绑定对同值 400，导入侧不得经 backupString 静默归一放行。
 // R47 B-5：旧版备份可能携带 "941" 式组号或含空白的条目——导入原样落库后
 // REQUEST-9<code>-*.conf glob 零匹配，blocking 模式静默无任何 CRS 规则生效。
-func validateV2BackupSecurityPolicies(rows []map[string]any) error {
-	for index, policy := range rows {
+// W2（v2.3.0）：security_ip_lists 随备份全量替换——先校验列表行 entries
+// 形状（JSON 数组文本）并收集 id 集，再校验策略 ip_acl_list_refs/
+// ip_whitelist_refs（整数数组 JSON 文本，逐 id 对备份内列表解析——导入为
+// 全量替换，备份行才是导入后的真实数据，与 validateBackupRuleReferences
+// 的备份内解析哲学一致；悬挂引用会让引用展开静默跳过，UI 宣称的引用
+// 控制静默失效）。
+func validateV2BackupSecurityPolicies(tables map[string][]map[string]any) error {
+	ipListIDs := make(map[int]struct{}, len(tables["security_ip_lists"]))
+	for index, row := range tables["security_ip_lists"] {
+		if id, ok := backupInteger(row["id"]); ok {
+			ipListIDs[id] = struct{}{}
+		}
+		if rawEntries, exists := row["entries"]; exists && rawEntries != nil {
+			entries, ok := rawEntries.(string)
+			if !ok {
+				return fmt.Errorf("安全 IP 列表 #%d：entries 需为 JSON 数组文本，实际类型 %T", index+1, rawEntries)
+			}
+			// 空串视同 '[]'（restoreTable 的 NULL 归一同值兜底），仅非空
+			// 文本要求可解析为 JSON 数组。
+			if strings.TrimSpace(entries) != "" {
+				var parsed []any
+				if err := json.Unmarshal([]byte(entries), &parsed); err != nil {
+					return fmt.Errorf("安全 IP 列表 #%d：entries 需为 JSON 数组文本", index+1)
+				}
+			}
+		}
+	}
+	for index, policy := range tables["security_policies"] {
 		name := backupString(policy["name"])
 		for _, field := range []string{"crs_rule_groups", "crs_excluded_rules"} {
 			raw, exists := policy[field]
@@ -1070,6 +1104,31 @@ func validateV2BackupSecurityPolicies(rows []map[string]any) error {
 			if strings.TrimSpace(s) != "" {
 				if err := services.ValidateGeoIPCountries(s, backupGeoIPMode); err != nil {
 					return fmt.Errorf("安全策略 #%d（%s）：%w", index+1, name, err)
+				}
+			}
+		}
+		// W2：refs 两列按保存侧同口径校验——字符串列承载整数数组的 JSON
+		// 文本（空串/null/缺省视同 '[]' 放行，写入侧由 restoreTable 归一），
+		// 非字符串类型与 R48-3 同口径拒绝。
+		for _, field := range []string{"ip_acl_list_refs", "ip_whitelist_refs"} {
+			raw, exists := policy[field]
+			if !exists || raw == nil {
+				continue
+			}
+			refsText, ok := raw.(string)
+			if !ok {
+				return fmt.Errorf("安全策略 #%d（%s）：%s 需为整数数组的 JSON 文本，实际类型 %T", index+1, name, field, raw)
+			}
+			if strings.TrimSpace(refsText) == "" {
+				continue
+			}
+			var refs []int
+			if err := json.Unmarshal([]byte(refsText), &refs); err != nil {
+				return fmt.Errorf("安全策略 #%d（%s）：%s 需为整数数组的 JSON 文本", index+1, name, field)
+			}
+			for _, id := range refs {
+				if _, exists := ipListIDs[id]; !exists {
+					return fmt.Errorf("安全策略 #%d（%s）：引用了不存在的 IP 列表 %d", index+1, name, id)
 				}
 			}
 		}
@@ -1556,7 +1615,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
-	if err := validateV2BackupSecurityPolicies(backup.Tables["security_policies"]); err != nil {
+	if err := validateV2BackupSecurityPolicies(backup.Tables); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -1660,7 +1719,10 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 	}
 	defer session.close()
 	tx := session.tx
-	deleteOrder := []string{"security_policy_bindings", "security_crs_version", "security_ip2region_version", "security_custom_rules", "security_block_pages", "security_policies", "api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs"}
+	// W2：security_ip_lists 先删/先插 security_policies——refs 是策略行上的
+	// JSON 引用（无外键，顺序本自由），固定 lists→policies 与集群 apply 侧
+	// 一致，保证插入后引用即时指向存在行。
+	deleteOrder := []string{"security_policy_bindings", "security_crs_version", "security_ip2region_version", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_policies", "api_keys", "path_rules", "upstreams", "cert_jobs", "lb_rules", "users", "ca_providers", "certificate_configs"}
 	for _, table := range deleteOrder {
 		if _, exists := backup.Tables[table]; !exists {
 			continue
@@ -1672,7 +1734,7 @@ func (h *Handlers) ImportConfigBackup(c *gin.Context) {
 			return
 		}
 	}
-	insertOrder := []string{"users", "lb_rules", "ca_providers", "certificate_configs", "api_keys", "upstreams", "path_rules", "cert_jobs", "security_policies", "security_crs_version", "security_ip2region_version", "security_block_pages", "security_custom_rules", "security_policy_bindings"}
+	insertOrder := []string{"users", "lb_rules", "ca_providers", "certificate_configs", "api_keys", "upstreams", "path_rules", "cert_jobs", "security_ip_lists", "security_policies", "security_crs_version", "security_ip2region_version", "security_block_pages", "security_custom_rules", "security_policy_bindings"}
 	for _, table := range insertOrder {
 		rows, exists := backup.Tables[table]
 		if !exists {
@@ -1891,6 +1953,7 @@ func importCountsDetail(tables map[string][]map[string]any) string {
 		{"ca_providers", "CA %d 个"},
 		{"certificate_configs", "DNS %d 个"},
 		{"cert_jobs", "任务 %d 个"},
+		{"security_ip_lists", "IP 地址列表 %d 个"},
 		{"security_crs_version", "CRS 版本 %d 条"},
 		{"security_ip2region_version", "IP2Region 版本 %d 条"},
 	}

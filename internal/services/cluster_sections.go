@@ -71,14 +71,17 @@ func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 	case "waf_files":
 		return s.WafFiles
 	case "security":
+		// IPLists（v2.3.0）参与 security 节哈希：列表行变化必须触发节重放；
+		// 字段顺序是哈希输入的一部分，主从同构建共享本定义，勿单独调整。
 		return struct {
 			Policies    json.RawMessage                          `json:"policies"`
 			Bindings    json.RawMessage                          `json:"bindings"`
 			CustomRules []models.SecurityCustomRule              `json:"custom_rules"`
 			BlockPages  []models.SecurityBlockPage               `json:"block_pages"`
+			IPLists     json.RawMessage                          `json:"ip_lists"`
 			CRSVersion  []models.ClusterSecurityCRSVersion       `json:"crs_version"`
 			IP2Region   []models.ClusterSecurityIP2RegionVersion `json:"ip2region_version"`
-		}{s.SecurityPolicies, s.SecurityBindings, s.SecurityCustomRules, s.SecurityBlockPages, s.SecurityCRSVersion, s.SecurityIP2RegionVersion}
+		}{s.SecurityPolicies, s.SecurityBindings, s.SecurityCustomRules, s.SecurityBlockPages, s.SecurityIPLists, s.SecurityCRSVersion, s.SecurityIP2RegionVersion}
 	}
 	return nil
 }

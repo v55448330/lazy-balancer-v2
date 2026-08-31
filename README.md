@@ -7,7 +7,7 @@ A visual load balancing management platform built on **Caddy v2.11 + caddy-l4** 
 ## Feature Overview
 
 - **Load Balancing**: HTTP/HTTPS reverse proxy and TCP layer-4 proxy; weighted round robin (percentage-interlocked), least connections, IP hash, cookie sticky sessions; active/passive health checks with failover; path-level custom routing; proxy timeouts with global defaults plus per-rule overrides (incl. SSE/LLM streaming); TCP PROXY v2 to pass the real client IP through
-- **Security**: Coraza v3 WAF + OWASP CRS v4 (detection/blocking dual modes); IP2Region region control; IP allowlist/blocklist/trusted list; rate limiting; custom rules; customizable block page and status codes; security event collection with an overview dashboard (see the dedicated section below)
+- **Security**: Coraza v3 WAF + OWASP CRS v4 (detection/blocking dual modes); IP2Region region control; IP allowlist/blocklist/trusted list; reusable named IP address lists (IP/CIDR + remarks, categories, referenced by policies; one-click save from event handling); rate limiting; custom rules; customizable block page and status codes; security event collection with an overview dashboard (see the dedicated section below)
 - **Free Certificates**: Let's Encrypt / ZeroSSL ACME automatic issuance (DNS-01, DNSPod/Tencent Cloud, accelerated by querying authoritative NS directly), automatic renewal, backoff retries, manual upload
 - **Primary-Replica Cluster**: registration approval, incremental sync (rules/certificates/users/keys/settings/security policies), status reporting, one-click promotion; snapshot HMAC-SHA256 signatures against tampering and replay; replicas fully read-only
 - **Monitoring**: traffic/rate/latency percentiles (P50/95/99), three-state upstream health, per-rule metrics with historical trends, per-rule access logs (JSON, live view) and TOP statistics
@@ -31,7 +31,7 @@ docker run -d --name lazy-balancer --network host \
   -v $(pwd)/data:/app/data -v $(pwd)/logs:/app/logs \
   -v $(pwd)/certs:/app/certs -v $(pwd)/waf:/app/waf \
   -e LOG_FILE=/app/logs/lazy-balancer.log \
-  v55448330/lazy-balancer-v2:v2.2.0
+  v55448330/lazy-balancer-v2:v2.2.1
 ```
 
 > The image must bind host ports 80/443 plus custom listen ports directly; `--network host` is recommended on Linux. On macOS/Windows use `-p 8000:8000 -p 80:80 -p 443:443`. The first visit to `http://<host>:8000` opens an initialization wizard that creates the admin account; there are no default credentials.
@@ -97,7 +97,7 @@ Inbound → IP precheck (multi-policy IP ACL merged, highest priority) → GeoIP
 | Anomaly threshold | 1/3/5/10/20; lower is stricter |
 | CRS rule groups & exclusions | Load by attack-type group / exclude by file name |
 | Custom rules | Multi-condition chained matching on URI/args/headers/body/User-Agent (contains/regex/exact/prefix), with assignable scores |
-| IP access control | Allowlist (allow only) / blocklist (deny) / trusted list (skip inspection), CIDR |
+| IP access control | Allowlist (allow only) / blocklist (deny) / trusted list (skip inspection), CIDR; reusable IP address lists can be referenced by allowlist or blocklist |
 | Region control | Block selected regions / allow only selected regions, based on IP2Region (blocked requests generate security events via Coraza) |
 | Rate limiting | Per-IP rate cap plus burst allowance |
 | Block response | Custom HTML block page + status code (400/401/403/404/429/503, unified across WAF/IP ACL/GeoIP/rate limiting) |
@@ -130,7 +130,7 @@ Configuration changes on the primary auto-increment the cluster version; replica
 Go 1.26 · Gin · SQLite · Caddy v2.11.4 + caddy-l4 v0.1.2 + caddy-ratelimit v0.1.0 · Coraza v3 · OWASP CRS v4 · IP2Region v3 · Vue 3 · Element Plus · Vite
 
 ```
-v55448330/lazy-balancer-v2:v2.2.0
+v55448330/lazy-balancer-v2:v2.2.1
 ```
 
 ## License

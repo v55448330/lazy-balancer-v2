@@ -271,6 +271,10 @@ type ClusterSnapshot struct {
 	SecurityBindings         json.RawMessage                   `json:"security_bindings,omitempty"`
 	SecurityCustomRules      []SecurityCustomRule              `json:"security_custom_rules,omitempty"`
 	SecurityBlockPages       []SecurityBlockPage               `json:"security_block_pages,omitempty"`
+	// SecurityIPLists（v2.3.0）：可复用 IP 地址列表全量 dump（行结构与
+	// security_policies 同款 map 形态）；策略 ip_acl_list_refs/
+	// ip_whitelist_refs 以 id 引用本表，随 security 节一起全量替换。
+	SecurityIPLists          json.RawMessage                   `json:"security_ip_lists,omitempty"`
 	SecurityCRSVersion       []ClusterSecurityCRSVersion       `json:"security_crs_version,omitempty"`
 	SecurityIP2RegionVersion []ClusterSecurityIP2RegionVersion `json:"security_ip2region_version,omitempty"`
 	WafFiles                 *ClusterWafFilesRef               `json:"waf_files,omitempty"`

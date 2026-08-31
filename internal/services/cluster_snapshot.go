@@ -247,6 +247,9 @@ func (s *ClusterService) driftGuardSectionHashes(ctx context.Context) (map[strin
 	if snapshot.SecurityBlockPages, err = s.snapshotSecurityBlockPages(ctx, tx); err != nil {
 		return nil, err
 	}
+	if snapshot.SecurityIPLists, err = s.snapshotSecurityIPLists(ctx, tx); err != nil {
+		return nil, err
+	}
 	if snapshot.SecurityCRSVersion, err = s.snapshotSecurityCRSVersion(ctx, tx); err != nil {
 		return nil, err
 	}
@@ -450,6 +453,9 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 	if snapshot.SecurityBlockPages, err = s.snapshotSecurityBlockPages(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
+	if snapshot.SecurityIPLists, err = s.snapshotSecurityIPLists(ctx, store); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
 	if snapshot.SecurityCRSVersion, err = s.snapshotSecurityCRSVersion(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
@@ -467,7 +473,14 @@ func (s *ClusterService) snapshotSecurityPolicies(ctx context.Context, store sna
 	// 'off' 而非 schema 默认 'deny' 即为此——主节点读路径把 NULL 当 'off'；
 	// enabled 归一化为 0 而非 schema 默认 1 同理——读路径 WHERE enabled=1 把
 	// NULL 当禁用，落 1 会让从节点执行主节点未启用的策略）。
-	return s.dumpTableAsJSON(ctx, store, "security_policies", "id,name,COALESCE(description,'') AS description,COALESCE(mode,'off') AS mode,COALESCE(anomaly_threshold,5) AS anomaly_threshold,COALESCE(ip_acl_mode,'') AS ip_acl_mode,COALESCE(ip_acl_list,'[]') AS ip_acl_list,COALESCE(ip_acl_enabled,0) AS ip_acl_enabled,COALESCE(ip_whitelist,'[]') AS ip_whitelist,COALESCE(ip_blacklist,'[]') AS ip_blacklist,COALESCE(rate_limit_enabled,0) AS rate_limit_enabled,COALESCE(rate_limit_rps,0) AS rate_limit_rps,COALESCE(rate_limit_burst,0) AS rate_limit_burst,COALESCE(crs_rule_groups,'[]') AS crs_rule_groups,COALESCE(crs_excluded_rules,'[]') AS crs_excluded_rules,COALESCE(custom_rules,'[]') AS custom_rules,COALESCE(block_page_id,0) AS block_page_id,COALESCE(block_status_code,0) AS block_status_code,COALESCE(enabled,0) AS enabled,COALESCE(updated_by,0) AS updated_by,COALESCE(created_at,'') AS created_at,COALESCE(updated_at,'') AS updated_at,COALESCE(geoip_countries,'[]') AS geoip_countries,COALESCE(geoip_mode,'off') AS geoip_mode,COALESCE(waf_check_response,0) AS waf_check_response", "id")
+	return s.dumpTableAsJSON(ctx, store, "security_policies", "id,name,COALESCE(description,'') AS description,COALESCE(mode,'off') AS mode,COALESCE(anomaly_threshold,5) AS anomaly_threshold,COALESCE(ip_acl_mode,'') AS ip_acl_mode,COALESCE(ip_acl_list,'[]') AS ip_acl_list,COALESCE(ip_acl_enabled,0) AS ip_acl_enabled,COALESCE(ip_whitelist,'[]') AS ip_whitelist,COALESCE(ip_blacklist,'[]') AS ip_blacklist,COALESCE(rate_limit_enabled,0) AS rate_limit_enabled,COALESCE(rate_limit_rps,0) AS rate_limit_rps,COALESCE(rate_limit_burst,0) AS rate_limit_burst,COALESCE(crs_rule_groups,'[]') AS crs_rule_groups,COALESCE(crs_excluded_rules,'[]') AS crs_excluded_rules,COALESCE(custom_rules,'[]') AS custom_rules,COALESCE(block_page_id,0) AS block_page_id,COALESCE(block_status_code,0) AS block_status_code,COALESCE(enabled,0) AS enabled,COALESCE(updated_by,0) AS updated_by,COALESCE(created_at,'') AS created_at,COALESCE(updated_at,'') AS updated_at,COALESCE(geoip_countries,'[]') AS geoip_countries,COALESCE(geoip_mode,'off') AS geoip_mode,COALESCE(waf_check_response,0) AS waf_check_response,COALESCE(ip_acl_list_refs,'[]') AS ip_acl_list_refs,COALESCE(ip_whitelist_refs,'[]') AS ip_whitelist_refs", "id")
+}
+
+// snapshotSecurityIPLists（v2.3.0）dump 可复用 IP 地址列表：策略 refs 引用
+// 的目标表，NULL 归一口径与 security_policies 一致（entries '[]'、审计列
+// 0/''），保证主从落库行为一致。
+func (s *ClusterService) snapshotSecurityIPLists(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
+	return s.dumpTableAsJSON(ctx, store, "security_ip_lists", "id,name,COALESCE(description,'') AS description,COALESCE(category,'') AS category,COALESCE(entries,'[]') AS entries,COALESCE(created_by,0) AS created_by,COALESCE(created_at,'') AS created_at,COALESCE(updated_by,0) AS updated_by,COALESCE(updated_at,'') AS updated_at", "id")
 }
 
 func (s *ClusterService) snapshotSecurityBindings(ctx context.Context, store snapshotStore) (json.RawMessage, error) {

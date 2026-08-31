@@ -165,6 +165,7 @@ func TestApplySnapshot_emptySecurityPayloadDeletesRows(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO security_policies (id,name,mode) VALUES (5,'doomed','blocking');
 		INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_doomed',5);
 		INSERT INTO security_custom_rules (id,name) VALUES (3,'doomed');
+		INSERT INTO security_ip_lists (id,name,entries) VALUES (11,'doomed','[]');
 		INSERT INTO security_crs_version (id,version) VALUES (1,'v4.14.0')`); err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +175,7 @@ func TestApplySnapshot_emptySecurityPayloadDeletesRows(t *testing.T) {
 		SecurityBindings:    json.RawMessage("[]"),
 		SecurityCustomRules: []models.SecurityCustomRule{},
 		SecurityBlockPages:  []models.SecurityBlockPage{},
+		SecurityIPLists:     json.RawMessage("[]"),
 		SecurityCRSVersion:  []models.ClusterSecurityCRSVersion{},
 	}
 
@@ -183,7 +185,7 @@ func TestApplySnapshot_emptySecurityPayloadDeletesRows(t *testing.T) {
 	}
 
 	// Then
-	for _, table := range []string{"security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_crs_version"} {
+	for _, table := range []string{"security_policies", "security_policy_bindings", "security_custom_rules", "security_block_pages", "security_ip_lists", "security_crs_version"} {
 		var count int
 		if err := database.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
 			t.Fatal(err)

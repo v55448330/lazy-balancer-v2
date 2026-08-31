@@ -7,7 +7,7 @@
 ## 功能概览
 
 - **负载均衡**：HTTP/HTTPS 反向代理与 TCP 四层代理；加权轮询（百分比互锁）、最少连接、IP 哈希、Cookie 粘滞；主动/被动健康检查与失败转移；路径级自定义路由；代理超时全局默认 + 规则级覆盖（含 SSE/LLM 流式）；TCP PROXY v2 透传真实客户端 IP
-- **安全防护**：Coraza v3 WAF + OWASP CRS v4（拦截/检测双模式）；IP2Region 区域控制；IP 白名单/黑名单/信任名单；限流；自定义规则；拦截页与状态码定制；安全事件采集与总览仪表盘（详见下文专节）
+- **安全防护**：Coraza v3 WAF + OWASP CRS v4（拦截/检测双模式）；IP2Region 区域控制；IP 白名单/黑名单/信任名单；支持可复用 IP 地址列表（IP/CIDR+备注、分类、被策略引用、事件处置一键存入）；限流；自定义规则；拦截页与状态码定制；安全事件采集与总览仪表盘（详见下文专节）
 - **免费证书**：Let's Encrypt / ZeroSSL ACME 自动签发（DNS-01，DNSPod/腾讯云，权威 NS 直查加速），自动续签、退避重试、手动上传
 - **主从集群**：注册审批、增量同步（规则/证书/用户/密钥/设置/安全策略）、状态上报、一键提升；快照 HMAC-SHA256 签名防篡改/重放；从节点全站只读
 - **监控**：流量/速率/延迟分位数（P50/95/99）、上游健康三态、规则级指标与历史趋势、按规则访问日志（JSON，实时查看）与 TOP 统计
@@ -31,7 +31,7 @@ docker run -d --name lazy-balancer --network host \
   -v $(pwd)/data:/app/data -v $(pwd)/logs:/app/logs \
   -v $(pwd)/certs:/app/certs -v $(pwd)/waf:/app/waf \
   -e LOG_FILE=/app/logs/lazy-balancer.log \
-  v55448330/lazy-balancer-v2:v2.2.0
+  v55448330/lazy-balancer-v2:v2.2.1
 ```
 
 > 镜像需直接绑定宿主机 80/443 及自定义监听端口，Linux 建议 `--network host`；macOS/Windows 用 `-p 8000:8000 -p 80:80 -p 443:443`。首次访问 `http://<host>:8000` 进入初始化向导创建管理员，无默认账号密码。
@@ -97,7 +97,7 @@ docker run -d --name lazy-balancer --network host \
 | 异常阈值 | 1/3/5/10/20，越低越严格 |
 | CRS 规则组与排除 | 按攻击类型组加载 / 按文件名排除 |
 | 自定义规则 | URI/参数/请求头/请求体/User-Agent 多条件链式匹配（包含/正则/精确/前缀），可设分值 |
-| IP 访问控制 | 白名单（仅允许）/ 黑名单（拒绝）/ 信任名单（跳过检测），CIDR |
+| IP 访问控制 | 白名单（仅允许）/ 黑名单（拒绝）/ 信任名单（跳过检测），CIDR；可引用 IP 地址列表（白名单侧/黑名单侧） |
 | 区域控制 | 基于 IP2Region 在 Coraza 内拦截所选 / 仅允许所选（被拦请求产生安全事件） |
 | 限流 | per-IP 速率上限 + 突发余量 |
 | 拦截响应 | 自定义 HTML 拦截页 + 状态码（400/401/403/404/429/503，WAF/IP ACL/GeoIP/限流统一） |
@@ -128,7 +128,7 @@ docker run -d --name lazy-balancer --network host \
 Go 1.26 · Gin · SQLite · Caddy v2.11.4 + caddy-l4 v0.1.2 + caddy-ratelimit v0.1.0 · Coraza v3 · OWASP CRS v4 · IP2Region v3 · Vue 3 · Element Plus · Vite
 
 ```
-v55448330/lazy-balancer-v2:v2.2.0
+v55448330/lazy-balancer-v2:v2.2.1
 ```
 
 ## License

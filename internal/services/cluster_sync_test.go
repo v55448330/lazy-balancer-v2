@@ -1438,6 +1438,7 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 	snapshot.SecurityBindings = json.RawMessage(`[]`)
 	snapshot.SecurityCustomRules = []models.SecurityCustomRule{}
 	snapshot.SecurityBlockPages = []models.SecurityBlockPage{}
+	snapshot.SecurityIPLists = json.RawMessage(`[]`)
 	snapshot.SecurityCRSVersion = []models.ClusterSecurityCRSVersion{}
 	snapshot.SecurityIP2RegionVersion = []models.ClusterSecurityIP2RegionVersion{}
 	snapshot.SectionHashes = ComputeSnapshotSectionHashes(&snapshot)

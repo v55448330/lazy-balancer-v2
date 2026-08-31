@@ -130,8 +130,9 @@ func TestToolsListHidesWriteTools_forReadOnlyAPIKey(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("parse tools/list response: %v", err)
 	}
-	if len(payload.Result.Tools) != 53 {
-		t.Fatalf("read-only tool count=%d, want 53", len(payload.Result.Tools))
+	// 54 = 全部 GET 工具数（新增 list_ip_lists 后 +1），写工具被只读可见性收敛隐藏
+	if len(payload.Result.Tools) != 54 {
+		t.Fatalf("read-only tool count=%d, want 54", len(payload.Result.Tools))
 	}
 	dashboardVisible := false
 	for _, tool := range payload.Result.Tools {

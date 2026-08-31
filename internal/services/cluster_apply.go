@@ -397,6 +397,7 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 	// 同步删除，不能因载荷为空而提前返回。
 	statements := []string{
 		"DELETE FROM security_policy_bindings",
+		"DELETE FROM security_ip_lists",
 		"DELETE FROM security_policies",
 		"DELETE FROM security_custom_rules",
 		"DELETE FROM security_block_pages",
@@ -408,6 +409,21 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 			return fmt.Errorf("清理安全同步表: %w", err)
 		}
 	}
+	// security_ip_lists 先于 security_policies 落库：策略 refs 以 JSON 引用
+	// 列表 id，列表先行可保证引用目标即时存在（全量替换事务内顺序无正确性
+	// 影响，固定顺序仅为确定性）。
+	var ipLists []map[string]interface{}
+	if len(snapshot.SecurityIPLists) > 0 {
+		if err := json.Unmarshal(snapshot.SecurityIPLists, &ipLists); err != nil {
+			return fmt.Errorf("解析 security_ip_lists: %w", err)
+		}
+	}
+	for _, l := range ipLists {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_ip_lists (id,name,description,category,entries,created_by,created_at,updated_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			l["id"], l["name"], l["description"], l["category"], snapshotJSONText(l["entries"]), l["created_by"], l["created_at"], l["updated_by"], l["updated_at"]); err != nil {
+			return fmt.Errorf("写入 security_ip_list: %w", err)
+		}
+	}
 	var policies []map[string]interface{}
 	if len(snapshot.SecurityPolicies) > 0 {
 		if err := json.Unmarshal(snapshot.SecurityPolicies, &policies); err != nil {
@@ -415,14 +431,15 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 		}
 	}
 	for _, p := range policies {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response,ip_acl_list_refs,ip_whitelist_refs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			p["id"], p["name"], p["description"], p["mode"], p["anomaly_threshold"],
 			p["ip_acl_mode"], snapshotJSONText(p["ip_acl_list"]), p["ip_acl_enabled"],
 			snapshotJSONText(p["ip_whitelist"]), snapshotJSONText(p["ip_blacklist"]),
 			p["rate_limit_enabled"], p["rate_limit_rps"], p["rate_limit_burst"],
 			snapshotJSONText(p["crs_rule_groups"]), snapshotJSONText(p["crs_excluded_rules"]), snapshotJSONText(p["custom_rules"]),
 			p["block_page_id"], p["block_status_code"], p["enabled"], p["updated_by"], p["created_at"], p["updated_at"],
-			snapshotJSONText(p["geoip_countries"]), p["geoip_mode"], p["waf_check_response"]); err != nil {
+			snapshotJSONText(p["geoip_countries"]), p["geoip_mode"], p["waf_check_response"],
+			snapshotJSONText(p["ip_acl_list_refs"]), snapshotJSONText(p["ip_whitelist_refs"])); err != nil {
 			return fmt.Errorf("写入 security_policy: %w", err)
 		}
 	}
