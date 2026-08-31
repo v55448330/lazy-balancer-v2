@@ -229,7 +229,9 @@
           <el-divider content-position="left" class="acl-divider">区域控制</el-divider>
           <el-form :model="form" label-width="100px" :disabled="isReadOnly">
             <el-form-item label="启用">
-              <el-switch v-model="form.geoip_enabled" />
+              <!-- 开关即生效状态：关闭提交 geoip_mode='off'（后端零发射），名单
+                   保留不清单（重开即复用）；从 off 重开时控制模式回落 deny。 -->
+              <el-switch v-model="form.geoip_enabled" @change="onGeoipEnabledChange" />
             </el-form-item>
             <template v-if="form.geoip_enabled">
               <!-- R72 二十七次 N3（裁决）：披露 IPv6/不可解析客户端语义——
@@ -720,6 +722,11 @@ const aclListLabel = computed(() => ACL_LIST_LABELS[form.value.ip_acl_mode] ?? '
 
 const GEOIP_MODE_LABELS: Record<string, string> = { deny: '拦截所选区域', allow: '仅允许所选区域' }
 const geoipModeLabel = computed(() => GEOIP_MODE_LABELS[form.value.geoip_mode] ?? form.value.geoip_mode)
+
+// 从 off 态重开开关时控制模式回落 deny（off 只是关闭哨兵，radio 无此项）。
+const onGeoipEnabledChange = (enabled: string | number | boolean) => {
+  if (enabled && form.value.geoip_mode === 'off') form.value.geoip_mode = 'deny'
+}
 
 const ACL_MODE_TIPS: Record<string, string> = {
   deny: '列表中的 IP 将被拒绝访问，其他 IP 正常进行安全检测',
@@ -1324,7 +1331,7 @@ async function openDialog(row?: PolicySummary) {
     ipWhitelistEnabled.value = ipWhitelist.value.length > 0
     ipBlacklistSelf.value = parseJsonList(d.ip_blacklist)
     geoipCountries.value = parseJsonList(d.geoip_countries)
-    form.value.geoip_enabled = geoipCountries.value.length > 0
+    form.value.geoip_enabled = (d.geoip_mode || 'deny') !== 'off' && geoipCountries.value.length > 0
       crsRuleGroups.value = normalizeCrsGroups(parseJsonList(d.crs_rule_groups))
       crsExcludedRules.value = parseJsonList(d.crs_excluded_rules)
       selectedCustomRules.value = parseCustomRuleIds(d.custom_rules)
@@ -1401,12 +1408,12 @@ const handleSave = async () => {
       currentStep.value = WIZARD_STEP.BINDINGS
       return
     }
-    // 名单保留语义（与 ip_acl_list 对齐）：关闭开关不再清空已配置的名单，保存时始终
-    // 回传当前名单内容，避免"关掉开关再打开"丢数据；ip_blacklist 本页不下发，后端
-    // 指针语义自动保留原值。注意：后端按"名单非空即生效"发射，信任名单/区域控制
-    // 的真正关闭方式是清空名单条目，开关仅控制编辑器显隐并在重开时按名单派生。
-    // 显式白名单：仅提交 UpdateSecurityPolicyRequest 实际字段（geoip_enabled 为
-    // 编辑器派生开关，后端无此字段，不下发；ip_blacklist 由其他入口管理）。
+    // 名单保留语义（与 ip_acl_list 对齐）：关闭开关不清空已配置的名单，保存时
+    // 始终回传当前名单内容，避免"关掉开关再打开"丢数据；ip_blacklist 本页不下发，
+    // 后端指针语义自动保留原值。区域控制开关 = geoip_mode 三态：开启提交
+    // deny/allow，关闭提交 'off'（后端零发射、caddygeoip handler 不注入）；
+    // geoip_enabled 是编辑器本地派生开关，后端无此字段，不下发。
+    // 显式白名单：仅提交 UpdateSecurityPolicyRequest 实际字段。
     const payload = {
       name: form.value.name,
       description: form.value.description,
@@ -1426,7 +1433,7 @@ const handleSave = async () => {
       block_page_id: form.value.block_page_id,
       block_status_code: form.value.block_status_code,
       geoip_countries: JSON.stringify(geoipCountries.value),
-      geoip_mode: form.value.geoip_mode,
+      geoip_mode: form.value.geoip_enabled ? (form.value.geoip_mode === 'off' ? 'deny' : form.value.geoip_mode) : 'off',
       waf_check_response: form.value.waf_check_response,
     }
     let saveRes: APIResponse<{ id: number }> | undefined

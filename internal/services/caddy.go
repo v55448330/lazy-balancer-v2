@@ -3097,13 +3097,20 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		}
 		proxyConfig["transport"] = transportConfig
 	}
-	if rule.HostHeader != "" {
-		proxyConfig["headers"] = map[string]interface{}{
-			"request": map[string]interface{}{
-				"set": map[string]interface{}{"Host": []string{rule.HostHeader}},
-			},
-		}
+	// X-GeoIP-* 是 caddygeoip→coraza 的进程内控制头（coraza 在本 handler 之前
+	// 执行，已消费完毕），绝不允许透传上游后端。无条件剥离：geoip 关闭的规则
+	// 同时防客户端伪造同名头直达后端。头名清单与 caddygeoip/handler.go 的
+	// headerNames 同源，变更需双侧同步。
+	proxyRequestHeaders := map[string]interface{}{
+		"delete": []string{
+			"X-GeoIP-Country", "X-GeoIP-Country-Code", "X-GeoIP-Region",
+			"X-GeoIP-Province", "X-GeoIP-City", "X-GeoIP-Loc",
+		},
 	}
+	if rule.HostHeader != "" {
+		proxyRequestHeaders["set"] = map[string]interface{}{"Host": []string{rule.HostHeader}}
+	}
+	proxyConfig["headers"] = map[string]interface{}{"request": proxyRequestHeaders}
 	if effectiveServerTokensHidden {
 		handleChain = append(handleChain, map[string]interface{}{
 			"handler": "headers",

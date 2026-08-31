@@ -389,3 +389,95 @@ func TestGeoipPrivateRanges_excludesPublicMappedIPv4(t *testing.T) {
 		t.Fatal("plain private address 192.168.1.1 should match a private range")
 	}
 }
+
+// TestBuildCorazaDirectives_geoipModeOff_noEmission：geoip_mode='off' 是区域
+// 控制的关闭态（与 ip_acl_enabled=false 同语义）——即使 geoip_countries 名单
+// 非空（保留语义不清单）也不得发射 id:8 拦截链。
+func TestBuildCorazaDirectives_geoipModeOff_noEmission(t *testing.T) {
+	policy := &models.SecurityPolicy{
+		Mode:           "off",
+		GeoIPMode:      "off",
+		GeoIPCountries: json.RawMessage(`["海外","广东省"]`),
+	}
+	directives := BuildCorazaDirectives(policy, nil)
+	if strings.Contains(directives, "GeoIP 区域拦截") || strings.Contains(directives, "id:8") {
+		t.Fatalf("geoip_mode=off must not emit geoip rules, got:\n%s", directives)
+	}
+}
+
+// TestPolicyHasGeoIP_modeGate：活跃判定 = mode!='off' 且名单非空。mode 门失效
+// 会使 caddygeoip handler 在开关关闭后照常注入（X-GeoIP-* 头继续被打到请求上）。
+func TestPolicyHasGeoIP_modeGate(t *testing.T) {
+	countries := json.RawMessage(`["海外"]`)
+	if PolicyHasGeoIP(&models.SecurityPolicy{GeoIPMode: "off", GeoIPCountries: countries}) {
+		t.Fatal("mode=off with retained countries must be inactive")
+	}
+	if !PolicyHasGeoIP(&models.SecurityPolicy{GeoIPMode: "deny", GeoIPCountries: countries}) {
+		t.Fatal("mode=deny with countries must be active")
+	}
+	if PolicyHasGeoIP(&models.SecurityPolicy{GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`[]`)}) {
+		t.Fatal("empty countries must be inactive regardless of mode")
+	}
+}
+
+// TestBuildHTTPHandleChain_stripsGeoIPHeadersBeforeUpstream：X-GeoIP-* 是
+// caddygeoip→coraza 的进程内控制头，绝不允许透传上游后端。reverse_proxy 必须在
+// headers.request.delete 中剥离全部 6 个头；无条件剥离（不依赖安全策略绑定），
+// 同时拦截 geoip 关闭时客户端伪造同名头直达后端。与 HostHeader set 并存。
+func TestBuildHTTPHandleChain_stripsGeoIPHeadersBeforeUpstream(t *testing.T) {
+	wantStrip := []string{
+		"X-GeoIP-Country", "X-GeoIP-Country-Code", "X-GeoIP-Region",
+		"X-GeoIP-Province", "X-GeoIP-City", "X-GeoIP-Loc",
+	}
+	upstreams := []UpstreamConfig{{Host: "127.0.0.1", Port: 8080, Weight: 1, Enabled: true}}
+
+	for _, tc := range []struct {
+		name       string
+		hostHeader string
+	}{
+		{name: "no host header override", hostHeader: ""},
+		{name: "with host header override", hostHeader: "api.example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rule := SingleRuleConfig{CaddyID: "lb_strip", Protocol: "http", ListenPort: 80, HostHeader: tc.hostHeader}
+			chain, err := buildHTTPHandleChain(rule, upstreams)
+			if err != nil {
+				t.Fatalf("buildHTTPHandleChain: %v", err)
+			}
+			if len(chain) == 0 {
+				t.Fatal("chain must not be empty")
+			}
+			last, ok := chain[len(chain)-1].(map[string]interface{})
+			if !ok || last["handler"] != "reverse_proxy" {
+				t.Fatalf("last handler must be reverse_proxy, got %#v", chain[len(chain)-1])
+			}
+			headers, ok := last["headers"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("reverse_proxy must carry headers, got %#v", last["headers"])
+			}
+			request, ok := headers["request"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("headers.request missing: %#v", headers)
+			}
+			del, ok := request["delete"].([]string)
+			if !ok {
+				t.Fatalf("headers.request.delete must be []string, got %#v", request["delete"])
+			}
+			have := make(map[string]bool, len(del))
+			for _, h := range del {
+				have[h] = true
+			}
+			for _, h := range wantStrip {
+				if !have[h] {
+					t.Fatalf("headers.request.delete must contain %s, got %v", h, del)
+				}
+			}
+			if tc.hostHeader != "" {
+				set, ok := request["set"].(map[string]interface{})
+				if !ok || set["Host"] == nil {
+					t.Fatalf("host header set must coexist with geoip strip, got %#v", request)
+				}
+			}
+		})
+	}
+}

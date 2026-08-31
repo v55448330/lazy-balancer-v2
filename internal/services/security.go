@@ -104,9 +104,11 @@ func geoipCountries(p *models.SecurityPolicy) []string {
 	return out
 }
 
-// PolicyHasGeoIP reports whether the policy configures any geoip countries.
+// PolicyHasGeoIP reports whether geoip region control is active: mode must not
+// be "off" (the persisted off-state; countries are retained, not cleared) and
+// the country list must be non-empty. Gates caddygeoip handler insertion.
 func PolicyHasGeoIP(p *models.SecurityPolicy) bool {
-	return len(geoipCountries(p)) > 0
+	return p.GeoIPMode != "off" && len(geoipCountries(p)) > 0
 }
 
 // crsPoolFingerprint（R72 三十次 F1）：coraza-caddy v2.5.0 的 computePoolKey()
@@ -226,7 +228,9 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) str
 	// triggered" → 策略 errors.routes → 拦截页按配置状态码渲染（与自定义规则
 	// 拦截统一口径）；无拦截页时回落 Caddy 默认 403 页。检测/关闭模式下仍强制
 	// 生效（规则先于 DetectionOnly 切换发出，mode=off 由上方 switch 门保引擎）。
-	if geoCountries := geoipCountries(p); len(geoCountries) > 0 {
+	// geoip_mode='off' 是区域控制关闭态（名单保留不清单），与 PolicyHasGeoIP
+	// 同门：开关关闭即零发射。
+	if geoCountries := geoipCountries(p); p.GeoIPMode != "off" && len(geoCountries) > 0 {
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:8,phase:1,deny,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain\"\n", strings.Join(geoipPrivateRanges, ",")))
 		sb.WriteString(fmt.Sprintf(" SecRule REQUEST_HEADERS:X-GeoIP-Loc \"%s\" \"t:none\"\n", escapeCorazaPattern(geoipLocOperator(geoCountries, p.GeoIPMode == "allow"))))
 	}
@@ -793,10 +797,15 @@ func crsFilenameToRuleIDRange(s string) string {
 // 发射端永不匹配，会静默削弱地域控制。ip2region 未加载且无缓存时同样拒绝未知
 // 省份（fail-closed）：启动期放行任意省份会让 deny 模式的地域拦截静默失效，
 // 提示未加载而非放行。
-func ValidateGeoIPCountries(raw string) error {
+// geoipMode="off" 是区域控制关闭态：名单仅为保留数据（开关重开即复用），
+// 跳过可用性门（缺库时关闭/保留名单的保存不得被 400 卡死），仅做形状校验。
+func ValidateGeoIPCountries(raw string, geoipMode string) error {
 	var entries []string
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 		return fmt.Errorf("geoip_countries 必须是 JSON 数组")
+	}
+	if geoipMode == "off" {
+		return nil
 	}
 	// R72 二十七次 N5（裁决）：IP 库未装载时拒绝启用任何地域条目（含海外——
 	// 海外拦截同样依赖 live searcher 设置占位变量，缺库时 CEL 全部恒假、

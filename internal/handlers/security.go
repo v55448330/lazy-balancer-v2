@@ -498,9 +498,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		json.Unmarshal(p.CRSExcludedRules, &crsExcluded)
 		ruleCount := bindingCounts[p.ID]
 		// R72 三十次追加 a：GeoIP/自定义规则的 has 计算（供 ruleProtections 显示行）。
-		var geoipEntries []string
-		json.Unmarshal([]byte(p.GeoIPCountries), &geoipEntries)
-		hasGeoIP := len(geoipEntries) > 0
+		hasGeoIP := services.PolicyHasGeoIP(&p)
 		policies = append(policies, models.SecurityPolicySummary{
 			ID: p.ID, Name: p.Name, Mode: p.Mode, Enabled: p.Enabled, RuleCount: ruleCount,
 			HasWAF: p.Mode != "off", HasIPControl: services.SecurityPolicyHasIPControl(&p), HasRateLimit: p.RateLimitEnabled && p.RateLimitRPS > 0,
@@ -665,7 +663,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if req.IPACLMode == "" {
 		req.IPACLMode = "deny"
 	}
-	if err := services.ValidateGeoIPCountries(req.GeoIPCountries); err != nil {
+	if err := services.ValidateGeoIPCountries(req.GeoIPCountries, req.GeoIPMode); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
@@ -896,13 +894,19 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		// R72 二十九次 M1：地域条目与存量完全相同的更新跳过 live 校验——N5 裁决
 		// 语义是「缺库时不得启用」而非「缺库时不得编辑未变更字段」；条目真正变化
 		// 时才落 fail-closed 门（缺库时改描述/开关不再 400）。
+		// 校验口径取生效 mode：请求携带 geoip_mode 用请求值，否则用存量值——
+		// off 态保留名单只做形状校验，不被可用性门卡死。
 		skipGeoIPValidation := false
-		var storedGeoIP string
-		if err := db.DB.QueryRow("SELECT geoip_countries FROM security_policies WHERE id=?", id).Scan(&storedGeoIP); err == nil {
+		var storedGeoIP, storedGeoIPMode string
+		if err := db.DB.QueryRow("SELECT geoip_countries, geoip_mode FROM security_policies WHERE id=?", id).Scan(&storedGeoIP, &storedGeoIPMode); err == nil {
 			skipGeoIPValidation = geoipEntriesEqual(*req.GeoIPCountries, storedGeoIP)
 		}
+		effectiveGeoIPMode := storedGeoIPMode
+		if req.GeoIPMode != nil && *req.GeoIPMode != "" {
+			effectiveGeoIPMode = *req.GeoIPMode
+		}
 		if !skipGeoIPValidation {
-			if err := services.ValidateGeoIPCountries(*req.GeoIPCountries); err != nil {
+			if err := services.ValidateGeoIPCountries(*req.GeoIPCountries, effectiveGeoIPMode); err != nil {
 				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 				return
 			}
@@ -2280,9 +2284,10 @@ func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string, blockStatusC
 		return fmt.Errorf("ip_acl_mode 必须为 allow、deny 或 bypass，当前值 %s", ipACLMode)
 	}
 	switch geoIPMode {
-	case "", "allow", "deny":
+	// "off" 是区域控制关闭态（名单保留不清单），与 WAF mode/ip_acl 同为三态。
+	case "", "off", "allow", "deny":
 	default:
-		return fmt.Errorf("geoip_mode 必须为 allow 或 deny，当前值 %s", geoIPMode)
+		return fmt.Errorf("geoip_mode 必须为 off、allow 或 deny，当前值 %s", geoIPMode)
 	}
 	return nil
 }

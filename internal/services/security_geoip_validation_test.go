@@ -23,18 +23,18 @@ func TestValidateGeoIPCountries_rejectsUnknownProvinceWhenCacheLoaded(t *testing
 	// 省份（广东）与未知省份（火星）都按 fail-closed「未加载」拒绝。旧语义
 	// 用缓存判 loaded 会放行已知省份，而发射端占位变量从未设置（CEL 恒假）
 	// → deny 地域拦截静默零强制。
-	if err := ValidateGeoIPCountries(`["火星"]`); err == nil || !strings.Contains(err.Error(), "未加载") {
+	if err := ValidateGeoIPCountries(`["火星"]`, "deny"); err == nil || !strings.Contains(err.Error(), "未加载") {
 		t.Fatalf("non-海外 entry with dead live searcher must be rejected with 未加载, got %v", err)
 	}
-	if err := ValidateGeoIPCountries(`["广东"]`); err == nil || !strings.Contains(err.Error(), "未加载") {
+	if err := ValidateGeoIPCountries(`["广东"]`, "deny"); err == nil || !strings.Contains(err.Error(), "未加载") {
 		t.Fatalf("cache-known province with dead live searcher must ALSO be rejected (emission cannot match), got %v", err)
 	}
 	// R72 二十七次 N5（用户裁决覆盖 R57 海外放行）：海外拦截同样依赖 live
 	// searcher 设置占位变量，缺库时 CEL 恒假零强制——未加载时一并拒绝。
-	if err := ValidateGeoIPCountries(`["海外"]`); err == nil || !strings.Contains(err.Error(), "未加载") {
+	if err := ValidateGeoIPCountries(`["海外"]`, "deny"); err == nil || !strings.Contains(err.Error(), "未加载") {
 		t.Fatalf("海外 with dead live searcher must be rejected with 未加载, got %v", err)
 	}
-	if err := ValidateGeoIPCountries(`["   "]`); err == nil {
+	if err := ValidateGeoIPCountries(`["   "]`, "deny"); err == nil {
 		t.Fatalf("blank entry must be rejected")
 	}
 }
@@ -46,7 +46,7 @@ func TestValidateGeoIPCountries_rejectsUnknownProvinceWhenNothingLoaded(t *testi
 	withIP2RegionPaths(t, filepath.Join(dir, "ip2region.xdb"), filepath.Join(dir, "missing-dist.xdb"))
 
 	// When：条目为任意非空省份名
-	err := ValidateGeoIPCountries(`["未知省"]`)
+	err := ValidateGeoIPCountries(`["未知省"]`, "deny")
 	// Then：拒绝并提示未加载——fail-closed，避免 deny 模式地域拦截静默失效
 	if err == nil || !strings.Contains(err.Error(), "未加载") {
 		t.Fatalf("unknown province without loaded database must be rejected with 未加载, got %v", err)
@@ -54,11 +54,26 @@ func TestValidateGeoIPCountries_rejectsUnknownProvinceWhenNothingLoaded(t *testi
 	// And："海外" 是唯一可判定归属的条目，放行；空条目仍拒绝
 	// R72 二十七次 N5（用户裁决覆盖 R57 海外放行）：海外拦截同样依赖 live
 	// searcher 设置占位变量，缺库时 CEL 恒假零强制——未加载时一并拒绝。
-	if err := ValidateGeoIPCountries(`["海外"]`); err == nil || !strings.Contains(err.Error(), "未加载") {
+	if err := ValidateGeoIPCountries(`["海外"]`, "deny"); err == nil || !strings.Contains(err.Error(), "未加载") {
 		t.Fatalf("海外 without loaded database must be rejected with 未加载, got %v", err)
 	}
-	if err := ValidateGeoIPCountries(`[""]`); err == nil {
+	if err := ValidateGeoIPCountries(`[""]`, "deny"); err == nil {
 		t.Fatalf("empty entry must be rejected")
+	}
+}
+
+// TestValidateGeoIPCountries_modeOff_shapeOnly：off 态名单是保留数据（开关
+// 重开即复用），跳过可用性门——缺库时关闭/保留名单的保存不得被 400 卡死。
+// 非法 JSON 形状在 off 态同样拒绝。
+func TestValidateGeoIPCountries_modeOff_shapeOnly(t *testing.T) {
+	dir := t.TempDir()
+	withIP2RegionPaths(t, filepath.Join(dir, "ip2region.xdb"), filepath.Join(dir, "missing-dist.xdb"))
+
+	if err := ValidateGeoIPCountries(`["广东","海外"]`, "off"); err != nil {
+		t.Fatalf("off-mode retained countries must pass without xdb, got %v", err)
+	}
+	if err := ValidateGeoIPCountries(`火星`, "off"); err == nil {
+		t.Fatal("off-mode must still reject non-JSON-array shape")
 	}
 }
 

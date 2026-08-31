@@ -1065,8 +1065,10 @@ func validateV2BackupSecurityPolicies(rows []map[string]any) error {
 			if !ok {
 				return fmt.Errorf("安全策略 #%d（%s）：geoip_countries 需为字符串（JSON 数组文本），实际类型 %T", index+1, name, rawGeo)
 			}
+			// off 态名单是保留数据（保存侧同口径），仅做形状校验。
+			backupGeoIPMode, _ := policy["geoip_mode"].(string)
 			if strings.TrimSpace(s) != "" {
-				if err := services.ValidateGeoIPCountries(s); err != nil {
+				if err := services.ValidateGeoIPCountries(s, backupGeoIPMode); err != nil {
 					return fmt.Errorf("安全策略 #%d（%s）：%w", index+1, name, err)
 				}
 			}
