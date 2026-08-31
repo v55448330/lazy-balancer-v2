@@ -1334,7 +1334,7 @@ const entrySourceSuffix = (entry: string, inline: string[], refs: number[]): str
 }
 
 const aclSectionAlert = computed<string>(() => {
-  const { peers } = comparisonContext.value
+  const { peers, coBound } = comparisonContext.value
   const aclEnabled = form.value.ip_acl_enabled
   // 本策略条目采用合并口径（内联 ∪ 引用列表），对端 peers 已在 peerPolicyViews 合并
   const mergedAcl = mergeIpEntries(ipACLList.value, ipACLListRefs.value)
@@ -1344,16 +1344,19 @@ const aclSectionAlert = computed<string>(() => {
   // 在本向导不可见，避免同地址两条仅名单名不同的重复提示）
   const blacklist = normalizeIpList(ipBlacklistSelf.value).filter((e) => !aclDeny.includes(e))
   if (aclAllow.length === 0 && aclDeny.length === 0 && blacklist.length === 0) return ''
+  // 与 CRS 告警同口径：共绑 = 确定性冲突（当下就拦截）；非共绑 = 假设性提示
+  //（仅当未来绑定同一规则才成立）
+  const suffix = coBound ? '' : '（若两策略绑定同一规则）'
   const items: string[] = []
   for (const peer of peers) {
     for (const entry of aclAllow.filter((e) => peer.denyEntries.includes(e))) {
-      items.push(`地址 ${entry} 在「本策略」的访问控制名单中、同时在「${peer.name}」的黑名单中——允许不跨策略生效，该地址仍会被「${peer.name}」拦截`)
+      items.push(`地址 ${entry} 在「本策略」的访问控制名单中、同时在「${peer.name}」的黑名单中——允许不跨策略生效，该地址仍会被「${peer.name}」拦截${suffix}`)
     }
     for (const entry of aclDeny.filter((e) => peer.allowEntries.includes(e))) {
-      items.push(`地址 ${entry} 在「本策略」的访问控制名单中${entrySourceSuffix(entry, ipACLList.value, ipACLListRefs.value)}、同时在「${peer.name}」的允许/信任名单中——允许/信任不跨策略生效，该地址仍会被「本策略」拦截`)
+      items.push(`地址 ${entry} 在「本策略」的访问控制名单中${entrySourceSuffix(entry, ipACLList.value, ipACLListRefs.value)}、同时在「${peer.name}」的允许/信任名单中——允许/信任不跨策略生效，该地址仍会被「本策略」拦截${suffix}`)
     }
     for (const entry of blacklist.filter((e) => peer.allowEntries.includes(e))) {
-      items.push(`地址 ${entry} 在「本策略」的黑名单中、同时在「${peer.name}」的允许/信任名单中——允许/信任不跨策略生效，该地址仍会被「本策略」拦截`)
+      items.push(`地址 ${entry} 在「本策略」的黑名单中、同时在「${peer.name}」的允许/信任名单中——允许/信任不跨策略生效，该地址仍会被「本策略」拦截${suffix}`)
     }
   }
   if (items.length === 0) return ''
@@ -1361,14 +1364,15 @@ const aclSectionAlert = computed<string>(() => {
 })
 
 const whitelistSectionAlert = computed<string>(() => {
-  const { peers } = comparisonContext.value
+  const { peers, coBound } = comparisonContext.value
   // 信任名单同样合并引用列表条目后与对端比较
   const trust = mergeIpEntries(ipWhitelist.value, ipWhitelistRefs.value)
   if (trust.length === 0) return ''
+  const suffix = coBound ? '' : '（若两策略绑定同一规则）'
   const items: string[] = []
   for (const peer of peers) {
     for (const entry of trust.filter((e) => peer.denyEntries.includes(e))) {
-      items.push(`地址 ${entry} 在「本策略」的信任名单中${entrySourceSuffix(entry, ipWhitelist.value, ipWhitelistRefs.value)}、同时在「${peer.name}」的黑名单中——信任不跨策略生效，该地址仍会被「${peer.name}」拦截`)
+      items.push(`地址 ${entry} 在「本策略」的信任名单中${entrySourceSuffix(entry, ipWhitelist.value, ipWhitelistRefs.value)}、同时在「${peer.name}」的黑名单中——信任不跨策略生效，该地址仍会被「${peer.name}」拦截${suffix}`)
     }
   }
   if (items.length === 0) return ''
@@ -1532,6 +1536,11 @@ async function openDialog(row?: PolicySummary) {
   } else { resetForm() }
   // 每次打开对话框刷新引用列表缓存（提取为列表/他处新建后选项保持最新）
   void fetchIpLists()
+  // 共绑判定依赖 securityBindings（页面挂载时加载的快照）——对话框打开时轻量
+  // 刷新一次，外部变更（他端会话/API）的绑定关系才能进入冲突告警口径
+  request.get<APIResponse<Record<string, BindingInfo[]>>>('/security/bindings')
+    .then((res) => { securityBindings.value = res.data || {} })
+    .catch(() => { /* 刷新失败保留快照兜底 */ })
   originalBoundRules.value = [...boundRules.value]
   currentStep.value = WIZARD_STEP.BASIC
   dialogVisible.value = true
