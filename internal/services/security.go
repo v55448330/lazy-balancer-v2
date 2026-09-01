@@ -175,7 +175,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	emitIPControl := (p.IPWhitelistEnabled && len(ipWL) > 0) || len(ipBL) > 0 || (p.IPACLEnabled && len(ipACLList) > 0)
 	// mode=off 是关闭态（名单保留不清单）：不为已关闭的区域控制发射空转 coraza handler
 	geoipActive := p.GeoIPMode != "off" && len(geoipCountries(p)) > 0
-	customRules := resolvePolicyCustomRules(p.CustomRules, store)
+	customRules := policyCustomRulesCached(p, store)
 	hasCustomRules := false
 	for _, cr := range customRules {
 		if cr.Enabled {
@@ -546,7 +546,7 @@ func SecurityPolicyHasIPControl(p *models.SecurityPolicy) bool {
 	if p.IPWhitelistEnabled && len(ipWL) > 0 {
 		return true
 	}
-	if ipListRefsNonEmpty(p.IPWhitelistRefs) {
+	if p.IPWhitelistEnabled && ipListRefsNonEmpty(p.IPWhitelistRefs) {
 		return true
 	}
 	var ipBL []string
@@ -727,6 +727,19 @@ func buildIPPrecheckHandler(policies []*models.SecurityPolicy) map[string]interf
 // SQLite caps bound variables at 32766, and an oversized IN previously
 // failed the whole query so custom rules were silently lost (WAF weakened).
 var policyCustomRuleChunkSize = 500
+
+// policyCustomRulesCached 以策略为粒度缓存自定义规则解析（审计 I-4）：批量
+// 生成期由 loadSecurityPolicyContext 对每个去重策略解析一次，替代逐
+// (规则×策略) 对的重复 IN 查询；非批量路径首次调用即缓存，语义不变。
+func policyCustomRulesCached(p *models.SecurityPolicy, store caddyConfigStore) []models.CustomRule {
+	if p.CustomRulesCached {
+		return p.CustomRulesCache
+	}
+	rules := resolvePolicyCustomRules(p.CustomRules, store)
+	p.CustomRulesCache = rules
+	p.CustomRulesCached = true
+	return rules
+}
 
 func resolvePolicyCustomRules(raw json.RawMessage, store caddyConfigStore) []models.CustomRule {
 	if len(raw) == 0 {

@@ -420,7 +420,7 @@
             </el-descriptions-item>
             <el-descriptions-item label="信任名单">
               <template v-if="ipWhitelistEnabled">启用 · {{ mergeIpEntries(ipWhitelist, ipWhitelistRefs).length }} 条（含引用列表）</template>
-              <template v-else>禁用{{ ipWhitelist.length + ipWhitelistRefs.length > 0 ? `（保留 ${ipWhitelist.length} 条）` : '' }}</template>
+              <template v-else>禁用{{ ipWhitelist.length > 0 ? `（保留 ${ipWhitelist.length} 条内联）` : '' }}{{ ipWhitelistRefs.length > 0 ? `（保存时将解除 ${ipWhitelistRefs.length} 个引用列表）` : '' }}</template>
             </el-descriptions-item>
             <el-descriptions-item label="区域控制">
               <template v-if="form.geoip_enabled">{{ geoipModeLabel }} · 区域 {{ geoipCountries.length }} 个</template>
@@ -934,7 +934,7 @@ const validateIpAclList = (): boolean => {
     }
   }
   if (form.value.geoip_enabled && geoipCountries.value.length === 0) {
-    ElMessage.error('区域控制启用后必须选择至少一个区域，否则所有请求将被拒绝')
+    ElMessage.error('区域控制启用后必须选择至少一个区域（引用即生效）')
     return false
   }
   return true
@@ -1709,6 +1709,7 @@ const handleSave = async () => {
     } catch (error: unknown) {
       // 失败的 bind 请求已由全局拦截器逐个 toast，这里仅记录并中止收尾
       console.error('Failed to sync policy bindings:', error)
+     ElMessage.warning('策略已保存，但部分规则绑定同步失败；对话框保持打开，重新点击保存可重试绑定（幂等）')
       return
     }
     showSaveResult(saveRes, '保存成功'); dialogVisible.value = false; fetchData()

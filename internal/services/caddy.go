@@ -900,6 +900,13 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 			batch = append(batch, policy)
 		}
 		resolvePolicyIPListRefs(batch, store)
+		// 审计 I-4：自定义规则按去重策略在此解析一次（缓存于策略对象），
+		// BuildCorazaDirectives 对同策略的多次调用（多规则绑定同策略）零重复查询。
+		for _, bp := range batch {
+			if bp != nil {
+				policyCustomRulesCached(bp, store)
+			}
+		}
 	}
 	for ruleCaddyID, policyIDs := range rulePolicyIDs {
 		for _, policyID := range policyIDs {

@@ -13,22 +13,26 @@ type SecurityPolicy struct {
 	IPACLEnabled       bool            `json:"ip_acl_enabled"`
 	IPWhitelist        json.RawMessage `json:"ip_whitelist"`
 	IPWhitelistEnabled bool            `json:"ip_whitelist_enabled"`
-	IPBlacklist        json.RawMessage `json:"ip_blacklist"`
-	RateLimitEnabled   bool            `json:"rate_limit_enabled"`
-	RateLimitRPS       int             `json:"rate_limit_rps"`
-	RateLimitBurst     int             `json:"rate_limit_burst"`
-	CRSRuleGroups      json.RawMessage `json:"crs_rule_groups"`
-	CRSExcludedRules   json.RawMessage `json:"crs_excluded_rules"`
-	CustomRules        json.RawMessage `json:"custom_rules"`
-	BlockPageID        int             `json:"block_page_id"`
-	BlockStatusCode    int             `json:"block_status_code"`
-	Enabled            bool            `json:"enabled"`
-	UpdatedBy          int             `json:"updated_by"`
-	CreatedAt          string          `json:"created_at"`
-	UpdatedAt          string          `json:"updated_at"`
-	GeoIPCountries     json.RawMessage `json:"geoip_countries"`
-	GeoIPMode          string          `json:"geoip_mode"`
-	WAFCheckResponse   bool            `json:"waf_check_response"`
+	// CustomRulesCache/CustomRulesCached：生成期自定义规则解析缓存（内部字段，
+	// 不序列化）——批量路径对去重策略解析一次，防 (规则×策略) 对重复查询。
+	CustomRulesCache  []CustomRule    `json:"-"`
+	CustomRulesCached bool            `json:"-"`
+	IPBlacklist       json.RawMessage `json:"ip_blacklist"`
+	RateLimitEnabled  bool            `json:"rate_limit_enabled"`
+	RateLimitRPS      int             `json:"rate_limit_rps"`
+	RateLimitBurst    int             `json:"rate_limit_burst"`
+	CRSRuleGroups     json.RawMessage `json:"crs_rule_groups"`
+	CRSExcludedRules  json.RawMessage `json:"crs_excluded_rules"`
+	CustomRules       json.RawMessage `json:"custom_rules"`
+	BlockPageID       int             `json:"block_page_id"`
+	BlockStatusCode   int             `json:"block_status_code"`
+	Enabled           bool            `json:"enabled"`
+	UpdatedBy         int             `json:"updated_by"`
+	CreatedAt         string          `json:"created_at"`
+	UpdatedAt         string          `json:"updated_at"`
+	GeoIPCountries    json.RawMessage `json:"geoip_countries"`
+	GeoIPMode         string          `json:"geoip_mode"`
+	WAFCheckResponse  bool            `json:"waf_check_response"`
 	// IPACLListRefs / IPWhitelistRefs：引用的 security_ip_lists id 数组（JSON 文本，
 	// 与 IPACLList 同为原始 string 列、同扫描机制）。生成期与 inline 条目取并集。
 	IPACLListRefs   string `json:"ip_acl_list_refs"`

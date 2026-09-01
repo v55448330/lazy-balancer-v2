@@ -395,8 +395,14 @@ func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models
 // policyWhitelistEnabled 兼容旧快照缺列：缺省视为启用（历史语义=名单非空即生效）。
 func policyWhitelistEnabled(p map[string]interface{}) bool {
 	if v, ok := p["ip_whitelist_enabled"]; ok {
-		if b, ok2 := v.(bool); ok2 {
-			return b
+		// 快照 dump 的 INTEGER 列经 json.Unmarshal 落入 map 为 float64（0/1），
+		// bool 形态仅手工构造快照出现——两种都必须接受，否则 0 被误判为启用
+		//（审计 B-1：主端关闭的信任名单在从端变更为启用，从端更宽松）。
+		switch t := v.(type) {
+		case bool:
+			return t
+		case float64:
+			return t != 0
 		}
 	}
 	return true

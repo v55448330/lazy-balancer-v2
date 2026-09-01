@@ -212,7 +212,8 @@ func TestSecurityPolicyHasIPControl_refsOnlyTruthTable(t *testing.T) {
 	}{
 		{"ACL refs only, enabled", &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: "[]", IPACLListRefs: "[3]"}, true},
 		{"ACL refs only, toggle off", &models.SecurityPolicy{IPACLMode: "deny", IPACLList: "[]", IPACLListRefs: "[3]"}, false},
-		{"whitelist refs only", &models.SecurityPolicy{IPWhitelistRefs: "[3]"}, true},
+		{"whitelist refs only, enabled", &models.SecurityPolicy{IPWhitelistEnabled: true, IPWhitelistRefs: "[3]"}, true},
+		{"whitelist refs only, toggle off", &models.SecurityPolicy{IPWhitelistRefs: "[3]"}, false},
 		{"malformed ACL refs", &models.SecurityPolicy{IPACLEnabled: true, IPACLList: "[]", IPACLListRefs: "bad"}, false},
 		{"no refs no inline", &models.SecurityPolicy{IPACLEnabled: true, IPACLList: "[]"}, false},
 	}

@@ -175,7 +175,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 	"security_policies": {
 		"description": "", "mode": "off", "anomaly_threshold": int64(5),
 		"ip_acl_mode": "", "ip_acl_list": "[]", "ip_acl_enabled": int64(0),
-		"ip_whitelist": "[]", "ip_blacklist": "[]",
+		"ip_whitelist": "[]", "ip_whitelist_enabled": int64(1), "ip_blacklist": "[]",
 		"rate_limit_enabled": int64(0), "rate_limit_rps": int64(0), "rate_limit_burst": int64(0),
 		"crs_rule_groups": "[]", "crs_excluded_rules": "[]", "custom_rules": "[]",
 		"block_page_id": int64(0), "block_status_code": int64(0), "enabled": int64(0),

@@ -369,3 +369,24 @@ func TestSyncService_applySnapshot_heals_local_rules_drift(t *testing.T) {
 		t.Fatalf("rules drift 未自愈: lb_rules 行数=%d, want 1", count)
 	}
 }
+
+// 审计 B-1：快照 dump 的 INTEGER 列 JSON 化为 float64（0/1）——断言 helper
+// 必须接受数字形态，否则主端 ip_whitelist_enabled=0 在从端被误存为启用。
+func TestPolicyWhitelistEnabled_acceptsNumericJSON(t *testing.T) {
+	cases := []struct {
+		name string
+		in   map[string]interface{}
+		want bool
+	}{
+		{"numeric zero", map[string]interface{}{"ip_whitelist_enabled": float64(0)}, false},
+		{"numeric one", map[string]interface{}{"ip_whitelist_enabled": float64(1)}, true},
+		{"bool false", map[string]interface{}{"ip_whitelist_enabled": false}, false},
+		{"bool true", map[string]interface{}{"ip_whitelist_enabled": true}, true},
+		{"missing defaults enabled", map[string]interface{}{}, true},
+	}
+	for _, c := range cases {
+		if got := policyWhitelistEnabled(c.in); got != c.want {
+			t.Fatalf("%s: policyWhitelistEnabled=%v, want %v", c.name, got, c.want)
+		}
+	}
+}
