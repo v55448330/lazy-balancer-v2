@@ -53,13 +53,19 @@
               <el-tooltip v-if="row.has_waf" :content="wafTip(row)" placement="top">
                 <el-tag size="small" effect="plain">WAF</el-tag>
               </el-tooltip>
-              <el-tooltip v-if="hasIpControl(row)" :content="ipControlTip(row)" placement="top">
+              <el-tooltip v-if="hasIpControl(row)" placement="top">
+                <template #content>
+                  <div v-for="line in ipControlTipLines(row)" :key="line">{{ line }}</div>
+                </template>
                 <el-tag size="small" type="success" effect="plain">IP 控制</el-tag>
+              </el-tooltip>
+              <el-tooltip v-if="hasGeoControl(row)" :content="geoipTipLine(row)" placement="top">
+                <el-tag size="small" type="danger" effect="plain">地域拦截</el-tag>
               </el-tooltip>
               <el-tooltip v-if="row.has_rate_limit" :content="`${row.rate_limit_rps} 次/秒 · 突发 ${row.rate_limit_burst}`" placement="top">
                 <el-tag size="small" type="warning" effect="plain">限流</el-tag>
               </el-tooltip>
-              <span v-if="!row.has_waf && !hasIpControl(row) && !row.has_rate_limit" class="text-secondary">—</span>
+              <span v-if="!row.has_waf && !hasIpControl(row) && !hasGeoControl(row) && !row.has_rate_limit" class="text-secondary">—</span>
             </div>
           </template>
         </el-table-column>
@@ -536,7 +542,7 @@ import { formatDate } from '@/utils/date'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse, UserListItem } from '@/types'
 
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[] }
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string }
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
@@ -842,11 +848,34 @@ const hasIpControl = (row: PolicySummary): boolean => {
 const wafTip = (row: PolicySummary): string =>
   `模式：${row.mode === 'blocking' ? '拦截' : '检测'} · 阈值 ${row.anomaly_threshold} · 排除 ${row.crs_excluded_count} 条 · 自定义 ${row.custom_rules_count} 条`
 
-const ipControlTip = (row: PolicySummary): string => {
+// 地域拦截启用口径与后端 PolicyHasGeoIP 一致：geoip_mode !== 'off' 且区域名单非空
+//（off 为关闭哨兵：区域保留不清单，重开即复用）
+const geoipRegionCount = (row: PolicySummary): number => parseJsonList(row.geoip_countries).length
+const hasGeoControl = (row: PolicySummary): boolean =>
+  row.has_geoip ?? ((row.geoip_mode ?? 'off') !== 'off' && geoipRegionCount(row) > 0)
+
+// 地域拦截明细行：启用 → 「地域拦截 N 区域」；关闭但保留区域 → 「地域拦截：已关闭
+//（保留 N 区域）」；未配置任何区域时返回空串不占行
+const geoipTipLine = (row: PolicySummary): string => {
+  const count = geoipRegionCount(row)
+  if ((row.geoip_mode ?? 'off') !== 'off') return `地域拦截 ${count} 区域`
+  return count > 0 ? `地域拦截：已关闭（保留 ${count} 区域）` : ''
+}
+
+// 「IP 控制」hover 明细行：访问控制（黑/白名单计数）+ 信任名单（含启用态，不单独
+// 占 tag 位避免防护能力列膨胀）+ 地域拦截（含关闭保留态）。计数均为合并口径
+//（内联 ∪ 引用列表条目），与向导/冲突检测同源。
+const ipControlTipLines = (row: PolicySummary): string[] => {
   const aclCount = mergeIpEntries(parseJsonList(row.ip_acl_list), parseRefIds(row.ip_acl_list_refs)).length
   const wlCount = mergeIpEntries(parseJsonList(row.ip_whitelist), parseRefIds(row.ip_whitelist_refs)).length
   const blCount = parseJsonList(row.ip_blacklist).length
-  return `访问控制：${row.ip_acl_mode === 'allow' ? '白名单模式' : '黑名单模式'} · 列表 ${aclCount} 条 · 白名单 ${wlCount} 条 · 黑名单 ${blCount} 条`
+  const lines = [
+    `访问控制：${ACL_MODE_LABELS[row.ip_acl_mode] ?? row.ip_acl_mode}模式 · 列表 ${aclCount} 条 · 黑名单 ${blCount} 条`,
+    `信任名单：${wlCount} 条（${row.ip_whitelist_enabled !== false ? '已启用' : '已关闭'}）`,
+  ]
+  const geoLine = geoipTipLine(row)
+  if (geoLine !== '') lines.push(geoLine)
+  return lines
 }
 
 // /security/bindings 以 rule_caddy_id 为键（v2.2.0 起值为绑定数组，policy_id ASC），
@@ -1594,6 +1623,10 @@ const handleSave = async () => {
     currentStep.value = WIZARD_STEP.IP_ACL
     return
   }
+  // 保存确认（与提取为列表/删除确认同款 warning 弹窗）：取消静默返回，不进入提交
+  try {
+    await ElMessageBox.confirm(`确定保存安全策略「${form.value.name.trim()}」？将立即重新加载 Caddy 配置。`, '确认', { type: 'warning' })
+  } catch { return }
   saving.value = true
   try {
     // v2.2.0 上限守卫（SC-BIND-02 配套）：POST bind 为 additive 且服务端不强制上限

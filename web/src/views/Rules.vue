@@ -1232,18 +1232,32 @@ interface SecurityPolicySummary {
   ip_whitelist: string
   rate_limit_rps: number
   rate_limit_burst: number
+  // 锁图标 hover 防护摘要口径与安全策略页「IP 控制」明细行一致（信任启用态 /
+  // 黑名单计数 / 引用列表合并 / 地域拦截启用态），后端 summary 已携带这些字段。
+  ip_blacklist?: string
+  ip_acl_list_refs?: string
+  ip_whitelist_refs?: string
+  ip_whitelist_enabled?: boolean
+  geoip_mode?: string
 }
 
 const securityPolicies = ref<SecurityPolicySummary[]>([])
 
+// 引用列表缓存：与 SecurityPolicies.vue 同款——IP 名单计数用合并口径
+//（内联 ∪ 引用列表条目），缺失的引用列表跳过（防御性回退为仅内联）
+interface IPListRefOption { id: number; name: string; entry_count: number; entries: Array<{ value: string; remark: string }> }
+const ipLists = ref<IPListRefOption[]>([])
+
 const fetchSecurityBindings = async () => {
   try {
-    const [bindingsRes, policiesRes] = await Promise.all([
+    const [bindingsRes, policiesRes, ipListRes] = await Promise.all([
       request.get<APIResponse<typeof securityBindings.value>>('/security/bindings'),
       request.get<APIResponse<SecurityPolicySummary[]>>('/security/policies'),
+      request.get<APIResponse<IPListRefOption[]>>('/security/ip-lists'),
     ])
     if (bindingsRes.data) securityBindings.value = bindingsRes.data
     if (policiesRes.data) securityPolicies.value = policiesRes.data
+    if (ipListRes.data) ipLists.value = ipListRes.data
   } catch { /* silent */ }
 }
 
@@ -1261,18 +1275,43 @@ interface PolicyProtectionGroup {
   rows: ProtectionRow[]
 }
 
-const parseIPListCount = (raw: string): number => {
-  if (!raw) return 0
+// ip 名单 JSON 文本 → 字符串数组（与 SecurityPolicies.vue parseJsonList 同款守卫）
+const parseIPList = (raw: string | undefined): string[] => {
+  if (!raw) return []
   try {
     const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.length : 0
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
   } catch {
-    return 0
+    return []
   }
 }
 
+// refs 字段为 JSON 数字数组文本（如 "[1,5]"）——字符串过滤会丢弃数字 id，需独立解析
+const parseRefIds = (raw: string | undefined): number[] => {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+  } catch { return [] }
+}
+
+// 合并内联 + 引用列表条目（按精确字符串去重），与安全策略页 mergeIpEntries 同口径
+const mergeIpEntries = (inline: string[], refs: number[]): string[] => {
+  const set = new Set(inline.map((v) => v.trim()).filter((v) => v !== ''))
+  for (const id of refs) {
+    const list = ipLists.value.find((l) => l.id === id)
+    if (!list) continue
+    for (const entry of list.entries) {
+      const v = entry.value.trim()
+      if (v !== '') set.add(v)
+    }
+  }
+  return [...set]
+}
+
 // D6-S1：geoip_countries 与 ip 列表同为库内 JSON 字符串，坏数据不得炸整页
-// 渲染路径——与 parseIPListCount / SecurityPolicies.vue 同款守卫。
+// 渲染路径——与 parseIPList / SecurityPolicies.vue 同款守卫。
 const parseGeoipCountryCount = (raw: string): number => {
   if (!raw) return 0
   try {
@@ -1298,14 +1337,20 @@ const ruleProtections = (caddyID: string): PolicyProtectionGroup[] => {
     if (mode === 'blocking') rows.push({ label: 'WAF（拦截）', detail: '命中即阻断' })
     else if (mode === 'detection') rows.push({ label: 'WAF（检测）', detail: '仅记录不阻断' })
     if (policy?.has_ip_control) {
-      const modeLabel = policy.ip_acl_mode === 'allow' ? '白名单模式' : (policy.ip_acl_mode === 'bypass' ? '免检测' : '黑名单模式')
-      const parts = [`${modeLabel} · ${parseIPListCount(policy.ip_acl_list)} 条`]
-      const trustCount = parseIPListCount(policy.ip_whitelist)
-      if (trustCount > 0 && policy.ip_acl_mode !== 'bypass') parts.push(`免检测 ${trustCount} 条`)
-      rows.push({ label: 'IP 访问控制', detail: parts.join(' · ') })
+      // 摘要口径与安全策略页「IP 控制」hover 明细行一致：合并计数（内联 ∪ 引用
+      // 列表）+ 黑名单计数 + 信任名单（含启用态）
+      const modeLabel = policy.ip_acl_mode === 'allow' ? '白名单模式' : (policy.ip_acl_mode === 'bypass' ? '免检测模式' : '黑名单模式')
+      const aclCount = mergeIpEntries(parseIPList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs)).length
+      const blCount = parseIPList(policy.ip_blacklist).length
+      rows.push({ label: 'IP 访问控制', detail: `${modeLabel} · 列表 ${aclCount} 条 · 黑名单 ${blCount} 条` })
+      rows.push({ label: '信任名单', detail: `${mergeIpEntries(parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs)).length} 条（${policy.ip_whitelist_enabled !== false ? '已启用' : '已关闭'}）` })
     }
     if (policy?.has_rate_limit) rows.push({ label: '速率限制', detail: `${policy.rate_limit_rps} 次/秒 · 突发 ${policy.rate_limit_burst} 次` })
-    if (policy?.has_geoip) rows.push({ label: 'GeoIP', detail: `${parseGeoipCountryCount(policy.geoip_countries)} 个地区` })
+    // 地域拦截（启用态）：启用 → 区域数；关闭但保留区域 → 已关闭（保留 N 区域）
+    const geoCount = parseGeoipCountryCount(policy?.geoip_countries ?? '')
+    if (policy?.has_geoip || geoCount > 0) {
+      rows.push({ label: '地域拦截', detail: policy?.has_geoip ? `${geoCount} 区域` : `已关闭（保留 ${geoCount} 区域）` })
+    }
     if (policy?.has_custom_rules) rows.push({ label: '自定义规则', detail: `${policy.custom_rules_count} 条` })
     return {
       key: binding.policy_id,
@@ -3159,7 +3204,9 @@ onUnmounted(() => {
 .acl-lock-icon.is-allow { color: var(--el-color-success); }
 .acl-lock-icon.is-deny { color: var(--el-color-danger); }
 .security-tooltip { min-width: 200px; font-size: 13px; }
-.security-tooltip .cert-value { max-width: 240px; }
+/* 防护摘要含合并计数 + 信任启用态（如「黑名单模式 · 列表 12 条 · 黑名单 3 条」），
+   240px 会折入省略号；放宽到 320px，完整文本仍有 :title 兜底 */
+.security-tooltip .cert-value { max-width: 320px; }
 .security-tooltip .policy-group + .policy-group { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e5e7eb; }
 .security-tooltip .policy-group.is-disabled { opacity: 0.45; }
 .security-tooltip .policy-group-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-weight: 600; }
