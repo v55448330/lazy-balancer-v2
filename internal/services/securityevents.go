@@ -257,7 +257,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	// 「rule_triggered 属于哪个策略」判定；仅加载启用策略（disabled 策略不应再
 	// 接收事件归因）。
 	policyByID := make(map[int]*models.SecurityPolicy)
-	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(geoip_countries,'[]') FROM security_policies WHERE enabled=1`)
+	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'') FROM security_policies WHERE enabled=1`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load policies: %w", err)
 	}
@@ -265,7 +265,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	for polRows.Next() {
 		p := &models.SecurityPolicy{}
 		var customJSON, crsJSON, blacklistJSON, geoipJSON string
-		if err := polRows.Scan(&p.ID, &p.Name, &customJSON, &crsJSON, &blacklistJSON, &p.IPACLEnabled, &p.IPACLMode, &p.IPACLList, &geoipJSON); err != nil {
+		if err := polRows.Scan(&p.ID, &p.Name, &customJSON, &crsJSON, &blacklistJSON, &p.IPACLEnabled, &p.IPACLMode, &p.IPACLList, &geoipJSON, &p.GeoIPMode); err != nil {
 			return nil, nil, nil, fmt.Errorf("security events: scan policy: %w", err)
 		}
 		p.CustomRules = json.RawMessage(customJSON)
@@ -303,8 +303,12 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 	}
 	switch {
 	case n == 8:
-		// GeoIP 拦截（id:8）：策略须携带 geoip 条目才拥有此事件——
-		// 否则多策略绑定时归因回退到首启用策略（与 id:2 allow 模式同族）。
+		// GeoIP 拦截（id:8）：所有权与发射门（PolicyHasGeoIP）同口径——mode!='off'
+		// 且名单非空。off 态名单仅为保留数据（不发射 id:8），不得抢走真实发射策略
+		// 的归因（审计 B1-IA：off+保留名单的首绑定策略曾错夺 id:8 归因）。
+		if policy.GeoIPMode == "off" {
+			return false
+		}
 		var geoCountries []string
 		if err := json.Unmarshal(policy.GeoIPCountries, &geoCountries); err != nil {
 			return false
@@ -852,7 +856,19 @@ func ensureAuditLogDir() error {
 	return os.MkdirAll(filepath.Dir(auditLogPath), 0o755)
 }
 
-func StartSecurityEventsIngestion(ctx context.Context) {
+func StartSecurityEventsIngestion(ctx context.Context) (waitExited func()) {
+	// 审计 B5-F3：返回 waitExited（循环退出时关闭的独立 done 通道）——优雅关停
+	// 在 db.Close 前先 cancel 再完整 join，避免在途 tick 与已关闭 DB 竞态刷噪。
+	// 每次调用独立通道，多启（测试）安全。
+	ingestionDone := make(chan struct{})
+	go func() {
+		defer close(ingestionDone)
+		runSecurityEventsIngestionLoop(ctx)
+	}()
+	return func() { <-ingestionDone }
+}
+
+func runSecurityEventsIngestionLoop(ctx context.Context) {
 	tailer := securityEventsNewTailer(auditLogPath, securityEventsOffsetPath)
 	if err := ensureAuditLogDir(); err != nil {
 		// 仅创建失败时告警一次（后续 tick 的同消息失败已由 S-1 限流窗口覆盖）。

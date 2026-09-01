@@ -33,7 +33,14 @@ const initialCurrentPage: PageId =
   queryPageValid ??
   (hashPage && isPageId(hashPage) ? hashPage :
    storedCurrentPage && isPageId(storedCurrentPage) ? storedCurrentPage : 'dashboard')
-if (!queryPageValid && storedCurrentPage !== initialCurrentPage) localStorage.setItem('currentPage', initialCurrentPage)
+// 审计 B4-I1：深链 ?page= 仅作首屏入口——消费后立即剥离并同步 localStorage，
+// 否则参数永久留在 URL 上遮蔽 hash 导航（深链标签页导航后刷新被拉回原页）。
+if (storedCurrentPage !== initialCurrentPage) localStorage.setItem('currentPage', initialCurrentPage)
+if (queryPageValid) {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('page')
+  window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+}
 
 interface AuthResponse {
   readonly token: string

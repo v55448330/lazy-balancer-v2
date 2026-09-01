@@ -1275,6 +1275,38 @@ func TestInitialize_convergesWindowEraSecurityPoliciesNotNullColumns(t *testing.
 // A4-S3: PK 重建迁移的 upstreams_new.enabled 此前为可空（与 fresh CREATE 的
 // NOT NULL DEFAULT 1 漂移）；对齐后重建结果必须 notnull=1，且遗留 NULL 行
 // 经 COALESCE 拷贝归一为 0。
+// 审计 B2-I1：FK OFF 时代积累的 path_rules 孤儿（rule_id 不在 lb_rules）在
+// 启动迁移中被一次性清理；DeleteRule/removeCreatedRule 已补显式删除断新增。
+func TestInitialize_cleansOrphanedPathRules(t *testing.T) {
+	dir := t.TempDir()
+	oldDB, oldMetricsDB, oldAuditDB := DB, MetricsDB, AuditDB
+	t.Cleanup(func() {
+		_ = Close()
+		DB, MetricsDB, AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	if _, err := DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_alive','r','http','a.test',8081,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DB.Exec(`INSERT INTO path_rules (rule_id,sort_order,match_type,path) VALUES ('lb_alive',1,'prefix','/api'), ('lb_ghost',1,'prefix','/x')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("re-initialize database: %v", err)
+	}
+	var orphan, alive int
+	_ = DB.QueryRow(`SELECT COUNT(*) FROM path_rules WHERE rule_id='lb_ghost'`).Scan(&orphan)
+	_ = DB.QueryRow(`SELECT COUNT(*) FROM path_rules WHERE rule_id='lb_alive'`).Scan(&alive)
+	if orphan != 0 {
+		t.Fatalf("orphan path_rules not cleaned: %d", orphan)
+	}
+	if alive != 1 {
+		t.Fatalf("live path_rules must survive cleanup: %d", alive)
+	}
+}
+
 func TestMigrateLbRulesPrimaryKey_rebuildsUpstreamEnabledNotNull(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if _, err := database.Exec(`

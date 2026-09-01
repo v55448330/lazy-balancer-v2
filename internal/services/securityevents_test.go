@@ -2255,7 +2255,9 @@ func TestSecurityEventsAttribution_GeoIPOwnerPicksGeoIPCarryingPolicy(t *testing
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_rule1','r','http','go029.com',443,1)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,geoip_countries,geoip_mode) VALUES (1,'policy-A',1,'[]','off')`); err != nil {
+	// 审计 B1-IA：A 为 off+保留名单（不发射 id:8）且绑定序第一——若归因门控
+	// 不判 mode，A 会抢走 B（真实发射者）的 id:8 事件归因。
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,geoip_countries,geoip_mode) VALUES (1,'policy-A',1,'["CN"]','off')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,geoip_countries,geoip_mode) VALUES (3,'policy-B',1,'["CN"]','deny')`); err != nil {

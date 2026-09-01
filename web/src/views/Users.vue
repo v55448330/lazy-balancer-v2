@@ -268,18 +268,33 @@ const handleSubmit = async () => {
           display_name: form.value.display_name || undefined,
           password: form.value.password || undefined,
         })
+        // 审计 B4-I2：本人改密成功即吊销当前 JWT（pwd_ver）——必须走干净登出
+        // （对齐 AppLayout.saveProfile），否则后续 fetchUsers 以死 token 出站
+        // 401，成功操作被误报为「会话失效」并强制整页刷新。
+        if (form.value.password) {
+          authStore.showToast('success', '密码已修改，请重新登录')
+          await authStore.logout()
+          return
+        }
         mfaAwareSuccess('已保存')
         showForm.value = false
         editingUser.value = null
         await fetchUsers()
         return
       }
+      const editingSelf = editingUser.value.id === authStore.user?.id
       await request.put(`/users/${editingUser.value.id}`, {
         username: form.value.username,
         role: form.value.role,
         display_name: form.value.display_name,
         password: form.value.password || undefined,
       })
+      // admin 编辑本人行且提交了密码：同 B4-I2，干净登出替代死 token 误报。
+      if (editingSelf && form.value.password) {
+        authStore.showToast('success', '密码已修改，请重新登录')
+        await authStore.logout()
+        return
+      }
       mfaAwareSuccess('更新成功')
     } else {
       await request.post('/users', form.value)

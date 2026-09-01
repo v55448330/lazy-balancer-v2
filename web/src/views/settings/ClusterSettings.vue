@@ -302,9 +302,9 @@ const fetchNodes = async (): Promise<void> => {
   nodesLoading.value = true
   try {
     const response = await request.get<APIResponse<readonly ClusterNodeWithSyncError[]>>('/cluster/nodes', { signal: clusterPolling.signal, silent: true })
-    if (!disposed && requestSeq === requestSequence) nodes.value = response.data ?? []
+    if (!disposed && requestSeq === nodesRequestSequence) nodes.value = response.data ?? []
   } finally {
-    if (!disposed && requestSeq === requestSequence) nodesLoading.value = false
+    if (!disposed && requestSeq === nodesRequestSequence) nodesLoading.value = false
   }
 }
 

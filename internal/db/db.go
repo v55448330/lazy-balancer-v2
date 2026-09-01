@@ -358,7 +358,7 @@ func createTables() error {
 		http_read_timeout INTEGER DEFAULT 60,
 		http_write_timeout INTEGER DEFAULT 60,
 		http_idle_timeout INTEGER DEFAULT 120,
-		upstream_keepalive_timeout INTEGER DEFAULT 60,
+		upstream_keepalive_timeout INTEGER DEFAULT 0,
 		proxy_dial_timeout INTEGER DEFAULT 0,
 		proxy_response_header_timeout INTEGER DEFAULT 0,
 		proxy_read_timeout INTEGER DEFAULT 0,
@@ -793,9 +793,10 @@ func runMigrations() error {
 		"global_config.http_read_timeout":  "UPDATE global_config SET http_read_timeout=60 WHERE http_read_timeout=0",
 		"global_config.http_write_timeout": "UPDATE global_config SET http_write_timeout=60 WHERE http_write_timeout=0",
 		"global_config.http_idle_timeout":  "UPDATE global_config SET http_idle_timeout=120 WHERE http_idle_timeout=0",
-		// 审计 A5-S1：旧默认 60→0 归一只在「新增列」这一次执行——列新增时
-		// 存量行从列 DEFAULT 得 60，此处一次归 0；此后用户显式设置的 60 是
-		// 写侧合法值，任何启动期迁移不得再改写。
+		// 审计 A5-S1/B5-F1：本列自引入起 DEFAULT 0，新增当刻存量行恒为 0——
+		// 此回填仅覆盖理论上的「列带 DEFAULT 60 时代新增」路径，实际库零命中
+		//（保留作形状防御）；真正的默认值收敛由 fresh CREATE DEFAULT 0 承担。
+		// 用户显式设置的 60 是写侧合法值，任何启动期迁移不得改写。
 		"global_config.upstream_keepalive_timeout": "UPDATE global_config SET upstream_keepalive_timeout=0 WHERE upstream_keepalive_timeout=60",
 	}
 	for col, dtype := range newColumns {
@@ -829,6 +830,11 @@ func runMigrations() error {
 	}
 	if _, err := DB.Exec("DROP TABLE IF EXISTS tls_certificates"); err != nil {
 		return fmt.Errorf("failed to drop tls_certificates: %w", err)
+	}
+	// 审计 B2-I1：FK OFF 时代 DeleteRule 缺 path_rules 显式删除所积累的孤儿行
+	// 一次性清理（幂等，无孤儿零命中）——孤儿随备份导出会使导入侧引用校验 400。
+	if _, err := DB.Exec("DELETE FROM path_rules WHERE rule_id NOT IN (SELECT caddy_id FROM lb_rules)"); err != nil {
+		return fmt.Errorf("failed to clean orphaned path_rules: %w", err)
 	}
 	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_api_keys_prefix_hash ON api_keys(key_prefix,key_hash)"); err != nil {
 		return fmt.Errorf("failed to index API key authentication: %w", err)

@@ -994,6 +994,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			"DELETE FROM cert_jobs WHERE rule_id = ?",
 			"DELETE FROM security_policy_bindings WHERE rule_caddy_id = ?",
 			"DELETE FROM upstreams WHERE rule_id = ?",
+			"DELETE FROM path_rules WHERE rule_id = ?",
 			"DELETE FROM lb_rules WHERE caddy_id = ?",
 		} {
 			if _, cleanupErr := cleanupTx.ExecContext(cleanupCtx, statement, caddyID); cleanupErr != nil {
@@ -2032,7 +2033,17 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				expiryPtr = &expiry
 			}
 			if !domainChanged && !caProviderChanged && ResolveEnableCertJobAction(true, jobStatus, expiryPtr, time.Now(), renewalDays) == EnableCertJobResume {
-				if _, err := db.DB.Exec("UPDATE cert_jobs SET status='issued',message='证书有效，已恢复使用',renewal_attempts=0,ca_available_after=NULL,last_error_code=NULL,updated_at=datetime('now') WHERE id=?", jobID); err != nil {
+				// 审计 B2-I2（R54 S-3 同型守卫）：行被并发删除时 UPDATE 命中 0 行
+				// 不报错——必须校验 RowsAffected，否则幻影 resume 抑制 needJob，
+				// 续签链静默断裂且被 200 掩盖（与 EnableRule 出口同口径）。
+				resumeResult, err := db.DB.Exec("UPDATE cert_jobs SET status='issued',message='证书有效，已恢复使用',renewal_attempts=0,ca_available_after=NULL,last_error_code=NULL,updated_at=datetime('now') WHERE id=?", jobID)
+				if err == nil {
+					resumed, raErr := resumeResult.RowsAffected()
+					if raErr != nil || resumed != 1 {
+						err = fmt.Errorf("任务行不存在或已被并发变更（rows=%d, err=%v）", resumed, raErr)
+					}
+				}
+				if err != nil {
 					restoreErr := restoreACMEState()
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "恢复证书任务失败: " + errors.Join(err, restoreErr).Error()})
 					return
@@ -2206,6 +2217,13 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	if _, err := tx.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID); err != nil {
 		log.Printf("DeleteRule upstreams delete error for caddy_id=%s: %v", caddyID, err)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除上游服务器失败"})
+		return
+	}
+	// 审计 B2-I1：FK 刻意 OFF（sqlite_pragmas.go），CASCADE 是死条款——path_rules
+	// 必须显式删除，否则孤儿行随备份导出后导入侧引用校验 400（备份自毒）。
+	if _, err := tx.Exec("DELETE FROM path_rules WHERE rule_id = ?", caddyID); err != nil {
+		log.Printf("DeleteRule path_rules delete error for caddy_id=%s: %v", caddyID, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除自定义路径失败"})
 		return
 	}
 	if _, err := tx.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID); err != nil {
