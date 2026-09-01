@@ -70,7 +70,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { request } from '@/utils/api'
+import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse } from '@/types'
 
@@ -157,7 +157,7 @@ const saveToListAction = async (): Promise<void> => {
   try {
     // 非 silent：错误走全局拦截器提示，428 时全局 MFA step-up 弹码链完整生效
     const res = await request.post<APIResponse<{ added: boolean }>>(`/security/ip-lists/${list.id}/ips`, { value: props.ip })
-    if (res.data?.added) ElMessage.success(`已存入列表「${list.name}」`)
+    if (res.data?.added) mfaAwareSuccess(`已存入列表「${list.name}」`)
     else ElMessage.info(`该 IP 已在列表「${list.name}」中`)
     await loadIpLists()
   } catch {
@@ -402,7 +402,7 @@ const applyAcl = async (policy: PolicyRow, target: AclTarget): Promise<void> => 
     }
 
     await request.put(`/security/policies/${policy.id}`, body)
-    ElMessage.success(successMsg)
+    mfaAwareSuccess(successMsg)
     await refreshRow(policy.id)
   } catch {
     // 失败提示由全局拦截器弹出，这里只需终止流程
@@ -441,7 +441,7 @@ const removeFromAcl = async (policy: PolicyRow): Promise<void> => {
       return
     }
     await request.put(`/security/policies/${policy.id}`, { ip_acl_list: JSON.stringify(list.filter((entry) => entry !== props.ip)) })
-    ElMessage.success(`已从策略「${policy.name}」的${listLabel}移除 ${props.ip}`)
+    mfaAwareSuccess(`已从策略「${policy.name}」的${listLabel}移除 ${props.ip}`)
     await refreshRow(policy.id)
   } catch {
     // 失败提示由全局拦截器弹出，这里只需终止流程
@@ -470,7 +470,7 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
       return
     }
     await request.put(`/security/policies/${policy.id}`, { ip_whitelist: JSON.stringify([...list, props.ip]) })
-    ElMessage.success(`已加入策略「${policy.name}」的信任名单`)
+    mfaAwareSuccess(`已加入策略「${policy.name}」的信任名单`)
     await refreshRow(policy.id)
   } catch {
     // 失败提示由全局拦截器弹出，这里只需终止流程

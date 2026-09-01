@@ -2948,7 +2948,9 @@ const startLogStats = async () => {
   const targetId = ruleLogCaddyId.value
   if (!targetId) return
   const requestSeq = ++ruleLogRequestSeq
-  const maps = { ip: {}, ua: {}, uri: {}, total: 0, startedAt: new Date().toLocaleString() }
+  // A4-S5：统计起始时间走 formatDate（配置时区口径），与页面其他时间戳一致，
+  // 不再用浏览器本地时区的 toLocaleString（started_at 为直接渲染的预格式化文本）
+  const maps = { ip: {}, ua: {}, uri: {}, total: 0, startedAt: formatDate(new Date().toISOString()) }
   logStatsMaps.value = maps
   ruleLogStats.value = null
   ruleLogStatsLoading.value = true

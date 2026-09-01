@@ -608,8 +608,14 @@ const ipWhitelistRefs = ref<number[]>([])
 interface IPListRefOption { id: number; name: string; entry_count: number; entries: Array<{ value: string; remark: string }> }
 const ipLists = ref<IPListRefOption[]>([])
 const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服务商', '办公网络', '数据中心', '可信地址', '恶意 IP', '其他']
-const fetchIpLists = async (): Promise<void> => {
-  try { const res = await request.get<APIResponse<IPListRefOption[]>>('/security/ip-lists'); ipLists.value = res.data || [] } catch { /* 静默失败：引用选择器退化为空列表，冲突比较回退内联口径 */ }
+const fetchIpLists = async (seq?: number): Promise<void> => {
+  try {
+    const res = await request.get<APIResponse<IPListRefOption[]>>('/security/ip-lists')
+    // A4-S2：带序列号调用（openDialog）时丢弃过期返回——对话框快速关闭重开后，
+    // 旧会话的在途响应不得覆盖新会话已刷新的引用列表缓存
+    if (seq !== undefined && seq !== policyDialogOpenSeq) return
+    ipLists.value = res.data || []
+  } catch { /* 静默失败：引用选择器退化为空列表，冲突比较回退内联口径 */ }
 }
 // refs 字段为 JSON 数字数组文本（如 "[1,5]"）——不能复用 parseJsonList：
 // 其字符串过滤会把数字 id 全部丢弃（保存成功但重开显示为空的根因）
@@ -984,9 +990,13 @@ const ruleBoundPolicies = ref<Record<string, RuleBoundPolicy[]>>({})
 const ensureBindingDetails = async (caddyIds: string[]): Promise<void> => {
   const missing = caddyIds.filter((id) => !(id in ruleBoundPolicies.value))
   if (missing.length === 0) return
+  // A4-S1：捕获对话框会话序列号——对话框关闭（resetWizard 已清空缓存）后落地的
+  // 过期响应不得回写，否则下一次会话把 stale 条目当作缓存跳过重取（missing 过滤）
+  const openSeq = policyDialogOpenSeq
   const results = await Promise.allSettled(
     missing.map((id) => request.get<APIResponse<RuleBoundPolicy[]>>(`/security/rules/${encodeURIComponent(id)}/policy`)),
   )
+  if (!dialogVisible.value || openSeq !== policyDialogOpenSeq) return
   const next = { ...ruleBoundPolicies.value }
   results.forEach((res, i) => {
     // 失败的不写入：保持缺省以便下次进入步骤时重试（全局拦截器已 toast）
@@ -1534,12 +1544,14 @@ async function openDialog(row?: PolicySummary) {
       return
     }
   } else { resetForm() }
-  // 每次打开对话框刷新引用列表缓存（提取为列表/他处新建后选项保持最新）
-  void fetchIpLists()
+  // 每次打开对话框刷新引用列表缓存（提取为列表/他处新建后选项保持最新）；
+  // A4-S2：传入 openSeq 丢弃过期返回，防止快速关闭重开后旧响应覆盖新缓存
+  void fetchIpLists(openSeq)
   // 共绑判定依赖 securityBindings（页面挂载时加载的快照）——对话框打开时轻量
-  // 刷新一次，外部变更（他端会话/API）的绑定关系才能进入冲突告警口径
+  // 刷新一次，外部变更（他端会话/API）的绑定关系才能进入冲突告警口径；
+  // A4-S2：同样按 openSeq 丢弃过期返回
   request.get<APIResponse<Record<string, BindingInfo[]>>>('/security/bindings')
-    .then((res) => { securityBindings.value = res.data || {} })
+    .then((res) => { if (openSeq !== policyDialogOpenSeq) return; securityBindings.value = res.data || {} })
     .catch(() => { /* 刷新失败保留快照兜底 */ })
   originalBoundRules.value = [...boundRules.value]
   currentStep.value = WIZARD_STEP.BASIC

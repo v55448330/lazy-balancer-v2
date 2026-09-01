@@ -124,11 +124,12 @@ import type { APIResponse } from '@/types'
 
 interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string; rule_name: string; policy_id: number; policy_name: string; client_ip: string; ip_location: string; method: string; uri: string; event_type: string; rule_triggered: string; rule_msg: string; action: string; anomaly_score: number }
 
-// 触发规则 family 映射：'2'/'3'/'4'/'5' 为 IP 访问控制拦截，949 为异常评分评估拦截，920/921 为协议异常/攻击，其余为 CRS 规则 ID
+// 触发规则 family 映射：'2'-'5' 与 '7'（允许模式预检拒绝，IP 白名单拒绝）为 IP 访问控制拦截，
+// '8' 为地域拦截，949 为异常评分评估拦截，920/921 为协议异常/攻击，其余为 CRS 规则 ID
 const triggeredLabel = (row: SecurityEvent): string => {
   const t = row.rule_triggered
   if (!t) return '—'
-  if (t === '2' || t === '3' || t === '4' || t === '5') return 'IP 访问控制'
+  if (t === '2' || t === '3' || t === '4' || t === '5' || t === '7') return 'IP 访问控制'
   if (t === '8') return '地域拦截'
   if (/^949/.test(t)) return '请求阻断评估'
   if (/^920/.test(t)) return '协议异常'

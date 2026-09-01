@@ -208,6 +208,9 @@ interface LoginTicketResponse {
 const authStore = useAuthStore()
 let disposed = false
 let requestSequence = 0
+// A4-S4：fetchNodes 独立计数器——updateAccessUrl 的手动刷新若与 fetchStatus 共享
+// requestSequence，会顶掉轮询在途 fetchStatus 的序列号，导致状态响应被当作过期丢弃
+let nodesRequestSequence = 0
 const status = ref<ClusterStatus | null>(null)
 const nodes = ref<readonly ClusterNodeWithSyncError[]>([])
 const initialLoading = ref(true)
@@ -295,7 +298,7 @@ const fetchStatus = async (): Promise<ClusterStatus> => {
 
 const fetchNodes = async (): Promise<void> => {
   if (disposed) return
-  const requestSeq = ++requestSequence
+  const requestSeq = ++nodesRequestSequence
   nodesLoading.value = true
   try {
     const response = await request.get<APIResponse<readonly ClusterNodeWithSyncError[]>>('/cluster/nodes', { signal: clusterPolling.signal, silent: true })
@@ -638,6 +641,7 @@ onMounted(async () => {
 onUnmounted(() => {
   disposed = true
   requestSequence++
+  nodesRequestSequence++
 })
 </script>
 
