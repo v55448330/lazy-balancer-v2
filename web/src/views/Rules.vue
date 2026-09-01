@@ -1349,7 +1349,8 @@ const ruleProtections = (caddyID: string): PolicyProtectionGroup[] => {
     // 地域拦截（启用态）：启用 → 区域数；关闭但保留区域 → 已关闭（保留 N 区域）
     const geoCount = parseGeoipCountryCount(policy?.geoip_countries ?? '')
     if (policy?.has_geoip || geoCount > 0) {
-      rows.push({ label: '地域拦截', detail: policy?.has_geoip ? `${geoCount} 区域` : `已关闭（保留 ${geoCount} 区域）` })
+      const geoModeLabel = policy?.geoip_mode === 'allow' ? '仅允许所选区域' : '拦截所选区域'
+      rows.push({ label: '地域拦截', detail: policy?.has_geoip ? `${geoModeLabel} · ${geoCount} 区域` : `已关闭（保留 ${geoCount} 区域）` })
     }
     if (policy?.has_custom_rules) rows.push({ label: '自定义规则', detail: `${policy.custom_rules_count} 条` })
     return {

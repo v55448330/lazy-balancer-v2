@@ -418,6 +418,10 @@
               <template v-if="form.ip_acl_enabled">{{ aclModeLabel }} · 列表 {{ aclMergedCount }} 条</template>
               <template v-else>禁用</template>
             </el-descriptions-item>
+            <el-descriptions-item label="信任名单">
+              <template v-if="ipWhitelistEnabled">启用 · {{ mergeIpEntries(ipWhitelist, ipWhitelistRefs).length }} 条（含引用列表）</template>
+              <template v-else>禁用{{ ipWhitelist.length + ipWhitelistRefs.length > 0 ? `（保留 ${ipWhitelist.length} 条）` : '' }}</template>
+            </el-descriptions-item>
             <el-descriptions-item label="区域控制">
               <template v-if="form.geoip_enabled">{{ geoipModeLabel }} · 区域 {{ geoipCountries.length }} 个</template>
               <template v-else>禁用</template>
@@ -858,7 +862,7 @@ const hasGeoControl = (row: PolicySummary): boolean =>
 //（保留 N 区域）」；未配置任何区域时返回空串不占行
 const geoipTipLine = (row: PolicySummary): string => {
   const count = geoipRegionCount(row)
-  if ((row.geoip_mode ?? 'off') !== 'off') return `地域拦截 ${count} 区域`
+  if ((row.geoip_mode ?? 'off') !== 'off') return `地域拦截：${GEOIP_MODE_LABELS[row.geoip_mode ?? 'deny'] ?? row.geoip_mode} · ${count} 区域`
   return count > 0 ? `地域拦截：已关闭（保留 ${count} 区域）` : ''
 }
 
