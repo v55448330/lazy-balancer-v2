@@ -125,6 +125,10 @@ Configuration changes on the primary auto-increment the cluster version; replica
 - **Export is a complete backup**: the exported file contains all configuration (including DNS/ACME credentials, certificates and private keys, password hashes) and can fully restore a working deployment; store backup files carefully and guard against leakage
 - **v1 migration**: just pick a v1 (nginx-based) backup and load-balancing rules convert automatically (inline certificates included)
 
+## Upgrade Notes
+
+During a rolling upgrade window (mixed primary/replica versions), replicas running the older build do not recognize IP address lists — policy IP access control entries that reference lists are silently inactive on those replicas until they are upgraded. Upgrading primary and replicas together is recommended.
+
 ## Tech Stack & Image
 
 Go 1.26 · Gin · SQLite · Caddy v2.11.4 + caddy-l4 v0.1.2 + caddy-ratelimit v0.1.0 · Coraza v3 · OWASP CRS v4 · IP2Region v3 · Vue 3 · Element Plus · Vite

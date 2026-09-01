@@ -123,6 +123,10 @@ docker run -d --name lazy-balancer --network host \
 - **导出即完整备份**：导出文件包含全部配置（含 DNS/ACME 凭证、证书与私钥、密码哈希），可完整恢复到可用状态；请将备份文件妥善保管，谨防外泄
 - **v1 迁移**：直接选择 v1（nginx 版）备份，自动转换负载均衡规则（含内联证书）
 
+## 升级须知
+
+滚动升级（主从不同版本共存）窗口内，旧版本从节点不识别「IP 地址列表」——策略中引用列表的 IP 访问控制在其上静默失效，直至该节点升级完成。建议主从节点同步升级。
+
 ## 技术栈与镜像
 
 Go 1.26 · Gin · SQLite · Caddy v2.11.4 + caddy-l4 v0.1.2 + caddy-ratelimit v0.1.0 · Coraza v3 · OWASP CRS v4 · IP2Region v3 · Vue 3 · Element Plus · Vite
