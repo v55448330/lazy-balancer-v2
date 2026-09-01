@@ -158,7 +158,8 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) str
 	// independently of the WAF mode so that "关闭 WAF" never disables IP control.
 	// GeoIP 地域拦截同阵营（v2.2.0 改走 coraza 后必须有引擎才能评估）。
 	emitIPControl := len(ipWL) > 0 || len(ipBL) > 0 || (p.IPACLEnabled && len(ipACLList) > 0)
-	geoipActive := len(geoipCountries(p)) > 0
+	// mode=off 是关闭态（名单保留不清单）：不为已关闭的区域控制发射空转 coraza handler
+	geoipActive := p.GeoIPMode != "off" && len(geoipCountries(p)) > 0
 	customRules := resolvePolicyCustomRules(p.CustomRules, store)
 	hasCustomRules := false
 	for _, cr := range customRules {
@@ -584,30 +585,44 @@ func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy
 const ipPrecheckAllowRuleID = 7
 
 // intersectIPLists 返回多个名单的交集（保持首名单出现顺序）；空集返回 nil。
+// 哈希集实现 O(n+m)：多策略 allow 模式合并集可达 10 万条目级，逐对线性
+// 扫描会把配置生成（持 CaddyService 互斥锁）拖至分钟级。
 func intersectIPLists(lists [][]string) []string {
 	if len(lists) == 0 {
 		return nil
 	}
+	candidate := make(map[string]struct{}, len(lists[0]))
+	for _, entry := range lists[0] {
+		if entry != "" {
+			candidate[entry] = struct{}{}
+		}
+	}
+	for _, rest := range lists[1:] {
+		next := make(map[string]struct{}, len(candidate))
+		for _, entry := range rest {
+			if entry == "" {
+				continue
+			}
+			if _, ok := candidate[entry]; ok {
+				next[entry] = struct{}{}
+			}
+		}
+		candidate = next
+		if len(candidate) == 0 {
+			return nil
+		}
+	}
 	var intersection []string
+	emitted := make(map[string]struct{}, len(candidate))
 	for _, entry := range lists[0] {
 		if entry == "" {
 			continue
 		}
-		inAll := true
-		for _, rest := range lists[1:] {
-			found := false
-			for _, other := range rest {
-				if other == entry {
-					found = true
-					break
-				}
+		if _, ok := candidate[entry]; ok {
+			if _, dup := emitted[entry]; dup {
+				continue
 			}
-			if !found {
-				inAll = false
-				break
-			}
-		}
-		if inAll {
+			emitted[entry] = struct{}{}
 			intersection = append(intersection, entry)
 		}
 	}

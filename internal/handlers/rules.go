@@ -1970,7 +1970,18 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				}
 				if !migrationRolledBack {
 					if err := certTx.Commit(); err != nil {
+						// 审计 A2-S1：commit 失败与开启/更新失败同后果——迁移未生效，
+						// 旧域任务持原域永驻（sweep 跳过终态），稍后 needJob 为新域
+						// 另建任务破坏「一规则一任务」。与 R48-2/R49 分支同语义退役。
 						services.Logf("error", "UpdateRule: cert job domain migration commit failed for caddy_id=%s: %v", caddyID, err)
+						oldCanonical := canonicalACMEDomainForJobLookup(existingRule.Domain)
+						if retireErr := retireCertJobsForDomain(db.DB, caddyID, oldCanonical, reversedACMEDomainForm(oldCanonical)); retireErr != nil {
+							services.Logf("error", "CRITICAL: UpdateRule: failed to retire old-domain cert job after migration commit failure for caddy_id=%s: %v", caddyID, retireErr)
+							recordAudit(c, "写入失败", "证书任务", services.FormatAuditDetail(
+								services.AuditRulePart(caddyID),
+								fmt.Sprintf("域名迁移提交失败后旧域任务退役失败：%v。旧域任务保持原状，请人工检查", retireErr),
+							))
+						}
 					}
 				}
 			}
@@ -2302,6 +2313,16 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		return
 	}
 	rule := rules[0]
+
+	// 审计 A2-S2：tcp-TLS 死形态归一与 CreateRule/UpdateRule 同口径——源行
+	// 遗留 enable_tls=1/tls_source=acme_dns 时，副本会原样携带死形态（tcp 不
+	// 终结入站 TLS、ACME 任务永不消费证书）。
+	if rule.Protocol == "tcp" {
+		rule.EnableTLS = false
+		rule.TLSSource = "manual"
+		rule.TLSCert, rule.TLSKey = "", ""
+		rule.ACMEConfigID = 0
+	}
 
 	userIDInt := contextUserID(c)
 

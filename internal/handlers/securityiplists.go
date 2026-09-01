@@ -327,6 +327,9 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	if req.Entries != nil {
 		entriesJSON = *req.Entries
 	}
+	if strings.TrimSpace(entriesJSON) == "" {
+		entriesJSON = "[]"
+	}
 	entries, err := validateIPListShape(name, description, category, entriesJSON)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -383,15 +386,16 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的列表 id"})
 		return
 	}
-	rows, err := tx.QueryContext(c.Request.Context(), "SELECT COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]') FROM security_policies")
+	rows, err := tx.QueryContext(c.Request.Context(), "SELECT id, COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]') FROM security_policies")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	referenced := 0
+	referencingPolicyIDs := make(map[int64]struct{})
 	for rows.Next() {
+		var policyID int64
 		var aclRefs, wlRefs string
-		if err := rows.Scan(&aclRefs, &wlRefs); err != nil {
+		if err := rows.Scan(&policyID, &aclRefs, &wlRefs); err != nil {
 			rows.Close()
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
@@ -399,7 +403,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		for _, raw := range []string{aclRefs, wlRefs} {
 			for _, refID := range parseIPListRefsIDs(raw) {
 				if refID == listID {
-					referenced++
+					referencingPolicyIDs[policyID] = struct{}{}
 				}
 			}
 		}
@@ -409,8 +413,8 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
 	}
-	if referenced > 0 {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该 IP 列表正被 %d 个安全策略引用，请先解除引用", referenced)})
+	if len(referencingPolicyIDs) > 0 {
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该 IP 列表正被 %d 个安全策略引用，请先解除引用", len(referencingPolicyIDs))})
 		return
 	}
 	// 快照名称与条目数须在 DELETE 前取（同事务内删除后行已不可见）
@@ -494,6 +498,6 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交事务失败: " + err.Error()})
 		return
 	}
-	recordAudit(c, "写入", "IP 地址列表", fmt.Sprintf("名称：%s（#%s）追加 IP %s（新增，现共 %d 条）", listName, id, req.Value, len(entries)+1))
+	recordAudit(c, "写入", "IP 地址列表", fmt.Sprintf("名称：%s（#%s）追加 IP %s（新增，现共 %d 条）", listName, id, req.Value, len(entries)))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已追加" + h.caddyApplyNote(c), Data: gin.H{"added": true}})
 }

@@ -559,6 +559,12 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
 			return
 		}
+		// 审计 A3-S2：与 ImportConfigBackup 同序——操作者自锁门（审计 B3）也须
+		// 进预览，否则预览显示「可导入」而实际导入 400（预览/导入判定不同序）。
+		if importUsername := c.GetString("username"); importUsername != "" && !backupContainsUsername(backup.Tables["users"], importUsername) {
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: "导入的备份不包含当前操作账户，导入后您将无法登录"}})
+			return
+		}
 		// R55 C-4：与 ImportConfigBackup 同序——坏 admin_tls_* 形态预览即报
 		// 不可导入，不得预览通过、导入才 400。
 		if err := validateV2BackupAdminTLS(backup.Config); err != nil {

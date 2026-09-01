@@ -1168,6 +1168,42 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	if req.BlockPageID != nil {
 		changedFields = append(changedFields, fmt.Sprintf("拦截页→#%d", *req.BlockPageID))
 	}
+	if req.Description != nil {
+		changedFields = append(changedFields, fmt.Sprintf("描述→%s", *req.Description))
+	}
+	if req.AnomalyThreshold != nil {
+		changedFields = append(changedFields, fmt.Sprintf("异常分阈值→%d", *req.AnomalyThreshold))
+	}
+	if req.BlockStatusCode != nil {
+		changedFields = append(changedFields, fmt.Sprintf("拦截状态码→%d", *req.BlockStatusCode))
+	}
+	if req.GeoIPCountries != nil {
+		changedFields = append(changedFields, fmt.Sprintf("GeoIP 名单→%s", *req.GeoIPCountries))
+	}
+	if req.GeoIPMode != nil {
+		changedFields = append(changedFields, fmt.Sprintf("GeoIP 模式→%s", *req.GeoIPMode))
+	}
+	if req.RateLimitEnabled != nil {
+		changedFields = append(changedFields, fmt.Sprintf("限流启用→%v", *req.RateLimitEnabled))
+	}
+	if req.RateLimitRPS != nil {
+		changedFields = append(changedFields, fmt.Sprintf("限流 RPS→%d", *req.RateLimitRPS))
+	}
+	if req.RateLimitBurst != nil {
+		changedFields = append(changedFields, fmt.Sprintf("限流突发→%d", *req.RateLimitBurst))
+	}
+	if req.CRSRuleGroups != nil {
+		changedFields = append(changedFields, fmt.Sprintf("CRS 规则组→%s", *req.CRSRuleGroups))
+	}
+	if req.CRSExcludedRules != nil {
+		changedFields = append(changedFields, fmt.Sprintf("CRS 排除→%s", *req.CRSExcludedRules))
+	}
+	if req.CustomRules != nil {
+		changedFields = append(changedFields, fmt.Sprintf("自定义规则→%s", *req.CustomRules))
+	}
+	if req.WAFCheckResponse != nil {
+		changedFields = append(changedFields, fmt.Sprintf("响应体检测→%v", *req.WAFCheckResponse))
+	}
 	if len(changedFields) > 0 {
 		auditDetail += "；" + strings.Join(changedFields, "；")
 	}
@@ -1555,7 +1591,8 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	// 'sqlmap' 这类消息关键词定位）。
 	if ruleTriggered := strings.TrimSpace(c.Query("rule_triggered")); ruleTriggered != "" {
 		familyPrefixes := map[string][]string{
-			"IP 访问控制": {"2", "3", "4", "5"},
+			"IP 访问控制": {"2", "3", "4", "5", "7"},
+			"地域拦截":    {"8"},
 			"请求阻断评估":  {"949"},
 			"协议异常":    {"920"},
 			"协议攻击":    {"921"},
@@ -1741,8 +1778,10 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	// 1xxxxx 无归属源（CRS 保留段 100000-999999 的余数），保持"其他"。
 	case strings.HasPrefix(ruleTriggered, "1") && (len(ruleTriggered) == 5 || len(ruleTriggered) >= 7):
 		return "自定义规则"
+	case ruleTriggered == "8" || strings.Contains(ruleMsg, "GeoIP 区域拦截"):
+		return "地域拦截"
 	case strings.Contains(ruleMsg, "IP 黑名单") || strings.Contains(ruleMsg, "IP 白名单") || strings.Contains(ruleMsg, "IP 访问控制") ||
-		ruleTriggered == "2" || ruleTriggered == "3" || ruleTriggered == "4" || ruleTriggered == "5":
+		ruleTriggered == "2" || ruleTriggered == "3" || ruleTriggered == "4" || ruleTriggered == "5" || ruleTriggered == "7":
 		return "IP 访问控制"
 	default:
 		return "其他"
