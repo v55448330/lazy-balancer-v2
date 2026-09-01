@@ -23,10 +23,10 @@ var crsDirectivesDir = "/app/waf/crs"
 func scanSecurityPolicyByID(policyID int) *models.SecurityPolicy {
 	var p models.SecurityPolicy
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
-	err := db.DB.QueryRow(`SELECT id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
+	err := db.DB.QueryRow(`SELECT id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
 		COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]')
 		FROM security_policies WHERE id=? AND enabled=1`, policyID).
-		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
+		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
 			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.IPACLListRefs, &p.IPWhitelistRefs)
 	if err != nil {
 		return nil
@@ -171,7 +171,8 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	// IP-level control (ACL / trust list / legacy bypass & blacklist) runs
 	// independently of the WAF mode so that "关闭 WAF" never disables IP control.
 	// GeoIP 地域拦截同阵营（v2.2.0 改走 coraza 后必须有引擎才能评估）。
-	emitIPControl := len(ipWL) > 0 || len(ipBL) > 0 || (p.IPACLEnabled && len(ipACLList) > 0)
+	// 信任名单三态门（对齐 ip_acl_enabled/geoip_mode）：关闭保留名单零发射。
+	emitIPControl := (p.IPWhitelistEnabled && len(ipWL) > 0) || len(ipBL) > 0 || (p.IPACLEnabled && len(ipACLList) > 0)
 	// mode=off 是关闭态（名单保留不清单）：不为已关闭的区域控制发射空转 coraza handler
 	geoipActive := p.GeoIPMode != "off" && len(geoipCountries(p)) > 0
 	customRules := resolvePolicyCustomRules(p.CustomRules, store)
@@ -221,7 +222,7 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off\"\n", strings.Join(ipACLList, ",")))
 		bypassEmitted = true
 	}
-	if len(ipWL) > 0 {
+	if p.IPWhitelistEnabled && len(ipWL) > 0 {
 		trustID := 3
 		if bypassEmitted {
 			trustID = 5
@@ -542,7 +543,7 @@ func SecurityPolicyHasIPControl(p *models.SecurityPolicy) bool {
 	json.Unmarshal([]byte(p.IPACLList), &ipACLList)
 	var ipWL []string
 	json.Unmarshal(p.IPWhitelist, &ipWL)
-	if len(ipWL) > 0 {
+	if p.IPWhitelistEnabled && len(ipWL) > 0 {
 		return true
 	}
 	if ipListRefsNonEmpty(p.IPWhitelistRefs) {

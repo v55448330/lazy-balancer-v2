@@ -3,31 +3,32 @@ package models
 import "encoding/json"
 
 type SecurityPolicy struct {
-	ID               int             `json:"id"`
-	Name             string          `json:"name"`
-	Description      string          `json:"description"`
-	Mode             string          `json:"mode"`
-	AnomalyThreshold int             `json:"anomaly_threshold"`
-	IPACLMode        string          `json:"ip_acl_mode"`
-	IPACLList        string          `json:"ip_acl_list"`
-	IPACLEnabled     bool            `json:"ip_acl_enabled"`
-	IPWhitelist      json.RawMessage `json:"ip_whitelist"`
-	IPBlacklist      json.RawMessage `json:"ip_blacklist"`
-	RateLimitEnabled bool            `json:"rate_limit_enabled"`
-	RateLimitRPS     int             `json:"rate_limit_rps"`
-	RateLimitBurst   int             `json:"rate_limit_burst"`
-	CRSRuleGroups    json.RawMessage `json:"crs_rule_groups"`
-	CRSExcludedRules json.RawMessage `json:"crs_excluded_rules"`
-	CustomRules      json.RawMessage `json:"custom_rules"`
-	BlockPageID      int             `json:"block_page_id"`
-	BlockStatusCode  int             `json:"block_status_code"`
-	Enabled          bool            `json:"enabled"`
-	UpdatedBy        int             `json:"updated_by"`
-	CreatedAt        string          `json:"created_at"`
-	UpdatedAt        string          `json:"updated_at"`
-	GeoIPCountries   json.RawMessage `json:"geoip_countries"`
-	GeoIPMode        string          `json:"geoip_mode"`
-	WAFCheckResponse bool            `json:"waf_check_response"`
+	ID                 int             `json:"id"`
+	Name               string          `json:"name"`
+	Description        string          `json:"description"`
+	Mode               string          `json:"mode"`
+	AnomalyThreshold   int             `json:"anomaly_threshold"`
+	IPACLMode          string          `json:"ip_acl_mode"`
+	IPACLList          string          `json:"ip_acl_list"`
+	IPACLEnabled       bool            `json:"ip_acl_enabled"`
+	IPWhitelist        json.RawMessage `json:"ip_whitelist"`
+	IPWhitelistEnabled bool            `json:"ip_whitelist_enabled"`
+	IPBlacklist        json.RawMessage `json:"ip_blacklist"`
+	RateLimitEnabled   bool            `json:"rate_limit_enabled"`
+	RateLimitRPS       int             `json:"rate_limit_rps"`
+	RateLimitBurst     int             `json:"rate_limit_burst"`
+	CRSRuleGroups      json.RawMessage `json:"crs_rule_groups"`
+	CRSExcludedRules   json.RawMessage `json:"crs_excluded_rules"`
+	CustomRules        json.RawMessage `json:"custom_rules"`
+	BlockPageID        int             `json:"block_page_id"`
+	BlockStatusCode    int             `json:"block_status_code"`
+	Enabled            bool            `json:"enabled"`
+	UpdatedBy          int             `json:"updated_by"`
+	CreatedAt          string          `json:"created_at"`
+	UpdatedAt          string          `json:"updated_at"`
+	GeoIPCountries     json.RawMessage `json:"geoip_countries"`
+	GeoIPMode          string          `json:"geoip_mode"`
+	WAFCheckResponse   bool            `json:"waf_check_response"`
 	// IPACLListRefs / IPWhitelistRefs：引用的 security_ip_lists id 数组（JSON 文本，
 	// 与 IPACLList 同为原始 string 列、同扫描机制）。生成期与 inline 条目取并集。
 	IPACLListRefs   string `json:"ip_acl_list_refs"`
@@ -40,23 +41,24 @@ type SecurityPolicy struct {
 }
 
 type SecurityPolicySummary struct {
-	ID               int    `json:"id"`
-	Name             string `json:"name"`
-	Mode             string `json:"mode"`
-	Enabled          bool   `json:"enabled"`
-	RuleCount        int    `json:"rule_count"`
-	HasWAF           bool   `json:"has_waf"`
-	HasIPControl     bool   `json:"has_ip_control"`
-	HasRateLimit     bool   `json:"has_rate_limit"`
-	AnomalyThreshold int    `json:"anomaly_threshold"`
-	IPACLMode        string `json:"ip_acl_mode"`
-	IPACLEnabled     bool   `json:"ip_acl_enabled"`
-	IPACLList        string `json:"ip_acl_list"`
-	IPWhitelist      string `json:"ip_whitelist"`
-	IPBlacklist      string `json:"ip_blacklist"`
-	RateLimitRPS     int    `json:"rate_limit_rps"`
-	RateLimitBurst   int    `json:"rate_limit_burst"`
-	CRSExcludedCount int    `json:"crs_excluded_count"`
+	ID                 int    `json:"id"`
+	Name               string `json:"name"`
+	Mode               string `json:"mode"`
+	Enabled            bool   `json:"enabled"`
+	RuleCount          int    `json:"rule_count"`
+	HasWAF             bool   `json:"has_waf"`
+	HasIPControl       bool   `json:"has_ip_control"`
+	HasRateLimit       bool   `json:"has_rate_limit"`
+	AnomalyThreshold   int    `json:"anomaly_threshold"`
+	IPACLMode          string `json:"ip_acl_mode"`
+	IPACLEnabled       bool   `json:"ip_acl_enabled"`
+	IPACLList          string `json:"ip_acl_list"`
+	IPWhitelist        string `json:"ip_whitelist"`
+	IPWhitelistEnabled bool   `json:"ip_whitelist_enabled"`
+	IPBlacklist        string `json:"ip_blacklist"`
+	RateLimitRPS       int    `json:"rate_limit_rps"`
+	RateLimitBurst     int    `json:"rate_limit_burst"`
+	CRSExcludedCount   int    `json:"crs_excluded_count"`
 	// D-K1：摘要携带 CRS 规则组原始 JSON——前端向导跨策略重复告警直接消费摘要，
 	// 不再对每条启用策略 N+1 拉取详情。
 	CRSRuleGroups json.RawMessage `json:"crs_rule_groups"`
@@ -75,55 +77,57 @@ type SecurityPolicySummary struct {
 }
 
 type CreateSecurityPolicyRequest struct {
-	Name             string `json:"name" binding:"required"`
-	Description      string `json:"description"`
-	Mode             string `json:"mode"`
-	AnomalyThreshold int    `json:"anomaly_threshold"`
-	IPACLMode        string `json:"ip_acl_mode"`
-	IPACLList        string `json:"ip_acl_list"`
-	IPACLEnabled     bool   `json:"ip_acl_enabled"`
-	IPWhitelist      string `json:"ip_whitelist"`
-	IPBlacklist      string `json:"ip_blacklist"`
-	RateLimitEnabled bool   `json:"rate_limit_enabled"`
-	RateLimitRPS     int    `json:"rate_limit_rps"`
-	RateLimitBurst   int    `json:"rate_limit_burst"`
-	CRSRuleGroups    string `json:"crs_rule_groups"`
-	CRSExcludedRules string `json:"crs_excluded_rules"`
-	CustomRules      string `json:"custom_rules"`
-	BlockPageID      int    `json:"block_page_id"`
-	BlockStatusCode  int    `json:"block_status_code"`
-	Enabled          *bool  `json:"enabled"`
-	GeoIPCountries   string `json:"geoip_countries"`
-	GeoIPMode        string `json:"geoip_mode"`
-	WAFCheckResponse bool   `json:"waf_check_response"`
-	IPACLListRefs    string `json:"ip_acl_list_refs"`
-	IPWhitelistRefs  string `json:"ip_whitelist_refs"`
+	Name               string `json:"name" binding:"required"`
+	Description        string `json:"description"`
+	Mode               string `json:"mode"`
+	AnomalyThreshold   int    `json:"anomaly_threshold"`
+	IPACLMode          string `json:"ip_acl_mode"`
+	IPACLList          string `json:"ip_acl_list"`
+	IPACLEnabled       bool   `json:"ip_acl_enabled"`
+	IPWhitelist        string `json:"ip_whitelist"`
+	IPWhitelistEnabled *bool  `json:"ip_whitelist_enabled"`
+	IPBlacklist        string `json:"ip_blacklist"`
+	RateLimitEnabled   bool   `json:"rate_limit_enabled"`
+	RateLimitRPS       int    `json:"rate_limit_rps"`
+	RateLimitBurst     int    `json:"rate_limit_burst"`
+	CRSRuleGroups      string `json:"crs_rule_groups"`
+	CRSExcludedRules   string `json:"crs_excluded_rules"`
+	CustomRules        string `json:"custom_rules"`
+	BlockPageID        int    `json:"block_page_id"`
+	BlockStatusCode    int    `json:"block_status_code"`
+	Enabled            *bool  `json:"enabled"`
+	GeoIPCountries     string `json:"geoip_countries"`
+	GeoIPMode          string `json:"geoip_mode"`
+	WAFCheckResponse   bool   `json:"waf_check_response"`
+	IPACLListRefs      string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs    string `json:"ip_whitelist_refs"`
 }
 
 type UpdateSecurityPolicyRequest struct {
-	Name             *string `json:"name"`
-	Description      *string `json:"description"`
-	Mode             *string `json:"mode"`
-	AnomalyThreshold *int    `json:"anomaly_threshold"`
-	IPACLMode        *string `json:"ip_acl_mode"`
-	IPACLList        *string `json:"ip_acl_list"`
-	IPACLEnabled     *bool   `json:"ip_acl_enabled"`
-	IPWhitelist      *string `json:"ip_whitelist"`
-	IPBlacklist      *string `json:"ip_blacklist"`
-	RateLimitEnabled *bool   `json:"rate_limit_enabled"`
-	RateLimitRPS     *int    `json:"rate_limit_rps"`
-	RateLimitBurst   *int    `json:"rate_limit_burst"`
-	CRSRuleGroups    *string `json:"crs_rule_groups"`
-	CRSExcludedRules *string `json:"crs_excluded_rules"`
-	CustomRules      *string `json:"custom_rules"`
-	BlockPageID      *int    `json:"block_page_id"`
-	BlockStatusCode  *int    `json:"block_status_code"`
-	Enabled          *bool   `json:"enabled"`
-	GeoIPCountries   *string `json:"geoip_countries"`
-	GeoIPMode        *string `json:"geoip_mode"`
-	WAFCheckResponse *bool   `json:"waf_check_response"`
-	IPACLListRefs    *string `json:"ip_acl_list_refs"`
-	IPWhitelistRefs  *string `json:"ip_whitelist_refs"`
+	Name               *string `json:"name"`
+	Description        *string `json:"description"`
+	Mode               *string `json:"mode"`
+	AnomalyThreshold   *int    `json:"anomaly_threshold"`
+	IPACLMode          *string `json:"ip_acl_mode"`
+	IPACLList          *string `json:"ip_acl_list"`
+	IPACLEnabled       *bool   `json:"ip_acl_enabled"`
+	IPWhitelist        *string `json:"ip_whitelist"`
+	IPWhitelistEnabled *bool   `json:"ip_whitelist_enabled"`
+	IPBlacklist        *string `json:"ip_blacklist"`
+	RateLimitEnabled   *bool   `json:"rate_limit_enabled"`
+	RateLimitRPS       *int    `json:"rate_limit_rps"`
+	RateLimitBurst     *int    `json:"rate_limit_burst"`
+	CRSRuleGroups      *string `json:"crs_rule_groups"`
+	CRSExcludedRules   *string `json:"crs_excluded_rules"`
+	CustomRules        *string `json:"custom_rules"`
+	BlockPageID        *int    `json:"block_page_id"`
+	BlockStatusCode    *int    `json:"block_status_code"`
+	Enabled            *bool   `json:"enabled"`
+	GeoIPCountries     *string `json:"geoip_countries"`
+	GeoIPMode          *string `json:"geoip_mode"`
+	WAFCheckResponse   *bool   `json:"waf_check_response"`
+	IPACLListRefs      *string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs    *string `json:"ip_whitelist_refs"`
 }
 
 type SecurityEvent struct {

@@ -439,7 +439,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 //  2. enabled 用 COALESCE(enabled,1)（schema 默认 TRUE）：List/Get 无 enabled
 //     WHERE 过滤，NULL-enabled 行须按 schema 默认呈现启用态；生成路径以
 //     WHERE enabled=1 守卫，NULL 行本就被过滤，故裸列即可。
-const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
+const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
 	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]')`
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
@@ -503,24 +503,25 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			ID: p.ID, Name: p.Name, Mode: p.Mode, Enabled: p.Enabled, RuleCount: ruleCount,
 			HasWAF: p.Mode != "off", HasIPControl: services.SecurityPolicyHasIPControl(&p), HasRateLimit: p.RateLimitEnabled && p.RateLimitRPS > 0,
 			HasGeoIP: hasGeoIP, HasCustomRules: services.CountEnabledCustomRules(p.CustomRules) > 0,
-			AnomalyThreshold: p.AnomalyThreshold,
-			IPACLMode:        p.IPACLMode,
-			IPACLEnabled:     p.IPACLEnabled,
-			IPACLList:        p.IPACLList,
-			IPWhitelist:      rawJSONString(p.IPWhitelist),
-			IPBlacklist:      rawJSONString(p.IPBlacklist),
-			RateLimitRPS:     p.RateLimitRPS,
-			RateLimitBurst:   p.RateLimitBurst,
-			CRSExcludedCount: len(crsExcluded),
-			CRSRuleGroups:    p.CRSRuleGroups,
-			CustomRulesCount: services.CountEnabledCustomRules(p.CustomRules),
-			UpdatedBy:        p.UpdatedBy,
-			UpdatedAt:        p.UpdatedAt,
-			GeoIPCountries:   rawJSONString(p.GeoIPCountries),
-			GeoIPMode:        p.GeoIPMode,
-			WAFCheckResponse: p.WAFCheckResponse,
-			IPACLListRefs:    p.IPACLListRefs,
-			IPWhitelistRefs:  p.IPWhitelistRefs,
+			AnomalyThreshold:   p.AnomalyThreshold,
+			IPACLMode:          p.IPACLMode,
+			IPACLEnabled:       p.IPACLEnabled,
+			IPWhitelistEnabled: p.IPWhitelistEnabled,
+			IPACLList:          p.IPACLList,
+			IPWhitelist:        rawJSONString(p.IPWhitelist),
+			IPBlacklist:        rawJSONString(p.IPBlacklist),
+			RateLimitRPS:       p.RateLimitRPS,
+			RateLimitBurst:     p.RateLimitBurst,
+			CRSExcludedCount:   len(crsExcluded),
+			CRSRuleGroups:      p.CRSRuleGroups,
+			CustomRulesCount:   services.CountEnabledCustomRules(p.CustomRules),
+			UpdatedBy:          p.UpdatedBy,
+			UpdatedAt:          p.UpdatedAt,
+			GeoIPCountries:     rawJSONString(p.GeoIPCountries),
+			GeoIPMode:          p.GeoIPMode,
+			WAFCheckResponse:   p.WAFCheckResponse,
+			IPACLListRefs:      p.IPACLListRefs,
+			IPWhitelistRefs:    p.IPWhitelistRefs,
 		})
 	}
 	if policies == nil {
@@ -611,6 +612,12 @@ func validateSecurityPolicyReferences(q policyQueryRower, blockPageID int, custo
 		}
 	}
 	return "", nil
+}
+
+// policyWhitelistDefault：Create 缺省（含旧客户端不传）视为启用——保持存量
+// 「名单非空即生效」语义不回退。
+func policyWhitelistDefault(v *bool) bool {
+	return v == nil || *v
 }
 
 func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
@@ -739,10 +746,10 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	result, err := tx.ExecContext(c.Request.Context(), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
+	result, err := tx.ExecContext(c.Request.Context(), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
 		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, waf_check_response, ip_acl_list_refs, ip_whitelist_refs, updated_by)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, req.IPBlacklist,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, policyWhitelistDefault(req.IPWhitelistEnabled), req.IPBlacklist,
 		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, req.WAFCheckResponse, req.IPACLListRefs, req.IPWhitelistRefs, getContextUserIDInt(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -1090,6 +1097,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addStr("ip_acl_mode", req.IPACLMode)
 	addStr("ip_acl_list", req.IPACLList)
 	addBool("ip_acl_enabled", req.IPACLEnabled)
+	addBool("ip_whitelist_enabled", req.IPWhitelistEnabled)
 	addStr("ip_whitelist", req.IPWhitelist)
 	addStr("ip_blacklist", req.IPBlacklist)
 
@@ -2255,7 +2263,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 
 func scanSecurityPolicyRow(row *sql.Row, p *models.SecurityPolicy) error {
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
-	if err := row.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
+	if err := row.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
 		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
 		return err
 	}
@@ -2270,7 +2278,7 @@ func scanSecurityPolicyRow(row *sql.Row, p *models.SecurityPolicy) error {
 
 func scanSecurityPolicy(rows *sql.Rows, p *models.SecurityPolicy) error {
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
-	if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
+	if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
 		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
 		return err
 	}
@@ -2298,62 +2306,64 @@ func rawJSONString(raw json.RawMessage) string {
 }
 
 type securityPolicyDetail struct {
-	ID               int    `json:"id"`
-	Name             string `json:"name"`
-	Description      string `json:"description"`
-	Mode             string `json:"mode"`
-	AnomalyThreshold int    `json:"anomaly_threshold"`
-	IPACLMode        string `json:"ip_acl_mode"`
-	IPACLList        string `json:"ip_acl_list"`
-	IPACLEnabled     bool   `json:"ip_acl_enabled"`
-	IPWhitelist      string `json:"ip_whitelist"`
-	IPBlacklist      string `json:"ip_blacklist"`
-	RateLimitEnabled bool   `json:"rate_limit_enabled"`
-	RateLimitRPS     int    `json:"rate_limit_rps"`
-	RateLimitBurst   int    `json:"rate_limit_burst"`
-	CRSRuleGroups    string `json:"crs_rule_groups"`
-	CRSExcludedRules string `json:"crs_excluded_rules"`
-	CustomRules      string `json:"custom_rules"`
-	BlockPageID      int    `json:"block_page_id"`
-	BlockStatusCode  int    `json:"block_status_code"`
-	Enabled          bool   `json:"enabled"`
-	CreatedAt        string `json:"created_at"`
-	UpdatedAt        string `json:"updated_at"`
-	GeoIPCountries   string `json:"geoip_countries"`
-	GeoIPMode        string `json:"geoip_mode"`
-	WAFCheckResponse bool   `json:"waf_check_response"`
-	IPACLListRefs    string `json:"ip_acl_list_refs"`
-	IPWhitelistRefs  string `json:"ip_whitelist_refs"`
+	ID                 int    `json:"id"`
+	Name               string `json:"name"`
+	Description        string `json:"description"`
+	Mode               string `json:"mode"`
+	AnomalyThreshold   int    `json:"anomaly_threshold"`
+	IPACLMode          string `json:"ip_acl_mode"`
+	IPACLList          string `json:"ip_acl_list"`
+	IPACLEnabled       bool   `json:"ip_acl_enabled"`
+	IPWhitelistEnabled bool   `json:"ip_whitelist_enabled"`
+	IPWhitelist        string `json:"ip_whitelist"`
+	IPBlacklist        string `json:"ip_blacklist"`
+	RateLimitEnabled   bool   `json:"rate_limit_enabled"`
+	RateLimitRPS       int    `json:"rate_limit_rps"`
+	RateLimitBurst     int    `json:"rate_limit_burst"`
+	CRSRuleGroups      string `json:"crs_rule_groups"`
+	CRSExcludedRules   string `json:"crs_excluded_rules"`
+	CustomRules        string `json:"custom_rules"`
+	BlockPageID        int    `json:"block_page_id"`
+	BlockStatusCode    int    `json:"block_status_code"`
+	Enabled            bool   `json:"enabled"`
+	CreatedAt          string `json:"created_at"`
+	UpdatedAt          string `json:"updated_at"`
+	GeoIPCountries     string `json:"geoip_countries"`
+	GeoIPMode          string `json:"geoip_mode"`
+	WAFCheckResponse   bool   `json:"waf_check_response"`
+	IPACLListRefs      string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs    string `json:"ip_whitelist_refs"`
 }
 
 func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 	return securityPolicyDetail{
-		ID:               p.ID,
-		Name:             p.Name,
-		Description:      p.Description,
-		Mode:             p.Mode,
-		AnomalyThreshold: p.AnomalyThreshold,
-		IPACLMode:        p.IPACLMode,
-		IPACLList:        p.IPACLList,
-		IPACLEnabled:     p.IPACLEnabled,
-		IPWhitelist:      rawJSONString(p.IPWhitelist),
-		IPBlacklist:      rawJSONString(p.IPBlacklist),
-		RateLimitEnabled: p.RateLimitEnabled,
-		RateLimitRPS:     p.RateLimitRPS,
-		RateLimitBurst:   p.RateLimitBurst,
-		CRSRuleGroups:    rawJSONString(p.CRSRuleGroups),
-		CRSExcludedRules: rawJSONString(p.CRSExcludedRules),
-		CustomRules:      rawJSONString(p.CustomRules),
-		BlockPageID:      p.BlockPageID,
-		BlockStatusCode:  p.BlockStatusCode,
-		Enabled:          p.Enabled,
-		CreatedAt:        p.CreatedAt,
-		UpdatedAt:        p.UpdatedAt,
-		GeoIPCountries:   rawJSONString(p.GeoIPCountries),
-		GeoIPMode:        p.GeoIPMode,
-		WAFCheckResponse: p.WAFCheckResponse,
-		IPACLListRefs:    p.IPACLListRefs,
-		IPWhitelistRefs:  p.IPWhitelistRefs,
+		ID:                 p.ID,
+		Name:               p.Name,
+		Description:        p.Description,
+		Mode:               p.Mode,
+		AnomalyThreshold:   p.AnomalyThreshold,
+		IPACLMode:          p.IPACLMode,
+		IPACLList:          p.IPACLList,
+		IPACLEnabled:       p.IPACLEnabled,
+		IPWhitelistEnabled: p.IPWhitelistEnabled,
+		IPWhitelist:        rawJSONString(p.IPWhitelist),
+		IPBlacklist:        rawJSONString(p.IPBlacklist),
+		RateLimitEnabled:   p.RateLimitEnabled,
+		RateLimitRPS:       p.RateLimitRPS,
+		RateLimitBurst:     p.RateLimitBurst,
+		CRSRuleGroups:      rawJSONString(p.CRSRuleGroups),
+		CRSExcludedRules:   rawJSONString(p.CRSExcludedRules),
+		CustomRules:        rawJSONString(p.CustomRules),
+		BlockPageID:        p.BlockPageID,
+		BlockStatusCode:    p.BlockStatusCode,
+		Enabled:            p.Enabled,
+		CreatedAt:          p.CreatedAt,
+		UpdatedAt:          p.UpdatedAt,
+		GeoIPCountries:     rawJSONString(p.GeoIPCountries),
+		GeoIPMode:          p.GeoIPMode,
+		WAFCheckResponse:   p.WAFCheckResponse,
+		IPACLListRefs:      p.IPACLListRefs,
+		IPWhitelistRefs:    p.IPWhitelistRefs,
 	}
 }
 

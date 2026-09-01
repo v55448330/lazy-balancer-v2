@@ -511,6 +511,7 @@ func createTables() error {
 		ip_acl_list TEXT DEFAULT '[]',
 		ip_acl_enabled BOOLEAN DEFAULT FALSE,
 		ip_whitelist TEXT DEFAULT '[]',
+		ip_whitelist_enabled INTEGER DEFAULT 1,
 		ip_blacklist TEXT DEFAULT '[]',
 		rate_limit_enabled BOOLEAN DEFAULT FALSE,
 		rate_limit_rps INTEGER DEFAULT 0,
@@ -776,10 +777,11 @@ func runMigrations() error {
 		"security_policies.updated_by":                    "INTEGER DEFAULT 0",
 		// 四列刻意可空（不加 NOT NULL）：restoreTable/快照/带外脏数据可携带 NULL，
 		// 读路径 loadSecurityPolicyContext 以 COALESCE 归一化；加 NOT NULL 会拒绝 null 恢复（A-I2/F3 回归测试）。
-		"security_policies.geoip_countries":    "TEXT DEFAULT '[]'",
-		"security_policies.geoip_mode":         "TEXT DEFAULT 'deny'",
-		"security_policies.waf_check_response": "INTEGER DEFAULT 0",
-		"security_policies.block_status_code":  "INTEGER DEFAULT 0",
+		"security_policies.ip_whitelist_enabled": "INTEGER DEFAULT 1",
+		"security_policies.geoip_countries":      "TEXT DEFAULT '[]'",
+		"security_policies.geoip_mode":           "TEXT DEFAULT 'deny'",
+		"security_policies.waf_check_response":   "INTEGER DEFAULT 0",
+		"security_policies.block_status_code":    "INTEGER DEFAULT 0",
 		// 可复用 IP 列表引用列（v2.3.0）：JSON 数组文本，存 security_ip_lists 的
 		// id 列表；同样刻意可空——读路径一律 COALESCE(...,'[]') 归一（同上四列口径）。
 		"security_policies.ip_acl_list_refs":  "TEXT DEFAULT '[]'",
@@ -1790,6 +1792,7 @@ func migrateSecurityPoliciesNullable() error {
 			updated_by INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT (datetime('now')),
 			updated_at DATETIME DEFAULT (datetime('now')),
+			ip_whitelist_enabled INTEGER DEFAULT 1,
 			geoip_countries TEXT DEFAULT '[]',
 			geoip_mode TEXT DEFAULT 'deny',
 			waf_check_response INTEGER DEFAULT 0,
@@ -1798,11 +1801,11 @@ func migrateSecurityPoliciesNullable() error {
 		);
 		INSERT INTO security_policies_new (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,
-			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response,
+			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,ip_whitelist_enabled,geoip_countries,geoip_mode,waf_check_response,
 			ip_acl_list_refs,ip_whitelist_refs)
 		SELECT id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,
-			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response,
+			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,COALESCE(ip_whitelist_enabled,1),geoip_countries,geoip_mode,waf_check_response,
 			COALESCE(ip_acl_list_refs,'[]'),COALESCE(ip_whitelist_refs,'[]')
 		FROM security_policies;
 		DROP TABLE security_policies;

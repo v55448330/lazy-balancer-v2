@@ -392,6 +392,16 @@ func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models
 	return nil
 }
 
+// policyWhitelistEnabled 兼容旧快照缺列：缺省视为启用（历史语义=名单非空即生效）。
+func policyWhitelistEnabled(p map[string]interface{}) bool {
+	if v, ok := p["ip_whitelist_enabled"]; ok {
+		if b, ok2 := v.(bool); ok2 {
+			return b
+		}
+	}
+	return true
+}
+
 func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.ClusterSnapshot) error {
 	// 与规则/用户等表一致的全量替换语义：空载荷意味着主节点已清空，从节点必须
 	// 同步删除，不能因载荷为空而提前返回。
@@ -431,10 +441,10 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 		}
 	}
 	for _, p := range policies {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response,ip_acl_list_refs,ip_whitelist_refs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response,ip_acl_list_refs,ip_whitelist_refs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			p["id"], p["name"], p["description"], p["mode"], p["anomaly_threshold"],
 			p["ip_acl_mode"], snapshotJSONText(p["ip_acl_list"]), p["ip_acl_enabled"],
-			snapshotJSONText(p["ip_whitelist"]), snapshotJSONText(p["ip_blacklist"]),
+			snapshotJSONText(p["ip_whitelist"]), policyWhitelistEnabled(p), snapshotJSONText(p["ip_blacklist"]),
 			p["rate_limit_enabled"], p["rate_limit_rps"], p["rate_limit_burst"],
 			snapshotJSONText(p["crs_rule_groups"]), snapshotJSONText(p["crs_excluded_rules"]), snapshotJSONText(p["custom_rules"]),
 			p["block_page_id"], p["block_status_code"], p["enabled"], p["updated_by"], p["created_at"], p["updated_at"],

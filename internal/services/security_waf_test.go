@@ -36,11 +36,12 @@ func TestBuildCorazaDirectives_WAFAuditLogPartsIncludeK(t *testing.T) {
 func TestBuildCorazaDirectives_BypassAndTrustListUseDistinctIDs(t *testing.T) {
 	// Given a blocking policy in bypass ACL mode whose trust list is also populated
 	policy := &models.SecurityPolicy{
-		Mode:         "blocking",
-		IPACLMode:    "bypass",
-		IPACLList:    `["203.0.113.0/24","192.0.2.7"]`,
-		IPACLEnabled: true,
-		IPWhitelist:  json.RawMessage(`["198.51.100.9"]`),
+		Mode:               "blocking",
+		IPACLMode:          "bypass",
+		IPACLList:          `["203.0.113.0/24","192.0.2.7"]`,
+		IPACLEnabled:       true,
+		IPWhitelist:        json.RawMessage(`["198.51.100.9"]`),
+		IPWhitelistEnabled: true,
 	}
 
 	// When
@@ -70,11 +71,12 @@ func TestBuildCorazaDirectives_BypassAndTrustListUseDistinctIDs(t *testing.T) {
 func TestBuildCorazaDirectives_TrustListPrecedesACLRules(t *testing.T) {
 	// Given an allow-mode ACL policy that also trusts a monitoring IP
 	policy := &models.SecurityPolicy{
-		Mode:         "blocking",
-		IPACLMode:    "allow",
-		IPACLList:    `["203.0.113.0/24"]`,
-		IPACLEnabled: true,
-		IPWhitelist:  json.RawMessage(`["198.51.100.9"]`),
+		Mode:               "blocking",
+		IPACLMode:          "allow",
+		IPACLList:          `["203.0.113.0/24"]`,
+		IPACLEnabled:       true,
+		IPWhitelist:        json.RawMessage(`["198.51.100.9"]`),
+		IPWhitelistEnabled: true,
 	}
 
 	// When
@@ -161,7 +163,7 @@ func TestSecurityPolicyHasIPControl_truthTable(t *testing.T) {
 		{"neither: ACL disabled, lists empty", &models.SecurityPolicy{IPACLMode: "allow", IPACLList: "[]", IPWhitelist: json.RawMessage("[]")}, false},
 		{"ACL enabled but list empty", &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: "[]"}, false},
 		{"ACL only: enabled allow-mode with entries", &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["203.0.113.0/24"]`}, true},
-		{"trust only: whitelist populated, ACL disabled", &models.SecurityPolicy{IPACLList: "[]", IPWhitelist: json.RawMessage(`["198.51.100.9"]`)}, true},
+		{"trust only: whitelist populated, ACL disabled", &models.SecurityPolicy{IPACLList: "[]", IPWhitelist: json.RawMessage(`["198.51.100.9"]`), IPWhitelistEnabled: true}, true},
 		{"both: enabled ACL entries and trust list", &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["203.0.113.0/24"]`, IPWhitelist: json.RawMessage(`["198.51.100.9"]`)}, true},
 		{"legacy bypass: bypass mode with entries", &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "bypass", IPACLList: `["192.0.2.7"]`}, true},
 		{"legacy bypass: entries present but toggle off", &models.SecurityPolicy{IPACLMode: "bypass", IPACLList: `["192.0.2.7"]`}, false},

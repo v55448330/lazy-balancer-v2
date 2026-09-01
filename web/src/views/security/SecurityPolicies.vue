@@ -536,8 +536,8 @@ import { formatDate } from '@/utils/date'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse, UserListItem } from '@/types'
 
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[] }
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[] }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
 interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean; block_page_id?: number }
@@ -1025,10 +1025,12 @@ const normalizeIpList = (values: string[]): string[] => [...new Set(values.map((
 // 策略 IP 名单按语义分两侧：允许侧 = 白名单/免检测模式下的 ACL 列表 + 信任名单；
 // 拒绝侧 = 黑名单模式下的 ACL 列表 + 独立 ip_blacklist 字段（由策略页外入口维护）。
 // 供 Step 4 冲突检测与 WAF/IP 步骤实时警告共用，保证两处口径一致。
-const ipAclSideEntries = (mode: string, aclEnabled: boolean, aclList: string[], whitelist: string[], blacklist: string[]): { allow: string[]; deny: string[] } => {
+// 信任名单并入 allow 侧须看启用态（三态：关闭=保留名单零生效）——否则对端
+// 已关闭的信任名单仍会触发误报冲突告警（用户实测：仅开黑名单仍告警）。
+const ipAclSideEntries = (mode: string, aclEnabled: boolean, aclList: string[], whitelist: string[], blacklist: string[], whitelistEnabled = true): { allow: string[]; deny: string[] } => {
   const allow: string[] = []
   if (aclEnabled && (mode === 'allow' || mode === 'bypass')) allow.push(...aclList)
-  allow.push(...whitelist)
+  if (whitelistEnabled) allow.push(...whitelist)
   const deny: string[] = []
   if (aclEnabled && mode === 'deny') deny.push(...aclList)
   deny.push(...blacklist)
@@ -1036,7 +1038,7 @@ const ipAclSideEntries = (mode: string, aclEnabled: boolean, aclList: string[], 
 }
 
 // 本策略（表单实时值）的允许/拒绝两侧名单——引用列表条目并入内联后参与比较
-const selfIpAclSides = computed(() => ipAclSideEntries(form.value.ip_acl_mode, form.value.ip_acl_enabled, mergeIpEntries(ipACLList.value, ipACLListRefs.value), mergeIpEntries(ipWhitelist.value, ipWhitelistRefs.value), ipBlacklistSelf.value))
+const selfIpAclSides = computed(() => ipAclSideEntries(form.value.ip_acl_mode, form.value.ip_acl_enabled, mergeIpEntries(ipACLList.value, ipACLListRefs.value), mergeIpEntries(ipWhitelist.value, ipWhitelistRefs.value), ipBlacklistSelf.value, ipWhitelistEnabled.value))
 
 const customRuleActionOf = (id: number): string => allCustomRules.value.find((r) => r.id === id)?.action ?? ''
 
@@ -1121,6 +1123,7 @@ const buildConflictChain = (caddyId: string): ConflictPolicyView[] => {
           mergeIpEntries(parseJsonList(summary.ip_acl_list), parseRefIds(summary.ip_acl_list_refs)),
           mergeIpEntries(parseJsonList(summary.ip_whitelist), parseRefIds(summary.ip_whitelist_refs)),
           parseJsonList(summary.ip_blacklist),
+          summary.ip_whitelist_enabled !== false,
         )
         : { allow: [] as string[], deny: [] as string[] }
       return {
@@ -1522,7 +1525,8 @@ async function openDialog(row?: PolicySummary) {
     ipWhitelist.value = parseJsonList(d.ip_whitelist)
     ipACLListRefs.value = parseRefIds(d.ip_acl_list_refs)
     ipWhitelistRefs.value = parseRefIds(d.ip_whitelist_refs)
-    ipWhitelistEnabled.value = ipWhitelist.value.length > 0
+    // 三态开关读真实持久化值（旧数据缺字段回退名单非空派生）
+    ipWhitelistEnabled.value = typeof d.ip_whitelist_enabled === 'boolean' ? d.ip_whitelist_enabled : ipWhitelist.value.length > 0
     ipBlacklistSelf.value = parseJsonList(d.ip_blacklist)
     geoipCountries.value = parseJsonList(d.geoip_countries)
     form.value.geoip_enabled = (d.geoip_mode || 'deny') !== 'off' && geoipCountries.value.length > 0
@@ -1630,6 +1634,7 @@ const handleSave = async () => {
       ip_acl_mode: form.value.ip_acl_mode,
       ip_acl_list: JSON.stringify(ipACLList.value),
       ip_whitelist: JSON.stringify(ipWhitelist.value),
+      ip_whitelist_enabled: ipWhitelistEnabled.value,
       ip_acl_list_refs: JSON.stringify(ipACLListRefs.value),
       ip_whitelist_refs: JSON.stringify(ipWhitelistRefs.value),
       rate_limit_enabled: form.value.rate_limit_enabled,
