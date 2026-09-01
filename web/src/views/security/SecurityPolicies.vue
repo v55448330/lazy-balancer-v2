@@ -502,7 +502,7 @@
     </el-dialog>
 
     <!-- 提取为地址列表：把当前内联名单一键转为可复用列表并改为引用（语义不变） -->
-    <el-dialog v-model="extractDialogVisible" title="提取为地址列表" width="min(480px, 92vw)" append-to-body :close-on-click-modal="false">
+    <el-dialog v-model="extractDialogVisible" title="提取为地址列表" width="min(480px, 92vw)" append-to-body :close-on-click-modal="false" :close-on-press-escape="!extracting" :show-close="!extracting">
       <el-alert type="warning" :closable="false" show-icon title="将创建列表并清空内联条目，引用后语义不变" class="extract-alert" />
       <el-form label-width="80px" @submit.prevent>
         <el-form-item label="来源">
@@ -518,7 +518,7 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="extractDialogVisible = false">取消</el-button>
+        <el-button @click="extractDialogVisible = false" :disabled="extracting">取消</el-button>
         <el-button type="primary" :loading="extracting" @click="confirmExtract">创建并引用</el-button>
       </template>
     </el-dialog>
@@ -1453,6 +1453,9 @@ const confirmExtract = async (): Promise<void> => {
   try {
     await ElMessageBox.confirm(`确定创建列表「${name}」（${sourceEntries.length} 条）并转为引用？内联条目将清空，拦截语义不变。`, '确认', { type: 'warning' })
   } catch { return }
+  // 审计 B4-S1：捕获对话框会话——在途 POST 落地时若用户已关窗并打开另一策略，
+  // 续体不得把 A 的列表 id 写进 B 的表单（持久化损坏）。
+  const openSeq = policyDialogOpenSeq
   extracting.value = true
   try {
     const res = await request.post<APIResponse<{ id: number }>>('/security/ip-lists', {
@@ -1464,6 +1467,9 @@ const confirmExtract = async (): Promise<void> => {
     })
     const newId = res.data?.id
     if (!newId) throw new Error('创建列表响应缺少 id')
+    // 审计 B4-S1：会话已切换（关窗重开另一策略）时丢弃续体——refs/内联写入
+    // 属于表单会话状态，落到新会话即持久化损坏。
+    if (openSeq !== policyDialogOpenSeq) return
     // 交换语义：新建列表 → 追加到该侧 refs → 清空内联（合并生效集不变）；
     // 策略本身不在此保存——用户在向导中显式点「保存」才落库
     if (extractSide.value === 'acl') {
@@ -1475,7 +1481,7 @@ const confirmExtract = async (): Promise<void> => {
     }
     extractDialogVisible.value = false
     // 刷新引用列表缓存：选择器选项与「合计 N 条」提示立即反映新列表
-    await fetchIpLists()
+    await fetchIpLists(openSeq)
     ElMessage.success(`已创建列表「${name}」并转为引用，内联条目已清空（引用后语义不变），保存策略后生效`)
   } catch (error: unknown) {
     // 409 重名 / 400 条目非法已由全局拦截器 toast，这里仅记录避免 unhandled rejection

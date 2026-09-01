@@ -127,6 +127,11 @@ func PolicyHasGeoIP(p *models.SecurityPolicy) bool {
 // directives 里嵌内容指纹（CRS 版本 + overrides mtime+size，每次配置生成仅
 // 2 个 stat + 1 个 db 查询，远低于 tarGzDirSum 的整树遍历成本），指纹变 →
 // 池键变 → 新 WAF 真正编译新规则。Coraza 把 '#' 当注释行，不影响语义。
+// crsPoolFingerprintForChain 是批量链构建入口的一次性指纹取值点（审计 B5-F2）。
+func crsPoolFingerprintForChain() string {
+	return crsPoolFingerprint()
+}
+
 func crsPoolFingerprint() string {
 	var version string
 	if db.DB == nil {
@@ -141,12 +146,21 @@ func crsPoolFingerprint() string {
 	return fmt.Sprintf("%s-%d-%d", version, mtime, size)
 }
 
-func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore) string {
+// prefetchedCRSFingerprint 可选参数：批量生成方按链计算一次并透传，避免
+// 逐 (规则×策略) 对重复执行 DB 查询+stat（审计 B5-F2）；空串回退自算。
+func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, prefetchedCRSFingerprint ...string) string {
 	var sb strings.Builder
 	// R72 三十次 F1：嵌 coraza 池键指纹（见 crsPoolFingerprint）——CRS 文件
 	// 替换/手动改 overrides 后池键必须变化，否则新 Caddy 配置复用旧 WAF
 	//（旧规则静默继续生效）。
-	sb.WriteString(fmt.Sprintf("# crs-pool=%s\n", crsPoolFingerprint()))
+	crsFp := ""
+	if len(prefetchedCRSFingerprint) > 0 {
+		crsFp = prefetchedCRSFingerprint[0]
+	}
+	if crsFp == "" {
+		crsFp = crsPoolFingerprint()
+	}
+	sb.WriteString(fmt.Sprintf("# crs-pool=%s\n", crsFp))
 	// Merged* 为策略加载路径附加的「inline ∪ 引用 IP 列表条目」合并集；未经
 	// 解析的策略（直接构造/非生成路径）由 helper 回退 inline-only。
 	ipWL := mergedWhitelist(p)
@@ -562,11 +576,11 @@ func CountEnabledCustomRules(raw json.RawMessage) int {
 // store 与策略预载同源（A-I1）：自定义规则读取必须沿同一 store——tx 内生成
 // 时 db.DB 看不到未提交的 security_custom_rules 行，会静默丢失 WAF 规则。
 // store=nil 时由 resolvePolicyCustomRules 回退 db.DB（非批量路径保持现状）。
-func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy, store caddyConfigStore) map[string]interface{} {
+func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy, store caddyConfigStore, crsFp string) map[string]interface{} {
 	if policy == nil {
 		return nil
 	}
-	directives := BuildCorazaDirectives(policy, store)
+	directives := BuildCorazaDirectives(policy, store, crsFp)
 	if directives == "" {
 		return nil
 	}

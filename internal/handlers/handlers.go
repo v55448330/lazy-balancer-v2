@@ -209,6 +209,40 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 	}
 
 	var data requestData
+	// 审计 B2-S1：TCP/DNS 字段从原始请求（Create/Update 两形态）提取。
+	var tcpFields struct {
+		enableDnsServer    bool
+		tcpHealthCheckPort int
+		tcpProxyProtocol   bool
+		tcpTryDuration     int
+		tcpTryInterval     int
+	}
+	switch v := req.(type) {
+	case models.CreateRuleRequest:
+		tcpFields.enableDnsServer = v.EnableDnsServer
+		tcpFields.tcpHealthCheckPort = v.TCPHealthCheckPort
+		tcpFields.tcpProxyProtocol = v.TCPProxyProtocol
+		tcpFields.tcpTryDuration = v.TCPTryDuration
+		tcpFields.tcpTryInterval = v.TCPTryInterval
+	case *models.CreateRuleRequest:
+		tcpFields.enableDnsServer = v.EnableDnsServer
+		tcpFields.tcpHealthCheckPort = v.TCPHealthCheckPort
+		tcpFields.tcpProxyProtocol = v.TCPProxyProtocol
+		tcpFields.tcpTryDuration = v.TCPTryDuration
+		tcpFields.tcpTryInterval = v.TCPTryInterval
+	case models.UpdateRuleRequest:
+		tcpFields.enableDnsServer = v.EnableDnsServer != nil && *v.EnableDnsServer
+		tcpFields.tcpHealthCheckPort = v.TCPHealthCheckPort
+		tcpFields.tcpProxyProtocol = v.TCPProxyProtocol != nil && *v.TCPProxyProtocol
+		tcpFields.tcpTryDuration = v.TCPTryDuration
+		tcpFields.tcpTryInterval = v.TCPTryInterval
+	case *models.UpdateRuleRequest:
+		tcpFields.enableDnsServer = v.EnableDnsServer != nil && *v.EnableDnsServer
+		tcpFields.tcpHealthCheckPort = v.TCPHealthCheckPort
+		tcpFields.tcpProxyProtocol = v.TCPProxyProtocol != nil && *v.TCPProxyProtocol
+		tcpFields.tcpTryDuration = v.TCPTryDuration
+		tcpFields.tcpTryInterval = v.TCPTryInterval
+	}
 	var upstreams []requestUpstream
 
 	switch r := req.(type) {
@@ -465,17 +499,29 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 	}
 
 	ruleConfig := services.SingleRuleConfig{
-		Protocol:                         data.Protocol,
-		Domain:                           data.Domain,
-		ListenPort:                       data.ListenPort,
-		Strategy:                         data.Strategy,
-		DynamicDNS:                       data.DynamicDNS,
-		DnsServer:                        data.DnsServer,
-		DnsFamily:                        data.DnsFamily,
-		HealthCheckPath:                  data.HealthCheckPath,
-		HealthCheckInterval:              data.HealthCheckInterval,
-		HealthCheckTimeout:               data.HealthCheckTimeout,
-		HealthCheckUnhealthyThreshold:    data.HealthCheckUnhealthyThreshold,
+		Protocol:                      data.Protocol,
+		Domain:                        data.Domain,
+		ListenPort:                    data.ListenPort,
+		Strategy:                      data.Strategy,
+		DynamicDNS:                    data.DynamicDNS,
+		DnsServer:                     data.DnsServer,
+		DnsFamily:                     data.DnsFamily,
+		HealthCheckPath:               data.HealthCheckPath,
+		HealthCheckInterval:           data.HealthCheckInterval,
+		HealthCheckTimeout:            data.HealthCheckTimeout,
+		HealthCheckUnhealthyThreshold: data.HealthCheckUnhealthyThreshold,
+		HealthCheckHealthyThreshold:   data.HealthCheckHealthyThreshold,
+		TLSSource:                     data.TLSSource,
+		ACMEConfigID:                  data.ACMEConfigID,
+		// 审计 B2-S1：补齐校验副本缺失的字段（含全部 TCP 字段）——否则 TCP
+		// 规则预检在「校验另一份零值配置」，用户真实值触发的错误被推迟到
+		// apply 阶段才暴露（多付一次 snapshot/restore 周期）。TCP/DNS 字段
+		// 不在 requestData 内，从原始请求提取。
+		EnableDnsServer:                  tcpFields.enableDnsServer,
+		TCPHealthCheckPort:               tcpFields.tcpHealthCheckPort,
+		TCPProxyProtocol:                 tcpFields.tcpProxyProtocol,
+		TCPTryDuration:                   tcpFields.tcpTryDuration,
+		TCPTryInterval:                   tcpFields.tcpTryInterval,
 		EnableTLS:                        data.EnableTLS,
 		TLSCert:                          data.TLSCert,
 		TLSKey:                           data.TLSKey,

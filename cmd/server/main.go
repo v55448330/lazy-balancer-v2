@@ -163,7 +163,7 @@ func run() error {
 	services.StartSecurityEventsRetention(context.Background())
 	// 审计日志轮转由事件摄入循环驱动（先采集后轮转），此处无需独立启动器
 	eventsIngestCtx, stopEventsIngestion := context.WithCancel(context.Background())
-	go services.StartSecurityEventsIngestion(eventsIngestCtx)
+	eventsIngestWait := services.StartSecurityEventsIngestion(eventsIngestCtx)
 	if isMaster {
 		lifecycle.StartACME()
 	} else {
@@ -174,6 +174,7 @@ func run() error {
 		// 审计 A5-S2：事件摄入与其余 worker 同生命周期——db.Close 前 cancel，
 		// 否则退出窗口内每 2s 对已关闭 MetricsDB 刷 "database is closed" 告警。
 		stopEventsIngestion()
+		eventsIngestWait()
 		metricsService.Stop()
 		<-metricsDone
 		crsManager.StopScheduler()

@@ -137,10 +137,17 @@ func isSynchronizedWrite(method, path string) bool {
 	if method == http.MethodPost && strings.HasPrefix(path, "/api/v1/certificate-configs/") && strings.HasSuffix(path, "/test") {
 		return false
 	}
-	// 审计 A3-S1：/api/v1/auth/mfa/ 自服务三路由写 users 触发器 OF 列
-	//（mfa_enabled/mfa_secret/mfa_recovery_codes）——须与 /api/v1/users 前缀
-	// 同入兜底分类，触发器安装失败的降级态下不得静默无版本 bump。
-	for _, prefix := range []string{"/api/v1/rules", "/api/v1/users", "/api/v1/auth/mfa", "/api/v1/api-keys", "/api/v1/certificate-configs", "/api/v1/security"} {
+	// 审计 A3-S1/B3-S1：/api/v1/auth/mfa 下仅 activate/disable/recovery-codes
+	// 三路由写 users 触发器 OF 列（mfa_enabled/mfa_secret/mfa_recovery_codes）；
+	// verify/verify-step/setup 只写刻意排除的记账/pending 列（永不 bump）——
+	// 不得按前缀捕获，否则触发器安装失败的降级态下 MFA 登录/step-up 被误伤
+	// 500，UI 恢复路径对 MFA 用户截断。
+	for _, exact := range []string{"/api/v1/auth/mfa/activate", "/api/v1/auth/mfa/disable", "/api/v1/auth/mfa/recovery-codes"} {
+		if path == exact {
+			return true
+		}
+	}
+	for _, prefix := range []string{"/api/v1/rules", "/api/v1/users", "/api/v1/api-keys", "/api/v1/certificate-configs", "/api/v1/security"} {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}

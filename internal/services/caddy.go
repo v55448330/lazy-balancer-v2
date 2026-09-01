@@ -2910,12 +2910,15 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	}
 	// v2.2.0 多策略：按绑定启用策略 policy_id ASC 依次编入各策略的
 	// [rate_limit?, waf?] 处理器组；限流先于 WAF 检查、body 解析与代理。
+	// 审计 B5-F2：CRS 池指纹在单次链构建内不变——按链计算一次透传给各策略，
+	// 替代逐 (规则×策略) 对的 DB 查询+stat（200 规则×3 策略 ≈600 查询→200）。
+	chainCRSFingerprint := crsPoolFingerprintForChain()
 	for _, policy := range policies {
 		if rateLimitHandler := buildRateLimitHandler(rule.CaddyID, policy); rateLimitHandler != nil {
 			handleChain = append(handleChain, rateLimitHandler)
 		}
 		if rule.Protocol == "http" {
-			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore); wafHandler != nil {
+			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore, chainCRSFingerprint); wafHandler != nil {
 				handleChain = append(handleChain, wafHandler)
 			}
 		}
