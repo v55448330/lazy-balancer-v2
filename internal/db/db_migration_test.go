@@ -1251,6 +1251,25 @@ func TestInitialize_convergesWindowEraSecurityPoliciesNotNullColumns(t *testing.
 	if _, err := DB.Exec(`INSERT INTO security_policies (id,name,geoip_countries) VALUES (2,'null-restore',NULL)`); err != nil {
 		t.Fatalf("insert NULL geoip_countries after convergence: %v", err)
 	}
+	// 审计 I-1：窗口期收敛不得丢失 refs 两列——rebuild 曾以陈旧 DDL 重建，
+	// 把同一 runMigrations 早前 newColumns 刚加的列丢掉，安全策略子系统当次
+	// 启动整体 500（no such column）、启动配置不应用、集群快照停摆。
+	for _, name := range []string{"ip_acl_list_refs", "ip_whitelist_refs"} {
+		var cnt int
+		if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('security_policies') WHERE name=?`, name).Scan(&cnt); err != nil {
+			t.Fatalf("read security_policies.%s schema: %v", name, err)
+		}
+		if cnt != 1 {
+			t.Fatalf("security_policies.%s missing after window-era convergence", name)
+		}
+	}
+	var aclRefs string
+	if err := DB.QueryRow(`SELECT COALESCE(ip_acl_list_refs,'') FROM security_policies WHERE id=1`).Scan(&aclRefs); err != nil {
+		t.Fatalf("read migrated policy refs: %v", err)
+	}
+	if aclRefs != "[]" {
+		t.Fatalf("ip_acl_list_refs=%q, want []", aclRefs)
+	}
 }
 
 // A4-S3: PK 重建迁移的 upstreams_new.enabled 此前为可空（与 fresh CREATE 的

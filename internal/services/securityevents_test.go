@@ -2236,3 +2236,49 @@ func TestRotateAuditLogIfNeeded_pendingArchiveMissing_removableMarkerWarnsOnceAn
 		t.Fatalf("pending-missing warn count after 2nd tick=%d, want 1 (no marker, branch not re-entered): %s", count, logs.String())
 	}
 }
+
+// 审计 I-3：GeoIP（id:8）归因走真实 loader 路径——securityEventsLoadMappings
+// 此前不加载 geoip_countries，case 8 所有权判定对空 GeoIPCountries 必败，
+// 多策略绑定时错归首启用策略（单测曾用合成 map 绕过 loader 掩盖该缺陷）。
+// Given：policy-A（id 1，无 geoip）绑定顺序第一，policy-B（id 3，geoip ["CN"]）。
+// When：摄取 audit rule_triggered="8"（GeoIP 区域拦截）。
+// Then：归因到 policy-B（携带 geoip 条目者），而非首绑定 policy-A。
+func TestSecurityEventsAttribution_GeoIPOwnerPicksGeoIPCarryingPolicy(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeMetricsDB(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_rule1','r','http','go029.com',443,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,geoip_countries,geoip_mode) VALUES (1,'policy-A',1,'[]','off')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,geoip_countries,geoip_mode) VALUES (3,'policy-B',1,'["CN"]','deny')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_rule1',1),('lb_rule1',3)`); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+	offsetPath := filepath.Join(dir, "security_events.offset")
+	if err := os.WriteFile(logPath, []byte(securityEventsFixtureForRule("8")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := securityEventsNewTailer(logPath, offsetPath).securityEventsTick(); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	var pid int
+	var pname string
+	if err := db.MetricsDB.QueryRow(`SELECT policy_id, policy_name FROM security_events`).Scan(&pid, &pname); err != nil {
+		t.Fatal(err)
+	}
+	if pid != 3 || pname != "policy-B" {
+		t.Fatalf("attribution=(%d,%q), want (3,policy-B) — GeoIP 事件必须归因到携带 geoip 条目的策略", pid, pname)
+	}
+}

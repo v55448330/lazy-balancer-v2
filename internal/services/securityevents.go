@@ -257,18 +257,19 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	// 「rule_triggered 属于哪个策略」判定；仅加载启用策略（disabled 策略不应再
 	// 接收事件归因）。
 	policyByID := make(map[int]*models.SecurityPolicy)
-	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]') FROM security_policies WHERE enabled=1`)
+	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(geoip_countries,'[]') FROM security_policies WHERE enabled=1`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load policies: %w", err)
 	}
 	defer polRows.Close()
 	for polRows.Next() {
 		p := &models.SecurityPolicy{}
-		var customJSON, crsJSON, blacklistJSON string
-		if err := polRows.Scan(&p.ID, &p.Name, &customJSON, &crsJSON, &blacklistJSON, &p.IPACLEnabled, &p.IPACLMode, &p.IPACLList); err != nil {
+		var customJSON, crsJSON, blacklistJSON, geoipJSON string
+		if err := polRows.Scan(&p.ID, &p.Name, &customJSON, &crsJSON, &blacklistJSON, &p.IPACLEnabled, &p.IPACLMode, &p.IPACLList, &geoipJSON); err != nil {
 			return nil, nil, nil, fmt.Errorf("security events: scan policy: %w", err)
 		}
 		p.CustomRules = json.RawMessage(customJSON)
+		p.GeoIPCountries = json.RawMessage(geoipJSON)
 		p.CRSRuleGroups = json.RawMessage(crsJSON)
 		p.IPBlacklist = json.RawMessage(blacklistJSON)
 		policyByID[p.ID] = p

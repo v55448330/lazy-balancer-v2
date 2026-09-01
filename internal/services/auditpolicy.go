@@ -122,7 +122,11 @@ var readOnlyWriteRoutes = map[string]struct{}{
 	"POST /api/v1/certificates/parse":           {},
 	"POST /api/v1/config/import/validate":       {},
 	"POST /api/v1/config/preview":               {},
-	"POST /api/v1/config/validate":              {},
+	// 审计 I-2：POST /config/validate 已移出只读豁免——该端点实际执行真实
+	// Caddy /load（?validate=true 参数被 Caddy v2.11.4 静默忽略，校验成功即
+	// 调用方配置成为运行配置），只读 API key/从节点/MFA 豁免均可触发真实
+	// 配置加载；移除后三守卫（apiKeyReadOnlyGuard/mfaStepUpGuard/readOnlyGuard）
+	// 同步恢复完整写权限校验。
 	// R68 B-F3：移除 "POST /api/v1/mcp"——/mcp 挂载早于本组 Use(apiKeyReadOnlyGuard)
 	// 等中间件（Gin 对 group 中间件链做注册期快照），该条目无任何运行时消费者；
 	// MCP 写控制实际由内部转发重入跳完整重跑只读/从节点/管理员守卫承担。

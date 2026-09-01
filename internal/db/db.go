@@ -790,10 +790,13 @@ func runMigrations() error {
 	// 「省略=用 Caddy 默认」的有效值（仅 >0 才输出超时指令），若每次启动都无条件
 	// 回填，会把用户显式设置的 0 静默改写，导致运行行为与界面展示不一致。
 	newColumnBackfills := map[string]string{
-		"global_config.http_read_timeout":          "UPDATE global_config SET http_read_timeout=60 WHERE http_read_timeout=0",
-		"global_config.http_write_timeout":         "UPDATE global_config SET http_write_timeout=60 WHERE http_write_timeout=0",
-		"global_config.http_idle_timeout":          "UPDATE global_config SET http_idle_timeout=120 WHERE http_idle_timeout=0",
-		"global_config.upstream_keepalive_timeout": "UPDATE global_config SET upstream_keepalive_timeout=60 WHERE upstream_keepalive_timeout=0",
+		"global_config.http_read_timeout":  "UPDATE global_config SET http_read_timeout=60 WHERE http_read_timeout=0",
+		"global_config.http_write_timeout": "UPDATE global_config SET http_write_timeout=60 WHERE http_write_timeout=0",
+		"global_config.http_idle_timeout":  "UPDATE global_config SET http_idle_timeout=120 WHERE http_idle_timeout=0",
+		// 审计 A5-S1：旧默认 60→0 归一只在「新增列」这一次执行——列新增时
+		// 存量行从列 DEFAULT 得 60，此处一次归 0；此后用户显式设置的 60 是
+		// 写侧合法值，任何启动期迁移不得再改写。
+		"global_config.upstream_keepalive_timeout": "UPDATE global_config SET upstream_keepalive_timeout=0 WHERE upstream_keepalive_timeout=60",
 	}
 	for col, dtype := range newColumns {
 		parts := strings.Split(col, ".")
@@ -849,9 +852,11 @@ func runMigrations() error {
 		"UPDATE global_config SET jwt_expire_minutes=20 WHERE jwt_expire_minutes IS NULL OR jwt_expire_minutes<=0 OR jwt_expire_minutes>1440",
 		"UPDATE global_config SET access_log_format='' WHERE access_log_format LIKE '{%'",
 		// R72 三次（用户反馈）：上游长连接空闲超时旧默认 60s 主动关闭空闲连接
-		//（SSE/WebSocket/LLM 流场景 churn）——精确命中旧默认的行归 0（继承
-		// Caddy/Go Transport 默认 2 分钟），用户自定义值不动。
-		"UPDATE global_config SET upstream_keepalive_timeout=0 WHERE COALESCE(upstream_keepalive_timeout,60)=60",
+		//（SSE/WebSocket/LLM 流场景 churn）——NULL 行归 0（继承 Caddy/Go
+		// Transport 默认 2 分钟）。审计 A5-S1：不得命中显式 60——60 是写侧
+		// 校验的合法值，原 COALESCE 口径会在每次启动把用户显式设置的 60
+		// 静默抹为 0（循环复现）。
+		"UPDATE global_config SET upstream_keepalive_timeout=0 WHERE upstream_keepalive_timeout IS NULL",
 	}
 	for _, statement := range defaultUpdates {
 		if _, err := DB.Exec(statement); err != nil {
@@ -1753,6 +1758,9 @@ func migrateSecurityPoliciesNullable() error {
 			_ = tx.Rollback()
 		}
 	}()
+	// rebuild 必须与 fresh CREATE（含 refs 两列）同形状并搬运其数据——
+	// 陈旧 DDL 会把同一 runMigrations 早前 newColumns 刚加的列丢掉
+	//（审计 I-1：窗口期库首启安全策略子系统整体 no such column）。
 	if _, err := tx.Exec(`CREATE TABLE security_policies_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
@@ -1778,14 +1786,18 @@ func migrateSecurityPoliciesNullable() error {
 			updated_at DATETIME DEFAULT (datetime('now')),
 			geoip_countries TEXT DEFAULT '[]',
 			geoip_mode TEXT DEFAULT 'deny',
-			waf_check_response INTEGER DEFAULT 0
+			waf_check_response INTEGER DEFAULT 0,
+			ip_acl_list_refs TEXT DEFAULT '[]',
+			ip_whitelist_refs TEXT DEFAULT '[]'
 		);
 		INSERT INTO security_policies_new (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,
-			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response)
+			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response,
+			ip_acl_list_refs,ip_whitelist_refs)
 		SELECT id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,
-			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response
+			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response,
+			COALESCE(ip_acl_list_refs,'[]'),COALESCE(ip_whitelist_refs,'[]')
 		FROM security_policies;
 		DROP TABLE security_policies;
 		ALTER TABLE security_policies_new RENAME TO security_policies;`); err != nil {
