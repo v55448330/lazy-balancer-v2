@@ -284,7 +284,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="ipListDialogVisible" :title="editingIpListId ? (isReadOnly ? '查看 IP 地址列表' : '编辑 IP 地址列表') : '新建 IP 地址列表'" width="min(760px, 94vw)">
+    <el-dialog v-model="ipListDialogVisible" class="ip-list-dialog" :title="editingIpListId ? (isReadOnly ? '查看 IP 地址列表' : '编辑 IP 地址列表') : '新建 IP 地址列表'" width="min(760px, 94vw)">
       <el-form :model="ipListForm" label-width="80px" label-position="right" :disabled="isReadOnly">
         <el-form-item label="名称" required>
           <el-input v-model="ipListForm.name" placeholder="列表名称" maxlength="50" show-word-limit />
@@ -299,7 +299,7 @@
           <el-input v-model="ipListForm.description" placeholder="列表用途说明" maxlength="200" show-word-limit />
         </el-form-item>
         <el-form-item label="条目" required>
-          <div style="width: 100%">
+          <div class="entries-block">
             <el-table :data="ipListForm.entries" size="small" max-height="360" empty-text="">
               <template #empty><el-empty description="暂无条目，点击下方按钮添加" :image-size="50" /></template>
               <el-table-column label="IP / CIDR" min-width="220">
@@ -318,10 +318,17 @@
                 </template>
               </el-table-column>
             </el-table>
-            <el-button v-if="!isReadOnly" size="small" type="primary" plain class="add-entry-btn" @click="ipListForm.entries.push({ value: '', remark: '' })">
-              + 添加条目
-            </el-button>
-            <div class="form-tip-line">每条支持单 IP 或 CIDR（如 10.0.0.1、2001:db8::/32）；每个列表最多 500 条，全站列表总数上限 200 个，格式错误的行以红色标出</div>
+            <div class="entries-toolbar">
+              <el-button v-if="!isReadOnly" size="small" type="primary" plain @click="ipListForm.entries.push({ value: '', remark: '' })">
+                + 添加条目
+              </el-button>
+              <div class="entries-toolbar-right">
+                <el-button v-if="!isReadOnly" size="small" type="primary" plain @click="triggerImportEntries">导入</el-button>
+                <el-button size="small" type="primary" plain @click="exportIpListEntries">导出</el-button>
+              </div>
+            </div>
+            <input ref="importEntriesInput" type="file" accept=".txt,.csv" class="entries-import-input" @change="onImportEntriesFileChange" />
+            <div class="form-tip-line">每条支持单 IP 或 CIDR（如 10.0.0.1、2001:db8::/32）；每个列表最多 500 条，全站列表总数上限 200 个，格式错误的行以红色标出；导入支持 .txt/.csv（每行一条：IP/CIDR + 可选备注，逗号或空白分隔）</div>
           </div>
         </el-form-item>
       </el-form>
@@ -580,6 +587,85 @@ const deleteIpList = (row: IPListRow) => {
       const del = await request.delete(`/security/ip-lists/${row.id}`)
       showSaveResult(del, '已删除'); fetchIpLists()
     }).catch(() => {})
+}
+
+// —— 条目纯前端导入/导出：只修改弹框内条目表，点保存前不落库 ——
+const importEntriesInput = ref<HTMLInputElement | null>(null)
+
+const triggerImportEntries = (): void => {
+  importEntriesInput.value?.click()
+}
+
+// 行格式：第一列 IP/CIDR，第二列备注（可空）；分隔符为半角逗号或空白（取第一段分隔，其余归入备注）
+const parseEntryLine = (line: string): { value: string; remark: string } | null => {
+  const match = line.match(/^([^,\s]+)(?:[,\s]+(.*))?$/)
+  if (!match) return null
+  const value = (match[1] ?? '').trim()
+  if (!isValidCidr(value)) return null
+  const remark = (match[2] ?? '').trim().slice(0, 100)
+  return { value, remark }
+}
+
+const onImportEntriesFileChange = (event: Event): void => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = '' // 复位以支持再次选择同一文件
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => { importEntriesFromText(typeof reader.result === 'string' ? reader.result : '') }
+  reader.onerror = () => { ElMessage.error('读取文件失败，请重试') }
+  reader.readAsText(file)
+}
+
+const importEntriesFromText = (text: string): void => {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '')
+  if (lines.length === 0) {
+    ElMessage.error('文件为空或没有可解析的内容，已取消导入')
+    return
+  }
+  // 与保存口径一致：值与备注均为空的占位行先行移除，导入后表格不留空行
+  ipListForm.value.entries = ipListForm.value.entries.filter((e) => e.value.trim() !== '' || e.remark.trim() !== '')
+  const existing = new Set(ipListForm.value.entries.map((e) => e.value.trim()).filter((v) => v !== ''))
+  let success = 0
+  let invalid = 0
+  let duplicate = 0
+  for (const line of lines) {
+    const parsed = parseEntryLine(line)
+    if (!parsed) { invalid++; continue }
+    if (existing.has(parsed.value)) { duplicate++; continue }
+    existing.add(parsed.value)
+    ipListForm.value.entries.push({ value: parsed.value, remark: parsed.remark })
+    success++
+  }
+  if (success === 0) {
+    ElMessage.error(duplicate > 0
+      ? `没有可导入的新条目（非法 ${invalid} 条 / 重复 ${duplicate} 条）`
+      : '文件中未解析到合法的 IP/CIDR 条目，已取消导入')
+    return
+  }
+  ElMessage.success(`导入完成：成功 ${success} 条，跳过 ${invalid + duplicate} 条（非法 ${invalid} / 重复 ${duplicate}）`)
+}
+
+const exportIpListEntries = (): void => {
+  const entries = ipListForm.value.entries
+    .map((e) => ({ value: e.value.trim(), remark: e.remark.trim() }))
+    .filter((e) => e.value !== '' || e.remark !== '')
+  if (entries.length === 0) {
+    ElMessage.warning('当前没有可导出的条目')
+    return
+  }
+  // 备注含逗号/引号时按 CSV 规则双引号包裹并转义内部引号
+  const escapeRemark = (remark: string): string => /[",]/.test(remark) ? `"${remark.replace(/"/g, '""')}"` : remark
+  // 首字符写入 UTF-8 BOM，避免 Excel 直接打开中文备注乱码
+  const csv = `\uFEFF${entries.map((e) => `${e.value},${escapeRemark(e.remark)}`).join('\r\n')}`
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'ip-list.csv'
+  link.click()
+  // Safari 下立即回收 objectURL 会截断下载文件，延迟释放（与 BasicSettings/Keys 导出一致）
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 const PATTERN_PLACEHOLDERS: Record<string, string> = {
@@ -1019,7 +1105,10 @@ onUnmounted(() => {
 .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .search-input { width: 280px; }
 .ip-list-toolbar { gap: 12px; }
-.add-entry-btn { margin-top: 8px; }
+.entries-block { width: 100%; }
+.entries-toolbar { display: flex; align-items: center; margin-top: 8px; }
+.entries-toolbar-right { margin-left: auto; }
+.entries-import-input { display: none; }
 .ip-entry-invalid :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--el-color-danger, #ef4444) inset; }
 .rules-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 .update-status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
@@ -1030,4 +1119,8 @@ onUnmounted(() => {
 <!-- el-tooltip popper 挂载到 body，scoped 样式无法命中，单独非 scoped 块 -->
 <style>
 .ip-list-refs-popper { line-height: 1.6; max-width: 280px; }
+/* el-dialog 的 class 落在 .el-dialog 元素上（$attrs 手动绑定，非组件根），
+   scoped 选择器无法命中，与上面 popper 同放非 scoped 块。
+   统一加大弹框四向 padding（16→24px），条目表格不再贴右侧边缘，左右留白对称。 */
+.ip-list-dialog { --el-dialog-padding-primary: 24px; }
 </style>
