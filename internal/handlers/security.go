@@ -1614,6 +1614,11 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 				ors = append(ors, "rule_triggered LIKE ?")
 				args = append(args, p+"%")
 			}
+			// 自定义规则族补 5 位数字段（emit 20000-99999 不以 1 开头，
+			// 前缀清单覆盖不到；GLOB 精确匹配 5 位数字）
+			if ruleTriggered == "自定义规则" {
+				ors = append(ors, "rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]'")
+			}
 			where += " AND (" + strings.Join(ors, " OR ") + ")"
 		case strings.HasPrefix(ruleTriggered, "IP"), strings.HasPrefix(ruleTriggered, "请求阻断"), strings.HasPrefix(ruleTriggered, "协议"):
 			// family 标签的部分输入：宽匹配（前缀命中任一 family 即可）。
@@ -1784,7 +1789,8 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	// 自定义规则触发 id 的两种形状：旧版内嵌规则 10000+id（5 位，10001-19999）
 	// 与 R30 起无 id 规则的合成 id 1000000+n（7 位，1000000-1999999）。6 位
 	// 1xxxxx 无归属源（CRS 保留段 100000-999999 的余数），保持"其他"。
-	case strings.HasPrefix(ruleTriggered, "1") && (len(ruleTriggered) == 5 || len(ruleTriggered) >= 7):
+	// 5 位数字 ID 仅自定义规则（emit=crID+10000，10000-99999）；首字符不再限定 1
+	case len(ruleTriggered) == 5 || (strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) >= 7):
 		return "自定义规则"
 	case ruleTriggered == "8" || strings.Contains(ruleMsg, "GeoIP 区域拦截"):
 		return "地域拦截"
