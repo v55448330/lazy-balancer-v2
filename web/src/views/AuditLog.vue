@@ -39,7 +39,7 @@
           <el-button @click="resetFilters">重置</el-button>
         </div>
       </div>
-      <el-table :data="logs" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+      <el-table :data="logs" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="" :tooltip-options="{ popperClass: 'log-overflow-popper' }">
         <template #empty>
           <el-empty description="暂无操作日志" :image-size="60" />
         </template>
@@ -197,4 +197,9 @@ onMounted(() => {
   width: 360px;
   flex: 0 0 auto;
 }
+</style>
+
+<style>
+.log-overflow-popper { max-width: 420px; word-break: break-all; }
+.log-overflow-popper .el-tooltip__popper { max-width: 420px; }
 </style>
