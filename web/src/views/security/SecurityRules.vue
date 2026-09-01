@@ -1122,5 +1122,5 @@ onUnmounted(() => {
 /* el-dialog 的 class 落在 .el-dialog 元素上（$attrs 手动绑定，非组件根），
    scoped 选择器无法命中，与上面 popper 同放非 scoped 块。
    统一加大弹框四向 padding（16→24px），条目表格不再贴右侧边缘，左右留白对称。 */
-.ip-list-dialog { --el-dialog-padding-primary: 24px; }
+.ip-list-dialog { padding-right: 24px; }
 </style>
