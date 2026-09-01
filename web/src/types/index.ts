@@ -161,6 +161,14 @@ export interface ClusterHealth {
   readonly uptime_sec: number
 }
 
+export interface ClusterSectionSync {
+  readonly section: string
+  readonly label: string
+  readonly hash: string
+  readonly master_hash: string
+  readonly synced: boolean
+}
+
 export interface ClusterNode {
   readonly id: number
   readonly name: string
@@ -175,6 +183,7 @@ export interface ClusterNode {
   readonly health: ClusterHealth | null
   readonly last_seen: string
   readonly created_at: string
+  readonly section_sync?: readonly ClusterSectionSync[] | null
 }
 
 export interface ClusterStatus {

@@ -145,14 +145,29 @@ type ClusterHealth struct {
 }
 
 type ClusterReport struct {
-	AppliedVersion int           `json:"applied_version" binding:"min=0"`
-	ServiceStatus  string        `json:"service_status" binding:"required,oneof=ok degraded"`
+	AppliedVersion int    `json:"applied_version" binding:"min=0"`
+	ServiceStatus  string `json:"service_status" binding:"required,oneof=ok degraded"`
 	Health         ClusterHealth `json:"health"`
 	LastSyncAt     string        `json:"last_sync_at"`
 	LastSyncError  string        `json:"last_sync_error"`
 	SyncErrorCode  SyncErrorCode `json:"sync_error_code,omitempty" binding:"omitempty,oneof=schema_too_new schema_too_old signature_invalid pin_mismatch validation_failed apply_failed transport_error"`
+	// SectionHashes 携带从节点 cluster_applied_sections 的已应用节哈希（本地
+	// 当前已落库口径），供主节点聚合 per-section 同步状态。旧版本从节点不上
+	// 报（nil，omitempty 省略字段），主节点据此展示「旧版本从节点」占位。
+	SectionHashes map[string]string `json:"section_hashes,omitempty"`
 	// Detached 为真表示从节点已提升脱离，请求主节点删除本节点记录（令牌随行撤销）。
 	Detached bool `json:"detached"`
+}
+
+// ClusterSectionSyncStatus 是主节点状态端点聚合的单个同步节比对结果：
+// Hash 为从节点上报的本地哈希，MasterHash 为主节点自身快照节哈希，
+// Synced 仅在两者非空且一致时为真（从节点缺记录按滞后处理）。
+type ClusterSectionSyncStatus struct {
+	Section    string `json:"section"`
+	Label      string `json:"label"`
+	Hash       string `json:"hash"`
+	MasterHash string `json:"master_hash"`
+	Synced     bool   `json:"synced"`
 }
 
 type ClusterBasicSettings struct {
@@ -366,6 +381,9 @@ type ClusterNodeView struct {
 	Health          *ClusterHealth `json:"health"`
 	LastSeen        string         `json:"last_seen"`
 	CreatedAt       string         `json:"created_at"`
+	// SectionSync 为主节点聚合的 per-section 同步状态，仅包含主节点同步开关
+	// 开启的节；旧版本从节点无上报时为 nil（JSON 省略），前端展示占位文案。
+	SectionSync []ClusterSectionSyncStatus `json:"section_sync,omitempty"`
 }
 
 type ClusterStatus struct {

@@ -171,7 +171,111 @@ func (s *ClusterService) Nodes(ctx context.Context, now time.Time) ([]models.Clu
 		}
 		nodes = append(nodes, node)
 	}
-	return nodes, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	attachSectionSync(ctx, s, nodes)
+	return nodes, nil
+}
+
+// attachSectionSync 为已上报分区哈希的节点聚合 per-section 同步状态：主节点
+// 自身节哈希与同步开关过滤每次请求只计算一次；任一依赖读取失败时整体降级
+// （所有节点 SectionSync 保持 nil，等同旧版本从节点占位），绝不把错误上抛
+// 拖垮节点列表，也绝不展示可能失真的「全部滞后」。
+func attachSectionSync(ctx context.Context, s *ClusterService, nodes []models.ClusterNodeView) {
+	reports := s.snapshotSectionReports()
+	hasReport := false
+	for i := range nodes {
+		if nodes[i].IsApproved && reports[nodes[i].ID] != nil {
+			hasReport = true
+			break
+		}
+	}
+	if !hasReport {
+		return
+	}
+	switches, err := readSyncSwitches(s.db)
+	if err != nil {
+		Logf("warn", "读取同步开关失败（分区同步状态降级省略）: %v", err)
+		return
+	}
+	masterSnapshot, _, _, err := s.cachedSnapshot(ctx)
+	if err != nil {
+		Logf("warn", "计算主节点分区哈希失败（分区同步状态降级省略）: %v", err)
+		return
+	}
+	masterHashes := masterSnapshot.SectionHashes
+	for i := range nodes {
+		if !nodes[i].IsApproved {
+			continue
+		}
+		if reported := reports[nodes[i].ID]; reported != nil {
+			nodes[i].SectionSync = buildSectionSyncStatuses(reported, masterHashes, switches)
+		}
+	}
+}
+
+// buildSectionSyncStatuses 按主节点开关过滤节，逐节比对从节点上报哈希与主节点
+// 自身哈希；从节点缺该节记录（从未同步/开关曾关闭）按滞后处理。
+func buildSectionSyncStatuses(reported, masterHashes map[string]string, switches SyncSwitches) []models.ClusterSectionSyncStatus {
+	statuses := make([]models.ClusterSectionSyncStatus, 0, len(syncSections))
+	for _, sec := range syncSections {
+		if !switches.sectionEnabled(sec.Key) {
+			continue
+		}
+		hash := reported[sec.Key]
+		masterHash := masterHashes[sec.Key]
+		statuses = append(statuses, models.ClusterSectionSyncStatus{
+			Section:    sec.Key,
+			Label:      sec.NewLabel,
+			Hash:       hash,
+			MasterHash: masterHash,
+			Synced:     hash != "" && hash == masterHash,
+		})
+	}
+	if len(statuses) == 0 {
+		return nil
+	}
+	return statuses
+}
+
+// storeSectionReport 记录节点最近一次上报的分区哈希（防御性拷贝，调用方后续
+// 改动上报载荷不影响已存状态）；空哈希视为旧版本从节点上报，清除既有记录。
+func (s *ClusterService) storeSectionReport(nodeID int, hashes map[string]string) {
+	s.sectionMu.Lock()
+	defer s.sectionMu.Unlock()
+	if s.sectionReports == nil {
+		s.sectionReports = make(map[int]map[string]string)
+	}
+	if len(hashes) == 0 {
+		delete(s.sectionReports, nodeID)
+		return
+	}
+	stored := make(map[string]string, len(hashes))
+	for key, hash := range hashes {
+		stored[key] = hash
+	}
+	s.sectionReports[nodeID] = stored
+}
+
+func (s *ClusterService) snapshotSectionReports() map[int]map[string]string {
+	s.sectionMu.Lock()
+	defer s.sectionMu.Unlock()
+	reports := make(map[int]map[string]string, len(s.sectionReports))
+	for nodeID, hashes := range s.sectionReports {
+		copied := make(map[string]string, len(hashes))
+		for key, hash := range hashes {
+			copied[key] = hash
+		}
+		reports[nodeID] = copied
+	}
+	return reports
+}
+
+func (s *ClusterService) clearSectionReport(nodeID int) {
+	s.sectionMu.Lock()
+	defer s.sectionMu.Unlock()
+	delete(s.sectionReports, nodeID)
 }
 
 func (s *ClusterService) ReportNode(ctx context.Context, nodeID int, report models.ClusterReport, now time.Time) error {
@@ -191,6 +295,7 @@ func (s *ClusterService) ReportNode(ctx context.Context, nodeID int, report mode
 	if err != nil || rows != 1 {
 		return ErrNodeNotFound
 	}
+	s.storeSectionReport(nodeID, report.SectionHashes)
 	return nil
 }
 
@@ -203,5 +308,6 @@ func (s *ClusterService) DeleteNode(ctx context.Context, nodeID int) error {
 	if err != nil || rows != 1 {
 		return ErrNodeNotFound
 	}
+	s.clearSectionReport(nodeID)
 	return nil
 }

@@ -58,6 +58,11 @@ func (s *SyncService) Report(ctx context.Context) error {
 		LastSyncAt:     lastSyncAt,
 		LastSyncError:  lastSyncError,
 		SyncErrorCode:  syncErrorCode,
+		// 分区哈希取 cluster_applied_sections 的已应用记录（apply 路径
+		// recordAppliedSectionHashes 维护，含漂移重放后的本地重建口径）：
+		// 代表本地当前已落库内容，无需为上报重建全量快照。从未同步过的节点
+		// 表为空 → nil → 主节点按「旧版本从节点」占位展示，首个同步周期后自愈。
+		SectionHashes: readAppliedSectionHashes(s.db),
 		Health: models.ClusterHealth{
 			CaddyOK:          caddyErr == nil,
 			RulesCount:       rulesCount,

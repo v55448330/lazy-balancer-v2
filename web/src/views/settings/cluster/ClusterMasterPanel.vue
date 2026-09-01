@@ -52,11 +52,32 @@
           <div v-if="row.status === 'offline'" class="offline-duration">离线 {{ offlineDuration(row.last_seen) }}</div>
         </template>
       </el-table-column>
-      <el-table-column label="配置版本" min-width="170">
+      <el-table-column label="配置版本" min-width="200">
         <template #default="{ row }">
-          <div class="version-cell">
+          <el-popover v-if="row.section_sync?.length" placement="top" trigger="hover" :width="380" :show-after="150">
+            <template #reference>
+              <div class="version-cell">
+                <span>已应用 {{ row.reported_version }} / 当前 {{ row.current_version }}</span>
+                <el-tag v-if="row.reported_version < row.current_version" type="warning" size="small">待同步</el-tag>
+                <el-tag v-if="laggingSectionCount(row) > 0" type="warning" size="small">分区滞后 {{ laggingSectionCount(row) }}</el-tag>
+              </div>
+            </template>
+            <div class="section-sync-panel">
+              <div class="section-sync-title">分区同步状态</div>
+              <div v-for="section in row.section_sync" :key="section.section" class="section-sync-row">
+                <span class="section-sync-label">{{ section.label }}</span>
+                <span class="section-sync-hash mono-value">{{ sectionHashPrefix(section.hash) }}</span>
+                <el-tooltip v-if="!section.synced" :content="sectionHashDetail(section)" placement="top">
+                  <el-tag type="warning" size="small">滞后</el-tag>
+                </el-tooltip>
+                <el-tag v-else type="success" size="small">已同步</el-tag>
+              </div>
+            </div>
+          </el-popover>
+          <div v-else class="version-cell">
             <span>已应用 {{ row.reported_version }} / 当前 {{ row.current_version }}</span>
             <el-tag v-if="row.reported_version < row.current_version" type="warning" size="small">待同步</el-tag>
+            <span v-if="row.is_approved" class="section-sync-stale">暂无分区上报（旧版本从节点）</span>
           </div>
         </template>
       </el-table-column>
@@ -98,7 +119,7 @@ import { computed } from 'vue'
 import { useWindowSize } from '@vueuse/core'
 import { formatDate } from '@/utils/date'
 import { List, QuestionFilled, Setting } from '@element-plus/icons-vue'
-import type { ClusterHealth, ClusterNode, ClusterNodeStatus, ClusterStatus } from '@/types'
+import type { ClusterHealth, ClusterNode, ClusterNodeStatus, ClusterSectionSync, ClusterStatus } from '@/types'
 
 type SyncErrorCode = 'schema_too_new' | 'schema_too_old' | 'signature_invalid' | 'pin_mismatch' | 'validation_failed' | 'apply_failed' | 'transport_error'
 type ClusterHealthWithSyncError = ClusterHealth & { readonly sync_error_code?: SyncErrorCode }
@@ -174,6 +195,13 @@ const offlineDuration = (lastSeen: string | null | undefined): string => {
   return `${Math.floor(elapsed / 86400)}d`
 }
 
+const laggingSectionCount = (node: ClusterNodeWithSyncError): number => node.section_sync?.filter(section => !section.synced).length ?? 0
+
+const sectionHashPrefix = (hash: string): string => hash ? `${hash.slice(0, 8)}…` : '无记录'
+
+const sectionHashDetail = (section: ClusterSectionSync): string =>
+  `本地 ${sectionHashPrefix(section.hash)} / 主端 ${sectionHashPrefix(section.master_hash)}`
+
 const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => {
 	const error = node.health?.last_sync_error.trim() ?? ''
 	if (!error) return ''
@@ -212,6 +240,12 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 .access-url-link :deep(.el-link__inner) { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .version-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .offline-duration { font-size: 12px; color: #9ca3af; margin-top: 2px; }
+.section-sync-stale { font-size: 12px; color: #9ca3af; }
+.section-sync-panel { display: flex; flex-direction: column; gap: 6px; }
+.section-sync-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.section-sync-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.section-sync-label { flex-shrink: 0; min-width: 96px; color: var(--text-primary); }
+.section-sync-hash { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ca3af; }
 .op-buttons { display: inline-flex; align-items: center; }
 .op-buttons .el-button + .el-button { margin-left: 4px; }
 .op-buttons .el-button { padding-left: 6px; padding-right: 6px; }

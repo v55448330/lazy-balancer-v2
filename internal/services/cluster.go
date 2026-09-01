@@ -36,18 +36,23 @@ type ClusterLifecycle interface {
 }
 
 type ClusterService struct {
-	db                   *sql.DB
-	lifecycle            ClusterLifecycle
-	roleMu               sync.Mutex
-	pinCleanupMu         sync.Mutex
-	pendingPinPath       string
-	pendingPinAuditURL   string
+	db                  *sql.DB
+	lifecycle           ClusterLifecycle
+	roleMu              sync.Mutex
+	pinCleanupMu        sync.Mutex
+	pendingPinPath      string
+	pendingPinAuditURL  string
 	beforeUpdateSettings func()
-	snapshotNow          func() time.Time
+	snapshotNow         func() time.Time
+	// sectionReports 缓存各从节点最近一次上报的分区哈希（ReportNode 写入、
+	// DeleteNode 清除、Nodes 聚合读取）。与 nodes 表的 health_json 同为内存态：
+	// 进程重启后随从节点下一次上报（≤60s）自动重建。
+	sectionMu      sync.Mutex
+	sectionReports map[int]map[string]string
 }
 
 func NewClusterService(database *sql.DB, lifecycle ClusterLifecycle) *ClusterService {
-	return &ClusterService{db: database, lifecycle: lifecycle, snapshotNow: time.Now}
+	return &ClusterService{db: database, lifecycle: lifecycle, snapshotNow: time.Now, sectionReports: make(map[int]map[string]string)}
 }
 
 func randomHex(byteCount int) (string, error) {
