@@ -856,7 +856,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 		}
 		rows, err := store.Query(`
 			SELECT id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5),
-			       COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
+			       COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist,'[]'), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_blacklist,'[]'),
 			       COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0),
 			       COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'),
 		COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''),
@@ -870,7 +870,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 			var p models.SecurityPolicy
 			var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
 			if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold,
-				&p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &ipBlacklist,
+				&p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &p.IPWhitelistEnabled, &ipBlacklist,
 				&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst,
 				&crsRuleGroups, &crsExcludedRules, &customRules,
 				&p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt,

@@ -481,3 +481,45 @@ func TestBuildHTTPHandleChain_stripsGeoIPHeadersBeforeUpstream(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadSecurityPolicyContext_carriesTriStateGateFields：批量预载是真实生成
+// 路径的唯一策略来源——其 SELECT 曾缺 ip_whitelist_enabled（零值 false 压制
+// 信任规则发射，信任 IP 仍记 CRS 检测事件；单测直构 struct 绕过 loader 掩盖）。
+// 本测试钉住 loader 携带三态门字段：whitelist_enabled / geoip_mode / refs。
+func TestLoadSecurityPolicyContext_carriesTriStateGateFields(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := db.Initialize(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_gate1','g','http','g.test',8081,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_ip_lists (id,name,entries) VALUES (7,'L','[{"value":"198.51.100.7","remark":""}]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,ip_whitelist,ip_whitelist_enabled,ip_whitelist_refs,geoip_countries,geoip_mode) VALUES (1,'p',1,'[]',0,'[7]','["CN"]','off')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_gate1',1)`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := loadSecurityPolicyContext(db.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policies := ctx.policyByRule["lb_gate1"]
+	if len(policies) != 1 {
+		t.Fatalf("policies=%d, want 1", len(policies))
+	}
+	p := policies[0]
+	if p.IPWhitelistEnabled {
+		t.Fatal("IPWhitelistEnabled must be carried as false from DB (trust off)")
+	}
+	if p.GeoIPMode != "off" {
+		t.Fatalf("GeoIPMode=%q, want off", p.GeoIPMode)
+	}
+	// refs-only 信任合并集仍应装载（数据在，仅被开关门压制）
+	if len(p.MergedWhitelist) != 1 || p.MergedWhitelist[0] != "198.51.100.7" {
+		t.Fatalf("MergedWhitelist=%v, want [198.51.100.7]", p.MergedWhitelist)
+	}
+}
