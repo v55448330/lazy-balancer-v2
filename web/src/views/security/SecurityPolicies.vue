@@ -1672,8 +1672,10 @@ const handleSave = async () => {
       ip_acl_list: JSON.stringify(ipACLList.value),
       ip_whitelist: JSON.stringify(ipWhitelist.value),
       ip_whitelist_enabled: ipWhitelistEnabled.value,
-      ip_acl_list_refs: JSON.stringify(ipACLListRefs.value),
-      ip_whitelist_refs: JSON.stringify(ipWhitelistRefs.value),
+      // 开关关闭即解除引用（内联名单按三态语义保留，refs 指向共享列表——
+      // 消费方关闭时释放，IP 地址列表页的引用数反映真实占用，且不阻塞列表删除）
+      ip_acl_list_refs: form.value.ip_acl_enabled ? JSON.stringify(ipACLListRefs.value) : '[]',
+      ip_whitelist_refs: ipWhitelistEnabled.value ? JSON.stringify(ipWhitelistRefs.value) : '[]',
       rate_limit_enabled: form.value.rate_limit_enabled,
       rate_limit_rps: form.value.rate_limit_rps,
       rate_limit_burst: form.value.rate_limit_burst,
