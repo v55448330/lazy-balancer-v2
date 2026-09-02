@@ -202,13 +202,19 @@
               <!-- 表格行编辑器：目标（与规则组同款混合下拉）× 作用域（全部 IP/指定 IP/地址
                    列表）× 条件控件（ip → 标签输入 + isValidCidr 即时拒绝；list → 引用
                    /security/ip-lists 列表）× 删除。上限 50 行；旧字符串数组存储读取时已
-                   归一为 scope:all 行，保存统一写对象数组。 -->
-              <el-card shadow="never" class="exclusion-card">
-                <el-table :data="crsExcludedRows" size="small" empty-text="">
-                  <template #empty>
-                    <el-empty description="未添加排除规则" :image-size="40" />
-                  </template>
-                  <el-table-column label="目标规则" min-width="260">
+                   归一为 scope:all 行，保存统一写对象数组。
+                   布局：空态不渲染表格——单行紧凑引导（说明 + 添加按钮）避免挤占弹框
+                   高度；有条目才渲染表格，作用域 radio 与条件控件同单元格纵排（条件
+                   控件按作用域切换渲染，避免三控件同列常驻撑宽），min-width 之和
+                   （200+240+60=500px）低于控件列宽 → 容器内完整展示无横向滚动；
+                   条目数徽标随工具行。 -->
+              <div v-if="crsExcludedRows.length === 0" class="exclusion-empty">
+                <span class="exclusion-empty-tip">未添加排除规则——排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP 或地址列表生效</span>
+                <el-button size="small" type="primary" plain :disabled="form.mode === 'off' || isReadOnly" @click="addExcludedRule">添加排除规则</el-button>
+              </div>
+              <template v-else>
+                <el-table :data="crsExcludedRows" size="small" class="exclusion-table">
+                  <el-table-column label="目标规则" min-width="200">
                     <template #default="{ row }">
                       <el-select
                         v-model="row.target"
@@ -244,41 +250,42 @@
                       <div v-if="exclusionRowConflict(row)" class="exclusion-row-warning">{{ exclusionRowConflict(row) }}</div>
                     </template>
                   </el-table-column>
-                  <el-table-column label="作用域" width="200">
+                  <!-- 作用域与条件合并列：radio 与条件控件同单元格纵排（条件按作用域
+                       切换渲染：all → 灰字提示 / ip → 标签输入 / list → 列表多选），
+                       消除三控件分列常驻导致的固定最小宽度 -->
+                  <el-table-column label="作用域 / 条件" min-width="240">
                     <template #default="{ row }">
-                      <el-radio-group v-model="row.scope" size="small" :disabled="form.mode === 'off' || isReadOnly">
-                        <el-radio value="all">全部 IP</el-radio>
-                        <el-radio value="ip">指定 IP</el-radio>
-                        <el-radio value="list">地址列表</el-radio>
-                      </el-radio-group>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="条件" min-width="220">
-                    <template #default="{ row }">
-                      <el-select
-                        v-if="row.scope === 'ip'"
-                        v-model="row.ips"
-                        multiple
-                        filterable
-                        allow-create
-                        default-first-option
-                        :disabled="form.mode === 'off' || isReadOnly"
-                        placeholder="输入 IP/CIDR 后回车"
-                        style="width: 100%"
-                        @change="(value: string[]) => onExclusionIpsChange(row, value)"
-                      />
-                      <el-select
-                        v-else-if="row.scope === 'list'"
-                        v-model="row.listRefs"
-                        multiple
-                        filterable
-                        :disabled="form.mode === 'off' || isReadOnly"
-                        placeholder="选择 IP 地址列表"
-                        style="width: 100%"
-                      >
-                        <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
-                      </el-select>
-                      <span v-else class="exclusion-scope-all">对所有 IP 生效</span>
+                      <div class="exclusion-scope-cell">
+                        <el-radio-group v-model="row.scope" size="small" :disabled="form.mode === 'off' || isReadOnly">
+                          <el-radio value="all">全部 IP</el-radio>
+                          <el-radio value="ip">指定 IP</el-radio>
+                          <el-radio value="list">地址列表</el-radio>
+                        </el-radio-group>
+                        <el-select
+                          v-if="row.scope === 'ip'"
+                          v-model="row.ips"
+                          multiple
+                          filterable
+                          allow-create
+                          default-first-option
+                          :disabled="form.mode === 'off' || isReadOnly"
+                          placeholder="输入 IP/CIDR 后回车"
+                          class="exclusion-scope-control"
+                          @change="(value: string[]) => onExclusionIpsChange(row, value)"
+                        />
+                        <el-select
+                          v-else-if="row.scope === 'list'"
+                          v-model="row.listRefs"
+                          multiple
+                          filterable
+                          :disabled="form.mode === 'off' || isReadOnly"
+                          placeholder="选择 IP 地址列表"
+                          class="exclusion-scope-control"
+                        >
+                          <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                        </el-select>
+                        <span v-else class="exclusion-scope-all">对所有 IP 生效</span>
+                      </div>
                     </template>
                   </el-table-column>
                   <el-table-column label="" width="60" align="center">
@@ -288,11 +295,11 @@
                   </el-table-column>
                 </el-table>
                 <div class="exclusion-toolbar">
-                  <el-button size="small" type="primary" plain :disabled="form.mode === 'off' || isReadOnly || crsExcludedRows.length >= CRS_EXCLUDED_MAX_ROWS" @click="addExcludedRule">+ 添加排除</el-button>
-                  <span class="exclusion-count">{{ crsExcludedRows.length }}/{{ CRS_EXCLUDED_MAX_ROWS }}</span>
+                  <el-button size="small" type="primary" plain :disabled="form.mode === 'off' || isReadOnly || crsExcludedRows.length >= CRS_EXCLUDED_MAX_ROWS" @click="addExcludedRule">添加排除规则</el-button>
+                  <el-tag size="small" type="info" effect="plain" class="exclusion-count">{{ crsExcludedRows.length }}/{{ CRS_EXCLUDED_MAX_ROWS }}</el-tag>
                 </div>
                 <div class="form-tip-line">排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP 或地址列表生效</div>
-              </el-card>
+              </template>
             </el-form-item>
             <el-form-item label="自定义规则">
               <el-select v-model="selectedCustomRules" :disabled="form.mode === 'off'" multiple filterable placeholder="选择要包含的自定义规则" style="width: 100%">
@@ -2072,15 +2079,25 @@ onMounted(async () => {
   gap: 12px;
 }
 
-/* —— 排除规则行编辑器（WAF 步骤，el-card 内行编辑表格）—— */
-.exclusion-card { width: 100%; }
-.exclusion-card :deep(.el-card__body) { padding: 8px; }
+/* —— 排除规则行编辑器（WAF 步骤）——
+   空态不渲染表格：单行紧凑引导（12px 灰调说明 + 添加按钮贴右），
+   高度约一行，避免 el-empty 撑高挤占弹框；有条目才渲染表格。 */
+.exclusion-empty { display: flex; align-items: center; gap: 12px; width: 100%; }
+.exclusion-empty-tip { flex: 1; min-width: 0; font-size: 12px; color: #9ca3af; line-height: 1.5; }
+.exclusion-table { width: 100%; }
 .exclusion-target-select { width: 100%; }
 /* 行级矛盾提示（与规则组选择冲突/冗余）：跟随目标 select 下方，警告色小字 */
 .exclusion-row-warning { font-size: 12px; color: #e6a23c; line-height: 1.5; margin-top: 4px; }
+/* 作用域 radio 与条件控件同单元格纵排（合并列消除横向滚动）；radio 收窄
+   默认 32px 间距并允许换行，窄容器下不溢出单元格 */
+.exclusion-scope-cell { display: flex; flex-direction: column; gap: 6px; }
+.exclusion-scope-cell :deep(.el-radio) { margin-right: 12px; }
+.exclusion-scope-cell :deep(.el-radio-group) { flex-wrap: wrap; row-gap: 2px; }
+.exclusion-scope-control { width: 100%; }
 .exclusion-scope-all { font-size: 12px; color: #9ca3af; }
 .exclusion-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.exclusion-count { font-size: 12px; color: #9ca3af; margin-left: auto; }
+/* 条目数徽标（N/50）随工具行右侧 */
+.exclusion-count { margin-left: auto; }
 
 .rule-bind-field { width: 100%; }
 

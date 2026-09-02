@@ -56,8 +56,10 @@ export interface CrsExcludedRow {
 export const CRS_EXCLUDED_MAX_ROWS = 50
 
 /**
- * crs_excluded_rules 载荷容错解析（读侧兼容两种形态，写侧统一对象数组）：
+ * crs_excluded_rules 载荷容错解析（读侧统一归一为数组形态，写侧另行转线上形态）：
  * - 对象数组 [{target,scope,ips,listRefs}]：字段缺失/形状异常按空值兜底，target 空的行丢弃；
+ *   ips 兼容两种形态——逗号分隔字符串（后端 CRSExcludedEntry 契约/落库形态）与数组
+ *   （前端内存形态），读侧一律归一为数组；
  * - 旧字符串数组（历史存储：CRS 文件名/纯数字 ID/区间）：归一为 scope:'all' 行，
  *   target 原样保留（后端 SecRuleRemoveById 兼容文件名/纯数字/区间三种形态）。
  */
@@ -82,9 +84,12 @@ export const parseCrsExcludedRules = (raw: string | undefined | null): CrsExclud
     const target = typeof rec.target === 'string' ? rec.target.trim() : ''
     if (target === '') continue
     const scope: CrsExclusionScope = rec.scope === 'ip' || rec.scope === 'list' ? rec.scope : 'all'
+    // 后端契约 ips 为逗号分隔字符串（"1.1.1.1,10.0.0.0/8"）；数组形态一并兼容
     const ips = Array.isArray(rec.ips)
       ? rec.ips.filter((v): v is string => typeof v === 'string' && v.trim() !== '')
-      : []
+      : typeof rec.ips === 'string'
+        ? rec.ips.split(',').map((v) => v.trim()).filter((v) => v !== '')
+        : []
     const listRefs = Array.isArray(rec.listRefs)
       ? rec.listRefs.map(Number).filter((n) => Number.isInteger(n) && n > 0)
       : []

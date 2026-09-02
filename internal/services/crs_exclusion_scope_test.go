@@ -272,3 +272,29 @@ func TestBuildCorazaDirectives_groupOnlySelectionEmissionEquivalent(t *testing.T
 		t.Fatalf("response-side glob must survive hybrid rework:\n%s", directives)
 	}
 }
+
+// v2.2.2 契约漂移回归：ips 数组形态（快捷排除/向导 tag 输入）与字符串形态
+// 均可解析；序列化恒为数组（前端读侧契约）。
+func TestCRSExcludedEntry_IPsDualShapeRoundTrip(t *testing.T) {
+	var arrForm CRSExcludedEntry
+	if err := json.Unmarshal([]byte(`{"target":"911013","scope":"ip","ips":["203.0.113.99","10.0.0.0/8"],"listRefs":[]}`), &arrForm); err != nil {
+		t.Fatalf("array form: %v", err)
+	}
+	if arrForm.IPs != "203.0.113.99,10.0.0.0/8" {
+		t.Fatalf("normalized ips=%q", arrForm.IPs)
+	}
+	out, err := json.Marshal(arrForm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"ips":["203.0.113.99","10.0.0.0/8"]`) {
+		t.Fatalf("marshal must emit array, got %s", out)
+	}
+	var strForm CRSExcludedEntry
+	if err := json.Unmarshal([]byte(`{"target":"942100","scope":"ip","ips":"1.2.3.4","listRefs":[]}`), &strForm); err != nil {
+		t.Fatalf("string form: %v", err)
+	}
+	if strForm.IPs != "1.2.3.4" {
+		t.Fatalf("string form ips=%q", strForm.IPs)
+	}
+}

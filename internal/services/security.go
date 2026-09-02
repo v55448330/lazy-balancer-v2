@@ -863,6 +863,48 @@ type CRSExcludedEntry struct {
 	ListRefs []int64 `json:"listRefs"`
 }
 
+// UnmarshalJSON/MarshalJSON 双向兼容 ips 形态（v2.2.2 契约漂移修复）：
+// 前端 tag 输入天然产生数组（["1.2.3.4"]），向导/快捷排除两侧统一以数组
+// 收发；后端内部存储/发射仍用逗号串。收：string|array 均可；发：数组。
+func (e *CRSExcludedEntry) UnmarshalJSON(data []byte) error {
+	type alias CRSExcludedEntry
+	var a alias
+	if err := json.Unmarshal(data, &a); err == nil {
+		*e = CRSExcludedEntry(a)
+		return nil
+	}
+	type arrayForm struct {
+		Target   string   `json:"target"`
+		Scope    string   `json:"scope"`
+		IPs      []string `json:"ips"`
+		ListRefs []int64  `json:"listRefs"`
+	}
+	var b arrayForm
+	if err := json.Unmarshal(data, &b); err != nil {
+		return err
+	}
+	*e = CRSExcludedEntry{Target: b.Target, Scope: b.Scope, IPs: strings.Join(b.IPs, ","), ListRefs: b.ListRefs}
+	return nil
+}
+
+func (e CRSExcludedEntry) MarshalJSON() ([]byte, error) {
+	var ips []string
+	for _, item := range strings.Split(e.IPs, ",") {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			ips = append(ips, trimmed)
+		}
+	}
+	if ips == nil {
+		ips = []string{}
+	}
+	return json.Marshal(map[string]interface{}{
+		"target":   e.Target,
+		"scope":    e.Scope,
+		"ips":      ips,
+		"listRefs": e.ListRefs,
+	})
+}
+
 // IsCRSRuleIDTarget 报告 s 是否为 6 位 CRS 规则 ID 形态（^9\d{5}$）。
 func IsCRSRuleIDTarget(s string) bool {
 	return len(s) == 6 && s[0] == '9' && allDigits(s[1:])

@@ -114,9 +114,10 @@
     </el-card>
 
     <!-- CRS 规则详情 + 快捷排除：索引查 id/msg 全文/file/category，源码片段取该 ID
-         所在行 ±10 行（apacheconf 高亮）；索引无此 ID → 「当前 CRS 已无此规则」仍可排除。
-         提交 = GET 策略现有 crs_excluded_rules → 追加一行 → PUT 全量（对象数组形态）。 -->
-    <el-dialog v-model="crsDialogVisible" :title="`CRS 规则 ${crsEvent?.rule_triggered ?? ''}`" width="min(760px, 94vw)" top="5vh" append-to-body @close="crsDialogSeq++">
+          所在行 ±10 行（apacheconf 高亮，默认折叠、展开才拉取）；索引无此 ID →
+          「当前 CRS 已无此规则」仍可排除。提交 = GET 策略现有 crs_excluded_rules →
+          追加一行 → PUT 全量（线上形态 ips 为逗号分隔字符串，见 confirmCrsExclude）。 -->
+    <el-dialog v-model="crsDialogVisible" :title="`CRS 规则 ${crsEvent?.rule_triggered ?? ''}`" width="min(760px, 94vw)" top="5vh" append-to-body class="crs-event-dialog" @close="crsDialogSeq++">
       <template v-if="crsEvent">
         <el-descriptions :column="1" border size="small">
           <el-descriptions-item label="规则 ID">{{ crsEvent.rule_triggered }}</el-descriptions-item>
@@ -143,30 +144,64 @@
           style="margin-top: 12px"
         />
 
+        <!-- 规则源码默认折叠（降低弹框默认高度），展开时才按需拉取文件内容 -->
         <template v-if="crsEntry">
-          <div class="crs-snippet-title">规则源码（{{ crsEntry.file }} 中 id:{{ crsEvent.rule_triggered }} 所在行 ±10 行）</div>
-          <div v-loading="crsSnippetLoading" class="crs-snippet-body">
+          <div class="crs-snippet-toggle" @click="toggleCrsSnippet">
+            <el-icon class="crs-snippet-toggle-icon" :class="{ 'is-expanded': crsSnippetExpanded }"><ArrowRight /></el-icon>
+            <span>{{ crsSnippetExpanded ? '收起规则源码' : '展开规则源码' }}</span>
+            <span class="crs-snippet-toggle-file">{{ crsEntry.file }} · id:{{ crsEvent.rule_triggered }} 所在行 ±10 行</span>
+          </div>
+          <div v-if="crsSnippetExpanded" v-loading="crsSnippetLoading" class="crs-snippet-body">
             <SyntaxHighlight v-if="crsSnippet" :content="crsSnippet" language="apacheconf" />
+            <div v-else-if="crsSnippetError" class="crs-snippet-empty">规则源码加载失败，可收起后重新展开重试</div>
             <div v-else-if="!crsSnippetLoading" class="crs-snippet-empty">未在该文件中定位到规则定义（规则文件可能已更新）</div>
           </div>
         </template>
 
-        <el-divider content-position="left">快捷排除</el-divider>
-        <el-radio-group v-model="crsExcludeScope" :disabled="crsActionDisabled">
-          <el-radio value="ip">仅排除该 IP（事件来源 {{ crsEvent.client_ip }}）</el-radio>
-          <el-radio value="all">所属策略不限 IP</el-radio>
-        </el-radio-group>
-        <div v-if="crsPolicyState !== 'ok'" class="crs-policy-hint">
-          <template v-if="crsPolicyState === 'checking'">策略状态检查中…</template>
-          <template v-else-if="crsPolicyState === 'missing'">归属策略已删除，请在策略向导中操作</template>
-          <template v-else-if="crsPolicyState === 'no-policy'">归属策略已删除，请在策略向导中操作</template>
-          <template v-else>策略状态加载失败，请关闭后重试</template>
+        <div class="crs-action-group">
+          <div class="crs-action-group-title">快捷排除（二选一）</div>
+          <el-radio-group v-model="crsExcludeScope" :disabled="crsActionDisabled">
+            <el-radio value="ip">仅排除该 IP（事件来源 {{ crsEvent.client_ip }}）</el-radio>
+            <el-radio value="all">所属策略不限 IP</el-radio>
+          </el-radio-group>
+          <div v-if="crsPolicyState !== 'ok'" class="crs-policy-hint">
+            <template v-if="crsPolicyState === 'checking'">策略状态检查中…</template>
+            <template v-else-if="crsPolicyState === 'missing'">归属策略已删除，请在策略向导中操作</template>
+            <template v-else-if="crsPolicyState === 'no-policy'">归属策略已删除，请在策略向导中操作</template>
+            <template v-else>策略状态加载失败，请关闭后重试</template>
+          </div>
+          <div v-else-if="crsAlreadyExcluded" class="crs-policy-hint">该规则的同等排除已存在于所属策略（确认后将追加为独立条目）</div>
+          <div class="crs-action-row">
+            <el-button type="primary" :loading="crsSubmitting" :disabled="crsActionDisabled" @click="confirmCrsExclude">确认排除</el-button>
+          </div>
         </div>
-        <div v-else-if="crsAlreadyExcluded" class="crs-policy-hint">该规则的同等排除已存在于所属策略（确认后将追加为独立条目）</div>
+
+        <div class="crs-action-group">
+          <div class="crs-action-group-title">把该 IP 加入地址列表</div>
+          <div class="crs-action-row">
+            <el-select
+              v-model="crsIpListId"
+              filterable
+              clearable
+              placeholder="选择地址列表"
+              class="crs-ip-list-select"
+              :disabled="!canManage || crsIpListSaving"
+            >
+              <el-option v-for="list in crsIpLists" :key="list.id" :label="`${list.name}（${list.entry_count} 条）`" :value="list.id" />
+            </el-select>
+            <el-button
+              type="primary"
+              plain
+              :loading="crsIpListSaving"
+              :disabled="!canManage || crsIpLists.length === 0 || crsIpListId === undefined"
+              @click="addEventIpToList"
+            >加入列表</el-button>
+          </div>
+          <div v-if="crsIpLists.length === 0 && !crsIpListLoading" class="crs-policy-hint">暂无地址列表，可在 规则集 → IP 地址列表 创建</div>
+        </div>
       </template>
       <template #footer>
         <el-button @click="crsDialogVisible = false">关闭</el-button>
-        <el-button type="primary" :loading="crsSubmitting" :disabled="crsActionDisabled" @click="confirmCrsExclude">确认排除</el-button>
       </template>
     </el-dialog>
   </div>
@@ -174,8 +209,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Refresh, Warning } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Refresh, Warning, ArrowRight } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
@@ -223,6 +258,16 @@ const crsExcludeScope = ref<'ip' | 'all'>('ip')
 const crsSubmitting = ref(false)
 const crsSnippet = ref('')
 const crsSnippetLoading = ref(false)
+// 源码默认折叠：展开才拉取文件内容（每次弹框会话至多一次，失败允许重展开重试）
+const crsSnippetExpanded = ref(false)
+const crsSnippetFetched = ref(false)
+const crsSnippetError = ref(false)
+// 「把该 IP 加入地址列表」动作组（与快捷排除互相独立）
+interface IpListOption { id: number; name: string; entry_count: number }
+const crsIpLists = ref<IpListOption[]>([])
+const crsIpListId = ref<number | undefined>(undefined)
+const crsIpListLoading = ref(false)
+const crsIpListSaving = ref(false)
 // ok=可提交 / checking=策略检查中 / missing=404 或无 policy_id / error=检查失败
 const crsPolicyState = ref<'checking' | 'ok' | 'missing' | 'no-policy' | 'error'>('checking')
 // 策略存在性检查顺带取回的现有排除清单（用于「已存在同等排除」提示；提交时仍重新 GET 最新）
@@ -277,7 +322,13 @@ const openCrsDialog = async (row: SecurityEvent): Promise<void> => {
   crsExcludeScope.value = 'ip'
   crsSnippet.value = ''
   crsSnippetLoading.value = false
+  crsSnippetExpanded.value = false
+  crsSnippetFetched.value = false
+  crsSnippetError.value = false
   crsExistingRows.value = []
+  crsIpListId.value = undefined
+  crsIpListSaving.value = false
+  void loadCrsIpLists(seq)
   if (!row.policy_id || row.policy_id <= 0) {
     crsPolicyState.value = 'no-policy'
   } else {
@@ -285,21 +336,80 @@ const openCrsDialog = async (row: SecurityEvent): Promise<void> => {
     void checkCrsPolicy(row.policy_id, seq)
   }
   crsDialogVisible.value = true
-  // 索引就绪后按 file 拉源码片段（索引失败/规则已移除时仅展示详情与提示）
+  // 索引仅供详情区 id/msg/file/category 展示（源码内容等用户展开后再拉）
   await ensureCrsRuleIndex(seq)
-  if (seq !== crsDialogSeq || !crsDialogVisible.value) return
-  const entry = crsIndexById.value.get(row.rule_triggered)
-  if (!entry?.file) return
+}
+
+// 折叠切换：首次展开时按 file 拉源码片段（索引失败/规则已移除时折叠行不渲染）
+const toggleCrsSnippet = async (): Promise<void> => {
+  crsSnippetExpanded.value = !crsSnippetExpanded.value
+  const ev = crsEvent.value
+  const entry = ev ? crsIndexById.value.get(ev.rule_triggered) : null
+  if (!crsSnippetExpanded.value || !ev || !entry?.file || crsSnippetFetched.value) return
+  const seq = crsDialogSeq
+  crsSnippetFetched.value = true
+  crsSnippetError.value = false
   crsSnippetLoading.value = true
   try {
     const res = await request.get<APIResponse<{ content: string }>>(`/security/crs/rules/${encodeURIComponent(entry.file)}`)
     if (seq !== crsDialogSeq || !crsDialogVisible.value) return
-    crsSnippet.value = extractRuleSnippet(res.data?.content || '', row.rule_triggered)
+    crsSnippet.value = extractRuleSnippet(res.data?.content || '', ev.rule_triggered)
   } catch {
     if (seq !== crsDialogSeq || !crsDialogVisible.value) return
     crsSnippet.value = ''
+    // 允许收起后再展开重试
+    crsSnippetFetched.value = false
+    crsSnippetError.value = true
   } finally {
     if (seq === crsDialogSeq) crsSnippetLoading.value = false
+  }
+}
+
+const loadCrsIpLists = async (seq: number): Promise<void> => {
+  crsIpListLoading.value = true
+  try {
+    const res = await request.get<APIResponse<IpListOption[]>>('/security/ip-lists')
+    if (seq !== crsDialogSeq) return
+    crsIpLists.value = res.data || []
+  } catch {
+    if (seq !== crsDialogSeq) return
+    crsIpLists.value = []
+  } finally {
+    if (seq === crsDialogSeq) crsIpListLoading.value = false
+  }
+  // 列表已在别处删除时清理悬空选择，避免静默写往不存在的列表
+  if (crsIpListId.value !== undefined && !crsIpLists.value.some((l) => l.id === crsIpListId.value)) {
+    crsIpListId.value = undefined
+  }
+}
+
+// 与 IPLocationAction 存入地址列表同口径：确认框（含列表名）→ 幂等 POST →
+// added=false 静默 info；与「确认排除」互不影响（独立 loading/状态）
+const addEventIpToList = async (): Promise<void> => {
+  const ev = crsEvent.value
+  if (!ev || !canManage.value || crsIpListSaving.value) return
+  const list = crsIpLists.value.find((l) => l.id === crsIpListId.value)
+  if (!list) return
+  try {
+    await ElMessageBox.confirm(
+      `将把 ${ev.client_ip} 加入地址列表「${list.name}」（幂等，已存在时不会重复添加）。是否继续？`,
+      '加入地址列表',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
+    )
+  } catch { return }
+  const seq = crsDialogSeq
+  crsIpListSaving.value = true
+  try {
+    // 非 silent：错误走全局拦截器提示，428 时全局 MFA step-up 弹码链完整生效
+    const res = await request.post<APIResponse<{ added: boolean }>>(`/security/ip-lists/${list.id}/ips`, { value: ev.client_ip })
+    if (seq !== crsDialogSeq) return
+    if (res.data?.added) mfaAwareSuccess(`已加入地址列表「${list.name}」`)
+    else ElMessage.info(`该 IP 已在列表「${list.name}」中`)
+    await loadCrsIpLists(seq)
+  } catch {
+    // 失败提示由全局拦截器弹出，这里只需终止流程
+  } finally {
+    if (seq === crsDialogSeq) crsIpListSaving.value = false
   }
 }
 
@@ -327,7 +437,11 @@ const confirmCrsExclude = async (): Promise<void> => {
       return
     }
     rows.push({ target: ev.rule_triggered, scope, ips, listRefs: [] })
-    await request.put(`/security/policies/${ev.policy_id}`, { crs_excluded_rules: JSON.stringify(rows) })
+    // 后端契约（services.CRSExcludedEntry）：ips 为逗号分隔字符串、listRefs 为数字
+    // 数组；内存态 CrsExcludedRow.ips 是数组——先转线上形态再 stringify，否则
+    // 后端 json.Unmarshal 类型不匹配直接 400「需为 JSON 数组字符串」
+    const wireRows = rows.map((r) => ({ target: r.target, scope: r.scope, ips: r.ips.join(','), listRefs: r.listRefs }))
+    await request.put(`/security/policies/${ev.policy_id}`, { crs_excluded_rules: JSON.stringify(wireRows) })
     mfaAwareSuccess(`已加入策略「${ev.policy_name || `#${ev.policy_id}`}」的排除清单，已生效并重载`)
     crsDialogVisible.value = false
   } catch {
@@ -414,11 +528,19 @@ onMounted(fetchEvents)
 .cell-tip { cursor: help; border-bottom: 1px dashed #c0c4cc; }
 
 /* —— CRS 规则详情 + 快捷排除弹框 —— */
-.crs-snippet-title { font-size: 13px; font-weight: 500; color: #374151; margin: 12px 0 8px; }
-.crs-snippet-body { min-height: 80px; }
+.crs-snippet-toggle { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 13px; font-weight: 500; color: var(--el-color-primary, #409eff); cursor: pointer; user-select: none; }
+.crs-snippet-toggle:hover { opacity: 0.85; }
+.crs-snippet-toggle-icon { font-size: 12px; transition: transform 0.2s; }
+.crs-snippet-toggle-icon.is-expanded { transform: rotate(90deg); }
+.crs-snippet-toggle-file { font-size: 12px; font-weight: 400; color: #9ca3af; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crs-snippet-body { margin-top: 8px; min-height: 80px; }
 .crs-snippet-body :deep(.prism-code) { max-height: 320px; }
 .crs-snippet-empty { font-size: 12px; color: #9ca3af; padding: 12px 0; }
 .crs-policy-hint { font-size: 12px; color: #e6a23c; line-height: 1.6; margin-top: 8px; }
+.crs-action-group { border: 1px solid var(--el-border-color-lighter, #ebeef5); border-radius: var(--el-border-radius-base, 4px); padding: 12px; margin-top: 12px; }
+.crs-action-group-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px; }
+.crs-action-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.crs-ip-list-select { width: 240px; flex: 0 0 auto; }
 </style>
 
 <style>
@@ -427,4 +549,7 @@ onMounted(fetchEvents)
   width: 360px;
   flex: 0 0 auto;
 }
+
+/* CRS 事件弹框：正文区自适应限高（top=5vh + 头/脚 ≈ 110px），源码展开时整体不超视口 */
+.crs-event-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
 </style>
