@@ -1306,6 +1306,7 @@ const peerPolicyViews = computed<PeerPolicyView[]>(() =>
         mergeIpEntries(parseJsonList(p.ip_acl_list), parseRefIds(p.ip_acl_list_refs)),
         mergeIpEntries(parseJsonList(p.ip_whitelist), parseRefIds(p.ip_whitelist_refs)),
         parseJsonList(p.ip_blacklist),
+        p.ip_whitelist_enabled !== false,
       )
       return { id: p.id, name: p.name, mode: p.mode, crsGroups: normalizeCrsGroups(parseUnknownStringList(p.crs_rule_groups)), allowEntries: sides.allow, denyEntries: sides.deny }
     }),
@@ -1363,7 +1364,7 @@ const wafStepCrsAlert = computed<string>(() => {
 // - aclSectionAlert（访问控制区）：ACL 列表（允许侧=allow/bypass、拒绝侧=deny）
 //   + ip_blacklist（服务端加载、本向导不编辑，语义属拒绝侧 → 归访问控制区）；
 // - whitelistSectionAlert（信任名单区）：ip_whitelist（允许侧）。
-// 名单生效口径与保存语义对齐：ip_whitelist 总是随保存下发、后端按「非空即生效」
+// 名单生效口径与保存语义对齐：ip_whitelist 随保存下发且受 ip_whitelist_enabled 三态门
 // 应用（开关仅控制编辑器显隐），故 computed 以 ipWhitelist 实际内容为准、仅模板
 // 显示层受 ipWhitelistEnabled 门控；ip_acl_list 仅 ip_acl_enabled 时生效（同
 // ipAclSideEntries）；ip_blacklist 非空即生效（无开关，但其警告随访问控制区
@@ -1412,7 +1413,8 @@ const aclSectionAlert = computed<string>(() => {
 const whitelistSectionAlert = computed<string>(() => {
   const { peers, coBound } = comparisonContext.value
   // 信任名单同样合并引用列表条目后与对端比较
-  const trust = mergeIpEntries(ipWhitelist.value, ipWhitelistRefs.value)
+  // 三态：信任关闭零生效（与后端发射门同口径），不参与跨策略冲突比较
+  const trust = ipWhitelistEnabled.value ? mergeIpEntries(ipWhitelist.value, ipWhitelistRefs.value) : []
   if (trust.length === 0) return ''
   const suffix = coBound ? '' : '（若两策略绑定同一规则）'
   const items: string[] = []

@@ -1633,7 +1633,12 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 					}
 				}
 			}
+			// 审计 T1-S2：部分输入命中「自定义规则」前缀时与精确匹配同口径补
+			// 5 位数字段（emit 20000-99999 不以 1 开头，前缀清单覆盖不到）。
 			if matched {
+				if strings.HasPrefix("自定义规则", ruleTriggered) {
+					ors = append(ors, "rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]'")
+				}
 				where += " AND (" + strings.Join(ors, " OR ") + ")"
 			} else {
 				where += " AND 1=0"

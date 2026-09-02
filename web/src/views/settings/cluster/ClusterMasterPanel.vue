@@ -77,7 +77,7 @@
           <div v-else class="version-cell">
             <span>已应用 {{ row.reported_version }} / 当前 {{ row.current_version }}</span>
             <el-tag v-if="row.reported_version < row.current_version" type="warning" size="small">待同步</el-tag>
-            <span v-if="row.is_approved" class="section-sync-stale">暂无分区上报（旧版本从节点）</span>
+            <span v-if="row.is_approved" class="section-sync-stale">暂无分区上报（等待上报或旧版本从节点）</span>
           </div>
         </template>
       </el-table-column>

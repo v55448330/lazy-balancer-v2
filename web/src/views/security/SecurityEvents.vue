@@ -134,7 +134,8 @@ const triggeredLabel = (row: SecurityEvent): string => {
   if (/^949/.test(t)) return '请求阻断评估'
   if (/^920/.test(t)) return '协议异常'
   if (/^921/.test(t)) return '协议攻击'
-  if (/^1\d{4}$/.test(t)) return '自定义规则'
+  // 5 位数字 ID 仅自定义规则（emit=crID+10000）；与后端过滤器 GLOB/概览口径一致
+  if (/^\d{5}$/.test(t)) return '自定义规则'
   return t
 }
 const showTriggeredMsg = (row: SecurityEvent): boolean => {

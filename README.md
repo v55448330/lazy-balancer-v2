@@ -127,7 +127,7 @@ Configuration changes on the primary auto-increment the cluster version; replica
 
 ## Upgrade Notes
 
-During a rolling upgrade window (mixed primary/replica versions), replicas running the older build do not recognize IP address lists — policy IP access control entries that reference lists are silently inactive on those replicas until they are upgraded. Upgrading primary and replicas together is recommended.
+During a rolling upgrade window (mixed primary/replica versions), replicas running the older build do not recognize IP address lists — policy IP access control entries that reference lists are silently inactive on those replicas until they are upgraded. Upgrading primary and replicas together is recommended. Note: during a cross-schema upgrade window (snapshot v2→v3, canonical_payload form) where the primary is upgraded first, older replicas report "snapshot signature verification failed / possible man-in-the-middle" errors — this is the expected safe rejection (not an actual attack) and resolves automatically once replicas are upgraded.
 
 ## Tech Stack & Image
 
