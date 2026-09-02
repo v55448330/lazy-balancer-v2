@@ -34,7 +34,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o lazy-balancer
 FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 ARG VERSION=2.2.1
 ENV APP_VERSION=${VERSION}
-RUN apk add --no-cache ca-certificates shadow sqlite tzdata
+# 安全修复：显式钉版 openssl=3.5.8-r0（CVE 修复版）——openssl 经 curl 的
+# libssl3/libcrypto3 依赖隐式装入，钉版保证镜像可复现且不携带旧版；
+# 升级源超出此版本时构建会失败提示，届时同步更新钉版值。
+RUN apk add --no-cache ca-certificates shadow sqlite tzdata openssl=3.5.8-r0
 WORKDIR /app
 
 COPY --from=xcaddy-builder /app/caddy /usr/local/bin/caddy
