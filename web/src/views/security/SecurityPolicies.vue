@@ -204,87 +204,99 @@
                    /security/ip-lists 列表）× 删除。上限 50 行；旧字符串数组存储读取时已
                    归一为 scope:all 行，保存统一写对象数组。
                    布局：空态不渲染表格——单行紧凑引导（说明 + 添加按钮）避免挤占弹框
-                   高度；有条目才渲染表格，作用域 radio 与条件控件同单元格纵排（条件
-                   控件按作用域切换渲染，避免三控件同列常驻撑宽），min-width 之和
-                   （200+240+60=500px）低于控件列宽 → 容器内完整展示无横向滚动；
-                   条目数徽标随工具行。 -->
+                   高度；有条目才渲染表格，条目多时容器 max-height 260px 内部滚动（表头
+                   sticky 固定），不再撑高弹框。行内控件统一 small（24px）：目标 select /
+                   作用域 radio / 条件控件同高 + 单元格垂直居中，消除一高一低；作用域列
+                   为固定双行（radio 行 + 条件行，各 24px），all/ip/list 切换不跳动行高；
+                   min-width 之和（200+240+60=500px）低于控件列宽 → 容器内完整展示无
+                   横向滚动；条目数徽标随工具行。 -->
               <div v-if="crsExcludedRows.length === 0" class="exclusion-empty">
                 <span class="exclusion-empty-tip">未添加排除规则——排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP 或地址列表生效</span>
                 <el-button size="small" type="primary" plain :disabled="form.mode === 'off' || isReadOnly" @click="addExcludedRule">添加排除规则</el-button>
               </div>
               <template v-else>
-                <el-table :data="crsExcludedRows" size="small" class="exclusion-table">
+                <el-table :data="crsExcludedRows" size="small" class="exclusion-table" :max-height="260">
                   <el-table-column label="目标规则" min-width="200">
                     <template #default="{ row }">
-                      <el-select
-                        v-model="row.target"
-                        filterable
-                        :disabled="form.mode === 'off' || isReadOnly"
-                        :loading="crsIndexLoading"
-                        :persistent="false"
-                        popper-class="crs-rule-popper"
-                        placeholder="搜索规则组 / 规则 ID / 描述"
-                        class="exclusion-target-select"
-                      >
-                        <el-option v-for="opt in crsGroupOptions" :key="`g-${opt.value}`" :label="opt.label" :value="opt.value" />
-                        <el-option-group label="单条规则 · 请求阶段">
-                          <el-option v-for="opt in crsIndexRequestOptions" :key="opt.id" :value="opt.id" :label="`${opt.id} — ${opt.label}`" :title="opt.fullLabel">
-                            <div class="crs-rule-option">
-                              <div class="crs-rule-option-label">{{ opt.id }} — {{ opt.label }}</div>
-                              <div class="crs-rule-option-meta">{{ opt.file }} · {{ opt.category }}</div>
-                            </div>
-                          </el-option>
-                        </el-option-group>
-                        <el-option-group label="单条规则 · 响应阶段">
-                          <el-option v-for="opt in crsIndexResponseOptions" :key="opt.id" :value="opt.id" :label="`${opt.id} — ${opt.label}`" :title="opt.fullLabel">
-                            <div class="crs-rule-option">
-                              <div class="crs-rule-option-label">{{ opt.id }} — {{ opt.label }}</div>
-                              <div class="crs-rule-option-meta">{{ opt.file }} · {{ opt.category }}</div>
-                            </div>
-                          </el-option>
-                        </el-option-group>
-                        <el-option v-if="crsGhostOptionFor(row.target)" :key="`ghost-${row.target}`" :label="crsGhostOptionFor(row.target)!.label" :value="row.target" :title="row.target" />
-                      </el-select>
-                      <!-- 行级矛盾提示：目标同时出现在规则组正选与排除清单（单条 ID 矛盾 /
-                           整组冗余），排除恒优先——提示而非阻断，交由用户裁决 -->
-                      <div v-if="exclusionRowConflict(row)" class="exclusion-row-warning">{{ exclusionRowConflict(row) }}</div>
+                      <div class="exclusion-target-cell">
+                        <el-select
+                          v-model="row.target"
+                          size="small"
+                          filterable
+                          :disabled="form.mode === 'off' || isReadOnly"
+                          :loading="crsIndexLoading"
+                          :persistent="false"
+                          popper-class="crs-rule-popper"
+                          placeholder="搜索规则组 / 规则 ID / 描述"
+                          class="exclusion-target-select"
+                        >
+                          <el-option v-for="opt in crsGroupOptions" :key="`g-${opt.value}`" :label="opt.label" :value="opt.value" />
+                          <el-option-group label="单条规则 · 请求阶段">
+                            <el-option v-for="opt in crsIndexRequestOptions" :key="opt.id" :value="opt.id" :label="`${opt.id} — ${opt.label}`" :title="opt.fullLabel">
+                              <div class="crs-rule-option">
+                                <div class="crs-rule-option-label">{{ opt.id }} — {{ opt.label }}</div>
+                                <div class="crs-rule-option-meta">{{ opt.file }} · {{ opt.category }}</div>
+                              </div>
+                            </el-option>
+                          </el-option-group>
+                          <el-option-group label="单条规则 · 响应阶段">
+                            <el-option v-for="opt in crsIndexResponseOptions" :key="opt.id" :value="opt.id" :label="`${opt.id} — ${opt.label}`" :title="opt.fullLabel">
+                              <div class="crs-rule-option">
+                                <div class="crs-rule-option-label">{{ opt.id }} — {{ opt.label }}</div>
+                                <div class="crs-rule-option-meta">{{ opt.file }} · {{ opt.category }}</div>
+                              </div>
+                            </el-option>
+                          </el-option-group>
+                          <el-option v-if="crsGhostOptionFor(row.target)" :key="`ghost-${row.target}`" :label="crsGhostOptionFor(row.target)!.label" :value="row.target" :title="row.target" />
+                        </el-select>
+                        <!-- 行级矛盾提示：目标同时出现在规则组正选与排除清单（单条 ID 矛盾 /
+                             整组冗余），排除恒优先——提示而非阻断，交由用户裁决 -->
+                        <div v-if="exclusionRowConflict(row)" class="exclusion-row-warning">{{ exclusionRowConflict(row) }}</div>
+                      </div>
                     </template>
                   </el-table-column>
-                  <!-- 作用域与条件合并列：radio 与条件控件同单元格纵排（条件按作用域
-                       切换渲染：all → 灰字提示 / ip → 标签输入 / list → 列表多选），
-                       消除三控件分列常驻导致的固定最小宽度 -->
+                  <!-- 作用域与条件合并列：固定双行（radio 行 + 条件行，各 24px 定高）
+                       ——条件按作用域切换渲染：all → 灰字提示 / ip → 标签输入 /
+                       list → 列表多选，行高恒定切换不跳动；控件统一 small 与目标
+                       select 同高，单元格内容垂直居中 -->
                   <el-table-column label="作用域 / 条件" min-width="240">
                     <template #default="{ row }">
                       <div class="exclusion-scope-cell">
-                        <el-radio-group v-model="row.scope" size="small" :disabled="form.mode === 'off' || isReadOnly">
-                          <el-radio value="all">全部 IP</el-radio>
-                          <el-radio value="ip">指定 IP</el-radio>
-                          <el-radio value="list">地址列表</el-radio>
-                        </el-radio-group>
-                        <el-select
-                          v-if="row.scope === 'ip'"
-                          v-model="row.ips"
-                          multiple
-                          filterable
-                          allow-create
-                          default-first-option
-                          :disabled="form.mode === 'off' || isReadOnly"
-                          placeholder="输入 IP/CIDR 后回车"
-                          class="exclusion-scope-control"
-                          @change="(value: string[]) => onExclusionIpsChange(row, value)"
-                        />
-                        <el-select
-                          v-else-if="row.scope === 'list'"
-                          v-model="row.listRefs"
-                          multiple
-                          filterable
-                          :disabled="form.mode === 'off' || isReadOnly"
-                          placeholder="选择 IP 地址列表"
-                          class="exclusion-scope-control"
-                        >
-                          <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
-                        </el-select>
-                        <span v-else class="exclusion-scope-all">对所有 IP 生效</span>
+                        <div class="exclusion-scope-line">
+                          <el-radio-group v-model="row.scope" size="small" :disabled="form.mode === 'off' || isReadOnly">
+                            <el-radio value="all">全部 IP</el-radio>
+                            <el-radio value="ip">指定 IP</el-radio>
+                            <el-radio value="list">地址列表</el-radio>
+                          </el-radio-group>
+                        </div>
+                        <div class="exclusion-scope-line">
+                          <el-select
+                            v-if="row.scope === 'ip'"
+                            v-model="row.ips"
+                            size="small"
+                            multiple
+                            filterable
+                            allow-create
+                            default-first-option
+                            :disabled="form.mode === 'off' || isReadOnly"
+                            placeholder="输入 IP/CIDR 后回车"
+                            class="exclusion-scope-control"
+                            @change="(value: string[]) => onExclusionIpsChange(row, value)"
+                          />
+                          <el-select
+                            v-else-if="row.scope === 'list'"
+                            v-model="row.listRefs"
+                            size="small"
+                            multiple
+                            filterable
+                            :disabled="form.mode === 'off' || isReadOnly"
+                            placeholder="选择 IP 地址列表"
+                            class="exclusion-scope-control"
+                          >
+                            <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                          </el-select>
+                          <span v-else class="exclusion-scope-all">对所有 IP 生效</span>
+                        </div>
                       </div>
                     </template>
                   </el-table-column>
@@ -2084,15 +2096,21 @@ onMounted(async () => {
    高度约一行，避免 el-empty 撑高挤占弹框；有条目才渲染表格。 */
 .exclusion-empty { display: flex; align-items: center; gap: 12px; width: 100%; }
 .exclusion-empty-tip { flex: 1; min-width: 0; font-size: 12px; color: #9ca3af; line-height: 1.5; }
+/* 条目多时限高内部滚动（:max-height 由 el-table 实现表头 sticky 固定），不撑高弹框 */
 .exclusion-table { width: 100%; }
+/* 行内垂直对齐：td 显式垂直居中 + 单元格内容 flex 纵向居中，目标 select 与
+   作用域控件（radio/条件输入）同高同行，消除一高一低 */
+.exclusion-table :deep(td.el-table__cell) { vertical-align: middle; }
+.exclusion-target-cell { display: flex; flex-direction: column; justify-content: center; }
 .exclusion-target-select { width: 100%; }
 /* 行级矛盾提示（与规则组选择冲突/冗余）：跟随目标 select 下方，警告色小字 */
 .exclusion-row-warning { font-size: 12px; color: #e6a23c; line-height: 1.5; margin-top: 4px; }
-/* 作用域 radio 与条件控件同单元格纵排（合并列消除横向滚动）；radio 收窄
-   默认 32px 间距并允许换行，窄容器下不溢出单元格 */
-.exclusion-scope-cell { display: flex; flex-direction: column; gap: 6px; }
+/* 作用域固定双行（radio 行 + 条件行）：控件统一 small（24px）与目标 select 同高；
+   条件行定高 24px——all（灰字）/ip（标签输入）/list（列表多选）切换行高恒定不跳动 */
+.exclusion-scope-cell { display: flex; flex-direction: column; justify-content: center; gap: 4px; }
 .exclusion-scope-cell :deep(.el-radio) { margin-right: 12px; }
 .exclusion-scope-cell :deep(.el-radio-group) { flex-wrap: wrap; row-gap: 2px; }
+.exclusion-scope-line { display: flex; align-items: center; min-height: 24px; }
 .exclusion-scope-control { width: 100%; }
 .exclusion-scope-all { font-size: 12px; color: #9ca3af; }
 .exclusion-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }

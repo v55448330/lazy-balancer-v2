@@ -23,7 +23,7 @@
         size="small"
         class="ipo-list-select"
       >
-        <el-option v-for="list in ipLists" :key="list.id" :label="`${list.name}（${list.entry_count} 条）`" :value="list.id" />
+        <el-option v-for="list in ipLists" :key="list.id" :label="ipListOptionLabel(list)" :value="list.id" />
       </el-select>
       <el-button
         size="small"
@@ -72,6 +72,8 @@ import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
+import { fetchIpListOptions, ipListOptionLabel, useIpListAdd } from '@/composables/useIpListAdd'
+import type { IpListOption } from '@/composables/useIpListAdd'
 import type { APIResponse } from '@/types'
 
 // 列表接口与详情接口共用同一组 SELECT 列，列表行直接携带完整 ACL 字段
@@ -123,16 +125,15 @@ const policiesError = ref(false)
 const busyKeys = ref<Set<string>>(new Set())
 
 // —— 显式存入地址列表：与策略名单动作同口径（确认弹框 + 全局 MFA 428 守卫 +
-// 明确反馈），不再作为名单写入后的隐式自动追加 ——
-interface IPListOption { id: number; name: string; entry_count: number }
-const ipLists = ref<IPListOption[]>([])
+// 明确反馈），不再作为名单写入后的隐式自动追加；确认/幂等 POST/反馈复用
+// useIpListAdd 共享实现（与 SecurityEvents 事件弹框「加入列表」同一链路） ——
+const ipLists = ref<IpListOption[]>([])
 const selectedListId = ref<number | undefined>(undefined)
-const savingToList = ref(false)
+const { adding: savingToList, addIpToList } = useIpListAdd()
 
 const loadIpLists = async (): Promise<void> => {
   try {
-    const res = await request.get<APIResponse<IPListOption[]>>('/security/ip-lists')
-    ipLists.value = res.data || []
+    ipLists.value = await fetchIpListOptions()
   } catch {
     ipLists.value = []
   }
@@ -146,25 +147,8 @@ const saveToListAction = async (): Promise<void> => {
   if (selectedListId.value === undefined || savingToList.value) return
   const list = ipLists.value.find((l) => l.id === selectedListId.value)
   if (!list) return
-  try {
-    await ElMessageBox.confirm(
-      `将把 ${props.ip} 存入地址列表「${list.name}」（幂等，已存在时不会重复添加）。是否继续？`,
-      '存入地址列表',
-      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
-    )
-  } catch { return }
-  savingToList.value = true
-  try {
-    // 非 silent：错误走全局拦截器提示，428 时全局 MFA step-up 弹码链完整生效
-    const res = await request.post<APIResponse<{ added: boolean }>>(`/security/ip-lists/${list.id}/ips`, { value: props.ip })
-    if (res.data?.added) mfaAwareSuccess(`已存入列表「${list.name}」`)
-    else ElMessage.info(`该 IP 已在列表「${list.name}」中`)
-    await loadIpLists()
-  } catch {
-    // 失败提示由全局拦截器弹出，这里只需终止流程
-  } finally {
-    savingToList.value = false
-  }
+  const done = await addIpToList(props.ip, list, { verb: '存入', successText: `已存入列表「${list.name}」` })
+  if (done) await loadIpLists()
 }
 
 const parseList = (raw: string): string[] => {

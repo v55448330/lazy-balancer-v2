@@ -114,9 +114,12 @@
     </el-card>
 
     <!-- CRS 规则详情 + 快捷排除：索引查 id/msg 全文/file/category，源码片段取该 ID
-          所在行 ±10 行（apacheconf 高亮，默认折叠、展开才拉取）；索引无此 ID →
-          「当前 CRS 已无此规则」仍可排除。提交 = GET 策略现有 crs_excluded_rules →
-          追加一行 → PUT 全量（线上形态 ips 为逗号分隔字符串，见 confirmCrsExclude）。 -->
+           所在行 ±10 行（apacheconf 高亮，默认折叠、展开才拉取）；索引无此 ID →
+           「当前 CRS 已无此规则」仍可排除。提交 = GET 策略现有 crs_excluded_rules →
+           追加一行 → PUT 全量（线上形态 ips 为逗号分隔字符串，见 confirmCrsExclude）。
+           「加入地址列表」下拉仅列所属策略排除规则（crs_excluded_rules.listRefs
+           并集，策略详情随存在性检查取回）引用且当前仍存在的列表——事件 IP 加入
+           其中任一列表即被该策略的对应排除规则放行。 -->
     <el-dialog v-model="crsDialogVisible" :title="`CRS 规则 ${crsEvent?.rule_triggered ?? ''}`" width="min(760px, 94vw)" top="5vh" append-to-body class="crs-event-dialog" @close="crsDialogSeq++">
       <template v-if="crsEvent">
         <el-descriptions :column="1" border size="small">
@@ -160,10 +163,15 @@
 
         <div class="crs-action-group">
           <div class="crs-action-group-title">快捷排除（二选一）</div>
-          <el-radio-group v-model="crsExcludeScope" :disabled="crsActionDisabled">
-            <el-radio value="ip">仅排除该 IP（事件来源 {{ crsEvent.client_ip }}）</el-radio>
-            <el-radio value="all">所属策略不限 IP</el-radio>
-          </el-radio-group>
+          <!-- 操作区收敛为两行：标题 + 「radio 选项 … 确认按钮」同一行并排
+               （按钮 margin-left:auto 贴右，与「加入地址列表」行同款 flex 模式） -->
+          <div class="crs-action-row crs-exclude-row">
+            <el-radio-group v-model="crsExcludeScope" :disabled="crsActionDisabled">
+              <el-radio value="ip">仅排除该 IP（事件来源 {{ crsEvent.client_ip }}）</el-radio>
+              <el-radio value="all">所属策略不限 IP</el-radio>
+            </el-radio-group>
+            <el-button type="primary" class="crs-exclude-submit" :loading="crsSubmitting" :disabled="crsActionDisabled" @click="confirmCrsExclude">确认排除</el-button>
+          </div>
           <div v-if="crsPolicyState !== 'ok'" class="crs-policy-hint">
             <template v-if="crsPolicyState === 'checking'">策略状态检查中…</template>
             <template v-else-if="crsPolicyState === 'missing'">归属策略已删除，请在策略向导中操作</template>
@@ -171,9 +179,6 @@
             <template v-else>策略状态加载失败，请关闭后重试</template>
           </div>
           <div v-else-if="crsAlreadyExcluded" class="crs-policy-hint">该规则的同等排除已存在于所属策略（确认后将追加为独立条目）</div>
-          <div class="crs-action-row">
-            <el-button type="primary" :loading="crsSubmitting" :disabled="crsActionDisabled" @click="confirmCrsExclude">确认排除</el-button>
-          </div>
         </div>
 
         <div class="crs-action-group">
@@ -185,19 +190,19 @@
               clearable
               placeholder="选择地址列表"
               class="crs-ip-list-select"
-              :disabled="!canManage || crsIpListSaving"
+              :disabled="!canManage || crsIpListSaving || crsExcludedListOptions.length === 0"
             >
-              <el-option v-for="list in crsIpLists" :key="list.id" :label="`${list.name}（${list.entry_count} 条）`" :value="list.id" />
+              <el-option v-for="list in crsExcludedListOptions" :key="list.id" :label="list.name" :value="list.id" />
             </el-select>
             <el-button
               type="primary"
               plain
               :loading="crsIpListSaving"
-              :disabled="!canManage || crsIpLists.length === 0 || crsIpListId === undefined"
+              :disabled="!canManage || crsExcludedListOptions.length === 0 || crsIpListId === undefined"
               @click="addEventIpToList"
             >加入列表</el-button>
           </div>
-          <div v-if="crsIpLists.length === 0 && !crsIpListLoading" class="crs-policy-hint">暂无地址列表，可在 规则集 → IP 地址列表 创建</div>
+          <div v-if="crsIpListHint" class="crs-policy-hint">{{ crsIpListHint }}</div>
         </div>
       </template>
       <template #footer>
@@ -218,6 +223,8 @@ import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { formatDate } from '@/utils/date'
 import { useCrsRuleIndex, parseCrsExcludedRules, CRS_EXCLUDED_MAX_ROWS } from '@/composables/useCrsRuleIndex'
 import type { CrsExcludedRow } from '@/composables/useCrsRuleIndex'
+import { fetchIpListOptions, useIpListAdd } from '@/composables/useIpListAdd'
+import type { IpListOption } from '@/composables/useIpListAdd'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse } from '@/types'
 
@@ -262,12 +269,13 @@ const crsSnippetLoading = ref(false)
 const crsSnippetExpanded = ref(false)
 const crsSnippetFetched = ref(false)
 const crsSnippetError = ref(false)
-// 「把该 IP 加入地址列表」动作组（与快捷排除互相独立）
-interface IpListOption { id: number; name: string; entry_count: number }
+// 「把该 IP 加入地址列表」动作组（与快捷排除互相独立）：选项 = 所属策略排除规则
+// （crs_excluded_rules，随存在性检查取回）listRefs 并集 ∩ 现存地址列表；加入/存入
+// 确认+幂等 POST+反馈复用 useIpListAdd 共享实现（与 IPLocationAction 同一链路）
 const crsIpLists = ref<IpListOption[]>([])
 const crsIpListId = ref<number | undefined>(undefined)
 const crsIpListLoading = ref(false)
-const crsIpListSaving = ref(false)
+const { adding: crsIpListSaving, addIpToList } = useIpListAdd()
 // ok=可提交 / checking=策略检查中 / missing=404 或无 policy_id / error=检查失败
 const crsPolicyState = ref<'checking' | 'ok' | 'missing' | 'no-policy' | 'error'>('checking')
 // 策略存在性检查顺带取回的现有排除清单（用于「已存在同等排除」提示；提交时仍重新 GET 最新）
@@ -289,6 +297,27 @@ const crsAlreadyExcluded = computed<boolean>(() => {
 
 const crsActionDisabled = computed(() =>
   !canManage.value || crsPolicyState.value !== 'ok' || crsSubmitting.value)
+
+// 「加入地址列表」下拉选项：所属策略排除规则 listRefs 并集（crsExistingRows 已由
+// checkCrsPolicy 解析 GET 策略详情的 crs_excluded_rules 聚合而来，Set 去重）∩
+// 现存地址列表（引用的列表已删除时自然过滤掉），label 用列表名
+const crsExcludedListOptions = computed<IpListOption[]>(() => {
+  const refIds = new Set<number>()
+  for (const row of crsExistingRows.value) {
+    for (const id of row.listRefs) refIds.add(id)
+  }
+  return crsIpLists.value.filter((l) => refIds.has(l.id))
+})
+
+// 下拉禁用/提示文案：并集为空（或前置数据未就绪）时给出对应口径的提示
+const crsIpListHint = computed<string>(() => {
+  if (crsIpListLoading.value) return '地址列表加载中…'
+  if (crsIpLists.value.length === 0) return '暂无地址列表，可在 规则集 → IP 地址列表 创建'
+  if (crsPolicyState.value === 'checking') return '所属策略状态检查中…'
+  if (crsPolicyState.value !== 'ok') return '归属策略不可用，无法确定排除规则引用的地址列表'
+  if (crsExcludedListOptions.value.length === 0) return '所属策略的排除规则未引用任何地址列表'
+  return ''
+})
 
 // 源码片段：该规则 ID 所在行 ±10 行（id:<ID> 出现在 SecRule 动作里，兼容引号/空格变体）
 const extractRuleSnippet = (content: string, ruleId: string): string => {
@@ -368,9 +397,9 @@ const toggleCrsSnippet = async (): Promise<void> => {
 const loadCrsIpLists = async (seq: number): Promise<void> => {
   crsIpListLoading.value = true
   try {
-    const res = await request.get<APIResponse<IpListOption[]>>('/security/ip-lists')
+    const lists = await fetchIpListOptions()
     if (seq !== crsDialogSeq) return
-    crsIpLists.value = res.data || []
+    crsIpLists.value = lists
   } catch {
     if (seq !== crsDialogSeq) return
     crsIpLists.value = []
@@ -383,34 +412,16 @@ const loadCrsIpLists = async (seq: number): Promise<void> => {
   }
 }
 
-// 与 IPLocationAction 存入地址列表同口径：确认框（含列表名）→ 幂等 POST →
-// added=false 静默 info；与「确认排除」互不影响（独立 loading/状态）
+// 加入地址列表：确认框（含列表名）→ 幂等 POST → added/已存在反馈，全部复用
+// useIpListAdd 共享实现（默认动词「加入」，与 IPLocationAction 存入动作同一链路）；
+// 与「确认排除」互不影响（独立 loading/状态），成功后刷新列表选项的 entry_count
 const addEventIpToList = async (): Promise<void> => {
   const ev = crsEvent.value
   if (!ev || !canManage.value || crsIpListSaving.value) return
-  const list = crsIpLists.value.find((l) => l.id === crsIpListId.value)
+  const list = crsExcludedListOptions.value.find((l) => l.id === crsIpListId.value)
   if (!list) return
-  try {
-    await ElMessageBox.confirm(
-      `将把 ${ev.client_ip} 加入地址列表「${list.name}」（幂等，已存在时不会重复添加）。是否继续？`,
-      '加入地址列表',
-      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
-    )
-  } catch { return }
-  const seq = crsDialogSeq
-  crsIpListSaving.value = true
-  try {
-    // 非 silent：错误走全局拦截器提示，428 时全局 MFA step-up 弹码链完整生效
-    const res = await request.post<APIResponse<{ added: boolean }>>(`/security/ip-lists/${list.id}/ips`, { value: ev.client_ip })
-    if (seq !== crsDialogSeq) return
-    if (res.data?.added) mfaAwareSuccess(`已加入地址列表「${list.name}」`)
-    else ElMessage.info(`该 IP 已在列表「${list.name}」中`)
-    await loadCrsIpLists(seq)
-  } catch {
-    // 失败提示由全局拦截器弹出，这里只需终止流程
-  } finally {
-    if (seq === crsDialogSeq) crsIpListSaving.value = false
-  }
+  const done = await addIpToList(ev.client_ip, list)
+  if (done) await loadCrsIpLists(crsDialogSeq)
 }
 
 // 提交：GET 最新 crs_excluded_rules → 追加（scope=ip 时 ips=[事件 IP]）→ PUT 全量；
@@ -418,6 +429,14 @@ const addEventIpToList = async (): Promise<void> => {
 const confirmCrsExclude = async (): Promise<void> => {
   const ev = crsEvent.value
   if (!ev || crsActionDisabled.value) return
+  const scopeText = crsExcludeScope.value === 'ip' ? `仅排除来源 IP ${ev.client_ip}` : '所属策略不限 IP'
+  try {
+    await ElMessageBox.confirm(
+      `将把规则 ${ev.rule_triggered} 加入策略「${ev.policy_name || `#${ev.policy_id}`}」的排除清单（${scopeText}），保存后立即生效并重载。是否继续？`,
+      '确认排除规则',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
   crsSubmitting.value = true
   try {
     const res = await request.get<APIResponse<{ policy: { crs_excluded_rules?: string } }>>(`/security/policies/${ev.policy_id}`)
@@ -539,7 +558,10 @@ onMounted(fetchEvents)
 .crs-policy-hint { font-size: 12px; color: #e6a23c; line-height: 1.6; margin-top: 8px; }
 .crs-action-group { border: 1px solid var(--el-border-color-lighter, #ebeef5); border-radius: var(--el-border-radius-base, 4px); padding: 12px; margin-top: 12px; }
 .crs-action-group-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px; }
-.crs-action-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+/* 操作行紧跟组标题（标题自带 8px 下距，行不再叠加上距，保持操作区两行紧凑） */
+.crs-action-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 0; }
+/* 快捷排除行：radio 选项与确认按钮同一行并排，按钮贴右（窄屏放不下时换行） */
+.crs-exclude-submit { margin-left: auto; flex-shrink: 0; }
 .crs-ip-list-select { width: 240px; flex: 0 0 auto; }
 </style>
 
