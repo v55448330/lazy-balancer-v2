@@ -65,7 +65,10 @@
         </el-table-column>
         <el-table-column label="触发规则" min-width="100">
           <template #default="{ row }">
-            <el-tooltip v-if="showTriggeredMsg(row)" :content="row.rule_msg" placement="top" :show-after="200">
+            <!-- CRS 规则（6 位 9xxxxx）：链接打开详情 + 快捷排除弹框；自定义 5 位/IP 族
+                 1-8 维持原纯文本 + msg 悬浮，无链接行为 -->
+            <el-link v-if="isCrsRuleId(row.rule_triggered)" type="primary" @click="openCrsDialog(row)">{{ triggeredLabel(row) }}</el-link>
+            <el-tooltip v-else-if="showTriggeredMsg(row)" :content="row.rule_msg" placement="top" :show-after="200">
               <span class="cell-tip">{{ triggeredLabel(row) }}</span>
             </el-tooltip>
             <span v-else>{{ triggeredLabel(row) }}</span>
@@ -109,17 +112,78 @@
         />
       </div>
     </el-card>
+
+    <!-- CRS 规则详情 + 快捷排除：索引查 id/msg 全文/file/category，源码片段取该 ID
+         所在行 ±10 行（apacheconf 高亮）；索引无此 ID → 「当前 CRS 已无此规则」仍可排除。
+         提交 = GET 策略现有 crs_excluded_rules → 追加一行 → PUT 全量（对象数组形态）。 -->
+    <el-dialog v-model="crsDialogVisible" :title="`CRS 规则 ${crsEvent?.rule_triggered ?? ''}`" width="min(760px, 94vw)" top="5vh" append-to-body @close="crsDialogSeq++">
+      <template v-if="crsEvent">
+        <el-descriptions :column="1" border size="small">
+          <el-descriptions-item label="规则 ID">{{ crsEvent.rule_triggered }}</el-descriptions-item>
+          <el-descriptions-item label="描述">
+            <span v-if="crsIndexLoading">加载中…</span>
+            <template v-else-if="crsEntry">{{ crsEntry.msg || '（无描述）' }}</template>
+            <template v-else>—</template>
+          </el-descriptions-item>
+          <el-descriptions-item label="文件 / 分类">
+            <span v-if="crsIndexLoading">加载中…</span>
+            <template v-else-if="crsEntry">{{ crsEntry.file }} · {{ crsEntry.category }}</template>
+            <template v-else>—</template>
+          </el-descriptions-item>
+          <el-descriptions-item label="事件来源 IP">{{ crsEvent.client_ip }}</el-descriptions-item>
+          <el-descriptions-item label="归属策略">{{ crsEvent.policy_name || crsEvent.policy_id || '—' }}</el-descriptions-item>
+        </el-descriptions>
+
+        <el-alert
+          v-if="!crsIndexLoading && !crsEntry"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="当前 CRS 已无此规则（规则集更新后已移除），仍可将其加入排除"
+          style="margin-top: 12px"
+        />
+
+        <template v-if="crsEntry">
+          <div class="crs-snippet-title">规则源码（{{ crsEntry.file }} 中 id:{{ crsEvent.rule_triggered }} 所在行 ±10 行）</div>
+          <div v-loading="crsSnippetLoading" class="crs-snippet-body">
+            <SyntaxHighlight v-if="crsSnippet" :content="crsSnippet" language="apacheconf" />
+            <div v-else-if="!crsSnippetLoading" class="crs-snippet-empty">未在该文件中定位到规则定义（规则文件可能已更新）</div>
+          </div>
+        </template>
+
+        <el-divider content-position="left">快捷排除</el-divider>
+        <el-radio-group v-model="crsExcludeScope" :disabled="crsActionDisabled">
+          <el-radio value="ip">仅排除该 IP（事件来源 {{ crsEvent.client_ip }}）</el-radio>
+          <el-radio value="all">所属策略不限 IP</el-radio>
+        </el-radio-group>
+        <div v-if="crsPolicyState !== 'ok'" class="crs-policy-hint">
+          <template v-if="crsPolicyState === 'checking'">策略状态检查中…</template>
+          <template v-else-if="crsPolicyState === 'missing'">归属策略已删除，请在策略向导中操作</template>
+          <template v-else-if="crsPolicyState === 'no-policy'">归属策略已删除，请在策略向导中操作</template>
+          <template v-else>策略状态加载失败，请关闭后重试</template>
+        </div>
+        <div v-else-if="crsAlreadyExcluded" class="crs-policy-hint">该规则的同等排除已存在于所属策略（确认后将追加为独立条目）</div>
+      </template>
+      <template #footer>
+        <el-button @click="crsDialogVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="crsSubmitting" :disabled="crsActionDisabled" @click="confirmCrsExclude">确认排除</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Refresh, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { request } from '@/utils/api'
+import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
+import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { formatDate } from '@/utils/date'
+import { useCrsRuleIndex, parseCrsExcludedRules, CRS_EXCLUDED_MAX_ROWS } from '@/composables/useCrsRuleIndex'
+import type { CrsExcludedRow } from '@/composables/useCrsRuleIndex'
+import { useAuthStore } from '@/stores/auth'
 import type { APIResponse } from '@/types'
 
 interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string; rule_name: string; policy_id: number; policy_name: string; client_ip: string; ip_location: string; method: string; uri: string; event_type: string; rule_triggered: string; rule_msg: string; action: string; anomaly_score: number }
@@ -141,6 +205,136 @@ const triggeredLabel = (row: SecurityEvent): string => {
 const showTriggeredMsg = (row: SecurityEvent): boolean => {
   const t = row.rule_triggered
   return !!t && t !== '2' && t !== '3' && t !== '4' && t !== '5' && !/^949/.test(t) && !!row.rule_msg
+}
+
+// —— CRS 规则快捷排除（6 位 9xxxxx 触发 ID → 详情弹框 + 二选一排除）——
+// CRS 规则索引：弹框每次打开取一次（openSeq 会话守卫），供 id/msg/file/category
+// 与源码片段文件名查询；失败退化为「当前 CRS 已无此规则」展示（loaded=false 时不误判）
+const { loading: crsIndexLoading, byId: crsIndexById, ensureForDialog: ensureCrsRuleIndex } = useCrsRuleIndex()
+const authStore = useAuthStore()
+// admin 只读态（从节点/非管理员）禁用确认按钮——与 IPLocationAction.canManage 同口径
+const canManage = computed(() => authStore.readOnlyReason === null)
+
+const isCrsRuleId = (t: string): boolean => /^9\d{5}$/.test(t)
+
+const crsDialogVisible = ref(false)
+const crsEvent = ref<SecurityEvent | null>(null)
+const crsExcludeScope = ref<'ip' | 'all'>('ip')
+const crsSubmitting = ref(false)
+const crsSnippet = ref('')
+const crsSnippetLoading = ref(false)
+// ok=可提交 / checking=策略检查中 / missing=404 或无 policy_id / error=检查失败
+const crsPolicyState = ref<'checking' | 'ok' | 'missing' | 'no-policy' | 'error'>('checking')
+// 策略存在性检查顺带取回的现有排除清单（用于「已存在同等排除」提示；提交时仍重新 GET 最新）
+const crsExistingRows = ref<CrsExcludedRow[]>([])
+// 弹框会话序号：关闭/重开丢弃在途的索引、源码与策略检查返回
+let crsDialogSeq = 0
+
+const crsEntry = computed(() => (crsEvent.value ? crsIndexById.value.get(crsEvent.value.rule_triggered) ?? null : null))
+
+// 同等排除已存在：同目标 + 同作用域（ip 时覆盖事件来源 IP）
+const crsAlreadyExcluded = computed<boolean>(() => {
+  const ev = crsEvent.value
+  if (!ev) return false
+  return crsExistingRows.value.some((r) =>
+    r.target === ev.rule_triggered
+    && r.scope === crsExcludeScope.value
+    && (crsExcludeScope.value !== 'ip' || r.ips.includes(ev.client_ip)))
+})
+
+const crsActionDisabled = computed(() =>
+  !canManage.value || crsPolicyState.value !== 'ok' || crsSubmitting.value)
+
+// 源码片段：该规则 ID 所在行 ±10 行（id:<ID> 出现在 SecRule 动作里，兼容引号/空格变体）
+const extractRuleSnippet = (content: string, ruleId: string): string => {
+  const needles = [`id:${ruleId}`, `id: ${ruleId}`, `id:'${ruleId}'`, `id:"${ruleId}"`]
+  const lines = content.split('\n')
+  const idx = lines.findIndex((line) => needles.some((n) => line.includes(n)))
+  if (idx === -1) return ''
+  return lines.slice(Math.max(0, idx - 10), Math.min(lines.length, idx + 11)).join('\n')
+}
+
+// 策略存在性检查：silent（404 属预期路径，不弹全局错误 toast）；顺带取现有排除清单
+const checkCrsPolicy = async (policyId: number, seq: number): Promise<void> => {
+  try {
+    const res = await request.get<APIResponse<{ policy: { crs_excluded_rules?: string } }>>(`/security/policies/${policyId}`, { silent: true })
+    if (seq !== crsDialogSeq) return
+    if (!res.data?.policy) {
+      crsPolicyState.value = 'missing'
+      return
+    }
+    crsExistingRows.value = parseCrsExcludedRules(res.data.policy.crs_excluded_rules)
+    crsPolicyState.value = 'ok'
+  } catch (error: unknown) {
+    if (seq !== crsDialogSeq) return
+    crsPolicyState.value = error instanceof ApiRequestError && error.status === 404 ? 'missing' : 'error'
+  }
+}
+
+const openCrsDialog = async (row: SecurityEvent): Promise<void> => {
+  const seq = ++crsDialogSeq
+  crsEvent.value = row
+  crsExcludeScope.value = 'ip'
+  crsSnippet.value = ''
+  crsSnippetLoading.value = false
+  crsExistingRows.value = []
+  if (!row.policy_id || row.policy_id <= 0) {
+    crsPolicyState.value = 'no-policy'
+  } else {
+    crsPolicyState.value = 'checking'
+    void checkCrsPolicy(row.policy_id, seq)
+  }
+  crsDialogVisible.value = true
+  // 索引就绪后按 file 拉源码片段（索引失败/规则已移除时仅展示详情与提示）
+  await ensureCrsRuleIndex(seq)
+  if (seq !== crsDialogSeq || !crsDialogVisible.value) return
+  const entry = crsIndexById.value.get(row.rule_triggered)
+  if (!entry?.file) return
+  crsSnippetLoading.value = true
+  try {
+    const res = await request.get<APIResponse<{ content: string }>>(`/security/crs/rules/${encodeURIComponent(entry.file)}`)
+    if (seq !== crsDialogSeq || !crsDialogVisible.value) return
+    crsSnippet.value = extractRuleSnippet(res.data?.content || '', row.rule_triggered)
+  } catch {
+    if (seq !== crsDialogSeq || !crsDialogVisible.value) return
+    crsSnippet.value = ''
+  } finally {
+    if (seq === crsDialogSeq) crsSnippetLoading.value = false
+  }
+}
+
+// 提交：GET 最新 crs_excluded_rules → 追加（scope=ip 时 ips=[事件 IP]）→ PUT 全量；
+// 非 silent——400 文案/MFA 428 全局链均由全局拦截器处理
+const confirmCrsExclude = async (): Promise<void> => {
+  const ev = crsEvent.value
+  if (!ev || crsActionDisabled.value) return
+  crsSubmitting.value = true
+  try {
+    const res = await request.get<APIResponse<{ policy: { crs_excluded_rules?: string } }>>(`/security/policies/${ev.policy_id}`)
+    const detail = res.data?.policy
+    if (!detail) throw new Error('策略详情响应缺少数据')
+    const rows = parseCrsExcludedRules(detail.crs_excluded_rules)
+    const scope = crsExcludeScope.value
+    const ips = scope === 'ip' ? [ev.client_ip] : []
+    // 幂等守卫：同目标 + 同作用域 + 同 IP 的行已存在时不再追加
+    if (rows.some((r) => r.target === ev.rule_triggered && r.scope === scope && r.ips.join(',') === ips.join(',') && r.listRefs.length === 0)) {
+      ElMessage.info('该排除已存在于所属策略')
+      crsDialogVisible.value = false
+      return
+    }
+    if (rows.length >= CRS_EXCLUDED_MAX_ROWS) {
+      ElMessage.error(`所属策略的排除清单已达 ${CRS_EXCLUDED_MAX_ROWS} 条上限，请在策略向导中整理`)
+      return
+    }
+    rows.push({ target: ev.rule_triggered, scope, ips, listRefs: [] })
+    await request.put(`/security/policies/${ev.policy_id}`, { crs_excluded_rules: JSON.stringify(rows) })
+    mfaAwareSuccess(`已加入策略「${ev.policy_name || `#${ev.policy_id}`}」的排除清单，已生效并重载`)
+    crsDialogVisible.value = false
+  } catch {
+    // 失败提示由全局拦截器弹出，这里只需终止流程
+  } finally {
+    crsSubmitting.value = false
+  }
 }
 
 const loading = ref(false)
@@ -218,6 +412,13 @@ onMounted(fetchEvents)
 .filter-actions { display: flex; gap: 0; margin-left: 8px; }
 .filter-actions .el-button + .el-button { margin-left: 8px; }
 .cell-tip { cursor: help; border-bottom: 1px dashed #c0c4cc; }
+
+/* —— CRS 规则详情 + 快捷排除弹框 —— */
+.crs-snippet-title { font-size: 13px; font-weight: 500; color: #374151; margin: 12px 0 8px; }
+.crs-snippet-body { min-height: 80px; }
+.crs-snippet-body :deep(.prism-code) { max-height: 320px; }
+.crs-snippet-empty { font-size: 12px; color: #9ca3af; padding: 12px 0; }
+.crs-policy-hint { font-size: 12px; color: #e6a23c; line-height: 1.6; margin-top: 8px; }
 </style>
 
 <style>

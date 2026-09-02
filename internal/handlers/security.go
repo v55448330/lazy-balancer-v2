@@ -742,6 +742,14 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
 		return
 	}
+	// crs_excluded_rules 作用域条目引用的 IP 列表同口径单批存在性校验。
+	if msg, err := validateIPListRefsExistence(tx, crsExcludedListRefs(req.CRSExcludedRules), nil); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+		return
+	} else if msg != "" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
+		return
+	}
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
@@ -764,11 +772,6 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "安全策略创建成功" + h.caddyApplyNote(c), Data: gin.H{"id": id}})
 }
 
-// validateAndNormalizeCRSField 统一 Create/Update 两条路径的 crs_* 形状校验：
-// 空串按归一为 "[]"，非空必须是字符串数组 JSON（防发射端解析失败静默置空）。
-// 条目内容同样受限：crs_rule_groups 组号恒为两位数字（进入 Include glob
-// REQUEST-9<code>-*.conf），排除项进入 SecRuleRemoveById 参数，空白/引号/控制
-// 字符都会生成非法配置行。
 // geoipEntriesEqual（R72 二十九次 M1）：比较两个 geoip_countries JSON 数组的
 // 集合相等性（顺序无关）——任一侧解析失败返回 false（保守走校验路径）。
 func geoipEntriesEqual(a, b string) bool {
@@ -796,6 +799,12 @@ func geoipEntriesEqual(a, b string) bool {
 	return true
 }
 
+// validateAndNormalizeCRSField 统一 Create/Update 两条路径的 crs_* 形状校验：
+// 空串按归一为 "[]"，非空必须是合法载荷（防发射端解析失败静默置空）。
+// crs_rule_groups：两位组号（进入 Include glob REQUEST-9<code>-*.conf）∪ 6 位
+// CRS 规则 ID（须存在于本地规则索引，陈旧 → 400）。crs_excluded_rules：双格式
+// ——旧 []string 沿用既有门（现状兼容，不加索引校验），新 []对象走
+// validateCRSExcludedRulesPayload（组号/ID 存在性、scope 互斥字段、≤50 条）。
 func validateAndNormalizeCRSField(name string, val *string) error {
 	if val == nil {
 		return nil
@@ -804,10 +813,14 @@ func validateAndNormalizeCRSField(name string, val *string) error {
 		*val = "[]"
 		return nil
 	}
+	if name == "crs_excluded_rules" {
+		return validateCRSExcludedRulesPayload(val)
+	}
 	var entries []string
 	if err := json.Unmarshal([]byte(*val), &entries); err != nil {
 		return fmt.Errorf("%s 需为 JSON 数组字符串", name)
 	}
+	var index *services.CRSRuleIndex
 	for _, entry := range entries {
 		trimmed := strings.TrimSpace(entry)
 		if trimmed == "" {
@@ -819,29 +832,159 @@ func validateAndNormalizeCRSField(name string, val *string) error {
 			}
 			return fmt.Errorf("%s 条目含非法字符（仅允许字母、数字、.、_、-）: %q", name, entry)
 		}
-		// R46 B-F2：组号恒为两位数字（发射端拼接 REQUEST-9<code>-*.conf）。
-		// "941"、"REQUEST-942" 这类写法会 glob 零匹配——coraza 对空 Include
-		// 静默接受，blocking 模式将无任何 CRS 规则生效且无任何报错。
-		if name == "crs_rule_groups" && (len(trimmed) != 2 || trimmed[0] < '0' || trimmed[0] > '9' || trimmed[1] < '0' || trimmed[1] > '9') {
-			return fmt.Errorf("%s 条目必须是两位数字组号（如 942 组填 \"42\"）: %q", name, entry)
+		// R46 B-F2 / 混合选择：组号恒为两位数字（发射端拼接 REQUEST-9<code>-*.conf）
+		// 或 6 位 CRS 规则 ID（经本地索引定位父文件 Include + 补删）。"941"、
+		// "REQUEST-942" 这类写法会 glob 零匹配——coraza 对空 Include 静默接受，
+		// blocking 模式将无任何 CRS 规则生效且无任何报错。
+		if name == "crs_rule_groups" && !services.IsCRSGroupCode(trimmed) {
+			if !services.IsCRSRuleIDTarget(trimmed) {
+				return fmt.Errorf("%s 条目必须是两位数字组号（如 942 组填 \"42\"）或 6 位 CRS 规则 ID（如 \"942100\"）: %q", name, entry)
+			}
+			if index == nil {
+				index = services.GetCRSRuleIndex()
+			}
+			if !index.Has(trimmed) {
+				return fmt.Errorf("规则 ID 不存在于当前 CRS: %q", entry)
+			}
 		}
 		// R47 B-#1：首尾空白条目（" 42"/"\t42"）trim 后能通过以上检查，但发射端
 		// 拼接 glob 用原始值会产生零匹配——校验与发射必须对同一形态达成一致。
-		// 放在两位数字检查之后："942 " 这类条目仍报组号形态错误（R46 口径）。
+		// 放在形态检查之后："942 " 这类条目仍报组号形态错误（R46 口径）。
 		if trimmed != entry {
 			return fmt.Errorf("%s 条目不能包含首尾空白: %q", name, entry)
 		}
-		// R59 B-N2 → R72 二十六次 W3-6 收紧：排除项必须是发射端实际会发射的
-		// 形态（services.CRSExcludedEntryEffective——CRS 规则 ID「纯数字/
-		// 数字-数字，900000-999999」或 CRS 文件名「REQUEST-9XX-*.conf」，文件
-		// 名经 crsFilenameToRuleIDRange 映射为 ID 区间）。此前保存侧只查字符集
-		// +长度，"942100L" 这类条目保存 200、发射时被形态门静默跳过（仅 warn
-		// 日志）——用户以为排除生效实则没有。保存即拒绝，与发射同款门永不漂移。
-		if name == "crs_excluded_rules" && !services.CRSExcludedEntryEffective(entry) {
-			return fmt.Errorf("%s 条目必须是 CRS 规则 ID（如 \"942100\"）或规则文件名（如 \"REQUEST-942-APPLICATION-ATTACK-SQLI.conf\"）: %q", name, entry)
+	}
+	return nil
+}
+
+// validateCRSExcludedRulesPayload 校验 crs_excluded_rules 双格式载荷（空串已在
+// 调用方归一为 "[]"）。旧 []string 走既有口径（字符集 + 首尾空白 +
+// services.CRSExcludedEntryEffective 发射门），与发射端 scope=all 路径同款，
+// 不加索引存在性校验（现状兼容）。新 []对象逐条校验 target/scope/ips/listRefs；
+// 完全相同条目由读侧归一去重，此处放行。引用的 IP 列表存在性在同事务内由
+// validateIPListRefsExistence 单批校验（见 crsExcludedListRefs 调用点）。
+func validateCRSExcludedRulesPayload(val *string) error {
+	raw := *val
+	var legacy []string
+	if err := json.Unmarshal([]byte(raw), &legacy); err == nil {
+		for _, entry := range legacy {
+			trimmed := strings.TrimSpace(entry)
+			if trimmed == "" {
+				return fmt.Errorf("crs_excluded_rules 条目不能为空")
+			}
+			for _, r := range trimmed {
+				if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
+					continue
+				}
+				return fmt.Errorf("crs_excluded_rules 条目含非法字符（仅允许字母、数字、.、_、-）: %q", entry)
+			}
+			// R59 B-N2 → R72 二十六次 W3-6 收紧：排除项必须是发射端实际会发射的
+			// 形态（services.CRSExcludedEntryEffective——CRS 规则 ID「纯数字/
+			// 数字-数字，900000-999999」或 CRS 文件名「REQUEST-9XX-*.conf」，文件
+			// 名经 crsFilenameToRuleIDRange 映射为 ID 区间）。
+			if trimmed != entry {
+				return fmt.Errorf("crs_excluded_rules 条目不能包含首尾空白: %q", entry)
+			}
+			if !services.CRSExcludedEntryEffective(entry) {
+				return fmt.Errorf("crs_excluded_rules 条目必须是 CRS 规则 ID（如 \"942100\"）或规则文件名（如 \"REQUEST-942-APPLICATION-ATTACK-SQLI.conf\"）: %q", entry)
+			}
+		}
+		return nil
+	}
+	var entries []services.CRSExcludedEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return fmt.Errorf("crs_excluded_rules 需为 JSON 数组字符串")
+	}
+	if len(entries) > services.CRSExcludedRulesMaxEntries {
+		return fmt.Errorf("crs_excluded_rules 条目不能超过 %d 条", services.CRSExcludedRulesMaxEntries)
+	}
+	var index *services.CRSRuleIndex
+	for i, entry := range entries {
+		target := strings.TrimSpace(entry.Target)
+		if target == "" {
+			return fmt.Errorf("crs_excluded_rules 条目 #%d 的 target 不能为空", i+1)
+		}
+		for _, r := range target {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
+				continue
+			}
+			return fmt.Errorf("crs_excluded_rules 条目 #%d 的 target 含非法字符（仅允许字母、数字、.、_、-）: %q", i+1, entry.Target)
+		}
+		// R47 B-#1 同口径：首尾空白在校验/发射两侧对同一形态达成一致。
+		if target != entry.Target {
+			return fmt.Errorf("crs_excluded_rules 条目 #%d 的 target 不能包含首尾空白: %q", i+1, entry.Target)
+		}
+		scope := entry.Scope
+		if scope == "" {
+			scope = "all"
+		}
+		switch scope {
+		case "all", "ip", "list":
+		default:
+			return fmt.Errorf("crs_excluded_rules 条目 #%d 的 scope 无效：%q（可选：all、ip、list）", i+1, entry.Scope)
+		}
+		if index == nil {
+			index = services.GetCRSRuleIndex()
+		}
+		if services.IsCRSGroupCode(target) {
+			if !index.HasGroup(target) {
+				return fmt.Errorf("规则组不存在于当前 CRS: %q", entry.Target)
+			}
+		} else if services.IsCRSRuleIDTarget(target) {
+			if !index.Has(target) {
+				return fmt.Errorf("规则 ID 不存在于当前 CRS: %q", entry.Target)
+			}
+		} else if !services.CRSExcludedEntryEffective(target) {
+			return fmt.Errorf("crs_excluded_rules 条目 #%d 必须是两位组号、CRS 规则 ID（如 \"942100\"）或规则文件名（如 \"REQUEST-942-APPLICATION-ATTACK-SQLI.conf\"）: %q", i+1, entry.Target)
+		} else if scope != "all" {
+			// 作用域限定走运行时 ctl:ruleRemoveById 逐 ID 展开，遗留文件名/区间
+			// 形态（映射为 ID 区间）无法展开——保存即拒，与发射端能力对齐。
+			return fmt.Errorf("crs_excluded_rules 条目 #%d：target %q 为文件名/区间形态，仅支持 scope=all（作用域限定请使用两位组号或 6 位规则 ID）", i+1, entry.Target)
+		}
+		ips := strings.TrimSpace(entry.IPs)
+		switch scope {
+		case "ip":
+			if ips == "" {
+				return fmt.Errorf("crs_excluded_rules 条目 #%d：scope=ip 必须填写 ips（逗号分隔的 IP/CIDR）", i+1)
+			}
+		case "list":
+			if len(entry.ListRefs) == 0 {
+				return fmt.Errorf("crs_excluded_rules 条目 #%d：scope=list 必须填写 listRefs（IP 地址列表 id）", i+1)
+			}
+		case "all":
+			if ips != "" || len(entry.ListRefs) > 0 {
+				return fmt.Errorf("crs_excluded_rules 条目 #%d：scope=all 不允许携带 ips/listRefs", i+1)
+			}
+		}
+		for _, item := range strings.Split(entry.IPs, ",") {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			if !validIPOrCIDR(item) {
+				return fmt.Errorf("crs_excluded_rules 条目 #%d 包含无效的 IP/CIDR：%s", i+1, item)
+			}
 		}
 	}
 	return nil
+}
+
+// crsExcludedListRefs 从 crs_excluded_rules 载荷收集全部引用的 IP 列表 id（去重；
+// 旧格式/解析失败 → nil）。存在性校验与 ip_acl_list_refs 共用
+// validateIPListRefsExistence（同事务单批 IN 查询）。
+func crsExcludedListRefs(payload string) []int64 {
+	var refs []int64
+	seen := make(map[int64]struct{})
+	for _, entry := range services.ParseCRSExcludedRules(payload) {
+		for _, id := range entry.ListRefs {
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			refs = append(refs, id)
+		}
+	}
+	return refs
 }
 
 func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
@@ -1057,7 +1200,8 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		}
 	}
 	// crs_rule_groups / crs_excluded_rules：显式空串按 Create 口径归一为 "[]"，
-	// 非空值必须是字符串数组的 JSON，防止任意串直写列后在发射端解析失败。
+	// 非空值必须是合法载荷（组号/规则 ID/文件名或新格式对象数组），防止任意串
+	// 直写列后在发射端解析失败。
 	for _, f := range []struct {
 		name string
 		val  *string
@@ -1067,6 +1211,18 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	} {
 		if err := validateAndNormalizeCRSField(f.name, f.val); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+	}
+	// crs_excluded_rules 作用域条目引用的 IP 列表存在性：仅校验显式提供的
+	// 载荷（同事务单批，与上方 ip_acl_list_refs 同口径）；悬空引用的源头由
+	// DeleteIPList 的引用扫描拦截。
+	if req.CRSExcludedRules != nil {
+		if msg, err := validateIPListRefsExistence(tx, crsExcludedListRefs(*req.CRSExcludedRules), nil); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
+			return
+		} else if msg != "" {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
 			return
 		}
 	}
@@ -2531,7 +2687,7 @@ func (h *Handlers) ListCRSRules(c *gin.Context) {
 		if err != nil {
 			continue
 		}
-		cat := categorizeCRSFile(entry.Name())
+		cat := services.CategorizeCRSFile(entry.Name())
 		if search != "" && !strings.Contains(strings.ToLower(entry.Name()), search) && !strings.Contains(strings.ToLower(cat), search) {
 			continue
 		}
@@ -2558,6 +2714,14 @@ func (h *Handlers) ListCRSRules(c *gin.Context) {
 		paged = []CRSRule{}
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"rules": paged, "total": total, "page": page, "page_size": pageSize}})
+}
+
+// GetCRSRuleIndex 返回结构化 CRS 规则索引（id/msg/file/category，按 id 升序）。
+// 消费方：保存侧 6 位规则 ID/两位组号的存在性校验与前端规则选择器；缓存与
+// BuildCorazaDirectives 的混合展开/陈旧过滤共享同一实例（services.GetCRSRuleIndex）。
+func (h *Handlers) GetCRSRuleIndex(c *gin.Context) {
+	index := services.GetCRSRuleIndex()
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"version": index.Version, "rules": index.Rules}})
 }
 
 func (h *Handlers) GetCRSRuleContent(c *gin.Context) {
@@ -2607,72 +2771,6 @@ func (h *Handlers) GetCRSSetupConfig(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"content": string(content)}})
-}
-
-func categorizeCRSFile(filename string) string {
-	name := strings.ToUpper(filename)
-	switch {
-	case strings.Contains(name, "920-"):
-		return "协议异常"
-	case strings.Contains(name, "921-"):
-		return "协议攻击"
-	case strings.Contains(name, "922-"):
-		return "multipart 攻击"
-	case strings.Contains(name, "930-"):
-		return "路径穿越 (LFI)"
-	case strings.Contains(name, "931-"):
-		return "远程文件包含 (RFI)"
-	case strings.Contains(name, "932-"):
-		return "远程代码执行 (RCE)"
-	case strings.Contains(name, "933-"):
-		return "PHP 攻击"
-	case strings.Contains(name, "934-"):
-		return "通用攻击"
-	case strings.Contains(name, "941-"):
-		return "XSS 跨站脚本"
-	case strings.Contains(name, "942-"):
-		return "SQL 注入"
-	case strings.Contains(name, "943-"):
-		return "会话固定"
-	case strings.Contains(name, "944-"):
-		return "Java 攻击"
-	case strings.Contains(name, "949-"):
-		return "请求阻断评估"
-	case strings.Contains(name, "950-"):
-		return "响应信息泄露"
-	case strings.Contains(name, "951-"):
-		return "响应 SQL 泄露"
-	case strings.Contains(name, "952-"):
-		return "响应 Java 泄露"
-	case strings.Contains(name, "953-"):
-		return "响应 PHP 泄露"
-	case strings.Contains(name, "954-"):
-		return "响应 IIS 泄露"
-	case strings.Contains(name, "955-"):
-		return "Webshell"
-	case strings.Contains(name, "956-"):
-		return "响应 Ruby 泄露"
-	case strings.Contains(name, "959-"):
-		return "响应阻断评估"
-	case strings.Contains(name, "980-"):
-		return "事件关联"
-	case strings.Contains(name, "900-"):
-		return "初始化/排除"
-	case strings.Contains(name, "901-"):
-		return "初始化"
-	case strings.Contains(name, "905-"):
-		return "通用异常"
-	case strings.Contains(name, "911-"):
-		return "方法限制"
-	case strings.Contains(name, "913-"):
-		return "爬虫检测"
-	case strings.Contains(name, "915-"):
-		return "请求体限制"
-	case strings.Contains(name, "999-"):
-		return "通用排除（CRS 后）"
-	default:
-		return "其他"
-	}
 }
 
 func derefInt(p *int) int {

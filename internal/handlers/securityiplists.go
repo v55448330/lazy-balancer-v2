@@ -386,7 +386,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的列表 id"})
 		return
 	}
-	rows, err := tx.QueryContext(c.Request.Context(), "SELECT id, COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]') FROM security_policies")
+	rows, err := tx.QueryContext(c.Request.Context(), "SELECT id, COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(crs_excluded_rules,'[]') FROM security_policies")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -394,8 +394,8 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	referencingPolicyIDs := make(map[int64]struct{})
 	for rows.Next() {
 		var policyID int64
-		var aclRefs, wlRefs string
-		if err := rows.Scan(&policyID, &aclRefs, &wlRefs); err != nil {
+		var aclRefs, wlRefs, crsExcluded string
+		if err := rows.Scan(&policyID, &aclRefs, &wlRefs, &crsExcluded); err != nil {
 			rows.Close()
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 			return
@@ -405,6 +405,13 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 				if refID == listID {
 					referencingPolicyIDs[policyID] = struct{}{}
 				}
+			}
+		}
+		// crs_excluded_rules 作用域条目的 listRefs 同为引用（JSON 对象数组，
+		// 读侧双格式归一后收集；旧 []string 格式恒无引用）。
+		for _, refID := range crsExcludedListRefs(crsExcluded) {
+			if refID == listID {
+				referencingPolicyIDs[policyID] = struct{}{}
 			}
 		}
 	}

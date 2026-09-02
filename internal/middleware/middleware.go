@@ -405,6 +405,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/security/block-pages", h.ListSecurityBlockPages)
 				business.GET("/security/ip-lists", h.ListIPLists)
 				business.GET("/security/crs/rules", h.ListCRSRules)
+				business.GET("/security/crs/rule-index", h.GetCRSRuleIndex)
 				business.GET("/security/crs/rules/:filename", h.GetCRSRuleContent)
 				business.GET("/security/crs/setup", h.GetCRSSetupConfig)
 

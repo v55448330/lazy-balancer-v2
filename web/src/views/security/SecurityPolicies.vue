@@ -138,8 +138,40 @@
               <span class="form-tip-inline">规则异常分值累计达到此阈值后触发拦截，越低越严格</span>
             </el-form-item>
             <el-form-item label="CRS 规则组">
-              <el-select v-model="crsRuleGroups" :disabled="form.mode === 'off'" multiple filterable placeholder="留空加载全部 CRS 规则" style="width: 100%">
-                <el-option v-for="opt in crsGroupOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+              <!-- 混合选择：组选项（两位组号，label 沿用「请求 · 942 · SQL 注入」）在前 +
+                   单条规则选项（6 位规则 ID，两行「ID — 描述」/「文件 · 分类」，按请求/响应
+                   阶段 el-option-group 分组）在后。832 条选项 → persistent=false 关闭即销毁
+                   下拉 DOM；索引在途时 loading 占位。陈旧值（CRS 更新后消失的规则 ID）以
+                   ghost 选项兜底显示。 -->
+              <el-select
+                v-model="crsRuleGroups"
+                :disabled="form.mode === 'off'"
+                multiple
+                filterable
+                :loading="crsIndexLoading"
+                :persistent="false"
+                popper-class="crs-rule-popper"
+                placeholder="留空加载全部 CRS 规则"
+                style="width: 100%"
+              >
+                <el-option v-for="opt in crsGroupOptions" :key="`g-${opt.value}`" :label="opt.label" :value="opt.value" />
+                <el-option-group label="OWASP CRS · 请求阶段 · 单条规则">
+                  <el-option v-for="opt in crsIndexRequestOptions" :key="opt.id" :value="opt.id" :label="`${opt.id} — ${opt.label}`" :title="opt.fullLabel">
+                    <div class="crs-rule-option">
+                      <div class="crs-rule-option-label">{{ opt.id }} — {{ opt.label }}</div>
+                      <div class="crs-rule-option-meta">{{ opt.file }} · {{ opt.category }}</div>
+                    </div>
+                  </el-option>
+                </el-option-group>
+                <el-option-group label="OWASP CRS · 响应阶段 · 单条规则">
+                  <el-option v-for="opt in crsIndexResponseOptions" :key="opt.id" :value="opt.id" :label="`${opt.id} — ${opt.label}`" :title="opt.fullLabel">
+                    <div class="crs-rule-option">
+                      <div class="crs-rule-option-label">{{ opt.id }} — {{ opt.label }}</div>
+                      <div class="crs-rule-option-meta">{{ opt.file }} · {{ opt.category }}</div>
+                    </div>
+                  </el-option>
+                </el-option-group>
+                <el-option v-for="opt in crsGroupGhostOptions" :key="`ghost-${opt.value}`" :label="opt.label" :value="opt.value" :title="opt.title" />
               </el-select>
               <div class="form-tip-line">选择后仅加载所选规则组，留空加载全部 CRS 规则</div>
               <!-- 跨策略 CRS 规则组重复实时警告（随当前选择重算）：置于表单项内控件列，
@@ -167,18 +199,100 @@
               <div class="form-tip-line">开启后 WAF 读取并检查上游响应内容（响应泄露类规则需要）；关闭可显著降低内存与 CPU 开销，大多数部署只需检查请求</div>
             </el-form-item>
             <el-form-item label="排除规则">
-              <el-select v-model="crsExcludedRules" :disabled="form.mode === 'off'" multiple filterable placeholder="搜索并选择要排除的规则" style="width: 100%">
-                <!-- R72 二十八次二调（用户反馈）：按请求/响应阶段分组，label 带
-                     phase 前缀——「请求 · 942 · SQL 注入」/「响应 · 955 · Webshell」，
-                     与规则组同款「代码 · 类别」解析形态；文件名保留在 title 悬浮。 -->
-                <el-option-group label="OWASP CRS · 请求阶段">
-                  <el-option v-for="rule in crsRequestRuleOptions" :key="rule.filename" :label="`请求 · ${crsOptionCode(rule.filename)} · ${rule.category}`" :value="rule.filename" :title="rule.filename" />
-                </el-option-group>
-                <el-option-group label="OWASP CRS · 响应阶段">
-                  <el-option v-for="rule in crsResponseRuleOptions" :key="rule.filename" :label="`响应 · ${crsOptionCode(rule.filename)} · ${rule.category}`" :value="rule.filename" :title="rule.filename" />
-                </el-option-group>
-              </el-select>
-              <div class="form-tip-line">排除的规则不会被检测或拦截</div>
+              <!-- 表格行编辑器：目标（与规则组同款混合下拉）× 作用域（全部 IP/指定 IP/地址
+                   列表）× 条件控件（ip → 标签输入 + isValidCidr 即时拒绝；list → 引用
+                   /security/ip-lists 列表）× 删除。上限 50 行；旧字符串数组存储读取时已
+                   归一为 scope:all 行，保存统一写对象数组。 -->
+              <el-card shadow="never" class="exclusion-card">
+                <el-table :data="crsExcludedRows" size="small" empty-text="">
+                  <template #empty>
+                    <el-empty description="未添加排除规则" :image-size="40" />
+                  </template>
+                  <el-table-column label="目标规则" min-width="260">
+                    <template #default="{ row }">
+                      <el-select
+                        v-model="row.target"
+                        filterable
+                        :disabled="form.mode === 'off' || isReadOnly"
+                        :loading="crsIndexLoading"
+                        :persistent="false"
+                        popper-class="crs-rule-popper"
+                        placeholder="搜索规则组 / 规则 ID / 描述"
+                        class="exclusion-target-select"
+                      >
+                        <el-option v-for="opt in crsGroupOptions" :key="`g-${opt.value}`" :label="opt.label" :value="opt.value" />
+                        <el-option-group label="单条规则 · 请求阶段">
+                          <el-option v-for="opt in crsIndexRequestOptions" :key="opt.id" :value="opt.id" :label="`${opt.id} — ${opt.label}`" :title="opt.fullLabel">
+                            <div class="crs-rule-option">
+                              <div class="crs-rule-option-label">{{ opt.id }} — {{ opt.label }}</div>
+                              <div class="crs-rule-option-meta">{{ opt.file }} · {{ opt.category }}</div>
+                            </div>
+                          </el-option>
+                        </el-option-group>
+                        <el-option-group label="单条规则 · 响应阶段">
+                          <el-option v-for="opt in crsIndexResponseOptions" :key="opt.id" :value="opt.id" :label="`${opt.id} — ${opt.label}`" :title="opt.fullLabel">
+                            <div class="crs-rule-option">
+                              <div class="crs-rule-option-label">{{ opt.id }} — {{ opt.label }}</div>
+                              <div class="crs-rule-option-meta">{{ opt.file }} · {{ opt.category }}</div>
+                            </div>
+                          </el-option>
+                        </el-option-group>
+                        <el-option v-if="crsGhostOptionFor(row.target)" :key="`ghost-${row.target}`" :label="crsGhostOptionFor(row.target)!.label" :value="row.target" :title="row.target" />
+                      </el-select>
+                      <!-- 行级矛盾提示：目标同时出现在规则组正选与排除清单（单条 ID 矛盾 /
+                           整组冗余），排除恒优先——提示而非阻断，交由用户裁决 -->
+                      <div v-if="exclusionRowConflict(row)" class="exclusion-row-warning">{{ exclusionRowConflict(row) }}</div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="作用域" width="200">
+                    <template #default="{ row }">
+                      <el-radio-group v-model="row.scope" size="small" :disabled="form.mode === 'off' || isReadOnly">
+                        <el-radio value="all">全部 IP</el-radio>
+                        <el-radio value="ip">指定 IP</el-radio>
+                        <el-radio value="list">地址列表</el-radio>
+                      </el-radio-group>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="条件" min-width="220">
+                    <template #default="{ row }">
+                      <el-select
+                        v-if="row.scope === 'ip'"
+                        v-model="row.ips"
+                        multiple
+                        filterable
+                        allow-create
+                        default-first-option
+                        :disabled="form.mode === 'off' || isReadOnly"
+                        placeholder="输入 IP/CIDR 后回车"
+                        style="width: 100%"
+                        @change="(value: string[]) => onExclusionIpsChange(row, value)"
+                      />
+                      <el-select
+                        v-else-if="row.scope === 'list'"
+                        v-model="row.listRefs"
+                        multiple
+                        filterable
+                        :disabled="form.mode === 'off' || isReadOnly"
+                        placeholder="选择 IP 地址列表"
+                        style="width: 100%"
+                      >
+                        <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                      </el-select>
+                      <span v-else class="exclusion-scope-all">对所有 IP 生效</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="" width="60" align="center">
+                    <template #default="{ $index }">
+                      <el-button link type="danger" size="small" :disabled="form.mode === 'off' || isReadOnly" @click="removeExcludedRule($index)">删除</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <div class="exclusion-toolbar">
+                  <el-button size="small" type="primary" plain :disabled="form.mode === 'off' || isReadOnly || crsExcludedRows.length >= CRS_EXCLUDED_MAX_ROWS" @click="addExcludedRule">+ 添加排除</el-button>
+                  <span class="exclusion-count">{{ crsExcludedRows.length }}/{{ CRS_EXCLUDED_MAX_ROWS }}</span>
+                </div>
+                <div class="form-tip-line">排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP 或地址列表生效</div>
+              </el-card>
             </el-form-item>
             <el-form-item label="自定义规则">
               <el-select v-model="selectedCustomRules" :disabled="form.mode === 'off'" multiple filterable placeholder="选择要包含的自定义规则" style="width: 100%">
@@ -410,8 +524,16 @@
               <el-tag v-else type="info" size="small" effect="plain">关闭</el-tag>
             </el-descriptions-item>
             <el-descriptions-item v-if="form.mode !== 'off'" label="异常阈值">{{ thresholdLabel(form.anomaly_threshold) }}</el-descriptions-item>
-            <el-descriptions-item v-if="form.mode !== 'off'" label="CRS 规则组">{{ crsRuleGroups.length === 0 ? '全部（默认）' : `${crsRuleGroups.length} 组` }}</el-descriptions-item>
-            <el-descriptions-item v-if="form.mode !== 'off'" label="排除规则">{{ crsExcludedRules.length }} 条</el-descriptions-item>
+            <el-descriptions-item v-if="form.mode !== 'off'" label="CRS 规则组">{{ crsRuleGroups.length === 0 ? '全部（默认）' : `${crsGroupSelectCount} 组 + ${crsRuleIdSelectCount} 规则` }}</el-descriptions-item>
+            <el-descriptions-item v-if="form.mode !== 'off'" label="排除规则">
+              <el-tooltip v-if="exclusionPreviewLines.length > 0" placement="top" popper-class="crs-preview-popper">
+                <template #content>
+                  <div v-for="line in exclusionPreviewLines" :key="line">{{ line }}</div>
+                </template>
+                <span>{{ serializedExcludedRules.length }} 条</span>
+              </el-tooltip>
+              <template v-else>0 条</template>
+            </el-descriptions-item>
             <el-descriptions-item v-if="form.mode !== 'off'" label="自定义规则">{{ selectedCustomRules.length }} 条</el-descriptions-item>
             <el-descriptions-item label="拦截页面">{{ blockPageName }}</el-descriptions-item>
             <el-descriptions-item label="IP 访问控制">
@@ -544,6 +666,8 @@ import { showSaveResult } from '@/utils/saveResult'
 import { isValidCidr } from '@/utils/ruleValidation'
 import { formatDate } from '@/utils/date'
 import { useAuthStore } from '@/stores/auth'
+import { useCrsRuleIndex, crsRuleLabelView, parseCrsExcludedRules, CRS_EXCLUDED_MAX_ROWS } from '@/composables/useCrsRuleIndex'
+import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRuleIndex'
 import type { APIResponse, UserListItem } from '@/types'
 
 interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string }
@@ -594,6 +718,13 @@ const getUpdaterName = (userId?: number) => {
 }
 
 const crsRuleOptions = ref<CRSRuleOption[]>([])
+// CRS 规则索引（约 832 条，id/msg/file/category）：规则组/排除目标的单条规则选项与
+// 预览 hover 明细共用；对话框打开时取一次（同会话缓存，openSeq 过期守卫见 useCrsRuleIndex）
+const { loading: crsIndexLoading, loaded: crsIndexLoaded, byId: crsIndexById, options: crsIndexOptions, ensureForDialog: ensureCrsRuleIndex } = useCrsRuleIndex()
+// —— 排除规则行编辑器（存储形态：对象数组 [{target,scope,ips,listRefs}]，旧字符串数组
+//     读取时由 parseCrsExcludedRules 归一为 scope:all 行）——
+const crsExcludedRows = ref<CrsExcludedRow[]>([])
+
 const loading = ref(false)
 const saving = ref(false)
 const policies = ref<PolicySummary[]>([])
@@ -664,7 +795,6 @@ const showWhitelistRefHint = computed(() => ipWhitelist.value.length > 0 || ipWh
 const ipBlacklistSelf = ref<string[]>([])
 const geoipCountries = ref<string[]>([])
 const crsRuleGroups = ref<string[]>([])
-const crsExcludedRules = ref<string[]>([])
 const boundRules = ref<string[]>([])
 const originalBoundRules = ref<string[]>([])
 // R60 D60-F1：策略对话框打开序列号——丢弃在途详情 GET 的过期返回。
@@ -766,10 +896,13 @@ const parseCustomRuleIds = (raw: string | undefined): number[] => {
   } catch { return [] }
 }
 
-// CRS 规则组以后端 Include 的两位组代码存储（REQUEST-9<code>-*.conf），兼容历史上存过的完整文件名前缀
+// CRS 规则组混合存储（两位组号 ∪ 6 位规则 ID）。组代码以后端 Include 的两位组代码
+// 归一（REQUEST-9<code>-*.conf → <code>，兼容历史完整文件名前缀）；6 位为单条规则 ID
+// 原样保留；其余形状丢弃。
 const normalizeCrsGroups = (values: string[]): string[] => {
   const codes = values.map((value) => {
     if (/^\d{2}$/.test(value)) return value
+    if (/^\d{6}$/.test(value)) return value
     const match = /^(?:REQUEST|RESPONSE)-9(\d{2})-/i.exec(value)
     return match?.[1] ?? ''
   }).filter((code) => code !== '')
@@ -790,10 +923,38 @@ const crsOptionCode = (filename: string): string => {
 //（REQUEST 规则查的不只是请求体，叫「请求体」不准确）。
 const crsOptionPhase = (filename: string): string => (/^RESPONSE-/i.test(filename) ? '响应' : '请求')
 
-// 排除规则选项按阶段分组（el-option-group 视觉分组 + label 内 phase 前缀供
-// 已选 tag 区分）。
-const crsRequestRuleOptions = computed(() => crsRuleOptions.value.filter((r) => !/^RESPONSE-/i.test(r.filename)))
-const crsResponseRuleOptions = computed(() => crsRuleOptions.value.filter((r) => /^RESPONSE-/i.test(r.filename)))
+// 排除规则/规则组的单条规则选项按阶段分组（索引 file 前缀判相位；rules 已按 id 升序）。
+// label 已由 crsRuleLabelView 清洗/截断，fullLabel 供 title 悬浮全文。
+const crsIndexRequestOptions = computed<CrsRuleOptionView[]>(() => crsIndexOptions.value.filter((r) => !/^RESPONSE-/i.test(r.file)))
+const crsIndexResponseOptions = computed<CrsRuleOptionView[]>(() => crsIndexOptions.value.filter((r) => /^RESPONSE-/i.test(r.file)))
+
+// 规则组/排除目标下拉的已知值全集（两位组号 ∪ 索引规则 ID）——命中即无需 ghost 选项
+const crsKnownTargetValues = computed<Set<string>>(() =>
+  new Set([...crsGroupOptions.value.map((o) => o.value), ...crsIndexOptions.value.map((o) => o.id)]))
+
+// ghost 选项兜底：已选/已存值不在已知值集（CRS 更新后消失的规则 ID、旧字符串数组遗留的
+// 文件名/区间形态）时补一个只读展示选项，避免 el-select tag 回退显示裸值。
+interface CrsGhostOption { value: string; label: string; title: string }
+const crsGhostOptionFor = (value: string): CrsGhostOption | null => {
+  const v = value.trim()
+  if (v === '' || crsKnownTargetValues.value.has(v)) return null
+  if (/^(?:REQUEST|RESPONSE)-/i.test(v)) {
+    const fileRule = crsRuleOptions.value.find((r) => r.filename === v)
+    const label = fileRule
+      ? `文件 · ${crsOptionPhase(v)} · ${crsOptionCode(v)} · ${fileRule.category}`
+      : `文件 · ${crsOptionPhase(v)} · ${crsOptionCode(v)}`
+    return { value: v, label, title: v }
+  }
+  if (/^\d{6}$/.test(v)) {
+    // 陈旧判定仅在索引成功加载后生效——加载失败/在途时不得把规则 ID 误标为已移除
+    if (!crsIndexLoaded.value) return null
+    return { value: v, label: `${v} —（当前 CRS 已无此规则）`, title: v }
+  }
+  return { value: v, label: v, title: v }
+}
+// 规则组多选框内的 ghost 选项（按当前选中值派生）
+const crsGroupGhostOptions = computed<CrsGhostOption[]>(() =>
+  crsRuleGroups.value.map(crsGhostOptionFor).filter((o): o is CrsGhostOption => o !== null))
 
 // crsResponsePhaseGroupCodes（R72 二十九次 L9）：响应阶段 CRS 类别两位代码
 //（950-956/959/980）——这些组仅在「检查响应体」开启时才被后端 Include
@@ -814,6 +975,105 @@ const crsGroupOptions = computed(() => {
   }
   return [...seen.entries()].map(([value, label]) => ({ value, label }))
 })
+
+// ================= 排除规则行编辑器 =================
+const addExcludedRule = (): void => {
+  if (crsExcludedRows.value.length >= CRS_EXCLUDED_MAX_ROWS) return
+  crsExcludedRows.value.push({ target: '', scope: 'all', ips: [], listRefs: [] })
+}
+
+const removeExcludedRule = (idx: number): void => {
+  crsExcludedRows.value.splice(idx, 1)
+}
+
+// 指定 IP 标签输入即时校验：非法条目立即拒绝（toast + 回滚为仅合法条目），
+// 与 ACL 内联名单位同一 isValidCidr 口径（后端 400 为最终裁决，此处前置拦截）
+const onExclusionIpsChange = (row: CrsExcludedRow, value: string[]): void => {
+  const invalid = value.find((entry) => !isValidCidr(entry))
+  if (invalid !== undefined) {
+    ElMessage.error(`IP/CIDR 条目格式不正确：${invalid}`)
+    row.ips = value.filter((entry) => isValidCidr(entry))
+    return
+  }
+  row.ips = value
+}
+
+// 行级矛盾提示：目标同时出现在规则组正选与排除清单——排除恒优先。
+// - 单条规则 ID 两边都选 → 矛盾（正选加载、排除又不加载）；
+// - 整组排除且该组同时在规则组正选 → 冗余（整组都不加载，正选形同虚设）。
+// 仅做提示不阻断：组合「正选组 + 排除组内单条」是正常用法，不在此列。
+const exclusionRowConflict = (row: CrsExcludedRow): string => {
+  const target = row.target.trim()
+  if (target === '' || form.value.mode === 'off') return ''
+  if (!crsRuleGroups.value.includes(target)) return ''
+  return /^\d{2}$/.test(target) ? '冗余：排除优先生效' : '与规则组选择矛盾（排除优先）'
+}
+
+// 提交口径：全空行（无目标且无条件）静默丢弃，其余按 target+scope+ips+listRefs 去重
+const serializedExcludedRules = computed<CrsExcludedRow[]>(() => {
+  const seen = new Set<string>()
+  const out: CrsExcludedRow[] = []
+  for (const row of crsExcludedRows.value) {
+    const target = row.target.trim()
+    if (target === '' && row.ips.length === 0 && row.listRefs.length === 0) continue
+    const key = `${target}\u0000${row.scope}\u0000${row.ips.join(',')}\u0000${row.listRefs.join(',')}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ target, scope: row.scope, ips: [...row.ips], listRefs: [...row.listRefs] })
+  }
+  return out
+})
+
+// 行是否为待校验的有效配置行（非全空行即需通过校验）
+const isFilledExclusionRow = (row: CrsExcludedRow): boolean =>
+  row.target.trim() !== '' || row.ips.length > 0 || row.listRefs.length > 0
+
+// 保存/跨步闸门：非空行必须目标齐备，scope=ip 需至少一个 IP，scope=list 需至少一个列表
+const validateExcludedRules = (): boolean => {
+  for (let i = 0; i < crsExcludedRows.value.length; i++) {
+    const row = crsExcludedRows.value[i]
+    if (!row || !isFilledExclusionRow(row)) continue
+    if (row.target.trim() === '') {
+      ElMessage.error(`第 ${i + 1} 条排除规则未选择目标`)
+      return false
+    }
+    if (row.scope === 'ip' && row.ips.length === 0) {
+      ElMessage.error(`第 ${i + 1} 条排除规则（指定 IP）未填写 IP`)
+      return false
+    }
+    if (row.scope === 'list' && row.listRefs.length === 0) {
+      ElMessage.error(`第 ${i + 1} 条排除规则（地址列表）未选择列表`)
+      return false
+    }
+  }
+  return true
+}
+
+// 预览目标 label：两位组号 → 组选项 label；6 位 ID → 索引「ID — 描述」（截断版）；
+// 旧文件名/未知值 → 解析化文件形态或原值
+const exclusionTargetLabel = (target: string): string => {
+  if (/^\d{2}$/.test(target)) return crsGroupOptions.value.find((o) => o.value === target)?.label ?? `规则组 ${target}`
+  const entry = crsIndexById.value.get(target)
+  if (entry) return `${target} — ${crsRuleLabelView(entry).label}`
+  if (/^(?:REQUEST|RESPONSE)-/i.test(target)) return `文件 · ${crsOptionPhase(target)} · ${crsOptionCode(target)}`
+  return target
+}
+
+// 作用域摘要：全部 / IP：…（内联条目）/ 列表：…（引用列表名，缓存缺失回退 #id）
+const exclusionScopeSummary = (row: CrsExcludedRow): string => {
+  if (row.scope === 'all') return '全部'
+  if (row.scope === 'ip') return `IP：${row.ips.length > 0 ? row.ips.join('、') : '（未填写）'}`
+  const names = row.listRefs.map((id) => ipLists.value.find((l) => l.id === id)?.name ?? `#${id}`)
+  return `列表：${names.length > 0 ? names.join('、') : '（未选择）'}`
+}
+
+// 配置预览 hover 明细：每条一行「目标 × 作用域摘要」
+const exclusionPreviewLines = computed<string[]>(() =>
+  serializedExcludedRules.value.map((row) => `${exclusionTargetLabel(row.target)} × ${exclusionScopeSummary(row)}`))
+
+// 预览「N 组 + M 规则」：两位组号与 6 位规则 ID 分别计数
+const crsGroupSelectCount = computed(() => crsRuleGroups.value.filter((v) => /^\d{2}$/.test(v)).length)
+const crsRuleIdSelectCount = computed(() => crsRuleGroups.value.filter((v) => /^\d{6}$/.test(v)).length)
 
 const THRESHOLD_LABELS: Record<number, string> = { 1: '极严格（1）', 3: '严格（3）', 5: '标准（5）', 10: '宽松（10）', 20: '极宽松（20）' }
 const thresholdLabel = (value: number): string => THRESHOLD_LABELS[value] ?? String(value)
@@ -946,6 +1206,11 @@ const nextStep = (): void => {
       ElMessage.warning('请输入策略名称')
       return
     }
+    moveToAdjacentWizardStep(1)
+    return
+  }
+  if (currentStep.value === WIZARD_STEP.WAF_RULES) {
+    if (!validateExcludedRules()) return
     moveToAdjacentWizardStep(1)
     return
   }
@@ -1566,7 +1831,7 @@ async function openDialog(row?: PolicySummary) {
     geoipCountries.value = parseJsonList(d.geoip_countries)
     form.value.geoip_enabled = (d.geoip_mode || 'deny') !== 'off' && geoipCountries.value.length > 0
       crsRuleGroups.value = normalizeCrsGroups(parseJsonList(d.crs_rule_groups))
-      crsExcludedRules.value = parseJsonList(d.crs_excluded_rules)
+      crsExcludedRows.value = parseCrsExcludedRules(d.crs_excluded_rules)
       selectedCustomRules.value = parseCustomRuleIds(d.custom_rules)
       boundRules.value = res.data?.bindings || []
       // 拦截页面失效兜底：block_page_id=0 是「无拦截页面」的合法状态（schema 默认 0），
@@ -1592,6 +1857,9 @@ async function openDialog(row?: PolicySummary) {
   // 每次打开对话框刷新引用列表缓存（提取为列表/他处新建后选项保持最新）；
   // A4-S2：传入 openSeq 丢弃过期返回，防止快速关闭重开后旧响应覆盖新缓存
   void fetchIpLists(openSeq)
+  // CRS 规则索引同口径：每次对话框打开取一次（同会话内步骤切换复用缓存），
+  // 供规则组/排除目标的单条规则选项与预览明细共用（openSeq 过期守卫见 useCrsRuleIndex）
+  void ensureCrsRuleIndex(openSeq)
   // 共绑判定依赖 securityBindings（页面挂载时加载的快照）——对话框打开时轻量
   // 刷新一次，外部变更（他端会话/API）的绑定关系才能进入冲突告警口径；
   // A4-S2：同样按 openSeq 丢弃过期返回
@@ -1605,7 +1873,7 @@ async function openDialog(row?: PolicySummary) {
 
 const resetForm = () => {
   form.value = defaultForm()
-  ipACLList.value = []; ipWhitelist.value = []; ipWhitelistEnabled.value = false; ipBlacklistSelf.value = []; ipACLListRefs.value = []; ipWhitelistRefs.value = []; geoipCountries.value = []; crsRuleGroups.value = []; crsExcludedRules.value = []; selectedCustomRules.value = []; boundRules.value = []; editingId.value = null
+  ipACLList.value = []; ipWhitelist.value = []; ipWhitelistEnabled.value = false; ipBlacklistSelf.value = []; ipACLListRefs.value = []; ipWhitelistRefs.value = []; geoipCountries.value = []; crsRuleGroups.value = []; crsExcludedRows.value = []; selectedCustomRules.value = []; boundRules.value = []; editingId.value = null
 }
 
 const resetWizard = () => {
@@ -1627,6 +1895,10 @@ const handleSave = async () => {
   }
   if (!validateIpAclList()) {
     currentStep.value = WIZARD_STEP.IP_ACL
+    return
+  }
+  if (!validateExcludedRules()) {
+    currentStep.value = WIZARD_STEP.WAF_RULES
     return
   }
   // 保存确认（与提取为列表/删除确认同款 warning 弹窗）：取消静默返回，不进入提交
@@ -1682,7 +1954,9 @@ const handleSave = async () => {
       rate_limit_rps: form.value.rate_limit_rps,
       rate_limit_burst: form.value.rate_limit_burst,
       crs_rule_groups: JSON.stringify(crsRuleGroups.value),
-      crs_excluded_rules: JSON.stringify(crsExcludedRules.value),
+      // 排除规则：统一写对象数组（旧字符串数组读取时已归一为 scope:all 行），
+      // 全空行丢弃 + 去重后的提交口径
+      crs_excluded_rules: JSON.stringify(serializedExcludedRules.value),
       custom_rules: JSON.stringify(selectedCustomRules.value),
       block_page_id: form.value.block_page_id,
       block_status_code: form.value.block_status_code,
@@ -1797,6 +2071,16 @@ onMounted(async () => {
   justify-content: flex-end;
   gap: 12px;
 }
+
+/* —— 排除规则行编辑器（WAF 步骤，el-card 内行编辑表格）—— */
+.exclusion-card { width: 100%; }
+.exclusion-card :deep(.el-card__body) { padding: 8px; }
+.exclusion-target-select { width: 100%; }
+/* 行级矛盾提示（与规则组选择冲突/冗余）：跟随目标 select 下方，警告色小字 */
+.exclusion-row-warning { font-size: 12px; color: #e6a23c; line-height: 1.5; margin-top: 4px; }
+.exclusion-scope-all { font-size: 12px; color: #9ca3af; }
+.exclusion-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.exclusion-count { font-size: 12px; color: #9ca3af; margin-left: auto; }
 
 .rule-bind-field { width: 100%; }
 
@@ -1920,4 +2204,16 @@ onMounted(async () => {
   transition: background-color 0.2s ease;
 }
 .policy-rules-popper .policy-rule-row:hover { background-color: rgba(255, 255, 255, 0.12); }
+
+/* el-select 下拉（teleported 到 body）内的两行规则选项：el-select-dropdown__item
+   默认 height:34px / line-height:34px / overflow:hidden 会裁切副行——对含
+   .crs-rule-option 的条目覆写高度自适应，容器 line-height 1.4 + 上下 padding
+   修正底部裁切；单行组选项维持默认 34px 不受影响 */
+.crs-rule-popper .el-select-dropdown__item:has(.crs-rule-option) { height: auto; line-height: 1.4; }
+.crs-rule-option { display: flex; flex-direction: column; line-height: 1.4; padding: 4px 0 5px; }
+.crs-rule-option-label { font-size: 13px; }
+.crs-rule-option-meta { font-size: 12px; color: #9ca3af; }
+
+/* 配置预览排除明细 popper（teleported） */
+.crs-preview-popper { line-height: 1.6; max-width: 420px; }
 </style>

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -283,21 +284,17 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 				sb.WriteString("Include /app/waf/crs/rules/REQUEST-*.conf\n")
 			}
 		} else {
-			for _, g := range groups {
-				// R47 B-#1：历史遗留行可能含首尾空白（旧校验曾放行），trim 后拼接，
-				// 保证 glob 恒为 REQUEST-9<code>-*.conf 的合法形态（镜像下方排除项的 trim）。
-				g = strings.TrimSpace(g)
-				sb.WriteString(fmt.Sprintf("Include /app/waf/crs/rules/REQUEST-9%[1]s-*.conf\n", g))
-				if p.WAFCheckResponse {
-					sb.WriteString(fmt.Sprintf("Include /app/waf/crs/rules/RESPONSE-9%[1]s-*.conf\n", g))
-				}
-			}
+			emitCRSRuleGroupSelection(&sb, p, groups)
 		}
 
-		var excludedRules []string
-		json.Unmarshal(p.CRSExcludedRules, &excludedRules)
-		for _, ruleID := range excludedRules {
-			ruleID = strings.TrimSpace(ruleID)
+		// 作用域限定（ip/list）条目收集后统一发射：列表引用需单批解析，合并去重。
+		var scoped []CRSExcludedEntry
+		for _, entry := range ParseCRSExcludedRules(string(p.CRSExcludedRules)) {
+			if entry.Scope == "ip" || entry.Scope == "list" {
+				scoped = append(scoped, entry)
+				continue
+			}
+			ruleID := strings.TrimSpace(entry.Target)
 			if ruleID == "" {
 				continue
 			}
@@ -319,6 +316,9 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 				continue
 			}
 			sb.WriteString(fmt.Sprintf("SecRuleRemoveById %s\n", mapped))
+		}
+		if len(scoped) > 0 {
+			emitScopedCRSExclusions(&sb, p, scoped)
 		}
 	}
 
@@ -845,6 +845,257 @@ func crsFilenameToRuleIDRange(s string) string {
 		}
 	}
 	return s
+}
+
+// CRSExcludedRulesMaxEntries 新格式 crs_excluded_rules 的条目上限（旧 []string
+// 格式无上限，保持现状兼容；与 crs_param_exemptions 的 50 条口径一致）。
+const CRSExcludedRulesMaxEntries = 50
+
+// CRSExcludedEntry 是 crs_excluded_rules 列的归一化单条：Target 为两位组号
+// （"42"）、6 位 CRS 规则 ID（"942100"）或遗留文件名/区间形态（仅 scope=all）；
+// Scope 为 "all"（全量排除，走 SecRuleRemoveById 现状路径）或 "ip"/"list"
+// （作用域限定，仅命中 IPs ∪ ListRefs 条目的客户端跳过排除）；IPs 为逗号
+// 分隔的 IP/CIDR；ListRefs 引用 security_ip_lists id。
+type CRSExcludedEntry struct {
+	Target   string  `json:"target"`
+	Scope    string  `json:"scope"`
+	IPs      string  `json:"ips"`
+	ListRefs []int64 `json:"listRefs"`
+}
+
+// IsCRSRuleIDTarget 报告 s 是否为 6 位 CRS 规则 ID 形态（^9\d{5}$）。
+func IsCRSRuleIDTarget(s string) bool {
+	return len(s) == 6 && s[0] == '9' && allDigits(s[1:])
+}
+
+// IsCRSGroupCode 报告 s 是否为两位数字组号形态。
+func IsCRSGroupCode(s string) bool {
+	return len(s) == 2 && allDigits(s)
+}
+
+func allDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// ParseCRSExcludedRules 读侧双格式归一：旧 []string（文件名/6 位 ID/区间）每条
+// 归一为 {target, scope:"all"}（保留原始条目顺序与重复，发射等价于旧实现）；
+// 新 []对象 缺省 scope 补 "all"、完全相同 {target,scope,ips,listRefs} 条目去重。
+// 空串/纯空白与任何解析失败均按空处理（nil）——防御旧/坏数据（集群同步/带外
+// 改库/降级版本写入的载荷），绝不让策略发射失败。
+func ParseCRSExcludedRules(raw string) []CRSExcludedEntry {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	var legacy []string
+	if err := json.Unmarshal([]byte(trimmed), &legacy); err == nil {
+		out := make([]CRSExcludedEntry, 0, len(legacy))
+		for _, entry := range legacy {
+			if strings.TrimSpace(entry) == "" {
+				continue
+			}
+			out = append(out, CRSExcludedEntry{Target: entry, Scope: "all"})
+		}
+		return out
+	}
+	var entries []CRSExcludedEntry
+	if err := json.Unmarshal([]byte(trimmed), &entries); err != nil {
+		return nil
+	}
+	out := make([]CRSExcludedEntry, 0, len(entries))
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.Target) == "" {
+			continue
+		}
+		if entry.Scope == "" {
+			entry.Scope = "all"
+		}
+		out = append(out, entry)
+	}
+	return dedupeCRSExcludedEntries(out)
+}
+
+// dedupeCRSExcludedEntries 按 {target,scope,ips,listRefs} 完全一致去重（保序，
+// 首见保留）；listRefs 以排序后的序列参与键（[1,2] 与 [2,1] 视为同条）。
+func dedupeCRSExcludedEntries(entries []CRSExcludedEntry) []CRSExcludedEntry {
+	seen := make(map[string]struct{}, len(entries))
+	out := make([]CRSExcludedEntry, 0, len(entries))
+	for _, entry := range entries {
+		refs := append([]int64{}, entry.ListRefs...)
+		sort.Slice(refs, func(i, j int) bool { return refs[i] < refs[j] })
+		key := entry.Target + "\x00" + entry.Scope + "\x00" + entry.IPs + "\x00" + fmt.Sprint(refs)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// crsScopedExclusionIDBase 是作用域限定排除 ctl 规则的 SecRule id 基值：首条
+// 2000001，单次 BuildCorazaDirectives 调用内递增（n 顺序唯一）。与 CRS 9xxxxx /
+// 自定义规则 cr.ID+10000 / 无 id 合成 1000000+ 段互不冲突。
+const crsScopedExclusionIDBase = 2000000
+
+// emitScopedCRSExclusions 发射作用域限定（scope=ip/list）的排除条目：每条先解析
+// 匹配集（ips 逗号条目 ∪ 全部 listRefs 的列表条目，跨条目去重保序；ListRefs 跨
+// 条目汇总后单批 LoadIPListEntriesByID），合并为空 → 跳过+warn（列表被清空/
+// 引用悬空时不发射空 ipMatch）；target 经 expandCRSScopedExclusionTargets 展开
+// 为逐 ID（ctl:ruleRemoveById 不支持区间），每 ID 一条 phase:1 运行时 ctl 规则。
+func emitScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, entries []CRSExcludedEntry) {
+	var refIDs []int64
+	seenRef := make(map[int64]struct{})
+	for _, entry := range entries {
+		for _, id := range entry.ListRefs {
+			if _, dup := seenRef[id]; dup {
+				continue
+			}
+			seenRef[id] = struct{}{}
+			refIDs = append(refIDs, id)
+		}
+	}
+	listsByID, err := LoadIPListEntriesByID(refIDs)
+	if err != nil {
+		Logf("warn", "解析作用域排除引用的 IP 列表失败（策略 %q）: %v", p.Name, err)
+		listsByID = map[int64][]string{}
+	}
+	index := GetCRSRuleIndex()
+	seq := 0
+	for _, entry := range entries {
+		match := make([]string, 0, 4)
+		seenIP := make(map[string]struct{})
+		addMatch := func(value string) {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				return
+			}
+			if _, dup := seenIP[value]; dup {
+				return
+			}
+			seenIP[value] = struct{}{}
+			match = append(match, value)
+		}
+		for _, ip := range strings.Split(entry.IPs, ",") {
+			addMatch(ip)
+		}
+		for _, ref := range entry.ListRefs {
+			for _, value := range listsByID[ref] {
+				addMatch(value)
+			}
+		}
+		if len(match) == 0 {
+			Logf("warn", "跳过作用域排除条目 %q（策略 %q）：ips/引用列表合并后为空", entry.Target, p.Name)
+			continue
+		}
+		for _, id := range expandCRSScopedExclusionTargets(entry.Target, index, p) {
+			seq++
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:%d,phase:1,pass,nolog,ctl:ruleRemoveById=%s\"\n",
+				strings.Join(match, ","), crsScopedExclusionIDBase+seq, id))
+		}
+	}
+}
+
+// expandCRSScopedExclusionTargets 把作用域限定条目的 target 展开为逐规则 ID：
+// 两位组号 → 索引内该组全部 ID（升序）；6 位 ID → 索引存在时单元素，否则视为
+// 陈旧（CRS 更替后规则消失，多经集群同步等带外通道落库）跳过+warn；其余形态
+// （遗留文件名/区间）不支持作用域限定（保存侧已拒，此处防御跳过+warn）。
+func expandCRSScopedExclusionTargets(target string, index *CRSRuleIndex, p *models.SecurityPolicy) []string {
+	target = strings.TrimSpace(target)
+	if IsCRSRuleIDTarget(target) {
+		if !index.Has(target) {
+			Logf("warn", "跳过陈旧排除规则 ID %q（策略 %q）：不存在于本地 CRS 规则索引", target, p.Name)
+			return nil
+		}
+		return []string{target}
+	}
+	if IsCRSGroupCode(target) {
+		ids := index.RuleIDsByGroup(target)
+		if len(ids) == 0 {
+			Logf("warn", "跳过陈旧排除规则组 %q（策略 %q）：不存在于本地 CRS 规则索引", target, p.Name)
+		}
+		return ids
+	}
+	Logf("warn", "跳过作用域排除条目 %q（策略 %q）：该 target 形态仅支持 scope=all", target, p.Name)
+	return nil
+}
+
+// crsFileGroupPattern 从 CRS 规则文件名提取两位组号（REQUEST-942-…/RESPONSE-951-…
+// → "42"/"51"）；不匹配常见形态时返回空串（永不命中任何已选组 → 走父文件补删）。
+var crsFileGroupPattern = regexp.MustCompile(`^(?:REQUEST|RESPONSE)-9([0-9]{2})-`)
+
+// emitCRSRuleGroupSelection 发射 crs_rule_groups 混合选择：两位组号条目走现状
+// Include glob 路径（逐条、trim 后拼接，含 WAFCheckResponse 的 RESPONSE 侧）；
+// 6 位 ID 条目经本地索引定位父文件——父文件组未被选中时 Include 该文件，并对
+// 文件内索引已知、未被选中的其余 ID 逐条 SecRuleRemoveById（ctl 不适用于配置期
+// 整组剔除，补删必须逐 ID，不能用区间以免误删同文件被选 ID）。陈旧 ID（索引
+// 不存在）跳过+warn。纯组号载荷的输出与既有实现逐行一致（等价回归锁定）。
+func emitCRSRuleGroupSelection(sb *strings.Builder, p *models.SecurityPolicy, groups []string) {
+	groupSet := make(map[string]struct{}, len(groups))
+	var idTargets []string
+	seenID := make(map[string]struct{})
+	for _, g := range groups {
+		// R47 B-#1：历史遗留行可能含首尾空白（旧校验曾放行），trim 后拼接，
+		// 保证 glob 恒为 REQUEST-9<code>-*.conf 的合法形态（镜像下方排除项的 trim）。
+		g = strings.TrimSpace(g)
+		if IsCRSRuleIDTarget(g) {
+			if _, dup := seenID[g]; !dup {
+				seenID[g] = struct{}{}
+				idTargets = append(idTargets, g)
+			}
+			continue
+		}
+		groupSet[g] = struct{}{}
+		sb.WriteString(fmt.Sprintf("Include /app/waf/crs/rules/REQUEST-9%[1]s-*.conf\n", g))
+		if p.WAFCheckResponse {
+			sb.WriteString(fmt.Sprintf("Include /app/waf/crs/rules/RESPONSE-9%[1]s-*.conf\n", g))
+		}
+	}
+	if len(idTargets) == 0 {
+		return
+	}
+	index := GetCRSRuleIndex()
+	selected := make(map[string]struct{}, len(idTargets))
+	for _, id := range idTargets {
+		selected[id] = struct{}{}
+	}
+	var parentFiles []string
+	included := make(map[string]struct{})
+	for _, id := range idTargets {
+		entry := index.Find(id)
+		if entry == nil {
+			Logf("warn", "跳过陈旧 CRS 规则组 ID %q（策略 %q）：不存在于本地规则索引", id, p.Name)
+			continue
+		}
+		if group := crsFileGroupPattern.FindStringSubmatch(entry.File); group != nil {
+			if _, covered := groupSet[group[1]]; covered {
+				continue
+			}
+		}
+		if _, dup := included[entry.File]; dup {
+			continue
+		}
+		included[entry.File] = struct{}{}
+		parentFiles = append(parentFiles, entry.File)
+		sb.WriteString(fmt.Sprintf("Include /app/waf/crs/rules/%s\n", entry.File))
+	}
+	if len(parentFiles) == 0 {
+		return
+	}
+	idsByFile := index.RuleIDsByFile()
+	for _, file := range parentFiles {
+		for _, id := range idsByFile[file] {
+			if _, keep := selected[id]; keep {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("SecRuleRemoveById %s\n", id))
+		}
+	}
 }
 
 // ValidateGeoIPCountries 校验 geoip_countries 载荷：必须是 JSON 数组且条目非空；
