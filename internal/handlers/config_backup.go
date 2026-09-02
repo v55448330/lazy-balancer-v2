@@ -1110,6 +1110,20 @@ func validateV2BackupSecurityPolicies(tables map[string][]map[string]any) error 
 		// W2：refs 两列按保存侧同口径校验——字符串列承载整数数组的 JSON
 		// 文本（空串/null/缺省视同 '[]' 放行，写入侧由 restoreTable 归一），
 		// 非字符串类型与 R48-3 同口径拒绝。
+		// 审计 U3-F5：crs_excluded_rules.listRefs 存在性校验——与两 refs 列同口径
+		//（"备份内解析哲学"），悬空引用在正常主端不可达（保存 400/删除 409 双门），
+		// 但手工编辑/带外改库导出的备份可携带；落库后发射侧静默缩小匹配集。
+		if excludedRaw, exists := policy["crs_excluded_rules"]; exists && excludedRaw != nil {
+			if excludedStr, ok := excludedRaw.(string); ok && strings.TrimSpace(excludedStr) != "" {
+				for _, entry := range services.ParseCRSExcludedRules(excludedStr) {
+					for _, refID := range entry.ListRefs {
+						if _, found := ipListIDs[int(refID)]; !found {
+							return fmt.Errorf("安全策略 #%d（%s）：crs_excluded_rules 引用了不存在的 IP 列表 %d", index+1, name, refID)
+						}
+					}
+				}
+			}
+		}
 		for _, field := range []string{"ip_acl_list_refs", "ip_whitelist_refs"} {
 			raw, exists := policy[field]
 			if !exists || raw == nil {

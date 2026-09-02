@@ -252,7 +252,7 @@ const showTriggeredMsg = (row: SecurityEvent): boolean => {
 // —— CRS 规则快捷排除（6 位 9xxxxx 触发 ID → 详情弹框 + 二选一排除）——
 // CRS 规则索引：弹框每次打开取一次（openSeq 会话守卫），供 id/msg/file/category
 // 与源码片段文件名查询；失败退化为「当前 CRS 已无此规则」展示（loaded=false 时不误判）
-const { loading: crsIndexLoading, byId: crsIndexById, ensureForDialog: ensureCrsRuleIndex } = useCrsRuleIndex()
+const { loading: crsIndexLoading, loaded: crsIndexReady, byId: crsIndexById, ensureForDialog: ensureCrsRuleIndex } = useCrsRuleIndex()
 const authStore = useAuthStore()
 // admin 只读态（从节点/非管理员）禁用确认按钮——与 IPLocationAction.canManage 同口径
 const canManage = computed(() => authStore.readOnlyReason === null)
@@ -296,7 +296,10 @@ const crsAlreadyExcluded = computed<boolean>(() => {
 })
 
 const crsActionDisabled = computed(() =>
-  !canManage.value || crsPolicyState.value !== 'ok' || crsSubmitting.value)
+  !canManage.value || crsPolicyState.value !== 'ok' || crsSubmitting.value
+  // 审计 U2-F1：索引已加载但无此规则（陈旧 ID）——后端保存侧 400「规则 ID
+  // 不存在于当前 CRS」恒拒绝，UI「仍可排除」是虚假指引，对齐禁用+改文案。
+  || (crsEntry.value === null && crsIndexReady.value))
 
 // 「加入地址列表」下拉选项：所属策略排除规则 listRefs 并集（crsExistingRows 已由
 // checkCrsPolicy 解析 GET 策略详情的 crs_excluded_rules 聚合而来，Set 去重）∩

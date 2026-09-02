@@ -170,7 +170,7 @@ type ipListRow struct {
 // 刻意不用 SQL LIKE（"5" 会命中 "[15]"、"[51]"——15 误报对 5 的假阳性），
 // JSON 解析是唯一精确口径。
 func loadIPListRefPolicies() (map[int64][]ipListRefPolicy, error) {
-	rows, err := db.DB.Query("SELECT id, COALESCE(name,''), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]') FROM security_policies")
+	rows, err := db.DB.Query("SELECT id, COALESCE(name,''), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(crs_excluded_rules,'[]') FROM security_policies")
 	if err != nil {
 		return nil, err
 	}
@@ -178,11 +178,13 @@ func loadIPListRefPolicies() (map[int64][]ipListRefPolicy, error) {
 	refs := make(map[int64][]ipListRefPolicy)
 	for rows.Next() {
 		var policyID int
-		var policyName, aclRefs, wlRefs string
-		if err := rows.Scan(&policyID, &policyName, &aclRefs, &wlRefs); err != nil {
+		var policyName, aclRefs, wlRefs, crsExcluded string
+		if err := rows.Scan(&policyID, &policyName, &aclRefs, &wlRefs, &crsExcluded); err != nil {
 			return nil, err
 		}
 		seenList := make(map[int64]struct{})
+		// 审计 U3-F4：引用计数补排除条目 listRefs 面（409 守卫已覆盖此面，仅补展示口径，
+		// 消除「显示 0 引用可删、点删得 409」的观测缺口）。
 		for _, raw := range []string{aclRefs, wlRefs} {
 			for _, listID := range parseIPListRefsIDs(raw) {
 				if _, dup := seenList[listID]; dup {
@@ -191,6 +193,14 @@ func loadIPListRefPolicies() (map[int64][]ipListRefPolicy, error) {
 				seenList[listID] = struct{}{}
 				refs[listID] = append(refs[listID], ipListRefPolicy{ID: policyID, Name: policyName})
 			}
+		}
+		// 审计 U3-F4：补排除条目 listRefs 面（409 守卫已覆盖，仅补展示口径）。
+		for _, listID := range crsExcludedListRefs(crsExcluded) {
+			if _, dup := seenList[listID]; dup {
+				continue
+			}
+			seenList[listID] = struct{}{}
+			refs[listID] = append(refs[listID], ipListRefPolicy{ID: policyID, Name: policyName})
 		}
 	}
 	if err := rows.Err(); err != nil {

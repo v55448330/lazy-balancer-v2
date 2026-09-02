@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"lazy-balancer-v2/internal/db"
 	"log"
 	"os"
 	"path/filepath"
@@ -247,6 +248,15 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	}
 
 	// Reload BEFORE deleting backups: if reload fails, restoreBackup can still roll back.
+	// 审计 U1-F4：版本行必须先于 reloader 更新——crsPoolFingerprint 以版本行为池键
+	// 输入，先重载则指纹仍为旧值、coraza 池命中旧实例，磁盘新规则要等下一次生成
+	// 才生效（无限期静默陈旧）。
+	if _, err := db.DB.Exec(
+		"UPDATE security_crs_version SET version=?, updated_at=datetime('now') WHERE id=1",
+		tag,
+	); err != nil {
+		writeCRSUpdateLog("WARN", string(CRSStatusReloading), fmt.Sprintf("提前写入版本行失败（稍后重写）: %v", err))
+	}
 	writeCRSUpdateLog("INFO", string(CRSStatusReloading), "应用新规则并重载 Caddy")
 	if m.reloader != nil {
 		if err := m.reloader(); err != nil {

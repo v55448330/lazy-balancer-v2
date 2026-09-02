@@ -270,23 +270,9 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	if p.Mode == "blocking" || p.Mode == "detection" {
 		var groups []string
 		json.Unmarshal(p.CRSRuleGroups, &groups)
-		sb.WriteString("Include /app/waf/crs/crs-setup.conf\n")
-		if _, err := os.Stat(filepath.Join(crsDirectivesDir, "zz-user-overrides.conf")); err == nil {
-			sb.WriteString("Include /app/waf/crs/zz-user-overrides.conf\n")
-		}
-		if p.AnomalyThreshold > 0 {
-			sb.WriteString(fmt.Sprintf("SecAction \"id:900,phase:1,nolog,pass,setvar:tx.inbound_anomaly_score_threshold=%d\"\n", p.AnomalyThreshold))
-		}
-		if len(groups) == 0 {
-			if p.WAFCheckResponse {
-				sb.WriteString("Include /app/waf/crs/rules/*.conf\n")
-			} else {
-				sb.WriteString("Include /app/waf/crs/rules/REQUEST-*.conf\n")
-			}
-		} else {
-			emitCRSRuleGroupSelection(&sb, p, groups)
-		}
-
+		// 审计 U1-F1(CRITICAL)：ctl:ruleRemoveById 是运行时动作，coraza 按语法序求值——
+		// 必须先于被禁规则发射，否则 phase:1 CRS 规则（绝大多数）先执行完毕、豁免整体
+		// 不生效。故作用域限定 ctl 规则置于 CRS Include 之前。
 		// 作用域限定（ip/list）条目收集后统一发射：列表引用需单批解析，合并去重。
 		var scoped []CRSExcludedEntry
 		for _, entry := range ParseCRSExcludedRules(string(p.CRSExcludedRules)) {
@@ -299,6 +285,11 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 				continue
 			}
 			mapped := crsFilenameToRuleIDRange(ruleID)
+			// 审计 U1-F2：两位组号 scope=all——crsFilenameToRuleIDRange 原样返回，形态门
+			// 恒 false 静默跳过（保存 200/生成零效果）。展开为该组 9xxxxx 区间。
+			if IsCRSGroupCode(ruleID) {
+				mapped = "9" + ruleID + "000-9" + ruleID + "999"
+			}
 			// R60 B-新1：SecRuleRemoveById 发射前形态门。历史行/API/备份可携带
 			// 过校验门但 coraza 语义非法的条目（"ABCDEF"、"942100-abc"、
 			// "REQUEST-942.conf"）——coraza directiveSecRuleRemoveByID 对
@@ -318,8 +309,25 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 			sb.WriteString(fmt.Sprintf("SecRuleRemoveById %s\n", mapped))
 		}
 		if len(scoped) > 0 {
-			emitScopedCRSExclusions(&sb, p, scoped)
+			emitScopedCRSExclusions(&sb, p, scoped, store)
 		}
+		sb.WriteString("Include /app/waf/crs/crs-setup.conf\n")
+		if _, err := os.Stat(filepath.Join(crsDirectivesDir, "zz-user-overrides.conf")); err == nil {
+			sb.WriteString("Include /app/waf/crs/zz-user-overrides.conf\n")
+		}
+		if p.AnomalyThreshold > 0 {
+			sb.WriteString(fmt.Sprintf("SecAction \"id:900,phase:1,nolog,pass,setvar:tx.inbound_anomaly_score_threshold=%d\"\n", p.AnomalyThreshold))
+		}
+		if len(groups) == 0 {
+			if p.WAFCheckResponse {
+				sb.WriteString("Include /app/waf/crs/rules/*.conf\n")
+			} else {
+				sb.WriteString("Include /app/waf/crs/rules/REQUEST-*.conf\n")
+			}
+		} else {
+			emitCRSRuleGroupSelection(&sb, p, groups)
+		}
+
 	}
 
 	// skipAfter 终点标记——IP ACL deny / 自定义 block 规则的 skipAfter
@@ -990,7 +998,9 @@ const crsScopedExclusionIDBase = 2000000
 // 条目汇总后单批 LoadIPListEntriesByID），合并为空 → 跳过+warn（列表被清空/
 // 引用悬空时不发射空 ipMatch）；target 经 expandCRSScopedExclusionTargets 展开
 // 为逐 ID（ctl:ruleRemoveById 不支持区间），每 ID 一条 phase:1 运行时 ctl 规则。
-func emitScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, entries []CRSExcludedEntry) {
+// emitScopedCRSExclusions 发射作用域限定 ctl 规则。store 非-nil 时经其解析列表引用
+//（v2 导入事务视图——A-I1 不变式，审计 U1-F3）；nil 回退 db.DB（测试/直调路径）。
+func emitScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, entries []CRSExcludedEntry, store caddyConfigStore) {
 	var refIDs []int64
 	seenRef := make(map[int64]struct{})
 	for _, entry := range entries {
@@ -1002,7 +1012,7 @@ func emitScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, entr
 			refIDs = append(refIDs, id)
 		}
 	}
-	listsByID, err := LoadIPListEntriesByID(refIDs)
+	listsByID, err := loadIPListEntriesVia(store, refIDs)
 	if err != nil {
 		Logf("warn", "解析作用域排除引用的 IP 列表失败（策略 %q）: %v", p.Name, err)
 		listsByID = map[int64][]string{}

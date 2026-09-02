@@ -134,6 +134,49 @@ func loadIPListEntries(store caddyConfigStore, ids []int64) map[int64][]string {
 
 // LoadIPListEntriesByID 以一次查询批量加载 IP 地址列表条目值（仅 value）。
 // ids 为空或数据库未初始化时返回空映射；缺失的 id 不出现在结果中。
+// loadIPListEntriesVia：store 感知装载（审计 U1-F3）——store 非-nil（v2 导入
+// 事务视图）经其查询，nil 回退 db.DB。镜像 resolvePolicyIPListRefs 的回退逻辑。
+func loadIPListEntriesVia(store caddyConfigStore, ids []int64) (map[int64][]string, error) {
+	if store == nil {
+		return LoadIPListEntriesByID(ids)
+	}
+	// 与 LoadIPListEntriesByID 同构，仅查询经 store。
+	entries := make(map[int64][]string, len(ids))
+	if len(ids) == 0 {
+		return entries, nil
+	}
+	placeholders := strings.Repeat("?,", len(ids))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := store.Query("SELECT id, COALESCE(entries,'[]') FROM security_ip_lists WHERE id IN ("+placeholders+")", args...)
+	if err != nil {
+		return entries, nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			continue
+		}
+		var list []models.IPListEntry
+		if err := json.Unmarshal([]byte(raw), &list); err != nil {
+			continue
+		}
+		vals := make([]string, 0, len(list))
+		for _, e := range list {
+			if v := strings.TrimSpace(e.Value); v != "" {
+				vals = append(vals, v)
+			}
+		}
+		entries[id] = vals
+	}
+	return entries, nil
+}
+
 func LoadIPListEntriesByID(ids []int64) (map[int64][]string, error) {
 	if len(ids) == 0 {
 		return map[int64][]string{}, nil

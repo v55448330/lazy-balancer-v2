@@ -263,7 +263,7 @@
                     <template #default="{ row }">
                       <div class="exclusion-scope-cell">
                         <div class="exclusion-scope-line">
-                          <el-radio-group v-model="row.scope" size="small" :disabled="form.mode === 'off' || isReadOnly">
+                          <el-radio-group v-model="row.scope" size="small" :disabled="form.mode === 'off' || isReadOnly" @change="onScopeChange(row)">
                             <el-radio value="all">全部 IP</el-radio>
                             <el-radio value="ip">指定 IP</el-radio>
                             <el-radio value="list">地址列表</el-radio>
@@ -1029,6 +1029,14 @@ const exclusionRowConflict = (row: CrsExcludedRow): string => {
 }
 
 // 提交口径：全空行（无目标且无条件）静默丢弃，其余按 target+scope+ips+listRefs 去重
+// 审计 U2-F2：作用域切换清残留——否则 scope=all 残留 ips 保存 400，
+// scope=list 残留 ips 被静默并入匹配集（语义漂移且 UI 不可见）。
+const onScopeChange = (row: CrsExcludedRow): void => {
+  if (row.scope === 'all') { row.ips = []; row.listRefs = [] }
+  else if (row.scope === 'ip') { row.listRefs = [] }
+  else if (row.scope === 'list') { row.ips = [] }
+}
+
 const serializedExcludedRules = computed<CrsExcludedRow[]>(() => {
   const seen = new Set<string>()
   const out: CrsExcludedRow[] = []
