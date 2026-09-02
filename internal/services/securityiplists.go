@@ -1,8 +1,8 @@
 package services
 
 import (
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"lazy-balancer-v2/internal/db"

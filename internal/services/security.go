@@ -997,7 +997,7 @@ const crsScopedExclusionIDBase = 2000000
 // 引用悬空时不发射空 ipMatch）；target 经 expandCRSScopedExclusionTargets 展开
 // 为逐 ID（ctl:ruleRemoveById 不支持区间），每 ID 一条 phase:1 运行时 ctl 规则。
 // emitScopedCRSExclusions 发射作用域限定 ctl 规则。store 非-nil 时经其解析列表引用
-//（v2 导入事务视图——A-I1 不变式，审计 U1-F3）；nil 回退 db.DB（测试/直调路径）。
+// （v2 导入事务视图——A-I1 不变式，审计 U1-F3）；nil 回退 db.DB（测试/直调路径）。
 func emitScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, entries []CRSExcludedEntry, store caddyConfigStore) {
 	var refIDs []int64
 	seenRef := make(map[int64]struct{})

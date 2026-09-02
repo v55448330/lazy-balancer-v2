@@ -145,8 +145,8 @@ type ClusterHealth struct {
 }
 
 type ClusterReport struct {
-	AppliedVersion int    `json:"applied_version" binding:"min=0"`
-	ServiceStatus  string `json:"service_status" binding:"required,oneof=ok degraded"`
+	AppliedVersion int           `json:"applied_version" binding:"min=0"`
+	ServiceStatus  string        `json:"service_status" binding:"required,oneof=ok degraded"`
 	Health         ClusterHealth `json:"health"`
 	LastSyncAt     string        `json:"last_sync_at"`
 	LastSyncError  string        `json:"last_sync_error"`
