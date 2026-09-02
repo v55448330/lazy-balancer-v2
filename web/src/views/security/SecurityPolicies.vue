@@ -680,7 +680,7 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import { Plus, Lock, InfoFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { request } from '@/utils/api'
+import { mfaAwareSuccess, request } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { isValidCidr } from '@/utils/ruleValidation'
 import { formatDate } from '@/utils/date'
@@ -1046,7 +1046,11 @@ const serializedExcludedRules = computed<CrsExcludedRow[]>(() => {
     const key = `${target}\u0000${row.scope}\u0000${row.ips.join(',')}\u0000${row.listRefs.join(',')}`
     if (seen.has(key)) continue
     seen.add(key)
-    out.push({ target, scope: row.scope, ips: [...row.ips], listRefs: [...row.listRefs] })
+    // 审计 V2-S3（第五轮）：序列化按 scope 剥离非当前作用域的残留——
+      // 带外数据（scope=all 但 ips 非空）会 400 卡保存。
+      out.push({ target, scope: row.scope,
+        ips: row.scope === 'ip' ? [...row.ips] : [],
+        listRefs: row.scope === 'list' ? [...row.listRefs] : [] })
   }
   return out
 })
@@ -1812,7 +1816,7 @@ const confirmExtract = async (): Promise<void> => {
     extractDialogVisible.value = false
     // 刷新引用列表缓存：选择器选项与「合计 N 条」提示立即反映新列表
     await fetchIpLists(openSeq)
-    ElMessage.success(`已创建列表「${name}」并转为引用，内联条目已清空（引用后语义不变），保存策略后生效`)
+    mfaAwareSuccess(`已创建列表「${name}」并转为引用，内联条目已清空（引用后语义不变），保存策略后生效`)
   } catch (error: unknown) {
     // 409 重名 / 400 条目非法已由全局拦截器 toast，这里仅记录避免 unhandled rejection
     console.error('Failed to extract IP list:', error)

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"fmt"
 	"encoding/json"
 	"strings"
 
@@ -153,7 +154,9 @@ func loadIPListEntriesVia(store caddyConfigStore, ids []int64) (map[int64][]stri
 	}
 	rows, err := store.Query("SELECT id, COALESCE(entries,'[]') FROM security_ip_lists WHERE id IN ("+placeholders+")", args...)
 	if err != nil {
-		return entries, nil
+		// 审计 V3-S1（第五轮）：不吞错——调用方 security.go 的 err!=nil warn 分支
+		// 需要可达（对齐同文件 loadIPListEntries :107-110 的留痕口径）。
+		return nil, fmt.Errorf("store 查询 security_ip_lists: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {

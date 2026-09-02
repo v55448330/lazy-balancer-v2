@@ -251,6 +251,10 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	// 审计 U1-F4：版本行必须先于 reloader 更新——crsPoolFingerprint 以版本行为池键
 	// 输入，先重载则指纹仍为旧值、coraza 池命中旧实例，磁盘新规则要等下一次生成
 	// 才生效（无限期静默陈旧）。
+	// 审计 V-IMPORTANT-1（第五轮）：先写后失败的版本行回滚——不回滚则
+	// currentCRSVersion() 已为新 tag，下轮自动更新短路「已是最新」、失败被掩盖
+	// 且永不重试（直到重启）。旧 tag 在 downloadAndInstall 调用栈可得。
+	prevTag := currentCRSVersion()
 	if _, err := db.DB.Exec(
 		"UPDATE security_crs_version SET version=?, updated_at=datetime('now') WHERE id=1",
 		tag,
@@ -262,6 +266,13 @@ func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 		if err := m.reloader(); err != nil {
 			writeCRSUpdateLog("ERROR", string(CRSStatusReloading), fmt.Sprintf("重载失败: %v", err))
 			m.restoreBackup()
+			// 版本行回滚到旧值，恢复下轮重试能力
+			if _, rbErr := db.DB.Exec(
+				"UPDATE security_crs_version SET version=?, updated_at=datetime('now') WHERE id=1",
+				prevTag,
+			); rbErr != nil {
+				writeCRSUpdateLog("ERROR", string(CRSStatusReloading), fmt.Sprintf("版本行回滚失败（重启后 ReconcileCRSState 自愈）: %v", rbErr))
+			}
 			return fmt.Errorf("重载 Caddy: %w", err)
 		}
 	}

@@ -270,11 +270,17 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	if p.Mode == "blocking" || p.Mode == "detection" {
 		var groups []string
 		json.Unmarshal(p.CRSRuleGroups, &groups)
-		// 审计 U1-F1(CRITICAL)：ctl:ruleRemoveById 是运行时动作，coraza 按语法序求值——
-		// 必须先于被禁规则发射，否则 phase:1 CRS 规则（绝大多数）先执行完毕、豁免整体
-		// 不生效。故作用域限定 ctl 规则置于 CRS Include 之前。
+		// 审计 V-CRITICAL-1（第五轮）：SecRuleRemoveById（配置期删除）与
+		// ctl:ruleRemoveById（运行时跳过）需要**相反**的发射顺序——
+		//   配置期：必须在 Include 之后（coraza 单遍解析，DeleteByID 只删已注册规则，
+		//           放在 Include 前是空集 no-op——emitCRSRuleGroupSelection 的补删
+		//           即正确先例：先 Include 父文件再逐 ID RemoveById）
+		//   运行时：必须在 Include 之前（phase:1 按插入序执行，ctl 规则先于被禁
+		//           规则才能在其求值前标记 tx.ruleRemoveByID——coraza ctl.go:85）
+		// 第四轮 U1-F1 把整个块搬到 Include 前修好了 ctl 却弄坏了配置期。
 		// 作用域限定（ip/list）条目收集后统一发射：列表引用需单批解析，合并去重。
 		var scoped []CRSExcludedEntry
+		var scopeAllTargets []string
 		for _, entry := range ParseCRSExcludedRules(string(p.CRSExcludedRules)) {
 			if entry.Scope == "ip" || entry.Scope == "list" {
 				scoped = append(scoped, entry)
@@ -285,29 +291,16 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 				continue
 			}
 			mapped := crsFilenameToRuleIDRange(ruleID)
-			// 审计 U1-F2：两位组号 scope=all——crsFilenameToRuleIDRange 原样返回，形态门
-			// 恒 false 静默跳过（保存 200/生成零效果）。展开为该组 9xxxxx 区间。
 			if IsCRSGroupCode(ruleID) {
 				mapped = "9" + ruleID + "000-9" + ruleID + "999"
 			}
-			// R60 B-新1：SecRuleRemoveById 发射前形态门。历史行/API/备份可携带
-			// 过校验门但 coraza 语义非法的条目（"ABCDEF"、"942100-abc"、
-			// "REQUEST-942.conf"）——coraza directiveSecRuleRemoveByID 对
-			// 非「纯数字或数字-数字」形态 Atoi 失败即 return err → 整个
-			// directives 串编译失败 → Caddy /load 400，含启动初始加载在内
-			// 的全部配置加载失败（配置自锁）。合法形态之外跳过该条目并留痕
-			// （custom rules customRuleEmissionIssue 同哲学：发射侧防御，
-			// 校验漏洞不升级为全局限摆）。越过界的合法 range（"1-999999"）
-			// 会静默删除 IP ACL(2-5)/自定义(10000+)/全部 CRS 规则——上限
-			// 999999 一并钳制。
 			if !validSecRuleRemoveTarget(mapped) {
-				// R61 B-R61-02：用分级日志（Logf warn）而非裸 log.Printf——后者无
-				// WARN 前缀，应用日志级别调至 warn/error 时会被过滤出文件日志。
 				Logf("warn", "跳过非法 SecRuleRemoveById 条目 %q（策略 %q）：非数字/区间形态或区间越界，coraza 会拒绝编译", ruleID, p.Name)
 				continue
 			}
-			sb.WriteString(fmt.Sprintf("SecRuleRemoveById %s\n", mapped))
+			scopeAllTargets = append(scopeAllTargets, mapped)
 		}
+		// 运行时 ctl 规则：Include 之前（先于被禁规则插入 phase:1 序列）
 		if len(scoped) > 0 {
 			emitScopedCRSExclusions(&sb, p, scoped, store)
 		}
@@ -326,6 +319,11 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 			}
 		} else {
 			emitCRSRuleGroupSelection(&sb, p, groups)
+		}
+		// 配置期 SecRuleRemoveById：Include 之后（此时 CRS 规则已注册，
+		// DeleteByID 能命中；发射前的形态门注释见 scopeAllTargets 收集段）
+		for _, mapped := range scopeAllTargets {
+			sb.WriteString(fmt.Sprintf("SecRuleRemoveById %s\n", mapped))
 		}
 
 	}
@@ -856,7 +854,7 @@ func crsFilenameToRuleIDRange(s string) string {
 }
 
 // CRSExcludedRulesMaxEntries 新格式 crs_excluded_rules 的条目上限（旧 []string
-// 格式无上限，保持现状兼容；与 crs_param_exemptions 的 50 条口径一致）。
+// 格式无上限，保持现状兼容；50 条上限口径）。
 const CRSExcludedRulesMaxEntries = 50
 
 // CRSExcludedEntry 是 crs_excluded_rules 列的归一化单条：Target 为两位组号

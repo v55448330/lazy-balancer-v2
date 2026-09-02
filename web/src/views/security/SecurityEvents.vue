@@ -143,7 +143,7 @@
           type="warning"
           :closable="false"
           show-icon
-          title="当前 CRS 已无此规则（规则集更新后已移除），仍可将其加入排除"
+          title="当前 CRS 已无此规则（规则集更新后已移除，或索引加载失败），仍可将其加入排除"
           style="margin-top: 12px"
         />
 

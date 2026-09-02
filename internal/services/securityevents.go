@@ -324,11 +324,29 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 		if !policy.IPACLEnabled || policy.IPACLMode != "deny" {
 			return false
 		}
+		// 审计 V1-S2（第五轮）：deny 归因应含 refs 合并集（inline ∪ ip_acl_list_refs），
+		// 否则 refs-only deny 策略无法认领自己的 id:2 事件。
+		if len(policy.MergedACLList) > 0 {
+			return true
+		}
 		var aclList []string
 		if err := json.Unmarshal([]byte(policy.IPACLList), &aclList); err != nil {
 			return false
 		}
 		return len(aclList) > 0
+	case n >= 900000 && n < 1000000:
+		// 审计 V1-S1（第五轮）：v2.2.2 混合选择——crs_rule_groups 可含六位 CRS ID
+		// 正选（与排除规则区分：排除规则的 id:2 事件由 id:2/4 家族承载）。
+		// 六位 ID 触发的 CRS 事件应归因到正选了该 ID 的策略。
+		var groups []string
+		if err := json.Unmarshal(policy.CRSRuleGroups, &groups); err == nil {
+			for _, g := range groups {
+				if strings.TrimSpace(g) == fmt.Sprintf("%d", n) {
+					return true
+				}
+			}
+		}
+		return false
 	case n >= 10000 && n < 900000:
 		var ids []int
 		if err := json.Unmarshal(policy.CustomRules, &ids); err == nil {
