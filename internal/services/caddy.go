@@ -860,7 +860,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 			       COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0),
 			       COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'),
 		COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''),
-			       COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0),
+			       COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0),
 			       COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]')
 		FROM security_policies WHERE id IN (`+placeholders+`) AND enabled = 1`, args...)
 		if err != nil {
@@ -874,7 +874,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 				&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst,
 				&crsRuleGroups, &crsExcludedRules, &customRules,
 				&p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt,
-				&geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
+				&geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
@@ -2906,6 +2906,16 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		policyStore = ctx.store
 	}
 	var handleChain []interface{}
+	// F3（v2.2.3）：链首注入 X-LB-Rule-ID——安全事件归因的一等信号（摄入侧优先
+	// 读头、回退 host 反查，同域名多规则/通配符场景归因从概率正确到确定正确）。
+	// 置于 IP 预检之前，预检与各策略 coraza 事务均可见；set 覆盖客户端伪造值；
+	// reverse_proxy 前无条件剥离（见 proxyRequestHeaders 删除清单），不直达上游。
+	if rule.Protocol == "http" && len(policies) > 0 {
+		handleChain = append(handleChain, map[string]interface{}{
+			"handler": "headers",
+			"request": map[string]interface{}{"set": map[string]interface{}{"X-LB-Rule-ID": []string{rule.CaddyID}}},
+		})
+	}
 	// 多策略 IP ACL 优先（IP 预检）：多策略绑定时把全部绑定策略的 deny 侧 IP
 	// 控制合并为极简 coraza 预检查器置于链首（先于全部 rate_limit/waf）——被拒
 	// IP 在任何策略的 CRS/自定义规则评估前即中断，不再产生前置策略的检测事件。
@@ -3118,11 +3128,13 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// X-GeoIP-* 是 caddygeoip→coraza 的进程内控制头（coraza 在本 handler 之前
 	// 执行，已消费完毕），绝不允许透传上游后端。无条件剥离：geoip 关闭的规则
 	// 同时防客户端伪造同名头直达后端。头名清单与 caddygeoip/handler.go 的
-	// headerNames 同源，变更需双侧同步。
+	// headerNames 同源，变更需双侧同步。X-LB-Rule-ID 同型：链首注入的归因头
+	//（F3）仅供 coraza 事务内消费，同口径无条件剥离。
 	proxyRequestHeaders := map[string]interface{}{
 		"delete": []string{
 			"X-GeoIP-Country", "X-GeoIP-Country-Code", "X-GeoIP-Region",
 			"X-GeoIP-Province", "X-GeoIP-City", "X-GeoIP-Loc",
+			"X-LB-Rule-ID",
 		},
 	}
 	if rule.HostHeader != "" {

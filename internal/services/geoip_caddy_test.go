@@ -71,6 +71,26 @@ func handlerNamesAsString(t *testing.T, routeValue interface{}) string {
 	return strings.Join(handlerNames(t, routeValue), ",")
 }
 
+// wafHandlers 按链序收集 route 的全部 waf（coraza）处理器——链首可能含
+// X-LB-Rule-ID 注入等原生 headers 处理器（F3），定长索引访问须以 waf 维度
+// 定位而非链维度，避免注入/移除前置处理器时测试集体漂移。
+func wafHandlers(t *testing.T, routeValue interface{}) []map[string]interface{} {
+	t.Helper()
+	route := mustMap(t, routeValue, "route")
+	handlers, ok := route["handle"].([]interface{})
+	if !ok {
+		t.Fatalf("handle has type %T", route["handle"])
+	}
+	var wafs []map[string]interface{}
+	for _, handlerValue := range handlers {
+		handler := mustMap(t, handlerValue, "handler")
+		if handler["handler"] == "waf" {
+			wafs = append(wafs, handler)
+		}
+	}
+	return wafs
+}
+
 // geoipRuleLine 从 BuildCorazaDirectives 产物中取出 GeoIP 链首规则行（id:8）。
 func geoipRuleLine(t *testing.T, directives string) string {
 	t.Helper()
@@ -189,7 +209,11 @@ func TestGenerateHTTPRouteObjects_geoip_passRouteOnlyNoBlockRoutes(t *testing.T)
 		t.Fatalf("main route must carry the coraza waf handler for geoip evaluation, handlers=%v", mainNames)
 	}
 	handlers, _ := mainRoute["handle"].([]interface{})
-	directives, _ := mustMap(t, handlers[0], "first handler")["directives"].(string)
+	wafs := wafHandlers(t, mainRoute)
+	if len(wafs) == 0 {
+		t.Fatalf("main route must carry at least one waf handler, handlers=%v", mainNames)
+	}
+	directives, _ := wafs[0]["directives"].(string)
 	found := false
 	for _, h := range handlers {
 		if d, _ := mustMap(t, h, "handler")["directives"].(string); strings.Contains(d, "msg:'GeoIP 区域拦截'") {

@@ -1355,9 +1355,13 @@ func TestGenerateRouteObject_placesWafHandlerFirst_whenBlockingPolicyBound(t *te
 		t.Fatalf("generate routes: %v", err)
 	}
 	names := handlerChainNames(t, routes[0])
+	// F3：链首是 X-LB-Rule-ID 注入（headers），waf 紧随其后
+	if names[0] != "headers" {
+		t.Fatalf("chain head=%q, want headers (X-LB-Rule-ID inject) in %v", names[0], names)
+	}
 	wafIndex := indexOfHandler(names, "waf")
-	if wafIndex != 0 {
-		t.Fatalf("waf handler index=%d, want first position in chain %v", wafIndex, names)
+	if wafIndex != 1 {
+		t.Fatalf("waf handler index=%d, want position 1 (right after the F3 inject) in chain %v", wafIndex, names)
 	}
 	if proxyIndex := indexOfHandler(names, "reverse_proxy"); proxyIndex <= wafIndex {
 		t.Fatalf("waf must execute before reverse_proxy: chain %v", names)

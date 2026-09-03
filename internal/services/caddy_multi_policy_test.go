@@ -176,19 +176,22 @@ func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 		t.Fatalf("routes[2] must be the main route (no path matcher): %#v", routes[2])
 	}
 
-	// 主路由处理器链：p1(off+geoip) → waf（仅 GeoIP SecRule）；p2 → rate_limit +
-	// waf(blocking)；p3 → waf(detection，含 GeoIP)；随后 reverse_proxy。
+	// 主路由处理器链：headers(X-LB-Rule-ID 注入，F3) → p1(off+geoip) waf →
+	// p2 rate_limit + waf(blocking)；p3 → waf(detection，含 GeoIP)；随后 reverse_proxy。
 	names := handlerNames(t, mainRoute)
-	if len(names) < 5 || names[0] != "waf" || names[1] != "rate_limit" || names[2] != "waf" || names[3] != "waf" {
-		t.Fatalf("main chain=%v, want [waf(p1 geoip), rate_limit(p2), waf(p2), waf(p3), ..., reverse_proxy]", names)
+	if len(names) < 6 || names[0] != "headers" || names[1] != "waf" || names[2] != "rate_limit" || names[3] != "waf" || names[4] != "waf" {
+		t.Fatalf("main chain=%v, want [headers(X-LB-Rule-ID), waf(p1 geoip), rate_limit(p2), waf(p2), waf(p3), ..., reverse_proxy]", names)
 	}
 	if names[len(names)-1] != "reverse_proxy" {
 		t.Fatalf("main chain last handler=%v, want reverse_proxy", names)
 	}
-	handlers, _ := mainRoute["handle"].([]interface{})
-	p1Waf := mustMap(t, handlers[0], "p1 geoip-only waf")["directives"].(string)
-	p2Waf := mustMap(t, handlers[2], "p2 waf handler")["directives"].(string)
-	p3Waf := mustMap(t, handlers[3], "p3 waf handler")["directives"].(string)
+	wafs := wafHandlers(t, mainRoute)
+	if len(wafs) != 3 {
+		t.Fatalf("waf handlers=%d, want 3 (p1/p2/p3): %v", len(wafs), names)
+	}
+	p1Waf := wafs[0]["directives"].(string)
+	p2Waf := wafs[1]["directives"].(string)
+	p3Waf := wafs[2]["directives"].(string)
 	// p1：WAF 关闭但地域拦截强制生效——引擎 On + 海外 GeoIP 规则，无 CRS Include
 	if !strings.Contains(p1Waf, "SecRuleEngine On") || strings.Contains(p1Waf, "Include ") {
 		t.Fatalf("p1 waf must be geoip-only directives, got: %.200s", p1Waf)
@@ -439,16 +442,21 @@ func TestMultiPolicy_IPPrecheckHandlerPrecedesAllSecurityHandlers(t *testing.T) 
 	// When
 	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_gen6", "gen6.example.test"))
 
-	// Then：链首是 IP 预检 waf，其次 p1 的 CRS waf、p2 的 ACL waf
+	// Then：链首是 X-LB-Rule-ID 注入（F3），其次 IP 预检 waf、p1 的 CRS waf、p2 的 ACL waf
 	handlers, _ := mainRoute["handle"].([]interface{})
-	if len(handlers) < 3 {
+	if len(handlers) < 4 {
 		t.Fatalf("main chain too short: %#v", handlers)
 	}
 	names := handlerNames(t, mainRoute)
-	if names[0] != "waf" || names[1] != "waf" || names[2] != "waf" {
-		t.Fatalf("main chain=%v, want [waf(precheck), waf, waf, ...]", names)
+	if names[0] != "headers" || names[1] != "waf" || names[2] != "waf" || names[3] != "waf" {
+		t.Fatalf("main chain=%v, want [headers(X-LB-Rule-ID), waf(precheck), waf, waf, ...]", names)
 	}
-	precheck := mustMap(t, handlers[0], "precheck handler")["directives"].(string)
+	// 注入头值=规则 caddy id 且覆盖客户端伪造（F3 归因信号本身的断言）
+	inject := mustMap(t, handlers[0], "X-LB-Rule-ID inject handler")
+	setHeaders := mustMap(t, inject["request"], "inject request")["set"].(map[string]interface{})
+	assertEqual(t, setHeaders["X-LB-Rule-ID"], []string{"lb_gen6"})
+	wafs := wafHandlers(t, mainRoute)
+	precheck := wafs[0]["directives"].(string)
 	// 预检含 p2 的拒绝 IP（deny 并集、id:2、audit 留痕）
 	if !strings.Contains(precheck, `@ipMatch 203.0.113.5" "id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END`) {
 		t.Fatalf("precheck must deny p2's ACL union with id:2:\n%s", precheck)
@@ -464,7 +472,7 @@ func TestMultiPolicy_IPPrecheckHandlerPrecedesAllSecurityHandlers(t *testing.T) 
 		t.Fatalf("precheck must emit the SecMarker terminal:\n%s", precheck)
 	}
 	// 后续策略 waf 保持原样：p1 的 CRS 指令仍在（预检不取代逐策略 WAF）
-	p1Directives := mustMap(t, handlers[1], "p1 waf")["directives"].(string)
+	p1Directives := wafs[1]["directives"].(string)
 	if !strings.Contains(p1Directives, "Include /app/waf/crs/rules/REQUEST-*.conf") {
 		t.Fatalf("p1 CRS directives must remain after the precheck:\n%s", p1Directives)
 	}
@@ -526,8 +534,11 @@ func TestMultiPolicy_IPPrecheckAllowModeIntersection(t *testing.T) {
 	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_gen8", "gen8.example.test"))
 
 	// Then：预检 allow 规则否定匹配交集（10.0.0.1），deny 模式并集规则不出现
-	handlers, _ := mainRoute["handle"].([]interface{})
-	precheck := mustMap(t, handlers[0], "precheck handler")["directives"].(string)
+	wafs := wafHandlers(t, mainRoute)
+	if len(wafs) == 0 {
+		t.Fatalf("no waf handler (expect the IP precheck): %v", handlerNames(t, mainRoute))
+	}
+	precheck := wafs[0]["directives"].(string)
 	if !strings.Contains(precheck, `"!@ipMatch 10.0.0.1" "id:7,phase:1,deny,status:403`) {
 		t.Fatalf("precheck allow rule must negate-match the intersection with id:7:\n%s", precheck)
 	}
