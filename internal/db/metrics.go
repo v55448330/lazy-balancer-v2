@@ -269,7 +269,9 @@ func initMetricsSchema(db *sql.DB) error {
 		anomaly_score INTEGER DEFAULT 0,
 		rule_name TEXT DEFAULT '',
 		policy_name TEXT DEFAULT '',
-		transaction_id TEXT DEFAULT ''
+		transaction_id TEXT DEFAULT '',
+		request_headers TEXT DEFAULT '',
+		request_body TEXT DEFAULT ''
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_security_events_time ON security_events(event_time DESC);
@@ -289,6 +291,27 @@ func initMetricsSchema(db *sql.DB) error {
 	}
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_security_events_transaction ON security_events(transaction_id) WHERE transaction_id != ''`); err != nil {
 		return fmt.Errorf("failed to create security_events transaction index: %w", err)
+	}
+	// 幂等迁移：事件请求上下文两列（v2.2.3 安全事件增强）——request_headers 恒由
+	// 摄入落库（8KB 截断），request_body 仅策略开 log_request_body 后有值（64KB
+	// 截断）；新库由上方建表语句直接带出。
+	if err := migrateSecurityEventsRequestContext(db); err != nil {
+		return fmt.Errorf("failed to migrate metrics database schema: %w", err)
+	}
+	return nil
+}
+
+func migrateSecurityEventsRequestContext(db *sql.DB) error {
+	for _, col := range []string{"request_headers", "request_body"} {
+		var colCount int
+		if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('security_events') WHERE name=?", col).Scan(&colCount); err != nil {
+			return fmt.Errorf("failed to check security_events.%s: %w", col, err)
+		}
+		if colCount == 0 {
+			if _, err := db.Exec(fmt.Sprintf("ALTER TABLE security_events ADD COLUMN %s TEXT DEFAULT ''", col)); err != nil {
+				return fmt.Errorf("failed to add security_events.%s: %w", col, err)
+			}
+		}
 	}
 	return nil
 }

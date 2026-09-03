@@ -33,6 +33,7 @@ type SecurityPolicy struct {
 	GeoIPCountries    json.RawMessage `json:"geoip_countries"`
 	GeoIPMode         string          `json:"geoip_mode"`
 	WAFCheckResponse  bool            `json:"waf_check_response"`
+	LogRequestBody    bool            `json:"log_request_body"`
 	// IPACLListRefs / IPWhitelistRefs：引用的 security_ip_lists id 数组（JSON 文本，
 	// 与 IPACLList 同为原始 string 列、同扫描机制）。生成期与 inline 条目取并集。
 	IPACLListRefs   string `json:"ip_acl_list_refs"`
@@ -76,6 +77,7 @@ type SecurityPolicySummary struct {
 	GeoIPCountries   string `json:"geoip_countries"`
 	GeoIPMode        string `json:"geoip_mode"`
 	WAFCheckResponse bool   `json:"waf_check_response"`
+	LogRequestBody   bool   `json:"log_request_body"`
 	IPACLListRefs    string `json:"ip_acl_list_refs"`
 	IPWhitelistRefs  string `json:"ip_whitelist_refs"`
 }
@@ -103,6 +105,7 @@ type CreateSecurityPolicyRequest struct {
 	GeoIPCountries     string `json:"geoip_countries"`
 	GeoIPMode          string `json:"geoip_mode"`
 	WAFCheckResponse   bool   `json:"waf_check_response"`
+	LogRequestBody     bool   `json:"log_request_body"`
 	IPACLListRefs      string `json:"ip_acl_list_refs"`
 	IPWhitelistRefs    string `json:"ip_whitelist_refs"`
 }
@@ -130,6 +133,7 @@ type UpdateSecurityPolicyRequest struct {
 	GeoIPCountries     *string `json:"geoip_countries"`
 	GeoIPMode          *string `json:"geoip_mode"`
 	WAFCheckResponse   *bool   `json:"waf_check_response"`
+	LogRequestBody     *bool   `json:"log_request_body"`
 	IPACLListRefs      *string `json:"ip_acl_list_refs"`
 	IPWhitelistRefs    *string `json:"ip_whitelist_refs"`
 }
@@ -150,6 +154,11 @@ type SecurityEvent struct {
 	AnomalyScore  int    `json:"anomaly_score"`
 	RuleName      string `json:"rule_name"`
 	PolicyName    string `json:"policy_name"`
+	// RequestHeaders：事件请求的完整头（JSON 文本，8KB 截断）——摄入恒落库；
+	// RequestBody：仅策略开 log_request_body 后有值（64KB 截断，非 UTF-8 转
+	// base64 并带标记前缀）。敏感头掩码是前端展示层姿态，库内为原文。
+	RequestHeaders string `json:"request_headers"`
+	RequestBody    string `json:"request_body"`
 }
 
 type SecurityOverview struct {

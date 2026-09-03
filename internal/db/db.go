@@ -525,11 +525,12 @@ func createTables() error {
 		updated_by INTEGER DEFAULT 0,
 		created_at DATETIME DEFAULT (datetime('now')),
 		updated_at DATETIME DEFAULT (datetime('now')),
-		geoip_countries TEXT DEFAULT '[]',
-		geoip_mode TEXT DEFAULT 'deny',
-		waf_check_response INTEGER DEFAULT 0,
-		ip_acl_list_refs TEXT DEFAULT '[]',
-		ip_whitelist_refs TEXT DEFAULT '[]'
+	geoip_countries TEXT DEFAULT '[]',
+	geoip_mode TEXT DEFAULT 'deny',
+	waf_check_response INTEGER DEFAULT 0,
+	log_request_body INTEGER DEFAULT 0,
+	ip_acl_list_refs TEXT DEFAULT '[]',
+	ip_whitelist_refs TEXT DEFAULT '[]'
 	);
 	CREATE TABLE IF NOT EXISTS security_policy_bindings (
 		rule_caddy_id TEXT NOT NULL,
@@ -782,6 +783,10 @@ func runMigrations() error {
 		"security_policies.geoip_mode":           "TEXT DEFAULT 'deny'",
 		"security_policies.waf_check_response":   "INTEGER DEFAULT 0",
 		"security_policies.block_status_code":    "INTEGER DEFAULT 0",
+		// 策略级「记录请求体」开关（v2.2.3）：开启后该策略 handler 的审计 parts
+		// 加 C，事件落 request_body（64KB 截断）。同口径刻意可空，读路径
+		// COALESCE(...,0) 归一。
+		"security_policies.log_request_body": "INTEGER DEFAULT 0",
 		// 可复用 IP 列表引用列（v2.3.0）：JSON 数组文本，存 security_ip_lists 的
 		// id 列表；同样刻意可空——读路径一律 COALESCE(...,'[]') 归一（同上四列口径）。
 		"security_policies.ip_acl_list_refs":  "TEXT DEFAULT '[]'",
