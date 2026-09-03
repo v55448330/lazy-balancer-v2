@@ -2528,6 +2528,7 @@ type securityPolicyDetail struct {
 	GeoIPCountries     string `json:"geoip_countries"`
 	GeoIPMode          string `json:"geoip_mode"`
 	WAFCheckResponse   bool   `json:"waf_check_response"`
+	LogRequestBody     bool   `json:"log_request_body"`
 	IPACLListRefs      string `json:"ip_acl_list_refs"`
 	IPWhitelistRefs    string `json:"ip_whitelist_refs"`
 }
@@ -2559,6 +2560,7 @@ func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 		GeoIPCountries:     rawJSONString(p.GeoIPCountries),
 		GeoIPMode:          p.GeoIPMode,
 		WAFCheckResponse:   p.WAFCheckResponse,
+		LogRequestBody:     p.LogRequestBody,
 		IPACLListRefs:      p.IPACLListRefs,
 		IPWhitelistRefs:    p.IPWhitelistRefs,
 	}
