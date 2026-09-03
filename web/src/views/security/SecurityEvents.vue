@@ -149,7 +149,9 @@
           type="warning"
           :closable="false"
           show-icon
-          title="当前 CRS 已无此规则（规则集更新后已移除，或索引加载失败），仍可将其加入排除"
+          :title="crsIndexReady
+            ? '此规则已从当前 CRS 移除，无法加入排除（存量排除条目仍生效）'
+            : '当前 CRS 索引加载失败，仍可将其加入排除'"
           style="margin-top: 12px"
         />
 
@@ -470,15 +472,16 @@ const loadCrsIpLists = async (seq: number): Promise<void> => {
     const lists = await fetchIpListOptions()
     if (seq !== crsDialogSeq) return
     crsIpLists.value = lists
+    // 列表已在别处删除时清理悬空选择——仅成功分支执行：瞬时失败（catch 置空
+    // 列表）时若照跑，会把仍存在的已选列表误判为悬空并抹掉。
+    if (crsIpListId.value !== undefined && !lists.some((l) => l.id === crsIpListId.value)) {
+      crsIpListId.value = undefined
+    }
   } catch {
     if (seq !== crsDialogSeq) return
     crsIpLists.value = []
   } finally {
     if (seq === crsDialogSeq) crsIpListLoading.value = false
-  }
-  // 列表已在别处删除时清理悬空选择，避免静默写往不存在的列表
-  if (crsIpListId.value !== undefined && !crsIpLists.value.some((l) => l.id === crsIpListId.value)) {
-    crsIpListId.value = undefined
   }
 }
 

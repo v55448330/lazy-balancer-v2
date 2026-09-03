@@ -1051,8 +1051,10 @@ const isEvalGroupExclusionTarget = (target: string): boolean => {
   }
   return false
 }
+// 仅 scope=all 的 949/959 排除使阈值拦截全局失效；scoped 排除只影响命中来源
+// IP，不配「全局失效」的无条件告警（审计 F-S2 口径）。
 const blockingEvalExclusionAlert = computed(
-  () => form.value.mode === 'blocking' && crsExcludedRows.value.some((row) => isEvalGroupExclusionTarget(row.target)),
+  () => form.value.mode === 'blocking' && crsExcludedRows.value.some((row) => row.scope === 'all' && isEvalGroupExclusionTarget(row.target)),
 )
 
 const crsGroupOptions = computed(() => {
@@ -1195,7 +1197,9 @@ const exclusionRowCurrentOptions = (row: CrsExcludedRow, rowIndex: number): CrsG
   ])
   if (rendered.has(v)) return []
   if (/^\d{2}$/.test(v)) {
-    const group = crsGroupOptions.value.find((o) => o.value === v)
+    // 排除侧合法可选 49/59（检测模式调优）——用排除口径的组选项源，否则
+    // 选 49/59 后查询不命中时 tag 退化为裸码。
+    const group = crsExclusionGroupOptions.value.find((o) => o.value === v)
     return group ? [{ value: v, label: group.label, title: group.label }] : []
   }
   const entry = crsIndexById.value.get(v)
@@ -1953,7 +1957,7 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
     // 审计 W-S5（第六轮）：性能提示应按实际生效的处理链计——禁用策略不产生处理链，
     // 计入会虚高（提示"超过 3 条可能影响性能"在不达 3 条时误报）。
     mergedCount: chain.filter((e) => e.enabled).length,
-    showPerfTip: chain.length > PERF_POLICY_THRESHOLD,
+    showPerfTip: chain.filter((e) => e.enabled).length > PERF_POLICY_THRESHOLD,
     hints: computeBindingConflicts(buildConflictChain(caddyId)),
   }
 }))
