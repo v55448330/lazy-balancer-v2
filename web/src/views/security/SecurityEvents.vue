@@ -98,6 +98,11 @@
             <span v-else>—</span>
           </template>
         </el-table-column>
+        <el-table-column label="操作" width="70" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" link type="primary" @click="openCtxDialog(row)">详情</el-button>
+          </template>
+        </el-table-column>
       </el-table>
 
       <div style="margin-top: 16px; display: flex; align-items: center;">
@@ -210,12 +215,73 @@
         <el-button @click="crsDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- 请求上下文详情：策略开启「记录请求体」后，命中规则事件携带的请求头/请求体。
+         请求头为 map[string][]string JSON 文本（多值以 ", " 连接；Cookie/Authorization/
+         Set-Cookie/Proxy-Authorization 值默认掩码，逐行眼睛图标点击显示）；合成键
+         _dropped 渲染为信息行而非头行。请求体按契约前缀解析：base64-truncated: →
+         base64: → 明文；明文尾部 \n...[TRUNCATED] 标记转为截断横幅；atob 解码失败
+         展示原始内容 + 错误说明。宽度/顶距与 crs-event-dialog 一致。 -->
+    <el-dialog v-model="ctxDialogVisible" title="请求上下文" width="min(760px, 94vw)" top="5vh" append-to-body class="ctx-event-dialog">
+      <template v-if="ctxEvent">
+        <el-descriptions :column="2" border size="small">
+          <el-descriptions-item label="方法">{{ ctxEvent.method || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="客户端 IP">{{ ctxEvent.client_ip || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="URI" :span="2">{{ ctxEvent.uri || '—' }}</el-descriptions-item>
+        </el-descriptions>
+
+        <div class="ctx-section-title">请求头</div>
+        <template v-if="ctxHeadersParsed.failed">
+          <el-alert type="error" :closable="false" show-icon title="请求头记录解析失败，以下为原始内容" class="ctx-banner" />
+          <pre class="ctx-body-pre">{{ ctxEvent.request_headers }}</pre>
+        </template>
+        <template v-else-if="ctxHeadersParsed.rows.length > 0 || ctxHeadersParsed.dropped > 0">
+          <div v-if="ctxHeadersParsed.dropped > 0" class="ctx-info-line">已隐藏 {{ ctxHeadersParsed.dropped }} 个头（请求头超出 8KB 采集上限）</div>
+          <el-table v-if="ctxHeadersParsed.rows.length > 0" :data="ctxHeadersParsed.rows" size="small" :max-height="260" :header-cell-style="{ background: '#f9fafb' }">
+            <el-table-column prop="name" label="名称" width="200" show-overflow-tooltip />
+            <el-table-column label="值" min-width="380">
+              <template #default="{ row }">
+                <div class="ctx-header-value-cell">
+                  <span class="ctx-header-value">{{ ctxHeaderDisplay(row) }}</span>
+                  <el-button
+                    v-if="row.sensitive"
+                    link
+                    type="primary"
+                    size="small"
+                    class="ctx-reveal-btn"
+                    :title="ctxRevealed.has(row.name.toLowerCase()) ? '点击隐藏' : '点击显示'"
+                    @click="toggleCtxReveal(row.name)"
+                  >
+                    <el-icon><Hide v-if="ctxRevealed.has(row.name.toLowerCase())" /><View v-else /></el-icon>
+                  </el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
+        <div v-else class="ctx-empty">暂无请求头记录</div>
+
+        <div class="ctx-section-title">请求体</div>
+        <template v-if="ctxBodyParsed.state === 'empty'">
+          <div class="ctx-empty">无请求体记录</div>
+        </template>
+        <template v-else>
+          <el-alert v-if="ctxBodyParsed.truncated" type="warning" :closable="false" show-icon title="请求体已截断，仅显示保留的前段内容" class="ctx-banner" />
+          <el-alert v-if="ctxBodyParsed.binary" type="info" :closable="false" show-icon title="请求体为二进制内容，已按 Base64 解码展示，可能包含不可读字符" class="ctx-banner" />
+          <el-alert v-if="ctxBodyParsed.state === 'error'" type="error" :closable="false" show-icon title="Base64 解码失败，以下为原始内容" class="ctx-banner" />
+          <pre class="ctx-body-pre">{{ ctxBodyParsed.text }}</pre>
+        </template>
+      </template>
+      <template #footer>
+        <el-button @click="ctxDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Refresh, Warning, ArrowRight } from '@element-plus/icons-vue'
+import { Refresh, Warning, ArrowRight, View, Hide } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import LogStorageBar from '@/components/LogStorageBar.vue'
@@ -229,7 +295,7 @@ import type { IpListOption } from '@/composables/useIpListAdd'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse } from '@/types'
 
-interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string; rule_name: string; policy_id: number; policy_name: string; client_ip: string; ip_location: string; method: string; uri: string; event_type: string; rule_triggered: string; rule_msg: string; action: string; anomaly_score: number }
+interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string; rule_name: string; policy_id: number; policy_name: string; client_ip: string; ip_location: string; method: string; uri: string; event_type: string; rule_triggered: string; rule_msg: string; action: string; anomaly_score: number; request_headers: string; request_body: string }
 
 // 触发规则 family 映射：'2'-'5' 与 '7'（允许模式预检拒绝，IP 白名单拒绝）为 IP 访问控制拦截，
 // '8' 为地域拦截，949 为异常评分评估拦截，920/921 为协议异常/攻击，其余为 CRS 规则 ID
@@ -483,6 +549,87 @@ const confirmCrsExclude = async (): Promise<void> => {
 
 const loading = ref(false)
 const events = ref<SecurityEvent[]>([])
+
+// —— 请求上下文详情弹框（策略「记录请求体」开启后事件携带 request_headers/request_body）——
+const ctxDialogVisible = ref(false)
+const ctxEvent = ref<SecurityEvent | null>(null)
+// 敏感头逐行显示状态（key = 小写头名）：默认掩码 ••••••，眼睛图标点击切换
+const ctxRevealed = ref<Set<string>>(new Set())
+
+const CTX_SENSITIVE_HEADERS = new Set(['cookie', 'authorization', 'set-cookie', 'proxy-authorization'])
+const CTX_TRUNCATED_SUFFIX = '\n...[TRUNCATED]'
+const CTX_B64_TRUNCATED_PREFIX = 'base64-truncated:'
+const CTX_B64_PREFIX = 'base64:'
+
+interface CtxHeaderRow { name: string; value: string; sensitive: boolean }
+interface CtxHeadersParsed { rows: CtxHeaderRow[]; dropped: number; failed: boolean }
+
+// 请求头解析："" → 空态；JSON.parse try/catch 防御（失败展示原始内容 + 错误说明）；
+// 合成键 _dropped: ["N"] 提取为信息行（N = 因 8KB 上限被丢弃的头数），不作为头行渲染；
+// 多值头以 ", " 连接
+const ctxHeadersParsed = computed<CtxHeadersParsed>(() => {
+  const raw = ctxEvent.value?.request_headers ?? ''
+  if (raw === '') return { rows: [], dropped: 0, failed: false }
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { rows: [], dropped: 0, failed: true }
+    const rows: CtxHeaderRow[] = []
+    let dropped = 0
+    for (const [name, values] of Object.entries(parsed as Record<string, unknown>)) {
+      const list = Array.isArray(values) ? values.map((v) => String(v)) : [String(values)]
+      if (name === '_dropped') {
+        const n = Number(list[0] ?? 0)
+        if (Number.isFinite(n) && n > 0) dropped = n
+        continue
+      }
+      rows.push({ name, value: list.join(', '), sensitive: CTX_SENSITIVE_HEADERS.has(name.toLowerCase()) })
+    }
+    return { rows, dropped, failed: false }
+  } catch {
+    return { rows: [], dropped: 0, failed: true }
+  }
+})
+
+interface CtxBodyParsed { state: 'empty' | 'ok' | 'error'; text: string; truncated: boolean; binary: boolean }
+
+// 请求体解析：前缀检查顺序 base64-truncated: → base64: → 明文；base64 系 atob 解码
+//（失败回退原始内容 + error 态）；明文以 \n...[TRUNCATED] 结尾时剥离标记转为截断横幅
+const ctxBodyParsed = computed<CtxBodyParsed>(() => {
+  const raw = ctxEvent.value?.request_body ?? ''
+  if (raw === '') return { state: 'empty', text: '', truncated: false, binary: false }
+  if (raw.startsWith(CTX_B64_TRUNCATED_PREFIX)) return decodeCtxBody(raw.slice(CTX_B64_TRUNCATED_PREFIX.length), true)
+  if (raw.startsWith(CTX_B64_PREFIX)) return decodeCtxBody(raw.slice(CTX_B64_PREFIX.length), false)
+  if (raw.endsWith(CTX_TRUNCATED_SUFFIX)) {
+    return { state: 'ok', text: raw.slice(0, -CTX_TRUNCATED_SUFFIX.length), truncated: true, binary: false }
+  }
+  return { state: 'ok', text: raw, truncated: false, binary: false }
+})
+
+const decodeCtxBody = (payload: string, truncated: boolean): CtxBodyParsed => {
+  try {
+    return { state: 'ok', text: atob(payload), truncated, binary: true }
+  } catch {
+    return { state: 'error', text: payload, truncated, binary: true }
+  }
+}
+
+const ctxHeaderDisplay = (row: CtxHeaderRow): string =>
+  row.sensitive && !ctxRevealed.value.has(row.name.toLowerCase()) ? '••••••' : row.value
+
+const toggleCtxReveal = (name: string): void => {
+  const key = name.toLowerCase()
+  const next = new Set(ctxRevealed.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  ctxRevealed.value = next
+}
+
+const openCtxDialog = (row: SecurityEvent): void => {
+  ctxEvent.value = row
+  ctxRevealed.value = new Set()
+  ctxDialogVisible.value = true
+}
+
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
@@ -574,6 +721,30 @@ onMounted(fetchEvents)
 /* 快捷排除行：radio 选项与确认按钮同一行并排，按钮贴右（窄屏放不下时换行） */
 .crs-exclude-submit { margin-left: auto; flex-shrink: 0; }
 .crs-ip-list-select { width: 240px; flex: 0 0 auto; }
+
+/* —— 请求上下文详情弹框 —— */
+.ctx-section-title { font-size: 13px; font-weight: 600; color: #374151; margin: 16px 0 8px; }
+.ctx-banner { margin-bottom: 8px; }
+.ctx-info-line { font-size: 12px; color: #9ca3af; line-height: 1.6; margin-bottom: 6px; }
+.ctx-empty { font-size: 12px; color: #9ca3af; padding: 4px 0 8px; }
+.ctx-header-value-cell { display: flex; align-items: center; gap: 6px; }
+.ctx-header-value { flex: 1; min-width: 0; word-break: break-all; font-family: monospace; font-size: 12px; }
+.ctx-reveal-btn { flex-shrink: 0; }
+/* 请求体滚动区：限高 320px 内部滚动，长行预格式换行 */
+.ctx-body-pre {
+  max-height: 320px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  background: #f9fafb;
+  border: 1px solid #ebeef5;
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin: 0;
+}
 </style>
 
 <style>
@@ -583,6 +754,6 @@ onMounted(fetchEvents)
   flex: 0 0 auto;
 }
 
-/* CRS 事件弹框：正文区自适应限高（top=5vh + 头/脚 ≈ 110px），源码展开时整体不超视口 */
-.crs-event-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
+/* CRS 事件弹框 / 请求上下文弹框：正文区自适应限高（top=5vh + 头/脚 ≈ 110px），内容多时整体不超视口 */
+.crs-event-dialog .el-dialog__body, .ctx-event-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
 </style>

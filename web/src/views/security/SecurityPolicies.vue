@@ -174,6 +174,7 @@
                 <el-option v-for="opt in crsGroupGhostOptions" :key="`ghost-${opt.value}`" :label="opt.label" :value="opt.value" :title="opt.title" />
               </el-select>
               <div class="form-tip-line">选择后仅加载所选规则组，留空加载全部 CRS 规则</div>
+              <div class="form-tip-line">初始化（901）与拦截评估（949/959）为系统基础规则，随策略自动加载</div>
               <!-- 跨策略 CRS 规则组重复实时警告（随当前选择重算）：置于表单项内控件列，
                    顺序 select → 说明 → 警告，与说明文字保持 6px 间距（见样式
                    .form-tip-line + .wizard-alert） -->
@@ -198,6 +199,18 @@
               <el-switch v-model="form.waf_check_response" :disabled="form.mode === 'off'" />
               <div class="form-tip-line">开启后 WAF 读取并检查上游响应内容（响应泄露类规则需要）；关闭可显著降低内存与 CPU 开销，大多数部署只需检查请求</div>
             </el-form-item>
+            <el-form-item label="记录请求体">
+              <el-switch v-model="form.log_request_body" :disabled="form.mode === 'off'" />
+              <div class="form-tip-line">开启后命中规则事件的请求头与请求体将记录到事件库，可在事件日志中查看详情</div>
+            </el-form-item>
+            <el-alert
+              v-if="form.log_request_body"
+              type="warning"
+              :closable="false"
+              show-icon
+              title="开启后命中规则事件的请求体将明文记录到事件库（单条上限 64KB），可能包含密码等敏感信息，请仅在排障期间开启"
+              style="margin-bottom: 12px"
+            />
             <el-form-item label="排除规则">
               <!-- 表格行编辑器：目标（与规则组同款混合下拉）× 作用域（全部 IP/指定 IP/地址
                    列表）× 条件控件（ip → 标签输入 + isValidCidr 即时拒绝；list → 引用
@@ -313,6 +326,14 @@
                 <div class="form-tip-line">排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP 或地址列表生效</div>
               </template>
             </el-form-item>
+            <el-alert
+              v-if="blockingEvalExclusionAlert"
+              type="warning"
+              :closable="false"
+              show-icon
+              title="排除评估规则（949/959）将使拦截模式的评分阈值拦截失效"
+              style="margin-bottom: 12px"
+            />
             <el-form-item label="自定义规则">
               <el-select v-model="selectedCustomRules" :disabled="form.mode === 'off'" multiple filterable placeholder="选择要包含的自定义规则" style="width: 100%">
                 <el-option v-for="rule in allCustomRules" :key="rule.id" :label="rule.name" :value="rule.id" />
@@ -690,7 +711,7 @@ import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRule
 import type { APIResponse, UserListItem } from '@/types'
 
 interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string }
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; waf_check_response?: boolean; log_request_body?: boolean }
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
 interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean; block_page_id?: number }
@@ -844,7 +865,7 @@ const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 const PICKER_PAGE_SIZE = 20
 
-const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny', waf_check_response: false })
+const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny', waf_check_response: false, log_request_body: false })
 const form = ref(defaultForm())
 const selectedCustomRules = ref<number[]>([])
 // action 用于多策略冲突检测（放行型 pass / 拦截型 block）；enabled 预留
@@ -915,16 +936,21 @@ const parseCustomRuleIds = (raw: string | undefined): number[] => {
   } catch { return [] }
 }
 
+// CRS 系统基础规则组（初始化 901 / 请求阻断评估 949 / 响应评估 959）：后端强制
+// 加载并在写入时从 crs_rule_groups 剥离——不提供选项，存量存储读回时同样剔除，
+// 避免渲染 ghost 标签与参与跨策略重复告警比较。
+const CRS_INFRA_GROUP_CODES = ['01', '49', '59']
+
 // CRS 规则组混合存储（两位组号 ∪ 6 位规则 ID）。组代码以后端 Include 的两位组代码
 // 归一（REQUEST-9<code>-*.conf → <code>，兼容历史完整文件名前缀）；6 位为单条规则 ID
-// 原样保留；其余形状丢弃。
+// 原样保留；系统基础组（CRS_INFRA_GROUP_CODES）与其余形状一并丢弃。
 const normalizeCrsGroups = (values: string[]): string[] => {
   const codes = values.map((value) => {
     if (/^\d{2}$/.test(value)) return value
     if (/^\d{6}$/.test(value)) return value
     const match = /^(?:REQUEST|RESPONSE)-9(\d{2})-/i.exec(value)
     return match?.[1] ?? ''
-  }).filter((code) => code !== '')
+  }).filter((code) => code !== '' && !CRS_INFRA_GROUP_CODES.includes(code))
   return [...new Set(codes)]
 }
 
@@ -976,12 +1002,35 @@ const crsGroupGhostOptions = computed<CrsGhostOption[]>(() =>
   crsRuleGroups.value.map(crsGhostOptionFor).filter((o): o is CrsGhostOption => o !== null))
 
 // crsResponsePhaseGroupCodes（R72 二十九次 L9）：响应阶段 CRS 类别两位代码
-//（950-956/959/980）——这些组仅在「检查响应体」开启时才被后端 Include
+//（950-956/980）——这些组仅在「检查响应体」开启时才被后端 Include
 //（security.go:169-177），否则静默 no-op。用于给选中响应组但开关关闭的用户
-// 一个针对性提示。
-const crsResponsePhaseGroupCodes = ['50', '51', '52', '53', '54', '55', '56', '59', '80']
+// 一个针对性提示。959 响应评估为系统基础组（随响应检查开启由后端强制加载，
+// 不再出现在可选组中），不在此列。
+const crsResponsePhaseGroupCodes = ['50', '51', '52', '53', '54', '55', '56', '80']
 const hasResponsePhaseGroupWithoutCheck = computed(
   () => form.value.mode !== 'off' && !form.value.waf_check_response && crsRuleGroups.value.some((g) => crsResponsePhaseGroupCodes.includes(g)),
+)
+
+// 拦截评估规则（949 请求阻断评估 / 959 响应评估）排除判定：拦截模式下这两组负责
+// 按异常阈值执行阻断，排除后阈值拦截失效。目标形态覆盖两位组号 49/59、949xxx/959xxx
+// 六位规则 ID、REQUEST-949-*/RESPONSE-959-* 文件名，以及与 949000-949999 /
+// 959000-959999 相交的区间遗留形态。
+const isEvalGroupExclusionTarget = (target: string): boolean => {
+  const t = target.trim()
+  if (t === '') return false
+  if (/^\d{2}$/.test(t)) return t === '49' || t === '59'
+  if (/^\d{6}$/.test(t)) return t.startsWith('949') || t.startsWith('959')
+  if (/^(?:REQUEST|RESPONSE)-9(?:49|59)-/i.test(t)) return true
+  const rangeMatch = /^(\d{6})\s*[-:]\s*(\d{6})$/.exec(t)
+  if (rangeMatch) {
+    const lo = Number(rangeMatch[1])
+    const hi = Number(rangeMatch[2])
+    return (lo <= 949999 && hi >= 949000) || (lo <= 959999 && hi >= 959000)
+  }
+  return false
+}
+const blockingEvalExclusionAlert = computed(
+  () => form.value.mode === 'blocking' && crsExcludedRows.value.some((row) => isEvalGroupExclusionTarget(row.target)),
 )
 
 const crsGroupOptions = computed(() => {
@@ -989,7 +1038,8 @@ const crsGroupOptions = computed(() => {
   for (const rule of crsRuleOptions.value) {
     const match = /^(?:REQUEST|RESPONSE)-9(\d{2})-/i.exec(rule.filename)
     const code = match?.[1]
-    if (!code || seen.has(code)) continue
+    // 系统基础组（01/49/59）不提供选择——后端强制加载
+    if (!code || seen.has(code) || CRS_INFRA_GROUP_CODES.includes(code)) continue
     seen.set(code, `${crsOptionPhase(rule.filename)} · 9${code} · ${rule.category}`)
   }
   return [...seen.entries()].map(([value, label]) => ({ value, label }))
@@ -1853,6 +1903,7 @@ async function openDialog(row?: PolicySummary) {
         geoip_enabled: false,
         geoip_mode: d.geoip_mode || 'deny',
         waf_check_response: d.waf_check_response ?? false,
+        log_request_body: d.log_request_body ?? false,
     }
     ipACLList.value = parseJsonList(d.ip_acl_list)
     ipWhitelist.value = parseJsonList(d.ip_whitelist)
@@ -1996,6 +2047,7 @@ const handleSave = async () => {
       geoip_countries: JSON.stringify(geoipCountries.value),
       geoip_mode: form.value.geoip_enabled ? (form.value.geoip_mode === 'off' ? 'deny' : form.value.geoip_mode) : 'off',
       waf_check_response: form.value.waf_check_response,
+      log_request_body: form.value.log_request_body,
     }
     let saveRes: APIResponse<{ id: number }> | undefined
     if (editingId.value) {
