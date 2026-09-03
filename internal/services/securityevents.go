@@ -355,15 +355,16 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	// 「rule_triggered 属于哪个策略」判定；仅加载启用策略（disabled 策略不应再
 	// 接收事件归因）。
 	policyByID := make(map[int]*models.SecurityPolicy)
-	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'') FROM security_policies WHERE enabled=1`)
+	polRows, err := db.DB.Query(`SELECT id, COALESCE(name,''), COALESCE(custom_rules,'[]'), COALESCE(crs_rule_groups,'[]'), COALESCE(ip_blacklist,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]'), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,''), COALESCE(waf_check_response,0) FROM security_policies WHERE enabled=1`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load policies: %w", err)
 	}
 	defer polRows.Close()
+	var policies []*models.SecurityPolicy
 	for polRows.Next() {
 		p := &models.SecurityPolicy{}
 		var customJSON, crsJSON, blacklistJSON, geoipJSON string
-		if err := polRows.Scan(&p.ID, &p.Name, &customJSON, &crsJSON, &blacklistJSON, &p.IPACLEnabled, &p.IPACLMode, &p.IPACLList, &geoipJSON, &p.GeoIPMode); err != nil {
+		if err := polRows.Scan(&p.ID, &p.Name, &customJSON, &crsJSON, &blacklistJSON, &p.IPACLEnabled, &p.IPACLMode, &p.IPACLList, &p.IPACLListRefs, &geoipJSON, &p.GeoIPMode, &p.WAFCheckResponse); err != nil {
 			return nil, nil, nil, fmt.Errorf("security events: scan policy: %w", err)
 		}
 		p.CustomRules = json.RawMessage(customJSON)
@@ -371,7 +372,12 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 		p.CRSRuleGroups = json.RawMessage(crsJSON)
 		p.IPBlacklist = json.RawMessage(blacklistJSON)
 		policyByID[p.ID] = p
+		policies = append(policies, p)
 	}
+	// deny 归因需要 refs 合并集（inline ∪ ip_acl_list_refs 解析集）——不解析则
+	// refs-only deny 策略无法认领自己的 id:2 事件（MergedACLList 恒空，回退
+	// inline 判定失败，事件错挂到绑定顺序首条启用策略）。
+	resolvePolicyIPListRefs(policies, nil)
 	if err := polRows.Err(); err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: iterate policies: %w", err)
 	}
@@ -438,6 +444,21 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 		// 六位正选归因，未命中时回落既有组号归因（空组=全部 CRS）。
 		// 第五轮的本分支在组号分支（:371）之前且直接 return false，使后者成为
 		// 死代码——用两位组号（常规配置）的策略其 CRS 事件归因失效。
+		// A1-S6：mode=off 不发射任何 CRS（engine 分支不成立或零 Include），
+		// 不得认领 CRS 事件（与 GeoIP 分支的 off 门同口径）。
+		if policy.Mode == "off" {
+			return false
+		}
+		// A1-I2：949 评估规则自 v2.2.3 起对全部启用 WAF 的策略强制包含（F0
+		// 基础设施去重强制 Include），959 对开启响应检查的策略强制包含——均与
+		// 存储的 crs_rule_groups 无关（写入面已剥离 49/59 组号，组号匹配恒
+		// false），须按各自发射门先行放行。
+		if strings.HasPrefix(ruleTriggered, "949") {
+			return true
+		}
+		if strings.HasPrefix(ruleTriggered, "959") {
+			return policy.WAFCheckResponse
+		}
 		var groups []string
 		if err := json.Unmarshal(policy.CRSRuleGroups, &groups); err != nil {
 			return false
