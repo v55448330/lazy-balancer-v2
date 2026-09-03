@@ -77,6 +77,13 @@ func (h *GeoIPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next ca
 	}
 	if h.searcher != nil {
 		h.setGeoIPPlaceholders(r)
+	} else {
+		// xdb 缺失/损坏（Provision 降级 pass-through）：coraza 的地域规则读
+		// REQUEST_HEADERS:X-GeoIP-Loc，缺失变量在 coraza 连取反算子都不产生
+		// 匹配（rule.go evaluate 按值循环）——不置哨兵则 deny/allow 两模式的
+		// id:8 恒不命中，地域拦截静默 fail-open。与查询失败同口径发「海外」，
+		// 恢复文档化 fail-closed 语义。
+		r.Header.Set("X-GeoIP-Loc", "海外")
 	}
 	return next.ServeHTTP(w, r)
 }

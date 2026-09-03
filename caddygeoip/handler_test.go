@@ -144,10 +144,11 @@ func geoipTestNext(t *testing.T, captured **http.Request) caddyhttp.HandlerFunc 
 	})
 }
 
-// TestServeHTTP_stripsSpoofedGeoIPHeaders_evenWithoutXdb：防伪造——客户端
-// 伪造的 X-GeoIP-* 头必须在入口剥除，即使 xdb 缺失（searcher nil、不设置
-// 任何头）也不得残留给下游 coraza（伪造 X-GeoIP-Loc 可绕过 allow 模式地域
-// 拦截或制造误拦）。
+// TestServeHTTP_stripsSpoofedGeoIPHeaders_evenWithoutXdb：防伪造+fail-closed——客户端
+// 伪造的 X-GeoIP-* 头必须在入口剥除（伪造 X-GeoIP-Loc 可绕过 allow 模式地域
+// 拦截或制造误拦）；xdb 缺失（searcher nil）时伪造值不得残留，且 X-GeoIP-Loc
+// 由「海外」哨兵覆盖——缺失变量会让 coraza 地域规则恒不命中（fail-open），
+// 哨兵恢复 deny/allow 两模式的 fail-closed 语义。
 func TestServeHTTP_stripsSpoofedGeoIPHeaders_evenWithoutXdb(t *testing.T) {
 	h := &GeoIPHandler{XdbPath: filepath.Join(t.TempDir(), "missing.xdb")}
 	if err := h.Provision(caddy.Context{Context: context.Background()}); err != nil {
@@ -178,7 +179,13 @@ func TestServeHTTP_stripsSpoofedGeoIPHeaders_evenWithoutXdb(t *testing.T) {
 	if err := h.ServeHTTP(httptest.NewRecorder(), req, geoipTestNext(t, &downstream)); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
+	if got := downstream.Header.Get("X-GeoIP-Loc"); got != "海外" {
+		t.Fatalf("X-GeoIP-Loc must be the fail-closed sentinel 海外 (not the spoofed value), got %q", got)
+	}
 	for _, name := range geoipCorazaHeaders {
+		if name == "X-GeoIP-Loc" {
+			continue
+		}
 		if got := downstream.Header.Get(name); got != "" {
 			t.Fatalf("spoofed header %s must be stripped without an xdb, got %q", name, got)
 		}
