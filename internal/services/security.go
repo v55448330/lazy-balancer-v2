@@ -25,10 +25,10 @@ func scanSecurityPolicyByID(policyID int) *models.SecurityPolicy {
 	var p models.SecurityPolicy
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
 	err := db.DB.QueryRow(`SELECT id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
-		COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]')
+		COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]')
 		FROM security_policies WHERE id=? AND enabled=1`, policyID).
 		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
-			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.IPACLListRefs, &p.IPWhitelistRefs)
+			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs)
 	if err != nil {
 		return nil
 	}
@@ -207,10 +207,22 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 	sb.WriteString("SecRequestBodyAccess On\n")
 	if p.WAFCheckResponse {
 		sb.WriteString("SecResponseBodyAccess On\n")
+		// SecResponseBodyMimeType 必须显式发射：coraza 的 ResponseBodyMimeTypes
+		// 零值是空集（不像 ModSecurity 有 text/plain|html|xml 默认），不发射则
+		// IsResponseBodyProcessable 恒 false、响应体永不进规则——响应检查空转。
+		// 在 ModSecurity 默认三类之上补 application/json（API 错误泄漏的现代形态）。
+		sb.WriteString("SecResponseBodyMimeType text/plain text/html text/xml application/json\n")
 	} else {
 		sb.WriteString("SecResponseBodyAccess Off\n")
 	}
-	sb.WriteString("SecAuditEngine RelevantOnly\nSecAuditLog /app/waf/audit/audit.log\nSecAuditLogFormat JSON\nSecAuditLogParts ABIJDEFHKZ\n")
+	// F2（v2.2.3）：策略级「记录请求体」开关——开启时审计 parts 加 C，coraza
+	// 在事件事务（RelevantOnly 门控）输出 transaction.request.body，摄入落库
+	// request_body（64KB 截断）。body access 恒 On 不变，仅审计输出面扩展。
+	auditParts := "ABIJDEFHKZ"
+	if p.LogRequestBody {
+		auditParts = "ABCIJDEFHKZ"
+	}
+	sb.WriteString(fmt.Sprintf("SecAuditEngine RelevantOnly\nSecAuditLog /app/waf/audit/audit.log\nSecAuditLogFormat JSON\nSecAuditLogParts %s\n", auditParts))
 
 	// SecRule id map: 2 = ACL allow/deny, 3 = bypass-mode (legacy), 4 = legacy
 	// blacklist, 5 = trust list, 8 = GeoIP 地域拦截. The trust list keeps the
@@ -318,7 +330,27 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 				sb.WriteString("Include /app/waf/crs/rules/REQUEST-*.conf\n")
 			}
 		} else {
+			// 基础设施组强制包含（去重，F0）：901 提供偏执级默认值与评分初始化——
+			// 缺失时偏执级守卫把未初始化变量按 0 处理、整段 skipAfter，策略空转
+			// 且 980099 每事务打 ERROR；949/959 是评分阈值拦截的唯一执行者——缺失
+			// 时拦截模式静默退化为仅记录。两者均属静默失效，不开放用户配置
+			//（写入层剥离 + 交互层隐藏，此处为最终兜底）。去重判定覆盖两位组号与
+			// 6 位 ID 的父文件，避免重复注册同规则 ID 触发 coraza 编译失败。
+			// 序：901 必须先于被选组注册（phase:1 默认值），949/959 必须在检测
+			// 规则之后（插入序=执行序）。
+			covered := crsCoveredInfraGroupCodes(groups)
+			if _, ok := covered["01"]; !ok {
+				sb.WriteString("Include /app/waf/crs/rules/REQUEST-901-INITIALIZATION.conf\n")
+			}
 			emitCRSRuleGroupSelection(&sb, p, groups)
+			if _, ok := covered["49"]; !ok {
+				sb.WriteString("Include /app/waf/crs/rules/REQUEST-949-BLOCKING-EVALUATION.conf\n")
+			}
+			if p.WAFCheckResponse {
+				if _, ok := covered["59"]; !ok {
+					sb.WriteString("Include /app/waf/crs/rules/RESPONSE-959-BLOCKING-EVALUATION.conf\n")
+				}
+			}
 		}
 		// 配置期 SecRuleRemoveById：Include 之后（此时 CRS 规则已注册，
 		// DeleteByID 能命中；发射前的形态门注释见 scopeAllTargets 收集段）
@@ -1078,6 +1110,86 @@ func expandCRSScopedExclusionTargets(target string, index *CRSRuleIndex, p *mode
 // crsFileGroupPattern 从 CRS 规则文件名提取两位组号（REQUEST-942-…/RESPONSE-951-…
 // → "42"/"51"）；不匹配常见形态时返回空串（永不命中任何已选组 → 走父文件补删）。
 var crsFileGroupPattern = regexp.MustCompile(`^(?:REQUEST|RESPONSE)-9([0-9]{2})-`)
+
+// crsInfraGroupCodes 基础设施组：901 初始化（偏执级默认值/评分初始化）、
+// 949 请求评估、959 响应评估。缺失任一都会静默失效（守卫按 0 跳过/拦截退化），
+// 因此对用户配置面隐藏、写入面剥离、发射面强制包含。
+var crsInfraGroupCodes = map[string]struct{}{"01": {}, "49": {}, "59": {}}
+
+// IsCRSInfraGroupCode 报告两位组号是否基础设施组。
+func IsCRSInfraGroupCode(code string) bool {
+	_, ok := crsInfraGroupCodes[code]
+	return ok
+}
+
+// IsCRSInfraRuleID 报告 6 位规则 ID 是否落在基础设施组的 ID 区间
+// （901000-901999 / 949000-949999 / 959000-959999）。写入面据此剥离——
+// 单选基础设施文件内的个别规则是无意义配置（缺省值/评估需整文件在场）。
+func IsCRSInfraRuleID(id string) bool {
+	if !IsCRSRuleIDTarget(id) {
+		return false
+	}
+	return strings.HasPrefix(id, "901") || strings.HasPrefix(id, "949") || strings.HasPrefix(id, "959")
+}
+
+// CRSExclusionTargetRemovesInit 报告排除目标与初始化组（901000-901999）是否
+// 相交：组号 "01"、组内规则 ID、REQUEST-901-*.conf 文件名、或与之相交的数字
+// 区间（含跨界区间如 900500-902000）。排除初始化规则无合法用途——偏执级默认
+// 值与评分初始化缺失会让守卫按 0 处理整段跳过、策略静默空转，写入面据此拒绝。
+func CRSExclusionTargetRemovesInit(target string) bool {
+	target = strings.TrimSpace(target)
+	if IsCRSGroupCode(target) {
+		return target == "01"
+	}
+	if IsCRSRuleIDTarget(target) {
+		return strings.HasPrefix(target, "901")
+	}
+	mapped := crsFilenameToRuleIDRange(target)
+	lo, hi, ok := crsNumericIDRange(mapped)
+	if !ok {
+		return false
+	}
+	return lo <= 901999 && hi >= 901000
+}
+
+func crsNumericIDRange(s string) (int, int, bool) {
+	loStr, hiStr, hasDash := strings.Cut(s, "-")
+	lo, err := strconv.Atoi(loStr)
+	if err != nil {
+		return 0, 0, false
+	}
+	hi := lo
+	if hasDash {
+		if hi, err = strconv.Atoi(hiStr); err != nil {
+			return 0, 0, false
+		}
+	}
+	return lo, hi, true
+}
+
+// crsCoveredInfraGroupCodes 计算混合选择已覆盖的组号集合：两位组号直接计入；
+// 6 位 ID 条目经索引定位父文件后其父文件组号同样计入（emitCRSRuleGroupSelection
+// 会 Include 该父文件）。陈旧 ID（索引不存在）与 emit 同口径跳过。
+func crsCoveredInfraGroupCodes(groups []string) map[string]struct{} {
+	covered := make(map[string]struct{}, len(groups))
+	var index *CRSRuleIndex
+	for _, g := range groups {
+		g = strings.TrimSpace(g)
+		if IsCRSRuleIDTarget(g) {
+			if index == nil {
+				index = GetCRSRuleIndex()
+			}
+			if entry := index.Find(g); entry != nil {
+				if m := crsFileGroupPattern.FindStringSubmatch(entry.File); m != nil {
+					covered[m[1]] = struct{}{}
+				}
+			}
+			continue
+		}
+		covered[g] = struct{}{}
+	}
+	return covered
+}
 
 // emitCRSRuleGroupSelection 发射 crs_rule_groups 混合选择：两位组号条目走现状
 // Include glob 路径（逐条、trim 后拼接，含 WAFCheckResponse 的 RESPONSE 侧）；

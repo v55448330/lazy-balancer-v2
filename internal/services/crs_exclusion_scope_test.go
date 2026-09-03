@@ -235,9 +235,63 @@ func TestBuildCorazaDirectives_hybridRuleGroupsStaleIDSkipped(t *testing.T) {
 		t.Fatalf("stale group ID must be skipped:\n%s", directives)
 	}
 	for _, line := range strings.Split(directives, "\n") {
-		if strings.HasPrefix(line, "Include /app/waf/crs/rules/") {
-			t.Fatalf("stale-only selection must not include any rules file: %q", line)
+		if !strings.HasPrefix(line, "Include /app/waf/crs/rules/") {
+			continue
 		}
+		// F0：基础设施组（901 初始化/949 评估）强制包含与选组内容无关，放行；
+		// 陈旧 ID 不得携带任何攻击组文件进场。
+		if strings.Contains(line, "REQUEST-901-INITIALIZATION.conf") || strings.Contains(line, "REQUEST-949-BLOCKING-EVALUATION.conf") {
+			continue
+		}
+		t.Fatalf("stale-only selection must not include any attack-group rules file: %q", line)
+	}
+}
+
+// F0：选组策略的基础设施组强制包含——未选 01/49/59 时 901 先于被选组、949 殿后
+// （响应检查开再加 959）；已选时不重复 Include（重复注册同规则 ID 会编译失败）；
+// glob 路径（空选组）不受影响（由 emptyGroups 等价语义测试锁定）。
+func TestBuildCorazaDirectives_infraGroupsForceIncluded(t *testing.T) {
+	scopedExclusionFixture(t)
+	policy := &models.SecurityPolicy{
+		Mode:          "blocking",
+		CRSRuleGroups: json.RawMessage(`["42"]`),
+	}
+	directives := BuildCorazaDirectives(policy, nil)
+	idx901 := strings.Index(directives, "Include /app/waf/crs/rules/REQUEST-901-INITIALIZATION.conf")
+	idx942 := strings.Index(directives, "Include /app/waf/crs/rules/REQUEST-942-")
+	idx949 := strings.Index(directives, "Include /app/waf/crs/rules/REQUEST-949-BLOCKING-EVALUATION.conf")
+	if idx901 < 0 || idx942 < 0 || idx949 < 0 {
+		t.Fatalf("infra includes missing (901=%d 942=%d 949=%d):\n%s", idx901, idx942, idx949, directives)
+	}
+	if !(idx901 < idx942 && idx942 < idx949) {
+		t.Fatalf("include order must be 901 → selected groups → 949:\n%s", directives)
+	}
+	if strings.Contains(directives, "RESPONSE-959-BLOCKING-EVALUATION.conf") {
+		t.Fatalf("959 must not be included without WAFCheckResponse:\n%s", directives)
+	}
+
+	// 响应检查开启 → 959 殿后；已选 01/49/59 组号 → 组 glob 各出现一次、精确文件
+	// 名的强制 Include 不再追加（组 glob 已覆盖，重复注册同规则 ID 会编译失败）
+	policy.WAFCheckResponse = true
+	policy.CRSRuleGroups = json.RawMessage(`["01","42","49","59","80"]`)
+	directives = BuildCorazaDirectives(policy, nil)
+	for glob, exact := range map[string]string{
+		"REQUEST-901-*.conf":  "REQUEST-901-INITIALIZATION.conf",
+		"REQUEST-949-*.conf":  "REQUEST-949-BLOCKING-EVALUATION.conf",
+		"RESPONSE-959-*.conf": "RESPONSE-959-BLOCKING-EVALUATION.conf",
+	} {
+		if got := strings.Count(directives, "Include /app/waf/crs/rules/"+glob); got != 1 {
+			t.Fatalf("%s included %d times, want exactly 1 (group glob):\n%s", glob, got, directives)
+		}
+		if strings.Contains(directives, "Include /app/waf/crs/rules/"+exact) {
+			t.Fatalf("%s must not be force-included when its group is already selected:\n%s", exact, directives)
+		}
+	}
+	// 6 位基础设施 ID 命中父文件覆盖判定 → 同样零重复（ID 路径会 Include 父文件）
+	policy.CRSRuleGroups = json.RawMessage(`["42","949110"]`)
+	directives = BuildCorazaDirectives(policy, nil)
+	if got := strings.Count(directives, "Include /app/waf/crs/rules/REQUEST-949-BLOCKING-EVALUATION.conf"); got != 1 {
+		t.Fatalf("949 included %d times via ID-parent coverage, want exactly 1:\n%s", got, directives)
 	}
 }
 
@@ -296,5 +350,19 @@ func TestCRSExcludedEntry_IPsDualShapeRoundTrip(t *testing.T) {
 	}
 	if strForm.IPs != "1.2.3.4" {
 		t.Fatalf("string form ips=%q", strForm.IPs)
+	}
+}
+
+// F0-mime：响应检查开启时强制发射 SecResponseBodyMimeType（coraza 零值=空集=
+// 响应体永不进规则），关闭时不得出现（避免无谓的响应体缓冲）。
+func TestBuildCorazaDirectives_responseBodyMimeTypeEmitted(t *testing.T) {
+	scopedExclusionFixture(t)
+	on := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "detection", WAFCheckResponse: true, CRSRuleGroups: json.RawMessage(`["51"]`)}, nil)
+	if !strings.Contains(on, "SecResponseBodyMimeType text/plain text/html text/xml application/json") {
+		t.Fatalf("WAFCheckResponse on must emit SecResponseBodyMimeType:\n%s", on)
+	}
+	off := BuildCorazaDirectives(&models.SecurityPolicy{Mode: "detection", CRSRuleGroups: json.RawMessage(`["42"]`)}, nil)
+	if strings.Contains(off, "SecResponseBodyMimeType") {
+		t.Fatalf("WAFCheckResponse off must not emit SecResponseBodyMimeType:\n%s", off)
 	}
 }
