@@ -10,7 +10,7 @@ RUN xcaddy build v2.11.4 \
   --with github.com/mholt/caddy-l4@v0.1.2 \
   --with github.com/caddyserver/transform-encoder@ba4124974830222da7f12a091cf11ddf4d49363f \
   --with github.com/mholt/caddy-ratelimit@v0.1.0 \
-  --with github.com/corazawaf/coraza-caddy/v2@v2.5.0 \
+  --with github.com/corazawaf/coraza-caddy/v2@v2.6.0 \
   --with lazy-balancer-v2/caddygeoip=./caddygeoip \
   --with lazy-balancer-v2/caddydeps=./caddydeps
 # 构建期断言：镜像扫描要求的最低依赖版本未被 MVS 抬升到位则直接失败
