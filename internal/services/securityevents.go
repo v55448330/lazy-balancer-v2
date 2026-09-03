@@ -6,6 +6,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,9 +15,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -37,14 +40,19 @@ type securityEventRecord struct {
 	TransactionID string
 	EventTime     string
 	Host          string
-	ClientIP      string
-	Method        string
-	URI           string
-	EventType     string
-	RuleTriggered string
-	RuleMsg       string
-	Action        string
-	AnomalyScore  int
+	// AttributionRuleID 是链首注入的 X-LB-Rule-ID 请求头值（F3）：规则归因的
+	// 一等信号，优先于 host 反查；注入头缺失/指向已删除规则时回退 host 映射。
+	AttributionRuleID string
+	ClientIP          string
+	Method            string
+	URI               string
+	EventType         string
+	RuleTriggered     string
+	RuleMsg           string
+	Action            string
+	AnomalyScore      int
+	RequestHeaders    string
+	RequestBody       string
 }
 
 // securityEventsAuditMessage 是一条审计消息：message 为宏展开后的规则 msg，
@@ -71,6 +79,9 @@ type securityEventsAuditTransaction struct {
 			Method  string              `json:"method"`
 			URI     string              `json:"uri"`
 			Headers map[string][]string `json:"headers"`
+			// Body 仅当策略 handler 的 SecAuditLogParts 含 C（策略开
+			// log_request_body）时由 coraza 输出；其余事务为零值空串。
+			Body string `json:"body"`
 		} `json:"request"`
 		IsInterrupted bool `json:"is_interrupted"`
 	} `json:"transaction"`
@@ -146,6 +157,9 @@ func securityEventsParseTransaction(raw json.RawMessage) (*securityEventRecord, 
 		EventType:     "waf",
 		Action:        "logged",
 	}
+	rec.AttributionRuleID = securityEventsFirstHeader(tx.Request.Headers, "x-lb-rule-id")
+	rec.RequestHeaders = securityEventsSerializeHeaders(tx.Request.Headers)
+	rec.RequestBody = securityEventsEncodeBody(tx.Request.Body)
 	if tx.IsInterrupted {
 		rec.Action = "blocked"
 	}
@@ -192,6 +206,90 @@ func securityEventsHostWithoutPort(hostport string) string {
 		return host
 	}
 	return hostport
+}
+
+const (
+	securityEventsHeadersCap = 8192
+	securityEventsBodyCap    = 65536
+)
+
+// securityEventsSerializeHeaders 落库事件请求头：JSON 文本，8KB 上限——超限按
+// 值体积从大到小逐条丢弃，并以 _dropped 键记录丢弃条数（始终保持合法 JSON，
+// 前端无需容错解析）。头名/值原文保留，敏感值掩码是展示层姿态。
+func securityEventsSerializeHeaders(headers map[string][]string) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(headers)
+	if err != nil {
+		return ""
+	}
+	if len(raw) <= securityEventsHeadersCap {
+		return string(raw)
+	}
+	trimmed := make(map[string][]string, len(headers)+1)
+	for k, v := range headers {
+		trimmed[k] = v
+	}
+	keys := make([]string, 0, len(trimmed))
+	for k := range trimmed {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return securityEventsHeaderValueSize(trimmed[keys[i]]) > securityEventsHeaderValueSize(trimmed[keys[j]])
+	})
+	dropped := 0
+	for _, k := range keys {
+		delete(trimmed, k)
+		dropped++
+		trimmed["_dropped"] = []string{strconv.Itoa(dropped)}
+		raw, err = json.Marshal(trimmed)
+		if err != nil {
+			return ""
+		}
+		if len(raw) <= securityEventsHeadersCap {
+			break
+		}
+	}
+	return string(raw)
+}
+
+func securityEventsHeaderValueSize(values []string) int {
+	n := 0
+	for _, v := range values {
+		n += len(v)
+	}
+	return n
+}
+
+// securityEventsEncodeBody 落库事件请求体：64KB 上限。UTF-8 文本原样存储，
+// 超限截到符文边界（不劈开多字节字符）并追加 \n...[TRUNCATED]；二进制整体
+// base64 并加 base64: 前缀，超限只编码前 64KB 原始字节、前缀改为
+// base64-truncated:。空体存空串。
+func securityEventsEncodeBody(body string) string {
+	if body == "" {
+		return ""
+	}
+	if utf8.ValidString(body) {
+		if len(body) <= securityEventsBodyCap {
+			return body
+		}
+		cut := securityEventsBodyCap
+		for cut > 0 && !utf8.RuneStart(body[cut]) {
+			cut--
+		}
+		return body[:cut] + "\n...[TRUNCATED]"
+	}
+	raw := body
+	truncated := false
+	if len(body) > securityEventsBodyCap {
+		raw = body[:securityEventsBodyCap]
+		truncated = true
+	}
+	if truncated {
+		return "base64-truncated:" + base64.StdEncoding.EncodeToString([]byte(raw))
+	}
+	return "base64:" + base64.StdEncoding.EncodeToString([]byte(raw))
 }
 
 // securityEventsRuleRef is an lb_rules identity resolved for one event:
@@ -638,6 +736,12 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 	// 每个 pass 开始时重置停摆偏移：只有本 pass 实际 F1 停摆才会重新赋值，
 	// 避免同偏移的新停摆被上一轮 warn 的限流状态吞掉（R33 F2）。
 	t.failOffset = -1
+	// F3：每 pass 一次从 host→ref 派生 caddy_id→ref 索引，供 X-LB-Rule-ID
+	// 注入头优先归因（O(规则数) 一次性，避免逐事件反查）。
+	rulesByID := make(map[string]securityEventsRuleRef, len(rules))
+	for _, ref := range rules {
+		rulesByID[ref.caddyID] = ref
+	}
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return offset, fmt.Errorf("security events: seek audit log: %w", err)
 	}
@@ -647,8 +751,8 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 		return offset, fmt.Errorf("security events: begin insert transaction: %w", err)
 	}
 	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO security_events
-		(event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, anomaly_score, rule_name, policy_name, transaction_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		(event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, anomaly_score, rule_name, policy_name, transaction_id, request_headers, request_body)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		tx.Rollback()
 		return committedOffset, fmt.Errorf("security events: prepare insert: %w", err)
@@ -748,11 +852,17 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 			}
 			Logf(level, "security events ingestion: skipping malformed transaction id=%s: %v", securityEventsTransactionID(raw), perr)
 		} else {
-			rule := securityEventsMapHost(rec.Host, rules)
+			rule := securityEventsRuleRef{}
+			if rec.AttributionRuleID != "" {
+				rule = rulesByID[rec.AttributionRuleID]
+			}
+			if rule.caddyID == "" {
+				rule = securityEventsMapHost(rec.Host, rules)
+			}
 			policyID, policyName := securityEventsAttributePolicy(rule.caddyID, rec.RuleTriggered, policyByID, bindings)
 			if _, ierr := stmt.Exec(rec.EventTime, rule.caddyID, policyID, rec.ClientIP, rec.Method, rec.URI,
 				rec.EventType, rec.RuleTriggered, rec.RuleMsg, rec.Action, rec.AnomalyScore,
-				rule.name, policyName, rec.TransactionID); ierr != nil {
+				rule.name, policyName, rec.TransactionID, rec.RequestHeaders, rec.RequestBody); ierr != nil {
 				_ = stmt.Close()
 				_ = tx.Rollback()
 				return committedOffset, fmt.Errorf("security events: insert event: %w", ierr)
@@ -769,8 +879,8 @@ func (t *securityEventsTailer) securityEventsProcessPass(f *os.File, offset int6
 					return committedOffset, fmt.Errorf("security events: begin batch transaction: %w", err)
 				}
 				stmt, err = tx.Prepare(`INSERT OR IGNORE INTO security_events
-					(event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, anomaly_score, rule_name, policy_name, transaction_id)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+				(event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, anomaly_score, rule_name, policy_name, transaction_id, request_headers, request_body)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 				if err != nil {
 					tx.Rollback()
 					return committedOffset, fmt.Errorf("security events: prepare batch insert: %w", err)

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -2300,5 +2302,131 @@ func TestSecurityEventsAttribution_GeoIPOwnerPicksGeoIPCarryingPolicy(t *testing
 	}
 	if pid != 3 || pname != "policy-B" {
 		t.Fatalf("attribution=(%d,%q), want (3,policy-B) — GeoIP 事件必须归因到携带 geoip 条目的策略", pid, pname)
+	}
+}
+
+func TestSecurityEventsSerializeHeaders_underCapKeepsExactJSON(t *testing.T) {
+	headers := map[string][]string{
+		"Host":       {"quanyi-order.go029.com"},
+		"User-Agent": {"curl/8.0"},
+	}
+	got := securityEventsSerializeHeaders(headers)
+	var roundTrip map[string][]string
+	if err := json.Unmarshal([]byte(got), &roundTrip); err != nil {
+		t.Fatalf("serialized headers must stay valid JSON: %v", err)
+	}
+	if len(roundTrip) != 2 || roundTrip["Host"][0] != "quanyi-order.go029.com" {
+		t.Errorf("roundTrip=%v, want exact headers preserved", roundTrip)
+	}
+	if securityEventsSerializeHeaders(nil) != "" {
+		t.Error("nil headers must serialize to empty string")
+	}
+}
+
+func TestSecurityEventsSerializeHeaders_dropsLargestUntilFits(t *testing.T) {
+	headers := map[string][]string{
+		"Host":       {"a.example.com"},
+		"User-Agent": {"probe"},
+		"X-Big":      {strings.Repeat("B", securityEventsHeadersCap)},
+	}
+	got := securityEventsSerializeHeaders(headers)
+	if len(got) > securityEventsHeadersCap {
+		t.Fatalf("len=%d exceeds cap %d", len(got), securityEventsHeadersCap)
+	}
+	var roundTrip map[string][]string
+	if err := json.Unmarshal([]byte(got), &roundTrip); err != nil {
+		t.Fatalf("truncated headers must stay valid JSON: %v", err)
+	}
+	if _, ok := roundTrip["X-Big"]; ok {
+		t.Error("largest header must be dropped first")
+	}
+	if roundTrip["Host"][0] != "a.example.com" || roundTrip["User-Agent"][0] != "probe" {
+		t.Errorf("small headers must be kept: %v", roundTrip)
+	}
+	if len(roundTrip["_dropped"]) != 1 || roundTrip["_dropped"][0] != "1" {
+		t.Errorf("_dropped marker=%v, want [\"1\"]", roundTrip["_dropped"])
+	}
+}
+
+func TestSecurityEventsEncodeBody_plainText(t *testing.T) {
+	if got := securityEventsEncodeBody("user=admin&pass=123"); got != "user=admin&pass=123" {
+		t.Errorf("plain body changed: %q", got)
+	}
+	if got := securityEventsEncodeBody(""); got != "" {
+		t.Errorf("empty body must stay empty, got %q", got)
+	}
+}
+
+func TestSecurityEventsEncodeBody_truncatesAtRuneBoundary(t *testing.T) {
+	// 65535 个 ASCII + 一个双字节字符 'é'（0xC3 0xA9，落在 65535-65536）+ 尾部：
+	// 朴素字节截断会把 'é' 劈成半个符文，必须回退到符文边界 65535。
+	body := strings.Repeat("a", 65535) + "é" + strings.Repeat("b", 100)
+	got := securityEventsEncodeBody(body)
+	if !strings.HasSuffix(got, "\n...[TRUNCATED]") {
+		t.Fatal("truncated body must carry the marker suffix")
+	}
+	content := strings.TrimSuffix(got, "\n...[TRUNCATED]")
+	if !utf8.ValidString(content) {
+		t.Error("truncated content must remain valid UTF-8 (no split rune)")
+	}
+	if len(content) != 65535 {
+		t.Errorf("content len=%d, want 65535 (rune boundary before the straddling é)", len(content))
+	}
+}
+
+func TestSecurityEventsEncodeBody_binary(t *testing.T) {
+	binary := string([]byte{0xff, 0xfe, 0x00, 0x01, 0x02})
+	got := securityEventsEncodeBody(binary)
+	if !strings.HasPrefix(got, "base64:") {
+		t.Fatalf("binary body must carry base64: prefix, got %q", got)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(got, "base64:"))
+	if err != nil || string(decoded) != binary {
+		t.Errorf("base64 round trip failed: decoded=%q err=%v", decoded, err)
+	}
+}
+
+func TestSecurityEventsEncodeBody_binaryTruncated(t *testing.T) {
+	binary := string(bytes.Repeat([]byte{0xff}, securityEventsBodyCap+100))
+	got := securityEventsEncodeBody(binary)
+	if !strings.HasPrefix(got, "base64-truncated:") {
+		t.Fatalf("oversized binary must carry base64-truncated: prefix, got prefix of %q", got[:30])
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(got, "base64-truncated:"))
+	if err != nil {
+		t.Fatalf("truncated payload must stay decodable: %v", err)
+	}
+	if len(decoded) != securityEventsBodyCap {
+		t.Errorf("decoded len=%d, want exactly the 64KB raw cap", len(decoded))
+	}
+}
+
+func TestSecurityEventsParseTransaction_requestContext(t *testing.T) {
+	raw := `{"transaction":{"unix_timestamp":1754910200000000000,"id":"tx-ctx-1","client_ip":"1.2.3.4","server_id":"go029.com","request":{"method":"POST","uri":"/login","headers":{"Host":["go029.com"],"X-LB-Rule-ID":["lb_abc123"],"Cookie":["session=secret"]},"body":"user=admin&pass=123"},"is_interrupted":true},"messages":[]}`
+	rec, err := securityEventsParseTransaction(json.RawMessage(raw))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if rec.AttributionRuleID != "lb_abc123" {
+		t.Errorf("AttributionRuleID=%q, want lb_abc123 from X-LB-Rule-ID header", rec.AttributionRuleID)
+	}
+	if rec.RequestBody != "user=admin&pass=123" {
+		t.Errorf("RequestBody=%q, want verbatim plain body", rec.RequestBody)
+	}
+	var headers map[string][]string
+	if err := json.Unmarshal([]byte(rec.RequestHeaders), &headers); err != nil {
+		t.Fatalf("RequestHeaders must be valid JSON: %v", err)
+	}
+	if headers["Cookie"][0] != "session=secret" {
+		t.Errorf("RequestHeaders lost Cookie: %v", headers)
+	}
+
+	rawNoCtx := `{"transaction":{"unix_timestamp":1754910200000000000,"id":"tx-ctx-2","client_ip":"1.2.3.4","server_id":"go029.com","request":{"method":"GET","uri":"/","headers":{"Host":["go029.com"]}},"is_interrupted":false},"messages":[]}`
+	rec2, err := securityEventsParseTransaction(json.RawMessage(rawNoCtx))
+	if err != nil {
+		t.Fatalf("parse no-ctx: %v", err)
+	}
+	if rec2.AttributionRuleID != "" || rec2.RequestBody != "" {
+		t.Errorf("missing context must stay empty: attribution=%q body=%q", rec2.AttributionRuleID, rec2.RequestBody)
 	}
 }
