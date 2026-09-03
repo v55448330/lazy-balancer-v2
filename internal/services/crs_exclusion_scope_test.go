@@ -366,3 +366,43 @@ func TestBuildCorazaDirectives_responseBodyMimeTypeEmitted(t *testing.T) {
 		t.Fatalf("WAFCheckResponse off must not emit SecResponseBodyMimeType:\n%s", off)
 	}
 }
+
+// F0 存量兜底：命中 901 初始化组的存量排除（组号/ID/文件名/跨界区间/作用域形态）
+// 在发射面一律跳过——否则它们会在强制 Include 之后把初始化规则重新删除。
+func TestBuildCorazaDirectives_storedInitExclusionsSkipped(t *testing.T) {
+	scopedExclusionFixture(t)
+	for _, target := range []string{`"01"`, `"901200"`, `"REQUEST-901-INITIALIZATION.conf"`, `"900500-902000"`} {
+		policy := &models.SecurityPolicy{
+			Mode:             "blocking",
+			CRSRuleGroups:    json.RawMessage(`["42"]`),
+			CRSExcludedRules: json.RawMessage(`[` + target + `]`),
+		}
+		directives := BuildCorazaDirectives(policy, nil)
+		if strings.Contains(directives, "SecRuleRemoveById 901") || strings.Contains(directives, "SecRuleRemoveById 900500-902000") {
+			t.Fatalf("stored init exclusion %s must not reach SecRuleRemoveById:\n%s", target, directives)
+		}
+		if !strings.Contains(directives, "Include /app/waf/crs/rules/REQUEST-901-INITIALIZATION.conf") {
+			t.Fatalf("forced 901 include must survive the stored exclusion %s:\n%s", target, directives)
+		}
+	}
+	// scoped（ip 作用域）存量 901 排除同样跳过：不得出现针对 901 的 ctl 展开
+	policy := &models.SecurityPolicy{
+		Mode:             "blocking",
+		CRSRuleGroups:    json.RawMessage(`["42"]`),
+		CRSExcludedRules: json.RawMessage(`[{"target":"901200","scope":"ip","ips":"203.0.113.7"}]`),
+	}
+	directives := BuildCorazaDirectives(policy, nil)
+	if strings.Contains(directives, "ruleRemoveById=901200") {
+		t.Fatalf("scoped stored init exclusion must not emit ctl removal:\n%s", directives)
+	}
+	// 非 901 排除不受影响（回归保护）：942 组号排除照常发射
+	policy = &models.SecurityPolicy{
+		Mode:             "blocking",
+		CRSRuleGroups:    json.RawMessage(`["42"]`),
+		CRSExcludedRules: json.RawMessage(`["42"]`),
+	}
+	directives = BuildCorazaDirectives(policy, nil)
+	if !strings.Contains(directives, "SecRuleRemoveById 942000-942999") {
+		t.Fatalf("non-init exclusion must still emit:\n%s", directives)
+	}
+}

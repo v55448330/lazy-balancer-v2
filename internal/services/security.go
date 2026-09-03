@@ -294,6 +294,14 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 		var scoped []CRSExcludedEntry
 		var scopeAllTargets []string
 		for _, entry := range ParseCRSExcludedRules(string(p.CRSExcludedRules)) {
+			// F0 存量兜底：命中 901 初始化组的排除一律跳过——初始化组已由下方
+			// 去重强制包含，排除若放行会在 Include 后（scope=all）或运行时
+			//（scoped ctl）将其删除，守卫按 0 处理、策略空转。写入面对新提交
+			// 已 400 硬拒（CRSExclusionTargetRemovesInit），此处拦存量老数据。
+			if CRSExclusionTargetRemovesInit(entry.Target) {
+				Logf("warn", "跳过命中初始化组的 CRS 排除条目 %q（策略 %q）：初始化规则为系统强制加载，排除不生效", entry.Target, p.Name)
+				continue
+			}
 			if entry.Scope == "ip" || entry.Scope == "list" {
 				scoped = append(scoped, entry)
 				continue
