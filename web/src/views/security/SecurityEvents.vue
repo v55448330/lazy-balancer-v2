@@ -35,6 +35,7 @@
              映射为 ID 前缀匹配）；也可直接输入 CRS 规则 ID（如 942100）或消息关键词。 -->
         <el-select v-model="filters.rule_triggered" placeholder="触发规则" clearable filterable allow-create style="width: 140px">
           <el-option label="IP 访问控制" value="IP 访问控制" />
+          <el-option label="地域拦截" value="地域拦截" />
           <el-option label="请求阻断评估" value="请求阻断评估" />
           <el-option label="协议异常" value="协议异常" />
           <el-option label="协议攻击" value="协议攻击" />
@@ -462,7 +463,14 @@ const confirmCrsExclude = async (): Promise<void> => {
     // 后端契约（services.CRSExcludedEntry）：ips 为逗号分隔字符串、listRefs 为数字
     // 数组；内存态 CrsExcludedRow.ips 是数组——先转线上形态再 stringify，否则
     // 后端 json.Unmarshal 类型不匹配直接 400「需为 JSON 数组字符串」
-    const wireRows = rows.map((r) => ({ target: r.target, scope: r.scope, ips: r.ips.join(','), listRefs: r.listRefs }))
+    // 审计 W-S1（第六轮）：与向导 serializedExcludedRules 同口径——序列化按 scope
+    // 剥离非当前作用域的残留（带外数据 scope=all+ips 会 400，向导能保存、此处却失败）。
+    const wireRows = rows.map((r) => ({
+      target: r.target,
+      scope: r.scope,
+      ips: r.scope === 'ip' ? r.ips.join(',') : '',
+      listRefs: r.scope === 'list' ? r.listRefs : [],
+    }))
     await request.put(`/security/policies/${ev.policy_id}`, { crs_excluded_rules: JSON.stringify(wireRows) })
     mfaAwareSuccess(`已加入策略「${ev.policy_name || `#${ev.policy_id}`}」的排除清单，已生效并重载`)
     crsDialogVisible.value = false

@@ -335,15 +335,27 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 		}
 		return len(aclList) > 0
 	case n >= 900000 && n < 1000000:
-		// 审计 V1-S1（第五轮）：v2.2.2 混合选择——crs_rule_groups 可含六位 CRS ID
-		// 正选（与排除规则区分：排除规则的 id:2 事件由 id:2/4 家族承载）。
-		// 六位 ID 触发的 CRS 事件应归因到正选了该 ID 的策略。
+		// 审计 V1-S1（第五轮）+ W-I1（第六轮回归修复）：v2.2.2 混合选择——
+		// crs_rule_groups 可含六位 CRS ID 正选；六位 ID 触发的 CRS 事件应先按
+		// 六位正选归因，未命中时回落既有组号归因（空组=全部 CRS）。
+		// 第五轮的本分支在组号分支（:371）之前且直接 return false，使后者成为
+		// 死代码——用两位组号（常规配置）的策略其 CRS 事件归因失效。
 		var groups []string
-		if err := json.Unmarshal(policy.CRSRuleGroups, &groups); err == nil {
-			for _, g := range groups {
-				if strings.TrimSpace(g) == fmt.Sprintf("%d", n) {
-					return true
-				}
+		if err := json.Unmarshal(policy.CRSRuleGroups, &groups); err != nil {
+			return false
+		}
+		for _, g := range groups {
+			if strings.TrimSpace(g) == fmt.Sprintf("%d", n) {
+				return true
+			}
+		}
+		if len(groups) == 0 {
+			return true
+		}
+		code := ruleTriggered[1:3]
+		for _, g := range groups {
+			if strings.TrimSpace(g) == code {
+				return true
 			}
 		}
 		return false
@@ -365,21 +377,6 @@ func securityEventsPolicyContainsRule(policy *models.SecurityPolicy, ruleTrigger
 				if e.ID+10000 == n {
 					return true
 				}
-			}
-		}
-		return false
-	case n >= 900000 && n <= 999999:
-		var groups []string
-		if err := json.Unmarshal(policy.CRSRuleGroups, &groups); err != nil {
-			return false
-		}
-		if len(groups) == 0 {
-			return true
-		}
-		code := ruleTriggered[1:3]
-		for _, g := range groups {
-			if strings.TrimSpace(g) == code {
-				return true
 			}
 		}
 		return false

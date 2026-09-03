@@ -417,6 +417,12 @@ const resetPassword = async (id: number) => {
       if (id === authStore.user?.id) {
         // R72 六次：本人改密走自助端点（不带 silent，失败由全局拦截器提示）
         await request.patch('/users/me', { password: value })
+        // 审计 W-I2（第六轮）：本人改密成功即吊销当前 JWT（pwd_ver）——必须走干净
+        // 登出（对齐 AppLayout.saveProfile / B4-I2），否则后续请求以死 token 出站
+        // 401，成功操作被误报为「会话失效」并强制整页刷新。
+        authStore.showToast('success', '密码已修改，请重新登录')
+        await authStore.logout()
+        return
       } else {
         await request.post(`/users/${id}/reset-password`, { new_password: value })
       }

@@ -85,6 +85,8 @@ interface PolicyRow {
   ip_acl_list: string
   ip_whitelist: string
   ip_blacklist: string
+  // 审计 W-S2（第六轮）：信任三态开关——加入名单前须提示「当前关闭=零生效」
+  ip_whitelist_enabled?: boolean
 }
 
 interface PolicyDetail {
@@ -453,8 +455,14 @@ const addTrust = async (policy: PolicyRow): Promise<void> => {
       ElMessage.info(`该 IP 已在策略「${policy.name}」的信任名单中`)
       return
     }
+    // 审计 W-S2（第六轮）：信任开关关闭时明确告知零生效——成功 toast 不再误导
+    const trustEnabled = detail.ip_whitelist_enabled !== false
     await request.put(`/security/policies/${policy.id}`, { ip_whitelist: JSON.stringify([...list, props.ip]) })
-    mfaAwareSuccess(`已加入策略「${policy.name}」的信任名单`)
+    if (trustEnabled) {
+      mfaAwareSuccess(`已加入策略「${policy.name}」的信任名单`)
+    } else {
+      mfaAwareSuccess(`已加入策略「${policy.name}」的信任名单——注意：该策略的信任名单当前为关闭状态，此 IP 暂不生效（需在策略向导中开启信任名单）`)
+    }
     await refreshRow(policy.id)
   } catch {
     // 失败提示由全局拦截器弹出，这里只需终止流程

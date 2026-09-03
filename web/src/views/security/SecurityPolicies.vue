@@ -1739,7 +1739,9 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
     chain,
     selfPosition: selfIndex + 1,
     selfBlockPageActive: form.value.enabled && firstEnabledWithPage?.isSelf === true,
-    mergedCount: chain.length,
+    // 审计 W-S5（第六轮）：性能提示应按实际生效的处理链计——禁用策略不产生处理链，
+    // 计入会虚高（提示"超过 3 条可能影响性能"在不达 3 条时误报）。
+    mergedCount: chain.filter((e) => e.enabled).length,
     showPerfTip: chain.length > PERF_POLICY_THRESHOLD,
     hints: computeBindingConflicts(buildConflictChain(caddyId)),
   }

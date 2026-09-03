@@ -1789,6 +1789,24 @@ func TestSecurityEventsAttribution_OverlappingCRSGroupPicksLowestPolicyID(t *tes
 	}
 }
 
+// W-I1 回归：属主非首绑定 + 组号——六位分支未命中后必须回落组号归因，
+// 而非回退首启用策略（第五轮 V1-S1 遮蔽组号分支的回归面）。
+func TestSecurityEventsAttribution_GroupOwnerNotFirstBound(t *testing.T) {
+	pid, pname := securityEventsSeedAttrPolicy(t, "942001", []struct {
+		id         int
+		name       string
+		enabled    int
+		customJSON string
+		crsJSON    string
+	}{
+		{id: 2, name: "policy-xss", enabled: 1, customJSON: `[]`, crsJSON: `["41"]`},
+		{id: 5, name: "policy-sqli", enabled: 1, customJSON: `[]`, crsJSON: `["42"]`},
+	})
+	if pid != 5 || pname != "policy-sqli" {
+		t.Fatalf("attribution=(%d,%q), want (5,policy-sqli) — 942001 属组 42，必须归因到组号 42 的策略而非首绑定的 41 策略", pid, pname)
+	}
+}
+
 // SC-EVT-01 未绑定（无 security_policy_bindings 行）→ 归因零值。
 func TestSecurityEventsAttribution_UnboundReturnsZeroValue(t *testing.T) {
 	dataDir := t.TempDir()
