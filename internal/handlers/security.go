@@ -440,7 +440,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 //     WHERE 过滤，NULL-enabled 行须按 schema 默认呈现启用态；生成路径以
 //     WHERE enabled=1 守卫，NULL 行本就被过滤，故裸列即可。
 const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
-	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]')`
+	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]')`
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	query := `SELECT ` + securityPolicySelectColumns + ` FROM security_policies`
@@ -520,6 +520,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			GeoIPCountries:     rawJSONString(p.GeoIPCountries),
 			GeoIPMode:          p.GeoIPMode,
 			WAFCheckResponse:   p.WAFCheckResponse,
+			LogRequestBody:     p.LogRequestBody,
 			IPACLListRefs:      p.IPACLListRefs,
 			IPWhitelistRefs:    p.IPWhitelistRefs,
 		})
@@ -755,10 +756,10 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		enabled = *req.Enabled
 	}
 	result, err := tx.ExecContext(c.Request.Context(), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, waf_check_response, ip_acl_list_refs, ip_whitelist_refs, updated_by)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, policyWhitelistDefault(req.IPWhitelistEnabled), req.IPBlacklist,
-		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, req.WAFCheckResponse, req.IPACLListRefs, req.IPWhitelistRefs, getContextUserIDInt(c))
+		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, getContextUserIDInt(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
 		return
@@ -854,6 +855,24 @@ func validateAndNormalizeCRSField(name string, val *string) error {
 			return fmt.Errorf("%s 条目不能包含首尾空白: %q", name, entry)
 		}
 	}
+	// F0 写入面规范化（v2.2.3）：剥离基础设施组（901/949/959 组号及其文件内
+	// 规则 ID）——它们由发射面强制包含，开放配置只会制造「忘选即静默失效」的
+	// 陷阱；剥离即「始终生效」的诚实表达。剥离后为空等价显式空选（"[]"=全量
+	// glob），至少是一个可工作的策略，优于「仅选初始化组」的空转配置。
+	if name == "crs_rule_groups" {
+		kept := entries[:0]
+		for _, entry := range entries {
+			if services.IsCRSInfraGroupCode(entry) || services.IsCRSInfraRuleID(entry) {
+				continue
+			}
+			kept = append(kept, entry)
+		}
+		normalized, err := json.Marshal(kept)
+		if err != nil {
+			return fmt.Errorf("%s 规范化失败: %w", name, err)
+		}
+		*val = string(normalized)
+	}
 	return nil
 }
 
@@ -887,6 +906,11 @@ func validateCRSExcludedRulesPayload(val *string) error {
 			}
 			if !services.CRSExcludedEntryEffective(entry) {
 				return fmt.Errorf("crs_excluded_rules 条目必须是 CRS 规则 ID（如 \"942100\"）或规则文件名（如 \"REQUEST-942-APPLICATION-ATTACK-SQLI.conf\"）: %q", entry)
+			}
+			// F0 排除守卫：初始化组（901）由发射面强制包含，排除它会让偏执级
+			// 守卫按 0 处理整段跳过、策略静默空转——无合法用途，保存即拒。
+			if services.CRSExclusionTargetRemovesInit(entry) {
+				return fmt.Errorf("crs_excluded_rules 条目 %q 命中初始化规则组（901xxx）：初始化规则为系统强制加载，不能排除", entry)
 			}
 		}
 		return nil
@@ -940,6 +964,11 @@ func validateCRSExcludedRulesPayload(val *string) error {
 			// 作用域限定走运行时 ctl:ruleRemoveById 逐 ID 展开，遗留文件名/区间
 			// 形态（映射为 ID 区间）无法展开——保存即拒，与发射端能力对齐。
 			return fmt.Errorf("crs_excluded_rules 条目 #%d：target %q 为文件名/区间形态，仅支持 scope=all（作用域限定请使用两位组号或 6 位规则 ID）", i+1, entry.Target)
+		}
+		// F0 排除守卫：初始化组（901）由发射面强制包含，排除它会让偏执级守卫
+		// 按 0 处理整段跳过、策略静默空转——无合法用途，保存即拒。
+		if services.CRSExclusionTargetRemovesInit(target) {
+			return fmt.Errorf("crs_excluded_rules 条目 #%d 命中初始化规则组（901xxx）：初始化规则为系统强制加载，不能排除", i+1)
 		}
 		ips := strings.TrimSpace(entry.IPs)
 		switch scope {
@@ -1266,6 +1295,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addStr("geoip_countries", req.GeoIPCountries)
 	addStr("geoip_mode", req.GeoIPMode)
 	addBool("waf_check_response", req.WAFCheckResponse)
+	addBool("log_request_body", req.LogRequestBody)
 	addStr("ip_acl_list_refs", req.IPACLListRefs)
 	addStr("ip_whitelist_refs", req.IPWhitelistRefs)
 
@@ -1872,7 +1902,7 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 
 	queryArgs := append(args, pageSize, offset)
 	rows, err := db.MetricsDB.Query(`SELECT e.id, e.event_time, e.rule_caddy_id, e.policy_id, e.client_ip, e.method, e.uri, e.event_type, e.rule_triggered, e.rule_msg, e.action, e.anomaly_score,
-		e.rule_name, e.policy_name
+		e.rule_name, e.policy_name, e.request_headers, e.request_body
 		FROM security_events e`+where+" ORDER BY e.event_time DESC LIMIT ? OFFSET ?", queryArgs...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: err.Error()})
@@ -1884,7 +1914,7 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	for rows.Next() {
 		var e models.SecurityEvent
 		// Scan 失败必须中止：否则部分零值的事件行会被当作真实事件返回（R35 D3）
-		if err := rows.Scan(&e.ID, &e.EventTime, &e.RuleCaddyID, &e.PolicyID, &e.ClientIP, &e.Method, &e.URI, &e.EventType, &e.RuleTriggered, &e.RuleMsg, &e.Action, &e.AnomalyScore, &e.RuleName, &e.PolicyName); err != nil {
+		if err := rows.Scan(&e.ID, &e.EventTime, &e.RuleCaddyID, &e.PolicyID, &e.ClientIP, &e.Method, &e.URI, &e.EventType, &e.RuleTriggered, &e.RuleMsg, &e.Action, &e.AnomalyScore, &e.RuleName, &e.PolicyName, &e.RequestHeaders, &e.RequestBody); err != nil {
 			log.Printf("security events: scan failed: %v", err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
 			return
@@ -2431,7 +2461,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 func scanSecurityPolicyRow(row *sql.Row, p *models.SecurityPolicy) error {
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
 	if err := row.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
+		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
 		return err
 	}
 	p.IPWhitelist = json.RawMessage(ipWhitelist)
@@ -2446,7 +2476,7 @@ func scanSecurityPolicyRow(row *sql.Row, p *models.SecurityPolicy) error {
 func scanSecurityPolicy(rows *sql.Rows, p *models.SecurityPolicy) error {
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries string
 	if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
+		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs); err != nil {
 		return err
 	}
 	p.IPWhitelist = json.RawMessage(ipWhitelist)

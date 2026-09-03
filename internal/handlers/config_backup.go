@@ -59,7 +59,7 @@ var backupBooleanTableColumns = map[string][]string{
 	"api_keys":                   {"is_enabled", "mcp_enabled", "read_only"},
 	"ca_providers":               {"enabled"},
 	"certificate_configs":        {"enabled"},
-	"security_policies":          {"ip_acl_enabled", "rate_limit_enabled", "enabled", "waf_check_response"},
+	"security_policies":          {"ip_acl_enabled", "rate_limit_enabled", "enabled", "waf_check_response", "log_request_body"},
 	"security_custom_rules":      {"enabled"},
 	"security_block_pages":       {"is_default"},
 	"security_crs_version":       {"auto_update"},
@@ -181,6 +181,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"block_page_id": int64(0), "block_status_code": int64(0), "enabled": int64(0),
 		"updated_by": int64(0), "created_at": "", "updated_at": "",
 		"geoip_countries": "[]", "geoip_mode": "off", "waf_check_response": int64(0),
+		"log_request_body": int64(0),
 		"ip_acl_list_refs": "[]", "ip_whitelist_refs": "[]",
 	},
 	"security_custom_rules": {
