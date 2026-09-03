@@ -72,7 +72,7 @@ import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
-import { fetchIpListOptions, ipListOptionLabel, useIpListAdd } from '@/composables/useIpListAdd'
+import { ipListOptionLabel, useIpListAdd } from '@/composables/useIpListAdd'
 import type { IpListOption } from '@/composables/useIpListAdd'
 import type { APIResponse } from '@/types'
 
@@ -83,7 +83,10 @@ interface PolicyRow {
   ip_acl_enabled: boolean
   ip_acl_mode: string
   ip_acl_list: string
+  // 引用的可复用地址列表（JSON 数字数组文本）——生效口径 = 内联 ∪ 引用条目
+  ip_acl_list_refs?: string
   ip_whitelist: string
+  ip_whitelist_refs?: string
   ip_blacklist: string
   // 审计 W-S2（第六轮）：信任三态开关——加入名单前须提示「当前关闭=零生效」
   ip_whitelist_enabled?: boolean
@@ -95,7 +98,9 @@ interface PolicyDetail {
   ip_acl_enabled: boolean
   ip_acl_mode: string
   ip_acl_list: string
+  ip_acl_list_refs?: string
   ip_whitelist: string
+  ip_whitelist_refs?: string
   ip_blacklist?: string
 }
 
@@ -133,11 +138,26 @@ const ipLists = ref<IpListOption[]>([])
 const selectedListId = ref<number | undefined>(undefined)
 const { adding: savingToList, addIpToList } = useIpListAdd()
 
+// 引用列表条目缓存：/security/ip-lists 响应本身携带 entries，选项下拉与
+// 「内联 ∪ 引用」合并口径共用同一次拉取，避免为 refs 引入第二次请求
+interface IpListWithEntries extends IpListOption {
+  entries?: Array<{ value: string; remark?: string }>
+}
+const ipListEntries = ref<Record<number, string[]>>({})
+
 const loadIpLists = async (): Promise<void> => {
   try {
-    ipLists.value = await fetchIpListOptions()
+    const res = await request.get<APIResponse<IpListWithEntries[]>>('/security/ip-lists')
+    const lists = res.data || []
+    ipLists.value = lists
+    const map: Record<number, string[]> = {}
+    for (const l of lists) {
+      map[l.id] = (l.entries || []).map((e) => e.value.trim()).filter((v) => v !== '')
+    }
+    ipListEntries.value = map
   } catch {
     ipLists.value = []
+    ipListEntries.value = {}
   }
   // 列表已在别处删除时清理悬空选择，避免静默写往不存在的列表
   if (selectedListId.value !== undefined && !ipLists.value.some((l) => l.id === selectedListId.value)) {
@@ -163,27 +183,63 @@ const parseList = (raw: string): string[] => {
   }
 }
 
+// refs 字段为 JSON 数字数组文本（如 "[1,5]"）——与 SecurityPolicies 向导同口径
+// 解析（parseRefIds）：字符串过滤会丢弃数字 id，这里显式 map(Number)
+const parseRefIds = (raw: string | undefined): number[] => {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+  } catch {
+    return []
+  }
+}
+
+// 生效名单 = 内联 ∪ 引用列表条目（精确字符串去重，与向导 mergeIpEntries 同口径）；
+// 缓存中缺失的引用列表跳过（防御性回退为仅内联）
+const mergeIpEntries = (inline: string[], refs: number[]): string[] => {
+  const set = new Set(inline.map((v) => v.trim()).filter((v) => v !== ''))
+  for (const id of refs) {
+    const entries = ipListEntries.value[id]
+    if (!entries) continue
+    for (const v of entries) set.add(v)
+  }
+  return [...set]
+}
+
+// 每策略生效 ACL / 信任名单（内联 ∪ 引用），状态展示与语义反转守卫共用
+const mergedAclEntries = (policy: PolicyRow): string[] =>
+  mergeIpEntries(parseList(policy.ip_acl_list), parseRefIds(policy.ip_acl_list_refs))
+
+const mergedTrustEntries = (policy: PolicyRow): string[] =>
+  mergeIpEntries(parseList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs))
+
 const normalizeRow = (p: PolicyRow): PolicyRow => ({
   id: p.id,
   name: p.name,
   ip_acl_enabled: !!p.ip_acl_enabled,
   ip_acl_mode: p.ip_acl_mode || '',
   ip_acl_list: p.ip_acl_list || '[]',
+  ip_acl_list_refs: p.ip_acl_list_refs || '[]',
   ip_whitelist: p.ip_whitelist || '[]',
+  ip_whitelist_refs: p.ip_whitelist_refs || '[]',
   ip_blacklist: p.ip_blacklist || '[]',
+  ip_whitelist_enabled: p.ip_whitelist_enabled,
 })
 
 const loadPolicies = async (): Promise<void> => {
   // 每次 @show 都强制重新拉取——同一策略绑定多条规则时，从规则 A 弹窗
   // 加入黑名单后，打开规则 B 弹窗需要看到最新 ACL 状态（无陈旧缓存）。
-  // 地址列表选项同节奏刷新（含 entry_count 展示）。
-  void loadIpLists()
+  // 地址列表选项同节奏刷新（含引用条目缓存）；等两者就绪后再渲染行，
+  // 避免「内联 ∪ 引用」口径在条目到达前短暂退化为仅内联
+  const listsPromise = loadIpLists()
   policiesLoading.value = true
   try {
     const url = props.ruleCaddyId
       ? `/security/policies?enabled=true&rule_caddy_id=${encodeURIComponent(props.ruleCaddyId)}`
       : '/security/policies?enabled=true'
-    const res = await request.get<APIResponse<PolicyRow[]>>(url)
+    const [res] = await Promise.all([request.get<APIResponse<PolicyRow[]>>(url), listsPromise])
     policies.value = (res.data || []).map(normalizeRow)
     policiesError.value = false
   } catch {
@@ -214,7 +270,7 @@ interface RowView {
 const rowView = (policy: PolicyRow): RowView => {
   const view: RowView = {
     policy,
-    inTrust: parseList(policy.ip_whitelist).includes(props.ip),
+    inTrust: mergedTrustEntries(policy).includes(props.ip),
     inLegacy: parseList(policy.ip_blacklist).includes(props.ip),
     tagType: 'info',
     tagLabel: '未启用',
@@ -229,7 +285,10 @@ const rowView = (policy: PolicyRow): RowView => {
   }
   if (!policy.ip_acl_enabled) return view
 
-  const list = parseList(policy.ip_acl_list)
+  // 生效名单 = 内联 ∪ 引用列表条目；引用命中的条目无法在本弹窗移除
+  // （PUT 仅写内联 ip_acl_list），移除按钮仅对内联命中开放
+  const list = mergedAclEntries(policy)
+  const inInline = parseList(policy.ip_acl_list).includes(props.ip)
   const inList = list.includes(props.ip)
   view.canEnableDeny = false
   view.canEnableAllow = false
@@ -240,8 +299,8 @@ const rowView = (policy: PolicyRow): RowView => {
     view.countLabel = `${list.length} 条`
     if (inList) {
       view.statusClass = 'is-ok'
-      view.statusLabel = '✅ 已在黑名单中'
-      view.canRemove = true
+      view.statusLabel = inInline ? '✅ 已在黑名单中' : '✅ 已在黑名单中（来自引用列表）'
+      view.canRemove = inInline
     } else {
       view.statusLabel = `拒绝列表 · ${list.length} 条`
       view.canAddDeny = true
@@ -252,8 +311,8 @@ const rowView = (policy: PolicyRow): RowView => {
     view.countLabel = `${list.length} 条`
     if (inList) {
       view.statusClass = 'is-ok'
-      view.statusLabel = '✅ 已在白名单中'
-      view.canRemove = true
+      view.statusLabel = inInline ? '✅ 已在白名单中' : '✅ 已在白名单中（来自引用列表）'
+      view.canRemove = inInline
     } else {
       view.statusClass = 'is-warn'
       view.statusLabel = '⚠️ 不在白名单中（当前无法访问）'
@@ -316,6 +375,9 @@ const applyAcl = async (policy: PolicyRow, target: AclTarget): Promise<void> => 
     const detail = await fetchDetail(policy.id)
     if (!detail) return
     const list = parseList(detail.ip_acl_list)
+    // 语义反转守卫按生效名单（内联 ∪ 引用）判定——内联为空但引用非空时，
+    // 切换模式同样会反转全部引用条目的语义，必须走强确认分支
+    const mergedList = mergeIpEntries(list, parseRefIds(detail.ip_acl_list_refs))
 
     let body: Record<string, unknown>
     let successMsg: string
@@ -339,8 +401,9 @@ const applyAcl = async (policy: PolicyRow, target: AclTarget): Promise<void> => 
       body = { ip_acl_enabled: true, ip_acl_mode: target, ip_acl_list: JSON.stringify(nextList) }
       successMsg = `已启用策略「${policy.name}」的 IP 访问控制并加入${ACL_LABELS[target]}`
     } else if (detail.ip_acl_mode === target) {
-      // 模式一致 → 确认后追加
-      if (list.includes(props.ip)) {
+      // 模式一致 → 确认后追加；命中判定用生效名单口径，避免把引用列表
+      // 已覆盖的 IP 重复写入内联条目
+      if (mergedList.includes(props.ip)) {
         ElMessage.info(`该 IP 已在策略「${policy.name}」的${ACL_LABELS[target]}中`)
         return
       }
@@ -355,15 +418,23 @@ const applyAcl = async (policy: PolicyRow, target: AclTarget): Promise<void> => 
       }
       body = { ip_acl_list: JSON.stringify([...list, props.ip]) }
       successMsg = `已加入策略「${policy.name}」的${ACL_LABELS[target]}`
-    } else if (list.length > 0) {
-      // 模式切换且已有条目（K3 语义反转守卫）：原条目语义将整体反转，
-      // 必须经确认框说明后果；确认后清空原列表、仅保留该 IP
+    } else if (mergedList.length > 0) {
+      // 模式切换且生效名单已有条目（K3 语义反转守卫，内联 ∪ 引用口径）：原条目
+      // 语义将整体反转，必须经确认框说明后果；确认后仅清空内联条目、仅保留该 IP——
+      // 引用列表条目随引用保留（本组件不写 refs），但其语义随模式一并反转，须点名
+      const refOnlyCount = mergedList.filter((v) => !list.includes(v)).length
+      const countDesc = refOnlyCount > 0
+        ? `生效名单共 ${mergedList.length} 条 IP（内联 ${list.length} 条 + 引用列表 ${refOnlyCount} 条）`
+        : `列表中已有 ${list.length} 条 IP`
+      const refSurviveTip = refOnlyCount > 0
+        ? `引用列表的 ${refOnlyCount} 条会随引用保留、但语义随模式一并反转；`
+        : ''
       const targetTip = target === 'allow'
-        ? `加入白名单会把访问控制切换为「仅允许名单内 IP」，原条目语义将反转，现有 ${list.length} 条将被清空、列表仅保留 ${props.ip}，其余所有 IP 将无法访问。`
-        : `加入黑名单会把访问控制切换为「拒绝名单内 IP」，原条目语义将反转，现有 ${list.length} 条将被清空、列表仅保留 ${props.ip}（该 IP 将被直接拦截）。`
+        ? `加入白名单会把访问控制切换为「仅允许名单内 IP」，原条目语义将反转，内联条目将被清空、仅保留 ${props.ip}；${refSurviveTip}其余所有 IP 将无法访问。`
+        : `加入黑名单会把访问控制切换为「拒绝名单内 IP」，原条目语义将反转，内联条目将被清空、仅保留 ${props.ip}（该 IP 将被直接拦截）；${refSurviveTip}`
       try {
         await ElMessageBox.confirm(
-          `策略「${policy.name}」当前为${modeLabel(detail.ip_acl_mode)}，列表中已有 ${list.length} 条 IP。${targetTip}是否继续？`,
+          `策略「${policy.name}」当前为${modeLabel(detail.ip_acl_mode)}，${countDesc}。${targetTip}是否继续？`,
           '切换访问控制模式',
           { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
         )
