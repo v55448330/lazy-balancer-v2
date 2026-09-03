@@ -140,38 +140,43 @@
             <el-form-item label="CRS 规则组">
               <!-- 混合选择：组选项（两位组号，label 沿用「请求 · 942 · SQL 注入」）在前 +
                    单条规则选项（6 位规则 ID，两行「ID — 描述」/「文件 · 分类」，按请求/响应
-                   阶段 el-option-group 分组）在后。保持 EP 默认 persistent——832 条选项随
-                   对话框打开挂载一次，存量值（组号/规则 ID）的 tag label 挂载即刻解析，无需
-                   用户先开一次下拉（persistent=false 时选项不挂载，tag 只能回退显示裸值）；
-                   索引在途时 loading 占位。陈旧值（CRS 更新后消失的规则 ID）以 ghost 选项
-                   兜底显示。 -->
+                   阶段 el-option-group 分组）在后。与排除目标同一交互模式：组选项常渲染
+                   可浏览，单条规则每阶段预览前 20 条，filter-method 接管过滤、输入查询词
+                   全索引搜索每阶段截顶 50 条，截断阶段末尾附禁用提示项；存量值（组号/规则
+                   ID）不在渲染列表时由 current 补项解析 label，tag 挂载即刻显示无需用户
+                   先开下拉；陈旧值（CRS 更新后消失的规则 ID）以 ghost 选项兜底显示；
+                   索引在途时 loading 占位。 -->
               <el-select
                 v-model="crsRuleGroups"
                 :disabled="form.mode === 'off'"
                 multiple
                 filterable
+                :filter-method="onCrsGroupQuery"
                 :loading="crsIndexLoading"
                 popper-class="crs-rule-popper"
                 placeholder="留空加载全部 CRS 规则"
                 style="width: 100%"
               >
-                <el-option v-for="opt in crsGroupOptions" :key="`g-${opt.value}`" :label="opt.label" :value="opt.value" />
+                <el-option v-for="opt in crsGroupSelectGroupOptions" :key="`g-${opt.value}`" :label="opt.label" :value="opt.value" />
                 <el-option-group label="OWASP CRS · 请求阶段 · 单条规则">
-                  <el-option v-for="opt in crsGroupIndexRequestOptions" :key="opt.id" :value="opt.id" :label="`${opt.id} — ${opt.label}`" :title="opt.fullLabel">
+                  <el-option v-for="opt in crsGroupSelectRequestOptions" :key="opt.id" :value="opt.id" :label="`${opt.id} — ${opt.label}`" :title="opt.fullLabel">
                     <div class="crs-rule-option">
                       <div class="crs-rule-option-label">{{ opt.id }} — {{ opt.label }}</div>
                       <div class="crs-rule-option-meta">{{ opt.file }} · {{ opt.category }}</div>
                     </div>
                   </el-option>
+                  <el-option v-if="crsGroupSelectRequestRemaining > 0" key="hint-request" value="__hint_request" :label="`…还有 ${crsGroupSelectRequestRemaining} 条，输入关键字搜索全部规则`" disabled class="crs-hint-option" />
                 </el-option-group>
                 <el-option-group label="OWASP CRS · 响应阶段 · 单条规则">
-                  <el-option v-for="opt in crsGroupIndexResponseOptions" :key="opt.id" :value="opt.id" :label="`${opt.id} — ${opt.label}`" :title="opt.fullLabel">
+                  <el-option v-for="opt in crsGroupSelectResponseOptions" :key="opt.id" :value="opt.id" :label="`${opt.id} — ${opt.label}`" :title="opt.fullLabel">
                     <div class="crs-rule-option">
                       <div class="crs-rule-option-label">{{ opt.id }} — {{ opt.label }}</div>
                       <div class="crs-rule-option-meta">{{ opt.file }} · {{ opt.category }}</div>
                     </div>
                   </el-option>
+                  <el-option v-if="crsGroupSelectResponseRemaining > 0" key="hint-response" value="__hint_response" :label="`…还有 ${crsGroupSelectResponseRemaining} 条，输入关键字搜索全部规则`" disabled class="crs-hint-option" />
                 </el-option-group>
+                <el-option v-for="opt in crsGroupCurrentOptions" :key="`current-${opt.value}`" :label="opt.label" :value="opt.value" :title="opt.title" />
                 <el-option v-for="opt in crsGroupGhostOptions" :key="`ghost-${opt.value}`" :label="opt.label" :value="opt.value" :title="opt.title" />
               </el-select>
               <div class="form-tip-line">选择后仅加载所选规则组，留空加载全部 CRS 规则</div>
@@ -236,9 +241,9 @@
                         <!-- 远程搜索模式：每行一个 select（上限 50 行），全量 832 条选项
                              × 50 行不可行——常渲染组选项 + 每阶段 20 条预览 + 当前值补项；
                              filter-method 接管过滤（EP 不再本地过滤），输入时全索引匹配
-                             每阶段截顶 50 条。默认 persistent 让这套小列表随挂载渲染，
-                             存量 target 的「ID — 描述」/组 label 即刻解析；陈旧值仍由
-                             ghost 选项兜底 -->
+                             每阶段截顶 50 条，截断阶段末尾附禁用提示项「…还有 N 条」。
+                             默认 persistent 让这套小列表随挂载渲染，存量 target 的
+                             「ID — 描述」/组 label 即刻解析；陈旧值仍由 ghost 选项兜底 -->
                         <el-select
                           v-model="row.target"
                           size="small"
@@ -258,6 +263,7 @@
                                 <div class="crs-rule-option-meta">{{ opt.file }} · {{ opt.category }}</div>
                               </div>
                             </el-option>
+                            <el-option v-if="exclusionRowRuleRemaining($index, 'request') > 0" :key="`hint-request-${$index}`" :value="`__hint_${$index}_request`" :label="`…还有 ${exclusionRowRuleRemaining($index, 'request')} 条，输入关键字搜索全部规则`" disabled class="crs-hint-option" />
                           </el-option-group>
                           <el-option-group v-if="exclusionRowRuleOptions($index, 'response').length > 0" label="单条规则 · 响应阶段">
                             <el-option v-for="opt in exclusionRowRuleOptions($index, 'response')" :key="opt.id" :value="opt.id" :label="`${opt.id} — ${opt.label}`" :title="opt.fullLabel">
@@ -266,6 +272,7 @@
                                 <div class="crs-rule-option-meta">{{ opt.file }} · {{ opt.category }}</div>
                               </div>
                             </el-option>
+                            <el-option v-if="exclusionRowRuleRemaining($index, 'response') > 0" :key="`hint-response-${$index}`" :value="`__hint_${$index}_response`" :label="`…还有 ${exclusionRowRuleRemaining($index, 'response')} 条，输入关键字搜索全部规则`" disabled class="crs-hint-option" />
                           </el-option-group>
                           <el-option v-for="opt in exclusionRowCurrentOptions(row, $index)" :key="`current-${opt.value}`" :label="opt.label" :value="opt.value" :title="opt.title" />
                           <el-option v-if="crsGhostOptionFor(row.target)" :key="`ghost-${row.target}`" :label="crsGhostOptionFor(row.target)!.label" :value="row.target" :title="row.target" />
@@ -988,10 +995,6 @@ const crsOptionPhase = (filename: string): string => (/^RESPONSE-/i.test(filenam
 const crsIndexRequestOptions = computed<CrsRuleOptionView[]>(() => crsIndexOptions.value.filter((r) => !/^RESPONSE-/i.test(r.file)))
 const crsIndexResponseOptions = computed<CrsRuleOptionView[]>(() => crsIndexOptions.value.filter((r) => /^RESPONSE-/i.test(r.file)))
 
-// 规则组选择器的单规则选项：剔除基础设施 ID（写入面同语义剥离，不提供选项）
-const crsGroupIndexRequestOptions = computed<CrsRuleOptionView[]>(() => crsIndexRequestOptions.value.filter((r) => !isInfraRuleId(r.id)))
-const crsGroupIndexResponseOptions = computed<CrsRuleOptionView[]>(() => crsIndexResponseOptions.value.filter((r) => !isInfraRuleId(r.id)))
-
 // 规则组/排除目标下拉的已知值全集（两位组号 ∪ 索引规则 ID）——命中即无需 ghost 选项
 const crsKnownTargetValues = computed<Set<string>>(() =>
   new Set([...crsGroupOptions.value.map((o) => o.value), ...crsIndexOptions.value.map((o) => o.id)]))
@@ -1076,13 +1079,93 @@ const crsExclusionGroupOptions = computed(() => {
   }
   return [...seen.entries()].map(([value, label]) => ({ value, label }))
 })
-// 每行一个 select（上限 50 行），若与规则组选择器一样全量渲染 832 条单条规则选项，
-// 50 行即 4 万+ 选项组件。改为：常渲染组选项 + 短预览（每阶段前 20 条，索引按 id
-// 升序）+ 当前值补项；输入查询时全索引过滤（id/描述/文件/分类），每阶段截顶 50 条。
-// filter-method 接管后 EP 不再本地过滤，渲染列表完全由查询词驱动；当前值不在渲染
-// 列表时由 current 补项/ghost 兜底，tag 始终显示「ID — 描述」/组 label 而非裸值。
-const EXCLUSION_RULE_PREVIEW_CAP = 20
-const EXCLUSION_RULE_SEARCH_CAP = 50
+// 两个 CRS 选择器（规则组多选 / 排除目标每行单选）统一为同一交互模式：组选项
+//（约 25 条）常渲染可浏览；单条规则选项无查询词时每阶段预览前 20 条（索引按 id
+// 升序），输入查询词时全索引过滤（id/描述/文件/分类）每阶段截顶 50 条；渲染被
+// 截断的阶段末尾附禁用提示项「…还有 N 条」。filter-method 接管后 EP 不再本地
+// 过滤，渲染列表完全由查询词驱动；当前值不在渲染列表时由 current 补项/ghost
+// 兜底，tag 始终显示「ID — 描述」/组 label 而非裸值——832 条全集不再随任何
+// select 挂载全量渲染（排除行上限 50 行，全量即 4 万+ 选项组件）。
+const CRS_RULE_PREVIEW_CAP = 20
+const CRS_RULE_SEARCH_CAP = 50
+
+// 两侧剔除口径：'group' 剔基础设施 ID（901/949/959，写入面同语义剥离，提供选项=
+// 选了保存后消失）；'exclusion' 仅剔 901（后端硬拒，提供即必现 400）——949/959
+// 保留可选（检测模式排除评估是合法调优，拦截模式另有 blockingEvalExclusionAlert）。
+type CrsSelectFilter = 'group' | 'exclusion'
+
+// 单条规则查询词匹配：id / 截断描述 / 全文描述 / 文件 / 分类（小写包含）
+const crsRuleMatchesQuery = (opt: CrsRuleOptionView, q: string): boolean =>
+  opt.id.toLowerCase().includes(q)
+  || opt.label.toLowerCase().includes(q)
+  || opt.fullLabel.toLowerCase().includes(q)
+  || opt.file.toLowerCase().includes(q)
+  || opt.category.toLowerCase().includes(q)
+
+// 组选项查询过滤（两位组号 value / label「请求 · 942 · SQL 注入」），无查询词全量
+const crsSelectGroupOptions = (query: string, filter: CrsSelectFilter): Array<{ value: string; label: string }> => {
+  const source = filter === 'group' ? crsGroupOptions.value : crsExclusionGroupOptions.value
+  const q = query.trim().toLowerCase()
+  if (q === '') return source
+  return source.filter((opt) => opt.value.includes(q) || opt.label.toLowerCase().includes(q))
+}
+
+// 阶段单条规则源列表（按两侧口径剔除基础设施 ID）
+const crsSelectRuleSource = (phase: 'request' | 'response', filter: CrsSelectFilter): CrsRuleOptionView[] => {
+  const base = phase === 'request' ? crsIndexRequestOptions.value : crsIndexResponseOptions.value
+  return filter === 'group' ? base.filter((r) => !isInfraRuleId(r.id)) : base.filter((r) => !isInitRuleId(r.id))
+}
+
+// 单条规则选项：无查询词给短预览（每阶段前 20 条）；有查询词全索引过滤后截顶 50 条
+const crsSelectRuleOptions = (query: string, phase: 'request' | 'response', filter: CrsSelectFilter): CrsRuleOptionView[] => {
+  const source = crsSelectRuleSource(phase, filter)
+  const q = query.trim().toLowerCase()
+  if (q === '') return source.slice(0, CRS_RULE_PREVIEW_CAP)
+  return source.filter((opt) => crsRuleMatchesQuery(opt, q)).slice(0, CRS_RULE_SEARCH_CAP)
+}
+
+// 截断剩余计数：该阶段匹配总数超出渲染条数（预览 20 / 搜索 50）时附禁用提示项
+const crsSelectRuleRemaining = (query: string, phase: 'request' | 'response', filter: CrsSelectFilter): number => {
+  const source = crsSelectRuleSource(phase, filter)
+  const q = query.trim().toLowerCase()
+  if (q === '') return Math.max(0, source.length - CRS_RULE_PREVIEW_CAP)
+  return Math.max(0, source.filter((opt) => crsRuleMatchesQuery(opt, q)).length - CRS_RULE_SEARCH_CAP)
+}
+
+// —— 规则组多选选择器：单查询词 + filter-method（与排除行同一模式） ——
+const crsGroupQuery = ref('')
+const onCrsGroupQuery = (query: string): void => { crsGroupQuery.value = query }
+const crsGroupSelectGroupOptions = computed(() => crsSelectGroupOptions(crsGroupQuery.value, 'group'))
+const crsGroupSelectRequestOptions = computed(() => crsSelectRuleOptions(crsGroupQuery.value, 'request', 'group'))
+const crsGroupSelectResponseOptions = computed(() => crsSelectRuleOptions(crsGroupQuery.value, 'response', 'group'))
+const crsGroupSelectRequestRemaining = computed(() => crsSelectRuleRemaining(crsGroupQuery.value, 'request', 'group'))
+const crsGroupSelectResponseRemaining = computed(() => crsSelectRuleRemaining(crsGroupQuery.value, 'response', 'group'))
+
+// 规则组多选的当前值补项：每个已选值不在当前渲染列表（预览外规则 ID、查询不命中
+// 的组/规则）时补一个 label 已解析的选项，保证不开下拉/输入查询期间 tag 仍显示
+// 完整 label。索引未命中的 6 位 ID 与其余形态跳过——交给 ghost 选项兜底。
+const crsGroupCurrentOptions = computed<CrsGhostOption[]>(() => {
+  const rendered = new Set<string>([
+    ...crsGroupSelectGroupOptions.value.map((o) => o.value),
+    ...crsGroupSelectRequestOptions.value.map((o) => o.id),
+    ...crsGroupSelectResponseOptions.value.map((o) => o.id),
+  ])
+  const out: CrsGhostOption[] = []
+  for (const raw of crsRuleGroups.value) {
+    const v = raw.trim()
+    if (v === '' || rendered.has(v)) continue
+    if (/^\d{2}$/.test(v)) {
+      const group = crsGroupOptions.value.find((o) => o.value === v)
+      if (group) out.push({ value: v, label: group.label, title: group.label })
+      continue
+    }
+    const entry = crsIndexById.value.get(v)
+    if (!entry) continue
+    const view = crsRuleLabelView(entry)
+    out.push({ value: v, label: `${v} — ${view.label}`, title: `${v} — ${view.fullLabel}` })
+  }
+  return out
+})
 
 // 与 crsExcludedRows 平行的每行查询词（添加/删除/整体替换行时同步维护索引对齐）
 const exclusionTargetQueries = ref<string[]>([])
@@ -1091,29 +1174,13 @@ const onExclusionTargetQuery = (rowIndex: number, query: string): void => {
   exclusionTargetQueries.value[rowIndex] = query
 }
 
-// 组选项查询过滤（两位组号 value / label「请求 · 942 · SQL 注入」）
-const exclusionRowGroupOptions = (rowIndex: number): Array<{ value: string; label: string }> => {
-  const q = (exclusionTargetQueries.value[rowIndex] ?? '').trim().toLowerCase()
-  if (q === '') return crsExclusionGroupOptions.value
-  return crsExclusionGroupOptions.value.filter((opt) => opt.value.includes(q) || opt.label.toLowerCase().includes(q))
-}
-
-// 单条规则选项：无查询词给短预览（每阶段前 20 条）；有查询词全索引过滤后截顶 50 条。
-// 源列表剔除 901xxx（后端硬拒，提供即必现 400）；949/959 保留（合法调优+警告）。
-const exclusionRowRuleOptions = (rowIndex: number, phase: 'request' | 'response'): CrsRuleOptionView[] => {
-  const base = phase === 'request' ? crsIndexRequestOptions.value : crsIndexResponseOptions.value
-  const source = base.filter((r) => !isInitRuleId(r.id))
-  const q = (exclusionTargetQueries.value[rowIndex] ?? '').trim().toLowerCase()
-  if (q === '') return source.slice(0, EXCLUSION_RULE_PREVIEW_CAP)
-  return source
-    .filter((opt) =>
-      opt.id.toLowerCase().includes(q)
-      || opt.label.toLowerCase().includes(q)
-      || opt.fullLabel.toLowerCase().includes(q)
-      || opt.file.toLowerCase().includes(q)
-      || opt.category.toLowerCase().includes(q))
-    .slice(0, EXCLUSION_RULE_SEARCH_CAP)
-}
+// 排除行选项（共享 helper 的逐行包装：查询词取自 exclusionTargetQueries）
+const exclusionRowGroupOptions = (rowIndex: number): Array<{ value: string; label: string }> =>
+  crsSelectGroupOptions(exclusionTargetQueries.value[rowIndex] ?? '', 'exclusion')
+const exclusionRowRuleOptions = (rowIndex: number, phase: 'request' | 'response'): CrsRuleOptionView[] =>
+  crsSelectRuleOptions(exclusionTargetQueries.value[rowIndex] ?? '', phase, 'exclusion')
+const exclusionRowRuleRemaining = (rowIndex: number, phase: 'request' | 'response'): number =>
+  crsSelectRuleRemaining(exclusionTargetQueries.value[rowIndex] ?? '', phase, 'exclusion')
 
 // 当前值补项：已选目标不在当前渲染列表（预览外规则 ID、查询不命中的组/规则）时补
 // 一个 label 已解析的选项，保证未开下拉/输入查询期间 tag 仍显示完整 label。索引未
@@ -2011,6 +2078,7 @@ async function openDialog(row?: PolicySummary) {
       crsRuleGroups.value = normalizeCrsGroups(parseJsonList(d.crs_rule_groups))
       crsExcludedRows.value = parseCrsExcludedRules(d.crs_excluded_rules)
       exclusionTargetQueries.value = []
+      crsGroupQuery.value = ''
       selectedCustomRules.value = parseCustomRuleIds(d.custom_rules)
       boundRules.value = res.data?.bindings || []
       // 拦截页面失效兜底：block_page_id=0 是「无拦截页面」的合法状态（schema 默认 0），
@@ -2052,7 +2120,7 @@ async function openDialog(row?: PolicySummary) {
 
 const resetForm = () => {
   form.value = defaultForm()
-  ipACLList.value = []; ipWhitelist.value = []; ipWhitelistEnabled.value = false; ipBlacklistSelf.value = []; ipACLListRefs.value = []; ipWhitelistRefs.value = []; geoipCountries.value = []; crsRuleGroups.value = []; crsExcludedRows.value = []; exclusionTargetQueries.value = []; selectedCustomRules.value = []; boundRules.value = []; editingId.value = null
+  ipACLList.value = []; ipWhitelist.value = []; ipWhitelistEnabled.value = false; ipBlacklistSelf.value = []; ipACLListRefs.value = []; ipWhitelistRefs.value = []; geoipCountries.value = []; crsRuleGroups.value = []; crsExcludedRows.value = []; exclusionTargetQueries.value = []; crsGroupQuery.value = ''; selectedCustomRules.value = []; boundRules.value = []; editingId.value = null
 }
 
 const resetWizard = () => {
@@ -2409,6 +2477,10 @@ onMounted(async () => {
 .crs-rule-option { display: flex; flex-direction: column; line-height: 1.4; padding: 4px 0 5px; }
 .crs-rule-option-label { font-size: 13px; }
 .crs-rule-option-meta { font-size: 12px; color: #9ca3af; }
+
+/* 截断提示项（禁用占位）：灰调小字，不可选也不参与 hover 高亮 */
+.crs-rule-popper .el-select-dropdown__item.crs-hint-option { font-size: 12px; color: var(--el-text-color-secondary); cursor: default; }
+.crs-rule-popper .el-select-dropdown__item.crs-hint-option:hover { background-color: transparent; }
 
 /* 配置预览排除明细 popper（teleported） */
 .crs-preview-popper { line-height: 1.6; max-width: 420px; }
