@@ -181,6 +181,21 @@ func (m *MetricsService) collect() {
 	// N+11 D3-F3：string 拷贝只做一次——parse 与 per-host store 共用同一
 	// text，此前两次 string(body) 最坏双拷贝 32MB（16MB body ×2）。
 	text := string(body)
+	// geoip 规则的请求先过独立透传路由（首处理器 http.handlers.geoip2region，
+	// buildGeoipPassRoute）再过主/路径路由，两条路由各自注入 metrics——同一
+	// 请求的请求数/状态码/字节量在全局与 per-host 全部翻倍。透传路由无
+	// reverse_proxy，其序列不含任何上游语义，整条剔除即恢复真实计数。
+	if strings.Contains(text, `handler="http.handlers.geoip2region"`) {
+		lines := strings.Split(text, "\n")
+		kept := lines[:0]
+		for _, line := range lines {
+			if strings.Contains(line, `handler="http.handlers.geoip2region"`) {
+				continue
+			}
+			kept = append(kept, line)
+		}
+		text = strings.Join(kept, "\n")
+	}
 	metrics, err := m.parsePrometheusMetrics(text)
 	if err != nil {
 		if logMetricsStateTransition(metricsFailureParse, true) != "" {
