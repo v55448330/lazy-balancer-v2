@@ -7,6 +7,8 @@ package services
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,6 +18,27 @@ import (
 func scopedExclusionFixture(t *testing.T) {
 	t.Helper()
 	seedCRSRuleIndexFixture(t)
+	seedInfraCRSFiles(t)
+}
+
+// seedInfraCRSFiles 提供基础设施三件套（901/949/959）与 crsDirectivesDir——
+// F0 存在性门仅在文件在场时发射强制 Include，fixture 缺文件会让门把
+// Include 全部跳过、断言集体失真。
+func seedInfraCRSFiles(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	rules := filepath.Join(dir, "rules")
+	if err := os.MkdirAll(rules, 0o755); err != nil {
+		t.Fatalf("mkdir rules: %v", err)
+	}
+	for _, name := range []string{"REQUEST-901-INITIALIZATION.conf", "REQUEST-949-BLOCKING-EVALUATION.conf", "RESPONSE-959-BLOCKING-EVALUATION.conf"} {
+		if err := os.WriteFile(filepath.Join(rules, name), []byte("# fixture\n"), 0o644); err != nil {
+			t.Fatalf("seed infra %s: %v", name, err)
+		}
+	}
+	old := crsDirectivesDir
+	crsDirectivesDir = dir
+	t.Cleanup(func() { crsDirectivesDir = old })
 }
 
 func TestParseCRSExcludedRules_dualFormatAndDegrade(t *testing.T) {
@@ -404,5 +427,35 @@ func TestBuildCorazaDirectives_storedInitExclusionsSkipped(t *testing.T) {
 	directives = BuildCorazaDirectives(policy, nil)
 	if !strings.Contains(directives, "SecRuleRemoveById 942000-942999") {
 		t.Fatalf("non-init exclusion must still emit:\n%s", directives)
+	}
+}
+
+// F0 存在性门（CRS 更新风险排查）：基础设施文件缺失时强制 Include 必须跳过
+// （coraza 对缺失精确路径 Include 是致命错误，配置加载失败=全站停摆）。
+func TestBuildCorazaDirectives_infraIncludeGuardedByExistence(t *testing.T) {
+	scopedExclusionFixture(t)
+	// 覆盖 fixture 的 crsDirectivesDir 为空目录（rules 下无任何文件）
+	empty := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(empty, "rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := crsDirectivesDir
+	crsDirectivesDir = empty
+	t.Cleanup(func() { crsDirectivesDir = old })
+
+	policy := &models.SecurityPolicy{
+		Mode:             "blocking",
+		WAFCheckResponse: true,
+		CRSRuleGroups:    json.RawMessage(`["42"]`),
+	}
+	directives := BuildCorazaDirectives(policy, nil)
+	for _, infra := range []string{"REQUEST-901-INITIALIZATION.conf", "REQUEST-949-BLOCKING-EVALUATION.conf", "RESPONSE-959-BLOCKING-EVALUATION.conf"} {
+		if strings.Contains(directives, "Include /app/waf/crs/rules/"+infra) {
+			t.Fatalf("missing infra file %s must not be force-included:\n%s", infra, directives)
+		}
+	}
+	// 被选组的 glob Include 不受影响（空匹配仅 warn，无致命路径）
+	if !strings.Contains(directives, "Include /app/waf/crs/rules/REQUEST-942-") {
+		t.Fatalf("selected group glob must still emit:\n%s", directives)
 	}
 }

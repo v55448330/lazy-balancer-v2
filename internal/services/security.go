@@ -346,17 +346,29 @@ func BuildCorazaDirectives(p *models.SecurityPolicy, store caddyConfigStore, pre
 			// 6 位 ID 的父文件，避免重复注册同规则 ID 触发 coraza 编译失败。
 			// 序：901 必须先于被选组注册（phase:1 默认值），949/959 必须在检测
 			// 规则之后（插入序=执行序）。
+			// 存在性门（CRS 更新风险排查）：coraza 对缺失的精确路径 Include 是致命
+			// 错误（seclang parser.go ReadFile → 配置加载失败、全站停摆）——CRS 更新
+			// 若移除/改名基础设施文件，跳过+告警也不允许拖垮配置加载（glob 形态
+			// 空匹配本就仅 warn，无需门）。
+			emitInfraInclude := func(name string) {
+				full := filepath.Join(crsDirectivesDir, "rules", name)
+				if _, err := os.Stat(full); err == nil {
+					sb.WriteString("Include /app/waf/crs/rules/" + name + "\n")
+				} else {
+					Logf("warn", "CRS 基础设施规则文件缺失，跳过强制 Include（%s，策略 %q）", name, p.Name)
+				}
+			}
 			covered := crsCoveredInfraGroupCodes(groups)
 			if _, ok := covered["01"]; !ok {
-				sb.WriteString("Include /app/waf/crs/rules/REQUEST-901-INITIALIZATION.conf\n")
+				emitInfraInclude("REQUEST-901-INITIALIZATION.conf")
 			}
 			emitCRSRuleGroupSelection(&sb, p, groups)
 			if _, ok := covered["49"]; !ok {
-				sb.WriteString("Include /app/waf/crs/rules/REQUEST-949-BLOCKING-EVALUATION.conf\n")
+				emitInfraInclude("REQUEST-949-BLOCKING-EVALUATION.conf")
 			}
 			if p.WAFCheckResponse {
 				if _, ok := covered["59"]; !ok {
-					sb.WriteString("Include /app/waf/crs/rules/RESPONSE-959-BLOCKING-EVALUATION.conf\n")
+					emitInfraInclude("RESPONSE-959-BLOCKING-EVALUATION.conf")
 				}
 			}
 		}
