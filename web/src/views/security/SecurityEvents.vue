@@ -31,22 +31,24 @@
         <!-- R72 十九次（用户需求）：规则 ID 筛选替换为三列（负载规则/触发规则/策略）
              服务端筛选（rule_name/rule_triggered/policy_name LIKE）。 -->
         <el-input v-model="filters.rule_name" placeholder="负载规则" clearable style="width: 140px" @keyup.enter="applyFilters" />
-        <!-- R72 二十次：触发规则改下拉+可输入——选项即表格显示的 family 标签（后端
-             映射为 ID 前缀匹配）；也可直接输入 CRS 规则 ID（如 942100）或消息关键词。
-             「排除所选」反向筛选：勾选后按 rule_triggered_exclude 取反（占比高的
-             类型筛掉看其余）。 -->
-        <el-select v-model="filters.rule_triggered" placeholder="触发规则" clearable filterable allow-create style="width: 140px">
-          <el-option label="IP 访问控制" value="IP 访问控制" title="IP 黑/白名单、信任、预检（id 2/3/4/5/7）" />
-          <el-option label="地域拦截" value="地域拦截" title="GeoIP 区域控制（id 8）" />
-          <el-option label="WAF 规则（CRS）" value="WAF 规则（CRS）" title="全部 6 位 CRS 规则 ID（不含 949/959 评估族）" />
-          <el-option label="评分拦截" value="评分拦截" title="异常分累计达阈值的评估拦截（949 请求 / 959 响应）" />
-          <el-option label="协议异常" value="协议异常" title="CRS 920 协议异常族" />
-          <el-option label="协议攻击" value="协议攻击" title="CRS 921 协议攻击族" />
-          <el-option label="自定义规则" value="自定义规则" title="自定义规则（5 位 ID 及合成 ID）" />
+        <!-- 触发规则筛选：单下拉双选项组——「筛选」组正选、「排除：…」组反向
+            （值以 ! 前缀编码，发送时拆为 rule_triggered_exclude），tag 自说明，
+             不占额外工具行宽度；也可直接输入 CRS 规则 ID（如 942100）、细标签
+            （评分拦截/协议异常/协议攻击）或消息关键词。 -->
+        <el-select v-model="filters.rule_triggered" placeholder="触发规则" clearable filterable allow-create style="width: 170px">
+          <el-option-group label="筛选">
+            <el-option label="IP 访问控制" value="IP 访问控制" title="IP 黑/白名单、信任、预检（id 2/3/4/5/7）" />
+            <el-option label="地域拦截" value="地域拦截" title="GeoIP 区域控制（id 8）" />
+            <el-option label="WAF 规则（CRS）" value="WAF 规则（CRS）" title="全部 6 位 CRS 规则 ID（含协议族与 949/959 评估族）" />
+            <el-option label="自定义规则" value="自定义规则" title="自定义规则（5 位 ID 及合成 ID）" />
+          </el-option-group>
+          <el-option-group label="排除（反向筛选，看其余类型）">
+            <el-option label="排除：IP 访问控制" value="!IP 访问控制" title="筛掉 IP 访问控制事件，只看其余" />
+            <el-option label="排除：地域拦截" value="!地域拦截" title="筛掉地域拦截事件，只看其余" />
+            <el-option label="排除：WAF 规则（CRS）" value="!WAF 规则（CRS）" title="筛掉全部 CRS 规则事件，只看其余" />
+            <el-option label="排除：自定义规则" value="!自定义规则" title="筛掉自定义规则事件，只看其余" />
+          </el-option-group>
         </el-select>
-        <el-tooltip content="勾选后筛选结果排除所选类型——用于筛掉占比高的类型（如地域拦截）看其余" placement="top" :show-after="200">
-          <el-checkbox v-model="filters.exclude_triggered" :disabled="!filters.rule_triggered" label="排除所选" size="small" style="margin-left: -4px" />
-        </el-tooltip>
         <el-input v-model="filters.policy_name" placeholder="策略" clearable style="width: 120px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 150px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.uri" placeholder="URI" clearable style="width: 160px" @keyup.enter="applyFilters" />
@@ -642,7 +644,7 @@ const openCtxDialog = (row: SecurityEvent): void => {
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const filters = ref({ action: '', ip: '', uri: '', rule_name: '', rule_triggered: '', exclude_triggered: false, policy_name: '', rule_caddy_id: '', timeRange: null as [string, string] | null })
+const filters = ref({ action: '', ip: '', uri: '', rule_name: '', rule_triggered: '', policy_name: '', rule_caddy_id: '', timeRange: null as [string, string] | null })
 
 const applyFilters = () => {
   // 时间区间校验：开始晚于结束时提示并清除该筛选（后端同样兜底 400）。
@@ -657,7 +659,7 @@ const applyFilters = () => {
 }
 
 const resetFilters = () => {
-  filters.value = { action: '', ip: '', uri: '', rule_name: '', rule_triggered: '', exclude_triggered: false, policy_name: '', rule_caddy_id: '', timeRange: null }
+  filters.value = { action: '', ip: '', uri: '', rule_name: '', rule_triggered: '', policy_name: '', rule_caddy_id: '', timeRange: null }
   page.value = 1
   fetchEvents()
 }
@@ -688,9 +690,11 @@ const fetchEvents = async () => {
     if (filters.value.rule_caddy_id) p.set('rule_caddy_id', filters.value.rule_caddy_id)
     if (filters.value.rule_name) p.set('rule_name', filters.value.rule_name)
     if (filters.value.rule_triggered) {
-      // 反向筛选：勾选「排除所选」时同一选择走 rule_triggered_exclude（整体取反）
-      if (filters.value.exclude_triggered) p.set('rule_triggered_exclude', filters.value.rule_triggered)
-      else p.set('rule_triggered', filters.value.rule_triggered)
+      // 「!」前缀编码的反向筛选（下拉「排除：…」组或手输 !949 这类前缀）：
+      // 拆为 rule_triggered_exclude；其余正选
+      const v = filters.value.rule_triggered
+      if (v.startsWith('!')) p.set('rule_triggered_exclude', v.slice(1))
+      else p.set('rule_triggered', v)
     }
     if (filters.value.policy_name) p.set('policy_name', filters.value.policy_name)
     if (filters.value.uri) p.set('uri', filters.value.uri)
