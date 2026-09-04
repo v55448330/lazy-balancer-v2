@@ -1730,6 +1730,73 @@ func enrichIPLocation(ip string) string {
 	return formatIP2RegionLocation(services.LookupRegion(ip))
 }
 
+// ruleTriggeredFamilyPrefixes 触发规则筛选的 family 标签 → ID 前缀集合
+// （「WAF 规则（CRS）」为复合 GLOB 条件单独处理，不在此表）。ruleTriggeredFilterSQL
+// 的单段解析与 ruleTriggeredMultiFilterSQL 的逐段结构化判定共用本表，改动需
+// 与前端筛选选项/triggeredLabel 显示标签三侧同步。
+var ruleTriggeredFamilyPrefixes = map[string][]string{
+	"IP 访问控制": {"2", "3", "4", "5", "7"},
+	"地域拦截":    {"8"},
+	"评分拦截":    {"949", "959"},
+	"协议异常":    {"920"},
+	"协议攻击":    {"921"},
+	"自定义规则":   {"10", "11", "12", "13", "14", "15", "16", "17", "18", "19"},
+}
+
+// ruleTriggeredPartStructured 报告一段筛选输入是否可按结构化路径解析（family
+// 精确/family 部分前缀/WAF 规则（CRS）或其前缀/纯数字）——只能走消息关键词
+// 路径（含逗号的消息词）的段返回 false，多值拆分据此决定整串回退。
+func ruleTriggeredPartStructured(input string) bool {
+	if input == "" {
+		return false
+	}
+	if input == "WAF 规则（CRS）" || strings.HasPrefix("WAF 规则（CRS）", input) {
+		return true
+	}
+	if _, ok := ruleTriggeredFamilyPrefixes[input]; ok {
+		return true
+	}
+	for label := range ruleTriggeredFamilyPrefixes {
+		if strings.HasPrefix(label, input) {
+			return true
+		}
+	}
+	for _, r := range input {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// ruleTriggeredMultiFilterSQL 逗号多值筛选：单值与 ruleTriggeredFilterSQL 逐字节
+// 一致；多值逐段复用单段解析后以 OR 连接（args 顺序保持段序）。任一段只能走消息
+// 关键词路径时整串回退单输入（保护「sqlmap, brute force」这类含逗号消息词）。
+// 正/反向共用：反向由调用方对返回片段套 NOT。
+func ruleTriggeredMultiFilterSQL(input string, args *[]any) string {
+	if !strings.Contains(input, ",") {
+		return ruleTriggeredFilterSQL(input, args)
+	}
+	parts := strings.Split(input, ",")
+	for _, p := range parts {
+		if !ruleTriggeredPartStructured(strings.TrimSpace(p)) {
+			return ruleTriggeredFilterSQL(input, args)
+		}
+	}
+	ors := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		ors = append(ors, ruleTriggeredFilterSQL(p, args))
+	}
+	if len(ors) == 0 {
+		return ruleTriggeredFilterSQL(input, args)
+	}
+	return "(" + strings.Join(ors, " OR ") + ")"
+}
+
 // ruleTriggeredFilterSQL 构建触发规则筛选条件：family 标签（含部分输入）映射为
 // ID 前缀/形态集合 OR 匹配，否则退回「精确/前缀/消息」子串。返回的片段自带外层
 // 括号，正向用 AND 拼接、反向由调用方套 NOT（rule_triggered_exclude 复用同映射）。
@@ -1742,16 +1809,8 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 	if input == "WAF 规则（CRS）" {
 		return "(" + wafCRSCondition + ")"
 	}
-	familyPrefixes := map[string][]string{
-		"IP 访问控制": {"2", "3", "4", "5", "7"},
-		"地域拦截":    {"8"},
-		"评分拦截":    {"949", "959"},
-		"协议异常":    {"920"},
-		"协议攻击":    {"921"},
-		"自定义规则":   {"10", "11", "12", "13", "14", "15", "16", "17", "18", "19"},
-	}
 	glob5 := "rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]'"
-	if prefixes, isFamily := familyPrefixes[input]; isFamily {
+	if prefixes, isFamily := ruleTriggeredFamilyPrefixes[input]; isFamily {
 		ors := make([]string, 0, len(prefixes)+1)
 		for _, p := range prefixes {
 			ors = append(ors, "rule_triggered LIKE ?")
@@ -1766,7 +1825,7 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 	// family 标签的部分输入：宽匹配（前缀命中任一 family 即并入其前缀集合）。
 	matched := false
 	ors := make([]string, 0, 6)
-	for label, ps := range familyPrefixes {
+	for label, ps := range ruleTriggeredFamilyPrefixes {
 		if strings.HasPrefix(label, input) {
 			matched = true
 			for _, p := range ps {
@@ -1852,10 +1911,10 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	// 映射为 ID 前缀集合 OR 匹配，否则退回 ID/消息子串。rule_triggered_exclude
 	// 复用同一映射整体取反（大多数事件为单一类型时筛掉它看其余）。
 	if ruleTriggered := strings.TrimSpace(c.Query("rule_triggered")); ruleTriggered != "" {
-		where += " AND " + ruleTriggeredFilterSQL(ruleTriggered, &args)
+		where += " AND " + ruleTriggeredMultiFilterSQL(ruleTriggered, &args)
 	}
 	if exclude := strings.TrimSpace(c.Query("rule_triggered_exclude")); exclude != "" {
-		where += " AND NOT (" + ruleTriggeredFilterSQL(exclude, &args) + ")"
+		where += " AND NOT (" + ruleTriggeredMultiFilterSQL(exclude, &args) + ")"
 	}
 
 	// R72 二十次（用户需求）：URI 筛选（子串）。
