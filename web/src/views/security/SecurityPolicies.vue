@@ -89,7 +89,7 @@
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? (isReadOnly ? '查看策略' : '编辑策略') : '新建策略'" width="min(800px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
+    <el-dialog v-model="dialogVisible" :title="editingId ? (isReadOnly ? '查看策略' : '编辑策略') : '新建策略'" width="min(1080px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
       <el-steps :active="currentStep" finish-status="success" align-center class="wizard-steps" :class="{ 'is-clickable': stepsClickable }">
         <el-step title="基础信息" :icon="InfoFilled" @click="jumpToStep(WIZARD_STEP.BASIC)" />
         <el-step title="WAF 规则" :icon="Lock" @click="jumpToStep(WIZARD_STEP.WAF_RULES)" />
@@ -239,13 +239,16 @@
                 <el-table :data="crsExcludedRows" size="small" class="exclusion-table" :max-height="260">
                   <el-table-column label="目标规则" min-width="200">
                     <template #default="{ row }">
+                      <!-- 目标列单行三件套：cascader（弹性占满）+ ghost 内联标签 + 冲突
+                           警告图标（tooltip 悬浮，不占布局流）。同行等高 24px，ghost /
+                           冲突图标出现只挤压 cascader 宽度，不改变行高与其他列位置 -->
                       <div class="exclusion-target-cell">
                         <!-- 懒加载级联单选（与规则组同一懒加载实现，排除口径：剔 01 组
                              /901 ID，保留 49/59/80）：每行一个 cascader（上限 50 行），
                              面板展开才挂载菜单、展开组才生成该组规则叶；checkStrictly
                              组或单条规则皆可作为 target。已存值能映射路径（组→[组号]、
                              规则→[组号, 规则ID]）则级联回填显示解析标签；不能映射
-                             （遗留文件名/陈旧 ID/被剔口径值）由下方 ghost 标签兜底，
+                             （遗留文件名/陈旧 ID/被剔口径值）由右侧 ghost 标签兜底，
                              可清除（×）或直接改选覆盖。:key 在索引就绪后重挂载，避免
                              在途期间展开组缓存空叶。 -->
                         <el-cascader
@@ -282,8 +285,16 @@
                           @close="row.target = ''"
                         >{{ exclusionRowGhostLabel(row.target) }}</el-tag>
                         <!-- 行级矛盾提示：目标同时出现在规则组正选与排除清单（单条 ID 矛盾 /
-                             整组冗余），排除恒优先——提示而非阻断，交由用户裁决 -->
-                        <div v-if="exclusionRowConflict(row)" class="exclusion-row-warning">{{ exclusionRowConflict(row) }}</div>
+                             整组冗余），排除恒优先——提示而非阻断。改为行内警告图标 +
+                             tooltip 悬浮展示全文，不占布局流（原下方警告行会致行高抖动） -->
+                        <el-tooltip
+                          v-if="exclusionRowConflict(row)"
+                          :content="exclusionRowConflict(row)"
+                          placement="top"
+                          :show-after="200"
+                        >
+                          <el-icon class="exclusion-conflict-icon"><WarningFilled /></el-icon>
+                        </el-tooltip>
                       </div>
                     </template>
                   </el-table-column>
@@ -718,7 +729,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
-import { Plus, Lock, InfoFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search } from '@element-plus/icons-vue'
+import { Plus, Lock, InfoFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, CascaderValue, LazyLoad } from 'element-plus'
 import { mfaAwareSuccess, request } from '@/utils/api'
@@ -2303,6 +2314,8 @@ onMounted(async () => {
 .extract-source { font-size: 13px; color: #6b7280; }
 
 .wizard-content { min-height: min(350px, 55dvh); max-height: 55dvh; overflow-y: auto; padding-right: 8px; }
+/* 弹框内 cascader 弹性兜底：本体不超出控件列宽（CRS 规则组 / 排除行 / 区域选择共用） */
+.wizard-content :deep(.el-cascader) { max-width: 100%; }
 
 .step-content { padding: 8px 0; }
 
@@ -2323,18 +2336,21 @@ onMounted(async () => {
 .exclusion-empty-tip { flex: 1; min-width: 0; font-size: 12px; color: #9ca3af; line-height: 1.5; }
 /* 条目多时限高内部滚动（:max-height 由 el-table 实现表头 sticky 固定），不撑高弹框 */
 .exclusion-table { width: 100%; }
-/* 行内垂直对齐：td 显式垂直居中 + 单元格内容 flex 纵向居中，目标 select 与
-   作用域控件（radio/条件输入）同高同行，消除一高一低 */
-.exclusion-table :deep(td.el-table__cell) { vertical-align: middle; }
-.exclusion-target-cell { display: flex; flex-direction: column; justify-content: center; }
-.exclusion-target-select { width: 100%; }
+/* 行内三列顶部对齐：td 统一顶部对齐，目标列（单行 24px）、作用域列（双行 24px×2）、
+   删除列（24px 按钮）首行基线一致；ghost 标签 / 冲突图标内联于目标列，出现或消失
+   只改变 cascader 可用宽度，不影响行高与其他列位置 */
+.exclusion-table :deep(td.el-table__cell) { vertical-align: top; }
+.exclusion-target-cell { display: flex; align-items: center; gap: 6px; min-height: 24px; }
+.exclusion-target-select { flex: 1 1 auto; min-width: 0; max-width: 100%; }
 /* ghost 兜底标签：级联无法映射路径的已存值（遗留文件名/陈旧规则 ID/被剔口径值）
-   以可读标签呈现，可删除；长 label 省略 + title 悬浮全文 */
+   以可读标签内联呈现于 cascader 右侧，可删除；限宽省略 + title 悬浮全文 */
 .crs-ghost-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.exclusion-target-ghost { margin-top: 4px; max-width: 100%; }
-.crs-ghost-tags :deep(.el-tag__content), .exclusion-target-ghost :deep(.el-tag__content) { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 行级矛盾提示（与规则组选择冲突/冗余）：跟随目标 select 下方，警告色小字 */
-.exclusion-row-warning { font-size: 12px; color: #e6a23c; line-height: 1.5; margin-top: 4px; }
+.exclusion-target-ghost { flex: 0 1 auto; min-width: 0; margin-top: 0; }
+.crs-ghost-tags :deep(.el-tag__content) { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exclusion-target-ghost :deep(.el-tag__content) { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 行级矛盾提示（与规则组选择冲突/冗余）：不占布局流的行内警告图标，tooltip 悬浮
+   展示全文；固定 16px 宽度占位稳定，出现/消失不推移其他列 */
+.exclusion-conflict-icon { flex: 0 0 auto; font-size: 16px; color: #e6a23c; cursor: help; vertical-align: middle; }
 /* 作用域固定双行（radio 行 + 条件行）：控件统一 small（24px）与目标 select 同高；
    条件行定高 24px——all（灰字）/ip（标签输入）/list（列表多选）切换行高恒定不跳动 */
 .exclusion-scope-cell { display: flex; flex-direction: column; justify-content: center; gap: 4px; }
