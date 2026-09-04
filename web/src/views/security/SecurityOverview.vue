@@ -154,7 +154,7 @@
                 <el-icon class="title-icon"><Odometer /></el-icon>
                 <span>限流拦截</span>
               </div>
-              <el-tag type="info" size="small" effect="plain">累计（进程启动至今）</el-tag>
+              <el-tag type="info" size="small" effect="plain">按 429 响应计（含上游自返 429）</el-tag>
             </div>
           </template>
           <el-alert v-if="rateLimitError" title="限流拦截数据加载失败" type="error" show-icon :closable="false" />

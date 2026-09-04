@@ -75,7 +75,12 @@ func parseRateLimit429Counts(body string) map[string]float64 {
 			continue
 		}
 		labels := parsePromLabelPairs(line[len(rateLimit429CountMetric):braceEnd])
-		if labels["code"] != "429" || labels["handler"] != "rate_limit" {
+		// 仅按 code=429 过滤：Caddy metrics 的 handler 标签取主路由链首处理器
+		//（routes.go:174），F3 注入后恒为 headers、错误路由响应亦继承主路由
+		// 标签——handler="rate_limit" 永不命中。本栈限流拦截自 v2.2.3 起恒 429
+		//（buildRateLimitErrorRoute），上游自返 429 无法区分、如实纳入计数
+		//（卡片文案已标注口径）。
+		if labels["code"] != "429" {
 			continue
 		}
 		host := labels["host"]

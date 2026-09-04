@@ -7,31 +7,32 @@ import (
 )
 
 // Fixture modelled on live Caddy admin /metrics output:
-// caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="go029.com",method="GET",server="http_443"} 7
+// caddy_http_request_duration_seconds_count{code="429",handler="headers",host="go029.com",method="GET",server="http_443"} 7
 const rateLimit429MetricsFixture = `# HELP caddy_http_request_duration_seconds Histogram of request durations
 # TYPE caddy_http_request_duration_seconds histogram
-caddy_http_request_duration_seconds_bucket{code="429",handler="rate_limit",host="go029.com",method="GET",server="http_443",le="0.005"} 3
-caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="go029.com",method="GET",server="http_443"} 7
-caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="go029.com",method="POST",server="http_443"} 2
-caddy_http_request_duration_seconds_sum{code="429",handler="rate_limit",host="go029.com",method="GET",server="http_443"} 0.31
-caddy_http_request_duration_seconds_count{code="200",handler="rate_limit",host="go029.com",method="GET",server="http_443"} 100
-caddy_http_request_duration_seconds_count{code="429",handler="reverse_proxy",host="go029.com",method="GET",server="http_443"} 5
-caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="api.example.com",method="GET",server="http_443"} 3
-caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="api.example.com",method="GET",server="http_80"} 4
-caddy_http_requests_total{handler="rate_limit",host="go029.com",server="http_443"} 42
+caddy_http_request_duration_seconds_bucket{code="429",handler="headers",host="go029.com",method="GET",server="http_443",le="0.005"} 3
+caddy_http_request_duration_seconds_count{code="429",handler="headers",host="go029.com",method="GET",server="http_443"} 7
+caddy_http_request_duration_seconds_count{code="429",handler="headers",host="go029.com",method="POST",server="http_443"} 2
+caddy_http_request_duration_seconds_sum{code="429",handler="headers",host="go029.com",method="GET",server="http_443"} 0.31
+caddy_http_request_duration_seconds_count{code="200",handler="headers",host="go029.com",method="GET",server="http_443"} 100
+caddy_http_request_duration_seconds_count{code="429",handler="headers",host="go029.com",method="GET",server="http_443"} 5
+caddy_http_request_duration_seconds_count{code="429",handler="headers",host="api.example.com",method="GET",server="http_443"} 3
+caddy_http_request_duration_seconds_count{code="429",handler="headers",host="api.example.com",method="GET",server="http_80"} 4
+caddy_http_requests_total{handler="headers",host="go029.com",server="http_443"} 42
 `
 
-func TestRateLimitBlocksParse_aggregatesPerHostOnly429RateLimit(t *testing.T) {
+func TestRateLimitBlocksParse_aggregatesPerHostByCode429(t *testing.T) {
 	// Given metrics text mixing codes, handlers, methods, servers, and sibling histogram series
-	// When the counters are parsed
+	// When the counters are parsed——仅按 code="429" 过滤（handler 标签自 F3 起恒为
+	// 主路由链首 headers，不可作区分维度；上游自返 429 如实纳入计数，卡片已标注口径）
 	counts := parseRateLimit429Counts(rateLimit429MetricsFixture)
 
-	// Then only code="429" + handler="rate_limit" count series contribute, summed per host
+	// Then all code="429" count series contribute, summed per host
 	if len(counts) != 2 {
 		t.Fatalf("hosts=%v, want exactly go029.com and api.example.com", counts)
 	}
-	if counts["go029.com"] != 9 {
-		t.Errorf("go029.com=%v, want 9 (7 GET + 2 POST)", counts["go029.com"])
+	if counts["go029.com"] != 14 {
+		t.Errorf("go029.com=%v, want 14 (7 GET + 2 POST + 5 upstream-429)", counts["go029.com"])
 	}
 	if counts["api.example.com"] != 7 {
 		t.Errorf("api.example.com=%v, want 7 (3 http_443 + 4 http_80)", counts["api.example.com"])
@@ -83,8 +84,8 @@ func TestScrapeRateLimitBlocks_returnsSortedPerHostCounts(t *testing.T) {
 	if len(blocks) != 2 {
 		t.Fatalf("blocks=%+v, want 2 hosts", blocks)
 	}
-	if blocks[0].Host != "go029.com" || blocks[0].Count != 9 {
-		t.Errorf("blocks[0]=%+v, want {go029.com 9}", blocks[0])
+	if blocks[0].Host != "go029.com" || blocks[0].Count != 14 {
+		t.Errorf("blocks[0]=%+v, want {go029.com 14}", blocks[0])
 	}
 	if blocks[1].Host != "api.example.com" || blocks[1].Count != 7 {
 		t.Errorf("blocks[1]=%+v, want {api.example.com 7}", blocks[1])
