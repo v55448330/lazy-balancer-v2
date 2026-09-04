@@ -89,7 +89,7 @@
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? (isReadOnly ? '查看策略' : '编辑策略') : '新建策略'" width="min(1080px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
+    <el-dialog v-model="dialogVisible" :title="editingId ? (isReadOnly ? '查看策略' : '编辑策略') : '新建策略'" width="min(950px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
       <el-steps :active="currentStep" finish-status="success" align-center class="wizard-steps" :class="{ 'is-clickable': stepsClickable }">
         <el-step title="基础信息" :icon="InfoFilled" @click="jumpToStep(WIZARD_STEP.BASIC)" />
         <el-step title="WAF 规则" :icon="Lock" @click="jumpToStep(WIZARD_STEP.WAF_RULES)" />
@@ -219,30 +219,35 @@
               title="开启后命中规则事件的请求体将明文记录到事件库（单条上限 64KB），可能包含密码等敏感信息，请仅在排障期间开启"
               style="margin-bottom: 12px"
             />
-            <el-form-item label="排除规则">
+            <el-form-item label="排除规则" label-position="top">
               <!-- 表格行编辑器：目标（与规则组同款混合下拉）× 作用域（全部 IP/指定 IP/地址
                    列表）× 条件控件（ip → 标签输入 + isValidCidr 即时拒绝；list → 引用
                    /security/ip-lists 列表）× 删除。上限 50 行；旧字符串数组存储读取时已
                    归一为 scope:all 行，保存统一写对象数组。
-                   布局：空态不渲染表格——单行紧凑引导（说明 + 添加按钮）避免挤占弹框
-                   高度；有条目才渲染表格，条目多时容器 max-height 260px 内部滚动（表头
-                   sticky 固定），不再撑高弹框。行内控件统一 small（24px）：目标 select /
-                   作用域 radio / 条件控件同高 + 单元格垂直居中，消除一高一低；作用域列
-                   为固定双行（radio 行 + 条件行，各 24px），all/ip/list 切换不跳动行高；
-                   min-width 之和（200+240+60=500px）低于控件列宽 → 容器内完整展示无
-                   横向滚动；条目数徽标随工具行。 -->
+                    布局：空态不渲染表格——单行紧凑引导（说明 + 添加按钮）避免挤占弹框
+                    高度；有条目才渲染表格，条目多时容器 max-height 260px 内部滚动（表头
+                    sticky 固定），不再撑高弹框。每条排除单行呈现（目标 × 作用域 × 条件
+                    合并列）：行内控件统一 small（24px）同高 + 单元格顶部对齐；cascader
+                    弹性占满剩余宽（min 280px）、radios 自然紧凑、条件控件内联于 radios
+                    之后（all 灰字短提示 / ip 标签输入 min 220 max 360 / list 紧凑选择），
+                    行高 ~32-40px（原双行 60px+）；合并列 min-width 560 + 删除列 60 低于
+                    弹框内容宽 → 1080px 全宽不换行、无横向滚动；条目数徽标随工具行。 -->
               <div v-if="crsExcludedRows.length === 0" class="exclusion-empty">
                 <span class="exclusion-empty-tip">未添加排除规则——排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP 或地址列表生效</span>
                 <el-button size="small" type="primary" plain :disabled="form.mode === 'off' || isReadOnly" @click="addExcludedRule">添加排除规则</el-button>
               </div>
               <template v-else>
                 <el-table :data="crsExcludedRows" size="small" class="exclusion-table" :max-height="260">
-                  <el-table-column label="目标规则" min-width="200">
+                  <!-- 单行合并列：目标规则 × 作用域 × 条件，一条排除规则一行呈现——
+                       左起：目标 cascader（弹性占满剩余，min 280px）+ ghost 内联标签 +
+                       冲突警告图标（tooltip 悬浮）→ 作用域 radios（自然宽）→ 条件控件
+                       内联随 radios 之后（all → 灰字短提示 / ip → 标签输入 min 220 max
+                       360 / list → 列表多选紧凑宽），行高 ~32-40px；1080px 弹框全宽下
+                       不换行，窄于该宽度时 flex-wrap 优雅折行且首行对齐不乱；ghost /
+                       冲突图标出现只挤压 cascader 宽度，不改行结构 -->
+                  <el-table-column label="目标规则 × 作用域 × 条件" min-width="560">
                     <template #default="{ row }">
-                      <!-- 目标列单行三件套：cascader（弹性占满）+ ghost 内联标签 + 冲突
-                           警告图标（tooltip 悬浮，不占布局流）。同行等高 24px，ghost /
-                           冲突图标出现只挤压 cascader 宽度，不改变行高与其他列位置 -->
-                      <div class="exclusion-target-cell">
+                      <div class="exclusion-row-cell">
                         <!-- 懒加载级联单选（与规则组同一懒加载实现，排除口径：剔 01 组
                              /901 ID，保留 49/59/80）：每行一个 cascader（上限 50 行），
                              面板展开才挂载菜单、展开组才生成该组规则叶；checkStrictly
@@ -285,8 +290,8 @@
                           @close="row.target = ''"
                         >{{ exclusionRowGhostLabel(row.target) }}</el-tag>
                         <!-- 行级矛盾提示：目标同时出现在规则组正选与排除清单（单条 ID 矛盾 /
-                             整组冗余），排除恒优先——提示而非阻断。改为行内警告图标 +
-                             tooltip 悬浮展示全文，不占布局流（原下方警告行会致行高抖动） -->
+                             整组冗余），排除恒优先——提示而非阻断。行内警告图标 +
+                             tooltip 悬浮展示全文，不占布局流 -->
                         <el-tooltip
                           v-if="exclusionRowConflict(row)"
                           :content="exclusionRowConflict(row)"
@@ -295,51 +300,41 @@
                         >
                           <el-icon class="exclusion-conflict-icon"><WarningFilled /></el-icon>
                         </el-tooltip>
-                      </div>
-                    </template>
-                  </el-table-column>
-                  <!-- 作用域与条件合并列：固定双行（radio 行 + 条件行，各 24px 定高）
-                       ——条件按作用域切换渲染：all → 灰字提示 / ip → 标签输入 /
-                       list → 列表多选，行高恒定切换不跳动；控件统一 small 与目标
-                       select 同高，单元格内容垂直居中 -->
-                  <el-table-column label="作用域 / 条件" min-width="240">
-                    <template #default="{ row }">
-                      <div class="exclusion-scope-cell">
-                        <div class="exclusion-scope-line">
-                          <el-radio-group v-model="row.scope" size="small" :disabled="form.mode === 'off' || isReadOnly" @change="onScopeChange(row)">
-                            <el-radio value="all">全部 IP</el-radio>
-                            <el-radio value="ip">指定 IP</el-radio>
-                            <el-radio value="list">地址列表</el-radio>
-                          </el-radio-group>
-                        </div>
-                        <div class="exclusion-scope-line">
-                          <el-select
-                            v-if="row.scope === 'ip'"
-                            v-model="row.ips"
-                            size="small"
-                            multiple
-                            filterable
-                            allow-create
-                            default-first-option
-                            :disabled="form.mode === 'off' || isReadOnly"
-                            placeholder="输入 IP/CIDR 后回车"
-                            class="exclusion-scope-control"
-                            @change="(value: string[]) => onExclusionIpsChange(row, value)"
-                          />
-                          <el-select
-                            v-else-if="row.scope === 'list'"
-                            v-model="row.listRefs"
-                            size="small"
-                            multiple
-                            filterable
-                            :disabled="form.mode === 'off' || isReadOnly"
-                            placeholder="选择 IP 地址列表"
-                            class="exclusion-scope-control"
-                          >
-                            <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
-                          </el-select>
-                          <span v-else class="exclusion-scope-all">对所有 IP 生效</span>
-                        </div>
+                        <el-radio-group v-model="row.scope" size="small" class="exclusion-scope-radios" :disabled="form.mode === 'off' || isReadOnly" @change="onScopeChange(row)">
+                          <el-radio value="all">全部 IP</el-radio>
+                          <el-radio value="ip">指定 IP</el-radio>
+                          <el-radio value="list">地址列表</el-radio>
+                        </el-radio-group>
+                        <!-- 条件控件内联于 radios 之后：all → 灰字短提示（自然宽、不预留
+                             布局空间）/ ip → 标签输入（min 220 max 360）/ list → 列表
+                             多选（紧凑宽）；切换只影响 radios 之后的空位，radios 与
+                             cascader 位置不抖动 -->
+                        <el-select
+                          v-if="row.scope === 'ip'"
+                          v-model="row.ips"
+                          size="small"
+                          multiple
+                          filterable
+                          allow-create
+                          default-first-option
+                          :disabled="form.mode === 'off' || isReadOnly"
+                          placeholder="输入 IP/CIDR 后回车"
+                          class="exclusion-scope-control-ip"
+                          @change="(value: string[]) => onExclusionIpsChange(row, value)"
+                        />
+                        <el-select
+                          v-else-if="row.scope === 'list'"
+                          v-model="row.listRefs"
+                          size="small"
+                          multiple
+                          filterable
+                          :disabled="form.mode === 'off' || isReadOnly"
+                          placeholder="选择 IP 地址列表"
+                          class="exclusion-scope-control-list"
+                        >
+                          <el-option v-for="l in ipLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                        </el-select>
+                        <span v-else class="exclusion-scope-all">对所有 IP 生效</span>
                       </div>
                     </template>
                   </el-table-column>
@@ -2335,30 +2330,36 @@ onMounted(async () => {
 .exclusion-empty { display: flex; align-items: center; gap: 12px; width: 100%; }
 .exclusion-empty-tip { flex: 1; min-width: 0; font-size: 12px; color: #9ca3af; line-height: 1.5; }
 /* 条目多时限高内部滚动（:max-height 由 el-table 实现表头 sticky 固定），不撑高弹框 */
-.exclusion-table { width: 100%; }
-/* 行内三列顶部对齐：td 统一顶部对齐，目标列（单行 24px）、作用域列（双行 24px×2）、
-   删除列（24px 按钮）首行基线一致；ghost 标签 / 冲突图标内联于目标列，出现或消失
-   只改变 cascader 可用宽度，不影响行高与其他列位置 */
+.exclusion-table { flex: 1 1 auto; min-width: 0; }
+/* 行内两列顶部对齐：td 统一顶部对齐，合并列（单行控件组 ~32px）与删除列（24px
+   按钮）首行基线一致；ghost 标签 / 冲突图标内联于合并列，出现或消失只改变
+   cascader 可用宽度，不影响行高与删除列位置 */
 .exclusion-table :deep(td.el-table__cell) { vertical-align: top; }
-.exclusion-target-cell { display: flex; align-items: center; gap: 6px; min-height: 24px; }
-.exclusion-target-select { flex: 1 1 auto; min-width: 0; max-width: 100%; }
+/* 单行合并行：目标 × 作用域 × 条件一条排除一行。1080px 弹框全宽下不换行；
+   窄于该宽度 flex-wrap 优雅折行（条件控件先折），首行对齐不乱 */
+.exclusion-row-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 24px; }
+/* 子组件根尺寸一律经 :deep 下发——el-cascader/el-select/el-radio-group/el-tag/el-icon
+   的根元素不继承父组件 data-v，scoped 块内按裸类名命中不到 */
+.exclusion-row-cell :deep(.exclusion-target-select) { flex: 2 1 300px; min-width: 280px; max-width: 100%; }
 /* ghost 兜底标签：级联无法映射路径的已存值（遗留文件名/陈旧规则 ID/被剔口径值）
    以可读标签内联呈现于 cascader 右侧，可删除；限宽省略 + title 悬浮全文 */
-.crs-ghost-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.exclusion-target-ghost { flex: 0 1 auto; min-width: 0; margin-top: 0; }
-.crs-ghost-tags :deep(.el-tag__content) { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.exclusion-target-ghost :deep(.el-tag__content) { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exclusion-row-cell :deep(.exclusion-target-ghost) { flex: 0 1 auto; min-width: 0; margin-top: 0; }
+.exclusion-row-cell :deep(.exclusion-target-ghost .el-tag__content) { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 行级矛盾提示（与规则组选择冲突/冗余）：不占布局流的行内警告图标，tooltip 悬浮
-   展示全文；固定 16px 宽度占位稳定，出现/消失不推移其他列 */
-.exclusion-conflict-icon { flex: 0 0 auto; font-size: 16px; color: #e6a23c; cursor: help; vertical-align: middle; }
-/* 作用域固定双行（radio 行 + 条件行）：控件统一 small（24px）与目标 select 同高；
-   条件行定高 24px——all（灰字）/ip（标签输入）/list（列表多选）切换行高恒定不跳动 */
-.exclusion-scope-cell { display: flex; flex-direction: column; justify-content: center; gap: 4px; }
-.exclusion-scope-cell :deep(.el-radio) { margin-right: 12px; }
-.exclusion-scope-cell :deep(.el-radio-group) { flex-wrap: wrap; row-gap: 2px; }
-.exclusion-scope-line { display: flex; align-items: center; min-height: 24px; }
-.exclusion-scope-control { width: 100%; }
-.exclusion-scope-all { font-size: 12px; color: #9ca3af; }
+   展示全文；固定 16px 宽度占位稳定，出现/消失不推移其他控件 */
+.exclusion-row-cell :deep(.exclusion-conflict-icon) { flex: 0 0 auto; font-size: 16px; color: #e6a23c; cursor: help; vertical-align: middle; }
+/* 作用域 radios 自然紧凑宽；条件控件内联其后——ip 标签输入 min 200 / max 320，
+   list 选择器紧凑固定宽，all 灰字短提示自然宽不预留布局空间；控件统一 small
+   （24px）与 cascader 同高 */
+.exclusion-row-cell :deep(.exclusion-scope-radios) { flex: 0 0 auto; }
+.exclusion-row-cell :deep(.exclusion-scope-radios .el-radio) { margin-right: 10px; }
+.exclusion-row-cell :deep(.exclusion-scope-radios .el-radio:last-child) { margin-right: 0; }
+.exclusion-row-cell :deep(.exclusion-scope-control-ip) { flex: 1 1 240px; min-width: 200px; max-width: 320px; }
+.exclusion-row-cell :deep(.exclusion-scope-control-list) { flex: 0 1 auto; min-width: 200px; max-width: 280px; }
+.exclusion-row-cell :deep(.exclusion-scope-all) { flex: 0 0 auto; font-size: 12px; color: #9ca3af; white-space: nowrap; }
+/* ghost 兜底标签容器（crs_rule_groups 下方，普通 div） */
+.crs-ghost-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.crs-ghost-tags :deep(.el-tag__content) { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .exclusion-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 /* 条目数徽标（N/50）随工具行右侧 */
 .exclusion-count { margin-left: auto; }
@@ -2476,6 +2477,7 @@ onMounted(async () => {
 
 <!-- el-tooltip popper 挂载到 body， scoped 样式无法命中，单独非 scoped 块 -->
 <style>
+
 .policy-rules-popper .policy-rule-row {
   padding: 4px 8px;
   border-radius: 4px;
