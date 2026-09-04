@@ -2773,10 +2773,11 @@ func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string, security
 	if content == "" {
 		return nil
 	}
-	statusCode := pagePolicy.BlockStatusCode
-	if statusCode == 0 {
-		statusCode = 429
-	}
+	// 限流拦截恒 429（不再取策略 BlockStatusCode）：429 Too Many Requests 是
+	// 限流的语义正确状态码，且使 caddy_http_requests_total{code="429"} 可单独
+	// 计量——Wave 6 状态统一后 403 与 WAF 拦截在指标中同形不可区分（实测：
+	// 错误路由响应继承主路由 handler 标签，无任何其他区分维度）。拦截页正文
+	// 不变（客户端体验一致），Retry-After 按限流 1s 窗口给出重试契约。
 	return map[string]interface{}{
 		"match": []interface{}{
 			map[string]interface{}{
@@ -2788,9 +2789,10 @@ func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string, security
 			map[string]interface{}{
 				"handler":     "static_response",
 				"body":        content,
-				"status_code": statusCode,
+				"status_code": 429,
 				"headers": map[string]interface{}{
 					"Content-Type": []string{"text/html; charset=utf-8"},
+					"Retry-After":  []string{"1"},
 				},
 			},
 		},

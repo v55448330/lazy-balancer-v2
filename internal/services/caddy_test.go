@@ -1937,7 +1937,8 @@ func TestGenerateCaddyConfig_rateLimitErrorRoute_usesFirstBoundPolicy(t *testing
 	route := findRateLimitErrorRoute(t, generated)
 	handler := firstHandler(t, route)
 	assertEqual(t, handler["body"], "<html>older-rl-block</html>")
-	assertEqual(t, handler["status_code"], 451)
+	// 限流错误路由状态码恒 429（v2.2.3 起不再取策略 BlockStatusCode）
+	assertEqual(t, handler["status_code"], 429)
 }
 
 func TestGenerateCaddyConfig_rendersRateLimitErrorRoute_defaultsTo429(t *testing.T) {
@@ -1962,8 +1963,10 @@ func TestGenerateCaddyConfig_rendersRateLimitErrorRoute_defaultsTo429(t *testing
 	assertEqual(t, handler["status_code"], 429)
 }
 
-func TestGenerateCaddyConfig_rendersRateLimitErrorRoute_honorsBlockStatusCode(t *testing.T) {
-	// Given
+func TestGenerateCaddyConfig_rendersRateLimitErrorRoute_always429RegardlessOfBlockStatusCode(t *testing.T) {
+	// Given：策略显式配置了 BlockStatusCode=451——限流错误路由状态码仍恒 429
+	//（语义正确 + 使 caddy_http_requests_total{code="429"} 可单独计量；
+	// Wave 6 状态统一后 403 与 WAF 拦截在指标中同形不可区分）
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_rl", "rl.example.test", 8080)
@@ -1978,7 +1981,7 @@ func TestGenerateCaddyConfig_rendersRateLimitErrorRoute_honorsBlockStatusCode(t 
 		t.Fatalf("generation failed: %s", message)
 	}
 	route := findRateLimitErrorRoute(t, generated)
-	assertEqual(t, firstHandler(t, route)["status_code"], 451)
+	assertEqual(t, firstHandler(t, route)["status_code"], 429)
 }
 
 func findRateLimitErrorRoute(t *testing.T, generated map[string]interface{}) map[string]interface{} {

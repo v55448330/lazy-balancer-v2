@@ -373,10 +373,12 @@ func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T
 	// 地域拦截与 CRS/自定义/IP ACL 同一中断形态（"GeoIP blocked" 子句已消亡）
 	wantExpr := "({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')"
 	assertEqual(t, routeMatcher(t, blockPageRoute)["expression"], wantExpr)
-	// 限流错误路由同样使用首绑定策略的拦截页
+	// 限流错误路由同样使用首绑定策略的拦截页，但状态码恒 429（语义正确+
+	// 使 code=429 指标可计量），不再取策略 BlockStatusCode
 	rlHandler := firstHandler(t, rateLimitRoute)
 	assertEqual(t, rlHandler["body"], "<html>first-block</html>")
-	assertEqual(t, rlHandler["status_code"], 451)
+	assertEqual(t, rlHandler["status_code"], 429)
+	assertEqual(t, rlHandler["headers"].(map[string]interface{})["Retry-After"], []string{"1"})
 }
 
 // SC-GEN-05：disabled 策略在生成中零贡献（无处理器/路由/错误路由），同规则的
