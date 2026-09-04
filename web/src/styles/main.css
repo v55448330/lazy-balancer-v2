@@ -172,3 +172,10 @@ body {
 
 /* 设置卡内表单基础样式（各设置页共用；label 右对齐 120px 列） */
 .settings-form { padding: 4px 0; }
+
+
+/* 428 MFA step-up 弹码弹框（api.ts promptMfaCode，teleport 到 body 需全局样式）：
+   自定义 OTP 内容块加高正文区后，EP 默认容器 align-items:center 会把 warning
+   图标悬在空中部——改为顶部对齐并与首行文本光学对齐（图标 24px ≈ 首行 22px 行高） */
+.mfa-stepup-message-box .el-message-box__container { align-items: flex-start; }
+.mfa-stepup-message-box .el-message-box__status { margin-top: 1px; }

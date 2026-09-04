@@ -412,9 +412,12 @@ onMounted(async () => {
   margin-bottom: 20px;
   color: var(--el-text-color-primary);
 }
-/* OTP 输入框在表单项内居中（组件根即 el-input-otp，display 覆盖 inline-flex 默认值） */
+/* OTP 输入框在表单项内居中：el-form-item__content 为 flex 容器，组件根（inline-flex）
+   作为 flex 项宽度收缩为内容宽——flex:1 撑满整行后 justify-content 才有居中空间 */
 .mfa-otp {
   display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
   justify-content: center;
 }
 .mfa-switch {

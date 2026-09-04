@@ -133,6 +133,9 @@ const promptMfaCode = (): Promise<string | null> =>
     ElMessageBox({
       title: 'MFA 验证',
       type: 'warning',
+      // 自定义类：OTP 内容块加高正文区，全局 CSS 把 warning 图标从垂直居中改为
+      // 与首行文本顶对齐（EP 2.14 容器 align-items:center 会让图标悬在空中部）
+      customClass: 'mfa-stepup-message-box',
       showCancelButton: true,
       confirmButtonText: '验证',
       cancelButtonText: '取消',
