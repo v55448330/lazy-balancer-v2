@@ -1695,7 +1695,10 @@ func ip2RegionShortenName(name string) string {
 }
 
 // formatIP2RegionLocation 把 ip2region 原始 region（"国家|省|市|ISP|国家代码"）
-// 格式化为展示文本：中国 → "中国·广东·深圳"，海外国家 → "海外"，未知/畸形 → ""。
+// 格式化为展示文本：中国 → "中国·广东·深圳·电信"（运营商有值且非 "0" 时追加，
+// v4 xdb 第 4 段为 ISP——实测 114.114.114.114=中国|江苏省|南京市|0|CN、
+// 180.101.245.246=中国|江苏省|南京市|电信|CN），海外国家 → "海外"（按需求不
+// 展示 ISP），未知/畸形 → ""。
 func formatIP2RegionLocation(region string) string {
 	fields := strings.Split(region, "|")
 	if len(fields) < 5 || fields[0] == "" || fields[0] == "0" {
@@ -1711,6 +1714,9 @@ func formatIP2RegionLocation(region string) string {
 			continue
 		}
 		parts = append(parts, ip2RegionShortenName(f))
+	}
+	if isp := strings.TrimSpace(fields[3]); isp != "" && isp != "0" {
+		parts = append(parts, isp)
 	}
 	return strings.Join(parts, "·")
 }

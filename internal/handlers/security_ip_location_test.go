@@ -15,13 +15,14 @@ func TestFormatIP2RegionLocation(t *testing.T) {
 		region string
 		want   string
 	}{
-		{"full china region", "中国|广东省|深圳市|电信|CN", "中国·广东·深圳"},
-		{"municipality", "中国|北京市|北京市|联通|CN", "中国·北京·北京"},
-		{"autonomous region", "中国|广西壮族自治区|南宁市|电信|CN", "中国·广西·南宁"},
-		{"sar", "中国|香港特别行政区|九龙|0|CN", "中国·香港·九龙"},
+		{"full china region", "中国|广东省|深圳市|电信|CN", "中国·广东·深圳·电信"},
+		{"municipality", "中国|北京市|北京市|联通|CN", "中国·北京·北京·联通"},
+		{"autonomous region", "中国|广西壮族自治区|南宁市|电信|CN", "中国·广西·南宁·电信"},
+		{"sar no isp", "中国|香港特别行政区|九龙|0|CN", "中国·香港·九龙"},
 		{"province only", "中国|山东省|0|0|CN", "中国·山东"},
 		{"unknown province city", "中国|0|0|0|CN", "中国"},
 		{"overseas", "美国|0|0|0|US", "海外"},
+		{"overseas with isp still hidden", "United States|California|0|Google LLC|US", "海外"},
 		{"unknown region", "0|0|0|0|0", ""},
 		{"empty", "", ""},
 		{"too few fields", "中国|广东省", ""},
