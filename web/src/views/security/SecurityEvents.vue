@@ -31,23 +31,35 @@
         <!-- R72 十九次（用户需求）：规则 ID 筛选替换为三列（负载规则/触发规则/策略）
              服务端筛选（rule_name/rule_triggered/policy_name LIKE）。 -->
         <el-input v-model="filters.rule_name" placeholder="负载规则" clearable style="width: 140px" @keyup.enter="applyFilters" />
-        <!-- 触发规则筛选：单下拉双选项组——「筛选」组正选、「排除：…」组反向
-            （值以 ! 前缀编码，发送时拆为 rule_triggered_exclude），tag 自说明，
-             不占额外工具行宽度；也可直接输入 CRS 规则 ID（如 942100）、细标签
-            （评分拦截/协议异常/协议攻击）或消息关键词。 -->
-        <el-select v-model="filters.rule_triggered" placeholder="触发规则" clearable filterable allow-create style="width: 170px">
-          <el-option-group label="筛选">
-            <el-option label="IP 访问控制" value="IP 访问控制" title="IP 黑/白名单、信任、预检（id 2/3/4/5/7）" />
-            <el-option label="地域拦截" value="地域拦截" title="GeoIP 区域控制（id 8）" />
-            <el-option label="WAF 规则（CRS）" value="WAF 规则（CRS）" title="全部 6 位 CRS 规则 ID（含协议族与 949/959 评估族）" />
-            <el-option label="自定义规则" value="自定义规则" title="自定义规则（5 位 ID 及合成 ID）" />
-          </el-option-group>
-          <el-option-group label="排除（反向筛选，看其余类型）">
-            <el-option label="排除：IP 访问控制" value="!IP 访问控制" title="筛掉 IP 访问控制事件，只看其余" />
-            <el-option label="排除：地域拦截" value="!地域拦截" title="筛掉地域拦截事件，只看其余" />
-            <el-option label="排除：WAF 规则（CRS）" value="!WAF 规则（CRS）" title="筛掉全部 CRS 规则事件，只看其余" />
-            <el-option label="排除：自定义规则" value="!自定义规则" title="筛掉自定义规则事件，只看其余" />
-          </el-option-group>
+        <!-- 触发规则筛选：多选 + 头部全选（勾的就是看的，统一正向心智）。
+             全选（4 类别全中且无自定义 tag）或空选 = 不过滤，不发送参数；子集或含
+             自定义 tag 时全部选中值英文逗号连接发送 rule_triggered（后端逐段按
+             family/前缀/纯数字 ID 解析，OR 连接）。filterable + allow-create：可直接
+             输入 CRS 规则 ID（如 942100）等自定义 tag 混入同一参数；自定义 tag 不参与
+             全选判定（只看 4 个类别是否全中）。 -->
+        <el-select
+          v-model="filters.rule_triggered"
+          multiple
+          filterable
+          allow-create
+          collapse-tags
+          collapse-tags-tooltip
+          :max-collapse-tags="1"
+          placeholder="触发规则"
+          style="width: 220px"
+          popper-class="triggered-filter-popper"
+        >
+          <template #header>
+            <el-checkbox
+              :model-value="triggeredCheckAll"
+              :indeterminate="triggeredIndeterminate"
+              @change="toggleTriggeredAll"
+            >全选</el-checkbox>
+          </template>
+          <el-option label="IP 访问控制" value="IP 访问控制" title="IP 黑/白名单、信任、预检（id 2/3/4/5/7）" />
+          <el-option label="地域拦截" value="地域拦截" title="GeoIP 区域控制（id 8）" />
+          <el-option label="WAF 规则（CRS）" value="WAF 规则（CRS）" title="全部 6 位 CRS 规则 ID（含协议族与 949/959 评估族）" />
+          <el-option label="自定义规则" value="自定义规则" title="自定义规则（5 位 ID 及合成 ID）" />
         </el-select>
         <el-input v-model="filters.policy_name" placeholder="策略" clearable style="width: 120px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 150px" @keyup.enter="applyFilters" />
@@ -293,6 +305,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { Refresh, Warning, ArrowRight, View, Hide } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import type { CheckboxValueType } from 'element-plus'
 import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
@@ -644,7 +657,27 @@ const openCtxDialog = (row: SecurityEvent): void => {
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const filters = ref({ action: '', ip: '', uri: '', rule_name: '', rule_triggered: '', policy_name: '', rule_caddy_id: '', timeRange: null as [string, string] | null })
+
+// 触发规则筛选的 4 个类别（与后端 family 映射对齐，硬编码）；手输的自定义 tag
+//（如 CRS 规则 ID 942100）不属类别、不参与全选判定
+const TRIGGERED_CATEGORIES = ['IP 访问控制', '地域拦截', 'WAF 规则（CRS）', '自定义规则'] as const
+type TriggeredCategory = typeof TRIGGERED_CATEGORIES[number]
+const isTriggeredCategory = (v: string): v is TriggeredCategory => (TRIGGERED_CATEGORIES as readonly string[]).includes(v)
+
+const filters = ref({ action: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES] as string[], policy_name: '', rule_caddy_id: '', timeRange: null as [string, string] | null })
+
+// 头部全选复选框三态：4 类别全中=全选（自定义 tag 不影响判定）；部分中=半选
+const triggeredCheckAll = computed(() => TRIGGERED_CATEGORIES.every((c) => filters.value.rule_triggered.includes(c)))
+const triggeredIndeterminate = computed(() => {
+  const selected = filters.value.rule_triggered
+  const hit = TRIGGERED_CATEGORIES.filter((c) => selected.includes(c)).length
+  return hit > 0 && hit < TRIGGERED_CATEGORIES.length
+})
+// 全选复选框只管辖 4 个类别：勾选=类别全中、取消=类别全清，均保留自定义 tag
+const toggleTriggeredAll = (checked: CheckboxValueType) => {
+  const custom = filters.value.rule_triggered.filter((v) => !isTriggeredCategory(v))
+  filters.value.rule_triggered = checked ? [...TRIGGERED_CATEGORIES, ...custom] : custom
+}
 
 const applyFilters = () => {
   // 时间区间校验：开始晚于结束时提示并清除该筛选（后端同样兜底 400）。
@@ -659,7 +692,7 @@ const applyFilters = () => {
 }
 
 const resetFilters = () => {
-  filters.value = { action: '', ip: '', uri: '', rule_name: '', rule_triggered: '', policy_name: '', rule_caddy_id: '', timeRange: null }
+  filters.value = { action: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES], policy_name: '', rule_caddy_id: '', timeRange: null }
   page.value = 1
   fetchEvents()
 }
@@ -689,12 +722,14 @@ const fetchEvents = async () => {
     if (filters.value.ip) p.set('ip', filters.value.ip)
     if (filters.value.rule_caddy_id) p.set('rule_caddy_id', filters.value.rule_caddy_id)
     if (filters.value.rule_name) p.set('rule_name', filters.value.rule_name)
-    if (filters.value.rule_triggered) {
-      // 「!」前缀编码的反向筛选（下拉「排除：…」组或手输 !949 这类前缀）：
-      // 拆为 rule_triggered_exclude；其余正选
-      const v = filters.value.rule_triggered
-      if (v.startsWith('!')) p.set('rule_triggered_exclude', v.slice(1))
-      else p.set('rule_triggered', v)
+    // 触发规则：全选（4 类别全中且无自定义 tag）或空选 = 不过滤，不发送参数；
+    // 子集（1~3 个类别）或含自定义 tag 时，全部选中值英文逗号连接发送 rule_triggered
+    //（后端逐段独立解析、OR 连接；含逗号的消息关键词会整串回退为消息搜索，前端只管连接）
+    const triggeredSelected = filters.value.rule_triggered
+    const triggeredAllHit = TRIGGERED_CATEGORIES.every((c) => triggeredSelected.includes(c))
+    const triggeredHasCustom = triggeredSelected.some((v) => !isTriggeredCategory(v))
+    if (triggeredSelected.length > 0 && (!triggeredAllHit || triggeredHasCustom)) {
+      p.set('rule_triggered', triggeredSelected.join(','))
     }
     if (filters.value.policy_name) p.set('policy_name', filters.value.policy_name)
     if (filters.value.uri) p.set('uri', filters.value.uri)
@@ -773,4 +808,8 @@ onMounted(fetchEvents)
 
 /* CRS 事件弹框 / 请求上下文弹框：正文区自适应限高（top=5vh + 头/脚 ≈ 110px），内容多时整体不超视口 */
 .crs-event-dialog .el-dialog__body, .ctx-event-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
+
+/* 触发规则筛选下拉：头部「全选」复选框整行可点（EP 自定义头部官方用法同款排布） */
+.triggered-filter-popper .el-select-dropdown__header { padding: 8px 12px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); }
+.triggered-filter-popper .el-select-dropdown__header .el-checkbox { display: flex; height: unset; }
 </style>
