@@ -24,13 +24,13 @@
           :default-time="[new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)]"
           class="filter-date-range"
         />
-        <el-select v-model="filters.action" placeholder="动作" clearable style="width: 120px">
+        <el-select v-model="filters.action" placeholder="动作" clearable style="width: 90px">
           <el-option label="拦截" value="blocked" />
           <el-option label="检测" value="logged" />
         </el-select>
         <!-- R72 十九次（用户需求）：规则 ID 筛选替换为三列（负载规则/触发规则/策略）
              服务端筛选（rule_name/rule_triggered/policy_name LIKE）。 -->
-        <el-input v-model="filters.rule_name" placeholder="负载规则" clearable style="width: 140px" @keyup.enter="applyFilters" />
+        <el-input v-model="filters.rule_name" placeholder="负载规则" clearable style="width: 100px" @keyup.enter="applyFilters" />
         <!-- 触发规则筛选：多选 + 头部全选（勾的就是看的，统一正向心智）。
              全选（4 类别全中且无自定义 tag）或空选 = 不过滤，不发送参数；子集或含
              自定义 tag 时全部选中值英文逗号连接发送 rule_triggered（后端逐段按
@@ -46,7 +46,7 @@
           collapse-tags-tooltip
           :max-collapse-tags="1"
           placeholder="触发规则"
-          style="width: 220px"
+          style="width: 170px"
           popper-class="triggered-filter-popper"
         >
           <template #header>
@@ -61,9 +61,9 @@
           <el-option label="WAF 规则（CRS）" value="WAF 规则（CRS）" title="全部 6 位 CRS 规则 ID（含协议族与 949/959 评估族）" />
           <el-option label="自定义规则" value="自定义规则" title="自定义规则（5 位 ID 及合成 ID）" />
         </el-select>
-        <el-input v-model="filters.policy_name" placeholder="策略" clearable style="width: 120px" @keyup.enter="applyFilters" />
-        <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 150px" @keyup.enter="applyFilters" />
-        <el-input v-model="filters.uri" placeholder="URI" clearable style="width: 160px" @keyup.enter="applyFilters" />
+        <el-input v-model="filters.policy_name" placeholder="策略" clearable style="width: 90px" @keyup.enter="applyFilters" />
+        <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 115px" @keyup.enter="applyFilters" />
+        <el-input v-model="filters.uri" placeholder="URI" clearable style="width: 115px" @keyup.enter="applyFilters" />
         <div class="filter-actions">
           <el-button type="primary" @click="applyFilters">筛选</el-button>
           <el-button @click="resetFilters">重置</el-button>
@@ -751,8 +751,12 @@ onMounted(fetchEvents)
 </script>
 
 <style scoped>
-.table-toolbar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-start; margin-bottom: 16px; align-items: center; }
-.filter-actions { display: flex; gap: 0; margin-left: 8px; }
+/* 工具行单行排布（1280px 视口全控件 + 筛选/重置一行放下）：nowrap 禁止换行，
+   各控件定宽不收缩，极端窄视口降级为横向滚动而非把按钮顶到第二行 */
+.table-toolbar { display: flex; flex-wrap: nowrap; gap: 8px; justify-content: flex-start; margin-bottom: 16px; align-items: center; overflow-x: auto; }
+.table-toolbar > * { flex: 0 0 auto; }
+.filter-actions { display: flex; gap: 0; }
+.filter-actions .el-button { padding-left: 12px; padding-right: 12px; }
 .filter-actions .el-button + .el-button { margin-left: 8px; }
 .cell-tip { cursor: help; border-bottom: 1px dashed #c0c4cc; }
 
@@ -801,15 +805,21 @@ onMounted(fetchEvents)
 
 <style>
 .filter-date-range.el-date-editor {
-  --el-date-editor-width: 360px;
-  width: 360px;
+  --el-date-editor-width: 320px;
+  width: 320px;
   flex: 0 0 auto;
 }
 
 /* CRS 事件弹框 / 请求上下文弹框：正文区自适应限高（top=5vh + 头/脚 ≈ 110px），内容多时整体不超视口 */
 .crs-event-dialog .el-dialog__body, .ctx-event-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
 
-/* 触发规则筛选下拉：头部「全选」复选框整行可点（EP 自定义头部官方用法同款排布） */
-.triggered-filter-popper .el-select-dropdown__header { padding: 8px 12px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); }
-.triggered-filter-popper .el-select-dropdown__header .el-checkbox { display: flex; height: unset; }
+/* 触发规则筛选下拉：头部「全选」复选框整行可点（EP 自定义头部官方用法同款排布）；
+   padding-left 20px 与选项行（EP 默认 20px）左对齐——默认 header-padding 10px 会
+   导致复选框与选项文字错开 */
+.triggered-filter-popper .el-select-dropdown__header { padding: 8px 6px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); }
+.triggered-filter-popper .el-select-dropdown__header .el-checkbox { display: flex; height: unset; margin-right: 0; }
+.triggered-filter-popper .el-select-dropdown__header .el-checkbox .el-checkbox__label { padding-left: 8px; }
+/* 选中项不加粗：EP 2.14 多选下拉 is-selected 默认 font-weight:bold，该筛选常态
+   全选（4 类别全勾）导致整列粗体，覆写回 normal（选中色与右侧 ✓ 保留） */
+.triggered-filter-popper .el-select-dropdown__item.is-selected { font-weight: normal; }
 </style>
