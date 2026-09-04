@@ -32,15 +32,21 @@
              服务端筛选（rule_name/rule_triggered/policy_name LIKE）。 -->
         <el-input v-model="filters.rule_name" placeholder="负载规则" clearable style="width: 140px" @keyup.enter="applyFilters" />
         <!-- R72 二十次：触发规则改下拉+可输入——选项即表格显示的 family 标签（后端
-             映射为 ID 前缀匹配）；也可直接输入 CRS 规则 ID（如 942100）或消息关键词。 -->
+             映射为 ID 前缀匹配）；也可直接输入 CRS 规则 ID（如 942100）或消息关键词。
+             「排除所选」反向筛选：勾选后按 rule_triggered_exclude 取反（占比高的
+             类型筛掉看其余）。 -->
         <el-select v-model="filters.rule_triggered" placeholder="触发规则" clearable filterable allow-create style="width: 140px">
-          <el-option label="IP 访问控制" value="IP 访问控制" />
-          <el-option label="地域拦截" value="地域拦截" />
-          <el-option label="请求阻断评估" value="请求阻断评估" />
-          <el-option label="协议异常" value="协议异常" />
-          <el-option label="协议攻击" value="协议攻击" />
-          <el-option label="自定义规则" value="自定义规则" />
+          <el-option label="IP 访问控制" value="IP 访问控制" title="IP 黑/白名单、信任、预检（id 2/3/4/5/7）" />
+          <el-option label="地域拦截" value="地域拦截" title="GeoIP 区域控制（id 8）" />
+          <el-option label="WAF 规则（CRS）" value="WAF 规则（CRS）" title="全部 6 位 CRS 规则 ID（不含 949/959 评估族）" />
+          <el-option label="评分拦截" value="评分拦截" title="异常分累计达阈值的评估拦截（949 请求 / 959 响应）" />
+          <el-option label="协议异常" value="协议异常" title="CRS 920 协议异常族" />
+          <el-option label="协议攻击" value="协议攻击" title="CRS 921 协议攻击族" />
+          <el-option label="自定义规则" value="自定义规则" title="自定义规则（5 位 ID 及合成 ID）" />
         </el-select>
+        <el-tooltip content="勾选后筛选结果排除所选类型——用于筛掉占比高的类型（如地域拦截）看其余" placement="top" :show-after="200">
+          <el-checkbox v-model="filters.exclude_triggered" :disabled="!filters.rule_triggered" label="排除所选" size="small" style="margin-left: -4px" />
+        </el-tooltip>
         <el-input v-model="filters.policy_name" placeholder="策略" clearable style="width: 120px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 150px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.uri" placeholder="URI" clearable style="width: 160px" @keyup.enter="applyFilters" />
@@ -52,13 +58,13 @@
 
       <el-table :data="events" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <template #empty><el-empty description="暂无安全事件" :image-size="60" /></template>
-        <el-table-column prop="event_time" label="时间" width="170" :formatter="(row: SecurityEvent) => formatDate(row.event_time)" />
-        <el-table-column label="动作" width="90" align="center">
+        <el-table-column prop="event_time" label="时间" width="190" :formatter="(row: SecurityEvent) => formatDate(row.event_time)" />
+        <el-table-column label="动作" width="80" align="center">
           <template #default="{ row }">
             <el-tag :type="row.action === 'blocked' ? 'danger' : 'warning'" size="small" effect="light">{{ row.action === 'blocked' ? '拦截' : '检测' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="规则" min-width="140">
+        <el-table-column label="规则" min-width="130">
           <template #default="{ row }">
             <el-link v-if="row.rule_name || row.rule_caddy_id" type="primary" @click="goToRule(row)">{{ row.rule_name || row.rule_caddy_id || '—' }}</el-link>
             <span v-else>—</span>
@@ -75,13 +81,13 @@
             <span v-else>{{ triggeredLabel(row) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="策略" min-width="170">
+        <el-table-column label="策略" min-width="150">
           <template #default="{ row }">
             <el-link v-if="row.policy_name || row.policy_id > 0" type="primary" @click="goToPolicy(row)">{{ row.policy_name || row.policy_id }}</el-link>
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="客户端 IP" min-width="150">
+        <el-table-column label="客户端 IP" min-width="140">
           <template #default="{ row }">
             <IPLocationAction :ip="row.client_ip" :location="row.ip_location" :rule-caddy-id="row.rule_caddy_id" />
           </template>
@@ -306,7 +312,7 @@ const triggeredLabel = (row: SecurityEvent): string => {
   if (!t) return '—'
   if (t === '2' || t === '3' || t === '4' || t === '5' || t === '7') return 'IP 访问控制'
   if (t === '8') return '地域拦截'
-  if (/^949/.test(t)) return '请求阻断评估'
+  if (/^949/.test(t) || /^959/.test(t)) return '评分拦截'
   if (/^920/.test(t)) return '协议异常'
   if (/^921/.test(t)) return '协议攻击'
   // 5 位数字 ID 仅自定义规则（emit=crID+10000）；与后端过滤器 GLOB/概览口径一致
@@ -636,7 +642,7 @@ const openCtxDialog = (row: SecurityEvent): void => {
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const filters = ref({ action: '', ip: '', uri: '', rule_name: '', rule_triggered: '', policy_name: '', rule_caddy_id: '', timeRange: null as [string, string] | null })
+const filters = ref({ action: '', ip: '', uri: '', rule_name: '', rule_triggered: '', exclude_triggered: false, policy_name: '', rule_caddy_id: '', timeRange: null as [string, string] | null })
 
 const applyFilters = () => {
   // 时间区间校验：开始晚于结束时提示并清除该筛选（后端同样兜底 400）。
@@ -651,7 +657,7 @@ const applyFilters = () => {
 }
 
 const resetFilters = () => {
-  filters.value = { action: '', ip: '', uri: '', rule_name: '', rule_triggered: '', policy_name: '', rule_caddy_id: '', timeRange: null }
+  filters.value = { action: '', ip: '', uri: '', rule_name: '', rule_triggered: '', exclude_triggered: false, policy_name: '', rule_caddy_id: '', timeRange: null }
   page.value = 1
   fetchEvents()
 }
@@ -681,7 +687,11 @@ const fetchEvents = async () => {
     if (filters.value.ip) p.set('ip', filters.value.ip)
     if (filters.value.rule_caddy_id) p.set('rule_caddy_id', filters.value.rule_caddy_id)
     if (filters.value.rule_name) p.set('rule_name', filters.value.rule_name)
-    if (filters.value.rule_triggered) p.set('rule_triggered', filters.value.rule_triggered)
+    if (filters.value.rule_triggered) {
+      // 反向筛选：勾选「排除所选」时同一选择走 rule_triggered_exclude（整体取反）
+      if (filters.value.exclude_triggered) p.set('rule_triggered_exclude', filters.value.rule_triggered)
+      else p.set('rule_triggered', filters.value.rule_triggered)
+    }
     if (filters.value.policy_name) p.set('policy_name', filters.value.policy_name)
     if (filters.value.uri) p.set('uri', filters.value.uri)
     if (filters.value.timeRange?.[0]) p.set('start_time', filters.value.timeRange[0])
