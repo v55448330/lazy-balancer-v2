@@ -36,15 +36,26 @@
 
         <el-form v-else-if="mfaStage" @submit.prevent="handleMfaVerify" class="login-form">
           <div class="mfa-step-title">两步验证</div>
-          <el-form-item>
+          <el-form-item v-if="!mfaUseRecovery">
+            <el-input-otp
+              ref="mfaOtpRef"
+              v-model="mfaCode"
+              :length="6"
+              inputmode="numeric"
+              :validator="isOtpDigitChar"
+              class="mfa-otp"
+              @finish="handleMfaVerify"
+            />
+          </el-form-item>
+          <el-form-item v-else>
             <el-input
               v-model="mfaCode"
-              :placeholder="mfaUseRecovery ? '请输入恢复代码' : '请输入 6 位验证码'"
+              placeholder="请输入恢复代码"
               size="large"
               :prefix-icon="Key"
-              :maxlength="mfaUseRecovery ? 200 : 6"
+              maxlength="200"
               autofocus
-              @input="mfaCode = mfaUseRecovery ? normalizeMfaCodeInput(mfaCode) : mfaCode.replace(/\s/g, '').slice(0, 6)"
+              @input="mfaCode = normalizeMfaCodeInput(mfaCode)"
             />
           </el-form-item>
           <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="login-error" />
@@ -108,14 +119,14 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { ApiRequestError, normalizeMfaCodeInput, request } from '@/utils/api'
 import { User, Lock, Postcard, Key } from '@element-plus/icons-vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, appVersion } from '@/utils/branding'
-import type { FormInstance, FormRules } from 'element-plus'
+import type { FormInstance, FormRules, InputOtpInstance } from 'element-plus'
 
 interface SetupStatusResponse {
   code: number
@@ -186,6 +197,19 @@ const mfaStage = ref(false)
 const mfaToken = ref('')
 const mfaCode = ref('')
 const mfaUseRecovery = ref(false)
+// MFA 验证码输入：el-input-otp（6 位数字，validator 逐字符拦截非数字）；
+// 恢复代码（6-16 位字母数字）走普通输入框
+const mfaOtpRef = ref<InputOtpInstance>()
+const isOtpDigitChar = (char: string): boolean => /^\d$/.test(char)
+
+// OTP 自动聚焦：进入 MFA 步骤或从恢复代码切回验证码时（el-input-otp 无 autofocus
+// 属性，expose 的 focus() 需在 nextTick 待其挂载后调用）
+watch([mfaStage, mfaUseRecovery], async ([stage, useRecovery]) => {
+  if (stage && !useRecovery) {
+    await nextTick()
+    mfaOtpRef.value?.focus()
+  }
+})
 
 const resetToPasswordStep = () => {
   mfaStage.value = false
@@ -387,6 +411,11 @@ onMounted(async () => {
   font-weight: 600;
   margin-bottom: 20px;
   color: var(--el-text-color-primary);
+}
+/* OTP 输入框在表单项内居中（组件根即 el-input-otp，display 覆盖 inline-flex 默认值） */
+.mfa-otp {
+  display: flex;
+  justify-content: center;
 }
 .mfa-switch {
   display: flex;

@@ -1,6 +1,9 @@
 import axios from 'axios'
 import type { AxiosInstance, AxiosRequestConfig } from 'axios'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { h, nextTick, ref } from 'vue'
+import { ElInputOtp, ElMessage, ElMessageBox } from 'element-plus'
+import type { InputOtpInstance } from 'element-plus'
+import 'element-plus/es/components/input-otp/style/css'
 import type {
   APIResponse,
   CaddyMetrics,
@@ -122,16 +125,44 @@ const promptMfaCode = (): Promise<string | null> =>
   new Promise((resolve) => {
     if (mfaPromptOpen) { resolve(null); return }
     mfaPromptOpen = true
-    ElMessageBox.prompt('请输入 6 位动态验证码（此操作不支持恢复代码）', 'MFA 验证', {
+    // el-input-otp 自定义内容（替换原生 prompt 的普通 input）：值在 confirm 时从
+    // otpCode 读取；填满 6 位自动触发 confirm（finish → handlers.confirm）。
+    // message 函数在 MessageBox 渲染上下文中执行，otpCode 变更会驱动重渲染。
+    const otpCode = ref('')
+    const otpRef = ref<InputOtpInstance>()
+    ElMessageBox({
+      title: 'MFA 验证',
+      type: 'warning',
+      showCancelButton: true,
       confirmButtonText: '验证',
       cancelButtonText: '取消',
-      inputValidator: validateTotpCodeInput,
-      inputErrorMessage: '请输入 6 位数字验证码',
-      type: 'warning',
+      message: ({ confirm }) =>
+        h('div', { style: 'display: flex; flex-direction: column; gap: 14px; padding-top: 2px;' }, [
+          h('div', null, '请输入 6 位动态验证码（此操作不支持恢复代码）'),
+          h(ElInputOtp, {
+            ref: otpRef,
+            modelValue: otpCode.value,
+            'onUpdate:modelValue': (v: string) => { otpCode.value = v },
+            length: 6,
+            inputmode: 'numeric',
+            validator: (char: string) => /^\d$/.test(char),
+            onFinish: () => { if (validateTotpCodeInput(otpCode.value)) confirm() },
+            style: 'align-self: center;',
+          }),
+        ]),
+      beforeClose: (action, _instance, done) => {
+        if (action === 'confirm' && !validateTotpCodeInput(otpCode.value)) {
+          ElMessage.error('请输入 6 位数字验证码')
+          return
+        }
+        done()
+      },
     })
-      .then(({ value }) => resolve(normalizeMfaCodeInput(value)))
+      .then(() => resolve(normalizeMfaCodeInput(otpCode.value)))
       .catch(() => resolve(null))
       .finally(() => { mfaPromptOpen = false })
+    // OTP 自动聚焦：MessageBox 的 autofocus 默认落在确认按钮，nextTick 后夺回给 OTP
+    void nextTick(() => otpRef.value?.focus())
   })
 
 let sessionExpiredDialogOpen = false
