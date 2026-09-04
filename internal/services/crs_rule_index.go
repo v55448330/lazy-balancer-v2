@@ -142,7 +142,7 @@ func CategorizeCRSFile(filename string) string {
 	case strings.Contains(name, "944-"):
 		return "Java 攻击"
 	case strings.Contains(name, "949-"):
-		return "请求阻断评估"
+		return "评分拦截"
 	case strings.Contains(name, "950-"):
 		return "响应信息泄露"
 	case strings.Contains(name, "951-"):

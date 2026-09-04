@@ -1724,6 +1724,77 @@ func enrichIPLocation(ip string) string {
 	return formatIP2RegionLocation(services.LookupRegion(ip))
 }
 
+// ruleTriggeredFilterSQL 构建触发规则筛选条件：family 标签（含部分输入）映射为
+// ID 前缀/形态集合 OR 匹配，否则退回「精确/前缀/消息」子串。返回的片段自带外层
+// 括号，正向用 AND 拼接、反向由调用方套 NOT（rule_triggered_exclude 复用同映射）。
+// family 口径与前端筛选选项/triggeredLabel 显示标签一一对应，改动需三侧同步。
+func ruleTriggeredFilterSQL(input string, args *[]any) string {
+	// WAF 规则（CRS）：全部 6 位 CRS 规则 ID，但排除评估族（949/959 归入「评分拦截」
+	// ——F0 强制包含后评估事件与检测事件同源，分开筛才有区分意义）。
+	const wafCRSCondition = "rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]' AND rule_triggered NOT LIKE '949%' AND rule_triggered NOT LIKE '959%'"
+	if input == "WAF 规则（CRS）" {
+		return "(" + wafCRSCondition + ")"
+	}
+	familyPrefixes := map[string][]string{
+		"IP 访问控制": {"2", "3", "4", "5", "7"},
+		"地域拦截":    {"8"},
+		"评分拦截":    {"949", "959"},
+		"协议异常":    {"920"},
+		"协议攻击":    {"921"},
+		"自定义规则":   {"10", "11", "12", "13", "14", "15", "16", "17", "18", "19"},
+	}
+	glob5 := "rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]'"
+	if prefixes, isFamily := familyPrefixes[input]; isFamily {
+		ors := make([]string, 0, len(prefixes)+1)
+		for _, p := range prefixes {
+			ors = append(ors, "rule_triggered LIKE ?")
+			*args = append(*args, p+"%")
+		}
+		// 自定义规则族补 5 位数字段（emit 20000-99999 不以 1 开头，前缀清单覆盖不到）。
+		if input == "自定义规则" {
+			ors = append(ors, glob5)
+		}
+		return "(" + strings.Join(ors, " OR ") + ")"
+	}
+	// family 标签的部分输入：宽匹配（前缀命中任一 family 即并入其前缀集合）。
+	matched := false
+	ors := make([]string, 0, 6)
+	for label, ps := range familyPrefixes {
+		if strings.HasPrefix(label, input) {
+			matched = true
+			for _, p := range ps {
+				ors = append(ors, "rule_triggered LIKE ?")
+				*args = append(*args, p+"%")
+			}
+		}
+	}
+	if strings.HasPrefix("WAF 规则（CRS）", input) {
+		matched = true
+		ors = append(ors, wafCRSCondition)
+	}
+	if matched {
+		if strings.HasPrefix("自定义规则", input) {
+			ors = append(ors, glob5)
+		}
+		return "(" + strings.Join(ors, " OR ") + ")"
+	}
+	// 纯数字输入（CRS 规则 ID）：「精确 OR 前缀」匹配避免双 % 全字段扫描；
+	// 其余按消息关键词双 LIKE（rule_msg 无结构可言）。
+	allDigits := len(input) > 0
+	for _, r := range input {
+		if r < '0' || r > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits {
+		*args = append(*args, input, input+"%", "%"+input+"%")
+		return "(rule_triggered = ? OR rule_triggered LIKE ? OR rule_msg LIKE ?)"
+	}
+	*args = append(*args, "%"+input+"%", "%"+input+"%")
+	return "(rule_triggered LIKE ? OR rule_msg LIKE ?)"
+}
+
 func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	page := 1
 	pageSize := 20
@@ -1768,80 +1839,16 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		where += " AND policy_name LIKE ?"
 		args = append(args, "%"+policyName+"%")
 	}
-	// isAllDigits：CRS 规则 ID 判定（触发规则列对 CRS 显示纯数字 ID）。
-	isAllDigits := func(v string) bool {
-		for _, r := range v {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-		return len(v) > 0
-	}
 
 	// R72 二十次：rule_triggered 筛选对齐表格显示语义——列显示的是 family 标签
-	//（IP 访问控制/请求阻断评估/协议异常/协议攻击/自定义规则）或原始 ID；用户按
-	// 显示文本筛选时纯 ID LIKE 必然搜不到。输入按 family 标签映射为 ID 前缀集合
-	// OR 匹配，否则退回 ID/消息子串（触发规则原文在 rule_msg，一并命中便于用
-	// 'sqlmap' 这类消息关键词定位）。
+	// 或原始 ID；用户按显示文本筛选时纯 ID LIKE 必然搜不到。输入按 family 标签
+	// 映射为 ID 前缀集合 OR 匹配，否则退回 ID/消息子串。rule_triggered_exclude
+	// 复用同一映射整体取反（大多数事件为单一类型时筛掉它看其余）。
 	if ruleTriggered := strings.TrimSpace(c.Query("rule_triggered")); ruleTriggered != "" {
-		familyPrefixes := map[string][]string{
-			"IP 访问控制": {"2", "3", "4", "5", "7"},
-			"地域拦截":    {"8"},
-			"请求阻断评估":  {"949"},
-			"协议异常":    {"920"},
-			"协议攻击":    {"921"},
-			"自定义规则":   {"10", "11", "12", "13", "14", "15", "16", "17", "18", "19"},
-		}
-		prefixes, isFamily := familyPrefixes[ruleTriggered]
-		switch {
-		case isFamily:
-			ors := make([]string, 0, len(prefixes))
-			for _, p := range prefixes {
-				ors = append(ors, "rule_triggered LIKE ?")
-				args = append(args, p+"%")
-			}
-			// 自定义规则族补 5 位数字段（emit 20000-99999 不以 1 开头，
-			// 前缀清单覆盖不到；GLOB 精确匹配 5 位数字）
-			if ruleTriggered == "自定义规则" {
-				ors = append(ors, "rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]'")
-			}
-			where += " AND (" + strings.Join(ors, " OR ") + ")"
-		case strings.HasPrefix(ruleTriggered, "IP"), strings.HasPrefix(ruleTriggered, "请求阻断"), strings.HasPrefix(ruleTriggered, "协议"):
-			// family 标签的部分输入：宽匹配（前缀命中任一 family 即可）。
-			matched := false
-			ors := make([]string, 0, 4)
-			for label, ps := range familyPrefixes {
-				if strings.HasPrefix(label, ruleTriggered) {
-					matched = true
-					for _, p := range ps {
-						ors = append(ors, "rule_triggered LIKE ?")
-						args = append(args, p+"%")
-					}
-				}
-			}
-			// 审计 T1-S2：部分输入命中「自定义规则」前缀时与精确匹配同口径补
-			// 5 位数字段（emit 20000-99999 不以 1 开头，前缀清单覆盖不到）。
-			if matched {
-				if strings.HasPrefix("自定义规则", ruleTriggered) {
-					ors = append(ors, "rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]'")
-				}
-				where += " AND (" + strings.Join(ors, " OR ") + ")"
-			} else {
-				where += " AND 1=0"
-			}
-		default:
-			// R72 二十一次（性能优化）：纯数字输入（CRS 规则 ID，如 942100——即表格
-			// 触发规则列对 CRS 显示的原文）改为「精确 OR 前缀」匹配，避免前后双 %
-			// 全字段扫描；消息关键词输入保留双 LIKE（rule_msg 无结构可言）。
-			// 10 万行实测：前缀匹配走 SCAN 但过滤更快，双列双 % 最重——能省则省。
-			if isAllDigits(ruleTriggered) {
-				where += " AND (rule_triggered = ? OR rule_triggered LIKE ? OR rule_msg LIKE ?)"
-				args = append(args, ruleTriggered, ruleTriggered+"%", "%"+ruleTriggered+"%")
-			} else {
-				where += " AND (rule_triggered LIKE ? OR rule_msg LIKE ?)"
-				args = append(args, "%"+ruleTriggered+"%", "%"+ruleTriggered+"%")
-			}
-		}
+		where += " AND " + ruleTriggeredFilterSQL(ruleTriggered, &args)
+	}
+	if exclude := strings.TrimSpace(c.Query("rule_triggered_exclude")); exclude != "" {
+		where += " AND NOT (" + ruleTriggeredFilterSQL(exclude, &args) + ")"
 	}
 
 	// R72 二十次（用户需求）：URI 筛选（子串）。
