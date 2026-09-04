@@ -1735,9 +1735,10 @@ func enrichIPLocation(ip string) string {
 // 括号，正向用 AND 拼接、反向由调用方套 NOT（rule_triggered_exclude 复用同映射）。
 // family 口径与前端筛选选项/triggeredLabel 显示标签一一对应，改动需三侧同步。
 func ruleTriggeredFilterSQL(input string, args *[]any) string {
-	// WAF 规则（CRS）：全部 6 位 CRS 规则 ID，但排除评估族（949/959 归入「评分拦截」
-	// ——F0 强制包含后评估事件与检测事件同源，分开筛才有区分意义）。
-	const wafCRSCondition = "rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]' AND rule_triggered NOT LIKE '949%' AND rule_triggered NOT LIKE '959%'"
+	// WAF 规则（CRS）：全部 6 位 CRS 规则 ID（含 920/921 协议族与 949/959 评估族——
+	// 用户心智模型「CRS 即 WAF 规则」；细分仍可输入细标签（评分拦截/协议异常）或
+	// 规则 ID 前缀过滤，family 映射全部保留）。
+	const wafCRSCondition = "rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]'"
 	if input == "WAF 规则（CRS）" {
 		return "(" + wafCRSCondition + ")"
 	}
