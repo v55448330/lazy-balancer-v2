@@ -136,7 +136,11 @@
           <el-table v-else :data="blockedEvents" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
             <template #empty><el-empty description="暂无拦截事件" :image-size="60" /></template>
             <el-table-column prop="event_time" label="时间" width="170" :formatter="(row: SecurityEvent) => formatDate(row.event_time)" />
-            <el-table-column prop="client_ip" label="来源 IP" min-width="130" />
+            <el-table-column label="来源 IP" min-width="150">
+              <template #default="{ row }">
+                <IPLocationAction :ip="row.client_ip" :location="row.ip_location" :rule-caddy-id="row.rule_caddy_id" />
+              </template>
+            </el-table-column>
             <el-table-column label="规则" min-width="160" show-overflow-tooltip>
               <template #default="{ row }">{{ row.rule_name || row.rule_caddy_id || '—' }}</template>
             </el-table-column>
@@ -223,7 +227,7 @@ interface TrendPoint { date: string; blocked: number; detected: number }
 interface TopIP { ip: string; ip_location: string; blocked: number; detected: number; last_time: string; attack_type: string }
 interface AttackType { name: string; value: number }
 interface Overview { today_blocked: number; today_detected: number; active_policies: number; crs_version: string; update_status?: string; trend: TrendPoint[]; top_ips: TopIP[]; attack_types: AttackType[] }
-interface SecurityEvent { id: number; event_time: string; client_ip: string; rule_caddy_id: string; rule_name: string; policy_name: string }
+interface SecurityEvent { id: number; event_time: string; client_ip: string; rule_caddy_id: string; rule_name: string; policy_name: string; ip_location?: string }
 interface RateLimitBlockHost { host: string; count: number }
 interface RateLimitBlocks { total: number; hosts: RateLimitBlockHost[] }
 
