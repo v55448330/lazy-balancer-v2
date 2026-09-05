@@ -1020,7 +1020,7 @@ func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *t
 	// Given
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	services.GetCAQueueManager().PauseAndDrain()
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_requeue_v2','requeue','http','requeue.example.test',8080,1,1,'acme_dns');
@@ -1084,7 +1084,7 @@ func TestImportConfigBackup_reports_partial_failure_when_certificate_job_recover
 	// Given
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	oldRequeue := requeueNonTerminalCertJobs
 	requeueNonTerminalCertJobs = func() error { return errors.New("requeue failed") }
@@ -1114,7 +1114,7 @@ func TestImportConfigBackup_joins_import_and_certificate_job_recovery_failures(t
 	// Given
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	oldRequeue := requeueNonTerminalCertJobs
 	requeueNonTerminalCertJobs = func() error { return errors.New("requeue failed") }

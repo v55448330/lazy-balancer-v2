@@ -610,7 +610,7 @@ func TestCreateRule_resolves_default_CA_provider_for_ACME(t *testing.T) {
 		t.Fatalf("read DNS provider ID: %v", err)
 	}
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	router := gin.New()
 	router.POST("/rules", handler.CreateRule)

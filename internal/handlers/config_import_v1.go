@@ -462,6 +462,21 @@ func validateConvertedV1Rules(rules []convertedRule) ([]convertedRule, []string,
 			rule.EnableTLS = false
 			normalizations = append(normalizations, fmt.Sprintf("规则 #%d（%s）：启用 TLS 但证书或私钥为空，已按关闭 TLS 导入（规则为禁用状态）", index+1, rule.Name))
 		}
+		// Round 38 B4 / Round 29 G-1（审计 M15 前移）：strategy 白名单与 80 端口
+		// +TLS 跳转自环门自导入循环前移至此——预览/导入共用同门，summary 计数
+		// 与实际导入数保持一致；strategy 空值按导入循环同款默认补齐。
+		mappedStrategy := rule.Strategy
+		if mappedStrategy == "" {
+			mappedStrategy = "weighted_round_robin"
+		}
+		if validateErr := validateRuleFeatures(ruleFeatureInput{
+			Protocol: rule.Protocol, Strategy: mappedStrategy,
+			ListenPort: rule.ListenPort, EnableTLS: rule.EnableTLS, TLSHTTPRedirect: rule.Redirect,
+			CompressTypes: "gzip",
+		}); validateErr != nil {
+			skips = append(skips, fmt.Sprintf("规则 #%d（%s）：%v", index+1, rule.Name, validateErr))
+			continue
+		}
 		valid = append(valid, rule)
 	}
 	return valid, skips, normalizations
@@ -557,12 +572,6 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		// 执行，预览结果与实际导入一致（冲突可自愈备份不得在预览误报不可导入）。
 		if err := validateV2BackupCertJobs(backup.Tables); err != nil {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: err.Error()}})
-			return
-		}
-		// 审计 A3-S2：与 ImportConfigBackup 同序——操作者自锁门（审计 B3）也须
-		// 进预览，否则预览显示「可导入」而实际导入 400（预览/导入判定不同序）。
-		if importUsername := c.GetString("username"); importUsername != "" && !backupContainsUsername(backup.Tables["users"], importUsername) {
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: importValidateResponse{Valid: false, Type: "v2", Error: "导入的备份不包含当前操作账户，导入后您将无法登录"}})
 			return
 		}
 		// R55 C-4：与 ImportConfigBackup 同序——坏 admin_tls_* 形态预览即报
@@ -692,6 +701,13 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理旧规则失败，已回滚: " + err.Error()})
 		return
 	}
+	// 审计 M14：v1 导入覆盖 lb_rules 后须同步清空 security_policy_bindings——
+	// 绑定表对 rule_caddy_id 无外键级联，残留行会指向已删除规则成为悬挂绑定。
+	if _, err := tx.ExecContext(ctx, "DELETE FROM security_policy_bindings"); err != nil {
+		err = session.abort(err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "清理旧策略绑定失败，已回滚: " + err.Error()})
+		return
+	}
 	userID := int(contextUserID(c))
 	imported := 0
 	tlsCount := 0
@@ -706,20 +722,6 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			return
 		}
 		affectedRuleIDs = append(affectedRuleIDs, caddyID)
-		// Round 38 B4: v1 导入规则也需通过 strategy 白名单校验。
-		mappedStrategy := r.Strategy
-		if mappedStrategy == "" {
-			mappedStrategy = "weighted_round_robin"
-		}
-		// Round 29 G-1: 补传端口/TLS/跳转字段，v1 转换后同样拦截 80 端口 + TLS 跳转自环规则。
-		if validateErr := validateRuleFeatures(ruleFeatureInput{
-			Protocol: r.Protocol, Strategy: mappedStrategy,
-			ListenPort: r.ListenPort, EnableTLS: r.EnableTLS, TLSHTTPRedirect: r.Redirect,
-			CompressTypes: "gzip",
-		}); validateErr != nil {
-			allWarnings = append(allWarnings, fmt.Sprintf("规则 %s 跳过：%s", r.Name, validateErr.Error()))
-			continue
-		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO lb_rules (name, description, protocol, domain, listen_port, strategy, dynamic_dns, enable_dns_server, dns_server,
 			health_check_path, health_check_interval, health_check_timeout,
 			health_check_unhealthy_threshold, health_check_healthy_threshold,

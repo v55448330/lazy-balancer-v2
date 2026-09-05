@@ -174,6 +174,41 @@ func TestImportV1Config_removes_orphaned_path_rules(t *testing.T) {
 	}
 }
 
+func TestImportV1Config_clears_security_policy_bindings(t *testing.T) {
+	// Given：审计 M14——绑定表对 rule_caddy_id 无外键级联，v1 覆盖导入后
+	// 不得残留指向已删除规则的悬挂绑定。
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id, name, protocol, domain, listen_port, enabled) VALUES ('lb_stale_binding', 'old-rule', 'http', 'stale.example.test', 8080, 1);
+		INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES ('lb_stale_binding', 1)`); err != nil {
+		t.Fatalf("seed rule with policy binding: %v", err)
+	}
+	backup := `{
+		"proxy_config":{"config":[{"pk":1,"fields":{"proxy_name":"new-rule","protocol":true,"listen":8443,"server_name":"example.test","status":true,"upstream_list":[1]}}]},
+		"upstream_config":{"config":[{"pk":1,"fields":{"status":true,"address":"127.0.0.1","port":9000,"weight":100}}]}
+	}`
+	router := gin.New()
+	router.POST("/config/import/v1", h.ImportV1Config)
+	request := httptest.NewRequest(http.MethodPost, "/config/import/v1", strings.NewReader(backup))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var bindings int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM security_policy_bindings").Scan(&bindings); err != nil {
+		t.Fatalf("count bindings: %v", err)
+	}
+	if bindings != 0 {
+		t.Fatalf("security_policy_bindings count=%d, want 0", bindings)
+	}
+}
+
 func TestValidateConfigImport_rejects_disabled_v1_rule_with_out_of_range_port(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -261,7 +296,7 @@ func TestImportV1Config_requeues_original_non_terminal_jobs_after_rollback(t *te
 	// Given
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	services.GetCAQueueManager().PauseAndDrain()
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_requeue_v1','old-rule','http','old.example.test',8080,1,1,'acme_dns');
@@ -307,7 +342,7 @@ func TestImportV1Config_reports_partial_failure_when_certificate_job_recovery_fa
 	// Given
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	oldRequeue := requeueNonTerminalCertJobs
 	requeueNonTerminalCertJobs = func() error { return errors.New("requeue failed") }
@@ -332,7 +367,7 @@ func TestImportV1Config_joins_import_and_certificate_job_recovery_failures(t *te
 	// Given
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	oldRequeue := requeueNonTerminalCertJobs
 	requeueNonTerminalCertJobs = func() error { return errors.New("requeue failed") }

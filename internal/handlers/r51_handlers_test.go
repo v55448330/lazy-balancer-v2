@@ -26,7 +26,7 @@ func TestDeleteRule_keeps_block_lease_when_compensation_started_after_drain_time
 	seedAuditRule(t, "lb_abort_lease", "abort-lease", "abort-lease.example.test", 8080, true, "acme_dns", true)
 	seedAuditUpstream(t, "lb_abort_lease")
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(nil)
+	services.InitCAQueueManager(nil, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	oldTimeout := cancelRuleJobsTimeout
 	cancelRuleJobsTimeout = 10 * time.Millisecond
@@ -79,7 +79,7 @@ func TestDeleteRule_releases_block_lease_when_drain_panics(t *testing.T) {
 	seedAuditRule(t, "lb_drain_panic", "drain-panic", "drain-panic.example.test", 8080, true, "acme_dns", true)
 	seedAuditUpstream(t, "lb_drain_panic")
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(nil)
+	services.InitCAQueueManager(nil, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	oldCancel := cancelRuleJobs
 	cancelRuleJobs = func(context.Context, *services.CAQueueManager, string) error {

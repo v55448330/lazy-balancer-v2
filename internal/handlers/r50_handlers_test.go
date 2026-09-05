@@ -134,7 +134,7 @@ func TestUpdateRule_cancels_in_flight_job_before_domain_migration(t *testing.T) 
 		t.Fatalf("read original job ID: %v", err)
 	}
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	oldCancel := cancelCertJob
 	type cancelObservation struct {

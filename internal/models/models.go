@@ -435,17 +435,19 @@ type CreateRuleRequest struct {
 }
 
 type UpdateRuleRequest struct {
-	Name                          string      `json:"name"`
-	Description                   string      `json:"description"`
+	Name string `json:"name"`
+	// 审计 M16：HostHeader/Description/DnsServer/HealthCheckPath 指针化——
+	// 省略（nil）=保留原值，显式空串=清空；旧行为空串与省略无法区分。
+	Description                   *string     `json:"description"`
 	Protocol                      string      `json:"protocol"`
 	Domain                        string      `json:"domain"`
 	ListenPort                    int         `json:"listen_port"`
 	Strategy                      string      `json:"strategy"`
 	DynamicDNS                    *bool       `json:"dynamic_dns"`
 	EnableDnsServer               *bool       `json:"enable_dns_server"`
-	DnsServer                     string      `json:"dns_server"`
+	DnsServer                     *string     `json:"dns_server"`
 	DnsFamily                     string      `json:"dns_family"`
-	HealthCheckPath               string      `json:"health_check_path"`
+	HealthCheckPath               *string     `json:"health_check_path"`
 	HealthCheckInterval           int         `json:"health_check_interval"`
 	HealthCheckTimeout            int         `json:"health_check_timeout"`
 	HealthCheckUnhealthyThreshold int         `json:"health_check_unhealthy_threshold"`
@@ -467,7 +469,7 @@ type UpdateRuleRequest struct {
 	ProxyFlushInterval            *int        `json:"proxy_flush_interval"`
 	ProxyStreamCloseDelay         *int        `json:"proxy_stream_close_delay"`
 	PathRules                     *[]PathRule `json:"path_rules"`
-	HostHeader                    string      `json:"host_header"`
+	HostHeader                    *string     `json:"host_header"`
 	Upstreams                     []Upstream  `json:"upstreams"`
 	EnableTLS                     *bool       `json:"enable_tls"`
 	TLSSource                     string      `json:"tls_source"`

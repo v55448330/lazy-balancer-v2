@@ -289,9 +289,9 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		if r.DynamicDNS != nil {
 			data.DynamicDNS = *r.DynamicDNS
 		}
-		data.DnsServer = r.DnsServer
+		data.DnsServer = derefStr(r.DnsServer)
 		data.DnsFamily = r.DnsFamily
-		data.HealthCheckPath = r.HealthCheckPath
+		data.HealthCheckPath = derefStr(r.HealthCheckPath)
 		data.HealthCheckInterval = r.HealthCheckInterval
 		data.HealthCheckTimeout = r.HealthCheckTimeout
 		data.HealthCheckUnhealthyThreshold = r.HealthCheckUnhealthyThreshold
@@ -316,7 +316,7 @@ func (h *Handlers) validateCaddyConfigBeforeSave(req interface{}, features ruleF
 		if r.EnableActiveHealthCheck != nil {
 			data.EnableActiveHealthCheck = *r.EnableActiveHealthCheck
 		}
-		data.HostHeader = r.HostHeader
+		data.HostHeader = derefStr(r.HostHeader)
 		if r.RequestBodyMaxSizeMB != nil {
 			data.RequestBodyMaxSizeMB = *r.RequestBodyMaxSizeMB
 		}

@@ -723,7 +723,6 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 
 	// Determine server name based on port, protocol and TLS status
 	var serverName string
-	var listenPort int
 	if req.Protocol == "http" {
 		if req.EnableTLS && req.ListenPort == 443 {
 			serverName = "http_443"
@@ -734,10 +733,8 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		} else {
 			serverName = fmt.Sprintf("http_%d", req.ListenPort)
 		}
-		listenPort = req.ListenPort
 	} else {
 		serverName = fmt.Sprintf("tcp_%d", req.ListenPort)
-		listenPort = req.ListenPort
 	}
 
 	userIDInt := contextUserID(c)
@@ -747,94 +744,6 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成规则 ID 失败"})
 		return
-	}
-
-	var global struct {
-		requestBodyMaxSizeMB, upstreamKeepaliveTimeout                                                        int
-		proxyDialTimeout, proxyResponseHeaderTimeout, proxyReadTimeout, proxyWriteTimeout, proxyStreamTimeout int
-		proxyFlushInterval, proxyStreamCloseDelay                                                             int
-		serverTokensHidden                                                                                    bool
-	}
-	if err := db.DB.QueryRow(`
-		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0),
-			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
-			COALESCE(server_tokens_hidden,FALSE)
-		FROM global_config WHERE id = 1
-	`).Scan(&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout,
-		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout, &global.proxyStreamTimeout, &global.proxyFlushInterval, &global.proxyStreamCloseDelay,
-		&global.serverTokensHidden); err != nil {
-		log.Printf("CreateRule failed to load global config: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取全局配置失败"})
-		return
-	}
-
-	// Build route config for Caddy validation (using request data before DB write)
-	ruleConfig := services.SingleRuleConfig{
-		Protocol:                         req.Protocol,
-		Domain:                           req.Domain,
-		ListenPort:                       listenPort,
-		Strategy:                         req.Strategy,
-		DynamicDNS:                       req.DynamicDNS,
-		EnableDnsServer:                  req.EnableDnsServer,
-		DnsServer:                        req.DnsServer,
-		DnsFamily:                        req.DnsFamily,
-		HealthCheckPath:                  req.HealthCheckPath,
-		HealthCheckInterval:              req.HealthCheckInterval,
-		HealthCheckTimeout:               req.HealthCheckTimeout,
-		HealthCheckUnhealthyThreshold:    req.HealthCheckUnhealthyThreshold,
-		EnableActiveHealthCheck:          req.EnableActiveHealthCheck,
-		TCPHealthCheckPort:               req.TCPHealthCheckPort,
-		TCPProxyProtocol:                 req.TCPProxyProtocol,
-		TCPTryDuration:                   req.TCPTryDuration,
-		TCPTryInterval:                   req.TCPTryInterval,
-		RequestBodyMaxSizeMB:             req.RequestBodyMaxSizeMB,
-		UpstreamKeepaliveTimeout:         req.UpstreamKeepaliveTimeout,
-		ServerTokensHidden:               req.ServerTokensHidden,
-		GlobalRequestBodyMaxSizeMB:       global.requestBodyMaxSizeMB,
-		GlobalUpstreamKeepaliveTimeout:   global.upstreamKeepaliveTimeout,
-		GlobalServerTokensHidden:         global.serverTokensHidden,
-		CustomRoutesEnabled:              features.CustomRoutesEnabled,
-		PathRules:                        toPathRuleConfigs(features.PathRules),
-		ProxyDialTimeout:                 features.ProxyDialTimeout,
-		ProxyResponseHeaderTimeout:       features.ProxyResponseHeaderTimeout,
-		ProxyReadTimeout:                 features.ProxyReadTimeout,
-		ProxyWriteTimeout:                features.ProxyWriteTimeout,
-		ProxyStreamTimeout:               features.ProxyStreamTimeout,
-		ProxyFlushInterval:               features.ProxyFlushInterval,
-		ProxyStreamCloseDelay:            features.ProxyStreamCloseDelay,
-		GlobalProxyDialTimeout:           global.proxyDialTimeout,
-		GlobalProxyResponseHeaderTimeout: global.proxyResponseHeaderTimeout,
-		GlobalProxyReadTimeout:           global.proxyReadTimeout,
-		GlobalProxyWriteTimeout:          global.proxyWriteTimeout,
-		GlobalProxyStreamTimeout:         global.proxyStreamTimeout,
-		GlobalProxyFlushInterval:         global.proxyFlushInterval,
-		GlobalProxyStreamCloseDelay:      global.proxyStreamCloseDelay,
-		EnableTLS:                        req.EnableTLS,
-		TLSSource:                        req.TLSSource,
-		ACMEConfigID:                     req.ACMEConfigID,
-		TLSHTTPRedirect:                  req.TLSHTTPRedirect,
-		EnableCompress:                   req.EnableCompress,
-		CompressTypes:                    req.CompressTypes,
-		HostHeader:                       req.HostHeader,
-		CaddyID:                          caddyID,
-	}
-	for _, u := range req.Upstreams {
-		protocol := u.Protocol
-		if protocol == "" {
-			if req.Protocol == "tcp" {
-				protocol = "tcp"
-			} else {
-				protocol = "http"
-			}
-		}
-		weight := u.Weight
-		if weight == 0 {
-			weight = 1
-		}
-		ruleConfig.Upstreams = append(ruleConfig.Upstreams, services.UpstreamConfig{
-			Host: u.Host, Port: u.Port, Weight: weight, Protocol: protocol, Enabled: u.Enabled,
-			MaxConnections: u.MaxConnections,
-		})
 	}
 
 	// R69 C-N3-b：运行时快照先于 validateCaddyConfigBeforeSave——validate 经 Caddy
@@ -1175,8 +1084,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.CAProviderID == nil {
 		req.CAProviderID = &existingRule.CAProviderID
 	}
-	if req.HealthCheckPath == "" {
-		req.HealthCheckPath = existingRule.HealthCheckPath
+	if req.HealthCheckPath == nil {
+		req.HealthCheckPath = &existingRule.HealthCheckPath
 	}
 	if req.HealthCheckInterval == 0 {
 		req.HealthCheckInterval = existingRule.HealthCheckInterval
@@ -1238,26 +1147,26 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.CompressTypes == "" {
 		req.CompressTypes = existingRule.CompressTypes
 	}
-	if req.DnsServer == "" {
-		req.DnsServer = existingRule.DnsServer
+	if req.DnsServer == nil {
+		req.DnsServer = &existingRule.DnsServer
 	}
 	if req.DnsFamily == "" {
 		req.DnsFamily = existingRule.DnsFamily
 	}
-	if req.HostHeader == "" {
-		req.HostHeader = existingRule.HostHeader
+	if req.HostHeader == nil {
+		req.HostHeader = &existingRule.HostHeader
 	}
 	if req.Name == "" {
 		req.Name = existingRule.Name
 	}
-	if req.Description == "" {
-		req.Description = existingRule.Description
+	if req.Description == nil {
+		req.Description = &existingRule.Description
 	}
 
 	protocolChanged := requestedProtocol != "" && requestedProtocol != existingRule.Protocol
 
 	if protocolChanged {
-		zero, disabled := 0, false
+		zero, disabled, empty := 0, false, ""
 		switch req.Protocol {
 		case "tcp":
 			if req.Strategy == "cookie" {
@@ -1271,7 +1180,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			req.TLSCert = ""
 			req.TLSKey = ""
 			req.TLSHTTPRedirect = &disabled
-			req.HealthCheckPath = ""
+			req.HealthCheckPath = &empty
 			req.RequestBodyMaxSizeMB = &zero
 			req.UpstreamKeepaliveTimeout = &zero
 			req.ServerTokensHidden = &zero
@@ -1285,7 +1194,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			req.ProxyStreamTimeout = &zero
 			req.ProxyFlushInterval = &zero
 			req.ProxyStreamCloseDelay = &zero
-			req.HostHeader = ""
+			req.HostHeader = &empty
 			req.EnableCompress = &disabled
 			req.CompressTypes = ""
 		case "http":
@@ -1495,7 +1404,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	query += "name = ?, "
 	args = append(args, req.Name)
 	query += "description = ?, "
-	args = append(args, req.Description)
+	args = append(args, derefStr(req.Description))
 	query += "protocol = ?, "
 	args = append(args, req.Protocol)
 	query += "domain = ?, "
@@ -1509,11 +1418,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	query += "enable_dns_server = ?, "
 	args = append(args, *req.EnableDnsServer)
 	query += "dns_server = ?, "
-	args = append(args, req.DnsServer)
+	args = append(args, derefStr(req.DnsServer))
 	query += "dns_family = ?, "
 	args = append(args, req.DnsFamily)
 	query += "health_check_path = ?, "
-	args = append(args, req.HealthCheckPath)
+	args = append(args, derefStr(req.HealthCheckPath))
 	query += "health_check_interval = ?, "
 	args = append(args, req.HealthCheckInterval)
 	query += "health_check_timeout = ?, "
@@ -1555,7 +1464,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	query += "proxy_stream_close_delay = ?, "
 	args = append(args, features.ProxyStreamCloseDelay)
 	query += "host_header = ?, "
-	args = append(args, req.HostHeader)
+	args = append(args, derefStr(req.HostHeader))
 	query += "enable_tls = ?, "
 	args = append(args, *req.EnableTLS)
 	query += "tls_source = ?, "
@@ -1585,106 +1494,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	query += "log_enabled = ?, "
 	args = append(args, *req.LogEnabled)
 
-	// Build full rule config for route generation
+	// 审计 M17：原此处的 SingleRuleConfig 死构造（建成后无任何消费）与仅供其
+	// 填充的 global_config 查询已删——validateCaddyConfigBeforeSave 自带全局
+	// 配置读取。domain 保留：下方 ACME 任务域名迁移/查找以其为键。
 	domain := req.Domain
-	listenPort := req.ListenPort
-	strategy := req.Strategy
-	if strategy == "" {
-		strategy = "weighted_round_robin"
-	}
-
-	var global struct {
-		requestBodyMaxSizeMB, upstreamKeepaliveTimeout                                                                                                   int
-		proxyDialTimeout, proxyResponseHeaderTimeout, proxyReadTimeout, proxyWriteTimeout, proxyStreamTimeout, proxyFlushInterval, proxyStreamCloseDelay int
-		serverTokensHidden                                                                                                                               bool
-	}
-	if err := db.DB.QueryRow(`
-		SELECT COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0),
-			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
-			COALESCE(server_tokens_hidden,FALSE)
-		FROM global_config WHERE id = 1
-	`).Scan(
-		&global.requestBodyMaxSizeMB, &global.upstreamKeepaliveTimeout,
-		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout, &global.proxyStreamTimeout, &global.proxyFlushInterval, &global.proxyStreamCloseDelay,
-		&global.serverTokensHidden); err != nil {
-		log.Printf("UpdateRule failed to load global config for caddy_id=%s: %v", caddyID, err)
-		if req.Protocol == "tcp" {
-			if restoreErr := h.restoreImportRuntime(preValidateRuntimeSnapshot); restoreErr != nil {
-				log.Printf("UpdateRule DB 失败后恢复运行配置失败 for caddy_id=%s: %v", caddyID, restoreErr)
-			}
-		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取全局配置失败"})
-		return
-	}
-
-	ruleConfig := services.SingleRuleConfig{
-		Protocol:                         req.Protocol,
-		Domain:                           domain,
-		ListenPort:                       listenPort,
-		Strategy:                         strategy,
-		DynamicDNS:                       *req.DynamicDNS,
-		EnableDnsServer:                  *req.EnableDnsServer,
-		DnsServer:                        req.DnsServer,
-		DnsFamily:                        req.DnsFamily,
-		HealthCheckPath:                  req.HealthCheckPath,
-		HealthCheckInterval:              req.HealthCheckInterval,
-		HealthCheckTimeout:               req.HealthCheckTimeout,
-		HealthCheckUnhealthyThreshold:    req.HealthCheckUnhealthyThreshold,
-		EnableActiveHealthCheck:          *req.EnableActiveHealthCheck,
-		TCPHealthCheckPort:               req.TCPHealthCheckPort,
-		TCPProxyProtocol:                 *req.TCPProxyProtocol,
-		TCPTryDuration:                   req.TCPTryDuration,
-		TCPTryInterval:                   req.TCPTryInterval,
-		RequestBodyMaxSizeMB:             *req.RequestBodyMaxSizeMB,
-		UpstreamKeepaliveTimeout:         *req.UpstreamKeepaliveTimeout,
-		ServerTokensHidden:               *req.ServerTokensHidden,
-		GlobalRequestBodyMaxSizeMB:       global.requestBodyMaxSizeMB,
-		GlobalUpstreamKeepaliveTimeout:   global.upstreamKeepaliveTimeout,
-		GlobalServerTokensHidden:         global.serverTokensHidden,
-		CustomRoutesEnabled:              features.CustomRoutesEnabled,
-		PathRules:                        toPathRuleConfigs(features.PathRules),
-		ProxyDialTimeout:                 features.ProxyDialTimeout,
-		ProxyResponseHeaderTimeout:       features.ProxyResponseHeaderTimeout,
-		ProxyReadTimeout:                 features.ProxyReadTimeout,
-		ProxyWriteTimeout:                features.ProxyWriteTimeout,
-		ProxyStreamTimeout:               features.ProxyStreamTimeout,
-		ProxyFlushInterval:               features.ProxyFlushInterval,
-		ProxyStreamCloseDelay:            features.ProxyStreamCloseDelay,
-		GlobalProxyDialTimeout:           global.proxyDialTimeout,
-		GlobalProxyResponseHeaderTimeout: global.proxyResponseHeaderTimeout,
-		GlobalProxyReadTimeout:           global.proxyReadTimeout,
-		GlobalProxyWriteTimeout:          global.proxyWriteTimeout,
-		GlobalProxyStreamTimeout:         global.proxyStreamTimeout,
-		GlobalProxyFlushInterval:         global.proxyFlushInterval,
-		GlobalProxyStreamCloseDelay:      global.proxyStreamCloseDelay,
-		EnableTLS:                        *req.EnableTLS,
-		TLSSource:                        req.TLSSource,
-		ACMEConfigID:                     req.ACMEConfigID,
-		TLSHTTPRedirect:                  *req.TLSHTTPRedirect,
-		EnableCompress:                   *req.EnableCompress,
-		CompressTypes:                    req.CompressTypes,
-		HostHeader:                       req.HostHeader,
-		CaddyID:                          caddyID,
-	}
-
-	for _, u := range req.Upstreams {
-		protocol := u.Protocol
-		if protocol == "" {
-			if req.Protocol == "tcp" {
-				protocol = "tcp"
-			} else {
-				protocol = "http"
-			}
-		}
-		weight := u.Weight
-		if weight == 0 {
-			weight = 1
-		}
-		ruleConfig.Upstreams = append(ruleConfig.Upstreams, services.UpstreamConfig{
-			Host: u.Host, Port: u.Port, Weight: weight, Protocol: protocol, Enabled: u.Enabled,
-			MaxConnections: u.MaxConnections,
-		})
-	}
 
 	// R69 C-N3-b：使用 validate 前摄取的快照（同 CreateRule）。
 	runtimeSnapshot := preValidateRuntimeSnapshot

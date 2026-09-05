@@ -320,7 +320,7 @@ func TestEnableRule_restores_cert_job_fields_when_requeue_fails(t *testing.T) {
 		t.Fatalf("seed disabled certificate job: %v", err)
 	}
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Stop()
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	router := gin.New()
@@ -410,7 +410,7 @@ func TestUpdateRule_reissues_when_default_CA_differs_from_latest_job_provider(t 
 	testServicesCertDir = t.TempDir()
 	t.Cleanup(func() { testServicesCertDir = oldCertDir })
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(nil)
+	services.InitCAQueueManager(nil, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	oldCreate := createOrRequeueCertJob
 	enqueuedProvider := make(chan int, 1)
@@ -451,7 +451,7 @@ func TestDeleteRule_returns_timeout_and_preserves_rule_when_worker_does_not_exit
 		t.Fatalf("seed certificate job: %v", err)
 	}
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(nil)
+	services.InitCAQueueManager(nil, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	services.GetCAQueueManager().PauseAndDrain()
 	oldTimeout := cancelRuleJobsTimeout
@@ -1066,7 +1066,7 @@ func TestUpdateRule_cancels_job_before_restore_when_create_returns_jobID_and_err
 		t.Fatalf("set rule CA provider: %v", err)
 	}
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	oldCreate := createOrRequeueCertJob
 	oldCancel := cancelCertJob
@@ -1123,7 +1123,7 @@ func TestUpdateRule_migrates_cert_job_domain_inplace(t *testing.T) {
 		t.Fatalf("read original job ID: %v", err)
 	}
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	router := gin.New()
 	router.PUT("/rules/:caddy_id", harness.handler.UpdateRule)
@@ -1498,7 +1498,7 @@ func TestDeleteRule_returnsConflictWhenWorkerRunning(t *testing.T) {
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_del_running", "running", "running.example.test", 8081, true, "acme_dns", true)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(nil)
+	services.InitCAQueueManager(nil, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	services.GetCAQueueManager().MarkJobRunningForTest("lb_del_running", 901)
 	router := gin.New()
@@ -1524,7 +1524,7 @@ func TestDisableRule_returnsConflictWhenWorkerRunning(t *testing.T) {
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_dis_running", "disrunning", "disrunning.example.test", 8082, true, "acme_dns", true)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(nil)
+	services.InitCAQueueManager(nil, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	services.GetCAQueueManager().MarkJobRunningForTest("lb_dis_running", 902)
 	router := gin.New()
@@ -1550,7 +1550,7 @@ func TestDeleteRule_queuedOnlyJobIsNotBlocked(t *testing.T) {
 		t.Fatalf("seed queued job: %v", err)
 	}
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(nil)
+	services.InitCAQueueManager(nil, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	router := gin.New()
 	router.DELETE("/rules/:caddy_id", handler.DeleteRule)
@@ -1560,5 +1560,37 @@ func TestDeleteRule_queuedOnlyJobIsNotBlocked(t *testing.T) {
 
 	if rec.Code == http.StatusConflict {
 		t.Fatalf("queued-only job must not trigger 409: body=%s", rec.Body.String())
+	}
+}
+
+// 审计 M16：host_header 指针化后「省略=保留原值、空串=清空」——空串必须
+// 落库为空串，而非被合并逻辑吞回原值。
+func TestUpdateRule_empty_host_header_clears_value(t *testing.T) {
+	// Given
+	harness := newUpdateAuditRuleHandlers(t, "lb_clear_host_header", 0, false)
+	seedAuditRule(t, "lb_clear_host_header", "before", "clear.example.test", 8080, false, "manual", false)
+	seedAuditUpstream(t, "lb_clear_host_header")
+	if _, err := db.DB.Exec("UPDATE lb_rules SET host_header='backend.example.test' WHERE caddy_id='lb_clear_host_header'"); err != nil {
+		t.Fatalf("seed host header: %v", err)
+	}
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", harness.handler.UpdateRule)
+	request := httptest.NewRequest(http.MethodPut, "/rules/lb_clear_host_header", strings.NewReader(`{"host_header":""}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var hostHeader string
+	if err := db.DB.QueryRow("SELECT COALESCE(host_header,'') FROM lb_rules WHERE caddy_id='lb_clear_host_header'").Scan(&hostHeader); err != nil {
+		t.Fatalf("read host header: %v", err)
+	}
+	if hostHeader != "" {
+		t.Fatalf("host_header=%q, want empty string（空串=清空）", hostHeader)
 	}
 }
