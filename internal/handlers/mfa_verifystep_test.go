@@ -80,8 +80,6 @@ func wrongMfaCode(t *testing.T, secret string, now time.Time) string {
 	return ""
 }
 
-
-
 // N+10 用户裁决：除登录与重置 MFA 外，全部 MFA 入口（含 verify-step）仅接受
 // 6 位动态验证码——恢复码属一次性应急登录凭证，不得作为操作授权凭证（导入
 // 配置等写守卫链经此端点）。RED：当前实现接受恢复码，本测试断言拒绝。

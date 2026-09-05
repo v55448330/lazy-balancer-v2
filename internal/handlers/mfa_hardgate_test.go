@@ -70,7 +70,7 @@ func seedMfaRulingUser(t *testing.T) string {
 func mfaRulingRouter(h *Handlers) *gin.Engine {
 	router := gin.New()
 	for _, r := range []struct {
-		path   string
+		path    string
 		handler func(*gin.Context)
 	}{
 		{"/auth/mfa/disable", h.MFADisable},
@@ -150,4 +150,3 @@ func TestMFAValidCode_StillWorks(t *testing.T) {
 		t.Fatalf("setup rebind with valid code: status=%d, want 200", got)
 	}
 }
-
