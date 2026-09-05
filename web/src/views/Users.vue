@@ -277,7 +277,7 @@ const handleSubmit = async () => {
         // 自助编辑：仅显示名 + 可选新密码（username/role 由 admin 管理）
         // 不带 silent：失败走全局拦截器标准 toast（与 AppLayout 个人资料保存一致）
         await request.patch('/users/me', {
-          display_name: form.value.display_name || undefined,
+          display_name: form.value.display_name,
           password: form.value.password || undefined,
           current_password: form.value.password ? form.value.current_password : undefined,
         })
@@ -328,6 +328,8 @@ const handleSubmit = async () => {
 const nodeModeSlave = computed(() => authStore.readOnlyReason === 'slave')
 
 const editUser = (user: UserListItem) => {
+  // 复审 P1 回归修复：admin 编辑他人也必须置 editingUser，否则 handleSubmit 走 POST 误建用户
+  editingUser.value = user
   // R72 六次（用户裁决）：本人行的编辑/改密是自助操作——非 admin 也可用（从
   // 节点除外：本地 users 被同步覆盖，改了也会被冲掉）。本人行走 PATCH
   // /users/me 自助端点（后端在 self-service 白名单）；admin 编辑任意行（含

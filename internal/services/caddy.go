@@ -3072,11 +3072,12 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		}
 		healthChecks := map[string]interface{}{
 			"passive": map[string]interface{}{
-				"fail_duration":    fmt.Sprintf("%ds", hcInterval*3),
-				"max_fails":        hcThreshold,
-				// 2026-09 渲染审计：原 []int{5} 非法（Caddy 按具体 HTTP 状态码判定，不存在
-// 状态码 5）——5xx 服务端错误从不计入被动失败。改为显式 500-504 合法集合。
-"unhealthy_status": []int{500, 501, 502, 503, 504},
+				"fail_duration": fmt.Sprintf("%ds", hcInterval*3),
+				"max_fails":     hcThreshold,
+				// 5 是 Caddy 官方类码语义（StatusCodeMatches：configured<100 匹配整百段，
+				// Caddyfile "5xx" 亦折叠为 5）——覆盖全部 500-599 服务端错误计入被动失败。
+				// 2026-09 复审裁定 1：曾误改为显式 [500..504] 收窄覆盖（505-599 漏计），已恢复。
+				"unhealthy_status": []int{5},
 			},
 		}
 		if rule.EnableActiveHealthCheck {

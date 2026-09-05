@@ -14,7 +14,7 @@
 | 范围 | 说明 |
 |---|---|
 | 只读 Key（read_only） | 仅能调用 GET 查询类工具；调写工具返回 403 |
-| 写工具（POST/PUT/DELETE） | 需非只读 Key；从节点上仅集群端点（promote_cluster/pull_sync/set_cluster_mode）可用且仅从节点语义正确，其余写工具一律 403——集群运维在目标节点本身调用，不要发往主节点 |
+| 写工具（POST/PUT/DELETE） | 需非只读 Key；从节点上仅集群端点（promote_cluster/pull_sync/set_cluster_mode）可用且仅从节点语义正确，其余变更类写工具一律 403（预览/解析/测试类 POST 除外）——集群运维在目标节点本身调用，不要发往主节点 |
 | IP 白名单 | 配了白名单的 Key，请求来源 IP 必须命中（MCP 内部转发不受影响） |
 | 生效方式 | 写操作校验后即时生效，失败自动回滚，无需手动 reload |
 
@@ -60,7 +60,7 @@
 
 ### 4.6 集群环境操作前
 
-`get_cluster_status` 确认本节点角色：从节点上仅集群端点（promote_cluster/pull_sync/set_cluster_mode）可用且仅从节点语义正确，其余写工具一律 403——集群运维（提升/拉取同步/切换模式）在目标从节点本身调用，不要发往主节点；其余写操作对主节点发起。
+`get_cluster_status` 确认本节点角色：从节点上仅集群端点（promote_cluster/pull_sync/set_cluster_mode）可用且仅从节点语义正确，其余变更类写工具一律 403（预览/解析/测试类 POST 除外）——集群运维（提升/拉取同步/切换模式）在目标从节点本身调用，不要发往主节点；其余写操作对主节点发起。
 
 ## 5. 操作纪律
 

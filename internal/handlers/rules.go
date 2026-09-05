@@ -488,7 +488,11 @@ func queryRedirectShadowConflict(domain string, listenPort int, enableTLS, tlsHT
 		// 生成自环 Location、属非法存量，不应作为占用方拦截新建 80 规则）。
 		rows, err = db.DB.Query("SELECT caddy_id, name, COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND enabled=1 AND enable_tls=1 AND tls_http_redirect=1 AND listen_port != 80 AND caddy_id != ?", excludeCaddyID)
 	case enableTLS && tlsHTTPRedirect:
-		rows, err = db.DB.Query("SELECT caddy_id, name, COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND enabled=1 AND listen_port=80 AND caddy_id != ?", excludeCaddyID)
+		// 2026-09 复审裁定 2：与渲染面同口径——全部上游被禁用的 80 规则不产生
+		// host 路由、不会遮蔽跳转，不再作为占用方（报错与真实渲染行为一致）。
+		rows, err = db.DB.Query(`SELECT r.caddy_id, r.name, COALESCE(r.domain,'') FROM lb_rules r
+			WHERE r.protocol='http' AND r.enabled=1 AND r.listen_port=80 AND r.caddy_id != ?
+			AND EXISTS (SELECT 1 FROM upstreams u WHERE u.rule_id=r.caddy_id AND u.enabled=1)`, excludeCaddyID)
 	default:
 		return "", "", nil
 	}

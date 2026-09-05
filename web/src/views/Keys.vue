@@ -397,7 +397,6 @@ const creating = ref(false)
 const createDialogVisible = ref(false)
 const createNameError = ref('')
 const createWhitelistError = ref('')
-// M6：特权态（读写或开启 MCP）创建/变更必须携带当前密码（后端确认门）
 const createForm = ref({ name: '', mcp_enabled: false, read_only: true, whitelistText: '', expiresAt: null as Date | null })
 const featureDialogVisible = ref(false)
 const featureSaving = ref(false)

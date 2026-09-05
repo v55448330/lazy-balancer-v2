@@ -285,6 +285,8 @@ func (m *CRSUpdateManager) run(trigger string) {
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
 	writeCRSUpdateLog("INFO", string(CRSStatusSuccess), fmt.Sprintf("CRS 已更新到 %s", tag))
+	// 复审裁定 3：清理 M24 之前版本残留在 live 目录的瞬态工件（仅更新成功后执行）
+	m.cleanupLegacyCRSTransient()
 	RecordAuditLog("system", "更新", "CRS规则库", FormatAuditDetail("版本："+tag, AuditResultPart("success")), "")
 }
 

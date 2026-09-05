@@ -1084,7 +1084,7 @@ func emitScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, entr
 		Logf("warn", "解析作用域排除引用的 IP 列表失败（策略 %q）: %v", p.Name, err)
 		listsByID = map[int64][]string{}
 	}
-	index := GetCRSRuleIndex()
+	index := chainIndex() // 复审：M4 惰性化漏改，改用链级一次取值
 	seq := 0
 	for _, entry := range entries {
 		match := make([]string, 0, 4)

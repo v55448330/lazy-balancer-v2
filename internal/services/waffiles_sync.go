@@ -207,8 +207,12 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged bool, err
 // 此处兜底旧版本残留/异常路径）。混入会让主从 tar 指纹按瞬态内容计算，
 // 两端永不对齐 → 全量重拉死循环。
 func skipWafSyncTransient(rel string) bool {
-	if strings.HasPrefix(filepath.Base(rel), ".") {
-		return true
+	// 复审裁定修复：逐段判断点前缀（.staging/crs.tar.gz 这类子文件此前漏过），
+	// *.bak/*.old 后缀匹配整串相对路径（覆盖目录形 rules.bak/ 与文件形 conf.bak）。
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if strings.HasPrefix(part, ".") {
+			return true
+		}
 	}
 	return strings.HasSuffix(rel, ".bak") || strings.HasSuffix(rel, ".old")
 }

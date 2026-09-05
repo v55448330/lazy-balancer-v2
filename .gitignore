@@ -68,3 +68,13 @@ round*-*.png
 
 # ACME test artifacts
 **/acme_accounts/
+
+# AI 辅助工具产物——不入库（本地保留）
+AGENTS.md
+**/AGENTS.md
+docs/superpowers/
+.superpowers/
+.opencode/
+.omo/
+.sisyphus/
+openspec/

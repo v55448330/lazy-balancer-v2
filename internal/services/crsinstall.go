@@ -105,6 +105,31 @@ func crsTransientPath(crsDir, name string) string {
 // live tree persists across rebuilds via the /app/waf bind mount, so no
 // snapshot is taken. On failure the live tree is restored from backup by
 // restoreBackup.
+// cleanupLegacyCRSTransient 2026-09 复审裁定 3：M24 迁移瞬态目录前的历史残留
+// （crsDir 内 .staging/、rules.bak/、rules.old/ 与文件形 *.bak/*.old）随 bind
+// mount 跨升级存活并混入集群同步 tar——更新成功路径一次性清理，审计留痕。
+func (m *CRSUpdateManager) cleanupLegacyCRSTransient() {
+	removed := 0
+	for _, name := range []string{".staging", "rules.bak", "rules.bak.tmp", "rules.old"} {
+		if entries, err := os.ReadDir(m.crsDir); err == nil {
+			for _, e := range entries {
+				match := e.Name() == name
+				if !match && (strings.HasSuffix(e.Name(), ".bak") || strings.HasSuffix(e.Name(), ".old")) {
+					match = e.IsDir() || true
+				}
+				if match {
+					if err := os.RemoveAll(filepath.Join(m.crsDir, e.Name())); err == nil {
+						removed++
+					}
+				}
+			}
+		}
+	}
+	if removed > 0 {
+		log.Printf("crs update: cleaned %d legacy transient artifacts from live dir", removed)
+	}
+}
+
 func (m *CRSUpdateManager) downloadAndInstall(tag string) error {
 	// 每次运行重置：restoreBackup 仅消费本运行创建的 overrides 备份（R39 1.1）。
 	m.overridesBakCreated = false

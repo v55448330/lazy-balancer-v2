@@ -298,7 +298,7 @@ service.interceptors.response.use(
       // 不是会话失效——直接传播后端文案，不得弹「会话失效」并强制登出。
       // C-1 补正：管理员重置端点 /users/:id/mfa/reset 同样以 401 返回「验证码错误」，
       // 需同口径放行（Users.vue 的 catch 展示后端文案供重试），否则误杀会话并在
-      // 锁定开关默认关闭时计入失败锁定计数。仅匹配 /mfa/reset 路径段，不泛化放行。
+      // 仅匹配 /mfa/reset 路径段，不泛化放行（2026-09 裁定后登录失败计数仅登录阶段）。
       if (error.config?.url?.includes('/auth/mfa/') || error.config?.url?.includes('/mfa/reset')) {
         return Promise.reject(new ApiRequestError(message, status))
       }
@@ -325,7 +325,7 @@ service.interceptors.response.use(
         }
       }
     } else if (status === 428 && error.response?.data?.code === 428 && error.config && !error.config._mfaRetried) {
-      // v2.1.8 MFA step-up：写操作（或票据签发）需 10 分钟内的 MFA 验证——
+      // v2.1.8 MFA step-up：写操作（或票据签发）需 60 秒内的 MFA 验证——
       // 全局弹码验证 → 新 JWT → 原请求自动重试一次。全站生效，页面零改动。
       try {
         const { useAuthStore } = await import('@/stores/auth')

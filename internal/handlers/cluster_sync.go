@@ -81,6 +81,20 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 // 指纹钉（内存缓存+磁盘 pin 文件），下一同步 tick 按新证书重新钉扎。仅 admin
 // 路由组可达（readOnlyGuard 的 /cluster/* 白名单保证从节点可用），操作留审计。
 func (h *Handlers) ForgetClusterPins(c *gin.Context) {
+	// 复审裁定 4：本端点语义=清除「本机作为从节点」对主节点证书的钉扎；主节点
+	// 的 pin 目录存的是各从节点钉（服务控制 TOFU 消费），误调会整体重置从节点
+	// 钉扎——主节点直接拒绝。
+	if h.syncService == nil {
+		clusterError(c, http.StatusServiceUnavailable, "同步服务未初始化", nil)
+		return
+	}
+	if h.clusterService != nil {
+		if isMaster, err := h.clusterService.IsMaster(c.Request.Context()); err == nil && isMaster {
+			recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail("主节点调用被拒绝：主节点 pin 目录存各从节点钉", services.AuditResultPart("failure")))
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "主节点无需清除指纹（本端点仅从节点使用）"})
+			return
+		}
+	}
 	removed, err := h.syncService.ForgetPins()
 	if err != nil {
 		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(err.Error(), services.AuditResultPart("failure")))

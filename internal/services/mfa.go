@@ -113,7 +113,7 @@ func mfaConsumeRecoveryCode(userID int, code string) bool {
 	return false
 }
 
-// —— 失败计数与锁定（全局开关 mfa_lockout_enabled）——
+// —— 锁定开关读取（2026-09 裁定：仅登录阶段锁定使用，登录后验证失败不计数）——
 
 // MFALockoutEnabled 读全局锁定开关。
 func MFALockoutEnabled() bool {
