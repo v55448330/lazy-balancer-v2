@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
@@ -66,7 +67,13 @@ func TestUserPasswordEndpoints_reject_passwords_shorter_than_six_characters(t *t
 func TestUpdateCurrentUser_rolls_back_display_name_when_password_update_fails(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
-	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,display_name) VALUES (1,'current','old-hash','admin','Before')"); err != nil {
+	// M5（契约）：本用例穿过共享密码确认门，种子须为真实 bcrypt 哈希且携带
+	// current_password（占位 'old-hash' 会在门处 401，到不了触发器路径）。
+	hash, err := bcrypt.GenerateFromPassword([]byte("old-secret"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,display_name) VALUES (1,'current',?,'admin','Before')", string(hash)); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	if _, err := db.DB.Exec("CREATE TRIGGER fail_current_password BEFORE UPDATE OF password_hash ON users BEGIN SELECT RAISE(ABORT,'password update failed'); END"); err != nil {
@@ -74,8 +81,7 @@ func TestUpdateCurrentUser_rolls_back_display_name_when_password_update_fails(t 
 	}
 	router := gin.New()
 	router.PUT("/me", func(c *gin.Context) { c.Set("user_id", 1); h.UpdateCurrentUser(c) })
-	request := httptest.NewRequest(http.MethodPut, "/me", strings.NewReader(`{"display_name":"After","password":"secret1"}`))
-	request.Header.Set("Content-Type", "application/json")
+	request := httptest.NewRequest(http.MethodPut, "/me", strings.NewReader(`{"display_name":"After","password":"secret1","current_password":"old-secret"}`))
 	response := httptest.NewRecorder()
 
 	// When
@@ -89,7 +95,7 @@ func TestUpdateCurrentUser_rolls_back_display_name_when_password_update_fails(t 
 	if err := db.DB.QueryRow("SELECT display_name,password_hash FROM users WHERE id=1").Scan(&displayName, &passwordHash); err != nil {
 		t.Fatalf("read user: %v", err)
 	}
-	if displayName != "Before" || passwordHash != "old-hash" {
+	if displayName != "Before" || passwordHash != string(hash) {
 		t.Fatalf("user=(%q,%q), want original state", displayName, passwordHash)
 	}
 }

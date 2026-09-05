@@ -324,17 +324,22 @@ func TestJWTAuth_rejects_first_token_after_two_same_second_password_changes(t *t
 		db.DB = oldDB
 		db.SetDB(oldDB)
 	})
+	hash, err := bcrypt.GenerateFromPassword([]byte("initial-secret"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
 	if _, err := db.DB.Exec(`
-		INSERT INTO users (id,username,password_hash,role,is_enabled,password_version) VALUES (7,'admin','hash','admin',1,0);
+		INSERT INTO users (id,username,password_hash,role,is_enabled,password_version) VALUES (7,'admin',?,'admin',1,0);
 		CREATE TRIGGER fixed_password_change_time AFTER UPDATE OF password_hash ON users
 		BEGIN UPDATE users SET password_changed_at='2026-07-30 12:00:00' WHERE id=NEW.id; END;
-	`); err != nil {
+	`, string(hash)); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	h := handlers.NewHandlers(handlers.Dependencies{})
-	update := func(password string) int64 {
+	update := func(current, next string) int64 {
 		response := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPatch, "/users/me", strings.NewReader(`{"password":"`+password+`"}`))
+		// M5（契约）：本人改密须携带 current_password 过共享确认门。
+		request := httptest.NewRequest(http.MethodPatch, "/users/me", strings.NewReader(`{"password":"`+next+`","current_password":"`+current+`"}`))
 		request.Header.Set("Content-Type", "application/json")
 		context, _ := gin.CreateTestContext(response)
 		context.Request = request
@@ -353,8 +358,8 @@ func TestJWTAuth_rejects_first_token_after_two_same_second_password_changes(t *t
 		}
 		return version
 	}
-	firstVersion := update("first-password")
-	secondVersion := update("second-password")
+	firstVersion := update("initial-secret", "first-password")
+	secondVersion := update("first-password", "second-password")
 	if firstVersion != 1 || secondVersion != 2 {
 		t.Fatalf("password versions=(%d,%d), want (1,2)", firstVersion, secondVersion)
 	}

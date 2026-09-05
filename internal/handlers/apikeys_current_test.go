@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -43,8 +44,9 @@ func setupAPIKeyTestDB(t *testing.T) *sql.DB {
 		role VARCHAR(20) NOT NULL DEFAULT 'user',
 		display_name VARCHAR(100),
 		is_enabled BOOLEAN DEFAULT TRUE,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		last_login DATETIME
+		last_login DATETIME,
+		mfa_failed_attempts INTEGER DEFAULT 0,
+		mfa_locked_until DATETIME
 	);
 	CREATE TABLE api_keys (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +65,14 @@ func setupAPIKeyTestDB(t *testing.T) *sql.DB {
 	INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', 'x', 'user'), (2, 'bob', 'x', 'user');
 	INSERT INTO api_keys (id, name, key_hash, key_prefix, created_by, is_enabled) VALUES (10, 'alice-key', 'h1', 'prefix1', 1, 1), (20, 'bob-key', 'h2', 'prefix2', 2, 1);`)
 	if err != nil {
+		t.Fatal(err)
+	}
+	// M6（契约）：特权 Key 创建走共享密码确认门——user 1 配真实 bcrypt 哈希。
+	hash, err := bcrypt.GenerateFromPassword([]byte("alice-secret"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE users SET password_hash=? WHERE id=1", string(hash)); err != nil {
 		t.Fatal(err)
 	}
 	return database
@@ -437,9 +447,17 @@ func TestUpdateCurrentUserAPIKeyForcesLegacyKeyReadOnly(t *testing.T) {
 
 func TestAdminAPIKeyReadOnlySettingIsUnchanged(t *testing.T) {
 	database := setupAPIKeyTestDB(t)
+	// M6（契约）：可写 Key 属特权 Key，须真实密码种子并携带 password 过共享确认门
+	hash, err := bcrypt.GenerateFromPassword([]byte("admin-secret"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := database.Exec("UPDATE users SET password_hash=? WHERE id=1", string(hash)); err != nil {
+		t.Fatalf("seed admin hash: %v", err)
+	}
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/api-keys", strings.NewReader(`{"name":"admin-write","read_only":false}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/api-keys", strings.NewReader(`{"name":"admin-write","read_only":false,"password":"admin-secret"}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Set("user_id", 1)
 	ctx.Set("role", "admin")
@@ -489,7 +507,8 @@ func TestCreateCurrentUserAPIKeyNormalizesMCPWhitelist(t *testing.T) {
 	database := setupAPIKeyTestDB(t)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/users/me/api-keys", strings.NewReader(`{"name":"mcp","mcp_enabled":true,"read_only":true,"mcp_ip_whitelist":["192.168.1.5","2001:db8::1"]}`))
+	// M6（契约）：mcp_enabled Key 属特权 Key，须携带密码过共享确认门。
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/users/me/api-keys", strings.NewReader(`{"name":"mcp","mcp_enabled":true,"read_only":true,"mcp_ip_whitelist":["192.168.1.5","2001:db8::1"],"password":"alice-secret"}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Set("user_id", 1)
 

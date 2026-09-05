@@ -694,88 +694,93 @@ func runMigrations() error {
 		"users.mfa_failed_attempts":                       "INTEGER DEFAULT 0",
 		"users.mfa_locked_until":                          "DATETIME",
 		"users.mfa_pending_fails":                         "INTEGER DEFAULT 0",
-		"mfa_challenges.attempts":                         "INTEGER DEFAULT 0",
-		"global_config.mfa_write_guard":                   "BOOLEAN DEFAULT 0",
-		"global_config.mfa_lockout_enabled":               "BOOLEAN DEFAULT 0",
-		"global_config.default_ca_provider_id":            "INTEGER DEFAULT 0",
-		"global_config.cert_renewal_days":                 "INTEGER DEFAULT 30",
-		"global_config.cert_renewal_attempts":             "INTEGER DEFAULT 5",
-		"global_config.cert_job_log_size_mb":              "INTEGER DEFAULT 10",
-		"global_config.audit_log_size_mb":                 "INTEGER DEFAULT 10",
-		"global_config.caddy_apply_error":                 "TEXT DEFAULT ''",
-		"global_config.runtime_log_size_mb":               "INTEGER DEFAULT 100",
-		"global_config.acme_email":                        "VARCHAR(255)",
-		"global_config.cert_expiry_days":                  "INTEGER DEFAULT 30",
-		"global_config.metrics_public":                    "BOOLEAN DEFAULT 0",
-		"global_config.metrics_origins":                   "VARCHAR(500)",
-		"global_config.caddy_log_level":                   "VARCHAR(10) DEFAULT 'info'",
-		"global_config.caddy_log_size_mb":                 "INTEGER DEFAULT 100",
-		"global_config.request_body_max_size_mb":          "INTEGER DEFAULT 0",
-		"global_config.http_read_timeout":                 "INTEGER DEFAULT 0",
-		"global_config.http_write_timeout":                "INTEGER DEFAULT 0",
-		"global_config.http_idle_timeout":                 "INTEGER DEFAULT 0",
-		"global_config.upstream_keepalive_timeout":        "INTEGER DEFAULT 0",
-		"global_config.server_tokens_hidden":              "BOOLEAN DEFAULT FALSE",
-		"global_config.admin_tls_enabled":                 "BOOLEAN DEFAULT 0",
-		"global_config.admin_tls_mode":                    "VARCHAR(20) DEFAULT 'selfsigned'",
-		"global_config.admin_tls_cert":                    "TEXT DEFAULT ''",
-		"global_config.admin_tls_key":                     "TEXT DEFAULT ''",
-		"global_config.access_log_json":                   "BOOLEAN DEFAULT TRUE",
-		"global_config.access_log_format":                 "TEXT DEFAULT ''",
-		"global_config.audit_retention_months":            "INTEGER DEFAULT 3",
-		"global_config.metrics_retention_days":            "INTEGER DEFAULT 7",
-		"global_config.jwt_expire_minutes":                "INTEGER DEFAULT 20",
-		"global_config.timezone":                          "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
-		"global_config.github_proxy_url":                  "TEXT NOT NULL DEFAULT 'https://v4.gh-proxy.org/'",
-		"lb_rules.log_enabled":                            "BOOLEAN DEFAULT 0",
-		"lb_rules.custom_routes_enabled":                  "BOOLEAN NOT NULL DEFAULT 0",
-		"lb_rules.proxy_dial_timeout":                     "INTEGER NOT NULL DEFAULT 0",
-		"lb_rules.proxy_response_header_timeout":          "INTEGER NOT NULL DEFAULT 0",
-		"lb_rules.proxy_read_timeout":                     "INTEGER NOT NULL DEFAULT 0",
-		"lb_rules.proxy_write_timeout":                    "INTEGER NOT NULL DEFAULT 0",
-		"lb_rules.proxy_stream_timeout":                   "INTEGER NOT NULL DEFAULT 0",
-		"lb_rules.proxy_flush_interval":                   "INTEGER NOT NULL DEFAULT 0",
-		"lb_rules.proxy_stream_close_delay":               "INTEGER NOT NULL DEFAULT 0",
-		"global_config.proxy_dial_timeout":                "INTEGER DEFAULT 0",
-		"global_config.proxy_response_header_timeout":     "INTEGER DEFAULT 0",
-		"global_config.proxy_read_timeout":                "INTEGER DEFAULT 0",
-		"global_config.proxy_write_timeout":               "INTEGER DEFAULT 0",
-		"global_config.proxy_stream_timeout":              "INTEGER DEFAULT 0",
-		"global_config.proxy_flush_interval":              "INTEGER DEFAULT 0",
-		"global_config.proxy_stream_close_delay":          "INTEGER DEFAULT 0",
-		"users.password_changed_at":                       "DATETIME",
-		"users.password_version":                          "INTEGER NOT NULL DEFAULT 0",
-		"global_config.cluster_version":                   "INTEGER DEFAULT 0",
-		"global_config.sync_global_config":                "BOOLEAN DEFAULT 1",
-		"global_config.sync_users":                        "BOOLEAN DEFAULT 1",
-		"global_config.sync_rules":                        "BOOLEAN DEFAULT 1",
-		"global_config.sync_waf_files":                    "BOOLEAN DEFAULT 1",
-		"global_config.sync_security":                     "BOOLEAN DEFAULT 1",
-		"global_config.cluster_token":                     "TEXT DEFAULT ''",
-		"global_config.registration_id":                   "INTEGER DEFAULT 0",
-		"global_config.registration_secret":               "TEXT DEFAULT ''",
-		"global_config.registration_confirm_failures":     "INTEGER DEFAULT 0",
-		"global_config.applied_version":                   "INTEGER DEFAULT 0",
-		"global_config.last_sync_error":                   "TEXT DEFAULT ''",
-		"global_config.sync_fingerprint":                  "TEXT DEFAULT ''",
-		"nodes.cluster_token_hash":                        "VARCHAR(64)",
-		"nodes.protocol":                                  "VARCHAR(10) DEFAULT 'http'",
-		"nodes.access_url":                                "VARCHAR(255) DEFAULT ''",
-		"nodes.registration_secret":                       "VARCHAR(64)",
-		"nodes.registration_secret_expires_at":            "DATETIME",
-		"nodes.cluster_token_delivered":                   "BOOLEAN DEFAULT 0",
-		"nodes.reported_version":                          "INTEGER DEFAULT 0",
-		"nodes.health_json":                               "TEXT",
-		"nodes.last_sync_at":                              "DATETIME",
-		"nodes.last_sync_error":                           "TEXT",
-		"security_policies.crs_excluded_rules":            "TEXT DEFAULT '[]'",
-		"security_policies.ip_acl_mode":                   "TEXT DEFAULT ''",
-		"security_policies.ip_acl_list":                   "TEXT DEFAULT '[]'",
-		"security_policies.ip_acl_enabled":                "BOOLEAN DEFAULT FALSE",
-		"security_policies.block_page_id":                 "INTEGER DEFAULT 0",
-		"security_block_pages.created_by":                 "INTEGER DEFAULT 0",
-		"security_block_pages.updated_by":                 "INTEGER DEFAULT 0",
-		"security_policies.updated_by":                    "INTEGER DEFAULT 0",
+		// M7（契约）：账户级登录锁定列（auth.go Login 写读；与 MFA 确认冷却的
+		// mfa_* 计数列独立，登录锁定与 MFA 冷却互不牵连）。计数列 NOT NULL——
+		// 存量行取默认 0，不存在 NULL 语义。
+		"users.login_failed_attempts":                 "INTEGER NOT NULL DEFAULT 0",
+		"users.login_locked_until":                    "TEXT",
+		"mfa_challenges.attempts":                     "INTEGER DEFAULT 0",
+		"global_config.mfa_write_guard":               "BOOLEAN DEFAULT 0",
+		"global_config.mfa_lockout_enabled":           "BOOLEAN DEFAULT 0",
+		"global_config.default_ca_provider_id":        "INTEGER DEFAULT 0",
+		"global_config.cert_renewal_days":             "INTEGER DEFAULT 30",
+		"global_config.cert_renewal_attempts":         "INTEGER DEFAULT 5",
+		"global_config.cert_job_log_size_mb":          "INTEGER DEFAULT 10",
+		"global_config.audit_log_size_mb":             "INTEGER DEFAULT 10",
+		"global_config.caddy_apply_error":             "TEXT DEFAULT ''",
+		"global_config.runtime_log_size_mb":           "INTEGER DEFAULT 100",
+		"global_config.acme_email":                    "VARCHAR(255)",
+		"global_config.cert_expiry_days":              "INTEGER DEFAULT 30",
+		"global_config.metrics_public":                "BOOLEAN DEFAULT 0",
+		"global_config.metrics_origins":               "VARCHAR(500)",
+		"global_config.caddy_log_level":               "VARCHAR(10) DEFAULT 'info'",
+		"global_config.caddy_log_size_mb":             "INTEGER DEFAULT 100",
+		"global_config.request_body_max_size_mb":      "INTEGER DEFAULT 0",
+		"global_config.http_read_timeout":             "INTEGER DEFAULT 0",
+		"global_config.http_write_timeout":            "INTEGER DEFAULT 0",
+		"global_config.http_idle_timeout":             "INTEGER DEFAULT 0",
+		"global_config.upstream_keepalive_timeout":    "INTEGER DEFAULT 0",
+		"global_config.server_tokens_hidden":          "BOOLEAN DEFAULT FALSE",
+		"global_config.admin_tls_enabled":             "BOOLEAN DEFAULT 0",
+		"global_config.admin_tls_mode":                "VARCHAR(20) DEFAULT 'selfsigned'",
+		"global_config.admin_tls_cert":                "TEXT DEFAULT ''",
+		"global_config.admin_tls_key":                 "TEXT DEFAULT ''",
+		"global_config.access_log_json":               "BOOLEAN DEFAULT TRUE",
+		"global_config.access_log_format":             "TEXT DEFAULT ''",
+		"global_config.audit_retention_months":        "INTEGER DEFAULT 3",
+		"global_config.metrics_retention_days":        "INTEGER DEFAULT 7",
+		"global_config.jwt_expire_minutes":            "INTEGER DEFAULT 20",
+		"global_config.timezone":                      "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
+		"global_config.github_proxy_url":              "TEXT NOT NULL DEFAULT 'https://v4.gh-proxy.org/'",
+		"lb_rules.log_enabled":                        "BOOLEAN DEFAULT 0",
+		"lb_rules.custom_routes_enabled":              "BOOLEAN NOT NULL DEFAULT 0",
+		"lb_rules.proxy_dial_timeout":                 "INTEGER NOT NULL DEFAULT 0",
+		"lb_rules.proxy_response_header_timeout":      "INTEGER NOT NULL DEFAULT 0",
+		"lb_rules.proxy_read_timeout":                 "INTEGER NOT NULL DEFAULT 0",
+		"lb_rules.proxy_write_timeout":                "INTEGER NOT NULL DEFAULT 0",
+		"lb_rules.proxy_stream_timeout":               "INTEGER NOT NULL DEFAULT 0",
+		"lb_rules.proxy_flush_interval":               "INTEGER NOT NULL DEFAULT 0",
+		"lb_rules.proxy_stream_close_delay":           "INTEGER NOT NULL DEFAULT 0",
+		"global_config.proxy_dial_timeout":            "INTEGER DEFAULT 0",
+		"global_config.proxy_response_header_timeout": "INTEGER DEFAULT 0",
+		"global_config.proxy_read_timeout":            "INTEGER DEFAULT 0",
+		"global_config.proxy_write_timeout":           "INTEGER DEFAULT 0",
+		"global_config.proxy_stream_timeout":          "INTEGER DEFAULT 0",
+		"global_config.proxy_flush_interval":          "INTEGER DEFAULT 0",
+		"global_config.proxy_stream_close_delay":      "INTEGER DEFAULT 0",
+		"users.password_changed_at":                   "DATETIME",
+		"users.password_version":                      "INTEGER NOT NULL DEFAULT 0",
+		"global_config.cluster_version":               "INTEGER DEFAULT 0",
+		"global_config.sync_global_config":            "BOOLEAN DEFAULT 1",
+		"global_config.sync_users":                    "BOOLEAN DEFAULT 1",
+		"global_config.sync_rules":                    "BOOLEAN DEFAULT 1",
+		"global_config.sync_waf_files":                "BOOLEAN DEFAULT 1",
+		"global_config.sync_security":                 "BOOLEAN DEFAULT 1",
+		"global_config.cluster_token":                 "TEXT DEFAULT ''",
+		"global_config.registration_id":               "INTEGER DEFAULT 0",
+		"global_config.registration_secret":           "TEXT DEFAULT ''",
+		"global_config.registration_confirm_failures": "INTEGER DEFAULT 0",
+		"global_config.applied_version":               "INTEGER DEFAULT 0",
+		"global_config.last_sync_error":               "TEXT DEFAULT ''",
+		"global_config.sync_fingerprint":              "TEXT DEFAULT ''",
+		"nodes.cluster_token_hash":                    "VARCHAR(64)",
+		"nodes.protocol":                              "VARCHAR(10) DEFAULT 'http'",
+		"nodes.access_url":                            "VARCHAR(255) DEFAULT ''",
+		"nodes.registration_secret":                   "VARCHAR(64)",
+		"nodes.registration_secret_expires_at":        "DATETIME",
+		"nodes.cluster_token_delivered":               "BOOLEAN DEFAULT 0",
+		"nodes.reported_version":                      "INTEGER DEFAULT 0",
+		"nodes.health_json":                           "TEXT",
+		"nodes.last_sync_at":                          "DATETIME",
+		"nodes.last_sync_error":                       "TEXT",
+		"security_policies.crs_excluded_rules":        "TEXT DEFAULT '[]'",
+		"security_policies.ip_acl_mode":               "TEXT DEFAULT ''",
+		"security_policies.ip_acl_list":               "TEXT DEFAULT '[]'",
+		"security_policies.ip_acl_enabled":            "BOOLEAN DEFAULT FALSE",
+		"security_policies.block_page_id":             "INTEGER DEFAULT 0",
+		"security_block_pages.created_by":             "INTEGER DEFAULT 0",
+		"security_block_pages.updated_by":             "INTEGER DEFAULT 0",
+		"security_policies.updated_by":                "INTEGER DEFAULT 0",
 		// 四列刻意可空（不加 NOT NULL）：restoreTable/快照/带外脏数据可携带 NULL，
 		// 读路径 loadSecurityPolicyContext 以 COALESCE 归一化；加 NOT NULL 会拒绝 null 恢复（A-I2/F3 回归测试）。
 		"security_policies.ip_whitelist_enabled": "INTEGER DEFAULT 1",
@@ -959,8 +964,10 @@ func runMigrations() error {
 	if err := migrateCertJobsStatusConstraint(); err != nil {
 		return fmt.Errorf("failed to migrate cert_jobs status constraint: %w", err)
 	}
-	if _, err := DB.Exec("CREATE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain ON cert_jobs(rule_id, domain)"); err != nil {
-		return fmt.Errorf("failed to create cert_jobs rule-domain index: %w", err)
+	// idx_cert_jobs_rule_domain 与 idx_cert_jobs_rule_domain_unique 左前缀重叠
+	//（审计 C 组清理），删除冗余索引；IF EXISTS 幂等，存量库一次性回收。
+	if _, err := DB.Exec("DROP INDEX IF EXISTS idx_cert_jobs_rule_domain"); err != nil {
+		return fmt.Errorf("failed to drop redundant cert_jobs rule-domain index: %w", err)
 	}
 	if _, err := DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_jobs_rule_domain_unique ON cert_jobs(rule_id, domain)"); err != nil {
 		return fmt.Errorf("failed to create cert_jobs unique index: %w", err)
@@ -1679,12 +1686,16 @@ func migrateUsersIsEnabledNotNull() error {
 		return fmt.Errorf("acquire migration connection: %w", err)
 	}
 	defer conn.Close()
+	fkPrev, err := readForeignKeysSetting(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("read foreign_keys setting: %w", err)
+	}
 	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
 		return fmt.Errorf("disable foreign keys: %w", err)
 	}
 	defer func() {
-		if _, enableErr := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); enableErr != nil {
-			log.Printf("failed to re-enable foreign keys after users migration: %v", enableErr)
+		if err := restoreForeignKeysSetting(ctx, conn, fkPrev); err != nil {
+			log.Printf("failed to restore foreign_keys=%d after users migration: %v", fkPrev, err)
 		}
 	}()
 	tx, err := conn.BeginTx(ctx, nil)
@@ -1716,10 +1727,12 @@ func migrateUsersIsEnabledNotNull() error {
 			mfa_last_timestep INTEGER DEFAULT 0,
 			mfa_failed_attempts INTEGER DEFAULT 0,
 			mfa_locked_until DATETIME,
-			mfa_pending_fails INTEGER DEFAULT 0
+			mfa_pending_fails INTEGER DEFAULT 0,
+			login_failed_attempts INTEGER NOT NULL DEFAULT 0,
+			login_locked_until TEXT
 		);
-		INSERT INTO users_not_null (id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_failed_attempts,mfa_locked_until,mfa_pending_fails)
-		SELECT id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_failed_attempts,mfa_locked_until,mfa_pending_fails FROM users;
+		INSERT INTO users_not_null (id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_failed_attempts,mfa_locked_until,mfa_pending_fails,login_failed_attempts,login_locked_until)
+		SELECT id,username,password_hash,role,display_name,is_enabled,created_at,last_login,password_changed_at,password_version,mfa_enabled,mfa_secret,mfa_pending_secret,mfa_recovery_codes,mfa_last_timestep,mfa_failed_attempts,mfa_locked_until,mfa_pending_fails,login_failed_attempts,login_locked_until FROM users;
 		DROP TABLE users;
 		ALTER TABLE users_not_null RENAME TO users;`); err != nil {
 		return fmt.Errorf("rebuild users table: %w", err)
@@ -1753,12 +1766,16 @@ func migrateSecurityPoliciesNullable() error {
 		return fmt.Errorf("acquire migration connection: %w", err)
 	}
 	defer conn.Close()
+	fkPrev, err := readForeignKeysSetting(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("read foreign_keys setting: %w", err)
+	}
 	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
 		return fmt.Errorf("disable foreign keys: %w", err)
 	}
 	defer func() {
-		if _, enableErr := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); enableErr != nil {
-			log.Printf("failed to re-enable foreign keys after security_policies migration: %v", enableErr)
+		if err := restoreForeignKeysSetting(ctx, conn, fkPrev); err != nil {
+			log.Printf("failed to restore foreign_keys=%d after security_policies migration: %v", fkPrev, err)
 		}
 	}()
 	tx, err := conn.BeginTx(ctx, nil)
@@ -1840,12 +1857,16 @@ func migrateNodesDeadColumns() error {
 		return fmt.Errorf("acquire nodes migration connection: %w", err)
 	}
 	defer conn.Close()
+	fkPrev, err := readForeignKeysSetting(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("read foreign_keys setting: %w", err)
+	}
 	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
 		return fmt.Errorf("disable foreign keys: %w", err)
 	}
 	defer func() {
-		if _, enableErr := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); enableErr != nil {
-			log.Printf("failed to re-enable foreign keys after nodes migration: %v", enableErr)
+		if err := restoreForeignKeysSetting(ctx, conn, fkPrev); err != nil {
+			log.Printf("failed to restore foreign_keys=%d after nodes migration: %v", fkPrev, err)
 		}
 	}()
 	tx, err := conn.BeginTx(ctx, nil)
@@ -1935,6 +1956,23 @@ func rollbackMigration(tx *sql.Tx, migrationErr error) error {
 	return migrationErr
 }
 
+// readForeignKeysSetting 读取连接当前 foreign_keys 设置（0/1）。M25：表重建
+// 迁移临时关闭 foreign_keys 前先记原值，结束后还原原值而非无条件 =ON——
+// 调用方若刻意保持关闭，迁移不得悄悄改写会话设置。
+func readForeignKeysSetting(ctx context.Context, conn *sql.Conn) (int, error) {
+	var setting int
+	if err := conn.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&setting); err != nil {
+		return 0, err
+	}
+	return setting, nil
+}
+
+// restoreForeignKeysSetting 将连接 foreign_keys 还原为迁移前读到的原值。
+func restoreForeignKeysSetting(ctx context.Context, conn *sql.Conn, setting int) error {
+	_, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA foreign_keys=%d", setting))
+	return err
+}
+
 // migrateLbRulesPrimaryKey rebuilds lb_rules and upstreams tables to use caddy_id as primary key
 func migrateLbRulesPrimaryKey() error {
 	// Check if lb_rules already has caddy_id as primary key (checked via pragma)
@@ -1958,13 +1996,17 @@ func migrateLbRulesPrimaryKey() error {
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Close()
+	fkPrev, err := readForeignKeysSetting(context.Background(), conn)
+	if err != nil {
+		return fmt.Errorf("failed to read foreign_keys setting: %w", err)
+	}
 	if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys = OFF"); err != nil {
 		return fmt.Errorf("failed to disable foreign keys: %w", err)
 	}
 	fkRestored := false
 	defer func() {
 		if !fkRestored {
-			_, _ = conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON")
+			_ = restoreForeignKeysSetting(context.Background(), conn, fkPrev)
 		}
 	}()
 
@@ -2130,8 +2172,8 @@ func migrateLbRulesPrimaryKey() error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
-	if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON"); err != nil {
-		return fmt.Errorf("failed to re-enable foreign keys: %w", err)
+	if err := restoreForeignKeysSetting(context.Background(), conn, fkPrev); err != nil {
+		return fmt.Errorf("failed to restore foreign keys: %w", err)
 	}
 	fkRestored = true
 
@@ -2221,13 +2263,17 @@ func migrateCertJobsStatusConstraint() error {
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Close()
+	fkPrev, err := readForeignKeysSetting(context.Background(), conn)
+	if err != nil {
+		return fmt.Errorf("failed to read foreign_keys setting: %w", err)
+	}
 	if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys = OFF"); err != nil {
 		return fmt.Errorf("failed to disable foreign keys: %w", err)
 	}
 	fkRestored := false
 	defer func() {
 		if !fkRestored {
-			_, _ = conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON")
+			_ = restoreForeignKeysSetting(context.Background(), conn, fkPrev)
 		}
 	}()
 
@@ -2286,8 +2332,8 @@ func migrateCertJobsStatusConstraint() error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit cert_jobs migration: %w", err)
 	}
-	if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON"); err != nil {
-		return fmt.Errorf("failed to re-enable foreign keys: %w", err)
+	if err := restoreForeignKeysSetting(context.Background(), conn, fkPrev); err != nil {
+		return fmt.Errorf("failed to restore foreign keys: %w", err)
 	}
 	fkRestored = true
 

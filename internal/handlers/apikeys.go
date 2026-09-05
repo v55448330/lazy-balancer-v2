@@ -118,8 +118,16 @@ func scanAPIKeys(rows *sql.Rows) ([]models.APIKeyWithUserResponse, error) {
 	return keys, nil
 }
 
+// createAPIKeyForUserRequest 在 models.CreateAPIKeyRequest 上扩展 M6 契约字段
+// password：特权 Key（可写或 MCP）创建必须过共享密码确认门（模型包不为此
+// 契约加列，扩展收敛在创建端点）。
+type createAPIKeyForUserRequest struct {
+	models.CreateAPIKeyRequest
+	Password string `json:"password" binding:"omitempty,max=72"`
+}
+
 func createAPIKeyForUser(c *gin.Context, userID int) {
-	var req models.CreateAPIKeyRequest
+	var req createAPIKeyForUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
 		return
@@ -130,6 +138,18 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	if req.ExpiresAt != nil && req.ExpiresAt.Before(time.Now()) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "过期时间不能早于当前时间"})
 		return
+	}
+	// M6（用户已批准契约）：特权 Key（非只读或 MCP）可凭密码读配置/调用工具，
+	// 创建必须现场确认密码——被劫持会话不能静默铸造长期特权凭据；只读非 MCP
+	// Key 保持无门。缺失 400；错误/冷却中由共享门写入 401/429。
+	if !req.ReadOnly || req.MCPEnabled {
+		if req.Password == "" {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "创建可写或 MCP API 密钥需提供密码"})
+			return
+		}
+		if err := confirmPasswordWithGate(c, userID, req.Password); err != nil {
+			return
+		}
 	}
 	whitelist, err := services.NormalizeCIDRs(req.MCPIPWhitelist)
 	if err != nil {

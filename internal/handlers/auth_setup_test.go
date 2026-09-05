@@ -42,7 +42,17 @@ func setupAuthTestDB(t *testing.T) *sql.DB {
 		last_login DATETIME,
 		password_changed_at DATETIME,
 		password_version INTEGER NOT NULL DEFAULT 0,
-		mfa_enabled BOOLEAN DEFAULT 0
+		mfa_enabled BOOLEAN DEFAULT 0,
+		mfa_failed_attempts INTEGER DEFAULT 0,
+		mfa_locked_until DATETIME,
+		-- M7 登录锁定列 + M5/M6 密码确认门计数列（与生产迁移后形状一致；api_keys
+		-- 供改密路径的 Key 吊销 DELETE）。
+		login_failed_attempts INTEGER NOT NULL DEFAULT 0,
+		login_locked_until TEXT
+	);
+	CREATE TABLE api_keys (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		created_by INTEGER NOT NULL
 	)`)
 	if err != nil {
 		t.Fatal(err)

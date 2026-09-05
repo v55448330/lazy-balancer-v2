@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -118,6 +119,15 @@ func TestCreateAPIKey_rejectsPastExpiry(t *testing.T) {
 func TestCreateAPIKey_acceptsFutureExpiry(t *testing.T) {
 	// Given
 	handler := newBackupTestHandlers(t)
+	// M6（契约）：admin 创建可写 Key 属特权 Key，须种子真实密码并携带 password
+	// 过共享确认门。
+	hash, err := bcrypt.GenerateFromPassword([]byte("admin-secret"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'admin',?,'admin',1)", string(hash)); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/api-keys", func(c *gin.Context) {
@@ -128,8 +138,7 @@ func TestCreateAPIKey_acceptsFutureExpiry(t *testing.T) {
 
 	// When
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api-keys", strings.NewReader(`{"name":"future-key","expires_at":"2999-01-01T00:00:00Z"}`))
-	request.Header.Set("Content-Type", "application/json")
+	request := httptest.NewRequest(http.MethodPost, "/api-keys", strings.NewReader(`{"name":"future-key","expires_at":"2999-01-01T00:00:00Z","password":"admin-secret"}`))
 	router.ServeHTTP(response, request)
 
 	// Then

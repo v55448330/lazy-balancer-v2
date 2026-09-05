@@ -200,3 +200,104 @@ func TestMFADisable_verifyFailure_writesAuditRow(t *testing.T) {
 		t.Fatalf("audit rows=%d, want >=1（disable 验码失败应写「认证拒绝」审计）", cnt)
 	}
 }
+
+func mfaRecoveryCodesTestRouter(h *Handlers) *gin.Engine {
+	router := gin.New()
+	router.POST("/auth/mfa/recovery-codes", func(c *gin.Context) {
+		c.Set("user_id", 1)
+		c.Set("username", "operator")
+		c.Set("auth_type", "jwt")
+		h.MFARecoveryCodes(c)
+	})
+	return router
+}
+
+// 场景 5（H3 recovery-codes 密码爆破收敛）：连续 10 次错误密码各得 401；第 10 次
+// 失败的单条递增已达阈值并置锁，第 11 次 429。修复前：该端点仅 bcrypt 比对、
+// 无任何失败上限，可无限在线爆破密码。
+func TestMFARecoveryCodes_passwordHardCap_429AfterTenFailures(t *testing.T) {
+	// Given 启用 MFA + 已知密码的操作者
+	h := newBackupTestHandlers(t)
+	seedMfaGateUser(t, gateTestPassword)
+	router := mfaRecoveryCodesTestRouter(h)
+
+	// When 连续 10 次错误密码
+	for i := 1; i <= 10; i++ {
+		rec := postRaw(router, "/auth/mfa/recovery-codes", `{"password":"totally-wrong"}`)
+		// Then 各 401（既有失败语义不变）
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status=%d body=%s, want 401", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	// When 第 11 次
+	rec := postRaw(router, "/auth/mfa/recovery-codes", `{"password":"totally-wrong"}`)
+
+	// Then 429（冷却生效，不再比对密码）
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("attempt 11: status=%d body=%s, want 429（密码确认门应触发）", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "连续失败过多，请 10 分钟后重试") {
+		t.Fatalf("attempt 11: body=%s, want 包含「连续失败过多，请 10 分钟后重试」", rec.Body.String())
+	}
+}
+
+// 场景 6（H3 成功清零）：阈值未达时正确密码 → 200 且失败计数清零——正常用户
+// 偶发输错不被跨请求累计惩罚。
+func TestMFARecoveryCodes_successClearsFailureCount(t *testing.T) {
+	// Given 已有 9 次密码失败（再错一次即触发冷却）
+	h := newBackupTestHandlers(t)
+	seedMfaGateUser(t, gateTestPassword)
+	router := mfaRecoveryCodesTestRouter(h)
+	for i := 1; i <= 9; i++ {
+		if rec := postRaw(router, "/auth/mfa/recovery-codes", `{"password":"totally-wrong"}`); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("warmup %d: status=%d body=%s, want 401", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	// When 正确密码
+	rec := postRaw(router, "/auth/mfa/recovery-codes", fmt.Sprintf(`{"password":%q}`, gateTestPassword))
+
+	// Then 200 + 失败计数清零
+	if rec.Code != http.StatusOK {
+		t.Fatalf("correct password: status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var attempts int
+	if err := db.DB.QueryRow("SELECT COALESCE(mfa_failed_attempts,0) FROM users WHERE id=1").Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 0 {
+		t.Fatalf("mfa_failed_attempts=%d, want 0（成功后计数应清零）", attempts)
+	}
+}
+
+// 场景 7（H3 disable 密码爆破收敛）：持有效验证码爆破密码——密码预检先于验码，
+// 失败计入同一硬门（有效码未被消费可复用），第 10 次失败置锁、第 11 次 429。
+// 修复前：disable 密码段完全不计数，可无限爆破。
+func TestMFADisable_wrongPasswordHardCap_429AfterTenFailures(t *testing.T) {
+	// Given 启用 MFA + 已知密码的操作者 + 一枚有效码（密码预检失败即返回，码不消费）
+	h := newBackupTestHandlers(t)
+	secret := seedMfaGateUser(t, gateTestPassword)
+	router := mfaDisableTestRouter(h)
+	valid := mfaResetCurrentCode(t, secret, time.Now())
+
+	// When 连续 10 次错误密码（码有效）
+	for i := 1; i <= 10; i++ {
+		rec := postRaw(router, "/auth/mfa/disable", fmt.Sprintf(`{"password":"totally-wrong","code":%q}`, valid))
+		// Then 各 401（密码错误，验码未达）
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status=%d body=%s, want 401", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	// When 第 11 次
+	rec := postRaw(router, "/auth/mfa/disable", fmt.Sprintf(`{"password":"totally-wrong","code":%q}`, valid))
+
+	// Then 429（密码失败与验码失败共享同一冷却）
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("attempt 11: status=%d body=%s, want 429（密码爆破应触发硬门）", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "连续失败过多，请 10 分钟后重试") {
+		t.Fatalf("attempt 11: body=%s, want 包含冷却文案", rec.Body.String())
+	}
+}

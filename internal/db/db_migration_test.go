@@ -505,7 +505,9 @@ func TestRunMigrations_makes_users_isEnabled_notNull_and_backfills_null(t *testi
 		mfa_last_timestep INTEGER DEFAULT 0,
 		mfa_failed_attempts INTEGER DEFAULT 0,
 		mfa_locked_until DATETIME,
-		mfa_pending_fails INTEGER DEFAULT 0
+		mfa_pending_fails INTEGER DEFAULT 0,
+		login_failed_attempts INTEGER NOT NULL DEFAULT 0,
+		login_locked_until TEXT
 	);
 	INSERT INTO users (username,password_hash,role,is_enabled) VALUES ('legacy','hash','admin',NULL);`); err != nil {
 		t.Fatalf("seed legacy users: %v", err)
@@ -532,6 +534,15 @@ func TestRunMigrations_makes_users_isEnabled_notNull_and_backfills_null(t *testi
 	}
 	if _, err := database.Exec("UPDATE users SET is_enabled=NULL WHERE username='legacy'"); err == nil {
 		t.Fatal("users.is_enabled accepted NULL after migration")
+	}
+	// M7：重建白名单含登录锁定列（newColumns 先补齐、重建保留，缺列即报错——
+	// 与 mfa 列同为回归锚点），且 NOT NULL 约束在重建后保持。
+	var loginColsNull int
+	if err := database.QueryRow(`SELECT "notnull" FROM pragma_table_info('users') WHERE name='login_failed_attempts'`).Scan(&loginColsNull); err != nil {
+		t.Fatalf("read users.login_failed_attempts schema: %v", err)
+	}
+	if loginColsNull != 1 {
+		t.Fatalf("login_failed_attempts notnull=%d, want 1（重建须保留 NOT NULL）", loginColsNull)
 	}
 }
 
@@ -1913,5 +1924,53 @@ func TestRunMigrations_addsGitHubProxyURLColumnWithDefault(t *testing.T) {
 	}
 	if got != "https://v4.gh-proxy.org/" {
 		t.Fatalf("github_proxy_url=%q, want default https://v4.gh-proxy.org/", got)
+	}
+}
+
+// M7：存量库经 newColumns 循环补齐登录锁定列（login_failed_attempts NOT NULL
+// DEFAULT 0 / login_locked_until TEXT），幂等，存量行取默认 0。
+func TestRunMigrations_addsUserLoginLockoutColumns(t *testing.T) {
+	// Given 旧形状 users 表（createTables 的 users 无 login_* 列，模拟 M7 前建库）
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec("INSERT INTO users (username,password_hash,role) VALUES ('legacy','hash','admin')"); err != nil {
+		t.Fatalf("seed legacy user: %v", err)
+	}
+	// 与 Initialize 同款单例行（迁移步骤读取 WHERE id=1，缺行即报错——兄弟用例同款种子）
+	if _, err := database.Exec("INSERT INTO global_config (id,caddy_config) VALUES (1,'{}')"); err != nil {
+		t.Fatalf("seed global config: %v", err)
+	}
+
+	// When 迁移两遍（验证幂等）
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	if err := runMigrations(); err != nil {
+		t.Fatalf("repeat migrations: %v", err)
+	}
+
+	// Then 两列存在、计数列 NOT NULL、存量行取默认 0
+	var notNull int
+	if err := database.QueryRow(`SELECT "notnull" FROM pragma_table_info('users') WHERE name='login_failed_attempts'`).Scan(&notNull); err != nil {
+		t.Fatalf("query login_failed_attempts schema: %v", err)
+	}
+	if notNull != 1 {
+		t.Fatalf("login_failed_attempts notnull=%d, want 1", notNull)
+	}
+	var lockedUntilCount int
+	if err := database.QueryRow("SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='login_locked_until'").Scan(&lockedUntilCount); err != nil {
+		t.Fatalf("query login_locked_until schema: %v", err)
+	}
+	if lockedUntilCount != 1 {
+		t.Fatalf("login_locked_until count=%d, want 1", lockedUntilCount)
+	}
+	var attempts int
+	if err := database.QueryRow("SELECT login_failed_attempts FROM users WHERE username='legacy'").Scan(&attempts); err != nil {
+		t.Fatalf("read migrated user: %v", err)
+	}
+	if attempts != 0 {
+		t.Fatalf("login_failed_attempts=%d, want default 0", attempts)
 	}
 }

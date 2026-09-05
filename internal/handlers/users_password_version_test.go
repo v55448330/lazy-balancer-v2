@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestPasswordUpdatesIncrementPasswordVersion(t *testing.T) {
@@ -18,7 +19,8 @@ func TestPasswordUpdatesIncrementPasswordVersion(t *testing.T) {
 		serve  func(*Handlers, *gin.Context)
 	}{
 		{
-			name: "current user", method: http.MethodPatch, path: "/users/me", body: `{"password":"second-password"}`,
+			// M5（契约）：本人改密须携带 current_password 过共享密码确认门。
+			name: "current user", method: http.MethodPatch, path: "/users/me", body: `{"password":"second-password","current_password":"first-password"}`,
 			serve: func(h *Handlers, c *gin.Context) { c.Set("user_id", 1); h.UpdateCurrentUser(c) },
 		},
 		{
@@ -37,7 +39,12 @@ func TestPasswordUpdatesIncrementPasswordVersion(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			database := setupAuthTestDB(t)
-			if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,password_version) VALUES (1,'alice','hash','admin','Alice',1,4)`); err != nil {
+			// M5：current_password 需真实 bcrypt 哈希比对（占位 'hash' 过不了确认门）。
+			hash, err := bcrypt.GenerateFromPassword([]byte("first-password"), bcrypt.MinCost)
+			if err != nil {
+				t.Fatalf("hash password: %v", err)
+			}
+			if _, err := database.Exec(`INSERT INTO users (id,username,password_hash,role,display_name,is_enabled,password_version) VALUES (1,'alice',?,'admin','Alice',1,4)`, string(hash)); err != nil {
 				t.Fatalf("seed user: %v", err)
 			}
 			response := httptest.NewRecorder()
