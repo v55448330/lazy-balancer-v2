@@ -212,6 +212,12 @@ func rotateAuditLogIfNeeded() {
 		throttledAuditFailureLogf("audit log rotation: truncate failed (will retry next cycle): %v", err)
 		return
 	}
+	// M20（2026-09-05 审计）：truncate 成功后立即把持久化 offset 归零——此前
+	// 依赖下次读取时的 size 比较（新 size < 旧 offset）才回退，窗口期内 offset
+	// 悬挂在旧文件大小上；写入失败仅告警不中断轮转（size 比对仍兜底）。
+	if err := securityEventsWriteOffset(securityEventsOffsetPath, 0); err != nil {
+		throttledAuditFailureLogf("audit log rotation: reset offset to 0 after truncate failed: %v", err)
+	}
 	log.Printf("audit log rotation: rotated %s (%d bytes → %s.1)", auditLogPath, info.Size(), base)
 	// 补采轮转窗口：归档大小可能因复制期间的新写入大于 stat 时的 size，
 	// 因此以 .1 实际大小作为窗口终点，覆盖复制竞态。

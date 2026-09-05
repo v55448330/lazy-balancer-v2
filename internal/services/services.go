@@ -515,6 +515,16 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 	for _, conflict := range newConflicts {
 		log.Printf("Metrics domain conflict: domain %q maps to rules %q; keeping %q", conflict.domain, strings.Join(conflict.ruleIDs, ","), conflict.ruleIDs[0])
 	}
+	// M19（2026-09-05 审计）：多域名规则的每条 host 序列此前各 INSERT 一行，
+	// 同一规则同一时间戳出现多行、按规则聚合时重复计数；先按 ruleID 聚合
+	//（requests/bytes 求和、codes 逐键合并）再每规则单行写入。
+	type ruleAggregate struct {
+		requests int64
+		codes    map[int]int64
+		bytesIn  int64
+		bytesOut int64
+	}
+	byRule := map[string]*ruleAggregate{}
 	for host, h := range hosts {
 		ruleID, ok := domainToRule[host]
 		if !ok {
@@ -525,14 +535,27 @@ func (m *MetricsService) storePerHostMetrics(text string) error {
 		if !ok {
 			continue
 		}
-		classified := classifyStatusCodes(h.codes)
+		agg := byRule[ruleID]
+		if agg == nil {
+			agg = &ruleAggregate{codes: map[int]int64{}}
+			byRule[ruleID] = agg
+		}
+		agg.requests += h.requests
+		agg.bytesIn += h.bytesIn
+		agg.bytesOut += h.bytesOut
+		for code, v := range h.codes {
+			agg.codes[code] += v
+		}
+	}
+	for ruleID, agg := range byRule {
+		classified := classifyStatusCodes(agg.codes)
 		if _, err := db.MetricsDB.Exec(`
 			INSERT INTO metrics_history
 			(rule_id, timestamp, requests_total, requests_2xx, requests_3xx,
 			 requests_4xx, requests_5xx, bytes_in, bytes_out,
 			 latency_p50, latency_p95, latency_p99)
 			VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
-		`, ruleID, h.requests, classified.status2xx, classified.status3xx, classified.status4xx, classified.status5xx, h.bytesIn, h.bytesOut); err != nil {
+		`, ruleID, agg.requests, classified.status2xx, classified.status3xx, classified.status4xx, classified.status5xx, agg.bytesIn, agg.bytesOut); err != nil {
 			return fmt.Errorf("store per-rule metrics for %s: %w", ruleID, err)
 		}
 	}

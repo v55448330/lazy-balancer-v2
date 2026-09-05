@@ -233,6 +233,8 @@ func openAndPingMetricsDB(dbPath string) (*sql.DB, error) {
 
 func initMetricsSchema(db *sql.DB) error {
 
+	// idx_metrics_rule 与 idx_metrics_rule_timestamp 左前缀重叠（审计 C 组清理），
+	// schema 内以 DROP INDEX IF EXISTS 一次性回收存量库上的冗余索引。
 	schema := `
 	CREATE TABLE IF NOT EXISTS metrics_history (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,7 +253,7 @@ func initMetricsSchema(db *sql.DB) error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics_history(timestamp);
-	CREATE INDEX IF NOT EXISTS idx_metrics_rule ON metrics_history(rule_id);
+	DROP INDEX IF EXISTS idx_metrics_rule;
 	CREATE INDEX IF NOT EXISTS idx_metrics_rule_timestamp ON metrics_history(rule_id, timestamp);
 
 	CREATE TABLE IF NOT EXISTS security_events (

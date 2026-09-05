@@ -26,12 +26,3 @@ func ValidateDefaultCAProvider(id int) error {
 	}
 	return nil
 }
-
-// SetDefaultCAProvider validates and persists the default CA provider ID.
-// Pass 0 to clear the explicit default (runtime will fall back to the first enabled provider).
-func SetDefaultCAProvider(id int) error {
-	if err := ValidateDefaultCAProvider(id); err != nil {
-		return err
-	}
-	return db.SetDefaultCAProvider(id)
-}

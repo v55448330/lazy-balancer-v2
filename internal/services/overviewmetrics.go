@@ -11,7 +11,8 @@ import (
 )
 
 // rateLimit429CountMetric 是 Caddy 按 host/handler/code 暴露的请求时长直方图计数序列；
-// 限流拦截产生的 HTTP 429 会落在 handler="rate_limit" 的 _count 序列上。
+// 限流口径：仅按 code="429" 过滤、含上游自返 429，handler 标签不参与判定
+// （见 parseRateLimit429Counts 内联说明）。
 const rateLimit429CountMetric = `caddy_http_request_duration_seconds_count{`
 
 var overviewMetricsHTTPClient = &http.Client{Timeout: 5 * time.Second}
@@ -60,8 +61,10 @@ func ScrapeRateLimitBlocks(metricsURL string) ([]RateLimitHostBlocks, error) {
 }
 
 // parseRateLimit429Counts 从 Prometheus 文本中挑出
-// caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host=...}
-// 序列并按 host 累加（同一 host 的不同 method/server 序列求和）。
+// caddy_http_request_duration_seconds_count{code="429",host=...} 序列并按 host
+// 累加（同一 host 的不同 method/server 序列求和）。口径：仅按 code=429 过滤、
+// 含上游自返 429，handler 标签恒不命中（见下方内联注释）；抓取失败由调用方
+// 返回 500。
 // 注释行、其他指标、_bucket/_sum 序列、缺 host 标签或数值非法的行一律跳过。
 func parseRateLimit429Counts(body string) map[string]float64 {
 	counts := map[string]float64{}

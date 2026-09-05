@@ -31,7 +31,17 @@ func fetchCaddyMetrics(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("Caddy 指标接口返回状态码 %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	// M21（2026-09-05 审计）：与 services.go collect 的 R72 W3-2 同型——limit+1
+	// 探测读取，超 16MB 显式报错（共用本函数的指标端点回 502），防止指标基数
+	// 膨胀时的无界内存分配。
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20+1))
+	if err != nil {
+		return nil, fmt.Errorf("读取 Caddy 指标响应失败: %w", err)
+	}
+	if len(body) > 16<<20 {
+		return nil, fmt.Errorf("Caddy 指标响应超过 16MB 上限")
+	}
+	return body, nil
 }
 
 func caddyMetricsError(c *gin.Context, err error) {

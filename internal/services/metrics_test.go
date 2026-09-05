@@ -357,6 +357,36 @@ func TestMetricsService_storePerHostMetrics_normalizes_bracketed_IPv6_host(t *te
 	}
 }
 
+func TestMetricsService_storePerHostMetrics_aggregates_multi_domain_rule_into_single_row(t *testing.T) {
+	// M19：同一规则配多域名时，两条 host 序列必须合并为单行历史记录，
+	// 否则同一时间戳出现多行、按规则聚合时重复计数。
+	// Given
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled) VALUES ('lb_multi','multi','a.example.com,b.example.com','http',8080,1)`); err != nil {
+		t.Fatalf("seed multi-domain rule: %v", err)
+	}
+	service := &MetricsService{}
+	text := strings.Join([]string{
+		`caddy_http_request_duration_seconds_count{code="200",host="a.example.com"} 3`,
+		`caddy_http_request_duration_seconds_count{code="404",host="a.example.com"} 1`,
+		`caddy_http_request_duration_seconds_count{code="200",host="b.example.com"} 5`,
+	}, "\n")
+
+	// When
+	if err := service.storePerHostMetrics(text); err != nil {
+		t.Fatalf("store per-host metrics: %v", err)
+	}
+
+	// Then：单行且计数为两域之和（requests 4+5=9，2xx 3+5=8，4xx 1）。
+	var rows, requests, status2xx, status4xx int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(requests_total),0), COALESCE(SUM(requests_2xx),0), COALESCE(SUM(requests_4xx),0) FROM metrics_history WHERE rule_id='lb_multi'`).Scan(&rows, &requests, &status2xx, &status4xx); err != nil {
+		t.Fatalf("query stored metrics: %v", err)
+	}
+	if rows != 1 || requests != 9 || status2xx != 8 || status4xx != 1 {
+		t.Fatalf("rows=%d requests=%d 2xx=%d 4xx=%d, want 1/9/8/1", rows, requests, status2xx, status4xx)
+	}
+}
+
 func TestMetricsService_storePerHostMetrics_logs_unchanged_domain_conflict_once(t *testing.T) {
 	// Given
 	_, database := newClusterTestService(t)
