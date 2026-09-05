@@ -48,7 +48,6 @@ var tools = []toolSpec{
 	{"get_config", "读取全局配置", http.MethodGet, "/config", nil, nil, emptySchema},
 	{"update_config", "更新全局配置并应用 Caddy", http.MethodPut, "/config", nil, nil, updateConfigSchema},
 	{"reload_caddy", "从数据库重新生成并加载 Caddy 配置", http.MethodPost, "/config/reload", nil, nil, emptySchema},
-	{"export_config", "导出完整配置备份", http.MethodGet, "/config/export", nil, nil, emptySchema},
 	{"get_metrics_dashboard", "获取聚合监控面板指标", http.MethodGet, "/metrics/dashboard", nil, nil, emptySchema},
 	{"get_metrics_overview", "获取指标总览", http.MethodGet, "/metrics/overview", nil, nil, emptySchema},
 	{"get_realtime_traffic", "获取实时流量", http.MethodGet, "/metrics/realtime", nil, nil, emptySchema},
@@ -192,7 +191,7 @@ const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证�
 权限范围：
 - 只读 Key（read_only）仅能调用 GET 查询类工具；写工具（POST/PUT/DELETE）需非只读 Key
 - 写操作需要管理员权限（API Key 所属用户角色为 admin），非管理员 Key 调用写工具返回 403
-- 写操作仅在主节点可用，从节点一律 403；所有写操作校验后即时生效（失败自动回滚），无需手动 reload
+- 从节点上仅集群端点（promote_cluster/pull_sync/set_cluster_mode）可用且仅从节点语义正确，其余写工具一律 403——集群运维在目标节点本身调用，不要发往主节点；所有写操作校验后即时生效（失败自动回滚），无需手动 reload
 - 配置 IP 白名单的 Key 还需来源 IP 命中白名单（MCP 内部转发不受白名单影响）
 
 常用流程：
@@ -202,7 +201,7 @@ const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证�
 - 快速看全局指标：get_metrics_overview（轻量）；get_metrics_dashboard 为全量聚合，数据量大，非必要不用
 - 修改规则前先 get_rule 取完整现状；delete_rule 不可恢复，调用前必须确认
 
-错误约定：401=密钥无效或未开启 MCP；403=只读 Key 调写工具/从节点写操作/IP 白名单拦截；-32602=参数不符合工具的 input_schema（先看 schema 再重试，不要猜测字段名）。
+错误约定：401=密钥无效或未开启 MCP；403=只读 Key 调写工具/从节点非集群写工具/IP 白名单拦截；-32602=参数不符合工具的 input_schema（先看 schema 再重试，不要猜测字段名）。
 
 完整操作手册：resources/read 读取 lazy-balancer://docs/ops-playbook（接入/scope/工作流/排障/纪律/性能建议）。`
 

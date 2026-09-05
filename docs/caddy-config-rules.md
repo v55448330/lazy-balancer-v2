@@ -152,9 +152,13 @@ for i, d := range domainHosts {
 ```
 
 ### Handle Chain 顺序
-1. **encode**（压缩）：如果启用压缩且有 gzip/zstd
-2. **headers**（请求头）：如果设置了 HostHeader
-3. **reverse_proxy**（反向代理）：主要处理逻辑
+1. **headers**（X-LB-Rule-ID 注入）：HTTP 规则绑定安全策略时链首注入归因头（供预检与 coraza 事务消费，reverse_proxy 前无条件剥离，不直达上游）
+2. **IP 预检**：多策略绑定时合并全部绑定策略 deny 侧 IP 控制的极简 coraza 预检查器（先于全部 rate_limit/waf）
+3. **rate_limit / waf**：按绑定策略 policy_id ASC 依次编入各策略的处理器组（限流先于 WAF）
+4. **request_body**：配置了请求体上限时
+5. **encode**（压缩）：如果启用压缩且有 gzip/zstd
+6. **headers**（Server 头隐藏）：server_tokens_hidden 时 deferred 删除 Server 响应头（须推迟到上游响应写入之后）
+7. **reverse_proxy**（反向代理）：主要处理逻辑；HostHeader 折入 reverse_proxy 的 request.headers（set Host），不再单独发射 headers 处理器
 
 ### 上游服务器配置
 
@@ -228,7 +232,7 @@ for i, d := range domainHosts {
 
 ## 配置验证
 
-使用 Caddy `/load?validate=true` 接口验证配置（不实际应用）：
+Caddy admin `/load?validate=true` 并非只读校验——Caddy v2.11.4 的 handleLoad 无视 validate 参数、无条件执行 caddy.Load，请求成功即真实加载：
 
 ```bash
 POST http://localhost:2019/load?validate=true
@@ -237,7 +241,7 @@ Content-Type: application/json
 <full_config_json>
 ```
 
-验证成功返回 200，失败返回 4xx 并包含错误信息。
+成功返回 200，失败返回 4xx 并包含错误信息，但请求体在成功后已成为运行配置。代码侧以清理/快照补偿该副作用：`ValidateConfig` 携带证书文件快照时验证后恢复快照；`ValidateRouteMergedConfig`/`ValidateTCPServerMergedConfig` 将候选路由/server 并入运行配置的副本后校验，避免运行面被单规则/单 server 配置整体替换。
 
 ## 关键函数说明
 
@@ -270,8 +274,8 @@ func (s *CaddyService) ValidateRouteMergedConfig(serverName string, routeConfig 
 
 流程：
 1. 获取当前服务器配置
-2. 复制配置并将新路由预置到 routes 数组首位
-3. 调用 `/load?validate=true` 验证
+2. 复制配置并将新路由追加到非兜底路由末尾（识别并保留兜底路由在最后）
+3. 调用 `/load?validate=true` 验证（validate 参数被 Caddy 忽略，实为真实加载；对副本操作以隔离运行面）
 4. 验证失败返回具体错误信息
 
 ### ApplyConfigFromTx

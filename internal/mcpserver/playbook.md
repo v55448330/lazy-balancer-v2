@@ -14,15 +14,15 @@
 | 范围 | 说明 |
 |---|---|
 | 只读 Key（read_only） | 仅能调用 GET 查询类工具；调写工具返回 403 |
-| 写工具（POST/PUT/DELETE） | 需非只读 Key，且**仅主节点可用**；从节点一律 403 |
+| 写工具（POST/PUT/DELETE） | 需非只读 Key；从节点上仅集群端点（promote_cluster/pull_sync/set_cluster_mode）可用且仅从节点语义正确，其余写工具一律 403——集群运维在目标节点本身调用，不要发往主节点 |
 | IP 白名单 | 配了白名单的 Key，请求来源 IP 必须命中（MCP 内部转发不受影响） |
 | 生效方式 | 写操作校验后即时生效，失败自动回滚，无需手动 reload |
 
-## 3. 工具分组速览（节选，全部 116 个工具以 tools/list 为准）
+## 3. 工具分组速览（节选，全部 120 个工具以 tools/list 为准）
 
 - **规则**：list_rules、get_rule、create_rule、update_rule、delete_rule、enable_rule、disable_rule、duplicate_rule
 - **证书**：list_cert_jobs、retry_cert_job、delete_cert_job、issue_certificate、list_certificates
-- **配置**：get_config、update_config、reload_caddy、export_config
+- **配置**：get_config、update_config、reload_caddy
 - **监控**：get_metrics_overview（轻量）、get_metrics_dashboard（全量聚合）、get_realtime_traffic、get_upstream_health
 - **系统**：get_system_info、list_audit_logs、list_users、list_api_keys、get_cluster_status
 
@@ -60,7 +60,7 @@
 
 ### 4.6 集群环境操作前
 
-`get_cluster_status` 确认本节点角色：从节点全站只读，写工具一律 403——写操作必须对主节点地址发起。
+`get_cluster_status` 确认本节点角色：从节点上仅集群端点（promote_cluster/pull_sync/set_cluster_mode）可用且仅从节点语义正确，其余写工具一律 403——集群运维（提升/拉取同步/切换模式）在目标从节点本身调用，不要发往主节点；其余写操作对主节点发起。
 
 ## 5. 操作纪律
 
@@ -72,7 +72,7 @@
 ## 6. 性能建议
 
 - 轻量优先：能 `get_metrics_overview` 就不用 `get_metrics_dashboard`；能 `get_rule` 就不用反复 `list_rules`
-- 审计日志务必分页；单工具响应上限 4 MiB，超限请改分页或专用导出（`export_config`）
+- 审计日志务必分页；单工具响应上限 4 MiB，超限请改用分页参数（page/page_size）缩小返回范围
 - 保持 HTTP 连接复用（一个 MCP 会话内不要每次新建连接）
 
 ## 7. 错误码速查
@@ -80,6 +80,6 @@
 | 错误 | 含义与处理 |
 |---|---|
 | 401 | 密钥无效/缺失，或未开启 MCP → 核对 Key 与开关 |
-| 403 | 只读 Key 调写工具 / 从节点写操作 / 来源 IP 不在白名单 → 换非只读 Key、对主节点调用、或放行来源 IP |
+| 403 | 只读 Key 调写工具 / 从节点非集群写工具 / 来源 IP 不在白名单 → 换非只读 Key；集群运维对目标从节点本身调用、其余写操作对主节点调用，或放行来源 IP |
 | -32602 | 参数不符合 `input_schema` → 重新读该工具 schema，按契约修正，不要猜字段名 |
 | IsError + 4xx/5xx 文本 | 内部 REST 返回的业务错误，响应体里有具体 message |

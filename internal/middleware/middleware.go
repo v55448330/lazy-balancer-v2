@@ -296,6 +296,9 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/cluster/promote", h.PromoteClusterNode)
 				admin.POST("/cluster/sync/pull", h.PullClusterSnapshot)
 				admin.PUT("/cluster/settings", h.UpdateClusterSettings)
+				// M13②：从节点管理员 PinMismatch 补救——清空 TOFU 指纹钉（内存+磁盘），
+				// 下次同步重新钉扎；/cluster/* 前缀在 readOnlyGuard 白名单内，从节点可用。
+				admin.POST("/cluster/forget-pins", h.ForgetClusterPins)
 
 				// Config
 				admin.POST("/config/preview", h.PreviewConfigUpdate)
@@ -754,13 +757,24 @@ func apiKeyAuth(cfg *config.Config) gin.HandlerFunc {
 func apiKeyReadOnlyGuard() gin.HandlerFunc {
 	writeMethods := map[string]bool{"POST": true, "PUT": true, "PATCH": true, "DELETE": true}
 	return func(c *gin.Context) {
-		if c.GetString("auth_type") != "api_key" || !c.GetBool("api_key_read_only") || !writeMethods[c.Request.Method] {
+		if c.GetString("auth_type") != "api_key" || !c.GetBool("api_key_read_only") {
 			c.Next()
 			return
 		}
 		path := c.FullPath()
 		if path == "" {
 			path = c.Request.URL.Path
+		}
+		// M8（2026-09 审计）：GET /config/export 导出含全部用户与密钥哈希的完整
+		// 备份，敏感度等同写操作——只读 Key 不得经 GET 旁路导出，单独设卡。
+		if c.Request.Method == http.MethodGet && path == "/api/v1/config/export" {
+			recordAuthenticationRejection(c, "api_key_read_only")
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "只读 API Key 不能导出配置备份"})
+			return
+		}
+		if !writeMethods[c.Request.Method] {
+			c.Next()
+			return
 		}
 		if services.IsReadOnlyWriteRoute(c.Request.Method, path) {
 			c.Next()
@@ -774,11 +788,19 @@ func apiKeyReadOnlyGuard() gin.HandlerFunc {
 // mfaStepUpGuard v2.1.8：MFA 写操作验证（全局开关，默认关；R72 五次：60 秒窗）。开启时，启用 MFA
 // 的 JWT 用户执行写操作（readOnlyWriteRoutes 判定源——与只读密钥同一事实源，契约
 // 绊线自动覆盖两侧）且 mfa_ts 距今超过 10 分钟 → 428，前端全局弹码验证后携新
-// JWT 重试。API Key/MCP 认证豁免（机器身份无 MFA 概念）。
+// JWT 重试。API Key/MCP 认证豁免（机器身份无 MFA 概念）。M8（2026-09 审计）：
+// GET /config/export 与写操作同级（导出含全部用户/密钥哈希的完整备份），一并
+// 纳入 step-up 覆盖。
 func mfaStepUpGuard() gin.HandlerFunc {
 	writeMethods := map[string]bool{"POST": true, "PUT": true, "PATCH": true, "DELETE": true}
 	return func(c *gin.Context) {
-		if !writeMethods[c.Request.Method] || c.GetString("auth_type") != "jwt" {
+		path := c.FullPath()
+		if path == "" {
+			path = c.Request.URL.Path
+		}
+		covered := writeMethods[c.Request.Method] ||
+			(c.Request.Method == http.MethodGet && path == "/api/v1/config/export")
+		if !covered || c.GetString("auth_type") != "jwt" {
 			c.Next()
 			return
 		}
@@ -789,10 +811,6 @@ func mfaStepUpGuard() gin.HandlerFunc {
 		// R72 C-I-1：step-up 机制本体必须永可达——豁免 verify-step 自身（POST，
 		// 位于本守卫之下），否则守卫生效后「弹码→verify-step→再 428」无限循环，
 		// 全员写操作死锁；/auth/logout 同理（登出不该要求验证码）。
-		path := c.FullPath()
-		if path == "" {
-			path = c.Request.URL.Path
-		}
 		if path == "/api/v1/auth/mfa/verify-step" || path == "/api/v1/auth/logout" {
 			c.Next()
 			return

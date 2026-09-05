@@ -53,7 +53,6 @@ var toolUsage = map[string]string{
 	"get_config":                   "读取全局配置（时区/日志级别/超时/续签策略等）",
 	"update_config":                "修改全局配置并即时应用（如时区、日志级别、代理超时）",
 	"reload_caddy":                 "从数据库重新生成并加载 Caddy 配置，用于配置异常时强制收敛",
-	"export_config":                "导出完整配置备份 JSON（含规则/用户/密钥/证书任务），用于迁移或存档；需管理员 + 主节点",
 	"get_metrics_dashboard":        "一次获取全局+全部规则的聚合监控指标（请求数/状态码/流量/健康），Dashboard 数据源",
 	"get_metrics_overview":         "获取轻量级指标总览（累计请求/字节/延迟分位数）",
 	"get_realtime_traffic":         "获取实时出入站速率（网卡计数器差分）",
