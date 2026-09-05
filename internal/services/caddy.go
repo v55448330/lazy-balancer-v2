@@ -173,6 +173,11 @@ const caddyErrorBodyMaxBytes = 1024
 
 // ValidateConfig validates Caddy configuration using the /load API with validate=true
 func (s *CaddyService) ValidateConfig(config map[string]interface{}) (err error) {
+	// R69：validate=true 实为真实加载（Caddy 以校验模式执行完整的 provision/
+	// 加载路径，coraza 等插件照常编译并持有资源），与 apply 同为写操作——必须
+	// 持写锁串行化，避免与并发 apply/证书快照恢复竞态（对照 ValidateRouteMergedConfig）。
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {
 		return errors.New(message)
 	}
@@ -1581,14 +1586,16 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 		// R43 F-A: 与规则渲染跳过同口径（上方按启用上游数 continue）——全部上游
 		// 被禁用的启用规则不生成任何端口路由，同样不得生成 301 跳转，否则域名
 		// 被跳到无服务的 TLS 端口（此前按上游裸计数，禁用上游也被计入）。
-		hasEnabledUpstream := false
-		for _, u := range ru.upstreams {
-			if u.Enabled {
-				hasEnabledUpstream = true
-				break
+		// M1：判定提为闭包，供 r 自身与下方 other 遮蔽复核共用同款口径。
+		hasEnabledUpstream := func(ups []upstream) bool {
+			for _, u := range ups {
+				if u.Enabled {
+					return true
+				}
 			}
+			return false
 		}
-		if !hasEnabledUpstream {
+		if !hasEnabledUpstream(ru.upstreams) {
 			continue
 		}
 		if r.Protocol == "http" && r.EnableTLS && r.TLSHTTPRedirect {
@@ -1615,6 +1622,12 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, overr
 				for _, other := range allRules {
 					otherRule := other.rule
 					if otherRule.CaddyID == r.CaddyID || otherRule.Protocol != "http" || otherRule.ListenPort != 80 {
+						continue
+					}
+					// M1（审计）：遮蔽复核的比对方也过启用上游门——零启用上游的
+					// 规则不生成 80 端口路由（死规则），不得作为遮蔽方压制兄弟
+					// 域名的 HTTPS 跳转。
+					if !hasEnabledUpstream(other.upstreams) {
 						continue
 					}
 					for existingDomain := range normalizedDomainSet(otherRule.Domain) {
@@ -2929,15 +2942,23 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	}
 	// v2.2.0 多策略：按绑定启用策略 policy_id ASC 依次编入各策略的
 	// [rate_limit?, waf?] 处理器组；限流先于 WAF 检查、body 解析与代理。
-	// 审计 B5-F2：CRS 池指纹在单次链构建内不变——按链计算一次透传给各策略，
-	// 替代逐 (规则×策略) 对的 DB 查询+stat（200 规则×3 策略 ≈600 查询→200）。
-	chainCRSFingerprint := crsPoolFingerprintForChain()
+	// 审计 B5-F2 + M4：CRS 池指纹在单次链构建内不变——按链计算一次透传给各
+	// 策略，替代逐 (规则×策略) 对的 DB 查询+stat（200 规则×3 策略 ≈600 查询→
+	// 200）；取值惰性化——零安全策略/非 http 链不发射任何 waf handler 时不再
+	// 空付指纹计算（SELECT+2×stat），仅首个 waf handler 发射前计算。
+	var chainFingerprint string
+	needFingerprint := func() string {
+		if chainFingerprint == "" {
+			chainFingerprint = crsPoolFingerprintForChain()
+		}
+		return chainFingerprint
+	}
 	for _, policy := range policies {
 		if rateLimitHandler := buildRateLimitHandler(rule.CaddyID, policy); rateLimitHandler != nil {
 			handleChain = append(handleChain, rateLimitHandler)
 		}
 		if rule.Protocol == "http" {
-			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore, chainCRSFingerprint); wafHandler != nil {
+			if wafHandler := buildWafHandlerWithPolicy(rule.CaddyID, policy, policyStore, needFingerprint()); wafHandler != nil {
 				handleChain = append(handleChain, wafHandler)
 			}
 		}

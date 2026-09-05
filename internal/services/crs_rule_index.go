@@ -368,3 +368,13 @@ func GetCRSRuleIndex() *CRSRuleIndex {
 	crsRuleIndexCache, crsRuleIndexKey = index, key
 	return index
 }
+
+// lazyCRSRuleIndex（审计 M4）返回链级惰性索引取值闭包：单次配置生成内
+// BuildCorazaDirectives 的三个消费点（crsCoveredInfraGroupCodes /
+// emitCRSRuleGroupSelection / emitScopedCRSExclusions）各自直调 GetCRSRuleIndex
+// 会各付一次缓存键计算（ReadDir + 全量 stat + DB 查询），200 规则全量生成时
+// 数百次纯浪费且全程持 CaddyService 写锁；闭包首次调用才取值，同链共享同一
+// 实例（零 WAF 选组/无作用域排除时不触发）。
+func lazyCRSRuleIndex() func() *CRSRuleIndex {
+	return sync.OnceValue(GetCRSRuleIndex)
+}
