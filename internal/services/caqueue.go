@@ -97,7 +97,9 @@ var caQueueDrainTimeout = 30 * time.Second
 
 // InitCAQueueManager initializes the singleton queue manager with the given
 // Caddy reloader. It must be called once during application startup before
-// GetCAQueueManager is used.
+// GetCAQueueManager is used. 可选 dataDir 为 ACME 账户密钥数据目录（审计
+// M18：留空时签发链路创建账户密钥会直接报错——密钥路径退化为 CWD 相对路径
+// 曾在测试环境堆积数千个私钥，生产必须传 cfg.DataDir）。
 func InitCAQueueManager(reloader func() error, dataDir ...string) {
 	caQueueManagerOnce.Do(func() {
 		var accountDataDir string

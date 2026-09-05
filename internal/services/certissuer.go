@@ -542,7 +542,11 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 
 	tx, err := db.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return errors.Join(fmt.Errorf("begin certificate transaction: %w", err), restoreCertificateDeployment(snapshot, s.caddyReloader))
+		// 审计 M10：终段 DB 失败（如 SQLITE_BUSY）与文件写入失败同走
+		// deploymentFailed 重试链（任务回 'downloaded'+退避，兼容 30s 部署
+		// 补扫）。已写入的证书文件就是本次部署目标，重试会重新快照并收敛，
+		// 回滚旧快照只会让首签发场景在重试成功前无证书可用。
+		return s.deploymentFailed(jobID, material, "开启证书事务失败: "+err.Error(), fmt.Errorf("begin certificate transaction: %w", err))
 	}
 	defer func() { _ = tx.Rollback() }()
 	err = transitionJob(tx, jobID, []string{"downloaded", "cleanup_dns", "cleanup_warning"}, "issued", map[string]any{
@@ -561,18 +565,26 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 		// R56 N-1(b)：并发部署回调（在途回调 × 补扫重试）部署同 jobID 同一份
 		// 证书时，CAS 败者的部署前快照可能早于胜者写入——无条件恢复会把磁盘
 		// 回退到旧证书，与 DB('issued'+新 PEM)/Caddy 三方静默分叉，且
-		// reconcileMissingCertFiles 不比对内容，分叉持续到下次续签。任务已被
-		// 胜者提交且磁盘已是本次部署的目标内容时跳过快照恢复，仅保留 failJob
-		// 归因（issued 为终态，failJob no-op）；内容不匹配（并发新化身等）
-		// 保持既有恢复语义。
-		var cleanupErr error
-		if deploymentCommittedByConcurrentWinner(jobID, material) {
-			log.Printf("certificate job %d: finalization lost CAS race to a concurrent deployment of identical material; keeping winner's files, skipping snapshot restore", jobID)
-		} else {
-			cleanupErr = restoreCertificateDeployment(snapshot, s.caddyReloader)
+		// reconcileMissingCertFiles 不比对内容，分叉持续到下次续签。终态 CAS
+		// 冲突（含任务中途被 disabled）保持既有补偿语义：胜者已提交且磁盘同
+		// 物料时跳过恢复，否则恢复快照并由 failJob 归因（issued/disabled 为
+		// 终态，failJob no-op）。
+		if errors.Is(err, ErrJobTransitionConflict) {
+			var cleanupErr error
+			if deploymentCommittedByConcurrentWinner(jobID, material) {
+				log.Printf("certificate job %d: finalization lost CAS race to a concurrent deployment of identical material; keeping winner's files, skipping snapshot restore", jobID)
+			} else {
+				cleanupErr = restoreCertificateDeployment(snapshot, s.caddyReloader)
+			}
+			failJob(jobID, "证书部署确认失败: "+err.Error())
+			return errors.Join(fmt.Errorf("finalize issued certificate: %w", err), rollbackErr, cleanupErr)
 		}
-		failJob(jobID, "证书部署确认失败: "+err.Error())
-		return errors.Join(fmt.Errorf("finalize issued certificate: %w", err), rollbackErr, cleanupErr)
+		// 审计 M10：真实 DB 失败（transition/提交出错，如 SQLITE_BUSY）不得走
+		// 上面的 failJob——会把已签发落库证书搁浅为 failed，rescan 只扫
+		// downloaded、续期只扫临期，自动恢复通道全部错过（首签发无证书最长
+		// ~60 天，手动重试整轮重签烧配额）。改走与文件写入失败相同的
+		// deploymentFailed 重试链（任务回 'downloaded'+退避，兼容 30s 补扫）。
+		return errors.Join(s.deploymentFailed(jobID, material, "证书部署确认失败: "+err.Error(), fmt.Errorf("finalize issued certificate: %w", err)), rollbackErr)
 	}
 	return nil
 }

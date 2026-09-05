@@ -367,8 +367,12 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(tag string) error {
 		return err
 	}
 	// TOFU 完整性基线在格式验证成功之后记录（R33 F6）：验证前的坏工件留下基线
-	// 会让下次同 tag 好下载误报。记录失败不阻断安装。
+	// 会让下次同 tag 好下载误报。I/O 类记录失败不阻断安装；mismatch 必须中止
+	// 安装并保留旧基线（审计 M11，契约#4，镜像代理投毒无拦截力）。
 	if ierr := recordDownloadIntegrity(ip2RegionXDBSourceURL(tag), staged, "IP数据库"); ierr != nil {
+		if errors.Is(ierr, errDownloadIntegrityMismatch) {
+			return ierr
+		}
 		log.Printf("ip2region update: failed to record download integrity: %v", ierr)
 	}
 	// R39 1.2：rename 前备份旧 xdb，reloader 失败时可回滚（镜像 CRS 的

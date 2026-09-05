@@ -3,7 +3,9 @@ package services
 // 下载校验（TOFU）：ghfast.top 代理下载无上游官方校验和可钉，首次成功下载
 // 后把 size+SHA256 记录到数据卷（.download-integrity.json）；后续同一来源
 // （URL 含版本 tag）下载若 size 或摘要变化，说明代理返回内容与上次不一致，
-// 以 error 日志 + 审计记录告警（不阻断安装，格式校验仍由调用方执行）。
+// 以 error 日志 + 审计记录告警并返回错误阻断安装、保留旧基线（格式校验仍由
+// 调用方执行）。内容变化必须经人工清理基线（删除记录文件中该来源条目）后
+// 重试，不自动重定基线。
 
 import (
 	"crypto/sha256"
@@ -31,10 +33,16 @@ type downloadIntegrityRecord struct {
 	SHA256 string `json:"sha256"`
 }
 
+// errDownloadIntegrityMismatch 标记「下载内容与 TOFU 基线不一致」的阻断性
+// 失败，供调用方与 I/O 类失败区分：mismatch 必须中止安装（审计 M11，契约#4），
+// I/O 失败仅记日志不阻断（R33 F6 既有语义）。
+var errDownloadIntegrityMismatch = errors.New("下载完整性校验失败：内容与基线不一致")
+
 // recordDownloadIntegrity 校验并记录一次成功下载的完整性快照：首次下载写入
-// 基线；同一来源再次下载且 size/digest 与基线不符时 Logf("error") 告警并
-// RecordAuditLog（可见但不阻断）。必须在下载文件的格式验证成功之后调用——
-// 验证前的坏工件基线会让下次同源好下载误报（R33 F6）。
+// 基线；同一来源再次下载且 size/digest 与基线不符时 Logf("error") + 审计并
+// 返回 errDownloadIntegrityMismatch 包装错误（阻断安装、保留旧基线）。必须在
+// 下载文件的格式验证成功之后调用——验证前的坏工件基线会让下次同源好下载
+// 误报（R33 F6）。
 func recordDownloadIntegrity(source, destPath, resource string) error {
 	info, err := os.Stat(destPath)
 	if err != nil {
@@ -51,14 +59,19 @@ func recordDownloadIntegrity(source, destPath, resource string) error {
 		return err
 	}
 	prev, existed := records[source]
+	// 审计 M11（契约#4）：mismatch 阻断安装并保留旧基线——ghfast.top 类镜像
+	// 代理投毒时「仅告警+自动重定基线」无拦截力；内容变化必须经人工清理基线
+	// （删除记录文件中该来源条目）后重试。
+	if existed && (prev.Size != info.Size() || prev.SHA256 != digest) {
+		Logf("error", "download integrity mismatch for %s: size %d→%d, sha256 %s→%s（与上次记录不一致，已阻断安装并保留旧基线；如确认上游更新合法，删除 %s 中该来源条目后重试）", source, prev.Size, info.Size(), prev.SHA256, digest, downloadIntegrityPath)
+		RecordAuditLog("system", "校验阻断", resource,
+			FormatAuditDetail(fmt.Sprintf("来源 %s 的下载内容与上次记录不一致（size %d→%d，sha256 %s→%s），已阻断安装并保留旧基线", source, prev.Size, info.Size(), prev.SHA256, digest)), "")
+		return fmt.Errorf("来源 %s 下载内容与上次完整性记录不一致（size %d→%d，sha256 %s→%s），已阻断安装；如确认上游更新合法，删除 %s 中该来源条目后重试: %w",
+			source, prev.Size, info.Size(), prev.SHA256, digest, downloadIntegrityPath, errDownloadIntegrityMismatch)
+	}
 	records[source] = downloadIntegrityRecord{Size: info.Size(), SHA256: digest}
 	if err := persistDownloadIntegrityRecords(records); err != nil {
 		return err
-	}
-	if existed && (prev.Size != info.Size() || prev.SHA256 != digest) {
-		Logf("error", "download integrity mismatch for %s: size %d→%d, sha256 %s→%s（代理返回内容与上次不一致，已按当前内容安装）", source, prev.Size, info.Size(), prev.SHA256, digest)
-		RecordAuditLog("system", "校验告警", resource,
-			FormatAuditDetail(fmt.Sprintf("来源 %s 的下载内容与上次记录不一致（size %d→%d，sha256 %s→%s）", source, prev.Size, info.Size(), prev.SHA256, digest)), "")
 	}
 	return nil
 }

@@ -80,7 +80,7 @@ func TestIssueCertificate_rejects_partial_rule_selector_without_creating_jobs(t 
 	// Given
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	router := gin.New()
 	router.POST("/certificates/issue", h.IssueCertificate)
@@ -119,7 +119,7 @@ func TestIssueCertificate_records_each_rule_and_batch_failure(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	services.GetCAQueueManager().Start()
 	if _, err := db.DB.Exec(`
@@ -181,7 +181,7 @@ func TestIssueCertificate_records_each_rule_and_batch_failure(t *testing.T) {
 func TestIssueCertificate_rejects_recent_running_job_without_requeue(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`
 		INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
@@ -215,7 +215,7 @@ func TestIssueCertificate_targeted_dual_domain_rule_queues_complete_domain_set(t
 	// Given
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules
 		(caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
@@ -247,7 +247,7 @@ func TestIssueCertificate_targeted_dual_domain_rule_queues_complete_domain_set(t
 func TestIssueCertificate_batch_preserves_running_jobs(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`
 		INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source) VALUES

@@ -418,21 +418,27 @@ func (i *Issuer) waitForDNS(ctx context.Context, fqdn, expected string, timeout 
 			return nil
 		}
 
-		// Fallback: public recursive resolvers (slower due to caching).
-		for _, resolver := range resolvers {
-			hit, found, err := probeTXT(ctx, resolver, fqdn, expected, true)
-			if err != nil {
-				log("查询失败 %s @ %s: %v", fqdn, resolver, err)
-				continue
-			}
-			if hit {
-				log("DNS 已命中 %s @ %s, 值: %s", fqdn, resolver, expected)
-				return nil
-			}
-			if len(found) > 0 {
-				lastFound = found
-				lastResolver = resolver
-				log("DNS 未命中 %s @ %s, 期望: %s, 实际: %s", fqdn, resolver, expected, strings.Join(found, "; "))
+		// 审计 M9：递归兜底仅在权威存活列表为空（本轮 probeAuthServers 后已无
+		// 任何可达权威）时执行；列表非空时成功只认 authReady——公共递归缓存可能
+		// 取自已更新的单台 NS，CA 恰好询问滞后 NS 时挑战仍会失败并白烧配额
+		// （LE 5 次/时），不得作为放行依据。
+		if len(authServers) == 0 {
+			// Fallback: public recursive resolvers (slower due to caching).
+			for _, resolver := range resolvers {
+				hit, found, err := probeTXT(ctx, resolver, fqdn, expected, true)
+				if err != nil {
+					log("查询失败 %s @ %s: %v", fqdn, resolver, err)
+					continue
+				}
+				if hit {
+					log("DNS 已命中 %s @ %s, 值: %s", fqdn, resolver, expected)
+					return nil
+				}
+				if len(found) > 0 {
+					lastFound = found
+					lastResolver = resolver
+					log("DNS 未命中 %s @ %s, 期望: %s, 实际: %s", fqdn, resolver, expected, strings.Join(found, "; "))
+				}
 			}
 		}
 

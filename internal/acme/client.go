@@ -139,6 +139,12 @@ type accountKeyMetadata struct {
 }
 
 func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string, eabKey []byte) (*ecdsa.PrivateKey, error) {
+	// 审计 M18：dataDir 为空时密钥路径退化为 CWD 相对路径（曾使 handlers 测试
+	// 在仓库内堆积数千个账户私钥），入口直接拒绝，对齐 dnsprovider/factory.go
+	// 的 dataDir 必填校验。
+	if dataDir == "" {
+		return nil, errors.New("ACME dataDir 未配置，拒绝生成/加载账户密钥")
+	}
 	acmeAccountKeyMu.Lock()
 	defer acmeAccountKeyMu.Unlock()
 	keyPath := acmeAccountKeyPath(dataDir, directoryURL, email, eabKID, eabKey)

@@ -56,7 +56,7 @@ func TestCertJobRetryBlocked_rejects_disabled_job_without_timestamp(t *testing.T
 func TestRetryCertJob_rejects_inactive_rule_atomically(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_retired','retired','http','retired.example.test',8080,0,1,'acme_dns');
@@ -83,7 +83,7 @@ func TestRetryCertJob_concurrent_status_change_returns_refresh_message(t *testin
 	// R42 发现4：worker 在 SELECT 与 UPDATE 之间流转状态时，409 文案应区分归因。
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_race','race','http','race.example.test',8080,1,1,'acme_dns');
@@ -122,7 +122,7 @@ func TestRetryCertJob_concurrent_status_change_returns_refresh_message(t *testin
 func TestRetryCertJob_accepts_www_first_rule_domain(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	// cert_jobs.domain 存排序规范形式，lb_rules.domain 保留用户 www 在前的输入顺序
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
@@ -374,7 +374,7 @@ func TestDeleteCertJob_keeps_row_when_delete_fails(t *testing.T) {
 func TestDeleteCertJob_requeues_running_job_when_delete_fails(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_running','running','http','running.example.test',8080,1,1,'acme_dns');
@@ -450,7 +450,7 @@ func TestRetryCertJob_does_not_acquire_caddyOpMu(t *testing.T) {
 	// 对此全部绿灯，此处用临界区内 TryLock 探针断言该不变量。
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_lockprobe','lockprobe','http','lockprobe.example.test',8080,0,1,'acme_dns');
@@ -488,7 +488,7 @@ func TestRetryCertJob_reread_row_deleted_returns_404(t *testing.T) {
 	// R55 A-#3 的三分归因）；本测试以删行模拟，断言新 404 契约。
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_reread','reread','http','reread.example.test',8080,1,1,'acme_dns');
@@ -523,7 +523,7 @@ func TestRetryCertJob_blocked_by_rule_deletion_returns_409(t *testing.T) {
 	// 应走 changed=false 的冲突语义（409），而不是返回 error 落 500。
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_blocked','blocked','http','blocked.example.test',8080,1,1,'acme_dns');
@@ -557,7 +557,7 @@ func TestRetryCertJob_active_job_returns_queue_busy_message(t *testing.T) {
 	// 409 文案必须归因"任务正在队列中"，不得误导为规则禁用/配置变更。
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
-	services.InitCAQueueManager(func() error { return nil })
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_blocker','blocker','http','blocker.example.test',8080,1,1,'acme_dns'),
 		       ('lb_active','active','http','active.example.test',8080,1,1,'acme_dns');
