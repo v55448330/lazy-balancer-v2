@@ -184,7 +184,8 @@ const applyCaddyKeys = (data: ConfigPayload) => {
 }
 
 const applyCertKeys = (data: ConfigPayload) => {
-  global.value.acme_email = data.acme_email || ''
+  // M31：回显侧同 trim——存量配置中已带入的空白不再随表单回写扩散
+  global.value.acme_email = (data.acme_email || '').trim()
   global.value.cert_expiry_days = data.cert_expiry_days ?? 30
   global.value.cert_renewal_days = data.cert_renewal_days ?? 30
   global.value.cert_renewal_attempts = data.cert_renewal_attempts ?? 5

@@ -166,6 +166,9 @@
         <el-form-item label="新密码">
           <el-input v-model="profileForm.password" :disabled="isReadOnly" type="password" minlength="6" maxlength="72" placeholder="如不修改请留空（至少6位）" show-password />
         </el-form-item>
+        <el-form-item label="当前密码">
+          <el-input v-model="profileForm.currentPassword" :disabled="isReadOnly" type="password" maxlength="72" :placeholder="profileForm.password ? '修改密码时必填' : '填写新密码后需确认'" show-password />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button :disabled="saving" @click="closeProfile">取消</el-button>
@@ -220,13 +223,14 @@ const pageTitle: Record<string, string> = {
   'security-policies': '安全防护 / 安全策略',
   'security-rules': '安全防护 / 规则集',
   'security-block-pages': '安全防护 / 拦截页面',
-  'security-events': '安全防护 / 事件日志',
 }
 
 const profileForm = ref({
   username: '',
   display_name: '',
   password: '',
+  // M5：提交新密码时的当前密码确认（后端密码确认门，不改密码时不需要）
+  currentPassword: '',
 })
 
 const syncProfileForm = () => {
@@ -234,6 +238,7 @@ const syncProfileForm = () => {
     username: authStore.user?.username || '',
     display_name: authStore.user?.display_name || '',
     password: '',
+    currentPassword: '',
   }
 }
 
@@ -275,12 +280,17 @@ const saveProfile = async () => {
     authStore.showToast('warning', '密码长度至少6位')
     return
   }
+  // M5：提交新密码必须携带当前密码（后端密码确认门），不改密码时不需要。
+  if (profileForm.value.password && !profileForm.value.currentPassword) {
+    authStore.showToast('warning', '请输入当前密码')
+    return
+  }
   saving.value = true
   const passwordChanged = Boolean(profileForm.value.password)
   try {
     await request.patch('/users/me', {
       display_name: profileForm.value.display_name,
-      ...(profileForm.value.password && { password: profileForm.value.password }),
+      ...(profileForm.value.password && { password: profileForm.value.password, current_password: profileForm.value.currentPassword }),
     })
     showProfile.value = false
     if (passwordChanged) {

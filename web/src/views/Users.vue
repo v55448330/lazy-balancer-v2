@@ -43,6 +43,11 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
+            <el-form-item v-if="selfEdit" label="当前密码">
+              <el-input v-model="form.current_password" type="password" show-password maxlength="72" :placeholder="form.password ? '修改密码时必填' : '填写新密码后需确认'" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
             <el-form-item v-if="!selfEdit" label="角色">
               <el-select v-model="form.role" style="width: 100%">
                 <el-option label="管理员" value="admin">
@@ -119,7 +124,7 @@
             <el-button type="warning" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id))" @click="resetPassword(row.id)">
               重置密码
             </el-button>
-            <el-button v-if="!row.mfa_enabled && row.id === authStore.user?.id" type="success" link size="small" :disabled="isReadOnly || submitting" @click="openMfaBinding(row)">
+            <el-button v-if="!row.mfa_enabled && row.id === authStore.user?.id" type="success" link size="small" :disabled="(row.id === authStore.user?.id ? nodeModeSlave : isReadOnly) || submitting" @click="openMfaBinding(row)">
               启用 MFA
             </el-button>
             <el-button v-if="row.mfa_enabled && authStore.user?.role === 'admin'" type="warning" link size="small" :disabled="isReadOnly || submitting || submittingUserId === row.id || operatingUserIds.has(row.id) || switchingIds.has(row.id)" @click="resetMfa(row)">
@@ -189,14 +194,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, onMounted } from 'vue'
+import { computed, h, nextTick, ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess, normalizeMfaCodeInput, validateMfaCodeInput } from '@/utils/api'
 import { formatDate } from '@/utils/date'
-import { ElMessageBox, ElMessage } from 'element-plus'
+import { ElMessageBox, ElMessage, ElInput } from 'element-plus'
 import { UserFilled, User, Plus } from '@element-plus/icons-vue'
 import QRCode from 'qrcode'
-import type { APIResponse, UserListItem } from '@/types'
+import type { APIResponse, UpdateCurrentUserInput, UserListItem } from '@/types'
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
@@ -218,7 +223,7 @@ const openCreateForm = () => {
   if (submitting.value) return
   editingUser.value = null
   selfEdit.value = false
-  form.value = { username: '', password: '', display_name: '', role: 'user' }
+  form.value = { username: '', password: '', current_password: '', display_name: '', role: 'user' }
   showForm.value = true
 }
 const editingUser = ref<UserListItem | null>(null)
@@ -227,6 +232,8 @@ let usersRequestSeq = 0
 const form = ref({
   username: '',
   password: '',
+  // M5：自助编辑提交新密码时的当前密码确认（仅 selfEdit 分支使用）
+  current_password: '',
   display_name: '',
   role: 'user',
 })
@@ -257,6 +264,11 @@ const handleSubmit = async () => {
     ElMessage.warning('密码长度至少6位')
     return
   }
+  // M5：自助编辑提交新密码时必须携带当前密码（后端密码确认门）
+  if (selfEdit.value && form.value.password && !form.value.current_password) {
+    ElMessage.warning('请输入当前密码')
+    return
+  }
   submittingUserId.value = editingUser.value?.id ?? null
   submitting.value = true
   try {
@@ -267,6 +279,7 @@ const handleSubmit = async () => {
         await request.patch('/users/me', {
           display_name: form.value.display_name || undefined,
           password: form.value.password || undefined,
+          current_password: form.value.password ? form.value.current_password : undefined,
         })
         // 审计 B4-I2：本人改密成功即吊销当前 JWT（pwd_ver）——必须走干净登出
         // （对齐 AppLayout.saveProfile），否则后续 fetchUsers 以死 token 出站
@@ -325,6 +338,7 @@ const editUser = (user: UserListItem) => {
     form.value = {
       username: user.username,
       password: '',
+      current_password: '',
       display_name: getDisplayName(user),
       role: user.role,
     }
@@ -333,10 +347,10 @@ const editUser = (user: UserListItem) => {
     return
   }
   if (isReadOnly.value || submitting.value) return
-  editingUser.value = user
   form.value = {
     username: user.username,
     password: '',
+    current_password: '',
     display_name: getDisplayName(user),
     role: user.role,
   }
@@ -349,7 +363,7 @@ const closeForm = () => {
   showForm.value = false
   selfEdit.value = false
   editingUser.value = null
-  form.value = { username: '', password: '', display_name: '', role: 'user' }
+  form.value = { username: '', password: '', current_password: '', display_name: '', role: 'user' }
 }
 
 const deleteUser = async (id: number) => {
@@ -394,29 +408,89 @@ const handleToggleStatus = async (id: number, isEnabled: boolean) => {
 }
 
 const resetPassword = async (id: number) => {
-  if (isReadOnly.value || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
+  // M29：本人重置密码是自助操作（非 admin 也可用），从节点除外（本地 users 被
+  // 同步覆盖，改了也会被冲掉）——与上方编辑按钮同口径放行。
+  if ((id === authStore.user?.id ? nodeModeSlave.value : isReadOnly.value) || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
   operatingUserIds.value.add(id)
+  const isSelf = id === authStore.user?.id
   try {
-    // 说明：Element Plus 2.x 的 ElMessageBox.prompt 不支持 inputAttributes/maxlength，
-    // 因此与后端 max=72 对齐的上限校验只能通过 inputValidator 提示文案兜底。
-    const { value } = await ElMessageBox.prompt('请输入新密码', '重置密码', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      inputType: 'password',
-      inputValidator: (value) => {
-        if (!value || value.length < 6) {
-          return '密码长度至少6位'
+    let newPassword = ''
+    let currentPassword = ''
+    if (isSelf) {
+      // M5：本人改密需当前密码过后端密码确认门（仅提交新密码时必填）。双输入
+      // 对话框用 h 渲染自定义 MessageBox（同 api.ts 弹码款式）；说明：Element
+      // Plus 2.x 的 prompt 不支持多输入与 maxlength，72 位上限在此兜底。
+      const newPasswordRef = ref('')
+      const currentPasswordRef = ref('')
+      await ElMessageBox({
+        title: '修改密码',
+        showCancelButton: true,
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        message: () => h('div', { style: 'display: flex; flex-direction: column; gap: 14px; padding-top: 2px;' }, [
+          h('div', null, '请输入当前密码以确认身份'),
+          h(ElInput, {
+            modelValue: currentPasswordRef.value,
+            'onUpdate:modelValue': (v: string) => { currentPasswordRef.value = v },
+            type: 'password',
+            showPassword: true,
+            placeholder: '当前密码',
+          }),
+          h('div', null, '请输入新密码（至少6位）'),
+          h(ElInput, {
+            modelValue: newPasswordRef.value,
+            'onUpdate:modelValue': (v: string) => { newPasswordRef.value = v },
+            type: 'password',
+            showPassword: true,
+            maxlength: 72,
+            placeholder: '新密码（至少6位）',
+          }),
+        ]),
+        beforeClose: (action, _instance, done) => {
+          if (action === 'confirm') {
+            if (!newPasswordRef.value || newPasswordRef.value.length < 6) {
+              ElMessage.error('密码长度至少6位')
+              return
+            }
+            if (newPasswordRef.value.length > 72) {
+              ElMessage.error('密码长度不能超过72位')
+              return
+            }
+            if (!currentPasswordRef.value) {
+              ElMessage.error('请输入当前密码')
+              return
+            }
+          }
+          done()
+        },
+      })
+      newPassword = newPasswordRef.value
+      currentPassword = currentPasswordRef.value
+    } else {
+      // 说明：Element Plus 2.x 的 ElMessageBox.prompt 不支持 inputAttributes/maxlength，
+      // 因此与后端 max=72 对齐的上限校验只能通过 inputValidator 提示文案兜底。
+      const { value } = await ElMessageBox.prompt('请输入新密码', '重置密码', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        inputType: 'password',
+        inputValidator: (value) => {
+          if (!value || value.length < 6) {
+            return '密码长度至少6位'
+          }
+          if (value.length > 72) {
+            return '密码长度不能超过72位'
+          }
+          return true
         }
-        if (value.length > 72) {
-          return '密码长度不能超过72位'
-        }
-        return true
-      }
-    })
-    if (value) {
-      if (id === authStore.user?.id) {
-        // R72 六次：本人改密走自助端点（不带 silent，失败由全局拦截器提示）
-        await request.patch('/users/me', { password: value })
+      })
+      newPassword = value
+    }
+    if (newPassword) {
+      if (isSelf) {
+        // R72 六次：本人改密走自助端点（不带 silent，失败由全局拦截器提示）；
+        // M5：body 携带 current_password 过后端密码确认门。
+        const body: UpdateCurrentUserInput = { password: newPassword, current_password: currentPassword }
+        await request.patch('/users/me', body)
         // 审计 W-I2（第六轮）：本人改密成功即吊销当前 JWT（pwd_ver）——必须走干净
         // 登出（对齐 AppLayout.saveProfile / B4-I2），否则后续请求以死 token 出站
         // 401，成功操作被误报为「会话失效」并强制整页刷新。
@@ -424,7 +498,7 @@ const resetPassword = async (id: number) => {
         await authStore.logout()
         return
       } else {
-        await request.post(`/users/${id}/reset-password`, { new_password: value })
+        await request.post(`/users/${id}/reset-password`, { new_password: newPassword })
       }
       mfaAwareSuccess('密码重置成功')
     }
@@ -500,7 +574,6 @@ const mfaQrCanvas = ref<HTMLCanvasElement | null>(null)
 const mfaBinding = ref({
   visible: false,
   step: 0,
-  userId: 0,
   username: '',
   secret: '',
   code: '',
@@ -520,7 +593,6 @@ const openMfaBinding = async (row: UserListItem): Promise<void> => {
   try {
     const res = await request.post<APIResponse<{ secret: string; uri: string }>>('/auth/mfa/setup', {}, { silent: true })
     if (!res.data) return
-    mfaBinding.value.userId = row.id
     mfaBinding.value.username = row.username
     mfaBinding.value.secret = res.data.secret
     mfaBinding.value.code = ''

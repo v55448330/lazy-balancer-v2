@@ -1025,8 +1025,6 @@ import { usePollingTask } from '@/composables/usePollingTask'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
 
 interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id' | 'compress_types'> {
-  id?: number
-  caddy_id: string
   dns_family: string[]
   upstreams: UpstreamInput[]
   acme_config_id?: number
@@ -1743,7 +1741,6 @@ const pathRuleUpstreamsToPercent = (upstreams: readonly PathRuleUpstream[] | nul
 const certInfo = reactive({
   valid: false,
   domain: '',
-  issuer: '',
   expiryDate: '',
   daysUntilExpiry: 0,
   warning: '',
@@ -1756,7 +1753,6 @@ const resetCertInfo = (): void => {
   Object.assign(certInfo, {
     valid: false,
     domain: '',
-    issuer: '',
     expiryDate: '',
     daysUntilExpiry: 0,
     warning: '',
@@ -1765,7 +1761,6 @@ const resetCertInfo = (): void => {
 }
 
 const wizardForm = reactive<RuleForm>({
-  caddy_id: '',
   name: '',
   description: '',
   protocol: 'http',
@@ -2072,7 +2067,6 @@ const validateCertificate = async () => {
       const data = res.data
       certInfo.valid = data.valid
       certInfo.domain = data.domain || '未知'
-      certInfo.issuer = data.issuer || ''
       certInfo.expiryDate = data.not_after || ''
       certInfo.daysUntilExpiry = data.days_until_expiry || 0
       certInfo.warning = data.warning || ''
@@ -2375,6 +2369,24 @@ const moveToAdjacentWizardStep = (direction: -1 | 1): void => {
   if (targetStep !== undefined) currentStep.value = targetStep
 }
 
+// M33：与后端 handlers.go 同口径的 host:port 查重——不分启用状态（禁用行也会
+// 随规则提交，重复行在保存时会被后端整单拒绝），空行按提交口径先行剔除。
+const findDuplicateUpstream = (): { rowIndex: number; key: string } | null => {
+  const seen = new Set<string>()
+  for (const [index, upstream] of wizardForm.upstreams.entries()) {
+    if (!upstream.host || !upstream.port) continue
+    const key = `${upstream.host}:${upstream.port}`
+    if (seen.has(key)) return { rowIndex: index + 1, key }
+    seen.add(key)
+  }
+  return null
+}
+
+// M34：主动健康检查路径必须以 / 开头——对齐后端按提交原串的校验（空串回退
+// '/' 的既有逻辑不受影响；纯空白或非斜杠开头都会被后端拒绝，前端先拦）。
+const hasInvalidActiveHealthCheckPath = (): boolean =>
+  wizardForm.enable_active_health_check && !(wizardForm.health_check_path || '/').startsWith('/')
+
 const nextStep = (): void => {
   if (currentStep.value === WIZARD_STEP.BASIC) {
     if (!wizardForm.name) {
@@ -2426,6 +2438,16 @@ const nextStep = (): void => {
     const upstreamError = validateEnabledUpstreams()
     if (upstreamError) {
       ElMessage.warning(upstreamError)
+      return
+    }
+    // M33/M34：上游 host:port 查重与健康检查路径门在此步前置拦截（提交侧同款双保险）
+    const duplicated = findDuplicateUpstream()
+    if (duplicated) {
+      ElMessage.error(`上游第 ${duplicated.rowIndex} 行重复：${duplicated.key}`)
+      return
+    }
+    if (hasInvalidActiveHealthCheckPath()) {
+      ElMessage.error('健康检查路径必须以 / 开头')
       return
     }
     moveToAdjacentWizardStep(1)
@@ -2483,6 +2505,19 @@ const submitWizard = async () => {
   const upstreamError = validateEnabledUpstreams()
   if (upstreamError) {
     ElMessage.warning(upstreamError)
+    saving.value = false
+    return
+  }
+  // M33：上游 host:port 查重（不分启用状态，同后端口径）
+  const duplicated = findDuplicateUpstream()
+  if (duplicated) {
+    ElMessage.error(`上游第 ${duplicated.rowIndex} 行重复：${duplicated.key}`)
+    saving.value = false
+    return
+  }
+  // M34：主动健康检查路径必须以 / 开头
+  if (hasInvalidActiveHealthCheckPath()) {
+    ElMessage.error('健康检查路径必须以 / 开头')
     saving.value = false
     return
   }
@@ -2677,8 +2712,6 @@ const openCopyWizard = async (rule: Rule) => {
   }
   const compressTypes = fullRule.compress_types ? selectedCompressTypes(fullRule.compress_types) : ['gzip']
   Object.assign(wizardForm, {
-    caddy_id: '',
-    id: undefined,
     name: `${fullRule.name}（副本）`,
     description: fullRule.description || '',
     protocol: fullRule.protocol,

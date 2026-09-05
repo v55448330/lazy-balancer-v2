@@ -652,7 +652,8 @@ const handleSave = async () => {
   saving.value = true
   try {
     const payload = {
-      acme_email: global.value.acme_email,
+      // M31：提交侧 trim——避免粘贴带入的首尾空白被原样写入配置并回显扩散
+      acme_email: global.value.acme_email.trim(),
       cert_expiry_days: global.value.cert_expiry_days,
       cert_renewal_days: global.value.cert_renewal_days,
       cert_renewal_attempts: global.value.cert_renewal_attempts,

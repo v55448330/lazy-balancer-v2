@@ -14,6 +14,7 @@ import type {
   Rule,
   SystemInfo,
   SystemMetrics,
+  UpdateCurrentUserInput,
 } from '@/types'
 
 declare module 'axios' {
@@ -73,12 +74,19 @@ interface RequestClient {
   get<T = APIResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T>
   post<T = APIResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
   put<T = APIResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  // M5：本人资料自助更新——提交新密码必须带 current_password（后端密码确认门）。
+  patch(url: '/users/me', data: UpdateCurrentUserInput, config?: AxiosRequestConfig): Promise<APIResponse>
   patch<T = APIResponse<unknown>>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
   delete<T = APIResponse<unknown>>(url: string, config?: AxiosRequestConfig): Promise<T>
 }
 
 // v2.1.8 MFA step-up 弹码：返回验证码或 null（取消）。
-let mfaPromptOpen = false
+// M27：并发 428 共享在途弹码 Promise（同码同结果），finally 清空供下一轮
+// step-up 重新弹窗；下方 verify-step 刷新同样只发一次。
+let mfaPending: Promise<string | null> | null = null
+// M27：在途 verify-step 刷新——同码重放会被后端 MFAVerifyTOTPCode 的
+// mfa_last_timestep 记录拒绝并计失败，并发等待者必须共享同一次刷新。
+let mfaStepUpRefresh: Promise<void> | null = null
 // R72 八次：MFA 宽限窗提示节流（60 秒一次）
 let lastMfaGraceNoticeAt = 0
 // R73：兜底 toast 的句柄——页面级反馈（mfaAwareSuccess）渲染同文案时关闭它，
@@ -121,10 +129,12 @@ export const validateMfaCodeInput = (raw: string): boolean => {
 
 const validateTotpCodeInput = (raw: string): boolean => /^\d{6}$/.test(normalizeMfaCodeInput(raw))
 
-const promptMfaCode = (): Promise<string | null> =>
-  new Promise((resolve) => {
-    if (mfaPromptOpen) { resolve(null); return }
-    mfaPromptOpen = true
+const promptMfaCode = (): Promise<string | null> => {
+  // M27：弹窗已在途时直接共享同一 Promise——并发 428 不再连环弹窗/被误判取消。
+  if (mfaPending) return mfaPending
+  // 新一轮弹码意味着新验证码：作废旧刷新句柄，确认后的等待者各自重试原请求。
+  mfaStepUpRefresh = null
+  mfaPending = new Promise<string | null>((resolve) => {
     // el-input-otp 自定义内容（替换原生 prompt 的普通 input）：值在 confirm 时从
     // otpCode 读取；填满 6 位自动触发 confirm（finish → handlers.confirm）。
     // message 函数在 MessageBox 渲染上下文中执行，otpCode 变更会驱动重渲染。
@@ -163,10 +173,12 @@ const promptMfaCode = (): Promise<string | null> =>
     })
       .then(() => resolve(normalizeMfaCodeInput(otpCode.value)))
       .catch(() => resolve(null))
-      .finally(() => { mfaPromptOpen = false })
+      .finally(() => { mfaPending = null })
     // OTP 自动聚焦：MessageBox 的 autofocus 默认落在确认按钮，nextTick 后夺回给 OTP
     void nextTick(() => otpRef.value?.focus())
   })
+  return mfaPending
+}
 
 let sessionExpiredDialogOpen = false
 // 用户指令（会话过期全站止损）：首个 401 的「会话失效」弹窗出现后、用户点击
@@ -320,7 +332,14 @@ service.interceptors.response.use(
         const authStore = useAuthStore()
         const code = await promptMfaCode()
         if (code) {
-          await authStore.refreshMfaStep(code)
+          // M27：并发 428 共享同一次 verify-step（同码重放会被后端 mfa_last_timestep
+          // 拒绝并计失败锁定），所有等待者用刷新后的 token 各自重试原请求。
+          if (!mfaStepUpRefresh) {
+            mfaStepUpRefresh = authStore.refreshMfaStep(code).finally(() => {
+              mfaStepUpRefresh = null
+            })
+          }
+          await mfaStepUpRefresh
           // R72 十五次（用户裁决）：验证成功不再独立 toast——用户刚输完码知道
           // 验证成功，反馈并入重试后的业务提示（宽限头会照常发出，但
           // wasRecentMfaGrace 因 justNow 标记而不加缀）。
@@ -328,7 +347,7 @@ service.interceptors.response.use(
           error.config._mfaRetried = true
           return service.request(error.config)
         }
-        // 取消弹码：温和提示，不暴露 428 英文常量。
+        // 取消弹码（共享 Promise resolve null 即用户真取消）：温和提示，不暴露 428 英文常量。
         if (!error.config?.silent) {
           ElMessage.warning('已取消 MFA 验证，操作未执行')
         }

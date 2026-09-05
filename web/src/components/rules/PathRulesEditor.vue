@@ -106,19 +106,27 @@
 import { ArrowDown, ArrowUp, Delete, Plus } from '@element-plus/icons-vue'
 import type { PathRule, PathRuleUpstream } from '@/types'
 import { MAX_UPSTREAM_ROWS, normalizeWeights, redistributeWeight } from '@/utils/upstreamWeights'
+import { canonicalPathKey } from '@/utils/ruleValidation'
 
 const pathRules = defineModel<PathRule[]>({ required: true })
 
 const rowError = (index: number): string => {
   const rule = pathRules.value[index]
   if (!rule) return ''
-  const path = rule.path.trim()
-  if (path !== '' && !path.startsWith('/')) return '必须以 / 开头'
-  if (/[*?{}]/.test(path)) return '不能包含 * ? { } 通配字符'
-  if (path !== '') {
-    const dupIndex = pathRules.value.findIndex((other, otherIndex) =>
-      otherIndex !== index && other.match_type === rule.match_type && other.path.trim() === path)
-    if (dupIndex >= 0) return `与规则 ${dupIndex + 1} 重复`
+  // M32：与后端/validatePathRules 同口径——前缀校验用原始串（后端 HasPrefix 在
+  // TrimSpace 之前），查重与跨类型遮蔽互查用 canonicalPathKey 归一。
+  if (rule.path !== '' && !rule.path.startsWith('/')) return '必须以 / 开头'
+  if (/[*?{}]/.test(rule.path)) return '不能包含 * ? { } 通配字符'
+  if (rule.path.trim() === '') return ''
+  const canonical = canonicalPathKey(rule.match_type, rule.path)
+  const dupIndex = pathRules.value.findIndex((other, otherIndex) =>
+    otherIndex !== index && other.path.trim() !== '' && canonicalPathKey(other.match_type, other.path) === canonical)
+  if (dupIndex >= 0) {
+    const other = pathRules.value[dupIndex]
+    if (!other) return ''
+    return other.match_type === rule.match_type
+      ? `与规则 ${dupIndex + 1} 重复`
+      : `与规则 ${dupIndex + 1} 同路径前缀+精确互相遮蔽`
   }
   return ''
 }
